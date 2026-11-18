@@ -95,7 +95,7 @@ const LEAD = 'This file can’t be edited live: '
 const sentence = (s: string): string => (/[.!?]$/.test(s) ? s : `${s}.`)
 
 /** A file in another workspace than the one opening it: it opens read only (live-refused.tsx). */
-export const OTHER_WORKSPACE_WORDS = 'This file is in another workspace, so it opens read-only here.'
+export const OTHER_WORKSPACE_WORDS = 'This file is in another workspace’s folder, so it opens read-only here. Open it from that workspace to edit it live.'
 const OTHER_WORKSPACE = new Set(['workspace_mismatch', 'path_escapes', 'other_workspace'])
 export const isOtherWorkspace = (code: string | undefined): boolean => code !== undefined && OTHER_WORKSPACE.has(code)
 

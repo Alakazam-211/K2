@@ -216,7 +216,7 @@ describe('LiveDocView', () => {
     act(() => t.end({ reason: 'declined', retry: false, code: 'path_escapes' }))
     await waitFor(() => expect(onDeclined).toHaveBeenCalledTimes(1))
     expect(onDeclined.mock.calls[0][0]).toEqual({ reason: 'declined', code: 'path_escapes' })
-    expect(screen.getByTestId('live-doc-status').textContent).toBe('This file is in another workspace, so it opens read-only here.')
+    expect(screen.getByTestId('live-doc-status').textContent).toBe('This file is in another workspace’s folder, so it opens read-only here. Open it from that workspace to edit it live.')
   })
 })
 
@@ -447,7 +447,7 @@ describe('the Live view’s words', () => {
     expect(d('generated')).toBe('This file can’t be edited live: it’s made from other files. Edit its source instead.')
     expect(d('not_a_text_doc')).toBe('This file can’t be edited live: it isn’t text.')
     expect(d('workspace_not_found', 'that file is not inside a workspace on this server')).toBe('This file can’t be edited live: it isn’t inside a workspace on this server.')
-    for (const c of ['workspace_mismatch', 'path_escapes', 'other_workspace']) expect(d(c)).toBe('This file is in another workspace, so it opens read-only here.')
+    for (const c of ['workspace_mismatch', 'path_escapes', 'other_workspace']) expect(d(c)).toBe('This file is in another workspace’s folder, so it opens read-only here. Open it from that workspace to edit it live.')
     expect(d('too_large', 'live editing is off: the text doesn’t fit one frame (too_large)')).toBe('This file can’t be edited live: it’s too large.')
     expect(d('not_utf8')).toBe('This file can’t be edited live: it isn’t UTF-8 text.')
     expect(d('doc_quarantined', 'This doc’s stored copy is damaged.')).toBe('This file can’t be edited live: This doc’s stored copy is damaged.')

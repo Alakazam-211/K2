@@ -139,12 +139,12 @@ describe('a refused live open of an HTML page', () => {
     h.refuse = { type: 'closed', reason: 'declined', retry: false, code: 'path_escapes' }
     setEditorPreview('code', true)
     renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
-    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('This file is in another workspace, so it opens read-only here.')
+    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('This file is in another workspace’s folder, so it opens read-only here. Open it from that workspace to edit it live.')
     await waitFor(() => expect(pageFrame()?.getAttribute('srcdoc') ?? '').toContain('<h1>k5 CLI progress</h1>'))
     // The words say read only, and it is: the plain editor gets the reason.
     const { result } = renderHook(() => useLiveRefused(FILE))
     act(() => result.current.onLiveRefused({ reason: 'declined', code: 'path_escapes' }))
-    expect(result.current.refusedReadOnly).toBe('This file is in another workspace, so it opens read-only here.')
+    expect(result.current.refusedReadOnly).toBe('This file is in another workspace’s folder, so it opens read-only here. Open it from that workspace to edit it live.')
     act(() => result.current.onLiveRefused({ reason: 'declined', code: 'protected', message: WHY }))
     expect(result.current.refusedReadOnly).toBeNull()
   })

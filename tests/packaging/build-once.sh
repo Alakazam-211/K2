@@ -30,6 +30,7 @@ cat > "$stub/cargo" <<'EOF'
 set -euo pipefail
 printf '%s\tembed=%s\texport=%s\n' "$*" "${K2_PTYD_EMBED:-}" "${K2_EXPORT_EMBED:-}" >> "$CALLS"
 printf 'target=%s jobs=%s\n' "${CARGO_TARGET_DIR:-}" "${CARGO_BUILD_JOBS:-}" >> "$CALLS.env"
+printf 'cargo %s\n' "${CARGO_ENCODED_RUSTFLAGS:-none}" | tr '\037' '|' >> "$CALLS.rf"
 # Parallel proof: the tauri build must already be running while we build
 # (STUB_MEET=1); in the serial order it never is, so this times out.
 if [ "${STUB_MEET:-0}" = 1 ]; then
@@ -49,6 +50,8 @@ for a in "$@"; do
         if [ "$a" = k2-daemon ] && [ -n "${K2_EXPORT_EMBED:-}" ]; then
             shasum -a 256 "$K2_EXPORT_EMBED" | cut -d' ' -f1 >> "$out/$a"
         fi
+        # STUB_LEAK=1: a binary that kept the builder's home (no path maps).
+        [ "${STUB_LEAK:-0}" = 1 ] && [ "$a" = k2-node ] && printf '\0/home/%s/.cargo/registry/src/x-1.0/src/lib.rs\0' "$(id -un)" >> "$out/$a"
         chmod +x "$out/$a"
     fi
     prev="$a"
@@ -61,6 +64,7 @@ cat > "$stub/bun" <<'EOF'
 set -euo pipefail
 [ "$*" = "run tauri build" ] || { echo "stub bun: unexpected: $*" >&2; exit 1; }
 printf 'tauri target=%s jobs=%s\n' "${CARGO_TARGET_DIR:-}" "${CARGO_BUILD_JOBS:-}" >> "$CALLS.env"
+printf 'tauri %s\n' "${CARGO_ENCODED_RUSTFLAGS:-none}" | tr '\037' '|' >> "$CALLS.rf"
 echo $$ > "$MEET/tauri.pid"
 if [ "${STUB_MEET:-0}" = 1 ]; then
     : > "$MEET/tauri"
@@ -131,6 +135,13 @@ pass_or 'grep -qx "target= jobs=7" "$CALLS.env"' \
 pass_or '[ -e "$proj/target/release/bundle/dmg/bundle_dmg.sh" ] && [ ! -e "$proj/target/tauri/release/bundle" ] && [ ! -e "$proj/target/release/bundle/macos/K2.app/Contents/MacOS/stale-file" ]' \
     "the fresh tauri bundle replaces target/release/bundle (DMG script included, stale bundle gone)" "$(ls -R "$proj/target" | head -30)"
 pass_or 'grep -q "^  \[tauri\] tauri: Finished release" "$work/step2.log"' "tauri's output is prefixed [tauri]" "$(cat "$work/step2.log")"
+# The release path maps (scripts/lib/build-paths.sh) reach both builds, the
+# same flags, $HOME first and the checkout after it.
+rf_cargo="$(sed -n 's/^cargo //p' "$CALLS.rf")"
+rf_tauri="$(sed -n 's/^tauri //p' "$CALLS.rf")"
+pass_or '[ -n "$rf_cargo" ] && [ "$rf_cargo" = "$rf_tauri" ] && [[ "$rf_cargo" == "--remap-path-prefix=$HOME=/home|"* ]] && [[ "$rf_cargo" == *"|--remap-path-prefix=$proj=/k2|"* ]]' \
+    "the sidecar and tauri builds both run under the path maps (\$HOME first, the checkout after)" "$(cat "$CALLS.rf")"
+pass_or 'grep -q "^  no builder paths in [0-9]* file(s)" "$work/step2.log"' "Step 2 checks the whole app for build paths" "$(cat "$work/step2.log")"
 
 want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-ptyd --bin k2-ptyd -p k2-export --bin k2-export -p k2-deckrender --bin k2-deckrender -p k2-scenerender --bin k2-scenerender -p k2-node --bin k2-node -p k2-menubar --bin k2-menubar -p k2-deskd --bin k2-deskd"
 [ "$(wc -l < "$CALLS" | tr -d ' ')" = 1 ] && pass "one cargo call builds every sidecar" \
@@ -151,6 +162,7 @@ grep -q "bin k2-ptyd" "$helper/k2-ptyd" && grep -q "bin k2-daemon" "$helper/k2-d
 
 echo "Step 8.5 (k2_build_standalone_macos_daemon):"
 : > "$CALLS"
+: > "$CALLS.rf"
 mkdir -p "$proj/scripts"
 cp "$ROOT/scripts/linux-ptyd-embed.sh" "$proj/scripts/"
 head -c 4096 /dev/urandom > "$helper/k2-ptyd"
@@ -171,6 +183,9 @@ esha="$(shasum -a 256 "$helper/k2-export" | cut -d' ' -f1)"
     && pass "only the embed differs: the signed nested k2-ptyd" || fail "embed" "$(cat "$CALLS")"
 [ "$(cut -f3 "$CALLS")" = "export=$helper/k2-export" ] && grep -q "$esha" "$work/standalone" \
     && pass "and the signed nested k2-export" || fail "export embed" "$(cat "$CALLS")"
+[ "$(sed -n 's/^cargo //p' "$CALLS.rf")" = "$rf_cargo" ] \
+    && pass "the standalone rebuild runs under Step 2's exact path maps (no full rebuild)" || fail "standalone maps" "step 2: $rf_cargo / 8.5: $(cat "$CALLS.rf")"
+grep -q "^  no builder paths in 1 file(s)" "$work/step85.log" && pass "and its daemon is checked for build paths" || fail "standalone check" "$(cat "$work/step85.log")"
 
 echo "Step 2 failures and the serial order:"
 : > "$CALLS"; : > "$CALLS.env"
@@ -183,6 +198,12 @@ fi
 tp="$(cat "$MEET/tauri.pid" 2>/dev/null || echo none)"
 pass_or '[ $(( $(date +%s) - t0 )) -lt 20 ] && ! kill -0 "$tp" 2>/dev/null && grep -q "the tauri build was stopped" "$work/fail1.log"' \
     "and stops the tauri build at once (no 30 s wait, no process left)" "pid $tp; $(cat "$work/fail1.log")"
+if run_step2 "$work/leak.log" STUB_LEAK=1; then
+    fail "a sidecar holding \$HOME fails Step 2" "$(cat "$work/leak.log")"
+else
+    pass_or 'grep -qF "FATAL: target/release/bundle/macos/K2.app/Contents/MacOS/k2-node holds the builder" "$work/leak.log" && grep -qF "/.cargo/registry/src/x-1.0/src/lib.rs" "$work/leak.log"' \
+        "a sidecar holding \$HOME fails Step 2, before signing, naming the file and the string" "$(cat "$work/leak.log")"
+fi
 if run_step2 "$work/fail2.log" STUB_TAURI_FAIL=1; then
     fail "a failed tauri build fails Step 2" "$(cat "$work/fail2.log")"
 else

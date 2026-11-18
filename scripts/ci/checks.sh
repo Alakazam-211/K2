@@ -67,6 +67,7 @@ part_web() {
     step "Release gates on K2 Compute (stubbed)";  bash tests/packaging/release-gates.sh
     step "release.sh waits + Step 0.5 env (stubbed)"; bash tests/packaging/release-wait-and-preflight.sh
     step "macOS sidecars build once (stubbed)";    bash tests/packaging/build-once.sh
+    step "Release path maps and build-path gate";  bash tests/packaging/build-paths.sh
     step "bun install";                            bun install --frozen-lockfile
     step "k2-home gate";                           bash scripts/k2-home-gate.sh
     step "k2-home gate's .k2 half on broken trees"; bash tests/garden/k2-home-dot-gate.sh

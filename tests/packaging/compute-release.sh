@@ -722,19 +722,20 @@ for t in cc c++ gcc g++ aarch64-linux-gnu-gcc; do
     printf '#!/bin/sh\necho "REAL %s $*"\n' "$t" > "$fake/realbin/$t"; chmod +x "$fake/realbin/$t"
 done
 rf="$(cd "$fake/src" && env -u RUSTFLAGS -u CFLAGS -u CXXFLAGS -u CARGO_TARGET_DIR -u SOURCE_DATE_EPOCH -u CC -u CXX \
-    PATH="$fake/realbin:$PATH" CARGO_HOME="$fake/cargo" CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+    PATH="$fake/realbin:$PATH" HOME="$fake" CARGO_HOME="$fake/cargo" CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
     bash -c 'source "$1"; k2_repro_build_env "$PWD" >/dev/null
         printf "%s\n%s\n%s\n%s\n" "$RUSTFLAGS" "${CFLAGS:-}" "${CXXFLAGS:-}" "$SOURCE_DATE_EPOCH"
         printf "%s\n" "$(command -v cc)"
         cc -c x.c -o x.o; c++ -c y.cc; aarch64-linux-gnu-gcc -c z.c' _ "$ROOT/scripts/ci/repro-build-env.sh")"
 src_p="$(cd "$fake/src" && pwd -P)"
-python3 - "$rf" "$src_p" "$fake/cargo" "$CT" <<'PY' && pass "repro env: rustc remaps (target last); C/C++ maps come from wrappers, not CFLAGS; SOURCE_DATE_EPOCH = commit time" || fail "repro env" "$rf"
+python3 - "$rf" "$src_p" "$fake/cargo" "$CT" "$fake" <<'PY' && pass "repro env: rustc remaps (\$HOME first, target last); C/C++ maps come from wrappers, not CFLAGS; SOURCE_DATE_EPOCH = commit time" || fail "repro env" "$rf"
 import sys
 lines = sys.argv[1].split("\n")
 rust, c, cxx, sde, cc_path = lines[:5]
 calls = lines[5:8]
-src, cargo, ct = sys.argv[2], sys.argv[3], sys.argv[4]
+src, cargo, ct, home = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 r = rust.split()
+assert r[0] == f"--remap-path-prefix={home}=/home", r
 assert f"--remap-path-prefix={src}=/k2" in r, r
 assert f"--remap-path-prefix={cargo}=/cargo" in r, r
 assert f"--remap-path-prefix={src}/target=/target" in r, r
@@ -746,6 +747,7 @@ for call, tool, tail in zip(calls, ("cc", "c++", "aarch64-linux-gnu-gcc"), ("-c 
     w = call.split()
     assert w[:2] == ["REAL", tool], call
     assert f"-ffile-prefix-map={src}=/k2" in w and f"-ffile-prefix-map={src}/target=/target" in w, call
+    assert w[2] == f"-ffile-prefix-map={home}=/home", call
     assert w.index(f"-ffile-prefix-map={src}/target=/target") > w.index(f"-ffile-prefix-map={src}=/k2"), call
     assert call.endswith(tail), call
 PY

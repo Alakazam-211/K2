@@ -50,10 +50,12 @@
 #   was baked too ("oauth_microsoft"; never a value).
 #
 # Paths: always remapped, the same way on every Linux builder
-# (scripts/ci/repro-build-env.sh: checkout → /k2, cargo home → /cargo,
-# target dir → /target, for rustc and the C/C++ deps), so two nodes and
-# GitHub can build the same bytes (G12; needs the same rustc too). Before
-# 0.46.6 only the V1 job remapped (BUILD_REMAP=1, now ignored).
+# (scripts/ci/repro-build-env.sh: $HOME → /home, checkout → /k2, cargo
+# home → /cargo, target dir → /target, for rustc and the C/C++ deps), so
+# two nodes and GitHub can build the same bytes (G12; needs the same rustc
+# too), and no file holds the node's home or job user (checked on the built
+# bytes, scripts/lib/build-paths.sh). Before 0.46.6 only the V1 job
+# remapped (BUILD_REMAP=1, now ignored).
 #
 # Never reads ~/.k2, never talks to a daemon, never signs.
 set -euo pipefail
@@ -115,6 +117,8 @@ source "$ROOT/scripts/require-mail-oauth-build-env.sh"
 source "$ROOT/scripts/linux-ptyd-embed.sh"
 # shellcheck source=scripts/ci/repro-build-env.sh
 source "$ROOT/scripts/ci/repro-build-env.sh"
+# shellcheck source=scripts/lib/build-paths.sh
+source "$ROOT/scripts/lib/build-paths.sh"
 
 # From a compute job: BUILD_* → the K2_* names option_env! reads.
 for v in GMAIL_CLIENT_ID GMAIL_CLIENT_SECRET MICROSOFT_CLIENT_ID; do
@@ -245,6 +249,8 @@ test "$(grep -a -o 'K2_APP_ENGINE_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;'
 if [ "$OAUTH_MODE" = "baked" ]; then
     assert_daemon_oauth_not_placeholder "$OUT/$DAEMON"
 fi
+# No file holds this node's home or the job user's name (the path maps).
+k2_assert_no_build_paths "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE"
 file "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE"
 
 for f in "$DAEMON" "$NODE" "$HELPER" "$ENGINE"; do
@@ -285,7 +291,7 @@ info = {
     "tree": os.environ["K2_BI_TREE"],
     "oauth": os.environ["K2_BI_OAUTH"],
     "oauth_microsoft": os.environ["K2_BI_OAUTH_MS"] == "true",
-    "remap": "/k2 /cargo /target",
+    "remap": "/home /k2 /cargo /target",
     "ptyd_sha256": os.environ["K2_BI_PTYD"],
     "export_sha256": os.environ["K2_BI_EXPORT"],
     "deskd_sha256": os.environ["K2_BI_DESKD"],

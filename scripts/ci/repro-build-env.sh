@@ -8,14 +8,17 @@
 #   k2_repro_build_env <source-dir>
 #
 # Path mappings, so no builder's own paths end up in a binary:
+#   $HOME               → /home    (anything else under the builder's home;
+#                                   skipped when unset or "/")
 #   <source-dir>        → /k2
 #   $CARGO_HOME         → /cargo   (registry sources, git deps)
 #   $CARGO_TARGET_DIR   → /target  (build-script OUT_DIRs; default
 #                                   <source-dir>/target)
 # Each path is mapped as given and, when it differs, as its physical path
 # (a symlinked checkout or home). The most specific mapping comes last
-# (rustc, gcc and clang apply the last matching one), so a target dir
-# inside the checkout maps to /target.
+# (rustc, gcc and clang apply the last matching one), so a checkout or
+# cargo home inside $HOME maps to /k2 or /cargo and a target dir inside the
+# checkout to /target. scripts/lib/build-paths.sh checks the built bytes.
 #
 #   rustc: --remap-path-prefix, appended to RUSTFLAGS.
 #   C/C++: -ffile-prefix-map, added by small compiler wrappers put first on
@@ -57,8 +60,10 @@ k2_repro_build_env() {
     local cargo_home="${CARGO_HOME:-$HOME/.cargo}"
     local target="${CARGO_TARGET_DIR:-$src/target}"
     case "$target" in /*) ;; *) target="$src/$target" ;; esac
+    local home="${HOME:-}"
+    home="${home%/}"
     local p
-    for p in "$src" "$cargo_home" "$target"; do
+    for p in "$home" "$src" "$cargo_home" "$target"; do
         case "$p" in
             *[[:space:]]*)
                 echo "FATAL: k2_repro_build_env: a build path has whitespace ($p); RUSTFLAGS can't carry it" >&2
@@ -67,7 +72,11 @@ k2_repro_build_env() {
         esac
     done
     local rflags="" cflags="" pair from to phys
-    for pair in "$src=/k2" "$cargo_home=/cargo" "$target=/target"; do
+    local -a pairs=("$src=/k2" "$cargo_home=/cargo" "$target=/target")
+    # Broadest first: the maps after it win for the checkout, the cargo
+    # home and the target dir.
+    [ -z "$home" ] || pairs=("$home=/home" "${pairs[@]}")
+    for pair in "${pairs[@]}"; do
         from="${pair%=*}" to="${pair##*=}"
         from="${from%/}"
         rflags="$rflags --remap-path-prefix=$from=$to"
@@ -134,5 +143,5 @@ k2_repro_build_env() {
             export K2_NODE_BUILD_COMMIT
             ;;
     esac
-    echo "  path remap on: $src → /k2, $cargo_home → /cargo, $target → /target (rustc flags; C/C++ via $wdir); SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-unset}"
+    echo "  path remap on: \$HOME → /home, $src → /k2, $cargo_home → /cargo, $target → /target (rustc flags; C/C++ via $wdir); SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-unset}"
 }

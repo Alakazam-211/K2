@@ -13,6 +13,11 @@
 #      k2-daemon + k2-ptyd; nested K2 Screen.app for k2-deskd;
 #      Contents/MacOS for the rest).
 #
+# Every cargo call here (and Step 8.5's) runs under the release path maps
+# (scripts/lib/build-paths.sh: $HOME, the checkout and the cargo home never
+# reach a binary), and the finished K2.app is checked for them: every file
+# in it, so a new sidecar is covered without a list.
+#
 # Signing, the AMFI launch check and notarizing stay in the callers.
 #
 # Why step 2 is one cargo call (0.46.4): with resolver 2 a cargo call
@@ -128,7 +133,7 @@ _k2_tauri_build_bg() {
     local dir="$1"
     (
         set -o pipefail
-        CARGO_TARGET_DIR="$dir" CARGO_BUILD_JOBS="$K2_MAC_TAURI_JOBS" bun run tauri build 2>&1 \
+        CARGO_TARGET_DIR="$dir" CARGO_BUILD_JOBS="$K2_MAC_TAURI_JOBS" k2_path_mapped bun run tauri build 2>&1 \
             | awk '{ print "  [tauri] " $0; fflush() }'
     )
 }
@@ -138,7 +143,7 @@ _k2_tauri_build_bg() {
 # feature resolution (see the header); k2_build_standalone_macos_daemon
 # uses the same array.
 _k2_mac_sidecar_cargo() {
-    cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}"
+    k2_path_mapped cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}"
 }
 
 # k2_check_bundled_dfn3 <resource-dir>: the built app carries the four
@@ -165,6 +170,9 @@ k2_build_mac_binaries() {
 
     k2_mac_build_env
     k2_clear_failed_cmake_dirs
+    # Step 8.5's standalone daemon calls this with the same checkout, so its
+    # flags match and every crate is reused.
+    k2_release_path_maps "$PWD" || return 1
 
     # The DeepFilterNet3 weights (noise removal) ship in the bundle's
     # Resources/dfn3/. tauri build's beforeBuildCommand stages them too; this
@@ -174,7 +182,7 @@ k2_build_mac_binaries() {
 
     if [ "${K2_MAC_BUILD_PARALLEL:-1}" = "0" ]; then
         echo ""; echo "  Build 1/2: tauri build (frontend + k2 + bundle)..."
-        bun run tauri build || { echo "FATAL: tauri build failed" >&2; return 1; }
+        k2_path_mapped bun run tauri build || { echo "FATAL: tauri build failed" >&2; return 1; }
         [ -d "$app" ] || { echo "FATAL: $app missing after tauri build" >&2; return 1; }
 
         echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-deckrender, k2-scenerender, k2-node, k2-menubar, k2-deskd (one cargo call)..."
@@ -241,4 +249,9 @@ k2_build_mac_binaries() {
     # open (same shape as frpc). Not executed from Contents/MacOS.
     cp "$out/k2-menubar" "$app/Contents/MacOS/k2-menubar" || return 1
     echo "  k2-menubar copied into the bundle."
+
+    # Before anything signs it: no file in the app holds this Mac's home or
+    # user name (the path maps above, proven on the built bytes).
+    echo ""; echo "  Checking $app for build paths..."
+    k2_assert_no_build_paths "$app" || return 1
 }

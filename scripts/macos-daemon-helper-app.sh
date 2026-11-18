@@ -34,6 +34,9 @@
 # every caller of this file gets its functions too.
 # shellcheck source=scripts/macos-screen-helper-app.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/macos-screen-helper-app.sh"
+# The release path maps and the build-path check (Step 2 and Step 8.5).
+# shellcheck source=scripts/lib/build-paths.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/build-paths.sh"
 
 K2_DAEMON_HELPER_APP="K2 Daemon.app"
 K2_DAEMON_HELPER_BUNDLE_ID="dev.k2.app.daemon"
@@ -412,18 +415,21 @@ _k2_standalone_cargo() {
         # (K2_MAC_SIDECAR_CARGO_ARGS), so only the embed differs: k2-core
         # and every other crate are reused; k2-daemon recompiles and links.
         if declare -F k2_mac_build_env >/dev/null; then k2_mac_build_env; fi
+        # Step 2's path maps (the same checkout gives the same flags).
+        k2_release_path_maps "$PWD" || exit 1
         K2_PTYD_EMBED="$ptyd"
         K2_REQUIRE_PTYD_EMBED=1
         K2_EXPORT_EMBED="$exp"
         K2_REQUIRE_EXPORT_EMBED=1
         export K2_PTYD_EMBED K2_REQUIRE_PTYD_EMBED K2_EXPORT_EMBED K2_REQUIRE_EXPORT_EMBED
-        cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}" \
+        k2_path_mapped cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}" \
             || { echo "FATAL: standalone k2-daemon build (embedding k2-ptyd) failed" >&2; exit 1; }
         assert_daemon_embeds_ptyd "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1
         assert_daemon_embeds_export "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1
         if declare -F assert_daemon_oauth_not_placeholder >/dev/null; then
             assert_daemon_oauth_not_placeholder "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1
         fi
+        k2_assert_no_build_paths "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1
         cp "${CARGO_TARGET_DIR:-target}/release/k2-daemon" "$out" || exit 1
     )
 }

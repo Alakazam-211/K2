@@ -54,6 +54,8 @@ bun install --frozen-lockfile
 # The same path mappings as every Linux builder (GitHub's app-linux.yml too).
 # shellcheck source=scripts/ci/repro-build-env.sh
 source "$ROOT/scripts/ci/repro-build-env.sh"
+# shellcheck source=scripts/lib/build-paths.sh
+source "$ROOT/scripts/lib/build-paths.sh"
 k2_repro_build_env "$ROOT"
 # k2-node sets CI=1 for every job; `tauri build` accepts only true/false
 # for CI and fails at once on 1 (0.46.5 shadow: L3 failed in 3 s).
@@ -63,6 +65,9 @@ export CI=true
 "$ROOT/scripts/fetch-dfn3.sh"
 # linuxdeploy without FUSE (job users have no /dev/fuse).
 APPIMAGE_EXTRACT_AND_RUN=1 bunx tauri build --bundles deb,rpm,appimage
+# The bundles are compressed, so the check reads the app binary they all
+# carry: no file holds this node's home or the job user's name.
+k2_assert_no_build_paths "$TARGET_DIR/release/k2"
 # The deb carries them (every bundle takes the same resources).
 DEB_LIST="$(dpkg-deb -c "$B/deb/K2_${VERSION}_amd64.deb")"
 if ! printf '%s\n' "$DEB_LIST" | grep '/dfn3/dfn3_ll\.nnef\.tar$' >/dev/null; then
@@ -108,7 +113,7 @@ info = {
     "tree": os.environ["K2_BI_TREE"],
     "rustc": os.environ["K2_BI_RUSTC"],
     "bun": os.environ["K2_BI_BUN"],
-    "remap": "/k2 /cargo /target",
+    "remap": "/home /k2 /cargo /target",
     "files": files,
 }
 json.dump(info, open(os.path.join(out, "build-info.json"), "w"), indent=2, sort_keys=True)

@@ -9,6 +9,8 @@
 //!   `folders`).
 //! - [`read`]: `k5 read <workspace>`, a workspace's live terminal.
 //! - [`activity`]: `k5 activity`, the activity feed.
+//! - [`sessions`]: `k5 sessions` and its read forms (`--past`, `show`,
+//!   `main`).
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
 //! and the others return `None`) when it is a form only the shell
@@ -41,6 +43,7 @@ pub mod done;
 pub mod inbox;
 pub mod read;
 pub mod respond;
+pub mod sessions;
 pub mod whoami;
 
 /// The port as curl takes it from the shell's URL: digits only, and a

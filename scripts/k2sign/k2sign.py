@@ -1914,6 +1914,21 @@ class Scratch:
 
     def __enter__(self):
         if self.ctx.admin:
+            if self.ctx.test:
+                # Test mode only: the wrapper drops TMPDIR, so the scratch
+                # goes in a fresh 0700 folder under the test root, never
+                # the host's /tmp. No fallback: if it can't be made, stop.
+                self.base = os.path.join(self.ctx.test_root, "admin-tmp-" + secrets.token_hex(8))
+                try:
+                    os.mkdir(self.base, 0o700)
+                except OSError as e:
+                    raise Refused("test mode: cannot make the admin scratch folder %s (%s)" % (self.base, e))
+                try:
+                    self.dir = tempfile.mkdtemp(prefix="k2sign-admin-", dir=self.base)
+                except BaseException:
+                    shutil.rmtree(self.base, ignore_errors=True)
+                    raise
+                return self.dir
             # Root's scratch never sits in a folder the signing user owns (N1).
             self.dir = tempfile.mkdtemp(prefix="k2sign-admin-")
             os.chmod(self.dir, 0o700)
@@ -1925,6 +1940,9 @@ class Scratch:
 
     def __exit__(self, *a):
         shutil.rmtree(self.dir, ignore_errors=True)
+        if self.ctx.admin and self.ctx.test:
+            # Test mode only: the fresh folder __enter__ made.
+            shutil.rmtree(self.base, ignore_errors=True)
 
 
 def verb_preflight(ctx, args):

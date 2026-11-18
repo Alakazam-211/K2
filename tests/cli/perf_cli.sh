@@ -54,6 +54,8 @@
 #   help page      k5 mail send --help                <= 30 ms
 #   bare k5        k5 alone (the daily tier, no       <= 30 ms
 #                  passport: nothing asked)
+#   unknown        k5 nope (Unknown command, then     <= 30 ms
+#                  the daily tier, exit 1)
 #
 # with cli/k2's p95 for the two pages as info. Before timing, each page
 # runs once on both CLIs and the two must print the same and exit the
@@ -432,6 +434,7 @@ measure_page("page --version", ["--version"], 5.0)
 measure_page("study errors", ["study", "errors"], 30.0)
 measure_page("help page (mail send --help)", ["mail", "send", "--help"], 30.0)
 measure_page("bare k5 (the daily tier)", [], 30.0)
+measure_page("unknown command (k5 nope)", ["nope"], 30.0)
 if not all(results):
     sys.exit(f"perf_cli: {results.count(False)} of {len(results)} measures missed their target")
 print(f"perf_cli: {len(results)} measures met their targets")

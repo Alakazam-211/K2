@@ -18,6 +18,10 @@
 //!   a passport, another host setting (still 127.0.0.1), the bulletin
 //!   (no line), the flags in any order, the gates; a port that is no port
 //!   goes to the shell.
+//! - `update`, `--app`: the newest tag, none (`unknown`), not a string,
+//!   with newlines after it, not JSON, a list, nothing, curl failing
+//!   (before and after an answer), the proxy settings passed through, the
+//!   gate; `--help` goes to the shell (which asks GitHub for it).
 
 #![cfg(unix)]
 
@@ -117,6 +121,13 @@ fn version(v: &str) -> Reply {
 
 fn gh(body: &str) -> Vec<(&'static str, String)> {
     vec![("UPDATE_GH_BODY", body.to_string())]
+}
+
+fn gh_rc(body: &str, rc: i32) -> Vec<(&'static str, String)> {
+    vec![
+        ("UPDATE_GH_BODY", body.to_string()),
+        ("UPDATE_GH_RC", rc.to_string()),
+    ]
 }
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
@@ -370,6 +381,131 @@ fn update_cli_answers_as_the_shell_does() {
                 &[],
                 vec![],
                 owner_only,
+                0,
+                0,
+            ),
+        )),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+    assert_native(&rig, &v[0]);
+}
+
+#[test]
+fn update_app_answers_as_the_shell_does() {
+    let rig = rig("app");
+    let newest = r#"{"tag_name":"v0.46.20","name":"K2 0.46.20","prerelease":false}"#;
+    let v = vec![
+        with(
+            gh(newest),
+            case("the newest release", &[], &[], vec![], owner_and_port, 0, 0),
+        ),
+        with(
+            gh(newest),
+            case("--app", &["--app"], &[], vec![], owner_and_port, 0, 0),
+        ),
+        with(
+            gh(newest),
+            case(
+                "--cli then --app, and words skipped",
+                &["--cli", "x", "--app", "--check"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh(r#"{"message":"API rate limit exceeded"}"#),
+            case("no tag: unknown", &[], &[], vec![], owner_and_port, 0, 0),
+        ),
+        with(
+            gh(r#"{"tag_name":null}"#),
+            case(
+                "a tag that is not a string",
+                &[],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh("{\"tag_name\":\"v1 \\u00e9\\n\\n\"}\n\n"),
+            case(
+                "newlines after the tag",
+                &[],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh("<html>"),
+            case("not JSON", &[], &[], vec![], owner_and_port, 1, 0),
+        ),
+        with(
+            gh("[1]"),
+            case("a list", &[], &[], vec![], owner_and_port, 1, 0),
+        ),
+        with(
+            gh(""),
+            case("nothing", &[], &[], vec![], owner_and_port, 1, 0),
+        ),
+        with(
+            gh_rc("", 6),
+            case("curl fails", &[], &[], vec![], owner_and_port, 6, 0),
+        ),
+        with(
+            gh_rc(newest, 56),
+            case(
+                "curl fails after an answer",
+                &[],
+                &[],
+                vec![],
+                owner_and_port,
+                56,
+                0,
+            ),
+        ),
+        with(
+            [
+                gh(newest),
+                vec![
+                    ("https_proxy", "http://127.0.0.1:9".into()),
+                    ("NO_PROXY", "example.com".into()),
+                    ("CURL_HOME", "/nowhere/curl-home".into()),
+                    ("SSL_CERT_FILE", "/nowhere/ca.pem".into()),
+                ],
+            ]
+            .concat(),
+            case(
+                "curl's settings reach curl",
+                &["--app"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh(newest),
+            case("the gate", &[], &[], vec![], nothing, 1, 0),
+        ),
+        shell(with(
+            gh(newest),
+            case(
+                "--help: the shell's",
+                &["--help"],
+                &[],
+                vec![],
+                owner_and_port,
                 0,
                 0,
             ),

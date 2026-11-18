@@ -79,7 +79,7 @@ pub const CLI_NATIVE: bool = true;
 
 /// `k5 update` and `k5 update --app` are the binary's. Off, the shell
 /// answers them (and runs curl itself).
-pub const APP_NATIVE: bool = false;
+pub const APP_NATIVE: bool = true;
 
 /// `k5 update --list` is the binary's. Off, the shell answers it (and
 /// runs curl itself).

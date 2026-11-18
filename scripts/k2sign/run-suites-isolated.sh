@@ -34,7 +34,8 @@
 #      always required.
 #   5. Takes a listing of the real state before and after, and fails if
 #      any of it changed: names, modes, sizes and mtimes of what a suite
-#      could plausibly touch (the keychain files, LaunchAgents, ~/Applications,
+#      could plausibly touch (the keychain files except the live login
+#      keychain, LaunchAgents, ~/Applications,
 #      ~/.k2sign, ~/.k2-updater, ~/.k2-release-approve, ~/k2-release-audit,
 #      the gh and git config, the installed signer's folders, sudoers.d,
 #      LaunchDaemons and this checkout's .git), and only the top-level
@@ -46,6 +47,17 @@
 #      mtimes there say nothing about the suites; the suites never see the
 #      real home (HOME is inside W) and the sandbox refuses any write to it,
 #      and a file appearing or going away there is still caught.
+#      The live login keychain is watched by its ITEMS, not its mtime (the
+#      K2 app writes it): `security dump-keychain` without -d (attributes
+#      only, never secrets) gives each item's label and class, its own
+#      modification date (mdat), and for keys and certificates, which have
+#      no mdat, the public key hash. Any change, or a different count,
+#      fails the run, and the log names the item by label only
+#      (scripts/k2sign/kc-items.awk, tested by tests/release/k2sign-kc-items.sh).
+#   5b. The suites get SDKROOT, found once with `xcrun --show-sdk-path`
+#      before the sandbox and printed in the log; read-only inside the
+#      sandbox. Only this harness sets it; the shipped wrappers' env lists
+#      are unchanged.
 #   6. Prints each suite's result line and removes W (--keep leaves it, for
 #      reading the logs).
 # Exit 0 only when all three suites pass and nothing watched changed.
@@ -228,10 +240,16 @@ snapshot() {
         # The keychains: every file in the folder in full (login and the
         # other *.keychain-db), the names in each subfolder (macOS writes
         # the <UUID>/ data-protection keychain all the time).
+        # The live login keychain is the one exception: the K2 app writes
+        # it while the suites run, so its mtime does not count here; its
+        # items do (kc_items, compared after the suites).
         kc="$REAL_HOME/Library/Keychains"
         if [ -d "$kc" ]; then
             /bin/ls -A "$kc" | sed "s|^|$kc/ |"
-            /usr/bin/find "$kc" -maxdepth 1 -type f -exec /usr/bin/stat -f '%N %p %z %m' {} + 2>/dev/null || echo "$kc (unreadable)"
+            /usr/bin/find "$kc" -maxdepth 1 -type f ! -name login.keychain-db -exec /usr/bin/stat -f '%N %p %z %m' {} + 2>/dev/null || echo "$kc (unreadable)"
+            if [ -f "$kc/login.keychain-db" ]; then
+                /usr/bin/stat -f '%N %p %z (mtime not counted: its items are)' "$kc/login.keychain-db"
+            fi
             /usr/bin/find "$kc" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r d; do
                 /bin/ls -A "$d" 2>/dev/null | sed "s|^|$d/ |" || echo "$d (unreadable)"
             done
@@ -248,6 +266,20 @@ snapshot() {
     } | LC_ALL=C sort
 }
 snapshot > "$W/logs/state.before"
+
+# The live login keychain's items, from `security dump-keychain` WITHOUT
+# -d, so attributes only, never a secret: label, class and each item's own
+# modification date (mdat); for keys and certificates, which have no mdat,
+# their label plus the key's or certificate's public key hash. Sorted, so
+# the count is compared too. Written inside W and removed with it.
+LOGIN_KC="$REAL_HOME/Library/Keychains/login.keychain-db"
+kc_items() {
+    [ -f "$LOGIN_KC" ] || { echo "(no login keychain)"; return 0; }
+    local dump
+    dump="$(/usr/bin/security dump-keychain "$LOGIN_KC")" || die "security dump-keychain (attributes only) failed on the login keychain"
+    printf '%s\n' "$dump" | /usr/bin/awk -f "$SRC/scripts/k2sign/kc-items.awk" | LC_ALL=C sort
+}
+kc_items > "$W/logs/kc.before"
 
 # ── 4. the sandbox ─────────────────────────────────────────────────────
 USER_TMP="$(cd "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" && pwd -P)" || die "cannot read the per-user temp folder"
@@ -272,9 +304,24 @@ cat > "$W/sandbox.sb" <<SB
     (global-name "com.apple.security.keychain-circle-notification"))
 SB
 
+# The macOS SDK, found here, before the sandbox and env -i. Without SDKROOT,
+# clang under env -i takes the Command Line Tools SDK, which may not match
+# the linker (S3 links C code). The release build on the signing Mac finds
+# its SDK the same way. No SDK: stop, never guess.
+SDK="$(/usr/bin/xcrun --show-sdk-path 2>/dev/null)" || SDK=""
+if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
+    echo "run-suites-isolated: cannot find the macOS SDK (xcrun --sdk macosx --show-sdk-path)" >&2
+    exit 1
+fi
+case "$SDK" in *'
+'*) echo "run-suites-isolated: the SDK path holds a newline: $SDK" >&2; exit 1 ;; esac
+# Read-only inside the sandbox: its profile refuses every write outside W.
+echo "SDK: $SDK (SDKROOT for the suites only; the shipped wrappers' env lists are unchanged)"
+
 # The one environment every suite gets: nothing from the caller but USER,
-# LOGNAME and a locale.
+# LOGNAME and a locale, plus the SDK found above.
 ENVV="HOME=$W/home
+SDKROOT=$SDK
 TMPDIR=$W/tmp/
 PATH=$W/bin:/usr/bin:/bin:/usr/sbin:/sbin
 USER=$ME
@@ -420,6 +467,17 @@ fi
 
 # ── 5b. the real state, after ──────────────────────────────────────────
 snapshot > "$W/logs/state.after"
+kc_items > "$W/logs/kc.after"
+if ! /usr/bin/cmp -s "$W/logs/kc.before" "$W/logs/kc.after"; then
+    rc=1
+    echo "FAIL: the login keychain's items changed while the suites ran ($(wc -l < "$W/logs/kc.before" | tr -d ' ') before, $(wc -l < "$W/logs/kc.after" | tr -d ' ') after). By label:"
+    # Labels only: an item added, removed, or whose mdat or identity changed.
+    /usr/bin/diff "$W/logs/kc.before" "$W/logs/kc.after" | sed -n 's/^\([<>]\) \([^	]*\)	.*/  \1 \2/p' | LC_ALL=C sort -u
+elif [ "$(cat "$W/logs/kc.before")" = "(no login keychain)" ]; then
+    echo "no login keychain for this user: nothing to compare there"
+else
+    echo "unchanged: $(wc -l < "$W/logs/kc.before" | tr -d ' ') login keychain items (mdat, or label and hash)"
+fi
 if ! /usr/bin/diff "$W/logs/state.before" "$W/logs/state.after" > "$W/logs/state.diff"; then
     rc=1
     echo "FAIL: real state changed while the suites ran (check whether something else on this Mac changed it):"

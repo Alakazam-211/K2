@@ -94,6 +94,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **New k5 command (Beta): the `k2` and `k5` commands as a Rust program.** Off by default. The owner turns it on in Settings → General → Server → Advanced, and the commands then run the new k5 program instead of the shell script. It answers `--version` and `k5 cli status` itself and hands every other command to the shell script, so they work as before; `k5 cli status` shows which commands it answers itself. On macOS and Linux. Not on Windows yet: Windows keeps the shell script.
 - **`k2 doc` sends a value that looks like @int:5 or @text as the text you typed, and never sends an empty change.**
 - **Duration options such as --for, --cooldown and --timeout take digits with a unit**; anything else is refused before a request is sent, and a leading zero now counts as decimal.
+- **`k2 done` escapes the agent name.** A name with `#`, `&`, `=`, `%`, a space or `+` in it (from `--agent` or `K2_AGENT_NAME`) no longer marks the wrong agent done, drops `--blocked`, or adds a parameter of its own: K2 gets the whole name as typed.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

@@ -20,12 +20,11 @@
 //!   cell-socket arm.
 //! - What the binary hands to the shell: -h and --help (as a flag and as
 //!   --blocked's value), a session the API started.
-//! - The agent escaped as the 0.46.16 shell escapes it (`#`, `&`, `=`, a
-//!   space, `+`, `%`, control bytes, UTF-8). The shell under this line is
-//!   older and sends the agent raw, so these rows check the binary against
-//!   the fixed shell's request bytes, stated in each row (the same bytes
-//!   `tests/cli/done_agent_escape.sh` checks the fixed shell sends). The
-//!   parity run against bash itself comes at the 0.46.16 rebase.
+//! - The agent escaped as the shell escapes it since 0.46.17 (`#`, `&`,
+//!   `=`, a space, `+`, `%`, control bytes, UTF-8): each row runs against
+//!   bash on the rig, and the binary's request bytes are also checked
+//!   against the bytes stated in the row (the same bytes
+//!   `tests/cli/done_agent_escape.sh` checks the shell sends).
 
 #![cfg(unix)]
 
@@ -790,9 +789,10 @@ fn binary_sends(rig: &Rig, c: &Case, want: &str) {
     );
 }
 
-/// The agent escaped as 0.46.16's `cmd_done` escapes it
+/// The agent escaped as `cmd_done` escapes it
 /// (`agent=$(urlencode "$agent")`), byte for byte, from --agent and from
-/// AGENT_NAME, with --blocked kept.
+/// AGENT_NAME, with --blocked kept: the same as bash, and the bytes the
+/// row states.
 #[test]
 fn done_escapes_the_agent() {
     let rig = Rig::new(VERB, "escape");
@@ -919,6 +919,7 @@ fn done_escapes_the_agent() {
         ),
     ];
     for (c, want) in &rows {
+        rig.check(c);
         binary_sends(&rig, c, want);
     }
 }

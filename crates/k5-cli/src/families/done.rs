@@ -17,8 +17,8 @@
 //!    Nothing is sent after any of these.
 //! 3. One `cli_request_post /cli/done "agent=<agent>[&blocked=<reason>]"`
 //!    over TCP (the shell calls it directly: never the cell socket). The
-//!    agent and the reason are escaped as `urlencode` does. This is the
-//!    0.46.16 shell's query: before it the shell sent the agent raw, so a
+//!    agent and the reason are escaped as `urlencode` does, as the shell
+//!    does since 0.46.17: before it the shell sent the agent raw, so a
 //!    `#` cut the URL (and lost --blocked) and a `&` added a parameter.
 //! 4. The answer's bytes on stdout as they came, NULs dropped, and exit 0,
 //!    whatever the status: the shell prints `out` and returns curl's code.
@@ -244,20 +244,15 @@ mod tests {
             r#"[[ $# -ge 2 && "$2" != -* ]] || { echo "k2 done: '--agent' needs a name." >&2; exit 2; }"#,
             r#"[[ $# -ge 2 ]] || { echo "k2 done: '--blocked' needs a reason." >&2; exit 2; }"#,
             r#"[[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }"#,
+            r#"local params="agent=$(urlencode "$agent")""#,
             r#"[[ -n "$blocked" ]] && params="$params&blocked=$(urlencode "$blocked")""#,
             r#"cli_request_post "/cli/done" "$params""#,
         ] {
             assert!(text.contains(shell), "cmd_done no longer has {shell:?}");
         }
-        // The binary escapes the agent as the 0.46.16 shell does; the shell
-        // under this line is older and sends it raw. When the fix is here,
-        // pin its line instead and make tests/done_parity.rs's
-        // `done_escapes_the_agent` rows parity rows against bash.
-        let raw = r#"local params="agent=$agent""#;
-        let fixed = r#"local params="agent=$(urlencode "$agent")""#;
         assert!(
-            text.contains(raw) && !text.contains(fixed),
-            "cmd_done's agent line changed: if it is 0.46.16's {fixed:?}, pin it here and compare the escaped-agent rows with bash"
+            !text.contains(r#"local params="agent=$agent""#),
+            "cmd_done sends the agent raw again"
         );
         let session = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

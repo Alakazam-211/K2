@@ -26,7 +26,9 @@ cmd_done() {
         esac
     done
     [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
-    local params="agent=$agent"
+    # The name is escaped like every other value: raw, a '#' cut the query
+    # (and dropped --blocked) and a '&' added a parameter of its own.
+    local params="agent=$(urlencode "$agent")"
     [[ -n "$blocked" ]] && params="$params&blocked=$(urlencode "$blocked")"
     cli_request_post "/cli/done" "$params"
 }

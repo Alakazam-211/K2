@@ -152,13 +152,13 @@ pub(crate) fn avoid_not_yours(name: &str) -> String {
 /// listing every other node to avoid. Node ids (a rename keeps it).
 pub(crate) fn only_from(who: &Who, v: &serde_json::Value, ws_id: &str) -> R<Vec<String>> {
     let Some(raw) = v.get("only").filter(|x| !x.is_null()) else { return Ok(Vec::new()) };
-    let list = raw.as_array().ok_or_else(|| no(codes::BAD_REQUEST, 400, "only is a list of node names (--only k2n8, repeatable)"))?;
+    let list = raw.as_array().ok_or_else(|| no(codes::BAD_REQUEST, 400, "only is a list of node names (--only linux-1, repeatable)"))?;
     if list.len() > MAX_AVOID {
         return Err(no(codes::BAD_REQUEST, 400, format!("--only names at most {MAX_AVOID} nodes")));
     }
     let mut ids: Vec<String> = Vec::new();
     for x in list {
-        let t = x.as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "only is a list of node names (--only k2n8, repeatable)"))?;
+        let t = x.as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "only is a list of node names (--only linux-1, repeatable)"))?;
         let n = resolve_node_for(who, Some(t), Some(ws_id)).map_err(|mut e| {
             if e.code == codes::NODE_NOT_FOUND {
                 e.hint = format!("--only {t}: {}", e.hint);

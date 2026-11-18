@@ -72,7 +72,7 @@ EXAMPLES
   k2 agent context move 0 top
   k2 agent context show --outline
   k2 agent context regen
-  k2 agent context regen --workspace julie
+  k2 agent context regen --workspace acme
   k2 agent context list --workspace /path/to/peer
 EOF
 }

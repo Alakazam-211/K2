@@ -15,9 +15,6 @@ use crate::cli_response::CliResponse;
 use crate::mail::domains;
 use crate::mail::jmap::{AuthBanRate, IpListEntry, StalwartClient};
 
-/// Standing allowlist IPs (help + clear warn). Never auto-insert.
-pub const STANDING_ALLOWLIST_IPS: &[&str] = &["65.130.10.89", "65.130.229.9"];
-
 /// Rejected wholesale NAT (T-Mobile). Do not allowlist.
 const REJECTED_ALLOWLIST_CIDR: &str = "172.56.0.0/16";
 
@@ -245,19 +242,10 @@ pub fn handle_bans_clear(body: &[u8]) -> CliResponse {
     if let Err(e) = engine.action_reload_blocked_ips() {
         return map_engine_err(e);
     }
-    let allow = match list_allowed(&engine) {
-        Ok(a) => a,
-        Err(e) => return map_engine_err(e),
-    };
-    let mut warnings = Vec::new();
-    for standing in STANDING_ALLOWLIST_IPS {
-        if !allow.iter().any(|e| address_eq(&e.address, standing)) {
-            warnings.push(format!(
-                "standing IP {standing} is not on the allowlist — pair clear with \
-                 `k2 hostmail allowlist add {standing}` (unban does not reset fail counters)"
-            ));
-        }
-    }
+    // The mail-ban check has no built-in allowlist: the owner's allowlist
+    // (k2 hostmail allowlist add) is the only one. `warnings` stays in the
+    // answer, empty, for clients that read it.
+    let warnings: Vec<String> = Vec::new();
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
@@ -852,12 +840,7 @@ mod tests {
     fn reject_tmobile_cidr() {
         let err = normalize_ip_or_cidr("172.56.0.0/16").expect_err("reject");
         assert!(err.contains("172.56.0.0/16"), "{err}");
-        assert!(normalize_ip_or_cidr("65.130.10.89").is_ok());
+        assert!(normalize_ip_or_cidr("203.0.113.10").is_ok());
         assert!(normalize_ip_or_cidr("10.0.0.0/8").is_ok());
-    }
-
-    #[test]
-    fn standing_ips_are_documented_constants() {
-        assert_eq!(STANDING_ALLOWLIST_IPS, &["65.130.10.89", "65.130.229.9"]);
     }
 }

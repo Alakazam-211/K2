@@ -31,12 +31,11 @@ help="$("$K2" hostmail bans --help)"
 <<<"$help" grep -qi 'fail counter' || fail "bans --help must mention fail counters"
 
 clear_help="$("$K2" hostmail bans clear --help)"
-<<<"$clear_help" grep -q '65.130.10.89' || fail "clear --help should mention standing IPs warn path"
+<<<"$clear_help" grep -q 'no built-in allowlist' || fail "clear --help must say there is no built-in allowlist"
 <<<"$clear_help" grep -q 'allowlist' || fail "clear --help must pair with allowlist"
 
 add_help="$("$K2" hostmail allowlist add --help)"
-<<<"$add_help" grep -q '65.130.10.89' || fail "allowlist add --help must print standing 65.130.10.89"
-<<<"$add_help" grep -q '65.130.229.9' || fail "allowlist add --help must print standing 65.130.229.9"
+<<<"$add_help" grep -q 'Nothing is added for you' || fail "allowlist add --help must say nothing is added for you"
 <<<"$add_help" grep -q '172.56.0.0/16' || fail "allowlist add --help must refuse documenting 172.56"
 
 # Capture once, then grep the string: `--schema | grep -q` under

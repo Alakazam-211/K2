@@ -1411,11 +1411,11 @@ FLAGS (add)
   --smtp-tls <kind>      implicit-tls | starttls for SMTP — always verified
 
 EXAMPLES
-  printf %s "$APP_PW" | k2 mail link add rosson@gmail.com \
+  printf %s "$APP_PW" | k2 mail link add alice@example.com \
       --host imap.gmail.com --workspace ~/DevProjects/K2 --pass-stdin
   k2 mail link add ops@acme.com --host mail.acme.com --tls starttls \
       --workspace acme-ops --pass-ref env:ACME_MAIL_PW
-  k2 mail link add rosson@gmail.com --provider gmail --workspace ~/DevProjects/K2
+  k2 mail link add alice@example.com --provider gmail --workspace ~/DevProjects/K2
   k2 mail link add me@company.com --provider microsoft --workspace acme-ops
   k2 mail link add me@company.com --provider microsoft --workspace acme-ops \
       --features mail,calendar
@@ -1546,7 +1546,7 @@ CALENDARS
 
 EXAMPLES
   k2 mail access grant ops@acme.dev support-team --level send
-  k2 mail access grant rosson@gmail.com research --level draft
+  k2 mail access grant alice@example.com research --level draft
   k2 mail access primary ops@acme.dev new-owner
   k2 mail access manage ops@acme.dev support-team --on            (manage, no delete)
   k2 mail access manage ops@acme.dev support-team --on --delete   (manage + delete)
@@ -1583,7 +1583,7 @@ EXAMPLES
   k2 mail move m_ab12  Archive
   k2 mail flag m_ab12 --read --star
   k2 mail delete m_ab12
-  k2 mail folder create rosson@gmail.com "Receipts"
+  k2 mail folder create alice@example.com "Receipts"
 EOF
 }
 
@@ -2583,8 +2583,8 @@ cmd_help_hostmail_bans_clear() {
     cat <<'EOF'
 Destroy BlockedIp rows for <ip> then ReloadBlockedIps.
 Default: authFailure only. --all also destroys portScanning/etc.
-Unknown IP → ok destroyed:[]. Warns if standing IPs
-65.130.10.89 / 65.130.229.9 are missing from the allowlist.
+Unknown IP → ok destroyed:[]. There is no built-in allowlist: add the
+addresses you trust with k2 hostmail allowlist add.
 Unban does not reset fail counters — pair with allowlist add.
 POST /cli/mail/bans/clear. GET → 405. mail_manage.
 
@@ -2654,9 +2654,8 @@ cmd_help_hostmail_allowlist_add() {
     cat <<'EOF'
 Create AllowedIp then ReloadSettings. Default reason=migration.
 --expires RFC3339 for a temporary cut window; omit for permanent.
-Standing every-cut IPs (document only — never auto-inserted):
-  65.130.10.89   (Rosson home Wi-Fi)
-  65.130.229.9   (office)
+The allowlist is yours: add the addresses you trust (your home and
+office IPs, for example 203.0.113.10). Nothing is added for you.
 Do not allowlist 172.56.0.0/16 (T-Mobile CGNAT).
 POST /cli/mail/allowlist/add. GET → 405. mail_manage.
 

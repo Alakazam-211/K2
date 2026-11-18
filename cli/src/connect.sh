@@ -26,7 +26,7 @@ sys.stdout.write(tok)
 ' "${K2_HOME}/tunnel.json" 2>/dev/null
 }
 
-# Read the connected subdomain LABEL from ~/.k2/tunnel.json (e.g. "rosson").
+# Read the connected subdomain LABEL from ~/.k2/tunnel.json (e.g. "acme").
 # This is the primary subdomain this machine's tunnel is bound to; we use it
 # to pick the connected row out of GET /subdomains for the plan display.
 # (The server-side gate matches on the tunnel TOKEN, not this label — this is

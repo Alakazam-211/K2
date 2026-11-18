@@ -266,7 +266,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         return Err(no(
             compute::codes::BAD_REQUEST,
             400,
-            "say one of: the whole list (k2 compute allow-nodes k2n9,k2-arch), --add NODE, --remove NODE, or --clear",
+            "say one of: the whole list (k2 compute allow-nodes linux-1,arch-1), --add NODE, --remove NODE, or --clear",
         ));
     }
     let ws = target_ws(who, s(&v, "workspace")).map_err(|r| other_workspace(who, s(&v, "workspace"), r))?;

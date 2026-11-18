@@ -2078,7 +2078,7 @@ exit: 0
     {
       "name": "hostmail allowlist add",
       "usage": "k2 hostmail allowlist add <ip|cidr> [--reason migration] [--expires <rfc3339>] [--json]",
-      "description": "AllowedIp + ReloadSettings. Standing IPs in --help only (65.130.10.89, 65.130.229.9) — never auto-insert. No 172.56.0.0/16. mail_manage.",
+      "description": "AllowedIp + ReloadSettings. The allowlist is the owner's; nothing is added for you. No 172.56.0.0/16. mail_manage.",
       "args": [{"name": "address", "required": true}],
       "flags": [
         {"name": "--reason", "arg": "text", "description": "Default migration."},

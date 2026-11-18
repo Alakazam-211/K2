@@ -1516,7 +1516,7 @@ One new turn per request: `[permission:<id>] approved | already on | denied | ex
 
 ## A step at a machine
 
-If a refusal tells you to run something at a machine (for example `At z3mbpz, run: sudo k2-node admin level policy`), it can't be requested:
+If a refusal tells you to run something at a machine (for example `On the signing host, run: sudo k2-node admin level policy`), it can't be requested:
 
 1. Write the steps for your human in markdown on your Thread.
 2. If you need to know when it's done, ask: `k2 thread ask <your address> "Tell me when it's done" --options "Done"`.

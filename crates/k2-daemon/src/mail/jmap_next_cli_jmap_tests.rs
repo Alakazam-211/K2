@@ -202,7 +202,7 @@ fn parse_blocked_ip_get_fixture() {
     let args = serde_json::json!({
         "list": [{
             "id": "bip1",
-            "address": "65.130.10.89",
+            "address": "203.0.113.10",
             "reason": "authFailure",
             "createdAt": "2026-09-18T12:00:00Z",
             "expiresAt": null,
@@ -211,7 +211,7 @@ fn parse_blocked_ip_get_fixture() {
     let rows = parse_ip_list_get(&args);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "bip1");
-    assert_eq!(rows[0].address, "65.130.10.89");
+    assert_eq!(rows[0].address, "203.0.113.10");
     assert_eq!(rows[0].reason.as_deref(), Some("authFailure"));
     assert!(rows[0].expires_at.is_null());
 }

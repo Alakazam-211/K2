@@ -13,7 +13,7 @@ WORDS
   solo     a node with one server: everything works exactly as before
 
 WHAT YOU SEE
-  k2 compute nodes    "shared by rosson.k2.dev (3 servers) until Oct 27"
+  k2 compute nodes    "shared by acme.k2.dev (3 servers) until Oct 27"
                       and your share: running 1/1 · queued 2/10 · …
   k2 compute queue <node>   the whole node queue. Other servers' jobs show
                       as "another server", tier, class, size and ETA only. No

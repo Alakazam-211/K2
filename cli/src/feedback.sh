@@ -1184,7 +1184,7 @@ FLAGS
 
 EXAMPLES
   k2 tickets assign ab12cd34 owner
-  k2 tickets assign ab12cd34 --to julie,rosson
+  k2 tickets assign ab12cd34 --to alice,bob
   k2 tickets assign ab12cd34 --clear
 EOF
 }

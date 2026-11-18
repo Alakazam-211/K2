@@ -50,7 +50,7 @@ part_web() {
     step "Release lock (stub k2-node)";            bash tests/packaging/release-lock.sh
     step "Release k2-ptyd checks (dry)";           bash tests/packaging/release-ptyd-checks.sh
     step "Linux builds on K2 Compute (stubbed)";   bash tests/packaging/compute-release.sh
-    step "Update signing on z3mbpZ (stubbed)";     bash tests/packaging/updater-signing.sh
+    step "Update signing on the signing host (stubbed)";     bash tests/packaging/updater-signing.sh
     step "CI gate scripts (stubbed)";              bash tests/packaging/ci-gate.sh
     step "k2-daemon test groups (no cargo)";       bash scripts/check-daemon-test-targets.sh
     step "Test-group check on broken layouts";     bash tests/packaging/daemon-test-targets.sh
@@ -175,6 +175,7 @@ part_rust_test() {
     bash tests/cli/root_helper_cli.sh
     bash tests/cli/front_cli.sh
     bash tests/cli/provision_mail_helper.sh
+    bash tests/cli/provision_sew.sh
     bash tests/packaging/install-daemon-root-helper.sh
     bash tests/cli/daemon_unit_oompolicy.sh
     bash tests/cli/daemon_unit_runtime_dir.sh

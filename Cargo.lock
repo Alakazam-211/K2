@@ -4595,6 +4595,7 @@ dependencies = [
  "criterion",
  "dirs 5.0.1",
  "dunce",
+ "gtk",
  "ignore",
  "image",
  "k2-client",

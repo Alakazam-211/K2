@@ -250,8 +250,19 @@ ignore = "0.4"
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 security-framework = "3"
 
+# tests/webview_proxy.rs opens a GTK window for its WebKitGTK page. The
+# same gtk 0.18 that webkit2gtk 2.0.2 and tauri already use.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gtk = "=0.18.2"
+
 [[bench]]
 name = "perf"
+harness = false
+
+# tests/webview_proxy.rs: a real WebKitGTK page under Xvfb (Linux). Its own
+# main: GTK runs on the main thread, one child process per case.
+[[test]]
+name = "webview_proxy"
 harness = false
 
 [build-dependencies]

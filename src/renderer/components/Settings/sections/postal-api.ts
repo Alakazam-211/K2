@@ -60,6 +60,9 @@ export interface PostalFriend {
   ownerName?: string | null
   route?: string | null
   sasVersion?: number | string | null
+  /** The request carries a pairing code: it can't be accepted until the
+   *  Postal network connection comes (the code itself is never listed). */
+  codeWaiting?: boolean
   pinnedAt?: string | null
   decidedBy?: string | null
   decidedAt?: string | null

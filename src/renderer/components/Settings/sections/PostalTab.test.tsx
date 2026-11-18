@@ -5,7 +5,8 @@
 //     features, and never for a Voice & Chat only login;
 //   - it shows the address card (with a claim form when there is no
 //     address), Friends, Invitations and Routing;
-//   - Accept posts postal/decide {workspace, id, decision: 'accept'};
+//   - Accept posts postal/decide {workspace, id, decision: 'accept'}; a
+//     request with a pairing code can't be accepted yet (Accept is off);
 //   - a 409 postal_off answer shows the daemon's hint inline;
 //   - the owner's switch posts postal/settings {enabled} and re-reads
 //     /boot-status so the tab appears.
@@ -168,6 +169,18 @@ describe('PostalTab', () => {
       fireEvent.click(accept)
     })
     expect(cli.posts).toContainEqual({ route: 'postal/decide', body: { workspace: '/ws/ada', id: 'f1', decision: 'accept' } })
+  })
+
+  it('a request with a pairing code says it waits, and Accept is off (Reject still works)', async () => {
+    cli.friends = [{ id: 'f9', peer: 'lab::gamma.postal.bot', status: 'pending_in', ownerName: 'Dana', codeWaiting: true }]
+    render(<PostalTab project={project} scope={scope} />)
+    const accept = (await screen.findByRole('button', { name: 'Accept' })) as HTMLButtonElement
+    expect(accept.disabled).toBe(true)
+    expect(screen.getByTestId('postal-code-note-f9').textContent).toContain('once the Postal network connection comes')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    })
+    expect(cli.posts).toContainEqual({ route: 'postal/decide', body: { workspace: '/ws/ada', id: 'f9', decision: 'reject' } })
   })
 
   it("shows the daemon's hint when Postal was turned off meanwhile", async () => {

@@ -669,6 +669,12 @@ fi
 if [ "${1:-}" = "send-feedback" ]; then
     case "${2:-}" in ""|help|-h|--help) _skip_conn_gate=1 ;; esac
 fi
+# `k2 postal`, its help, and send|route|adopt (which only say "not
+# available yet") talk to nothing (0.46.16, Postal Beta): no daemon.
+if [ "${1:-}" = "postal" ]; then
+    case "${2:-}" in ""|help|-h|--help|send|route|adopt) _skip_conn_gate=1 ;; esac
+    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+fi
 # `k2 organization`, `k2 organization --help` and any verb's --help only
 # print help (the Org Chart): no daemon.
 if [ "${1:-}" = "organization" ]; then

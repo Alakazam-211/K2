@@ -435,9 +435,14 @@ export function PostalTab({
             actions={
               canManage ? (
                 <>
+                  {f.codeWaiting ? (
+                    <span className={SETTING_ROW_HINT} data-testid={`postal-code-note-${f.id}`}>
+                      Has a pairing code: it can be accepted once the Postal network connection comes (a later release).
+                    </span>
+                  ) : null}
                   <Button
                     variant="accent"
-                    disabled={busy !== null}
+                    disabled={busy !== null || f.codeWaiting === true}
                     onClick={() => void run(`decide:${f.id}`, () => decidePostalRequest(scope, workspace, f.id, 'accept'), `${f.peer} is now a friend.`)}
                   >
                     Accept

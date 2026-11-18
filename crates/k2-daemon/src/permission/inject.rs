@@ -122,6 +122,11 @@ pub(crate) fn outcome_line(req: &PermissionRequest, now: i64) -> Option<String> 
 
 /// Wake the agent once with the request's outcome (its own address).
 pub(crate) fn send_outcome(req: &PermissionRequest) {
+    // K2's own card for an incoming Postal friend request: a request never
+    // wakes an agent, and neither does its answer (prd-postal-in-k2-v1 §5.5).
+    if super::actions::postal::quiet(req) {
+        return;
+    }
     let now = k2_core::overlay::now_secs();
     let Some(line) = outcome_line(req, now) else { return };
     let addr = req.addr.clone().unwrap_or_else(|| present::workspace_handle(&req.workspace_id));

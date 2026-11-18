@@ -5,8 +5,9 @@
 //! Postal (Beta, prd-postal-in-k2-v1 S3): the floor here lets a login in;
 //! the handler (`postal_routes`) decides by role and by passport: claiming
 //! is an Owner's or Admin's, answering a request the Owner's (Admins when
-//! allowed), an agent's invite and the p5 link are cards, and an agent
-//! removes or blocks its own friends itself. None is on the Voice & Chat
+//! allowed), turning Postal on the Owner's; an agent asks for each of them,
+//! for an invite and for the p5 link on a card, and removes, blocks or
+//! rejects its own friends and requests itself. None is on the Voice & Chat
 //! only allowlist.
 
 use super::Floor::{Admin, Member, Owner};
@@ -16,6 +17,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/postal/block", Member),
     post("/cli/postal/claim", Admin),
     post("/cli/postal/decide", Admin),
+    // The handler: the Owner turns it on; an agent's ask is a card.
+    post("/cli/postal/enable", Member),
     get("/cli/postal/friends", Member),
     post("/cli/postal/invite", Member),
     post("/cli/postal/link-p5", Member),

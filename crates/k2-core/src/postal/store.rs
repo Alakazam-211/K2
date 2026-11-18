@@ -175,6 +175,12 @@ pub fn handle_for_workspace(conn: &Connection, workspace_id: &str) -> Option<Han
     .flatten()
 }
 
+/// The workspace that holds `address` (any status: a released address
+/// stays its workspace's to take back), if any.
+pub fn address_holder(conn: &Connection, address: &str) -> Option<String> {
+    conn.query_row("SELECT workspace_id FROM postal_handles WHERE address = ?1", params![address], |r| r.get(0)).optional().ok().flatten()
+}
+
 /// Every live handle on this server, oldest first.
 pub fn handles(conn: &Connection) -> Vec<Handle> {
     let Ok(mut st) = conn.prepare(&format!("SELECT {HANDLE_COLS} FROM postal_handles WHERE status != 'released' ORDER BY created_at, id")) else {
@@ -381,6 +387,22 @@ pub fn decide(conn: &Connection, id: &str, accept: bool, by: &str) -> Result<Fri
         set_status(conn, id, "rejected", Some(by))?;
     }
     friend(conn, id).ok_or(StoreError::NotFound)
+}
+
+/// A friend's key changed on the Postal network (the SDK's `rekey` gate):
+/// an accepted friend waits as `rekey_pending` for a person, and its mail
+/// is held back until then. The new key isn't stored here: the SDK keeps it
+/// and pins it when a person accepts. Not a friend: `NotPending`.
+pub fn mark_rekey(conn: &Connection, handle_id: &str, peer: &str) -> Result<Friend, StoreError> {
+    let f = friend_by_peer(conn, handle_id, peer).ok_or(StoreError::NotFound)?;
+    match f.status.as_str() {
+        "rekey_pending" => return Ok(f),
+        "accepted" => {}
+        other => return Err(StoreError::NotPending(other.to_string())),
+    }
+    let t = now();
+    conn.execute("UPDATE postal_friends SET status = 'rekey_pending', updated_at = ?2 WHERE id = ?1", params![f.id, t]).map_err(db)?;
+    friend(conn, &f.id).ok_or(StoreError::NotFound)
 }
 
 /// Remove a friend or withdraw a request (`revoked`), kept as history.

@@ -17,14 +17,22 @@
 //!   off by default). Every friend request, incoming or outgoing, waits for
 //!   a person's permission card.
 //!
-//! Native Postal (the SDK host: pairing on the plane, receive, send, held
-//! mail) comes in later slices; the address grammar here matches p5's
-//! `PostalAddr` so both sides parse one identity the same way.
+//! - **The human gates (S3, [`gate`]).** The SDK's `HumanGate` seam: K2
+//!   presents a card for each request, keeps the pairing code the card
+//!   shows, and queues every person's answer for the SDK.
+//!
+//! **Waits on others (never pretended):** native pairing, receive, send
+//! and held mail need postal-sdk wire v2 (S1, Postal Bot) and the plane's
+//! P-1..P-8 (K2 Web); [`gate::network_available`] is `false` until then,
+//! and every answer that would go out says "not available yet". The
+//! address grammar here matches p5's `PostalAddr` so both sides parse one
+//! identity the same way.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
+pub mod gate;
 pub mod store;
 
 /// The `/boot-status` feature key while the server's Postal switch is on:

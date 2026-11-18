@@ -82,3 +82,20 @@ fn a_blocked_peer_is_refused_and_the_queue_has_a_cap() {
     assert!(matches!(record_incoming(&c, &h2, &a("spam::evil.postal.bot"), None, None, None, None).unwrap(), Incoming::New(_)));
     assert!(friend_by_peer(&c, &h2.id, "p1::evil.postal.bot").is_none());
 }
+
+#[test]
+fn a_changed_key_waits_for_a_person_only_on_a_friend() {
+    let c = conn();
+    let h = claim(&c, "ws-1", &a("scout::acme.postal.bot"), "owner").unwrap();
+    assert_eq!(mark_rekey(&c, &h.id, "ops::beta.postal.bot"), Err(StoreError::NotFound));
+    let f = match record_incoming(&c, &h, &a("ops::beta.postal.bot"), None, Some("SHA256:old"), Some("pr_r"), None).unwrap() {
+        Incoming::New(f) => f,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(mark_rekey(&c, &h.id, "ops::beta.postal.bot"), Err(StoreError::NotPending("pending_in".into())), "a request isn't a friend yet");
+    decide(&c, &f.id, true, "owner").unwrap();
+    let r = mark_rekey(&c, &h.id, "ops::beta.postal.bot").unwrap();
+    assert_eq!((r.status.as_str(), r.peer_fingerprint.as_deref()), ("rekey_pending", Some("SHA256:old")), "the old key stays until a person accepts");
+    assert_eq!(mark_rekey(&c, &h.id, "ops::beta.postal.bot").unwrap().status, "rekey_pending", "twice is the same");
+    assert_eq!(decide(&c, &f.id, true, "owner").unwrap().status, "accepted");
+}

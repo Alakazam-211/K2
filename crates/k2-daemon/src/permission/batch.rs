@@ -9,7 +9,8 @@
 //! [`super::present::view_for`]); confirm items are answered one by one.
 //! A card that shows its approver a secret (`apps.user-password-reset`)
 //! never batches. A compute package card (`compute.packages`) batches only
-//! with other package cards.
+//! with other package cards. A Postal friend request whose card shows a
+//! pairing code never batches either (its code is read alone).
 
 use k2_core::overlay;
 use k2_core::permission::request::{limits, PermissionRequest};
@@ -37,6 +38,10 @@ fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<
     if super::actions::box_login_grant::never_batched(&req.action) {
         return None;
     }
+    // A Postal request whose card shows a pairing code: read alone.
+    if super::actions::postal::never_batched(req) {
+        return None;
+    }
     // A compute package card batches only with other package cards: the
     // person reads every name and the size, never under an unrelated
     // "Allow all" (prd-compute-self-serve-environments-v1 §3.3, §16.9).
@@ -53,7 +58,7 @@ fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<
             continue;
         }
         let items = store::for_card(conv, card).ok()?;
-        if items.iter().any(|i| super::actions::box_login_grant::never_batched(&i.action)) {
+        if items.iter().any(|i| super::actions::box_login_grant::never_batched(&i.action) || super::actions::postal::never_batched(i)) {
             continue;
         }
         if items.iter().any(|i| super::actions::compute::batches_alone(&i.action) != packages) {

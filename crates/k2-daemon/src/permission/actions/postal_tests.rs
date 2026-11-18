@@ -1,10 +1,12 @@
-//! Postal's cards end to end (prd-postal-in-k2-v1 S3, S0): an agent's
-//! invite and an incoming request each wait on a card on the agent's pinned
-//! Thread; only a person at the floor answers; Allow and Deny run the
-//! route's own rules as that person; deciding in the tab closes the card;
-//! the p5 link mints a key that can only message its workspace and hands it
-//! to p5 on stdin. Test DB, temp HOME; no agent is woken (turns go to
-//! `inject`'s sink); p5 is a script.
+//! Postal's cards end to end (prd-postal-in-k2-v1 S3, S0; Rosson
+//! 2026-11-18): turning Postal on, an agent's address, its invite and an
+//! incoming request each wait on a card on the agent's pinned Thread; only
+//! a person at the floor answers; Allow and Deny run the route's own rules
+//! as that person; deciding in the tab closes the card; incoming requests
+//! batch, except one with a pairing code, and never wake the agent; the p5
+//! link mints a key that can only message its workspace and hands it to p5
+//! on stdin. Test DB, temp HOME; no agent is woken (turns go to `inject`'s
+//! sink); p5 is a script.
 
 use k2_core::connect_users::Role;
 use k2_core::permission::catalog::{Floor, Grant, Proof, WallCoverage};
@@ -42,17 +44,30 @@ fn post(path: &str, who: Who, body: Value) -> (String, Value) {
 }
 
 #[test]
-fn the_cards_are_registered_k2_presented_one_time_clicks() {
+fn the_cards_are_registered_k2_presented_clicks_with_their_walls() {
     let _db = k2_core::db::scoped_for_test();
-    for (id, floor) in [(INVITE, Floor::Admin), (PAIR_ACCEPT, Floor::Admin), (LINK_P5, Floor::Owner)] {
+    for (id, floor, grant, coverage) in [
+        (INVITE, Floor::Admin, Grant::OneTime, WallCoverage::Held),
+        (PAIR_ACCEPT, Floor::Admin, Grant::OneTime, WallCoverage::Held),
+        (LINK_P5, Floor::Owner, Grant::OneTime, WallCoverage::Held),
+        (CLAIM, Floor::Admin, Grant::OneTime, WallCoverage::Held),
+        (ENABLE, Floor::Owner, Grant::Standing, WallCoverage::Code),
+    ] {
         let r = super::super::find(id).expect("registered");
         k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (floor, Proof::Click, Grant::OneTime), "{id}");
-        assert!(r.spec.walls.is_empty() && r.spec.coverage == WallCoverage::None, "{id}: K2 presents it");
+        assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant, r.spec.coverage), (floor, Proof::Click, grant, coverage), "{id}");
+        assert!(crate::permission::walls::V1_ACTIONS.contains(&id), "{id}: a v1 action (the Ask-with lines name it)");
         assert!(crate::permission::present::find_not_cardable(id).is_none(), "{id}");
     }
-    for p in [crate::postal_routes::INVITE, crate::postal_routes::DECIDE, crate::postal_routes::LINK_P5] {
+    for p in [
+        crate::postal_routes::INVITE,
+        crate::postal_routes::DECIDE,
+        crate::postal_routes::LINK_P5,
+        crate::postal_routes::CLAIM,
+        crate::postal_routes::ENABLE,
+    ] {
         assert!(crate::routes::route_policy::lookup(p).and_then(|x| x.post).is_some(), "{p} has a POST row");
+        assert!(crate::session_token::is_agent_verb(p), "{p}: an agent may ask");
     }
 }
 
@@ -89,7 +104,18 @@ async fn an_agents_invite_waits_for_a_person_and_allow_records_it() {
         k2_core::postal::store::friend_by_peer(conn, &h.id, peer).unwrap()
     });
     assert_eq!((f.asked_by.as_deref(), f.note.as_deref()), (Some(format!("login:{admin}").as_str()), Some("to review each other's PRs")));
-    assert!(last_turn(&ws).contains(&format!("Friend request to {peer} recorded")), "{}", last_turn(&ws));
+    let turn = last_turn(&ws);
+    assert!(turn.contains(&format!("Friend request to {peer} recorded")) && turn.contains("not sent yet"), "{turn}");
+    assert!(vw["consequences"].as_str().unwrap().contains("Not sent yet"), "the card never says it was sent: {vw}");
+    assert!(matches!(
+        k2_core::postal::gate::answers_for(&f.id).last(),
+        Some(k2_core::postal::gate::Answer::Invite { .. })
+    ), "queued for the SDK");
+}
+
+fn no_postal_turn(ws: &Ws) {
+    let turns = crate::permission::inject::sent_to(&ws.handle);
+    assert!(!turns.iter().any(|t| t.contains("Postal friend")), "a request (or its answer) never wakes the agent: {turns:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -101,7 +127,8 @@ async fn an_incoming_request_is_k2s_card_owner_allows_deny_rejects() {
     let ws = seed("ppair");
     claim(&ws);
     let peer = k2_core::postal::parse_address("lab::gamma.postal.bot").unwrap();
-    let got = crate::postal_routes::receive_request(&ws.id, &peer, Some("Dana"), Some("SHA256:abc"), Some("pr_1"), Some("let's pair")).expect("recorded");
+    let got = crate::postal_routes::receive_request(&ws.id, &peer, Some("Dana"), Some("SHA256:abc"), Some("pr_1"), Some("let's pair"), None)
+        .expect("recorded");
     let card = got["card"]["card"].as_str().expect("K2 put a card up").to_string();
     let friend_id = got["friend"]["id"].as_str().unwrap().to_string();
     let req = row(got["card"]["request"].as_str().unwrap());
@@ -112,45 +139,134 @@ async fn an_incoming_request_is_k2s_card_owner_allows_deny_rejects() {
     let effect = vw["consequences"].as_str().unwrap();
     assert!(effect.contains("let's pair") && effect.contains("SHA256:abc"), "{effect}");
     // The same request again: the same card.
-    let again = crate::postal_routes::receive_request(&ws.id, &peer, None, None, Some("pr_1"), None).unwrap();
+    let again = crate::postal_routes::receive_request(&ws.id, &peer, None, None, Some("pr_1"), None, None).unwrap();
     assert_eq!(
         (again["card"]["card"].as_str(), again["card"]["waiting"].as_bool()),
         (Some(card.as_str()), Some(true)),
         "a known request puts up no second card: {again}"
     );
+    // The agent's own `k2 postal accept <id>`: that same card, not a decision.
+    let (s, v) = post(crate::postal_routes::DECIDE, agent_who(&ws), json!({ "id": friend_id, "decision": "accept" }));
+    assert_eq!((s.as_str(), v["asked"].as_bool(), v["card"].as_str()), ("200 OK", Some(true), Some(card.as_str())), "{v}");
+    assert_eq!(friend_status(&ws, "lab::gamma.postal.bot").as_deref(), Some("pending_in"));
     // An Admin may not answer until the owner allows Admins; the owner may.
     let admin = login("ppa", Role::Admin);
     let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow" }));
     assert_eq!(s, "200 OK", "{a}");
     assert_eq!(a["action"]["result"]["outcome"], "failed", "{a}");
     assert_eq!(friend_status(&ws, "lab::gamma.postal.bot").as_deref(), Some("pending_in"));
+    no_postal_turn(&ws);
+}
 
-    // A second request: the Owner allows it.
-    let peer2 = k2_core::postal::parse_address("lab2::gamma.postal.bot").unwrap();
-    let got2 = crate::postal_routes::receive_request(&ws.id, &peer2, None, None, None, None).unwrap();
-    let card2 = got2["card"]["card"].as_str().unwrap().to_string();
-    let (s, a) = answer_as("owner", &ws, &card2, json!({ "answer": "Allow" }));
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incoming_requests_batch_and_each_is_answered_on_its_own() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let _on = crate::postal_routes::switch_for_test(true);
+    let ws = seed("pbat");
+    claim(&ws);
+    let mut reqs = Vec::new();
+    for p in ["lab2::gamma.postal.bot", "lab3::gamma.postal.bot", "lab4::gamma.postal.bot"] {
+        let got = crate::postal_routes::receive_request(&ws.id, &k2_core::postal::parse_address(p).unwrap(), None, None, None, None, None).unwrap();
+        reqs.push((p, got["card"]["card"].as_str().unwrap().to_string(), got["card"]["request"].as_str().unwrap().to_string(), got["friend"]["id"].as_str().unwrap().to_string()));
+    }
+    // Three requests in the batch window: one card.
+    assert!(reqs.iter().all(|r| r.1 == reqs[0].1), "batched: {reqs:?}");
+    let card = reqs[0].1.clone();
+    assert_eq!(view(&ws, &card)["items"].as_array().map(Vec::len), Some(3));
+    // The Owner allows the first, denies the second; the third is decided in the tab.
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "item": reqs[0].2, "answer": "Allow" }));
     assert_eq!(s, "200 OK", "{a}");
-    assert_eq!(friend_status(&ws, "lab2::gamma.postal.bot").as_deref(), Some("accepted"), "{a}");
-
-    // A third: Deny rejects it, as the person.
-    let peer3 = k2_core::postal::parse_address("lab3::gamma.postal.bot").unwrap();
-    let got3 = crate::postal_routes::receive_request(&ws.id, &peer3, None, None, None, None).unwrap();
-    let card3 = got3["card"]["card"].as_str().unwrap().to_string();
-    let (s, a) = answer_as("owner", &ws, &card3, json!({ "answer": "Deny" }));
+    assert_eq!(friend_status(&ws, reqs[0].0).as_deref(), Some("accepted"), "{a}");
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "item": reqs[1].2, "answer": "Deny" }));
     assert_eq!(s, "200 OK", "{a}");
-    assert_eq!(friend_status(&ws, "lab3::gamma.postal.bot").as_deref(), Some("rejected"));
-
-    // A fourth, decided in the tab: its card closes.
-    let peer4 = k2_core::postal::parse_address("lab4::gamma.postal.bot").unwrap();
-    let got4 = crate::postal_routes::receive_request(&ws.id, &peer4, None, None, None, None).unwrap();
-    let card4 = got4["card"]["card"].as_str().unwrap().to_string();
-    let id4 = got4["friend"]["id"].as_str().unwrap().to_string();
-    let (s, v) = post(crate::postal_routes::DECIDE, Who::Owner, json!({ "workspace": ws.id, "id": id4, "decision": "accept" }));
+    assert_eq!(friend_status(&ws, reqs[1].0).as_deref(), Some("rejected"));
+    let (s, v) = post(crate::postal_routes::DECIDE, Who::Owner, json!({ "workspace": ws.id, "id": reqs[2].3, "decision": "accept" }));
     assert_eq!(s, "200 OK", "{v}");
-    let doc = k2_core::overlay::get_thread_doc(&ws.conv, &card4).expect("read").expect("doc");
-    assert!(!doc.is_pending_choice(), "the card closed");
-    assert_eq!(row(got4["card"]["request"].as_str().unwrap()).state.as_str(), "approved");
+    assert_eq!(row(&reqs[2].2).state.as_str(), "approved", "deciding in the tab closes its card item");
+    no_postal_turn(&ws);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_with_a_pairing_code_is_alone_never_shows_the_code_and_cant_be_accepted_yet() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let _on = crate::postal_routes::switch_for_test(true);
+    let ws = seed("pcode");
+    claim(&ws);
+    let plain = crate::postal_routes::receive_request(&ws.id, &k2_core::postal::parse_address("a1::gamma.postal.bot").unwrap(), None, None, None, None, None).unwrap();
+    let got = crate::postal_routes::receive_request(
+        &ws.id,
+        &k2_core::postal::parse_address("lab::gamma.postal.bot").unwrap(),
+        Some("Dana"),
+        Some("SHA256:abc"),
+        Some("pr_c"),
+        None,
+        Some("482913"),
+    )
+    .unwrap();
+    let card = got["card"]["card"].as_str().unwrap().to_string();
+    assert_ne!(Some(card.as_str()), plain["card"]["card"].as_str(), "a request with a code never joins a batch");
+    let vw = view(&ws, &card);
+    assert!(!vw.to_string().contains("482913") && !vw.to_string().contains("482 913"), "the code is never on the card: {vw}");
+    assert!(vw["whatChanges"].as_str().unwrap().contains("can't be accepted yet"), "{vw}");
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["action"]["result"]["outcome"], "failed", "{a}");
+    assert_eq!(friend_status(&ws, "lab::gamma.postal.bot").as_deref(), Some("pending_in"), "nothing pretended");
+    no_postal_turn(&ws);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_asks_for_its_address_and_an_admin_gives_it() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let _on = crate::postal_routes::switch_for_test(true);
+    let ws = seed("pclm");
+    let addr = format!("{}::acme.postal.bot", ws.handle);
+    let (s, v) = post(crate::postal_routes::CLAIM, agent_who(&ws), json!({ "address": addr.to_uppercase() }));
+    assert_eq!((s.as_str(), v["asked"].as_bool(), v["action"].as_str()), ("200 OK", Some(true), Some(CLAIM)), "{v}");
+    let card = card_of(&v);
+    assert!(k2_core::db::read(|c| k2_core::postal::store::handle_for_workspace(c, &ws.id)).is_none(), "nothing claimed before a person allows it");
+    let vw = view(&ws, &card);
+    assert!(vw["whatChanges"].as_str().unwrap().contains(&format!("Give {} the Postal address {addr}", ws.handle)), "{vw}");
+    below_floor(answer_as(&login("pcm", Role::Member), &ws, &card, json!({ "answer": "Allow" })), "admin");
+    let (s, a) = answer_as(&login("pca", Role::Admin), &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!((s.as_str(), a["action"]["result"]["outcome"].as_str()), ("200 OK", Some("approved")), "{a}");
+    let h = k2_core::db::read(|c| k2_core::postal::store::handle_for_workspace(c, &ws.id)).expect("claimed");
+    assert_eq!(h.address, addr);
+    assert!(last_turn(&ws).contains(&format!("has the Postal address {addr}")), "{}", last_turn(&ws));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_asks_the_owner_to_turn_postal_on() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let _off = crate::postal_routes::switch_for_test(false);
+    let ws = seed("pena");
+    // Any Postal route refuses the agent and names the card; enable asks.
+    let (s, v) = post(crate::postal_routes::INVITE, agent_who(&ws), json!({ "to": "ops::beta.postal.bot", "why": "x" }));
+    assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("postal_off")), "{v}");
+    let (s, v) = post(crate::postal_routes::ENABLE, agent_who(&ws), json!({ "why": "to pair with the build agent" }));
+    assert_eq!((s.as_str(), v["asked"].as_bool()), ("200 OK", Some(true)), "{v}");
+    let card = card_of(&v);
+    let vw = view(&ws, &card);
+    assert_eq!(vw["setting"], "Postal (Beta)", "{vw}");
+    assert!(vw["consequences"].as_str().unwrap().contains("still waits on a person's card"), "{vw}");
+    below_floor(answer_as(&login("pea", Role::Admin), &ws, &card, json!({ "answer": "Allow" })), "owner");
+    assert!(!k2_core::postal::enabled());
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!((s.as_str(), a["action"]["result"]["outcome"].as_str()), ("200 OK", Some("approved")), "{a}");
+    assert!(k2_core::postal::enabled() && k2_core::app_settings::load().postal_enabled, "on, and kept");
+    assert!(last_turn(&ws).contains("approved by"), "{}", last_turn(&ws));
+    // On already: asking again needs no card.
+    let (s, v) = post(crate::postal_routes::ENABLE, agent_who(&ws), json!({}));
+    assert_eq!((s.as_str(), v["enabled"].as_bool(), v.get("asked")), ("200 OK", Some(true), None), "{v}");
+    k2_core::app_settings::update(json!({ "postalEnabled": false })).expect("reset");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

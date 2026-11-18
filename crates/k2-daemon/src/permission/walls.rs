@@ -171,7 +171,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 70] = [
+pub(crate) const V1_ACTIONS: [&str; 75] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -300,6 +300,14 @@ pub(crate) const V1_ACTIONS: [&str; 70] = [
     "agents.hire",
     // 0.46.13 (prd-signed-approvals-v1 S1): ask people for signed approvals.
     "approve.request",
+    // 0.46.16 Postal (prd-postal-in-k2-v1 §5.5; Rosson 2026-11-18): every
+    // step an agent takes to befriend another agent is its person's card.
+    // K2 puts each up in the route's own answer; these lines find it.
+    "postal.enable",
+    "postal.claim",
+    "postal.invite",
+    "postal.pair.accept",
+    "postal.link-p5",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -538,6 +546,28 @@ pub(crate) const ROWS: &[Row] = &[
     row(ask("agents.hire", Floor::Admin), code(403, "hire_off"), "/cli/agents/hire", POST),
     // 0.46.13: `k2 approve request` while approve.request is off.
     row(ask("approve.request", Floor::Admin), code(403, "approve_request_off"), "/cli/approve/request", POST),
+    // ── Postal (0.46.16, prd-postal-in-k2-v1 §5.5) ─────────────────────
+    // Off: every Postal route refuses an agent with `postal_off`; the
+    // server's owner turns it on.
+    row(ask("postal.enable", Floor::Owner), code(403, "postal_off"), "/cli/postal/", ANY),
+    // The route put the card up in the same answer (`asked: true`, exit 2):
+    // the line asks for that same card (`already_pending`).
+    row(ask("postal.enable", Floor::Owner), POSTAL_ASKED, "/cli/postal/enable", POST),
+    Row {
+        params: &[("address", &[ParamFrom::Body("/address")])],
+        ..row(ask("postal.claim", Floor::Admin), POSTAL_ASKED, "/cli/postal/claim", POST)
+    },
+    Row {
+        params: &[("to", &[ParamFrom::Body("/to")]), ("note", &[ParamFrom::Body("/why")])],
+        ..row(ask("postal.invite", Floor::Admin), POSTAL_ASKED, "/cli/postal/invite", POST)
+    },
+    Row {
+        params: &[("id", &[ParamFrom::Body("/id")])],
+        ..row(ask("postal.pair.accept", Floor::Admin), POSTAL_ASKED, "/cli/postal/decide", POST)
+    },
+    row(ask("postal.link-p5", Floor::Owner), POSTAL_ASKED, "/cli/postal/link-p5", POST),
+    // Another workspace's Postal address and friends: a person's.
+    row(Target::Cannot { r#where: POSTAL_OTHER_WHERE }, code(403, "postal_own_workspace_only"), "/cli/postal/", ANY),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
     // `k2 agent harness` / `k2 workspace swap-canonical` on the agent's own
     // workspace (0.46.6): the refusal carries the normalized harness.
@@ -971,6 +1001,12 @@ pub(crate) const MACHINE_HINTS: &[(&str, &str)] = &[(
     "remote_admin_off",
     "At {node}, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)",
 )];
+
+/// A Postal route that put its card up in the same answer.
+const POSTAL_ASKED: WallMatch = WallMatch::Held { status: 200, field: "asked", value: "true" };
+
+/// Another workspace's Postal: a person's, in that workspace's tab.
+const POSTAL_OTHER_WHERE: &str = "a person does this, in that workspace's Postal tab (Settings → Workspaces → <name> → Postal)";
 
 /// The `--why` placeholder in every Ask-with command.
 pub(crate) const WHY_PLACEHOLDER: &str = "<what you need it for>";
@@ -1497,6 +1533,15 @@ mod tests {
             (403, "POST", "/cli/mail/config/set", vec![], Some(json!({"workspace":"sales","agentSend":"off"})), json!({"ok":false,"error":{"code":"owner_only","hint":"x","workspace":{"name":"alpha","path":"/a","id":"w"}}}), "mail.stop-sending"),
             // 0.46.13: `k2 approve request` without the permission.
             (403, "POST", "/cli/approve/request", vec![], Some(json!({"payload_b64":"AA=="})), json!({"ok":false,"error":{"code":"approve_request_off","hint":"x"}}), "approve.request"),
+            // 0.46.16 Postal: off refuses an agent on every route; each
+            // agent step answers with the card K2 put up (`asked: true`).
+            (403, "GET", "/cli/postal/status", vec![], None, json!({"ok":false,"state":"off","error":{"code":"postal_off","hint":"x"}}), "postal.enable"),
+            (403, "POST", "/cli/postal/invite", vec![], Some(json!({"to":"ops::beta.postal.bot","why":"x"})), json!({"ok":false,"state":"off","error":{"code":"postal_off","hint":"x"}}), "postal.enable"),
+            (200, "POST", "/cli/postal/enable", vec![], Some(json!({})), json!({"ok":true,"asked":true,"action":"postal.enable","card":"c1"}), "postal.enable"),
+            (200, "POST", "/cli/postal/claim", vec![], Some(json!({"address":"scout::acme.postal.bot"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.claim"),
+            (200, "POST", "/cli/postal/invite", vec![], Some(json!({"to":"ops::beta.postal.bot","why":"to review PRs"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.invite"),
+            (200, "POST", "/cli/postal/decide", vec![], Some(json!({"id":"f-1","decision":"accept"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.pair.accept"),
+            (200, "POST", "/cli/postal/link-p5", vec![], Some(json!({})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.link-p5"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -1515,6 +1560,41 @@ mod tests {
             }
             assert!(asked.contains(&a), "{a}: no captured wall teaches it");
         }
+    }
+
+    /// 0.46.16 Postal: each agent step's Ask-with line names its card with
+    /// the values the agent sent; a plain answer teaches nothing; another
+    /// workspace's Postal can't be requested.
+    #[test]
+    fn postal_lines_name_each_card_with_its_values() {
+        let cmd = |status, path: &str, body: Value, resp: Value| {
+            teach_of(status, "POST", path, &[], Some(body), resp).map(|p| p["command"].as_str().unwrap_or_default().to_string())
+        };
+        let asked = json!({"ok":true,"asked":true,"card":"c1"});
+        assert_eq!(
+            cmd(200, "/cli/postal/invite", json!({"to":"ops::beta.postal.bot","why":"to review PRs"}), asked.clone()).as_deref(),
+            Some("k2 permission request postal.invite note='to review PRs' to=ops::beta.postal.bot --why \"<what you need it for>\"")
+        );
+        assert_eq!(
+            cmd(200, "/cli/postal/claim", json!({"address":"scout::acme.postal.bot"}), asked.clone()).as_deref(),
+            Some("k2 permission request postal.claim address=scout::acme.postal.bot --why \"<what you need it for>\"")
+        );
+        assert_eq!(
+            cmd(200, "/cli/postal/decide", json!({"id":"f-1","decision":"accept"}), asked.clone()).as_deref(),
+            Some("k2 permission request postal.pair.accept id=f-1 --why \"<what you need it for>\"")
+        );
+        assert_eq!(
+            cmd(200, "/cli/postal/enable", json!({}), asked.clone()).as_deref(),
+            Some("k2 permission request postal.enable --why \"<what you need it for>\"")
+        );
+        let off = json!({"ok":false,"state":"off","error":{"code":"postal_off","hint":"x"}});
+        let p = teach_of(403, "POST", "/cli/postal/claim", &[], Some(json!({"address":"scout::acme.postal.bot"})), off).unwrap();
+        assert_eq!((action_of(&p), p["approvers"].as_str()), ("postal.enable", Some("owner")), "{p}");
+        // Done without a card (a person's own claim, an agent's block): nothing to ask.
+        assert!(teach_of(200, "POST", "/cli/postal/claim", &[], None, json!({"ok":true,"handle":{}})).is_none());
+        assert!(teach_of(200, "POST", "/cli/postal/block", &[], None, json!({"ok":true,"asked":true})).is_none(), "block puts no card up");
+        let p = teach_of(403, "GET", "/cli/postal/status", &[], None, json!({"ok":false,"error":{"code":"postal_own_workspace_only"}})).unwrap();
+        assert_eq!((p["requestable"].as_bool(), p["where"].as_str()), (Some(false), Some(POSTAL_OTHER_WHERE)), "{p}");
     }
 
     #[test]
@@ -2017,7 +2097,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 70);
+        assert_eq!(V1_ACTIONS.len(), 75);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

@@ -436,6 +436,9 @@ export interface InboxParticipant {
   /** What `level` really allows once that gate applies (daemon truth).
    *  `send` with the gate off is `blocked_off`: every send is gated. */
   sendState?: SendState
+  /** Linked calendars (0.46.16): this workspace's agents never see event
+   *  descriptions. Null on hosted inboxes; older daemons omit it. */
+  calendarOmitDescription?: boolean | null
 }
 
 /** A workspace's agent-send gate (`projects.mail_agent_send`). */
@@ -670,6 +673,9 @@ export async function linkOauthStart(args: {
   address: string
   provider: 'gmail' | 'microsoft'
   workspace: string
+  /** What to consent for. Absent = mail. `calendar-read` is a read-only
+   *  calendar link (0.46.16): agents read events, nothing writes. */
+  features?: 'mail' | 'calendar-read' | 'mail,calendar-read'
   /** Desktop remote path: client binds loopback + opens browser. */
   clientCapture?: boolean
   /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
@@ -686,13 +692,51 @@ export async function linkOauthStart(args: {
  *  {@link linkOauthStatus} like a new link. Owner-gated. */
 export async function linkOauthUpgrade(args: {
   inbox: string
-  features: 'calendar' | 'mail' | 'mail,calendar'
+  features: 'calendar-read' | 'calendar' | 'mail' | 'mail,calendar'
   /** Google: the desktop client binds the loopback and relays the code. */
   clientCapture?: boolean
   /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
   redirectUri?: string
 }): Promise<OauthStartResult> {
   return parseOauthStart(await daemonCliPost<unknown>(primaryScope(), 'mail/link/oauth/start', args))
+}
+
+/** One calendar on a linked account, as the owner sees it (0.46.16). */
+export interface LinkedCalendar {
+  id: string
+  name: string
+  isDefault?: boolean
+  /** Shown to agents: the primary always; others when the owner added them. */
+  optedIn: boolean
+  primary: boolean
+}
+
+/** GET /cli/mail/calendar/calendars — the owner's view of a linked
+ *  account's calendars: `access` is `read-only` (pick which calendars
+ *  agents see) or `read-write` (a link from before 0.46.16: all). */
+export async function linkedCalendars(address: string): Promise<{ access: 'read-only' | 'read-write'; calendars: LinkedCalendar[] }> {
+  return daemonCliGet(primaryScope(), 'mail/calendar/calendars', { address })
+}
+
+/** POST /cli/mail/calendar/calendars — show or hide calendars of a
+ *  read-only link to agents (owner/Admin). The primary is always on. */
+export async function setLinkedCalendars(body: {
+  address: string
+  add?: string[]
+  remove?: string[]
+}): Promise<{ access: string; calendars: LinkedCalendar[] }> {
+  return daemonCliPost(primaryScope(), 'mail/calendar/calendars', body)
+}
+
+/** POST /cli/mail/access/calendar-privacy — whether one workspace's agents
+ *  see event descriptions on a linked calendar (owner/Admin). The meeting
+ *  link and id are read out either way. */
+export async function setCalendarPrivacy(body: {
+  address: string
+  project: string
+  omitDescription: boolean
+}): Promise<{ ok: boolean; changed: boolean }> {
+  return daemonCliPost(primaryScope(), 'mail/access/calendar-privacy', body)
 }
 
 /** POST /cli/mail/link/oauth/complete — relay a client-captured code (or

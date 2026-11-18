@@ -29,6 +29,21 @@ function withActions(actions: unknown[]): OverlayThreadItem {
 }
 
 describe('parseSystemNotice', () => {
+  // Calendar S1: `k2 cal link --request` posts a card whose button opens
+  // Settings with the calendar form filled in (a client step, no route).
+  it('reads a calendar link request: link_calendar with its address, provider and workspace', () => {
+    const n = parseSystemNotice(
+      withActions([
+        { id: 'link_calendar', label: 'Link read-only', body: { address: 'pat@example.com', provider: 'gmail', workspace: '/w/ops' }, workspace: '/w/ops' },
+        { id: 'link_calendar', label: 'Bad', body: { address: 'pat@example.com', provider: 'yahoo', workspace: '/w/ops' } },
+        { id: 'link_calendar', label: 'No address', body: { provider: 'microsoft', workspace: '/w/ops' } },
+      ]),
+    )
+    expect(n!.actions).toEqual([
+      { id: 'link_calendar', label: 'Link read-only', call: { kind: 'link_calendar', address: 'pat@example.com', provider: 'gmail', workspace: '/w/ops' }, done: null },
+    ])
+  })
+
   it('reads the daemon\'s delivery notice: kind, code, words without "K2: ", Send again and Open its terminal', () => {
     const n = parseSystemNotice(DELIVERY_NOTICES.neverReadIn)
     expect(n).not.toBeNull()

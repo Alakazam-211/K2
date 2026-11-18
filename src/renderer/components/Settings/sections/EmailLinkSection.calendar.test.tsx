@@ -125,7 +125,7 @@ describe('AddCalendarAccess', () => {
     render(<AddCalendarAccess inbox={inbox(msMailOnly)} canMutate onUpgraded={onUpgraded} pollMs={10} />)
 
     fireEvent.click(screen.getByTestId('add-calendar-button'))
-    expect(api.linkOauthUpgrade).toHaveBeenCalledWith({ inbox: 'rosson@contoso.example', features: 'calendar' })
+    expect(api.linkOauthUpgrade).toHaveBeenCalledWith({ inbox: 'rosson@contoso.example', features: 'calendar-read' })
     await screen.findByText('FAKE-0042')
     expect(screen.getByTestId('add-calendar-device').textContent).toContain('https://microsoft.example/devicelogin')
     await waitFor(() => expect(onUpgraded).toHaveBeenCalledTimes(1))
@@ -193,7 +193,7 @@ describe('AddCalendarAccess', () => {
     await screen.findByTestId('add-calendar-browser')
     expect(api.linkOauthUpgrade).toHaveBeenCalledWith({
       inbox: 'rosson@gmail.example',
-      features: 'calendar',
+      features: 'calendar-read',
       clientCapture: true,
       redirectUri: 'http://127.0.0.1:5555/cb',
     })

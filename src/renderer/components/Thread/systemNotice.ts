@@ -33,6 +33,9 @@ const KINDS: ReadonlySet<string> = new Set<SystemNoticeKind>(['info', 'delivery'
 export type SystemNoticeCall =
   | { kind: 'post'; route: string; body: Record<string, unknown> }
   | { kind: 'open_terminal'; workspace: string | null }
+  /** Calendar S1: open Settings → Email Link with the calendar Connect
+   *  form filled in (the person signs in; the agent never holds the link). */
+  | { kind: 'link_calendar'; address: string; provider: 'gmail' | 'microsoft'; workspace: string }
 
 /** A button that already ran (the daemon's `doneAt` and `doneBy`). */
 export interface SystemNoticeDone {
@@ -63,6 +66,8 @@ export interface SystemNotice {
 export const RESEND_ACTION_ID = 'resend'
 /** The action id the client carries out itself. */
 export const OPEN_TERMINAL_ACTION_ID = 'open_terminal'
+/** "Link read-only" on a calendar link request (`k2 cal link --request`). */
+export const LINK_CALENDAR_ACTION_ID = 'link_calendar'
 
 /** The most buttons one notice draws. */
 const MAX_ACTIONS = 4
@@ -105,6 +110,14 @@ function parseAction(raw: unknown): SystemNoticeAction | null {
   // A step this client takes: never a post, whatever else it carries.
   if (id === OPEN_TERMINAL_ACTION_ID) {
     return { id, label, call: { kind: 'open_terminal', workspace: str(raw.workspace) || null }, done }
+  }
+  if (id === LINK_CALENDAR_ACTION_ID) {
+    const body = isRecord(raw.body) ? raw.body : {}
+    const provider = body.provider === 'gmail' || body.provider === 'microsoft' ? body.provider : null
+    const address = str(body.address)
+    const workspace = str(body.workspace)
+    if (!provider || !address || !workspace) return null
+    return { id, label, call: { kind: 'link_calendar', address, provider, workspace }, done }
   }
   // Send again posts its body to its route. Any other id is one this
   // client doesn't know: no button.

@@ -37,7 +37,8 @@ import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { webFeatures } from '@/web/features'
-import { Button, Callout, Input, Spinner, Tag } from '@/components/ui'
+import { Button, Callout, Input, Segmented, Spinner, Tag, Toggle } from '@/components/ui'
+import { useCalendarLinkRequestStore } from '@/stores/calendar-link-request'
 import type { SettingEntry } from '../searchManifest'
 import {
   SaveError,
@@ -62,11 +63,15 @@ import {
   linkOauthStart,
   linkOauthStatus,
   linkOauthUpgrade,
+  linkedCalendars,
   MailReplyError,
   mailErrorInfo,
   mailErrorMessage,
   removeLinkedInbox,
+  setCalendarPrivacy,
+  setLinkedCalendars,
   setOauthClient,
+  type LinkedCalendar,
   type Inbox,
   type OauthClientProvider,
   type OauthConfig,
@@ -328,6 +333,23 @@ function ConnectGroup({
   const [flow, setFlow] = useState<OauthFlow | null>(null)
   const [failure, setFailure] = useState<ConnectFailure | null>(null)
   const [imapOpen, setImapOpen] = useState(false)
+  // Calendar S1: connect email, or just a calendar, read-only (agents read
+  // events; nothing writes). Descriptions show to the workspace's agents
+  // unless the person unticks it.
+  const [mode, setMode] = useState<'mail' | 'calendar'>('mail')
+  const [showDescriptions, setShowDescriptions] = useState(true)
+  // A "Link your calendar, read-only" card an agent posted fills the form
+  // (also when Settings is already open on this page).
+  const linkRequest = useCalendarLinkRequestStore((st) => st.pending)
+  useEffect(() => {
+    if (!linkRequest || flow !== null) return
+    const req = useCalendarLinkRequestStore.getState().take()
+    if (!req) return
+    const ws = projects.find((p) => p.id === req.workspace || p.path === req.workspace)
+    setMode('calendar')
+    setAddress(req.address)
+    if (ws) setProject(ws.id)
+  }, [linkRequest, flow, projects])
   // Cancel in-flight client-capture wait when the user resets or unmounts.
   const captureCancelRef = useRef<string | null>(null)
   // Latest embedded consent webview id (for unmount reap without depending
@@ -383,6 +405,7 @@ function ConnectGroup({
               address: address.trim(),
               provider: 'gmail',
               workspace: project.trim(),
+              ...(mode === 'calendar' ? { features: 'calendar-read' as const } : {}),
               clientCapture: true,
               redirectUri: bind.redirectUri,
             })
@@ -447,6 +470,7 @@ function ConnectGroup({
           address: address.trim(),
           provider,
           workspace: project.trim(),
+          ...(mode === 'calendar' ? { features: 'calendar-read' as const } : {}),
         })
         if (res.flow === 'device') {
           const bound = Number.isFinite(res.expiresIn) && res.expiresIn > 0 ? res.expiresIn * 1000 : OAUTH_MAX_MS
@@ -487,7 +511,7 @@ function ConnectGroup({
         setBusy(null)
       }
     },
-    [canStart, address, project, dropFlow],
+    [canStart, address, project, mode, dropFlow],
   )
 
   const onConnectedRef = useRef(onConnected)
@@ -507,9 +531,23 @@ function ConnectGroup({
         if (cancelled) return
         if (s.state === 'connected') {
           dropFlow()
+          const linked = s.address ?? address.trim()
+          // The person unticked "Show event descriptions": that workspace's
+          // agents never see them (the meeting link is still read out).
+          if (mode === 'calendar' && !showDescriptions) {
+            try {
+              await setCalendarPrivacy({ address: linked, project: project.trim(), omitDescription: true })
+            } catch (e) {
+              setFailure({
+                title: 'The calendar is linked, but descriptions still show',
+                line: 'Open the account below and turn off “Show event descriptions” for that workspace.',
+                detail: serverReason(e),
+              })
+            }
+          }
           setAddress('')
           setProject('')
-          onConnectedRef.current(s.address ?? address.trim(), workspaceName)
+          onConnectedRef.current(linked, workspaceName)
         } else if (s.state === 'denied' || s.state === 'expired' || s.state === 'error') {
           setFailure(signInFailure(flow.provider, s))
           dropFlow()
@@ -530,7 +568,7 @@ function ConnectGroup({
       cancelled = true
       window.clearInterval(id)
     }
-  }, [flow, address, workspaceName, dropFlow])
+  }, [flow, address, project, mode, showDescriptions, workspaceName, dropFlow])
 
   const cancel = useCallback((): void => {
     const cap = captureCancelRef.current
@@ -635,6 +673,27 @@ function ConnectGroup({
         settingId="email-link.add"
         card
       >
+        <SettingRow
+          label="Connect"
+          hint={
+            mode === 'calendar'
+              ? 'A calendar, read-only: agents see its events but can’t change, accept or decline anything. The primary calendar is on; you can add shared ones after.'
+              : 'Email (and you can add a read-only calendar to it later).'
+          }
+          settingId="email-link.connect-calendar"
+        >
+          <Segmented
+            value={mode}
+            onChange={(v) => setMode(v)}
+            options={[
+              { value: 'mail', label: 'Email' },
+              { value: 'calendar', label: 'A calendar' },
+            ]}
+            aria-label="What to connect"
+            disabled={locked}
+            data-testid="email-link-mode"
+          />
+        </SettingRow>
         <SettingRow label="Workspace" hint="Its agents can use the account, and it decides who else can." field>
           <SettingDropdown
             value={project}
@@ -658,8 +717,24 @@ function ConnectGroup({
             spellCheck={false}
           />
         </SettingRow>
+        {mode === 'calendar' && (
+          <SettingRow
+            label="Show event descriptions to this workspace’s agents"
+            hint="Booking notes can hold private details. When off, agents still get the meeting link and id, nothing else from the description."
+          >
+            <Toggle
+              checked={showDescriptions}
+              onChange={setShowDescriptions}
+              disabled={locked}
+              aria-label="Show event descriptions to this workspace’s agents"
+            />
+          </SettingRow>
+        )}
         <div data-settings-id="email-link.oauth">
-          <SettingRow label="Gmail" hint={`Sign in with Google here in ${PRODUCT_NAME}.`}>
+          <SettingRow
+            label={mode === 'calendar' ? 'Google Calendar' : 'Gmail'}
+            hint={`Sign in with Google here in ${PRODUCT_NAME}.`}
+          >
             <Button
               // The IMAP form's Connect is the one filled button while it's open.
               variant={imapOpen ? 'default' : 'accent'}
@@ -668,7 +743,7 @@ function ConnectGroup({
               onClick={() => void start('gmail')}
               title={notReady ?? `Open Google’s sign-in page in ${PRODUCT_NAME}`}
             >
-              {busy === 'gmail' ? 'Starting…' : 'Connect Gmail'}
+              {busy === 'gmail' ? 'Starting…' : mode === 'calendar' ? 'Connect Google Calendar' : 'Connect Gmail'}
             </Button>
           </SettingRow>
         </div>
@@ -680,7 +755,7 @@ function ConnectGroup({
             onStart={() => void start('microsoft')}
           />
         </SettingRow>
-        <SettingRow
+        {mode === 'mail' && <SettingRow
           label="Other email"
           hint="Fastmail, iCloud and others, with an app password from your provider."
           below={
@@ -713,7 +788,7 @@ function ConnectGroup({
           >
             {imapOpen ? 'Hide' : 'Set up…'}
           </Button>
-        </SettingRow>
+        </SettingRow>}
       </SettingsGroup>
 
       {flow?.kind === 'device' && (
@@ -1223,7 +1298,8 @@ export function AddCalendarAccess({
     try {
       const res = await linkOauthUpgrade({
         inbox: inbox.address,
-        features: 'calendar',
+        // 0.46.16: an added calendar is read-only (agents never write).
+        features: 'calendar-read',
         clientCapture: true,
         redirectUri: bind.redirectUri,
       })
@@ -1274,7 +1350,7 @@ export function AddCalendarAccess({
         await startGoogle()
         return
       }
-      const res = await linkOauthUpgrade({ inbox: inbox.address, features: 'calendar' })
+      const res = await linkOauthUpgrade({ inbox: inbox.address, features: 'calendar-read' })
       if (res.flow === 'device') {
         const bound = Number.isFinite(res.expiresIn) && res.expiresIn > 0 ? res.expiresIn * 1000 : OAUTH_MAX_MS
         setFlow({
@@ -1347,7 +1423,7 @@ export function AddCalendarAccess({
     <SettingsGroup title="Calendar" card testId="add-calendar">
       <SettingRow
         label="Calendar isn’t connected"
-        hint={`This account was connected for mail only. Add its calendar so agents with access can read and add events.${isGoogle ? ' Google asks you to allow it in your browser.' : ''}`}
+        hint={`This account was connected for mail only. Add its calendar, read-only, so agents with access can see its events (they can’t change anything).${isGoogle ? ' Google asks you to allow it in your browser.' : ''}`}
         below={
           failure ? (
             <div className="space-y-2" data-testid="add-calendar-error" role="alert">
@@ -1513,11 +1589,7 @@ function AccountDetail({
       {needsCalendarConsent(inbox) ? (
         <AddCalendarAccess inbox={inbox} canMutate={canMutate} onUpgraded={onChanged} />
       ) : calendarOn ? (
-        <SettingsGroup title="Calendar" card>
-          <SettingRow label="Calendar" hint="Agents with access can read this account’s calendar and add events.">
-            <Tag tone="ok">Connected</Tag>
-          </SettingRow>
-        </SettingsGroup>
+        <LinkedCalendarPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />
       ) : null}
 
       <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} card />
@@ -1546,6 +1618,133 @@ function AccountDetail({
         </SettingRow>
       </SettingsGroup>
     </div>
+  )
+}
+
+// ── A linked calendar: read-only or not, which calendars, descriptions ──
+
+/** The Calendar card of a linked account (calendar S1): whether agents can
+ *  only read it, which calendars a read-only link shows them (the primary
+ *  always), and, per workspace, whether they see event descriptions. */
+export function LinkedCalendarPanel({
+  inbox,
+  canMutate,
+  patchInbox,
+}: {
+  inbox: Inbox
+  canMutate: boolean
+  patchInbox: (address: string, patch: (i: Inbox) => Inbox) => void
+}): React.JSX.Element {
+  const readOnly = inbox.capabilities?.calendar?.write !== true
+  const [cals, setCals] = useState<LinkedCalendar[] | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const address = inbox.address
+
+  useEffect(() => {
+    if (!readOnly) return
+    let cancelled = false
+    linkedCalendars(address)
+      .then((r) => {
+        if (!cancelled) setCals(r.calendars)
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(mailErrorMessage(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [address, readOnly])
+
+  const toggleCalendar = useCallback(
+    async (c: LinkedCalendar, on: boolean): Promise<void> => {
+      setBusy(c.id)
+      setError(null)
+      // Optimistic: the switch moves now; a refusal puts it back.
+      setCals((cur) => cur?.map((x) => (x.id === c.id ? { ...x, optedIn: on } : x)) ?? cur)
+      try {
+        const r = await setLinkedCalendars({ address, ...(on ? { add: [c.id] } : { remove: [c.id] }) })
+        setCals(r.calendars)
+      } catch (e) {
+        setCals((cur) => cur?.map((x) => (x.id === c.id ? { ...x, optedIn: !on } : x)) ?? cur)
+        setError(mailErrorMessage(e))
+      } finally {
+        setBusy(null)
+      }
+    },
+    [address],
+  )
+
+  const setDescriptions = useCallback(
+    async (projectId: string, show: boolean): Promise<void> => {
+      setBusy(`desc-${projectId}`)
+      setError(null)
+      const apply = (omit: boolean) => (i: Inbox): Inbox => ({
+        ...i,
+        primary: i.primary.projectId === projectId ? { ...i.primary, calendarOmitDescription: omit } : i.primary,
+        grants: i.grants.map((g) => (g.projectId === projectId ? { ...g, calendarOmitDescription: omit } : g)),
+      })
+      patchInbox(address, apply(!show))
+      try {
+        await setCalendarPrivacy({ address, project: projectId, omitDescription: !show })
+      } catch (e) {
+        patchInbox(address, apply(show))
+        setError(mailErrorMessage(e))
+      } finally {
+        setBusy(null)
+      }
+    },
+    [address, patchInbox],
+  )
+
+  const workspaces = [inbox.primary, ...inbox.grants]
+  return (
+    <SettingsGroup title="Calendar" card testId="linked-calendar">
+      <SettingRow
+        label="Calendar"
+        hint={
+          readOnly
+            ? 'Read-only: agents with access see its events. They can’t create, change, accept or decline anything.'
+            : 'Agents with access can read this calendar and add draft events (linked before read-only links). To make it read-only, disconnect it and connect the calendar again.'
+        }
+      >
+        <Tag tone="ok">{readOnly ? 'Read-only' : 'Connected'}</Tag>
+      </SettingRow>
+      {readOnly &&
+        (cals ?? []).map((c) => (
+          <SettingRow
+            key={c.id}
+            label={c.primary ? `${c.name} (primary)` : c.name}
+            hint={c.primary ? 'Always shown to agents with access.' : 'Show this calendar to agents with access.'}
+          >
+            <Toggle
+              checked={c.optedIn}
+              disabled={!canMutate || c.primary || busy !== null}
+              onChange={(on) => void toggleCalendar(c, on)}
+              aria-label={`Show ${c.name} to agents`}
+            />
+          </SettingRow>
+        ))}
+      {workspaces.map((w) => (
+        <SettingRow
+          key={`desc-${w.projectId}`}
+          label={`Show event descriptions to ${w.workspace ?? 'this workspace'}’s agents`}
+          hint="When off, they still get the meeting link and id, nothing else from the description."
+        >
+          <Toggle
+            checked={w.calendarOmitDescription !== true}
+            disabled={!canMutate || busy !== null}
+            onChange={(on) => void setDescriptions(w.projectId, on)}
+            aria-label={`Show event descriptions to ${w.workspace ?? 'this workspace'}’s agents`}
+          />
+        </SettingRow>
+      ))}
+      {error && (
+        <p role="alert" className="px-4 pb-3 type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
+          {error}
+        </p>
+      )}
+    </SettingsGroup>
   )
 }
 

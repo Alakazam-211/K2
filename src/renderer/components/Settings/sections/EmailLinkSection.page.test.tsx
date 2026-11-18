@@ -23,6 +23,9 @@ const api = vi.hoisted(() => ({
   linkOauthStart: vi.fn(),
   linkOauthStatus: vi.fn(),
   removeLinkedInbox: vi.fn(),
+  setCalendarPrivacy: vi.fn(),
+  linkedCalendars: vi.fn(),
+  setLinkedCalendars: vi.fn(),
 }))
 vi.mock('./email-api', async (importOriginal) => {
   const real = await importOriginal<typeof import('./email-api')>()
@@ -41,7 +44,8 @@ vi.mock('@/stores/confirm-dialog', () => ({
   },
 }))
 
-import { EmailLinkSection } from './EmailLinkSection'
+import { EmailLinkSection, LinkedCalendarPanel } from './EmailLinkSection'
+import { useCalendarLinkRequestStore } from '@/stores/calendar-link-request'
 import { MailReplyError, parseInboxes, parseOauthConfig, type Inbox } from './email-api'
 
 const ROW: Inbox = {
@@ -132,6 +136,81 @@ describe('EmailLinkSection', () => {
     expect(notice.textContent).toContain('alex@example.com is connected. Agents in atlas can use it now.')
     expect(api.linkOauthStart).toHaveBeenCalledWith({ address: 'alex@example.com', provider: 'microsoft', workspace: 'p1' })
     expect(await screen.findByTestId('account-row-alex@example.com')).toBeTruthy()
+  })
+
+  // Calendar S1: Connect → A calendar is a read-only link; unticking
+  // "Show event descriptions" leaves them out for that workspace.
+  it('connects a calendar read-only and leaves descriptions out when asked', async () => {
+    let connected = false
+    api.fetchInboxes.mockImplementation(async () => (connected ? [ROW] : []))
+    api.linkOauthStart.mockResolvedValue({ flow: 'device', linkId: 'l1', userCode: 'FAKE-0001', verificationUrl: 'https://login.example/device', expiresIn: 900 })
+    api.linkOauthStatus.mockImplementation(async () => {
+      connected = true
+      return { state: 'connected', address: 'alex@example.com' }
+    })
+    api.setCalendarPrivacy.mockResolvedValue({ ok: true, changed: true })
+    render(<EmailLinkSection />)
+    await screen.findByTestId('accounts-empty')
+    fireEvent.click(screen.getByRole('radio', { name: 'A calendar' }))
+    expect(screen.queryByText('Other email')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+    fireEvent.click(document.querySelector('[data-setting-dropdown-menu] [data-value="p1"]') as HTMLElement)
+    fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'alex@example.com' } })
+    const desc = screen.getByRole('switch', { name: 'Show event descriptions to this workspace’s agents' })
+    expect(desc.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(desc)
+    fireEvent.click(screen.getByTestId('connect-microsoft'))
+    await screen.findByTestId('email-notice')
+    expect(api.linkOauthStart).toHaveBeenCalledWith({
+      address: 'alex@example.com',
+      provider: 'microsoft',
+      workspace: 'p1',
+      features: 'calendar-read',
+    })
+    expect(api.setCalendarPrivacy).toHaveBeenCalledWith({ address: 'alex@example.com', project: 'p1', omitDescription: true })
+  })
+
+  it('a "link your calendar" card fills the form in', async () => {
+    api.fetchInboxes.mockResolvedValue([])
+    useCalendarLinkRequestStore.getState().request({ address: 'pat@example.com', provider: 'gmail', workspace: 'p2' })
+    render(<EmailLinkSection />)
+    await screen.findByTestId('accounts-empty')
+    expect((screen.getByLabelText('Email address') as HTMLInputElement).value).toBe('pat@example.com')
+    expect(screen.getByRole('radio', { name: 'A calendar' }).getAttribute('aria-checked')).toBe('true')
+    expect(useCalendarLinkRequestStore.getState().pending).toBeNull()
+  })
+
+  it('a read-only calendar: pick calendars, and descriptions per workspace', async () => {
+    const ro: Inbox = {
+      ...ROW,
+      capabilities: { source: 'google', calendar: { read: true, write: false }, missing: [] },
+    }
+    api.linkedCalendars.mockResolvedValue({
+      access: 'read-only',
+      calendars: [
+        { id: 'alex@example.com', name: 'alex@example.com', optedIn: true, primary: true },
+        { id: 'team@example.com', name: 'Consults', optedIn: false, primary: false },
+      ],
+    })
+    api.setLinkedCalendars.mockResolvedValue({
+      access: 'read-only',
+      calendars: [
+        { id: 'alex@example.com', name: 'alex@example.com', optedIn: true, primary: true },
+        { id: 'team@example.com', name: 'Consults', optedIn: true, primary: false },
+      ],
+    })
+    api.setCalendarPrivacy.mockResolvedValue({ ok: true, changed: true })
+    const patched: Inbox[] = []
+    render(<LinkedCalendarPanel inbox={ro} canMutate patchInbox={(_a, f) => patched.push(f(ro))} />)
+    const consults = await screen.findByRole('switch', { name: 'Show Consults to agents' })
+    expect((screen.getByRole('switch', { name: 'Show alex@example.com to agents' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(consults)
+    await waitFor(() => expect(api.setLinkedCalendars).toHaveBeenCalledWith({ address: 'alex@example.com', add: ['team@example.com'] }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Show Consults to agents' }).getAttribute('aria-checked')).toBe('true'))
+    fireEvent.click(screen.getByRole('switch', { name: 'Show event descriptions to atlas’s agents' }))
+    await waitFor(() => expect(api.setCalendarPrivacy).toHaveBeenCalledWith({ address: 'alex@example.com', project: 'p1', omitDescription: true }))
+    expect(patched[0].primary.calendarOmitDescription).toBe(true)
+    expect(screen.getByTestId('linked-calendar').textContent).toContain('Read-only')
   })
 
   it('says why a sign-in failed and offers Try again', async () => {

@@ -190,6 +190,28 @@ function NoticePostButton({
   )
 }
 
+/** Link read-only (calendar S1): Settings → Email Link with the calendar
+ *  form filled in. Only on the window's own server, whose Settings open. */
+function NoticeLinkCalendarButton({
+  action,
+  call,
+  primary,
+}: {
+  action: SystemNoticeAction
+  call: Extract<SystemNoticeCall, { kind: 'link_calendar' }>
+  primary: boolean
+}): JSX.Element | null {
+  const source = useThreadAttachmentSource()
+  const open = useCallback(() => {
+    // Loaded on press: Settings' stores stay out of the Thread.
+    void import('@/stores/calendar-link-request')
+      .then((m) => m.requestCalendarLink({ address: call.address, provider: call.provider, workspace: call.workspace }))
+      .catch((err: unknown) => console.warn('[thread] open calendar link failed:', err))
+  }, [call.address, call.provider, call.workspace])
+  if (!source || !source.scope.isWindowHost()) return null
+  return <NoticeButton label={action.label} testId={`notice-action-${action.id}`} primary={primary} onClick={open} />
+}
+
 /** What Open its terminal says when the window's server has no agent at
  *  that address. */
 export const TERMINAL_NOT_FOUND_WORDS = 'That agent isn’t on this server.'
@@ -252,6 +274,7 @@ function NoticeActionButton({
 }): JSX.Element | null {
   const call = action.call
   if (call.kind === 'open_terminal') return <NoticeTerminalButton action={action} workspace={call.workspace} primary={primary} />
+  if (call.kind === 'link_calendar') return <NoticeLinkCalendarButton action={action} call={call} primary={primary} />
   return <NoticePostButton action={action} call={call} primary={primary} viewer={viewer} />
 }
 

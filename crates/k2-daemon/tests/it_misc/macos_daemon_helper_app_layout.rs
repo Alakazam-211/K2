@@ -72,7 +72,9 @@ fn helper_bundle_id_matches_build_script() {
 #[test]
 fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
     const PTYD_BUILD: &str = "cargo build --release -p k2-ptyd --bin k2-ptyd";
-    const SIDECAR_BUILD: &str = "cargo build --release \"${K2_MAC_SIDECAR_CARGO_ARGS[@]}\"";
+    // The sidecars build with the release path maps (scripts/lib/build-paths.sh),
+    // so no builder path lands in a shipped binary.
+    const SIDECAR_BUILD: &str = "k2_path_mapped cargo build --release \"${K2_MAC_SIDECAR_CARGO_ARGS[@]}\"";
     const SIDECAR_ARRAY: &str = "K2_MAC_SIDECAR_CARGO_ARGS=(";
     const PTYD_ARGS: &str = "-p k2-ptyd --bin k2-ptyd";
     const SHARED: &str = "scripts/lib/build-binaries.sh";

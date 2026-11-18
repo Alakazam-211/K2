@@ -211,8 +211,13 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
     let line_err = |l: String| Stop::Usage(format!("{l}\n"));
     let mut sub: Option<Sub> = None;
     let mut json = false;
-    let (mut tool, mut name, mut handle, mut about, mut group) =
-        (String::new(), String::new(), String::new(), String::new(), String::new());
+    let (mut tool, mut name, mut handle, mut about, mut group) = (
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
     let mut have_about = false;
     let mut row = String::new();
     let mut i = 0;
@@ -276,13 +281,7 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
                 }
                 i += 1;
             }
-            _ => {
-                return Err(Stop::Usage(format!(
-                    "{}\n{}",
-                    unknown_argument(w),
-                    usage()
-                )))
-            }
+            _ => return Err(Stop::Usage(format!("{}\n{}", unknown_argument(w), usage()))),
         }
     }
     let sub = sub.unwrap_or(Sub::List);
@@ -1219,7 +1218,9 @@ impl Py {
             let dev = is_str(Some(rid), "dev_tools");
             let opens = dget(r, "opens");
             let raw_note = dget(r, "note");
-            if dev && opens.is_none_or(|o| matches!(o, Value::Null)) && raw_note.is_some_and(py::truthy)
+            if dev
+                && opens.is_none_or(|o| matches!(o, Value::Null))
+                && raw_note.is_some_and(py::truthy)
             {
                 note = Some(format!("run: {}", py::str_of(raw_note.unwrap_or(&nothing))));
             } else if dev && is_str(opens, "dev_tools") && note.is_none() {

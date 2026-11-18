@@ -90,7 +90,10 @@ fn the_shell_s_lines() {
     ] {
         assert!(text.contains(shell), "cmd_setup no longer has {shell:?}");
     }
-    assert_eq!(UNREACHABLE, "Error: could not reach the K2 daemon (k2 setup)");
+    assert_eq!(
+        UNREACHABLE,
+        "Error: could not reach the K2 daemon (k2 setup)"
+    );
     assert_eq!(
         MEET_KESSEL,
         "Next: meet Kessel, the agent that runs K2: k2 setup kessel"
@@ -116,8 +119,7 @@ fn the_shell_s_lines() {
     assert!(git_tools.contains("            *) printf -v c '%%%02X' \"'$c\"; out+=\"$c\" ;;"));
     // `setup chief-of-staff` rides the locked tool.
     let policy = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/src/cli-tools-policy.sh"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh"),
     )
     .expect("cli-tools-policy.sh");
     assert!(policy.contains(
@@ -131,17 +133,38 @@ fn the_python_s_lines() {
     let py = python();
     for (n, line) in [
         (3, "raw = sys.stdin.read()"),
-        (PY_ERROR_LINE, r#"print("Error: %s%s" % ((code + ": ") if code and code not in hint else "", hint), file=sys.stderr)"#),
+        (
+            PY_ERROR_LINE,
+            r#"print("Error: %s%s" % ((code + ": ") if code and code not in hint else "", hint), file=sys.stderr)"#,
+        ),
         (PY_LOW, r#"low = (code + " " + hint).lower()"#),
         (PY_GRANTED, r#"granted = perms.get("granted") or []"#),
         (PY_LEFT, r#"left = perms.get("left") or []"#),
-        (PY_JOIN_GRANTED, r#"print("Allowed from the start: " + ", ".join(granted))"#),
-        (PY_JOIN_LEFT, r#"print("It asks on a permission card for: " + ", ".join("%s (%s)" % (l.get("action"), l.get("reason")) for l in left))"#),
-        (PY_DONE, r#"done = sum(1 for r in rows if r.get("state") == "done")"#),
-        (PY_DONE + 1, r#"print("Setup: %d of %d done" % (done, len(rows)))"#),
-        (PY_LINE, r#"line = "  %s %s" % (MARK.get(r.get("state"), "[?]"), LABELS.get(rid, rid))"#),
+        (
+            PY_JOIN_GRANTED,
+            r#"print("Allowed from the start: " + ", ".join(granted))"#,
+        ),
+        (
+            PY_JOIN_LEFT,
+            r#"print("It asks on a permission card for: " + ", ".join("%s (%s)" % (l.get("action"), l.get("reason")) for l in left))"#,
+        ),
+        (
+            PY_DONE,
+            r#"done = sum(1 for r in rows if r.get("state") == "done")"#,
+        ),
+        (
+            PY_DONE + 1,
+            r#"print("Setup: %d of %d done" % (done, len(rows)))"#,
+        ),
+        (
+            PY_LINE,
+            r#"line = "  %s %s" % (MARK.get(r.get("state"), "[?]"), LABELS.get(rid, rid))"#,
+        ),
         (PY_NOTE, r#"note = NOTES.get(r.get("note") or "")"#),
-        (PY_KESSEL, r#"print("Kessel: %s at %s (k2 thread <its handle> to talk to it)" % (kessel.get("name"), kessel.get("path")))"#),
+        (
+            PY_KESSEL,
+            r#"print("Kessel: %s at %s (k2 thread <its handle> to talk to it)" % (kessel.get("name"), kessel.get("path")))"#,
+        ),
     ] {
         assert_eq!(at(&py, n), line, "line {n}");
     }
@@ -194,12 +217,35 @@ fn the_words_as_cmd_setup_reads_them() {
     }
     assert_eq!(ok(&["kessel"]).body, "{}");
     assert_eq!(
-        ok(&["kessel", "--focus-group", "Ops", "--handle", "kay", "--name", "Kay", "--tool", "claude"]).body,
+        ok(&[
+            "kessel",
+            "--focus-group",
+            "Ops",
+            "--handle",
+            "kay",
+            "--name",
+            "Kay",
+            "--tool",
+            "claude"
+        ])
+        .body,
         r#"{"tool": "claude", "name": "Kay", "handle": "kay", "focusGroup": "Ops"}"#
     );
-    assert_eq!(ok(&["kessel", "--name", "", "--focus-group", ""]).body, "{}");
     assert_eq!(
-        ok(&["chief-of-staff", "--name", "Ada", "--about", "", "--tool", "codex"]).body,
+        ok(&["kessel", "--name", "", "--focus-group", ""]).body,
+        "{}"
+    );
+    assert_eq!(
+        ok(&[
+            "chief-of-staff",
+            "--name",
+            "Ada",
+            "--about",
+            "",
+            "--tool",
+            "codex"
+        ])
+        .body,
         r#"{"tool": "codex", "name": "Ada", "about": ""}"#
     );
     assert_eq!(ok(&["skip", "dev_tools"]).body, r#"{"row": "dev_tools"}"#);
@@ -222,13 +268,19 @@ fn the_words_as_cmd_setup_reads_them() {
         usage(&["skip", "x", "--focus-group", "Ops"]),
         "k2 setup: --focus-group goes with k2 setup kessel or k2 setup chief-of-staff\n"
     );
-    assert_eq!(usage(&["kessel", "--name"]), "k2 setup: --name needs a value\n");
+    assert_eq!(
+        usage(&["kessel", "--name"]),
+        "k2 setup: --name needs a value\n"
+    );
     assert_eq!(usage(&["kessel", "--about", "x"]), format!("{NO_ABOUT}\n"));
     assert_eq!(
         usage(&["chief-of-staff", "--handle", "x"]),
         format!("{NO_HANDLE}\n")
     );
-    assert_eq!(usage(&["chief-of-staff", "--name", "Ada"]), format!("{CHIEF_USAGE}\n"));
+    assert_eq!(
+        usage(&["chief-of-staff", "--name", "Ada"]),
+        format!("{CHIEF_USAGE}\n")
+    );
     assert_eq!(
         usage(&["chief-of-staff", "--name", "Ada", "--tool", "x"]),
         format!("{CHIEF_USAGE}\n")
@@ -249,7 +301,10 @@ fn the_words_as_cmd_setup_reads_them() {
         assert_eq!(parse(help), Err(Stop::Help), "{help:?}");
     }
     // A value is no help.
-    assert_eq!(ok(&["kessel", "--name", "help"]).body, r#"{"name": "help"}"#);
+    assert_eq!(
+        ok(&["kessel", "--name", "help"]).body,
+        r#"{"name": "help"}"#
+    );
     assert!(usage_text().starts_with("k2 setup [--json]"));
 }
 
@@ -259,7 +314,10 @@ fn values_as_setup_jstr_writes_them() {
         ("plain", r#""plain""#),
         ("", r#""""#),
         (r#"K "Five" \ 5"#, r#""K \"Five\" \\ 5""#),
-        ("runs \"ops\"\tand\nbooks\r", r#""runs \"ops\"\tand\nbooks\r""#),
+        (
+            "runs \"ops\"\tand\nbooks\r",
+            r#""runs \"ops\"\tand\nbooks\r""#,
+        ),
         ("a\u{1}b\u{1f}c\u{7f}d", "\"a\\u0001b\\u001fc\u{7f}d\""),
         ("\u{1b}[0m", "\"\\u001b[0m\""),
         ("Ann's caf\u{e9} \u{2192}", "\"Ann's caf\u{e9} \u{2192}\""),
@@ -291,9 +349,18 @@ fn json_strings_as_setup_junesc_reads_them() {
 fn fields_as_setup_jfield_finds_them() {
     let f = |k: &str, t: &str| jfield(k, t.as_bytes()).map(|v| String::from_utf8(v).unwrap());
     assert_eq!(f("code", r#"{"code":"x"}"#).as_deref(), Some("x"));
-    assert_eq!(f("code", "{\"code\" \t:\n \"x y\"}").as_deref(), Some("x y"));
-    assert_eq!(f("code", r#"{"code":5,"code":"later"}"#).as_deref(), Some("later"));
-    assert_eq!(f("hint", r#"{"hint":"a \"q\" b"}"#).as_deref(), Some(r#"a "q" b"#));
+    assert_eq!(
+        f("code", "{\"code\" \t:\n \"x y\"}").as_deref(),
+        Some("x y")
+    );
+    assert_eq!(
+        f("code", r#"{"code":5,"code":"later"}"#).as_deref(),
+        Some("later")
+    );
+    assert_eq!(
+        f("hint", r#"{"hint":"a \"q\" b"}"#).as_deref(),
+        Some(r#"a "q" b"#)
+    );
     assert_eq!(f("hint", r#"{"hint":""}"#).as_deref(), Some(""));
     assert_eq!(f("hint", r#"{"hint":"open"#), None);
     assert_eq!(f("hint", r#"{"xhint":"no"}"#), None);
@@ -304,7 +371,10 @@ fn fields_as_setup_jfield_finds_them() {
     );
     assert_eq!(f("hint", "{\"hint\":\"end\\"), None);
     let o = |t: &str| error_object(t.as_bytes()).map(|r| String::from_utf8(r.to_vec()).unwrap());
-    assert_eq!(o(r#"{"error":{"code":"a"}}"#).as_deref(), Some(r#""code":"a"}}"#));
+    assert_eq!(
+        o(r#"{"error":{"code":"a"}}"#).as_deref(),
+        Some(r#""code":"a"}}"#)
+    );
     assert_eq!(
         o(r#"{"error":"s","x":{"error" : {"y":1}}}"#).as_deref(),
         Some(r#""y":1}}}"#)
@@ -364,19 +434,63 @@ fn the_answers_as_setup_render_prints_them() {
     );
     let refusal = |body: &str| rendered(Sub::List, false, &format!("{body}\n403"));
     for (body, line, exit) in [
-        (r#"{"ok":false,"error":{"code":"first_run_person_only","hint":"agents have none"}}"#, "Error: first_run_person_only: agents have none", Exit::Refused),
-        (r#"{"error":{"code":"unknown_row","hint":"\"nope\" is not a row (unknown_row)"}}"#, r#"Error: "nope" is not a row (unknown_row)"#, Exit::Usage),
-        (r#"{"error":{"code":"kessel_first_run_off","hint":"off"}}"#, "Error: kessel_first_run_off: off", Exit::Error),
-        (r#"{"error":{"code":"unknown_focus_group","message":"none"}}"#, "Error: unknown_focus_group: none", Exit::NotFound),
-        (r#"{"error":{"code":"ambiguous_focus_group","hint":""}}"#, "Error: ambiguous_focus_group", Exit::NotFound),
-        (r#"{"error":{"hint":"Bad TOKEN"}}"#, "Error: Bad TOKEN", Exit::Refused),
-        (r#"{"error":"role_required","message":"Voice only."}"#, "Error: role_required", Exit::Refused),
-        (r#"{"error":"invalid or missing token"}"#, "Error: invalid or missing token", Exit::Refused),
-        (r#"{"error":{"code":"store","hint":"disk full\twhile saving \\ the list"}}"#, "Error: store: disk full\twhile saving \\ the list", Exit::Error),
-        (r#"{"state":"migrating"}"#, r#"Error: {"state":"migrating"}"#, Exit::Error),
+        (
+            r#"{"ok":false,"error":{"code":"first_run_person_only","hint":"agents have none"}}"#,
+            "Error: first_run_person_only: agents have none",
+            Exit::Refused,
+        ),
+        (
+            r#"{"error":{"code":"unknown_row","hint":"\"nope\" is not a row (unknown_row)"}}"#,
+            r#"Error: "nope" is not a row (unknown_row)"#,
+            Exit::Usage,
+        ),
+        (
+            r#"{"error":{"code":"kessel_first_run_off","hint":"off"}}"#,
+            "Error: kessel_first_run_off: off",
+            Exit::Error,
+        ),
+        (
+            r#"{"error":{"code":"unknown_focus_group","message":"none"}}"#,
+            "Error: unknown_focus_group: none",
+            Exit::NotFound,
+        ),
+        (
+            r#"{"error":{"code":"ambiguous_focus_group","hint":""}}"#,
+            "Error: ambiguous_focus_group",
+            Exit::NotFound,
+        ),
+        (
+            r#"{"error":{"hint":"Bad TOKEN"}}"#,
+            "Error: Bad TOKEN",
+            Exit::Refused,
+        ),
+        (
+            r#"{"error":"role_required","message":"Voice only."}"#,
+            "Error: role_required",
+            Exit::Refused,
+        ),
+        (
+            r#"{"error":"invalid or missing token"}"#,
+            "Error: invalid or missing token",
+            Exit::Refused,
+        ),
+        (
+            r#"{"error":{"code":"store","hint":"disk full\twhile saving \\ the list"}}"#,
+            "Error: store: disk full\twhile saving \\ the list",
+            Exit::Error,
+        ),
+        (
+            r#"{"state":"migrating"}"#,
+            r#"Error: {"state":"migrating"}"#,
+            Exit::Error,
+        ),
         (r#"{"error":5}"#, r#"Error: {"error":5}"#, Exit::Error),
     ] {
-        assert_eq!(refusal(body), (String::new(), format!("{line}\n"), exit), "{body}");
+        assert_eq!(
+            refusal(body),
+            (String::new(), format!("{line}\n"), exit),
+            "{body}"
+        );
     }
     assert_eq!(
         rendered(Sub::List, false, "<html>bad gateway</html>\n502"),
@@ -387,10 +501,7 @@ fn the_answers_as_setup_render_prints_them() {
         )
     );
     // 201 is not 200.
-    assert_eq!(
-        rendered(Sub::List, false, "Setup\n201").2,
-        Exit::Error
-    );
+    assert_eq!(rendered(Sub::List, false, "Setup\n201").2, Exit::Error);
     let r = render(Sub::List, false, b"\n000x\n200", || false);
     assert_eq!(r.noted.as_deref(), Some(&b"\n000x"[..]));
     assert_eq!(render(Sub::List, false, b"\n000", || false).noted, None);
@@ -425,19 +536,35 @@ fn old(sub: Sub, body: &str) -> (String, String, Exit) {
 #[test]
 fn an_older_daemon_s_list() {
     let rest = r#"{"id":"llm_sign_in","state":"todo","opens":"llm_sign_in"},{"id":"first_agent","state":"todo","opens":"add_workspace"}"#;
-    let with = |dev: &str| format!(r#"{{"enabled":true,"hidden":false,"finished":false,"rows":[{dev}{rest}]}}"#);
-    let (out, err, exit) = old(Sub::List, &with(r#"{"id":"dev_tools","state":"todo","opens":"dev_tools"},"#));
+    let with = |dev: &str| {
+        format!(r#"{{"enabled":true,"hidden":false,"finished":false,"rows":[{dev}{rest}]}}"#)
+    };
+    let (out, err, exit) = old(
+        Sub::List,
+        &with(r#"{"id":"dev_tools","state":"todo","opens":"dev_tools"},"#),
+    );
     assert_eq!((err.as_str(), exit), ("", Exit::Ok));
     assert_eq!(
         out,
         format!("Setup: 0 of 3 done\n  [ ] Install developer tools ({APPLE_TOOLS})\n  [ ] Sign in to an AI tool\n  [ ] Make your first agent\n")
     );
-    let (out, _, _) = old(Sub::List, &with(r#"{"id":"dev_tools","state":"todo","opens":null,"note":"sudo apt install git"},"#));
+    let (out, _, _) = old(
+        Sub::List,
+        &with(r#"{"id":"dev_tools","state":"todo","opens":null,"note":"sudo apt install git"},"#),
+    );
     assert!(out.contains("  [ ] Install developer tools (run: sudo apt install git)\n"));
-    let (out, _, _) = old(Sub::List, &with(r#"{"id":"dev_tools","state":"done","opens":"dev_tools"},"#));
+    let (out, _, _) = old(
+        Sub::List,
+        &with(r#"{"id":"dev_tools","state":"done","opens":"dev_tools"},"#),
+    );
     assert!(out.starts_with("Setup: 1 of 3 done\n  [x] Install developer tools\n"));
-    let (out, _, _) = old(Sub::List, &with(r#"{"id":"dev_tools","state":"todo","opens":"dev_tools","note":"installing"},"#));
-    assert!(out.contains("(The Apple installer is open. Follow it, and this step finishes by itself.)"));
+    let (out, _, _) = old(
+        Sub::List,
+        &with(r#"{"id":"dev_tools","state":"todo","opens":"dev_tools","note":"installing"},"#),
+    );
+    assert!(
+        out.contains("(The Apple installer is open. Follow it, and this step finishes by itself.)")
+    );
     let (out, _, _) = old(
         Sub::Skip,
         r#"{"enabled":false,"hidden":true,"rows":[{"id":"x","state":"odd"},{"state":"skipped","id":7}],"kessel":{"name":"Kessel","path":"/k"},"offer":"meet_kessel"}"#,
@@ -465,35 +592,92 @@ fn an_older_daemon_s_made_and_refusals() {
         "Made your Chief of Staff: Ada (None) at None\nTell your person on your Thread, and point them to Ada (k2 msg None).\n"
     );
     for (body, err, exit) in [
-        (r#"{"error":{"code":"tool_not_signed_in","hint":"sign in"}}"#, "Error: tool_not_signed_in: sign in\n", Exit::Usage),
-        (r#"{"error":{"code":"x_passport","hint":"has x_passport"}}"#, "Error: has x_passport\n", Exit::Refused),
+        (
+            r#"{"error":{"code":"tool_not_signed_in","hint":"sign in"}}"#,
+            "Error: tool_not_signed_in: sign in\n",
+            Exit::Usage,
+        ),
+        (
+            r#"{"error":{"code":"x_passport","hint":"has x_passport"}}"#,
+            "Error: has x_passport\n",
+            Exit::Refused,
+        ),
         (r#"{"ok":true}"#, "Error: {\"ok\":true}\n", Exit::Error),
         (r#"[1]"#, "Error: [1]\n", Exit::Error),
         (r#"{"error":["a"]}"#, "Error: ['a']\n", Exit::Error),
-        ("{bad", "Error: the daemon sent something k2 setup does not understand: {bad\n", Exit::Error),
+        (
+            "{bad",
+            "Error: the daemon sent something k2 setup does not understand: {bad\n",
+            Exit::Error,
+        ),
     ] {
-        assert_eq!(old(Sub::List, body), (String::new(), err.to_string(), exit), "{body}");
+        assert_eq!(
+            old(Sub::List, body),
+            (String::new(), err.to_string(), exit),
+            "{body}"
+        );
     }
     // Where the Python raises: what it printed, then its traceback.
     for (body, printed, exception) in [
-        (r#"{"error":{"code":5,"hint":"h"}}"#, "", "TypeError: 'in <string>' requires string as left operand, not int"),
-        (r#"{"error":{"code":"c","hint":["c"]}}"#, "Error: ['c']\n", "TypeError: can only concatenate str (not \"list\") to str"),
-        (r#"{"error":{"code":"c","hint":7}}"#, "", "TypeError: argument of type 'int' is not iterable"),
-        (r#"{"rows":5}"#, "", "TypeError: 'int' object is not iterable"),
-        (r#"{"rows":"ab"}"#, "", "AttributeError: 'str' object has no attribute 'get'"),
-        (r#"{"rows":[{"state":["x"]}]}"#, "Setup: 0 of 1 done\n", "TypeError: unhashable type: 'list'"),
-        (r#"{"rows":[],"kessel":[1]}"#, "Setup: 0 of 0 done\nThe app does not show setup lists on this server yet.\n", "AttributeError: 'list' object has no attribute 'get'"),
+        (
+            r#"{"error":{"code":5,"hint":"h"}}"#,
+            "",
+            "TypeError: 'in <string>' requires string as left operand, not int",
+        ),
+        (
+            r#"{"error":{"code":"c","hint":["c"]}}"#,
+            "Error: ['c']\n",
+            "TypeError: can only concatenate str (not \"list\") to str",
+        ),
+        (
+            r#"{"error":{"code":"c","hint":7}}"#,
+            "",
+            "TypeError: argument of type 'int' is not iterable",
+        ),
+        (
+            r#"{"rows":5}"#,
+            "",
+            "TypeError: 'int' object is not iterable",
+        ),
+        (
+            r#"{"rows":"ab"}"#,
+            "",
+            "AttributeError: 'str' object has no attribute 'get'",
+        ),
+        (
+            r#"{"rows":[{"state":["x"]}]}"#,
+            "Setup: 0 of 1 done\n",
+            "TypeError: unhashable type: 'list'",
+        ),
+        (
+            r#"{"rows":[],"kessel":[1]}"#,
+            "Setup: 0 of 0 done\nThe app does not show setup lists on this server yet.\n",
+            "AttributeError: 'list' object has no attribute 'get'",
+        ),
     ] {
         let (out, err, exit) = old(Sub::List, body);
-        let (o, e) = if printed.starts_with("Error:") { ("", printed) } else { (printed, "") };
+        let (o, e) = if printed.starts_with("Error:") {
+            ("", printed)
+        } else {
+            (printed, "")
+        };
         assert_eq!((out.as_str(), exit), (o, Exit::Error), "{body}");
-        assert!(err.starts_with(&format!("{e}Traceback (most recent call last):\n")), "{body}: {err}");
+        assert!(
+            err.starts_with(&format!("{e}Traceback (most recent call last):\n")),
+            "{body}: {err}"
+        );
         assert!(err.ends_with(&format!("{exception}\n")), "{body}: {err}");
     }
-    let (out, err, _) = old(Sub::Kessel, r#"{"workspaceId":"w","permissions":{"granted":[1]}}"#);
+    let (out, err, _) = old(
+        Sub::Kessel,
+        r#"{"workspaceId":"w","permissions":{"granted":[1]}}"#,
+    );
     assert_eq!(out, "Made Kessel: None (None) at None\n");
     assert!(err.ends_with("TypeError: sequence item 0: expected str instance, int found\n"));
-    let (_, err, _) = old(Sub::Kessel, r#"{"workspaceId":"w","permissions":{"left":["x"]}}"#);
+    let (_, err, _) = old(
+        Sub::Kessel,
+        r#"{"workspaceId":"w","permissions":{"left":["x"]}}"#,
+    );
     assert!(err.contains("in <genexpr>\n"), "{err}");
 }
 

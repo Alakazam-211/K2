@@ -774,7 +774,11 @@ impl Client {
         text: bool,
         body: &[u8],
     ) -> Result<Response, Error> {
-        let kind = if post { Kind::SetupPost } else { Kind::SetupGet };
+        let kind = if post {
+            Kind::SetupPost
+        } else {
+            Kind::SetupGet
+        };
         let args: &[&str] = if text { &["format=text"] } else { &[] };
         let t0 = Instant::now();
         let mut tries = 1;
@@ -1944,7 +1948,13 @@ mod tests {
             },
         );
         let (_, r) = p
-            .build(Kind::SetupGet, Channel::Tcp, "/cli/first-run/status", &[], &[])
+            .build(
+                Kind::SetupGet,
+                Channel::Tcp,
+                "/cli/first-run/status",
+                &[],
+                &[],
+            )
             .unwrap();
         assert_eq!(r.target, "/cli/first-run/status?token=s.t");
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();

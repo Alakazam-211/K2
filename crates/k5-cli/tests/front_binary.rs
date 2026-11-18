@@ -186,7 +186,8 @@ fn a_verb_falls_through_and_answers_as_the_shell_does() {
         args(&["nosuchverb"]),
         args(&["study", "app-api"]),
         args(&["version", "extra"]),
-        args(&[]),
+        // The daily tier's -h is the shell's (k5 alone is the binary's).
+        args(&["-h"]),
         vec![OsString::from_vec(odd)],
     ];
     for case in &cases {

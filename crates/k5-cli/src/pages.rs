@@ -449,7 +449,7 @@ pub const DAILY_FORMS: &[&[&str]] = &[&[], &["help"], &["--help"]];
 /// The daily tier for [`DAILY_FORMS`]. True: the binary asks the daemon
 /// whether permission cards are on as the shell does ([`crate::cards`])
 /// and prints the tier for the answer. False: the shell answers them.
-pub const DAILY_NATIVE: bool = false;
+pub const DAILY_NATIVE: bool = true;
 
 /// The daily tier's line while permission cards are on, between
 /// `_daily.txt` and `_daily-end.txt` (`cmd_help_v2_daily`'s `echo`).

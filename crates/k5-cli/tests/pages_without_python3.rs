@@ -1,7 +1,8 @@
 //! The study and help pages the binary prints, with no `python3` on
 //! `PATH` (K2's ruling: a native command runs where python3 is missing):
 //! every study topic as text and as `--json`, the study list and usage,
-//! and every help form in `src/help_native.txt` print the same bytes, on
+//! every help form in `src/help_native.txt` and the daily tier (`k2`,
+//! `k2 help`, `k2 --help`) print the same bytes, on
 //! the same stream, with the same exit as with `python3`. With none, the
 //! `--json` pages are the binary's whatever the `PYTHON*` settings and the
 //! locale say, as no Python reads them.
@@ -132,8 +133,12 @@ fn every_page_prints_the_same_without_python3() {
         .map(|f| f.argv.iter().map(|w| w.to_string()).collect())
         .collect();
     assert!(help.len() > 100, "only {} help forms", help.len());
+    let daily: Vec<Vec<String>> = k5_cli::pages::DAILY_FORMS
+        .iter()
+        .map(|f| f.iter().map(|w| w.to_string()).collect())
+        .collect();
     let study = study_lines();
-    for line in study.iter().chain(&help) {
+    for line in study.iter().chain(&help).chain(&daily) {
         let args: Vec<&str> = line.iter().map(String::as_str).collect();
         let with = rig.run(&args, true, &[]);
         let without = rig.run(&args, false, &[]);
@@ -155,10 +160,21 @@ fn every_page_prints_the_same_without_python3() {
             f.argv
         );
     }
+    // The daily tier: no passport, so cards are off and nothing is asked.
+    let tier = k5_cli::pages::daily_text(false).expect("the daily tier");
+    for f in k5_cli::pages::DAILY_FORMS {
+        let out = rig.run(f, false, &[]);
+        assert_eq!(
+            (out.code, out.stdout.as_str(), out.stderr.as_str()),
+            (Some(0), tier.as_str(), ""),
+            "{f:?} with no python3"
+        );
+    }
     println!(
-        "{} study lines and {} help forms, the same with no python3",
+        "{} study lines, {} help forms and the {} forms of the daily tier, the same with no python3",
         study.len(),
-        help.len()
+        help.len(),
+        daily.len()
     );
 }
 

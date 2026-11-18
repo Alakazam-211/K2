@@ -37,16 +37,21 @@
 #    itself, tests/cli/help_native.sh) prints what this checkout's bash
 #    prints, with the binary's hand-over to bash broken: K5_HOME_OVERRIDE
 #    set to a relative path, which bash never reads and the binary refuses
-#    before it runs bash. So a pass is the binary's own answer. Forms bash
-#    keeps (the tiers made of pieces, the card pages, pieces, a form that
-#    is not exactly a row) must fail that way. So must any help with no
-#    port or no token (the connection gate), and a family's help with
-#    K2_HOOK_SOCK set and a CODEX_ setting (bash looks for a shared Codex
-#    server). An agent's terminal (a passport, K2_PORT and K2_HOOK_SOCK a
-#    live socket) gets every row from the binary too; with K2_HOOK_SOCK
-#    set and no passport, an id tool's help is refused the same way
-#    (exit 3) by both. (The dead-passport probe, with the socket gone,
-#    needs a daemon: crates/k5-cli/tests/help_session_parity.rs.)
+#    before it runs bash. So a pass is the binary's own answer. The daily
+#    tier's three forms (`k2`, `k2 help`, `k2 --help`) are the binary's
+#    too, with no passport (cards off, nothing asked). Forms bash keeps
+#    (the other tiers made of pieces, -h and `help <word>` for the daily
+#    tier, the card pages, pieces, a form that is not exactly a row) must
+#    fail that way. So must any help with no port or no token (the
+#    connection gate), and a family's help with K2_HOOK_SOCK set and a
+#    CODEX_ setting (bash looks for a shared Codex server). An agent's
+#    terminal (a passport, K2_PORT and K2_HOOK_SOCK a live socket) gets
+#    every row from the binary too; with K2_HOOK_SOCK set and no passport,
+#    an id tool's help is refused the same way (exit 3) by both. (The
+#    dead-passport probe, with the socket gone, needs a daemon:
+#    crates/k5-cli/tests/help_session_parity.rs; so does the daily tier
+#    with a passport, which asks whether cards are on:
+#    help_daily_cards_parity.rs there, and tests/cli/help_native.sh.)
 #
 # No daemon: help is offline. Each run gets a scratch HOME and no K2_/K5_
 # settings from the caller (env -i). The connection gate wants a port and a
@@ -348,11 +353,15 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
         native -- $argv
     done < "$LIST"
     [ "$rows" -gt 300 ] || bad "only $rows rows in $LIST"
-    for cmd in "" "help" "--help" "-h" "help deprecated" "help nope" "app --help" "chat --help" \
+    for cmd in "-h" "help deprecated" "help nope" "--help nope" "app --help" "chat --help" \
         "mail send x --help" "help mail send" "zen --help" "wiki nope" "mail --help x"; do
         # shellcheck disable=SC2086
         handed -- $cmd
     done
+    # The daily tier: an owner's terminal, no passport, so nothing is asked.
+    native --
+    native -- help
+    native -- --help
     SOCK="K2_HOOK_SOCK=$SANDBOX/no.sock"
     # No passport: an id tool's help is refused, an open one prints.
     native "$SOCK" -- mail send --help
@@ -361,6 +370,9 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native "$SOCK" -- agent --help
     native "$SOCK" -- help mail
     native "$SOCK" -- help-advanced
+    native "$SOCK" --
+    native "$SOCK" -- help
+    native "$SOCK" -- --help
     handed "$SOCK" "CODEX_THREAD_ID=t1" -- mail send --help
     native "$SOCK" "CODEX_THREAD_ID=t1" -- agent --help
     # An agent's terminal: a passport and its live socket (a bound socket
@@ -379,12 +391,17 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     EMPTY="HOME=$SANDBOX/empty-home"
     mkdir -p "$SANDBOX/empty-home"
     handed "$EMPTY" -- help mail
+    handed "$EMPTY" --
+    handed "$EMPTY" -- --help
+    handed "$EMPTY" "K2_PORT=1" -- help
+    handed "$EMPTY" "K2_HOOK_TOKEN=sessT.notreal1" --
     handed "$EMPTY" -- mail send --help
     handed "$EMPTY" "K2_PORT=1" -- help mail
     handed "$EMPTY" "K2_HOOK_TOKEN=sessT.notreal1" -- help mail
     native "$EMPTY" "K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" -- help mail
     native "$EMPTY" "K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" -- mail send --help
     handed "SHELLOPTS=xtrace" -- mail send --help
+    handed "SHELLOPTS=xtrace" -- --help
     echo "  $((pass - before)) binary checks passed ($rows forms, each also in an agent's terminal)"
 fi
 

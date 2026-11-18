@@ -2,7 +2,8 @@
 //!
 //! When the k2-daemon is running, it publishes agent-hook events
 //! (`HookEvent::AgentLifecycle`, `::AgentReply`, …) as JSON frames on
-//! `ws://127.0.0.1:<port>/events?token=<t>`. This module runs a
+//! `ws://127.0.0.1:<port>/events` (the owner token in an
+//! `Authorization: Bearer` header, never the address). This module runs a
 //! background thread that connects to that stream, decodes each frame,
 //! and re-emits it through the Tauri app's existing event bus so the
 //! React UI sees daemon-originated events identically to ones emitted by
@@ -76,6 +77,19 @@ enum ConnectOutcome {
     Error,
 }
 
+/// The `/events` upgrade request: the owner token goes in an
+/// `Authorization: Bearer` header, never the address. The socket is a plain
+/// TcpStream to 127.0.0.1, so no proxy setting applies to it.
+fn events_request(port: u16, token: &str) -> Result<tungstenite::handshake::client::Request, String> {
+    let url = format!("ws://127.0.0.1:{port}/events?client=desktop-app");
+    let mut request = url.clone().into_client_request().map_err(|e| format!("bad url {url}: {e}"))?;
+    let mut bearer = tungstenite::http::HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|_| "the daemon token is not a valid header value".to_string())?;
+    bearer.set_sensitive(true);
+    request.headers_mut().insert(tungstenite::http::header::AUTHORIZATION, bearer);
+    Ok(request)
+}
+
 /// Single connect attempt. Returns once the connection closes or an error
 /// surfaces. Does NOT panic — every error path logs and returns.
 fn connect_once(app_handle: &AppHandle) -> ConnectOutcome {
@@ -88,11 +102,10 @@ fn connect_once(app_handle: &AppHandle) -> ConnectOutcome {
     // desktop app, so a bundled-app update trigger only goes out while the
     // app is really open (a phone on /events no longer counts). Older
     // daemons ignore the extra parameter.
-    let url = format!("ws://127.0.0.1:{port}/events?token={token}&client=desktop-app");
-    let request = match url.clone().into_client_request() {
+    let request = match events_request(port, &token) {
         Ok(r) => r,
         Err(e) => {
-            log_debug!("[daemon-events] bad url {url}: {e}");
+            log_debug!("[daemon-events] {e}");
             return ConnectOutcome::Error;
         }
     };
@@ -191,4 +204,25 @@ fn read_daemon_credentials() -> Option<(u16, String)> {
         return None;
     }
     Some((port, token))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_events_upgrade_carries_the_token_as_a_bearer_header_never_in_the_address() {
+        let req = events_request(5123, "tok").expect("request");
+        assert_eq!(req.uri().to_string(), "ws://127.0.0.1:5123/events?client=desktop-app");
+        assert!(!req.uri().to_string().contains("token"), "token in the address: {}", req.uri());
+        let auth = req.headers().get(tungstenite::http::header::AUTHORIZATION).expect("an Authorization header");
+        assert_eq!(auth.to_str().expect("ascii"), "Bearer tok");
+        assert!(auth.is_sensitive());
+    }
+
+    #[test]
+    fn a_token_that_is_not_a_header_value_is_an_error_not_a_request() {
+        let err = events_request(5123, "bad\ntoken").expect_err("refused");
+        assert!(!err.contains("bad"), "the error must not quote the token: {err}");
+    }
 }

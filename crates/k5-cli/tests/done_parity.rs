@@ -220,7 +220,7 @@ fn binary_sends(rig: &Rig, c: &Case, want: &str) {
     let (_project, query) = rest.split_once('&').unwrap_or_else(|| panic!("{name}: nothing after the project: {line:?}"));
     assert_eq!(query, format!("{want} HTTP/1.1"), "{name}: the query after the project, in {line:?}");
     assert_eq!(body, "", "{name}: the body");
-    assert_eq!(out, Out { code: Some(0), stdout: OK.to_string(), stderr: String::new() }, "{name}");
+    assert_eq!(out, Out { code: Some(0), signal: None, stdout: OK.to_string(), stderr: String::new() }, "{name}");
 }
 
 

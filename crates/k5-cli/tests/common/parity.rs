@@ -31,6 +31,7 @@
 use super::stub::{Logged, Reply, Stub};
 use std::ffi::OsString;
 use std::net::TcpListener;
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -69,7 +70,11 @@ pub struct Rig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Out {
+    /// The exit code, or 128 plus the signal that ended the process (as a
+    /// shell reports it: 141 for SIGPIPE).
     pub code: Option<i32>,
+    /// The signal that ended the process, if one did.
+    pub signal: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
@@ -102,7 +107,8 @@ pub struct Case {
     pub cwd: Option<PathBuf>,
     /// TMPDIR names a folder that isn't there.
     pub no_tmpdir: bool,
-    /// Bash's exit code and request count: the case proves what it says.
+    /// Bash's exit code (141: killed by SIGPIPE) and request count: the
+    /// case proves what it says.
     pub code: i32,
     pub requests: usize,
     pub compare: Compare,
@@ -174,7 +180,13 @@ impl Rig {
         }
         cmd.arg(self.verb).args(case.args);
         let o = cmd.output().unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
-        Out { code: o.status.code(), stdout: String::from_utf8_lossy(&o.stdout).into_owned(), stderr: String::from_utf8_lossy(&o.stderr).into_owned() }
+        let signal = o.status.signal();
+        Out {
+            code: o.status.code().or_else(|| signal.map(|s| 128 + s)),
+            signal,
+            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+        }
     }
 
     /// Runs both sides of `c` and compares them.
@@ -208,6 +220,7 @@ impl Rig {
         }
         assert_eq!(rl, bl, "{name}: the requests differ\n== rust ==\n{}\n== bash ==\n{}", rl.join("\n----\n"), bl.join("\n----\n"));
         assert_eq!(r.code, b.code, "{name}: the exit code\nrust: {r:?}\nbash: {b:?}");
+        assert_eq!(r.signal, b.signal, "{name}: the signal that ended it\nrust: {r:?}\nbash: {b:?}");
         assert_eq!(r.stdout, b.stdout, "{name}: stdout");
         if c.compare == Compare::Waited {
             let (bs, bn) = mask_waited(&b.stderr);

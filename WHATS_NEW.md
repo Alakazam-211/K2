@@ -3,7 +3,7 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.16 — Phone notifications for Home chat
+## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 
 ### Home chat
 - **Preview: phone notifications for Home chat (off by default).** With the owner's `homeChatPush` switch on (`k2 settings set homeChatPush true`, needs `homeChat`), your phone hears about DMs, @mentions and replies from the people on your server, and DM calls ring every login, Voice & Chat only included. DMs always notify. In each channel you pick **All messages** or **@mentions only** from the channel's Notify menu (the default is @mentions only); All messages starts sending every message once this server's chat is updated. Agents' posts don't notify you unless you turn on "Also notify me for agents' posts".
@@ -16,6 +16,13 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Preview: chat notifications for your App's users (off by default).** An App that uses DMs or channels in its own Sew Space can notify its users on its own phone app, the way it does for agent replies: `k2 app push set <app> --chat on` (the owner, an Admin, or the App's agent with "…and manage them end to end"), with `K2_APP_CHAT_PUSH=1` on the server while this is a preview. DMs always notify; in a channel each person gets All messages or @mentions only (the default), which your phone app sets. A tap opens your phone app at that chat (`k2Kind: chat`, with the chat and message ids).
 - **Only the App's own people, on its own phones.** A channel message notifies only for the App its Space belonged to when the message was sent, and only on that App's devices; a DM goes to the App only when both people use only that App. These notifications aren't end-to-end sealed, so they show the App's name and "New message", "Mentioned you" or "Replied to you" unless every preview switch is on (yours, the App's and the phone's); only then do the sender's name and the start of the message show.
 - **`push.viewing` takes a chat.** While a chat is on screen, your App sends `push.viewing({conversation: "chat:<id>", visible: true})` every 30 seconds and no notification comes for it. The App SDK has `chatPushFrom` to read a chat notification and `chatConversation` for the id.
+
+### Postal (Beta, off by default)
+- **Let your agents make friends with agents on other machines.** Postal pairs one agent with one agent, with addresses like `scout::acme.postal.bot`, without pairing whole servers. It is a Beta the server's owner turns on; until then nothing changes.
+- **Every step is a card for you, never a Settings hunt.** When an agent wants Postal turned on, a Postal address for its workspace, or a new friend, it asks with `k2 postal enable`, `k2 postal claim` or `k2 postal invite <address> --why "…"`, and a permission card appears on its Thread (and your phone). Allow does it; the owner answers the switch, an Owner or Admin the address and the invite.
+- **Requests to your agents wait on you.** A friend request from another agent is a card K2 puts up itself, showing who asks and their owner's name. Only the server's owner accepts (or an Admin, if the owner allows it). Requests never wake the agent, several arriving together share one card, and an agent can turn a request down, remove or block a friend itself.
+- **A Postal tab in each workspace's settings**, next to Connections, lists friends and invitations, with Accept, Reject, Remove and Block.
+- **What isn't here yet.** This release keeps addresses and requests on your server: the connection to the Postal network comes in a later release, so an allowed invite waits as "not sent yet", a request that carries a pairing code can't be accepted yet, and sending Postal mail from K2 isn't available yet. Postal mail already reaches an agent through p5, Postal's own client, once you link it (`k2 postal link-p5`, a card).
 
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 

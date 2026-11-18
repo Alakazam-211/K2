@@ -38,7 +38,7 @@ use crate::mail::calendar::{
     self as cal, error_response, event_not_found, invites_need_send, ok_json, rfc3339_utc, usage,
     BusySpan, WriteBody,
 };
-use crate::mail::oauth::{self, OauthProvider};
+use crate::mail::oauth::{self, CalAccess, OauthProvider};
 use k2_core::db::schema::MailExternalInbox;
 
 // ── The target ──────────────────────────────────────────────────────────
@@ -69,6 +69,27 @@ pub struct LinkedCalInbox {
     /// The caller's `k2 mail access` level on the inbox.
     pub level: Level,
     pub backend: LinkedBackend,
+    /// What the LINK allows (prd-google-calendar-link-v1 §3.1): `Read` for
+    /// a `calendar-read` link — writes refused, calendars masked to
+    /// [`Self::opted_in`] — whatever the caller's level.
+    pub cal: CalAccess,
+    /// `calendar-read` links: the calendars the owner opted in besides the
+    /// primary (`None` = every listed calendar, a 0.46.1 `calendar` link).
+    pub opted_in: Option<Vec<String>>,
+    /// The caller's workspace omits event descriptions on this link (§3.2).
+    pub omit_description: bool,
+    /// The caller's workspace (`projects.id`): agent reads are logged
+    /// against it (§3.9).
+    pub project_id: String,
+}
+
+/// How a read lists events (`events --full`, `--include-cancelled`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ViewOpts {
+    /// The `show` shape for every event (description and attendees).
+    pub full: bool,
+    /// Keep cancelled occurrences (Google `showDeleted`).
+    pub include_cancelled: bool,
 }
 
 /// 409 `capability_missing` with `{cap, reason, fix}` (PRD §3.1). Only
@@ -99,16 +120,32 @@ pub(crate) fn cap_name(need: Level) -> &'static str {
     }
 }
 
-/// The owner's fix for a link consented without calendars.
+/// The owner's fix for a link consented without calendars: read-only
+/// (prd-google-calendar-link-v1 §3.1, CV-3).
 pub(crate) fn upgrade_fix(address: &str) -> String {
-    format!("k2 mail link upgrade {address} --features calendar (owner)")
+    format!("k2 mail link upgrade {address} --features calendar-read (owner)")
+}
+
+/// 409 `capability_missing` `{cap: calendar.write, reason: read_only_link}`
+/// (§3.2): the link is read-only, whatever the caller's level. Answered
+/// before any provider call.
+pub fn read_only_link(address: &str) -> CliResponse {
+    capability_missing(
+        "calendar.write",
+        "read_only_link",
+        "nothing to fix — agents never change a person's calendar on a read-only link",
+        &format!(
+            "'{address}' is linked read-only: agents can read its calendar but never change it \
+             (no create, update, delete, accept or decline)"
+        ),
+    )
 }
 
 /// Route a LINKED inbox (already past the access gate) to its calendar
 /// provider, or say why it can't: an app-password IMAP inbox has no
 /// calendar API, the owner may have turned linked calendars off, and a
 /// link consented for mail only needs `k2 mail link upgrade`.
-pub fn linked_target(inbox: AccessInbox, need: Level) -> Result<LinkedCalInbox, CliResponse> {
+pub fn linked_target(inbox: AccessInbox, need: Level, project_id: &str) -> Result<LinkedCalInbox, CliResponse> {
     let cap = cap_name(need);
     let Some(row) = inbox.linked.clone() else {
         return Err(cal::engine_err("linked inbox row missing (unexpected)"));
@@ -145,7 +182,9 @@ pub fn linked_target(inbox: AccessInbox, need: Level) -> Result<LinkedCalInbox, 
         LinkedBackend::Microsoft => OauthProvider::Microsoft,
         LinkedBackend::Google => OauthProvider::Gmail,
     };
-    if !oauth::features_granted(p, granted).calendar {
+    // CV-2: the stored link type caps what the granted scopes say.
+    let level = oauth::calendar_level(p, &meta.features, granted);
+    if level == CalAccess::None {
         let fix = upgrade_fix(&address);
         return Err(capability_missing(
             cap,
@@ -157,7 +196,31 @@ pub fn linked_target(inbox: AccessInbox, need: Level) -> Result<LinkedCalInbox, 
             ),
         ));
     }
-    Ok(LinkedCalInbox { address, row, level: inbox.your_level, backend })
+    if level == CalAccess::Read && need >= Level::Draft {
+        return Err(read_only_link(&address));
+    }
+    let opted_in = match level {
+        CalAccess::Read => Some(
+            crate::mail::calendar_link::opted_in(&row.id)
+                .map_err(cal::engine_err)?
+                .into_iter()
+                .map(|c| c.calendar_id)
+                .collect(),
+        ),
+        _ => None,
+    };
+    let omit_description =
+        crate::mail::calendar_link::omit_description(&row.id, project_id).map_err(cal::engine_err)?;
+    Ok(LinkedCalInbox {
+        address,
+        row,
+        level: inbox.your_level,
+        backend,
+        cal: level,
+        opted_in,
+        omit_description,
+        project_id: project_id.to_string(),
+    })
 }
 
 // ── Errors ──────────────────────────────────────────────────────────────
@@ -289,8 +352,9 @@ pub trait CalendarProvider {
         let _ = g;
         listed == asked
     }
-    /// Occurrences overlapping `[start, end)`, summary shape; `truncated`
-    /// when there were more than `limit`. `NotFound` = no such calendar.
+    /// Occurrences overlapping `[start, end)`, summary shape (the full
+    /// shape with `opts.full`); `truncated` when there were more than
+    /// `limit`. `NotFound` = no such calendar.
     fn view(
         &self,
         g: &LinkedCalInbox,
@@ -298,7 +362,12 @@ pub trait CalendarProvider {
         end: &DateTime<Utc>,
         calendar: Option<&str>,
         limit: usize,
+        opts: ViewOpts,
     ) -> Result<(Vec<Value>, bool), CalErr>;
+    /// Which calendar a stored event is on: `primary` for the account's
+    /// own, else the provider's calendar id (`None` = no such event). The
+    /// opt-in mask of a `calendar-read` link reads it.
+    fn calendar_of(&self, g: &LinkedCalInbox, id: &str) -> Result<Option<String>, CalErr>;
     /// One stored event (`None` = gone).
     fn event(&self, g: &LinkedCalInbox, id: &str, full: bool) -> Result<Option<StoredEvent>, CalErr>;
     /// Create a draft event; returns the provider id and the summary.
@@ -399,16 +468,68 @@ fn draft_checks(g: &LinkedCalInbox, b: &WriteBody, what: &str) -> Result<(), Cli
     Ok(())
 }
 
+// ── The calendar mask of a read-only link (§3.2) ───────────────────────
+
+/// Is a listed calendar (provider id) one the link exposes? Every
+/// calendar on a read-write link; on a `calendar-read` link the primary
+/// (`isDefault`) and the owner's opt-ins.
+fn listed_exposed(p: &dyn CalendarProvider, g: &LinkedCalInbox, c: &Value) -> bool {
+    let Some(opted) = &g.opted_in else { return true };
+    if c.get("isDefault").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    let id = c.get("id").and_then(Value::as_str).unwrap_or("");
+    opted.iter().any(|o| p.same_calendar(g, id, o))
+}
+
+/// May a read name `calendar` (a caller's `--calendar`, or the calendar an
+/// event is on)? `None` and `primary` are the primary. On a `calendar-read`
+/// link anything else must be opted in; an id that might be the primary's
+/// own (Graph's default calendar id, Google's address) is checked against
+/// the calendar list.
+fn calendar_exposed(p: &dyn CalendarProvider, g: &LinkedCalInbox, calendar: Option<&str>) -> Result<bool, CalErr> {
+    let Some(opted) = &g.opted_in else { return Ok(true) };
+    let Some(c) = calendar.map(str::trim).filter(|c| !c.is_empty()) else { return Ok(true) };
+    if c.eq_ignore_ascii_case(crate::mail::calendar_link::PRIMARY) || c.eq_ignore_ascii_case(&g.address) {
+        return Ok(true);
+    }
+    if opted.iter().any(|o| o == c || p.same_calendar(g, o, c)) {
+        return Ok(true);
+    }
+    Ok(p.calendars(g)?.iter().any(|x| {
+        x.get("isDefault").and_then(Value::as_bool) == Some(true)
+            && x.get("id").and_then(Value::as_str).is_some_and(|id| p.same_calendar(g, id, c))
+    }))
+}
+
+/// Per-grant omission on one shaped event (§3.2): the description never
+/// leaves; the join field read out of it stays.
+fn privacy(g: &LinkedCalInbox, mut ev: Value) -> Value {
+    if g.omit_description {
+        crate::mail::calendar_event::redact_description(&mut ev);
+    }
+    ev
+}
+
+/// The default `events` window on a linked calendar (§3.6): 1 day back
+/// for finished calls, 45 days ahead.
+pub const LINKED_BACK_DAYS: i64 = 1;
+pub const LINKED_AHEAD_DAYS: i64 = 45;
+
 // ── Verbs (provider-neutral) ────────────────────────────────────────────
 
 pub fn list_with(p: &dyn CalendarProvider, g: &LinkedCalInbox) -> CliResponse {
     match p.calendars(g) {
-        Ok(cals) => ok_json(json!({
-            "ok": true,
-            "address": g.address,
-            "source": p.source(),
-            "calendars": cals,
-        })),
+        Ok(cals) => {
+            let cals: Vec<Value> = cals.into_iter().filter(|c| listed_exposed(p, g, c)).collect();
+            ok_json(json!({
+                "ok": true,
+                "address": g.address,
+                "source": p.source(),
+                "access": if g.cal == CalAccess::Read { "read-only" } else { "read-write" },
+                "calendars": cals,
+            }))
+        }
         Err(e) => to_resp(g, e, None),
     }
 }
@@ -419,41 +540,80 @@ pub fn events_with(
     params: &HashMap<String, String>,
     now: DateTime<Utc>,
 ) -> CliResponse {
-    let (start, end) = match cal::window(params, now) {
-        Ok(w) => w,
-        Err(r) => return r,
+    // §3.6: with no window named, 1 day back and 45 ahead (and room for a
+    // busy person's 45 days).
+    let defaulted = crate::cli::opt_param(params, "start").is_none() && crate::cli::opt_param(params, "end").is_none();
+    let (start, end) = if defaulted {
+        (now - chrono::Duration::days(LINKED_BACK_DAYS), now + chrono::Duration::days(LINKED_AHEAD_DAYS))
+    } else {
+        match cal::window(params, now) {
+            Ok(w) => w,
+            Err(r) => return r,
+        }
     };
     let limit = match params.get("limit").map(|v| v.trim().parse::<usize>()) {
+        None if defaulted => cal::MAX_EVENTS,
         None => cal::DEFAULT_EVENTS,
         Some(Ok(n)) if n >= 1 => n.min(cal::MAX_EVENTS),
         _ => return usage(format!("invalid 'limit' — a number from 1 to {}", cal::MAX_EVENTS)),
     };
+    let flag = |k: &str| params.get(k).is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes"));
+    let opts = ViewOpts { full: flag("full"), include_cancelled: flag("includeCancelled") || flag("include_cancelled") };
     let calendar = crate::cli::opt_param(params, "calendar");
-    match p.view(g, &start, &end, calendar.as_deref(), limit) {
-        Ok((events, truncated)) => ok_json(json!({
-            "ok": true,
-            "address": g.address,
-            "start": rfc3339_utc(&start),
-            "end": rfc3339_utc(&end),
-            "calendar": calendar,
-            "events": events,
-            "truncated": truncated,
-            "source": p.source(),
-        })),
+    match calendar_exposed(p, g, calendar.as_deref()) {
+        Ok(true) => {}
+        Ok(false) | Err(CalErr::NotFound) => return no_such_calendar(),
+        Err(e) => return to_resp(g, e, None),
+    }
+    match p.view(g, &start, &end, calendar.as_deref(), limit, opts) {
+        Ok((events, truncated)) => {
+            let events: Vec<Value> = events
+                .into_iter()
+                .filter(|e| opts.include_cancelled || e.get("status").and_then(Value::as_str) != Some("cancelled"))
+                .map(|e| privacy(g, e))
+                .collect();
+            ok_json(json!({
+                "ok": true,
+                "address": g.address,
+                "start": rfc3339_utc(&start),
+                "end": rfc3339_utc(&end),
+                "calendar": calendar,
+                "events": events,
+                "truncated": truncated,
+                "source": p.source(),
+                "access": if g.cal == CalAccess::Read { "read-only" } else { "read-write" },
+            }))
+        }
         Err(CalErr::NotFound) => no_such_calendar(),
         Err(e) => to_resp(g, e, None),
     }
 }
 
 pub fn show_with(p: &dyn CalendarProvider, g: &LinkedCalInbox, id: &str, token: &str) -> CliResponse {
+    // §3.2: an event on a calendar the read-only link doesn't expose is
+    // the same masked not_found as an unknown id.
+    if g.opted_in.is_some() {
+        match p.calendar_of(g, id) {
+            Ok(Some(c)) => match calendar_exposed(p, g, Some(&c)) {
+                Ok(true) => {}
+                Ok(false) | Err(CalErr::NotFound) => return event_not_found(token),
+                Err(e) => return to_resp(g, e, Some(token)),
+            },
+            Ok(None) | Err(CalErr::NotFound) => return event_not_found(token),
+            Err(e) => return to_resp(g, e, Some(token)),
+        }
+    }
     match p.event(g, id, true) {
-        Ok(Some(ev)) => ok_json(json!({ "ok": true, "address": g.address, "event": ev.full })),
+        Ok(Some(ev)) => ok_json(json!({ "ok": true, "address": g.address, "event": privacy(g, ev.full) })),
         Ok(None) => event_not_found(token),
         Err(e) => to_resp(g, e, Some(token)),
     }
 }
 
 pub fn create_with(p: &dyn CalendarProvider, g: &LinkedCalInbox, b: &WriteBody) -> CliResponse {
+    if g.cal == CalAccess::Read {
+        return read_only_link(&g.address);
+    }
     if let Err(r) = draft_checks(g, b, "this event") {
         return r;
     }
@@ -567,6 +727,9 @@ pub fn update_with(
     token: &str,
     b: &WriteBody,
 ) -> CliResponse {
+    if g.cal == CalAccess::Read {
+        return read_only_link(&g.address);
+    }
     if let Err(r) = draft_checks(g, b, "this update") {
         return r;
     }
@@ -646,6 +809,9 @@ pub fn update_with(
 }
 
 pub fn delete_with(p: &dyn CalendarProvider, g: &LinkedCalInbox, id: &str, token: &str) -> CliResponse {
+    if g.cal == CalAccess::Read {
+        return read_only_link(&g.address);
+    }
     if let Err(r) = stored_guard(p, g, id, token, "delete refused") {
         return r;
     }
@@ -774,22 +940,45 @@ pub fn wait_with(
 // ── Production entry points (called by calendar.rs after routing) ───────
 
 /// The real provider for a routed inbox.
-fn real(g: &LinkedCalInbox) -> Box<dyn CalendarProvider> {
+pub(crate) fn real(g: &LinkedCalInbox) -> Box<dyn CalendarProvider> {
     match g.backend {
         LinkedBackend::Microsoft => Box::new(crate::mail::calendar_graph::GraphCalendar::real(&g.row)),
         LinkedBackend::Google => Box::new(crate::mail::calendar_google::GoogleCalendar::real(&g.row)),
     }
 }
 
+/// §3.9 (GC-13, CV-16): an AGENT's read of a person's linked calendar is
+/// logged in the mailbox access log before anything is fetched ("no row,
+/// no access"). People's reads are logged by the access layer already.
+fn agent_read(g: &LinkedCalInbox, action: &str, message_ref: Option<&str>) -> Result<(), CliResponse> {
+    crate::mail::mailbox_guard::log_agent_read(
+        &g.project_id,
+        crate::mail::access::Source::Linked,
+        &g.row.id,
+        &g.address,
+        action,
+        message_ref,
+    )
+}
+
 pub fn handle_list(g: &LinkedCalInbox) -> CliResponse {
+    if let Err(r) = agent_read(g, "calendar/list", None) {
+        return r;
+    }
     list_with(real(g).as_ref(), g)
 }
 
 pub fn handle_events(g: &LinkedCalInbox, params: &HashMap<String, String>, now: DateTime<Utc>) -> CliResponse {
+    if let Err(r) = agent_read(g, "calendar/events", None) {
+        return r;
+    }
     events_with(real(g).as_ref(), g, params, now)
 }
 
 pub fn handle_show(g: &LinkedCalInbox, id: &str, token: &str) -> CliResponse {
+    if let Err(r) = agent_read(g, "calendar/show", Some(token)) {
+        return r;
+    }
     show_with(real(g).as_ref(), g, id, token)
 }
 
@@ -806,6 +995,9 @@ pub fn handle_delete(g: &LinkedCalInbox, id: &str, token: &str) -> CliResponse {
 }
 
 pub fn handle_freebusy(g: &LinkedCalInbox, params: &HashMap<String, String>, now: DateTime<Utc>) -> CliResponse {
+    if let Err(r) = agent_read(g, "calendar/freebusy", None) {
+        return r;
+    }
     freebusy_with(real(g).as_ref(), g, params, now)
 }
 
@@ -822,6 +1014,9 @@ pub fn handle_wait(
             "this workspace already has 4 wait calls open — loop ONE wait, don't fan out",
         );
     };
+    if let Err(r) = agent_read(g, "calendar/wait", None) {
+        return r;
+    }
     let since = crate::cli::opt_param(params, "since_state");
     let begun = std::time::Instant::now();
     let mut elapsed = || begun.elapsed().as_secs();

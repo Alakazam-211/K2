@@ -526,6 +526,15 @@ pub fn handle_inboxes(body: &[u8]) -> CliResponse {
             Ok(v) => v,
             Err(r) => return r,
         };
+        // A calendar-only link has no mail to watch (calendar S1, CV-10):
+        // since 0.46.16 a Microsoft link can be calendar-only too.
+        if source == Source::Linked {
+            if let Some(row) = crate::mail::external::inbox_for_address(&address) {
+                if let Err(r) = crate::mail::capabilities::mail_scope_gate(&row, "mail.read") {
+                    return r;
+                }
+            }
+        }
         // A person's mailbox is a person's to choose (§5.3, W21).
         if is_agent() && is_person_mailbox(source, &inbox_id) {
             return err(

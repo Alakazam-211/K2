@@ -194,6 +194,102 @@ pub fn handle_capabilities(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+// ── Calendar S1: governance rows + per-workspace calendar privacy ───────
+
+/// Write the governance row for a change to `address` BEFORE it happens
+/// (prd-google-calendar-link-v1 §3.9). An address with no inbox row lets
+/// the handler answer its own not_found.
+fn governance(address: &str, workspace: &str, action: &str) -> Result<(), CliResponse> {
+    match access::inbox_ref(address) {
+        Ok((source, id, addr)) => {
+            crate::mail::mailbox_guard::log_governance(source, &id, &addr, Some(workspace), action)
+        }
+        Err(_) => Ok(()),
+    }
+}
+
+/// Set one workspace's "omit event descriptions" choice on a LINKED
+/// calendar (§3.2). A person's choice: the owner token or an Owner/Admin
+/// login, never an agent passport (an IT agent included). The workspace
+/// must reach the inbox. Logged `omit_description_on|off` first.
+fn privacy_refused() -> Option<CliResponse> {
+    let agent = !matches!(crate::mail::agent_creds::mail_caller(), crate::mail::agent_creds::MailCaller::Owner);
+    agent.then(|| {
+        error_response(
+            "403 Forbidden",
+            "owner_only",
+            "whether agents see event descriptions is a person's choice — ask your human \
+             (Settings → Email Link, or 'k2 mail access set-level … --calendar-omit-description on|off')",
+        )
+    })
+}
+
+fn set_calendar_privacy(address: &str, project_id: &str, omit: bool) -> Result<bool, CliResponse> {
+    if let Some(r) = privacy_refused() {
+        return Err(r);
+    }
+    let (source, inbox_id, addr) = access::inbox_ref(address).map_err(access_error_response)?;
+    if source != access::Source::Linked {
+        return Err(error_response(
+            "400 Bad Request",
+            "usage",
+            &format!("'{addr}' is a hosted inbox — calendar privacy is for linked Google / Microsoft calendars"),
+        ));
+    }
+    if !access::has_access(source, &inbox_id, project_id) {
+        return Err(error_response(
+            "404 Not Found",
+            "not_found",
+            &format!("that workspace has no access to '{addr}' — grant it first ('k2 mail access grant')"),
+        ));
+    }
+    let action = if omit { "omit_description_on" } else { "omit_description_off" };
+    crate::mail::mailbox_guard::log_governance(source, &inbox_id, &addr, Some(project_id), action)?;
+    let (actor, _) = crate::mail::mailbox_guard::governance_actor();
+    crate::mail::calendar_link::set_omit_description(&inbox_id, project_id, omit, &actor)
+        .map_err(|e| error_response("500 Internal Server Error", "engine", &e))
+}
+
+// ── POST /cli/mail/access/calendar-privacy ──────────────────────────────
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct CalendarPrivacyBody {
+    address: String,
+    project: String,
+    omit_description: Option<bool>,
+}
+
+/// POST `/cli/mail/access/calendar-privacy` `{address, project,
+/// omitDescription}` — Settings' per-workspace "Show event descriptions"
+/// toggle (owner/Admin; §3.2).
+pub fn handle_calendar_privacy(body: &[u8]) -> CliResponse {
+    let b: CalendarPrivacyBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.address.trim().is_empty() || b.project.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "needs 'address', 'project' and 'omitDescription'");
+    }
+    let Some(omit) = b.omit_description else {
+        return error_response("400 Bad Request", "usage", "missing 'omitDescription' — true or false");
+    };
+    let project_id = match resolve_project(&b.project) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    match set_calendar_privacy(&b.address, &project_id, omit) {
+        Ok(changed) => ok_json(serde_json::json!({
+            "ok": true,
+            "address": b.address.trim(),
+            "projectId": project_id,
+            "calendarOmitDescription": omit,
+            "changed": changed,
+        })),
+        Err(r) => r,
+    }
+}
+
 // ── POST /cli/mail/access/grant ─────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -202,6 +298,9 @@ struct GrantBody {
     address: String,
     project: String,
     level: String,
+    /// Calendar S1: also set this workspace's omit-descriptions choice on
+    /// a linked calendar (owner/Admin only).
+    calendar_omit_description: Option<bool>,
 }
 
 /// POST `/cli/mail/access/grant` — Primary/owner: grant a workspace
@@ -228,7 +327,23 @@ pub fn handle_grant(body: &[u8]) -> CliResponse {
     if let Some(refused) = refuse_own_workspace(&grantee_id, "granting inbox access") {
         return refused;
     }
-    match access::grant_access(&b.address, &grantee_id, &b.level) {
+    if b.calendar_omit_description.is_some() {
+        if let Some(r) = privacy_refused() {
+            return r;
+        }
+    }
+    if let Err(r) = governance(&b.address, &grantee_id, "grant") {
+        return r;
+    }
+    let granted = access::grant_access(&b.address, &grantee_id, &b.level);
+    if granted.is_ok() {
+        if let Some(omit) = b.calendar_omit_description {
+            if let Err(r) = set_calendar_privacy(&b.address, &grantee_id, omit) {
+                return r;
+            }
+        }
+    }
+    match granted {
         Ok((address, source)) => ok_json(serde_json::json!({
             "ok": true,
             "address": address,
@@ -271,6 +386,9 @@ pub fn handle_revoke(body: &[u8]) -> CliResponse {
         Ok(id) => id,
         Err(resp) => return resp,
     };
+    if let Err(r) = governance(&b.address, &grantee_id, "revoke") {
+        return r;
+    }
     match access::revoke_access(&b.address, &grantee_id) {
         Ok(address) => ok_json(serde_json::json!({
             "ok": true,
@@ -334,6 +452,8 @@ struct SetLevelBody {
     address: String,
     project: String,
     level: String,
+    /// Calendar S1: also set the omit-descriptions choice (owner/Admin).
+    calendar_omit_description: Option<bool>,
 }
 
 /// POST `/cli/mail/access/set-level` — set a workspace's level. When it
@@ -360,7 +480,23 @@ pub fn handle_set_level(body: &[u8]) -> CliResponse {
     if let Some(refused) = refuse_own_workspace(&project_id, "setting an inbox's access level") {
         return refused;
     }
-    match access::set_level(&b.address, &project_id, &b.level) {
+    if b.calendar_omit_description.is_some() {
+        if let Some(r) = privacy_refused() {
+            return r;
+        }
+    }
+    if let Err(r) = governance(&b.address, &project_id, "set_level") {
+        return r;
+    }
+    let set = access::set_level(&b.address, &project_id, &b.level);
+    if set.is_ok() {
+        if let Some(omit) = b.calendar_omit_description {
+            if let Err(r) = set_calendar_privacy(&b.address, &project_id, omit) {
+                return r;
+            }
+        }
+    }
+    match set {
         Ok((address, source, is_primary)) => ok_json(serde_json::json!({
             "ok": true,
             "address": address,

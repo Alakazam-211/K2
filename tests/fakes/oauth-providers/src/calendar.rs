@@ -73,6 +73,14 @@ impl Calendar {
         invited["isOrganizer"] = json!(false);
         invited["organizer"]["emailAddress"]["address"] = json!("boss@contoso.example");
         invited["showAs"] = json!("tentative");
+        // Calendar S1: an untouched invite (notResponded) with a Teams
+        // meeting attached (the join field).
+        invited["responseStatus"] = json!({ "response": "notResponded", "time": "0001-01-01T00:00:00Z" });
+        invited["onlineMeeting"] = json!({
+            "joinUrl": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_fake/0",
+            "conferenceId": "123456789",
+            "tollNumber": "+1 555 0100",
+        });
         for e in [solo, meeting, invited] {
             events.insert(e["id"].as_str().unwrap_or_default().to_string(), e);
         }
@@ -216,7 +224,16 @@ pub fn handle(
         ("POST", ["me", "events"]) => Some(create(cal, sent, "")),
         ("POST", ["me", "calendars", id, "events"]) => Some(create(cal, sent, id)),
         ("GET", ["me", "events", id]) => Some(match cal.events.get(*id) {
-            Some(e) => (200, public(e).to_string()),
+            Some(e) => {
+                let mut out = public(e);
+                // `$expand=calendar(...)`: which calendar the event is on
+                // (calendar S1's opt-in mask on a read-only link).
+                if q("$expand").starts_with("calendar") {
+                    let c = e["_cal"].as_str().unwrap_or("cal-default");
+                    out["calendar"] = json!({ "id": c, "isDefaultCalendar": c == "cal-default" });
+                }
+                (200, out.to_string())
+            }
             None => (404, graph_error("ErrorItemNotFound", "The specified object was not found in the store.")),
         }),
         ("PATCH", ["me", "events", id]) => {

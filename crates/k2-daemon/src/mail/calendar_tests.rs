@@ -374,7 +374,7 @@ fn seed_oauth_link(owner: &str, address: &str, provider: &str, calendar: bool) -
             host,
             provider,
             if calendar { "mail,calendar" } else { "mail" },
-            scope_for(p, Features { mail: true, calendar }),
+            scope_for(p, Features { mail: true, calendar: if calendar { crate::mail::oauth::CalAccess::Write } else { crate::mail::oauth::CalAccess::None } }),
         ],
     )
     .expect("seed oauth link");
@@ -406,7 +406,7 @@ fn microsoft_link_routes_to_graph_or_names_the_missing_capability() {
     assert_eq!(body_of(&r)["error"]["cap"], "calendar.read");
     assert_eq!(
         body_of(&r)["error"]["fix"],
-        format!("k2 mail link upgrade {mail_only} --features calendar (owner)")
+        format!("k2 mail link upgrade {mail_only} --features calendar-read (owner)")
     );
     let r = resolve_target(&owner, Some(&mail_only), Level::Draft).err().expect("mail only");
     assert_eq!(body_of(&r)["error"]["cap"], "calendar.write");
@@ -481,7 +481,7 @@ fn google_link_routes_to_google_or_names_the_missing_capability() {
         let conn = db.lock();
         conn.execute(
             "UPDATE mail_external_inboxes SET features = 'calendar', granted_scopes = ?2 WHERE id = ?1",
-            rusqlite::params![id, scope_for(OauthProvider::Gmail, Features { mail: false, calendar: true })],
+            rusqlite::params![id, scope_for(OauthProvider::Gmail, Features { mail: false, calendar: crate::mail::oauth::CalAccess::Write })],
         )
         .expect("calendar-only");
     }
@@ -508,7 +508,7 @@ fn google_link_routes_to_google_or_names_the_missing_capability() {
     assert_eq!(reason_of(&r), "scope_not_granted");
     assert_eq!(
         body_of(&r)["error"]["fix"],
-        format!("k2 mail link upgrade {mail_only} --features calendar (owner)")
+        format!("k2 mail link upgrade {mail_only} --features calendar-read (owner)")
     );
     k2_core::app_settings::update(json!({ "linkedCalendars": false })).expect("switch off");
     let r = resolve_target(&owner, Some(&consented), Level::Read).err().expect("switched off");
@@ -539,7 +539,7 @@ fn calendar_only_google_link_has_no_mail() {
         let conn = db.lock();
         conn.execute(
             "UPDATE mail_external_inboxes SET features = 'calendar', granted_scopes = ?2 WHERE id = ?1",
-            rusqlite::params![id, scope_for(OauthProvider::Gmail, Features { mail: false, calendar: true })],
+            rusqlite::params![id, scope_for(OauthProvider::Gmail, Features { mail: false, calendar: crate::mail::oauth::CalAccess::Write })],
         )
         .expect("calendar-only");
     }

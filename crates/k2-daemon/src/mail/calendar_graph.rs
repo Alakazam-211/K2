@@ -7,7 +7,8 @@
 //!
 //! [`crate::mail::calendar::resolve_target`] routes here only AFTER the
 //! access gate passed (CAL19 masking holds), and only for a Microsoft
-//! link whose grant covers `Calendars.ReadWrite` while the owner's
+//! link whose grant covers `Calendars.Read` (a read-only `calendar-read`
+//! link, 0.46.16) or `Calendars.ReadWrite` while the owner's
 //! `linkedCalendars` switch is on — every other linked case answers 409
 //! `capability_missing` `{cap, reason, fix}` from [`linked_target`].
 //!
@@ -42,10 +43,18 @@
 //! / `$skiptoken` value — never a URL — so a client can't point the
 //! daemon's bearer token anywhere but `/me/calendarView/delta`.
 //!
+//! **Calendar S1 (0.46.16):** every request asks `Prefer:
+//! IdType="ImmutableId"` (GC-9; a read that misses retries once without
+//! it, for ids handed out before), `originalStartTimeZone` Windows ids are
+//! read as IANA names (GC-8, `calendar_event::iana_zone`), and events carry
+//! the provider-neutral fields (join from `onlineMeeting`, location or
+//! body; `responseStatus` → `self_response`).
+//!
 //! ⚠ LIVE-BOX: occurrence ids from `calendarView`, `getSchedule` on
-//! personal (outlook.com) accounts, and Windows zone names in
-//! `originalStartTimeZone` (kept as-is; an update without `timeZone` then
-//! writes UTC) are the parts to check against a real tenant.
+//! personal (outlook.com) accounts, `$expand=calendar` on an event under
+//! `Calendars.Read`, and how an untouched invite's `responseStatus` reads
+//! (`notResponded` or `tentativelyAccepted`, CV-25) are the parts to check
+//! against a real tenant.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,21 +68,31 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::mail::access::Level;
 use crate::mail::calendar::{self as cal, ok_json, rfc3339_utc, usage, BusyKind, BusySpan, WriteBody};
+use crate::mail::calendar_event as ce;
 use crate::mail::calendar_provider::{
     self as linked, CalendarProvider, Changes, DraftEvent, DraftPatch, LinkedCalInbox, StateErr,
-    StoredEvent,
+    StoredEvent, ViewOpts,
 };
 use crate::mail::graph::{self, GraphHttp, GraphMethod, GraphResponse};
 use k2_core::db::schema::MailExternalInbox;
 
-/// The `$select` for summaries and the draft guard.
+/// The `$select` for summaries and the draft guard. `body` is read (plain
+/// text) only to find a meeting link written in it; the text itself never
+/// leaves a summary (prd-google-calendar-link-v1 §3.5, GC-7).
 const EVENT_SELECT: &str = "id,subject,start,end,isAllDay,location,showAs,isCancelled,type,\
      recurrence,attendees,organizer,isOrganizer,originalStartTimeZone,originalEndTimeZone,\
-     seriesMasterId";
+     seriesMasterId,originalStart,responseStatus,onlineMeeting,onlineMeetingUrl,\
+     isOnlineMeeting,onlineMeetingProvider,createdDateTime,lastModifiedDateTime,webLink,body";
 /// The `$select` for `show`.
 const EVENT_FULL_SELECT: &str = "id,subject,start,end,isAllDay,location,showAs,isCancelled,\
      type,recurrence,attendees,organizer,isOrganizer,originalStartTimeZone,originalEndTimeZone,\
-     seriesMasterId,body,iCalUId,sensitivity,isReminderOn,reminderMinutesBeforeStart";
+     seriesMasterId,originalStart,responseStatus,onlineMeeting,onlineMeetingUrl,isOnlineMeeting,\
+     onlineMeetingProvider,createdDateTime,lastModifiedDateTime,webLink,\
+     body,iCalUId,sensitivity,isReminderOn,reminderMinutesBeforeStart";
+/// GC-9: ids that survive a move between calendars. Every request asks
+/// for them; an `ev_…` token minted before 0.46.16 holds an old-form id, so
+/// a read that misses retries once without it ([`GraphCalendar::event_raw`]).
+const IMMUTABLE_IDS: &str = "IdType=\"ImmutableId\"";
 /// Graph throttling: bounded 429 retries, capped `Retry-After`.
 const MAX_THROTTLE_RETRIES: u32 = 3;
 const RETRY_AFTER_CAP_SECS: u64 = 60;
@@ -138,10 +157,27 @@ impl GraphCalendar {
         body: Option<&Value>,
         extra_prefer: Option<String>,
     ) -> Result<GraphResponse, CalErr> {
+        self.req_ids(m, url, body, extra_prefer, true)
+    }
+
+    /// The one request path: the UTC and plain-text `Prefer` headers, the
+    /// immutable-id `Prefer` unless `immutable` is false (the GC-9
+    /// fallback), and bounded 429 back-off.
+    fn req_ids(
+        &self,
+        m: GraphMethod,
+        url: &str,
+        body: Option<&Value>,
+        extra_prefer: Option<String>,
+        immutable: bool,
+    ) -> Result<GraphResponse, CalErr> {
         let mut headers = vec![
             ("Prefer", "outlook.timezone=\"UTC\"".to_string()),
             ("Prefer", "outlook.body-content-type=\"text\"".to_string()),
         ];
+        if immutable {
+            headers.push(("Prefer", IMMUTABLE_IDS.to_string()));
+        }
         if let Some(p) = extra_prefer {
             headers.push(("Prefer", p));
         }
@@ -198,6 +234,7 @@ impl GraphCalendar {
         end: &DateTime<Utc>,
         calendar: Option<&str>,
         limit: usize,
+        full: bool,
     ) -> Result<(Vec<Value>, bool), CalErr> {
         let path = match calendar {
             Some(c) => format!("/me/calendars/{}/calendarView", graph::path_encode(c)),
@@ -210,7 +247,7 @@ impl GraphCalendar {
                 ("endDateTime", rfc3339_utc(end)),
                 ("$top", (limit + 1).to_string()),
                 ("$orderby", "start/dateTime".to_string()),
-                ("$select", EVENT_SELECT.to_string()),
+                ("$select", if full { EVENT_FULL_SELECT } else { EVENT_SELECT }.to_string()),
             ],
         );
         let v = self.json(self.req(GraphMethod::Get, &url, None)?, "calendar view")?;
@@ -221,16 +258,49 @@ impl GraphCalendar {
         Ok((list, truncated))
     }
 
+    /// One event by id. GC-9: asked with immutable ids; a miss retries
+    /// once without them, so an `ev_…` token minted before 0.46.16 (an
+    /// old-form id) still reads. The event then shapes with its old id.
     pub fn event_raw(&self, id: &str, full: bool) -> Result<Option<Value>, CalErr> {
         let url = graph::with_query(
             &Self::url(&format!("/me/events/{}", graph::path_encode(id))),
             &[("$select", if full { EVENT_FULL_SELECT } else { EVENT_SELECT }.to_string())],
         );
-        match self.json(self.req(GraphMethod::Get, &url, None)?, "event read") {
-            Ok(v) => Ok(Some(v)),
-            Err(CalErr::NotFound) => Ok(None),
-            Err(e) => Err(e),
+        for immutable in [true, false] {
+            match self.json(self.req_ids(GraphMethod::Get, &url, None, None, immutable)?, "event read") {
+                Ok(v) => return Ok(Some(v)),
+                Err(CalErr::NotFound) => continue,
+                Err(e) => return Err(e),
+            }
         }
+        Ok(None)
+    }
+
+    /// Which calendar an event is on: `primary` for the mailbox's default
+    /// calendar, else the Graph calendar id (the opt-in mask on a
+    /// `calendar-read` link). `None` = no such event.
+    ///
+    /// ⚠ LIVE-CHECK: `$expand=calendar` on an event, under `Calendars.Read`.
+    pub fn calendar_of_event(&self, id: &str) -> Result<Option<String>, CalErr> {
+        let url = graph::with_query(
+            &Self::url(&format!("/me/events/{}", graph::path_encode(id))),
+            &[
+                ("$select", "id".to_string()),
+                ("$expand", "calendar($select=id,isDefaultCalendar)".to_string()),
+            ],
+        );
+        for immutable in [true, false] {
+            match self.json(self.req_ids(GraphMethod::Get, &url, None, None, immutable)?, "event calendar") {
+                Ok(v) => {
+                    let default = v.pointer("/calendar/isDefaultCalendar").and_then(Value::as_bool) == Some(true);
+                    let cid = v.pointer("/calendar/id").and_then(Value::as_str).map(str::to_string);
+                    return Ok(if default { Some(crate::mail::calendar_link::PRIMARY.to_string()) } else { cid });
+                }
+                Err(CalErr::NotFound) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(None)
     }
 
     pub fn create_raw(&self, calendar: Option<&str>, ev: &Value) -> Result<Value, CalErr> {
@@ -476,12 +546,94 @@ pub fn graph_others(ev: &Value, owner: &str) -> Vec<String> {
     out
 }
 
+/// The provider-neutral fields of one Graph event (prd-google-calendar-
+/// link-v1 §3.5): join, organizer, `self_response`, attendees, series.
+fn neutral(ev: &Value, address: &str, calendar: Option<&str>) -> ce::Neutral {
+    let me = address.trim().to_ascii_lowercase();
+    let organizer = email_of(ev.get("organizer"));
+    let org_self = ev.get("isOrganizer").and_then(Value::as_bool) == Some(true);
+    let attendees: Vec<Value> = ev
+        .get("attendees")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|a| {
+            let email = email_of(Some(a));
+            json!({
+                "email": email,
+                "name": a.pointer("/emailAddress/name").and_then(Value::as_str),
+                "response": a.pointer("/status/response").and_then(Value::as_str).and_then(ce::norm_response),
+                "optional": a.get("type").and_then(Value::as_str) == Some("optional"),
+                "self": email.as_deref() == Some(me.as_str()),
+                "organizer": email.is_some() && email == organizer,
+            })
+        })
+        .collect();
+    // CV-25: the plain mapping (notResponded / none → needsAction). An
+    // untouched invite Exchange placed as tentativelyAccepted reads
+    // `tentative` until a live tenant shows otherwise.
+    let self_response = match ev.pointer("/responseStatus/response").and_then(Value::as_str) {
+        Some(r) => ce::norm_response(r),
+        None if org_self => Some("accepted"),
+        None => None,
+    };
+    let conf = ev.get("onlineMeeting").filter(|m| !m.is_null());
+    let phone: Vec<String> = conf
+        .and_then(|m| m.get("tollNumber").and_then(Value::as_str))
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| vec![t.trim().to_string()])
+        .unwrap_or_default();
+    let conf_id = conf.and_then(|m| m.get("conferenceId").and_then(Value::as_str)).map(str::to_string);
+    let join = conf
+        .and_then(|m| m.get("joinUrl").and_then(Value::as_str))
+        .and_then(|u| ce::join_from_conference(u, conf_id.clone(), phone.clone()))
+        .or_else(|| ev.get("onlineMeetingUrl").and_then(Value::as_str).and_then(|u| ce::join_from_conference(u, conf_id, phone)))
+        .or_else(|| {
+            ev.pointer("/location/displayName").and_then(Value::as_str).and_then(|l| ce::join_from_text(l, ce::JoinFrom::Location))
+        })
+        .or_else(|| {
+            ev.pointer("/body/content").and_then(Value::as_str).and_then(|b| ce::join_from_text(b, ce::JoinFrom::Description))
+        });
+    let stamp = |k: &str| {
+        ev.get(k)
+            .and_then(Value::as_str)
+            .and_then(|t| DateTime::parse_from_rfc3339(t.trim()).ok())
+            .map(|d| rfc3339_utc(&d.with_timezone(&Utc)))
+    };
+    ce::Neutral {
+        calendar_id: calendar.map(str::to_string),
+        created: stamp("createdDateTime"),
+        updated: stamp("lastModifiedDateTime"),
+        join,
+        organizer_name: ev.pointer("/organizer/emailAddress/name").and_then(Value::as_str).map(str::to_string),
+        organizer,
+        organizer_is_self: org_self,
+        self_response,
+        attendees,
+        attendees_partial: false,
+        series: ev.get("seriesMasterId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(|sid| {
+            json!({
+                "seriesId": cal::encode_event_id(address, sid),
+                "originalStart": stamp("originalStart"),
+                "exception": ev.get("type").and_then(Value::as_str) == Some("exception"),
+            })
+        }),
+        web_link: ev.get("webLink").and_then(Value::as_str).map(str::to_string),
+        event_type: None,
+    }
+}
+
 /// One Graph event, summary shape.
 pub fn shape_summary(ev: &Value, address: &str, calendar: Option<&str>) -> Value {
+    shape(ev, address, calendar, false)
+}
+
+fn shape(ev: &Value, address: &str, calendar: Option<&str>, full: bool) -> Value {
     let id = ev.get("id").and_then(Value::as_str).unwrap_or("");
     let start = graph_instant(ev.get("start"));
     let end = graph_instant(ev.get("end"));
-    let zone = ev.get("originalStartTimeZone").and_then(Value::as_str);
+    // GC-8: a Windows zone id becomes its IANA name; a custom zone is null.
+    let zone = ev.get("originalStartTimeZone").and_then(Value::as_str).and_then(ce::iana_zone);
     let duration = match (start, end) {
         (Some(s), Some(e)) => Some(cal::format_duration((e - s).num_seconds())),
         _ => None,
@@ -493,13 +645,13 @@ pub fn shape_summary(ev: &Value, address: &str, calendar: Option<&str>) -> Value
     };
     let recurring = ev.get("recurrence").is_some_and(|r| !r.is_null())
         || matches!(ev.get("type").and_then(Value::as_str), Some("occurrence" | "exception" | "seriesMaster"));
-    json!({
+    let mut out = json!({
         "id": cal::encode_event_id(address, id),
         "calendarIds": calendar.map(|c| vec![c.to_string()]).unwrap_or_default(),
         "title": ev.get("subject").and_then(Value::as_str).unwrap_or(""),
         "start": start.map(|d| rfc3339_utc(&d)),
         "end": end.map(|d| rfc3339_utc(&d)),
-        "localStart": start.map(|d| local_in(&d, zone)),
+        "localStart": start.map(|d| local_in(&d, zone.as_deref())),
         "duration": duration,
         "timeZone": zone,
         "allDay": ev.get("isAllDay").and_then(Value::as_bool).unwrap_or(false),
@@ -510,17 +662,23 @@ pub fn shape_summary(ev: &Value, address: &str, calendar: Option<&str>) -> Value
         "participants": ev.get("attendees").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0),
         "source": "microsoft",
         "invite": { "state": "none" },
-    })
+    });
+    ce::apply(&mut out, neutral(ev, address, calendar), full);
+    out
 }
 
-/// One Graph event, full shape (`show`).
+/// One Graph event, full shape (`show`, `event`, `events --full`). The
+/// body is here; per-grant omission is applied by the seam.
 pub fn shape_full(ev: &Value, address: &str) -> Value {
-    let mut out = shape_summary(ev, address, None);
+    shape_full_on(ev, address, None)
+}
+
+fn shape_full_on(ev: &Value, address: &str, calendar: Option<&str>) -> Value {
+    let mut out = shape(ev, address, calendar, true);
     out["address"] = json!(address);
     out["uid"] = ev.get("iCalUId").cloned().unwrap_or(Value::Null);
     out["description"] = ev.pointer("/body/content").cloned().unwrap_or(Value::Null);
     out["privacy"] = ev.get("sensitivity").cloned().unwrap_or(Value::Null);
-    out["organizer"] = email_of(ev.get("organizer")).map(Value::from).unwrap_or(Value::Null);
     out["participantList"] = Value::Array(
         ev.get("attendees")
             .and_then(Value::as_array)
@@ -592,13 +750,9 @@ fn stored_of(ev: &Value, address: &str, full: bool) -> StoredEvent {
     StoredEvent {
         start: graph_instant(ev.get("start")),
         end: graph_instant(ev.get("end")),
-        // Keep the event's own zone only when it is an IANA name (a
-        // Windows zone name writes UTC).
-        zone: ev
-            .get("originalStartTimeZone")
-            .and_then(Value::as_str)
-            .filter(|z| z.parse::<chrono_tz::Tz>().is_ok())
-            .map(str::to_string),
+        // Keep the event's own zone: an IANA name, or a Windows zone id
+        // mapped to one (GC-8); a custom zone writes UTC.
+        zone: ev.get("originalStartTimeZone").and_then(Value::as_str).and_then(ce::iana_zone),
         others: graph_others(ev, address),
         all_day: ev.get("isAllDay").and_then(Value::as_bool).unwrap_or(false),
         full: if full { shape_full(ev, address) } else { Value::Null },
@@ -627,9 +781,25 @@ impl CalendarProvider for GraphCalendar {
         end: &DateTime<Utc>,
         calendar: Option<&str>,
         limit: usize,
+        opts: ViewOpts,
     ) -> Result<(Vec<Value>, bool), CalErr> {
-        let (events, truncated) = self.calendar_view(start, end, calendar, limit)?;
-        Ok((events.iter().map(|e| shape_summary(e, &g.address, calendar)).collect(), truncated))
+        // The primary is Graph's default calendar (`/me/calendarView`).
+        let calendar = calendar
+            .map(str::trim)
+            .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case(crate::mail::calendar_link::PRIMARY) && !c.eq_ignore_ascii_case(&g.address));
+        let (events, truncated) = self.calendar_view(start, end, calendar, limit, opts.full)?;
+        let shape = |e: &Value| {
+            if opts.full {
+                shape_full_on(e, &g.address, calendar)
+            } else {
+                shape_summary(e, &g.address, calendar)
+            }
+        };
+        Ok((events.iter().map(shape).collect(), truncated))
+    }
+
+    fn calendar_of(&self, _g: &LinkedCalInbox, id: &str) -> Result<Option<String>, CalErr> {
+        self.calendar_of_event(id)
     }
 
     fn event(&self, g: &LinkedCalInbox, id: &str, full: bool) -> Result<Option<StoredEvent>, CalErr> {
@@ -711,7 +881,7 @@ impl CalendarProvider for GraphCalendar {
         if let Ok(s) = self.schedule(&g.address, start, end) {
             return Ok((s, "getSchedule", false));
         }
-        let (events, truncated) = self.calendar_view(start, end, None, cal::MAX_EVENTS)?;
+        let (events, truncated) = self.calendar_view(start, end, None, cal::MAX_EVENTS, false)?;
         let spans = events
             .iter()
             .filter(|e| e.get("isCancelled").and_then(Value::as_bool) != Some(true))
@@ -993,7 +1163,16 @@ mod tests {
     }
 
     fn inbox(level: Level) -> GraphCalInbox {
-        GraphCalInbox { address: ME.into(), row: row(), level, backend: crate::mail::calendar_provider::LinkedBackend::Microsoft }
+        GraphCalInbox {
+            address: ME.into(),
+            row: row(),
+            level,
+            backend: crate::mail::calendar_provider::LinkedBackend::Microsoft,
+            cal: crate::mail::oauth::CalAccess::Write,
+            opted_in: None,
+            omit_description: false,
+            project_id: "p1".into(),
+        }
     }
 
     fn cal(mock: &Arc<Mock>) -> GraphCalendar {
@@ -1288,9 +1467,9 @@ mod tests {
     }
 
     #[test]
-    fn update_of_an_event_in_a_windows_zone_writes_utc() {
-        // Exchange often stores Windows zone names; they're not IANA, so the
-        // write is UTC (the instant is right; Outlook shows it localised).
+    fn update_of_an_event_in_a_windows_zone_keeps_its_iana_zone() {
+        // GC-8: Exchange stores Windows zone ids; K2 maps them to IANA, so
+        // an update keeps the event's own zone.
         let ev = stored("E4", json!([]), true, ME, "Pacific Standard Time");
         let m = Mock::new(vec![(200, ev.clone()), (200, ev)]);
         let r = update_with(
@@ -1302,8 +1481,20 @@ mod tests {
         );
         ok(&r);
         let p = m.seen()[1].body.clone().expect("patch");
+        assert_eq!(p["start"], json!({ "dateTime": "2026-10-20T09:00:00", "timeZone": "America/Los_Angeles" }));
+        assert_eq!(p["end"], json!({ "dateTime": "2026-10-20T11:30:00", "timeZone": "America/Los_Angeles" }));
+        // A custom zone has no IANA name: the write is UTC.
+        let ev = stored("E4", json!([]), true, ME, "tzone://Microsoft/Custom");
+        let m = Mock::new(vec![(200, ev.clone()), (200, ev)]);
+        ok(&update_with(
+            &cal(&m),
+            &inbox(Level::Draft),
+            "E4",
+            "ev_tok",
+            &write(json!({"project":"p1","end":"2026-10-20T18:30:00Z"})),
+        ));
+        let p = m.seen()[1].body.clone().expect("patch");
         assert_eq!(p["start"], json!({ "dateTime": "2026-10-20T16:00:00", "timeZone": "UTC" }));
-        assert_eq!(p["end"], json!({ "dateTime": "2026-10-20T18:30:00", "timeZone": "UTC" }));
     }
 
     #[test]
@@ -1392,7 +1583,8 @@ mod tests {
         assert_eq!(evs.len(), 2);
         assert_eq!(out["truncated"], true);
         assert_eq!(evs[0]["id"], cal::encode_event_id(ME, "O1"));
-        assert_eq!(evs[0]["timeZone"], "Eastern Standard Time", "the stored zone name is kept as-is");
+        assert_eq!(evs[0]["timeZone"], "America/New_York", "a Windows zone id reads as its IANA name (GC-8)");
+        assert!(s.prefers().contains(&"IdType=\"ImmutableId\"".to_string()), "GC-9: immutable ids");
         assert_eq!(evs[0]["duration"], cal::format_duration(3600));
         assert_eq!(evs[1]["participants"], 1);
         assert_eq!(evs[0]["calendarIds"], json!(["CAL-1"]));
@@ -1747,5 +1939,144 @@ mod tests {
         assert_eq!(cap_name(Level::Read), "calendar.read");
         assert_eq!(cap_name(Level::Draft), "calendar.write");
         assert_eq!(cap_name(Level::Send), "calendar.invite");
+    }
+
+    // ── Calendar S1 (prd-google-calendar-link-v1) ───────────────────────
+
+    fn ro(opted: &[&str], omit: bool) -> GraphCalInbox {
+        GraphCalInbox {
+            cal: crate::mail::oauth::CalAccess::Read,
+            opted_in: Some(opted.iter().map(|s| s.to_string()).collect()),
+            omit_description: omit,
+            ..inbox(Level::Draft)
+        }
+    }
+
+    /// An untouched invite with a Teams meeting attached.
+    fn teams_invite(response: &str) -> Value {
+        let mut ev = stored("T1", json!([
+            { "type": "required", "status": { "response": "accepted" }, "emailAddress": { "address": "boss@contoso.com", "name": "Boss" } },
+            { "type": "optional", "status": { "response": response }, "emailAddress": { "address": ME, "name": "Me" } },
+        ]), false, "boss@contoso.com", "W. Europe Standard Time");
+        ev["responseStatus"] = json!({ "response": response, "time": "0001-01-01T00:00:00Z" });
+        ev["onlineMeeting"] = json!({ "joinUrl": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_x/0", "conferenceId": "987654321", "tollNumber": "+1 555 0100" });
+        ev["createdDateTime"] = json!("2026-11-18T15:40:02.1234567Z");
+        ev["lastModifiedDateTime"] = json!("2026-11-18T16:02:11.7654321Z");
+        ev["webLink"] = json!("https://outlook.office365.com/owa/?itemid=x");
+        ev["body"] = json!({ "contentType": "text", "content": "Agenda: private budget numbers" });
+        ev
+    }
+
+    #[test]
+    fn not_responded_and_none_read_as_needs_action_with_the_teams_join() {
+        for raw in ["notResponded", "none"] {
+            let m = Mock::new(vec![(200, json!({ "value": [teams_invite(raw)] }))]);
+            let out = ok(&events_with(&cal(&m), &inbox(Level::Read), &params(&[("start", "2026-10-19T00:00:00Z"), ("end", "2026-10-26T00:00:00Z"), ("full", "1")]), at("2026-10-17T00:00:00Z")));
+            let e = &out["events"][0];
+            assert_eq!(e["self_response"], "needsAction", "{raw}");
+            assert_eq!(e["organizer_is_self"], false);
+            assert_eq!(e["myRole"], "attendee");
+            assert_eq!(e["organizer"], "boss@contoso.com");
+            assert_eq!(e["join"], json!({ "provider": "teams", "meeting_id": "987654321", "url": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_x/0", "phone": ["+1 555 0100"], "from": "conference" }));
+            assert_eq!(e["timeZone"], "Europe/Berlin", "GC-8: a Windows zone id reads as IANA");
+            assert_eq!(e["localStart"], "2026-10-20T18:00:00");
+            assert_eq!(e["created"], "2026-11-18T15:40:02Z");
+            assert_eq!(e["updated"], "2026-11-18T16:02:11Z");
+            assert_eq!(e["webLink"], "https://outlook.office365.com/owa/?itemid=x");
+            assert_eq!(e["attendees"][0]["response"], "accepted");
+            assert_eq!(e["attendees"][0]["organizer"], true);
+            assert_eq!(e["attendees"][1]["self"], true);
+            assert_eq!(e["attendees"][1]["optional"], true);
+        }
+        // CV-25: tentativelyAccepted stays tentative until a live tenant says otherwise.
+        let m = Mock::new(vec![(200, json!({ "value": [teams_invite("tentativelyAccepted")] }))]);
+        let out = ok(&events_with(&cal(&m), &inbox(Level::Read), &params(&[("start", "2026-10-19T00:00:00Z"), ("end", "2026-10-26T00:00:00Z")]), at("2026-10-17T00:00:00Z")));
+        assert_eq!(out["events"][0]["self_response"], "tentative");
+        assert!(out["events"][0].get("description").is_none(), "no body in a summary");
+        assert!(!out.to_string().contains("budget"), "{out}");
+        let q = m.seen()[0].query();
+        for f in ["onlineMeeting", "responseStatus", "lastModifiedDateTime", "webLink", "originalStart"] {
+            assert!(q["$select"].contains(f), "$select lacks {f}: {}", q["$select"]);
+        }
+    }
+
+    #[test]
+    fn a_join_link_in_the_location_or_body_is_labelled() {
+        let mut ev = stored("Z1", json!([]), true, ME, "UTC");
+        ev["location"] = json!({ "displayName": "Office" });
+        ev["body"] = json!({ "contentType": "text", "content": "Join https://acme.zoom.us/j/81234567890?pwd=x\nPasscode 1234" });
+        let mut ev2 = stored("Z2", json!([]), true, ME, "UTC");
+        ev2["location"] = json!({ "displayName": "https://meet.google.com/abc-defg-hij" });
+        let m = Mock::new(vec![(200, json!({ "value": [ev, ev2] }))]);
+        let out = ok(&events_with(&cal(&m), &inbox(Level::Read), &params(&[("start", "2026-10-19T00:00:00Z"), ("end", "2026-10-26T00:00:00Z")]), at("2026-10-17T00:00:00Z")));
+        assert_eq!(out["events"][0]["join"]["provider"], "zoom");
+        assert_eq!(out["events"][0]["join"]["meeting_id"], "81234567890");
+        assert_eq!(out["events"][0]["join"]["from"], "description");
+        assert_eq!(out["events"][0]["self_response"], "accepted", "her own event");
+        assert_eq!(out["events"][1]["join"]["provider"], "meet");
+        assert_eq!(out["events"][1]["join"]["from"], "location");
+        assert!(!out.to_string().contains("1234\""), "the passcode never leaves");
+    }
+
+    /// GC-9: every request asks immutable ids; a show that misses retries
+    /// once without them (an id from before 0.46.16).
+    #[test]
+    fn immutable_ids_with_a_fallback_for_old_ids() {
+        let m = Mock::new(vec![
+            (404, json!({ "error": { "code": "ErrorItemNotFound", "message": "not found" } })),
+            (200, stored("OLD", json!([]), true, ME, "UTC")),
+        ]);
+        let out = ok(&show_with(&cal(&m), &inbox(Level::Read), "OLD", "ev_tok"));
+        assert_eq!(out["event"]["id"], cal::encode_event_id(ME, "OLD"));
+        let seen = m.seen();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].prefers().contains(&"IdType=\"ImmutableId\"".to_string()), "{:?}", seen[0].prefers());
+        assert!(!seen[1].prefers().iter().any(|p| p.contains("IdType")), "the retry drops the immutable ask");
+        // A real miss is still not_found.
+        let m = Mock::new(vec![
+            (404, json!({ "error": { "code": "ErrorItemNotFound", "message": "not found" } })),
+            (404, json!({ "error": { "code": "ErrorItemNotFound", "message": "not found" } })),
+        ]);
+        let r = show_with(&cal(&m), &inbox(Level::Read), "NOPE", "ev_tok");
+        assert_eq!(code(&r), "not_found");
+    }
+
+    /// §3.2 on Graph: an event's calendar comes from `$expand=calendar`; the
+    /// default calendar is the primary, anything else must be opted in.
+    #[test]
+    fn a_read_only_link_masks_events_on_calendars_not_opted_in() {
+        let on_default = json!({ "id": "E1", "calendar": { "id": "AAMkDefault", "isDefaultCalendar": true } });
+        let m = Mock::new(vec![(200, on_default), (200, stored("E1", json!([]), true, ME, "UTC"))]);
+        ok(&show_with(&cal(&m), &ro(&[], false), "E1", "ev_tok"));
+        assert!(m.seen()[0].query()["$expand"].starts_with("calendar("), "{:?}", m.seen()[0].query());
+        let on_shared = json!({ "id": "E2", "calendar": { "id": "C-shared", "isDefaultCalendar": false } });
+        let m = Mock::new(vec![(200, on_shared.clone()), (200, json!({ "value": [] }))]);
+        let r = show_with(&cal(&m), &ro(&[], false), "E2", "ev_tok");
+        assert_eq!(code(&r), "not_found", "{}", r.body);
+        let m = Mock::new(vec![(200, on_shared), (200, stored("E2", json!([]), true, ME, "UTC"))]);
+        ok(&show_with(&cal(&m), &ro(&["C-shared"], false), "E2", "ev_tok"));
+        // The primary by name reads /me/calendarView (Graph's default).
+        let m = Mock::new(vec![(200, json!({ "value": [] }))]);
+        ok(&events_with(&cal(&m), &ro(&[], false), &params(&[("calendar", "primary"), ("start", "2026-10-19T00:00:00Z"), ("end", "2026-10-26T00:00:00Z")]), at("2026-10-17T00:00:00Z")));
+        assert_eq!(m.seen()[0].path(), format!("{GRAPH}/me/calendarView"));
+        // Writes: refused before any request.
+        let m = Mock::new(vec![]);
+        let r = delete_with(&cal(&m), &ro(&[], false), "E1", "ev_tok");
+        assert_eq!(body(&r)["error"]["reason"], "read_only_link");
+        assert!(m.seen().is_empty());
+    }
+
+    #[test]
+    fn omitted_descriptions_on_graph_keep_the_join_only() {
+        let m = Mock::new(vec![(200, teams_invite("none"))]);
+        let out = ok(&show_with(&cal(&m), &inbox_omit(), "T1", "ev_tok"));
+        assert_eq!(out["event"]["description"], Value::Null);
+        assert_eq!(out["event"]["redacted"], json!(["description"]));
+        assert_eq!(out["event"]["join"]["provider"], "teams");
+        assert!(!out.to_string().contains("budget"));
+    }
+
+    fn inbox_omit() -> GraphCalInbox {
+        GraphCalInbox { omit_description: true, ..inbox(Level::Read) }
     }
 }

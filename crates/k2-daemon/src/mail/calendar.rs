@@ -37,7 +37,8 @@
 //! answers 409 `capability_missing` `{cap, reason, fix}`: an app-password
 //! IMAP inbox (`backend_unsupported`), a link consented for mail only
 //! (`scope_not_granted`, fix `k2 mail link upgrade … --features
-//! calendar`), or the owner's `linkedCalendars` switch off
+//! calendar-read`), a write on a read-only link (`read_only_link`,
+//! calendar S1), or the owner's `linkedCalendars` switch off
 //! (`owner_disabled`). The hosted path below is unchanged (MCS-A16:
 //! [`CalendarApi`] stays the Stalwart internals).
 //!
@@ -376,7 +377,7 @@ pub fn resolve_target(
     // CAL19: only AFTER access passed, so a linked inbox the caller
     // cannot see still answers the masked not_found above.
     if inbox.source == Source::Linked {
-        return crate::mail::calendar_provider::linked_target(inbox, need).map(CalTarget::Linked);
+        return crate::mail::calendar_provider::linked_target(inbox, need, project_id).map(CalTarget::Linked);
     }
     let Some(account_id) = inbox.account_id.filter(|s| !s.trim().is_empty()) else {
         return Err(engine_err(format!(

@@ -50,7 +50,7 @@ use std::time::{Duration, Instant};
 use crate::cli_response::CliResponse;
 use crate::mail::external::{self, ExtError};
 use crate::mail::oauth::{
-    self, ClientChoice, Features, FlowKind, HttpClient, OauthProvider, Poll, ReqwestHttp, Tokens,
+    self, CalAccess, ClientChoice, Features, FlowKind, HttpClient, OauthProvider, Poll, ReqwestHttp, Tokens,
 };
 use crate::mail::secrets::{FileSecretStore, SecretStore};
 
@@ -79,6 +79,9 @@ struct LinkPlan {
     /// started a new link, recorded on the row when it lands. `None` for an
     /// agent's link and for upgrades (the row keeps what it has).
     linked_by: Option<String>,
+    /// Calendar S1 (§3.9): who started the link, for its governance row
+    /// (`actor`, `actor_role`), written when it lands on its own thread.
+    audit_actor: Option<(String, String)>,
 }
 
 // ── Response helpers (the shared {code, hint} error contract) ───────────
@@ -323,22 +326,28 @@ fn complete_with_tokens(
     }
     // A calendar-only link whose calendar scope was unticked would store
     // a row that can do nothing: refuse it the same way.
-    if !plan.features.mail && plan.features.calendar && !granted.calendar {
+    if !plan.features.mail && plan.features.calendar.any() && !granted.calendar.any() {
+        let what = match plan.features.calendar {
+            CalAccess::Read => "see your calendar events",
+            _ => "see and edit your calendar events",
+        };
         set_failure(
             link_id,
             LinkStatus::Error,
             "scope_not_granted",
             format!(
                 "calendar access was not granted for {address} — link again and allow K2 to \
-                 see and edit your calendar events. Nothing was stored"
+                 {what}. Nothing was stored"
             ),
             None,
         );
         return;
     }
+    // What was asked AND granted: a read-only ask stays read-only even
+    // when the provider hands back a wider scope (vs-live-2 CV-2).
     let features = Features {
         mail: plan.features.mail && granted.mail,
-        calendar: plan.features.calendar && granted.calendar,
+        calendar: plan.features.calendar.min(granted.calendar),
     };
     let meta = external::OauthMeta {
         features: features.as_db(),
@@ -349,8 +358,10 @@ fn complete_with_tokens(
         account_kind: info.kind.clone(),
         account_checked_at: Some(now),
     };
-    let calendar_note = if plan.features.calendar && !features.calendar {
+    let calendar_note = if plan.features.calendar.any() && !features.calendar.any() {
         " Calendar access was not granted — add it later with 'k2 mail link upgrade'."
+    } else if features.calendar < plan.features.calendar {
+        " Only read access to the calendar was granted."
     } else {
         ""
     };
@@ -361,6 +372,7 @@ fn complete_with_tokens(
                     if let Some(person) = plan.linked_by.as_deref() {
                         external::set_linked_by(address, person);
                     }
+                    link_audit(plan, address, Some(project_id.as_str()), "link");
                     set_terminal(
                     link_id,
                     LinkStatus::Connected,
@@ -371,12 +383,19 @@ fn complete_with_tokens(
                             meta.features,
                             external::oauth_send_hint(plan.provider)
                         )
+                    } else if features.calendar == CalAccess::Read {
+                        format!(
+                            "connected {address} (calendar, read-only) — agents in the bound \
+                             workspace can read its primary calendar with 'k2 cal events'; they \
+                             can't change anything on it. Add shared calendars with 'k2 cal \
+                             calendars {address} --add <id|name>' (owner).{calendar_note}"
+                        )
                     } else {
                         format!(
                             "connected {address} (calendar) — agents in the bound workspace can \
                              use its calendar with 'k2 calendar' (drafts only: no attendees, \
                              nobody is emailed). Mail was not linked; add it later with 'k2 mail \
-                             link upgrade {address} --features mail'."
+                             link upgrade {address} --features mail'.{calendar_note}"
                         )
                     }),
                     );
@@ -386,18 +405,42 @@ fn complete_with_tokens(
         }
         LinkTarget::Upgrade { row_id } => {
             match external::upgrade_oauth_inbox(secrets, row_id, tokens, &meta, now) {
-                Ok(_) => set_terminal(
-                    link_id,
-                    LinkStatus::Connected,
-                    Some(format!(
-                        "upgraded {address} — now consented for {}; its grants, levels and ids \
-                         are unchanged.{calendar_note}",
-                        meta.features
-                    )),
-                ),
+                Ok(_) => {
+                    link_audit(plan, address, None, "link_upgrade");
+                    set_terminal(
+                        link_id,
+                        LinkStatus::Connected,
+                        Some(format!(
+                            "upgraded {address} — now consented for {}; its grants, levels and ids \
+                             are unchanged.{calendar_note}",
+                            meta.features
+                        )),
+                    )
+                }
                 Err(e) => set_terminal(link_id, LinkStatus::Error, Some(ext_error_hint(e))),
             }
         }
+    }
+}
+
+/// The governance row for a link that landed (§3.9), by who started it.
+/// The link already happened on its own thread, so a failed write is
+/// logged, never undone. Never the code, token or pasted address.
+fn link_audit(plan: &LinkPlan, address: &str, workspace: Option<&str>, action: &str) {
+    let Some(row) = external::inbox_for_address(address) else { return };
+    let (actor, role) = plan.audit_actor.clone().unwrap_or_else(|| ("daemon".to_string(), "daemon".to_string()));
+    if crate::mail::mailbox_guard::log_governance_as(
+        &actor,
+        &role,
+        crate::mail::access::Source::Linked,
+        &row.id,
+        &row.email_address,
+        workspace,
+        action,
+    )
+    .is_err()
+    {
+        k2_core::log_debug!("[mail/link] the {action} audit row for a linked inbox could not be written");
     }
 }
 
@@ -725,13 +768,21 @@ struct StartBody {
     client_capture: bool,
     /// Client-local `http://127.0.0.1:<port>/cb` (required with client_capture).
     redirect_uri: String,
-    /// MCS1: what to consent for — `"mail"`, `"calendar"`, `"mail,calendar"`
-    /// or `["mail","calendar"]`. Absent = mail.
+    /// MCS1: what to consent for — `"mail"`, `"calendar"`, `"calendar-read"`,
+    /// `"mail,calendar-read"` or a list of those words. Absent = mail.
     features: serde_json::Value,
     /// MCS1 incremental re-consent: an existing linked row (id or address)
     /// to upgrade IN PLACE. `features` then names what to add.
     inbox: String,
+    /// GC-6: how long a client-capture link waits for `complete` (the
+    /// headless paste-back asks 900). 0 = the default 300 s.
+    capture_ttl_secs: u64,
 }
+
+/// How long a client capture waits for `complete` by default, and at most
+/// (prd-google-calendar-link-v1 §3.1: a person pasting back from a phone).
+const DEFAULT_CAPTURE_TTL_SECS: u64 = 300;
+const MAX_CAPTURE_TTL_SECS: u64 = 900;
 
 /// `features` as a string or a list of strings.
 fn parse_features(v: &serde_json::Value) -> Result<Option<Features>, String> {
@@ -764,7 +815,7 @@ fn require_configured_client(provider: OauthProvider, client: &ClientChoice) -> 
         OauthProvider::Microsoft => {
             "register an app in Microsoft Entra (any organisation directory + personal accounts, \
              'Allow public client flows' on, delegated Graph permissions openid profile email \
-             offline_access User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite), then run \
+             offline_access User.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite), then run \
              'k2 mail oauth-config set --provider microsoft --client-id <application id> \
              [--tenant <tenant>]' or use Settings → Email Link → Sign-in apps"
         }
@@ -836,14 +887,15 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
         }
     };
     // MCS4 (PRD §3.2, Q3): a Google link may be calendar-only — no
-    // restricted Gmail scope, so no CASA; Google sends invites itself. A
-    // Microsoft link always carries mail (one Graph grant covers both).
-    if !features.mail && provider != OauthProvider::Gmail {
+    // restricted Gmail scope, so no CASA; Google sends invites itself.
+    // prd-google-calendar-link-v1 §3.1 (GC-4): so may a Microsoft link;
+    // mail verbs on such a row answer `scope_not_granted` (mail_scope_gate).
+    if !features.mail && !features.calendar.any() {
         return error_response(
             "400 Bad Request",
             "usage",
-            "a Microsoft link needs the mail feature — use --features mail or mail,calendar \
-             (calendar-only links are for Google accounts)",
+            "a link needs mail or a calendar — use --features mail, calendar-read or \
+             mail,calendar-read",
         );
     }
     let (_path, project_id) = match resolve_caller(&b.workspace) {
@@ -857,8 +909,9 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
         address: b.address.trim().to_string(),
         target: LinkTarget::New { project_id },
         linked_by: crate::mail::mailbox_guard::viewer_person(),
+        audit_actor: Some(crate::mail::mailbox_guard::governance_actor()),
     };
-    start_plan(plan, b.client_capture, b.redirect_uri.trim())
+    start_plan(plan, b.client_capture, b.redirect_uri.trim(), b.capture_ttl_secs)
 }
 
 /// MCS1 `k2 mail link upgrade`: re-consent an EXISTING OAuth row for more
@@ -870,7 +923,8 @@ fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "an upgrade needs 'features' — what to add: mail, calendar or mail,calendar",
+            "an upgrade needs 'features' — what to add: mail, calendar-read (read-only) or \
+             calendar (read and write)",
         );
     };
     let Some(row) = external::inbox_for_id_or_address(&b.inbox) else {
@@ -918,6 +972,19 @@ fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
     let have = external::read_oauth_meta(&row.id)
         .and_then(|m| Features::parse(&m.features).ok().flatten())
         .unwrap_or(Features::MAIL);
+    // vs-live-2 CV-3: an upgrade only adds. Read-only on a link that can
+    // write would be a silent no-op; going down means a new link.
+    if add.calendar == CalAccess::Read && have.calendar == CalAccess::Write {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            &format!(
+                "'{}' already has calendar write — to make it read-only, unlink it ('k2 mail \
+                 link remove {}') and link it again with 'k2 cal link'",
+                row.email_address, row.email_address
+            ),
+        );
+    }
     let plan = LinkPlan {
         provider,
         client: oauth::resolve_client(provider),
@@ -925,14 +992,26 @@ fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
         address: row.email_address.clone(),
         target: LinkTarget::Upgrade { row_id: row.id.clone() },
         linked_by: None,
+        audit_actor: Some(crate::mail::mailbox_guard::governance_actor()),
     };
-    start_plan(plan, b.client_capture, b.redirect_uri.trim())
+    start_plan(plan, b.client_capture, b.redirect_uri.trim(), b.capture_ttl_secs)
 }
 
 /// Route a plan to its provider's flow. The request's shape is checked
 /// first (a usage error teaches before anything else), then that a real
 /// client is configured.
-fn start_plan(plan: LinkPlan, client_capture: bool, redirect_uri: &str) -> CliResponse {
+fn start_plan(plan: LinkPlan, client_capture: bool, redirect_uri: &str, capture_ttl_secs: u64) -> CliResponse {
+    // GC-6: a paste-back (a person on a phone) may ask for up to 900 s;
+    // only a client-capture link has a capture to keep.
+    if capture_ttl_secs != 0 && (!client_capture || !(60..=MAX_CAPTURE_TTL_SECS).contains(&capture_ttl_secs)) {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            &format!(
+                "captureTtlSecs is for clientCapture links only, from 60 to {MAX_CAPTURE_TTL_SECS} seconds"
+            ),
+        );
+    }
     if client_capture && plan.provider.config().default_flow == FlowKind::DeviceCode {
         return error_response(
             "400 Bad Request",
@@ -968,7 +1047,7 @@ fn start_plan(plan: LinkPlan, client_capture: bool, redirect_uri: &str) -> CliRe
             start_device(plan, &link_id)
         }
         FlowKind::Loopback if client_capture => {
-            start_loopback_client_capture(plan, &link_id, redirect_uri)
+            start_loopback_client_capture(plan, &link_id, redirect_uri, capture_ttl_secs)
         }
         FlowKind::Loopback => start_loopback(plan, &link_id),
     }
@@ -1166,7 +1245,7 @@ fn start_loopback(plan: LinkPlan, link_id: &str) -> CliResponse {
 /// Gmail remote path: client binds 127.0.0.1 and will open the browser.
 /// Daemon holds PKCE verifier + state until `POST …/complete`. Never opens
 /// a browser on the daemon host.
-fn start_loopback_client_capture(plan: LinkPlan, link_id: &str, redirect_uri: &str) -> CliResponse {
+fn start_loopback_client_capture(plan: LinkPlan, link_id: &str, redirect_uri: &str, capture_ttl_secs: u64) -> CliResponse {
     if redirect_uri.is_empty() {
         return error_response(
             "400 Bad Request",
@@ -1211,7 +1290,8 @@ fn start_loopback_client_capture(plan: LinkPlan, link_id: &str, redirect_uri: &s
                 state: state.clone(),
                 verifier: pkce.verifier.clone(),
                 redirect_uri: redirect_uri.to_string(),
-                expires_at: Instant::now() + Duration::from_secs(300),
+                expires_at: Instant::now()
+                    + Duration::from_secs(if capture_ttl_secs == 0 { DEFAULT_CAPTURE_TTL_SECS } else { capture_ttl_secs }),
             },
         );
     }
@@ -1537,6 +1617,7 @@ mod tests {
             address: address.to_string(),
             target: LinkTarget::New { project_id: project.to_string() },
             linked_by: None,
+            audit_actor: None,
         }
     }
 
@@ -1745,7 +1826,7 @@ mod tests {
         let ok_body = token_body(
             "AT-secret",
             "RT-secret",
-            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: true }),
+            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: CalAccess::Write }),
             serde_json::json!({ "preferred_username": address, "tid": "tenant-guid-1" }),
         );
         let http = MockHttp::new(&[
@@ -1763,7 +1844,7 @@ mod tests {
             OauthProvider::Microsoft,
             &project,
             &address,
-            Features { mail: true, calendar: true },
+            Features { mail: true, calendar: CalAccess::Write },
         );
         run_device_flow(
             &store,
@@ -1929,12 +2010,12 @@ mod tests {
         let wrong = token_body(
             "AT-wrong",
             "RT-wrong",
-            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: true }),
+            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: CalAccess::Write }),
             serde_json::json!({ "preferred_username": "other@company.com", "tid": "t-1" }),
         );
         let up_plan = LinkPlan {
             target: LinkTarget::Upgrade { row_id: row.id.clone() },
-            features: Features { mail: true, calendar: true },
+            features: Features { mail: true, calendar: CalAccess::Write },
             ..plan.clone()
         };
         run_device_flow(
@@ -1956,7 +2037,7 @@ mod tests {
         let good = token_body(
             "AT-2",
             "RT-2",
-            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: true }),
+            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: CalAccess::Write }),
             claims,
         );
         run_device_flow(
@@ -2017,15 +2098,91 @@ mod tests {
             "features": "mail,contacts",
         });
         assert_eq!(handle_link_oauth_start(bad.to_string().as_bytes()).status, "400 Bad Request");
-        let cal_only = serde_json::json!({
-            "address": "a@contoso.example", "provider": "microsoft", "workspace": ws,
-            "features": ["calendar"],
-        });
-        let r = handle_link_oauth_start(cal_only.to_string().as_bytes());
-        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
-        assert!(r.body.contains("mail feature"), "{}", r.body);
-        assert!(r.body.contains("calendar-only links are for Google"), "{}", r.body);
         cleanup(&pid);
+    }
+
+    /// One completed link (fake provider tokens, no network): the stored
+    /// row's `features` and granted scopes.
+    fn complete_link(provider: OauthProvider, features: Features, granted: &str, tag: &str) -> (String, serde_json::Value) {
+        let project = insert_project();
+        let domain = if provider == OauthProvider::Gmail { "gmail.com" } else { "contoso.example" };
+        let address = format!("{tag}-{}@{domain}", &project[..8]);
+        let link_id = uuid::Uuid::new_v4().to_string();
+        insert_pending(&link_id, &address);
+        let claims = if provider == OauthProvider::Gmail {
+            serde_json::json!({ "email": address, "email_verified": true })
+        } else {
+            serde_json::json!({ "preferred_username": address, "tid": "tenant-guid-1" })
+        };
+        let tokens = Tokens {
+            access_token: "AT-secret".into(),
+            refresh_token: Some("RT-secret".into()),
+            scope: Some(granted.to_string()),
+            token_type: "Bearer".into(),
+            expires_in: 3600,
+            id_token: Some(fake_id_token(claims)),
+        };
+        let http = MockHttp::new(&[]);
+        let store = MemStore::default();
+        let plan = plan_new(provider, &project, &address, features);
+        complete_with_tokens(&store, &http, &plan, &link_id, &tokens, 3_000);
+        let params: HashMap<String, String> = HashMap::from([("linkId".to_string(), link_id)]);
+        let st = body_json(&handle_link_oauth_status(&params));
+        (address, st)
+    }
+
+    /// prd-google-calendar-link-v1 §3.1 (CV-2): a read-only calendar link
+    /// is STORED `calendar-read` even when Google hands back an old write
+    /// scope too (incremental auth), so the stored type keeps it read-only.
+    #[test]
+    fn calendar_read_link_is_stored_read_only_even_with_a_wider_grant() {
+        let read_scopes = oauth::scope_for(OauthProvider::Gmail, Features::CALENDAR_READ);
+        assert!(read_scopes.contains("calendar.events.readonly"), "{read_scopes}");
+        assert!(read_scopes.contains("calendar.calendarlist.readonly"), "{read_scopes}");
+        assert!(!read_scopes.contains("auth/calendar.events "), "no write scope asked: {read_scopes}");
+        assert!(!read_scopes.contains("calendar.freebusy"), "{read_scopes}");
+        assert!(!read_scopes.contains("mail.google.com"), "{read_scopes}");
+        let wider = format!("{read_scopes} https://www.googleapis.com/auth/calendar.events");
+        let (address, st) = complete_link(OauthProvider::Gmail, Features::CALENDAR_READ, &wider, "ro");
+        assert_eq!(st["state"], "connected", "{st}");
+        assert!(st["hint"].as_str().unwrap().contains("read-only"), "{st}");
+        let row = external::inbox_for_address(&address).expect("row");
+        let meta = external::read_oauth_meta(&row.id).expect("meta");
+        assert_eq!(meta.features, "calendar-read");
+        assert_eq!(
+            oauth::calendar_level(OauthProvider::Gmail, &meta.features, meta.granted_scopes.as_deref().unwrap()),
+            CalAccess::Read,
+            "the stored type caps the wider grant"
+        );
+    }
+
+    /// GC-4: a Microsoft link may be calendar-only now (`Calendars.Read`);
+    /// the row has no mail, so mail verbs refuse with `scope_not_granted`.
+    #[test]
+    fn microsoft_calendar_only_read_link_stores_a_row_without_mail() {
+        let scopes = oauth::scope_for(OauthProvider::Microsoft, Features::CALENDAR_READ);
+        assert!(scopes.contains("Calendars.Read"), "{scopes}");
+        assert!(!scopes.contains("Calendars.ReadWrite"), "{scopes}");
+        assert!(!scopes.contains("Mail."), "{scopes}");
+        let (address, st) = complete_link(OauthProvider::Microsoft, Features::CALENDAR_READ, &scopes, "msro");
+        assert_eq!(st["state"], "connected", "{st}");
+        let row = external::inbox_for_address(&address).expect("row");
+        assert_eq!(row.kind, "graph");
+        let meta = external::read_oauth_meta(&row.id).expect("meta");
+        assert_eq!(meta.features, "calendar-read");
+        assert!(!crate::mail::capabilities::linked_row_has_mail(&row.id));
+        let r = crate::mail::capabilities::mail_scope_gate(&row, "mail.read").expect_err("no mail");
+        assert!(r.body.contains("scope_not_granted"), "{}", r.body);
+        // Unticked calendar consent on a calendar-only ask stores nothing.
+        let (address, st) = complete_link(
+            OauthProvider::Microsoft,
+            Features::CALENDAR_READ,
+            "openid profile email offline_access User.Read",
+            "msnone",
+        );
+        assert_eq!(st["code"], "scope_not_granted", "{st}");
+        assert!(st["hint"].as_str().unwrap().contains("see your calendar events"), "{st}");
+        assert!(row_oauth(&address).is_none(), "nothing stored");
     }
 
     /// MCS4: a calendar-only Google link stores a row consented for
@@ -2034,7 +2191,7 @@ mod tests {
     #[test]
     fn calendar_only_google_link_stores_a_calendar_row_or_nothing() {
         let project = insert_project();
-        let cal_only = Features { mail: false, calendar: true };
+        let cal_only = Features { mail: false, calendar: CalAccess::Write };
         let scopes = oauth::scope_for(OauthProvider::Gmail, cal_only);
         assert!(!scopes.contains("mail.google.com"), "{scopes}");
         for (tag, granted, stored) in [

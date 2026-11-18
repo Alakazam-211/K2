@@ -2127,6 +2127,11 @@ const MIGRATIONS_BY_HAND: &[(&str, &str)] = &[
         // (Rosson, 0.46.16): the candidates; the daemon's one-time boot
         // step `crate::migrations::agents_hire_restore_0319` decides each.
         ("0319_agents_hire_restore", include_str!("../../drizzle_sql/0319_agents_hire_restore.sql")),
+        // 0316 — read-only calendar links (calendar S1): the calendars a
+        // `calendar-read` link exposes besides its primary, and each
+        // workspace's omit-descriptions choice; store: k2-daemon
+        // `mail::calendar_link`. (0317 is calendar S2's tracker.)
+        ("0316_calendar_link_s1", include_str!("../../drizzle_sql/0316_calendar_link_s1.sql")),
         // 0318 — who a permission card asks (`--to`, the owner's
         // `permissionApprovers`); no rows = everyone who may answer.
         // Store: `k2_daemon::permission::approvers`.
@@ -3115,6 +3120,8 @@ mod tests {
                 "0311_postal_friends",
                 // 0.46.16: hiring back for workspaces from before 0299.
                 "0319_agents_hire_restore",
+                // 0.46.17: read-only calendar links (calendar S1).
+                "0316_calendar_link_s1",
                 // 0.46.17: who a permission card asks.
                 "0318_permission_request_approvers",
             ],
@@ -3337,6 +3344,8 @@ mod tests {
                 "0311_postal_friends",
                 // 0.46.16: hiring back for workspaces from before 0299.
                 "0319_agents_hire_restore",
+                // 0.46.17: read-only calendar links (calendar S1).
+                "0316_calendar_link_s1",
                 // 0.46.17: who a permission card asks.
                 "0318_permission_request_approvers",
             ],
@@ -3611,7 +3620,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0318_permission_request_approvers", "0318 (permission request approvers) runs last, after 0319 (hiring restored, 0.46.16), 0311 (Postal friends), 0310 (delivery badges), 0315 (Claude sign-in warnings), 0313 (compute job env), 0312 (compute_jobs indexes), 0307 (Home chat rows apart), 0306 (Home chat rows), 0305 (Home groups), 0303 (signed approvals), 0302 (0.46.13), 0299 (0.46.12) and 0295 (CI test history)");
+        assert_eq!(top, "0318_permission_request_approvers", "0318 (permission request approvers) runs last, after 0316 (calendar S1), 0319 (hiring restored, 0.46.16), 0311 (Postal friends), 0310 (delivery badges), 0315 (Claude sign-in warnings), 0313 (compute job env), 0312 (compute_jobs indexes), 0307 (Home chat rows apart), 0306 (Home chat rows), 0305 (Home groups), 0303 (signed approvals), 0302 (0.46.13), 0299 (0.46.12) and 0295 (CI test history)");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3717,6 +3726,8 @@ mod tests {
                 "0311_postal_friends",
                 // 0.46.16: hiring back for workspaces from before 0299.
                 "0319_agents_hire_restore",
+                // 0.46.17: read-only calendar links (calendar S1).
+                "0316_calendar_link_s1",
                 // 0.46.17: who a permission card asks.
                 "0318_permission_request_approvers",
             ],
@@ -4899,6 +4910,8 @@ mod tests {
                 "0313_compute_job_env",
                 // 0.46.15: Claude sign-in warnings (dropped above).
                 "0315_llm_sign_in_warnings",
+                // 0.46.16: calendar S1 (IF NOT EXISTS: runs again as a no-op).
+                "0316_calendar_link_s1",
                 "0318_permission_request_approvers",
             ] {
                 conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();

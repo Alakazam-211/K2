@@ -1033,7 +1033,7 @@ fn scope_sets_follow_the_prd_table() {
     // The static configs ARE the mail feature set.
     assert_eq!(ms(Features::MAIL), OauthProvider::Microsoft.config().scope);
     assert_eq!(g(Features::MAIL), OauthProvider::Gmail.config().scope);
-    let both = Features { mail: true, calendar: true };
+    let both = Features { mail: true, calendar: crate::mail::oauth::CalAccess::Write };
     let ms_both = ms(both);
     for want in [
         "openid",
@@ -1047,7 +1047,7 @@ fn scope_sets_follow_the_prd_table() {
     ] {
         assert!(scope_granted(&ms_both, want), "{want} missing from {ms_both}");
     }
-    let cal_only = g(Features { mail: false, calendar: true });
+    let cal_only = g(Features { mail: false, calendar: crate::mail::oauth::CalAccess::Write });
     assert!(!cal_only.contains("mail.google.com"), "calendar-only skips the restricted scope");
     assert!(cal_only.contains("calendar.events") && cal_only.starts_with("openid email"));
     assert!(!scope_granted(&ms(Features::MAIL), "Calendars.ReadWrite"));
@@ -1058,11 +1058,11 @@ fn features_parse_store_and_union() {
     assert_eq!(Features::parse("").unwrap(), None);
     assert_eq!(Features::parse("mail").unwrap(), Some(Features::MAIL));
     let both = Features::parse("Calendar, mail").unwrap().unwrap();
-    assert_eq!(both, Features { mail: true, calendar: true });
+    assert_eq!(both, Features { mail: true, calendar: crate::mail::oauth::CalAccess::Write });
     assert_eq!(both.as_db(), "mail,calendar");
-    assert_eq!(Features { mail: false, calendar: true }.as_db(), "calendar");
+    assert_eq!(Features { mail: false, calendar: crate::mail::oauth::CalAccess::Write }.as_db(), "calendar");
     assert!(Features::parse("mail,contacts").unwrap_err().contains("contacts"));
-    assert_eq!(Features::MAIL.union(Features { mail: false, calendar: true }), both);
+    assert_eq!(Features::MAIL.union(Features { mail: false, calendar: crate::mail::oauth::CalAccess::Write }), both);
 }
 
 #[test]
@@ -1072,11 +1072,11 @@ fn granted_scopes_match_bare_or_qualified_spellings() {
     assert!(scope_granted(granted, "https://graph.microsoft.com/Mail.ReadWrite"));
     assert!(!scope_granted(granted, "Calendars.ReadWrite"));
     let f = features_granted(OauthProvider::Microsoft, granted);
-    assert!(f.mail && !f.calendar);
+    assert!(f.mail && !f.calendar.any());
     let legacy = "https://graph.microsoft.com/Mail.ReadWrite offline_access";
     assert!(!scope_granted(legacy, "Mail.Send"), "pre-MCS1 rows never had Mail.Send");
     let g = features_granted(OauthProvider::Gmail, "https://mail.google.com/ openid");
-    assert!(g.mail && !g.calendar);
+    assert!(g.mail && !g.calendar.any());
 }
 
 #[test]

@@ -120,8 +120,11 @@ pub mod alias;
 pub mod app_password;
 pub mod bans;
 pub mod calendar;
+pub mod calendar_event;
 pub mod calendar_google;
 pub mod calendar_graph;
+pub mod calendar_link;
+pub mod calendar_link_routes;
 pub mod calendar_provider;
 pub mod calendar_share;
 pub mod capabilities;
@@ -205,6 +208,8 @@ mod fake_jmap;
 // OA0 (0.46.11): people's mailboxes through a named workspace, end to end.
 #[cfg(test)]
 mod mailbox_guard_tests;
+#[cfg(test)]
+mod calendar_link_tests;
 // The mail reader, end to end (OA1–OA9).
 #[cfg(test)]
 mod reader_tests;

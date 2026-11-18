@@ -3,9 +3,12 @@
 //! The floors and what a row means are documented in `route_policy.rs`.
 
 use super::Floor::{Admin, Member, Owner};
-use super::{both, get, post, Route};
+use super::{both, get, post, split, Route};
 
 pub(super) const ROWS: &[Route] = &[
+    // Calendar S1: a workspace's omit-descriptions choice on a linked
+    // calendar (owner/Admin; agents refused in the handler too).
+    post("/cli/mail/access/calendar-privacy", Admin),
     post("/cli/mail/access/grant", Admin),
     post("/cli/mail/access/revoke", Admin),
     post("/cli/mail/access/set-level", Admin),
@@ -45,10 +48,17 @@ pub(super) const ROWS: &[Route] = &[
     // Calendars S3: agent calendar verbs, gated by k2 mail access levels
     // in the handlers (read: GET; draft: POST) — Member floor like
     // messages/draft.
+    // Calendar S1 (prd-google-calendar-link-v1 §3.4, CV-17/CV-18): which
+    // calendars a read-only link shows. GET = anyone with a read grant
+    // (the owner sees every calendar); POST = owner/Admin.
+    split("/cli/mail/calendar/calendars", Member, Admin),
     post("/cli/mail/calendar/create", Member),
     post("/cli/mail/calendar/delete", Member),
     get("/cli/mail/calendar/events", Member),
     get("/cli/mail/calendar/freebusy", Member),
+    // Calendar S1: an agent asks its person to link a calendar (a card;
+    // links nothing). Not under /cli/mail/link/ (passports are denied it).
+    post("/cli/mail/calendar/link-request", Member),
     get("/cli/mail/calendar/list", Member),
     // Calendars S4: groups + sharing (mail-manage surface).
     post("/cli/mail/calendar/manage", Admin),

@@ -240,6 +240,18 @@ pub fn handle_external_remove(body: &[u8]) -> CliResponse {
                 "no external inbox '{address}' — 'k2 mail external list' shows what's connected"
             )));
         }
+        // Calendar S1 (§3.9): the unlink is a governance row, written first.
+        if let Some(row) = external::inbox_for_address(&address) {
+            if let Err(r) = crate::mail::mailbox_guard::log_governance(
+                crate::mail::access::Source::Linked,
+                &row.id,
+                &row.email_address,
+                Some(row.owner_project_id.as_str()),
+                "link_remove",
+            ) {
+                return r;
+            }
+        }
     }
     match external::remove_inbox(&FileSecretStore::default(), &b.address) {
         Ok(v) => {

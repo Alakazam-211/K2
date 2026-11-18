@@ -727,6 +727,36 @@ fn manage_target(raw_address: &str) -> Result<ManageTarget, AccessError> {
     })
 }
 
+/// Which inbox an address names, for the owner surface (unmasked):
+/// `(source, inbox id, address)`. Calendar S1 logs governance rows and
+/// keeps per-workspace calendar privacy against it.
+pub fn inbox_ref(raw_address: &str) -> Result<(Source, String, String), AccessError> {
+    manage_target(raw_address).map(|t| (t.source, t.inbox_id, t.address))
+}
+
+/// Does `project_id` reach the inbox at all (primary, or a grant)?
+pub fn has_access(source: Source, inbox_id: &str, project_id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let primary: Option<String> = match source {
+        Source::Linked => conn
+            .query_row(
+                "SELECT owner_project_id FROM mail_external_inboxes WHERE id = ?1",
+                rusqlite::params![inbox_id],
+                |r| r.get(0),
+            )
+            .ok(),
+        Source::Hosted => conn
+            .query_row(
+                "SELECT owner_project_id FROM mail_addresses WHERE id = ?1",
+                rusqlite::params![inbox_id],
+                |r| r.get(0),
+            )
+            .ok(),
+    };
+    primary.as_deref() == Some(project_id) || grant_level_conn(&conn, source, inbox_id, project_id).is_some()
+}
+
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -816,6 +846,9 @@ pub fn revoke_access(
             rusqlite::params![target.source.as_str(), target.inbox_id, grantee_project_id],
         )
         .map_err(|e| AccessError::Engine(format!("revoke access: {e}")))?;
+        if target.source == Source::Linked {
+            crate::mail::calendar_link::drop_pref(&conn, &target.inbox_id, grantee_project_id);
+        }
     }
     Ok(target.address)
 }
@@ -1200,6 +1233,20 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
     let mut out: Vec<serde_json::Value> = Vec::new();
     for row in &rows {
         let grants = grants_for(&conn, row.source, &row.inbox_id);
+        // Calendar S1 (§3.2): each workspace's omit-descriptions choice on
+        // a linked calendar (null on hosted rows; a read error reads as
+        // omitted, never as shown).
+        let omit = |project_id: &str| -> serde_json::Value {
+            match row.source {
+                Source::Linked => serde_json::json!(crate::mail::calendar_link::omit_description_conn(
+                    &conn,
+                    &row.inbox_id,
+                    project_id
+                )
+                .unwrap_or(true)),
+                Source::Hosted => serde_json::Value::Null,
+            }
+        };
         // The caller's effective level (agent view filters on it).
         let your = viewer.and_then(|p| {
             effective_level_conn(
@@ -1229,6 +1276,7 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
                     "canDelete": g.can_delete,
                     "agentSend": mode,
                     "sendState": send_state(&g.level, &mode, row.source),
+                    "calendarOmitDescription": omit(&g.project_id),
                 })
             })
             .collect();
@@ -1251,6 +1299,7 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
                 "canDelete": row.primary_can_delete,
                 "agentSend": primary_mode,
                 "sendState": send_state(primary_level.as_str(), &primary_mode, row.source),
+                "calendarOmitDescription": omit(&row.owner_project_id),
             },
             "grants": grants_json,
             "yourLevel": your.map(|l| l.as_str()),

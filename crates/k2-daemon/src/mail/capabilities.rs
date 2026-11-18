@@ -126,24 +126,32 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
     // What the grant covers. A row from before 0188 has no mirrored scopes
     // yet: it was a mail-only link with the pre-MCS1 scope set, which for
     // Microsoft never included Mail.Send or calendars.
-    let (mail_scope, send_scope, calendar_scope) = match backend {
+    // The calendar level is the stored link type capped by the grant
+    // (vs-live-2 CV-2): a `calendar-read` link is read-only.
+    let stored = input.meta.map(|m| m.features.as_str()).unwrap_or("mail");
+    let (mail_scope, send_scope, cal_level) = match backend {
         Backend::Google => {
             let f = granted.map(|g| oauth::features_granted(OauthProvider::Gmail, g));
             (
                 f.is_none_or(|f| f.mail),
                 f.is_none_or(|f| f.mail),
-                f.is_some_and(|f| f.calendar),
+                granted.map(|g| oauth::calendar_level(OauthProvider::Gmail, stored, g)).unwrap_or_default(),
             )
         }
         Backend::Microsoft => match granted {
             Some(g) => {
                 let f = oauth::features_granted(OauthProvider::Microsoft, g);
-                (f.mail, oauth::scope_granted(g, "Mail.Send"), f.calendar)
+                (
+                    f.mail,
+                    oauth::scope_granted(g, "Mail.Send"),
+                    oauth::calendar_level(OauthProvider::Microsoft, stored, g),
+                )
             }
-            None => (true, false, false),
+            None => (true, false, oauth::CalAccess::None),
         },
-        Backend::Hosted | Backend::Imap => (true, true, false),
+        Backend::Hosted | Backend::Imap => (true, true, oauth::CalAccess::None),
     };
+    let calendar_scope = cal_level.any();
 
     // ── mail ──
     let mail_read = if !mail_scope {
@@ -200,7 +208,13 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
                 "an IMAP inbox linked with an app password has no calendar API",
             ),
             Backend::Google | Backend::Microsoft if !calendar_scope => {
-                Verdict::off("scope_not_granted", upgrade_fix(address, "calendar"))
+                Verdict::off("scope_not_granted", upgrade_fix(address, "calendar-read"))
+            }
+            Backend::Google | Backend::Microsoft if want >= Level::Draft && cal_level == oauth::CalAccess::Read => {
+                Verdict::off(
+                    "read_only_link",
+                    "the link is read-only: agents never change a person's calendar on it",
+                )
             }
             Backend::Google | Backend::Microsoft if !input.linked_calendars_on => Verdict::off(
                 "owner_disabled",
@@ -220,7 +234,13 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
                 "an IMAP inbox linked with an app password has no calendar API",
             ),
             Backend::Google | Backend::Microsoft if !calendar_scope => {
-                Verdict::off("scope_not_granted", upgrade_fix(address, "calendar"))
+                Verdict::off("scope_not_granted", upgrade_fix(address, "calendar-read"))
+            }
+            Backend::Google | Backend::Microsoft if cal_level == oauth::CalAccess::Read => {
+                Verdict::off(
+                    "read_only_link",
+                    "the link is read-only: no invites, RSVPs or changes",
+                )
             }
             _ => Verdict::off(
                 "not_built",
@@ -422,7 +442,7 @@ mod tests {
         assert_eq!(cal["reason"], "scope_not_granted");
         assert_eq!(
             cal["fix"],
-            "k2 mail link upgrade you@contoso.com --features calendar (owner)"
+            "k2 mail link upgrade you@contoso.com --features calendar-read (owner)"
         );
         assert_eq!(v["account"]["kind"], "work");
         assert_eq!(v["account"]["checked"], true);
@@ -488,7 +508,7 @@ mod tests {
             OauthProvider::Gmail,
             oauth::Features {
                 mail: true,
-                calendar: true,
+                calendar: oauth::CalAccess::Write,
             },
         );
         let m = meta(Some(&scopes));
@@ -529,7 +549,7 @@ mod tests {
             OauthProvider::Gmail,
             oauth::Features {
                 mail: false,
-                calendar: true,
+                calendar: oauth::CalAccess::Write,
             },
         );
         let mut m = meta(Some(&scopes));

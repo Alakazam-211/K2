@@ -1223,7 +1223,13 @@ fn handle_log(params: &HashMap<String, String>) -> CliResponse {
     let inbox = crate::cli::opt_param(params, "inbox").map(|a| a.trim().to_ascii_lowercase());
     let actor = crate::cli::opt_param(params, "actor").map(|a| {
         let a = a.trim().to_string();
-        if a == "owner-token" || a.starts_with("user:") { a } else { format!("user:{a}") }
+        // Calendar S1 (GC-13): agents' calendar reads are `agent:<id>` rows,
+        // and a link that finished on its own thread is `daemon`.
+        if a == "owner-token" || a == "daemon" || a.starts_with("user:") || a.starts_with("agent:") {
+            a
+        } else {
+            format!("user:{a}")
+        }
     });
     // Whose rows this viewer may see: all, or their own mailboxes'.
     let own: Option<Vec<String>> = if viewer.opens_any {

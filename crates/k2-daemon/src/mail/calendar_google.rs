@@ -32,7 +32,16 @@
 //! **Wait state:** `gs_<b64url(json)>` holds ONLY the calendar and the
 //! Google `nextSyncToken` — never a URL.
 //!
-//! ⚠ LIVE-BOX: `calendarList` access roles on Workspace shared calendars,
+//! **Calendar S1 (0.46.16):** every event list asks
+//! `showHiddenInvitations=true` (an unknown sender's invite Google keeps
+//! off the grid still lists, as `self_response: "needsAction"`); `wait`'s
+//! sync rounds are unchanged (CV-4: S2 decides). Events carry the
+//! provider-neutral fields (join from `conferenceData`, `hangoutLink`,
+//! location or description).
+//!
+//! ⚠ LIVE-BOX: `showHiddenInvitations` and `conferenceData` /
+//! `attendees[].responseStatus` under `calendar.events.readonly` alone,
+//! `calendarList` access roles on Workspace shared calendars,
 //! `freeBusy` errors for consumer accounts, and the size of a first full
 //! sync on a very large calendar are the parts to check against a real
 //! account.
@@ -47,9 +56,10 @@ use serde_json::{json, Value};
 
 use crate::mail::access::Level;
 use crate::mail::calendar::{self as cal, rfc3339_utc, BusyKind, BusySpan};
+use crate::mail::calendar_event as ce;
 use crate::mail::calendar_provider::{
     CalErr, CalendarProvider, Changes, DraftEvent, DraftPatch, LinkedCalInbox, StateErr,
-    StoredEvent,
+    StoredEvent, ViewOpts,
 };
 use crate::mail::graph::{self, GraphHttp, GraphMethod, GraphResponse};
 use k2_core::db::schema::MailExternalInbox;
@@ -336,23 +346,31 @@ impl GoogleCalendar {
 
     /// Occurrences overlapping `[start, end)` on one calendar (expanded by
     /// Google), first page only; `truncated` when there were more.
+    ///
+    /// Every list asks `showHiddenInvitations=true` (prd-google-calendar-
+    /// link-v1 §3.5.1): an invite Google keeps off the grid because the
+    /// sender is unknown still shows, as `self_response: "needsAction"`.
+    /// `include_cancelled` adds `showDeleted=true` (cancelled occurrences).
     pub fn list_events(
         &self,
         key: &str,
         start: &DateTime<Utc>,
         end: &DateTime<Utc>,
         limit: usize,
+        include_cancelled: bool,
     ) -> Result<(Vec<Value>, bool), CalErr> {
-        let url = graph::with_query(
-            &Self::events_url(key),
-            &[
-                ("timeMin", rfc3339_utc(start)),
-                ("timeMax", rfc3339_utc(end)),
-                ("singleEvents", "true".to_string()),
-                ("orderBy", "startTime".to_string()),
-                ("maxResults", (limit + 1).to_string()),
-            ],
-        );
+        let mut q = vec![
+            ("timeMin", rfc3339_utc(start)),
+            ("timeMax", rfc3339_utc(end)),
+            ("singleEvents", "true".to_string()),
+            ("orderBy", "startTime".to_string()),
+            ("maxResults", (limit + 1).to_string()),
+            ("showHiddenInvitations", "true".to_string()),
+        ];
+        if include_cancelled {
+            q.push(("showDeleted", "true".to_string()));
+        }
+        let url = graph::with_query(&Self::events_url(key), &q);
         let v = self.json(self.req(GraphMethod::Get, &url, None)?, "event list")?;
         let mut list = v.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
         let more = v.get("nextPageToken").and_then(Value::as_str).is_some_and(|t| !t.is_empty());
@@ -535,9 +553,100 @@ pub fn google_others(ev: &Value, owner: &str) -> Vec<String> {
     out
 }
 
+/// The provider-neutral fields of one Google event (prd-google-calendar-
+/// link-v1 §3.5): join, organizer, `self_response`, attendees, series.
+fn neutral(ev: &Value, g: &LinkedCalInbox, key: &str) -> ce::Neutral {
+    let me = g.address.trim().to_ascii_lowercase();
+    let org_self = ev.pointer("/organizer/self").and_then(Value::as_bool) == Some(true)
+        || lower(ev.pointer("/organizer/email")).as_deref() == Some(me.as_str());
+    let attendees: Vec<Value> = ev
+        .get("attendees")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|a| {
+            let email = lower(a.get("email"));
+            let is_self = a.get("self").and_then(Value::as_bool) == Some(true) || email.as_deref() == Some(me.as_str());
+            json!({
+                "email": email,
+                "name": a.get("displayName").and_then(Value::as_str),
+                "response": a.get("responseStatus").and_then(Value::as_str).and_then(ce::norm_response),
+                "optional": a.get("optional").and_then(Value::as_bool).unwrap_or(false),
+                "self": is_self,
+                "organizer": a.get("organizer").and_then(Value::as_bool).unwrap_or(false),
+            })
+        })
+        .collect();
+    let mine = attendees.iter().find(|a| a["self"] == json!(true)).and_then(|a| a["response"].as_str());
+    // Her own event with no row for her is accepted; an event with no
+    // attendees at all is hers too.
+    let self_response = match mine {
+        Some(r) => ce::norm_response(r),
+        None if org_self || attendees.is_empty() => Some("accepted"),
+        None => None,
+    };
+    ce::Neutral {
+        calendar_id: Some(listed_id(g, key)),
+        created: ev.get("created").and_then(Value::as_str).and_then(parse_rfc3339).map(|d| rfc3339_utc(&d)),
+        updated: ev.get("updated").and_then(Value::as_str).and_then(parse_rfc3339).map(|d| rfc3339_utc(&d)),
+        join: google_join(ev),
+        organizer: lower(ev.pointer("/organizer/email")),
+        organizer_name: ev.pointer("/organizer/displayName").and_then(Value::as_str).map(str::to_string),
+        organizer_is_self: org_self,
+        self_response,
+        attendees,
+        attendees_partial: ev.get("attendeesOmitted").and_then(Value::as_bool) == Some(true),
+        series: ev.get("recurringEventId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(|sid| {
+            let original = google_instant(ev.get("originalStartTime")).0;
+            let start = google_instant(ev.get("start")).0;
+            json!({
+                "seriesId": cal::encode_event_id(&g.address, &provider_id(sid, key)),
+                "originalStart": original.map(|d| rfc3339_utc(&d)),
+                "exception": original.is_some() && start.is_some() && original != start,
+            })
+        }),
+        web_link: ev.get("htmlLink").and_then(Value::as_str).map(str::to_string),
+        event_type: ev.get("eventType").and_then(Value::as_str).map(str::to_string),
+    }
+}
+
+/// The join field (§3.5): the attached conference first (its video entry
+/// point, else `hangoutLink`), then a meeting link in `location`, then
+/// one in `description`. Labels a link written in the event; never calls
+/// a meeting service.
+fn google_join(ev: &Value) -> Option<ce::Join> {
+    let points = ev.pointer("/conferenceData/entryPoints").and_then(Value::as_array);
+    let phone: Vec<String> = points
+        .into_iter()
+        .flatten()
+        .filter(|p| p.get("entryPointType").and_then(Value::as_str) == Some("phone"))
+        .filter_map(|p| p.get("uri").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let conf_id = ev.pointer("/conferenceData/conferenceId").and_then(Value::as_str).map(str::to_string);
+    let video = points
+        .into_iter()
+        .flatten()
+        .find(|p| p.get("entryPointType").and_then(Value::as_str) == Some("video"))
+        .and_then(|p| p.get("uri").and_then(Value::as_str));
+    if let Some(j) = video.and_then(|u| ce::join_from_conference(u, conf_id.clone(), phone.clone())) {
+        return Some(j);
+    }
+    if let Some(j) = ev.get("hangoutLink").and_then(Value::as_str).and_then(|u| ce::join_from_conference(u, conf_id, phone)) {
+        return Some(j);
+    }
+    if let Some(j) = ev.get("location").and_then(Value::as_str).and_then(|l| ce::join_from_text(l, ce::JoinFrom::Location)) {
+        return Some(j);
+    }
+    ev.get("description").and_then(Value::as_str).and_then(|d| ce::join_from_text(d, ce::JoinFrom::Description))
+}
+
 /// One Google event, summary shape. `key` is the calendar it was read
 /// from (`primary` for the account's own).
 pub fn shape_summary(ev: &Value, g: &LinkedCalInbox, key: &str) -> Value {
+    shape(ev, g, key, false)
+}
+
+fn shape(ev: &Value, g: &LinkedCalInbox, key: &str, full: bool) -> Value {
     let id = ev.get("id").and_then(Value::as_str).unwrap_or("");
     let (start, all_day) = google_instant(ev.get("start"));
     let (end, _) = google_instant(ev.get("end"));
@@ -556,7 +665,7 @@ pub fn shape_summary(ev: &Value, g: &LinkedCalInbox, key: &str) -> Value {
     };
     let recurring = ev.get("recurringEventId").is_some_and(|r| !r.is_null())
         || ev.get("recurrence").is_some_and(|r| !r.is_null());
-    json!({
+    let mut out = json!({
         "id": cal::encode_event_id(&g.address, &provider_id(id, key)),
         "calendarIds": vec![listed_id(g, key)],
         "title": ev.get("summary").and_then(Value::as_str).unwrap_or(""),
@@ -573,17 +682,19 @@ pub fn shape_summary(ev: &Value, g: &LinkedCalInbox, key: &str) -> Value {
         "participants": ev.get("attendees").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0),
         "source": "google",
         "invite": { "state": "none" },
-    })
+    });
+    ce::apply(&mut out, neutral(ev, g, key), full);
+    out
 }
 
-/// One Google event, full shape (`show`).
+/// One Google event, full shape (`show`, `event`, `events --full`). The
+/// description is here; per-grant omission is applied by the seam.
 pub fn shape_full(ev: &Value, g: &LinkedCalInbox, key: &str) -> Value {
-    let mut out = shape_summary(ev, g, key);
+    let mut out = shape(ev, g, key, true);
     out["address"] = json!(g.address);
     out["uid"] = ev.get("iCalUID").cloned().unwrap_or(Value::Null);
     out["description"] = ev.get("description").cloned().unwrap_or(Value::Null);
     out["privacy"] = ev.get("visibility").cloned().unwrap_or(Value::Null);
-    out["organizer"] = lower(ev.pointer("/organizer/email")).map(Value::from).unwrap_or(Value::Null);
     out["participantList"] = Value::Array(
         ev.get("attendees")
             .and_then(Value::as_array)
@@ -687,10 +798,16 @@ impl CalendarProvider for GoogleCalendar {
         end: &DateTime<Utc>,
         calendar: Option<&str>,
         limit: usize,
+        opts: ViewOpts,
     ) -> Result<(Vec<Value>, bool), CalErr> {
         let key = cal_key(g, calendar);
-        let (events, truncated) = self.list_events(&key, start, end, limit)?;
-        Ok((events.iter().map(|e| shape_summary(e, g, &key)).collect(), truncated))
+        let (events, truncated) = self.list_events(&key, start, end, limit, opts.include_cancelled)?;
+        let shape = |e: &Value| if opts.full { shape_full(e, g, &key) } else { shape_summary(e, g, &key) };
+        Ok((events.iter().map(shape).collect(), truncated))
+    }
+
+    fn calendar_of(&self, _g: &LinkedCalInbox, id: &str) -> Result<Option<String>, CalErr> {
+        Ok(split_id(id).map(|(_, key)| key.to_string()))
     }
 
     fn event(&self, g: &LinkedCalInbox, id: &str, full: bool) -> Result<Option<StoredEvent>, CalErr> {
@@ -776,7 +893,7 @@ impl CalendarProvider for GoogleCalendar {
         if let Ok(s) = self.free_busy(&g.address, start, end) {
             return Ok((s, "freeBusy", false));
         }
-        let (events, truncated) = self.list_events(PRIMARY, start, end, cal::MAX_EVENTS)?;
+        let (events, truncated) = self.list_events(PRIMARY, start, end, cal::MAX_EVENTS, false)?;
         let owner = g.address.to_ascii_lowercase();
         let spans = events
             .iter()
@@ -964,7 +1081,16 @@ mod tests {
     }
 
     fn inbox(level: Level) -> LinkedCalInbox {
-        LinkedCalInbox { address: ME.into(), row: row(), level, backend: LinkedBackend::Google }
+        LinkedCalInbox {
+            address: ME.into(),
+            row: row(),
+            level,
+            backend: LinkedBackend::Google,
+            cal: crate::mail::oauth::CalAccess::Write,
+            opted_in: None,
+            omit_description: false,
+            project_id: "p1".into(),
+        }
     }
 
     fn gcal(m: &Arc<Mock>) -> GoogleCalendar {
@@ -1338,7 +1464,7 @@ mod tests {
         assert!(r.status.starts_with("409"), "{}", r.body);
         assert_eq!(code(&r), "capability_missing");
         assert_eq!(body(&r)["error"]["reason"], "scope_not_granted");
-        assert_eq!(body(&r)["error"]["fix"], format!("k2 mail link upgrade {ME} --features calendar (owner)"));
+        assert_eq!(body(&r)["error"]["fix"], format!("k2 mail link upgrade {ME} --features calendar-read (owner)"));
     }
 
     #[test]
@@ -1487,5 +1613,220 @@ mod tests {
         assert_eq!(split_id("/primary"), None);
         assert_eq!(split_id("abc/"), None);
         assert_eq!(split_id("abc"), None);
+    }
+
+    // ── Calendar S1 (prd-google-calendar-link-v1) ───────────────────────
+
+    /// A read-only link's inbox: `calendar-read`, the given opt-ins.
+    fn ro(opted: &[&str], omit: bool) -> LinkedCalInbox {
+        LinkedCalInbox {
+            cal: crate::mail::oauth::CalAccess::Read,
+            opted_in: Some(opted.iter().map(|s| s.to_string()).collect()),
+            omit_description: omit,
+            ..inbox(Level::Draft)
+        }
+    }
+
+    const TEAM_CAL: &str = "team@group.calendar.google.com";
+
+    fn cal_list() -> Value {
+        json!({ "items": [
+            { "id": ME, "summary": ME, "accessRole": "owner", "primary": true },
+            { "id": TEAM_CAL, "summary": "Consults", "accessRole": "owner" },
+            { "id": "family@group.calendar.google.com", "summary": "Family", "accessRole": "owner" },
+        ]})
+    }
+
+    /// An invite from an unknown sender, not answered, a Zoom link and
+    /// private notes in its description.
+    fn hidden_invite() -> Value {
+        json!({
+            "id": "g-hid",
+            "status": "confirmed",
+            "summary": "Intro call",
+            "start": { "dateTime": "2026-11-20T11:00:00-07:00", "timeZone": "America/Denver" },
+            "end": { "dateTime": "2026-11-20T11:30:00-07:00", "timeZone": "America/Denver" },
+            "created": "2026-11-18T15:40:02.000Z",
+            "updated": "2026-11-18T16:02:11.123Z",
+            "htmlLink": "https://www.google.com/calendar/event?eid=x",
+            "organizer": { "email": "Someone@Example.org" },
+            "attendees": [
+                { "email": ME, "self": true, "responseStatus": "needsAction" },
+                { "email": "someone@example.org", "organizer": true, "responseStatus": "accepted" },
+            ],
+            "description": "Private: the client prefers mornings.\nZoom: https://us02web.zoom.us/j/89876543210?pwd=SECRET\nPasscode: 445566",
+        })
+    }
+
+    #[test]
+    fn every_list_asks_for_hidden_invitations_and_an_unanswered_invite_is_needs_action() {
+        let m = Mock::new(vec![(200, json!({ "items": [hidden_invite()] }))]);
+        let out = ok(&linked::events_with(&gcal(&m), &inbox(Level::Read), &params(&[("start", "2026-11-19"), ("end", "2026-11-26")]), at("2026-11-18T16:00:00Z")));
+        let q = m.seen()[0].query();
+        assert_eq!(q["showHiddenInvitations"], "true", "§3.5.1: every list sends the flag");
+        assert!(!q.contains_key("showDeleted"), "cancelled stay out by default");
+        let e = &out["events"][0];
+        assert_eq!(e["self_response"], "needsAction");
+        assert_eq!(e["organizer_is_self"], false);
+        assert_eq!(e["myRole"], "attendee");
+        assert_eq!(e["organizer"], "someone@example.org");
+        assert_eq!(e["join"], json!({ "provider": "zoom", "meeting_id": "89876543210", "url": "https://us02web.zoom.us/j/89876543210?pwd=SECRET", "phone": [], "from": "description" }));
+        assert_eq!(e["updated"], "2026-11-18T16:02:11Z");
+        assert_eq!(e["created"], "2026-11-18T15:40:02Z");
+        assert_eq!(e["timeZone"], "America/Denver");
+        assert_eq!(e["localStart"], "2026-11-20T11:00:00");
+        assert_eq!(e["calendarId"], ME);
+        assert_eq!(e["webLink"], "https://www.google.com/calendar/event?eid=x");
+        assert!(e.get("description").is_none(), "a summary never carries the description");
+        assert!(e.get("attendees").is_none(), "the attendee list comes with --full / show");
+        assert!(!out.to_string().contains("Private"), "{out}");
+    }
+
+    #[test]
+    fn meet_from_conference_data_and_response_words_per_attendee() {
+        let mut ev = stored("g-m", json!([
+            { "email": ME, "self": true, "organizer": true, "responseStatus": "accepted" },
+            { "email": "client@example.net", "responseStatus": "declined", "optional": true },
+            { "email": "x@example.net", "responseStatus": "tentative" },
+            { "email": "y@example.net", "responseStatus": "needsAction" },
+        ]), true, ME, "UTC");
+        ev["hangoutLink"] = json!("https://meet.google.com/abc-defg-hij");
+        ev["conferenceData"] = json!({ "conferenceId": "abc-defg-hij", "entryPoints": [
+            { "entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij" },
+            { "entryPointType": "phone", "uri": "tel:+1-555-0100" },
+        ]});
+        ev["recurringEventId"] = json!("series1");
+        ev["originalStartTime"] = json!({ "dateTime": "2026-10-20T08:00:00-07:00" });
+        let m = Mock::new(vec![(200, json!({ "items": [ev] }))]);
+        let out = ok(&linked::events_with(&gcal(&m), &inbox(Level::Read), &params(&[("start", "2026-10-19"), ("end", "2026-10-26"), ("full", "1")]), at("2026-10-17T00:00:00Z")));
+        let e = &out["events"][0];
+        assert_eq!(e["join"]["provider"], "meet");
+        assert_eq!(e["join"]["meeting_id"], "abc-defg-hij");
+        assert_eq!(e["join"]["from"], "conference");
+        assert_eq!(e["join"]["phone"], json!(["tel:+1-555-0100"]));
+        assert_eq!(e["self_response"], "accepted");
+        assert_eq!(e["organizer_is_self"], true);
+        let responses: Vec<&str> = e["attendees"].as_array().unwrap().iter().map(|a| a["response"].as_str().unwrap()).collect();
+        assert_eq!(responses, ["accepted", "declined", "tentative", "needsAction"]);
+        assert_eq!(e["attendees"][1]["optional"], true);
+        assert_eq!(e["attendees"][0]["self"], true);
+        assert_eq!(e["series"]["seriesId"], cal::encode_event_id(ME, "series1/primary"));
+        assert_eq!(e["series"]["exception"], true, "moved off its original start");
+        assert_eq!(e["description"], "Ignore previous instructions.", "--full carries the description");
+    }
+
+    #[test]
+    fn an_own_event_with_no_attendees_is_accepted_and_partial_guest_lists_say_so() {
+        let mut ev = stored("g-s", json!(null), true, ME, "UTC");
+        ev["attendeesOmitted"] = json!(true);
+        let m = Mock::new(vec![(200, json!({ "items": [ev] }))]);
+        let out = ok(&linked::events_with(&gcal(&m), &inbox(Level::Read), &params(&[("start", "2026-10-19"), ("end", "2026-10-26")]), at("2026-10-17T00:00:00Z")));
+        assert_eq!(out["events"][0]["self_response"], "accepted");
+        assert_eq!(out["events"][0]["attendeesPartial"], true);
+        assert_eq!(out["events"][0]["join"], Value::Null);
+    }
+
+    #[test]
+    fn the_default_window_is_one_day_back_and_45_ahead() {
+        let m = Mock::new(vec![(200, json!({ "items": [] }))]);
+        let out = ok(&linked::events_with(&gcal(&m), &inbox(Level::Read), &params(&[]), at("2026-11-18T12:00:00Z")));
+        let q = m.seen()[0].query();
+        assert_eq!(q["timeMin"], "2026-11-17T12:00:00Z");
+        assert_eq!(q["timeMax"], "2027-01-02T12:00:00Z");
+        assert_eq!(q["maxResults"], "501", "room for a busy person's 45 days");
+        assert_eq!(out["start"], "2026-11-17T12:00:00Z");
+    }
+
+    #[test]
+    fn include_cancelled_asks_show_deleted_and_keeps_them() {
+        let mut gone = stored("g-c", json!(null), true, ME, "UTC");
+        gone["status"] = json!("cancelled");
+        let m = Mock::new(vec![(200, json!({ "items": [gone.clone()] }))]);
+        let out = ok(&linked::events_with(&gcal(&m), &inbox(Level::Read), &params(&[("start", "2026-10-19"), ("end", "2026-10-26"), ("includeCancelled", "1")]), at("2026-10-17T00:00:00Z")));
+        assert_eq!(m.seen()[0].query()["showDeleted"], "true");
+        assert_eq!(out["events"][0]["status"], "cancelled");
+        let m = Mock::new(vec![(200, json!({ "items": [gone] }))]);
+        let out = ok(&linked::events_with(&gcal(&m), &inbox(Level::Read), &params(&[("start", "2026-10-19"), ("end", "2026-10-26")]), at("2026-10-17T00:00:00Z")));
+        assert_eq!(out["events"], json!([]), "cancelled are left out by default");
+    }
+
+    /// CV-2 / §3.2: a read-only link refuses every write before any request.
+    #[test]
+    fn a_read_only_link_refuses_writes_before_any_request() {
+        let m = Mock::new(vec![]);
+        let g = ro(&[], false);
+        let w = write(json!({ "project": "p1", "title": "t", "start": "2026-10-20T16:00:00Z", "end": "2026-10-20T17:00:00Z" }));
+        for r in [
+            linked::create_with(&gcal(&m), &g, &w),
+            linked::update_with(&gcal(&m), &g, "e1/primary", "ev_tok", &w),
+            linked::delete_with(&gcal(&m), &g, "e1/primary", "ev_tok"),
+        ] {
+            assert!(r.status.starts_with("409"), "{} {}", r.status, r.body);
+            assert_eq!(body(&r)["error"]["reason"], "read_only_link");
+            assert_eq!(body(&r)["error"]["cap"], "calendar.write");
+        }
+        assert!(m.seen().is_empty(), "nothing reached Google");
+    }
+
+    /// §3.2: a read-only link shows its primary plus the owner's opt-ins;
+    /// any other calendar is the masked not_found, for events and show.
+    #[test]
+    fn a_read_only_link_masks_calendars_not_opted_in() {
+        // list: primary + Consults (opted in), not Family.
+        let m = Mock::new(vec![(200, cal_list())]);
+        let out = ok(&linked::list_with(&gcal(&m), &ro(&[TEAM_CAL], false)));
+        let ids: Vec<&str> = out["calendars"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, [ME, TEAM_CAL]);
+        assert_eq!(out["access"], "read-only");
+        // events on a calendar not opted in: one list read, then not_found.
+        let m = Mock::new(vec![(200, cal_list())]);
+        let r = linked::events_with(&gcal(&m), &ro(&[], false), &params(&[("calendar", TEAM_CAL), ("start", "2026-10-19"), ("end", "2026-10-26")]), at("2026-10-17T00:00:00Z"));
+        assert!(r.status.starts_with("404"), "{} {}", r.status, r.body);
+        assert_eq!(code(&r), "not_found");
+        assert_eq!(m.seen().len(), 1, "no event list was read");
+        let m = Mock::new(vec![(200, cal_list())]);
+        let r = linked::events_with(&gcal(&m), &ro(&[], false), &params(&[("calendar", "unknown@group.calendar.google.com")]), at("2026-10-17T00:00:00Z"));
+        assert_eq!(code(&r), "not_found", "an unknown calendar answers the same");
+        // the primary (by name or address) and an opted-in one read.
+        for (cal, opted) in [("primary", vec![]), (ME, vec![]), (TEAM_CAL, vec![TEAM_CAL])] {
+            let m = Mock::new(vec![(200, json!({ "items": [] }))]);
+            ok(&linked::events_with(&gcal(&m), &ro(&opted, false), &params(&[("calendar", cal), ("start", "2026-10-19"), ("end", "2026-10-26")]), at("2026-10-17T00:00:00Z")));
+        }
+        // show of an event on a calendar not opted in: not_found, never fetched.
+        let m = Mock::new(vec![(200, cal_list())]);
+        let r = linked::show_with(&gcal(&m), &ro(&[], false), &format!("e1/{TEAM_CAL}"), "ev_tok");
+        assert_eq!(code(&r), "not_found");
+        assert!(m.seen().iter().all(|s| !s.path().contains("/events/")), "the event was never read");
+        // a read-write (0.46.1) link keeps every calendar (GC-23).
+        let m = Mock::new(vec![(200, cal_list())]);
+        let out = ok(&linked::list_with(&gcal(&m), &inbox(Level::Read)));
+        assert_eq!(out["calendars"].as_array().unwrap().len(), 3);
+        assert_eq!(out["access"], "read-write");
+    }
+
+    /// §3.2 + Q5: with descriptions omitted, show and events --full answer
+    /// description null + redacted, and the join link is still read out.
+    #[test]
+    fn omitted_descriptions_leave_only_the_join_values() {
+        let m = Mock::new(vec![(200, hidden_invite())]);
+        let out = ok(&linked::show_with(&gcal(&m), &ro(&[], true), "g-hid/primary", "ev_tok"));
+        let e = &out["event"];
+        assert_eq!(e["description"], Value::Null);
+        assert_eq!(e["redacted"], json!(["description"]));
+        assert_eq!(e["join"]["meeting_id"], "89876543210");
+        assert_eq!(e["join"]["url"], "https://us02web.zoom.us/j/89876543210?pwd=SECRET");
+        let s = out.to_string();
+        for leak in ["Private", "mornings", "Passcode", "445566"] {
+            assert!(!s.contains(leak), "{leak} leaked: {s}");
+        }
+        let m = Mock::new(vec![(200, json!({ "items": [hidden_invite()] }))]);
+        let out = ok(&linked::events_with(&gcal(&m), &ro(&[], true), &params(&[("start", "2026-11-19"), ("end", "2026-11-26"), ("full", "1")]), at("2026-11-18T00:00:00Z")));
+        assert_eq!(out["events"][0]["description"], Value::Null);
+        assert!(!out.to_string().contains("445566"));
+        // Not omitted: the full text is there.
+        let m = Mock::new(vec![(200, hidden_invite())]);
+        let out = ok(&linked::show_with(&gcal(&m), &ro(&[], false), "g-hid/primary", "ev_tok"));
+        assert!(out["event"]["description"].as_str().unwrap().contains("Private"));
+        assert!(out["event"].get("redacted").is_none());
     }
 }

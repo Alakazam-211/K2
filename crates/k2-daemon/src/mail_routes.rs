@@ -286,6 +286,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/calendar/show" => crate::mail::calendar::handle_show(params),
         "/cli/mail/calendar/freebusy" => crate::mail::calendar::handle_freebusy(params),
         "/cli/mail/calendar/wait" => crate::mail::calendar::handle_wait(params),
+        // Calendar S1: which calendars a read-only link shows (POST = the
+        // owner's add/remove).
+        "/cli/mail/calendar/calendars" => crate::mail::calendar_link_routes::handle_calendars_get(params),
         // Calendars S4: groups + sharing (mail-manage surface; the
         // handlers refuse a change that widens the calling agent).
         "/cli/mail/group" => crate::mail::calendar_share::handle_group_get(params),
@@ -380,6 +383,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/calendar/create"
         | "/cli/mail/calendar/update"
         | "/cli/mail/calendar/delete"
+        // Calendar S1: the link request posts a card (POST-only).
+        | "/cli/mail/calendar/link-request"
+        | "/cli/mail/access/calendar-privacy"
         // Calendars S4: POST-only mutations.
         | "/cli/mail/group/delete"
         | "/cli/mail/calendar/manage"
@@ -454,6 +460,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/access/set-primary" => routes_access::handle_set_primary(body),
         "/cli/mail/access/set-level" => routes_access::handle_set_level(body),
         "/cli/mail/access/set-manage" => routes_access::handle_set_manage(body),
+        // Calendar S1 (§3.2): per-workspace "omit event descriptions".
+        "/cli/mail/access/calendar-privacy" => routes_access::handle_calendar_privacy(body),
         // 0081 management/delete action verbs (workspace token; can_manage
         // / can_delete gated in the handlers, NOT owner-level).
         "/cli/mail/move" => routes_messages::handle_move(body),
@@ -543,6 +551,10 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/calendar/share" => crate::mail::calendar_share::handle_share(body),
         "/cli/mail/calendar/unshare" => crate::mail::calendar_share::handle_unshare(body),
         "/cli/mail/calendar/sharing" => crate::mail::calendar_share::handle_sharing_post(body),
+        // Calendar S1: the owner's per-link calendar opt-ins, and an
+        // agent's request for a read-only link (a card).
+        "/cli/mail/calendar/calendars" => crate::mail::calendar_link_routes::handle_calendars_post(body),
+        "/cli/mail/calendar/link-request" => crate::mail::calendar_link_routes::handle_link_request(body),
         _ => CliResponse::not_found(),
     }
 }

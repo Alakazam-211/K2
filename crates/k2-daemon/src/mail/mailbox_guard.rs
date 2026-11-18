@@ -135,6 +135,13 @@ fn is_list_action(action: &str) -> bool {
             | "calendar/list"
             | "calendar/events"
             | "calendar/freebusy"
+            // Calendar S1 (CV-16): a heartbeat polling these every few
+            // minutes logs once per 10 minutes, not 288 rows a day.
+            | "calendar/wait"
+            | "calendar/calendars"
+            | "calendar/changes"
+            | "calendar/watch"
+            | "calendar/watch/log"
             | "reader/inboxes"
             | "reader/folders"
             | "reader/messages"
@@ -454,6 +461,152 @@ pub fn set_reason(reason: Option<&str>) {
 /// 503 when it ends). Long reads check it before dialling the engine.
 pub fn audit_failed() -> bool {
     CTX.with(|c| c.borrow().as_ref().is_some_and(|ctx| ctx.audit_failed))
+}
+
+// ── Calendar S1: agent reads and governance events (prd-google-calendar-
+// link-v1 §3.9, GC-13, vs-live-2 CV-16) ─────────────────────────────────
+
+/// One row written outside a [`run`] context (an agent passport, or a
+/// background flow), list-shaped actions inside the 10-minute window.
+#[allow(clippy::too_many_arguments)]
+fn write_plain_row(
+    conn: &rusqlite::Connection,
+    actor: &str,
+    role: &str,
+    source: Source,
+    inbox_id: &str,
+    address: &str,
+    workspace: Option<&str>,
+    action: &str,
+    message_ref: Option<&str>,
+) -> rusqlite::Result<Option<i64>> {
+    let at = now_secs();
+    if is_list_action(action) {
+        let seen: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM mail_reader_audit WHERE actor = ?1 AND inbox_source = ?2 \
+             AND inbox_id = ?3 AND action = ?4 AND outcome = 'ok' AND at > ?5",
+            rusqlite::params![actor, source.as_str(), inbox_id, action, at - LIST_WINDOW_SECS],
+            |r| r.get(0),
+        )?;
+        if seen > 0 {
+            return Ok(None);
+        }
+    }
+    let (person_kind, _) = inbox_kind(conn, source, inbox_id);
+    conn.execute(
+        "INSERT INTO mail_reader_audit (at, actor, actor_role, inbox_source, inbox_id, address, \
+         inbox_kind, own, workspace_id, action, message_ref, ip_hint, outcome, reason) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, NULL, 'ok', NULL)",
+        rusqlite::params![
+            at,
+            actor,
+            role,
+            source.as_str(),
+            inbox_id,
+            address,
+            if person_kind { "person" } else { "agent" },
+            workspace,
+            action,
+            message_ref,
+        ],
+    )?;
+    Ok(Some(conn.last_insert_rowid()))
+}
+
+/// An AGENT's read of a linked (person's) calendar, logged as
+/// `actor = agent:<project_id>`, `actor_role = agent` before anything is
+/// fetched (§3.9). A no-op when a login or the owner token is calling
+/// (the access layer logged them) and for background work with no
+/// passport. The tracker's own polls are not callers and never log here
+/// (CV-16). `Err` = the log couldn't be written: 503, nothing is read.
+pub fn log_agent_read(
+    project_id: &str,
+    source: Source,
+    inbox_id: &str,
+    address: &str,
+    action: &str,
+    message_ref: Option<&str>,
+) -> Result<(), CliResponse> {
+    if active() || source != Source::Linked {
+        return Ok(());
+    }
+    if crate::caller_workspace::request_principal().is_none() {
+        return Ok(());
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    write_plain_row(
+        &conn,
+        &format!("agent:{project_id}"),
+        "agent",
+        source,
+        inbox_id,
+        address,
+        Some(project_id),
+        action,
+        message_ref,
+    )
+    .map(|_| ())
+    .map_err(|e| {
+        k2_core::log_debug!("[mail/guard] agent audit write failed: {e}");
+        audit_unavailable()
+    })
+}
+
+/// Who is changing something, for a governance row: the login or owner
+/// token of this request, else the agent passport, else the daemon.
+pub fn governance_actor() -> (String, String) {
+    if let Some(v) = viewer_info() {
+        return (v.actor, v.role.to_string());
+    }
+    if let Some(p) = crate::caller_workspace::request_principal() {
+        return (format!("agent:{}", p.workspace_uuid), "agent".to_string());
+    }
+    ("daemon".to_string(), "daemon".to_string())
+}
+
+/// A governance event on a linked inbox (`link`, `grant`, `set_level`,
+/// `omit_description_on`, `calendar_add`, …), written BEFORE the change.
+/// Inside a [`run`] the row gets the call's HTTP status at the end. Never
+/// a token, code, pasted address or description. `Err` = 503, the caller
+/// changes nothing.
+pub fn log_governance(
+    source: Source,
+    inbox_id: &str,
+    address: &str,
+    workspace: Option<&str>,
+    action: &str,
+) -> Result<(), CliResponse> {
+    let (actor, role) = governance_actor();
+    log_governance_as(&actor, &role, source, inbox_id, address, workspace, action)
+}
+
+/// [`log_governance`] with a known actor (a link that completes on its own
+/// thread, after the request that started it).
+pub fn log_governance_as(
+    actor: &str,
+    role: &str,
+    source: Source,
+    inbox_id: &str,
+    address: &str,
+    workspace: Option<&str>,
+    action: &str,
+) -> Result<(), CliResponse> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let id = write_plain_row(&conn, actor, role, source, inbox_id, address, workspace, action, None).map_err(|e| {
+        k2_core::log_debug!("[mail/guard] governance audit write failed: {e}");
+        audit_unavailable()
+    })?;
+    drop(conn);
+    if let Some(id) = id {
+        CTX.with(|c| {
+            if let Some(ctx) = c.borrow_mut().as_mut() {
+                ctx.rows.push(id);
+            }
+        });
+    }
+    Ok(())
 }
 
 /// [`check`] for an address (hosted or linked). An address K2 has no row

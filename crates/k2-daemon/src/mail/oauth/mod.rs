@@ -1573,30 +1573,55 @@ pub fn admin_consent_url(client_id: &str) -> String {
 
 // ── Scope sets per feature (PRD §3.2) ────────────────────────────────────
 
+/// How much of a calendar a link may use (prd-google-calendar-link-v1
+/// §3.1). `Read` is the `calendar-read` feature: read-only scopes, and
+/// writes refused with `read_only_link` whatever the token's scope string
+/// says (vs-live-2 CV-2). `Write` is the 0.46.1 `calendar` feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum CalAccess {
+    #[default]
+    None,
+    Read,
+    Write,
+}
+
+impl CalAccess {
+    /// Any calendar at all.
+    pub fn any(self) -> bool {
+        self != CalAccess::None
+    }
+}
+
 /// What a link is consented for. A link always carries the identity
 /// scopes; `mail` and `calendar` add their sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Features {
     pub mail: bool,
-    pub calendar: bool,
+    pub calendar: CalAccess,
 }
 
 impl Features {
-    pub const MAIL: Features = Features { mail: true, calendar: false };
+    pub const MAIL: Features = Features { mail: true, calendar: CalAccess::None };
+    /// A new calendar link (`k2 cal link`, Settings → Connect a calendar):
+    /// calendar only, read-only.
+    pub const CALENDAR_READ: Features = Features { mail: false, calendar: CalAccess::Read };
 
-    /// Parse `mail`, `calendar`, `mail,calendar` (commas or spaces, any
-    /// order, case-insensitive). Empty → `None` (the caller picks the
-    /// default). Unknown words are a usage error.
+    /// Parse `mail`, `calendar`, `calendar-read` and combinations (commas
+    /// or spaces, any order, case-insensitive). Empty → `None` (the caller
+    /// picks the default). Unknown words are a usage error. `calendar` and
+    /// `calendar-read` together are `calendar` (write covers read).
     pub fn parse(raw: &str) -> Result<Option<Features>, String> {
         let mut f = Features::default();
         let mut any = false;
         for w in raw.split(|c: char| c == ',' || c.is_whitespace()).filter(|w| !w.is_empty()) {
             match w.to_ascii_lowercase().as_str() {
                 "mail" => f.mail = true,
-                "calendar" | "calendars" => f.calendar = true,
+                "calendar" | "calendars" => f.calendar = f.calendar.max(CalAccess::Write),
+                "calendar-read" | "calendar_read" => f.calendar = f.calendar.max(CalAccess::Read),
                 other => {
                     return Err(format!(
-                        "unknown feature '{other}' — use mail, calendar or mail,calendar"
+                        "unknown feature '{other}' — use mail, calendar-read (read-only calendar) \
+                         or calendar (read and write), e.g. mail,calendar-read"
                     ))
                 }
             }
@@ -1605,18 +1630,38 @@ impl Features {
         Ok(if any { Some(f) } else { None })
     }
 
-    /// The stored spelling (`features` column): `mail`, `calendar` or
-    /// `mail,calendar`.
+    /// The stored spelling (`features` column): `mail`, `calendar`,
+    /// `calendar-read`, `mail,calendar` or `mail,calendar-read`.
     pub fn as_db(self) -> String {
-        match (self.mail, self.calendar) {
-            (true, true) => "mail,calendar".to_string(),
-            (false, true) => "calendar".to_string(),
+        let cal = match self.calendar {
+            CalAccess::None => None,
+            CalAccess::Read => Some("calendar-read"),
+            CalAccess::Write => Some("calendar"),
+        };
+        match (self.mail, cal) {
+            (true, Some(c)) => format!("mail,{c}"),
+            (false, Some(c)) => c.to_string(),
             _ => "mail".to_string(),
         }
     }
 
+    /// Both sets; the calendar level is the higher of the two.
     pub fn union(self, other: Features) -> Features {
-        Features { mail: self.mail || other.mail, calendar: self.calendar || other.calendar }
+        Features { mail: self.mail || other.mail, calendar: self.calendar.max(other.calendar) }
+    }
+}
+
+/// The calendar level a linked row may use: what its grant covers, capped
+/// by what it was STORED as (vs-live-2 CV-2). Google can hand back an old
+/// write scope on an upgrade (`include_granted_scopes=true`), so a row
+/// stored `calendar-read` stays read-only whatever its scope string says.
+/// A row stored without a calendar feature keeps the 0.46.1 rule (its
+/// grant decides), so links made before 0.46.16 keep their access.
+pub fn calendar_level(provider: OauthProvider, stored_features: &str, granted: &str) -> CalAccess {
+    let granted = features_granted(provider, granted).calendar;
+    match Features::parse(stored_features).ok().flatten().map(|f| f.calendar) {
+        Some(CalAccess::Read) => granted.min(CalAccess::Read),
+        _ => granted,
     }
 }
 
@@ -1640,21 +1685,34 @@ const MS_IDENTITY: &[&str] =
 const MS_MAIL: &[&str] =
     &["https://graph.microsoft.com/Mail.ReadWrite", "https://graph.microsoft.com/Mail.Send"];
 const MS_CALENDAR: &[&str] = &["https://graph.microsoft.com/Calendars.ReadWrite"];
+/// `calendar-read` (prd-google-calendar-link-v1 §3.1): Google's
+/// `calendar.events.readonly` ("View events on all your calendars", which
+/// `events.list` / `events.get` accept, shared calendars included) plus the
+/// calendar list. Both are sensitive, not restricted: no CASA.
+const GOOGLE_CALENDAR_READ: &[&str] = &[
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+];
+/// `calendar-read` on Microsoft: `Calendars.Read`, the least-privileged
+/// delegated permission for `calendarView` and its delta; no admin consent.
+const MS_CALENDAR_READ: &[&str] = &["https://graph.microsoft.com/Calendars.Read"];
 
 /// The space-separated scope string for `features` (PRD §3.2 table).
 /// Both providers return ONE refresh token for the whole set, so a row
 /// keeps one vaulted bundle whatever it was consented for.
 pub fn scope_for(provider: OauthProvider, features: Features) -> String {
-    let (identity, mail, calendar) = match provider {
-        OauthProvider::Gmail => (GOOGLE_IDENTITY, GOOGLE_MAIL, GOOGLE_CALENDAR),
-        OauthProvider::Microsoft => (MS_IDENTITY, MS_MAIL, MS_CALENDAR),
+    let (identity, mail, cal_write, cal_read) = match provider {
+        OauthProvider::Gmail => (GOOGLE_IDENTITY, GOOGLE_MAIL, GOOGLE_CALENDAR, GOOGLE_CALENDAR_READ),
+        OauthProvider::Microsoft => (MS_IDENTITY, MS_MAIL, MS_CALENDAR, MS_CALENDAR_READ),
     };
     let mut out: Vec<&str> = identity.to_vec();
     if features.mail {
         out.extend_from_slice(mail);
     }
-    if features.calendar {
-        out.extend_from_slice(calendar);
+    match features.calendar {
+        CalAccess::Write => out.extend_from_slice(cal_write),
+        CalAccess::Read => out.extend_from_slice(cal_read),
+        CalAccess::None => {}
     }
     out.join(" ")
 }
@@ -1674,17 +1732,28 @@ pub fn scope_granted(granted: &str, want: &str) -> bool {
 }
 
 /// The scopes K2 itself would need for each feature, checked against a
-/// granted string: the features the grant actually covers.
+/// granted string: the features the grant actually covers. Calendar is
+/// `Write` with Google's `calendar.events` / Graph's `Calendars.ReadWrite`,
+/// else `Read` with `calendar.events.readonly` / `Calendars.Read`.
 pub fn features_granted(provider: OauthProvider, granted: &str) -> Features {
     let all = |set: &[&str]| set.iter().all(|s| scope_granted(granted, s));
+    let level = |write: bool, read: bool| {
+        if write {
+            CalAccess::Write
+        } else if read {
+            CalAccess::Read
+        } else {
+            CalAccess::None
+        }
+    };
     match provider {
         OauthProvider::Gmail => Features {
             mail: all(GOOGLE_MAIL),
-            calendar: all(&GOOGLE_CALENDAR[..1]),
+            calendar: level(all(&GOOGLE_CALENDAR[..1]), all(&GOOGLE_CALENDAR_READ[..1])),
         },
         OauthProvider::Microsoft => Features {
             mail: scope_granted(granted, "Mail.ReadWrite"),
-            calendar: all(MS_CALENDAR),
+            calendar: level(all(MS_CALENDAR), all(MS_CALENDAR_READ)),
         },
     }
 }

@@ -1821,6 +1821,9 @@ pub fn remove_inbox_with(
     // Cascade the S11 access grants in code (inbox_id is not a FK —
     // the 0064 idiom): no grant row may outlive the inbox it points at.
     crate::mail::access::cascade_grants(&conn, crate::mail::access::Source::Linked, &row.id);
+    // Calendar S1 (0316): its opted-in calendars and privacy prefs go too
+    // (the FK cascade does the same; this keeps unlink right on its own).
+    crate::mail::calendar_link::purge_link(&conn, &row.id).map_err(ExtError::Engine)?;
     conn.execute(
         "DELETE FROM mail_external_inboxes WHERE id = ?1",
         rusqlite::params![row.id],

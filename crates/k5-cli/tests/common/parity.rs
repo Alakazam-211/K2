@@ -71,6 +71,8 @@ pub fn cli_k2() -> PathBuf {
 static N: AtomicUsize = AtomicUsize::new(0);
 
 pub struct Rig {
+    /// The first word, before each case's arguments; empty for none (the
+    /// program's name alone, which the shell reads as `help`).
     pub verb: &'static str,
     pub dir: PathBuf,
     pub home: PathBuf,
@@ -179,7 +181,7 @@ impl Rig {
         ] {
             std::fs::create_dir_all(d).unwrap();
         }
-        let short = verb.chars().next().expect("a verb");
+        let short = verb.chars().next().unwrap_or('h');
         let stub = Stub::start(&PathBuf::from(format!(
             "/tmp/k5{short}-{}-{n}.sock",
             std::process::id()
@@ -200,6 +202,35 @@ impl Rig {
             dead_sock,
             stub,
             no_python3: OnceCell::new(),
+        }
+    }
+
+    /// The words after the program's name: the verb, if there is one,
+    /// then the case's arguments.
+    pub fn argv(&self, case: &Case) -> Vec<&'static str> {
+        let verb = (!self.verb.is_empty()).then_some(self.verb);
+        verb.into_iter().chain(case.args.iter().copied()).collect()
+    }
+
+    /// The word the shell's requests name the command by in
+    /// `X-K5-Cli-Noun` (`_k5_headers`): `${1:-help}`, or `other` when it
+    /// is not a lower-case word (`_K5_NOUN_RE`).
+    pub fn noun(&self) -> &'static str {
+        let noun = if self.verb.is_empty() {
+            "help"
+        } else {
+            self.verb
+        };
+        let b = noun.as_bytes();
+        let word = b.len() <= 32
+            && b[0].is_ascii_lowercase()
+            && b[1..]
+                .iter()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-');
+        if word {
+            noun
+        } else {
+            "other"
         }
     }
 
@@ -279,10 +310,7 @@ impl Rig {
                     .find(|(k, _)| k == name)
                     .map(|(_, v)| OsString::from(v))
             };
-            let args: Vec<OsString> = std::iter::once(self.verb)
-                .chain(case.args.iter().copied())
-                .map(OsString::from)
-                .collect();
+            let args: Vec<OsString> = self.argv(case).into_iter().map(OsString::from).collect();
             let verdict = k5_cli::passport::decide(
                 k5_cli::passport::facts(&args, lookup),
                 k5_cli::passport::live_session_ancestor,
@@ -291,7 +319,7 @@ impl Rig {
                 cmd.env("K5_CLI_WOULD_REFUSE", "1");
             }
         }
-        cmd.arg(self.verb).args(case.args);
+        cmd.args(self.argv(case));
         let o = cmd.output().unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
         let signal = o.status.signal();
         Out {
@@ -345,7 +373,7 @@ impl Rig {
             .stub
             .log()
             .iter()
-            .map(|r| normalise(r, true, self.verb, c.name))
+            .map(|r| normalise(r, true, self.noun(), c.name))
             .collect();
         (out, log)
     }
@@ -369,8 +397,9 @@ impl Rig {
         let sent = self.stub.log();
         println!("-- rust, no python3: {out:?}");
         if handed {
+            let words: Vec<OsString> = self.argv(c).into_iter().map(OsString::from).collect();
             let line = k5_cli::fallthrough::FrontError::NoPython {
-                noun: self.verb.to_string(),
+                noun: k5_cli::fallthrough::noun(&words),
             }
             .to_string();
             assert_eq!(
@@ -392,7 +421,7 @@ impl Rig {
         );
         let log: Vec<String> = sent
             .iter()
-            .map(|r| normalise(r, true, self.verb, name))
+            .map(|r| normalise(r, true, self.noun(), name))
             .collect();
         assert_eq!(
             log,
@@ -444,7 +473,7 @@ impl Rig {
                 self.stub
                     .log()
                     .iter()
-                    .map(|r| normalise(r, native, self.verb, name))
+                    .map(|r| normalise(r, native, self.noun(), name))
                     .collect::<Vec<_>>(),
             );
             outs.push(out);

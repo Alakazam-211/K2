@@ -13,6 +13,11 @@
 //! session checks first ([`session_checks`]): with a passport and a live
 //! socket they pass, and the page prints.
 //!
+//! The daily tier of the help (`k2`, `k2 help`, `k2 --help`:
+//! [`daily_page`]) is two files with one line between them while
+//! permission cards are on, which the shell asks the daemon with a
+//! passport ([`crate::cards`]); its switch is [`DAILY_NATIVE`].
+//!
 //! `k2 study` (`cli/src/study-command.sh`): its arguments are read in
 //! order, as the shell reads them. The binary answers the list (`study`,
 //! `study list`), the usage (`--help` or `-h` anywhere after the errors
@@ -433,6 +438,66 @@ pub fn help_page(
     })
 }
 
+/// The command lines that print the daily tier of `k2 help`
+/// (`cmd_help_v2_daily`, `cli/src/help.sh`), the first thing anyone
+/// types: `k2` alone, `k2 help` and `k2 --help`. `tests/cli/help_native.sh`
+/// proves from bash's own trace that bash does nothing else for them
+/// but the cards probe. `-h`, an empty word and `help <word>` for a word
+/// with no page of its own print the same tier, and stay the shell's.
+pub const DAILY_FORMS: &[&[&str]] = &[&[], &["help"], &["--help"]];
+
+/// The daily tier for [`DAILY_FORMS`]. True: the binary asks the daemon
+/// whether permission cards are on as the shell does ([`crate::cards`])
+/// and prints the tier for the answer. False: the shell answers them.
+pub const DAILY_NATIVE: bool = false;
+
+/// The daily tier's line while permission cards are on, between
+/// `_daily.txt` and `_daily-end.txt` (`cmd_help_v2_daily`'s `echo`).
+pub const CARDS_HELP_LINE: &str = concat!(
+    "  permission request <action> --why \"\u{2026}\"   Ask a person to allow what ",
+    k2_client::product_name!(),
+    " refused you (k2 study permissions)"
+);
+
+/// Whether `args` (the words after the program's name) is one of
+/// [`DAILY_FORMS`].
+pub fn daily(args: &[&str]) -> bool {
+    DAILY_FORMS.contains(&args)
+}
+
+/// `cmd_help_v2_daily`: `_daily.txt`, [`CARDS_HELP_LINE`] while cards
+/// are `on`, then `_daily-end.txt`.
+pub fn daily_text(on: bool) -> Option<String> {
+    let (head, end) = (text::help("_daily")?, text::help("_daily-end")?);
+    let mut out = String::with_capacity(head.len() + CARDS_HELP_LINE.len() + 1 + end.len());
+    out.push_str(head);
+    if on {
+        out.push_str(CARDS_HELP_LINE);
+        out.push('\n');
+    }
+    out.push_str(end);
+    Some(out)
+}
+
+/// The daily tier, or `None` when the shell answers. The connection gate
+/// needs a port and a token for help. Its tool, `help`, is an open one,
+/// so the session checks pass it ([`open_tool`]). Then the shell asks
+/// whether permission cards are on (`_permission_cli_enabled`): with no
+/// passport it asks nothing and they are off; with one, the binary asks
+/// the same way ([`cards::ask`]), or hands the command over where it
+/// can't be sure to.
+pub fn daily_page(p: &Prelude, env: &Env, would_refuse: impl FnOnce() -> bool) -> Option<Page> {
+    if !DAILY_NATIVE || !(p.port && p.token) {
+        return None;
+    }
+    let on = cards::on(cards::ask(env, p, would_refuse)?);
+    Some(Page {
+        text: daily_text(on)?.into(),
+        stderr: false,
+        exit: Exit::Ok,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -820,6 +885,85 @@ mod tests {
                 Exit::ALL.iter().any(|e| e.code() == i32::from(f.code)),
                 "{f:?}"
             );
+        }
+    }
+
+    /// The router sends the three forms to `cmd_help` with no word, which
+    /// prints the daily tier as `cmd_help_v2_daily` puts it together.
+    #[test]
+    fn the_daily_tier_is_the_shell_s() {
+        let router = src("router.sh");
+        assert!(router.contains("case \"${1:-help}\" in\n"));
+        assert!(router.contains(
+            "    help|--help|-h)\n        # Guard against `set -u` when no trailing args.\n        if [ $# -gt 0 ]; then shift; fi\n        cmd_help \"$@\"\n        ;;\n"
+        ));
+        assert!(src("wiki.sh").contains(
+            "    case \"${1:-}\" in\n        -a|--advanced|advanced)   cmd_help_v2_advanced ;;\n"
+        ));
+        assert!(src("wiki.sh").contains("        '')                       cmd_help_v2_daily ;;\n"));
+        let daily = format!(
+            "cmd_help_v2_daily() {{\n    cat <<'EOF'\n%include cli/text/help/_daily.txt\nEOF\n    # Permission cards (Beta): one line, only while both switches are on\n    # for this agent (PRD rev 3.1 \u{a7}11.4). Off = today's text.\n    if _permission_cli_enabled; then\n        echo '{CARDS_HELP_LINE}'\n    fi\n    cat <<'EOF'\n%include cli/text/help/_daily-end.txt\nEOF\n}}\n"
+        );
+        assert!(src("help.sh").contains(&daily), "cmd_help_v2_daily moved");
+        let (head, end) = (
+            text::help("_daily").unwrap(),
+            text::help("_daily-end").unwrap(),
+        );
+        assert_eq!(daily_text(false).unwrap(), format!("{head}{end}"));
+        assert_eq!(
+            daily_text(true).unwrap(),
+            format!("{head}{CARDS_HELP_LINE}\n{end}")
+        );
+        assert!(head.ends_with('\n') && !CARDS_HELP_LINE.contains('\''));
+    }
+
+    #[test]
+    fn the_daily_forms() {
+        for yes in [&[][..], &["help"], &["--help"]] {
+            assert!(daily(yes), "{yes:?}");
+        }
+        for no in [
+            &["-h"][..],
+            &[""],
+            &["help", "nope"],
+            &["--help", "mail"],
+            &["help", ""],
+            &["HELP"],
+            &["help-advanced"],
+        ] {
+            assert!(!daily(no), "{no:?}");
+        }
+        // help, --help and no word are the open tool `help`: the shell's
+        // session checks pass them, so the binary has none to run.
+        for verb in ["help", "--help"] {
+            assert!(!tools::is_id(tools::tool_id(verb, "")), "{verb}");
+        }
+    }
+
+    #[test]
+    fn the_daily_page_needs_the_gate_and_its_switch() {
+        // No passport: cards off, nothing asked.
+        let env = Env::of(&[("HOME", "/nonexistent/k5-daily")]);
+        let never = || -> bool { panic!("nothing is asked") };
+        let owner = prelude(true, true, false, false);
+        let page = daily_page(&owner, &env, never);
+        if DAILY_NATIVE {
+            let page = page.expect("the tier");
+            assert_eq!(
+                (page.text.as_ref(), page.stderr, page.exit),
+                (daily_text(false).unwrap().as_str(), false, Exit::Ok)
+            );
+            let sock = prelude(true, true, false, true);
+            assert!(daily_page(&sock, &env, never).is_some(), "HOOK_SOCK set");
+        } else {
+            assert_eq!(page, None);
+        }
+        for no in [
+            prelude(false, true, false, false),
+            prelude(true, false, false, false),
+            prelude(false, false, true, true),
+        ] {
+            assert_eq!(daily_page(&no, &env, never), None, "{no:?}");
         }
     }
 }

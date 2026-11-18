@@ -142,6 +142,9 @@ fn main() {
         Route::Help(form) => page(who, &args, |p, env| {
             pages::help_page(form, p, env, || passport::current(&args).would_refuse())
         }),
+        Route::Daily => page(who, &args, |p, env| {
+            pages::daily_page(p, env, || passport::current(&args).would_refuse())
+        }),
         Route::Fallthrough => shell(who, &args),
     };
     trace::finish("command");

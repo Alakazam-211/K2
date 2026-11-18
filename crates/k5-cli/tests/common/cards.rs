@@ -48,6 +48,24 @@ fn moved(r: &Rig) {
     std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub.port)).unwrap();
 }
 
+/// The row with a passport and neither a socket nor a port.
+pub const NO_SOCKET_NO_PORT: &str = "no socket and no port: nothing asked, off";
+
+/// The rows for a help page (the daily tier: `k2`, `k2 help`,
+/// `k2 --help`), which exits 0 either way: [`rows`], but the shell's
+/// connection gate wants a port for help, so with none it stops at the
+/// gate (`Error: Cannot connect to K2.`, exit 1) before anything is asked.
+pub fn help_rows(rig: &Rig, args: &'static [&'static str]) -> Vec<Case> {
+    let mut all = rows(rig, args, 0, 0);
+    let gate = all
+        .iter_mut()
+        .find(|c| c.name == NO_SOCKET_NO_PORT)
+        .expect("the row with no port");
+    gate.name = "no socket and no port: the connection gate, exit 1";
+    gate.code = 1;
+    all
+}
+
 /// The rows for `args`, whose page exits `on_code` with cards on and
 /// `off_code` with them off.
 pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i32) -> Vec<Case> {
@@ -219,12 +237,7 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
                 ("K2_HOOK_TOKEN", super::parity::PASSPORT.to_string()),
                 ("K2_HOOK_SOCK", "{nosock}".to_string()),
             ],
-            row(
-                "no socket and no port: nothing asked, off",
-                vec![],
-                off_code,
-                0,
-            ),
+            row(NO_SOCKET_NO_PORT, vec![], off_code, 0),
         ),
         with(
             with_passport(port, &[("K2_HOOK_SOCK", "{sock}")]),

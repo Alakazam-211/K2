@@ -17,10 +17,12 @@
 //! value), with its connection gate in front of it, exactly as it always
 //! has. No copy of the text lives here: a page is the shell's own file.
 //!
-//! A study page ([`Route::Study`], when the `study` row is `Native`) and
-//! a help form the shell only prints a file for ([`Route::Help`],
-//! [`help_route`]) are pages: the binary prints them when the shell's
-//! environment lets it ([`crate::pages`]), and hands them over otherwise.
+//! A study page ([`Route::Study`], when the `study` row is `Native`), a
+//! help form the shell only prints a file for ([`Route::Help`],
+//! [`help_route`]) and the daily tier of the help (`k2`, `k2 help`,
+//! `k2 --help`: [`Route::Daily`]) are pages: the binary prints them when
+//! the shell's environment lets it ([`crate::pages`]), and hands them
+//! over otherwise.
 
 use crate::pages::{self, Study};
 use crate::route::{self, Noun, Owner};
@@ -75,6 +77,9 @@ pub enum Route {
     Study(Study),
     /// A help form whose page is a file ([`text::HELP_FORMS`]).
     Help(&'static HelpForm),
+    /// `k2`, `k2 help` or `k2 --help`: the daily tier of the help
+    /// ([`pages::daily_page`]).
+    Daily,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -84,10 +89,18 @@ pub fn route(args: &[OsString]) -> Route {
     let found = route::find(route::TABLE, args);
     match (found.owner, found.noun) {
         (Owner::Native, Some(noun)) => native(noun, args),
-        // Nothing is `Spec` yet: there is no runner for it. A help form
-        // the shell only prints a file for is a page.
+        // Nothing is `Spec` yet: there is no runner for it. The daily
+        // tier and a help form the shell only prints a file for are
+        // pages.
+        _ if daily_route(args) => Route::Daily,
         _ => help_route(args).map_or(Route::Fallthrough, Route::Help),
     }
+}
+
+/// Whether `args` prints the daily tier ([`pages::DAILY_FORMS`]).
+fn daily_route(args: &[OsString]) -> bool {
+    let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
+    words.is_some_and(|w| pages::daily(&w))
 }
 
 /// The front's own code for a `Native` row. A form it does not take
@@ -176,9 +189,7 @@ mod tests {
             assert_eq!(route(&args(&[one])), Route::Version, "{one}");
         }
         let rows: &[&[&str]] = &[
-            &[],
-            &["help"],
-            &["--help"],
+            &["-h"],
             &["-V"],
             &["--Version"],
             &["versions"],
@@ -198,6 +209,34 @@ mod tests {
         ];
         for row in rows {
             assert_eq!(route(&args(row)), Route::Fallthrough, "{row:?}");
+        }
+    }
+
+    /// `k2`, `k2 help` and `k2 --help` are the daily tier; the other
+    /// forms that print it stay the shell's.
+    #[test]
+    fn the_daily_forms() {
+        for daily in [&[][..], &["help"], &["--help"]] {
+            assert_eq!(route(&args(daily)), Route::Daily, "{daily:?}");
+        }
+        for other in [
+            &["-h"][..],
+            &[""],
+            &["help", "nope"],
+            &["--help", "nope"],
+            &["help", ""],
+        ] {
+            assert_eq!(route(&args(other)), Route::Fallthrough, "{other:?}");
+        }
+        assert_eq!(
+            route(&args(&["help", "mail"])),
+            Route::Help(text::help_form(&["help", "mail"]).unwrap())
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let not_utf8 = vec![OsString::from_vec(vec![b'h', 0xff])];
+            assert_eq!(route(&not_utf8), Route::Fallthrough);
         }
     }
 
@@ -561,10 +600,9 @@ mod tests {
         // A native row keeps its own help; anything not exactly a form is
         // the shell's.
         assert_eq!(route(&args(&["cli", "--help"])), Route::CliHelp);
+        // The daily tier's forms are [`Route::Daily`] (the_daily_forms).
         for shell in [
-            &["--help"][..],
-            &["help"],
-            &[],
+            &["-h"][..],
             &["mail", "send", "x", "--help"],
             &["help", "nope"],
             &["chat", "--help"],

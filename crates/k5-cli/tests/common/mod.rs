@@ -1,12 +1,14 @@
 //! What the parity tests share: the shell CLI's source, read from the
-//! repo, a way to run a piece of it under bash, and a logging stub
-//! daemon ([`stub`]).
+//! repo, a way to run a piece of it under bash, a logging stub daemon
+//! ([`stub`]), and the rig a native family's parity test runs on
+//! ([`parity`]).
 //!
 //! The source is `cli/src`, found from this crate's folder. It must be
 //! there: a test that can't read it fails, it never skips.
 
 #![allow(dead_code)]
 
+pub mod parity;
 pub mod stub;
 
 use std::path::PathBuf;

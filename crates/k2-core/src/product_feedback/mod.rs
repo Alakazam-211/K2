@@ -28,6 +28,7 @@ pub mod screenshot;
 pub mod scrub;
 pub mod settings;
 pub mod store;
+pub mod teach;
 pub mod wire;
 
 /// The intake, compiled in (PF20).

@@ -27,20 +27,44 @@
 //! - `GET  show?id=` → one row (own; the owner and admins any)
 //! - `POST retry {id}` (`failed` → `queued`), `POST cancel {id}`
 //!   (`queued` → `cancelled`)
-//! - `GET  settings` → `{enabled, agents, agentDiagnostics,
-//!   rememberDiagnostics, canEdit, canSend, why?, message?, endpoint,
-//!   contactAddress, pending, service}`; `POST settings` `{enabled?,
-//!   agents?, agentDiagnostics?}` (the owner or an admin, a person) and
+//! - `GET  settings` → `{enabled, agents, agentPlatform, agentAttach,
+//!   agentDiagnostics, agentsAsked, agentsAskedAt, agentsAskedBy,
+//!   agentScopes, attachParts: [{id, label}], rememberDiagnostics, canEdit,
+//!   canSend, why?, message?, endpoint, contactAddress, pending, service}`;
+//!   `POST settings` `{enabled?, agents?, agentPlatform?, agentAttach?,
+//!   agentDiagnostics?}` (the owner or an admin, a person) and
 //!   `{rememberDiagnostics?}` (any person, for themselves). Each server
 //!   key a write changes is one `product-feedback-settings` row in the
 //!   auth audit (who, the key, old to new).
 //!
+//! **Agents report problems on their own (0.46.17, opt-in).** `agents`
+//! lets agents report CLI problems, `agentPlatform` anything else about
+//! the platform, `agentAttach` lists the parts of the details they may attach
+//! (`attachParts`; `"none"` or `[]` is none, `"all"` every part). Any of
+//! the three in a write is the person's answer: the daemon stamps
+//! `agentsAskedAt` and `agentsAskedBy`; one write sets all three.
+//! `agentDiagnostics` (0.46.11) still works: `true` is every part, `false`
+//! none. While nobody has answered, the parts alone are refused (409
+//! `answer_agents_first`): the answer names `agents` (or `agentPlatform`). **A settings file without `agentsAskedAt` (every server before
+//! 0.46.17, and a new install) is all off for agents** until a person
+//! answers; see `k2_core::product_feedback::settings`.
+//!
+//! An agent's `send` says its `scope`: `cli` (with `command`, the command
+//! it ran) or `platform` (missing = `platform`, the stricter one, for an
+//! older CLI). Neither switch on: 403 `agents_off`; `platform` while only
+//! `agents` is on: 403 `scope_off`. Its attached details are only the parts
+//! allowed (the versions always). The scope and the command go out as the
+//! report's first details section, `agent-report` (the intake takes no
+//! other new field), so the service sees every agent report tagged by
+//! scope and the Sent tab shows it as sent. A person's report has no scope.
+//!
 //! Who: the owner token, a Connect login (Member floor in `route_policy`),
 //! a K2 terminal's passport (a person typing) and an agent's passport. App
 //! passes and API keys: 403 `product_feedback_wrong_credential`. An agent
-//! sends only while `agents` is on, within the box limits (1 a minute and
-//! 3 a day per workspace, 10 a day for all agents), with no contact email.
-//! Only `senderKind` leaves the box; the sender's name stays here.
+//! sends only while a person allowed it (above), within the box limits (1 a
+//! minute and 3 a day per workspace, 10 a day for all agents), with no
+//! contact email. Only `senderKind` leaves the box; the sender's name stays
+//! here.
 
 use std::collections::HashMap;
 
@@ -48,6 +72,7 @@ use serde::Deserialize;
 use serde_json::{json, Value as J};
 
 use k2_core::connect_users::Role;
+use k2_core::{cli_name, product_name};
 use k2_core::product_feedback::store::{self, Row, State};
 use k2_core::product_feedback::{self as pf, now_ms, settings};
 
@@ -253,6 +278,9 @@ fn row_json(c: &Caller, r: &Row, full: bool, shot_on_box: bool) -> J {
         "contactEmail": r.contact_email,
         "hasDiagnostics": r.diagnostics_json.is_some(),
         "hasScreenshot": r.screenshot_meta.is_some(),
+        // An agent report's scope (0.46.17); null for a person's or an
+        // older agent row.
+        "scope": serde_json::from_str::<J>(&r.meta_json).ok().and_then(|m| m.get("scope").cloned()).unwrap_or(J::Null),
     });
     if full {
         v["screenshot"] = match r.screenshot_meta.as_deref().and_then(pf::screenshot::Meta::parse) {
@@ -333,7 +361,21 @@ struct SendBody {
     locale: Option<String>,
     diagnostics: Option<DiagChoice>,
     screenshot: Option<ShotChoice>,
+    /// An agent's: `cli` or `platform` (missing = `platform`).
+    scope: Option<String>,
+    /// An agent's `cli` report: the command it ran.
+    command: Option<String>,
 }
+
+/// The longest `command` an agent report carries, in bytes.
+pub const MAX_COMMAND_BYTES: usize = 1000;
+
+/// The details section every agent report carries first: its scope and,
+/// for `cli`, the command.
+pub const AGENT_REPORT_SECTION: &str = "agent-report";
+
+/// Room kept in an agent's details for [`AGENT_REPORT_SECTION`].
+const AGENT_REPORT_ROOM: usize = 2048;
 
 /// The screenshot the person confirmed: the draft, and the hash of the
 /// bytes they saw.
@@ -370,8 +412,18 @@ fn need_owner() -> CliResponse {
     refuse(
         "403 Forbidden",
         "diagnostics_need_owner",
-        "An agent can't consent for a person. Ask your owner to allow agents to include K2 details: k2 send-feedback settings --agent-diagnostics on",
+        concat!("An agent can't consent for a person. No part of the ", product_name!(), " details is allowed for agents on this server; send it again without them, or ask your owner which parts agents may attach (Settings, then Feedback)."),
     )
+}
+
+/// An agent's share of a details bundle: the versions (always) and the
+/// parts the person allowed, in the bundle's order. Everything else
+/// ("Where you were" among them) is left out.
+fn agent_parts(sections: Vec<pf::diagnostics::Section>, allowed: &[String]) -> Vec<pf::diagnostics::Section> {
+    sections
+        .into_iter()
+        .filter(|s| s.id == settings::ALWAYS_PART || allowed.iter().any(|a| *a == s.id))
+        .collect()
 }
 
 /// `client` for this caller: a passport is always `cli`.
@@ -390,9 +442,19 @@ fn diagnostics(c: &Caller, body: &[u8]) -> CliResponse {
         Ok(b) => b,
         Err(r) => return r,
     };
-    if c.is_agent() && !settings::load().agent_diagnostics {
-        return need_owner();
-    }
+    // An agent: only the parts the person allowed (none = refused).
+    let agent_allowed = if c.is_agent() {
+        let policy = settings::load().agent_policy();
+        if !policy.cli {
+            return agents_off();
+        }
+        if policy.attach.is_empty() {
+            return need_owner();
+        }
+        Some(policy.attach)
+    } else {
+        None
+    };
     let client = match client_of(c, b.client.as_deref()) {
         Ok(x) => x,
         Err(r) => return r,
@@ -407,6 +469,11 @@ fn diagnostics(c: &Caller, body: &[u8]) -> CliResponse {
     let now = now_ms();
     let (facts, logs, book) = crate::product_feedback_diag::gather(&ctx);
     let sections = pf::diagnostics::build(&facts, &logs, &book, now);
+    let sections = match &agent_allowed {
+        // Room for the agent-report section the send puts first.
+        Some(allowed) => pf::diagnostics::fit(agent_parts(sections, allowed), pf::MAX_DIAGNOSTICS_BYTES - AGENT_REPORT_ROOM),
+        None => sections,
+    };
     let draft = pf::diagnostics::put_draft(&c.sender, sections, now);
     let list: Vec<J> = draft
         .sections
@@ -428,23 +495,74 @@ fn parse<T: for<'de> Deserialize<'de> + Default>(body: &[u8]) -> Result<T, CliRe
     serde_json::from_slice(body).map_err(|e| bad("bad_json", format!("The body isn't the JSON this route takes: {e}")))
 }
 
-/// Why `c` may not send now (PF7, PF8, PF14, PF19), as the refusal.
-fn send_gate(c: &Caller) -> Option<CliResponse> {
+/// Neither agent switch is on (or no person answered yet).
+fn agents_off() -> CliResponse {
+    refuse(
+        "403 Forbidden",
+        "agents_off",
+        concat!("Agents don't report ", product_name!(), " problems on this server: a person hasn't allowed it. Don't send it; your person turns it on in Settings, then Feedback (or tell them and they send it)."),
+    )
+}
+
+/// A `platform` report while only CLI problems are allowed.
+fn scope_off() -> CliResponse {
+    refuse(
+        "403 Forbidden",
+        "scope_off",
+        concat!("On this server agents report only ", product_name!(), " CLI problems (--scope cli, with the command you ran). Anything else about ", product_name!(), " needs your person to allow it in Settings, then Feedback."),
+    )
+}
+
+/// Why `c` may not send now (PF7, PF8, PF14, PF19, and the agent opt-in:
+/// no agent switch on), as the refusal. The scope is checked after.
+fn send_gate(c: &Caller, policy: &settings::AgentPolicy) -> Option<CliResponse> {
     if let Some(h) = drain::hold() {
         let status = if h == drain::Hold::NeedsConnect { "409 Conflict" } else { "403 Forbidden" };
         return Some(refuse(status, h.code(), h.message()));
     }
-    if c.is_agent() && !settings::load().agents {
-        return Some(refuse(
-            "403 Forbidden",
-            "agents_off",
-            "The owner turned off feedback from agents on this server. Ask your owner to turn it on (k2 send-feedback settings --agents on), or ask them to send it.",
-        ));
+    if c.is_agent() && !policy.cli {
+        return Some(agents_off());
     }
     None
 }
 
-fn meta(c: &Caller, client: &str, b: &SendBody) -> J {
+/// An agent's scope and command, checked: `(scope, command)`. A missing
+/// scope is `platform` (an older CLI sends none); `cli` needs the command.
+fn agent_scope(b: &SendBody) -> Result<(&'static str, Option<String>), CliResponse> {
+    let scope = match b.scope.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => settings::SCOPE_PLATFORM,
+        Some(s) => match settings::SCOPES.iter().find(|x| **x == s) {
+            Some(x) => x,
+            None => return Err(bad("bad_scope", concat!("scope is cli (a ", product_name!(), " CLI problem) or platform (anything else about ", product_name!(), ")."))),
+        },
+    };
+    let command = b.command.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let command = match command {
+        None if scope == settings::SCOPE_CLI => {
+            return Err(bad("command_required", concat!("A cli report names the command you ran: command (", cli_name!(), " send-feedback --scope cli --command \"", cli_name!(), " …\").")))
+        }
+        None => None,
+        Some(cmd) if cmd.len() > MAX_COMMAND_BYTES || cmd.chars().any(|ch| ch.is_control()) => {
+            return Err(bad("bad_command", format!("command is the one line you ran, at most {MAX_COMMAND_BYTES} bytes.")))
+        }
+        Some(cmd) => Some(k2_core::redaction::redact(cmd)),
+    };
+    Ok((scope, command))
+}
+
+/// The [`AGENT_REPORT_SECTION`] text.
+fn agent_report_text(scope: &str, command: Option<&str>) -> String {
+    let what = if scope == settings::SCOPE_CLI { concat!("a ", product_name!(), " CLI problem") } else { concat!("something about ", product_name!()) };
+    match command {
+        Some(cmd) => format!("Scope: {scope} ({what})\nCommand: {cmd}"),
+        None => format!("Scope: {scope} ({what})"),
+    }
+}
+
+/// The row's stored versions, and for an agent its scope and command
+/// (local: the Sent tab and `show` read them; the intake gets them as the
+/// [`AGENT_REPORT_SECTION`] only).
+fn meta(c: &Caller, client: &str, b: &SendBody, agent: Option<&(&'static str, Option<String>)>) -> J {
     let daemon = env!("CARGO_PKG_VERSION");
     let k2 = if client == "desktop" && !c.passport {
         b.k2_version.as_deref().and_then(|v| pf::short_field(v, 32)).unwrap_or_else(|| daemon.to_string())
@@ -459,7 +577,7 @@ fn meta(c: &Caller, client: &str, b: &SendBody) -> J {
             std::env::var("LANG").ok().and_then(|l| pf::short_field(l.split('.').next().unwrap_or(""), 35))
         })
         .unwrap_or_default();
-    json!({
+    let mut m = json!({
         "k2Version": k2,
         "daemonVersion": daemon,
         "installKind": crate::boot_status::install_kind(),
@@ -467,7 +585,14 @@ fn meta(c: &Caller, client: &str, b: &SendBody) -> J {
         "osVersion": pf::os_version(),
         "arch": std::env::consts::ARCH,
         "locale": locale,
-    })
+    });
+    if let Some((scope, command)) = agent {
+        m["scope"] = json!(scope);
+        if let Some(cmd) = command {
+            m["command"] = json!(cmd);
+        }
+    }
+    m
 }
 
 fn send(c: &Caller, body: &[u8]) -> CliResponse {
@@ -478,9 +603,20 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
     if b.screenshot.is_some() && c.passport {
         return people_only();
     }
-    if let Some(r) = send_gate(c) {
+    let policy = settings::load().agent_policy();
+    if let Some(r) = send_gate(c, &policy) {
         return r;
     }
+    // An agent's scope (a person's report has none; one sent is ignored).
+    let agent = if c.is_agent() {
+        match agent_scope(&b) {
+            Ok((scope, _)) if !policy.allows(scope) => return scope_off(),
+            Ok(x) => Some(x),
+            Err(r) => return r,
+        }
+    } else {
+        None
+    };
     let category = b.category.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("other");
     if !pf::CATEGORIES.contains(&category) {
         return bad("bad_category", "category is one of bug, idea, praise, other.");
@@ -504,10 +640,10 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
     // The preview's own bytes, minus what the person left out (PF26): the
     // daemon never collects again here.
     let mut draft_id: Option<String> = None;
-    let diagnostics_json = match &b.diagnostics {
-        None => None,
+    let diagnostics: Vec<pf::diagnostics::Section> = match &b.diagnostics {
+        None => Vec::new(),
         Some(choice) => {
-            if c.is_agent() && !settings::load().agent_diagnostics {
+            if c.is_agent() && policy.attach.is_empty() {
                 return need_owner();
             }
             let id = choice.draft_id.as_deref().unwrap_or("").trim();
@@ -519,15 +655,32 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
                 );
             };
             match pf::diagnostics::choose(&draft.sections, &choice.drop, &choice.edited) {
-                Ok(sections) if sections.is_empty() => None,
                 Ok(sections) => {
+                    // An agent's: only the parts allowed now (the person
+                    // may have narrowed them since the preview).
+                    let sections = if c.is_agent() { agent_parts(sections, &policy.attach) } else { sections };
                     draft_id = Some(draft.id.clone());
-                    Some(serde_json::to_string(&sections).expect("sections serialize"))
+                    sections
                 }
                 Err(e) => return bad("diagnostics_edit", e),
             }
         }
     };
+    // Every agent report's first section: its scope (and command), the
+    // service's tag.
+    let diagnostics = match &agent {
+        Some((scope, command)) => {
+            let mut all = vec![pf::diagnostics::Section {
+                id: AGENT_REPORT_SECTION.into(),
+                title: "Agent report".into(),
+                text: agent_report_text(scope, command.as_deref()),
+            }];
+            all.extend(diagnostics);
+            pf::diagnostics::fit(all, pf::MAX_DIAGNOSTICS_BYTES)
+        }
+        None => diagnostics,
+    };
+    let diagnostics_json = (!diagnostics.is_empty()).then(|| serde_json::to_string(&diagnostics).expect("sections serialize"));
     // The picture the person saw (§3.1 D): the draft's own bytes, only
     // when the hash they confirmed is the draft's.
     let shot = match &b.screenshot {
@@ -589,7 +742,7 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
         category: category.to_string(),
         body: text,
         contact_email: contact,
-        meta_json: meta(c, client, &b).to_string(),
+        meta_json: meta(c, client, &b, agent.as_ref()).to_string(),
         diagnostics_json,
         screenshot: shot.as_ref().map(|d| store::NewShot {
             png: (*d.png).clone(),
@@ -876,11 +1029,16 @@ fn transition(c: &Caller, body: &[u8], is_retry: bool) -> CliResponse {
 
 fn settings_get(c: &Caller) -> CliResponse {
     let s = settings::load();
+    let policy = s.agent_policy();
     let hold = drain::hold();
-    let agent_off = c.is_agent() && !s.agents;
+    let agent_off = c.is_agent() && !policy.cli;
     let (can_send, why, message) = match (&hold, agent_off) {
         (Some(h), _) => (false, Some(h.code()), Some(h.message())),
-        (None, true) => (false, Some("agents_off"), Some("The owner turned off feedback from agents on this server.".to_string())),
+        (None, true) => (
+            false,
+            Some("agents_off"),
+            Some(concat!("Agents don't report ", product_name!(), " problems on this server: a person hasn't allowed it.").to_string()),
+        ),
         (None, false) => (true, None, None),
     };
     let remember = match &c.username {
@@ -899,10 +1057,19 @@ fn settings_get(c: &Caller) -> CliResponse {
         let conn = db.lock();
         store::pending_count(&conn).unwrap_or(0)
     };
+    let parts: Vec<J> = settings::ATTACH_PARTS.iter().map(|(id, label)| json!({ "id": id, "label": label })).collect();
     ok(json!({
         "enabled": s.enabled && !k2_core::airgap::enabled(),
-        "agents": s.agents,
-        "agentDiagnostics": s.agent_diagnostics,
+        // The agent switches as they apply (not asked = all off).
+        "agents": policy.cli,
+        "agentPlatform": policy.platform,
+        "agentAttach": policy.attach,
+        "agentDiagnostics": !policy.attach.is_empty(),
+        "agentScopes": policy.scopes(),
+        "agentsAsked": s.agents_asked(),
+        "agentsAskedAt": s.agents_asked_at,
+        "agentsAskedBy": s.agents_asked_by,
+        "attachParts": parts,
         "rememberDiagnostics": remember,
         "canEdit": c.admin && !c.passport,
         "canSend": can_send,
@@ -921,8 +1088,52 @@ fn settings_get(c: &Caller) -> CliResponse {
 struct SettingsBody {
     enabled: Option<bool>,
     agents: Option<bool>,
+    agent_platform: Option<bool>,
+    /// A list of part ids, or `"none"` / `"all"` (or ids joined by commas).
+    agent_attach: Option<J>,
+    /// 0.46.11: `true` = every part, `false` = none.
     agent_diagnostics: Option<bool>,
     remember_diagnostics: Option<bool>,
+}
+
+/// `agentAttach` as part ids, checked.
+fn attach_parts(v: &J) -> Result<Vec<String>, CliResponse> {
+    let all = || settings::ATTACH_PARTS.iter().map(|(id, _)| id.to_string()).collect::<Vec<_>>();
+    let ids: Vec<String> = match v {
+        J::Array(a) => {
+            let mut out = Vec::new();
+            for x in a {
+                match x.as_str() {
+                    Some(s) => out.push(s.trim().to_string()),
+                    None => return Err(bad("bad_attach_part", "agentAttach is a list of part ids (strings).")),
+                }
+            }
+            out
+        }
+        J::String(s) => match s.trim() {
+            "" | "none" => Vec::new(),
+            "all" => all(),
+            list => list.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect(),
+        },
+        _ => return Err(bad("bad_attach_part", "agentAttach is a list of part ids, or \"none\" or \"all\".")),
+    };
+    if ids.iter().any(|id| id == "none" || id == "all") && ids.len() > 1 {
+        return Err(bad("bad_attach_part", "none and all stand alone in agentAttach."));
+    }
+    if ids.len() == 1 && ids[0] == "none" {
+        return Ok(Vec::new());
+    }
+    if ids.len() == 1 && ids[0] == "all" {
+        return Ok(all());
+    }
+    if let Some(unknown) = ids.iter().find(|id| !settings::is_attach_part(id)) {
+        let known: Vec<&str> = settings::ATTACH_PARTS.iter().map(|(id, _)| *id).collect();
+        return Err(bad(
+            "bad_attach_part",
+            format!("{unknown} isn't a part agents may attach. The parts: {} (or none). The versions always go.", known.join(", ")),
+        ));
+    }
+    Ok(ids)
 }
 
 fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
@@ -934,13 +1145,48 @@ fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
         return refuse(
             "403 Forbidden",
             "settings_people_only",
-            "Only a person signed in to this server changes these settings (the owner or an admin in Settings → General → Send feedback).",
+            "Only a person signed in to this server changes these settings (the owner or an admin in Settings, then Feedback).",
         );
     }
-    let server_keys = b.enabled.is_some() || b.agents.is_some() || b.agent_diagnostics.is_some();
+    let agent_keys = b.agents.is_some() || b.agent_platform.is_some() || b.agent_attach.is_some() || b.agent_diagnostics.is_some();
+    let server_keys = b.enabled.is_some() || agent_keys;
     if server_keys && !c.admin {
         return refuse("403 Forbidden", "admin_only", "Only the owner or an admin can change this server's feedback settings.");
     }
+    if b.agent_attach.is_some() && b.agent_diagnostics.is_some() {
+        return bad("attach_twice", "Send agentAttach (the parts) or the older agentDiagnostics, not both.");
+    }
+    let attach = match &b.agent_attach {
+        None => None,
+        Some(v) => match attach_parts(v) {
+            Ok(p) => Some(p),
+            Err(r) => return r,
+        },
+    };
+    let before = settings::load();
+    let was = before.agent_policy();
+    // The parts alone can't be the answer (an older client's "Agents may
+    // include K2 details" on a server nobody has asked yet): it would mark
+    // the question answered with agents off, and the prompt never comes.
+    if agent_keys && !before.agents_asked() && b.agents.is_none() && b.agent_platform.is_none() {
+        return refuse(
+            "409 Conflict",
+            "answer_agents_first",
+            "Choose first whether agents may report problems (agents: true or false); what they may attach goes with that answer.",
+        );
+    }
+    // The answer, from what applies now (an unasked server starts all off).
+    let cli = b.agents.unwrap_or(was.cli);
+    let platform = b.agent_platform.unwrap_or(was.platform && cli);
+    if platform && !cli {
+        return bad(
+            "platform_needs_agents",
+            concat!("Agents report anything about ", product_name!(), " only while they report CLI problems too: turn agents on as well (agents: true)."),
+        );
+    }
+    let attach = attach
+        .or_else(|| b.agent_diagnostics.map(|on| if on { settings::ATTACH_PARTS.iter().map(|(id, _)| id.to_string()).collect() } else { Vec::new() }))
+        .unwrap_or_else(|| was.attach.clone());
     if let Some(on) = b.remember_diagnostics {
         let Some(u) = c.username.as_deref() else {
             return refuse("403 Forbidden", "settings_people_only", "Only a person can remember this choice.");
@@ -952,16 +1198,13 @@ fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
         }
     }
     if server_keys {
-        let before = settings::load();
-        let mut s = before;
+        let mut s = before.clone();
         if let Some(v) = b.enabled {
             s.enabled = v;
         }
-        if let Some(v) = b.agents {
-            s.agents = v;
-        }
-        if let Some(v) = b.agent_diagnostics {
-            s.agent_diagnostics = v;
+        if agent_keys {
+            let by = c.username.clone().unwrap_or_else(|| c.sender.clone());
+            s.answer(cli, platform, &attach, &by, now_ms());
         }
         if let Err(e) = settings::save(&s) {
             return CliResponse::internal_error(format!("save feedback settings: {e}"));
@@ -971,8 +1214,20 @@ fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
             // Rows held while it was off may go now.
             drain::kick();
         }
+        if teaching_changed(&before, &s) {
+            // The AGENTS.md reporting section follows the switches.
+            let _ = std::thread::Builder::new().name("feedback-agents-md".into()).spawn(|| {
+                k2_core::workspace::skill_regen::sync_product_feedback_teaching_everywhere();
+            });
+        }
     }
     settings_get(c)
+}
+
+/// Whether what agents read about reporting changed (the AGENTS.md
+/// section is composed from these).
+fn teaching_changed(before: &settings::Settings, after: &settings::Settings) -> bool {
+    k2_core::product_feedback::teach::agents_md_section(before) != k2_core::product_feedback::teach::agents_md_section(after)
 }
 
 /// The auth audit event for a change of a server key. The owner sees it in
@@ -981,20 +1236,27 @@ fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
 const SETTINGS_AUDIT_EVENT: &str = "product-feedback-settings";
 
 /// One audit row per server key the write changed: who, the key (its wire
-/// name) and old to new, as `ok <key> <old>-><new>`. A key set to the
-/// value it had writes no row.
+/// name) and old to new, as `ok <key> <old>-><new>` (the agent switches as
+/// they applied: an unasked server's were off). A key set to the value it
+/// had writes no row.
 fn audit_changes(c: &Caller, before: &settings::Settings, after: &settings::Settings) {
-    let word = |on: bool| if on { "on" } else { "off" };
+    let word = |on: bool| if on { "on" } else { "off" }.to_string();
+    let parts = |p: &[String]| if p.is_empty() { "none".to_string() } else { p.join(",") };
+    let (was, now) = (before.agent_policy(), after.agent_policy());
+    let asked = |s: &settings::Settings| if s.agents_asked() { "yes" } else { "no" }.to_string();
     for (key, old, new) in [
-        ("enabled", before.enabled, after.enabled),
-        ("agents", before.agents, after.agents),
-        ("agentDiagnostics", before.agent_diagnostics, after.agent_diagnostics),
+        ("enabled", word(before.enabled), word(after.enabled)),
+        // The first answer, even a "no" that moves no switch.
+        ("agentsAsked", asked(before), asked(after)),
+        ("agents", word(was.cli), word(now.cli)),
+        ("agentPlatform", word(was.platform), word(now.platform)),
+        ("agentAttach", parts(&was.attach), parts(&now.attach)),
     ] {
         if old != new {
             k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
                 SETTINGS_AUDIT_EVENT,
                 &c.sender,
-                format!("ok {key} {}->{}", word(old), word(new)),
+                format!("ok {key} {old}->{new}"),
                 "-",
                 "-",
                 "cli",

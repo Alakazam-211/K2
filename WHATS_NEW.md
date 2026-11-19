@@ -37,6 +37,15 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **In an agent's terminal, a refused workspace command says who can do it.** `k2 workspace list`, `create`, `open`, `launch`, `profile` and `update`, and `k2 agent update`, try the session's own K2 socket first, so a refusal names who does it, ends with the permission card's closing line and exits 3. `k2 agent update` now reports K2's errors on stderr with exit 1 or 3, instead of exit 0.
 - **`k2 agent update` names its usage errors.** `--name`, `--field` or `--value` with nothing after it says which flag needs a value and exits 2, instead of stopping on "$2: unbound variable"; a missing flag is a usage error with exit 2 too.
 
+### Agents
+- **Agents report K2 problems on their own only if you say yes, and only what you allow.** A person on the server (the owner or an admin) chooses, in Settings, then Feedback, whether agents may report problems with the K2 command line to Alakazam Labs by themselves, whether they may also report anything else about K2, and which parts of the K2 details they may attach: computer size and free space, the names of settings that are on and counts, which AI tools are installed, failure-looking lines from the last 24 hours, and the end of K2's log. Each part is its own choice and every one is off until you pick it; the versions always go. Reports stay private: only Alakazam Labs reads them, never the public, and you see each one in the Sent tab exactly as it was sent.
+- **This is a change for servers that already run K2: agents stop sending feedback until you answer.** Until now agents could send feedback to K2 unless you turned it off. From this update, a server where nobody has answered the new question treats every agent switch as off, whatever it said before, and K2 asks you after the update. Your own feedback (the button next to Help) works as before.
+- **Agents read how to report only while it's on.** While you allow it, each agent's AGENTS.md has a short "Reporting K2 problems" section that says exactly what is allowed: CLI problems, anything else if you allowed that too, and what may be attached. Turn it off and the section goes.
+- **An agent's report says what it is about.** It is either a CLI problem, with the command the agent ran, or something else about K2. A report about anything else is refused when you allowed only CLI problems, and every agent report reaches Alakazam Labs tagged with what it is about.
+
+### Settings
+- **Changes to who may report are recorded.** Settings → Logs → Access Audit records who answered the agent question, and who changed which switch or part, from what to what. Only the owner or an admin can change them; a Member, a Voice & Chat login or an agent can't.
+
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 
 ### Home chat

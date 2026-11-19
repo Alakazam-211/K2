@@ -321,12 +321,18 @@ fn compose_agents_md(project_path: &str) -> String {
         out.push('\n');
         out.push_str(crate::org_chart::AGENTS_MD_BLOCK);
     }
+    // Reporting problems to Alakazam Labs (the agent opt-in, 0.46.17): only
+    // while a person allowed agents to report. Off = no section.
+    if let Some(section) = crate::product_feedback::teach::agents_md_section(&crate::product_feedback::settings::load()) {
+        out.push('\n');
+        out.push_str(&section);
+    }
     out
 }
 
-/// The Org Chart switch flipped: recompose every workspace's AGENTS.md so
-/// its block follows the switch. Returns how many were recomposed.
-pub fn sync_org_chart_teaching_everywhere() -> usize {
+/// Recompose every registered workspace's AGENTS.md (a switch that changes
+/// what agents read flipped). Returns how many were recomposed.
+fn recompose_every_agents_md() -> usize {
     let Ok(projects) = crate::projects_ops::projects_list() else {
         return 0;
     };
@@ -334,6 +340,19 @@ pub fn sync_org_chart_teaching_everywhere() -> usize {
         recompose_agents_md(&p.path);
     }
     projects.len()
+}
+
+/// The Org Chart switch flipped: recompose every workspace's AGENTS.md so
+/// its block follows the switch. Returns how many were recomposed.
+pub fn sync_org_chart_teaching_everywhere() -> usize {
+    recompose_every_agents_md()
+}
+
+/// The agent reporting switches changed (`/cli/product-feedback/settings`):
+/// recompose every workspace's AGENTS.md so its reporting section follows
+/// them (appears, changes, or goes). Returns how many were recomposed.
+pub fn sync_product_feedback_teaching_everywhere() -> usize {
+    recompose_every_agents_md()
 }
 
 /// The AGENTS.md pointer to the `k2-permissions` skill, composed only while

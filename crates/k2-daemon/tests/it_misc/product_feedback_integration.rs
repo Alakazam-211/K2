@@ -312,7 +312,8 @@ async fn a_send_waits_for_the_service_then_goes_with_the_box_token() {
 
     let (s, v) = call(port, "GET", &q("/cli/product-feedback/settings", OWNER), None);
     assert_eq!(s, 200, "{v}");
-    assert_eq!((v["canSend"].clone(), v["enabled"].clone(), v["agents"].clone(), v["agentDiagnostics"].clone()), (json!(true), json!(true), json!(true), json!(false)), "{v}");
+    assert_eq!((v["canSend"].clone(), v["enabled"].clone(), v["agents"].clone(), v["agentDiagnostics"].clone()), (json!(true), json!(true), json!(false), json!(false)), "{v}");
+    assert_eq!(v["agentsAsked"], json!(false), "a new home: agents off until a person answers: {v}");
     assert_eq!(v["endpoint"], json!(e.intake.base), "{v}");
     assert_eq!(v["service"]["state"], json!("unknown"), "{v}");
 
@@ -503,6 +504,9 @@ async fn agents_people_and_wrong_credentials() {
     }
 
     // An agent: cli whatever it says, person-only fields refused, limits.
+    // (A person lets agents report anything first: off until asked.)
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/settings", OWNER), Some(json!({"agents": true, "agentPlatform": true})));
+    assert_eq!((s, v["agents"].clone(), v["agentPlatform"].clone()), (200, json!(true), json!(true)), "{v}");
     let agent = passport("ws-feedback-agent");
     let (s, v) = send(port, &agent, json!({"text": "x", "contactEmail": "a@b.co"}));
     assert_eq!((s, v["error"].clone()), (400, json!("contact_people_only")), "{v}");
@@ -598,7 +602,7 @@ async fn server_keys_need_an_admin_and_each_change_is_audited() {
     use k2_core::product_feedback::settings::{self, Settings};
     let e = setup(true);
     let port = e.port;
-    let defaults = Settings { enabled: true, agents: true, agent_diagnostics: false };
+    let defaults = Settings::default();
     assert_eq!(settings::load(), defaults);
     assert_eq!(settings_audit(), Vec::<(String, String)>::new(), "a fresh home has no rows");
 
@@ -626,56 +630,110 @@ async fn server_keys_need_an_admin_and_each_change_is_audited() {
     };
     let agent = passport("ws-pf-settings-agent");
     let member = login("pfs-member", None);
+    let voice = login("pfs-voice", Some(connect_users::Role::VoiceChat));
     let admin = login("pfs-admin", Some(connect_users::Role::Admin));
 
-    // Refused: a Member (even with a per-person key in the same write), an
-    // agent and a terminal. Nothing changes and nothing is audited.
+    // Refused: a Member (even with a per-person key in the same write), a
+    // Voice & Chat login (below the route's Member floor), an agent and a
+    // terminal. Nothing changes and nothing is audited.
+    let all_on = json!({"agents": true, "agentPlatform": true, "agentAttach": "all"});
     for (who, tok, body, code) in [
-        ("Member", &member, json!({"agents": false}), "admin_only"),
-        ("Member with remember", &member, json!({"agents": false, "rememberDiagnostics": true}), "admin_only"),
-        ("agent passport", &agent, json!({"agents": false}), "settings_people_only"),
-        ("terminal passport", &shell, json!({"agents": false}), "settings_people_only"),
+        ("Member", &member, json!({"agents": true}), Some("admin_only")),
+        ("Member, all three", &member, all_on.clone(), Some("admin_only")),
+        ("Member with remember", &member, json!({"agents": true, "rememberDiagnostics": true}), Some("admin_only")),
+        ("Voice & Chat", &voice, all_on.clone(), None),
+        ("agent passport", &agent, all_on.clone(), Some("settings_people_only")),
+        ("agent passport, attach", &agent, json!({"agentAttach": ["log-tail"]}), Some("settings_people_only")),
+        ("terminal passport", &shell, all_on.clone(), Some("settings_people_only")),
     ] {
         let (s, v) = post_settings(port, tok, body);
-        assert_eq!((s, v["error"].clone()), (403, json!(code)), "{who}: {v}");
+        assert_eq!(s, 403, "{who}: {v}");
+        if let Some(code) = code {
+            assert_eq!(v["error"], json!(code), "{who}: {v}");
+        }
         assert_eq!(settings::load(), defaults, "{who} changed nothing");
     }
+    let (s, v) = call(port, "GET", &q("/cli/product-feedback/settings", &voice), None);
+    assert_eq!(s, 403, "Voice & Chat doesn't read them either: {v}");
     let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", &member), None);
     assert_eq!(v["rememberDiagnostics"], json!(false), "the refused write kept nothing: {v}");
+    assert_eq!(v["canEdit"], json!(false), "{v}");
     assert_eq!(settings_audit(), Vec::<(String, String)>::new(), "a refused attempt writes no row");
 
-    // An Admin login changes it: one row, who, the key, old to new.
-    let (s, v) = post_settings(port, &admin, json!({"agents": false}));
-    assert_eq!((s, v["agents"].clone()), (200, json!(false)), "{v}");
-    assert_eq!(settings::load(), Settings { agents: false, ..defaults });
-    let want = vec![("login:pfs-admin".to_string(), "ok agents on->off".to_string())];
+    // Bad answers: refused, nothing written.
+    for (body, code) in [
+        (json!({"agents": false, "agentPlatform": true}), "platform_needs_agents"),
+        (json!({"agentPlatform": true}), "platform_needs_agents"),
+        (json!({"agentAttach": ["log-tail", "context"]}), "bad_attach_part"),
+        (json!({"agentAttach": ["versions"]}), "bad_attach_part"),
+        (json!({"agentAttach": ["none", "log-tail"]}), "bad_attach_part"),
+        (json!({"agentAttach": 3}), "bad_attach_part"),
+        (json!({"agentAttach": "none", "agentDiagnostics": true}), "attach_twice"),
+        (json!({"agentCli": true}), "bad_json"),
+    ] {
+        let (s, v) = post_settings(port, &admin, body.clone());
+        assert_eq!((s, v["error"].clone()), (400, json!(code)), "{body}: {v}");
+        assert_eq!(settings::load(), defaults, "{body} changed nothing");
+    }
+    // The parts alone aren't an answer while nobody has been asked.
+    for body in [json!({"agentAttach": ["log-tail"]}), json!({"agentDiagnostics": true})] {
+        let (s, v) = post_settings(port, &admin, body.clone());
+        assert_eq!((s, v["error"].clone()), (409, json!("answer_agents_first")), "{body}: {v}");
+        assert_eq!(settings::load(), defaults, "{body} changed nothing");
+    }
+
+    // An Admin answers "CLI problems, nothing attached" in one write: the
+    // daemon stamps when and who; rows for what moved (and the answer).
+    let before = k2_core::product_feedback::now_ms();
+    let (s, v) = post_settings(port, &admin, json!({"agents": true, "agentPlatform": false, "agentAttach": "none"}));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!((v["agents"].clone(), v["agentPlatform"].clone(), v["agentAttach"].clone(), v["agentDiagnostics"].clone()), (json!(true), json!(false), json!([]), json!(false)), "{v}");
+    assert_eq!((v["agentsAsked"].clone(), v["agentsAskedBy"].clone(), v["agentScopes"].clone()), (json!(true), json!("pfs-admin"), json!(["cli"])), "{v}");
+    assert!(v["agentsAskedAt"].as_i64().unwrap() >= before, "{v}");
+    let parts: Vec<&str> = v["attachParts"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
+    assert_eq!(parts, vec!["computer", "k2-state", "agent-tools", "recent-errors", "log-tail"], "{v}");
+    assert!(v["attachParts"].as_array().unwrap().iter().all(|p| !p["label"].as_str().unwrap().is_empty()), "{v}");
+    let mut want = vec![
+        ("login:pfs-admin".to_string(), "ok agentsAsked no->yes".to_string()),
+        ("login:pfs-admin".to_string(), "ok agents off->on".to_string()),
+    ];
     assert_eq!(settings_audit(), want);
 
     // The terminal's passport was a person's, the agent's an agent's.
     let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", &shell), None);
     assert_eq!(v["senderKind"], json!("person"), "{v}");
     let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", &agent), None);
-    assert_eq!(v["senderKind"], json!("agent"), "{v}");
+    assert_eq!((v["senderKind"].clone(), v["canSend"].clone(), v["agentScopes"].clone()), (json!("agent"), json!(true), json!(["cli"])), "{v}");
 
     // A write of the values already set: 200 and no row.
-    let (s, v) = post_settings(port, &admin, json!({"agents": false, "enabled": true, "agentDiagnostics": false}));
+    let (s, v) = post_settings(port, &admin, json!({"agents": true, "enabled": true, "agentAttach": []}));
     assert_eq!(s, 200, "{v}");
     assert_eq!(settings_audit(), want, "a no-op writes no row");
 
-    // The owner: one row per key that changed, none for the one that didn't.
-    let (s, v) = post_settings(port, OWNER, json!({"enabled": true, "agents": true, "agentDiagnostics": true}));
-    assert_eq!((s, v["agents"].clone(), v["agentDiagnostics"].clone()), (200, json!(true), json!(true)), "{v}");
-    let after_owner = Settings { agent_diagnostics: true, ..defaults };
-    assert_eq!(settings::load(), after_owner);
-    let want = [
-        want,
-        vec![
-            ("owner".to_string(), "ok agents off->on".to_string()),
-            ("owner".to_string(), "ok agentDiagnostics off->on".to_string()),
-        ],
-    ]
-    .concat();
+    // The owner: everything, then two parts; one row per key that changed.
+    let (s, v) = post_settings(port, OWNER, all_on.clone());
+    assert_eq!((s, v["agentPlatform"].clone(), v["agentDiagnostics"].clone(), v["agentsAskedBy"].clone()), (200, json!(true), json!(true), json!("owner")), "{v}");
+    let (s, v) = post_settings(port, OWNER, json!({"agentAttach": "log-tail,computer"}));
+    assert_eq!((s, v["agentAttach"].clone(), v["agentPlatform"].clone()), (200, json!(["computer", "log-tail"]), json!(true)), "the others stay: {v}");
+    want.extend([
+        ("owner".to_string(), "ok agentPlatform off->on".to_string()),
+        ("owner".to_string(), "ok agentAttach none->computer,k2-state,agent-tools,recent-errors,log-tail".to_string()),
+        ("owner".to_string(), "ok agentAttach computer,k2-state,agent-tools,recent-errors,log-tail->computer,log-tail".to_string()),
+    ]);
     assert_eq!(settings_audit(), want);
+    let after_owner = settings::load();
+    assert!(after_owner.agents && after_owner.agent_platform && after_owner.agent_diagnostics, "{after_owner:?}");
+
+    // Agents off takes platform with it.
+    let (s, v) = post_settings(port, OWNER, json!({"agents": false}));
+    assert_eq!((s, v["agents"].clone(), v["agentPlatform"].clone(), v["agentAttach"].clone()), (200, json!(false), json!(false), json!([])), "{v}");
+    want.extend([
+        ("owner".to_string(), "ok agents on->off".to_string()),
+        ("owner".to_string(), "ok agentPlatform on->off".to_string()),
+        ("owner".to_string(), "ok agentAttach computer,log-tail->none".to_string()),
+    ]);
+    assert_eq!(settings_audit(), want);
+    let after_owner = settings::load();
 
     // A Member remembers their own choice: 200, no server key moves, no row.
     let (s, v) = post_settings(port, &member, json!({"rememberDiagnostics": true}));
@@ -684,6 +742,177 @@ async fn server_keys_need_an_admin_and_each_change_is_audited() {
     assert_eq!(settings_audit(), want, "a per-person choice is not a server change");
 
     drop(k2_daemon::v2_session_map::unregister(shell_key));
+}
+
+// ── 3c. agents report on their own only after a person says yes (0.46.17) ──
+
+fn outbox_count() -> i64 {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT COUNT(*) FROM product_feedback_outbox", [], |r| r.get(0)).unwrap()
+}
+
+/// A registered workspace for `id`, so its AGENTS.md is recomposed when the
+/// switches change; returns the folder.
+fn workspace(id: &str) -> std::path::PathBuf {
+    let dir = dirs::home_dir().expect("home").join("work").join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT INTO projects (id, name, path, agents_can_request_permissions) VALUES (?1, ?1, ?2, 1)",
+        rusqlite::params![id, dir.to_string_lossy().to_string()],
+    )
+    .unwrap();
+    dir
+}
+
+fn agents_md(dir: &std::path::Path) -> String {
+    let p = k2_core::workspace_dot_dir(dir).join("AGENTS.md");
+    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+}
+
+/// The recompose runs on its own thread after the write.
+fn wait_agents_md(dir: &std::path::Path, what: &str, pred: impl Fn(&str) -> bool) -> String {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        k2_core::workspace::skill_regen::ensure_agents_md_if_missing(&dir.to_string_lossy());
+        let body = agents_md(dir);
+        if pred(&body) {
+            return body;
+        }
+        assert!(Instant::now() < deadline, "AGENTS.md never {what}: {body}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_report_only_what_a_person_allowed() {
+    use k2_core::product_feedback::{settings, teach};
+    let e = setup(true);
+    let port = e.port;
+    empty_outbox();
+    let _cards = EnvVar::set("K2_PERMISSION_CARDS", "1");
+    let ws_a = "ws-optin-a";
+    let dir_a = workspace(ws_a);
+    let agent = passport(ws_a);
+    let agent_b = passport("ws-optin-b");
+    workspace("ws-optin-b");
+
+    // The migration: a 0.46.16 file (agents on by default, diagnostics on)
+    // reads as everything off for agents.
+    std::fs::write(settings::path(), r#"{"enabled": true, "agents": true, "agentDiagnostics": true}"#).unwrap();
+    let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", OWNER), None);
+    assert_eq!(
+        (v["agents"].clone(), v["agentPlatform"].clone(), v["agentAttach"].clone(), v["agentDiagnostics"].clone(), v["agentsAsked"].clone(), v["agentsAskedAt"].clone()),
+        (json!(false), json!(false), json!([]), json!(false), json!(false), J::Null),
+        "an old file: all off until asked: {v}"
+    );
+    let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", &agent), None);
+    assert_eq!((v["canSend"].clone(), v["why"].clone(), v["agentScopes"].clone()), (json!(false), json!("agents_off"), json!([])), "{v}");
+    let n = outbox_count();
+    for body in [json!({"text": "x"}), json!({"text": "x", "scope": "cli", "command": "k2 msg x"}), json!({"text": "x", "scope": "platform"})] {
+        let (s, v) = send(port, &agent, body.clone());
+        assert_eq!((s, v["error"].clone()), (403, json!("agents_off")), "{body}: {v}");
+        // Permission cards on: the refusal says it can't be requested.
+        assert_eq!(v["permission"]["requestable"], json!(false), "{v}");
+    }
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/diagnostics", &agent), Some(json!({})));
+    assert_eq!((s, v["error"].clone()), (403, json!("agents_off")), "{v}");
+    assert_eq!(outbox_count(), n, "nothing stored while off");
+    // No note while off: AGENTS.md says nothing about reporting.
+    k2_core::workspace::skill_regen::recompose_agents_md(&dir_a.to_string_lossy());
+    let off_md = agents_md(&dir_a);
+    assert!(!off_md.contains(teach::HEADING) && !off_md.contains("send-feedback"), "{off_md}");
+
+    // A person says yes to CLI problems only, nothing attached.
+    let (s, v) = post_settings(port, OWNER, json!({"agents": true, "agentPlatform": false, "agentAttach": "none"}));
+    assert_eq!(s, 200, "{v}");
+    let md = wait_agents_md(&dir_a, "gained the section", |b| b.contains(teach::HEADING));
+    assert!(md.contains("Not on this server: report only CLI problems") && md.contains("Nothing: send text only"), "{md}");
+
+    // cli needs a command; a bad scope or command is refused.
+    for (body, code) in [
+        (json!({"text": "x", "scope": "cli"}), "command_required"),
+        (json!({"text": "x", "scope": "cli", "command": "  "}), "command_required"),
+        (json!({"text": "x", "scope": "cli", "command": "k2 a\nk2 b"}), "bad_command"),
+        (json!({"text": "x", "scope": "cli", "command": "k".repeat(1001)}), "bad_command"),
+        (json!({"text": "x", "scope": "everything"}), "bad_scope"),
+    ] {
+        let (s, v) = send(port, &agent, body.clone());
+        assert_eq!((s, v["error"].clone()), (400, json!(code)), "{body}: {v}");
+    }
+    // platform (or no scope: an older CLI) while only cli is on: scope_off.
+    for body in [json!({"text": "the Garden is slow", "scope": "platform"}), json!({"text": "no scope"})] {
+        let (s, v) = send(port, &agent, body.clone());
+        assert_eq!((s, v["error"].clone()), (403, json!("scope_off")), "{body}: {v}");
+        assert!(v["message"].as_str().unwrap().contains("--scope cli"), "{v}");
+        assert_eq!(v["permission"]["requestable"], json!(false), "the Ask-with closing line: {v}");
+    }
+    // Details refused: nothing attachable.
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/diagnostics", &agent), Some(json!({})));
+    assert_eq!((s, v["error"].clone()), (403, json!("diagnostics_need_owner")), "{v}");
+    assert_eq!(outbox_count(), n, "nothing stored for a refusal");
+
+    // A cli report: tagged by scope, with the command, as the first details
+    // section the intake gets; the Sent tab shows it as sent.
+    let (s, v) = send(port, &agent, json!({"text": "help says --json, the command refuses it", "scope": "cli", "command": "k2 msg list --json", "category": "bug"}));
+    assert_eq!(s, 200, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let it = wait_row(port, OWNER, &id, "sent", |it| it["state"] == json!("sent"));
+    assert_eq!((it["scope"].clone(), it["senderKind"].clone()), (json!("cli"), json!("agent")), "{it}");
+    let tag = json!([{"id": "agent-report", "title": "Agent report", "text": "Scope: cli (a K2 CLI problem)\nCommand: k2 msg list --json"}]);
+    assert_eq!(it["diagnostics"], tag, "{it}");
+    let body = e.intake.requests().last().unwrap().json();
+    assert_eq!(body["diagnostics"], json!({ "sections": tag }), "the service's tag: {body}");
+    let mut keys: Vec<&str> = body.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec!["arch", "category", "client", "clientId", "daemonVersion", "diagnostics", "installKind", "k2Version", "locale", "os", "osVersion", "senderKind", "text"],
+        "no field the intake doesn't take: {body}"
+    );
+
+    // A person's report has no scope (one sent is ignored, never refused).
+    let (s, v) = send(port, OWNER, json!({"text": "a person's", "scope": "platform", "command": "k2 x"}));
+    assert_eq!(s, 200, "{v}");
+    let pid = v["id"].as_str().unwrap().to_string();
+    let it = wait_row(port, OWNER, &pid, "sent", |it| it["state"] == json!("sent"));
+    assert_eq!((it["scope"].clone(), it["diagnostics"].clone()), (J::Null, J::Null), "{it}");
+    assert!(!e.intake.requests().last().unwrap().json().as_object().unwrap().contains_key("diagnostics"));
+
+    // Platform too, with two parts: a platform report goes, and an agent's
+    // details are the versions and exactly those parts.
+    let (s, v) = post_settings(port, OWNER, json!({"agents": true, "agentPlatform": true, "agentAttach": ["log-tail", "computer"]}));
+    assert_eq!((s, v["agentScopes"].clone()), (200, json!(["cli", "platform"])), "{v}");
+    wait_agents_md(&dir_a, "said platform is allowed", |b| b.contains("Also allowed: `--scope platform`"));
+    let (s, d) = call(port, "POST", &q("/cli/product-feedback/diagnostics", &agent_b), Some(json!({})));
+    assert_eq!(s, 200, "{d}");
+    let ids: Vec<&str> = d["sections"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["versions", "computer", "log-tail"], "{d}");
+    let draft = d["draftId"].as_str().unwrap().to_string();
+    // The person narrows it before the agent sends: only what's allowed now.
+    let (s, _) = post_settings(port, OWNER, json!({"agentAttach": ["computer"]}));
+    assert_eq!(s, 200);
+    let (s, v) = send(port, &agent_b, json!({"text": "Settings froze", "scope": "platform", "diagnostics": {"draftId": draft}}));
+    assert_eq!(s, 200, "{v}");
+    let bid = v["id"].as_str().unwrap().to_string();
+    let it = wait_row(port, OWNER, &bid, "sent", |it| it["state"] == json!("sent"));
+    let sent: Vec<&str> = it["diagnostics"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(sent, vec!["agent-report", "versions", "computer"], "{it}");
+    assert_eq!(it["diagnostics"][0]["text"], json!("Scope: platform (something about K2)"), "{it}");
+    assert_eq!(it["scope"], json!("platform"));
+    let body = e.intake.requests().last().unwrap().json();
+    let wire_ids: Vec<&str> = body["diagnostics"]["sections"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(wire_ids, sent, "{body}");
+
+    // A no: everything off again, and the section goes.
+    let (s, v) = post_settings(port, OWNER, json!({"agents": false, "agentPlatform": false, "agentAttach": "none"}));
+    assert_eq!((s, v["agents"].clone(), v["agentsAsked"].clone()), (200, json!(false), json!(true)), "{v}");
+    let gone = wait_agents_md(&dir_a, "lost the section", |b| !b.contains(teach::HEADING));
+    assert!(!gone.contains("send-feedback"), "{gone}");
+    let (s, v) = send(port, &agent, json!({"text": "x", "scope": "cli", "command": "k2 y"}));
+    assert_eq!((s, v["error"].clone()), (403, json!("agents_off")), "{v}");
 }
 
 // ── 4. when nothing may leave ────────────────────────────────────────
@@ -833,17 +1062,25 @@ async fn diagnostics_are_previewed_scrubbed_and_sent_as_shown() {
     let (s, v) = send(port, OWNER, json!({"text": "x", "diagnostics": {"draftId": draft}}));
     assert_eq!((s, v["error"].clone()), (410, json!("draft_expired")), "{v}");
 
-    // Agents: refused until the owner allows agent diagnostics.
+    // Agents: off until a person answers; then refused until a person
+    // allows some part of the details.
     let agent = passport("ws-feedback-diag");
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/diagnostics", &agent), Some(json!({})));
+    assert_eq!((s, v["error"].clone()), (403, json!("agents_off")), "{v}");
+    let (s, _) = call(port, "POST", &q("/cli/product-feedback/settings", OWNER), Some(json!({"agents": true, "agentPlatform": true})));
+    assert_eq!(s, 200);
     let (s, v) = call(port, "POST", &q("/cli/product-feedback/diagnostics", &agent), Some(json!({})));
     assert_eq!((s, v["error"].clone()), (403, json!("diagnostics_need_owner")), "{v}");
     let (s, v) = send(port, &agent, json!({"text": "x", "diagnostics": {"draftId": draft}}));
     assert_eq!((s, v["error"].clone()), (403, json!("diagnostics_need_owner")), "{v}");
-    let (s, _) = call(port, "POST", &q("/cli/product-feedback/settings", OWNER), Some(json!({"agentDiagnostics": true})));
-    assert_eq!(s, 200);
-    let (s, v) = call(port, "POST", &q("/cli/product-feedback/diagnostics", &agent), Some(json!({"client": "desktop", "includeClientFaults": true})));
+    // The 0.46.11 switch still works: every part.
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/settings", OWNER), Some(json!({"agentDiagnostics": true})));
+    assert_eq!((s, v["agentAttach"].clone()), (200, json!(["computer", "k2-state", "agent-tools", "recent-errors", "log-tail"])), "{v}");
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/diagnostics", &agent), Some(json!({"client": "desktop", "includeClientFaults": true, "page": "Agents"})));
     assert_eq!(s, 200, "{v}");
-    assert!(v["sections"][6]["text"].as_str().unwrap().contains("Client: cli"), "a passport is always cli: {v}");
+    let ids: Vec<&str> = v["sections"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["versions", "computer", "k2-state", "agent-tools", "recent-errors", "log-tail"], "never a person's page: {v}");
+    assert!(!v.to_string().contains("Page: Agents"), "{v}");
 }
 
 // ── 6. a screenshot: seen, sent, deleted from the box ────────────────

@@ -5,6 +5,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.46.17
 
+### Threads
+- Thread: after you attach a file, the message box is ready to type in, and Return sends the file even with no text.
+
 ### Command line
 - **An agent refused for want of its passport is no longer sent to a settings page that doesn't exist.** The refusal, and the SETTINGS part of `k2 study auth`, told the owner to set the tool Open in Settings → CLI Tools. There is no such setting: which tools need the session's passport is fixed, and the daemon decides every request. The refusal now says to run the command from a K2 agent session that carries its passport.
 - **`k2 api-key create --hire` keeps its confirm token out of other programs' view.** The token from your confirm now reaches the request on a pipe, never in a helper program's environment, where other programs of the same user could read it. A confirm token is what keeps a person-only step person-only.

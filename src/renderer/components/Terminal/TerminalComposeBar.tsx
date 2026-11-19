@@ -39,7 +39,7 @@ import {
 } from '@/lib/pick-compose-files'
 import { useToastStore } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
-import { composeBarMayTakeFocus, isEffectivelyHidden } from '@/lib/workspace-switch-focus'
+import { composeBarMayTakeFocus, focusComposeAfterAttach, isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import {
   type ComposeHistoryItem,
   type ComposeSlashCommand,
@@ -689,9 +689,13 @@ export function TerminalComposeBar({
         if (merged.dropped > 0) setThreadAddrError(THREAD_POST_TOO_MANY_FILES)
         return merged.files
       })
-      requestAnimationFrame(() => textareaRef.current?.focus())
+      // Ready to type (or Return sends the files), caret after any words;
+      // never over a dialog or into a hidden chat (focusComposeAfterAttach).
+      requestAnimationFrame(() => {
+        if (focusComposeAfterAttach(textareaRef.current)) persistCaret()
+      })
     },
-    [insertPathsText, scope, workspacePath],
+    [insertPathsText, persistCaret, scope, workspacePath],
   )
   const removeThreadFile = useCallback((path: string) => {
     setThreadFiles((cur) => cur.filter((f) => f.path !== path))

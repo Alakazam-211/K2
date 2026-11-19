@@ -190,6 +190,31 @@ export function composeBarMayTakeFocus(textarea: HTMLTextAreaElement): boolean {
   return true
 }
 
+/** Files just attached to a Thread's box: the box takes the caret, at the
+ *  end of its words, so the person can type (or press Return to send the
+ *  files). Only `.focus()`: nothing scrolls, the pointer stays put. Not a
+ *  hidden box (another tab or chat), not while a dialog is up (one opened
+ *  while the file was on its way), not out of another text field or
+ *  another agent's message box the person moved to meanwhile. Returns
+ *  whether it moved the caret. */
+export function focusComposeAfterAttach(textarea: HTMLTextAreaElement | null): boolean {
+  if (!textarea || !textarea.isConnected || isEffectivelyHidden(textarea)) return false
+  if (isModalOpen() || isTypingElsewhere()) return false
+  const active = typeof document === 'undefined' ? null : document.activeElement
+  if (
+    active instanceof HTMLTextAreaElement &&
+    active !== textarea &&
+    active.closest('[data-compose-bar]') &&
+    !isEffectivelyHidden(active)
+  ) {
+    return false
+  }
+  if (active !== textarea) textarea.focus({ preventScroll: true })
+  const end = textarea.value.length
+  textarea.setSelectionRange(end, end)
+  return true
+}
+
 function dashPaneRoot(workspaceId: string): HTMLElement | null {
   if (typeof document === 'undefined') return null
   const escaped =

@@ -24,6 +24,7 @@ import {
   applyWorkspaceSwitchFocus,
   composeBarMayTakeFocus,
   findVisibleComposeTextarea,
+  focusComposeAfterAttach,
   focusThreadComposeSlotTextarea,
   tryFocusPreferredInputInDashboardPane,
   __resetWorkspaceSwitchFocusForTests,
@@ -665,5 +666,69 @@ describe('composeBarMayTakeFocus (compose-bar mount)', () => {
     dialog.setAttribute('role', 'alertdialog')
     document.body.appendChild(dialog)
     expect(composeBarMayTakeFocus(thread!)).toBe(false)
+  })
+})
+
+describe('focusComposeAfterAttach (a file just attached)', () => {
+  function bar(text = '', opts: { hidden?: boolean } = {}): HTMLTextAreaElement {
+    const wrap = document.createElement('div')
+    if (opts.hidden) wrap.setAttribute('aria-hidden', 'true')
+    const el = document.createElement('div')
+    el.setAttribute('data-compose-bar', '')
+    const ta = document.createElement('textarea')
+    ta.value = text
+    el.appendChild(ta)
+    wrap.appendChild(el)
+    document.body.appendChild(wrap)
+    return ta
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    settingsOpen = false
+  })
+
+  it('takes the caret to the end of the words, whatever the switch setting says', () => {
+    for (const pref of ['terminal', 'off', 'composer']) {
+      document.body.innerHTML = ''
+      workspaceSwitchFocus = pref
+      const ta = bar('Have a look')
+      ta.setSelectionRange(0, 0)
+      expect(focusComposeAfterAttach(ta)).toBe(true)
+      expect(document.activeElement).toBe(ta)
+      expect([ta.selectionStart, ta.selectionEnd]).toEqual([11, 11])
+    }
+  })
+
+  it('not a hidden chat, not a box gone from the page, not none', () => {
+    const hidden = bar('x', { hidden: true })
+    expect(focusComposeAfterAttach(hidden)).toBe(false)
+    const gone = bar('x')
+    gone.remove()
+    expect(focusComposeAfterAttach(gone)).toBe(false)
+    expect(focusComposeAfterAttach(null)).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('not over a dialog', () => {
+    const ta = bar()
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    document.body.appendChild(dialog)
+    expect(focusComposeAfterAttach(ta)).toBe(false)
+    expect(document.activeElement).not.toBe(ta)
+  })
+
+  it("not out of another field or another agent's message box", () => {
+    const ta = bar()
+    const search = document.createElement('input')
+    document.body.appendChild(search)
+    search.focus()
+    expect(focusComposeAfterAttach(ta)).toBe(false)
+    expect(document.activeElement).toBe(search)
+    const other = bar()
+    other.focus()
+    expect(focusComposeAfterAttach(ta)).toBe(false)
+    expect(document.activeElement).toBe(other)
   })
 })

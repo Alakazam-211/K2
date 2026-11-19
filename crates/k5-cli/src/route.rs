@@ -169,6 +169,14 @@ pub static TABLE: &[Noun] = &[
                 words: &["profile"],
                 owner: Owner::Native,
             },
+            Verb {
+                words: &["create"],
+                owner: Owner::Native,
+            },
+            Verb {
+                words: &["open"],
+                owner: Owner::Native,
+            },
         ],
     },
     bash(&["onboarding"]),

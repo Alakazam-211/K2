@@ -99,6 +99,8 @@ for out in "${outs[@]}"; do
             if [ "$a" = k5-cli ]; then
                 v="${STUB_K5_VERSION:-$(sed -n 's/^K2_CLI_VERSION="\(.*\)"$/\1/p' cli/k2)}"
                 printf 'K5_CLI_VERSION=%s\0' "$v" >> "$out/$a"
+                # STUB_LEAK_K5=1: a k5-cli that kept the builder's home.
+                [ "${STUB_LEAK_K5:-0}" = 1 ] && printf '\0/home/%s/.cargo/registry/src/y-1.0/src/lib.rs\0' "$(id -un)" >> "$out/$a"
             fi
             # STUB_LEAK=1: a binary that kept the builder's home (no path maps).
             [ "${STUB_LEAK:-0}" = 1 ] && [ "$a" = k2-node ] && printf '\0/home/%s/.cargo/registry/src/x-1.0/src/lib.rs\0' "$(id -un)" >> "$out/$a"
@@ -222,10 +224,11 @@ pass_or '[ -e "$proj/target/release/bundle/dmg/bundle_dmg.sh" ] && [ ! -e "$proj
 pass_or 'grep -q "^  \[tauri\] tauri: Finished release" "$work/step2.log"' "tauri's output is prefixed [tauri]" "$(cat "$work/step2.log")"
 # The release path maps (scripts/lib/build-paths.sh) reach both builds, the
 # same flags, $HOME first and the checkout after it.
-rf_cargo="$(sed -n 's/^cargo //p' "$CALLS.rf")"
+# Every cargo call (the sidecars, then k5-cli) runs under the same maps.
+rf_cargo="$(sed -n 's/^cargo //p' "$CALLS.rf" | sort -u)"
 rf_tauri="$(sed -n 's/^tauri //p' "$CALLS.rf")"
 pass_or '[ -n "$rf_cargo" ] && [ "$rf_cargo" = "$rf_tauri" ] && [[ "$rf_cargo" == "--remap-path-prefix=$HOME=/home|"* ]] && [[ "$rf_cargo" == *"|--remap-path-prefix=$proj=/k2|"* ]]' \
-    "the sidecar and tauri builds both run under the path maps (\$HOME first, the checkout after)" "$(cat "$CALLS.rf")"
+    "the sidecar, k5-cli and tauri builds all run under the path maps (\$HOME first, the checkout after)" "$(cat "$CALLS.rf")"
 pass_or 'grep -q "^  no builder paths in [0-9]* file(s)" "$work/step2.log"' "Step 2 checks the whole app for build paths" "$(cat "$work/step2.log")"
 
 want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-ptyd --bin k2-ptyd -p k2-export --bin k2-export -p k2-deckrender --bin k2-deckrender -p k2-scenerender --bin k2-scenerender -p k2-node --bin k2-node -p k2-menubar --bin k2-menubar -p k2-deskd --bin k2-deskd"
@@ -296,6 +299,12 @@ if run_step2 "$work/leak.log" STUB_LEAK=1; then
 else
     pass_or 'grep -qF "FATAL: target/release/bundle/macos/K2.app/Contents/MacOS/k2-node holds the builder" "$work/leak.log" && grep -qF "/.cargo/registry/src/x-1.0/src/lib.rs" "$work/leak.log"' \
         "a sidecar holding \$HOME fails Step 2, before signing, naming the file and the string" "$(cat "$work/leak.log")"
+fi
+if run_step2 "$work/leak-k5.log" STUB_LEAK_K5=1; then
+    fail "a k5-cli holding \$HOME fails Step 2" "$(cat "$work/leak-k5.log")"
+else
+    pass_or 'grep -qF "FATAL: target/release/bundle/macos/K2.app/Contents/MacOS/k5-cli holds the builder" "$work/leak-k5.log"' \
+        "a k5-cli holding \$HOME fails Step 2: the build-path check runs after it is in the bundle" "$(cat "$work/leak-k5.log")"
 fi
 : > "$CALLS"
 if run_step2 "$work/fail-x86.log" STUB_NO_X86=1; then

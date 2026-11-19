@@ -261,7 +261,7 @@ if [ "$OAUTH_MODE" = "baked" ]; then
     assert_daemon_oauth_not_placeholder "$OUT/$DAEMON"
 fi
 # No file holds this node's home or the job user's name (the path maps).
-k2_assert_no_build_paths "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE"
+k2_assert_no_build_paths "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE" "$OUT/$K5CLI"
 file "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE" "$OUT/$K5CLI"
 
 for f in "$DAEMON" "$NODE" "$HELPER" "$ENGINE" "$K5CLI"; do

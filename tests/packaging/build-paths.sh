@@ -189,13 +189,13 @@ grep -qx '    k2_release_path_maps "$PWD" || return 1' "$ROOT/scripts/lib/build-
 grep -q 'k2_path_mapped cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS\[@\]}"' "$ROOT/scripts/macos-daemon-helper-app.sh" \
     && grep -q 'k2_assert_no_build_paths "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1' "$ROOT/scripts/macos-daemon-helper-app.sh" \
     && pass "the Step 8.5 standalone daemon is mapped and checked" || fail "standalone" "no maps or no check"
-grep -qx 'k2_assert_no_build_paths "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE"' "$ROOT/scripts/ci/build-linux-bins.sh" \
+grep -qx 'k2_assert_no_build_paths "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE" "$OUT/$K5CLI"' "$ROOT/scripts/ci/build-linux-bins.sh" \
     && grep -qx 'k2_assert_no_build_paths "$TARGET_DIR/release/k2"' "$ROOT/scripts/ci/build-linux-app.sh" \
     && pass "the Linux release builds check every binary they ship" || fail "linux" "no check"
 builds="$(sed -E 's/^[[:space:]]+//' "$ROOT/scripts/lib/build-binaries.sh" | grep -vE '^(#|echo )' | grep -E 'cargo build --release|bun run tauri build')"
 n="$(printf '%s\n' "$builds" | grep -c .)"
 m="$(printf '%s\n' "$builds" | grep -cE 'k2_path_mapped (cargo build --release|bun run tauri build)')"
-[ "$n" = "$m" ] && [ "$n" = 3 ] && pass "every cargo and tauri build in build-binaries.sh runs mapped ($m of $n)" || fail "unmapped build" "$m of $n mapped"
+[ "$n" = "$m" ] && [ "$n" = 4 ] && pass "every cargo and tauri build in build-binaries.sh runs mapped, k5-cli included ($m of $n)" || fail "unmapped build" "$m of $n mapped"
 bash -n "$LIB" && pass "bash -n build-paths.sh" || fail "bash -n" "syntax"
 
 echo ""

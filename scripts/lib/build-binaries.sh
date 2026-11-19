@@ -187,7 +187,9 @@ k2_build_mac_k5_cli() {
         args+=(--target "$t")
         slices+=("$tdir/$t/release/k5-cli")
     done
-    cargo build --release -p k5-cli --bin k5-cli "${args[@]}" \
+    # Under the release path maps (k2_release_path_maps), like every other
+    # build here: the bundle's build-path check covers this file too.
+    k2_path_mapped cargo build --release -p k5-cli --bin k5-cli "${args[@]}" \
         || { echo "FATAL: k5-cli build (${K2_MAC_K5_CLI_TARGETS[*]}) failed" >&2; return 1; }
     mkdir -p "$(dirname "$dest")" || return 1
     lipo -create -output "$dest" "${slices[@]}" \
@@ -307,16 +309,15 @@ k2_build_mac_binaries() {
     # open (same shape as frpc). Not executed from Contents/MacOS.
     cp "$out/k2-menubar" "$app/Contents/MacOS/k2-menubar" || return 1
     echo "  k2-menubar copied into the bundle."
-
-    # Before anything signs it: no file in the app holds this Mac's home or
-    # user name (the path maps above, proven on the built bytes).
-    echo ""; echo "  Checking $app for build paths..."
-    k2_assert_no_build_paths "$app" || return 1
-
     # The k5 command's program, beside the app's executable, where
     # k2-client's cli_install looks for it (`<X>.app/Contents/MacOS`). Off
     # by default: the bundle carries it; only the owner's switch runs it.
     [ -x "$out/k5-universal/k5-cli" ] || { echo "FATAL: k5-cli missing at $out/k5-universal/k5-cli after its build" >&2; return 1; }
     cp "$out/k5-universal/k5-cli" "$app/Contents/MacOS/k5-cli" || return 1
     echo "  k5-cli (universal) copied into the bundle."
+
+    # Before anything signs it: no file in the app holds this Mac's home or
+    # user name (the path maps above, proven on the built bytes).
+    echo ""; echo "  Checking $app for build paths..."
+    k2_assert_no_build_paths "$app" || return 1
 }

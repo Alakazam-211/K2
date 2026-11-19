@@ -164,7 +164,7 @@ export function PostalTab({
    *  result. A request that stopped waiting meanwhile reloads the lists and
    *  says so in the card. */
   const run = useCallback(
-    async <T,>(key: string, at: PostalNotice['at'], write: () => Promise<T>, done?: string | ((result: T) => string)): Promise<boolean> => {
+    async <T,>(key: string, at: PostalNotice['at'], write: () => Promise<T>, done?: string | ((result: T) => string), peer?: string): Promise<boolean> => {
       if (busy) return false
       setBusy(key)
       setNotice(null)
@@ -182,7 +182,7 @@ export function PostalTab({
       } catch (err) {
         if (!mounted.current) return false
         if (postalErrorCode(err) === 'postal_not_pending') {
-          setNotice({ text: `${postalPlainError(err)} The list is up to date now.`, at, tone: 'error' })
+          setNotice({ text: `${postalPlainError(err, peer)} The list is up to date now.`, at, tone: 'error' })
           reload()
         } else {
           setErrors((e) => ({ ...e, [key]: `${postalPlainError(err)} Nothing changed; try again.` }))
@@ -258,7 +258,7 @@ export function PostalTab({
    *  carries a pairing code, otherwise at once. */
   const accept = (f: PostalFriend, at: PostalNotice['at'], done: string): void => {
     if (f.codeWaiting) setCodeFor(f.id)
-    else void run(`decide:${f.id}`, at, () => decidePostalRequest(scope, workspace, f.id, 'accept'), done)
+    else void run(`decide:${f.id}`, at, () => decidePostalRequest(scope, workspace, f.id, 'accept'), done, f.peer)
   }
 
   const codeForm = (f: PostalFriend, at: PostalNotice['at'], done: string): React.ReactNode =>
@@ -440,7 +440,7 @@ export function PostalTab({
                       variant="quiet"
                       disabled={busy !== null}
                       onClick={() =>
-                        void run(`decide:${f.id}`, 'invitations', () => decidePostalRequest(scope, workspace, f.id, 'reject'), `Rejected ${f.peer}.`)
+                        void run(`decide:${f.id}`, 'invitations', () => decidePostalRequest(scope, workspace, f.id, 'reject'), `Rejected ${f.peer}.`, f.peer)
                       }
                     >
                       Reject

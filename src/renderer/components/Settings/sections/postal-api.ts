@@ -112,9 +112,11 @@ export function postalErrorCode(err: unknown): string | null {
  *  a 5xx with no code) says the server couldn't do it, without its inner reason;
  *  anything else is the daemon's hint as a sentence. The caller adds the
  *  next step (Try again, or what changed). */
-export function postalPlainError(err: unknown): string {
+export function postalPlainError(err: unknown, peer?: string): string {
   const code = postalErrorCode(err)
-  if (code === 'postal_not_pending') return 'This request isn’t waiting for an answer any more: it was withdrawn or already answered.'
+  if (code === 'postal_not_pending') {
+    return `${peer ? `The request from ${peer}` : 'This request'} isn’t waiting for an answer any more: it was withdrawn or already answered.`
+  }
   const status = httpStatusOf(err)
   if (code === 'internal' || (!code && status !== null && status >= 500)) return 'The server couldn’t do that just now.'
   const text = postalErrorText(err).replace(/[.\s]+$/, '')

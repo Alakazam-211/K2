@@ -340,7 +340,7 @@ describe('PostalTab', () => {
     await waitFor(() => expect(cli.gets.filter((g) => g.route === 'postal/friends').length).toBeGreaterThan(reads))
     const notice = screen.getByTestId('postal-notice')
     expect(notice.textContent).toBe(
-      'This request isn’t waiting for an answer any more: it was withdrawn or already answered. The list is up to date now.',
+      'The request from nova::quarry.postal.bot isn’t waiting for an answer any more: it was withdrawn or already answered. The list is up to date now.',
     )
     expect(notice.closest('[data-settings-id="projects.postal-invitations"]')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull()

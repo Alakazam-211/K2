@@ -118,7 +118,7 @@ export function PostalPairCodeAnswer({
         <CardButton label={POSTAL_PAIR_LABEL.deny} testId="permission-deny" disabled={busy} onClick={onDeny} />
       </div>
       <div data-testid="permission-code-note" className="text-[10px] leading-relaxed" style={{ color: CARD_MUTED }}>
-        You read your code to {friend ? readCodeTo(friend.peer, friend.ownerName) : 'the other side'} and type theirs here. The agent never sees either code.
+        You read your code to {friend ? readCodeTo(friend.peer, friend.ownerName) : 'the other side'}, and type theirs here. The agent never sees either code.
       </div>
     </>
   )

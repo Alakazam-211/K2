@@ -82,7 +82,10 @@ export function PostalPairCodeForm({
       Your code: <span className="font-mono" data-testid="postal-code-mine">{mine ?? '…'}</span>. Read it to {readCodeTo(peer, owner)}.
     </>
   )
-  const why = 'The two codes match only if nobody sits between the two servers. A code that doesn’t match ends the request on both sides.'
+  // The card's own words already say why the codes match; it keeps the consequence.
+  const why = card
+    ? 'A code that doesn’t match ends the request on both sides.'
+    : 'The two codes match only if nobody sits between the two servers. A code that doesn’t match ends the request on both sides.'
   const field = {
     'aria-label': 'The code shown on their screen',
     inputMode: 'numeric' as const,

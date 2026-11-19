@@ -129,6 +129,14 @@ pub enum Compare {
         stdout: &'static str,
         stderr: &'static str,
     },
+    /// A NUL byte in the answer, which bash's `resp=$(cli_request …)`
+    /// drops and, from bash 4.4 on, warns about on stderr in one line
+    /// naming `cli/k2`'s path and line, while the binary drops it
+    /// silently (`scripts/cli-parity.sh`'s named difference
+    /// `nul-in-answer`): everything as [`Compare::Exact`] but bash's
+    /// stderr, which must be the binary's plus that one line (none on a
+    /// bash before 4.4).
+    NulInAnswer,
     /// The shell's Python raises: everything as [`Compare::Exact`] but
     /// the traceback on stderr, where only what comes before it and its
     /// last line's exception name must match (its frames and wording
@@ -629,6 +637,30 @@ impl Rig {
                 r.stderr,
                 b.stderr
             );
+        } else if c.compare == Compare::NulInAnswer {
+            let head = format!("{}: line ", cli_k2().display());
+            let warning = |l: &str| {
+                l.strip_prefix(&head)
+                    .is_some_and(|after| after.ends_with(NUL_WARNING))
+            };
+            let (warned, rest): (Vec<&str>, Vec<&str>) =
+                b.stderr.split_inclusive('\n').partition(|l| warning(l));
+            assert_eq!(
+                warned.len(),
+                usize::from(bash_warns_on_nul()),
+                "{name}: bash's NUL warning lines (bash warns from 4.4 on): {:?}",
+                b.stderr
+            );
+            assert_eq!(
+                r.stderr,
+                rest.concat(),
+                "{name}: stderr but bash's NUL warning"
+            );
+            assert!(
+                !r.stderr.contains("null byte"),
+                "{name}: the binary wrote about the NUL: {:?}",
+                r.stderr
+            );
         } else if matches!(c.compare, Compare::Waited | Compare::InPipe { .. }) {
             let (bs, bn) = mask_waited(&b.stderr);
             let (rs, rn) = mask_waited(&r.stderr);
@@ -645,6 +677,27 @@ impl Rig {
         }
         (r.clone(), rl, handed, rt)
     }
+}
+
+/// How bash's warning about a NUL that `$(…)` dropped ends, after
+/// `<script>: line <n>`.
+const NUL_WARNING: &str = ": warning: command substitution: ignored null byte in input\n";
+
+/// Whether the `bash` the rig runs warns when `$(…)` drops a NUL byte:
+/// from 4.4 on.
+fn bash_warns_on_nul() -> bool {
+    let o = Command::new("bash")
+        .args(["-c", "echo \"${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}\""])
+        .output()
+        .expect("run bash");
+    assert!(o.status.success(), "bash's version: {o:?}");
+    let text = String::from_utf8(o.stdout).expect("bash's version is UTF-8");
+    let v: Vec<u32> = text
+        .split_whitespace()
+        .map(|n| n.parse().expect("a number in bash's version"))
+        .collect();
+    assert_eq!(v.len(), 2, "bash's version: {text:?}");
+    (v[0], v[1]) >= (4, 4)
 }
 
 /// `from`'s files and folders copied into `to` (made first).

@@ -10,8 +10,8 @@
 //!   `null`s, `true`), none, no list, many rows; `--json`; the daemon's
 //!   error (an object with each code, text, a number, `null`), a refusal
 //!   with a permission card (the closing line), not JSON (short, long,
-//!   empty), not an object, Python's raises, the bulletin, migrating,
-//!   trailing newlines.
+//!   empty), a NUL, not an object, Python's raises, the bulletin,
+//!   migrating, trailing newlines.
 //! - The owner from disk, a passport over TCP (the workspace from
 //!   `/cli/whoami`, on the cell socket or TCP), re-minted, healed, dead;
 //!   `HOOK_SOCK` with the owner on disk (PRD 13.9 #4); PROJECT_PATH; the
@@ -28,8 +28,8 @@
 //! the thread with each message's files), `--json`, `--html`, `--html
 //! --json`, no brief; odd values, a long body, bytes that are not UTF-8,
 //! an id that needs escaping; the daemon's error (each code, text, a
-//! number, a permission card, migrating then the answer); not JSON,
-//! not an object; Python's raises; the words; a passport over TCP
+//! number, a permission card, migrating then the answer); not JSON, a
+//! NUL, not an object; Python's raises; the words; a passport over TCP
 //! only (re-minted; refused: one heal; dead: the restart line), PRD 13.9 #4;
 //! no answer (an empty reply and an empty 5xx: the transport's line; a
 //! reset, not HTTP, TMPDIR unusable, none in time, no daemon:
@@ -77,6 +77,17 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 fn traceback(c: Case) -> Case {
     Case {
         compare: Compare::Traceback,
+        ..c
+    }
+}
+
+/// A NUL in the answer: `scripts/cli-parity.sh`'s named difference
+/// `nul-in-answer` ([`Compare::NulInAnswer`]). Bash's `$(cli_request …)`
+/// drops it with a warning naming the script's path and line (bash 4.4
+/// and later), the binary silently; all else is exact.
+fn nul_in_answer(c: Case) -> Case {
+    Case {
+        compare: Compare::NulInAnswer,
         ..c
     }
 }
@@ -332,6 +343,15 @@ fn list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        nul_in_answer(case(
+            "a NUL in a string",
+            &["list"],
+            &[],
+            vec![ok("{\"items\":[{\"id\":\"x\",\"title\":\"a\u{0}b\"}]}")],
+            owner_and_port,
+            0,
+            1,
+        )),
         case(
             "an empty 200",
             &["list"],
@@ -1213,10 +1233,15 @@ fn show_answers_as_the_shell_does() {
             1,
             1,
         ),
-        // No NUL row: `resp=$(cli_request …)` drops a NUL with bash's own
-        // warning, which names the script's path and line; the binary drops
-        // it as `$(…)` does, silently (as for `list` and every reader of a
-        // `$(…)` answer).
+        nul_in_answer(case(
+            "a NUL in a string",
+            &["show", "x"],
+            &[],
+            vec![ok("{\"title\":\"a\u{0}b\"}")],
+            owner_and_port,
+            0,
+            1,
+        )),
         case(
             "not an object",
             &["show", "x"],

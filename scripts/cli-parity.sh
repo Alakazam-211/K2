@@ -24,6 +24,9 @@
 # bash on purpose, by a PRD ruling. They are not skips: before any test
 # runs, each is checked to hold exactly as written (both sides), and the
 # gate fails, saying which one no longer holds, when either side changes.
+# One that holds only on some hosts proves itself where it holds and,
+# elsewhere, checks what it can and prints "NOT PROVEN on this host" with
+# where it is proven (bash32-get-pipe: the macOS job, on /bin/bash 3.2).
 # No tests/cli test meets one through the binary today; one that does is
 # mapped to its difference here by name, never skipped broadly. (The
 # binary's own parity tests meet owner-token-with-passport:
@@ -31,7 +34,13 @@
 # activity_parity.rs, feedback_parity.rs and setup_parity.rs. They meet
 # native-without-python3 in every case of the parity rig, in
 # whoami_parity.rs, pages_without_python3.rs and the study cards tests;
-# tests/cli runs with python3 on PATH.)
+# tests/cli runs with python3 on PATH. They meet bash32-get-pipe in the
+# no-answer cases of inbox_parity.rs and read_parity.rs, through the
+# rig's Compare::InPipe on macOS; that compare holds the same bash 3.2
+# reader for activity_parity.rs, connections_write_parity.rs and
+# connect_parity.rs too, not named here yet. They meet nul-in-answer in
+# feedback_parity.rs's "a NUL in a string" rows of list and show, through
+# Compare::NulInAnswer.)
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -136,6 +145,8 @@ EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
     "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and msg prints one line naming Python 3 and exits 69 without starting bash"
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, read, activity, feedback list and show) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
+    "bash32-get-pipe|R3.3, K2 ruling at the 0.46.15 rebase|a GET on the left of a pipe into a python3 reader that gets an empty reply (one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\` and \`read acme\`. Both print \"Error: K2's server gave an empty answer to <route> after <n> s; run k2 daemon status\"; the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr. The pipe mark (_K2_PIPE_MARK) quiets cli_send's POST readers only, not these"
+    "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -283,15 +294,205 @@ s.serve_forever()
     return 1
 }
 
+# start_stub <dir> <mode>: a stub daemon on a free loopback port that
+# logs each request ("GET /path?query") to <dir>/log, each %XX escape in
+# upper case (curl writes -G's in lower case, the binary in upper: K2's
+# ruling, as the parity rig's normaliser says). Mode close: no
+# reply at all, the connection just closes (an empty reply, curl's 52).
+# Mode nul: /cli/feedback/list and /cli/feedback/show answer a ticket
+# whose title holds a NUL byte, anything else {"role":"canonical"}. Sets
+# STUB_PID and STUB_PORT; returns 1 when it doesn't start.
+start_stub() {
+    local d="$1" mode="$2"
+    rm -f "$d/port" "$d/port.tmp"
+    python3 -I -c '
+import os, re, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+d, mode = sys.argv[1], sys.argv[2]
+NUL = {
+    "/cli/feedback/list": b"{\"items\":[{\"id\":\"fb_nul1\",\"status\":\"waiting\",\"priority\":2,\"kind\":\"question\",\"title\":\"acme\x00globex\"}]}",
+    "/cli/feedback/show": b"{\"id\":\"fb_nul1\",\"status\":\"waiting\",\"priority\":2,\"kind\":\"question\",\"title\":\"acme\x00globex\",\"createdAt\":0}",
+}
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(os.path.join(d, "log"), "a") as f:
+            path = re.sub("%[0-9a-fA-F]{2}", lambda m: m.group(0).upper(), self.path)
+            f.write(self.command + " " + path + "\n")
+        self.close_connection = True
+        if mode == "close":
+            return
+        body = NUL.get(self.path.split("?", 1)[0], b"{\"role\":\"canonical\"}")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    do_POST = do_GET
+    def log_message(self, *a):
+        pass
+s = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.server_port))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+s.serve_forever()
+' "$d" "$mode" &
+    STUB_PID=$!
+    for _ in $(seq 1 100); do [ -s "$d/port" ] && break; sleep 0.05; done
+    STUB_PORT="$(cat "$d/port" 2>/dev/null || true)"
+    if [ -z "$STUB_PORT" ]; then
+        kill "$STUB_PID" 2>/dev/null || true
+        return 1
+    fi
+}
+
+stop_stub() {
+    kill "$STUB_PID" 2>/dev/null || true
+    wait "$STUB_PID" 2>/dev/null || true
+}
+
+# run_side <dir> <shell|binary> <words...>: one CLI's run, in <dir>/ws
+# with HOME <dir>/home (the owner token and the stub's port on disk), a
+# fresh TMPDIR, no K2_*/K5_* variable and stdin from /dev/null. <shell>
+# is the bash to run cli/k2 with. Its stdout goes to <dir>/out, stderr to
+# <dir>/err, the requests to <dir>/log; returns its exit code.
+run_side() {
+    local d="$1" side="$2" tmp rc=0
+    shift 2
+    : >"$d/log"
+    tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+    if [ "$side" = binary ]; then set -- "$WORK/bin/k5" "$@"; else set -- "$side" "$ROOT/cli/k2" "$@"; fi
+    (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" "$@") \
+        >"$d/out" 2>"$d/err" </dev/null || rc=$?
+    return "$rc"
+}
+
+# The no-answer line's seconds, masked.
+mask_seconds() { sed -E 's/(after|within) [0-9]+ s;/\1 N s;/g' "$1"; }
+
+# check_bash32_get_pipe: the stub never answers (an empty reply) and both
+# CLIs run `inbox`, `inbox read a1`, `inbox folders` and `read acme`, the
+# owner token and port on disk. On macOS with /bin/bash 3.2 bash must exit
+# 1 with no signal, its stdout the reader's for an empty input and its
+# stderr the binary's (seconds masked) then the reader's, while the binary
+# prints the line and dies of SIGPIPE (141) with nothing on stdout. With
+# any other bash, bash must answer as the binary does (the line, 141,
+# nothing on stdout); the check then says plainly that the difference
+# itself was not proven here, and returns 3.
+check_bash32_get_pipe() {
+    local d="$WORK/bash32-pipe" shell=bash ver i rc rr words problems=()
+    local -a all_words reader_out reader_err
+    all_words=("inbox" "inbox read a1" "inbox folders" "read acme")
+    reader_out=($'No items.\n' "" $'No folders yet. Create one by moving an item:\n  k2 inbox move <id> projects\n' "")
+    reader_err=("" $'Error: no answer from the K2 daemon (neither this session\'s cell socket nor the loopback port answered). Is K2 running? Try again: k2 inbox read <id>\n' "" $'\n')
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    [ "$(uname -s)" != Darwin ] || shell=/bin/bash
+    ver="$("$shell" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')"
+    start_stub "$d" close || { echo "the stub daemon didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    for i in 0 1 2 3; do
+        words="${all_words[$i]}"
+        # shellcheck disable=SC2086
+        rc=0; run_side "$d" "$shell" $words || rc=$?
+        cp "$d/out" "$d/out.bash"; cp "$d/log" "$d/log.bash"
+        mask_seconds "$d/err" >"$d/err.bash"
+        # shellcheck disable=SC2086
+        rr=0; run_side "$d" binary $words || rr=$?
+        [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 1 ] || problems+=("$shell $words sent $(wc -l <"$d/log.bash" | tr -d ' ') requests, want 1: $(head -c 300 "$d/log.bash")")
+        cmp -s "$d/log.bash" "$d/log" || problems+=("$words: the requests differ: $shell '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
+        [ "$rr" = 141 ] || problems+=("the binary's $words exited $rr, want 141 (SIGPIPE): $(head -c 300 "$d/err")")
+        [ ! -s "$d/out" ] || problems+=("the binary's $words printed on stdout: $(head -c 200 "$d/out")")
+        grep -q "^Error: K2's server gave an empty answer to /cli/" "$d/err" || problems+=("the binary's $words wrote no no-answer line: $(head -c 300 "$d/err")")
+        if [ "$ver" = 3.2 ]; then
+            [ "$rc" = 1 ] || problems+=("$shell ($ver) $words exited $rc, want 1 (the reader ran): the difference is gone or changed")
+            printf '%s' "${reader_out[$i]}" >"$d/want.out"
+            cmp -s "$d/want.out" "$d/out.bash" || problems+=("$shell ($ver) $words printed '$(head -c 300 "$d/out.bash")' on stdout, want the reader's '${reader_out[$i]}'")
+            { mask_seconds "$d/err"; printf '%s' "${reader_err[$i]}"; } >"$d/want.err"
+        else
+            [ "$rc" = 141 ] || problems+=("$shell ($ver) $words exited $rc, want 141 as the binary: the difference is no longer only bash 3.2's")
+            [ ! -s "$d/out.bash" ] || problems+=("$shell ($ver) $words printed on stdout: $(head -c 300 "$d/out.bash")")
+            mask_seconds "$d/err" >"$d/want.err"
+        fi
+        cmp -s "$d/want.err" "$d/err.bash" || problems+=("$shell ($ver) $words wrote '$(head -c 400 "$d/err.bash")' on stderr (seconds masked), want '$(head -c 400 "$d/want.err")'")
+    done
+    stop_stub
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    [ "$ver" = 3.2 ] && return 0
+    echo "checked only on bash 3.2, macOS's /bin/bash (the macOS parity job runs it); here $shell is bash $ver, where bash and the binary answer alike on all four (the line, SIGPIPE 141, nothing on stdout), so the difference itself was not proven on this host"
+    return 3
+}
+
+# check_nul_in_answer: the stub answers `feedback list` and `feedback show
+# fb_nul1` with a NUL inside the title ("acme<NUL>globex"), the owner token
+# and port on disk. Both CLIs exit 0, send the same requests and print the
+# same stdout, which has the title as "acmeglobex"; the binary writes
+# nothing about the NUL; bash (the one on PATH, as the tests run it)
+# writes exactly one line, "<path to cli/k2>: line <n>: warning: command
+# substitution: ignored null byte in input", from 4.4 on, none before;
+# stderr is otherwise the same. On a bash before 4.4 the check says so
+# and returns 3: the two are exact there.
+check_nul_in_answer() {
+    local d="$WORK/nul" ver major minor warns=0 rc rr n line words route problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    ver="$(bash -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')"
+    major="${ver%%.*}" minor="${ver#*.}"
+    if [ "$major" -gt 4 ] || { [ "$major" -eq 4 ] && [ "$minor" -ge 4 ]; }; then warns=1; fi
+    start_stub "$d" nul || { echo "the stub daemon didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    for words in "feedback list" "feedback show fb_nul1"; do
+        # shellcheck disable=SC2086
+        rc=0; run_side "$d" bash $words || rc=$?
+        cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
+        # shellcheck disable=SC2086
+        rr=0; run_side "$d" binary $words || rr=$?
+        [ "$rc" = 0 ] || problems+=("bash $words exited $rc: $(head -c 300 "$d/err.bash")")
+        [ "$rr" = 0 ] || problems+=("the binary's $words exited $rr: $(head -c 300 "$d/err")")
+        route="${words#feedback }"; route="${route%% *}"
+        grep -q "^GET /cli/feedback/$route" "$d/log.bash" \
+            || problems+=("bash $words never asked for the ticket: $(head -c 300 "$d/log.bash")")
+        cmp -s "$d/log.bash" "$d/log" || problems+=("$words: the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
+        cmp -s "$d/out.bash" "$d/out" || problems+=("$words: stdout differs: bash '$(head -c 300 "$d/out.bash")', the binary '$(head -c 300 "$d/out")'")
+        grep -q 'acmeglobex' "$d/out" || problems+=("the binary's $words printed no title 'acmeglobex' (the NUL dropped): $(head -c 300 "$d/out")")
+        n=0; : >"$d/err.rest"
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                "$ROOT/cli/k2: line "*": warning: command substitution: ignored null byte in input") n=$((n + 1)) ;;
+                *) printf '%s\n' "$line" >>"$d/err.rest" ;;
+            esac
+        done <"$d/err.bash"
+        [ "$n" = "$warns" ] || problems+=("bash $ver $words wrote $n NUL warning lines, want $warns (bash warns from 4.4 on): $(head -c 300 "$d/err.bash")")
+        cmp -s "$d/err.rest" "$d/err" || problems+=("$words: stderr but bash's NUL warning differs: bash '$(head -c 300 "$d/err.rest")', the binary '$(head -c 300 "$d/err")'")
+        ! grep -q 'null byte' "$d/err" || problems+=("the binary's $words wrote about the NUL: $(head -c 300 "$d/err")")
+    done
+    stop_stub
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    [ "$warns" = 1 ] && return 0
+    echo "bash on PATH is $ver, which drops a NUL silently as the binary does (the warning came in bash 4.4): the two are exact here, so the difference itself was not proven on this host"
+    return 3
+}
+
 for entry in "${EXPECTED_DIFFS[@]}"; do
     IFS='|' read -r d_name d_prd d_what <<<"$entry"
-    if why="$("check_${d_name//-/_}")"; then
-        echo "cli-parity: named difference $d_name (PRD $d_prd) holds: $d_what"
-    else
-        echo "cli-parity: FAIL: the named difference $d_name (PRD $d_prd) no longer holds: $d_what" >&2
-        printf '%s\n' "$why" | sed 's/^/    /' >&2
-        exit 1
-    fi
+    d_rc=0; why="$("check_${d_name//-/_}")" || d_rc=$?
+    case "$d_rc" in
+        0) echo "cli-parity: named difference $d_name (PRD $d_prd) holds: $d_what" ;;
+        3)
+            # It applies elsewhere only; what was checked here held.
+            echo "cli-parity: named difference $d_name (PRD $d_prd) NOT PROVEN on this host: $d_what"
+            printf '%s\n' "$why" | sed 's/^/    /'
+            ;;
+        *)
+            echo "cli-parity: FAIL: the named difference $d_name (PRD $d_prd) no longer holds: $d_what" >&2
+            printf '%s\n' "$why" | sed 's/^/    /' >&2
+            exit 1
+            ;;
+    esac
 done
 
 echo "cli-parity: ${#TESTS[@]} tests (shard $SHARD/$SHARDS), binary $BIN ($want_version)"

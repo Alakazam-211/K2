@@ -75612,10 +75612,10 @@ raw = sys.stdin.read()
 try:
     rows = json.loads(raw)
 except Exception:
-    sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
+    sys.stderr.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
 if isinstance(rows, dict):
-    sys.stdout.write('Error: %s\n' % rows.get('error', raw[:200]))
+    sys.stderr.write('Error: %s\n' % rows.get('error', raw[:200]))
     sys.exit(1)
 if os.environ.get('RUNNING_ONLY') == 'true':
     rows = [r for r in rows if r.get('agentEnabled')]

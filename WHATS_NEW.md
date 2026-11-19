@@ -31,6 +31,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 workspace launch <path>` and `profile <path>` name only that workspace.** Each request carries the one workspace you named, instead of that one and the workspace you are in.
 - **`k2 workspace launch` reads its flags before its target.** `k2 workspace launch --json` launches the workspace you are in (the answer is K2's JSON either way) instead of looking for a workspace named "--json". `--no-attach` is refused with exit 2, since launch never attaches a terminal; an unknown flag or a second target is refused with exit 2 too, instead of being dropped.
 - **`k2 workspace update` names its usage errors.** `--field` or `--value` with nothing after it says which flag needs a value and exits 2, instead of stopping on "$2: unbound variable"; a missing flag or an unknown word is a usage error with exit 2 too.
+- **`k2 workspace list` prints its errors on stderr.** An error from K2 or an answer it can't read no longer lands in the table's output.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

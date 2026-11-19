@@ -317,6 +317,22 @@ $USAGE"; do
     assert_eq "update $args: no request" "$(wc -l <"$LOG_FILE" | tr -d ' ')" "0"
 done
 
+echo "== list: the table's errors go to stderr =="
+answer /cli/projects/list 200 '{"error":"boom"}'
+run workspace list
+assert_eq "list error: exit 1" "$rc" "1"
+assert_eq "list error: nothing on stdout" "$out" ""
+assert_eq "list error: on stderr" "$err" "Error: boom"
+answer /cli/projects/list 200 'garbage'
+run workspace list
+assert_eq "list unreadable: exit 1" "$rc" "1"
+assert_eq "list unreadable: nothing on stdout" "$out" ""
+assert_eq "list unreadable: on stderr" "$err" "Error: daemon returned an unparseable response: 'garbage'"
+answer /cli/projects/list 200 "[{\"name\":\"acme\",\"agentMode\":\"custom\",\"path\":\"$WS\",\"agentEnabled\":true}]"
+run workspace list
+assert_eq "list: exit 0" "$rc" "0"
+assert_contains "list: the row" "$out" "acme"
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

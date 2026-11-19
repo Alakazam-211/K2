@@ -1,0 +1,24 @@
+[package]
+name = "k2-brand"
+# Not the product version: release.sh does not bump this crate.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "The brand's names (the command, its aliases, the product, the brand id), generated when building from one brand file, brand/<id>/brand.toml. No dependencies at run time; k2-client re-exports it."
+build = "build.rs"
+
+[lib]
+path = "src/lib.rs"
+
+# No [dependencies]: the names are written into the crate when building.
+
+# The build script reads the brand file. The same 0.8 k2-core and k2-daemon
+# use, so Cargo.lock gains no crate.
+[build-dependencies]
+toml = "0.8"
+
+# The tests call the build script's reader (src/brand_file.rs) on small
+# brand files.
+[dev-dependencies]
+toml = "0.8"

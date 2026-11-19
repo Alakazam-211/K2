@@ -42,7 +42,7 @@ K2/
 │   ├── k2-daemon/             # The long-running daemon: scheduler and agents keep working with the app closed. Logic goes here
 │   ├── k2-core/               # Core library: db, llm, terminal, scheduler, agent hooks. Logic goes here too
 │   │   └── drizzle_sql/       # Numbered SQL migrations
-│   ├── k2-client/             # What the thin client needs without k2-core: paths, process bootstrap, account session
+│   ├── k2-client/             # What the thin client needs without k2-core: paths, process bootstrap, account session (k2-brand: the names, from brand/<id>/brand.toml)
 │   ├── k2-vault/              # Encrypted store for passwords, tokens and keys (k2-redact: exact-value redaction)
 │   ├── k2-ptyd/               # Per-user PTY host: terminal sessions outlive the program that drives them
 │   ├── k2-term-grid/          # Terminal grid model for remote rendering (k2-term-wire: its binary wire format)

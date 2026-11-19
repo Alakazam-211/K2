@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "src-tauri",
+    # The brand's names (command, aliases, product, id), generated when
+    # building from brand/<id>/brand.toml; k2-client re-exports them.
+    "crates/k2-brand",
     "crates/k2-client",
     "crates/k2-core",
     "crates/k2-daemon",

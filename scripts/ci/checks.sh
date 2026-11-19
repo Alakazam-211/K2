@@ -151,7 +151,7 @@ part_rust_test() {
     # crate here to -D warnings, so the flag changes no outcome.
     export RUSTFLAGS="-D warnings"
     step "cargo nextest k2-client"
-    cargo nextest run --profile ci -p k2-client
+    cargo nextest run --profile ci -p k2-client -p k2-brand
     step "cargo nextest k2-ptyd (Linux)"
     cargo build -p k2-ptyd --bin k2-ptyd
     cargo nextest run --profile ci -p k2-ptyd

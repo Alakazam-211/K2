@@ -249,11 +249,12 @@ jobs:
 
       # k2-client (0.46.3 build-speed): the thin client's leaf code that
       # moved out of k2-core (paths, migration, wake, perf, release sums…);
-      # its tests no longer run under k2-core. Temp homes only.
+      # its tests no longer run under k2-core. Temp homes only. k2-brand:
+      # the brand's names it re-exports, and the brand file reader's tests.
       - name: cargo nextest k2-client
         env:
           RUSTFLAGS: -D warnings
-        run: cargo nextest run --profile ci -p k2-client
+        run: cargo nextest run --profile ci -p k2-client -p k2-brand
 
       # k2-ptyd (prd-k2-ptyd-v1 R1: single point of failure for every
       # agent): the PTY host's own suite incl. the bounded protocol fuzz,

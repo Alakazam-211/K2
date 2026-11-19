@@ -75324,7 +75324,9 @@ if isinstance(p, str) and p.strip(): print(p)' 2>/dev/null) || true
         fi
         target="$resolved"
     fi
-    _ws_request cli_request_post "/cli/workspace/ensure-canonical-session" "project=$(urlencode "$target")"
+    # The target rides as the one `project=` (the request helpers add
+    # $PROJECT's; a second one named the caller's workspace too).
+    PROJECT="$target" _ws_request cli_request_post "/cli/workspace/ensure-canonical-session"
     # Errors (a refusal, a permission card) on stderr with its exit code
     # and closing line, never printed as the answer with exit 0.
     cli_print_or_fail "$_WS_ANSWER" /cli/workspace/ensure-canonical-session
@@ -75332,7 +75334,7 @@ if isinstance(p, str) and p.strip(): print(p)' 2>/dev/null) || true
 
 cmd_workspace_profile() {
     local target="${1:-$PROJECT}"
-    _ws_request cli_request "/cli/workspace/agent-display-name" "project=$(urlencode "$target")"
+    PROJECT="$target" _ws_request cli_request "/cli/workspace/agent-display-name"
     cli_print_or_fail "$_WS_ANSWER" /cli/workspace/agent-display-name
 }
 

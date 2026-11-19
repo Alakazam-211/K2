@@ -28,6 +28,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 workspace launch`, `profile` and `update` report K2's errors as errors.** A refusal or other error goes to stderr with exit 1, or exit 3 and the permission card's closing line (`Ask with: ...`) when K2 sends a card, instead of the error's JSON on stdout with exit 0. An empty or unreadable answer is an error too.
 - **The workspace commands say when K2's server doesn't answer.** `k2 workspace list`, `create`, `open`, `launch`, `profile` and `update` print the usual "K2's server didn't answer" line and exit 1 when the server never answers or nothing takes the connection, instead of ending silently with exit 7 or 141.
 - **`k2 workspace launch <name>` launches only a folder K2 named.** When K2 can't find the workspace, or answers with no folder, the command says so and exits 1, instead of launching a workspace called "None" or the name as typed.
+- **`k2 workspace launch <path>` and `profile <path>` name only that workspace.** Each request carries the one workspace you named, instead of that one and the workspace you are in.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

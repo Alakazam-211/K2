@@ -251,6 +251,31 @@ WS_Q="$("$PY" -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]
 assert_contains "resolve found: launches that folder" "$(grep -F "\"path\": \"$ENSURE\"" "$LOG_FILE")" "project=$WS_Q"
 assert_not_contains "resolve found: never the word None" "$(cat "$LOG_FILE")" "project=None"
 
+echo "== launch/profile <path>: one project=, the target's =="
+WS2="$WORK/ws2"
+mkdir -p "$WS2/.k2"
+# project_params <route>: the project= values that route was sent, one per line.
+project_params() {
+    "$PY" -c 'import json, sys
+from urllib.parse import parse_qs
+for line in open(sys.argv[1]):
+    r = json.loads(line)
+    if r["path"] == sys.argv[2]:
+        for v in parse_qs(r["query"], keep_blank_values=True).get("project", []):
+            print(v)' "$LOG_FILE" "$1"
+}
+answer "$ENSURE" 200 '{"success":true}' /cli/workspace/agent-display-name 200 "$NAME_OK"
+run workspace launch "$WS2"
+assert_eq "launch <path>: exit 0" "$rc" "0"
+assert_eq "launch <path>: one project=, the target" "$(project_params "$ENSURE")" "$WS2"
+run workspace profile "$WS2"
+assert_eq "profile <path>: exit 0" "$rc" "0"
+assert_eq "profile <path>: one project=, the target" "$(project_params /cli/workspace/agent-display-name)" "$WS2"
+run workspace profile
+assert_eq "profile: one project=, this workspace" "$(project_params /cli/workspace/agent-display-name)" "$WS"
+run workspace launch
+assert_eq "launch: one project=, this workspace" "$(project_params "$ENSURE")" "$WS"
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -141,8 +141,16 @@ class H(BaseHTTPRequestHandler):
         if path in ("/cli/settings/update", "/cli/workspace/open"):
             err = {"error": {"code": "owner_only", "hint": "owner only"}}
             if on and path == "/cli/settings/update" and self.headers.get("Authorization") == "Bearer passport-teach":
-                err["permission"] = {"requestable": False, "where": "a person does this, from a terminal outside K2"}
+                if json.loads(body or "{}") == {"ciPreview": True}:
+                    # 0.46.17: the agent's own ciPreview true asks the owner.
+                    err["permission"] = dict(ask("ci.preview"), approvers="owner")
+                else:
+                    err["permission"] = {"requestable": False, "where": "a person does this, from a terminal outside K2"}
             return self.reply(403, err)
+        if path == "/cli/ci/run" and on:
+            # 0.46.17: CI on K2 Compute is off (409 ci_preview_off).
+            return self.reply(409, {"error": {"code": "ci_preview_off", "hint": "k2 ci is part of CI on K2 Compute, a preview that is off on this server"},
+                                    "permission": dict(ask("ci.preview"), approvers="owner")})
         err = {"error": {"code": "owner_only", "hint": "only the server's owner may do this"}}
         if on:
             if path == "/cli/connections" and "action=remove" in self.path:
@@ -323,6 +331,22 @@ run agent settings set computePreview true
 [ "$(last_err_line)" = "It can't be requested." ] && ok || bad "settings set: last stderr line is '$(last_err_line)'"
 [ "$(printf '%s\n' "$ERR" | grep -c "It can't be requested.")" = 1 ] && ok || bad "settings set: the closing line must print once"
 grep -q '^POST /cli/settings/update {"computePreview":true}$' "$LOG" && ok || bad "settings set: wrong request: $(cat "$LOG")"
+
+# 0.46.17: the agent's own `k2 settings set ciPreview true`, and any k2 ci
+# verb while CI on K2 Compute is off, end with the owner's ci.preview card.
+CI_ASK='Ask with: k2 permission request ci.preview --why "<what you need it for>"'
+run agent settings set ciPreview true
+[ "$RC" = 3 ] && ok || bad "settings set ciPreview: exit $RC, want 3 ($ERR)"
+[ "$(last_err_line)" = "$CI_ASK" ] && ok || bad "settings set ciPreview: last stderr line is '$(last_err_line)'"
+[ "$(printf '%s\n' "$ERR" | grep -c '^Ask with:')" = 1 ] && ok || bad "settings set ciPreview: the closing line must print once"
+<<<"$ERR" grep -q "ask the owner on a permission card" && ok || bad "settings set ciPreview: no card line: '$ERR'"
+<<<"$ERR" grep -q "ask your human" && bad "settings set ciPreview: still says ask your human: '$ERR'" || ok
+grep -q '^POST /cli/settings/update {"ciPreview":true}$' "$LOG" && ok || bad "settings set ciPreview: wrong request: $(cat "$LOG")"
+run agent ci run
+[ "$RC" = 3 ] && ok || bad "ci run off: exit $RC, want 3 ($ERR)"
+<<<"$ERR" grep -q '^ci_preview_off: ' && ok || bad "ci run off: no code line: '$ERR'"
+[ "$(last_err_line)" = "$CI_ASK" ] && ok || bad "ci run off: last stderr line is '$(last_err_line)'"
+[ "$(printf '%s\n' "$ERR" | grep -c '^Ask with:')" = 1 ] && ok || bad "ci run off: the closing line must print once"
 
 # The mail family (its own Python transport) ends the same way: an agent
 # widening its own inbox access (M0) is the owner's, exit 3, line once.

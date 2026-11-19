@@ -330,6 +330,12 @@ rc "ci_preview_off" 3 ci run dark
 has "ci_preview_off says code: hint" "$(cat "$WORK/err")" "ci_preview_off: the hint for ci_preview_off"
 has "help names the preview switch" "$("$K2" ci --help)" "(preview: k2 settings set ciPreview true)"
 has "study names the preview switch" "$("$K2" study ci)" "k2 settings set ciPreview true"
+# 0.46.17: the Settings row, and the card an agent asks for.
+has "help names the Settings row" "$("$K2" ci --help)" "Settings → Compute → CI on K2 Compute"
+has "help names the card" "$("$K2" ci --help)" "k2 permission"
+has "help names the card action" "$("$K2" ci --help)" "request ci.preview"
+has "study names the card" "$("$K2" study ci)" "Ask with: k2 permission request ci.preview (off: ci.preview-off)"
+has "study names the Settings row" "$("$K2" study ci)" "in Settings → Compute"
 
 echo "== status =="
 rc "status" 0 ci status

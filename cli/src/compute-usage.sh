@@ -506,7 +506,8 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    it; you type the node's name, then Touch ID / vault
                    password. An offer alone never makes a node this server's.
 CI seats on shared nodes (0.46.10): node rosters, lanes, seats (preview: k2 settings set ciPreview true).
-Off, every verb below exits 3 (ci_preview_off). Agents with
+Off, every verb below exits 3 (ci_preview_off; an agent asks the owner with
+k2 permission request ci.preview). Agents with
 "operate compute nodes" file and read; a person (owner or Admin, from a
 terminal outside K2, Touch ID / vault password) decides every change:
   k2 compute roster [show] [--json]   this server's signed node roster (seq,

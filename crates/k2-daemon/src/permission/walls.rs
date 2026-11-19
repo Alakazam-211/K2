@@ -316,6 +316,9 @@ pub(crate) const V1_ACTIONS: [&str; 76] = [
     "postal.invite",
     "postal.pair.accept",
     "postal.link-p5",
+    // 0.46.17: turn on CI on K2 Compute for the server (`ciPreview`, the
+    // owner's). Its `ci.preview-off` twin is asked only.
+    "ci.preview",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -377,6 +380,16 @@ const COMPUTE_GRANT_ROW: Row = Row {
     body_lacks: &["/allowCi", "/allowGpu"],
     ..row(ask("compute.grant", Floor::Admin), code(403, "owner_only"), "/cli/compute/grants/set", POST)
 };
+
+/// `k2 settings set ciPreview true`'s body (0.46.17), and its route.
+const CI_PREVIEW_ON: &[(&str, &str)] = &[("/ciPreview", "true")];
+const CI_SETTINGS_ROUTE: &str = super::actions::ci_preview::SETTINGS_ROUTE;
+
+/// What `POST /cli/settings/update` answers a passport over TCP
+/// (`token_ok` refuses it before the handler): a flat `error` string.
+pub(crate) const SETTINGS_TCP_REFUSAL: &str = "invalid or missing token";
+/// That refusal's whole body (the dispatcher sends exactly this).
+pub(crate) const SETTINGS_TCP_REFUSAL_BODY: &str = r#"{"error":"invalid or missing token"}"#;
 
 /// `k2 compute access on`'s body: the compute toggle, turned on.
 const COMPUTE_ACCESS_ON: &[(&str, &str)] = &[("/toggle", "compute"), ("/value", "true")];
@@ -535,6 +548,18 @@ pub(crate) const ROWS: &[Row] = &[
     // can't set it), both teach `compute.git-access-setup`.
     row(ask("compute.git-access-setup", Floor::Admin), code(403, "git_access_needs_setup"), "/cli/compute/git-access/grant", POST),
     row(ask("compute.git-access-setup", Floor::Admin), code(403, "owner_only"), "/cli/compute/git-access/setup", POST),
+    // ── CI on K2 Compute (0.46.17) ─────────────────────────────────────
+    // Every CI surface answers 409 `ci_preview_off` while the server's
+    // `ciPreview` is off (`k2 ci`, rosters, lanes, seats, signer pairing,
+    // rightsize, stats…): the owner turns it on, on a card.
+    row(ask("ci.preview", Floor::Owner), code(409, k2_core::compute::CI_PREVIEW_OFF), "/cli/", ANY),
+    // The agent's own `k2 settings set ciPreview true`: agents never reach
+    // `/cli/settings/*`. On the cell socket that is the teaching
+    // `owner_only` (`cell_gated_body`); over TCP, `token_ok`'s flat
+    // refusal. Only `ciPreview: true`: any other key (or `false`) stays
+    // "It can't be requested".
+    Row { body_eq: CI_PREVIEW_ON, ..row(ask("ci.preview", Floor::Owner), code(403, "owner_only"), CI_SETTINGS_ROUTE, POST) },
+    Row { body_eq: CI_PREVIEW_ON, ..row(ask("ci.preview", Floor::Owner), code(403, SETTINGS_TCP_REFUSAL), CI_SETTINGS_ROUTE, POST) },
     // ── Sew (0.46.6)───────────────────────────────────────────────────
     // An agent's own call to the owner handoff: agents never become Sew's
     // install owner; the owner opens it for themselves on a card.
@@ -1271,6 +1296,18 @@ pub(crate) fn add_permission(body: &str, permission: &Value) -> Option<String> {
     Some(format!("{head}{sep}\"permission\":{permission}{tail}"))
 }
 
+/// A status some row answers on besides 401/403: a hold's 2xx, or a
+/// refusal with its own status (`ci_preview_off` is a 409, 0.46.17). With
+/// `path`, only rows whose prefix it starts with count.
+fn walled_status(code: u16, path: Option<&str>) -> bool {
+    ROWS.iter().any(|r| {
+        let s = match r.matches {
+            WallMatch::Code { status, .. } | WallMatch::Held { status, .. } => status,
+        };
+        s == code && path.is_none_or(|p| p.starts_with(r.prefix))
+    })
+}
+
 /// The whole wrapper for one answer: `None` = send `body` unchanged.
 fn teach(
     status: &str,
@@ -1282,10 +1319,7 @@ fn teach(
     body: &str,
 ) -> Option<String> {
     let code = status_code(status);
-    let candidate = matches!(code, 401 | 403)
-        || ROWS
-            .iter()
-            .any(|r| matches!(r.matches, WallMatch::Held { status: s, .. } if s == code) && path.starts_with(r.prefix));
+    let candidate = matches!(code, 401 | 403) || walled_status(code, Some(path));
     if !candidate || !body.trim_start().starts_with('{') {
         return None;
     }
@@ -1320,7 +1354,7 @@ pub(crate) fn teach_tcp<'a>(status: &str, body: &'a str) -> Cow<'a, str> {
         return Cow::Borrowed(body);
     }
     let code = status_code(status);
-    if code < 200 || (code >= 300 && !matches!(code, 401 | 403)) {
+    if code < 200 || (code >= 300 && !matches!(code, 401 | 403) && !walled_status(code, None)) {
         return Cow::Borrowed(body);
     }
     let taught = crate::routes::pass_gate::with_request(|r| {
@@ -1572,6 +1606,12 @@ mod tests {
             (403, "POST", "/cli/mail/config/set", vec![], Some(json!({"workspace":"sales","agentSend":"off"})), json!({"ok":false,"error":{"code":"owner_only","hint":"x","workspace":{"name":"alpha","path":"/a","id":"w"}}}), "mail.stop-sending"),
             // 0.46.13: `k2 approve request` without the permission.
             (403, "POST", "/cli/approve/request", vec![], Some(json!({"payload_b64":"AA=="})), json!({"ok":false,"error":{"code":"approve_request_off","hint":"x"}}), "approve.request"),
+            // 0.46.17: CI on K2 Compute off (any CI verb), and the agent's
+            // own `k2 settings set ciPreview true` (cell socket, then TCP).
+            (409, "POST", "/cli/ci/run", vec![], Some(json!({"rev":"HEAD"})), json!({"error":{"code":"ci_preview_off","hint":"x"}}), "ci.preview"),
+            (409, "GET", "/cli/compute/roster", vec![], None, json!({"error":{"code":"ci_preview_off","hint":"x"}}), "ci.preview"),
+            (403, "POST", "/cli/settings/update", vec![], Some(json!({"ciPreview":true})), json!({"error":{"code":"owner_only","hint":"x"}}), "ci.preview"),
+            (403, "POST", "/cli/settings/update", vec![], Some(json!({"ciPreview":true})), json!({"error":"invalid or missing token"}), "ci.preview"),
             // 0.46.16 Postal: off refuses an agent on every route; each
             // agent step answers with the card K2 put up (`asked: true`).
             (403, "GET", "/cli/postal/status", vec![], None, json!({"ok":false,"state":"off","error":{"code":"postal_off","hint":"x"}}), "postal.enable"),
@@ -2513,5 +2553,41 @@ mod tests {
             let p = teach_as(&me.id, "/cli/mail/config/set", json!({"workspace": ws, "agentSend": "off"}), &owner_only).expect("taught");
             assert_eq!(p["command"], format!("k2 permission request mail.stop-sending target={ws} --why \"<what you need it for>\""), "{p}");
         }
+    }
+
+    /// 0.46.17: CI on K2 Compute. Every `ci_preview_off` (a 409) and the
+    /// agent's own `k2 settings set ciPreview true` (either door) end with
+    /// the owner's `ci.preview` card; nothing else on the settings route
+    /// does, and the 409 reaches the wrapper on both doors.
+    #[test]
+    fn ci_preview_teaches_the_owners_card() {
+        const ASK: &str = "k2 permission request ci.preview --why \"<what you need it for>\"";
+        let off = json!({"error":{"code":"ci_preview_off","hint":"x"}});
+        for (m, path) in [("POST", "/cli/ci/run"), ("GET", "/cli/ci/status"), ("POST", "/cli/compute/seats/request"), ("GET", "/cli/compute/rightsize")] {
+            let p = teach_of(409, m, path, &[], None, off.clone()).unwrap_or_else(|| panic!("{path}: not taught"));
+            assert_eq!((p["command"].as_str(), p["approvers"].as_str()), (Some(ASK), Some("owner")), "{path}: {p}");
+            assert_eq!(p["params"], json!({}), "{p}");
+        }
+        // Another 409 is no refusal of this card's.
+        assert!(teach_of(409, "POST", "/cli/ci/run", &[], None, json!({"error":{"code":"ci_not_a_repo"}})).is_none());
+        // The wrapper lets a 409 through only where a row answers on it.
+        assert!(walled_status(409, None) && walled_status(409, Some("/cli/ci/run")));
+        assert!(!walled_status(409, Some("/v1/sandboxes")) && !walled_status(500, None));
+
+        // The settings route: ciPreview true asks; false, another key, or
+        // both keys at once with ciPreview false stay "It can't be requested".
+        for refusal in [json!({"error":{"code":"owner_only","hint":"x"}}), json!({"error":"invalid or missing token"})] {
+            let p = teach_of(403, "POST", "/cli/settings/update", &[], Some(json!({"ciPreview": true})), refusal.clone()).expect("taught");
+            assert_eq!(p["command"], ASK, "{refusal}: {p}");
+            for body in [json!({"ciPreview": false}), json!({"computePreview": true}), json!({"ciPreview": false, "computePreview": true})] {
+                let p = teach_of(403, "POST", "/cli/settings/update", &[], Some(body.clone()), refusal.clone()).expect("a refusal");
+                assert_eq!(p["requestable"], false, "{body}: {p}");
+            }
+        }
+        // The TCP refusal's body is the code the row matches on.
+        assert_eq!(serde_json::from_str::<Value>(SETTINGS_TCP_REFUSAL_BODY).expect("json")["error"], SETTINGS_TCP_REFUSAL);
+        // The cell socket, with the gate off for this workspace: today's text.
+        let empty = HashMap::new();
+        assert!(cell_gated_body("POST", "/cli/settings/update", &empty, br#"{"ciPreview":true}"#, "no-such-workspace").is_none());
     }
 }

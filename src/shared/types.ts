@@ -148,6 +148,10 @@ export interface AppSettingsResponse {
   // While off every /cli/compute/* route 404s `compute_disabled`. Optional:
   // older snapshots omit it → readers treat absent as false.
   computePreview?: boolean
+  // CI on K2 Compute preview (0.46.17 Settings → Compute row): `k2 ci`, node
+  // rosters, lanes, seats. Owner-only; needs computePreview on too. Optional:
+  // older snapshots omit it → readers treat absent as false.
+  ciPreview?: boolean
   // Voice rooms previews (prd-k2-voice-rooms-v1), Owner-only, default off:
   // the K2 Admin Space + rooms, and voice through the tunnel. Optional:
   // an older daemon omits them → readers treat absent as false.

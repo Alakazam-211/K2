@@ -6162,12 +6162,12 @@ async fn handle_one_request(
         "/cli/settings/update" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             if !super::http::token_ok(&query, state.token.as_str()) {
-                let _ = stream.read(&mut buf).await;
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await; // noted: walls' ci.preview row reads it
                 super::http::send_response(
                     &mut *stream,
                     "403 Forbidden",
                     "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
+                    crate::permission::walls::SETTINGS_TCP_REFUSAL_BODY,
                 )
                 .await;
                 return DispatchOutcome::Done;

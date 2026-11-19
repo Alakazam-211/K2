@@ -97,9 +97,11 @@ import { LocalPackagesSummary, NodePackagesSummary, PackageRequestsPanel } from 
 import { findLocalNode, onComputeSync } from './compute-packages-api'
 import { touchIdOrPassword } from '@/lib/desktop-words'
 import { ActionError, CopyBox, NodeStatus, SettingsLink, failureFor, hardwareLine, osLine, tierWord, tierWords, type ActionFailure } from './ComputeBits'
+import { CI_PREVIEW_ENTRY, CiPreviewRow } from './CiPreviewRow'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
   { id: 'compute.preview', section: 'compute', label: 'Let agents use your machines', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', 'k2 compute', 'offload', 'build'] },
+  CI_PREVIEW_ENTRY,
   { id: 'compute.machines', section: 'compute', label: 'Machines', description: 'Your machines that offer compute; switch one on for this server', keywords: ['compute', 'machine', 'machines', 'use compute', 'cpu', 'ram', 'disk', 'one-click'] },
   { id: 'compute.nodes', section: 'compute', label: 'Machine settings', description: 'Machines that run jobs for this server', keywords: ['compute', 'node', 'pause', 'drain', 'resume', 'confirm', 'rename', 'remove'] },
   { id: 'compute.add-node', section: 'compute', label: 'Add a machine', description: 'Make a pairing code for another machine', keywords: ['enroll', 'pairing', 'code', 'install', 'pair', 'add node'] },
@@ -376,6 +378,7 @@ export function ComputeSection(): React.JSX.Element {
                 </p>
                 <ActionError failure={previewFailure} />
               </SettingSwitchRow>
+              <CiPreviewRow computeOn={controllerState === 'ready'} />
             </SettingsGroup>
 
             {disabled ? (

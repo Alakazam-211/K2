@@ -30626,7 +30626,8 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    it; you type the node's name, then Touch ID / vault
                    password. An offer alone never makes a node this server's.
 CI seats on shared nodes (0.46.10): node rosters, lanes, seats (preview: k2 settings set ciPreview true).
-Off, every verb below exits 3 (ci_preview_off). Agents with
+Off, every verb below exits 3 (ci_preview_off; an agent asks the owner with
+k2 permission request ci.preview). Agents with
 "operate compute nodes" file and read; a person (owner or Admin, from a
 terminal outside K2, Touch ID / vault password) decides every change:
   k2 compute roster [show] [--json]   this server's signed node roster (seq,
@@ -40252,8 +40253,10 @@ _ci_usage() {
     cat <<'EOF'
 k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
 (preview: k2 settings set ciPreview true): off, every k2 ci verb exits 3
-(ci_preview_off) and the daemon checks nothing; the owner turns it on
-(compute must be on too)
+(ci_preview_off) and the daemon checks nothing. The owner turns it on in
+Settings → Compute → CI on K2 Compute, or with k2 settings set ciPreview true
+(compute must be on too). An agent asks the owner on a card: k2 permission
+request ci.preview --why "…" (the refusal prints that line)
 
   k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB]
              [--cpus N] [--timeout 1h] [--branches main,integ/*]
@@ -51310,7 +51313,12 @@ if status != "200" or not isinstance(d, dict) or d.get("error") is not None:
     print("Error: %s%s" % ((code + ": ") if code and code not in hint else "", hint), file=sys.stderr)
     low = (code + " " + hint).lower()
     if status in ("401", "403") or any(w in low for w in ("owner", "admin", "forbidden", "not allowed", "refused", "passport")):
-        print("Server settings are the owner'"'"'s: ask your human, or run it from a terminal outside a K2 agent session.", file=sys.stderr)
+        perm = d.get("permission") if isinstance(d, dict) else None
+        if isinstance(perm, dict) and perm.get("command"):
+            # Permission cards on: the closing "Ask with: …" line follows.
+            print("Server settings are the owner'"'"'s: ask the owner on a permission card.", file=sys.stderr)
+        else:
+            print("Server settings are the owner'"'"'s: ask your human, or run it from a terminal outside a K2 agent session.", file=sys.stderr)
         sys.exit(3)
     sys.exit(2 if status == "400" else 1)
 if d.get(key) is not want:
@@ -59896,7 +59904,7 @@ cmd_schema() {
     {
       "name": "settings set",
       "usage": "k2 settings set <key> <true|false>",
-      "description": "The owner turns one server preview switch on or off (POST /cli/settings/update): voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview, videoRoomsPreview, usageSingleRecord, agentProcessNames, homeChat or homeChatPush (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
+      "description": "The owner turns one server preview switch on or off (POST /cli/settings/update): voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview, videoRoomsPreview, usageSingleRecord, agentProcessNames, homeChat or homeChatPush (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3; an agent's ciPreview true, with permission cards on, ends with the k2 permission request ci.preview line to ask the owner). A daemon refusal exits 3.",
       "args": [{"name": "key", "required": true}, {"name": "value", "required": true, "description": "true or false (on and off work too)."}],
       "flags": []
     },
@@ -61997,10 +62005,10 @@ k2 study ci — CI on K2 Compute (k2 ci): every push checked, no runner
 (preview: k2 settings set ciPreview true)
 
 A PREVIEW IN 0.46.10
-  Off by default: every k2 ci verb answers ci_preview_off (exit 3) and the
-  daemon's CI loop does nothing. The owner turns it on, in a plain terminal
-  on the server: k2 settings set ciPreview true (and compute nodes: k2
-  compute preview on). An agent asks its human (k2 thread).
+  Off by default: every k2 ci verb answers ci_preview_off (exit 3). The
+  owner turns it on (at once; compute on too) in Settings → Compute, or:
+  k2 settings set ciPreview true. An agent asks on the owner's card: run the
+  refusal's Ask with: k2 permission request ci.preview (off: ci.preview-off).
 
 WHAT IT IS
   The K2 daemon checks your repo's commits on K2 Compute nodes. You write
@@ -100271,6 +100279,14 @@ A job reads a private GitHub repo only with a grant, and every grant needs this 
     k2 permission request compute.git-access-setup --why "<what you need it for>"
 
 Run it as printed. The owner or an admin enters a GitHub App key or a read-only token in K2's own form on the card: it goes straight into this server's vault and you never see it. Never ask for a key or token in chat or on a secret card. When the `[permission:]` turn comes back (it may say "already on": they set it in the form), run the grant again: it ends with `k2 permission request compute.git-access repos=<owner>/<repo> --why "..."`, a second card. Once that's approved, run your job again. `k2 study compute` (GIT ACCESS).
+
+## CI on compute nodes
+
+CI on compute nodes (`ciPreview`) is a server switch, the owner's. While it's off, every `k2 ci` command (and node rosters, lanes and seats) is refused with `ci_preview_off` (exit 3) and ends with:
+
+    k2 permission request ci.preview --why "<what you need it for>"
+
+Run it as printed; your own `k2 settings set ciPreview true` ends with the same line. Only the owner allows it, for the whole server, and CI checks then go ahead of other compute jobs. When the `[permission:]` turn says approved, run your command again (compute nodes must be on too). To turn it off again: `k2 permission request ci.preview-off --why "..."`. `k2 study ci`.
 
 ## Apps
 

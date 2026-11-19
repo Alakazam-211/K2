@@ -1504,6 +1504,14 @@ A job reads a private GitHub repo only with a grant, and every grant needs this 
 
 Run it as printed. The owner or an admin enters a GitHub App key or a read-only token in K2's own form on the card: it goes straight into this server's vault and you never see it. Never ask for a key or token in chat or on a secret card. When the `[permission:]` turn comes back (it may say "already on": they set it in the form), run the grant again: it ends with `k2 permission request compute.git-access repos=<owner>/<repo> --why "..."`, a second card. Once that's approved, run your job again. `k2 study compute` (GIT ACCESS).
 
+## CI on compute nodes
+
+CI on compute nodes (`ciPreview`) is a server switch, the owner's. While it's off, every `k2 ci` command (and node rosters, lanes and seats) is refused with `ci_preview_off` (exit 3) and ends with:
+
+    k2 permission request ci.preview --why "<what you need it for>"
+
+Run it as printed; your own `k2 settings set ciPreview true` ends with the same line. Only the owner allows it, for the whole server, and CI checks then go ahead of other compute jobs. When the `[permission:]` turn says approved, run your command again (compute nodes must be on too). To turn it off again: `k2 permission request ci.preview-off --why "..."`. `k2 study ci`.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
@@ -2587,6 +2595,10 @@ mod tests {
             "k2 permission request permission.approvers to=",
             "k2 permission request app.login-grant op=role",
             "k2 app grant role <grant-id> --role <role>",
+            // 0.46.17: CI on K2 Compute, the owner's card both ways.
+            "k2 permission request ci.preview --why",
+            "k2 permission request ci.preview-off",
+            "ci_preview_off",
         ] {
             assert!(body.contains(must), "the k2-permissions skill must teach: {must}");
         }

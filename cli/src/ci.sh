@@ -7,8 +7,10 @@ _ci_usage() {
     cat <<'EOF'
 k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
 (preview: k2 settings set ciPreview true): off, every k2 ci verb exits 3
-(ci_preview_off) and the daemon checks nothing; the owner turns it on
-(compute must be on too)
+(ci_preview_off) and the daemon checks nothing. The owner turns it on in
+Settings → Compute → CI on K2 Compute, or with k2 settings set ciPreview true
+(compute must be on too). An agent asks the owner on a card: k2 permission
+request ci.preview --why "…" (the refusal prints that line)
 
   k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB]
              [--cpus N] [--timeout 1h] [--branches main,integ/*]

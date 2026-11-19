@@ -1730,7 +1730,12 @@ if status != "200" or not isinstance(d, dict) or d.get("error") is not None:
     print("Error: %s%s" % ((code + ": ") if code and code not in hint else "", hint), file=sys.stderr)
     low = (code + " " + hint).lower()
     if status in ("401", "403") or any(w in low for w in ("owner", "admin", "forbidden", "not allowed", "refused", "passport")):
-        print("Server settings are the owner'"'"'s: ask your human, or run it from a terminal outside a K2 agent session.", file=sys.stderr)
+        perm = d.get("permission") if isinstance(d, dict) else None
+        if isinstance(perm, dict) and perm.get("command"):
+            # Permission cards on: the closing "Ask with: …" line follows.
+            print("Server settings are the owner'"'"'s: ask the owner on a permission card.", file=sys.stderr)
+        else:
+            print("Server settings are the owner'"'"'s: ask your human, or run it from a terminal outside a K2 agent session.", file=sys.stderr)
         sys.exit(3)
     sys.exit(2 if status == "400" else 1)
 if d.get(key) is not want:

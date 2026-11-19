@@ -43,6 +43,12 @@ vi.mock('./compute-api', async (importOriginal) => {
 })
 
 vi.mock('./K2ConnectSection', () => ({ getAccountAccessToken: vi.fn(async () => null) }))
+// The CI on K2 Compute row reads its own setting (CiPreviewRow.test.tsx
+// covers it); here it is off and the viewer is the owner.
+vi.mock('./ci-preview-api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('./ci-preview-api')>()
+  return { ...orig, fetchCiPreview: vi.fn(async () => false), fetchCiPreviewRole: vi.fn(async () => 'owner'), saveCiPreview: vi.fn() }
+})
 // Node admin parts read their own routes; this page's tests don't cover them
 // (ComputeAdminParts.test.tsx does).
 vi.mock('./compute-admin-api', async (importOriginal) => {
@@ -233,6 +239,16 @@ describe('preview off', () => {
     expect(m.fetchComputeGrants).not.toHaveBeenCalled()
     fireEvent.click(sw)
     await waitFor(() => expect(setComputePreview).toHaveBeenCalledWith(true))
+  })
+
+  it('shows CI on K2 Compute under the compute switch, saying it needs compute on', async () => {
+    useSettingsStore.setState({ computePreview: false } as never)
+    m.fetchComputeNodes.mockRejectedValue(DISABLED)
+    render(<ComputeSection />)
+    const row = await screen.findByTestId('ci-preview-row')
+    expect(within(row).getByRole('switch', { name: 'CI on K2 Compute (preview)' })).toBeTruthy()
+    await waitFor(() => expect(within(row).getByTestId('ci-preview-needs-compute').textContent).toContain('Let agents use your machines is on'))
+    expect(COMPUTE_MANIFEST.map((e) => e.id)).toContain('compute.ci-preview')
   })
 })
 

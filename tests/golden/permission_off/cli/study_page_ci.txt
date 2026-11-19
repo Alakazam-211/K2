@@ -5,10 +5,10 @@ k2 study ci — CI on K2 Compute (k2 ci): every push checked, no runner
 (preview: k2 settings set ciPreview true)
 
 A PREVIEW IN 0.46.10
-  Off by default: every k2 ci verb answers ci_preview_off (exit 3) and the
-  daemon's CI loop does nothing. The owner turns it on, in a plain terminal
-  on the server: k2 settings set ciPreview true (and compute nodes: k2
-  compute preview on). An agent asks its human (k2 thread).
+  Off by default: every k2 ci verb answers ci_preview_off (exit 3). The
+  owner turns it on (at once; compute on too) in Settings → Compute, or:
+  k2 settings set ciPreview true. An agent asks on the owner's card: run the
+  refusal's Ask with: k2 permission request ci.preview (off: ci.preview-off).
 
 WHAT IT IS
   The K2 daemon checks your repo's commits on K2 Compute nodes. You write

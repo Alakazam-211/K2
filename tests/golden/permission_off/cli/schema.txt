@@ -8018,7 +8018,7 @@ exit: 0
     {
       "name": "settings set",
       "usage": "k2 settings set <key> <true|false>",
-      "description": "The owner turns one server preview switch on or off (POST /cli/settings/update): voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview, videoRoomsPreview, usageSingleRecord, agentProcessNames, homeChat or homeChatPush (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
+      "description": "The owner turns one server preview switch on or off (POST /cli/settings/update): voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview, videoRoomsPreview, usageSingleRecord, agentProcessNames, homeChat or homeChatPush (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3; an agent's ciPreview true, with permission cards on, ends with the k2 permission request ci.preview line to ask the owner). A daemon refusal exits 3.",
       "args": [{"name": "key", "required": true}, {"name": "value", "required": true, "description": "true or false (on and off work too)."}],
       "flags": []
     },

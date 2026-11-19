@@ -629,6 +629,20 @@ async fn connect_once(h: &Arc<Held>, token: &str, resume: bool) -> Ended {
                                     }
                                 };
                                 h.publish(&frames);
+                                // prd-home-chat-pushes-v1 §9 (HC-11): a read on
+                                // any device may clear this conversation's pushes
+                                // on the person's phones. Outside the state lock.
+                                if ev == "read_state_updated" {
+                                    let d = &v["d"];
+                                    let id = |x: &Value| match x {
+                                        Value::String(s) if !s.is_empty() => Some(s.clone()),
+                                        Value::Number(n) => Some(n.to_string()),
+                                        _ => None,
+                                    };
+                                    if let (Some(conv), Some(read)) = (id(&d["channel_id"]), id(&d["last_read_id"])) {
+                                        super::chat_push::read_moved(&h.ext, &conv, &read);
+                                    }
+                                }
                             }
                             Some(op::INVALID_SESSION) => {
                                 let resumable = v["d"]["resumable"].as_bool().unwrap_or(false);

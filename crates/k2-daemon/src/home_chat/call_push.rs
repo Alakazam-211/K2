@@ -11,12 +11,27 @@
 //! `{items, next}`; each item has `seq, kind, at, channel_id,
 //! from_member_id, app_id`, and a call's also `call_id, message_id`. Kinds
 //! `call_ring` (a loud ring only), `call_missed` (a ring that timed out, the
-//! same `call_id`), `mention`, `dm`, `reply_to_me`; K2 acts on the first two
-//! and ignores the rest. Sew holds the feed (`items: []`) during Do Not
-//! Disturb. A ring answered, declined or cancelled before the poll never
-//! shows, and the feed has no ring-ended item.
+//! same `call_id`), `mention`, `dm`, `reply_to_me`. The calls are pushed
+//! here; the message kinds go to [`super::chat_push`] (Home chat pushes,
+//! prd-home-chat-pushes-v1), which drops them while `homeChatPush` is off.
+//! Sew 0.11.0's additive kinds are taken when they come: `all` and `keyword`
+//! (messages), `read` (a read marker) and `call_ring_stopped` (a ring's end
+//! with no held session). Any other kind is ignored. Sew holds the feed
+//! (`items: []`) during Do Not Disturb. A ring answered, declined or
+//! cancelled before the poll never shows.
 //! - `410 cursor_expired {oldest_seq, head}`: resume at `oldest_seq`; the
-//!   gap pushes nothing.
+//!   gap pushes nothing. A `head` below K2's cursor means Sew's data went
+//!   back: start at `head` (HC-2).
+//!
+//! **The cursor** is stored per person in skin.db
+//! (`tool_hook::home_push`), written after a page's pushes went (a crash
+//! repeats a push, never loses one), and forgotten on `sew_data_reset`. A
+//! person with no stored cursor starts at Sew's head when Sew has
+//! `feed_head` (0.10.6), else at 0, and the age guards keep a backlog quiet:
+//! a ring more than [`RING_MAX_AGE_SECS`] old never rings, and a missed call
+//! more than [`ITEM_MAX_AGE_SECS`] old never pushes (each item's own `at`;
+//! one that doesn't parse counts as old). Do Not Disturb holds rings too
+//! (D7): a ring released after it is old.
 //! - `404` (an unknown, agent or malformed id) and `403 not_provisioned`
 //!   (deactivated): that person's poller stops (the supervisor tries again
 //!   after [`STOPPED_FOR`]).
@@ -64,16 +79,100 @@ pub const STOPPED_FOR: Duration = Duration::from_secs(600);
 const SUPERVISE_EVERY: Duration = Duration::from_secs(30);
 /// Calls remembered per person (oldest dropped first).
 const CALLS_KEPT: usize = 256;
+/// A ring item older than this never rings (D7: a DND release, a restart).
+pub const RING_MAX_AGE_SECS: i64 = 45;
+/// A missed call or a message item older than this never alerts
+/// (HC-3, HC-4).
+pub const ITEM_MAX_AGE_SECS: i64 = 600;
 
-/// One feed item K2 acts on (ids only).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The feed kinds K2 takes; any other is ignored (additive).
+pub const CALL_KINDS: &[&str] = &["call_ring", "call_missed", "call_ring_stopped"];
+/// The message kinds (Home chat pushes). `all` and `keyword` are Sew 0.11.0's.
+pub const MESSAGE_KINDS: &[&str] = &["dm", "mention", "reply_to_me", "all", "keyword"];
+/// Sew 0.11.0's read marker.
+pub const READ_KIND: &str = "read";
+
+/// One feed item K2 acts on. `preview` is message text: it is private and
+/// never printed ([`std::fmt::Debug`] hides it, HC-21).
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct FeedItem {
-    /// `call_ring` or `call_missed`.
+    pub seq: u64,
     pub kind: String,
+    /// When Sew wrote it (unix seconds; `None` = didn't parse, counts as old).
+    pub at: Option<i64>,
+    /// A call's id (call kinds; `""` otherwise).
     pub call_id: String,
     pub channel_id: Option<String>,
-    /// The caller (`from_member_id`).
+    pub message_id: Option<String>,
+    pub space_id: Option<String>,
+    pub app_id: Option<String>,
+    /// The sender or caller (`from_member_id`).
     pub started_by: Option<String>,
+    /// Sew 0.11.0's `from_external_id`.
+    pub from_ext: Option<String>,
+    /// `call_ring_stopped`'s reason.
+    pub reason: Option<String>,
+    preview: Option<String>,
+}
+
+impl std::fmt::Debug for FeedItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeedItem")
+            .field("seq", &self.seq)
+            .field("kind", &self.kind)
+            .field("at", &self.at)
+            .field("call_id", &self.call_id)
+            .field("channel_id", &self.channel_id)
+            .field("message_id", &self.message_id)
+            .field("space_id", &self.space_id)
+            .field("app_id", &self.app_id)
+            .field("started_by", &self.started_by)
+            .field("from_ext", &self.from_ext)
+            .field("reason", &self.reason)
+            .field("preview", &self.preview.as_ref().map(|_| "<hidden>"))
+            .finish()
+    }
+}
+
+impl FeedItem {
+    /// A call item (tests and the parser).
+    pub fn call(kind: &str, call_id: &str, channel_id: Option<&str>, started_by: Option<&str>, at: Option<i64>) -> FeedItem {
+        FeedItem {
+            kind: kind.to_string(),
+            call_id: call_id.to_string(),
+            channel_id: channel_id.map(str::to_string),
+            started_by: started_by.map(str::to_string),
+            at,
+            ..Default::default()
+        }
+    }
+
+    /// Sew's feed preview of the message (only while the org policy
+    /// `notifications.mgmt_preview` is on). Message text: never log it.
+    pub fn preview(&self) -> Option<&str> {
+        self.preview.as_deref()
+    }
+
+    /// Tests: an item with this preview.
+    #[doc(hidden)]
+    pub fn with_preview(mut self, text: &str) -> FeedItem {
+        self.preview = Some(text.to_string());
+        self
+    }
+
+    /// Is this item older than `max` seconds at `now` (an unparsed `at` is)?
+    pub fn older_than(&self, max: i64, now: i64) -> bool {
+        self.at.is_none_or(|at| now - at > max)
+    }
+}
+
+/// An RFC 3339 time as unix seconds (`None` when it doesn't parse).
+pub fn at_of(v: &Value) -> Option<i64> {
+    match v {
+        Value::String(s) => chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.timestamp()),
+        Value::Number(n) => n.as_i64().map(|t| if t > 100_000_000_000 { t / 1000 } else { t }),
+        _ => None,
+    }
 }
 
 fn id_of(v: &Value) -> Option<String> {
@@ -88,17 +187,40 @@ fn u64_of(v: &Value) -> Option<u64> {
     v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
-/// A feed page (`{items, next}`): its call items, and `next` (`None` when
-/// the answer has none: not Sew's page).
+/// A feed page (`{items, next}`): the items K2 takes, in order, and `next`
+/// (`None` when the answer has none: not Sew's page). Kinds K2 doesn't know
+/// are dropped, and so is an item missing what its kind needs (a call id; a
+/// channel and a message id).
 pub fn parse_feed(body: &Value) -> (Vec<FeedItem>, Option<u64>) {
     let mut out = Vec::new();
     for e in body["items"].as_array().into_iter().flatten() {
         let kind = e["kind"].as_str().unwrap_or("");
-        if kind != "call_ring" && kind != "call_missed" {
-            continue; // mention, dm, reply_to_me, and kinds K2 doesn't know
+        let call = CALL_KINDS.contains(&kind);
+        let message = MESSAGE_KINDS.contains(&kind) || kind == READ_KIND;
+        if !call && !message {
+            continue; // kinds K2 doesn't know
         }
-        let Some(call_id) = id_of(&e["call_id"]) else { continue };
-        out.push(FeedItem { kind: kind.to_string(), call_id, channel_id: id_of(&e["channel_id"]), started_by: id_of(&e["from_member_id"]) });
+        let item = FeedItem {
+            seq: u64_of(&e["seq"]).unwrap_or(0),
+            kind: kind.to_string(),
+            at: at_of(&e["at"]),
+            call_id: id_of(&e["call_id"]).unwrap_or_default(),
+            channel_id: id_of(&e["channel_id"]),
+            message_id: id_of(&e["message_id"]),
+            space_id: id_of(&e["space_id"]),
+            app_id: id_of(&e["app_id"]),
+            started_by: id_of(&e["from_member_id"]),
+            from_ext: e["from_external_id"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
+            reason: e["reason"].as_str().map(str::to_string),
+            preview: e["preview"].as_str().filter(|s| !s.trim().is_empty()).map(str::to_string),
+        };
+        if call && item.call_id.is_empty() {
+            continue;
+        }
+        if message && (item.channel_id.is_none() || item.message_id.is_none()) {
+            continue;
+        }
+        out.push(item);
     }
     (out, u64_of(&body["next"]))
 }
@@ -142,7 +264,12 @@ impl CallPushes {
         }
     }
 
-    /// Feed items in order (at `now`) → the pushes they make.
+    /// Feed items in order (at `now`) → the pushes they make. Age guards on
+    /// each item's own `at` (HC-3): a ring more than [`RING_MAX_AGE_SECS`]
+    /// old never rings (it is remembered, so its `call_missed` still gives
+    /// one "Missed call"); a missed call more than [`ITEM_MAX_AGE_SECS`] old
+    /// never pushes. Sew 0.11.0's `call_ring_stopped` replaces a ring K2
+    /// pushed, with no held session needed. Other kinds are not calls.
     pub fn on_feed(&mut self, items: &[FeedItem], now: i64) -> Vec<Action> {
         let mut out = Vec::new();
         for it in items {
@@ -150,14 +277,27 @@ impl CallPushes {
             match (it.kind.as_str(), known) {
                 ("call_ring", None) => {
                     let channel_id = it.channel_id.clone().unwrap_or_default();
-                    self.remember(&it.call_id, Seen { channel_id: channel_id.clone(), started_by: it.started_by.clone(), ringing_since: Some(now), done: false });
-                    out.push(Action { call_id: it.call_id.clone(), channel_id, started_by: it.started_by.clone(), state: CallPushState::Ringing });
+                    let fresh = !it.older_than(RING_MAX_AGE_SECS, now);
+                    self.remember(
+                        &it.call_id,
+                        Seen { channel_id: channel_id.clone(), started_by: it.started_by.clone(), ringing_since: fresh.then_some(now), done: false },
+                    );
+                    if fresh {
+                        out.push(Action { call_id: it.call_id.clone(), channel_id, started_by: it.started_by.clone(), state: CallPushState::Ringing });
+                    }
                 }
                 ("call_missed", known) if !known.as_ref().is_some_and(|k| k.done) => {
                     let channel_id = known.as_ref().map(|k| k.channel_id.clone()).filter(|c| !c.is_empty()).or_else(|| it.channel_id.clone()).unwrap_or_default();
                     let started_by = known.as_ref().and_then(|k| k.started_by.clone()).or_else(|| it.started_by.clone());
                     self.remember(&it.call_id, Seen { channel_id: channel_id.clone(), started_by: started_by.clone(), ringing_since: None, done: true });
-                    out.push(Action { call_id: it.call_id.clone(), channel_id, started_by, state: CallPushState::Missed });
+                    if !it.older_than(ITEM_MAX_AGE_SECS, now) {
+                        out.push(Action { call_id: it.call_id.clone(), channel_id, started_by, state: CallPushState::Missed });
+                    }
+                }
+                ("call_ring_stopped", Some(_)) => {
+                    if let Some(a) = self.on_ring_stopped(&it.call_id, it.reason.as_deref().unwrap_or("")) {
+                        out.push(a);
+                    }
                 }
                 _ => {}
             }
@@ -239,17 +379,83 @@ fn error_code(body: &Value) -> &str {
     body.pointer("/error/code").or_else(|| body.get("code")).and_then(Value::as_str).unwrap_or("")
 }
 
+/// Where `ext`'s poller starts: the stored cursor (HC-2); with none, Sew's
+/// head when Sew has `feed_head` (0.10.6: a person K2 never read starts at
+/// now), else 0 (the age guards keep the backlog quiet).
+pub fn initial_cursor(ext: &str) -> u64 {
+    match k2_core::tool_hook::with_home_chat_db(|conn| k2_core::tool_hook::home_push::cursor(conn, ext)) {
+        Ok(Some(c)) => return c,
+        Ok(None) => {}
+        Err(e) => k2_core::log_debug!("[home-chat] {ext}: feed cursor: {e}"),
+    }
+    if (deps().push_flags)().feed_head {
+        let path = format!("/mgmt/v1/people/{}/notifications/head", k2_core::tool_hook::sew_wire::pct_path(ext));
+        match (deps().mgmt)("GET", &path, None) {
+            Ok((200..=299, body)) => {
+                if let Some(h) = body.get("head").and_then(u64_of) {
+                    store_cursor(ext, h);
+                    return h;
+                }
+            }
+            Ok((s, body)) => k2_core::log_debug!("[home-chat] {ext}: feed head answered {s} {}", error_code(&body)),
+            Err(e) => k2_core::log_debug!("[home-chat] {ext}: feed head: {e}"),
+        }
+    }
+    0
+}
+
+/// Why a poller stopped after a reset (it starts again at once).
+const RESET_STOP: &str = "Sew's data was reset";
+
+/// Bumped by [`restart_all`] (Sew's data was reset): a page read before it
+/// never stores its cursor, and its poller stops (the supervisor starts it
+/// again from the start).
+static RESET_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn reset_gen() -> u64 {
+    RESET_GEN.load(Ordering::SeqCst)
+}
+
+/// Sew's data was reset: every poller stops and starts again from the
+/// forgotten cursor (HC-2). Calls remembered in memory go too.
+pub fn restart_all() {
+    RESET_GEN.fetch_add(1, Ordering::SeqCst);
+    for stop in running().lock().unwrap_or_else(|p| p.into_inner()).values() {
+        stop.store(true, Ordering::SeqCst);
+    }
+    pushers().lock().unwrap_or_else(|p| p.into_inner()).clear();
+}
+
+/// Store `ext`'s cursor (a failure is logged: the next page writes again).
+fn store_cursor(ext: &str, cursor: u64) {
+    if let Err(e) = k2_core::tool_hook::with_home_chat_db(|conn| k2_core::tool_hook::home_push::set_cursor(conn, ext, cursor, now_secs())) {
+        k2_core::log_debug!("[home-chat] {ext}: feed cursor write: {e}");
+    }
+}
+
 /// One read of `ext`'s feed from `cursor` (blocking); the pushes it makes
-/// go out and `cursor` moves to the page's `next`.
+/// go out and `cursor` moves to the page's `next` (stored once they went).
 pub fn poll_once(ext: &str, cursor: &mut u64) -> Result<Poll, String> {
     let waiting = pushers().lock().unwrap_or_else(|p| p.into_inner()).get(ext).is_some_and(CallPushes::ringing);
     let wait = if waiting { FEED_WAIT_RINGING_S } else { FEED_WAIT_S };
+    let gen = reset_gen();
     let (status, body) = (deps().feed)(ext, *cursor, wait)?;
+    if reset_gen() != gen {
+        // Sew's data was reset during the read: this page is the old Sew's.
+        return Ok(Poll::Stop(RESET_STOP.into()));
+    }
     match status {
         200..=299 => {}
         410 if error_code(&body) == "cursor_expired" => {
-            let oldest = body.pointer("/error/details/oldest_seq").or_else(|| body.get("oldest_seq")).and_then(u64_of);
-            *cursor = oldest.ok_or("410 cursor_expired without oldest_seq")?;
+            let field = |k: &str| body.pointer(&format!("/error/details/{k}")).or_else(|| body.get(k)).and_then(u64_of);
+            let oldest = field("oldest_seq").ok_or("410 cursor_expired without oldest_seq")?;
+            // HC-2: a head below K2's cursor is a Sew that went back (a
+            // restore): start at its head, the gap pushes nothing.
+            *cursor = match field("head") {
+                Some(head) if head < *cursor => head,
+                _ => oldest,
+            };
+            store_cursor(ext, *cursor);
             return Ok(Poll::Again(0));
         }
         404 => return Ok(Poll::Stop(format!("404 {}", error_code(&body)))),
@@ -259,12 +465,19 @@ pub fn poll_once(ext: &str, cursor: &mut u64) -> Result<Poll, String> {
         s => return Err(format!("the feed answered {s} {}", error_code(&body))),
     }
     let (items, next) = parse_feed(&body);
-    *cursor = next.ok_or("the feed's page had no next")?;
-    let actions = pushers().lock().unwrap_or_else(|p| p.into_inner()).entry(ext.to_string()).or_default().on_feed(&items, now_secs());
+    let next = next.ok_or("the feed's page had no next")?;
+    let now = now_secs();
+    let actions = pushers().lock().unwrap_or_else(|p| p.into_inner()).entry(ext.to_string()).or_default().on_feed(&items, now);
     for a in &actions {
         send(ext, a);
     }
-    Ok(Poll::Again(actions.len()))
+    let messages = super::chat_push::on_feed(ext, &items, now);
+    if next != *cursor {
+        store_cursor(ext, next);
+    }
+    *cursor = next;
+    super::chat_push::after_page(ext);
+    Ok(Poll::Again(actions.len() + messages))
 }
 
 /// The fallback for `ext` at `now`: with no live held session (`heard` is
@@ -323,6 +536,30 @@ pub fn live_feed(ext: &str, after: u64, wait: u64) -> Result<(u16, Value), Strin
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("runtime: {e}"))?;
     let timeout = crate::sew_mgmt::long_poll_timeout(Duration::from_secs(wait));
     let r = rt.block_on(client.get_with_timeout(&path, timeout)).map_err(|e| format!("{path}: {e:?}"))?;
+    let body = serde_json::from_str(&r.body_text()).unwrap_or(Value::Null);
+    Ok((r.status, body))
+}
+
+/// The live mgmt call for the push path (the feed head, a person's level),
+/// as the install. Any status comes back with its body; only a transport
+/// failure is an error. Errors carry the path and the transport's class,
+/// never a body (HC-21).
+pub fn live_mgmt(method: &str, path: &str, body: Option<&Value>) -> Result<(u16, Value), String> {
+    let t = k2_core::tool_hook::get_target(k2_core::tool_hook::CHAT_KIND)?.ok_or("chat isn't set up here")?;
+    if !t.enabled {
+        return Err("chat is off here".into());
+    }
+    let client = crate::sew_mgmt::MgmtClient::new(&t.socket, &t.token_file);
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("runtime: {e}"))?;
+    let r = match (method, body) {
+        ("GET", _) => rt.block_on(client.get(path)),
+        (_, b) => {
+            let raw = b.map(Value::to_string).unwrap_or_else(|| "{}".into());
+            let key = format!("k2-home-push-{}", uuid::Uuid::new_v4());
+            rt.block_on(client.post(path, raw.as_bytes(), &key, "system:home-chat-push"))
+        }
+    }
+    .map_err(|e| format!("{path}: {e:?}"))?;
     let body = serde_json::from_str(&r.body_text()).unwrap_or(Value::Null);
     Ok((r.status, body))
 }
@@ -395,14 +632,16 @@ fn start(ext: &str) {
     let who = ext.to_string();
     let mine = stop.clone();
     let spawned = std::thread::Builder::new().name("home-chat-call-push".into()).spawn(move || {
-        let mut cursor: u64 = 0;
+        let mut cursor: u64 = initial_cursor(&who);
         let mut backoff = Duration::from_secs(1);
         while !stop.load(Ordering::SeqCst) {
             match poll_once(&who, &mut cursor) {
                 Ok(Poll::Again(_)) => backoff = Duration::from_secs(1),
                 Ok(Poll::Stop(why)) => {
                     k2_core::log_debug!("[home-chat] {who}: call feed stopped ({why})");
-                    stopped().lock().unwrap_or_else(|p| p.into_inner()).insert(who.clone(), std::time::Instant::now());
+                    if why != RESET_STOP {
+                        stopped().lock().unwrap_or_else(|p| p.into_inner()).insert(who.clone(), std::time::Instant::now());
+                    }
                     break;
                 }
                 Err(e) => {
@@ -413,6 +652,8 @@ fn start(ext: &str) {
             }
             expire_rings(&who, now_secs(), heard_live(&who));
         }
+        // HC-7: a stopped poller's open windows go, text included.
+        super::chat_push::forget_person(&who);
         let mut g = running().lock().unwrap_or_else(|p| p.into_inner());
         if g.get(&who).is_some_and(|s| Arc::ptr_eq(s, &mine)) {
             g.remove(&who);
@@ -473,12 +714,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Items written at t = 100 (the tests' clock runs from there).
     fn ring(id: &str) -> FeedItem {
-        FeedItem { kind: "call_ring".into(), call_id: id.into(), channel_id: Some("900".into()), started_by: Some("42".into()) }
+        FeedItem::call("call_ring", id, Some("900"), Some("42"), Some(100))
     }
 
     fn missed(id: &str) -> FeedItem {
-        FeedItem { kind: "call_missed".into(), call_id: id.into(), channel_id: Some("900".into()), started_by: None }
+        FeedItem::call("call_missed", id, Some("900"), None, Some(140))
     }
 
     /// Each call: one ring push, then exactly one push that replaces it.
@@ -532,24 +774,74 @@ mod tests {
         assert!(p.on_feed(&[missed("8")], 200).is_empty(), "replaced once");
     }
 
-    /// Sew's page: `{items, next}`; only call kinds are kept, unknown kinds
-    /// are ignored, `from_member_id` is the caller.
+    /// Sew's page: `{items, next}`. Calls and, since Home chat pushes
+    /// (prd-home-chat-pushes-v1; this test used to pin that `mention` was
+    /// dropped), the message kinds are kept with their ids, `at` and Sew's
+    /// preview; an unknown kind is ignored, and so is a message item with no
+    /// message id. `from_member_id` is the caller or sender.
     #[test]
     fn the_feed_page_parses_items_and_next() {
         let body = json!({"items": [
             {"seq": 5, "kind": "call_ring", "at": "2026-11-14T12:00:00Z", "channel_id": "900", "from_member_id": "42", "app_id": null, "call_id": "77", "message_id": "1001"},
-            {"seq": 6, "kind": "mention", "at": "2026-11-14T12:00:01Z", "channel_id": "901", "from_member_id": "43", "app_id": null},
+            {"seq": 6, "kind": "mention", "at": "2026-11-14T12:00:01Z", "space_id": "7001", "channel_id": "901", "message_id": "1002", "from_member_id": "43", "app_id": null, "preview": "hi @alex"},
             {"seq": 7, "kind": "something_new", "at": "2026-11-14T12:00:02Z", "channel_id": "900", "from_member_id": "42", "app_id": null},
             {"seq": 8, "kind": "call_missed", "at": "2026-11-14T12:00:45Z", "channel_id": "900", "from_member_id": "42", "app_id": null, "call_id": "77", "message_id": "1001"},
-        ], "next": 8});
+            {"seq": 9, "kind": "dm", "at": "2026-11-14T12:00:46Z", "channel_id": "900", "from_member_id": "42", "app_id": null},
+        ], "next": 9});
         let (items, next) = parse_feed(&body);
-        assert_eq!(next, Some(8));
-        assert_eq!(items, vec![
-            FeedItem { kind: "call_ring".into(), call_id: "77".into(), channel_id: Some("900".into()), started_by: Some("42".into()) },
-            FeedItem { kind: "call_missed".into(), call_id: "77".into(), channel_id: Some("900".into()), started_by: Some("42".into()) },
-        ]);
+        assert_eq!(next, Some(9));
+        let t0 = chrono::DateTime::parse_from_rfc3339("2026-11-14T12:00:00Z").unwrap().timestamp();
+        let mut want_ring = FeedItem::call("call_ring", "77", Some("900"), Some("42"), Some(t0));
+        want_ring.seq = 5;
+        want_ring.message_id = Some("1001".into());
+        let mut want_missed = FeedItem::call("call_missed", "77", Some("900"), Some("42"), Some(t0 + 45));
+        want_missed.seq = 8;
+        want_missed.message_id = Some("1001".into());
+        assert_eq!(items.len(), 3, "{items:?}");
+        assert_eq!(items[0], want_ring);
+        assert_eq!((items[1].kind.as_str(), items[1].channel_id.as_deref(), items[1].message_id.as_deref()), ("mention", Some("901"), Some("1002")));
+        assert_eq!((items[1].space_id.as_deref(), items[1].started_by.as_deref(), items[1].preview()), (Some("7001"), Some("43"), Some("hi @alex")));
+        assert_eq!(items[2], want_missed);
+        assert!(!format!("{:?}", items[1]).contains("hi @alex"), "Debug never prints the preview");
         assert_eq!(parse_feed(&json!({"items": [], "next": 3})), (vec![], Some(3)));
         assert_eq!(parse_feed(&json!({"entries": []})).1, None, "not Sew's page");
+    }
+
+    /// HC-3, D7: a ring older than 45 s (a restart backlog, a DND release)
+    /// never rings, and its fresh `call_missed` gives one "Missed call"; a
+    /// missed call older than 10 minutes gives nothing; an `at` that doesn't
+    /// parse counts as old.
+    #[test]
+    fn old_rings_and_old_missed_calls_stay_quiet() {
+        let mut p = CallPushes::default();
+        let stale = FeedItem::call("call_ring", "5", Some("900"), Some("42"), Some(100));
+        assert!(p.on_feed(&[stale], 100 + RING_MAX_AGE_SECS + 1).is_empty(), "a stale ring never rings");
+        assert!(!p.ringing());
+        let m = p.on_feed(&[FeedItem::call("call_missed", "5", Some("900"), None, Some(150))], 160);
+        assert_eq!(m.iter().map(|a| a.state).collect::<Vec<_>>(), vec![CallPushState::Missed], "one Missed call");
+        assert_eq!(m[0].started_by.as_deref(), Some("42"), "the caller from the ring");
+        let old = FeedItem::call("call_missed", "6", Some("900"), None, Some(100));
+        assert!(p.on_feed(&[old], 100 + ITEM_MAX_AGE_SECS + 1).is_empty(), "a day-old missed call: nothing");
+        let unparsed = FeedItem::call("call_ring", "7", Some("900"), None, None);
+        assert!(p.on_feed(&[unparsed], 100).is_empty(), "no parsable at: old");
+        assert_eq!(at_of(&json!("2026-11-14T12:00:00Z")), Some(chrono::DateTime::parse_from_rfc3339("2026-11-14T12:00:00Z").unwrap().timestamp()));
+        assert_eq!(at_of(&json!("yesterday")), None);
+    }
+
+    /// Sew 0.11.0 (S-6): `call_ring_stopped` on the feed replaces the ring
+    /// with no held session; one for a call K2 never rang is nothing.
+    #[test]
+    fn a_feed_ring_stop_replaces_the_ring() {
+        let mut p = CallPushes::default();
+        p.on_feed(&[ring("9")], 100);
+        let mut stop = FeedItem::call("call_ring_stopped", "9", Some("900"), None, Some(110));
+        stop.reason = Some("accepted".into());
+        let a = p.on_feed(&[stop.clone()], 110);
+        assert_eq!(a.iter().map(|a| a.state).collect::<Vec<_>>(), vec![CallPushState::Answered]);
+        assert!(p.on_feed(&[stop], 111).is_empty(), "replaced once");
+        let mut other = FeedItem::call("call_ring_stopped", "10", Some("900"), None, Some(110));
+        other.reason = Some("declined".into());
+        assert!(p.on_feed(&[other], 110).is_empty(), "never rang: nothing");
     }
 
     /// The owner's ring reaches the owner token's own phones (and the

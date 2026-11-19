@@ -168,6 +168,10 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // People and channels on Home (prd-home-people-channels-v1 §14.5): it
     // also brings the K5 Space up. Owner only.
     "homeChat",
+    // Phone pushes for Home chat and its message text (prd-home-chat-pushes-v1
+    // §7). Owner only.
+    "homeChatPush",
+    "homeChatPushPreviews",
     // Board files preview (prd-board-tab-v1). Dogfood only: it doesn't turn on
     // for customers until held edits survive a restart.
     "boardFilePreview",
@@ -588,7 +592,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
     let org_chart_was = k2_core::org_chart::enabled();
     let agent_hooks_touched = partial.get("agentHooks").is_some();
     let cores_touched = partial.get(k2_core::docs_cores::SETTING_KEY).is_some();
-    let voice_touched = ["voiceRoomsPreview", "voiceRoomsCount", "homeChat"].iter().any(|k| partial.get(*k).is_some());
+    let voice_touched = ["voiceRoomsPreview", "voiceRoomsCount", "homeChat", "homeChatPush", "homeChatPushPreviews"].iter().any(|k| partial.get(*k).is_some());
     let checklist_touched = partial.get("setupChecklist").is_some() || partial.get("kesselFirstRun").is_some();
     match k2_core::app_settings::update(partial) {
         Ok(merged) => {
@@ -605,6 +609,8 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             // is planned by the next sweep (now, debounced).
             k2_core::voice_preview::set_enabled(merged.voice_rooms_preview);
             k2_core::home_chat::set_enabled(merged.home_chat);
+            k2_core::home_chat::set_push_enabled(merged.home_chat_push);
+            k2_core::home_chat::set_push_previews(merged.home_chat_push_previews);
             k2_core::board_preview::set_enabled(merged.board_file_preview);
             sync_org_chart(&merged, org_chart_was, actor.audit_user());
             k2_core::voice_rooms::set_tunnel_enabled(merged.voice_tunnel_preview);
@@ -695,6 +701,8 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
             k2_core::compute::set_placement_policy(placement_policy_of(&defaults.compute_placement));
             k2_core::voice_preview::set_enabled(defaults.voice_rooms_preview);
             k2_core::home_chat::set_enabled(defaults.home_chat);
+            k2_core::home_chat::set_push_enabled(defaults.home_chat_push);
+            k2_core::home_chat::set_push_previews(defaults.home_chat_push_previews);
             k2_core::board_preview::set_enabled(defaults.board_file_preview);
             sync_org_chart(&defaults, k2_core::org_chart::enabled(), actor.audit_user());
             k2_core::voice_rooms::set_tunnel_enabled(defaults.voice_tunnel_preview);

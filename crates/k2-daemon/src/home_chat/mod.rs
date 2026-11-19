@@ -9,7 +9,9 @@
 //! - [`routes`]: `/cli/home-chat/*` (feature `home-chat-v1`).
 //! - [`events_ws`]: `WS /cli/home-chat/events`, the person's own socket.
 //! - [`call_push`]: phone pushes for DM call rings (S14), from Sew's person
-//!   feed.
+//!   feed, and that feed's one poller per person.
+//! - [`chat_push`]: phone pushes for Home chat DMs, @mentions and replies
+//!   (prd-home-chat-pushes-v1), from the same poller.
 //! - [`arrivals`]: DMs and channels that arrive on their own land in the
 //!   person's People group (homes-people-group-v1).
 //!
@@ -29,8 +31,10 @@ use crate::voice::bff::{HttpSew, SewApi};
 
 pub mod arrivals;
 pub mod call_push;
+pub mod chat_push;
 pub mod events_ws;
 pub mod follower;
+pub mod notify;
 pub mod people;
 pub mod routes;
 pub mod sessions;
@@ -38,6 +42,8 @@ pub mod state;
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod push_tests;
 
 /// A pass minter: `(external id, sid)` → a signed chat pass.
 pub type MintFn = dyn Fn(&str, &str) -> Result<String, String> + Send + Sync;
@@ -46,6 +52,9 @@ pub type MintFn = dyn Fn(&str, &str) -> Result<String, String> + Send + Sync;
 pub type FeedFn = dyn Fn(&str, u64, u64) -> Result<(u16, serde_json::Value), String> + Send + Sync;
 /// A person's push devices: external id → (person key, device logins).
 pub type DevicesFn = dyn Fn(&str) -> Option<(String, Vec<String>)> + Send + Sync;
+/// One mgmt call as the install: `(method, path, body)` → the HTTP status and
+/// body (`Err` only when Sew wasn't reached).
+pub type MgmtFn = dyn Fn(&str, &str, Option<&serde_json::Value>) -> Result<(u16, serde_json::Value), String> + Send + Sync;
 
 /// What Home chat talks to. Production: [`Deps::live`]; tests install a
 /// fake Sew (HTTP and gateway) through [`set_deps`].
@@ -63,6 +72,10 @@ pub struct Deps {
     pub feed: Arc<FeedFn>,
     /// Whose phones a call push reaches ([`call_push::live_devices`]).
     pub devices: Arc<DevicesFn>,
+    /// Sew's Home chat push flags (prd-home-chat-pushes-v1 §3).
+    pub push_flags: Arc<dyn Fn() -> k2_core::tool_hook::features::HomePushFeatures + Send + Sync>,
+    /// Mgmt calls the push path makes (the feed head, a person's level).
+    pub mgmt: Arc<MgmtFn>,
 }
 
 fn live_mint(ext: &str, sid: &str) -> Result<String, String> {
@@ -81,6 +94,8 @@ impl Deps {
             platform_ok: crate::sew::sew_supported(),
             feed: Arc::new(call_push::live_feed),
             devices: Arc::new(call_push::live_devices),
+            push_flags: Arc::new(|| k2_core::tool_hook::sew_home_push_features().unwrap_or_default()),
+            mgmt: Arc::new(call_push::live_mgmt),
         }
     }
 }
@@ -146,6 +161,14 @@ pub fn sew_data_reset(why: &str) {
         admin_space::mark_verify(conn, admin_space::VERIFY_FULL, &format!("Sew's data was reset: {why}"), now_secs(), true)?;
         Ok(r)
     });
+    // HC-2: a restored Sew's seqs are lower; a stored cursor above its head
+    // would push nothing until Sew caught up. Every poller reads from the
+    // start again (the age guards keep the backlog quiet).
+    match k2_core::tool_hook::with_home_chat_db(k2_core::tool_hook::home_push::forget_cursors) {
+        Ok(n) => k2_core::log_debug!("[home-chat] Sew's data was reset: {n} feed cursors forgotten"),
+        Err(e) => k2_core::log_debug!("[home-chat] Sew's data was reset; feed cursors: {e}"),
+    }
+    call_push::restart_all();
     match forgot {
         Ok(r) => k2_core::log_debug!(
             "[home-chat] Sew's data was reset ({why}): {} DM ids forgotten, {} channels to make again, {} people to add again, {} lists to resend",
@@ -171,6 +194,15 @@ pub fn boot_status_key() -> Option<&'static str> {
         return None;
     }
     status().0.then_some(k2_core::home_chat::FEATURE)
+}
+
+/// `/boot-status` lists `home-chat-push-v1` when the owner's `homeChatPush`
+/// is on and Home chat runs here (prd-home-chat-pushes-v1 §7).
+pub fn push_boot_status_key() -> Option<&'static str> {
+    if !k2_core::home_chat::push_enabled() {
+        return None;
+    }
+    status().0.then_some(k2_core::home_chat::PUSH_FEATURE)
 }
 
 async fn answer(stream: &mut tokio::net::TcpStream, r: &crate::cli_response::CliResponse) {

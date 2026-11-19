@@ -176,7 +176,12 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/cli/home-chat/dm"),
     ("GET", "/cli/home-chat/events"),
     ("GET", "/cli/home-chat/messages"),
+    // prd-home-chat-pushes-v1 §7: the person's own levels and push choices.
+    ("GET", "/cli/home-chat/notify"),
+    ("POST", "/cli/home-chat/notify/set"),
     ("GET", "/cli/home-chat/people"),
+    ("GET", "/cli/home-chat/push-prefs"),
+    ("POST", "/cli/home-chat/push-prefs/set"),
     ("POST", "/cli/home-chat/react"),
     ("GET", "/cli/home-chat/reactors"),
     ("GET", "/cli/home-chat/replies"),
@@ -185,6 +190,13 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/cli/home-chat/summary"),
     ("POST", "/cli/home-chat/typing"),
     ("POST", "/cli/home-chat/view"),
+    // prd-home-chat-pushes-v1 D3, §7: the phone's own push device, so a Voice
+    // & Chat only phone gets Home chat pushes and DM call rings. The handler
+    // scopes these to the caller's own login (TP12); `device_person` still
+    // keeps Thread, ticket and project pushes away from the role.
+    ("GET", "/cli/push/device"),
+    ("POST", "/cli/push/register-device"),
+    ("POST", "/cli/push/unregister-device"),
 ];
 
 /// `Public` rows a Voice & Chat only login's token may be presented on
@@ -1740,8 +1752,10 @@ mod tests {
         // The PRD's 14 rows plus the reviewer shares (3 + 8 Garden reads),
         // plus Home chat's 21 (prd-home-people-channels-v1 HP-11), plus its
         // 4 DM call rows (HP-39), plus a recording card's transcript lines
-        // (`home-chat/replies`, prd-home-call-recording-v1 §5).
-        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1);
+        // (`home-chat/replies`, prd-home-call-recording-v1 §5), plus Home chat
+        // pushes' 4 (notify, notify/set, push-prefs, push-prefs/set) and the
+        // phone's own 3 push device rows (prd-home-chat-pushes-v1 D3, §7).
+        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1 + 4 + 3);
         for p in VOICE_CHAT_PUBLIC {
             let r = lookup(p).unwrap_or_else(|| panic!("{p} is not a row"));
             assert!(

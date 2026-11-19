@@ -31,7 +31,9 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/home-chat/channels",
     "/cli/home-chat/channels/members",
     "/cli/home-chat/messages",
+    "/cli/home-chat/notify",
     "/cli/home-chat/people",
+    "/cli/home-chat/push-prefs",
     "/cli/home-chat/reactors",
     "/cli/home-chat/replies",
     "/cli/home-chat/status",
@@ -49,6 +51,8 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/home-chat/channels/remove",
     "/cli/home-chat/channels/rename",
     "/cli/home-chat/dm",
+    "/cli/home-chat/notify/set",
+    "/cli/home-chat/push-prefs/set",
     "/cli/home-chat/react",
     "/cli/home-chat/send",
     "/cli/home-chat/typing",
@@ -135,21 +139,26 @@ pub(super) fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &
         "/cli/home-chat/channels/rename" => rename(c, parse(body)?),
         "/cli/home-chat/channels/delete" => delete(c, parse(body)?),
         "/cli/home-chat/channels/allow-agents" => allow_agents(c, parse(body)?),
+        // prd-home-chat-pushes-v1 §7 (HC-14: one path per method).
+        "/cli/home-chat/notify" => super::notify::get(c, p),
+        "/cli/home-chat/notify/set" => super::notify::set(c, parse(body)?),
+        "/cli/home-chat/push-prefs" => super::notify::prefs_get(c),
+        "/cli/home-chat/push-prefs/set" => super::notify::prefs_set(c, parse(body)?),
         _ => Err(Refusal::new(404, "not_found", "no such Home chat route")),
     }
 }
 
-fn parse<T: for<'de> Deserialize<'de>>(body: &[u8]) -> R<T> {
+pub(super) fn parse<T: for<'de> Deserialize<'de>>(body: &[u8]) -> R<T> {
     let b = if body.iter().all(u8::is_ascii_whitespace) { b"{}".as_slice() } else { body };
     serde_json::from_slice(b).map_err(|e| usage(format!("bad request body: {e}")))
 }
 
-fn param<'a>(p: &'a HashMap<String, String>, k: &str) -> Option<&'a str> {
+pub(super) fn param<'a>(p: &'a HashMap<String, String>, k: &str) -> Option<&'a str> {
     p.get(k).map(|s| s.trim()).filter(|s| !s.is_empty())
 }
 
 /// A Sew id from a request (digits only, so it can't steer a path).
-fn sew_id(raw: &str, what: &str) -> R<String> {
+pub(super) fn sew_id(raw: &str, what: &str) -> R<String> {
     let t = raw.trim();
     if hook::sew_wire::is_sew_id(t) {
         Ok(t.to_string())
@@ -194,7 +203,7 @@ fn sew_as_keyed(ext: &str, method: &str, path: &str, body: Option<&Value>, key: 
     call(&tok).map_err(super::sessions::unavailable)
 }
 
-fn ok_or_refuse(a: SewAnswer) -> R<Value> {
+pub(super) fn ok_or_refuse(a: SewAnswer) -> R<Value> {
     if a.ok() {
         return Ok(a.body);
     }

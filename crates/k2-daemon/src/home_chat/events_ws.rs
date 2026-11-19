@@ -3,7 +3,15 @@
 //! `deleted`, `read`, `reaction`, `typing`, `member_removed`,
 //! `summary_changed`, `status`, `message_updated` (a call's record moved)
 //! and the DM call frames `call_ring` and `call_updated` (`hello` carries
-//! the calls already ringing). Nothing from any other person or server.
+//! the calls already ringing), and `notify {conv, level, effective,
+//! inherited, muted}` when the person's level changed on any device
+//! (prd-home-chat-pushes-v1 §7). Nothing from any other person or server.
+//!
+//! **Viewing leases** (prd-home-chat-pushes-v1 HC-15): the one thing a client
+//! sends, `{"t":"viewing","conv":"<sew id>","visible":true|false}`, repeated
+//! every 30 s while a conversation is open, visible and focused. Each is
+//! kept for 90 s under this socket ([`super::chat_push::lease`]); `false`, or
+//! the socket closing, clears it. Leases only quiet phone pushes.
 //!
 //! The login is asked again before a frame when the login store moved, and
 //! on the 5 s tick (`socket_access`), at the `VoiceChat` floor: a removed,
@@ -62,6 +70,14 @@ pub async fn serve(stream: &mut TcpStream, ext: String, token: String, owner_tok
             return;
         }
     };
+    let socket = crate::thread_viewers::next_socket_id();
+    serve_ws(ws, &ext, &token, &owner_token, socket).await;
+    // HC-15: a closed (or crashed) client's leases go with its socket.
+    super::chat_push::close_socket(socket);
+}
+
+async fn serve_ws(ws: tokio_tungstenite::WebSocketStream<&mut TcpStream>, ext: &str, token: &str, owner_token: &str, socket: u64) {
+    let (ext, token, owner_token) = (ext.to_string(), token.to_string(), owner_token.to_string());
     let (mut write, mut read) = ws.split();
     let held = super::follower::hold(&ext);
     let mut rx = held.events.subscribe();
@@ -123,6 +139,11 @@ pub async fn serve(stream: &mut TcpStream, ext: String, token: String, owner_tok
                     Some(Ok(Message::Close(frame))) => {
                         let _ = write.send(Message::Close(frame)).await;
                         break;
+                    }
+                    Some(Ok(Message::Text(t))) => {
+                        if let Some((conv, visible)) = super::chat_push::parse_viewing(&t) {
+                            super::chat_push::lease(socket, &ext, &conv, visible);
+                        }
                     }
                     Some(Ok(_)) => {}
                     None | Some(Err(_)) => break,

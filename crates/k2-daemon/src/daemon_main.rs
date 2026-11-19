@@ -485,7 +485,12 @@ async fn async_main() {
     k2_core::org_chart::sync_from_settings(&k2_core::app_settings::load());
     crate::board_file::held::sweep_if_due();
     k2_core::voice_preview::set_enabled(k2_core::app_settings::load().voice_rooms_preview);
-    k2_core::home_chat::set_enabled(k2_core::app_settings::load().home_chat);
+    {
+        let st = k2_core::app_settings::load();
+        k2_core::home_chat::set_enabled(st.home_chat);
+        k2_core::home_chat::set_push_enabled(st.home_chat_push);
+        k2_core::home_chat::set_push_previews(st.home_chat_push_previews);
+    }
     k2_core::voice_rooms::set_tunnel_enabled(k2_core::app_settings::load().voice_tunnel_preview);
     k2_core::compute::set_placement_policy(crate::settings_routes::placement_policy_of(&k2_core::app_settings::load().compute_placement));
     // Permission cards: on by default from 0.46.11. An existing server's

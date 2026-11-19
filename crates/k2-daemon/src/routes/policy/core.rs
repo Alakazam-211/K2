@@ -1016,7 +1016,10 @@ pub(super) const ROWS: &[Route] = &[
     // 0.46.7: who may open a site. Member floor: anyone who can run a site may
     // make it private; the handler refuses a Member PIN and public.
     both("/cli/publish/visibility", Member),
-    get("/cli/push/device", Member),
+    // prd-home-chat-pushes-v1 D3: every login registers its own phone
+    // (VoiceChat floor, a reviewed VOICE_CHAT_ALLOWLIST edit); the handler
+    // scopes the device to the caller.
+    get("/cli/push/device", VoiceChat),
     // prd-e2e-push-v1 §4a: the E2E switch, the per-device override and
     // the phone list are the owner's (testing and rollback controls).
     post("/cli/push/device/e2e", Owner),
@@ -1026,8 +1029,8 @@ pub(super) const ROWS: &[Route] = &[
     both("/cli/push/e2e", Owner),
     // 0.46.3: the push attempt ring (read-only; no content or tokens).
     get("/cli/push/log", Owner),
-    post("/cli/push/register-device", Member),
-    post("/cli/push/unregister-device", Member),
+    post("/cli/push/register-device", VoiceChat),
+    post("/cli/push/unregister-device", VoiceChat),
     post("/cli/relations/create", Member),
     post("/cli/relations/delete", Member),
     get("/cli/relations/list", Member),

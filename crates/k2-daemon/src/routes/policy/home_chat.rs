@@ -25,7 +25,13 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/home-chat/dm", VoiceChat),
     get("/cli/home-chat/events", VoiceChat),
     get("/cli/home-chat/messages", VoiceChat),
+    // prd-home-chat-pushes-v1 §7: a person's own level per conversation and
+    // their push choices (every human role; HC-14: one path per method).
+    get("/cli/home-chat/notify", VoiceChat),
+    post("/cli/home-chat/notify/set", VoiceChat),
     get("/cli/home-chat/people", VoiceChat),
+    get("/cli/home-chat/push-prefs", VoiceChat),
+    post("/cli/home-chat/push-prefs/set", VoiceChat),
     post("/cli/home-chat/react", VoiceChat),
     get("/cli/home-chat/reactors", VoiceChat),
     // prd-home-call-recording-v1 §5: a recording card's transcript lines.

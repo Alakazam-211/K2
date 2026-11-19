@@ -83,6 +83,22 @@ pub fn missed_for(summary: &Value, me: &str) -> bool {
     !me.is_empty() && summary["end_reason"].as_str() != Some("cancelled") && has("missed_ids") && !has("declined_ids")
 }
 
+/// The `notify` frame for one conversation from Sew's `ChannelNotifyPrefs`
+/// (`{channel_id, level, effective_level, muted}`): `level` is the
+/// conversation's own level, or the one in effect when it inherits.
+pub fn notify_frame(conv: &str, prefs: &Value) -> Value {
+    let effective = prefs["effective_level"].as_str();
+    let own = prefs["level"].as_str();
+    json!({
+        "type": "notify",
+        "conv": conv,
+        "level": own.or(effective),
+        "effective": effective,
+        "inherited": own.is_none(),
+        "muted": prefs["muted"].as_bool().unwrap_or(false),
+    })
+}
+
 /// One more on a DM's count (a missed call).
 fn bump(c: &mut Conv, unread_count_flag: bool) {
     c.mention_count = c.mention_count.saturating_add(1);
@@ -451,6 +467,14 @@ impl PersonState {
                     self.viewing.remove(&cid);
                     out.push(json!({"type": "member_removed", "conv": cid}));
                     out.push(json!({"type": "summary_changed", "conv": cid}));
+                }
+            }
+            "notification_prefs_updated" => {
+                // prd-home-chat-pushes-v1 §7: a level changed on any device
+                // (Sew's channel prefs): the person's windows stay in step.
+                let ch = &d["channel"];
+                if let Some(cid) = id_of(&ch["channel_id"]) {
+                    out.push(notify_frame(&cid, ch));
                 }
             }
             "typing_started" => {

@@ -377,9 +377,10 @@ fn call_pushes(since: usize, ids: &[&str]) -> Vec<(String, CallPushState)> {
 
 const SAM_EXT: &str = "k2:connect:5a6b7c8d-0000-4000-8000-000000000031";
 
-/// A feed item as Sew writes it.
+/// A feed item as Sew writes it, written now (an old ring never rings:
+/// prd-home-chat-pushes-v1 HC-3).
 fn item(seq: u64, kind: &str, call: &str) -> Value {
-    json!({"seq": seq, "kind": kind, "at": "2026-11-14T12:00:00Z", "channel_id": "900", "from_member_id": "42", "app_id": null, "call_id": call, "message_id": "1001"})
+    json!({"seq": seq, "kind": kind, "at": chrono::Utc::now().to_rfc3339(), "channel_id": "900", "from_member_id": "42", "app_id": null, "call_id": call, "message_id": "1001"})
 }
 
 /// Install a fake feed answering `reads` in order (then empty pages that
@@ -406,6 +407,8 @@ fn fake_feed(reads: Vec<(u16, Value)>) -> Arc<Mutex<Vec<(u64, u64)>>> {
             }
         }),
         devices: Arc::new(|ext: &str| (ext == SAM_EXT).then(|| ("sam".to_string(), vec!["sam".to_string()]))),
+        push_flags: base.push_flags.clone(),
+        mgmt: base.mgmt.clone(),
     })));
     asked
 }

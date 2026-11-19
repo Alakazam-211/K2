@@ -1373,6 +1373,10 @@ pub fn features() -> Vec<&'static str> {
     if let Some(k) = crate::home_chat::boot_status_key() {
         out.push(k);
     }
+    // Home chat phone pushes (prd-home-chat-pushes-v1): the owner's switch.
+    if let Some(k) = crate::home_chat::push_boot_status_key() {
+        out.push(k);
+    }
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
     out

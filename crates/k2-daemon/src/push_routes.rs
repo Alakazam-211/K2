@@ -884,6 +884,88 @@ pub fn notify_call(push: k2_core::push::CallPush) {
     }
 }
 
+/// The gateway calls one Home chat push makes to these phones
+/// (prd-home-chat-pushes-v1 HC-19): one for the generic lane (the legacy
+/// lane goes generic for this kind, HC-8) and one per seal format. A
+/// phone's own previews choice rides inside its blob, so it costs nothing.
+pub(crate) fn home_chat_calls(devices: &[push_devices::PushDevice]) -> usize {
+    let cfg = current_config();
+    let plan = K2Cloud::plan_device_lanes(cfg.as_ref(), devices, k2_core::push::e2e::server_mode(), unix_now());
+    let mut formats: Vec<k2_core::push::seal::Format> = plan.sealed.iter().map(|d| d.format).collect();
+    formats.sort();
+    formats.dedup();
+    usize::from(!plan.legacy.is_empty() || !plan.generic.is_empty()) + formats.len()
+}
+
+/// Take `calls` from the Home chat bucket (HC-19: 120 an hour, 10 on the
+/// shared token), all or nothing. Dormant/test: always granted.
+pub(crate) fn take_home_chat_budget(now: Instant, calls: usize) -> bool {
+    #[cfg(test)]
+    {
+        let _ = (now, calls);
+        true
+    }
+    #[cfg(not(test))]
+    {
+        let Some(cloud) = current_cloud() else {
+            return true;
+        };
+        let per_hour = if cloud.config().tunnel.is_some() { budget::HOME_CHAT_PER_HOUR } else { budget::HOME_CHAT_PER_HOUR_SHARED };
+        let ok = budget::global().try_take_n(budget::BudgetClass::HomeChat, per_hour, now, calls.max(1));
+        if !ok {
+            note_budget_drop(budget::BudgetClass::HomeChat);
+        }
+        ok
+    }
+}
+
+/// Send one Home chat push (prd-home-chat-pushes-v1 §5) to one person's
+/// phones: air-gap is checked again, the badge path notes the alert (so a
+/// later read clears it, HC-11), then a detached send. The coalescer took
+/// the budget. Test: the capture sink. Never logs text (HC-21): an error
+/// line carries the dispatch error class only.
+pub(crate) fn deliver_home_chat(event: PushEvent) {
+    if airgap_blocks() {
+        note_airgap_drop();
+        return;
+    }
+    crate::badge_push::alert_sent(&event);
+    #[cfg(test)]
+    {
+        test_push_capture::capture(&event);
+    }
+    #[cfg(not(test))]
+    {
+        let Some(cloud) = current_cloud() else {
+            return;
+        };
+        let PushEvent::HomeChat(h) = &event else {
+            return;
+        };
+        let principal = h.principal.clone();
+        let logins = h.device_usernames.clone();
+        std::thread::spawn(move || {
+            let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
+            if let Err(e) = cloud.dispatch_rechecked(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
+                k2_core::log_debug!("[push] home chat dispatch failed ({}): {}", cloud.label(), push_error_class(&e));
+            }
+        });
+    }
+}
+
+/// A dispatch error as a log line may hold it: its class and status, never
+/// a relay body.
+#[cfg_attr(test, allow(dead_code))]
+fn push_error_class(e: &k2_core::push::PushError) -> String {
+    match e {
+        k2_core::push::PushError::Remote { status, .. } => format!("relay HTTP {status}"),
+        other => {
+            let s = other.to_string();
+            s.chars().take(80).collect()
+        }
+    }
+}
+
 /// How long a resolved gateway config is reused before it is read again
 /// (settings JSON + `tunnel.json`, maybe the token vault). Short, so a
 /// pairing or a settings change applies without a restart.

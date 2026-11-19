@@ -71,6 +71,7 @@ pub(crate) static KEEP_MINE: ActionSpec = ActionSpec {
     // the person's own, an agent can't reach it).
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 
@@ -161,6 +162,7 @@ pub(crate) static ACCESS: ActionSpec = ActionSpec {
         params: &[("garden", ParamFrom::Response("/garden"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -187,6 +189,7 @@ pub(crate) static ACCESS_OFF: ActionSpec = ActionSpec {
     settings: GARDENS,
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 
@@ -218,6 +221,7 @@ pub(crate) static DELETE: ActionSpec = ActionSpec {
         params: &[("garden", ParamFrom::Body("/garden"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -360,6 +364,7 @@ pub(crate) static SIGN: ActionSpec = ActionSpec {
         params: &[("widget", ParamFrom::Response("/widget")), ("version", ParamFrom::Response("/version"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -386,6 +391,7 @@ pub(crate) static SIGN_OFF: ActionSpec = ActionSpec {
     settings: WIDGET_HISTORY,
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 

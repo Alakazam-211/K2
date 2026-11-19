@@ -65,6 +65,7 @@ pub(crate) static REFRESH: ActionSpec = ActionSpec {
         Wall { matches: WallMatch::Code { status: 403, code: NEEDS_PERSON }, route_prefix: SWAP_ROUTE, method: WallMethod::Post, params: NOTE_PARAMS },
     ],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

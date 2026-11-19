@@ -126,6 +126,7 @@ pub(crate) static DELIVERY: ActionSpec = ActionSpec {
         params: &[("secret", ParamFrom::Response("/error/secret")), ("delivery", ParamFrom::Response("/error/delivery"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -266,6 +267,7 @@ pub(crate) static SHARE_SERVICE: ActionSpec = ActionSpec {
         ],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -576,6 +578,7 @@ pub(crate) static USE: ActionSpec = ActionSpec {
         params: &[("secret", ParamFrom::Response("/error/secret")), ("from", ParamFrom::Response("/error/from")), ("as", ParamFrom::Response("/error/as"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

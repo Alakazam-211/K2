@@ -59,6 +59,7 @@ pub(crate) static LAND: ActionSpec = ActionSpec {
         params: &[("sidecar", ParamFrom::Response("/error/sidecar")), ("tip", ParamFrom::Response("/error/tip"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -91,6 +92,7 @@ pub(crate) static RETIRE: ActionSpec = ActionSpec {
         params: &[("sidecar", ParamFrom::Response("/error/sidecar")), ("discard", ParamFrom::Response("/error/discard"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

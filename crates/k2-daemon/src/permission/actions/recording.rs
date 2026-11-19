@@ -76,6 +76,7 @@ pub(crate) static APPS_RECORDING: ActionSpec = ActionSpec {
         ],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

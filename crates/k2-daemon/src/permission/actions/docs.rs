@@ -49,6 +49,7 @@ pub(crate) static SHARE: ActionSpec = ActionSpec {
         params: &[],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

@@ -55,6 +55,7 @@ pub(crate) static APPROVE_REQUEST: ActionSpec = ActionSpec {
         params: &[],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -79,6 +80,7 @@ pub(crate) static APPROVE_REQUEST_OFF: ActionSpec = ActionSpec {
     settings: SETTINGS,
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 

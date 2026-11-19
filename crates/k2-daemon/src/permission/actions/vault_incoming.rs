@@ -104,6 +104,7 @@ pub(crate) static ACCEPT: ActionSpec = ActionSpec {
     // the card itself; the agent may also ask for it (`k2 permission list`).
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 

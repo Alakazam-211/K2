@@ -10,8 +10,8 @@
 //!   PIN ([`gate_answer`]), and a site that has one is "already on".
 
 use k2_core::permission::catalog::{
-    ActionSpec, Area, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamFrom, ParamKind, ParamSpec, Proof, SettingsRef, Undo, Wall,
-    WallCoverage, WallMatch, WallMethod, Words,
+    ActionSpec, Area, CardForm, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamFrom, ParamKind, ParamSpec, Proof, SettingsRef, Undo,
+    Wall, WallCoverage, WallMatch, WallMethod, Words,
 };
 use k2_core::permission::request::PermissionRequest;
 use k2_core::site_visibility::{self as sv, Mode};
@@ -24,7 +24,8 @@ use crate::publish_cards::{PIN, PUBLIC, PUBLIC_NEEDS_PERSON};
 const ROUTE: &str = "/cli/publish/visibility";
 
 /// Asked Allow before the PIN is set: nothing is decided.
-pub(crate) const PIN_FORM_FIRST: &str = "pin_form_first";
+pub(crate) const PIN_FORM: CardForm = CardForm { id: "publish-pin", refusal: "pin_form_first" };
+pub(crate) const PIN_FORM_FIRST: &str = PIN_FORM.refusal;
 
 const SETTINGS: SettingsRef = SettingsRef { page: "k2-connect", path: "Settings → Network → Tunnel → Addresses" };
 
@@ -60,6 +61,7 @@ pub(crate) static PUBLISH_PUBLIC: ActionSpec = ActionSpec {
         params: &[("label", ParamFrom::Response("/label")), ("reason", ParamFrom::Body("/reason"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -85,6 +87,8 @@ pub(crate) static PUBLISH_PIN: ActionSpec = ActionSpec {
     // Asked only. The refusal carries K2's card already.
     walls: &[],
     coverage: WallCoverage::None,
+    // The PIN goes into K2's own form on the card first.
+    form: Some(PIN_FORM),
     machine_hints: &[],
 };
 

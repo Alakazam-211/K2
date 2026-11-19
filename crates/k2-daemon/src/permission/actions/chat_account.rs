@@ -94,6 +94,7 @@ pub(crate) static CHAT_ACCOUNT: ActionSpec = ActionSpec {
         Wall { matches: WallMatch::Code { status: 403, code: "not_granted" }, route_prefix: CHAT_ROUTES, method: WallMethod::Any, params: &[] },
     ],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[],
 };
 

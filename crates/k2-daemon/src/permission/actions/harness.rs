@@ -58,6 +58,7 @@ pub(crate) static SWITCH: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

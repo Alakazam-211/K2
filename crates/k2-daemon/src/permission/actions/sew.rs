@@ -67,6 +67,7 @@ pub(crate) static OWNER_HANDOFF: ActionSpec = ActionSpec {
         params: &[],
     }],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[],
 };
 
@@ -110,6 +111,7 @@ pub(crate) static ROLLBACK_DATA_LOSS: ActionSpec = ActionSpec {
         params: &[],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -407,6 +409,7 @@ pub(crate) static RECORDING_ENABLE: ActionSpec = ActionSpec {
         params: &[],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

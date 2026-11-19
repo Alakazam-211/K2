@@ -101,6 +101,7 @@ pub(crate) static CHAT_KEY: ActionSpec = ActionSpec {
         ],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -372,6 +373,7 @@ pub(crate) static SPACE_GOVERNANCE: ActionSpec = ActionSpec {
         params: &[("app", ParamFrom::Body("/app")), ("space", ParamFrom::Body("/spaceId")), ("to", ParamFrom::Body("/governance"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

@@ -396,6 +396,9 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
         answer,
         undo,
         reveal: super::actions::password_reset::reveal_view(req),
+        // K2's own form (0.46.17), from the catalog: clients know before
+        // anyone taps Allow.
+        form: spec.form.map(|f| f.id.to_string()),
     }
 }
 

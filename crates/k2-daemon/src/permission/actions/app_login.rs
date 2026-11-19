@@ -100,6 +100,7 @@ pub(crate) static LOGIN_GRANT: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[],
 };
 

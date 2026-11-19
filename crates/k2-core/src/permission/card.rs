@@ -193,6 +193,15 @@ pub struct ItemView {
     /// other card, so their views are byte for byte as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reveal: Option<RevealView>,
+    /// Only on a card whose Allow works once a person has filled K2's own
+    /// form on it (0.46.17; the catalog's `ActionSpec::form`):
+    /// `git-access-setup` (`compute.git-access-setup`), `publish-pin`
+    /// (`publish.pin`). A client that can't show that form knows before
+    /// anyone taps Allow, which is refused `<…>_form_first` until then.
+    /// Absent on every other card, so their views are byte for byte as
+    /// before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<String>,
 }
 
 /// `view.reveal` (0.46.6, `apps.user-password-reset`): Allow makes a
@@ -277,6 +286,7 @@ mod tests {
             answer: None,
             undo: None,
             reveal: None,
+            form: None,
         }
     }
 
@@ -328,6 +338,22 @@ mod tests {
         assert_eq!(back, i);
         let plain: ItemView = serde_json::from_value(serde_json::to_value(item()).unwrap()).unwrap();
         assert_eq!(plain.reveal, None, "an older view (no key) reads as no reveal");
+    }
+
+    /// 0.46.17: `form` is on a card with K2's own form only; every other
+    /// view keeps its exact keys (checked above with `form: None`).
+    #[test]
+    fn form_is_only_on_a_card_with_a_form() {
+        let mut i = item();
+        i.form = Some("git-access-setup".into());
+        let w = serde_json::to_value(&i).unwrap();
+        assert_eq!(w["form"], json!("git-access-setup"));
+        let back: ItemView = serde_json::from_value(w).unwrap();
+        assert_eq!(back, i);
+        let plain = serde_json::to_value(item()).unwrap();
+        assert!(plain.get("form").is_none(), "{plain}");
+        let plain: ItemView = serde_json::from_value(plain).unwrap();
+        assert_eq!(plain.form, None, "an older view (no key) reads as no form");
     }
 
     #[test]

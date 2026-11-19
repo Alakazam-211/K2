@@ -61,6 +61,7 @@ pub(crate) static STOP_SENDING: ActionSpec = ActionSpec {
         params: &[("target", ParamFrom::Body("/workspace"))],
     }],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[],
 };
 

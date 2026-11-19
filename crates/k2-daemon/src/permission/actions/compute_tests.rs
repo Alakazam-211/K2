@@ -782,6 +782,8 @@ fn git_access_setup_is_a_persons_card_with_no_value_on_it() {
     let card = card_of(&v);
     let vw = view(&ws, &card);
     assert_eq!(vw["setting"], "GitHub access for compute jobs", "{vw}");
+    // 0.46.17: the card says it has K2's own form before anyone taps Allow.
+    assert_eq!(vw["form"], "git-access-setup", "{vw}");
     assert!(vw["whatChanges"].as_str().unwrap_or("").contains("K2's own form"), "{vw}");
     let cons = vw["consequences"].as_str().unwrap_or_else(|| panic!("no consequences: {vw}"));
     assert!(cons.contains("Contents read-only") && cons.contains(&format!("{} never sees it", ws.handle)), "{cons}");
@@ -903,6 +905,7 @@ fn compute_grant_card_names_each_limit_now_and_asked() {
         "{vw}"
     );
     assert_eq!(vw["setting"], "Compute job limits", "{vw}");
+    assert!(vw.get("form").is_none(), "a plain card has no form: {vw}");
     assert_eq!(vw["scope"], format!("{h} on {name}"), "{vw}");
     assert_eq!(vw["approvers"]["floor"], "admin", "{vw}");
     assert_eq!(vw["direction"], "loosen", "{vw}");

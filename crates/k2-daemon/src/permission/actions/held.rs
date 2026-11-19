@@ -190,6 +190,7 @@ pub(crate) static APPS_APPROVE: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::Held,
+    form: None,
     machine_hints: &[],
 };
 
@@ -272,6 +273,7 @@ pub(crate) static MAIL_APPROVE: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::Held,
+    form: None,
     machine_hints: &[],
 };
 
@@ -407,6 +409,7 @@ pub(crate) static SOURCES_APPROVE: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[],
 };
 
@@ -543,6 +546,7 @@ pub(crate) static GARDEN_PROPOSAL_APPROVE: ActionSpec = ActionSpec {
         params: &[("proposal", ParamFrom::Body("/id"))],
     }],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[],
 };
 
@@ -608,6 +612,7 @@ pub(crate) static VAULT_MOVE_APPROVE: ActionSpec = ActionSpec {
         params: &[("request", ParamFrom::Response("/request/id"))],
     }],
     coverage: WallCoverage::Held,
+    form: None,
     machine_hints: &[],
 };
 

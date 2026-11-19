@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use k2_core::compute::admin as cadmin;
 use k2_core::permission::catalog::{
-    ActionSpec, Area, ConfirmAction, Direction, Expiry, Floor, Grant, MachineHint, NeverReason, NotCardable, NotCardableSpec,
+    ActionSpec, Area, CardForm, ConfirmAction, Direction, Expiry, Floor, Grant, MachineHint, NeverReason, NotCardable, NotCardableSpec,
     ParamFrom, ParamKind, ParamSpec, Proof, SettingsRef, Undo, Wall, WallCoverage, WallMatch, WallMethod, Words, MAX_EXPIRY_SECS,
 };
 use serde_json::json;
@@ -77,6 +77,7 @@ pub(crate) static ADMIN_APPROVE: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[MachineHint {
         code: cadmin::codes::REMOTE_ADMIN_OFF,
         hint: "At {node}, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)",
@@ -281,6 +282,7 @@ pub(crate) static CI: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -306,6 +308,7 @@ pub(crate) static CI_OFF: ActionSpec = ActionSpec {
     settings: CI_SETTINGS,
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 
@@ -418,6 +421,7 @@ pub(crate) static GPU: ActionSpec = ActionSpec {
         params: &[("node", ParamFrom::Response("/error/node"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -443,6 +447,7 @@ pub(crate) static GPU_OFF: ActionSpec = ActionSpec {
     settings: CI_SETTINGS,
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 
@@ -567,6 +572,7 @@ pub(crate) static GRANT: ActionSpec = ActionSpec {
         ],
     }],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[],
 };
 
@@ -897,6 +903,7 @@ pub(crate) static ALLOW_NODES: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -928,6 +935,7 @@ pub(crate) static ALLOW_NODES_CLEAR: ActionSpec = ActionSpec {
         params: &[],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -1129,6 +1137,7 @@ pub(crate) static CI_CACHE_TRUST: ActionSpec = ActionSpec {
         params: &[("branches", ParamFrom::Response("/error/branches"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -1239,6 +1248,7 @@ pub(crate) static PACKAGES: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -1419,6 +1429,7 @@ pub(crate) static PACKAGES_POLICY: ActionSpec = ActionSpec {
         params: &[("node", ParamFrom::Body("/node")), ("server", ParamFrom::Body("/server")), ("level", ParamFrom::Body("/level"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -1526,6 +1537,7 @@ pub(crate) static GIT_ACCESS: ActionSpec = ActionSpec {
         params: &[("repos", ParamFrom::Response("/error/repos"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -1606,7 +1618,8 @@ pub(crate) fn needs_setup_why() -> String {
 // ── compute.git-access-setup (0.46.10) ───────────────────────────────
 
 /// Allow before the credential is set: nothing is decided.
-pub(crate) const GIT_SETUP_FORM_FIRST: &str = "git_access_setup_form_first";
+pub(crate) const GIT_SETUP_FORM: CardForm = CardForm { id: "git-access-setup", refusal: "git_access_setup_form_first" };
+pub(crate) const GIT_SETUP_FORM_FIRST: &str = GIT_SETUP_FORM.refusal;
 
 /// `compute.git-access-setup`: this server's GitHub credential, which
 /// every git-access grant needs. A person (the owner or an Admin) types it
@@ -1653,6 +1666,8 @@ pub(crate) static GIT_SETUP: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::Code,
+    // The credential goes into K2's own form on the card first.
+    form: Some(GIT_SETUP_FORM),
     machine_hints: &[],
 };
 

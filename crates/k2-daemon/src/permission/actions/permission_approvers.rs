@@ -52,6 +52,7 @@ pub(crate) static APPROVERS: ActionSpec = ActionSpec {
     settings: SettingsRef { page: "permission-cards", path: "Settings → Access → Permission Cards → Who agents ask" },
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 

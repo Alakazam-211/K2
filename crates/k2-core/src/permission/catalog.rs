@@ -603,7 +603,24 @@ pub struct ActionSpec {
     pub settings: SettingsRef,
     pub walls: &'static [Wall],
     pub coverage: WallCoverage,
+    /// K2's own form a person fills on the card before Allow can apply
+    /// (0.46.17): the card carries its id (`view.form`) so a client that
+    /// can't show it knows before anyone taps Allow. `None` for every other
+    /// card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form: Option<CardForm>,
     pub machine_hints: &'static [MachineHint],
+}
+
+/// A card's own form (0.46.17): its id on the card, and the code Allow is
+/// refused with (409, nothing decided) until the form is filled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardForm {
+    /// `view.form` on the card: `git-access-setup`, `publish-pin`.
+    pub id: &'static str,
+    /// The refusal: `<…>_form_first`.
+    pub refusal: &'static str,
 }
 
 /// A row that looks like a catalog row but isn't card-able in v1.
@@ -649,6 +666,11 @@ pub fn validate(spec: &ActionSpec) -> Result<(), String> {
     if matches!(spec.coverage, WallCoverage::None) != spec.walls.is_empty() {
         return Err(format!("{}: coverage None iff there are no walls", spec.id));
     }
+    if let Some(f) = spec.form {
+        if f.id.is_empty() || !f.id.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') || !f.refusal.ends_with("_form_first") {
+            return Err(format!("{}: a form has a kebab-case id and a <…>_form_first refusal", spec.id));
+        }
+    }
     if matches!(spec.proof, Proof::SettingsConfirm { .. }) && spec.direction == Direction::Tighten {
         return Err(format!("{}: lowering never takes a confirm in Settings", spec.id));
     }
@@ -685,6 +707,7 @@ mod tests {
             params: &[],
         }],
         coverage: WallCoverage::Code,
+        form: None,
         machine_hints: &[],
     };
 

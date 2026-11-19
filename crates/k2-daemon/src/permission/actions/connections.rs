@@ -46,6 +46,7 @@ pub(crate) static CREATE: ActionSpec = ActionSpec {
         params: &[],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -90,6 +91,7 @@ pub(crate) static ADD: ActionSpec = ActionSpec {
         Wall { matches: WallMatch::Code { status: 403, code: "not_connected" }, route_prefix: "/cli/", method: WallMethod::Any, params: &[] },
     ],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

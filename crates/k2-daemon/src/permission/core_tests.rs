@@ -945,3 +945,34 @@ fn a_cell_that_is_not_a_sidecar_still_asks_on_the_pinned_thread() {
     assert_eq!(v["addr"], ws.handle.as_str(), "{v}");
     assert_eq!(row(v["id"].as_str().expect("id")).conversation_id.as_deref(), Some(ws.conv.as_str()));
 }
+
+/// 0.46.17: every card whose Allow can be refused `<…>_form_first` (a
+/// person fills K2's own form on it first) declares that form on its
+/// catalog spec, which puts `form` on the card; no other card has one.
+/// The codes are read from the action sources, so a new `_form_first`
+/// refusal without a declared form fails here.
+#[test]
+fn every_form_first_refusal_has_its_form_on_the_card() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/permission/actions");
+    let mut in_source = std::collections::BTreeSet::new();
+    for e in std::fs::read_dir(dir).expect("read the actions dir") {
+        let path = e.expect("dir entry").path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        if !name.ends_with(".rs") || name.ends_with("_tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        for piece in text.split('"').skip(1).step_by(2) {
+            if piece.ends_with("_form_first") && piece.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+                in_source.insert(piece.to_string());
+            }
+        }
+    }
+    assert!(in_source.contains("git_access_setup_form_first") && in_source.contains("pin_form_first"), "{in_source:?}");
+    let declared: std::collections::BTreeSet<String> =
+        super::actions::all().iter().filter_map(|r| r.spec.form).map(|f| f.refusal.to_string()).collect();
+    assert_eq!(declared, in_source, "a *_form_first refusal needs a `form` on its ActionSpec (and a form, its refusal)");
+
+    let forms: Vec<(&str, &str)> = super::actions::all().iter().filter_map(|r| r.spec.form.map(|f| (r.spec.id, f.id))).collect();
+    assert_eq!(forms, vec![("compute.git-access-setup", "git-access-setup"), ("publish.pin", "publish-pin")]);
+}

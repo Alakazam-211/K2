@@ -86,6 +86,7 @@ pub(crate) static SEND: ActionSpec = ActionSpec {
         params: &[("secret", ParamFrom::Response("/error/secret")), ("to", ParamFrom::Response("/error/to")), ("note", ParamFrom::Response("/error/note"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

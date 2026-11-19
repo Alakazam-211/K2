@@ -79,6 +79,7 @@ pub(crate) static BOX_LOGIN_GRANT: ActionSpec = ActionSpec {
     settings: SettingsRef { page: "people", path: "Settings → User Access" },
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 

@@ -100,6 +100,7 @@ pub(crate) static INVITE_SPEC: ActionSpec = ActionSpec {
         params: &[("to", ParamFrom::Body("/to")), ("note", ParamFrom::Body("/why"))],
     }],
     coverage: WallCoverage::Held,
+    form: None,
     machine_hints: &[],
 };
 
@@ -129,6 +130,7 @@ pub(crate) static PAIR_ACCEPT_SPEC: ActionSpec = ActionSpec {
     settings: SETTINGS,
     walls: &[Wall { matches: ASKED, route_prefix: "/cli/postal/decide", method: WallMethod::Post, params: &[("id", ParamFrom::Body("/id"))] }],
     coverage: WallCoverage::Held,
+    form: None,
     machine_hints: &[],
 };
 
@@ -153,6 +155,7 @@ pub(crate) static LINK_P5_SPEC: ActionSpec = ActionSpec {
     settings: SETTINGS,
     walls: &[Wall { matches: ASKED, route_prefix: "/cli/postal/link-p5", method: WallMethod::Post, params: &[] }],
     coverage: WallCoverage::Held,
+    form: None,
     machine_hints: &[],
 };
 
@@ -182,6 +185,7 @@ pub(crate) static CLAIM_SPEC: ActionSpec = ActionSpec {
         params: &[("address", ParamFrom::Body("/address"))],
     }],
     coverage: WallCoverage::Held,
+    form: None,
     machine_hints: &[],
 };
 
@@ -209,6 +213,7 @@ pub(crate) static ENABLE_SPEC: ActionSpec = ActionSpec {
         Wall { matches: ASKED, route_prefix: "/cli/postal/enable", method: WallMethod::Post, params: &[] },
     ],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

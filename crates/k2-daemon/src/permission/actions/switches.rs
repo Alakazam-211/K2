@@ -239,6 +239,7 @@ const fn on_spec(
         settings: PERMISSIONS_TAB,
         walls,
         coverage,
+        form: None,
         machine_hints: &[],
     }
 }
@@ -265,6 +266,7 @@ pub(crate) const fn off_spec(
         settings: PERMISSIONS_TAB,
         walls: &[],
         coverage: WallCoverage::None,
+        form: None,
         machine_hints: &[],
     }
 }

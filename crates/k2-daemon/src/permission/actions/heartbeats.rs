@@ -57,6 +57,7 @@ pub(crate) static PAUSE: ActionSpec = ActionSpec {
         params: WALL_PARAMS,
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -86,6 +87,7 @@ pub(crate) static RESUME: ActionSpec = ActionSpec {
         params: WALL_PARAMS,
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

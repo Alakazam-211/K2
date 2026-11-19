@@ -121,6 +121,7 @@ pub(crate) static PASSWORD_RESET: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::PrefixOnly,
+    form: None,
     machine_hints: &[],
 };
 

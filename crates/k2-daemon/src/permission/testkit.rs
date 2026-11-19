@@ -93,6 +93,7 @@ const fn switch(id: &'static str, floor: Floor, setting: &'static str, what: &'s
         settings: SETTINGS,
         walls: &[],
         coverage: WallCoverage::None,
+        form: None,
         machine_hints: &[],
     }
 }
@@ -116,6 +117,7 @@ pub(crate) static CONFIRM: ActionSpec = ActionSpec {
     settings: SettingsRef { page: "app-approvals", path: "Settings → Cores → App Approvals" },
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 pub(crate) static MODE: ActionSpec = ActionSpec {

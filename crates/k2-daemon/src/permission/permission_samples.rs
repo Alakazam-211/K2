@@ -165,6 +165,7 @@ const fn switch(id: &'static str, floor: Floor, words: Words, params: &'static [
         settings: STANDARD_SETTINGS,
         walls: &[],
         coverage: WallCoverage::None,
+        form: None,
         machine_hints: &[],
     }
 }
@@ -212,6 +213,7 @@ static APPS_APPROVE: ActionSpec = ActionSpec {
     settings: APPROVALS,
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 

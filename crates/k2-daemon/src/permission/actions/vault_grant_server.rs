@@ -78,6 +78,7 @@ pub(crate) static GRANT_SERVER: ActionSpec = ActionSpec {
         params: &[("secret", ParamFrom::Response("/error/secret")), ("as", ParamFrom::Response("/error/as"))],
     }],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 

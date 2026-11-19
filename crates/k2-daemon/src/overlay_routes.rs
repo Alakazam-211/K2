@@ -5656,6 +5656,39 @@ pub fn record_inject_chatter(
     }
 }
 
+/// A Postal message on `person`'s Thread with the agent at
+/// `workspace_token` (prd-postal-in-k2-v1 §5.2 `thread:<person>`): K2's
+/// label on its own line, every body line quoted, the author a `postal`
+/// kind with the sender's address, and a Chatter line like any delivery.
+/// Never typed into the agent.
+pub(crate) fn post_postal_thread_line(workspace_token: &str, from: &str, badge: &str, person: &str, text: &str) -> Result<(), String> {
+    let recipient = resolve_addr(workspace_token).map_err(|r| r.body)?;
+    let label = crate::workspace_msg::postal_label(from, badge);
+    let clean = strip_untrusted_controls(text);
+    let body = format!("[{label}]\n{}", crate::workspace_msg::quote_every_line(&clean));
+    let (doc, links) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let (item, links) = overlay::post_thread_with_attachments(
+            &conn,
+            &recipient.conversation_id,
+            &recipient.project_id,
+            from,
+            person,
+            &body,
+            "postal",
+            None,
+            Some(overlay::PostAuthor::postal(from)),
+            Vec::new(),
+            None,
+        )?;
+        (item.doc, links)
+    };
+    crate::overlay_ws::emit_links(&links, &doc);
+    record_inject_chatter(workspace_token, from, text, "postal", None, None);
+    Ok(())
+}
+
 fn resolve_local_sender(from: &str) -> Option<ResolvedOverlay> {
     let from = from.trim();
     if from.is_empty() || from == "external" || from == "owner" || from == "k2" {

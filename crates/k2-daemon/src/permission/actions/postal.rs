@@ -8,8 +8,8 @@
 //! |---|---|---|---|
 //! | **`postal.enable`** | the agent: `k2 postal enable`, or the Ask-with line of any `postal_off` refusal | the Owner | turns the server's Postal switch (Beta, off by default) on |
 //! | **`postal.claim address=`** | the agent: `k2 postal claim <address>` | an Owner or Admin | gives the workspace that Postal address (kept here; the network confirms it later) |
-//! | **`postal.invite to= [note=]`** | the agent: `k2 postal invite <address> --why "…"` | an Owner or Admin | records the friend request (`pending_out`); **not sent** until the network half exists |
-//! | **`postal.pair.accept id=`** | K2 itself, when a request (or a friend's changed key) arrives; the agent's `k2 postal accept <id>` puts the same card up again | the Owner (Admins when the Owner allows it) | accepts; Deny rejects. A request with a pairing code can't be accepted yet (the SDK checks the code typed from the other box) |
+//! | **`postal.invite to= [note=]`** | the agent: `k2 postal invite <address> --why "…"` | an Owner or Admin | sends the friend request over the Postal network (kept `pending_out` until this server is connected) |
+//! | **`postal.pair.accept id= [pairing=code]`** | K2 itself, on both boxes, when a request's handshake is done (or a friend's key changed); the agent's `k2 postal accept <id>` puts the same card up again | the Owner (Admins when the Owner allows it) | with `pairing=code`, K2's own form on the card shows this box's code and posts the code from the OTHER box to the decide route (Allow is then already done); Deny rejects |
 //! | **`postal.link-p5`** | the agent (or a person): `k2 postal link-p5` | the Owner | mints a key that can only message this workspace, turns on what it needs, hands it to p5 |
 //!
 //! Tightening needs no card: an agent removes, blocks or rejects its own
@@ -32,11 +32,9 @@
 //!   the agent's own asks (enable, claim, invite, link-p5); the per-handle
 //!   cap on incoming requests is the store's (`PENDING_IN_CAP`).
 //!
-//! **Waits on others:** the invite is recorded, not sent, and an incoming
-//! request reaches K2 only through [`crate::postal_routes::receive_request`]
-//! (the seam the network half calls). Both need postal-sdk wire v2 (S1,
-//! Postal Bot) and the plane's pair API (P-1..P-3, P-7, K2 Web). The cards
-//! say so in plain words; nothing claims a request went out.
+//! The codes never reach the card, the Thread or the agent: the form reads
+//! this box's code from `GET /cli/postal/code` as the person, and Allow
+//! without a code is refused before anything is decided ([`gate_answer`]).
 
 use k2_core::permission::catalog::{
     ActionSpec, Area, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamFrom, ParamKind, ParamSpec, Proof, SettingsRef, Undo, Wall,
@@ -71,7 +69,7 @@ const ASKED: WallMatch = WallMatch::Held { status: 200, field: "asked", value: "
 
 /// Not sent yet: the words every outgoing step uses while the network half
 /// waits (postal-sdk wire v2, the plane's pair API).
-const NOT_SENT: &str = "Not sent yet: this server isn't connected to the Postal network in this release. Allow keeps the request here, and it goes out when that connection comes.";
+const NOT_SENT: &str = "Allow sends the request over the Postal network as soon as this server is connected to it (k2 postal status says whether it is); until then it waits here.";
 
 pub(crate) static INVITE_SPEC: ActionSpec = ActionSpec {
     id: INVITE,
@@ -108,7 +106,12 @@ pub(crate) static INVITE_SPEC: ActionSpec = ActionSpec {
 pub(crate) static PAIR_ACCEPT_SPEC: ActionSpec = ActionSpec {
     id: PAIR_ACCEPT,
     area: Area::Misc,
-    params: &[ParamSpec { key: "id", kind: ParamKind::HeldRequest, required: true, list: false, choices: &[] }],
+    params: &[
+        ParamSpec { key: "id", kind: ParamKind::HeldRequest, required: true, list: false, choices: &[] },
+        // `code`: the request carries a pairing code (SAS v2): Allow opens
+        // K2's own form for the code shown on the other side's screen.
+        ParamSpec { key: "pairing", kind: ParamKind::Choice, required: false, list: false, choices: &["code"] },
+    ],
     floor: Floor::Admin,
     direction: Direction::Loosen,
     grant: Grant::OneTime,
@@ -261,14 +264,52 @@ fn pending_friend(ctx: &Ctx) -> Result<k2_core::postal::store::Friend, String> {
     Ok(f)
 }
 
+/// The request's friend row, whatever its state (the card's words stay
+/// the same while it moves).
+fn friend_of(ctx: &Ctx) -> Option<k2_core::postal::store::Friend> {
+    let id = text_param(ctx, "id")?;
+    k2_core::db::read(|conn| {
+        let h = k2_core::postal::store::handle_for_workspace(conn, &ctx.workspace_id)?;
+        k2_core::postal::store::friend(conn, id).filter(|f| f.handle_id == h.id)
+    })
+}
+
+/// Does this card's request carry a pairing code?
+fn wants_code(ctx: &Ctx) -> bool {
+    text_param(ctx, "pairing") == Some("code")
+}
+
 fn check_pair_accept(ctx: &Ctx) -> Check {
     if !k2_core::postal::enabled() {
         return off();
     }
     match pending_friend(ctx) {
         Ok(_) => Check::Needed,
-        Err(e) => Check::Moved(e),
+        Err(e) => match friend_of(ctx) {
+            // The person's code went through K2's form on this card: this
+            // box signed, and the friend waits on (or has) the other side's.
+            Some(f) if f.status == "accepted" || (f.status == "pending_out" && f.decided_by.is_some()) => Check::AlreadyDone,
+            _ => Check::Moved(e),
+        },
     }
+}
+
+/// Allow on a request with a pairing code needs the code typed in K2's
+/// form first (it goes straight to the decide route as this person). Refused
+/// here, before anything is decided, so the card stays open.
+pub(crate) fn gate_answer(req: &PermissionRequest) -> Result<(), CliResponse> {
+    if req.action != PAIR_ACCEPT {
+        return Ok(());
+    }
+    let ctx = present::ctx_of(req);
+    if wants_code(&ctx) && pending_friend(&ctx).is_ok() {
+        return Err(postal_routes::err(
+            "409 Conflict",
+            "postal_code_needed",
+            concat!("type the 6-digit code shown on the other side's screen in ", product_name!(), "'s form on this card first"),
+        ));
+    }
+    Ok(())
 }
 
 fn check_link_p5(_ctx: &Ctx) -> Check {
@@ -328,12 +369,12 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             );
         }
         PAIR_ACCEPT => {
-            let f = pending_friend(ctx).ok();
+            let f = friend_of(ctx);
             let peer = f.as_ref().map(|f| f.peer_address.clone()).unwrap_or_else(|| "an agent on Postal".into());
             let owner_name = f.as_ref().and_then(|f| f.owner_name.clone()).filter(|o| !o.trim().is_empty());
             let owner = owner_name.as_ref().map(|o| format!(" (its owner: {o})")).unwrap_or_default();
             let rekey = f.as_ref().is_some_and(|f| f.status == "rekey_pending");
-            let has_code = f.as_ref().is_some_and(|f| gate::code(&f.id).is_some());
+            let has_code = wants_code(ctx);
             let mut what = if rekey {
                 format!("Trust the new key of {peer}{owner}, a Postal friend of {ws}")
             } else {
@@ -341,7 +382,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             };
             if has_code {
                 // Never the code itself: the agent reads its own Thread.
-                what.push_str(". This request carries a pairing code, and checking it needs this server's Postal network connection, which comes in a later release: it can't be accepted yet");
+                what.push_str(&format!(". Allow opens {}'s own form: read your 6-digit code to them, and type the code shown on their screen", product_name!()));
             }
             put("accept", what);
             let mut effect = if rekey {
@@ -350,7 +391,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
                 )
             } else {
                 format!(
-                    "{peer} can then write to {ws}: its mail reaches {ws} under a [postal {peer} · …] label, every line quoted. Deny rejects the request. {ws} or a person can remove or block {peer} later."
+                    "{peer} can then write to {ws}: its mail reaches {ws} under a [postal {peer} · p_…] label, every line quoted. The two codes match only if nobody sits between the two servers. Deny rejects the request. {ws} or a person can remove or block {peer} later."
                 )
             };
             if let Some(note) = f.as_ref().and_then(|f| f.note.clone()).filter(|n| !n.trim().is_empty()) {
@@ -387,7 +428,8 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             put(
                 "effect",
                 format!(
-                    "Agents on other machines can then ask to be friends with {ws} at {addr}; every request still waits on a person's card. One address per workspace: its sidecars and subagents share it. The Postal network confirms the address in a later release; until then it is kept on this server only."
+                    "Agents on other machines can then ask to be friends with {ws} at {addr}; every request still waits on a person's card. One address per workspace: its sidecars and subagents share it. The address's label must be this server's {} Connect name; it goes on the Postal network once this server is connected.",
+                    product_name!()
                 ),
             );
         }
@@ -396,7 +438,8 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             put(
                 "effect",
                 format!(
-                    "Every workspace's Postal tab appears, and its agent can ask, on cards like this one, for a Postal address and for friends. Every friend request, in or out, still waits on a person's card. The Postal network connection comes in a later release: until then addresses and requests are kept on this server only. Off again any time in Settings → General → Postal, or with {} postal disable.",
+                    "Every workspace's Postal tab appears, and its agent can ask, on cards like this one, for a Postal address and for friends. Every friend request, in or out, still waits on a person's card. This server talks to the Postal network with its {} Connect account. Off again any time in Settings → General → Postal, or with {} postal disable.",
+                    product_name!(),
                     cli_name!()
                 ),
             );
@@ -425,13 +468,22 @@ fn apply_invite(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     if !r.status.starts_with("200") {
         return refused_of(r);
     }
-    Applied::Done {
-        message: format!(
-            "Friend request to {to} recorded for {}, not sent yet: this server isn't connected to the Postal network in this release; it goes out when that connection comes. {} postal friends shows it under Requests out.",
+    let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+    let message = if v["sent"].as_bool() == Some(true) {
+        format!(
+            "Friend request to {to} sent for {}. When they answer, a person on each side types the other's 6-digit code on a card. {} postal friends shows it under Requests out.",
             ctx.workspace_handle,
             cli_name!()
-        ),
-    }
+        )
+    } else {
+        format!(
+            "Friend request to {to} recorded for {}; it goes out as soon as this server is connected to the Postal network ({} postal status). {} postal friends shows it under Requests out.",
+            ctx.workspace_handle,
+            cli_name!(),
+            cli_name!()
+        )
+    };
+    Applied::Done { message }
 }
 
 fn apply_pair_accept(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
@@ -441,7 +493,7 @@ fn apply_pair_accept(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Appli
     let Some(id) = text_param(ctx, "id") else {
         return Applied::Refused { code: "bad_params".into(), message: "id= is the request".into() };
     };
-    let r = postal_routes::decide_as(&postal_routes::who_of(who), &ctx.workspace_id, id, true);
+    let r = postal_routes::decide_as(&postal_routes::who_of(who), &ctx.workspace_id, id, true, None);
     if !r.status.starts_with("200") {
         return refused_of(r);
     }
@@ -496,7 +548,7 @@ pub(crate) fn on_denied(req: &PermissionRequest, who: &Answerer) {
     }
     let ctx = present::ctx_of(req);
     let Some(id) = text_param(&ctx, "id") else { return };
-    let r = postal_routes::decide_as(&postal_routes::who_of(who), &ctx.workspace_id, id, false);
+    let r = postal_routes::decide_as(&postal_routes::who_of(who), &ctx.workspace_id, id, false, None);
     if !r.status.starts_with("200") {
         k2_core::log_debug!("[postal] reject {id} from its card: {} {}", r.status, r.body);
     }
@@ -513,7 +565,8 @@ pub(crate) fn quiet(req: &PermissionRequest) -> bool {
 /// read alone, never under "Allow all").
 pub(crate) fn never_batched(req: &PermissionRequest) -> bool {
     req.action == PAIR_ACCEPT
-        && req.params.get("id").and_then(Value::as_str).is_some_and(|id| gate::code(id).is_some())
+        && (req.params.get("pairing").and_then(Value::as_str) == Some("code")
+            || req.params.get("id").and_then(Value::as_str).is_some_and(|id| gate::code(id).is_some()))
 }
 
 // ── the p5 link (S0) ─────────────────────────────────────────────────
@@ -814,6 +867,9 @@ pub(crate) fn ask_pair_accept(ws: &Ws, f: &k2_core::postal::store::Friend) -> Cl
 pub(crate) fn present_pair_accept(ws: &Ws, f: &k2_core::postal::store::Friend) -> Value {
     let mut params = Map::new();
     params.insert("id".into(), json!(f.id));
+    if gate::code(&f.id).is_some() {
+        params.insert("pairing".into(), json!("code"));
+    }
     let why = if f.status == "rekey_pending" {
         format!("{}'s key changed on the Postal network. A person here trusts the new key or ends the friendship.", f.peer_address)
     } else {
@@ -866,6 +922,15 @@ pub(crate) fn close_pair_cards(workspace_id: &str, friend_id: &str, how: &str, w
         if let Ok(Some(done)) = store::get(r.id.as_str()) {
             answer::audit(k2_core::permission::audit_event::ANSWER, "k2", "daemon", &done);
         }
+    }
+}
+
+/// Close every open card for friend row `friend_id` because of something
+/// the Postal network did (friends now, the other side ended it).
+pub(crate) fn close_pair_cards_by_network(workspace_id: &str, friend_id: &str, why: &str) {
+    let open = open_for(workspace_id, PAIR_ACCEPT, Some(friend_id));
+    if !open.is_empty() {
+        answer::close_open(&open, RequestState::Cancelled, &format!("Closed: {why}."));
     }
 }
 

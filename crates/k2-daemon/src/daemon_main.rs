@@ -558,6 +558,8 @@ async fn async_main() {
     k2_core::listen::set_setting_lan(settings.listen_lan);
     // Postal (Beta, prd-postal-in-k2-v1 S3): the owner's switch, default off.
     k2_core::postal::set_enabled(settings.postal_enabled);
+    // Its keys live in the vault (whichever vault opens below).
+    crate::vault::postal::install();
 
     // 0.40.0 — retire com.k2so.* LaunchAgents (idempotent; the app's
     // boot runs the same sweep — whichever boots first wins). A swept
@@ -1718,6 +1720,9 @@ async fn async_main() {
     crate::sim_routes::register_lanes();
     boot_clock.phase("sim lanes");
 
+    // Postal (Beta): the network loop, once the DB and vault are up; it
+    // idles while the switch is off.
+    crate::postal_net::start();
     boot_status::set_ready();
     boot_clock.ready();
     if let Err(e) = crate::rt::spawn("boot-after-ready", after_ready_workspace_pass) {

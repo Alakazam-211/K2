@@ -512,6 +512,9 @@ fn decide_one(
         // `compute.git-access-setup` (0.46.10): the same for the server's
         // GitHub credential; K2's own form on the card sets it first.
         super::actions::compute::gate_git_setup(req)?;
+        // `postal.pair.accept` with a pairing code (0.46.16): the code goes
+        // through K2's own form on the card first, as this person.
+        super::actions::postal::gate_answer(req)?;
     }
 
     // 1. The compare-and-set, before any apply (C12).

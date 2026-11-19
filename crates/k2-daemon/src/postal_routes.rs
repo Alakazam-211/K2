@@ -1,24 +1,31 @@
-//! `/cli/postal/*` (prd-postal-in-k2-v1 S3, local half; S0's `link-p5`).
+//! `/cli/postal/*` (prd-postal-in-k2-v1 S3, S4, S5; S0's `link-p5`).
 //!
-//! A workspace's Postal address and its friends, behind the server's Postal
-//! switch (`k2_core::postal::enabled`, **off by default**). While the
-//! switch is off every route here answers `postal_off` (409 to a person,
-//! 403 to an agent, whose refusal teaches the `postal.enable` card),
-//! except `settings` and `enable` (how the owner turns it on) and
-//! `link-p5` (the interim p5 path, which works while native Postal is off).
+//! A workspace's Postal address, its friends and its mail, behind the
+//! server's Postal switch (`k2_core::postal::enabled`, **off by default**).
+//! While the switch is off every route here answers `postal_off` (409 to a
+//! person, 403 to an agent, whose refusal teaches the `postal.enable`
+//! card), except `settings`, `enable`, `owner-link` and `link-p5`.
 //!
 //! ```text
 //!   GET  /cli/postal/status?workspace=     address, counts, the network's state
 //!   GET  /cli/postal/friends?workspace=    every friend and request (all states)
+//!   GET  /cli/postal/code?workspace=&id=   this server's pairing code (people only)
 //!   POST /cli/postal/claim    {workspace, address, why?}     an Owner or Admin;
 //!                                                            agent → a postal.claim card
 //!   POST /cli/postal/invite   {workspace, to, why}           agent → a postal.invite card;
-//!                                                            an Owner or Admin: recorded
-//!   POST /cli/postal/decide   {workspace, id, decision}      the Owner (Admins if allowed);
+//!                                                            an Owner or Admin: sent
+//!   POST /cli/postal/decide   {workspace, id, decision, code?}  the Owner (Admins if allowed),
+//!                                                            with the code from the OTHER box;
 //!                                                            agent: reject itself, accept →
 //!                                                            K2's postal.pair.accept card
 //!   POST /cli/postal/remove   {workspace, peer}              an Owner or Admin, or the agent itself
 //!   POST /cli/postal/block    {workspace, peer}              the same
+//!   POST /cli/postal/send     {workspace?, to, text, wake?}  the agent (its own address); an
+//!                                                            Owner or Admin naming the workspace
+//!   POST /cli/postal/route    {workspace, friend?, targets, wake?, clear?}
+//!                                                            an Owner or Admin; the agent
+//!                                                            only quieter
+//!   POST /cli/postal/owner-link {token?}                     the Owner: link Postal approvals
 //!   POST /cli/postal/enable   {why?}                         the Owner; agent → a postal.enable card
 //!   GET|POST /cli/postal/settings {enabled, adminsMayAccept} read: any login; write: the Owner
 //!   POST /cli/postal/link-p5  {workspace}                    a postal.link-p5 card (the Owner's)
@@ -28,19 +35,14 @@
 //! person (Rosson ruling 5; 2026-11-18): the switch, its address, an
 //! invite and the p5 link are cards K2 puts up in the same answer
 //! (`asked: true`; the CLI's exit 2); an incoming request is a card K2
-//! presents itself ([`crate::permission::actions::postal::present_pair_accept`]);
-//! a person's own click in the Postal tab is that person's consent.
-//! Tightening (remove, block, rejecting a request) needs no card.
+//! presents itself ([`crate::permission::actions::postal::present_pair_accept`]),
+//! on both boxes once the pairing handshake is done; a person's own click
+//! in the Postal tab is that person's consent. Tightening (remove, block,
+//! rejecting a request, quieter routing) needs no card.
 //!
-//! **Waits on others, never pretended** (each answer says so): nothing
-//! here talks to the Postal network. An allowed invite waits as
-//! `pending_out` (`sent: false`, `network: "not_available_yet"`) and is
-//! queued for the SDK ([`k2_core::postal::gate`]); incoming requests and
-//! changed keys arrive only through [`receive_request`] / [`receive_rekey`]
-//! ([`K2Gate`], the SDK's `HumanGate`), which the network half calls. That
-//! half needs postal-sdk wire v2 (S1, Postal Bot) and the plane's P-1..P-8
-//! (K2 Web). `k2 postal send|route|adopt` answer "not available yet" from
-//! the CLI (S4, S5, S7).
+//! The Postal network itself is [`crate::postal_net`]. **Waits on others,
+//! never pretended:** live delivery to this box (S6, the plane's P-6) and
+//! `adopt` (S7).
 
 use std::collections::HashMap;
 
@@ -62,11 +64,16 @@ pub const BLOCK: &str = "/cli/postal/block";
 pub const SETTINGS: &str = "/cli/postal/settings";
 pub const LINK_P5: &str = "/cli/postal/link-p5";
 pub const ENABLE: &str = "/cli/postal/enable";
+pub const SEND: &str = "/cli/postal/send";
+pub const ROUTE: &str = "/cli/postal/route";
+pub const CODE: &str = "/cli/postal/code";
+pub const OWNER_LINK: &str = "/cli/postal/owner-link";
 
-pub const PATHS: &[&str] = &[STATUS, FRIENDS, CLAIM, INVITE, DECIDE, REMOVE, BLOCK, SETTINGS, LINK_P5, ENABLE];
-const POST_ONLY: &[&str] = &[CLAIM, INVITE, DECIDE, REMOVE, BLOCK, LINK_P5, ENABLE];
+pub const PATHS: &[&str] = &[STATUS, FRIENDS, CLAIM, INVITE, DECIDE, REMOVE, BLOCK, SETTINGS, LINK_P5, ENABLE, SEND, ROUTE, CODE, OWNER_LINK];
+const POST_ONLY: &[&str] = &[CLAIM, INVITE, DECIDE, REMOVE, BLOCK, LINK_P5, ENABLE, SEND, ROUTE, OWNER_LINK];
+const GET_ONLY: &[&str] = &[STATUS, FRIENDS, CODE];
 /// The routes that answer while the switch is off.
-pub const OPEN_WHILE_OFF: &[&str] = &[SETTINGS, LINK_P5, ENABLE];
+pub const OPEN_WHILE_OFF: &[&str] = &[SETTINGS, LINK_P5, ENABLE, OWNER_LINK];
 
 pub const MAX_BODY: usize = 64 * 1024;
 
@@ -153,7 +160,7 @@ fn store_err(e: StoreError) -> CliResponse {
 
 /// A workspace a Postal call is about.
 #[derive(Debug, Clone)]
-pub(crate) struct Ws {
+pub struct Ws {
     pub id: String,
     pub path: String,
     pub handle: String,
@@ -165,7 +172,7 @@ impl Ws {
     }
 }
 
-fn ws_of_id(id: &str) -> Option<Ws> {
+pub fn ws_of_id(id: &str) -> Option<Ws> {
     let path: String = k2_core::db::read(|conn| {
         conn.query_row("SELECT path FROM projects WHERE id = ?1", rusqlite::params![id], |r| r.get(0)).ok()
     })?;
@@ -219,10 +226,10 @@ pub fn handle(path: &str, who: Who, is_post: bool, body: &[u8], params: &HashMap
     if is_post_only(path) && !is_post {
         return CliResponse::method_not_allowed();
     }
-    if !is_post && path != STATUS && path != FRIENDS && path != SETTINGS {
+    if !is_post && !GET_ONLY.contains(&path) && path != SETTINGS {
         return CliResponse::method_not_allowed();
     }
-    if is_post && (path == STATUS || path == FRIENDS) {
+    if is_post && GET_ONLY.contains(&path) {
         return CliResponse::method_not_allowed();
     }
     if matches!(who, Who::Invalid | Who::Wrong) {
@@ -242,6 +249,7 @@ pub fn handle(path: &str, who: Who, is_post: bool, body: &[u8], params: &HashMap
     match path {
         SETTINGS => settings(&who, is_post, &v),
         ENABLE => enable(&who, str_of(&v, params, "why")),
+        OWNER_LINK => owner_link(&who, v.get("token").and_then(Value::as_str)),
         _ => {
             let named = str_of(&v, params, "workspace").or_else(|| params.get("project").map(String::as_str));
             let ws = match workspace_for(&who, named) {
@@ -253,7 +261,10 @@ pub fn handle(path: &str, who: Who, is_post: bool, body: &[u8], params: &HashMap
                 FRIENDS => friends(&ws),
                 CLAIM => claim(&who, &ws, str_of(&v, params, "address"), str_of(&v, params, "why")),
                 INVITE => invite(&who, &ws, str_of(&v, params, "to"), str_of(&v, params, "why")),
-                DECIDE => decide(&who, &ws, str_of(&v, params, "id"), str_of(&v, params, "decision")),
+                DECIDE => decide(&who, &ws, str_of(&v, params, "id"), str_of(&v, params, "decision"), str_of(&v, params, "code")),
+                SEND => send(&who, &ws, str_of(&v, params, "to"), v.get("text").and_then(Value::as_str), v.get("wake").and_then(Value::as_bool).unwrap_or(true)),
+                ROUTE => route(&who, &ws, &v),
+                CODE => code(&who, &ws, str_of(&v, params, "id")),
                 REMOVE | BLOCK => tighten(&who, &ws, path == BLOCK, str_of(&v, params, "peer")),
                 LINK_P5 => crate::permission::actions::postal::ask_link_p5(&who, &ws),
                 _ => CliResponse::not_found(),
@@ -303,12 +314,29 @@ pub(crate) async fn serve_tcp(
     true
 }
 
-const PLANE_NOTE: &str = "The Postal network connection comes in a later release: the address and requests are kept here until then.";
-
-/// What every answer says about the Postal network while the network half
-/// waits (postal-sdk wire v2, the plane's P-1..P-8).
+/// What every answer says about the Postal network: connected or not,
+/// why not, and what still waits on others (live delivery, S6).
 fn plane() -> Value {
-    json!({ "connected": k2_core::postal::gate::network_available(), "state": k2_core::postal::gate::NOT_YET, "note": PLANE_NOTE })
+    let connected = k2_core::postal::gate::network_available();
+    let problem = crate::postal_net::last_problem();
+    let note = if connected {
+        format!(
+            "Connected to the Postal network with this server's {} Connect account. Mail goes by the network's hold; live delivery to this server comes with a later Postal network update.",
+            k2_core::product_name!()
+        )
+    } else {
+        match &problem {
+            Some((_, hint)) => format!("Not connected to the Postal network: {hint}"),
+            None => "Not connected to the Postal network yet (it connects within a minute of Postal being on).".to_string(),
+        }
+    };
+    json!({
+        "connected": connected,
+        "state": if connected { "connected" } else { k2_core::postal::gate::NOT_YET },
+        "problem": problem.map(|(c, _)| c),
+        "live": "not_yet",
+        "note": note,
+    })
 }
 
 fn status(ws: &Ws) -> CliResponse {
@@ -323,6 +351,7 @@ fn status(ws: &Ws) -> CliResponse {
         "workspace": ws.json(),
         "handle": handle,
         "counts": { "accepted": counts.0, "pendingIn": counts.1, "pendingOut": counts.2 },
+        "ownerLinked": if k2_core::postal::gate::network_available() { crate::postal_net::owner_linked() } else { None },
         "plane": plane(),
     }))
 }
@@ -387,7 +416,17 @@ fn record_claim(who: &Who, ws: &Ws, addr: &k2_core::postal::Address) -> CliRespo
         store::claim(&conn, &ws.id, addr, &actor(who))
     };
     match r {
-        Ok(h) => ok(json!({ "ok": true, "workspace": ws.json(), "handle": h, "plane": plane() })),
+        Ok(h) => {
+            if k2_core::postal::gate::network_available() {
+                if let Some(net) = crate::postal_net::net() {
+                    if let Err(e) = crate::postal_net::pairing::register_handles(&net) {
+                        k2_core::log_debug!("[postal] register {}: {}", h.address, e.code());
+                    }
+                }
+            }
+            let h = k2_core::db::read(|conn| store::handle_for_workspace(conn, &ws.id)).unwrap_or(h);
+            ok(json!({ "ok": true, "workspace": ws.json(), "handle": h, "plane": plane() }))
+        }
         Err(e) => store_err(e),
     }
 }
@@ -467,14 +506,22 @@ pub(crate) fn record_invite(ws: &Ws, handle: &store::Handle, peer: &k2_core::pos
     };
     match r {
         Ok(f) => {
-            // Queued for the SDK; nothing is sent in this release.
-            k2_core::postal::gate::record_answer(k2_core::postal::gate::Answer::Invite { friend_id: f.id.clone(), peer: f.peer_address.clone() });
+            // Out now when the network answers; else the loop sends it.
+            if k2_core::postal::gate::network_available() {
+                if let Some(net) = crate::postal_net::net() {
+                    if let Err(e) = crate::postal_net::pairing::send_unsent(&net) {
+                        k2_core::log_debug!("[postal] invite {}: {}", f.id, e.code());
+                    }
+                }
+            }
+            let f = k2_core::db::read(|conn| store::friend(conn, &f.id)).unwrap_or(f);
+            let sent = f.pair_id.is_some();
             ok(json!({
                 "ok": true,
                 "workspace": ws.json(),
                 "friend": f,
-                "sent": false,
-                "network": k2_core::postal::gate::NOT_YET,
+                "sent": sent,
+                "network": if sent { "sent" } else { k2_core::postal::gate::NOT_YET },
                 "plane": plane(),
             }))
         }
@@ -500,7 +547,7 @@ pub(crate) fn invite_as(who: &Who, ws_id: &str, to: &str, note: Option<&str>) ->
     }
 }
 
-fn decide(who: &Who, ws: &Ws, id: Option<&str>, decision: Option<&str>) -> CliResponse {
+fn decide(who: &Who, ws: &Ws, id: Option<&str>, decision: Option<&str>, code: Option<&str>) -> CliResponse {
     let Some(id) = id else {
         return err("400 Bad Request", "usage", format!("name the request: id=<the request's id> ({} postal friends lists them)", cli_name!()));
     };
@@ -525,9 +572,20 @@ fn decide(who: &Who, ws: &Ws, id: Option<&str>, decision: Option<&str>) -> CliRe
             return crate::permission::actions::postal::ask_pair_accept(ws, &f);
         }
         // Turning a request down is tightening: the agent's own.
+        reject_on_network(&f);
         return record_decision(who, ws, &f.id, false);
     }
-    decide_as(who, &ws.id, id, accept)
+    decide_as(who, &ws.id, id, accept, code)
+}
+
+/// Sign `reject` for a request whose handshake waits, so the other side
+/// hears it (best effort: otherwise the plane lets it expire).
+fn reject_on_network(f: &store::Friend) {
+    if let Some(net) = k2_core::postal::gate::network_available().then(crate::postal_net::net).flatten() {
+        if let Err(e) = crate::postal_net::pairing::reject(&net, f) {
+            k2_core::log_debug!("[postal] reject {} on the network: {}", f.id, e.code());
+        }
+    }
 }
 
 /// The decide route's rules for one request of workspace `ws_id`, as a
@@ -535,7 +593,7 @@ fn decide(who: &Who, ws: &Ws, id: Option<&str>, decision: Option<&str>) -> CliRe
 /// Deny). A request that carries a pairing code can't be accepted in this
 /// release: the SDK checks the code the person types from the **other**
 /// box (`Handshake::confirm`), and that waits on the network half.
-pub(crate) fn decide_as(who: &Who, ws_id: &str, id: &str, accept: bool) -> CliResponse {
+pub(crate) fn decide_as(who: &Who, ws_id: &str, id: &str, accept: bool, code: Option<&str>) -> CliResponse {
     if !k2_core::postal::enabled() {
         return off();
     }
@@ -547,14 +605,69 @@ pub(crate) fn decide_as(who: &Who, ws_id: &str, id: &str, accept: bool) -> CliRe
         );
     }
     let Some(ws) = ws_of_id(ws_id) else { return store_err(StoreError::NotFound) };
-    if accept && k2_core::postal::gate::code(id).is_some() {
-        return err(
-            "409 Conflict",
-            k2_core::postal::gate::CODE_NOT_YET,
-            "this request carries a pairing code, and checking it needs this server's Postal network connection, which comes in a later release: it can't be accepted yet (Reject or Block still work)",
-        );
+    let pairing = k2_core::postal::gate::code(id).is_some();
+    if accept && pairing {
+        return confirm_with_code(who, &ws, id, code);
+    }
+    if !accept {
+        if let Some(f) = k2_core::db::read(|conn| store::friend(conn, id)) {
+            reject_on_network(&f);
+        }
     }
     record_decision(who, &ws, id, accept)
+}
+
+/// A person's accept of a request that carries a pairing code: the code
+/// they typed (from the OTHER side's screen) goes to the SDK, which checks
+/// it and only then signs; the owner's token sends it.
+fn confirm_with_code(who: &Who, ws: &Ws, id: &str, code: Option<&str>) -> CliResponse {
+    let Some(typed) = code.and_then(k2_core::postal::gate::normalize_code) else {
+        return err(
+            "400 Bad Request",
+            "postal_code_needed",
+            "type the 6-digit code shown on the other side's screen (code=123456); your own code is in the Postal tab and on the card's form",
+        );
+    };
+    let handle = match handle_of(ws) {
+        Ok(h) => h,
+        Err(r) => return r,
+    };
+    let Some(f) = k2_core::db::read(|conn| store::friend(conn, id)).filter(|f| f.handle_id == handle.id) else {
+        return store_err(StoreError::NotFound);
+    };
+    let Some(net) = crate::postal_net::net() else {
+        return err("503 Service Unavailable", "postal_unreachable", "this server has no Postal network client");
+    };
+    match crate::postal_net::pairing::confirm(&net, &f, &typed, &actor(who)) {
+        Ok(crate::postal_net::pairing::Outcome::Accepted { friends }) => {
+            let f = k2_core::db::read(|conn| store::friend(conn, id)).unwrap_or(f);
+            crate::permission::actions::postal::close_pair_cards(&ws.id, &f.id, "accepted", who);
+            ok(json!({
+                "ok": true,
+                "workspace": ws.json(),
+                "friend": f,
+                "friends": friends,
+                "hint": if friends { "friends now" } else { "your side is confirmed; they become friends when the other side types your code" },
+                "plane": plane(),
+            }))
+        }
+        Ok(crate::postal_net::pairing::Outcome::Mismatch) => {
+            crate::permission::actions::postal::close_pair_cards_by_network(&ws.id, &f.id, "the code didn't match");
+            err(
+                "409 Conflict",
+                "postal_code_mismatch",
+                "that code doesn't match this server's: someone may sit between the two servers, or it was misread. The request failed on both sides; ask again to pair.",
+            )
+        }
+        Err(e) => {
+            let status = match e {
+                crate::postal_net::plane::CallError::NoOwnerLink(_) => "409 Conflict",
+                ref x if x.is_retryable() => "503 Service Unavailable",
+                _ => "409 Conflict",
+            };
+            err(status, &e.code(), e.hint())
+        }
+    }
 }
 
 /// Write one decision on a request of `ws`, close its cards, and queue the
@@ -619,7 +732,12 @@ fn tighten(who: &Who, ws: &Ws, block: bool, peer: Option<&str>) -> CliResponse {
             });
             k2_core::postal::gate::clear_code(&f.id);
             crate::permission::actions::postal::close_pair_cards(&ws.id, &f.id, if block { "blocked" } else { "removed" }, who);
-            ok(json!({ "ok": true, "workspace": ws.json(), "friend": f }))
+            // Revoke on the plane now; the loop retries what doesn't go.
+            let revoked = k2_core::postal::gate::network_available()
+                .then(crate::postal_net::net)
+                .flatten()
+                .map(|net| crate::postal_net::pairing::revoke(&net, &f).map_err(|e| e.code()));
+            ok(json!({ "ok": true, "workspace": ws.json(), "friend": f, "revokedOnNetwork": revoked.as_ref().map(|r| r.is_ok()) }))
         }
         Err(e) => store_err(e),
     }
@@ -675,12 +793,198 @@ fn settings(who: &Who, is_post: bool, v: &Value) -> CliResponse {
     ok(json!({ "ok": true, "enabled": k2_core::postal::enabled(), "adminsMayAccept": s.postal_admins_may_accept }))
 }
 
+// ── send, route, code, owner link (S4, S5, S3 network) ─────────────────
+
+/// `POST /cli/postal/send {to, text, wake?}`: an agent sends as its own
+/// workspace's address (the passport says which); an Owner or Admin names
+/// the workspace. The answer: `{success, id, badge, to, status, reason,
+/// via: "postal"}`.
+fn send(who: &Who, ws: &Ws, to: Option<&str>, text: Option<&str>, wake: bool) -> CliResponse {
+    if who.passport().is_none() && !admin(who) {
+        return people_only("sending Postal mail as an agent");
+    }
+    let handle = match handle_of(ws) {
+        Ok(h) => h,
+        Err(r) => return r,
+    };
+    let Some(to) = to else {
+        return err("400 Bad Request", "usage", "to is the Postal address: handle::label.postal.bot");
+    };
+    let actor = match who.passport() {
+        Some(_) => format!("agent:{}", ws.handle),
+        None => actor(who),
+    };
+    let sender_ws = who.passport().map(|(own, _)| own.to_string());
+    let mut o = match crate::postal_net::send::queue(&handle, to, text.unwrap_or(""), wake, &actor, sender_ws.as_deref()) {
+        Ok(o) => o,
+        Err(r) => return err(r.status, r.code, r.hint),
+    };
+    if k2_core::postal::gate::network_available() {
+        if let Some(net) = crate::postal_net::net() {
+            if let Err(e) = crate::postal_net::send::advance(&net, &mut o) {
+                k2_core::log_debug!("[postal] send {}: {}", o.item.id, e.code());
+            }
+        }
+    }
+    let mut v = crate::postal_net::send::answer(&o);
+    if o.badge.is_none() && !k2_core::postal::gate::network_available() {
+        v["hint"] = json!("queued on this server: it goes out as soon as this server is connected to the Postal network");
+    }
+    ok(v)
+}
+
+/// `POST /cli/postal/route {friend?, targets, wake?, clear?}`: where this
+/// workspace's Postal mail lands (§5.2). An Owner or Admin sets any rule;
+/// the agent itself only a quieter one (Rosson's 11-08 answer 6).
+fn route(who: &Who, ws: &Ws, v: &Value) -> CliResponse {
+    use k2_core::postal::route::Rule;
+    if who.passport().is_none() && !admin(who) {
+        return people_only("changing where Postal mail lands");
+    }
+    let handle = match handle_of(ws) {
+        Ok(h) => h,
+        Err(r) => return r,
+    };
+    let friend = match v.get("friend").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(a) => {
+            let Some(peer) = k2_core::postal::parse_address(a) else {
+                return err("400 Bad Request", "bad_postal_address", "friend must be a Postal address: handle::label.postal.bot");
+            };
+            match k2_core::db::read(|conn| store::friend_by_peer(conn, &handle.id, &peer.as_string())) {
+                Some(f) => Some(f),
+                None => return store_err(StoreError::NotFound),
+            }
+        }
+    };
+    let current = friend
+        .as_ref()
+        .and_then(|f| Rule::from_json(f.route.as_deref()))
+        .or_else(|| Rule::from_json(handle.route.as_deref()))
+        .unwrap_or_default();
+    let clear = v.get("clear").and_then(Value::as_bool).unwrap_or(false);
+    let new = if clear {
+        None
+    } else {
+        let words: Vec<String> = match v.get("targets") {
+            Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+            Some(Value::String(s)) => s.split_whitespace().map(str::to_string).collect(),
+            _ => Vec::new(),
+        };
+        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+        let wake = v.get("wake").and_then(Value::as_bool).unwrap_or(true);
+        match Rule::parse_targets(&refs, wake) {
+            Some(r) => Some(r),
+            None => {
+                return err(
+                    "400 Bad Request",
+                    "usage",
+                    "targets are terminal, inbox, inbox+pointer and thread:<person> (one or more)",
+                )
+            }
+        }
+    };
+    if who.passport().is_some() {
+        // The agent may only make its own routing quieter; clearing a rule
+        // goes back to the default (terminal, wake), which may be louder.
+        let effective_after = new.clone().unwrap_or_else(|| {
+            if friend.is_some() {
+                Rule::from_json(handle.route.as_deref()).unwrap_or_default()
+            } else {
+                Rule::default()
+            }
+        });
+        if !effective_after.is_quieter_than(&current) {
+            return err(
+                "403 Forbidden",
+                "postal_route_louder",
+                "an agent may only make its own Postal routing quieter (terminal → inbox, wake off); a louder route is a person's, in the Postal tab",
+            );
+        }
+    }
+    let json = new.as_ref().map(Rule::to_json);
+    let r = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match &friend {
+            Some(f) => store::set_friend_route(&conn, &f.id, json.as_deref()),
+            None => store::set_handle_route(&conn, &handle.id, json.as_deref()),
+        }
+    };
+    if let Err(e) = r {
+        return store_err(e);
+    }
+    crate::hire_routes::audit("postal-route", &actor(who), &format!("{} {}: {}", handle.address, friend.as_ref().map(|f| f.peer_address.as_str()).unwrap_or("(agent)"), json.as_deref().unwrap_or("default")));
+    ok(json!({ "ok": true, "workspace": ws.json(), "friend": friend.map(|f| f.peer_address), "route": new }))
+}
+
+/// `GET /cli/postal/code?id=`: this server's 6-digit pairing code for a
+/// request, for the person who answers it (to read out to the other side).
+/// Never an agent's: an agent's call is refused.
+fn code(who: &Who, ws: &Ws, id: Option<&str>) -> CliResponse {
+    if who.passport().is_some() || !may_accept(who) {
+        return err(
+            "403 Forbidden",
+            "postal_people_only",
+            "a pairing code is for the person who answers the request (the Owner, or an Admin when the Owner allows it), never an agent",
+        );
+    }
+    let Some(id) = id else { return err("400 Bad Request", "usage", "id is the request") };
+    let handle = match handle_of(ws) {
+        Ok(h) => h,
+        Err(r) => return r,
+    };
+    let Some(f) = k2_core::db::read(|conn| store::friend(conn, id)).filter(|f| f.handle_id == handle.id) else {
+        return store_err(StoreError::NotFound);
+    };
+    match k2_core::postal::gate::code(&f.id) {
+        Some(c) => ok(json!({
+            "ok": true,
+            "id": f.id,
+            "peer": f.peer_address,
+            "code": k2_core::postal::gate::show_code(&c),
+            "hint": "read this code to the other side, and type the code shown on their screen",
+        })),
+        None => err("404 Not Found", "postal_no_code", "no pairing code waits for this request (it was answered, or this server restarted: pair again)"),
+    }
+}
+
+/// `POST /cli/postal/owner-link [{token}]`: the Owner links Postal
+/// approvals for this server (the plane's postal-decide device grant). The
+/// answer carries the page the Owner opens to approve; the token goes to
+/// the vault. A headless box's Owner may instead hand over a `k2c_pd_`
+/// token they approved elsewhere (`--token-stdin`); it is never shown back.
+fn owner_link(who: &Who, token: Option<&str>) -> CliResponse {
+    if who.passport().is_some() || !who.is_owner() {
+        return err("403 Forbidden", "owner_only", "the server's owner links Postal approvals");
+    }
+    if let Some(t) = token.map(str::trim).filter(|t| !t.is_empty()) {
+        let Some(net) = crate::postal_net::net() else {
+            return err("503 Service Unavailable", "postal_unreachable", "this server has no Postal network client");
+        };
+        let label = match net.label() {
+            Ok(l) => l,
+            Err(e) => return err(if e.is_retryable() { "503 Service Unavailable" } else { "409 Conflict" }, &e.code(), e.hint()),
+        };
+        return match k2_core::postal::keys::set_decide_token(&label, t) {
+            Ok(()) => {
+                crate::hire_routes::audit("postal-owner-link", &actor(who), &format!("label={label} linked (token handed over)"));
+                ok(json!({ "ok": true, "label": label, "linked": true }))
+            }
+            Err(e) => err("400 Bad Request", "usage", e),
+        };
+    }
+    match crate::postal_net::owner_link_start() {
+        Ok(v) => ok(v),
+        Err(e) => err(if e.is_retryable() { "503 Service Unavailable" } else { "409 Conflict" }, &e.code(), e.hint()),
+    }
+}
+
 /// An incoming friend request for workspace `ws_id`'s address (the seam
 /// the Postal network half calls when the plane reports one; see
 /// [`K2Gate`]). Records it, keeps this box's pairing code (people only), and
 /// presents K2's `postal.pair.accept` card; never wakes the agent. A
 /// blocked peer or a full queue is refused here, before any card.
-#[cfg_attr(not(test), allow(dead_code))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn receive_request(
     ws_id: &str,
@@ -718,7 +1022,6 @@ pub(crate) fn receive_request(
 /// A friend's key changed on the Postal network (the SDK's `rekey` gate):
 /// the friend waits as `rekey_pending` and K2 presents the same card, in
 /// "trust the new key" words. Never wakes the agent.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn receive_rekey(ws_id: &str, peer: &k2_core::postal::Address) -> Result<Value, StoreError> {
     let ws = ws_of_id(ws_id).ok_or(StoreError::NotFound)?;
     let f = {
@@ -732,13 +1035,8 @@ pub(crate) fn receive_rekey(ws_id: &str, peer: &k2_core::postal::Address) -> Res
 }
 
 /// postal-sdk's `HumanGate`, K2's side: each gate records and presents a
-/// card, and never decides. The SDK's pairing (over the plane's pair API,
-/// P-1..P-3 and P-7) calls it; nothing does in this release. When S3–S5 wire it,
-/// follow the four rules in [`k2_core::postal::gate`] (SeenStore = the
-/// `msg_deliveries` unique insert in the storing transaction; verify the
-/// `p5-msg-v1` hop proof on live delivery; stop the pull loop when
-/// `next_after` doesn't advance; check the box's own key before `open`).
-#[cfg_attr(not(test), allow(dead_code))]
+/// card, and never decides. The daemon's pairing ([`crate::postal_net::pairing`])
+/// raises it on both boxes once a handshake is done.
 pub(crate) struct K2Gate;
 
 impl k2_core::postal::gate::HumanGate for K2Gate {

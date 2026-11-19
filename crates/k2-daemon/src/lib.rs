@@ -41,6 +41,7 @@ pub mod sandbox_reaper;
 pub mod v1_ws_message;
 pub mod v1_ws_postal;
 pub mod msg_verify;
+pub mod postal_net;
 pub mod postal_routes;
 pub mod claude_auth_host;
 pub mod subscription_usage;

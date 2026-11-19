@@ -746,6 +746,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/postal/claim",
         "/cli/postal/decide",
         "/cli/postal/enable",
+        // S4/S5: an agent sends as its own address and makes its own
+        // routing quieter. Never `/cli/postal/code` (people only).
+        "/cli/postal/send",
+        "/cli/postal/route",
         // 0.46.1 `k2 agent identity`: an agent reads and sets its OWN
         // color and picture. The handler pins the workspace to the passport
         // and refuses a name. `/cli/agent/handle` is NOT here (people and

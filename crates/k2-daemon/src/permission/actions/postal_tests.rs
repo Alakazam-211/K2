@@ -105,12 +105,11 @@ async fn an_agents_invite_waits_for_a_person_and_allow_records_it() {
     });
     assert_eq!((f.asked_by.as_deref(), f.note.as_deref()), (Some(format!("login:{admin}").as_str()), Some("to review each other's PRs")));
     let turn = last_turn(&ws);
-    assert!(turn.contains(&format!("Friend request to {peer} recorded")) && turn.contains("not sent yet"), "{turn}");
-    assert!(vw["consequences"].as_str().unwrap().contains("Not sent yet"), "the card never says it was sent: {vw}");
-    assert!(matches!(
-        k2_core::postal::gate::answers_for(&f.id).last(),
-        Some(k2_core::postal::gate::Answer::Invite { .. })
-    ), "queued for the SDK");
+    // Not connected to the Postal network in this test: recorded, and it
+    // says so (never "sent").
+    assert!(turn.contains(&format!("Friend request to {peer} recorded")) && turn.contains("as soon as this server is connected"), "{turn}");
+    assert!(vw["consequences"].as_str().unwrap().contains("as soon as this server is connected"), "the card never says it was sent: {vw}");
+    assert_eq!(f.pair_id, None, "not on the Postal network yet: the loop sends it once connected");
 }
 
 fn no_postal_turn(ws: &Ws) {
@@ -189,7 +188,7 @@ async fn incoming_requests_batch_and_each_is_answered_on_its_own() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_request_with_a_pairing_code_is_alone_never_shows_the_code_and_cant_be_accepted_yet() {
+async fn a_request_with_a_pairing_code_is_alone_never_shows_the_code_and_allow_needs_the_code() {
     let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
@@ -211,11 +210,16 @@ async fn a_request_with_a_pairing_code_is_alone_never_shows_the_code_and_cant_be
     assert_ne!(Some(card.as_str()), plain["card"]["card"].as_str(), "a request with a code never joins a batch");
     let vw = view(&ws, &card);
     assert!(!vw.to_string().contains("482913") && !vw.to_string().contains("482 913"), "the code is never on the card: {vw}");
-    assert!(vw["whatChanges"].as_str().unwrap().contains("can't be accepted yet"), "{vw}");
+    assert!(vw["whatChanges"].as_str().unwrap().contains("Allow opens K2's own form"), "{vw}");
+    // Allow without the code (K2's form on the card types it first): refused
+    // before anything is decided, and the card stays open.
     let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));
-    assert_eq!(s, "200 OK", "{a}");
-    assert_eq!(a["action"]["result"]["outcome"], "failed", "{a}");
+    assert!(s.starts_with("409"), "{s} {a}");
+    assert_eq!(a["error"]["code"], "postal_code_needed", "{a}");
     assert_eq!(friend_status(&ws, "lab::gamma.postal.bot").as_deref(), Some("pending_in"), "nothing pretended");
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Deny" }));
+    assert_eq!(s, "200 OK", "the card was still open: {a}");
+    assert_eq!(friend_status(&ws, "lab::gamma.postal.bot").as_deref(), Some("rejected"));
     no_postal_turn(&ws);
 }
 
@@ -312,4 +316,60 @@ async fn link_p5_mints_a_key_that_can_only_message_this_workspace_and_hands_it_t
     assert!(crate::misc_routes::api_enabled(), "the /v1 surface is on with the click");
     k2_core::app_settings::set_api_enabled(false);
     assert!(!key.contains(' ') && !last_turn(&ws).contains(key.trim()), "the key is never shown");
+}
+
+/// Both boxes get the card (the SDK raises the request on the side that
+/// asked too): this box's allowed, sent request (`pending_out` with a pair
+/// id) becomes a request with a pairing code on a card here as well, never
+/// showing the code; and the person's code through K2's form makes Allow
+/// "already done" rather than stale.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_asking_box_gets_the_code_card_too() {
+    use k2_core::postal::gate::{FriendRequest, HumanGate};
+    use k2_core::postal::sdk::pairing::{Fingerprint, Side};
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let _on = crate::postal_routes::switch_for_test(true);
+    let ws = seed("pfrom");
+    let me = claim(&ws);
+    let peer = "ops::beta.postal.bot";
+    let pair = "01JD8X4Q2W3E4R5T6Y7Z8A9B0C";
+    let fid = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let h = k2_core::postal::store::handle_for_workspace(&conn, &ws.id).unwrap();
+        let f = k2_core::postal::store::record_outgoing(&conn, &h, &k2_core::postal::parse_address(peer).unwrap(), Some("pair up"), "owner").unwrap();
+        k2_core::postal::store::set_pair_id(&conn, &f.id, pair).unwrap();
+        f.id
+    };
+    crate::postal_routes::K2Gate.friend_request(&FriendRequest {
+        pair_id: pair.into(),
+        local_handle: me,
+        peer: peer.into(),
+        peer_owner_name: None,
+        side: Side::From,
+        show_code: "246810".into(),
+        peer_fingerprint: Fingerprint::from_bytes([9; 32]),
+    });
+    let f = k2_core::db::read(|c| k2_core::postal::store::friend(c, &fid)).unwrap();
+    assert_eq!((f.status.as_str(), f.pair_id.as_deref()), ("pending_in", Some(pair)), "the same row, now a person's to answer");
+    assert_eq!(gate::code(&fid).as_deref(), Some("246810"));
+    let open: Vec<_> = crate::permission::store::open(Some(&ws.id)).unwrap().into_iter().filter(|r| r.action == PAIR_ACCEPT).collect();
+    assert_eq!(open.len(), 1, "a card on the asking box too");
+    assert_eq!(open[0].params["pairing"], "code");
+    let card = open[0].card_id.clone().expect("card");
+    let vw = view(&ws, &card);
+    assert!(!vw.to_string().contains("246810") && !vw.to_string().contains("246 810"), "never the code: {vw}");
+    // The person's code went through K2's form (the decide route signed and
+    // sent it): the row waits for the other side, decided by that person.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::postal::store::confirmed_waiting_peer(&conn, &fid, "owner").unwrap();
+    }
+    gate::clear_code(&fid);
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["action"]["result"]["outcome"], "already_done", "not stale: the card's words don't move with the row: {a}");
 }

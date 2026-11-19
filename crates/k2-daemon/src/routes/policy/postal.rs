@@ -16,13 +16,21 @@ use super::{get, post, split, Route};
 pub(super) const ROWS: &[Route] = &[
     post("/cli/postal/block", Member),
     post("/cli/postal/claim", Admin),
+    // People only (the handler refuses a passport): this server's pairing code.
+    get("/cli/postal/code", Member),
     post("/cli/postal/decide", Admin),
     // The handler: the Owner turns it on; an agent's ask is a card.
     post("/cli/postal/enable", Member),
     get("/cli/postal/friends", Member),
     post("/cli/postal/invite", Member),
     post("/cli/postal/link-p5", Member),
+    // The Owner links Postal approvals (the plane's postal-decide grant).
+    post("/cli/postal/owner-link", Owner),
     post("/cli/postal/remove", Member),
+    // The handler: an agent only makes its own routing quieter.
+    post("/cli/postal/route", Member),
+    // An agent sends as its own address; a person needs Admin.
+    post("/cli/postal/send", Member),
     split("/cli/postal/settings", Member, Owner),
     get("/cli/postal/status", Member),
 ];

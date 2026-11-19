@@ -223,10 +223,20 @@ fn an_agent_turns_a_request_down_itself_and_a_coded_request_waits() {
     let row = v["friends"].as_array().unwrap().iter().find(|f| f["id"] == id2.as_str()).cloned().unwrap();
     assert_eq!(row["codeWaiting"], true, "{row}");
     assert!(!v.to_string().contains("123456") && !v.to_string().contains("123 456"), "the code is never in the list: {v}");
+    // Accepting it needs the code shown on the OTHER side's screen.
     let (s, v) = call(DECIDE, Who::Owner, true, json!({ "workspace": ws.path, "id": id2, "decision": "accept", "sas": "123456" }), &[]);
-    assert_eq!((s, v["error"]["code"].as_str()), (409, Some("postal_code_check_not_available")), "{v}");
-    assert!(v["error"]["hint"].as_str().unwrap().contains("later release"), "{v}");
+    assert_eq!((s, v["error"]["code"].as_str()), (400, Some("postal_code_needed")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("other side"), "{v}");
+    // A code, but no handshake on this server (never paired over the
+    // network here): refused, nothing pretended.
+    let (s, v) = call(DECIDE, Who::Owner, true, json!({ "workspace": ws.path, "id": id2, "decision": "accept", "code": "654 321" }), &[]);
+    assert!(s == 409 || s == 503, "{s} {v}");
     assert_eq!(k2_core::db::read(|c| store::friend(c, &id2)).unwrap().status, "pending_in", "nothing pretended");
+    // This server's code is a person's: an agent can't read it.
+    let (s, v) = call(CODE, agent(&ws), false, Value::Null, &[("id", &id2)]);
+    assert_eq!((s, v["error"]["code"].as_str()), (403, Some("postal_people_only")), "{v}");
+    let (s, v) = call(CODE, Who::Owner, false, Value::Null, &[("workspace", &ws.path), ("id", &id2)]);
+    assert_eq!((s, v["code"].as_str()), (200, Some("123 456")), "{v}");
     let (s, v) = call(DECIDE, Who::Owner, true, json!({ "workspace": ws.path, "id": id2, "decision": "reject" }), &[]);
     assert_eq!((s, v["friend"]["status"].as_str()), (200, Some("rejected")), "{v}");
     assert_eq!(k2_core::postal::gate::code(&id2), None, "answered: the code is gone");
@@ -262,9 +272,9 @@ fn the_sdk_gate_records_and_never_decides() {
     assert_eq!((f.status.as_str(), f.pair_id.as_deref(), f.owner_name.as_deref()), ("pending_in", Some("pr_g"), Some("Dana")));
     assert_eq!(f.peer_fingerprint.as_deref(), Some("07".repeat(32).as_str()), "the SDK's fingerprint, as hex");
     assert_eq!(k2_core::postal::gate::code(&f.id).as_deref(), Some("111222"), "this box's code, kept for people");
-    // Accepting it needs the SDK's handshake: not in this release.
+    // Accepting it needs the code typed from the other side's screen.
     let (s, v) = call(DECIDE, Who::Owner, true, json!({ "workspace": ws.path, "id": f.id, "decision": "accept" }), &[]);
-    assert_eq!((s, v["error"]["code"].as_str()), (409, Some("postal_code_check_not_available")), "{v}");
+    assert_eq!((s, v["error"]["code"].as_str()), (400, Some("postal_code_needed")), "{v}");
     // A request for an address nobody here holds is dropped, not recorded.
     K2Gate.friend_request(&FriendRequest { local_handle: "nobody::acme.postal.bot".into(), peer: "x9::gamma.postal.bot".into(), ..req.clone() });
     assert!(k2_core::db::read(|c| {

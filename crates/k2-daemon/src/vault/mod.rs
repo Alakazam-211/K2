@@ -21,6 +21,7 @@ pub mod keeper_client;
 pub mod local_auth;
 pub mod mainrefs;
 pub mod oauth_refresh;
+pub mod postal;
 pub mod proxy;
 pub mod publish_env;
 pub mod refstore;

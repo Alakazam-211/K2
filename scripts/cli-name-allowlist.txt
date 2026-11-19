@@ -593,11 +593,17 @@
 1 cli src/renderer/lib/thread-reply.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/lib/zen/zen-source-ask.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/stores/active-agents.ts debt: the command name typed out; use CLI_NAME or cli_name!()
+17 value src/renderer/components/Wiki/WikiPage.tsx debt: unsorted value
 10 value crates/k2-daemon/src/sql/cluster.rs debt: unsorted value
 10 value crates/k2-signer/src/verbs.rs debt: unsorted value
 7 value src-tauri/src/commands/settings.rs debt: unsorted value
+6 value src/renderer/lib/zen/garden-access-api.ts debt: unsorted value
 5 value crates/k2-core/src/overlay/doc.rs debt: unsorted value
 5 value crates/k2-daemon/src/docs/host.rs debt: unsorted value
+5 value src/renderer/components/Help/HelpExplorer.tsx debt: unsorted value
+5 value src/renderer/components/Help/cli-explorer.ts debt: unsorted value
+5 value src/renderer/components/Thread/systemNotice.fixtures.ts debt: unsorted value
+5 value src/renderer/components/Wiki/wiki-api.ts debt: unsorted value
 4 value crates/k2-core/src/cli_folder_trust/scan.rs debt: unsorted value
 4 value crates/k2-core/src/suite/testkit.rs debt: unsorted value
 4 value crates/k2-core/src/zen/version_carry.rs debt: unsorted value
@@ -605,6 +611,7 @@
 4 value crates/k2-node/src/gens.rs debt: unsorted value
 4 value crates/k2-signer/src/registry.rs debt: unsorted value
 4 value crates/k2-signer/src/session.rs debt: unsorted value
+4 value src/renderer/components/Wiki/wiki-graph-data.ts debt: unsorted value
 3 value crates/k2-core/src/jscheck/inventory.rs debt: unsorted value
 3 value crates/k2-core/src/jscheck/lint.rs debt: unsorted value
 3 value crates/k2-core/src/sim/manager.rs debt: unsorted value
@@ -617,6 +624,7 @@
 3 value crates/k2-daemon/src/subscription_usage.rs debt: unsorted value
 3 value crates/k2-daemon/src/zen_access_routes.rs debt: unsorted value
 3 value crates/k2-root-proto/src/k2_db.rs debt: unsorted value
+3 value src/renderer/components/Desktop/desktop-keymap.ts debt: unsorted value
 2 value crates/k2-core/src/firewall.rs debt: unsorted value
 2 value crates/k2-core/src/mail_forward.rs debt: unsorted value
 2 value crates/k2-core/src/runtime_dir.rs debt: unsorted value
@@ -633,6 +641,11 @@
 2 value crates/k2-daemon/src/sql/pgmove/k2.rs debt: unsorted value
 2 value crates/k2-daemon/src/sql/pgmove/real_move.rs debt: unsorted value
 2 value crates/k2-daemon/src/wiki_routes.rs debt: unsorted value
+2 value src/renderer/components/AgentPane/inbox-browser.ts debt: unsorted value
+2 value src/renderer/components/Settings/sections/SewSection.tsx debt: unsorted value
+2 value src/renderer/components/Settings/sections/ZenWidgetData.tsx debt: unsorted value
+2 value src/renderer/components/Settings/sections/sew-api.ts debt: unsorted value
+2 value src/renderer/lib/zen/zen-rail-views.ts debt: unsorted value
 1 value crates/k2-client/src/account_session.rs debt: unsorted value
 1 value crates/k2-client/src/cli_install.rs debt: unsorted value
 1 value crates/k2-core/src/cli_folder_trust.rs debt: unsorted value
@@ -715,3 +728,13 @@
 1 value crates/k2-root-proto/src/sew.rs debt: unsorted value
 1 value crates/k2-signer/src/forge.rs debt: unsorted value
 1 value crates/k2-signer/src/trust.rs debt: unsorted value
+1 value src/renderer/components/Desktop/DesktopPane.tsx debt: unsorted value
+1 value src/renderer/components/Settings/sections/AgentSkillsSection.tsx debt: unsorted value
+1 value src/renderer/components/Settings/sections/DomainsSection.tsx debt: unsorted value
+1 value src/renderer/components/Settings/sections/GeneralSection.tsx debt: unsorted value
+1 value src/renderer/components/Settings/sections/access-audit-words.ts debt: unsorted value
+1 value src/renderer/components/Wiki/WikiGraph.tsx debt: unsorted value
+1 value src/renderer/components/Wiki/WikiGraph3D.tsx debt: unsorted value
+1 value src/renderer/components/Wiki/WikiNoteList.tsx debt: unsorted value
+1 value src/renderer/lib/agent-type.ts debt: unsorted value
+1 value src/renderer/lib/garden-data/garden-data-types.ts debt: unsorted value

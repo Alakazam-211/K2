@@ -7,6 +7,9 @@ renderer code.
                                                      drop rows at zero (reasons kept)
     python3 scripts/garden/brand-gate.py --list [KIND]
                                                      print every counted line
+    python3 scripts/garden/brand-gate.py --list value --debt
+                                                     print the `value` rows that are
+                                                     the command, and their total
     python3 scripts/garden/brand-gate.py --unsorted  print the `value` rows not yet
                                                      sorted, and their total
 
@@ -37,10 +40,21 @@ the word scripts/garden/cli-name-flip.py matches, either digit):
          it, backticks, "run k2"). Rust: only inside a string literal.
          Renderer: anywhere on a code line. Not a `[k2 ...]` stamp and not a
          string that is only the name (that is `value`).
-  value  Rust only: a string literal that is exactly "k2" or "k5". Each one
-         is a value some program reads or a name to move to CLI_NAME; a row
-         says which (`keeper: <who reads it>`) or is `debt: unsorted value`
-         until someone reads it. --unsorted prints the rows still unsorted.
+  value  a string that is exactly "k2" or "k5". Rust: a string literal.
+         Renderer: '...', "..." or `...` on a code line, not after a `//`
+         (a command built from parts, ['k2', 'msg'].join(' '), reads as a
+         command to nobody, so `cli` cannot see it). Each line has one
+         class. Kept in every brand: stored (on this machine's disk or
+         database, read back by our own code), wire (another program of
+         ours reads it: another server, the app, an App, the CLI's JSON),
+         outside (a program that is not ours holds it), inert (no reader
+         cares). Or command (the command a person or agent types, or its
+         file's name on disk), which a later step moves to CLI_NAME. A row
+         is `keeper: <class>[+<class>]; <who reads it>`, or
+         `debt: command (<n> lines); <step>` with `; keeps: <class>; <who
+         reads it>` after it when the file has other lines too, or
+         `debt: unsorted value` until someone reads it. --unsorted prints
+         the rows still unsorted; --list value --debt the command's lines.
   glued  a brand name built into a token, with no space between: Rust
          `{CLI_NAME}`, `{PRODUCT_NAME}`, `{BRAND_ID}` in a string, or
          `cli_name!()`, `product_name!()` beside a literal in a `concat!`;
@@ -109,7 +123,7 @@ HINT = {
     "K5": "use k2_core::brand or @/lib/brand",
     "repo": "use k2_core::brand or @/lib/brand",
     "cli": "use CLI_NAME or cli_name!() (k2_core::brand, @/lib/brand)",
-    "value": "use CLI_NAME, or add a keeper: row that says who reads the value",
+    "value": "use CLI_NAME, or add a keeper: row that says its class and who reads the value",
     "glued": "keep the name apart from the token, or add a keeper: row that says who reads this name",
 }
 AREAS = [
@@ -276,17 +290,54 @@ def rust_cli_kinds(lines, code, known, out):
         out[kind] = [(i + 1, lines[i].strip()) for i in sorted(rows)]
 
 
+TS_QUOTES = "'\"`"
+
+
+def ts_whole_string(line, m):
+    """The match is a whole string in any of the three quote forms:
+    'k2', "k2" or `k2`."""
+    b = line[m.start() - 1] if m.start() > 0 else ""
+    a = line[m.end()] if m.end() < len(line) else ""
+    return b != "" and b in TS_QUOTES and a == b
+
+
+def ts_code_end(line):
+    """Where a `//` comment starts on a renderer line, outside a string;
+    the line's length when it has none."""
+    q, i = None, 0
+    while i < len(line):
+        c = line[i]
+        if q:
+            if c == "\\":
+                i += 2
+                continue
+            if c == q:
+                q = None
+        elif c in TS_QUOTES:
+            q = c
+        elif line.startswith("//", i):
+            return i
+        i += 1
+    return len(line)
+
+
 def ts_cli_kinds(lines, code, known, out):
     """Add the command's kinds of one renderer file to `out`."""
     hits = {}
     for i in code:
         line = lines[i]
+        end = ts_code_end(line)
+        cli = False
         for lm in NAME.finditer(line):
-            if flip.is_stamp(line[:lm.start()], line[lm.end():]) or flip.whole_string_is_name(line, lm):
+            if ts_whole_string(line, lm):
+                if lm.start() < end and i not in hits.get("value", []):
+                    hits.setdefault("value", []).append(i)
+                continue
+            if cli or flip.is_stamp(line[:lm.start()], line[lm.end():]):
                 continue
             if flip.reads_as_command(line, lm, known):
                 hits.setdefault("cli", []).append(i)
-                break
+                cli = True
         for m in TS_HOLE.finditer(line):
             a = line[m.end():m.end() + 2]
             if glued(line[m.start() - 1:m.start()] if m.start() else "", a[:1], a[1:2]):
@@ -342,6 +393,53 @@ def scan(root):
     return found
 
 
+VALUE_CLASSES = ("stored", "wire", "outside", "inert")
+VALUE_KEEPER = re.compile(r"keeper: ([a-z]+(?:\+[a-z]+)*); \S")
+VALUE_DEBT = re.compile(r"debt: command \((\d+) lines?\)(?:; ([BC][0-9]+[a-z]?)(?:; keeps: ([a-z]+(?:\+[a-z]+)*); \S.*)?)?$")
+VALUE_UNSORTED = "debt: unsorted value"
+VALUE_FORMS = ("'keeper: <class>[+<class>]; <who reads it>' or "
+               "'debt: command (<n> lines); <step>[; keeps: <class>[+<class>]; <who reads it>]'")
+
+
+def value_reason_error(lines, reason):
+    """What is wrong with a `value` row's reason, or None. The classes:
+    stored, wire, outside, inert (kept in every brand), and command (a
+    debt that names the step that moves it)."""
+    if reason == VALUE_UNSORTED:
+        return None
+    m = VALUE_KEEPER.match(reason)
+    if reason.startswith("keeper: "):
+        if not m:
+            return f"want {VALUE_FORMS}, got '{reason}'"
+        return classes_error(m.group(1))
+    if not reason.startswith("debt: command"):
+        return f"want {VALUE_FORMS}, got '{reason}'"
+    m = VALUE_DEBT.match(reason)
+    if not m:
+        return f"want {VALUE_FORMS}, got '{reason}'"
+    n = int(m.group(1))
+    if not m.group(2):
+        return f"a command debt names the step that moves it (B3, B9, ...), got '{reason}'"
+    if n < 1 or n > lines:
+        return f"'command ({n} lines)' must be 1 to the row's {lines} lines"
+    if m.group(3):
+        if n == lines:
+            return f"all {lines} lines are the command, so the row keeps none: drop '; keeps: ...'"
+        return classes_error(m.group(3))
+    if n < lines:
+        return f"{lines - n} of the row's {lines} lines are not the command: add '; keeps: <class>; <who reads it>'"
+    return None
+
+
+def classes_error(classes):
+    for c in classes.split("+"):
+        if c == "ask":
+            return "class 'ask': the gardener has not answered yet, so this line has no class"
+        if c not in VALUE_CLASSES:
+            return f"unknown class '{c}'; a kept value is {', '.join(VALUE_CLASSES)}"
+    return None
+
+
 def read_allowlist(path, kinds):
     head, rows = [], {}
     with open(path, encoding="utf-8") as f:
@@ -358,6 +456,10 @@ def read_allowlist(path, kinds):
                 sys.exit(f"brand-gate: {path} line {n}: the reason must start 'keeper: ' or 'debt: ', got '{parts[3]}'")
             if parts[1] == "glued" and not parts[3].startswith("keeper: "):
                 sys.exit(f"brand-gate: {path} line {n}: a glued row is always 'keeper: <who reads this name>', got '{parts[3]}'")
+            if parts[1] == "value":
+                why = value_reason_error(int(parts[0]), parts[3])
+                if why:
+                    sys.exit(f"brand-gate: {path} line {n}: the value row for {parts[2]}: {why}")
             key = (parts[1], parts[2])
             if key in rows:
                 sys.exit(f"brand-gate: {path} line {n}: {parts[1]} {parts[2]} is listed twice")
@@ -410,7 +512,7 @@ def check_rows(found, rows, kinds):
 def main(argv):
     root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
     allowlist = cli_allowlist = ceilings = None
-    mode, list_kind = "check", None
+    mode, list_kind, debt = "check", None, False
     all_kinds = list(BRAND_KINDS) + list(CLI_KINDS)
     args = list(argv)
     while args:
@@ -419,6 +521,8 @@ def main(argv):
             mode = "tighten"
         elif a == "--unsorted":
             mode = "unsorted"
+        elif a == "--debt":
+            debt = True
         elif a == "--list":
             mode = "list"
             if args and args[0] in all_kinds:
@@ -443,6 +547,20 @@ def main(argv):
         for (kind, rel), (n, _) in left:
             print(f"{n} value {rel}")
         print(f"brand-gate: {len(left)} value row(s) unsorted ({sum(n for _, (n, _) in left)} lines).")
+        return 0
+
+    if debt:
+        if mode != "list" or list_kind != "value":
+            sys.exit("brand-gate: --debt goes with --list value")
+        _, rows = read_allowlist(cli_allowlist, CLI_KINDS)
+        steps = {}
+        for (kind, rel), (n, why) in sorted(rows.items(), key=lambda r: r[0][1]):
+            m = VALUE_DEBT.match(why) if kind == "value" else None
+            if m:
+                print(f"{m.group(1)} {rel} {m.group(2)}")
+                steps[m.group(2)] = steps.get(m.group(2), 0) + int(m.group(1))
+        by_step = ", ".join(f"{s} {steps[s]}" for s in sorted(steps))
+        print(f"brand-gate: {sum(steps.values())} value lines are the command" + (f" ({by_step})." if steps else "."))
         return 0
 
     found = scan(root)

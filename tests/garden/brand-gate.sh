@@ -190,7 +190,7 @@ rows "1 value crates/b/src/lib.rs debt: unsorted value"
 crun 0 "0 glued lines in 1 rows type the command name; 1 value rows unsorted"
 crun 0 "brand-gate: 1 value row(s) unsorted (1 lines)." --unsorted
 crun 0 "1 value crates/b/src/lib.rs" --unsorted
-rows "1 value crates/b/src/lib.rs keeper: the config file's tool key"
+rows "1 value crates/b/src/lib.rs keeper: stored; the config file's tool key"
 crun 0 "brand-gate: 0 value row(s) unsorted (0 lines)." --unsorted
 mv "$C/crates/b/src/lib.rs" "$C/crates/b/src/lib_test.rs"
 rows
@@ -200,8 +200,73 @@ rows "1 value crates/b/src/lib.rs because"
 crun 1 "the reason must start 'keeper: ' or 'debt: '"
 rows "1 K2 crates/b/src/lib.rs debt: x"
 crun 1 "want '<lines> <cli|value|glued> <path> <keeper|debt>: <reason>'"
-printf 'fn clean() {}\n' > "$C/crates/b/src/lib.rs"
+
+# A value row's reason has a class: keeper: <class>[+<class>]; <who reads
+# it>, or debt: command (<n> lines); <step>[; keeps: <class>; <who>].
+printf 'fn v() -> [&'"'"'static str; 3] { ["k2", "k2", "k2"] }\nfn w() -> &'"'"'static str { "k2" }\nfn x() -> &'"'"'static str { "k2" }\n' > "$C/crates/b/src/lib.rs"
+for good in "keeper: stored; the audit log's actor column" \
+            "keeper: stored+wire; the firewall config, and the app reads it" \
+            "keeper: outside; Postgres, the schema's name" \
+            "keeper: inert; bytes written to probe a folder" \
+            "debt: command (3 lines); B9" \
+            "debt: command (2 lines); B3; keeps: outside; the package's lib folder" \
+            "debt: command (1 line); B9; keeps: stored+wire; the agent mode"; do
+    rows "3 value crates/b/src/lib.rs $good"
+    crun 0 "3 value, 0 glued lines in 1 rows"
+done
+bad() { rows "3 value crates/b/src/lib.rs $1"; crun 1 "the value row for crates/b/src/lib.rs: $2"; }
+bad "keeper: the config file's tool key" "want 'keeper: <class>[+<class>]; <who reads it>' or 'debt: command (<n> lines); <step>"
+bad "keeper: stored" "want 'keeper: <class>[+<class>]; <who reads it>'"
+bad "keeper: kept; the audit log" "unknown class 'kept'; a kept value is stored, wire, outside, inert"
+bad "keeper: stored+shown; the audit log" "unknown class 'shown'"
+bad "keeper: command; the bin folder" "unknown class 'command'"
+bad "keeper: ask; who reads the label?" "class 'ask': the gardener has not answered yet"
+bad "debt: command (2 lines); B3; keeps: ask; the label" "class 'ask'"
+bad "debt: command (4 lines); B9" "'command (4 lines)' must be 1 to the row's 3 lines"
+bad "debt: command (0 lines); B9; keeps: stored; x" "'command (0 lines)' must be 1 to the row's 3 lines"
+bad "debt: command (3 lines)" "a command debt names the step that moves it"
+bad "debt: command (3 lines); later" "want 'keeper: <class>[+<class>]; <who reads it>'"
+bad "debt: command (2 lines); B9" "1 of the row's 3 lines are not the command: add '; keeps: <class>; <who reads it>'"
+bad "debt: command (3 lines); B9; keeps: stored; x" "all 3 lines are the command, so the row keeps none"
+bad "debt: should move" "want 'keeper: <class>[+<class>]; <who reads it>'"
+
+# --list value --debt: the command's lines, row by row, and their total.
+rows "3 value crates/b/src/lib.rs debt: command (2 lines); B3; keeps: inert; a probe" \
+     "1 value src/renderer/lib/v.ts debt: command (1 line); B9"
+printf "export const tool = 'k2'\n" > "$C/src/renderer/lib/v.ts"
+crun 0 "2 crates/b/src/lib.rs B3" --list value --debt
+crun 0 "1 src/renderer/lib/v.ts B9" --list value --debt
+crun 0 "brand-gate: 3 value lines are the command (B3 2, B9 1)." --list value --debt
+crun 1 "--debt goes with --list value" --list cli --debt
+rm "$C/src/renderer/lib/v.ts"
 rows
+crun 0 "brand-gate: 0 value lines are the command." --list value --debt
+
+# The renderer: a code line with a string that is exactly the name, in any
+# of the three quote forms. Not in a test file, not in a comment, not a
+# longer string.
+printf 'fn clean() {}\n' > "$C/crates/b/src/lib.rs"
+printf "export const who = 'k2'\n" > "$C/src/renderer/lib/w.ts"
+crun 1 "src/renderer/lib/w.ts:1 spells out value and has no value row"
+for line in 'export const who = "k2"' 'export const who = `k2`' "export type Who = 'k5' | 'local'" "if (mode === 'k2') go() // the mode"; do
+    printf '%s\n' "$line" > "$C/src/renderer/lib/w.ts"
+    crun 0 "value src/renderer/lib/w.ts:1:" --list value
+done
+cp "$C/src/renderer/lib/w.ts" "$C/src/renderer/lib/w.test.ts"
+rows "1 value src/renderer/lib/w.ts keeper: inert; the wiki page's own mode"
+crun 0 "0 cli, 1 value, 0 glued lines in 1 rows"
+rm "$C/src/renderer/lib/w.test.ts"
+cat > "$C/src/renderer/lib/w.ts" <<'TS'
+// const who = 'k2'
+/* const who = 'k2' */
+ * const who = 'k2'
+export const a = 'k2 ', b = 'k2so', c = "~/.k2"
+export const e = go() // was 'k2'
+export const f = 'see // k2', g = `${'k2-node'}`
+TS
+rows
+crun 0 "0 cli, 0 value, 0 glued lines in 0 rows"
+rm "$C/src/renderer/lib/w.ts"
 
 # Gate 4, glued: a brand name built into a token fails with no row and
 # passes with a keeper row.
@@ -283,7 +348,7 @@ fn v() -> &'static str { "k2" }
 fn g() -> String { format!("{CLI_NAME}_session") }
 RS
 rows "5 cli crates/b/src/lib.rs debt: the command name typed out; use CLI_NAME or cli_name!()" \
-     "2 value crates/b/src/lib.rs keeper: the session file's tool key" \
+     "2 value crates/b/src/lib.rs keeper: stored; the session file's tool key" \
      "1 glued crates/b/src/lib.rs keeper: the session cookie's reader" \
      "3 cli crates/b/src/gone.rs debt: gone"
 crun 0 "cli crates/b/src/lib.rs:1: fn a()" --list cli
@@ -291,7 +356,7 @@ crun 0 "value crates/b/src/lib.rs:2: fn v()" --list value
 crun 0 "glued crates/b/src/lib.rs:3: fn g()" --list glued
 clacks "value crates" --list cli
 crun 0 "brand-gate: c.txt tightened: 3 lines in 3 rows." --tighten
-want="$(printf '# the command name\n\n1 cli crates/b/src/lib.rs debt: the command name typed out; use CLI_NAME or cli_name!()\n1 value crates/b/src/lib.rs keeper: the session file'"'"'s tool key\n1 glued crates/b/src/lib.rs keeper: the session cookie'"'"'s reader')"
+want="$(printf '# the command name\n\n1 cli crates/b/src/lib.rs debt: the command name typed out; use CLI_NAME or cli_name!()\n1 value crates/b/src/lib.rs keeper: stored; the session file'"'"'s tool key\n1 glued crates/b/src/lib.rs keeper: the session cookie'"'"'s reader')"
 [ "$(cat "$C/c.txt")" = "$want" ] || { echo "FAIL: tightened cli allowlist: $(cat "$C/c.txt")" >&2; exit 1; }
 pass=$((pass + 1))
 crun 0 "brand-gate: ok (1 cli, 1 value, 1 glued lines in 3 rows type the command name; 0 value rows unsorted)."

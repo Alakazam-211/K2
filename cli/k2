@@ -2196,8 +2196,24 @@ cli_send_json() {
 # `cli_print_or_fail`, below).
 #
 # The transports run inside $(…) subshells, so the note is a small file
-# keyed by the CLI's own pid ($$ is the parent's pid in a subshell).
-_K2_PERMISSION_NOTE="${TMPDIR:-/tmp}/k2-permission-note.$$"
+# keyed by the CLI's own pid ($$ is the parent's pid in a subshell). It
+# lives in $TMPDIR when that is a folder this user can write, else in /tmp
+# or /var/tmp. Every write to it is silent: with no folder to write, there
+# is no note and no closing line, never an error line or a line printed
+# before the command's own output.
+_k2_note_dir() {
+    local d
+    for d in "${TMPDIR:-}" /tmp /var/tmp; do
+        if [ -n "$d" ] && [ -d "$d" ] && [ -w "$d" ] && [ -x "$d" ]; then
+            _K2_NOTE_DIR="${d%/}"
+            [ -n "$_K2_NOTE_DIR" ] || _K2_NOTE_DIR="/"
+            return 0
+        fi
+    done
+    _K2_NOTE_DIR="/tmp"
+}
+_k2_note_dir
+_K2_PERMISSION_NOTE="${_K2_NOTE_DIR%/}/k2-permission-note.$$"
 
 # The closing line(s) for a body (cli_send_json's "\n<status>" tail is
 # ignored), or nothing.
@@ -2234,13 +2250,13 @@ _permission_note() {
     case "${1:-}" in
         *'"bulletin":{"day":"'*)
             if [[ "${1:-}" =~ \"bulletin\":\{\"day\":\"([0-9-]+)\",\"unread\":true,\"key\":\"([0-9a-f]+)\" ]]; then
-                printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >"${_K2_PERMISSION_NOTE}.bulletin" 2>/dev/null || true
+                { printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >"${_K2_PERMISSION_NOTE}.bulletin"; } 2>/dev/null || true
             fi
             ;;
     esac
     # A passport refused: the flush checks whether it is really dead.
     if [ -n "${SCOPED_TOKEN:-}" ]; then
-        case "${1:-}" in *"Invalid or missing auth token"*) : >"${_K2_PERMISSION_NOTE}.passport" 2>/dev/null ;; esac
+        case "${1:-}" in *"Invalid or missing auth token"*) { : >"${_K2_PERMISSION_NOTE}.passport"; } 2>/dev/null || true ;; esac
     fi
     # A lookup on the way to the command's own request (the sender's name)
     # is no refusal of the command: never its closing line (0.46.15).
@@ -2249,9 +2265,8 @@ _permission_note() {
     local lines
     lines="$(_permission_closing_lines "$1")" || return 0
     [ -n "$lines" ] || return 0
-    if ! printf '%s\n' "$lines" > "$_K2_PERMISSION_NOTE" 2>/dev/null; then
-        printf '%s\n' "$lines" >&2
-    fi
+    # Kept for the exit trap, which prints it only when the command failed.
+    { printf '%s\n' "$lines" >"$_K2_PERMISSION_NOTE"; } 2>/dev/null || true
     return 0
 }
 
@@ -2300,14 +2315,14 @@ _org_bulletin_flush() {
     read -r day key <"$f" 2>/dev/null || true
     rm -f "$f" 2>/dev/null || true
     [ "$rc" = 0 ] && [ -n "${day:-}" ] && [ -n "${key:-}" ] || return 0
-    stamp="${TMPDIR:-/tmp}/k2-bulletin.${key}"
+    stamp="${_K2_NOTE_DIR%/}/k2-bulletin.${key}"
     now="$(date +%s)"
     last=""
     [ -f "$stamp" ] && read -r last <"$stamp" 2>/dev/null
     case "$last" in ''|*[!0-9]*) last=0 ;; esac
     if [ $((now - last)) -ge 1800 ]; then
         echo "K2 bulletin for ${day} is unread: k2 organization bulletin" >&2
-        printf '%s\n' "$now" >"$stamp" 2>/dev/null || true
+        { printf '%s\n' "$now" >"$stamp"; } 2>/dev/null || true
     fi
     return 0
 }

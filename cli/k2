@@ -7248,8 +7248,11 @@ cmd_heartbeat_wake() {
     # Python stopping, a refusal, an error status, an answer that is not
     # JSON, no connection) prints one line on stderr and exits non-zero: 3
     # for a refusal that carries a permission card (with its Ask with:
-    # line), 1 for the rest.
-    python3 -c "
+    # line), 1 for the rest. The workspace, the K2 home and the no-owner
+    # switch reach it through the environment, never pasted into its
+    # source: a path with a quote in it would end the string.
+    _K2_WAKE_PROJECT="$PROJECT" _K2_WAKE_HOME="$K2_HOME" \
+        _K2_WAKE_NO_OWNER_FALLBACK="${_k2_no_owner_fallback:-}" python3 -c "
 import json, os, socket, sys, time, urllib.error, urllib.parse, urllib.request
 
 def fail(msg, code=1):
@@ -7261,11 +7264,12 @@ def fail(msg, code=1):
 # only the K2SO_ names sent an agent's wake check with the owner token.
 port = os.environ.get('K5_PORT') or os.environ.get('K2_PORT') or os.environ.get('K2SO_PORT') or ''
 token = os.environ.get('K5_HOOK_TOKEN') or os.environ.get('K2_HOOK_TOKEN') or os.environ.get('K2SO_HOOK_TOKEN') or ''
-if not port:
-    try: port = open(os.path.expanduser('$K2_HOME/heartbeat.port')).read().strip()
+home = os.environ.get('_K2_WAKE_HOME', '')
+if not port and home:
+    try: port = open(os.path.join(home, 'heartbeat.port')).read().strip()
     except OSError: pass
-if not token and '${_k2_no_owner_fallback:-}' != '1':
-    try: token = open(os.path.expanduser('$K2_HOME/heartbeat.token')).read().strip()
+if not token and home and os.environ.get('_K2_WAKE_NO_OWNER_FALLBACK') != '1':
+    try: token = open(os.path.join(home, 'heartbeat.token')).read().strip()
     except OSError: pass
 if not port:
     fail(\"no port for K2's server (no K2_PORT and no heartbeat.port); run k2 daemon status\")
@@ -7278,7 +7282,7 @@ try:
 except Exception as e:
     fail(f'the proxy rule did not run: {type(e).__name__}: {e}')
 
-project = '$PROJECT'
+project = os.environ.get('_K2_WAKE_PROJECT', '')
 base = f'http://127.0.0.1:{port}'
 auth = {'Authorization': 'Bearer ' + token} if token else {}
 

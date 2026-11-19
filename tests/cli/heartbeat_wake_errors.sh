@@ -406,6 +406,54 @@ wake
 not_told "launched, then the write fails" && is_error "launched, then the write fails" 1 \
     "Error: k2 heartbeat wake: K2's server answered /cli/terminal/write with HTTP 500: pty write failed: broken pipe"
 
+echo "paths with a quote and a space: the wake works"
+# The workspace and the K2 home reach the wake's Python through the
+# environment. Pasted into its source, a ' or " in either path ended the
+# string and the Python never ran. Both paths here hold ', " and a space.
+# No K2_PORT and no passport: the port and the owner token come from the
+# K2 home, so the home path is used too.
+QHOME="$T/it's a \"k2\" home"
+QWS="$T/the \"plan\" it's in"
+mkdir -p "$QHOME/.k2" "$QWS/.k2"
+printf '%s' "$STUB_PORT" >"$QHOME/.k2/heartbeat.port"
+printf '%s' "owner-token-quoted-home" >"$QHOME/.k2/heartbeat.token"
+QPROJ="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$QWS")"
+# quoted_ok <case>: noop, both reads with the quoted workspace and the
+# home's owner token.
+quoted_ok() {
+    if [ "$RC" = 0 ] && [ "$(cat "$T/out")" = "$NOOP" ] && [ ! -s "$T/err" ] &&
+        grep -qxF "GET /cli/agents/list?project=$QPROJ auth=Bearer owner-token-quoted-home" "$T/requests.log" &&
+        grep -qxF "GET /cli/inbox/list?project=$QPROJ&folder= auth=Bearer owner-token-quoted-home" "$T/requests.log"; then
+        ok "$1"
+    else
+        bad "$1"
+    fi
+}
+plan '{"/cli/agents/list": [200, "[]"], "/cli/inbox/list": [200, "[]"]}'
+: >"$T/requests.log"
+RC=0
+env -i PATH="$PATH" HOME="$QHOME" K2_HOME="$QHOME/.k2" PROJECT="$QWS" \
+    DEFS="$RULE_DEF"$'\n'"export _K2_PY_PROXY_RULE"$'\n'"$WAKE_DEF" \
+    bash -c 'set -euo pipefail; eval "$DEFS"; cmd_heartbeat_wake' >"$T/out" 2>"$T/err" || RC=$?
+quoted_ok "the function alone, quoted workspace and K2 home"
+: >"$T/requests.log"
+RC=0
+env -u K2_PORT -u K2_HOOK_TOKEN HOME="$QHOME" K2_PROJECT_PATH="$QWS" \
+    "$K2_CLI" heartbeat wake >"$T/out" 2>"$T/err" || RC=$?
+quoted_ok "end to end, quoted workspace and HOME"
+plan '{"/cli/agents/list": [200, "[]"], "/cli/inbox/list": [200, '"$(js "$ITEM")"'], '"$RUNNING"'}'
+: >"$T/requests.log"
+RC=0
+env -u K2_PORT -u K2_HOOK_TOKEN HOME="$QHOME" K2_PROJECT_PATH="$QWS" \
+    "$K2_CLI" heartbeat wake >"$T/out" 2>"$T/err" || RC=$?
+if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&
+    [ "$(tail -n 1 "$T/out")" = '{"success":true}{"status":"notified","terminalId":"agent-chat:p1:manager"}' ] &&
+    grep -qF "POST /cli/terminal/write?project=$QPROJ&id=agent-chat%3Ap1%3Amanager&message=" "$T/requests.log"; then
+    ok "end to end, quoted paths: the manager is told"
+else
+    bad "end to end, quoted paths: the manager is told"
+fi
+
 if [ "${#failed[@]}" -gt 0 ]; then
     echo "heartbeat_wake_errors: ${#failed[@]} failed, $pass passed: ${failed[*]}" >&2
     exit 1

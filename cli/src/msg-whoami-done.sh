@@ -261,7 +261,7 @@ cmd_msg() {
         return 2
     fi
     if [ -n "$_REMOTE_HOST" ]; then
-        _postal_send_teach "$target"
+        _postal_send_teach "$target" "$text"
         _send_remote_msg "$_BARE_TARGET" "$_REMOTE_HOST" "$text" "$PROJECT"
         return $?
     fi

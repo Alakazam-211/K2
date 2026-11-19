@@ -68,9 +68,9 @@
     },
     {
       "name": "msg",
-      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace|agent::host> --inbox-silent|--inbox-wake <path> [path…]",
-      "description": "Send to another workspace agent. For files use --inbox-wake (copy + knock, preferred) or --inbox-silent (copy only). Live text is SHORT, one line. Not k2 mail. Spawns the agent if needed. Federated live AND tray: agent::host over the same federation plane (connected peer is the gate, not a Connect token). Wire form fp::ws::agent is k2 fed send only.",
-      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or agent::host (live and tray both use federation)"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
+      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace|agent::host> --inbox-silent|--inbox-wake <path> [path…] | k2 msg <handle::label.postal.bot> \"text\" [--no-wake] [--json]",
+      "description": "Send to another workspace agent. For files use --inbox-wake (copy + knock, preferred) or --inbox-silent (copy only). Live text is SHORT, one line. Not k2 mail. Spawns the agent if needed. Federated live AND tray: agent::host over the same federation plane (connected peer is the gate, not a Connect token). Wire form fp::ws::agent is k2 fed send only. A Postal address (handle::label.postal.bot) sends Postal mail to a friend (Beta; k2 study postal).",
+      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or agent::host (live and tray both use federation), or a Postal friend's handle::label.postal.bot"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
         {"name": "--summary", "arg": "text", "description": "One line saying what you need or what you did, for people (Chatter, the Projects view, phones, k2 inbox list). Pass it for anything longer than ~3 lines; over ~600 characters without one prints a hint. Never injected: the agent gets the whole message."},

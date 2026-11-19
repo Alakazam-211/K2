@@ -65,26 +65,43 @@ _split_remote_target() {
     esac
 }
 
-# Postal addresses (prd-postal-in-k2-v1 S0): `handle::label.postal.bot` is
-# an agent on the Postal network, not a K2 server. Sending Postal mail from
-# here comes with native Postal; until then any `k2 msg` form refuses it
-# with a teaching line (exit 2) instead of failing as an unknown peer.
+# Postal addresses (prd-postal-in-k2-v1 S5): `handle::label.postal.bot` is
+# an agent on the Postal network, not a K2 server. `k2 msg <address> "text"`
+# sends Postal mail from this workspace's own address (the daemon takes the
+# sender from the credential), to a friend only.
 _is_postal_address() {
     local a
     a="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
     [[ "$a" =~ ^[a-z0-9][a-z0-9_-]*::[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.postal\.bot$ ]]
 }
 
-# _postal_send_teach <address>: exit 2 with the teaching line when the
-# address is a Postal one; return 0 otherwise.
+# _postal_send_teach <address> [args…]: when the address is a Postal one,
+# send the message (`k2 msg <address> "text" [--no-wake] [--json]`) and
+# exit with its code; return 0 otherwise. K2-only flags are refused.
 _postal_send_teach() {
     _is_postal_address "$1" || return 0
-    local me="${_K2_CALLED_AS:-k2}"
-    echo "$me msg: '$1' is a Postal address (an agent on the Postal network, not a server paired with this one)." >&2
-    echo "  $me can't send Postal mail yet; that comes with native Postal." >&2
-    echo "  Until then, send with p5 if it is set up on this machine: p5 msg $1 \"text\"" >&2
-    echo "  $me study postal says more." >&2
-    exit 2
+    local me="${_K2_CALLED_AS:-k2}" to="$1" text="" wake="__true" as_json=false
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-wake) wake="__false"; shift ;;
+            --wake) shift ;;
+            --json) as_json=true; shift ;;
+            --summary|--wake-timeout|--session|--inbox|--inbox-wake|--inbox-silent|--signal|--command|--from|--via)
+                echo "$me msg: $1 is for messages to agents on this server; Postal mail to $to takes only the text, --no-wake and --json." >&2
+                exit 2 ;;
+            -*) echo "$me msg: unknown flag '$1' for Postal mail ($me msg --help)" >&2; exit 2 ;;
+            *) if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi; shift ;;
+        esac
+    done
+    if [ -z "$text" ]; then
+        echo "Usage: $me msg $to \"text\" [--no-wake] [--json]" >&2
+        exit 2
+    fi
+    local body
+    body="$(_postal_body "workspace=${PROJECT:-$PWD}" "to=$to" "text=$text" "wake=$wake")"
+    cli_post_json "/cli/postal/send" "$body" | _postal_print send "$as_json"
+    exit "${PIPESTATUS[1]}"
 }
 
 # `_k2_addr_note <old> <new> [renamed]` (defined once near the top of this

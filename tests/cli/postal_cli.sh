@@ -8,10 +8,12 @@
 # exits 2, with the body the daemon reads (enable's why, claim's address and
 # why, invite's to and why, accept's id); a refusal exits 3 and ends
 # with the daemon's "Ask with:" line; postal_off is a refusal (3); reject,
-# remove and block go straight through (0); a person's invite says
-# "not sent yet"; the friends list marks a request with a pairing code;
-# send, route and adopt say "not available yet" and send nothing;
-# `k2 msg <postal address>` exits 2 and sends nothing. Hermetic: HOME is a
+# remove and block go straight through (0); a person's invite says it goes
+# out once connected; the friends list marks a request with a pairing code;
+# accept --code carries the code; `k2 msg <postal address>` and postal send
+# post to /cli/postal/send (exit 0 held, 3 not a friend or a secret in the
+# text, 2 for a K2-only flag); route sends its targets; owner-link reads a
+# token from stdin; adopt says "not available yet". Hermetic: HOME is a
 # throwaway dir, every K2_*/K2SO_* var is unset, the daemon is a python stub.
 
 set -euo pipefail
@@ -81,9 +83,26 @@ class H(BaseHTTPRequestHandler):
                 out = {"ok": True, "friend": {"id": "f-o", "peer": b.get("to"), "status": "pending_out"}, "sent": False, "network": "not_available_yet"}
             else:
                 out = ASKED
+        elif p == "/cli/postal/send":
+            b = json.loads(body or b"{}")
+            if b.get("to") == "stranger::beta.postal.bot":
+                status, out = 403, {"ok": False, "error": {"code": "postal_not_friends", "hint": "stranger::beta.postal.bot isn't a Postal friend"}}
+            elif "hunter2" in (b.get("text") or ""):
+                status, out = 403, {"ok": False, "error": {"code": "postal_secret_in_text", "hint": "this text holds the value of a secret"}}
+            else:
+                out = {"success": True, "id": "01J0000000000000000000000A", "deliveryId": "m_AbCdEf0123", "badge": "p_3f9a0c41d27be6058a1c",
+                       "to": b.get("to"), "status": "held", "reason": None, "via": "postal", "live": "not_yet"}
+        elif p == "/cli/postal/route":
+            b = json.loads(body or b"{}")
+            out = {"ok": True, "friend": b.get("friend"), "route": None if b.get("clear") else {"targets": b.get("targets", "").split(), "wake": b.get("wake", True)}}
+        elif p == "/cli/postal/owner-link":
+            out = {"ok": True, "label": "acme", "linked": True}
         elif p == "/cli/postal/decide":
             b = json.loads(body or b"{}")
-            if b.get("decision") == "accept":
+            if b.get("decision") == "accept" and b.get("code"):
+                out = {"ok": True, "friend": {"id": b.get("id"), "peer": "lab::gamma.postal.bot", "status": "pending_out"}, "friends": False,
+                       "hint": "your side is confirmed; they become friends when the other side types your code"}
+            elif b.get("decision") == "accept":
                 out = dict(ASKED, hint="a person answers the card on your pinned Thread (the Owner, or an Admin when the Owner allows it); the answer doesn't wake you: k2 postal friends shows it")
             else:
                 out = {"ok": True, "friend": {"id": b.get("id"), "peer": "spam::gamma.postal.bot", "status": "rejected"}}
@@ -139,7 +158,9 @@ out="$(env HOME="$WORK/nohome" K2_PORT=1 "$K2_CLI" postal --help 2>&1)"
 assert_contains "help: step 1 asks the owner" "$out" "k2 postal enable [--why"
 assert_contains "help: step 3 invites with a why" "$out" 'k2 postal invite <address> --why "what you want to do together"'
 assert_contains "help: asked is exit 2" "$out" 'Each prints "Asked: …" and exits 2'
-assert_contains "help: not available yet" "$out" "k2 postal send | route | adopt"
+assert_contains "help: msg sends Postal mail" "$out" 'k2 msg <address> "text" [--no-wake] [--json]'
+assert_contains "help: accept types the other side's code" "$out" "accept <request id> --code <their code>"
+assert_contains "help: live delivery waits" "$out" "live delivery to this server"
 assert_contains "help: requests never wake you" "$out" "Incoming requests never wake you"
 
 echo "== the three card steps =="
@@ -169,14 +190,23 @@ assert_contains "reject: says so" "$out" "spam::gamma.postal.bot: rejected"
 run postal block ops::beta.postal.bot
 assert_eq "block: exit 0" "$rc" "0"
 run postal friends
-assert_contains "friends: a request with a pairing code" "$out" "has a pairing code"
+assert_contains "friends: a request with a pairing code" "$out" "pairing code waiting"
 assert_contains "friends: waiting requests show their id" "$out" "id f-9"
 
 echo "== a person's invite =="
 echo person > "$WORK/mode"
 run postal invite ops::beta.postal.bot --why "x"
 assert_eq "person invite: exit 0" "$rc" "0"
-assert_contains "person invite: recorded, not sent" "$out" "Recorded, not sent yet"
+assert_contains "person invite: recorded until connected" "$out" "as soon as this server is connected"
+run postal accept f-9 --code "123 456"
+assert_eq "accept --code: exit 0" "$rc" "0"
+assert_eq "accept --code: the code goes" "$(last /cli/postal/decide)" 'POST {"code": "123 456", "decision": "accept", "id": "f-9"}'
+assert_contains "accept --code: says it waits for the other side" "$out" "Your side is confirmed"
+printf 'k2c_pd_0123456789abcdef0123456789abcdef\n' > "$WORK/tok"
+set +e; out="$(k2 postal owner-link --token-stdin < "$WORK/tok" 2>&1)"; rc=$?; set -e
+assert_eq "owner-link --token-stdin: exit 0" "$rc" "0"
+assert_contains "owner-link: linked" "$out" "Postal approvals linked for acme"
+assert_not_contains "owner-link: the token is never printed" "$out" "k2c_pd_"
 
 echo "== off =="
 echo off > "$WORK/mode"
@@ -186,17 +216,40 @@ assert_contains "postal_off: the error" "$out" "postal_off"
 assert_contains "postal_off: ends with the Ask-with line" "$out" "Ask with: k2 permission request postal.enable"
 rm -f "$WORK/mode"
 
+echo "== sending =="
+run msg ops::beta.postal.bot "hello there" --no-wake
+assert_eq "msg to a Postal friend: exit 0" "$rc" "0"
+assert_eq "msg: the body the daemon reads" "$(last /cli/postal/send)" 'POST {"text": "hello there", "to": "ops::beta.postal.bot", "wake": false}'
+assert_contains "msg: the status" "$out" "Postal mail to ops::beta.postal.bot: held"
+assert_contains "msg: the badge" "$out" "Badge:    p_3f9a0c41d27be6058a1c"
+run postal send ops::beta.postal.bot "second"
+assert_eq "postal send: exit 0" "$rc" "0"
+assert_eq "postal send: the same route" "$(last /cli/postal/send)" 'POST {"text": "second", "to": "ops::beta.postal.bot", "wake": true}'
+run msg stranger::beta.postal.bot "hi"
+assert_eq "not a friend: refused, exit 3" "$rc" "3"
+assert_contains "not a friend: the code" "$out" "postal_not_friends"
+run msg ops::beta.postal.bot "the password is hunter2"
+assert_eq "a vault secret in the text: refused, exit 3" "$rc" "3"
+before="$(nreq)"
+run msg ops::beta.postal.bot "hi" --summary "x"
+assert_eq "a K2-only flag: usage, exit 2" "$rc" "2"
+assert_contains "a K2-only flag: says why" "$out" "takes only the text"
+assert_eq "a refused flag sends nothing" "$(nreq)" "$before"
+
+echo "== routing =="
+run postal route inbox+pointer thread:rosson --no-wake
+assert_eq "route: exit 0" "$rc" "0"
+assert_eq "route: targets and wake" "$(last /cli/postal/route)" 'POST {"targets": "inbox+pointer thread:rosson", "wake": false}'
+assert_contains "route: says where it lands" "$out" "inbox+pointer + thread:rosson, no wake"
+run postal route --clear --friend ops::beta.postal.bot
+assert_eq "route --clear: the friend" "$(last /cli/postal/route)" 'POST {"clear": true, "friend": "ops::beta.postal.bot"}'
+
 echo "== not available yet =="
 before="$(nreq)"
-for sub in send route adopt; do
-    run postal "$sub" ops::beta.postal.bot
-    assert_eq "$sub: exit 1" "$rc" "1"
-    assert_contains "$sub: says not available yet" "$out" "not available yet"
-done
-run msg scout::acme.postal.bot "hello"
-assert_eq "msg to a Postal address: exit 2" "$rc" "2"
-assert_contains "msg to a Postal address: says it can't yet" "$out" "can't send Postal mail yet"
-assert_eq "none of them sent anything" "$(nreq)" "$before"
+run postal adopt
+assert_eq "adopt: exit 1" "$rc" "1"
+assert_contains "adopt: says not available yet" "$out" "not available yet"
+assert_eq "adopt sent nothing" "$(nreq)" "$before"
 
 echo
 echo "postal CLI: $pass passed, $fail failed"

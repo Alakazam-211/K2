@@ -47,14 +47,19 @@ pub struct Https {
 
 impl Https {
     pub fn new(base: String) -> Result<Self, String> {
-        let client = reqwest::blocking::Client::builder()
+        let mut builder = reqwest::blocking::Client::builder()
             // Long enough for a 25 s events long poll.
             .timeout(Duration::from_secs(45))
             .connect_timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!("k2-postal/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|e| format!("postal http client: {e}"))?;
+            .user_agent(concat!("k2-postal/", env!("CARGO_PKG_VERSION")));
+        // Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+        // proxy; the plane's remote https host may use this box's proxy
+        // settings (k2_core::proxy_rule). Each call is still sent once.
+        if k2_core::proxy_rule::direct(&base) {
+            builder = builder.no_proxy();
+        }
+        let client = builder.build().map_err(|e| format!("postal http client: {e}"))?;
         Ok(Self { base, client })
     }
 }

@@ -9240,7 +9240,7 @@ print("Rotate: mint a new one, switch the monitor, then k2 api-key revoke <old i
             # context. The key reaches python on stdin (printf is a builtin:
             # no argv) and the body reaches curl on stdin.
             printf '%s' "$anthropic" | K2_AK_LABEL="$label" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" K2_AK_ALLOW="$allow" K2_AK_DENY="$deny" \
-                K2_AK_HIRE="$hire" K2_AK_HCONF="$hire_confirm" K2_AK_HDAY="$h_day" K2_AK_HLIVE="$h_live" K2_AK_HTEAM="$h_team" K2_AK_HDB="$h_db" \
+                K2_AK_HIRE="$hire" K2_AK_HDAY="$h_day" K2_AK_HLIVE="$h_live" K2_AK_HTEAM="$h_team" K2_AK_HDB="$h_db" \
                 K2_AK_HLINK="$h_link" K2_AK_HTARGETS="$h_targets" K2_AK_HRETIRE="$h_retire" K2_AK_HREACH="$h_reach" K2_AK_HFOLDER="$h_folder" K2_AK_HAPPS="$h_apps" \
                 python3 -c 'import json,os,sys
 b={"label": os.environ.get("K2_AK_LABEL","")}
@@ -9291,8 +9291,12 @@ if os.environ.get("K2_AK_HIRE") == "1":
         apps.append(a)
     if apps: h["apps"]=apps
     b["hire"]=h
-    b["confirmToken"]=os.environ.get("K2_AK_HCONF","")
 print(json.dumps(b))' \
+                | { local ak_body; ak_body="$(cat)"
+                    # The hire key's confirm token joins the body on
+                    # stdin (_with_confirm_token), never argv or the
+                    # environment. No body (bad flags): nothing is sent.
+                    if [ -n "$ak_body" ] && [ -n "$hire_confirm" ]; then _with_confirm_token "$ak_body" "$hire_confirm"; else printf '%s' "$ak_body"; fi; } \
                 | cli_post_json_stdin "/cli/api-keys/create" \
                 | K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os,sys
 try:

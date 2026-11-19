@@ -27,7 +27,8 @@
 //! only when it is a handle; a peer's error in the outbox only as a code,
 //! or capped and escaped; a vault handoff's sender only when it is a
 //! handle; a peer's roster error only as a code, or capped and escaped;
-//! an envelope only when its msg_uuid is a UUID.
+//! an envelope only when its msg_uuid is a UUID; a peer's roster only up
+//! to 1 MiB.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -764,4 +765,32 @@ fn an_envelope_reaches_a_route_only_when_its_msg_uuid_is_a_uuid() {
     assert!(k2_core::inbox::list_root(&ops_path).is_empty(), "nothing landed");
     let r = try_http(b.port, "POST", "/cli/federation/inbound", Some(&seal(None))).expect("answers");
     assert_eq!(r.status, 200, "{}", r.body);
+}
+
+/// `GET /cli/federation/peer-rosters` through the real dispatcher: a paired
+/// server whose roster is over 1 MiB shows as `error` with no agents; one
+/// in size passes through.
+#[test]
+fn a_peer_roster_over_the_cap_is_not_passed_through() {
+    let a = spawn_daemon("c");
+    let over = serde_json::json!({ "agents": [{ "workspace_id": "w", "workspace_name": "x".repeat(1024 * 1024), "agent": "ops", "address": "w::ops", "aliases": [] }] });
+    let big = answering_peer(over.to_string());
+    let fine = answering_peer(serde_json::json!({ "agents": [{ "workspace_id": "w2", "workspace_name": "Ops", "agent": "ops", "address": "w2::ops", "aliases": [] }] }).to_string());
+    write_peers(
+        &a,
+        &[
+            ("big", &new_pem(), format!("http://127.0.0.1:{big}"), 2),
+            ("fine", &new_pem(), format!("http://127.0.0.1:{fine}"), 2),
+        ],
+    );
+    let (st, v) = http(&a, "GET", "/cli/federation/peer-rosters", None);
+    assert_eq!(st, 200, "{}", v.to_string().len());
+    let big = server(&v, "big");
+    assert_eq!(big["status"], "error", "{big}");
+    assert!(big["error"].as_str().expect("error").contains("byte cap"), "{big}");
+    assert!(big["agents"].as_array().expect("agents").is_empty());
+    assert!(v.to_string().len() < 64 * 1024, "the big roster is not passed through");
+    let fine = server(&v, "fine");
+    assert_eq!(fine["status"], "ok", "{fine}");
+    assert_eq!(names(fine), vec!["Ops"]);
 }

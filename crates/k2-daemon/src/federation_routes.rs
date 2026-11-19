@@ -2809,13 +2809,37 @@ pub(crate) fn get_peer_roster_typed(
     if !status.is_success() {
         return Err(RosterFetchError::Status(status.as_u16()));
     }
-    resp.text().map_err(|e| {
-        if e.is_timeout() {
-            RosterFetchError::Transport { timed_out: true, message: format!("read roster body: {}", error_chain(&e)) }
+    read_roster_body(resp)
+}
+
+/// The largest roster body read from a paired server. One roster entry
+/// (id, display name, handle, address, a couple of aliases) is about 250
+/// bytes, so 1 MiB holds about 4,000 workspaces: far more than a server
+/// lists, while a peer can't make this server hold an unbounded answer.
+pub(crate) const ROSTER_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Read a roster answer of at most [`ROSTER_MAX_BYTES`]; a bigger one is a
+/// `Body` error and is not read further.
+fn read_roster_body(resp: reqwest::blocking::Response) -> Result<String, RosterFetchError> {
+    use std::io::Read;
+    let too_big = || RosterFetchError::Body(format!("the roster is over the {ROSTER_MAX_BYTES} byte cap; not read"));
+    if resp.content_length().is_some_and(|n| n > ROSTER_MAX_BYTES) {
+        return Err(too_big());
+    }
+    let mut buf = Vec::new();
+    resp.take(ROSTER_MAX_BYTES + 1).read_to_end(&mut buf).map_err(|e| {
+        let timed_out = e.kind() == std::io::ErrorKind::TimedOut
+            || e.get_ref().and_then(|i| i.downcast_ref::<reqwest::Error>()).is_some_and(reqwest::Error::is_timeout);
+        if timed_out {
+            RosterFetchError::Transport { timed_out: true, message: format!("read roster body: {e}") }
         } else {
-            RosterFetchError::Body(format!("read roster body: {}", error_chain(&e)))
+            RosterFetchError::Body(format!("read roster body: {e}"))
         }
-    })
+    })?;
+    if buf.len() as u64 > ROSTER_MAX_BYTES {
+        return Err(too_big());
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[cfg(test)]

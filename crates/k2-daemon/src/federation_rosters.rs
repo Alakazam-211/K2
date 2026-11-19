@@ -526,6 +526,56 @@ mod tests {
         assert_eq!(names(server(&v, "fine")), vec!["ops"]);
     }
 
+    /// Like [`answering_port`] with no `Content-Length`: the body ends
+    /// when the connection closes.
+    fn answering_port_unsized(body: String) -> u16 {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n";
+                let _ = s.write_all(head.as_bytes());
+                let _ = s.write_all(body.as_bytes());
+            }
+        });
+        port
+    }
+
+    /// A paired server's roster is passed through up to ROSTER_MAX_BYTES
+    /// (1 MiB); a bigger answer, sized or not, is an `error` and is not read.
+    #[test]
+    fn a_roster_over_the_cap_is_an_error_and_a_real_sized_one_passes() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let _base = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
+        assert_eq!(crate::federation_routes::ROSTER_MAX_BYTES, 1024 * 1024);
+        let entries: Vec<(String, String)> = (0..1000).map(|i| (format!("Workspace {i:04}"), format!("ws-{i:04}"))).collect();
+        let refs: Vec<(&str, &str)> = entries.iter().map(|(n, h)| (n.as_str(), h.as_str())).collect();
+        let big_list = roster(&refs);
+        assert!(big_list.len() < 400 * 1024, "a thousand workspaces is well under the cap: {}", big_list.len());
+        let over = serde_json::json!({ "agents": [{ "workspace_id": "w", "workspace_name": "x".repeat(1024 * 1024), "agent": "ops", "address": "w::ops", "aliases": [] }] }).to_string();
+        let sized_over = answering_port("200 OK", over.clone());
+        let unsized_over = answering_port_unsized(over);
+        let thousand = answering_port("200 OK", big_list);
+        save_trusted(vec![
+            pin("sized", "sized", &format!("http://127.0.0.1:{sized_over}")),
+            pin("unsized", "unsized", &format!("http://127.0.0.1:{unsized_over}")),
+            pin("thousand", "thousand", &format!("http://127.0.0.1:{thousand}")),
+        ]);
+        let v = ok_body(peer_rosters_body(None, Duration::from_secs(5)));
+        for l in ["sized", "unsized"] {
+            let s = server(&v, l);
+            assert_eq!(s["status"], "error", "{l}: {s}");
+            assert!(s["error"].as_str().expect("error").contains("byte cap"), "{l}: {s}");
+            assert!(s["agents"].as_array().expect("agents").is_empty(), "{l}: {s}");
+        }
+        let s = server(&v, "thousand");
+        assert_eq!(s["status"], "ok", "{s}");
+        assert_eq!(names(s).len(), 1000);
+    }
+
     #[test]
     fn one_peer_by_selector_leaves_this_server_out() {
         let _home = crate::test_support::TempHome::new();

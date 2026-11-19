@@ -701,23 +701,60 @@ pub(crate) fn bad_sender_response() -> CliResponse {
     }
 }
 
-/// A peer's raw `reason` for this daemon's log only: the first 200
-/// characters, every character outside printable ASCII escaped.
-pub(crate) fn reason_for_log(raw: &serde_json::Value) -> String {
-    const CAP: usize = 200;
-    let text = raw.as_str().map_or_else(|| raw.to_string(), str::to_string);
+/// The cap on a peer's free text: in this daemon's log, and in what an
+/// agent sees (a tray title, an answer's `title` and `from`).
+pub(crate) const PEER_TEXT_CAP: usize = 200;
+
+/// A peer's free text cleaned: the first `cap` characters, every character
+/// outside printable ASCII escaped (`\u{1b}`), `...` when cut.
+pub(crate) fn escape_capped(text: &str, cap: usize) -> String {
     let mut out = String::new();
-    for c in text.chars().take(CAP) {
+    for c in text.chars().take(cap) {
         if c == ' ' || c.is_ascii_graphic() {
             out.push(c);
         } else {
             out.extend(c.escape_unicode());
         }
     }
-    if text.chars().count() > CAP {
+    if text.chars().count() > cap {
         out.push_str("...");
     }
     out
+}
+
+/// A peer's raw `reason` for this daemon's log only: the first 200
+/// characters, every character outside printable ASCII escaped.
+pub(crate) fn reason_for_log(raw: &serde_json::Value) -> String {
+    let text = raw.as_str().map_or_else(|| raw.to_string(), str::to_string);
+    escape_capped(&text, PEER_TEXT_CAP)
+}
+
+/// The longest cover note a peer's tray may carry.
+pub(crate) const TRAY_NOTE_MAX: usize = 64 * 1024;
+
+/// The longest tray file name (a file name on disk).
+const TRAY_FILE_NAME_MAX: usize = 255;
+
+/// True when a peer's tray file name is already a plain, safe file name:
+/// [`k2_core::inbox::sanitize_sidecar_filename`] leaves it unchanged
+/// (letters, digits, `.`, `-` and `_`, no path), at most 255 bytes.
+pub(crate) fn is_tray_file_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= TRAY_FILE_NAME_MAX && k2_core::inbox::sanitize_sidecar_filename(name) == name
+}
+
+/// 400 for a tray whose file names or cover note are not in shape:
+/// nothing lands. `code` is the stable reason.
+pub(crate) fn bad_tray_response() -> CliResponse {
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "bad_tray: a tray lands only when each file name is a plain file name \
+                      (letters, digits, '.', '-' and '_', at most 255 bytes) and its note is at most 64 KiB",
+            "code": "bad_tray",
+        })
+        .to_string(),
+    }
 }
 
 /// Fail-closed: map each ingress reject to a status. Auth/authorization
@@ -792,10 +829,36 @@ fn deliver_inbound_tray(
     msg_uuid: &str,
     signal_id: &str,
 ) -> CliResponse {
-    let decoded = match federation::parse_tray_payload(payload) {
+    let spec: federation::TraySpec = match serde_json::from_value(payload.clone()) {
+        Ok(s) => s,
+        Err(e) => return CliResponse::bad_request(format!("inbox-tray payload: {e}")),
+    };
+    // Each file name must already be a plain file name, and the note fit
+    // the cap; otherwise nothing lands.
+    if let Some(bad) = spec.files.iter().find(|f| !is_tray_file_name(&f.name)) {
+        k2_core::log_debug!(
+            "[federation] inbound tray refused: peer {peer_fingerprint} sent a file name that is not a plain file name. Raw: {}",
+            reason_for_log(&serde_json::Value::from(bad.name.as_str()))
+        );
+        return bad_tray_response();
+    }
+    if let Some(note) = spec.body.as_deref().filter(|b| b.len() > TRAY_NOTE_MAX) {
+        k2_core::log_debug!(
+            "[federation] inbound tray refused: peer {peer_fingerprint} sent a note of {} bytes (cap {TRAY_NOTE_MAX})",
+            note.len()
+        );
+        return bad_tray_response();
+    }
+    let decoded = match federation::decode_tray_spec(&spec) {
         Ok(d) => d,
         Err(e) => return CliResponse::bad_request(e),
     };
+    // The title is typed into the agent's terminal (the wake pointer) and
+    // written into the cover: one line, capped, escaped. The note goes to
+    // the cover only: control characters other than line breaks and tabs
+    // are dropped.
+    let title = decoded.title.as_deref().map(|t| escape_capped(t, PEER_TEXT_CAP));
+    let note = decoded.body.as_deref().map(ingress::sanitize_text);
     let named: Vec<k2_core::inbox::NamedBytes> = decoded
         .files
         .iter()
@@ -807,10 +870,10 @@ fn deliver_inbound_tray(
     let package = match k2_core::inbox::deliver_named_bytes(
         std::path::Path::new(project_path),
         &named,
-        decoded.title.as_deref(),
+        title.as_deref(),
         Some(from_label),
         Some("msg-inbox"),
-        decoded.body.as_deref(),
+        note.as_deref(),
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -826,12 +889,15 @@ fn deliver_inbound_tray(
     } else {
         package.sidecar_paths.len()
     };
+    // With no title the inbox takes one from a `.md` file's text: clean
+    // that too before an agent sees it (a given title is clean already).
+    let shown_title = title.clone().unwrap_or_else(|| escape_capped(&package.title, PEER_TEXT_CAP));
     let opt_in = k2_core::workspace::settings::remote_instruct_allowed_for_path(project_path);
     let wake = if decoded.wake {
         if opt_in {
             let pointer = k2_core::inbox::wake_pointer_text_n(
                 &package.id,
-                &package.title,
+                &shown_title,
                 Some(file_count),
             );
             let (result, _) =
@@ -864,7 +930,7 @@ fn deliver_inbound_tray(
         "mode": "inbox",
         "ok": true,
         "id": package.id,
-        "title": package.title,
+        "title": shown_title,
         "filename": package.filename,
         "coverPath": package.cover_path,
         "sidecarPaths": package.sidecar_paths,

@@ -641,6 +641,33 @@ pub(crate) fn declined_hint(target: &str, reason: &str) -> String {
     }
 }
 
+/// True when a peer's decline `reason` is a code (`^[a-z0-9_]{1,64}$`).
+/// Only a code is passed on to the sender; anything else is
+/// `declined_by_peer`.
+pub(crate) fn is_reason_code(reason: &str) -> bool {
+    (1..=64).contains(&reason.len())
+        && reason.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// A peer's raw `reason` for this daemon's log only: the first 200
+/// characters, every character outside printable ASCII escaped.
+pub(crate) fn reason_for_log(raw: &serde_json::Value) -> String {
+    const CAP: usize = 200;
+    let text = raw.as_str().map_or_else(|| raw.to_string(), str::to_string);
+    let mut out = String::new();
+    for c in text.chars().take(CAP) {
+        if c == ' ' || c.is_ascii_graphic() {
+            out.push(c);
+        } else {
+            out.extend(c.escape_unicode());
+        }
+    }
+    if text.chars().count() > CAP {
+        out.push_str("...");
+    }
+    out
+}
+
 /// Fail-closed: map each ingress reject to a status. Auth/authorization
 /// failures are 403; malformed/bad-sig are 400; replay/skew/ttl/loop are
 /// 409 (the request was well-formed but not acceptable now).
@@ -1140,10 +1167,23 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 serde_json::from_str(&resp_body).unwrap_or(serde_json::Value::Null);
             let delivered = parsed.get("delivered").and_then(|v| v.as_bool());
             if delivered == Some(false) {
-                let reason = parsed
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("declined_by_peer");
+                // Only a code reaches the caller (the answer and the hint);
+                // any other value goes to this daemon's log.
+                let raw_reason = parsed.get("reason");
+                let reason = match raw_reason.and_then(|v| v.as_str()) {
+                    Some(r) if is_reason_code(r) => r,
+                    _ => {
+                        if let Some(raw) = raw_reason {
+                            k2_core::log_debug!(
+                                "[federation/send] peer {} declined with a reason that is not a code; \
+                                 passed on as declined_by_peer. Raw: {}",
+                                peer.fingerprint,
+                                reason_for_log(raw)
+                            );
+                        }
+                        "declined_by_peer"
+                    }
+                };
                 let target = format!("{agent}::{}", peer_host(&peer));
                 CliResponse::ok_json(
                     serde_json::json!({

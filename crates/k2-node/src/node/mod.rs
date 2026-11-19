@@ -1255,6 +1255,30 @@ impl Node {
         crate::admin::housekeeping::stuck_jobs(self)
     }
 
+    /// The leftover check's inputs (0.46.16): the job-facing roots, and a
+    /// mark per live job (one a runner holds, or whose ledger row is still
+    /// open). The ledger's pid is the job's group; its leader's start isn't
+    /// kept there (a report only: a reused id can only hide a leftover).
+    pub fn leftover_inputs(&self) -> (Vec<PathBuf>, Vec<crate::jobtree::Mark>) {
+        let roots = vec![self.layout().home.clone(), self.layout().tenants_root()];
+        let mut marks = Vec::new();
+        let running: Vec<(Slot, String, u32)> = self.jobs.lock().unwrap().iter().map(|((slot, id), j)| (*slot, id.clone(), j.generation)).collect();
+        for t in self.tenants() {
+            let mut live: Vec<(String, u32)> = running.iter().filter(|(s, _, _)| *s == t.slot).map(|(_, id, g)| (id.clone(), *g)).collect();
+            let l = t.ledger.lock().unwrap();
+            for r in l.non_terminal().unwrap_or_default() {
+                if !live.iter().any(|(id, g)| *id == r.job_id && *g == r.generation) {
+                    live.push((r.job_id.clone(), r.generation));
+                }
+            }
+            for (id, g) in live {
+                let pgid = l.pid(&id, g).ok().flatten().unwrap_or(0) as i32;
+                marks.push(crate::jobtree::Mark { root: t.paths.job_dir(&id, g), job_id: id, pgid, leader_start: None });
+            }
+        }
+        (roots, marks)
+    }
+
     /// Remove idle warm slots (not busy, untouched since `cutoff`), under
     /// the slot lock so no lease races the delete. (dir, bytes freed).
     pub fn gc_slots(&self, cutoff: i64) -> Vec<(PathBuf, u64)> {

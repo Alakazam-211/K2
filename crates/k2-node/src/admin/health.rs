@@ -303,6 +303,9 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
         errors.insert("sleep".into(), "unreadable".into());
     }
     let executor = executor_fact(node).await;
+    // 0.46.16: processes no live job owns (a report, never a kill).
+    let (roots, marks) = node.leftover_inputs();
+    let leftovers = tokio::task::spawn_blocking(move || crate::jobtree::leftovers(&roots, &marks, crate::jobtree::LEFTOVER_MIN_AGE_SECS)).await.ok().map(leftovers_fact);
     let mut h = Health {
         at: now,
         boot_id: node.opts.clock.boot_id(),
@@ -325,6 +328,7 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
         stuck_jobs: node.stuck_jobs(),
         errors,
         packages: pkg_health(node),
+        leftovers,
     };
     if let (Some(u), true) = (h.updates.as_mut(), node.host.lock().unwrap().reboot_required) {
         u.reboot_required = Some(true);
@@ -332,8 +336,24 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
     if !h.fits() {
         h.stuck_jobs.truncate(16);
         h.errors.clear();
+        if let Some(l) = h.leftovers.as_mut() {
+            l.procs.truncate(2);
+        }
     }
     h
+}
+
+/// The health fact for the leftover check: the count, and the oldest few.
+pub fn leftovers_fact(found: Vec<crate::jobtree::Leftover>) -> k2_node_proto::health::Leftovers {
+    use k2_node_proto::health::{LeftoverProc, Leftovers, MAX_LEFTOVER_PROCS};
+    Leftovers {
+        count: found.len() as u32,
+        procs: found
+            .into_iter()
+            .take(MAX_LEFTOVER_PROCS)
+            .map(|l| LeftoverProc { pid: l.pid, age_secs: l.age_secs, cmd: l.cmd.chars().take(160).collect(), job_id: l.job_id })
+            .collect(),
+    }
 }
 
 /// Protocol 7 (§10): the package manager's upkeep facts. K2 refreshes a

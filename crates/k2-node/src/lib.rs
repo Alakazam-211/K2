@@ -22,6 +22,7 @@ pub mod gpu;
 pub mod identity;
 pub mod install;
 pub mod jobstat;
+pub mod jobtree;
 pub mod journal;
 pub mod ledger;
 pub mod locks;

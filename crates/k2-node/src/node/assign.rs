@@ -650,7 +650,26 @@ impl Node {
                 let _ = j.append(frames::LogStream::Sys, format!("[k2-node] {detail}\n").as_bytes());
             }
             let dirs = crate::runner::JobDirs::new(t.paths.job_dir(&row.job_id, row.generation));
-            node.finish_job(&t, &a, Some(&dirs), state, Some(&reason), Some(&detail), row.src.clone(), None, journal, None, row.outputs.clone()).await;
+            // No runner, but its processes may still run (a runner that gave
+            // up or died with the job live): its `K2_COMPUTE_JOB` and its
+            // folder mark them (its group id isn't trusted this late).
+            let mut outputs = row.outputs.clone();
+            let m = crate::jobtree::Mark { job_id: row.job_id.clone(), root: dirs.root.clone(), pgid: 0, leader_start: None };
+            let grace = node.opts.cancel_grace.min(std::time::Duration::from_secs(5));
+            if let Ok(lines) = tokio::task::spawn_blocking(move || crate::jobtree::sweep(&m, grace)).await {
+                if !lines.is_empty() {
+                    crate::nlog!("job {} gen {}: killed {} leftover process(es) of a job no runner held", row.job_id, row.generation, lines.len());
+                    if let Some(j) = journal.as_mut() {
+                        let _ = j.append(frames::LogStream::Sys, format!("[k2-node] killed {} leftover process(es) the job left running: {}\n", lines.len(), lines.join("; ")).as_bytes());
+                    }
+                    if let Some(n) = crate::jobtree::note(&lines) {
+                        let o = outputs.get_or_insert_with(Default::default);
+                        o.notes.insert(0, n);
+                        *o = std::mem::take(o).capped();
+                    }
+                }
+            }
+            node.finish_job(&t, &a, Some(&dirs), state, Some(&reason), Some(&detail), row.src.clone(), None, journal, None, outputs).await;
         });
         true
     }

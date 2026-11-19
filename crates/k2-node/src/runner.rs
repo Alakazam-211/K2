@@ -2,10 +2,12 @@
 //!
 //! - The env starts EMPTY; [`job_env`] sets the node's names, then the
 //!   plan's `--env` pairs (checked again here).
-//! - Own process group (and a cgroup leaf on Linux when delegated).
+//! - Own session and process group (`setsid`; and a cgroup leaf on Linux
+//!   when delegated).
 //! - Stop = SIGTERM to the group, a grace period, then SIGKILL (+
 //!   `cgroup.kill`). After the main process exits the group is killed
-//!   anyway, so a background grandchild can't outlive the job.
+//!   anyway, so a background grandchild can't outlive the job; one that
+//!   left the group is the job-end sweep's ([`crate::jobtree`]).
 //! - macOS has no hard memory cap: an RSS sampler sums the group's RSS
 //!   once a second and the job is killed over the cap.
 
@@ -216,7 +218,10 @@ impl RssSampler for PsSampler {
 
 pub struct Spawned {
     pub child: tokio::process::Child,
+    /// Its process group and session (= its pid).
     pub pgid: i32,
+    /// The leader's start time ([`crate::util::process_start_time`]).
+    pub start: Option<u64>,
 }
 
 /// Start the job's command.
@@ -229,7 +234,6 @@ pub fn spawn(argv: &[String], env: &[(String, String)], cwd: &Path, leaf: Option
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
         .kill_on_drop(false);
     for (k, v) in env {
         cmd.env(k, v);
@@ -240,13 +244,27 @@ pub fn spawn(argv: &[String], env: &[(String, String)], cwd: &Path, leaf: Option
             if let Some(p) = procs.as_ref() {
                 crate::cgroup::join_in_child(p)?;
             }
+            // Its own session and process group (pgid = sid = its pid): a
+            // child that `setpgid`s stays in the session, so the job-end
+            // sweep still finds it.
+            new_session()?;
             raise_nofile();
             Ok(())
         });
     }
     let child = cmd.spawn().map_err(|e| format!("spawn {program}: {e}"))?;
     let pgid = child.id().ok_or("child has no pid")? as i32;
-    Ok(Spawned { child, pgid })
+    let start = crate::util::process_start_time(pgid as u32);
+    Ok(Spawned { child, pgid, start })
+}
+
+/// `setsid` in a forked child (async-signal-safe).
+pub(crate) fn new_session() -> std::io::Result<()> {
+    // SAFETY: setsid only; the child is never a group leader before it.
+    if unsafe { libc::setsid() } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Raise the open-files soft limit (builds open many files).

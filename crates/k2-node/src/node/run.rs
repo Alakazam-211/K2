@@ -41,7 +41,8 @@ type OutPipe = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
 /// A running job: our child (no wall / Seatbelt), a unit (Linux wall),
 /// or a `job-hold` process's (macOS, test nodes; §5.2).
 pub(super) enum Proc {
-    Local { child: tokio::process::Child, pgid: i32, leaf: Option<Leaf> },
+    /// `start`: the leader's start time (the job-end sweep's group rule).
+    Local { child: tokio::process::Child, pgid: i32, leaf: Option<Leaf>, start: Option<u64> },
     /// `cg`: the unit's cgroup dir under `/sys/fs/cgroup`, once the
     /// executor said it (CE-14, the CE-10 stall rule). `rc`: the
     /// `job-exec` shim's rc file, when it records the exit there.
@@ -92,6 +93,19 @@ impl Proc {
             Proc::Unit { .. } => 0,
             Proc::Holder { facts, .. } => facts.pgid,
         }
+    }
+
+    /// What marks this job's processes for the job-end sweep
+    /// ([`crate::jobtree`]): its group and session while the leader is gone
+    /// or still its own, its `K2_COMPUTE_JOB`, its folder. A unit's job has
+    /// no group of the node's (its cgroup holds it).
+    pub(super) fn mark(&self, job_id: &str, root: &Path) -> crate::jobtree::Mark {
+        let (pgid, leader_start) = match self {
+            Proc::Local { pgid, start, .. } => (*pgid, *start),
+            Proc::Holder { facts, .. } => (facts.pgid, facts.job_start),
+            Proc::Unit { .. } => (0, None),
+        };
+        crate::jobtree::Mark { job_id: job_id.to_string(), root: root.to_path_buf(), pgid, leader_start }
     }
 
     fn needs_rss_sampler(&self) -> bool {
@@ -1651,17 +1665,21 @@ impl Node {
         // The wall rule (C9): the unit or the holder's group is gone before
         // anything the job wrote is read (its output's last bytes, artifacts).
         self.proc_reap(&mut proc).await;
-        // macOS: what the job left running outside its group (a `setsid`
-        // fake daemon): the node's own processes under the job's folder,
-        // ended and named in the job's log (Linux: the leaf or the unit
-        // already holds everything).
-        if cfg!(target_os = "macos") {
-            let (root, grace) = (dirs.root.clone(), self.opts.cancel_grace.min(Duration::from_secs(5)));
-            if let Ok(lines) = tokio::task::spawn_blocking(move || crate::strays::reap_under(&root, grace)).await {
+        // What the job left running outside its group (a `setpgid` or
+        // `setsid` daemon, after a cancel, a timeout or a normal end): the
+        // node's own processes in its session, with its `K2_COMPUTE_JOB`,
+        // or under its folder, ended and named in the job's log and its
+        // record (`jobtree`; on Linux the leaf or the unit already holds
+        // its tree, and this finds nothing more).
+        let mut leftover_note: Option<String> = None;
+        {
+            let (m, grace) = (proc.mark(&job, &dirs.root), self.opts.cancel_grace.min(Duration::from_secs(5)));
+            if let Ok(lines) = tokio::task::spawn_blocking(move || crate::jobtree::sweep(&m, grace)).await {
                 if !lines.is_empty() {
-                    crate::nlog!("job {job}: ended {} process(es) it left outside its group", lines.len());
-                    let text = format!("[k2-node] ended {} process(es) the job left running outside its group: {}\n", lines.len(), lines.join("; "));
+                    crate::nlog!("job {job}: killed {} leftover process(es) it left outside its group", lines.len());
+                    let text = format!("[k2-node] killed {} leftover process(es) the job left running outside its group: {}\n", lines.len(), lines.join("; "));
                     let _ = journal.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, text.as_bytes());
+                    leftover_note = crate::jobtree::note(&lines);
                 }
             }
         }
@@ -1825,6 +1843,11 @@ impl Node {
             o.notes.push(n);
             o.network_hosts = rows;
         }
+        // The job record says what the sweep killed (`k2 compute get`).
+        if let Some(n) = leftover_note {
+            let o = outputs.get_or_insert_with(Default::default);
+            o.notes.insert(0, n);
+        }
         outputs = outputs.map(|o| o.capped());
         if let Some(line) = evicted.line() {
             if let Some(j) = journal.as_mut() {
@@ -1945,10 +1968,10 @@ impl Node {
             cg.create_leaf(&key, cpu.quota_millis, cpu.weight, a.plan.limits.mem_bytes).map_err(|e| crate::nlog!("cgroup leaf for {key}: {e}")).ok()
         });
         match runner::spawn(&argv, env, cwd, leaf.as_ref()) {
-            Ok(runner::Spawned { mut child, pgid }) => {
+            Ok(runner::Spawned { mut child, pgid, start }) => {
                 let out = child.stdout.take().map(|p| Box::new(p) as OutPipe);
                 let err = child.stderr.take().map(|p| Box::new(p) as OutPipe);
-                Ok((Proc::Local { child, pgid, leaf }, out, err))
+                Ok((Proc::Local { child, pgid, leaf, start }, out, err))
             }
             Err(e) => {
                 if let Some(l) = &leaf {
@@ -2160,7 +2183,7 @@ impl Node {
     /// SIGTERM everything, SIGKILL after the grace period.
     async fn proc_stop(&self, p: &mut Proc) {
         match p {
-            Proc::Local { child, pgid, leaf } => runner::stop_group(child, *pgid, leaf.as_ref(), self.opts.cancel_grace).await,
+            Proc::Local { child, pgid, leaf, .. } => runner::stop_group(child, *pgid, leaf.as_ref(), self.opts.cancel_grace).await,
             Proc::Unit { unit, .. } => {
                 let _ = self.job_op(crate::admin::jobs::JobOp::Stop { unit: unit.clone() }, vec![], Duration::from_secs(30)).await;
             }
@@ -3611,7 +3634,7 @@ pub(super) mod tests {
         let leaf = cg.create_leaf("j-g1", None, None, Some(1 << 20)).unwrap();
         let child = tokio::process::Command::new("/usr/bin/true").spawn().unwrap();
         std::fs::write(leaf.dir.join("memory.events"), "low 0\nhigh 0\nmax 3\noom 1\noom_kill 0\n").unwrap();
-        let p = Proc::Local { child, pgid: 0, leaf: Some(leaf) };
+        let p = Proc::Local { child, pgid: 0, leaf: Some(leaf), start: None };
         assert!(!p.oom(), "oom without a kill isn't a kill");
         let Proc::Local { leaf: Some(l), .. } = &p else { unreachable!() };
         std::fs::write(l.dir.join("memory.events"), "low 0\nhigh 0\nmax 9\noom 2\noom_kill 1\n").unwrap();

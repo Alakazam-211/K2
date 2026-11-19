@@ -1,5 +1,10 @@
 //! macOS: processes a job left running outside its process group.
 //!
+//! 0.46.16: the node's job-end sweep is [`crate::jobtree`] now (both
+//! OSes: the job's session, and env values under its folder too); it uses
+//! the path rules, the spared list and [`end`] from here. [`find_under`]
+//! and [`reap_under`] stay for the cwd/exe/argv rule alone.
+//!
 //! At job end the node kills the job's process group (the holder does,
 //! then [`crate::node`]'s reap). A process that `setsid`s out of that group
 //! survives. A test's fake daemon (`frpc`) does exactly that, and on the
@@ -197,7 +202,24 @@ pub fn find_under(_root: &Path) -> Vec<Stray> {
 }
 
 fn still(s: &Stray) -> bool {
-    crate::util::process_start_time(s.pid as u32) == Some(s.start)
+    crate::util::process_start_time(s.pid as u32) == Some(s.start) && !zombie(s.pid)
+}
+
+/// Ended but not yet reaped by its parent: nothing more to signal (Linux
+/// keeps a zombie's `/proc/<pid>/stat`, start time included).
+fn zombie(pid: i32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        return std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|s| s.rfind(')').map(|i| s[i + 1..].split_whitespace().next() == Some("Z")))
+            .unwrap_or(false);
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 /// SIGTERM each (if still the same process), wait up to `grace` for them

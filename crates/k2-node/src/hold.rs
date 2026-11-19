@@ -15,7 +15,7 @@
 //! - Its folder (`<node state>/hold/<job key>/`) is the node's only (the
 //!   Seatbelt profile denies `state/` to jobs). The node writes `spec.json`;
 //!   the holder reads it once and deletes it (the job's env may carry
-//!   tokens), starts the job in its own process group with stdin
+//!   tokens), starts the job in its own session and process group with stdin
 //!   `/dev/null` and stdout/stderr = the spool fds it inherited (it never
 //!   opens a spool path), and writes `hold.json` (its pid, start time, the
 //!   job's pgid). The node reads that **once** into the run facts and never
@@ -264,13 +264,15 @@ fn hold(dir: &Path, spec: HoldSpec) -> i32 {
     }
     {
         use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
         // SAFETY: only async-signal-safe calls between fork and exec.
         unsafe {
             cmd.pre_exec(|| {
                 // The holder's own handlers never reach the job.
                 libc::signal(libc::SIGTERM, libc::SIG_DFL);
                 libc::signal(libc::SIGINT, libc::SIG_DFL);
+                // Its own session and group (pgid = sid = its pid), as a
+                // job the node starts itself (`runner::spawn`).
+                crate::runner::new_session()?;
                 crate::runner::raise_nofile();
                 Ok(())
             });

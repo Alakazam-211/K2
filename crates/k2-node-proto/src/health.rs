@@ -51,6 +51,36 @@ pub struct Health {
     /// manager's upkeep facts. `None` from older nodes and Macs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packages: Option<PkgHealth>,
+    /// 0.46.16: processes of the job user that look like a job's (they
+    /// carry `K2_COMPUTE_JOB` or a path under the node's job roots) and
+    /// that no live job owns. A report for a person, never a kill. `None`
+    /// from older nodes; `Some` with count 0 when the check found none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leftovers: Option<Leftovers>,
+}
+
+/// Cap on [`Leftovers::procs`] (the count says how many in all).
+pub const MAX_LEFTOVER_PROCS: usize = 8;
+
+/// The node's leftover-process check (see [`Health::leftovers`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Leftovers {
+    pub count: u32,
+    /// The oldest first, at most [`MAX_LEFTOVER_PROCS`].
+    #[serde(default)]
+    pub procs: Vec<LeftoverProc>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeftoverProc {
+    pub pid: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub age_secs: Option<u64>,
+    /// Its command line, cut short.
+    pub cmd: String,
+    /// The `K2_COMPUTE_JOB` it carries: the job that left it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
 }
 
 /// What K2 knows about the node's package manager (§10). K2 refreshes a

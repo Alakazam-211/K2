@@ -96,6 +96,7 @@ part_web() {
     step "one proxy rule in Rust, the CLI's curl and its Python (parity table)"; bash tests/cli/proxy_rule_parity.sh
     step "k2 names a body file the Windows way in Git Bash"; bash tests/cli/windows_curl_body_path.sh
     step "k2 heartbeat wake sends the session passport"; bash tests/cli/heartbeat_wake_passport.sh
+    step "k2 heartbeat wake says why when it cannot run (stub daemon)"; bash tests/cli/heartbeat_wake_errors.sh
     step "k2 fed never sends the owner token from a session"; bash tests/cli/fed_passport.sh
     step "the CLI name rewrite, on a copy";        bash tests/garden/cli-name-flip.sh
     step "the dispatcher arm reader";              bash tests/garden/dispatcher-arms.sh

@@ -7217,9 +7217,18 @@ cmd_heartbeat_wake() {
     if [ -n "${_k2_no_owner_fallback:-}" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
         _k2_refuse_owner_fallback
     fi
-    local has_work
+    # "noop" only when the daemon answered and there is no inbox work.
+    # Anything else (no port, the Python stopping, a refusal, an error
+    # status, an answer that is not JSON, no connection) prints one line
+    # on stderr and exits non-zero: 3 for a refusal that carries a
+    # permission card (with its Ask with: line), 1 for the rest.
+    local has_work wake_rc=0
     has_work=$(python3 -c "
-import json, sys, subprocess, os
+import json, os, socket, sys, urllib.error, urllib.parse, urllib.request
+
+def fail(msg, code=1):
+    print('Error: k2 heartbeat wake: ' + msg, file=sys.stderr)
+    sys.exit(code)
 
 # The session's port and passport under their current names first, then
 # the older ones; a name that is set but empty counts as unset. Reading
@@ -7228,35 +7237,92 @@ port = os.environ.get('K5_PORT') or os.environ.get('K2_PORT') or os.environ.get(
 token = os.environ.get('K5_HOOK_TOKEN') or os.environ.get('K2_HOOK_TOKEN') or os.environ.get('K2SO_HOOK_TOKEN') or ''
 if not port:
     try: port = open(os.path.expanduser('$K2_HOME/heartbeat.port')).read().strip()
-    except: pass
+    except OSError: pass
 if not token and '${_k2_no_owner_fallback:-}' != '1':
     try: token = open(os.path.expanduser('$K2_HOME/heartbeat.token')).read().strip()
-    except: pass
+    except OSError: pass
+if not port:
+    fail(\"no port for K2's server (no K2_PORT and no heartbeat.port); run k2 daemon status\")
+
+# Loopback and plain http skip the proxy; remote https may use it.
+if '_K2_PY_PROXY_RULE' not in os.environ:
+    fail('_K2_PY_PROXY_RULE is not set (the k2 prelude exports it)')
+try:
+    exec(os.environ['_K2_PY_PROXY_RULE'])
+except Exception as e:
+    fail(f'the proxy rule did not run: {type(e).__name__}: {e}')
 
 project = '$PROJECT'
 base = f'http://127.0.0.1:{port}'
-
-agent_inbox = False
-ws_inbox = False
-import urllib.parse, urllib.request
-# Loopback and plain http skip the proxy; remote https may use it.
-exec(os.environ['_K2_PY_PROXY_RULE'])
 auth = {'Authorization': 'Bearer ' + token} if token else {}
+
+def refused(route, code, data, raw):
+    # The daemon's error text, then the permission card's closing line
+    # as every other family prints it.
+    err = data.get('error') if isinstance(data, dict) else None
+    if isinstance(err, dict):
+        err = err.get('hint') or err.get('code')
+    why = str(err) if err else (raw.decode('utf-8', 'replace').strip()[:300] or 'no body')
+    verb = 'refused' if code in (401, 403) else 'answered'
+    print(f\"Error: k2 heartbeat wake: K2's server {verb} {route} with HTTP {code}: {why}\", file=sys.stderr)
+    p = data.get('permission') if isinstance(data, dict) else None
+    if isinstance(p, dict):
+        cmd = p.get('command')
+        if isinstance(cmd, str) and cmd:
+            print('Ask with: ' + cmd, file=sys.stderr)
+            sys.exit(3)
+        if p.get('requestable') is False:
+            hint = p.get('hint')
+            if isinstance(hint, str) and hint:
+                print(hint, file=sys.stderr)
+            print(\"It can't be requested.\", file=sys.stderr)
+            sys.exit(3)
+    sys.exit(1)
+
+def answer(route):
+    # The JSON the daemon answered on route, or None for the retired
+    # /cli/work/inbox (every daemon since 0.39 answers it 410 Gone).
+    req = urllib.request.Request(f'{base}{route}?project={urllib.parse.quote(project)}', headers=auth)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            code, raw = resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        code, raw = e.code, e.read()
+    except (socket.timeout, TimeoutError):
+        fail(f\"K2's server didn't answer {route} within 5 s; run k2 daemon status\")
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (socket.timeout, TimeoutError)):
+            fail(f\"K2's server didn't answer {route} within 5 s; run k2 daemon status\")
+        fail(f\"can't reach K2's server at {base}: {e.reason}; run k2 daemon status\")
+    except OSError as e:
+        fail(f\"K2's server closed the connection on {route}: {e}; run k2 daemon status\")
+    if code == 410 and route == '/cli/work/inbox':
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+        if code == 200:
+            fail(f\"K2's server answered {route} with something that is not JSON\")
+    if code != 200:
+        refused(route, code, data, raw)
+    return data
+
 try:
-    req = urllib.request.Request(f'{base}/cli/agents/list?project={urllib.parse.quote(project)}', headers=auth)
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        agents = json.loads(resp.read())
-        agent_inbox = any(a.get('inboxCount', 0) > 0 for a in agents)
-except: pass
-try:
-    req = urllib.request.Request(f'{base}/cli/work/inbox?project={urllib.parse.quote(project)}', headers=auth)
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        items = json.loads(resp.read())
-        ws_inbox = len(items) > 0 if isinstance(items, list) else False
-except: pass
+    agents = answer('/cli/agents/list')
+    if not isinstance(agents, list) or not all(isinstance(a, dict) for a in agents):
+        fail(f\"K2's server answered /cli/agents/list with a {type(agents).__name__}, not a list of agents\")
+    agent_inbox = any(a.get('inboxCount', 0) > 0 for a in agents)
+    items = answer('/cli/work/inbox')
+    ws_inbox = len(items) > 0 if isinstance(items, list) else False
+except SystemExit:
+    raise
+except Exception as e:
+    fail(f'the inbox check stopped: {type(e).__name__}: {e}')
 
 print('yes' if (agent_inbox or ws_inbox) else 'no')
-" 2>/dev/null || echo "no")
+") || wake_rc=$?
+    [ "$wake_rc" = 0 ] || exit "$wake_rc"
 
     if [ "$has_work" != "yes" ]; then
         echo '{"status":"noop","reason":"no inbox work found"}'

@@ -58,8 +58,8 @@ cmd_setup() {
                 [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
                 sub="$1"; shift ;;
             agent-reports)
-                # The agent opt-in (0.46.17): send-feedback's settings write,
-                # which renders with python3, unlike the rest of k2 setup.
+                # The agent opt-in (0.46.17): send-feedback's settings read
+                # and write, in bash and curl like the rest of k2 setup.
                 [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
                 shift
                 if [ "$as_json" = 1 ]; then set -- --json "$@"; fi

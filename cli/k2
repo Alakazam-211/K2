@@ -60180,8 +60180,8 @@ cmd_setup() {
                 [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
                 sub="$1"; shift ;;
             agent-reports)
-                # The agent opt-in (0.46.17): send-feedback's settings write,
-                # which renders with python3, unlike the rest of k2 setup.
+                # The agent opt-in (0.46.17): send-feedback's settings read
+                # and write, in bash and curl like the rest of k2 setup.
                 [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
                 shift
                 if [ "$as_json" = 1 ]; then set -- --json "$@"; fi
@@ -60984,6 +60984,140 @@ _sf_agents_word() {
     esac
 }
 
+# The settings route for _sf_settings_run: the answer in _CP_BODY.
+#   _sf_settings_call settings|setup GET|POST [body]
+# settings goes through _compute_call, as every send-feedback verb. setup
+# goes through _setup_send, bash and curl only like the rest of k2 setup
+# (the session's passport in an agent's session, never the owner token);
+# a refusal prints the standard {"error", "hint"} line and exits 2 for a
+# bad request, 3 for the rest.
+_sf_settings_call() {
+    local who="$1" method="$2" body="${3:-}" raw code err="" hint=""
+    if [ "$who" = settings ]; then
+        _compute_call "$method" /cli/product-feedback/settings "$body"
+        return 0
+    fi
+    raw="$(_setup_send "$method" /cli/product-feedback/settings 1 "$body")"
+    code="${raw##*$'\n'}"
+    _CP_BODY="${raw%$'\n'*}"
+    if [ -z "$raw" ] || [ "$code" = "$raw" ] || [ "$code" = "000" ]; then
+        echo "Error: could not reach the K2 daemon (k2 setup agent-reports)" >&2
+        exit 1
+    fi
+    [ "$code" = 200 ] && return 0
+    _permission_note "$_CP_BODY"
+    local re_obj='"error"[[:space:]]*:[[:space:]]*\{(.*)$'
+    if [[ "$_CP_BODY" =~ $re_obj ]]; then
+        local rest="${BASH_REMATCH[1]}"
+        _setup_jfield code "$rest" && err="$_SETUP_J"
+        _setup_jfield hint "$rest" && hint="$_SETUP_J"
+    else
+        _setup_jfield error "$_CP_BODY" && err="$_SETUP_J"
+        _setup_jfield message "$_CP_BODY" && hint="$_SETUP_J"
+    fi
+    [ -n "$err" ] || { err=error; hint="${_CP_BODY:0:200}"; }
+    local je jh
+    _setup_jstr "$err"; je="$_SETUP_J"
+    _setup_jstr "$hint"; jh="$_SETUP_J"
+    echo "{\"error\": $je, \"hint\": $jh}" >&2
+    case "$code" in
+        400|413) exit 2 ;;
+        *) exit 3 ;;
+    esac
+}
+
+# Small readers of the settings answer (the daemon's compact JSON), in bash
+# so k2 setup agent-reports needs no python3. Each sets _SF_V.
+#   _sf_jbool KEY JSON    true or false ("" when missing)
+#   _sf_jnum KEY JSON     digits ("" when missing or null)
+#   _sf_jarr KEY JSON     the text between the array's brackets
+_sf_jbool() {
+    local re='"'"$1"'"[[:space:]]*:[[:space:]]*(true|false)'
+    _SF_V=""
+    if [[ "$2" =~ $re ]]; then _SF_V="${BASH_REMATCH[1]}"; fi
+}
+_sf_jnum() {
+    local re='"'"$1"'"[[:space:]]*:[[:space:]]*([0-9]+)'
+    _SF_V=""
+    if [[ "$2" =~ $re ]]; then _SF_V="${BASH_REMATCH[1]}"; fi
+}
+_sf_jarr() {
+    local re='"'"$1"'"[[:space:]]*:[[:space:]]*\[([^]]*)\]'
+    _SF_V=""
+    if [[ "$2" =~ $re ]]; then _SF_V="${BASH_REMATCH[1]}"; fi
+}
+_sf_oo() { if [ "$1" = true ]; then echo on; else echo off; fi; }
+
+# Print the settings answer in _CP_BODY for people.
+_sf_settings_render() {
+    local v="$_CP_BODY" svc="" svc_msg="" re line
+    # The service's own object first, so its message isn't read as the
+    # top-level one.
+    re='"service"[[:space:]]*:[[:space:]]*\{[^}]*\}'
+    if [[ "$v" =~ $re ]]; then
+        svc="${BASH_REMATCH[0]}"
+        v="${v/"$svc"/}"
+        if _setup_jfield message "$svc"; then svc_msg="$_SETUP_J"; fi
+    fi
+    echo "Send feedback to $_SF_PRODUCT on this server"
+    _sf_jbool enabled "$v"; printf '  enabled:            %s\n' "$(_sf_oo "$_SF_V")"
+    if [[ "$v" == *'"agentsAsked"'* ]] || [[ "$v" == *'"attachParts"'* ]]; then
+        local agents platform asked
+        _sf_jbool agents "$v"; agents="$_SF_V"
+        _sf_jbool agentPlatform "$v"; platform="$_SF_V"
+        if [ "$agents" != true ]; then
+            line="nothing (off)"
+        elif [ "$platform" = true ]; then
+            line="anything about $_SF_PRODUCT"
+        else
+            line="problems with $_SF_PRODUCT commands"
+        fi
+        printf '  agents report:      %s\n' "$line"
+        _sf_jbool agentsAsked "$v"; asked="$_SF_V"
+        if [ "$asked" = true ]; then
+            local by="-" when="-"
+            if _setup_jfield agentsAskedBy "$v" && [ -n "$_SETUP_J" ]; then by="$_SETUP_J"; fi
+            [ "$by" = owner ] && by="the owner"
+            _sf_jnum agentsAskedAt "$v"
+            if [ -n "$_SF_V" ]; then
+                local secs=$((_SF_V / 1000))
+                when="$(date -d "@$secs" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$secs" '+%Y-%m-%d %H:%M' 2>/dev/null || echo -)"
+            fi
+            printf '  answered:           by %s, %s\n' "$by" "$when"
+        else
+            echo "  answered:           not asked yet"
+        fi
+        local allowed parts obj id label state
+        _sf_jarr agentAttach "$v"; allowed="$_SF_V"
+        echo "  agents may attach:  (the versions always go)"
+        _sf_jarr attachParts "$v"; parts="$_SF_V"
+        re='\{([^}]*)\}'
+        while [[ "$parts" =~ $re ]]; do
+            obj="${BASH_REMATCH[1]}"
+            parts="${parts#*"${BASH_REMATCH[0]}"}"
+            _setup_jfield id "$obj" || continue
+            id="$_SETUP_J"
+            label=""
+            if _setup_jfield label "$obj"; then label="$_SETUP_J"; fi
+            state=off
+            [[ "$allowed" == *"\"$id\""* ]] && state=on
+            printf '    %-3s  %-13s  %s\n' "$state" "$id" "$label"
+        done
+    else
+        _sf_jbool agents "$v"; printf '  agents:             %s\n' "$(_sf_oo "$_SF_V")"
+        _sf_jbool agentDiagnostics "$v"; printf '  agent diagnostics:  %s\n' "$(_sf_oo "$_SF_V")"
+    fi
+    _sf_jbool canSend "$v"
+    if [ "$_SF_V" = true ]; then echo "  can send now:       yes"; else echo "  can send now:       no"; fi
+    if _setup_jfield message "$v" && [ -n "$_SETUP_J" ]; then printf '    %s\n' "$_SETUP_J"; fi
+    if [ -n "$svc_msg" ]; then printf '  service:            %s\n' "$svc_msg"; fi
+    _sf_jnum pending "$v"
+    if [ -n "$_SF_V" ] && [ "$_SF_V" != 0 ]; then printf '  waiting to send:    %s\n' "$_SF_V"; fi
+    local endpoint=""
+    if _setup_jfield endpoint "$v"; then endpoint="$_SETUP_J"; fi
+    printf '  sends to:           %s\n' "$endpoint"
+}
+
 # The settings read and the agent opt-in write, one function for
 # `k2 send-feedback settings` and `k2 setup agent-reports` (the same POST to
 # /cli/product-feedback/settings).
@@ -61021,7 +61155,7 @@ _sf_settings_run() {
         # Which server this is: its GET names agentsAsked and attachParts.
         local new=1
         if [ "$have_attach" = 1 ] || [ "$agents" = on ] || [ "$agents" = cli ] || [ "$agents" = all ]; then
-            _compute_call GET /cli/product-feedback/settings ""
+            _sf_settings_call "$who" GET
             case "$_CP_BODY" in *'"agentsAsked"'*|*'"attachParts"'*) new=1 ;; *) new=0 ;; esac
         fi
         if [ "$new" = 0 ] && { [ "$have_attach" = 1 ] || [ "$agents" = cli ] || [ "$agents" = all ]; }; then
@@ -61043,51 +61177,12 @@ _sf_settings_run() {
             payload="${payload}${sep}\"agentAttach\": ${_SETUP_J}"; sep=", "
         fi
         if [ -n "$agent_diag" ]; then payload="${payload}${sep}\"agentDiagnostics\": $agent_diag"; sep=", "; fi
-        _compute_call POST /cli/product-feedback/settings "{${payload}}"
+        _sf_settings_call "$who" POST "{${payload}}"
     else
-        _compute_call GET /cli/product-feedback/settings ""
+        _sf_settings_call "$who" GET
     fi
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
-    printf '%s' "$_CP_BODY" | K2_SF_PRODUCT="$_SF_PRODUCT" python3 -c '
-import json, os, sys, time
-v = json.load(sys.stdin)
-product = os.environ["K2_SF_PRODUCT"]
-oo = lambda b: "on" if b else "off"
-print("Send feedback to %s on this server" % product)
-print("  enabled:            %s" % oo(v.get("enabled")))
-if "agentsAsked" in v or "attachParts" in v:
-    if not v.get("agents"):
-        what = "nothing (off)"
-    elif v.get("agentPlatform"):
-        what = "anything about %s" % product
-    else:
-        what = "problems with %s commands" % product
-    print("  agents report:      %s" % what)
-    if v.get("agentsAsked"):
-        by = v.get("agentsAskedBy") or "-"
-        by = "the owner" if by == "owner" else by
-        at = v.get("agentsAskedAt")
-        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(at / 1000)) if isinstance(at, (int, float)) else "-"
-        print("  answered:           by %s, %s" % (by, when))
-    else:
-        print("  answered:           not asked yet")
-    allowed = set(v.get("agentAttach") or [])
-    print("  agents may attach:  (the versions always go)")
-    for p in v.get("attachParts") or []:
-        print("    %-3s  %-13s  %s" % (oo(p["id"] in allowed), p["id"], p.get("label", "")))
-else:
-    print("  agents:             %s" % oo(v.get("agents")))
-    print("  agent diagnostics:  %s" % oo(v.get("agentDiagnostics")))
-print("  can send now:       %s" % ("yes" if v.get("canSend") else "no"))
-if v.get("message"):
-    print("    " + v["message"])
-svc = v.get("service") or {}
-if svc.get("message"):
-    print("  service:            " + svc["message"])
-if v.get("pending"):
-    print("  waiting to send:    %s" % v["pending"])
-print("  sends to:           %s" % v.get("endpoint", ""))
-'
+    _sf_settings_render
 }
 
 _sf_settings() { _sf_settings_run settings "$@"; }

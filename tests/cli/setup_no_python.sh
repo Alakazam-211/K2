@@ -5,8 +5,9 @@
 # verb asks the daemon for its lines (`?format=text`) and prints them with
 # bash and curl only; refusals (JSON) map to the same exit codes as before
 # (2 usage, 3 refused, 4 no such Focus Group, 1 anything else). The POST bodies are built in bash,
-# quotes and backslashes escaped. A python3 that fails loudly is first on
-# PATH; the test fails if it ever runs.
+# quotes and backslashes escaped. k2 setup agent-reports reads the
+# feedback settings' JSON and prints it in bash too. A python3 that fails
+# loudly is first on PATH; the test fails if it ever runs.
 #
 # Nothing is installed: the daemon is a stub (python3 runs only the stub,
 # from its full path). The CLI runs with a clean environment (`env -i`, a
@@ -72,6 +73,24 @@ STATUS = {"enabled": True, "hidden": False, "finished": False,
           "rows": [{"id": "dev_tools", "state": "todo", "opens": "dev_tools"}], "offer": "meet_kessel"}
 MADE = "Made Kessel: Kessel (kessel) at /home/me/k2-agents/kessel\nKessel is starting and will say hello on its Thread: k2 thread kessel\n"
 
+# k2 setup agent-reports (0.46.17): /cli/product-feedback/settings, compact
+# JSON (json.dumps escapes the arrow as \u2192), nulls, the service's own
+# message.
+PARTS = [["computer", "Computer size and free space"], ["k2-state", "The names of settings that are on, and counts"],
+         ["agent-tools", "Which AI tools are installed"], ["recent-errors", "Failure-looking lines from the last 24 hours"],
+         ["log-tail", "The end of K2's log"]]
+PF_SETTINGS = {"enabled": True, "agents": True, "agentPlatform": True, "agentAttach": ["computer", "log-tail"],
+               "agentDiagnostics": True, "agentScopes": ["cli", "platform"], "agentsAsked": True,
+               "agentsAskedAt": 1763538000000, "agentsAskedBy": "owner",
+               "attachParts": [{"id": i, "label": l} for i, l in PARTS], "rememberDiagnostics": False,
+               "canEdit": True, "canSend": True, "why": None, "message": None,
+               "endpoint": "https://feedback.example.test", "contactAddress": "", "senderKind": "person",
+               "pending": 2, "service": {"state": "ok", "code": None, "message": "K2's feedback service is reachable \u2192 ok.", "at": 1}}
+PF_ERRORS = {
+    "pf_people": (403, json.dumps({"ok": False, "error": "settings_people_only", "message": "Only a person signed in to this server changes these settings."}, separators=(",", ":")), "application/json"),
+    "pf_bad_part": (400, json.dumps({"ok": False, "error": "bad_attach_part", "message": "nope isn't a part agents may attach."}, separators=(",", ":")), "application/json"),
+}
+
 def refusal(code, hint):
     return json.dumps({"ok": False, "error": {"code": code, "hint": hint}}, separators=(",", ":"))
 
@@ -114,6 +133,10 @@ class H(BaseHTTPRequestHandler):
             return self._send(403, '{"error":"invalid or missing token"}', "application/json")
         if mode in ERRORS:
             return self._send(*ERRORS[mode])
+        if u.path == "/cli/product-feedback/settings":
+            if mode in PF_ERRORS and method == "POST":
+                return self._send(*PF_ERRORS[mode])
+            return self._send(200, json.dumps(PF_SETTINGS, separators=(",", ":")), "application/json")
         if q.get("format") != ["text"]:
             return self._send(200, json.dumps(STATUS, separators=(",", ":")), "application/json")
         if u.path in ("/cli/first-run/kessel", "/cli/first-run/chief-of-staff"):
@@ -145,7 +168,7 @@ done
 : >"$LOG_FILE"
 
 # The failing python3 is first on PATH; nothing else from this shell's env.
-k2() { (cd "$WORK" && env -i PATH="$SHIMS:/usr/bin:/bin" HOME="$WORK/home" K2_PORT="$PORT" K2_HOOK_TOKEN='t.k/+= z' "$K2_CLI" "$@"); }
+k2() { (cd "$WORK" && env -i PATH="$SHIMS:/usr/bin:/bin" HOME="$WORK/home" TZ=UTC K2_PORT="$PORT" K2_HOOK_TOKEN='t.k/+= z' "$K2_CLI" "$@"); }
 run() {
     set +e
     out="$(k2 "$@" 2>"$WORK/err")"
@@ -218,6 +241,47 @@ assert_eq "kessel --focus-group empty: left out" "$(last_request)" "POST /cli/fi
 run setup chief-of-staff --name Ada --about "" --tool codex --focus-group 'fg_"1"'
 assert_eq "chief-of-staff --focus-group: exit 0" "$rc" "0"
 assert_eq "chief-of-staff --focus-group: after about, escaped" "$(last_request)" "POST /cli/first-run/chief-of-staff $Q {\"tool\": \"codex\", \"name\": \"Ada\", \"about\": \"\", \"focusGroup\": \"fg_\\\"1\\\"\"}"
+
+echo "== agent-reports (the feedback opt-in, 0.46.17) =="
+PF=/cli/product-feedback/settings
+run setup agent-reports
+assert_eq "agent-reports: exit 0" "$rc" "0"
+assert_eq "agent-reports: GET, no query" "$(last_request)" "GET $PF  "
+assert_eq "agent-reports: the raw token in the Bearer header" "$(cat "$AUTH_FILE")" "'Bearer t.k/+= z'"
+assert_eq "agent-reports: the read, in bash" "$out" "$(printf '%s\n' \
+    "Send feedback to K2 on this server" \
+    "  enabled:            on" \
+    "  agents report:      anything about K2" \
+    "  answered:           by the owner, 2025-11-19 07:40" \
+    "  agents may attach:  (the versions always go)" \
+    "    on   computer       Computer size and free space" \
+    "    off  k2-state       The names of settings that are on, and counts" \
+    "    off  agent-tools    Which AI tools are installed" \
+    "    off  recent-errors  Failure-looking lines from the last 24 hours" \
+    "    on   log-tail       The end of K2's log" \
+    "  can send now:       yes" \
+    "  service:            K2's feedback service is reachable → ok." \
+    "  waiting to send:    2" \
+    "  sends to:           https://feedback.example.test")"
+assert_eq "agent-reports: nothing on stderr" "$err" ""
+: >"$LOG_FILE"
+run setup agent-reports --agents all --attach 'computer,log-tail'
+assert_eq "agent-reports --agents all --attach: exit 0" "$rc" "0"
+# Built outside "$(…)": bash 3.2 keeps the backslash of \" inside one.
+want_pf="GET $PF  "$'\n'"POST $PF  "'{"agents": true, "agentPlatform": true, "agentAttach": "computer,log-tail"}'
+assert_eq "agent-reports --agents all --attach: the version read, then one write" "$(cat "$LOG_FILE")" "$want_pf"
+run setup agent-reports --agents off --json
+assert_eq "agent-reports --agents off --json: one write" "$(last_request)" "POST $PF  {\"agents\": false}"
+case "$out" in '{"enabled":true,'*) ok "agent-reports --json: the daemon's answer" ;; *) bad "agent-reports --json: $out" ;; esac
+echo pf_people >"$MODE_FILE"
+run setup agent-reports --agents off
+assert_eq "agent-reports refused: exit 3" "$rc" "3"
+assert_eq "agent-reports refused: the line" "$err" '{"error": "settings_people_only", "hint": "Only a person signed in to this server changes these settings."}'
+echo pf_bad_part >"$MODE_FILE"
+run setup agent-reports --attach nope
+assert_eq "agent-reports bad part: exit 2" "$rc" "2"
+assert_eq "agent-reports bad part: the line" "$err" "{\"error\": \"bad_attach_part\", \"hint\": \"nope isn't a part agents may attach.\"}"
+echo ok >"$MODE_FILE"
 
 echo "== usage (no daemon call) =="
 : >"$LOG_FILE"

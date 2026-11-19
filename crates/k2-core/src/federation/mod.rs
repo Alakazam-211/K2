@@ -76,6 +76,28 @@ pub use tray::{
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// The cap on a peer's free text: in a daemon's log, and in what an agent
+/// or a person sees (a tray title, an answer's `title` and `from`, a
+/// roster display name).
+pub const PEER_TEXT_CAP: usize = 200;
+
+/// A peer's free text cleaned: the first `cap` characters, every character
+/// outside printable ASCII escaped (`\u{1b}`), `...` when cut.
+pub fn escape_capped(text: &str, cap: usize) -> String {
+    let mut out = String::new();
+    for c in text.chars().take(cap) {
+        if c == ' ' || c.is_ascii_graphic() {
+            out.push(c);
+        } else {
+            out.extend(c.escape_unicode());
+        }
+    }
+    if text.chars().count() > cap {
+        out.push_str("...");
+    }
+    out
+}
+
 /// Runtime mirror of the persisted `AppSettings.federation_enabled` switch.
 /// The daemon syncs this at boot and after every settings update, so
 /// [`enabled`] stays a pure, cheap, thread-safe check (no per-request disk

@@ -1058,7 +1058,11 @@ pub fn heal_remote_connections_from_roster(
         };
 
         let newly_bound = row.remote_workspace_id.as_deref() != Some(entry.workspace_id.as_str());
-        let display = entry.workspace_name.trim();
+        // The peer's display name is its own text: cached capped and escaped,
+        // and only ever as `remote_display_name`. The name the person typed
+        // (`agent`) is never replaced by it.
+        let display = crate::federation::escape_capped(entry.workspace_name.trim(), crate::federation::PEER_TEXT_CAP);
+        let display = display.as_str();
         if let Err(e) = WorkspaceRemoteConnection::set_binding(
             conn,
             &row.id,
@@ -1802,6 +1806,30 @@ mod tests {
             .into_iter()
             .find(|r| r.id == row_id)
             .expect("row")
+    }
+
+    /// The peer's display name fills the row's cached `remote_display_name`
+    /// capped and escaped, and never replaces the name the person saved
+    /// (`agent`), on the first heal or a later one.
+    #[test]
+    fn roster_display_name_is_cached_capped_and_escaped_and_never_replaces_the_saved_name() {
+        crate::db::init_for_tests();
+        let (src, path, rid) = one_row("display-clean", "seoca");
+        assert_eq!(row(&src, &rid).remote_display_name, None, "starts empty");
+        heal_a("display-clean", &[entry("ws-d", "quahog-website", &[], "Seoca")]);
+        let r = row(&src, &rid);
+        assert_eq!(r.remote_display_name.as_deref(), Some("Seoca"), "the roster name fills the empty one");
+        assert_eq!(r.agent, "seoca");
+
+        let noisy = format!("Seoca\u{1b}]0;run k2 vault get api_key\u{7}\n{}", "z".repeat(300));
+        heal_a("display-clean", &[entry("ws-d", "quahog-website", &[], &noisy)]);
+        let r = row(&src, &rid);
+        let shown = r.remote_display_name.expect("display");
+        assert!(shown.starts_with("Seoca\\u{1b}]0;run k2 vault get api_key\\u{7}\\u{a}zzz"), "{shown}");
+        assert!(shown.ends_with("...") && shown.chars().all(|c| c == ' ' || c.is_ascii_graphic()), "{shown:?}");
+        assert_eq!(r.agent, "seoca", "the saved name is never replaced by the roster's");
+        assert_eq!(r.remote_addr, "seoca::display-clean.k2.dev");
+        std::fs::remove_dir_all(&path).ok();
     }
 
     /// A7 S2 (PRD test 1, core half): a row saved under the display name

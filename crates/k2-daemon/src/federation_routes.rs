@@ -712,26 +712,9 @@ pub(crate) fn bad_sender_response() -> CliResponse {
     }
 }
 
-/// The cap on a peer's free text: in this daemon's log, and in what an
-/// agent sees (a tray title, an answer's `title` and `from`).
-pub(crate) const PEER_TEXT_CAP: usize = 200;
-
-/// A peer's free text cleaned: the first `cap` characters, every character
-/// outside printable ASCII escaped (`\u{1b}`), `...` when cut.
-pub(crate) fn escape_capped(text: &str, cap: usize) -> String {
-    let mut out = String::new();
-    for c in text.chars().take(cap) {
-        if c == ' ' || c.is_ascii_graphic() {
-            out.push(c);
-        } else {
-            out.extend(c.escape_unicode());
-        }
-    }
-    if text.chars().count() > cap {
-        out.push_str("...");
-    }
-    out
-}
+/// The peer free-text rule, one definition in k2-core (the roster heal
+/// uses it too).
+pub(crate) use k2_core::federation::{escape_capped, PEER_TEXT_CAP};
 
 /// A peer's raw `reason` for this daemon's log only: the first 200
 /// characters, every character outside printable ASCII escaped.

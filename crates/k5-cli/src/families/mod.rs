@@ -11,7 +11,8 @@
 //! - [`activity`]: `k5 activity`, the activity feed.
 //! - [`sessions`]: `k5 sessions` and its read forms (`--past`, `show`,
 //!   `main`).
-//! - [`connections`]: `k5 connections list`.
+//! - [`connections`]: `k5 connections list`, `add` and `remove`.
+//! - [`connect`]: `k5 connect status`, this device's K2 Connect pairing.
 //! - [`feedback`]: `k5 feedback list` and `k5 feedback show <id>` (also
 //!   `tickets`).
 //! - [`update`]: `k5 update`, `k5 update --cli [--check]` and
@@ -41,7 +42,9 @@
 //! # A request on the left of a pipe
 //!
 //! `inbox`, `read` and `activity` send `cli_send cli_request … | python3 -c …`
-//! (`activity`: `cli_request`, over TCP only, [`request_piped_tcp`]), under
+//! (`activity`: `cli_request`, over TCP only, [`request_piped_tcp`];
+//! `connections add` and `remove`: `cli_request_post`, over TCP only,
+//! [`request_post_piped_tcp`]), under
 //! `set -euo pipefail` ([`request_piped`]). The reader on the right reads
 //! what the call printed: the answer's bytes with the NULs dropped, and
 //! with its trailing newlines dropped too when the cell socket answered
@@ -61,6 +64,7 @@ use crate::transport::{Call, Channel, Client, Error, Response};
 use std::path::Path;
 
 pub mod activity;
+pub mod connect;
 pub mod connections;
 pub mod done;
 pub mod feedback;
@@ -189,6 +193,20 @@ pub fn request_piped_tcp(
     args: &[&str],
 ) -> Piped {
     let r = client.call(Channel::Tcp, endpoint, Call::Request(args));
+    piped(client, closing, r)
+}
+
+/// `cli_request_post <endpoint> <args>` on the left of a pipe: as
+/// [`request_piped_tcp`], a POST with an empty body. Sent once but for the
+/// tries the transport makes before anything went out (a connect refused
+/// or timed out) and a 503 `migrating` (no handler ran).
+pub fn request_post_piped_tcp(
+    client: &mut Client,
+    closing: &mut Closing,
+    endpoint: &str,
+    args: &[&str],
+) -> Piped {
+    let r = client.call(Channel::Tcp, endpoint, Call::RequestPost(args));
     piped(client, closing, r)
 }
 

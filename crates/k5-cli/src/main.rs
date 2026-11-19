@@ -148,6 +148,7 @@ fn main() {
         Route::Connections => {
             families::connections::run(&args).unwrap_or_else(|| shell(who, &args))
         }
+        Route::Connect => families::connect::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Feedback => families::feedback::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Update => families::update::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Setup => families::setup::run(&args).unwrap_or_else(|| shell(who, &args)),

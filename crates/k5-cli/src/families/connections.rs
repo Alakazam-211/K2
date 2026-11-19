@@ -114,8 +114,16 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, [String; 2]>> {
     Some(Ok(ask))
 }
 
-/// `k5 connections list ...`: `args` is the whole command line after
-/// `argv[0]`. `None`: the shell CLI answers it (see the module's notes).
+/// What the words ask for: `list`'s ask (or the lines that stop it), or
+/// a write verb and the words after it.
+enum Form<'a> {
+    List(Result<Ask, [String; 2]>),
+    Write(write::Verb, Vec<&'a str>),
+}
+
+/// `k5 connections list ...`, `add <name>` and `remove <name>`: `args` is
+/// the whole command line after `argv[0]`. `None`: the shell CLI answers
+/// it (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let hook_sock = super::hook_sock();
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
@@ -126,7 +134,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let ask = parse(&words)?;
+    let form = match words.first().and_then(|w| write::Verb::of(w)) {
+        Some(verb) => Form::Write(verb, words[1..].to_vec()),
+        None => Form::List(parse(&words)?),
+    };
     if !python::family_native(python::here()) {
         return None;
     }
@@ -142,12 +153,12 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     {
         return None;
     }
-    Some(run_with(args, ask, hook_sock.as_deref(), settings))
+    Some(run_with(args, form, hook_sock.as_deref(), settings))
 }
 
 fn run_with(
     args: &[OsString],
-    ask: Result<Ask, [String; 2]>,
+    form: Form<'_>,
     hook_sock: Option<&Path>,
     mut settings: Settings,
 ) -> Exit {
@@ -161,14 +172,18 @@ fn run_with(
     if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
         return stop;
     }
-    let ask = match ask {
-        Ok(a) => a,
-        Err(lines) => {
+    let (ask, write) = match form {
+        Form::List(Ok(a)) => (a, None),
+        Form::List(Err(lines)) => {
             for l in lines {
                 out::stderr_line(&l);
             }
             return Exit::Usage;
         }
+        Form::Write(verb, rest) => match write::target(verb, &rest) {
+            Ok(t) => (Ask::default(), Some((verb, t))),
+            Err(_) => return write::usage(verb),
+        },
     };
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);
@@ -179,6 +194,9 @@ fn run_with(
             return Exit::Error;
         }
     };
+    if let Some((verb, target)) = write {
+        return write::send(&mut client, verb, target);
+    }
     let mut closing = Closing::default();
     let passport = client.passport().is_some();
     let call: &[&str] = if ask.users {
@@ -602,6 +620,8 @@ fn text_lines(d: &Value, ask: Ask, o: &mut Out) -> Result<Exit, Raise> {
     }
     Ok(Exit::Ok)
 }
+
+pub mod write;
 
 #[cfg(test)]
 mod tests;

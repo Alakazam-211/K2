@@ -82,6 +82,17 @@ pub const APPS_SLICE: &str = "k2apps.slice";
 /// The cores' drop-in file name on each core unit (never the pg helper's
 /// `k2-ram.conf`, AR17). Never sets `KillMode` (AR48: stage H owns it).
 pub const CORES_DROPIN_FILE: &str = "k2-cores.conf";
+/// The daemon unit's restart guard for the agents' leaf (0.46.16): a drop-in
+/// of its own beside [`CORES_DROPIN_FILE`] (see [`daemon_subgroup_dropin`]).
+pub const DAEMON_SUBGROUP_DROPIN_FILE: &str = "k2-delegate-subgroup.conf";
+/// `DelegateSubgroup=` arrived in systemd 254 (Ubuntu 24.04 ships 255).
+pub const DELEGATE_SUBGROUP_MIN_SYSTEMD: u32 = 254;
+/// The leaf systemd starts the daemon in (`DelegateSubgroup=`), and the one
+/// `k2_core::agents_leaf` moves the daemon's own processes into.
+pub const DAEMON_LEAF: &str = "daemon";
+/// `$0` of the older-systemd fallback's `ExecStopPost=`: how the daemon
+/// (`systemctl show -p ExecStopPost`) and the helper's status recognise it.
+pub const CLEAR_MARK: &str = "k2-agents-leaf-clear";
 
 /// The `process` exception: one template system unit, an instance per App.
 pub const PROCESS_UNIT_FILE: &str = "k2app-process@.service";
@@ -693,7 +704,8 @@ pub enum Core {
 pub fn cores_dropin(core: Core) -> &'static str {
     match core {
         // AR18: Delegate=yes lets the daemon move agents into its own
-        // `agents/` leaf later (S17); harmless until it does.
+        // `agents/` leaf (S17). Never alone: `daemon_subgroup_dropin` is
+        // what lets the unit start again once the daemon has split it.
         Core::Daemon => {
             "# K2 cores slice (k2-root-helper `apps cores-slice`).\n\
              [Service]\n\
@@ -717,6 +729,45 @@ pub fn cores_dropin(core: Core) -> &'static str {
              CPUWeight=200\n\
              IOWeight=200\n"
         }
+    }
+}
+
+/// `<daemon unit>.d/k2-delegate-subgroup.conf`: the restart guard of the
+/// agents' leaf (0.46.16; written by `apps cores-slice` with
+/// [`cores_dropin`]). With `Delegate=yes` the daemon splits its unit's
+/// cgroup into `daemon/` + `agents/` and turns controllers on in the unit's
+/// own `cgroup.subtree_control`. Under `KillMode=process` the unit's
+/// processes outlive a stop, so the cgroup (and its controllers) stays;
+/// systemd's next start must put the main process in the unit's own cgroup,
+/// which the kernel refuses (no internal processes): `status=219/CGROUP`.
+///
+/// systemd 254+ (`systemd`: the major of `systemctl --version`): start the
+/// main process in the `daemon/` leaf instead (`DelegateSubgroup=`; the
+/// exact shape verified by hand on a 255 box). Older or unknown: an
+/// `ExecStopPost=+` (root) turns the unit cgroup's controllers off after
+/// every stop, a failed start included, so the next start can place the
+/// main process in it; the daemon turns them back on once it has moved
+/// itself into `daemon/`. Not `ExecStartPre=`: before 254 systemd runs that
+/// in the unit's own cgroup (only control processes started after the main
+/// one go to the `.control` subgroup), where the kernel refuses it too.
+pub fn daemon_subgroup_dropin(systemd: Option<u32>) -> String {
+    if systemd.is_some_and(|v| v >= DELEGATE_SUBGROUP_MIN_SYSTEMD) {
+        format!(
+            "# Agents leaf restart guard (k2-root-helper `apps cores-slice`).\n\
+             [Service]\n\
+             DelegateSubgroup={DAEMON_LEAF}\n"
+        )
+    } else {
+        // `$$` and `%%` are systemd's escapes for a literal `$` and `%`.
+        format!(
+            "# Agents leaf restart guard (k2-root-helper `apps cores-slice`).\n\
+             # systemd before 254 has no delegated subgroup start: after each stop, turn\n\
+             # the unit cgroup's controllers off so the next start can use it.\n\
+             [Service]\n\
+             ExecStopPost=+-/bin/sh -c 'f=/sys/fs/cgroup$$(sed -n \"s|^0::||p\" /proc/self/cgroup); \
+             f=$${{f%%/.control}}/cgroup.subtree_control; \
+             for c in $$(cat \"$$f\" 2>/dev/null); do echo \"-$$c\" > \"$$f\"; done; exit 0' {CLEAR_MARK}\n"
+        )
     }
 }
 
@@ -1552,6 +1603,30 @@ mod tests {
         assert_eq!(bounded("512", BUDGET_MEM_MIB), Some(512));
         for bad in ["", "0", "255", "0512", "-1", "1e3", "512M", "99999999999"] {
             assert!(bounded(bad, BUDGET_MEM_MIB).is_none(), "{bad:?}");
+        }
+    }
+
+    /// 0.46.16: the daemon's restart guard per systemd version: the exact
+    /// bytes verified by hand on a 255 box, and the older fallback.
+    #[test]
+    fn daemon_subgroup_dropin_per_systemd_version() {
+        let new = "# Agents leaf restart guard (k2-root-helper `apps cores-slice`).\n[Service]\nDelegateSubgroup=daemon\n";
+        for v in [254, 255, 257] {
+            assert_eq!(daemon_subgroup_dropin(Some(v)), new, "systemd {v}");
+        }
+        let old = "# Agents leaf restart guard (k2-root-helper `apps cores-slice`).\n\
+                   # systemd before 254 has no delegated subgroup start: after each stop, turn\n\
+                   # the unit cgroup's controllers off so the next start can use it.\n\
+                   [Service]\n\
+                   ExecStopPost=+-/bin/sh -c 'f=/sys/fs/cgroup$$(sed -n \"s|^0::||p\" /proc/self/cgroup); f=$${f%%/.control}/cgroup.subtree_control; for c in $$(cat \"$$f\" 2>/dev/null); do echo \"-$$c\" > \"$$f\"; done; exit 0' k2-agents-leaf-clear\n";
+        for v in [None, Some(245), Some(249), Some(253)] {
+            let d = daemon_subgroup_dropin(v);
+            assert_eq!(d, old, "systemd {v:?}");
+            assert!(!d.contains("DelegateSubgroup="), "an unknown key on systemd {v:?}");
+        }
+        for v in [None, Some(249), Some(255)] {
+            let d = daemon_subgroup_dropin(v);
+            assert!(d.starts_with('#') && d.contains("\n[Service]\n") && !d.contains("KillMode") && !d.contains("Slice="), "{d}");
         }
     }
 

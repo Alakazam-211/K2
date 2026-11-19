@@ -1342,6 +1342,69 @@ fn cores_slice_writes_dashless_slice_and_dropins_without_killmode() {
     );
 }
 
+const GUARD: &str = "/etc/systemd/system/k2-daemon.service.d/k2-delegate-subgroup.conf";
+
+/// 0.46.16: Delegate=yes never goes out without the restart guard, in the
+/// shape this box's systemd understands; a re-run upgrades a box prepared
+/// before the guard (the repair path), `off` takes it away, and `apps
+/// status` says per daemon unit whether it is current.
+#[test]
+fn cores_slice_writes_the_daemons_restart_guard_per_systemd_version() {
+    // systemd 255 (Ubuntu 24.04): DelegateSubgroup=daemon.
+    let t = box_root();
+    with_app_user(&t);
+    write(&t, "/proc/meminfo", "MemTotal:        8000000 kB\n");
+    rule(&t, SYSTEMCTL, "--version", 0, "systemd 255 (255.4-1ubuntu8.4)\n+PAM +AUDIT\n");
+    let v = json(&t.call(&["apps", "cores-slice", "768"]));
+    assert_eq!(read(&t, GUARD), daemon_subgroup_dropin(Some(255)));
+    assert!(read(&t, GUARD).contains("\nDelegateSubgroup=daemon\n"));
+    assert!(read(&t, "/etc/systemd/system/k2-daemon.service.d/k2-cores.conf").contains("\nDelegate=yes\n"));
+    assert_eq!(v["daemonGuard"], "DelegateSubgroup");
+    assert_eq!(v["systemd"], 255);
+    assert!(v["sliceMovesAfter"].as_str().unwrap().contains("reboot"));
+    assert!(!t.p("/etc/systemd/system/postgresql@.service.d/k2-delegate-subgroup.conf").exists());
+    let st = json(&t.call(&["apps", "status"]));
+    assert_eq!(st["coresSlice"]["daemonGuard"]["k2-daemon.service"], "ok", "{st}");
+
+    // A box prepared before the guard: status says missing; the re-run
+    // adds it (changed, one reload) and leaves the rest as it was.
+    std::fs::remove_file(t.p(GUARD)).unwrap();
+    let st = json(&t.call(&["apps", "status"]));
+    assert_eq!(st["coresSlice"]["daemonGuard"]["k2-daemon.service"], "missing");
+    let before = reloads(&t);
+    let v = json(&t.call(&["apps", "cores-slice", "768"]));
+    assert_eq!(v["changed"], true);
+    assert_eq!(reloads(&t), before + 1);
+    assert_eq!(read(&t, GUARD), daemon_subgroup_dropin(Some(255)));
+    let v = json(&t.call(&["apps", "cores-slice", "768"]));
+    assert_eq!(v["changed"], false, "idempotent");
+
+    ok(&t.call(&["apps", "cores-slice", "off"]));
+    assert!(!t.p(GUARD).exists(), "off takes the guard with Delegate=yes");
+
+    // systemd 249 (Ubuntu 22.04) and an unreadable version: the fallback.
+    for ver in [Some("systemd 249 (249.11-0ubuntu3.12)\n"), None] {
+        let t = box_root();
+        with_app_user(&t);
+        write(&t, "/proc/meminfo", "MemTotal:        8000000 kB\n");
+        if let Some(out) = ver {
+            rule(&t, SYSTEMCTL, "--version", 0, out);
+        }
+        let v = json(&t.call(&["apps", "cores-slice", "768"]));
+        let g = read(&t, GUARD);
+        assert_eq!(g, daemon_subgroup_dropin(None), "{ver:?}");
+        assert!(g.contains("ExecStopPost=+-/bin/sh -c ") && g.contains(CLEAR_MARK) && !g.contains("DelegateSubgroup"));
+        assert_eq!(v["daemonGuard"], "ExecStopPost");
+        // A systemd upgrade past 254, then a re-run: the guard upgrades.
+        t.exec.0.borrow_mut().rules.clear();
+        rule(&t, SYSTEMCTL, "--version", 0, "systemd 255 (255.4-1ubuntu8.4)\n");
+        let st = json(&t.call(&["apps", "status"]));
+        assert_eq!(st["coresSlice"]["daemonGuard"]["k2-daemon.service"], "drift");
+        assert_eq!(json(&t.call(&["apps", "cores-slice", "768"]))["changed"], true);
+        assert_eq!(read(&t, GUARD), daemon_subgroup_dropin(Some(255)));
+    }
+}
+
 #[test]
 fn budget_is_bounded_by_the_box() {
     let t = box_root();

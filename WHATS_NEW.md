@@ -27,6 +27,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Mail lands in the agent's terminal by default**, waking it, under K2's own `[postal <address> · p_…]` line with every line of theirs quoted. Long messages, files, or mail while the agent is busy go to its inbox with a pointer. `k2 postal route` sends one friend's mail to the inbox or to a person's Thread instead; an agent can only make its own routing quieter. Mail sent while your server was off waits on the Postal network for up to 7 days and arrives when it is back, once each.
 - **What isn't here yet.** Mail reaches your server through the Postal network's hold (within about a minute); live delivery straight to your server comes with a later Postal network update. Taking over p5's handles (`k2 postal adopt`) isn't available yet; p5 still delivers through `k2 postal link-p5`.
 
+### Servers
+- **The daemon restarts cleanly after box prep's cores floor.** On a server prepared with `k2 app box prepare --cores-mem-min`, the second restart of the daemon could fail over and over with `status=219/CGROUP`. Box prep now adds `k2-delegate-subgroup.conf` to the daemon's unit (`DelegateSubgroup=daemon` on systemd 254 and newer, a cleanup step after each stop on older systemd), and the daemon never splits its unit without it. Run `k2 app box prepare --cores-mem-min <MiB>` again on a server prepared before this release; K2 also adds it by itself at the next boot.
+- **Agent sessions sit in their own memory budget.** Sessions that survived a restart, and anything they started, now move into the agents' cgroup too, not only new ones.
+- **`k2 app box doctor` says more.** The `agentsLeaf` row fails when the next restart would crash-loop, and warns when agent sessions run outside their budget. A new `daemonSlice` row warns when the daemon still runs in its old slice: a slice change only takes effect after a full stop and start (or a reboot), not a restart, and `k2 app box prepare` now says so.
+
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home

@@ -240,7 +240,7 @@ fn disk_sha(d: &Dir, cred: &str) -> HResult<Option<String>> {
     }
 }
 
-fn systemd_version(ctx: &Ctx) -> Option<u32> {
+pub(crate) fn systemd_version(ctx: &Ctx) -> Option<u32> {
     let out = ctx.exec.run(SYSTEMCTL, &["--version".to_string()], None).ok()?;
     if out.status != 0 {
         return None;

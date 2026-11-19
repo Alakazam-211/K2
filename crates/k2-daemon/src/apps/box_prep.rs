@@ -508,21 +508,10 @@ pub fn doctor(f: &Facts) -> J {
             )
         });
         // S17 / AR18: the agents' own memory budget inside the daemon's unit.
-        out.push(match &f.agents_leaf {
-            Some(v) if v["on"] == true => c(
-                "agentsLeaf",
-                "ok",
-                format!("agent sessions in {} (memory.high {})", v["leaf"].as_str().unwrap_or("?"), v["memoryHigh"].as_str().unwrap_or("?")),
-                None,
-            ),
-            Some(v) => c(
-                "agentsLeaf",
-                "warn",
-                format!("agent sessions share the daemon's memory: {}", v["why"].as_str().unwrap_or("?")),
-                Some("k2 app box prepare --cores-mem-min <MiB> (owner), then restart the daemon"),
-            ),
-            None => c("agentsLeaf", "unknown", "", None),
-        });
+        out.push(agents_leaf_check(f.agents_leaf.as_ref()));
+        if let Some(ch) = daemon_slice_check(f.agents_leaf.as_ref()) {
+            out.push(ch);
+        }
         out.push(match (hs("/enginePresent").as_bool() == Some(true), &f.engine) {
             (true, Some(Ok(v)))
                 if v["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
@@ -624,6 +613,85 @@ pub fn doctor(f: &Facts) -> J {
     }
 
     finish(out, f, active, configured)
+}
+
+const GUARD_FIX: &str = "k2 app box prepare --cores-mem-min <MiB> (owner): it adds the restart guard (k2-delegate-subgroup.conf)";
+
+/// S17 / AR18 + 0.46.16: the agents' leaf (`k2_core::agents_leaf::
+/// doctor_json`). Never part of readiness. Not ok when a restart of the
+/// daemon would fail (controllers on in the unit cgroup, no restart guard:
+/// 219/CGROUP), or when agent sessions run outside `agents/`.
+fn agents_leaf_check(v: Option<&J>) -> Check {
+    let Some(v) = v else { return c("agentsLeaf", "unknown", "", None) };
+    let live = &v["live"];
+    let n = |k: &str| live[k].as_u64().unwrap_or(0);
+    if live["armed"] == true {
+        return c(
+            "agentsLeaf",
+            "fail",
+            format!(
+                "the daemon's unit cgroup hands controllers down ({}) with no restart guard: its next start fails with status=219/CGROUP \
+                 ({} process(es) outlive a stop under KillMode=process)",
+                live["controllersOn"].as_array().map(|a| a.iter().filter_map(J::as_str).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+                n("daemonProcs") + n("agentProcs")
+            ),
+            Some(GUARD_FIX),
+        );
+    }
+    if v["on"] != true {
+        return c(
+            "agentsLeaf",
+            "warn",
+            format!("agent sessions share the daemon's memory: {}", v["why"].as_str().unwrap_or("?")),
+            Some("k2 app box prepare --cores-mem-min <MiB> (owner), then restart the daemon"),
+        );
+    }
+    let leaf = v["leaf"].as_str().unwrap_or("?");
+    if live.is_object() && n("misplaced") > 0 {
+        let none = n("sessions") > 0 && n("sessionsInLeaf") == 0;
+        return c(
+            "agentsLeaf",
+            "warn",
+            format!(
+                "{}: {} agent process(es) still in daemon/ ({} of {} sessions in {leaf}), outside the agents' memory budget",
+                if none { "agents/ holds none of the agent sessions" } else { "some agent processes run outside agents/" },
+                n("misplaced"),
+                n("sessionsInLeaf"),
+                n("sessions"),
+            ),
+            Some("restart the daemon; if it stays, send the daemon log ([agents] lines) with k2 send-feedback"),
+        );
+    }
+    let sessions = if live.is_object() { format!(", {} of {} sessions", n("sessionsInLeaf"), n("sessions")) } else { String::new() };
+    c(
+        "agentsLeaf",
+        "ok",
+        format!("agent sessions in {leaf} (memory.high {}{sessions}; restart guard {})", v["memoryHigh"].as_str().unwrap_or("?"), v["guard"].as_str().unwrap_or("?")),
+        None,
+    )
+}
+
+/// 0.46.16: `Slice=` moves a unit only when systemd makes its cgroup
+/// afresh (a stop and start with none of its processes left, or a reboot);
+/// a restart keeps the old slice, so the cores' `MemoryMin` floor doesn't
+/// cover the daemon yet. Only when the unit's slice and the running one
+/// are both known.
+fn daemon_slice_check(v: Option<&J>) -> Option<Check> {
+    let v = v?;
+    let (want, run) = (v["unitSlice"].as_str()?, v["runningSlice"].as_str()?);
+    Some(if want == run {
+        c("daemonSlice", "ok", format!("the daemon runs in {run}"), None)
+    } else {
+        c(
+            "daemonSlice",
+            "warn",
+            format!(
+                "the daemon runs in {run}, its unit says {want}: the new slice (and its MemoryMin floor) applies only after a stop and start \
+                 of the unit with none of its processes left, or a reboot (a restart keeps the old slice)"
+            ),
+            Some("reboot the box when convenient (or stop the daemon, its k2-ptyd and agent sessions, then start it)"),
+        )
+    })
 }
 
 /// 0.46.3: the unwalled process engine is its own owner opt-in (never
@@ -772,7 +840,7 @@ pub fn gather() -> Facts {
         return f;
     }
     apply_helper_status(&mut f, &st, |argv| root_helper::call_text(argv, None));
-    f.agents_leaf = Some(k2_core::agents_leaf::status_json());
+    f.agents_leaf = Some(k2_core::agents_leaf::doctor_json());
     f.kernel = read_trim("/proc/sys/kernel/osrelease");
     f.cgroup2 = read_trim("/sys/fs/cgroup/cgroup.controllers");
     f.systemd = k2_core::bg_proc::command("/usr/bin/systemctl")
@@ -1114,6 +1182,9 @@ pub(crate) fn prepare_core(opts: &PrepareOpts, pod: &super::podman_install::Podm
                 (None, pi::Decision::Keep { version, source }) => json!({"action": "keep", "have": version, "source": source}),
                 (None, _) => json!({"action": "distro"}),
             };
+            if let Some(n) = prepare_notes(&opts, &doc) {
+                v["notes"] = n;
+            }
             v["box"] = doc;
             Ok(v)
         }
@@ -1130,6 +1201,20 @@ pub(crate) fn prepare_core(opts: &PrepareOpts, pod: &super::podman_install::Podm
             Err(r)
         }
     }
+}
+
+/// 0.46.16: what the owner still has to do after a prepare with a cores
+/// floor: restart the daemon (Delegate= and its restart guard apply at the
+/// next start), and, while its slice still differs, a stop and start or a
+/// reboot (`daemonSlice`).
+pub fn prepare_notes(opts: &PrepareOpts, doc: &J) -> Option<J> {
+    opts.cores_mem_min_mib?;
+    let mut notes = vec![json!("Restart the daemon so Delegate=yes and its restart guard (k2-delegate-subgroup.conf) apply")];
+    let slice = doc["checks"].as_array().and_then(|a| a.iter().find(|c| c["id"] == "daemonSlice"));
+    if let Some(ch) = slice.filter(|c| c["status"] != "ok") {
+        notes.push(ch["detail"].clone());
+    }
+    Some(J::Array(notes))
 }
 
 /// After every boot: the nft table and io.cost don't survive a reboot, and
@@ -1198,6 +1283,19 @@ pub fn reapply_plan(status: Option<&J>) -> Vec<Vec<String>> {
         && s.pointer("/mac/applied").and_then(J::as_bool) != Some(true)
     {
         p.push(sv(&["apps", "apparmor", "on"]));
+    }
+    // 0.46.16: a box prepared before the daemon's restart guard (or whose
+    // systemd moved past 254) gets it from the same floor: until then this
+    // daemon keeps its unit whole (agents_leaf), so the next restart arms
+    // the agents' leaf safely. Only a helper that reports the guard.
+    if let Some(guards) = s.pointer("/coresSlice/daemonGuard").and_then(J::as_object) {
+        let floor = s
+            .pointer("/coresSlice/memoryMin")
+            .and_then(J::as_str)
+            .and_then(|m| m.trim_end_matches('M').parse::<u64>().ok());
+        if let Some(n) = floor.filter(|_| guards.values().any(|g| g != "ok")) {
+            p.push(sv(&["apps", "cores-slice", &n.to_string()]));
+        }
     }
     p
 }
@@ -1283,6 +1381,65 @@ mod tests {
         assert_eq!(status_of(&d, "agentsLeaf"), "warn");
         assert_eq!(d["ready"], true, "a soft finding: {d:#}");
         assert!(d.to_string().contains("--cores-mem-min"), "{d}");
+    }
+
+    /// 0.46.16: the doctor says not ok when a restart would crash-loop
+    /// (armed, no guard), when agents/ holds none of the live sessions, and
+    /// when the daemon's slice hasn't moved yet; none of it gates the box.
+    #[test]
+    fn the_agents_leaf_reports_an_armed_unit_an_empty_leaf_and_a_stale_slice() {
+        let leaf = "/sys/fs/cgroup/k2cores.slice/k2-daemon.service/agents";
+        let mut f = good();
+        // The live bug: split by 0.46.14, no guard, 12 sessions in daemon/.
+        f.agents_leaf = Some(json!({"on": false, "why": k2_core::agents_leaf::UNGUARDED, "guard": "none",
+            "live": {"unitProcs": 0, "daemonProcs": 15, "agentProcs": 0, "sessions": 12, "sessionsInLeaf": 0, "misplaced": 12,
+                     "controllersOn": ["cpu", "memory", "pids"], "armed": true}}));
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "agentsLeaf"), "fail", "{d}");
+        assert!(d.to_string().contains("219/CGROUP") && d.to_string().contains("k2-delegate-subgroup.conf"), "{d}");
+        assert_eq!(d["ready"], true, "reported, not gated: {d:#}");
+
+        // On, but the sessions sit in daemon/ (the sweep couldn't move them).
+        f.agents_leaf = Some(json!({"on": true, "leaf": leaf, "memoryHigh": "max", "guard": "DelegateSubgroup",
+            "live": {"unitProcs": 0, "daemonProcs": 15, "agentProcs": 0, "sessions": 12, "sessionsInLeaf": 0, "misplaced": 12,
+                     "controllersOn": ["cpu", "memory", "pids"], "armed": false}}));
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "agentsLeaf"), "warn", "{d}");
+        assert!(d.to_string().contains("agents/ holds none of the agent sessions"), "{d}");
+
+        // Healthy: every session in agents/.
+        f.agents_leaf = Some(json!({"on": true, "leaf": leaf, "memoryHigh": "max", "guard": "DelegateSubgroup",
+            "unitSlice": "k2cores.slice", "runningSlice": "k2cores.slice",
+            "live": {"unitProcs": 0, "daemonProcs": 3, "agentProcs": 30, "sessions": 12, "sessionsInLeaf": 12, "misplaced": 0,
+                     "controllersOn": ["cpu", "memory", "pids"], "armed": false}}));
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "agentsLeaf"), "ok", "{d}");
+        assert!(d.to_string().contains("12 of 12 sessions"), "{d}");
+        assert_eq!(status_of(&d, "daemonSlice"), "ok");
+
+        // Slice= changed, the daemon restarted, still in system.slice.
+        f.agents_leaf.as_mut().unwrap()["runningSlice"] = json!("system.slice");
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "daemonSlice"), "warn", "{d}");
+        assert!(d.to_string().contains("a restart keeps the old slice"), "{d}");
+        assert_eq!(d["ready"], true);
+        let o = PrepareOpts { runtime: OciRuntime::Crun, cores_mem_min_mib: Some(768), budget: None };
+        let n = prepare_notes(&o, &d).unwrap();
+        assert_eq!(n.as_array().unwrap().len(), 2, "{n}");
+        assert!(n[1].as_str().unwrap().contains("stop and start"), "{n}");
+        assert_eq!(prepare_notes(&PrepareOpts { cores_mem_min_mib: None, ..o }, &d), None, "no cores floor, nothing to say");
+    }
+
+    /// The daemon and the root helper agree on the guard's names.
+    #[test]
+    fn the_restart_guard_names_match_the_helper() {
+        assert_eq!(k2_core::agents_leaf::CLEAR_MARK, k2_root_proto::apps::CLEAR_MARK);
+        assert_eq!(k2_core::agents_leaf::GUARD_DROPIN, k2_root_proto::apps::DAEMON_SUBGROUP_DROPIN_FILE);
+        assert_eq!(k2_core::agents_leaf::DAEMON_LEAF, k2_root_proto::apps::DAEMON_LEAF);
+        for v in [None, Some(249), Some(255)] {
+            let g = k2_core::agents_leaf::guard_from_dropin(&k2_root_proto::apps::daemon_subgroup_dropin(v));
+            assert_ne!(g, k2_core::agents_leaf::Guard::None, "{v:?}");
+        }
     }
 
     #[test]
@@ -1694,6 +1851,26 @@ mod tests {
             };
             assert_eq!(k2_root_proto::Verb::parse(&r).unwrap().class(), want, "{argv:?}");
         }
+    }
+
+    /// 0.46.16, the repair path: a box prepared before the restart guard
+    /// gets it at the next boot, from its own floor.
+    #[test]
+    fn boot_reapply_adds_the_daemons_restart_guard() {
+        let mut s = good_status();
+        s["coresSlice"] = json!({"present": true, "memoryMin": "768M", "daemonUnits": ["k2-daemon.service"],
+                                 "daemonGuard": {"k2-daemon.service": "missing"}});
+        let p: Vec<String> = reapply_plan(Some(&s)).iter().map(|a| a.join(" ")).collect();
+        assert_eq!(p, vec!["apps cores-slice 768"]);
+        s["coresSlice"]["daemonGuard"]["k2-daemon.service"] = json!("drift");
+        assert_eq!(reapply_plan(Some(&s)).len(), 1);
+        s["coresSlice"]["daemonGuard"]["k2-daemon.service"] = json!("ok");
+        assert!(reapply_plan(Some(&s)).is_empty());
+        // An older helper (no daemonGuard) or no floor: nothing.
+        s["coresSlice"]["daemonGuard"] = J::Null;
+        assert!(reapply_plan(Some(&s)).is_empty());
+        s["coresSlice"] = json!({"present": false, "daemonGuard": {}});
+        assert!(reapply_plan(Some(&s)).is_empty());
     }
 
     #[test]

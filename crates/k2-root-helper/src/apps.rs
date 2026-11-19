@@ -1961,6 +1961,12 @@ pub fn cores_slice(ctx: &Ctx, who: &Caller, mem_min: Option<u64>) -> HResult<J> 
         .dir(SYSTEMD_SYSTEM_DIR)
         .map_err(|e| Fail::io_err("open /etc/systemd/system", e))?;
     let mut changed = false;
+    // Asked only when there is a daemon unit to guard.
+    let sysd_version = if mem_min.is_some() && units.iter().any(|(_, c)| *c == Core::Daemon) {
+        crate::creds::systemd_version(ctx)
+    } else {
+        None
+    };
     match mem_min {
         Some(n) => {
             let total =
@@ -1971,17 +1977,27 @@ pub fn cores_slice(ctx: &Ctx, who: &Caller, mem_min: Option<u64>) -> HResult<J> 
             changed |= put(ctx, &sysd, CORES_SLICE, cores_slice_unit(n).as_bytes())?;
             for (u, core) in &units {
                 let d = ensure_subdir(ctx, SYSTEMD_SYSTEM_DIR, &format!("{u}.d"))?;
+                // 0.46.16: the daemon's restart guard goes with Delegate=yes,
+                // and a re-run upgrades a box prepared before it (or after
+                // a systemd upgrade past 254).
+                if *core == Core::Daemon {
+                    let g = daemon_subgroup_dropin(sysd_version);
+                    changed |= put(ctx, &d, DAEMON_SUBGROUP_DROPIN_FILE, g.as_bytes())?;
+                }
                 changed |= put(ctx, &d, CORES_DROPIN_FILE, cores_dropin(*core).as_bytes())?;
             }
         }
         None => {
-            for (u, _) in &units {
+            for (u, core) in &units {
                 changed |= unput(
                     ctx,
                     SYSTEMD_SYSTEM_DIR,
                     Some(&format!("{u}.d")),
                     CORES_DROPIN_FILE,
                 )?;
+                if *core == Core::Daemon {
+                    changed |= unput(ctx, SYSTEMD_SYSTEM_DIR, Some(&format!("{u}.d")), DAEMON_SUBGROUP_DROPIN_FILE)?;
+                }
             }
             changed |= unput(ctx, SYSTEMD_SYSTEM_DIR, None, CORES_SLICE)?;
         }
@@ -1995,8 +2011,17 @@ pub fn cores_slice(ctx: &Ctx, who: &Caller, mem_min: Option<u64>) -> HResult<J> 
         "memoryMinMib": mem_min,
         "units": names,
         "changed": changed,
-        // Slice= moves a unit at its next restart; K2 restarts nothing here.
+        // K2 restarts nothing here. The restart guard and Delegate= apply
+        // at the unit's next start (a restart is one); Slice= only moves a
+        // unit whose cgroup systemd makes afresh: a stop and a start with
+        // no process left behind (KillMode=process keeps ptyd and agent
+        // sessions), or a reboot.
         "pendingRestart": if changed { names.clone() } else { Vec::new() },
+        "sliceMovesAfter": "a stop and start of the unit with none of its processes left, or a reboot (a restart keeps the old slice)",
+        "daemonGuard": (mem_min.is_some() && units.iter().any(|(_, c)| *c == Core::Daemon)).then(|| {
+            if sysd_version.is_some_and(|v| v >= DELEGATE_SUBGROUP_MIN_SYSTEMD) { "DelegateSubgroup" } else { "ExecStopPost" }
+        }),
+        "systemd": sysd_version,
     }))
 }
 
@@ -2199,6 +2224,21 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
         .find_map(|l| l.strip_prefix("MemoryMin="))
         .map(str::to_string);
     let daemons = caller::load_daemons(ctx).unwrap_or_default();
+    // 0.46.16: each system daemon unit's restart guard, against the bytes
+    // this systemd wants ("missing" on a box prepared before the guard).
+    let guards: serde_json::Map<String, J> = if cores.is_empty() || !daemons.iter().any(|d| d.scope == "system") {
+        serde_json::Map::new()
+    } else {
+        let sysd_version = crate::creds::systemd_version(ctx);
+        daemons
+            .iter()
+            .filter(|d| d.scope == "system")
+            .map(|d| {
+                let f = format!("{SYSTEMD_SYSTEM_DIR}/{}.d/{DAEMON_SUBGROUP_DROPIN_FILE}", d.unit);
+                (d.unit.clone(), json!(file_state(ctx, &f, daemon_subgroup_dropin(sysd_version).as_bytes())))
+            })
+            .collect()
+    };
     Ok(json!({
         "user": user,
         "subid": subid,
@@ -2213,7 +2253,8 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
         "processUser": process_user_json(ctx),
         "mac": mac_json(ctx),
         "coresSlice": {"present": !cores.is_empty(), "memoryMin": cores_min,
-                       "daemonUnits": daemons.iter().filter(|d| d.scope == "system").map(|d| d.unit.clone()).collect::<Vec<_>>()},
+                       "daemonUnits": daemons.iter().filter(|d| d.scope == "system").map(|d| d.unit.clone()).collect::<Vec<_>>(),
+                       "daemonGuard": guards},
         "engine": engine_json(ctx),
         "podmanBundle": crate::podman::status_json(ctx),
         "enginePresent": exists(ctx, ENGINE_PATH),

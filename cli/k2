@@ -10874,7 +10874,8 @@ for s in e.get("steps", []):
             if [ "$json_out" != 1 ]; then
                 printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
-for s in json.load(sys.stdin).get("steps", []):
+v = json.load(sys.stdin)
+for s in v.get("steps", []):
     r = s.get("result")
     ch = r.get("changed") if isinstance(r, dict) else None
     print("  ok   %s%s" % (s.get("verb", ""), "" if ch is None else ("  (changed)" if ch else "  (already)")))
@@ -10884,6 +10885,8 @@ for s in json.load(sys.stdin).get("steps", []):
             print("       AppArmor: installed the distro package %s (apparmor_parser %s) for the k2-app profile" % (" ".join(aa["installed"]), aa.get("parser")))
         elif aa.get("note"):
             print("       AppArmor: %s" % aa["note"])
+for n in v.get("notes") or []:
+    print("Note: %s" % n)
 '
                 printf '%s' "$_CP_BODY" | _app_box_print
             fi

@@ -620,10 +620,10 @@ pub(crate) fn workspace_not_found_response(q: &str) -> CliResponse {
                 .filter(|s| !s.trim().eq_ignore_ascii_case(token));
             let hint = match suggestion {
                 Some(s) => format!(
-                    "no agent/workspace named '{q}' — did you mean '{s}'? Run `k2 workspace list` for registered names, or pass a full path."
+                    "no agent/workspace named '{q}' — did you mean '{s}'? Run `k2 connections list` for the names you can reach (a person: `k2 workspace list`), or pass a full path."
                 ),
                 None => format!(
-                    "no agent/workspace named '{q}'. Run `k2 workspace list` for registered names, or pass a full path."
+                    "no agent/workspace named '{q}'. Run `k2 connections list` for the names you can reach (a person: `k2 workspace list`), or pass a full path."
                 ),
             };
             ("404 Not Found", "not_found", hint)

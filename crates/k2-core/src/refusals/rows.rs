@@ -140,7 +140,7 @@ pub(super) const ROWS: &[Refusal] = &[
     r("too_many_test_guests", "access", 409, Who::Agent, "The App already has as many test guests as it may.",
         concat!("Remove one first. List them: ", cli_name!(), " app test-guests <app-id>")),
     r("workspace_not_found", "access", 404, Who::Agent, "No workspace by that name or id on this server.",
-        concat!("Check the name: ", cli_name!(), " workspace list")),
+        concat!("Check the name against the workspaces you reach: ", cli_name!(), " connections list")),
     r("wrong_credential", "access", 403, Who::Agent, "App passes, API keys and API sessions can't manage Apps or exec into them.",
         concat!("Run ", cli_name!(), " app from the workspace's own agent terminal, or as the owner.")),
     // ── approvals ──

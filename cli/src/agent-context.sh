@@ -1150,7 +1150,7 @@ HOOKS (Claude Code / Cursor / Gemini integration state)
   hooks emit <event> [--json '<obj>']           A custom program reports its lifecycle
                                                 (session passport only; k2 study hooks)
 
-For "what's running" use `workspace list --running` (daily tier).
+For what's running and who you can reach use `connections list` (daily tier).
 For workspace-scoped ops use the `workspace` verb (daily tier).
 EOF
 }

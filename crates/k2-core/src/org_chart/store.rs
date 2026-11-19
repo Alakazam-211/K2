@@ -182,7 +182,7 @@ fn require_agent(conn: &Connection, project_id: &str) -> Result<()> {
     if agent_exists(conn, project_id)? {
         Ok(())
     } else {
-        Err(OrgError::not_found("agent", project_id, "k2 workspace list shows the agents on this server."))
+        Err(OrgError::not_found("agent", project_id, "k2 organization list shows the agents on this server."))
     }
 }
 

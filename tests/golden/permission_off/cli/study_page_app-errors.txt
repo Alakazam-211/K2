@@ -165,7 +165,8 @@ ACCESS (who may do what: switches, owners, workspaces)
   too_many_test_guests (exit 3)
       fix: Remove one first. List them: k2 app test-guests <app-id>
   workspace_not_found (exit 3)
-      fix: Check the name: k2 workspace list
+      fix: Check the name against the workspaces you reach: k2 connections
+      list
   wrong_credential (exit 3)
       fix: Run k2 app from the workspace's own agent terminal, or as the
       owner.

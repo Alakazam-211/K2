@@ -168,7 +168,7 @@ fn need<'a>(m: &'a Map<String, Value>, k: &str, what: &str) -> Result<&'a str, C
 pub(crate) fn resolve_agent(token: &str) -> Result<String, CliResponse> {
     let t = token.trim().strip_prefix("agent:").unwrap_or(token.trim());
     let not_found = || {
-        fail(&OrgError::not_found("agent", t, "k2 organization list (or k2 workspace list) shows the agents on this server."))
+        fail(&OrgError::not_found("agent", t, "k2 organization list shows the agents on this server."))
     };
     if t.is_empty() {
         return Err(usage("name the agent"));

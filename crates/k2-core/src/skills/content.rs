@@ -1267,7 +1267,7 @@ pub fn compose_agent_wake_context(
                     name, their_role, their_profile.to_string_lossy()
                 ));
             }
-            md.push_str(concat!("\nYou can create new agents (`", cli_name!(), " skills create <name> --role \"...\"`) or update existing ones (`", cli_name!(), " agent update --name <name> --field role --value \"...\"`).\n\n"));
+            md.push_str(concat!("\nYou can create new agents (`", cli_name!(), " skills create <name> --role \"...\"`); a person updates an existing one's profile (`", cli_name!(), " agent update --name <name> --field role --value \"...\"`, from their own terminal).\n\n"));
         } else {
             md.push_str("## Other Agents\n");
             md.push_str("You can delegate work to these agents:\n\n");

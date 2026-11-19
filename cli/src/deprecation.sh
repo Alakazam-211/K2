@@ -16,10 +16,10 @@ warn_deprecated() {
 # tests/cli/retired_verbs_table.sh runs every row.
 _K2_RETIRED_VERBS=(
     "agents create|k2 skills create <name> --role \"...\""
-    "agents running|k2 workspace list --running"
-    "agents list|k2 workspace list  (or k2 skills list)"
+    "agents running|k2 connections list  (a person: k2 workspace list --running)"
+    "agents list|k2 connections list  (or k2 skills list; a person: k2 workspace list)"
     "agents work|k2 inbox"
-    "agents status|k2 workspace list"
+    "agents status|k2 connections list  (a person: k2 workspace list)"
     "agents delete|k2 skills remove <name>"
     "agents remove|k2 skills remove <name>"
     "agents launch|your harness's own session start (K2 no longer launches agents)"

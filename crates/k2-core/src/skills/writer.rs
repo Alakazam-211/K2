@@ -625,7 +625,7 @@ External (scan these proactively when woken — customize for your project):
 ## Tools Available
 
 - `k2 skills create <name> --role "Specialization description"` — create a new agent template
-- `k2 agent update --name "agent-name" --field role --value "Updated role"` — update a member's profile
+- A member's profile is changed by a person: `k2 agent update --name "agent-name" --field role --value "Updated role"` from their own terminal (ask your human)
 - Delegate with your harness's sub-agent or worktree feature (K2 no longer spawns agents); hand it the agent's profile from `k2 skills profile <agent>`
 - `k2 inbox compose --title "..." --body "..."` — add a task to the workspace inbox
 - `k2 reviews` — see completed work ready for review

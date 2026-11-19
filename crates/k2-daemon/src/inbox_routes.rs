@@ -748,7 +748,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "connections",
         summary: "Cross-workspace links: local peers for msg/read/inbox + roster",
-        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `k2 connections list`, and agent-initiated `k2 msg` / `k2 msg --inbox-wake|--inbox-silent` / `k2 read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `k2 connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner turns on \"Agents can add connections\" (Settings → Network → Tunnel → Policies) or the agent's own \"Let this agent add connections\" (Settings → Workspaces / Agents → <workspace> → Connections). `list` is always allowed.\n\nNOT the same as: skill profiles (`k2 skills`), live sessions (`k2 workspace list --running`), or K2 Connect tunnel state (`k2 tunnel`).",
+        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `k2 connections list`, and agent-initiated `k2 msg` / `k2 msg --inbox-wake|--inbox-silent` / `k2 read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `k2 connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner turns on \"Agents can add connections\" (Settings → Network → Tunnel → Policies) or the agent's own \"Let this agent add connections\" (Settings → Workspaces / Agents → <workspace> → Connections). `list` is always allowed.\n\n`k2 connections list` also shows this workspace's own live sessions first.\n\nNOT the same as: skill profiles (`k2 skills`) or K2 Connect tunnel state (`k2 tunnel`).",
     },
     GlossaryEntry {
         term: "feedback",
@@ -833,7 +833,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "workspace",
         summary: "A folder K2 manages (has exactly one primary agent)",
-        definition: "A folder that K2 manages. Has at most one primary agent, plus heartbeats, settings, and inbox. List all with `k2 workspace list`.\n\nNot to be confused with a *project*: a project is a named GROUP of workspaces sharing one chat + one PoC agent (see `k2 glossary project`). `k2 msg` takes a workspace name, never a project name.",
+        definition: "A folder that K2 manages. Has at most one primary agent, plus heartbeats, settings, and inbox. An agent lists the ones it can reach with `k2 connections list`; a person lists every one with `k2 workspace list`.\n\nNot to be confused with a *project*: a project is a named GROUP of workspaces sharing one chat + one PoC agent (see `k2 glossary project`). `k2 msg` takes a workspace name, never a project name.",
     },
     GlossaryEntry {
         term: "worktree",

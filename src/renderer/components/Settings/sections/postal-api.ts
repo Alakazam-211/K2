@@ -16,7 +16,8 @@
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { daemonErrorText } from '@/lib/daemon-error'
+import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
+import { httpStatusOf } from '@/lib/daemon-http-error'
 import { PRODUCT_NAME } from '@/lib/brand'
 import { isPartialBootView, type BootStatusLike } from '@/lib/boot-status-view'
 import { hostBootStatus } from '@/lib/host-ops'
@@ -67,6 +68,11 @@ export interface PostalFriend {
   /** The request carries a pairing code: a person accepts it by typing the
    *  code shown on the other side's screen (the code itself is never listed). */
   codeWaiting?: boolean
+  /** The network's id for the pairing. An outgoing request has none until
+   *  the network sends it (`pending_out` with no `pairId`: not sent yet). */
+  pairId?: string | null
+  /** The asker's words with the request (theirs, or this agent's `--why`). */
+  note?: string | null
   pinnedAt?: PostalTime
   decidedBy?: string | null
   decidedAt?: PostalTime
@@ -94,6 +100,30 @@ export function postalErrorText(err: unknown): string {
   // keep the first line only.
   const first = text.split('\n')[0]?.trim() ?? ''
   return first || `${PRODUCT_NAME} couldn’t reach this server.`
+}
+
+/** The daemon's refusal code for a failed Postal call, if it sent one. */
+export function postalErrorCode(err: unknown): string | null {
+  return daemonErrorOf(err)?.code ?? null
+}
+
+/** What a person reads for a failed Postal call, in plain words: a known
+ *  refusal says what happened; a server fault (the daemon's `internal`, or
+ *  a 5xx with no code) says the server couldn't do it, without its inner reason;
+ *  anything else is the daemon's hint as a sentence. The caller adds the
+ *  next step (Try again, or what changed). */
+export function postalPlainError(err: unknown): string {
+  const code = postalErrorCode(err)
+  if (code === 'postal_not_pending') return 'This request isn’t waiting for an answer any more: it was withdrawn or already answered.'
+  const status = httpStatusOf(err)
+  if (code === 'internal' || (!code && status !== null && status >= 500)) return 'The server couldn’t do that just now.'
+  const text = postalErrorText(err).replace(/[.\s]+$/, '')
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}.`
+}
+
+/** An outgoing request the network hasn't sent yet (no pairing id). */
+export function postalNotSentYet(f: Pick<PostalFriend, 'status' | 'pairId'>): boolean {
+  return f.status === 'pending_out' && !f.pairId
 }
 
 /** A friend's stored routing rule (`{"targets":[...],"wake":bool}`) in

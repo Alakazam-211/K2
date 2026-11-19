@@ -86,6 +86,8 @@ ${CHAMFER_SCOPE} [data-zen-drawer-tile][data-chamfer] { overflow: visible !impor
 ${CHAMFER_SCOPE} [data-zen-soft-button][data-chamfer]:hover:not(:disabled):not([data-zen-lit]) { --ch-fill: var(--zen-surface-raised) !important; }
 ${CHAMFER_SCOPE} [data-zen-compose] [data-zen-soft-button][data-chamfer]:hover:not(:disabled):not([data-zen-lit]) { --ch-fill: var(--zen-surface) !important; }
 ${CHAMFER_SCOPE} [data-testid="thread-choice-chip"][data-chamfer]:hover:not(:disabled) { --ch-edge: var(--thread-card-accent, var(--color-accent)) !important; }
+${CHAMFER_SCOPE} [data-card-primary][data-chamfer]:hover:not(:disabled) { --ch-fill: var(--thread-card-accent-fill-hover, var(--thread-card-accent-fill, var(--thread-card-accent, var(--color-accent)))) !important; --ch-edge: var(--ch-fill) !important; }
+${CHAMFER_SCOPE} [data-card-field][data-chamfer]:focus-within { --ch-edge: var(--thread-card-accent, var(--color-accent)) !important; }
 ${CHAMFER_SCOPE} [data-zen-drawer-dot] { border-radius: 0 !important; }
 ${CHAMFER_SCOPE} .zen-drawer-tag { border-radius: 0 !important; ${allCorners(chamferCutFor(18))} clip-path: ${chamferPolygon('0px')}; }
 ${CHAMFER_SCOPE} .zen-drawer-tag.zen-drawer-code { ${allCorners(chamferCutFor(16))} }

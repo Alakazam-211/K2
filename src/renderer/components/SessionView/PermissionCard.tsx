@@ -19,26 +19,38 @@
 // the floor and the confirm at the click; nothing here decides who may.
 
 import { SitePinForm } from '@/components/WorkspacePanel/SitePinForm'
-import { PostalPairCodeForm } from '@/components/Settings/sections/PostalPairCodeForm'
 import { GitAccessSetupForm } from './GitAccessSetupForm'
 import { useCallback, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { ConfirmStep } from '@/components/Settings/sections/DataSourceConfirm'
-import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
+import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 import { cardExpiryLabel } from './overlayThread'
 import { PermissionReveal } from './PermissionReveal'
 import { CardDismiss } from './CardDismiss'
 import {
-  CARD_ACCENT,
-  CARD_DANGER,
+  CARD_CONTROL_RADIUS,
+  CARD_DANGER_TEXT,
   CARD_EDGE,
   CARD_FILL,
-  CARD_INPUT_CLASS,
+  CARD_LINK,
   CARD_MUTED,
+  CARD_OK_TEXT,
   CARD_RADIUS,
   CARD_TEXT,
   CARD_TEXT2,
+  CARD_WARN_TEXT,
   CardButton,
+  CardField,
 } from './cardControls'
+import {
+  POSTAL_PAIR_ACCEPT_ACTION,
+  POSTAL_PAIR_LABEL,
+  PostalPairCodeAnswer,
+  PostalPairNote,
+  postalPairWantsCode,
+  usePostalPairFriend,
+  withoutPostalNote,
+  type PostalPairFriend,
+} from './PostalPairCard'
 import {
   APP_USERS_SWITCH_COVERS,
   approverWord,
@@ -63,14 +75,14 @@ import {
 } from './permissionCardView'
 
 const EDGE = CARD_EDGE
-const ACCENT = CARD_ACCENT
 const FILL = CARD_FILL
 const TEXT = CARD_TEXT
 const TEXT2 = CARD_TEXT2
 const MUTED = CARD_MUTED
-const AMBER = 'var(--zen-needs-you,var(--color-status-needs-you,#e0a43a))'
-const OK = 'var(--zen-ok,var(--color-status-ok,#5cc08a))'
-const DANGER = CARD_DANGER
+// Words in a colour: each its Style's text grade (4.5:1 on the card).
+const WARN = CARD_WARN_TEXT
+const OK = CARD_OK_TEXT
+const DANGER = CARD_DANGER_TEXT
 const RADIUS = CARD_RADIUS
 
 const TONE: Record<'ok' | 'danger' | 'muted', string> = { ok: OK, danger: DANGER, muted: MUTED }
@@ -106,15 +118,21 @@ function CardFooter({ expiry, onDismiss }: { expiry: string | null; onDismiss?: 
   return onDismiss ? <CardDismiss onDismiss={onDismiss} aside={line} /> : line
 }
 
+/** A tag or chip's box: the control's corner (cut in the square Style). */
+function chipBox(edge: string): CSSProperties {
+  return { ...chamferVars({ cut: chamferCutFor(18), fill: FILL, edge, border: 1 }), border: `1px solid ${edge}` }
+}
+
 /** "Loosens access" (amber) or "Tightens access". */
 function DirectionTag({ direction }: { direction: 'loosen' | 'tighten' }): JSX.Element {
-  const c = direction === 'loosen' ? AMBER : OK
+  const c = direction === 'loosen' ? WARN : OK
   return (
     <span
       data-testid="permission-direction"
       data-direction={direction}
-      className="inline-flex items-center px-1.5 text-[10px] font-medium"
-      style={{ color: c, border: `1px solid color-mix(in srgb, ${c} 45%, transparent)`, lineHeight: '16px' }}
+      data-chamfer=""
+      className={`inline-flex items-center px-2 text-[10px] font-medium ${CARD_CONTROL_RADIUS}`}
+      style={{ ...chipBox(`color-mix(in srgb, ${c} 45%, ${FILL})`), color: c, lineHeight: '16px' }}
     >
       {direction === 'loosen' ? 'Loosens access' : 'Tightens access'}
     </span>
@@ -122,8 +140,12 @@ function DirectionTag({ direction }: { direction: 'loosen' | 'tighten' }): JSX.E
 }
 
 /** The request's facts: headline, setting · scope · how long, values, what it does. */
-function ItemFacts({ item, headline = true }: { item: PermissionItem; headline?: boolean }): JSX.Element {
+function ItemFacts({ item, headline = true, postal }: { item: PermissionItem; headline?: boolean; postal?: PostalPairFriend | null }): JSX.Element {
   const meta = [item.setting, item.scope, item.duration].filter(Boolean).join(' · ')
+  // A Postal friend request: its note on its own line, never the raw
+  // request chips (workspace, id, pairing).
+  const isPostal = item.action === POSTAL_PAIR_ACCEPT_ACTION
+  const consequences = isPostal && postal?.note ? withoutPostalNote(item.consequences) : item.consequences
   return (
     <>
       {headline && (
@@ -132,24 +154,26 @@ function ItemFacts({ item, headline = true }: { item: PermissionItem; headline?:
         </div>
       )}
       {meta && <Muted testId="permission-meta">{meta}</Muted>}
-      {item.values.length > 0 && (
+      {!isPostal && item.values.length > 0 && (
         <div data-testid="permission-values" className="flex flex-wrap gap-1">
           {item.values.map((v) => (
             <span
               key={`${v.key}=${v.value}`}
-              className="px-1 font-mono text-[10px]"
-              style={{ color: TEXT2, border: `1px solid ${EDGE}` }}
+              data-chamfer=""
+              className={`px-1.5 font-mono text-[10px] ${CARD_CONTROL_RADIUS}`}
+              style={{ ...chipBox(EDGE), color: TEXT2 }}
             >
               {v.key}: {v.value}
             </span>
           ))}
         </div>
       )}
-      {item.consequences && (
+      {consequences && (
         <div data-testid="permission-consequences" style={{ color: TEXT2 }}>
-          {item.consequences}
+          {consequences}
         </div>
       )}
+      {isPostal && <PostalPairNote friend={postal ?? null} />}
     </>
   )
 }
@@ -192,8 +216,6 @@ function ErrorLine({ text }: { text: string | null }): JSX.Element | null {
   )
 }
 
-const inputClass = CARD_INPUT_CLASS
-
 /** The note box for people below the floor (§4.3, §17.5). */
 export function PermissionNoteBox({
   item,
@@ -225,8 +247,8 @@ export function PermissionNoteBox({
   }
   return (
     <div data-testid="permission-note-box" className="flex flex-col gap-1">
-      <input
-        data-testid="permission-note-input"
+      <CardField
+        testId="permission-note-input"
         aria-label={`Note for ${approverWord(item.approvers.floor)}`}
         value={text}
         maxLength={item.noteBox.max}
@@ -235,8 +257,6 @@ export function PermissionNoteBox({
           setSaved(false)
         }}
         placeholder={`Leave a note for ${approverWord(item.approvers.floor)} (optional)`}
-        className={inputClass}
-        style={{ color: TEXT }}
       />
       <div className="flex items-center gap-1.5">
         <CardButton
@@ -255,7 +275,7 @@ export function PermissionNoteBox({
   )
 }
 
-type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string } | { kind: 'pin' } | { kind: 'git' } | { kind: 'code' }
+type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string } | { kind: 'pin' } | { kind: 'git' }
 
 type CardConfirmAction =
   | 'app-approve'
@@ -282,10 +302,6 @@ const PUBLISH_PIN_ACTION = 'publish.pin'
 /** This server's GitHub credential for compute git access (0.46.10). */
 const GIT_ACCESS_SETUP_ACTION = 'compute.git-access-setup'
 
-/** A Postal friend request (0.46.16); `pairing=code` when it carries a
- *  pairing code, which K2's own form takes. */
-const POSTAL_PAIR_ACCEPT_ACTION = 'postal.pair.accept'
-
 /** The vault confirm actions a permission card may ask for (§17.4). */
 function confirmActionOf(action: string | undefined): CardConfirmAction | null {
   return action === 'app-approve' ||
@@ -311,10 +327,13 @@ function AnswerControls({
   always,
   denyOnly = false,
   onReveal,
+  postal,
 }: {
   item: PermissionItem
   actions: PermissionCardActions
   batchItem: boolean
+  /** A Postal friend request's friend row (PostalPairCard). */
+  postal?: PostalPairFriend | null
   /** The "from now on" answer the daemon offers on this card, if any. */
   always?: string
   /** The daemon offers only Deny: there is nothing to allow. */
@@ -342,6 +361,10 @@ function AnswerControls({
     }
   }
   const confirmAction = confirmActionOf(item.proof.action)
+  // A Postal friend request reads in the Postal tab's words.
+  const isPostal = item.action === POSTAL_PAIR_ACCEPT_ACTION
+  const denyLabel = isPostal ? POSTAL_PAIR_LABEL.deny : PERMISSION_LABEL.deny
+  const allowLabel = isPostal ? POSTAL_PAIR_LABEL.allow : PERMISSION_LABEL.allow
   if (step.kind === 'confirm' && actions.confirmScope && confirmAction && item.proof.secretId) {
     return (
       <div data-testid="permission-confirm-sheet" className="flex flex-col gap-1">
@@ -372,19 +395,17 @@ function AnswerControls({
   if (step.kind === 'deny') {
     return (
       <div data-testid="permission-deny-box" className="flex flex-col gap-1">
-        <input
-          data-testid="permission-deny-reason"
+        <CardField
+          testId="permission-deny-reason"
           aria-label="Why (optional)"
           value={reason}
           maxLength={DENY_REASON_MAX}
           onChange={(e) => setReason(e.target.value.replace(/[\r\n]+/g, ' '))}
           placeholder="Why? (optional; the agent sees it)"
-          className={inputClass}
-          style={{ color: TEXT }}
         />
         <div className="flex gap-1.5">
           <CardButton
-            label={PERMISSION_LABEL.deny}
+            label={denyLabel}
             testId="permission-deny-send"
             danger
             disabled={busy}
@@ -455,37 +476,21 @@ function AnswerControls({
       </div>
     )
   }
-  // `postal.pair.accept` with a pairing code (0.46.16): Allow opens K2's own
-  // form, which shows this server's code (for the person to read out) and
-  // posts the code from the OTHER side's screen straight to the decide
-  // route as this person; only then is Allow sent. Neither code passes
-  // through the card, the Thread or the agent.
-  const pairing = item.values.find((v) => v.key === 'pairing')?.value
-  if (item.action === POSTAL_PAIR_ACCEPT_ACTION && pairing === 'code' && actions.confirmScope) {
-    const requestId = item.values.find((v) => v.key === 'id')?.value ?? ''
-    const workspace = item.values.find((v) => v.key === 'workspace')?.value ?? ''
-    if (step.kind === 'code') {
-      return (
-        <div className="flex flex-col gap-1">
-          <PostalPairCodeForm
-            scope={actions.confirmScope}
-            workspace={workspace}
-            requestId={requestId}
-            peer="the other agent"
-            onDone={() => void send({ answer: PERMISSION_LABEL.allow })}
-            onCancel={() => setStep({ kind: 'idle' })}
-          />
-          <ErrorLine text={error} />
-        </div>
-      )
-    }
+  // `postal.pair.accept` with a pairing code (0.46.16): "Type their code"
+  // opens K2's own form (PostalPairCard); only once the daemon took the code
+  // is Allow sent. Neither code passes through the card, the Thread or the
+  // agent.
+  if (postalPairWantsCode(item) && actions.confirmScope) {
     return (
       <div className="flex flex-col gap-1">
-        <div className="flex flex-wrap gap-1.5">
-          <CardButton label="Type their code" testId="permission-allow" primary disabled={busy} onClick={() => setStep({ kind: 'code' })} />
-          <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
-        </div>
-        <Muted testId="permission-code-note">You read your code to them and type theirs in this form. The agent never sees either.</Muted>
+        <PostalPairCodeAnswer
+          item={item}
+          scope={actions.confirmScope}
+          friend={postal ?? null}
+          busy={busy}
+          onAllow={() => void send({ answer: PERMISSION_LABEL.allow })}
+          onDeny={() => setStep({ kind: 'deny' })}
+        />
         <ErrorLine text={error} />
       </div>
     )
@@ -514,7 +519,7 @@ function AnswerControls({
       <div className="flex flex-wrap gap-1.5">
         {!denyOnly && (
           <CardButton
-            label={confirm ? 'Allow (needs your confirm)' : PERMISSION_LABEL.allow}
+            label={confirm ? 'Allow (needs your confirm)' : allowLabel}
             testId="permission-allow"
             primary
             disabled={busy || (confirm && !canConfirmHere)}
@@ -531,7 +536,7 @@ function AnswerControls({
             onClick={() => (confirm ? setStep({ kind: 'confirm', answer: always }) : void send({ answer: always }))}
           />
         )}
-        <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
+        <CardButton label={denyLabel} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
       </div>
       {confirm && !canConfirmHere && (
         <Muted testId="permission-confirm-elsewhere">Open the agent’s Thread to confirm this, or answer it on your phone.</Muted>
@@ -614,10 +619,12 @@ function ItemOutcome({
   always,
   denyOnly = false,
   onReveal,
+  postal,
 }: {
   always?: string
   denyOnly?: boolean
   onReveal?: (r: RevealedSecret) => void
+  postal?: PostalPairFriend | null
   item: PermissionItem
   viewer: PermissionViewer
   agent: string
@@ -648,7 +655,7 @@ function ItemOutcome({
     }
     if (!offered) return null
     return actions ? (
-      <AnswerControls item={item} actions={actions} batchItem={batchItem} always={always} denyOnly={denyOnly} onReveal={onReveal} />
+      <AnswerControls item={item} actions={actions} batchItem={batchItem} always={always} denyOnly={denyOnly} onReveal={onReveal} postal={postal} />
     ) : (
       <Muted testId="permission-answer-elsewhere">Answer this in the agent’s Thread.</Muted>
     )
@@ -688,7 +695,7 @@ function SettingsLink({ item, actions }: { item: PermissionItem; actions: Permis
       data-testid="permission-open-settings"
       onClick={() => open(section)}
       className="self-start text-[10px] underline-offset-2 hover:underline cursor-pointer"
-      style={{ color: ACCENT, background: 'transparent', border: 0, padding: 0 }}
+      style={{ color: CARD_LINK, background: 'transparent', border: 0, padding: 0 }}
     >
       Open in Settings
     </button>
@@ -724,6 +731,8 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
   // A password or link this person allowed: in this card's state only.
   const [revealed, setRevealed] = useState<RevealedSecret | null>(null)
   const forget = useCallback(() => setRevealed(null), [])
+  // A Postal friend request: its friend row, read as the person who answers.
+  const postal = usePostalPairFriend(view, approver ? actions?.confirmScope : null)
   return (
     <CardFrame testId="permission-card" attrs={{ 'data-state': view.state, 'data-mode': view.viewer.mode }}>
       <div className="flex items-center gap-1.5">
@@ -737,7 +746,7 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
           </span>
         )}
       </div>
-      <ItemFacts item={view} />
+      <ItemFacts item={view} postal={postal} />
       <WhyLine item={view} />
       {approver && <NotesList item={view} />}
       {approver && view.askedFor && <Muted testId="permission-asked-for">Asked while working with {view.askedFor}</Muted>}
@@ -760,6 +769,7 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
         }
         denyOnly={options !== undefined && options.length > 0 && !options.some((o) => o.label === PERMISSION_LABEL.allow)}
         onReveal={view.reveal ? setRevealed : undefined}
+        postal={postal}
       />
       {revealed && <PermissionReveal secret={revealed} onGone={forget} />}
       {approver && <SettingsLink item={view} actions={actions} />}

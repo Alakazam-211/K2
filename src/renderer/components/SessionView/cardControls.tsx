@@ -2,10 +2,17 @@
 // button (ChoiceCard's chip, side by side) and the one-line field. The
 // permission card's Deny box and a card's Dismiss line use these, so every
 // inline step on a card has the same field and buttons, sized to the card,
-// in both themes (chamfered in K2's square Style, `--thread-card-radius`
-// elsewhere).
+// in both themes (chamfered in K2's square Style, the control radius
+// elsewhere: a pill in Glass).
+//
+// Words on a card read at 4.5:1 in every look: the primary button is the
+// accent's fill under its own label colour (as the Settings accent button),
+// a link is the accent's text colour, and a warning or OK tag uses the
+// Style's text grade of that colour, never the bright status dot colour.
+// Each falls back to the older token, so a Garden that sets none of these
+// keeps its own look.
 
-import type { JSX } from 'react'
+import type { InputHTMLAttributes, JSX } from 'react'
 import { chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 
 export const CARD_EDGE = 'var(--thread-card-border,var(--color-border))'
@@ -16,11 +23,42 @@ export const CARD_TEXT2 = 'var(--thread-card-text-secondary,var(--color-text-sec
 export const CARD_MUTED = 'var(--thread-card-muted,var(--color-text-muted))'
 export const CARD_DANGER = 'var(--zen-danger,var(--color-status-error))'
 export const CARD_RADIUS = 'rounded-[var(--thread-card-radius,0px)]'
+/** The primary button's fill, and its label (4.5:1 on it). */
+export const CARD_ACCENT_FILL = 'var(--thread-card-accent-fill,var(--thread-card-accent,var(--color-accent)))'
+export const CARD_ACCENT_FILL_HOVER = `var(--thread-card-accent-fill-hover,${CARD_ACCENT_FILL})`
+export const CARD_ON_ACCENT = 'var(--thread-card-on-accent,var(--color-on-accent))'
+/** A link's words ("Open in Settings"). */
+export const CARD_LINK = `var(--thread-card-link,${CARD_ACCENT})`
+/** Words in the warning, OK and error colours. */
+export const CARD_WARN_TEXT = 'var(--thread-card-warn-text,var(--zen-needs-you,var(--color-status-warn-text)))'
+export const CARD_OK_TEXT = 'var(--thread-card-ok-text,var(--zen-ok,var(--color-status-ok)))'
+export const CARD_DANGER_TEXT = `var(--zen-danger-text,${CARD_DANGER})`
+/** A control's corner: a button, a field or a tag. */
+export const CARD_CONTROL_RADIUS = 'rounded-[var(--thread-card-control-radius,var(--thread-card-radius,var(--radius-field)))]'
 
-/** A card's one-line field (give it `style={{ color: CARD_TEXT }}`). */
-export const CARD_INPUT_CLASS = `w-full box-border bg-transparent px-2 py-1 text-[11px] outline-none border border-[var(--thread-card-border,var(--color-border))] focus:border-[var(--thread-card-accent,var(--color-accent))] ${CARD_RADIUS}`
+/** A card's one-line field: cut corners in the square Style (the box draws
+ *  the edge, which turns the accent while the field has focus), the
+ *  control's corner elsewhere. */
+export function CardField({ testId, className, ...input }: InputHTMLAttributes<HTMLInputElement> & { testId?: string }): JSX.Element {
+  return (
+    <div
+      data-chamfer=""
+      data-card-field=""
+      style={chamferVars({ cut: chamferCutFor(24), fill: CARD_FILL, edge: CARD_EDGE, border: 1 })}
+      className={`box-border w-full min-w-0 border border-[var(--thread-card-border,var(--color-border))] focus-within:border-[var(--thread-card-accent,var(--color-accent))] ${CARD_CONTROL_RADIUS} ${className ?? ''}`}
+    >
+      <input
+        data-testid={testId}
+        {...input}
+        className="block w-full min-w-0 box-border bg-transparent border-0 px-2.5 py-1 text-[11px] outline-none"
+        style={{ color: CARD_TEXT, ...input.style }}
+      />
+    </div>
+  )
+}
 
-/** A card button: ChoiceCard's chip, side by side. `primary` is filled. */
+/** A card button: ChoiceCard's chip, side by side. `primary` is the
+ *  accent's fill with its own label colour, as the Settings accent button. */
 export function CardButton({
   label,
   testId,
@@ -28,26 +66,36 @@ export function CardButton({
   primary = false,
   danger = false,
   disabled = false,
+  type = 'button',
 }: {
   label: string
   testId: string
-  onClick: () => void
+  onClick?: () => void
   primary?: boolean
   danger?: boolean
   disabled?: boolean
+  type?: 'button' | 'submit'
 }): JSX.Element {
-  const edge = primary ? CARD_ACCENT : danger ? `color-mix(in srgb, ${CARD_DANGER} 60%, ${CARD_EDGE})` : CARD_EDGE
-  const fill = primary ? `color-mix(in srgb, ${CARD_ACCENT} 18%, transparent)` : 'transparent'
+  const edge = primary ? CARD_ACCENT_FILL : danger ? `color-mix(in srgb, ${CARD_DANGER} 60%, ${CARD_EDGE})` : CARD_EDGE
+  // The square Style draws the fill on a layer over the edge, so a
+  // see-through fill shows the edge colour (ChoiceCard's chips look the
+  // same); the primary fill is solid.
+  const fill = primary ? CARD_ACCENT_FILL : 'transparent'
   return (
     <button
-      type="button"
+      type={type}
       data-testid={testId}
       data-label={label}
       data-chamfer=""
+      data-card-primary={primary ? '' : undefined}
       disabled={disabled}
       onClick={onClick}
-      style={{ ...chamferVars({ cut: chamferCutFor(24), fill, edge, border: 1 }), borderColor: edge, background: fill, color: primary ? CARD_TEXT : CARD_TEXT2 }}
-      className={`${CARD_RADIUS} border px-2.5 py-1 text-[11px] font-medium whitespace-nowrap transition-colors cursor-pointer hover:text-[var(--thread-card-text,var(--color-text-primary))] disabled:cursor-not-allowed disabled:opacity-50`}
+      style={{ ...chamferVars({ cut: chamferCutFor(24), fill, edge, border: 1 }), borderColor: edge, background: fill, color: primary ? CARD_ON_ACCENT : CARD_TEXT2 }}
+      className={`${CARD_CONTROL_RADIUS} border px-2.5 py-1 text-[11px] font-medium whitespace-nowrap transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
+        primary
+          ? 'hover:enabled:!bg-[var(--thread-card-accent-fill-hover,var(--thread-card-accent-fill,var(--thread-card-accent,var(--color-accent))))]'
+          : 'hover:text-[var(--thread-card-text,var(--color-text-primary))]'
+      }`}
     >
       {label}
     </button>

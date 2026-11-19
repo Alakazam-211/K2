@@ -6,6 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 
+// The Postal card reads its friend row (peer, owner, note) as the person.
+const postalRows = vi.hoisted(() => ({ friends: [] as unknown[], reads: 0 }))
+vi.mock('@/components/Settings/sections/postal-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/Settings/sections/postal-api')>()),
+  fetchPostalFriends: vi.fn(async () => {
+    postalRows.reads += 1
+    return { ok: true, state: 'on', handle: null, friends: postalRows.friends }
+  }),
+  fetchPostalCode: vi.fn(async () => '482 913'),
+}))
+
 vi.mock('@/components/Settings/sections/DataSourceConfirm', () => ({
   // The vault confirm (Touch ID / password) answers with a token at once.
   ConfirmStep: (p: { action: string; secretId: string; onToken: (t: string) => void; onCancel: () => void }): ReactNode => (
@@ -515,5 +526,49 @@ describe('PermissionCard: a Postal request with a pairing code (0.46.16)', () =>
     fireEvent.click(allow)
     await waitFor(() => expect(screen.getByTestId('postal-code-form')).toBeTruthy())
     vi.unstubAllGlobals()
+  })
+
+  it("speaks the tab's words: the note on its own line, no raw chips, Reject, and who to read the code to", async () => {
+    postalRows.friends = [{ id: 'f-9', peer: 'lab::gamma.postal.bot', status: 'pending_in', ownerName: 'Dana', note: 'Hi from Dana.', codeWaiting: true }]
+    draw(
+      permissionDoc({
+        view: {
+          action: 'postal.pair.accept',
+          whatChanges: 'Let lab::gamma.postal.bot (its owner: Dana) be friends with billing on Postal',
+          consequences: 'lab::gamma.postal.bot can then write to billing. You can remove or block it later. Their note: “Hi from Dana.”',
+          values: [
+            { key: 'workspace', value: 'billing' },
+            { key: 'id', value: 'f-9' },
+            { key: 'pairing', value: 'code' },
+          ],
+        },
+      }),
+    )
+    await waitFor(() => expect(text('postal-pair-note')).toBe('Their note: “Hi from Dana.”'))
+    expect(screen.queryByTestId('permission-values')).toBeNull()
+    expect(text('permission-consequences')).toBe('lab::gamma.postal.bot can then write to billing. You can remove or block it later.')
+    expect(text('permission-deny')).toBe('Reject')
+    expect(text('permission-code-note')).toContain('You read your code to Dana, lab::gamma.postal.bot’s owner')
+    fireEvent.click(screen.getByTestId('permission-allow'))
+    await waitFor(() => expect(text('postal-code-mine')).toBe('482 913'))
+    expect(screen.getByTestId('postal-code-form').textContent).toContain('Read it to Dana, lab::gamma.postal.bot’s owner.')
+    // The card's own buttons and field, not the Settings ones.
+    expect(screen.getByTestId('postal-code-accept').getAttribute('data-card-primary')).toBe('')
+    expect(screen.getByTestId('postal-code-input').closest('[data-card-field]')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('postal-code-back'))
+    fireEvent.click(screen.getByTestId('permission-deny'))
+    expect(text('permission-deny-send')).toBe('Reject')
+  })
+})
+
+describe('PermissionCard: words read at 4.5:1 in every look', () => {
+  it('the primary button is the accent fill under its own label colour; tags and links use text-grade tokens', () => {
+    draw(permissionDoc({}))
+    const allow = screen.getByTestId('permission-allow')
+    expect(allow.getAttribute('data-card-primary')).toBe('')
+    expect(allow.getAttribute('style') ?? '').toContain('--thread-card-accent-fill')
+    expect(allow.getAttribute('style') ?? '').toContain('--thread-card-on-accent')
+    const tag = screen.getByTestId('permission-direction')
+    expect(tag.getAttribute('style') ?? '').toContain('--thread-card-warn-text')
   })
 })

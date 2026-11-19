@@ -95,6 +95,14 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   // (3:1 on the page), the shared focus ring and the small type size: the
   // Jump to bottom pill (ThreadJumpPill). A Garden falls back to its own.
   '--zen-accent-fill': 'var(--color-accent-fill, var(--color-accent))',
+  '--zen-accent-fill-hover': 'var(--color-accent-fill-hover, var(--color-accent-fill, var(--color-accent)))',
+  // Words on a card: a link, and a warning or OK tag, in the Style's text
+  // grade (4.5:1), and a control's corner (a pill in Glass, cut in Terminal).
+  // A Garden sets none of these: its cards keep their own look.
+  '--zen-link': 'var(--color-accent-text, var(--color-accent))',
+  '--zen-warn-text': 'var(--color-status-warn-text, var(--color-status-needs-you))',
+  '--zen-ok-text': 'var(--color-status-ok-soft, var(--color-status-ok))',
+  '--zen-control-radius': 'var(--radius-pill)',
   '--zen-control-edge': 'var(--color-control-edge, var(--color-border))',
   '--zen-focus-ring': 'var(--color-accent-text, var(--color-accent))',
   // The message box's edge: a control on the page, so the control edge
@@ -137,6 +145,13 @@ export const THREAD_CARD_TOKENS = {
   '--thread-card-text-secondary': 'var(--zen-text)',
   '--thread-card-muted': 'var(--zen-text-muted)',
   '--thread-card-radius': 'calc(var(--zen-radius) / 2)',
+  '--thread-card-control-radius': 'var(--zen-control-radius, calc(var(--zen-radius) / 2))',
+  '--thread-card-accent-fill': 'var(--zen-accent-fill, var(--zen-accent))',
+  '--thread-card-accent-fill-hover': 'var(--zen-accent-fill-hover, var(--zen-accent-fill, var(--zen-accent)))',
+  '--thread-card-on-accent': 'var(--zen-accent-text)',
+  '--thread-card-link': 'var(--zen-link, var(--zen-accent))',
+  '--thread-card-warn-text': 'var(--zen-warn-text, var(--zen-needs-you))',
+  '--thread-card-ok-text': 'var(--zen-ok-text, var(--zen-ok))',
 } as CSSProperties
 
 /** Where the shared rules apply: a Zen root, or the desktop Thread's box. */

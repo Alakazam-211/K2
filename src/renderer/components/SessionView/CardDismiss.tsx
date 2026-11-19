@@ -12,7 +12,7 @@
 
 import { useState, type JSX, type ReactNode } from 'react'
 import { daemonErrorText } from '@/lib/daemon-error'
-import { CARD_DANGER, CARD_INPUT_CLASS, CARD_MUTED, CARD_TEXT, CardButton } from './cardControls'
+import { CARD_DANGER_TEXT, CARD_MUTED, CardButton, CardField } from './cardControls'
 
 /** The daemon's limit on a dismiss reason (`CLOSE_REASON_MAX_CHARS`). */
 export const CARD_DISMISS_REASON_MAX = 200
@@ -73,9 +73,9 @@ export function CardDismiss({
   return (
     <div data-testid="thread-card-dismiss-form" className="flex flex-col gap-1">
       {aside}
-      <input
+      <CardField
         autoFocus
-        data-testid="thread-card-dismiss-reason"
+        testId="thread-card-dismiss-reason"
         value={reason}
         maxLength={CARD_DISMISS_REASON_MAX}
         disabled={busy}
@@ -92,8 +92,6 @@ export function CardDismiss({
         }}
         placeholder="Why? (optional)"
         aria-label="Why you are dismissing this card (optional)"
-        className={CARD_INPUT_CLASS}
-        style={{ color: CARD_TEXT }}
       />
       <div className="flex items-center gap-1.5">
         <CardButton label={busy ? 'Dismissing…' : 'Dismiss card'} testId="thread-card-dismiss-confirm" disabled={busy} onClick={() => void send()} />
@@ -103,7 +101,7 @@ export function CardDismiss({
         Closes the card without answering. The agent is told; nothing is decided.
       </div>
       {error ? (
-        <div data-testid="thread-card-dismiss-error" role="alert" className="text-[10px] leading-relaxed" style={{ color: CARD_DANGER }}>
+        <div data-testid="thread-card-dismiss-error" role="alert" className="text-[10px] leading-relaxed" style={{ color: CARD_DANGER_TEXT }}>
           {error}
         </div>
       ) : null}

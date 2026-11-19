@@ -25,6 +25,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 compute node servers add` takes the pairing code on stdin with `--code-stdin`.** It reads the code from stdin, so it is never on the command line, where other users on the machine can see it. `--code CODE.FP` and `--code -` still work.
 - **In an agent's session, the workspace commands act with the agent's own pass.** `k2 workspace list`, `create`, `open`, `launch`, `profile` and `update` (and `k2 agent profile` and `k2 agent update`) send the session's passport from inside an agent's terminal, never the server owner's token. These are the owner's commands, so K2 refuses an agent there. In your own terminal they act as you, as before.
 - **`k2 workspace create` and `open` no longer report a success K2 didn't give.** An empty answer, one that isn't JSON or JSON that isn't an object is an error that names the route, with exit 1, instead of a blank success with exit 0 (or a silent exit 1).
+- **`k2 workspace launch`, `profile` and `update` report K2's errors as errors.** A refusal or other error goes to stderr with exit 1, or exit 3 and the permission card's closing line (`Ask with: ...`) when K2 sends a card, instead of the error's JSON on stdout with exit 0. An empty or unreadable answer is an error too.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

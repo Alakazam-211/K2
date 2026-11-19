@@ -207,7 +207,9 @@ echo "== update aimed at another workspace: the passport, refused =="
 run K2_PORT="$PORT" K2_HOOK_SOCK="$SOCK" K2_HOOK_TOKEN="$PASSPORT" K2_PROJECT_PATH="$WORK/other" -- workspace update --field role --value Lead
 assert_eq "another workspace: the update's Bearer header" "$(field auth /cli/agent/update)" "'Bearer $PASSPORT'"
 assert_contains "another workspace: the update names it" "$(field query /cli/agent/update)" "project=$("$PY" -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$WORK/other")"
-assert_contains "another workspace: the daemon's refusal reaches the caller" "$out$err" "Invalid or missing auth token"
+assert_eq "another workspace: refused, exit 1" "$rc" "1"
+assert_eq "another workspace: nothing on stdout" "$out" ""
+assert_contains "another workspace: the daemon's refusal on stderr" "$err" "Error: Invalid or missing auth token"
 owner_never_sent "another workspace"
 
 echo "== the owner's own terminal (no session): the owner token, as before =="

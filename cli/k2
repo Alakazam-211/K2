@@ -75296,12 +75296,18 @@ try: print(json.load(sys.stdin).get("path",""))
 except: pass' 2>/dev/null)
         [[ -n "$resolved" ]] && target="$resolved"
     fi
-    cli_request_post "/cli/workspace/ensure-canonical-session" "project=$(urlencode "$target")"
+    local resp
+    resp=$(cli_request_post "/cli/workspace/ensure-canonical-session" "project=$(urlencode "$target")")
+    # Errors (a refusal, a permission card) on stderr with its exit code
+    # and closing line, never printed as the answer with exit 0.
+    cli_print_or_fail "$resp" /cli/workspace/ensure-canonical-session
 }
 
 cmd_workspace_profile() {
     local target="${1:-$PROJECT}"
-    cli_request "/cli/workspace/agent-display-name" "project=$(urlencode "$target")"
+    local resp
+    resp=$(cli_request "/cli/workspace/agent-display-name" "project=$(urlencode "$target")")
+    cli_print_or_fail "$resp" /cli/workspace/agent-display-name
 }
 
 cmd_workspace_update() {
@@ -75345,10 +75351,12 @@ except: pass' 2>/dev/null)
         # longer recognizes as a routing key.
         agent_name="$(basename "$PROJECT")"
     fi
-    cli_request_post "/cli/agent/update" \
+    local resp
+    resp=$(cli_request_post "/cli/agent/update" \
         "agent=$(urlencode "$agent_name")" \
         "field=$(urlencode "$field")" \
-        "value=$(urlencode "$value")"
+        "value=$(urlencode "$value")")
+    cli_print_or_fail "$resp" /cli/agent/update
 }
 
 # BEGIN_WORKSPACE_RESOURCES

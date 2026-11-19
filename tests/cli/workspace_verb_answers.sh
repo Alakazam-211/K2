@@ -144,6 +144,44 @@ for verb in create open; do
     assert_eq "$verb: success: the answer" "$out" '{"success":true}'
 done
 
+echo "== launch/profile/update: an error goes to stderr with its exit and closing line =="
+CARD='{"error":{"code":"owner_only","hint":"this needs the owner"},"permission":{"command":"k2 permission request ws-change"}}'
+NAME_OK='{"display_name":"Acme","handle":"acme"}'
+# "label|final route|lookup route|lookup answer|args" (args split on spaces).
+CASES=(
+    "launch|/cli/workspace/ensure-canonical-session|||workspace launch $WS"
+    "profile|/cli/workspace/agent-display-name|||workspace profile"
+    "update|/cli/agent/update|/cli/workspace/agent-display-name|$NAME_OK|workspace update --field role --value Lead"
+)
+for c in "${CASES[@]}"; do
+    IFS='|' read -r name route lroute lbody args <<<"$c"
+    lookup=()
+    [ -n "$lroute" ] && lookup=("$lroute" 200 "$lbody")
+    answer ${lookup[@]+"${lookup[@]}"} "$route" 400 '{"error":"workspace not found: nope"}'
+    # shellcheck disable=SC2086
+    run $args
+    assert_eq "$name: an error: exit 1" "$rc" "1"
+    assert_eq "$name: an error: nothing on stdout" "$out" ""
+    assert_eq "$name: an error: on stderr" "$err" "Error: workspace not found: nope"
+    answer ${lookup[@]+"${lookup[@]}"} "$route" 403 "$CARD"
+    # shellcheck disable=SC2086
+    run $args
+    assert_eq "$name: a permission card: exit 3" "$rc" "3"
+    assert_eq "$name: a permission card: nothing on stdout" "$out" ""
+    assert_eq "$name: a permission card: the error, then the closing line" "$err" "Error: this needs the owner
+Ask with: k2 permission request ws-change"
+    answer ${lookup[@]+"${lookup[@]}"} "$route" 200 ""
+    # shellcheck disable=SC2086
+    run $args
+    assert_eq "$name: empty 200: exit 1" "$rc" "1"
+    assert_eq "$name: empty 200: says so" "$err" "Error: K2's server gave an empty answer to $route"
+    answer ${lookup[@]+"${lookup[@]}"} "$route" 200 '{"success":true}'
+    # shellcheck disable=SC2086
+    run $args
+    assert_eq "$name: success: exit 0" "$rc" "0"
+    assert_eq "$name: success: the answer" "$out" '{"success":true}'
+done
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

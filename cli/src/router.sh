@@ -519,14 +519,16 @@ case "${1:-help}" in
                 echo "    Until then their k2 commands fail. A system unit: run the sudo systemctl" >&2
                 echo "    stop it prints within 2 minutes." >&2
                 echo "" >&2
-                echo "  restart [--sessions] [--host <base-url>] [--token <token>] [--wait]" >&2
+                echo "  restart [--sessions] [--host <base-url>] [--token-stdin | --token <token>] [--wait]" >&2
                 echo "    Default: restart the LOCAL daemon (macOS launchctl kickstart, Linux" >&2
                 echo "    systemctl restart). Agent sessions hosted by k2-ptyd keep running." >&2
                 echo "    --sessions: end the agent sessions too (they start fresh)." >&2
                 echo "    --host:  restart a REMOTE daemon with no GUI by POSTing" >&2
                 echo "             <base-url>/cli/daemon/restart (e.g. --host https://<sub>.k2.dev)." >&2
                 echo "             Authorizes with the owner token OR an Owner/Admin connect-user" >&2
-                echo "             session token; --token defaults to ~/.k2/daemon.token." >&2
+                echo "             session token; the token defaults to ~/.k2/daemon.token." >&2
+                echo "    --token-stdin: read the token from stdin. A token on the command line" >&2
+                echo "             (--token <token>) is visible to other users on this machine." >&2
                 echo "    --wait:  after the restart is accepted, poll <base>/boot-status every" >&2
                 echo "             ~2s up to ~60s until phase=ready, then print the version it" >&2
                 echo "             came back on. Timeout → message + non-zero exit." >&2

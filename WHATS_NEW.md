@@ -18,6 +18,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **The sign-in code you paste into `k2 llm tokens add` and `login` stays out of other programs' view.** It now reaches K2 on a pipe, never on a helper program's command line.
 - **`k2 fed pair-join`, `pair-finish` and `pair-verify` take the pairing token on stdin.** `--token-stdin` (or `-`) reads it from stdin, so it is never on the command line, where other users on the machine can see it; the token as an argument still works, and each step's next-step line names `--token-stdin`.
 - **`k2 read <workspace>@<host>` takes the remote token on stdin.** `--token-stdin` reads it from stdin, so it is never on the command line, where other users on the machine can see it. `--token <tok>` still works.
+- **`k2 daemon restart --host` takes the token on stdin.** `--token-stdin` reads it from stdin, so it is never on the command line, where other users on the machine can see it. `--token <token>` and `--token=<token>` still work.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

@@ -27,6 +27,7 @@
 # --password-stdin, k2 users pair-phone, k2 connect login; and the remote
 # server's token of k2 clone (--host, --token).
 # Also the remote token of k2 read <ws>@<host> --token-stdin.
+# Also the token of k2 daemon restart --host <url> --token-stdin.
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -224,6 +225,8 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._answer(401, {"msg": "Invalid login credentials"})
         if path == "/cli/clone/preview":
             return self._answer(200, {"workspace": "ws1", "secrets": {"rows": []}, "callerCanCopySecrets": True})
+        if path == "/cli/daemon/restart":
+            return self._answer(200, {"restarting": True})
         if path == "/cli/api-keys/create":
             return self._answer(200, {"id": "k1", "key": "k2ak_test", "capabilities": {"hire": True}})
         return self._answer(200, {"ok": True})
@@ -433,6 +436,16 @@ assert_off_children "fed pair-join --token-stdin" "pairing token" "$FED_TOKEN"
 #     that server's terminal read and no child's argv or environment, nor
 #     k2's own argv.
 sec_case "read --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINEL" read "ws1@http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
+
+# 23. k2 daemon restart --host <url> --token-stdin: the token reaches that
+#     daemon's restart route and no child's argv or environment, nor k2's
+#     own argv. The remote restart needs only curl, so this case checks
+#     for curl children itself.
+fresh
+printf '%s\n' "$REMOTE_SENTINEL" | k2run daemon restart --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin >/dev/null 2>&1 || true
+assert_tcp_got "daemon restart --token-stdin" /cli/daemon/restart "token" "$REMOTE_SENTINEL"
+if grep -q '^curl ' "$ARGLOG"; then ok "daemon restart --token-stdin: curl children were logged"; else bad "daemon restart --token-stdin: no curl child was logged"; fi
+assert_off_children "daemon restart --token-stdin" "token" "$REMOTE_SENTINEL"
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

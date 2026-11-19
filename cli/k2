@@ -5815,7 +5815,7 @@ cmd_daemon_restart() {
     #                     no GUI required. The remote route is supervisor-
     #                     agnostic — it triggers graceful shutdown and the
     #                     remote supervisor (launchd/systemd) respawns it.
-    local host="" token="" wait=0 end_agents=0
+    local host="" token="" token_stdin=0 wait=0 end_agents=0
     while [ $# -gt 0 ]; do
         case "$1" in
             # k2-ptyd P57: a restart keeps agent sessions running; with
@@ -5825,10 +5825,19 @@ cmd_daemon_restart() {
             --host=*) host="${1#--host=}"; shift ;;
             --token) token="${2:-}"; shift 2 ;;
             --token=*) token="${1#--token=}"; shift ;;
+            --token-stdin) token_stdin=1; shift ;;
             --wait) wait=1; shift ;;
             *) echo "daemon restart: unknown argument: $1" >&2; exit 2 ;;
         esac
     done
+    # --token-stdin reads the token from stdin: a token on the command
+    # line is visible to other users on this machine.
+    if [ "$token_stdin" = 1 ]; then
+        [ -z "$token" ] || { echo "daemon restart: --token-stdin or --token, not both" >&2; exit 2; }
+        _cli_read_secret_stdin "Token: "
+        token="$_K2_SECRET"; _K2_SECRET=""
+        [ -n "$token" ] || { echo "daemon restart: --token-stdin: no token on stdin" >&2; exit 2; }
+    fi
 
     # ── REMOTE restart ────────────────────────────────────────────────
     if [ -n "$host" ]; then
@@ -5840,7 +5849,7 @@ cmd_daemon_restart() {
             fi
         fi
         if [ -z "$token" ]; then
-            echo "daemon restart --host: no owner token (pass --token <tok> or populate $_daemon_token_file)" >&2
+            echo "daemon restart --host: no owner token (pass --token-stdin or populate $_daemon_token_file)" >&2
             exit 1
         fi
         # Strip a trailing slash so we don't emit a double-slash URL.
@@ -112217,14 +112226,16 @@ case "${1:-help}" in
                 echo "    Until then their k2 commands fail. A system unit: run the sudo systemctl" >&2
                 echo "    stop it prints within 2 minutes." >&2
                 echo "" >&2
-                echo "  restart [--sessions] [--host <base-url>] [--token <token>] [--wait]" >&2
+                echo "  restart [--sessions] [--host <base-url>] [--token-stdin | --token <token>] [--wait]" >&2
                 echo "    Default: restart the LOCAL daemon (macOS launchctl kickstart, Linux" >&2
                 echo "    systemctl restart). Agent sessions hosted by k2-ptyd keep running." >&2
                 echo "    --sessions: end the agent sessions too (they start fresh)." >&2
                 echo "    --host:  restart a REMOTE daemon with no GUI by POSTing" >&2
                 echo "             <base-url>/cli/daemon/restart (e.g. --host https://<sub>.k2.dev)." >&2
                 echo "             Authorizes with the owner token OR an Owner/Admin connect-user" >&2
-                echo "             session token; --token defaults to ~/.k2/daemon.token." >&2
+                echo "             session token; the token defaults to ~/.k2/daemon.token." >&2
+                echo "    --token-stdin: read the token from stdin. A token on the command line" >&2
+                echo "             (--token <token>) is visible to other users on this machine." >&2
                 echo "    --wait:  after the restart is accepted, poll <base>/boot-status every" >&2
                 echo "             ~2s up to ~60s until phase=ready, then print the version it" >&2
                 echo "             came back on. Timeout → message + non-zero exit." >&2

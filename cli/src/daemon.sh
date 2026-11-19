@@ -410,7 +410,7 @@ cmd_daemon_restart() {
     #                     no GUI required. The remote route is supervisor-
     #                     agnostic — it triggers graceful shutdown and the
     #                     remote supervisor (launchd/systemd) respawns it.
-    local host="" token="" wait=0 end_agents=0
+    local host="" token="" token_stdin=0 wait=0 end_agents=0
     while [ $# -gt 0 ]; do
         case "$1" in
             # k2-ptyd P57: a restart keeps agent sessions running; with
@@ -420,10 +420,19 @@ cmd_daemon_restart() {
             --host=*) host="${1#--host=}"; shift ;;
             --token) token="${2:-}"; shift 2 ;;
             --token=*) token="${1#--token=}"; shift ;;
+            --token-stdin) token_stdin=1; shift ;;
             --wait) wait=1; shift ;;
             *) echo "daemon restart: unknown argument: $1" >&2; exit 2 ;;
         esac
     done
+    # --token-stdin reads the token from stdin: a token on the command
+    # line is visible to other users on this machine.
+    if [ "$token_stdin" = 1 ]; then
+        [ -z "$token" ] || { echo "daemon restart: --token-stdin or --token, not both" >&2; exit 2; }
+        _cli_read_secret_stdin "Token: "
+        token="$_K2_SECRET"; _K2_SECRET=""
+        [ -n "$token" ] || { echo "daemon restart: --token-stdin: no token on stdin" >&2; exit 2; }
+    fi
 
     # ── REMOTE restart ────────────────────────────────────────────────
     if [ -n "$host" ]; then
@@ -435,7 +444,7 @@ cmd_daemon_restart() {
             fi
         fi
         if [ -z "$token" ]; then
-            echo "daemon restart --host: no owner token (pass --token <tok> or populate $_daemon_token_file)" >&2
+            echo "daemon restart --host: no owner token (pass --token-stdin or populate $_daemon_token_file)" >&2
             exit 1
         fi
         # Strip a trailing slash so we don't emit a double-slash URL.

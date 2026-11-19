@@ -35,6 +35,8 @@ export interface BriefTokens {
 export const BRIEF_BODY_PX = 13
 export const BRIEF_PAD_X_PX = 18
 export const BRIEF_MEASURE_CH = 75
+/** How wide a wide table's fade is at the edge that has more. */
+export const BRIEF_TABLE_FADE_PX = 32
 
 /** The report column in the ticket's middle pane: set in the report's own
  *  type, no wider than the measure plus the report's padding and its box's
@@ -149,19 +151,20 @@ export function briefStylesheet(tokens: BriefTokens): string {
     `blockquote{margin:.6em 0;padding:.2em .9em;border-left:3px solid var(--border);color:var(--text2)}`,
     `hr{border:0;border-top:1px solid var(--border);margin:1em 0}`,
     // A table wider than the report scrolls sideways in its own strip, never
-    // cut: a scrollbar that always shows, and a shade on the side that has
-    // more (the shades are the strip's background, which the table's own
-    // cells cover where it starts and ends).
-    `.k2-table-scroll{overflow-x:auto;max-width:100%;margin:.6em 0;padding-bottom:2px;`
+    // cut silently: a scrollbar that always shows, the cells fading out at
+    // the edge that has more (a sticky fade after the table, which reaches
+    // its own room once the strip is scrolled to the end), and a shade at
+    // the start once it's scrolled (the strip's background, under the cells).
+    `.k2-table-scroll{display:flex;overflow-x:auto;max-width:100%;margin:.6em 0;padding-bottom:2px;`
       + `background:linear-gradient(to right,var(--bg) 30%,transparent) left center/24px 100% no-repeat local,`
-      + `linear-gradient(to left,var(--bg) 30%,transparent) right center/24px 100% no-repeat local,`
-      + `radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--text) 22%,transparent),transparent) left center/10px 100% no-repeat scroll,`
-      + `radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--text) 22%,transparent),transparent) right center/10px 100% no-repeat scroll;`
+      + `radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--text) 30%,transparent),transparent) left center/12px 100% no-repeat scroll;`
       + `scrollbar-width:thin;scrollbar-color:var(--muted) transparent}`,
+    `.k2-table-scroll::after{content:'';flex:none;position:sticky;right:0;width:${BRIEF_TABLE_FADE_PX}px;margin-left:-${BRIEF_TABLE_FADE_PX}px;`
+      + `background:linear-gradient(to right,transparent,var(--bg) 85%);pointer-events:none}`,
     `.k2-table-scroll::-webkit-scrollbar{height:8px}`,
     `.k2-table-scroll::-webkit-scrollbar-thumb{background:var(--muted)}`,
     `.k2-table-scroll::-webkit-scrollbar-track{background:color-mix(in srgb,var(--text) 6%,transparent)}`,
-    `.k2-table-scroll>table{margin:0}`,
+    `.k2-table-scroll>table{margin:0 ${BRIEF_TABLE_FADE_PX}px 0 0;flex:0 1 auto}`,
     `table{border-collapse:collapse;margin:.6em 0}`,
     // Cells wrap at word breaks only: body's `overflow-wrap:anywhere` lets a
     // table squeeze a column to one character (a word stacked letter by

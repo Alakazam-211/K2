@@ -118,10 +118,10 @@ describe('buildBriefSrcDoc (T10)', () => {
     const { frameHtml } = buildBriefSrcDoc('<p>Plans</p><table><tr><td>Starter</td><td>Up to 3</td></tr></table>', tokens)
     expect(frameHtml).toContain('<div class="k2-table-scroll"><table>')
     const css = briefStylesheet(tokens)
-    expect(css).toMatch(/\.k2-table-scroll\{overflow-x:auto;/)
+    expect(css).toMatch(/\.k2-table-scroll\{display:flex;overflow-x:auto;/)
     // The cue: a scrollbar that always shows, and shades on the sides.
     expect(css).toContain('.k2-table-scroll::-webkit-scrollbar{height:8px}')
-    expect(css).toContain('no-repeat local')
+    expect(css).toMatch(/\.k2-table-scroll::after\{[^}]*position:sticky;right:0/)
   })
 
   it('links take the text-grade accent, and running text stops at a readable measure', () => {

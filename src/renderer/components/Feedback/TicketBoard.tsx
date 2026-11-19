@@ -322,6 +322,9 @@ export function TicketBoard({
         {/* Which tickets: the app's segmented control (Frost in Glass, cut in
             Terminal, the arrow keys move and choose), Waiting on me first as
             on the phone; each count in a small pill. */}
+        {/* Its own line (data-k2-line), so the tabs measure the room left
+            beside the « and turn into a dropdown before they'd run under it. */}
+        <div data-k2-line="" className="flex flex-1 min-w-0">
         <Segmented<TicketScope>
           aria-label="Which tickets"
           value={scope}
@@ -344,6 +347,7 @@ export function TicketBoard({
             buttonProps: { 'data-testid': `ticket-scope-${s.value}`, className: 'cursor-pointer' },
           }))}
         />
+        </div>
         <DrawerToggleButton
           side="left"
           placement="drawer"

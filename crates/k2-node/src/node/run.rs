@@ -1276,7 +1276,7 @@ impl Node {
             if let Some(c) = &job_cache_dir {
                 rw.push(c.clone());
             }
-            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref(), writers, uid_share == UidShare::Own).await
+            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref(), writers, readers.as_ref().map(|(_, e)| e), uid_share == UidShare::Own).await
         } else if let (Some(bin), Some((out_w, err_w))) = (holder_bin.as_ref(), writers) {
             self.start_held(&t, &a, &cwd, &env, network, proxy_port, bin, &hold_dir, out_w, err_w, deadline_unix).await.map(|p| (p, None, None, None, None))
         } else {
@@ -1966,6 +1966,11 @@ impl Node {
     /// can't deadlock it), closes its end, and passes the read end; the
     /// `job-exec` shim reads it to EOF. No value is in argv, a unit
     /// property, D-Bus, `exec.json` or any file.
+    ///
+    /// `spool_err`: the node's read end of the stderr spool (`spool`'s
+    /// second file). When the wall refuses the start, what systemd-run
+    /// wrote there (or into the stderr pipe) goes into the error, so the
+    /// job's log says why ([`start_refusal_text`]).
     #[allow(clippy::too_many_arguments)]
     async fn start_unit(
         &self,
@@ -1979,6 +1984,7 @@ impl Node {
         mem_limit: u64,
         secrets: Option<&k2_node_proto::secret::Plain>,
         spool: Option<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)>,
+        spool_err: Option<&std::fs::File>,
         job_uid: bool,
     ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>, Option<u32>, Option<String>), String> {
         use crate::admin::jobs::{JobAnswer, JobOp, JobStart};
@@ -1989,7 +1995,7 @@ impl Node {
         crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf(), stdin_env: secrets.is_some(), rc_file: rc_file.clone() })?;
         // Spool files (§5.1) where the node gave them; pipes otherwise (a
         // secret job). Either way root only relays the fds.
-        let (mut fds, readers): (Vec<std::os::fd::OwnedFd>, Option<(std::io::PipeReader, std::io::PipeReader)>) = match spool {
+        let (mut fds, mut readers): (Vec<std::os::fd::OwnedFd>, Option<(std::io::PipeReader, std::io::PipeReader)>) = match spool {
             Some((o, e)) => (vec![o, e], None),
             None => {
                 let (out_r, out_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
@@ -2077,7 +2083,17 @@ impl Node {
             Ok(JobAnswer::Started { unit, uid_index, gpu, .. }) => (unit, uid_index, gpu),
             Ok(JobAnswer::Refused(r)) => {
                 withhold(stdin_body.take());
-                return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message));
+                // systemd-run's own message (it refused before any unit
+                // existed, so neither the journal nor the unit has it):
+                // what it wrote to the job's stderr by now. Root's copy of
+                // the write end is closed with systemd-run, so the spool
+                // read and the pipe read never wait.
+                let raw = match (spool_err, readers.take()) {
+                    (Some(f), _) => spool_head(f, START_STDERR_MAX),
+                    (None, Some((_, err_r))) => pipe_now(err_r, START_STDERR_MAX),
+                    (None, None) => Vec::new(),
+                };
+                return Err(format!("the job wall refused to start it: {}: {}{}", r.code, r.message, start_refusal_text(&r.message, &raw)));
             }
             Ok(other) => {
                 withhold(stdin_body.take());
@@ -2918,6 +2934,75 @@ pub fn check_secret_names(p: &k2_node_proto::secret::Plain, plan: &[String], env
 }
 
 /// The bytes on the stdin pipe (SE21): `K2SE1\n` + the canonical payload.
+/// At most this much of what systemd-run wrote before a refused start is
+/// read (its own message is a line or two).
+const START_STDERR_MAX: usize = 4096;
+
+/// What a refused start adds to its error (which the job's log carries):
+/// systemd-run's own lines from the job's stderr (`raw`), as `; systemd-run
+/// said: <line> | <line>`, control characters out, at most 20 lines. When
+/// the refusal says systemd-run ended early but it wrote nothing, the error
+/// says that instead of pointing at a message that isn't there; any other
+/// refusal with nothing on stderr adds nothing.
+pub(crate) fn start_refusal_text(refusal: &str, raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(&raw[..raw.len().min(START_STDERR_MAX)]);
+    let lines: Vec<String> = text
+        .lines()
+        .map(|l| l.chars().filter(|c| !c.is_control() || *c == '\t').collect::<String>().trim().to_string())
+        .filter(|l| !l.is_empty())
+        .take(20)
+        .collect();
+    if !lines.is_empty() {
+        format!("; systemd-run said: {}", lines.join(" | "))
+    } else if refusal.contains("systemd-run ended") {
+        "; systemd-run wrote nothing to stderr".to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// The start of a spool file, up to `max` bytes (a regular file: never
+/// waits).
+fn spool_head(f: &std::fs::File, max: usize) -> Vec<u8> {
+    use std::os::unix::fs::FileExt;
+    let mut buf = vec![0u8; max];
+    let mut n = 0;
+    while n < max {
+        match f.read_at(&mut buf[n..], n as u64) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
+    buf.truncate(n);
+    buf
+}
+
+/// What is in a pipe now, up to `max` bytes, without waiting (a writer
+/// still open somewhere can't hang the node).
+fn pipe_now(r: std::io::PipeReader, max: usize) -> Vec<u8> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    let fd = r.as_raw_fd();
+    // SAFETY: F_GETFL/F_SETFL on a valid fd we own.
+    unsafe {
+        let fl = libc::fcntl(fd, libc::F_GETFL);
+        if fl < 0 || libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK) < 0 {
+            return Vec::new();
+        }
+    }
+    let mut r = r;
+    let mut out = Vec::new();
+    let mut buf = [0u8; 1024];
+    while out.len() < max {
+        match r.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => out.extend_from_slice(&buf[..k]),
+        }
+    }
+    out.truncate(max);
+    out
+}
+
 fn secret_pipe_body(p: &k2_node_proto::secret::Plain) -> Result<Vec<u8>, String> {
     let mut values: Vec<(String, Vec<u8>)> = p.0.iter().map(|(k, v)| (k.clone(), v.as_bytes().to_vec())).collect();
     let json = k2_node_proto::secret::payload(&values);
@@ -3067,6 +3152,127 @@ pub(super) mod tests {
         assert!(failed.starts_with("network: none: the no-lan proxy couldn't start (no free proxy port), so this job has no network"), "{failed}");
     }
 
+    /// 0.46.15 k2n11: a refused start carries systemd-run's own lines (it
+    /// exits before any unit exists, so nothing else has them); a refusal
+    /// that blames systemd-run but has no lines says so; any other refusal
+    /// adds nothing.
+    #[test]
+    fn a_refused_start_carries_systemd_runs_own_message() {
+        let ended = "systemd-run ended before the job started (exit status: 1); its message is in the job's log";
+        assert_eq!(
+            start_refusal_text(ended, b"Failed to parse IP address prefix: localhost\n"),
+            "; systemd-run said: Failed to parse IP address prefix: localhost"
+        );
+        assert_eq!(
+            start_refusal_text(ended, b"\x1b[0;1;31mFailed to start transient service unit: Unit k2job-x.service has a bad unit file setting.\x1b[0m\n\n  second line\r\n"),
+            "; systemd-run said: [0;1;31mFailed to start transient service unit: Unit k2job-x.service has a bad unit file setting.[0m | second line"
+        );
+        assert_eq!(start_refusal_text(ended, b""), "; systemd-run wrote nothing to stderr");
+        assert_eq!(start_refusal_text("job_uid_unavailable: no free uid", b""), "");
+        let many: Vec<u8> = (0..100).flat_map(|i| format!("line {i}\n").into_bytes()).collect();
+        let t = start_refusal_text(ended, &many);
+        assert!(t.ends_with("line 19") && !t.contains("line 20"), "{t}");
+        let huge = vec![b'x'; START_STDERR_MAX * 4];
+        assert!(start_refusal_text(ended, &huge).len() <= START_STDERR_MAX + 64);
+        // The pipe read never waits on a writer that is still open.
+        let (r, mut w) = std::io::pipe().unwrap();
+        std::io::Write::write_all(&mut w, b"partial").unwrap();
+        let t0 = std::time::Instant::now();
+        assert_eq!(pipe_now(r, START_STDERR_MAX), b"partial");
+        assert!(t0.elapsed() < Duration::from_secs(5), "pipe_now waited for the writer");
+        drop(w);
+    }
+
+    /// 0.46.15 k2n11 (`--netns-dummy` jobs failed with "its message is in
+    /// the job's log" and nothing there): a fake executor writes what
+    /// systemd-run writes to the job's stderr fd and refuses the start, as
+    /// root's does when systemd-run exits before the unit exists. The
+    /// error, which the node writes into the job's log (`run_job`'s spawn
+    /// failure: `sys(journal, e)`) and the receipt, carries that message:
+    /// once through the stderr spool (every adoptable job) and once through
+    /// the stderr pipe (a secret job).
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_systemd_run_refusal_puts_its_stderr_in_the_jobs_log() {
+        use crate::admin::exec::LocalResponse;
+        use crate::admin::jobs::JobAnswer;
+        const SAID: &str = "Failed to parse IP address prefix: localhost";
+        let d = crate::util::temp_dir("start-stderr");
+        let sock = crate::admin::server::short_sock(&d);
+        let _ = std::fs::remove_file(&sock);
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        std::thread::spawn(move || {
+            use crate::admin::exec::LocalRequest;
+            use crate::admin::jobs::JobOp;
+            loop {
+                let Ok((mut s, _)) = l.accept() else { return };
+                let Ok(h) = crate::admin::server::read_frame(&mut s, 1 << 20) else { continue };
+                let req = serde_json::from_slice::<LocalRequest>(&h).unwrap_or(LocalRequest::Status);
+                let answer = match req {
+                    LocalRequest::Job { job: JobOp::Start(_) } => {
+                        // systemd-run's stderr is the job's: it writes its
+                        // complaint there and ends; root drops the fds.
+                        let fds = crate::admin::fdpass::recv_fds(&s).expect("the start's fds");
+                        assert!(fds.len() >= 2, "stdout and stderr");
+                        let mut err = std::fs::File::from(fds.into_iter().nth(1).unwrap());
+                        std::io::Write::write_all(&mut err, format!("{SAID}\n").as_bytes()).unwrap();
+                        drop(err);
+                        JobAnswer::Refused(k2_node_proto::admin::AdminRefusal::new(
+                            "failed",
+                            "systemd-run ended before the job started (exit status: 1); its message is in the job's log",
+                        ))
+                    }
+                    LocalRequest::Job { job: JobOp::KeyTaint { .. } } => JobAnswer::KeyTaint { tainted: false },
+                    LocalRequest::Job { job: JobOp::Release { .. } } => JobAnswer::Done { detail: serde_json::json!({}) },
+                    _ => JobAnswer::Refused(k2_node_proto::admin::AdminRefusal::new("not_configured", "the test executor only refuses starts")),
+                };
+                let _ = crate::admin::server::write_frame(&mut s, &serde_json::to_vec(&LocalResponse::Job(answer)).unwrap());
+            }
+        });
+        let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
+        layout.ensure().unwrap();
+        std::fs::create_dir_all(&layout.config).unwrap();
+        let mut o = super::super::NodeOptions::new(layout);
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.wall = Some(Wall::JobUser { user: "k2job".into() });
+        o.exec_stdin = Some(true);
+        o.admin_socket = sock.clone();
+        o.cancel_grace = Duration::from_millis(100);
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+        let n = Node::open(o).await.unwrap();
+        let t = n.owner();
+        let mut a = crate::ledger::tests::assign("nd", 1);
+        a.plan.network = Some(k2_node_proto::jobnet::JobNet {
+            mode: k2_node_proto::jobnet::JobNetMode::None,
+            dummies: vec![k2_node_proto::jobnet::Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }],
+        });
+        let dirs = JobDirs::new(d.join("job"));
+        dirs.create().unwrap();
+        let want = format!("; systemd-run said: {SAID}");
+
+        // Spooled output (an adoptable job): the message is in the stderr
+        // spool, which nothing tails once the start failed.
+        let sp = d.join("spool");
+        let o_ = spool::create(&sp, "nd-g1", "out").unwrap();
+        let e_ = spool::create(&sp, "nd-g1", "err").unwrap();
+        let r = n.start_unit(&t, &a, &dirs, &dirs.root, &[], vec![], Network::None, 1 << 30, None, Some((o_.writer, e_.writer)), Some(&e_.reader), false).await;
+        let e = r.err().expect("the start is refused");
+        assert!(e.starts_with("the job wall refused to start it: failed: systemd-run ended before the job started"), "{e}");
+        assert!(e.ends_with(&want), "systemd-run's message isn't in the error the job's log gets: {e}");
+
+        // A secret job's pipes: the message is in the stderr pipe.
+        let mut a2 = a.clone();
+        a2.plan.secret_env = vec!["K2T_SECRET".into()];
+        let secrets = k2_node_proto::secret::Plain(vec![("K2T_SECRET".into(), "k2test-secret-start-stderr".into())]);
+        let r = n.start_unit(&t, &a2, &dirs, &dirs.root, &[], vec![], Network::None, 1 << 30, Some(&secrets), None, None, false).await;
+        let e = r.err().expect("the start is refused");
+        assert!(e.ends_with(&want), "systemd-run's message isn't in the error the job's log gets: {e}");
+        assert!(!e.contains("k2test-secret"), "{e}");
+        let _ = std::fs::remove_file(&sock);
+    }
+
     /// M8.2 (11-07 review): a secret job asked to run as a uid of its own,
     /// on an executor that starts the unit without one (an older or
     /// tampered executor): the unit's stdin closes empty, so no secret
@@ -3149,7 +3355,7 @@ pub(super) mod tests {
         let dirs = JobDirs::new(d.join("job"));
         dirs.create().unwrap();
         let secrets = k2_node_proto::secret::Plain(vec![("K2T_SECRET".into(), "k2test-secret-M8-value".into())]);
-        let r = n.start_unit(&t, &a, &dirs, &dirs.root, &[], vec![], Network::On, 1 << 30, Some(&secrets), None, true).await;
+        let r = n.start_unit(&t, &a, &dirs, &dirs.root, &[], vec![], Network::On, 1 << 30, Some(&secrets), None, None, true).await;
         let e = r.err().expect("the start fails");
         assert!(e.contains(crate::admin::jobpool::JOB_UID_UNAVAILABLE), "{e} (the fake executor: {:?})", rx.try_recv());
         let got = rx.recv_timeout(Duration::from_secs(20)).expect("the fake executor answered").expect("the fake executor ran");

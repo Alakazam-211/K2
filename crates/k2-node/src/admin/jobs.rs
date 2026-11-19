@@ -787,6 +787,36 @@ pub fn runtime_max(max_secs: Option<u64>) -> Option<u64> {
 /// them, so another server's jobs keep away from it on every node.
 pub const TEAM_RESTRICT_NAMESPACES: &str = "RestrictNamespaces=~user net";
 
+/// The keywords systemd takes in `IPAddressAllow=`/`IPAddressDeny=`.
+pub const IP_ACCESS_KEYWORDS: &[&str] = &["any", "localhost", "link-local", "multicast"];
+
+/// Whether systemd-run can parse an `IPAddressAllow=`/`IPAddressDeny=`
+/// value (systemd 255 `bus_append_cgroup_property`, client side): one of
+/// [`IP_ACCESS_KEYWORDS`] alone, or space-separated addresses/prefixes and
+/// no keyword. A keyword beside a prefix is "Failed to parse IP address
+/// prefix: localhost" and systemd-run exits 1 before any unit exists (the
+/// 0.46.15 `--netns-dummy` start failure on k2n11).
+pub fn ip_access_value_ok(v: &str) -> bool {
+    if IP_ACCESS_KEYWORDS.contains(&v) {
+        return true;
+    }
+    let mut words = v.split_ascii_whitespace().peekable();
+    words.peek().is_some()
+        && words.all(|w| {
+            let (addr, len) = match w.split_once('/') {
+                Some((a, l)) => (a, Some(l)),
+                None => (w, None),
+            };
+            match addr.parse::<std::net::IpAddr>() {
+                Ok(ip) => {
+                    let max = if ip.is_ipv4() { 32 } else { 128 };
+                    len.is_none_or(|l| l.parse::<u8>().is_ok_and(|l| l <= max))
+                }
+                Err(_) => false,
+            }
+        })
+}
+
 /// The fixed template (argv[0] is `systemd-run`).
 pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
     let mut a: Vec<String> = vec![
@@ -902,10 +932,15 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
             }
             prop("IPAddressDeny=any".into());
             // Its own loopback works (the namespace's; nothing outside it),
-            // and its dummy interfaces' addresses (0.46.14).
-            let mut allow = vec!["localhost".to_string()];
-            allow.extend(p.allow_ips.iter().cloned());
-            prop(format!("IPAddressAllow={}", allow.join(" ")));
+            // and its dummy interfaces' addresses (0.46.14), each in its own
+            // assignment (systemd merges them): systemd-run takes a keyword
+            // (`localhost`, `any`, …) only as a whole value, so
+            // `localhost 10.254.254.1/32` fails to parse in systemd-run
+            // itself, before any unit exists ([`ip_access_value_ok`]).
+            prop("IPAddressAllow=localhost".into());
+            if !p.allow_ips.is_empty() {
+                prop(format!("IPAddressAllow={}", p.allow_ips.join(" ")));
+            }
             // The resolver's local sockets would still answer from outside
             // the namespace (DNS as a side channel).
             prop("InaccessiblePaths=-/run/systemd/resolve -/run/nscd -/var/run/nscd".into());
@@ -1652,10 +1687,15 @@ impl Executor {
         }
         let argv = systemd_run_argv(plan);
         let prog = find_program("systemd-run").ok_or_else(|| refuse(code::NOT_CONFIGURED, "systemd-run not found"))?;
+        // systemd-run's own errors (a property it can't parse, a refused
+        // D-Bus call) go to its stderr, which is the job's: the node writes
+        // them into the job's log when the start fails
+        // (`node::run::start_refusal_text`). Console, never the journal.
         let mut child = std::process::Command::new(prog)
             .args(&argv[1..])
             .env_clear()
             .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .env("SYSTEMD_LOG_TARGET", "console")
             .current_dir("/")
             .stdin(input.map(Stdio::from).unwrap_or_else(Stdio::null))
             .stdout(Stdio::from(out))
@@ -2181,6 +2221,65 @@ mod tests {
         assert!(a.iter().any(|x| x == "CPUQuota=1%"), "never below 1%");
     }
 
+    /// Every `-p` of a job unit is one systemd 255's `systemd-run` parses
+    /// client side for a transient *service* (the unit type we use: never
+    /// `--scope`, which takes no exec properties such as
+    /// `NetworkNamespacePath=`), and no address rule mixes a keyword with
+    /// prefixes. A failure here is a start that systemd-run refuses with
+    /// exit 1 and no unit.
+    fn assert_unit_props_parse(a: &[String]) {
+        assert!(!a.iter().any(|x| x == "--scope" || x.starts_with("--scope=")), "a job unit is a service: {a:?}");
+        assert!(a.iter().any(|x| x.starts_with("--unit=") && x.ends_with(".service")), "{a:?}");
+        let props: Vec<&str> = a.windows(2).filter(|w| w[0] == "-p").map(|w| w[1].as_str()).collect();
+        assert!(!props.is_empty(), "{a:?}");
+        for p in &props {
+            let (k, v) = p.split_once('=').unwrap_or_else(|| panic!("-p {p} has no '=': {a:?}"));
+            assert!(!k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric()), "-p {p}: bad property name");
+            if k == "IPAddressAllow" || k == "IPAddressDeny" {
+                assert!(ip_access_value_ok(v), "systemd-run can't parse -p {p} (a keyword only as the whole value)");
+            }
+        }
+        // One namespace per unit: root's, or a private one, never both.
+        let netns = props.iter().filter(|p| p.starts_with("NetworkNamespacePath=")).count();
+        let private = props.iter().filter(|p| **p == "PrivateNetwork=yes").count();
+        assert!(netns + private <= 1, "{props:?}");
+    }
+
+    /// The parse rule itself, as systemd 255's systemd-run applies it
+    /// (reproduced on Ubuntu 24.04, systemd 255.4-1ubuntu8.18, compute job
+    /// 36994e26: `IPAddressAllow=localhost 10.254.254.1/32` → "Failed to
+    /// parse IP address prefix: localhost", exit 1; the split form gets as
+    /// far as the D-Bus call).
+    #[test]
+    fn ip_access_values_take_a_keyword_only_alone() {
+        for ok in ["any", "localhost", "link-local", "multicast", "10.254.254.1/32", "10.254.254.1/32 fd00::1/128", "fd00::1", "0.0.0.0/8 2002::/16"] {
+            assert!(ip_access_value_ok(ok), "{ok}");
+        }
+        for bad in ["", " ", "localhost 10.254.254.1/32", "10.254.254.1/32 localhost", "any ::1/128", "10.0.0.1/33", "fd00::1/129", "example.com", "10.0.0.1/x"] {
+            assert!(!ip_access_value_ok(bad), "{bad:?}");
+        }
+    }
+
+    /// Every network shape's unit parses: on, no-lan (with this machine's
+    /// extra prefixes), none, none with dummies, a team tenant's, a GPU-less
+    /// owner's.
+    #[test]
+    fn every_job_unit_shape_is_one_systemd_run_parses() {
+        for network in [Network::On, Network::NoLan, Network::None] {
+            for dummies in [false, true] {
+                let mut p = plan();
+                p.network = network;
+                p.lan_extra = vec!["192.168.7.0/24".into(), "2a01:4f8:1:2::/64".into()];
+                p.restrict_userns = true;
+                if dummies && network == Network::None {
+                    p.netns = Some(crate::admin::netns::netns_path("k2job-j1-g1"));
+                    p.allow_ips = vec!["10.254.254.1/32".into(), "fd00:6b32::7/128".into()];
+                }
+                assert_unit_props_parse(&systemd_run_argv(&p));
+            }
+        }
+    }
+
     /// 0.46.14 (`--netns-dummy`): a unit with its own namespace joins root's
     /// (`NetworkNamespacePath=`, never `PrivateNetwork` beside it), keeps
     /// the address filter, and lets through only loopback and its dummy
@@ -2196,10 +2295,13 @@ mod tests {
         assert!(has("NetworkNamespacePath=/run/netns/k2job-j1-g1"), "{a:?}");
         assert!(!has("PrivateNetwork=yes"), "one namespace: root's");
         assert!(has("IPAddressDeny=any"));
-        assert!(
-            has("IPAddressAllow=localhost 10.254.254.1/32 fd00::1/128"),
-            "{a:?}"
-        );
+        // Two assignments (systemd merges them): the keyword alone, then the
+        // prefixes. Never `localhost 10.254.254.1/32` in one: systemd-run
+        // can't parse that and exits 1 before the unit exists (k2n11).
+        assert!(has("IPAddressAllow=localhost"), "{a:?}");
+        assert!(has("IPAddressAllow=10.254.254.1/32 fd00::1/128"), "{a:?}");
+        assert_eq!(a.iter().filter(|x| x.starts_with("IPAddressAllow=")).count(), 2, "{a:?}");
+        assert_unit_props_parse(&a);
         assert!(
             a.iter().any(|x| x.contains("-/run/systemd/resolve")),
             "no DNS side channel"

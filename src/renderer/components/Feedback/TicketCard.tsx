@@ -358,15 +358,20 @@ export function FeedbackCard({
       )}
       <div
         data-testid="card-bottom-row"
-        className="mt-1.5 flex items-center gap-1.5 type-hint text-[var(--color-text-muted)] min-w-0"
+        className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 type-hint text-[var(--color-text-muted)] min-w-0"
       >
-        <CardStatusDropdown row={row} onMutated={onMutated} />
-        <CardAssigneeInitials assignees={row.assignees} />
-        <span className="flex-1" />
-        <FileCountBadge count={row.fileCount} />
-        {row.hasBrief === true && <HtmlBriefBadge />}
-        <span data-testid="card-age" className="tabular-nums flex-shrink-0">
-          {formatRelativeTime(row.createdAt, nowSec)}
+        {/* Status and people never shrink under each other; in a narrow
+            card the files, report mark and age wrap to their own line. */}
+        <span className="flex items-center gap-1.5 flex-shrink-0">
+          <CardStatusDropdown row={row} onMutated={onMutated} />
+          <CardAssigneeInitials assignees={row.assignees} />
+        </span>
+        <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
+          <FileCountBadge count={row.fileCount} />
+          {row.hasBrief === true && <HtmlBriefBadge />}
+          <span data-testid="card-age" className="tabular-nums flex-shrink-0">
+            {formatRelativeTime(row.createdAt, nowSec)}
+          </span>
         </span>
       </div>
     </Surface>

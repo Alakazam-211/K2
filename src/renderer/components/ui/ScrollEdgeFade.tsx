@@ -117,6 +117,7 @@ ${EDGES.map((e) => GLASS_BLUR_LAYERS.map((l, i) => glassLayer(e, l, i)).join('\n
 ${EDGES.map((e) => `${GLASS} ${band(e)} > .k2-edge-tint { ${edgeTintCss(e, GLASS_TINT_STOPS)} }`).join('\n')}
 ${EDGES.map((e) => `${GLASS} ${FRAME}[data-edge-heavy] > [data-scroll-edge="${e}"] > .k2-edge-tint { ${edgeTintCss(e, GLASS_TINT_STOPS_TILE)} }`).join('\n')}
 ${GLASS}[data-frost="tile"] ${BLUR_SPANS} { display: none; }
+${FRAME}[data-edge-noblur] > [data-scroll-edge] > [data-edge-blur] { display: none; }
 ${EDGES.map((e) => `${GLASS}[data-frost="tile"] ${band(e)} > .k2-edge-tint { ${edgeTintCss(e, GLASS_TINT_STOPS_TILE)} }`).join('\n')}
 @media (prefers-reduced-transparency: reduce) {
   ${BLUR_SPANS} { display: none; }
@@ -189,19 +190,23 @@ export interface ScrollEdgeFrameProps {
    *  a dialog, where a row must never read through the band beside a bar
    *  even if the webview draws no blur there. */
   heavy?: boolean
+  /** false: the bands only tint, with no blur. For raised cards in a tile:
+   *  blurred, a card is lighter than the tile, so the band showed as a
+   *  lighter strip with a hard inner edge. Pair it with `heavy`. */
+  blur?: boolean
   testId?: string
   children: ReactNode
 }
 
 /** A scrolling list whose ends fade softly under the bars beside it. */
-export function ScrollEdgeFrame({ className, scrollClassName, tint, heavy = false, testId, children }: ScrollEdgeFrameProps): JSX.Element {
+export function ScrollEdgeFrame({ className, scrollClassName, tint, heavy = false, blur = true, testId, children }: ScrollEdgeFrameProps): JSX.Element {
   const frame = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   useScrollEdges(frame, scroller, content)
   const style = tint ? ({ [SCROLL_EDGE_TINT_VAR]: tint } as CSSProperties) : undefined
   return (
-    <div ref={frame} className={cx('relative', className)} data-scroll-edges="" data-edge-heavy={heavy ? '' : undefined} data-testid={testId} style={style}>
+    <div ref={frame} className={cx('relative', className)} data-scroll-edges="" data-edge-heavy={heavy ? '' : undefined} data-edge-noblur={blur ? undefined : ''} data-testid={testId} style={style}>
       <style data-scroll-edge-styles="">{SCROLL_EDGE_CSS}</style>
       <div ref={scroller} className={cx('absolute inset-0', scrollClassName)} data-scroll-edges-list="">
         <div ref={content}>{children}</div>

@@ -485,6 +485,25 @@ describe('after-shot fixes', () => {
     expect(screen.getByTestId('ticket-report-scroll').hasAttribute('data-edge-heavy')).toBe(true)
   })
 
+  it('the list’s fade only tints: blurring the raised cards left a lighter band with a hard top edge', async () => {
+    board()
+    expect((await screen.findByTestId('ticket-list-scroll')).hasAttribute('data-edge-noblur')).toBe(true)
+  })
+
+  it('a narrow card’s bottom row wraps its right-hand group instead of squeezing the status under the people', async () => {
+    board()
+    const row = (await screen.findAllByTestId('card-bottom-row'))[0]
+    expect(row.className).toContain('flex-wrap')
+    const status = within(row).getByTestId('card-status')
+    const left = row.firstElementChild as HTMLElement
+    expect(left.contains(status)).toBe(true)
+    expect(left.contains(within(row).getByTestId('card-assignee'))).toBe(true)
+    expect(left.className).toContain('flex-shrink-0')
+    const right = row.lastElementChild as HTMLElement
+    expect(right.contains(within(row).getByTestId('card-age'))).toBe(true)
+    expect(right.className).toContain('ml-auto')
+  })
+
   it('the byline wraps in a narrow report', async () => {
     board()
     fireEvent.click(card(first.id))

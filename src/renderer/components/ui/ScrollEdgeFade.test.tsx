@@ -329,3 +329,17 @@ describe('a heavy band (a list in a dialog)', () => {
     expect((container.querySelector('[data-scroll-edges]') as HTMLElement).hasAttribute('data-edge-heavy')).toBe(false)
   })
 })
+
+describe('a band without blur (raised cards in a tile)', () => {
+  it('drops only the blur layers, in every look, and keeps the tint', () => {
+    expect(ruleFor(SCROLL_EDGE_CSS, '[data-scroll-edges][data-edge-noblur] > [data-scroll-edge] > [data-edge-blur] {')).toContain('display: none')
+    expect(SCROLL_EDGE_CSS).not.toMatch(/\[data-edge-noblur\][^{]*\.k2-edge-tint[^{]*\{ display: none/)
+  })
+
+  it('is marked on the frame only when asked for', () => {
+    const { container, rerender } = render(<ScrollEdgeFrame heavy blur={false}><div /></ScrollEdgeFrame>)
+    expect((container.querySelector('[data-scroll-edges]') as HTMLElement).hasAttribute('data-edge-noblur')).toBe(true)
+    rerender(<ScrollEdgeFrame heavy><div /></ScrollEdgeFrame>)
+    expect((container.querySelector('[data-scroll-edges]') as HTMLElement).hasAttribute('data-edge-noblur')).toBe(false)
+  })
+})

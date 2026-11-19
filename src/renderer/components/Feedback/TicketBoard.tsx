@@ -331,12 +331,15 @@ export function TicketBoard({
       </div>
 
       {/* The cards scroll in a frame whose ends fade, tinted with the tile's
-          own fill; at the tile's foot it keeps inside the rim's curve. */}
+          own fill (no blur: a blurred raised card is lighter than the tile
+          and edged the band); at the tile's foot it keeps inside the rim's
+          curve. */}
       <ScrollEdgeFrame
         className={`flex-1 min-h-0 ${TILE_FOOT_CLIP}`}
         scrollClassName="overflow-y-auto overflow-x-hidden px-2 pb-2 [&>div]:min-h-full [&>div]:flex [&>div]:flex-col"
         tint={TICKET_LIST_EDGE_TINT}
         heavy
+        blur={false}
         testId="ticket-list-scroll"
       >
         <TicketListBody

@@ -229,6 +229,28 @@ for c in "${REFUSED_CASES[@]}"; do
     assert_eq "refused connect: $name: says so" "$err" "Error: K2's server didn't answer $route: nothing took the connection at http://127.0.0.1:$CLOSED; run k2 daemon status"
 done
 
+echo "== launch <name>: a resolve answer with no folder is refused =="
+ENSURE=/cli/workspace/ensure-canonical-session
+for body in '{"path":null}' '{"path":""}' '{"workspace":"acme"}'; do
+    answer /cli/workspace/resolve 200 "$body" "$ENSURE" 200 '{"success":true}'
+    run workspace launch acme
+    assert_eq "resolve $body: exit 1" "$rc" "1"
+    assert_eq "resolve $body: nothing on stdout" "$out" ""
+    assert_eq "resolve $body: says so" "$err" "Error: K2's server gave no folder for workspace 'acme' (/cli/workspace/resolve answered: $body)"
+    if grep -Fq "\"path\": \"$ENSURE\"" "$LOG_FILE"; then bad "resolve $body: launched anyway"; else ok "resolve $body: nothing launched"; fi
+done
+answer /cli/workspace/resolve 400 '{"error":"workspace not found: acme"}' "$ENSURE" 200 '{"success":true}'
+run workspace launch acme
+assert_eq "resolve not found: exit 1" "$rc" "1"
+assert_eq "resolve not found: the daemon's words" "$err" "Error: workspace not found: acme"
+if grep -Fq "\"path\": \"$ENSURE\"" "$LOG_FILE"; then bad "resolve not found: launched anyway"; else ok "resolve not found: nothing launched"; fi
+answer /cli/workspace/resolve 200 "{\"path\":\"$WS\"}" "$ENSURE" 200 '{"success":true}'
+run workspace launch acme
+assert_eq "resolve found: exit 0" "$rc" "0"
+WS_Q="$("$PY" -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$WS")"
+assert_contains "resolve found: launches that folder" "$(grep -F "\"path\": \"$ENSURE\"" "$LOG_FILE")" "project=$WS_Q"
+assert_not_contains "resolve found: never the word None" "$(cat "$LOG_FILE")" "project=None"
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

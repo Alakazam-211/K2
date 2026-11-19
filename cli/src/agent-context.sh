@@ -1192,11 +1192,21 @@ cmd_workspace_launch() {
     if [[ ! -d "$target" ]]; then
         # Possibly a workspace name; resolve via daemon.
         local resolved
-        _K2_PERMISSION_QUIET=1 _ws_request cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")"
+        _ws_request cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")"
         resolved=$(printf '%s' "$_WS_ANSWER" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("path",""))
-except: pass' 2>/dev/null)
-        [[ -n "$resolved" ]] && target="$resolved"
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(0)
+p = d.get("path") if isinstance(d, dict) else None
+if isinstance(p, str) and p.strip(): print(p)' 2>/dev/null) || true
+        if [[ -z "$resolved" ]]; then
+            # An error, or an answer it can't read: cli_print_or_fail says
+            # which and exits. An answer with no folder (`"path": null`)
+            # is no target either.
+            cli_print_or_fail "$_WS_ANSWER" /cli/workspace/resolve >/dev/null
+            echo "Error: K2's server gave no folder for workspace '$target' (/cli/workspace/resolve answered: ${_WS_ANSWER:0:200})" >&2
+            exit 1
+        fi
+        target="$resolved"
     fi
     _ws_request cli_request_post "/cli/workspace/ensure-canonical-session" "project=$(urlencode "$target")"
     # Errors (a refusal, a permission card) on stderr with its exit code

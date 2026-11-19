@@ -62,10 +62,10 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 
 /// No answer on the left of the pipe: the line, then SIGPIPE. macOS's
 /// bash 3.2 runs the reader on an empty input instead, which prints an
-/// empty line on stderr ([`Compare::InPipe`]).
+/// empty line on stderr ([`Compare::Bash32GetPipe`]).
 fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::InPipe {
+        compare: Compare::Bash32GetPipe {
             stdout: "",
             stderr: "\n",
         },

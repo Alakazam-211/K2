@@ -124,8 +124,18 @@ pub enum Compare {
     /// `stderr`, and the command exits 1. Only there, and only when bash
     /// ended with no signal, that is what bash must print (after the
     /// binary's line) while the binary still dies of SIGPIPE with nothing
-    /// on stdout.
+    /// on stdout. The commands that difference is named for use
+    /// [`Compare::Bash32GetPipe`]; this one holds those not named yet.
     InPipe {
+        stdout: &'static str,
+        stderr: &'static str,
+    },
+    /// [`Compare::InPipe`] for a command `scripts/cli-parity.sh` names
+    /// in its expected difference `bash32-get-pipe`: inbox, read,
+    /// activity, connections add and remove, connect status. Compared
+    /// the same way; the name says the bash 3.2 side is a ruled
+    /// difference, checked by the gate too.
+    Bash32GetPipe {
         stdout: &'static str,
         stderr: &'static str,
     },
@@ -491,7 +501,10 @@ impl Rig {
             tools, with_tools,
             "{name}: the programs run with no python3"
         );
-        if matches!(c.compare, Compare::Waited | Compare::InPipe { .. }) {
+        if matches!(
+            c.compare,
+            Compare::Waited | Compare::InPipe { .. } | Compare::Bash32GetPipe { .. }
+        ) {
             let (ws, wn) = mask_waited(&with.stderr);
             let (os, on) = mask_waited(&out.stderr);
             assert_eq!(os, ws, "{name}: stderr with no python3 (seconds masked)");
@@ -548,7 +561,7 @@ impl Rig {
             bl.join("\n----\n").replace('\r', "")
         );
         let bash_3_2_pipe = match c.compare {
-            Compare::InPipe { stdout, stderr }
+            Compare::InPipe { stdout, stderr } | Compare::Bash32GetPipe { stdout, stderr }
                 if cfg!(target_os = "macos") && b.signal.is_none() =>
             {
                 Some((stdout, stderr))
@@ -661,7 +674,10 @@ impl Rig {
                 "{name}: the binary wrote about the NUL: {:?}",
                 r.stderr
             );
-        } else if matches!(c.compare, Compare::Waited | Compare::InPipe { .. }) {
+        } else if matches!(
+            c.compare,
+            Compare::Waited | Compare::InPipe { .. } | Compare::Bash32GetPipe { .. }
+        ) {
             let (bs, bn) = mask_waited(&b.stderr);
             let (rs, rn) = mask_waited(&r.stderr);
             assert_eq!(rs, bs, "{name}: stderr (seconds masked)");

@@ -495,7 +495,7 @@ fn connect_status_with_a_passport() {
 fn connect_status_with_no_answer() {
     let rig = Rig::new(VERB, "none");
     let in_pipe = |c: Case| Case {
-        compare: Compare::InPipe {
+        compare: Compare::Bash32GetPipe {
             stdout: "",
             stderr: "",
         },

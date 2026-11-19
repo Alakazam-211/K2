@@ -81,13 +81,14 @@ pub mod watch;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use k2_core::log_debug;
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::session::{BlobSession, Config, Demotion, PoolStats, Session, SessionError, SessionManager};
-use k2_mpc_base::store::{DocKey, DocStore};
+use k2_mpc_base::store::{CommitDurability, DocKey, DocStore, StoreSettings, StoreSettingsError};
 
 /// The vendored kit writes docs back to their files (its C4, base
 /// `e7c1fd6`). `docs-md-v1` is advertised while the runtime is up.
@@ -118,10 +119,41 @@ const RECHECK_EVERY_TICKS: u64 = 8;
 /// Orphan-share sweep (about a minute; the first runs on the first tick).
 const SWEEP_EVERY_TICKS: u64 = 240;
 
+/// Grouped commits (kit v0.23.0, Rosson's decision for 0.46.17): one wait
+/// for the disk per group of at most 32 changes or 100 ms. The owner's
+/// "Save every change immediately" ([`save_immediately`]) turns it off.
+pub const COMMIT_GROUP_CHANGES: u32 = 32;
+/// A group's longest wait, ms ([`COMMIT_GROUP_CHANGES`]).
+pub const COMMIT_GROUP_MS: u64 = 100;
+
+/// Why K2 flushed the store's saves ([`Runtime::flush_saves`]): an explicit
+/// save, a tab's close, a tab going out of view, the docs going idle.
+pub const FLUSH_REASONS: [&str; 4] = ["save", "close", "switch_away", "idle"];
+
+/// Flushes that succeeded since this daemon started, by [`FLUSH_REASONS`]
+/// (status shows them: `saves.flushes`).
+static FLUSHES: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+fn count_flush(why: &str) {
+    if let Some(i) = FLUSH_REASONS.iter().position(|r| *r == why) {
+        FLUSHES[i].fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Flushes since start, by reason (`{save, close, switch_away, idle}`).
+pub fn flush_counts() -> serde_json::Value {
+    serde_json::Value::Object(
+        FLUSH_REASONS.iter().zip(FLUSHES.iter()).map(|(r, n)| (r.to_string(), serde_json::json!(n.load(Ordering::SeqCst)))).collect(),
+    )
+}
+
 
 /// The loaded runtime.
 pub struct Runtime {
     manager: SessionManager,
+    /// The store's commit count at the last tick: a tick that finds it
+    /// unchanged with commits not yet on disk is idle, and flushes them.
+    last_commits: AtomicU64,
     /// K2's own handle on the store (shares, `log`); dropped at release so
     /// the file lock goes with the kit's.
     store: Mutex<Option<Arc<DocStore>>>,
@@ -240,8 +272,30 @@ fn blob_config() -> BlobConfig {
     cfg
 }
 
-fn config() -> Config {
-    kit_config(memory_budget_bytes())
+/// The owner's "Save every change immediately" (`docsSaveImmediately`,
+/// off by default): every change waits for the disk before its call
+/// returns, as before kit v0.23.0. Read when the store opens, so a change
+/// takes effect at the next daemon start (kit v0.24.0 brings a live setter).
+pub fn save_immediately() -> bool {
+    k2_core::app_settings::load().docs_save_immediately
+}
+
+/// The store's settings K2 opens it with: the kit's default cache (64 MiB)
+/// and grouped commits ([`COMMIT_GROUP_CHANGES`], [`COMMIT_GROUP_MS`]), or
+/// every commit waiting for the disk when `immediate`.
+pub fn store_settings(immediate: bool) -> Result<StoreSettings, StoreSettingsError> {
+    if immediate {
+        return Ok(StoreSettings::DEFAULT.with_commit_durability(CommitDurability::Immediate));
+    }
+    Ok(StoreSettings::DEFAULT.with_commit_durability(CommitDurability::grouped(COMMIT_GROUP_CHANGES, COMMIT_GROUP_MS)?))
+}
+
+/// `immediate` or `grouped`, for status and the log.
+pub fn durability_word(s: &StoreSettings) -> &'static str {
+    match s.commit_durability() {
+        CommitDurability::Immediate => "immediate",
+        _ => "grouped",
+    }
 }
 
 /// The kit's settings K2 runs with. K2 sets no live size limit per file
@@ -252,9 +306,14 @@ fn config() -> Config {
 /// while K2 sends no device key (`JoinOptions::device`; it sends none).
 /// Kit v0.21.0's hold after the version an app opened is noted
 /// (`opened_hold_ms`, [`opened`]) stays at the kit's 10 s.
-fn kit_config(memory_budget_bytes: u64) -> Config {
+///
+/// Kit v0.23.0: `store` is what the store opens with ([`store_settings`]);
+/// the manager reports it as it runs (`SessionManager::new` sets it from
+/// the store).
+fn kit_config(memory_budget_bytes: u64, store: StoreSettings) -> Config {
     let mut c = Config::default();
     c.memory_budget_bytes = memory_budget_bytes;
+    c.store = store;
     c
 }
 
@@ -276,28 +335,41 @@ pub fn start() {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let opened = DocStore::open_with_retry(&path, OPEN_WAIT);
+    let settings = match store_settings(save_immediately()) {
+        Ok(s) => s,
+        Err(e) => {
+            log_debug!("[docs] WARN: the docs store's settings were refused: {e}");
+            *slot().write().expect("docs slot") = Slot::Failed(OpenFailure { why: e.to_string(), newer_k2: false });
+            return;
+        }
+    };
+    let opened = DocStore::open_with_retry_with(&path, OPEN_WAIT, settings);
     let mut s = slot().write().expect("docs slot");
     match opened {
         Ok(store) => {
             let store = Arc::new(store);
-            let mut manager =
-                SessionManager::new(store.clone(), Arc::new(host::K2Host::new(Arc::downgrade(&store))), config());
+            let mut manager = SessionManager::new(
+                store.clone(),
+                Arc::new(host::K2Host::new(Arc::downgrade(&store))),
+                kit_config(memory_budget_bytes(), settings),
+            );
             let blobs = open_blobs(&store);
             if let Some(b) = &blobs {
                 manager = manager.with_blob_store(b.clone());
             }
             let rt = Runtime {
                 manager,
+                last_commits: AtomicU64::new(0),
                 store: Mutex::new(Some(store)),
                 opened: Mutex::new(HashMap::new()),
                 watch: watch::Watch::start(),
             };
             log_debug!(
-                "[docs] store open at {} (budget {} MiB, disk sync on, any-file docs {})",
+                "[docs] store open at {} (budget {} MiB, disk sync on, any-file docs {}, commits {})",
                 path.display(),
                 rt.manager.config().memory_budget_bytes >> 20,
                 if blobs.is_some() { "on" } else { "off" },
+                durability_word(&rt.manager.config().store),
             );
             *s = Slot::Running(Arc::new(rt));
             drop(s);
@@ -641,6 +713,42 @@ impl Runtime {
         if let Some(store) = self.store() {
             claims::flush(&store);
         }
+        self.flush_if_idle();
+    }
+
+    /// Grouped commits: every change so far made durable now
+    /// (`SessionManager::flush`; nothing to do when every commit is on disk,
+    /// or with "Save every change immediately"). K2 calls it at a person's
+    /// or agent's explicit save (`k2 doc flush`), when a tab closes, when it
+    /// goes out of view (its `visible: false`), and when the docs go idle.
+    /// Returns whether every commit is on disk after it. A failure is
+    /// logged: a commit that failed at the disk rolls the store back at the
+    /// next tick or flush (`AuditEvent::StoreRolledBack`).
+    pub fn flush_saves(&self, why: &str) -> bool {
+        match self.manager.flush() {
+            Ok(()) => {
+                count_flush(why);
+                true
+            }
+            Err(SessionError::Released) => false,
+            Err(e) => {
+                log_debug!("[docs] WARN: flush ({why}): {e}");
+                false
+            }
+        }
+    }
+
+    /// Commits not yet on disk, and none since the last tick: the docs are
+    /// idle, so flush them ([`Runtime::flush_saves`]). Returns whether it
+    /// flushed.
+    fn flush_if_idle(&self) -> bool {
+        let Some(store) = self.store() else { return false };
+        let commits = store.commits();
+        let before = self.last_commits.swap(commits, Ordering::SeqCst);
+        if commits != before || store.durable_through() >= commits {
+            return false;
+        }
+        self.flush_saves("idle")
     }
 
     /// Every loaded doc's participants have their rights re-checked (the
@@ -792,6 +900,31 @@ fn rewrite_again(r: &k2_mpc_base::blob::PurgeReport) -> bool {
     (r.key_destroyed || r.index_rows_removed > 0) && !r.store_rewritten
 }
 
+/// How the store saves (kit v0.23.0): `commits` is what it runs with
+/// (`grouped` or `immediate`), `saveEveryChangeImmediately` the owner's
+/// setting, and `restartNeeded` when they differ (the setting takes effect
+/// at the next daemon start); `commitsMade` and `commitsOnDisk` since the
+/// store opened, and the flushes by reason.
+fn saves_json(rt: &Runtime) -> serde_json::Value {
+    let store = rt.config().store;
+    let setting = save_immediately();
+    let running_immediate = matches!(store.commit_durability(), CommitDurability::Immediate);
+    let (made, on_disk) = rt.store().map_or((0, 0), |s| (s.commits(), s.durable_through()));
+    let mut v = serde_json::json!({
+        "commits": durability_word(&store),
+        "saveEveryChangeImmediately": setting,
+        "restartNeeded": setting != running_immediate,
+        "commitsMade": made,
+        "commitsOnDisk": on_disk,
+        "flushes": flush_counts(),
+    });
+    if let CommitDurability::Grouped { max_changes, max_ms } = store.commit_durability() {
+        v["groupMaxChanges"] = serde_json::json!(max_changes);
+        v["groupMaxMs"] = serde_json::json!(max_ms);
+    }
+    v
+}
+
 /// Pool stats for status and doctor: `{running, loaded, estimatedBytes,
 /// budgetBytes, unloadedTotal, diskSync}`, or why the runtime is down.
 pub fn pool_json() -> serde_json::Value {
@@ -812,6 +945,7 @@ pub fn pool_json() -> serde_json::Value {
                     "unreferencedBytes": p.blob_unreferenced_bytes,
                     "maxFileBytes": blob_max_bytes(),
                 },
+                "saves": saves_json(&rt),
             }),
             Err(e) => serde_json::json!({ "running": false, "error": e.to_string() }),
         },
@@ -832,7 +966,7 @@ mod tests {
     #[test]
     fn a_deck_takes_k2s_host_wide_live_size_limit() {
         use k2_mpc_base::session::{KeyedLimit, LimitSource};
-        let c = kit_config(256 << 20);
+        let c = kit_config(256 << 20, StoreSettings::DEFAULT);
         assert!(c.keyed_max_entries_by_pack.is_empty(), "K2 sets no limit per file type: {:?}", c.keyed_max_entries_by_pack);
         assert_eq!(c.keyed_max_entries, 25_000, "K2's host-wide live size limit");
         let deck = k2_mpc_pptx::PptxLive::default();
@@ -845,7 +979,7 @@ mod tests {
     /// kit's cap. A watcher past it takes no writer slot until promoted.
     #[test]
     fn k2_keeps_the_kits_writer_defaults_with_no_writers_cap() {
-        let c = kit_config(256 << 20);
+        let c = kit_config(256 << 20, StoreSettings::DEFAULT);
         assert_eq!(c.writers_max, 0, "no writers cap");
         assert_eq!(c.participants_max, Config::default().participants_max, "the kit's participant cap");
         assert!(c.reuse_person_writers, "the kit's default; nothing changes without a device key");
@@ -857,7 +991,7 @@ mod tests {
     /// version noted; K2 doesn't change it.
     #[test]
     fn k2_keeps_the_kits_opened_hold() {
-        let c = kit_config(256 << 20);
+        let c = kit_config(256 << 20, StoreSettings::DEFAULT);
         assert_eq!(c.opened_hold_ms, Config::default().opened_hold_ms, "the kit's hold");
         assert_eq!(c.opened_hold_ms, 10_000, "10 s");
     }
@@ -953,6 +1087,150 @@ mod tests {
         for junk in ["0", "", "x", "-3"] {
             assert_eq!(parse_blob_max(Some(junk)), BLOB_MAX_BYTES, "{junk:?}");
         }
+    }
+
+    /// Kit v0.23.0, Rosson's decision: K2 opens the store with grouped
+    /// saves (32 changes or 100 ms per wait for the disk) and the kit's
+    /// cache; the owner's "Save every change immediately" opens it with every
+    /// change waiting for the disk.
+    #[test]
+    fn grouped_saves_are_the_default_and_the_owner_setting_turns_them_off() {
+        let grouped = store_settings(false).expect("grouped settings");
+        assert_eq!(grouped, StoreSettings::DEFAULT.with_commit_durability(CommitDurability::grouped(32, 100).expect("in range")));
+        assert_eq!(grouped.commit_durability(), CommitDurability::Grouped { max_changes: 32, max_ms: 100 });
+        assert_eq!(grouped.cache_bytes(), StoreSettings::DEFAULT.cache_bytes(), "the kit's 64 MiB cache");
+        assert_eq!(durability_word(&grouped), "grouped");
+        let immediate = store_settings(true).expect("immediate settings");
+        assert_eq!(immediate.commit_durability(), CommitDurability::Immediate);
+        assert_eq!(immediate, StoreSettings::DEFAULT);
+        assert_eq!(durability_word(&immediate), "immediate");
+        assert_eq!(kit_config(256 << 20, grouped).store, grouped, "the config reports the store as it runs");
+        assert!(!k2_core::app_settings::AppSettings::default().docs_save_immediately, "the setting is off by default");
+        crate::test_support::with_temp_home(|| {
+            assert!(!save_immediately(), "a new server saves in groups");
+            k2_core::app_settings::update(serde_json::json!({ "docsSaveImmediately": true })).expect("turn it on");
+            assert!(save_immediately(), "the setting is read from app settings");
+        });
+    }
+
+    /// A runtime over a temp store with grouped saves whose group never
+    /// fills or times out by itself (the host's clock stands still, and the
+    /// doc's seq floor is already raised), so only K2's barriers put it on
+    /// disk.
+    struct Grouped {
+        dir: std::path::PathBuf,
+        rt: Runtime,
+        s: Arc<Session>,
+        conn: k2_mpc_base::session::ConnId,
+    }
+
+    impl Drop for Grouped {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    struct StillHost;
+
+    impl k2_mpc_base::session::Host for StillHost {
+        fn rights(&self, _who: &k2_mpc_base::session::Participant, _key: &DocKey) -> k2_mpc_base::session::Rights {
+            k2_mpc_base::session::Rights::editor()
+        }
+        fn now_ms(&self) -> u64 {
+            1_700_000_000_000
+        }
+        fn on_event(&self, _ev: &k2_mpc_base::session::AuditEvent) {}
+    }
+
+    impl Grouped {
+        fn new() -> Grouped {
+            use k2_mpc_base::session::{Participant, ParticipantKind, Stay, TextFilePack};
+            let dir = std::env::temp_dir().join(format!("k2-docs-grouped-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).expect("dir");
+            let settings = StoreSettings::DEFAULT.with_commit_durability(CommitDurability::grouped(1024, 10_000).expect("in range"));
+            let store = Arc::new(DocStore::open_with(dir.join("docs.redb"), settings).expect("store"));
+            let mut config = kit_config(256 << 20, settings);
+            config.edit_rate_per_s = 1_000_000;
+            config.edit_burst = 1_000_000;
+            let manager = SessionManager::new(store.clone(), Arc::new(StillHost), config);
+            let s = manager
+                .open(Arc::new(TextFilePack::new("markdown", 4 << 20)), &DocKey { space: "ws".into(), path: "notes.md".into() }, Some(b"one\n"))
+                .expect("open");
+            let conn = s.join(Participant::new("agent:writer", "Writer", "#16a34a", ParticipantKind::Agent, "cli"), Stay::Held).expect("join").conn;
+            let rt = Runtime {
+                manager,
+                last_commits: AtomicU64::new(0),
+                store: Mutex::new(Some(store)),
+                opened: Mutex::new(HashMap::new()),
+                watch: watch::Watch::start(),
+            };
+            let g = Grouped { dir, rt, s, conn };
+            // The doc's first versions raise its seq floor (the kit's
+            // `seq_floor.rs`), and that commit waits for the disk; the next
+            // ones (up to the group's 1,024) don't.
+            g.edit("warm\n");
+            g
+        }
+
+        fn edit(&self, line: &str) {
+            self.s
+                .run_tool(self.conn, k2_mpc_base::session::TextFilePack::ROOT, &["append".to_owned()], line.as_bytes())
+                .expect("append");
+        }
+
+        /// (commits made, commits on disk).
+        fn counts(&self) -> (u64, u64) {
+            let st = self.rt.store().expect("store");
+            (st.commits(), st.durable_through())
+        }
+
+        fn flushes(&self, why: &str) -> u64 {
+            flush_counts()[why].as_u64().expect("a count")
+        }
+    }
+
+    /// Grouped saves wait for a barrier: K2's flush (an explicit save, a
+    /// tab's close or switch-away, all through `flush_saves`) puts every
+    /// change on disk and is counted by its reason.
+    #[test]
+    fn a_flush_puts_every_grouped_change_on_disk() {
+        let g = Grouped::new();
+        g.edit("two\n");
+        let (made, on_disk) = g.counts();
+        assert!(on_disk < made, "a grouped change waits for its group: {on_disk} of {made} on disk");
+        for why in ["save", "close", "switch_away"] {
+            let before = g.flushes(why);
+            g.edit(&format!("{why}\n"));
+            assert!(g.counts().1 < g.counts().0, "{why}: the change waits");
+            assert!(g.rt.flush_saves(why), "{why}: the flush succeeds");
+            let (made, on_disk) = g.counts();
+            assert_eq!(on_disk, made, "{why}: every change is on disk after the flush");
+            assert_eq!(g.flushes(why), before + 1, "{why}: counted");
+        }
+        assert!(g.rt.flush_saves("save"), "a flush with nothing waiting is a no-op that succeeds");
+    }
+
+    /// The idle barrier: a tick that finds commits waiting and none since the
+    /// last tick flushes them; a tick right after a change doesn't.
+    #[test]
+    fn an_idle_tick_flushes_and_a_busy_one_waits() {
+        let g = Grouped::new();
+        g.edit("two\n");
+        let idle_before = g.flushes("idle");
+        assert!(!g.rt.flush_if_idle(), "a change since the last tick: not idle yet");
+        assert!(g.counts().1 < g.counts().0, "still waiting");
+        assert!(g.rt.flush_if_idle(), "no change since the last tick: idle, so it flushes");
+        let (made, on_disk) = g.counts();
+        assert_eq!(on_disk, made, "every change on disk once idle");
+        assert_eq!(g.flushes("idle"), idle_before + 1);
+        assert!(!g.rt.flush_if_idle(), "nothing waiting: no flush");
+        g.rt.tick();
+        g.edit("three\n");
+        g.rt.tick();
+        assert!(g.counts().1 < g.counts().0, "the tick right after a change leaves it waiting (the kit's group hasn't timed out)");
+        g.rt.tick();
+        let (made, on_disk) = g.counts();
+        assert_eq!(on_disk, made, "the next quiet tick puts it on disk");
     }
 
     #[test]

@@ -216,6 +216,10 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // 0.46.6: the K2 Connect account server address. It decides where
     // k2.dev account passwords and refresh tokens are sent.
     "connectDbUrl",
+    // 0.46.17 (kit v0.23.0): "Save every change immediately" for live docs
+    // (Settings → Cores → Multiplayer): grouped saves off. Owner only; it
+    // takes effect after a restart.
+    "docsSaveImmediately",
 ];
 
 /// Who is writing settings, resolved by the dispatcher from the request
@@ -595,6 +599,12 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
     if let Some(v) = partial.get("orgChart") {
         if !v.is_boolean() {
             return CliResponse::bad_request("orgChart is true or false");
+        }
+    }
+    // Kit v0.23.0: the owner's "Save every change immediately" for live docs.
+    if let Some(v) = partial.get("docsSaveImmediately") {
+        if !v.is_boolean() {
+            return CliResponse::bad_request("docsSaveImmediately is true or false");
         }
     }
     let org_chart_was = k2_core::org_chart::enabled();
@@ -1062,6 +1072,38 @@ mod tests {
             // An Admin still manages the remote-access keys.
             let r = handle_settings_update(br#"{"federationEnabled":false}"#, admin);
             assert_eq!(r.status, "200 OK", "Admin keeps its tier: {}", r.body);
+        });
+    }
+
+    /// 0.46.17 (kit v0.23.0): "Save every change immediately" is the
+    /// Owner's alone: an Admin or Member gets an atomic 403 with nothing
+    /// written, a non-boolean is a 400, and the Owner's write lands.
+    #[test]
+    fn docs_save_immediately_is_owner_only_and_a_boolean() {
+        with_temp_home(|| {
+            let admin = session_actor("adminsaves", connect_users::Role::Admin);
+            let member = session_actor("membersaves", connect_users::Role::Member);
+            for actor in [admin, member] {
+                for body in [br#"{"docsSaveImmediately":true}"#.as_slice(), br#"{"docsSaveImmediately":true,"defaultAgent":"codex"}"#.as_slice()] {
+                    let r = handle_settings_update(body, actor);
+                    assert_eq!(r.status, "403 Forbidden", "{actor:?}: got {}", r.body);
+                    assert!(r.body.contains("docsSaveImmediately") && r.body.contains("requires the Owner role"), "{actor:?}: {}", r.body);
+                }
+            }
+            let s = k2_core::app_settings::load();
+            assert!(!s.docs_save_immediately, "a 403 leaves it off");
+            assert_eq!(s.default_agent, "claude", "a mixed payload must not half-apply");
+            for bad in [br#"{"docsSaveImmediately":"yes"}"#.as_slice(), br#"{"docsSaveImmediately":1}"#.as_slice()] {
+                let r = handle_settings_update(bad, SettingsActor::Owner);
+                assert_eq!(r.status, "400 Bad Request", "got {}", r.body);
+            }
+            assert!(!k2_core::app_settings::load().docs_save_immediately);
+            let r = handle_settings_update(br#"{"docsSaveImmediately":true}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(k2_core::app_settings::load().docs_save_immediately, "the Owner's write lands");
+            let r = handle_settings_update(br#"{"docsSaveImmediately":false}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(!k2_core::app_settings::load().docs_save_immediately);
         });
     }
 

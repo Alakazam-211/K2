@@ -82,9 +82,20 @@ pub fn registry_for(t: &Target) -> &'static Registry {
 /// K2's own names on top of the registry (CLI aliases and K2's verbs).
 pub const K2_VERBS: &[&str] = &["lock", "unlock", "view --region", "versions", "watch"];
 
+/// Kit v0.23.0 lists `undo`, `redo` and `revert` on tier 0 (they run
+/// through `BlobSession::run_revert`, not `run_tool`). K2's any-file docs
+/// keep answering them as before (`not_a_text_doc`, and not offered) until
+/// K2 routes them there.
+pub const KIT_VERBS_NOT_ROUTED: &[&str] = &["undo", "redo", "revert"];
+
+/// Whether `verb` (a registry form) is one of [`KIT_VERBS_NOT_ROUTED`].
+fn not_routed(verb: &str) -> bool {
+    KIT_VERBS_NOT_ROUTED.iter().any(|v| verb == *v || verb.strip_prefix(v).is_some_and(|rest| rest.starts_with(' ')))
+}
+
 /// What a tier-0 doc offers, for the teaching refusal.
 pub fn offered_for(reg: &Registry) -> String {
-    let mut v: Vec<&str> = reg.verbs().iter().map(|v| v.name).collect();
+    let mut v: Vec<&str> = reg.verbs().iter().map(|v| v.name).filter(|n| !not_routed(n)).collect();
     v.extend(K2_VERBS.iter().copied());
     v.join(", ")
 }
@@ -168,7 +179,7 @@ pub(super) fn handle(path: &str, rt: &Arc<super::Runtime>, c: &Call, fallback: O
 
 fn handle_inner(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
     if let Some(verb) = route_verb(path, c) {
-        if registry_for(c.target).get(&verb).is_none() {
+        if not_routed(&verb) || registry_for(c.target).get(&verb).is_none() {
             return not_a_text_doc(c.target, &verb);
         }
     }
@@ -360,7 +371,9 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
         routes::FLUSH => {
             let j = join(s, c, Stay::UntilIdle)?;
             let f = s.flush(j.conn)?;
-            Ok(ok0(t, json!({ "written": f.written, "hash": f.hash, "disk": routes::disk_json(f.disk.as_ref()) })))
+            // An explicit save: every change on disk too (grouped commits).
+            let durable = rt.flush_saves("save");
+            Ok(ok0(t, json!({ "written": f.written, "hash": f.hash, "durable": durable, "disk": routes::disk_json(f.disk.as_ref()) })))
         }
         routes::READ => {
             let j = join(s, c, Stay::UntilIdle)?;
@@ -1056,6 +1069,11 @@ mod tests {
         for kind in super::super::blob_packs::BlobKind::ALL {
             let drawing = matches!(kind, super::super::blob_packs::BlobKind::Dxf | super::super::blob_packs::BlobKind::Dwg);
             for spec in super::super::blob_packs::registry_of(kind).verbs() {
+                // Kit v0.23.0's tier-0 undo, redo and revert: K2 doesn't route them on
+                // any-file docs yet (`KIT_VERBS_NOT_ROUTED`).
+                if not_routed(spec.name) {
+                    continue;
+                }
                 let word = spec.name.split_whitespace().next().unwrap_or(spec.name);
                 let a_cad_read = drawing && labels.contains(&"cad") && cad_usage.contains(&format!("\n  {} ", spec.name));
                 let routed = labels.contains(&word) || a_cad_read;
@@ -1082,8 +1100,14 @@ mod tests {
         {
             assert!(names.contains(&v), "{v} is not a tier-0 verb in the kit's registry: {names:?}");
         }
-        for v in ["grep", "sed -i", "undo", "claim", "replace", "diff --version", "revert", "cursor"] {
+        for v in ["grep", "sed -i", "claim", "replace", "diff --version", "cursor"] {
             assert!(!names.contains(&v), "{v} is a tier-0 verb now: route it in tier0.rs");
+        }
+        // Kit v0.23.0: undo, redo and revert are tier-0 verbs (`run_revert`);
+        // K2 doesn't route them on any-file docs yet, so they stay refused.
+        for v in KIT_VERBS_NOT_ROUTED {
+            assert!(names.contains(v), "{v} is no longer a tier-0 verb in the kit's registry: drop it from KIT_VERBS_NOT_ROUTED");
+            assert!(!offered().split(", ").any(|o| o == *v), "{v} is offered on an any-file doc: {}", offered());
         }
         for v in K2_VERBS {
             assert!(registry().get(v).is_none(), "{v} is a kit verb now: drop it from K2_VERBS");

@@ -989,6 +989,12 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         | SessionError::Blob(BlobError::Store(err @ StoreError::RewriteNewer { .. })) => {
             kit_refusal("store_newer", "MPC-E502", err.to_string())
         }
+        // Kit v0.23.0, grouped saves (MPC-E526 `store_recovering`, exit 1): a
+        // commit failed at the disk and the store is going back to what was on
+        // disk; nothing was applied. The kit's id and exit, K2's words.
+        SessionError::Store(StoreError::Recovering) | SessionError::Blob(BlobError::Store(StoreError::Recovering)) => {
+            kit_report(e, Some(STORE_RECOVERING_HINT))
+        }
         // Kit v0.10.2 (MPC-E520): a doc another engine or stored format wrote.
         // It is never read, on open or on delete and purge. Exit 6.
         SessionError::EngineMismatch { .. } => kit_refusal("engine_mismatch", "MPC-E520", engine_mismatch_hint(e)),
@@ -1157,6 +1163,10 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         other => kit_report(other, None),
     }
 }
+
+/// What `MPC-E526` (`store_recovering`) tells the caller.
+pub(super) const STORE_RECOVERING_HINT: &str = "saving to disk failed a moment ago, so the docs are going back to what was last \
+     saved: nothing was applied. Read the doc again (a change from the last fraction of a second may be missing), then retry";
 
 /// What `MPC-E180` (`opened_version_unknown`) says: the doc never had that
 /// version, so nothing was noted.
@@ -1353,7 +1363,11 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
         FLUSH => {
             let j = join(s, c, Stay::UntilIdle)?;
             let f = s.flush(j.conn)?;
+            // An explicit save: every change so far on disk too (grouped
+            // commits, kit v0.23.0), not only written back to the file.
+            let durable = super::runtime().is_ok_and(|rt| rt.flush_saves("save"));
             Ok(ok(json!({
+                "durable": durable,
                 "doc": doc_json(t),
                 "written": f.written,
                 "hash": f.hash,
@@ -2869,6 +2883,21 @@ mod tests {
             e["hint"],
             json!("This store holds data from a newer kit (table \"later\"). Upgrade K2 to a version with a newer kit to purge or rewrite it; reading and editing still work.")
         );
+    }
+
+    /// Kit v0.23.0, grouped saves: `MPC-E526` while the store rolls back is
+    /// the kit's id and exit 1 (retry), with K2's words, never a 500.
+    #[test]
+    fn a_store_recovering_refusal_is_the_kits_retry() {
+        for err in [SessionError::Store(StoreError::Recovering), SessionError::Blob(BlobError::Store(StoreError::Recovering))] {
+            let r = session_error(&err);
+            assert_ne!(r.status, "500 Internal Server Error", "{err:?}");
+            let e = error_of(&r);
+            assert_eq!(e["id"], json!("MPC-E526"), "{err:?}: {e:?}");
+            assert_eq!(e["code"], json!("store_recovering"), "{err:?}");
+            assert_eq!(e["exit"], json!(1), "{err:?}");
+            assert_eq!(e["hint"], json!(STORE_RECOVERING_HINT), "{err:?}");
+        }
     }
 
     /// Kit v0.10.2: an address refusal keeps exit 2, and says its id and the

@@ -1045,10 +1045,20 @@ struct Worker {
 }
 
 /// However the worker ends (a spawn that failed included), its connection
-/// leaves the doc (`leave` on a gone connection is a no-op).
+/// leaves the doc (`leave` on a gone connection is a no-op), and every
+/// change so far goes to disk (grouped commits: a tab's close is a save).
 impl Drop for Worker {
     fn drop(&mut self) {
         let _ = self.session.leave(self.conn);
+        save_on("close");
+    }
+}
+
+/// Grouped commits (kit v0.23.0): a tab closed or went out of view, so
+/// every change so far goes to disk now ([`super::Runtime::flush_saves`]).
+fn save_on(why: &str) {
+    if let Ok(rt) = super::runtime() {
+        rt.flush_saves(why);
     }
 }
 
@@ -1334,6 +1344,13 @@ impl Worker {
             Err(SessionError::Released) => restart(),
             Err(e @ SessionError::Unloaded) => Closed::kit(CloseReason::CutOff, &e),
             Err(e @ SessionError::Forbidden { .. }) => Closed::kit(CloseReason::RightsLost, &e),
+            // Kit v0.23.0, grouped commits: a commit failed at the disk and
+            // the doc reloaded at what was on disk, so the kit dropped every
+            // connection (`LeaveReason::RolledBack`). The person reads why,
+            // and the tab joins again (`rolled_back` retries).
+            Err(SessionError::NotJoined { .. }) if host::take_rolled_back_conn(&self.key, self.conn) => {
+                Closed::k2(CloseReason::RolledBack, "rolled_back", host::ROLLED_BACK_NOTE)
+            }
             Err(SessionError::NotJoined { .. }) => {
                 let store = super::runtime().ok().and_then(|rt| rt.store());
                 if host::rights_for(&self.pid, &self.key, store.as_deref()).read {
@@ -1476,6 +1493,10 @@ impl Worker {
             }
             ClientFrame::Visible(v) => {
                 let _ = self.session.set_visible(self.conn, v);
+                // Switching away (the window's blur, the tab hidden): a save.
+                if !v {
+                    save_on("switch_away");
+                }
                 Ok(())
             }
             // The keyed watch: a snapshot, then its change frames from the

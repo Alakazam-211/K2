@@ -2151,6 +2151,11 @@ if a.get("on"):
         a.get("loaded"), a.get("blobs"), mib(a.get("bytes", 0)), mib(a.get("unreferencedBytes", 0)), mib(a.get("maxFileBytes", 0))))
 elif a:
     print("any-file docs: off (see the daemon log)")
+s = p.get("saves") or {}
+if s:
+    how = "grouped (%s changes or %s ms per wait for the disk)" % (s.get("groupMaxChanges"), s.get("groupMaxMs")) if s.get("commits") == "grouped" else "every change at once"
+    print("saves: %s · %s of %s on disk%s" % (how, s.get("commitsOnDisk"), s.get("commitsMade"),
+          " · restart K2 for Save every change immediately to take effect" if s.get("restartNeeded") else ""))
 '
                 return 0
             fi

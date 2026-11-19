@@ -928,6 +928,16 @@ pub struct AppSettings {
     /// boot; `K2_DOCS_MEMORY_MIB` overrides it. Shown by `GET /cli/docs/pool`.
     #[serde(default = "default_docs_memory_budget_mib")]
     pub docs_memory_budget_mib: u64,
+    /// Live docs (kit v0.23.0): "Save every change immediately" (Settings →
+    /// Cores → Multiplayer). Off (the default): the docs store groups its
+    /// saves, one wait for the disk per 32 changes or 100 ms, and makes them
+    /// durable at once on an explicit save, a tab's close or switch-away, and
+    /// when idle; a disk failure can lose the last fraction of a second. On:
+    /// every change waits for the disk before it returns. Read when the
+    /// store opens, so it takes effect after K2 restarts. Owner only
+    /// (`settings_routes::OWNER_ONLY_KEYS`).
+    #[serde(default)]
+    pub docs_save_immediately: bool,
     /// Doc exports (`k2 doc export`, vs-live §2 step 7, §3.3): each export
     /// worker's wall time in seconds (0 = the default, 300).
     #[serde(default)]
@@ -1410,6 +1420,7 @@ impl Default for AppSettings {
             mail_quota_bytes: default_mail_quota_bytes(),
             mail_quota_messages: default_mail_quota_messages(),
             docs_memory_budget_mib: default_docs_memory_budget_mib(),
+            docs_save_immediately: false,
             docs_export_wall_secs: 0,
             docs_export_memory_mib: 0,
             docs_export_max_output_mib: 0,

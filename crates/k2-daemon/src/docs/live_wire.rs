@@ -40,7 +40,7 @@ pub const FRAME_MAX: usize = 4 << 20;
 /// not the wire's: it bounds what one socket can make the daemon buffer.
 pub const HARD_CAP: usize = 8 << 20;
 
-/// Why a Live socket ended: WIRE.md "Closing", 13 rows.
+/// Why a Live socket ended: WIRE.md "Closing", 14 rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseReason {
     Left,
@@ -57,6 +57,10 @@ pub enum CloseReason {
     /// The transport's own (a dropped socket); never in a frame.
     Network,
     Closed,
+    /// Kit v0.23.0's `rolled_back`: grouped commits, a commit failed at the
+    /// disk, and the doc reloaded at what was on disk; the client joins
+    /// again (its `canRetry` retries it).
+    RolledBack,
 }
 
 impl CloseReason {
@@ -75,13 +79,14 @@ impl CloseReason {
             CloseReason::Auth => "auth",
             CloseReason::Network => "network",
             CloseReason::Closed => "closed",
+            CloseReason::RolledBack => "rolled_back",
         }
     }
 
-    /// The table's retry column (the client's `canRetry`): only `cut_off`
-    /// and `network`.
+    /// The table's retry column (the client's `canRetry`): `cut_off`,
+    /// `network` and, since kit v0.23.0, `rolled_back`.
     pub fn retry(self) -> bool {
-        matches!(self, CloseReason::CutOff | CloseReason::Network)
+        matches!(self, CloseReason::CutOff | CloseReason::Network | CloseReason::RolledBack)
     }
 
     /// From the kit's leave reason.
@@ -91,6 +96,10 @@ impl CloseReason {
             LeaveReason::Idle => CloseReason::Idle,
             LeaveReason::Kicked => CloseReason::Kicked,
             LeaveReason::RightsLost => CloseReason::RightsLost,
+            LeaveReason::RolledBack => CloseReason::RolledBack,
+            // `LeaveReason` is `#[non_exhaustive]` since kit v0.23.0: a
+            // later reason reads as a plain leave until K2 names it.
+            _ => CloseReason::Left,
         }
     }
 }
@@ -1257,6 +1266,7 @@ mod tests {
             (CloseReason::Auth, "auth", false),
             (CloseReason::Network, "network", true),
             (CloseReason::Closed, "closed", false),
+            (CloseReason::RolledBack, "rolled_back", true),
         ] {
             assert_eq!(r.as_str(), s);
             assert_eq!(r.retry(), retry, "{s}");

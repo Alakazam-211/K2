@@ -606,7 +606,35 @@ pub fn cores_route(caller: &DocCaller) -> CliResponse {
         "later": docs_cores::LATER,
         // Board files in a tab (the preview switch beside the Board row).
         "boardFilePreview": k2_core::board_preview::enabled(),
+        // Kit v0.23.0: "Save every change immediately" (the owner's).
+        "saves": saves_json(caller),
     }))
+}
+
+/// The "Save every change immediately" row (kit v0.23.0): the owner's
+/// setting (`docsSaveImmediately`), whether this caller may change it (the
+/// owner alone), what the store runs with now (`grouped` or `immediate`;
+/// `null` while live docs are off), and whether a restart is needed for the
+/// setting to take effect.
+pub fn saves_json(caller: &DocCaller) -> Value {
+    let on = super::save_immediately();
+    let running = super::runtime().ok().map(|rt| rt.config().store);
+    json!({
+        "saveEveryChangeImmediately": on,
+        "canChange": is_owner(caller),
+        "running": running.as_ref().map(super::durability_word),
+        "restartNeeded": running.is_some_and(|s| matches!(s.commit_durability(), k2_mpc_base::store::CommitDurability::Immediate) != on),
+    })
+}
+
+/// The owner: the owner token (not a shell tab's passport) or an Owner login.
+fn is_owner(caller: &DocCaller) -> bool {
+    match caller {
+        DocCaller::Agent { .. } => false,
+        DocCaller::Person { via, .. } if *via == super::caller::VIA_TERMINAL => false,
+        DocCaller::Person { key, .. } if key == k2_core::notify_prefs::OWNER => true,
+        DocCaller::Person { key, .. } => k2_core::connect_users::role_for_user(key) == Some(k2_core::connect_users::Role::Owner),
+    }
 }
 
 /// Whether a core with a multiplayer view for people is on (S5 routes on it).

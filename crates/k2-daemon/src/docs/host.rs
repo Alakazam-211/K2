@@ -29,12 +29,14 @@
 //! (`auth_audit`) as metadata only (doc key, pid, action); joins and leaves
 //! to the debug log.
 
-use std::sync::Weak;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use k2_core::log_debug;
 use k2_mpc_base::session::{
-    AuditEvent, ClaimEnd, Host, LeaveReason, Participant, PurgedScope, ReservationEnd, Rights,
+    AuditEvent, ClaimEnd, ConnId, Host, LeaveReason, Participant, PurgedScope, ReservationEnd, Rights,
 };
 use k2_mpc_base::store::{DocKey, DocStore, PurgeCounts};
 
@@ -70,6 +72,55 @@ pub const AUDIT_OUTSIDE_OVERRIDE: &str = "doc-outside-override";
 /// K2 closed a doc's live session (a multiplayer core switched off): the
 /// connections that were in it, as a count.
 pub const AUDIT_SESSION_CLOSED: &str = "doc-session-closed";
+/// Grouped commits (kit v0.23.0): a commit failed at the disk, so the store
+/// reopened at what was on disk, and each live doc reloaded from it. The
+/// doc and its versions (lost from, kept at), never content.
+pub const AUDIT_ROLLED_BACK: &str = "doc-rolled-back";
+
+/// What a person reads in the doc's tab after a rollback (grouped commits):
+/// plain words, what happened and what to do. The tab joins again by itself.
+pub const ROLLED_BACK_NOTE: &str = "Saving to disk failed, so this document went back to what was last saved: \
+     your last fraction of a second of edits was rolled back. Check your last change and make it again if it's missing.";
+
+/// The connections the kit dropped with `LeaveReason::RolledBack`, until
+/// their socket reads it ([`take_rolled_back_conn`]).
+fn rolled_back_conns() -> &'static Mutex<HashSet<(DocKey, ConnId)>> {
+    static S: std::sync::OnceLock<Mutex<HashSet<(DocKey, ConnId)>>> = std::sync::OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// When the store last rolled back (`AuditEvent::StoreRolledBack`), ms; 0: never.
+static STORE_ROLLED_BACK_AT: AtomicU64 = AtomicU64::new(0);
+
+/// The kit dropped `conn` on `key` after a rollback (the `Left` event).
+pub(super) fn note_rolled_back_conn(key: &DocKey, conn: ConnId) {
+    let mut set = rolled_back_conns().lock().unwrap_or_else(|p| p.into_inner());
+    // A socket that was already gone never reads its entry: keep the set small.
+    if set.len() >= ROLLED_BACK_CONNS_MAX {
+        set.clear();
+    }
+    set.insert((key.clone(), conn));
+}
+
+/// At most this many dropped connections wait for their socket to read them.
+const ROLLED_BACK_CONNS_MAX: usize = 4096;
+
+/// Whether the kit dropped `conn` on `key` after a rollback; it is
+/// forgotten as it's read, so a socket says it once.
+pub fn take_rolled_back_conn(key: &DocKey, conn: ConnId) -> bool {
+    rolled_back_conns().lock().unwrap_or_else(|p| p.into_inner()).remove(&(key.clone(), conn))
+}
+
+/// When the store last rolled back (ms since the epoch), if it has since
+/// this daemon started.
+pub fn store_rolled_back_at() -> Option<u64> {
+    Some(STORE_ROLLED_BACK_AT.load(Ordering::SeqCst)).filter(|ms| *ms > 0)
+}
+
+/// The audit line of a doc's rollback: its key and versions.
+pub fn rolled_back_outcome(key: &DocKey, lost_from: u64, durable_seq: u64) -> String {
+    format!("{} rolled_back lost_from={lost_from} kept={durable_seq}", key_label(key))
+}
 
 thread_local! {
     /// While [`collect_disk_errors`] runs on this thread: the kit's
@@ -374,6 +425,15 @@ impl Host for K2Host {
                 LeaveReason::Left | LeaveReason::Idle => {
                     log_debug!("[docs] {pid} left {} ({conn}, {reason:?})", key_label(key))
                 }
+                // Kit v0.23.0, grouped commits: the doc reloaded at what was
+                // on disk after a commit failed there; the socket tells its
+                // person and joins again ([`rolled_back_conn`]).
+                LeaveReason::RolledBack => {
+                    note_rolled_back_conn(key, *conn);
+                    log_debug!("[docs] {pid} rejoins {} after a rollback ({conn})", key_label(key))
+                }
+                // `LeaveReason` is `#[non_exhaustive]` since kit v0.23.0.
+                _ => log_debug!("[docs] {pid} left {} ({conn}, {reason:?})", key_label(key)),
             },
             // Purge stays off `k2 doc` (owner-only, a later surface); when it
             // runs, the audit gets what was reached (scope, counts), never
@@ -551,6 +611,22 @@ impl Host for K2Host {
             }
             AuditEvent::Recovered { key, error } => {
                 log_debug!("[docs] WARN: store write failed for {}; session reloaded: {error}", key_label(key))
+            }
+            // Kit v0.23.0, grouped commits: a commit failed at the disk and
+            // the store reopened at what was on disk (each live doc then
+            // raises `RolledBack`; a tier-0 doc is closed and reloads at its
+            // next open). Calls in between were refused `MPC-E526`.
+            AuditEvent::StoreRolledBack { error } => {
+                STORE_ROLLED_BACK_AT.store(now_ms().max(1), Ordering::SeqCst);
+                log_debug!("[docs] WARN: the docs store rolled back to what was on disk: {error}");
+                audit(AUDIT_ROLLED_BACK, "k2", format!("store error={error}"));
+            }
+            // One live doc reloaded at what was on disk; its connections
+            // leave with `LeaveReason::RolledBack` right after, and each
+            // socket tells its person ([`ROLLED_BACK_NOTE`]) and joins again.
+            AuditEvent::RolledBack { key, lost_from, durable_seq } => {
+                log_debug!("[docs] WARN: {} rolled back to version {durable_seq} after a disk failure", key_label(key));
+                audit(AUDIT_ROLLED_BACK, "k2", rolled_back_outcome(key, *lost_from, *durable_seq));
             }
             // Kit v0.10.0.3: the first sync after a reopen found the stored
             // disk replica (the merge base for the next outside save) stale
@@ -894,6 +970,74 @@ mod tests {
             ],
             "the event must reach its own arm (not the catch-all) and log exactly one line"
         );
+    }
+
+    /// Kit v0.23.0, grouped saves: a store's rollback and each doc's are
+    /// audited (the error, the doc's versions; never content), and each
+    /// connection the kit drops with `LeaveReason::RolledBack` is told once
+    /// (its socket's `closed {reason: rolled_back}`); a plain leave isn't.
+    #[test]
+    fn a_rollback_is_audited_and_each_dropped_connection_is_told_once() {
+        use k2_mpc_base::session::{Config, Participant, ParticipantKind, SessionManager, Stay, TextFilePack};
+        struct Editors;
+        impl Host for Editors {
+            fn rights(&self, _: &Participant, _: &DocKey) -> Rights {
+                Rights::editor()
+            }
+            fn now_ms(&self) -> u64 {
+                1_700_000_000_000
+            }
+            fn on_event(&self, _: &AuditEvent) {}
+        }
+        crate::test_support::with_temp_home(|| {
+            let dir = std::env::temp_dir().join(format!("k2-docs-rollback-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).expect("dir");
+            let store = std::sync::Arc::new(DocStore::open(dir.join("docs.redb")).expect("store"));
+            let mgr = SessionManager::new(store, std::sync::Arc::new(Editors), Config::default());
+            let key = DocKey { space: "proj-123".into(), path: "notes/a.md".into() };
+            let s = mgr.open(std::sync::Arc::new(TextFilePack::new("markdown", 4 << 20)), &key, Some(b"one\n")).expect("open");
+            let ada = s.join(Participant::new("person:ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"), Stay::Held).expect("ada").conn;
+            let bob = s.join(Participant::new("person:bob", "Bob", "#16a34a", ParticipantKind::Person, "tab"), Stay::Held).expect("bob").conn;
+
+            let h = K2Host::default();
+            h.on_event(&AuditEvent::StoreRolledBack { error: "a commit failed at the disk".into() });
+            assert!(store_rolled_back_at().is_some(), "the store's rollback is noted");
+            h.on_event(&AuditEvent::RolledBack { key: key.clone(), lost_from: 8, durable_seq: 7 });
+            let lines: Vec<String> = k2_core::auth_audit::tail(1000)
+                .expect("audit tail")
+                .into_iter()
+                .filter(|e| e["event"] == AUDIT_ROLLED_BACK)
+                .map(|e| e["outcome"].as_str().expect("outcome").to_string())
+                .collect();
+            assert_eq!(
+                lines,
+                ["store error=a commit failed at the disk", "proj-123:notes/a.md rolled_back lost_from=8 kept=7"],
+                "one line each, in order"
+            );
+
+            h.on_event(&AuditEvent::Left { key: key.clone(), pid: "person:ada".into(), conn: ada, reason: LeaveReason::RolledBack });
+            h.on_event(&AuditEvent::Left { key: key.clone(), pid: "person:bob".into(), conn: bob, reason: LeaveReason::Left });
+            assert!(take_rolled_back_conn(&key, ada), "Ada's socket says it was rolled back");
+            assert!(!take_rolled_back_conn(&key, ada), "once");
+            assert!(!take_rolled_back_conn(&key, bob), "a plain leave is no rollback");
+            let other = DocKey { space: "proj-123".into(), path: "notes/b.md".into() };
+            h.on_event(&AuditEvent::Left { key: key.clone(), pid: "person:bob".into(), conn: bob, reason: LeaveReason::RolledBack });
+            assert!(!take_rolled_back_conn(&other, bob), "per doc");
+            assert!(take_rolled_back_conn(&key, bob));
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// Kit v0.23.0: the note a person reads after a rollback is plain words:
+    /// what happened, how much, and what to do.
+    #[test]
+    fn the_rollback_note_says_what_happened_and_what_to_do() {
+        assert!(ROLLED_BACK_NOTE.starts_with("Saving to disk failed"), "{ROLLED_BACK_NOTE}");
+        assert!(ROLLED_BACK_NOTE.contains("last fraction of a second of edits was rolled back"), "{ROLLED_BACK_NOTE}");
+        assert!(ROLLED_BACK_NOTE.contains("make it again"), "{ROLLED_BACK_NOTE}");
+        for jargon in ["commit", "store", "MPC-", "durable", "grouped"] {
+            assert!(!ROLLED_BACK_NOTE.contains(jargon), "no {jargon:?} in a person's note: {ROLLED_BACK_NOTE}");
+        }
     }
 
     /// Kit v0.20.0's `AuditEvent::WritersNearCap`: its own warn line,

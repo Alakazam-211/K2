@@ -60,7 +60,7 @@ vi.mock('@/stores/session-events', async (orig) => ({
 
 import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
-import { BOARD_FILE_PREVIEW_LABEL, MultiplayerSection, MULTIPLAYER_EDITORS_ONLY_INTRO, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE, SAVE_IMMEDIATELY_LINE, SAVE_IMMEDIATELY_MANIFEST, SAVE_IMMEDIATELY_NAME, SAVE_IMMEDIATELY_OWNER_LINE, SAVE_IMMEDIATELY_RESTART_LINE } from './MultiplayerSection'
+import { BOARD_FILE_PREVIEW_LABEL, MultiplayerSection, MULTIPLAYER_EDITORS_ONLY_INTRO, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE, saveImmediatelyLine, SAVE_IMMEDIATELY_MANIFEST, SAVE_IMMEDIATELY_NAME, SAVE_IMMEDIATELY_OWNER_LINE, SAVE_IMMEDIATELY_RESTART_LINE } from './MultiplayerSection'
 import { EDITOR_PREVIEW_MANIFEST } from '@/components/Editor/EditorPreviewSwitch'
 import { primaryScope } from '@/kessel/server-scope'
 import { useSettingsStore } from '@/stores/settings'
@@ -432,7 +432,7 @@ describe('Settings → Cores → Multiplayer: Board files in a tab', () => {
 })
 
 describe('Settings → Cores → Multiplayer: Save every change immediately (kit v0.23.0)', () => {
-  const saves = (over: Json = {}): Json => ({ saveEveryChangeImmediately: false, canChange: true, running: 'grouped', restartNeeded: false, ...over })
+  const saves = (over: Json = {}): Json => ({ saveEveryChangeImmediately: false, canChange: true, running: 'grouped', restartNeeded: false, os: 'macos', ...over })
   async function mountWith(): Promise<void> {
     render(<MultiplayerSection />)
     await waitFor(() => expect(coreSwitches()).toHaveLength(4))
@@ -444,14 +444,29 @@ describe('Settings → Cores → Multiplayer: Save every change immediately (kit
     const toggle = sw(SAVE_IMMEDIATELY_NAME)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(toggle.disabled).toBe(false)
-    expect(within(row('save-immediately')).getByText(SAVE_IMMEDIATELY_LINE)).toBeTruthy()
-    expect(SAVE_IMMEDIATELY_LINE).toMatch(/takes effect after \S+ restarts\.$/)
+    expect(within(row('save-immediately')).getByText(saveImmediatelyLine('macos'))).toBeTruthy()
+    expect(saveImmediatelyLine('macos')).toMatch(/takes effect after \S+ restarts\.$/)
     expect(screen.queryByTestId('multiplayer-saves-restart')).toBeNull()
     h.cores = answer({ saves: saves({ saveEveryChangeImmediately: true, restartNeeded: true }) })
     fireEvent.click(toggle)
     await waitFor(() => expect(sw(SAVE_IMMEDIATELY_NAME).getAttribute('aria-checked')).toBe('true'))
     expect(h.posts).toEqual([{ route: 'settings/update', body: { docsSaveImmediately: true } }])
     expect(screen.getByTestId('multiplayer-saves-restart').textContent).toBe(SAVE_IMMEDIATELY_RESTART_LINE)
+  })
+
+  it('says what saving every change costs on the server’s kind of drive, as measured', async () => {
+    expect(saveImmediatelyLine('macos')).toContain('Save every change: safest, but about 10× slower to save on this kind of drive (measured).')
+    expect(saveImmediatelyLine('linux')).toContain(
+      'Save every change: safest, but up to 5× slower to save on this kind of drive, about the same on server drives with power-loss protection (measured).',
+    )
+    expect(saveImmediatelyLine(null)).toContain('measured up to 10× on a Mac, up to 5× on Linux')
+    for (const os of ['macos', 'linux', null]) {
+      expect(saveImmediatelyLine(os)).toContain('0.03–0.25 s to 0.7–0.9 s')
+      expect(saveImmediatelyLine(os)).toMatch(/takes effect after \S+ restarts\.$/)
+    }
+    h.cores = answer({ saves: saves({ os: 'linux' }) })
+    await mountWith()
+    expect(within(row('save-immediately')).getByText(saveImmediatelyLine('linux'))).toBeTruthy()
   })
 
   it('is the owner’s alone: disabled with a line for anyone else, and a click writes nothing', async () => {
@@ -472,6 +487,8 @@ describe('Settings → Cores → Multiplayer: Save every change immediately (kit
     expect(() => parseDocCores(answer({ saves: saves({ running: 'sometimes' }) }))).toThrow(/running/)
     expect(() => parseDocCores(answer({ saves: saves({ canChange: 'yes' }) }))).toThrow(/canChange/)
     expect(parseDocCores(answer({ saves: saves({ running: null }) })).saves?.running).toBeNull()
+    expect(parseDocCores(answer({ saves: saves({ os: undefined }) })).saves?.os).toBeNull()
+    expect(() => parseDocCores(answer({ saves: saves({ os: 7 }) }))).toThrow(/os/)
   })
 
   it('is found by searching for saving, apart from the cores', () => {

@@ -192,7 +192,7 @@ async fn grouped_saves_reach_the_disk_at_every_barrier_and_the_owner_can_turn_th
     let c = json_of(&body);
     assert_eq!(
         c["saves"],
-        json!({ "saveEveryChangeImmediately": true, "canChange": true, "running": "grouped", "restartNeeded": true }),
+        json!({ "saveEveryChangeImmediately": true, "canChange": true, "running": "grouped", "restartNeeded": true, "os": std::env::consts::OS }),
         "Settings shows the owner's setting and that a restart is needed: {c}"
     );
     let s = saves();

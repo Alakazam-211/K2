@@ -614,8 +614,9 @@ pub fn cores_route(caller: &DocCaller) -> CliResponse {
 /// The "Save every change immediately" row (kit v0.23.0): the owner's
 /// setting (`docsSaveImmediately`), whether this caller may change it (the
 /// owner alone), what the store runs with now (`grouped` or `immediate`;
-/// `null` while live docs are off), and whether a restart is needed for the
-/// setting to take effect.
+/// `null` while live docs are off), whether a restart is needed for the
+/// setting to take effect, and the server's OS (`macos`, `linux`, `windows`:
+/// Settings says what saving each change costs on its kind of drive).
 pub fn saves_json(caller: &DocCaller) -> Value {
     let on = super::save_immediately();
     let running = super::runtime().ok().map(|rt| rt.config().store);
@@ -624,6 +625,7 @@ pub fn saves_json(caller: &DocCaller) -> Value {
         "canChange": is_owner(caller),
         "running": running.as_ref().map(super::durability_word),
         "restartNeeded": running.is_some_and(|s| matches!(s.commit_durability(), k2_mpc_base::store::CommitDurability::Immediate) != on),
+        "os": std::env::consts::OS,
     })
 }
 

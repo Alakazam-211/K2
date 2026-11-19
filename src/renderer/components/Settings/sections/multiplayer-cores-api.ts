@@ -64,6 +64,8 @@ export interface DocSaves {
   running: 'grouped' | 'immediate' | null
   /** The setting takes effect after K2 restarts, and it hasn't yet. */
   restartNeeded: boolean
+  /** The server's OS (`macos`, `linux`, `windows`); null from a server that doesn't say. */
+  os: string | null
 }
 
 export interface DocCores {
@@ -157,6 +159,7 @@ function parseSaves(v: unknown): DocSaves {
     canChange: bool(o, 'canChange', w),
     running,
     restartNeeded: bool(o, 'restartNeeded', w),
+    os: o.os === undefined || o.os === null ? null : str(o, 'os', w),
   }
 }
 

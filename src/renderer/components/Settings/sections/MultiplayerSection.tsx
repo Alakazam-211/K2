@@ -54,10 +54,29 @@ export const BOARD_FILE_PREVIEW_LINE =
 
 /** "Save every change immediately" (kit v0.23.0): the owner's, off by default. */
 export const SAVE_IMMEDIATELY_NAME = 'Save every change immediately'
-export const SAVE_IMMEDIATELY_LINE =
-  `Off: ${PRODUCT_NAME} saves live documents to disk in small groups, a few times a second, and at once when you save, close or leave a file. ` +
-  `If the disk fails, the last fraction of a second of edits can be lost. On: every change is saved to disk before ${PRODUCT_NAME} goes on, which is slower. ` +
-  `A change here takes effect after ${PRODUCT_NAME} restarts.`
+/** What saving every change costs, by the server's OS (K2 Cores' measurements per saved
+ *  change: a Mac's internal SSD 5.9 ms vs 0.6 ms; Linux on a typical NVMe 3.0 vs 0.6 ms;
+ *  Linux server drives with power-loss protection about the same). */
+export function saveImmediatelyCost(os: string | null): string {
+  switch (os) {
+    case 'macos':
+      return 'Save every change: safest, but about 10× slower to save on this kind of drive (measured).'
+    case 'linux':
+      return 'Save every change: safest, but up to 5× slower to save on this kind of drive, about the same on server drives with power-loss protection (measured).'
+    default:
+      return 'Save every change: safest, but slower to save (measured up to 10× on a Mac, up to 5× on Linux).'
+  }
+}
+
+/** The row's words for a server on `os`. */
+export function saveImmediatelyLine(os: string | null): string {
+  return (
+    `Off: ${PRODUCT_NAME} saves live documents to disk in small groups, a few times a second, and at once when you save, close or leave a file. ` +
+    `If the disk fails, the last fraction of a second of edits can be lost. ${saveImmediatelyCost(os)} ` +
+    `With many agents writing, a person's longest wait for a keystroke went from about 0.03–0.25 s to 0.7–0.9 s. ` +
+    `A change here takes effect after ${PRODUCT_NAME} restarts.`
+  )
+}
 export const SAVE_IMMEDIATELY_OWNER_LINE = "Only the server's owner can change this."
 export const SAVE_IMMEDIATELY_RESTART_LINE = `Restart ${PRODUCT_NAME} for this to take effect.`
 
@@ -396,7 +415,7 @@ function SaveImmediatelyRow({
       }
     >
       <div className="type-row text-[var(--color-text-primary)]">{SAVE_IMMEDIATELY_NAME}</div>
-      <div className={SETTING_ROW_HINT}>{SAVE_IMMEDIATELY_LINE}</div>
+      <div className={SETTING_ROW_HINT}>{saveImmediatelyLine(saves.os)}</div>
       {!saves.canChange ? (
         <div className={SETTING_ROW_HINT} data-testid="multiplayer-saves-owner-line">
           {SAVE_IMMEDIATELY_OWNER_LINE}

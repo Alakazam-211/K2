@@ -26,6 +26,8 @@ export type { AppKeyOk, AppKeyRoomsSet, AppKeyUser, AppKeyUserCreated, AppKeyUse
 export { K2Error, fromResponse } from './errors.ts'
 export * from './generated/verbs.ts'
 export { qrSvg, type QrSvgOptions } from './pairing.ts'
+// 0.46.16 App chat pushes: a DM or channel push's data, typed, and push.viewing's chat conversation.
+export { chatConversation, chatPushFrom, CHAT_ANDROID_CHANNEL, CHAT_CONVERSATION_PREFIX, type ChatPush, type ChatPushReason } from './push.ts'
 // 0.46.9 resumable transfers: the bytes of files.uploadCreate's upload, through the door.
 export {
   backoffMs,

@@ -11161,7 +11161,7 @@
           "properties": {
             "conversation": {
               "type": "string",
-              "description": "The Thread's id (a room's pinned Chat this guest reads, from thread.*)."
+              "description": "The Thread's id (a room's pinned Chat this guest reads, from thread.*), or an App chat: chat:<Sew channel id> (k2Conv on a chat push) for a chat member of this App."
             },
             "visible": {
               "type": "boolean",
@@ -11212,7 +11212,7 @@
         "usage",
         "failed"
       ],
-      "doc": "Say this guest has a Thread open (or closed it): agent-reply pushes for that Thread stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows the Thread; only that guest's own state changes.",
+      "doc": "Say this guest has a Thread or an App chat (chat:<Sew channel id>) open, or closed it: agent-reply and chat pushes for it stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows it; only that guest's own state changes.",
       "example": "await k2.asGuest(pass).push.viewing({conversation, visible: true})"
     },
     {

@@ -12,6 +12,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **@mentions are highlighted** in the Home chat view.
 - Phones show these notifications with the K2 Companion update that adds them.
 
+### Apps
+- **Preview: chat notifications for your App's users (off by default).** An App that uses DMs or channels in its own Sew Space can notify its users on its own phone app, the way it does for agent replies: `k2 app push set <app> --chat on` (the owner, an Admin, or the App's agent with "…and manage them end to end"), with `K2_APP_CHAT_PUSH=1` on the server while this is a preview. DMs always notify; in a channel each person gets All messages or @mentions only (the default), which your phone app sets. A tap opens your phone app at that chat (`k2Kind: chat`, with the chat and message ids).
+- **Only the App's own people, on its own phones.** A channel message notifies only for the App its Space belonged to when the message was sent, and only on that App's devices; a DM goes to the App only when both people use only that App. These notifications aren't end-to-end sealed, so they show the App's name and "New message", "Mentioned you" or "Replied to you" unless every preview switch is on (yours, the App's and the phone's); only then do the sender's name and the start of the message show.
+- **`push.viewing` takes a chat.** While a chat is on screen, your App sends `push.viewing({conversation: "chat:<id>", visible: true})` every 30 seconds and no notification comes for it. The App SDK has `chatPushFrom` to read a chat notification and `chatConversation` for the id.
+
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home

@@ -7,6 +7,7 @@ export type { AppKeyOk, AppKeyRoomsSet, AppKeyUser, AppKeyUserCreated, AppKeyUse
 export { K2Error, fromResponse } from './errors.ts';
 export * from './generated/verbs.ts';
 export { qrSvg, type QrSvgOptions } from './pairing.ts';
+export { chatConversation, chatPushFrom, CHAT_ANDROID_CHANNEL, CHAT_CONVERSATION_PREFIX, type ChatPush, type ChatPushReason } from './push.ts';
 export { backoffMs, downloadLink, missingParts, uploadToDoor, MAX_PART, TransferError, type DoorUploadDone, type DoorUploadStatus, type UploadToDoorOptions, } from './transfer.ts';
 export { beginSignIn, clearSignInCookie, pkce, verifierFromCookieHeader, SIGN_IN_COOKIE, type BeginOptions, type Pkce, type SignInStart } from './auth.ts';
 export { applyChannelOps, channelOp, setAllChannels, CHANNEL_OPS_PER_CALL, CHANNELS_PER_PERSON, MEMBER_CHANNELS_PER_CALL, type ChannelRef, type ChatChannelsActor, type ChatSpaceOptions, type EnsureOptions, } from './chat.ts';

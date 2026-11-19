@@ -18,6 +18,8 @@ export { coerceTurn, describe as describeTurn, reduceTurn } from "../../activity
 export { K2Error, fromResponse } from "./errors.js";
 export * from "./generated/verbs.js";
 export { qrSvg } from "./pairing.js";
+// 0.46.16 App chat pushes: a DM or channel push's data, typed, and push.viewing's chat conversation.
+export { chatConversation, chatPushFrom, CHAT_ANDROID_CHANNEL, CHAT_CONVERSATION_PREFIX } from "./push.js";
 // 0.46.9 resumable transfers: the bytes of files.uploadCreate's upload, through the door.
 export { backoffMs, downloadLink, missingParts, uploadToDoor, MAX_PART, TransferError, } from "./transfer.js";
 // 0.46.9: the sign-in door's PKCE helpers (k2.auth uses them).

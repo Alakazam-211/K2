@@ -61072,7 +61072,7 @@ no cap (your own rooms)
   push.unregister          POST /cli/skin/push/unregister                        Stop this App's notifications on one of this guest's own devices (signing out also removes it).
   push.device              GET  /cli/skin/push/device                            This guest's own push registration for one device (never the token).
   push.prefs               POST /cli/skin/push/prefs                             Change one device's notification choices (previews, muted topics) without its token.
-  push.viewing             POST /cli/skin/push/viewing                           Say this guest has a Thread open (or closed it): agent-reply pushes for that Thread stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows the Thread; only that guest's own state changes.
+  push.viewing             POST /cli/skin/push/viewing                           Say this guest has a Thread or an App chat (chat:<Sew channel id>) open, or closed it: agent-reply and chat pushes for it stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows it; only that guest's own state changes.
   pairing.start            POST /cli/skin/pair/start (server only)               Start pairing this guest's phone: a one-time code and its QR, from their own web sign-in (at most 15 minutes old, or with their password).
   pairing.status           GET  /cli/skin/pair/status (server only)              Is this guest's pairing done: pending, paired (with the device's name), expired or cancelled.
   pairing.cancel           POST /cli/skin/pair/cancel (server only)              Drop one of this guest's pairing codes (the QR stops working).

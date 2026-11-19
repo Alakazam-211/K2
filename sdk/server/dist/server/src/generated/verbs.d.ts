@@ -13662,7 +13662,7 @@ export interface AppSurfaces {
             mutedTopics?: string[];
             previews?: boolean | null;
         }): Promise<AppPushDevice>;
-        /** Say this guest has a Thread open (or closed it): agent-reply pushes for that Thread stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows the Thread; only that guest's own state changes. no cap · POST /cli/skin/push/viewing. e.g. `await k2.asGuest(pass).push.viewing({conversation, visible: true})` */
+        /** Say this guest has a Thread or an App chat (chat:<Sew channel id>) open, or closed it: agent-reply and chat pushes for it stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows it; only that guest's own state changes. no cap · POST /cli/skin/push/viewing. e.g. `await k2.asGuest(pass).push.viewing({conversation, visible: true})` */
         viewing(args: {
             conversation: string;
             visible: boolean;

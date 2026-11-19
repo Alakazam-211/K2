@@ -174,12 +174,68 @@ K2 adds these keys:
 |---|---|
 | `k2App` | the App's id |
 | `k2Send` | the send id |
-| `k2Kind` | `app` (your App sent it) or `agent` (an agent replied in a room) |
+| `k2Kind` | `app` (your App sent it), `agent` (an agent replied in a room) or `chat` (a DM or channel message in the App's Sew Space, below) |
 | `k2Topic` | the topic, when the send named one |
 | `k2Who` | match it to `who` from register |
 
 No username, person id, room name or server name ever rides a push. Apple
 and Google don't see who.
+
+### Chat pushes (DMs and channels)
+
+When the App uses DMs or channels in its own Sew Space, K2 can push them to
+the App's users the way it pushes agent replies. They go to your phone app,
+on the devices registered above, and a tap opens your phone app (never K2's
+Home). They're off by default; the owner, an Admin or the App's agent (with
+"…and manage them end to end") turns them on:
+
+```sh
+k2 app push set <app> --chat on
+```
+
+The server must also have `K2_APP_CHAT_PUSH=1` (off by default while it is
+proven). `k2 app push status <app>` shows `chat pushes on`, or that it's
+waiting for the server switch.
+
+The rules:
+
+- **DMs always push.**
+- **A channel pushes at the person's own level:** All messages, or
+  @mentions only (the default). Your phone app sets it on the person's own
+  Sew session, `POST /api/v1/channels/{id}/notify/set {"level": "all"}` (or
+  `"mentions"`). Show "DMs always notify" for a DM. All messages pushes only
+  @mentions and replies until the server runs Sew 0.11.0.
+- No push for the person's own posts or agents' posts.
+- While a chat is on screen, call `push.viewing` every 30 seconds with
+  `conversation: "chat:<k2Conv>"`. No push for that chat comes while it's
+  open.
+- Pushes in a 45-second window come as one push, `N new messages`.
+- A DM goes to your App only when both people use only your App. A DM
+  between people in more than one App belongs to K2's Home.
+
+The payload:
+
+| Key | Meaning |
+|---|---|
+| `k2Kind` | `chat` |
+| `k2Reason` | `dm`, `mention`, `reply`, `all` or `keyword` |
+| `k2Conv` | the Sew channel id (a DM is a channel too) |
+| `k2ConvKind` | `dm` or `channel` |
+| `k2Msg` | the newest message this push covers: scroll to it |
+| `k2Count` | how many messages it covers |
+| `k2Mention` | `1` if any of them mentions the person, else `0` |
+
+`collapseId` and `threadId` are `chat:<k2Conv>`, so a later push replaces
+that chat's banner. On Android, create a notification channel with the id
+`chat`. Clear a chat's notifications when it opens.
+
+This path is not sealed (see below). So the title is the App's name, and
+the body is fixed words (`New message`, `Mentioned you`, `Replied to you`,
+`N new messages`), unless every preview switch is on: the owner's message
+previews, the App's (`k2 app push set <app> --previews`), the device's own
+`previews`, and the server's chat previews. Only then the title is the
+sender's name and the body the start of the message. No channel name rides
+a chat push.
 
 ### Sensitive content
 
@@ -313,4 +369,6 @@ When Apple or Google refuse:
 - `k2 app push off <app>` stops one App at once.
 - `K2_APP_PUSH=off` in the daemon's environment stops every App on the
   server.
+- `K2_APP_CHAT_PUSH=1` turns chat pushes on for the server; each App still
+  turns its own on with `k2 app push set <app> --chat on`.
 - K2 Companion's own phones are `k2 push`, a separate list.

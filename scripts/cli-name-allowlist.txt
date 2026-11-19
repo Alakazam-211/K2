@@ -593,148 +593,148 @@
 1 cli src/renderer/lib/thread-reply.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/lib/zen/zen-source-ask.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/stores/active-agents.ts debt: the command name typed out; use CLI_NAME or cli_name!()
-17 value src/renderer/components/Wiki/WikiPage.tsx debt: unsorted value
-10 value crates/k2-daemon/src/sql/cluster.rs debt: unsorted value
-10 value crates/k2-signer/src/verbs.rs debt: unsorted value
-7 value src-tauri/src/commands/settings.rs debt: unsorted value
-6 value src/renderer/lib/zen/garden-access-api.ts debt: unsorted value
-5 value crates/k2-core/src/overlay/doc.rs debt: unsorted value
-5 value crates/k2-daemon/src/docs/host.rs debt: unsorted value
-5 value src/renderer/components/Help/HelpExplorer.tsx debt: unsorted value
-5 value src/renderer/components/Help/cli-explorer.ts debt: unsorted value
-5 value src/renderer/components/Thread/systemNotice.fixtures.ts debt: unsorted value
-5 value src/renderer/components/Wiki/wiki-api.ts debt: unsorted value
-4 value crates/k2-core/src/cli_folder_trust/scan.rs debt: unsorted value
-4 value crates/k2-core/src/suite/testkit.rs debt: unsorted value
-4 value crates/k2-core/src/zen/version_carry.rs debt: unsorted value
-4 value crates/k2-daemon/src/permission/actions/postal.rs debt: unsorted value
-4 value crates/k2-node/src/gens.rs debt: unsorted value
-4 value crates/k2-signer/src/registry.rs debt: unsorted value
-4 value crates/k2-signer/src/session.rs debt: unsorted value
-4 value src/renderer/components/Wiki/wiki-graph-data.ts debt: unsorted value
-3 value crates/k2-core/src/jscheck/inventory.rs debt: unsorted value
-3 value crates/k2-core/src/jscheck/lint.rs debt: unsorted value
-3 value crates/k2-core/src/sim/manager.rs debt: unsorted value
-3 value crates/k2-daemon/src/desktop/virtual_routes.rs debt: unsorted value
-3 value crates/k2-daemon/src/garden_data/call.rs debt: unsorted value
-3 value crates/k2-daemon/src/mail/defaults.rs debt: unsorted value
-3 value crates/k2-daemon/src/mail/jmap.rs debt: unsorted value
-3 value crates/k2-daemon/src/overlay_routes.rs debt: unsorted value
-3 value crates/k2-daemon/src/sew/s32.rs debt: unsorted value
-3 value crates/k2-daemon/src/subscription_usage.rs debt: unsorted value
-3 value crates/k2-daemon/src/zen_access_routes.rs debt: unsorted value
-3 value crates/k2-root-proto/src/k2_db.rs debt: unsorted value
-3 value src/renderer/components/Desktop/desktop-keymap.ts debt: unsorted value
-2 value crates/k2-core/src/firewall.rs debt: unsorted value
-2 value crates/k2-core/src/mail_forward.rs debt: unsorted value
-2 value crates/k2-core/src/runtime_dir.rs debt: unsorted value
-2 value crates/k2-core/src/skills/writer.rs debt: unsorted value
-2 value crates/k2-core/src/workspace/agent_identity.rs debt: unsorted value
-2 value crates/k2-core/src/workspace/context_layers.rs debt: unsorted value
-2 value crates/k2-core/src/workspace/settings.rs debt: unsorted value
-2 value crates/k2-daemon/src/apps/db_connect.rs debt: unsorted value
-2 value crates/k2-daemon/src/compute_rollout.rs debt: unsorted value
-2 value crates/k2-daemon/src/docs/claims.rs debt: unsorted value
-2 value crates/k2-daemon/src/docs/preview/service.rs debt: unsorted value
-2 value crates/k2-daemon/src/permission/actions/vault_incoming.rs debt: unsorted value
-2 value crates/k2-daemon/src/sql/ops.rs debt: unsorted value
-2 value crates/k2-daemon/src/sql/pgmove/k2.rs debt: unsorted value
-2 value crates/k2-daemon/src/sql/pgmove/real_move.rs debt: unsorted value
-2 value crates/k2-daemon/src/wiki_routes.rs debt: unsorted value
-2 value src/renderer/components/AgentPane/inbox-browser.ts debt: unsorted value
-2 value src/renderer/components/Settings/sections/SewSection.tsx debt: unsorted value
-2 value src/renderer/components/Settings/sections/ZenWidgetData.tsx debt: unsorted value
-2 value src/renderer/components/Settings/sections/sew-api.ts debt: unsorted value
-2 value src/renderer/lib/zen/zen-rail-views.ts debt: unsorted value
-1 value crates/k2-client/src/account_session.rs debt: unsorted value
-1 value crates/k2-client/src/cli_install.rs debt: unsorted value
-1 value crates/k2-core/src/cli_folder_trust.rs debt: unsorted value
-1 value crates/k2-core/src/cli_folder_trust/gate.rs debt: unsorted value
-1 value crates/k2-core/src/compute/trim.rs debt: unsorted value
-1 value crates/k2-core/src/deploy/build.rs debt: unsorted value
-1 value crates/k2-core/src/email_outcomes.rs debt: unsorted value
-1 value crates/k2-core/src/external_agents/collect.rs debt: unsorted value
-1 value crates/k2-core/src/heartbeats/wakeup_wait.rs debt: unsorted value
-1 value crates/k2-core/src/hire/template/format.rs debt: unsorted value
-1 value crates/k2-core/src/hire/template/upgrade.rs debt: unsorted value
-1 value crates/k2-core/src/llm_accounts/wallet.rs debt: unsorted value
-1 value crates/k2-core/src/migrations/unification_0_37_0.rs debt: unsorted value
-1 value crates/k2-core/src/product_feedback/scrub.rs debt: unsorted value
-1 value crates/k2-core/src/refusals/mod.rs debt: unsorted value
-1 value crates/k2-core/src/suite/mod.rs debt: unsorted value
-1 value crates/k2-core/src/tool_hook/home_push.rs debt: unsorted value
-1 value crates/k2-core/src/wiki/mod.rs debt: unsorted value
-1 value crates/k2-core/src/workspace/wake_prompts.rs debt: unsorted value
-1 value crates/k2-core/src/zen/widget_shot.rs debt: unsorted value
-1 value crates/k2-daemon/src/app_account_deletion.rs debt: unsorted value
-1 value crates/k2-daemon/src/app_push/payload.rs debt: unsorted value
-1 value crates/k2-daemon/src/approve/card.rs debt: unsorted value
-1 value crates/k2-daemon/src/approve/routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/apps/auth_door.rs debt: unsorted value
-1 value crates/k2-daemon/src/apps/box_prep.rs debt: unsorted value
-1 value crates/k2-daemon/src/apps/db_connect_real_pg.rs debt: unsorted value
-1 value crates/k2-daemon/src/apps/db_door_real_pg.rs debt: unsorted value
-1 value crates/k2-daemon/src/apps/disk_scan.rs debt: unsorted value
-1 value crates/k2-daemon/src/apps/held_cards.rs debt: unsorted value
-1 value crates/k2-daemon/src/apps/pg_choice.rs debt: unsorted value
-1 value crates/k2-daemon/src/apps/podman_install.rs debt: unsorted value
-1 value crates/k2-daemon/src/ci_release.rs debt: unsorted value
-1 value crates/k2-daemon/src/client_ip.rs debt: unsorted value
-1 value crates/k2-daemon/src/daemon_stop.rs debt: unsorted value
-1 value crates/k2-daemon/src/docs/annotations.rs debt: unsorted value
-1 value crates/k2-daemon/src/domains/renew.rs debt: unsorted value
-1 value crates/k2-daemon/src/email_notify/outcomes.rs debt: unsorted value
-1 value crates/k2-daemon/src/firewall/routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/garden_access.rs debt: unsorted value
-1 value crates/k2-daemon/src/garden_data/blob_routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/garden_data/grant_routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/garden_data/mod.rs debt: unsorted value
-1 value crates/k2-daemon/src/heartbeat_launch.rs debt: unsorted value
-1 value crates/k2-daemon/src/llm_accounts_runtime.rs debt: unsorted value
-1 value crates/k2-daemon/src/mail/app_password.rs debt: unsorted value
-1 value crates/k2-daemon/src/mail/cert_owner.rs debt: unsorted value
-1 value crates/k2-daemon/src/mail/cert_trigger.rs debt: unsorted value
-1 value crates/k2-daemon/src/mail/fake_jmap.rs debt: unsorted value
-1 value crates/k2-daemon/src/mail/forward_sync.rs debt: unsorted value
-1 value crates/k2-daemon/src/mail/sieve_lockdown.rs debt: unsorted value
-1 value crates/k2-daemon/src/mail/sieve_lockdown_live.rs debt: unsorted value
-1 value crates/k2-daemon/src/mail/sieve_user.rs debt: unsorted value
-1 value crates/k2-daemon/src/misc_routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/msg_verify.rs debt: unsorted value
-1 value crates/k2-daemon/src/permission/answer.rs debt: unsorted value
-1 value crates/k2-daemon/src/permission/inject.rs debt: unsorted value
-1 value crates/k2-daemon/src/permission_default.rs debt: unsorted value
-1 value crates/k2-daemon/src/postal_net/plane.rs debt: unsorted value
-1 value crates/k2-daemon/src/publish_cards.rs debt: unsorted value
-1 value crates/k2-daemon/src/sew/routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/sew/supervisor.rs debt: unsorted value
-1 value crates/k2-daemon/src/skin_routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/sql/sysops.rs debt: unsorted value
-1 value crates/k2-daemon/src/tool_hook_worker.rs debt: unsorted value
-1 value crates/k2-daemon/src/vault/adopt.rs debt: unsorted value
-1 value crates/k2-daemon/src/vault/spawn.rs debt: unsorted value
-1 value crates/k2-daemon/src/workspace_msg.rs debt: unsorted value
-1 value crates/k2-daemon/src/workspace_routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/zen_garden_cards.rs debt: unsorted value
-1 value crates/k2-daemon/src/zen_remote_routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/zen_routes.rs debt: unsorted value
-1 value crates/k2-daemon/src/zen_sign_cards.rs debt: unsorted value
-1 value crates/k2-root-helper/src/apps.rs debt: unsorted value
-1 value crates/k2-root-helper/src/pg_major.rs debt: unsorted value
-1 value crates/k2-root-helper/src/sew.rs debt: unsorted value
-1 value crates/k2-root-helper/src/sew_teardown.rs debt: unsorted value
-1 value crates/k2-root-proto/src/paths.rs debt: unsorted value
-1 value crates/k2-root-proto/src/podman.rs debt: unsorted value
-1 value crates/k2-root-proto/src/sew.rs debt: unsorted value
-1 value crates/k2-signer/src/forge.rs debt: unsorted value
-1 value crates/k2-signer/src/trust.rs debt: unsorted value
-1 value src/renderer/components/Desktop/DesktopPane.tsx debt: unsorted value
-1 value src/renderer/components/Settings/sections/AgentSkillsSection.tsx debt: unsorted value
-1 value src/renderer/components/Settings/sections/DomainsSection.tsx debt: unsorted value
-1 value src/renderer/components/Settings/sections/GeneralSection.tsx debt: unsorted value
-1 value src/renderer/components/Settings/sections/access-audit-words.ts debt: unsorted value
-1 value src/renderer/components/Wiki/WikiGraph.tsx debt: unsorted value
-1 value src/renderer/components/Wiki/WikiGraph3D.tsx debt: unsorted value
-1 value src/renderer/components/Wiki/WikiNoteList.tsx debt: unsorted value
-1 value src/renderer/lib/agent-type.ts debt: unsorted value
-1 value src/renderer/lib/garden-data/garden-data-types.ts debt: unsorted value
+17 value src/renderer/components/Wiki/WikiPage.tsx keeper: wire+inert; the wiki index's scope (daemon); the page's own view mode
+10 value crates/k2-daemon/src/sql/cluster.rs keeper: stored; the Postgres cluster record's role
+10 value crates/k2-signer/src/verbs.rs keeper: outside; k2sign's project id for this repo's releases
+7 value src-tauri/src/commands/settings.rs debt: command (6 lines); B9; keeps: outside; the package's lib folder
+6 value src/renderer/lib/zen/garden-access-api.ts keeper: wire; the Garden access actor and signer kind from the daemon
+5 value crates/k2-core/src/overlay/doc.rs keeper: stored+wire; the Thread sender, login and via; a collected line's origin
+5 value crates/k2-daemon/src/docs/host.rs keeper: stored; the docs audit's actor
+5 value src/renderer/components/Help/HelpExplorer.tsx keeper: stored; the CLI catalog's tool key
+5 value src/renderer/components/Help/cli-explorer.ts debt: command (2 lines); B9; keeps: stored; the CLI catalog's tool key
+5 value src/renderer/components/Thread/systemNotice.fixtures.ts keeper: wire; the Thread system author's login, from and via
+5 value src/renderer/components/Wiki/wiki-api.ts keeper: wire+inert; the wiki index's scope (daemon); the page's own view mode
+4 value crates/k2-core/src/cli_folder_trust/scan.rs keeper: wire; a trust finding's tool, in the card's and the CLI's JSON
+4 value crates/k2-core/src/suite/testkit.rs keeper: wire; an App manifest's requires.k2 and the suite variant
+4 value crates/k2-core/src/zen/version_carry.rs keeper: stored; the auth audit's actor and maker
+4 value crates/k2-daemon/src/permission/actions/postal.rs keeper: stored+outside; the permission audit's actor; p5's own verb
+4 value crates/k2-node/src/gens.rs keeper: inert; bytes written to probe a clone method
+4 value crates/k2-signer/src/registry.rs keeper: outside; k2sign's project id for this repo's releases
+4 value crates/k2-signer/src/session.rs keeper: outside; k2sign's project id for this repo's releases
+4 value src/renderer/components/Wiki/wiki-graph-data.ts keeper: inert; the wiki page's own view mode
+3 value crates/k2-core/src/jscheck/inventory.rs keeper: wire; the k2 global that App scripts use
+3 value crates/k2-core/src/jscheck/lint.rs keeper: wire; the k2 global that App scripts use
+3 value crates/k2-core/src/sim/manager.rs keeper: stored; sim_audit.actor
+3 value crates/k2-daemon/src/desktop/virtual_routes.rs keeper: stored; the desktop audit line's actor
+3 value crates/k2-daemon/src/garden_data/call.rs keeper: wire; madeBy, in the Garden data JSON
+3 value crates/k2-daemon/src/mail/defaults.rs keeper: wire; setBy, in the mail defaults JSON
+3 value crates/k2-daemon/src/mail/jmap.rs keeper: outside; Stalwart: the creation id, the sieve script name, the app password label
+3 value crates/k2-daemon/src/overlay_routes.rs keeper: wire; the Thread sender
+3 value crates/k2-daemon/src/sew/s32.rs keeper: wire+inert; a destination kind a caller sends; probe bytes
+3 value crates/k2-daemon/src/subscription_usage.rs keeper: outside; clientInfo.name, read by the LLM tool's app server
+3 value crates/k2-daemon/src/zen_access_routes.rs keeper: wire; madeBy and the actor kind, in the Garden access JSON
+3 value crates/k2-root-proto/src/k2_db.rs keeper: outside; Postgres, the schema's name in a pg_restore list
+3 value src/renderer/components/Desktop/desktop-keymap.ts keeper: inert; the key router's own route name
+2 value crates/k2-core/src/firewall.rs keeper: stored; the firewall config's managed_by; the app reads it
+2 value crates/k2-core/src/mail_forward.rs keeper: stored; mail_forward_events.actor
+2 value crates/k2-core/src/runtime_dir.rs keeper: outside; systemd's RuntimeDirectory=k2 (packaging's unit); B9 reads it again
+2 value crates/k2-core/src/skills/writer.rs keeper: stored; the stored agent mode (ruling 5)
+2 value crates/k2-core/src/workspace/agent_identity.rs keeper: stored; the stored agent mode (ruling 5)
+2 value crates/k2-core/src/workspace/context_layers.rs keeper: stored; pack ids and aliases in a workspace's context stack
+2 value crates/k2-core/src/workspace/settings.rs keeper: stored; the stored agent mode (ruling 5)
+2 value crates/k2-daemon/src/apps/db_connect.rs keeper: stored; the Postgres cluster record's role
+2 value crates/k2-daemon/src/compute_rollout.rs keeper: stored; the compute event's actor
+2 value crates/k2-daemon/src/docs/claims.rs keeper: stored+wire; the live message's sender and its Chatter row
+2 value crates/k2-daemon/src/docs/preview/service.rs keeper: stored; the docs audit's actor
+2 value crates/k2-daemon/src/permission/actions/vault_incoming.rs keeper: stored; the permission audit's actor
+2 value crates/k2-daemon/src/sql/ops.rs keeper: stored; the Postgres cluster record's role
+2 value crates/k2-daemon/src/sql/pgmove/k2.rs keeper: stored; the Postgres cluster record's role
+2 value crates/k2-daemon/src/sql/pgmove/real_move.rs keeper: outside; Postgres, the schema's name
+2 value crates/k2-daemon/src/wiki_routes.rs keeper: wire; the wiki index's scope query
+2 value src/renderer/components/AgentPane/inbox-browser.ts keeper: wire; the chat-about stamp's kind, [k2 inboxID:...]
+2 value src/renderer/components/Settings/sections/SewSection.tsx keeper: wire; the Sew identity the daemon reads
+2 value src/renderer/components/Settings/sections/ZenWidgetData.tsx keeper: wire; madeBy, from the Garden data JSON
+2 value src/renderer/components/Settings/sections/sew-api.ts keeper: wire; the Sew identity the daemon reads
+2 value src/renderer/lib/zen/zen-rail-views.ts keeper: inert; a built-in view's source label that nothing compares
+1 value crates/k2-client/src/account_session.rs keeper: outside; the bundle layout, the app's own binary name (src-tauri [[bin]]); B9 reads it again
+1 value crates/k2-client/src/cli_install.rs debt: command (1 line); B3
+1 value crates/k2-core/src/cli_folder_trust.rs keeper: outside; Cursor's marker file holds trustMethod; our revoke matches it
+1 value crates/k2-core/src/cli_folder_trust/gate.rs keeper: wire; a trust finding's tool, in the card's and the CLI's JSON
+1 value crates/k2-core/src/compute/trim.rs keeper: stored; compute_admin_settings.updated_by
+1 value crates/k2-core/src/deploy/build.rs keeper: stored; the seeds table's created_with (key k2: the version that built it)
+1 value crates/k2-core/src/email_outcomes.rs keeper: stored; the email outcome's source column
+1 value crates/k2-core/src/external_agents/collect.rs keeper: wire; the Thread sender of a collected line
+1 value crates/k2-core/src/heartbeats/wakeup_wait.rs keeper: stored; an inbox note's from (frontmatter)
+1 value crates/k2-core/src/hire/template/format.rs keeper: wire; a library template's author field (template.toml)
+1 value crates/k2-core/src/hire/template/upgrade.rs keeper: stored; an inbox note's source and from (frontmatter)
+1 value crates/k2-core/src/llm_accounts/wallet.rs keeper: stored; the LLM account's created_by
+1 value crates/k2-core/src/migrations/unification_0_37_0.rs keeper: stored; the stored agent mode (ruling 5)
+1 value crates/k2-core/src/product_feedback/scrub.rs keeper: inert; a stop word the feedback scrubber never replaces
+1 value crates/k2-core/src/refusals/mod.rs keeper: wire; a refusal's who, in its JSON
+1 value crates/k2-core/src/suite/mod.rs keeper: wire; the suite catalog's variant and the App release file name
+1 value crates/k2-core/src/tool_hook/home_push.rs keeper: stored; home_chat_push_prefs.updated_by
+1 value crates/k2-core/src/wiki/mod.rs keeper: wire; the fleet wiki index's scope; the app reads it
+1 value crates/k2-core/src/workspace/wake_prompts.rs keeper: stored; the stored agent mode (ruling 5)
+1 value crates/k2-core/src/zen/widget_shot.rs keeper: wire; the frame's hello key (sdk/k2-runtime.js:355)
+1 value crates/k2-daemon/src/app_account_deletion.rs keeper: stored; a Tickets notice's agent name
+1 value crates/k2-daemon/src/app_push/payload.rs keeper: wire; App push data keys: the k2 prefix K2's own stamps use
+1 value crates/k2-daemon/src/approve/card.rs keeper: wire; the live message's sender, [from k2]
+1 value crates/k2-daemon/src/approve/routes.rs keeper: wire; the approval JSON's reportedBy
+1 value crates/k2-daemon/src/apps/auth_door.rs keeper: wire; the door's answer, "k2": true
+1 value crates/k2-daemon/src/apps/box_prep.rs keeper: wire; the root helper's podmanSource
+1 value crates/k2-daemon/src/apps/db_connect_real_pg.rs keeper: stored; the Postgres cluster record's role
+1 value crates/k2-daemon/src/apps/db_door_real_pg.rs keeper: stored; the Postgres cluster record's role
+1 value crates/k2-daemon/src/apps/disk_scan.rs keeper: wire; the disk report's consumer id
+1 value crates/k2-daemon/src/apps/held_cards.rs keeper: stored; the permission audit's actor
+1 value crates/k2-daemon/src/apps/pg_choice.rs keeper: stored; the Postgres cluster record's role
+1 value crates/k2-daemon/src/apps/podman_install.rs keeper: wire; the Podman install decision's source
+1 value crates/k2-daemon/src/ci_release.rs keeper: outside; k2sign's project id for this repo's releases
+1 value crates/k2-daemon/src/client_ip.rs keeper: stored; app_requests.closed_early
+1 value crates/k2-daemon/src/daemon_stop.rs keeper: outside; launchd's job label (dev.k2.daemon); B9 reads it again
+1 value crates/k2-daemon/src/docs/annotations.rs keeper: wire; a key in the purge answer, read by the CLI
+1 value crates/k2-daemon/src/domains/renew.rs keeper: stored; the domain renew record's source; the app reads it
+1 value crates/k2-daemon/src/email_notify/outcomes.rs keeper: stored; the email audit line's actor
+1 value crates/k2-daemon/src/firewall/routes.rs keeper: wire; the managedBy the app sends
+1 value crates/k2-daemon/src/garden_access.rs keeper: stored; the auth audit's actor
+1 value crates/k2-daemon/src/garden_data/blob_routes.rs keeper: stored; the Garden data audit's actor
+1 value crates/k2-daemon/src/garden_data/grant_routes.rs keeper: wire; madeBy, in the Garden data JSON
+1 value crates/k2-daemon/src/garden_data/mod.rs keeper: stored; the Garden data audit's actor
+1 value crates/k2-daemon/src/heartbeat_launch.rs keeper: wire; a reminder's sender when it has no stamp, [from k2]
+1 value crates/k2-daemon/src/llm_accounts_runtime.rs keeper: stored; the auth audit's actor
+1 value crates/k2-daemon/src/mail/app_password.rs keeper: outside; Stalwart's app password label
+1 value crates/k2-daemon/src/mail/cert_owner.rs keeper: wire; the mail cert status's owner
+1 value crates/k2-daemon/src/mail/cert_trigger.rs keeper: stored; the reorder state's path
+1 value crates/k2-daemon/src/mail/fake_jmap.rs keeper: outside; the JMAP creation id, as Stalwart echoes it
+1 value crates/k2-daemon/src/mail/forward_sync.rs keeper: stored; mail_forward_events.actor
+1 value crates/k2-daemon/src/mail/sieve_lockdown.rs keeper: wire; the sieve lockdown JSON's owner
+1 value crates/k2-daemon/src/mail/sieve_lockdown_live.rs keeper: outside; Stalwart, the sieve script's name
+1 value crates/k2-daemon/src/mail/sieve_user.rs keeper: outside; Stalwart, the sieve script's name
+1 value crates/k2-daemon/src/misc_routes.rs keeper: stored; the stored agent mode (ruling 5)
+1 value crates/k2-daemon/src/msg_verify.rs keeper: wire; the verify answer's kind
+1 value crates/k2-daemon/src/permission/answer.rs keeper: stored; the permission audit's actor
+1 value crates/k2-daemon/src/permission/inject.rs keeper: wire; the live message's sender, [from k2]
+1 value crates/k2-daemon/src/permission_default.rs keeper: stored; the Access Audit user and the notice's agent name
+1 value crates/k2-daemon/src/postal_net/plane.rs keeper: wire; Postal's client field
+1 value crates/k2-daemon/src/publish_cards.rs keeper: stored; the permission audit's actor
+1 value crates/k2-daemon/src/sew/routes.rs keeper: wire; the Sew identity the app sends
+1 value crates/k2-daemon/src/sew/supervisor.rs keeper: wire; the root helper's teardown answer
+1 value crates/k2-daemon/src/skin_routes.rs keeper: stored; a Tickets notice's agent name
+1 value crates/k2-daemon/src/sql/sysops.rs keeper: outside; Postgres, the schema's name
+1 value crates/k2-daemon/src/tool_hook_worker.rs keeper: wire; Sew's status provider
+1 value crates/k2-daemon/src/vault/adopt.rs keeper: stored; an inbox note's from (frontmatter)
+1 value crates/k2-daemon/src/vault/spawn.rs keeper: outside; systemd's RuntimeDirectory=k2 (packaging's unit); B9 reads it again
+1 value crates/k2-daemon/src/workspace_msg.rs keeper: stored; the stored agent mode (ruling 5)
+1 value crates/k2-daemon/src/workspace_routes.rs keeper: stored; the stored agent mode (ruling 5)
+1 value crates/k2-daemon/src/zen_garden_cards.rs keeper: stored; the permission audit's actor
+1 value crates/k2-daemon/src/zen_remote_routes.rs keeper: wire; the frame's hello key (sdk/k2-runtime.js:355)
+1 value crates/k2-daemon/src/zen_routes.rs keeper: wire; madeBy, in the widget sign answer
+1 value crates/k2-daemon/src/zen_sign_cards.rs keeper: stored; the permission audit's actor
+1 value crates/k2-root-helper/src/apps.rs keeper: wire; the podmanSource the daemon reads
+1 value crates/k2-root-helper/src/pg_major.rs keeper: wire; the source the daemon reads in the helper's answer
+1 value crates/k2-root-helper/src/sew.rs keeper: wire; Sew's --from flag
+1 value crates/k2-root-helper/src/sew_teardown.rs keeper: wire; the teardown answer the daemon reads
+1 value crates/k2-root-proto/src/paths.rs debt: command (1 line); B3
+1 value crates/k2-root-proto/src/podman.rs keeper: stored; the root helper's /opt/k2 folder for the Podman bundle
+1 value crates/k2-root-proto/src/sew.rs keeper: wire; Sew's identity provider
+1 value crates/k2-signer/src/forge.rs keeper: outside; k2sign's project id for this repo's releases
+1 value crates/k2-signer/src/trust.rs keeper: outside; k2sign's project id for this repo's releases
+1 value src/renderer/components/Desktop/DesktopPane.tsx keeper: inert; the key router's own route name
+1 value src/renderer/components/Settings/sections/AgentSkillsSection.tsx keeper: inert; a search keyword, the product's name for its agent skill
+1 value src/renderer/components/Settings/sections/DomainsSection.tsx keeper: wire; the firewall's managedBy from the daemon
+1 value src/renderer/components/Settings/sections/GeneralSection.tsx debt: command (1 line); B9
+1 value src/renderer/components/Settings/sections/access-audit-words.ts keeper: stored; the audit log's actor, shown as the product name
+1 value src/renderer/components/Wiki/WikiGraph.tsx keeper: inert; the wiki page's own view mode
+1 value src/renderer/components/Wiki/WikiGraph3D.tsx keeper: inert; the wiki page's own view mode
+1 value src/renderer/components/Wiki/WikiNoteList.tsx keeper: inert; the wiki page's own view mode
+1 value src/renderer/lib/agent-type.ts keeper: stored; the stored agent mode (ruling 5)
+1 value src/renderer/lib/garden-data/garden-data-types.ts keeper: wire; madeBy, from the Garden data JSON

@@ -23,7 +23,34 @@ import {
   resetReportedBrandForTests,
 } from './brand'
 
-const RUST = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../crates/k2-client/src/brand.rs'), 'utf8')
+const HERE = dirname(fileURLToPath(import.meta.url))
+const RUST = readFileSync(join(HERE, '../../../crates/k2-client/src/brand.rs'), 'utf8')
+/** The default brand file: the command's name, its aliases and the product's name (k2-brand reads it). */
+const BRAND_FILE = readFileSync(join(HERE, '../../../brand/k2/brand.toml'), 'utf8')
+
+/** The body of one `[table]` of the default brand file. */
+function brandTable(name: string): string {
+  const m = BRAND_FILE.match(new RegExp(`^\\[${name}\\]\\n([\\s\\S]*?)(?=^\\[[a-z]+\\]$|(?![\\s\\S]))`, 'm'))
+  if (!m) throw new Error(`no [${name}] in brand/k2/brand.toml`)
+  return m[1]
+}
+
+/** The value of `key = "..."` in one table of the default brand file. */
+function brandString(table: string, key: string): string {
+  const m = brandTable(table).match(new RegExp(`^${key} = "([^"]*)"$`, 'm'))
+  if (!m) throw new Error(`no ${table}.${key} in brand/k2/brand.toml`)
+  return m[1]
+}
+
+/** The names in `[cli] aliases = [{ name = "...", mode = "..." }, ...]`, in order. */
+function brandAliases(): string[] {
+  const m = brandTable('cli').match(/^aliases = \[(.*)\]$/m)
+  if (!m) throw new Error('no one-line cli.aliases in brand/k2/brand.toml')
+  const names = [...m[1].matchAll(/\{ name = "([^"]*)", mode = "[a-z]+" \}/g)].map((x) => x[1])
+  const entries = m[1].split('{').length - 1
+  if (names.length !== entries) throw new Error(`cli.aliases has ${entries} entries, read ${names.length}`)
+  return names
+}
 
 /** The literal a Rust brand macro (`product_name!()`) expands to. */
 function rustMacro(name: string): string {
@@ -43,13 +70,13 @@ afterEach(() => resetReportedBrandForTests())
 
 describe('the renderer brand module', () => {
   it('holds the names the Rust side holds', () => {
-    expect(PRODUCT_NAME).toBe(rustMacro('product_name'))
-    expect(CLI_NAME).toBe(rustMacro('cli_name'))
+    expect(PRODUCT_NAME).toBe(brandString('names', 'product'))
+    expect(CLI_NAME).toBe(brandString('cli', 'name'))
+    expect(CLI_ALIASES).toEqual(brandAliases())
     expect(RELEASE_REPO).toBe(rustMacro('release_repo'))
     expect(COMPANY_NAME).toBe(rustConst('COMPANY_NAME'))
     expect(PUBLIC_SITE).toBe(rustConst('PUBLIC_SITE'))
     expect(SUPPORT_EMAIL).toBe(rustConst('SUPPORT_EMAIL'))
-    expect(RUST).toContain(`pub const CLI_ALIASES: &[&str] = &[${CLI_ALIASES.map((a) => `"${a}"`).join(', ')}];`)
   })
 
   it('spells the values out, so a change here is seen', () => {

@@ -23,6 +23,9 @@ dirs = "5"
 # workspace paths and path comparisons need the plain C:\ form); exactly
 # std::fs::canonicalize on Unix. Already in Cargo.lock.
 dunce = "1"
+# The brand's names (command, aliases, product, id), written when building
+# from brand/<id>/brand.toml; brand.rs re-exports them. No run-time deps.
+k2-brand = { path = "../k2-brand" }
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -4681,6 +4681,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "dirs 5.0.1",
  "dunce",
+ "k2-brand",
  "libc",
  "parking_lot",
  "security-framework 3.7.0",

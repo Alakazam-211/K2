@@ -1,8 +1,10 @@
 /**
  * The product's names, one definition each, for the renderer.
  *
- * The same values as `crates/k2-client/src/brand.rs` (`k2_core::brand`);
- * `brand.test.ts` reads that file and fails when the two drift. Copy that
+ * The same values as `crates/k2-client/src/brand.rs` (`k2_core::brand`)
+ * and the default brand file, `brand/k2/brand.toml` (the command's name,
+ * its aliases and the product's name); `brand.test.ts` reads both and
+ * fails when they drift. Copy that
  * names the product, the command, the site or the release repo uses these
  * instead of spelling the name out; `scripts/brand-gate.sh` keeps new
  * literals out of the rest of the renderer.

@@ -1,13 +1,19 @@
 //! The product's names, one definition each, ahead of a rename.
 //!
+//! The command's name, its aliases, the product's name and the brand's id
+//! come from the brand file, `brand/<id>/brand.toml` (`brand/k2` unless
+//! `K2_BRAND_DIR` names another folder), through the `k2-brand` crate,
+//! and are re-exported here. The rest is still defined here.
+//!
 //! What people and agents read as the product's name, the command's name,
 //! the public website, the support address and the repo releases come
 //! from. Code that prints one of these, or builds a URL from one, uses
 //! this module, so a later rename is a change here and not a search across
 //! the tree. `k2_core::brand` re-exports it; the renderer's copy is
-//! `src/renderer/lib/brand.ts` (its test reads this file and fails when the
-//! two drift). `scripts/brand-gate.sh` keeps new hard-coded product names
-//! out of the rest of the Rust and renderer code.
+//! `src/renderer/lib/brand.ts` (its test reads this file and the default
+//! brand file, and fails when they drift). `scripts/brand-gate.sh` keeps
+//! new hard-coded product names out of the rest of the Rust and renderer
+//! code.
 //!
 //! These are names for words and links only. Names other programs hold
 //! (bundle ids, launchd labels, unit names, token prefixes, headers,
@@ -18,21 +24,12 @@
 //! be built with `concat!` (`concat!("run ", cli_name!(), " app list")`)
 //! and still be one `&'static str`. Each const is defined from its macro.
 
-/// The product's name as a literal, for `concat!` in a `const`.
-#[macro_export]
-macro_rules! product_name {
-    () => {
-        "K2"
-    };
-}
-
-/// The command's name as a literal, for `concat!` in a `const`.
-#[macro_export]
-macro_rules! cli_name {
-    () => {
-        "k2"
-    };
-}
+// From the brand file: the command's name and the product's name as
+// literals for `concat!` (`cli_name!()`, `product_name!()`, at this
+// crate's root), as consts, the command's aliases with their modes, and the
+// brand's id.
+use k2_brand::product_name;
+pub use k2_brand::{AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, PRODUCT_NAME};
 
 /// The repo releases come from (`owner/name`), as a literal.
 #[macro_export]
@@ -42,21 +39,11 @@ macro_rules! release_repo {
     };
 }
 
-/// The product's name, as people read it: "K2".
-pub const PRODUCT_NAME: &str = product_name!();
-
 /// The company that makes it.
 pub const COMPANY_NAME: &str = "Alakazam Labs";
 
 /// The product with its maker: "K2 by Alakazam Labs".
 pub const PRODUCT_LOCKUP: &str = concat!(product_name!(), " by Alakazam Labs");
-
-/// The command people and agents type: `k2`.
-pub const CLI_NAME: &str = cli_name!();
-
-/// Other names the command answers to. `k2so` is the pre-0.40 name; its
-/// shim runs `k2`.
-pub const CLI_ALIASES: &[&str] = &["k2so"];
 
 /// The public website.
 pub const PUBLIC_SITE: &str = "https://k2.dev";
@@ -108,6 +95,7 @@ pub fn release_tag_url(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli_name;
 
     /// The values, spelled out: a change to one is a rename people see.
     #[test]

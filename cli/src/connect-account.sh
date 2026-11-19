@@ -635,7 +635,7 @@ else:
     if [ -n "$sub" ]; then
         printf '  Paired subdomain: %s → https://%s.k2.dev\n' "$sub" "$sub"
     else
-        printf '%s\n' "  Paired subdomain: '(none)'"
+        printf '%s\n' "  Paired subdomain: (none)"
     fi
     echo "  Tunnel token:     $token_set"
 

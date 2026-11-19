@@ -9,12 +9,14 @@
 #      and the token counts as set.
 #   2. Values that are not strings, a file that is not JSON, a JSON list:
 #      no subdomain, no token, exit 0.
-#   3. A passport healed during the first daemon call (the token check) is
+#   3. No pairing prints "(none)", without quotes (cases in section 2 and
+#      with no tunnel.json at all).
+#   4. A passport healed during the first daemon call (the token check) is
 #      the one the second call (the tunnel status) sends.
 #
-# Sections 1 and 2 have no daemon: HOME is a sandbox with no port or token
+# Sections 1 to 3 have no daemon: HOME is a sandbox with no port or token
 # files, and the env carries no session, so the last line is the "daemon
-# not running" one. Section 3 talks to a small Python stub. HOME is
+# not running" one. Section 4 talks to a small Python stub. HOME is
 # sandboxed throughout.
 
 set -euo pipefail
@@ -110,10 +112,16 @@ for case_name in number list notjson; do
     assert_eq "$case_name: nothing ran" "$([ -e "$MARK" ] && echo ran || echo none)" "none"
     assert_eq "$case_name: the whole output" "$(cat "$WORK/out")" "K2 Connect account
   Account session: no
-  Paired subdomain: '(none)'
+  Paired subdomain: (none)
   Tunnel token:     no
 $NOT_RUNNING"
 done
+
+echo "== no pairing file at all =="
+rm -f "$HOME/.k2/tunnel.json"
+run status
+assert_eq "no file: exit 0" "$rc" "0"
+assert_eq "no file: (none), no quotes" "$(sed -n 3p "$WORK/out")" "  Paired subdomain: (none)"
 
 echo "== a passport healed in the first call is sent by the second =="
 OLD="sess42.oldsecretaaaa"

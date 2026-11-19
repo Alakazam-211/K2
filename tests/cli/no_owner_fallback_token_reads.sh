@@ -105,9 +105,14 @@ esac
 
 # fn <names...> -- <env assignments...> -- <shell code>: define the named
 # functions from the bash source and run the code with them, in a shell
-# set up as the prelude leaves it. Sets OUT and RC.
+# set up as the prelude leaves it: the k5 hand-over helpers' text
+# (_K5_PY_HTTP, _K5_NOUN_RE, _k5_headers and _k5_py_headers, which every
+# Python call to the daemon passes on) is always defined. Sets OUT and RC.
 fn() {
-    local names=() envs=() defs="" n body
+    local names=(_k5_headers _k5_py_headers) envs=() n body
+    local defs
+    defs="$(sed -n "/^_K5_PY_HTTP='\$/,/^'\$/p; /^_K5_NOUN_RE=/p" "$CLI_BASH_SOURCE")"$'\n'
+    case "$defs" in *"def k5_request"*"_K5_NOUN_RE="*|*"_K5_NOUN_RE="*"def k5_request"*) ;; *) die "no _K5_PY_HTTP or _K5_NOUN_RE in $CLI_BASH_SOURCE" ;; esac
     while [ "$1" != "--" ]; do names+=("$1"); shift; done
     shift
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done

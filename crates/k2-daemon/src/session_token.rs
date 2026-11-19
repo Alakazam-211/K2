@@ -1401,6 +1401,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // pinned chat; an agent passport never moves one (its own gets
         // `harness_needs_person`, a permission card when cards are on).
         "/cli/workspace/swap-canonical",
+        // `k2 workspace profile` (0.46.16): an agent reads its own
+        // workspace's profile; the handler refuses any other
+        // (workspace_profile_route, `own_workspace_only`).
+        "/cli/workspace/agent-display-name",
         "/cli/agent/harness",
         // `k2 agent refresh` (0.46.8): the handler takes its own main session
         // with the workspace's switch on; else a permission card or a refusal.

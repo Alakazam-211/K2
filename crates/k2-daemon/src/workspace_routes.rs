@@ -205,7 +205,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // (the technical agent name), then `projects.name`. Total —
         // always returns a string. Mtime-cached, so render-path
         // callers can hit this freely.
-        "/cli/workspace/agent-display-name" => match need_project(params) {
+        // An agent passport reads its own workspace's only
+        // (workspace_profile_route).
+        "/cli/workspace/agent-display-name" => match crate::workspace_profile_route::other_workspace_refusal(params)
+            .map_or_else(|| need_project(params), Err)
+        {
             Ok(p) => {
                 let handle = {
                     let db = k2_core::db::shared();

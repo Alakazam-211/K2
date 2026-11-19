@@ -16178,6 +16178,7 @@ async fn handle_one_request(
                 });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
+        p if p == crate::workspace_profile_route::PATH => crate::workspace_profile_route::serve_tcp(&mut *stream, &mut buf, is_post, &path, &query, bearer_token.as_deref(), state.token.as_str()).await,
         p if p.starts_with("/cli/") => {
             // 0.44.4: formerly GET-shaped verbs arrive here as POST; read
             // the whole body (keep-alive framing) and fold a form/JSON body

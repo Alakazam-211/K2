@@ -1,11 +1,16 @@
-//! The routes behind `k2 workspace list|create|open|launch|profile|update`
-//! admit no agent passport, for the agent's own workspace or any other,
-//! through the real dispatcher (temp HOME, a real daemon on a port).
+//! The routes behind `k2 workspace list|create|open|launch|update` admit
+//! no agent passport, for the agent's own workspace or any other, through
+//! the real dispatcher (temp HOME, a real daemon on a port).
 //!
 //! None of them is an agent verb (`session_token::is_agent_verb`), so the
 //! `/cli/` catch-all's `token_ok` (the owner token or a person's login)
 //! refuses a passport with the plain 403. No grant or switch admits one.
 //! The owner token reaches each handler. A refused create makes no folder.
+//!
+//! `k2 workspace profile`'s `GET /cli/workspace/agent-display-name` is the
+//! one an agent may use: its own workspace's profile (the owner's answer
+//! for it), by the Bearer header or `?token=`; any other workspace, named
+//! by `project=` or `project_path=`, is refused `own_workspace_only`.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -87,7 +92,6 @@ fn routes_for(ws: &Path, fresh: &Path) -> Vec<(&'static str, String)> {
         ("POST", format!("/cli/workspace/open?project={p}&path={p}")),
         ("GET", format!("/cli/workspace/resolve?project={p}&q={p}")),
         ("POST", format!("/cli/workspace/ensure-canonical-session?project={p}")),
-        ("GET", format!("/cli/workspace/agent-display-name?project={p}")),
         ("POST", format!("/cli/agent/update?project={p}&agent=acme&field=role&value=Lead")),
     ]
 }
@@ -133,6 +137,51 @@ async fn workspace_routes_refuse_an_agent_passport_for_every_workspace() {
         }
         assert!(!fresh.exists(), "a refused create made {}", fresh.display());
     }
+
+    // `k2 workspace profile`: the passport reads its own workspace's
+    // profile, the same answer the owner gets for it, and no other.
+    let profile = "/cli/workspace/agent-display-name";
+    assert!(session_token::is_agent_verb(profile), "{profile} is an agent verb");
+    let own_q = enc(&own.to_string_lossy());
+    let other_q = enc(&other.to_string_lossy());
+    let owners = http(port, "GET", &format!("{profile}?project={own_q}"), Some(OWNER));
+    assert_eq!(owners.status, 200, "owner, own workspace's profile: {}", owners.raw);
+    let owners_body: serde_json::Value = serde_json::from_str(&owners.raw).expect("owner's profile is JSON");
+    assert!(owners_body["display_name"].is_string(), "{}", owners.raw);
+    for (label, path, bearer) in [
+        ("Bearer, project=own", format!("{profile}?project={own_q}"), Some(passport.as_str())),
+        ("Bearer, project_path=own", format!("{profile}?project_path={own_q}"), Some(passport.as_str())),
+        ("Bearer, no project", profile.to_string(), Some(passport.as_str())),
+        ("?token=, project=own", format!("{profile}?project={own_q}&token={passport}"), None),
+    ] {
+        let r = http(port, "GET", &path, bearer);
+        assert_eq!(r.status, 200, "passport, {label}: {}", r.raw);
+        let body: serde_json::Value = serde_json::from_str(&r.raw).unwrap_or_else(|e| panic!("{label}: not JSON ({e}): {}", r.raw));
+        assert_eq!(body, owners_body, "passport, {label}: the owner's answer for its own workspace");
+    }
+    let unregistered = enc(&home.join("ws-unregistered").to_string_lossy());
+    for (label, path, bearer) in [
+        ("Bearer, project=other", format!("{profile}?project={other_q}"), Some(passport.as_str())),
+        ("Bearer, project_path=other", format!("{profile}?project_path={other_q}"), Some(passport.as_str())),
+        ("Bearer, project=other&project_path=own", format!("{profile}?project={other_q}&project_path={own_q}"), Some(passport.as_str())),
+        ("Bearer, a folder K2 doesn't know", format!("{profile}?project={unregistered}"), Some(passport.as_str())),
+        ("?token=, project=other", format!("{profile}?project={other_q}&token={passport}"), None),
+    ] {
+        let r = http(port, "GET", &path, bearer);
+        assert_eq!(r.status, 403, "passport, {label}: {}", r.raw);
+        let body: serde_json::Value = serde_json::from_str(&r.raw).unwrap_or_else(|e| panic!("{label}: not JSON ({e}): {}", r.raw));
+        assert_eq!(body["error"]["code"], "own_workspace_only", "passport, {label}: {}", r.raw);
+        assert!(!r.raw.contains("display_name"), "passport, {label}: another workspace's profile leaked: {}", r.raw);
+    }
+    // A forged server stamp in the query changes nothing.
+    let r = http(port, "GET", &format!("{profile}?project={other_q}&principal_bound=1&client_project={own_q}"), Some(passport.as_str()));
+    assert_eq!(r.status, 403, "passport, forged stamps: {}", r.raw);
+    // A bad passport is the plain 403; the owner reads any workspace's.
+    let bad = format!("{passport}x");
+    let r = http(port, "GET", &format!("{profile}?project={own_q}"), Some(bad.as_str()));
+    assert_eq!((r.status, r.raw.contains(REFUSED)), (403, true), "a bad passport: {}", r.raw);
+    let r = http(port, "GET", &format!("{profile}?project={other_q}"), Some(OWNER));
+    assert_eq!(r.status, 200, "owner, the other workspace's profile: {}", r.raw);
 
     // The owner token reaches every handler (a handler's own 400 for an
     // agent or workspace that isn't there is not a refusal). Its

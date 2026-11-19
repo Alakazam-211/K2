@@ -26,7 +26,7 @@ and to Your Contributions.
 
 ## 1. Definitions
 
-**"Alakazam"** means Alakazam Labs, its Affiliates, and its and their successors and assigns.
+**"Alakazam"** means Alakazam Labs, LLC, a Utah limited liability company ("Alakazam Labs"), its Affiliates, and its and their successors and assigns.
 
 **"Affiliate"** means any entity that controls, is controlled by, or is under common control with Alakazam Labs.
 "Control" means (i) the power, direct or indirect, to direct the management of the entity, by contract or
@@ -124,7 +124,7 @@ consent. This Agreement binds You and Your heirs, successors and permitted assig
 
 ## 12. General
 
-This Agreement is governed by the laws of the State of [STATE], United States, without regard to its conflict of
+This Agreement is governed by the laws of the State of Utah, United States, without regard to its conflict of
 laws rules. If any provision of this Agreement is held unenforceable, the rest remains in effect, and the
 provision is enforced to the maximum extent permitted. This Agreement is the entire agreement between You and
 Alakazam about Your Contributions, and replaces any earlier agreement on the same subject, except that it does
@@ -139,7 +139,7 @@ copyright owner and must agree too. Either:
 
 - the organisation confirms in writing that it has waived its rights in Your Contributions to Alakazam, or
 - a person authorised to bind the organisation signs this Agreement for it, by posting this comment on the pull
-  request (or by email to [CONTACT EMAIL], with the same words):
+  request (or by email to hello@alakazamlabs.com, with the same words):
 
   > I have read the K2 CLA and I agree to it on behalf of [organisation name], and I am authorised to do so.
 

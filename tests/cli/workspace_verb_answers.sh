@@ -342,6 +342,34 @@ for args in "--help" "-h" "--json -h" "--running --help"; do
     assert_eq "list $args: no request" "$(wc -l <"$LOG_FILE" | tr -d ' ')" "0"
 done
 
+echo "== agent update: a flag with no value is a named usage error, exit 2 =="
+AUSAGE='Usage: k2 agent update --name <agent> --field <field> --value "..."'
+AFIELD="  field: frontmatter key (role, type) or section name (Work Sources, Capabilities)"
+for c in "--name|Error: --name needs a value
+$AUSAGE" \
+         "--name acme --field|Error: --field needs a value
+$AUSAGE" \
+         "--name acme --field role --value|Error: --value needs a value
+$AUSAGE" \
+         "--name acme --field role|$AUSAGE
+$AFIELD"; do
+    args="${c%%|*}"; want="${c#*|}"
+    # shellcheck disable=SC2086
+    run agent update $args
+    assert_eq "agent update $args: exit 2" "$rc" "2"
+    assert_eq "agent update $args: says why" "$err" "$want"
+    assert_eq "agent update $args: no request" "$(wc -l <"$LOG_FILE" | tr -d ' ')" "0"
+done
+answer /cli/agent/update 200 '{"success":true,"content":"x"}'
+run agent update --name acme --field role --value Lead
+assert_eq "agent update: exit 0" "$rc" "0"
+assert_eq "agent update: the success line" "$out" "Updated role for agent acme"
+answer /cli/agent/update 400 '{"error":"Agent '"'"'acme'"'"' does not exist"}'
+run agent update --name acme --field role --value Lead
+assert_eq "agent update error: exit 1" "$rc" "1"
+assert_eq "agent update error: nothing on stdout" "$out" ""
+assert_eq "agent update error: on stderr" "$err" "Error: Agent 'acme' does not exist"
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

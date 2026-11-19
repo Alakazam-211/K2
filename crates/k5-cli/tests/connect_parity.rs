@@ -30,7 +30,8 @@ use common::parity::*;
 use common::stub::Reply;
 
 const VERB: &str = "connect";
-const ACCOUNT: &str = r#"{"access_token":"a.b.c","refresh_token":"r1","email":" me@acme.example "}"#;
+const ACCOUNT: &str =
+    r#"{"access_token":"a.b.c","refresh_token":"r1","email":" me@acme.example "}"#;
 const NO_TOKEN: &str = r#"{"subdomain":"acme","token":"","device_id":"d1"}"#;
 const PAIRED: &str = r#"{"subdomain":"acme","token":"tok","device_id":"d1"}"#;
 const RUNNING: &str = r#"{"running":true,"public_url":"https://acme.k2.dev","enabled":true}"#;
@@ -133,7 +134,10 @@ fn connect_status_answers_as_the_shell_does() {
             &[],
             vec![
                 Reply::Answer(403, r#"{"error":"forbidden"}"#.into()),
-                Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"no é"}}"#.into()),
+                Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"owner_only","hint":"no é"}}"#.into(),
+                ),
             ],
             |r| {
                 files(r, None, None);
@@ -317,7 +321,11 @@ fn connect_status_answers_as_the_shell_does() {
             &[],
             vec![ok(STOPPED)],
             |r| {
-                files(r, None, Some(r#"{"subdomain":"  a b\"$HOME  ","token":"t"}"#));
+                files(
+                    r,
+                    None,
+                    Some(r#"{"subdomain":"  a b\"$HOME  ","token":"t"}"#),
+                );
                 owner_and_port(r)
             },
             0,
@@ -368,8 +376,7 @@ fn connect_status_answers_as_the_shell_does() {
             |r| {
                 files(r, None, None);
                 owner_only(r);
-                std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub.port))
-                    .unwrap();
+                std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub.port)).unwrap();
             },
             0,
             2,

@@ -103,7 +103,9 @@ fn obj(text: &str) -> Option<Value> {
 fn the_account_s_email() {
     assert_eq!(account_email(&None), Some(String::new()));
     assert_eq!(
-        account_email(&obj(r#"{"access_token":"a","refresh_token":"r","email":" me@x.example "}"#)),
+        account_email(&obj(
+            r#"{"access_token":"a","refresh_token":"r","email":" me@x.example "}"#
+        )),
         Some("me@x.example".into())
     );
     // No refresh token: the email is still the third line.
@@ -114,21 +116,29 @@ fn the_account_s_email() {
     // Not a dict, or a value that is not a string: Python stops there.
     assert_eq!(account_email(&obj("[1]")), Some(String::new()));
     assert_eq!(
-        account_email(&obj(r#"{"access_token":"a","refresh_token":5,"email":"me"}"#)),
+        account_email(&obj(
+            r#"{"access_token":"a","refresh_token":5,"email":"me"}"#
+        )),
         Some(String::new())
     );
     assert_eq!(
-        account_email(&obj(r#"{"access_token":0,"refresh_token":[],"email":"me"}"#)),
+        account_email(&obj(
+            r#"{"access_token":0,"refresh_token":[],"email":"me"}"#
+        )),
         Some("me".into())
     );
     // A token with a newline moves the email down a line.
     assert_eq!(
-        account_email(&obj(r#"{"access_token":"a\nb","refresh_token":"r","email":"me"}"#)),
+        account_email(&obj(
+            r#"{"access_token":"a\nb","refresh_token":"r","email":"me"}"#
+        )),
         Some("r".into())
     );
     // Trailing empty lines go before `sed -n 3p`.
     assert_eq!(
-        account_email(&obj(r#"{"access_token":"a","refresh_token":"","email":""}"#)),
+        account_email(&obj(
+            r#"{"access_token":"a","refresh_token":"","email":""}"#
+        )),
         Some(String::new())
     );
     // A NUL or half a surrogate pair: the shell's.
@@ -161,7 +171,12 @@ fn the_pairing() {
         tunnel(&obj(r#"{"subdomain":"a b\"$x"}"#)),
         Some(("a b\"$x".into(), false))
     );
-    for odd in [r#"{"subdomain":"it's"}"#, r#"{"subdomain":"a\\b"}"#, r#"{"subdomain":"é"}"#, r#"{"subdomain":"a\tb"}"#] {
+    for odd in [
+        r#"{"subdomain":"it's"}"#,
+        r#"{"subdomain":"a\\b"}"#,
+        r#"{"subdomain":"é"}"#,
+        r#"{"subdomain":"a\tb"}"#,
+    ] {
         assert_eq!(tunnel(&obj(odd)), None, "{odd}");
     }
 }
@@ -169,7 +184,10 @@ fn the_pairing() {
 #[test]
 fn the_daemon_s_token() {
     assert_eq!(token_flag(br#"{"tokenSet":true}"#), "yes");
-    assert_eq!(token_flag(br#"{"tokenSet":false,"tokenUnreadable":1}"#), UNREADABLE);
+    assert_eq!(
+        token_flag(br#"{"tokenSet":false,"tokenUnreadable":1}"#),
+        UNREADABLE
+    );
     assert_eq!(token_flag(b"{}\n\n"), "no");
     assert_eq!(token_flag(b"[1]"), "no");
     assert_eq!(token_flag(b"x"), "no");
@@ -190,7 +208,10 @@ fn the_tunnel_s_status() {
         status_lines(b"x"),
         "  Tunnel status:   (unparseable daemon response)\n"
     );
-    assert_eq!(status_lines(b"[1]"), "  Tunnel status:   (error: unknown)\n");
+    assert_eq!(
+        status_lines(b"[1]"),
+        "  Tunnel status:   (error: unknown)\n"
+    );
     assert_eq!(
         status_lines(br#"{"error":{"code":"x"}}"#),
         "  Tunnel status:   (error: {'code': 'x'})\n"

@@ -61,7 +61,10 @@ fn the_python() {
             18,
             "code in ('agents_create_connections_disabled', 'gated', 'forbidden')",
         ),
-        (line::ALLOW, "or 'Allow agents to create connections' in hint"),
+        (
+            line::ALLOW,
+            "or 'Allow agents to create connections' in hint",
+        ),
         (
             line::NOT_ALLOWED,
             r#"or \"isn't allowed to create or remove connections\" in hint"#,
@@ -72,9 +75,18 @@ fn the_python() {
             25,
             r#"\"this agent isn't allowed to create or remove connections — \""#,
         ),
-        (26, r"'the owner can enable it in Settings \u2192 K2 Connect '"),
-        (27, r"'(Allow agents to create connections) or Workspaces \u2192 '"),
-        (28, r"'(workspace) \u2192 Allow agents to create connections'"),
+        (
+            26,
+            r"'the owner can enable it in Settings \u2192 K2 Connect '",
+        ),
+        (
+            27,
+            r"'(Allow agents to create connections) or Workspaces \u2192 '",
+        ),
+        (
+            28,
+            r"'(workspace) \u2192 Allow agents to create connections'",
+        ),
         (
             30,
             r"sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')",
@@ -127,7 +139,10 @@ fn show(body: &str, verb: Verb) -> (String, String, i32) {
 fn what_an_add_prints() {
     let (o, e, c) = show(r#"{"ok":true,"target":"beta"}"#, Verb::Add);
     assert_eq!((o.as_str(), e.as_str(), c), ("Connected to beta\n", "", 0));
-    let (o, _, _) = show(r#"{"noop":true,"target":"beta","message":"already"}"#, Verb::Add);
+    let (o, _, _) = show(
+        r#"{"noop":true,"target":"beta","message":"already"}"#,
+        Verb::Add,
+    );
     assert_eq!(o, "Already connected to beta (already)\n");
     let (o, _, _) = show(r#"{"noop":1}"#, Verb::Add);
     assert_eq!(o, "Already connected to ? ()\n");
@@ -177,9 +192,8 @@ fn the_daemon_s_errors() {
 
 #[test]
 fn the_gate() {
-    let teach = format!(
-        "{{\"error\": {{\"code\": \"gated\", \"hint\": \"no \u{2014} {TEACHING}\"}}}}\n"
-    );
+    let teach =
+        format!("{{\"error\": {{\"code\": \"gated\", \"hint\": \"no \u{2014} {TEACHING}\"}}}}\n");
     let (o, e, c) = show(r#"{"error":{"code":"gated","hint":"no"}}"#, Verb::Add);
     assert_eq!((o.as_str(), e.as_str(), c), ("", teach.as_str(), 3));
     // A hint that says it, with Settings in it: as it is, the default code.
@@ -201,7 +215,10 @@ fn the_gate() {
         Verb::Add,
     );
     assert_eq!(c, 3);
-    assert!(e.contains(&format!("connections \u{2014} {TEACHING}")), "{e}");
+    assert!(
+        e.contains(&format!("connections \u{2014} {TEACHING}")),
+        "{e}"
+    );
     // An empty text error is not the gate.
     let (o, _, c) = show(r#"{"error":""}"#, Verb::Add);
     assert_eq!((o.as_str(), c), ("Error: \n", 1));
@@ -219,11 +236,7 @@ fn where_python_raises() {
     let tb = |body: &str, verb: Verb| {
         let s = reader(body.as_bytes(), verb);
         assert_eq!(s.exit, Exit::Error, "{body}");
-        s.stderr
-            .lines()
-            .last()
-            .unwrap_or_default()
-            .to_string()
+        s.stderr.lines().last().unwrap_or_default().to_string()
     };
     assert_eq!(
         tb("[1]", Verb::Add),

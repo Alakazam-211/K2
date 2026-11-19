@@ -380,7 +380,12 @@ fn connect_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
     let body = &text[text.find("\ncmd_connect() {\n").expect("cmd_connect")..];
     let body = &body[..body.find("\n}\n").expect("its end")];
     for verb in noun.verbs {
-        assert_eq!(verb.words.len(), 1, "{:?}: one word per verb row", verb.words);
+        assert_eq!(
+            verb.words.len(),
+            1,
+            "{:?}: one word per verb row",
+            verb.words
+        );
         let word = verb.words[0];
         let arm = format!("        {word})\n            cmd_connect_{word} \"$@\"\n");
         assert!(

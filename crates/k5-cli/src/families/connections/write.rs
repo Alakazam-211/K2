@@ -68,10 +68,7 @@ impl Verb {
 
     /// No target: exit 1.
     pub fn usage(self) -> String {
-        format!(
-            "Usage: k2 connections {} <workspace-name>",
-            self.word()
-        )
+        format!("Usage: k2 connections {} <workspace-name>", self.word())
     }
 }
 
@@ -292,7 +289,11 @@ fn error_lines(err: &Value, stdout: &mut String, stderr: &mut String) -> Result<
         };
         s(&(head + TEACHING))
     };
-    let code = if py::truthy(&code) { code } else { s(DEFAULT_CODE) };
+    let code = if py::truthy(&code) {
+        code
+    } else {
+        s(DEFAULT_CODE)
+    };
     let shape = Value::Object(vec![(
         Text::from("error"),
         Value::Object(vec![(Text::from("code"), code), (Text::from("hint"), hint)]),

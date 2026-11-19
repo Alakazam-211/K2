@@ -59,7 +59,15 @@ fn in_pipe(c: Case) -> Case {
 fn connections_add_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "add");
     let v = vec![
-        case("add", &["add", "beta"], &[], vec![ok(ADDED)], owner_and_port, 0, 1),
+        case(
+            "add",
+            &["add", "beta"],
+            &[],
+            vec![ok(ADDED)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "a target that needs escaping",
             &["add", "a b/é&c=d#e"],
@@ -82,7 +90,9 @@ fn connections_add_answers_as_the_shell_does() {
             "already connected",
             &["add", "beta"],
             &[],
-            vec![ok(r#"{"ok":true,"noop":true,"target":"beta","message":"already é"}"#)],
+            vec![ok(
+                r#"{"ok":true,"noop":true,"target":"beta","message":"already é"}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -122,7 +132,9 @@ fn connections_add_answers_as_the_shell_does() {
             "bound with no handle: nothing reached",
             &["add", "x"],
             &[],
-            vec![ok(r#"{"target":"x","bound":true,"handle":"","bindWarning":"no roster"}"#)],
+            vec![ok(
+                r#"{"target":"x","bound":true,"handle":"","bindWarning":"no roster"}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -166,7 +178,10 @@ fn connections_add_answers_as_the_shell_does() {
             "the gate: its code and no hint",
             &["add", "beta"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"forbidden"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"forbidden"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -214,7 +229,9 @@ fn connections_add_answers_as_the_shell_does() {
             "the bulletin line when it worked",
             &["add", "beta"],
             &[],
-            vec![ok(r#"{"ok":true,"target":"beta","bulletin":{"day":"2026-11-17","unread":true,"key":"ab12"}}"#)],
+            vec![ok(
+                r#"{"ok":true,"target":"beta","bulletin":{"day":"2026-11-17","unread":true,"key":"ab12"}}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -308,7 +325,15 @@ fn connections_add_answers_as_the_shell_does() {
         )),
         // The words.
         case("no target", &["add"], &[], vec![], owner_and_port, 1, 0),
-        case("an empty target", &["add", ""], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "an empty target",
+            &["add", ""],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         case(
             "PROJECT_PATH",
             &["add", "beta"],
@@ -680,7 +705,15 @@ fn connections_remove_answers_as_the_shell_does() {
             1,
         )),
         case("no target", &["remove"], &[], vec![], owner_and_port, 1, 0),
-        case("no port", &["remove", "beta"], &[], vec![], owner_only, 1, 0),
+        case(
+            "no port",
+            &["remove", "beta"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
         with(
             h(&[("K2_HOOK_SOCK", "{sock}")]),
             case(

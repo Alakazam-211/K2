@@ -93,6 +93,10 @@ pub(crate) struct Row {
     /// `chat.account` is only ever its own account, and `mail.send-mode`
     /// only its own sending (0.46.8). Read for a match only.
     pub own_ws: Option<&'static str>,
+    /// JSON pointers the refused request's body must have **no** value at:
+    /// `compute.grant` is limits only, never `--ci` or `--gpu` (0.46.17).
+    /// Read for a match only.
+    pub body_lacks: &'static [&'static str],
 }
 
 const fn ask(action: &'static str, floor: Floor) -> Target {
@@ -123,6 +127,7 @@ const fn row(target: Target, matches: WallMatch, prefix: &'static str, method: W
         optional: &[],
         body_eq: &[],
         own_ws: None,
+        body_lacks: &[],
     }
 }
 
@@ -171,7 +176,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 75] = [
+pub(crate) const V1_ACTIONS: [&str; 76] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -278,6 +283,9 @@ pub(crate) const V1_ACTIONS: [&str; 75] = [
     "compute.git-access-setup",
     // 0.46.11 (prd-compute-gpu-jobs-v1 S1): GPU jobs on one node.
     "compute.gpu",
+    // 0.46.17: change the limits of the agent's own grant on one node
+    // (`k2 compute grant` without --ci or --gpu).
+    "compute.grant",
     // 0.46.11 (prd-vault-for-agents-v1 A6): use a server's or another
     // workspace's secret for a while.
     "vault.use",
@@ -352,6 +360,24 @@ const LOGIN_GRANT_PARAMS: &[(&str, &[ParamFrom])] = &[
     ("role", &[ParamFrom::Body("/roleId")]),
 ];
 
+/// `k2 compute grant`'s values (0.46.17): the node and each limit it was
+/// sent, `--max-time` as the duration typed (the CLI sends seconds).
+const COMPUTE_GRANT_PARAMS: &[(&str, &[ParamFrom])] = &[
+    ("node", &[ParamFrom::Body("/node")]),
+    ("max-time", &[ParamFrom::BodySecs("/maxJobSecs")]),
+    ("max-parallel", &[ParamFrom::Body("/maxParallel")]),
+    ("max-queued", &[ParamFrom::Body("/maxQueued")]),
+    ("max-disk", &[ParamFrom::Body("/maxDiskGb")]),
+];
+
+/// The `compute.grant` wall: an agent's own grant change, limits only.
+const COMPUTE_GRANT_ROW: Row = Row {
+    params: COMPUTE_GRANT_PARAMS,
+    optional: &["max-time", "max-parallel", "max-queued", "max-disk"],
+    body_lacks: &["/allowCi", "/allowGpu"],
+    ..row(ask("compute.grant", Floor::Admin), code(403, "owner_only"), "/cli/compute/grants/set", POST)
+};
+
 /// `k2 compute access on`'s body: the compute toggle, turned on.
 const COMPUTE_ACCESS_ON: &[(&str, &str)] = &[("/toggle", "compute"), ("/value", "true")];
 
@@ -366,10 +392,17 @@ pub(crate) const ROWS: &[Row] = &[
     },
     // ── compute ────────────────────────────────────────────────────────
     row(ask("compute.use", Floor::Admin), code(403, "compute_off"), "/cli/", ANY),
-    // compute.grant and compute.agents are covered by compute.use (turning it
-    // on grants every active node).
+    // compute.agents is covered by compute.use (turning it on grants every
+    // active node); so is a grant for another workspace, or one with --ci
+    // or --gpu.
     row(ask("compute.use", Floor::Admin), code(403, "not_granted"), "/cli/compute/", ANY),
     row(ask("compute.use", Floor::Admin), code(403, "owner_only"), "/cli/compute/grants", ANY),
+    // 0.46.17: the agent's own `k2 compute grant <node> --max-time …`
+    // (limits only: no --ci, no --gpu) asks to change its own grant's
+    // limits there, with the values it typed. The body names its own
+    // workspace, or none (a passport acts for its own).
+    Row { own_ws: Some("/workspace"), ..COMPUTE_GRANT_ROW },
+    Row { body_has: Some(("/workspace", false)), ..COMPUTE_GRANT_ROW },
     row(ask("compute.use", Floor::Admin), code(403, "owner_only"), "/cli/compute/agents", ANY),
     // 0.46.9 (Rosson 2026-11-05): the agent's own `k2 compute access on`.
     // The switch's route refuses every passport (`forbidden`); turning on
@@ -1072,6 +1105,7 @@ fn row_matches(r: &Row, req: &Refused<'_>, code: Option<&str>) -> bool {
         && r.body_has.is_none_or(|(p, present)| body_value(req.body, p) == present)
         && body_eq_ok(r, req.body)
         && own_ws_ok(r, req.body, req.workspace_id)
+        && r.body_lacks.iter().all(|p| !body_value(req.body, p))
 }
 
 /// An `own_ws` row: the body names the asking agent's own workspace.
@@ -1138,6 +1172,7 @@ fn param_value(from: &ParamFrom, req: &Refused<'_>) -> Option<String> {
         ParamFrom::Query(k) => req.params.get(*k).filter(|s| !s.trim().is_empty()).cloned(),
         ParamFrom::Body(p) => req.body.and_then(|b| b.pointer(p)).and_then(value_string),
         ParamFrom::Response(p) => req.response.pointer(p).and_then(value_string),
+        ParamFrom::BodySecs(p) => req.body.and_then(|b| b.pointer(p)).and_then(Value::as_i64).map(k2_core::permission::catalog::secs_word),
     }
 }
 
@@ -1415,7 +1450,11 @@ mod tests {
             (403, "GET", "/cli/compute/nodes", vec![], None, json!({"error":{"code":"compute_off","hint":"x"}}), "compute.use"),
             (403, "POST", "/cli/compute/admin/propose", vec![], None, json!({"error":{"code":"operate_off"}}), "compute.operate"),
             (403, "POST", "/cli/compute/nodes/retire", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.manage"),
-            (403, "POST", "/cli/compute/grants/set", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.use"),
+            // 0.46.17: the agent's own grant change (no workspace named) asks
+            // for its limits; revoking, or a grant with --ci, is compute.use's.
+            (403, "POST", "/cli/compute/grants/set", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.grant"),
+            (403, "POST", "/cli/compute/grants/set", vec![], Some(json!({"node":"n1","allowCi":true})), json!({"error":{"code":"owner_only"}}), "compute.use"),
+            (403, "POST", "/cli/compute/grants/revoke", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.use"),
             (403, "POST", "/cli/sidecar/new", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             (403, "POST", "/cli/sessions/open", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             // 0.46.12: hiring is its own switch.
@@ -1731,7 +1770,7 @@ mod tests {
             for (_, sources) in r.params {
                 for f in *sources {
                     let key = match f {
-                        ParamFrom::Body(k) | ParamFrom::Query(k) | ParamFrom::Response(k) => *k,
+                        ParamFrom::Body(k) | ParamFrom::Query(k) | ParamFrom::Response(k) | ParamFrom::BodySecs(k) => *k,
                     };
                     assert!(!key.to_ascii_lowercase().contains("password"), "{key}");
                 }
@@ -2097,7 +2136,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 75);
+        assert_eq!(V1_ACTIONS.len(), 76);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {
@@ -2109,7 +2148,8 @@ mod tests {
                     && a.needs == b.needs
                     && a.body_has == b.body_has
                     && a.body_eq == b.body_eq
-                    && a.own_ws == b.own_ws;
+                    && a.own_ws == b.own_ws
+                    && a.body_lacks == b.body_lacks;
                 assert!(!same, "two rows claim {:?} on {}", a.matches, a.prefix);
             }
         }
@@ -2360,6 +2400,68 @@ mod tests {
         // With no known asker, a named workspace never matches.
         let p = teach_as("", json!({"toggle":"compute","value":true,"workspace":me.handle}));
         assert_eq!(p["requestable"], false, "{p}");
+    }
+
+    /// 0.46.17: the agent's own `k2 compute grant <node> --max-time 4h`
+    /// asks for compute.grant with every limit it typed (max-time as the
+    /// duration, the CLI sends seconds), for its own workspace named by any
+    /// name or none. Another workspace's grant, and `--ci` / `--gpu` (on or
+    /// off), stay compute.use's row.
+    #[test]
+    fn compute_grant_teaches_the_limits_typed_for_its_own_grant_only() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let me = crate::permission::actions::held::tests::seed("wgm");
+        let other = crate::permission::actions::held::tests::seed("wgo");
+        let refused = json!({"ok":false,"error":{"code":"owner_only","hint":"only the server's owner or an admin"}});
+        let teach_as = |body: Value| {
+            let params = HashMap::new();
+            permission_for(&Refused {
+                status: 403,
+                method: "POST",
+                path: "/cli/compute/grants/set",
+                params: &params,
+                body: Some(&body),
+                response: &refused,
+                workspace_id: &me.id,
+            })
+            .expect("a passport's refusal always carries a permission object")
+        };
+        let want = "k2 permission request compute.grant max-time=4h node=k2n15 --why \"<what you need it for>\"";
+        for body in [
+            json!({"node":"k2n15","maxJobSecs":14400}),
+            json!({"node":"k2n15","workspace":"","maxJobSecs":14400}),
+            json!({"node":"k2n15","workspace":me.handle,"maxJobSecs":14400}),
+            json!({"node":"k2n15","workspace":me.id,"maxJobSecs":14400}),
+            // The per-submitter cap isn't the card's; it's left off the line.
+            json!({"node":"k2n15","workspace":me.handle,"maxJobSecs":14400,"submitterMaxRunning":2}),
+        ] {
+            let p = teach_as(body.clone());
+            assert_eq!(action_of(&p), "compute.grant", "{body}: {p}");
+            assert_eq!(p["params"], json!({"node":"k2n15","max-time":"4h"}), "{body}: the workspace is never a value: {p}");
+            assert_eq!(p["approvers"], "owner or admin", "{body}: {p}");
+            assert_eq!(p["command"], want, "{body}: {p}");
+        }
+        let p = teach_as(json!({"node":"k2n15","maxJobSecs":5400,"maxParallel":2,"maxQueued":20,"maxDiskGb":120}));
+        assert_eq!(
+            p["command"],
+            "k2 permission request compute.grant max-disk=120 max-parallel=2 max-queued=20 max-time=1h30m node=k2n15 --why \"<what you need it for>\"",
+            "{p}"
+        );
+        // No limit typed: the card itself says to name one.
+        let p = teach_as(json!({"node":"k2n15"}));
+        assert_eq!(p["command"], "k2 permission request compute.grant node=k2n15 --why \"<what you need it for>\"", "{p}");
+        for body in [
+            json!({"node":"k2n15","workspace":other.handle,"maxJobSecs":14400}),
+            json!({"node":"k2n15","workspace":other.id,"maxJobSecs":14400}),
+            json!({"node":"k2n15","maxJobSecs":14400,"allowCi":true}),
+            json!({"node":"k2n15","maxJobSecs":14400,"allowCi":false}),
+            json!({"node":"k2n15","workspace":me.handle,"maxJobSecs":14400,"allowGpu":true}),
+            json!({"node":"k2n15","maxJobSecs":14400,"allowGpu":false}),
+        ] {
+            let p = teach_as(body.clone());
+            assert_eq!(action_of(&p), "compute.use", "{body}: never compute.grant: {p}");
+        }
     }
 
     /// 0.46.8: `own_ws` rows teach only for the asking agent's own

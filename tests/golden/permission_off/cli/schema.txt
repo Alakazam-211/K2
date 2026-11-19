@@ -5114,10 +5114,10 @@ exit: 0
     {
       "name": "compute grant",
       "usage": "k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu]",
-      "description": "Grant a workspace a node, with limits. Owner or admin, or an agent allowed to manage compute nodes; --ci and --gpu need the owner or an Admin login.",
+      "description": "Grant a workspace a node, with limits. Owner or admin, or an agent allowed to manage compute nodes; --ci and --gpu need the owner or an Admin login. Any other agent asks for its own grant's limits (no --ci or --gpu; --workspace may be left out): owner_only (exit 3) ends with k2 permission request compute.grant node=<node> max-time=… --why \"…\".",
       "args": [{"name": "node", "required": true}],
       "flags": [
-        {"name": "--workspace", "arg": "WS", "description": "The workspace that gets the node."},
+        {"name": "--workspace", "arg": "WS", "description": "The workspace that gets the node (an agent may leave it out: its own)."},
         {"name": "--max-time", "arg": "2h", "description": "The longest job."},
         {"name": "--max-disk", "arg": "60G", "description": "The most disk."},
         {"name": "--max-parallel", "arg": "1", "description": "Jobs running at once."},

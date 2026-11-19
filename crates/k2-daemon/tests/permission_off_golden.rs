@@ -763,7 +763,7 @@ const WALLS: &[Wall] = &[
         body: Some(r#"{"name":"x","set":{"viewers":[]}}"#),
     },
     Wall { id: "dropped_garden_widget_resume", action: "(later: garden.widget.resume)", method: "POST", path_q: "/cli/zen/widget/resume", body: Some("{}") },
-    Wall { id: "dropped_compute_grant", action: "(covered by compute.use: compute.grant)", method: "POST", path_q: "/cli/compute/grants/set", body: Some("{}") },
+    Wall { id: "dropped_compute_grant", action: "compute.grant node= max-time= (0.46.17)", method: "POST", path_q: "/cli/compute/grants/set", body: Some("{}") },
     Wall { id: "dropped_compute_node_pause", action: "(dropped: compute.node.pause)", method: "POST", path_q: "/cli/compute/nodes/pause", body: Some("{}") },
     Wall { id: "dropped_domain_apex_add", action: "(covered by dns.manage: domain.apex.add)", method: "POST", path_q: "/cli/domains", body: Some("{}") },
     // ── never rows (§9) ──

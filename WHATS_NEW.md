@@ -48,6 +48,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Settings
 - **Changes to who may report are recorded.** Settings → Logs → Access Audit records who answered the agent question, and who changed which switch or part, from what to what. Only the owner or an admin can change them; a Member, a Voice & Chat login or an agent can't.
 
+### Compute
+- **An agent can ask on a card to change its own compute limits.** `k2 compute grant <node> --max-time 4h` (or `--max-parallel`, `--max-queued`, `--max-disk`) from an agent now ends with `Ask with: k2 permission request compute.grant node=<node> max-time=4h`, instead of "It can't be requested." The owner or an admin sees each limit as it is now and as asked ("run jobs of up to 4 hours on k2n15 (now 2 hours)"); Allow sets exactly those limits on that agent's own grant and keeps the rest. `--ci` and `--gpu` keep their own cards.
+
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 
 ### Home chat

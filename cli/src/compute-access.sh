@@ -23,7 +23,9 @@ cmd_compute_grant() {
             *) node="$1"; shift ;;
         esac
     done
-    [ -n "$node" ] && [ -n "$workspace" ] || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu]" >&2; exit 2; }
+    # An agent's session may leave out --workspace: its passport names its
+    # own (0.46.17). A person's never may.
+    { [ -n "$node" ] && { [ -n "$workspace" ] || _compute_in_session; }; } || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu]" >&2; exit 2; }
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_workspace="$workspace" K2_CJ_maxJobSecs_n="$maxt" \
         K2_CJ_maxDiskGb_n="$maxd" K2_CJ_maxParallel_n="$maxp" K2_CJ_maxQueued_n="$maxq" K2_CJ_submitterMaxRunning_n="$maxsub")"

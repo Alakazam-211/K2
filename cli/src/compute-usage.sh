@@ -568,6 +568,12 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    node=<node> --why "…"). The node's own owner must also turn
                    GPU jobs on for this server at that machine
                    (sudo k2-node admin gpu on). It doesn't give --exclusive
+                   The owner or an Admin grants. An agent asks for its own
+                   grant's limits on a card (no --ci or --gpu; it may leave out
+                   --workspace): the refusal ends with k2 permission request
+                   compute.grant node=<node> max-time=4h … --why "…" (any of
+                   max-time, max-parallel, max-queued, max-disk, as typed).
+                   Allow sets exactly those; the others stay as they are
   k2 compute revoke <node> --workspace WS
   k2 compute grants [--node N] [--workspace WS] [--json]
                    --workspace WS: that workspace's grants. The owner, an

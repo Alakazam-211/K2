@@ -1,4 +1,4 @@
-# dropped_compute_grant — stands for catalog row `(covered by compute.use: compute.grant)`
+# dropped_compute_grant — stands for catalog row `compute.grant node= max-time= (0.46.17)`
 ## tcp (agent passport)
 > POST /cli/compute/grants/set
 > body: {}

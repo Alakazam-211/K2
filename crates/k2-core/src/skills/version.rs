@@ -379,7 +379,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 63;
 /// ask with permission cards", "Let this agent refresh its pinned chat").
 /// v17 = 0.46.16: `--to` and "Who is asked" (`permission.approvers`), and a
 /// login's role moved in place (`k2 app grant role`, `app.login-grant op=role`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 17;
+/// v18 = 0.46.17: "Your compute job limits" (`compute.grant`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 18;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

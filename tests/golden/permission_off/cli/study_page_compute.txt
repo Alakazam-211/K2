@@ -105,6 +105,21 @@ NODE LIST (0.46.8)
   --clear opens every granted node at once: ask for the nodes you need.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
 
+GRANT LIMITS (0.46.17)
+  Your grant on each node caps your jobs there: the longest job, how many
+  run at once, how many wait, disk per job (k2 compute grants shows them).
+  Only the owner or an Admin changes a grant (or an agent allowed to
+  manage compute nodes). Run what you need anyway:
+    k2 compute grant <node> --max-time 4h [--max-parallel 2] [--max-queued 20] [--max-disk 120G]
+  It is refused (owner_only, exit 3) and ends with the card to ask on:
+    k2 permission request compute.grant node=<node> max-time=4h --why "…"
+  Run it as printed. The card shows each limit now and asked; Allow sets
+  exactly those, and your other limits there stay as they are. A new
+  --max-parallel re-sends your jobs already waiting there, in order. Only
+  your own workspace's grant, on a node you're granted (or any active
+  node while "Let this agent use compute nodes" is on). --ci and --gpu
+  are their own cards (compute.ci, compute.gpu).
+
 GIT ACCESS (0.46.9)
   k2 compute git-access   the private GitHub repos your jobs may read.
   With a grant, plain git clone/fetch of https://github.com/<o>/<r> in
@@ -269,9 +284,9 @@ TIERS (queue lines, like an airport; 0.46.6)
                    (passing it is fine); --wait is refused (exit 2). 48 h
                    queue timeout. --timeout is still capped by the grant's
                    max per job (k2 compute nodes shows it): for a longer
-                   job, ask your owner to run k2 compute grant <node>
-                   --workspace <ws> --max-time 8h. For a job that goes
-                   quiet, add --stall-timeout off.
+                   job, run k2 compute grant <node> --max-time 8h; it ends
+                   with the card to ask on (GRANT LIMITS). For a job that
+                   goes quiet, add --stall-timeout off.
   --tier ci        highest: the next free slot, ahead of everything queued.
                    Needs a grant with --ci, which only the owner or an Admin
                    sets (k2 compute grant <node> --workspace <ws> --ci).
@@ -1286,7 +1301,9 @@ COMMON ERRORS
                          machine. It can't be requested; exit 3
   private_home_choice    enable: say --private-home or --no-private-home
   owner_only             owner verb from an agent or a K2 terminal: use Settings
-                         (or ask for "Let this agent manage compute nodes")
+                         (or ask for "Let this agent manage compute nodes").
+                         Your own grant's limits: ask on the compute.grant card
+                         its refusal names (GRANT LIMITS)
   node_not_allowed       that node is off this workspace's node list (the error
                          names the list): name one on it, or no node; exit 3
   no_gpu_node            --gpu, but no node you can use runs GPU jobs for this server

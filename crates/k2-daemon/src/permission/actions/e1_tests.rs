@@ -351,11 +351,10 @@ fn the_walls_match_the_refusals() {
 fn rows_outside_v1_say_it_cant_be_requested_or_name_their_cover() {
     let _env = env();
     let ws = seed("e1nc");
-    for (id, covered) in [("domain.apex.add", Some("dns.manage")), ("compute.grant", Some("compute.use"))] {
-        let (s, v) = ask(&ws, id, json!({}));
-        assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("not_cardable")), "{id}: {v}");
-        assert_eq!(v["permission"]["action"].as_str(), covered, "{id}: {v}");
-    }
+    // `compute.grant` is a card of its own since 0.46.17 (compute_tests).
+    let (s, v) = ask(&ws, "domain.apex.add", json!({}));
+    assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("not_cardable")), "{v}");
+    assert_eq!(v["permission"]["action"].as_str(), Some("dns.manage"), "{v}");
     // Rosson (2026-10-21): agents can't ask for wider roles or clones.
     for id in ["app.role-caps", "clone.approve", "garden.lock", "garden.widget.resume", "sources.bind-secret"] {
         let (s, v) = ask(&ws, id, json!({}));

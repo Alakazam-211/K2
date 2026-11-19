@@ -261,6 +261,7 @@ const ACTION_WORDS: Record<string, string> = {
   'compute.ci': 'run CI on compute nodes',
   'compute.gpu': 'use GPUs on compute nodes',
   'compute.allow-nodes': 'use more compute machines',
+  'compute.grant': 'change its compute job limits',
   'compute.packages': 'install packages on compute nodes',
   'compute.packages-policy': 'change the compute package rules',
   'compute.git-access': 'reach git from compute jobs',

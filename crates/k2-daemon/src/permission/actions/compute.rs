@@ -127,6 +127,9 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     if action == PACKAGES.id {
         return Some(packages_computed(ctx));
     }
+    if action == GRANT.id {
+        return Some(grant_computed(ctx));
+    }
     if action != ADMIN_APPROVE.id {
         return None;
     }
@@ -500,6 +503,351 @@ fn apply_gpu(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
 
 fn apply_gpu_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     apply_gpu_to(ctx, who, false)
+}
+
+// ── compute.grant (0.46.17) ──────────────────────────────────────────
+
+/// The limits `compute.grant` may change, as `k2 compute grant` names them.
+const GRANT_LIMIT_KEYS: [&str; 4] = ["max-time", "max-parallel", "max-queued", "max-disk"];
+
+const GRANT_PARAMS: &[ParamSpec] = &[
+    ParamSpec { key: "node", kind: ParamKind::Node, required: true, list: false, choices: &[] },
+    // A duration as `k2 compute grant --max-time` takes it (4h, 90m,
+    // 1h30m, 300s or whole seconds).
+    ParamSpec { key: "max-time", kind: ParamKind::Text, required: false, list: false, choices: &[] },
+    ParamSpec { key: "max-parallel", kind: ParamKind::Text, required: false, list: false, choices: &[] },
+    ParamSpec { key: "max-queued", kind: ParamKind::Text, required: false, list: false, choices: &[] },
+    // GB, as `--max-disk 60G` (or 60).
+    ParamSpec { key: "max-disk", kind: ParamKind::Text, required: false, list: false, choices: &[] },
+];
+
+/// `compute.grant node= [max-time=] [max-parallel=] [max-queued=]
+/// [max-disk=]`: change the limits of the asking workspace's own grant on
+/// one node, as `k2 compute grant <node> --workspace <its own>` would
+/// (Rosson 2026-11-19: "Is this not a card you can present?"). Always the
+/// asker's own workspace (the request can't name one). Only a node it holds
+/// a grant on, or any active node while its "Let this agent use compute
+/// nodes" is on (that switch grants every active node). Never `--ci` or
+/// `--gpu`: those keep their own cards (`compute.ci`, `compute.gpu`).
+/// Allow goes through `POST /cli/compute/grants/set` as the person, so a
+/// changed max-parallel re-sends the jobs waiting there, as the CLI's does.
+pub(crate) static GRANT: ActionSpec = ActionSpec {
+    id: "compute.grant",
+    area: Area::Compute,
+    params: GRANT_PARAMS,
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    // K2 writes the words from the stored values and the grant now
+    // (`grant_computed`): `{change}` names each limit asked, with what it is
+    // now while that differs; `{effects}` the limits that stay and what
+    // else changes.
+    words: Words {
+        setting: "Compute job limits",
+        what_changes: "{change}",
+        consequences: "{effects}",
+        scope: "{ws} on {node}",
+        duration: "until someone changes them",
+        retry: "run your command again",
+    },
+    undo: Undo::None,
+    settings: CI_SETTINGS,
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: "owner_only" },
+        route_prefix: "/cli/compute/grants/set",
+        method: WallMethod::Post,
+        params: &[
+            ("node", ParamFrom::Body("/node")),
+            ("max-time", ParamFrom::BodySecs("/maxJobSecs")),
+            ("max-parallel", ParamFrom::Body("/maxParallel")),
+            ("max-queued", ParamFrom::Body("/maxQueued")),
+            ("max-disk", ParamFrom::Body("/maxDiskGb")),
+        ],
+    }],
+    coverage: WallCoverage::PrefixOnly,
+    machine_hints: &[],
+};
+
+/// One grant's four limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Limits {
+    pub secs: i64,
+    pub parallel: i64,
+    pub queued: i64,
+    pub disk_gb: i64,
+}
+
+impl Limits {
+    fn of(g: &k2_core::compute::store::GrantRow) -> Limits {
+        Limits { secs: g.max_job_secs, parallel: g.max_parallel, queued: g.max_queued, disk_gb: g.max_disk_gb }
+    }
+}
+
+/// What a `compute.grant` request asks, checked: the node, the limits it
+/// changes, the grant's limits now, and whether there is a grant yet.
+#[derive(Debug, Clone)]
+pub(crate) struct GrantAsk {
+    pub node: String,
+    pub asked: [Option<i64>; 4],
+    pub now: Limits,
+    pub has_grant: bool,
+}
+
+impl GrantAsk {
+    /// The grant's limits once applied.
+    pub(crate) fn wanted(&self) -> Limits {
+        let [t, p, q, d] = self.asked;
+        Limits {
+            secs: t.unwrap_or(self.now.secs),
+            parallel: p.unwrap_or(self.now.parallel),
+            queued: q.unwrap_or(self.now.queued),
+            disk_gb: d.unwrap_or(self.now.disk_gb),
+        }
+    }
+}
+
+/// `4h`, `90m`, `1h30m`, `300s` or whole seconds: the CLI's `--max-time`.
+pub(crate) fn parse_duration(raw: &str) -> Option<i64> {
+    let t = raw.trim();
+    if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) {
+        return t.parse().ok();
+    }
+    let (mut total, mut num) = (0i64, String::new());
+    for c in t.chars() {
+        match c {
+            '0'..='9' => num.push(c),
+            'h' | 'm' | 's' if !num.is_empty() => {
+                let n: i64 = num.parse().ok()?;
+                let mul = match c {
+                    'h' => 3600,
+                    'm' => 60,
+                    _ => 1,
+                };
+                total = total.checked_add(n.checked_mul(mul)?)?;
+                num.clear();
+            }
+            _ => return None,
+        }
+    }
+    (num.is_empty() && !t.is_empty()).then_some(total)
+}
+
+/// `60`, `60G`, `60g` or `60GB`: the CLI's `--max-disk`, in GB.
+fn parse_disk(raw: &str) -> Option<i64> {
+    let t = raw.trim();
+    let t = t.strip_suffix("GB").or_else(|| t.strip_suffix("gb")).or_else(|| t.strip_suffix(['G', 'g'])).unwrap_or(t);
+    (!t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())).then(|| t.parse().ok()).flatten()
+}
+
+/// One asked limit, checked against the same bounds as the grant route
+/// (`compute_routes::grant_set`).
+fn grant_limit(ctx: &Ctx, key: &str) -> Result<Option<i64>, String> {
+    let Some(raw) = text_param(ctx, key) else { return Ok(None) };
+    let (v, lo, hi, how) = match key {
+        "max-time" => (parse_duration(raw), 60, 7 * 86_400, "a duration from 1m to 168h (4h, 90m, 1h30m, or seconds)"),
+        "max-parallel" => (raw.parse().ok(), 1, 64, "a number from 1 to 64"),
+        "max-queued" => (raw.parse().ok(), 1, 1000, "a number from 1 to 1000"),
+        _ => (parse_disk(raw), 1, 10_000, "GB from 1 to 10000 (60 or 60G)"),
+    };
+    match v {
+        Some(n) if (lo..=hi).contains(&n) => Ok(Some(n)),
+        _ => Err(format!("{key}={raw} is not {how}")),
+    }
+}
+
+/// The request's values and the grant they change, or why it can't be
+/// asked: no limit named, a bad value, no such active node, or a node
+/// the workspace may not use.
+pub(crate) fn grant_ask(ctx: &Ctx) -> Result<GrantAsk, String> {
+    let name = text_param(ctx, "node").ok_or("name the node: node=<name> (k2 compute grants shows yours)")?;
+    let [t, p, q, d] = GRANT_LIMIT_KEYS;
+    let asked = [grant_limit(ctx, t)?, grant_limit(ctx, p)?, grant_limit(ctx, q)?, grant_limit(ctx, d)?];
+    if asked.iter().all(Option::is_none) {
+        return Err("name at least one limit: max-time=, max-parallel=, max-queued= or max-disk= (--ci and --gpu have their own cards: compute.ci, compute.gpu)".into());
+    }
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let n = k2_core::compute::store::find_node(&conn, name)
+        .filter(|n| n.state == "active")
+        .ok_or_else(|| format!("no active compute node '{name}' (k2 compute nodes)"))?;
+    let (now, has_grant) = match k2_core::compute::store::grant(&conn, &n.id, &ctx.workspace_id) {
+        Some(g) => (Limits::of(&g), true),
+        None if k2_core::compute::store::agents_can_use_compute(&conn, &ctx.workspace_id) => {
+            let l = k2_core::compute::access::limits_for(&n, &Default::default());
+            let v = |x: Option<i64>| x.unwrap_or_default();
+            (Limits { secs: v(l.max_job_secs), parallel: v(l.max_parallel), queued: v(l.max_queued), disk_gb: v(l.max_disk_gb) }, false)
+        }
+        None => {
+            return Err(format!(
+                "{} has no grant on '{}' and can't use compute nodes: ask for that first (k2 permission request compute.use --why \"…\")",
+                ctx.workspace_handle, n.name
+            ))
+        }
+    };
+    Ok(GrantAsk { node: n.name, asked, now, has_grant })
+}
+
+/// 14400 → "4 hours", 5400 → "1 hour 30 minutes", 90 → "1 minute 30 seconds".
+pub(crate) fn hours_words(secs: i64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    let unit = |n: i64, one: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {one}s") };
+    let mut parts = Vec::new();
+    if h > 0 {
+        parts.push(unit(h, "hour"));
+    }
+    if m > 0 {
+        parts.push(unit(m, "minute"));
+    }
+    if s > 0 || parts.is_empty() {
+        parts.push(unit(s, "second"));
+    }
+    parts.join(" ")
+}
+
+/// "one job" / "3 jobs".
+fn jobs(n: i64) -> String {
+    if n == 1 {
+        "one job".to_string()
+    } else {
+        format!("{n} jobs")
+    }
+}
+
+/// Each limit in plain words: what it lets the agent do ("run jobs of up
+/// to 4 hours"), the limit as it stands ("jobs of up to 4 hours") and its
+/// value alone, for "(now …)".
+fn limit_words(i: usize, l: &Limits) -> (String, String, String) {
+    match i {
+        0 => {
+            let t = hours_words(l.secs);
+            (format!("run jobs of up to {t}"), format!("jobs of up to {t}"), t)
+        }
+        1 => (format!("run {} at a time", jobs(l.parallel)), format!("{} at a time", jobs(l.parallel)), l.parallel.to_string()),
+        2 => (format!("keep up to {} waiting", jobs(l.queued)), format!("up to {} waiting", jobs(l.queued)), l.queued.to_string()),
+        _ => (format!("use up to {} GB of disk per job", l.disk_gb), format!("{} GB of disk per job", l.disk_gb), format!("{} GB", l.disk_gb)),
+    }
+}
+
+/// "a, b and c".
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The card's words for `compute.grant`: `{change}` ("Let k2-engine run
+/// jobs of up to 4 hours on k2n15 (now 2 hours)"), `{effects}` (the limits
+/// that stay, a grant it doesn't have yet, the waiting jobs a new
+/// max-parallel re-sends) and `{node}`. "(now …)" shows only while it
+/// differs, so the decided card reads true too.
+fn grant_computed(ctx: &Ctx) -> Ctx {
+    let mut out = ctx.clone();
+    let ws = &ctx.workspace_handle;
+    let (change, effects, node) = match grant_ask(ctx) {
+        Ok(a) => {
+            let want = a.wanted();
+            let mut phrases = Vec::new();
+            let mut stays = Vec::new();
+            for (i, asked) in a.asked.iter().enumerate() {
+                let (wanted, _, _) = limit_words(i, &want);
+                let (now_words, stands, now_value) = limit_words(i, &a.now);
+                if asked.is_none() {
+                    stays.push(stands);
+                    continue;
+                }
+                let was = (wanted != now_words).then(|| format!(" (now {now_value})"));
+                phrases.push((wanted, was));
+            }
+            let change = match phrases.as_slice() {
+                [(one, was)] => format!("Let {ws} {one} on {}{}", a.node, was.clone().unwrap_or_default()),
+                many => {
+                    let items: Vec<String> = many.iter().map(|(w, was)| format!("{w}{}", was.clone().unwrap_or_default())).collect();
+                    format!("Let {ws} {} on {}", and_list(&items), a.node)
+                }
+            };
+            let mut effects = Vec::new();
+            if !a.has_grant {
+                effects.push(format!("{ws} has no grant on {} yet: this gives it one, so its jobs may run there.", a.node));
+            }
+            if !stays.is_empty() {
+                effects.push(format!("Its other limits on {} stay as they are: {}.", a.node, and_list(&stays)));
+            }
+            if a.has_grant && want.parallel != a.now.parallel {
+                effects.push(format!("Its jobs already waiting on {} are sent again with the new limit, in the same order.", a.node));
+            }
+            if want.secs > a.now.secs || want.parallel > a.now.parallel {
+                effects.push(format!("Other jobs on {} may wait longer for a slot.", a.node));
+            }
+            (change, effects.join(" "), a.node)
+        }
+        Err(_) => {
+            let node = text_param(ctx, "node").unwrap_or("its node").to_string();
+            (format!("Change {ws}'s compute job limits on {node}"), String::new(), node)
+        }
+    };
+    out.params.insert("change".into(), json!(change));
+    out.params.insert("effects".into(), json!(effects));
+    out.params.insert("node".into(), json!(node));
+    out
+}
+
+fn check_grant(ctx: &Ctx) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    match grant_ask(ctx) {
+        Ok(a) if a.has_grant && a.wanted() == a.now => Check::AlreadyDone,
+        Ok(_) => Check::Needed,
+        Err(m) => Check::Moved(m),
+    }
+}
+
+/// Through the grant route's own entry (`POST /cli/compute/grants/set`,
+/// the one `k2 compute grant` calls), as the person: the asked limits, the
+/// others as they are (that route resets a limit it isn't sent), and no
+/// CI, GPU or per-submitter value (absent keeps the grant's).
+fn apply_grant(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    if !compute_on() {
+        return Applied::Refused { code: "compute_off".into(), message: "compute nodes are off on this server".into() };
+    }
+    let a = match grant_ask(ctx) {
+        Ok(a) => a,
+        Err(m) => return Applied::Refused { code: "bad_params".into(), message: m },
+    };
+    let want = a.wanted();
+    let path = "/cli/compute/grants/set";
+    if let Err(r) = super::switches::route_floor(who, path) {
+        return super::switches::applied(&r, "");
+    }
+    let body = json!({
+        "node": a.node,
+        "workspace": ctx.workspace_id,
+        "maxJobSecs": want.secs,
+        "maxParallel": want.parallel,
+        "maxQueued": want.queued,
+        "maxDiskGb": want.disk_gb,
+    });
+    let r = crate::compute_routes::handle(path, who_of(who), body.to_string().as_bytes(), &HashMap::new());
+    let resent = serde_json::from_str::<serde_json::Value>(&r.body).ok().and_then(|v| v["resent"].as_i64()).unwrap_or(0);
+    let mut message = format!(
+        "{}'s limits on {} are now: jobs of up to {}, {} at a time, up to {} waiting, {} GB of disk per job.",
+        ctx.workspace_handle,
+        a.node,
+        hours_words(want.secs),
+        jobs(want.parallel),
+        jobs(want.queued),
+        want.disk_gb
+    );
+    match resent {
+        0 => {}
+        1 => message.push_str(" Its job waiting there was sent again with the new limit."),
+        n => message.push_str(&format!(" Its {n} jobs waiting there were sent again with the new limit, in the same order.")),
+    }
+    super::switches::applied(&r, message)
 }
 
 // ── compute.allow-nodes (0.46.8, `crate::compute_allow`) ────────────
@@ -1359,6 +1707,7 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &CI_OFF, check: check_ci_off, apply: apply_ci_off },
         Registered { spec: &GPU, check: check_gpu, apply: apply_gpu },
         Registered { spec: &GPU_OFF, check: check_gpu_off, apply: apply_gpu_off },
+        Registered { spec: &GRANT, check: check_grant, apply: apply_grant },
         Registered { spec: &ALLOW_NODES, check: check_allow_nodes, apply: apply_allow_nodes },
         Registered { spec: &ALLOW_NODES_CLEAR, check: check_allow_nodes_clear, apply: apply_allow_nodes_clear },
         Registered { spec: &CI_CACHE_TRUST, check: check_cache_trust, apply: apply_cache_trust },
@@ -1369,7 +1718,7 @@ pub(crate) fn actions() -> Vec<Registered> {
 
 // ── Appendix A4: compute rows that aren't card-able in v1 ───────────
 
-// `compute.grant` and `compute.node.pause` are E1's.
+// `compute.node.pause` is E1's; `compute.grant` is a card since 0.46.17.
 const IN_SETTINGS: &str = "Settings → Cores → Compute";
 
 static NOT_CARDABLE: [NotCardableSpec; 9] = [

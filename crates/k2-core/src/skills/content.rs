@@ -1488,6 +1488,14 @@ With a node list (`k2 compute allow-nodes`), your jobs run only on the nodes on 
 
 Run it as printed. The owner or an admin sees each node, its size and who owns it. Allow adds exactly those nodes to your own list; then run your job again. Only nodes granted to your workspace: one that isn't is refused with `allow_nodes_not_granted` and can't be requested (a person grants the node first). Only your own list: another agent asks for its own. `--clear` opens every granted node at once, so ask for the nodes you need instead.
 
+## Your compute job limits
+
+Your grant on a node caps your jobs there: the longest job, how many run at once, how many wait, and disk per job (`k2 compute grants`). Changing them is a person's: `k2 compute grant <node> --max-time 4h` (with any of `--max-parallel`, `--max-queued`, `--max-disk`; `--workspace` may be left out) is refused with `owner_only` (exit 3) and ends with:
+
+    k2 permission request compute.grant node=<node> max-time=4h --why "<what you need it for>"
+
+Run it as printed. The owner or an admin sees each limit now and the one you asked for. Allow sets exactly those limits, and your other limits there stay as they are; a new max-parallel re-sends your jobs already waiting there, in order. Then run your job again. Only your own workspace's grant, on a node you're granted (or any active node while "Let this agent use compute nodes" is on). `--ci` and `--gpu` have their own cards (`compute.ci`, `compute.gpu`).
+
 ## GitHub access for compute jobs
 
 A job reads a private GitHub repo only with a grant, and every grant needs this server's GitHub credential. With none set yet, `k2 compute git-access grant --github <owner>/<repo>` is refused with `git_access_needs_setup` (exit 3) and ends with:
@@ -2572,6 +2580,8 @@ mod tests {
             // 0.46.15: adding a node to the agent's own compute node list.
             "k2 permission request compute.allow-nodes nodes=<node>[,<node>…]",
             "allow_nodes_not_granted",
+            // 0.46.17: the agent's own grant's limits on a node.
+            "k2 permission request compute.grant node=<node> max-time=4h",
             // 0.46.16: who is asked, and a login's role moved in place.
             "--to <login>[,<login>…]",
             "k2 permission request permission.approvers to=",

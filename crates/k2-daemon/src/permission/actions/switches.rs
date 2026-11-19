@@ -976,7 +976,7 @@ const IN_SETTINGS: &str = "Settings, or a terminal outside K2";
 /// Rows near the switches that aren't v1 cards: the two "no" rows of A1,
 /// the rows a switch covers, and Rosson's rule that agents can't ask for
 /// wider roles or clones (2026-10-21).
-pub(crate) static NOT_CARDABLE: [NotCardableSpec; 11] = [
+pub(crate) static NOT_CARDABLE: [NotCardableSpec; 10] = [
     NotCardableSpec {
         id: "heartbeat.wake-computer",
         area: Area::Switches,
@@ -989,7 +989,6 @@ pub(crate) static NOT_CARDABLE: [NotCardableSpec; 11] = [
         why: NotCardable::Dropped,
         r#where: "a terminal outside K2 (k2 workspace api-skip-permissions)",
     },
-    NotCardableSpec { id: "compute.grant", area: Area::Compute, why: NotCardable::Covered { by: "compute.use" }, r#where: IN_SETTINGS },
     NotCardableSpec { id: "compute.node.pause", area: Area::Compute, why: NotCardable::Dropped, r#where: "Settings → Cores → Compute → Machine settings" },
     NotCardableSpec { id: "domain.apex.add", area: Area::Domains, why: NotCardable::Covered { by: "dns.manage" }, r#where: IN_SETTINGS },
     NotCardableSpec { id: "vault.widen", area: Area::Vault, why: NotCardable::Dropped, r#where: "Settings → Vault" },

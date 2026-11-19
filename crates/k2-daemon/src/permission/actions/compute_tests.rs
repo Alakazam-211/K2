@@ -849,3 +849,200 @@ fn the_grant_card_points_at_setup_while_there_is_no_credential() {
     };
     assert!(granted.is_empty(), "nothing granted: {granted:?}");
 }
+
+// ── compute.grant (0.46.17) ──────────────────────────────────────────
+
+fn set_compute_switch(ws: &Ws, on: bool) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::store::set_agents_can_use_compute(&conn, &ws.id, on).expect("the compute switch");
+}
+
+/// The limits `k2 compute grant` takes, read the same way on the card.
+#[test]
+fn compute_grant_reads_the_limits_as_the_cli_takes_them() {
+    use super::{hours_words, parse_duration};
+    for (raw, secs) in [("4h", Some(14_400)), ("90m", Some(5_400)), ("1h30m", Some(5_400)), ("300s", Some(300)), ("7200", Some(7_200)), ("2h0m", Some(7_200)), ("4", Some(4))] {
+        assert_eq!(parse_duration(raw), secs, "{raw}");
+    }
+    for raw in ["", "h", "4x", "4 hours", "1.5h", "4h5", "-4h", "4H"] {
+        assert_eq!(parse_duration(raw), None, "{raw}");
+    }
+    for (secs, words) in [(14_400, "4 hours"), (3_600, "1 hour"), (5_400, "1 hour 30 minutes"), (90, "1 minute 30 seconds"), (60, "1 minute")] {
+        assert_eq!(hours_words(secs), words, "{secs}");
+    }
+}
+
+/// A person's card (owner or Admin, one click), its words in plain terms:
+/// each asked limit with what it is now, the limits that stay, and what a
+/// new max-parallel or a longer job does to the node's other jobs.
+#[test]
+fn compute_grant_card_names_each_limit_now_and_asked() {
+    let _db = k2_core::db::scoped_for_test();
+    use k2_core::permission::catalog::{Direction, Floor, Proof};
+    let r = super::super::find("compute.grant").expect("compute.grant registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((r.spec.floor, r.spec.direction, r.spec.proof), (Floor::Admin, Direction::Loosen, Proof::Click));
+    assert!(crate::routes::route_policy::lookup("/cli/compute/grants/set").and_then(|x| x.post).is_some(), "the route the card calls");
+    assert!(super::super::not_cardable().iter().all(|n| n.id != "compute.grant"), "a card now, not a not-cardable row");
+
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("cgw");
+    let (_, name) = list_node(&ws, "cg-a", true);
+    let h = ws.handle.clone();
+
+    let v = ask_ok(&ws, "compute.grant", json!({ "node": name, "max-time": "4h" }));
+    let vw = view(&ws, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Let {h} run jobs of up to 4 hours on {name} (now 2 hours)."), "{vw}");
+    assert_eq!(
+        vw["consequences"],
+        format!(
+            "Its other limits on {name} stay as they are: one job at a time, up to 10 jobs waiting and 60 GB of disk per job. Other jobs on {name} may wait longer for a slot."
+        ),
+        "{vw}"
+    );
+    assert_eq!(vw["setting"], "Compute job limits", "{vw}");
+    assert_eq!(vw["scope"], format!("{h} on {name}"), "{vw}");
+    assert_eq!(vw["approvers"]["floor"], "admin", "{vw}");
+    assert_eq!(vw["direction"], "loosen", "{vw}");
+    // A Member login is below the card's floor.
+    let member = login("cgm", Role::Member);
+    below_floor(answer_as(&member, &ws, &card_of(&v), json!({ "answer": "Allow" })), "admin");
+
+    // Several limits at once (another workspace: its own card).
+    let ws2 = seed("cgv");
+    let (_, name2) = list_node(&ws2, "cg-b", true);
+    let h2 = ws2.handle.clone();
+    let v = ask_ok(&ws2, "compute.grant", json!({ "node": name2, "max-parallel": "2", "max-queued": "20", "max-disk": "120G" }));
+    let vw = view(&ws2, &card_of(&v));
+    assert_eq!(
+        vw["whatChanges"],
+        format!("Let {h2} run 2 jobs at a time (now 1), keep up to 20 jobs waiting (now 10) and use up to 120 GB of disk per job (now 60 GB) on {name2}."),
+        "{vw}"
+    );
+    assert_eq!(
+        vw["consequences"],
+        format!(
+            "Its other limits on {name2} stay as they are: jobs of up to 2 hours. Its jobs already waiting on {name2} are sent again with the new limit, in the same order. Other jobs on {name2} may wait longer for a slot."
+        ),
+        "{vw}"
+    );
+
+    // Lowering a limit: no "wait longer" line.
+    let ws3 = seed("cgl");
+    let (_, name3) = list_node(&ws3, "cg-c", true);
+    let v = ask_ok(&ws3, "compute.grant", json!({ "node": name3, "max-time": "1h" }));
+    let vw = view(&ws3, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Let {} run jobs of up to 1 hour on {name3} (now 2 hours).", ws3.handle), "{vw}");
+    assert!(!vw["consequences"].as_str().unwrap_or("").contains("wait longer"), "{vw}");
+}
+
+/// Only its own workspace's grant, only limits, only a node it holds a
+/// grant on (or any active node while its compute switch is on): every
+/// other ask is refused before a card. Asking for what it has already is
+/// "already done".
+#[test]
+fn compute_grant_asks_only_for_its_own_grant_and_its_limits() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("cgo");
+    let other = seed("cgp");
+    let (_, mine) = list_node(&ws, "cg-m", true);
+    let (theirs_id, theirs) = list_node(&other, "cg-t", true);
+
+    // Never a workspace (its own or another's), never CI or GPU.
+    for params in [json!({ "node": mine, "max-time": "4h", "workspace": other.id }), json!({ "node": mine, "max-time": "4h", "workspace": ws.id })] {
+        let (s, v) = ask(&ws, "compute.grant", params.clone());
+        assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "{params}: {v}");
+        assert!(v["error"]["hint"].as_str().unwrap_or("").contains("the workspace is always yours"), "{params}: {v}");
+    }
+    for params in [json!({ "node": mine, "max-time": "4h", "ci": "true" }), json!({ "node": mine, "gpu": "true" }), json!({ "node": mine, "allow-ci": "1" })] {
+        let hint = ask_refused(&ws, "compute.grant", params.clone());
+        assert!(hint.contains("compute.grant takes node=, max-time=, max-parallel=, max-queued=, max-disk="), "{params}: {hint}");
+    }
+    // A node it holds no grant on, its compute switch off: ask for that first.
+    let hint = ask_refused(&ws, "compute.grant", json!({ "node": theirs, "max-time": "4h" }));
+    assert!(hint.contains(&format!("has no grant on '{theirs}'")) && hint.contains("compute.use"), "{hint}");
+    assert!(ask_refused(&ws, "compute.grant", json!({ "node": "no-such-node", "max-time": "4h" })).contains("no active compute node 'no-such-node'"));
+    // A limit, and only a good one.
+    assert!(ask_refused(&ws, "compute.grant", json!({ "node": mine })).contains("name at least one limit"));
+    for (key, raw) in [
+        ("max-time", "4x"),
+        ("max-time", "30s"),
+        ("max-time", "200h"),
+        ("max-parallel", "0"),
+        ("max-parallel", "65"),
+        ("max-parallel", "two"),
+        ("max-queued", "1001"),
+        ("max-disk", "0"),
+        ("max-disk", "10001G"),
+        ("max-disk", "1T"),
+    ] {
+        let hint = ask_refused(&ws, "compute.grant", json!({ "node": mine, key: raw }));
+        assert!(hint.starts_with(&format!("{key}={raw} is not ")), "{key}={raw}: {hint}");
+    }
+    let stored: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM permission_requests WHERE workspace_id = ?1", [&ws.id], |r| r.get(0)).expect("count")
+    };
+    assert_eq!(stored, 0, "a refused ask stores no request and makes no card");
+
+    // What it has already: nothing to ask (2h, one at a time, 10, 60 GB).
+    for params in [json!({ "node": mine, "max-time": "2h" }), json!({ "node": mine, "max-time": "7200", "max-parallel": "1", "max-disk": "60G" })] {
+        let (s, v) = ask(&ws, "compute.grant", params.clone());
+        assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{params}: {v}");
+    }
+
+    // Its compute switch on: any active node may be asked for; the card
+    // says it gives a grant there too. The other workspace's grant is not
+    // what it reads.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let tight = k2_core::compute::store::GrantLimits { max_job_secs: Some(600), ..Default::default() };
+        k2_core::compute::store::set_grant(&conn, &theirs_id, &other.id, &tight, "owner", 8).expect("their grant");
+    }
+    set_compute_switch(&ws, true);
+    let v = ask_ok(&ws, "compute.grant", json!({ "node": theirs, "max-time": "4h" }));
+    let vw = view(&ws, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Let {} run jobs of up to 4 hours on {theirs} (now 2 hours).", ws.handle), "{vw}");
+    assert!(
+        vw["consequences"].as_str().unwrap_or("").starts_with(&format!("{} has no grant on {theirs} yet: this gives it one", ws.handle)),
+        "{vw}"
+    );
+
+    // Compute off: nothing asks.
+    let _off = ComputeOn::set(false);
+    assert!(ask_refused(&ws, "compute.grant", json!({ "node": mine, "max-time": "4h" })).contains("compute nodes are off"));
+}
+
+/// The grant changed under a waiting card (the owner ran k2 compute grant
+/// meanwhile): what the person read is no longer true, so the click is
+/// stale and applies nothing.
+#[test]
+fn compute_grant_card_goes_stale_when_the_grant_moves() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("cgs");
+    let (node_id, name) = list_node(&ws, "cg-s", true);
+    let v = ask_ok(&ws, "compute.grant", json!({ "node": name, "max-time": "4h" }));
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let l = k2_core::compute::store::GrantLimits { max_job_secs: Some(3 * 3600), ..Default::default() };
+        k2_core::compute::store::set_grant(&conn, &node_id, &ws.id, &l, "owner", 9).expect("grant moved");
+    }
+    let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id_of(&v)).state, RequestState::Stale);
+    let g = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::store::grant(&conn, &node_id, &ws.id).expect("grant")
+    };
+    assert_eq!(g.max_job_secs, 3 * 3600, "nothing applied");
+}

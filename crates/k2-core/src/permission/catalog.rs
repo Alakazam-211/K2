@@ -485,6 +485,30 @@ pub enum ParamFrom {
     Body(&'static str),
     /// A JSON pointer into the refusal body (`/request/id`).
     Response(&'static str),
+    /// A JSON pointer to whole seconds in the request body, taught as the
+    /// duration the agent typed (`14400` → `4h`, `5400` → `1h30m`):
+    /// `compute.grant max-time=` (0.46.17), whose CLI sends seconds.
+    BodySecs(&'static str),
+}
+
+/// Whole seconds as the duration a person types (`4h`, `1h30m`, `90s`):
+/// hours, minutes and seconds parts, the zero ones left out. `0` is `0s`.
+pub fn secs_word(secs: i64) -> String {
+    if secs <= 0 {
+        return "0s".to_string();
+    }
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    let mut out = String::new();
+    if h > 0 {
+        out.push_str(&format!("{h}h"));
+    }
+    if m > 0 {
+        out.push_str(&format!("{m}m"));
+    }
+    if s > 0 {
+        out.push_str(&format!("{s}s"));
+    }
+    out
 }
 
 /// One wall of an action.
@@ -805,5 +829,14 @@ mod tests {
         assert_eq!((Floor::Owner.as_str(), Floor::Owner.label()), ("owner", "owner"));
         assert_eq!((Floor::Admin.as_str(), Floor::Admin.label()), ("admin", "owner or admin"));
         assert_eq!(Floor::GardenOwner.as_str(), "owner", "approvers.floor is owner or admin only");
+    }
+
+    /// `compute.grant max-time=` is taught as the agent typed it (0.46.17).
+    #[test]
+    fn seconds_read_as_the_duration_typed() {
+        for (secs, word) in [(14_400, "4h"), (5_400, "1h30m"), (90, "1m30s"), (45, "45s"), (3_601, "1h1s"), (7 * 86_400, "168h"), (0, "0s")] {
+            assert_eq!(secs_word(secs), word, "{secs}");
+        }
+        assert_eq!(serde_json::to_value(ParamFrom::BodySecs("/maxJobSecs")).unwrap(), serde_json::json!({"from":"bodySecs","key":"/maxJobSecs"}));
     }
 }

@@ -15,13 +15,13 @@
 # The only public addresses allowed are named below with why (real
 # shipped behaviour the help describes).
 #
-# It scans cli/src/*.sh (the parts) and cli/k2 (the built file), every
-# line, and fails naming file, line and the match. Before the real scan
+# It scans cli/src/*.sh (the parts), cli/text/**/*.txt (the study and help
+# pages the parts include) and cli/k2 (the built file), every line, and fails naming file, line and the match. Before the real scan
 # it runs on a scratch tree with planted names and fails unless it
 # catches exactly those lines.
 #
 # Run with: bash tests/cli/help_node_names.sh
-# bash-only: reads cli/src/*.sh and the built cli/k2 as text; never runs them.
+# bash-only: reads cli/src/*.sh, cli/text and the built cli/k2 as text; never runs them.
 set -euo pipefail
 export LC_ALL=C
 
@@ -56,6 +56,7 @@ shapes = re.compile(
     re.IGNORECASE,
 )
 files = sorted(glob.glob(os.path.join(root, "cli", "src", "*.sh")))
+files += sorted(glob.glob(os.path.join(root, "cli", "text", "**", "*.txt"), recursive=True))
 files.append(os.path.join(root, "cli", "k2"))
 for path in files:
     rel = os.path.relpath(path, root)
@@ -73,7 +74,7 @@ PY
 # Self-check: planted names must be caught, generic ones must not.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/cli/src"
+mkdir -p "$tmp/cli/src" "$tmp/cli/text/study"
 cat >"$tmp/cli/src/planted.sh" <<'EOF'
   k2 compute run k2n99 -- make test
   placed on build7-vin (auto)
@@ -84,10 +85,12 @@ cat >"$tmp/cli/src/planted.sh" <<'EOF'
   allowlist add 203.0.113.10; 10.0.0.2; 192.168.1.5; 127.0.0.1; v1.2.3.4.5
 EOF
 printf '%s\n' 'the built file: K2N12-M4 in capitals' 'k2-core and linux-2 are fine' >"$tmp/cli/k2"
+printf '%s\n' 'a page: k2 compute run linux-1' 'placed on k2n7-m1 (a page file)' >"$tmp/cli/text/study/planted.txt"
 want='cli/src/planted.sh:1: names a machine (k2n99): k2 compute run k2n99 -- make test
 cli/src/planted.sh:2: names a machine (7-vin): placed on build7-vin (auto)
 cli/src/planted.sh:4: names a machine (K2-WIN): # a comment about K2-WIN-TEST
 cli/src/planted.sh:6: names a public IP (93.184.216.34): allowlist add 93.184.216.34 (a public address)
+cli/text/study/planted.txt:2: names a machine (k2n7): placed on k2n7-m1 (a page file)
 cli/k2:1: names a machine (K2N12): the built file: K2N12-M4 in capitals'
 got="$(scan "$tmp")"
 if [ "$got" != "$want" ]; then
@@ -103,4 +106,4 @@ if [ -n "$hits" ]; then
     echo "FAIL: the CLI text names one of our machines or a public IP; use a generic name (mac-mini-1, linux-1, win-1, arch-1) or a documentation IP (203.0.113.x)" >&2
     exit 1
 fi
-echo "  PASS: cli/src/*.sh and cli/k2 name no machine and no public IP"
+echo "  PASS: cli/src/*.sh, cli/text and cli/k2 name no machine and no public IP"

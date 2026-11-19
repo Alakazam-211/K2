@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "libc",
  "redb",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-fab"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "k2-mpc-base",
 ]

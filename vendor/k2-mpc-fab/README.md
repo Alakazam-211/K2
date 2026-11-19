@@ -57,8 +57,8 @@ so a checkout of the kit sits beside this repo's, at the kit release `CHANGELOG.
 vendors both side by side: the kit at `vendor/k2-mpc-base`, this pack at `vendor/k2-mpc-fab`.
 `Cargo.lock` is committed. A public reader gets the kit from K2's repository,
 https://github.com/Alakazam-211/K2, where it is vendored at `vendor/k2-mpc-base`: check that
-folder out beside this repo as `k2-mpc-base`. Kit v0.22.0, the release this pack pairs with, is
-vendored there from the K2 release that vendors kit v0.22.0.
+folder out beside this repo as `k2-mpc-base`. Kit v0.23.0, the release this pack pairs with, is
+vendored there from the K2 release that vendors kit v0.23.0.
 
 Build and test: `scripts/check.sh`. One of its steps, `scripts/check-private.sh`, **fails without
 private patterns** (exit 2, fail closed): it looks for the names of a host's own build machines,

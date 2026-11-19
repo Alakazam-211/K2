@@ -7,20 +7,18 @@ fn source(file: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
-/// The heredoc Python (`python3 - <<'PYEOF'`) after `after` in `file`,
-/// its lines as Python numbers them (line 1 is the first one after the
-/// `<<'PYEOF'` line).
-fn heredoc(file: &str, after: &str) -> Vec<String> {
+/// A Python text kept in a single-quoted shell variable, `name='...'`,
+/// as `python3 -c "$name"` numbers it (line 1 is the empty one after the
+/// opening quote).
+fn single_quoted(file: &str, name: &str) -> Vec<String> {
     let text = source(file);
+    let open = format!("{name}='");
     let body = text
-        .split_once(after)
-        .unwrap_or_else(|| panic!("no {after:?} in {file}"))
+        .split_once(open.as_str())
+        .unwrap_or_else(|| panic!("no {open:?} in {file}"))
         .1;
-    let start =
-        body.find("python3 - <<'PYEOF'\n").expect("the heredoc") + "python3 - <<'PYEOF'\n".len();
-    let rest = &body[start..];
-    let end = rest.find("\nPYEOF\n").expect("its end");
-    rest[..end].split('\n').map(str::to_string).collect()
+    let end = body.find("\n'\n").expect("its end");
+    body[..end].split('\n').map(str::to_string).collect()
 }
 
 fn at_line(lines: &[String], n: u32) -> String {
@@ -79,148 +77,74 @@ fn the_shell_s_lines() {
 
 #[test]
 fn list_s_python() {
-    let l = heredoc("feedback.sh", "cmd_feedback_list() {");
+    let l = single_quoted("feedback.sh", "_feedback_list_py");
     for (n, text) in [
-        (2, r#"raw = os.environ["RESP"]"#),
-        (4, "d = json.loads(raw)"),
+        (3, r#"raw = sys.stdin.buffer.read().decode("utf-8", "replace")"#),
+        (5, "d = json.loads(raw)"),
         (line::L_ERR, r#"err = d.get("error")"#),
         (line::L_CODE, r#"code = err.get("code")"#),
-        (
-            15,
-            r#"sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)"#,
-        ),
+        (16, r#"sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)"#),
         (line::L_JSON, "print(json.dumps(d))"),
         (line::L_FOR, r#"for i in d.get("items", []):"#),
-        (21, r#"print("%-10s%-18s%2s   %-10s%s" % ("#),
-        (
-            line::L_ROW,
-            r#"str(i.get("id", ""))[:8], i.get("status", "?"),"#,
-        ),
-        (
-            23,
-            r#"i.get("priority", "?"), i.get("kind", "?"), i.get("title", "")))"#,
-        ),
+        (22, r#"print("%-10s%-18s%2s   %-10s%s" % ("#),
+        (line::L_ROW, r#"str(i.get("id", ""))[:8], i.get("status", "?"),"#),
+        (24, r#"i.get("priority", "?"), i.get("kind", "?"), i.get("title", "")))"#),
     ] {
         assert_eq!(at_line(&l, n), text, "line {n}");
     }
-    assert_eq!(l.len(), 23);
+    assert_eq!(l.len(), 24);
 }
 
 #[test]
 fn show_s_python() {
-    let l = heredoc("feedback.sh", "cmd_feedback_show() {");
+    let l = single_quoted("feedback.sh", "_feedback_show_py");
     for (n, text) in [
         (line::S_DIE_CODE, r#"code = err.get("code")"#),
-        (
-            18,
-            r#"qs = urllib.parse.urlencode({"id": os.environ["FB_ID"], "brief": "1", "token": token})"#,
-        ),
-        (
-            19,
-            r#"req = urllib.request.Request(base + "/cli/feedback/show?" + qs, method="GET")"#,
-        ),
-        (
-            22,
-            "with urllib.request.urlopen(k5_request(req), timeout=30) as r:",
-        ),
-        (23, r#"raw = r.read().decode("utf-8", "replace")"#),
-        (25, r#"raw = e.read().decode("utf-8", "replace")"#),
-        (
-            line::S_UNREACHABLE,
-            r#"die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})"#,
-        ),
-        (
-            line::S_UNPARSEABLE,
-            r#"die({"code": "bad_response", "hint": "daemon returned an unparseable response: %r" % raw[:200]})"#,
-        ),
-        (
-            line::S_UNEXPECTED,
-            r#"die({"code": "bad_response", "hint": "daemon returned an unexpected response: %r" % raw[:200]})"#,
-        ),
+        (15, r#"raw = sys.stdin.buffer.read().decode("utf-8", "replace")"#),
+        (line::S_UNPARSEABLE, r#"die({"code": "bad_response", "hint": "daemon returned an unparseable response: %r" % raw[:200]})"#),
+        (line::S_UNEXPECTED, r#"die({"code": "bad_response", "hint": "daemon returned an unexpected response: %r" % raw[:200]})"#),
         (line::S_ERR, "die(err)"),
-        (
-            38,
-            r#"brief = d.get("brief") if isinstance(d.get("brief"), dict) else None"#,
-        ),
-        (
-            line::S_NO_BRIEF,
-            r#"die({"code": "no_brief", "hint": "ticket %s has no HTML brief" % str(d.get("id", ""))[:8]})"#,
-        ),
+        (26, r#"brief = d.get("brief") if isinstance(d.get("brief"), dict) else None"#),
+        (line::S_NO_BRIEF, r#"die({"code": "no_brief", "hint": "ticket %s has no HTML brief" % str(d.get("id", ""))[:8]})"#),
         (line::S_HTML_JSON, "print(json.dumps(d))"),
-        (47, r#"sys.stdout.write(brief["html"])"#),
-        (51, r#"d.pop("brief", None)"#),
+        (35, r#"sys.stdout.write(brief["html"])"#),
+        (39, r#"d.pop("brief", None)"#),
         (line::S_JSON, "print(json.dumps(d))"),
         (line::S_AGO_INT, "s = int(time.time() - ts)"),
-        (58, r#"if s < 60: return "just now""#),
-        (59, r#"if s < 3600: return "%dm ago" % (s // 60)"#),
-        (60, r#"if s < 172800: return "%dh ago" % (s // 3600)"#),
-        (61, r#"return "%dd ago" % (s // 86400)"#),
-        (64, r#"if n < 1024: return "%d B" % n"#),
-        (
-            line::S_SIZE_KB,
-            r#"if n < 1024 * 1024: return "%.1f KB" % (n / 1024.0)"#,
-        ),
-        (
-            line::S_SIZE_MB,
-            r#"return "%.1f MB" % (n / (1024.0 * 1024.0))"#,
-        ),
-        (
-            68,
-            r#"print("feedback : %s  (%s)" % (str(d.get("id", ""))[:8], d.get("status", "?")))"#,
-        ),
-        (69, r#"print("title    : %s" % d.get("title", ""))"#),
-        (
-            70,
-            r#"print("kind     : %s · priority %s" % (d.get("kind", "?"), d.get("priority", "?")))"#,
-        ),
-        (71, r#"asked = "%s" % (d.get("agentName") or "?")"#),
-        (73, r#"asked += " · session %s" % str(d["sessionId"])[:8]"#),
-        (
-            line::S_ASKED,
-            r#"asked += " · %s" % ago(d.get("createdAt", 0))"#,
-        ),
-        (76, r#"assignees = d.get("assignees") or []"#),
-        (
-            line::S_ASSIGNED,
-            r#"print("assigned : %s" % (", ".join(assignees) if assignees else "(none)"))"#,
-        ),
-        (
-            line::S_OPTIONS,
-            r#"print("options  : %s" % " | ".join(d["options"]))"#,
-        ),
-        (81, r#"print("answer   : %s" % d["answer"])"#),
-        (83, r#"body_lines = str(d["body"]).splitlines() or [""]"#),
-        (86, r#"print(" " * 11 + extra)"#),
-        (88, r#"n = d.get("briefBytes")"#),
-        (90, r#"n = brief.get("bytes")"#),
-        (
-            line::S_BRIEF,
-            r#"% (size(int(n)) if isinstance(n, (int, float)) else "?", str(d.get("id", ""))[:8]))"#,
-        ),
-        (93, r#"text = str((brief or {}).get("text") or "")"#),
-        (95, "for line in lines[:40]:"),
-        (
-            98,
-            r#"print("  … %d more lines (open the ticket, or use --html)" % (len(lines) - 40))"#,
-        ),
+        (46, r#"if s < 60: return "just now""#),
+        (47, r#"if s < 3600: return "%dm ago" % (s // 60)"#),
+        (48, r#"if s < 172800: return "%dh ago" % (s // 3600)"#),
+        (49, r#"return "%dd ago" % (s // 86400)"#),
+        (52, r#"if n < 1024: return "%d B" % n"#),
+        (line::S_SIZE_KB, r#"if n < 1024 * 1024: return "%.1f KB" % (n / 1024.0)"#),
+        (line::S_SIZE_MB, r#"return "%.1f MB" % (n / (1024.0 * 1024.0))"#),
+        (56, r#"print("feedback : %s  (%s)" % (str(d.get("id", ""))[:8], d.get("status", "?")))"#),
+        (57, r#"print("title    : %s" % d.get("title", ""))"#),
+        (58, r#"print("kind     : %s · priority %s" % (d.get("kind", "?"), d.get("priority", "?")))"#),
+        (59, r#"asked = "%s" % (d.get("agentName") or "?")"#),
+        (61, r#"asked += " · session %s" % str(d["sessionId"])[:8]"#),
+        (line::S_ASKED, r#"asked += " · %s" % ago(d.get("createdAt", 0))"#),
+        (64, r#"assignees = d.get("assignees") or []"#),
+        (line::S_ASSIGNED, r#"print("assigned : %s" % (", ".join(assignees) if assignees else "(none)"))"#),
+        (line::S_OPTIONS, r#"print("options  : %s" % " | ".join(d["options"]))"#),
+        (69, r#"print("answer   : %s" % d["answer"])"#),
+        (71, r#"body_lines = str(d["body"]).splitlines() or [""]"#),
+        (74, r#"print(" " * 11 + extra)"#),
+        (76, r#"n = d.get("briefBytes")"#),
+        (78, r#"n = brief.get("bytes")"#),
+        (line::S_BRIEF, r#"% (size(int(n)) if isinstance(n, (int, float)) else "?", str(d.get("id", ""))[:8]))"#),
+        (81, r#"text = str((brief or {}).get("text") or "")"#),
+        (83, "for line in lines[:40]:"),
+        (86, r#"print("  … %d more lines (open the ticket, or use --html)" % (len(lines) - 40))"#),
         (line::S_FOR, r#"for c in d.get("comments", []):"#),
-        (
-            line::S_C,
-            r#"lines = str(c.get("body", "")).splitlines() or [""]"#,
-        ),
-        (
-            line::S_AT,
-            r#"print("  %-9s%-10s%s" % (c.get("author", "?"), "(%s)" % ago(c.get("at", 0)), lines[0]))"#,
-        ),
-        (105, r#"print(" " * 21 + extra)"#),
-        (
-            line::S_FILES,
-            r#"for line in ticket_file_lines(c.get("attachments"), d.get("projectPath"), " " * 21):"#,
-        ),
+        (line::S_C, r#"lines = str(c.get("body", "")).splitlines() or [""]"#),
+        (line::S_AT, r#"print("  %-9s%-10s%s" % (c.get("author", "?"), "(%s)" % ago(c.get("at", 0)), lines[0]))"#),
+        (93, r#"print(" " * 21 + extra)"#),
+        (line::S_FILES, r#"for line in ticket_file_lines(c.get("attachments"), d.get("projectPath"), " " * 21):"#),
     ] {
         assert_eq!(at_line(&l, n), text, "line {n}");
     }
-    assert_eq!(l.len(), 108);
+    assert_eq!(l.len(), 96);
 }
 
 /// `_ticket_files_check_py`, as `exec` numbers it (line 1 is the empty
@@ -368,25 +292,6 @@ fn the_words() {
     for help in [&["list", "--help"][..], &["show", "x", "-h"], &["ask"], &[]] {
         assert_eq!(words(help), None, "{help:?}");
     }
-}
-
-#[test]
-fn only_an_http_proxy_setting_goes_to_the_shell() {
-    let env = |pairs: &[(&str, &str)]| -> Vec<(OsString, OsString)> {
-        pairs
-            .iter()
-            .map(|(k, v)| (OsString::from(k), OsString::from(v)))
-            .collect()
-    };
-    for set in ["http_proxy", "HTTP_PROXY", "Http_Proxy"] {
-        assert!(urllib_proxy(env(&[(set, "http://p:3128")])), "{set}");
-    }
-    assert!(!urllib_proxy(env(&[("http_proxy", "")])));
-    assert!(!urllib_proxy(env(&[
-        ("https_proxy", "x"),
-        ("no_proxy", "*"),
-        ("ALL_PROXY", "x")
-    ])));
 }
 
 #[test]

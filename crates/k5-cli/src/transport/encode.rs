@@ -56,41 +56,8 @@ pub fn quote_bytes(bytes: &[u8]) -> String {
     out
 }
 
-/// `urllib.parse.urlencode(pairs)` (its `quote_plus`, `safe=''`): each
-/// key and value as [`quote`] escapes it, but a space is `+`; `key=value`
-/// joined by `&`.
-pub fn urlencode_plus(pairs: &[(&str, &str)]) -> String {
-    let plus = |s: &str| s.split(' ').map(quote).collect::<Vec<_>>().join("+");
-    pairs
-        .iter()
-        .map(|(k, v)| format!("{}={}", plus(k), plus(v)))
-        .collect::<Vec<_>>()
-        .join("&")
-}
-
 /// The bytes Python's `quote` never escapes (RFC 3986 unreserved).
 fn is_unreserved(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~')
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// What Python 3's `urllib.parse.urlencode` returned for each.
-    #[test]
-    fn urlencode_is_python_s() {
-        assert_eq!(
-            urlencode_plus(&[("id", "a b/~*é"), ("brief", "1"), ("token", "t.x")]),
-            "id=a+b%2F~%2A%C3%A9&brief=1&token=t.x"
-        );
-        assert_eq!(
-            urlencode_plus(&[("id", "  +&=%"), ("token", "")]),
-            "id=++%2B%26%3D%25&token="
-        );
-        assert_eq!(
-            urlencode_plus(&[("id", "日本 x\n")]),
-            "id=%E6%97%A5%E6%9C%AC+x%0A"
-        );
-    }
-}

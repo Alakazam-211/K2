@@ -20,16 +20,17 @@
 //!    exit 1 (the main shell's USR1 trap); a call that failed any other
 //!    way, or an empty answer, is the `daemon_unreachable` line, exit 1.
 //!    Then the shell's Python on it ([`list_reader`]).
-//! 4. `show`: the shell's Python fetches the ticket itself with
-//!    `urllib.request.urlopen` (`GET /cli/feedback/show?id=…&brief=1&
-//!    token=…`, over TCP, one try, no heal, no closing line:
-//!    [`crate::transport::Client::urlopen_get`]); anything that is not an
-//!    answer is the `daemon_unreachable` line, exit 1. Then the rest of
-//!    that Python ([`show_reader`]): the brief's HTML alone with
+//! 4. `show`: `resp=$(cli_request /cli/feedback/show id=… brief=1) ||
+//!    resp=""`, over TCP only, as `list`'s (no `_cli_use_passport_project`
+//!    first). The same lines for no answer and an empty one. Then the
+//!    shell's Python on it ([`show_reader`]): the brief's HTML alone with
 //!    `--html`, the JSON with `--json`, else the ticket, its brief's text
 //!    and its thread.
-//! 5. The EXIT trap's lines ([`crate::prelude::Closing`]): only `list`'s
-//!    answer is noted.
+//! 5. The EXIT trap's lines ([`crate::prelude::Closing`]): both answers
+//!    are noted.
+//!
+//! Both readers get the answer on stdin and decode it as UTF-8 with
+//! `replace`.
 //!
 //! The daemon's error is one line of JSON on stderr, exit 4 for
 //! `not_found` and `ambiguous_id`, 2 for `usage`, else 1.
@@ -40,10 +41,8 @@
 //! command line with `-h` or `--help` ([`crate::front`]), a word that is
 //! not UTF-8, a port that is set but is no port curl takes, and a
 //! `python3` the binary can't tell ([`crate::families`], Without Python).
-//! `show` also hands the shell a port written with a leading zero
-//! (urllib's `Host` line keeps the text) and an `http_proxy` setting in
-//! any case (urllib would go through that proxy), with or without
-//! `python3`.
+//! The binary's own transport never uses a proxy (loopback and plain http
+//! never do, by the shell's rule too).
 //!
 //! Where the shell's Python raises (an answer that is not an object, a
 //! field of a type it doesn't expect), this prints a Python 3.12
@@ -58,7 +57,7 @@ use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
-use crate::transport::encode::{quote, urlencode_plus};
+use crate::transport::encode::quote;
 use crate::transport::{Call, Channel, Client, Error};
 use std::ffi::OsString;
 use std::path::Path;
@@ -84,32 +83,32 @@ pub const UNREACHABLE: &str = concat!(
 
 /// The lines of the shell's Python that raise (`tests` pins them).
 pub mod line {
-    /// `list`'s Python (`python3 -`, so `<stdin>`).
-    pub const L_ERR: u32 = 9;
-    pub const L_CODE: u32 = 14;
-    pub const L_JSON: u32 = 17;
-    pub const L_FOR: u32 = 20;
-    pub const L_ROW: u32 = 22;
-    /// `show`'s Python (`python3 -`, so `<stdin>`).
-    pub const S_DIE_CODE: u32 = 15;
-    pub const S_UNREACHABLE: u32 = 27;
-    pub const S_UNPARSEABLE: u32 = 31;
-    pub const S_UNEXPECTED: u32 = 33;
-    pub const S_ERR: u32 = 36;
-    pub const S_NO_BRIEF: u32 = 43;
-    pub const S_HTML_JSON: u32 = 45;
-    pub const S_JSON: u32 = 53;
-    pub const S_AGO_INT: u32 = 57;
-    pub const S_SIZE_KB: u32 = 65;
-    pub const S_SIZE_MB: u32 = 66;
-    pub const S_ASKED: u32 = 74;
-    pub const S_ASSIGNED: u32 = 77;
-    pub const S_OPTIONS: u32 = 79;
-    pub const S_BRIEF: u32 = 92;
-    pub const S_FOR: u32 = 101;
-    pub const S_C: u32 = 102;
-    pub const S_AT: u32 = 103;
-    pub const S_FILES: u32 = 107;
+    /// `list`'s Python (`python3 -c "$_feedback_list_py"`, so `<string>`;
+    /// the text starts with a newline, so its first line is line 2).
+    pub const L_ERR: u32 = 10;
+    pub const L_CODE: u32 = 15;
+    pub const L_JSON: u32 = 18;
+    pub const L_FOR: u32 = 21;
+    pub const L_ROW: u32 = 23;
+    /// `show`'s Python (`python3 -c "$_feedback_show_py"`, likewise).
+    pub const S_DIE_CODE: u32 = 12;
+    pub const S_UNPARSEABLE: u32 = 19;
+    pub const S_UNEXPECTED: u32 = 21;
+    pub const S_ERR: u32 = 24;
+    pub const S_NO_BRIEF: u32 = 31;
+    pub const S_HTML_JSON: u32 = 33;
+    pub const S_JSON: u32 = 41;
+    pub const S_AGO_INT: u32 = 45;
+    pub const S_SIZE_KB: u32 = 53;
+    pub const S_SIZE_MB: u32 = 54;
+    pub const S_ASKED: u32 = 62;
+    pub const S_ASSIGNED: u32 = 65;
+    pub const S_OPTIONS: u32 = 67;
+    pub const S_BRIEF: u32 = 80;
+    pub const S_FOR: u32 = 89;
+    pub const S_C: u32 = 90;
+    pub const S_AT: u32 = 91;
+    pub const S_FILES: u32 = 95;
     /// `_ticket_files_check_py` (`cli/src/browser.sh`), run by `exec`, so
     /// `<string>`.
     pub const T_SIZE_KB: u32 = 10;
@@ -225,17 +224,6 @@ fn parse_show(rest: &[&str]) -> Result<Ask, String> {
     Ok(Ask::Show { id, json, html })
 }
 
-/// Python's urllib reads `http_proxy` (any case, not empty) and would send
-/// the call to that proxy.
-fn urllib_proxy(env: impl IntoIterator<Item = (OsString, OsString)>) -> bool {
-    env.into_iter().any(|(name, value)| {
-        !value.is_empty()
-            && name
-                .to_str()
-                .is_some_and(|n| n.eq_ignore_ascii_case("http_proxy"))
-    })
-}
-
 /// `k5 feedback list|show ...`: `args` is the whole command line after
 /// `argv[0]`. `None`: the shell CLI answers it (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -248,10 +236,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if !python::family_native(python::here()) {
         return None;
     }
-    let show = matches!(ask, Ok(Ask::Show { .. }));
-    if show && urllib_proxy(std::env::vars_os()) {
-        return None;
-    }
     let settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {
@@ -261,11 +245,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     };
     if prelude::gate(&settings).is_none() {
         // A port curl won't take is the shell's.
-        let text = settings.port_text.as_deref()?;
-        let port = curl_port(text)?;
-        if show && port.to_string() != text {
-            return None;
-        }
+        curl_port(settings.port_text.as_deref()?)?;
     }
     Some(run_with(args, ask, settings))
 }
@@ -296,7 +276,7 @@ fn run_with(args: &[OsString], ask: Result<Ask, String>, mut settings: Settings)
     let mut closing = Closing::default();
     let exit = match ask {
         Ask::List { all, status, json } => list(&mut client, &mut closing, all, &status, json),
-        Ask::Show { id, json, html } => show(&mut client, &id, json, html),
+        Ask::Show { id, json, html } => show(&mut client, &mut closing, &id, json, html),
     };
     closing.flush(&mut client, exit);
     exit
@@ -319,15 +299,36 @@ fn list(client: &mut Client, closing: &mut Closing, all: bool, status: &str, jso
     } else {
         &[]
     };
+    fetch(client, closing, LIST, args, |raw| list_reader(raw, json))
+}
+
+fn show(client: &mut Client, closing: &mut Closing, id: &str, json: bool, html: bool) -> Exit {
+    let id_arg = format!("id={}", quote(id));
+    fetch(client, closing, SHOW, &[id_arg.as_str(), "brief=1"], |raw| {
+        show_reader(&String::from_utf8_lossy(raw), json, html, now())
+    })
+}
+
+/// `resp=$(cli_request <ep> <args>) || resp=""`, then the reader on it:
+/// the transport's line when there was no answer, the
+/// `daemon_unreachable` line when the call failed any other way or the
+/// answer, as `$(…)` holds it, is empty.
+fn fetch(
+    client: &mut Client,
+    closing: &mut Closing,
+    endpoint: &str,
+    args: &[&str],
+    reader: impl FnOnce(&[u8]) -> Shown,
+) -> Exit {
     let passport = client.passport().is_some();
-    match client.call(Channel::Tcp, LIST, Call::Request(args)) {
+    match client.call(Channel::Tcp, endpoint, Call::Request(args)) {
         Ok(r) => {
             closing.answer(&r, passport);
             let raw = super::connections::held(&r.body);
             if raw.is_empty() {
                 unreachable_line().print()
             } else {
-                list_reader(&raw, json).print()
+                reader(&raw).print()
             }
         }
         Err(Error::NoAnswer(n)) => {
@@ -335,18 +336,6 @@ fn list(client: &mut Client, closing: &mut Closing, all: bool, status: &str, jso
             Exit::Error
         }
         Err(_) => unreachable_line().print(),
-    }
-}
-
-fn show(client: &mut Client, id: &str, json: bool, html: bool) -> Exit {
-    let query = urlencode_plus(&[("id", id), ("brief", "1")]);
-    match client.urlopen_get(SHOW, &query) {
-        Ok(r) => show_reader(&String::from_utf8_lossy(&r.body), json, html, now()).print(),
-        Err(_) => Shown::err(
-            err_line("daemon_unreachable", UNREACHABLE) + "\n",
-            Exit::Error,
-        )
-        .print(),
     }
 }
 
@@ -682,24 +671,13 @@ impl Out {
         }
     }
 
-    /// The traceback after what was printed: frames in the heredoc are
-    /// `<stdin>`'s, those in `_ticket_files_check_py` (run by `exec`)
-    /// `<string>`'s.
+    /// The traceback after what was printed: every frame is `<string>`'s,
+    /// the reader's own (`python3 -c`) and `_ticket_files_check_py`'s (run
+    /// by `exec`) alike.
     fn raised(self, r: &Raise) -> Shown {
-        let mut tb = String::from("Traceback (most recent call last):\n");
-        for (n, name) in &r.frames {
-            let file = if name.starts_with("ticket_") {
-                "<string>"
-            } else {
-                "<stdin>"
-            };
-            tb.push_str(&format!("  File \"{file}\", line {n}, in {name}\n"));
-        }
-        tb.push_str(&r.exception);
-        tb.push('\n');
         Shown {
             stdout: self.stdout,
-            stderr: self.stderr + &tb,
+            stderr: self.stderr + &super::traceback(&r.frames, &r.exception),
             exit: Exit::Error,
         }
     }

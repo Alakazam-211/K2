@@ -10,9 +10,7 @@
 //! headers. The normaliser treats only these as expected differences,
 //! each counted (exactly one per request):
 //!
-//! - `User-Agent`: `curl/<version>` from bash (`Python-urllib/<version>`
-//!   from its embedded Python's `urlopen`, whose head the binary writes
-//!   the same way for that call), `k5/<version>` here;
+//! - `User-Agent`: `curl/<version>` from bash, `k5/<version>` here;
 //! - `X-K5-Cli-Version: <version>`: sent by the binary only, dropped;
 //! - `X-K5-Cli-Via`: `fallthrough` from bash, `native` from the binary;
 //! - `X-K5-Cli-Noun: <verb>`: sent by bash only, dropped;
@@ -559,11 +557,10 @@ impl Rig {
             bl.join("\n----\n")
         );
         if c.compare == Compare::OwnerTokenWithPassport {
-            // The token is followed by the next pair, or (urllib's query,
-            // where it comes last) by the end of the query.
-            let sent = |l: &str, t: &str| {
-                l.contains(&format!("token={t}&")) || l.contains(&format!("token={t} HTTP/1.1"))
-            };
+            // The credential is the Bearer header over TCP and on the
+            // cell socket alike.
+            let bearer = |t: &str| format!("Authorization: Bearer {t}\r");
+            let sent = |l: &str, t: &str| l.contains(&bearer(t));
             assert!(
                 bl.iter().all(|l| sent(l, OWNER)),
                 "{name}: bash no longer sends the owner token: {bl:?}"
@@ -574,13 +571,7 @@ impl Rig {
             );
             bl = bl
                 .iter()
-                .map(|l| {
-                    l.replace(&format!("token={OWNER}&"), &format!("token={PASSPORT}&"))
-                        .replace(
-                            &format!("token={OWNER} HTTP/1.1"),
-                            &format!("token={PASSPORT} HTTP/1.1"),
-                        )
-                })
+                .map(|l| l.replace(&bearer(OWNER), &bearer(PASSPORT)))
                 .collect();
         }
         assert_eq!(
@@ -742,9 +733,7 @@ pub fn normalise(r: &Logged, native: bool, verb: &str, case: &str) -> String {
             } else {
                 None
             }
-        } else if line.starts_with("User-Agent: curl/")
-            || line.starts_with("User-Agent: Python-urllib/")
-        {
+        } else if line.starts_with("User-Agent: curl/") {
             ua += 1;
             Some("User-Agent: <ua>")
         } else if line == "X-K5-Cli-Via: fallthrough" {

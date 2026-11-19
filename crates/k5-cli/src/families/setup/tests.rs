@@ -59,9 +59,9 @@ fn the_shell_s_lines() {
         r#"            $'\177') out="${out}${c}" ;;"#,
         r#"            [[:cntrl:]]) printf -v c '\\u%04x' "'$c"; out="${out}${c}" ;;"#,
         // `_setup_send`.
-        r#"    q="token=$(_git_tools_q "$TOKEN")""#,
-        r#"    [ "$as_json" = "1" ] || q="${q}&format=text""#,
-        r#"        _k2_cfg_add url "${BASE_URL}${path}?${q}""#,
+        r#"    [ "$as_json" = "1" ] || q="?format=text""#,
+        r#"        _k2_cfg_add url "${BASE_URL}${path}${q}""#,
+        r#"        _k2_cfg_auth "$TOKEN""#,
         r#"            out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 30 -w $'\n%{http_code}' 2>/dev/null; printf x)""#,
         r#"            _k2_cfg_add data-raw "$body""#,
         r#"                -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null; printf x)""#,

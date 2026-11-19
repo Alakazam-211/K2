@@ -18,8 +18,8 @@
 //!    `kessel` or `chief-of-staff`. A mistake is its line (or the usage),
 //!    exit 2, and nothing is sent.
 //! 4. One `_setup_send` ([`crate::transport::Client::setup_send`]): over
-//!    TCP, never the cell socket, `token=` the shell's TCP token and
-//!    `format=text` but with `--json`. `setup` alone is `GET
+//!    TCP, never the cell socket, the shell's TCP token as Bearer and
+//!    `?format=text` but with `--json`. `setup` alone is `GET
 //!    /cli/first-run/status`; each verb is a `POST` of its JSON body,
 //!    built as `_setup_jstr` writes it ([`body`]). A POST is sent once:
 //!    only a refused connect (nothing reached the daemon) is tried again,

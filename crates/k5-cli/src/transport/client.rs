@@ -2,10 +2,10 @@
 //! sends, its tries and its time limits (the shapes are in
 //! [`crate::transport`]).
 
-use super::encode::{quote, urlencode_plus};
+use super::encode::quote;
 use super::permission::{self, Note};
 use super::skew;
-use super::wire::{self, Answer, Body, Failure, Head, Method, Request, Target};
+use super::wire::{self, Answer, Body, Failure, Method, Request, Target};
 use k2_client::brand::PRODUCT_NAME;
 use std::fmt;
 use std::io;
@@ -100,8 +100,7 @@ pub enum Auth {
     None,
     /// No passport: the owner token, over TCP only.
     Owner(String),
-    /// A passport: the Bearer on the cell socket at `sock`, and `token=`
-    /// over TCP.
+    /// A passport: the Bearer on the cell socket at `sock`, and over TCP.
     Passport {
         passport: Passport,
         sock: Option<PathBuf>,
@@ -165,7 +164,7 @@ impl Healer for SecretsDir {
 /// The channel a request went on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
-    /// Loopback TCP, `token=` in the query.
+    /// Loopback TCP, the credential as Bearer (never in the query).
     Tcp,
     /// The cell socket, the passport as Bearer.
     Uds,
@@ -226,16 +225,10 @@ enum Kind {
     /// `cli_send_json GET`'s request with no query of the caller's, at
     /// most 15 s; no heal, no line, no note.
     PassportProject,
-    /// The embedded Python's `urllib.request.urlopen(req, timeout=30)` of
-    /// a GET over TCP (`k2 tickets show`, `cli/src/feedback.sh`): urllib's
-    /// head ([`Head::Urllib`]), the caller's query and then `token=`, one
-    /// try (urllib never tries again), at most 30 s to connect and 30 s in
-    /// all; no heal, no line, no note.
-    Urlopen,
     /// `_permission_probe` (`cli/src/permission.sh`): a GET of
     /// [`CARDS_ENDPOINT`] with `-G` and no data of the caller's, on the
-    /// cell socket (the passport as Bearer) or over TCP (`token=` as
-    /// curl's `data-urlencode` writes it), never both. Connect 1 s, at
+    /// cell socket (the passport as Bearer) or over TCP (the token as
+    /// Bearer), never both. Connect 1 s, at
     /// most 1 s; only `_k2_curl`'s tries (a refused connect, and a moved
     /// port over TCP); no heal, no line, no note.
     Cards,
@@ -247,7 +240,7 @@ enum Kind {
     /// too); no heal, no line, no note.
     UpdateVersion,
     /// `_setup_send GET` (`cli/src/setup.sh`): `_k2_curl` with a config
-    /// `url` of `<ep>?token=<_git_tools_q T>[&format=text]`, `-s
+    /// `url` of `<ep>[?format=text]` and the token as Bearer, `-s
     /// --connect-timeout 5 --max-time 30`, over TCP. One exchange with
     /// `_k2_curl`'s tries (a refused connect, a moved port); the 503
     /// "migrating" tries and the one heal are `_setup_send`'s own loop
@@ -288,7 +281,6 @@ impl Kind {
                 | Kind::BearerForm
                 | Kind::SidecarGet
                 | Kind::PassportProject
-                | Kind::Urlopen
                 | Kind::Cards
                 | Kind::UpdateVersion
                 | Kind::SetupGet
@@ -307,7 +299,6 @@ impl Kind {
                 | Kind::BearerForm
                 | Kind::SidecarGet
                 | Kind::PassportProject
-                | Kind::Urlopen
                 | Kind::Cards
                 | Kind::UpdateVersion
                 | Kind::SetupGet
@@ -325,18 +316,16 @@ impl Kind {
                 | Kind::BearerForm
                 | Kind::SidecarGet
                 | Kind::PassportProject
-                | Kind::Urlopen
                 | Kind::Cards
                 | Kind::UpdateVersion
                 | Kind::SetupGet
                 | Kind::SetupPost
         )
     }
-    /// `--connect-timeout` (urllib's `timeout`, for [`Kind::Urlopen`]).
+    /// `--connect-timeout`.
     fn connect_timeout(self) -> Duration {
         match self {
             Kind::Probe => PROBE_CONNECT_TIMEOUT,
-            Kind::Urlopen => MAX_TIME,
             Kind::Cards => CARDS_TIME,
             Kind::UpdateVersion => UPDATE_CONNECT_TIMEOUT,
             _ => CONNECT_TIMEOUT,
@@ -344,12 +333,9 @@ impl Kind {
     }
     /// Nothing is ever tried twice: the body is read from stdin (the
     /// shell's `@-` rule is an argument that is exactly `@-`, never one in
-    /// a URL), it is urllib's one try, or `_K2_CURL_TRIES=1`.
+    /// a URL), or `_K2_CURL_TRIES=1`.
     fn once(self) -> bool {
-        matches!(
-            self,
-            Kind::PostJsonStdin | Kind::Urlopen | Kind::UpdateVersion
-        )
+        matches!(self, Kind::PostJsonStdin | Kind::UpdateVersion)
     }
 }
 
@@ -734,7 +720,7 @@ impl Client {
     }
 
     /// A GET of `path` as it is, over TCP, with no credential and no query
-    /// of ours: no `token=`, no `project=`, no Bearer. For what the daemon
+    /// of ours: no `project=`, no Bearer. For what the daemon
     /// shows anyone on this machine (`/boot-status`). A refused or timed
     /// out connect is tried again as `cli_request`'s is; no heal, no note.
     pub fn get_public(&mut self, path: &str) -> Result<Response, Error> {
@@ -758,7 +744,7 @@ impl Client {
     }
 
     /// `_setup_send <GET|POST> <ep> <as_json> [<body>]` (`cli/src/setup.sh`):
-    /// `ep?token=<T>`, then `&format=text` when `text`, over TCP; a POST
+    /// `ep`, then `?format=text` when `text`, the token as Bearer, over TCP; a POST
     /// carries `body` as JSON. Each exchange is `_k2_curl`'s (a refused
     /// connect is tried again, [`Client::refused_before_answer`] counts
     /// those of the last one). Then `_setup_send`'s loop: a GET whose
@@ -814,8 +800,7 @@ impl Client {
 
     /// `k2 respond`'s TCP arm: `args` joined by `&` as a form body, POSTed
     /// to `endpoint` as it is over TCP with the passport as Bearer (a
-    /// config line, before the shell's `-H`s), no `token=` and no
-    /// `project=`. `_k2_curl` with `-s -X POST`, connect 5 s, at most
+    /// config line, before the shell's `-H`s), no `project=`. `_k2_curl` with `-s -X POST`, connect 5 s, at most
     /// 30 s; only a refused connect is tried again. Nothing is read back:
     /// no heal, no no-answer line, no note. Needs a passport.
     pub fn post_form_bearer(&mut self, endpoint: &str, args: &[&str]) -> Result<Response, Error> {
@@ -858,7 +843,7 @@ impl Client {
 
     /// `_cli_use_passport_project`'s request: `/cli/whoami` with the
     /// passport, on the cell socket when there is a live one, then over
-    /// TCP (`token=` the passport) when that failed or its answer, as
+    /// TCP (the passport as Bearer) when that failed or its answer, as
     /// `$(…)` holds it, is empty or says "not served on cell socket".
     /// At most 15 s each; no heal, no line, no note. What `out` holds
     /// after it: the answer's bytes with the NULs and trailing newlines
@@ -887,32 +872,21 @@ impl Client {
         }
     }
 
-    /// The embedded Python's `urlopen` of `endpoint?<query>&token=<T>`
-    /// over TCP ([`Kind::Urlopen`]): `query` is what
-    /// [`urlencode_plus`] made of the caller's pairs, and the TCP token
-    /// goes after it as `urlencode` writes it. The binary's hand-over
-    /// headers as for any call. Any status is an answer (urllib's
-    /// `HTTPError` body is read the same way).
-    pub fn urlopen_get(&mut self, endpoint: &str, query: &str) -> Result<Response, Error> {
-        self.run(
-            Kind::Urlopen,
-            Channel::Tcp,
-            endpoint,
-            &[query],
-            &[],
-            Instant::now(),
-        )
-        .map_err(|f| f.error)
-    }
 
     fn send_json_as(&mut self, kind: Kind, path: &str, payload: &str) -> Result<Response, Error> {
         let post = kind == Kind::SendJsonPost;
         let t0 = Instant::now();
         if self.cell_socket().is_some() {
+            // A POST goes on to TCP only after a failed connect (curl 7) or
+            // "not served on cell socket", as `cli_send`'s.
             match self.run(kind, Channel::Uds, path, &[], payload.as_bytes(), t0) {
-                Ok(r) if !contains(&r.body, NOT_SERVED) && r.status != 0 => return Ok(r),
+                Ok(r) if contains(&r.body, NOT_SERVED) => {}
+                Ok(r) if r.status != 0 => return Ok(r),
+                Ok(_) if post => return Err(maybe_applied(path, t0)),
                 Ok(_) => {}
-                Err(f) if f.sent && post => return Err(maybe_applied(path, t0)),
+                Err(f) if post && f.error.curl_code() != wire::curl::COULDNT_CONNECT => {
+                    return Err(maybe_applied(path, t0))
+                }
                 Err(_) => {}
             }
         }
@@ -1085,7 +1059,6 @@ impl Client {
             | Kind::PostJsonStdin
             | Kind::Public
             | Kind::BearerForm
-            | Kind::Urlopen
             | Kind::SetupGet
             | Kind::SetupPost => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
@@ -1202,18 +1175,23 @@ impl Client {
     ) -> Result<(Target, Request), Error> {
         let mut headers: Vec<(String, String)> = Vec::new();
         let (target, host) = match channel {
-            Channel::Tcp if matches!(kind, Kind::Probe | Kind::BearerForm) => {
-                // A config line read before the command line's `-H`s, as
-                // on the cell socket.
-                let Some(passport) = self.passport() else {
-                    return Err(Error::NoCredential {
-                        endpoint: endpoint.to_string(),
-                    });
+            Channel::Tcp => {
+                // The credential is the first header, an `Authorization:
+                // Bearer` line of the shell's curl config (`_k2_cfg_auth`),
+                // read before the command line's `-H`s. Never the query.
+                let credential = match kind {
+                    Kind::Public | Kind::UpdateVersion => None,
+                    Kind::Probe | Kind::BearerForm => Some(self.passport().map(Passport::as_str)),
+                    _ => Some(self.tcp_token()),
                 };
-                headers.push((
-                    "Authorization".into(),
-                    format!("Bearer {}", passport.as_str()),
-                ));
+                if let Some(credential) = credential {
+                    let Some(token) = credential else {
+                        return Err(Error::NoCredential {
+                            endpoint: endpoint.to_string(),
+                        });
+                    };
+                    headers.push(("Authorization".into(), format!("Bearer {token}")));
+                }
                 (
                     Target::Tcp {
                         host: self.host.clone(),
@@ -1222,13 +1200,6 @@ impl Client {
                     format!("{}:{}", self.host, self.port),
                 )
             }
-            Channel::Tcp => (
-                Target::Tcp {
-                    host: self.host.clone(),
-                    port: self.port,
-                },
-                format!("{}:{}", self.host, self.port),
-            ),
             Channel::Uds => {
                 let no = || Error::NoCellSocket {
                     endpoint: endpoint.to_string(),
@@ -1254,16 +1225,7 @@ impl Client {
         }
 
         let tcp = channel == Channel::Tcp;
-        let token = match (kind, self.tcp_token()) {
-            (Kind::Public | Kind::Probe | Kind::BearerForm | Kind::UpdateVersion, _) => "",
-            (_, Some(t)) => t,
-            (_, None) => {
-                return Err(Error::NoCredential {
-                    endpoint: endpoint.to_string(),
-                })
-            }
-        };
-        let with_project = || format!("token={token}&project={}", quote(&self.project));
+        let with_project = || format!("project={}", quote(&self.project));
         let joined = args.join("&");
         let json = |headers: &mut Vec<(String, String)>| {
             headers.push(("Content-Type".into(), "application/json".into()));
@@ -1328,62 +1290,32 @@ impl Client {
                     }),
                 )
             }
-            Kind::PostJson | Kind::PostJsonStdin => {
-                let path = if tcp {
-                    format!("{endpoint}?token={token}")
-                } else {
-                    endpoint.to_string()
-                };
-                (Method::Post, path, json(&mut headers))
-            }
+            Kind::PostJson | Kind::PostJsonStdin => (Method::Post, endpoint.to_string(), json(&mut headers)),
             Kind::SendJsonGet | Kind::SidecarGet | Kind::PassportProject | Kind::Cards => {
                 let payload = String::from_utf8_lossy(body);
-                let path = if tcp {
-                    let mut data = wire::curl_data_urlencode("token", token);
-                    if !payload.is_empty() {
-                        data.push('&');
-                        data.push_str(&payload);
-                    }
-                    wire::append_get_query(endpoint, &data)
-                } else if payload.is_empty() {
+                let path = if payload.is_empty() {
                     endpoint.to_string()
                 } else {
                     wire::append_get_query(endpoint, &payload)
                 };
                 (Method::Get, path, None)
             }
-            Kind::SendJsonPost => {
-                let path = if tcp {
-                    format!("{endpoint}?token={}", quote(token))
-                } else {
-                    endpoint.to_string()
-                };
-                (Method::Post, path, json(&mut headers))
-            }
+            Kind::SendJsonPost => (Method::Post, endpoint.to_string(), json(&mut headers)),
             Kind::Public | Kind::Probe | Kind::UpdateVersion => {
                 (Method::Get, endpoint.to_string(), None)
             }
             Kind::SetupGet | Kind::SetupPost => {
-                // `_git_tools_q` keeps the same bytes `quote` keeps.
-                let mut path = format!("{endpoint}?token={}", quote(token));
-                for a in args {
-                    path.push('&');
-                    path.push_str(a);
-                }
+                // `${path}${q}`: `?format=text` or nothing.
+                let path = if joined.is_empty() {
+                    endpoint.to_string()
+                } else {
+                    format!("{endpoint}?{joined}")
+                };
                 if kind == Kind::SetupPost {
                     (Method::Post, path, json(&mut headers))
                 } else {
                     (Method::Get, path, None)
                 }
-            }
-            Kind::Urlopen => {
-                let token = urlencode_plus(&[("token", token)]);
-                let path = if joined.is_empty() {
-                    format!("{endpoint}?{token}")
-                } else {
-                    format!("{endpoint}?{joined}&{token}")
-                };
-                (Method::Get, path, None)
             }
             Kind::BearerForm => {
                 headers.push(("Content-Type".into(), wire::FORM_TYPE.into()));
@@ -1402,11 +1334,6 @@ impl Client {
             byte,
         })?;
         let request = Request {
-            head: if kind == Kind::Urlopen {
-                Head::Urllib
-            } else {
-                Head::Curl
-            },
             method,
             target: path,
             host,
@@ -1679,7 +1606,6 @@ mod tests {
             Kind::Probe,
             Kind::SidecarGet,
             Kind::PassportProject,
-            Kind::Urlopen,
             Kind::Cards,
         ] {
             assert!(!k.checks_local_denial(), "{k:?}");
@@ -1722,7 +1648,6 @@ mod tests {
                 false,
                 false,
             ),
-            (Urlopen, false, false, false, false, false, false, true),
             (Cards, false, false, false, false, false, false, false),
             (
                 UpdateVersion,
@@ -1758,8 +1683,6 @@ mod tests {
     fn the_time_limits() {
         let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
         assert_eq!(c.max_time(Kind::Request), Duration::from_secs(30));
-        assert_eq!(c.max_time(Kind::Urlopen), Duration::from_secs(30));
-        assert_eq!(Kind::Urlopen.connect_timeout(), Duration::from_secs(30));
         assert_eq!(
             Kind::UpdateVersion.connect_timeout(),
             Duration::from_secs(2)
@@ -1886,8 +1809,8 @@ mod tests {
         assert!(!r.target.contains("token"));
     }
 
-    /// `_setup_send`'s two: `token=` escaped as `_git_tools_q` does, then
-    /// `format=text` when asked; the POST's body as JSON; the binary's
+    /// `_setup_send`'s two: the token as the Bearer header, then
+    /// `?format=text` when asked; the POST's body as JSON; the binary's
     /// headers and the owner's source; over TCP to the host and port.
     #[test]
     fn the_setup_requests() {
@@ -1907,13 +1830,17 @@ mod tests {
             (r.method, r.target.as_str(), r.host.as_str()),
             (
                 Method::Get,
-                "/cli/first-run/status?token=t.k%2F%2B%3D%20z&format=text",
+                "/cli/first-run/status?format=text",
                 "127.0.0.1:9"
             )
         );
         assert!(r.body.is_none());
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, [VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]);
+        assert_eq!(
+            names,
+            ["Authorization", VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]
+        );
+        assert_eq!(r.headers[0].1, "Bearer t.k/+= z");
         let (_, r) = c
             .build(
                 Kind::SetupPost,
@@ -1925,12 +1852,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             (r.method, r.target.as_str()),
-            (Method::Post, "/cli/first-run/skip?token=t.k%2F%2B%3D%20z")
+            (Method::Post, "/cli/first-run/skip")
         );
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(
             names,
             [
+                "Authorization",
                 VERSION_HEADER,
                 VIA_HEADER,
                 OWNER_SOURCE_HEADER,
@@ -1956,43 +1884,83 @@ mod tests {
                 &[],
             )
             .unwrap();
-        assert_eq!(r.target, "/cli/first-run/status?token=s.t");
+        assert_eq!(r.target, "/cli/first-run/status");
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
+        assert_eq!(names, ["Authorization", VERSION_HEADER, VIA_HEADER]);
+        assert_eq!(r.headers[0].1, "Bearer s.t");
     }
 
-    /// `k2 tickets show`'s urlopen: the caller's query, then `token=` as
-    /// `urlencode` writes it; urllib's head; the binary's headers.
+    /// Over TCP every call but the public GETs carries its credential as
+    /// the first header, `Authorization: Bearer <T>` (the shell's
+    /// `_k2_cfg_auth`, a curl config line read before the `-H`s), and
+    /// never in the query: the owner token, or the passport when there is
+    /// one. `cli_request`'s query starts with `project=`.
     #[test]
-    fn the_urlopen_get() {
-        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o t+".into()));
-        c.owner_from_disk = true;
-        let (target, r) = c
-            .build(
-                Kind::Urlopen,
-                Channel::Tcp,
-                "/cli/feedback/show",
-                &["id=a+b&brief=1"],
-                &[],
-            )
-            .unwrap();
-        assert!(matches!(target, Target::Tcp { port: 9, .. }));
-        assert_eq!(r.target, "/cli/feedback/show?id=a+b&brief=1&token=o+t%2B");
-        assert_eq!(
-            (r.head, r.method, r.body.is_none()),
-            (Head::Urllib, Method::Get, true)
+    fn the_tcp_credential_is_a_bearer_header() {
+        let owner = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o t+".into()));
+        let passport = Client::new(
+            "127.0.0.1",
+            9,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.t").unwrap(),
+                sock: None,
+            },
         );
-        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, [VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]);
-        let (_, r) = c
-            .build(Kind::Urlopen, Channel::Tcp, "/cli/x", &[""], &[])
+        use Kind::*;
+        for (c, want) in [(&owner, "Bearer o t+"), (&passport, "Bearer s.t")] {
+            for k in [
+                Request,
+                RequestPost,
+                PostForm,
+                PostJson,
+                PostJsonStdin,
+                SendJsonGet,
+                SendJsonPost,
+                SidecarGet,
+                PassportProject,
+                Cards,
+                SetupGet,
+                SetupPost,
+            ] {
+                let (_, r) = c.build(k, Channel::Tcp, "/cli/x", &[], &[]).unwrap();
+                assert_eq!(
+                    r.headers.first().map(|(n, v)| (n.as_str(), v.as_str())),
+                    Some(("Authorization", want)),
+                    "{k:?}"
+                );
+                assert!(!r.target.contains("token"), "{k:?}: {}", r.target);
+            }
+        }
+        for k in [Probe, BearerForm] {
+            let (_, r) = passport.build(k, Channel::Tcp, "/cli/x", &[], &[]).unwrap();
+            assert_eq!(r.headers[0], ("Authorization".into(), "Bearer s.t".into()));
+            assert!(matches!(
+                owner.build(k, Channel::Tcp, "/cli/x", &[], &[]),
+                Err(Error::NoCredential { .. })
+            ));
+        }
+        for k in [Public, UpdateVersion] {
+            let (_, r) = owner.build(k, Channel::Tcp, "/cli/x", &[], &[]).unwrap();
+            assert!(r.headers.iter().all(|(n, _)| n != "Authorization"), "{k:?}");
+        }
+        let (_, r) = owner
+            .build(Request, Channel::Tcp, "/cli/x", &["a=1"], &[])
             .unwrap();
-        assert_eq!(r.target, "/cli/x?token=o+t%2B");
-        let c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
-        let (_, r) = c
-            .build(Kind::Request, Channel::Tcp, "/cli/x", &[], &[])
+        assert_eq!(r.target, "/cli/x?project=%2Fp&a=1");
+        let (_, r) = owner
+            .build(SendJsonGet, Channel::Tcp, "/cli/x", &[], b"a=1")
             .unwrap();
-        assert_eq!(r.head, Head::Curl);
+        assert_eq!(r.target, "/cli/x?a=1");
+        let (_, r) = owner
+            .build(PostForm, Channel::Tcp, "/cli/x", &["a=1"], &[])
+            .unwrap();
+        assert_eq!(r.target, "/cli/x?project=%2Fp");
+        let none = Client::new("127.0.0.1", 9, "/p", Auth::None);
+        assert!(matches!(
+            none.build(Request, Channel::Tcp, "/cli/x", &[], &[]),
+            Err(Error::NoCredential { .. })
+        ));
     }
 
     /// `X-K5-Owner-Source: disk` after the Via, only on an owner's call

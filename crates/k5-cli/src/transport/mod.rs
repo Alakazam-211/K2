@@ -43,17 +43,22 @@
 //!
 //! | call | TCP | cell socket |
 //! |---|---|---|
-//! | `cli_request` | `GET <ep>?token=<T>&project=<P>&args` (-G) | `GET <ep>?args` (-G; no `?` with no args) |
-//! | `cli_request_post` | `POST <ep>?token=<T>&project=<P>&args`, empty body, curl's form type | `POST <ep>?args`, likewise |
-//! | `cli_post_form` | `POST <ep>?token=<T>&project=<P>`, body `args`, `Content-Type: application/x-www-form-urlencoded` | `POST <ep>`, likewise |
-//! | `cli_post_json` | `POST <ep>?token=<T>` (no `project=`), `Content-Type: application/json` | `POST <ep>`, likewise |
+//! | `cli_request` | `GET <ep>?project=<P>&args` (-G) | `GET <ep>?args` (-G; no `?` with no args) |
+//! | `cli_request_post` | `POST <ep>?project=<P>&args`, empty body, curl's form type | `POST <ep>?args`, likewise |
+//! | `cli_post_form` | `POST <ep>?project=<P>`, body `args`, `Content-Type: application/x-www-form-urlencoded` | `POST <ep>`, likewise |
+//! | `cli_post_json` | `POST <ep>` (no `project=`), `Content-Type: application/json` | `POST <ep>`, likewise |
 //! | `cli_post_json_stdin` | as `cli_post_json` | none |
-//! | `cli_send_json GET` | `GET <ep>?token=<curl-escaped T>&payload` (-G) | `GET <ep>?payload` (-G) |
-//! | `cli_send_json POST` | `POST <ep>?token=<quoted T>`, JSON | `POST <ep>`, JSON |
-//! | (none: [`client::Client::get_public`]) | `GET <ep>`: no token, no `project=`, no Owner-Source | none |
-//! | `k2 respond`'s own curl ([`client::Client::post_form_bearer`]) | `POST <ep>`, the passport as Bearer (first), body `args`, the form type; no query | none |
-//! | `_permission_probe` ([`client::Client::permission_enabled`]) | `GET /cli/permission/enabled?token=<curl-escaped T>` (-G); connect 1 s, at most 1 s | `GET /cli/permission/enabled` (-G), likewise; never both |
-//! | the embedded Python's `urlopen` in `k2 tickets show` ([`client::Client::urlopen_get`]) | `GET <ep>?<query>&token=<T>`, both as `urllib.parse.urlencode` writes them, with urllib's head ([`wire::Head::Urllib`]); one try, no heal, no line, no note | none |
+//! | `cli_send_json GET` | `GET <ep>?payload` (-G; no `?` with no payload) | `GET <ep>?payload` (-G) |
+//! | `cli_send_json POST` | `POST <ep>`, JSON | `POST <ep>`, JSON |
+//! | (none: [`client::Client::get_public`]) | `GET <ep>`: no credential, no `project=`, no Owner-Source | none |
+//! | `k2 respond`'s own curl ([`client::Client::post_form_bearer`]) | `POST <ep>`, the passport as Bearer, body `args`, the form type; no query | none |
+//! | `_permission_probe` ([`client::Client::permission_enabled`]) | `GET /cli/permission/enabled` (-G); connect 1 s, at most 1 s | `GET /cli/permission/enabled` (-G), likewise; never both |
+//!
+//! The credential is never in the query or on argv: on the cell socket it
+//! is the passport, over TCP the passport or else the owner token, always
+//! as `Authorization: Bearer <T>`, the first header (the shell's
+//! `_k2_cfg_auth`: a line of the curl config on stdin, read before the
+//! command line's `-H`s). Only the public GETs carry none.
 //!
 //! An endpoint that already has a `?` gets the `-G` query, and
 //! `cli_request_post`'s, after `&`; the other POST forms always add `?`,

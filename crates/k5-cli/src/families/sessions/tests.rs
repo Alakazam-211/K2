@@ -110,8 +110,8 @@ fn the_shell_s_lines() {
         r#"        404) echo 4 ;;"#,
         r#"            out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \"#,
         r#"                --connect-timeout 5 --max-time 120 \"#,
-        r#"        if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then"#,
-        r#"        _k2_cfg_add data-urlencode "token=${TOKEN}""#,
+        r#"        if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then"#,
+        r#"        _k2_cfg_auth "$TOKEN""#,
         r#"            -w $'\n%{http_code}' 2>/dev/null || true"#,
     ] {
         assert!(

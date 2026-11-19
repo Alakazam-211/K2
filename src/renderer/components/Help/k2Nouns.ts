@@ -58,6 +58,12 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         blurb: 'Preview: voice rooms on this server. See who is in them; the owner and Admins change and moderate them. People talk from the K2 app.',
         example: 'k2 voice rooms',
       },
+      {
+        noun: 'postal',
+        blurb: 'Friends for an agent here among agents on other machines (handle::label.postal.bot); every step is a card your person answers.',
+        example: 'k2 postal status',
+        beta: true,
+      },
       { noun: 'read', blurb: "Peek at another agent's terminal before injecting.", example: 'k2 read sales --lines 40' },
       { noun: 'talk', blurb: 'Read their screen first, then send, in one call.', example: 'k2 talk sales "ready?"', beta: true },
       { noun: 'terminal', blurb: 'Raw bytes into a terminal, or spawn one (advanced).' },

@@ -392,6 +392,19 @@ describe('deep links and search land on the right workspace and tab', () => {
     expect(document.querySelector('[data-settings-id="projects.heartbeat"]')).toBeTruthy()
   })
 
+  it('the search takes focus when the page opens on its list, not on a link to a workspace', async () => {
+    render(<ProjectsSection />)
+    const search = screen.getByRole('searchbox', { name: 'Search workspaces' })
+    await waitFor(() => expect(document.activeElement).toBe(search))
+    cleanup()
+    useSettingsStore.setState({ initialProjectId: 'd', initialWorkspaceTab: 'schedule' })
+    render(<ProjectsSection />)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(document.activeElement).not.toBe(screen.getByRole('searchbox', { name: 'Search workspaces' }))
+  })
+
   it('a deep link while open moves the selection, and the same link works again after picking another row', () => {
     render(<ProjectsSection />)
     act(() => useSettingsStore.setState({ initialProjectId: 'b', initialWorkspaceTab: 'connections' }))

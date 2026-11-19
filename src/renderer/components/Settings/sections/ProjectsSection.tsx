@@ -430,9 +430,12 @@ export function ProjectsSection(): React.JSX.Element {
   const reorderDropRef = useRef<number | null>(null)
   const dragOverGroupRef = useRef<string | null>(null)
 
-  // Auto-focus search when navigating to Workspaces page
+  // Focus the search when the page opens on its list. Not when it opens on
+  // a workspace (a link to its tab): the field would wear a focus ring there.
   useEffect(() => {
+    if (initialProjectId) return
     requestAnimationFrame(() => searchInputRef.current?.focus())
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on arrival only
   }, [])
 
   // Filter helper for search

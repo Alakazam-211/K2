@@ -128,9 +128,9 @@
 //! failed, 18 an answer cut short, 1 an answer that is not HTTP, 3 a URL
 //! curl won't send. `cli_request` and `cli_request_post` (and their
 //! twins) run curl through `_cli_curl`, whose local check turns a failure
-//! that is this machine's into 75 with no no-answer line
-//! ([`client::locally_denied`]: the OS refused the connect, or `TMPDIR`
-//! can't be used, but never a refused connect).
+//! that is this machine's into 75 (the OS refused the connect) or 76
+//! (`TMPDIR` can't be used), with no no-answer line
+//! ([`client::local_failure`]; never a refused connect).
 //!
 //! # The daemon's version
 //!

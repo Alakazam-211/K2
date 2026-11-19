@@ -51,7 +51,7 @@ use crate::out::json::{self, Text, Value};
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
-use crate::transport::client::{tmpdir_unusable, LOCAL_TRANSPORT_DENIED};
+use crate::transport::client::{tmpdir_unusable, TMPDIR_UNWRITABLE};
 use crate::transport::encode::quote_bytes;
 use crate::transport::wire::curl;
 use crate::transport::{Call, Error};
@@ -151,7 +151,7 @@ fn run_with(args: &[OsString], mut settings: Settings) -> Exit {
     // port that is no port (3), and `_cli_curl` reads that as any failure.
     let Some(port) = settings.port_text.as_deref().and_then(curl_port) else {
         return Exit::from_curl(if tmpdir_unusable() {
-            LOCAL_TRANSPORT_DENIED
+            TMPDIR_UNWRITABLE
         } else {
             curl::URL_MALFORMAT
         });

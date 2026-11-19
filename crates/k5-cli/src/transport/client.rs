@@ -262,7 +262,7 @@ impl Kind {
         matches!(self, Kind::Request | Kind::RequestPost | Kind::Public)
     }
     /// A failure goes through `_cli_curl`'s local check
-    /// ([`locally_denied`]): the two functions that run curl through it.
+    /// ([`local_failure`]): the two functions that run curl through it.
     fn checks_local_denial(self) -> bool {
         matches!(self, Kind::Request | Kind::RequestPost)
     }
@@ -415,16 +415,21 @@ pub enum Error {
     MaybeApplied { endpoint: String, waited: u64 },
     /// `_cli_curl`'s local refusal: the call failed and this machine, not
     /// the daemon, is the likely cause (the OS refused the connect, or
-    /// `TMPDIR` can't be used), so the shell returns
-    /// `_CLI_LOCAL_TRANSPORT_DENIED` ([`LOCAL_TRANSPORT_DENIED`]) and no
-    /// no-answer line. See [`locally_denied`].
-    Denied { endpoint: String },
+    /// `TMPDIR` can't be used), so the shell returns `code` in place of
+    /// curl's ([`LOCAL_TRANSPORT_DENIED`] or [`TMPDIR_UNWRITABLE`]) and no
+    /// no-answer line. See [`local_failure`].
+    Denied { endpoint: String, code: i32 },
 }
 
 /// `_CLI_LOCAL_TRANSPORT_DENIED` (`cli/src/cli-tools-policy.sh`): the code
-/// `_cli_curl` returns in place of curl's when the failure is this
-/// machine's.
+/// `_cli_curl` returns in place of curl's 7 when the OS refused the
+/// connect on this machine. Nothing was sent.
 pub const LOCAL_TRANSPORT_DENIED: i32 = 75;
+
+/// `_CLI_TMPDIR_UNWRITABLE`: the code `_cli_curl` returns in place of
+/// curl's when it failed while `TMPDIR` can't be used. The request may
+/// have gone out.
+pub const TMPDIR_UNWRITABLE: i32 = 76;
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -441,7 +446,7 @@ impl fmt::Display for Error {
                 f,
                 "Error: {PRODUCT_NAME}'s server didn't answer {endpoint} ({waited} s); the request may have been applied. Check before running it again."
             ),
-            Error::Denied { endpoint } => write!(f, "this machine refused the request to {endpoint} (the OS, or TMPDIR)"),
+            Error::Denied { endpoint, .. } => write!(f, "this machine refused the request to {endpoint} (the OS, or TMPDIR)"),
         }
     }
 }
@@ -463,7 +468,7 @@ impl Error {
             Error::Empty { .. } => wire::curl::GOT_NOTHING,
             Error::Broken { curl, .. } => *curl,
             Error::BadTarget { .. } => wire::curl::URL_MALFORMAT,
-            Error::Denied { .. } => LOCAL_TRANSPORT_DENIED,
+            Error::Denied { code, .. } => *code,
             Error::NoCellSocket { .. }
             | Error::NoCredential { .. }
             | Error::MaybeApplied { .. } => 1,
@@ -471,17 +476,16 @@ impl Error {
     }
 }
 
-/// A call that failed, and whether any of its request may have reached
-/// the daemon ([`wire::Failure::sent`]).
+/// A call that failed. Whether a POST on the cell socket goes on to TCP
+/// is read from its curl code, as the shell's `cli_send` reads `$rc`.
 #[derive(Debug)]
 struct Failed {
     error: Error,
-    sent: bool,
 }
 
 impl Failed {
     fn unsent(error: Error) -> Failed {
-        Failed { error, sent: false }
+        Failed { error }
     }
 }
 
@@ -694,24 +698,31 @@ impl Client {
     }
 
     /// `cli_send`: the cell socket when there is a passport with a live
-    /// socket and the route is one it serves, then TCP when that gave no
-    /// usable answer: nothing of the request went out, or the daemon said
-    /// "not served on cell socket" (no handler ran). A GET also goes to
-    /// TCP after a failure or an empty body, as the shell's does (a body
-    /// of only newlines and NULs is empty to it: it holds the answer in
-    /// `$(…)`). A POST that went out never does: a failure is
-    /// [`Error::MaybeApplied`], and an answer, even an empty one, is the
-    /// answer.
+    /// socket and the route is one it serves; its answer when it has one
+    /// (a body of only newlines and NULs is none: the shell holds it in
+    /// `$(…)`) that is not "not served on cell socket". Else a GET goes on
+    /// to TCP, and a POST only when the connect failed (curl 7, or 75 when
+    /// the OS refused it) or the daemon said "not served on cell socket"
+    /// (no handler ran). Any other end of a POST there (28, 52, 56, an
+    /// empty answer, 76, ...) may have run it: [`Error::MaybeApplied`],
+    /// never sent again.
     pub fn send(&mut self, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
         let t0 = Instant::now();
         if self.cell_socket().is_some() && uds_eligible(endpoint) {
             match self.call_from(Channel::Uds, endpoint, call, t0) {
                 Ok(r) if contains(&r.body, NOT_SERVED) => {}
-                Ok(r) if call.is_post() || r.body.iter().any(|b| !matches!(b, b'\n' | 0)) => {
-                    return Ok(r)
-                }
+                Ok(r) if r.body.iter().any(|b| !matches!(b, b'\n' | 0)) => return Ok(r),
+                Ok(_) if call.is_post() => return Err(maybe_applied(endpoint, t0)),
                 Ok(_) => {}
-                Err(f) if f.sent && call.is_post() => return Err(maybe_applied(endpoint, t0)),
+                Err(f)
+                    if call.is_post()
+                        && !matches!(
+                            f.error.curl_code(),
+                            wire::curl::COULDNT_CONNECT | LOCAL_TRANSPORT_DENIED
+                        ) =>
+                {
+                    return Err(maybe_applied(endpoint, t0))
+                }
                 Err(_) => {}
             }
         }
@@ -942,6 +953,7 @@ impl Client {
             Err(Error::BadTarget { .. }) if kind.checks_local_denial() && tmpdir_unusable() => {
                 return Err(Failed::unsent(Error::Denied {
                     endpoint: endpoint.to_string(),
+                    code: TMPDIR_UNWRITABLE,
                 }));
             }
             Err(e) => return Err(Failed::unsent(e)),
@@ -972,24 +984,25 @@ impl Client {
                 {
                     return Err(Failed {
                         error: Error::NoAnswer(no_answer(endpoint, t0, true)),
-                        sent: true,
                     });
                 }
                 a
             }
             Err(f) => {
-                let sent = f.sent();
-                if kind.checks_local_denial() && locally_denied(&f, &self.host) {
+                if let Some(code) = kind
+                    .checks_local_denial()
+                    .then(|| local_failure(&f, &self.host))
+                    .flatten()
+                {
                     return Err(Failed {
                         error: Error::Denied {
                             endpoint: endpoint.to_string(),
+                            code,
                         },
-                        sent,
                     });
                 }
                 return Err(Failed {
                     error: failure(kind, endpoint, f, t0),
-                    sent,
                 });
             }
         };
@@ -1394,22 +1407,23 @@ fn failure(kind: Kind, endpoint: &str, f: Failure, t0: Instant) -> Error {
     }
 }
 
-/// `_cli_transport_is_denied`: whether a failed call is this machine's
-/// doing, as the shell reads curl's `-v` trace. A refused connect never
-/// is. The OS refusing the connect (EPERM, EACCES), an address family it
-/// doesn't have, or no route to `::1` is. Any other failure is when
-/// `TMPDIR` (else `/tmp`) is not a folder this user may write in
+/// `_cli_transport_failure`: the code `_cli_curl` gives a failed call
+/// that is this machine's doing, as the shell reads curl's `-v` trace. A
+/// refused connect never is. The OS refusing the connect (EPERM, EACCES),
+/// an address family it doesn't have, or no route to `::1` is
+/// [`LOCAL_TRANSPORT_DENIED`]. Any other failure is [`TMPDIR_UNWRITABLE`]
+/// when `TMPDIR` (else `/tmp`) is not a folder this user may write in
 /// ([`tmpdir_unusable`]).
-pub fn locally_denied(f: &Failure, host: &str) -> bool {
+pub fn local_failure(f: &Failure, host: &str) -> Option<i32> {
     if let Failure::Connect(e) = f {
         if e.kind() == io::ErrorKind::ConnectionRefused {
-            return false;
+            return None;
         }
         if os_denied(e, host) {
-            return true;
+            return Some(LOCAL_TRANSPORT_DENIED);
         }
     }
-    tmpdir_unusable()
+    tmpdir_unusable().then_some(TMPDIR_UNWRITABLE)
 }
 
 #[cfg(unix)]
@@ -1555,7 +1569,20 @@ mod tests {
                 },
                 3,
             ),
-            (Error::Denied { endpoint: ep() }, 75),
+            (
+                Error::Denied {
+                    endpoint: ep(),
+                    code: 75,
+                },
+                75,
+            ),
+            (
+                Error::Denied {
+                    endpoint: ep(),
+                    code: 76,
+                },
+                76,
+            ),
             (
                 Error::MaybeApplied {
                     endpoint: ep(),
@@ -1579,18 +1606,25 @@ mod tests {
         ));
     }
 
-    /// `_cli_transport_is_denied`'s reading of a failed connect: a refused
-    /// one never is the machine's; the OS refusing it is.
+    /// `_cli_transport_failure`'s reading of a failed connect: a refused
+    /// one never is the machine's; the OS refusing it is, 75.
     #[cfg(unix)]
     #[test]
     fn the_os_refusing_a_connect_is_local() {
         let e = |n: i32| io::Error::from_raw_os_error(n);
-        assert!(!locally_denied(
-            &Failure::Connect(io::Error::from(io::ErrorKind::ConnectionRefused)),
-            "127.0.0.1"
-        ));
+        assert_eq!(
+            local_failure(
+                &Failure::Connect(io::Error::from(io::ErrorKind::ConnectionRefused)),
+                "127.0.0.1"
+            ),
+            None
+        );
         for n in [libc::EPERM, libc::EACCES, libc::EAFNOSUPPORT] {
-            assert!(locally_denied(&Failure::Connect(e(n)), "127.0.0.1"), "{n}");
+            assert_eq!(
+                local_failure(&Failure::Connect(e(n)), "127.0.0.1"),
+                Some(LOCAL_TRANSPORT_DENIED),
+                "{n}"
+            );
         }
         assert!(os_denied(&e(libc::ENETUNREACH), "::1"));
         assert!(!os_denied(&e(libc::ENETUNREACH), "127.0.0.1"));
@@ -1984,13 +2018,14 @@ mod tests {
         assert_eq!(
             order,
             [
+                "Authorization",
                 WOULD_REFUSE_HEADER,
                 VERSION_HEADER,
                 VIA_HEADER,
                 OWNER_SOURCE_HEADER
             ]
         );
-        assert_eq!(got[3].1, "disk");
+        assert_eq!(got[4].1, "disk");
         assert!(names(&c, Kind::Public)
             .iter()
             .all(|(n, _)| n != OWNER_SOURCE_HEADER));

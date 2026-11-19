@@ -72,9 +72,11 @@ pub enum Exit {
     /// Any other code curl ends with, passed on as it is: a call whose
     /// last step is curl ends with it, as the shell runs under `set -e`
     /// (28 no answer in time, 52 an empty reply, 55 and 56 a write or a
-    /// read that failed, 18 an answer cut short), and 75, the code
-    /// `_cli_curl` gives a failure that is this machine's
-    /// ([`crate::transport::client::LOCAL_TRANSPORT_DENIED`]). Not in
+    /// read that failed, 18 an answer cut short), and the two codes
+    /// `_cli_curl` gives a failure that is this machine's: 75, a connect
+    /// the OS refused ([`crate::transport::client::LOCAL_TRANSPORT_DENIED`]),
+    /// and 76, a failure while TMPDIR can't be used
+    /// ([`crate::transport::client::TMPDIR_UNWRITABLE`]). Not in
     /// [`Exit::ALL`]: the number is the outcome's, not a code of the
     /// shell's own. [`Exit::from_curl`] makes one.
     Curl(i32),
@@ -120,7 +122,7 @@ impl Exit {
         }
     }
 
-    /// The exit for curl's code `code` (or `_cli_curl`'s 75) passed on:
+    /// The exit for curl's code `code` (or `_cli_curl`'s 75 and 76) passed on:
     /// the named code when it has a name, else [`Exit::Curl`].
     pub fn from_curl(code: i32) -> Exit {
         Exit::ALL
@@ -140,7 +142,7 @@ mod tests {
         assert_eq!(Exit::from_curl(7), Exit::DaemonUnreachable);
         assert_eq!(Exit::from_curl(3), Exit::Refused);
         assert_eq!(Exit::from_curl(1), Exit::Error);
-        for code in [18, 28, 52, 55, 56, 75] {
+        for code in [18, 28, 52, 55, 56, 75, 76] {
             assert_eq!(Exit::from_curl(code), Exit::Curl(code));
             assert_eq!(Exit::from_curl(code).code(), code);
         }

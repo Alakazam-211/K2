@@ -154,6 +154,7 @@ pub(crate) fn build() -> serde_json::Value {
                     waiting_total: "1".into(),
                     stale: Default::default(),
                     read: Default::default(),
+                    home_unread: String::new(),
                 },
                 &ctx(1_760_960_000_128),
             ),
@@ -393,6 +394,7 @@ fn badge(stale: StaleHint) -> BadgePush {
         waiting_total: "1".into(),
         stale,
         read: Default::default(),
+        home_unread: String::new(),
     }
 }
 

@@ -165,6 +165,7 @@ fn canary_events() -> Vec<PushEvent> {
             waiting_total: "1".into(),
             stale: Default::default(),
             read: ReadHint::of(vec![ReadEntry { kind: ReadKind::Thread, id: "read-canary-31".into(), seq: 7 }]),
+            home_unread: String::new(),
         }),
         // Sew S30: an agent's chat post waits for approval (no body ever).
         PushEvent::ChatApprovalRequested {
@@ -405,6 +406,7 @@ fn the_stale_hint_carries_ids_and_seqs_only() {
         waiting_total: "1".into(),
         stale: stale.clone(),
         read: Default::default(),
+        home_unread: String::new(),
     });
     let (sk2, mut k2) = phone_key(51);
     k2.v = 2;
@@ -471,6 +473,7 @@ fn the_stale_hint_carries_ids_and_seqs_only() {
         waiting_total: "0".into(),
         stale: StaleHint::of(many),
         read: Default::default(),
+        home_unread: String::new(),
     };
     let ctx = e2e::SealCtx { kid: "k".into(), ctr: 1, ts: 1, stamp: PushStamp::default(), badge_key: "b".into() };
     let fitted = e2e::fit_nudge_in(&e2e::nudge_plaintext_in(&b, &ctx, seal::Format::V2), seal::Format::V2).expect("fits");
@@ -541,6 +544,7 @@ fn read_badge(read: ReadHint) -> PushEvent {
         waiting_total: "1".into(),
         stale: StaleHint::of(vec![("c-stale".into(), 11)]),
         read,
+        home_unread: String::new(),
     })
 }
 
@@ -702,6 +706,7 @@ fn every_badge_and_alert_has_what_the_phone_matches_on() {
         waiting_total: "0".into(),
         stale: Default::default(),
         read: read.clone(),
+        home_unread: String::new(),
     });
     cloud.dispatch_in_mode(&zero, "bk-test", &[apns.clone()], PushE2eMode::Off).expect("plain");
     let zeroes = relay.calls()[0].1["payload"]["data"].clone();
@@ -761,6 +766,7 @@ fn the_nudge_fitter_trims_stale_first_then_read() {
         waiting_total: "2".into(),
         stale: StaleHint { pairs: stale, more: true },
         read: ReadHint { entries: read, more: false },
+        home_unread: String::new(),
     };
     let ctx = |sub: String| e2e::SealCtx {
         kid: "0011223344556677".into(),
@@ -1370,7 +1376,7 @@ fn msg_rides_only_inside_sealed_alerts() {
     assert!(!wire.contains(MSG_CANARY) && !wire.contains("\"msg\""), "{wire}");
     // The nudge plaintext never has msg (a badge push has no post).
     let ctx = e2e::SealCtx { kid: "k".into(), ctr: 1, ts: 1, stamp: PushStamp::default(), badge_key: "b".into() };
-    let badge = BadgePush { principal: "o".into(), device_usernames: vec![], unread_total: "1".into(), waiting_total: "0".into(), stale: Default::default(), read: Default::default() };
+    let badge = BadgePush { principal: "o".into(), device_usernames: vec![], unread_total: "1".into(), waiting_total: "0".into(), stale: Default::default(), read: Default::default(), home_unread: String::new() };
     assert!(e2e::nudge_plaintext(&badge, &ctx).get("msg").is_none());
 }
 
@@ -1717,6 +1723,7 @@ fn stale_badge() -> BadgePush {
             entries: vec![ReadEntry { kind: ReadKind::Project, id: "read-canary-31".into(), seq: 9 }],
             more: true,
         },
+        home_unread: String::new(),
     }
 }
 
@@ -2494,4 +2501,198 @@ fn a_ring_probe_that_says_no_or_gets_no_answer_still_rings() {
     let calls = relay.calls();
     assert_eq!(calls.len(), 1, "no probe within the retry window: {calls:?}");
     assert!(calls[0].2);
+}
+
+// ── Home chat (prd-home-chat-pushes-v1 §5; vs-live HC-8, HC-10, HC-11, HC-13) ──
+
+const HC_SECRET: &str = "HC-SENTINEL-TEXT-5150";
+const HC_CANARIES: &[&str] = &[HC_SECRET, "SenderCanaryName", "ChannelCanaryName", "hc-conv-canary-901", "880011223344", "sender-canary", "member-canary-42"];
+
+fn home_chat_event(text: &str) -> PushEvent {
+    PushEvent::HomeChat(HomeChatPush {
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        reason: HomeChatReason::Mention,
+        conversation_id: "hc-conv-canary-901".into(),
+        dm: false,
+        message_id: "880011223344".into(),
+        count: 1,
+        mention: true,
+        sender_ext: "k2:connect:sender-canary".into(),
+        sender_member_id: "member-canary-42".into(),
+        sender_name: "SenderCanaryName".into(),
+        channel_name: "ChannelCanaryName".into(),
+        unread_total: "3".into(),
+        waiting_total: "1".into(),
+        home_unread: "2".into(),
+        preview: text.into(),
+        msg: Some(HomeChatMsg {
+            id: "880011223344".into(),
+            conversation_id: "hc-conv-canary-901".into(),
+            from: "k2:connect:sender-canary".into(),
+            at: 1_800_000_000,
+            text: text.into(),
+            truncated: false,
+        }),
+        passive: false,
+    })
+}
+
+/// HC-8 (privacy): a Home chat push to a phone with E2E off, or with no
+/// key, is the generic payload byte for byte: `K2` / `New message`, no
+/// names, no ids, no text, whatever the phone's own previews say.
+#[test]
+fn a_home_chat_push_to_a_keyless_or_e2e_off_phone_is_generic_byte_for_byte() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_, k) = phone_key(61);
+    let devices = vec![register("hc-off-1", "apns", "tok-hc-off-1", true, None), register("hc-off-2", "fcm", "tok-hc-off-2", true, Some(&k))];
+    let event = home_chat_event(HC_SECRET);
+    let stamp = PushStamp { subdomain: "rosson".into(), instance_id: legacy_golden::GOLDEN_INSTANCE.into() };
+    for (mode, devs) in [(PushE2eMode::Off, &devices[..]), (PushE2eMode::SealedWhenSupported, &devices[..1]), (PushE2eMode::SealedOnly, &devices[..1])] {
+        let url = unique_url("hc-generic");
+        let relay = Relay::new(true);
+        e2e::note_relay_caps(&url, true, false);
+        tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, devs, mode).expect("dispatch");
+        let calls = relay.calls();
+        assert_eq!(calls.len(), 1, "{mode:?}: one generic call");
+        let (_, body, sealed) = &calls[0];
+        assert!(!sealed, "{mode:?}");
+        let want = e2e::generic_payload(&event, &stamp, LEAK_BK);
+        assert_eq!(serde_json::to_string(&body["payload"]).expect("json"), serde_json::to_string(&want).expect("json"), "{mode:?}: byte for byte");
+        let wire = body.to_string();
+        for c in HC_CANARIES {
+            assert!(!wire.contains(c), "{mode:?}: {c:?} in the clear: {wire}");
+        }
+        assert_eq!((body["payload"]["title"].clone(), body["payload"]["body"].clone()), (serde_json::json!("K2"), serde_json::json!("New message")));
+        assert_eq!(body["payload"]["data"]["kind"], "home_chat");
+        assert_eq!(body["payload"]["data"]["homeUnread"], "2", "HC-13: the Home count rides the generic lane");
+        assert!(body["payload"].get("collapseId").is_none() && body["payload"].get("threadId").is_none(), "HC-9");
+    }
+}
+
+/// D5, D6, HC-21: names and text ride only inside the seal. A phone with
+/// previews on shows the text; one with previews off shows `Mentioned you`
+/// on the lock screen, with the text only in its sealed `msg`. Nothing in
+/// the clear, the attempt ring or the device log.
+#[test]
+fn home_chat_names_and_text_ride_only_inside_the_seal() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (sk1, k1) = phone_key(62);
+    let (sk2, k2) = phone_key(63);
+    let on_id = ring_device("hc-on");
+    let off_id = ring_device("hc-off");
+    let devices = vec![register(&on_id, "apns", "tok-hc-on", true, Some(&k1)), register(&off_id, "fcm", "tok-hc-prev-off", false, Some(&k2))];
+    let event = home_chat_event(HC_SECRET);
+    let url = unique_url("hc-sealed");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, false);
+    tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1);
+    let (_, body, sealed) = &calls[0];
+    assert!(*sealed);
+    let wire = body.to_string();
+    for c in HC_CANARIES {
+        assert!(!wire.contains(c), "{c:?} in the clear: {wire}");
+    }
+    let blob = |i: usize| body["devices"][i]["e2e"].as_str().expect("e2e").to_string();
+    let on: serde_json::Value = serde_json::from_slice(&seal::open(SealKind::Alert, &sk1, &k1.psk, &blob(0)).expect("open")).expect("json");
+    let off: serde_json::Value = serde_json::from_slice(&seal::open(SealKind::Alert, &sk2, &k2.psk, &blob(1)).expect("open")).expect("json");
+    assert_eq!(on["kind"], "home_chat");
+    assert_eq!(on["title"], "#ChannelCanaryName · SenderCanaryName");
+    assert_eq!(on["body"], HC_SECRET);
+    assert_eq!(on["group"], "hc:hc-conv-canary-901");
+    assert_eq!(on["data"], event.data().to_value());
+    assert_eq!(on["msg"]["text"], HC_SECRET);
+    assert!(on["msg"].get("fromName").is_none() && on["msg"].get("mention").is_none(), "HC-10: not repeated in msg");
+    assert_eq!(off["body"], "Mentioned you", "the phone's previews off: the fixed body");
+    assert_eq!(off["msg"]["text"], HC_SECRET, "the text rides only in the sealed msg");
+    for id in [&on_id, &off_id] {
+        let rec = attempts::recent(Some(id)).last().cloned().expect("an attempt");
+        assert_eq!(rec.kind, "home_chat");
+        let json = serde_json::to_string(&rec).expect("json");
+        for c in HC_CANARIES {
+            assert!(!json.contains(c) && !rec.line().contains(c), "{c:?} in the attempt ring");
+        }
+    }
+    let log = format!("{:?}", super::device_log::recent(None));
+    for c in HC_CANARIES {
+        assert!(!log.contains(c), "{c:?} in the device log");
+    }
+    // Without text (a preview switch off), nothing to cut and the fixed body.
+    let PushEvent::HomeChat(mut bare) = home_chat_event("") else { unreachable!() };
+    bare.msg = None;
+    let bare = PushEvent::HomeChat(bare);
+    assert_eq!(bare.body(), "Mentioned you");
+    assert!(!bare.has_preview());
+}
+
+/// HC-10: the largest Home chat alert (names of 64 four-byte characters, a
+/// 120-character four-byte text, the longest ids) still fits format 1.
+#[test]
+fn the_largest_home_chat_alert_fits_format_one() {
+    let wide = |n: usize| "\u{1D538}".repeat(n);
+    let PushEvent::HomeChat(mut h) = home_chat_event(&wide(120)) else { unreachable!() };
+    h.sender_name = wide(64);
+    h.channel_name = wide(64);
+    h.conversation_id = "9".repeat(19);
+    h.message_id = "9".repeat(19);
+    h.sender_member_id = "9".repeat(19);
+    h.sender_ext = format!("k2:connect:{}", uuid::Uuid::new_v4());
+    h.count = 99;
+    if let Some(m) = h.msg.as_mut() {
+        m.id = "9".repeat(19);
+        m.conversation_id = "9".repeat(19);
+        m.from = h.sender_ext.clone();
+    }
+    let event = PushEvent::HomeChat(h);
+    let ctx = e2e::SealCtx {
+        kid: "0123456789abcdef".into(),
+        ctr: 1_800_000_000_000,
+        ts: 1_800_000_000,
+        stamp: PushStamp { subdomain: "s".repeat(63), instance_id: uuid::Uuid::new_v4().to_string() },
+        badge_key: LEAK_BK.into(),
+    };
+    let v = e2e::alert_plaintext(&event, &ctx).expect("sealable");
+    let fitted = e2e::fit_alert_in(&v, seal::Format::V1).expect("fits format 1");
+    assert!(fitted.len() <= seal::Format::V1.max_json(SealKind::Alert));
+    let (_, k) = phone_key(64);
+    seal::seal_in(SealKind::Alert, seal::Format::V1, &k.public_key, &k.psk, &fitted).expect("seals");
+}
+
+/// HC-11, HC-13: `ReadKind::Home` is `h:<conv>:<message id>`, the cursor
+/// kind `home` maps to it, and the nudge carries `homeUnread` (format 1
+/// fits; an impossible server name drops it before the nudge would fail).
+#[test]
+fn home_read_hints_and_home_unread_on_the_nudge() {
+    let hint = ReadHint::of(vec![ReadEntry { kind: ReadKind::Home, id: "901".into(), seq: 880011 }]);
+    assert_eq!(hint.wire(), "h:901:880011");
+    assert_eq!(ReadKind::of_cursor(crate::home_chat::READ_KIND), Some(ReadKind::Home));
+    let b = BadgePush {
+        principal: "o".into(),
+        device_usernames: vec![],
+        unread_total: "1".into(),
+        waiting_total: "0".into(),
+        stale: Default::default(),
+        read: Default::default(),
+        home_unread: "12".into(),
+    };
+    let ctx = e2e::SealCtx {
+        kid: "0123456789abcdef".into(),
+        ctr: 1_800_000_000_000,
+        ts: 1_800_000_000,
+        stamp: PushStamp { subdomain: "rosson-office".into(), instance_id: uuid::Uuid::new_v4().to_string() },
+        badge_key: LEAK_BK.into(),
+    };
+    let v1: serde_json::Value = serde_json::from_slice(&e2e::fit_nudge_in(&e2e::nudge_plaintext(&b, &ctx), seal::Format::V1).expect("fits format 1")).expect("json");
+    assert!(v1["data"].get("homeUnread").is_none(), "format 1: no room, never carried");
+    assert_eq!(v1["data"]["unreadTotal"], "1");
+    let wide = e2e::SealCtx { stamp: PushStamp { subdomain: "s".repeat(63), instance_id: uuid::Uuid::new_v4().to_string() }, ..ctx };
+    let v2: serde_json::Value = serde_json::from_slice(&e2e::fit_nudge_in(&e2e::nudge_plaintext_in(&b, &wide, seal::Format::V2), seal::Format::V2).expect("fits format 2")).expect("json");
+    assert_eq!(v2["data"]["homeUnread"], "12", "format 2 carries it, even with the longest server name");
+    assert_eq!(PushEvent::Badge(b).data().get("homeUnread"), Some("12"));
 }

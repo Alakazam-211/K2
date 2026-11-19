@@ -140,6 +140,8 @@ pub fn kind_label(event: &PushEvent, lane: Lane) -> &'static str {
             super::CallPushState::Ended => "call_ended",
             super::CallPushState::Answered => "call_answered",
         },
+        // The kind only: never the reason, a name or any text (HC-21).
+        PushEvent::HomeChat(_) => "home_chat",
     }
 }
 

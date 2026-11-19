@@ -43,6 +43,58 @@ pub const BADGE_CAP: u32 = 99;
 
 static SETTING_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// The env var that turns Home chat phone pushes on
+/// (prd-home-chat-pushes-v1 §7).
+pub const PUSH_ENV: &str = "K2_HOME_CHAT_PUSH";
+/// The feature key `/boot-status` lists while Home chat pushes are on and
+/// Home chat runs.
+pub const PUSH_FEATURE: &str = "home-chat-push-v1";
+/// The read-hint kind of a Home conversation (`h:<conv>:<message id>`,
+/// HC-11). Never a stored read cursor kind: Sew keeps Home read states.
+pub const READ_KIND: &str = "home";
+
+static PUSH_SETTING: AtomicBool = AtomicBool::new(false);
+/// `homeChatPushPreviews` (D6, Rosson 11-18: on when the owner turns
+/// pushes on; the text is sealed to the person's own device).
+static PUSH_PREVIEWS: AtomicBool = AtomicBool::new(true);
+
+/// Sync the persisted `homeChatPush` setting into this process.
+pub fn set_push_enabled(on: bool) {
+    PUSH_SETTING.store(on, Ordering::Relaxed);
+}
+
+/// Sync the persisted `homeChatPushPreviews` setting into this process.
+pub fn set_push_previews(on: bool) {
+    PUSH_PREVIEWS.store(on, Ordering::Relaxed);
+}
+
+/// Home chat phone pushes are on: [`PUSH_ENV`] or the persisted switch,
+/// and Home chat itself ([`enabled`]). Default off until proven. Off, the
+/// person feed poller still runs for DM calls; message kinds are dropped.
+pub fn push_enabled() -> bool {
+    if !enabled() {
+        return false;
+    }
+    if let Ok(v) = std::env::var(PUSH_ENV) {
+        if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") {
+            return true;
+        }
+    }
+    PUSH_SETTING.load(Ordering::Relaxed)
+}
+
+/// Message text may reach K2's push path: pushes on and the owner's
+/// `homeChatPushPreviews` on (D6). Off, K2 strips Sew's preview itself and
+/// the sweep turns Sew's `notifications.mgmt_preview` off (HC-16).
+pub fn push_previews_allowed() -> bool {
+    push_enabled() && PUSH_PREVIEWS.load(Ordering::Relaxed)
+}
+
+/// The owner's `homeChatPushPreviews` as stored (whatever the push switch).
+pub fn push_previews_setting() -> bool {
+    PUSH_PREVIEWS.load(Ordering::Relaxed)
+}
+
 /// Sync the persisted `home_chat` setting into this process.
 pub fn set_enabled(on: bool) {
     SETTING_ENABLED.store(on, Ordering::Relaxed);

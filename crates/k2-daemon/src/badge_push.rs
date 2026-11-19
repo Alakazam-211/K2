@@ -95,12 +95,20 @@ pub trait BadgeEnv {
     fn send(&self, event: PushEvent);
     /// A chat's newest Thread seq now (`None` = unknown: left out).
     fn latest_seq(&self, conversation_id: &str) -> Option<i64>;
+    /// The person's unread Home chat conversations (prd-home-chat-pushes-v1
+    /// HC-13; `None` = not known: left out, and never a reason to send).
+    fn home_unread(&self, person: &str) -> Option<u32> {
+        let _ = person;
+        None
+    }
 }
 
 #[derive(Debug, Default, Clone)]
 struct Entry {
     /// The totals this person's phones were last told.
     last_told: Option<Totals>,
+    /// The `homeUnread` they were last told (HC-13).
+    last_home: Option<u32>,
     /// When the last badge push went out.
     last_send: Option<Instant>,
     /// A send scheduled for the end of the window.
@@ -266,7 +274,8 @@ impl Coalescer {
         let pairs: Vec<(String, i64)> =
             stale.iter().rev().filter_map(|c| env.latest_seq(c).map(|s| (c.clone(), s))).collect();
         let read = ReadHint::of(read.into_iter().rev().collect());
-        if e.last_told == Some(totals) && pairs.is_empty() && read.is_empty() {
+        let home = env.home_unread(person);
+        if e.last_told == Some(totals) && (home.is_none() || e.last_home == home) && pairs.is_empty() && read.is_empty() {
             return;
         }
         let devices = env.devices(person);
@@ -279,6 +288,9 @@ impl Coalescer {
             return;
         }
         e.last_told = Some(totals);
+        if home.is_some() {
+            e.last_home = home;
+        }
         e.last_send = Some(now);
         for r in &read.entries {
             let m = e.mark(r.kind, &r.id);
@@ -291,6 +303,7 @@ impl Coalescer {
             waiting_total: totals.waiting_total.to_string(),
             stale: k2_core::push::StaleHint::of(pairs),
             read,
+            home_unread: home.map(|n| n.to_string()).unwrap_or_default(),
         }));
     }
 
@@ -305,16 +318,35 @@ impl Coalescer {
 /// People, prefs, devices and read state from the daemon's stores.
 pub struct DaemonEnv;
 
+/// A person's Thread and project totals. A Voice & Chat only login has no
+/// Threads, tickets or projects here (prd-voice-chat-only-members-v1 §6.4):
+/// zero, so its badge is Home chat's alone (HC-12, HC-13).
+pub(crate) fn totals_for(person: &str) -> Option<Totals> {
+    let people = k2_core::notify_prefs::People::load().ok()?;
+    if is_voice_chat_login(&people, person) {
+        return Some(Totals { total: 0, waiting_total: 0 });
+    }
+    let p = k2_core::read_state::Person::of_login(&people, person);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if !k2_core::read_state::tables_exist(&conn) {
+        return None;
+    }
+    k2_core::read_state::totals(&conn, &p, k2_core::read_state::now_secs()).ok()
+}
+
+/// `person` is an enabled Voice & Chat only login.
+fn is_voice_chat_login(people: &k2_core::notify_prefs::People, person: &str) -> bool {
+    people.user(person).is_some_and(|u| !u.disabled && u.role == k2_core::connect_users::Role::VoiceChat)
+}
+
 impl BadgeEnv for DaemonEnv {
     fn totals(&self, person: &str) -> Option<Totals> {
-        let people = k2_core::notify_prefs::People::load().ok()?;
-        let p = k2_core::read_state::Person::of_login(&people, person);
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        if !k2_core::read_state::tables_exist(&conn) {
-            return None;
-        }
-        k2_core::read_state::totals(&conn, &p, k2_core::read_state::now_secs()).ok()
+        totals_for(person)
+    }
+
+    fn home_unread(&self, person: &str) -> Option<u32> {
+        crate::home_chat::chat_push::home_unread_for_person(person)
     }
 
     fn devices(&self, person: &str) -> Vec<String> {
@@ -362,9 +394,13 @@ pub(crate) fn person_bell_devices(person: &str) -> Vec<String> {
     if !prefs.bell(person).on {
         return Vec::new();
     }
+    // HC-12: a Voice & Chat only login's phones get badge pushes for Home
+    // chat (read hints, `homeUnread`); `device_person` stays as it is, so
+    // they still get no Thread, ticket or project push.
+    let home_only = is_voice_chat_login(&people, person);
     let mut out: Vec<String> = devices
         .into_iter()
-        .filter(|d| people.device_person(&d.username).as_deref() == Some(person))
+        .filter(|d| people.device_person(&d.username).as_deref() == Some(person) || (home_only && d.username.eq_ignore_ascii_case(person)))
         .map(|d| d.username)
         .collect();
     out.sort();
@@ -498,6 +534,13 @@ fn alert_note(event: &PushEvent) -> Option<(String, ReadKind, String, i64, Optio
         PushEvent::ProjectPost(p) => {
             Some((p.principal.clone(), ReadKind::Project, p.group_id.clone(), p.seq, totals(&p.unread_total, &p.waiting_total)))
         }
+        // HC-11: a Home chat alert, at its newest message id (a Sew id fits
+        // i64; a non-numeric one is refused). Never `note_stale` for Home
+        // conversations: that reads a Thread seq.
+        PushEvent::HomeChat(h) => {
+            let seq = h.message_id.parse::<i64>().ok()?;
+            Some((h.principal.clone(), ReadKind::Home, h.conversation_id.clone(), seq, totals(&h.unread_total, &h.waiting_total)))
+        }
         _ => None,
     }
 }
@@ -574,6 +617,7 @@ mod tests {
         blocked: Cell<bool>,
         sent: RefCell<Vec<BadgePush>>,
         seqs: RefCell<HashMap<String, i64>>,
+        home: Cell<Option<u32>>,
     }
 
     impl Fake {
@@ -620,6 +664,74 @@ mod tests {
         fn latest_seq(&self, conversation_id: &str) -> Option<i64> {
             self.seqs.borrow().get(conversation_id).copied()
         }
+        fn home_unread(&self, _person: &str) -> Option<u32> {
+            self.home.get()
+        }
+    }
+
+    /// prd-home-chat-pushes-v1 HC-11, HC-13: after a Home chat alert, a read
+    /// of it rides ONE badge push as `h:<conv>:<message id>` with
+    /// `homeUnread`; a later read with no new alert sends no hint; a change
+    /// of the Home count alone corrects the badge; an unknown count never
+    /// sends one.
+    #[test]
+    fn a_home_read_after_an_alert_rides_an_h_hint_with_home_unread() {
+        let env = Fake::with("vc-callee", &["vc-callee"], 0, 0);
+        env.home.set(Some(1));
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_alert_sent("vc-callee", ReadKind::Home, "901", 880011, Some(Totals { total: 0, waiting_total: 0 }));
+        c.note_read("vc-callee", ReadKind::Home, "901", 880011);
+        c.trigger(&env, "vc-callee", t0);
+        let s = env.sent();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].read.wire(), "h:901:880011");
+        assert_eq!(s[0].home_unread, "1");
+        c.note_read("vc-callee", ReadKind::Home, "901", 880012);
+        c.trigger(&env, "vc-callee", t0 + WINDOW + Duration::from_secs(1));
+        c.tick(&env, t0 + WINDOW * 2 + Duration::from_secs(2));
+        assert_eq!(env.sent().len(), 1, "no alert since: no hint, nothing changed");
+        env.home.set(Some(0));
+        c.trigger(&env, "vc-callee", t0 + WINDOW * 3);
+        c.tick(&env, t0 + WINDOW * 4);
+        let s = env.sent();
+        assert_eq!(s.len(), 2, "the Home count changed");
+        assert_eq!((s[1].home_unread.as_str(), s[1].read.is_empty()), ("0", true));
+        env.home.set(None);
+        c.trigger(&env, "vc-callee", t0 + WINDOW * 6);
+        c.tick(&env, t0 + WINDOW * 7);
+        assert_eq!(env.sent().len(), 2, "unknown is never a reason to send");
+    }
+
+    /// HC-11: a Home chat alert notes `ReadKind::Home` at its message id; a
+    /// non-numeric id is refused.
+    #[test]
+    fn a_home_chat_alert_is_noted_at_its_message_id() {
+        let push = |msg: &str| {
+            PushEvent::HomeChat(k2_core::push::HomeChatPush {
+                principal: "vc-callee".into(),
+                device_usernames: vec!["vc-callee".into()],
+                reason: k2_core::push::HomeChatReason::Dm,
+                conversation_id: "900".into(),
+                dm: true,
+                message_id: msg.into(),
+                count: 1,
+                mention: false,
+                sender_ext: "k2:owner".into(),
+                sender_member_id: "1".into(),
+                sender_name: "Owner".into(),
+                channel_name: String::new(),
+                unread_total: "0".into(),
+                waiting_total: "0".into(),
+                home_unread: "1".into(),
+                preview: String::new(),
+                msg: None,
+                passive: false,
+            })
+        };
+        let n = alert_note(&push("880011")).expect("noted");
+        assert_eq!((n.0.as_str(), n.1, n.2.as_str(), n.3), ("vc-callee", ReadKind::Home, "900", 880011));
+        assert!(alert_note(&push("abc")).is_none(), "a non-numeric id is refused");
     }
 
     /// push-content-available-v1 (K3): stale notes wait 60 s and merge into
@@ -1101,6 +1213,7 @@ mod tests {
             waiting_total: "0".into(),
             stale: Default::default(),
             read: Default::default(),
+            home_unread: String::new(),
         });
         assert_eq!(e.budget_class(), k2_core::push::budget::BudgetClass::Badge);
     }

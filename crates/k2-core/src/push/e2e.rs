@@ -393,6 +393,8 @@ pub fn alert_kind(event: &PushEvent) -> Option<&'static str> {
         PushEvent::DesktopNotice { .. } => Some(super::PUSH_KIND_DESKTOP),
         // DM calls: sealed like the other alerts (the caller's name, ids).
         PushEvent::Call(_) => Some(super::PUSH_KIND_CALL),
+        // Home chat (prd-home-chat-pushes-v1 §5): names and text only inside.
+        PushEvent::HomeChat(_) => Some(super::PUSH_KIND_HOME_CHAT),
         PushEvent::Badge(_) | PushEvent::AgentNeedsAttention { .. } | PushEvent::HeartbeatFailed { .. } => None,
     }
 }
@@ -414,6 +416,8 @@ pub fn alert_group(event: &PushEvent) -> String {
         PushEvent::ChatApprovalRequested { outbox_id, .. } => format!("chat_approval:{outbox_id}"),
         PushEvent::DesktopNotice { .. } => "desktop".to_string(),
         PushEvent::Call(c) => format!("call:{}", c.call_id),
+        // The NSE replaces the conversation's banner by this (HC-9).
+        PushEvent::HomeChat(h) => format!("hc:{}", h.conversation_id),
         _ => String::new(),
     }
 }
@@ -434,7 +438,26 @@ pub fn alert_plaintext(event: &PushEvent, ctx: &SealCtx) -> Option<serde_json::V
             m.insert("msg".into(), msg_value(msg));
         }
     }
+    if let PushEvent::HomeChat(h) = event {
+        if let Some(msg) = &h.msg {
+            m.insert("msg".into(), home_chat_msg_value(msg));
+        }
+    }
     Some(serde_json::Value::Object(m))
+}
+
+/// The sealed `msg` of a Home chat alert (prd-home-chat-pushes-v1 §5): the
+/// newest message, for the phone to show before it fetches. The sender's
+/// name and the mention flag are in `data` (HC-10: not repeated here).
+pub fn home_chat_msg_value(msg: &super::HomeChatMsg) -> serde_json::Value {
+    serde_json::json!({
+        "id": msg.id,
+        "conversationId": msg.conversation_id,
+        "from": msg.from,
+        "at": msg.at,
+        "text": msg.text,
+        "truncated": msg.truncated,
+    })
 }
 
 /// The sealed `msg` object (prd-e2e-push-v1 follow-up): the latest post for
@@ -506,6 +529,12 @@ pub fn nudge_plaintext_in(b: &BadgePush, ctx: &SealCtx, format: seal::Format) ->
         if b.read.more {
             data["readMore"] = "1".into();
         }
+    }
+    // prd-home-chat-pushes-v1 HC-13: the person's unread Home conversations,
+    // format 2 only (like the read hints): a format-1 nudge's 256 bytes are
+    // already full with a server name of a dozen characters.
+    if format == seal::Format::V2 && !b.home_unread.is_empty() {
+        data["homeUnread"] = b.home_unread.clone().into();
     }
     m.insert("data".into(), data);
     serde_json::Value::Object(m)
@@ -595,6 +624,9 @@ pub fn fit_alert_in(v: &serde_json::Value, format: seal::Format) -> Result<Vec<u
     }
     cap_name(&mut v, "/title");
     cap_name(&mut v, "/data/agentName");
+    // Home chat (HC-10): the sender's and the channel's names.
+    cap_name(&mut v, "/data/senderName");
+    cap_name(&mut v, "/data/channelName");
     if let Some(b) = fit_body(&v, max) {
         return Ok(b);
     }
@@ -602,7 +634,28 @@ pub fn fit_alert_in(v: &serde_json::Value, format: seal::Format) -> Result<Vec<u
         d.remove("avatarRev");
         d.remove("agentColor");
     }
+    if let Some(b) = fit_body(&v, max) {
+        return Ok(b);
+    }
+    // Home chat (HC-10): a title and two names in a 4-byte script can still
+    // be too long; they shrink further before the alert would fail.
+    for p in ["/title", "/data/senderName", "/data/channelName"] {
+        cap_name_to(&mut v, p, NAME_CAP_TIGHT_CHARS);
+    }
     fit_body(&v, max).ok_or_else(|| SealError::TooLarge { len: json_bytes(&v).len(), max })
+}
+
+/// The tighter cap of the last fitting step (Home chat names).
+pub const NAME_CAP_TIGHT_CHARS: usize = 24;
+
+fn cap_name_to(v: &mut serde_json::Value, pointer: &str, cap: usize) {
+    if let Some(slot) = v.pointer_mut(pointer) {
+        if let Some(s) = slot.as_str() {
+            if s.graphemes(true).count() > cap {
+                *slot = format!("{}{ELLIPSIS}", first_graphemes(s, cap - 1)).into();
+            }
+        }
+    }
 }
 
 /// The nudge JSON bytes within the 256-byte bucket.
@@ -639,6 +692,11 @@ pub fn fit_nudge_in(v: &serde_json::Value, format: seal::Format) -> Result<Vec<u
                 return Ok(bytes);
             }
         }
+    }
+    // The Home unread count is a convenience (the phone keeps its last one):
+    // it goes before the nudge would fail (HC-13).
+    if let Some(d) = v.get_mut("data").and_then(|d| d.as_object_mut()) {
+        d.remove("homeUnread");
     }
     let bytes = json_bytes(&v);
     if bytes.len() > max {
@@ -704,7 +762,7 @@ pub fn generic_payload_with(event: &PushEvent, stamp: &PushStamp, badge_key: &st
     if !stamp.instance_id.is_empty() {
         data.insert("instanceId", stamp.instance_id.clone());
     }
-    for k in ["unreadTotal", "waitingTotal"] {
+    for k in ["unreadTotal", "waitingTotal", "homeUnread"] {
         if let Some(v) = full.get(k) {
             data.insert(k, v);
         }

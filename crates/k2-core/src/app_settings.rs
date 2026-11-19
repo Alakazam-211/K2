@@ -550,6 +550,17 @@ pub struct AppSettings {
     /// is being built.
     #[serde(default)]
     pub home_chat: bool,
+    /// Phone pushes for Home chat DMs, @mentions and replies
+    /// (prd-home-chat-pushes-v1 §7): needs `home_chat`. Persisted mirror of
+    /// `K2_HOME_CHAT_PUSH`. Owner only. Default OFF until proven.
+    #[serde(default)]
+    pub home_chat_push: bool,
+    /// Message text in Home chat pushes (D6): the owner's server switch. It
+    /// is the one switch behind Sew's `notifications.mgmt_preview`. Default
+    /// ON (Rosson 11-18): it only takes effect once `home_chat_push` is on,
+    /// and the text is sealed to the person's own phone.
+    #[serde(default = "default_true")]
+    pub home_chat_push_previews: bool,
     /// Board files preview (prd-board-tab-v1): the `/cli/board/file/*` routes
     /// and the `board-file-v1` feature. Owner only, off by default. Dogfood
     /// only: it doesn't turn on for customers until held edits survive a restart.
@@ -1332,6 +1343,8 @@ impl Default for AppSettings {
             ci_preview: false,
             voice_rooms_preview: false,
             home_chat: false,
+            home_chat_push: false,
+            home_chat_push_previews: true,
             board_file_preview: false,
             setup_checklist: false,
             kessel_first_run: false,

@@ -141,6 +141,129 @@ pub enum PushEvent {
     /// the ring, then a missed or ended push that REPLACES it (the same
     /// `collapseId`, `call:<call id>`). Ids and the caller's name only.
     Call(CallPush),
+    /// A Home chat message for one person (prd-home-chat-pushes-v1 §5): a
+    /// DM, an @mention or a reply from another box person, coalesced per
+    /// (conversation, person). Sealed only: a phone with no key, or on the
+    /// legacy lane, gets the generic `K2` / `New message` (HC-8). Text rides
+    /// only inside the seal, and only when the owner's and the person's
+    /// preview switches are on (D6).
+    HomeChat(HomeChatPush),
+}
+
+/// Why a Home chat push went (`data.reason`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeChatReason {
+    /// A DM or group-DM message (DMs always push, D1).
+    Dm,
+    /// An @mention of the person (or @channel / @here).
+    Mention,
+    /// A reply in a thread the person follows.
+    Reply,
+    /// A channel message at level All messages (Sew 0.11.0, `feed_all_messages`).
+    All,
+    /// A keyword hit (Sew 0.11.0).
+    Keyword,
+}
+
+impl HomeChatReason {
+    /// `data.reason`.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Dm => "dm",
+            Self::Mention => "mention",
+            Self::Reply => "reply",
+            Self::All => "all",
+            Self::Keyword => "keyword",
+        }
+    }
+
+    /// The body when no text may show.
+    fn fixed_body(self) -> &'static str {
+        match self {
+            Self::Mention => "Mentioned you",
+            Self::Reply => "Replied to you",
+            Self::Dm | Self::All | Self::Keyword => "New message",
+        }
+    }
+}
+
+/// One person's Home chat push (prd-home-chat-pushes-v1 §5), already
+/// coalesced: the same payload goes to every one of their phones.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HomeChatPush {
+    /// The recipient person key.
+    pub principal: String,
+    /// That person's device logins. Empty = nobody, never "everyone".
+    pub device_usernames: Vec<String>,
+    pub reason: HomeChatReason,
+    /// Sew's channel id (decimal).
+    pub conversation_id: String,
+    /// A DM or group DM (`convKind: dm`), else a channel.
+    pub dm: bool,
+    /// The newest message this push covers (the read-clear key; a Sew id,
+    /// time-sortable, fits i64).
+    pub message_id: String,
+    /// Messages covered (at least 1).
+    pub count: u32,
+    /// Any covered message mentions the person.
+    pub mention: bool,
+    /// `k2:owner` or `k2:connect:<uuid>` (never empty: an unknown sender is
+    /// never pushed, HC-6).
+    pub sender_ext: String,
+    pub sender_member_id: String,
+    /// How this server names the sender (the title; capped at seal time).
+    pub sender_name: String,
+    /// The channel's name (channels only; `""` for a DM).
+    pub channel_name: String,
+    /// `data.unreadTotal` / `data.waitingTotal`: the Thread and project
+    /// badge totals, as other alerts carry them.
+    pub unread_total: String,
+    pub waiting_total: String,
+    /// `data.homeUnread`: the person's unread Home conversations (HC-13), or
+    /// `""` when no held session knows it (the key is then left out).
+    pub home_unread: String,
+    /// The lock-screen text: Sew's feed preview of the newest message, or
+    /// `""` (the fixed body). Already `""` unless the owner's and the
+    /// person's preview switches are on; [`PushEvent::without_preview`]
+    /// clears it for a phone with its own previews off.
+    pub preview: String,
+    /// The newest message for the phone to show before it fetches, sealed
+    /// only (`msg`). `None` unless the owner's and the person's preview
+    /// switches are on (with them off no text goes, seal included).
+    pub msg: Option<HomeChatMsg>,
+    /// An old item's quiet summary (an item over 10 minutes old, HC-4): no
+    /// sound, and `data.passive: "1"` tells the phone to show it silently.
+    pub passive: bool,
+}
+
+/// The newest message a Home chat push covers (sealed alerts only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HomeChatMsg {
+    pub id: String,
+    pub conversation_id: String,
+    /// The sender's ext.
+    pub from: String,
+    /// When it was posted (unix seconds).
+    pub at: i64,
+    /// Sew's preview (at most 120 characters).
+    pub text: String,
+    pub truncated: bool,
+}
+
+impl HomeChatPush {
+    /// The preview this push shows (`None` when empty).
+    pub fn shown_preview(&self) -> Option<&str> {
+        Some(self.preview.trim()).filter(|p| !p.is_empty())
+    }
+
+    /// `data.convKind`.
+    pub fn conv_kind(&self) -> &'static str {
+        if self.dm {
+            "dm"
+        } else {
+            "channel"
+        }
+    }
 }
 
 /// Where a DM call push is (S14). A ring is replaced by exactly one of the
@@ -229,6 +352,10 @@ pub struct BadgePush {
     /// push-read-hints-v1: which of the person's chats they read, so a
     /// phone can clear those notifications. Empty = a plain badge push.
     pub read: ReadHint,
+    /// `data.homeUnread` (prd-home-chat-pushes-v1 HC-13): the person's unread
+    /// Home conversations, apart from the Thread totals. `""` = not known
+    /// (left out).
+    pub home_unread: String,
 }
 
 /// The `stale` hint on a silent push (push-content-available-v1, 0.46.7):
@@ -269,6 +396,10 @@ impl StaleHint {
 pub enum ReadKind {
     Thread,
     Project,
+    /// A Home chat conversation (prd-home-chat-pushes-v1 §9, HC-11): `h:`,
+    /// with the Sew message id read through as the "seq" (Sew ids are
+    /// time-sortable and fit i64).
+    Home,
 }
 
 impl ReadKind {
@@ -276,6 +407,7 @@ impl ReadKind {
         match self {
             Self::Thread => "t",
             Self::Project => "p",
+            Self::Home => "h",
         }
     }
 
@@ -285,6 +417,7 @@ impl ReadKind {
         match kind {
             crate::read_state::KIND_THREAD => Some(Self::Thread),
             crate::read_state::KIND_PROJECT => Some(Self::Project),
+            crate::home_chat::READ_KIND => Some(Self::Home),
             _ => None,
         }
     }
@@ -657,6 +790,18 @@ impl PushEvent {
             Self::DesktopNotice { .. } => "Remote desktop".to_string(),
             Self::Call(c) if !c.caller.trim().is_empty() => c.caller.trim().to_string(),
             Self::Call(_) => "K2".to_string(),
+            // A DM: the sender; a channel: `#name · sender`.
+            Self::HomeChat(h) => {
+                let sender = h.sender_name.trim();
+                let channel = h.channel_name.trim();
+                match (h.dm, sender.is_empty(), channel.is_empty()) {
+                    (true, false, _) => sender.to_string(),
+                    (false, false, false) => format!("#{channel} · {sender}"),
+                    (false, true, false) => format!("#{channel}"),
+                    (false, false, true) => sender.to_string(),
+                    _ => e2e::GENERIC_TITLE.to_string(),
+                }
+            }
             // Silent: no visible text.
             Self::Badge(_) => String::new(),
             // Permission cards (rev 3.1 §17.7): "billing asks for a permission".
@@ -698,6 +843,7 @@ impl PushEvent {
                 CallPushState::Ended => "Call ended".to_string(),
                 CallPushState::Answered => "Answered on another device".to_string(),
             },
+            Self::HomeChat(h) => home_chat_body(h),
         }
     }
 
@@ -714,7 +860,8 @@ impl PushEvent {
             | Self::ThreadPost(_)
             | Self::ChatApprovalRequested { .. }
             | Self::DesktopNotice { .. }
-            | Self::Call(_) => "",
+            | Self::Call(_)
+            | Self::HomeChat(_) => "",
         }
     }
 
@@ -739,6 +886,8 @@ impl PushEvent {
             Self::DesktopNotice { owners, .. } => Some(owners.as_slice()),
             // Always targeted: the called person's own phones.
             Self::Call(c) => Some(c.device_usernames.as_slice()),
+            // Always targeted: the one person's own phones.
+            Self::HomeChat(h) => Some(h.device_usernames.as_slice()),
             _ => None,
         }
     }
@@ -751,7 +900,11 @@ impl PushEvent {
 
     /// True when this push shows message text (a Thread preview).
     pub fn has_preview(&self) -> bool {
-        matches!(self, Self::ThreadPost(t) if t.shown_preview().is_some())
+        match self {
+            Self::ThreadPost(t) => t.shown_preview().is_some(),
+            Self::HomeChat(h) => h.shown_preview().is_some(),
+            _ => false,
+        }
     }
 
     /// The same push without message text: the generic body for devices
@@ -759,6 +912,9 @@ impl PushEvent {
     pub fn without_preview(&self) -> PushEvent {
         match self {
             Self::ThreadPost(t) => Self::ThreadPost(ThreadPush { preview: String::new(), ..t.clone() }),
+            // The sealed `msg` stays (it is the person's own device's); only
+            // the lock-screen text goes (D6, the phone's own previews).
+            Self::HomeChat(h) => Self::HomeChat(HomeChatPush { preview: String::new(), ..h.clone() }),
             other => other.clone(),
         }
     }
@@ -789,7 +945,12 @@ impl PushEvent {
         let (principal, device_usernames, unread_total, waiting_total) = match self {
             Self::ThreadPost(t) => (&t.principal, &t.device_usernames, &t.unread_total, &t.waiting_total),
             Self::ProjectPost(p) => (&p.principal, &p.device_usernames, &p.unread_total, &p.waiting_total),
+            Self::HomeChat(h) => (&h.principal, &h.device_usernames, &h.unread_total, &h.waiting_total),
             _ => return None,
+        };
+        let home_unread = match self {
+            Self::HomeChat(h) => h.home_unread.clone(),
+            _ => String::new(),
         };
         if unread_total.is_empty() || waiting_total.is_empty() {
             return None;
@@ -801,6 +962,7 @@ impl PushEvent {
             waiting_total: waiting_total.clone(),
             stale: StaleHint::default(),
             read: ReadHint::default(),
+            home_unread,
         }))
     }
 
@@ -818,6 +980,7 @@ impl PushEvent {
             Self::ThreadPost(_) => budget::BudgetClass::Thread,
             Self::Badge(_) => budget::BudgetClass::Badge,
             Self::Call(_) => budget::BudgetClass::Call,
+            Self::HomeChat(_) => budget::BudgetClass::HomeChat,
             _ => budget::BudgetClass::Other,
         }
     }
@@ -884,7 +1047,12 @@ impl PushEvent {
     /// DM call's ring (missed, ended, answered on another device). It still
     /// carries the ring's collapse id, so it replaces the ring.
     pub fn is_silent_alert(&self) -> bool {
-        matches!(self, Self::Call(c) if c.state != CallPushState::Ringing)
+        match self {
+            Self::Call(c) => c.state != CallPushState::Ringing,
+            // An old item's quiet summary (HC-4).
+            Self::HomeChat(h) => h.passive,
+            _ => false,
+        }
     }
 
     /// Merge [`Self::aps_hints`] into a relay `payload` object.
@@ -920,11 +1088,17 @@ impl PushEvent {
                 ("unreadTotal", p.unread_total.clone()),
                 ("waitingTotal", p.waiting_total.clone()),
             ]),
-            Self::Badge(b) => PushData::of(&[
-                ("kind", PUSH_KIND_BADGE.to_string()),
-                ("unreadTotal", b.unread_total.clone()),
-                ("waitingTotal", b.waiting_total.clone()),
-            ]),
+            Self::Badge(b) => {
+                let mut d = PushData::of(&[
+                    ("kind", PUSH_KIND_BADGE.to_string()),
+                    ("unreadTotal", b.unread_total.clone()),
+                    ("waitingTotal", b.waiting_total.clone()),
+                ]);
+                if !b.home_unread.is_empty() {
+                    d.insert("homeUnread", b.home_unread.clone());
+                }
+                d
+            }
             Self::ThreadPost(t) => {
                 let mut d = Self::thread_data(t);
                 if let ThreadBudget::Permission { request_id, .. } = &t.budget {
@@ -952,6 +1126,35 @@ impl PushEvent {
                 ("conversationId", c.channel_id.clone()),
                 ("callState", c.state.as_wire().to_string()),
             ]),
+            Self::HomeChat(h) => {
+                let mut d = PushData::of(&[
+                    ("kind", PUSH_KIND_HOME_CHAT.to_string()),
+                    ("reason", h.reason.as_wire().to_string()),
+                    ("conversationId", h.conversation_id.clone()),
+                    ("convKind", h.conv_kind().to_string()),
+                    ("messageId", h.message_id.clone()),
+                    ("count", h.count.max(1).to_string()),
+                    ("mention", if h.mention { "1" } else { "0" }.to_string()),
+                    ("senderExt", h.sender_ext.clone()),
+                    ("senderMemberId", h.sender_member_id.clone()),
+                    ("senderName", h.sender_name.clone()),
+                    // People pictures don't exist yet: the phone draws
+                    // initials, keyed by `senderExt`.
+                    ("avatarRev", String::new()),
+                    ("unreadTotal", h.unread_total.clone()),
+                    ("waitingTotal", h.waiting_total.clone()),
+                ]);
+                if !h.dm {
+                    d.insert("channelName", h.channel_name.clone());
+                }
+                if !h.home_unread.is_empty() {
+                    d.insert("homeUnread", h.home_unread.clone());
+                }
+                if h.passive {
+                    d.insert("passive", "1");
+                }
+                d
+            }
             // Legacy desktop-era events carry no mobile deep link.
             Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => PushData::default(),
         }
@@ -1020,6 +1223,35 @@ pub fn thread_body(kind: ThreadMsgKind, count: u32, preview: Option<&str>) -> St
     }
 }
 
+/// The Home chat push body (prd-home-chat-pushes-v1 §5): the preview, or
+/// `N new messages · <preview>`, or with no text `N new messages` /
+/// `New message` / `Mentioned you` / `Replied to you`, within
+/// [`preview::PREVIEW_MAX_CHARS`].
+pub fn home_chat_body(h: &HomeChatPush) -> String {
+    let preview = h.shown_preview();
+    if h.count > 1 {
+        let head = format!("{} new messages", h.count);
+        return match preview {
+            Some(p) => {
+                let sep = " · ";
+                let room = preview::PREVIEW_MAX_CHARS.saturating_sub(head.chars().count() + sep.chars().count());
+                let p = preview::cap_chars(p, room);
+                if p.is_empty() {
+                    head
+                } else {
+                    format!("{head}{sep}{p}")
+                }
+            }
+            None => head,
+        };
+    }
+    if let Some(p) = preview {
+        return preview::cap_chars(p, preview::PREVIEW_MAX_CHARS);
+    }
+    let reason = if h.mention { HomeChatReason::Mention } else { h.reason };
+    reason.fixed_body().to_string()
+}
+
 /// Push `data.kind` for a ticket event (created / commented). The wire
 /// value is `"ticket"` since the 2026-07-23 Tickets rebrand (`ec845928`);
 /// the mobile companion routes on it. Never `"feedback"`.
@@ -1044,6 +1276,9 @@ pub const PUSH_KIND_DESKTOP: &str = "desktop";
 /// `callState` `ringing`, then `missed` or `ended` with the same
 /// `collapseId` (`call:<callId>`), so the ring's banner is replaced.
 pub const PUSH_KIND_CALL: &str = "call";
+
+/// Push `data.kind` for a Home chat message (prd-home-chat-pushes-v1 §5).
+pub const PUSH_KIND_HOME_CHAT: &str = "home_chat";
 
 /// What happens when a push attempt fails. Adapters return `Err` after
 /// exhausting their own retry policy; the daemon does not queue events for
@@ -2126,7 +2361,15 @@ impl K2Cloud {
         if !e2e::is_sealable(event) {
             return LanePlan { legacy: devices.iter().collect(), ..Default::default() };
         }
-        Self::plan_device_lanes(config, devices, mode, now)
+        let mut plan = Self::plan_device_lanes(config, devices, mode, now);
+        // prd-home-chat-pushes-v1 D5, HC-8: person-to-person text and names
+        // never ride the clear path. A phone with E2E off or no key gets the
+        // generic `K2` / `New message`, never today's payload.
+        if matches!(event, PushEvent::HomeChat(_)) {
+            let legacy = std::mem::take(&mut plan.legacy);
+            plan.generic.extend(legacy);
+        }
+        plan
     }
 
     /// [`Self::plan_lanes`] for a sealable kind.
@@ -2911,6 +3154,7 @@ mod tests {
             waiting_total: "1".into(),
             stale: Default::default(),
             read: Default::default(),
+            home_unread: String::new(),
         })
     }
 

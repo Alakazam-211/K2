@@ -22,6 +22,11 @@
 //!   chatty agent's posts never hold back a card and an agent asking a lot
 //!   never spends another person's budget.
 //!
+//! - [`BudgetClass::HomeChat`] (Home chat DMs, @mentions and replies,
+//!   prd-home-chat-pushes-v1 §5, HC-19): [`HOME_CHAT_PER_HOUR`] calls an hour
+//!   on the per-daemon path, [`HOME_CHAT_PER_HOUR_SHARED`] on the shared
+//!   token. With it the buckets add up to 540 an hour, under the relay's 600.
+//!
 //! Over budget, a push is dropped (never queued — the `PushTarget`
 //! contract); the Thread coalescer carries the dropped count into its next
 //! push ("N new messages"). The clock is injected so tests never sleep.
@@ -42,6 +47,11 @@ pub const OTHER_PER_HOUR: usize = 30;
 pub const BADGE_PER_HOUR: usize = 240;
 /// DM call pushes an hour: a ring and its replacement are two.
 pub const CALL_PER_HOUR: usize = 120;
+/// Home chat calls an hour on the per-daemon relay path (HC-19: the
+/// buckets stay under the relay's 600 an hour).
+pub const HOME_CHAT_PER_HOUR: usize = 120;
+/// Home chat calls an hour while on the shared token.
+pub const HOME_CHAT_PER_HOUR_SHARED: usize = 10;
 /// Permission-card pushes an hour, per person (§6.7, §17.7).
 pub const PERMISSION_PER_HOUR: usize = 30;
 /// The sliding window.
@@ -59,6 +69,8 @@ pub enum BudgetClass {
     /// Permission-card pushes (rev 3.1 §6.7): one window per person; see
     /// [`Budgets::try_take_for`].
     Permission,
+    /// Home chat alerts (prd-home-chat-pushes-v1 HC-19).
+    HomeChat,
 }
 
 /// Independent sliding windows of send instants.
@@ -68,6 +80,7 @@ pub struct Budgets {
     other: Mutex<VecDeque<Instant>>,
     badge: Mutex<VecDeque<Instant>>,
     call: Mutex<VecDeque<Instant>>,
+    home_chat: Mutex<VecDeque<Instant>>,
     /// [`BudgetClass::Permission`], one window per person key.
     permission: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
@@ -100,6 +113,7 @@ impl Budgets {
             BudgetClass::Other => Some(&self.other),
             BudgetClass::Badge => Some(&self.badge),
             BudgetClass::Call => Some(&self.call),
+            BudgetClass::HomeChat => Some(&self.home_chat),
             BudgetClass::Permission => None,
         }
     }
@@ -283,5 +297,32 @@ mod tests {
         assert!(b.try_take_for(BudgetClass::Permission, "rosson", PERMISSION_PER_HOUR, t0 + WINDOW, 1));
         assert_eq!(b.used_for(BudgetClass::Permission, "rosson", t0 + WINDOW), 1);
         assert_eq!(b.used_for(BudgetClass::Permission, "dana", t0 + WINDOW), 0);
+    }
+
+    /// prd-home-chat-pushes-v1 HC-19: Home chat alerts have their own bucket
+    /// (a spent Thread or call bucket never holds them back, and they never
+    /// spend another), and every shared bucket together stays under the
+    /// relay's 600 calls an hour per server.
+    #[test]
+    fn home_chat_budget_is_its_own_and_the_sum_fits_the_relay() {
+        let b = Budgets::new();
+        let t0 = Instant::now();
+        for _ in 0..THREAD_PER_HOUR {
+            assert!(b.try_take(BudgetClass::Thread, THREAD_PER_HOUR, t0));
+        }
+        for _ in 0..CALL_PER_HOUR {
+            assert!(b.try_take(BudgetClass::Call, CALL_PER_HOUR, t0));
+        }
+        for i in 0..HOME_CHAT_PER_HOUR {
+            assert!(b.try_take(BudgetClass::HomeChat, HOME_CHAT_PER_HOUR, t0), "home chat send {i}");
+        }
+        assert!(!b.try_take(BudgetClass::HomeChat, HOME_CHAT_PER_HOUR, t0), "the 121st is over");
+        assert_eq!(b.used(BudgetClass::HomeChat, t0), HOME_CHAT_PER_HOUR);
+        assert_eq!(b.used(BudgetClass::Badge, t0), 0, "untouched");
+        assert_eq!(b.used(BudgetClass::Other, t0), 0, "untouched");
+        let sum = THREAD_PER_HOUR + OTHER_PER_HOUR + BADGE_PER_HOUR + CALL_PER_HOUR + HOME_CHAT_PER_HOUR;
+        assert_eq!(sum, 540);
+        assert!(sum < 600, "the relay allows 600 an hour per server");
+        assert!(HOME_CHAT_PER_HOUR_SHARED <= 10);
     }
 }

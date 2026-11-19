@@ -22159,11 +22159,13 @@ cmd_skin() {
                         pw=$(cat)
                     fi
                     local body raw
-                    body=$(K2_SKIN_USER="$username" K2_SKIN_PW="$pw" K2_SKIN_PW_SET="$password_stdin" K2_SKIN_EMAIL="$email" K2_SKIN_APP="$app" K2_SKIN_ROLE="$role" K2_SKIN_TEMP="$temp_password" python3 -c '
-import json,os
+                    # The password reaches python on stdin, never argv or the
+                    # environment (ps shows both to every process of this user).
+                    body=$(printf '%s' "$pw" | K2_SKIN_USER="$username" K2_SKIN_PW_SET="$password_stdin" K2_SKIN_EMAIL="$email" K2_SKIN_APP="$app" K2_SKIN_ROLE="$role" K2_SKIN_TEMP="$temp_password" python3 -c '
+import json,os,sys
 b={"username": os.environ["K2_SKIN_USER"]}
 if os.environ.get("K2_SKIN_PW_SET","0") == "1":
-    b["password"]=os.environ.get("K2_SKIN_PW","")
+    b["password"]=sys.stdin.read()
 if os.environ.get("K2_SKIN_TEMP","0") == "1":
     b["generate"]=True
 em=os.environ.get("K2_SKIN_EMAIL","")
@@ -22393,9 +22395,10 @@ else:
                     local pw
                     pw=$(cat)
                     local body raw
-                    body=$(K2_SKIN_USER="$username" K2_SKIN_PW="$pw" python3 -c '
-import json,os
-print(json.dumps({"username": os.environ["K2_SKIN_USER"], "password": os.environ.get("K2_SKIN_PW","")}))')
+                    # The password reaches python on stdin, never argv or the environment.
+                    body=$(printf '%s' "$pw" | K2_SKIN_USER="$username" python3 -c '
+import json,os,sys
+print(json.dumps({"username": os.environ["K2_SKIN_USER"], "password": sys.stdin.read()}))')
                     raw=$(cli_post_json "/cli/skin/users/password" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | _skin_exit_if_held || exit $?

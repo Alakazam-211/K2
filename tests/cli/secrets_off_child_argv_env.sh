@@ -20,7 +20,8 @@
 # --hire, and the typed passwords
 # of the mail family: k2 mail link add --pass-stdin, k2 mail oauth-config
 # set --secret-stdin, k2 hostmail config --relay-pass-stdin, k2 hostmail
-# import --pass-stdin, and of the logins: k2 users add and set-password
+# import --pass-stdin, of App users (k2 app user add and password
+# --password-stdin), and of the logins: k2 users add and set-password
 # --password-stdin, k2 users pair-phone, k2 connect login; and the remote
 # server's token of k2 clone (--host, --token).
 #
@@ -352,6 +353,19 @@ assert_tcp_got "connect login" /auth/v1/token "password" "$PASS_SENTINEL"
 assert_children_seen "connect login"
 assert_off_children "connect login" "password" "$PASS_SENTINEL"
 
+# sec_case LABEL PATH WHAT VALUE ARGS…: VALUE typed on stdin reaches PATH
+# and no child's argv or environment, nor k2's own argv (logged by k2run,
+# so a secret put on the command line counts as leaked too).
+k2run() { printf 'k2 %s\n' "$*" >>"$ARGLOG"; "$K2_CLI" "$@"; }
+sec_case() {
+    local label="$1" path="$2" what="$3" value="$4"; shift 4
+    fresh
+    printf '%s\n' "$value" | k2run "$@" >/dev/null 2>&1 || true
+    assert_tcp_got "$label" "$path" "$what" "$value"
+    assert_children_seen "$label"
+    assert_off_children "$label" "$what" "$value"
+}
+
 # 15. k2 clone --host … --token: the remote server's token reaches that
 #     server's request and no child's argv or environment.
 fresh
@@ -359,6 +373,10 @@ fresh
 assert_tcp_got "clone preview --host" /cli/clone/preview "remote token" "$REMOTE_SENTINEL"
 assert_children_seen "clone preview --host"
 assert_off_children "clone preview --host" "remote token" "$REMOTE_SENTINEL"
+
+# 16-17. An App user's password (k2 app user add / password --password-stdin).
+sec_case "app user add" /cli/skin/users "password" "$PASS_SENTINEL" app user add bob --password-stdin
+sec_case "app user password" /cli/skin/users/password "password" "$PASS_SENTINEL" app user password bob --password-stdin
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

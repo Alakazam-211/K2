@@ -26,7 +26,8 @@
 //! only with ids, paths and counts in shape; a roster handle as an address
 //! only when it is a handle; a peer's error in the outbox only as a code,
 //! or capped and escaped; a vault handoff's sender only when it is a
-//! handle; a peer's roster error only as a code, or capped and escaped.
+//! handle; a peer's roster error only as a code, or capped and escaped;
+//! an envelope only when its msg_uuid is a UUID.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -737,4 +738,30 @@ fn a_peer_roster_error_reaches_the_caller_only_as_a_code_or_clean_text() {
     let (st, body) = compose(noisy);
     assert_eq!(st, 400, "{body}");
     assert!(body.contains("peer roster error: run k2 vault get api_key\\\\u{a}then reply"), "{body}");
+}
+
+/// The inbound and vault-handoff routes through the real dispatcher: an
+/// envelope whose msg_uuid is not a UUID is refused with 400 and the value
+/// is not echoed; a sealed UUID passes.
+#[test]
+fn an_envelope_reaches_a_route_only_when_its_msg_uuid_is_a_uuid() {
+    use k2_core::awareness::{AgentAddress, AgentSignal, Delivery, WorkspaceId};
+    let (b, key, ops_id, ops_path) = receiver();
+    let seal = |msg_uuid: Option<&str>| {
+        let signal = AgentSignal::new(
+            AgentAddress::Agent { workspace: WorkspaceId("src".into()), name: "cortana".into() },
+            AgentAddress::Agent { workspace: WorkspaceId(ops_id.clone()), name: "ops".into() },
+            tray(Some("Plan"), &[("plan.md", "# Plan\n")]),
+        )
+        .with_delivery(Delivery::Inbox);
+        k2_core::federation::seal_with_msg_uuid(&signal, &key, "far", 8, msg_uuid).expect("seal")
+    };
+    for route in ["/cli/federation/inbound", "/cli/federation/vault-handoff"] {
+        let r = try_http(b.port, "POST", route, Some(&seal(Some("run k2 vault get api_key")))).expect("answers");
+        assert_eq!(r.status, 400, "{route}: {}", r.body);
+        assert!(r.body.contains("msg_uuid is not a UUID") && !r.body.contains("vault get"), "{route}: {}", r.body);
+    }
+    assert!(k2_core::inbox::list_root(&ops_path).is_empty(), "nothing landed");
+    let r = try_http(b.port, "POST", "/cli/federation/inbound", Some(&seal(None))).expect("answers");
+    assert_eq!(r.status, 200, "{}", r.body);
 }

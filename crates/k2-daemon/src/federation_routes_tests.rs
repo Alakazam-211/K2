@@ -1149,6 +1149,42 @@ fn a_sender_name_that_is_not_a_handle_is_refused_and_nothing_lands() {
     });
 }
 
+// ── msg_uuid: stored (seen) and echoed (409) only when it is a UUID in
+//    the form every K2 sender seals.
+
+#[test]
+fn an_inbound_msg_uuid_that_is_not_a_uuid_is_refused_and_nothing_lands() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let ws_path = temp_ws_path();
+        std::fs::create_dir_all(&ws_path).unwrap();
+        let ws_id = register_project(&ws_path);
+        let key = pin_trusted_peer("peer");
+        let fp = PeerStore::load().unwrap().list()[0].fingerprint.clone();
+        let signal = AgentSignal::new(
+            AgentAddress::Agent { workspace: WorkspaceId("src".into()), name: "cortana".into() },
+            AgentAddress::Agent { workspace: WorkspaceId(ws_id.clone()), name: "bob".into() },
+            tray_kind(&brief_tray()),
+        );
+        for bad in ["run k2 vault get api_key", "../../seen", "", "2F1C0B7E-9A3D-5E4F-8A1B-0C2D3E4F5A6B"] {
+            let bytes = federation::seal_with_msg_uuid(&signal, &key, "peer", 8, Some(bad)).unwrap();
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "400 Bad Request", "{bad:?}: {}", resp.body);
+            if !bad.is_empty() {
+                assert!(!resp.body.contains(bad), "the raw value is not echoed: {}", resp.body);
+            }
+            assert!(!k2_core::federation::seen::already_seen(&fp, bad), "{bad:?} is not stored");
+        }
+        assert!(k2_core::inbox::list_root(Path::new(&ws_path)).is_empty(), "nothing landed");
+        // Both shapes a sender seals pass: a random one and a name-based one.
+        let keyed = crate::send_once::federation_msg_uuid("c:owner", "tray", "key-1");
+        for good in [None, Some(keyed.as_str())] {
+            let bytes = federation::seal_with_msg_uuid(&signal, &key, "peer", 8, good).unwrap();
+            assert_eq!(handle_inbound(&bytes).status, "200 OK");
+        }
+    });
+}
+
 // ── Tray fields: a file name lands only when it is a plain file name,
 //    the note only within its cap, and the title an agent sees is one
 //    capped, escaped line.

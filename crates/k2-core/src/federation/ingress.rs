@@ -188,6 +188,13 @@ pub struct Ingested {
     pub msg_uuid: String,
 }
 
+/// True when `msg_uuid` has the shape every K2 sender seals: a UUID in
+/// lowercase hyphenated form (a random one for a plain send, a name-based
+/// one derived from a send's idempotency key).
+pub fn is_msg_uuid(msg_uuid: &str) -> bool {
+    uuid::Uuid::parse_str(msg_uuid).is_ok_and(|u| u.hyphenated().to_string() == msg_uuid)
+}
+
 /// Ingest a raw inbound federation envelope — the PURE SECURITY GATE. See
 /// the module docs for the fail-closed order. On success EVERY check
 /// (decode → verify signature vs pinned key → `require_peer` → replay →
@@ -230,6 +237,16 @@ pub fn ingest(
             RequirePeerError::NotTrusted(_) => IngressError::NotTrusted,
             RequirePeerError::CapabilityDenied { .. } => IngressError::CapabilityDenied,
         })?;
+
+    // 4b. SHAPE of the idempotency key, before it is stored or echoed:
+    //     a UUID in the form every K2 sender seals.
+    if !is_msg_uuid(&envelope.payload.msg_uuid) {
+        crate::log_debug!(
+            "[federation/ingress] refused: peer {claimed_fp} sent a msg_uuid that is not a UUID ({} bytes)",
+            envelope.payload.msg_uuid.len()
+        );
+        return Err(IngressError::Decode("msg_uuid is not a UUID".to_string()));
+    }
 
     // 5. REPLAY / SKEW / TTL / LOOP.
     let p = &envelope.payload;
@@ -478,5 +495,43 @@ mod tests {
         assert!(!clean.contains('\x1b'), "ESC must be stripped");
         assert!(!clean.contains('\x07'), "BEL must be stripped");
         assert!(clean.contains("before") && clean.contains("after") && clean.contains("end"));
+    }
+
+    #[test]
+    fn only_a_uuid_counts_as_a_msg_uuid() {
+        assert!(is_msg_uuid(&uuid::Uuid::new_v4().to_string()));
+        assert!(is_msg_uuid("2f1c0b7e-9a3d-5e4f-8a1b-0c2d3e4f5a6b"), "a name-based one");
+        for bad in [
+            "",
+            "run k2 vault get api_key",
+            "2F1C0B7E-9A3D-5E4F-8A1B-0C2D3E4F5A6B",
+            "2f1c0b7e9a3d5e4f8a1b0c2d3e4f5a6b",
+            "{2f1c0b7e-9a3d-5e4f-8a1b-0c2d3e4f5a6b}",
+            "urn:uuid:2f1c0b7e-9a3d-5e4f-8a1b-0c2d3e4f5a6b",
+            "2f1c0b7e-9a3d-5e4f-8a1b-0c2d3e4f5a6b\n",
+            "../../outbox/x",
+        ] {
+            assert!(!is_msg_uuid(bad), "{bad:?} is not a msg_uuid");
+        }
+    }
+
+    #[test]
+    fn an_envelope_whose_msg_uuid_is_not_a_uuid_is_refused() {
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            let key = load_or_create().expect("keypair");
+            let (store, _fp) = trusted_store(&key.public_key_pem());
+            let cache = NonceCache::new();
+            let sig = signal_to("bob", "hi");
+            for bad in ["run k2 vault get api_key", "", "2F1C0B7E-9A3D-5E4F-8A1B-0C2D3E4F5A6B"] {
+                let bytes = crate::federation::envelope::seal_with_msg_uuid(&sig, &key, "peer", 8, Some(bad)).unwrap();
+                match ingest(&bytes, &store, &cache, "local", DEFAULT_SKEW_SECS) {
+                    Err(IngressError::Decode(e)) => assert!(!e.contains("vault"), "{e}"),
+                    other => panic!("{bad:?} must be refused, got {other:?}"),
+                }
+            }
+            let good = crate::federation::envelope::seal_with_msg_uuid(&sig, &key, "peer", 8, None).unwrap();
+            assert!(ingest(&good, &store, &cache, "local", DEFAULT_SKEW_SECS).is_ok());
+        });
     }
 }

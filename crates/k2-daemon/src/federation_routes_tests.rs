@@ -1264,12 +1264,32 @@ fn a_tray_title_and_note_reach_the_agent_and_cover_cleaned() {
         assert!(!cover.contains("\n[from owner]"), "the title can't add a line to the cover: {cover:?}");
         assert!(cover.contains("line one\nline[31m two"), "the note keeps its lines: {cover:?}");
 
-        // No title: the one the inbox takes from a `.md` heading is cleaned too.
+        // No title: the one the inbox takes from a `.md` heading is cleaned
+        // too, in the answer and in the cover's title line.
         let spec = raw_tray(None, None, &[("note.md", "# Hi\u{1b}[31m there\n")]);
         let resp = handle_inbound(&seal_from_named(&ws_id, &key, "cortana", tray_kind(&spec)));
         assert_eq!(resp.status, "200 OK", "{}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["title"], "Hi\\u{1b}[31m there", "{v}");
+        let cover = std::fs::read_to_string(v["coverPath"].as_str().expect("coverPath")).unwrap();
+        assert!(cover.contains("\ntitle: Hi\\u{1b}[31m there\n"), "{cover:?}");
+
+        // The same with a long heading beside another file, and from a
+        // frontmatter title.
+        let long = format!("# {}\u{7}\n", "h".repeat(300));
+        let spec = raw_tray(None, None, &[("plan.md", &long), ("data.csv", "1,2\n")]);
+        let resp = handle_inbound(&seal_from_named(&ws_id, &key, "cortana", tray_kind(&spec)));
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        let shown = v["title"].as_str().expect("title");
+        assert_eq!(shown, format!("{}...", "h".repeat(200)), "{v}");
+        let cover = std::fs::read_to_string(v["coverPath"].as_str().expect("coverPath")).unwrap();
+        assert!(cover.contains(&format!("\ntitle: {shown}\n")), "{cover:?}");
+        let spec = raw_tray(None, None, &[("fm.md", "---\ntitle: Front\u{1b}]0;x\u{7}\n---\nbody\n")]);
+        let resp = handle_inbound(&seal_from_named(&ws_id, &key, "cortana", tray_kind(&spec)));
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["title"], "Front\\u{1b}]0;x\\u{7}", "{v}");
+        let cover = std::fs::read_to_string(v["coverPath"].as_str().expect("coverPath")).unwrap();
+        assert!(cover.contains("\ntitle: Front\\u{1b}]0;x\\u{7}\n"), "{cover:?}");
     });
 }
 

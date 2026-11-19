@@ -1033,7 +1033,6 @@ fn deliver_inbound_tray(
     // written into the cover: one line, capped, escaped. The note goes to
     // the cover only: control characters other than line breaks and tabs
     // are dropped.
-    let title = decoded.title.as_deref().map(|t| escape_capped(t, PEER_TEXT_CAP));
     let note = decoded.body.as_deref().map(ingress::sanitize_text);
     let named: Vec<k2_core::inbox::NamedBytes> = decoded
         .files
@@ -1043,6 +1042,13 @@ fn deliver_inbound_tray(
             bytes: bytes.clone(),
         })
         .collect();
+    // With no title, the inbox would take the cover's title from a `.md`
+    // file's heading: clean that the same way and give it as the title.
+    let title = decoded
+        .title
+        .clone()
+        .or_else(|| k2_core::inbox::md_title_for_named(&named))
+        .map(|t| escape_capped(&t, PEER_TEXT_CAP));
     let package = match k2_core::inbox::deliver_named_bytes(
         std::path::Path::new(project_path),
         &named,
@@ -1065,8 +1071,8 @@ fn deliver_inbound_tray(
     } else {
         package.sidecar_paths.len()
     };
-    // With no title the inbox takes one from a `.md` file's text: clean
-    // that too before an agent sees it (a given title is clean already).
+    // A title from file names only is clean already; clean it anyway
+    // before an agent sees it (a given title is clean already).
     let shown_title = title.clone().unwrap_or_else(|| escape_capped(&package.title, PEER_TEXT_CAP));
     let opt_in = k2_core::workspace::settings::remote_instruct_allowed_for_path(project_path);
     let wake = if decoded.wake {

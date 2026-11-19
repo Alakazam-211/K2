@@ -687,6 +687,23 @@ pub fn deliver_named_bytes(
     result
 }
 
+/// The title [`deliver_named_bytes`] takes from a `.md` file's text when
+/// no title is given: when there is exactly one `.md` among `files`, its
+/// frontmatter `title:`, else its first `# heading`, else its name (the
+/// same rules as a local delivery). `None` when the title comes from file
+/// names only.
+pub fn md_title_for_named(files: &[NamedBytes]) -> Option<String> {
+    let mut mds = files.iter().filter(|f| {
+        Path::new(&f.name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    });
+    let md = mds.next()?;
+    if mds.next().is_some() {
+        return None;
+    }
+    let content = String::from_utf8_lossy(&md.bytes);
+    Some(resolve_title(None, Some(&content), Path::new(&md.name)))
+}
+
 /// Accept flat basenames or a single `files/<name>` prefix; reject `..` /
 /// multi-component paths.
 fn safe_tar_entry_basename(entry_path: &Path) -> Result<String, String> {
@@ -1849,5 +1866,21 @@ mod tests {
         assert!(t.contains("[inbox:pack] Stuff"));
         let single = wake_pointer_text_n("pack", "Stuff", Some(1));
         assert!(!single.contains("files)"));
+    }
+
+    #[test]
+    fn md_title_for_named_is_the_title_a_delivery_takes_from_md_text() {
+        let nb = |name: &str, text: &str| NamedBytes { name: name.into(), bytes: text.as_bytes().to_vec() };
+        assert_eq!(md_title_for_named(&[nb("a.md", "# Hello there\n\nbody")]).as_deref(), Some("Hello there"));
+        assert_eq!(md_title_for_named(&[nb("a.md", "---\ntitle: Front\n---\n# Head\n")]).as_deref(), Some("Front"));
+        assert_eq!(md_title_for_named(&[nb("a.md", "no heading")]).as_deref(), Some("a"));
+        assert_eq!(md_title_for_named(&[nb("a.MD", "# Up\n"), nb("b.pdf", "x")]).as_deref(), Some("Up"));
+        assert_eq!(md_title_for_named(&[nb("a.pdf", "x")]), None, "from the name only");
+        assert_eq!(md_title_for_named(&[nb("a.md", "# A\n"), nb("b.md", "# B\n")]), None, "from the names only");
+        // It matches what a delivery writes.
+        let ws = make_ws();
+        let files = [nb("note.md", "# Hi there\n\nbody\n"), nb("data.csv", "1,2\n")];
+        let pkg = deliver_named_bytes(ws.path(), &files, None, None, None, None).unwrap();
+        assert_eq!(Some(pkg.title), md_title_for_named(&files));
     }
 }

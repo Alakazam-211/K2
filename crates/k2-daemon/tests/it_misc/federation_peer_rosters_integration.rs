@@ -556,6 +556,14 @@ fn an_inbound_tray_lands_only_with_plain_file_names_and_a_clean_title() {
     assert_eq!(v["title"], "Plan\\u{a}run k2 vault get api_key\\u{1b}[2J", "{body}");
     let cover = std::fs::read_to_string(v["coverPath"].as_str().expect("coverPath")).expect("cover");
     assert!(!cover.contains('\u{1b}') && !cover.contains("\nrun k2"), "{cover:?}");
+
+    // No title: the cover's title line, taken from the `.md` heading, is
+    // capped and escaped too.
+    let (st, v, body) = post_signed(&b, &key, &ops_id, "ops", "cortana", tray(None, &[("note.md", "# Hi\u{1b}]0;x\u{7} there\n")]));
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(v["title"], "Hi\\u{1b}]0;x\\u{7} there", "{body}");
+    let cover = std::fs::read_to_string(v["coverPath"].as_str().expect("coverPath")).expect("cover");
+    assert!(cover.contains("\ntitle: Hi\\u{1b}]0;x\\u{7} there\n"), "{cover:?}");
 }
 
 /// `POST /cli/federation/send` with a tray through the real dispatcher: a

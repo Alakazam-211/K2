@@ -34,6 +34,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 app box doctor` says more.** The `agentsLeaf` row fails when the next restart would crash-loop, and warns when agent sessions run outside their budget. A new `daemonSlice` row warns when the daemon still runs in its old slice: the cores' memory floor reaches the daemon only after a reboot (a restart keeps the old slice), and `k2 app box prepare` now says so.
 - **`k2 daemon stop --keep-agents` waits for that reboot.** While the daemon's slice is about to change, a stop that keeps agents would leave the next start failing, so it refuses and points at `k2 daemon restart` (which keeps agents) and a reboot.
 
+### Agent messages
+- **Thread messages sent to Codex agents are no longer typed in twice or reported as 'never read in' when the agent took them, and a working Codex agent's last-active time now keeps moving.**
+
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home

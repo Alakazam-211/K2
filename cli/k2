@@ -48978,17 +48978,20 @@ cmd_connect_status() {
     fi
     local sub="" token_set="no"
     if [ -f "${K2_HOME}/tunnel.json" ]; then
-        eval "$(python3 -c '
+        # The file's fields are data: Python prints each one ended by a NUL
+        # byte and the shell reads them as text, so nothing in them runs.
+        # A file that can't be read leaves both as they are.
+        { IFS= read -r -d '' sub && IFS= read -r -d '' token_set; } < <(python3 -c '
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
 except Exception:
     d = {}
-sub = (d.get("subdomain") or "").strip()
+sub = (d.get("subdomain") or "").strip().replace("\0", "")
 tok = (d.get("token") or "").strip()
-print("sub=%r" % sub)
-print("token_set=%r" % ("yes" if tok else "no"))
-' "${K2_HOME}/tunnel.json" 2>/dev/null)"
+out = "%s\0%s\0" % (sub, "yes" if tok else "no")
+sys.stdout.buffer.write(out.encode("utf-8", "replace"))
+' "${K2_HOME}/tunnel.json" 2>/dev/null) || { sub=""; token_set="no"; }
     fi
     # 0.45.7: a desktop keeps the token in the K2 vault (tunnel.json's is
     # empty since 0.45.4) — ask the daemon, which reads both.
@@ -49009,7 +49012,11 @@ else:
     fi
     echo "K2 Connect account"
     echo "  Account session: $acc_present$([ -n "$acc_email" ] && echo "  ($acc_email)")"
-    echo "  Paired subdomain: ${sub:-'(none)'}$([ -n "$sub" ] && echo " → https://${sub}.k2.dev")"
+    if [ -n "$sub" ]; then
+        printf '  Paired subdomain: %s → https://%s.k2.dev\n' "$sub" "$sub"
+    else
+        printf '%s\n' "  Paired subdomain: '(none)'"
+    fi
     echo "  Tunnel token:     $token_set"
 
     # Tunnel live status when the daemon is up.

@@ -59,7 +59,7 @@ Cross-device relationship / `k2 talk` style peering is a separate layer. **Do no
 
 ## CLI cookbook
 
-Owner/admin verbs need an owner or admin token (local daemon token, or Connect session / `--token` / connect-tokens when using `--host`). Drive verbs prefer a live `k2rs_…` grant.
+Owner/admin verbs need an owner or admin token (local daemon token, or Connect session / `--token-stdin` / connect-tokens when using `--host`). Drive verbs prefer a live `k2rs_…` grant. `--token-stdin` reads the token from stdin; a token on the command line (`--token`) is visible to other users on the machine.
 
 ```sh
 # ── On target device (owner) ──────────────────────────────────────────
@@ -71,11 +71,11 @@ k2 remote-session status          # enabled?, grants, sessions, recent denials
 k2 remote-session grants          # list grants (no secrets)
 
 # ── Driver (local daemon, or --host target via Connect) ───────────────
-k2 remote-session shell --token k2rs_… [--host …] [--cwd PATH]
+k2 remote-session shell --token-stdin [--host …] [--cwd PATH]   # paste the k2rs_… token
 # note sessionId from the response
 
-k2 remote-session write <session-id> "ls -la" --token k2rs_… [--host …]
-k2 remote-session read  <session-id> --lines 80 --token k2rs_… [--host …]
+k2 remote-session write <session-id> "ls -la" --token-stdin [--host …]
+k2 remote-session read  <session-id> --lines 80 --token-stdin [--host …]
 
 # ── Tear down ─────────────────────────────────────────────────────────
 k2 remote-session revoke rs_…     # revoke grant; kills shells bound to it
@@ -100,7 +100,8 @@ k2 remote-session disable         # Layer 0 OFF; kills all remote shells
 | `--scope shell` | Only scope implemented (default) |
 | `--cwd PATH` | Shell spawn working dir (default: daemon HOME; soft default only — no path-jail yet) |
 | `--host HOST` | Remote daemon URL/host; reuses connect-tokens / `$K2_REMOTE_TOKEN` like `k2 talk` |
-| `--token TOK` | Owner/connect token (admin) or `k2rs_…` (drive) |
+| `--token-stdin` | Read the owner/connect token (admin) or `k2rs_…` (drive) from stdin |
+| `--token TOK` | The token on the command line, where other users on the machine can see it; prefer `--token-stdin` |
 | `--json` | Machine-readable `status` / `grants` |
 
 ---

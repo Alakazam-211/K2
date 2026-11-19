@@ -29,6 +29,7 @@
 # Also the remote token of k2 read <ws>@<host> --token-stdin.
 # Also the token of k2 daemon restart --host <url> --token-stdin.
 # Also the remote token of k2 talk <ws>@<host> --token-stdin.
+# Also the tokens of k2 remote-session status --host and write --token-stdin.
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -452,6 +453,12 @@ assert_off_children "daemon restart --token-stdin" "token" "$REMOTE_SENTINEL"
 #     reaches that server's terminal read (talk reads first) and no
 #     child's argv or environment, nor k2's own argv, through the send.
 sec_case "talk --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINEL" talk "ws1@http://127.0.0.1:$(cat "$W/tcp-port")" "hello" --token-stdin
+
+# 25-26. k2 remote-session --token-stdin: an owner token for a remote host
+#        (status --host) and a grant token on this daemon (write) reach the
+#        route and no child's argv or environment, nor k2's own argv.
+sec_case "remote-session status --token-stdin" /cli/remote-session/status "owner token" "$REMOTE_SENTINEL" remote-session status --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
+sec_case "remote-session write --token-stdin" /cli/terminal/write "grant token" "$REMOTE_SENTINEL" remote-session write sess-1 "ls" --token-stdin
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -842,7 +842,7 @@ case "${1:-help}" in
     remote-session)
         # Remote Session Layer 0 + grants + shell PTY (owner/admin CLI).
         # Locked id tool; connection gate required (daemon). Grant-driven
-        # shell/write/read use --token k2rs_…; admin ops use owner token.
+        # shell/write/read use a k2rs_… grant token; admin ops use owner token.
         if _wants_help "${@:2}"; then
             cmd_help_remote_session
             exit 0

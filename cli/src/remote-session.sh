@@ -2,7 +2,7 @@
 # Stages 1–3 daemon: Layer 0 toggle, grants (k2rs_…), shell PTY + I/O.
 # Routes live under /cli/remote-session/* and terminal write/read with
 # grant-token support. Owner/admin for status/enable/disable/grant/revoke;
-# shell/write/read accept a grant token via --token k2rs_….
+# shell/write/read accept a grant token via --token-stdin (or --token k2rs_…).
 
 # Parse TTL strings into integer seconds.
 # Accepts: bare seconds (1800), 30m, 45m, 1h, 90s. Echoes seconds or
@@ -119,16 +119,16 @@ Grants mint a one-time k2rs_… token; shell PTYs and terminal I/O require a
 live grant (or owner break-glass on write/read).
 
 USAGE
-  k2 remote-session status [--json] [--host HOST] [--token TOK]
-  k2 remote-session enable  [--host HOST] [--token TOK]
-  k2 remote-session disable [--host HOST] [--token TOK]
+  k2 remote-session status [--json] [--host HOST] [--token-stdin | --token TOK]
+  k2 remote-session enable  [--host HOST] [--token-stdin | --token TOK]
+  k2 remote-session disable [--host HOST] [--token-stdin | --token TOK]
   k2 remote-session grant [--scope shell] [--ttl 30m|1800] [--label "..."]
-                          [--host HOST] [--token TOK]
-  k2 remote-session grants [--json] [--host HOST] [--token TOK]
-  k2 remote-session revoke <grant-id> [--host HOST] [--token TOK]
-  k2 remote-session shell [--cwd PATH] [--host HOST] [--token k2rs_…]
-  k2 remote-session write <session-id> "text" [--token k2rs_…] [--host HOST]
-  k2 remote-session read  <session-id> [--lines N] [--token k2rs_…] [--host HOST]
+                          [--host HOST] [--token-stdin | --token TOK]
+  k2 remote-session grants [--json] [--host HOST] [--token-stdin | --token TOK]
+  k2 remote-session revoke <grant-id> [--host HOST] [--token-stdin | --token TOK]
+  k2 remote-session shell [--cwd PATH] [--host HOST] [--token-stdin | --token k2rs_…]
+  k2 remote-session write <session-id> "text" [--token-stdin | --token k2rs_…] [--host HOST]
+  k2 remote-session read  <session-id> [--lines N] [--token-stdin | --token k2rs_…] [--host HOST]
 
 ADMIN (owner/admin token)
   status     Layer 0 enabled?, active grants/sessions, recent denials
@@ -138,7 +138,7 @@ ADMIN (owner/admin token)
   grants     List grants (no secrets)
   revoke     Revoke by id (kills bound shells)
 
-DRIVE (prefer --token k2rs_… grant)
+DRIVE (prefer a k2rs_… grant token, with --token-stdin)
   shell      Spawn daemon-user login shell PTY under the grant
   write      Inject text into a remote-session PTY (terminal/write)
   read       Peek last N lines of a remote-session PTY (terminal/read)
@@ -150,16 +150,19 @@ OPTIONS
   --cwd PATH        Working directory for shell spawn (default: daemon HOME)
   --lines N         Lines for read (default 50)
   --host HOST       Remote daemon (https://HOST or full URL). Reuses
-                    connect-tokens / --token / $K2_REMOTE_TOKEN like k2 talk.
-  --token TOK       Owner/connect token (admin) or k2rs_… grant (drive)
+                    connect-tokens / --token-stdin / $K2_REMOTE_TOKEN like k2 talk.
+  --token-stdin     Read the token from stdin: owner/connect token (admin)
+                    or k2rs_… grant (drive)
+  --token TOK       The token on the command line, where other users on
+                    this machine can see it; prefer --token-stdin
   --json            Machine-readable status / grants
 
 EXAMPLES
   k2 remote-session enable
   k2 remote-session grant --ttl 30m --label "lab overnight"
-  k2 remote-session shell --token k2rs_…
-  k2 remote-session write <session-id> "ls -la" --token k2rs_…
-  k2 remote-session read  <session-id> --lines 80 --token k2rs_…
+  k2 remote-session shell --token-stdin          # paste the k2rs_… token
+  k2 remote-session write <session-id> "ls -la" --token-stdin
+  k2 remote-session read  <session-id> --lines 80 --token-stdin
   k2 remote-session revoke rs_…
   k2 remote-session status --host box.k2.dev   # owner token from connect-tokens
 
@@ -171,11 +174,20 @@ EXIT CODES
 EOF
 }
 
-# Apply --host / --token for a remote-session subcommand.
+# Apply --host / --token / --token-stdin for a remote-session subcommand.
 # Grant tokens (k2rs_) set TOKEN even without --host (local drive).
 # With --host, reuses _apply_remote_host (connect-tokens / K2_REMOTE_TOKEN).
+# $3 = 1 (--token-stdin) reads the token from stdin: a token on the command
+# line is visible to other users on this machine. Both forms together, or
+# an empty stdin token, is a usage error (returns 2).
 _rs_apply_target() {
-    local host="${1:-}" token="${2:-}"
+    local host="${1:-}" token="${2:-}" token_stdin="${3:-0}"
+    if [ "$token_stdin" = 1 ]; then
+        [ -z "$token" ] || { echo "k2 remote-session: --token-stdin or --token, not both" >&2; return 2; }
+        _cli_read_secret_stdin "Token: "
+        token="$_K2_SECRET"; _K2_SECRET=""
+        [ -n "$token" ] || { echo "k2 remote-session: --token-stdin: no token on stdin" >&2; return 2; }
+    fi
     if [ -n "$host" ]; then
         _apply_remote_host "$host" "$token" || return 1
         return 0
@@ -196,17 +208,18 @@ cmd_remote_session() {
 
     case "$sub" in
         status)
-            local host="" token="" json=0
+            local host="" token="" token_stdin=0 json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  host="${2:-}"; shift 2 ;;
                     --token) token="${2:-}"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --json)  json=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; cmd_help_remote_session >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" || return 1
+            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
             local raw
             raw=$(cli_request "/cli/remote-session/status") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -255,16 +268,17 @@ else:
             ;;
 
         enable|disable)
-            local host="" token=""
+            local host="" token="" token_stdin=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  host="${2:-}"; shift 2 ;;
                     --token) token="${2:-}"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" || return 1
+            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
             local raw
             raw=$(cli_post_json "/cli/remote-session/${sub}" "{}") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -287,11 +301,12 @@ if killed is not None:
             ;;
 
         grant)
-            local host="" token="" scope="shell" ttl_raw="30m" label=""
+            local host="" token="" token_stdin=0 scope="shell" ttl_raw="30m" label=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  host="${2:-}"; shift 2 ;;
                     --token) token="${2:-}"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --scope) scope="${2:-}"; shift 2 ;;
                     --ttl)   ttl_raw="${2:-}"; shift 2 ;;
                     --label) label="${2:-}"; shift 2 ;;
@@ -304,7 +319,7 @@ if killed is not None:
                 echo "Error: invalid --ttl '$ttl_raw' (use 30m, 1h, 90s, or bare seconds)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" || return 1
+            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
             local body raw
             body=$(SCOPE="$scope" TTL="$ttl_secs" LABEL="$label" python3 -c '
 import json,os
@@ -344,17 +359,18 @@ print("Scope: %s" % (g.get("scope") or "shell"))
             ;;
 
         grants)
-            local host="" token="" json=0
+            local host="" token="" token_stdin=0 json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  host="${2:-}"; shift 2 ;;
                     --token) token="${2:-}"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --json)  json=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" || return 1
+            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
             local raw
             raw=$(cli_request "/cli/remote-session/grants") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -406,11 +422,12 @@ for r in rows:
             ;;
 
         revoke)
-            local id="" host="" token=""
+            local id="" host="" token="" token_stdin=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  host="${2:-}"; shift 2 ;;
                     --token) token="${2:-}"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
                         echo "Unknown flag: $1" >&2; return 2 ;;
@@ -424,7 +441,7 @@ for r in rows:
                 echo "Usage: k2 remote-session revoke <grant-id>" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" || return 1
+            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
             local body raw
             body=$(ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["ID"]}))')
             raw=$(cli_post_json "/cli/remote-session/revoke" "$body") || raw=""
@@ -449,17 +466,18 @@ if killed is not None:
             ;;
 
         shell)
-            local host="" token="" cwd=""
+            local host="" token="" token_stdin=0 cwd=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  host="${2:-}"; shift 2 ;;
                     --token) token="${2:-}"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --cwd)   cwd="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" || return 1
+            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
             local body raw
             if [ -n "$cwd" ]; then
                 body=$(CWD="$cwd" python3 -c 'import json,os; print(json.dumps({"cwd": os.environ["CWD"]}))')
@@ -481,8 +499,8 @@ print("grantId:   %s" % (d.get("grantId") or "?"))
 print("ready:     %s" % ("true" if d.get("ready") else "false"))
 print("")
 print("Next:")
-print("  k2 remote-session write %s \"command\" --token <k2rs_…>" % sid)
-print("  k2 remote-session read  %s [--lines 50] --token <k2rs_…>" % sid)
+print("  k2 remote-session write %s \"command\" --token-stdin" % sid)
+print("  k2 remote-session read  %s [--lines 50] --token-stdin" % sid)
 '
                 return 0
             fi
@@ -491,11 +509,12 @@ print("  k2 remote-session read  %s [--lines 50] --token <k2rs_…>" % sid)
             ;;
 
         write)
-            local sid="" text="" host="" token=""
+            local sid="" text="" host="" token="" token_stdin=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  host="${2:-}"; shift 2 ;;
                     --token) token="${2:-}"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
                         echo "Unknown flag: $1" >&2; return 2 ;;
@@ -507,10 +526,10 @@ print("  k2 remote-session read  %s [--lines 50] --token <k2rs_…>" % sid)
                 esac
             done
             if [ -z "$sid" ] || [ -z "$text" ]; then
-                echo "Usage: k2 remote-session write <session-id> \"text\" [--token k2rs_…] [--host HOST]" >&2
+                echo "Usage: k2 remote-session write <session-id> \"text\" [--token-stdin | --token k2rs_…] [--host HOST] (a token on the command line is visible to other users on this machine)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" || return 1
+            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
             local raw
             raw=$(cli_request_post "/cli/terminal/write" \
                 "id=$(urlencode "$sid")" \
@@ -561,11 +580,12 @@ sys.exit(0 if isinstance(d,dict) and (d.get("ok") is True or "success" in d) els
             ;;
 
         read)
-            local sid="" lines=50 host="" token=""
+            local sid="" lines=50 host="" token="" token_stdin=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  host="${2:-}"; shift 2 ;;
                     --token) token="${2:-}"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --lines) lines="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
@@ -577,10 +597,10 @@ sys.exit(0 if isinstance(d,dict) and (d.get("ok") is True or "success" in d) els
                 esac
             done
             if [ -z "$sid" ]; then
-                echo "Usage: k2 remote-session read <session-id> [--lines N] [--token k2rs_…] [--host HOST]" >&2
+                echo "Usage: k2 remote-session read <session-id> [--lines N] [--token-stdin | --token k2rs_…] [--host HOST] (a token on the command line is visible to other users on this machine)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" || return 1
+            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
             local raw
             raw=$(cli_request "/cli/terminal/read" \
                 "id=$(urlencode "$sid")" \

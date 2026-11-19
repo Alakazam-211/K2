@@ -277,10 +277,10 @@ REMOTE SESSION (owner/admin Layer 0 + grants + shell PTY)
   remote-session grant [--ttl 30m] [--label L]  Mint shell grant (token shown once)
   remote-session grants [--json]                List grants (no secrets)
   remote-session revoke <grant-id>              Revoke grant + kill bound shells
-  remote-session shell [--cwd PATH] [--token k2rs_…]
+  remote-session shell [--cwd PATH] [--token-stdin]
                                                 Spawn grant-bound login shell PTY
-  remote-session write <sid> "text" [--token k2rs_…]
-  remote-session read  <sid> [--lines N] [--token k2rs_…]
+  remote-session write <sid> "text" [--token-stdin]
+  remote-session read  <sid> [--lines N] [--token-stdin]
   remote-session --help                         Full Remote Session help
 
 WIKI (per-workspace brain map under .k2/wiki/)

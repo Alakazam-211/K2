@@ -4010,45 +4010,49 @@ exit: 0
       "description": "Owner/admin Remote Session surface: Layer 0 master switch, shell grants (k2rs_ token shown once), grant-bound shell PTY spawn, terminal write/read. Defaults OFF. Locked id tool.",
       "args": [],
       "flags": [
-        {"name": "--host", "arg": "HOST", "description": "Remote daemon host (reuses connect-tokens / --token / $K2_REMOTE_TOKEN)."},
-        {"name": "--token", "arg": "TOK", "description": "Owner/connect token (admin) or k2rs_ grant token (drive)."},
+        {"name": "--host", "arg": "HOST", "description": "Remote daemon host (reuses connect-tokens / --token-stdin / --token / $K2_REMOTE_TOKEN)."},
+        {"name": "--token-stdin", "arg": null, "description": "Read the owner/connect token (admin) or k2rs_ grant token (drive) from stdin."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."},
         {"name": "--json", "arg": null, "description": "JSON output for status/grants."}
       ]
     },
     {
       "name": "remote-session status",
-      "usage": "k2 remote-session status [--json] [--host HOST] [--token TOK]",
+      "usage": "k2 remote-session status [--json] [--host HOST] [--token-stdin | --token TOK]",
       "description": "Show enabled flag, active grants/sessions, recent denials (owner/admin).",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "Machine-readable object."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
-        {"name": "--token", "arg": "TOK", "description": "Owner/admin token."}
+        {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
       ]
     },
     {
       "name": "remote-session enable",
-      "usage": "k2 remote-session enable [--host HOST] [--token TOK]",
+      "usage": "k2 remote-session enable [--host HOST] [--token-stdin | --token TOK]",
       "description": "Turn Remote Sessions ON (owner/admin).",
       "args": [],
       "flags": [
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
-        {"name": "--token", "arg": "TOK", "description": "Owner/admin token."}
+        {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
       ]
     },
     {
       "name": "remote-session disable",
-      "usage": "k2 remote-session disable [--host HOST] [--token TOK]",
+      "usage": "k2 remote-session disable [--host HOST] [--token-stdin | --token TOK]",
       "description": "Turn Remote Sessions OFF and kill grant-bound shells (owner/admin).",
       "args": [],
       "flags": [
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
-        {"name": "--token", "arg": "TOK", "description": "Owner/admin token."}
+        {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
       ]
     },
     {
       "name": "remote-session grant",
-      "usage": "k2 remote-session grant [--scope shell] [--ttl 30m|1800] [--label \"...\"] [--host HOST] [--token TOK]",
+      "usage": "k2 remote-session grant [--scope shell] [--ttl 30m|1800] [--label \"...\"] [--host HOST] [--token-stdin | --token TOK]",
       "description": "Mint a shell grant. Prints k2rs_ token once (cannot be retrieved again). Mint allowed while Layer 0 is OFF; use blocked until enable.",
       "args": [],
       "flags": [
@@ -4056,59 +4060,65 @@ exit: 0
         {"name": "--ttl", "arg": "dur", "description": "30m, 45m, 1h, 90s, or bare seconds (default 30m)."},
         {"name": "--label", "arg": "text", "description": "Optional human label."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
-        {"name": "--token", "arg": "TOK", "description": "Owner/admin token."}
+        {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
       ]
     },
     {
       "name": "remote-session grants",
-      "usage": "k2 remote-session grants [--json] [--host HOST] [--token TOK]",
+      "usage": "k2 remote-session grants [--json] [--host HOST] [--token-stdin | --token TOK]",
       "description": "List grants (never includes token or credential hash).",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "Machine-readable object."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
-        {"name": "--token", "arg": "TOK", "description": "Owner/admin token."}
+        {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
       ]
     },
     {
       "name": "remote-session revoke",
-      "usage": "k2 remote-session revoke <grant-id> [--host HOST] [--token TOK]",
+      "usage": "k2 remote-session revoke <grant-id> [--host HOST] [--token-stdin | --token TOK]",
       "description": "Revoke a grant by id and kill every PTY bound to it.",
       "args": [{"name": "grant-id", "required": true}],
       "flags": [
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
-        {"name": "--token", "arg": "TOK", "description": "Owner/admin token."}
+        {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
       ]
     },
     {
       "name": "remote-session shell",
-      "usage": "k2 remote-session shell [--cwd PATH] [--host HOST] [--token k2rs_…]",
-      "description": "Spawn a daemon-user login shell PTY under a live grant. Prefer --token k2rs_…. Returns sessionId for write/read.",
+      "usage": "k2 remote-session shell [--cwd PATH] [--host HOST] [--token-stdin | --token k2rs_…]",
+      "description": "Spawn a daemon-user login shell PTY under a live grant. Prefer a k2rs_… grant token, with --token-stdin. Returns sessionId for write/read.",
       "args": [],
       "flags": [
         {"name": "--cwd", "arg": "PATH", "description": "Working directory (default: daemon HOME)."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
-        {"name": "--token", "arg": "k2rs_…", "description": "Grant token (required for drive)."}
+        {"name": "--token-stdin", "arg": null, "description": "Read the grant token (required for drive) from stdin."},
+        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
       ]
     },
     {
       "name": "remote-session write",
-      "usage": "k2 remote-session write <session-id> \"text\" [--token k2rs_…] [--host HOST]",
+      "usage": "k2 remote-session write <session-id> \"text\" [--token-stdin | --token k2rs_…] [--host HOST]",
       "description": "Inject text into a remote-session PTY via /cli/terminal/write (grant token or owner).",
       "args": [{"name": "session-id", "required": true}, {"name": "text", "required": true}],
       "flags": [
-        {"name": "--token", "arg": "k2rs_…", "description": "Grant token."},
+        {"name": "--token-stdin", "arg": null, "description": "Read the grant token from stdin."},
+        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."}
       ]
     },
     {
       "name": "remote-session read",
-      "usage": "k2 remote-session read <session-id> [--lines N] [--token k2rs_…] [--host HOST]",
+      "usage": "k2 remote-session read <session-id> [--lines N] [--token-stdin | --token k2rs_…] [--host HOST]",
       "description": "Peek last N lines of a remote-session PTY via /cli/terminal/read (grant token or owner).",
       "args": [{"name": "session-id", "required": true}],
       "flags": [
         {"name": "--lines", "arg": "N", "description": "Lines to return (default 50)."},
-        {"name": "--token", "arg": "k2rs_…", "description": "Grant token."},
+        {"name": "--token-stdin", "arg": null, "description": "Read the grant token from stdin."},
+        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."}
       ]
     },

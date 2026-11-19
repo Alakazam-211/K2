@@ -2,10 +2,12 @@
 # Select TCP credential by catalog mode BEFORE any verb handler runs.
 # ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
 # invert to DISK_OWNER_TOKEN (COMPAT-58). See _cli_apply_auth_for_verb.
+# It reads every argument: a locked tool's name after leading flags
+# (`k2 setup --json chief-of-staff`) is the same locked tool.
 # A passport from a shared Codex app-server or a dead session is refused
 # with a clear error first (never an owner fallback).
 _cli_check_session_passport "${1:-help}"
-_cli_apply_auth_for_verb "${1:-help}" "${2:-}"
+_cli_apply_auth_for_verb "${1:-help}" "${@:2}"
 
 # Permission cards (Beta): print the refusal's closing line, if a transport
 # noted one, once the command's own output is done. Prints nothing and

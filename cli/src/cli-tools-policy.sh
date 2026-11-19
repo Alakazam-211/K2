@@ -179,6 +179,41 @@ _cli_tool_id_for_verb() {
     esac
 }
 
+# The tool id for a whole `k2 <verb> <args...>`: the first argument's, as
+# above, or, when that maps to no tool, the id of the first word after any
+# leading flags (and the values of the flags that take one). A family whose
+# parser reads flags before its verb (`k2 setup --json chief-of-staff`)
+# then names the same tool as without them, so a locked tool stays locked
+# when flags come before its name. Only ever the stricter of the two: a
+# first argument that names a tool keeps it. A help flag ends the search
+# (help stays help).
+_cli_tool_id_for_args() {
+    local verb="${1:-}" id
+    [ $# -gt 0 ] && shift
+    id="$(_cli_tool_id_for_verb "$verb" "${1:-}")"
+    if [ -z "$id" ]; then
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -h|--help) break ;;
+                --) shift; break ;;
+                -*)
+                    # The flags k2 setup reads with a value.
+                    case "$verb:$1" in
+                        setup:--tool|setup:--name|setup:--handle|setup:--about|setup:--focus-group)
+                            [ $# -gt 1 ] && shift ;;
+                    esac
+                    shift ;;
+                *) break ;;
+            esac
+        done
+        case "${1:-}" in
+            -h|--help) ;;
+            *) [ $# -gt 0 ] && id="$(_cli_tool_id_for_verb "$verb" "$1")" ;;
+        esac
+    fi
+    printf '%s\n' "$id"
+}
+
 # Default identity mode for a tool id: open | id.
 # Locked production tools are always id (cannot be Open in the catalog).
 _cli_tool_default_mode() {
@@ -221,9 +256,9 @@ _cli_require_session_passport() {
 # Outside a scoped cell (no $K2_HOOK_SOCK), disk owner discovery above is the
 # human/external-terminal path and remains valid Owner proof for ID tools.
 _cli_apply_auth_for_verb() {
-    local verb="${1:-}" sub="${2:-}"
+    local verb="${1:-}"
     local tool_id mode
-    tool_id="$(_cli_tool_id_for_verb "$verb" "$sub")"
+    tool_id="$(_cli_tool_id_for_args "$@")"
     mode="$(_cli_tool_default_mode "$tool_id")"
     local hook_sock="${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}"
 

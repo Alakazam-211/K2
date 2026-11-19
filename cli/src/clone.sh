@@ -1249,11 +1249,13 @@ for line in d.get("doctor") or []:
             # write); owner/admin keep the set-role call below.
             local body_role=""
             case "$role" in member|voice_chat) body_role="$role" ;; esac
-            body=$(USERNAME="$username" PASSWORD="$password" KEEP="$keep_password" ROLE="$body_role" \
+            # The password reaches python on stdin, never argv or the
+            # environment (ps shows both to every process of this user).
+            body=$(printf '%s' "$password" | USERNAME="$username" KEEP="$keep_password" ROLE="$body_role" \
                 SHARE_AGENTS="$share_agents" SHARE_GARDENS="$share_gardens" SHARE_SOURCES="$share_sources" \
                 FIXED="$fixed_password" FORCE="$force" python3 -c '
-import json, os
-b = {"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"]}
+import json, os, sys
+b = {"username": os.environ["USERNAME"], "password": sys.stdin.read()}
 if os.environ["ROLE"] == "voice_chat":
     # L4: a voice_chat login is fixed and kept unless a flag says otherwise
     # (the daemon decides; only flags given are sent).
@@ -1533,9 +1535,10 @@ print("%s (Voice & Chat only)\n  agents:  %s\n  gardens: %s\n  sources: %s" % (u
             local password
             password="$(_users_read_password "$password_stdin")" || return 1
             local body resp
-            body=$(USERNAME="$username" PASSWORD="$password" KEEP="$keep_password" python3 -c '
-import json, os
-b = {"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"]}
+            # The password reaches python on stdin, never argv or the environment.
+            body=$(printf '%s' "$password" | USERNAME="$username" KEEP="$keep_password" python3 -c '
+import json, os, sys
+b = {"username": os.environ["USERNAME"], "password": sys.stdin.read()}
 if os.environ["KEEP"] == "1":
     b["mustChangePassword"] = False
 print(json.dumps(b))

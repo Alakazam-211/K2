@@ -19,7 +19,8 @@
 # _rec_send_confirmed), k2 api-key create --hire, and the typed passwords
 # of the mail family: k2 mail link add --pass-stdin, k2 mail oauth-config
 # set --secret-stdin, k2 hostmail config --relay-pass-stdin, k2 hostmail
-# import --pass-stdin.
+# import --pass-stdin, and of the logins: k2 users add and set-password
+# --password-stdin, k2 users pair-phone, k2 connect login.
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -189,6 +190,13 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._answer(200, {"source": {"id": "src-1", "name": "a-source"}})
         if path == "/cli/sources/secret":
             return self._answer(200, {"names": ["a-source"], "secret": "x", "secretBound": True})
+        if path == "/cli/auth/device/pair-code":
+            if body.get("password"):
+                return self._answer(200, {"code": "123456", "expiresIn": 300})
+            return self._answer(200, {"error": {"code": "password_required",
+                                                "hint": "type your password again to make a pairing code"}})
+        if path == "/auth/v1/token":
+            return self._answer(401, {"msg": "Invalid login credentials"})
         if path == "/cli/api-keys/create":
             return self._answer(200, {"id": "k1", "key": "k2ak_test", "capabilities": {"hire": True}})
         return self._answer(200, {"ok": True})
@@ -322,6 +330,21 @@ pw_case "mail link add" /cli/mail/external/add mail link add a@example.test --ho
 pw_case "mail oauth-config set" /cli/mail/oauth-config/set mail oauth-config set --provider gmail --client-id cid --secret-stdin --json
 pw_case "hostmail config relay" /cli/mail/config/set hostmail config --relay-pass-stdin --json
 pw_case "hostmail import" /cli/mail/import hostmail import --address a@example.test --imapsync from=imap.example.test --user u --pass-stdin --json
+
+# 11-14. Login passwords: typed on stdin, they reach the request body and
+#        no child's argv or environment.
+pw_case "users add" /cli/users/add users add alice --password-stdin
+pw_case "users set-password" /cli/users/set-password users set-password alice --password-stdin
+pw_case "users pair-phone" /cli/auth/device/pair-code users pair-phone
+# k2 connect login asks with getpass, which reads stdin when there is no
+# terminal: setsid drops the controlling terminal so the test can type.
+SETSID="$(command -v setsid)" || { echo "FAIL: setsid not found (util-linux)" >&2; exit 1; }
+fresh
+printf '%s\n' "$PASS_SENTINEL" | K2_CONNECT_DB_URL="http://127.0.0.1:$(cat "$W/tcp-port")/" \
+    "$SETSID" -w "$K2_CLI" connect login --email a@example.test --subdomain acme >/dev/null 2>&1 || true
+assert_tcp_got "connect login" /auth/v1/token "password" "$PASS_SENTINEL"
+assert_children_seen "connect login"
+assert_off_children "connect login" "password" "$PASS_SENTINEL"
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

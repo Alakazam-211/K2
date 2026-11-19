@@ -223,13 +223,15 @@ _connect_device_label() {
 
 # Supabase password grant → access_token / refresh_token / email.
 # Prints the three fields one-per-line on success; errors on stderr.
+# The password reaches python on stdin, never argv or the environment
+# (ps shows both to every process of this user).
 _connect_supabase_sign_in() {
     local email="$1" password="$2"
-    EMAIL="$email" PASSWORD="$password" \
+    printf '%s' "$password" | EMAIL="$email" \
     SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
 import json, os, sys, urllib.request, urllib.error
 url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
-body = json.dumps({"email": os.environ["EMAIL"], "password": os.environ["PASSWORD"]}).encode()
+body = json.dumps({"email": os.environ["EMAIL"], "password": sys.stdin.read()}).encode()
 req = urllib.request.Request(url, data=body, method="POST", headers={
     "apikey": os.environ["SUPA_KEY"],
     "User-Agent": os.environ.get("K2_UA") or "k2-cli",

@@ -64,9 +64,10 @@ print(json.dumps(b))
             IFS= read -r pw || pw=""
         fi
         [ -n "$pw" ] || { echo "Error: a password is needed to make a pairing code for your login." >&2; return 2; }
-        body=$(USER_ARG="$user" PW="$pw" python3 -c '
-import json, os
-b = {"password": os.environ["PW"]}
+        # The password reaches python on stdin, never argv or the environment.
+        body=$(printf '%s' "$pw" | USER_ARG="$user" python3 -c '
+import json, os, sys
+b = {"password": sys.stdin.read()}
 if os.environ.get("USER_ARG"):
     b["user"] = os.environ["USER_ARG"]
 print(json.dumps(b))

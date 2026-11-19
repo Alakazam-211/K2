@@ -1041,6 +1041,40 @@ fn only_a_handle_counts_as_a_sender_name() {
 }
 
 #[test]
+fn a_sender_name_is_trimmed_and_lowercased_before_the_handle_check() {
+    assert_eq!(sender_handle("Cortana").as_deref(), Some("cortana"));
+    assert_eq!(sender_handle("  K2-Gardener ").as_deref(), Some("k2-gardener"));
+    assert_eq!(sender_handle("cortana").as_deref(), Some("cortana"));
+    // Only surrounding spaces are trimmed: a break inside still fails.
+    assert_eq!(sender_handle("cortana\n").as_deref(), Some("cortana"));
+    for bad in ["Cortana Prime", "cor tana", "Cortana]", "scout_v3", "Caf\u{c9}", "cor\ntana", "", "   ", &"A".repeat(65)] {
+        assert_eq!(sender_handle(bad), None, "{bad:?} is not a handle after trim and lowercase");
+    }
+}
+
+#[test]
+fn an_upper_case_sender_name_lands_normalised_and_a_space_is_still_refused() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let ws_path = temp_ws_path();
+        std::fs::create_dir_all(&ws_path).unwrap();
+        let ws_id = register_project(&ws_path);
+        let key = pin_trusted_peer("peer");
+        let resp = handle_inbound(&seal_from_named(&ws_id, &key, " Cortana ", tray_kind(&brief_tray())));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert!(v["from"].as_str().expect("from").starts_with("cortana::"), "{v}");
+        for bad in ["Cortana Prime", "Cortana]"] {
+            let resp = handle_inbound(&seal_from_named(&ws_id, &key, bad, tray_kind(&brief_tray())));
+            assert_eq!(resp.status, "400 Bad Request", "{bad:?}: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["code"], "bad_sender", "{v}");
+        }
+        assert_eq!(k2_core::inbox::list_root(Path::new(&ws_path)).len(), 1, "only the handle landed");
+    });
+}
+
+#[test]
 fn only_a_host_name_or_ip_with_an_optional_port_counts_as_a_peer_host() {
     for good in ["peer.k2.dev", "127.0.0.1:38471", "localhost", "box-2.example.com:443"] {
         assert!(is_peer_host(good), "{good:?} is a host");

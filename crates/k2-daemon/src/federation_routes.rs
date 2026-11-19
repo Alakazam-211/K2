@@ -542,16 +542,19 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     };
     // The label is typed into an agent's terminal and written into its
     // inbox: both parts must be in shape, or nothing is delivered.
-    if !is_handle(sender_agent) || !(host.is_empty() || is_peer_host(&host)) {
-        k2_core::log_debug!(
-            "[federation] inbound refused: peer {} sent a sender address that is not a handle. Raw name: {}; host: {}",
-            ingested.peer_fingerprint,
-            reason_for_log(&serde_json::Value::from(sender_agent)),
-            reason_for_log(&serde_json::Value::from(host.as_str()))
-        );
-        return bad_sender_response();
-    }
-    let from_label = federated_from_label(sender_agent, &host);
+    let sender_agent = match sender_handle(sender_agent) {
+        Some(name) if host.is_empty() || is_peer_host(&host) => name,
+        _ => {
+            k2_core::log_debug!(
+                "[federation] inbound refused: peer {} sent a sender address that is not a handle. Raw name: {}; host: {}",
+                ingested.peer_fingerprint,
+                reason_for_log(&serde_json::Value::from(sender_agent)),
+                reason_for_log(&serde_json::Value::from(host.as_str()))
+            );
+            return bad_sender_response();
+        }
+    };
+    let from_label = federated_from_label(&sender_agent, &host);
 
     // Tray packages (`k2 msg agent::host --inbox-wake`) ride this same
     // sealed envelope. Land in `.k2/inbox/`; never dump file bytes into
@@ -670,6 +673,14 @@ const HANDLE_MAX: usize = 64;
 /// name reaches an agent only in this shape.
 pub(crate) fn is_handle(name: &str) -> bool {
     name.len() <= HANDLE_MAX && k2_core::workspace_session_handles::is_address_token(name)
+}
+
+/// A peer's sender name as a handle: trimmed and lowercased first (an
+/// older sender may send capitals), then [`is_handle`]. `None` when it
+/// still is not one (a space, a bad character).
+pub(crate) fn sender_handle(raw: &str) -> Option<String> {
+    let name = raw.trim().to_ascii_lowercase();
+    is_handle(&name).then_some(name)
 }
 
 /// True when a pinned peer's host is a host name or IP, with an optional

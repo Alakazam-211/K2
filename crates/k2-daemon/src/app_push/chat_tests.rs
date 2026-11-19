@@ -284,8 +284,8 @@ fn a_window_trails_one_push_with_the_count() {
     let env = Fake::default();
     let mut c = Coalescer::new();
     let t0 = Instant::now();
-    c.on_items(&env, ME, &[item("all", "901", "101", "42", Some(SPACE_A), Some(APP_A), 1)], NOW, t0);
-    c.on_items(&env, ME, &[channel_mention("102"), item("all", "901", "103", "42", Some(SPACE_A), Some(APP_A), 1)], NOW, t0 + secs(5));
+    c.on_items(&env, ME, &[item("message", "901", "101", "42", Some(SPACE_A), Some(APP_A), 1)], NOW, t0);
+    c.on_items(&env, ME, &[channel_mention("102"), item("message", "901", "103", "42", Some(SPACE_A), Some(APP_A), 1)], NOW, t0 + secs(5));
     c.on_items(&env, ME, &[channel_mention("102")], NOW, t0 + secs(6));
     c.tick(&env, t0 + secs(44));
     assert_eq!(env.sent().len(), 1, "still open");

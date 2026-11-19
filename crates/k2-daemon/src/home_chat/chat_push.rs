@@ -9,7 +9,8 @@
 //! one per person: Sew keeps one waiter each) hands every page here
 //! ([`on_feed`]). Sew writes `dm`, `mention` and `reply_to_me` items, gated
 //! by the member's level, mute and Do Not Disturb (Sew holds the feed during
-//! DND); 0.11.0 adds `all`, `keyword` and the `read` marker. The poller drops
+//! DND); 0.11.0 adds `message` (a channel at All messages), `keyword` and
+//! the `read` marker (flag `feed_all_messages`). The poller drops
 //! nothing here; these rules do, in the daemon (headless: no client needed).
 //!
 //! **Dropped at once** (nothing held): `homeChatPush` off; an App's item
@@ -165,6 +166,7 @@ fn reason_of(kind: &str) -> HomeChatReason {
         "mention" => HomeChatReason::Mention,
         "reply_to_me" => HomeChatReason::Reply,
         "keyword" => HomeChatReason::Keyword,
+        // `message`: a channel at level All messages.
         _ => HomeChatReason::All,
     }
 }
@@ -482,7 +484,10 @@ fn ensure_ticker() {
 /// One feed page for `ext`: message items into the windows, read markers
 /// to the badge path. Returns the alerts that went.
 pub fn on_feed(ext: &str, items: &[FeedItem], now_unix: i64) -> usize {
-    for it in items.iter().filter(|i| i.kind == READ_KIND) {
+    // A thread's read (`thread_root_id`) says nothing about the channel's
+    // own messages: its `message_id` is a reply's, so it would read past
+    // channel posts the person hasn't seen. Only channel and DM reads count.
+    for it in items.iter().filter(|i| i.kind == READ_KIND && i.thread_root_id.is_none()) {
         if let (Some(conv), Some(msg)) = (&it.channel_id, &it.message_id) {
             read_moved(ext, conv, msg);
         }
@@ -901,8 +906,8 @@ pub(crate) mod tests {
         let env = Fake::default();
         let mut c = Coalescer::new();
         let t0 = Instant::now();
-        c.on_items(&env, ME, &[item("all", "901", "2001", "42", Some(K5), 1)], NOW, t0);
-        c.on_items(&env, ME, &[mention("2002"), item("all", "901", "2003", "42", Some(K5), 1)], NOW, t0 + secs(5));
+        c.on_items(&env, ME, &[item("message", "901", "2001", "42", Some(K5), 1)], NOW, t0);
+        c.on_items(&env, ME, &[mention("2002"), item("message", "901", "2003", "42", Some(K5), 1)], NOW, t0 + secs(5));
         c.tick(&env, t0 + WINDOW);
         let s = env.sent();
         assert_eq!(s.len(), 2);

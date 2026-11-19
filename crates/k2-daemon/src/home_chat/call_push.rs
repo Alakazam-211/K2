@@ -87,8 +87,9 @@ pub const ITEM_MAX_AGE_SECS: i64 = 600;
 
 /// The feed kinds K2 takes; any other is ignored (additive).
 pub const CALL_KINDS: &[&str] = &["call_ring", "call_missed", "call_ring_stopped"];
-/// The message kinds (Home chat pushes). `all` and `keyword` are Sew 0.11.0's.
-pub const MESSAGE_KINDS: &[&str] = &["dm", "mention", "reply_to_me", "all", "keyword"];
+/// The message kinds (Home chat pushes). `message` (a channel at level All
+/// messages) and `keyword` are Sew 0.11.0's (flag `feed_all_messages`).
+pub const MESSAGE_KINDS: &[&str] = &["dm", "mention", "reply_to_me", "message", "keyword"];
 /// Sew 0.11.0's read marker.
 pub const READ_KIND: &str = "read";
 
@@ -110,6 +111,9 @@ pub struct FeedItem {
     pub started_by: Option<String>,
     /// Sew 0.11.0's `from_external_id`.
     pub from_ext: Option<String>,
+    /// Sew 0.11.0's `thread_root_id`: the message is a thread reply, or a
+    /// `read` item is a read of that thread (not of the channel).
+    pub thread_root_id: Option<String>,
     /// `call_ring_stopped`'s reason.
     pub reason: Option<String>,
     preview: Option<String>,
@@ -128,6 +132,7 @@ impl std::fmt::Debug for FeedItem {
             .field("app_id", &self.app_id)
             .field("started_by", &self.started_by)
             .field("from_ext", &self.from_ext)
+            .field("thread_root_id", &self.thread_root_id)
             .field("reason", &self.reason)
             .field("preview", &self.preview.as_ref().map(|_| "<hidden>"))
             .finish()
@@ -211,6 +216,7 @@ pub fn parse_feed(body: &Value) -> (Vec<FeedItem>, Option<u64>) {
             app_id: id_of(&e["app_id"]),
             started_by: id_of(&e["from_member_id"]),
             from_ext: e["from_external_id"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
+            thread_root_id: id_of(&e["thread_root_id"]),
             reason: e["reason"].as_str().map(str::to_string),
             preview: e["preview"].as_str().filter(|s| !s.trim().is_empty()).map(str::to_string),
         };
@@ -805,6 +811,27 @@ mod tests {
         assert!(!format!("{:?}", items[1]).contains("hi @alex"), "Debug never prints the preview");
         assert_eq!(parse_feed(&json!({"items": [], "next": 3})), (vec![], Some(3)));
         assert_eq!(parse_feed(&json!({"entries": []})).1, None, "not Sew's page");
+    }
+
+    /// Sew 0.11.0's feed v2 (flag `feed_all_messages`), as its own sew-proto
+    /// writes it: a channel message at All messages is kind `message` (not
+    /// `all`), `keyword` and `read` are taken, `from_external_id` and
+    /// `thread_root_id` are read, and `head` on the page changes nothing.
+    #[test]
+    fn the_feed_v2_kinds_parse() {
+        let body = json!({"items": [
+            {"seq": 10, "kind": "message", "at": "2026-11-14T12:00:00Z", "space_id": "7001", "channel_id": "901", "message_id": "1010", "from_member_id": "43", "from_external_id": "u:sam", "app_id": null},
+            {"seq": 11, "kind": "keyword", "at": "2026-11-14T12:00:01Z", "space_id": "7001", "channel_id": "901", "message_id": "1011", "from_member_id": "43", "thread_root_id": "1005", "app_id": null},
+            {"seq": 12, "kind": "read", "at": "2026-11-14T12:00:02Z", "channel_id": "901", "message_id": "1011", "from_member_id": "41", "thread_root_id": "1005", "app_id": null},
+            {"seq": 13, "kind": "all", "at": "2026-11-14T12:00:03Z", "channel_id": "901", "message_id": "1012", "from_member_id": "43", "app_id": null},
+        ], "next": 13, "head": 20});
+        let (items, next) = parse_feed(&body);
+        assert_eq!(next, Some(13));
+        let kinds: Vec<&str> = items.iter().map(|i| i.kind.as_str()).collect();
+        assert_eq!(kinds, ["message", "keyword", "read"], "`all` is not a Sew kind: {items:?}");
+        assert_eq!((items[0].from_ext.as_deref(), items[0].thread_root_id.as_deref()), (Some("u:sam"), None));
+        assert_eq!(items[1].thread_root_id.as_deref(), Some("1005"));
+        assert_eq!((items[2].message_id.as_deref(), items[2].thread_root_id.as_deref()), (Some("1011"), Some("1005")));
     }
 
     /// HC-3, D7: a ring older than 45 s (a restart backlog, a DND release)

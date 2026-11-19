@@ -277,8 +277,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const [liveEpoch, setLiveEpoch] = useState(0)
   const [liveEnded, setLiveEnded] = useState(false)
   const liveCore = useLiveDocCore(room.scope, filePath, liveEpoch)
-  // A declined live open or session: the usual view, and why; Reload reads the file and retries the live open.
-  const { refusedWords, refusedReadOnly, onLiveRefused, reload: reloadLive, refusedBar } = useLiveRefused(filePath, () => void (setLiveEpoch((e) => e + 1), loadFile()))
+  const { refusedWords, refusedReadOnly, onLiveRefused, reload: reloadLive, refusedBar } = useLiveRefused(filePath, () => void (setLiveEpoch((e) => e + 1), loadFile())) // a declined live open or session: the usual view, and why; Reload reads the file and retries the live open
   const liveOn = liveCore.status === 'live' && textLock === null && !isDirty && refusedWords === null
   // The "Any other file" core: the usual view, with the panel beside it.
   const anyFile = liveCore.status === 'any-file'

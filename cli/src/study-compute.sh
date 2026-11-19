@@ -1516,7 +1516,7 @@ WHAT THE WALL DOES NOT STOP (say so before you share)
 
 FOR THE NODE'S OWNER
   k2 compute node servers <node>                 list (slot, state, share)
-  k2 compute node servers <node> add --url … --code CODE.FP [--trust team]
+  k2 compute node servers <node> add --url … --code-stdin [--trust team]
   k2 compute node servers <node> limits|pause|resume|revoke <server> …
   k2 compute node servers <node> limits <server> priority=true|false
                                  its --tier priority counts here (default:

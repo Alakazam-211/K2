@@ -535,12 +535,13 @@
     },
     {
       "name": "compute node servers add",
-      "usage": "k2 compute node servers <node> add --url URL --code CODE.FP|- [--trust own|team] [--for 7d|none] [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive] [--reason TEXT]",
+      "usage": "k2 compute node servers <node> add --url URL --code-stdin | --code CODE.FP|- [--trust own|team] [--for 7d|none] [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive] [--reason TEXT]",
       "description": "Add another K2 server to a node you own. Held for your approval (Touch ID or vault password); the new server's owner then confirms the SAS. Needs the node's remote-admin level full.",
       "args": [{"name": "node", "required": true}],
       "flags": [
         {"name": "--url", "arg": "URL", "description": "The new server's URL."},
-        {"name": "--code", "arg": "CODE.FP|-", "description": "What k2 compute node add <node> printed on the new server; - reads it from stdin, never in argv."},
+        {"name": "--code-stdin", "arg": null, "description": "Read the code k2 compute node add <node> printed on the new server from stdin."},
+        {"name": "--code", "arg": "CODE.FP|-", "description": "The code on the command line, where other users on this machine can see it; - reads it from stdin. Prefer --code-stdin."},
         {"name": "--trust", "arg": "own|team", "description": "How far the new server is trusted."},
         {"name": "--for", "arg": "7d|none", "description": "How long the share lasts."},
         {"name": "--weight", "arg": "N", "description": "Its share weight (every server starts at 1)."},

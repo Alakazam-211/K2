@@ -456,15 +456,17 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
   k2 compute node servers <node> [list [--refresh]] [--json]   every server on it: slot, state,
                    trust, share, today's use, end date, pending SAS
                    (--refresh: ask the node now, not the copy K2 keeps)
-  k2 compute node servers <node> add --url URL --code CODE.FP [--trust own|team]
+  k2 compute node servers <node> add --url URL --code-stdin [--trust own|team]
                    [--for 7d|none] [--weight N] [--max-running N] [--max-queued N]
                    [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G]
                    [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
                    [--reason TEXT]   (--reason: a note for whoever approves it)
                    no-lan on a Mac: the internet over HTTPS through a per-job
                    proxy, never the local network (k2 study compute: IN THE JOB)
-                   CODE.FP is what `k2 compute node add <node>` printed on the
-                   NEW server. Held for your approval (Touch ID / vault
+                   --code-stdin reads CODE.FP, what `k2 compute node add <node>`
+                   printed on the NEW server, from stdin (--code CODE.FP works
+                   too, but a code on the command line is visible to other
+                   users on this machine). Held for your approval (Touch ID / vault
                    password); the new server's owner then confirms the SAS.
                    Needs the node's remote-admin level `full`; on a node set
                    to `policy`, add servers at the machine instead:

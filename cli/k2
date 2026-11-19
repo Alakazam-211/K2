@@ -30565,15 +30565,17 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
   k2 compute node servers <node> [list [--refresh]] [--json]   every server on it: slot, state,
                    trust, share, today's use, end date, pending SAS
                    (--refresh: ask the node now, not the copy K2 keeps)
-  k2 compute node servers <node> add --url URL --code CODE.FP [--trust own|team]
+  k2 compute node servers <node> add --url URL --code-stdin [--trust own|team]
                    [--for 7d|none] [--weight N] [--max-running N] [--max-queued N]
                    [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G]
                    [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
                    [--reason TEXT]   (--reason: a note for whoever approves it)
                    no-lan on a Mac: the internet over HTTPS through a per-job
                    proxy, never the local network (k2 study compute: IN THE JOB)
-                   CODE.FP is what `k2 compute node add <node>` printed on the
-                   NEW server. Held for your approval (Touch ID / vault
+                   --code-stdin reads CODE.FP, what `k2 compute node add <node>`
+                   printed on the NEW server, from stdin (--code CODE.FP works
+                   too, but a code on the command line is visible to other
+                   users on this machine). Held for your approval (Touch ID / vault
                    password); the new server's owner then confirms the SAS.
                    Needs the node's remote-admin level `full`; on a node set
                    to `policy`, add servers at the machine instead:
@@ -33927,11 +33929,12 @@ cmd_compute_node_servers() {
             _compute_render servers
             ;;
         add)
-            local url="" code="" trust="own" forv="" reason="" pairs=()
+            local url="" code="" code_stdin=0 trust="own" forv="" reason="" pairs=()
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --url) url="${2:-}"; shift 2 ;;
                     --code) code="${2:-}"; shift 2 ;;
+                    --code-stdin) code_stdin=1; shift ;;
                     --trust) trust="${2:-}"; shift 2 ;;
                     --for) forv="${2:-}"; shift 2 ;;
                     --reason) reason="${2:-}"; shift 2 ;;
@@ -33947,18 +33950,25 @@ cmd_compute_node_servers() {
                     --gate) pairs+=("gate=true" "top_class=\"gate\""); shift ;;
                     --exclusive) pairs+=("exclusive=true"); shift ;;
                     --json) shift ;;
-                    *) echo "usage: k2 compute node servers <node> add --url URL --code -|CODE.FP [--trust own|team] [--for 7d|none] [limits…] (unknown '$1')" >&2; exit 2 ;;
+                    *) echo "usage: k2 compute node servers <node> add --url URL --code-stdin | --code CODE.FP [--trust own|team] [--for 7d|none] [limits…] (unknown '$1')" >&2; exit 2 ;;
                 esac
             done
-            # The code off argv (2026-10-28): --code - reads one line from
-            # stdin; no --code at all takes $K2_NODE_ENROLL_CODE.
-            if [ "$code" = "-" ]; then
+            # The code off argv (2026-10-28): --code-stdin (or --code -)
+            # reads one line from stdin; no --code at all takes
+            # $K2_NODE_ENROLL_CODE. A code on the command line is visible
+            # to other users on this machine.
+            if [ "$code_stdin" = 1 ]; then
+                [ -z "$code" ] || { echo "k2 compute node servers add: --code-stdin or --code, not both" >&2; exit 2; }
+                _cli_read_secret_stdin "Pairing code: "
+                code="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
+                [ -n "$code" ] || { echo "k2 compute node servers add: --code-stdin: no code on stdin" >&2; exit 2; }
+            elif [ "$code" = "-" ]; then
                 IFS= read -r code || true
                 code="${code%$'\r'}"
             elif [ -z "$code" ] && _envn_any NODE_ENROLL_CODE; then
                 _envn_into code NODE_ENROLL_CODE
             fi
-            [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code - < code-file (or K2_NODE_ENROLL_CODE) [--trust own|team] [--for 7d|none]" >&2; exit 2; }
+            [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code-stdin < code-file (or K2_NODE_ENROLL_CODE) [--trust own|team] [--for 7d|none] (a code on the command line, --code CODE.FP, is visible to other users on this machine)" >&2; exit 2; }
             local for_n=""
             case "$forv" in
                 "") for_n="" ;;
@@ -56494,12 +56504,13 @@ cmd_schema() {
     },
     {
       "name": "compute node servers add",
-      "usage": "k2 compute node servers <node> add --url URL --code CODE.FP|- [--trust own|team] [--for 7d|none] [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive] [--reason TEXT]",
+      "usage": "k2 compute node servers <node> add --url URL --code-stdin | --code CODE.FP|- [--trust own|team] [--for 7d|none] [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h] [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive] [--reason TEXT]",
       "description": "Add another K2 server to a node you own. Held for your approval (Touch ID or vault password); the new server's owner then confirms the SAS. Needs the node's remote-admin level full.",
       "args": [{"name": "node", "required": true}],
       "flags": [
         {"name": "--url", "arg": "URL", "description": "The new server's URL."},
-        {"name": "--code", "arg": "CODE.FP|-", "description": "What k2 compute node add <node> printed on the new server; - reads it from stdin, never in argv."},
+        {"name": "--code-stdin", "arg": null, "description": "Read the code k2 compute node add <node> printed on the new server from stdin."},
+        {"name": "--code", "arg": "CODE.FP|-", "description": "The code on the command line, where other users on this machine can see it; - reads it from stdin. Prefer --code-stdin."},
         {"name": "--trust", "arg": "own|team", "description": "How far the new server is trusted."},
         {"name": "--for", "arg": "7d|none", "description": "How long the share lasts."},
         {"name": "--weight", "arg": "N", "description": "Its share weight (every server starts at 1)."},
@@ -69621,7 +69632,7 @@ WHAT THE WALL DOES NOT STOP (say so before you share)
 
 FOR THE NODE'S OWNER
   k2 compute node servers <node>                 list (slot, state, share)
-  k2 compute node servers <node> add --url … --code CODE.FP [--trust team]
+  k2 compute node servers <node> add --url … --code-stdin [--trust team]
   k2 compute node servers <node> limits|pause|resume|revoke <server> …
   k2 compute node servers <node> limits <server> priority=true|false
                                  its --tier priority counts here (default:

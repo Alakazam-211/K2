@@ -31,6 +31,7 @@
 # Also the remote token of k2 talk <ws>@<host> --token-stdin.
 # Also the tokens of k2 remote-session status --host and write --token-stdin.
 # Also the pairing code of k2 compute node servers add (--code -).
+# Also the pairing code of k2 compute node servers add --code-stdin.
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -466,6 +467,11 @@ sec_case "remote-session write --token-stdin" /cli/terminal/write "grant token" 
 # 27. k2 compute node servers <node> add --code -: the pairing code reaches
 #     the add route and no child's argv or environment, nor k2's own argv.
 sec_case "compute node servers add --code -" /cli/compute/nodes/servers/add "pairing code" "$PASS_SENTINEL" compute node servers node-1 add --url https://globex.example --code -
+
+# 28. k2 compute node servers <node> add --code-stdin: the pairing code
+#     reaches the add route and no child's argv or environment, nor k2's
+#     own argv.
+sec_case "compute node servers add --code-stdin" /cli/compute/nodes/servers/add "pairing code" "$PASS_SENTINEL" compute node servers node-1 add --url https://globex.example --code-stdin
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -22,6 +22,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 talk <workspace>@<host>` takes the remote token on stdin.** `--token-stdin` reads it from stdin, so it is never on the command line, where other users on the machine can see it. `--token <tok>` still works.
 - **`k2 remote-session` takes the owner or grant token on stdin.** Every subcommand that takes a token (`status`, `enable`, `disable`, `grant`, `grants`, `revoke`, `shell`, `write`, `read`) now has `--token-stdin`, which reads it from stdin, so it is never on the command line, where other users on the machine can see it. `--token <tok>` still works, and the help, the next-step lines after `shell` and the docs name `--token-stdin`.
 - **`k2 compute node servers add` keeps the pairing code out of other programs' view.** The code now reaches K2 on a pipe, never in a helper program's environment or command line.
+- **`k2 compute node servers add` takes the pairing code on stdin with `--code-stdin`.** It reads the code from stdin, so it is never on the command line, where other users on the machine can see it. `--code CODE.FP` and `--code -` still work.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

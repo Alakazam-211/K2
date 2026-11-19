@@ -625,11 +625,12 @@ cmd_compute_node_servers() {
             _compute_render servers
             ;;
         add)
-            local url="" code="" trust="own" forv="" reason="" pairs=()
+            local url="" code="" code_stdin=0 trust="own" forv="" reason="" pairs=()
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --url) url="${2:-}"; shift 2 ;;
                     --code) code="${2:-}"; shift 2 ;;
+                    --code-stdin) code_stdin=1; shift ;;
                     --trust) trust="${2:-}"; shift 2 ;;
                     --for) forv="${2:-}"; shift 2 ;;
                     --reason) reason="${2:-}"; shift 2 ;;
@@ -645,18 +646,25 @@ cmd_compute_node_servers() {
                     --gate) pairs+=("gate=true" "top_class=\"gate\""); shift ;;
                     --exclusive) pairs+=("exclusive=true"); shift ;;
                     --json) shift ;;
-                    *) echo "usage: k2 compute node servers <node> add --url URL --code -|CODE.FP [--trust own|team] [--for 7d|none] [limits…] (unknown '$1')" >&2; exit 2 ;;
+                    *) echo "usage: k2 compute node servers <node> add --url URL --code-stdin | --code CODE.FP [--trust own|team] [--for 7d|none] [limits…] (unknown '$1')" >&2; exit 2 ;;
                 esac
             done
-            # The code off argv (2026-10-28): --code - reads one line from
-            # stdin; no --code at all takes $K2_NODE_ENROLL_CODE.
-            if [ "$code" = "-" ]; then
+            # The code off argv (2026-10-28): --code-stdin (or --code -)
+            # reads one line from stdin; no --code at all takes
+            # $K2_NODE_ENROLL_CODE. A code on the command line is visible
+            # to other users on this machine.
+            if [ "$code_stdin" = 1 ]; then
+                [ -z "$code" ] || { echo "k2 compute node servers add: --code-stdin or --code, not both" >&2; exit 2; }
+                _cli_read_secret_stdin "Pairing code: "
+                code="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
+                [ -n "$code" ] || { echo "k2 compute node servers add: --code-stdin: no code on stdin" >&2; exit 2; }
+            elif [ "$code" = "-" ]; then
                 IFS= read -r code || true
                 code="${code%$'\r'}"
             elif [ -z "$code" ] && _envn_any NODE_ENROLL_CODE; then
                 _envn_into code NODE_ENROLL_CODE
             fi
-            [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code - < code-file (or K2_NODE_ENROLL_CODE) [--trust own|team] [--for 7d|none]" >&2; exit 2; }
+            [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code-stdin < code-file (or K2_NODE_ENROLL_CODE) [--trust own|team] [--for 7d|none] (a code on the command line, --code CODE.FP, is visible to other users on this machine)" >&2; exit 2; }
             local for_n=""
             case "$forv" in
                 "") for_n="" ;;

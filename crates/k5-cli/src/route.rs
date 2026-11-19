@@ -154,7 +154,23 @@ pub static TABLE: &[Noun] = &[
     bash(&["reviews"]),
     bash(&["review"]),
     bash(&["trust-folders"]),
-    bash(&["workspace"]),
+    // `list`, `profile`, `launch`, `update`, `create` and `open`, the
+    // verbs a first run uses; every other verb, and `workspace` alone, is
+    // the shell's. One verb row each, so each can turn back alone.
+    Noun {
+        words: &["workspace"],
+        owner: Owner::Bash,
+        verbs: &[
+            Verb {
+                words: &["list"],
+                owner: Owner::Native,
+            },
+            Verb {
+                words: &["profile"],
+                owner: Owner::Native,
+            },
+        ],
+    },
     bash(&["onboarding"]),
     bash(&["remind"]),
     bash(&["reminders"]),

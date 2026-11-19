@@ -332,6 +332,7 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
             ["connections"] => connections_verbs_are_its_list(noun),
             ["connect"] => connect_verbs_are_its_arms(noun),
             ["feedback", "tickets"] => feedback_verbs_are_its_arms(noun),
+            ["workspace"] => workspace_verbs_are_its_arms(noun),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -364,6 +365,40 @@ fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
             body.lines()
                 .any(|l| l.starts_with(&arm) && l.ends_with(&call)),
             "the feedback|tickets case has no {word} arm calling cmd_feedback_{word}"
+        );
+    }
+}
+
+/// `workspace`'s verb rows: each is one arm of the `workspace)` case in
+/// `cli/src/router.sh`, which hands it to its own function, and one the
+/// binary's family answers.
+fn workspace_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "router.sh")
+        .expect("cli/src/router.sh")
+        .1;
+    let body = &text[text.find("\n    workspace)\n").expect("the workspace arm")..];
+    let body = &body[..body.find("\n        ;;\n").expect("its end")];
+    for verb in noun.verbs {
+        assert_eq!(
+            verb.words.len(),
+            1,
+            "{:?}: one word per verb row",
+            verb.words
+        );
+        let word = verb.words[0];
+        assert!(
+            k5_cli::families::workspace::VERBS.contains(&word),
+            "the workspace family does not answer {word}"
+        );
+        let arm = format!("            {word})");
+        let call = format!(" shift 2; cmd_workspace_{word} \"$@\" ;;");
+        assert!(
+            body.lines()
+                .any(|l| l.starts_with(&arm) && l.ends_with(&call)),
+            "the workspace case has no {word} arm calling cmd_workspace_{word}"
         );
     }
 }

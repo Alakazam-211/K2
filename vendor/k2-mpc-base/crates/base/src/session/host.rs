@@ -275,8 +275,10 @@ pub enum LeaseEnd {
     HolderRemoved,
 }
 
-/// Why a participant left.
+/// Why a participant left. Non-exhaustive: a host's match takes a wildcard arm, so a later
+/// reason doesn't break it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LeaveReason {
     /// [`crate::session::Session::leave`].
     Left,
@@ -286,6 +288,10 @@ pub enum LeaveReason {
     Kicked,
     /// The host stopped granting read (all of the pid's connections leave).
     RightsLost,
+    /// Grouped commits ([`crate::store::CommitDurability::Grouped`]): a commit failed at the
+    /// disk and the doc reloaded at the store's durable state ([`AuditEvent::RolledBack`]);
+    /// every connection leaves, and joins again under a fresh writer, then reads the doc again.
+    RolledBack,
 }
 
 /// Something the host may want to audit or log. Never carries doc content.
@@ -318,6 +324,21 @@ pub enum AuditEvent {
     /// A store write failed mid-edit. The session reloaded from the store; carets, viewing
     /// ranges and undo history were reset.
     Recovered { key: DocKey, error: String },
+    /// Grouped commits ([`crate::store::CommitDurability::Grouped`]): a commit failed at the
+    /// disk, so the store was reopened at its durable state and this live doc reloaded from it,
+    /// as after an abrupt stop. Changes from `lost_from` on, if any, were lost; the doc is at
+    /// `durable_seq`. Carets, viewing ranges and undo history were reset. Next step: changes
+    /// after `durable_seq` were lost in an abrupt stop; agents holding later versions must
+    /// read the doc again.
+    RolledBack {
+        key: DocKey,
+        lost_from: crate::store::Seq,
+        durable_seq: crate::store::Seq,
+    },
+    /// Grouped commits: a commit failed at the disk (`error`), and the store was reopened at
+    /// its durable state; each live doc then raises [`AuditEvent::RolledBack`] (a tier-0 doc
+    /// is closed instead, and reloads at its next open).
+    StoreRolledBack { error: String },
     /// The file was edited outside the kit; the edit was merged in as change `seq` (by
     /// [`crate::session::EXTERNAL_PID`]). For a tier-0 blob doc, `seq` is the version the
     /// save became.
@@ -491,6 +512,10 @@ pub enum AuditEvent {
     /// failed (it was skipped; the others were re-checked). `error` is the session error's
     /// message.
     RecheckFailed { key: DocKey, error: String },
+    /// A native doc's cut took longer than [`crate::session::CutQueueSettings::slow_ms`]:
+    /// `ms`, with `tail` changes since its last cut (also in
+    /// [`crate::session::TickReport::native_cuts`]).
+    NativeCutSlow { key: DocKey, ms: u64, tail: u64 },
     /// [`crate::session::SessionManager::delete_doc`] / `delete_space`: the doc was deleted
     /// while loaded. Its session closed: `connections` (each with its pid) were in it and are
     /// gone, with their subscriptions and any lease; later calls on the session fail with

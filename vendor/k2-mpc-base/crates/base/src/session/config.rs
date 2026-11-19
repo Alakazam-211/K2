@@ -2,6 +2,9 @@
 
 use std::collections::BTreeMap;
 
+/// The largest [`Config::blob_batch_max_calls`] the kit takes.
+pub const BATCH_CALLS_CEILING: u64 = 1_000;
+
 /// Settings for a [`super::SessionManager`] and its sessions. Start from
 /// [`Config::default`] and change fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,6 +341,10 @@ pub struct Config {
     /// The tier-0 verb path: the most new bytes one verb's plan may hold, over all its ranges
     /// (`MPC-E725` past it). Default 256 MiB.
     pub blob_verb_max_insert_bytes: u64,
+    /// The tier-0 batch (`BlobSession::run_batch`): the most calls one batch may hold; a batch
+    /// over it is refused before any call runs (`MPC-E728`). 1 to [`BATCH_CALLS_CEILING`];
+    /// out of that range, every batch is refused, naming the setting. Default 32.
+    pub blob_batch_max_calls: u64,
     /// Annotations: the longest comment body, in bytes (`MPC-E907` past it). Default 16 KiB.
     pub annot_body_max_bytes: u64,
     /// Annotations: the most comment threads in one doc. Default 10,000.
@@ -402,12 +409,16 @@ pub struct Config {
     /// is made. Docs already on the native engine open, edit and save whatever this says.
     /// Default false.
     pub native_beta: bool,
-    /// When a native doc's records are cut (feature `native`): after a commit, once the
-    /// changes since its last cut reach `min(ceiling, max(floor, n / divisor))` of its `n`
-    /// changes in total ([`CutCadence::every`]). Default [`CutCadence::BETA`]:
-    /// `min(200, max(100, n / 30))`, the threshold measured for the Beta. A host sets its own
-    /// through [`CutCadence::new`], which refuses a cadence outside its bounds; a doc takes the
-    /// setting at its next open.
+    /// When a native doc's records are cut (feature `native`), the whole rule being
+    /// [`CutCadence::due`]: after a commit, once the changes since its last cut reach
+    /// `min(ceiling, max(floor, n / divisor))` of its `n` changes in total
+    /// ([`CutCadence::every`]), and, above `bytes_from_changes` changes in total, once the bytes
+    /// of the records written since also reach the checkpoint's bytes / `bytes_divisor`. Default
+    /// [`CutCadence::BETA`]: `min(200, max(100, n / 30))`, the threshold measured for the Beta,
+    /// and above 30,000 changes a fortieth of the checkpoint. A host sets its own through
+    /// [`CutCadence::new`], which refuses a cadence outside its bounds; a doc takes the setting
+    /// at its next open. Listed as `native_cut_floor`, `native_cut_ceiling`,
+    /// `native_cut_divisor`, `native_cut_bytes_from_changes` and `native_cut_bytes_divisor`.
     pub native_cut_cadence: CutCadence,
     /// When the host-wide cut queue runs a native doc's cut (feature `native`): only after
     /// `idle_ms` with no native commit (a forced cut need not wait for it), at most
@@ -419,6 +430,25 @@ pub struct Config {
     /// time on the host. Listed as `native_cut_idle_ms`, `native_cut_duty_pct` and
     /// `native_cut_slow_ms`.
     pub native_cut_queue: CutQueueSettings,
+
+    // --- the store ---
+    /// The store's settings ([`crate::store::StoreSettings`]: its cache size, default
+    /// 64 MiB). They take effect where the store is opened: the host passes them to
+    /// [`crate::store::DocStore::open_with`]. A manager reports what its store was opened with
+    /// ([`super::SessionManager::new`] sets this field from
+    /// [`crate::store::DocStore::settings`]), so `capabilities` from a manager's config lists
+    /// the store as it runs. Listed as `store_cache_bytes`, and its commit durability as
+    /// `store_commit_grouped` (1 when grouped), `store_commit_max_changes` and
+    /// `store_commit_max_ms` (0 at [`crate::store::CommitDurability::Immediate`]).
+    pub store: crate::store::StoreSettings,
+
+    // --- memory ---
+    /// The host's own release of freed memory to the OS ([`super::HostRelease`]), called after
+    /// each native cut the cut queue makes and after a clean unload's cut, in place of the kit's
+    /// own (glibc's `malloc_trim(0)` on Linux, nothing elsewhere). A host built with another
+    /// allocator passes that allocator's call here. Default `None`: the kit's own. Listed as
+    /// `host_release` (0 or 1).
+    pub release: Option<super::HostRelease>,
 }
 
 /// When the host-wide cut queue runs a native doc's cut ([`Config::native_cut_queue`]). Made
@@ -524,14 +554,41 @@ impl Default for CutQueueSettings {
     }
 }
 
-/// When a native doc's records are cut ([`Config::native_cut_cadence`]): a live cut once the
-/// changes since the last cut reach [`CutCadence::every`] of the doc's changes in total. Made
-/// only by [`CutCadence::new`] (checked) or [`CutCadence::BETA`], so every value is in bounds.
+/// When a native doc's records are cut ([`Config::native_cut_cadence`]), the whole rule being
+/// [`CutCadence::due`]: up to [`CutCadence::bytes_from_changes`] changes in total, once the
+/// changes since the last cut reach [`CutCadence::every`] of the doc's changes in total; above
+/// it, once they reach it AND the bytes of the records written since the last cut reach the
+/// checkpoint's bytes divided by [`CutCadence::bytes_divisor`] (never before the change count).
+/// Made only by [`CutCadence::new`] (checked) or [`CutCadence::BETA`], so every value is in
+/// bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CutCadence {
     floor: u64,
     ceiling: u64,
     divisor: u64,
+    bytes_from_changes: u64,
+    bytes_divisor: u64,
+}
+
+/// Why a native doc is due a cut ([`CutCadence::due`]): what the cadence says, before the
+/// host-wide cut queue decides when it runs (only when the host is idle, one at a time, within
+/// its duty; a forced one need not wait for idle).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CutDue {
+    /// Due by the cadence: cut when the host is idle.
+    Cadence,
+    /// Twice the rule that governs: at least twice [`CutCadence::every`] changes since the last
+    /// cut and, above [`CutCadence::bytes_from_changes`] changes in total, at least twice the
+    /// byte threshold. Cut while editing goes on (still one at a time and within the duty).
+    Forced,
+    /// Past the large-uncut bound: up to [`CutCadence::bytes_from_changes`] changes in total,
+    /// more than [`CutCadence::live_cut_most`] changes since the last cut; above it, twice the
+    /// forced threshold in both figures: more than `4·every(n)` changes AND a tail of more than
+    /// four times the byte threshold (checkpoint/10 by default). Such a cut is O(the doc's
+    /// history since its last cut), so it is never made on an edit's path: it waits for the
+    /// host to be idle.
+    LargeUncut,
 }
 
 /// Why [`CutCadence::new`] refused a cadence.
@@ -550,29 +607,48 @@ pub enum CadenceError {
     /// A divisor of 0.
     #[error("the cut cadence's divisor must be at least 1")]
     DivisorZero,
+    /// A byte rule from 0 changes.
+    #[error("the cut cadence's byte rule must start at 1 change or more")]
+    BytesFromZero,
+    /// A byte divisor of 0.
+    #[error("the cut cadence's byte divisor must be at least 1")]
+    BytesDivisorZero,
 }
 
 impl CutCadence {
-    /// The Beta's cadence, the default: `min(200, max(100, n / 30))`, the largest threshold
-    /// whose measured load stays at the Beta's bar.
+    /// The Beta's cadence, the default: `min(200, max(100, n / 30))` changes, the largest
+    /// threshold whose measured load stays at the Beta's bar; above 30,000 changes in total,
+    /// also a tail of a fortieth of the checkpoint's bytes.
     pub const BETA: CutCadence = CutCadence {
         floor: 100,
         ceiling: 200,
         divisor: 30,
+        bytes_from_changes: 30_000,
+        bytes_divisor: 40,
     };
 
     /// The most a ceiling may be: a native doc's uncut tail stays a bounded part of its load.
     pub const CEILING_MOST: u64 = 10_000;
 
-    /// A cadence of `min(ceiling, max(floor, n / divisor))`, checked: `1 <= floor <= ceiling
-    /// <= CEILING_MOST` and `divisor >= 1`, else refused with the reason.
-    pub fn new(floor: u64, ceiling: u64, divisor: u64) -> Result<Self, CadenceError> {
+    /// A cadence of `min(ceiling, max(floor, n / divisor))` changes, with the byte rule above
+    /// `bytes_from_changes` changes in total (a tail of the checkpoint's bytes / `bytes_divisor`),
+    /// checked: `1 <= floor <= ceiling <= CEILING_MOST`, `divisor >= 1`, `bytes_from_changes >= 1`
+    /// and `bytes_divisor >= 1`, else refused with the reason.
+    pub fn new(
+        floor: u64,
+        ceiling: u64,
+        divisor: u64,
+        bytes_from_changes: u64,
+        bytes_divisor: u64,
+    ) -> Result<Self, CadenceError> {
         // the plant: any cadence taken unchecked
         if crate::beta_plant::planted("cadence-unchecked") {
             return Ok(CutCadence {
                 floor,
                 ceiling,
                 divisor,
+                bytes_from_changes,
+                bytes_divisor,
             });
         }
         if floor == 0 {
@@ -590,11 +666,112 @@ impl CutCadence {
         if divisor == 0 {
             return Err(CadenceError::DivisorZero);
         }
+        if bytes_from_changes == 0 {
+            return Err(CadenceError::BytesFromZero);
+        }
+        if bytes_divisor == 0 {
+            return Err(CadenceError::BytesDivisorZero);
+        }
         Ok(CutCadence {
             floor,
             ceiling,
             divisor,
+            bytes_from_changes,
+            bytes_divisor,
         })
+    }
+
+    /// Whether a doc of `n` changes in total is due a cut, and why (the whole rule, the type's
+    /// docs), with `tail_changes` changes and `tail_bytes` record bytes since its last cut and a
+    /// checkpoint of `checkpoint_bytes` (the bytes its last cut wrote); `None` when it isn't.
+    pub fn due(
+        &self,
+        n: u64,
+        tail_changes: u64,
+        tail_bytes: u64,
+        checkpoint_bytes: u64,
+    ) -> Option<CutDue> {
+        self.due_at(self.every(n), n, tail_changes, tail_bytes, checkpoint_bytes)
+    }
+
+    /// [`CutCadence::due`] with the change threshold `t` given (the adapter's, which a test
+    /// build may plant).
+    pub(crate) fn due_at(
+        &self,
+        t: u64,
+        n: u64,
+        tail_changes: u64,
+        tail_bytes: u64,
+        checkpoint_bytes: u64,
+    ) -> Option<CutDue> {
+        let bytes = self.bytes_rule(n);
+        // the plant: the byte rule alone above its threshold, without the change count
+        let changes = tail_changes >= t || (bytes && crate::beta_plant::planted("bytes-before-t"));
+        if !changes || (bytes && !self.bytes_reach(tail_bytes, checkpoint_bytes, 1)) {
+            return None;
+        }
+        if self.past_large_uncut(t, n, tail_changes, tail_bytes, checkpoint_bytes) {
+            return Some(CutDue::LargeUncut);
+        }
+        let forced = tail_changes >= t.saturating_mul(2)
+            && (!bytes || self.bytes_reach(tail_bytes, checkpoint_bytes, 2));
+        Some(if forced {
+            CutDue::Forced
+        } else {
+            CutDue::Cadence
+        })
+    }
+
+    /// Whether the byte rule applies to a doc of `n` changes in total: above
+    /// [`CutCadence::bytes_from_changes`].
+    fn bytes_rule(&self, n: u64) -> bool {
+        // the plants: the byte rule at any n; the byte rule never
+        if crate::beta_plant::planted("bytes-rule-below-30k") {
+            return true;
+        }
+        if crate::beta_plant::planted("bytes-rule-ignored") {
+            return false;
+        }
+        n > self.bytes_from_changes
+    }
+
+    /// Whether a tail of `tail_bytes` reaches `times` the byte threshold of a checkpoint of
+    /// `checkpoint_bytes`: `tail_bytes * bytes_divisor >= times * checkpoint_bytes`, exact (no
+    /// rounding: the products are taken in 128 bits).
+    fn bytes_reach(&self, tail_bytes: u64, checkpoint_bytes: u64, times: u64) -> bool {
+        u128::from(tail_bytes) * u128::from(self.bytes_divisor)
+            >= u128::from(times) * u128::from(checkpoint_bytes)
+    }
+
+    /// Whether a doc of `n` changes in total, with `tail_changes` changes and `tail_bytes`
+    /// record bytes since its last cut and a checkpoint of `checkpoint_bytes`, is past the
+    /// large-uncut bound ([`CutDue::LargeUncut`]), due or not, `t` its change threshold: up to
+    /// [`CutCadence::bytes_from_changes`] changes in total, more than
+    /// [`CutCadence::live_cut_most`] changes; above it, twice the forced threshold in both
+    /// figures, more than `4·t` changes AND a tail of more than four times the byte threshold
+    /// (checkpoint/10 by default), so a doc of small edits under continuous load is forced first.
+    pub(crate) fn past_large_uncut(
+        &self,
+        t: u64,
+        n: u64,
+        tail_changes: u64,
+        tail_bytes: u64,
+        checkpoint_bytes: u64,
+    ) -> bool {
+        if !self.bytes_rule(n) {
+            return tail_changes > self.live_cut_most();
+        }
+        let past = |changes: u64, times: u128| {
+            tail_changes > changes
+                && u128::from(tail_bytes) * u128::from(self.bytes_divisor)
+                    > times * u128::from(checkpoint_bytes)
+        };
+        // the plant: the bound at twice the ceiling and twice the byte threshold, where it meets
+        // the forced threshold and forced is never reached
+        if crate::beta_plant::planted("forced-dead-above-30k") {
+            return past(self.live_cut_most(), 2);
+        }
+        past(t.saturating_mul(4), 4)
     }
 
     /// The changes since the last cut at which a doc of `n` changes in total is cut:
@@ -609,9 +786,10 @@ impl CutCadence {
         }
     }
 
-    /// The most changes since the last cut that the after-edit check cuts: past it the doc's
-    /// store is a large uncut one, cut at the idle tick or the unload. Twice the ceiling, so a
-    /// host that checks once per commit of a batch never meets it.
+    /// Up to 30,000 changes in total (the byte rule's threshold), the most changes since the
+    /// last cut a doc may be forced at: past it the doc's store is a large uncut one
+    /// ([`CutDue::LargeUncut`]), cut only when the host is idle or on a clean unload. Twice the
+    /// ceiling, so a doc whose every commit is checked never meets it.
     pub const fn live_cut_most(&self) -> u64 {
         2 * self.ceiling
     }
@@ -629,6 +807,16 @@ impl CutCadence {
     /// Between them, one change in this many of the doc's total.
     pub const fn divisor(&self) -> u64 {
         self.divisor
+    }
+
+    /// Above this many changes in total, a cut also waits for the byte rule.
+    pub const fn bytes_from_changes(&self) -> u64 {
+        self.bytes_from_changes
+    }
+
+    /// The byte rule's divisor: the tail's record bytes must reach the checkpoint's bytes / this.
+    pub const fn bytes_divisor(&self) -> u64 {
+        self.bytes_divisor
     }
 }
 
@@ -826,6 +1014,7 @@ impl Config {
             blob_verb_max_bytes,
             blob_verb_max_spans,
             blob_verb_max_insert_bytes,
+            blob_batch_max_calls,
             annot_body_max_bytes,
             annot_threads_max,
             annot_comments_max,
@@ -842,7 +1031,16 @@ impl Config {
             native_beta,
             native_cut_cadence,
             native_cut_queue,
+            store,
+            release,
         } = self;
+        let grouped = match store.commit_durability() {
+            crate::store::CommitDurability::Grouped {
+                max_changes,
+                max_ms,
+            } => Some((max_changes, max_ms)),
+            _ => None,
+        };
         vec![
             ("editor_window_ms", *editor_window_ms),
             ("idle_leave_ms", *idle_leave_ms),
@@ -926,6 +1124,7 @@ impl Config {
             ("blob_verb_max_bytes", *blob_verb_max_bytes),
             ("blob_verb_max_spans", *blob_verb_max_spans),
             ("blob_verb_max_insert_bytes", *blob_verb_max_insert_bytes),
+            ("blob_batch_max_calls", *blob_batch_max_calls),
             ("annot_body_max_bytes", *annot_body_max_bytes),
             ("annot_threads_max", *annot_threads_max),
             ("annot_comments_max", *annot_comments_max),
@@ -940,9 +1139,25 @@ impl Config {
             ("native_cut_floor", native_cut_cadence.floor()),
             ("native_cut_ceiling", native_cut_cadence.ceiling()),
             ("native_cut_divisor", native_cut_cadence.divisor()),
+            (
+                "native_cut_bytes_from_changes",
+                native_cut_cadence.bytes_from_changes(),
+            ),
+            (
+                "native_cut_bytes_divisor",
+                native_cut_cadence.bytes_divisor(),
+            ),
             ("native_cut_idle_ms", native_cut_queue.idle_ms()),
             ("native_cut_duty_pct", native_cut_queue.duty_pct()),
             ("native_cut_slow_ms", native_cut_queue.slow_ms()),
+            ("store_cache_bytes", store.cache_bytes()),
+            ("store_commit_grouped", u64::from(grouped.is_some())),
+            (
+                "store_commit_max_changes",
+                grouped.map_or(0, |g| u64::from(g.0)),
+            ),
+            ("store_commit_max_ms", grouped.map_or(0, |g| g.1)),
+            ("host_release", u64::from(release.is_some())),
         ]
     }
 }
@@ -1045,6 +1260,7 @@ impl Default for Config {
             blob_verb_max_bytes: 256 << 20,
             blob_verb_max_spans: 1_000_000,
             blob_verb_max_insert_bytes: 256 << 20,
+            blob_batch_max_calls: 32,
             annot_body_max_bytes: 16 << 10,
             annot_threads_max: 10_000,
             annot_comments_max: 1_000,
@@ -1061,6 +1277,8 @@ impl Default for Config {
             native_beta: false,
             native_cut_cadence: CutCadence::BETA,
             native_cut_queue: CutQueueSettings::BETA,
+            store: crate::store::StoreSettings::DEFAULT,
+            release: None,
         }
     }
 }

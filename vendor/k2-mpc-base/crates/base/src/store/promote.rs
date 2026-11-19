@@ -81,7 +81,8 @@ impl DocStore {
         let link = self.blob_link();
         let blob_dir = link.as_ref().map(|l| l.dir.clone());
         let waiting = |c: &super::ChunkId| link.as_ref().is_some_and(|l| (l.waiting)(id, c));
-        let w = self.begin_write()?;
+        // a barrier: the doc changes tier (grouped commits, `group.rs`)
+        let w = self.begin_barrier("promote")?;
         let released = {
             let old = {
                 let docs = w.open_table(DOCS)?;

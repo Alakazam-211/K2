@@ -105,7 +105,24 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
    process or another, is refused `StoreError::Locked` (`MPC-E505` `store_locked`, exit 6:
    "Another process has this document open"), before anything is read or written.
    `DocStore::open_with_retry(path, wait)` waits for the holder instead, and is refused the
-   same way past its deadline.
+   same way past its deadline. Each try is the open itself: the store it finds free it keeps,
+   so another opener can't take it between the try and the open.
+
+   **The store's cache.** The store library keeps the pages it reads and writes in memory up
+   to a size, as the process's own heap (not a mapping of the file), and frees them only by
+   evicting at that size. A store holds every doc of its host, so this is one cache per
+   process, shared by all docs, filled only as pages are read, and not counted in
+   `memory_budget_bytes`. The kit sets it on purpose:
+   `StoreSettings::DEFAULT` (64 MiB), or the host's choice through
+   `StoreSettings::new(cache_bytes)`, from 16 MiB to 1 GiB (outside it,
+   `StoreSettingsError::CacheOutOfRange`), given at `DocStore::open_with(path, settings)` or
+   `DocStore::open_with_retry_with(path, wait, settings)`; `open` and `open_with_retry` use the
+   default. A rewrite (a purge's) opens its fresh file with the store's own settings.
+   `DocStore::settings()` says what the store runs with; the manager's `Config::store` is set
+   from it, and `capabilities` lists it as `store_cache_bytes`. Below 16 MiB the edit path
+   slows; above 64 MiB a cache helps only when it holds every page the host reads and the
+   system has dropped the file from its own page cache (a host with very many docs and a cold
+   system cache may want more).
 8. Deleting: `delete_doc(&key)` / `delete_space(space)` close the loaded sessions of those
    docs, then erase them from the store ([Deleting docs](#deleting-docs)).
 
@@ -113,7 +130,8 @@ The host drives time: call `tick()` on a timer (about once a second). It closes 
 connections, cuts idle versions, runs version retention and the revert window (every
 `history_tick_ms`), runs the disk stat backup and due write-backs, and unloads idle sessions,
 all on `Host::now_ms`, and returns a `TickReport { left, written, ingested, unloaded, errors,
-versions_cut, versions_thinned, reverts_dropped, .. }`.
+versions_cut, versions_thinned, reverts_dropped, native_cuts, .. }`. With native documents it
+also runs the cut queue ([The native engine (a Beta)](#the-native-engine-a-beta)).
 (`expire_idle()` and `unload_idle()` remain for hosts without files.) The kit starts no
 threads of its own. `recheck_rights()` per session, or `SessionManager::recheck_rights()` over
 every loaded doc, is the host's periodic rights re-check.
@@ -225,17 +243,35 @@ standard one (Yrs). It is a Beta: off by default, text file types only.
 - **No move to or from tier 0:** demoting a native document, or promoting at its key, is refused
   (`SessionError::NativeNoTier0`, `MPC-E721` `native_no_tier0`, exit 4, as the standard engine's
   refusals of those calls), nothing changed.
-- **The cut cadence is a host setting,** `Config::native_cut_cadence` (a `CutCadence`): a live
-  cut once the changes since the last cut reach `min(ceiling, max(floor, n / divisor))` of the
-  document's `n` changes. The default, `CutCadence::BETA`, is `min(200, max(100, n / 30))`;
-  `CutCadence::new` refuses a floor of 0, a floor over the ceiling, a ceiling past 10,000 and a
-  divisor of 0 (`CadenceError`). A document takes the setting at its next open.
+- **The cut cadence is a host setting,** `Config::native_cut_cadence` (a `CutCadence`, listed by
+  `capabilities` as `native_cut_floor`, `native_cut_ceiling`, `native_cut_divisor`,
+  `native_cut_bytes_from_changes` and `native_cut_bytes_divisor`). `CutCadence::due` is the
+  whole rule; with `n` the document's changes in total and `T(n) = min(ceiling, max(floor, n /
+  divisor))`:
+  - up to `bytes_from_changes` changes in total, a cut is due once the changes since the last
+    cut reach `T(n)`;
+  - above it, once they reach `T(n)` **and** the bytes of the records written since the last
+    cut reach the checkpoint's bytes divided by `bytes_divisor`; never before `T(n)` changes;
+  - forced (`CutDue::Forced`: cut while editing goes on) at twice the rule that governs:
+    `2·T(n)` changes, and above `bytes_from_changes` twice the byte threshold too;
+  - a large uncut document (`CutDue::LargeUncut`: its cut waits for idle) past twice the
+    ceiling in changes; above `bytes_from_changes`, past twice the forced threshold in both
+    figures (more than `4·T(n)` changes and a tail of more than four times the byte
+    threshold), so a document under continuous edits is forced before it is ever left for idle.
+
+  The kit counts both byte figures itself, from the records it writes: the checkpoint's bytes
+  are those of the records the document's last cut wrote, the tail's those written since. The
+  default, `CutCadence::BETA`, is `min(200, max(100, n / 30))` changes and, above 30,000
+  changes, a tail of a fortieth of the checkpoint's bytes. `CutCadence::new` refuses a floor of
+  0, a floor over the ceiling, a ceiling past 10,000, a divisor of 0, a byte rule from 0 changes
+  and a byte divisor of 0 (`CadenceError`). A document takes the setting at its next open.
 - **The cut queue's settings are host settings,** `Config::native_cut_queue` (a
   `CutQueueSettings`, listed by `capabilities` as `native_cut_idle_ms`, `native_cut_duty_pct`
   and `native_cut_slow_ms`). A cut is background work that competes with editing, so the
   manager queues the native documents that are due and runs their cuts one at a time:
   - one entry per document, ordered forced first (a document at twice its cadence, or past its
-    size budget), then the most changes since its last cut, then the oldest;
+    size budget), then the most changes since its last cut, then the oldest; the cadence says
+    whether a document is due and why, the queue when;
   - a cut that isn't forced runs only when no native commit came for `native_cut_idle_ms`
     (default 250 ms); a forced one runs while editing goes on;
   - cuts take at most `native_cut_duty_pct` of the time (default 10%): after a cut that took
@@ -247,13 +283,39 @@ standard one (Yrs). It is a Beta: off by default, text file types only.
   `CutQueueSettings::new` refuses an idle window of 0 or past a minute, a duty outside 1% to
   50% and a slow threshold of 0 (`CutQueueError`). **The queue is per `SessionManager`, so a
   host runs one manager per process** (as it does already, one per store): only then is one
-  cut at a time a rule for the whole host. The queue runs native cuts once the native engine's
-  single-replica mode is in the kit; until then nothing is queued.
+  cut at a time a rule for the whole host.
+- **How a native document is cut.** After each commit of a native document's records (a change,
+  an outside save, a purge) its session asks whether a cut is due (`CutCadence::due`; a cheap
+  question that cuts nothing) and, if it is, queues the document with the manager. No cut runs
+  on an edit's path. `tick()` runs the queue after everything else and before the idle unloads:
+  at most one cut per tick, under that document's session lock, its wall time measured. Right
+  after a cut the kit asks the allocator to return the memory it freed to the OS. A clean
+  unload (an idle unload, or one to keep the memory budget) and a host's close (`close`,
+  `close_where`) cut a document with changes since its last cut on its way out, counted
+  against the duty, and ask again once the session is out of the pool. The kit's own call is
+  glibc's `malloc_trim(0)` (elsewhere nothing yet); a host built with another allocator passes
+  that allocator's call as `Config::release` (`HostRelease::new(f)`, `f` a plain
+  `fn() -> MemoryRelease` that usually returns `MemoryRelease::ByHost { returned }`), and the
+  kit calls it instead, at every point; the kit never links an allocator itself.
+  `capabilities` lists `host_release` (0 or 1).
+  The tick reports it all: `TickReport::native_cuts` (`NativeCut { key, ms, tail, why, outcome,
+  slow, released }`, `why` one of `NativeCutWhy::{Cadence, Unload, Forced}`, `outcome` one of
+  `NativeCutOutcome::{Done, Refused}`, `released` what the release after a made cut did),
+  `native_cuts_deferred` (documents due and waiting: not idle yet, inside the duty gap, or
+  behind the one cut a tick runs) and `memory_released` (`MemoryRelease`, after the queued
+  cut). A slow cut is also `AuditEvent::NativeCutSlow { key, ms, tail }`; a cut
+  that fails is in `TickReport::errors`, the document back on the generation its store holds.
+  These are a native document's cuts, not the history's versions (`versions_cut`).
 - **Exit codes:** every native refusal exits as the standard engine's refusal in the same
   situation (or, with none, in the class it was ruled into); a row holds the table.
-- **Not yet:** a native document's log isn't compacted (its compaction is the engine's cut, which
-  waits for the engine's single-replica mode), so its history grows with every change;
-  conversion between the engines isn't there.
+- **A native document's log rows.** A native document's state is its engine's records; of its
+  log rows a session reads only the newest one's position (its version) and the recent authors.
+  So an open reads only its newest 1,024 log rows, and each cut trims the log to them, in the
+  cut's own transaction (the newest row always stays, so the next change's position is never
+  one a row had). Its change rows (its history and blame), provenance and revert records are
+  kept as on Yrs. An open checks the rows it reads (an older row was checked when it was
+  written, and a purge checks every row).
+- **Not yet:** conversion between the engines isn't there.
 
 ## Identity, connections and attribution
 
@@ -311,6 +373,24 @@ that person's writers on that device instead:
   transactions the session opens anyway (a change's commit, the session's close); a join and a
   leave open none. An older kit (v0.10.2 on) never reuses or hands out such an ID and copies the
   rows on a rewrite (`tools/n1` `node-both`).
+- **A native document (the native engine Beta): the store is the device.** A person's (or App
+  guest's) join with no device key on a native document takes the store itself as its device,
+  so the person keeps one writer across sessions on this store: a stateless join
+  (`Session::join_shared`, a command-line verb) at once; any other join after a clean
+  `Session::release`, or once a parked writer's `person_writer_park_ms` is over. A host that
+  sends a device key gets its own device as above. Yrs documents: unchanged.
+- **A copied or restored store never continues a writer's line.** Native peers detect a
+  writer's change sent again with other content only above their stable point, so the kit
+  makes it impossible instead: the store keeps an incarnation, and an open draws a new one
+  (every person then takes one fresh writer on that store) when the last opener didn't close
+  the store cleanly (a process killed or stopped, or a backup or copy taken while it was open), when the store file
+  isn't the recorded one (another file or another path: a copy, a move, a restore written as a
+  new file), or when the incarnation is missing. A host sees nothing but that one fresh writer
+  per person. **Restore a native store as a new file** (copy it to a new file and move that
+  into place), never by writing over the live file in place: a cleanly closed backup written
+  over the same file is the one case the store can't tell from itself. A refused re-sent
+  change, where it is detected, is `MPC-E183` `native_equivocation` (exit 2), the engine's
+  code beside it.
 
 ### The writers cap
 
@@ -588,7 +668,9 @@ view of a keyed doc that isn't a table:
 Every edit call is **one atomic change**:
 - inserted text is normalised by the pack;
 - it is applied as the connection's client ID;
-- it is appended to the store in **one durable transaction before the call returns**.
+- it is appended to the store in **one durable transaction before the call returns** (at the
+  default commit durability; with grouped commits, in one transaction that is durable with its
+  group: [Grouped commits](#grouped-commits)).
 
 It returns `EditResult { version, changed: Vec<LineRange>, lines_added, lines_removed }`. The
 `(+a −r)` counts match a line diff. A call that changes nothing returns the same version and
@@ -601,6 +683,54 @@ an empty `changed`.
 | `edit(conn, Vec<Edit>, if_version)` | Hunks in byte offsets, at most one `Edit` per root. With `if_version: Some(V)`, a doc that has moved past V gives `Stale { expected, actual }` and nothing is applied (the same check as the edit verbs' `--if-version`, amendment 14). Invalid hunks (out of range, inside a character, overlapping) change nothing. |
 | `write_base(conn, root, base, text)` | `write --base V`: `merge3(text at V, text, live)`, **by whole lines** (v0.9.7.1). Applies only what the caller changed since V. Two changes touching the same line (or inserting at the same point) → `Conflicts(Vec<Conflict>)` and nothing applied: a write never merges inside a line, so two writers changing different words of one line conflict and the second re-reads and retries; changes to different lines, adjacent or not, both land; two different appends at the end of the text both land, the live one first (rule O5). The final line break follows the side that wrote the last line, so no two lines are ever joined (the v0.9.7 limitation at the end of the text is gone). Each `Conflict` gives its lines in the base, the writer's text (`ours_lines`) and the live text (`theirs_lines`); `WriteOutcome::refusal_at(base, current)` is the agent's refusal (re-read version `current` with `cat`, write again with `--base current`). Unknown or expired V → `BaseExpired` ("re-read and retry"). Up to v0.9.7 the sides were diffed to the character, and two lines sharing their first characters could merge "cleanly" into one garbled line. |
 | `replace_text(conn, root, text)` | Make a root equal `text` through a minimal diff. Last-writer-wins for that root: for people who mean "replace whatever is there" (`write --base live`). |
+
+### Grouped commits
+
+`StoreSettings::with_commit_durability(CommitDurability)` chooses when a commit waits for the
+disk. `CommitDurability::Immediate` (the default) is the promise above: every change is on disk
+when its call returns. `CommitDurability::grouped(max_changes, max_ms)` (1 to 1,024 changes, 1
+to 10,000 ms; outside them `StoreSettingsError::GroupOutOfRange`) trades that for speed: one
+commit waits for the disk per group instead of one per change. `capabilities` lists
+`store_commit_grouped`, `store_commit_max_changes` and `store_commit_max_ms`.
+
+**What a person or an agent is promised, grouped:**
+- **Acknowledged** (the call returns `Ok`): the change is applied, visible to every member and
+  placed in the store's one order of commits. `EditResult::durable` says whether it is on disk
+  yet.
+- **Durable**: with its group, at most `max_changes` changes or `max(max_ms, the tick period)`
+  later (the session manager's `tick` makes a group that waited `max_ms` durable), and at once
+  at a **barrier**: a commit something outside the store depends on. The barriers: the file
+  write-back (the store is durable before the file is written, so the file is never ahead of
+  it), a blob doc's write-back, a native cut, a delete, a purge, a demotion or promotion, a
+  rewrite, and a close, unload or release. `SessionManager::flush()` makes everything durable
+  now (what an agent that must know its change survived asks for), and
+  `SessionManager::durable_through()` gives the store's commits on disk.
+- **After an abrupt stop or a power loss** the store reopens as a **prefix** of its commits,
+  across every doc: it loses at most the last group, never a change while keeping a later one,
+  and never part of a change.
+- **No version is given out twice.** Each doc keeps a seq floor in the store, past every version
+  it gave out; the floor is raised, in a commit that waits for the disk, at most once per
+  `max_changes` changes. An open after a grouped opener's unclean close is a recovery: it
+  records the versions between the doc's newest kept change and its floor as lost, and every
+  writer a later join could take back (an agent's, a person's on a device) is retired, so every
+  writer after it is fresh. The doc's next version is past every lost one; a `write --base`, an
+  `events_since` or the live window from a lost version is refused `MPC-E112` `base_expired`
+  (exit 8): read the doc again and redo the change at the version read. A blob doc's versions
+  keep a floor of their own, and a `--base` at a lost one is refused the same way. The floor
+  covers the kit's versions. A later update of the native engine adds its part: after a
+  rollback, the native engine refuses state from before the reload.
+- **A commit that fails at the disk** while grouped loses the commits not yet durable, while
+  the live docs still hold them. Until the session manager's next `tick` or `flush`, every read
+  and write of that store's docs is refused `MPC-E526` `store_recovering` (exit 1: retry). The
+  tick then reopens the store at its durable state (`AuditEvent::StoreRolledBack`), reloads
+  every live doc from it (`AuditEvent::RolledBack { key, lost_from, durable_seq }` each), and
+  closes every connection with `LeaveReason::RolledBack` (wire `rolled_back`): a connection's
+  writer may have made lost changes others received, so each joins again under a fresh writer
+  and reads the doc again. A blob doc's session is closed and reloads at its next open.
+- **An older kit and a store that lost a group.** A recovery that recorded lost versions stamps
+  the store's features word with `FEATURE_SEQ_FLOOR`: a kit without the seq floor refuses the
+  store at open, `MPC-E502` `store_newer`, rather than give a lost version out again. A grouped
+  store closed cleanly, or one that never lost a version, stays readable by older kits.
 
 ### Which to use
 
@@ -1989,6 +2119,8 @@ order):
 | `view` | where an edit's change is, as of `version.after` (`session::ViewAt`, below); null when it made no change |
 | `dry_run` | whether the call was a dry run ([Dry run](#dry-run-one-contract-for-every-tier)); false on every other call |
 
+A tier-0 batch's result has one more field, `batch`, after `dry_run` ([A batch of verbs](#a-batch-of-verbs)).
+
 - **A changed unit** (`tools::ChangedUnit`, also `ToolOutput::changed_units`) is `{address,
   root, key, field, op, before, after}`: a list element by its address (`Pack::address_of`); a
   field of a composite map (`Pack::composite`: the key `<element>\x1f<field>`) split into its
@@ -2150,6 +2282,7 @@ of paths. They are in **every build** (no feature, no test-only hook) and **off 
 |---|---|---|
 | `edit_as` | `Doc::edit_made`, the body `Doc::edit_as`, `Doc::edit_applied` and the session share | one change applied to an engine doc: the session's, a disk replica's or a bare doc's |
 | `commit` | `Session::commit` | a change's commit: store, then bookkeeping (every mutating verb's tail) |
+| `commit.store` | `Session::commit_rows` | a change's store transaction: its rows and the commit, with the wait for the disk when the commit makes them durable (every commit at `Immediate`; with grouped commits, the one that closes a group) |
 | `store.txn_commit` | `DocStore::commit_changes` | the durable transaction commit alone (left out of the Yrs speed baseline's ratios) |
 | `blame` | `Session::blame` | blame of a line range or the whole doc |
 | `prov.lookup` | `undo::plan`, per region | undo's and revert's provenance lookups for one region: the window's roots and the region's revert, which asks which roots are live. One block, because a single lookup (about 160 ns, release) costs about what a running timer does |
@@ -2471,6 +2604,8 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `compact_entries` / `compact_bytes` | 1,000 / 2 MiB | compact after an append: from `compact_entries` entries once the log's bytes are at least a quarter of the snapshot's (v0.9.8: its cost per change stays constant as the state grows), always at 8 × `compact_entries` entries or at `compact_bytes` bytes |
 | `unload_compact_entries` | 100 | compact on unload |
 | `memory_budget_bytes` / `memory_factor` / `idle_unload_ms` | 256 MiB / 20 / 10 min | the pool |
+| `host_release` (`Config::release`) | 0 (the kit's own) | the host's release of freed memory after a native cut and after an unload's cut (`HostRelease`) |
+| `store_cache_bytes` (`Config::store`) | 64 MiB | the store's cache: one per opened store, 16 MiB to 1 GiB, set where the store is opened (`DocStore::open_with`); the manager reports its store's |
 | `write_quiet_ms` / `write_max_delay_ms` | 1 s / 5 s | write-back after this much quiet, or this long after the first unwritten change |
 | `disk_poll_ms` | 3 s | stat backup interval while anyone is present |
 | `disk_read_max_bytes` | 64 MiB | larger files are declined unread (`too_large`) |
@@ -3591,13 +3726,14 @@ save, or its key renumbered by it.
 `claim_nodes(conn, keys, ttl_ms, note)`, `renew_claim`, `release_claim`, `claims`: the CSV
 claim model on a whole-file doc. A claim names node keys of the current version's index (every
 key must be a node now; no index yet: `MPC-E713`), lasts `claim_default_ms` unless asked (at most
-`claim_max_ms`; 0 refused), and carries its note. **Advisory:** it never refuses a write, a
-restore or a lease (the lease guards the file); nothing in the write path reads claims. Another
+`claim_max_ms`; 0 refused), and carries its note. **Advisory** but for agents under
+`ClaimPolicy::Respect` (below): it never refuses a person's write, a restore or a lease (the
+lease guards the file). Another
 participant's live claim on one of the same nodes refuses a new one: `SessionError::NodesClaimed`,
 `MPC-E301` `claimed`, exit 5. Limits as any claim's (`claims_max`, `claims_per_participant`, 256
-nodes, a 1 KiB note). Memory only. The one place a node claim refuses anything: under
-`ClaimPolicy::Respect`, an **agent's** file-type verb whose change touches a node someone else
-claims ([Verbs on a blob doc](#verbs-on-a-blob-doc)).
+nodes, a 1 KiB note). Memory only. Under `ClaimPolicy::Respect` a node claim refuses an
+**agent's** change to a node someone else claims: its file-type verbs
+([Verbs on a blob doc](#verbs-on-a-blob-doc)), and its whole-file writes (below).
 
 **A hold's reach.** A pack says, per node kind, how far a hold on a node of that kind reaches
 (`BlobPack::hold_reach`): `HoldReach::Node` (the node; the default), `Subtree` (the node and
@@ -3607,6 +3743,21 @@ agent's verb is refused (`MPC-E301`, naming the holder) when a node it changes i
 reach of a node someone else holds, the reach read at the version the verb runs on and in its
 output: a member put on a held layer after the hold is covered. A person's change is never
 refused.
+
+**A hold binds an agent's whole-file write.** With `BlobWriteOptions::policy(ClaimPolicy::Respect)`
+on `write_with`, `write_bytes_with` or `expect_save_with`, an agent's write is checked while
+someone else holds a node: its bytes are read with the file type's own index off the session
+lock (a streamed write is first spooled to the blob store's temp folder, then stored from the
+spool), diffed with head's index, and refused when a node it changes, adds or removes is inside
+a hold's reach (`MPC-E301`, naming the holder; nothing is stored). Head not indexed yet is
+`MPC-E713` (retry). A write the index can't read within its limits, or at all, can't be checked,
+and is refused while the holds last (`MPC-E306` `hold_unindexable`, exit 5, `details.holders`):
+change the doc through the file type's verbs, or ask the holders to release. A hold taken while
+a write uploads (none when it was admitted) can't be judged against it, so the write is refused
+naming that holder; the same call again is checked. With nobody else holding a node, under
+`ClaimPolicy::Ignore` (the default), for a person, and for a file type with no index, a write is
+as before, with no index read. A checked write's read seeds the new version's index, as a
+verb's does. An agent's `restore` isn't checked.
 
 It ends on release, expiry, its connection leaving (`ClaimEnd::Left`), and `ClaimEnd::Deleted`
 once a version's index holds none of its nodes (checked when that index exists; a claim isn't
@@ -3670,8 +3821,10 @@ word, or one not lowercase; refusals with another pack's prefix.
    writes (`MPC-E715`), someone else's lease (`MPC-E701`, exit 5), a `merge: Lease` verb without
    the caller's own lease (`MPC-E718`), then `--if-version V` (head must be `V`, else
    `MPC-E110`). `--base V` newer than head is `MPC-E110`; head itself is the plain case; an
-   older `V` is checked per node (below, "`--base` per node"). The edit takes the write's own
-   lease for its length when nobody holds one, as `write` does.
+   older `V` is checked per node (below, "`--base` per node"). The verb takes **no lease** to
+   plan: another agent's verb on the same doc plans at the same time, and neither is refused
+   for the other merely running (a lease someone took themselves, or a whole-file `write` in
+   progress, still refuses with `MPC-E701`).
 2. **Plan, off the lock:** the verb runs on head, whose structure index must exist (a version
    a verb made has it at once, below; another, an outside save say, waits for the host's index
    job: until then `MPC-E713`, retry); the plan is checked (in order, apart, inside
@@ -3686,11 +3839,15 @@ word, or one not lowercase; refusals with another pack's prefix.
    digest must be `DIGEST`, else `MPC-E729`.
 4. **Commit, under the lock:** the caller is admitted again and the leases checked again. When
    head moved meanwhile (an outside save), the verb plans once more on the new head (nothing was
-   committed, so nothing applies twice; a `--base` call is checked per node again on the new
-   head); a second move, or a move under `--if-version`, is `MPC-E110`. Under `ClaimPolicy::Respect` an agent's change to a node someone else claims is
-   `MPC-E301` (exit 5). Then one version (`BlobReason::Write`, author, via, on-behalf-of, the
-   host's turn), its verb in `blob_verbs` in the same transaction, the write-back and the index
-   job asked for, as a write's. The same bytes as head record nothing.
+   committed, so nothing applies twice); a plain call plans once more, then `MPC-E110`; a
+   `--base` call plans again on each move, checked per node against its base every time, up to
+   `BASE_REPLANS_MAX` (64) times, then `MPC-E110`; a move under `--if-version` is `MPC-E110`.
+   Under `ClaimPolicy::Respect` an agent's change to a node someone else claims is `MPC-E301`
+   (exit 5). Then, holding the automatic lease only for the commit (taken and released under
+   the same lock, as `LeaseAcquired` and `LeaseEnded` events, when nobody holds one), one
+   version (`BlobReason::Write`, author, via, on-behalf-of, the host's turn), its verb in
+   `blob_verbs` in the same transaction, the write-back and the index job asked for, as a
+   write's. The same bytes as head record nothing. A dry run takes no lease at all.
 
 5. **Its index, off the lock:** the version's structure index is recorded from the pack's
    draft the check already read (the same bytes), exactly as the host's index job records one:
@@ -3769,12 +3926,134 @@ real run's, `changed.bytes.after_digest` included. The real run with `--expect <
 stores exactly those bytes or refuses `MPC-E729`. A read verb refuses `--dry-run`, `--expect`,
 `--if-version` and `--base` (exit 2).
 
-**Records:** `blob_verbs` `(doc, version)` holds the verb's name and, for a batch, its calls
+**Records:** `blob_verbs` `(doc, version)` holds the verb's name and, for a batch, its calls (for a revert, also the version it took away: [Revert, undo and redo](#revert-undo-and-redo-on-a-blob-doc))
 (names only: **no arguments are stored**, they can hold content). It is written in the version's
 own transaction, created lazily, removed with a version retention deletes and by a participant's
 erasure (their versions and those made on their behalf), and kept by a content purge; a
 promotion's tier-0 history carries it. An older kit reads and writes such a store as before and
 refuses its rewrite (`MPC-E502`).
+
+### A batch of verbs
+
+`BlobSession::run_batch(conn, args, calls, opts)`: an agent's calls of a file type's edit verbs
+as **one change**. `args` are the batch's own flags (`--if-version V` or `--base V`,
+`--dry-run`, `--expect DIGEST`, `--json`); each `BatchCall` is a verb of `BlobPack::verbs` with
+its arguments, as `run_tool` takes them. A host's CLI can read one call per line:
+
+```
+k2 doc batch plan.dxf [--if-version V | --base V] [--dry-run] [--json] <<'END'
+{"argv":["layer","rename","A-WALL","--to","A-WALL-EXIST"]}
+{"argv":["entity","move","--on-layer","A-WALL-EXIST","--by","10,0","--unit","mm"]}
+END
+```
+
+- **Each call plans on what the calls before it staged.** The stage is head plus one composed
+  list of ranges over head's bytes, read through the kit's applier as a single verb's output
+  is, with its own index: call k gets stage k-1's bytes (whole or as a stream, as the verb
+  says; `blob_verb_max_bytes` bounds a whole read) and index (`BlobVerbCtx::index`, `size`).
+  Its plan is checked against that stage, composed into the list, and the new stage is read
+  with the pack's index and diffed with the one before: a node the call didn't declare refuses
+  the batch at that call (`MPC-E726`).
+- **`$N` and `$N.k`** in a call's arguments stand for the first (the k-th) node call N
+  created (`BlobVerbOut::created`), 1-based, resolved just before the call runs; `$$` is a
+  literal `$`. Naming a call that isn't earlier, or a node it didn't create, is a usage error.
+- **Guards are the batch's.** A call carrying its own `--if-version`, `--base`, `--dry-run` or
+  `--expect`, a read verb and a name that is no verb of the file type are usage errors (exit 2)
+  naming the call. `--if-version V`: head must be `V` (`MPC-E110`). `--base V`: the whole batch
+  is folded at `V` too, and checked per node as a single verb is ("`--base` per node", above),
+  over every call's change; nodes the calls create never conflict. A conflict names the first
+  call holding one of its nodes.
+- **Admission and the commit** are a single verb's, once for the batch: rights, the edit rate
+  (one token), agent writes (`MPC-E715` for the whole batch), someone else's lease
+  (`MPC-E701`), and each `merge: Lease` call's own lease (`MPC-E718`, naming the call), checked
+  when admitted and again at the commit. The batch plans with **no lease**, off the session
+  lock; the automatic lease is held only around its one commit, so two agents' batches on the
+  same doc plan at the same time. Under `ClaimPolicy::Respect`, each call's change is checked
+  against others' holds with its reach (the nodes it changed, read at head, at the stage before
+  it and at its own), in order: the first call reaching a held node refuses the batch
+  (`MPC-E301`). A person's batch is never refused for a hold.
+- **One version, one record.** The output is the last stage: its composed ranges are checked
+  against head and the caps (`MPC-E725`), applied over head once, and committed as one version
+  with one `blob_verbs` row: the verb `batch` and its calls' names, in order. Its structure index
+  is recorded from the last stage's draft, so the next verb waits for no index job. When head
+  moves meanwhile, the batch is folded again on the new head, as a single verb plans again.
+- **All or nothing.** Any refusal (a call's usage, a pack's refusal, a stray node, a guard, a
+  claim, a cap) applies nothing.
+- **Limits:** `blob_batch_max_calls` (default 32, listed in `capabilities`) calls per batch; more
+  are refused before any call runs (`MPC-E728`, `details.size` the count and `details.limit`
+  the setting). A setting outside 1 to `session::BATCH_CALLS_CEILING` (1,000) refuses every
+  batch as a usage error naming the setting.
+- **A dry run** stops before the commit, as a single verb's: no version, no lease, charged as a
+  read; its result is the real run's but for `dry_run` and `version.after`.
+
+**The result** is a single edit verb's (`verb` `batch`, `changed` from head's index to the last
+stage's, `changed.word` `batch`, the calls' stdout one after another as `data.text`, each
+call's notes once), plus one field after `dry_run`, on a batch's result only:
+
+- `batch`: `{calls, failed_at}`. `calls` lists each call as `{verb, word, created}` (its verb,
+  its word and the keys it created), empty on a refusal; `failed_at` is the 1-based call a
+  refusal names, or null (no refusal, or one of the batch as a whole: its flags, the call cap,
+  admission, `--if-version`, head moving too often).
+
+In text, a pack's refusal's summary starts `batch call <k>:` and a usage error names its call.
+
+**What the person sees:** one version by the agent, its verb `batch` and its calls
+(`BlobLogEntry::verb`, `calls`). The agent's `undo` (`BlobSession::run_revert` with
+`RevertWhat::Undo`) takes the whole batch away as one change, as `restore` of the version before
+it does ("Revert, undo and redo on a blob doc", below).
+
+### Revert, undo and redo on a blob doc
+
+`BlobSession::run_revert(conn, what, args, opts)`: take one version's change away from head, as
+a new version. `what` is `RevertWhat::Version(K)` (`revert <version>`), `RevertWhat::Undo` or
+`RevertWhat::Redo` (the caller's own). `args` are `--if-version V`, `--dry-run`, `--expect
+DIGEST` and `--json`; `--base` is a usage error, because the revert checks each node itself.
+Version 1 has nothing before it, so reverting it is a usage error too.
+
+- **Who:** `revert` needs the version's author, the person it was made for, or an owner
+  (`MPC-E105`), as a live doc's revert does. `undo` and `redo` only ever take the caller's own
+  versions. Admission is a verb's: edit rights, the edit rate, agent writes, someone else's
+  lease, `--if-version`.
+- **The file type's merge does it:** `BlobPack::merge3_known` with `base` the bytes of K,
+  `ours` head's and `theirs` those of K-1, and `base_is` `SaveBase::Revert`. A file type with
+  no merge, or whose merge answers `Unsupported`, gets `MPC-E730 revert_unsupported` (exit 2),
+  whose next step is `restore --version <K-1>`: that also replaces every change made since.
+  Each of the three versions is bounded by `blob_merge_max_bytes` (`MPC-E728`).
+- **Checked first, by node:** what K changed (the index diff from K-1 to K) against what
+  changed since (from K to head), with `--base`'s overlap rule ("`--base` per node", above).
+  An overlap gets `MPC-E731 revert_conflict` (exit 1), with `details.conflicts` naming each
+  node's field, who changed it and in which version. A merge that finds a conflict the index
+  doesn't show is `MPC-E731` too, with no conflicts listed. Another program's save in
+  (K-1, head] must be one the pack proves keeps node keys, else `MPC-E719`
+  (`details.base` K-1).
+- **Then the verb path's checks:** the merged bytes are read with the file type's index
+  (`MPC-E727` if it refuses them), and their change from head must lie inside what K changed
+  (`MPC-E726`). Under `ClaimPolicy::Respect`, an agent's revert reaching a node someone else
+  holds is refused (`MPC-E301`); a person's never is. When head moves meanwhile, the revert
+  plans once more, then answers `MPC-E110`. A dry run stops before the commit, as a verb's
+  does.
+- **One version:** the caller's (`BlobReason::Write`), made with the automatic lease around
+  the commit only, its index recorded from the check. Its `blob_verbs` row holds the verb
+  (`revert`, `undo` or `redo`) and the version it took away (`BlobVersion::revert`,
+  `BlobLogEntry::reverts`). The result is a verb's, with `changed.word` `reverted`, `undone`
+  or `redone`, and `data` `{reverts: K}`.
+
+The registry's `undo`, `redo` and `revert` rows are on the blob tier: a host's CLI runs them
+through this call, and the tier-0 parity harness checks them.
+
+**The undo stack** is read from the caller's own versions in `blob_verbs`, with no table of
+its own, at most `undo_depth` kit-made versions back:
+
+- a verb's, a batch's, a revert's or a redo's version can be undone;
+- an `undo` takes its version off the stack and can be redone;
+- any new change of theirs clears redo, a whole-file write and a restore included;
+- with nothing to undo or redo, the call exits 1 with a `nothing_to_undo` or `nothing_to_redo`
+  note, and writes nothing.
+
+Whole-file writes and restores are never undo steps.
+
+**Older kits:** a revert's `blob_verbs` row is record version 2. A kit before this one reads
+it as a version with no verb, never as another verb.
 
 ### Tier 0 → text (v0.9.2)
 

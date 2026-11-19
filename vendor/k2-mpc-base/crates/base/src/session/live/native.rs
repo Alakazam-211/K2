@@ -1,9 +1,9 @@
 //! The native engine (a Beta) in sessions: where a native doc's keys come from, and how a doc
 //! is loaded on the engine its stamp names. A native doc has one replica, the host's: people,
 //! agents and readers join it through the session's verbs, each participant its own writer, as
-//! on Yrs; nothing here takes or gives sync bytes. Its log isn't compacted: its compaction is the
-//! engine's cut, which waits for the engine's single-replica mode. Its disk replica is text only
-//! (`text_replica.rs`), and its live text is capped (`text_cap.rs`).
+//! on Yrs; nothing here takes or gives sync bytes. Its log isn't folded into a kit snapshot: its
+//! compaction is the engine's cut, which the manager's cut queue runs (`native_cut.rs`). Its disk
+//! replica is text only (`text_replica.rs`), and its live text is capped (`text_cap.rs`).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -44,7 +44,7 @@ pub(super) fn load_doc(
     let engine = check_engine(meta)?;
     let loaded = {
         timed!(LoadStoreRead);
-        store.load(doc_id)?
+        read_log(store, doc_id, &engine)?
     };
     let mut doc = {
         let (StoredEngine::Yrs, _) = (engine, keys);
@@ -77,6 +77,11 @@ pub(super) fn load_doc(
         state_bytes,
         authors,
     })
+}
+
+/// A stored doc's log as its load reads it: its snapshot and every row after it.
+fn read_log(store: &DocStore, doc_id: DocId, _: &StoredEngine) -> Result<crate::store::Loaded> {
+    Ok(store.load(doc_id)?)
 }
 
 /// The stamp of a doc made on the native engine (`native`) or on Yrs: its engine's name and

@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -365,14 +365,14 @@
       "source": "kit",
       "run_tool": false,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E111", "MPC-E112", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E701", "MPC-E703", "MPC-E715", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E823", "MPC-E824", "MPC-E901", "MPC-E908", "MPC-E909"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E111", "MPC-E112", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E306", "MPC-E405", "MPC-E701", "MPC-E703", "MPC-E715", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E822", "MPC-E823", "MPC-E824", "MPC-E901", "MPC-E908", "MPC-E909"]
     },
     {
       "name": "undo",
       "kind": "edit",
-      "tiers": ["text", "grid"],
+      "tiers": ["text", "blob", "grid"],
       "needs": ["read", "edit"],
-      "usage": "undo [--steps N] [--for P]",
+      "usage": "undo [--steps N] [--for P] (tier 0: one step, of your own)",
       "exits": [0, 1],
       "serves": ["P16"],
       "source": "kit",
@@ -383,9 +383,9 @@
     {
       "name": "redo",
       "kind": "edit",
-      "tiers": ["text", "grid"],
+      "tiers": ["text", "blob", "grid"],
       "needs": ["read", "edit"],
-      "usage": "redo [--steps N]",
+      "usage": "redo [--steps N] (tier 0: one step, of your own)",
       "exits": [0, 1],
       "serves": ["P16"],
       "source": "kit",
@@ -656,9 +656,9 @@
     {
       "name": "revert",
       "kind": "edit",
-      "tiers": ["text", "grid"],
+      "tiers": ["text", "blob", "grid"],
       "needs": ["read", "edit", "author_or_owner"],
-      "usage": "revert <change> [--partial] (too old: exit 8)",
+      "usage": "revert <change> [--partial] (too old: exit 8; tier 0: a version, no --partial)",
       "exits": [0, 1],
       "serves": ["P31"],
       "source": "kit",
@@ -719,7 +719,7 @@
       "errors": ["MPC-E106"]
     }
   ],
-  "errors_any_verb": ["MPC-E101", "MPC-E107", "MPC-E108", "MPC-E109", "MPC-E146", "MPC-E154", "MPC-E169", "MPC-E401", "MPC-E402", "MPC-E403", "MPC-E404", "MPC-E407", "MPC-E415", "MPC-E501", "MPC-E502", "MPC-E503", "MPC-E505", "MPC-E508", "MPC-E509", "MPC-E510", "MPC-E513", "MPC-E514", "MPC-E515", "MPC-E516", "MPC-E517", "MPC-E518", "MPC-E519", "MPC-E520", "MPC-E521", "MPC-E522", "MPC-E706", "MPC-E707", "MPC-E709", "MPC-E710"],
+  "errors_any_verb": ["MPC-E101", "MPC-E107", "MPC-E108", "MPC-E109", "MPC-E146", "MPC-E154", "MPC-E169", "MPC-E401", "MPC-E402", "MPC-E403", "MPC-E404", "MPC-E407", "MPC-E415", "MPC-E501", "MPC-E502", "MPC-E503", "MPC-E505", "MPC-E508", "MPC-E509", "MPC-E510", "MPC-E513", "MPC-E514", "MPC-E515", "MPC-E516", "MPC-E517", "MPC-E518", "MPC-E519", "MPC-E520", "MPC-E521", "MPC-E522", "MPC-E526", "MPC-E706", "MPC-E707", "MPC-E709", "MPC-E710"],
   "meta_verbs": [
     {
       "name": "explain",
@@ -824,7 +824,7 @@
     {
       "row": "P16",
       "action": "Undo / redo my own edits",
-      "tiers": ["text", "grid"],
+      "tiers": ["text", "blob", "grid"],
       "verbs": ["undo", "redo", "undo --drop"]
     },
     {
@@ -914,7 +914,7 @@
     {
       "row": "P31",
       "action": "Reverse one specific change",
-      "tiers": ["text", "grid"],
+      "tiers": ["text", "blob", "grid"],
       "verbs": ["revert"]
     },
     {
@@ -1082,6 +1082,7 @@
     "blob_verb_max_bytes": 268435456,
     "blob_verb_max_spans": 1000000,
     "blob_verb_max_insert_bytes": 268435456,
+    "blob_batch_max_calls": 32,
     "annot_body_max_bytes": 16384,
     "annot_threads_max": 10000,
     "annot_comments_max": 1000,
@@ -1096,9 +1097,16 @@
     "native_cut_floor": 100,
     "native_cut_ceiling": 200,
     "native_cut_divisor": 30,
+    "native_cut_bytes_from_changes": 30000,
+    "native_cut_bytes_divisor": 40,
     "native_cut_idle_ms": 250,
     "native_cut_duty_pct": 10,
     "native_cut_slow_ms": 250,
+    "store_cache_bytes": 67108864,
+    "store_commit_grouped": 0,
+    "store_commit_max_changes": 0,
+    "store_commit_max_ms": 0,
+    "host_release": 0,
     "tool_output_max_bytes": 33554432
   },
   "positions": {
@@ -1961,6 +1969,12 @@
       "status": "live"
     },
     {
+      "id": "MPC-E183",
+      "name": "native_equivocation",
+      "exit": 2,
+      "status": "live"
+    },
+    {
       "id": "MPC-E201",
       "name": "undo_conflict",
       "exit": 1,
@@ -2036,6 +2050,12 @@
       "id": "MPC-E305",
       "name": "watching",
       "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E306",
+      "name": "hold_unindexable",
+      "exit": 5,
       "status": "live"
     },
     {
@@ -2285,6 +2305,12 @@
       "status": "live"
     },
     {
+      "id": "MPC-E526",
+      "name": "store_recovering",
+      "exit": 1,
+      "status": "live"
+    },
+    {
       "id": "MPC-E601",
       "name": "purge_current_version",
       "exit": 2,
@@ -2473,6 +2499,18 @@
     {
       "id": "MPC-E729",
       "name": "not_as_previewed",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E730",
+      "name": "revert_unsupported",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E731",
+      "name": "revert_conflict",
       "exit": 1,
       "status": "live"
     },

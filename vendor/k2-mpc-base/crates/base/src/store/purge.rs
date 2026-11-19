@@ -259,7 +259,8 @@ impl DocStore {
         id: DocId,
         p: &DocPurge<'_>,
     ) -> Result<(PurgeCounts, Vec<PurgedBlob>), StoreError> {
-        let w = self.begin_write()?;
+        // a full barrier (grouped commits, `group.rs`)
+        let w = self.begin_barrier("purge")?;
         let c = purge_in(&w, id, p)?;
         let released = super::blob_refs::recompute_in(&w, id, p.ref_roots, &p.live_refs, p.now)?;
         w.commit()?;

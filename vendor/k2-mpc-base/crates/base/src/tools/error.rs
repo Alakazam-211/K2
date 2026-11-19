@@ -182,6 +182,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::Strayed { .. }
         | SessionError::OutputUnreadable { .. }
         | SessionError::VerbTooLarge { .. }
+        | SessionError::RevertUnsupported { .. }
         | SessionError::BadAnnotation(_)
         | SessionError::AnnotationCap { .. }
         | SessionError::WritersFull { .. }
@@ -195,7 +196,8 @@ pub fn session_exit(e: &SessionError) -> u8 {
         SessionError::Leased { .. }
         | SessionError::Claimed { .. }
         | SessionError::ElemsClaimed(_)
-        | SessionError::NodesClaimed(_) => exit::LEASED,
+        | SessionError::NodesClaimed(_)
+        | SessionError::HoldUnindexable { .. } => exit::LEASED,
         SessionError::IndexRead(r) => r.exit(),
         SessionError::Store(e) | SessionError::Blob(BlobError::Store(e)) => store_exit(e),
         SessionError::EngineMismatch { .. } | SessionError::NativeEngineMissing { .. } => {
@@ -209,6 +211,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::KeysReissued { .. }
         | SessionError::BaseAcrossUnprovenSave { .. }
         | SessionError::BaseMoved { .. }
+        | SessionError::RevertConflict { .. }
         | SessionError::IndexPending { .. }
         | SessionError::FacetConflict(_)
         | SessionError::Disk(_)
@@ -239,6 +242,8 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         | S::PurgedVersion(..) => exit::NOT_FOUND,
         S::CurrentVersion(..) => exit::USAGE,
         S::MarksLost(_) => exit::TOO_OLD,
+        // grouped commits: the store is reopened at the next tick or flush; retry
+        S::Recovering => exit::NO,
         S::Db(_)
         | S::Newer { .. }
         | S::NeverWritten { .. }
@@ -306,6 +311,7 @@ mod tests {
                 5,
             ),
             (SessionError::Store(S::Locked), 6),
+            (SessionError::Store(S::Recovering), 1),
             // purge: the current blob version is refused (2); a purged one is gone (4)
             (SessionError::Store(S::CurrentVersion(1, 2)), 2),
             (SessionError::Store(S::PurgedVersion(1, 2)), 4),

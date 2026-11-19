@@ -198,6 +198,9 @@ impl DocStore {
         // a store of a format this build doesn't write (the native engine's): refused before
         // anything changes (v0.10.1)
         self.check_rewritable_format()?;
+        // a barrier: the group made durable in this file before it is copied (grouped
+        // commits, `group.rs`)
+        self.flush_barrier("rewrite")?;
         let mut g = self.db.write().unwrap_or_else(|p| p.into_inner());
         let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         let bytes_before = size(&self.path);
@@ -207,7 +210,7 @@ impl DocStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(io("removing an old temp file", e)),
         }
-        let fresh = Database::create(&tmp)?;
+        let fresh = super::settings::redb_builder(&self.settings).create(&tmp)?;
         let rows = match copy_all(&g, &fresh) {
             Ok(n) => n,
             Err(e) => {
@@ -228,6 +231,7 @@ impl DocStore {
         // the old file is unlinked; closing it releases its blocks
         let old = std::mem::replace(&mut *g, fresh);
         drop(old);
+        drop(g);
         Ok(RewriteReport {
             bytes_before,
             bytes_after: size(&self.path),

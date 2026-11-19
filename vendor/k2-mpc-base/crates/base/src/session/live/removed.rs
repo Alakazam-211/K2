@@ -163,7 +163,7 @@ impl Session {
             Err(_) => {
                 self.emit(AuditEvent::OutsideOverride {
                     key: st.key.clone(),
-                    change: st.version + 1,
+                    change: st.next_seq(),
                     rule: "not_computed",
                     region: String::new(),
                     by: None,

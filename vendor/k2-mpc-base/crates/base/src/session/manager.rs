@@ -103,6 +103,65 @@ pub struct TickReport {
     /// [`super::Config::conflict_copy_keep_ms`]: only copies the kit recorded,
     /// still holding exactly their version's bytes, whose version isn't named.
     pub conflict_copies_removed: Vec<(DocKey, PathBuf)>,
+    /// Native docs (feature `native`): the engine's cuts this tick ran, at most one from the
+    /// cut queue and any a clean unload made ([`Config::native_cut_queue`]). Not the history's
+    /// versions ([`TickReport::versions_cut`]).
+    pub native_cuts: Vec<NativeCut>,
+    /// Native docs due a cut that waits: not idle yet, inside the duty gap after the last cut,
+    /// or behind the one cut a tick runs.
+    pub native_cuts_deferred: usize,
+    /// What returning freed memory to the OS did, right after this tick's queued cut (`None`:
+    /// no cut was made): the host's release ([`Config::release`]) when it set one, else the
+    /// kit's own. An unload's cut reports its own ([`NativeCut::released`]).
+    pub memory_released: Option<super::MemoryRelease>,
+}
+
+/// Why a native doc's cut ran ([`NativeCut`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NativeCutWhy {
+    /// Its changes since its last cut reached its cadence ([`super::CutCadence::due`]), or it
+    /// is a large uncut doc: run when the host was idle.
+    Cadence,
+    /// A clean unload, or a host's close ([`SessionManager::close`]): the doc was leaving
+    /// memory.
+    Unload,
+    /// Forced (twice its cadence, or its bytes past the engine's budget): run while editing
+    /// went on, within the duty.
+    Forced,
+}
+
+/// How a native doc's cut ended ([`NativeCut`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NativeCutOutcome {
+    /// Cut: the store holds its new generation.
+    Done,
+    /// Refused for now (changes not yet committed, `MPC-E524`, or another live instance of the
+    /// doc, `MPC-E525`): it stays queued and is tried again after the duty gap.
+    Refused,
+}
+
+/// A native doc's cut, as a tick reports it ([`TickReport::native_cuts`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NativeCut {
+    /// The doc.
+    pub key: DocKey,
+    /// Its measured wall time, ms.
+    pub ms: u64,
+    /// Its changes since its last cut when it ran.
+    pub tail: u64,
+    /// Why it ran.
+    pub why: NativeCutWhy,
+    /// How it ended.
+    pub outcome: NativeCutOutcome,
+    /// Over [`super::CutQueueSettings::slow_ms`] (also an [`AuditEvent::NativeCutSlow`]).
+    pub slow: bool,
+    /// What returning freed memory to the OS did after the cut ([`Config::release`], else the
+    /// kit's own): a queued cut's right after it, an unload's once the unloaded doc was
+    /// dropped. `None` for a cut that wasn't made.
+    pub released: Option<super::MemoryRelease>,
 }
 
 struct Pool {
@@ -117,10 +176,12 @@ struct Pool {
     parked: HashMap<DocKey, HashMap<String, Vec<Note>>>,
     /// The host-wide cut queue ([`super::cut_queue`], [`Config::native_cut_queue`]): one per
     /// manager, and a host runs one manager per process, so one native cut runs at a time on
-    /// the host. It runs native cuts once the native engine's single-replica mode is vendored;
-    /// until then nothing queues.
-    #[allow(dead_code)]
-    cut_queue: super::cut_queue::CutQueue<DocKey>,
+    /// the host. Keyed by the doc's store id, which a rename keeps.
+    cut_queue: super::cut_queue::CutQueue<crate::store::DocId>,
+    /// Cuts clean unloads made since the last tick, and the unloads' cut errors, for its
+    /// report.
+    unload_cuts: Vec<NativeCut>,
+    unload_cut_errors: Vec<(DocKey, SessionError)>,
 }
 
 /// The most docs [`Pool::parked`] keeps notes for; past it the doc whose latest note is oldest
@@ -137,7 +198,8 @@ const PARKED_TEXT_MAX: usize = 64 << 20;
 ///
 /// A session is **unloadable** when it has no connections and nobody else holds its
 /// `Arc` (only the pool does). Unloading never loses anything: every change is already
-/// durable. Unloadable sessions go when idle for [`Config::idle_unload_ms`]
+/// durable (with grouped commits, [`crate::store::CommitDurability::Grouped`], an unload is a
+/// barrier: it makes the group durable first). Unloadable sessions go when idle for [`Config::idle_unload_ms`]
 /// ([`SessionManager::unload_idle`]) and, least recently used first, whenever the pool's
 /// estimate is over [`Config::memory_budget_bytes`] (checked on every open).
 ///
@@ -150,16 +212,33 @@ pub struct SessionManager {
     /// Where native docs' keys come from (feature `native`; none: a native doc is refused,
     /// `MPCE-E566`).
     keys: super::live::KeysSource,
+    /// What the sessions tell the cut queue: native commits and the docs they found due.
+    cut_inbox: Arc<super::cut_queue::NativeCutInbox>,
+    /// The host's clock, which the store holds weakly to bound a group's wait (grouped
+    /// commits, [`crate::store::CommitDurability::Grouped`]).
+    _clock: Arc<crate::store::StoreClock>,
 }
 
 impl SessionManager {
-    pub fn new(store: Arc<DocStore>, host: Arc<dyn Host>, config: Config) -> Self {
+    /// A manager over `store`, with `config`. Its [`Config::store`] becomes `store`'s own
+    /// settings ([`DocStore::settings`]): the store was opened with them, so that is what
+    /// [`SessionManager::config`] (and `capabilities` from it) reports.
+    pub fn new(store: Arc<DocStore>, host: Arc<dyn Host>, mut config: Config) -> Self {
+        // what the store was opened with, whatever the config said (`Config::store`)
+        config.store = store.settings();
         let cut_queue = super::cut_queue::CutQueue::new(config.native_cut_queue);
+        let clock: Arc<crate::store::StoreClock> = {
+            let host = host.clone();
+            Arc::new(move || host.now_ms())
+        };
+        store.set_clock(Arc::downgrade(&clock));
         Self {
             host,
             config: Arc::new(config),
             pool: Mutex::new(Pool {
                 cut_queue,
+                unload_cuts: Vec::new(),
+                unload_cut_errors: Vec::new(),
                 parked: HashMap::new(),
                 store: Some(store),
                 sessions: HashMap::new(),
@@ -168,6 +247,8 @@ impl SessionManager {
             }),
             blobs: None,
             keys: super::live::KeysSource::default(),
+            cut_inbox: Arc::default(),
+            _clock: clock,
         }
     }
 
@@ -265,6 +346,7 @@ impl SessionManager {
         if let Some(b) = &self.blobs {
             session.set_blob_store(b.clone());
         }
+        session.set_cut_inbox(self.cut_inbox.clone());
         let s = Arc::new(session);
         if let Some(notes) = pool.parked.remove(key) {
             s.adopt_notes(notes);
@@ -377,6 +459,9 @@ impl SessionManager {
     /// Time is [`super::Host::now_ms`], like every other timer in the kit.
     pub fn tick(&self) -> Result<TickReport> {
         timed!(Tick);
+        // grouped commits: a store that failed at the disk is reopened, and every live doc
+        // reloaded, before anything else runs
+        self.roll_back()?;
         let mut rep = TickReport {
             left: self.expire_idle()?,
             ..TickReport::default()
@@ -461,6 +546,15 @@ impl SessionManager {
             }
         }
         rep.unloaded = self.unload_idle()?;
+        let mut pool = self.pool()?;
+        rep.native_cuts.append(&mut pool.unload_cuts);
+        rep.errors.append(&mut pool.unload_cut_errors);
+        rep.native_cuts_deferred = pool.cut_queue.queued();
+        // grouped commits: a group that has waited its time is made durable (`group.rs`)
+        if let Some(store) = pool.store.clone() {
+            drop(pool);
+            store.tick_group()?;
+        }
         Ok(rep)
     }
 
@@ -1027,20 +1121,89 @@ impl SessionManager {
     /// [`SessionError::Closed`] (`reason`, the host's code). Outside saves are no longer merged:
     /// the session is out of the pool, so `tick` no longer reaches it; the next open takes a
     /// save made meanwhile in as an ordinary outside save. Waiting outside-save notes are kept
-    /// for that open, as on an unload. The kit doesn't remember the close: opening again is the
-    /// host's decision. Returns whether a session was loaded.
+    /// for that open, as on an unload. A native doc with changes since its last cut is cut first,
+    /// as on a clean unload (counted against the cut queue's duty, reported at the next tick).
+    /// The kit doesn't remember the close: opening again is the host's decision. Returns whether
+    /// a session was loaded.
     pub fn close(&self, key: &DocKey, reason: &'static str) -> Result<bool> {
         let mut pool = self.pool()?;
         if let Some(s) = pool.sessions.remove(key) {
             let waiting = s.close_by_host(reason);
             self.park_notes(&mut pool, key, waiting);
+            // then the release, as on a clean unload
+            drop(s);
+            Self::barrier(&pool, "close")?;
             return Ok(true);
         }
         if let Some(s) = pool.blob_sessions.remove(key) {
             s.close_by_host(reason);
+            Self::barrier(&pool, "close")?;
             return Ok(true);
         }
         Ok(false)
+    }
+
+    /// Make every change so far durable now ([`crate::store::CommitDurability::Grouped`]): one
+    /// commit that waits for the disk when a group is waiting; nothing to do at
+    /// [`crate::store::CommitDurability::Immediate`] (the default), where every change is
+    /// durable when its call returns. What an agent that must know its change survived asks
+    /// for.
+    pub fn flush(&self) -> Result<()> {
+        self.roll_back()?;
+        let pool = self.pool()?;
+        if pool.store.is_none() {
+            return Err(SessionError::Released);
+        }
+        Self::barrier(&pool, "flush")
+    }
+
+    /// How many of the store's commits since its open are on disk
+    /// ([`DocStore::durable_through`]): an abrupt stop or a power loss keeps at least these.
+    /// Equal to [`DocStore::commits`] at [`crate::store::CommitDurability::Immediate`].
+    pub fn durable_through(&self) -> Result<u64> {
+        let pool = self.pool()?;
+        let store = pool.store.as_ref().ok_or(SessionError::Released)?;
+        Ok(store.durable_through())
+    }
+
+    /// Grouped commits, after a commit failed at the disk ([`DocStore::rollback_pending`]):
+    /// the store reopened at its durable prefix, [`AuditEvent::StoreRolledBack`], and every
+    /// live doc reloaded from it ([`AuditEvent::RolledBack`] each; a tier-0 doc is closed and
+    /// reloads at its next open). Until then the store refuses every transaction. Nothing to do
+    /// otherwise.
+    fn roll_back(&self) -> Result<()> {
+        let mut pool = self.pool()?;
+        let Some(store) = pool.store.clone() else {
+            return Ok(());
+        };
+        if !store.rollback_pending() {
+            return Ok(());
+        }
+        store.reopen_in_place()?;
+        self.host.on_event(&AuditEvent::StoreRolledBack {
+            error: "a commit failed at the disk".into(),
+        });
+        // the plant: the live docs keep what the store lost
+        if !crate::beta_plant::planted("rollback-keeps-live-docs") {
+            for s in pool.sessions.values() {
+                s.reload_rolled_back();
+            }
+        }
+        for (_, s) in pool.blob_sessions.drain() {
+            s.close(SessionError::Broken(
+                "a commit failed at the disk; the doc reloads at its next open".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// A barrier (grouped commits, [`crate::store::CommitDurability::Grouped`]): every commit
+    /// so far made durable, before a doc leaves memory or the store is let go.
+    fn barrier(pool: &Pool, name: &str) -> Result<()> {
+        if let Some(store) = &pool.store {
+            store.flush_barrier(name)?;
+        }
+        Ok(())
     }
 
     /// [`SessionManager::close`] for every loaded doc `pick` names, given its key and its pack
@@ -1069,9 +1232,13 @@ impl SessionManager {
             if let Some(s) = pool.sessions.remove(k) {
                 let waiting = s.close_by_host(reason);
                 self.park_notes(&mut pool, k, waiting);
+                drop(s);
             } else if let Some(s) = pool.blob_sessions.remove(k) {
                 s.close_by_host(reason);
             }
+        }
+        if !keys.is_empty() {
+            Self::barrier(&pool, "close")?;
         }
         Ok(keys)
     }
@@ -1267,8 +1434,10 @@ impl SessionManager {
         for (_, s) in pool.blob_sessions.drain() {
             s.close(SessionError::Released);
         }
+        // the store let go durable (grouped commits)
+        let flushed = Self::barrier(&pool, "release");
         pool.store = None;
-        Ok(())
+        flushed
     }
 
     fn unloadable(s: &Arc<Session>) -> bool {
@@ -1281,6 +1450,13 @@ impl SessionManager {
             let waiting = s.close(SessionError::Unloaded, true);
             pool.unloaded_total += 1;
             self.park_notes(pool, key, waiting);
+            // the doc's memory is freed once its session goes: then the release, as after a
+            // queued cut
+            drop(s);
+            // the doc leaves memory durable (grouped commits)
+            if let Err(e) = Self::barrier(pool, "unload") {
+                pool.unload_cut_errors.push((key.clone(), e));
+            }
         }
     }
 

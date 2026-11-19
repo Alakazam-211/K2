@@ -9,7 +9,7 @@
 //!
 //! The contract is in `docs/SESSIONS.md`, "Tier 0".
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -30,12 +30,14 @@ use super::ratelimit::Bucket;
 
 mod annot;
 mod base;
+mod batch;
 mod index_page;
 mod index_read;
 mod index_tool;
 mod node_claims;
 mod opened;
 mod promote;
+mod revert;
 mod struct_index;
 mod verbs;
 use crate::anchor::{AnchorJudgment, AnchorRules, CandidateWhy};
@@ -47,13 +49,15 @@ use crate::store::{
     Approval, ApprovalState, BlobReason, BlobSync, BlobVersion, ChunkCommit, DocId, DocKey,
     DocMeta, DocStore, PurgeCounts, StoreError, VersionId, BLOB_DOC_PACK,
 };
+pub use batch::BatchCall;
 pub use index_read::INDEX_ADDRS_MAX;
 pub use node_claims::NODE_CLAIM_ROOT;
 pub use promote::{Promoted, Promotion};
+pub use revert::RevertWhat;
 pub use struct_index::{IndexInput, IndexJob};
 pub use verbs::{
     BlobPlan, BlobVerb, BlobVerbCtx, BlobVerbFn, BlobVerbKind, BlobVerbOut, BlobVerbRefused,
-    MergeBound, Span, VerbInput, VerbMerge,
+    MergeBound, Span, VerbInput, VerbMerge, BASE_REPLANS_MAX,
 };
 
 /// The participant a pack's merge of a conflicting save is attributed to (tier 0.5).
@@ -83,6 +87,10 @@ pub enum SaveBase {
     /// The save's own stamp names this version as the one it was made on
     /// ([`BlobPack::save_lineage`]).
     Stamped,
+    /// Not a save: the kit's revert of one version ([`BlobSession::run_revert`]), with `base`
+    /// that version, `ours` head and `theirs` the version before it, so the merge takes that
+    /// version's change away from head.
+    Revert,
 }
 
 /// What a save's own stamp says ([`BlobPack::save_lineage`]): its id, and the id of the save it
@@ -567,7 +575,9 @@ pub struct BlobRead {
 }
 
 /// The host's choices for one tier-0 write ([`BlobSession::write_with`],
-/// [`BlobSession::write_bytes_with`], [`BlobSession::restore_with`]): the host-given turn.
+/// [`BlobSession::write_bytes_with`], [`BlobSession::expect_save_with`],
+/// [`BlobSession::restore_with`]): the host-given turn, and what an agent's write does about
+/// others' holds on nodes.
 /// `#[non_exhaustive]`: start from [`BlobWriteOptions::default`] (or `new`) and use the
 /// setters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -576,6 +586,12 @@ pub struct BlobWriteOptions {
     /// The host-given turn of this call ([`crate::turn`]; default `None`): stored with the
     /// version it records ([`BlobVersion::turn`]).
     pub turn: Option<crate::turn::Turn>,
+    /// What an agent's whole-file write does about others' holds on nodes (default
+    /// [`super::ClaimPolicy::Ignore`]). Under [`super::ClaimPolicy::Respect`], while others
+    /// hold nodes, the write is read with the file type's index and refused when it changes a
+    /// node inside a hold's reach (`MPC-E301`), or when its index can't be read within the
+    /// limits (`MPC-E306`). A person's write is never refused.
+    pub policy: super::ClaimPolicy,
 }
 
 impl BlobWriteOptions {
@@ -586,6 +602,12 @@ impl BlobWriteOptions {
     /// The host-given turn of this call ([`crate::session::EditOptions::turn`]).
     pub fn turn(mut self, turn: crate::turn::Turn) -> Self {
         self.turn = Some(turn);
+        self
+    }
+
+    /// What an agent's write does about others' holds ([`BlobWriteOptions::policy`]).
+    pub fn policy(mut self, policy: super::ClaimPolicy) -> Self {
+        self.policy = policy;
         self
     }
 }
@@ -781,6 +803,9 @@ pub struct BlobLogEntry {
     pub verb: Option<String>,
     /// A batch's calls ([`BlobVersion::calls`]); empty otherwise.
     pub calls: Vec<String>,
+    /// The version a revert, undo or redo took away ([`BlobVersion::revert`]); `None`
+    /// otherwise.
+    pub reverts: Option<VersionId>,
 }
 
 /// Returned by [`BlobSession::status`]. Metadata only.
@@ -881,6 +906,10 @@ struct BState {
     store: Option<Arc<DocStore>>,
     closed: Option<SessionError>,
     vid: VersionId,
+    /// The last of the doc's lost versions (grouped commits, `store/seq_floor.rs`; 0: none),
+    /// read at the load: the next version is past it ([`BState::next_vid`]). A rollback closes
+    /// the session, and the next load reads it again.
+    lost_through: VersionId,
     cur: BlobVersion,
     members: Vec<BMember>,
     joins: u64,
@@ -907,6 +936,13 @@ struct BState {
     node_claims: Vec<node_claims::NodeClaim>,
     /// The pin when the plant `OpenedInMemory` keeps it in memory only (test-only use).
     opened_mem: Option<crate::store::OpenedRec>,
+}
+
+impl BState {
+    /// The version the doc's next commit takes: past head and past its lost versions.
+    fn next_vid(&self) -> VersionId {
+        self.vid.max(self.lost_through) + 1
+    }
 }
 
 const OWN_WRITES_KEPT: usize = 8;
@@ -1066,6 +1102,7 @@ pub(super) fn blob_log(
                 turn: v.turn,
                 verb: v.verb,
                 calls: v.calls,
+                reverts: v.revert.map(|r| r.version),
             }
         })
         .collect())
@@ -1153,6 +1190,7 @@ impl BlobSession {
         doc_id: DocId,
         key: DocKey,
         (vid, cur): (VersionId, BlobVersion),
+        lost_through: VersionId,
     ) -> Self {
         let now = host.now_ms();
         Self {
@@ -1168,6 +1206,7 @@ impl BlobSession {
                 store: Some(store),
                 closed: None,
                 vid,
+                lost_through,
                 cur,
                 members: Vec::new(),
                 joins: 0,
@@ -1205,8 +1244,17 @@ impl BlobSession {
             });
         }
         let current = store.blob_current(doc_id)?;
+        let lost_through = store.blob_lost_through(doc_id)?;
         Ok(Self::build(
-            host, config, blobs, pack, store, doc_id, meta.key, current,
+            host,
+            config,
+            blobs,
+            pack,
+            store,
+            doc_id,
+            meta.key,
+            current,
+            lost_through,
         ))
     }
 
@@ -1259,7 +1307,17 @@ impl BlobSession {
         let (doc_id, vid) =
             store.create_blob_doc_with(&meta, &first, sync.as_ref(), put.chunked())?;
         let for_index = (store.clone(), key.clone(), first.blob, first.size);
-        let s = Self::build(host, config, blobs, pack, store, doc_id, key, (vid, first));
+        let s = Self::build(
+            host,
+            config,
+            blobs,
+            pack,
+            store,
+            doc_id,
+            key,
+            (vid, first),
+            0,
+        );
         s.want_index_key(&for_index.0, &for_index.1, vid, for_index.2, for_index.3);
         Ok(s)
     }
@@ -1270,6 +1328,11 @@ impl BlobSession {
         let g = self.lock_any()?;
         if let Some(e) = &g.closed {
             return Err(e.clone());
+        }
+        // grouped commits: refused until the session manager reopens the store after a commit
+        // failed at the disk (as a text doc's session: `MPC-E526`, retry)
+        if g.store.as_ref().is_some_and(|s| s.rollback_pending()) {
+            return Err(crate::store::StoreError::Recovering.into());
         }
         Ok(g)
     }
@@ -2121,7 +2184,7 @@ impl BlobSession {
         opts: &BlobWriteOptions,
     ) -> Result<BlobWriteResult> {
         let now = self.now();
-        let (space, pid, auto, cheap) = {
+        let (space, pid, auto, cheap, respect, check) = {
             let mut st = self.lock()?;
             let i = self.admit_write(&mut st, conn, Action::WriteBase, now)?;
             self.check_agent_write(&st, i)?;
@@ -2133,6 +2196,7 @@ impl BlobSession {
                     actual: st.vid,
                 });
             }
+            let (respect, check) = self.hold_check(&mut st, i, opts, now)?;
             let auto = st.lease.is_none();
             if auto {
                 self.grant(&mut st, i, self.config.lease_auto_ms.max(1), now, true);
@@ -2142,23 +2206,55 @@ impl BlobSession {
                 pid,
                 auto,
                 Self::cheap_set(&st, Some(i)),
+                respect,
+                check,
             )
         };
-        // the doc's lock is only tried: a writer never waits on it, so no lock order crosses
-        // the session's (a busy doc gets a whole-file version)
-        let put = self.blobs.put_version(
-            &space,
-            Some(self.doc_id),
-            src,
-            LockWait::Try,
-            &cheap,
-            &PackHints(&*self.pack),
-        );
+        // while others hold nodes: the source spooled, read with the file type's index for
+        // what it reaches into, then stored from the spool; off the lock
+        let mut reach = None;
+        let put = match &check {
+            None => self.blobs.put_version(
+                &space,
+                Some(self.doc_id),
+                src,
+                LockWait::Try,
+                &cheap,
+                &PackHints(&*self.pack),
+            ),
+            Some((holders, t)) => {
+                let spooled = self.blobs.spool_source(src).map_err(SessionError::from);
+                let checked = spooled.and_then(|mut f| {
+                    let len = f.len();
+                    let r = self.write_reach(t, &mut f, len, holders)?;
+                    f.rewind()?;
+                    Ok((f, r))
+                });
+                match checked {
+                    Ok((mut f, r)) => {
+                        reach = Some(r);
+                        self.blobs.put_version(
+                            &space,
+                            Some(self.doc_id),
+                            &mut f,
+                            LockWait::Try,
+                            &cheap,
+                            &PackHints(&*self.pack),
+                        )
+                    }
+                    Err(e) => {
+                        self.end_auto_lease(auto, &pid);
+                        return Err(e);
+                    }
+                }
+            }
+        };
         let now = self.now();
-        let mut st = self.lock()?;
-        let st = &mut *st;
+        let mut guard = self.lock()?;
+        let st = &mut *guard;
+        let holds = respect.then(|| reach.as_ref().map(|(r, _)| r));
         let out = match &put {
-            Ok(p) => self.commit_write(st, conn, p, base, opts, now),
+            Ok(p) => self.commit_write(st, conn, p, base, opts, holds, now),
             Err(e) => Err(e.clone().into()),
         };
         // the put no longer waits: referenced by the version, or given up
@@ -2168,7 +2264,83 @@ impl BlobSession {
         if auto && st.lease.as_ref().is_some_and(|l| l.auto && l.pid == pid) {
             self.end_lease(st, LeaseEnd::Released);
         }
+        drop(guard);
+        // the check's read is the new version's index: recorded as an index job would
+        if let (Ok(r), Some((_, draft))) = (&out, reach) {
+            if r.changed {
+                self.seed_index(r.version, draft);
+            }
+        }
         out
+    }
+
+    /// Whether an agent's whole-file write by member `i` is checked against others' holds
+    /// ([`BlobWriteOptions::policy`]): `respect` (an agent's write under
+    /// [`super::ClaimPolicy::Respect`], on a file type with an index), and, when others hold
+    /// nodes now, who they are and the target (head) the write is read against.
+    #[allow(clippy::type_complexity)]
+    fn hold_check(
+        &self,
+        st: &mut BState,
+        i: usize,
+        opts: &BlobWriteOptions,
+        now: u64,
+    ) -> Result<(bool, Option<(Vec<String>, struct_index::Target)>)> {
+        let respect = st.members[i].p.kind == ParticipantKind::Agent
+            && opts.policy == super::ClaimPolicy::Respect
+            && self.pack.index_spec().is_some();
+        if !respect {
+            return Ok((false, None));
+        }
+        let pid = st.members[i].p.pid.clone();
+        let holders = self.holders_besides(st, &pid, now);
+        if holders.is_empty() {
+            return Ok((true, None));
+        }
+        Ok((true, Some((holders, self.target_of(st, None)?))))
+    }
+
+    /// The claim check of an agent's whole-file write at its commit, under the lock
+    /// ([`BlobWriteOptions::policy`]): `holds` is `None` for a write not checked, `Some(None)`
+    /// for one that found nobody holding a node when admitted (a hold taken since can't be
+    /// judged, so it refuses), `Some(Some(reach))` for one read for its reach.
+    fn check_write_holds(
+        &self,
+        st: &mut BState,
+        pid: &str,
+        holds: Option<Option<&BTreeSet<crate::index::NodeKey>>>,
+        now: u64,
+    ) -> Result<()> {
+        // the planted faults: a checked write's reach not checked; a hold taken since
+        // admission not judged
+        let skipped = plant_on!(
+            crate::differential::tier0_verb_mutant()
+                == Some(crate::differential::Tier0VerbMutant::WholeWriteSkipsHolds)
+        );
+        let missed = plant_on!(
+            crate::differential::tier0_verb_mutant()
+                == Some(crate::differential::Tier0VerbMutant::HoldDuringUploadMissed)
+        );
+        let refused = match holds {
+            None => None,
+            Some(Some(_)) if skipped => None,
+            Some(Some(reach)) => self.node_claim_against(st, pid, reach, now),
+            Some(None) if missed => None,
+            Some(None) => self.any_node_claim_against(st, pid, now),
+        };
+        refused.map_or(Ok(()), Err)
+    }
+
+    /// End a write's own lease (`auto`) when it is still `pid`'s.
+    fn end_auto_lease(&self, auto: bool, pid: &str) {
+        if !auto {
+            return;
+        }
+        if let Ok(mut st) = self.lock() {
+            if st.lease.as_ref().is_some_and(|l| l.auto && l.pid == pid) {
+                self.end_lease(&mut st, LeaseEnd::Released);
+            }
+        }
     }
 
     /// [`BlobSession::write`] from memory.
@@ -2203,6 +2375,7 @@ impl BlobSession {
         self.write_with(conn, &mut &bytes[..], base, opts)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn commit_write(
         &self,
         st: &mut BState,
@@ -2210,6 +2383,7 @@ impl BlobSession {
         put: &VersionPut,
         base: VersionId,
         opts: &BlobWriteOptions,
+        holds: Option<Option<&BTreeSet<crate::index::NodeKey>>>,
         now: u64,
     ) -> Result<BlobWriteResult> {
         let info = put.info();
@@ -2232,6 +2406,7 @@ impl BlobSession {
                 not_recorded: None,
             });
         }
+        self.check_write_holds(st, &pid, holds, now)?;
         let p = &st.members[i].p;
         let mut v = BlobVersion::new(
             info.id,
@@ -2303,15 +2478,33 @@ impl BlobSession {
     /// replaced, and on unload (it is in memory only); bytes it was holding back then come in
     /// as an outside save at the next check (`file_changed`, or `tick`'s stat poll).
     pub fn expect_save(&self, conn: ConnId, base: VersionId, bytes: &[u8]) -> Result<SaveTicket> {
-        let out = self.expect_save_inner(conn, base, bytes);
+        self.expect_save_with(conn, base, bytes, &BlobWriteOptions::new())
+    }
+
+    /// [`BlobSession::expect_save`] with the host's [`BlobWriteOptions`] (its policy on
+    /// others' holds, [`BlobWriteOptions::policy`]).
+    pub fn expect_save_with(
+        &self,
+        conn: ConnId,
+        base: VersionId,
+        bytes: &[u8],
+        opts: &BlobWriteOptions,
+    ) -> Result<SaveTicket> {
+        let out = self.expect_save_inner(conn, base, bytes, opts);
         self.for_viewer(conn, out, |_, v| v)
     }
 
-    fn expect_save_inner(&self, conn: ConnId, base: VersionId, bytes: &[u8]) -> Result<SaveTicket> {
+    fn expect_save_inner(
+        &self,
+        conn: ConnId,
+        base: VersionId,
+        bytes: &[u8],
+        opts: &BlobWriteOptions,
+    ) -> Result<SaveTicket> {
         static IDS: AtomicU64 = AtomicU64::new(1);
         let now = self.now();
-        let mut st = self.lock()?;
-        let st = &mut *st;
+        let mut guard = self.lock()?;
+        let st = &mut *guard;
         self.expire_ticket(st, now);
         let i = self.admit_write(st, conn, Action::WriteBase, now)?;
         self.check_agent_write(st, i)?;
@@ -2326,6 +2519,33 @@ impl BlobSession {
         if st.disk.is_none() {
             return Err(SessionError::BadPath("this session has no file".into()));
         }
+        // while others hold nodes: the bytes read with the file type's index for what they
+        // reach into, off the lock, then the call admitted again as it stands now (with no
+        // holds when admitted, the lock is held throughout, so none can arrive)
+        let (_, check) = self.hold_check(st, i, opts, now)?;
+        let (mut guard, i) = match check {
+            None => (guard, i),
+            Some((holders, t)) => {
+                drop(guard);
+                let (reach, _) =
+                    self.write_reach(&t, &mut &bytes[..], bytes.len() as u64, &holders)?;
+                let now = self.now();
+                let mut guard = self.lock()?;
+                let st = &mut *guard;
+                self.expire_ticket(st, now);
+                let i = self.admit(st, conn, Need::Edit, Action::WriteBase, now)?;
+                self.check_lease(st, &pid, now)?;
+                if base != st.vid {
+                    return Err(SessionError::Stale {
+                        expected: base,
+                        actual: st.vid,
+                    });
+                }
+                self.check_write_holds(st, &pid, Some(Some(&reach)), now)?;
+                (guard, i)
+            }
+        };
+        let st = &mut *guard;
         let put = self.blobs.put_version_bytes(
             &st.key.space,
             Some(self.doc_id),
@@ -2995,6 +3215,17 @@ impl BlobSession {
             .collect())
     }
 
+    /// The version `vid` came after: the one before it, or the one before the lost versions
+    /// just before it (grouped commits, `store/seq_floor.rs`; none in a store that never lost
+    /// one).
+    pub(super) fn version_before(&self, store: &DocStore, vid: VersionId) -> Result<VersionId> {
+        let before = vid.saturating_sub(1);
+        Ok(match store.lost_blob_range(self.doc_id, before)? {
+            Some((from, _)) => from.saturating_sub(1),
+            None => before,
+        })
+    }
+
     // ----- conflict copies -----
 
     /// The folder recorded copies are relative to: the file's real folder.
@@ -3009,18 +3240,21 @@ impl BlobSession {
     /// The recorded copies (from the versions, once per session; then kept up to date).
     fn copy_records(&self, st: &mut BState) -> Result<Vec<CopyRec>> {
         if st.copies.is_none() {
-            let recs = Self::store(st)?
-                .blob_versions(self.doc_id)?
-                .into_iter()
-                .filter_map(|(vid, v)| {
-                    v.conflict_copy.map(|rec| CopyRec {
-                        version: vid,
-                        kept: vid.saturating_sub(1),
-                        at_ms: v.at_ms,
-                        rec,
-                    })
-                })
-                .collect();
+            let store = Self::store(st)?;
+            let mut recs = Vec::new();
+            for (vid, v) in store.blob_versions(self.doc_id)? {
+                let Some(rec) = v.conflict_copy else {
+                    continue;
+                };
+                // what the save replaced: the version before it
+                let kept = self.version_before(&store, vid)?;
+                recs.push(CopyRec {
+                    version: vid,
+                    kept,
+                    at_ms: v.at_ms,
+                    rec,
+                });
+            }
             st.copies = Some(recs);
         }
         Ok(st.copies.clone().unwrap_or_default())

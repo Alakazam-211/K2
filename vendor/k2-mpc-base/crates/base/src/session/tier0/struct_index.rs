@@ -53,6 +53,10 @@ pub(super) struct Target {
     pub(super) space: String,
     pub(super) version: VersionId,
     pub(super) ver: BlobVersion,
+    /// The version a change made on it takes: on head, the doc's next one (past its lost
+    /// versions, `store/seq_floor.rs`); on an older version, its own plus one (a call planned
+    /// there, never committed there).
+    pub(super) next: VersionId,
 }
 
 pub(super) fn limits_of(c: &Config) -> IndexLimits {
@@ -490,16 +494,17 @@ impl BlobSession {
     /// [`BlobSession::index_target`] under a lock the caller holds.
     pub(super) fn target_of(&self, st: &BState, version: Option<VersionId>) -> Result<Target> {
         let store = Self::store(st)?;
-        let (version, ver) = match version {
-            None => (st.vid, st.cur.clone()),
-            Some(v) if v == st.vid => (v, st.cur.clone()),
-            Some(v) => (v, store.blob_version(self.doc_id, v)?),
+        let (version, ver, next) = match version {
+            None => (st.vid, st.cur.clone(), st.next_vid()),
+            Some(v) if v == st.vid => (v, st.cur.clone(), st.next_vid()),
+            Some(v) => (v, store.blob_version(self.doc_id, v)?, v + 1),
         };
         Ok(Target {
             store,
             space: st.key.space.clone(),
             version,
             ver,
+            next,
         })
     }
 

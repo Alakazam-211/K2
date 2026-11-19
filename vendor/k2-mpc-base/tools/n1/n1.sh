@@ -211,6 +211,45 @@
 #                                                swept at its open, reads the verb back and
 #                                                rewrites. The last line is `N-1 VERBS OK`.
 #
+# A tier-0 revert's record (`blob_verbs` record version 2, after v0.22.0):
+#
+#   tools/n1/n1.sh layout-revert <previous rev> <dir>  no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/revert the consumer
+#                                                (tools/n1/consumer-revert)
+#   tools/n1/n1.sh node-revert <dir>             on a build node, from the repo root: this
+#                                                build's `n1_revert_producer` writes a blob doc
+#                                                with a verb's version and a revert of it; the
+#                                                previous release reads the revert's version as
+#                                                no verb, writes one and rewrites the store;
+#                                                this build's `n1_revert_after` reads the
+#                                                revert's record back whole. The last line is
+#                                                `N-1 REVERT OK`.
+#
+#
+# Grouped commits (`CommitDurability::Grouped`, after v0.22.0), both ways:
+#
+#   tools/n1/n1.sh layout-grouped <previous rev> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/head this checkout's
+#                                                (`git archive HEAD`), <dir>/grouped the consumer
+#                                                built against the old one
+#                                                (tools/n1/consumer-grouped) and
+#                                                <dir>/grouped-head this build's side
+#                                                (tools/n1/consumer-grouped-head)
+#   tools/n1/n1.sh node-grouped <dir>            on a build node, from the repo root, stores in
+#                                                <dir>/stores: this build writes clean.redb
+#                                                grouped and closes it cleanly (its floor rows
+#                                                kept), and stamped.redb, left without a clean
+#                                                close after a change waited for its group, then
+#                                                opened again (the recovery stamps the seq floor
+#                                                bit); the previous release opens clean.redb,
+#                                                reads it and edits it, refuses stamped.redb at
+#                                                open (`MPC-E502` `store_newer`, exit 6, one
+#                                                line, its bytes unchanged) and writes and edits
+#                                                prev.redb; this build then reads that edit in
+#                                                clean.redb, opens prev.redb grouped, reads and
+#                                                edits it, and opens stamped.redb. Each check
+#                                                prints an `N1-GROUPED` line; the last line is
+#                                                `N-1 GROUPED OK`.
 #
 # The rows depend on the previous release: the node modes read each kit's crate version from
 # its manifest and hand it to the rows (K2MB_N1_READER, the build whose consumer ran on a store;
@@ -244,7 +283,7 @@ tree_of() {
     git -C "$1" archive "$2" | tar -x -C "$3"
   fi
 }
-MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir> | layout-opened <tag> <dir> | node-opened <dir> | layout-verbs <rev> <dir> | node-verbs <dir>}
+MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir> | layout-opened <tag> <dir> | node-opened <dir> | layout-verbs <rev> <dir> | node-verbs <dir> | layout-revert <rev> <dir> | node-revert <dir> | layout-grouped <rev> <dir> | node-grouped <dir>}
 case $MODE in
   layout)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -501,6 +540,41 @@ case $MODE in
     K2MB_N1_OUT="$OUT/format" cargo test -p k2-mpc-base --test engine_stamp n1_format_after -- --ignored --nocapture
     echo "N-1 FORMAT OK"
     ;;
+  layout-grouped)
+    REV=${2:?previous release rev}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/head" "$OUT/grouped" "$OUT/grouped-head"
+    tree_of "$ROOT" "$REV" "$OUT/old"
+    tree_of "$ROOT" HEAD "$OUT/head"
+    for side in old head; do
+      sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/$side/Cargo.toml"
+      rm "$OUT/$side/Cargo.toml.bak"
+    done
+    cp -R "$ROOT/tools/n1/consumer-grouped/." "$OUT/grouped/"
+    cp "$OUT/old/Cargo.lock" "$OUT/grouped/Cargo.lock"
+    cp -R "$ROOT/tools/n1/consumer-grouped-head/." "$OUT/grouped-head/"
+    cp "$OUT/head/Cargo.lock" "$OUT/grouped-head/Cargo.lock"
+    echo "laid out: $OUT (old = $REV, head = HEAD)"
+    ;;
+  node-grouped)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    S="$OUT/stores"
+    rm -rf "$S"; mkdir -p "$S"
+    PREV=$(kit_version "$OUT/old")
+    echo "== this build ($(kit_version "$OUT/head")) writes a grouped store and closes it cleanly"
+    (cd "$OUT/grouped-head" && cargo run -q -- produce "$S")
+    echo "== this build leaves a grouped store without a clean close, then opens it (the recovery)"
+    (cd "$OUT/grouped-head" && cargo run -q -- unclean "$S")
+    (cd "$OUT/grouped-head" && cargo run -q -- recover "$S")
+    echo "== the previous release ($PREV) opens the clean store and refuses the stamped one"
+    (cd "$OUT/grouped" && cargo run -q -- read "$S")
+    echo "== the previous release ($PREV) writes a store of its own"
+    (cd "$OUT/grouped" && cargo run -q -- produce "$S")
+    echo "== this build again"
+    (cd "$OUT/grouped-head" && cargo run -q -- after "$S")
+    echo "N-1 GROUPED OK"
+    ;;
   layout-opened)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -544,6 +618,28 @@ case $MODE in
     echo "== this build again"
     K2MB_N1_OUT="$OUT/verbs" cargo test -p k2-mpc-base --test tier0_verbs n1_verbs_after -- --ignored --nocapture
     echo "N-1 VERBS OK"
+    ;;
+  layout-revert)
+    TAG=${2:?previous release rev}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/revert"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-revert/." "$OUT/revert/"
+    cp "$OUT/old/Cargo.lock" "$OUT/revert/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-revert)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== this build writes the revert's version"
+    K2MB_N1_OUT="$OUT/revert" cargo test -p k2-mpc-base --test tier0_revert n1_revert_producer -- --ignored --nocapture
+    echo "== the previous release ($(kit_version "$OUT/old"))"
+    (cd "$OUT/revert" && cargo run -q)
+    echo "== this build again"
+    K2MB_N1_OUT="$OUT/revert" cargo test -p k2-mpc-base --test tier0_revert n1_revert_after -- --ignored --nocapture
+    echo "N-1 REVERT OK"
     ;;
   *) echo "n1.sh: unknown mode $MODE" >&2; exit 2 ;;
 esac

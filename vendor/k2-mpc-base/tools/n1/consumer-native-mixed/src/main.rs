@@ -7,7 +7,8 @@
 //!   edit and keeps it across a release; `n.md` alone is refused, on open and on delete, with
 //!   `MPC-E169` `native_engine_missing` as its own session variant (exit 6); a purge of `y.md`'s
 //!   history and a whole-store rewrite run; every row of `n.md` (its meta, its engine store,
-//!   the store's nonces) is byte for byte what the producer wrote.
+//!   the store's nonces, its log rows: the newest ones its cut kept) is byte for byte what the
+//!   producer wrote.
 //!   `<dir>/last.redb` (the same store after `n.md`'s delete there) opens at format 8 with no
 //!   native bit, and `y.md` reads.
 use std::path::Path;
@@ -30,6 +31,7 @@ const DOCS: TableDefinition<u64, &[u8]> = TableDefinition::new("docs");
 const GENS: TableDefinition<u64, &[u8]> = TableDefinition::new("native_gens");
 const RECORDS: TableDefinition<(u64, u64, u64), &[u8]> = TableDefinition::new("native_records");
 const NONCES: TableDefinition<&[u8], u64> = TableDefinition::new("native_nonces");
+const UPDATES: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("updates");
 
 struct H {
     now: AtomicU64,
@@ -77,6 +79,16 @@ fn native_rows(p: &Path) -> Vec<Vec<u8>> {
     for kv in records.range((id, 0, 0)..=(id, u64::MAX, u64::MAX)).unwrap() {
         out.push(kv.unwrap().1.value().to_vec());
     }
+    // its log rows: this build's cut trimmed them to the newest (a gap below), and nothing here
+    // reads, moves or renumbers them
+    let log = r.open_table(UPDATES).unwrap();
+    let mut rows = 0;
+    for kv in log.range((id, 0)..=(id, u64::MAX)).unwrap() {
+        let (k, v) = kv.unwrap();
+        out.push([&k.value().1.to_le_bytes()[..], v.value()].concat());
+        rows += 1;
+    }
+    assert!(rows > 1_000, "n.md's trimmed log holds its newest rows: {rows}");
     let nonces = r.open_table(NONCES).unwrap();
     for kv in nonces.iter().unwrap() {
         let (k, v) = kv.unwrap();

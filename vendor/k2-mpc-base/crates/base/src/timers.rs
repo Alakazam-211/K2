@@ -138,6 +138,11 @@ paths! {
     GridIngest = "grid.ingest",
     /// Undo planning on a grid, per step.
     GridUndoPlan = "grid.undo.plan",
+    /// A session's store transaction for one change (`Session::commit_rows`): its rows and
+    /// the commit, with the wait for the disk when the commit makes them durable (every
+    /// commit at `CommitDurability::Immediate`; with grouped commits, the one that closes a
+    /// group).
+    CommitStore = "commit.store",
 }
 
 /// Number of paths.

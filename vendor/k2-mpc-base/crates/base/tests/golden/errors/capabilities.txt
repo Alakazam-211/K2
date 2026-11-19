@@ -1,4 +1,4 @@
-k2-mpc-base 0.22.0
+k2-mpc-base 0.23.0
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -132,14 +132,14 @@ Verbs (after the doc path):
     usage:  write --base V | --base live (new text on stdin; a grid: --base V [--partial] [--respect-claims], merged by key)
     exits:  0 1 8
     serves: P14
-    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E701 MPC-E703 MPC-E715 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E822 MPC-E823 MPC-E824 MPC-E901 MPC-E908 MPC-E909
-  undo  [edit; text+grid; needs read+edit]
-    usage:  undo [--steps N] [--for P]
+    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E306 MPC-E405 MPC-E701 MPC-E703 MPC-E715 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E822 MPC-E823 MPC-E824 MPC-E901 MPC-E908 MPC-E909
+  undo  [edit; text+blob+grid; needs read+edit]
+    usage:  undo [--steps N] [--for P] (tier 0: one step, of your own)
     exits:  0 1
     serves: P16
     errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E822 MPC-E823 MPC-E901 MPC-E908 MPC-E909
-  redo  [edit; text+grid; needs read+edit]
-    usage:  redo [--steps N]
+  redo  [edit; text+blob+grid; needs read+edit]
+    usage:  redo [--steps N] (tier 0: one step, of your own)
     exits:  0 1
     serves: P16
     errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E822 MPC-E823 MPC-E901 MPC-E908 MPC-E909
@@ -243,8 +243,8 @@ Verbs (after the doc path):
     exits:  0
     serves: P30
     errors: MPC-E103
-  revert  [edit; text+grid; needs read+edit+author_or_owner]
-    usage:  revert <change> [--partial] (too old: exit 8)
+  revert  [edit; text+blob+grid; needs read+edit+author_or_owner]
+    usage:  revert <change> [--partial] (too old: exit 8; tier 0: a version, no --partial)
     exits:  0 1
     serves: P31
     errors: MPC-E102 MPC-E105 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E202 MPC-E203 MPC-E204 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E822 MPC-E823 MPC-E901 MPC-E908 MPC-E909
@@ -268,7 +268,7 @@ Verbs (after the doc path):
     exits:  0 1
     serves: P34
     errors: MPC-E106
-  (any verb on a doc can also return: MPC-E101 MPC-E107 MPC-E108 MPC-E109 MPC-E146 MPC-E154 MPC-E169 MPC-E401 MPC-E402 MPC-E403 MPC-E404 MPC-E407 MPC-E415 MPC-E501 MPC-E502 MPC-E503 MPC-E505 MPC-E508 MPC-E509 MPC-E510 MPC-E513 MPC-E514 MPC-E515 MPC-E516 MPC-E517 MPC-E518 MPC-E519 MPC-E520 MPC-E521 MPC-E522 MPC-E706 MPC-E707 MPC-E709 MPC-E710)
+  (any verb on a doc can also return: MPC-E101 MPC-E107 MPC-E108 MPC-E109 MPC-E146 MPC-E154 MPC-E169 MPC-E401 MPC-E402 MPC-E403 MPC-E404 MPC-E407 MPC-E415 MPC-E501 MPC-E502 MPC-E503 MPC-E505 MPC-E508 MPC-E509 MPC-E510 MPC-E513 MPC-E514 MPC-E515 MPC-E516 MPC-E517 MPC-E518 MPC-E519 MPC-E520 MPC-E521 MPC-E522 MPC-E526 MPC-E706 MPC-E707 MPC-E709 MPC-E710)
 
 Verbs with no doc:
   explain [ID] [--json] (an error id: what happened, what to do next, the rule; no id: every id)
@@ -292,7 +292,7 @@ Parity (each thing a person can do, and the verbs that do it):
   P13  Paste a block / apply a change [text+grid]: patch, apply, append
   P14  Rewrite from what I last saw [text+blob+grid]: write
   P15  Format (bold, heading, list) [text]: insert, replace, sed -i
-  P16  Undo / redo my own edits [text+grid]: undo, redo, undo --drop
+  P16  Undo / redo my own edits [text+blob+grid]: undo, redo, undo --drop
   P17  See that it saved [text+blob+grid+keyed]: status, flush
   P18  Watch others edit live [text+blob+grid]: watch, tail -f
   P19  History, diff, show a version [text+blob+grid+keyed]: log, diff --version, show --version, diff
@@ -307,7 +307,7 @@ Parity (each thing a person can do, and the verbs that do it):
   P28  Purge a pasted secret or personal data [text+blob+grid]: (no verb yet)
   P29  Approve or decline an assistant's edit made on my behalf [text+blob+grid+keyed]: approve, decline
   P30  See which edits are waiting for my approval [text+blob+grid+keyed]: log --pending, approvals
-  P31  Reverse one specific change [text+grid]: revert
+  P31  Reverse one specific change [text+blob+grid]: revert
   P32  Take the lease (lock the file while I change it), or extend it [blob]: lease, lease --renew
   P33  Release my lease [blob]: lease --release
   P34  Break someone else's lease [blob]: lease --break
@@ -402,6 +402,7 @@ Limits in effect:
   blob_verb_max_bytes = 268435456
   blob_verb_max_spans = 1000000
   blob_verb_max_insert_bytes = 268435456
+  blob_batch_max_calls = 32
   annot_body_max_bytes = 16384
   annot_threads_max = 10000
   annot_comments_max = 1000
@@ -416,9 +417,16 @@ Limits in effect:
   native_cut_floor = 100
   native_cut_ceiling = 200
   native_cut_divisor = 30
+  native_cut_bytes_from_changes = 30000
+  native_cut_bytes_divisor = 40
   native_cut_idle_ms = 250
   native_cut_duty_pct = 10
   native_cut_slow_ms = 250
+  store_cache_bytes = 67108864
+  store_commit_grouped = 0
+  store_commit_max_changes = 0
+  store_commit_max_ms = 0
+  host_release = 0
   tool_output_max_bytes = 33554432
 
 Positions (docs/POSITIONS.md):

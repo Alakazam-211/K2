@@ -1749,6 +1749,75 @@ fn verb_walk(seen: &mut Seen) {
         &argv(&["part", "set", "@n:2", "note", "y", "--base", &v]),
         &opts,
     )); // E719
+
+    // a hold binds an agent's whole-file write: one the index can't read, while a person holds
+    // a node, can't be checked (E306)
+    let (s, c, _) = open_base("h.idx", &file(&["@n:1|k|a|-|1|-|-", "@n:2|k|b|-|1|-|-"]));
+    s.claim_nodes(
+        c,
+        &[k2_mpc_base::index::NodeKey::parse("@n:1").unwrap()],
+        None,
+        None,
+    )
+    .unwrap();
+    f.grant("hb", Rights::full());
+    let bot = s
+        .join(who("hb", ParticipantKind::Agent), Stay::Held)
+        .unwrap()
+        .conn;
+    let head = s.status().unwrap().version;
+    let respect = k2_mpc_base::session::BlobWriteOptions::new()
+        .policy(k2_mpc_base::session::ClaimPolicy::Respect);
+    match s.write_bytes_with(bot, b"not an index file\n", head, &respect) {
+        Err(e) => seen.err(e), // E306
+        Ok(_) => panic!("an unreadable agent write under a hold landed"),
+    }
+
+    // a revert of one version: a file type with no merge (E730), and a field changed since
+    // the version (E731)
+    use k2_mpc_base::session::RevertWhat;
+    std::fs::write(ws.join("rn.idx"), file(&["@n:1|k|a|-|1|-|-"])).unwrap();
+    let s = f
+        .mgr
+        .open_blob_file(
+            Arc::new(IxPack::default()),
+            &key("rn.idx"),
+            &ws.join("rn.idx"),
+            &ws,
+        )
+        .unwrap();
+    index_head(&s);
+    let c = s
+        .join(who("vw", ParticipantKind::Person), Stay::Held)
+        .unwrap()
+        .conn;
+    let head = s.status().unwrap().version;
+    s.write_bytes(c, &file(&["@n:1|k|a|-|1|-|x"]), head)
+        .unwrap();
+    let k = s.status().unwrap().version;
+    seen.tool(s.run_revert(c, RevertWhat::Version(k), &[], &opts)); // E730
+    let merging = || IxPack {
+        verbs: index_pack::BASE_SET,
+        merge: true,
+        line_merge: true,
+        ..IxPack::default()
+    };
+    std::fs::write(ws.join("rc.idx"), file(&["@n:1|k|a|-|1|-|-"])).unwrap();
+    let s = f
+        .mgr
+        .open_blob_file(Arc::new(merging()), &key("rc.idx"), &ws.join("rc.idx"), &ws)
+        .unwrap();
+    index_head(&s);
+    let c = s
+        .join(who("vw", ParticipantKind::Person), Stay::Held)
+        .unwrap()
+        .conn;
+    s.run_tool(c, &argv(&["part", "set", "@n:1", "note", "x"]), &opts)
+        .unwrap();
+    let k = s.status().unwrap().version;
+    s.run_tool(c, &argv(&["part", "set", "@n:1", "note", "y"]), &opts)
+        .unwrap();
+    seen.tool(s.run_revert(c, RevertWhat::Version(k), &[], &opts)); // E731
 }
 
 /// "Every id is reachable or retired": every live id the registry marks `Reach::Verb` is

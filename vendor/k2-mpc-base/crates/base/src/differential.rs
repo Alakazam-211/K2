@@ -595,6 +595,45 @@ pub enum Tier0VerbMutant {
     /// The agent-write check is run in the verb path under `AgentWrites::VerbsOnly`: an
     /// agent's verbs are refused as its whole-file writes are.
     VerbsOnlyCheckInVerbPath,
+    /// A verb holds the automatic lease for its whole run, planning included, as it once did:
+    /// another agent's concurrent verb is refused for the lease.
+    LeaseHeldWholeVerb,
+    /// An agent's whole-file write under `ClaimPolicy::Respect`, read for what it reaches,
+    /// skips the claim check of that reach: a write changing a held node lands.
+    WholeWriteSkipsHolds,
+    /// An agent's whole-file write trusts what it found at admission: a hold taken while it
+    /// uploads (no holds when admitted) isn't checked at the commit.
+    HoldDuringUploadMissed,
+    /// A batch commits each call as its own version as it goes: three calls make three
+    /// versions, and a refusal at a later call leaves the earlier ones applied.
+    BatchCommitsEach,
+    /// Each call of a batch plans on head, not on what the calls before it staged.
+    BatchPlansOnHead,
+    /// A batch's ranges are merged by offset as if every call's were head's, a later range
+    /// replacing an earlier one it overlaps: a call after one that changed a length lands in
+    /// the wrong place.
+    BatchComposeWrong,
+    /// A batch's `--base V` checks only its last call's nodes against what changed since V.
+    BatchBaseLastCallOnly,
+    /// A batch's claim check reads only its first call's reach.
+    BatchClaimsFirstCall,
+    /// A batch holds the automatic lease for its whole run, planning included: another
+    /// agent's batch is refused for the lease.
+    BatchLeaseWholeRun,
+    /// A tier-0 revert takes the whole version before K, not K's change alone: what changed
+    /// since is lost.
+    RevertTakesWholeVersion,
+    /// A tier-0 revert skips its check of what changed since K and, on a merge's conflict,
+    /// takes the version before K: a later change to the same field is overwritten.
+    RevertOverwrites,
+    /// A tier-0 revert of version K lets anyone with edit rights take K's change away.
+    RevertIgnoresAuthor,
+    /// `undo` takes the newest kit-made version of anyone, not the caller's own.
+    UndoLatestAny,
+    /// A new change by the caller leaves their redo in place.
+    RedoNotCleared,
+    /// A tier-0 revert skips the claim check: an agent's revert into a held node lands.
+    RevertSkipsClaims,
 }
 
 impl Tier0VerbMutant {
@@ -646,6 +685,21 @@ impl Tier0VerbMutant {
             "reach-ignored" => Self::ReachIgnored,
             "reach-at-hold-time" => Self::ReachAtHoldTime,
             "verbs-only-check-in-verb-path" => Self::VerbsOnlyCheckInVerbPath,
+            "lease-held-whole-verb" => Self::LeaseHeldWholeVerb,
+            "whole-write-skips-holds" => Self::WholeWriteSkipsHolds,
+            "hold-during-upload-missed" => Self::HoldDuringUploadMissed,
+            "batch-commits-each" => Self::BatchCommitsEach,
+            "batch-plans-on-head" => Self::BatchPlansOnHead,
+            "batch-compose-wrong" => Self::BatchComposeWrong,
+            "batch-base-last-call-only" => Self::BatchBaseLastCallOnly,
+            "batch-claims-first-call" => Self::BatchClaimsFirstCall,
+            "batch-lease-whole-run" => Self::BatchLeaseWholeRun,
+            "revert-takes-whole-version" => Self::RevertTakesWholeVersion,
+            "revert-overwrites" => Self::RevertOverwrites,
+            "revert-ignores-author" => Self::RevertIgnoresAuthor,
+            "undo-latest-any" => Self::UndoLatestAny,
+            "redo-not-cleared" => Self::RedoNotCleared,
+            "revert-skips-claims" => Self::RevertSkipsClaims,
             _ => return None,
         })
     }

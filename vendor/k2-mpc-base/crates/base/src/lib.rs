@@ -157,6 +157,11 @@ compile_error!(
      engine owner's sign-off). Build with `--cfg k2_mpc_untrusted_wire_ack` only once they do."
 );
 
+// Lib tests read the test pack the integration tests share (`tests/index_pack`), which names
+// the crate by its public paths.
+#[cfg(test)]
+extern crate self as k2_mpc_base;
+
 pub mod addr;
 pub mod anchor;
 pub mod annot;

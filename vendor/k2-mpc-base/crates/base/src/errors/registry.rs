@@ -790,6 +790,15 @@ OPENED_NO_FILE = e("MPC-E182", "opened_no_file", Session, 2,
      changed.")
     .indirect("a host's note_opened call (tests/opened.rs)");
 
+NATIVE_EQUIVOCATION = e("MPC-E183", "native_equivocation", Session, 2,
+    "the native engine (a Beta): one line per writer", SYNC,
+    "this update reuses writer {agent}'s change {seq} with other content",
+    "Nothing was applied: a change this copy already holds came again with other content, so \
+     the copy that sent it continued that writer from an older point (a store restored or \
+     copied without rotating its writers). Drop the update, keep this copy as it is, and resync \
+     the sender from the host's store; don't retry the same bytes.")
+    .indirect("a native update re-emitting a known change with other content (feature native)");
+
 // ---------------------------------------------------------------- 2xx history and undo
 
 UNDO_CONFLICT = e("MPC-E201", "undo_conflict", History, 1,
@@ -917,6 +926,18 @@ WATCHING = e("MPC-E305", "watching", Presence, 3, "the participant cap (particip
     .step("cat", &[],
         "The doc has all the participants it allows, so you joined as a watcher; read it until \
          the host lets you in, and don't retry in a loop.");
+
+HOLD_UNINDEXABLE = e("MPC-E306", "hold_unindexable", Presence, 5,
+    "claims on nodes: an agent's whole-file write",
+    &["write", "(host)"],
+    "the write can't be checked against the holds on this doc ({why}); nothing applied",
+    "Others hold nodes in this doc (details.holders), and the file type's index couldn't read \
+     your new version within its limits (details.why), so the kit can't tell which nodes it \
+     changes. Nothing was applied. Make the change through the file type's verbs, which are \
+     checked node by node, or ask the holders to release their holds and write again.")
+    .step("activity", &[],
+        "Others hold nodes in this doc and your write couldn't be checked against them; make \
+         the change through the file type's verbs, or ask the holders to release.");
 
 SELECTION_TOO_LARGE = e("MPC-E310", "selection_too_large", Presence, 2, "K-PRES-6",
     &["select"],
@@ -1217,6 +1238,16 @@ CUT_DOC_OPEN = e("MPC-E525", "cut_doc_open", Store, 6, "no cut of an open doc", 
      idle tick or unload cuts it.")
     .indirect("a cut of a native doc another live instance holds open");
 
+STORE_RECOVERING = e("MPC-E526", "store_recovering", Store, 1, "grouped commits", ANY,
+    "the store is recovering after a commit failed at the disk; retry",
+    "The store groups its commits, and one failed at the disk, so the changes not yet on disk \
+     are gone from it. Until the host reopens the store at its durable state and reloads every \
+     live doc from it, nothing of the store is read or written, so no one acts on changes that \
+     are about to be dropped. Nothing was applied. Retry: the doc is then at its durable state, \
+     and a change after it may be missing; read the doc again before writing at a base.")
+    .indirect("a read or a write of a grouped store between a commit failing at the disk and \
+     the host's next tick or flush");
+
 // ---------------------------------------------------------------- 6xx erasure
 
 PURGE_CURRENT = e("MPC-E601", "purge_current_version", Erasure, 2, "K-T0-9, K-PURGE-1",
@@ -1466,6 +1497,25 @@ NOT_AS_PREVIEWED = e("MPC-E729", "not_as_previewed", Blob, 1,
     "The call carried the digest its dry run showed (--expect), and the bytes it would store \
      now differ: the file changed since, or the call did. Nothing was written. Run the dry run \
      again, show it, and use its digest.");
+
+REVERT_UNSUPPORTED = e("MPC-E730", "revert_unsupported", Blob, 2,
+    "tier-0 revert, undo and redo: the file type's merge", HOST,
+    "version {version} can't be reverted alone: {why} (version {before} is the one before it)",
+    "Taking one version's change away needs the file type's own merge, and it has none or it \
+     can't take these bytes. Nothing was written. Restore the version \
+     before it instead (details.before): that also replaces every change made since.")
+    .step("restore", &["--version", "{before}"],
+        "This file type can't take one version's change away alone; restoring the version before \
+         it also replaces every change made since.");
+
+REVERT_CONFLICT = e("MPC-E731", "revert_conflict", Blob, 1,
+    "tier-0 revert, undo and redo: changed since", HOST,
+    "version {version}'s change to {addresses} was changed since (head {head}); nothing \
+     reverted",
+    "Someone changed what that version changed after it, in a way that overlaps: each is in \
+     details.conflicts with the field, who changed it and in which version (empty when the file \
+     type's merge found the overlap). Nothing was written. Read them at head and change them \
+     back yourself, or ask whoever changed them.");
 
 // ---------------------------------------------------------------- 8xx structured and CSV
 // the CSV grid work: wired in v0.10.0; the walk in

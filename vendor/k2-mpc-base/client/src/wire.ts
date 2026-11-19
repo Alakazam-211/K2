@@ -451,6 +451,9 @@ export type CloseReason =
   | "kicked"
   /** The participant can't read the doc any more (`LeaveReason::RightsLost`). */
   | "rights_lost"
+  /** The doc reloaded at its store's durable state after a commit failed at the disk
+   * (`LeaveReason::RolledBack`, after v0.22.0): connect again and read the doc again. */
+  | "rolled_back"
   /** The doc was deleted. */
   | "deleted"
   /** The doc moved (renamed); reopen it at its new key. */
@@ -706,7 +709,7 @@ export interface LiveTransport extends Transport {
 
 /** Whether a close reason allows a reconnect. */
 export function canRetry(reason: CloseReason): boolean {
-  return reason === "network" || reason === "cut_off";
+  return reason === "network" || reason === "cut_off" || reason === "rolled_back";
 }
 
 // ---------- the keyed watch (WIRE.md, "The keyed watch") ----------

@@ -29,21 +29,26 @@ mod delete;
 mod demoted;
 pub(crate) mod enc;
 mod features;
+mod group;
 mod history;
 mod live_carrier;
 mod live_copies;
 mod native;
 mod opened;
+#[cfg(test)]
+pub(crate) mod power_loss;
 mod promote;
 mod purge;
 mod rewrite;
 mod scan;
+mod seq_floor;
+mod settings;
 mod structured;
 mod turns;
 mod verbs;
 
 pub(crate) use annot::{AnnotFail, Committed, Observed};
-pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
+pub use blob::{BlobReason, BlobVersion, Revert, RevertStep, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, PurgedBlob, SpaceKey};
 pub(crate) use blob_refs::BlobRefScan;
 pub(crate) use blob_struct::{StructCommitted, StructPut};
@@ -56,7 +61,8 @@ pub(crate) use demoted::DemoteRows;
 pub use demoted::DemotedChange;
 pub(crate) use features::feature_names;
 pub use features::{
-    FEATURE_CHUNKED, FEATURE_NATIVE, STORE_FORMAT_FEATURES, STORE_FORMAT_NEVER_WRITTEN,
+    FEATURE_CHUNKED, FEATURE_NATIVE, FEATURE_SEQ_FLOOR, STORE_FORMAT_FEATURES,
+    STORE_FORMAT_NEVER_WRITTEN,
 };
 pub use history::Redaction;
 pub(crate) use history::{
@@ -69,6 +75,7 @@ pub(crate) use history::{CommitInterrupt, INTERRUPT_COMMIT};
 pub(crate) use live_carrier::{Released, LIVE_SLOT};
 pub use live_copies::LiveCopyRow;
 
+pub(crate) use group::Clock as StoreClock;
 pub(crate) use opened::OpenedRec;
 pub(crate) use promote::PromoteRows;
 #[cfg(test)]
@@ -78,6 +85,7 @@ pub(crate) use purge::{DocPurge, ElemPick, Pick};
 pub use rewrite::RewriteReport;
 pub(crate) use scan::Needles;
 pub use scan::{scan_bytes, scan_file, Finding, MIN_MATCH};
+pub use settings::{CommitDurability, StoreSettings, StoreSettingsError};
 pub use structured::ElemCounts;
 pub(crate) use structured::{
     ElemFacet, ElemOpKind, ElemOpRecord, ElemRoot, ElemWrite, StoredEffect,
@@ -925,6 +933,15 @@ pub enum StoreError {
     /// waits for it instead, up to a deadline.
     #[error("Another process has this document open: its store is held by another opener")]
     Locked,
+    /// Grouped commits ([`CommitDurability::Grouped`]): a commit failed at the disk, and the
+    /// store is being reopened at its durable state, with every live doc reloaded from it
+    /// (`group.rs`). Until then nothing of the store is read or written, so no one acts on
+    /// changes the reopen drops. `MPC-E526` `store_recovering`, exit 1: retry.
+    #[error(
+        "the store is recovering after a commit failed at the disk; retry: the doc is reloaded at \
+         its durable state"
+    )]
+    Recovering,
     #[error("version {1} of doc {0} is named; retention never deletes named versions")]
     NamedVersion(DocId, VersionId),
     #[error("put_meta can't change a doc's key; use rekey")]
@@ -1029,6 +1046,43 @@ fn lock_untyped() -> bool {
 #[cfg(not(test))]
 fn lock_untyped() -> bool {
     false
+}
+
+/// Test builds only: the plant `retry-probe-then-open` (`MPC_STORE_PLANT`): the open with a wait
+/// lets the store it found free go, then opens it again, as before (another opener can take it
+/// in between).
+#[cfg(test)]
+fn probe_then_open() -> bool {
+    std::env::var("MPC_STORE_PLANT").as_deref() == Ok("retry-probe-then-open")
+}
+
+/// Outside test builds: nothing is planted.
+#[cfg(not(test))]
+fn probe_then_open() -> bool {
+    false
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `set_open_gap_hook`'s hook, taken by the next `open_gap` on this thread.
+    static OPEN_GAP_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test builds only: run `f` once, at the next `open_gap` on this thread (a rival opener
+/// trying the store there, in `lock_tests.rs`).
+#[cfg(test)]
+fn set_open_gap_hook(f: impl FnOnce() + 'static) {
+    OPEN_GAP_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+}
+
+/// The point in [`DocStore::open_with_retry_with`] between finding the store free and setting
+/// it up: a test's hook runs here (`set_open_gap_hook`); nothing outside test builds.
+fn open_gap() {
+    #[cfg(test)]
+    if let Some(f) = OPEN_GAP_HOOK.with(|h| h.borrow_mut().take()) {
+        f();
+    }
 }
 
 /// A fresh random key.
@@ -1487,6 +1541,9 @@ pub struct DocStore {
     /// the swap.
     db: RwLock<Database>,
     path: PathBuf,
+    /// What the store was opened with ([`DocStore::open_with`]); a rewrite's fresh file is
+    /// opened with it too.
+    settings: StoreSettings,
     /// What the store keeps of the [`crate::blob::BlobStore`] over it, if one is open: its
     /// folder (where a chunked version's manifest is read when the store drops it), its lock
     /// and its writes' waiting marks (`chunks.rs`).
@@ -1494,17 +1551,96 @@ pub struct DocStore {
     /// Commits skip the sync to disk ([`DocStore::unsynced_for_tests`]).
     #[cfg(any(feature = "conformance", feature = "differential"))]
     unsynced: std::sync::atomic::AtomicBool,
+    /// Test builds: how a store on a test storage layer opens its database again
+    /// ([`DocStore::open_on_backend_for_tests`], [`DocStore::reopen_in_place`]).
+    #[cfg(test)]
+    reopen_backend: Option<ReopenBackend>,
+    /// The commits made since the open, how many are durable ([`DocStore::commits`]), and the
+    /// group not yet durable (`group.rs`).
+    commit_count: group::Commits,
+    /// The last recovery after a lost group, at the open or in place (`seq_floor.rs`).
+    recovered: std::sync::Mutex<Option<seq_floor::Recovered>>,
+}
+
+/// A clean close: the group not yet durable is made durable (grouped commits, `group.rs`), and
+/// (feature `native`) the writer incarnation's open mark is cleared in that same commit, so the
+/// next open keeps the incarnation (`incarnation.rs`). Best effort: a close that can't write
+/// leaves the mark set, and the next open rotates (the safe direction).
+impl Drop for DocStore {
+    fn drop(&mut self) {
+        let grouped = matches!(
+            self.settings.commit_durability(),
+            CommitDurability::Grouped { .. }
+        );
+        let inc = false;
+        if !inc && !grouped {
+            let _ = self.flush();
+            return;
+        }
+        if let Ok(w) = self.begin_write_durable() {
+            let closed = true;
+            if closed && (!grouped || seq_floor::close(&w).is_ok()) {
+                let _ = w.commit();
+            }
+        }
+    }
 }
 
 /// A write transaction with the store's read guard held until it commits or drops.
 pub(crate) struct Wtx<'a> {
     tx: redb::WriteTransaction,
     _g: RwLockReadGuard<'a, Database>,
+    count: &'a group::Commits,
+    /// This commit waits for the disk (every one at `Immediate`; grouped, the group's last).
+    durable: bool,
+    /// The host's clock when it began (grouped commits).
+    now: Option<u64>,
+    /// The store groups its commits (a failure at the disk then loses the group: `group.rs`).
+    grouped: bool,
+}
+
+/// Test builds: a test storage layer's database opened again ([`DocStore::reopen_in_place`]).
+#[cfg(test)]
+type ReopenBackend =
+    Box<dyn Fn(&StoreSettings) -> Result<Database, redb::DatabaseError> + Send + Sync>;
+
+/// A failure at the disk, now or at an earlier call (the store library then refuses every
+/// call): what makes a grouped store wait to be reopened (`group.rs`).
+fn io_failed(e: &redb::StorageError) -> bool {
+    matches!(
+        e,
+        redb::StorageError::Io(_) | redb::StorageError::PreviousIo
+    )
 }
 
 impl Wtx<'_> {
     pub(crate) fn commit(self) -> Result<(), redb::CommitError> {
-        self.tx.commit()
+        let Wtx {
+            mut tx,
+            _g,
+            count,
+            mut durable,
+            now,
+            grouped,
+        } = self;
+        // a doc's seq floor raised in this commit: on disk before a version past it is issued
+        // (`seq_floor.rs`)
+        if count.take_floor_raised() && !durable {
+            tx.set_durability(redb::Durability::Immediate);
+            durable = true;
+        }
+        match tx.commit() {
+            Ok(()) => {
+                count.committed(durable, now);
+                Ok(())
+            }
+            Err(e) => {
+                if grouped && matches!(&e, redb::CommitError::Storage(s) if io_failed(s)) {
+                    count.fail();
+                }
+                Err(e)
+            }
+        }
     }
 }
 
@@ -1902,24 +2038,302 @@ fn dec_snapshot_ref(b: &[u8]) -> Result<(Seq, &[u8]), StoreError> {
     Ok(v)
 }
 
+/// Test builds: whether the barrier `name`'s plant is installed (`DocStore::begin_barrier`).
+fn barrier_skipped(name: &str) -> bool {
+    #[cfg(test)]
+    {
+        let plant = match name {
+            "write-back" => "write-back-skips-barrier".to_owned(),
+            _ => format!("barrier-skipped-{name}"),
+        };
+        // a purge's barrier is its commit and the rewrite after it; a demotion's, its commit
+        // and its file's write-back after it
+        crate::beta_plant::planted(&plant)
+            || (name == "rewrite" && crate::beta_plant::planted("barrier-skipped-purge"))
+            || (name == "blob-write-back" && crate::beta_plant::planted("barrier-skipped-demote"))
+    }
+    #[cfg(not(test))]
+    {
+        let _ = name;
+        false
+    }
+}
+
 impl DocStore {
     fn guard(&self) -> RwLockReadGuard<'_, Database> {
         self.db.read().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// A write transaction (redb's default durability: committed means on disk).
+    /// A write transaction: committed means on disk at [`CommitDurability::Immediate`] (the
+    /// store library's default durability); grouped, committed means applied and ordered, and
+    /// on disk with its group (`group.rs`).
     pub(crate) fn begin_write(&self) -> Result<Wtx<'_>, StoreError> {
+        self.begin_write_as(false)
+    }
+
+    /// A write transaction whose commit waits for the disk however the store groups its
+    /// commits, making every commit before it durable too: a barrier, for a commit something
+    /// outside the store depends on (`group.rs`).
+    pub(crate) fn begin_write_durable(&self) -> Result<Wtx<'_>, StoreError> {
+        self.begin_write_as(true)
+    }
+
+    /// [`DocStore::begin_write_durable`] for the barrier `name` (`group.rs`). Test builds: the
+    /// plant `barrier-skipped-{name}` (`write-back-skips-barrier` for the write-back) makes it
+    /// an ordinary commit.
+    pub(crate) fn begin_barrier(&self, name: &str) -> Result<Wtx<'_>, StoreError> {
+        if barrier_skipped(name) {
+            return self.begin_write();
+        }
+        self.begin_write_durable()
+    }
+
+    /// [`DocStore::flush`] for the barrier `name` (as [`DocStore::begin_barrier`]).
+    pub(crate) fn flush_barrier(&self, name: &str) -> Result<(), StoreError> {
+        if barrier_skipped(name) {
+            return Ok(());
+        }
+        self.flush()
+    }
+
+    fn begin_write_as(&self, barrier: bool) -> Result<Wtx<'_>, StoreError> {
+        self.check_not_failed()?;
         let g = self.guard();
+        let grouped = matches!(
+            self.settings.commit_durability(),
+            CommitDurability::Grouped { .. }
+        );
         #[allow(unused_mut)]
-        let mut tx = g.begin_write()?;
+        let mut tx = match g.begin_write() {
+            Ok(tx) => tx,
+            Err(e) => {
+                if grouped && matches!(&e, redb::TransactionError::Storage(s) if io_failed(s)) {
+                    self.commit_count.fail();
+                }
+                return Err(e.into());
+            }
+        };
+        // a mark an earlier transaction left without committing is not this one's
+        self.commit_count.take_floor_raised();
+        // decided once the store library's one writer is this one: no other commit between
+        let (durable, now) = self
+            .commit_count
+            .next(self.settings.commit_durability(), barrier);
+        if !durable {
+            tx.set_durability(redb::Durability::None);
+        }
         #[cfg(any(feature = "conformance", feature = "differential"))]
         if self.unsynced.load(std::sync::atomic::Ordering::Relaxed) {
             tx.set_durability(redb::Durability::None);
         }
-        Ok(Wtx { tx, _g: g })
+        Ok(Wtx {
+            tx,
+            _g: g,
+            count: &self.commit_count,
+            durable,
+            now,
+            grouped,
+        })
+    }
+
+    /// Grouped commits: refused while the store waits to be reopened after a commit failed
+    /// at the disk (`group.rs`).
+    fn check_not_failed(&self) -> Result<(), StoreError> {
+        if self.commit_count.failed() {
+            return Err(StoreError::Recovering);
+        }
+        Ok(())
+    }
+
+    /// Whether a grouped commit failed at the disk and the store waits to be reopened
+    /// (`group.rs`): every transaction is refused until [`DocStore::reopen_in_place`].
+    pub(crate) fn rollback_pending(&self) -> bool {
+        self.commit_count.failed()
+    }
+
+    /// The last recovery after a lost group of grouped commits, at the open or after a commit
+    /// failed at the disk (`seq_floor.rs`): `None` when there was none. Read by the rows.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn recovered(&self) -> Option<seq_floor::Recovered> {
+        *self
+            .recovered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether version `seq` of doc `id` is one a lost group of grouped commits may have had
+    /// (`seq_floor.rs`): never issued again, and refused as a base (`base_expired`). False in
+    /// a store that never lost one.
+    pub(crate) fn lost_seq(&self, id: DocId, seq: Seq) -> Result<bool, StoreError> {
+        if !self.commit_count.lost_known() {
+            return Ok(false);
+        }
+        let r = self.begin_read()?;
+        let meta = r.open_table(META)?;
+        seq_floor::is_lost(&meta, seq_floor::Space::Text, id, seq)
+    }
+
+    /// The last version of doc `id`'s newest lost range (`seq_floor.rs`; 0 when it has none):
+    /// its next version is past it.
+    pub(crate) fn lost_through(&self, id: DocId) -> Result<Seq, StoreError> {
+        if !self.commit_count.lost_known() {
+            return Ok(0);
+        }
+        let r = self.begin_read()?;
+        let meta = r.open_table(META)?;
+        seq_floor::lost_through(&meta, seq_floor::Space::Text, id)
+    }
+
+    /// Whether tier-0 version `vid` of doc `id` is one a lost group of grouped commits may have
+    /// had (`seq_floor.rs`, the blob space): never issued again, and refused as a base
+    /// (`base_expired`). False in a store that never lost one.
+    pub(crate) fn lost_blob_version(&self, id: DocId, vid: VersionId) -> Result<bool, StoreError> {
+        Ok(self.lost_blob_range(id, vid)?.is_some())
+    }
+
+    /// The lost range of doc `id`'s tier-0 versions holding `vid` (its first and last), if any
+    /// (`seq_floor.rs`): `None` in a store that never lost one.
+    pub(crate) fn lost_blob_range(
+        &self,
+        id: DocId,
+        vid: VersionId,
+    ) -> Result<Option<(VersionId, VersionId)>, StoreError> {
+        if !self.commit_count.lost_known() {
+            return Ok(None);
+        }
+        let r = self.begin_read()?;
+        let meta = r.open_table(META)?;
+        seq_floor::lost_range_at(&meta, seq_floor::Space::Blob, id, vid)
+    }
+
+    /// The last version of doc `id`'s newest lost range of tier-0 versions (`seq_floor.rs`; 0
+    /// when it has none): its next version is past it.
+    pub(crate) fn blob_lost_through(&self, id: DocId) -> Result<VersionId, StoreError> {
+        if !self.commit_count.lost_known() {
+            return Ok(0);
+        }
+        let r = self.begin_read()?;
+        let meta = r.open_table(META)?;
+        seq_floor::lost_through(&meta, seq_floor::Space::Blob, id)
+    }
+
+    /// The commits this store made since it was opened, in their one order: a change is the
+    /// commit at its position (read right after its call returns).
+    pub fn commits(&self) -> u64 {
+        self.commit_count.made()
+    }
+
+    /// The commits, of [`DocStore::commits`], on disk: an abrupt stop or a power loss keeps at
+    /// least these. Every commit at [`CommitDurability::Immediate`]; with grouped commits,
+    /// those up to the last group made durable.
+    pub fn durable_through(&self) -> u64 {
+        // the plant: every commit claimed durable, made durable or not
+        if crate::beta_plant::planted("durable-claimed-early") {
+            return self.commits();
+        }
+        self.commit_count.durable()
+    }
+
+    /// Make every commit durable now ([`DocStore::durable_through`] then equals
+    /// [`DocStore::commits`]): one commit that waits for the disk, when a group is waiting
+    /// (nothing at [`CommitDurability::Immediate`]).
+    pub fn flush(&self) -> Result<(), StoreError> {
+        if self.commit_count.pending() == 0 {
+            return Ok(());
+        }
+        let w = self.begin_write_durable()?;
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Whether every commit so far is on disk: always at [`CommitDurability::Immediate`]
+    /// (where a reader between a commit and its count must not see it otherwise).
+    pub(crate) fn all_durable(&self) -> bool {
+        match self.settings.commit_durability() {
+            CommitDurability::Grouped { .. } => self.durable_through() >= self.commits(),
+            _ => true,
+        }
+    }
+
+    /// The host's clock, which bounds a group's wait (grouped commits, `group.rs`): the
+    /// session manager gives its host's. Held weakly: once the clock's owner is gone, only the
+    /// count and the barriers bound a group.
+    pub(crate) fn set_clock(&self, clock: std::sync::Weak<group::Clock>) {
+        self.commit_count.set_clock(clock);
+    }
+
+    /// The group made durable when it has waited `max_ms` (grouped commits; the session
+    /// manager's tick): a store with no commit waiting does nothing.
+    pub(crate) fn tick_group(&self) -> Result<(), StoreError> {
+        if self
+            .commit_count
+            .due_at_tick(self.settings.commit_durability())
+        {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Test builds only: the store on a test storage layer `backend` (the rows' power loss,
+    /// `power_loss.rs`), under `settings`. `path` names it (a rewrite's temp file beside it).
+    #[cfg(test)]
+    pub(crate) fn open_on_backend_for_tests(
+        backend: impl redb::StorageBackend + Clone,
+        path: PathBuf,
+        settings: StoreSettings,
+    ) -> Result<Self, StoreError> {
+        let db = settings::redb_builder(&settings).create_with_backend(backend.clone())?;
+        let mut s = Self::open_db(db, path, settings)?;
+        s.reopen_backend = Some(Box::new(move |settings: &StoreSettings| {
+            settings::redb_builder(settings).create_with_backend(backend.clone())
+        }));
+        Ok(s)
+    }
+
+    /// Grouped commits, after a commit failed at the disk (`group.rs`): the store's database
+    /// opened again on its file, which holds the durable prefix, in place (no transaction
+    /// spans it: the write guard is held), with the writer incarnation taken again (an open
+    /// whose last opener didn't close cleanly: it rotates). Everything the store then holds is
+    /// durable, and it takes transactions again. The caller (the session manager) reloads every
+    /// live doc from it. Nothing to do unless [`DocStore::rollback_pending`].
+    pub(crate) fn reopen_in_place(&self) -> Result<(), StoreError> {
+        if !self.rollback_pending() {
+            return Ok(());
+        }
+        let mut g = self.db.write().unwrap_or_else(|p| p.into_inner());
+        // the old database first (the file's lock is this process's: one opener at a time), in
+        // the meantime an empty one in memory that no transaction reaches (refused: failed)
+        let empty =
+            redb::Builder::new().create_with_backend(redb::backends::InMemoryBackend::new())?;
+        drop(std::mem::replace(&mut *g, empty));
+        #[cfg(test)]
+        let again = match &self.reopen_backend {
+            Some(f) => f(&self.settings),
+            None => settings::redb_builder(&self.settings).create(&self.path),
+        };
+        #[cfg(not(test))]
+        let again = settings::redb_builder(&self.settings).create(&self.path);
+        let db = again?;
+        // the grouped mark is still set (no clean close): a recovery (`seq_floor.rs`); and the
+        // incarnation's open mark too: taken again, it rotates
+        let w = db.begin_write()?;
+        let recovered = seq_floor::at_open(&w, &self.settings)?;
+        w.commit()?;
+        *self
+            .recovered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = recovered.done;
+        if recovered.lost_known {
+            self.commit_count.set_lost_known();
+        }
+        *g = db;
+        drop(g);
+        self.commit_count.reopened();
+        Ok(())
     }
 
     pub(crate) fn begin_read(&self) -> Result<Rtx<'_>, StoreError> {
+        self.check_not_failed()?;
         let g = self.guard();
         Ok(Rtx {
             tx: g.begin_read()?,
@@ -1932,20 +2346,37 @@ impl DocStore {
         &self.path
     }
 
-    /// Open (or create) the store at `path`. One opener at a time: the store library takes an
-    /// exclusive OS lock on the store file and holds it for the store's life (the OS drops it
-    /// when the process exits, however it ends; no lock file is left). A store another opener
-    /// holds, in this process or another, is refused [`StoreError::Locked`] (`MPC-E505`) before
-    /// anything is read or written; [`DocStore::open_with_retry`] waits instead.
+    /// The settings the store was opened with ([`DocStore::open_with`]).
+    pub fn settings(&self) -> StoreSettings {
+        self.settings
+    }
+
+    /// Open (or create) the store at `path`, with [`StoreSettings::DEFAULT`]
+    /// ([`DocStore::open_with`]).
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_with(path, StoreSettings::DEFAULT)
+    }
+
+    /// Open (or create) the store at `path` with `settings` (its cache size: [`StoreSettings`]).
+    /// One opener at a time: the store library takes an exclusive OS lock on the store file and
+    /// holds it for the store's life (the OS drops it when the process exits, however it ends;
+    /// no lock file is left). A store another opener holds, in this process or another, is
+    /// refused [`StoreError::Locked`] (`MPC-E505`) before anything is read or written;
+    /// [`DocStore::open_with_retry_with`] waits instead.
+    pub fn open_with(path: impl AsRef<Path>, settings: StoreSettings) -> Result<Self, StoreError> {
         let path = path.as_ref().to_owned();
-        let db = match Database::create(&path) {
+        let db = match settings::redb_builder(&settings).create(&path) {
             Ok(db) => db,
             Err(redb::DatabaseError::DatabaseAlreadyOpen) if !lock_untyped() => {
                 return Err(StoreError::Locked)
             }
             Err(e) => return Err(e.into()),
         };
+        Self::open_db(db, path, settings)
+    }
+
+    /// The rest of an open, on the database the caller opened (and holds) at `path`.
+    fn open_db(db: Database, path: PathBuf, settings: StoreSettings) -> Result<Self, StoreError> {
         // an interrupted rewrite left its temp file: the store itself is whole (removed
         // only once this opener holds the store, so another's rewrite in flight is left alone)
         let _ = std::fs::remove_file(rewrite::temp_path(&path));
@@ -1956,7 +2387,7 @@ impl DocStore {
         // or rewritten here; opening it writes nothing
         if let Some(f) = features::check_stamp(&db)? {
             if f > STORE_FORMAT_WRITTEN {
-                return Self::open_newer(db, path, f);
+                return Self::open_newer(db, path, settings, f);
             }
         }
         let w = db.begin_write()?;
@@ -2007,14 +2438,25 @@ impl DocStore {
             }
             sweep_orphans(&w, ADDITIVE_TABLES)?;
         }
+        // grouped commits: an open after a grouped opener's unclean close is a recovery, and
+        // a grouped open sets the mark its clean close removes (`seq_floor.rs`)
+        let recovered = seq_floor::at_open(&w, &settings)?;
         w.commit()?;
         let s = Self {
             db: RwLock::new(db),
             path,
+            settings,
             blob_link: std::sync::Mutex::new(None),
             #[cfg(any(feature = "conformance", feature = "differential"))]
             unsynced: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            reopen_backend: None,
+            commit_count: Default::default(),
+            recovered: std::sync::Mutex::new(recovered.done),
         };
+        if recovered.lost_known {
+            s.commit_count.set_lost_known();
+        }
         s.finish_pending_rewrite()?;
         Ok(s)
     }
@@ -2046,7 +2488,12 @@ impl DocStore {
     /// [`STORE_FORMAT_WRITTEN`]): read-only at open. No table is created, nothing is swept, and a
     /// rewrite a newer build left pending isn't finished here: the open is refused
     /// ([`StoreError::RewriteNewer`]) and the file is left as it is.
-    fn open_newer(db: Database, path: PathBuf, found: u64) -> Result<Self, StoreError> {
+    fn open_newer(
+        db: Database,
+        path: PathBuf,
+        settings: StoreSettings,
+        found: u64,
+    ) -> Result<Self, StoreError> {
         {
             let r = db.begin_read()?;
             let meta = r.open_table(META)?;
@@ -2057,9 +2504,14 @@ impl DocStore {
         Ok(Self {
             db: RwLock::new(db),
             path,
+            settings,
             blob_link: std::sync::Mutex::new(None),
             #[cfg(any(feature = "conformance", feature = "differential"))]
             unsynced: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            reopen_backend: None,
+            commit_count: Default::default(),
+            recovered: std::sync::Mutex::new(None),
         })
     }
 
@@ -2113,15 +2565,32 @@ impl DocStore {
         ])
     }
 
-    /// [`DocStore::open`], waiting up to `wait` while another opener holds the store (a daemon
-    /// handing off, say); past it, refused [`StoreError::Locked`] (`MPC-E505`).
+    /// [`DocStore::open_with_retry_with`] with [`StoreSettings::DEFAULT`].
     pub fn open_with_retry(path: impl AsRef<Path>, wait: Duration) -> Result<Self, StoreError> {
+        Self::open_with_retry_with(path, wait, StoreSettings::DEFAULT)
+    }
+
+    /// [`DocStore::open_with`], waiting up to `wait` while another opener holds the store (a
+    /// daemon handing off, say); past it, refused [`StoreError::Locked`] (`MPC-E505`). Each try
+    /// is the open itself: the store it finds free it keeps, so another opener can't take it
+    /// between the try and the open.
+    pub fn open_with_retry_with(
+        path: impl AsRef<Path>,
+        wait: Duration,
+        settings: StoreSettings,
+    ) -> Result<Self, StoreError> {
+        let path = path.as_ref().to_owned();
         let deadline = Instant::now() + wait;
         loop {
-            match Database::create(path.as_ref()) {
-                Ok(db) => {
+            match settings::redb_builder(&settings).create(&path) {
+                Ok(db) if probe_then_open() => {
                     drop(db);
-                    return Self::open(path);
+                    open_gap();
+                    return Self::open_with(path, settings);
+                }
+                Ok(db) => {
+                    open_gap();
+                    return Self::open_db(db, path, settings);
                 }
                 Err(redb::DatabaseError::DatabaseAlreadyOpen) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20));
@@ -2338,11 +2807,26 @@ impl DocStore {
         if let Some(v) = w.open_table(SNAPSHOTS)?.get(id)? {
             next = next.max(dec_snapshot_ref(v.value())?.0 + 1);
         }
+        // never a version a lost group may have had (`seq_floor.rs`; the plant ignores them)
+        if self.commit_count.lost_known() && !crate::beta_plant::planted("seq-floor-ignored") {
+            let meta = w.open_table(META)?;
+            next = next.max(seq_floor::lost_through(&meta, seq_floor::Space::Text, id)? + 1);
+        }
         let mut seqs = Vec::with_capacity(entries.len());
         for e in entries {
             put_entry(w, id, next, e)?;
             seqs.push(next);
             next += 1;
+        }
+        // grouped: the floor is raised, durably, before a version at or past it is issued
+        if let (CommitDurability::Grouped { max_changes, .. }, Some(&last)) =
+            (self.settings.commit_durability(), seqs.last())
+        {
+            let text = seq_floor::Space::Text;
+            if last >= seq_floor::floor_in(w, text, id)? {
+                seq_floor::set_floor_in(w, text, id, last + u64::from(max_changes) + 1)?;
+                self.commit_count.raise_floor();
+            }
         }
         Ok(seqs)
     }
@@ -2380,19 +2864,7 @@ impl DocStore {
         let mut updates = Vec::new();
         for kv in r.open_table(UPDATES)?.range((id, from)..=(id, u64::MAX))? {
             let (k, v) = kv?;
-            let (e, redacted) = dec_entry_full(v.value())?;
-            if redacted.is_some() {
-                // a purge snapshots past every entry it redacts
-                return Err(StoreError::Corrupt("purged log entry after the snapshot"));
-            }
-            #[cfg(test)]
-            let skip = plant::planted(plant::EntryPlant::LoadSkipsEngineCheck);
-            #[cfg(not(test))]
-            let skip = false;
-            if !skip {
-                engine.check(&e.body)?;
-            }
-            updates.push((k.value().1, e));
+            updates.push((k.value().1, load_entry(&engine, v.value())?));
         }
         Ok(Loaded { snapshot, updates })
     }
@@ -2742,7 +3214,9 @@ impl DocStore {
         s: &SyncState,
     ) -> Result<PendingSync, StoreError> {
         let b = enc_sync(s);
-        let w = self.begin_write()?;
+        // a barrier: the store is durable before the file is written, so the file is never
+        // ahead of it (grouped commits, `group.rs`)
+        let w = self.begin_barrier("write-back")?;
         w.open_table(SYNC)?.insert((id, PENDING), b.as_slice())?;
         w.commit()?;
         Ok(PendingSync(b))
@@ -3092,9 +3566,38 @@ pub(crate) mod plant {
 }
 
 #[cfg(test)]
+mod cache_tests;
+#[cfg(test)]
 mod features_tests;
 #[cfg(test)]
 mod lock_tests;
+
+/// A log row as a load reads it: decoded, refused when a purge left it redacted past the
+/// snapshot, and of the doc's engine (`engine`).
+fn load_entry(engine: &EntryEngine, bytes: &[u8]) -> Result<LogEntry, StoreError> {
+    #[cfg(test)]
+    LOG_ROWS_DECODED.with(|n| n.set(n.get() + 1));
+    let (e, redacted) = dec_entry_full(bytes)?;
+    if redacted.is_some() {
+        // a purge snapshots past every entry it redacts
+        return Err(StoreError::Corrupt("purged log entry after the snapshot"));
+    }
+    #[cfg(test)]
+    let skip = plant::planted(plant::EntryPlant::LoadSkipsEngineCheck);
+    #[cfg(not(test))]
+    let skip = false;
+    if !skip {
+        engine.check(&e.body)?;
+    }
+    Ok(e)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test builds only: the log rows this thread's loads decoded ([`load_entry`]).
+    pub(crate) static LOG_ROWS_DECODED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(test)]
 mod native_absent_tests;
 #[cfg(test)]

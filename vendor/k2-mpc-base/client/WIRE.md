@@ -580,6 +580,7 @@ retry, error?})`.
 | `idle` | the kit's `LeaveReason::Idle` | no |
 | `kicked` | `LeaveReason::Kicked` | no |
 | `rights_lost` | `LeaveReason::RightsLost`: can't read the doc any more | no |
+| `rolled_back` | `LeaveReason::RolledBack` (after v0.22.0): the host's store groups its commits, one failed at the disk, and the doc reloaded at its durable state; changes after it may be gone. Connect again (a fresh writer) and read the doc again before writing at a base | yes |
 | `deleted` | the doc was deleted | no |
 | `moved` | the doc was renamed (`rekey`); open it at its new key (`path`, when sent) | no |
 | `released` | the doc moved to another host for good: open it there | no |
@@ -776,7 +777,7 @@ the kit's own final roster.
 | `rights` | `"edit"` when the kit's `Rights` has `read` and `edit`; `"read"` with `read` only; `"none"` otherwise. `history` and `owner` aren't sent |
 | `role` | `"editor"` / `"viewer"` (`Role`) |
 | `kind` | `ParticipantKind` in lower case: `person`, `agent`, `app`, `external`, `restore`, `import` |
-| `reason` (`left`) | `LeaveReason`: `left`, `idle`, `kicked`, `rights_lost` |
+| `reason` (`left`) | `LeaveReason`: `left`, `idle`, `kicked`, `rights_lost`, `rolled_back` (after v0.22.0) |
 | `how` (`claim_ended`) | `ClaimEnd::as_str`: `released`, `edited`, `expired`, `left`, `reset`, `deleted`, `gone_outside_save` (after v0.18.0; a client reads a reason it doesn't know as `deleted`) |
 | `keys` (`claim_ended`) | `RosterEvent::ClaimEnded::addresses`, only when not empty: a claim on elements (or a blob doc's nodes), its elements by address as they were when it was taken, in key order |
 | `note` (`note`) | `NoteKind::as_str` |

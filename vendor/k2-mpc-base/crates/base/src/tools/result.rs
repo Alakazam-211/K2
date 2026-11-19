@@ -31,6 +31,9 @@
 //! - `dry_run`: whether the call was a dry run (`docs/SESSIONS.md`, "Dry run: one contract for
 //!   every tier"); false on every call that isn't.
 //!
+//! A tier-0 batch's result (`BlobSession::run_batch`) has one more field after `dry_run`,
+//! `batch`: `{calls, failed_at}` (`docs/SESSIONS.md`, "A batch of verbs").
+//!
 //! On a blob doc, a pack verb's edit (the tier-0 verb path) fills `changed` from the structure
 //! index's diff of the version it read and its output: `counts` per node kind (`kind`, `added`,
 //! `removed`, `changed`), `units` by node, `lines` null, and `bytes` (`size_before`,

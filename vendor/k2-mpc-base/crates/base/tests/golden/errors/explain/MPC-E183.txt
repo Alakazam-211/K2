@@ -1,0 +1,21 @@
+MPC-E183 native_equivocation (sessions and edits)
+exit:     2
+message:  this update reuses writer {agent}'s change {seq} with other content
+next:     Nothing was applied: a change this copy already holds came again with other content, so the copy that sent it continued that writer from an older point (a store restored or copied without rotating its writers). Drop the update, keep this copy as it is, and resync the sender from the host's store; don't retry the same bytes.
+rule:     the native engine (a Beta): one line per writer
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E183",
+  "name": "native_equivocation",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "this update reuses writer {agent}'s change {seq} with other content",
+  "next": "Nothing was applied: a change this copy already holds came again with other content, so the copy that sent it continued that writer from an older point (a store restored or copied without rotating its writers). Drop the update, keep this copy as it is, and resync the sender from the host's store; don't retry the same bytes.",
+  "rule": "the native engine (a Beta): one line per writer",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

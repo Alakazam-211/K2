@@ -97,7 +97,7 @@ person_actions! {
     /// Format (bold, heading, list).
     Format = 15, TEXT, "Format (bold, heading, list)";
     /// Undo / redo my own edits: all or nothing; `undo --drop` skips a blocked step.
-    Undo = 16, TG, "Undo / redo my own edits";
+    Undo = 16, ALL3, "Undo / redo my own edits";
     /// See that it saved.
     Saved = 17, EVERY, "See that it saved";
     /// Watch others edit live.
@@ -127,7 +127,7 @@ person_actions! {
     /// See which edits are waiting for my approval.
     Pending = 30, EVERY, "See which edits are waiting for my approval";
     /// Reverse one change, inside the revert window; older changes: `restore --version`.
-    Revert = 31, TG, "Reverse one specific change";
+    Revert = 31, ALL3, "Reverse one specific change";
     /// Tier 0: take the lease, or extend mine (`lease`, `lease --renew`).
     Lease = 32, BLOB, "Take the lease (lock the file while I change it), or extend it";
     /// Tier 0: release my lease.
@@ -204,7 +204,7 @@ mod tests {
             PersonAction::for_tier(Tier::Blob)
                 .map(|a| a.number())
                 .collect::<Vec<_>>(),
-            [1, 2, 3, 4, 6, 14, 17, 18, 19, 20, 21, 22, 24, 25, 28, 29, 30, 32, 33, 34]
+            [1, 2, 3, 4, 6, 14, 16, 17, 18, 19, 20, 21, 22, 24, 25, 28, 29, 30, 31, 32, 33, 34]
         );
         // the grid tier (CSV contract §3.5): every text row but formatting (CSV has none),
         // tier 0's own rows left out (leases), then the grid rows' own actions

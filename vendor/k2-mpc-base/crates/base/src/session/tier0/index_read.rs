@@ -250,6 +250,7 @@ impl BlobSession {
                 space: space.to_owned(),
                 version: v,
                 ver: ver.clone(),
+                next: v + 1,
             };
             match self.load_view(&t, spec) {
                 Ok(view) => Ok(Some(view)),
@@ -349,6 +350,7 @@ impl BlobSession {
                 space: t.space.clone(),
                 version: *vid,
                 ver: ver.clone(),
+                next: *vid + 1,
             };
             let prev = match self.load_view(&older, &spec) {
                 Ok(p) => p,

@@ -3,6 +3,13 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.23.0 (kit tag v0.23.0)
+
+Still wire 3. A leave can say `rolled_back` (`LeaveReason::RolledBack`): a host whose store
+groups its commits reloaded the doc at its durable state after a commit failed at the disk.
+`canRetry` retries it; connect again and read the doc again before writing at a base. The
+`LeaveReason` type gains it; no other API change. `WIRE.md` lists it.
+
 ## 0.22.0 (kit tag v0.22.0)
 
 Still wire 3, with no API change. `WIRE.md` says that an agent's `view_address` follows each verb

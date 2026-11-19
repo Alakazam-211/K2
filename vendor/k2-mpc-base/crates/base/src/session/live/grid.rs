@@ -2335,6 +2335,7 @@ impl Session {
         if edits.is_empty() {
             return Ok(EditResult {
                 version: st.version,
+                durable: self.durable_now(st),
                 ..EditResult::default()
             });
         }
@@ -2524,6 +2525,7 @@ impl Session {
             return Ok(GridWriteReport {
                 outcome: GridWrite::Applied(EditResult {
                     version: st.version,
+                    durable: self.durable_now(st),
                     ..EditResult::default()
                 }),
                 skipped: conflicts,
@@ -2623,6 +2625,7 @@ impl Session {
         if edits.is_empty() {
             return Ok(report(GridWrite::Applied(EditResult {
                 version: st.version,
+                durable: self.durable_now(st),
                 ..EditResult::default()
             })));
         }
@@ -2671,6 +2674,7 @@ impl Session {
             return Ok(GridWriteReport {
                 outcome: GridWrite::Applied(EditResult {
                     version: st.version,
+                    durable: self.durable_now(st),
                     ..EditResult::default()
                 }),
                 skipped: Vec::new(),
@@ -2950,6 +2954,7 @@ impl Session {
         if edits.is_empty() {
             return Ok(EditResult {
                 version: st.version,
+                durable: self.durable_now(st),
                 ..EditResult::default()
             });
         }
@@ -3868,7 +3873,7 @@ impl Session {
             };
             if let Err(e) = store.commit_disk(
                 self.doc_id,
-                st.version + 1,
+                st.next_seq(),
                 &[],
                 &[],
                 &versions,
@@ -3992,7 +3997,7 @@ impl Session {
         let Some(update) = made.update else {
             return Ok(DiskCheck::Unchanged);
         };
-        let seq = st.version + 1;
+        let seq = st.next_seq();
         let a = self.structured_applied(
             st,
             Made {

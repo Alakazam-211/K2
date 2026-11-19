@@ -674,6 +674,22 @@ impl BlobStore {
         })
     }
 
+    /// A writer's whole source in the store's temp folder (not synced), at its first byte, to
+    /// be read more than once: by a check, then (rewound) by [`BlobStore::put_version`]. Over
+    /// [`super::BlobConfig::max_blob_bytes`]: [`BlobError::TooLarge`]. The file is removed when
+    /// the [`SpooledSource`] is dropped.
+    pub(crate) fn spool_source(&self, src: &mut dyn Read) -> Result<SpooledSource, BlobError> {
+        let (f, path, len) = self.spool(&[], src)?;
+        let mut out = SpooledSource {
+            f: Some(f),
+            path,
+            len,
+        };
+        // the spool is written to its end: it is read from its start
+        out.rewind()?;
+        Ok(out)
+    }
+
     /// `head` and the rest of `src` in a temp file (not synced: it is read back and removed).
     fn spool(&self, head: &[u8], src: &mut dyn Read) -> Result<(Spool, PathBuf, u64), BlobError> {
         static N: AtomicU64 = AtomicU64::new(0);
@@ -1260,6 +1276,49 @@ fn entries_err(e: EntriesError) -> BlobError {
 
 /// A spooled source, read back from its start.
 struct Spool(File);
+
+/// A writer's source in a temp file ([`BlobStore::spool_source`]): read it, [`rewind`] it,
+/// read it again. Removed on drop (the file closed first).
+///
+/// [`rewind`]: SpooledSource::rewind
+pub(crate) struct SpooledSource {
+    f: Option<Spool>,
+    path: PathBuf,
+    len: u64,
+}
+
+impl SpooledSource {
+    /// Its length in bytes.
+    pub(crate) fn len(&self) -> u64 {
+        self.len
+    }
+
+    /// Back to its first byte.
+    pub(crate) fn rewind(&mut self) -> Result<(), BlobError> {
+        match self.f.as_mut() {
+            Some(f) => f.seek_start(),
+            None => Err(BlobError::Damaged(
+                "a spool read after it was removed".into(),
+            )),
+        }
+    }
+}
+
+impl Read for SpooledSource {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.f.as_mut() {
+            Some(f) => f.read(buf),
+            None => Ok(0),
+        }
+    }
+}
+
+impl Drop for SpooledSource {
+    fn drop(&mut self) {
+        drop(self.f.take());
+        let _ = fs::remove_file(&self.path);
+    }
+}
 
 impl Spool {
     fn seek_start(&mut self) -> Result<(), BlobError> {

@@ -31,6 +31,7 @@ mod history;
 mod keyed_view;
 mod mint;
 mod native;
+mod native_cut;
 mod native_purge;
 #[cfg(test)]
 mod next_change_tests;
@@ -373,6 +374,22 @@ pub struct EditResult {
     /// ([`EditOptions::view()`], [`WriteOptions::view()`], [`UndoRequest::view`], or a result
     /// through `run_tool`); `None` otherwise.
     pub view: Option<Box<ViewAt>>,
+    /// Whether the change is on disk when the call returns: always at
+    /// [`crate::store::CommitDurability::Immediate`] (the default); with grouped commits, once
+    /// its group is ([`crate::session::SessionManager::durable_through`],
+    /// [`crate::session::SessionManager::flush`]). A change not yet durable is applied, visible
+    /// to every member and ordered, and may be lost in an abrupt stop or a power loss, with
+    /// every change after it.
+    pub durable: bool,
+}
+
+/// Why a session reloads from the store ([`Session::recover`], [`Session::reload_rolled_back`]).
+#[derive(Clone, Copy)]
+enum Reload<'a> {
+    /// A store write failed (its error).
+    Failed(&'a str),
+    /// Grouped commits: the store was reopened at its durable prefix.
+    RolledBack,
 }
 
 /// Returned by [`Session::write_base`].
@@ -990,6 +1007,9 @@ struct State {
     /// is never among them, nor an ID of unknown kind (an older kit's owner record): either
     /// may still have a writer outside this session.
     reusable_clients: std::collections::HashSet<ClientId>,
+    /// The last version of the doc's newest lost range (grouped commits, `store/seq_floor.rs`;
+    /// 0 when none): its next version is past it and past [`State::version`].
+    lost_through: Seq,
     /// The person-device writers the session knows ([`Config::reuse_person_writers`]): read
     /// from the store at load (when on), kept as leases come and go (`live/writers.rs`).
     writers: writers::Writers,
@@ -1138,6 +1158,14 @@ struct State {
     group_hint: Option<u64>,
     /// The pin when the plant `OpenedInMemory` keeps it in memory only (test-only use).
     opened_mem: Option<crate::store::OpenedRec>,
+}
+
+impl State {
+    /// The version the doc's next change takes: past its version, and past every version a
+    /// lost group of grouped commits may have had (`store/seq_floor.rs`).
+    fn next_seq(&self) -> Seq {
+        self.version.max(self.lost_through) + 1
+    }
 }
 
 /// [`State::grid_now`]: the version and codec a grid reading was made at, and the reading.
@@ -1346,6 +1374,9 @@ pub struct Session {
     /// Where a native doc's keys come from (the manager's; `live/native.rs`): its reload after
     /// a failed write asks them again.
     keys: KeysSource,
+    /// The manager's cut inbox (`live/native_cut.rs`): a native commit says when it was made
+    /// and whether its doc is due a cut. Set by the manager at open.
+    cut_inbox: std::sync::OnceLock<Arc<super::cut_queue::NativeCutInbox>>,
 }
 
 /// Whether a structured change's stream re-identified elements: a list insert, delete,
@@ -1713,6 +1744,7 @@ impl Session {
             Some(planted) => planted,
             None => store.reusable_clients(doc_id)?,
         };
+        let lost_through = store.lost_through(doc_id)?;
         let writers = if config.reuse_person_writers {
             writers::Writers::load(&store, doc_id, loaded_version, now)?
         } else {
@@ -1728,6 +1760,7 @@ impl Session {
             last_used_ms: AtomicU64::new(now),
             blobs: std::sync::OnceLock::new(),
             keys: keys.clone(),
+            cut_inbox: std::sync::OnceLock::new(),
             state: Mutex::new(State {
                 key: meta.key,
                 store: Some(store),
@@ -1744,6 +1777,7 @@ impl Session {
                 joins: 0,
                 owners: None,
                 reusable_clients,
+                lost_through,
                 writers,
                 writers_told: false,
                 hist: HashMap::new(),
@@ -2052,6 +2086,12 @@ impl Session {
         let g = self.lock_any()?;
         if let Some(e) = &g.closed {
             return Err(e.clone());
+        }
+        // grouped commits: a commit failed at the disk, and the doc holds changes the store
+        // lost until the session manager's next tick or flush reloads it; nothing reads or
+        // writes it meanwhile (`MPC-E526`, retry)
+        if g.store.as_ref().is_some_and(|s| s.rollback_pending()) {
+            return Err(crate::store::StoreError::Recovering.into());
         }
         Ok(g)
     }
@@ -2433,7 +2473,6 @@ impl Session {
             writers::Room::OPEN
         };
         let mut writers_full = false;
-        // person-writer reuse (v0.14.0, `live/writers.rs`): a person's writer per device
         let person = person.filter(|_| writers::takes_part(&p));
         let mut prev = prev;
         let mut handed_from = None;
@@ -3341,6 +3380,13 @@ impl Session {
     fn base_text(&self, st: &mut State, root: &str, base: Seq, now: u64) -> Result<Option<String>> {
         if base == st.version {
             return Ok(Some(self.text_of(st, root)?.1.to_owned()));
+        }
+        // grouped commits: a version a group the store lost had is no base
+        // (`store/seq_floor.rs`)
+        if let Ok(store) = self.store(st) {
+            if store.lost_seq(self.doc_id, base)? {
+                return Ok(None);
+            }
         }
         self.prune_read_bases(st, now);
         if let Some(b) = st.read_bases.iter().find(|b| b.version == base) {
@@ -4394,6 +4440,7 @@ impl Session {
         if applied.is_empty() {
             let res = EditResult {
                 version: st.version,
+                durable: self.durable_now(st),
                 ..EditResult::default()
             };
             return Ok((res, which.into_iter().map(|_| None).collect()));
@@ -4764,6 +4811,7 @@ impl Session {
                 elems,
                 hidden,
                 view,
+                durable: self.durable_now(st),
             },
             done,
         ))
@@ -4782,6 +4830,7 @@ impl Session {
         records: Option<&[Vec<u8>]>,
     ) -> Result<Vec<Seq>> {
         prof!("commit.store");
+        timed!(CommitStore);
         let s = self.store(st)?.clone();
         planted_store_commit_fails()?;
         debug_assert!(
@@ -4957,7 +5006,7 @@ impl Session {
         };
         {
             prof!("session.engine_checks");
-            self.report_engine_checks(st, st.version + 1);
+            self.report_engine_checks(st, st.next_seq());
         }
         let firsts = made.firsts;
         let mut a = Applied {
@@ -5380,10 +5429,67 @@ impl Session {
         p.len()
     }
 
+    /// Whether every commit of the store so far is on disk (`EditResult::durable`): always at
+    /// [`crate::store::CommitDurability::Immediate`].
+    fn durable_now(&self, st: &State) -> bool {
+        self.store(st).is_ok_and(|s| s.all_durable())
+    }
+
     /// After a failed store write: rebuild from the store so memory matches what is durable.
     /// Carets, views and undo history are reset (they were moved by a change that didn't
     /// land). If the reload fails too, the session closes.
     fn recover(&self, st: &mut State, error: &str) {
+        // grouped commits: a commit failed at the disk and the store waits to be reopened; the
+        // session manager reloads every live doc then (`SessionManager::tick`), this one too
+        if self.store(st).is_ok_and(|s| s.rollback_pending()) {
+            return;
+        }
+        self.reload(st, Reload::Failed(error));
+    }
+
+    /// Grouped commits, after the store was reopened at its durable prefix
+    /// ([`super::SessionManager::tick`]): the doc reloaded from it as after a failed store write
+    /// ([`Session::recover`]), and [`AuditEvent::RolledBack`] raised. A doc whose reload fails
+    /// closes.
+    pub(crate) fn reload_rolled_back(&self) {
+        let Ok(mut st) = self.lock() else { return };
+        if st.closed.is_some() {
+            return;
+        }
+        // the plant: a native doc alone is reloaded
+        if crate::beta_plant::planted("rollback-skips-yrs") && !st.doc.is_native() {
+            return;
+        }
+        self.reload(&mut st, Reload::RolledBack);
+    }
+
+    /// After the doc reloaded at the store's durable state (grouped commits, a commit failed at
+    /// the disk): every connection closes ([`LeaveReason::RolledBack`]) and joins again under a
+    /// fresh writer. A connection's writer is told to its client when it joins (and the client
+    /// mints keys under it), and the lost changes it may have made under that writer reached
+    /// other members, so it can't go on writing as it, nor be given another one in place. The
+    /// recovery retired every reusable writer in the store (`store/seq_floor.rs`), so no join
+    /// takes one back; the doc's next version is past every lost one; and no version read
+    /// before is a base any more.
+    fn after_rollback(&self, st: &mut State) -> Result<()> {
+        // the plant: the members stay, writing as the writers the lost changes had
+        if !crate::beta_plant::planted("no-rotation-after-recovery") {
+            for i in (0..st.members.len()).rev() {
+                self.remove_member(st, i, LeaveReason::RolledBack);
+            }
+        }
+        let store = self.store(st)?.clone();
+        st.read_bases.clear();
+        st.owners = None;
+        st.lost_through = store.lost_through(self.doc_id)?;
+        st.reusable_clients = store.reusable_clients(self.doc_id)?;
+        if self.config.reuse_person_writers {
+            st.writers = writers::Writers::load(&store, self.doc_id, st.version, self.now())?;
+        }
+        Ok(())
+    }
+
+    fn reload(&self, st: &mut State, why: Reload<'_>) {
         let reloaded = (|| -> Result<_> {
             let store = self.store(st)?;
             let meta = store.meta(self.doc_id)?;
@@ -5442,12 +5548,30 @@ impl Session {
                 // the pack's verb state is built again from the reloaded doc
                 st.verb_state = None;
                 self.reload_disk(st);
-                self.emit(AuditEvent::Recovered {
-                    key: st.key.clone(),
-                    error: error.to_owned(),
+                self.emit(match why {
+                    Reload::Failed(error) => AuditEvent::Recovered {
+                        key: st.key.clone(),
+                        error: error.to_owned(),
+                    },
+                    Reload::RolledBack => AuditEvent::RolledBack {
+                        key: st.key.clone(),
+                        lost_from: version + 1,
+                        durable_seq: version,
+                    },
                 });
+                if matches!(why, Reload::RolledBack) {
+                    if let Err(e) = self.after_rollback(st) {
+                        st.closed = Some(SessionError::Broken(format!(
+                            "a commit failed at the disk; reloading from the store failed: {e}"
+                        )));
+                    }
+                }
             }
             Err(e) => {
+                let error = match why {
+                    Reload::Failed(error) => error,
+                    Reload::RolledBack => "a commit failed at the disk",
+                };
                 st.closed = Some(SessionError::Broken(format!(
                     "{error}; reloading from the store failed: {e}"
                 )));
@@ -5466,8 +5590,8 @@ impl Session {
     }
 
     fn compact(&self, st: &mut State) {
-        // a native doc's compaction is the engine's cut, which waits for its single-replica
-        // mode: its log isn't folded into a kit snapshot
+        // a native doc's compaction is the engine's cut, which the manager's cut queue runs
+        // (`live/native_cut.rs`): its log isn't folded into a kit snapshot
         if st.doc.is_native() {
             return;
         }
@@ -6949,7 +7073,9 @@ impl Session {
                 state,
             };
             d.replica_bytes = sync.state.len() as u64;
-            store.commit_disk(self.doc_id, st.version + 1, &[], &[], &[], &meta, &sync)?;
+            // (no entries: the next version as `State::next_seq`, field by field, `d` held)
+            let next = st.version.max(st.lost_through) + 1;
+            store.commit_disk(self.doc_id, next, &[], &[], &[], &meta, &sync)?;
             d.synced_hash = h;
             // a person saved since the kit's recent writes: one of them coming back now is
             // their save, not an echo (v0.9.5)
@@ -7063,7 +7189,7 @@ impl Session {
                 return Err(e.into());
             }
         };
-        self.report_engine_checks(st, st.version + 1);
+        self.report_engine_checks(st, st.next_seq());
         let after = texts_of(&st.doc, &self.schema)?;
         // the merged change is one of the updates the replica is to catch up with (v0.9.7):
         // when the doc now holds the file's text, `replica_to_file` brings the replica
@@ -7079,7 +7205,7 @@ impl Session {
                 return Err(e);
             }
         };
-        let seq = st.version + 1;
+        let seq = st.next_seq();
         let mut versions = Vec::new();
         if st.last_version_seq != st.version {
             versions.push(Self::version_of(
@@ -7147,7 +7273,7 @@ impl Session {
             self.emit(AuditEvent::IdentityMismatch {
                 key: st.key.clone(),
                 root: root.to_owned(),
-                change: st.version + 1,
+                change: st.next_seq(),
             });
         }
         // the provenance map follows the change as local edits do (`apply_local`), in
@@ -7565,7 +7691,9 @@ impl Session {
             let mut meta = store.meta(self.doc_id)?;
             meta.synced_hash = Some(sync.hash.clone());
             meta.synced_seq = sync.seq;
-            store.commit_disk(self.doc_id, st.version + 1, &[], &[], &[], &meta, &sync)?;
+            // (no entries: the next version as `State::next_seq`, field by field, `d` held)
+            let next = st.version.max(st.lost_through) + 1;
+            store.commit_disk(self.doc_id, next, &[], &[], &[], &meta, &sync)?;
             Ok(())
         });
         if let Err(e) = stored {

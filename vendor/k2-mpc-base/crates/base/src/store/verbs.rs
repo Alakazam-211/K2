@@ -32,7 +32,7 @@ use redb::{TableDefinition, WriteTransaction};
 
 use super::enc::{R, W};
 use super::turns::ReadTurns;
-use super::{DocId, StoreError};
+use super::{DocId, Revert, RevertStep, StoreError};
 
 /// `(doc, seq)` → the pack verb of a live change (record version 1).
 pub(super) const CHANGE_VERBS: TableDefinition<(u64, u64), &[u8]> =
@@ -97,25 +97,55 @@ pub(super) fn get(t: &ReadTurns, id: DocId, seq: u64) -> Result<Option<String>, 
 }
 
 /// A tier-0 version's record: version 1, the verb, then the calls (each a verb name; empty
-/// unless it is a batch).
-pub(super) fn enc_blob_verb(verb: &str, calls: &[String]) -> Vec<u8> {
+/// unless it is a batch). A revert's is version 2: version 1's fields, then the version it took
+/// away and its step (0 revert, 1 undo, 2 redo). An older kit reads a version-2 record as no
+/// verb.
+pub(super) fn enc_blob_verb(verb: &str, calls: &[String], revert: Option<Revert>) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(1).str(verb).strs(calls);
+    match revert {
+        None => {
+            w.u8(1).str(verb).strs(calls);
+        }
+        Some(rv) => {
+            let step = match rv.step {
+                RevertStep::Revert => 0,
+                RevertStep::Undo => 1,
+                RevertStep::Redo => 2,
+            };
+            w.u8(2).str(verb).strs(calls).u64(rv.version).u8(step);
+        }
+    }
     w.0
 }
 
+/// A tier-0 version's verb, its calls and what it reverts.
+pub(super) type BlobVerbRow = (String, Vec<String>, Option<Revert>);
+
 /// `None` for a record this kit can't read (another version, an empty or over-long id, too
-/// many calls): read as no verb.
-pub(super) fn dec_blob_verb(b: &[u8]) -> Option<(String, Vec<String>)> {
+/// many calls, a revert of version 0 or an unknown step): read as no verb.
+pub(super) fn dec_blob_verb(b: &[u8]) -> Option<BlobVerbRow> {
     let mut r = R::new(b, "blob verb");
-    if r.u8().ok()? != 1 {
+    let ver = r.u8().ok()?;
+    if ver != 1 && ver != 2 {
         return None;
     }
     let verb = r.str().ok()?;
     let calls = r.strs().ok()?;
+    let revert = if ver == 2 {
+        let version = r.u64().ok().filter(|v| *v >= 1)?;
+        let step = match r.u8().ok()? {
+            0 => RevertStep::Revert,
+            1 => RevertStep::Undo,
+            2 => RevertStep::Redo,
+            _ => return None,
+        };
+        Some(Revert::new(version, step))
+    } else {
+        None
+    };
     r.end().ok()?;
     let ok = |s: &String| !s.is_empty() && s.len() <= VERB_MAX;
-    (ok(&verb) && calls.len() <= CALLS_MAX && calls.iter().all(ok)).then_some((verb, calls))
+    (ok(&verb) && calls.len() <= CALLS_MAX && calls.iter().all(ok)).then_some((verb, calls, revert))
 }
 
 /// Write version `vid`'s verb in `w`, the version's own transaction (creating the table with
@@ -126,6 +156,7 @@ pub(super) fn put_blob_in(
     vid: u64,
     verb: Option<&str>,
     calls: &[String],
+    revert: Option<Revert>,
 ) -> Result<(), StoreError> {
     #[cfg(any(test, feature = "differential"))]
     if crate::differential::tier0_verb_mutant()
@@ -143,7 +174,7 @@ pub(super) fn put_blob_in(
         .cloned()
         .collect();
     w.open_table(BLOB_VERBS)?
-        .insert((id, vid), enc_blob_verb(v, &calls).as_slice())?;
+        .insert((id, vid), enc_blob_verb(v, &calls, revert).as_slice())?;
     Ok(())
 }
 
@@ -153,7 +184,7 @@ pub(super) fn get_blob(
     t: &ReadTurns,
     id: DocId,
     vid: u64,
-) -> Result<Option<(String, Vec<String>)>, StoreError> {
+) -> Result<Option<BlobVerbRow>, StoreError> {
     let Some(t) = t else {
         return Ok(None);
     };
@@ -188,26 +219,37 @@ mod tests {
     fn a_blob_row_round_trips_and_another_version_reads_as_none() {
         let calls = vec!["layer rename".to_owned(), "entity move".to_owned()];
         assert_eq!(
-            dec_blob_verb(&enc_blob_verb("batch", &calls)),
-            Some(("batch".to_owned(), calls.clone()))
+            dec_blob_verb(&enc_blob_verb("batch", &calls, None)),
+            Some(("batch".to_owned(), calls.clone(), None))
         );
         assert_eq!(
-            dec_blob_verb(&enc_blob_verb("part set", &[])),
-            Some(("part set".to_owned(), Vec::new()))
+            dec_blob_verb(&enc_blob_verb("part set", &[], None)),
+            Some(("part set".to_owned(), Vec::new(), None))
         );
-        let mut other = enc_blob_verb("part set", &[]);
-        other[0] = 2;
+        // a revert's record (version 2)
+        let undo = Revert::new(7, RevertStep::Undo);
+        let v2 = enc_blob_verb("undo", &[], Some(undo));
+        assert_eq!(v2[0], 2, "a revert's record is version 2");
+        assert_eq!(
+            dec_blob_verb(&v2),
+            Some(("undo".to_owned(), Vec::new(), Some(undo)))
+        );
+        let mut step = v2.clone();
+        *step.last_mut().unwrap() = 9;
+        assert_eq!(dec_blob_verb(&step), None, "an unknown step is none");
+        let mut other = enc_blob_verb("part set", &[], None);
+        other[0] = 3;
         assert_eq!(dec_blob_verb(&other), None);
-        let mut long = enc_blob_verb("part set", &[]);
+        let mut long = enc_blob_verb("part set", &[], None);
         long.push(0);
         assert_eq!(
             dec_blob_verb(&long),
             None,
             "a longer record is another layout"
         );
-        assert_eq!(dec_blob_verb(&enc_blob_verb("", &[])), None);
+        assert_eq!(dec_blob_verb(&enc_blob_verb("", &[], None)), None);
         assert_eq!(
-            dec_blob_verb(&enc_blob_verb("batch", &[String::new()])),
+            dec_blob_verb(&enc_blob_verb("batch", &[String::new()], None)),
             None,
             "an empty call is none"
         );

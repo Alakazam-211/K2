@@ -391,17 +391,17 @@ impl BlobVerbRefused {
 
 /// The kit's own flags, taken out of a verb's arguments before the pack sees them.
 #[derive(Debug, Default)]
-struct KitFlags {
-    if_version: Option<VersionId>,
-    base: Option<VersionId>,
-    dry_run: bool,
-    expect: Option<String>,
-    json: bool,
+pub(super) struct KitFlags {
+    pub(super) if_version: Option<VersionId>,
+    pub(super) base: Option<VersionId>,
+    pub(super) dry_run: bool,
+    pub(super) expect: Option<String>,
+    pub(super) json: bool,
     /// The arguments the pack sees.
-    rest: Vec<String>,
+    pub(super) rest: Vec<String>,
 }
 
-fn kit_flags(args: &[String]) -> std::result::Result<KitFlags, ToolError> {
+pub(super) fn kit_flags(args: &[String]) -> std::result::Result<KitFlags, ToolError> {
     let (if_version, base, args) = crate::tools::take_guards(args)?;
     let mut f = KitFlags {
         if_version,
@@ -452,7 +452,7 @@ const CHUNK: usize = 64 << 10;
 
 /// The version read with a plan's ranges replaced: every other byte copied from a verified
 /// reader of it, in order. Optionally hashed as it goes (the output's digest).
-struct Applied {
+pub(super) struct Applied {
     src: BlobReader,
     spans: Vec<Span>,
     next: usize,
@@ -461,15 +461,15 @@ struct Applied {
     buf: Vec<u8>,
     at: usize,
     digest: Option<DigestStream>,
-    written: u64,
+    pub(super) written: u64,
     done: bool,
     /// The version's own read failure (a damaged blob), kept for its id.
-    failed: Option<BlobError>,
+    pub(super) failed: Option<BlobError>,
     off_by_one: bool,
 }
 
 impl Applied {
-    fn new(src: BlobReader, spans: Vec<Span>, digest: bool) -> Self {
+    pub(super) fn new(src: BlobReader, spans: Vec<Span>, digest: bool) -> Self {
         Applied {
             src,
             spans,
@@ -558,7 +558,7 @@ impl Applied {
     }
 
     /// The output's digest, `sha256:<hex>`.
-    fn digest_hex(&mut self) -> String {
+    pub(super) fn digest_hex(&mut self) -> String {
         let d = self
             .digest
             .take()
@@ -573,7 +573,7 @@ impl Applied {
     }
 
     /// Read the rest, to the version's verified end.
-    fn drain(&mut self) -> std::result::Result<(), BlobError> {
+    pub(super) fn drain(&mut self) -> std::result::Result<(), BlobError> {
         let mut sink = vec![0u8; CHUNK];
         loop {
             match self.read(&mut sink) {
@@ -586,7 +586,7 @@ impl Applied {
     }
 
     /// What a failed read was: the version's own (a damaged blob), else the plan's.
-    fn failure(&mut self, e: io::Error) -> BlobError {
+    pub(super) fn failure(&mut self, e: io::Error) -> BlobError {
         self.failed
             .take()
             .unwrap_or_else(|| BlobError::Io(format!("applying the plan: {e}")))
@@ -627,6 +627,10 @@ fn drain_verified(reader: &mut BlobReader) -> Result<()> {
         }
     }
 }
+
+/// How many times a `--base` call plans again on a head that moved while it planned (each
+/// time checked per node against its base) before it is refused as stale (`MPC-E110`).
+pub const BASE_REPLANS_MAX: u32 = 64;
 
 /// A plan the kit takes: ranges in order and apart, inside the version, within the caps.
 pub(super) fn check_plan(spans: &[Span], size: u64, c: &Config) -> Result<()> {
@@ -672,7 +676,7 @@ pub(super) fn check_plan(spans: &[Span], size: u64, c: &Config) -> Result<()> {
 /// is an `insert`, a removed one a `delete`, a moved one a `move`, a renamed one or one with
 /// other content or text a `set`, and each changed property a `set` of that field (`before`
 /// and `after` its values for `attrs.<name>`). At most [`UNITS_MAX`], and how many more.
-fn units_of_diff(
+pub(super) fn units_of_diff(
     diff: &[NodeChange],
     before: &IndexView,
     after: &IndexView,
@@ -732,7 +736,7 @@ fn units_of_diff(
 }
 
 /// Per node kind: how many nodes the diff adds, removes and changes.
-fn counts_of_diff(diff: &[NodeChange], before: &IndexView, after: &IndexView) -> Value {
+pub(super) fn counts_of_diff(diff: &[NodeChange], before: &IndexView, after: &IndexView) -> Value {
     let kind_of = |k: &str| {
         after
             .nodes
@@ -781,7 +785,12 @@ struct Edited<'a> {
     size_after: u64,
 }
 
-fn tool_output(stdout: Vec<u8>, summary: String, exit: u8, version: VersionId) -> ToolOutput {
+pub(super) fn tool_output(
+    stdout: Vec<u8>,
+    summary: String,
+    exit: u8,
+    version: VersionId,
+) -> ToolOutput {
     ToolOutput {
         stdout,
         stderr_summary: summary,
@@ -798,7 +807,7 @@ fn tool_output(stdout: Vec<u8>, summary: String, exit: u8, version: VersionId) -
 }
 
 /// A call's notes as data and, for a text result, as `note: ` lines.
-fn with_notes(
+pub(super) fn with_notes(
     mut o: ToolOutput,
     rd: crate::tools::ResultData,
     notes: Vec<(Value, String)>,
@@ -829,7 +838,7 @@ pub(super) enum Ran {
 }
 
 /// Under the lock again, before the commit: the call as it stands now.
-enum Decision {
+pub(super) enum Decision {
     /// Head moved since the plan.
     Moved,
     /// Commit (or, a dry run, stop), as the connection at this index.
@@ -868,7 +877,7 @@ impl BlobSession {
 
     /// The notes every result of `verb` on a version of `size` bytes carries: `lease_only` on
     /// a `merge: Lease` edit, `merge_over_bound` over the merge bound.
-    fn verb_notes(&self, verb: &BlobVerb, size: u64) -> Vec<(Value, String)> {
+    pub(super) fn verb_notes(&self, verb: &BlobVerb, size: u64) -> Vec<(Value, String)> {
         let mut out = Vec::new();
         if verb.kind == BlobVerbKind::Edit && verb.merge == Some(VerbMerge::Lease) {
             let text = format!(
@@ -1012,8 +1021,67 @@ impl BlobSession {
         }
     }
 
+    /// Run `verb` on a stage of a batch: version `t` with the ranges `spans` applied (`size`
+    /// bytes; its index `view`), read through the kit's applier as the verb says.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn run_verb_staged(
+        &self,
+        t: &Target,
+        spans: &[Span],
+        size: u64,
+        view: &IndexView,
+        verb: &BlobVerb,
+        args: &[String],
+        json: bool,
+    ) -> std::result::Result<Ran, ToolRunError> {
+        let c = &self.config;
+        let ctx = BlobVerbCtx {
+            version: t.version,
+            size,
+            index: Some(view),
+            json,
+            merge: self.merge_bound(size),
+            max_spans: c.blob_verb_max_spans,
+            max_insert_bytes: c.blob_verb_max_insert_bytes,
+        };
+        let src = self
+            .blobs
+            .reader_of(&t.space, self.doc_id, &t.ver.blob)
+            .map_err(SessionError::from)?;
+        let mut staged = Applied::new(src, spans.to_vec(), false);
+        let out = match verb.input {
+            VerbInput::Whole => {
+                if size > c.blob_verb_max_bytes {
+                    return Err(SessionError::VerbTooLarge {
+                        what: "the stage a whole-file verb reads",
+                        size,
+                        limit: c.blob_verb_max_bytes,
+                    }
+                    .into());
+                }
+                let mut bytes = Vec::new();
+                if let Err(e) = staged.read_to_end(&mut bytes) {
+                    return Err(SessionError::from(staged.failure(e)).into());
+                }
+                (verb.run)(&ctx, &mut &bytes[..], args)
+            }
+            VerbInput::Stream => {
+                let out = (verb.run)(&ctx, &mut staged, args);
+                staged.drain().map_err(SessionError::from)?;
+                out
+            }
+        };
+        match out {
+            Ok(o) => Ok(Ran::Out(o)),
+            Err(BlobVerbRefused::Usage(m)) => Err(ToolError::usage(m).into()),
+            Err(BlobVerbRefused::Pack { entry, why, next }) => {
+                Ok(Ran::Refused { entry, why, next })
+            }
+        }
+    }
+
     /// A pack's refusal by its id, as its output: nothing applied.
-    fn pack_refused(
+    pub(super) fn pack_refused(
         verb: &BlobVerb,
         entry: &'static ErrorEntry,
         why: String,
@@ -1088,7 +1156,7 @@ impl BlobSession {
 
     /// `--if-version V`: head must be `V`. `--base V`: `V` no newer than head (an older one is
     /// checked per node, [`BlobSession::check_base`]).
-    fn check_verb_guards(st: &BState, f: &KitFlags) -> Result<()> {
+    pub(super) fn check_verb_guards(st: &BState, f: &KitFlags) -> Result<()> {
         let stale = f
             .if_version
             .filter(|v| *v != st.vid)
@@ -1103,7 +1171,7 @@ impl BlobSession {
     }
 
     /// A `merge: Lease` verb needs the caller's own lease, never one a write took for itself.
-    fn check_own_lease(&self, st: &BState, pid: &str, verb: &BlobVerb) -> Result<()> {
+    pub(super) fn check_own_lease(&self, st: &BState, pid: &str, verb: &BlobVerb) -> Result<()> {
         if verb.merge != Some(VerbMerge::Lease) || planted!(LeaseOnlyIgnored) {
             return Ok(());
         }
@@ -1155,7 +1223,11 @@ impl BlobSession {
             if !(dry && planted!(SkipsGuards)) {
                 Self::check_verb_guards(st, f)?;
             }
-            let auto = (!dry || planted!(TakesLease)) && st.lease.is_none();
+            // the plan runs with no lease: the automatic lease is taken only around the commit
+            // (step 5), so another agent's verb plans meanwhile (the planted faults: a dry run
+            // that takes one; the lease held across the whole verb)
+            let whole = !dry && planted!(LeaseHeldWholeVerb);
+            let auto = (whole || (dry && planted!(TakesLease))) && st.lease.is_none();
             if auto {
                 self.grant(st, i, self.config.lease_auto_ms.max(1), now, true);
             }
@@ -1172,8 +1244,8 @@ impl BlobSession {
         let out = self.edit_planned(
             conn, verb, f, opts, as_data, &spec, &pid, agent, &path, &mut t, &mut cheap, &mut seed,
         );
-        // the write's own lease ends with it (a dry run takes none)
-        if auto && !(dry && planted!(TakesLease)) {
+        // the planted whole-verb lease ends with the call (a dry run's planted one stays)
+        if auto && !dry {
             if let Ok(mut st) = self.lock() {
                 if st.lease.as_ref().is_some_and(|l| l.auto && l.pid == pid) {
                     self.end_lease(&mut st, LeaseEnd::Released);
@@ -1213,6 +1285,7 @@ impl BlobSession {
         let dry = f.dry_run;
         let json = opts.json || f.json;
         let mut replanned = false;
+        let mut replans = 0u32;
         loop {
             // 2. plan, off the lock
             let before = match self.load_view(t, spec) {
@@ -1336,8 +1409,14 @@ impl BlobSession {
                     let actual = st.vid;
                     self.blobs.finish(&t.space, put);
                     // `--if-version` names head; `--base` is checked per node again on the new
-                    // head
-                    if replanned || f.if_version.is_some() {
+                    // head, as often as head moves (bounded); a plain call plans once more
+                    replans += 1;
+                    let more = if f.base.is_some() {
+                        replans <= BASE_REPLANS_MAX
+                    } else {
+                        !replanned
+                    };
+                    if !more || f.if_version.is_some() {
                         return Err(SessionError::Stale {
                             expected: f.if_version.or(f.base).unwrap_or(t.version),
                             actual,
@@ -1378,7 +1457,7 @@ impl BlobSession {
                     st.members[i].last_edit_ms = Some(now);
                 }
                 if planted!(StoresIndex) {
-                    self.want_index(st, t.version + 1, info.id, info.size);
+                    self.want_index(st, st.next_vid(), info.id, info.size);
                 }
                 if planted!(WritesBack) {
                     self.plant_write_back(st, t, &plan);
@@ -1403,7 +1482,16 @@ impl BlobSession {
             v.on_behalf_of = p.on_behalf_of.clone();
             v.turn = opts.turn;
             v.verb = Some(verb.name.to_owned());
+            // the automatic lease, around the commit only: nobody held one when the caller was
+            // admitted again above, so it is the caller's for this commit and ends with it
+            let auto = st.lease.is_none();
+            if auto {
+                self.grant(st, i, self.config.lease_auto_ms.max(1), now, true);
+            }
             let committed = self.commit_own(st, i, v, now, put.chunked());
+            if auto && st.lease.as_ref().is_some_and(|l| l.auto && l.pid == pid) {
+                self.end_lease(st, LeaseEnd::Released);
+            }
             // the put stops waiting: referenced by the version, or given up
             self.blobs.finish(&t.space, put);
             let r = committed?;
@@ -1477,7 +1565,7 @@ impl BlobSession {
             }
             Err(e) => return Err(SessionError::OutputUnreadable { why: e.to_string() }),
         };
-        let after = self.output_view(t, spec, &draft, t.version + 1)?;
+        let after = self.output_view(t, spec, &draft, t.next)?;
         let diff = iread::diff(before, &after);
         if !planted!(StrayUnchecked) {
             let declared: BTreeSet<&str> = out
@@ -1504,7 +1592,7 @@ impl BlobSession {
     /// needn't wait for that job. Nothing to do when a job is already out for these bytes, the
     /// row exists, or the version is past the index's limits; a refusal there is the job's to
     /// make again (the version is committed either way).
-    fn seed_index(&self, version: VersionId, draft: crate::index::IndexDraft) {
+    pub(super) fn seed_index(&self, version: VersionId, draft: crate::index::IndexDraft) {
         if let Ok(Some(job)) = self.index_job(Some(version)) {
             let _ = job.seed(draft);
         }
@@ -1535,7 +1623,7 @@ impl BlobSession {
     /// grammar reads it), else the container of the **last** changed node, else that node. Cells,
     /// lines and time are null on this tier. `None` when nothing changed. A dry run computes the
     /// same, and nothing is set from it.
-    fn view_of_change(
+    pub(super) fn view_of_change(
         &self,
         viewing: Option<&str>,
         diff: &[NodeChange],

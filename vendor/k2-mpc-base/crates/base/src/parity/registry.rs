@@ -672,20 +672,20 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         NE,
         &[A::UndoWith],
         &[P::Undo],
-        "undo [--steps N] [--for P]",
+        "undo [--steps N] [--for P] (tier 0: one step, of your own)",
         OK01,
     )
-    .on(TG),
+    .on(ALL3),
     kit(
         "redo",
         E,
         NE,
         &[A::RedoWith],
         &[P::Undo],
-        "redo [--steps N]",
+        "redo [--steps N] (tier 0: one step, of your own)",
         OK01,
     )
-    .on(TG),
+    .on(ALL3),
     kit(
         "undo --drop",
         E,
@@ -886,10 +886,10 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[Need::Read, Need::Edit, Need::AuthorOrOwner],
         &[A::Revert],
         &[P::Revert],
-        "revert <change> [--partial] (too old: exit 8)",
+        "revert <change> [--partial] (too old: exit 8; tier 0: a version, no --partial)",
         OK01,
     )
-    .on(TG),
+    .on(ALL3),
     // grids (CSV contract §3.5, §5.5)
     kit(
         "rows drop-deleted",
@@ -1981,6 +1981,8 @@ mod tests {
                 "cat",
                 "who",
                 "write",
+                "undo",
+                "redo",
                 "status",
                 "flush",
                 "log",
@@ -1995,6 +1997,7 @@ mod tests {
                 "decline",
                 "log --pending",
                 "approvals",
+                "revert",
                 "lease",
                 "lease --renew",
                 "lease --release",

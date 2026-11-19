@@ -45,6 +45,8 @@ fn delete_in(w: &WriteTransaction, id: DocId, now: u64) -> Result<DocKey, StoreE
             paths.remove(k.as_str())?;
         }
     }
+    // its seq floor and lost versions (grouped commits): `meta` rows, not a per-doc table
+    super::seq_floor::erase_in(w, id)?;
     for (t, how) in DOC_TABLES {
         if *how == Erase::Range {
             t.erase(w, id)?;
@@ -68,7 +70,8 @@ impl DocStore {
     /// The store doesn't know about loaded sessions: a host deletes through
     /// [`crate::session::SessionManager::delete_doc`], which closes them first.
     pub fn delete_doc(&self, id: DocId, now_ms: u64) -> Result<DocKey, StoreError> {
-        let w = self.begin_write()?;
+        // a barrier (grouped commits, `group.rs`)
+        let w = self.begin_barrier("delete")?;
         let key = delete_in(&w, id, now_ms)?;
         w.commit()?;
         Ok(key)
@@ -114,7 +117,8 @@ impl DocStore {
         space: &str,
         now_ms: u64,
     ) -> Result<Vec<(DocId, DocKey)>, StoreError> {
-        let w = self.begin_write()?;
+        // a barrier (grouped commits, `group.rs`)
+        let w = self.begin_barrier("delete")?;
         let ids: Vec<DocId> = {
             let prefix = format!("{space}\u{0}");
             let paths = w.open_table(PATHS)?;

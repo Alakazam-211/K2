@@ -6,7 +6,7 @@
 //! Plants (`MPC_BETA_PLANT`, `crate::beta_plant`), one per run, each caught at its row's assert:
 //! `queue-runs-two`, `idle-ignored`, `duty-ignored`, `forced-waits-for-idle`, `refused-dropped`.
 
-use super::config::{Config, CutQueueError, CutQueueSettings};
+use super::config::{Config, CutDue, CutQueueError, CutQueueSettings};
 use super::cut_queue::{CutOutcome, CutQueue, CutWhy};
 
 /// A queue on the Beta's settings: idle 250 ms, duty 10%, slow 250 ms.
@@ -41,6 +41,46 @@ fn the_queue_hands_out_one_cut_at_a_time() {
         "row: the next cut once the first is reported"
     );
     println!("QUEUE one-at-a-time rows=2");
+}
+
+/// The cadence says why, the queue when: a doc the cadence says is forced is queued forced and
+/// cut while editing goes on; one due at its cadence, and one past the large-uncut bound, are
+/// queued at the cadence and wait for idle.
+#[test]
+fn a_due_doc_is_queued_with_the_cadences_reason() {
+    assert_eq!(CutWhy::of(CutDue::Forced), CutWhy::Forced, "row: forced");
+    assert_eq!(
+        CutWhy::of(CutDue::Cadence),
+        CutWhy::Cadence,
+        "row: at the cadence"
+    );
+    assert_eq!(
+        CutWhy::of(CutDue::LargeUncut),
+        CutWhy::Cadence,
+        "row: a large uncut doc waits for idle"
+    );
+    let mut q = queue();
+    q.enqueue("big", CutWhy::of(CutDue::LargeUncut), 2_100, 0);
+    q.enqueue("due", CutWhy::of(CutDue::Cadence), 200, 0);
+    q.enqueue("forced", CutWhy::of(CutDue::Forced), 400, 0);
+    assert_eq!(q.queued(), 3, "event: three docs queued");
+    // a native commit 1 ms ago: not idle
+    assert_eq!(
+        q.next(1_000, 999),
+        Some("forced"),
+        "row: the forced doc is cut while not idle"
+    );
+    assert!(
+        q.ran("forced", 0, CutOutcome::Done).is_some(),
+        "event: reported"
+    );
+    assert_eq!(q.next(1_000, 999), None, "row: the others wait for idle");
+    assert_eq!(
+        q.next(1_249, 999),
+        Some("big"),
+        "row: once idle, the largest tail first"
+    );
+    println!("QUEUE cadence-reason rows=6");
 }
 
 /// Idle: a doc due at its cadence waits until no native commit for `native_cut_idle_ms` (250).

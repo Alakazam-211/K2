@@ -24,7 +24,7 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
   # base-a was one part until the v0.9.5 merge put it over a job's limit (INLINE 142,396):
   # base-a1 is the kit's unit tests (its proptest regressions) and doctests, base-a2 its
   # integration tests on the kit without its unit-test modules
-  base-a1) echo "$KIT crates/base/proptest-regressions" ;;
+  base-a1) echo "$KIT crates/base/proptest-regressions crates/base/tests/index_pack" ;;
   base-a2)
     T=$(git ls-files crates/base/tests | grep -v -e '^crates/base/tests/tier0' -e '^crates/base/tests/promote' -e '^crates/base/tests/demote' -e '^crates/base/tests/parity' -e '^crates/base/tests/erasure' -e '^crates/base/tests/fixtures/' -e '^crates/base/tests/golden/errors/' -e '^crates/base/tests/vectors/k2-engine/' -e '^crates/base/tests/live_edit.rs')
     for t in $C $D $E; do T=$(echo "$T" | grep -v -x "crates/base/tests/$t.rs"); done

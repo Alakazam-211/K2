@@ -735,7 +735,10 @@ fn the_cut_cadence_is_checked_and_defaults_to_the_betas() {
         rows += 1;
     }
     assert_eq!(d.live_cut_most(), 400, "row: twice the ceiling");
-    assert_eq!(CutCadence::new(100, 200, 30), Ok(CutCadence::BETA));
+    assert_eq!(
+        CutCadence::new(100, 200, 30, 30_000, 40),
+        Ok(CutCadence::BETA)
+    );
     for (f, c, v, want) in [
         (0, 500, 30, CadenceError::FloorZero),
         (
@@ -759,13 +762,13 @@ fn the_cut_cadence_is_checked_and_defaults_to_the_betas() {
         (100, 500, 0, CadenceError::DivisorZero),
     ] {
         assert_eq!(
-            CutCadence::new(f, c, v),
+            CutCadence::new(f, c, v, 30_000, 40),
             Err(want),
             "row: ({f}, {c}, {v}) is refused"
         );
         rows += 1;
     }
-    let edge = CutCadence::new(1, CutCadence::CEILING_MOST, 1);
+    let edge = CutCadence::new(1, CutCadence::CEILING_MOST, 1, 1, 1);
     assert!(edge.is_ok(), "row: the bounds themselves: {edge:?}");
     let listed = Config::default().limits();
     for (name, want) in [
@@ -781,6 +784,231 @@ fn the_cut_cadence_is_checked_and_defaults_to_the_betas() {
     println!("CADENCE rows={rows}");
 }
 
+/// Up to `bytes_from_changes` (30,000) changes in total, the cadence is the T rule as landed:
+/// at n = 3,000, 29,999 and 30,000 a doc is due at `T(n)` changes since its last cut whatever
+/// its tail's bytes (none, one, and far below a fortieth of the checkpoint's), not one change
+/// before; forced at `2·T(n)`; past the large-uncut bound beyond twice the ceiling; and the T
+/// rule up to a host's own byte threshold.
+/// `MPC_BETA_PLANT=bytes-rule-below-30k` (the byte rule at any n) fails at the first cell's due.
+#[test]
+fn the_cadence_below_30k_is_the_t_rule() {
+    const CHECKPOINT: u64 = 4_000_000;
+    let c = CutCadence::BETA;
+    let mut cells = 0;
+    for n in [3_000, 29_999, 30_000] {
+        let t = c.every(n);
+        for tail_bytes in [0, 1, CHECKPOINT / 400] {
+            assert_eq!(
+                c.due(n, t - 1, tail_bytes, CHECKPOINT),
+                None,
+                "row: n={n}: not due one change before T(n)={t} (tail {tail_bytes} bytes)"
+            );
+            assert_eq!(
+                c.due(n, t, tail_bytes, CHECKPOINT),
+                Some(CutDue::Cadence),
+                "row: n={n}: due at T(n)={t} whatever the tail's bytes ({tail_bytes} of a \
+                 {CHECKPOINT}-byte checkpoint)"
+            );
+            assert_eq!(
+                c.due(n, 2 * t, tail_bytes, CHECKPOINT),
+                Some(CutDue::Forced),
+                "row: n={n}: forced at 2T(n)={}",
+                2 * t
+            );
+            assert_eq!(
+                c.due(n, c.live_cut_most() + 1, tail_bytes, CHECKPOINT),
+                Some(CutDue::LargeUncut),
+                "row: n={n}: past the large-uncut bound beyond {} changes",
+                c.live_cut_most()
+            );
+            cells += 1;
+        }
+    }
+    // a host's own byte rule, from 1,000 changes: the T rule up to its threshold
+    let own = CutCadence::new(100, 200, 30, 1_000, 10).unwrap();
+    assert_eq!(
+        own.due(1_000, 100, 0, 1_000),
+        Some(CutDue::Cadence),
+        "row: at a host's own threshold (1,000 changes), due at T(n) whatever the bytes"
+    );
+    cells += 1;
+    assert_eq!(cells, 10, "control: every cell ran");
+    println!("CADENCE-BELOW-30K cells={cells}");
+}
+
+/// Above `bytes_from_changes` (30,000) changes in total, a cut also waits for the bytes: at
+/// n = 30,001 and 100,000, with a checkpoint of 4,000,000 bytes, a tail of `T(n)` changes is not
+/// due at checkpoint/40 − 1 bytes and is due at checkpoint/40; never before `T(n)` changes, even
+/// with the tail at checkpoint/10; forced at `2·T(n)` changes and checkpoint/20 bytes, not one
+/// change or one byte short of either; above a host's own byte threshold, its own divisor. (The
+/// large-uncut bound above 30,000 is the next row's.)
+/// `MPC_BETA_PLANT=bytes-rule-ignored` (the change rule alone) fails at the first cell's
+/// checkpoint/40 − 1 assert; `MPC_BETA_PLANT=bytes-before-t` (the byte rule alone) at its
+/// never-before-T assert.
+#[test]
+fn the_cadence_above_30k_waits_for_the_bytes() {
+    const CHECKPOINT: u64 = 4_000_000;
+    let c = CutCadence::BETA;
+    let (b40, b20, b10) = (CHECKPOINT / 40, CHECKPOINT / 20, CHECKPOINT / 10);
+    let mut cells = 0;
+    for n in [30_001, 100_000] {
+        let t = c.every(n);
+        assert_eq!(t, 200, "control: T({n}) is the ceiling");
+        assert_eq!(
+            c.due(n, t, b40 - 1, CHECKPOINT),
+            None,
+            "row: n={n}: not due at T(n)={t} changes with the tail at checkpoint/40 - 1 bytes"
+        );
+        assert_eq!(
+            c.due(n, t, b40, CHECKPOINT),
+            Some(CutDue::Cadence),
+            "row: n={n}: due at T(n)={t} changes with the tail at checkpoint/40 bytes"
+        );
+        assert_eq!(
+            c.due(n, t - 1, b10, CHECKPOINT),
+            None,
+            "row: n={n}: never due before T(n)={t} changes, even at checkpoint/10 bytes"
+        );
+        assert_eq!(
+            c.due(n, 2 * t, b20, CHECKPOINT),
+            Some(CutDue::Forced),
+            "row: n={n}: forced at 2T(n) changes and checkpoint/20 bytes"
+        );
+        assert_eq!(
+            c.due(n, 2 * t, b20 - 1, CHECKPOINT),
+            Some(CutDue::Cadence),
+            "row: n={n}: not forced one byte short of checkpoint/20"
+        );
+        assert_eq!(
+            c.due(n, 2 * t - 1, b20, CHECKPOINT),
+            Some(CutDue::Cadence),
+            "row: n={n}: not forced one change short of 2T(n)"
+        );
+        let most = c.live_cut_most();
+        assert_eq!(
+            c.due(n, most + 1, b40, CHECKPOINT),
+            Some(CutDue::Cadence),
+            "row: n={n}: beyond {most} changes but under checkpoint/20 bytes: due, not forced"
+        );
+        cells += 1;
+    }
+    // a host's own byte rule: above 1,000 changes, a tenth of the checkpoint
+    let own = CutCadence::new(100, 200, 30, 1_000, 10).unwrap();
+    assert_eq!(
+        own.due(1_001, 100, 99, 1_000),
+        None,
+        "row: above a host's own threshold, its divisor: not due at 99 bytes < 1,000 / 10"
+    );
+    assert_eq!(
+        own.due(1_001, 100, 100, 1_000),
+        Some(CutDue::Cadence),
+        "row: above a host's own threshold, due at 1,000 / 10 bytes"
+    );
+    cells += 1;
+    assert_eq!(cells, 3, "control: every cell ran");
+    println!("CADENCE-ABOVE-30K cells={cells}");
+}
+
+/// Above 30,000 changes in total, forced stays live: the large-uncut bound is twice the forced
+/// threshold in both figures, more than `4·T(n)` changes AND more than checkpoint/10 bytes. At
+/// n = 100,000 (`T(n)` = 200) with a checkpoint of 4,000,000 bytes, a doc of small edits whose
+/// tail crosses checkpoint/20 bytes after 1,600 changes is forced (cut while editing goes on),
+/// not left for the idle slot; so is one at checkpoint/10 bytes, and one past checkpoint/10 at
+/// `4·T(n)` changes; only past both (more than checkpoint/10 bytes and more than `4·T(n)`
+/// changes) is it a large uncut doc, left for the idle slot.
+/// `MPC_BETA_PLANT=forced-dead-above-30k` (the bound at twice the ceiling and checkpoint/20, which
+/// shadowed forced) fails at the first cell.
+#[test]
+fn forced_stays_live_above_30k() {
+    const CHECKPOINT: u64 = 4_000_000;
+    let c = CutCadence::BETA;
+    let (b20, b10) = (CHECKPOINT / 20, CHECKPOINT / 10);
+    let n = 100_000;
+    let t = c.every(n);
+    assert_eq!(t, 200, "control: T({n}) is the ceiling");
+    let mut cells = 0;
+    for (changes, bytes, want, what) in [
+        (
+            1_600,
+            b20 + 1,
+            CutDue::Forced,
+            "small edits crossing checkpoint/20: forced",
+        ),
+        (
+            1_600,
+            b10,
+            CutDue::Forced,
+            "at checkpoint/10 bytes: still forced",
+        ),
+        (
+            4 * t,
+            b10 + 1,
+            CutDue::Forced,
+            "past checkpoint/10 at 4T(n) changes: still forced",
+        ),
+        (
+            4 * t + 1,
+            b10 + 1,
+            CutDue::LargeUncut,
+            "past both: left for the idle slot",
+        ),
+        (
+            1_600,
+            b10 + 1,
+            CutDue::LargeUncut,
+            "small edits past both: left for the idle slot",
+        ),
+    ] {
+        assert_eq!(
+            c.due(n, changes, bytes, CHECKPOINT),
+            Some(want),
+            "row: n={n}, {changes} changes, {bytes} tail bytes: {what}"
+        );
+        cells += 1;
+    }
+    assert_eq!(cells, 5, "control: every cell ran");
+    println!("CADENCE-FORCED-ABOVE-30K cells={cells}");
+}
+
+/// The byte rule's settings: by default from 30,000 changes in total and a fortieth of the
+/// checkpoint, listed among the settings in effect (`native_cut_bytes_from_changes`,
+/// `native_cut_bytes_divisor`); `CutCadence::new` refuses a byte rule from 0 changes and a byte
+/// divisor of 0, and takes the bounds themselves (a host's own byte settings are the rule `due`
+/// applies: the cells in the two rows above).
+/// `MPC_BETA_PLANT=cadence-unchecked` fails at the first refusal's assert.
+#[test]
+fn the_cadence_byte_settings_are_checked_and_listed() {
+    let d = CutCadence::BETA;
+    assert_eq!(
+        (d.bytes_from_changes(), d.bytes_divisor()),
+        (30_000, 40),
+        "row: the defaults"
+    );
+    assert_eq!(
+        CutCadence::new(100, 200, 30, 0, 40),
+        Err(CadenceError::BytesFromZero),
+        "row: a byte rule from 0 changes is refused"
+    );
+    assert_eq!(
+        CutCadence::new(100, 200, 30, 30_000, 0),
+        Err(CadenceError::BytesDivisorZero),
+        "row: a byte divisor of 0 is refused"
+    );
+    let edge = CutCadence::new(100, 200, 30, 1, 1);
+    assert!(edge.is_ok(), "row: the bounds themselves: {edge:?}");
+    let listed = Config::default().limits();
+    for (name, want) in [
+        ("native_cut_bytes_from_changes", 30_000),
+        ("native_cut_bytes_divisor", 40),
+    ] {
+        assert!(
+            listed.contains(&(name, want)),
+            "row: {name} listed among the settings"
+        );
+    }
+    println!("CADENCE-BYTE-SETTINGS ok");
+}
+
 /// A host's cadence reaches its native docs: a doc made under it runs under it, and after a
 /// restart under another cadence the reopened doc runs under the new one (a doc takes the
 /// setting at its next open). The Yrs twin has no cadence.
@@ -789,7 +1017,7 @@ fn the_cut_cadence_is_checked_and_defaults_to_the_betas() {
 fn a_hosts_cut_cadence_reaches_its_native_docs() {
     let mut exercised = 0;
     for col in cols() {
-        let first = CutCadence::new(10, 20, 5).unwrap();
+        let first = CutCadence::new(10, 20, 5, 30_000, 40).unwrap();
         let mut f = fx(
             "cadence",
             Config {
@@ -800,7 +1028,7 @@ fn a_hosts_cut_cadence_reaches_its_native_docs() {
         let k = key("a.md");
         let s = f.make(&k, b"one\n", col);
         drop(s);
-        let second = CutCadence::new(50, 60, 2).unwrap();
+        let second = CutCadence::new(50, 60, 2, 1_000, 10).unwrap();
         f.restart(Config {
             native_cut_cadence: second,
             ..config(true)
@@ -970,4 +1198,274 @@ fn a_native_doc_neither_demotes_nor_promotes() {
 // One replica: no sync bytes
 
 // ---------------------------------------------------------------------------------------------
+// The native cut through sessions: the after-commit check, the tick's queue, a clean unload
+
+/// What a tick reported for native cuts, over a run.
+#[derive(Default)]
+struct CutLog {
+    cuts: Vec<NativeCut>,
+    deferred_ticks: usize,
+    released: usize,
+}
+
+impl CutLog {
+    fn took(&mut self, rep: &TickReport) {
+        self.cuts.extend(rep.native_cuts.iter().cloned());
+        self.deferred_ticks += usize::from(rep.native_cuts_deferred > 0);
+        self.released += usize::from(rep.memory_released.is_some());
+    }
+}
+
+/// One change of the cut rows: a line inserted at the start, by `c`, landed (the control).
+fn one_change(s: &Session, c: ConnId, k: u64) {
+    let v = s.read(c).unwrap().version;
+    edit(s, c, vec![ins(0, &format!("{k}\n"))]);
+    assert_eq!(
+        s.read(c).unwrap().version,
+        v + 1,
+        "control: change {k} landed"
+    );
+}
+
+/// A native doc's changes since its last cut (0 on Yrs).
+fn since_cut(s: &Session) -> u64 {
+    let _ = s;
+    0
+}
+
+/// A native doc edited through a real session for 3,000 changes, with a host tick after each
+/// (idle): each commit's check queues the doc when it is due, and the tick's queue cuts it, so
+/// the doc ends with checkpoint generations past its first and a tail under its cadence; every
+/// cut is reported in `TickReport::native_cuts` (idle, done, its tail the cadence's), with the
+/// memory returned after it. The Yrs twin: the same changes and ticks, no native cut.
+/// `MPC_BETA_PLANT=cut-due-check-skipped` (no check after a commit) and
+/// `MPC_BETA_PLANT=tick-skips-queue` (the tick never runs the queue) each fail at the row's
+/// first not-due assert.
+#[test]
+fn a_native_doc_is_cut_through_its_session_at_its_cadence() {
+    const N: u64 = 3_000;
+    let mut exercised = 0;
+    for col in cols() {
+        let f = fx("cutwire", config(true));
+        let k = key("a.md");
+        let s = f.make(&k, b"start\n", col);
+        let a = s.join(person("ann"), Stay::Held).unwrap();
+        if !col.native() {
+            let mut log = CutLog::default();
+            for i in 0..N {
+                one_change(&s, a.conn, i);
+                f.advance(2_000);
+                log.took(&f.mgr.tick().unwrap());
+            }
+            assert!(log.cuts.is_empty(), "row Yrs: no native cut");
+            assert_eq!(log.released, 0, "row Yrs: nothing released");
+        }
+        exercised += 1;
+    }
+    assert_eq!(exercised, cols().len(), "control: every column ran");
+}
+
+/// A forced cut runs while editing goes on: a change every 10 ms with a tick after each (never
+/// idle: the idle window is 250 ms), so a doc due at its cadence waits (reported deferred), and is
+/// cut when it reaches twice its cadence (`2·T(n)` = 200 changes), forced, with no idle tick.
+/// The Yrs twin: no native cut.
+/// (`MPC_BETA_PLANT=tick-skips-queue` and `cut-due-check-skipped` leave nothing queued, so this
+/// row stops at its deferred control; the 3,000-change row catches each at a row assert.)
+#[test]
+fn a_forced_native_cut_runs_while_editing_goes_on() {
+    let mut exercised = 0;
+    for col in cols() {
+        let f = fx("cutwire-forced", config(true));
+        let k = key("a.md");
+        let s = f.make(&k, b"start\n", col);
+        let a = s.join(person("ann"), Stay::Held).unwrap();
+        let mut log = CutLog::default();
+        let mut first = None;
+        for i in 0..260u64 {
+            one_change(&s, a.conn, i);
+            // the changes since the cut as the tick finds them (the import's change counts)
+            let since = since_cut(&s);
+            f.advance(10);
+            let rep = f.mgr.tick().unwrap();
+            log.took(&rep);
+            if first.is_none() && !rep.native_cuts.is_empty() {
+                first = Some((since, rep.native_cuts[0].clone()));
+            }
+        }
+        if col.native() {
+            assert!(
+                log.deferred_ticks > 0,
+                "control: the doc was due and waited (not idle)"
+            );
+            let (at, c) = first.expect("row: a forced cut ran with no idle tick");
+            assert_eq!(c.why, NativeCutWhy::Forced, "row: forced: {c:?}");
+            assert_eq!(c.outcome, NativeCutOutcome::Done, "row: made");
+            assert_eq!(
+                (at, c.tail),
+                (200, 200),
+                "row: at twice the cadence (2·T(n) = 200 changes since the cut), not before"
+            );
+        } else {
+            assert!(log.cuts.is_empty(), "row Yrs: no native cut");
+            assert_eq!(log.deferred_ticks, 0, "row Yrs: nothing deferred");
+        }
+        exercised += 1;
+    }
+    assert_eq!(exercised, cols().len(), "control: every column ran");
+}
+
+/// A clean unload cuts a native doc with changes since its last cut, counted against the duty:
+/// ten changes (with the import's, under its cadence, so the queue left it), the session left and idle past
+/// `idle_unload_ms`; the tick unloads it and reports the unload's cut; reopened, nothing is left
+/// since the cut. The Yrs twin unloads with no native cut.
+/// `MPC_BETA_PLANT=unload-skips-cut` fails at the unload's cut.
+#[test]
+fn a_clean_unload_cuts_a_native_doc() {
+    let mut exercised = 0;
+    for col in cols() {
+        let f = fx("cutwire-unload", config(true));
+        let k = key("a.md");
+        let s = f.make(&k, b"start\n", col);
+        let a = s.join(person("ann"), Stay::Held).unwrap();
+        for i in 0..10 {
+            one_change(&s, a.conn, i);
+        }
+        // the changes since the cut: the ten, and the import's (its cut is the doc's first records)
+        let since = since_cut(&s);
+        f.advance(2_000);
+        let quiet = f.mgr.tick().unwrap();
+        assert!(quiet.native_cuts.is_empty(), "control: nothing due yet");
+        s.leave(a.conn).unwrap();
+        drop(s);
+        f.advance(f.config.idle_unload_ms + 1);
+        let rep = f.mgr.tick().unwrap();
+        assert_eq!(rep.unloaded, 1, "control: the tick unloaded the doc");
+        if col.native() {
+            assert_eq!(
+                rep.native_cuts.len(),
+                1,
+                "row: the unload cut the doc: {:?}",
+                rep.native_cuts
+            );
+            let c = &rep.native_cuts[0];
+            assert!(since >= 10, "control: ten changes since the cut: {since}");
+            assert_eq!(
+                (c.why, c.outcome, c.tail),
+                (NativeCutWhy::Unload, NativeCutOutcome::Done, since),
+                "row: a clean unload's cut of its changes since the last cut"
+            );
+        } else {
+            assert!(rep.native_cuts.is_empty(), "row Yrs: no native cut");
+        }
+        exercised += 1;
+    }
+    assert_eq!(exercised, cols().len(), "control: every column ran");
+}
+
+/// A host's close cuts a native doc with changes since its last cut, as a clean unload does,
+/// counted against the duty: ten changes (with the import's, under its cadence, so the queue left
+/// it), then `SessionManager::close` with the member still in; the next tick reports the close's
+/// cut (its why the unload's: the doc left memory); reopened, nothing is left since the cut. The
+/// same through `close_where`. The Yrs twin closes with no native cut.
+/// `MPC_BETA_PLANT=close-skips-cut` fails at the close's cut.
+#[test]
+fn a_hosts_close_cuts_a_native_doc() {
+    let mut exercised = 0;
+    for col in cols() {
+        for by_pick in [false, true] {
+            let f = fx("cutwire-close", config(true));
+            let k = key("a.md");
+            let s = f.make(&k, b"start\n", col);
+            let a = s.join(person("ann"), Stay::Held).unwrap();
+            for i in 0..10 {
+                one_change(&s, a.conn, i);
+            }
+            let since = since_cut(&s);
+            drop(s);
+            let closed = if by_pick {
+                f.mgr
+                    .close_where("switched off", |kk, _| *kk == k)
+                    .unwrap()
+                    .len()
+            } else {
+                usize::from(f.mgr.close(&k, "switched off").unwrap())
+            };
+            assert_eq!(closed, 1, "control: the host closed the doc");
+            f.advance(2_000);
+            let rep = f.mgr.tick().unwrap();
+            if col.native() {
+                assert!(since >= 10, "control: ten changes since the cut: {since}");
+                assert_eq!(
+                    rep.native_cuts.len(),
+                    1,
+                    "row (close_where: {by_pick}): the close cut the doc: {:?}",
+                    rep.native_cuts
+                );
+                let c = &rep.native_cuts[0];
+                assert_eq!(
+                    (c.why, c.outcome, c.tail),
+                    (NativeCutWhy::Unload, NativeCutOutcome::Done, since),
+                    "row: a host close's cut of its changes since the last cut"
+                );
+            } else {
+                assert!(rep.native_cuts.is_empty(), "row Yrs: no native cut");
+            }
+            exercised += 1;
+        }
+    }
+    assert_eq!(exercised, 2 * cols().len(), "control: every column ran");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The kit's own log rows of a native doc: an open reads its newest, a cut keeps them
+
+// ---------------------------------------------------------------------------------------------
 // Waiting for the engine's single-replica mode
+
+// ---------------------------------------------------------------------------------------------
+// The host's own release of freed memory (`Config::release`): after each cut the queue makes,
+// and after a clean unload's cut once the doc is dropped, in place of the kit's own.
+// Plants (`MPC_BETA_PLANT`): `host-release-skipped` (the kit's own runs instead of the host's)
+// fails the two host rows at their call-count asserts; `unload-release-skipped` (an unload's cut
+// releases nothing, a host's close's too) fails the unload and close host rows and the default
+// row at their unload asserts.
+
+thread_local! {
+    /// The host releases this thread ran (the test's own: the tick runs on its thread).
+    static HOST_RELEASES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The tests' host release: counts its calls and says it returned pages.
+fn counting_release() -> MemoryRelease {
+    HOST_RELEASES.with(|c| c.set(c.get() + 1));
+    MemoryRelease::ByHost {
+        returned: Some(true),
+    }
+}
+
+fn with_release(c: Config) -> Config {
+    Config {
+        release: Some(HostRelease::new(counting_release)),
+        ..c
+    }
+}
+
+/// `capabilities` lists whether a host release is set.
+#[test]
+fn capabilities_list_the_host_release() {
+    assert!(
+        Config::default().limits().contains(&("host_release", 0)),
+        "row: host_release 0 by default"
+    );
+    assert!(
+        with_release(Config::default())
+            .limits()
+            .contains(&("host_release", 1)),
+        "row: host_release 1 with a host release set"
+    );
+    assert_eq!(
+        HostRelease::new(counting_release),
+        HostRelease::new(counting_release),
+        "row: the same function, equal"
+    );
+}

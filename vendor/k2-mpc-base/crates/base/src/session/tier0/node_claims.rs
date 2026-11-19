@@ -264,6 +264,85 @@ impl BlobSession {
             })
     }
 
+    /// The participants other than `pid` holding nodes now (expired claims end first), each
+    /// once, in order: whether an agent's whole-file write is read for holds
+    /// ([`super::BlobWriteOptions::policy`]).
+    pub(super) fn holders_besides(&self, st: &mut BState, pid: &str, now: u64) -> Vec<String> {
+        self.sweep_node_claims(st, now);
+        let mut out: Vec<String> = st
+            .node_claims
+            .iter()
+            .filter(|c| c.pid != pid)
+            .map(|c| c.pid.clone())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The first live claim by a participant other than `pid`, as the refusal it makes
+    /// ([`SessionError::NodesClaimed`]): for a whole-file write that found nobody holding a
+    /// node when it was admitted and can't tell what a hold taken since covers.
+    pub(super) fn any_node_claim_against(
+        &self,
+        st: &mut BState,
+        pid: &str,
+        now: u64,
+    ) -> Option<SessionError> {
+        self.sweep_node_claims(st, now);
+        st.node_claims.iter().find(|c| c.pid != pid).map(|c| {
+            SessionError::NodesClaimed(Box::new(NodesClaim {
+                id: c.id,
+                by: c.pid.clone(),
+                name: c.name.clone(),
+                keys: c.keys.iter().cloned().collect(),
+                remaining_ms: c.expires_ms.saturating_sub(now),
+                note: c.note.clone(),
+            }))
+        })
+    }
+
+    /// What an agent's whole-file write reaches into, for the claim check at its commit: the
+    /// new version `src` (`size` bytes) read with the file type's index, diffed with `t`'s
+    /// (the base, head), each changed node with its hold reach on both sides
+    /// ([`reach_of`]); and the draft, to seed the new version's index with. Off the session
+    /// lock. A version the index can't read within its limits is
+    /// [`SessionError::HoldUnindexable`] naming `holders`; head not indexed yet is
+    /// [`SessionError::IndexPending`].
+    pub(super) fn write_reach(
+        &self,
+        t: &super::struct_index::Target,
+        src: &mut dyn Read,
+        size: u64,
+        holders: &[String],
+    ) -> Result<(BTreeSet<NodeKey>, crate::index::IndexDraft)> {
+        let spec = self
+            .pack
+            .index_spec()
+            .ok_or(SessionError::IndexUnsupported)?;
+        let before = self.load_view(t, &spec)?;
+        let unindexable = |why: String| SessionError::HoldUnindexable {
+            why,
+            holders: holders.to_vec(),
+        };
+        let draft = self
+            .pack
+            .index(src, size, &super::struct_index::limits_of(&self.config))
+            .map_err(|e| unindexable(e.to_string()))?;
+        let after = self
+            .output_view(t, &spec, &draft, t.next)
+            .map_err(|e| match e {
+                SessionError::OutputUnreadable { why } => unindexable(why),
+                other => other,
+            })?;
+        let touched: BTreeSet<NodeKey> = crate::index::read::diff(&before, &after)
+            .iter()
+            .map(|c| c.key.clone())
+            .collect();
+        let reach = reach_of(&*self.pack, &[&before, &after], &touched, true);
+        Ok((reach, draft))
+    }
+
     /// The live node claims, as `conn` may see them (for the roster).
     pub(super) fn node_claims_of(st: &BState, pid: &str, now: u64) -> Vec<ClaimInfo> {
         st.node_claims

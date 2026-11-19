@@ -59,11 +59,11 @@ fn row(a: PersonAction) -> ParityRow {
         | P::FindReplace
         | P::Paste
         | P::Format
-        | P::Undo
         | P::Annotate
         | P::UndoPartial
-        | P::Mention
-        | P::Revert => ParityRow::not_applicable(a, &[], &[], "text docs only"),
+        | P::Mention => ParityRow::not_applicable(a, &[], &[], "text docs only"),
+        P::Undo => ParityRow::live(a, &["undo", "redo"]),
+        P::Revert => ParityRow::live(a, &["revert"]),
         // grid docs only
         P::RowInsert
         | P::RowMove
@@ -90,7 +90,10 @@ fn agent_parity_any_file() {
         .iter()
         .filter(|r| r.status == RowStatus::Live)
         .count();
-    assert_eq!(live, 17, "rows live (Export live since the exports work)");
+    assert_eq!(
+        live, 19,
+        "rows live (Export live since the exports work; Undo and Revert since tier 0's revert)"
+    );
     assert_eq!(report.not_applicable.len(), 0);
     assert_eq!(report.deferred.len(), 3);
     for r in rows().iter().filter(|r| r.status == RowStatus::Live) {
@@ -115,7 +118,7 @@ fn agent_parity_any_file() {
         .count();
     // the pending row four times: `log --pending` and its alias `approvals`, each also with `--all`
     assert_eq!(approvals, 7, "the approval rows' cases (approve, pending)");
-    assert_eq!(report.matched.len(), 35, "{:?}", report.matched);
+    assert_eq!(report.matched.len(), 38, "{:?}", report.matched);
 }
 
 /// A tier-0 list must have every blob action's row, not the text-only ones.

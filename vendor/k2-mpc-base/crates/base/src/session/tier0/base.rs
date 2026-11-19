@@ -56,7 +56,7 @@ fn node_level(c: &NodeChange) -> Option<NodeChangeKind> {
 /// The field two changes to one node share (`None`: they don't overlap). Either change being
 /// node-level overlaps (the field names it); text overlaps only text; props overlap when they
 /// share an entry.
-fn overlap(mine: &NodeChange, theirs: &NodeChange) -> Option<String> {
+pub(super) fn overlap(mine: &NodeChange, theirs: &NodeChange) -> Option<String> {
     if planted!(BaseNodeLevelOnly) {
         return Some(
             theirs
@@ -108,17 +108,7 @@ impl BlobSession {
             }
             .into());
         }
-        let vt = match self.index_target(Some(v)) {
-            Ok(vt) => vt,
-            Err(SessionError::Store(StoreError::NoVersion(..))) => {
-                return Err(SessionError::Stale {
-                    expected: v,
-                    actual: t.version,
-                }
-                .into())
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let vt = self.base_target(v, t)?;
         let view_v = self.load_view(&vt, spec)?;
         // the verb at V: what it would have changed on what the caller read
         let (d_v, touched) = if planted!(BaseHeadOnly) {
@@ -146,12 +136,44 @@ impl BlobSession {
                 }
             }
         };
+        let side = self.base_side_from(v, t, spec, head, view_v, d_v, touched)?;
+        Ok(BaseRun::Side(Box::new(side)))
+    }
+
+    /// Version `v` as the base of a call on head `t`: a version a lost group of grouped commits
+    /// may have had is expired (`MPC-E112`, `store/seq_floor.rs`; head itself never is: its
+    /// bytes are the version's), and a version the doc doesn't hold is stale (`MPC-E110`).
+    pub(super) fn base_target(&self, v: VersionId, t: &Target) -> Result<Target> {
+        if v != t.version && t.store.lost_blob_version(self.doc_id, v)? {
+            return Err(SessionError::BaseExpired { base: v });
+        }
+        match self.index_target(Some(v)) {
+            Ok(vt) => Ok(vt),
+            Err(SessionError::Store(StoreError::NoVersion(..))) => Err(SessionError::Stale {
+                expected: v,
+                actual: t.version,
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The base side once the change at `v` is known (`d_v`, and the keys the call declared
+    /// there, `touched`): the outside saves in `(v, head]` (each must be
+    /// [`SavePairing::Proven`]: else `MPC-E719`), and what changed between `v` and head.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn base_side_from(
+        &self,
+        v: VersionId,
+        t: &Target,
+        spec: &IndexSpec,
+        head: &IndexView,
+        view_v: IndexView,
+        d_v: Vec<NodeChange>,
+        touched: Vec<String>,
+    ) -> Result<BaseSide> {
         // the outside saves since V: only a writer the pack proves keeps keys may lie between
         if !planted!(PairingAssumed) {
-            let versions = t
-                .store
-                .blob_versions(self.doc_id)
-                .map_err(SessionError::from)?;
+            let versions = t.store.blob_versions(self.doc_id)?;
             let crossings = self.crossings(spec, &t.store, &t.space, &versions, v, t.version)?;
             if let Some(c) = crossings
                 .iter()
@@ -167,8 +189,7 @@ impl BlobSession {
                     base: v,
                     head: t.version,
                     addresses,
-                }
-                .into());
+                });
             }
         }
         // what changed between V and head (the planted fault: V read for head)
@@ -177,12 +198,12 @@ impl BlobSession {
         } else {
             iread::diff(&view_v, head)
         };
-        Ok(BaseRun::Side(Box::new(BaseSide {
+        Ok(BaseSide {
             v,
             d_v,
             view_v,
             moved,
-        })))
+        })
     }
 
     /// The per-node check of a `--base` call: each node the verb changes at V or at head
@@ -263,7 +284,7 @@ impl BlobSession {
 
     /// For each conflicting node, the newest version in `(v, head]` that changed it, and its
     /// author (head's when no stored index shows it).
-    fn who_changed(
+    pub(super) fn who_changed(
         &self,
         v: VersionId,
         t: &Target,
@@ -281,6 +302,7 @@ impl BlobSession {
                 space: t.space.clone(),
                 version: *vid,
                 ver: ver.clone(),
+                next: *vid + 1,
             };
             views.push((*vid, ver, self.load_view(&target, spec).ok()));
         }

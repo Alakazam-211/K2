@@ -392,6 +392,37 @@ pub enum SessionError {
     /// `MPC-E727`, exit 2.
     #[error("the file type's index refuses the verb's output")]
     OutputUnreadable { why: String },
+    /// An agent's whole-file write under [`super::ClaimPolicy::Respect`], while others hold
+    /// nodes, that the file type's index couldn't read within its limits (`why`): the kit can't
+    /// tell which nodes it changes. `holders`: the participants holding nodes now. Nothing was
+    /// written. `MPC-E306`, exit 5.
+    #[error("the write can't be checked against the holds on this doc ({why})")]
+    HoldUnindexable { why: String, holders: Vec<String> },
+    /// A tier-0 revert of version `version` the file type can't make: it has no merge, or its
+    /// merge can't take these bytes (`why`). Nothing was written.
+    /// `MPC-E730`, exit 2: `restore` the version before it instead, which also replaces what
+    /// changed since.
+    #[error(
+        "version {version} can't be reverted alone: {why} (version {} is the one before it)",
+        .version.saturating_sub(1)
+    )]
+    RevertUnsupported {
+        version: crate::store::VersionId,
+        why: String,
+    },
+    /// A tier-0 revert of version `version` whose nodes were changed since in a way that
+    /// overlaps (`conflicts`, each with who changed it and in which version), or that the file
+    /// type's merge refuses. Nothing was written. `MPC-E731`, exit 1.
+    #[error(
+        "version {version}'s change to {} was changed since (head {head}); nothing reverted",
+        .addresses.join(" ")
+    )]
+    RevertConflict {
+        version: crate::store::VersionId,
+        head: crate::store::VersionId,
+        addresses: Vec<String>,
+        conflicts: Vec<BaseConflict>,
+    },
     /// A verb's call is over a bound (`what`: the version a whole-file verb reads, the spans of
     /// its plan...), named with the limit. Nothing was written. `MPC-E728`, exit 2.
     #[error("{what} is {size}, over the limit of {limit}")]

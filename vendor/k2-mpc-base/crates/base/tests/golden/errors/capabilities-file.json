@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -1059,6 +1059,12 @@
       "status": "live"
     },
     {
+      "id": "MPC-E183",
+      "name": "native_equivocation",
+      "exit": 2,
+      "status": "live"
+    },
+    {
       "id": "MPC-E201",
       "name": "undo_conflict",
       "exit": 1,
@@ -1134,6 +1140,12 @@
       "id": "MPC-E305",
       "name": "watching",
       "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E306",
+      "name": "hold_unindexable",
+      "exit": 5,
       "status": "live"
     },
     {
@@ -1383,6 +1395,12 @@
       "status": "live"
     },
     {
+      "id": "MPC-E526",
+      "name": "store_recovering",
+      "exit": 1,
+      "status": "live"
+    },
+    {
       "id": "MPC-E601",
       "name": "purge_current_version",
       "exit": 2,
@@ -1571,6 +1589,18 @@
     {
       "id": "MPC-E729",
       "name": "not_as_previewed",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E730",
+      "name": "revert_unsupported",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E731",
+      "name": "revert_conflict",
       "exit": 1,
       "status": "live"
     },

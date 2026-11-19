@@ -742,6 +742,33 @@ impl BlobAgent<'_> {
                 s.name_version(c, vid, &name)?;
                 v(VerbValue::Version(vid))
             }
+            // tier 0's revert, undo and redo: `BlobSession::run_revert`
+            "undo" | "redo" | "revert" => {
+                let what = match form {
+                    "undo" => crate::session::RevertWhat::Undo,
+                    "redo" => crate::session::RevertWhat::Redo,
+                    _ => match args.iter().find(|a| !a.starts_with('-')) {
+                        Some(k) => crate::session::RevertWhat::Version(num(k)?),
+                        None => return Ok(usage("revert <version>")),
+                    },
+                };
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(match form {
+                    "undo" => Api::UndoWith,
+                    "redo" => Api::RedoWith,
+                    _ => Api::Revert,
+                });
+                match s.run_revert(c, what, &[], &tools::ToolOptions::default()) {
+                    Ok(out) => {
+                        let exit = out.exit;
+                        Ok(Bound::Value(VerbValue::Tool(out), exit))
+                    }
+                    Err(tools::ToolRunError::Session(e)) => Err(BindError::Session(e)),
+                    Err(tools::ToolRunError::Tool(e)) => {
+                        Ok(Bound::Refused(e.to_string(), e.exit()))
+                    }
+                }
+            }
             "mv" => {
                 let Some(to) = args.iter().find(|a| !a.starts_with('-')).cloned() else {
                     return Ok(usage("mv <new path>"));

@@ -66,7 +66,7 @@ pub(super) fn put_version(
     w.open_table(BLOB_VERSIONS)?
         .insert((id, vid), enc_version(v).as_slice())?;
     super::turns::put_in(w, super::turns::BLOB_TURNS, id, vid, v.turn.as_ref())?;
-    super::verbs::put_blob_in(w, id, vid, v.verb.as_deref(), &v.calls)?;
+    super::verbs::put_blob_in(w, id, vid, v.verb.as_deref(), &v.calls, v.revert)?;
     if let Some(p) = &v.on_behalf_of {
         w.open_table(BLOB_APPROVALS)?.insert(
             (id, vid),
@@ -253,6 +253,47 @@ pub struct BlobVersion {
     pub verb: Option<String>,
     /// A batch's calls, each by its verb name, in order; empty for any other version.
     pub calls: Vec<String>,
+    /// A revert's version and step (`revert`, `undo`, `redo`; the `blob_verbs` table's record
+    /// version 2): `None` for every other version.
+    pub revert: Option<Revert>,
+}
+
+/// What a revert version took away ([`BlobVersion::revert`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Revert {
+    /// The version whose change it took away.
+    pub version: VersionId,
+    pub step: RevertStep,
+}
+
+impl Revert {
+    pub fn new(version: VersionId, step: RevertStep) -> Self {
+        Revert { version, step }
+    }
+}
+
+/// How a revert was asked for ([`Revert::step`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RevertStep {
+    /// `revert <version>`.
+    Revert,
+    /// The caller's own undo.
+    Undo,
+    /// The caller's own redo (a revert of their undo).
+    Redo,
+}
+
+impl RevertStep {
+    /// The verb recorded for it: `revert`, `undo` or `redo`.
+    pub fn verb(self) -> &'static str {
+        match self {
+            RevertStep::Revert => "revert",
+            RevertStep::Undo => "undo",
+            RevertStep::Redo => "redo",
+        }
+    }
 }
 
 impl BlobVersion {
@@ -283,6 +324,7 @@ impl BlobVersion {
             turn: None,
             verb: None,
             calls: Vec::new(),
+            revert: None,
         }
     }
 }
@@ -312,9 +354,10 @@ fn with_turn(
     mut v: BlobVersion,
 ) -> Result<BlobVersion, StoreError> {
     v.turn = turns::get(tt, id, vid)?;
-    if let Some((verb, calls)) = super::verbs::get_blob(vt, id, vid)? {
+    if let Some((verb, calls, revert)) = super::verbs::get_blob(vt, id, vid)? {
         v.verb = Some(verb);
         v.calls = calls;
+        v.revert = revert;
     }
     Ok(v)
 }
@@ -361,6 +404,7 @@ pub(super) fn dec_version(b: &[u8]) -> Result<BlobVersion, StoreError> {
         turn: None,
         verb: None,
         calls: Vec::new(),
+        revert: None,
     };
     r.end()?;
     Ok(v)
@@ -501,6 +545,50 @@ pub(super) fn last_vid(w: &WriteTransaction, id: DocId) -> Result<VersionId, Sto
 }
 
 impl DocStore {
+    /// The id before the first version a commit appends to blob doc `id` in `w`, whose last
+    /// version is `last`: `last`, or past the doc's lost versions (`seq_floor.rs`, the blob
+    /// space; the plant ignores them). Read only in a store that lost some.
+    pub(super) fn blob_before_next_in(
+        &self,
+        w: &WriteTransaction,
+        id: DocId,
+        last: VersionId,
+    ) -> Result<VersionId, StoreError> {
+        if !self.commit_count.lost_known() || crate::beta_plant::planted("blob-floor-ignored") {
+            return Ok(last);
+        }
+        let meta = w.open_table(META)?;
+        let lost = super::seq_floor::lost_through(&meta, super::seq_floor::Space::Blob, id)?;
+        Ok(last.max(lost))
+    }
+
+    /// Grouped commits: before a version at or past blob doc `id`'s blob floor is issued (the
+    /// commit's last version `last`), the floor raised past it, and the commit waits for the
+    /// disk (`seq_floor.rs`, as a text commit's `append_in`). Nothing at
+    /// [`super::CommitDurability::Immediate`]. `barrier`: the commit is a barrier, durable by
+    /// itself (a demotion's), so the floor rides it and nothing more is asked of it: the
+    /// barrier alone makes the commit durable, and its row checks exactly that.
+    pub(super) fn raise_blob_floor_in(
+        &self,
+        w: &WriteTransaction,
+        id: DocId,
+        last: VersionId,
+        barrier: bool,
+    ) -> Result<(), StoreError> {
+        use super::seq_floor::{floor_in, set_floor_in, Space};
+        if let super::CommitDurability::Grouped { max_changes, .. } =
+            self.settings.commit_durability()
+        {
+            if last >= floor_in(w, Space::Blob, id)? {
+                set_floor_in(w, Space::Blob, id, last + u64::from(max_changes) + 1)?;
+                if !barrier {
+                    self.commit_count.raise_floor();
+                }
+            }
+        }
+        Ok(())
+    }
+
     // ----- blob index (crate-private: the blob store keeps files and rows consistent) -----
 
     pub(crate) fn blob_space(&self, space: &str) -> Result<Option<SpaceKey>, StoreError> {
@@ -849,10 +937,12 @@ impl DocStore {
     ) -> Result<Vec<VersionId>, StoreError> {
         chunk_hook_before(!chunked.is_empty());
         let w = self.begin_write()?;
-        let mut last = last_vid(&w, id)?;
+        let last = last_vid(&w, id)?;
         if last != expect_last {
             return Err(StoreError::LogMoved(id, expect_last, last));
         }
+        // the versions take the ids after the last one, past the lost ones (`seq_floor.rs`)
+        let mut last = self.blob_before_next_in(&w, id, last)?;
         let k = space_in(&w, space)?;
         for c in chunked {
             if c.doc != id {
@@ -870,6 +960,9 @@ impl DocStore {
             vids.push(last);
             // the version and the reference it takes
             chunk_work!(rows_written, 2, if !chunked.is_empty());
+        }
+        if !vids.is_empty() {
+            self.raise_blob_floor_in(&w, id, last, false)?;
         }
         if let Some(s) = sync {
             let mut t = w.open_table(BLOB_SYNC)?;
@@ -1292,7 +1385,8 @@ impl DocStore {
     /// Record a write-back about to happen (before the rename), so a crash right after it
     /// is recognised on the next open as the kit's own write, not an outside edit.
     pub(crate) fn set_blob_pending(&self, id: DocId, s: &BlobSync) -> Result<(), StoreError> {
-        let w = self.begin_write()?;
+        // a barrier, as a text doc's write-back (grouped commits, `group.rs`)
+        let w = self.begin_barrier("blob-write-back")?;
         w.open_table(BLOB_SYNC)?
             .insert((id, PENDING), enc_sync(s).as_slice())?;
         w.commit()?;

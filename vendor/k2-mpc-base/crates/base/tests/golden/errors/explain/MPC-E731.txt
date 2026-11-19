@@ -1,0 +1,21 @@
+MPC-E731 revert_conflict (tier 0 and blobs)
+exit:     1
+message:  version {version}'s change to {addresses} was changed since (head {head}); nothing reverted
+next:     Someone changed what that version changed after it, in a way that overlaps: each is in details.conflicts with the field, who changed it and in which version (empty when the file type's merge found the overlap). Nothing was written. Read them at head and change them back yourself, or ask whoever changed them.
+rule:     tier-0 revert, undo and redo: changed since
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E731",
+  "name": "revert_conflict",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "version {version}'s change to {addresses} was changed since (head {head}); nothing reverted",
+  "next": "Someone changed what that version changed after it, in a way that overlaps: each is in details.conflicts with the field, who changed it and in which version (empty when the file type's merge found the overlap). Nothing was written. Read them at head and change them back yourself, or ask whoever changed them.",
+  "rule": "tier-0 revert, undo and redo: changed since",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

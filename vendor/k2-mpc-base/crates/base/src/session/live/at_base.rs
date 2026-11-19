@@ -138,6 +138,19 @@ impl Session {
         if base > st.version {
             return Err(expired(base, "a version this doc hasn't reached"));
         }
+        // grouped commits: a version a group the store lost had (`store/seq_floor.rs`)
+        let lost = match self.store(st) {
+            Ok(s) if base < st.version => s
+                .lost_seq(self.doc_id, base)
+                .map_err(|e| SessionError::from(e).report())?,
+            _ => false,
+        };
+        if lost {
+            return Err(expired(
+                base,
+                "a version lost when the store reopened at its durable state: read again",
+            ));
+        }
         // a structured doc's changes are ops by key, not text hunks: the window (read from
         // the records' text roots) can't replay them, so a client reloads (an empty
         // window there would read as "nothing happened")
@@ -397,6 +410,7 @@ impl Session {
             return Ok(EditAtBase {
                 result: EditResult {
                     version: st.version,
+                    durable: self.durable_now(st),
                     ..EditResult::default()
                 },
                 hunks: Vec::new(),

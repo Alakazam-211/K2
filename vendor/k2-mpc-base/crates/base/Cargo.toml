@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.22.0"
+version = "0.23.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -61,6 +61,10 @@ proptest = "1"
 rand = { version = "0.8", features = ["small_rng"] }
 # Tests stand in for remote clients with raw Yrs docs (Yjs wire-compatible): the same copy.
 yrs = { path = "../../vendor/yrs", version = "=0.28.0" }
+# Test builds only: the store library counts its cache's evictions (`cache_metrics`), which the
+# store's cache rows read to see the size the kit set (`store/cache_tests.rs`). A
+# dev-dependency's features reach only test builds (resolver 2): never a host's build.
+redb = { version = "2", features = ["cache_metrics"] }
 
 # the workspace's (the root Cargo.toml: the acknowledgement cfg)
 [lints]

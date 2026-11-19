@@ -9,16 +9,74 @@
 //!   the top of the heap) to the OS.
 //! - **Other platforms:** nothing yet. macOS's and Windows' allocators return memory on their
 //!   own schedule; an explicit call is added only where a measurement shows it helps.
+//!
+//! **A host's own release.** A host built with another allocator (mimalloc, say, whose free
+//! pages `malloc_trim` doesn't reach) gives the kit its allocator's call instead:
+//! [`crate::session::Config::release`], a [`HostRelease`]. The kit then calls it, and not its
+//! own, at the same points: after each cut the cut queue makes, and after a clean unload's cut
+//! once the unloaded doc is dropped. The kit never links an allocator itself.
 
-/// What [`release_freed`] did. (Each platform builds one variant; the cut queue reads it.)
+/// What the kit's request to return freed memory to the OS did, after a native cut
+/// (`TickReport::memory_released`). Each platform builds one variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) enum Release {
+#[non_exhaustive]
+pub enum Release {
     /// The allocator was asked to return its free pages; `returned`: whether it said it
     /// returned any.
     Trimmed { returned: bool },
     /// This platform's allocator has no call the kit makes.
     NotOnThisPlatform,
+    /// The host's own release ran ([`HostRelease`]); `returned`: whether its allocator said it
+    /// returned pages, when it says (`None` when it doesn't).
+    ByHost { returned: Option<bool> },
+}
+
+/// A host's own call that returns its allocator's free pages to the OS
+/// ([`crate::session::Config::release`]): a plain function, so the kit holds no state of the
+/// host's. Two are equal when they are the same function.
+#[derive(Clone, Copy)]
+pub struct HostRelease(fn() -> Release);
+
+impl HostRelease {
+    /// The host's release `f`; it returns what it did (usually [`Release::ByHost`]).
+    pub const fn new(f: fn() -> Release) -> Self {
+        HostRelease(f)
+    }
+
+    /// Run it.
+    // a build without the native engine (the public cut's) makes no cut, so calls none
+    #[allow(dead_code)]
+    pub(crate) fn call(&self) -> Release {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for HostRelease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HostRelease(set)")
+    }
+}
+
+impl PartialEq for HostRelease {
+    fn eq(&self, other: &Self) -> bool {
+        // the same function (by its address: the kit's minimum Rust has no `ptr::fn_addr_eq`)
+        self.0 as usize == other.0 as usize
+    }
+}
+
+impl Eq for HostRelease {}
+
+/// Return freed memory to the OS with the host's release when it set one, else the kit's own
+/// ([`release_freed`]).
+// a build without the native engine (the public cut's) makes no cut, so calls none
+#[allow(dead_code)]
+pub(crate) fn release_with(host: Option<&HostRelease>) -> Release {
+    match host {
+        // the plant: the host's release is never called (the kit's own runs instead)
+        Some(h) if !crate::beta_plant::planted("host-release-skipped") => h.call(),
+        _ => release_freed(),
+    }
 }
 
 /// Ask the allocator to return its free pages to the OS (module docs).

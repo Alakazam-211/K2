@@ -279,7 +279,11 @@ fn scenario() -> Table {
     let a = f.join("agent", ParticipantKind::Agent);
     let v1 = t.call(
         "Session::edit",
-        &[(Path::Commit, ONE), (Path::StoreTxnCommit, ONE)],
+        &[
+            (Path::Commit, ONE),
+            (Path::CommitStore, ONE),
+            (Path::StoreTxnCommit, ONE),
+        ],
         || append(&f, p, "pat's line\n"),
     );
     t.call("Doc::from_store", &[(Path::LoadDoc, ONE)], || {

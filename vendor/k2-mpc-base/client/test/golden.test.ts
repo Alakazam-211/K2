@@ -303,7 +303,7 @@ function checkRoster(e: RosterEvent) {
       expect(RIGHTS).toContain(e.rights);
       return;
     case "left":
-      expect(["left", "idle", "kicked", "rights_lost"]).toContain(e.reason);
+      expect(["left", "idle", "kicked", "rights_lost", "rolled_back"]).toContain(e.reason);
       return;
     case "rights":
       expect(RIGHTS).toContain(e.rights);

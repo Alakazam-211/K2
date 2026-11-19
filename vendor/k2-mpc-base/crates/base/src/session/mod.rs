@@ -69,6 +69,8 @@ mod carrier_judge;
 /// The keyed watch ([`KEYED_WATCH_FEATURE`]) is additive within version 3 the same way.
 pub const WIRE_VERSION: u32 = 3;
 
+pub use crate::memory::HostRelease;
+pub use crate::memory::Release as MemoryRelease;
 pub use crate::store::{Approval, ApprovalState};
 pub use crate::store::{ChangeInfo, ChangeKind, VersionInfo};
 pub use crate::turn::Turn;
@@ -80,9 +82,9 @@ pub use awareness::{
     OVERWRITE_PENDING_MAX, OVERWRITE_TEXT_MAX, OVERWRITE_VALUE_MAX,
 };
 pub use config::{
-    CadenceError, Config, CutCadence, CutQueueError, CutQueueSettings, KeyedLimit, LimitSource,
-    DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE, DEFAULT_BLAME_CHECK_LARGE_AT,
-    WRITERS_NOTICE_MAX,
+    CadenceError, Config, CutCadence, CutDue, CutQueueError, CutQueueSettings, KeyedLimit,
+    LimitSource, BATCH_CALLS_CEILING, DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE,
+    DEFAULT_BLAME_CHECK_LARGE_AT, WRITERS_NOTICE_MAX,
 };
 pub use disk::{file_identity, is_write_temp, DiskCheck, DiskState, FileIdentity, FlushOutcome};
 pub use error::{BaseConflict, DroppedBy, EditWithError, ElemsClaim, NodesClaim, SessionError};
@@ -108,7 +110,10 @@ pub use live::{
     DEVICE_KEY_MAX,
 };
 pub(crate) use live::{Shown, VerbRefused};
-pub use manager::{DocEngine, OpenOptions, PoolStats, SessionManager, TickReport};
+pub use manager::{
+    DocEngine, NativeCut, NativeCutOutcome, NativeCutWhy, OpenOptions, PoolStats, SessionManager,
+    TickReport,
+};
 pub use opened::{Opened, OpenedAt, OpenedVia};
 pub use pack::{
     default_reconcile, elem_of_map_key, list_pairing, Declined, Pack, PackContent, PackError,
@@ -124,13 +129,14 @@ pub use participant::{
 pub use position::{At, Cursor, LineCol, LineRange};
 pub use roster::{ClaimActor, RosterEvent, RosterMember, Who};
 pub use tier0::{
-    conflict_copy_name, AgentWrites, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry,
-    BlobLogKind, BlobMerge, BlobPack, BlobPlan, BlobRead, BlobSession, BlobStatus, BlobVerb,
-    BlobVerbCtx, BlobVerbFn, BlobVerbKind, BlobVerbOut, BlobVerbRefused, BlobWriteOptions,
-    BlobWriteResult, ConflictCopy, HoldReach, IndexInput, IndexJob, LeaseInfo, Lineage, MergeBound,
-    NotRecorded, Promoted, Promotion, SaveBase, SaveFacts, SaveMerge, SavePairing, SaveTicket,
-    Span, VerbInput, VerbMerge, INDEX_ADDRS_MAX, LINEAGE_VERSIONS_READ, MERGE_PID, NODE_CLAIM_ROOT,
-    REGION_MAX_BYTES, SAVE_TICKETS_KEPT,
+    conflict_copy_name, AgentWrites, AnyFile, BatchCall, BlobApproval, BlobAuthor, BlobBlame,
+    BlobLogEntry, BlobLogKind, BlobMerge, BlobPack, BlobPlan, BlobRead, BlobSession, BlobStatus,
+    BlobVerb, BlobVerbCtx, BlobVerbFn, BlobVerbKind, BlobVerbOut, BlobVerbRefused,
+    BlobWriteOptions, BlobWriteResult, ConflictCopy, HoldReach, IndexInput, IndexJob, LeaseInfo,
+    Lineage, MergeBound, NotRecorded, Promoted, Promotion, RevertWhat, SaveBase, SaveFacts,
+    SaveMerge, SavePairing, SaveTicket, Span, VerbInput, VerbMerge, BASE_REPLANS_MAX,
+    INDEX_ADDRS_MAX, LINEAGE_VERSIONS_READ, MERGE_PID, NODE_CLAIM_ROOT, REGION_MAX_BYTES,
+    SAVE_TICKETS_KEPT,
 };
 pub use undo::{ConflictKind, ConflictRegion};
 pub use view::View;
@@ -143,6 +149,8 @@ mod cut_queue_tests;
 mod disk_crash_tests;
 #[cfg(test)]
 mod engine_check_tests;
+#[cfg(test)]
+mod grouped_commit_tests;
 #[cfg(test)]
 mod manager_tests;
 #[cfg(test)]

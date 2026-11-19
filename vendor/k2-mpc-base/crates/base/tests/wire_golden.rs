@@ -214,6 +214,8 @@ fn reason(r: LeaveReason) -> &'static str {
         LeaveReason::Idle => "idle",
         LeaveReason::Kicked => "kicked",
         LeaveReason::RightsLost => "rights_lost",
+        LeaveReason::RolledBack => "rolled_back",
+        other => unreachable!("a leave reason the wire doesn't name: {other:?}"),
     }
 }
 

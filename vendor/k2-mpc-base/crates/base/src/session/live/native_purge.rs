@@ -3,7 +3,7 @@
 //! content (it is re-encoded with garbage collection on); a native doc's records keep it, for
 //! history, until a purge erases it. So a purge of a native doc, whatever its scope, has the
 //! engine erase **every deleted element** of the doc's text, everywhere its records hold it
-//! (`MpceDoc::purge_deleted`), leaving its live text as it is, as on Yrs:
+//! (the native engine purges deleted records), leaving its live text as it is, as on Yrs:
 //!
 //! - the engine's purge is one change: the session logs it as a change of no text by the
 //!   purging owner (a log row naming its position, and a change row with an empty record);

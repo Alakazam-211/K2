@@ -201,6 +201,40 @@ impl Refusal for SessionError {
                             .collect(),
                     ),
                 ),
+            S::RevertConflict {
+                version,
+                head,
+                addresses,
+                conflicts,
+            } => rep(&r::REVERT_CONFLICT, msg)
+                .with("version", *version)
+                .with("head", *head)
+                .with(
+                    "addresses",
+                    Value::list(addresses.iter().map(String::as_str)),
+                )
+                .with(
+                    "conflicts",
+                    Value::List(
+                        conflicts
+                            .iter()
+                            .map(|c| {
+                                Value::obj([
+                                    ("address", Value::from(c.address.as_str())),
+                                    ("root", Value::from("index")),
+                                    ("key", Value::from(c.key.as_str())),
+                                    ("field", Value::from(c.field.as_str())),
+                                    ("by", Value::from(c.by.as_str())),
+                                    ("change", Value::from(c.change)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            S::RevertUnsupported { version, why } => rep(&r::REVERT_UNSUPPORTED, msg)
+                .with("version", *version)
+                .with("before", version.saturating_sub(1))
+                .with("why", why),
             S::BaseWeakKey { head, keys } => rep(&r::BASE_WEAK_KEY, msg)
                 .with("head", *head)
                 .with("keys", Value::list(keys.iter().map(String::as_str))),
@@ -210,6 +244,12 @@ impl Refusal for SessionError {
                 Value::List(keys.iter().map(|k| Value::from(k.as_str())).collect()),
             ),
             S::OutputUnreadable { why } => rep(&r::OUTPUT_UNREADABLE, msg).with("why", why),
+            S::HoldUnindexable { why, holders } => {
+                rep(&r::HOLD_UNINDEXABLE, msg).with("why", why).with(
+                    "holders",
+                    Value::List(holders.iter().map(|h| Value::from(h.as_str())).collect()),
+                )
+            }
             S::VerbTooLarge { what, size, limit } => rep(&r::VERB_TOO_LARGE, msg)
                 .with("what", *what)
                 .with("size", *size)
@@ -509,6 +549,7 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
             .with("doc", *d)
             .with("version", *v),
         S::Locked => rep(&r::STORE_LOCKED, msg),
+        S::Recovering => rep(&r::STORE_RECOVERING, msg),
         S::NamedVersion(d, v) => rep(&r::NAMED_VERSION, msg)
             .with("doc", *d)
             .with("version", *v),
@@ -609,6 +650,9 @@ fn doc(e: &DocError, msg: String) -> ErrorReport {
         D::NeedsStateTransfer => rep(&r::NEEDS_STATE_TRANSFER, msg),
         D::NativeOneReplica => rep(&r::NATIVE_ONE_REPLICA, msg),
         D::NativeNoYjs => rep(&r::NATIVE_NO_YJS, msg),
+        D::NativeEquivocation { agent, seq } => rep(&r::NATIVE_EQUIVOCATION, msg)
+            .with("agent", *agent)
+            .with("seq", *seq),
     }
 }
 

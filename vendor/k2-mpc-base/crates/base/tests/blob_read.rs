@@ -1312,6 +1312,8 @@ fn rows() -> Vec<ParityRow> {
                 P::Lease => ParityRow::live(a, &["lease", "lease --renew"]),
                 P::ReleaseLease => ParityRow::live(a, &["lease --release"]),
                 P::BreakLease => ParityRow::live(a, &["lease --break"]),
+                P::Undo => ParityRow::live(a, &["undo", "redo"]),
+                P::Revert => ParityRow::live(a, &["revert"]),
                 other => panic!("{other:?}: no row"),
             })
         })

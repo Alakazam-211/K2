@@ -30,6 +30,7 @@ k2-mpc-base|test|claim_gone_outside||base-a2
 k2-mpc-base|test|claim_marks||base-a2
 k2-mpc-base|test|client_reuse||base-a2
 k2-mpc-base|test|client_vectors||base-a2
+k2-mpc-base|test|commit_cost||base-a2
 k2-mpc-base|test|contract_presence||base-a2
 k2-mpc-base|test|contract_turn||base-a2
 k2-mpc-base|test|contract_verbs||base-a2
@@ -111,6 +112,9 @@ k2-mpc-base|test|table||base-a2
 k2-mpc-base|test|tier0||base-a2,base-b
 k2-mpc-base|test|tier0_large||base-a2,base-b
 k2-mpc-base|test|tier0_base||base-a2,base-b,plants
+k2-mpc-base|test|tier0_batch||base-a2,base-b,plants
+k2-mpc-base|test|tier0_revert||base-a2,base-b,plants
+k2-mpc-base|test|tier0_holds_write||base-a2,base-b,plants
 k2-mpc-base|test|tier0_outside||base-a2,base-b,plants
 k2-mpc-base|test|tier0_verbs||base-a2,base-b,plants
 k2-mpc-base|test|timers||base-a2

@@ -171,6 +171,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E180` | `opened_version_unknown` | 4 | outside saves: the version the app opened | `(host)` | live |
 | `MPC-E181` | `opened_version_gone` | 8 | outside saves: the version the app opened | `(host)` | live |
 | `MPC-E182` | `opened_no_file` | 2 | outside saves: the version the app opened | `(host)` | live |
+| `MPC-E183` | `native_equivocation` | 2 | the native engine (a Beta): one line per writer | `(sync)` | live |
 
 ### MPC-E101 `forbidden_read`
 
@@ -669,6 +670,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Exit:** 2
 - **Reached by:** a host's note_opened call (tests/opened.rs)
 
+### MPC-E183 `native_equivocation`
+
+- **Message:** `this update reuses writer {agent}'s change {seq} with other content`
+- **Next:** Nothing was applied: a change this copy already holds came again with other content, so the copy that sent it continued that writer from an older point (a store restored or copied without rotating its writers). Drop the update, keep this copy as it is, and resync the sender from the host's store; don't retry the same bytes.
+- **Rule:** the native engine (a Beta): one line per writer
+- **Exit:** 2
+- **Reached by:** a native update re-emitting a known change with other content (feature native)
+
 ## 2xx: history and undo
 
 | Id | Name | Exit | Rule | Verbs | Status |
@@ -755,6 +764,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E303` | `claim_contended` | 2 | claims | `claim --renew` | live |
 | `MPC-E304` | `bad_claim` | 2 | claims | `claim`, `claim --renew`, `claim --release` | live |
 | `MPC-E305` | `watching` | 3 | the participant cap (participants_max) | `@change` | live |
+| `MPC-E306` | `hold_unindexable` | 5 | claims on nodes: an agent's whole-file write | `write`, `(host)` | live |
 | `MPC-E310` | `selection_too_large` | 2 | K-PRES-6 | `select` | live |
 | `MPC-E320` | `no_annotation` | 4 | K-ANN-1 | `reply`, `resolve`, `resolve --reopen`, `comment --delete`, `reanchor`, `comments --log` | live |
 | `MPC-E321` | `bad_annotation` | 2 | K-ANN-1, K-ANN-6 | `comment`, `reply`, `reanchor`, `comments` | live |
@@ -798,6 +808,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next step:** `cat`. The doc has all the participants it allows, so you joined as a watcher; read it until the host lets you in, and don't retry in a loop.
 - **Rule:** the participant cap (participants_max)
 - **Exit:** 3
+
+### MPC-E306 `hold_unindexable`
+
+- **Message:** `the write can't be checked against the holds on this doc ({why}); nothing applied`
+- **Next:** Others hold nodes in this doc (details.holders), and the file type's index couldn't read your new version within its limits (details.why), so the kit can't tell which nodes it changes. Nothing was applied. Make the change through the file type's verbs, which are checked node by node, or ask the holders to release their holds and write again.
+- **Next step:** `activity`. Others hold nodes in this doc and your write couldn't be checked against them; make the change through the file type's verbs, or ask the holders to release.
+- **Rule:** claims on nodes: an agent's whole-file write
+- **Exit:** 5
 
 ### MPC-E310 `selection_too_large`
 
@@ -966,6 +984,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E523` | `purge_doc_open` | 6 | no purge of an open doc | `purge` | live |
 | `MPC-E524` | `cut_pending_records` | 6 | a cut after the commit | `(host)` | live |
 | `MPC-E525` | `cut_doc_open` | 6 | no cut of an open doc | `(host)` | live |
+| `MPC-E526` | `store_recovering` | 1 | grouped commits | `*` | live |
 
 ### MPC-E501 `store_failed`
 
@@ -1166,6 +1185,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Exit:** 6
 - **Reached by:** a cut of a native doc another live instance holds open
 
+### MPC-E526 `store_recovering`
+
+- **Message:** `the store is recovering after a commit failed at the disk; retry`
+- **Next:** The store groups its commits, and one failed at the disk, so the changes not yet on disk are gone from it. Until the host reopens the store at its durable state and reloads every live doc from it, nothing of the store is read or written, so no one acts on changes that are about to be dropped. Nothing was applied. Retry: the doc is then at its durable state, and a change after it may be missing; read the doc again before writing at a base.
+- **Rule:** grouped commits
+- **Exit:** 1
+- **Reached by:** a read or a write of a grouped store between a commit failing at the disk and the host's next tick or flush
+
 ## 6xx: erasure
 
 | Id | Name | Exit | Rule | Verbs | Status |
@@ -1230,6 +1257,8 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E727` | `output_unreadable` | 2 | the tier-0 verb path: the output check | `@blob_verb` | live |
 | `MPC-E728` | `verb_too_large` | 2 | the tier-0 verb path: the bounds | `@blob_verb` | live |
 | `MPC-E729` | `not_as_previewed` | 1 | the tier-0 verb path: the dry-run contract | `@blob_verb` | live |
+| `MPC-E730` | `revert_unsupported` | 2 | tier-0 revert, undo and redo: the file type's merge | `(host)` | live |
+| `MPC-E731` | `revert_conflict` | 1 | tier-0 revert, undo and redo: changed since | `(host)` | live |
 
 ### MPC-E701 `leased`
 
@@ -1453,6 +1482,21 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `the bytes this call would store are not the ones previewed (expected {expected}, now {actual})`
 - **Next:** The call carried the digest its dry run showed (--expect), and the bytes it would store now differ: the file changed since, or the call did. Nothing was written. Run the dry run again, show it, and use its digest.
 - **Rule:** the tier-0 verb path: the dry-run contract
+- **Exit:** 1
+
+### MPC-E730 `revert_unsupported`
+
+- **Message:** `version {version} can't be reverted alone: {why} (version {before} is the one before it)`
+- **Next:** Taking one version's change away needs the file type's own merge, and it has none or it can't take these bytes. Nothing was written. Restore the version before it instead (details.before): that also replaces every change made since.
+- **Next step:** `restore` with `--version` `{before}`. This file type can't take one version's change away alone; restoring the version before it also replaces every change made since.
+- **Rule:** tier-0 revert, undo and redo: the file type's merge
+- **Exit:** 2
+
+### MPC-E731 `revert_conflict`
+
+- **Message:** `version {version}'s change to {addresses} was changed since (head {head}); nothing reverted`
+- **Next:** Someone changed what that version changed after it, in a way that overlaps: each is in details.conflicts with the field, who changed it and in which version (empty when the file type's merge found the overlap). Nothing was written. Read them at head and change them back yourself, or ask whoever changed them.
+- **Rule:** tier-0 revert, undo and redo: changed since
 - **Exit:** 1
 
 ## 8xx: structured and CSV

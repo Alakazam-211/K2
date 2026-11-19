@@ -212,18 +212,19 @@ fn format_8_unknown_feature_is_refused_by_name() {
             Some(crate::errors::Value::List(vec!["bit 5".into()])),
             "row: the details name the bit"
         );
-        stamp(&t, 8, Some((1 << 2) | (1 << 63)), false);
+        // bit 3: bit 2 is the seq floor's now (grouped commits), which this build knows
+        stamp(&t, 8, Some((1 << 3) | (1 << 63)), false);
         let e = refused(
             &t,
             &StoreError::UnknownFeatures {
                 found: 8,
-                unknown: (1 << 2) | (1 << 63),
+                unknown: (1 << 3) | (1 << 63),
             },
             "unknown bits alone are refused",
         );
         assert_eq!(
             e.to_string(),
-            "store is format 8 and requires features bit 2, bit 63, which this build doesn't \
+            "store is format 8 and requires features bit 3, bit 63, which this build doesn't \
              know: use the newer build"
         );
     });

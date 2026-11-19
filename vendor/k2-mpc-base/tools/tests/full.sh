@@ -22,7 +22,7 @@
 #   base-d       the kit: disk, if_version, blame, blame_incremental (blame_cost is ignored: a
 #                measurement), and position_index with its planted engine bugs (v0.9.7)
 #   errors       the kit: error_ids (the registry snapshot, explain goldens, ERRORS.md, the walk), tools_session, pack_verbs, and the mpc example
-#   base-b       the kit: tier 0's integration tests (tier0, tier0_large, tier0_verbs, tier0_outside, tier0_base, promote, demote), the parity harnesses (parity, parity_blob, parity_grid) and erasure
+#   base-b       the kit: tier 0's integration tests (tier0, tier0_large, tier0_verbs, tier0_outside, tier0_base, tier0_batch, tier0_revert, tier0_holds_write, promote, demote), the parity harnesses (parity, parity_blob, parity_grid) and erasure
 #   spec-undo    the undo spec suite, its mutant tests included
 #   wire-guard   the untrusted-wire build guard (tools/tests/wire-guard.sh), and the native
 #                engine's absence without its feature
@@ -45,6 +45,9 @@ else
   echo "tests: cargo test"; NEXTEST=0
   tests() { cargo test "$@"; }
 fi
+# the grouped-commit kill row (crates/base/src/session/grouped_commit_tests.rs): 50 kills at
+# seeded points in a gate (the row's own default is 10)
+export K2MB_GROUPED_KILLS=${K2MB_GROUPED_KILLS:-50}
 case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wire-guard, plants, lint, tools or evidence} in
   base-a1) timed build cargo test -p k2-mpc-base --lib --no-run
           timed base_a1 tests -p k2-mpc-base --lib
@@ -67,8 +70,8 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
           # the pack template's carrier-row check (scripts/pack-checks/carrier-row.sh), self-test
           timed carrier_row_selftest sh tools/test-carrier-row.sh
           ;;
-  base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test tier0_verbs --test tier0_outside --test tier0_base --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run
-          timed base_b tests -p k2-mpc-base --test tier0 --test tier0_large --test tier0_verbs --test tier0_outside --test tier0_base --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit ;;
+  base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test tier0_verbs --test tier0_outside --test tier0_base --test tier0_batch --test tier0_revert --test tier0_holds_write --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run
+          timed base_b tests -p k2-mpc-base --test tier0 --test tier0_large --test tier0_verbs --test tier0_outside --test tier0_base --test tier0_batch --test tier0_revert --test tier0_holds_write --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit ;;
   base-c) timed build cargo test -p k2-mpc-base --test soak --test edit_paths --test edit_cost --test history --test presence --test sessions --test roster --test app_view --test overflow --no-run
           timed base_c tests -p k2-mpc-base --test soak --test edit_paths --test edit_cost --test history --test presence --test sessions --test roster --test app_view --test overflow ;;
   base-d) timed build cargo test -p k2-mpc-base --test disk --test if_version --test blame --test blame_incremental --test blame_cost --no-run
@@ -109,6 +112,97 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
             'k2-mpc-base::roster/two_connections_of_one_pid_each_get_their_own_device_caret
              k2-mpc-base::roster/a_caret_move_on_connection_2_emits_its_client' \
             crates/base/tests/roster.rs '' -- tests -p k2-mpc-base --features planted-device-bugs --test roster
+          # the store's plants (MPC_STORE_PLANT, test builds of the kit's lib): the cache size not
+          # applied (the store library's default, 1 GiB) fails the cache rows that read the
+          # library's evictions, each at its own assertion; the open with a wait letting the
+          # store it found free go before opening it again fails the race row
+          timed control_store_cache control store-cache -- tests -p k2-mpc-base --lib store::cache_tests
+          timed plant_store_cache_ignored plant store-cache-ignored \
+            'k2-mpc-base/store::cache_tests::the_cache_size_is_applied
+             k2-mpc-base/store::cache_tests::a_rewrite_keeps_the_cache_size
+             k2-mpc-base/store::cache_tests::an_open_with_a_wait_applies_the_cache_size' \
+            crates/base/src/store/cache_tests.rs '(evictions 0)' MPC_STORE_PLANT=store-cache-ignored \
+            -- tests -p k2-mpc-base --lib store::cache_tests
+          timed control_store_lock control store-lock -- tests -p k2-mpc-base --lib store::lock_tests
+          timed plant_retry_probe_then_open plant retry-probe-then-open \
+            'k2-mpc-base/store::lock_tests::an_open_with_a_wait_keeps_the_store_it_found_free' \
+            crates/base/src/store/lock_tests.rs 'the open with a wait opens' MPC_STORE_PLANT=retry-probe-then-open \
+            -- tests -p k2-mpc-base --lib store::lock_tests
+          # grouped commits (MPC_BETA_PLANT, the kit's lib): each plant alone fails its row of
+          # session/grouped_commit_tests.rs at that row's own assertion
+          timed control_grouped control grouped -- tests -p k2-mpc-base --lib session::grouped_commit_tests
+          timed plant_g_durable_claimed_early plant durable-claimed-early \
+            'k2-mpc-base/session::grouped_commit_tests::grouped_commits_survive_a_kill_as_a_prefix' \
+            crates/base/src/session/grouped_commit_tests.rs 'every change known durable is kept' MPC_BETA_PLANT=durable-claimed-early \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::grouped_commits_survive_a_kill_as_a_prefix
+          timed plant_g_write_back_skips_barrier plant write-back-skips-barrier \
+            'k2-mpc-base/session::grouped_commit_tests::a_write_back_is_never_ahead_of_the_store' \
+            crates/base/src/session/grouped_commit_tests.rs 'ahead of the store' MPC_BETA_PLANT=write-back-skips-barrier \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::a_write_back_is_never_ahead_of_the_store
+          timed plant_g_group_changes_ignored plant group-changes-ignored \
+            'k2-mpc-base/session::grouped_commit_tests::the_group_bound_holds' \
+            crates/base/src/session/grouped_commit_tests.rs 'the count bound' MPC_BETA_PLANT=group-changes-ignored \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::the_group_bound_holds
+          timed plant_g_group_ms_ignored plant group-ms-ignored \
+            'k2-mpc-base/session::grouped_commit_tests::the_group_bound_holds' \
+            crates/base/src/session/grouped_commit_tests.rs 'the time bound at the tick' MPC_BETA_PLANT=group-ms-ignored \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::the_group_bound_holds
+          timed plant_g_rollback_keeps_live_docs plant rollback-keeps-live-docs \
+            'k2-mpc-base/session::grouped_commit_tests::a_failed_durable_commit_reloads_every_live_doc' \
+            crates/base/src/session/grouped_commit_tests.rs 'left RolledBack' MPC_BETA_PLANT=rollback-keeps-live-docs \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::a_failed_durable_commit_reloads_every_live_doc
+          timed plant_g_rollback_skips_yrs plant rollback-skips-yrs \
+            'k2-mpc-base/session::grouped_commit_tests::a_failed_durable_commit_reloads_every_live_doc' \
+            crates/base/src/session/grouped_commit_tests.rs 'left RolledBack' MPC_BETA_PLANT=rollback-skips-yrs \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::a_failed_durable_commit_reloads_every_live_doc
+          timed plant_g_no_rotation_after_recovery plant no-rotation-after-recovery \
+            'k2-mpc-base/session::grouped_commit_tests::a_lost_version_is_refused_and_no_id_is_reissued' \
+            crates/base/src/session/grouped_commit_tests.rs 'writer after the loss is fresh' MPC_BETA_PLANT=no-rotation-after-recovery \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::a_lost_version_is_refused_and_no_id_is_reissued
+          timed plant_g_seq_floor_ignored plant seq-floor-ignored \
+            'k2-mpc-base/session::grouped_commit_tests::a_lost_version_is_refused_and_no_id_is_reissued' \
+            crates/base/src/session/grouped_commit_tests.rs 'is refused base_expired' MPC_BETA_PLANT=seq-floor-ignored \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::a_lost_version_is_refused_and_no_id_is_reissued
+          timed plant_g_blob_floor_ignored plant blob-floor-ignored \
+            'k2-mpc-base/session::grouped_commit_tests::a_lost_blob_version_is_refused_and_no_blob_version_is_reissued' \
+            crates/base/src/session/grouped_commit_tests.rs 'is refused base_expired' MPC_BETA_PLANT=blob-floor-ignored \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::a_lost_blob_version_is_refused_and_no_blob_version_is_reissued
+          timed plant_g_barrier_skipped_flush plant barrier-skipped-flush \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier flush makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-flush \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          timed plant_g_barrier_skipped_close plant barrier-skipped-close \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier close makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-close \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          timed plant_g_barrier_skipped_unload plant barrier-skipped-unload \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier unload makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-unload \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          timed plant_g_barrier_skipped_release plant barrier-skipped-release \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier release makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-release \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          timed plant_g_barrier_skipped_delete plant barrier-skipped-delete \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier delete makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-delete \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          timed plant_g_barrier_skipped_rewrite plant barrier-skipped-rewrite \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier rewrite makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-rewrite \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          timed plant_g_barrier_skipped_purge plant barrier-skipped-purge \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier purge makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-purge \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          timed plant_g_barrier_skipped_demote plant barrier-skipped-demote \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier demote makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-demote \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          timed plant_g_barrier_skipped_promote plant barrier-skipped-promote \
+            'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
+            crates/base/src/session/grouped_commit_tests.rs 'the barrier promote makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-promote \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
           # the agent-result plants (differential::ErgoMutant, MPC_ERGO_MUTANT): each fails the rows
           # of tests/agent_results.rs that read what it breaks, at their own assertions. The
           # result written though not asked for changes every row's text, so its run is the one
@@ -345,20 +439,23 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
              k2-mpc-base::tier0_base/base_unproven_writer
              k2-mpc-base::tier0_base/weak_key_if_version
              k2-mpc-base::tier0_base/base_dry_run_refuses_alike
-             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+             k2-mpc-base::tier0_base/two_agents_one_drawing
+             k2-mpc-base::tier0_base/swarm_on_one_doc' \
             crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-whole-doc \
             -- tests -p k2-mpc-base --test tier0_base
           timed plant_t0b_base_ignored plant t0b-base-ignored \
             'k2-mpc-base::tier0_base/base_refuses_moved
              k2-mpc-base::tier0_base/base_selector_at_v
              k2-mpc-base::tier0_base/base_dry_run_refuses_alike
-             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+             k2-mpc-base::tier0_base/two_agents_one_drawing
+             k2-mpc-base::tier0_base/swarm_on_one_doc' \
             crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-ignored \
             -- tests -p k2-mpc-base --test tier0_base
           timed plant_t0b_base_node_level_only plant t0b-base-node-level-only \
             'k2-mpc-base::tier0_base/base_field_level
              k2-mpc-base::tier0_base/base_refuses_moved
-             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+             k2-mpc-base::tier0_base/two_agents_one_drawing
+             k2-mpc-base::tier0_base/swarm_on_one_doc' \
             crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-node-level-only \
             -- tests -p k2-mpc-base --test tier0_base
           timed plant_t0b_base_head_only plant t0b-base-head-only \
@@ -385,7 +482,8 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
             'k2-mpc-base::tier0_base/base_refuses_moved
              k2-mpc-base::tier0_base/base_selector_at_v
              k2-mpc-base::tier0_base/base_dry_run_refuses_alike
-             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+             k2-mpc-base::tier0_base/two_agents_one_drawing
+             k2-mpc-base::tier0_base/swarm_on_one_doc' \
             crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=plan-on-stale-head \
             -- tests -p k2-mpc-base --test tier0_base
           timed plant_t0b_seed_gap_loses plant t0b-seed-gap-loses \
@@ -403,6 +501,100 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
             'k2-mpc-base::tier0_base/hold_layer_covers_members' \
             crates/base/tests/tier0_base.rs "a hold's reach" MPC_T0V_MUTANT=reach-at-hold-time \
             -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_lease_held_whole_verb plant t0b-lease-held-whole-verb \
+            'k2-mpc-base::tier0_base/swarm_on_one_doc
+             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+            crates/base/tests/tier0_base.rs 'no refusal for overlap in time' MPC_T0V_MUTANT=lease-held-whole-verb \
+            -- tests -p k2-mpc-base --test tier0_base
+          # a hold binds an agent's whole-file write (tests/tier0_holds_write.rs): each plant alone
+          timed control_tier0_holds_write control tier0-holds-write -- tests -p k2-mpc-base --test tier0_holds_write
+          timed plant_t0h_whole_write_skips_holds plant t0h-whole-write-skips-holds \
+            'k2-mpc-base::tier0_holds_write/whole_write_respects_holds
+             k2-mpc-base::tier0_holds_write/whole_write_hold_reach' \
+            crates/base/tests/tier0_holds_write.rs 'binds a whole-file write' MPC_T0V_MUTANT=whole-write-skips-holds \
+            -- tests -p k2-mpc-base --test tier0_holds_write
+          timed plant_t0h_hold_during_upload_missed plant t0h-hold-during-upload-missed \
+            'k2-mpc-base::tier0_holds_write/whole_write_hold_during_upload' \
+            crates/base/tests/tier0_holds_write.rs 'while the write uploads' MPC_T0V_MUTANT=hold-during-upload-missed \
+            -- tests -p k2-mpc-base --test tier0_holds_write
+          # a tier-0 batch (tests/tier0_batch.rs): each plant alone fails the rows that read what
+          # it breaks, at their own assertions
+          timed control_tier0_batch control tier0-batch -- tests -p k2-mpc-base --test tier0_batch
+          timed plant_t0batch_commits_each plant t0batch-commits-each \
+            'k2-mpc-base::tier0_batch/batch_one_version
+             k2-mpc-base::tier0_batch/batch_all_or_nothing
+             k2-mpc-base::tier0_batch/batch_strayed_union
+             k2-mpc-base::tier0_batch/batch_base_per_node
+             k2-mpc-base::tier0_batch/batch_claims_union
+             k2-mpc-base::tier0_batch/batch_dry_run_matches_real
+             k2-mpc-base::tier0_batch/batch_caps
+             k2-mpc-base::tier0_batch/batch_seeds_index
+             k2-mpc-base::tier0_batch/batch_race
+             k2-mpc-base::tier0_batch/a_batch_commit_takes_the_group_durability' \
+            crates/base/tests/tier0_batch.rs 'batch_' MPC_T0V_MUTANT=batch-commits-each \
+            -- tests -p k2-mpc-base --test tier0_batch
+          timed plant_t0batch_plans_on_head plant t0batch-plans-on-head \
+            'k2-mpc-base::tier0_batch/batch_sees_staged
+             k2-mpc-base::tier0_batch/batch_exact
+             k2-mpc-base::tier0_batch/batch_base_per_node
+             k2-mpc-base::tier0_batch/batch_dry_run_matches_real
+             k2-mpc-base::tier0_batch/batch_race' \
+            crates/base/tests/tier0_batch.rs 'batch_' MPC_T0V_MUTANT=batch-plans-on-head \
+            -- tests -p k2-mpc-base --test tier0_batch
+          timed plant_t0batch_compose_wrong plant t0batch-compose-wrong \
+            'k2-mpc-base::tier0_batch/batch_sees_staged
+             k2-mpc-base::tier0_batch/batch_exact
+             k2-mpc-base::tier0_batch/batch_base_per_node
+             k2-mpc-base::tier0_batch/batch_dry_run_matches_real
+             k2-mpc-base::tier0_batch/batch_race' \
+            crates/base/tests/tier0_batch.rs 'batch_' MPC_T0V_MUTANT=batch-compose-wrong \
+            -- tests -p k2-mpc-base --test tier0_batch
+          timed plant_t0batch_base_last_call_only plant t0batch-base-last-call-only \
+            'k2-mpc-base::tier0_batch/batch_base_per_node' \
+            crates/base/tests/tier0_batch.rs '--base is checked per node over every call' MPC_T0V_MUTANT=batch-base-last-call-only \
+            -- tests -p k2-mpc-base --test tier0_batch
+          timed plant_t0batch_claims_first_call plant t0batch-claims-first-call \
+            'k2-mpc-base::tier0_batch/batch_claims_union' \
+            crates/base/tests/tier0_batch.rs 'a hold any call reaches refuses' MPC_T0V_MUTANT=batch-claims-first-call \
+            -- tests -p k2-mpc-base --test tier0_batch
+          timed plant_t0batch_lease_whole_run plant t0batch-lease-whole-run \
+            'k2-mpc-base::tier0_batch/batch_lease_rules
+             k2-mpc-base::tier0_batch/batch_race' \
+            crates/base/tests/tier0_batch.rs 'batch_' MPC_T0V_MUTANT=batch-lease-whole-run \
+            -- tests -p k2-mpc-base --test tier0_batch
+          timed plant_t0batch_stray_unchecked plant t0batch-stray-unchecked \
+            'k2-mpc-base::tier0_batch/batch_strayed_union' \
+            crates/base/tests/tier0_batch.rs 'a node no call declared refuses the batch' MPC_T0V_MUTANT=stray-unchecked \
+            -- tests -p k2-mpc-base --test tier0_batch
+          # a tier-0 revert, undo and redo (tests/tier0_revert.rs): each plant alone fails the
+          # rows that read what it breaks, at their own assertions
+          timed control_tier0_revert control tier0-revert -- tests -p k2-mpc-base --test tier0_revert
+          timed plant_t0rev_revert_takes_whole_version plant t0rev-revert-takes-whole-version \
+            'k2-mpc-base::tier0_revert/revert_one_version
+             k2-mpc-base::tier0_revert/undo_own_only
+             k2-mpc-base::tier0_revert/revert_stray_refused' \
+            crates/base/tests/tier0_revert.rs 'revert' MPC_T0V_MUTANT=revert-takes-whole-version \
+            -- tests -p k2-mpc-base --test tier0_revert
+          timed plant_t0rev_revert_overwrites plant t0rev-revert-overwrites \
+            'k2-mpc-base::tier0_revert/revert_conflict_names_who' \
+            crates/base/tests/tier0_revert.rs 'revert_conflict_names_who' MPC_T0V_MUTANT=revert-overwrites \
+            -- tests -p k2-mpc-base --test tier0_revert
+          timed plant_t0rev_revert_ignores_author plant t0rev-revert-ignores-author \
+            'k2-mpc-base::tier0_revert/revert_needs_author_or_owner' \
+            crates/base/tests/tier0_revert.rs 'revert_needs_author_or_owner' MPC_T0V_MUTANT=revert-ignores-author \
+            -- tests -p k2-mpc-base --test tier0_revert
+          timed plant_t0rev_undo_latest_any plant t0rev-undo-latest-any \
+            'k2-mpc-base::tier0_revert/undo_own_only' \
+            crates/base/tests/tier0_revert.rs 'undo_own_only' MPC_T0V_MUTANT=undo-latest-any \
+            -- tests -p k2-mpc-base --test tier0_revert
+          timed plant_t0rev_redo_not_cleared plant t0rev-redo-not-cleared \
+            'k2-mpc-base::tier0_revert/redo_cleared_by_new_edit' \
+            crates/base/tests/tier0_revert.rs 'redo_cleared_by_new_edit' MPC_T0V_MUTANT=redo-not-cleared \
+            -- tests -p k2-mpc-base --test tier0_revert
+          timed plant_t0rev_revert_skips_claims plant t0rev-revert-skips-claims \
+            'k2-mpc-base::tier0_revert/revert_held_refused' \
+            crates/base/tests/tier0_revert.rs 'revert_held_refused' MPC_T0V_MUTANT=revert-skips-claims \
+            -- tests -p k2-mpc-base --test tier0_revert
           # the opened-pin plants (differential::OpenedMutant, MPC_OPENED_MUTANT): each fails the
           # rows of tests/opened.rs that read what it breaks, at their own assertions
           timed control_opened control opened -- tests -p k2-mpc-base --test opened

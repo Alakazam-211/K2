@@ -179,6 +179,11 @@ pub enum DocError {
     /// engine: refused, nothing applied. Error id `MPC-E168` (`native_no_yjs`).
     #[error("this doc is on the native engine; Yjs sync bytes can't reach it")]
     NativeNoYjs,
+    /// `MPC-E183` `native_equivocation`: the native engine refused a change it already holds
+    /// with different content, `(agent, seq)` (decided against this doc's own held copy above
+    /// its stable point); nothing applied.
+    #[error("this update reuses writer {agent}'s change {seq} with other content")]
+    NativeEquivocation { agent: u64, seq: u64 },
 }
 
 /// A root's content as plain data, independent of the engine (versions, export, restore).

@@ -318,6 +318,58 @@ fn p20_name_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
+// ---------- undo, redo, revert (`BlobSession::run_revert`) ----------
+
+/// A revert's observable result: its exit, the version after, and its stdout.
+fn revert_out(o: &crate::tools::ToolOutput) -> Output {
+    Output::value((
+        o.exit,
+        o.version,
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+    ))
+}
+
+fn revert_person(p: &mut BlobPerson<'_>, what: crate::session::RevertWhat) -> R {
+    let c = p.conn()?;
+    Ok(
+        match p
+            .session()
+            .run_revert(c, what, &[], &crate::tools::ToolOptions::new())
+        {
+            Ok(o) => Step::exit(o.exit, revert_out(&o)),
+            Err(e) => Step::exit(e.exit(), Output::None),
+        },
+    )
+}
+
+fn revert_agent(a: &mut BlobAgent<'_>, argv: &[&str]) -> R {
+    agent_step(a.verb(argv, b"")?, |v| match v {
+        VerbValue::Tool(o) => revert_out(o),
+        v => other(v),
+    })
+}
+
+fn p16_undo_person(p: &mut BlobPerson<'_>) -> R {
+    revert_person(p, crate::session::RevertWhat::Undo)
+}
+fn p16_undo_agent(a: &mut BlobAgent<'_>) -> R {
+    revert_agent(a, &["undo"])
+}
+fn p16_redo_person(p: &mut BlobPerson<'_>) -> R {
+    revert_person(p, crate::session::RevertWhat::Redo)
+}
+fn p16_redo_agent(a: &mut BlobAgent<'_>) -> R {
+    revert_agent(a, &["redo"])
+}
+fn p31_person(p: &mut BlobPerson<'_>) -> R {
+    let v = p.stage().mark("v")?;
+    revert_person(p, crate::session::RevertWhat::Version(v))
+}
+fn p31_agent(a: &mut BlobAgent<'_>) -> R {
+    let v = a.stage().mark("v")?.to_string();
+    revert_agent(a, &["revert", &v])
+}
+
 // ---------- mv ----------
 
 fn p21_person(p: &mut BlobPerson<'_>) -> R {
@@ -702,6 +754,31 @@ pub fn kit_blob_cases(action: PersonAction) -> Vec<BlobCase> {
             ),
         ],
         P::Rename => vec![c(action, "mv", "file and key move", p21_person, p21_agent)],
+        P::Undo => vec![
+            c(
+                action,
+                "undo",
+                "after sam's write: nothing of mine to undo, or refused alike",
+                p16_undo_person,
+                p16_undo_agent,
+            )
+            .setup(sam_writes),
+            c(
+                action,
+                "redo",
+                "nothing undone: nothing to redo, or refused alike",
+                p16_redo_person,
+                p16_redo_agent,
+            ),
+        ],
+        P::Revert => vec![c(
+            action,
+            "revert",
+            "sam's version: only its author or an owner, or refused alike",
+            p31_person,
+            p31_agent,
+        )
+        .setup(sam_writes)],
         P::Blame => vec![
             c(action, "blame", "who set it", p22_person, p22_agent).setup(sam_writes),
             c(
@@ -839,11 +916,9 @@ pub fn kit_blob_cases(action: PersonAction) -> Vec<BlobCase> {
         | P::FindReplace
         | P::Paste
         | P::Format
-        | P::Undo
         | P::Annotate
         | P::UndoPartial
-        | P::Mention
-        | P::Revert => Vec::new(),
+        | P::Mention => Vec::new(),
         // grid docs only: `kit_grid_cases`
         P::RowInsert
         | P::RowMove

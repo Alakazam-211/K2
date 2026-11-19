@@ -531,37 +531,49 @@ fn base_dry_run_refuses_alike() {
     );
 }
 
-/// Run `a` as agent `c` until it isn't refused for the other agent's lease (each verb holds a
-/// lease of its own while it runs) or for head's index not recorded yet: the result.
-fn until_unleased(s: &BlobSession, c: ConnId, a: &[String]) -> ToolOutput {
+/// Run `a` as agent `c` until it isn't refused for head's index not recorded yet (`MPC-E713`:
+/// the gap after another verb's commit, as a host's runner waits it out): the result. Nothing
+/// else is retried: a verb plans with no lease, so another agent's verb never refuses it.
+fn until_indexed(s: &BlobSession, c: ConnId, a: &[String]) -> ToolOutput {
     let refs: Vec<&str> = a.iter().map(String::as_str).collect();
     for _ in 0..2_000 {
         let o = call(s, c, &refs);
-        if !matches!(err_id(&o).as_deref(), Some("MPC-E701" | "MPC-E713")) {
+        if err_id(&o).as_deref() != Some("MPC-E713") {
             return o;
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    panic!("the other agent's lease never ended")
+    panic!("head's index never landed")
 }
 
-/// Two agents' calls on one session, from two threads released together; each retries while
-/// the other's verb holds the file. Their results, A's then B's.
+/// Agents' calls on one session, from threads released together, each retried only on
+/// `MPC-E713`. Their results, in order.
+fn swarm(s: &Arc<BlobSession>, calls: Vec<(ConnId, Vec<String>)>) -> Vec<ToolOutput> {
+    let go = Arc::new(Barrier::new(calls.len()));
+    let threads: Vec<_> = calls
+        .into_iter()
+        .map(|(c, args)| {
+            let (s, go) = (s.clone(), go.clone());
+            std::thread::spawn(move || {
+                go.wait();
+                until_indexed(&s, c, &args)
+            })
+        })
+        .collect();
+    threads.into_iter().map(|t| t.join().unwrap()).collect()
+}
+
+/// Two agents' calls on one session, from two threads released together. Their results, A's
+/// then B's.
 fn race(
     s: &Arc<BlobSession>,
     a: (ConnId, Vec<String>),
     b: (ConnId, Vec<String>),
 ) -> [ToolOutput; 2] {
-    let go = Arc::new(Barrier::new(2));
-    let run = |(c, args): (ConnId, Vec<String>)| {
-        let (s, go) = (s.clone(), go.clone());
-        std::thread::spawn(move || {
-            go.wait();
-            until_unleased(&s, c, &args)
-        })
-    };
-    let (ta, tb) = (run(a), run(b));
-    [ta.join().unwrap(), tb.join().unwrap()]
+    let mut out = swarm(s, vec![a, b]);
+    let b = out.pop().unwrap();
+    let a = out.pop().unwrap();
+    [a, b]
 }
 
 /// two_agents_one_drawing (the CAD verbs design's race row, on the test pack): agents A and B
@@ -682,7 +694,7 @@ fn two_agents_one_drawing() {
         ),
         "two_agents_one_drawing: --base per node: different nodes land; the same field: one \
          lands, the other E723 naming the winner; different fields land; two adds land; a hold's \
-         reach covers a layer's members (a verbatim retry isn't answered replayed yet: a known \
+         reach covers a layer's members; no refusal for overlap in time (a verbatim retry isn't answered replayed yet: a known \
          gap)"
     );
 }
@@ -863,5 +875,109 @@ fn hold_block_covers_subtree() {
         ((Some("MPC-E301".to_owned()), Some("ann".to_owned())), None),
         "hold_block_covers_subtree: a hold's reach: a block hold refuses an agent's change \
          under it; a node outside lands"
+    );
+}
+
+/// swarm_on_one_doc: eight agents, released together, each call `--base V` on one doc: four on
+/// four different nodes, four setting the same field of one node. Each call lands or is refused
+/// for a real conflict (`MPC-E723`); none is refused for another verb merely running (no
+/// `MPC-E701`): a verb plans with no lease, and the automatic lease covers only its commit.
+/// The four on different nodes all land; of the four on one field exactly one does. No edit is
+/// lost or applied twice: one version per landed call, each node holding its caller's value.
+/// Plant: `lease-held-whole-verb`.
+#[test]
+fn swarm_on_one_doc() {
+    let f = fx("swarm");
+    let s = f.open("a.idx", DOC, pack());
+    let agents: Vec<ConnId> = (0..8)
+        .map(|n| f.join(&s, &format!("agent-{n}"), ParticipantKind::Agent))
+        .collect();
+    let v = head(&s);
+    let base = |x: &[&str]| {
+        let mut x = argv(x);
+        x.extend(["--base".to_owned(), v.to_string()]);
+        x
+    };
+    let mut calls = Vec::new();
+    for (n, key) in ["@n:1", "@n:2", "@n:3", "@n:4"].iter().enumerate() {
+        let value = format!("d{n}");
+        calls.push((agents[n], base(&["part", "set", key, "note", &value])));
+    }
+    for (n, a) in agents.iter().enumerate().skip(4) {
+        let value = format!("s{n}");
+        calls.push((*a, base(&["part", "set", "@n:2", "tag", &value])));
+    }
+    let out = swarm(&s, calls);
+    let ids: Vec<Option<String>> = out.iter().map(err_id).collect();
+    let disjoint_landed = ids[..4].iter().all(Option::is_none);
+    let same: Vec<&Option<String>> = ids[4..].iter().collect();
+    let same_landed = same.iter().filter(|i| i.is_none()).count();
+    let same_refused = same
+        .iter()
+        .filter(|i| i.as_deref() == Some("MPC-E723"))
+        .count();
+    let leased = ids
+        .iter()
+        .filter(|i| i.as_deref() == Some("MPC-E701"))
+        .count();
+    // each node holds its caller's value; the tag is the one landed call's
+    let notes: Vec<Option<String>> = ["@n:1", "@n:2", "@n:3", "@n:4"]
+        .iter()
+        .map(|k| field(&s, agents[0], k, NOTE))
+        .collect();
+    let winner = (4..8).find(|n| ids[*n].is_none()).map(|n| format!("s{n}"));
+    let tag = field(&s, agents[0], "@n:2", TAG);
+    let versions = head(&s) - v;
+    let some = |x: &str| Some(x.to_owned());
+    assert_eq!(
+        (
+            leased,
+            disjoint_landed,
+            same_landed,
+            same_refused,
+            notes,
+            tag == winner && winner.is_some(),
+            versions
+        ),
+        (
+            0,
+            true,
+            1,
+            3,
+            vec![some("d0"), some("d1"), some("d2"), some("d3")],
+            true,
+            5
+        ),
+        "swarm_on_one_doc: --base per node: agents at once on one doc: no refusal for overlap \
+         in time, every disjoint call lands, one of a field's callers lands, the others E723, nothing lost or \
+         applied twice ({ids:?})"
+    );
+}
+
+/// person_lease_refuses_agent_verb: a person's own lease still refuses an agent's verb
+/// (`MPC-E701`, exit 5, naming the holder), and once released the verb lands.
+#[test]
+fn person_lease_refuses_agent_verb() {
+    let f = fx("person-lease");
+    let s = f.open("a.idx", DOC, pack());
+    let ann = f.join(&s, "ann", ParticipantKind::Person);
+    let bot = f.join(&s, "bot", ParticipantKind::Agent);
+    s.acquire_lease(ann, None).unwrap();
+    let held = call(&s, bot, &["part", "set", "@n:2", "note", "x"]);
+    let holder = detail(&held, "holder")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let refused = (err_id(&held), held.exit, holder);
+    s.release_lease(ann).unwrap();
+    let after = err_id(&call(&s, bot, &["part", "set", "@n:2", "note", "x"]));
+    assert_eq!(
+        (refused, after, field(&s, bot, "@n:2", NOTE)),
+        (
+            (Some("MPC-E701".to_owned()), 5, Some("ann".to_owned())),
+            None,
+            Some("x".to_owned())
+        ),
+        "person_lease_refuses_agent_verb: a person's lease refuses an agent's verb (E701); \
+         released, it lands"
     );
 }

@@ -12,7 +12,9 @@
 //! ([`hold_the_store_for_the_parent`]).
 //!
 //! Plant: `MPC_STORE_PLANT=store-lock-untyped` (the library's refusal passed through untyped, as
-//! before) fails at the second opener's assert.
+//! before) fails at the second opener's assert. `MPC_STORE_PLANT=retry-probe-then-open` (the
+//! open with a wait finds the store free, lets it go, then opens it again, as before) fails
+//! [`an_open_with_a_wait_keeps_the_store_it_found_free`] at its first assert.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -214,6 +216,53 @@ fn an_open_with_a_wait_takes_the_store_when_the_holder_exits() {
         "a wait past its deadline",
     );
     child.kill();
+}
+
+/// Two openers racing: the open with a wait finds the store free and, before it has set the
+/// store up, a rival opener tries it (a test hook at that point, `open_gap`). The waiting open
+/// keeps the store it found free, so it opens, never refused `MPC-E505` while its wait lasts,
+/// and the rival is the one refused.
+/// `MPC_STORE_PLANT=retry-probe-then-open` fails at the first assert: the rival takes the store
+/// in the gap and the waiting open is refused although its wait had not run out.
+#[test]
+fn an_open_with_a_wait_keeps_the_store_it_found_free() {
+    use std::sync::mpsc;
+    let t = TmpDir::new("race");
+    drop(DocStore::open(t.db()).unwrap());
+    let path = t.db();
+    let (tx, rx) = mpsc::channel::<(bool, std::thread::JoinHandle<()>)>();
+    set_open_gap_hook(move || {
+        let (got_tx, got_rx) = mpsc::channel();
+        let h = std::thread::spawn(move || match DocStore::open(&path) {
+            Ok(s) => {
+                got_tx.send(true).unwrap();
+                // holds it a moment, as a handing-off daemon would
+                std::thread::sleep(Duration::from_millis(200));
+                drop(s);
+            }
+            Err(e) => {
+                assert!(
+                    matches!(e, StoreError::Locked),
+                    "control: the rival is refused typed: {e:?}"
+                );
+                got_tx.send(false).unwrap();
+            }
+        });
+        let got = got_rx.recv().unwrap();
+        tx.send((got, h)).unwrap();
+    });
+    let r = DocStore::open_with_retry(t.db(), Duration::from_secs(30));
+    let (rival_got, h) = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("control: the rival tried the store in the gap");
+    h.join().unwrap();
+    assert!(
+        r.is_ok(),
+        "row: the open with a wait opens, not refused while its wait lasts: {:?}",
+        r.err()
+    );
+    assert!(!rival_got, "row: the rival is the one refused");
+    println!("RACE waiting_opened=1 rival_refused=1");
 }
 
 fn key() -> DocKey {

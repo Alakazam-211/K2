@@ -62,6 +62,11 @@ pub struct IxPack {
     pub content_doubt: bool,
     /// [`BlobPack::hold_reach`] per node kind (a kind not listed: the default).
     pub reach: &'static [(&'static str, HoldReach)],
+    /// [`BlobPack::merge3_bytes`] merges by line key ([`line_merge`]) instead of keeping both.
+    pub line_merge: bool,
+    /// With `line_merge`: the merge also sets the last line's note to `strayed` (a merge that
+    /// changes a node neither side changed).
+    pub merge_strays: bool,
 }
 
 impl Default for IxPack {
@@ -79,6 +84,8 @@ impl Default for IxPack {
             pairing: None,
             content_doubt: false,
             reach: &[],
+            line_merge: false,
+            merge_strays: false,
         }
     }
 }
@@ -94,6 +101,7 @@ impl BlobPack for IxPack {
         _size: u64,
         limits: &IndexLimits,
     ) -> Result<IndexDraft, IndexRefused> {
+        INDEX_RUNS.with(|n| n.set(n.get() + 1));
         let mut bytes = Vec::new();
         let read = match self.stop_after {
             Some(n) => src.take(n).read_to_end(&mut bytes),
@@ -127,8 +135,25 @@ impl BlobPack for IxPack {
         self.merge
     }
 
-    fn merge3_bytes(&self, _base: &[u8], _ours: &[u8], _theirs: &[u8]) -> BlobMerge {
-        BlobMerge::Conflict
+    fn merge3_bytes(&self, base: &[u8], ours: &[u8], theirs: &[u8]) -> BlobMerge {
+        if !self.line_merge {
+            return BlobMerge::Conflict;
+        }
+        match line_merge(base, ours, theirs) {
+            Some(mut out) if self.merge_strays => {
+                if let Some(last) = out.iter().rposition(|l| l.starts_with("@n:")) {
+                    let mut f: Vec<String> = out[last].split('|').map(str::to_owned).collect();
+                    while f.len() < 8 {
+                        f.push("-".to_owned());
+                    }
+                    f[7] = "strayed".to_owned();
+                    out[last] = f.join("|");
+                }
+                BlobMerge::Merged(join_lines(&out))
+            }
+            Some(out) => BlobMerge::Merged(join_lines(&out)),
+            None => BlobMerge::Conflict,
+        }
     }
 
     fn verbs(&self) -> &'static [BlobVerb] {
@@ -180,6 +205,74 @@ impl BlobPack for IxPack {
             IDX_ERRORS
         }
     }
+}
+
+/// A three-way merge by line: keyed lines (`@n:...`) pair by key, every other line must be
+/// the same on all three sides. A line one side changed takes that side's; both changed it
+/// differently: `None` (a conflict). Lines keep `ours`' order; a line only `theirs` added goes
+/// at the end; a line one side removed and the other left is removed.
+pub fn line_merge(base: &[u8], ours: &[u8], theirs: &[u8]) -> Option<Vec<String>> {
+    let lines = |b: &[u8]| -> Option<Vec<String>> {
+        Some(
+            std::str::from_utf8(b)
+                .ok()?
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+        )
+    };
+    let (b, o, t) = (lines(base)?, lines(ours)?, lines(theirs)?);
+    let key = |l: &str| {
+        l.starts_with("@n:")
+            .then(|| l.split('|').next().unwrap_or("").to_owned())
+    };
+    let find = |v: &[String], k: &str| v.iter().find(|l| key(l).as_deref() == Some(k)).cloned();
+    let plain = |v: &[String]| {
+        v.iter()
+            .filter(|l| key(l).is_none())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    if plain(&b) != plain(&o) || plain(&b) != plain(&t) {
+        return None;
+    }
+    let pick =
+        |b: Option<String>, o: Option<String>, t: Option<String>| -> Result<Option<String>, ()> {
+            if o == b {
+                Ok(t)
+            } else if t == b || t == o {
+                Ok(o)
+            } else {
+                Err(())
+            }
+        };
+    let mut out = Vec::new();
+    for l in &o {
+        match key(l) {
+            None => out.push(l.clone()),
+            Some(k) => {
+                if let Some(x) = pick(find(&b, &k), Some(l.clone()), find(&t, &k)).ok()? {
+                    out.push(x);
+                }
+            }
+        }
+    }
+    for l in &t {
+        if let Some(k) = key(l) {
+            if find(&o, &k).is_none() {
+                if let Some(x) = pick(find(&b, &k), None, Some(l.clone())).ok()? {
+                    out.push(x);
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+fn join_lines(lines: &[String]) -> Vec<u8> {
+    let mut s = lines.join("\n");
+    s.push('\n');
+    s.into_bytes()
 }
 
 // ---------- the verbs (the tier-0 verb path) ----------
@@ -247,6 +340,17 @@ pub static VERB_SET: &[BlobVerb] = &[
     )
     .with_word("changed"),
 ];
+
+thread_local! {
+    /// How many times this pack's index ran on this thread ([`index_runs`]).
+    static INDEX_RUNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times the pack's index ran on this thread (an index job's run, a verb's output
+/// check, a whole-file write's check), for the rows that count them.
+pub fn index_runs() -> u64 {
+    INDEX_RUNS.with(|n| n.get())
+}
 
 thread_local! {
     /// Run by `part set` before it reads (a test moves head from it); `None`: nothing.
@@ -403,6 +507,57 @@ pub static BASE_SET: &[BlobVerb] = &[
         part_new,
     )
     .with_word("added"),
+];
+
+/// The verbs for a tier-0 batch ([`BASE_SET`]'s four, `part guard` (under the caller's own
+/// lease), `part bad` (misbehaves as asked) and `part peek` (a read)).
+pub static BATCH_SET: &[BlobVerb] = &[
+    BlobVerb::edit(
+        "part set",
+        "KEY name|text|content|note|tag VALUE",
+        EDIT,
+        VerbMerge::Pack,
+        VerbInput::Stream,
+        part_set,
+    )
+    .with_word("set"),
+    BlobVerb::edit(
+        "part add",
+        "KEY KIND NAME (a line at the end)",
+        EDIT,
+        VerbMerge::Pack,
+        VerbInput::Whole,
+        part_add,
+    )
+    .with_word("added"),
+    BlobVerb::edit(
+        "part new",
+        "KIND NAME (a line at the end, its key one above the highest @n:)",
+        EDIT,
+        VerbMerge::Pack,
+        VerbInput::Whole,
+        part_new,
+    )
+    .with_word("added"),
+    BlobVerb::edit(
+        "part guard",
+        "KEY name|text|note VALUE (under your own lease)",
+        EDIT,
+        VerbMerge::Lease,
+        VerbInput::Stream,
+        part_set,
+    )
+    .with_word("set"),
+    BlobVerb::edit(
+        "part bad",
+        "unsorted|overlap|outside|many|stray|garble|refuse KEY [KEY2]",
+        EDIT,
+        VerbMerge::Pack,
+        VerbInput::Stream,
+        part_bad,
+    )
+    .with_word("changed"),
+    BlobVerb::read("part peek", "KEY", READ, VerbInput::Stream, part_peek),
 ];
 
 /// `NAME FIELD VALUE`: the field set on every line with that name (keyed or not), each node

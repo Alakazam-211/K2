@@ -70,6 +70,7 @@ fn store_errors_with(x: &str) -> Vec<StoreError> {
         S::KeyTaken(key()),
         S::NoVersion(1, 2),
         S::Locked,
+        S::Recovering,
         S::NamedVersion(1, 2),
         S::KeyChange,
         S::NoApproval(1, 2),
@@ -128,6 +129,7 @@ fn doc_errors_with(x: &str) -> Vec<DocError> {
         D::NeedsStateTransfer,
         D::NativeOneReplica,
         D::NativeNoYjs,
+        D::NativeEquivocation { agent: 7, seq: 3 },
         D::Hunk(HunkError::Order { index: 1 }),
         D::Hunk(HunkError::Range { index: 1 }),
         D::Hunk(HunkError::Empty { index: 1 }),
@@ -403,10 +405,24 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             head: 5,
             keys: vec!["r1.0".into()],
         },
+        S::RevertUnsupported {
+            version: 4,
+            why: x.into(),
+        },
+        S::RevertConflict {
+            version: 3,
+            head: 5,
+            addresses: vec!["@n:2".into()],
+            conflicts: Vec::new(),
+        },
         S::Strayed {
             keys: vec!["@n:2".into()],
         },
         S::OutputUnreadable { why: x.into() },
+        S::HoldUnindexable {
+            why: x.into(),
+            holders: vec!["ann".into()],
+        },
         S::VerbTooLarge {
             what: "the version a whole-file verb reads",
             size: 10,
@@ -736,6 +752,11 @@ fn native_refusals_exit_as_their_standard_twins() {
             doc(DocError::NativeNoYjs),
             Ok(malformed()),
             "sync bytes the doc can't take",
+        ),
+        (
+            doc(DocError::NativeEquivocation { agent: 7, seq: 3 }),
+            Err(2),
+            "a peer's bad data (as an op outside its past)",
         ),
         (
             S::NativeBetaOff,

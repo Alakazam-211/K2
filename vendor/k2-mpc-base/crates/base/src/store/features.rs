@@ -3,9 +3,11 @@
 //! - **Format 8** means the store's `meta` holds a word of required features under
 //!   [`REQUIRED_FEATURES`]. From 8 on, a new on-disk capability is a feature bit, not a format
 //!   number: two independent capabilities can't be ordered on one number.
-//! - **The features**: [`FEATURE_CHUNKED`] (the store holds chunked versions) and
+//! - **The features**: [`FEATURE_CHUNKED`] (the store holds chunked versions),
 //!   [`FEATURE_NATIVE`] (the store holds engine stores: a container-level guard, never a claim
-//!   about the engine's own header bits, which the kit never writes, reads or mirrors).
+//!   about the engine's own header bits, which the kit never writes, reads or mirrors) and
+//!   [`FEATURE_SEQ_FLOOR`] (a recovery after a lost group of grouped commits recorded lost
+//!   versions, `seq_floor.rs`: a kit without the floor would issue them again).
 //! - **At open, before anything else reads or writes the store**, a kit refuses a word naming a
 //!   bit it doesn't know, by name ([`StoreError::UnknownFeatures`]); a format-8 store without
 //!   its word, or a word in a store below format 8, is damage ([`StoreError::Corrupt`]).
@@ -47,8 +49,13 @@ pub const FEATURE_CHUNKED: u64 = 1 << 0;
 /// Required feature: the store holds engine stores (the native engine's).
 pub const FEATURE_NATIVE: u64 = 1 << 1;
 
+/// Required feature: a recovery recorded versions a lost group of grouped commits may have
+/// had (`seq_floor.rs`): a kit that doesn't keep the seq floor would issue them again, so it
+/// refuses the store at open.
+pub const FEATURE_SEQ_FLOOR: u64 = 1 << 2;
+
 /// Every feature bit this build knows.
-const FEATURES_KNOWN: u64 = FEATURE_CHUNKED | FEATURE_NATIVE;
+const FEATURES_KNOWN: u64 = FEATURE_CHUNKED | FEATURE_NATIVE | FEATURE_SEQ_FLOOR;
 
 /// The names of the bits set in `bits`, lowest first: a known feature by its name, any other
 /// as `bit N`.
@@ -58,6 +65,7 @@ pub(crate) fn feature_names(bits: u64) -> Vec<String> {
         .map(|i| match 1u64 << i {
             FEATURE_CHUNKED => "chunked".to_owned(),
             FEATURE_NATIVE => "native".to_owned(),
+            FEATURE_SEQ_FLOOR => "seq floor".to_owned(),
             _ => format!("bit {i}"),
         })
         .collect()
@@ -125,6 +133,22 @@ pub(super) fn check_stamp(db: &Database) -> Result<Option<u64>, StoreError> {
         super::native::check_held(&r, false)?;
     }
     Ok(checked)
+}
+
+/// Raise the store to format 8 with feature `bit` in `w`'s transaction, never lowering the
+/// format or clearing a bit.
+pub(super) fn stamp_feature(w: &redb::WriteTransaction, bit: u64) -> Result<(), StoreError> {
+    use redb::ReadableTable;
+    let mut meta = w.open_table(META)?;
+    let f = meta.get("store_format")?.map_or(0, |v| v.value());
+    if f < STORE_FORMAT_FEATURES {
+        meta.insert("store_format", STORE_FORMAT_FEATURES)?;
+    }
+    let word = meta.get(REQUIRED_FEATURES)?.map_or(0, |v| v.value());
+    if word & bit == 0 {
+        meta.insert(REQUIRED_FEATURES, word | bit)?;
+    }
+    Ok(())
 }
 
 /// Clear the native bit in `w`'s transaction when the store holds no engine store any more:

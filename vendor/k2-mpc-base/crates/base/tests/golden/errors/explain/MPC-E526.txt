@@ -1,0 +1,21 @@
+MPC-E526 store_recovering (store)
+exit:     1
+message:  the store is recovering after a commit failed at the disk; retry
+next:     The store groups its commits, and one failed at the disk, so the changes not yet on disk are gone from it. Until the host reopens the store at its durable state and reloads every live doc from it, nothing of the store is read or written, so no one acts on changes that are about to be dropped. Nothing was applied. Retry: the doc is then at its durable state, and a change after it may be missing; read the doc again before writing at a base.
+rule:     grouped commits
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E526",
+  "name": "store_recovering",
+  "area": "store",
+  "exit": 1,
+  "message": "the store is recovering after a commit failed at the disk; retry",
+  "next": "The store groups its commits, and one failed at the disk, so the changes not yet on disk are gone from it. Until the host reopens the store at its durable state and reloads every live doc from it, nothing of the store is read or written, so no one acts on changes that are about to be dropped. Nothing was applied. Retry: the doc is then at its durable state, and a change after it may be missing; read the doc again before writing at a base.",
+  "rule": "grouped commits",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

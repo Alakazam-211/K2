@@ -15,15 +15,24 @@
 //! - **Refused:** a refused cut stays queued, retried after the duty gap.
 //!
 //! Time comes in as plain milliseconds from the host's clock, and a cut's wall time is the
-//! caller's measurement: the queue reads no clock. It runs native cuts once the native engine's
-//! single-replica mode is vendored; until then nothing queues.
+//! caller's measurement: the queue reads no clock.
+//!
+//! **How docs reach it** ([`NativeCutInbox`]): a session asks its native doc, after each commit,
+//! whether a cut is due (the native engine's cut check, O(1)), and leaves the answer in the
+//! manager's inbox with the commit's time. The session holds its own lock then, and the queue
+//! lives in the pool (the lock order is the pool, then a session), so the inbox is a lock of its
+//! own that takes no other: the manager's tick moves what it holds into the queue.
 
-#![cfg_attr(not(test), allow(dead_code))]
+// the queue runs native docs' cuts: a build without the native engine (the public cut's) runs
+// none, and its rows (`cut_queue_tests.rs`) read what the host's report doesn't
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
-use super::config::CutQueueSettings;
+use super::config::{CutDue, CutQueueSettings};
 use crate::beta_plant::planted;
 
 /// Why a doc is due a cut.
@@ -39,6 +48,17 @@ pub(crate) enum CutWhy {
 }
 
 impl CutWhy {
+    /// The queue's reason for a doc its cadence says is due (`CutCadence::due`, through the
+    /// native engine's cut check): the cadence decides whether and why, the queue when. A forced
+    /// doc is cut while editing goes on; a doc due at its cadence, and one past the large-uncut
+    /// bound (whose cut is O(its history since its last cut)), wait for the host to be idle.
+    pub(crate) fn of(due: CutDue) -> Self {
+        match due {
+            CutDue::Forced => CutWhy::Forced,
+            CutDue::Cadence | CutDue::LargeUncut => CutWhy::Cadence,
+        }
+    }
+
     /// A second enqueue keeps the stronger reason: forced over unload over cadence.
     fn rank(self) -> u8 {
         match self {
@@ -213,6 +233,20 @@ impl<K: Clone + Eq + Hash> CutQueue<K> {
         })
     }
 
+    /// A cut made outside the queue (a clean unload's) that took `measured_ms`, ending at
+    /// `end_ms`: the duty gap starts at its end, as after a queued cut, so the next queued cut
+    /// waits. A job handed out is unaffected.
+    pub(crate) fn ran_outside(&mut self, end_ms: u64, measured_ms: u64) {
+        let gap = end_ms.saturating_add(self.settings.duty_gap_ms(measured_ms));
+        self.gap_until_ms = self.gap_until_ms.max(gap);
+    }
+
+    /// `key` leaves the queue (its doc was cut on its way out, or is gone). A job handed out
+    /// for it is still reported with [`CutQueue::ran`].
+    pub(crate) fn forget(&mut self, key: &K) {
+        self.entries.remove(key);
+    }
+
     /// How many docs are queued.
     pub(crate) fn queued(&self) -> usize {
         self.entries.len()
@@ -221,5 +255,48 @@ impl<K: Clone + Eq + Hash> CutQueue<K> {
     /// `key`'s entry: why it is due, its tail and when it was first queued.
     pub(crate) fn entry(&self, key: &K) -> Option<(CutWhy, u64, u64)> {
         self.entries.get(key).map(|e| (e.why, e.tail, e.queued_ms))
+    }
+}
+
+/// One doc a session found due after a commit ([`NativeCutInbox`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DueCut {
+    /// The doc, by its store id (a rename keeps it).
+    pub(crate) doc: crate::store::DocId,
+    /// Why, as the queue takes it.
+    pub(crate) why: CutWhy,
+    /// Its changes since its last cut.
+    pub(crate) tail: u64,
+    /// The commit's time (the host's clock).
+    pub(crate) at_ms: u64,
+}
+
+/// What the manager's sessions tell its cut queue (module docs): the time of the last native
+/// commit, and the docs found due since the last tick. Shared by the manager and every session
+/// it opens; its lock takes no other.
+#[derive(Debug, Default)]
+pub(crate) struct NativeCutInbox {
+    last_commit_ms: AtomicU64,
+    due: Mutex<Vec<DueCut>>,
+}
+
+impl NativeCutInbox {
+    /// A native commit at `at_ms`, and the doc's due cut, if any.
+    pub(crate) fn committed(&self, at_ms: u64, due: Option<DueCut>) {
+        self.last_commit_ms.fetch_max(at_ms, Ordering::SeqCst);
+        if let Some(d) = due {
+            // a lock poisoned elsewhere still holds a list of plain values: keep using it
+            self.due.lock().unwrap_or_else(|e| e.into_inner()).push(d);
+        }
+    }
+
+    /// The time of the last native commit any session reported (0: none).
+    pub(crate) fn last_commit_ms(&self) -> u64 {
+        self.last_commit_ms.load(Ordering::SeqCst)
+    }
+
+    /// Every due doc reported since the last call, in order.
+    pub(crate) fn take(&self) -> Vec<DueCut> {
+        std::mem::take(&mut *self.due.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }

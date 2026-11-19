@@ -180,7 +180,8 @@ pub(crate) struct DemoteRows<'a> {
     pub pack: &'a str,
     /// The blob doc's metadata (same key).
     pub meta: &'a DocMeta,
-    /// The blob versions, oldest first: they take the ids after the doc's last blob version.
+    /// The blob versions, oldest first: they take the ids after the doc's last blob version
+    /// (past its lost ones, `seq_floor.rs`).
     pub versions: &'a [BlobVersion],
     /// What the file holds, when the doc has one.
     pub sync: Option<&'a BlobSync>,
@@ -223,7 +224,8 @@ impl DocStore {
         if p.versions.is_empty() {
             return Err(StoreError::Corrupt("demotion: no version"));
         }
-        let w = self.begin_write()?;
+        // a barrier: the doc changes tier (grouped commits, `group.rs`)
+        let w = self.begin_barrier("demote")?;
         let vids = {
             let old = {
                 let docs = w.open_table(DOCS)?;
@@ -251,7 +253,9 @@ impl DocStore {
             w.open_table(DOCS)?
                 .insert(id, enc_meta(p.meta).as_slice())?;
             let k = blob::space_in(&w, &p.meta.key.space)?;
-            let mut last = blob::last_vid(&w, id)?;
+            // the versions take the ids after the last one, past the lost ones
+            // (`seq_floor.rs`)
+            let mut last = self.blob_before_next_in(&w, id, blob::last_vid(&w, id)?)?;
             let mut vids = Vec::with_capacity(p.versions.len());
             for v in p.versions {
                 if !super::chunks::take_ref(&w, id, &v.blob)? {
@@ -261,6 +265,8 @@ impl DocStore {
                 blob::put_version(&w, id, last, v)?;
                 vids.push(last);
             }
+            // the demotion's commit is a barrier (`begin_barrier("demote")` above): durable
+            self.raise_blob_floor_in(&w, id, last, true)?;
             {
                 let mut t = w.open_table(BLOB_SYNC)?;
                 t.retain_in((id, 0)..=(id, u8::MAX), |_, _| false)?;

@@ -1,0 +1,27 @@
+MPC-E306 hold_unindexable (presence and claims)
+exit:     5
+message:  the write can't be checked against the holds on this doc ({why}); nothing applied
+next:     Others hold nodes in this doc (details.holders), and the file type's index couldn't read your new version within its limits (details.why), so the kit can't tell which nodes it changes. Nothing was applied. Make the change through the file type's verbs, which are checked node by node, or ask the holders to release their holds and write again.
+step:     activity; why: Others hold nodes in this doc and your write couldn't be checked against them; make the change through the file type's verbs, or ask the holders to release.
+rule:     claims on nodes: an agent's whole-file write
+verbs:    write; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E306",
+  "name": "hold_unindexable",
+  "area": "presence and claims",
+  "exit": 5,
+  "message": "the write can't be checked against the holds on this doc ({why}); nothing applied",
+  "next": "Others hold nodes in this doc (details.holders), and the file type's index couldn't read your new version within its limits (details.why), so the kit can't tell which nodes it changes. Nothing was applied. Make the change through the file type's verbs, which are checked node by node, or ask the holders to release their holds and write again.",
+  "next_step": {
+    "verb": "activity",
+    "args": [],
+    "why": "Others hold nodes in this doc and your write couldn't be checked against them; make the change through the file type's verbs, or ask the holders to release."
+  },
+  "rule": "claims on nodes: an agent's whole-file write",
+  "verbs": ["write", "(host)"],
+  "returned_by": ["write"],
+  "status": "live",
+  "since_or_until": null
+}

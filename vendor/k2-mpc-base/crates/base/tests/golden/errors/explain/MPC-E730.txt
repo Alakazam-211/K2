@@ -1,0 +1,27 @@
+MPC-E730 revert_unsupported (tier 0 and blobs)
+exit:     2
+message:  version {version} can't be reverted alone: {why} (version {before} is the one before it)
+next:     Taking one version's change away needs the file type's own merge, and it has none or it can't take these bytes. Nothing was written. Restore the version before it instead (details.before): that also replaces every change made since.
+step:     restore; args: --version {before}; why: This file type can't take one version's change away alone; restoring the version before it also replaces every change made since.
+rule:     tier-0 revert, undo and redo: the file type's merge
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E730",
+  "name": "revert_unsupported",
+  "area": "tier 0 and blobs",
+  "exit": 2,
+  "message": "version {version} can't be reverted alone: {why} (version {before} is the one before it)",
+  "next": "Taking one version's change away needs the file type's own merge, and it has none or it can't take these bytes. Nothing was written. Restore the version before it instead (details.before): that also replaces every change made since.",
+  "next_step": {
+    "verb": "restore",
+    "args": ["--version", "{before}"],
+    "why": "This file type can't take one version's change away alone; restoring the version before it also replaces every change made since."
+  },
+  "rule": "tier-0 revert, undo and redo: the file type's merge",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

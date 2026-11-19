@@ -655,51 +655,66 @@ def healed_passport():
         return ''
     return t
 
-def request(route, method='GET', **params):
-    # The daemon's status and body for route; no answer ends the command.
+class Busy(Exception):
+    # The daemon isn't answering just now (soft requests only).
+    pass
+
+def request(route, method='GET', soft=False, **params):
+    # The daemon's status and body for route. No answer (nothing listens,
+    # a timeout, a connection closed unanswered) ends the command, or
+    # with soft raises Busy with the reason.
     global token, auth, healed
     query = 'project=' + urllib.parse.quote(project)
     query += ''.join('&' + k + '=' + urllib.parse.quote(v, safe='') for k, v in params.items())
     body = b'' if method == 'POST' else None
     req = urllib.request.Request(f'{base}{route}?{query}', data=body, headers=auth, method=method)
+    why = ''
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             code, raw = resp.status, resp.read()
     except urllib.error.HTTPError as e:
         code, raw = e.code, e.read()
     except (socket.timeout, TimeoutError):
-        fail(f\"K2's server didn't answer {route} within 5 s; run k2 daemon status\")
+        why = f\"K2's server didn't answer {route} within 5 s\"
     except urllib.error.URLError as e:
         if isinstance(e.reason, (socket.timeout, TimeoutError)):
-            fail(f\"K2's server didn't answer {route} within 5 s; run k2 daemon status\")
-        fail(f\"can't reach K2's server at {base}: {e.reason}; run k2 daemon status\")
+            why = f\"K2's server didn't answer {route} within 5 s\"
+        else:
+            why = f\"can't reach K2's server at {base}: {e.reason}\"
     except OSError as e:
-        fail(f\"K2's server closed the connection on {route}: {e}; run k2 daemon status\")
+        why = f\"K2's server closed the connection on {route}: {e}\"
+    if why:
+        if soft:
+            raise Busy(why)
+        fail(why + '; run k2 daemon status')
     if code in (401, 403) and not healed and b'Invalid or missing auth token' in raw:
         new = healed_passport()
         if new:
             healed = True
             token, auth = new, {'Authorization': 'Bearer ' + new}
-            return request(route, method, **params)
+            return request(route, method, soft, **params)
     return code, raw
 
-def checked(route, method='GET', **params):
+def checked(route, method='GET', soft=False, **params):
     # The JSON the daemon answered on route with HTTP 200 (a change: and
     # no error in it), and the raw answer; anything else ends the command
-    # with its error line.
-    code, raw = request(route, method, **params)
+    # with its error line. With soft, the daemon's 503 while it finishes
+    # its first-boot migrations raises Busy too.
+    code, raw = request(route, method, soft, **params)
     try:
         data = json.loads(raw)
     except ValueError:
         data = None
         if code == 200:
             fail(f\"K2's server answered {route} with something that is not JSON\")
+    if soft and code == 503 and isinstance(data, dict) and data.get('state') == 'migrating':
+        raise Busy(f\"K2's server answered {route} with HTTP 503: {data.get('error') or 'migrating'}\")
     if code != 200 or (method == 'POST' and isinstance(data, dict) and data.get('error')):
         refused(route, code, data, raw)
     return data, raw
 
-def answer(route, **params):
-    return checked(route, **params)[0]
+def answer(route, soft=False, **params):
+    return checked(route, 'GET', soft, **params)[0]
 
 def post(route, **params):
     # A change, checked: a write or a launch that failed ends the command
@@ -710,10 +725,12 @@ def post(route, **params):
 def say(**fields):
     print(json.dumps(fields, separators=(',', ':'), ensure_ascii=False))
 
-def sessions():
+def sessions(soft=False):
     # The daemon's live sessions. A read that fails ends the command: it
-    # never counts as no manager, so it never launches one.
-    data = answer('/cli/agents/running')
+    # never counts as no manager, so it never launches one. With soft
+    # (the poll after a launch), a daemon not answering just now raises
+    # Busy instead.
+    data = answer('/cli/agents/running', soft=soft)
     if not isinstance(data, list) or not all(isinstance(t, dict) for t in data):
         fail(f\"K2's server answered /cli/agents/running with a {type(data).__name__}, not a list of sessions\")
     return data
@@ -771,15 +788,29 @@ try:
         sys.exit(0)
 
     # Manager is asleep: launch it, then send the triage message once its
-    # terminal is up (Claude needs a moment to start).
+    # terminal is up (Claude needs a moment to start). A poll the daemon
+    # doesn't answer just now (nothing listens, a timeout, a connection
+    # closed unanswered, its 503 while migrating) is tried again until the
+    # last poll; then the wake fails with that reason. Any other failed
+    # poll (a refusal, an error status, an answer that is not JSON) ends
+    # it at once.
     post('/cli/agents/launch', agent='manager')
+    busy = ''
     for _ in range(12):
         time.sleep(5)
-        new_id = launched_manager(sessions())
+        try:
+            found = sessions(soft=True)
+        except Busy as e:
+            busy = str(e)
+            continue
+        busy = ''
+        new_id = launched_manager(found)
         if new_id:
             post('/cli/terminal/write', id=new_id, message=TRIAGE)
             say(status='launched_and_notified', terminalId=new_id)
             sys.exit(0)
+    if busy:
+        fail(f'the manager was launched, but K2 did not answer the last of 12 polls for its terminal (60 s): {busy}; run k2 daemon status')
     say(status='launched', agent='manager', note='triage message not sent - terminal not ready')
 except SystemExit:
     raise

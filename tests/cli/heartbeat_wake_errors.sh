@@ -47,8 +47,9 @@ bad() {
 # The stub reads plan.json on every request: {"<route>": [status, body]},
 # or {"<route>": {"seq": [[status, body], ...]}} for a route asked more than
 # once: the nth request gets the nth answer, the last one repeats. Status 0
-# closes the connection with no answer. A route the plan does not name
-# answers 404.
+# closes the connection with no answer; ["slow", body] answers body after
+# 6 s; ["down", secs] closes it and then listens on nothing for secs. A
+# route the plan does not name answers 404.
 # "#passport": {"route", "old", "new", "from", "again", "card"} plays a
 # daemon that lost its passport store: from the route's "from"-th request
 # on (0 = the first), a request that presents "old" is refused with the
@@ -57,7 +58,7 @@ bad() {
 # refused too ("card": with a permission card). Refused requests do not
 # count toward "seq".
 cat >"$T/stub.py" <<'PY'
-import http.server, json, os, sys
+import http.server, json, os, sys, time
 log, plan, portfile = sys.argv[1], sys.argv[2], sys.argv[3]
 class H(http.server.BaseHTTPRequestHandler):
     def _any(self):
@@ -96,22 +97,40 @@ class H(http.server.BaseHTTPRequestHandler):
                 json.dump(counts, f)
             entry = entry["seq"][min(n, len(entry["seq"]) - 1)]
         status, body = entry
+        if status == "down":  # close unanswered, then stop listening for body seconds
+            DOWN[0] = float(body)
+            return
+        if status == "slow":  # answer only after 6 s (the CLI waits 5)
+            time.sleep(6)
+            status, body = 200, body
         if status == 0:
             return
         body = body.encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass
     do_GET = do_POST = _any
     def log_message(self, *a):
         pass
+DOWN = [0.0]
 srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+port = srv.server_address[1]
 with open(portfile + ".tmp", "w") as f:
-    f.write(str(srv.server_address[1]))
+    f.write(str(port))
 os.rename(portfile + ".tmp", portfile)
-srv.serve_forever()
+while True:
+    srv.handle_request()
+    if DOWN[0]:
+        # Nothing listens on the port meanwhile: a connect is refused.
+        srv.server_close()
+        time.sleep(DOWN[0])
+        DOWN[0] = 0.0
+        srv = http.server.HTTPServer(("127.0.0.1", port), H)
 PY
 echo '{}' >"$T/plan.json"
 : >"$T/requests.log"
@@ -363,9 +382,63 @@ plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], '"$B
 wake
 poll_stopped "the launch poll answers 500" && is_error "the launch poll answers 500" 1 \
     "Error: k2 heartbeat wake: K2's server answered /cli/agents/running with HTTP 500: session map busy"
-plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [0, ""]]}}'
+# A poll that fails for good (a refusal, an error status, an answer that
+# is not JSON) stops the wait at once.
+plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [403, "{\"error\":\"not allowed: read sessions\",\"permission\":{\"command\":\"k2 permission request heartbeats.read --why \\\"<what you need it for>\\\"\"}}"]]}}'
 wake
-poll_stopped "the launch poll gets no answer" && err_like "the launch poll gets no answer" 1 "$CLOSED"
+if poll_stopped "the launch poll is refused"; then
+    if [ "$(gets /cli/agents/running)" = 2 ]; then
+        is_error "the launch poll is refused: no more polls" 3 \
+        "Error: k2 heartbeat wake: K2's server refused /cli/agents/running with HTTP 403: not allowed: read sessions" "Ask with: $ASK"
+    else
+        bad "the launch poll is refused: no more polls: want 2 reads of /cli/agents/running"
+    fi
+fi
+plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [404, "{\"error\":\"not found\"}"]]}}'
+wake
+if poll_stopped "the launch poll answers 404"; then
+    if [ "$(gets /cli/agents/running)" = 2 ]; then
+        is_error "the launch poll answers 404: no more polls" 1 \
+        "Error: k2 heartbeat wake: K2's server answered /cli/agents/running with HTTP 404: not found"
+    else
+        bad "the launch poll answers 404: no more polls: want 2 reads of /cli/agents/running"
+    fi
+fi
+plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [200, "<html>not json</html>"]]}}'
+wake
+if poll_stopped "the launch poll answers something that is not JSON"; then
+    if [ "$(gets /cli/agents/running)" = 2 ]; then
+        is_error "the launch poll answers something that is not JSON: no more polls" 1 \
+        "Error: k2 heartbeat wake: K2's server answered /cli/agents/running with something that is not JSON"
+    else
+        bad "the launch poll answers something that is not JSON: no more polls: want 2 reads of /cli/agents/running"
+    fi
+fi
+# A poll the daemon doesn't answer just now is tried again: a connection
+# closed unanswered, nothing listening (the stub is down for 7 s), a
+# timeout and the 503 of a daemon finishing its migrations, then the
+# manager is up and told.
+MIGRATING='[503, "{\"state\":\"migrating\",\"error\":\"daemon is completing first-boot migrations\"}"]'
+plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [0, ""], ["down", "7"], ["slow", "[]"], '"$MIGRATING"', [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}}'
+wake
+if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&
+    [ "$(tail -n 1 "$T/out")" = "$LAUNCHED"'{"success":true}{"status":"launched_and_notified","terminalId":"agent-chat-manager"}' ] &&
+    [ "$(gets /cli/agents/running)" = 6 ] && [ "$(posted /cli/agents/launch?)" = 1 ] && [ "$(posted /cli/terminal/write?)" = 1 ]; then
+    ok "the launch poll: no answer, refused, a timeout and a 503 while migrating are tried again"
+else
+    bad "the launch poll: no answer, refused, a timeout and a 503 while migrating are tried again"
+fi
+# Still not answering at the last poll: the wake fails with that reason.
+plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], '"$MIGRATING"']}}'
+wake
+if poll_stopped "the launch poll never gets an answer"; then
+    if [ "$(gets /cli/agents/running)" = 13 ]; then
+        is_error "the launch poll never gets an answer: twelve polls, then the last reason" 1 \
+        "Error: k2 heartbeat wake: the manager was launched, but K2 did not answer the last of 12 polls for its terminal (60 s): K2's server answered /cli/agents/running with HTTP 503: daemon is completing first-boot migrations; run k2 daemon status"
+    else
+        bad "the launch poll never gets an answer: twelve polls, then the last reason: want 13 reads of /cli/agents/running"
+    fi
+fi
 plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}}'
 wake
 if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&

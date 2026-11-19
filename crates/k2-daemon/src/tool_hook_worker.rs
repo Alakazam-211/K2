@@ -1213,12 +1213,20 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
     let agent_dm = status.features.iter().any(|f| f == hook::features::AGENTS_DM_WITH_BOX_PEOPLE);
     // Home chat on: K2 keeps `calls.dm_enabled` on for DM calls (HP-42).
     let calls_dm = kind == hook::CHAT_KIND && k2_core::home_chat::enabled();
+    // prd-home-chat-pushes-v1 HC-16: `notifications.mgmt_preview` follows the
+    // owner's switches both ways, so it is read while Home chat is on and
+    // while Sew last showed it on (K2 turns it off after Home chat goes off).
+    let mgmt_preview = kind == hook::CHAT_KIND && (k2_core::home_chat::enabled() || hook::mgmt_preview_seen_on());
+    let mut mgmt_preview_policies: Option<Value> = None;
     let mut recording_policies: Option<Value> = None;
     let mut agent_dm_policies: Option<Value> = None;
     let mut calls_dm_policies: Option<Value> = None;
-    let policy_read = if managed || recording || agent_dm || calls_dm {
+    let policy_read = if managed || recording || agent_dm || calls_dm || mgmt_preview {
         match policy_read(client).await {
             Ok((v, body)) => {
+                if mgmt_preview {
+                    mgmt_preview_policies = Some(body.clone());
+                }
                 if calls_dm {
                     calls_dm_policies = Some(body.clone());
                 }
@@ -1266,6 +1274,11 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         if let Some(body) = &calls_dm_policies {
             if let Err(e) = hook::note_calls_dm_policy(body) {
                 log_debug!("[home-chat] DM calls policy: {e}");
+            }
+        }
+        if let Some(body) = &mgmt_preview_policies {
+            if let Err(e) = hook::note_mgmt_preview_policy(body) {
+                log_debug!("[home-chat] push preview policy: {e}");
             }
         }
         if let Some(body) = &recording_policies {

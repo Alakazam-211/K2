@@ -164,6 +164,58 @@ impl HomeChatFeatures {
     }
 }
 
+// ── Home chat pushes (prd-home-chat-pushes-v1 §3, vs-live HC-1/HC-2) ──
+// Names to agree with Sew; each path turns on from its flag, never a version.
+
+/// Sew 0.10.6: `GET /mgmt/v1/people/{ext}/notifications/head` → `{head}`, so a
+/// person K2 never read starts at now. Without it the first read starts at 0
+/// and old items are dropped by age.
+pub const FEED_HEAD: &str = "feed_head";
+/// Sew 0.10.6 (S-1): `GET/POST /mgmt/v1/people/{ext}/channels/{id}/notify`,
+/// a person's level over mgmt. Without it K2 sets the level on the person's
+/// own held session.
+pub const PERSON_CHANNEL_NOTIFY: &str = "person_channel_notify";
+/// Sew 0.11.0 (S-2): feed kinds `all` (channel messages at level All
+/// messages) and `keyword`. Without it All messages is saved in Sew but
+/// pushes come for @mentions only.
+pub const FEED_ALL_MESSAGES: &str = "feed_all_messages";
+/// Sew 0.11.0 (S-3): the feed kind `read` (`channel_id` + read-up-to
+/// `message_id`). K2 acts on the kind whenever it comes (additive).
+pub const FEED_READ_MARKER: &str = "feed_read_marker";
+/// Sew 0.11.0 (S-4): `from_external_id` on feed items. K2 uses it when an
+/// item carries it, else maps the member id.
+pub const FEED_FROM_EXTERNAL_ID: &str = "feed_from_external_id";
+
+/// The Home chat push flags, read together from ONE feature list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomePushFeatures {
+    pub feed_head: bool,
+    pub person_channel_notify: bool,
+    pub feed_all_messages: bool,
+    pub feed_read_marker: bool,
+    pub feed_from_external_id: bool,
+}
+
+impl HomePushFeatures {
+    /// From a feature list as Sew reported it (unknown flags ignored).
+    pub fn from_flags<S: AsRef<str>>(flags: &[S]) -> HomePushFeatures {
+        let has = |f: &str| flags.iter().any(|x| x.as_ref() == f);
+        HomePushFeatures {
+            feed_head: has(FEED_HEAD),
+            person_channel_notify: has(PERSON_CHANNEL_NOTIFY),
+            feed_all_messages: has(FEED_ALL_MESSAGES),
+            feed_read_marker: has(FEED_READ_MARKER),
+            feed_from_external_id: has(FEED_FROM_EXTERNAL_ID),
+        }
+    }
+
+    /// From the list the last status refresh recorded for `kind`.
+    pub fn read(conn: &Connection, kind: &str) -> Result<HomePushFeatures, String> {
+        Ok(HomePushFeatures::from_flags(&list(conn, kind)?))
+    }
+}
+
 /// Sew 0.9.0's four recording flags, read together from ONE feature list
 /// (like [`VoiceFeatures`]). Gates read these fields, never versions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]

@@ -71,6 +71,15 @@ pub const CALLS_DM: &str = "calls.dm_enabled";
 /// Outbox subject of the DM calls `policy_set` row.
 pub const SUBJECT_CALLS_DM: &str = "policy:calls.dm_enabled";
 
+/// Sew's org policy that puts a 120-character `preview` on person feed items
+/// (default off). K2 keeps it equal to `homeChatPush && homeChatPushPreviews`
+/// both ways (prd-home-chat-pushes-v1 D6, HC-16): unlike `calls.dm_enabled`,
+/// K2 also turns it OFF. K2 strips the preview itself whenever either switch
+/// is off, so the sweep's lag never lets text through.
+pub const MGMT_PREVIEW: &str = "notifications.mgmt_preview";
+/// Outbox subject of the mgmt preview `policy_set` row.
+pub const SUBJECT_MGMT_PREVIEW: &str = "policy:notifications.mgmt_preview";
+
 /// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -81,7 +90,10 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             seen_at   INTEGER NOT NULL
          );",
     )
-    .map_err(|e| format!("skin.db sew policy schema: {e}"))
+    .map_err(|e| format!("skin.db sew policy schema: {e}"))?;
+    // prd-home-chat-pushes-v1 (HC-2): the feed cursors and each person's
+    // push choices live beside Sew's policies.
+    super::home_push::ensure_schema(conn)
 }
 
 /// Is `v` (the policy's value as Sew showed it; `None` = absent, Sew's
@@ -180,6 +192,9 @@ pub fn after_done(conn: &Connection, row_id: &str, result: &str, now: i64) -> Re
         }
         if let Some(seen) = v.get("policies").and_then(|p| p.get(CALLS_DM)) {
             note_calls_dm(conn, Some(seen), now)?;
+        }
+        if let Some(seen) = v.get("policies").and_then(|p| p.get(MGMT_PREVIEW)) {
+            note_mgmt_preview(conn, Some(seen), now)?;
         }
     }
     match managed_fields_in(result.as_bytes()) {
@@ -284,6 +299,62 @@ pub fn plan_calls_dm(conn: &Connection, busy: &std::collections::HashSet<String>
     }])
 }
 
+/// The `notifications.mgmt_preview` value in a `{"policies": {...}}` body
+/// (`None` = absent: Sew's default, off).
+pub fn mgmt_preview_in(body: &Value) -> Option<Value> {
+    body.get("policies").unwrap_or(body).get(MGMT_PREVIEW).filter(|v| !v.is_null()).cloned()
+}
+
+/// Record what Sew showed for `notifications.mgmt_preview` (`is_k2` here
+/// means "on": what K2 wants changes with the owner's switches).
+pub fn note_mgmt_preview(conn: &Connection, seen: Option<&Value>, now: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO tool_sew_policy (key, seen, is_k2, seen_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(key) DO UPDATE SET seen = excluded.seen, is_k2 = excluded.is_k2, seen_at = excluded.seen_at",
+        params![MGMT_PREVIEW, seen.map(Value::to_string), (seen == Some(&Value::Bool(true))) as i64, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("sew policy write: {e}"))
+}
+
+/// Did Sew last show `notifications.mgmt_preview` on? `None` = not read on
+/// this install.
+pub fn mgmt_preview_seen(conn: &Connection) -> Result<Option<bool>, String> {
+    conn.query_row("SELECT is_k2 FROM tool_sew_policy WHERE key = ?1", params![MGMT_PREVIEW], |r| r.get::<_, i64>(0))
+        .optional()
+        .map(|o| o.map(|v| v != 0))
+        .map_err(|e| format!("sew policy read: {e}"))
+}
+
+/// [`mgmt_preview_seen`] is `Some(true)`.
+pub fn mgmt_preview_seen_on(conn: &Connection) -> Result<bool, String> {
+    Ok(mgmt_preview_seen(conn)? == Some(true))
+}
+
+/// The sweep: one `policy_set {notifications.mgmt_preview: want}` once K2
+/// read the policy on this install and Sew shows the other value. Both ways
+/// (HC-16): on when the owner's push and preview switches are on, off
+/// otherwise.
+pub fn plan_mgmt_preview(conn: &Connection, busy: &std::collections::HashSet<String>, want: bool) -> Result<Vec<NewOp>, String> {
+    if busy.contains(SUBJECT_MGMT_PREVIEW) {
+        return Ok(Vec::new());
+    }
+    match mgmt_preview_seen(conn)? {
+        Some(on) if on != want => {}
+        _ => return Ok(Vec::new()),
+    }
+    Ok(vec![NewOp {
+        tool: CHAT_KIND,
+        op: Op::PolicySet,
+        subject_key: SUBJECT_MGMT_PREVIEW.to_string(),
+        payload: json!({ "changes": { MGMT_PREVIEW: want } }),
+        grant_id: None,
+        grant_rev: None,
+        cause: Cause::Reconcile,
+        after_subject: None,
+    }])
+}
+
 /// A new Sew install: K2 hasn't read its policy yet.
 pub fn forget(conn: &Connection) -> Result<(), String> {
     conn.execute("DELETE FROM tool_sew_policy", []).map(|_| ()).map_err(|e| format!("sew policy reset: {e}"))
@@ -341,6 +412,33 @@ mod tests {
         assert_eq!(plan_calls_dm(&c, &busy, true).unwrap().len(), 1, "off: set again");
         note_calls_dm(&c, calls_dm_in(&json!({"policies": {"calls.dm_enabled": true}})).as_ref(), 3).unwrap();
         assert!(plan_calls_dm(&c, &busy, true).unwrap().is_empty(), "on: done");
+    }
+
+    /// prd-home-chat-pushes-v1 HC-16: `notifications.mgmt_preview` follows
+    /// the owner's switches both ways once K2 read it; nothing before a
+    /// read; one row at a time.
+    #[test]
+    fn mgmt_preview_follows_the_switches_both_ways() {
+        let c = Connection::open_in_memory().unwrap();
+        ensure_schema(&c).unwrap();
+        let busy = std::collections::HashSet::new();
+        assert!(plan_mgmt_preview(&c, &busy, true).unwrap().is_empty(), "not read yet: nothing");
+        assert!(!mgmt_preview_seen_on(&c).unwrap());
+        note_mgmt_preview(&c, mgmt_preview_in(&json!({"policies": {}})).as_ref(), 1).unwrap();
+        assert!(plan_mgmt_preview(&c, &busy, false).unwrap().is_empty(), "absent is off: off wanted, nothing");
+        let ops = plan_mgmt_preview(&c, &busy, true).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload, json!({"changes": {"notifications.mgmt_preview": true}}));
+        let busy_now: std::collections::HashSet<String> = [SUBJECT_MGMT_PREVIEW.to_string()].into();
+        assert!(plan_mgmt_preview(&c, &busy_now, true).unwrap().is_empty(), "one row at a time");
+        note_mgmt_preview(&c, mgmt_preview_in(&json!({"policies": {"notifications.mgmt_preview": true}})).as_ref(), 2).unwrap();
+        assert!(mgmt_preview_seen_on(&c).unwrap());
+        assert!(plan_mgmt_preview(&c, &busy, true).unwrap().is_empty(), "on and wanted on: done");
+        let off = plan_mgmt_preview(&c, &busy, false).unwrap();
+        assert_eq!(off.len(), 1, "the owner turned previews off: K2 turns Sew's off too");
+        assert_eq!(off[0].payload, json!({"changes": {"notifications.mgmt_preview": false}}));
+        forget(&c).unwrap();
+        assert!(plan_mgmt_preview(&c, &busy, false).unwrap().is_empty(), "a new install: read first");
     }
 
     #[test]

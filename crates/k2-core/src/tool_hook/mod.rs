@@ -46,6 +46,7 @@ pub mod chat;
 pub mod features;
 pub mod governed;
 pub mod home;
+pub mod home_push;
 pub mod members;
 pub mod outbox;
 pub mod policy;
@@ -1279,6 +1280,9 @@ pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyR
         ops.extend(policy::plan_agent_dm(&tx, &busy)?);
         // Sew's DM calls need `calls.dm_enabled` while Home chat is on (HP-42).
         ops.extend(policy::plan_calls_dm(&tx, &busy, crate::home_chat::enabled())?);
+        // prd-home-chat-pushes-v1 D6, HC-16: Sew's feed carries text only
+        // while the owner's push and preview switches are both on, both ways.
+        ops.extend(policy::plan_mgmt_preview(&tx, &busy, crate::home_chat::push_previews_allowed())?);
         // Sew 0.9.0: the recording org policies a person asked for.
         ops.extend(recording::plan_policies(&tx, &busy)?);
         let mut n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
@@ -1322,6 +1326,21 @@ pub fn note_calls_dm_policy(body: &serde_json::Value) -> Result<(), String> {
     crate::skin::with_skin_conn(|conn| policy::note_calls_dm(conn, policy::calls_dm_in(body).as_ref(), now))
 }
 
+/// Record what Sew's policies show for `notifications.mgmt_preview` (the
+/// sweep's policy read; prd-home-chat-pushes-v1 HC-16).
+pub fn note_mgmt_preview_policy(body: &serde_json::Value) -> Result<(), String> {
+    if !skin_store_exists() {
+        return Ok(());
+    }
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| policy::note_mgmt_preview(conn, policy::mgmt_preview_in(body).as_ref(), now))
+}
+
+/// Did Sew last show `notifications.mgmt_preview` on? `false` before a read.
+pub fn mgmt_preview_seen_on() -> bool {
+    skin_store_exists() && crate::skin::with_skin_conn(policy::mgmt_preview_seen_on).unwrap_or(false)
+}
+
 /// Did the box's Sew report `flag` in its last status ([`features`])?
 /// `false` before any sweep, or on a box without Sew.
 pub fn sew_has(flag: &str) -> Result<bool, String> {
@@ -1359,6 +1378,15 @@ pub fn sew_home_chat_features() -> Result<features::HomeChatFeatures, String> {
         return Ok(features::HomeChatFeatures::default());
     }
     crate::skin::with_skin_conn(|conn| features::HomeChatFeatures::read(conn, CHAT_KIND))
+}
+
+/// The Home chat push flags ([`features::HomePushFeatures`]), from the one
+/// list the last status refresh recorded (all false before any sweep).
+pub fn sew_home_push_features() -> Result<features::HomePushFeatures, String> {
+    if !skin_store_exists() {
+        return Ok(features::HomePushFeatures::default());
+    }
+    crate::skin::with_skin_conn(|conn| features::HomePushFeatures::read(conn, CHAT_KIND))
 }
 
 /// Sew 0.9.0's recording flags ([`features::RecordingFeatures`]), from the

@@ -1238,16 +1238,26 @@ cmd_workspace_profile() {
 
 cmd_workspace_update() {
     local field="" value=""
+    local usage="Usage: k2 workspace update --field <f> --value <v>"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --field) field="$2"; shift 2 ;;
-            --value) value="$2"; shift 2 ;;
-            *) shift ;;
+            --field|--value)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: $1 needs a value" >&2
+                    echo "$usage" >&2
+                    exit 2
+                fi
+                if [[ "$1" = --field ]]; then field="$2"; else value="$2"; fi
+                shift 2 ;;
+            *)
+                echo "Error: unknown argument: $1" >&2
+                echo "$usage" >&2
+                exit 2 ;;
         esac
     done
     if [[ -z "$field" || -z "$value" ]]; then
-        echo "Usage: k2 workspace update --field <f> --value <v>" >&2
-        exit 1
+        echo "$usage" >&2
+        exit 2
     fi
     # 0.40.24 (B1): `update --field` edits the AGENT.md profile — it has
     # NEVER touched the projects DB. Passing a DB column name here used to

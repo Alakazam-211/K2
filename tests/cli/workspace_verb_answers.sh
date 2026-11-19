@@ -298,6 +298,25 @@ for c in "--no-attach|Error: --no-attach: k2 workspace launch never attaches a t
     assert_eq "launch $args: no request" "$(wc -l <"$LOG_FILE" | tr -d ' ')" "0"
 done
 
+echo "== update: a flag with no value is a named usage error, exit 2 =="
+USAGE="Usage: k2 workspace update --field <f> --value <v>"
+for c in "--field|Error: --field needs a value
+$USAGE" \
+         "--field role --value|Error: --value needs a value
+$USAGE" \
+         "--value Lead --field|Error: --field needs a value
+$USAGE" \
+         "--value Lead|$USAGE" \
+         "--field role --value Lead --bogus|Error: unknown argument: --bogus
+$USAGE"; do
+    args="${c%%|*}"; want="${c#*|}"
+    # shellcheck disable=SC2086
+    run workspace update $args
+    assert_eq "update $args: exit 2" "$rc" "2"
+    assert_eq "update $args: says why" "$err" "$want"
+    assert_eq "update $args: no request" "$(wc -l <"$LOG_FILE" | tr -d ' ')" "0"
+done
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

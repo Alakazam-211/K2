@@ -46,7 +46,11 @@ assert_rc_nonzero() {
 }
 
 WORK="$(mktemp -d -t k2-ws-resources-XXXXXX)"
-ABS_DIR="$(mktemp -d /private/tmp/k2-wsres-abs-XXXXXX)"
+# The folder's physical path: _workspace_resources_abs reads the cwd the way
+# the OS reports it (symlinks resolved, as with macOS /var -> /private/var),
+# so $PWD inside it must be the same path.
+ABS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/k2-wsres-abs.XXXXXX")"
+ABS_DIR="$(cd "$ABS_DIR" && pwd -P)"
 cleanup() {
     rm -rf "$WORK" "$ABS_DIR"
 }

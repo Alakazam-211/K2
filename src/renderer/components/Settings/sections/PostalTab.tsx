@@ -38,11 +38,13 @@ import {
   invitePostalFriend,
   isPostalAddress,
   postalErrorText,
+  postalRouteText,
   removePostalFriend,
   usePostalTabShown,
   type PostalFriend,
   type PostalFriendStatus,
   type PostalStatus,
+  type PostalTime,
 } from './postal-api'
 
 export const POSTAL_ROUTING_LINE =
@@ -78,9 +80,14 @@ function statusTag(status: PostalFriendStatus): { text: string; tone: TagTone } 
   }
 }
 
-function when(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
+/** A daemon time as a date. The daemon sends unix seconds; a number past
+ *  1e12 is read as milliseconds, and an ISO string is read as is. Anything
+ *  else is ''. */
+function when(t: PostalTime | undefined): string {
+  let d: Date
+  if (typeof t === 'number' && Number.isFinite(t) && t > 0) d = new Date(t > 1e12 ? t : t * 1000)
+  else if (typeof t === 'string' && t.trim()) d = new Date(t)
+  else return ''
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
@@ -94,18 +101,21 @@ function InlineError({ message, testId }: { message: string | null; testId?: str
 }
 
 /** One peer in a list: its address, its owner's name, a status tag, and the
- *  row's actions on the right. */
+ *  row's actions on the right. `below` (an open form) goes full width under
+ *  the address and meta lines. */
 function PeerRow({
   friend,
   actions,
+  below,
   error,
 }: {
   friend: PostalFriend
   actions?: React.ReactNode
+  below?: React.ReactNode
   error?: string | null
 }): React.JSX.Element {
   const tag = statusTag(friend.status)
-  const meta = [friend.ownerName ? `Owner: ${friend.ownerName}` : '', friend.route ? `Route: ${friend.route}` : '', when(friend.decidedAt ?? friend.updatedAt ?? friend.createdAt)]
+  const meta = [friend.ownerName ? `Owner: ${friend.ownerName}` : '', postalRouteText(friend.route) ?? '', when(friend.decidedAt ?? friend.updatedAt ?? friend.createdAt)]
     .filter(Boolean)
     .join(' · ')
   return (
@@ -118,8 +128,17 @@ function PeerRow({
           </div>
           {meta ? <div className={SETTING_ROW_HINT}>{meta}</div> : null}
         </div>
-        {actions ? <div className="flex flex-wrap items-center gap-2 flex-shrink-0">{actions}</div> : null}
+        {actions ? (
+          <div className="flex flex-wrap items-center gap-2 flex-shrink-0" data-testid="postal-row-actions">
+            {actions}
+          </div>
+        ) : null}
       </div>
+      {below ? (
+        <div className="mt-3" data-testid="postal-row-below">
+          {below}
+        </div>
+      ) : null}
       <InlineError message={error ?? null} testId="postal-row-error" />
     </div>
   )
@@ -434,27 +453,34 @@ export function PostalTab({
         {groups.incoming.length === 0 && groups.outgoing.length === 0 ? (
           <EmptyRow testId="postal-invitations-empty" title="No invitations waiting" />
         ) : null}
-        {groups.incoming.map((f) => (
-          <PeerRow
-            key={f.id}
-            friend={f}
-            error={errors[`decide:${f.id}`] ?? null}
-            actions={
-              canManage ? (
-                <>
-                  {f.codeWaiting && codeFor === f.id ? (
-                    <PostalPairCodeForm
-                      scope={scope}
-                      workspace={workspace}
-                      requestId={f.id}
-                      peer={f.peer}
-                      onDone={() => {
-                        setCodeFor(null)
-                        reload()
-                      }}
-                      onCancel={() => setCodeFor(null)}
-                    />
-                  ) : (
+        {groups.incoming.map((f) => {
+          // The open code form takes the row's full width under its lines;
+          // the actions column hides meanwhile (Back brings it back).
+          const coding = canManage && f.codeWaiting === true && codeFor === f.id
+          return (
+            <PeerRow
+              key={f.id}
+              friend={f}
+              error={errors[`decide:${f.id}`] ?? null}
+              below={
+                coding ? (
+                  <PostalPairCodeForm
+                    scope={scope}
+                    workspace={workspace}
+                    requestId={f.id}
+                    peer={f.peer}
+                    onDone={() => {
+                      setCodeFor(null)
+                      setNotice(`${f.peer} is now a friend.`)
+                      reload()
+                    }}
+                    onCancel={() => setCodeFor(null)}
+                  />
+                ) : undefined
+              }
+              actions={
+                canManage && !coding ? (
+                  <>
                     <Button
                       variant="accent"
                       disabled={busy !== null}
@@ -466,19 +492,19 @@ export function PostalTab({
                     >
                       Accept
                     </Button>
-                  )}
-                  <Button
-                    variant="quiet"
-                    disabled={busy !== null}
-                    onClick={() => void run(`decide:${f.id}`, () => decidePostalRequest(scope, workspace, f.id, 'reject'), `Rejected ${f.peer}.`)}
-                  >
-                    Reject
-                  </Button>
-                </>
-              ) : undefined
-            }
-          />
-        ))}
+                    <Button
+                      variant="quiet"
+                      disabled={busy !== null}
+                      onClick={() => void run(`decide:${f.id}`, () => decidePostalRequest(scope, workspace, f.id, 'reject'), `Rejected ${f.peer}.`)}
+                    >
+                      Reject
+                    </Button>
+                  </>
+                ) : undefined
+              }
+            />
+          )
+        })}
         {groups.outgoing.map((f) => (
           <PeerRow key={f.id} friend={f} />
         ))}

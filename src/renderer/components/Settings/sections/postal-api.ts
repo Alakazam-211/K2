@@ -37,11 +37,15 @@ export type PostalFriendStatus =
   | 'blocked'
   | 'rekey_pending'
 
+/** A time as the daemon sends it: unix seconds (an ISO string from older
+ *  answers is read too). */
+export type PostalTime = number | string | null
+
 export interface PostalHandle {
   id: string
   address: string
   status: string
-  createdAt: string
+  createdAt: PostalTime
 }
 
 export interface PostalStatus {
@@ -63,11 +67,11 @@ export interface PostalFriend {
   /** The request carries a pairing code: a person accepts it by typing the
    *  code shown on the other side's screen (the code itself is never listed). */
   codeWaiting?: boolean
-  pinnedAt?: string | null
+  pinnedAt?: PostalTime
   decidedBy?: string | null
-  decidedAt?: string | null
-  createdAt?: string | null
-  updatedAt?: string | null
+  decidedAt?: PostalTime
+  createdAt?: PostalTime
+  updatedAt?: PostalTime
 }
 
 export interface PostalFriends {
@@ -90,6 +94,34 @@ export function postalErrorText(err: unknown): string {
   // keep the first line only.
   const first = text.split('\n')[0]?.trim() ?? ''
   return first || `${PRODUCT_NAME} couldn’t reach this server.`
+}
+
+/** A friend's stored routing rule (`{"targets":[...],"wake":bool}`) in
+ *  plain words, like "Mail: its terminal, wakes it". Null for no rule (the
+ *  default: the terminal, with a wake) and for a rule it can't read.
+ *  Targets: `terminal`, `inbox`, `inbox+pointer`, `thread:<person>`; a
+ *  missing `wake` is on, as the daemon reads it. */
+export function postalRouteText(route: string | null | undefined): string | null {
+  if (!route) return null
+  let rule: unknown
+  try {
+    rule = JSON.parse(route)
+  } catch {
+    return null
+  }
+  if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return null
+  const { targets, wake = true } = rule as { targets?: unknown; wake?: unknown }
+  if (!Array.isArray(targets) || targets.length === 0 || typeof wake !== 'boolean') return null
+  const words: string[] = []
+  for (const t of targets) {
+    if (t === 'terminal') words.push('its terminal')
+    else if (t === 'inbox') words.push('its inbox')
+    else if (t === 'inbox+pointer') words.push('its inbox, with a note in its terminal')
+    else if (typeof t === 'string' && t.startsWith('thread:') && t.slice(7).trim()) words.push(`${t.slice(7).trim()}’s Thread`)
+    else return null
+  }
+  const woken = !wake ? ', doesn’t wake it' : targets.includes('terminal') ? ', wakes it' : ''
+  return `Mail: ${words.join(' and ')}${woken}`
 }
 
 /** A full Postal address: `handle::label.postal.bot`. */

@@ -61,17 +61,18 @@ export function PostalPairCodeForm({
   return (
     <form
       data-testid="postal-code-form"
-      className="flex flex-col gap-1.5"
+      className="flex flex-col gap-1.5 min-w-0 max-w-full"
       onSubmit={(e) => {
         e.preventDefault()
         void submit()
       }}
     >
-      <div className="type-hint text-[var(--color-text-primary)]">
+      <div className="type-hint text-[var(--color-text-primary)] max-w-[75ch] break-words">
         Your code: <span className="font-mono" data-testid="postal-code-mine">{mine ?? '…'}</span>. Read it to {peer}’s person.
       </div>
       <Input
         data-testid="postal-code-input"
+        className="w-72 max-w-full"
         aria-label="The code shown on their screen"
         inputMode="numeric"
         autoComplete="off"
@@ -80,15 +81,15 @@ export function PostalPairCodeForm({
         onChange={(e) => setTyped(e.target.value)}
         placeholder="The code shown on their screen"
       />
-      <div className="type-hint text-[var(--color-text-secondary)]">
+      <div className="type-hint text-[var(--color-text-secondary)] max-w-[75ch] break-words">
         The two codes match only if nobody sits between the two servers. A code that doesn’t match ends the request on both sides.
       </div>
       {error ? (
-        <div className="type-hint text-[var(--color-status-warn-text)]" data-testid="postal-code-error">
+        <div className="type-hint text-[var(--color-status-warn-text)] max-w-[75ch] break-words" data-testid="postal-code-error">
           {error}
         </div>
       ) : null}
-      <div className="flex gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         <Button variant="accent" type="submit" disabled={busy || mine === null}>
           Accept
         </Button>

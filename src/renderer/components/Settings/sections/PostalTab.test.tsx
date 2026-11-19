@@ -77,6 +77,7 @@ vi.mock('@/stores/connect-host', async () => {
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { PostalTab, POSTAL_ROUTING_LINE } from './PostalTab'
 import { PostalServerSwitch } from './PostalServerSwitch'
+import { postalRouteText } from './postal-api'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import type { ServerScope } from '@/kessel/server-scope'
 
@@ -268,6 +269,110 @@ describe('PostalTab', () => {
     const card = await screen.findByTestId('postal-status-error')
     expect(card.textContent).toContain('Postal is off on this server')
     expect(card.textContent).not.toMatch(/at \w+ \(/)
+  })
+})
+
+describe('PostalTab dates, route words and the code form', () => {
+  it("reads the daemon's unix-seconds dates as real dates (not 1970)", async () => {
+    // The daemon sends created/updated/decided times as unix seconds.
+    cli.status = statusBody({ id: 'h1', address: 'ada::acme.postal.bot', status: 'claimed', createdAt: 1763500000 })
+    cli.friends = [
+      { id: 'f2', peer: 'bee::hive.postal.bot', status: 'accepted', createdAt: 1763500000, updatedAt: 1763500000, decidedAt: 1763500000 },
+    ]
+    render(<PostalTab project={project} scope={scope} />)
+    await screen.findByTestId('postal-address')
+    const tab = screen.getByTestId('postal-tab').textContent ?? ''
+    expect(tab).toMatch(/claimed \D*\d{1,2}\D*2025/)
+    expect(tab).not.toContain('1970')
+    const row = (await screen.findAllByTestId('postal-peer-row'))[0]
+    expect(row.textContent).toContain('2025')
+    expect(row.textContent).not.toContain('1970')
+  })
+
+  it('also reads milliseconds and ISO strings, and shows nothing for junk', async () => {
+    cli.friends = [
+      { id: 'a', peer: 'ms::a.postal.bot', status: 'accepted', createdAt: 1763500000000 },
+      { id: 'b', peer: 'iso::b.postal.bot', status: 'accepted', createdAt: '2025-11-18T21:00:00Z' },
+      { id: 'c', peer: 'junk::c.postal.bot', status: 'accepted', createdAt: 'not a date' },
+    ]
+    render(<PostalTab project={project} scope={scope} />)
+    const rows = await screen.findAllByTestId('postal-peer-row')
+    expect(rows[0].textContent).toContain('2025')
+    expect(rows[1].textContent).toContain('2025')
+    expect(rows[2].textContent).not.toMatch(/Invalid|NaN|1970/)
+  })
+
+  it("says a friend's route in plain words, never the raw rule", async () => {
+    cli.friends = [{ id: 'f2', peer: 'bee::hive.postal.bot', status: 'accepted', route: '{"targets":["terminal"],"wake":true}' }]
+    render(<PostalTab project={project} scope={scope} />)
+    const row = (await screen.findAllByTestId('postal-peer-row'))[0]
+    expect(row.textContent).toContain('Mail: its terminal, wakes it')
+    expect(row.textContent).not.toContain('{')
+    expect(row.textContent).not.toContain('Route:')
+  })
+
+  it("the code form opens below the row, with the row's actions hidden; Back brings Reject back", async () => {
+    cli.friends = [{ id: 'f9', peer: 'lab::gamma.postal.bot', status: 'pending_in', ownerName: 'Dana', codeWaiting: true }]
+    cli.code = '123 456'
+    render(<PostalTab project={project} scope={scope} />)
+    const accept = await screen.findByRole('button', { name: 'Accept' })
+    const row = accept.closest('[data-testid="postal-peer-row"]') as HTMLElement
+    expect(row.querySelector('[data-testid="postal-row-actions"]')).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(accept)
+    })
+    const form = await screen.findByTestId('postal-code-form')
+    expect(row.contains(form)).toBe(true)
+    expect(form.closest('[data-testid="postal-row-actions"]')).toBeNull()
+    expect(form.closest('[data-testid="postal-row-below"]')).toBeTruthy()
+    expect(row.querySelector('[data-testid="postal-row-actions"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.queryByTestId('postal-code-form')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeTruthy()
+  })
+
+  it('says the peer is a friend after an accept with a code', async () => {
+    cli.friends = [{ id: 'f9', peer: 'lab::gamma.postal.bot', status: 'pending_in', codeWaiting: true }]
+    cli.code = '123 456'
+    render(<PostalTab project={project} scope={scope} />)
+    const accept = await screen.findByRole('button', { name: 'Accept' })
+    await act(async () => {
+      fireEvent.click(accept)
+    })
+    await screen.findByTestId('postal-code-mine')
+    fireEvent.change(screen.getByTestId('postal-code-input'), { target: { value: '654321' } })
+    await act(async () => {
+      fireEvent.submit(screen.getByTestId('postal-code-form'))
+    })
+    expect(screen.getByTestId('postal-notice').textContent).toBe('lab::gamma.postal.bot is now a friend.')
+  })
+})
+
+describe('postalRouteText', () => {
+  it('says where mail lands and whether it wakes the agent', () => {
+    expect(postalRouteText('{"targets":["terminal"],"wake":true}')).toBe('Mail: its terminal, wakes it')
+    // The daemon reads a missing wake as on.
+    expect(postalRouteText('{"targets":["terminal"]}')).toBe('Mail: its terminal, wakes it')
+    expect(postalRouteText('{"targets":["inbox"],"wake":true}')).toBe('Mail: its inbox')
+    expect(postalRouteText('{"targets":["inbox+pointer"],"wake":true}')).toBe('Mail: its inbox, with a note in its terminal')
+    expect(postalRouteText('{"targets":["thread:rosson"],"wake":true}')).toBe('Mail: rosson’s Thread')
+    expect(postalRouteText('{"targets":["thread:rosson","terminal"],"wake":false}')).toBe(
+      'Mail: rosson’s Thread and its terminal, doesn’t wake it',
+    )
+    expect(postalRouteText('{"targets":["inbox"],"wake":false}')).toBe('Mail: its inbox, doesn’t wake it')
+  })
+
+  it("is null for the default (no rule) and for a rule it can't read", () => {
+    expect(postalRouteText(null)).toBeNull()
+    expect(postalRouteText(undefined)).toBeNull()
+    expect(postalRouteText('')).toBeNull()
+    expect(postalRouteText('junk')).toBeNull()
+    expect(postalRouteText('{"targets":[]}')).toBeNull()
+    expect(postalRouteText('{"targets":["pigeon"]}')).toBeNull()
+    expect(postalRouteText('{"targets":"terminal"}')).toBeNull()
+    expect(postalRouteText('{"targets":["thread:"]}')).toBeNull()
+    expect(postalRouteText('[1,2]')).toBeNull()
   })
 })
 

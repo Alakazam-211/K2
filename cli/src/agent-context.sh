@@ -900,6 +900,8 @@ SERVER SWITCHES (the owner only)
                             sessions; off = today's)
     homeChat                people and channels on Home (DMs and channels
                             in the K5 Space; needs chat on this server)
+    homeChatPush            phone pushes for Home chat DMs, @mentions and
+                            replies (needs homeChat on too)
   All of them are off until the owner turns them on.
   Run it as the owner in a plain terminal on the server (not a K2 tab): the
   CLI picks up the owner's credential there by itself. These are the only

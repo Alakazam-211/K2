@@ -538,6 +538,97 @@ fn an_agent_hires_only_with_its_own_switch_and_only_from_its_main_session() {
     assert!(sink.iter().any(|(e, _, o)| e == "agent-hire" && o == "refused:main_only"), "{sink:?}");
 }
 
+/// 0.46.17 (an agent that had hired before 0.46.12 got `hire_off` on its
+/// real run after a dry run that said "would apply", with no Ask line):
+/// a plain dry run (no template) answers as the real hire would, writes
+/// nothing either way, and is audited as a dry run; the `hire_off` hint
+/// says how a person turns cards on while they're off for the agent, and
+/// with cards on the refusal wrapper ends it with `agents.hire`'s Ask line.
+#[test]
+fn a_plain_dry_run_tells_the_truth_and_the_refusal_teaches_the_card() {
+    let _home = k2_core::test_env::TempHome::new();
+    let _env = k2_core::test_env::EnvVar::remove("K2_PERMISSION_CARDS");
+    k2_core::permission::gate::set_server_switch(false);
+    let root = ensure_test_root();
+    let (ws, agent) = hiring_agent("dr");
+    k2_core::workspace::settings::set_agents_can_hire_agents(&ws, false).unwrap();
+    let path = root.join(uniq("dry")).to_string_lossy().into_owned();
+    let dry = |who: &Who, body: Value| {
+        let r = handle_cli(CLI_HIRE, who.clone(), true, body.to_string().as_bytes(), &HashMap::new(), None);
+        let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json {e}: {}", r.body));
+        (r, v)
+    };
+
+    // Switch off, cards off: the dry run is refused as the hire would be
+    // (with or without a path), and the hint says how cards go on.
+    for body in [json!({ "dryRun": true }), json!({ "path": path, "name": "Dry", "dryRun": true })] {
+        let (r, v) = dry(&agent, body.clone());
+        assert_eq!((r.status, v["error"]["code"].as_str()), ("403 Forbidden", Some("hire_off")), "{body}: {}", r.body);
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("Let this agent hire agents"), "{hint}");
+        assert!(hint.contains("Permission cards are off for you"), "cards off names it: {hint}");
+        assert!(hint.contains(crate::apps::user_hold::PERMISSION_CARDS_ON_PATH), "and where they go on: {hint}");
+        assert!(hint.ends_with("you ask with k2 permission request agents.hire."), "{hint}");
+        assert!(v.get("permission").is_none(), "no card object while cards are off: {v}");
+    }
+    assert!(!Path::new(&path).exists(), "a dry run writes nothing");
+    // The same refusal on the real run.
+    let (r, v) = dry(&agent, json!({ "path": path, "name": "Real" }));
+    assert_eq!((r.status, v["error"]["code"].as_str()), ("403 Forbidden", Some("hire_off")), "{}", r.body);
+    assert!(!Path::new(&path).exists());
+    let sink = super::AUDIT_SINK.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    assert!(sink.iter().any(|(e, _, o)| e == "agent-hire" && o == "dry-run:hire_off"), "{sink:?}");
+
+    // A template dry run still skips the switch, and says the real hire
+    // needs it (no card to ask with while cards are off).
+    let (r, v) = dry(&agent, json!({ "template": "writer", "name": uniq("Tpl"), "dryRun": true }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(
+        (v["dryRun"].as_bool(), v["hireSwitch"]["on"].as_bool(), v["hireSwitch"]["code"].as_str()),
+        (Some(true), Some(false), Some("hire_off")),
+        "{v}"
+    );
+    assert!(v["hireSwitch"]["hint"].as_str().expect("hint").contains("Permission cards are off for you"), "{v}");
+    assert!(v["hireSwitch"].get("command").is_none(), "{v}");
+
+    // Cards on for this agent (both switches): the hint is the plain one and
+    // the wrapper ends the refusal with agents.hire's Ask line, dry run or not.
+    let _cards = k2_core::test_env::EnvVar::set("K2_PERMISSION_CARDS", "1");
+    k2_core::workspace::settings::set_agents_can_request_permissions(&ws, true).expect("agent cards switch");
+    let ask = "k2 permission request agents.hire --why \"<what you need it for>\"";
+    for body in [json!({ "dryRun": true }), json!({ "path": path, "name": "Real" })] {
+        let r = handle_cli(CLI_HIRE, agent.clone(), true, body.to_string().as_bytes(), &HashMap::new(), None);
+        assert_eq!((r.status, code_of(&r).as_str()), ("403 Forbidden", "hire_off"), "{}", r.body);
+        assert!(!r.body.contains("Permission cards are off"), "{}", r.body);
+        let taught = crate::permission::walls::teach_cell(r.status, "POST", CLI_HIRE, &HashMap::new(), body.to_string().as_bytes(), &ws, &r.body)
+            .unwrap_or_else(|| panic!("no permission object: {}", r.body));
+        let t: Value = serde_json::from_str(&taught).expect("json");
+        assert_eq!((t["permission"]["action"].as_str(), t["permission"]["command"].as_str()), (Some("agents.hire"), Some(ask)), "{t}");
+    }
+    let (r, v) = dry(&agent, json!({ "template": "writer", "name": uniq("Tpl"), "dryRun": true }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(v["hireSwitch"]["command"].as_str(), Some(ask), "{v}");
+    assert!(!v["hireSwitch"]["hint"].as_str().expect("hint").contains("Permission cards are off"), "{v}");
+
+    // Switch on: the plain dry run passes the gate and still writes nothing;
+    // the template dry run has nothing to add.
+    k2_core::workspace::settings::set_agents_can_hire_agents(&ws, true).unwrap();
+    let (r, v) = dry(&agent, json!({ "path": path, "name": "Dry", "dryRun": true }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!((v["dryRun"].as_bool(), v["hire"].as_str()), (Some(true), Some("allowed")), "{v}");
+    assert!(!Path::new(&path).exists(), "a dry run that would pass writes nothing either");
+    let (r, v) = dry(&agent, json!({ "template": "writer", "name": uniq("Tpl"), "dryRun": true }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(v.get("hireSwitch").is_none(), "{v}");
+    // A sidecar's plain dry run: main_only, as its real hire.
+    let side = Who::Agent { project_id: ws.clone(), session_id: "tab-dry-side".into() };
+    let (r, v) = dry(&side, json!({ "dryRun": true }));
+    assert_eq!((r.status, v["error"]["code"].as_str()), ("403 Forbidden", Some("main_only")), "{}", r.body);
+    // The owner's plain dry run: the gate is an agent's only.
+    let (r, v) = dry(&Who::Owner, json!({ "dryRun": true }));
+    assert_eq!((r.status, v["hire"].as_str()), ("200 OK", Some("allowed")), "{}", r.body);
+}
+
 #[test]
 fn passport_converge_never_raises_db_access() {
     let _home = k2_core::test_env::TempHome::new();

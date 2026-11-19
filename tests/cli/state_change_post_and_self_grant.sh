@@ -13,6 +13,10 @@
 #   4. The same hire with `--db-access off` is not refused by that check.
 #   5. 0.46.12: the daemon's `hire_off` refusal ("Let this agent hire
 #      agents" is off) exits 3 and ends with its "Ask with:" line.
+#   6. 0.46.17: an agent's plain --dry-run asks the daemon's gate (a
+#      path-less dry run): refused → FAILED/not run, exit 3, the Ask line
+#      (none with cards off); allowed → would apply. A --template dry run
+#      prints that the real hire needs the switch.
 #
 # No daemon build — a python stub records every request. HOME is sandboxed.
 
@@ -62,15 +66,25 @@ work = sys.argv[1]
 class H(BaseHTTPRequestHandler):
     def _handle(self, method):
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if length:
-            self.rfile.read(length)
+        raw = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
         with open(os.path.join(work, "requests.log"), "a") as f:
             f.write("%s %s\n" % (method, parsed.path))
+        if parsed.path == "/cli/agents/hire":
+            with open(os.path.join(work, "hire_bodies.log"), "a") as f:
+                f.write(raw.decode("utf-8", "replace") + "\n")
         mode = open(os.path.join(work, "mode")).read().strip()
         if mode == "hireoff" and parsed.path == "/cli/agents/hire":
             code, body = 403, {"ok": False, "error": {"code": "hire_off", "hint": "Ask your human to turn on 'Let this agent hire agents'."},
                                "permission": {"action": "agents.hire", "command": "k2 permission request agents.hire --why \"<why>\""}}
+        elif mode == "hireoff-nocards" and parsed.path == "/cli/agents/hire":
+            code, body = 403, {"ok": False, "error": {"code": "hire_off", "hint": "Ask your human to turn on 'Let this agent hire agents'. Permission cards are off for you, so no card can go up."}}
+        elif mode == "allow" and parsed.path == "/cli/agents/hire":
+            code, body = 200, {"ok": True, "dryRun": True, "hire": "allowed"}
+        elif mode == "tplswitch" and parsed.path == "/cli/agents/hire":
+            code, body = 200, {"ok": True, "dryRun": True, "path": os.path.join(work, "tpl-agent"), "rows": [],
+                               "hireSwitch": {"on": False, "code": "hire_off", "hint": "Ask your human.",
+                                              "command": "k2 permission request agents.hire --why \"<why>\""}}
         elif mode == "new" and method == "GET":
             code, body = 405, {"error": "POST required"}
         elif mode == "old" and method == "POST":
@@ -202,6 +216,102 @@ if grep -q '"hire_off"' "$WORK/hireoff.err" && tail -n 1 "$WORK/hireoff.err" | g
     pass=$((pass + 1))
 else
     echo "  FAIL: hire_off stderr: $(cat "$WORK/hireoff.err")" >&2
+    fail=$((fail + 1))
+fi
+
+# ── 6. an agent's plain --dry-run asks the daemon's gate ────────────────
+run_agent() {
+    env -u K2SO_HOOK_SOCK -u K2SO_HOOK_TOKEN -u K2SO_PORT \
+        K2_PORT="$STUB_PORT" K2_HOOK_TOKEN="sess-0444.scoped-secret" K2_HOOK_SOCK="$FAKE_SOCK" \
+        K2_PROJECT_PATH="$WORK" "$K2_CLI" "$@"
+}
+echo "== an agent's dry run while Let this agent hire agents is off =="
+echo hireoff >"$WORK/mode"
+: >"$WORK/hire_bodies.log"
+set +e
+run_agent agent hire "$WORK/dry-agent" --dry-run >"$WORK/dry.out" 2>"$WORK/dry.err"
+rc=$?
+set -e
+echo new >"$WORK/mode"
+assert_eq "dry run hire_off exit 3" "$rc" "3"
+if grep -q '\[would apply\]' "$WORK/dry.out"; then
+    echo "  FAIL: the dry run still says would apply: $(cat "$WORK/dry.out")" >&2
+    fail=$((fail + 1))
+else
+    echo "  PASS: no step says would apply"
+    pass=$((pass + 1))
+fi
+if grep -q '\[FAILED\] *create-dir: .*(hire_off: ' "$WORK/dry.out" && grep -q '\[not run\] .*(the hire would be refused)' "$WORK/dry.out"; then
+    echo "  PASS: the plan shows the hire refused (hire_off) and the rest not run"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: dry run plan: $(cat "$WORK/dry.out")" >&2
+    fail=$((fail + 1))
+fi
+if grep -q '"hire_off"' "$WORK/dry.err" && tail -n 1 "$WORK/dry.err" | grep -q '^Ask with: k2 permission request agents.hire'; then
+    echo "  PASS: the dry run ends with the Ask with: line"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: dry run stderr: $(cat "$WORK/dry.err")" >&2
+    fail=$((fail + 1))
+fi
+assert_eq "the gate probe is a path-less dry run" \
+    "$(python3 -c 'import json,sys; b=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]; print(json.dumps(b))' "$WORK/hire_bodies.log")" \
+    '[{"dryRun": true}]'
+if [ -e "$WORK/dry-agent" ]; then
+    echo "  FAIL: the dry run created the folder" >&2
+    fail=$((fail + 1))
+else
+    echo "  PASS: the dry run created nothing"
+    pass=$((pass + 1))
+fi
+
+echo "== the same dry run with permission cards off for the agent =="
+echo hireoff-nocards >"$WORK/mode"
+set +e
+run_agent agent hire "$WORK/dry-agent" --dry-run >"$WORK/dry2.out" 2>"$WORK/dry2.err"
+rc=$?
+set -e
+echo new >"$WORK/mode"
+assert_eq "cards off: exit 3" "$rc" "3"
+if ! grep -q '^Ask with:' "$WORK/dry2.err" && tail -n 1 "$WORK/dry2.err" | grep -q '"hire_off"' && grep -q 'Permission cards are off for you' "$WORK/dry2.err"; then
+    echo "  PASS: no Ask with: line; the daemon's hint says cards are off"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: cards-off stderr: $(cat "$WORK/dry2.err")" >&2
+    fail=$((fail + 1))
+fi
+
+echo "== an agent's dry run, the daemon lets it hire =="
+echo allow >"$WORK/mode"
+set +e
+run_agent agent hire "$WORK/dry-agent" --dry-run >"$WORK/dry3.out" 2>"$WORK/dry3.err"
+rc=$?
+set -e
+echo new >"$WORK/mode"
+assert_eq "allowed dry run exit 0" "$rc" "0"
+if grep -q '\[would apply\] *create-dir' "$WORK/dry3.out"; then
+    echo "  PASS: allowed: the plan says would apply"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: allowed plan: $(cat "$WORK/dry3.out") $(cat "$WORK/dry3.err")" >&2
+    fail=$((fail + 1))
+fi
+
+echo "== a template dry run says the real hire needs the switch =="
+echo tplswitch >"$WORK/mode"
+set +e
+run_agent agent hire --template writer --name "Tpl" --dry-run >"$WORK/tpl.out" 2>"$WORK/tpl.err"
+rc=$?
+set -e
+echo new >"$WORK/mode"
+assert_eq "template dry run exit 0" "$rc" "0"
+if grep -q "needs *'Let this agent hire agents': it is off, so the real hire is refused (hire_off)" "$WORK/tpl.out" \
+    && grep -q 'ask with *k2 permission request agents.hire' "$WORK/tpl.out"; then
+    echo "  PASS: the template plan names the switch and the card"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: template plan: $(cat "$WORK/tpl.out") $(cat "$WORK/tpl.err")" >&2
     fail=$((fail + 1))
 fi
 

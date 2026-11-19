@@ -940,6 +940,15 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
     if req.template.as_deref().is_some_and(|t| !t.trim().is_empty()) {
         return cli_template_hire(who, &caller, &req, &extra, take_app.as_deref(), brief.as_deref());
     }
+    // A plain dry run (`dryRun: true`, no template; 0.46.17): the gate
+    // above is the whole answer. It refused already (hire_off / main_only,
+    // taught like the real hire) or the real hire would pass it. Nothing
+    // else in the body is read and nothing is written; `k2 agent hire
+    // --dry-run` sends it without a path, so a daemon from before this
+    // answers `usage: missing path` instead of hiring.
+    if extra.get("dryRun").and_then(|v| v.as_bool()) == Some(true) {
+        return ok(serde_json::json!({ "ok": true, "dryRun": true, "hire": "allowed" }));
+    }
     match converge::converge(&req, &caller, &ConvergeAuthority::unrestricted()) {
         Ok(out) => {
             if out.changed || out.created {
@@ -971,27 +980,77 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
 /// agents" is off (`hire_off`; the walls map teaches `agents.hire`).
 pub(crate) const HIRE_OFF_HINT: &str = "Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → {ws} → Permissions (or run k2 agent access set {ws} agents_hire on as the owner). Opening your own sidecars is a separate switch.";
 
+/// The card an agent asks with for "Let this agent hire agents".
+const HIRE_ACTION: &str = "agents.hire";
+
+/// The `hire_off` hint for workspace `workspace_id` (address `ws`). With
+/// permission cards on for that agent (both switches) the refusal wrapper
+/// adds `Ask with: k2 permission request agents.hire …` under it. Off,
+/// `k2 permission` is an unknown command for it (`k2 study permissions`,
+/// "Off"), so the hint says what the person clicks and how they turn cards
+/// on so the next ask is a card (0.46.17: an agent that had hired before
+/// 0.46.12 got `hire_off` with neither).
+pub(crate) fn hire_off_hint(workspace_id: &str, ws: &str) -> String {
+    let base = HIRE_OFF_HINT.replace("{ws}", ws);
+    if k2_core::permission::gate::enabled_for(workspace_id) {
+        base
+    } else {
+        format!(
+            "{base} Permission cards are off for you, so no card can go up: to approve from a card instead, your human turns them on ({}) and you ask with k2 permission request {HIRE_ACTION}.",
+            crate::apps::user_hold::PERMISSION_CARDS_ON_PATH
+        )
+    }
+}
+
+/// What the real hire still needs, for a template dry run that skipped the
+/// switch (`hireSwitch` in its answer): `None` when the caller isn't an
+/// agent or its switch is on. `command` is the card to ask with, present
+/// only while permission cards are on for that agent.
+fn hire_switch_note(who: &Who) -> Option<serde_json::Value> {
+    let Who::Agent { project_id, .. } = who else {
+        return None;
+    };
+    if k2_core::workspace::settings::agents_can_hire_agents(project_id) {
+        return None;
+    }
+    let ws = k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| project_id.clone());
+    let mut v = serde_json::json!({
+        "on": false,
+        "code": "hire_off",
+        "hint": hire_off_hint(project_id, &ws),
+    });
+    if k2_core::permission::gate::enabled_for(project_id) {
+        v["command"] = serde_json::json!(crate::permission::walls::ask_command(HIRE_ACTION, &serde_json::Map::new()));
+    }
+    Some(v)
+}
+
 /// "Let this agent hire agents" (0299, 0.46.12; prd-agent-templates-v1
 /// AT5): an agent's own `k2 agent hire` needs its workspace's switch, and
 /// only the workspace's main session may hire (a sidecar never can, switch
 /// or not). A template dry run writes nothing, so it needs only the main
-/// session: the agent can show its person the hire before asking. A plain
-/// shell tab is a person typing (as for sidecars); the owner token and
-/// logins have their route floor; keys use `/v1`.
+/// session: the agent can show its person the hire before asking (its
+/// answer's `hireSwitch` says the real hire needs the switch). A plain dry
+/// run (no template) answers exactly as the real hire would here, so
+/// `k2 agent hire --dry-run` never shows "would apply" for a hire the
+/// daemon refuses. A plain shell tab is a person typing (as for sidecars);
+/// the owner token and logins have their route floor; keys use `/v1`.
 fn agent_hire_gate(who: &Who, body: &[u8]) -> Result<(), CliResponse> {
     let Who::Agent { project_id, session_id } = who else {
         return Ok(());
     };
     let v: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
     let template = v.get("template").and_then(|t| t.as_str()).is_some_and(|t| !t.trim().is_empty());
-    let dry_run = template && v.get("dryRun").and_then(|d| d.as_bool()).unwrap_or(false);
+    let dry_run = v.get("dryRun").and_then(|d| d.as_bool()).unwrap_or(false);
+    // A dry run is audited as one, not as a refused hire.
+    let outcome = |code: &str| if dry_run { format!("dry-run:{code}") } else { format!("refused:{code}") };
     let ws = k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| project_id.clone());
-    if !dry_run && !k2_core::workspace::settings::agents_can_hire_agents(project_id) {
-        audit("agent-hire", &who.label(), "refused:hire_off");
-        return Err(err(403, "hire_off", HIRE_OFF_HINT.replace("{ws}", &ws)));
+    if !(template && dry_run) && !k2_core::workspace::settings::agents_can_hire_agents(project_id) {
+        audit("agent-hire", &who.label(), &outcome("hire_off"));
+        return Err(err(403, "hire_off", hire_off_hint(project_id, &ws)));
     }
     if !is_main_session(project_id, session_id) {
-        audit("agent-hire", &who.label(), "refused:main_only");
+        audit("agent-hire", &who.label(), &outcome("main_only"));
         return Err(err(
             403,
             "main_only",
@@ -1100,6 +1159,13 @@ fn cli_template_hire(
             }
             let mut v = out.to_json();
             v["id"] = serde_json::json!(out.workspace_id);
+            // The dry run skipped "Let this agent hire agents": say the
+            // real hire needs it (and the card to ask with).
+            if out.dry_run {
+                if let Some(note) = hire_switch_note(who) {
+                    v["hireSwitch"] = note;
+                }
+            }
             // Daemon-first hello (PRD §3, the Hello row): with `launch: true`,
             // on the first create the daemon starts the agent and delivers its
             // hello, then the hirer's `onboard` message after it. Absent or

@@ -71013,10 +71013,13 @@ WHO MAY
   A person: the owner, or a login in Settings or a terminal. An agent: only
   its main session (a sidecar gets main_only, exit 3), and only while
   "Let this agent hire agents" is on for its workspace (else hire_off, exit
-  3; ask with k2 permission request agents.hire). A --template --dry-run
-  needs only the main session. Opening its own sidecars is a separate
-  switch, "Let this agent manage its sidecars" (k2 sidecar). The owner or
-  an admin turns hiring on: k2 agent access set <ws> agents_hire on.
+  3; ask with k2 permission request agents.hire; with permission cards
+  off, the refusal says how a person turns them on). A --dry-run shows
+  that refusal too, except a --template --dry-run: it needs only the main
+  session and says the real hire needs the switch. Opening its own
+  sidecars is a separate switch, "Let this agent manage its sidecars"
+  (k2 sidecar). The owner or an admin turns hiring on:
+  k2 agent access set <ws> agents_hire on.
 
 EXAMPLES
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
@@ -72369,6 +72372,10 @@ def emit(ok, changed):
                 line += " (%s v%s)" % (t.get("id"), t.get("version"))
         elif step == "hello":
             line = "hello: the agent says hello on its Thread"
+        elif step == "generate-agents-md":
+            line = "agents-md: generate AGENTS.md"
+        elif step == "fanout":
+            line = "fanout: leftover harness names (CLAUDE.md, GEMINI.md…)"
         elif step == "take-app":
             line = "take-app: hand %s to this agent" % a.get("app")
             h = a.get("handover") or {}
@@ -72396,6 +72403,13 @@ def emit(ok, changed):
                 print("      %-12s %s" % (words.get(r.get("status"), r.get("status")), txt))
             if a.get("permissionsNote"):
                 print("      %s" % a["permissionsNote"])
+            hs = a.get("hireSwitch")
+            if hs:
+                print("      %-12s %s" % ("needs", "'Let this agent hire agents': it is off, so the real hire is refused (%s)" % (hs.get("code") or "hire_off")))
+                if hs.get("command"):
+                    print("      %-12s %s" % ("ask with", hs["command"]))
+                elif hs.get("hint"):
+                    print("      %-12s %s" % ("", hs["hint"]))
             # First-conversation questions, when this call writes ROLE.md
             # (a re-run writes nothing, so it has nothing to say).
             qs = a.get("questions") or []
@@ -72451,6 +72465,10 @@ def take_template_rows(a, resp, applied):
     a["info"] = resp.get("template") or {}
     a["permissions"] = resp.get("permissions") or {}
     a["questions"] = resp.get("questions") or []
+    if isinstance(resp.get("hireSwitch"), dict):
+        # A template dry run skips "Let this agent hire agents" (so the
+        # agent can show its person the hire); the real hire needs it.
+        a["hireSwitch"] = resp["hireSwitch"]
     if (a["permissions"].get("suggested") or a["permissions"].get("cards")) and not (a["permissions"].get("granted")):
         a["permissionsNote"] = TEMPLATE_PERMS_NOTE
     busy = [r for r in a["rows"] if r.get("status") in ("write", "done") and r.get("step") not in ("folder", "register")]
@@ -72476,6 +72494,28 @@ if dry_run:
             ta_["exitCode"] = template_exit(code)
         else:
             take_template_rows(ta_, resp, applied=False)
+    elif core_token:
+        # 0.46.17: an agent's own hire. The daemon's gate ("Let this agent
+        # hire agents", main session only) runs only when the hire core is
+        # called, so ask it the same question now: a plan of "would apply"
+        # for a hire it refuses is a lie. No path in the body: a daemon from
+        # before this answers `usage: missing path` (nothing written) and
+        # the plan stays as it was.
+        core_pending = [a for a in actions if a["step"] in ("create-dir", "write-persona", "register-workspace", "set-db-access")
+                        and a["status"] == "pending"]
+        if core_pending:
+            resp = http_post_json("/cli/agents/hire", {"dryRun": True}, tok=core_token)
+            gerr = resp.get("error") if isinstance(resp, dict) else None
+            if isinstance(gerr, dict) and gerr.get("code") in ("hire_off", "main_only"):
+                note_permission(resp)
+                core_pending[0]["status"] = "failed"
+                core_pending[0]["error"] = {"code": gerr["code"], "hint": gerr.get("hint") or gerr["code"]}
+                core_pending[0]["exitCode"] = 3
+                # As the real run: every later step needs the workspace.
+                for a in actions:
+                    if a["status"] == "pending":
+                        a["status"] = "not-run"
+                        a["reason"] = "the hire would be refused"
     finish(any(a["status"] == "pending" for a in actions))
 
 changed = False

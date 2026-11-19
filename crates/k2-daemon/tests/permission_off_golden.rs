@@ -57,6 +57,9 @@
 //! covered here: the Thread card hygiene fixes (§6.10), the keep-as-mine
 //! floor (§6.9), the people-facing `permissionCards` key in
 //! `/cli/settings/get`, and the `handle_access` toggle-list error string.
+//! One wall's hint was re-captured on purpose: `hire_off` (0.46.17) also says
+//! how a person turns permission cards on, since with them off no card can
+//! go up (`hire_routes::hire_off_hint`); still no `permission` object.
 //!
 //! No vault, keychain, real `~/.k2` or running daemon is touched: `$HOME` is
 //! a short temp dir under /tmp (Unix socket paths are length-capped).

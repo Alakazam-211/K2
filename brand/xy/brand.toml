@@ -1,0 +1,12 @@
+# The xy brand: a stand-in brand for CI, so a build can prove that no name
+# is spelled outside the brand file. Not a product. Alias modes: silent,
+# notice, tombstone.
+id = "xy"
+schema = 1
+
+[names]
+product = "XY"
+
+[cli]
+name = "xy"
+aliases = []

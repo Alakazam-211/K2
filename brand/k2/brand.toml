@@ -1,0 +1,12 @@
+# The k2 brand: today's default build. crates/k2-brand reads this file when
+# building (K2_BRAND_DIR picks another brand folder). Alias modes: silent,
+# notice, tombstone.
+id = "k2"
+schema = 1
+
+[names]
+product = "K2"
+
+[cli]
+name = "k2"
+aliases = [{ name = "k2so", mode = "silent" }]

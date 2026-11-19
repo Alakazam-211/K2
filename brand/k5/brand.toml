@@ -1,0 +1,14 @@
+# The k5 brand: the name after the rename. crates/k2-brand reads this file
+# when K2_BRAND_DIR points here. Alias modes: silent, notice, tombstone.
+id = "k5"
+schema = 1
+
+[names]
+product = "K5"
+
+[cli]
+name = "k5"
+aliases = [
+    { name = "k2", mode = "notice" },
+    { name = "k2so", mode = "silent" },
+]

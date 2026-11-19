@@ -666,7 +666,7 @@ cmd_compute_node_servers() {
             esac
             local set_json
             set_json="$(_compute_kv_json ${pairs[@]+"${pairs[@]}"})" || exit 2
-            _compute_call POST /cli/compute/nodes/servers/add "$(_compute_json K2_CJ_node="$node" K2_CJ_url="$url" K2_CJ_code="$code" \
+            _compute_call POST /cli/compute/nodes/servers/add "$(_compute_json K2_CJ_node="$node" K2_CJ_url="$url" K2_CJ_code_s="$code" \
                 K2_CJ_trust="$trust" K2_CJ_forSecs_n="$for_n" K2_CJ_set_j="$set_json" K2_CJ_reason="$reason")" tcp
             code=""
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys

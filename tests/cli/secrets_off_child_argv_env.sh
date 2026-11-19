@@ -30,6 +30,7 @@
 # Also the token of k2 daemon restart --host <url> --token-stdin.
 # Also the remote token of k2 talk <ws>@<host> --token-stdin.
 # Also the tokens of k2 remote-session status --host and write --token-stdin.
+# Also the pairing code of k2 compute node servers add (--code -).
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -227,6 +228,8 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._answer(401, {"msg": "Invalid login credentials"})
         if path == "/cli/clone/preview":
             return self._answer(200, {"workspace": "ws1", "secrets": {"rows": []}, "callerCanCopySecrets": True})
+        if path == "/cli/compute/nodes/servers/add":
+            return self._answer(200, {"request": {"id": "req-1", "summary": "add a server"}})
         if path == "/cli/daemon/restart":
             return self._answer(200, {"restarting": True})
         if path == "/cli/api-keys/create":
@@ -459,6 +462,10 @@ sec_case "talk --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINE
 #        route and no child's argv or environment, nor k2's own argv.
 sec_case "remote-session status --token-stdin" /cli/remote-session/status "owner token" "$REMOTE_SENTINEL" remote-session status --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
 sec_case "remote-session write --token-stdin" /cli/terminal/write "grant token" "$REMOTE_SENTINEL" remote-session write sess-1 "ls" --token-stdin
+
+# 27. k2 compute node servers <node> add --code -: the pairing code reaches
+#     the add route and no child's argv or environment, nor k2's own argv.
+sec_case "compute node servers add --code -" /cli/compute/nodes/servers/add "pairing code" "$PASS_SENTINEL" compute node servers node-1 add --url https://globex.example --code -
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

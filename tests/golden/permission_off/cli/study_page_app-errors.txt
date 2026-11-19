@@ -303,6 +303,9 @@ DATABASE (an App's own database: k2 app db connect, check, disconnect)
       the command again. If it repeats, report it.
 
 BOX (box prep, box services, Podman)
+  already_running (exit 3)
+      fix: Wait for it to end (Settings → Cores → Apps → This server
+      shows it, or k2 app doctor), then run it again if it's still needed.
   apps_running (exit 3)
       fix: Stop every App first (k2 app stop <app-id>), then run k2 app box
       unprep --yes.
@@ -340,10 +343,19 @@ BOX (box prep, box services, Podman)
   port_owned (exit 3)
       fix: Pick another port, or ask that App's agent (k2 msg <address>
       "…") or the owner.
+  restart_unavailable (exit 3)
+      fix: The owner restarts it by hand: k2 daemon restart (or sudo
+      systemctl restart k2-daemon). Or pick "Tonight at 3 am" on the card.
   role_required (exit 3)
       fix: Ask someone with that role to do it: an Admin or the owner.
   root_busy (exit 3)
       fix: Wait for it to finish, then run the command again.
+  run_failed (exit 3)
+      fix: Run it again in a moment (or k2 app box prepare). If it repeats,
+      report it with the reason.
+  settings_write_failed (exit 3)
+      fix: Check the box's disk, then run k2 app box auto-prepare on|off
+      again. If it repeats, report it.
   unprep_failed (exit 3)
       fix: Read the reason, fix it, then run k2 app box unprep --yes again.
   unsupported (exit 3)

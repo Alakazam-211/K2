@@ -23,7 +23,7 @@
 # import --pass-stdin, of App users (k2 app user add and password
 # --password-stdin), the tunnel token k2 connect login binds, and of the
 # logins, k2 tunnel switch --token-stdin, and the sign-in code pasted
-# into k2 llm tokens add: k2 users add and set-password
+# into k2 llm tokens add, and k2 fed pair-join --token-stdin: k2 users add and set-password
 # --password-stdin, k2 users pair-phone, k2 connect login; and the remote
 # server's token of k2 clone (--host, --token).
 #
@@ -246,6 +246,8 @@ for _ in $(seq 1 50); do [ -f "$W/ready" ] && [ -s "$W/tcp-port" ] && break; sle
 # sees a terminal, not a session.
 cat "$W/tcp-port" >"$HOME/.k2/heartbeat.port"
 printf 'test-token\n' >"$HOME/.k2/heartbeat.token"
+# k2 fed reads the owner token from daemon.token (a fresh server has both).
+printf 'test-token\n' >"$HOME/.k2/daemon.token"
 cd "$W"
 
 PASS=0; FAIL=0
@@ -415,6 +417,16 @@ sec_case "tunnel switch --token-stdin" /cli/tunnel/switch "tunnel token" "$TUNNE
 # 20. k2 llm tokens add: the sign-in code pasted on stdin reaches
 #     login/input and no child's argv or environment.
 K2_LLMA_POLL_SECS=0 sec_case "llm tokens add (code)" /cli/llm/accounts/login/input "sign-in code" "$PASS_SENTINEL" llm tokens add claude work
+
+# 21. k2 fed pair-join --token-stdin: the other owner's pairing token
+#     reaches the pairing route (decoded) and, as typed, no child's argv
+#     or environment, nor k2's own argv.
+FED_TOKEN="k2pair1:$("$REAL_PY" -c 'import base64,json,sys; print(base64.urlsafe_b64encode(json.dumps({"n": sys.argv[1]}).encode()).decode().rstrip("="))' "$PASS_SENTINEL")"
+fresh
+printf '%s\n' "$FED_TOKEN" | k2run fed pair-join --token-stdin >/dev/null 2>&1 || true
+assert_tcp_got "fed pair-join --token-stdin" /cli/federation/pair/v2/respond "pairing token" "$PASS_SENTINEL"
+assert_children_seen "fed pair-join --token-stdin" curl
+assert_off_children "fed pair-join --token-stdin" "pairing token" "$FED_TOKEN"
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

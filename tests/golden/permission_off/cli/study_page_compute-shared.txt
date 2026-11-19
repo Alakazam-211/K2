@@ -118,9 +118,10 @@ SEATS AND LANES (0.46.10: your CI on another owner's nodes)
   whether vault secrets may go there). K2 ships one lane, ci-standard
   (secrets on); the owner's `k2 compute lanes` lists theirs.
   0 The two servers pair once (both owners, each on their own server; each
-    step prints a token to pass to the other):
-      A: k2 fed pair-start          B: k2 fed pair-join <token 1>
-      A: k2 fed pair-finish <token 2>  B: k2 fed pair-verify <token 3>
+    step prints a token to pass to the other; each next step reads it with
+    --token-stdin, off the command line):
+      A: k2 fed pair-start          B: k2 fed pair-join --token-stdin   (token 1)
+      A: k2 fed pair-finish --token-stdin (token 2)  B: k2 fed pair-verify --token-stdin (token 3)
       both compare the codes, then each: k2 fed confirm <fp> <code>
   1 Ask (an agent may):
       k2 compute seats request <owner-host> --lane ci-standard --secrets --why "…"

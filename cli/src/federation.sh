@@ -6,7 +6,7 @@
 #   k2 fed send <peer>::<workspace>::<agent> "message"
 #   k2 fed outbox                                queued + dead-lettered per peer
 #   k2 fed pair-start [--subdomain S] [--url URL] [--label L]   pairing v2, step 1 (then
-#   k2 fed pair-join / pair-finish / pair-verify <token>)
+#   k2 fed pair-join / pair-finish / pair-verify <token> | --token-stdin)
 #   k2 fed pair-request --pubkey <spki.pem> ...   pre-0.45.2 pairing (known peers only)
 #   k2 fed confirm <fingerprint> <sas-code>
 #
@@ -106,9 +106,16 @@ cmd_fed() {
 print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv[3]}))' "$label" "$subdomain" "$url")
                     ;;
                 *)
+                    # --token-stdin (or -) reads the token from stdin: a
+                    # token on the command line is visible to other users
+                    # on this machine.
                     token_in="${1:-}"
+                    if [ "$token_in" = "--token-stdin" ] || [ "$token_in" = "-" ]; then
+                        _cli_read_secret_stdin "Token: "
+                        token_in="$_K2_SECRET"; _K2_SECRET=""
+                    fi
                     if [ -z "$token_in" ]; then
-                        echo "usage: k2 fed $sub <token from the other server's owner>" >&2
+                        echo "usage: k2 fed $sub --token-stdin | <token from the other server's owner> (a token on the command line is visible to other users on this machine)" >&2
                         exit 2
                     fi
                     case "$sub" in
@@ -116,18 +123,21 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
                         pair-finish) route="pair/v2/reveal" ;;
                         pair-verify) route="pair/v2/verify" ;;
                     esac
-                    body=$(python3 -c 'import base64,json,sys
-t = sys.argv[1].strip()
-want = {"pair-join": ("k2pair1:", "offer"), "pair-finish": ("k2pair2:", "answer"), "pair-verify": ("k2pair3:", "reveal")}[sys.argv[2]]
+                    # The token reaches python on stdin, never argv or the
+                    # environment (ps shows both to every process of this user).
+                    body=$(printf '%s' "$token_in" | python3 -c 'import base64,json,sys
+t = sys.stdin.read().strip()
+want = {"pair-join": ("k2pair1:", "offer"), "pair-finish": ("k2pair2:", "answer"), "pair-verify": ("k2pair3:", "reveal")}[sys.argv[1]]
 if not t.startswith(want[0]):
-    sys.stderr.write("k2 fed %s: expected a %s... token (got %s...)\n" % (sys.argv[2], want[0], t[:8])); sys.exit(2)
+    sys.stderr.write("k2 fed %s: expected a %s... token (got %s...)\n" % (sys.argv[1], want[0], t[:8])); sys.exit(2)
 raw = t[len(want[0]):]
 raw += "=" * (-len(raw) % 4)
 try:
     obj = json.loads(base64.urlsafe_b64decode(raw.encode()).decode())
 except Exception as e:
-    sys.stderr.write("k2 fed %s: the token is damaged (%s)\n" % (sys.argv[2], e)); sys.exit(2)
-print(json.dumps({want[1]: obj}))' "$token_in" "$sub") || exit 2
+    sys.stderr.write("k2 fed %s: the token is damaged (%s)\n" % (sys.argv[1], e)); sys.exit(2)
+print(json.dumps({want[1]: obj}))' "$sub") || exit 2
+                    token_in=""
                     ;;
             esac
             local _K2_CFG="" resp
@@ -151,15 +161,15 @@ def tok(prefix, obj):
 if step == "pair-start":
     print("Send this to the other server owner (valid 10 minutes, single use):")
     print(tok("k2pair1:", d["offer"]))
-    print("They run: k2 fed pair-join <token>, and send you back a k2pair2: token.")
+    print("They run: k2 fed pair-join --token-stdin (and paste it), and send you back a k2pair2: token.")
 elif step == "pair-join":
     print("Send this back to the owner who started the pairing:")
     print(tok("k2pair2:", d["answer"]))
-    print("They run: k2 fed pair-finish <token>, and send you a k2pair3: token.")
+    print("They run: k2 fed pair-finish --token-stdin (and paste it), and send you a k2pair3: token.")
 elif step == "pair-finish":
     print("Send this to the other owner:")
     print(tok("k2pair3:", d["reveal"]))
-    print("They run: k2 fed pair-verify <token>.")
+    print("They run: k2 fed pair-verify --token-stdin (and paste it).")
     print("Your pairing code: %s" % d["sas"])
     print("If both codes match, run: k2 fed confirm %s %s" % (d["peer_fingerprint"], d["sas"]))
 else:
@@ -381,7 +391,7 @@ print(f\"total queued: {d.get('total_queued',0)}\")"
             echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
             echo "  peers: list pinned servers (use their host with k2 msg agent::host)" >&2
             echo "  pair-start [--subdomain S] [--url http://host:port] [--label L]: start a pairing (prints a token for the other owner)" >&2
-            echo "  pair-join / pair-finish / pair-verify <token>: the next steps; both owners then compare codes and confirm" >&2
+            echo "  pair-join / pair-finish / pair-verify --token-stdin | <token>: the next steps; both owners then compare codes and confirm (a token on the command line is visible to other users on this machine)" >&2
             echo "  pair-request: the pre-0.45.2 pairing; refused for a server not paired yet" >&2
             echo "  send/outbox/pair-*/confirm need federation ON; pubkey works anytime" >&2
             echo "  outbox: queued + dead-lettered cross-server messages per peer" >&2

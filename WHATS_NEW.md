@@ -16,6 +16,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 connect login` keeps your tunnel token out of other programs' view.** The subdomain's tunnel token now reaches K2 on a pipe, never in a helper program's environment.
 - **`k2 tunnel switch` takes the tunnel token on stdin.** `--token-stdin` reads it from stdin, so it is never on the command line, where other users on the machine can see it. `--token <t>` still works.
 - **The sign-in code you paste into `k2 llm tokens add` and `login` stays out of other programs' view.** It now reaches K2 on a pipe, never on a helper program's command line.
+- **`k2 fed pair-join`, `pair-finish` and `pair-verify` take the pairing token on stdin.** `--token-stdin` (or `-`) reads it from stdin, so it is never on the command line, where other users on the machine can see it; the token as an argument still works, and each step's next-step line names `--token-stdin`.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

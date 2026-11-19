@@ -239,7 +239,10 @@ pub fn handle_vault_handoff(body: &[u8]) -> CliResponse {
     let actor = if p.from.actor.is_empty() {
         format!("peer:{peer_addr}")
     } else {
-        format!("{}@{host}", p.from.actor.chars().filter(|c| !c.is_control()).take(200).collect::<String>())
+        // The peer's own text: control characters dropped, then capped and
+        // every other character outside printable ASCII escaped.
+        let stripped: String = p.from.actor.chars().filter(|c| !c.is_control()).collect();
+        format!("{}@{host}", crate::federation_routes::escape_capped(&stripped, crate::federation_routes::PEER_TEXT_CAP))
     };
     let handle = if p.from.handle.is_empty() { sender_agent.clone() } else { p.from.handle.clone() };
     let inc = Incoming {

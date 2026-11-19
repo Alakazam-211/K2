@@ -590,6 +590,32 @@ fn a_handoff_from_a_sender_name_that_is_not_a_handle_is_refused() {
     });
 }
 
+/// The peer's own `actor` stamp reaches the handoff record with control
+/// characters dropped, capped at 200 characters and every other character
+/// outside printable ASCII escaped.
+#[test]
+fn a_handoff_actor_is_stripped_capped_and_escaped() {
+    with_temp_home(|| {
+        let _db = k2_core::db::scoped_for_test();
+        let v = crate::vault::ensure_test_vault();
+        let (_d, sender) = other_vault("fed-actor");
+        let (ws, path) = receiving_workspace();
+        k2_core::workspace::settings::update_project_setting(&path, "allow_remote_instruct", "1").expect("opt in");
+        let (key, peer) = pin_peer("peer");
+        let id = k2_vault::handoff::new_delivery_id();
+        let raw = format!("agent:x\u{202e}evil\n\u{1b}[2J caf\u{e9}{}", "y".repeat(300));
+        let r = handle_vault_handoff(&sealed_envelope(&sender, &v, &key, &peer.fingerprint, &ws, &id, item("K_ACTOR"), &sentinel(), |p| {
+            p.from.actor = raw.clone();
+        }));
+        assert_eq!(body(&r)["status"], "pending", "{}", r.body);
+        let actor = v.handoff_get(&id, "in").unwrap().sender_actor;
+        assert!(actor.starts_with("agent:x\\u{202e}evil[2J caf\\u{e9}yyy"), "{actor}");
+        let (stamp, _host) = actor.rsplit_once('@').expect("actor@host");
+        assert!(stamp.ends_with("..."), "capped: {stamp}");
+        assert!(actor.chars().all(|c| c == ' ' || c.is_ascii_graphic()), "{actor:?}");
+    });
+}
+
 #[test]
 fn only_the_sending_peer_can_unsend_and_it_disables_the_copy() {
     with_temp_home(|| {

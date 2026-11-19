@@ -11,7 +11,10 @@
 #      _K5_PY_HEADERS="" (not the daemon);
 #   3. sits in a block that does not run the helper first:
 #      exec(os.environ.pop("_K5_PY_HTTP")) between python3 and the call.
-# It also fails on build_opener (a request that would skip urlopen), and
+# It also fails on build_opener (a request that would skip urlopen), except
+# a build_opener handed straight to install_opener on the same line: that
+# sets the opener urlopen itself uses (the proxy rule, _K2_PY_PROXY_RULE),
+# so the request still goes through urlopen(k5_request(...)). And it fails
 # when the helper text does not compile or does not define k5_request.
 #
 # Before the real scan it runs itself on a scratch dir of broken and good
@@ -45,7 +48,7 @@ for path in sorted(glob.glob(os.path.join(src, "*.sh"))):
         if line.lstrip().startswith("#"):
             continue
         at = "%s:%d" % (name, i + 1)
-        if "build_opener(" in line:
+        if "build_opener(" in line and not re.search(r"install_opener\([\w.]*build_opener\(", line):
             print("%s: build_opener sends requests that skip k5_request; use urlopen(k5_request(...))" % at)
         if "urlopen(" not in line:
             continue
@@ -108,6 +111,7 @@ fixture bad_no_prefix "A=2" "$X" 'urllib.request.urlopen(k5_request(req), timeou
 fixture bad_no_headers '_K5_PY_HTTP="$_K5_PY_HTTP"' "$X" 'urllib.request.urlopen(k5_request(req), timeout=5)'
 fixture bad_no_exec "$D" "pass" 'urllib.request.urlopen(k5_request(req), timeout=5)'
 fixture bad_opener "$D" "$X" 'urllib.request.build_opener().open(req)'
+fixture good_installed_opener "$D" "$X"$'\n''urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler()))' 'urllib.request.urlopen(k5_request(req), timeout=5)'
 got="$(scan "$FX" | grep -v '^checked ' | cut -d: -f1 | sort -u | tr '\n' ' ')"
 want="bad_no_exec.sh bad_no_headers.sh bad_no_prefix.sh bad_no_wrap.sh bad_opener.sh "
 if [ "$got" = "$want" ]; then

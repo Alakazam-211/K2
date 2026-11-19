@@ -1458,11 +1458,9 @@ cmd_workspace_list() {
             # 0.46.6: scripts read JSON, never the table (a path with a
             # space used to split the columns). The same rows as
             # `k2 agent list --json` (workspace == agent).
+            # --help/-h never gets here: the router prints the workspace
+            # help for it first.
             --json) as_json="true"; shift ;;
-            -h|--help)
-                echo "Usage: k2 workspace list [--running] [--json]"
-                echo "  --json   {ok, workspaces:[{name, id, handle, path, mode, enabled, live, sessionId, backend, ptydAdopted}]}"
-                exit 0 ;;
             *) shift ;;
         esac
     done

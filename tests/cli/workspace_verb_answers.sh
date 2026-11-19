@@ -333,6 +333,15 @@ run workspace list
 assert_eq "list: exit 0" "$rc" "0"
 assert_contains "list: the row" "$out" "acme"
 
+echo "== list --help/-h: the router's workspace help, before list runs =="
+for args in "--help" "-h" "--json -h" "--running --help"; do
+    # shellcheck disable=SC2086
+    run workspace list $args
+    assert_eq "list $args: exit 0" "$rc" "0"
+    assert_contains "list $args: the workspace help" "$out" "k2 workspace"
+    assert_eq "list $args: no request" "$(wc -l <"$LOG_FILE" | tr -d ' ')" "0"
+done
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

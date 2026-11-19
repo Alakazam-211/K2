@@ -51,6 +51,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Compute
 - **An agent can ask on a card to change its own compute limits.** `k2 compute grant <node> --max-time 4h` (or `--max-parallel`, `--max-queued`, `--max-disk`) from an agent now ends with `Ask with: k2 permission request compute.grant node=<node> max-time=4h`, instead of "It can't be requested." The owner or an admin sees each limit as it is now and as asked ("run jobs of up to 4 hours on k2n15 (now 2 hours)"); Allow sets exactly those limits on that agent's own grant and keeps the rest. `--ci` and `--gpu` keep their own cards.
 
+### Compute
+- **CI on K2 Compute has a switch in Settings and a permission card.** Settings → Compute shows "CI on K2 Compute (preview)": the owner turns it on or off there, at once (it works while compute is on); everyone else sees it read-only. An agent refused `ci_preview_off` by `k2 ci`, or by its own `k2 settings set ciPreview true`, now gets the closing line `Ask with: k2 permission request ci.preview`: the owner allows it on a card, and `ci.preview-off` turns it off again.
+
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 
 ### Home chat

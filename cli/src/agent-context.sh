@@ -1156,7 +1156,10 @@ EOF
 }
 
 # _ws_request <cli_request|cli_request_post> <endpoint> [params...]: one
-# request of a workspace verb, its answer in _WS_ANSWER. A request K2's
+# request of a workspace verb, its answer in _WS_ANSWER. It goes through
+# cli_send: in an agent's session with a cell socket the socket first (its
+# refusal teaches), else TCP with the credential _cli_apply_auth_for_verb
+# chose (the session's passport, never the owner token). A request K2's
 # server never answered ends the command with the no-answer line and exit
 # 1 (_cli_no_answer, from inside the request); one it never took (a
 # refused connect) or a transport failure says so too, exit 1. Never a
@@ -1165,7 +1168,7 @@ EOF
 _ws_request() {
     local fn="$1" endpoint="$2" rc=0
     shift 2
-    _WS_ANSWER="$("$fn" "$endpoint" "$@")" || rc=$?
+    _WS_ANSWER="$(_K2_UDS_TRY=1 cli_send "$fn" "$endpoint" "$@")" || rc=$?
     [ "$rc" -eq 0 ] && return 0
     case "$rc" in
         7) echo "Error: K2's server didn't answer ${endpoint}: nothing took the connection at ${BASE_URL}; run k2 daemon status" >&2 ;;
@@ -1232,7 +1235,10 @@ if isinstance(p, str) and p.strip(): print(p)' 2>/dev/null) || true
 
 cmd_workspace_profile() {
     local target="${1:-$PROJECT}"
-    PROJECT="$target" _ws_request cli_request "/cli/workspace/agent-display-name"
+    # The cell socket sends no project= of its own: the target rides as
+    # project_path= too, so naming another workspace is refused, not
+    # answered with the caller's own profile.
+    PROJECT="$target" _ws_request cli_request "/cli/workspace/agent-display-name" "project_path=$(urlencode "$target")"
     cli_print_or_fail "$_WS_ANSWER" /cli/workspace/agent-display-name
 }
 
@@ -1466,6 +1472,7 @@ cmd_workspace_list() {
     done
     if [ "$as_json" = "true" ]; then
         _ws_request cli_request "/cli/agent/list"
+        local rc=0
         printf '%s' "$_WS_ANSWER" | RUNNING_ONLY="$running" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
@@ -1484,10 +1491,12 @@ rows = d.get("agents") or []
 if os.environ.get("RUNNING_ONLY") == "true":
     rows = [r for r in rows if r.get("enabled")]
 print(json.dumps({"ok": True, "workspaces": rows}))
-'
+' || rc=$?
+        _ws_list_exit "$rc"
         return
     fi
     _ws_request cli_request "/cli/projects/list"
+    local rc=0
     printf '%s' "$_WS_ANSWER" | RUNNING_ONLY="$running" python3 -c "
 import json, os, sys
 raw = sys.stdin.read()
@@ -1497,7 +1506,10 @@ except Exception:
     sys.stderr.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
 if isinstance(rows, dict):
-    sys.stderr.write('Error: %s\n' % rows.get('error', raw[:200]))
+    e = rows.get('error', raw[:200])
+    if isinstance(e, dict):
+        e = e.get('hint') or e.get('code') or raw[:200]
+    sys.stderr.write('Error: %s\n' % e)
     sys.exit(1)
 if os.environ.get('RUNNING_ONLY') == 'true':
     rows = [r for r in rows if r.get('agentEnabled')]
@@ -1512,7 +1524,16 @@ for r in rows:
     mode = r.get('agentMode') or 'off'
     path = r.get('path', '')
     print(f'  {name:<24} [{mode:<8}] {path}')
-"
+" || rc=$?
+    _ws_list_exit "$rc"
+}
+
+# A failed list exits 3 when K2 refused it with a permission card (its
+# closing line follows), else with the reader's own code.
+_ws_list_exit() {
+    [ "$1" -eq 0 ] && return 0
+    _permission_in_body "$_WS_ANSWER" && exit 3
+    exit "$1"
 }
 
 cmd_workspace_triage() {

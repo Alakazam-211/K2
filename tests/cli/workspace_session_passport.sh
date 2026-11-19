@@ -10,10 +10,14 @@
 # never in a header or the query. In the owner's own terminal (no session)
 # the owner token is sent, as before.
 #
-# The daemon admits no passport on these routes, for any workspace (they
-# are not agent verbs: the TCP catch-all and the cell socket both answer
-# 403 "Invalid or missing auth token"). The stub answers the same, so an
-# `update` aimed at another workspace is refused.
+# The daemon admits a passport on one of these routes only: `profile`'s
+# /cli/workspace/agent-display-name, for its own workspace (any other is
+# 403 own_workspace_only). Every other route here is not an agent verb:
+# TCP answers a passport 403 "Invalid or missing auth token", and the
+# cell socket answers with its refusal, a permission card when cards are
+# on. The stub answers the same, so an `update` aimed at another
+# workspace is refused. With a cell socket in the session, these verbs
+# try the socket first (cli_send), so an agent gets the card and exit 3.
 #
 # Nothing is installed: the daemon is a stub that logs each request's
 # method, path, query and Bearer header. The CLI runs with a clean
@@ -37,12 +41,17 @@ assert_contains() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1 (no $(printf %q "
 
 WORK="$(mktemp -d -t k2-ws-passport-XXXXXX)"
 STUB_PID=""
+UDS_PID=""
+# A Unix socket path must be short (about 100 bytes): its own folder.
+SOCK_DIR="$(mktemp -d /tmp/k2ws-XXXXXX)"
 cleanup() {
-    if [ -n "$STUB_PID" ]; then
-        kill "$STUB_PID" 2>/dev/null || true
-        wait "$STUB_PID" 2>/dev/null || true
-    fi
-    rm -rf "$WORK"
+    for p in "$STUB_PID" "$UDS_PID"; do
+        if [ -n "$p" ]; then
+            kill "$p" 2>/dev/null || true
+            wait "$p" 2>/dev/null || true
+        fi
+    done
+    rm -rf "$WORK" "$SOCK_DIR"
 }
 trap cleanup EXIT
 
@@ -51,15 +60,22 @@ PASSPORT="sess17.passport3c9f"
 LOG_FILE="$WORK/requests"
 
 cat >"$WORK/stub.py" <<'PY'
-import json, os
+import json, os, socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 LOG_FILE = os.environ["LOG_FILE"]
 OWNER = os.environ["OWNER"]
 PASSPORT = os.environ["PASSPORT"]
 WS = os.environ["WS"]
 REFUSED = '{"error":"Invalid or missing auth token"}'
+VIA = os.environ.get("VIA", "tcp")
+# The cell socket's refusal of a route that isn't an agent verb, cards on.
+CARD = json.dumps({
+    "error": {"code": "owner_only", "hint": "a person does this (the owner, or an admin where Settings allows), not an agent: this route isn't open to agents. Use Settings or a terminal outside K2."},
+    "permission": {"requestable": False, "where": "a person does this, in Settings or from a terminal outside K2"},
+})
+OTHER_WS = json.dumps({"error": {"code": "own_workspace_only", "hint": "an agent reads its own workspace's profile only; a person can read another's"}})
 OWNER_ANSWERS = {
     "/cli/projects/list": json.dumps([{"name": "acme", "agentMode": "custom", "path": WS, "agentEnabled": True}]),
     "/cli/agent/list": json.dumps({"ok": True, "agents": [{"name": "acme", "path": WS, "enabled": True}]}),
@@ -84,14 +100,23 @@ class H(BaseHTTPRequestHandler):
         u = urlsplit(self.path)
         auth = self.headers.get("Authorization")
         with open(LOG_FILE, "a") as f:
-            f.write(json.dumps({"method": method, "path": u.path, "query": u.query, "auth": auth}) + "\n")
-        if auth == "Bearer " + OWNER and u.path in OWNER_ANSWERS:
+            f.write(json.dumps({"via": VIA, "method": method, "path": u.path, "query": u.query, "auth": auth}) + "\n")
+        if VIA == "tcp" and auth == "Bearer " + OWNER and u.path in OWNER_ANSWERS:
             return self._send(200, OWNER_ANSWERS[u.path])
-        # A passport: whoami (an agent verb) knows it; every workspace
-        # route refuses it, whichever workspace it names (the daemon's
-        # catch-all answer).
-        if auth == "Bearer " + PASSPORT and u.path == "/cli/whoami":
+        passport = auth == "Bearer " + PASSPORT
+        # A passport: whoami (an agent verb) knows it; profile answers for
+        # its own workspace only (the claim is project=, else project_path=);
+        # every other workspace route refuses it, whichever workspace it names.
+        if passport and u.path == "/cli/whoami":
             return self._send(200, json.dumps({"ok": True, "workspace": "acme"}))
+        if passport and u.path == "/cli/workspace/agent-display-name":
+            q = parse_qs(u.query)
+            claim = (q.get("project") or q.get("project_path") or [WS])[0]
+            if claim == WS:
+                return self._send(200, OWNER_ANSWERS[u.path])
+            return self._send(403, OTHER_WS)
+        if passport and VIA == "uds":
+            return self._send(403, CARD)
         return self._send(403, REFUSED)
 
     def do_GET(self):
@@ -105,7 +130,14 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *_a):
         pass
 
-HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
+if VIA == "uds":
+    class U(socketserver.UnixStreamServer):
+        def get_request(self):
+            conn, _ = super().get_request()
+            return conn, ("uds", 0)
+    U(os.environ["SOCK_PATH"], H).serve_forever()
+else:
+    HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
 PY
 
 mkdir -p "$WORK/ws/.k2" "$WORK/other/.k2"
@@ -211,6 +243,69 @@ assert_eq "another workspace: refused, exit 1" "$rc" "1"
 assert_eq "another workspace: nothing on stdout" "$out" ""
 assert_contains "another workspace: the daemon's refusal on stderr" "$err" "Error: Invalid or missing auth token"
 owner_never_sent "another workspace"
+
+echo "== a session with a cell socket: the socket's refusal teaches, exit 3 =="
+LIVE_SOCK="$SOCK_DIR/cell.sock"
+LOG_FILE="$LOG_FILE" OWNER="$OWNER" PASSPORT="$PASSPORT" WS="$WS" VIA=uds SOCK_PATH="$LIVE_SOCK" "$PY" "$WORK/stub.py" &
+UDS_PID=$!
+for _i in $(seq 1 50); do [ -S "$LIVE_SOCK" ] && break; sleep 0.1; done
+[ -S "$LIVE_SOCK" ] || { echo "FAIL: the cell socket stub did not start" >&2; exit 1; }
+CARD_LINES="Error: a person does this (the owner, or an admin where Settings allows), not an agent: this route isn't open to agents. Use Settings or a terminal outside K2.
+It can't be requested."
+# "label|args" for every verb the socket refuses.
+REFUSED_VERBS=(
+    "workspace list|workspace list"
+    "workspace list --json|workspace list --json"
+    "workspace create|workspace create $WORK/newws"
+    "workspace open|workspace open $WS"
+    "workspace launch <path>|workspace launch $WS"
+    "workspace launch <name>|workspace launch acme"
+    "workspace update|workspace update --field role --value Lead"
+    "agent update|agent update --name acme --field role --value Lead"
+)
+for v in "${REFUSED_VERBS[@]}"; do
+    name="${v%%|*}"; args="${v#*|}"
+    # shellcheck disable=SC2086
+    run K2_PORT="$PORT" K2_HOOK_SOCK="$LIVE_SOCK" K2_HOOK_TOKEN="$PASSPORT" -- $args
+    assert_eq "socket: $name: exit 3" "$rc" "3"
+    assert_eq "socket: $name: nothing on stdout" "$out" ""
+    if [ "$name" = "workspace list --json" ]; then
+        # --json keeps its JSON error object, then the closing line.
+        assert_eq "socket: $name: the card's code, as JSON" "$(printf '%s\n' "$err" | head -n 1 | "$PY" -c 'import json, sys; print(json.load(sys.stdin)["error"]["code"])')" "owner_only"
+        assert_eq "socket: $name: the closing line" "$(printf '%s\n' "$err" | tail -n 1)" "It can't be requested."
+    else
+        assert_eq "socket: $name: the card's words and closing line" "$err" "$CARD_LINES"
+    fi
+    assert_eq "socket: $name: every request went to the socket" "$(field via | sort -u)" "'uds'"
+    owner_never_sent "socket: $name"
+done
+run K2_PORT="$PORT" K2_HOOK_SOCK="$LIVE_SOCK" K2_HOOK_TOKEN="$PASSPORT" -- workspace profile
+assert_eq "socket: profile: exit 0" "$rc" "0"
+assert_contains "socket: profile: its own profile" "$out" '"display_name": "Acme"'
+assert_eq "socket: profile: by the socket" "$(field via | sort -u)" "'uds'"
+run K2_PORT="$PORT" K2_HOOK_SOCK="$LIVE_SOCK" K2_HOOK_TOKEN="$PASSPORT" -- workspace profile "$WORK/other"
+assert_eq "socket: profile <other>: exit 1" "$rc" "1"
+assert_eq "socket: profile <other>: nothing on stdout" "$out" ""
+assert_eq "socket: profile <other>: refused" "$err" "Error: an agent reads its own workspace's profile only; a person can read another's"
+kill "$UDS_PID" 2>/dev/null || true; wait "$UDS_PID" 2>/dev/null || true; UDS_PID=""
+
+echo "== the same session over TCP only (no socket): a plain refusal, exit 1 =="
+for v in "${REFUSED_VERBS[@]}"; do
+    name="${v%%|*}"; args="${v#*|}"
+    # shellcheck disable=SC2086
+    run K2_PORT="$PORT" K2_HOOK_SOCK="$SOCK" K2_HOOK_TOKEN="$PASSPORT" -- $args
+    assert_eq "tcp: $name: exit 1" "$rc" "1"
+    assert_eq "tcp: $name: nothing on stdout" "$out" ""
+    if [ "$name" = "workspace list --json" ]; then
+        assert_contains "tcp: $name: the daemon's refusal, as JSON" "$(printf '%s\n' "$err" | head -n 1)" '"hint": "Invalid or missing auth token"'
+    else
+        assert_eq "tcp: $name: the daemon's refusal" "$(printf '%s\n' "$err" | head -n 1)" "Error: Invalid or missing auth token"
+    fi
+    owner_never_sent "tcp: $name"
+done
+run K2_PORT="$PORT" K2_HOOK_SOCK="$SOCK" K2_HOOK_TOKEN="$PASSPORT" -- workspace profile
+assert_eq "tcp: profile: exit 0" "$rc" "0"
+assert_contains "tcp: profile: its own profile" "$out" '"display_name": "Acme"'
 
 echo "== the owner's own terminal (no session): the owner token, as before =="
 for v in "${VERBS[@]}"; do

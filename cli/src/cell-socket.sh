@@ -81,7 +81,11 @@ cli_post_json_uds() {
 
 # Verbs the scoped per-cell socket actually serves (the daemon allowlist).
 # Anything else stays on TCP+owner.
+# _K2_UDS_TRY=1 (set by the caller for one send): try the socket for any
+# route. The socket answers a route agents can't use with its refusal (a
+# permission card when cards are on), where TCP has only a plain 403.
 _uds_eligible() {
+    [ "${_K2_UDS_TRY:-0}" = 1 ] && return 0
     case "$1" in
         /cli/workspace/msg|/cli/awareness/publish) return 0 ;;
         # Folder trust (SS10): agents read status and ask (the card).

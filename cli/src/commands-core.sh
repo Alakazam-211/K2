@@ -15,21 +15,18 @@ cmd_agent_update() {
         echo "  field: frontmatter key (role, type) or section name (Work Sources, Capabilities)" >&2
         exit 1
     fi
-    cli_request_post "/cli/agent/update" \
+    # Through cli_send, as `k2 workspace update` (_ws_request): an error is
+    # an error, on stderr with its exit and closing line.
+    _ws_request cli_request_post "/cli/agent/update" \
         "agent=$(urlencode "$name")" \
         "field=$(urlencode "$field")" \
-        "value=$(urlencode "$value")" \
-        | python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    if d.get('success'):
-        print(f'Updated {\"$field\"} for agent {\"$name\"}')
-    else:
-        print(f'Error: {d}', file=sys.stderr)
-except:
-    print('Error: failed to parse response', file=sys.stderr)
-" 2>/dev/null
+        "value=$(urlencode "$value")"
+    cli_print_or_fail "$_WS_ANSWER" /cli/agent/update >/dev/null
+    if ! printf '%s' "$_WS_ANSWER" | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("success") is True else 1)' 2>/dev/null; then
+        echo "Error: K2 did not say it updated $field for agent $name: ${_WS_ANSWER:0:200}" >&2
+        exit 1
+    fi
+    echo "Updated $field for agent $name"
 }
 
 # 0.40.31: cmd_heartbeat_noop / cmd_heartbeat_action removed with the

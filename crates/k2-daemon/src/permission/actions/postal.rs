@@ -600,7 +600,7 @@ fn revoke_old_links(label: &str) {
 /// Hand `key` to `p5 k2 link <slug> --path <dir> --key-stdin` on stdin.
 fn run_p5_link(p5: &std::path::Path, slug: &str, dir: &str, key: &str) -> Result<(), String> {
     use std::io::Write;
-    let mut child = std::process::Command::new(p5)
+    let mut child = k2_core::bg_proc::command(p5)
         .args(["k2", "link", slug, "--path", dir, "--key-stdin"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())

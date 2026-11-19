@@ -6,7 +6,10 @@
 # (scheduled mail went out at once), `--label` on `hostmail app-password
 # add`, and the selector on `hostmail dkim retire`.
 #
-# 1. Static: every M_* the heredoc reads must be on the export list.
+# 1. Static: every M_* the heredoc reads must be on the export list, or,
+#    for a secret, on the stdin list (_k2_stdin_secrets): the passwords
+#    and the OAuth secret ride stdin, never the environment, so none of
+#    them may be on the export list.
 # 2. Live: those verbs, against a local echo server, must put the value
 #    in the request body. No daemon; throwaway HOME.
 set -euo pipefail
@@ -32,17 +35,30 @@ cat >"$WORK/audit.py" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
 i = s.index("_mail_py() {")
-j = s.index("python3 - <<'PYEOF'", i)
+j = s.index('python3 -c "$_K2_PY_STDIN_BOOT"', i)
 k = s.index("\nPYEOF", j)
+m = re.search(r"_k2_stdin_secrets([^;]*);", s[i:j])
+if not m:
+    sys.exit("found no _k2_stdin_secrets list in _mail_py")
+on_stdin = set(re.findall(r'\b(M_[A-Z_]+) "\$\{', m.group(1)))
 exported = set(re.findall(r'\b(M_[A-Z_]+)="', s[i:j]))
 used = set(re.findall(r"""(?:env\(|environ\.get\(|environ\[)["'](M_[A-Z_]+)["']""", s[j:k]))
 if not used:
     sys.exit("found no M_* reads in the _mail_py heredoc")
-print(" ".join(sorted(used - exported)))
+out = []
+missing = used - exported - on_stdin
+if missing:
+    out.append("_mail_py reads but does not hand over: " + " ".join(sorted(missing)))
+secrets = {"M_PASS", "M_RELAY_PASS", "M_OAUTH_SECRET", "M_IMAPSYNC_PASS"}
+if secrets - on_stdin:
+    out.append("these secrets are not on the stdin list: " + " ".join(sorted(secrets - on_stdin)))
+if secrets & exported:
+    out.append("these secrets are in python3's environment: " + " ".join(sorted(secrets & exported)))
+print("; ".join(out))
 PY
 python3 "$WORK/audit.py" "$CLI_BASH_SOURCE" >"$WORK/missing"
 missing="$(cat "$WORK/missing")"
-[ -z "$missing" ] || fail "_mail_py reads but does not export: $missing"
+[ -z "$missing" ] || fail "$missing"
 
 cat >"$WORK/srv.py" <<'PY'
 import http.server, json, sys

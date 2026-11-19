@@ -440,6 +440,34 @@ class _K2ProxyRule(_k2_ur.ProxyHandler):
 _k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule()))
 '
 export _K2_PY_PROXY_RULE
+# A secret for an embedded Python script that is itself read from stdin (a
+# heredoc) rides stdin ahead of the script, never argv or the environment
+# (ps shows both to every process of this user):
+#   { _k2_stdin_secrets NAME "$value" ...; cat; } <<'PY' | VAR=… python3 -c "$_K2_PY_STDIN_BOOT" args…
+# stdin is NAME NUL value NUL for each pair, one more NUL, then the script.
+# The script reads the values from the dict K2_STDIN_SECRETS. Bash values
+# can't hold a NUL, so the split is exact. Not a secret itself.
+_K2_PY_STDIN_BOOT='
+import sys
+_b = sys.stdin.buffer.read()
+K2_STDIN_SECRETS = {}
+while True:
+    _k, _s, _b = _b.partition(b"\0")
+    if not _s:
+        sys.exit("k2: the embedded script did not arrive on stdin")
+    if not _k:
+        break
+    _v, _s, _b = _b.partition(b"\0")
+    K2_STDIN_SECRETS[_k.decode()] = _v.decode("utf-8", "surrogateescape")
+exec(compile(_b, "<stdin>", "exec"), {"__name__": "__main__", "__builtins__": __builtins__, "K2_STDIN_SECRETS": K2_STDIN_SECRETS})
+'
+_k2_stdin_secrets() {
+    while [ $# -ge 2 ]; do
+        printf '%s\0%s\0' "$1" "$2"
+        shift 2
+    done
+    printf '\0'
+}
 _K2_CURL_TRIES=4
 _k2_curl() {
     local cfg="$1"; shift

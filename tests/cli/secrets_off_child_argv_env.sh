@@ -16,7 +16,10 @@
 # Covered: k2 vault backup key, k2 sources secret (the token and the
 # secret's name), k2 app recording <app> set, k2 hostchat app-space
 # recording, k2 hostchat app-space recording-lock (callers of
-# _rec_send_confirmed), k2 api-key create --hire.
+# _rec_send_confirmed), k2 api-key create --hire, and the typed passwords
+# of the mail family: k2 mail link add --pass-stdin, k2 mail oauth-config
+# set --secret-stdin, k2 hostmail config --relay-pass-stdin, k2 hostmail
+# import --pass-stdin.
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -29,6 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 TOKEN_SENTINEL="k2vc_CHILDTEST000sentinel"
 SECRET_SENTINEL="CHILDTEST_SECRET_NAME"
+PASS_SENTINEL="CHILDTEST_PASSWORD_7Kq"
 AGEKEY="age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
 
 W="$(mktemp -d /tmp/k2child-XXXXXX)"
@@ -303,6 +307,21 @@ printf '\n' | "$K2_CLI" api-key create --label hire-test --workspaces ws1 --hire
 assert_tcp_got "api-key create --hire" /cli/api-keys/create "confirm token" "$TOKEN_SENTINEL"
 assert_children_seen "api-key create --hire" curl
 assert_off_children "api-key create --hire" "confirm token" "$TOKEN_SENTINEL"
+
+# 7-10. The mail family's passwords and OAuth secret: typed on stdin, they
+#       reach the daemon in the body and no child's argv or environment.
+pw_case() {
+    local label="$1" path="$2"; shift 2
+    fresh
+    printf '%s\n' "$PASS_SENTINEL" | "$K2_CLI" "$@" >/dev/null 2>&1 || true
+    assert_tcp_got "$label" "$path" "password" "$PASS_SENTINEL"
+    assert_children_seen "$label"
+    assert_off_children "$label" "password" "$PASS_SENTINEL"
+}
+pw_case "mail link add" /cli/mail/external/add mail link add a@example.test --host imap.example.test --workspace ws1 --pass-stdin --json
+pw_case "mail oauth-config set" /cli/mail/oauth-config/set mail oauth-config set --provider gmail --client-id cid --secret-stdin --json
+pw_case "hostmail config relay" /cli/mail/config/set hostmail config --relay-pass-stdin --json
+pw_case "hostmail import" /cli/mail/import hostmail import --address a@example.test --imapsync from=imap.example.test --user u --pass-stdin --json
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -40,7 +40,11 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 # `domain list` read must NOT carry a `project` param (the daemon uses
 # its presence to pick the owner table vs the agent view), so this
 # driver controls the query string exactly.
+# The passwords and the OAuth secret ride stdin ahead of the script
+# (_k2_stdin_secrets), never the environment; env() reads them the same.
 _mail_py() {
+    { _k2_stdin_secrets M_PASS "${M_PASS:-}" M_RELAY_PASS "${M_RELAY_PASS:-}" \
+        M_OAUTH_SECRET "${M_OAUTH_SECRET:-}" M_IMAPSYNC_PASS "${M_IMAPSYNC_PASS:-}"; cat; } <<'PYEOF' | \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" M_WS_PATH="$PROJECT" \
     M_VERB="${M_VERB:-}" M_JSON="${M_JSON:-false}" \
     M_LOCAL="${M_LOCAL:-}" M_DOMAIN="${M_DOMAIN:-}" M_CLIENT_ID="${M_CLIENT_ID:-}" \
@@ -62,7 +66,7 @@ _mail_py() {
     M_NOTE="${M_NOTE:-}" M_HEALTH="${M_HEALTH:-false}" \
     M_SEND_MODE="${M_SEND_MODE:-}" M_RELAY_HOST="${M_RELAY_HOST:-}" \
     M_RELAY_PORT="${M_RELAY_PORT:-}" M_RELAY_USER="${M_RELAY_USER:-}" \
-    M_RELAY_PASS="${M_RELAY_PASS:-}" M_AGENT_SEND="${M_AGENT_SEND:-}" \
+    M_AGENT_SEND="${M_AGENT_SEND:-}" \
     M_ADDRESS_CAP="${M_ADDRESS_CAP:-}" M_WORKSPACE="${M_WORKSPACE:-}" \
     M_QUOTA_BYTES="${M_QUOTA_BYTES:-}" M_QUOTA_GB="${M_QUOTA_GB:-}" \
     M_QUOTA_MESSAGES="${M_QUOTA_MESSAGES:-}" \
@@ -76,16 +80,16 @@ _mail_py() {
     M_HOST="${M_HOST:-}" M_PORT="${M_PORT:-}" M_TLS="${M_TLS:-}" \
     M_USER="${M_USER:-}" M_NAME="${M_NAME:-}" \
     M_DRAFTS_FOLDER="${M_DRAFTS_FOLDER:-}" \
-    M_PASS="${M_PASS:-}" M_PASS_REF="${M_PASS_REF:-}" \
+    M_PASS_REF="${M_PASS_REF:-}" \
     M_PROVIDER="${M_PROVIDER:-}" M_FEATURES="${M_FEATURES:-}" M_TENANT="${M_TENANT:-}" \
-    M_OAUTH_SECRET="${M_OAUTH_SECRET:-}" M_LINK_CAL="${M_LINK_CAL:-}" \
+    M_LINK_CAL="${M_LINK_CAL:-}" \
     M_SMTP_HOST="${M_SMTP_HOST:-}" M_SMTP_PORT="${M_SMTP_PORT:-}" M_SMTP_TLS="${M_SMTP_TLS:-}" \
     M_HOSTNAME="${M_HOSTNAME:-}" \
     M_IP="${M_IP:-}" M_ALL="${M_ALL:-false}" \
     M_REASON="${M_REASON:-}" M_EXPIRES="${M_EXPIRES:-}" \
     M_HOURS="${M_HOURS:-}" \
     M_MAILDIR="${M_MAILDIR:-}" M_IMAPSYNC_HOST="${M_IMAPSYNC_HOST:-}" \
-    M_IMAPSYNC_USER="${M_IMAPSYNC_USER:-}" M_IMAPSYNC_PASS="${M_IMAPSYNC_PASS:-}" \
+    M_IMAPSYNC_USER="${M_IMAPSYNC_USER:-}" \
     M_IMAPSYNC_PORT="${M_IMAPSYNC_PORT:-}" M_SKIP_INBOX="${M_SKIP_INBOX:-false}" \
     M_PERSON="${M_PERSON:-}" \
     M_MEMBERS="${M_MEMBERS:-}" M_LIST_OP="${M_LIST_OP:-}" \
@@ -105,7 +109,7 @@ _mail_py() {
     M_BK_OFF_DAILY="${M_BK_OFF_DAILY:-}" M_BK_OFF_WEEKLY="${M_BK_OFF_WEEKLY:-}" \
     M_BK_OFF_MONTHLY="${M_BK_OFF_MONTHLY:-}" M_BK_WINDOW="${M_BK_WINDOW:-}" \
     M_BK_MAX_LOCAL_GB="${M_BK_MAX_LOCAL_GB:-}" M_BK_CONFIRM="${M_BK_CONFIRM:-}" \
-    python3 - <<'PYEOF'
+    python3 -c "$_K2_PY_STDIN_BOOT"
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
@@ -262,6 +266,8 @@ def call(method, route, params=None, body=None, timeout=30, timeout_hint=None):
     return d
 
 def env(k):
+    if k in K2_STDIN_SECRETS:
+        return K2_STDIN_SECRETS[k]
     return os.environ.get(k, "")
 
 def env_list(k):

@@ -8,6 +8,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Command line
 - **An agent refused for want of its passport is no longer sent to a settings page that doesn't exist.** The refusal, and the SETTINGS part of `k2 study auth`, told the owner to set the tool Open in Settings → CLI Tools. There is no such setting: which tools need the session's passport is fixed, and the daemon decides every request. The refusal now says to run the command from a K2 agent session that carries its passport.
 - **`k2 api-key create --hire` keeps its confirm token out of other programs' view.** The token from your confirm now reaches the request on a pipe, never in a helper program's environment, where other programs of the same user could read it. A confirm token is what keeps a person-only step person-only.
+- **Mail passwords you type stay out of other programs' view.** The password of `k2 mail link add --pass-stdin`, `k2 hostmail config --relay-pass-stdin` and `k2 hostmail import --pass-stdin`, and the secret of `k2 mail oauth-config set --secret-stdin`, now reach K2's mail helper on a pipe, never in its environment, where other programs of the same user could read them.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

@@ -2151,7 +2151,6 @@ fn reject_wait(params: &HashMap<String, String>) -> Result<(), CliResponse> {
     Ok(())
 }
 
-/// Labels + a prose-comma hint ([`overlay::split_ask_options`]).
 fn collect_ask_options(params: &HashMap<String, String>) -> Result<overlay::AskOptions, CliResponse> {
     let options = opt_param(params, "options");
     let option = opt_param(params, "option");

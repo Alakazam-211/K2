@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.17
+
+Pairs with kit v0.23.0 (its public cut). The bridge's lock moves to it; the pack's code doesn't
+change. The kit changes no pack API but one (a blob pack's `merge3_known` is also asked for a
+revert, `SaveBase::Revert`), and its other changes are the host's (undo, redo and revert on a blob
+doc, a batch of verbs, a blob verb that plans with no lease, holds that bind an agent's whole-file
+write, the store's cache at 64 MiB, grouped commits as an opt-in) and the native engine's (off);
+the bridge uses none of them.
+
+- The board crate and the bridge 0.1.17 (`Cargo.lock`, `bridge/Cargo.lock`, `fuzz/Cargo.lock`);
+  `bridge/Cargo.lock`: k2-mpc-base 0.23.0. `bridge/Cargo.toml`'s pin comment and
+  `bridge/README.md`'s kit line name v0.23.0 and its cut.
+
 ## v0.1.16
 
 Pairs with kit v0.22.0 (`e085cada`, the public cut). The bridge's lock and kit pin text move to

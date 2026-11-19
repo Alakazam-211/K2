@@ -31,9 +31,9 @@
 //! number, a permission card, migrating then the answer); not JSON,
 //! not an object; Python's raises; the words; a passport over TCP
 //! only (re-minted; refused: one heal; dead: the restart line), PRD 13.9 #4;
-//! no answer (an empty reply, a reset, not HTTP, TMPDIR unusable, none in
-//! time, no daemon: `daemon_unreachable`; an empty 5xx: not JSON); and
-//! what it hands to the shell (help). A port with a leading zero is the
+//! no answer (an empty reply and an empty 5xx: the transport's line; a
+//! reset, not HTTP, TMPDIR unusable, none in time, no daemon:
+//! `daemon_unreachable`, as `list`'s); and what it hands to the shell (help). A port with a leading zero is the
 //! binary's own, as `list`'s is.
 //!
 //! Neither verb sends a request on the left of a pipe (`list` holds its
@@ -1531,24 +1531,24 @@ fn show_with_a_passport() {
 fn show_with_no_answer() {
     let rig = Rig::new(VERB, "snone");
     let v = vec![
-        case(
-            "an empty reply (52): daemon_unreachable",
+        waited(case(
+            "an empty reply: the line, exit 1",
             &["show", "x"],
             &[],
             vec![Reply::Close],
             owner_and_port,
             1,
             1,
-        ),
-        case(
-            "a 5xx with no body: not JSON",
+        )),
+        waited(case(
+            "a 5xx with no body: the line, exit 1",
             &["show", "x"],
             &[],
             vec![Reply::Answer(502, String::new())],
             owner_and_port,
             1,
             1,
-        ),
+        )),
         case(
             "a reset (56): daemon_unreachable",
             &["show", "x"],
@@ -1611,7 +1611,7 @@ fn show_with_no_daemon() {
 #[test]
 fn show_with_a_daemon_that_never_answers() {
     let rig = Rig::new(VERB, "shang");
-    rig.check(&case(
+    rig.check(&waited(case(
         "no answer in time (28)",
         &["show", "x"],
         &[],
@@ -1619,7 +1619,7 @@ fn show_with_a_daemon_that_never_answers() {
         owner_and_port,
         1,
         1,
-    ));
+    )));
 }
 
 #[test]

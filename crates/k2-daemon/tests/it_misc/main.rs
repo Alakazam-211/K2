@@ -56,3 +56,4 @@ mod tunnel_subdomain_switch_integration;
 mod v1_agent_hire_integration;
 mod vault_run_helper_integration;
 mod workspace_layouts_revision_integration;
+mod workspace_passport_routes_integration;

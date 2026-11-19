@@ -28,8 +28,8 @@
 //! the thread with each message's files), `--json`, `--html`, `--html
 //! --json`, no brief; odd values, a long body, bytes that are not UTF-8,
 //! an id that needs escaping; the daemon's error (each code, text, a
-//! number, a permission card, migrating then the answer); not JSON, a
-//! NUL, not an object; Python's raises; the words; a passport over TCP
+//! number, a permission card, migrating then the answer); not JSON,
+//! not an object; Python's raises; the words; a passport over TCP
 //! only (re-minted; refused: one heal; dead: the restart line), PRD 13.9 #4;
 //! no answer (an empty reply, a reset, not HTTP, TMPDIR unusable, none in
 //! time, no daemon: `daemon_unreachable`; an empty 5xx: not JSON); and
@@ -1213,15 +1213,10 @@ fn show_answers_as_the_shell_does() {
             1,
             1,
         ),
-        case(
-            "a NUL in a string",
-            &["show", "x"],
-            &[],
-            vec![ok("{\"title\":\"a\u{0}b\"}")],
-            owner_and_port,
-            1,
-            1,
-        ),
+        // No NUL row: `resp=$(cli_request …)` drops a NUL with bash's own
+        // warning, which names the script's path and line; the binary drops
+        // it as `$(…)` does, silently (as for `list` and every reader of a
+        // `$(…)` answer).
         case(
             "not an object",
             &["show", "x"],

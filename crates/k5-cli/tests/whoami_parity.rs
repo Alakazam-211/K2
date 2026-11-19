@@ -463,18 +463,19 @@ fn check_parity(rig: &Rig, c: &Case) -> (Out, Vec<String>) {
         bl.join("\n----\n")
     );
     if c.compare == Compare::OwnerTokenWithPassport {
+        let bearer = |t: &str| format!("Authorization: Bearer {t}\n");
         assert!(
-            bl.iter().all(|l| l.contains(&format!("token={OWNER}&"))),
+            bl.iter().all(|l| l.contains(&bearer(OWNER))),
             "{name}: bash no longer sends the owner token: {bl:?}"
         );
         assert!(
             rl.iter()
-                .all(|l| l.contains(&format!("token={PASSPORT}&")) && !l.contains(OWNER)),
+                .all(|l| l.contains(&bearer(PASSPORT)) && !l.contains(OWNER)),
             "{name}: the binary: {rl:?}"
         );
         bl = bl
             .iter()
-            .map(|l| l.replace(&format!("token={OWNER}&"), &format!("token={PASSPORT}&")))
+            .map(|l| l.replace(&bearer(OWNER), &bearer(PASSPORT)))
             .collect();
     }
     assert_eq!(

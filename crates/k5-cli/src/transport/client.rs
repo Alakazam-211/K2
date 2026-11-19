@@ -1982,9 +1982,14 @@ mod tests {
             }
         }
         // cli_post_json_stdin's comes after the hand-over headers.
-        let (_, r) = owner.build(PostJsonStdin, Channel::Tcp, "/cli/x", &[], &[]).unwrap();
+        let (_, r) = owner
+            .build(PostJsonStdin, Channel::Tcp, "/cli/x", &[], &[])
+            .unwrap();
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, [VERSION_HEADER, VIA_HEADER, "Authorization", "Content-Type"]);
+        assert_eq!(
+            names,
+            [VERSION_HEADER, VIA_HEADER, "Authorization", "Content-Type"]
+        );
         assert_eq!(r.target, "/cli/x");
         for k in [Probe, BearerForm] {
             let (_, r) = passport.build(k, Channel::Tcp, "/cli/x", &[], &[]).unwrap();

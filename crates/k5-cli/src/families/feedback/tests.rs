@@ -616,7 +616,7 @@ fn list_s_reader() {
     let r = list_reader(br#"{"items":["x"]}"#, false);
     assert!(
         r.stderr.ends_with(
-            "line 22, in <module>\nAttributeError: 'str' object has no attribute 'get'\n"
+            "line 23, in <module>\nAttributeError: 'str' object has no attribute 'get'\n"
         ),
         "{r:?}"
     );
@@ -711,6 +711,6 @@ fn show_s_reader() {
     );
     let bad = show_reader(r#"{"assignees":[1]}"#, false, false, now);
     assert!(bad.stderr.ends_with(
-        "line 77, in <module>\nTypeError: sequence item 0: expected str instance, int found\n"
+        "line 65, in <module>\nTypeError: sequence item 0: expected str instance, int found\n"
     ));
 }

@@ -4865,6 +4865,10 @@ except Exception as e:
 # Show the recent heartbeat decision log for this workspace.
 # Every tick writes one row per agent — fired OR skipped — with the
 # reason. This makes "why didn't my agent wake?" directly answerable.
+# An answer that is not the list of rows (none, not JSON, the daemon's
+# error, a refusal) prints one line on stderr and exits non-zero: 3 for a
+# refusal that carries a permission card (the exit trap adds its Ask
+# with: line), 1 for the rest.
 cmd_heartbeat_log() {
     local limit="50"
     while [[ $# -gt 0 ]]; do
@@ -4876,26 +4880,42 @@ cmd_heartbeat_log() {
     done
     cli_send cli_request "/cli/heartbeat-log" "limit=$limit" | python3 -c "
 import json, sys
+
+def fail(msg, code=1):
+    print('Error: k2 heartbeat log: ' + msg, file=sys.stderr)
+    sys.exit(code)
+
+raw = sys.stdin.read()
+if not raw.strip():
+    fail(\"K2's server gave no answer on /cli/heartbeat-log; run k2 daemon status\")
 try:
-    rows = json.loads(sys.stdin.read())
-    if not rows:
-        print('No heartbeat activity recorded yet.')
-        sys.exit(0)
-    print(f'{'Fired At':<22} {'Agent':<20} {'Decision':<22} {'Inbox':<8} Reason')
-    print('-' * 100)
-    for r in rows:
-        fired = r.get('firedAt', '?')[:19].replace('T', ' ')
-        agent = r.get('agentName') or '(project)'
-        decision = r.get('decision', '?')
-        inbox_count = r.get('inboxCount')
-        inbox_priority = r.get('inboxPriority') or ''
-        inbox = f'{inbox_count or 0}{\" \" + inbox_priority if inbox_priority else \"\"}'
-        reason = r.get('reason') or ''
-        print(f'{fired:<22} {agent:<20} {decision:<22} {inbox:<8} {reason}')
-except Exception as e:
-    print(f'Error parsing response: {e}', file=sys.stderr)
-    sys.exit(1)
-" 2>/dev/null || cat
+    rows = json.loads(raw)
+except ValueError:
+    fail(\"K2's server answered /cli/heartbeat-log with something that is not JSON\")
+if isinstance(rows, dict) and rows.get('error'):
+    err = rows['error']
+    if isinstance(err, dict):
+        err = err.get('hint') or err.get('code')
+    if isinstance(rows.get('permission'), dict):
+        fail(f\"K2's server refused /cli/heartbeat-log: {err}\", 3)
+    fail(f\"K2's server answered /cli/heartbeat-log with an error: {err}\")
+if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+    fail(f\"K2's server answered /cli/heartbeat-log with a {type(rows).__name__}, not a list of heartbeat rows\")
+if not rows:
+    print('No heartbeat activity recorded yet.')
+    sys.exit(0)
+print(f'{\"Fired At\":<22} {\"Agent\":<20} {\"Decision\":<22} {\"Inbox\":<8} Reason')
+print('-' * 100)
+for r in rows:
+    fired = r.get('firedAt', '?')[:19].replace('T', ' ')
+    agent = r.get('agentName') or '(project)'
+    decision = r.get('decision', '?')
+    inbox_count = r.get('inboxCount')
+    inbox_priority = r.get('inboxPriority') or ''
+    inbox = f'{inbox_count or 0}{\" \" + inbox_priority if inbox_priority else \"\"}'
+    reason = r.get('reason') or ''
+    print(f'{fired:<22} {agent:<20} {decision:<22} {inbox:<8} {reason}')
+"
 }
 
 cmd_hooks_status() {

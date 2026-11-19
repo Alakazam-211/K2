@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.1: pairs with kit v0.23.0
+
+**Requires `k2-mpc-base` v0.23.0**. BLEND files behave as in v0.3.0.
+
+- Pairs with kit v0.23.0. It changes no pack API but one: a blob pack's `merge3_known` is also asked
+  for a revert (`SaveBase::Revert`, base the version taken away, ours head, theirs the version
+  before it; the default calls `merge3_bytes`). Its other changes are the host's (undo, redo and
+  revert on a blob doc, a batch of verbs, a blob verb that plans with no lease, holds that bind an
+  agent's whole-file write, the store's cache at 64 MiB, grouped commits as an opt-in) and the
+  native engine's (off).
+- On a BLEND file, `undo`, `redo` and `revert` are refused with `MPC-E730` `revert_unsupported`
+  (this pack has no merge); the next step is `restore`.
+- `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.23.0 and the crate version 0.3.1; `README.md`'s
+  kit line names v0.23.0.
+
 ## v0.3.0: pairs with kit v0.22.0
 
 **Requires `k2-mpc-base` v0.22.0** (its edit check, `Pack::check_edit`). The crate version is

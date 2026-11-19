@@ -71,19 +71,22 @@ _clone_person_guard() {
 }
 
 # The engine: preview, push, pull, here, show, approve. Python so the
-# chunked transfer and the JSON stay in one place. Tokens and passwords ride
-# the environment and /dev/tty, never argv.
+# chunked transfer and the JSON stay in one place. Passwords ride /dev/tty
+# and the remote server's token rides stdin ahead of the script
+# (_k2_stdin_secrets), never argv; this server's own token rides the
+# environment.
 _clone_py() {
-    K2C_LOCAL_URL="$BASE_URL" K2C_LOCAL_TOKEN="$TOKEN" K2C_K2_HOME="$K2_HOME" \
+    { _k2_stdin_secrets K2C_REMOTE_TOKEN "${K2C_REMOTE_TOKEN:-}"; cat; } <<'PY' | \
+    K2C_LOCAL_URL="$BASE_URL" K2C_LOCAL_TOKEN="$TOKEN" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" \
     K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && [ -r /dev/tty ] && echo 1 || echo 0)" \
-    python3 - "$@" <<'PY'
+    python3 -c "$_K2_PY_STDIN_BOOT" "$@"
 import base64, getpass, http.client, json, os, socket, sys, time, uuid
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
 
 LOCAL = ("local", os.environ["K2C_LOCAL_URL"], os.environ["K2C_LOCAL_TOKEN"])
-REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), os.environ.get("K2C_REMOTE_TOKEN", ""))
+REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), K2_STDIN_SECRETS.get("K2C_REMOTE_TOKEN", ""))
 OPTS = json.loads(os.environ.get("K2C_OPTS") or "{}")
 K2_HOME = os.environ["K2C_K2_HOME"]
 VSOCK = os.environ.get("K2C_VAULT_SOCK", "")
@@ -712,6 +715,8 @@ _clone_opt() {
 }
 
 # Point K2C_REMOTE_* at a Connect host (token from --token / env / file).
+# Not exported: _clone_py hands the URL to its python3 and the token on its
+# stdin, so no other child sees the token.
 _clone_remote() {
     local host="$1" tok
     tok="$(_remote_token_for_host "$host" "$_CLONE_TOKEN")"
@@ -721,7 +726,6 @@ _clone_remote() {
         *) K2C_REMOTE_URL="https://${host}" ;;
     esac
     K2C_REMOTE_TOKEN="$tok"
-    export K2C_REMOTE_URL K2C_REMOTE_TOKEN
 }
 
 cmd_clone() {

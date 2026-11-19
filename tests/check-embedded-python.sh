@@ -593,10 +593,14 @@ def blocks(text, base_line=1, depth=0):
                         var_uses.append((code_var(code), line))
                         # `{ _k2_stdin_secrets …; cat; } <<'PY' | … python3 -c
                         # "$_K2_PY_STDIN_BOOT"`: the script is the heredoc on
-                        # the command just before the pipe.
-                        prev = stdin_body(lx.cmds[ci - 1]) if ci > 0 else None
-                        if code_var(code) == "_K2_PY_STDIN_BOOT" and prev is not None:
-                            yield "stdin", prev.body.value(), lx.line(prev.body.pos), None
+                        # the `}` before the pipe (the commands of any $(…)
+                        # in between come first in lx.cmds).
+                        if code_var(code) == "_K2_PY_STDIN_BOOT":
+                            for pc in reversed(lx.cmds[max(0, ci - 12):ci]):
+                                prev = stdin_body(pc)
+                                if prev is not None and pc.words and pc.words[0].literal() == "}":
+                                    yield "stdin", prev.body.value(), lx.line(prev.body.pos), None
+                                    break
                     else:
                         yield kind, None, line, "the code is a bash substitution"
                 break

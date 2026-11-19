@@ -20,7 +20,8 @@
 # of the mail family: k2 mail link add --pass-stdin, k2 mail oauth-config
 # set --secret-stdin, k2 hostmail config --relay-pass-stdin, k2 hostmail
 # import --pass-stdin, and of the logins: k2 users add and set-password
-# --password-stdin, k2 users pair-phone, k2 connect login.
+# --password-stdin, k2 users pair-phone, k2 connect login; and the remote
+# server's token of k2 clone (--host, --token).
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -34,6 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOKEN_SENTINEL="k2vc_CHILDTEST000sentinel"
 SECRET_SENTINEL="CHILDTEST_SECRET_NAME"
 PASS_SENTINEL="CHILDTEST_PASSWORD_7Kq"
+REMOTE_SENTINEL="k2rt_CHILDTEST_remote_token"
 AGEKEY="age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
 
 W="$(mktemp -d /tmp/k2child-XXXXXX)"
@@ -197,6 +199,8 @@ class H(http.server.BaseHTTPRequestHandler):
                                                 "hint": "type your password again to make a pairing code"}})
         if path == "/auth/v1/token":
             return self._answer(401, {"msg": "Invalid login credentials"})
+        if path == "/cli/clone/preview":
+            return self._answer(200, {"workspace": "ws1", "secrets": {"rows": []}, "callerCanCopySecrets": True})
         if path == "/cli/api-keys/create":
             return self._answer(200, {"id": "k1", "key": "k2ak_test", "capabilities": {"hire": True}})
         return self._answer(200, {"ok": True})
@@ -345,6 +349,14 @@ printf '%s\n' "$PASS_SENTINEL" | K2_CONNECT_DB_URL="http://127.0.0.1:$(cat "$W/t
 assert_tcp_got "connect login" /auth/v1/token "password" "$PASS_SENTINEL"
 assert_children_seen "connect login"
 assert_off_children "connect login" "password" "$PASS_SENTINEL"
+
+# 15. k2 clone --host … --token: the remote server's token reaches that
+#     server's request and no child's argv or environment.
+fresh
+"$K2_CLI" clone preview ws1 --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token "$REMOTE_SENTINEL" --json </dev/null >/dev/null 2>&1 || true
+assert_tcp_got "clone preview --host" /cli/clone/preview "remote token" "$REMOTE_SENTINEL"
+assert_children_seen "clone preview --host"
+assert_off_children "clone preview --host" "remote token" "$REMOTE_SENTINEL"
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -273,11 +273,27 @@ _cli_apply_auth_for_verb() {
         fi
         # No hook sock → TOKEN already owner (external) or env; Owner OK for ID.
     else
-        # Open / ungoverned: keep COMPAT-58 inversion for TCP ergonomics.
-        if [ -n "$hook_sock" ] && [ -n "${DISK_OWNER_TOKEN:-}" ]; then
+        if [ -n "$hook_sock" ] && _cli_verb_sends_session_passport "$verb" "${2:-}"; then
+            # In a session these send the session's own passport, or no
+            # credential when it has none: never the owner token from disk.
+            TOKEN="${SCOPED_TOKEN:-}"
+        elif [ -n "$hook_sock" ] && [ -n "${DISK_OWNER_TOKEN:-}" ]; then
+            # Open / ungoverned: keep COMPAT-58 inversion for TCP ergonomics.
             TOKEN="$DISK_OWNER_TOKEN"
         fi
     fi
+}
+
+# Open verbs that still act as the caller in an agent's session: the
+# workspace verbs that list, create, open, start or change a workspace and
+# its agent profile (`k2 agent profile|update` are the same commands).
+# Outside a session they send $TOKEN, as every Open verb does.
+_cli_verb_sends_session_passport() {
+    case "${1:-} ${2:-}" in
+        "workspace list"|"workspace create"|"workspace open"|"workspace launch"|"workspace profile"|"workspace update") return 0 ;;
+        "agent profile"|"agent update") return 0 ;;
+    esac
+    return 1
 }
 
 # The credential project membership changes ride from verbs that are not

@@ -452,8 +452,17 @@ sys.stdout.write(pw)
     subs_json="$(_connect_list_subdomains "$access_token")" || return 1
 
     # Pick subdomain (interactive numbered list, or --subdomain).
-    local pick_json
-    pick_json=$(SUBS_JSON="$subs_json" WANT="$subdomain" python3 -c '
+    # The picker sees the rows without their tunnel tokens: SUBS_JSON is in
+    # its environment, and a token never is (ps shows it to every process
+    # of this user). The chosen row's token is read on stdin below.
+    local pick_json subs_public
+    subs_public="$(printf '%s' "$subs_json" | python3 -c '
+import json, sys
+rows = json.loads(sys.stdin.read() or "[]")
+if isinstance(rows, list):
+    rows = [{k: v for k, v in r.items() if k != "tunnel_token"} if isinstance(r, dict) else r for r in rows]
+print(json.dumps(rows))')" || return 1
+    pick_json=$(SUBS_JSON="$subs_public" WANT="$subdomain" python3 -c '
 import json, os, sys
 rows = json.loads(os.environ.get("SUBS_JSON") or "[]")
 want = (os.environ.get("WANT") or "").strip().lower()
@@ -511,16 +520,24 @@ else:
             sys.stderr.write("Error: selection out of range.\n"); sys.exit(1)
         chosen = norm[n - 1]
 label = (chosen.get("label") or "").strip()
-tok = (chosen.get("tunnel_token") or "").strip()
-if not label or not tok:
+if not label:
     sys.stderr.write("Error: selected subdomain is missing label or tunnel_token.\n")
     sys.exit(1)
-print(json.dumps({"label": label, "tunnel_token": tok, "status": chosen.get("status") or ""}))
+print(json.dumps({"label": label, "status": chosen.get("status") or ""}))
 ') || return 1
 
     local label tunnel_token
     label=$(printf '%s' "$pick_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["label"])')
-    tunnel_token=$(printf '%s' "$pick_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tunnel_token"])')
+    tunnel_token=$(printf '%s' "$subs_json" | WANT_LABEL="$label" python3 -c '
+import json, os, sys
+rows = json.loads(sys.stdin.read() or "[]")
+want = os.environ["WANT_LABEL"]
+tok = next(((r.get("tunnel_token") or "").strip() for r in (rows if isinstance(rows, list) else [])
+            if isinstance(r, dict) and (r.get("label") or "").strip() == want), "")
+if not tok:
+    sys.stderr.write("Error: selected subdomain is missing label or tunnel_token.\n")
+    sys.exit(1)
+print(tok)') || return 1
 
     # Daemon required for bind + start.
     _connect_require_daemon || return 1
@@ -533,11 +550,12 @@ print(json.dumps({"label": label, "tunnel_token": tok, "status": chosen.get("sta
     _connect_claim_subdomain "$access_token" "$label" "$device_id" "$device_label" || return 1
 
     local cfg_body cfg_resp
-    cfg_body=$(LABEL="$label" TOK="$tunnel_token" DID="$device_id" DLBL="$device_label" python3 -c '
-import json, os
+    # The tunnel token reaches python on stdin, never argv or the environment.
+    cfg_body=$(printf '%s' "$tunnel_token" | LABEL="$label" DID="$device_id" DLBL="$device_label" python3 -c '
+import json, os, sys
 print(json.dumps({
     "subdomain": os.environ["LABEL"],
-    "token": os.environ["TOK"],
+    "token": sys.stdin.read(),
     "deviceId": os.environ["DID"],
     "deviceLabel": os.environ.get("DLBL") or "",
     "autoStart": True,

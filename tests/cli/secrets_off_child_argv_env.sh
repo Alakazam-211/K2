@@ -21,7 +21,8 @@
 # of the mail family: k2 mail link add --pass-stdin, k2 mail oauth-config
 # set --secret-stdin, k2 hostmail config --relay-pass-stdin, k2 hostmail
 # import --pass-stdin, of App users (k2 app user add and password
-# --password-stdin), and of the logins: k2 users add and set-password
+# --password-stdin), the tunnel token k2 connect login binds, and of the
+# logins: k2 users add and set-password
 # --password-stdin, k2 users pair-phone, k2 connect login; and the remote
 # server's token of k2 clone (--host, --token).
 #
@@ -38,6 +39,7 @@ TOKEN_SENTINEL="k2vc_CHILDTEST000sentinel"
 SECRET_SENTINEL="CHILDTEST_SECRET_NAME"
 PASS_SENTINEL="CHILDTEST_PASSWORD_7Kq"
 REMOTE_SENTINEL="k2rt_CHILDTEST_remote_token"
+TUNNEL_SENTINEL="k2tt_CHILDTEST_tunnel_token"
 AGEKEY="age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
 
 W="$(mktemp -d /tmp/k2child-XXXXXX)"
@@ -151,9 +153,9 @@ STUB_PID=$!
 # path, Authorization header, body). A recording change without a
 # confirmToken gets 403 vault_confirm_required, as the daemon answers a
 # widening; with one it is saved.
-"$REAL_PY" - "$W/tcp-port" "$TCPLOG" <<'PYEOF' &
+"$REAL_PY" - "$W/tcp-port" "$TCPLOG" "$TUNNEL_SENTINEL" <<'PYEOF' &
 import http.server, json, sys, threading
-port_path, log_path = sys.argv[1], sys.argv[2]
+port_path, log_path, tunnel_token = sys.argv[1], sys.argv[2], sys.argv[3]
 lock = threading.Lock()
 RECORDING = {
     "/cli/app/recording/set": "recording-app",
@@ -199,6 +201,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self._answer(200, {"code": "123456", "expiresIn": 300})
             return self._answer(200, {"error": {"code": "password_required",
                                                 "hint": "type your password again to make a pairing code"}})
+        if path == "/rest/v1/subdomains":
+            return self._answer(200, [{"label": "acme", "status": "active", "tunnel_token": tunnel_token}])
+        if path == "/rest/v1/rpc/claim_subdomain":
+            return self._answer(200, [{"claimed": True}])
+        if path == "/cli/tunnel/config":
+            return self._answer(200, {"tokenSet": True, "subdomain": "acme"})
         if path == "/auth/v1/token":
             return self._answer(401, {"msg": "Invalid login credentials"})
         if path == "/cli/clone/preview":
@@ -377,6 +385,16 @@ assert_off_children "clone preview --host" "remote token" "$REMOTE_SENTINEL"
 # 16-17. An App user's password (k2 app user add / password --password-stdin).
 sec_case "app user add" /cli/skin/users "password" "$PASS_SENTINEL" app user add bob --password-stdin
 sec_case "app user password" /cli/skin/users/password "password" "$PASS_SENTINEL" app user password bob --password-stdin
+
+# 18. k2 connect login: the subdomain's tunnel token, read from the account
+#     server, reaches the daemon's tunnel config and no child's argv or
+#     environment.
+fresh
+K2_CONNECT_DB_URL="http://127.0.0.1:$(cat "$W/tcp-port")/" \
+    k2run connect login --token test-access --subdomain acme </dev/null >/dev/null 2>&1 || true
+assert_tcp_got "connect login tunnel" /cli/tunnel/config "tunnel token" "$TUNNEL_SENTINEL"
+assert_children_seen "connect login tunnel"
+assert_off_children "connect login tunnel" "tunnel token" "$TUNNEL_SENTINEL"
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -8,9 +8,9 @@
 //!                                                  the owner in person + a fresh confirm
 //! POST /cli/app/push/credentials/remove {app, platform, confirmToken}   the same
 //! POST /cli/app/push/check          {app}          the owner: one real call per platform to a fake token (CP16)
-//! POST /cli/app/push/set            {app, enabled?, agentReplies?, previews?, maxDevices?, serverOnly?}
+//! POST /cli/app/push/set            {app, enabled?, agentReplies?, chatPushes?, previews?, maxDevices?, serverOnly?}
 //!                                                  on: the owner; off: Admin or the App's agent (switch 1);
-//!                                                  agentReplies/previews: Admin or the App's agent (switch 2);
+//!                                                  agentReplies/chatPushes/previews: Admin or the App's agent (switch 2);
 //!                                                  maxDevices: the owner
 //! POST /cli/app/push/send           {app, to, title, body, …}   Admin, or the App's agent (switch 2) → 202
 //! POST /cli/app/push/test           {app, to}      the same, fixed text "Test notification from K2"
@@ -177,6 +177,8 @@ pub(crate) fn status_json(t: &Target) -> R<J> {
         "ownerOn": cfg.owner_on,
         "approved": super::push_send_approved(&t.service_id),
         "agentReplies": cfg.agent_replies,
+        "chatPushes": cfg.chat_pushes,
+        "chatPushesBox": super::chat::box_enabled(),
         "previews": cfg.previews,
         "serverOnly": cfg.server_only,
         "maxDevices": cfg.max_devices.unwrap_or(store::DEFAULT_MAX_DEVICES_PER_APP),
@@ -368,6 +370,7 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     let t = push_target(who, s(&v, "app"))?;
     let enabled = bool_opt(&v, "enabled")?;
     let agent_replies = bool_opt(&v, "agentReplies")?;
+    let chat_pushes = bool_opt(&v, "chatPushes")?;
     let previews = bool_opt(&v, "previews")?;
     let server_only = bool_opt(&v, "serverOnly")?;
     let max_devices = match v.get("maxDevices") {
@@ -375,8 +378,8 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
         Some(J::Number(n)) => Some(n.as_i64().ok_or_else(|| no("usage", 400, "maxDevices is a whole number"))?),
         Some(_) => return Err(no("usage", 400, "maxDevices is a whole number")),
     };
-    if enabled.is_none() && agent_replies.is_none() && previews.is_none() && max_devices.is_none() && server_only.is_none() {
-        return Err(no("usage", 400, "send {app} with enabled, agentReplies, previews, maxDevices and/or serverOnly"));
+    if enabled.is_none() && agent_replies.is_none() && chat_pushes.is_none() && previews.is_none() && max_devices.is_none() && server_only.is_none() {
+        return Err(no("usage", 400, "send {app} with enabled, agentReplies, chatPushes, previews, maxDevices and/or serverOnly"));
     }
     // On, and raising the device ceiling, are the owner's approval of push
     // for this App (CP36): the owner in person with a fresh vault confirm
@@ -408,11 +411,11 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     if enabled == Some(false) && !admin_human(who) && !app_agent_at(who, &t, Level::Build) {
         return Err(no("forbidden", 403, "turning notifications off is for the owner, Admins and this App's own agent"));
     }
-    if (agent_replies.is_some() || previews.is_some() || server_only.is_some()) && !admin_human(who) && !app_agent_at(who, &t, Level::Full) {
+    if (agent_replies.is_some() || chat_pushes.is_some() || previews.is_some() || server_only.is_some()) && !admin_human(who) && !app_agent_at(who, &t, Level::Full) {
         return Err(no(
             "forbidden",
             403,
-            "agent replies, previews and who may register are set by the owner, Admins, or this App's own agent with \"…and manage them end to end\" on",
+            "agent replies, chat pushes, previews and who may register are set by the owner, Admins, or this App's own agent with \"…and manage them end to end\" on",
         ));
     }
     let by = actor(who);
@@ -423,6 +426,7 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
         agent_replies,
         previews,
         server_only,
+        chat_pushes,
     };
     store::set_switches(&t.service_id, sw, &by).map_err(|e| no("usage", 400, e))?;
     if let Some(m) = max_devices {
@@ -441,6 +445,9 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     }
     if agent_replies.is_some_and(|a| a != before.agent_replies) || previews.is_some_and(|p| p != before.previews) {
         super::audit_line("app-push-settings", &by, &format!("app={} agentReplies={:?} previews={:?}", t.service_id, agent_replies, previews));
+    }
+    if chat_pushes.is_some_and(|c| c != before.chat_pushes) {
+        super::audit_line("app-push-settings", &by, &format!("app={} chatPushes={chat_pushes:?}", t.service_id));
     }
     status_json(&t)
 }

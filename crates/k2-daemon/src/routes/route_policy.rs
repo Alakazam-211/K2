@@ -1765,6 +1765,20 @@ mod tests {
         }
     }
 
+    /// App chat pushes (prd-home-chat-pushes-v1 HC-25) add no route: the
+    /// `chatPushes` switch rides `/cli/app/push/set`, an Admin row a Voice &
+    /// Chat only login never reaches (the walk below proves the gate), and
+    /// the App user's `chat:<id>` lease rides `push.viewing`, a guest pass
+    /// row that isn't on the allowlist either.
+    #[test]
+    fn app_chat_push_switch_stays_admin_and_off_the_voice_chat_allowlist() {
+        let set = lookup("/cli/app/push/set").expect("the set row");
+        assert_eq!(set.post, Some(Floor::Admin));
+        for path in ["/cli/app/push/set", "/cli/app/push", "/cli/skin/push/viewing"] {
+            assert!(!VOICE_CHAT_ALLOWLIST.iter().any(|(_, p)| *p == path), "{path} is not a Voice & Chat row");
+        }
+    }
+
     /// The full-route walk through the real gate with a real Voice & Chat
     /// only session: every row, every declared method (and a GET on every
     /// row) is refused (403 `role_required`, or 404 for a row its switch

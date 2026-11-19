@@ -214,3 +214,35 @@ fn removing_keys_needs_the_same_confirm_and_status_shows_metadata_only() {
     assert_eq!(v["apns"], J::Null);
     assert_eq!(super::super::creds::load_apns(&f.app), Err(super::super::creds::KeyError::NotConfigured));
 }
+
+/// HC-25: `chatPushes` is off by default; the owner, an Admin and the App's
+/// own agent with "…and manage them end to end" (switch 2) set it; a Member,
+/// a Voice & Chat only login, an agent at switch 1 and another workspace's
+/// agent can't. Per App.
+#[test]
+fn chat_pushes_are_off_by_default_and_admins_or_the_apps_agent_set_them() {
+    let f = fx("chat");
+    let (st, v, _) = get(STATUS, &Who::Owner, &[("app", &f.app)]);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["chatPushes"], json!(false), "off by default: {v}");
+    assert_eq!(v["chatPushesBox"], json!(false), "K2_APP_CHAT_PUSH is off by default: {v}");
+    switches(&f.ws, true, false);
+    for who in [login(Role::Member), login(Role::VoiceChat), agent(&f.ws)] {
+        let (st, v, _) = post(SET, &who, json!({"app": f.app, "chatPushes": true}));
+        assert_eq!((st, code(&v)), (403, "forbidden"), "{who:?}: {v}");
+    }
+    let (st, _, _) = post(SET, &agent(&f.other_ws), json!({"app": f.app, "chatPushes": true}));
+    assert_eq!(st, 404, "another workspace's agent can't see the App");
+    assert!(!store::config(&f.app).expect("cfg").chat_pushes, "nothing changed");
+    let (st, v, _) = post(SET, &login(Role::Admin), json!({"app": f.app, "chatPushes": true}));
+    assert_eq!((st, v["chatPushes"].clone()), (200, json!(true)), "{v}");
+    let (st, v, _) = post(SET, &Who::Owner, json!({"app": f.app, "chatPushes": "yes"}));
+    assert_eq!((st, code(&v)), (400, "usage"), "a bool only: {v}");
+    switches(&f.ws, true, true);
+    let (st, v, _) = post(SET, &agent(&f.ws), json!({"app": f.app, "chatPushes": false}));
+    assert_eq!((st, v["chatPushes"].clone()), (200, json!(false)), "the App's agent at switch 2: {v}");
+    let (st, v, _) = post(SET, &agent(&f.ws), json!({"app": f.app, "chatPushes": true}));
+    assert_eq!(st, 200, "{v}");
+    assert!(!store::config(&f.other_app).expect("cfg").chat_pushes, "per App");
+    assert!(!store::config(&f.app).expect("cfg").agent_replies, "chatPushes leaves agentReplies alone");
+}

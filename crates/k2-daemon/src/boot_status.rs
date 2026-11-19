@@ -788,6 +788,12 @@ pub const FEATURE_APP_PUSH: &str = "custom-app-push-v1";
 /// says its signed-in person has a Thread open, so agent-reply pushes stay
 /// quiet for 90 s; a guest's own overlay `viewing` frames count too (TA-23).
 pub const FEATURE_APP_PUSH_VIEWING: &str = "app-push-viewing-v1";
+/// DM and channel pushes for an App's users in its Sew Space
+/// (prd-home-chat-pushes-v1 HC-25, 0.46.16): `k2Kind: chat`, `chatPushes`
+/// on `/cli/app/push/set`, and `push.viewing` with `chat:<channel id>`.
+/// Listed only while `K2_APP_CHAT_PUSH` is on (each App still turns its own
+/// on).
+pub const FEATURE_APP_CHAT_PUSH: &str = "app-chat-push-v1";
 /// `k2 app status` (prd-tauri-core-0467-v1 TC-15, TC-16, TC-28):
 /// `GET /cli/app/status`, and an App's `host.checks` run after each switch.
 pub const FEATURE_APP_STATUS: &str = "app-status-v1";
@@ -1376,6 +1382,10 @@ pub fn features() -> Vec<&'static str> {
     // Home chat phone pushes (prd-home-chat-pushes-v1): the owner's switch.
     if let Some(k) = crate::home_chat::push_boot_status_key() {
         out.push(k);
+    }
+    // App chat pushes (HC-25): the box switch, off by default.
+    if crate::app_push::chat::box_enabled() {
+        out.push(FEATURE_APP_CHAT_PUSH);
     }
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);

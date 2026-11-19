@@ -2,7 +2,7 @@
 //! and Google receive (§8.3, CP29).
 //!
 //! K2 adds its own stamps: `k2App` (the App's service id), `k2Send` (the
-//! send id), `k2Kind` (`app` | `agent`), `k2Topic` and `k2Who` (an opaque
+//! send id), `k2Kind` (`app` | `agent` | `chat`), `k2Topic` and `k2Who` (an opaque
 //! per-(App, guest) key). No guest username, principal id, room name or K2
 //! host name ever rides a push: Apple and Google must not see who.
 
@@ -29,6 +29,8 @@ pub const MAX_CHANNEL_BYTES: usize = 64;
 /// `k2Kind`.
 pub const KIND_APP: &str = "app";
 pub const KIND_AGENT: &str = "agent";
+/// A DM or channel message in the App's Sew Space (`app_push::chat`).
+pub const KIND_CHAT: &str = "chat";
 
 /// One notification, checked. `title`/`body` are `None` only when silent.
 #[derive(Clone, PartialEq, Eq)]

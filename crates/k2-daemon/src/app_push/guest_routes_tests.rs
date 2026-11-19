@@ -274,3 +274,39 @@ fn a_token_another_guest_holds_is_refused_until_they_sign_out() {
     let (st, v, _) = call(REGISTER, &pf, true, reg_body("phone"), &[]);
     assert_eq!(st, 200, "after dana signs out: {v}");
 }
+
+/// HC-25: `push.viewing` takes an App chat, `chat:<Sew channel id>`, from a
+/// chat member of this App; the lease lands under the guest's own key and
+/// quiets only their chat pushes. No chat grant, or a conversation that
+/// isn't a Sew id: `skin_room`.
+#[test]
+fn viewing_takes_an_app_chat_from_a_chat_member() {
+    use super::super::chat::Env as _;
+    let f = fx("chatview");
+    let dana = pass_for("dana", &f.app);
+    let body = |c: &str| json!({"conversation": c, "visible": true});
+    let (st, v, _) = call(VIEWING, &dana, true, body("chat:901"), &[]);
+    assert_eq!((st, code(&v)), (403, "skin_room"), "no chat grant yet: {v}");
+    let pid = dana.principal_id.clone().expect("a guest");
+    skin::create_grant(&skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: pid.clone(),
+        kind: "chat".into(),
+        target_id: String::new(),
+        role: None,
+        scope: Some("member".into()),
+        created_by: Some("owner".into()),
+    })
+    .expect("chat grant");
+    let (st, v, _) = call(VIEWING, &dana, true, body("chat:../x"), &[]);
+    assert_eq!((st, code(&v)), (403, "skin_room"), "a Sew id only: {v}");
+    let (st, v, _) = call(VIEWING, &dana, true, body("chat:901"), &[]);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["conversation"], "chat:901");
+    let now = std::time::Instant::now();
+    assert!(crate::thread_viewers::global().is_viewing(&format!("guest:{pid}"), "chat:901", now), "the guest's own lease");
+    assert!(super::super::chat::LiveEnv.viewing(&pid, "901", now), "and the chat path reads it");
+    let (st, _, _) = call(VIEWING, &dana, true, json!({"conversation": "chat:901", "visible": false}), &[]);
+    assert_eq!(st, 200);
+    assert!(!super::super::chat::LiveEnv.viewing(&pid, "901", std::time::Instant::now()), "false ends it");
+}

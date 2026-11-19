@@ -139,6 +139,18 @@ sent_has "sends serverOnly true" '"serverOnly": true'
 expect "any" 0 "" app push set jobs --register any
 sent_has "sends serverOnly false" '"serverOnly": false'
 
+echo "== k2 app push set --chat (0.46.16, HC-25) =="
+: >"$LOG"
+expect "help names it" 0 "--chat on|off" app push --help
+expect "a bad value" 2 "--chat on|off" app push set jobs --chat maybe
+nothing_sent "not sent"
+printf '{"ok":true,"app":"svc","name":"jobs","state":"on","chatPushes":true,"chatPushesBox":false,"devices":{"total":0,"guests":0,"apns":0,"fcm":0}}' >"$ANSWER"
+expect "on, waiting for the server switch" 0 "chat pushes on (waiting: K2_APP_CHAT_PUSH is not on for this server)" app push set jobs --chat on
+sent_has "sends chatPushes true" '"chatPushes": true'
+printf '{"ok":true,"app":"svc","name":"jobs","state":"on","chatPushes":false,"chatPushesBox":true,"devices":{"total":0,"guests":0,"apns":0,"fcm":0}}' >"$ANSWER"
+expect "off" 0 "chat pushes off" app push set jobs --chat off
+sent_has "sends chatPushes false" '"chatPushes": false'
+
 echo "== k2 hostchat home names the flag =="
 printf '{"ok":true,"apps":[],"sew":{"appOrigin":true,"appOrigins":false}}' >"$ANSWER"
 expect "every App origin no" 0 "every App origin no" hostchat home

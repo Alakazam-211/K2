@@ -11,6 +11,8 @@
 //!   only, on the main port, the browser helper or the App's link.
 //! - [`owner_routes`]: `/cli/app/push/*` for the owner, Admins and the
 //!   App's agent (`k2 app push …`).
+//! - [`chat`]: DM and channel pushes for the App's users in its Sew Space
+//!   (0.46.16, `chatPushes`, off by default; `K2_APP_CHAT_PUSH=1`).
 //! - Storage: `k2_core::skin::app_push` (skin.db).
 //!
 //! **State.** An App's push is on when the owner approved `push:send` for
@@ -21,6 +23,7 @@
 
 pub mod agent_reply;
 pub mod budget;
+pub mod chat;
 pub mod creds;
 pub mod guest_routes;
 pub mod owner_routes;

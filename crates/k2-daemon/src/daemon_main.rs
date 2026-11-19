@@ -2106,6 +2106,9 @@ async fn async_main() {
     crate::home_chat::arrivals::install();
     // S14: phone pushes for DM call rings (idle while Home chat is off).
     crate::home_chat::call_push::spawn();
+    // HC-25: DM and channel pushes for App users, on the App's own push
+    // path (idle while K2_APP_CHAT_PUSH is off or Sew isn't set up).
+    crate::app_push::chat::spawn();
 
     // Remote desktop (D6): the routes and the stream talk to the real
     // K2 Screen (k2-deskd); a switch left on starts it again.

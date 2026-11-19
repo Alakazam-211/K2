@@ -14,7 +14,10 @@
 //! push rule, so agent-reply pushes stay quiet while they look. The same
 //! state a guest's own overlay socket sets with `{"t":"viewing"}` frames.
 //! Only the caller's own state; the conversation is a pinned Chat the pass
-//! reads (`thread:read` in its room), else `skin_room`.
+//! reads (`thread:read` in its room), else `skin_room`. Since 0.46.16 it
+//! may also be an App chat, `chat:<Sew channel id>` (HC-25): the guest must
+//! be a chat member who uses this App; that lease quiets their DM and
+//! channel pushes for that conversation.
 //!
 //! And the App's own verbs on its link (its link pass, `push:send`, §8):
 //!
@@ -263,7 +266,24 @@ pub fn handle_viewing(pass: &SkinPass, body: &[u8]) -> CliResponse {
         if let Some(extra) = v.as_object().and_then(|o| o.keys().find(|k| *k != "conversation" && *k != "visible")) {
             return Err(usage(&format!("unknown field {extra}: send {{conversation, visible}}")));
         }
-        crate::overlay_ws::skin_overlay_gate(pass, conversation)?;
+        match conversation.strip_prefix(super::chat::LEASE_PREFIX) {
+            // HC-25: an App chat (`chat:<Sew channel id>`). The lease only
+            // quiets this guest's own chat pushes, so K2 checks what it
+            // knows without asking Sew: a Sew id, a user of this App, and a
+            // chat member here. A channel they aren't in quiets nothing.
+            Some(channel) => {
+                let pid = pass.principal_id.as_deref().unwrap_or_default();
+                let member = k2_core::tool_hook::sew_wire::is_sew_id(channel)
+                    && store::user_apps(pid).is_ok_and(|apps| apps.iter().any(|a| a == &pass.app))
+                    && store::still_chat_member(&pass.app, pid, None).unwrap_or(false);
+                if !member {
+                    return Err(crate::skin_routes::skin_room_response());
+                }
+            }
+            None => {
+                crate::overlay_ws::skin_overlay_gate(pass, conversation)?;
+            }
+        }
         if let Err(wait) = viewings().take(&pass.id, VIEWINGS_PER_HOUR) {
             let mut extra = serde_json::Map::new();
             extra.insert("retryAfterMs".into(), json!(wait));

@@ -169,6 +169,7 @@ pub fn sew_data_reset(why: &str) {
         Err(e) => k2_core::log_debug!("[home-chat] Sew's data was reset; feed cursors: {e}"),
     }
     call_push::restart_all();
+    crate::app_push::chat::restart_all();
     match forgot {
         Ok(r) => k2_core::log_debug!(
             "[home-chat] Sew's data was reset ({why}): {} DM ids forgotten, {} channels to make again, {} people to add again, {} lists to resend",

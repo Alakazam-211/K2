@@ -422,10 +422,16 @@ agent and other Apps can use the keys, never read them.
   k2 app push on|off <app>             On is the owner's approval (also given by
                                        approving push:send in a deploy); off is
                                        the owner's, an Admin's or the App agent's.
-  k2 app push set <app> [--agent-replies on|off] [--previews on|off]
-                 [--max-devices N] [--register server|any]
+  k2 app push set <app> [--agent-replies on|off] [--chat on|off]
+                 [--previews on|off] [--max-devices N] [--register server|any]
                                        Agent-reply pushes (off by default) and
-                                       their previews; --max-devices: phones
+                                       their previews. --chat: DM and channel
+                                       pushes for the App's users in its Sew
+                                       Space (off by default; the server also
+                                       needs K2_APP_CHAT_PUSH=1); a tap opens
+                                       your phone app (k2Kind chat). Names and
+                                       text show only with every preview
+                                       switch on. --max-devices: phones
                                        that can get this App's notifications,
                                        everyone together (owner; not sign-ins:
                                        k2 app login settings --max-devices).
@@ -481,6 +487,11 @@ print("  devices:  %s for %s people (apns %s, fcm %s; sandbox %s)" % (d.get("tot
 if v.get("serverOnly"):
     print("  devices register only through this App server (k2 app push set <app> --register any to change)")
 print("  agent replies %s, previews %s, at most %s devices" % ("on" if v.get("agentReplies") else "off", "on" if v.get("previews") else "off", v.get("maxDevices")))
+if "chatPushes" in v:
+    chat = "on" if v.get("chatPushes") else "off"
+    if v.get("chatPushes") and not v.get("chatPushesBox"):
+        chat += " (waiting: K2_APP_CHAT_PUSH is not on for this server)"
+    print("  chat pushes %s" % chat)
 for s in v.get("set") or []:
     print("  set: " + s)
 for r in v.get("removed") or []:
@@ -674,10 +685,11 @@ cmd_app_push_onoff() {
 }
 
 cmd_app_push_set() {
-    local app="" replies="" previews="" maxd="" register="" json_out=0
+    local app="" replies="" chat="" previews="" maxd="" register="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --agent-replies) replies="${2:-}"; shift 2 ;;
+            --chat) chat="${2:-}"; shift 2 ;;
             --previews) previews="${2:-}"; shift 2 ;;
             --max-devices) maxd="${2:-}"; shift 2 ;;
             --register) register="${2:-}"; shift 2 ;;
@@ -686,15 +698,16 @@ cmd_app_push_set() {
             *) app="$1"; shift ;;
         esac
     done
-    local usage="usage: k2 app push set <app> [--agent-replies on|off] [--previews on|off] [--max-devices N] [--register server|any]"
+    local usage="usage: k2 app push set <app> [--agent-replies on|off] [--chat on|off] [--previews on|off] [--max-devices N] [--register server|any]"
     [ -n "$app" ] || { echo "$usage" >&2; exit 2; }
-    local r_b="" p_b="" s_b=""
+    local r_b="" c_b="" p_b="" s_b=""
     case "$register" in server) s_b=1 ;; any) s_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
     case "$replies" in on) r_b=1 ;; off) r_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
+    case "$chat" in on) c_b=1 ;; off) c_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
     case "$previews" in on) p_b=1 ;; off) p_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
     case "$maxd" in ""|*[!0-9]*) [ -z "$maxd" ] || { echo "$usage" >&2; exit 2; } ;; esac
-    { [ -z "$r_b" ] && [ -z "$p_b" ] && [ -z "$maxd" ] && [ -z "$s_b" ]; } && { echo "$usage" >&2; exit 2; }
-    _app_push_on_post "$(_compute_json K2_CJ_app="$app" K2_CJ_agentReplies_b="$r_b" K2_CJ_previews_b="$p_b" K2_CJ_maxDevices_n="$maxd" K2_CJ_serverOnly_b="$s_b")"
+    { [ -z "$r_b" ] && [ -z "$c_b" ] && [ -z "$p_b" ] && [ -z "$maxd" ] && [ -z "$s_b" ]; } && { echo "$usage" >&2; exit 2; }
+    _app_push_on_post "$(_compute_json K2_CJ_app="$app" K2_CJ_agentReplies_b="$r_b" K2_CJ_chatPushes_b="$c_b" K2_CJ_previews_b="$p_b" K2_CJ_maxDevices_n="$maxd" K2_CJ_serverOnly_b="$s_b")"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | _app_push_status_print
 }

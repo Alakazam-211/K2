@@ -36,15 +36,15 @@ const OK: &str = r#"{"ok":true}"#;
 const ROLE: &str = r#"{"role":"canonical"}"#;
 
 /// A session the API started, with a live cell socket.
-fn cell(rig: &Rig, extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
-    let mut e = with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+fn cell(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+    let mut e = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
     e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
     e
 }
 
 /// A host session: the passport, no socket.
-fn host(rig: &Rig, extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
-    with_passport(rig.stub.port, extra)
+fn host(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+    with_passport(extra)
 }
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
@@ -54,8 +54,8 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 #[test]
 fn respond_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "all");
-    let c = |extra: &[(&'static str, &str)]| cell(&rig, extra);
-    let h = |extra: &[(&'static str, &str)]| host(&rig, extra);
+    let c = cell;
+    let h = host;
     let refused = || Reply::Answer(403, REFUSED.into());
     let v = vec![
         // The cell socket.
@@ -530,8 +530,8 @@ fn respond_with_no_answer() {
         no_tmpdir: true,
         ..c
     };
-    let c = || cell(&rig, &[]);
-    let h = || host(&rig, &[]);
+    let c = || cell(&[]);
+    let h = || host(&[]);
     let garbage = || Reply::Raw(GARBAGE.to_vec());
     let empty_5xx = || Reply::Answer(502, String::new());
     let v = vec![
@@ -703,11 +703,11 @@ fn respond_with_no_daemon() {
     let rig = Rig::new(VERB, "dead");
     let port = dead_port();
     rig.check(&with(
-        host(&rig, &[("K2_PORT", port.as_str())]),
+        host(&[("K2_PORT", port.as_str())]),
         case("TCP: nothing listens", &["x"], &[], vec![], nothing, 7, 0),
     ));
     rig.check(&with(
-        cell(&rig, &[("K2_HOOK_SOCK", "{deadsock}")]),
+        cell(&[("K2_HOOK_SOCK", "{deadsock}")]),
         case(
             "cell: a socket file nothing listens on",
             &["x"],
@@ -727,7 +727,7 @@ fn respond_on_a_cell_socket_that_never_answers() {
     let c = Case {
         compare: Compare::Waited,
         ..with(
-            cell(&rig, &[]),
+            cell(&[]),
             case(
                 "cell: no answer in time (28)",
                 &["x"],
@@ -747,7 +747,7 @@ fn respond_on_a_cell_socket_that_never_answers() {
 fn respond_over_tcp_that_never_answers() {
     let rig = Rig::new(VERB, "hangt");
     let c = with(
-        host(&rig, &[]),
+        host(&[]),
         case(
             "TCP: no answer in time (28)",
             &["x"],
@@ -770,7 +770,7 @@ fn respond_hands_these_to_the_shell() {
         compare: Compare::Shell,
         ..c
     };
-    let c = |extra: &[(&'static str, &str)]| cell(&rig, extra);
+    let c = cell;
     let v = vec![
         shell(with(
             c(&[]),

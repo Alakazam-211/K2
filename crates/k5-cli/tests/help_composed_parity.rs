@@ -49,8 +49,7 @@ impl Form {
     }
 }
 
-fn rows(rig: &Rig, f: &Form) -> Vec<Case> {
-    let port = rig.stub.port;
+fn rows(f: &Form) -> Vec<Case> {
     let id = f.chat_family();
     let row = |name, replies, setup, code, requests| {
         case(name, f.args, &[], replies, setup, code, requests)
@@ -68,7 +67,7 @@ fn rows(rig: &Rig, f: &Form) -> Vec<Case> {
             0,
         ),
         with(
-            with_passport(port, &[("K2_HOOK_SOCK", "{sock}")]),
+            with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
             row(
                 "an agent on its cell socket: the page, nothing sent",
                 vec![],
@@ -78,7 +77,7 @@ fn rows(rig: &Rig, f: &Form) -> Vec<Case> {
             ),
         ),
         with(
-            with_passport(port, &[]),
+            with_passport(&[]),
             row("an agent over TCP: the page", vec![], nothing, 0, 0),
         ),
         with(
@@ -92,7 +91,7 @@ fn rows(rig: &Rig, f: &Form) -> Vec<Case> {
             ),
         ),
         with(
-            with_passport(port, &[("K2_HOOK_SOCK", "{nosock}")]),
+            with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
             row(
                 "the socket gone, the daemon knows the passport: the page",
                 if id {
@@ -106,7 +105,7 @@ fn rows(rig: &Rig, f: &Form) -> Vec<Case> {
             ),
         ),
         with(
-            with_passport(port, &[("K2_HOOK_SOCK", "{nosock}")]),
+            with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
             row(
                 "the socket gone, the daemon refuses the passport: chat's stale lines, exit 3",
                 if id {
@@ -132,10 +131,7 @@ fn rows(rig: &Rig, f: &Form) -> Vec<Case> {
             ),
         ),
         with(
-            with_passport(
-                port,
-                &[("K2_HOOK_SOCK", "{sock}"), ("CODEX_THREAD_ID", "t1")],
-            ),
+            with_passport(&[("K2_HOOK_SOCK", "{sock}"), ("CODEX_THREAD_ID", "t1")]),
             Case {
                 // An id tool: the shell looks for a shared Codex server.
                 compare: if id { Compare::Shell } else { Compare::Exact },
@@ -163,7 +159,7 @@ fn rows(rig: &Rig, f: &Form) -> Vec<Case> {
 fn check(forms: &[Form]) {
     for f in forms {
         let rig = Rig::new(f.verb, f.tag);
-        for c in rows(&rig, f) {
+        for c in rows(f) {
             rig.check(&c);
         }
     }

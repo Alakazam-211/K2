@@ -418,7 +418,7 @@ fn workspace_profile_answers_as_the_shell_does() {
 #[test]
 fn workspace_reads_with_a_passport() {
     let rig = Rig::new(VERB, "pass");
-    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let h = with_passport;
     let v = vec![
         with(
             h(&[]),

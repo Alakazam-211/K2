@@ -1,9 +1,18 @@
 //! The rig a native family's parity test runs on: `cli/k2 <verb>` (as the
 //! front hands it a verb) and `k5-cli <verb>`, each run as people run it
-//! against one logging stub daemon ([`super::stub`]). For every case both
+//! against a logging stub daemon ([`super::stub`]). For every case both
 //! get the same environment, folder and answers, and must send the same
 //! requests and print the same stdout and stderr with the same exit code.
 //! `tests/whoami_parity.rs` is the first of these, written before the rig.
+//!
+//! Each side ([`Side`]) has its own stub: its own port (the stub binds it
+//! and reads it back), its own socket and its own request log. A case's
+//! settings name the port as `{port}` and the socket as `{sock}`, filled
+//! in for the side that runs. Each request a side's stub logged must be
+//! that side's (its `User-Agent` and `X-K5-Cli-Via`), and every request
+//! any stub got must have been read by its side's run: one that wasn't
+//! came from a CLI pointed at a stub not its own, a crossed request, and
+//! fails the case.
 //!
 //! The shell runs with `K5_CLI_VIA=rust`, and `K5_CLI_WOULD_REFUSE=1`
 //! when the passport rule says so, so its requests carry the hand-over
@@ -44,7 +53,7 @@
 #![cfg(unix)]
 
 use super::stub::{Logged, Reply, Stub};
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -63,6 +72,8 @@ pub const BULLETIN: &str =
     r#"{"ok":true,"bulletin":{"day":"2026-11-17","unread":true,"key":"ab12"}}"#;
 /// Not HTTP: curl reads it as HTTP/0.9 and refuses it (status 000, exit 1).
 pub const GARBAGE: &[u8] = b"garbage\r\n\r\n";
+/// A case's setting for the stub's port, filled in for the side that runs.
+pub const PORT: &str = "{port}";
 
 pub fn cli_k2() -> PathBuf {
     let p = super::cli_src().join("../k2");
@@ -71,6 +82,47 @@ pub fn cli_k2() -> PathBuf {
 }
 
 static N: AtomicUsize = AtomicUsize::new(0);
+
+/// A run of a case, each against its own stub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// `cli/k2`.
+    Bash,
+    /// The binary.
+    Rust,
+    /// The binary with no `python3` on `PATH`.
+    NoPython3,
+}
+
+impl Side {
+    pub const ALL: [Side; 3] = [Side::Bash, Side::Rust, Side::NoPython3];
+
+    fn index(self) -> usize {
+        match self {
+            Side::Bash => 0,
+            Side::Rust => 1,
+            Side::NoPython3 => 2,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Side::Bash => "bash",
+            Side::Rust => "rust",
+            Side::NoPython3 => "rust with no python3",
+        }
+    }
+
+    /// The side of a run: `bash`, else the binary, with `PATH` given
+    /// only when it has no `python3`.
+    fn of(bash: bool, path: Option<&str>) -> Side {
+        match (bash, path) {
+            (true, _) => Side::Bash,
+            (false, None) => Side::Rust,
+            (false, Some(_)) => Side::NoPython3,
+        }
+    }
+}
 
 pub struct Rig {
     /// The first word, before each case's arguments; empty for none (the
@@ -83,7 +135,13 @@ pub struct Rig {
     pub secrets: PathBuf,
     /// A socket file nothing listens on.
     pub dead_sock: PathBuf,
-    pub stub: Stub,
+    /// One stub per side, in [`Side::ALL`]'s order.
+    stubs: Vec<Stub>,
+    /// The side being prepared or run.
+    side: Cell<Side>,
+    /// A test's hook ([`Rig::cross`]): this side's CLI talks to that
+    /// side's stub.
+    cross: Cell<Option<(Side, Side)>>,
     /// `PATH` with no `python3` on it, made when first asked for.
     no_python3: OnceCell<String>,
     /// A folder put first on `PATH`, on every side.
@@ -197,10 +255,15 @@ impl Rig {
             std::fs::create_dir_all(d).unwrap();
         }
         let short = verb.chars().next().unwrap_or('h');
-        let stub = Stub::start(&PathBuf::from(format!(
-            "/tmp/k5{short}-{}-{n}.sock",
-            std::process::id()
-        )));
+        let stubs = ['b', 'r', 'n']
+            .iter()
+            .map(|s| {
+                Stub::start(&PathBuf::from(format!(
+                    "/tmp/k5{short}{s}-{}-{n}.sock",
+                    std::process::id()
+                )))
+            })
+            .collect();
         let dead_sock = PathBuf::from(format!("/tmp/k5{short}d-{}-{n}.sock", std::process::id()));
         let _ = std::fs::remove_file(&dead_sock);
         drop(
@@ -215,11 +278,38 @@ impl Rig {
             proj,
             secrets,
             dead_sock,
-            stub,
+            stubs,
+            side: Cell::new(Side::Bash),
+            cross: Cell::new(None),
             no_python3: OnceCell::new(),
             path_first: None,
             tool_log: None,
         }
+    }
+
+    /// `side`'s own stub: its log is that side's requests.
+    pub fn stub_of(&self, side: Side) -> &Stub {
+        &self.stubs[side.index()]
+    }
+
+    /// The stub `side`'s CLI talks to: its own, unless [`Rig::cross`]
+    /// says otherwise.
+    fn target(&self, side: Side) -> &Stub {
+        match self.cross.get() {
+            Some((from, to)) if from == side => self.stub_of(to),
+            _ => self.stub_of(side),
+        }
+    }
+
+    /// The stub the side being prepared or run talks to.
+    pub fn stub(&self) -> &Stub {
+        self.target(self.side.get())
+    }
+
+    /// From now on `from`'s CLI talks to `to`'s stub: a crossed request,
+    /// for the test that proves the rig fails on one.
+    pub fn cross(&self, from: Side, to: Side) {
+        self.cross.set(Some((from, to)));
     }
 
     /// The words after the program's name: the verb, if there is one,
@@ -264,13 +354,15 @@ impl Rig {
     pub fn port_on_disk(&self) {
         std::fs::write(
             self.k2home.join("heartbeat.port"),
-            format!("{}\n", self.stub.port),
+            format!("{}\n", self.stub().port),
         )
         .unwrap();
     }
 
-    fn fill(&self, v: &str) -> String {
-        v.replace("{sock}", &self.stub.sock.to_string_lossy())
+    fn fill(&self, side: Side, v: &str) -> String {
+        let stub = self.target(side);
+        v.replace(PORT, &stub.port.to_string())
+            .replace("{sock}", &stub.sock.to_string_lossy())
             .replace("{deadsock}", &self.dead_sock.to_string_lossy())
             .replace("{nosock}", &self.dir.join("no-socket").to_string_lossy())
             .replace("{secrets}", &self.secrets.to_string_lossy())
@@ -284,6 +376,8 @@ impl Rig {
 
     /// [`Rig::run`], with `path` as `PATH` when given.
     fn run_on(&self, bash: bool, case: &Case, path: Option<&str>) -> Out {
+        let side = Side::of(bash, path);
+        self.side.set(side);
         let mut cmd = if bash {
             let mut c = Command::new("bash");
             c.arg(cli_k2());
@@ -311,10 +405,10 @@ impl Rig {
         let tmp = if case.no_tmpdir {
             self.dir.join("no-tmp")
         } else {
-            self.dir.join(match (bash, path) {
-                (true, _) => "tmp-bash",
-                (false, None) => "tmp-rust",
-                (false, Some(_)) => "tmp-nopy",
+            self.dir.join(match side {
+                Side::Bash => "tmp-bash",
+                Side::Rust => "tmp-rust",
+                Side::NoPython3 => "tmp-nopy",
             })
         };
         cmd.env("HOME", &self.home)
@@ -323,7 +417,7 @@ impl Rig {
         let env: Vec<(String, String)> = case
             .env
             .iter()
-            .map(|(k, v)| (k.to_string(), self.fill(v)))
+            .map(|(k, v)| (k.to_string(), self.fill(side, v)))
             .collect();
         cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         if bash {
@@ -353,9 +447,12 @@ impl Rig {
         }
     }
 
-    /// Each case starts from an empty K2 home, no re-minted passport and
-    /// its own answers.
-    fn prepare(&self, c: &Case) {
+    /// Each side of a case starts from an empty K2 home, no re-minted
+    /// passport, an empty log and the case's answers, once every request
+    /// so far was read by its own side ([`Rig::settle`]).
+    pub fn prepare(&self, side: Side, c: &Case) {
+        self.settle(c.name);
+        self.side.set(side);
         for f in [
             self.secrets.join(".k2-passport"),
             self.k2home.join("heartbeat.port"),
@@ -368,7 +465,69 @@ impl Rig {
         let _ = std::fs::remove_dir_all(self.k2home.join("run"));
         self.take_tool_log();
         (c.setup)(self);
-        self.stub.reset(&c.replies);
+        self.stub_of(side).reset(&[]);
+        self.stub().reset(&c.replies);
+    }
+
+    /// Every request a stub got was read by its own side's run. One
+    /// nobody read came from a CLI talking to a stub not its own side's.
+    fn settle(&self, name: &str) {
+        for side in Side::ALL {
+            let stray = self.stub_of(side).unread();
+            assert!(
+                stray.is_empty(),
+                "{name}: crossed: {} request(s) in the {} side's stub that its own run did not send:\n{}",
+                stray.len(),
+                side.name(),
+                heads(&stray)
+            );
+        }
+    }
+
+    /// `side`'s requests, from its own stub, each checked to be one that
+    /// side sent: the binary's own (`native`) or the shell's. Then no
+    /// stub may hold a request nobody read ([`Rig::settle`]).
+    pub fn read(&self, side: Side, native: bool, name: &str) -> Vec<Logged> {
+        let log = self.stub_of(side).take_log();
+        for r in &log {
+            let by = sent_by(r);
+            assert_eq!(
+                by,
+                Some(native),
+                "{name}: crossed: the {} side's stub has a request {} sent, not {}:\n{}",
+                side.name(),
+                sender(by),
+                sender(Some(native)),
+                heads(std::slice::from_ref(r))
+            );
+        }
+        self.settle(name);
+        log
+    }
+
+    /// A normalised request with its `Host` line's port, the port of the
+    /// stub `side` talks to, written `{port}`: each side's stub has its
+    /// own. Leading zeros stay.
+    fn on_port(&self, side: Side, request: String) -> String {
+        let port = self.target(side).port.to_string();
+        request
+            .split('\n')
+            .map(|line| {
+                if !line.starts_with("Host: ") {
+                    return line.to_string();
+                }
+                let Some((host, digits)) = line.rsplit_once(':') else {
+                    return line.to_string();
+                };
+                let zeros = digits.len() - digits.trim_start_matches('0').len();
+                if digits[zeros..] == port {
+                    format!("{host}:{}{PORT}", &digits[..zeros])
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// What the stub programs logged since the last call, emptied.
@@ -404,14 +563,14 @@ impl Rig {
         if without_python3 {
             self.mirror_tmp();
         }
-        self.prepare(c);
         let path = without_python3.then(|| self.path_without_python3());
+        let side = Side::of(false, path);
+        self.prepare(side, c);
         let out = self.run_on(false, c, path);
         let log = self
-            .stub
-            .log()
+            .read(side, true, c.name)
             .iter()
-            .map(|r| normalise(r, true, self.noun(), c.name))
+            .map(|r| self.on_port(side, normalise(r, true, self.noun(), c.name)))
             .collect();
         (out, log)
     }
@@ -424,6 +583,7 @@ impl Rig {
         if c.no_python3 == NoPython3::AsWith {
             self.check_without_python3(c, &with, &log, handed, &tools);
         }
+        self.settle(c.name);
     }
 
     /// The binary with no `python3` on `PATH` against its run `with` one
@@ -438,9 +598,9 @@ impl Rig {
         with_tools: &str,
     ) {
         let name = c.name;
-        self.prepare(c);
+        self.prepare(Side::NoPython3, c);
         let out = self.run_on(false, c, Some(self.path_without_python3()));
-        let sent = self.stub.log();
+        let sent = self.read(Side::NoPython3, true, name);
         let tools = self.take_tool_log();
         println!("-- rust, no python3: {out:?}");
         if handed {
@@ -466,13 +626,13 @@ impl Rig {
             return;
         }
         assert_eq!(
-            self.stub.left(),
+            self.stub().left(),
             0,
             "{name}: answers left unused with no python3: {out:?}"
         );
         let log: Vec<String> = sent
             .iter()
-            .map(|r| normalise(r, true, self.noun(), name))
+            .map(|r| self.on_port(Side::NoPython3, normalise(r, true, self.noun(), name)))
             .collect();
         assert_eq!(
             log,
@@ -517,24 +677,24 @@ impl Rig {
         let mut tools = Vec::new();
         let mut handed = false;
         for bash in [true, false] {
-            self.prepare(c);
+            let side = Side::of(bash, None);
+            self.prepare(side, c);
             let out = self.run(bash, c);
             tools.push(self.take_tool_log());
             if !bash {
                 handed = self.handed_off();
             }
-            let side = if bash { "bash" } else { "rust" };
             assert_eq!(
-                self.stub.left(),
+                self.stub().left(),
                 0,
-                "{name}: {side} left answers unused: {out:?}"
+                "{name}: {} left answers unused: {out:?}",
+                side.name()
             );
             let native = !bash && c.compare != Compare::Shell;
             logs.push(
-                self.stub
-                    .log()
+                self.read(side, native, name)
                     .iter()
-                    .map(|r| normalise(r, native, self.noun(), name))
+                    .map(|r| self.on_port(side, normalise(r, native, self.noun(), name)))
                     .collect::<Vec<_>>(),
             );
             outs.push(out);
@@ -760,6 +920,42 @@ pub fn mask_waited(text: &str) -> (String, Vec<u64>) {
     }
 }
 
+/// Who sent `r`: the binary (`true`: `User-Agent: k5/...` and
+/// `X-K5-Cli-Via: native`), the shell (`false`: `curl/...` and
+/// `fallthrough`), or neither.
+fn sent_by(r: &Logged) -> Option<bool> {
+    let text = String::from_utf8_lossy(&r.bytes);
+    let head = text.split("\r\n\r\n").next().unwrap_or_default();
+    let has = |prefix: &str| head.split("\r\n").any(|l| l.starts_with(prefix));
+    if has("User-Agent: k5/") && has("X-K5-Cli-Via: native") {
+        Some(true)
+    } else if has("User-Agent: curl/") && has("X-K5-Cli-Via: fallthrough") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn sender(by: Option<bool>) -> &'static str {
+    match by {
+        Some(true) => "the binary",
+        Some(false) => "the shell",
+        None => "neither side",
+    }
+}
+
+/// Each request's head, for a failure.
+fn heads(log: &[Logged]) -> String {
+    log.iter()
+        .map(|r| {
+            let text = String::from_utf8_lossy(&r.bytes);
+            let head = text.split("\r\n\r\n").next().unwrap_or_default();
+            format!("[{}] {}", r.channel, head.replace("\r\n", "\n  "))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// A logged request with the expected differences masked, each counted.
 /// `native`: the binary sent it itself.
 pub fn normalise(r: &Logged, native: bool, verb: &str, case: &str) -> String {
@@ -888,10 +1084,10 @@ pub fn heal(rig: &Rig) -> Reply {
     }
 }
 
-/// The passport's settings, and `extra`.
-pub fn with_passport(port: u16, extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+/// The passport's settings (the stub's port), and `extra`.
+pub fn with_passport(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
     [
-        ("K2_PORT", port.to_string()),
+        ("K2_PORT", PORT.to_string()),
         ("K2_HOOK_TOKEN", PASSPORT.to_string()),
         ("K2_SECRETS_DIR", "{secrets}".to_string()),
     ]

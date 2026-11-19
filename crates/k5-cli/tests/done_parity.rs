@@ -57,8 +57,8 @@ fn named(
 
 /// `c` in an agent's session: the passport's settings, `extra` and the
 /// agent's name.
-fn passport_case(rig: &Rig, extra: &[(&'static str, &str)], c: Case) -> Case {
-    let mut env = with_passport(rig.stub.port, extra);
+fn passport_case(extra: &[(&'static str, &str)], c: Case) -> Case {
+    let mut env = with_passport(extra);
     env.push((AGENT.0, AGENT.1.to_string()));
     Case { env, ..c }
 }
@@ -324,7 +324,6 @@ fn done_answers_as_the_shell_does() {
             0,
         ),
         passport_case(
-            &rig,
             &[("K2_NO_OWNER_FALLBACK", "1")],
             case(
                 "the guard lets a passport through",
@@ -337,7 +336,6 @@ fn done_answers_as_the_shell_does() {
             ),
         ),
         passport_case(
-            &rig,
             &[],
             case(
                 "a passport over TCP",
@@ -350,7 +348,6 @@ fn done_answers_as_the_shell_does() {
             ),
         ),
         passport_case(
-            &rig,
             &[("K2_HOOK_SOCK", "{sock}")],
             case(
                 "a passport and a live cell socket: still TCP",
@@ -365,7 +362,6 @@ fn done_answers_as_the_shell_does() {
         Case {
             compare: Compare::OwnerTokenWithPassport,
             ..passport_case(
-                &rig,
                 &[("K2_HOOK_SOCK", "{sock}")],
                 case(
                     "a passport, a cell socket and the owner token on disk (PRD 13.9 #4)",
@@ -379,7 +375,6 @@ fn done_answers_as_the_shell_does() {
             )
         },
         passport_case(
-            &rig,
             &[],
             case(
                 "a re-minted passport is used from the start",
@@ -392,7 +387,6 @@ fn done_answers_as_the_shell_does() {
             ),
         ),
         passport_case(
-            &rig,
             &[],
             case(
                 "a refused passport heals once",
@@ -405,7 +399,6 @@ fn done_answers_as_the_shell_does() {
             ),
         ),
         passport_case(
-            &rig,
             &[],
             case(
                 "a dead passport: the probe, then the restart line",
@@ -421,7 +414,6 @@ fn done_answers_as_the_shell_does() {
             ),
         ),
         passport_case(
-            &rig,
             &[],
             case(
                 "a refused passport the probe finds good: no line",
@@ -744,7 +736,6 @@ fn done_hands_these_to_the_shell() {
     for (name, args, code, requests) in api {
         let replies = if requests == 1 { vec![ok(OK)] } else { vec![] };
         let mut c = passport_case(
-            &rig,
             &[("K2_API_CELL", "1")],
             case(name, args, &[], replies, port_only, code, requests),
         );
@@ -760,19 +751,10 @@ fn done_hands_these_to_the_shell() {
 /// the project is `want`, an empty body, the answer on stdout, exit 0.
 fn binary_sends(rig: &Rig, c: &Case, want: &str) {
     let name = c.name;
-    for f in [
-        rig.secrets.join(".k2-passport"),
-        rig.k2home.join("heartbeat.port"),
-        rig.k2home.join("heartbeat.token"),
-        rig.k2home.join("daemon.token"),
-    ] {
-        let _ = std::fs::remove_file(f);
-    }
-    (c.setup)(rig);
-    rig.stub.reset(&c.replies);
+    rig.prepare(Side::Rust, c);
     let out = rig.run(false, c);
-    assert_eq!(rig.stub.left(), 0, "{name}: answers left unused: {out:?}");
-    let log = rig.stub.log();
+    assert_eq!(rig.stub().left(), 0, "{name}: answers left unused: {out:?}");
+    let log = rig.read(Side::Rust, true, name);
     assert_eq!(log.len(), 1, "{name}: {} requests: {out:?}", log.len());
     let text = String::from_utf8(log[0].bytes.clone())
         .unwrap_or_else(|_| panic!("{name}: a request that is not UTF-8"));

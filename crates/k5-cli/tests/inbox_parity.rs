@@ -62,15 +62,15 @@ fn long_items() -> String {
 }
 
 /// A session with a live cell socket.
-fn cell(rig: &Rig, extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
-    let mut e = with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+fn cell(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+    let mut e = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
     e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
     e
 }
 
 /// A host session: the passport, no socket.
-fn host(rig: &Rig, extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
-    with_passport(rig.stub.port, extra)
+fn host(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+    with_passport(extra)
 }
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
@@ -111,7 +111,7 @@ fn reply(body: String) -> Reply {
 #[test]
 fn inbox_lists_as_the_shell_does() {
     let rig = Rig::new(VERB, "list");
-    let h = |extra: &[(&'static str, &str)]| host(&rig, extra);
+    let h = host;
     let v = vec![
         case(
             "no verb: an empty inbox",
@@ -751,8 +751,8 @@ fn inbox_reads_an_item_as_the_shell_does() {
 #[test]
 fn inbox_in_a_session_as_the_shell_does() {
     let rig = Rig::new(VERB, "cell");
-    let c = |extra: &[(&'static str, &str)]| cell(&rig, extra);
-    let h = |extra: &[(&'static str, &str)]| host(&rig, extra);
+    let c = cell;
+    let h = host;
     let not_served = || Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into());
     let v = vec![
         with(
@@ -1019,7 +1019,7 @@ fn inbox_with_no_answer() {
         no_tmpdir: true,
         ..c
     };
-    let c = || cell(&rig, &[]);
+    let c = || cell(&[]);
     let empty_5xx = || Reply::Answer(502, String::new());
     let garbage = || Reply::Raw(GARBAGE.to_vec());
     let v = vec![
@@ -1222,10 +1222,7 @@ fn inbox_with_no_daemon() {
         ));
     }
     rig.check(&with(
-        cell(
-            &rig,
-            &[("K2_HOOK_SOCK", "{deadsock}"), ("K2_PORT", port.as_str())],
-        ),
+        cell(&[("K2_HOOK_SOCK", "{deadsock}"), ("K2_PORT", port.as_str())]),
         case(
             "a dead socket and no daemon",
             &[],
@@ -1263,7 +1260,7 @@ fn inbox_hands_these_to_the_shell() {
         compare: Compare::Shell,
         ..c
     };
-    let c = |extra: &[(&'static str, &str)]| cell(&rig, extra);
+    let c = cell;
     let v = vec![
         shell(case(
             "compose",

@@ -56,6 +56,8 @@ pub struct Logged {
 #[derive(Default)]
 struct State {
     log: Vec<Logged>,
+    /// How much of `log` [`Stub::take_log`] has handed out.
+    read: usize,
     queue: VecDeque<Reply>,
 }
 
@@ -105,12 +107,27 @@ impl Stub {
     pub fn reset(&self, replies: &[Reply]) {
         let mut s = self.state.lock().expect("the stub's lock");
         s.log.clear();
+        s.read = 0;
         s.queue = replies.iter().cloned().collect();
     }
 
     /// The requests so far.
     pub fn log(&self) -> Vec<Logged> {
         self.state.lock().expect("the stub's lock").log.clone()
+    }
+
+    /// The requests so far, all marked as read.
+    pub fn take_log(&self) -> Vec<Logged> {
+        let mut s = self.state.lock().expect("the stub's lock");
+        s.read = s.log.len();
+        s.log.clone()
+    }
+
+    /// The requests that came after the last [`Stub::take_log`] (or
+    /// [`Stub::reset`]): nobody has read them.
+    pub fn unread(&self) -> Vec<Logged> {
+        let s = self.state.lock().expect("the stub's lock");
+        s.log[s.read..].to_vec()
     }
 
     /// Answers not used yet.

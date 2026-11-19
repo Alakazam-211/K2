@@ -366,9 +366,9 @@ fn connections_answers_as_the_shell_does() {
 #[test]
 fn connections_with_a_passport() {
     let rig = Rig::new(VERB, "pass");
-    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let h = with_passport;
     let cell = |extra: &[(&'static str, &str)]| {
-        let mut e = with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+        let mut e = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
         e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
         e
     };
@@ -595,7 +595,7 @@ fn connections_with_no_answer() {
         no_tmpdir: true,
         ..c
     };
-    let cell = || with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+    let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
     let v = vec![
         waited(case(
             "an empty reply: the line, exit 1",

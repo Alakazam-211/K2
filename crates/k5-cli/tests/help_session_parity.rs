@@ -11,7 +11,8 @@
 mod common;
 
 use common::parity::{
-    case, dead_port, heal, nothing, ok, owner_and_port, with_passport, Case, Compare, Rig, REFUSED,
+    case, dead_port, heal, nothing, ok, owner_and_port, with_passport, Case, Compare, Rig, PORT,
+    REFUSED,
 };
 use common::stub::Reply;
 
@@ -22,8 +23,7 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 #[test]
 fn a_family_s_help_with_hook_sock() {
     let rig = Rig::new("mail", "help");
-    let port = rig.stub.port;
-    let sock = |s: &'static str| with_passport(port, &[("K2_HOOK_SOCK", s)]);
+    let sock = |s: &'static str| with_passport(&[("K2_HOOK_SOCK", s)]);
     let base = |name, replies, code, requests| {
         case(
             name,
@@ -136,7 +136,7 @@ fn a_family_s_help_with_hook_sock() {
         ),
         with(
             vec![
-                ("K2_PORT", format!("0{port}")),
+                ("K2_PORT", format!("0{PORT}")),
                 ("K2_HOOK_TOKEN", common::parity::PASSPORT.to_string()),
                 ("K2_HOOK_SOCK", "{nosock}".to_string()),
             ],

@@ -376,7 +376,8 @@ fn connect_status_answers_as_the_shell_does() {
             |r| {
                 files(r, None, None);
                 owner_only(r);
-                std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub.port)).unwrap();
+                std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub().port))
+                    .unwrap();
             },
             0,
             2,
@@ -426,7 +427,7 @@ fn connect_status_answers_as_the_shell_does() {
 #[test]
 fn connect_status_with_a_passport() {
     let rig = Rig::new(VERB, "pass");
-    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let h = with_passport;
     let v = vec![
         with(
             h(&[("K2_HOOK_SOCK", "{sock}")]),

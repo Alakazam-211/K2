@@ -44,9 +44,9 @@ fn refusal(status: u16, body: &str) -> Reply {
 }
 
 /// An agent's settings: the passport over TCP to the stub, and `extra`.
-fn agent(rig: &Rig, extra: &[(&'static str, &str)], c: Case) -> Case {
+fn agent(extra: &[(&'static str, &str)], c: Case) -> Case {
     Case {
-        env: with_passport(rig.stub.port, extra),
+        env: with_passport(extra),
         ..c
     }
 }
@@ -58,7 +58,7 @@ type Environment = (&'static str, Vec<(&'static str, String)>, fn(&Rig), Compare
 /// owner (A), the owner with `HOOK_SOCK` (As), an agent over TCP (T), an
 /// agent in a K2 terminal (C), and the last with the owner token on disk
 /// (PRD 13.9 #4).
-fn environments(rig: &Rig) -> Vec<Environment> {
+fn environments() -> Vec<Environment> {
     let sock = |extra: Vec<(&'static str, String)>| {
         let mut e = extra;
         e.push(("K2_HOOK_SOCK", "{sock}".to_string()));
@@ -74,19 +74,19 @@ fn environments(rig: &Rig) -> Vec<Environment> {
         ),
         (
             "agent over TCP",
-            with_passport(rig.stub.port, &[]),
+            with_passport(&[]),
             port_only,
             Compare::Exact,
         ),
         (
             "agent, a live cell socket",
-            sock(with_passport(rig.stub.port, &[])),
+            sock(with_passport(&[])),
             port_only,
             Compare::Exact,
         ),
         (
             "agent, a cell socket, the owner token on disk (PRD 13.9 #4)",
-            sock(with_passport(rig.stub.port, &[])),
+            sock(with_passport(&[])),
             owner_and_port,
             Compare::OwnerTokenWithPassport,
         ),
@@ -99,7 +99,7 @@ fn the_list_in_each_environment() {
     let rig = Rig::new(VERB, "envs");
     let ask = || refusal(403, PERMISSION_ASK);
     let mut v = Vec::new();
-    for (env_name, env, setup, compare) in environments(&rig) {
+    for (env_name, env, setup, compare) in environments() {
         let rows: Vec<(&'static str, &'static [&'static str], Reply, i32)> = vec![
             ("the list", &[], text(LIST), 0),
             ("--json", &["--json"], text(STATUS), 0),
@@ -532,7 +532,6 @@ fn the_passport() {
     let rig = Rig::new(VERB, "passport");
     let v = vec![
         agent(
-            &rig,
             &[],
             case(
                 "a re-minted passport is used from the start",
@@ -545,7 +544,6 @@ fn the_passport() {
             ),
         ),
         agent(
-            &rig,
             &[],
             case(
                 "a refused passport heals once",
@@ -558,7 +556,6 @@ fn the_passport() {
             ),
         ),
         agent(
-            &rig,
             &[],
             case(
                 "a refused passport heals once, --json",
@@ -571,7 +568,6 @@ fn the_passport() {
             ),
         ),
         agent(
-            &rig,
             &[],
             case(
                 "a dead passport: the probe, then the restart line",
@@ -584,7 +580,6 @@ fn the_passport() {
             ),
         ),
         agent(
-            &rig,
             &[],
             case(
                 "a refused passport the probe finds good: no line",
@@ -597,7 +592,6 @@ fn the_passport() {
             ),
         ),
         agent(
-            &rig,
             &[("K2_NO_OWNER_FALLBACK", "1")],
             case(
                 "the guard lets a passport through",
@@ -787,7 +781,7 @@ fn no_answer() {
     let dead = dead_port();
     let published = |r: &Rig| {
         r.owner_on_disk();
-        std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub.port)).unwrap();
+        std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub().port)).unwrap();
     };
     for (name, args, reply) in [
         ("a moved port: the stray 000 line", &[][..], text(LIST)),
@@ -1452,7 +1446,6 @@ fn the_writes_with_a_passport() {
     let sock = [("K2_HOOK_SOCK", "{sock}")];
     let v = vec![
         agent(
-            &rig,
             &[],
             case(
                 "chief-of-staff over TCP",
@@ -1465,7 +1458,6 @@ fn the_writes_with_a_passport() {
             ),
         ),
         agent(
-            &rig,
             &sock,
             case(
                 "chief-of-staff in a K2 terminal",
@@ -1478,7 +1470,6 @@ fn the_writes_with_a_passport() {
             ),
         ),
         agent(
-            &rig,
             &sock,
             case(
                 "chief-of-staff in a K2 terminal, the owner token on disk: the passport",
@@ -1493,7 +1484,6 @@ fn the_writes_with_a_passport() {
         Case {
             compare: Compare::OwnerTokenWithPassport,
             ..agent(
-                &rig,
                 &sock,
                 case(
                     "hide in a K2 terminal, the owner token on disk (PRD 13.9 #4)",
@@ -1507,7 +1497,6 @@ fn the_writes_with_a_passport() {
             )
         },
         agent(
-            &rig,
             &[],
             case(
                 "an agent's refusal",
@@ -1520,7 +1509,6 @@ fn the_writes_with_a_passport() {
             ),
         ),
         agent(
-            &rig,
             &[],
             case(
                 "a refused passport: the write once more, healed",
@@ -1533,7 +1521,6 @@ fn the_writes_with_a_passport() {
             ),
         ),
         agent(
-            &rig,
             &[],
             case(
                 "a dead passport after a write",
@@ -1598,7 +1585,7 @@ fn a_write_is_sent_once() {
     ));
     let published = |r: &Rig| {
         r.owner_on_disk();
-        std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub.port)).unwrap();
+        std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub().port)).unwrap();
     };
     rig.check(&case(
         "a refused connect, then the published port: sent once",

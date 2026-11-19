@@ -134,9 +134,8 @@ fn every_retired_verb() {
             for c in plain_rows(alone, 1) {
                 rig.check(&c);
             }
-            let port = rig.stub.port;
             rig.check(&with(
-                with_passport(port, &[("K2_HOOK_SOCK", "{sock}")]),
+                with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
                 case(
                     "an agent on its cell socket: the line, nothing asked",
                     alone,
@@ -157,7 +156,6 @@ fn every_retired_verb() {
 #[test]
 fn a_word_whose_tool_is_an_id_tool() {
     let rig = Rig::new("fs", "id");
-    let port = rig.stub.port;
     let cases = vec![
         with(
             vec![("K2_HOOK_SOCK", "{nosock}".to_string())],
@@ -175,7 +173,7 @@ fn a_word_whose_tool_is_an_id_tool() {
             },
         ),
         with(
-            with_passport(port, &[("K2_HOOK_SOCK", "{sock}")]),
+            with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
             Case {
                 compare: Compare::Shell,
                 ..case(

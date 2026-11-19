@@ -160,7 +160,7 @@ fn assert_native(rig: &Rig, c: &Case) {
 #[test]
 fn update_cli_answers_as_the_shell_does() {
     let rig = rig("cli");
-    let port = rig.stub.port.to_string();
+    let port = PORT.to_string();
     let v = vec![
         case(
             "--cli, the daemon on our version",
@@ -340,7 +340,7 @@ fn update_cli_answers_as_the_shell_does() {
             ),
         ),
         with(
-            with_passport(rig.stub.port, &[]),
+            with_passport(&[]),
             case(
                 "--cli, a passport",
                 &["--cli"],

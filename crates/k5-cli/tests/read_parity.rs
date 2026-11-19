@@ -46,14 +46,14 @@ fn many_lines(n: usize) -> String {
     format!(r#"{{"lines":[{}]}}"#, lines.join(","))
 }
 
-fn cell(rig: &Rig, extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
-    let mut e = with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+fn cell(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+    let mut e = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
     e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
     e
 }
 
-fn host(rig: &Rig, extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
-    with_passport(rig.stub.port, extra)
+fn host(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+    with_passport(extra)
 }
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
@@ -88,7 +88,7 @@ fn words(v: Vec<&'static str>) -> &'static [&'static str] {
 #[test]
 fn read_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "all");
-    let h = |extra: &[(&'static str, &str)]| host(&rig, extra);
+    let h = host;
     let v = vec![
         case(
             "a workspace",
@@ -557,7 +557,7 @@ fn read_answers_as_the_shell_does() {
 #[test]
 fn read_over_the_cell_socket() {
     let rig = Rig::new(VERB, "cell");
-    let c = |extra: &[(&'static str, &str)]| cell(&rig, extra);
+    let c = cell;
     let not_served = || Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into());
     let v = vec![
         with(
@@ -729,7 +729,7 @@ fn read_with_no_answer() {
         no_tmpdir: true,
         ..c
     };
-    let c = || cell(&rig, &[]);
+    let c = || cell(&[]);
     let v = vec![
         in_pipe(case(
             "an empty reply: the line, then SIGPIPE",
@@ -817,10 +817,7 @@ fn read_with_no_daemon() {
         0,
     ));
     rig.check(&with(
-        cell(
-            &rig,
-            &[("K2_HOOK_SOCK", "{deadsock}"), ("K2_PORT", port.as_str())],
-        ),
+        cell(&[("K2_HOOK_SOCK", "{deadsock}"), ("K2_PORT", port.as_str())]),
         case(
             "a dead socket and no daemon",
             &["acme"],

@@ -436,9 +436,9 @@ fn activity_answers_as_the_shell_does() {
 #[test]
 fn activity_with_a_passport() {
     let rig = Rig::new(VERB, "pass");
-    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let h = with_passport;
     let cell = |extra: &[(&'static str, &str)]| {
-        let mut e = with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+        let mut e = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
         e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
         e
     };

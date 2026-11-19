@@ -538,9 +538,9 @@ fn list_answers_as_the_shell_does() {
 #[test]
 fn list_with_a_passport() {
     let rig = Rig::new(VERB, "lpass");
-    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let h = with_passport;
     let cell = |extra: &[(&'static str, &str)]| {
-        let mut e = with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+        let mut e = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
         e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
         e
     };
@@ -1452,9 +1452,9 @@ fn show_answers_as_the_shell_does() {
 #[test]
 fn show_with_a_passport() {
     let rig = Rig::new(VERB, "spass");
-    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let h = with_passport;
     let cell = |extra: &[(&'static str, &str)]| {
-        let mut e = with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+        let mut e = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
         e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
         e
     };
@@ -1681,7 +1681,7 @@ fn tickets_show_is_feedback_show() {
 #[test]
 fn show_hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "sshell");
-    let zero_port = format!("0{}", rig.stub.port);
+    let zero_port = format!("0{PORT}");
     let v = vec![
         shell(case(
             "show -h",

@@ -350,7 +350,7 @@ fn workspace_create_and_open_send_the_shell_s_path() {
 #[test]
 fn workspace_create_with_a_passport() {
     let rig = Rig::new(VERB, "pass");
-    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let h = with_passport;
     let v = vec![
         with(
             h(&[]),

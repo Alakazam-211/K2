@@ -628,9 +628,9 @@ fn sessions_answers_as_the_shell_does() {
 #[test]
 fn sessions_with_a_passport() {
     let rig = Rig::new(VERB, "pass");
-    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let h = with_passport;
     let cell = |extra: &[(&'static str, &str)]| {
-        let mut e = with_passport(rig.stub.port, &[("K2_HOOK_SOCK", "{sock}")]);
+        let mut e = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
         e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
         e
     };
@@ -909,10 +909,7 @@ fn sessions_with_no_daemon() {
         0,
     ));
     rig.check(&with(
-        with_passport(
-            0,
-            &[("K2_HOOK_SOCK", "{deadsock}"), ("K2_PORT", port.as_str())],
-        ),
+        with_passport(&[("K2_HOOK_SOCK", "{deadsock}"), ("K2_PORT", port.as_str())]),
         case(
             "a dead socket and no daemon",
             &["--past"],

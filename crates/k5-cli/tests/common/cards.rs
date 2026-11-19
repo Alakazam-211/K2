@@ -16,7 +16,7 @@
 
 use super::parity::{
     case, dead_port, heal, healed_on_disk, ok, owner_and_port, with_passport, Case, Compare,
-    NoPython3, Rig, GARBAGE, REFUSED,
+    NoPython3, Rig, GARBAGE, PORT, REFUSED,
 };
 use super::stub::Reply;
 use std::time::Duration;
@@ -45,7 +45,7 @@ fn fresh_healed(r: &Rig) {
 
 /// The daemon moved to the stub's port: `daemon.port` says so.
 fn moved(r: &Rig) {
-    std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub.port)).unwrap();
+    std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub().port)).unwrap();
 }
 
 /// The row with a passport and neither a socket nor a port.
@@ -69,9 +69,8 @@ pub fn help_rows(rig: &Rig, args: &'static [&'static str]) -> Vec<Case> {
 /// The rows for `args`, whose page exits `on_code` with cards on and
 /// `off_code` with them off.
 pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i32) -> Vec<Case> {
-    let port = rig.stub.port;
-    let cell = || with_passport(port, &[("K2_HOOK_SOCK", "{sock}")]);
-    let tcp = || with_passport(port, &[("K2_HOOK_SOCK", "{nosock}")]);
+    let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
+    let tcp = || with_passport(&[("K2_HOOK_SOCK", "{nosock}")]);
     let row = |name, replies, code, requests| case(name, args, &[], replies, fresh, code, requests);
     vec![
         with(
@@ -93,7 +92,7 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
         ),
         with(tcp(), row("off, over TCP", vec![ok(OFF)], off_code, 1)),
         with(
-            with_passport(port, &[]),
+            with_passport(&[]),
             row("on, over TCP (no socket set)", vec![ok(ON)], on_code, 1),
         ),
         with(
@@ -211,7 +210,7 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
             },
         ),
         with(
-            with_passport(port, &[("K2_HOOK_SOCK", "{deadsock}")]),
+            with_passport(&[("K2_HOOK_SOCK", "{deadsock}")]),
             row(
                 "nothing listens on the socket: the tries, then off",
                 vec![],
@@ -240,7 +239,7 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
             row(NO_SOCKET_NO_PORT, vec![], off_code, 0),
         ),
         with(
-            with_passport(port, &[("K2_HOOK_SOCK", "{sock}")]),
+            with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
             Case {
                 setup: fresh_healed,
                 ..row(
@@ -254,7 +253,7 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
         with(
             vec![
                 ("K2_HOOK_SOCK", "{sock}".to_string()),
-                ("K2_PORT", port.to_string()),
+                ("K2_PORT", PORT.to_string()),
             ],
             Case {
                 setup: fresh_owner,
@@ -350,7 +349,7 @@ pub fn check_without_python3(
         let (got, log) = rig.binary(c, true);
         let name = c.name;
         println!("== {name} {args:?} (no python3)\n-- rust: {got:?}");
-        assert_eq!(rig.stub.left(), 0, "{name}: answers left unused");
+        assert_eq!(rig.stub().left(), 0, "{name}: answers left unused");
         assert_eq!(log.len(), c.requests, "{name}: the requests {log:?}");
         assert_eq!(
             (got.code, got.stdout.as_str(), got.stderr.as_str()),

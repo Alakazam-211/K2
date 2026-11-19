@@ -1934,8 +1934,6 @@ async fn handle_one_request(
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
     }
-    // k5 CLI usage (R1 slice 10): count this request's X-K5-* claims when
-    // its credential checks out. A count only: it never gates anything.
     crate::cli_usage::note_tcp(&headers_blob, &query, state.token.as_str()).await;
 
     // A′ (app-mobile-access-v1, 0.46.3): the catalog is the wall for App
@@ -2146,15 +2144,7 @@ async fn handle_one_request(
             let _ = stream.read(&mut buf).await;
             crate::pair_page::send_aasa(&mut *stream).await;
         }
-        // R1 slice 10: the k5 CLI's usage counts, owner only (`cli_usage::handle`).
-        crate::cli_usage::ROUTE => {
-            let _ = stream.read(&mut buf).await;
-            let (q, owner) = (query.clone(), state.token.to_string());
-            let r = tokio::task::spawn_blocking(move || crate::cli_usage::handle(&q, &owner))
-                .await
-                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
-            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
-        }
+        p @ (crate::cli_usage::ROUTE | crate::cli_beta_routes::PATH) => crate::cli_beta_routes::serve_k5_tcp(p, &mut *stream, &mut buf, &query, state.token.as_str(), is_post).await,
         "/ping" => {
             let _ = stream.read(&mut buf).await;
             // Unauthenticated. Smallest liveness check. PRD boot-status-ghost
@@ -11927,13 +11917,6 @@ async fn handle_one_request(
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
-            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
-        }
-        // New k5 command (Beta): the owner's switch (`cli_beta_routes`); the body is read for the owner only.
-        crate::cli_beta_routes::PATH => {
-            let by = super::http::owner_role_identity(&query, state.token.as_str());
-            let body = if is_post && by.is_some() { super::http::read_post_body(&mut *stream, &mut buf).await } else { let _ = stream.read(&mut buf).await; Vec::new() };
-            let r = tokio::task::spawn_blocking(move || crate::cli_beta_routes::handle(by.as_deref(), is_post, &body)).await.unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Chunk 2.2 — owner-only writer for `projects.agents_can_manage_skin`.

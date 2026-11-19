@@ -270,7 +270,8 @@ fn tcp_caller(auth_query: &str, owner_token: &str) -> Option<Option<String>> {
 }
 
 /// The TCP door: called after the dispatcher's gates, with the request
-/// head and its folded credential query (`effective_auth_query`).
+/// head and its folded credential query (`effective_auth_query`). A count
+/// only: it never gates anything.
 pub async fn note_tcp(head: &str, auth_query: &str, owner_token: &str) {
     let Some(claims) = Claims::from_head(head) else { return };
     let (query, owner) = (auth_query.to_string(), owner_token.to_string());
@@ -317,6 +318,19 @@ pub fn boot_status_value() -> serde_json::Value {
 
 /// `GET /cli/cli-usage`: the owner (token, or an Owner login) reads every
 /// row, after this boot's pending counts are written.
+/// The TCP door's arm for [`ROUTE`] (`routes/dispatcher.rs`): the
+/// request's body is drained, [`handle`] runs off the async threads, and
+/// its answer goes back.
+pub(crate) async fn serve_tcp(stream: &mut tokio::net::TcpStream, buf: &mut [u8], query: &str, owner_token: &str) {
+    use tokio::io::AsyncReadExt;
+    let _ = stream.read(buf).await;
+    let (q, owner) = (query.to_string(), owner_token.to_string());
+    let r = tokio::task::spawn_blocking(move || handle(&q, &owner))
+        .await
+        .unwrap_or_else(|e| CliResponse::internal_error(format!("worker join: {e}")));
+    crate::routes::http::send_response(stream, r.status, r.content_type, &r.body).await;
+}
+
 pub fn handle(auth_query: &str, owner_token: &str) -> CliResponse {
     if crate::routes::http::owner_role_identity(auth_query, owner_token).is_none() {
         return CliResponse {

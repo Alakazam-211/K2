@@ -46,6 +46,35 @@ fn state() -> Value {
 
 /// The route. `by`: the caller when it is the owner (the dispatcher's
 /// `owner_role_identity`), else `None`.
+/// The TCP door's one arm for the k5 command's two routes
+/// (`routes/dispatcher.rs`): [`crate::cli_usage::ROUTE`], the owner's usage
+/// counts, and [`PATH`], the owner's "New k5 command (Beta)" switch.
+pub(crate) async fn serve_k5_tcp(path: &str, stream: &mut tokio::net::TcpStream, buf: &mut [u8], query: &str, owner_token: &str, is_post: bool) {
+    if path == crate::cli_usage::ROUTE {
+        crate::cli_usage::serve_tcp(stream, buf, query, owner_token).await
+    } else {
+        serve_tcp(stream, buf, query, owner_token, is_post).await
+    }
+}
+
+/// The TCP door's arm for [`PATH`]: the body is
+/// read for the owner only (else drained), [`handle`] runs off the async
+/// threads, and its answer goes back.
+pub(crate) async fn serve_tcp(stream: &mut tokio::net::TcpStream, buf: &mut [u8], query: &str, owner_token: &str, is_post: bool) {
+    use tokio::io::AsyncReadExt;
+    let by = crate::routes::http::owner_role_identity(query, owner_token);
+    let body = if is_post && by.is_some() {
+        crate::routes::http::read_post_body(stream, buf).await
+    } else {
+        let _ = stream.read(buf).await;
+        Vec::new()
+    };
+    let r = tokio::task::spawn_blocking(move || handle(by.as_deref(), is_post, &body))
+        .await
+        .unwrap_or_else(CliResponse::internal_error);
+    crate::routes::http::send_response(stream, r.status, r.content_type, &r.body).await;
+}
+
 pub fn handle(by: Option<&str>, is_post: bool, body: &[u8]) -> CliResponse {
     handle_with(by, is_post, body, relink)
 }

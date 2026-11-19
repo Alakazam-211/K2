@@ -7220,14 +7220,15 @@ cmd_heartbeat_wake() {
     if [ -n "${_k2_no_owner_fallback:-}" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
         _k2_refuse_owner_fallback
     fi
-    # One Python block makes every request, so each read is checked the
+    # One Python block makes every request, so each answer is checked the
     # same way. "noop" only when the daemon answered and there is no inbox
     # work; the manager is launched only when the daemon's live sessions
-    # answered and have no manager. Anything else (no port, the Python
-    # stopping, a refusal, an error status, an answer that is not JSON, no
-    # connection) prints one line on stderr and exits non-zero: 3 for a
-    # refusal that carries a permission card (with its Ask with: line), 1
-    # for the rest.
+    # answered and have no manager; "notified" and "launched" only when
+    # the daemon took the write or the launch. Anything else (no port, the
+    # Python stopping, a refusal, an error status, an answer that is not
+    # JSON, no connection) prints one line on stderr and exits non-zero: 3
+    # for a refusal that carries a permission card (with its Ask with:
+    # line), 1 for the rest.
     python3 -c "
 import json, os, socket, sys, time, urllib.error, urllib.parse, urllib.request
 
@@ -7304,23 +7305,28 @@ def request(route, method='GET', **params):
     except OSError as e:
         fail(f\"K2's server closed the connection on {route}: {e}; run k2 daemon status\")
 
-def answer(route, **params):
-    # The JSON the daemon answered on route with HTTP 200; anything else
-    # ends the command with its error line.
-    code, raw = request(route, **params)
+def checked(route, method='GET', **params):
+    # The JSON the daemon answered on route with HTTP 200 (a change: and
+    # no error in it), and the raw answer; anything else ends the command
+    # with its error line.
+    code, raw = request(route, method, **params)
     try:
         data = json.loads(raw)
     except ValueError:
         data = None
         if code == 200:
             fail(f\"K2's server answered {route} with something that is not JSON\")
-    if code != 200:
+    if code != 200 or (method == 'POST' and isinstance(data, dict) and data.get('error')):
         refused(route, code, data, raw)
-    return data
+    return data, raw
+
+def answer(route, **params):
+    return checked(route, **params)[0]
 
 def post(route, **params):
-    # A change; its answer is printed as it comes.
-    code, raw = request(route, method='POST', **params)
+    # A change, checked: a write or a launch that failed ends the command
+    # before its success line. The answer is printed as before.
+    raw = checked(route, 'POST', **params)[1]
     sys.stdout.write(raw.decode('utf-8', 'replace'))
 
 def say(**fields):

@@ -183,10 +183,13 @@ wake_fn 1
 is_noop "the function alone, with the proxy rule exported"
 
 echo "work to do: the manager is told, as before"
-RUNNING='"/cli/agents/running": [200, "[{\"terminalId\":\"agent-chat:p1:manager\",\"cwd\":\"/w\"}]"], "/cli/terminal/write": [200, "{\"ok\":true}"]'
+# The write's answer as the daemon gives it (terminal_routes::handle_write).
+WROTE='"/cli/terminal/write": [200, "{\"success\":true}"]'
+SCAN='"/cli/agents/running": [200, "[{\"terminalId\":\"agent-chat:p1:manager\",\"cwd\":\"/w\"}]"]'
+RUNNING="$SCAN, $WROTE"
 # told <case>: the running manager got the triage message, once.
 told() {
-    if [ "$RC" = 0 ] && [ "$(tail -n 1 "$T/out")" = '{"ok":true}{"status":"notified","terminalId":"agent-chat:p1:manager"}' ] &&
+    if [ "$RC" = 0 ] && [ "$(tail -n 1 "$T/out")" = '{"success":true}{"status":"notified","terminalId":"agent-chat:p1:manager"}' ] &&
         [ ! -s "$T/err" ] && [ "$(gets /cli/agents/list)" = 1 ] && [ "$(gets /cli/inbox/list)" = 1 ] && root_asked &&
         [ "$(gets /cli/agents/running)" = 1 ] &&
         [ "$(grep -cF 'POST /cli/terminal/write?' "$T/requests.log" || true)" = 1 ] &&
@@ -329,7 +332,9 @@ never_launched "the scan is refused with a card" && is_error "the scan is refuse
     "Error: k2 heartbeat wake: K2's server refused /cli/agents/running with HTTP 403: not allowed: read sessions" \
     "Ask with: $ASK"
 
-LAUNCH='"/cli/agents/launch": [200, "{\"success\":true}"], "/cli/terminal/write": [200, "{\"ok\":true}"]'
+# The launch's answer as the daemon gives it (agents_routes::handle_agents_launch).
+LAUNCHED='{"success":true,"terminalId":"7d3f9a52-1c4e-4b8a-9f21-5e6d7c8b9a01","agentName":"manager","pendingDrained":0,"note":"Agent session launched by daemon"}'
+LAUNCH='"/cli/agents/launch": [200, '"$(js "$LAUNCHED")"'], '"$WROTE"
 plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], '"$BUSY"']}}'
 wake
 poll_stopped "the launch poll answers 500" && is_error "the launch poll answers 500" 1 \
@@ -340,7 +345,7 @@ poll_stopped "the launch poll gets no answer" && err_like "the launch poll gets 
 plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}}'
 wake
 if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&
-    [ "$(tail -n 1 "$T/out")" = '{"success":true}{"ok":true}{"status":"launched_and_notified","terminalId":"agent-chat-manager"}' ] &&
+    [ "$(tail -n 1 "$T/out")" = "$LAUNCHED"'{"success":true}{"status":"launched_and_notified","terminalId":"agent-chat-manager"}' ] &&
     [ "$(gets /cli/agents/running)" = 2 ] && [ "$(posted /cli/agents/launch?)" = 1 ] &&
     [ "$(posted /cli/terminal/write?)" = 1 ] && grep -qF 'POST /cli/agents/launch?project=' "$T/requests.log" &&
     grep -qF '&agent=manager ' "$T/requests.log" && grep -qF 'id=agent-chat-manager&message=New%20work%20detected' "$T/requests.log"; then
@@ -348,6 +353,58 @@ if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&
 else
     bad "no manager running: it is launched, then told once its terminal is up"
 fi
+
+echo "the write and the launch: a failed one is an error, never notified or launched"
+# not_told <case>: no notified or launched line on stdout.
+not_told() {
+    if grep -qF '"status":"notified"' "$T/out" || grep -qF '"status":"launched' "$T/out"; then
+        bad "$1: it printed a notified or launched line"
+        return 1
+    fi
+}
+# <case>|<status>|<body, escaped for the plan>|<the line after "K2's server ">
+for c in 'the write answers 500|500|{\"error\":\"pty write failed: broken pipe\"}|answered /cli/terminal/write with HTTP 500: pty write failed: broken pipe' \
+    'the write answers 400 (no such session)|400|{\"error\":\"session not found (checked legacy + v2 maps)\"}|answered /cli/terminal/write with HTTP 400: session not found (checked legacy + v2 maps)' \
+    'the write answers something that is not JSON|200|<html>not json</html>|answered /cli/terminal/write with something that is not JSON' \
+    'the write answers 200 with an error in it|200|{\"error\":\"pty closed\"}|answered /cli/terminal/write with HTTP 200: pty closed'; do
+    IFS='|' read -r name st body want <<<"$c"
+    plan '{'"$WORK"', '"$SCAN"', "/cli/terminal/write": ['"$st"', "'"$body"'"]}'
+    wake
+    not_told "$name" && is_error "$name" 1 "Error: k2 heartbeat wake: K2's server $want"
+done
+plan '{'"$WORK"', '"$SCAN"', "/cli/terminal/write": [0, ""]}'
+wake
+not_told "the write gets no answer" && err_like "the write gets no answer" 1 \
+    "Error: k2 heartbeat wake: K2's server closed the connection on /cli/terminal/write: *; run k2 daemon status"
+plan '{'"$WORK"', '"$SCAN"', "/cli/terminal/write": [403, "{\"error\":\"not allowed: write to a terminal\",\"permission\":{\"command\":\"k2 permission request heartbeats.read --why \\\"<what you need it for>\\\"\"}}"]}'
+wake
+not_told "the write is refused with a card" && is_error "the write is refused with a card" 3 \
+    "Error: k2 heartbeat wake: K2's server refused /cli/terminal/write with HTTP 403: not allowed: write to a terminal" \
+    "Ask with: $ASK"
+plan '{'"$WORK"', "/cli/agents/running": [200, "[]"], "/cli/agents/launch": [400, "{\"error\":\"build_launch failed: no manager agent\"}"]}'
+wake
+if not_told "the launch answers 400: no poll"; then
+    if [ "$(gets /cli/agents/running)" = 1 ] && [ "$(posted)" = 1 ]; then
+        is_error "the launch answers 400: no poll" 1 \
+            "Error: k2 heartbeat wake: K2's server answered /cli/agents/launch with HTTP 400: build_launch failed: no manager agent"
+    else
+        bad "the launch answers 400: no poll (it polled or posted again)"
+    fi
+fi
+plan '{'"$WORK"', "/cli/agents/running": [200, "[]"], "/cli/agents/launch": [0, ""]}'
+wake
+if not_told "the launch gets no answer: no poll"; then
+    if [ "$(gets /cli/agents/running)" = 1 ]; then
+        err_like "the launch gets no answer: no poll" 1 \
+            "Error: k2 heartbeat wake: K2's server closed the connection on /cli/agents/launch: *; run k2 daemon status"
+    else
+        bad "the launch gets no answer: no poll (it polled)"
+    fi
+fi
+plan '{'"$WORK"', "/cli/agents/launch": [200, '"$(js "$LAUNCHED")"'], "/cli/terminal/write": [500, "{\"error\":\"pty write failed: broken pipe\"}"], "/cli/agents/running": {"seq": [[200, "[]"], [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}}'
+wake
+not_told "launched, then the write fails" && is_error "launched, then the write fails" 1 \
+    "Error: k2 heartbeat wake: K2's server answered /cli/terminal/write with HTTP 500: pty write failed: broken pipe"
 
 if [ "${#failed[@]}" -gt 0 ]; then
     echo "heartbeat_wake_errors: ${#failed[@]} failed, $pass passed: ${failed[*]}" >&2

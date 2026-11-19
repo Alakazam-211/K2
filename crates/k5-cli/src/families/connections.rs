@@ -27,7 +27,7 @@
 //!
 //! The route table sends `connections list`, `connections --json` and
 //! `connections --users` here (a verb row, [`crate::route`]), and `add`
-//! (its own verb row, answered by [`write`]): every other action of
+//! and `remove` (a verb row each, answered by [`write`]): every other action of
 //! `cmd_connections`, `connections` alone and its help stay the shell's. So does a command
 //! line with `-h` or `--help` ([`crate::front`]), a word that is not
 //! UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a port that

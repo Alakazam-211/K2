@@ -1,5 +1,5 @@
-//! `k5-cli connections add` against the shell CLI's `cli/k2 connections
-//! add`, on the parity rig ([`common::parity`]): the same requests,
+//! `k5-cli connections add` and `remove` against the shell CLI's
+//! `cli/k2 connections add` and `remove`, on the parity rig ([`common::parity`]): the same requests,
 //! stdout, stderr and exit code.
 //!
 //! - The answers: connected, already connected, a remote add that reaches
@@ -580,4 +580,228 @@ fn connections_add_hands_these_to_the_shell() {
     for c in v {
         rig.check(&c);
     }
+}
+
+const REMOVED: &str = r#"{"ok":true}"#;
+
+#[test]
+fn connections_remove_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "remove");
+    let h = |extra: &[(&'static str, &str)]| with_passport(rig.stub.port, extra);
+    let v = vec![
+        case(
+            "remove",
+            &["remove", "beta"],
+            &[],
+            vec![ok(REMOVED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a target that needs escaping, words after it",
+            &["remove", "seoca::quahog.example/é", "x"],
+            &[],
+            vec![ok(r#"{"ok":true,"warning":"not printed","target":"x"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "the gate: exit 3",
+            &["remove", "beta"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"gated","hint":"no"}}"#.into(),
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "the daemon's error",
+            &["remove", "nope"],
+            &[],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"not_found","hint":"not connected to nope"}}"#.into(),
+            )],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an error with no hint",
+            &["remove", "nope"],
+            &[],
+            vec![ok(r#"{"error":{"code":"x","n":[1.5,null]}}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "a refusal with a permission card: the closing line",
+            &["remove", "beta"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "migrating, then the answer",
+            &["remove", "beta"],
+            &[],
+            vec![
+                Reply::Answer(503, r#"{"state":"migrating"}"#.into()),
+                ok(REMOVED),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "not JSON",
+            &["remove", "beta"],
+            &[],
+            vec![ok("x")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        traceback(case(
+            "not an object",
+            &["remove", "beta"],
+            &[],
+            vec![ok("\"s\"")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case("no target", &["remove"], &[], vec![], owner_and_port, 1, 0),
+        case("no port", &["remove", "beta"], &[], vec![], owner_only, 1, 0),
+        with(
+            h(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(
+                "a K2 terminal: the passport over TCP",
+                &["remove", "beta"],
+                &[],
+                vec![ok(REMOVED)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[]),
+            case(
+                "a refused passport heals once",
+                &["remove", "beta"],
+                &[],
+                vec![heal(&rig), ok(REMOVED)],
+                port_only,
+                0,
+                2,
+            ),
+        ),
+        case(
+            "HOOK_SOCK set and no passport: the require-passport lines",
+            &["remove", "beta"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// One request each, as for `add`.
+#[test]
+fn connections_remove_is_sent_once() {
+    let rig = Rig::new(VERB, "removeonce");
+    let no_tmp = |c: Case| Case {
+        no_tmpdir: true,
+        ..c
+    };
+    let v = vec![
+        case(
+            "an empty 200 is the answer",
+            &["remove", "beta"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        in_pipe(case(
+            "an empty reply (52): the line, SIGPIPE",
+            &["remove", "beta"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            141,
+            1,
+        )),
+        in_pipe(case(
+            "a 5xx with no body: the line, SIGPIPE",
+            &["remove", "beta"],
+            &[],
+            vec![Reply::Answer(500, String::new())],
+            owner_and_port,
+            141,
+            1,
+        )),
+        case(
+            "a reset (56): the reader's line",
+            &["remove", "beta"],
+            &[],
+            vec![Reply::Reset],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "not HTTP (000, curl 1): the reader's line",
+            &["remove", "beta"],
+            &[],
+            vec![Reply::Raw(GARBAGE.to_vec())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        no_tmp(case(
+            "TMPDIR unusable, a reset (75): the reader's line",
+            &["remove", "beta"],
+            &[],
+            vec![Reply::Reset],
+            owner_and_port,
+            1,
+            1,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn connections_remove_hands_these_to_the_shell() {
+    let rig = Rig::new(VERB, "removeshell");
+    rig.check(&Case {
+        compare: Compare::Shell,
+        ..case(
+            "remove --help",
+            &["remove", "beta", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )
+    });
 }

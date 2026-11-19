@@ -209,7 +209,7 @@ pub static TABLE: &[Noun] = &[
     bash(&["reserve"]),
     bash(&["release"]),
     // `list` (and `--json` and `--users`, which the shell reads as
-    // `list`) and `add`; every other action, and `connections` alone, is
+    // `list`), `add` and `remove`; every other action, and `connections` alone, is
     // the shell's. One verb row each, so each can turn back alone.
     Noun {
         words: &["connections"],
@@ -221,6 +221,10 @@ pub static TABLE: &[Noun] = &[
             },
             Verb {
                 words: &["add"],
+                owner: Owner::Native,
+            },
+            Verb {
+                words: &["remove"],
                 owner: Owner::Native,
             },
         ],

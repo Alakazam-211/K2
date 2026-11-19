@@ -1,0 +1,147 @@
+# CLA: every outside contributor signs CLA.md once, by a pull request comment.
+#
+# Sets the commit status "CLA" on the pull request's head commit (make it a required check on main).
+# Signatures live on the orphan branch `cla-signatures`, in signatures/cla-v1.json: GitHub login, GitHub
+# account id, the date, the pull request and the comment id, plus the blob sha of the CLA.md that was signed.
+# Nothing else is stored.
+#
+# Security: this runs on pull_request_target with a write token, so it never checks out or runs pull
+# request code, and no pull request text is interpolated into the script; it only calls the GitHub API.
+#
+# One-time setup (an admin):
+#   git switch --orphan cla-signatures && mkdir signatures
+#   printf '{\n  "signatures": []\n}\n' > signatures/cla-v1.json
+#   git add signatures && git commit -m "CLA signatures" && git push origin cla-signatures
+# then make the "CLA" status required on main, and restrict pushes to `cla-signatures` to GitHub Actions.
+
+name: CLA
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: cla-signatures
+  cancel-in-progress: false
+
+jobs:
+  cla:
+    if: github.event_name == 'pull_request_target' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write       # commit to the cla-signatures branch
+      pull-requests: write  # the bot's comment
+      statuses: write       # the "CLA" status
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const PHRASE = 'I have read the K2 CLA and I agree to it.';
+            const BRANCH = 'cla-signatures';
+            const FILE = 'signatures/cla-v1.json';
+            const CONTEXT = 'CLA';
+            const MARKER = '<!-- k2-cla -->';
+            // Alakazam's own accounts (K2's agents commit as these). Logins, lower case.
+            const ALLOW = new Set(['z3thon']);
+            const allowed = (login) => ALLOW.has(login.toLowerCase()) || login.endsWith('[bot]');
+
+            const { owner, repo } = context.repo;
+            let number;
+            let signer = null;
+            if (context.eventName === 'pull_request_target') {
+              number = context.payload.pull_request.number;
+            } else {
+              const body = (context.payload.comment.body || '').trim();
+              if (body !== PHRASE && body.toLowerCase() !== 'recheck') return;
+              number = context.payload.issue.number;
+              if (body === PHRASE) signer = context.payload.comment;
+            }
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+            if (pr.state !== 'open') return;
+
+            // Who must have signed: the opener and every commit author on the pull request.
+            const need = new Map(); // account id -> login
+            const unlinked = [];
+            const add = (u) => { if (u && u.type !== 'Bot' && !allowed(u.login)) need.set(u.id, u.login); };
+            add(pr.user);
+            const commits = await github.paginate(github.rest.pulls.listCommits,
+              { owner, repo, pull_number: number, per_page: 100 });
+            for (const c of commits) {
+              if (c.author) add(c.author);
+              else unlinked.push(c.sha.slice(0, 10));
+            }
+
+            // The signatures file, with its blob sha for a safe update.
+            async function load() {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path: FILE, ref: BRANCH });
+              return { sha: data.sha, list: JSON.parse(Buffer.from(data.content, 'base64').toString('utf8')).signatures };
+            }
+            let file = await load();
+            const signed = (id) => file.list.some((s) => s.id === id);
+
+            // A signing comment from someone this pull request needs.
+            if (signer && need.has(signer.user.id) && !signed(signer.user.id)) {
+              const { data: cla } = await github.rest.repos.getContent({ owner, repo, path: 'CLA.md', ref: pr.base.ref });
+              for (let attempt = 0; attempt < 3; attempt++) {
+                if (signed(signer.user.id)) break;
+                const list = file.list.concat([{
+                  login: signer.user.login,
+                  id: signer.user.id,
+                  signed_at: signer.created_at,
+                  pull_request: number,
+                  comment_id: signer.id,
+                  cla_blob: cla.sha,
+                }]);
+                const content = Buffer.from(JSON.stringify({ signatures: list }, null, 2) + '\n').toString('base64');
+                try {
+                  await github.rest.repos.createOrUpdateFileContents({
+                    owner, repo, path: FILE, branch: BRANCH, sha: file.sha, content,
+                    message: `CLA signed by @${signer.user.login} in #${number}`,
+                  });
+                  file = await load();
+                  break;
+                } catch (e) {
+                  if (e.status !== 409 && e.status !== 422) throw e;
+                  file = await load(); // someone else wrote first: reload and retry
+                }
+              }
+            }
+
+            const missing = [...need].filter(([id]) => !signed(id)).map(([, login]) => login);
+            const ok = missing.length === 0 && unlinked.length === 0;
+
+            await github.rest.repos.createCommitStatus({
+              owner, repo, sha: pr.head.sha, context: CONTEXT,
+              state: ok ? 'success' : 'failure',
+              description: ok ? 'Everyone has signed the CLA' : 'Waiting for the CLA',
+              target_url: `https://github.com/${owner}/${repo}/blob/main/CLA.md`,
+            });
+
+            // One bot comment per pull request, updated in place.
+            let text;
+            if (ok) {
+              text = `${MARKER}\nThanks: everyone on this pull request has signed the [K2 CLA](https://github.com/${owner}/${repo}/blob/main/CLA.md).`;
+            } else {
+              const lines = [MARKER, 'Thanks for your pull request. Before we can merge it, everyone who wrote a commit here needs to sign our [Contributor License Agreement](https://github.com/' + owner + '/' + repo + '/blob/main/CLA.md), once.', ''];
+              if (missing.length) {
+                lines.push('Please read it, then reply here with this exact comment:', '', '```', PHRASE, '```', '');
+                lines.push('Still to sign: ' + missing.map((l) => '@' + l).join(', '));
+              }
+              if (unlinked.length) {
+                lines.push('', 'These commits have an author email that isn\'t linked to a GitHub account, so we can\'t tell who wrote them: ' + unlinked.join(', ') + '. Add the email to your GitHub account (Settings → Emails), or amend the commits with an email that is, then comment `recheck`.');
+              }
+              text = lines.join('\n');
+            }
+            const comments = await github.paginate(github.rest.issues.listComments,
+              { owner, repo, issue_number: number, per_page: 100 });
+            const mine = comments.find((c) => c.user.type === 'Bot' && (c.body || '').startsWith(MARKER));
+            if (mine) {
+              if (mine.body !== text) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body: text });
+            } else if (!ok) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: number, body: text });
+            }

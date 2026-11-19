@@ -184,3 +184,4 @@ Existing viewers:
 3. Run `cargo fmt`, `cargo clippy`, `cargo test` for the crate you touched (for example `cargo test -p k2-core`; the `k2-daemon` tests run under `cargo nextest run -p k2-daemon`), and `bun run typecheck` before pushing.
 4. Open a PR against `main` with a clear description of what changed and why.
 5. Keep PRs focused -- one feature or fix per PR.
+6. On your first pull request, sign our [Contributor License Agreement](CLA.md) once: a bot asks you to, and you reply with the comment it gives. The CLA lets Alakazam Labs ship your contribution in K2 under its licence and under other terms; you keep your copyright.

@@ -2103,6 +2103,11 @@ k2 talk <workspace> --answer <N>      # BETA: drive a 1-question HITL + re-read
 k2 talk <workspace> --respond <y|n>   # BETA: alias of --answer (y->1, n->2)
 k2 talk <workspace> --scout           # BETA: surface a WHOLE multi-Q form at once
 k2 talk <workspace> --answers <a,b,c> # BETA: answer a whole form + submit, one call
+k2 talk <workspace>@<host> "text" --token-stdin
+                                      # a workspace on a remote server; reads its
+                                      # token from stdin (--token <tok> works too,
+                                      # but a token on the command line is visible
+                                      # to other users on this machine)
 
   ★ BETA — THE inter-agent interaction verb. ★
 

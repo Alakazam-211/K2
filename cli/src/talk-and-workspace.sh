@@ -323,7 +323,7 @@ cmd_talk() {
         esac
     done
 
-    local target="" text="" from="" command="" lines=50 agent="" session="" token=""
+    local target="" text="" from="" command="" lines=50 agent="" session="" token="" token_stdin=0
     local read_only="false"
     local answer="" respond=""
     local scout="false" answers=""
@@ -341,6 +341,7 @@ cmd_talk() {
             --agent)     agent="$2"; shift 2 ;;
             --session)   session="$2"; shift 2 ;;
             --token)     token="$2"; shift 2 ;;
+            --token-stdin) token_stdin=1; shift ;;
             --answer)    answer="$2"; shift 2 ;;
             --respond)   respond="$2"; shift 2 ;;
             --scout)     scout="true"; shift ;;
@@ -362,9 +363,17 @@ cmd_talk() {
     [[ -z "$target" ]] && {
         echo "Error: workspace required" >&2
         echo "Usage: k2 talk <workspace> \"text\" [--read-only] [--from <name>] [--lines N] [--agent <name>]" >&2
+        echo "       k2 talk <workspace>@<host> \"text\" [--token-stdin | --token <tok>] ..." >&2
+        echo "       --token-stdin reads the remote token from stdin; a token on the command line (--token <tok>) is visible to other users on this machine" >&2
         echo "       Run 'k2 talk --help' for the full BETA protocol." >&2
         exit 1
     }
+    if [ "$token_stdin" = 1 ]; then
+        [ -z "$token" ] || { echo "k2 talk: --token-stdin or --token, not both" >&2; exit 2; }
+        _cli_read_secret_stdin "Token: "
+        token="$_K2_SECRET"; _K2_SECRET=""
+        [ -n "$token" ] || { echo "k2 talk: --token-stdin: no token on stdin" >&2; exit 2; }
+    fi
 
     # Remote addressing (K2-as-a-server): <workspace>@<host> talks to a
     # workspace on a CONNECTED remote daemon (owner token over the tunnel) —

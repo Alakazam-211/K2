@@ -28,6 +28,7 @@
 # server's token of k2 clone (--host, --token).
 # Also the remote token of k2 read <ws>@<host> --token-stdin.
 # Also the token of k2 daemon restart --host <url> --token-stdin.
+# Also the remote token of k2 talk <ws>@<host> --token-stdin.
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -446,6 +447,11 @@ printf '%s\n' "$REMOTE_SENTINEL" | k2run daemon restart --host "http://127.0.0.1
 assert_tcp_got "daemon restart --token-stdin" /cli/daemon/restart "token" "$REMOTE_SENTINEL"
 if grep -q '^curl ' "$ARGLOG"; then ok "daemon restart --token-stdin: curl children were logged"; else bad "daemon restart --token-stdin: no curl child was logged"; fi
 assert_off_children "daemon restart --token-stdin" "token" "$REMOTE_SENTINEL"
+
+# 24. k2 talk <ws>@<host> "text" --token-stdin: the remote server's token
+#     reaches that server's terminal read (talk reads first) and no
+#     child's argv or environment, nor k2's own argv, through the send.
+sec_case "talk --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINEL" talk "ws1@http://127.0.0.1:$(cat "$W/tcp-port")" "hello" --token-stdin
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

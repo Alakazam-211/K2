@@ -76,14 +76,15 @@ impl Verb {
 pub const GATED_CODES: [&str; 3] = ["agents_create_connections_disabled", "gated", "forbidden"];
 /// The two hints that mean the gate.
 pub const GATED_HINTS: [&str; 2] = [
-    "Allow agents to create connections",
+    "Agents can add connections",
     "isn't allowed to create or remove connections",
 ];
 /// What a gated hint without `Settings` in it gets after it.
 pub const TEACHING: &str = concat!(
-    "this agent isn't allowed to create or remove connections \u{2014} the owner can enable it in Settings \u{2192} ",
-    k2_client::product_name!(),
-    " Connect (Allow agents to create connections) or Workspaces \u{2192} (workspace) \u{2192} Allow agents to create connections"
+    "this agent isn't allowed to create or remove connections \u{2014} ",
+    "Owner can turn on: Settings \u{2192} Network \u{2192} Tunnel \u{2192} Policies \u{2192} ",
+    "\"Agents can add connections\" (or Settings \u{2192} Workspaces / Agents \u{2192} ",
+    "<workspace> \u{2192} Connections \u{2192} \"Let this agent add connections\")."
 );
 /// The gate's code when the error had none.
 pub const DEFAULT_CODE: &str = "agents_create_connections_disabled";
@@ -95,9 +96,9 @@ pub mod line {
     pub const NOT_ALLOWED: u32 = 20;
     pub const SETTINGS: u32 = 23;
     pub const JOIN: u32 = 24;
-    pub const RPARTITION: u32 = 41;
-    pub const LABEL: u32 = 42;
-    pub const STRIP: u32 = 43;
+    pub const RPARTITION: u32 = 42;
+    pub const LABEL: u32 = 43;
+    pub const STRIP: u32 = 44;
 }
 
 /// The call and its reader, after the checks: `target` is the word after

@@ -44,7 +44,7 @@ fn the_shell_s_lines() {
 fn the_python() {
     let add = super::super::super::shell_python("usage.sh", "action=add&target=");
     let remove = super::super::super::shell_python("usage.sh", "action=remove&target=");
-    assert_eq!(add[..33], remove[..33], "the error parts differ");
+    assert_eq!(add[..34], remove[..34], "the error parts differ");
     let at = |lines: &[String], n: u32| lines[n as usize - 1].trim().to_string();
     for (n, text) in [
         (3, "raw = sys.stdin.read()"),
@@ -63,7 +63,7 @@ fn the_python() {
         ),
         (
             line::ALLOW,
-            "or 'Allow agents to create connections' in hint",
+            "or 'Agents can add connections' in hint",
         ),
         (
             line::NOT_ALLOWED,
@@ -77,33 +77,37 @@ fn the_python() {
         ),
         (
             26,
-            r"'the owner can enable it in Settings \u2192 K2 Connect '",
+            r"'Owner can turn on: Settings \u2192 Network \u2192 Tunnel '",
         ),
         (
             27,
-            r"'(Allow agents to create connections) or Workspaces \u2192 '",
+            r#"'\u2192 Policies \u2192 \"Agents can add connections\" (or Settings '"#,
         ),
         (
             28,
-            r"'(workspace) \u2192 Allow agents to create connections'",
+            r"'\u2192 Workspaces / Agents \u2192 <workspace> \u2192 Connections '",
         ),
         (
-            30,
+            29,
+            r#"'\u2192 \"Let this agent add connections\").'"#,
+        ),
+        (
+            31,
             r"sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')",
         ),
-        (31, "sys.exit(3)"),
-        (32, r"sys.stdout.write('Error: %s\n' % hint)"),
+        (32, "sys.exit(3)"),
+        (33, r"sys.stdout.write('Error: %s\n' % hint)"),
     ] {
         assert_eq!(at(&add, n), text, "line {n}");
     }
     for (n, text) in [
-        (34, "if d.get('noop'):"),
+        (35, "if d.get('noop'):"),
         (
-            35,
+            36,
             "print('Already connected to %s (%s)' % (d.get('target', '?'), d.get('message', '')))",
         ),
-        (37, "print('Connected to %s' % d.get('target', '?'))"),
-        (40, "if d.get('bound') and d.get('handle'):"),
+        (38, "print('Connected to %s' % d.get('target', '?'))"),
+        (41, "if d.get('bound') and d.get('handle'):"),
         (
             line::RPARTITION,
             "host = (d.get('target') or '').rpartition('::')[2]",
@@ -116,18 +120,18 @@ fn the_python() {
             line::STRIP,
             "if d.get('displayName') and d['displayName'].strip().lower() != d['handle'].strip().lower():",
         ),
-        (44, "label += ' (%s)' % d['displayName']"),
-        (45, "print('  reaches %s' % label)"),
-        (46, "if d.get('bindWarning'):"),
-        (47, r"sys.stderr.write('warning: %s\n' % d['bindWarning'])"),
-        (48, "if d.get('warning'):"),
-        (49, r"sys.stderr.write('warning: %s\n' % d['warning'])"),
+        (45, "label += ' (%s)' % d['displayName']"),
+        (46, "print('  reaches %s' % label)"),
+        (47, "if d.get('bindWarning'):"),
+        (48, r"sys.stderr.write('warning: %s\n' % d['bindWarning'])"),
+        (49, "if d.get('warning'):"),
+        (50, r"sys.stderr.write('warning: %s\n' % d['warning'])"),
     ] {
         assert_eq!(at(&add, n), text, "add line {n}");
     }
-    assert_eq!(add.len(), 49);
-    assert_eq!(at(&remove, 34), "print('Disconnected.')");
-    assert_eq!(remove.len(), 34);
+    assert_eq!(add.len(), 50);
+    assert_eq!(at(&remove, 35), "print('Disconnected.')");
+    assert_eq!(remove.len(), 35);
 }
 
 fn show(body: &str, verb: Verb) -> (String, String, i32) {
@@ -198,14 +202,14 @@ fn the_gate() {
     assert_eq!((o.as_str(), e.as_str(), c), ("", teach.as_str(), 3));
     // A hint that says it, with Settings in it: as it is, the default code.
     let (o, e, c) = show(
-        r#"{"error":{"hint":"Allow agents to create connections in Settings é"}}"#,
+        r#"{"error":{"hint":"Agents can add connections in Settings é"}}"#,
         Verb::Remove,
     );
     assert_eq!(
         (o.as_str(), e.as_str(), c),
         (
             "",
-            "{\"error\": {\"code\": \"agents_create_connections_disabled\", \"hint\": \"Allow agents to create connections in Settings é\"}}\n",
+            "{\"error\": {\"code\": \"agents_create_connections_disabled\", \"hint\": \"Agents can add connections in Settings é\"}}\n",
             3
         )
     );

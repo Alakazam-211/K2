@@ -91,7 +91,7 @@ pub const CARDS_ONLY: &str = "permissions";
 /// The list's line for [`CARDS_ONLY`] while cards are on, after each line
 /// that starts `  design   ` (`_study_catalog_all`'s awk).
 pub const CARDS_CATALOG_LINE: &str = concat!(
-    "  permissions         Permission cards (Beta): ask a person to allow what ",
+    "  permissions         Permission cards: ask a person to allow what ",
     k2_client::product_name!(),
     " refused you"
 );

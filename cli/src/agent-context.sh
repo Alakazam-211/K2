@@ -1155,6 +1155,26 @@ For workspace-scoped ops use the `workspace` verb (daily tier).
 EOF
 }
 
+# _ws_request <cli_request|cli_request_post> <endpoint> [params...]: one
+# request of a workspace verb, its answer in _WS_ANSWER. A request K2's
+# server never answered ends the command with the no-answer line and exit
+# 1 (_cli_no_answer, from inside the request); one it never took (a
+# refused connect) or a transport failure says so too, exit 1. Never a
+# silent curl exit code, and never a lookup piped into a reader, which
+# hid that line and died by SIGPIPE.
+_ws_request() {
+    local fn="$1" endpoint="$2" rc=0
+    shift 2
+    _WS_ANSWER="$("$fn" "$endpoint" "$@")" || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    case "$rc" in
+        7) echo "Error: K2's server didn't answer ${endpoint}: nothing took the connection at ${BASE_URL}; run k2 daemon status" >&2 ;;
+        "$_CLI_LOCAL_TRANSPORT_DENIED") echo "Error: this machine refused the connection to K2's server at ${BASE_URL}, so ${endpoint} was not sent" >&2 ;;
+        *) echo "Error: the request to K2's server failed (${endpoint}, curl exit ${rc}); run k2 daemon status" >&2 ;;
+    esac
+    exit 1
+}
+
 # Phase 2.1 — workspace launch (smart cascade placeholder).
 # Calls existing /cli/workspace/ensure-canonical-session which provides
 # the attach|wake|spawn semantics the mock describes.
@@ -1172,24 +1192,22 @@ cmd_workspace_launch() {
     if [[ ! -d "$target" ]]; then
         # Possibly a workspace name; resolve via daemon.
         local resolved
-        resolved=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
-            | python3 -c 'import json,sys
+        _K2_PERMISSION_QUIET=1 _ws_request cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")"
+        resolved=$(printf '%s' "$_WS_ANSWER" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("path",""))
 except: pass' 2>/dev/null)
         [[ -n "$resolved" ]] && target="$resolved"
     fi
-    local resp
-    resp=$(cli_request_post "/cli/workspace/ensure-canonical-session" "project=$(urlencode "$target")")
+    _ws_request cli_request_post "/cli/workspace/ensure-canonical-session" "project=$(urlencode "$target")"
     # Errors (a refusal, a permission card) on stderr with its exit code
     # and closing line, never printed as the answer with exit 0.
-    cli_print_or_fail "$resp" /cli/workspace/ensure-canonical-session
+    cli_print_or_fail "$_WS_ANSWER" /cli/workspace/ensure-canonical-session
 }
 
 cmd_workspace_profile() {
     local target="${1:-$PROJECT}"
-    local resp
-    resp=$(cli_request "/cli/workspace/agent-display-name" "project=$(urlencode "$target")")
-    cli_print_or_fail "$resp" /cli/workspace/agent-display-name
+    _ws_request cli_request "/cli/workspace/agent-display-name" "project=$(urlencode "$target")"
+    cli_print_or_fail "$_WS_ANSWER" /cli/workspace/agent-display-name
 }
 
 cmd_workspace_update() {
@@ -1221,8 +1239,8 @@ cmd_workspace_update() {
     # Forward to agent profile update (workspace agent IS the workspace).
     # The agent name is the workspace's primary agent — daemon resolves it.
     local agent_name
-    agent_name=$(cli_request "/cli/workspace/agent-display-name" 2>/dev/null \
-        | python3 -c 'import json,sys
+    _K2_PERMISSION_QUIET=1 _ws_request cli_request "/cli/workspace/agent-display-name"
+    agent_name=$(printf '%s' "$_WS_ANSWER" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("display_name",""))
 except: pass' 2>/dev/null)
     if [[ -z "$agent_name" ]]; then
@@ -1233,12 +1251,11 @@ except: pass' 2>/dev/null)
         # longer recognizes as a routing key.
         agent_name="$(basename "$PROJECT")"
     fi
-    local resp
-    resp=$(cli_request_post "/cli/agent/update" \
+    _ws_request cli_request_post "/cli/agent/update" \
         "agent=$(urlencode "$agent_name")" \
         "field=$(urlencode "$field")" \
-        "value=$(urlencode "$value")")
-    cli_print_or_fail "$resp" /cli/agent/update
+        "value=$(urlencode "$value")"
+    cli_print_or_fail "$_WS_ANSWER" /cli/agent/update
 }
 
 # BEGIN_WORKSPACE_RESOURCES
@@ -1414,7 +1431,8 @@ cmd_workspace_list() {
         esac
     done
     if [ "$as_json" = "true" ]; then
-        cli_request "/cli/agent/list" | RUNNING_ONLY="$running" python3 -c '
+        _ws_request cli_request "/cli/agent/list"
+        printf '%s' "$_WS_ANSWER" | RUNNING_ONLY="$running" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 try:
@@ -1435,7 +1453,8 @@ print(json.dumps({"ok": True, "workspaces": rows}))
 '
         return
     fi
-    cli_request "/cli/projects/list" | RUNNING_ONLY="$running" python3 -c "
+    _ws_request cli_request "/cli/projects/list"
+    printf '%s' "$_WS_ANSWER" | RUNNING_ONLY="$running" python3 -c "
 import json, os, sys
 raw = sys.stdin.read()
 try:

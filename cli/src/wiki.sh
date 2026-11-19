@@ -1119,13 +1119,12 @@ cmd_workspace_create() {
     [ "$no_wiki" = true ] && extra+=("no_wiki=1")
     [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")
     [ "$fanout" = true ] && extra+=("fanout=1")
-    local resp
     if [ ${#extra[@]} -gt 0 ]; then
-        resp=$(cli_request_post "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}")
+        _ws_request cli_request_post "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}"
     else
-        resp=$(cli_request_post "/cli/workspace/create" "path=$(urlencode "$target_path")")
+        _ws_request cli_request_post "/cli/workspace/create" "path=$(urlencode "$target_path")"
     fi
-    cli_print_or_fail "$resp" /cli/workspace/create
+    cli_print_or_fail "$_WS_ANSWER" /cli/workspace/create
 }
 
 # P13: re-assert Claude/Codex/Grok/Gemini folder trust for every registered
@@ -1584,13 +1583,12 @@ cmd_workspace_open() {
     [ "$no_wiki" = true ] && extra+=("no_wiki=1")
     [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")
     [ "$fanout" = true ] && extra+=("fanout=1")
-    local resp
     if [ ${#extra[@]} -gt 0 ]; then
-        resp=$(cli_request_post "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}")
+        _ws_request cli_request_post "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}"
     else
-        resp=$(cli_request_post "/cli/workspace/open" "path=$(urlencode "$target_path")")
+        _ws_request cli_request_post "/cli/workspace/open" "path=$(urlencode "$target_path")"
     fi
-    cli_print_or_fail "$resp" /cli/workspace/open
+    cli_print_or_fail "$_WS_ANSWER" /cli/workspace/open
 }
 
 cmd_heartbeat_toggle() {

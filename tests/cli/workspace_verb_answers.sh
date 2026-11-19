@@ -182,6 +182,53 @@ Ask with: k2 permission request ws-change"
     assert_eq "$name: success: the answer" "$out" '{"success":true}'
 done
 
+echo "== a lookup K2 never answers: the no-answer line, exit 1, no next request =="
+# "label|lookup route|next route|args"
+LOOKUPS=(
+    "launch <name>|/cli/workspace/resolve|/cli/workspace/ensure-canonical-session|workspace launch acme"
+    "update|/cli/workspace/agent-display-name|/cli/agent/update|workspace update --field role --value Lead"
+)
+for c in "${LOOKUPS[@]}"; do
+    IFS='|' read -r name lroute next args <<<"$c"
+    answer "$lroute" 500 "" "$next" 200 '{"success":true}'
+    # shellcheck disable=SC2086
+    run $args
+    assert_eq "$name: no answer: exit 1" "$rc" "1"
+    assert_eq "$name: no answer: nothing on stdout" "$out" ""
+    assert_contains "$name: no answer: the no-answer line" "$err" "Error: K2's server gave an empty answer to $lroute after "
+    assert_eq "$name: no answer: one line" "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" "1"
+    if grep -Fq "\"path\": \"$next\"" "$LOG_FILE"; then bad "$name: no answer: $next was still sent"; else ok "$name: no answer: $next not sent"; fi
+done
+
+echo "== nothing takes the connection: the no-answer line, exit 1 =="
+CLOSED="$("$PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+mkdir -p "$WORK/closed-home/.k2"
+printf '%s' "$OWNER" >"$WORK/closed-home/.k2/heartbeat.token"
+printf '%s' "$CLOSED" >"$WORK/closed-home/.k2/heartbeat.port"
+# "label|first route|args"
+REFUSED_CASES=(
+    "list|/cli/projects/list|workspace list"
+    "list --json|/cli/agent/list|workspace list --json"
+    "create|/cli/workspace/create|workspace create $WORK/never"
+    "open|/cli/workspace/open|workspace open $WS"
+    "launch <path>|/cli/workspace/ensure-canonical-session|workspace launch $WS"
+    "launch <name>|/cli/workspace/resolve|workspace launch acme"
+    "profile|/cli/workspace/agent-display-name|workspace profile"
+    "update|/cli/workspace/agent-display-name|workspace update --field role --value Lead"
+)
+for c in "${REFUSED_CASES[@]}"; do
+    IFS='|' read -r name route args <<<"$c"
+    set +e
+    # shellcheck disable=SC2086
+    out="$(cd "$WS" && env -i PATH="/usr/bin:/bin" HOME="$WORK/closed-home" K2_PROJECT_PATH="$WS" "$K2_CLI" $args 2>"$WORK/err")"
+    rc=$?
+    err="$(cat "$WORK/err")"
+    set -e
+    assert_eq "refused connect: $name: exit 1" "$rc" "1"
+    assert_eq "refused connect: $name: nothing on stdout" "$out" ""
+    assert_eq "refused connect: $name: says so" "$err" "Error: K2's server didn't answer $route: nothing took the connection at http://127.0.0.1:$CLOSED; run k2 daemon status"
+done
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

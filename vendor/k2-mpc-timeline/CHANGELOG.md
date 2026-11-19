@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.2: pairs with kit v0.23.0
+
+**Requires `k2-mpc-base` v0.23.0**. A timeline behaves as in v0.1.1.
+
+- Pairs with kit v0.23.0. It changes no pack API but one: a blob pack's `merge3_known` is also asked
+  for a revert (`SaveBase::Revert`, base the version taken away, ours head, theirs the version
+  before it; the default calls `merge3_bytes`). Its other changes are the host's (undo, redo and
+  revert on a blob doc, a batch of verbs, a blob verb that plans with no lease, holds that bind an
+  agent's whole-file write, the store's cache at 64 MiB, grouped commits as an opt-in) and the
+  native engine's (off).
+- On a timeline, `undo`, `redo` and `revert` are refused with `MPC-E730` `revert_unsupported`
+  (this pack has no merge); the next step is `restore`.
+- **Tests:** the turn rows' leave reasons name the kit's new `LeaveReason::RolledBack`
+  (`rolled_back`) and take any later reason as `other` (`LeaveReason` is `#[non_exhaustive]`).
+- `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.23.0 and the crate version 0.1.2; `README.md`'s
+  kit line names v0.23.0.
+
 ## v0.1.1: pairs with kit v0.22.0
 
 **Requires `k2-mpc-base` v0.22.0**. A timeline behaves as in v0.1.0.

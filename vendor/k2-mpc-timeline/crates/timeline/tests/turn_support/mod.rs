@@ -556,6 +556,9 @@ fn reason(r: LeaveReason) -> &'static str {
         LeaveReason::Idle => "idle",
         LeaveReason::Kicked => "kicked",
         LeaveReason::RightsLost => "rights_lost",
+        LeaveReason::RolledBack => "rolled_back",
+        // the kit adds reasons (LeaveReason is non_exhaustive): one this row set has no name for
+        _ => "other",
     }
 }
 

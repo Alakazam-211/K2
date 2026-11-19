@@ -22,7 +22,7 @@
 // An UNLINKED ticket (workspace removed, TB18) is read-only: no options,
 // no reassign, no chat — only Resolve and Dismiss.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -51,7 +51,7 @@ import {
   type FeedbackStatus,
 } from './feedback-api'
 import { PriorityBadge, StatusBadge, StatusMark } from './badges'
-import { BriefFrame } from './BriefFrame'
+import { BriefFrame, useBriefThemeKey } from './BriefFrame'
 import { cardAssigneeNames, isViewer } from './TicketCard'
 import { TicketAgentRail } from './TicketAgentRail'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
@@ -69,7 +69,7 @@ import {
 } from '@/lib/ticket-board-chrome'
 import { useElementWidth } from '@/hooks/useElementWidth'
 import { Button, ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
-import { briefColumnStyle } from './brief-srcdoc'
+import { briefColumnStyle, readBriefTokens } from './brief-srcdoc'
 import { ResizeEdge } from '@/components/Layout/ResizeEdge'
 import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
@@ -115,6 +115,11 @@ export interface TicketDiscussionPlace {
 /** The report's fades take its tile's fill: the page in Terminal, the tile
  *  in Glass (styles/glass/overrides.css sets --ticket-report-fill). */
 const REPORT_EDGE_TINT = 'var(--ticket-report-fill, var(--color-bg))'
+
+/** The report's right padding while the closed discussion's tab shows: the
+ *  tab's inset (right-2), its width (w-7) and the report's own gap (2), so
+ *  the tab stands clear of the report's box. */
+export const DISCUSSION_TAB_GUTTER = 'pr-11'
 
 /** Ticket id → its HTML brief. Briefs never change after filing (H8), so
  *  one fetch per ticket per window is enough (H39). Exported for tests. */
@@ -498,10 +503,12 @@ export function FeedbackItemView({
           expanded={expanded}
           onExpandedChange={setExpanded}
           onChanged={onChanged}
+          tabGutter={asDrawer && !drawerOpen}
         />
         {asDrawer && !drawerOpen && (
-          // The closed drawer's tab, inside the report by its right edge,
-          // so the discussion is always one click away.
+          // The closed drawer's tab, inside the pane by its right edge, in a
+          // gutter the report keeps clear (DISCUSSION_TAB_GUTTER), so it
+          // never sits on the report's box. One click opens the discussion.
           <button
             type="button"
             data-testid="ticket-discussion-tab"
@@ -509,7 +516,7 @@ export function FeedbackItemView({
             onClick={() => setDrawerOpen(true)}
             title="Show the discussion"
             data-k2-chamfer="control"
-            className="k2-focus absolute right-2 top-1/2 -translate-y-1/2 z-20 flex items-center gap-1.5 px-1.5 py-3 [writing-mode:vertical-rl] type-hint font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-[var(--radius-field)] [box-shadow:var(--shadow-2)] hover:bg-[var(--color-wash-1)] cursor-pointer"
+            className="k2-focus absolute right-2 top-1/2 -translate-y-1/2 z-20 flex items-center justify-center gap-1.5 w-7 py-3 [writing-mode:vertical-rl] type-hint font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-[var(--radius-field)] [box-shadow:var(--shadow-2)] hover:bg-[var(--color-wash-1)] cursor-pointer"
           >
             Discussion{item ? ` · ${item.comments.length}` : ''}
           </button>
@@ -570,6 +577,7 @@ function TicketBody({
   expanded,
   onExpandedChange,
   onChanged,
+  tabGutter,
 }: {
   item: FeedbackShow | null
   error: string | null
@@ -584,10 +592,17 @@ function TicketBody({
   expanded: boolean
   onExpandedChange: (v: boolean) => void
   onChanged: () => void
+  /** The closed discussion's tab stands by the pane's right edge: the
+   *  report keeps clear of it, so the tab never sits on the report's box. */
+  tabGutter: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
+  // The column's measure follows the theme's face (as the report's does).
+  const themeKey = useBriefThemeKey()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const columnStyle = useMemo(() => briefColumnStyle(readBriefTokens().font), [themeKey])
 
   useEffect(() => {
     clearStuckBodyUserSelect()
@@ -640,7 +655,7 @@ function TicketBody({
       <SelectableRegion className="flex-1 flex flex-col min-h-0">
         <ScrollEdgeFrame
           className="flex-1 min-h-0"
-          scrollClassName="overflow-y-auto overflow-x-hidden px-4 py-3 [&>div]:min-h-full [&>div]:flex [&>div]:flex-col"
+          scrollClassName={`overflow-y-auto overflow-x-hidden pl-4 ${tabGutter ? DISCUSSION_TAB_GUTTER : 'pr-4'} py-3 [&>div]:min-h-full [&>div]:flex [&>div]:flex-col`}
           tint={REPORT_EDGE_TINT}
           heavy
           testId="ticket-report-scroll"
@@ -650,7 +665,7 @@ function TicketBody({
           data-ticket-thread={ticketId}
           // A readable measure: the summary and the report keep one column,
           // left where the report sits, however wide the pane gets.
-          style={briefColumnStyle()}
+          style={columnStyle}
         >
           {item.body && (
             // The short summary: an inset well above the report.

@@ -58,8 +58,8 @@ vi.mock('@/hooks/useElementWidth', () => ({
   useElementWidth: (el: HTMLElement | null) => (el ? measured.width : 0),
 }))
 
-import { TicketBoard } from './TicketBoard'
-import { briefCache } from './FeedbackItemView'
+import { TicketBoard, ticketMiddleState } from './TicketBoard'
+import { briefCache, DISCUSSION_TAB_GUTTER } from './FeedbackItemView'
 import { writeTicketOpenOn } from '@/lib/ticket-open-pref'
 
 const NOW = 1_759_241_200
@@ -212,14 +212,25 @@ describe('a failed load', () => {
     expect(screen.queryByTestId('ticket-start-oldest')).toBeNull()
   })
 
-  it('a search with no match offers Clear search in the middle, not the oldest waiting ticket', async () => {
+  it('a search with no match says so once, in the list, with Clear search under it', async () => {
     board()
     fireEvent.change(screen.getByLabelText('Search tickets'), { target: { value: 'zzz nothing' } })
-    expect(screen.getByTestId('ticket-middle-line').textContent).toBe('No ticket matches your search.')
+    const empty = screen.getByTestId('ticket-list-empty')
+    expect(empty.textContent).toContain('No tickets match your search')
+    expect(within(empty).getByTestId('ticket-clear-search').textContent).toBe('Clear search')
+    // The middle stays quiet: no second message, no oldest waiting ticket.
+    expect(screen.queryByTestId('ticket-middle-line')).toBeNull()
+    expect(screen.queryByTestId('ticket-middle-clear-search')).toBeNull()
     expect(screen.queryByTestId('ticket-start-oldest')).toBeNull()
     fireEvent.click(screen.getByTestId('ticket-clear-search'))
     expect((screen.getByLabelText('Search tickets') as HTMLInputElement).value).toBe('')
     await waitFor(() => expect(screen.getAllByTestId('ticket-card').length).toBeGreaterThan(0))
+  })
+
+  it('with the list folded away, the middle says a search found nothing', () => {
+    const base = { loading: false, failed: false, noTickets: false, noMatch: true, emptyTab: true }
+    expect(ticketMiddleState(base)).toEqual({ state: 'no-match', line: null })
+    expect(ticketMiddleState({ ...base, listFolded: true })).toEqual({ state: 'no-match', line: 'No tickets match your search.' })
   })
 
   it('while the list loads, no tab claims 0 and the middle asks for nothing', () => {
@@ -280,8 +291,13 @@ describe('the width rules', () => {
     await openAt(620)
     expect(screen.getByTestId('ticket-board').getAttribute('data-discussion-mode')).toBe('drawer')
     expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
+    // The tab stands in a gutter the report keeps clear, never on its box.
+    const reportScroll = (): HTMLElement =>
+      screen.getByTestId('ticket-report-scroll').querySelector<HTMLElement>('.overflow-y-auto') as HTMLElement
+    expect(reportScroll().className).toContain(DISCUSSION_TAB_GUTTER)
     fireEvent.click(await screen.findByTestId('ticket-discussion-tab'))
     expect(await screen.findByTestId('ticket-agent-rail')).toBeTruthy()
+    expect(reportScroll().className).not.toContain(DISCUSSION_TAB_GUTTER)
     fireEvent.click(screen.getByTestId('ticket-discussion-hide'))
     await waitFor(() => expect(screen.queryByTestId('ticket-agent-rail')).toBeNull())
   })

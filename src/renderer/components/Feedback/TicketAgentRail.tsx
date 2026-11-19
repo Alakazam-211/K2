@@ -821,19 +821,21 @@ export function ThreadTab({
           </StashDrawerSlot>
         }
         // One short line, as the Thread's "Message <agent>" (an empty box
-        // stays one line tall, so a longer hint would be cut off). Under
-        // live quick answers it offers your own words instead.
-        placeholder={quickShown ? 'Or write your own answer' : `Message ${item.agentName}`}
+        // stays one line tall, so a longer hint would be cut off: this one
+        // fits whole at 1280 in every look). Under live quick answers it
+        // offers your own words instead.
+        placeholder={quickShown ? 'Or type your own' : `Message ${item.agentName}`}
         above={
           <>
             {actionError && <ThreadChatNote error>{actionError}</ThreadChatNote>}
             {attach.on && <TicketComposeFileChips files={composeFiles.files} onRemove={composeFiles.remove} />}
             {deliveryMiss && <ThreadChatNote>Saved. The agent did not receive it ({deliveryMiss}).</ThreadChatNote>}
-            {/* A closed ticket takes no pick: say so, and how to answer
-                anyway, instead of greyed answers with no reason. */}
+            {/* A closed ticket takes no pick: say so, and what the box under
+                it does. The daemon moves a closed ticket to Needs discussion
+                when you write to it, so a reply reopens it. */}
             {options.length > 0 && !optionsLive && (
               <ThreadChatNote testId="ticket-quick-answers-closed">
-                {item.status === 'dismissed' ? 'Dismissed' : 'Resolved'}. Reopen it to answer.
+                {item.status === 'dismissed' ? 'Dismissed' : 'Resolved'}. Replying reopens it.
               </ThreadChatNote>
             )}
             {quickShown && (

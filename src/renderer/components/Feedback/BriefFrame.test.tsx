@@ -9,7 +9,14 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DNS_PREFETCH_OFF_META, frameCsp, frameSrcDoc } from '@/lib/frame-csp'
 import { BriefFrame, BRIEF_LINKS_MAX_HEIGHT_CLASS, briefOverlayStoplightInset } from './BriefFrame'
 import { desktopChromeFor, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from '@/lib/desktop-chrome'
-import { buildBriefSrcDoc, briefStylesheet, fallbackBriefTokens } from './brief-srcdoc'
+import {
+  briefColumnStyle,
+  briefFontIsMono,
+  briefMeasureCh,
+  buildBriefSrcDoc,
+  briefStylesheet,
+  fallbackBriefTokens,
+} from './brief-srcdoc'
 import type { FeedbackBrief } from './feedback-api'
 import { applyAppZoomForTest, resetAppZoomForTest, setScreenRect, setWindowSize } from '@/test-utils/app-zoom'
 
@@ -129,6 +136,24 @@ describe('buildBriefSrcDoc (T10)', () => {
     expect(css).toContain('--link:#123456')
     expect(css).toContain('a{color:var(--link);')
     expect(css).toMatch(/body\.k2-brief>:is\(p,ul,ol[^)]*\)\{max-width:75ch\}/)
+  })
+
+  it('the measure holds about 75 characters in a proportional face too (Glass’s system font)', () => {
+    const glass = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, 'Noto Sans', Arial, sans-serif, 'Apple Color Emoji'"
+    const terminal = "'MesloLGM Nerd Font', Menlo, Monaco, 'SF Mono', Consolas, monospace, 'Apple Color Emoji'"
+    expect(briefFontIsMono(terminal)).toBe(true)
+    expect(briefFontIsMono(glass)).toBe(false)
+    // No generic family: a face's name decides.
+    expect(briefFontIsMono("'JetBrains Mono'")).toBe(true)
+    expect(briefFontIsMono('Inter')).toBe(false)
+    // `ch` is a proportional face's "0", wider than its average letter.
+    expect(briefMeasureCh(terminal)).toBe(75)
+    expect(briefMeasureCh(glass)).toBe(56)
+    expect(briefStylesheet({ ...tokens, font: glass })).toMatch(/body\.k2-brief>:is\(p,ul,ol[^)]*\)\{max-width:56ch\}/)
+    // The middle pane's column takes the same measure, so the summary lines
+    // up with the report.
+    expect(briefColumnStyle(glass).maxWidth).toBe('calc(56ch + 38px)')
+    expect(briefColumnStyle(terminal).maxWidth).toBe('calc(75ch + 38px)')
   })
 
   it('a hostile token value cannot break out of the stylesheet', () => {

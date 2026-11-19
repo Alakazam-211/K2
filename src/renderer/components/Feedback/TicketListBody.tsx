@@ -63,6 +63,7 @@ export function TicketListBody({
   scope,
   search,
   setScope,
+  onClearSearch,
   otherWaiting,
   emptyHint,
   me = null,
@@ -84,6 +85,8 @@ export function TicketListBody({
   scope: TicketScope
   search: string
   setScope: (scope: TicketScope) => void
+  /** Empty the search (a search with no match offers it). */
+  onClearSearch: () => void
   otherWaiting: number
   emptyHint: React.ReactNode
   /** Who's looking (assignee names), for "You" on the cards' people. */
@@ -175,10 +178,37 @@ export function TicketListBody({
                 Show all tickets
               </button>
             </div>
+          ) : rows !== null && rows.length > 0 && search.trim() ? (
+            // A search with no match says so here, once (the middle stays
+            // quiet), with the way back to the list under it (and, from a
+            // narrower tab, the same search over every ticket).
+            <>
+              <p className="type-name text-[var(--color-text-secondary)]">No tickets match your search</p>
+              <div className="mt-1.5 flex flex-wrap justify-center gap-x-3 gap-y-1 type-hint">
+                <button
+                  type="button"
+                  data-testid="ticket-clear-search"
+                  onClick={onClearSearch}
+                  className="k2-focus text-[var(--color-accent-text)] hover:underline cursor-pointer"
+                >
+                  Clear search
+                </button>
+                {scope !== 'all' && (
+                  <button
+                    type="button"
+                    data-testid="ticket-search-all"
+                    onClick={() => setScope('all')}
+                    className="k2-focus text-[var(--color-accent-text)] hover:underline cursor-pointer"
+                  >
+                    Search all tickets
+                  </button>
+                )}
+              </div>
+            </>
           ) : rows !== null && rows.length > 0 ? (
             <>
               <p className="type-name text-[var(--color-text-secondary)]">
-                {scope === 'all' || search ? 'No tickets match your search' : 'Nothing assigned to you here'}
+                {scope === 'all' ? 'No tickets match your search' : 'Nothing assigned to you here'}
               </p>
               {scope !== 'all' && (
                 <button

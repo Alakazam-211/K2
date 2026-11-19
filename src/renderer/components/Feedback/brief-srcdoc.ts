@@ -35,15 +35,39 @@ export interface BriefTokens {
 export const BRIEF_BODY_PX = 13
 export const BRIEF_PAD_X_PX = 18
 export const BRIEF_MEASURE_CH = 75
+/** The same measure in a proportional face. `ch` is the width of its "0",
+ *  and an average letter (spaces included) of the system faces is about
+ *  three quarters of that, so 75ch would run to about 100 characters; 56ch
+ *  holds about 75. A monospaced face's letters are all one `ch` wide. */
+export const BRIEF_MEASURE_CH_PROPORTIONAL = 56
 /** How wide a wide table's fade is at the edge that has more. */
 export const BRIEF_TABLE_FADE_PX = 32
+
+const GENERIC_FAMILY = /^(monospace|ui-monospace|sans-serif|serif|system-ui|ui-sans-serif|ui-serif|cursive|fantasy)$/i
+const MONO_NAME = /mono|menlo|monaco|consolas|courier/i
+
+/** Whether a font stack sets text in a monospaced face: its first generic
+ *  family says so (a theme's stack ends in one), else a family's name. */
+export function briefFontIsMono(font: string): boolean {
+  const families = font.split(',').map((f) => f.trim().replace(/^['"]|['"]$/g, ''))
+  const generic = families.find((f) => GENERIC_FAMILY.test(f))
+  if (generic) return /monospace$/i.test(generic)
+  return families.some((f) => MONO_NAME.test(f))
+}
+
+/** The report's reading measure, in `ch` of its own face: about 75
+ *  characters a line, in a monospaced face or a proportional one. */
+export function briefMeasureCh(font: string): number {
+  return briefFontIsMono(font) ? BRIEF_MEASURE_CH : BRIEF_MEASURE_CH_PROPORTIONAL
+}
 
 /** The report column in the ticket's middle pane: set in the report's own
  *  type, no wider than the measure plus the report's padding and its box's
  *  edges, so the summary above lines up with the report. The column's own
- *  children set their sizes; only the measure reads this one. */
-export function briefColumnStyle(): { fontSize: string; maxWidth: string } {
-  return { fontSize: `${BRIEF_BODY_PX}px`, maxWidth: `calc(${BRIEF_MEASURE_CH}ch + ${2 * BRIEF_PAD_X_PX + 2}px)` }
+ *  children set their sizes; only the measure reads this one. `font` is
+ *  the app's (the column and the report share it). */
+export function briefColumnStyle(font: string): { fontSize: string; maxWidth: string } {
+  return { fontSize: `${BRIEF_BODY_PX}px`, maxWidth: `calc(${briefMeasureCh(font)}ch + ${2 * BRIEF_PAD_X_PX + 2}px)` }
 }
 
 export interface BriefLink {
@@ -135,9 +159,10 @@ export function briefStylesheet(tokens: BriefTokens): string {
     `:root{color-scheme:${t.scheme};--bg:${t.surface};--text:${t.text};--text2:${t.textSecondary};--muted:${t.muted};--border:${t.border};--accent:${t.accent};--link:${safe(tokens.link, safe(tokens.accent, t.accent))};}`,
     `html,body{margin:0;padding:0;background:var(--bg);color:var(--text);}`,
     `body.k2-brief{font-family:${t.font};font-size:${BRIEF_BODY_PX}px;line-height:1.55;padding:14px ${BRIEF_PAD_X_PX}px;overflow-wrap:anywhere;}`,
-    // A readable measure: running text stops at about 75 characters, left
-    // where the report sits; a table or code block may use the full width.
-    `body.k2-brief>:is(p,ul,ol,dl,h1,h2,h3,h4,h5,h6,blockquote,figure,details,.k2-need,.k2-callout){max-width:${BRIEF_MEASURE_CH}ch}`,
+    // A readable measure: running text stops at about 75 characters (in the
+    // theme's own face, see briefMeasureCh), left where the report sits; a
+    // table or code block may use the full width.
+    `body.k2-brief>:is(p,ul,ol,dl,h1,h2,h3,h4,h5,h6,blockquote,figure,details,.k2-need,.k2-callout){max-width:${briefMeasureCh(t.font)}ch}`,
     `h1,h2,h3,h4{color:var(--text);line-height:1.3;margin:1.1em 0 .45em;}`,
     `h1{font-size:1.35em}h2{font-size:1.18em}h3{font-size:1.05em}h4{font-size:1em}`,
     `body.k2-brief>:first-child{margin-top:0}`,

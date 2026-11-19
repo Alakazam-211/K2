@@ -97,11 +97,15 @@ export function ticketMiddleState(list: {
   noTickets: boolean
   noMatch: boolean
   emptyTab: boolean
+  /** The list is folded to its rail, so its own lines don't show. */
+  listFolded?: boolean
 }): { state: TicketMiddleState; line: string | null } {
   if (list.loading) return { state: 'loading', line: null }
   if (list.failed) return { state: 'failed', line: 'The tickets didn’t load, so there’s nothing to open yet.' }
   if (list.noTickets) return { state: 'none', line: 'When an agent asks you something, its report opens here.' }
-  if (list.noMatch) return { state: 'no-match', line: 'No ticket matches your search.' }
+  // A search with no match is said once, by the list (with Clear search);
+  // the middle says it only while the list is folded away.
+  if (list.noMatch) return { state: 'no-match', line: list.listFolded ? 'No tickets match your search.' : null }
   if (list.emptyTab) return { state: 'empty-tab', line: 'Nothing to open in this tab.' }
   return { state: 'pick', line: 'Pick a ticket to read its report and answer the agent.' }
 }
@@ -300,6 +304,7 @@ export function TicketBoard({
     noTickets: rows !== null && rows.length === 0 && error === null,
     noMatch: emptyList && search.trim().length > 0,
     emptyTab: emptyList,
+    listFolded: layout.list !== 'open',
   })
   // Waiting / needs-discussion tickets on someone else's board (or
   // nobody's): told in the empty Waiting state so "nothing is waiting on
@@ -395,6 +400,7 @@ export function TicketBoard({
           scope={scope}
           search={search}
           setScope={setScope}
+          onClearSearch={() => setSearch('')}
           otherWaiting={otherWaiting}
           emptyHint={emptyHint}
           me={me}
@@ -527,8 +533,8 @@ export function TicketBoard({
                 {middle.line}
               </p>
             )}
-            {middle.state === 'no-match' && (
-              <Button variant="accent" size="md" data-testid="ticket-clear-search" onClick={() => setSearch('')}>
+            {middle.state === 'no-match' && middle.line && (
+              <Button variant="accent" size="md" data-testid="ticket-middle-clear-search" onClick={() => setSearch('')}>
                 Clear search
               </Button>
             )}

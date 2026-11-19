@@ -82,6 +82,9 @@ struct Entry {
     /// (`agent_name == project_id`): its `workspace_sessions` row may be
     /// keyed `agent-chat:<pid>` (A14 d).
     pinned_project: Option<String>,
+    /// The session's last screen output (ms, noted at most once a second):
+    /// a last-active time, never evidence for the row (DA29).
+    output_at: Option<i64>,
 }
 
 #[derive(Default)]
@@ -394,7 +397,7 @@ pub fn register(facts: SessionFacts) {
         },
         now,
     );
-    store().lock().rows.insert(facts.session_id, Entry { row, pinned_project });
+    store().lock().rows.insert(facts.session_id, Entry { row, pinned_project, output_at: None });
 }
 
 /// DA2: the session went away. Removes the row and, when an older client
@@ -635,6 +638,29 @@ pub fn note_client_input(session_id: &str, input: &[u8]) {
     if let Some(key) = KeyInput::classify(input) {
         apply(session_id, Evidence::Key(key));
     }
+}
+
+/// The session printed to its screen (the observer notes it at most once
+/// a second). It moves the session's last-active time ([`output_at`])
+/// and wakes a parked transcript reader; it is not row evidence, so it
+/// never makes a row working, idle or fresh on its own.
+pub fn note_output(session_id: &str) {
+    note_output_at(session_id, now_ms());
+}
+
+/// [`note_output`] at `now`.
+pub fn note_output_at(session_id: &str, now: i64) {
+    {
+        let mut st = store().lock();
+        let Some(entry) = st.rows.get_mut(session_id) else { return };
+        entry.output_at = Some(entry.output_at.map_or(now, |t| t.max(now)));
+    }
+    crate::activity_transcript::wake(session_id);
+}
+
+/// The session's last screen output (ms), if any since registration.
+pub fn output_at(session_id: &str) -> Option<i64> {
+    store().lock().rows.get(session_id).and_then(|e| e.output_at)
 }
 
 /// Fire every row's due timers at `now`.

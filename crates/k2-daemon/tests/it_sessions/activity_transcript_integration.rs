@@ -305,6 +305,101 @@ fn two_fresh_codex_tabs_adopt_distinct_rollouts_without_relocating() {
     }
 }
 
+const STAMPED_TURN: &[&str] = &[
+    r#"{"timestamp":"2026-11-19T14:13:20.000Z","type":"event_msg","payload":{"type":"user_message","message":"[thread:sales] run the tests please"}}"#,
+    r#"{"timestamp":"2026-11-19T14:13:20.100Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+];
+
+/// The `[thread:<addr>]` stamps the follower published for `sid`.
+fn stamps(rx: &mut tokio::sync::broadcast::Receiver<activity_transcript::TranscriptEvent>, sid: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if ev.session_id == sid {
+            if let Some(addr) = ev.signal.thread_addr() {
+                out.push(addr.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The Codex report: a Codex session idle for over two minutes has a
+/// parked reader. A Thread line K2 typed in wakes it, so one pass reads
+/// the stamped `user_message` + `task_started`: the stamp is published
+/// (the take check sees it) and the row is working.
+#[test]
+fn a_delivered_line_wakes_a_long_idle_codex_reader() {
+    let env = Env::new("wake");
+    let ws = tmp_dir("ws-wake");
+    let pid = format!("act3-wake-{}", uuid::Uuid::new_v4());
+    seed_project(&pid, &ws);
+    let sid = uuid::Uuid::new_v4().to_string();
+    register(&sid, "tab-codex-wake", "codex", &ws);
+    let day = codex_day_dir(&env.home);
+    let rollout = codex_rollout(&day, "conv-codex-wake", &ws, now_ms());
+    let start = now_ms();
+    activity_transcript::poll_all_once(start);
+    assert_eq!(
+        activity_transcript::conversation_of(&sid),
+        Some(("conv-codex-wake".to_string(), ConversationSource::Adopted))
+    );
+    let mut rx = activity_transcript::subscribe();
+
+    // Three minutes idle: past IDLE_FOLLOW_MS, the reader is parked.
+    let t = start + activity_transcript::IDLE_FOLLOW_MS + 60_000;
+    activity_transcript::poll_all_once(t);
+    append(&rollout, STAMPED_TURN);
+    activity_transcript::poll_all_once(t + 200);
+    assert_ne!(row(&sid)["display"], "working", "parked: the new records are not read without a wake");
+    assert!(stamps(&mut rx, &sid).is_empty(), "parked: no stamp read");
+
+    // K2 types the line in: one pass reads it.
+    activity_transcript::note_delivery(&sid);
+    activity_transcript::poll_all_once(t + 400);
+    assert_eq!(stamps(&mut rx, &sid), vec!["sales".to_string()], "the stamp is read in one pass");
+    let r = row(&sid);
+    assert_eq!(r["display"], "working", "{r}");
+    assert_eq!(r["evidenceSource"], "transcript");
+    assert_eq!(activity_transcript::transcript_read_at(&sid), Some(t + 400), "the take check sees a fresh read");
+    activity_store::unregister(&sid);
+}
+
+/// Codex `/new` sends no hook: while a delivered line is watched, the
+/// follower switches to the newer rollout for its cwd and reads it.
+#[test]
+fn a_watched_codex_session_follows_its_newer_rollout() {
+    let env = Env::new("new");
+    let ws = tmp_dir("ws-new");
+    let pid = format!("act3-new-{}", uuid::Uuid::new_v4());
+    seed_project(&pid, &ws);
+    let sid = uuid::Uuid::new_v4().to_string();
+    register(&sid, "tab-codex-new", "codex", &ws);
+    let day = codex_day_dir(&env.home);
+    codex_rollout(&day, "conv-codex-old", &ws, now_ms());
+    activity_transcript::poll_all_once(now_ms());
+    assert_eq!(
+        activity_transcript::conversation_of(&sid),
+        Some(("conv-codex-old".to_string(), ConversationSource::Adopted))
+    );
+    // `/new`: a fresh rollout begins after the old one went quiet.
+    let fresh = codex_rollout(&day, "conv-codex-fresh", &ws, now_ms() + 1_000);
+    let mut rx = activity_transcript::subscribe();
+    // Without a delivery the follower stays where it is.
+    activity_transcript::poll_all_once(now_ms());
+    assert_eq!(activity_transcript::conversation_of(&sid).map(|c| c.0).as_deref(), Some("conv-codex-old"));
+
+    activity_transcript::note_delivery(&sid);
+    append(&fresh, STAMPED_TURN);
+    activity_transcript::poll_all_once(now_ms());
+    assert_eq!(
+        activity_transcript::conversation_of(&sid),
+        Some(("conv-codex-fresh".to_string(), ConversationSource::Adopted))
+    );
+    assert_eq!(stamps(&mut rx, &sid), vec!["sales".to_string()]);
+    assert_eq!(row(&sid)["display"], "working");
+    activity_store::unregister(&sid);
+}
+
 /// 0.45.0 integration (k2 sidecar × A18): a sidecar tab still waiting for
 /// its conversation (`adopt_since` set) is adopted by the sidecar's own
 /// watch, which also moves the pane-keyed Chats name. The follower may

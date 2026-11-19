@@ -150,7 +150,9 @@ fn secs(ms_or_s: i64) -> i64 {
     }
 }
 
-/// `(state, activity json, last evidence seconds)` for a live session.
+/// `(state, activity json, last active seconds)` for a live session: the
+/// later of its last evidence and its last screen output (an agent with
+/// no hooks prints while it works even when nothing else reaches K2).
 fn live_activity(session_id: &str) -> (&'static str, Option<Value>, Option<i64>) {
     let Some(row) = crate::activity_store::row_json(session_id) else {
         return ("idle", None, None);
@@ -161,12 +163,14 @@ fn live_activity(session_id: &str) -> (&'static str, Option<Value>, Option<i64>)
         .and_then(Value::as_i64)
         .or_else(|| row.pointer("/lead/since").and_then(Value::as_i64))
         .map(secs);
-    let evidence = row.get("evidenceAt").and_then(Value::as_i64).map(secs);
+    let evidence = row.get("evidenceAt").and_then(Value::as_i64);
+    let output = crate::activity_store::output_at(session_id);
+    let last_active = evidence.max(output).map(secs);
     let subagents = row.pointer("/counts/subagents").and_then(Value::as_u64).unwrap_or(0);
     (
         state_for_display(display),
         Some(json!({ "display": display, "since": since, "subagents": subagents })),
-        evidence,
+        last_active,
     )
 }
 
@@ -512,6 +516,31 @@ mod tests {
         assert_eq!(state_for_display(Some("idle")), "idle");
         assert_eq!(state_for_display(Some("unverifiable")), "idle");
         assert_eq!(state_for_display(None), "idle");
+    }
+
+    /// The Codex report: a hook-less session working with nothing but
+    /// screen output still moves its last-active time, and the output
+    /// alone does not make it working.
+    #[test]
+    fn screen_output_alone_moves_last_active() {
+        let sid = uuid::Uuid::new_v4().to_string();
+        crate::activity_store::register(crate::activity_store::SessionFacts {
+            session_id: sid.clone(),
+            agent_name: format!("roster-output-{sid}"),
+            cwd: None,
+            program: Some("codex".to_string()),
+        });
+        let (state, _, before) = live_activity(&sid);
+        assert_eq!((state, before), ("idle", None), "no evidence and no output yet");
+        let t = 1_761_741_200_000;
+        crate::activity_store::note_output_at(&sid, t);
+        let (state, _, after) = live_activity(&sid);
+        assert_eq!(after, Some(t / 1000), "output moves lastActiveAt");
+        assert_eq!(state, "idle", "output is not a working word");
+        assert_eq!(crate::activity_store::row_json(&sid).expect("row")["evidenceAt"], Value::Null, "output is not row evidence");
+        crate::activity_store::note_output_at(&sid, t + 5_000);
+        assert_eq!(live_activity(&sid).2, Some(t / 1000 + 5));
+        crate::activity_store::unregister(&sid);
     }
 
     #[test]

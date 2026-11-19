@@ -24,10 +24,17 @@
 //! `end_turn` cross-check waits on a record), every 1 s while it is
 //! monitoring, and every 1 s for two minutes after it goes idle when the
 //! transcript is its only turn-start signal (no hooks: Codex, Grok).
-//! After that it is parked, with no I/O at all, until a title change or a
-//! client keystroke wakes it ([`wake`]), or a hook makes the row busy. A
-//! Claude row with working hooks is parked whenever it is idle: the hook
-//! says when a turn starts.
+//! After that it is parked, with no I/O at all, until a title change, a
+//! client keystroke, screen output or a line K2 typed in wakes it
+//! ([`wake`], [`note_delivery`]), or a hook makes the row busy. A Claude
+//! row with working hooks is parked whenever it is idle: the hook says
+//! when a turn starts.
+//!
+//! **A new conversation in the same pane.** A hook-less harness (Codex)
+//! tells K2 nothing on `/new`. While a delivered line is being watched
+//! ([`note_delivery`]), its follower looks every [`ROLLOUT_CHECK_MS`] for
+//! a newer transcript for its cwd that began after its current file went
+//! quiet and that no other session owns, and switches to it.
 //!
 //! A file born after the session spawned is read from its first record
 //! (`CatchUp`: all of it is this session's); an older file (a resumed
@@ -62,6 +69,12 @@ pub const WARM_POLL_MS: i64 = 1_000;
 /// After going idle, a session with no hooks is read this long before it
 /// parks (its transcript is its only turn-start signal).
 pub const IDLE_FOLLOW_MS: i64 = 120_000;
+
+/// A delivered line keeps the follower looking for a newer transcript
+/// this long after the last [`note_delivery`]…
+pub const DELIVERY_WATCH_MS: i64 = 30_000;
+/// …every this often.
+pub const ROLLOUT_CHECK_MS: i64 = 3_000;
 
 /// A18: a missed resolve retries after this, doubling…
 pub const RESOLVE_BACKOFF_MIN_MS: i64 = 5_000;
@@ -118,12 +131,21 @@ struct Follower {
     markers: &'static [&'static str],
     screen: ScreenScan,
     next_screen_at: i64,
+    /// The last time the attached file was read (ms; 0 = never).
+    last_read_at: i64,
+    /// When the followed file began (ms), for the newer-file check.
+    followed_born: i64,
+    /// Look for a newer transcript until then ([`note_delivery`]).
+    rollout_watch_until: i64,
+    next_rollout_check_at: i64,
 }
 
 struct Slot {
     registered_at: i64,
     /// The latest wake (ms), set without the follower lock.
     woken_at: AtomicI64,
+    /// A line was typed in since the last pass ([`note_delivery`]).
+    delivered: std::sync::atomic::AtomicBool,
     /// A conversation id from a hook claim, applied on the next tick.
     note: Mutex<Option<String>>,
     /// The pane was just claimed: an unresolved transcript is retried on
@@ -189,10 +211,15 @@ pub fn track(facts: TrackFacts, now: i64) {
         markers,
         screen: ScreenScan::default(),
         next_screen_at: now,
+        last_read_at: 0,
+        followed_born: 0,
+        rollout_watch_until: 0,
+        next_rollout_check_at: 0,
     };
     let slot = Arc::new(Slot {
         registered_at: now,
         woken_at: AtomicI64::new(0),
+        delivered: std::sync::atomic::AtomicBool::new(false),
         note: Mutex::new(None),
         retry: std::sync::atomic::AtomicBool::new(false),
         follower: Mutex::new(follower),
@@ -237,6 +264,26 @@ pub fn wake(session_id: &str) {
     }
 }
 
+/// K2 typed a line into the session (a Thread delivery), or is watching
+/// one it typed: read the transcript again even if it was parked, and,
+/// for a hook-less harness, look for a newer transcript for a while.
+pub fn note_delivery(session_id: &str) {
+    let slot = slots().lock().get(session_id).cloned();
+    if let Some(slot) = slot {
+        slot.woken_at.store(now_ms(), Ordering::SeqCst);
+        slot.delivered.store(true, Ordering::SeqCst);
+    }
+}
+
+/// When the session's transcript was last read, or `None` when no file
+/// is attached (the Thread take check: a missing stamp means nothing
+/// unless the file was read since the line went in).
+pub fn transcript_read_at(session_id: &str) -> Option<i64> {
+    let slot = slots().lock().get(session_id).cloned()?;
+    let f = slot.follower.lock();
+    f.follow.as_ref().map(|_| f.last_read_at)
+}
+
 /// The follower's conversation id and where it came from (status, tests).
 #[allow(dead_code)] // integration tests via the lib
 pub fn conversation_of(session_id: &str) -> Option<(String, ConversationSource)> {
@@ -273,10 +320,14 @@ pub fn poll_all_once(now: i64) {
 fn poll_one(sid: &str, slot: &Slot, now: i64) {
     let Some(view) = crate::activity_store::follow_view(sid) else { return };
     let mut f = slot.follower.lock();
-    let woken = slot.woken_at.swap(0, Ordering::SeqCst);
-    if woken > 0 {
-        f.idle_follow_until = f.idle_follow_until.max(woken + IDLE_FOLLOW_MS);
+    // A wake opens the idle window from this pass (the pass runs every
+    // 200 ms, so that is the wake's own time).
+    if slot.woken_at.swap(0, Ordering::SeqCst) > 0 {
+        f.idle_follow_until = f.idle_follow_until.max(now + IDLE_FOLLOW_MS);
         f.next_poll_at = f.next_poll_at.min(now);
+    }
+    if slot.delivered.swap(false, Ordering::SeqCst) {
+        f.rollout_watch_until = now + DELIVERY_WATCH_MS;
     }
     if view.hot || !view.display_idle {
         f.idle_follow_until = now + IDLE_FOLLOW_MS;
@@ -296,6 +347,12 @@ fn poll_one(sid: &str, slot: &Slot, now: i64) {
     if f.reader.is_some() {
         if f.follow.is_none() && now >= f.next_resolve_at {
             resolve(&mut f, sid, now);
+        }
+        // Claude rows keep their hook-driven re-resolve (`SessionStart`).
+        let hookless = !view.had_hook && f.facts.harness != "claude";
+        if hookless && now < f.rollout_watch_until && now >= f.next_rollout_check_at {
+            f.next_rollout_check_at = now + ROLLOUT_CHECK_MS;
+            switch_to_newer(&mut f, sid, now);
         }
         read_due(&mut f, sid, &view, now);
     }
@@ -338,6 +395,7 @@ fn read_due(f: &mut Follower, sid: &str, view: &crate::activity_store::FollowVie
         f.next_resolve_at = now + RESOLVE_BACKOFF_MIN_MS;
         return;
     }
+    f.last_read_at = now;
     if poll.reset {
         reader.reset();
     }
@@ -388,6 +446,7 @@ fn resolve(f: &mut Follower, sid: &str, now: i64) {
     match found {
         Some((path, start)) => {
             log_debug!("[activity/transcript] {sid}: following {} ({start:?})", path.display());
+            f.followed_born = file_birth_ms(&path);
             f.follow = Some(TranscriptFollow::new(path, start));
             if let Some(reader) = f.reader.as_mut() {
                 reader.reset();
@@ -401,6 +460,43 @@ fn resolve(f: &mut Follower, sid: &str, now: i64) {
             f.next_resolve_at = now + f.backoff_ms;
         }
     }
+}
+
+/// A hook-less harness started a new conversation in this pane (Codex
+/// `/new`): the newest transcript for the cwd that began after the
+/// followed one went quiet, and that no other live session owns, becomes
+/// the followed file, read from its start. Not counted in
+/// [`resolve_scans`]: it runs only while a delivered line is watched.
+fn switch_to_newer(f: &mut Follower, sid: &str, now: i64) {
+    let (Some(cwd), Some(follow)) = (f.facts.cwd.clone(), f.follow.as_ref()) else { return };
+    let current_quiet_at = std::fs::metadata(follow.path())
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as i64);
+    let current = f.conversation.as_ref().map(|(c, _)| c.clone());
+    // From the followed file's own birth, not a tick later: file times
+    // come from a coarse clock, so a file begun moments after it can share
+    // its stamp. The followed file itself is left out by id below.
+    let candidates = k2_core::chat_continue::adoptable_transcripts(&f.facts.harness, &cwd, f.followed_born);
+    let pick = {
+        let owned = claimed().lock();
+        candidates.into_iter().rev().find(|c| {
+            Some(&c.id) != current.as_ref()
+                && c.created_ms + ADOPT_SLACK_MS >= current_quiet_at
+                && !owned.contains(&(f.facts.harness.clone(), c.id.clone()))
+        })
+    };
+    let Some(pick) = pick else { return };
+    log_debug!("[activity/transcript] {sid}: newer transcript {}; following it", pick.path.display());
+    set_conversation(f, pick.id.clone(), ConversationSource::Adopted);
+    stamp_tab_session(&f.facts, &pick.id);
+    f.followed_born = pick.created_ms;
+    f.follow = Some(TranscriptFollow::new(pick.path, FollowStart::CatchUp));
+    if let Some(reader) = f.reader.as_mut() {
+        reader.reset();
+    }
+    f.next_poll_at = now;
 }
 
 /// The earliest transcript for this cwd that began after the spawn and

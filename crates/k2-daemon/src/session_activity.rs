@@ -58,6 +58,9 @@ pub enum Activity {
 /// impossible; 2s (vs the renderer's 1s) absorbs bus/encode jitter.
 const WORKING_GRACE: Duration = Duration::from_secs(2);
 
+/// Screen output is noted at most this often ([`crate::activity_store::note_output`]).
+const OUTPUT_NOTE_EVERY: Duration = Duration::from_secs(1);
+
 /// First-char braille spinner range — claude/codex/grok working marker.
 fn title_is_working(title: &str) -> bool {
     matches!(title.chars().next(), Some(c) if ('\u{2800}'..='\u{28FF}').contains(&c))
@@ -127,6 +130,7 @@ pub fn spawn_observer(agent_name: String, session: Arc<DaemonPtySession>) {
     let mut rx = session.subscribe_events();
     tokio::spawn(async move {
         let mut state = Activity::Idle;
+        let mut last_output: Option<tokio::time::Instant> = None;
         // Armed only while WORKING; None = no pending decay.
         let mut grace_deadline: Option<tokio::time::Instant> = None;
         loop {
@@ -152,7 +156,18 @@ pub fn spawn_observer(agent_name: String, session: Arc<DaemonPtySession>) {
                     log_debug!("[session-activity] observer exit (child) agent={agent_name}");
                     return;
                 }
-                Some(Ok(_)) => continue, // frames/clipboard/etc — not evidence
+                Some(Ok(AlacEvent::Wakeup)) => {
+                    // Screen output: at most once a second, it moves the
+                    // session's last-active time and wakes its transcript
+                    // reader. Never a working/idle word on its own.
+                    let now = tokio::time::Instant::now();
+                    if last_output.is_none_or(|t| now.duration_since(t) >= OUTPUT_NOTE_EVERY) {
+                        last_output = Some(now);
+                        crate::activity_store::note_output(&session_id);
+                    }
+                    continue;
+                }
+                Some(Ok(_)) => continue, // clipboard/etc — not evidence
                 Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
                 Some(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                     if state != Activity::Idle {

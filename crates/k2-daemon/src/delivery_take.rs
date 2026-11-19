@@ -25,9 +25,14 @@
 //! - **Not taken:** the caller's `on_not_taken` runs once
 //!   (`overlay_routes`: type it in once more, then, if the retry is not
 //!   taken either, a notice in the Thread for the sender).
-//! - A session whose transcript K2 isn't reading yet ([`RowView::can_tell`]
-//!   false: a missing stamp would mean nothing) or that is gone is not
-//!   watched further. No retry, no notice.
+//! - **Never typed again unless K2 is sure.** A session whose transcript
+//!   K2 isn't reading right now ([`RowView::can_tell`] false, see
+//!   [`reading_fresh`]: no file attached, or, with no hooks, not read
+//!   since the line went in) or that is gone is not watched further. A
+//!   missing stamp would mean nothing: no retry, no notice.
+//! - Each look wakes the session's transcript reader
+//!   ([`crate::activity_transcript::note_delivery`]), so a long-idle
+//!   hook-less agent (Codex) is read while its line is watched.
 //!
 //! One daemon thread runs the watches, only while there are some.
 
@@ -53,6 +58,10 @@ const SEEN_CAP: usize = 512;
 
 /// How often the watcher looks.
 const TICK: Duration = Duration::from_millis(500);
+
+/// A hook-less session's transcript must have been read this recently
+/// for a missing stamp to count ([`reading_fresh`]).
+pub(crate) const FRESH_READ_MS: i64 = 5_000;
 
 /// The take window, or `None` when the check is off.
 pub(crate) fn take_window() -> Option<Duration> {
@@ -114,13 +123,30 @@ fn stamp_seen(session: &str, addr: &str, since: i64, same_thread: &dyn Fn(&str) 
 
 // ── The decision ──────────────────────────────────────────────────────
 
+/// Can K2 tell, right now, whether the agent read in a line delivered at
+/// `since`? `read_at` is the transcript reader's last read (`None`: no
+/// file attached).
+/// - No file attached: no.
+/// - Hooks work (Claude): the prompt hook carries the stamp, and the
+///   transcript (read while a turn runs) carries a queued command; yes
+///   once the transcript has spoken.
+/// - No hooks (Codex): the transcript is the only witness, so only if it
+///   was read after the line went in and within [`FRESH_READ_MS`].
+pub(crate) fn reading_fresh(had_hook: bool, had_transcript: bool, read_at: Option<i64>, since: i64, now: i64) -> bool {
+    let Some(read_at) = read_at else { return false };
+    if had_hook {
+        return had_transcript;
+    }
+    read_at >= since && now - read_at <= FRESH_READ_MS
+}
+
 /// The agent's row, as the check reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RowView {
     /// Its lead is working, or waiting on a person.
     pub busy: bool,
-    /// K2 reads its turns (hooks or a transcript). Without that a missing
-    /// stamp means nothing.
+    /// K2 is reading its turns right now ([`reading_fresh`]). Without
+    /// that a missing stamp means nothing.
     pub can_tell: bool,
 }
 
@@ -157,14 +183,16 @@ pub(crate) fn decide(
     let Some(row) = row else {
         return Step::GiveUp("session_gone");
     };
-    if !row.can_tell {
-        return Step::GiveUp("no_turn_evidence");
-    }
     if row.busy {
         return if waited_ms >= BUSY_CAP_MS { Step::GiveUp("busy_too_long") } else { Step::Wait };
     }
     if quiet_ms < window_ms {
         return Step::Wait;
+    }
+    // The window is over with no stamp. Typed again only if K2 is reading
+    // the agent's turns right now; otherwise it can't tell.
+    if !row.can_tell {
+        return Step::GiveUp("no_turn_evidence");
     }
     if on_screen() {
         return Step::OnScreen;
@@ -206,7 +234,10 @@ pub(crate) fn rows_show(rows: &[String], snippet: &str) -> bool {
 
 /// What the watcher reads about a session (a seam for the tests).
 pub(crate) trait Probe {
-    fn row(&self, session: &str) -> Option<RowView>;
+    /// The row for a line delivered at `since`, looked at `now`.
+    fn row(&self, session: &str, since: i64, now: i64) -> Option<RowView>;
+    /// A look is under way: wake the session's transcript reader.
+    fn nudge(&self, _session: &str) {}
     fn screen_shows(&self, session: &str, snippet: &str) -> bool;
     /// `other` is another address of `addr`'s Thread.
     fn same_thread(&self, addr: &str, other: &str) -> bool;
@@ -216,15 +247,20 @@ pub(crate) trait Probe {
 struct LiveProbe;
 
 impl Probe for LiveProbe {
-    fn row(&self, session: &str) -> Option<RowView> {
+    fn row(&self, session: &str, since: i64, now: i64) -> Option<RowView> {
+        let read_at = crate::activity_transcript::transcript_read_at(session);
         crate::activity_store::with_row(session, |row| RowView {
             busy: row.lead.state != k2_core::activity::LeadState::Idle,
-            // Only a session whose transcript K2 is reading: that is where
-            // both a new prompt and a mid-turn queued command show up. A
-            // session with hooks alone would miss a queued command, and
-            // one with neither shows nothing at all.
-            can_tell: row.had_transcript(),
+            // Only a session whose transcript K2 is reading now: that is
+            // where both a new prompt and a mid-turn queued command show
+            // up. Hooks alone would miss a queued command, and a reader
+            // that is detached or parked shows nothing at all.
+            can_tell: reading_fresh(row.had_hook(), row.had_transcript(), read_at, since, now),
         })
+    }
+
+    fn nudge(&self, session: &str) {
+        crate::activity_transcript::note_delivery(session);
     }
 
     fn screen_shows(&self, session: &str, snippet: &str) -> bool {
@@ -329,8 +365,9 @@ pub(crate) fn tick(ws: &mut Vec<Watch>, now: i64, window_ms: i64, probe: &dyn Pr
     let mut fired = Vec::new();
     ws.retain_mut(|w| {
         let same = |other: &str| probe.same_thread(&w.addr, other);
+        probe.nudge(&w.session);
         let stamp = stamp_seen(&w.session, &w.addr, w.since, &same);
-        let row = probe.row(&w.session);
+        let row = probe.row(&w.session, w.since, now);
         if row.is_some_and(|r| r.busy) {
             w.quiet_since = now;
         }
@@ -382,7 +419,7 @@ mod tests {
     }
 
     impl Probe for Fake {
-        fn row(&self, session: &str) -> Option<RowView> {
+        fn row(&self, session: &str, _since: i64, _now: i64) -> Option<RowView> {
             self.rows.get(session).copied()
         }
         fn screen_shows(&self, session: &str, snippet: &str) -> bool {
@@ -426,8 +463,44 @@ mod tests {
     #[test]
     fn decide_gives_up_when_it_cannot_tell() {
         let blind = RowView { busy: false, can_tell: false };
-        assert_eq!(decide(false, Some(blind), W, W, W, || false), Step::GiveUp("no_turn_evidence"));
+        assert_eq!(decide(false, Some(blind), 5_000, 5_000, W, || panic!("no screen read")), Step::Wait, "the reader may still catch up");
+        assert_eq!(decide(false, Some(blind), W, W, W, || panic!("no screen read")), Step::GiveUp("no_turn_evidence"));
         assert_eq!(decide(false, None, W, W, W, || false), Step::GiveUp("session_gone"));
+    }
+
+    #[test]
+    fn reading_is_fresh_only_while_a_file_is_attached_and_read() {
+        // No file attached: never, hooks or not.
+        assert!(!reading_fresh(true, true, None, 1_000, 2_000));
+        assert!(!reading_fresh(false, true, None, 1_000, 2_000));
+        // Hooks (Claude): as before, once the transcript has spoken.
+        assert!(reading_fresh(true, true, Some(0), 1_000, 30_000));
+        assert!(!reading_fresh(true, false, Some(0), 1_000, 30_000));
+        // No hooks (Codex): read after the line went in, and lately.
+        assert!(reading_fresh(false, true, Some(20_500), 1_000, 21_000));
+        assert!(reading_fresh(false, false, Some(20_500), 1_000, 21_000), "a read file with no records yet still witnesses");
+        assert!(!reading_fresh(false, true, Some(900), 1_000, 1_500), "read before the line went in");
+        assert!(!reading_fresh(false, true, Some(2_000), 1_000, 2_000 + FRESH_READ_MS + 1), "parked since");
+    }
+
+    /// The Codex report: a hook-less session whose reader is detached or
+    /// went quiet is never typed into again and gets no notice.
+    #[test]
+    fn a_detached_or_stale_reader_gives_up_without_a_retype() {
+        for label in ["detached", "stale"] {
+            let s = sid(label);
+            let mut probe = Fake::default();
+            probe.rows.insert(s.clone(), RowView { busy: false, can_tell: false });
+            // Codex cleared its input box: nothing on screen.
+            probe.screen.insert(s.clone(), vec!["› ".to_string()]);
+            let n = Arc::new(AtomicUsize::new(0));
+            let mut ws = vec![Watch::new(&s, "sales", 0, "[thread:sales] run the tests", false, counting(&n))];
+            for t in (0..=W + 1_000).step_by(500) {
+                run_fired(tick(&mut ws, t, W, &probe));
+            }
+            assert!(ws.is_empty(), "{label}: the watch stops");
+            assert_eq!(n.load(Ordering::SeqCst), 0, "{label}: no retype, no notice");
+        }
     }
 
     #[test]

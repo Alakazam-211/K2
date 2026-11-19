@@ -35945,11 +35945,14 @@ EOF
 _LLMA_BASE="/cli/llm/accounts"
 
 # _llma_json k1 v1 k2 v2 … → a JSON object. Values "__true__"/"__false__"
-# become booleans; empty values are dropped.
+# become booleans; empty values are dropped. The pairs reach python on
+# stdin, NUL-separated, never argv: a value can be a secret (the sign-in
+# code of login/input), and ps shows argv to every process of this user.
 _llma_json() {
-    python3 -c '
+    if [ $# -eq 0 ]; then echo '{}'; return 0; fi
+    printf '%s\0' "$@" | python3 -c '
 import json, sys
-a = sys.argv[1:]
+a = [x.decode("utf-8", "surrogateescape") for x in sys.stdin.buffer.read().split(b"\0")[:-1]]
 out = {}
 for k, v in zip(a[::2], a[1::2]):
     if v == "__true__":
@@ -35959,7 +35962,7 @@ for k, v in zip(a[::2], a[1::2]):
     elif v != "":
         out[k] = v
 print(json.dumps(out))
-' "$@"
+'
 }
 
 # Tools that take API keys (and so can be pinned): the sign-in tools

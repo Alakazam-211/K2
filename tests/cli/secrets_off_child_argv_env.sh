@@ -22,7 +22,8 @@
 # set --secret-stdin, k2 hostmail config --relay-pass-stdin, k2 hostmail
 # import --pass-stdin, of App users (k2 app user add and password
 # --password-stdin), the tunnel token k2 connect login binds, and of the
-# logins, and k2 tunnel switch --token-stdin: k2 users add and set-password
+# logins, k2 tunnel switch --token-stdin, and the sign-in code pasted
+# into k2 llm tokens add: k2 users add and set-password
 # --password-stdin, k2 users pair-phone, k2 connect login; and the remote
 # server's token of k2 clone (--host, --token).
 #
@@ -157,6 +158,7 @@ STUB_PID=$!
 import http.server, json, sys, threading
 port_path, log_path, tunnel_token = sys.argv[1], sys.argv[2], sys.argv[3]
 lock = threading.Lock()
+LLM = {"code_in": False}
 RECORDING = {
     "/cli/app/recording/set": "recording-app",
     "/cli/sew/app-spaces/recording": "recording-space",
@@ -201,6 +203,16 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self._answer(200, {"code": "123456", "expiresIn": 300})
             return self._answer(200, {"error": {"code": "password_required",
                                                 "hint": "type your password again to make a pairing code"}})
+        if path == "/cli/llm/accounts/add":
+            LLM["code_in"] = False
+            return self._answer(200, {"login": {"loginId": "L1"}})
+        if path == "/cli/llm/accounts/login/input":
+            LLM["code_in"] = True
+            return self._answer(200, {"ok": True})
+        if path == "/cli/llm/accounts/login/status":
+            if LLM["code_in"]:
+                return self._answer(200, {"login": {"state": "signed_in", "done": True, "tool": "claude", "label": "work"}})
+            return self._answer(200, {"login": {"state": "waiting_for_code"}})
         if path == "/rest/v1/subdomains":
             return self._answer(200, [{"label": "acme", "status": "active", "tunnel_token": tunnel_token}])
         if path == "/rest/v1/rpc/claim_subdomain":
@@ -399,6 +411,10 @@ assert_off_children "connect login tunnel" "tunnel token" "$TUNNEL_SENTINEL"
 # 19. k2 tunnel switch <sub> --token-stdin: the tunnel token reaches the
 #     switch and no child's argv or environment, nor k2's own argv.
 sec_case "tunnel switch --token-stdin" /cli/tunnel/switch "tunnel token" "$TUNNEL_SENTINEL" tunnel switch acme --token-stdin
+
+# 20. k2 llm tokens add: the sign-in code pasted on stdin reaches
+#     login/input and no child's argv or environment.
+K2_LLMA_POLL_SECS=0 sec_case "llm tokens add (code)" /cli/llm/accounts/login/input "sign-in code" "$PASS_SENTINEL" llm tokens add claude work
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

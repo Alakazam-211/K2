@@ -45,6 +45,12 @@
 @utility type-control { font-size: var(--type-md); font-weight: var(--tw-font-weight, 400); line-height: var(--tw-leading, 1.35); }
 @utility type-badge { font-size: var(--type-micro); font-weight: var(--tw-font-weight, 600); line-height: var(--tw-leading, 1.35); }
 
+/* A line of reading text (a hint, a note) runs about 75 characters in any
+   face. `ch` is the width of a code-face zero, so outside Terminal (whose UI
+   font is the code face) the system font's narrower letters need fewer. */
+:root { --measure-text: 75ch; }
+html:not([data-style="terminal"]) { --measure-text: 62ch; }
+
 /* Code inside a sentence (a command in a hint, a file name in a row) sits at
    the sentence's visual size. The code face runs large next to the system
    font, so outside Terminal (whose UI font is the code face) it steps down.

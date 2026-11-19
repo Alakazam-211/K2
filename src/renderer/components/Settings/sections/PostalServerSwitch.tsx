@@ -6,23 +6,26 @@
 // workspace's Postal tab appears or goes (postal-api `refreshPostalFeature`).
 //
 // A server without Postal (an older daemon: 404) shows no group at all.
+// A save that fails puts the switch back, says so in plain words and offers
+// Try again (the same change once more).
 
 import React, { useEffect, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
-import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
-import { BetaTag, Toggle } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveNote, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
+import { BetaTag, Button, Toggle } from '@/components/ui'
 import { httpStatusOf } from '@/lib/daemon-http-error'
 import type { ServerScope } from '@/kessel/server-scope'
 import {
   fetchPostalSettings,
   fetchPostalViewerRole,
   postalErrorText,
+  postalPlainError,
   refreshPostalFeature,
   savePostalSettings,
   type PostalSettings,
 } from './postal-api'
 
-export const POSTAL_SWITCH_LABEL = 'Postal (Beta): let agents have friends on other machines'
+export const POSTAL_SWITCH_LABEL = 'Let agents have friends on other machines'
 export const POSTAL_ADMINS_LABEL = 'Admins may accept friend requests'
 
 export const POSTAL_SERVER_MANIFEST: SettingEntry[] = [
@@ -31,10 +34,35 @@ export const POSTAL_SERVER_MANIFEST: SettingEntry[] = [
 
 type State = { kind: 'loading' } | { kind: 'hidden' } | { kind: 'ready'; value: PostalSettings } | { kind: 'error'; message: string }
 
+/** A change that didn't save: which switch, what it tried, and why. */
+type Failed = { key: keyof PostalSettings; next: boolean; message: string } | null
+
+/** "Admins may accept friend requests", in words for this viewer and state. */
+export function postalAdminsHint(on: boolean, isOwner: boolean): string {
+  if (on) return 'On: admins accept new friends for this server’s agents too.'
+  return isOwner ? 'Off: only you accept new friends for this server’s agents.' : 'Off: only the owner accepts new friends for this server’s agents.'
+}
+
+/** What failed, and Try again (the same change once more). */
+function SaveFailed({ failed, onRetry, busy }: { failed: Failed; onRetry: () => void; busy: boolean }): React.JSX.Element | null {
+  if (!failed) return null
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="postal-save-failed">
+      <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[var(--measure-text,75ch)]">
+        Couldn’t save that, so nothing changed. {failed.message}
+      </p>
+      <Button size="sm" onClick={onRetry} disabled={busy}>
+        Try again
+      </Button>
+    </div>
+  )
+}
+
 export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX.Element | null {
   const [state, setState] = useState<State>({ kind: 'loading' })
   const [role, setRole] = useState<string | null>(null)
   const [busy, setBusy] = useState<keyof PostalSettings | null>(null)
+  const [failed, setFailed] = useState<Failed>(null)
   const mainSave = useSaveStatus()
   const adminsSave = useSaveStatus()
 
@@ -68,7 +96,9 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
     const save = key === 'enabled' ? mainSave : adminsSave
     const prev = state.value
     setBusy(key)
-    save.reset()
+    setFailed(null)
+    mainSave.reset()
+    adminsSave.reset()
     setState({ kind: 'ready', value: { ...prev, [key]: next } }) // optimistic
     try {
       const stored = await savePostalSettings(scope, { [key]: next })
@@ -77,7 +107,7 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
       if (key === 'enabled') await refreshPostalFeature(scope)
     } catch (err) {
       setState({ kind: 'ready', value: prev })
-      save.failed(new Error(postalErrorText(err)))
+      setFailed({ key, next, message: postalPlainError(err) })
     } finally {
       setBusy(null)
     }
@@ -111,15 +141,17 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
           >
             <div className={SETTING_ROW_LABEL}>{POSTAL_SWITCH_LABEL}</div>
             <div className={SETTING_ROW_HINT}>
-              On: each workspace gets a Postal tab where its agent can claim an address (like scout::acme.postal.bot),
-              invite friends and answer requests. This server connects to the Postal network to send and receive friend
-              requests and your agents&rsquo; messages with their friends; anything sent while it isn&rsquo;t connected
-              waits until it is.
+              <span className="block max-w-[var(--measure-text,75ch)]">
+                On: each workspace gets a Postal tab where its agent can claim an address (like scout::acme.postal.bot),
+                invite friends and answer requests. This server connects to the Postal network to send and receive friend
+                requests and your agents&rsquo; messages with their friends; anything sent while it isn&rsquo;t connected
+                waits until it is.
+              </span>
             </div>
             {role !== null && !isOwner ? (
               <div className={SETTING_ROW_HINT}>Only this server&rsquo;s owner can turn this on or off.</div>
             ) : null}
-            <SaveError state={mainSave.state} />
+            {failed?.key === 'enabled' ? <SaveFailed failed={failed} busy={busy !== null} onRetry={() => void flip('enabled', failed.next)} /> : null}
           </SettingSwitchRow>
           {state.value.enabled ? (
             <SettingSwitchRow
@@ -139,8 +171,12 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
               }
             >
               <div className={SETTING_ROW_LABEL}>{POSTAL_ADMINS_LABEL}</div>
-              <div className={SETTING_ROW_HINT}>Off: only you accept new friends for this server&rsquo;s agents.</div>
-              <SaveError state={adminsSave.state} />
+              <div className={SETTING_ROW_HINT} data-testid="postal-admins-hint">
+                {postalAdminsHint(state.value.adminsMayAccept, isOwner)}
+              </div>
+              {failed?.key === 'adminsMayAccept' ? (
+                <SaveFailed failed={failed} busy={busy !== null} onRetry={() => void flip('adminsMayAccept', failed.next)} />
+              ) : null}
             </SettingSwitchRow>
           ) : null}
         </>

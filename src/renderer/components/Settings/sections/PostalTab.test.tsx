@@ -9,6 +9,9 @@
 //     request with a pairing code it opens K2's code form, which shows this
 //     server's code and sends the one typed from the other side;
 //   - a 409 postal_off answer shows the daemon's hint inline;
+//   - Remove and Block ask first; what happened is said in the card where
+//     it happened; a request that stopped waiting reloads and says so;
+//   - an invite the network hasn't sent yet says Not sent yet;
 //   - the owner's switch posts postal/settings {enabled} and re-reads
 //     /boot-status so the tab appears.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -26,6 +29,7 @@ const cli = vi.hoisted(() => ({
   gets: [] as { route: string; params: unknown }[],
   posts: [] as { route: string; body: unknown }[],
   inviteResult: { ok: true } as unknown,
+  postFail: {} as Record<string, Error>,
 }))
 const feature = vi.hoisted(() => ({ on: true }))
 const noted = vi.hoisted(() => ({ calls: [] as unknown[][] }))
@@ -43,6 +47,7 @@ vi.mock('@/lib/daemon-cli', () => ({
   }),
   daemonCliPost: vi.fn(async (_s: unknown, route: string, body: unknown) => {
     cli.posts.push({ route, body })
+    if (cli.postFail[route]) throw cli.postFail[route]
     if (route === 'postal/settings') {
       cli.settings = { ...cli.settings, ...(body as object) }
       return { ok: true, ...cli.settings }
@@ -74,7 +79,7 @@ vi.mock('@/stores/connect-host', async () => {
   return { useConnectHostStore: create(() => ({ activeHost: 'local', serverVersion: '0.46.14' })) }
 })
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { PostalTab, POSTAL_ROUTING_LINE } from './PostalTab'
 import { PostalServerSwitch } from './PostalServerSwitch'
 import { postalRouteText } from './postal-api'
@@ -107,6 +112,7 @@ beforeEach(() => {
   cli.gets = []
   cli.posts = []
   cli.inviteResult = { ok: true }
+  cli.postFail = {}
   feature.on = true
   noted.calls = []
 })
@@ -234,14 +240,133 @@ describe('PostalTab', () => {
     await act(async () => {
       fireEvent.click(remove)
     })
+    // Remove asks first, in words.
+    const sheet = await screen.findByTestId('postal-remove-confirm')
+    expect(sheet.textContent).toContain('Remove bee::hive.postal.bot?')
+    expect(sheet.textContent).toContain('You’d need a new request to be friends again.')
+    expect(cli.posts.find((p) => p.route === 'postal/remove')).toBeUndefined()
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }))
+    })
+    expect(cli.posts).toContainEqual({ route: 'postal/remove', body: { workspace: '/ws/ada', peer: 'bee::hive.postal.bot' } })
     expect(screen.getByTestId('postal-notice').textContent).toBe('Removed bee::hive.postal.bot.')
+  })
+
+  it('Block asks first, says what it does, and Cancel blocks nothing', async () => {
+    cli.friends = [{ id: 'f2', peer: 'bee::hive.postal.bot', status: 'accepted' }]
+    render(<PostalTab project={project} scope={scope} />)
+    const block = await screen.findByRole('button', { name: 'Block' })
+    await act(async () => {
+      fireEvent.click(block)
+    })
+    let sheet = await screen.findByTestId('postal-block-confirm')
+    expect(sheet.textContent).toContain('Block bee::hive.postal.bot?')
+    expect(sheet.textContent).toContain(
+      'It ends the friendship and refuses its requests. You can unblock it later, but you’d need to be friends again.',
+    )
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }))
+    })
+    expect(screen.queryByTestId('postal-block-confirm')).toBeNull()
+    expect(cli.posts.find((p) => p.route === 'postal/block')).toBeUndefined()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Block' }))
+    })
+    sheet = await screen.findByTestId('postal-block-confirm')
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Block' }))
+    })
+    expect(cli.posts).toContainEqual({ route: 'postal/block', body: { workspace: '/ws/ada', peer: 'bee::hive.postal.bot' } })
+    // Said in the Friends card, where it happened.
+    const notice = screen.getByTestId('postal-notice')
+    expect(notice.textContent).toContain('Blocked bee::hive.postal.bot.')
+    expect(notice.closest('[data-settings-id="projects.postal-friends"]')).toBeTruthy()
+  })
+
+  it('an invitation the network has not sent yet says Not sent yet; a sent one says Waiting', async () => {
+    cli.friends = [
+      { id: 'o1', peer: 'vega::outpost.postal.bot', status: 'pending_out', pairId: null },
+      { id: 'o2', peer: 'orbit::meridian.postal.bot', status: 'pending_out', pairId: 'pr_o2' },
+    ]
+    render(<PostalTab project={project} scope={scope} />)
+    const rows = await screen.findAllByTestId('postal-peer-row')
+    const byPeer = (peer: string): string => rows.find((r) => r.getAttribute('data-peer') === peer)?.textContent ?? ''
+    expect(byPeer('vega::outpost.postal.bot')).toContain('Not sent yet')
+    expect(byPeer('vega::outpost.postal.bot')).toContain('It goes out once this server connects to the Postal network.')
+    expect(byPeer('orbit::meridian.postal.bot')).toContain('Waiting')
+    expect(byPeer('orbit::meridian.postal.bot')).not.toContain('Not sent yet')
+  })
+
+  it("an incoming request shows its note in quotes, and a code request says you'll compare codes", async () => {
+    cli.friends = [
+      { id: 'f9', peer: 'lab::gamma.postal.bot', status: 'pending_in', ownerName: 'Dana', codeWaiting: true, note: 'Hi from Dana.' },
+      { id: 'f8', peer: 'nova::quarry.postal.bot', status: 'pending_in' },
+    ]
+    render(<PostalTab project={project} scope={scope} />)
+    const rows = await screen.findAllByTestId('postal-peer-row')
+    const lab = rows.find((r) => r.getAttribute('data-peer') === 'lab::gamma.postal.bot') as HTMLElement
+    const nova = rows.find((r) => r.getAttribute('data-peer') === 'nova::quarry.postal.bot') as HTMLElement
+    expect(within(lab).getByTestId('postal-peer-note').textContent).toBe('Their note: “Hi from Dana.”')
+    expect(within(lab).getByTestId('postal-row-explainer').textContent).toBe(
+      'Code check: you’ll compare 6-digit codes with Dana before it’s accepted.',
+    )
+    expect(within(nova).queryByTestId('postal-row-explainer')).toBeNull()
+    expect(within(nova).queryByTestId('postal-peer-note')).toBeNull()
+  })
+
+  it('a changed key says what it means and offers Trust new key', async () => {
+    cli.friends = [{ id: 'f7', peer: 'iris::harbor.postal.bot', status: 'rekey_pending', ownerName: 'Ivo' }]
+    render(<PostalTab project={project} scope={scope} />)
+    const trust = await screen.findByRole('button', { name: 'Trust new key' })
+    const row = trust.closest('[data-testid="postal-peer-row"]') as HTMLElement
+    expect(within(row).getByTestId('postal-row-explainer').textContent).toContain('Trust the new key once Ivo says they changed it')
+    await act(async () => {
+      fireEvent.click(trust)
+    })
+    expect(cli.posts).toContainEqual({ route: 'postal/decide', body: { workspace: '/ws/ada', id: 'f7', decision: 'accept' } })
+    expect(screen.getByTestId('postal-notice').textContent).toBe('Trusted iris::harbor.postal.bot’s new key.')
+  })
+
+  it('a request that stopped waiting reloads the lists and says so in plain words', async () => {
+    cli.friends = [{ id: 'f8', peer: 'nova::quarry.postal.bot', status: 'pending_in' }]
+    cli.postFail['postal/decide'] = new DaemonHttpError("this request isn't waiting for an answer (it is revoked)", 409, 'postal_not_pending')
+    render(<PostalTab project={project} scope={scope} />)
+    const accept = await screen.findByRole('button', { name: 'Accept' })
+    const reads = cli.gets.filter((g) => g.route === 'postal/friends').length
+    cli.friends = [{ id: 'f8', peer: 'nova::quarry.postal.bot', status: 'revoked' }]
+    await act(async () => {
+      fireEvent.click(accept)
+    })
+    await waitFor(() => expect(cli.gets.filter((g) => g.route === 'postal/friends').length).toBeGreaterThan(reads))
+    const notice = screen.getByTestId('postal-notice')
+    expect(notice.textContent).toBe(
+      'This request isn’t waiting for an answer any more: it was withdrawn or already answered. The list is up to date now.',
+    )
+    expect(notice.closest('[data-settings-id="projects.postal-invitations"]')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull()
+    expect(document.body.textContent).not.toContain('(it is revoked)')
+  })
+
+  it('before the agent has an address, Invite shows only the one-line reason', async () => {
+    render(<PostalTab project={project} scope={scope} />)
+    const why = await screen.findByTestId('postal-invite-needs-address')
+    expect(why.textContent).toContain('Claim a Postal address for this agent first.')
+    expect(screen.queryByTestId('postal-invite-form')).toBeNull()
+    expect(screen.queryByLabelText('Address to invite')).toBeNull()
+  })
+
+  it('Invitations has its own loading and error words', async () => {
+    cli.getFail = new DaemonHttpError('the Postal store is busy', 503, 'postal_unreachable')
+    render(<PostalTab project={project} scope={scope} />)
+    const err = await screen.findByTestId('postal-invitations-error')
+    expect(err.textContent).toContain('Couldn’t read this agent’s invitations')
+    expect(screen.getByTestId('postal-friends-error').textContent).toContain('Couldn’t read this agent’s friends')
   })
 
   async function invite(to: string): Promise<void> {
     cli.status = statusBody({ id: 'h1', address: 'ada::acme.postal.bot', status: 'claimed', createdAt: '2026-11-17T00:00:00Z' })
     render(<PostalTab project={project} scope={scope} />)
     const field = await screen.findByLabelText('Address to invite')
-    await waitFor(() => expect((field as HTMLInputElement).disabled).toBe(false))
     fireEvent.change(field, { target: { value: to } })
     await act(async () => {
       fireEvent.submit(screen.getByTestId('postal-invite-form'))
@@ -252,7 +377,9 @@ describe('PostalTab', () => {
     cli.inviteResult = { ok: true, sent: true, network: 'sent' }
     await invite('bee::hive.postal.bot')
     expect(cli.posts).toContainEqual({ route: 'postal/invite', body: { workspace: '/ws/ada', to: 'bee::hive.postal.bot' } })
-    expect(screen.getByTestId('postal-notice').textContent).toBe('Invitation sent to bee::hive.postal.bot.')
+    const notice = screen.getByTestId('postal-notice')
+    expect(notice.textContent).toBe('Invitation sent to bee::hive.postal.bot.')
+    expect(notice.closest('[data-settings-id="projects.postal-invitations"]')).toBeTruthy()
   })
 
   it('the invite notice says it goes out later when the daemon could not send it yet', async () => {
@@ -401,6 +528,43 @@ describe('PostalServerSwitch', () => {
     )
     expect(text).not.toMatch(/nothing\s+leaves/)
     expect(text).not.toMatch(/later release/)
+  })
+
+  it("the admins switch's hint fits the viewer and the switch", async () => {
+    cli.settings = { enabled: true, adminsMayAccept: false }
+    render(<PostalServerSwitch scope={scope} />)
+    const hint = await screen.findByTestId('postal-admins-hint')
+    await waitFor(() => expect(hint.textContent).toBe('Off: only you accept new friends for this server’s agents.'))
+    cleanup()
+    cli.role = 'admin'
+    render(<PostalServerSwitch scope={scope} />)
+    await screen.findByText(/Only this server.s owner can turn this on or off/)
+    expect(screen.getByTestId('postal-admins-hint').textContent).toBe('Off: only the owner accepts new friends for this server’s agents.')
+    cleanup()
+    cli.settings = { enabled: true, adminsMayAccept: true }
+    render(<PostalServerSwitch scope={scope} />)
+    expect((await screen.findByTestId('postal-admins-hint')).textContent).toBe('On: admins accept new friends for this server’s agents too.')
+  })
+
+  it('a save that fails says so in plain words and offers Try again', async () => {
+    cli.settings = { enabled: true, adminsMayAccept: false }
+    cli.postFail['postal/settings'] = new DaemonHttpError('app settings: Read-only file system (os error 30)', 500, 'internal')
+    render(<PostalServerSwitch scope={scope} />)
+    const toggle = await screen.findByTestId('postal-admins-accept')
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(toggle)
+    })
+    const failed = await screen.findByTestId('postal-save-failed')
+    expect(failed.textContent).toContain('Couldn’t save that, so nothing changed. The server couldn’t do that just now.')
+    expect(failed.textContent).not.toContain('os error')
+    delete cli.postFail['postal/settings']
+    await act(async () => {
+      fireEvent.click(within(failed).getByRole('button', { name: 'Try again' }))
+    })
+    expect(cli.posts.filter((p) => p.route === 'postal/settings')).toHaveLength(2)
+    expect(cli.settings.adminsMayAccept).toBe(true)
+    expect(screen.queryByTestId('postal-save-failed')).toBeNull()
   })
 
   it('a non-owner sees it read-only', async () => {

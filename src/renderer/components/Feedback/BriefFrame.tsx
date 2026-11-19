@@ -21,7 +21,7 @@
 // The frame document is memoized on the brief's sha256 + the app theme, so
 // the thread's event-driven refetches never reload the frame.
 
-import React, { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
@@ -35,7 +35,7 @@ import {
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import type { FeedbackBrief } from './feedback-api'
-import { buildBriefSrcDoc, readBriefTokens, type BriefLink, type BriefTokens } from './brief-srcdoc'
+import { BRIEF_PAD_X_PX, buildBriefSrcDoc, readBriefTokens, type BriefLink, type BriefTokens } from './brief-srcdoc'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { clientToCssPx, cssViewport } from '@/lib/app-zoom'
 
@@ -96,7 +96,7 @@ function BriefLinks({ links }: { links: BriefLink[] }): React.JSX.Element | null
               data-testid="brief-link"
               onClick={() => openLink(l.url)}
               title={`Open in your browser: ${l.url}`}
-              className="min-w-0 truncate text-left text-[var(--color-accent)] hover:underline cursor-pointer selectable-copy"
+              className="min-w-0 truncate text-left text-[var(--color-accent-text)] hover:underline cursor-pointer selectable-copy"
             >
               {l.url}
             </button>
@@ -290,6 +290,22 @@ function BriefOverlay({
   // while a brief is expanded.
   const zenOverlay = useCallback((el: HTMLDivElement | null) => (el ? registerZenK2Overlay(el) : undefined), [])
 
+  // The report's text starts where the title does: the frame steps in by
+  // the title's offset (past the stoplights on macOS), less the report's
+  // own padding.
+  const titleRef = useRef<HTMLSpanElement>(null)
+  const [lead, setLead] = useState(0)
+  useLayoutEffect(() => {
+    const el = titleRef.current
+    if (!el) return
+    const read = (): void => setLead(Math.max(0, el.offsetLeft - BRIEF_PAD_X_PX))
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(read)
+    ro.observe(el.parentElement ?? el)
+    return () => ro.disconnect()
+  }, [])
+
   return createPortal(
     <div
       ref={zenOverlay}
@@ -318,6 +334,7 @@ function BriefOverlay({
           />
         )}
         <span
+          ref={titleRef}
           data-testid="brief-overlay-title"
           className="no-drag min-w-0 type-heading text-[var(--color-text-primary)] truncate selectable-copy"
         >
@@ -325,7 +342,7 @@ function BriefOverlay({
         </span>
         <DialogCloseButton data-testid="brief-overlay-close" className="ml-auto -mr-1" onClick={onClose} />
       </div>
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 bg-[var(--color-bg-surface)]" data-brief-overlay-body="" style={{ paddingLeft: lead }}>
         <HtmlFrame
           html={frameHtml}
           profile="inert"

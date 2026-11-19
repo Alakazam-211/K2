@@ -114,6 +114,23 @@ describe('buildBriefSrcDoc (T10)', () => {
     expect(frameCsp('inert')).toContain("script-src 'none'")
   })
 
+  it('a wide table scrolls sideways in its own strip, with a cue, instead of being cut', () => {
+    const { frameHtml } = buildBriefSrcDoc('<p>Plans</p><table><tr><td>Starter</td><td>Up to 3</td></tr></table>', tokens)
+    expect(frameHtml).toContain('<div class="k2-table-scroll"><table>')
+    const css = briefStylesheet(tokens)
+    expect(css).toMatch(/\.k2-table-scroll\{overflow-x:auto;/)
+    // The cue: a scrollbar that always shows, and shades on the sides.
+    expect(css).toContain('.k2-table-scroll::-webkit-scrollbar{height:8px}')
+    expect(css).toContain('no-repeat local')
+  })
+
+  it('links take the text-grade accent, and running text stops at a readable measure', () => {
+    const css = briefStylesheet({ ...tokens, link: '#123456' })
+    expect(css).toContain('--link:#123456')
+    expect(css).toContain('a{color:var(--link);')
+    expect(css).toMatch(/body\.k2-brief>:is\(p,ul,ol[^)]*\)\{max-width:75ch\}/)
+  })
+
   it('a hostile token value cannot break out of the stylesheet', () => {
     const css = briefStylesheet({ ...tokens, accent: 'red}</style><script>alert(1)</script>' })
     expect(css).not.toContain('</style>')

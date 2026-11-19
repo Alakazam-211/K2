@@ -24,7 +24,24 @@ export interface BriefTokens {
   muted: string
   border: string
   accent: string
+  /** The text-grade accent: links in the report read at 4.5:1 or more
+   *  (the accent when a theme has none). */
+  link?: string
   font: string
+}
+
+/** The report's type and reading measure: its body size, its side padding,
+ *  and the longest line, in characters, a paragraph runs to. */
+export const BRIEF_BODY_PX = 13
+export const BRIEF_PAD_X_PX = 18
+export const BRIEF_MEASURE_CH = 75
+
+/** The report column in the ticket's middle pane: set in the report's own
+ *  type, no wider than the measure plus the report's padding and its box's
+ *  edges, so the summary above lines up with the report. The column's own
+ *  children set their sizes; only the measure reads this one. */
+export function briefColumnStyle(): { fontSize: string; maxWidth: string } {
+  return { fontSize: `${BRIEF_BODY_PX}px`, maxWidth: `calc(${BRIEF_MEASURE_CH}ch + ${2 * BRIEF_PAD_X_PX + 2}px)` }
 }
 
 export interface BriefLink {
@@ -92,6 +109,7 @@ export function readBriefTokens(root: HTMLElement = document.documentElement): B
     muted: safe(v('--color-text-muted'), fb.muted),
     border: safe(v('--color-border'), fb.border),
     accent: safe(v('--color-accent'), fb.accent),
+    link: safe(v('--color-accent-text'), safe(v('--color-accent'), fb.accent)),
     font: safe(v('--font-ui'), fb.font),
   }
 }
@@ -112,14 +130,17 @@ export function briefStylesheet(tokens: BriefTokens): string {
     font: safe(tokens.font, fallbackBriefTokens(tokens.scheme).font),
   }
   return [
-    `:root{color-scheme:${t.scheme};--bg:${t.surface};--text:${t.text};--text2:${t.textSecondary};--muted:${t.muted};--border:${t.border};--accent:${t.accent};}`,
+    `:root{color-scheme:${t.scheme};--bg:${t.surface};--text:${t.text};--text2:${t.textSecondary};--muted:${t.muted};--border:${t.border};--accent:${t.accent};--link:${safe(tokens.link, safe(tokens.accent, t.accent))};}`,
     `html,body{margin:0;padding:0;background:var(--bg);color:var(--text);}`,
-    `body.k2-brief{font-family:${t.font};font-size:13px;line-height:1.55;padding:14px 18px;overflow-wrap:anywhere;}`,
+    `body.k2-brief{font-family:${t.font};font-size:${BRIEF_BODY_PX}px;line-height:1.55;padding:14px ${BRIEF_PAD_X_PX}px;overflow-wrap:anywhere;}`,
+    // A readable measure: running text stops at about 75 characters, left
+    // where the report sits; a table or code block may use the full width.
+    `body.k2-brief>:is(p,ul,ol,dl,h1,h2,h3,h4,h5,h6,blockquote,figure,details,.k2-need,.k2-callout){max-width:${BRIEF_MEASURE_CH}ch}`,
     `h1,h2,h3,h4{color:var(--text);line-height:1.3;margin:1.1em 0 .45em;}`,
     `h1{font-size:1.35em}h2{font-size:1.18em}h3{font-size:1.05em}h4{font-size:1em}`,
     `body.k2-brief>:first-child{margin-top:0}`,
     `p{margin:.55em 0}ul,ol{margin:.5em 0;padding-left:1.5em}li{margin:.2em 0}`,
-    `a{color:var(--accent);text-decoration:underline;cursor:default}`,
+    `a{color:var(--link);text-decoration:underline;cursor:default}`,
     `sup.k2-link-ref{color:var(--muted);font-size:.75em;margin-left:.15em}`,
     `code,kbd,pre{font-family:inherit;font-size:.95em}`,
     `code,kbd{background:color-mix(in srgb,var(--text) 8%,transparent);padding:.05em .3em}`,
@@ -127,7 +148,21 @@ export function briefStylesheet(tokens: BriefTokens): string {
     `pre code{background:none;padding:0}`,
     `blockquote{margin:.6em 0;padding:.2em .9em;border-left:3px solid var(--border);color:var(--text2)}`,
     `hr{border:0;border-top:1px solid var(--border);margin:1em 0}`,
-    `table{border-collapse:collapse;margin:.6em 0;max-width:100%}`,
+    // A table wider than the report scrolls sideways in its own strip, never
+    // cut: a scrollbar that always shows, and a shade on the side that has
+    // more (the shades are the strip's background, which the table's own
+    // cells cover where it starts and ends).
+    `.k2-table-scroll{overflow-x:auto;max-width:100%;margin:.6em 0;padding-bottom:2px;`
+      + `background:linear-gradient(to right,var(--bg) 30%,transparent) left center/24px 100% no-repeat local,`
+      + `linear-gradient(to left,var(--bg) 30%,transparent) right center/24px 100% no-repeat local,`
+      + `radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--text) 22%,transparent),transparent) left center/10px 100% no-repeat scroll,`
+      + `radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--text) 22%,transparent),transparent) right center/10px 100% no-repeat scroll;`
+      + `scrollbar-width:thin;scrollbar-color:var(--muted) transparent}`,
+    `.k2-table-scroll::-webkit-scrollbar{height:8px}`,
+    `.k2-table-scroll::-webkit-scrollbar-thumb{background:var(--muted)}`,
+    `.k2-table-scroll::-webkit-scrollbar-track{background:color-mix(in srgb,var(--text) 6%,transparent)}`,
+    `.k2-table-scroll>table{margin:0}`,
+    `table{border-collapse:collapse;margin:.6em 0}`,
     // Cells wrap at word breaks only: body's `overflow-wrap:anywhere` lets a
     // table squeeze a column to one character (a word stacked letter by
     // letter); `break-word` still breaks a long URL but keeps words whole.
@@ -156,6 +191,14 @@ export function buildBriefSrcDoc(html: string, tokens: BriefTokens): BriefSrcDoc
     `<!doctype html><html><head></head><body>${html}</body></html>`,
     'text/html',
   )
+  // Each table sits in its own sideways scroller (see the stylesheet).
+  for (const table of Array.from(doc.body.querySelectorAll('table'))) {
+    if (table.parentElement?.classList.contains('k2-table-scroll')) continue
+    const strip = doc.createElement('div')
+    strip.className = 'k2-table-scroll'
+    table.replaceWith(strip)
+    strip.appendChild(table)
+  }
   const links: BriefLink[] = []
   for (const a of Array.from(doc.body.querySelectorAll('a'))) {
     const href = (a.getAttribute('href') ?? '').trim()

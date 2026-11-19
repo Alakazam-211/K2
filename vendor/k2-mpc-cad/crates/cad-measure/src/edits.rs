@@ -10,12 +10,19 @@
 //! what it reads of each handle an intent names, in the input and in the output, and its audit
 //! counts. `edit-referee` then holds the output's facts to the input's, changed as the intent
 //! says and in no other way, and the output's audit to no new errors.
+//!
+//! Per style, one revert too (`<name>-revert`): the wall moved (version K), then another line
+//! coloured, and K's change taken away by the pack's merge as the kit's tier-0 revert runs it
+//! (base K, ours head, theirs K-1). Its input is the first version, its intent the wall moved
+//! by nothing and the colour kept.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use k2_mpc_base::session::{BlobMerge, BlobPack};
 use k2_mpc_dxf::edit;
 use k2_mpc_dxf::testgen::{self, Eol, Ver};
+use k2_mpc_dxf::DxfPack;
 
 /// One call: its verb, its arguments and what it means, by the labels of the sampler.
 struct Call {
@@ -279,6 +286,34 @@ pub fn write(out: &Path) -> Result<(), String> {
                 put("intent.txt", format!("{}\n", intent.join("\n")).as_bytes())?;
                 files += 1;
             }
+            let name = format!("{}-{eol:?}-revert", v.acadver());
+            let (wall, red) = (b.addr("wall"), b.addr("red"));
+            let step = |bytes: &[u8], verb: &str, args: &[&str]| {
+                edit::plan(bytes, verb, args)
+                    .map(|p| p.output)
+                    .map_err(|e| format!("{name}: {verb} refused: {e}"))
+            };
+            let k = step(
+                &b.bytes,
+                "entity move",
+                &[&wall, "--by", "1.5,-2.25", "--unit", "mm"],
+            )?;
+            let head = step(&k, "entity set", &[&red, "--color", "3"])?;
+            let BlobMerge::Merged(reverted) = DxfPack.merge3_bytes(&k, &head, &b.bytes) else {
+                return Err(format!("{name}: the merge doesn't take the move away"));
+            };
+            let put = |suffix: &str, bytes: &[u8]| {
+                let path = out.join(format!("{name}.{suffix}"));
+                std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+            };
+            put("in.dxf", &b.bytes)?;
+            put("out.dxf", &reverted)?;
+            let (hw, hr) = (b.handle("wall"), b.handle("red"));
+            put(
+                "intent.txt",
+                format!("move {hw:X} 0 0\ncolor {hr:X} 3\n").as_bytes(),
+            )?;
+            files += 1;
         }
     }
     println!("edits: {files} calls written");

@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.4.1: pairs with kit v0.23.0
+
+**Requires `k2-mpc-base` v0.23.0**. The pack's code is unchanged from v0.4.0; a DXF
+drawing's versions now revert, undo and redo through the kit (below).
+
+- Pairs with kit v0.23.0. It changes no pack API but one: a blob pack's `merge3_known` is also asked
+  for a revert (`SaveBase::Revert`, base the version taken away, ours head, theirs the version
+  before it; the default calls `merge3_bytes`). Its other changes are the host's (undo, redo and
+  revert on a blob doc, a batch of verbs, a blob verb that plans with no lease, holds that bind an
+  agent's whole-file write, the store's cache at 64 MiB, grouped commits as an opt-in) and the
+  native engine's (off).
+- `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.23.0 and the four crates at 0.4.1.
+
+### Revert, undo and redo of DXF edits (the kit's tier-0 revert)
+- **A DXF drawing's versions revert through the kit** (`BlobSession::run_revert`, kit
+  v0.23.0): the pack's own merge by unit and field takes one version's change
+  away and keeps later, unrelated ones. No pack code changes; rows only:
+  - `revert_one_past_edit`: an agent's move reverted while a person's later colour is kept;
+    head is byte for byte the colour change alone (kit plant `revert-takes-whole-version`);
+  - `revert_refused_same_field_changed_since`: a later move of the same wall refuses the
+    revert `MPC-E731`, naming the wall and who; nothing written (kit plant `revert-overwrites`);
+  - `undo_redo_own_last_verb`: an agent's undo takes its own colour away and keeps a person's
+    later one, and its redo puts it back, as before the undo (kit plant `undo-latest-any`).
+- The edit referee's files (`cad-measure edits`) hold one revert per style (`<name>-revert`):
+  the move taken away by the pack's merge as the revert runs it, the colour kept, read by the
+  ezdxf checker.
+
 ## v0.4.0: pairs with kit v0.22.0
 
 **Requires `k2-mpc-base` v0.22.0**, checked out beside this repo, as v0.3.0 does; no kit change.

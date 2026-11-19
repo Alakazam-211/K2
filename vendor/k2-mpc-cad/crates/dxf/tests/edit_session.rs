@@ -15,8 +15,8 @@ use k2_mpc_base::errors::Value;
 use k2_mpc_base::index::{Digest, IndexStatus};
 use k2_mpc_base::session::{
     AuditEvent, BlobMerge, BlobPack, BlobSession, BlobWriteOptions, ClaimPolicy, Config, ConnId,
-    DiskCheck, Host, OpenedAt, Participant, ParticipantKind, Rights, SessionError, SessionManager,
-    Stay,
+    DiskCheck, Host, OpenedAt, Participant, ParticipantKind, RevertWhat, Rights, SessionError,
+    SessionManager, Stay,
 };
 use k2_mpc_base::store::{DocKey, DocStore, VersionId};
 use k2_mpc_base::tools::{ToolOptions, ToolOutput};
@@ -1314,4 +1314,195 @@ pub fn rotate_negative_through_the_kit() {
         seen.push(by.join(" "));
     }
     println!("rotate_negative_through_the_kit: {seen:?} land as --by 270");
+}
+
+fn revert(s: &BlobSession, c: ConnId, what: RevertWhat) -> ToolOutput {
+    s.run_revert(c, what, &[], &ToolOptions::new().result_json(true))
+        .expect("with the result asked for, every outcome is a result")
+}
+
+/// Head's log entry: its verb and the version it reverts.
+fn head_entry(s: &BlobSession, c: ConnId) -> (Option<String>, Option<VersionId>) {
+    let h = head(s);
+    s.log(c)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.id == h)
+        .map(|e| (e.verb, e.reverts))
+        .unwrap_or((None, None))
+}
+
+/// The bytes one verb makes of `bytes` alone (the pack's own plan, no kit): what a revert that
+/// keeps only that verb's change must equal.
+fn planned(bytes: &[u8], verb: &str, args: &[&str]) -> Vec<u8> {
+    k2_mpc_dxf::edit::plan(bytes, verb, args)
+        .unwrap_or_else(|e| panic!("{verb} plans: {e}"))
+        .output
+}
+
+/// revert_one_past_edit: an agent moves the wall (version K); a person then colours another
+/// line. Reverting K, through the kit's tier-0 revert (the pack's merge with base K, ours head,
+/// theirs K-1), lands as the agent's version with the verb `revert` and `reverts: K`, and its
+/// bytes are exactly the drawing with the colour change alone: the colour verb's own output on
+/// the first version. Kit plant: `revert-takes-whole-version`.
+#[test]
+pub fn revert_one_past_edit() {
+    let f = fx("revert");
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let s = f.open("plan.dxf", &b.bytes);
+    let bot = f.join(&s, "bot", ParticipantKind::Agent);
+    let ann = f.join(&s, "ann", ParticipantKind::Person);
+    let (wall, red) = (b.addr("wall"), b.addr("red"));
+    let mv = [wall.as_str(), "--by", "1.5,-2.25", "--unit", "mm"];
+    let colour = [red.as_str(), "--color", "3"];
+    let o = call(&s, bot, &argv("entity move", &mv));
+    assert_eq!(err_id(&o), None, "revert_one_past_edit: the move lands");
+    let k = head(&s);
+    let o = call(&s, ann, &argv("entity set", &colour));
+    assert_eq!(
+        err_id(&o),
+        None,
+        "revert_one_past_edit: the later colour lands"
+    );
+    index(&s);
+    let o = revert(&s, bot, RevertWhat::Version(k));
+    assert_eq!(
+        (err_id(&o), head_entry(&s, bot)),
+        (None, (Some("revert".to_owned()), Some(k))),
+        "revert_one_past_edit: the revert lands as a version of its own ({})",
+        res(&o).to_json()
+    );
+    let want = planned(&b.bytes, "entity set", &colour);
+    let got = bytes_at(&s, bot, head(&s));
+    assert!(
+        got != b.bytes,
+        "revert_one_past_edit: the later colour is kept (head is not the first version)"
+    );
+    assert_eq!(
+        sha(&got),
+        sha(&want),
+        "revert_one_past_edit: head is the colour change alone, byte for byte"
+    );
+}
+
+/// revert_refused_same_field_changed_since: an agent moves the wall (version K); a person then
+/// moves the same wall again (the same field). Reverting K is refused `MPC-E731`, naming the
+/// wall and who changed it since and in which version; head and its bytes are unchanged. Kit
+/// plant: `revert-overwrites`.
+#[test]
+pub fn revert_refused_same_field_changed_since() {
+    let f = fx("revert-conflict");
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let s = f.open("plan.dxf", &b.bytes);
+    let bot = f.join(&s, "bot", ParticipantKind::Agent);
+    let ann = f.join(&s, "ann", ParticipantKind::Person);
+    let wall = b.addr("wall");
+    let o = call(
+        &s,
+        bot,
+        &argv("entity move", &[&wall, "--by", "1,0", "--unit", "mm"]),
+    );
+    assert_eq!(
+        err_id(&o),
+        None,
+        "revert_refused_same_field_changed_since: the move"
+    );
+    let k = head(&s);
+    let o = call(
+        &s,
+        ann,
+        &argv("entity move", &[&wall, "--by", "0,2", "--unit", "mm"]),
+    );
+    assert_eq!(
+        err_id(&o),
+        None,
+        "revert_refused_same_field_changed_since: the later move"
+    );
+    index(&s);
+    let h = head(&s);
+    let before = bytes_at(&s, bot, h);
+    let o = revert(&s, bot, RevertWhat::Version(k));
+    let first = match res(&o).get("conflicts") {
+        Some(Value::List(l)) => l.first().map(|c| {
+            (
+                c.get("key").and_then(Value::as_str).map(str::to_owned),
+                c.get("by").and_then(Value::as_str).map(str::to_owned),
+                c.get("change").and_then(Value::as_u64),
+            )
+        }),
+        _ => None,
+    };
+    assert_eq!(
+        (err_id(&o), first, head(&s)),
+        (
+            Some("MPC-E731".to_owned()),
+            Some((Some(wall.clone()), Some("ann".to_owned()), Some(h))),
+            h
+        ),
+        "revert_refused_same_field_changed_since: refused, naming the wall and who ({})",
+        res(&o).to_json()
+    );
+    assert_eq!(
+        sha(&bytes_at(&s, bot, head(&s))),
+        sha(&before),
+        "revert_refused_same_field_changed_since: nothing written"
+    );
+}
+
+/// undo_redo_own_last_verb: an agent colours the wall; a person then colours another line. The
+/// agent's undo takes its own change away (the wall's colour back, the person's kept: the
+/// person's verb's own output on the first version) as a version with the verb `undo`; its
+/// redo puts it back (both colours, the bytes from before the undo), as `redo`. Kit plant:
+/// `undo-latest-any`.
+#[test]
+pub fn undo_redo_own_last_verb() {
+    let f = fx("undo");
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let s = f.open("plan.dxf", &b.bytes);
+    let bot = f.join(&s, "bot", ParticipantKind::Agent);
+    let ann = f.join(&s, "ann", ParticipantKind::Person);
+    let (wall, red) = (b.addr("wall"), b.addr("red"));
+    let mine = [wall.as_str(), "--color", "5"];
+    let theirs = [red.as_str(), "--color", "3"];
+    let o = call(&s, bot, &argv("entity set", &mine));
+    assert_eq!(
+        err_id(&o),
+        None,
+        "undo_redo_own_last_verb: the agent's verb"
+    );
+    let v = head(&s);
+    let o = call(&s, ann, &argv("entity set", &theirs));
+    assert_eq!(
+        err_id(&o),
+        None,
+        "undo_redo_own_last_verb: the person's verb"
+    );
+    index(&s);
+    let both = bytes_at(&s, bot, head(&s));
+    let u = revert(&s, bot, RevertWhat::Undo);
+    let theirs_alone = planned(&b.bytes, "entity set", &theirs);
+    assert_eq!(
+        (err_id(&u), head_entry(&s, bot)),
+        (None, (Some("undo".to_owned()), Some(v))),
+        "undo_redo_own_last_verb: the undo lands, of the agent's own version ({})",
+        res(&u).to_json()
+    );
+    assert_eq!(
+        sha(&bytes_at(&s, bot, head(&s))),
+        sha(&theirs_alone),
+        "undo_redo_own_last_verb: after the undo, the person's change alone"
+    );
+    index(&s);
+    let r = revert(&s, bot, RevertWhat::Redo);
+    assert_eq!(
+        (err_id(&r), head_entry(&s, bot).0),
+        (None, Some("redo".to_owned())),
+        "undo_redo_own_last_verb: the redo lands ({})",
+        res(&r).to_json()
+    );
+    assert_eq!(
+        sha(&bytes_at(&s, bot, head(&s))),
+        sha(&both),
+        "undo_redo_own_last_verb: after the redo, both changes, as before the undo"
+    );
 }

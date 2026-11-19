@@ -131,11 +131,13 @@ EOF
 }
 
 # Hidden from agents while off (0.46.17, K2's ruling): in an agent's
-# session (a session passport) `k2 help` leaves send-feedback out and
-# `k2 study send-feedback` is one line, while this server's settings answer
-# agents:false (the switch itself, not canSend or why: a drain hold wins
-# over agents_off there). One read per process, cached. Any failure (no
-# daemon, a refusal, an answer without the switch) shows everything as
+# session `k2 help` leaves send-feedback out and `k2 study send-feedback`
+# is one line, while this server's settings answer agents:false (the
+# switch itself, not canSend or why: a drain hold wins over agents_off
+# there) and senderKind:agent (the daemon's word for the caller: a person
+# typing in a K2 terminal tab is a person and sees everything). One read
+# per process, cached, only with a session passport. Any failure (no
+# daemon, a refusal, an answer without those fields) shows everything as
 # before. A terminal outside K2 (the owner token) never asks.
 _K2_SF_AGENTS_OFF=""
 _sf_agents_off_here() {
@@ -149,7 +151,8 @@ _sf_agents_off_here() {
 }
 
 # One settings read with the session passport, the cell socket first (as
-# _permission_probe). Succeeds only on 200 with "agents": false.
+# _permission_probe). Succeeds only on 200 with "agents": false and
+# "senderKind": "agent".
 _sf_agents_off_probe() {
     local sock out="" _K2_CFG=""
     sock="$(_hook_sock)"
@@ -170,7 +173,7 @@ try:
     v = json.load(sys.stdin)
 except Exception:
     sys.exit(1)
-sys.exit(0 if isinstance(v, dict) and v.get("agents") is False else 1)
+sys.exit(0 if isinstance(v, dict) and v.get("agents") is False and v.get("senderKind") == "agent" else 1)
 ' 2>/dev/null
 }
 

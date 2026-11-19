@@ -7,6 +7,8 @@
 #     k2 study send-feedback is one line (exit 0), in --json too;
 #   * the signal is the switch (agents), not canSend or why: with a drain
 #     hold in why, agents:false still hides it and agents:true shows it;
+#   * only for an agent (the daemon's senderKind): a person typing in a K2
+#     terminal tab (a passport whose senderKind is person) sees everything;
 #   * one settings read per process;
 #   * agents on, no daemon, or a refused read: the full help and page;
 #   * a person outside K2 (the owner token): the full help and page, and no
@@ -55,18 +57,18 @@ from urllib.parse import urlparse
 LOG, PORTF, MODE = sys.argv[1:4]
 PARTS = [{"id": "computer", "label": "Computer size and free space"}]
 
-def settings(mode):
+def settings(mode, kind):
     on = mode.startswith("on")
     v = {"enabled": True, "agents": on, "agentPlatform": False, "agentAttach": [], "agentDiagnostics": False,
          "agentScopes": ["cli"] if on else [], "agentsAsked": on, "agentsAskedAt": 1763538000000 if on else None,
          "agentsAskedBy": "owner" if on else None, "attachParts": PARTS, "rememberDiagnostics": False,
          "canEdit": False, "canSend": on, "endpoint": "https://feedback.example.test", "contactAddress": "",
-         "pending": 0, "service": {}, "ok": True}
+         "pending": 0, "service": {}, "senderKind": kind, "ok": True}
     if mode.endswith("-held"):
         v["canSend"] = False
         v["why"] = "needs_connect"
         v["message"] = "This server isn't paired with K2 Connect."
-    elif not on:
+    elif not on and kind == "agent":
         v["why"] = "agents_off"
         v["message"] = "Agents don't report K2 problems on this server: a person hasn't allowed it."
     return v
@@ -95,7 +97,10 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/product-feedback/settings":
             if mode == "refused":
                 return self.reply(403, {"ok": False, "error": "unauthorized", "message": "no"})
-            return self.reply(200, settings(mode))
+            # The daemon's caller kind: an agent's passport is an agent; a
+            # K2 terminal tab's passport and the owner token are a person.
+            kind = "agent" if self.headers.get("Authorization") == "Bearer passport-native" else "person"
+            return self.reply(200, settings(mode, kind))
         return self.reply(404, {"ok": False, "error": "not_found", "message": "no such route in the stub: " + path})
     do_GET = handle_any
     do_POST = handle_any
@@ -129,7 +134,9 @@ bad() { echo "  FAIL: $*" >&2; fail=$((fail + 1)); }
 
 # run <who> <args…>: who = person (a terminal outside K2: the owner token
 # on disk) | agent (a session passport over TCP) | agent-nodaemon (a
-# passport, nothing listening). Sets OUT, ERR, RC; the log starts empty.
+# passport, nothing listening) | shell (a person in a K2 terminal tab: a
+# passport the daemon calls a person). Sets OUT, ERR, RC; the log starts
+# empty.
 run() {
     local who="$1"; shift
     : > "$LOG"
@@ -137,6 +144,7 @@ run() {
     case "$who" in
         person) "$K2" "$@" </dev/null >"$SANDBOX/out" 2>"$SANDBOX/err"; RC=$? ;;
         agent) K2_PORT="$PORT" K2_HOOK_TOKEN=passport-native "$K2" "$@" </dev/null >"$SANDBOX/out" 2>"$SANDBOX/err"; RC=$? ;;
+        shell) K2_PORT="$PORT" K2_HOOK_TOKEN=shell-native "$K2" "$@" </dev/null >"$SANDBOX/out" 2>"$SANDBOX/err"; RC=$? ;;
         agent-nodaemon) K2_PORT=1 K2_HOOK_TOKEN=passport-native "$K2" "$@" </dev/null >"$SANDBOX/out" 2>"$SANDBOX/err"; RC=$? ;;
     esac
     set -e
@@ -210,7 +218,19 @@ for case_ in on on-held refused nodaemon; do
     want_eq "$case_: the full page" "$OUT" "$PERSON_PAGE"
 done
 
-echo "== a person while agents are off =="
+echo "== a person in a K2 terminal tab while agents are off =="
+for mode in off off-held; do
+    echo "$mode" > "$MODE"
+    run shell help
+    want_rc 0 "shell tab, $mode: help"
+    want_eq "shell tab, $mode: help is the person's" "$OUT" "$PERSON_HELP"
+    want_eq "shell tab, $mode: one settings read" "$(reqs $S)" "GET "
+    run shell study send-feedback
+    want_rc 0 "shell tab, $mode: study send-feedback"
+    want_eq "shell tab, $mode: the full page" "$OUT" "$PERSON_PAGE"
+done
+
+echo "== a person outside K2 while agents are off =="
 echo off > "$MODE"
 run person help
 want_eq "person, agents off: the same help" "$OUT" "$PERSON_HELP"

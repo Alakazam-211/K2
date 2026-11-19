@@ -620,3 +620,127 @@ impl PartMerge for ListPack {
         Resolution::Merged(out.into_bytes())
     }
 }
+
+/// One write's plan holds: its ranges are in order, apart and inside the file; the file with
+/// them applied (by this function, not the crate) is what the record-by-record writer gives;
+/// and `write` gives the same. `Err` names what failed; `Ok` is the plan's range count.
+pub fn plan_holds(
+    name_: &str,
+    p: &k2_mpc_opc::OpcPackage<'_>,
+    changes: &BTreeMap<String, k2_mpc_opc::Change>,
+) -> Result<usize, String> {
+    let bytes = p.bytes();
+    let plan = p
+        .write_plan(changes)
+        .map_err(|e| format!("{name_}: write_plan: {e}"))?;
+    let mut end = None;
+    for s in &plan {
+        if end.is_some_and(|e| s.at <= e) {
+            return Err(format!(
+                "{name_}: ranges out of order or touching at {}",
+                s.at
+            ));
+        }
+        let e = s.at.checked_add(s.len).filter(|&e| e <= bytes.len());
+        end = Some(e.ok_or_else(|| format!("{name_}: a range outside the file at {}", s.at))?);
+    }
+    // applied here, independently of the crate's own applier
+    let mut applied = Vec::new();
+    let mut at = 0;
+    for s in &plan {
+        applied.extend_from_slice(&bytes[at..s.at]);
+        applied.extend_from_slice(&s.with);
+        at = s.at + s.len;
+    }
+    applied.extend_from_slice(&bytes[at..]);
+    let whole = p
+        .write_by_records(changes)
+        .map_err(|e| format!("{name_}: write_by_records: {e}"))?;
+    if applied != whole {
+        return Err(format!(
+            "{name_}: the plan applied isn't the write ({} ranges, {} bytes against {})",
+            plan.len(),
+            applied.len(),
+            whole.len()
+        ));
+    }
+    if p.write(changes)
+        .map_err(|e| format!("{name_}: write: {e}"))?
+        != whole
+    {
+        return Err(format!("{name_}: write isn't its plan applied"));
+    }
+    Ok(plan.len())
+}
+
+/// The change sets the plan rows write on a package: none; the main part replaced; the first
+/// entry replaced; a part removed; the last entry removed; a part added; all three at once.
+pub fn plan_changes(
+    p: &k2_mpc_opc::OpcPackage<'_>,
+) -> Vec<(&'static str, BTreeMap<String, k2_mpc_opc::Change>)> {
+    use k2_mpc_opc::{name, Change};
+    let key_of = |i: usize| name::key(&p.zip.entries()[i].name);
+    let n = p.zip.entries().len();
+    let main = p
+        .parts
+        .keys()
+        .find(|k| Format::ALL.iter().any(|f| f.main() == k.as_str()))
+        .cloned()
+        .unwrap_or_else(|| key_of(n / 2));
+    let edited = |k: &str| {
+        let mut c = p.parts[k].content.clone();
+        c.extend_from_slice(b"<!-- planned -->");
+        Change::Replace(c)
+    };
+    let one = |k: String, c: Change| BTreeMap::from([(k, c)]);
+    let added = || Change::Add {
+        name: "customXml/planned9.xml".into(),
+        content: b"<?xml version=\"1.0\"?><item/>".to_vec(),
+    };
+    let first = key_of(0);
+    let last = key_of(n - 1);
+    let app = name::key("docProps/app.xml");
+    let removed = if p.parts.contains_key(&app) {
+        app
+    } else {
+        key_of(n / 2)
+    };
+    let mut all = one(main.clone(), edited(&main));
+    all.insert(removed.clone(), Change::Remove);
+    all.insert(name::key("customXml/planned9.xml"), added());
+    vec![
+        ("none", BTreeMap::new()),
+        ("main replaced", one(main.clone(), edited(&main))),
+        ("first replaced", one(first.clone(), edited(&first))),
+        ("one removed", one(removed, Change::Remove)),
+        ("last removed", one(last, Change::Remove)),
+        (
+            "one added",
+            one(name::key("customXml/planned9.xml"), added()),
+        ),
+        ("all three", all),
+    ]
+}
+
+/// Every default fixture's plans hold, for every change set (the plan leg). It fails unless
+/// some plan left a gap of the file's own bytes between two ranges.
+pub fn plans_hold() -> Result<(), String> {
+    let l = limits();
+    let (mut writes, mut ranges, mut gapped) = (0, 0, 0);
+    for (n, b) in fixtures() {
+        let p = k2_mpc_opc::OpcPackage::open(&b, &l).map_err(|e| format!("{n}: {e}"))?;
+        for (what, ch) in plan_changes(&p) {
+            let r = plan_holds(&format!("{n} ({what})"), &p, &ch)?;
+            writes += 1;
+            ranges += r;
+            gapped += usize::from(r > 1);
+        }
+    }
+    if writes == 0 || gapped == 0 {
+        return Err(format!(
+            "plans: {writes} writes, {gapped} with a gap: nothing exercised"
+        ));
+    }
+    println!("plans: {writes} writes, {ranges} ranges ({gapped} writes with more than one), each applied equal to the write");
+    Ok(())
+}

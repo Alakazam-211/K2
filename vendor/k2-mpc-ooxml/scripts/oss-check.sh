@@ -1,5 +1,5 @@
 #!/bin/sh
-# K-OSS-3: the repository carries its licence, MIT OR Apache-2.0. Fail unless
+# oss-check: the repository carries its licence, MIT OR Apache-2.0. Fail unless
 #   - LICENSE-MIT (the MIT licence) and LICENSE-APACHE (the Apache License, Version 2.0) are at
 #     the root, and NOTICE.md is there too;
 #   - every crate of ours ([package] in a tracked Cargo.toml) says
@@ -106,7 +106,7 @@ done < "$LIST"
 
 if [ -s "$OUT" ]; then
   cat "$OUT"
-  echo "oss-check: $(wc -l < "$OUT" | tr -d ' ') problem(s) ($crates crates, $pkgs package.json checked); K-OSS-3: MIT OR Apache-2.0" >&2
+  echo "oss-check: $(wc -l < "$OUT" | tr -d ' ') problem(s) ($crates crates, $pkgs package.json checked); the licence must be MIT OR Apache-2.0" >&2
   exit 1
 fi
 echo "oss-check: ok (LICENSE-MIT, LICENSE-APACHE, NOTICE.md; $crates crates, $pkgs package.json: $LIC)"

@@ -24,7 +24,7 @@ use crate::name::{self, CONTENT_TYPES};
 use crate::rels::Relationships;
 use crate::types::ContentTypes;
 use crate::xml;
-use crate::zip::{self, Package, Source};
+use crate::zip::{self, Package, Source, Span};
 
 /// The first bytes of a compound file: an encrypted package, or a legacy binary format.
 pub const CFB_MAGIC: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -179,9 +179,33 @@ impl<'a> OpcPackage<'a> {
     /// The package with `changes` spliced in: every other entry is copied raw, in place, so
     /// untouched parts keep their bytes, the zip's order and its timestamps; a replaced part
     /// keeps its headers; new parts go at the end, in key order. Content equal to a part's
-    /// old content keeps its raw record.
+    /// old content keeps its raw record. It is [`OpcPackage::write_plan`] applied to the
+    /// file's bytes.
     pub fn write(&self, changes: &BTreeMap<String, Change>) -> Result<Vec<u8>, Decline> {
-        let mut items: Vec<Source<'_, 'a>> = Vec::with_capacity(self.parts.len() + 4);
+        zip::apply(self.bytes(), &self.write_plan(changes)?)
+    }
+
+    /// What [`OpcPackage::write`] gives, as ranges of the file's bytes and what replaces each
+    /// (see [`zip::write_plan`]): a removed or replaced entry's record, new entries inserted
+    /// before the directory, and the directory and end record replaced by the new ones. In
+    /// order, apart, inside the file; every byte outside them is the file's own.
+    pub fn write_plan(&self, changes: &BTreeMap<String, Change>) -> Result<Vec<Span>, Decline> {
+        zip::write_plan(&self.zip, &self.items(changes)?)
+    }
+
+    /// The same package as [`OpcPackage::write`], built record by record with [`zip::write`]
+    /// rather than as ranges of the file: the tests hold the two equal.
+    pub fn write_by_records(&self, changes: &BTreeMap<String, Change>) -> Result<Vec<u8>, Decline> {
+        zip::write(&self.zip, &self.items(changes)?)
+    }
+
+    /// What goes in the package for `changes`, in order: each entry raw or replaced, unless
+    /// removed, then the new parts in key order.
+    fn items<'s>(
+        &'s self,
+        changes: &'s BTreeMap<String, Change>,
+    ) -> Result<Vec<Source<'s, 'a>>, Decline> {
+        let mut items: Vec<Source<'s, 'a>> = Vec::with_capacity(self.parts.len() + 4);
         for (i, e) in self.zip.entries().iter().enumerate() {
             let key = name::key(&e.name);
             match changes.get(&key) {
@@ -222,7 +246,7 @@ impl<'a> OpcPackage<'a> {
                 _ => {}
             }
         }
-        zip::write(&self.zip, &items)
+        Ok(items)
     }
 }
 

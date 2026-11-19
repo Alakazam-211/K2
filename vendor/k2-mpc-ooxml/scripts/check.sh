@@ -16,4 +16,5 @@ cargo test -q --locked -p k2-mpc-opc --features mutants --test mutants
 sh scripts/check-licences.sh
 sh scripts/oss-check.sh
 sh scripts/check-private.sh
+sh scripts/check-labels.sh
 echo "repo checks: ok"

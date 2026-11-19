@@ -5,13 +5,23 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::{fixtures, fixtures_hold, limits, second_reader};
+use common::{fixtures, fixtures_hold, limits, plans_hold, second_reader};
 use k2_mpc_opc::zip::Package;
 use k2_mpc_opc::{name, Change, OpcPackage};
 
 #[test]
 fn every_fixture_round_trips_byte_for_byte() {
     if let Err(e) = fixtures_hold() {
+        panic!("{e}");
+    }
+}
+
+/// write_plan_applied_equals_write: on every fixture, for each change set, the write's plan
+/// (ranges in order, apart, inside the file) applied to the file is the record-by-record write,
+/// and `write` is the same. Mutant: `opc_plan_skips_gap`.
+#[test]
+fn write_plan_applied_equals_write() {
+    if let Err(e) = plans_hold() {
         panic!("{e}");
     }
 }

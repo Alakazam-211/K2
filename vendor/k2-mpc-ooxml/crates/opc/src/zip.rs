@@ -116,7 +116,7 @@ pub struct Package<'a> {
     eocd: Range<usize>,
 }
 
-/// What [`write`] puts in the package for one entry.
+/// What [`write()`] puts in the package for one entry.
 #[derive(Debug, Clone, Copy)]
 pub enum Source<'p, 'a> {
     /// The entry's local record, copied byte for byte.
@@ -570,6 +570,180 @@ pub fn write(template: &Package<'_>, items: &[Source<'_, '_>]) -> Result<Vec<u8>
     put32(&mut out, at + 12, cd_size);
     put32(&mut out, at + 16, cd_off);
     Ok(out)
+}
+
+/// One range of a package's bytes and what replaces it: the `len` bytes at `at` become `with`
+/// (`len` 0: `with` is inserted at `at`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span {
+    pub at: usize,
+    pub len: usize,
+    pub with: Vec<u8>,
+}
+
+/// What [`write()`] gives for `items`, as spans over `template`'s bytes: in order of `at`,
+/// apart (two ranges that would touch are one), inside the file. An entry left out is its record's
+/// range replaced by nothing; a replaced entry is its record's range replaced by its new
+/// record; a new entry is inserted where it goes; the directory and the end record are one
+/// range replaced by the new ones (with any new entries at the end before them). Every other
+/// byte is the template's, copied in place. Each [`Source::Raw`] and [`Source::Replaced`] must
+/// be the template's own entry, in its order, each at most once (`zip_layout` otherwise: such
+/// a write isn't the template with ranges replaced).
+pub fn write_plan(template: &Package<'_>, items: &[Source<'_, '_>]) -> Result<Vec<Span>, Decline> {
+    let not_spliced = || {
+        Decline::new(
+            "zip_layout",
+            "a write that isn't the package with ranges replaced",
+        )
+    };
+    let entries = &template.entries;
+    // where the directory starts: new entries at the end are inserted there
+    let cd_start = template.eocd.start - directory_len(template);
+    let mut spans: Vec<Span> = Vec::new();
+    let mut directory = Vec::new();
+    // the output's length so far, and the next template entry not yet placed
+    let (mut written, mut next) = (0usize, 0usize);
+    let left_out = |spans: &mut Vec<Span>, from: usize, to: usize| {
+        for e in &entries[from..to] {
+            push_span(spans, e.record.start, e.record.len(), Vec::new());
+        }
+    };
+    for item in items {
+        let own = match *item {
+            Source::Raw(p, i) | Source::Replaced(p, i, _) => {
+                if !std::ptr::eq(p.bytes, template.bytes) || i < next || i >= entries.len() {
+                    return Err(not_spliced());
+                }
+                left_out(&mut spans, next, i);
+                next = i + 1;
+                Some(&entries[i])
+            }
+            Source::New(..) => None,
+        };
+        let offset = to_u32(written)?;
+        match (emit(item, offset, &mut directory)?, own) {
+            (Record::Copied(r), _) => written += r.len(),
+            (Record::Written(b), Some(e)) => {
+                written += b.len();
+                push_span(&mut spans, e.record.start, e.record.len(), b);
+            }
+            (Record::Written(b), None) => {
+                written += b.len();
+                // inserted before the next template entry's record, or before the directory
+                let at = entries.get(next).map_or(cd_start, |e| e.record.start);
+                push_span(&mut spans, at, 0, b);
+            }
+        }
+    }
+    left_out(&mut spans, next, entries.len());
+    let tail = tail(template, items.len(), to_u32(written)?, directory)?;
+    push_span(&mut spans, cd_start, template.bytes.len() - cd_start, tail);
+    Ok(spans)
+}
+
+/// `bytes` with each of `spans` applied: every byte outside them copied, each range replaced
+/// by its bytes. The spans must be in order of `at`, not overlapping, inside `bytes`
+/// (`zip_layout` otherwise).
+pub fn apply(bytes: &[u8], spans: &[Span]) -> Result<Vec<u8>, Decline> {
+    let bad = || Decline::new("zip_layout", "ranges out of order or outside the file");
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0usize;
+    for s in spans {
+        let end = s.at.checked_add(s.len).ok_or_else(bad)?;
+        if s.at < at || end > bytes.len() {
+            return Err(bad());
+        }
+        out.extend_from_slice(&bytes[at..s.at]);
+        out.extend_from_slice(&s.with);
+        at = end;
+    }
+    out.extend_from_slice(&bytes[at..]);
+    Ok(out)
+}
+
+/// Add a range after the last: one that touches it joins it.
+fn push_span(spans: &mut Vec<Span>, at: usize, len: usize, with: Vec<u8>) {
+    if len == 0 && with.is_empty() {
+        return;
+    }
+    if let Some(last) = spans.last_mut() {
+        let end = last.at + last.len;
+        // planted: a range that doesn't touch the last joins it anyway, dropping the template's
+        // bytes between them
+        if end == at || (end < at && mutant::active("opc_plan_skips_gap")) {
+            last.len = at + len - last.at;
+            last.with.extend_from_slice(&with);
+            return;
+        }
+    }
+    spans.push(Span { at, len, with });
+}
+
+/// The template's directory's length: from its offset to the end record.
+fn directory_len(template: &Package<'_>) -> usize {
+    template.entries.iter().map(|e| e.central.len()).sum()
+}
+
+/// One entry's local record as [`write`] puts it: the template's bytes, copied, or new bytes.
+enum Record<'a> {
+    Copied(&'a [u8]),
+    Written(Vec<u8>),
+}
+
+/// One item's local record (written at `offset`), its directory record appended to
+/// `directory`.
+fn emit<'a>(
+    item: &Source<'_, 'a>,
+    offset: u32,
+    directory: &mut Vec<u8>,
+) -> Result<Record<'a>, Decline> {
+    let mut rec = Vec::new();
+    match *item {
+        Source::Raw(p, i) if !mutant::active("zip_recompress_all") => {
+            let e = p
+                .entries
+                .get(i)
+                .ok_or_else(|| Decline::new("zip_corrupt", "no such entry"))?;
+            let at = directory.len();
+            directory.extend_from_slice(&p.bytes[e.central.clone()]);
+            put32(directory, at + 42, offset);
+            return Ok(Record::Copied(&p.bytes[e.record.clone()]));
+        }
+        Source::Raw(p, i) => {
+            let c = p.inflate(i)?;
+            let e = &p.entries[i];
+            write_replaced(&mut rec, directory, p, e, &c, offset)?;
+        }
+        Source::Replaced(p, i, c) => {
+            let e = p
+                .entries
+                .get(i)
+                .ok_or_else(|| Decline::new("zip_corrupt", "no such entry"))?;
+            write_replaced(&mut rec, directory, p, e, c, offset)?;
+        }
+        Source::New(name, c) => write_new(&mut rec, directory, name, c, offset)?,
+    }
+    Ok(Record::Written(rec))
+}
+
+/// The directory, then the template's end record (its comment kept) with the count, the
+/// directory's size and its offset (`cd_off`) of what was written.
+fn tail(
+    template: &Package<'_>,
+    count: usize,
+    cd_off: u32,
+    mut directory: Vec<u8>,
+) -> Result<Vec<u8>, Decline> {
+    let cd_size = to_u32(directory.len())?;
+    let count = u16::try_from(count)
+        .map_err(|_| Decline::new("zip_entries", "too many entries to write"))?;
+    let at = directory.len();
+    directory.extend_from_slice(&template.bytes[template.eocd.clone()]);
+    put16(&mut directory, at + 8, count);
+    put16(&mut directory, at + 10, count);
+    put32(&mut directory, at + 12, cd_size);
+    put32(&mut directory, at + 16, cd_off);
+    Ok(directory)
 }
 
 fn write_replaced(

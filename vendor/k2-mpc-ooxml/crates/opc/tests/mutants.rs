@@ -6,8 +6,8 @@
 mod common;
 
 use common::damage::refusals_hold;
-use common::fixtures_hold;
 use common::merges;
+use common::{fixtures_hold, plans_hold};
 use k2_mpc_opc::mutant::with;
 
 type Leg = fn() -> Result<(), String>;
@@ -20,6 +20,8 @@ const ROWS: &[(&str, Leg, &str)] = &[
     ("zip_no_tiling", refusals_hold, "refusals"),
     ("doctype_skip", refusals_hold, "refusals"),
     ("zip_recompress_all", fixtures_hold, "fixtures"),
+    // the write as ranges of the file
+    ("opc_plan_skips_gap", plans_hold, "plans"),
     // the merge: renaming, re-minting, rewriting, merging by key
     ("opc_no_rename", merges::two_images, "two images"),
     ("opc_no_rename", merges::two_slides, "two slides"),
@@ -44,6 +46,7 @@ const ROWS: &[(&str, Leg, &str)] = &[
 fn the_legs_pass_without_a_mutant() {
     refusals_hold().expect("refusals");
     fixtures_hold().expect("fixtures");
+    plans_hold().expect("plans");
     merges::named().expect("merge rows");
 }
 

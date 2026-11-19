@@ -2,7 +2,7 @@
 //! the `mutants` feature, [`active`] is a constant `false` and nothing here exists in a build.
 //!
 //! One switch serves this crate and the packs built on it: a pack's own `mutant` module
-//! re-exports [`with`] and [`active`], so a mutant planted through the pack reaches the
+//! re-exports `with` and [`active`], so a mutant planted through the pack reaches the
 //! package layer too (a pack's `mutants` feature turns on this crate's).
 
 #[cfg(feature = "mutants")]

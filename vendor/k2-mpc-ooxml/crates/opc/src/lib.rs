@@ -6,7 +6,8 @@
 //! - [`zip`]: a bounded zip reader that accepts only what it can reproduce exactly, and a
 //!   writer that copies untouched entries byte for byte (its module documentation says what a
 //!   byte-exact round trip needs).
-//! - [`OpcPackage`]: an open package; [`OpcPackage::write`] splices changes in.
+//! - [`OpcPackage`]: an open package; [`OpcPackage::write`] splices changes in, and
+//!   [`OpcPackage::write_plan`] gives the same write as ranges of the file's bytes.
 //! - [`types`] and [`rels`]: `[Content_Types].xml` and relationships parts, with the byte ranges
 //!   of what they hold.
 //! - [`merge`]: the package-level three-way merge; a format pack plugs in its own content
@@ -30,3 +31,4 @@ pub mod zip;
 pub use error::Decline;
 pub use limits::Limits;
 pub use package::{Change, OpcPackage, Part};
+pub use zip::Span;

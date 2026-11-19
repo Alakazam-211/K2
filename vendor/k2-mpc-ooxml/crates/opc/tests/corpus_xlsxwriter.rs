@@ -4,16 +4,16 @@
 //! files only, never their contents.
 //!
 //! On every file: the manifest's outcome; the package writes back to its own bytes; the
-//! second reader agrees on every entry; it has no package problem; a spliced edit changes only
-//! that entry; and a three-way merge of two edits apart holds both, every other entry theirs'
-//! raw record.
+//! second reader agrees on every entry; it has no package problem; each write's plan, applied,
+//! is the write; a spliced edit changes only that entry; and a three-way merge of two edits
+//! apart holds both, every other entry theirs' raw record.
 
 mod common;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use common::{limits, package_holds};
+use common::{limits, package_holds, plan_changes, plan_holds};
 use k2_mpc_opc::merge::{merge3_bytes, Generic, Outcome};
 use k2_mpc_opc::zip::Package;
 use k2_mpc_opc::{name, Change, OpcPackage};
@@ -76,6 +76,10 @@ fn one_file(n: &str, bytes: &[u8], expect: &str) -> Result<(), String> {
         Err(d) => return Err(format!("{n}: {} ({}), not {expect}", d.code, d.message)),
     };
     package_holds(n, bytes)?;
+    // each write's plan, applied, is the write
+    for (what, ch) in plan_changes(&p) {
+        plan_holds(&format!("{n} ({what})"), &p, &ch)?;
+    }
     // a spliced edit changes only its entry
     let a = edit_target(&p, "").ok_or_else(|| format!("{n}: no XML part"))?;
     let ours = with_comment(&p.parts[&a].content, "ours");

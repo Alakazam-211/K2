@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-opc"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crc32fast",
  "flate2",

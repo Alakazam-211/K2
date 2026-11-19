@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.2
+
+The crate version is `0.1.2`; `Cargo.lock` and `fuzz/Cargo.lock` record it. It names no kit. It
+pairs with the pptx pack's v0.1.10, which names it beside `../k2-mpc-ooxml`. As for v0.1.1, the tag
+is a cut commit that leaves out `checkers/`, `docs/checkers.md` and `fuzz/`.
+
+- **`OpcPackage::write_plan`**: a write as ranges of the file's bytes and what replaces each
+  (`zip::Span`: `at`, `len`, `with`), in order, apart and inside the file: a removed or replaced
+  entry's record, new entries inserted before the directory, and the directory and end record
+  replaced by the new ones. Every other byte is the file's own, so a host can store the result as
+  the old bytes with those ranges replaced. `OpcPackage::write` is the plan applied
+  (`zip::apply`); `zip::write_plan` does the same for any write of a package's own entries in
+  their order. `OpcPackage::write_by_records` builds the same package record by record.
+- Tests: `write_plan_applied_equals_write` on every fixture and change set (none, a part
+  replaced, the first entry replaced, a part removed, the last entry removed, a part added, all
+  three at once), the plan applied independently of the crate and held equal to the record by
+  record write; the same on every file of the xlsxwriter set; the mutant `opc_plan_skips_gap`
+  (two ranges joined across the file's bytes between them), caught by the plan leg.
+
 ## v0.1.1 (2026-11-12)
 
 The crate version is `0.1.1`; `Cargo.lock` and `fuzz/Cargo.lock` record it. No code or test

@@ -93,6 +93,16 @@ run() {
     set -e
 }
 
+# The prelude exports _K2_PY_PROXY_RULE, and every embedded Python block
+# that calls the daemon exec's it first. Without it the wake's Python stops
+# before its first request and its "|| echo no" hides that, so fn() takes
+# the definition from the bash source as the prelude leaves it.
+PY_PROXY_RULE_DEF="$(awk -v q="'" '$0 == "_K2_PY_PROXY_RULE=" q {on=1} on {print} on && $0 == q {exit}' "$CLI_BASH_SOURCE")"
+case "$PY_PROXY_RULE_DEF" in
+    *"install_opener"*) ;;
+    *) die "no _K2_PY_PROXY_RULE definition in $CLI_BASH_SOURCE" ;;
+esac
+
 # fn <names...> -- <env assignments...> -- <shell code>: define the named
 # functions from the bash source and run the code with them, in a shell
 # set up as the prelude leaves it. Sets OUT and RC.
@@ -102,6 +112,7 @@ fn() {
     shift
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
+    defs+="$PY_PROXY_RULE_DEF"$'\n'"export _K2_PY_PROXY_RULE"$'\n'
     for n in "${names[@]}"; do
         body="$(awk -v n="$n" '$0 ~ "^" n "\\(\\) \\{" {on=1} on {print} on && /^}/ {exit}' "$CLI_BASH_SOURCE")"
         [ -n "$body" ] || die "no function $n in $CLI_BASH_SOURCE"

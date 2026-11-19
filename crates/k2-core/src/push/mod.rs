@@ -213,6 +213,11 @@ pub struct HomeChatPush {
     pub sender_member_id: String,
     /// How this server names the sender (the title; capped at seal time).
     pub sender_name: String,
+    /// `data.avatarRev`: the sender's person-picture rev (the stored
+    /// picture's hash, `imageHash` in `GET /cli/people/picture` and
+    /// `pictureRev` in `GET /cli/home-chat/people`); the phone shows its
+    /// cached `person:<senderExt>` picture. `""` when they have none.
+    pub avatar_rev: String,
     /// The channel's name (channels only; `""` for a DM).
     pub channel_name: String,
     /// `data.unreadTotal` / `data.waitingTotal`: the Thread and project
@@ -1138,9 +1143,9 @@ impl PushEvent {
                     ("senderExt", h.sender_ext.clone()),
                     ("senderMemberId", h.sender_member_id.clone()),
                     ("senderName", h.sender_name.clone()),
-                    // People pictures don't exist yet: the phone draws
-                    // initials, keyed by `senderExt`.
-                    ("avatarRev", String::new()),
+                    // The sender's picture rev; `""` = no picture (the
+                    // phone draws initials, keyed by `senderExt`).
+                    ("avatarRev", h.avatar_rev.clone()),
                     ("unreadTotal", h.unread_total.clone()),
                     ("waitingTotal", h.waiting_total.clone()),
                 ]);

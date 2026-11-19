@@ -116,7 +116,7 @@ fn a_fake_feed_item_becomes_one_sealed_push() {
 
     let event = PushEvent::HomeChat(h.clone());
     let data = event.data();
-    for (k, v) in [("kind", "home_chat"), ("reason", "dm"), ("conversationId", "900"), ("convKind", "dm"), ("messageId", "880001"), ("count", "1"), ("mention", "0"), ("senderMemberId", "42"), ("senderName", "Sam Lee"), ("avatarRev", ""), ("homeUnread", "2")] {
+    for (k, v) in [("kind", "home_chat"), ("reason", "dm"), ("conversationId", "900"), ("convKind", "dm"), ("messageId", "880001"), ("count", "1"), ("mention", "0"), ("senderMemberId", "42"), ("senderName", "Sam Lee"), ("avatarRev", "rev-sam-hash"), ("homeUnread", "2")] {
         assert_eq!(data.get(k), Some(v), "data.{k}");
     }
     assert!(data.get("channelName").is_none(), "a DM has no channel name");
@@ -267,6 +267,7 @@ fn chat_push_event(msg: &str) -> PushEvent {
         sender_ext: "k2:connect:sam".into(),
         sender_member_id: "42".into(),
         sender_name: "Sam Lee".into(),
+        avatar_rev: String::new(),
         channel_name: "standup".into(),
         unread_total: "3".into(),
         waiting_total: "1".into(),
@@ -419,4 +420,44 @@ fn a_voice_chat_only_phone_gets_home_badges_and_nothing_else() {
     let t = crate::badge_push::totals_for("vc-badge").expect("totals");
     assert_eq!((t.total, t.waiting_total), (0, 0), "Home chat only");
     k2_core::push_devices::remove_device_because("vc-badge-phone", k2_core::push::device_log::Reason::PhoneOff).expect("cleanup");
+}
+
+/// Companion's follow-up (prd-home-chat-pushes-v1 §5): `GET
+/// /cli/home-chat/people` carries each person's picture rev, the same value
+/// a Home chat push names as `avatarRev` (the stored picture's hash, the
+/// `imageHash` of `GET /cli/people/picture`), and `null` for a person with
+/// no picture.
+#[test]
+fn people_rows_and_pushes_carry_the_same_picture_rev() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    use k2_core::person_picture;
+    k2_core::connect_users::add_user("pic-sam", "a-long-password-3").expect("add_user");
+    k2_core::connect_users::add_user("pic-kim", "a-long-password-3").expect("add_user");
+    let sam_id = k2_core::connect_users::user_uuid("pic-sam").expect("uuid").expect("an id");
+    let kim_id = k2_core::connect_users::user_uuid("pic-kim").expect("uuid").expect("an id");
+    let sam_ext = format!("k2:connect:{sam_id}");
+    let sam_key = format!("{}{sam_id}", person_picture::CONNECT_PREFIX);
+    let (owner_rev, sam_rev) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (
+            person_picture::set(&conn, person_picture::OWNER_KEY, b"jpeg-owner-rev-test", "owner").expect("owner picture"),
+            person_picture::set(&conn, &sam_key, b"jpeg-sam-rev-test", "pic-sam").expect("sam picture"),
+        )
+    };
+    let rows = people::list(&member()).expect("people");
+    let rev = |ext: &str| rows.iter().find(|r| r["ext"] == ext).unwrap_or_else(|| panic!("no row for {ext}: {rows:?}"))["pictureRev"].clone();
+    assert_eq!(rev("k2:owner"), json!(owner_rev));
+    assert_eq!(rev(&sam_ext), json!(sam_rev));
+    assert_eq!(rev(&format!("k2:connect:{kim_id}")), Value::Null, "no picture: null");
+    assert_eq!(people::picture_rev(&sam_ext), Some(sam_rev.clone()));
+    // The push names the same rev (the live env's lookup).
+    use super::chat_push::Env as _;
+    assert_eq!(chat_push::LiveEnv.avatar_rev(&sam_ext), sam_rev);
+    assert_eq!(chat_push::LiveEnv.avatar_rev(&format!("k2:connect:{kim_id}")), "", "empty only without a picture");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    person_picture::clear(&conn, person_picture::OWNER_KEY).expect("cleanup");
+    person_picture::clear(&conn, &sam_key).expect("cleanup");
 }

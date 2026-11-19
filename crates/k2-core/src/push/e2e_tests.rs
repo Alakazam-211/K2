@@ -2521,6 +2521,7 @@ fn home_chat_event(text: &str) -> PushEvent {
         sender_ext: "k2:connect:sender-canary".into(),
         sender_member_id: "member-canary-42".into(),
         sender_name: "SenderCanaryName".into(),
+        avatar_rev: "avatar-rev-canary-hash".into(),
         channel_name: "ChannelCanaryName".into(),
         unread_total: "3".into(),
         waiting_total: "1".into(),

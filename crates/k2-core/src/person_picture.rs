@@ -99,6 +99,26 @@ pub fn get(conn: &Connection, key: &str) -> Result<Option<Stored>, String> {
     .map_err(|e| format!("person picture: {e}"))
 }
 
+/// The storage key of a Home chat person's external id (`k2:owner` →
+/// `owner`, `k2:connect:<id>` → `connect:<id>`); `None` for anyone else
+/// (agents, App users).
+pub fn storage_key_of_ext(ext: &str) -> Option<String> {
+    if ext == "k2:owner" {
+        return Some(OWNER_KEY.to_string());
+    }
+    ext.strip_prefix("k2:connect:").filter(|id| !id.trim().is_empty()).map(|id| format!("{CONNECT_PREFIX}{id}"))
+}
+
+/// The picture rev of a Home chat person (prd-home-chat-pushes-v1 §5
+/// `avatarRev`): their stored picture's hash, the same `imageHash`
+/// `GET /cli/people/picture` lists. `None` when they have no picture.
+pub fn rev_of_ext(conn: &Connection, ext: &str) -> Result<Option<String>, String> {
+    let Some(key) = storage_key_of_ext(ext) else { return Ok(None) };
+    conn.query_row("SELECT image_hash FROM person_pictures WHERE person_key = ?1", params![key], |r| r.get::<_, String>(0))
+        .optional()
+        .map_err(|e| format!("person picture: {e}"))
+}
+
 /// Storage key → hash for every stored picture.
 pub fn hashes(conn: &Connection) -> Result<BTreeMap<String, String>, String> {
     let mut stmt = conn
@@ -163,6 +183,22 @@ mod tests {
         let c = Connection::open_in_memory().expect("open");
         crate::db::run_migrations(&c).expect("migrate");
         c
+    }
+
+    /// prd-home-chat-pushes-v1 §5: a Home chat person's rev is their stored
+    /// picture's hash (the owner's and a Connect login's), and none for a
+    /// person with no picture or anyone who isn't a box person.
+    #[test]
+    fn a_home_chat_persons_rev_is_the_picture_hash() {
+        let c = conn();
+        let owner = set(&c, OWNER_KEY, b"jpeg-owner", "owner").expect("set");
+        let sam = set(&c, "connect:0f8fad5b-0000", b"jpeg-sam", "sam").expect("set");
+        assert_eq!(rev_of_ext(&c, "k2:owner").unwrap(), Some(owner));
+        assert_eq!(rev_of_ext(&c, "k2:connect:0f8fad5b-0000").unwrap(), Some(sam));
+        assert_eq!(rev_of_ext(&c, "k2:connect:no-picture").unwrap(), None);
+        assert_eq!(rev_of_ext(&c, "k2:workspace:w1").unwrap(), None, "agents have their own");
+        assert_eq!(rev_of_ext(&c, "k2:connect:").unwrap(), None);
+        assert_eq!(get(&c, OWNER_KEY).unwrap().map(|s| s.hash), rev_of_ext(&c, "k2:owner").unwrap(), "the imageHash GET lists");
     }
 
     #[test]

@@ -117,7 +117,7 @@ pub(super) fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &
         // messages from others' (Sew names authors by member id).
         "/cli/home-chat/people" => Ok(json!({
             "ok": true,
-            "me": {"ext": c.ext, "memberId": people::ready_member(&c.ext)},
+            "me": {"ext": c.ext, "memberId": people::ready_member(&c.ext), "pictureRev": people::picture_rev(&c.ext)},
             "people": people::list(c).map_err(internal)?,
         })),
         "/cli/home-chat/channels" => channels(c, p),

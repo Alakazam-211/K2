@@ -104,6 +104,8 @@ pub trait Env: Send + Sync {
     fn sender(&self, item: &FeedItem) -> Option<Sender>;
     /// A channel's name (`""` unknown).
     fn channel_name(&self, conv: &str) -> String;
+    /// A sender's person-picture rev (`""` = no picture).
+    fn avatar_rev(&self, ext: &str) -> String;
     /// `ext` is still in the channel, or the DM isn't gone (HC-7).
     fn still_in(&self, ext: &str, conv: &str, dm: bool) -> bool;
     /// `ext`'s phones now (`None` = no live login: disabled, removed).
@@ -366,6 +368,7 @@ impl Coalescer {
             sender_ext: newest.sender.ext.clone(),
             sender_member_id: newest.sender_member_id.clone(),
             sender_name: newest.sender.name.clone(),
+            avatar_rev: env.avatar_rev(&newest.sender.ext),
             channel_name: if newest.dm { String::new() } else { env.channel_name(conv) },
             unread_total,
             waiting_total,
@@ -642,6 +645,12 @@ impl Env for LiveEnv {
         Some(Sender { ext, name })
     }
 
+    fn avatar_rev(&self, ext: &str) -> String {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::person_picture::rev_of_ext(&conn, ext).ok().flatten().unwrap_or_default()
+    }
+
     fn channel_name(&self, conv: &str) -> String {
         k2_core::tool_hook::with_home_chat_db(|c| k2_core::tool_hook::admin_channels::channel_by_id(c, conv))
             .ok()
@@ -784,6 +793,9 @@ pub(crate) mod tests {
         fn channel_name(&self, conv: &str) -> String {
             if conv == "901" { "standup".into() } else { String::new() }
         }
+        fn avatar_rev(&self, ext: &str) -> String {
+            if ext == SAM { "rev-sam-hash".into() } else { String::new() }
+        }
         fn still_in(&self, _: &str, _: &str, _: bool) -> bool {
             *self.still_in.lock().unwrap()
         }
@@ -863,6 +875,7 @@ pub(crate) mod tests {
         assert_eq!((h.sender_ext.as_str(), h.sender_name.as_str(), h.sender_member_id.as_str()), (SAM, "Sam Lee", "42"));
         assert_eq!((h.unread_total.as_str(), h.waiting_total.as_str(), h.home_unread.as_str()), ("3", "1", "2"));
         assert_eq!(h.preview, SECRET, "text when every switch is on");
+        assert_eq!(h.avatar_rev, "rev-sam-hash", "the sender's picture rev");
         assert_eq!(h.msg.as_ref().map(|m| m.text.as_str()), Some(SECRET));
         assert!(!h.passive);
         let e = PushEvent::HomeChat(h.clone());

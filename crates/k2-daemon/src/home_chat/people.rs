@@ -109,13 +109,40 @@ pub fn ready_member(ext: &str) -> Option<String> {
     hook::chat_member(ext).ok().flatten().filter(|m| m.state == members::ACTIVE).map(|m| m.member_id)
 }
 
-/// `GET /cli/home-chat/people` (§6.1).
+/// Every box person's picture rev by ext (prd-home-chat-pushes-v1 §5: the
+/// stored picture's hash, the `imageHash` of `GET /cli/people/picture`, and
+/// the `avatarRev` of their Home chat pushes). One read for the list.
+fn picture_revs() -> Result<std::collections::BTreeMap<String, String>, String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    Ok(k2_core::person_picture::hashes(&conn)?
+        .into_iter()
+        .filter_map(|(key, hash)| {
+            if key == k2_core::person_picture::OWNER_KEY {
+                return Some(("k2:owner".to_string(), hash));
+            }
+            key.strip_prefix(k2_core::person_picture::CONNECT_PREFIX).map(|id| (format!("k2:connect:{id}"), hash))
+        })
+        .collect())
+}
+
+/// One box person's picture rev (`None`: no picture).
+pub fn picture_rev(ext: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::person_picture::rev_of_ext(&conn, ext).ok().flatten()
+}
+
+/// `GET /cli/home-chat/people` (§6.1). Each row's `pictureRev` is the
+/// person's picture rev (`null`: no picture); the phone caches the picture
+/// as `person:<ext>` and a Home chat push's `avatarRev` names the same rev.
 pub fn list(c: &Caller) -> Result<Vec<Value>, String> {
+    let revs = picture_revs()?;
     let mut out = Vec::new();
     let show_role = c.is_admin();
     if c.ext != "k2:owner" {
         let member = ready_member("k2:owner");
-        let mut v = json!({"ext": "k2:owner", "username": "owner", "displayName": crate::workspace_msg::resolve_owner_from(), "picture": null, "ready": member.is_some(), "memberId": member});
+        let mut v = json!({"ext": "k2:owner", "username": "owner", "displayName": crate::workspace_msg::resolve_owner_from(), "picture": null, "pictureRev": revs.get("k2:owner"), "ready": member.is_some(), "memberId": member});
         if show_role {
             v["role"] = json!("owner");
         }
@@ -130,7 +157,7 @@ pub fn list(c: &Caller) -> Result<Vec<Value>, String> {
             continue;
         }
         let member = ready_member(&ext);
-        let mut v = json!({"ext": ext, "username": l.username, "displayName": l.display_name, "picture": null, "ready": member.is_some(), "memberId": member});
+        let mut v = json!({"ext": ext, "username": l.username, "displayName": l.display_name, "picture": null, "pictureRev": revs.get(&ext), "ready": member.is_some(), "memberId": member});
         if show_role {
             v["role"] = json!(l.role.as_wire());
         }

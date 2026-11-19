@@ -720,6 +720,7 @@ mod tests {
                 sender_ext: "k2:owner".into(),
                 sender_member_id: "1".into(),
                 sender_name: "Owner".into(),
+                avatar_rev: String::new(),
                 channel_name: String::new(),
                 unread_total: "0".into(),
                 waiting_total: "0".into(),

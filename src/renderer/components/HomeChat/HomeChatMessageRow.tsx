@@ -185,11 +185,13 @@ function quoteText(p: ReplyPreview): { from: string; line: string } {
 }
 
 /** A mention: the accent's edge on the left, clear of the bubble, and a
- *  faint wash. */
+ *  faint wash. The edge is a border, not a shadow: shadows come only from the
+ *  theme's shadow slots, and the accent here is the conversation's own. The
+ *  border plus padding keeps the text where it was (2 + 4). */
 const MENTION_ROW: CSSProperties = {
   background: `color-mix(in srgb, var(--zen-accent) ${MENTION_WASH_PCT}%, transparent)`,
-  boxShadow: 'inset 2px 0 0 var(--zen-accent)',
-  paddingLeft: 6,
+  borderLeft: '2px solid var(--zen-accent)',
+  paddingLeft: 4,
 }
 
 function prefersReducedMotion(): boolean {

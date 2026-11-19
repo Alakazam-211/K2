@@ -9,9 +9,13 @@
 #      and the token counts as set.
 #   2. Values that are not strings, a file that is not JSON, a JSON list:
 #      no subdomain, no token, exit 0.
+#   3. A passport healed during the first daemon call (the token check) is
+#      the one the second call (the tunnel status) sends.
 #
-# No daemon: HOME is a sandbox with no port or token files, and the env
-# carries no session, so the last line is the "daemon not running" one.
+# Sections 1 and 2 have no daemon: HOME is a sandbox with no port or token
+# files, and the env carries no session, so the last line is the "daemon
+# not running" one. Section 3 talks to a small Python stub. HOME is
+# sandboxed throughout.
 
 set -euo pipefail
 
@@ -31,7 +35,11 @@ assert_eq() {
 }
 
 WORK="$(mktemp -d -t k2-connect-status-XXXXXX)"
-cleanup() { rm -rf "$WORK"; }
+STUB_PID=""
+cleanup() {
+    if [ -n "$STUB_PID" ]; then kill "$STUB_PID" 2>/dev/null || true; wait "$STUB_PID" 2>/dev/null || true; fi
+    rm -rf "$WORK"
+}
 trap cleanup EXIT
 
 export HOME="$WORK/home"
@@ -106,6 +114,82 @@ for case_name in number list notjson; do
   Tunnel token:     no
 $NOT_RUNNING"
 done
+
+echo "== a passport healed in the first call is sent by the second =="
+OLD="sess42.oldsecretaaaa"
+NEW="sess42.newsecretbbbb"
+SECRETS="$WORK/secrets"
+mkdir -p "$SECRETS"
+# The daemon already dropped the env's passport: it accepts only the new
+# one, and its first refusal writes that one into the session's folder,
+# like an adoption finishing while the call was on its way.
+printf '%s\n' "$NEW" >"$WORK/valid"
+: >"$WORK/requests.log"
+python3 - "$WORK" "$NEW" <<'PYEOF' &
+import json, os, sys, urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+work, new = sys.argv[1], sys.argv[2]
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        q = urllib.parse.parse_qs(parsed.query)
+        presented = (q.get("token") or [""])[0] or (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+        with open(os.path.join(work, "requests.log"), "a") as f:
+            f.write("%s %s\n" % (parsed.path, presented))
+        with open(os.path.join(work, "valid")) as f:
+            ok = presented in f.read().split()
+        heal = os.path.join(work, "heal-on-refusal")
+        if not ok and os.path.exists(heal):
+            os.remove(heal)
+            with open(os.path.join(work, "secrets", ".k2-passport"), "w") as f:
+                f.write(new + "\n")
+            with open(os.path.join(work, "valid"), "w") as f:
+                f.write(new + "\n")
+        if not ok:
+            body, code = {"error": "Invalid or missing auth token"}, 403
+        elif parsed.path == "/cli/tunnel/config":
+            body, code = {"tokenSet": True}, 200
+        elif parsed.path == "/cli/tunnel/status":
+            body, code = {"running": False, "enabled": True}, 200
+        else:
+            body, code = {"error": "not found"}, 404
+        data = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *a):
+        pass
+
+srv = HTTPServer(("127.0.0.1", 0), H)
+with open(os.path.join(work, "stub.port.tmp"), "w") as f:
+    f.write(str(srv.server_address[1]))
+os.replace(os.path.join(work, "stub.port.tmp"), os.path.join(work, "stub.port"))
+srv.serve_forever()
+PYEOF
+STUB_PID=$!
+for _ in $(seq 1 100); do [ -s "$WORK/stub.port" ] && break; sleep 0.05; done
+[ -s "$WORK/stub.port" ] || { echo "FAIL: the stub never bound" >&2; exit 1; }
+STUB_PORT="$(cat "$WORK/stub.port")"
+
+tunnel "{'subdomain': 'acme'}"
+touch "$WORK/heal-on-refusal"
+run env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" \
+    K2_HOOK_TOKEN="$OLD" K2_SECRETS_DIR="$SECRETS" K2_PROJECT_PATH="$WORK" "$K2_CLI" connect status
+assert_eq "heal: exit 0" "$rc" "0"
+assert_eq "heal: the requests, in order" "$(cat "$WORK/requests.log")" "/cli/tunnel/config $OLD
+/cli/tunnel/config $NEW
+/cli/tunnel/status $NEW"
+assert_eq "heal: the whole output" "$(cat "$WORK/out")" "K2 Connect account
+  Account session: no
+  Paired subdomain: acme → https://acme.k2.dev
+  Tunnel token:     yes
+  Tunnel running:  no
+  State:           stopped"
 
 echo
 echo "connect_status_files: $pass passed, $fail failed"

@@ -49009,6 +49009,9 @@ elif isinstance(d, dict) and d.get("tokenUnreadable"):
 else:
     print("no")
 ' 2>/dev/null)" || token_set="no"
+        # That call ran in a subshell: a passport it healed is lost there.
+        # Take it up here so the status call below sends it.
+        _cli_use_healed_passport || true
     fi
     echo "K2 Connect account"
     echo "  Account session: $acc_present$([ -n "$acc_email" ] && echo "  ($acc_email)")"

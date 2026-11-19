@@ -12,9 +12,13 @@
 //!   message again with the same id and a fresh `sent_at` (a copy older
 //!   than 300 s is refused live as stale; the receiver dedupes on the id).
 //! - **Hold only for now**: K2 seals to the friend's pinned key and parks
-//!   it on the plane. Live delivery to `https://<label>.postal.bot/p5/msg`
-//!   (both ways) is S6, which waits on the plane routing K2 boxes'
-//!   `<label>.postal.bot` names (K2 Web's P-6).
+//!   it on the plane. Live delivery (`POST https://<label>.postal.bot/postal/v2/msg`)
+//!   is S6, which waits on the plane routing K2 boxes' `<label>.postal.bot`
+//!   names (K2 Web's P-6). Every live reply goes through the SDK's
+//!   `Item::on_live` ([`on_live`]), which follows the wire v2 reply table:
+//!   a 429 from a receiver that is up but busy is **hold now**, like a 503,
+//!   a refused connection or a 404; a timeout, a 408 or another 5xx retries
+//!   live with backoff.
 //! - The answer carries the badge of the copy the plane holds and a status:
 //!   `queued` (not on the plane yet), `held`, `delivered` (the receiving
 //!   host stored it), `failed` (with the reason).
@@ -161,6 +165,17 @@ fn jitter() -> f64 {
     f64::from(u16::from_le_bytes(b)) / 65_536.0
 }
 
+/// Live delivery (S6) waits on the plane's P-6; until then every message
+/// goes by hold.
+const LIVE_SEND: bool = false;
+
+/// One live try's reply, fed to the SDK's outbox: it decides hold now
+/// (429, 503 `host_down`, refused, 404), retry live with backoff (timeout,
+/// 408, other 5xx) or final (other 4xx). K2 never second-guesses it.
+pub fn on_live(o: &mut Outgoing, reply: &k2_core::postal::sdk::outbox::Live, now: i64) {
+    o.item.on_live(reply, now, jitter());
+}
+
 /// The state word the answer and the record carry.
 pub fn state_word(o: &Outgoing) -> &'static str {
     match &o.item.state {
@@ -249,6 +264,7 @@ pub fn advance(net: &Plane, o: &mut Outgoing) -> Result<(), CallError> {
             }
             Step::Live => {
                 // Not in this release (S6): hold instead.
+                debug_assert!(!LIVE_SEND, "live send is S6: its replies go through on_live");
                 o.item.hold_next = true;
             }
             Step::Hold => {
@@ -325,6 +341,39 @@ pub fn on_receipt_event(net: &Plane, client_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn outgoing() -> Outgoing {
+        Outgoing {
+            item: Item::new("01ARZ3NDEKTSV4RRFFQ69G5FAV", Address::parse("scout::bravo.postal.bot").unwrap(), 1_800_000_000),
+            handle_id: "h".into(),
+            workspace_id: "w".into(),
+            from: "alice::acme.postal.bot".into(),
+            body: "hi".into(),
+            content_type: CONTENT_TYPE.into(),
+            wake: true,
+            tray: false,
+            badge: None,
+            record_id: "m_aaaaaaaaaa".into(),
+        }
+    }
+
+    #[test]
+    fn a_live_429_holds_now_and_a_timeout_retries_live() {
+        use k2_core::postal::sdk::outbox::Live;
+        let t = 1_800_000_000;
+        let mut busy = outgoing();
+        on_live(&mut busy, &Live::Status(429, r#"{"error":{"code":"rate_limited","message":"","retry_after_s":30}}"#.into()), t);
+        assert_eq!(busy.item.next(t), Step::Hold, "a receiver that is up but busy: hold now");
+        let mut down = outgoing();
+        on_live(&mut down, &Live::Status(503, r#"{"error":{"code":"host_down","message":""}}"#.into()), t);
+        assert_eq!(down.item.next(t), Step::Hold);
+        let mut slow = outgoing();
+        on_live(&mut slow, &Live::Transport("timed out".into()), t);
+        assert!(matches!(slow.item.next(t), Step::Wait { .. }), "a timeout retries live later");
+        let mut refused = outgoing();
+        on_live(&mut refused, &Live::Status(403, r#"{"error":{"code":"not_connected","message":""}}"#.into()), t);
+        assert_eq!((refused.item.next(t), state_word(&refused)), (Step::Done, "failed"));
+    }
 
     #[test]
     fn the_backstop_refuses_a_text_with_a_vault_value() {

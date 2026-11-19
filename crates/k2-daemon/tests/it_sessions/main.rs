@@ -27,6 +27,7 @@ mod boot_status_views_integration;
 mod boot_trash_hang_integration;
 mod canonical_session_integration;
 mod daemon_port_stability_integration;
+mod daemon_stop_slice_pending_cli;
 mod grid_emitter_integration;
 mod heartbeat_creation_traps_integration;
 mod heartbeat_daemon_tick_integration;

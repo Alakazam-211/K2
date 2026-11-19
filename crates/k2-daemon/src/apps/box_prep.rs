@@ -615,6 +615,11 @@ pub fn doctor(f: &Facts) -> J {
     finish(out, f, active, configured)
 }
 
+/// What applies a moved daemon slice: a reboot. Killing every process the
+/// unit left behind works too, but it ends every agent session.
+pub const SLICE_FIX: &str = "reboot the box tonight (or at a quiet time); killing every process the daemon's unit left \
+     (systemctl kill --kill-whom=all, which ends every agent session) before a start also applies it";
+
 const GUARD_FIX: &str = "k2 app box prepare --cores-mem-min <MiB> (owner): it adds the restart guard (k2-delegate-subgroup.conf)";
 
 /// S17 / AR18 + 0.46.16: the agents' leaf (`k2_core::agents_leaf::
@@ -671,11 +676,12 @@ fn agents_leaf_check(v: Option<&J>) -> Check {
     )
 }
 
-/// 0.46.16: `Slice=` moves a unit only when systemd makes its cgroup
-/// afresh (a stop and start with none of its processes left, or a reboot);
-/// a restart keeps the old slice, so the cores' `MemoryMin` floor doesn't
-/// cover the daemon yet. Only when the unit's slice and the running one
-/// are both known.
+/// 0.46.16: `Slice=` moves the daemon only at a reboot. A restart keeps the
+/// old slice, so the cores' `MemoryMin` floor doesn't cover the daemon yet;
+/// a stop then start while its processes live (KillMode=process: ptyd,
+/// agent sessions, frpc, published services) fails to start it at all
+/// (verified on systemd 255), so K2 never suggests one. Only when the
+/// unit's slice and the running one are both known.
 fn daemon_slice_check(v: Option<&J>) -> Option<Check> {
     let v = v?;
     let (want, run) = (v["unitSlice"].as_str()?, v["runningSlice"].as_str()?);
@@ -686,10 +692,10 @@ fn daemon_slice_check(v: Option<&J>) -> Option<Check> {
             "daemonSlice",
             "warn",
             format!(
-                "the daemon runs in {run}, its unit says {want}: the new slice (and its MemoryMin floor) applies only after a stop and start \
-                 of the unit with none of its processes left, or a reboot (a restart keeps the old slice)"
+                "the daemon runs in {run}, its unit says {want}: the cores' memory floor covers it only after a reboot \
+                 (a restart keeps the old slice; don't stop and start the daemon for it: with its agents and other processes alive the start fails)"
             ),
-            Some("reboot the box when convenient (or stop the daemon, its k2-ptyd and agent sessions, then start it)"),
+            Some(SLICE_FIX),
         )
     })
 }
@@ -1185,6 +1191,9 @@ pub(crate) fn prepare_core(opts: &PrepareOpts, pod: &super::podman_install::Podm
             if let Some(n) = prepare_notes(&opts, &doc) {
                 v["notes"] = n;
             }
+            if let Some(a) = apply_offer(&opts, &doc) {
+                v["apply"] = json!(a);
+            }
             v["box"] = doc;
             Ok(v)
         }
@@ -1205,14 +1214,26 @@ pub(crate) fn prepare_core(opts: &PrepareOpts, pod: &super::podman_install::Podm
 
 /// 0.46.16: what the owner still has to do after a prepare with a cores
 /// floor: restart the daemon (Delegate= and its restart guard apply at the
-/// next start), and, while its slice still differs, a stop and start or a
-/// reboot (`daemonSlice`).
+/// next start), and, while its slice still differs, a reboot for the
+/// memory floor (`daemonSlice`). Never a stop and start.
+/// How the owner applies a prepare with a cores floor (`apply` in its
+/// answer; the 0.46.17 "Get this server ready" card reads it):
+/// `reboot_tonight` while the daemon's slice moved (only a reboot applies
+/// it; a stop then start with live agents fails to start the daemon), else
+/// `restart` (the restart guard and Delegate= apply at the next start). Never
+/// a stop and start.
+pub fn apply_offer(opts: &PrepareOpts, doc: &J) -> Option<&'static str> {
+    opts.cores_mem_min_mib?;
+    let pending = doc["checks"].as_array().is_some_and(|a| a.iter().any(|c| c["id"] == "daemonSlice" && c["status"] != "ok"));
+    Some(if pending { "reboot_tonight" } else { "restart" })
+}
+
 pub fn prepare_notes(opts: &PrepareOpts, doc: &J) -> Option<J> {
     opts.cores_mem_min_mib?;
     let mut notes = vec![json!("Restart the daemon so Delegate=yes and its restart guard (k2-delegate-subgroup.conf) apply")];
     let slice = doc["checks"].as_array().and_then(|a| a.iter().find(|c| c["id"] == "daemonSlice"));
     if let Some(ch) = slice.filter(|c| c["status"] != "ok") {
-        notes.push(ch["detail"].clone());
+        notes.push(json!(format!("Reboot the box to apply the cores' memory floor to the daemon: {}", ch["detail"].as_str().unwrap_or(""))));
     }
     Some(J::Array(notes))
 }
@@ -1421,13 +1442,19 @@ mod tests {
         f.agents_leaf.as_mut().unwrap()["runningSlice"] = json!("system.slice");
         let d = doctor(&f);
         assert_eq!(status_of(&d, "daemonSlice"), "warn", "{d}");
-        assert!(d.to_string().contains("a restart keeps the old slice"), "{d}");
+        let row = d["checks"].as_array().unwrap().iter().find(|c| c["id"] == "daemonSlice").unwrap().to_string();
+        assert!(row.contains("only after a reboot") && row.contains("reboot the box tonight"), "{row}");
+        assert!(!row.contains("stop and start of") && !row.contains("then start it"), "never a stop and start: {row}");
         assert_eq!(d["ready"], true);
         let o = PrepareOpts { runtime: OciRuntime::Crun, cores_mem_min_mib: Some(768), budget: None };
         let n = prepare_notes(&o, &d).unwrap();
         assert_eq!(n.as_array().unwrap().len(), 2, "{n}");
-        assert!(n[1].as_str().unwrap().contains("stop and start"), "{n}");
-        assert_eq!(prepare_notes(&PrepareOpts { cores_mem_min_mib: None, ..o }, &d), None, "no cores floor, nothing to say");
+        assert!(n[1].as_str().unwrap().starts_with("Reboot the box"), "{n}");
+        assert_eq!(apply_offer(&o, &d), Some("reboot_tonight"), "the slice moved: a reboot, never a stop and start");
+        assert_eq!(prepare_notes(&PrepareOpts { cores_mem_min_mib: None, ..o.clone() }, &d), None, "no cores floor, nothing to say");
+        assert_eq!(apply_offer(&PrepareOpts { cores_mem_min_mib: None, ..o.clone() }, &d), None);
+        f.agents_leaf.as_mut().unwrap()["runningSlice"] = json!("k2cores.slice");
+        assert_eq!(apply_offer(&o, &doctor(&f)), Some("restart"), "the slice is where the unit says: a restart applies the guard");
     }
 
     /// The daemon and the root helper agree on the guard's names.
@@ -1850,6 +1877,35 @@ mod tests {
                 k2_root_proto::Class::Open
             };
             assert_eq!(k2_root_proto::Verb::parse(&r).unwrap().class(), want, "{argv:?}");
+        }
+    }
+
+    /// 0.46.16: nothing box prep runs (the owner's prepare, the automatic
+    /// prep, which runs the same plan, and the boot re-apply) stops, starts,
+    /// restarts or kills a unit. A stop then start of the daemon while its
+    /// agents live fails to start it once its slice moved; K2 leaves the
+    /// restart (and the reboot for the slice) to the owner.
+    #[test]
+    fn box_prep_never_stops_or_starts_a_unit() {
+        let mut drift = good_status();
+        drift["nft"]["current"] = json!(false);
+        drift["ioCost"]["enabled"] = json!(false);
+        drift["reservedPorts"]["covered"] = json!(false);
+        drift["mac"]["applied"] = json!(false);
+        drift["coresSlice"] = json!({"present": true, "memoryMin": "768M", "daemonUnits": ["k2-daemon.service"],
+                                     "daemonGuard": {"k2-daemon.service": "missing"}});
+        let mut all = reapply_plan(Some(&drift));
+        assert!(all.iter().any(|a| a.join(" ") == "apps cores-slice 768"), "{all:?}");
+        for runtime in [OciRuntime::Crun, OciRuntime::Youki] {
+            all.extend(plan(&PrepareOpts { runtime, cores_mem_min_mib: Some(768), budget: Some((4096, 4096)) }));
+            all.extend(super::super::podman_install::plan_with_install(plan(&PrepareOpts { runtime, cores_mem_min_mib: Some(768), budget: None })));
+        }
+        for argv in &all {
+            for bad in ["stop", "start", "restart", "try-restart", "kill", "reboot", "systemctl"] {
+                assert!(!argv.iter().any(|a| a == bad), "{argv:?} would {bad} a unit");
+            }
+            assert_ne!(argv.first().map(String::as_str), Some("creds"), "{argv:?}: creds restart restarts units");
+            assert_ne!(argv.first().map(String::as_str), Some("daemon"), "{argv:?}: the daemon's own unit verbs");
         }
     }
 

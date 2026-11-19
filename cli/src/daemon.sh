@@ -32,6 +32,22 @@ _daemon_write_stop_intent() {
     mv -f "$tmp" "$dir/$name.json"
 }
 
+# "<running slice> <unit's Slice=>" when they differ (box prep's cores floor
+# moved the unit to k2cores.slice): systemd moves the daemon only at a
+# reboot, and a start after a stop FAILS while the unit's processes from
+# this run live (KillMode=process: k2-ptyd, agent sessions, frpc, published
+# services). Nothing otherwise.
+_daemon_slice_pending() {
+    local scope="$1" unit="$2" want cg run
+    want=$(_daemon_systemctl "$scope" show -p Slice --value "$unit" 2>/dev/null) || return 1
+    cg=$(_daemon_systemctl "$scope" show -p ControlGroup --value "$unit" 2>/dev/null) || return 1
+    [ -n "$want" ] && [ -n "$cg" ] || return 1
+    run=${cg%/*}; run=${run##*/}
+    [ -n "$run" ] || run="-.slice"
+    [ "$run" != "$want" ] || return 1
+    printf '%s %s\n' "$run" "$want"
+}
+
 # `k2 daemon stop --keep-agents` (Linux under systemd): a maintenance stop.
 # The daemon stops; agents keep running in k2-ptyd and the next start adopts
 # them, as after a restart. Needs the unit's KillMode=process (K2's units
@@ -48,6 +64,12 @@ _daemon_stop_keeping_agents() {
         exit 2
     fi
     scope=${su%% *}; unit=${su#* }
+    local pend
+    if pend=$(_daemon_slice_pending "$scope" "$unit"); then
+        # The agents would outlive the stop, and the start after it fails.
+        printf '{"error":"slice_pending","hint":"the daemon runs in %s but its unit says %s: a stop that keeps agents would leave its next start failing. Restart instead (k2 daemon restart keeps agents), and reboot the box to apply the new slice"}\n' "${pend%% *}" "${pend#* }" >&2
+        exit 2
+    fi
     rm -f "$K2_HOME/run/stop-intent.json"
     _daemon_write_stop_intent cli keep-intent || { echo "daemon stop: could not write $K2_HOME/run/keep-intent.json" >&2; exit 1; }
     if _daemon_systemctl "$scope" stop "$unit"; then
@@ -285,8 +307,11 @@ cmd_daemon_stop() {
     fi
     case "$(_daemon_os)" in
         linux)
-            local su scope unit
+            local su scope unit pend
             su=$(_daemon_linux_unit) || su=""
+            if [ -n "$su" ] && pend=$(_daemon_slice_pending "${su%% *}" "${su#* }"); then
+                echo "Note: the daemon runs in ${pend%% *} but its unit says ${pend#* }. While processes from this run live (frpc, published services), k2 daemon start fails; reboot the box to start it in the new slice." >&2
+            fi
             _daemon_write_stop_intent cli || true
             if [ -z "$su" ]; then
                 # No systemd unit (a supervisor-less box, dev): ask the daemon.

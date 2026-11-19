@@ -31,7 +31,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Servers
 - **The daemon restarts cleanly after box prep's cores floor.** On a server prepared with `k2 app box prepare --cores-mem-min`, the second restart of the daemon could fail over and over with `status=219/CGROUP`. Box prep now adds `k2-delegate-subgroup.conf` to the daemon's unit (`DelegateSubgroup=daemon` on systemd 254 and newer, a cleanup step after each stop on older systemd), and the daemon never splits its unit without it. Run `k2 app box prepare --cores-mem-min <MiB>` again on a server prepared before this release; K2 also adds it by itself at the next boot.
 - **Agent sessions sit in their own memory budget.** Sessions that survived a restart, and anything they started, now move into the agents' cgroup too, not only new ones.
-- **`k2 app box doctor` says more.** The `agentsLeaf` row fails when the next restart would crash-loop, and warns when agent sessions run outside their budget. A new `daemonSlice` row warns when the daemon still runs in its old slice: a slice change only takes effect after a full stop and start (or a reboot), not a restart, and `k2 app box prepare` now says so.
+- **`k2 app box doctor` says more.** The `agentsLeaf` row fails when the next restart would crash-loop, and warns when agent sessions run outside their budget. A new `daemonSlice` row warns when the daemon still runs in its old slice: the cores' memory floor reaches the daemon only after a reboot (a restart keeps the old slice), and `k2 app box prepare` now says so.
+- **`k2 daemon stop --keep-agents` waits for that reboot.** While the daemon's slice is about to change, a stop that keeps agents would leave the next start failing, so it refuses and points at `k2 daemon restart` (which keeps agents) and a reboot.
 
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 

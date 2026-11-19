@@ -1361,7 +1361,8 @@ fn cores_slice_writes_the_daemons_restart_guard_per_systemd_version() {
     assert!(read(&t, "/etc/systemd/system/k2-daemon.service.d/k2-cores.conf").contains("\nDelegate=yes\n"));
     assert_eq!(v["daemonGuard"], "DelegateSubgroup");
     assert_eq!(v["systemd"], 255);
-    assert!(v["sliceMovesAfter"].as_str().unwrap().contains("reboot"));
+    let moves = v["sliceMovesAfter"].as_str().unwrap();
+    assert!(moves.starts_with("a reboot") && moves.contains("never stop and start"), "{moves}");
     assert!(!t.p("/etc/systemd/system/postgresql@.service.d/k2-delegate-subgroup.conf").exists());
     let st = json(&t.call(&["apps", "status"]));
     assert_eq!(st["coresSlice"]["daemonGuard"]["k2-daemon.service"], "ok", "{st}");

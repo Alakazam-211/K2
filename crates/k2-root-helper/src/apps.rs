@@ -2012,12 +2012,13 @@ pub fn cores_slice(ctx: &Ctx, who: &Caller, mem_min: Option<u64>) -> HResult<J> 
         "units": names,
         "changed": changed,
         // K2 restarts nothing here. The restart guard and Delegate= apply
-        // at the unit's next start (a restart is one); Slice= only moves a
-        // unit whose cgroup systemd makes afresh: a stop and a start with
-        // no process left behind (KillMode=process keeps ptyd and agent
-        // sessions), or a reboot.
+        // at the unit's next start (a restart is one). Slice= moves the
+        // daemon only at a reboot: a restart keeps the old slice, and a
+        // stop then start while its processes live (KillMode=process keeps
+        // ptyd, agent sessions, frpc) fails to start the unit at all
+        // (verified on systemd 255). Never stop and start it for this.
         "pendingRestart": if changed { names.clone() } else { Vec::new() },
-        "sliceMovesAfter": "a stop and start of the unit with none of its processes left, or a reboot (a restart keeps the old slice)",
+        "sliceMovesAfter": "a reboot (a restart keeps the old slice; never stop and start the daemon for it: with its processes alive the start fails)",
         "daemonGuard": (mem_min.is_some() && units.iter().any(|(_, c)| *c == Core::Daemon)).then(|| {
             if sysd_version.is_some_and(|v| v >= DELEGATE_SUBGROUP_MIN_SYSTEMD) { "DelegateSubgroup" } else { "ExecStopPost" }
         }),

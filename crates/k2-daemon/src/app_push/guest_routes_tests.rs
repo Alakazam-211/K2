@@ -288,6 +288,9 @@ fn viewing_takes_an_app_chat_from_a_chat_member() {
     let (st, v, _) = call(VIEWING, &dana, true, body("chat:901"), &[]);
     assert_eq!((st, code(&v)), (403, "skin_room"), "no chat grant yet: {v}");
     let pid = dana.principal_id.clone().expect("a guest");
+    k2_core::tool_hook::allow_target_off_linux_for_tests(true);
+    k2_core::tool_hook::set_target(k2_core::tool_hook::CHAT_KIND, true, Some("/tmp/k2-test-sew.sock"), Some("/tmp/k2-test-sew.token"), "owner-token")
+        .expect("chat set up");
     skin::create_grant(&skin::SkinGrantWrite {
         subject_kind: "principal".into(),
         subject_id: pid.clone(),

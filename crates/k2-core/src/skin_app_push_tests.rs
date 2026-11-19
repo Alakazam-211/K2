@@ -519,6 +519,9 @@ fn chat_pushes_default_off_and_pick_only_space_members_with_devices() {
     assert!(user_apps("no-such-principal").expect("apps").is_empty());
     // The chat grant decides membership at flush.
     assert!(!still_chat_member(&f.app, &f.dana, None).expect("check"), "no chat member grant yet");
+    crate::tool_hook::allow_target_off_linux_for_tests(true);
+    crate::tool_hook::set_target(crate::tool_hook::CHAT_KIND, true, Some("/tmp/k2-test-sew.sock"), Some("/tmp/k2-test-sew.token"), "owner-token")
+        .expect("chat set up");
     crate::skin::create_grant(&crate::skin::SkinGrantWrite {
         subject_kind: "principal".into(),
         subject_id: f.dana.clone(),

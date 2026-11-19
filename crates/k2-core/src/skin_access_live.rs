@@ -260,6 +260,11 @@ mod tests {
         // it would re-resolve every pass and find nothing changed.
         ("app_recording_locks", "the CUI/FCI lock: narrows the Space row sent to Sew, which refuses the start; no pass resolve reads it"),
         ("app_push_config", "push settings"),
+        // Home chat pushes (prd-home-chat-pushes-v1, 0.46.16): the feed
+        // pollers' cursors and each person's push choices. A pass never
+        // reads them; they only decide what a phone is told.
+        ("home_chat_feed_cursor", "where each Sew person feed poller has read to"),
+        ("home_chat_push_prefs", "a person's Home chat push choices"),
         ("app_push_devices", "push devices"),
         ("app_test_guests", "marks test guests"),
         // 0.46.9: account deletion. A request turns the person's grants off
@@ -307,6 +312,7 @@ mod tests {
         ("tool_app_member_lists", "toward Sew"),
         ("tool_app_service_retire", "toward Sew"),
         ("tool_app_space_channels", "toward Sew"),
+        ("tool_app_space_history", "when each Space was bound to which App: routes App chat pushes, never a pass"),
         ("tool_app_space_kept", "toward Sew"),
         ("tool_app_space_leaving", "toward Sew"),
         ("tool_app_space_member_channels", "toward Sew"),

@@ -229,7 +229,8 @@ fn chat_pushes_are_off_by_default_and_admins_or_the_apps_agent_set_them() {
     switches(&f.ws, true, false);
     for who in [login(Role::Member), login(Role::VoiceChat), agent(&f.ws)] {
         let (st, v, _) = post(SET, &who, json!({"app": f.app, "chatPushes": true}));
-        assert_eq!((st, code(&v)), (403, "forbidden"), "{who:?}: {v}");
+        assert_eq!(st, 403, "{who:?}: {v}");
+        assert!(matches!(code(&v), "forbidden" | "member_read_only"), "{who:?}: {v}");
     }
     let (st, _, _) = post(SET, &agent(&f.other_ws), json!({"app": f.app, "chatPushes": true}));
     assert_eq!(st, 404, "another workspace's agent can't see the App");

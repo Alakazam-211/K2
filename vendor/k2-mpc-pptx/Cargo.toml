@@ -13,7 +13,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # The kit (k2-mpc-base), by path: checked out side by side, as the other type packs do (a host
-# vendors both repos under one folder). Pinned to the kit's v0.22.0 (e085cada, its public cut):
+# vendors both repos under one folder). Pinned to the kit's v0.23.0 (905515d9, its public cut):
 # v0.15.0's keyed limits (MPC-E415 and MPC-E822), the keyed outside-save rule and the carrier
 # hook (`Pack::wants_carrier` and `Pack::encode_from`, which the live pack needs), v0.15.1's
 # keyed costs and the carrier row's judge (`session::test_support::carrier_judge`, feature
@@ -21,12 +21,13 @@ license = "MIT OR Apache-2.0"
 # index (`Pack::view_schema`, `Pack::address_of`, `view_derive` with the carrier), the keyed
 # watch's `Pack::watch_extras` and the structure index's row format 2
 # (`IndexSpec::with_older_format`), and v0.18.0's keyed limit refusal
-# (`SessionError::KeyedAtLimit`): a host vendors the kit at that tag beside this repo, and a
-# contributor checks it out there at that commit (README, "Tests and checks"). Run
+# (`SessionError::KeyedAtLimit`), and v0.23.0's revert on a blob doc
+# (`BlobSession::run_revert`, `SaveBase::Revert`): a host vendors the kit at that tag beside this
+# repo, and a contributor checks it out there at that commit (README, "Tests and checks"). Run
 # `cargo update -p k2-mpc-base` and commit both locks (this one and fuzz/'s) when the pin moves.
 k2-mpc-base = { path = "../k2-mpc-base/crates/base" }
 # The shared package layer for docx, pptx and xlsx (k2-mpc-ooxml), by path the same way: its
-# checkout sits beside this one, at k2-mpc-ooxml's v0.1.1 (2362f7c1, its cut): a host vendors it
+# checkout sits beside this one, at k2-mpc-ooxml's v0.1.2 (306d3938, its cut): a host vendors it
 # beside this repo, and a contributor checks it out there at that commit. Commit both locks when
 # it moves.
 k2-mpc-opc = { path = "../k2-mpc-ooxml/crates/opc" }

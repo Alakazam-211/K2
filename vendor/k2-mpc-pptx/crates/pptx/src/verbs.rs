@@ -56,8 +56,9 @@ const ED: VerbKind = VerbKind::Edit;
 const READ: &[u8] = &[OK, USAGE, NOT_FOUND];
 const EDIT: &[u8] = &[OK, USAGE, NOT_FOUND];
 
-/// Every verb, as data for [`Registry::for_file`]. The index's own verbs (`shape list`,
-/// `shape show`, `shape diff`, `shape blame`) come from the kit ([`crate::index::VERBS`]).
+/// Every verb, as data for [`Registry::for_file`]: the live tier's, and the clash verbs. The
+/// index's own verbs (`shape list`, `shape show`, `shape diff`, `shape blame`) come from the kit
+/// ([`crate::index::VERBS`]); a deck that isn't live is served by [`registry`].
 pub const VERBS: &[FileVerb] = &[
     FileVerb::new(
         "slide list",
@@ -136,9 +137,13 @@ pub const VERBS: &[FileVerb] = &[
     ),
 ];
 
-/// The verbs as the kit's file-verb registry.
+/// The kit's registry for a deck that isn't live ([`Registry::for_blob_pack`] of
+/// [`crate::PptxPack`]): the kit's tier-0 verbs, the index's (`shape list`, `shape show`,
+/// `shape diff`, `shape blame`) and the deck's own ([`crate::blob_verbs::VERB_SET`]: `slide
+/// list` and the seven edits). The clash verbs (`conflicts list`, `conflict take`) stay in
+/// [`VERBS`] only, until the kit holds conflicts on tier 0.
 pub fn registry() -> Result<Registry, RegistryError> {
-    Registry::for_file(VERBS)
+    Registry::for_blob_pack(&crate::PptxPack::default())
 }
 
 /// Why a verb didn't run.
@@ -304,6 +309,66 @@ pub fn apply(bytes: &[u8], edit: &Edit, limits: &Limits) -> Result<Applied, Verb
         bytes: out,
         address,
     })
+}
+
+/// One edit as the kit's tier-0 path takes it ([`plan`]): the ranges of the deck's bytes it
+/// replaces, and the index's nodes (by key, [`crate::index`]) it changes and adds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planned {
+    /// In order and apart; empty when the edit changes nothing.
+    pub spans: Vec<k2_mpc_opc::Span>,
+    /// The new slide's or shape's address, for an add.
+    pub address: Option<String>,
+    /// The nodes it changes: the one it edits, the slide whose part holds it (a slide's node
+    /// is its whole part), and those whose place moves with it (a slide's position, a shape's
+    /// place in front of the ones behind it).
+    pub touched: Vec<String>,
+    /// The nodes it adds: a new slide with its shapes, a new shape, a new notes slide.
+    pub created: Vec<String>,
+}
+
+/// Plan one edit: what [`apply`] writes, as ranges of `bytes` (the package layer's
+/// `write_plan`, so every byte outside them is the deck's own), with the nodes it says it
+/// changes and adds, worked out from the edit and the deck before it, never from the output.
+/// The output is read back as [`apply`] reads it.
+pub fn plan(bytes: &[u8], edit: &Edit, limits: &Limits) -> Result<Planned, VerbError> {
+    let p = Pptx::open(bytes, limits)?;
+    let mut w = Work::new(&p, limits);
+    w.edit(edit)?;
+    let address = w.address.take();
+    if w.changes.is_empty() {
+        return Ok(Planned {
+            spans: Vec::new(),
+            address,
+            touched: Vec::new(),
+            created: Vec::new(),
+        });
+    }
+    let spans = p.opc.write_plan(&w.changes)?;
+    let out = k2_mpc_opc::zip::apply(bytes, &spans)?;
+    // a guard on our own writer: what a verb writes, this pack reads
+    Pptx::open(&out, limits).map_err(|d| {
+        refused(format!(
+            "the edit would make a deck this pack can't read: {d}"
+        ))
+    })?;
+    let (touched, created) = w.declared(edit, address.as_deref())?;
+    Ok(Planned {
+        spans,
+        address,
+        touched,
+        created,
+    })
+}
+
+/// The keys of `shapes` and every shape under them, on slide `sld`, in order.
+fn shape_keys(shapes: &[slide::ShapeInfo], sld: u32, out: &mut Vec<String>) {
+    for s in shapes {
+        if let Some(id) = s.id {
+            out.push(format!("@sld:{sld}/sp:{id}"));
+        }
+        shape_keys(&s.children, sld, out);
+    }
 }
 
 /// Text for paragraphs: one per line (`\r\n` and `\r` read as a line end), each with the
@@ -1104,6 +1169,114 @@ impl Work<'_, '_> {
             },
         );
         Ok(())
+    }
+}
+
+impl Work<'_, '_> {
+    /// The nodes an edit changes and adds ([`Planned`]), from the edit and the deck as it was
+    /// opened; a new slide's shapes from the part this edit made.
+    fn declared(
+        &self,
+        edit: &Edit,
+        address: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<String>), VerbError> {
+        let p = self.p;
+        let sk = |id: u32| format!("@sld:{id}");
+        let order: Vec<u32> = p.deck.slides.iter().map(|s| s.id).collect();
+        let pos = |id: u32| order.iter().position(|x| *x == id);
+        let made = || {
+            address
+                .map(str::to_owned)
+                .ok_or_else(|| refused("the add made no address"))
+        };
+        let (mut touched, mut created) = (Vec::new(), Vec::new());
+        match edit {
+            Edit::AddSlide { place, .. } => {
+                let addr = made()?;
+                let (id, _) = parse_address(&addr)?;
+                // every slide from where it goes on moves one place down
+                let from = match place {
+                    None => order.len(),
+                    Some(Place::First) => 0,
+                    Some(Place::After(a)) => pos(*a).map_or(order.len(), |i| i + 1),
+                };
+                touched.extend(order[from..].iter().map(|s| sk(*s)));
+                created.push(addr);
+                let part = self.slide(id)?.part.clone();
+                let text = self.current(&part)?;
+                let doc = parse_xml(&text, self.limits)?;
+                shape_keys(&read_shapes(&doc), id, &mut created);
+            }
+            Edit::MoveSlide { slide, place } => {
+                let mut after = order.clone();
+                if let Some(i) = pos(*slide) {
+                    after.remove(i);
+                }
+                let at = match place {
+                    Place::First => 0,
+                    Place::After(a) => after
+                        .iter()
+                        .position(|x| x == a)
+                        .map_or(after.len(), |j| j + 1),
+                };
+                after.insert(at.min(after.len()), *slide);
+                // each slide whose position changes
+                touched.extend(
+                    order
+                        .iter()
+                        .zip(&after)
+                        .filter(|(b, a)| b != a)
+                        .map(|(b, _)| sk(*b)),
+                );
+            }
+            Edit::AddTextBox { slide, .. } => {
+                touched.push(sk(*slide));
+                created.push(made()?);
+            }
+            Edit::SetText { slide, shape, .. } | Edit::MoveShape { slide, shape, .. } => {
+                touched.push(sk(*slide));
+                touched.push(format!("@sld:{slide}/sp:{shape}"));
+            }
+            Edit::DeleteShape { slide, shape } => {
+                touched.push(sk(*slide));
+                let part = self.slide(*slide)?.part.clone();
+                let text = part_text(&p.opc, &part)?;
+                let doc = parse_xml(text, self.limits)?;
+                let shapes = read_shapes(&doc);
+                if let Some(i) = shapes.iter().position(|s| s.id == Some(*shape)) {
+                    // the shape and what it holds go; each shape in front of it moves back one
+                    shape_keys(&shapes[i..=i], *slide, &mut touched);
+                    touched.extend(
+                        shapes[i + 1..]
+                            .iter()
+                            .filter_map(|s| s.id)
+                            .map(|id| format!("@sld:{slide}/sp:{id}")),
+                    );
+                }
+            }
+            Edit::SetNotes { slide, .. } => {
+                let had = p.deck.slide(*slide).is_some_and(|s| s.notes.is_some());
+                let key = format!("@notes:{slide}");
+                if had {
+                    touched.push(key);
+                } else {
+                    created.push(key);
+                }
+            }
+        }
+        // planted: only the node the edit names is declared, not its slide or what moves
+        // with it
+        if crate::mutant::active("pptx_declares_too_little") {
+            let own = match edit {
+                Edit::SetText { slide, shape, .. }
+                | Edit::MoveShape { slide, shape, .. }
+                | Edit::DeleteShape { slide, shape } => Some(format!("@sld:{slide}/sp:{shape}")),
+                Edit::MoveSlide { slide, .. } => Some(sk(*slide)),
+                _ => None,
+            };
+            touched.retain(|k| Some(k) == own.as_ref());
+        }
+        Ok((touched, created))
     }
 }
 

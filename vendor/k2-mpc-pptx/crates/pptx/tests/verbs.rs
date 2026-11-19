@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 
 use common::{entries, limits};
 use k2_mpc_base::index::IndexLimits;
+use k2_mpc_pptx::blob_verbs::VERB_SET;
 use k2_mpc_pptx::index::draft;
 use k2_mpc_pptx::slide::{read_shapes, ShapeInfo};
 use k2_mpc_pptx::testgen::{self, DeckSpec, LAYOUT_CONTENT, LAYOUT_TITLE};
@@ -100,8 +101,23 @@ fn slide_xml(bytes: &[u8], sld: u32) -> String {
 
 #[test]
 fn the_verbs_are_registry_data() {
+    // the kit's registry for a deck that isn't live: every deck verb on the blob path, and not
+    // the clash verbs (they stay file verbs until the kit holds conflicts on tier 0)
     let r = registry().expect("the kit takes them");
-    assert_eq!(r.verbs().len(), VERBS.len());
+    let missing: Vec<&str> = VERB_SET
+        .iter()
+        .map(|v| v.name)
+        .filter(|n| r.get(n).is_none())
+        .collect();
+    let clash: Vec<&str> = ["conflicts list", "conflict take"]
+        .into_iter()
+        .filter(|n| r.get(n).is_some())
+        .collect();
+    assert_eq!(
+        (missing, clash),
+        (Vec::<&str>::new(), Vec::<&str>::new()),
+        "the_verbs_are_registry_data: registry() is the kit's blob registry for the deck"
+    );
     for v in VERBS {
         assert!(v.serves.iter().all(|s| ROWS.contains(s)), "{}", v.name);
     }

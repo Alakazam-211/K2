@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.1.10: pairs with kit v0.23.0 and k2-mpc-ooxml v0.1.2
+
+**Requires `k2-mpc-base` v0.23.0 and `k2-mpc-ooxml` v0.1.2** (its `OpcPackage::write_plan`), each
+checked out beside this repo. The crate version is `0.1.10`; `Cargo.lock` and `fuzz/Cargo.lock`
+record k2-mpc-base 0.23.0 and k2-mpc-opc 0.1.2. As for v0.1.9, the tag is a cut commit that leaves
+out `fuzz/`.
+
+- **The deck's verbs on the kit's tier-0 path** (`PptxPack::verbs`, `blob_verbs`): `slide list`
+  and the seven edits (`slide add`, `slide move`, `shape add`, `shape text`, `shape move`,
+  `shape delete`, `notes set`) run by the kit on a deck that isn't live, each a plan of the byte
+  ranges it replaces: `verbs::plan`, the file verb's edit through the package layer's
+  `OpcPackage::write_plan`, so every byte outside the ranges is the deck's own. Each edit names
+  the nodes it changes and adds (the shape, its slide, the slides or shapes whose place moves
+  with it; a new slide with its shapes, a new shape, a new notes slide), and the kit refuses an
+  output whose index shows any other. Each edit carries its word (`added`, `moved`, `set`,
+  `deleted`) and runs under the caller's own lease (`VerbMerge::Lease`): a verb's write then an
+  app's save is a whole-file conflict until this pack merges a save against the version the app
+  opened. `verbs::apply` is unchanged, the live tier's oracle.
+- **Holds** (`PptxPack::hold_reach`): a hold on a slide covers its shapes and notes; on a group,
+  its shapes; on a master, its layouts. A verb names every slide whose position it shifts, so
+  under `ClaimPolicy::Respect` an agent's `slide add --first` (or `--after` an earlier slide, or a
+  `slide move` across it) is refused (`MPC-E301`) while someone holds a slide it moves down.
+- **The pack's refusals** (`PptxPack::errors`): `PPTX-E001 deck_declined`, `PPTX-E002
+  deck_refused`, `PPTX-E004 deck_not_found` (exit 4).
+- **`verbs::registry()` is the kit's registry for a deck that isn't live**
+  (`Registry::for_blob_pack(&PptxPack)`): the kit's tier-0 verbs, the index's and the deck's own.
+  It was the file-verb registry of `VERBS`. `VERBS` stays as the live tier's verbs and the clash
+  verbs (`conflicts list`, `conflict take`), which stay off the blob path until the kit holds
+  conflicts on tier 0.
+- Rows (`tests/blob_verbs.rs`): `file_verb_equals_blob_verb` (every case on every fixture deck,
+  stored and deflated: the kit's verb gives the file verb's bytes, or its refusal),
+  `edit_verbs_need_the_callers_lease`, `slide_list_on_the_blob_path`,
+  `a_slide_hold_covers_its_shapes`, `the_kit_lists_the_deck_verbs`; the mutant
+  `pptx_declares_too_little`.
+- **The kit's revert, undo and redo on a deck** (`BlobSession::run_revert`): the kit takes one
+  version's change away through this pack's merge, and `PptxPack::merge3_known` now answers a
+  revert (`SaveBase::Revert`) with `PptxPack::merge3_exact` (new): the merge by shape with
+  neither stale guard, since the kit hands over three of the doc's own versions, not an app's
+  save. Until now a revert took `merge3_bytes`'s guard for a save on a base it can't know, and
+  every revert, undo or redo with a later change on the deck was refused as a conflict
+  (`MPC-E731`, no conflicts listed); a redo right after its undo was refused by the
+  `base == ours` guard. Any other known base (a save the app opened or stamped) is
+  `merge3_bytes`'s as before; a clash is a whole-file conflict as before.
+- Rows (`tests/blob_verbs.rs`), each red under the kit's plant it names (`MPC_T0V_MUTANT`, with
+  the kit's `differential` feature):
+  - `revert_keeps_a_later_edit`: an agent's shape move reverted while a person's later edit on
+    another slide is kept; the bytes are the person's edit alone on the deck before the move, by
+    the file verb, and the `zip` crate reads every part as that deck's. Plant
+    `revert-takes-whole-version`.
+  - `revert_refused_when_the_shape_changed_since`: the same shape moved again since: `MPC-E731`,
+    its conflicts naming the shape, who and in which version; nothing written. Plant
+    `revert-overwrites`.
+  - `undo_and_redo_keep_a_later_edit`: the agent's undo of its move keeps the person's later
+    edit (the bytes are that edit alone); its redo gives the bytes from before the undo. Plant
+    `undo-latest-any`.
+
 ## v0.1.9: pairs with kit v0.22.0 and k2-mpc-ooxml v0.1.1
 
 **Requires `k2-mpc-base` v0.22.0** (`e085cada`, its public cut) beside `k2-mpc-ooxml` v0.1.1. A deck

@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "libc",
  "redb",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-opc"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-pptx"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-opc",

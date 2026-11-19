@@ -2,6 +2,7 @@
 //! crate) for deflated variants.
 #![allow(dead_code)]
 
+pub mod blob_rows;
 pub mod hash_rows;
 pub mod kit_view_golden;
 pub mod live;

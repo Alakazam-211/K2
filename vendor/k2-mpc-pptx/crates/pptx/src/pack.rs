@@ -4,8 +4,9 @@
 
 use std::io::Read;
 
+use k2_mpc_base::errors::ErrorEntry;
 use k2_mpc_base::index::{IndexDraft, IndexLimits, IndexRefused, IndexSpec};
-use k2_mpc_base::session::{BlobMerge, BlobPack};
+use k2_mpc_base::session::{BlobMerge, BlobPack, BlobVerb, HoldReach, SaveBase, SaveMerge};
 use k2_mpc_base::view_index::{ViewIndex, ViewSchema, ViewSource};
 
 use crate::index::{index_pptx, FORMAT, OLDER_FORMAT, PACK, VERBS};
@@ -64,6 +65,16 @@ impl PptxPack {
         {
             return BlobMerge::Conflict;
         }
+        self.merge3_exact(base, ours, theirs)
+    }
+
+    /// The merge by shape with neither stale guard, for three versions the caller knows
+    /// exactly: the kit's revert ([`SaveBase::Revert`]: `base` the version taken away, `ours`
+    /// head, `theirs` the version before it, all three the doc's own versions). No app's buffer
+    /// is in play, so `base == ours` (the revert of head's own version) is that version taken
+    /// away, and a version both sides changed merges by shape. A clash is a whole-file conflict
+    /// while [`HOLD_CLASHES`] is off, as in [`PptxPack::merge3_since`].
+    pub fn merge3_exact(&self, base: &[u8], ours: &[u8], theirs: &[u8]) -> BlobMerge {
         match merge3(base, ours, theirs, &self.limits) {
             Outcome::Merged(m) if m.conflicts.is_empty() => BlobMerge::Merged(m.bytes),
             Outcome::Merged(m) if HOLD_CLASHES || mutant::active("pack_holds_clashes") => {
@@ -99,6 +110,17 @@ impl BlobPack for PptxPack {
         self.merge3_since(base, ours, theirs, Since::KitMayHaveWritten)
     }
 
+    /// The kit's revert, undo and redo ([`SaveBase::Revert`]) hand over the doc's own three
+    /// versions, after the kit's own check that nothing the reverted version changed changed
+    /// since: [`PptxPack::merge3_exact`], with no stale guard. Any other known base (a save the
+    /// app opened or stamped) is [`BlobPack::merge3_bytes`]'s, as before.
+    fn merge3_known(&self, m: &SaveMerge<'_>) -> BlobMerge {
+        if m.base_is == SaveBase::Revert {
+            return self.merge3_exact(m.base, m.ours, m.theirs);
+        }
+        self.merge3_bytes(m.base, m.ours, m.theirs)
+    }
+
     /// Format 2 carries the view items, and reads format 1's rows (the same nodes) until a
     /// version is indexed again ([`crate::index::FORMAT`]).
     fn index_spec(&self) -> Option<IndexSpec> {
@@ -122,5 +144,21 @@ impl BlobPack for PptxPack {
 
     fn view_derive(&self, source: ViewSource<'_>, index: &mut ViewIndex) {
         crate::live::view_schema::derive(source, index);
+    }
+
+    /// `slide list` and the seven edits ([`crate::blob_verbs`]), each under the caller's own
+    /// lease until this pack merges a save against the version the app opened.
+    fn verbs(&self) -> &'static [BlobVerb] {
+        crate::blob_verbs::VERB_SET
+    }
+
+    /// A slide's hold covers its shapes and notes; a group's, its shapes; a master's, its
+    /// layouts ([`crate::blob_verbs::hold_reach`]).
+    fn hold_reach(&self, kind: &str) -> HoldReach {
+        crate::blob_verbs::hold_reach(kind)
+    }
+
+    fn errors(&self) -> &'static [ErrorEntry] {
+        crate::blob_verbs::PPTX_ERRORS
     }
 }

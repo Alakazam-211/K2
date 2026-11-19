@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{hash_rows, limits, live_rows, splice_rows, view_rows};
+use common::{blob_rows, hash_rows, limits, live_rows, splice_rows, view_rows};
 use k2_mpc_base::session::{BlobMerge, BlobPack};
 use k2_mpc_pptx::merge::{merge3, Outcome};
 use k2_mpc_pptx::mutant;
@@ -292,6 +292,11 @@ const ROWS: &[(&str, Leg)] = &[
     ("FidReused", live_rows::row_new_shape_after_a_group),
     ("ReadUnbounded", live_rows::row_reads_bounded_and_paged),
     ("ZOrderGlobal", live_rows::row_each_verb),
+    // the verbs on the kit's tier-0 path
+    (
+        "pptx_declares_too_little",
+        blob_rows::file_verb_equals_blob_verb,
+    ),
 ];
 
 #[test]

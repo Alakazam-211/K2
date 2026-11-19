@@ -136,8 +136,8 @@ today, a save both sides changed is a whole-file conflict** (Stated limits, the 
 
 Every check runs with cargo and a stable Rust toolchain (1.88 or later), with the kit and the
 package layer checked out beside this repo, where `Cargo.toml`'s path dependencies point:
-`../k2-mpc-base` at the kit's v0.22.0 (`e085cada`, its public cut) and `../k2-mpc-ooxml` at
-its v0.1.1 (`2362f7c1`, its cut).
+`../k2-mpc-base` at the kit's v0.23.0 (`905515d9`, its public cut) and `../k2-mpc-ooxml` at
+its v0.1.2 (`306d3938`, its cut).
 
 ```sh
 sh scripts/check.sh            # every step below; exits non-zero on the first failure

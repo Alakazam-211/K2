@@ -10,6 +10,8 @@
 //!   clash;
 //! - [`verbs`]: the agent's verbs, as registry data and as edits that splice only what they
 //!   change;
+//! - [`blob_verbs`]: the verbs on the kit's tier-0 path, each a plan of the byte ranges it
+//!   replaces;
 //! - [`PptxPack`]: the kit's [`k2_mpc_base::session::BlobPack`] for decks.
 //!
 //! Live, [`PptxLive`] ([`live`]) is the kit's [`k2_mpc_base::session::Pack`] for a deck held as
@@ -25,6 +27,7 @@
 //! is a typed [`Decline`], and the file stays at tier 0.
 #![forbid(unsafe_code)]
 
+pub mod blob_verbs;
 pub mod deck;
 pub mod geom;
 pub mod index;

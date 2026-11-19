@@ -28,6 +28,14 @@ k2 setup chief-of-staff --name N --about "what they do" --tool claude|codex|grok
                         For Kessel only: it works from Kessel's own pinned chat, never a
                         sidecar, another agent or a person (exit 3).
 k2 setup dismiss-offer  "Not now" on the Meet Kessel offer (yours only)
+k2 setup agent-reports [--agents off|cli|all] [--attach <parts>|none|all]
+                        whether agents may report K2 problems to Alakazam Labs
+                        on their own: off, problems with K2 commands (cli), or
+                        anything about K2 (all); and which parts of the K2
+                        details they may attach (joined by commas, none or
+                        all; the versions always go). No flags: what is set.
+                        The same as k2 send-feedback settings --agents/--attach.
+                        The owner or an admin.
 
 Every verb takes --json: the daemon's JSON as is.
 
@@ -49,6 +57,14 @@ cmd_setup() {
             hide|show|kessel|chief-of-staff|dismiss-offer)
                 [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
                 sub="$1"; shift ;;
+            agent-reports)
+                # The agent opt-in (0.46.17): send-feedback's settings write,
+                # which renders with python3, unlike the rest of k2 setup.
+                [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
+                shift
+                if [ "$as_json" = 1 ]; then set -- --json "$@"; fi
+                _sf_settings_run setup "$@"
+                return ;;
             --tool|--name|--handle|--about|--focus-group)
                 case "$sub" in
                     kessel|chief-of-staff) ;;

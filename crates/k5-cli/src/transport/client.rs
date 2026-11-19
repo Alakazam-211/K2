@@ -1186,6 +1186,10 @@ impl Client {
         body: &[u8],
     ) -> Result<(Target, Request), Error> {
         let mut headers: Vec<(String, String)> = Vec::new();
+        // `cli_post_json_stdin` reads its config with `-K /dev/fd/3`, after
+        // the `-H`s `_k2_curl` puts first: its Bearer comes after the
+        // hand-over headers. Every other call's comes before them.
+        let mut late_credential = None;
         let (target, host) = match channel {
             Channel::Tcp => {
                 // The credential is the first header, an `Authorization:
@@ -1202,7 +1206,12 @@ impl Client {
                             endpoint: endpoint.to_string(),
                         });
                     };
-                    headers.push(("Authorization".into(), format!("Bearer {token}")));
+                    let line = ("Authorization".to_string(), format!("Bearer {token}"));
+                    if kind == Kind::PostJsonStdin {
+                        late_credential = Some(line);
+                    } else {
+                        headers.push(line);
+                    }
                 }
                 (
                     Target::Tcp {
@@ -1235,6 +1244,7 @@ impl Client {
         if self.owner_from_disk && matches!(self.auth, Auth::Owner(_)) && kind != Kind::Public {
             headers.push((OWNER_SOURCE_HEADER.into(), OWNER_SOURCE_DISK.into()));
         }
+        headers.extend(late_credential);
 
         let tcp = channel == Channel::Tcp;
         let with_project = || format!("project={}", quote(&self.project));
@@ -1954,7 +1964,6 @@ mod tests {
                 RequestPost,
                 PostForm,
                 PostJson,
-                PostJsonStdin,
                 SendJsonGet,
                 SendJsonPost,
                 SidecarGet,
@@ -1972,6 +1981,11 @@ mod tests {
                 assert!(!r.target.contains("token"), "{k:?}: {}", r.target);
             }
         }
+        // cli_post_json_stdin's comes after the hand-over headers.
+        let (_, r) = owner.build(PostJsonStdin, Channel::Tcp, "/cli/x", &[], &[]).unwrap();
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [VERSION_HEADER, VIA_HEADER, "Authorization", "Content-Type"]);
+        assert_eq!(r.target, "/cli/x");
         for k in [Probe, BearerForm] {
             let (_, r) = passport.build(k, Channel::Tcp, "/cli/x", &[], &[]).unwrap();
             assert_eq!(r.headers[0], ("Authorization".into(), "Bearer s.t".into()));

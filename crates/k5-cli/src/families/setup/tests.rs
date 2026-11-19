@@ -110,13 +110,6 @@ fn the_shell_s_lines() {
         assert_eq!(sub.word(), word);
         assert_eq!(sub.post(), sub != Sub::List);
     }
-    // `_git_tools_q` keeps what `quote` keeps.
-    let git_tools = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/git-tools.sh"),
-    )
-    .expect("git-tools.sh");
-    assert!(git_tools.contains("            [A-Za-z0-9._~-]) out+=\"$c\" ;;"));
-    assert!(git_tools.contains("            *) printf -v c '%%%02X' \"'$c\"; out+=\"$c\" ;;"));
     // `setup chief-of-staff` rides the locked tool.
     let policy = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh"),

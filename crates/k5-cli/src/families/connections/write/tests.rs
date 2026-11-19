@@ -190,8 +190,10 @@ fn the_daemon_s_errors() {
 
 #[test]
 fn the_gate() {
+    // json.dumps writes the teaching line's quotes as \".
+    let teaching = TEACHING.replace('"', "\\\"");
     let teach =
-        format!("{{\"error\": {{\"code\": \"gated\", \"hint\": \"no \u{2014} {TEACHING}\"}}}}\n");
+        format!("{{\"error\": {{\"code\": \"gated\", \"hint\": \"no \u{2014} {teaching}\"}}}}\n");
     let (o, e, c) = show(r#"{"error":{"code":"gated","hint":"no"}}"#, Verb::Add);
     assert_eq!((o.as_str(), e.as_str(), c), ("", teach.as_str(), 3));
     // A hint that says it, with Settings in it: as it is, the default code.
@@ -214,7 +216,7 @@ fn the_gate() {
     );
     assert_eq!(c, 3);
     assert!(
-        e.contains(&format!("connections \u{2014} {TEACHING}")),
+        e.contains(&format!("connections \u{2014} {teaching}")),
         "{e}"
     );
     // An empty text error is not the gate.
@@ -275,7 +277,7 @@ fn where_python_raises() {
     // What was printed before the raise stays.
     let s = reader(br#"{"bound":true,"handle":"h","displayName":1}"#, Verb::Add);
     assert_eq!(s.stdout, "Connected to ?\n");
-    assert!(s.stderr.contains("line 43, in <module>"), "{}", s.stderr);
+    assert!(s.stderr.contains("line 44, in <module>"), "{}", s.stderr);
 }
 
 #[test]

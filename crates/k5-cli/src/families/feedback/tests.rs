@@ -603,7 +603,7 @@ fn list_s_reader() {
     let r = list_reader(br#"{"error":3}"#, false);
     assert_eq!(
         r.stderr,
-        "{\"error\": 3}\nTraceback (most recent call last):\n  File \"<stdin>\", line 14, in <module>\nAttributeError: 'int' object has no attribute 'get'\n"
+        "{\"error\": 3}\nTraceback (most recent call last):\n  File \"<string>\", line 15, in <module>\nAttributeError: 'int' object has no attribute 'get'\n"
     );
     let r = list_reader(b"nope", false);
     assert_eq!(
@@ -686,7 +686,7 @@ fn show_s_reader() {
     let err = show_reader(r#"{"error":["x"]}"#, false, false, now);
     assert_eq!(
         err.stderr,
-        "{\"error\": [\"x\"]}\nTraceback (most recent call last):\n  File \"<stdin>\", line 36, in <module>\n  File \"<stdin>\", line 15, in die\nAttributeError: 'list' object has no attribute 'get'\n"
+        "{\"error\": [\"x\"]}\nTraceback (most recent call last):\n  File \"<string>\", line 24, in <module>\n  File \"<string>\", line 12, in die\nAttributeError: 'list' object has no attribute 'get'\n"
     );
     let many: Vec<String> = (0..45).map(|i| format!("t{i}")).collect();
     let long = show_reader(

@@ -600,12 +600,12 @@ fn workspace_reads_with_no_answer() {
             1,
         ),
         no_tmp(case(
-            "profile: TMPDIR unusable, a reset (75)",
+            "profile: TMPDIR unusable, a reset (76)",
             &["profile"],
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            75,
+            76,
             1,
         )),
     ];

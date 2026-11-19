@@ -13,7 +13,7 @@
 //!   reset, no daemon: curl's code, nothing printed, no POST.
 //! - The POST sent once: an empty 200 is the answer; an empty reply, a
 //!   5xx with no body and none in time are the line and exit 1; a reset
-//!   (56), not HTTP (1) and TMPDIR unusable (75) are curl's code.
+//!   (56), not HTTP (1) and TMPDIR unusable (76) are curl's code.
 //! - What the binary hands to the shell: help, a workspace path that is
 //!   not absolute. (`--field` or `--value` as the last word is the shell's
 //!   too, `families::workspace`'s unit tests show; bash's line names its
@@ -509,12 +509,12 @@ fn workspace_launch_and_update_are_sent_once() {
             1,
         ),
         no_tmp(case(
-            "launch: TMPDIR unusable, a reset (75)",
+            "launch: TMPDIR unusable, a reset (76)",
             &["launch"],
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         waited(case(
@@ -563,12 +563,12 @@ fn workspace_launch_and_update_are_sent_once() {
             2,
         ),
         no_tmp(case(
-            "update: TMPDIR unusable, a reset (75)",
+            "update: TMPDIR unusable, a reset (76)",
             up,
             &[],
             vec![name(), Reply::Reset],
             owner_and_port,
-            75,
+            76,
             2,
         )),
     ];

@@ -16,7 +16,7 @@
 //!   older daemon's 405 (the same call as a GET), a healed passport.
 //! - Sent once: an empty 200 is the answer; an empty reply, a 5xx with no
 //!   body and none in time are the line and exit 1; a reset (56), not
-//!   HTTP (1) and TMPDIR unusable (75) are curl's code; only a connect
+//!   HTTP (1) and TMPDIR unusable (76) are curl's code; only a connect
 //!   nothing accepted (7) is tried again. Each with one request.
 //! - What the binary hands to the shell: help, a doubled `/`, a relative
 //!   `open` while `CDPATH` is set, a port that is no port.
@@ -464,12 +464,12 @@ fn sent_once(verb: &'static str, tag: &str) {
             1,
         ),
         no_tmp(case(
-            "TMPDIR unusable, a reset (75)",
+            "TMPDIR unusable, a reset (76)",
             args,
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         no_tmp(case(

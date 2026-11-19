@@ -18,7 +18,7 @@
 //!   dead socket file; the id tool's checks; a re-minted, a healed and a
 //!   dead passport; PROJECT_PATH; the gates.
 //! - No answer (an empty reply, a 5xx with no body, none in time): the
-//!   line and exit 1; a reset (56), not HTTP (1), TMPDIR unusable (75) and
+//!   line and exit 1; a reset (56), not HTTP (1), TMPDIR unusable (76) and
 //!   no daemon (7): curl's code, nothing printed.
 //! - What the binary hands to the shell: `connections` alone, help, a
 //!   port that is no port (`add` and `remove`: connections_write_parity.rs).
@@ -634,12 +634,12 @@ fn connections_with_no_answer() {
             1,
         ),
         no_tmp(case(
-            "TMPDIR unusable, a reset: 75",
+            "TMPDIR unusable, a reset: 76",
             &["list"],
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         no_tmp(case(

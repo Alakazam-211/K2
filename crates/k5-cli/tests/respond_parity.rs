@@ -16,7 +16,7 @@
 //! - The gates, before the words.
 //! - No answer, as the 0.46.15 no-resend test makes each, on both arms:
 //!   in time (28), an empty reply (52), a reset (56), an empty 200, not
-//!   HTTP (curl 1), a 5xx with no body; TMPDIR unusable (no 75 here: the
+//!   HTTP (curl 1), a 5xx with no body; TMPDIR unusable (no 76 here: the
 //!   shell's curl for respond doesn't go through `_cli_curl`); nothing
 //!   listening (7). Neither arm ever sends twice: the request count of
 //!   each case says so.

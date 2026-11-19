@@ -20,7 +20,7 @@
 //!   PROJECT_PATH and a PWD through a link.
 //! - No answer (an empty reply, a 5xx with no body, no answer in time):
 //!   the line, then death by SIGPIPE (141), one request on TCP; a reset,
-//!   not HTTP, TMPDIR unusable (75) and no daemon (7): the reader on an
+//!   not HTTP, TMPDIR unusable (76) and no daemon (7): the reader on an
 //!   empty input, and the call's code.
 //! - What the binary hands to the shell: the write verbs, `--help`, a
 //!   `CODEX_` variable with `HOOK_SOCK` set, a port that is no port.
@@ -1113,12 +1113,12 @@ fn inbox_with_no_answer() {
             1,
         ),
         no_tmp(case(
-            "TMPDIR unusable, a reset: 75",
+            "TMPDIR unusable, a reset: 76",
             &[],
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         no_tmp(case(
@@ -1131,21 +1131,21 @@ fn inbox_with_no_answer() {
             1,
         )),
         no_tmp(case(
-            "TMPDIR unusable, an empty reply: 75, no line",
+            "TMPDIR unusable, an empty reply: 76, no line",
             &[],
             &[],
             vec![Reply::Close],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         no_tmp(case(
-            "TMPDIR unusable, not HTTP: 75",
+            "TMPDIR unusable, not HTTP: 76",
             &["folders"],
             &[],
             vec![garbage()],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         no_tmp(listed(case(

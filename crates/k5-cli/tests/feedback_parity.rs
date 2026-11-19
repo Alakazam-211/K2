@@ -23,21 +23,21 @@
 //! - What the binary hands to the shell: `feedback` alone, help, another
 //!   verb, a port that is no port.
 //!
-//! `show`, whose request is its Python's own `urlopen`: the ticket with
+//! `show`, fetched through `cli_request` as `list` is: the ticket with
 //! every field (a brief, its size each way, 40 and 45 lines of its text,
 //! the thread with each message's files), `--json`, `--html`, `--html
 //! --json`, no brief; odd values, a long body, bytes that are not UTF-8,
 //! an id that needs escaping; the daemon's error (each code, text, a
-//! number, a permission card with no closing line, migrating not asked
-//! again); not JSON, a NUL, not an object; Python's raises; the words; a
-//! passport over TCP only (re-minted; refused with no heal), PRD 13.9 #4;
+//! number, a permission card, migrating then the answer); not JSON, a
+//! NUL, not an object; Python's raises; the words; a passport over TCP
+//! only (re-minted; refused: one heal; dead: the restart line), PRD 13.9 #4;
 //! no answer (an empty reply, a reset, not HTTP, TMPDIR unusable, none in
 //! time, no daemon: `daemon_unreachable`; an empty 5xx: not JSON); and
-//! what it hands to the shell (help, an `http_proxy` setting, a port
-//! with a leading zero).
+//! what it hands to the shell (help). A port with a leading zero is the
+//! binary's own, as `list`'s is.
 //!
 //! Neither verb sends a request on the left of a pipe (`list` holds its
-//! answer in `$(…)`, `show`'s Python reads it itself), so no case dies of
+//! answer in `$(…)`, and so does `show`), so no case dies of
 //! SIGPIPE; every case runs with stdout and stderr on pipes.
 
 #![cfg(unix)]
@@ -695,7 +695,7 @@ fn list_with_no_answer() {
             1,
         ),
         no_tmp(case(
-            "TMPDIR unusable, a reset (75): daemon_unreachable",
+            "TMPDIR unusable, a reset (76): daemon_unreachable",
             &["list"],
             &[],
             vec![Reply::Reset],
@@ -1174,13 +1174,16 @@ fn show_answers_as_the_shell_does() {
             1,
         ),
         case(
-            "migrating: not asked again",
+            "migrating, then the answer",
             &["show", "x"],
             &[],
-            vec![Reply::Answer(503, r#"{"state":"migrating"}"#.into())],
+            vec![
+                Reply::Answer(503, r#"{"state":"migrating"}"#.into()),
+                ok(PLAIN),
+            ],
             owner_and_port,
             0,
-            1,
+            2,
         ),
         // Not JSON.
         case(
@@ -1463,13 +1466,28 @@ fn show_with_a_passport() {
         with(
             h(&[]),
             case(
-                "a refused passport: the error, no heal, no restart line",
+                "a refused passport heals once",
                 &["show", "x"],
                 &[],
-                vec![heal(&rig)],
+                vec![heal(&rig), ok(PLAIN)],
+                port_only,
+                0,
+                2,
+            ),
+        ),
+        with(
+            h(&[]),
+            case(
+                "a dead passport: the probe, then the restart line",
+                &["show", "x"],
+                &[],
+                vec![
+                    Reply::Answer(403, REFUSED.into()),
+                    Reply::Answer(403, REFUSED.into()),
+                ],
                 port_only,
                 1,
-                1,
+                2,
             ),
         ),
         with(
@@ -1555,7 +1573,7 @@ fn show_with_no_answer() {
             1,
         ),
         no_tmp(case(
-            "TMPDIR unusable, a reset (75 for curl): daemon_unreachable",
+            "TMPDIR unusable, a reset (76 for curl): daemon_unreachable",
             &["show", "x"],
             &[],
             vec![Reply::Reset],
@@ -1643,8 +1661,6 @@ fn tickets_show_is_feedback_show() {
 #[test]
 fn show_hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "sshell");
-    let proxy = dead_port();
-    let proxy_url = format!("http://127.0.0.1:{proxy}");
     let zero_port = format!("0{}", rig.stub.port);
     let v = vec![
         shell(case(
@@ -1665,26 +1681,8 @@ fn show_hands_these_to_the_shell() {
             0,
             0,
         )),
-        // urllib goes through the proxy; nothing reaches the stub.
-        shell(case(
-            "an http_proxy setting",
-            &["show", "x"],
-            &[("http_proxy", proxy_url.as_str())],
-            vec![],
-            owner_and_port,
-            1,
-            0,
-        )),
-        shell(case(
-            "an HTTP_PROXY setting",
-            &["show", "x"],
-            &[("HTTP_PROXY", proxy_url.as_str())],
-            vec![],
-            owner_and_port,
-            1,
-            0,
-        )),
-        shell(case(
+        // The binary's own now, as `list`'s: curl reads the port as a number.
+        case(
             "a port with a leading zero",
             &["show", "x"],
             &[("K2_PORT", zero_port.as_str())],
@@ -1692,7 +1690,7 @@ fn show_hands_these_to_the_shell() {
             owner_only,
             0,
             1,
-        )),
+        ),
     ];
     for c in v {
         rig.check(&c);

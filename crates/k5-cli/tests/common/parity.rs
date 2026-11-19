@@ -559,7 +559,7 @@ impl Rig {
         if c.compare == Compare::OwnerTokenWithPassport {
             // The credential is the Bearer header over TCP and on the
             // cell socket alike.
-            let bearer = |t: &str| format!("Authorization: Bearer {t}\r");
+            let bearer = |t: &str| format!("Authorization: Bearer {t}\n");
             let sent = |l: &str, t: &str| l.contains(&bearer(t));
             assert!(
                 bl.iter().all(|l| sent(l, OWNER)),

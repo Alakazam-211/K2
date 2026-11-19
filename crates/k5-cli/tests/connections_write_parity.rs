@@ -15,7 +15,7 @@
 //!   the id tool's checks; the gates.
 //! - Sent once: an empty 200 is the answer; an empty reply, a 5xx with no
 //!   body and none in time are the line and death by SIGPIPE; a reset
-//!   (56), not HTTP (1) and TMPDIR unusable (75) are curl's code under
+//!   (56), not HTTP (1) and TMPDIR unusable (76) are curl's code under
 //!   the reader's line; only a connect nothing accepted (7) is tried
 //!   again. Each with one request.
 //! - What the binary hands to the shell: help, a port that is no port.
@@ -157,7 +157,7 @@ fn connections_add_answers_as_the_shell_does() {
             &[],
             vec![Reply::Answer(
                 403,
-                r#"{"error":{"hint":"Allow agents to create connections: Settings"}}"#.into(),
+                r#"{"error":{"hint":"Agents can add connections: Settings"}}"#.into(),
             )],
             owner_and_port,
             3,
@@ -398,7 +398,7 @@ fn connections_add_with_a_passport() {
                 &[],
                 vec![Reply::Answer(
                     403,
-                    r#"{"error":{"code":"agents_create_connections_disabled","hint":"Allow agents to create connections is off"}}"#.into(),
+                    r#"{"error":{"code":"agents_create_connections_disabled","hint":"Agents can add connections is off"}}"#.into(),
                 )],
                 port_only,
                 3,
@@ -511,7 +511,7 @@ fn connections_add_is_sent_once() {
             1,
         ),
         no_tmp(case(
-            "TMPDIR unusable, a reset (75): the reader's line",
+            "TMPDIR unusable, a reset (76): the reader's line",
             &["add", "beta"],
             &[],
             vec![Reply::Reset],
@@ -808,7 +808,7 @@ fn connections_remove_is_sent_once() {
             1,
         ),
         no_tmp(case(
-            "TMPDIR unusable, a reset (75): the reader's line",
+            "TMPDIR unusable, a reset (76): the reader's line",
             &["remove", "beta"],
             &[],
             vec![Reply::Reset],

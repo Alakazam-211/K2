@@ -15,7 +15,7 @@
 //!   GET again), migrating, the bulletin line.
 //! - No answer, as the 0.46.15 no-resend test makes each: in time (28), an
 //!   empty reply (52), a reset (56), an empty 200, not HTTP (curl 1), a 5xx
-//!   with no body; each with TMPDIR unusable too (`_cli_curl`'s 75); no
+//!   with no body; each with TMPDIR unusable too (`_cli_curl`'s 76); no
 //!   daemon (7). `done` posts once over TCP and never resends: it has no
 //!   cell-socket arm.
 //! - What the binary hands to the shell: -h and --help (as a flag and as
@@ -583,30 +583,30 @@ fn done_with_no_answer() {
             1,
         )),
         no_tmp(named(
-            "TMPDIR unusable: an empty reply is 75",
+            "TMPDIR unusable: an empty reply is 76",
             &[],
             &[],
             vec![Reply::Close],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         no_tmp(named(
-            "TMPDIR unusable: a reset is 75",
+            "TMPDIR unusable: a reset is 76",
             &[],
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         no_tmp(named(
-            "TMPDIR unusable: not HTTP is 75",
+            "TMPDIR unusable: not HTTP is 76",
             &[],
             &[],
             vec![Reply::Raw(GARBAGE.to_vec())],
             owner_and_port,
-            75,
+            76,
             1,
         )),
         no_tmp(waited(named(
@@ -628,12 +628,12 @@ fn done_with_no_answer() {
             1,
         )),
         no_tmp(named(
-            "TMPDIR unusable: a port that is no port is 75",
+            "TMPDIR unusable: a port that is no port is 76",
             &[],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            75,
+            76,
             0,
         )),
     ];
@@ -783,7 +783,7 @@ fn binary_sends(rig: &Rig, c: &Case, want: &str) {
         .split("\r\n")
         .next()
         .unwrap_or_else(|| panic!("{name}: no request line"));
-    let start = format!("POST {ENDPOINT}?token={OWNER}&project=");
+    let start = format!("POST {ENDPOINT}?project=");
     let rest = line
         .strip_prefix(start.as_str())
         .unwrap_or_else(|| panic!("{name}: the request line: {line:?}"));

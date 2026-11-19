@@ -107,7 +107,8 @@ fn a_daemon_that_comes_up_between_tries_answers() {
     assert_eq!((r.status, r.body.as_slice()), (200, &b"{}"[..]));
     let got = text(&up.join().unwrap());
     assert!(
-        got.starts_with("GET /cli/x?token=owner-tok&project=%2Fp HTTP/1.1\r\n"),
+        got.starts_with("GET /cli/x?project=%2Fp HTTP/1.1\r\n")
+            && got.contains("\r\nAuthorization: Bearer owner-tok\r\n"),
         "{got}"
     );
 }
@@ -194,12 +195,12 @@ fn a_heal_happens_once() {
     let log: Vec<String> = s.log().iter().map(|l| text(&l.bytes)).collect();
     assert_eq!(log.len(), 2, "{log:?}");
     assert!(
-        log[0].starts_with("GET /cli/x?token=sessA.old1&"),
+        log[0].contains("\r\nAuthorization: Bearer sessA.old1\r\n"),
         "{}",
         log[0]
     );
     assert!(
-        log[1].starts_with("GET /cli/x?token=sessA.new1&"),
+        log[1].contains("\r\nAuthorization: Bearer sessA.new1\r\n"),
         "{}",
         log[1]
     );

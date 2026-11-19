@@ -412,13 +412,14 @@ fn cli_status_as_the_owner_shows_the_counts() {
     assert_eq!(
         h[0],
         format!(
-            "GET /cli/cli-usage?token={OWNER}&project={} HTTP/1.1",
+            "GET /cli/cli-usage?project={} HTTP/1.1",
             k5_cli::transport::wire::curl_get_query(&proj)
         )
     );
     assert_eq!(
         &h[4..],
         [
+            format!("Authorization: Bearer {OWNER}"),
             "X-K5-Cli-Version: ".to_string() + ours(),
             "X-K5-Cli-Via: native".into(),
             "X-K5-Owner-Source: disk".into()
@@ -533,7 +534,9 @@ fn cli_status_with_a_passport_is_the_table_and_one_line() {
     assert_eq!(log.len(), 1, "{log:?}");
     let h = head(&log[0]);
     assert!(
-        h[0].starts_with(&format!("GET /cli/cli-usage?token={PASSPORT}&project=")),
+        h[0].starts_with("GET /cli/cli-usage?project=")
+            && h.contains(&format!("Authorization: Bearer {PASSPORT}"))
+            && !h.iter().any(|l| l.contains(OWNER)),
         "{h:?}"
     );
     assert_eq!(rig.stub.left(), 1);
@@ -593,7 +596,8 @@ fn inside_a_session_with_no_passport_the_call_is_counted() {
     );
     assert_eq!(out.code, Some(0), "{out:?}");
     let h = head(&rig.stub.log()[0]);
-    assert_eq!(h[4], "X-K5-Would-Refuse: 1", "{h:?}");
+    assert_eq!(h[4], format!("Authorization: Bearer {OWNER}"), "{h:?}");
+    assert_eq!(h[5], "X-K5-Would-Refuse: 1", "{h:?}");
 }
 
 #[test]

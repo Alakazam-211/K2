@@ -4900,11 +4900,8 @@ fn deliver_thread_to_pty(
         via,
     );
     k2_core::log_debug!("{}", thread_delivery_log_line(addr, via, &resp, t0.elapsed().as_millis(), retry));
-    // Typed-in text wakes no title or keystroke: wake the session's
-    // transcript reader so a long-idle hook-less agent is read again.
-    if let Some(sid) = resp.target_session_id.as_deref().filter(|_| resp.success) {
-        crate::activity_transcript::note_delivery(sid);
-    }
+    // Typed-in text wakes no title or keystroke, so wake the transcript reader.
+    crate::activity_transcript::note_delivered(resp.success, resp.target_session_id.as_deref());
     if let Some(t) = turn {
         let target = resp.target_session_id.as_deref().filter(|_| resp.success);
         // A wake can re-pin the agent's Chat to a new conversation; the

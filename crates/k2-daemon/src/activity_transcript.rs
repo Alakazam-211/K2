@@ -264,6 +264,14 @@ pub fn wake(session_id: &str) {
     }
 }
 
+/// [`note_delivery`] for a delivery's answer: only a successful delivery
+/// to a known session wakes the reader.
+pub fn note_delivered(success: bool, session_id: Option<&str>) {
+    if let Some(sid) = session_id.filter(|_| success) {
+        note_delivery(sid);
+    }
+}
+
 /// K2 typed a line into the session (a Thread delivery), or is watching
 /// one it typed: read the transcript again even if it was parked, and,
 /// for a hook-less harness, look for a newer transcript for a while.

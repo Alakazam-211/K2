@@ -486,10 +486,12 @@ if [ -z "$TOKEN" ] && [ -n "$DISK_OWNER_TOKEN" ]; then
     TOKEN="$DISK_OWNER_TOKEN"
 fi
 
-# ── CLI Tools identity policy (mirrors crates/k2-core cli_tool_policy) ──
-# Static catalog defaults for the bash CLI (daemon overrides live in
-# Settings → CLI Tools; locked tools cannot be Open). Pure helpers below
-# are unit-testable via the BEGIN/END markers (see tests/cli/).
+# ── CLI tool identity policy ──
+# The CLI's own table: which catalog tool a command is, whether that tool
+# sends the session's passport in a K2 terminal (id) or not (open), and
+# which tools are locked (never open). Nothing else holds a copy, and no
+# setting overrides it. The daemon still decides every request. The pure
+# helpers below are unit-testable via the BEGIN/END markers (see tests/cli/).
 # BEGIN_CLI_TOOL_POLICY
 
 # Map a top-level `k2 <verb>` (and, for `agent`, its sub-verb) to a catalog

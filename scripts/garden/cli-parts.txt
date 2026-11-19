@@ -6,7 +6,7 @@
 # <command>` cuts the `k2 --schema` manifest at that command's entry; a
 # part named schema/<noun> becomes cli/src/schema/<noun>.entries.
 prelude	(file start)
-cli-tools-policy	CLI Tools identity policy (mirrors crates/k2-core cli_tool_policy)
+cli-tools-policy	CLI tool identity policy
 cell-socket	#58 Phase-1 close: scoped per-cell UDS arms
 respond	F2 (sandbox cell + HOST session) — k2 respond
 session-complete	Host-session / sandbox completion — k2 done (API lifecycle)

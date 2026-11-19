@@ -160,6 +160,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.15 Claude sign-in warning: the owner pop-up is about the window's
   // own server's LLM tokens (shown from App.tsx), like the Settings rows.
   'components/LlmSignInWarning/LlmSignInWarning.tsx',
+  // 0.46.16 "Get this server ready for Apps": the owner's one-click card is
+  // about the window's own server's App setup, like the Settings App rows.
+  'components/AppsReadyOffer/apps-ready-api.ts',
   'components/Settings/sections/AdminAccessDialogs.tsx',
   'components/Settings/sections/AdminAccessPanel.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',

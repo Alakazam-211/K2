@@ -58,16 +58,16 @@
 13 K2 src/renderer/components/Settings/sections/ConnectionsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 13 K2 src/renderer/components/Settings/sections/EmailHostingSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 13 K2 src/renderer/components/Settings/sections/LocalGrokBotsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-12 K2 crates/k2-daemon/src/app_user_invites.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 12 K2 crates/k2-daemon/src/apps/grace.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 12 K2 crates/k2-daemon/src/sew/voice.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-12 K2 src/renderer/components/Help/k2Nouns.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 12 K2 src/renderer/lib/editor/live/live-notices.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 12 K2 src/renderer/lib/voice/voice-wire.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 11 K2 crates/k2-client/src/cli_install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-core/src/llm_accounts/identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+11 K2 crates/k2-daemon/src/app_user_invites.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-daemon/src/mail/forward_sync.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-root-helper/src/creds.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+11 K2 src/renderer/components/Help/k2Nouns.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 11 K2 src/renderer/components/Settings/sections/AppsResourcesSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 11 K2 src/renderer/components/Settings/sections/PeopleSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 11 K2 src/renderer/components/Settings/sections/RemoteDesktopSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
@@ -104,7 +104,6 @@
 9 K2 src/renderer/lib/voice/video-labels.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 8 K2 crates/k2-core/src/skills/writer.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 8 K2 crates/k2-core/src/skin.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-8 K2 crates/k2-core/src/tunnel/connector.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 8 K2 crates/k2-core/src/workspace/harness.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 8 K2 crates/k2-core/src/zen/schema.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 8 K2 crates/k2-core/src/zen/widgets.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -162,7 +161,6 @@
 6 K2 crates/k2-daemon/src/compute_move.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/mail/jmap.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/mail/routes_send.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-6 K2 crates/k2-daemon/src/permission/actions/publish.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/sew/fetch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/shared_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/site_gate/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -190,7 +188,7 @@
 5 K2 crates/k2-core/src/hire/template/save.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/push/vectors.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/skills/version.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-5 K2 crates/k2-core/src/tunnel/identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+5 K2 crates/k2-core/src/tunnel/connector.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/workspace/onboarding.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/zen/sync.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/zen/widget_store.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -199,7 +197,6 @@
 5 K2 crates/k2-daemon/src/apps/routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/chat_refresh.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/desktop/virtual_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-5 K2 crates/k2-daemon/src/domains/acme.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/email_notify/app_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/federation_vault.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/garden_data/workbench_rows.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -207,6 +204,7 @@
 5 K2 crates/k2-daemon/src/mail/routes_link_oauth.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/mail/sieve_lockdown.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/permission/actions/chat_cards.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+5 K2 crates/k2-daemon/src/permission/actions/publish.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/permission/actions/vault_grant_server.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/publish_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-daemon/src/publish_runtime.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -243,6 +241,7 @@
 4 K2 crates/k2-core/src/push/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/site_visibility.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/skin_invites.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+4 K2 crates/k2-core/src/tunnel/identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/tunnel/render.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/wiki/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/zen/card_moves.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -255,15 +254,13 @@
 4 K2 crates/k2-daemon/src/apps/requires.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/apps/runtime_notes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/apps/supervisor.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-4 K2 crates/k2-daemon/src/capabilities.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/clone_proposal_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/compute_git.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/compute_trust.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-4 K2 crates/k2-daemon/src/connect_proxy.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/desktop/virtual_desktop.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/docs/host.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/docs/routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-4 K2 crates/k2-daemon/src/docs/target.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+4 K2 crates/k2-daemon/src/domains/acme.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/email_notify/budget.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/email_notify/owner_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/email_notify/send.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -324,10 +321,8 @@
 3 K2 crates/k2-core/src/runtime_dir.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/sim/android/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/sim/ios/helper.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-core/src/sim/manager.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/sources/state.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/tool_hook/governed.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-core/src/tunnel/cert_broker.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/zen/widget_folder.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/agent_harness.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/app_pairing/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -347,7 +342,6 @@
 3 K2 crates/k2-daemon/src/compute_preset.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/connect_users_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/desktop/managed.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-daemon/src/docs/export.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/domains/renew.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/garden_data/call.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/heartbeat_launch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -356,9 +350,7 @@
 3 K2 crates/k2-daemon/src/mail/domains.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/mail/drafts.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/mail/profile.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-daemon/src/mail/ptr.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/mail/routes_external.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-daemon/src/misc_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/power/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/project_group_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/publish_site_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -415,7 +407,6 @@
 2 K2 crates/k2-core/src/app_sdk/sew_kit.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/ci.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/connect_users.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 crates/k2-core/src/federation/pairing.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/federation/tray.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/garden_data/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/hire/converge.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -424,6 +415,7 @@
 2 K2 crates/k2-core/src/secret_paths.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/sew_chat/teach.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/sim/ios/simctl.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-core/src/sim/manager.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/skin_account_deletion.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/skin_ties.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/suite/seeds_json.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -449,13 +441,16 @@
 2 K2 crates/k2-daemon/src/apps/move_plan.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/apps/open.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/apps/static_engine.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-daemon/src/capabilities.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/claude_auth_host.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/compute_allow.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/compute_secrets.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/connect_device_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-daemon/src/connect_proxy.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/desktop/env_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-daemon/src/docs/export.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/docs/preview/route.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 crates/k2-daemon/src/domains/routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-daemon/src/docs/target.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/email_notify/agent_notices.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/email_notify/relay.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/email_notify/senders.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -468,6 +463,7 @@
 2 K2 crates/k2-daemon/src/mail/backup.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/mail/dav.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/mail/preflight.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-daemon/src/misc_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/overlay_routes/secret_delivery.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/permission/actions/vault_send.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/permission/actions/workbench.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -488,14 +484,12 @@
 2 K2 crates/k2-daemon/src/sew/service_user.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/sew/users.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/sew_chat/routes_approvals.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 crates/k2-daemon/src/sim_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/skin_hydra.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/sources/tinker_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/splice_guard.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/sql/query.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/sql/supervisor.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/sql/versions_access.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 crates/k2-daemon/src/tunnel_tls_listener.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/vault/adopt.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/vault/proxy.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-node-proto/src/needs.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
@@ -603,7 +597,6 @@
 1 K2 crates/k2-core/src/compute/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/compute/share.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/compute/sync.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-core/src/connections.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/contract/lint.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/contract/live.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/deploy/engine.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -611,6 +604,7 @@
 1 K2 crates/k2-core/src/external_agents/collect.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/federation/address_notice.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/federation/dial.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-core/src/federation/pairing.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/feedback_brief.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/first_run_text.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/frame_policy.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -634,7 +628,6 @@
 1 K2 crates/k2-core/src/sew_chat/hub.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/sim/android/sdk.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/sim/ios_node/fake_node.rs keeper: install folder, bundle, helper or asset names that installed copies and the OS hold; they move with the new app, not with the copy
-1 K2 crates/k2-core/src/sim/limits.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/skin_auth_door.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/sources/lint.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/suite/unpack.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -645,6 +638,7 @@
 1 K2 crates/k2-core/src/tool_hook/app_space.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/tool_hook/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/tool_hook/recording.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-core/src/tunnel/cert_broker.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/tunnel/cp_proxy.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/tunnel/relay_list.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/workspace/agent_launch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -697,15 +691,13 @@
 1 K2 crates/k2-daemon/src/desktop/deskd.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/desktop/launch_agent.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/desktop_mirror_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/dns/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/dns/proxy.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/docs/annotations.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/docs/claims.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/docs/conflicts.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/docs/live.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/docs/tier0.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/domains/bind.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/domains/pending_watch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/domains/routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/domains/store.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/egress.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/email_notify/compose.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -732,6 +724,7 @@
 1 K2 crates/k2-daemon/src/mail/dns_verify.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail/graph.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail/mailbox_guard.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/mail/ptr.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail/send.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail/watch/routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -765,12 +758,14 @@
 1 K2 crates/k2-daemon/src/sew/recording_rollout.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/sew/secrets.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/sew_chat/routes_admin.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/sim_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/sources/approve_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/sql/named_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/sql/pgmove/request.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/sql/pgmove/worker.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/stash_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/ticket_settings_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/tunnel_tls_listener.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/usage_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/v1_host_sessions.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/v1_sandboxes/policy.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -840,7 +835,6 @@
 1 K2 src/renderer/components/FileViewerPane/BoardFileCard.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/FileViewerPane/BoardFileName.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/FileViewerPane/FileViewerPane.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/FileViewerPane/LiveDocView.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/GrokBots/GrokBotTag.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Help/cli-explorer.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Home/room/HomeRemoteRooms.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
@@ -896,7 +890,6 @@
 1 K2 src/renderer/components/TopBar/AppMenuPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/TopBar/ServerSwitcher.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Usage/LimitBar.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Voice/CallViewButtons.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Voice/CallWindow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Wiki/FocusGroupFilterDropdown.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Wiki/WikiWorkspacePicker.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand

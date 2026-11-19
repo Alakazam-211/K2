@@ -136,7 +136,7 @@ async fn an_incoming_request_is_k2s_card_owner_allows_deny_rejects() {
     let what = vw["whatChanges"].as_str().unwrap();
     assert!(what.contains("Let lab::gamma.postal.bot (its owner: Dana) be friends with"), "{what}");
     let effect = vw["consequences"].as_str().unwrap();
-    assert!(effect.contains("let's pair") && effect.contains("SHA256:abc"), "{effect}");
+    assert!(effect.contains("SHA256:abc") && effect.ends_with("Their note: \u{201c}let's pair\u{201d}"), "the note goes last, in quotes, with no stray stop: {effect}");
     // The same request again: the same card.
     let again = crate::postal_routes::receive_request(&ws.id, &peer, None, None, Some("pr_1"), None, None).unwrap();
     assert_eq!(
@@ -210,7 +210,10 @@ async fn a_request_with_a_pairing_code_is_alone_never_shows_the_code_and_allow_n
     assert_ne!(Some(card.as_str()), plain["card"]["card"].as_str(), "a request with a code never joins a batch");
     let vw = view(&ws, &card);
     assert!(!vw.to_string().contains("482913") && !vw.to_string().contains("482 913"), "the code is never on the card: {vw}");
-    assert!(vw["whatChanges"].as_str().unwrap().contains("Allow opens K2's own form"), "{vw}");
+    // The headline says what accepting does; the code step is the card's
+    // own button. The words name who to compare codes with.
+    assert!(!vw["whatChanges"].as_str().unwrap().contains("Allow opens"), "{vw}");
+    assert!(vw["consequences"].as_str().unwrap().contains("First you and Dana compare 6-digit codes in K2\u{2019}s own form"), "{vw}");
     // Allow without the code (K2's form on the card types it first): refused
     // before anything is decided, and the card stays open.
     let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));

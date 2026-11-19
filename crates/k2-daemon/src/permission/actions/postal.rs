@@ -9,7 +9,7 @@
 //! | **`postal.enable`** | the agent: `k2 postal enable`, or the Ask-with line of any `postal_off` refusal | the Owner | turns the server's Postal switch (Beta, off by default) on |
 //! | **`postal.claim address=`** | the agent: `k2 postal claim <address>` | an Owner or Admin | gives the workspace that Postal address (kept here; the network confirms it later) |
 //! | **`postal.invite to= [note=]`** | the agent: `k2 postal invite <address> --why "…"` | an Owner or Admin | sends the friend request over the Postal network (kept `pending_out` until this server is connected) |
-//! | **`postal.pair.accept id= [pairing=code]`** | K2 itself, on both boxes, when a request's handshake is done (or a friend's key changed); the agent's `k2 postal accept <id>` puts the same card up again | the Owner (Admins when the Owner allows it) | with `pairing=code`, K2's own form on the card shows this box's code and posts the code from the OTHER box to the decide route (Allow is then already done); Deny rejects |
+//! | **`postal.pair.accept id= [pairing=code]`** | K2 itself, on both boxes, when a request's handshake is done (or a friend's key changed); the agent's `k2 postal accept <id>` puts the same card up again | the Owner (Admins when the Owner allows it) | with `pairing=code`, K2's own form on the card ("Type their code") shows this box's code and posts the code from the OTHER box to the decide route (Allow is then already done); Deny (the desktop's Reject) rejects |
 //! | **`postal.link-p5`** | the agent (or a person): `k2 postal link-p5` | the Owner | mints a key that can only message this workspace, turns on what it needs, hands it to p5 |
 //!
 //! Tightening needs no card: an agent removes, blocks or rejects its own
@@ -374,31 +374,34 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             let owner_name = f.as_ref().and_then(|f| f.owner_name.clone()).filter(|o| !o.trim().is_empty());
             let owner = owner_name.as_ref().map(|o| format!(" (its owner: {o})")).unwrap_or_default();
             let rekey = f.as_ref().is_some_and(|f| f.status == "rekey_pending");
-            let has_code = wants_code(ctx);
-            let mut what = if rekey {
+            // The headline says what accepting does; the card's own buttons
+            // say how (K2's code form, when the request carries a code).
+            let what = if rekey {
                 format!("Trust the new key of {peer}{owner}, a Postal friend of {ws}")
             } else {
                 format!("Let {peer}{owner} be friends with {ws} on Postal")
             };
-            if has_code {
-                // Never the code itself: the agent reads its own Thread.
-                what.push_str(&format!(". Allow opens {}'s own form: read your 6-digit code to them, and type the code shown on their screen", product_name!()));
-            }
             put("accept", what);
             let mut effect = if rekey {
-                format!(
-                    "{peer}'s key changed on the Postal network, and its mail is held back until a person here trusts the new key. Deny ends the friendship."
-                )
+                format!("{peer}\u{2019}s key changed on the Postal network, so its mail waits until a person here trusts the new key. Turning it down ends the friendship.")
             } else {
-                format!(
-                    "{peer} can then write to {ws}: its mail reaches {ws} under a [postal {peer} · p_…] label, every line quoted. The two codes match only if nobody sits between the two servers. Deny rejects the request. {ws} or a person can remove or block {peer} later."
-                )
+                format!("{peer} can then write to {ws}. Its mail arrives labelled [postal {peer} \u{b7} p_\u{2026}], every line quoted. You can remove or block {peer} later.")
             };
-            if let Some(note) = f.as_ref().and_then(|f| f.note.clone()).filter(|n| !n.trim().is_empty()) {
-                effect.push_str(&format!(" Their note: \"{}\".", note.trim()));
+            if wants_code(ctx) {
+                // Never the code itself: the agent reads its own Thread.
+                let with = owner_name.clone().unwrap_or_else(|| format!("{peer}\u{2019}s person"));
+                effect.push_str(&format!(
+                    " First you and {with} compare 6-digit codes in {}\u{2019}s own form: they match only if nobody sits between the two servers.",
+                    product_name!()
+                ));
             }
             if let Some(fp) = f.as_ref().and_then(|f| f.peer_fingerprint.clone()) {
                 effect.push_str(&format!(" Their key: {fp}."));
+            }
+            // The asker's note goes last, in quotes, as they wrote it (a
+            // client that shows the note on its own drops this sentence).
+            if let Some(note) = f.as_ref().and_then(|f| f.note.clone()).filter(|n| !n.trim().is_empty()) {
+                effect.push_str(&format!(" Their note: \u{201c}{}\u{201d}", note.trim()));
             }
             put("effect", effect);
         }

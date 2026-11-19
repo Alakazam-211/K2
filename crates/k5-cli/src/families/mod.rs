@@ -20,6 +20,8 @@
 //! - [`setup`]: `k5 setup [--json]`, the setup checklist, and its writes
 //!   (`hide`, `show`, `skip`, `kessel`, `chief-of-staff`,
 //!   `dismiss-offer`), the reads and the writes each behind a switch.
+//! - [`workspace`]: `k5 workspace list`, `create`, `open`, `launch`,
+//!   `profile` and `update`, the verbs a first run uses.
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
 //! and the others return `None`) when it is a form only the shell
@@ -75,6 +77,7 @@ pub mod sessions;
 pub mod setup;
 pub mod update;
 pub mod whoami;
+pub mod workspace;
 
 /// The port as curl takes it from the shell's URL: digits only, and a
 /// port number.

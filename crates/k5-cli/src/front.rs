@@ -9,7 +9,7 @@
 //!
 //! A family's help never reaches the family: a `whoami`, `done`,
 //! `respond`, `inbox`, `read`, `activity`, `sessions`, `connections`,
-//! `connect`, `feedback` (`tickets`), `update` or `setup` command line with `-h` or
+//! `connect`, `feedback` (`tickets`), `update`, `setup` or `workspace` command line with `-h` or
 //! `--help` anywhere in it (`setup`: or the word `help`) is a help page
 //! when it is exactly a form the shell only prints a file for
 //! ([`Route::Help`], [`help_route`]), and falls through
@@ -81,6 +81,10 @@ pub enum Route {
     /// no `-h` or `--help` in it ([`crate::families::feedback`], which may
     /// still hand it to the shell).
     Feedback,
+    /// `workspace` with a verb the route table sends here and no `-h` or
+    /// `--help` in it ([`crate::families::workspace`], which may still
+    /// hand it to the shell).
+    Workspace,
     /// `update` with no `-h` or `--help` in it ([`crate::families::update`],
     /// which hands a form whose switch is off to the shell).
     Update,
@@ -197,6 +201,7 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         ("connect", Route::Connect),
         ("feedback", Route::Feedback),
         ("update", Route::Update),
+        ("workspace", Route::Workspace),
     ] {
         if noun.names(word) {
             return route;

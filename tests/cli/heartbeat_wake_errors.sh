@@ -44,8 +44,11 @@ bad() {
     failed+=("$1")
 }
 
-# The stub reads plan.json on every request: {"<route>": [status, body]}.
-# A route the plan does not name answers 404.
+# The stub reads plan.json on every request: {"<route>": [status, body]},
+# or {"<route>": {"seq": [[status, body], ...]}} for a route asked more than
+# once: the nth request gets the nth answer, the last one repeats. Status 0
+# closes the connection with no answer. A route the plan does not name
+# answers 404.
 cat >"$T/stub.py" <<'PY'
 import http.server, json, os, sys
 log, plan, portfile = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -58,7 +61,21 @@ class H(http.server.BaseHTTPRequestHandler):
             f.write("%s %s auth=%s\n" % (self.command, self.path, self.headers.get("Authorization") or ""))
         with open(plan) as f:
             routes = json.load(f)
-        status, body = routes.get(self.path.split("?", 1)[0], [404, '{"error":"not found"}'])
+        route = self.path.split("?", 1)[0]
+        entry = routes.get(route, [404, '{"error":"not found"}'])
+        if isinstance(entry, dict):
+            counts = {}
+            if os.path.exists(plan + ".counts"):
+                with open(plan + ".counts") as f:
+                    counts = json.load(f)
+            n = counts.get(route, 0)
+            counts[route] = n + 1
+            with open(plan + ".counts", "w") as f:
+                json.dump(counts, f)
+            entry = entry["seq"][min(n, len(entry["seq"]) - 1)]
+        status, body = entry
+        if status == 0:
+            return
         body = body.encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -92,7 +109,7 @@ NOOP='{"status":"noop","reason":"no inbox work found"}'
 ITEM='[{"id":"review-the-plan","filename":"review-the-plan.md","folder":"","title":"Review the plan","priority":"normal","created":"2026-11-18T09:00:00Z","source":"msg","from":"acme-site","bodyPreview":"Please read the plan and say what is missing.","summary":"Read the plan"}]'
 ASK='k2 permission request heartbeats.read --why "<what you need it for>"'
 
-plan() { printf '%s\n' "$1" >"$T/plan.json"; }
+plan() { rm -f "$T/plan.json.counts"; printf '%s\n' "$1" >"$T/plan.json"; }
 # js <text>: text as a JSON string, for a body inside a plan.
 js() { python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
 
@@ -255,6 +272,82 @@ case "$(cat "$T/err")" in
         fi ;;
     *) bad "nothing listens on the port" ;;
 esac
+
+echo "the manager scan and the launch poll: a failed read is an error, never asleep"
+WORK='"/cli/agents/list": [200, "[{\"name\":\"a\",\"inboxCount\":1}]"], "/cli/inbox/list": [200, "[]"]'
+BUSY='[500, "{\"error\":\"session map busy\"}"]'
+posted() { # posted [route]: how many POSTs (of route) the stub saw
+    grep -c "^POST ${1:-}" "$T/requests.log" || true
+}
+# err_like <case> <exit> <glob>: that exit, one stderr line matching glob, no noop.
+err_like() {
+    # shellcheck disable=SC2254
+    case "$(cat "$T/err")" in
+        $3) if [ "$RC" = "$2" ] && [ "$(wc -l <"$T/err" | tr -d ' ')" = 1 ] && ! grep -qF '"status":"noop"' "$T/out"; then
+                ok "$1"
+            else
+                bad "$1 (want exit $2 and stderr like: $3)"
+            fi ;;
+        *) bad "$1 (want exit $2 and stderr like: $3)" ;;
+    esac
+}
+# never_launched <case>: nothing was posted (no launch, no write).
+never_launched() {
+    if [ "$(posted)" != 0 ]; then
+        bad "$1: it posted"
+        return 1
+    fi
+}
+# poll_stopped <case>: the launch was posted once, then nothing else, and
+# no launched line.
+poll_stopped() {
+    if [ "$(posted)" != 1 ] || [ "$(posted /cli/agents/launch?)" != 1 ] || grep -qF '"status":"launched' "$T/out"; then
+        bad "$1: want one POST (the launch) and no launched line"
+        return 1
+    fi
+}
+CLOSED="Error: k2 heartbeat wake: K2's server closed the connection on /cli/agents/running: *; run k2 daemon status"
+
+plan '{'"$WORK"', "/cli/agents/running": '"$BUSY"'}'
+wake
+never_launched "the scan answers 500" && is_error "the scan answers 500" 1 \
+    "Error: k2 heartbeat wake: K2's server answered /cli/agents/running with HTTP 500: session map busy"
+plan '{'"$WORK"', "/cli/agents/running": [200, "<html>not json</html>"]}'
+wake
+never_launched "the scan answers something that is not JSON" && is_error "the scan answers something that is not JSON" 1 \
+    "Error: k2 heartbeat wake: K2's server answered /cli/agents/running with something that is not JSON"
+plan '{'"$WORK"', "/cli/agents/running": [0, ""]}'
+wake
+never_launched "the scan gets no answer" && err_like "the scan gets no answer" 1 "$CLOSED"
+plan '{'"$WORK"', "/cli/agents/running": [200, "{\"sessions\":[]}"]}'
+wake
+never_launched "the scan answers an object" && is_error "the scan answers an object" 1 \
+    "Error: k2 heartbeat wake: K2's server answered /cli/agents/running with a dict, not a list of sessions"
+plan '{'"$WORK"', "/cli/agents/running": [403, "{\"error\":\"not allowed: read sessions\",\"permission\":{\"command\":\"k2 permission request heartbeats.read --why \\\"<what you need it for>\\\"\"}}"]}'
+wake
+never_launched "the scan is refused with a card" && is_error "the scan is refused with a card" 3 \
+    "Error: k2 heartbeat wake: K2's server refused /cli/agents/running with HTTP 403: not allowed: read sessions" \
+    "Ask with: $ASK"
+
+LAUNCH='"/cli/agents/launch": [200, "{\"success\":true}"], "/cli/terminal/write": [200, "{\"ok\":true}"]'
+plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], '"$BUSY"']}}'
+wake
+poll_stopped "the launch poll answers 500" && is_error "the launch poll answers 500" 1 \
+    "Error: k2 heartbeat wake: K2's server answered /cli/agents/running with HTTP 500: session map busy"
+plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [0, ""]]}}'
+wake
+poll_stopped "the launch poll gets no answer" && err_like "the launch poll gets no answer" 1 "$CLOSED"
+plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}}'
+wake
+if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&
+    [ "$(tail -n 1 "$T/out")" = '{"success":true}{"ok":true}{"status":"launched_and_notified","terminalId":"agent-chat-manager"}' ] &&
+    [ "$(gets /cli/agents/running)" = 2 ] && [ "$(posted /cli/agents/launch?)" = 1 ] &&
+    [ "$(posted /cli/terminal/write?)" = 1 ] && grep -qF 'POST /cli/agents/launch?project=' "$T/requests.log" &&
+    grep -qF '&agent=manager ' "$T/requests.log" && grep -qF 'id=agent-chat-manager&message=New%20work%20detected' "$T/requests.log"; then
+    ok "no manager running: it is launched, then told once its terminal is up"
+else
+    bad "no manager running: it is launched, then told once its terminal is up"
+fi
 
 if [ "${#failed[@]}" -gt 0 ]; then
     echo "heartbeat_wake_errors: ${#failed[@]} failed, $pass passed: ${failed[*]}" >&2

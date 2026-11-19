@@ -7213,20 +7213,23 @@ cmd_heartbeat_wake() {
     # 3. If manager is asleep → launch with triage prompt
     # Work is an agent's inbox count above 0, or an item at the root of
     # the workspace inbox (/cli/inbox/list with folder=: arrivals nobody
-    # has filed yet; filed items sit in folders).
+    # has filed yet; filed items sit in folders). Whether the manager runs
+    # is the daemon's live sessions (/cli/agents/running).
     # K2_NO_OWNER_FALLBACK with no session passport: refuse as the
     # connection guard does; the block below never reads the token file.
     if [ -n "${_k2_no_owner_fallback:-}" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
         _k2_refuse_owner_fallback
     fi
-    # "noop" only when the daemon answered and there is no inbox work.
-    # Anything else (no port, the Python stopping, a refusal, an error
-    # status, an answer that is not JSON, no connection) prints one line
-    # on stderr and exits non-zero: 3 for a refusal that carries a
-    # permission card (with its Ask with: line), 1 for the rest.
-    local has_work wake_rc=0
-    has_work=$(python3 -c "
-import json, os, socket, sys, urllib.error, urllib.parse, urllib.request
+    # One Python block makes every request, so each read is checked the
+    # same way. "noop" only when the daemon answered and there is no inbox
+    # work; the manager is launched only when the daemon's live sessions
+    # answered and have no manager. Anything else (no port, the Python
+    # stopping, a refusal, an error status, an answer that is not JSON, no
+    # connection) prints one line on stderr and exits non-zero: 3 for a
+    # refusal that carries a permission card (with its Ask with: line), 1
+    # for the rest.
+    python3 -c "
+import json, os, socket, sys, time, urllib.error, urllib.parse, urllib.request
 
 def fail(msg, code=1):
     print('Error: k2 heartbeat wake: ' + msg, file=sys.stderr)
@@ -7281,17 +7284,17 @@ def refused(route, code, data, raw):
             sys.exit(3)
     sys.exit(1)
 
-def answer(route, **params):
-    # The JSON the daemon answered on route with HTTP 200; anything else
-    # ends the command with its error line.
+def request(route, method='GET', **params):
+    # The daemon's status and body for route; no answer ends the command.
     query = 'project=' + urllib.parse.quote(project)
     query += ''.join('&' + k + '=' + urllib.parse.quote(v, safe='') for k, v in params.items())
-    req = urllib.request.Request(f'{base}{route}?{query}', headers=auth)
+    body = b'' if method == 'POST' else None
+    req = urllib.request.Request(f'{base}{route}?{query}', data=body, headers=auth, method=method)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            code, raw = resp.status, resp.read()
+            return resp.status, resp.read()
     except urllib.error.HTTPError as e:
-        code, raw = e.code, e.read()
+        return e.code, e.read()
     except (socket.timeout, TimeoutError):
         fail(f\"K2's server didn't answer {route} within 5 s; run k2 daemon status\")
     except urllib.error.URLError as e:
@@ -7300,6 +7303,11 @@ def answer(route, **params):
         fail(f\"can't reach K2's server at {base}: {e.reason}; run k2 daemon status\")
     except OSError as e:
         fail(f\"K2's server closed the connection on {route}: {e}; run k2 daemon status\")
+
+def answer(route, **params):
+    # The JSON the daemon answered on route with HTTP 200; anything else
+    # ends the command with its error line.
+    code, raw = request(route, **params)
     try:
         data = json.loads(raw)
     except ValueError:
@@ -7310,34 +7318,22 @@ def answer(route, **params):
         refused(route, code, data, raw)
     return data
 
-try:
-    agents = answer('/cli/agents/list')
-    if not isinstance(agents, list) or not all(isinstance(a, dict) for a in agents):
-        fail(f\"K2's server answered /cli/agents/list with a {type(agents).__name__}, not a list of agents\")
-    agent_inbox = any(a.get('inboxCount', 0) > 0 for a in agents)
-    items = answer('/cli/inbox/list', folder='')
-    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
-        fail(f\"K2's server answered /cli/inbox/list with a {type(items).__name__}, not a list of inbox items\")
-    ws_inbox = len(items) > 0
-except SystemExit:
-    raise
-except Exception as e:
-    fail(f'the inbox check stopped: {type(e).__name__}: {e}')
+def post(route, **params):
+    # A change; its answer is printed as it comes.
+    code, raw = request(route, method='POST', **params)
+    sys.stdout.write(raw.decode('utf-8', 'replace'))
 
-print('yes' if (agent_inbox or ws_inbox) else 'no')
-") || wake_rc=$?
-    [ "$wake_rc" = 0 ] || exit "$wake_rc"
+def say(**fields):
+    print(json.dumps(fields, separators=(',', ':'), ensure_ascii=False))
 
-    if [ "$has_work" != "yes" ]; then
-        echo '{"status":"noop","reason":"no inbox work found"}'
-        return
-    fi
+def sessions():
+    # The daemon's live sessions. A read that fails ends the command: it
+    # never counts as no manager, so it never launches one.
+    data = answer('/cli/agents/running')
+    if not isinstance(data, list) or not all(isinstance(t, dict) for t in data):
+        fail(f\"K2's server answered /cli/agents/running with a {type(data).__name__}, not a list of sessions\")
+    return data
 
-    # Is the manager running? The daemon's live sessions say.
-    local manager_terminal="" running
-    running=$(cli_request "/cli/agents/running" 2>/dev/null)
-    manager_terminal=$(echo "$running" | python3 -c "
-import json, sys
 def agent_from_tid(tid):
     # New format: agent-chat:<project_id>:<agent>[:hb:<heartbeat>]
     # Worktree:   agent-chat:wt:<workspace_id>     -> no agent name
@@ -7352,56 +7348,60 @@ def agent_from_tid(tid):
         return tid[len('agent-chat-'):] or None
     return None
 
-try:
-    data = json.loads(sys.stdin.read())
-    for t in data:
-        cwd = t.get('cwd', '')
-        tid = t.get('terminalId', '')
-        agent = agent_from_tid(tid)
-        if '.k2/agents/manager' in cwd or '.k2so/agents/manager' in cwd or '.k2/agents/coordinator' in cwd or '.k2so/agents/coordinator' in cwd or agent in ('manager', 'coordinator'):
-            print(tid)
-            break
-except: pass
-" 2>/dev/null)
+def in_manager_dir(cwd):
+    return any(d in cwd for d in ('.k2/agents/manager', '.k2so/agents/manager', '.k2/agents/coordinator', '.k2so/agents/coordinator'))
 
-    if [ -n "$manager_terminal" ]; then
-        # Manager is awake — send triage message
-        local msg="New work detected. Run k2 inbox to see your inbox and triage work."
-        cli_request_post "/cli/terminal/write" "id=$(urlencode "$manager_terminal")&message=$(urlencode "$msg")"
-        echo "{\"status\":\"notified\",\"terminalId\":\"$manager_terminal\"}"
-    else
-        # Manager is asleep — launch it, then send triage message after startup
-        cli_request_post "/cli/agents/launch" "agent=manager"
-        # Wait for the terminal to be created and Claude to initialize
-        local attempts=0
-        while [ $attempts -lt 12 ]; do
-            sleep 5
-            attempts=$((attempts + 1))
-            # Check if manager terminal now exists
-            local check
-            check=$(cli_request "/cli/agents/running" 2>/dev/null)
-            local new_id
-            new_id=$(echo "$check" | python3 -c "
-import json, sys
+def running_manager(found):
+    for t in found:
+        cwd, tid = t.get('cwd', ''), t.get('terminalId', '')
+        if in_manager_dir(cwd) or agent_from_tid(tid) in ('manager', 'coordinator'):
+            return tid
+    return ''
+
+def launched_manager(found):
+    for t in found:
+        cwd, tid = t.get('cwd', ''), t.get('terminalId', '')
+        if in_manager_dir(cwd) or tid.startswith('agent-chat-manager') or tid.startswith('agent-chat-coordinator'):
+            return tid
+    return ''
+
+TRIAGE = 'New work detected. Run k2 inbox to see your inbox and triage work.'
+
 try:
-    data = json.loads(sys.stdin.read())
-    for t in data:
-        cwd = t.get('cwd', '')
-        tid = t.get('terminalId', '')
-        if '.k2/agents/manager' in cwd or '.k2so/agents/manager' in cwd or '.k2/agents/coordinator' in cwd or '.k2so/agents/coordinator' in cwd or tid.startswith('agent-chat-manager') or tid.startswith('agent-chat-coordinator'):
-            print(tid)
-            break
-except: pass
-" 2>/dev/null)
-            if [ -n "$new_id" ]; then
-                local msg="New work detected. Run k2 inbox to see your inbox and triage work."
-                cli_request_post "/cli/terminal/write" "id=$(urlencode "$new_id")&message=$(urlencode "$msg")"
-                echo "{\"status\":\"launched_and_notified\",\"terminalId\":\"$new_id\"}"
-                return
-            fi
-        done
-        echo '{"status":"launched","agent":"manager","note":"triage message not sent - terminal not ready"}'
-    fi
+    agents = answer('/cli/agents/list')
+    if not isinstance(agents, list) or not all(isinstance(a, dict) for a in agents):
+        fail(f\"K2's server answered /cli/agents/list with a {type(agents).__name__}, not a list of agents\")
+    agent_inbox = any(a.get('inboxCount', 0) > 0 for a in agents)
+    items = answer('/cli/inbox/list', folder='')
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        fail(f\"K2's server answered /cli/inbox/list with a {type(items).__name__}, not a list of inbox items\")
+    if not (agent_inbox or items):
+        say(status='noop', reason='no inbox work found')
+        sys.exit(0)
+
+    manager = running_manager(sessions())
+    if manager:
+        # Manager is awake: send the triage message.
+        post('/cli/terminal/write', id=manager, message=TRIAGE)
+        say(status='notified', terminalId=manager)
+        sys.exit(0)
+
+    # Manager is asleep: launch it, then send the triage message once its
+    # terminal is up (Claude needs a moment to start).
+    post('/cli/agents/launch', agent='manager')
+    for _ in range(12):
+        time.sleep(5)
+        new_id = launched_manager(sessions())
+        if new_id:
+            post('/cli/terminal/write', id=new_id, message=TRIAGE)
+            say(status='launched_and_notified', terminalId=new_id)
+            sys.exit(0)
+    say(status='launched', agent='manager', note='triage message not sent - terminal not ready')
+except SystemExit:
+    raise
+except Exception as e:
+    fail(f'the wake stopped: {type(e).__name__}: {e}')
+" || exit $?
 }
 
 cmd_agent_complete() {

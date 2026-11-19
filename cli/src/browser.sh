@@ -498,7 +498,7 @@ cmd_thread() {
         echo "Usage: k2 thread <addr> \"text\"     # write overlay text" >&2
         echo "       k2 thread <addr> [\"text\"] --file path[:line[-end]]   # attach files" >&2
         echo "       k2 thread <addr> [--json] [--limit N|--all] [--before-seq N]" >&2
-        echo "       k2 thread ask <addr> \"prompt\" --options \"a,b,c\"" >&2
+        echo "       k2 thread ask <addr> \"prompt\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2
         echo "       k2 thread secret <addr> --name NAME" >&2
         echo "       k2 thread withdraw <addr> <card-id> [--why \"…\"]" >&2
         echo "       k2 thread dismiss <addr> <card-id> [--why \"…\"]" >&2
@@ -736,10 +736,10 @@ cmd_thread_ask() {
                 shift ;;
         esac
     done
-    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --options \"a,b,c\"" >&2; exit 1; }
-    [[ -n "$prompt" ]] || { echo "Error: prompt required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --options \"a,b,c\"" >&2; exit 1; }
+    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2; exit 1; }
+    [[ -n "$prompt" ]] || { echo "Error: prompt required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2; exit 1; }
     if [[ -z "$options_csv" && ${#option_list[@]} -eq 0 ]]; then
-        echo "Error: ask requires --options or --option" >&2
+        echo "Error: ask requires --option \"…\" (repeatable) or --options \"a,b,c\"" >&2
         exit 1
     fi
     if [[ -n "$expires" && "$no_expiry" == "true" ]]; then
@@ -778,6 +778,17 @@ print(json.dumps(obj))
     local rc=$?
     _k2_moved_from_note "$response"
     _k2_idem_replay_note "$response"
+    # 0.46.17: the daemon keeps commas inside (), [] and "…" in one option;
+    # a comma that reads like prose ("Yes, k2n2…") still splits, and the
+    # answer's `hint` says so. One stderr line, never a refusal.
+    printf '%s' "$response" | python3 -c 'import json,sys
+try:
+    h=json.loads(sys.stdin.read()).get("hint")
+except Exception:
+    h=None
+if isinstance(h,str) and h:
+    sys.stderr.write("hint: %s\n" % h)
+' || true
     if [[ "$json" == "true" ]]; then
         echo "$response"
         return $rc
@@ -1188,7 +1199,10 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread <addr> --file out/shot.png            # text is optional when a file rides
   k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
   k2 thread <addr> --seq N                        # read message N (the [N] in a read), whole
-  k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
+  k2 thread ask <addr> "prompt" --option "…" --option "…"  # choice card; do not wait
+      --option "…"       repeatable, one per button; commas inside are fine
+      --options "a,b,c"  short labels without commas (commas inside (), [] or "…" stay
+                         in one label; a prose-like comma, "Yes, k2n2…", splits and warns)
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
       [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|proxy|file|env|agent]
@@ -1272,7 +1286,7 @@ this workspace (copy others into it first, e.g. out/); secrets (.env, keys,
 tokens, credentials in the text) are refused: secrets go through k2 vault.
 path:12 or path:12-40 opens at that line.
 
---json on any verb. Ask --option repeatable; --allow-custom; mix with --options is 400.
+--json on any verb. Ask: --option is repeatable; --allow-custom; mixing --option and --options is 400.
 
 A post or an ask that got no answer is asked again with the same key (K2 posts one
 key once). If K2 still doesn't answer, the error says it may have been delivered

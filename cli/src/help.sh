@@ -13,7 +13,8 @@ TALK TO OTHERS
   whoami [--json]                       This cell: workspace / role / address / session
   thread <addr> "text"                  Overlay text (not PTY; that's msg). sales / sales/reviewer
   thread <addr> [--json]                Read / tail that conversation's Thread
-  thread ask <addr> "prompt" --options  Choice card; returns immediately (do not wait)
+  thread ask <addr> "prompt" --option   Choice card (--option "…" repeatable; --options a,b for short
+                                        labels); returns immediately (do not wait)
   thread secret <addr> --name NAME      Secret field; you never see the value
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
   msg <workspace>/<handle> "text"       Sidecar (`sales/1`, `sales/reviewer`; slash not hyphen)

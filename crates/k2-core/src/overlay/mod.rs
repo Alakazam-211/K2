@@ -26,7 +26,7 @@ use crate::product_name;
 pub use doc::{CardAction, ChoiceBody, ChoiceOption, CLOSED_DISMISSED, CLOSED_WITHDRAWN, CLOSE_REASON_MAX_CHARS, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, NoticeAction, SystemNotice, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
 pub use approval::{mark_approval, post_approval, ApprovalCardBody};
 pub use attachments::ThreadAttachment;
-pub use options::{check_ask_caps, parse_options_value, split_options_csv};
+pub use options::{check_ask_caps, parse_ask_options, parse_options_value, split_ask_options, split_options_csv, AskOptions};
 pub use store::{ClientIdHit, ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
 pub use transfer::IMPORTED_READ_ONLY;
 

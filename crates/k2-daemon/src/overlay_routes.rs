@@ -2151,12 +2151,13 @@ fn reject_wait(params: &HashMap<String, String>) -> Result<(), CliResponse> {
     Ok(())
 }
 
-fn collect_ask_options(params: &HashMap<String, String>) -> Result<Vec<String>, CliResponse> {
+/// Labels + a prose-comma hint ([`overlay::split_ask_options`]).
+fn collect_ask_options(params: &HashMap<String, String>) -> Result<overlay::AskOptions, CliResponse> {
     let options = opt_param(params, "options");
     let option = opt_param(params, "option");
     match (options.as_deref(), option.as_deref()) {
         (Some(_), Some(_)) => Err(usage("mix of --options and --option is not allowed")),
-        (Some(raw), None) | (None, Some(raw)) => overlay::parse_options_value(raw).map_err(usage),
+        (Some(raw), None) | (None, Some(raw)) => overlay::parse_ask_options(raw).map_err(usage),
         (None, None) => Err(usage("ask requires --options or --option")),
     }
 }
@@ -2182,8 +2183,8 @@ fn handle_ask(params: &HashMap<String, String>, session_author: &str) -> CliResp
     if prompt.trim().is_empty() {
         return usage("missing prompt");
     }
-    let options = match collect_ask_options(params) {
-        Ok(o) => o,
+    let (options, options_hint) = match collect_ask_options(params) {
+        Ok(o) => (o.options, o.hint),
         Err(e) => return e,
     };
     // §6.10 (prd-agent-settings-cards-v1): at most 8 options of 80
@@ -2238,23 +2239,23 @@ fn handle_ask(params: &HashMap<String, String>, session_author: &str) -> CliResp
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
                 .unwrap_or_default();
-            CliResponse::ok_json(with_moved_from(
-                serde_json::json!({
-                    "ok": true,
-                    "id": item.id,
-                    "from": item.doc.from,
-                    "prompt": choice.map(|c| c.prompt.clone()).unwrap_or_else(|| prompt.trim().to_string()),
-                    "options": labels,
-                    "allow_custom": choice.map(|c| c.allow_custom).unwrap_or(allow_custom),
-                    "status": choice.map(|c| c.status.clone()).unwrap_or_else(|| "pending".to_string()),
-                    "expiresAt": choice.and_then(|c| c.expires_at),
-                    "kind": item.doc.kind,
-                    "seq": item.seq,
-                    "conversation_id": resolved.conversation_id,
-                    "addr": resolved.addr,
-                }),
-                &resolved,
-            ))
+            let mut body = serde_json::json!({
+                "ok": true,
+                "id": item.id,
+                "from": item.doc.from,
+                "prompt": choice.map(|c| c.prompt.clone()).unwrap_or_else(|| prompt.trim().to_string()),
+                "options": labels,
+                "allow_custom": choice.map(|c| c.allow_custom).unwrap_or(allow_custom),
+                "status": choice.map(|c| c.status.clone()).unwrap_or_else(|| "pending".to_string()),
+                "expiresAt": choice.and_then(|c| c.expires_at),
+                "kind": item.doc.kind,
+                "seq": item.seq,
+                "conversation_id": resolved.conversation_id,
+                "addr": resolved.addr,
+            });
+            // A prose-like `--options` comma split anyway; the CLI prints this.
+            if let Some(hint) = options_hint { body["hint"] = serde_json::Value::String(hint); }
+            CliResponse::ok_json(with_moved_from(body, &resolved))
         }
         Err(e) => error_json("400 Bad Request", "usage", e),
     }

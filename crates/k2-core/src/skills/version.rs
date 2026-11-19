@@ -350,7 +350,9 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 62 (0.46.15): the mail and database notes name the Settings
 /// pages by their current labels (Cores → Email Hosting, Cores → Database).
 /// Bumped to 63 (0.46.16): the Study topics list names postal.
-pub const SKILL_VERSION_WORKSPACE: u32 = 63;
+/// Bumped to 64 (0.46.17): `k2 thread ask` leads with the repeatable
+/// `--option "…"` (commas inside are fine); `--options` is for short labels.
+pub const SKILL_VERSION_WORKSPACE: u32 = 64;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

@@ -148,7 +148,7 @@ WHAT PUSHES
   On a server with Thread push (0.45.5+), these can send a phone push
   (K2 Companion) to the people on this server:
     k2 thread <addr> "text"            your first 2 sentences
-    k2 thread ask <addr> "…" --options the question
+    k2 thread ask <addr> "…" --option  the question
     k2 thread secret <addr> --name …   "Asks for a secret"
   The push shows your name and a preview: markdown stripped, at most
   140 characters. Code blocks show as [code]. A secret card never shows

@@ -1922,6 +1922,39 @@ fn mix_options_and_option_is_400() {
     );
 }
 
+#[test]
+fn ask_options_keep_parentheses_and_hint_on_a_prose_comma() {
+    let handle = format!("ovlcomma{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let (project_id, _) = seed(&handle);
+    pin(&project_id, &uuid::Uuid::new_v4().to_string());
+    let ask = |options: serde_json::Value, key: &str| {
+        let mut body = serde_json::json!({ "addr": handle, "prompt": "Which mini?", "from": "k2" });
+        body[key] = options;
+        let resp = dispatch_post("/cli/thread/ask", &HashMap::new(), body.to_string().as_bytes());
+        assert_eq!(resp.status, "200 OK", "ask failed: {}", resp.body);
+        json_body(&resp)
+    };
+
+    // Commas inside parentheses stay in the label; no hint.
+    let kept = ask(serde_json::json!("k2n2-m1 (an M1, small),k2n1-m4,Wait"), "options");
+    assert_eq!(kept["options"], serde_json::json!(["k2n2-m1 (an M1, small)", "k2n1-m4", "Wait"]), "{kept}");
+    assert!(kept.get("hint").is_none(), "no hint on a clean list: {kept}");
+
+    // A prose-like comma still splits, and the answer carries the hint.
+    let prose = ask(serde_json::json!("Yes, k2n2-m1 (an M1; Sew keeps the M4 and k2n3),No"), "options");
+    assert_eq!(prose["options"], serde_json::json!(["Yes", "k2n2-m1 (an M1; Sew keeps the M4 and k2n3)", "No"]), "{prose}");
+    assert_eq!(
+        prose["hint"],
+        r#"an option looks like it continues after a comma ("Yes" / "k2n2-m1 (…)"); to keep commas inside an option, pass each one with --option "…""#,
+        "{prose}"
+    );
+
+    // The repeatable --option form (a JSON array) keeps every comma.
+    let each = ask(serde_json::json!(["Yes, k2n2-m1 (an M1)", "No, wait"]), "option");
+    assert_eq!(each["options"], serde_json::json!(["Yes, k2n2-m1 (an M1)", "No, wait"]), "{each}");
+    assert!(each.get("hint").is_none(), "--option never hints: {each}");
+}
+
 /// The stored card's `answeredBy` (or Null).
 fn answered_doc_by(addr: &str, card_id: &str) -> serde_json::Value {
     let snap = json_body(&dispatch("/cli/thread", &params_of(&[("addr", addr)])).expect("read"));

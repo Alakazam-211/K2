@@ -17,8 +17,10 @@ THREAD
   `k2 thread <addr> "text"`     write overlay (not PTY; that's k2 msg)
   `k2 thread <addr>`            read / tail (default page 25)
   `k2 thread <addr> --seq N`    read message N whole (the [N] in a read)
-  `k2 thread ask <addr> "…" --options a,b,c [--expires 3d]`
-                                choice card; returns immediately
+  `k2 thread ask <addr> "…" --option "…" --option "…" [--expires 3d]`
+                                choice card; returns immediately. --option is
+                                repeatable (commas inside are fine);
+                                --options a,b,c for short labels without commas
   `k2 thread secret <addr> --name NAME`
                                 secret field; you never see the value
   `k2 thread withdraw <addr> <card-id> [--why "…"]`

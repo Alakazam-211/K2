@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.17
+
+### Command line
+- **An agent refused for want of its passport is no longer sent to a settings page that doesn't exist.** The refusal, and the SETTINGS part of `k2 study auth`, told the owner to set the tool Open in Settings → CLI Tools. There is no such setting: which tools need the session's passport is fixed, and the daemon decides every request. The refusal now says to run the command from a K2 agent session that carries its passport.
+
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 
 ### Home chat

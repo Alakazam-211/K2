@@ -146,12 +146,19 @@ else
     echo "  FAIL: teaching error missing passport text: $out" >&2
     fail=$((fail + 1))
 fi
-if echo "$out" | grep -q "Settings → CLI Tools"; then
-    echo "  PASS: teaching error points at Settings → CLI Tools"
+if echo "$out" | grep -q "Run it from a K2 agent session that carries its passport."; then
+    echo "  PASS: teaching error says to run it from a session with its passport"
     pass=$((pass + 1))
 else
-    echo "  FAIL: teaching error missing Settings pointer: $out" >&2
+    echo "  FAIL: teaching error missing the session line: $out" >&2
     fail=$((fail + 1))
+fi
+if echo "$out" | grep -q "Settings → CLI Tools"; then
+    echo "  FAIL: teaching error still points at a settings page that does not exist: $out" >&2
+    fail=$((fail + 1))
+else
+    echo "  PASS: teaching error names no settings page"
+    pass=$((pass + 1))
 fi
 
 # ── 3. End-to-end: k2 mail must not send owner token from a scoped cell ─

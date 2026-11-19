@@ -14,7 +14,7 @@ OPEN VS ID
            and read-mostly. `k2 study` is Open and daemon-optional.
   ID       msg, inbox, connections, heartbeat, … — need session identity.
   Locked   mail, db, store, dns, publish, connect, daemon, users, skin, …
-           cannot be set Open. Owner/admin or a grant; agents often
+           always need the passport. Owner/admin or a grant; agents often
            exit 3 on the owner verbs.
 
 WHEN YOU ARE REFUSED
@@ -32,9 +32,9 @@ WHAT NOT TO DO
   - Do not assume `k2 study` succeeding means the daemon is up
 
 SETTINGS
-  Owners can set some tools Open in Settings → CLI Tools. Locked
-  production tools cannot be set Open. You cannot Open yourself out
-  of a gate from inside a refused verb.
+  No setting moves a tool between Open and ID: the table is the CLI's
+  own, and the daemon decides every request. You cannot Open yourself
+  out of a gate from inside a refused verb.
 
 PASSPORTS
   App passes (k2skn_ prefix) are Thread caps, never grid. API keys

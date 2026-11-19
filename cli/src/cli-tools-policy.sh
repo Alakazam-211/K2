@@ -240,9 +240,8 @@ _cli_tool_is_locked() {
 _cli_require_session_passport() {
     local tool_id="${1:-unknown}"
     echo "Error: tool '${tool_id}' requires session ID (passport)." >&2
-    echo "Run from a K2 agent session that carries session identity, or ask the owner" >&2
-    echo "to set this tool to Open in Settings → CLI Tools (if the platform allows)." >&2
-    echo "Locked production tools cannot be set Open." >&2
+    echo "Run it from a K2 agent session that carries its passport." >&2
+    echo "No setting turns this off; locked production tools always need one." >&2
     exit 3
 }
 

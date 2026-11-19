@@ -80,7 +80,7 @@ _is_postal_address() {
 # exit with its code; return 0 otherwise. K2-only flags are refused.
 _postal_send_teach() {
     _is_postal_address "$1" || return 0
-    local me="${_K2_CALLED_AS:-k2}" to="$1" text="" wake="__true" as_json=false
+    local to="$1" text="" wake="__true" as_json=false
     shift
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -88,14 +88,14 @@ _postal_send_teach() {
             --wake) shift ;;
             --json) as_json=true; shift ;;
             --summary|--wake-timeout|--session|--inbox|--inbox-wake|--inbox-silent|--signal|--command|--from|--via)
-                echo "$me msg: $1 is for messages to agents on this server; Postal mail to $to takes only the text, --no-wake and --json." >&2
+                echo "k2 msg: $1 is for messages to agents on this server; Postal mail to $to takes only the text, --no-wake and --json." >&2
                 exit 2 ;;
-            -*) echo "$me msg: unknown flag '$1' for Postal mail ($me msg --help)" >&2; exit 2 ;;
+            -*) echo "k2 msg: unknown flag '$1' for Postal mail (k2 msg --help)" >&2; exit 2 ;;
             *) if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi; shift ;;
         esac
     done
     if [ -z "$text" ]; then
-        echo "Usage: $me msg $to \"text\" [--no-wake] [--json]" >&2
+        echo "Usage: k2 msg $to \"text\" [--no-wake] [--json]" >&2
         exit 2
     fi
     local body

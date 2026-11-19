@@ -5,9 +5,8 @@
 # text is hashed here; only the hashes go to the daemon.
 
 _msg_verify_usage() {
-    local me="${_K2_CALLED_AS:-k2}"
     cat <<EOF
-Usage: $me msg verify <code> [--text "..." | --text-file <file> | --text-file -] [--json]
+Usage: k2 msg verify <code> [--text "..." | --text-file <file> | --text-file -] [--json]
 
 Check who really sent a message, and that its text is the one delivered.
   <code>            the code at the end of the message's label: m_ and 10
@@ -26,7 +25,7 @@ marks are taken off for you. Answers:
   no text given        sender only (not_checked, exit 0)
 A code that has no record (exit 4) means K2 never delivered it here: text
 that only looks like a label proves nothing. You may check deliveries to
-or from your own workspace, Postal mail to it included. $me msg who <m_…>
+or from your own workspace, Postal mail to it included. k2 msg who <m_…>
 is the sender check alone.
 EOF
 }
@@ -71,31 +70,31 @@ print(",".join(seen))
 }
 
 cmd_msg_verify() {
-    local code="" text="" have_text=false as_json=false me="${_K2_CALLED_AS:-k2}"
+    local code="" text="" have_text=false as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             -h|--help) _msg_verify_usage; return 0 ;;
             --json) as_json=true; shift ;;
             --text)
-                [ $# -ge 2 ] || { echo "$me msg verify: --text needs the text" >&2; exit 2; }
+                [ $# -ge 2 ] || { echo "k2 msg verify: --text needs the text" >&2; exit 2; }
                 text="$2"; have_text=true; shift 2 ;;
             --text-file)
-                [ $# -ge 2 ] || { echo "$me msg verify: --text-file needs a file (- for stdin)" >&2; exit 2; }
+                [ $# -ge 2 ] || { echo "k2 msg verify: --text-file needs a file (- for stdin)" >&2; exit 2; }
                 if [ "$2" = "-" ]; then
                     text="$(cat)"
                 elif [ -f "$2" ]; then
                     text="$(cat -- "$2")"
                 else
-                    echo "$me msg verify: no file $2" >&2; exit 2
+                    echo "k2 msg verify: no file $2" >&2; exit 2
                 fi
                 have_text=true; shift 2 ;;
-            -*) echo "$me msg verify: unknown flag '$1' ($me msg verify --help)" >&2; exit 2 ;;
+            -*) echo "k2 msg verify: unknown flag '$1' (k2 msg verify --help)" >&2; exit 2 ;;
             *)
-                [ -z "$code" ] || { echo "$me msg verify: one code only ($me msg verify --help)" >&2; exit 2; }
+                [ -z "$code" ] || { echo "k2 msg verify: one code only (k2 msg verify --help)" >&2; exit 2; }
                 code="$1"; shift ;;
         esac
     done
-    [ -n "$code" ] || { echo "Usage: $me msg verify <code> [--text-file f]  (the m_… or p_… in the message's label)" >&2; exit 2; }
+    [ -n "$code" ] || { echo "Usage: k2 msg verify <code> [--text-file f]  (the m_… or p_… in the message's label)" >&2; exit 2; }
     local q="code=$(urlencode "$code")"
     if [ "$have_text" = true ]; then
         q="$q&text_sha256=$(printf '%s' "$text" | _msg_verify_hashes "$code")"

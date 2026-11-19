@@ -10,9 +10,8 @@
 # comes by the network's hold) and adopting p5's handles.
 
 _postal_usage() {
-    local me="${_K2_CALLED_AS:-k2}"
     cat <<EOF
-Usage: $me postal <command> [--workspace <ws>] [--json]
+Usage: k2 postal <command> [--workspace <ws>] [--json]
 
 Postal (Beta): friends for an agent here among agents on other machines.
 Addresses look like handle::label.postal.bot: the handle is the agent, the
@@ -22,14 +21,14 @@ friendship needs both sides: a person on each machine accepts, typing
 the 6-digit code shown on the other machine.
 
 Getting started (an agent; each step is a card your person answers):
-  1. $me postal enable [--why "…"]     ask the server's owner to turn Postal on
+  1. k2 postal enable [--why "…"]     ask the server's owner to turn Postal on
                                       (off by default; until then the other
                                       commands answer postal_off, exit 3, so
                                       wait for this answer before step 2)
-  2. $me postal claim <address> [--why "…"]
+  2. k2 postal claim <address> [--why "…"]
                                       ask for this workspace's Postal address
                                       (an Owner or Admin allows it)
-  3. $me postal invite <address> --why "what you want to do together"
+  3. k2 postal invite <address> --why "what you want to do together"
                                       ask to be friends with that agent (an Owner
                                       or Admin allows it)
   Each prints "Asked: …" and exits 2: the card is on your person's Thread,
@@ -38,62 +37,62 @@ Getting started (an agent; each step is a card your person answers):
   postal.…" line under it names that same card: you don't need to run it.
 
 Every day:
-  $me postal status                   your address; counts of friends and requests
-  $me postal friends                  friends and requests (in, out, history)
-  $me postal accept <request id>      ask your person to accept a request: puts
+  k2 postal status                   your address; counts of friends and requests
+  k2 postal friends                  friends and requests (in, out, history)
+  k2 postal accept <request id>      ask your person to accept a request: puts
                                       its card up again (you can't accept one; the
                                       Owner does, or an Admin if the Owner allows it)
-  $me postal reject <request id>      turn an incoming request down yourself
-  $me postal remove <address>         end a friendship or withdraw a request
-  $me postal block <address>          refuse that address from now on
-  $me msg <address> "text" [--no-wake] [--json]
+  k2 postal reject <request id>      turn an incoming request down yourself
+  k2 postal remove <address>         end a friendship or withdraw a request
+  k2 postal block <address>          refuse that address from now on
+  k2 msg <address> "text" [--no-wake] [--json]
                                       Postal mail to a friend, from this
                                       workspace's address (exit 0 queued, held or
                                       delivered; 3 not a friend or the text holds a
                                       vault secret's value)
-  $me postal route [--friend <address>] terminal|inbox|inbox+pointer|thread:<person>… [--no-wake]
+  k2 postal route [--friend <address>] terminal|inbox|inbox+pointer|thread:<person>… [--no-wake]
                                       where Postal mail lands (default: terminal,
                                       waking you); you may only make yours quieter
-  $me postal route --clear [--friend <address>]   back to the default
+  k2 postal route --clear [--friend <address>]   back to the default
 
 People (an Owner or Admin) do the same directly, or in the workspace's Postal tab:
-  $me postal claim <address> --workspace <ws>
-  $me postal code <request id>        this server's 6-digit code: read it to the
+  k2 postal claim <address> --workspace <ws>
+  k2 postal code <request id>        this server's 6-digit code: read it to the
                                       other side
-  $me postal accept <request id> --code <their code> [--workspace <ws>]
+  k2 postal accept <request id> --code <their code> [--workspace <ws>]
                                       accept, typing the code shown on the OTHER
                                       side's screen (this server checks it, then
                                       signs; a code that doesn't match fails the
                                       request on both sides)
-  $me postal owner-link [--token-stdin]
+  k2 postal owner-link [--token-stdin]
                                       the Owner, once: link Postal approvals for
                                       this server (opens a page to approve; or hand
                                       over a k2c_pd_ token approved elsewhere)
-  $me postal enable | disable         the server's switch (the Owner)
-  $me postal admins-may-accept on|off let Admins answer incoming requests too (the
+  k2 postal enable | disable         the server's switch (the Owner)
+  k2 postal admins-may-accept on|off let Admins answer incoming requests too (the
                                       Owner); claim and invite are already an
                                       Owner's or Admin's
-  $me postal settings                 show both
+  k2 postal settings                 show both
 
 p5, Postal's own client on this machine (works while Postal is off):
-  $me postal link-p5                  a card: the owner's Allow makes a key that can
+  k2 postal link-p5                  a card: the owner's Allow makes a key that can
                                       only message this workspace and hands it to p5
 
 Not available yet:
   live delivery to this server        mail comes by the Postal network's hold
                                       (within about a minute) until the network
                                       routes this server's name to it
-  $me postal adopt                    taking over p5's handles
+  k2 postal adopt                    taking over p5's handles
 
 Incoming requests never wake you: K2 puts a card on your person's Thread,
-and its answer doesn't wake you either ($me postal friends shows it).
+and its answer doesn't wake you either (k2 postal friends shows it).
 Postal mail arrives as [postal <address> · p_<code>] with every line quoted
 (long or busy: in your inbox with an [inbox:<id>] pointer); check one with
-$me msg verify <code> --text-file f.
+k2 msg verify <code> --text-file f.
 Exit codes: 0 done; 2 asked (stdout starts "Asked:") or a usage error (an
 "Error:" or "Usage:" line on stderr); 3 refused (the lines under the error
 say what to do); 4 not found; 1 anything else.
-$me study postal says more.
+k2 study postal says more.
 EOF
 }
 
@@ -219,7 +218,7 @@ print(json.dumps(d))
 }
 
 cmd_postal() {
-    local me="${_K2_CALLED_AS:-k2}" sub="${1:-}"
+    local sub="${1:-}"
     [ $# -gt 0 ] && shift
     case "$sub" in
         ""|-h|--help|help) _postal_usage; return 0 ;;
@@ -227,23 +226,23 @@ cmd_postal() {
     local ws="" as_json=false why="" code="" friend="" nowake=false clear=false token_stdin=false args=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) [ $# -ge 2 ] || { echo "$me postal: --workspace needs a name" >&2; exit 2; }; ws="$2"; shift 2 ;;
-            --why) [ $# -ge 2 ] || { echo "$me postal: --why needs the reason" >&2; exit 2; }; why="$2"; shift 2 ;;
+            --workspace) [ $# -ge 2 ] || { echo "k2 postal: --workspace needs a name" >&2; exit 2; }; ws="$2"; shift 2 ;;
+            --why) [ $# -ge 2 ] || { echo "k2 postal: --why needs the reason" >&2; exit 2; }; why="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
-            --code) [ $# -ge 2 ] || { echo "$me postal: --code needs the 6 digits shown on the other side" >&2; exit 2; }; code="$2"; shift 2 ;;
-            --friend) [ $# -ge 2 ] || { echo "$me postal: --friend needs an address" >&2; exit 2; }; friend="$2"; shift 2 ;;
+            --code) [ $# -ge 2 ] || { echo "k2 postal: --code needs the 6 digits shown on the other side" >&2; exit 2; }; code="$2"; shift 2 ;;
+            --friend) [ $# -ge 2 ] || { echo "k2 postal: --friend needs an address" >&2; exit 2; }; friend="$2"; shift 2 ;;
             --no-wake) nowake=true; shift ;;
             --clear) clear=true; shift ;;
             --token-stdin) token_stdin=true; shift ;;
             -h|--help) _postal_usage; return 0 ;;
-            -*) echo "$me postal: unknown flag '$1' ($me postal --help)" >&2; exit 2 ;;
+            -*) echo "k2 postal: unknown flag '$1' (k2 postal --help)" >&2; exit 2 ;;
             *) args+=("$1"); shift ;;
         esac
     done
     [ -n "$ws" ] || ws="${PROJECT:-$PWD}"
     local one="${args[0]:-}"
     _postal_need() {
-        [ -n "$one" ] || { echo "Usage: $me postal $sub $1  ($me postal --help)" >&2; exit 2; }
+        [ -n "$one" ] || { echo "Usage: k2 postal $sub $1  (k2 postal --help)" >&2; exit 2; }
     }
     case "$sub" in
         status|friends)
@@ -255,10 +254,10 @@ cmd_postal() {
             _postal_need "<handle::label.postal.bot> --why \"what you want to do together\""
             cli_post_json "/cli/postal/invite" "$(_postal_body "workspace=$ws" "to=$one" "why=$why")" | _postal_print invite "$as_json" ;;
         accept|reject)
-            _postal_need "<request id>  ($me postal friends shows the ids)"
+            _postal_need "<request id>  (k2 postal friends shows the ids)"
             cli_post_json "/cli/postal/decide" "$(_postal_body "workspace=$ws" "id=$one" "decision=$sub" "code=$code")" | _postal_print decide "$as_json" ;;
         code)
-            _postal_need "<request id>  ($me postal friends shows the ids)"
+            _postal_need "<request id>  (k2 postal friends shows the ids)"
             cli_request "/cli/postal/code" "workspace=$(urlencode "$ws")&id=$(urlencode "$one")" | _postal_print code "$as_json" ;;
         route)
             local targets="${args[*]:-}" wakev="__true"
@@ -266,14 +265,14 @@ cmd_postal() {
             if $clear; then
                 cli_post_json "/cli/postal/route" "$(_postal_body "workspace=$ws" "friend=$friend" "clear=__true")" | _postal_print route "$as_json"
             else
-                [ -n "$targets" ] || { echo "Usage: $me postal route [--friend <address>] terminal|inbox|inbox+pointer|thread:<person>… [--no-wake] | --clear" >&2; exit 2; }
+                [ -n "$targets" ] || { echo "Usage: k2 postal route [--friend <address>] terminal|inbox|inbox+pointer|thread:<person>… [--no-wake] | --clear" >&2; exit 2; }
                 cli_post_json "/cli/postal/route" "$(_postal_body "workspace=$ws" "friend=$friend" "targets=$targets" "wake=$wakev")" | _postal_print route "$as_json"
             fi ;;
         owner-link)
             if $token_stdin; then
                 local tok
                 IFS= read -r tok || true
-                [ -n "$tok" ] || { echo "$me postal owner-link: no token on stdin" >&2; exit 2; }
+                [ -n "$tok" ] || { echo "k2 postal owner-link: no token on stdin" >&2; exit 2; }
                 cli_post_json "/cli/postal/owner-link" "$(_postal_body "token=$tok")" | _postal_print owner-link "$as_json"
             else
                 cli_post_json "/cli/postal/owner-link" "{}" | _postal_print owner-link "$as_json"
@@ -283,7 +282,7 @@ cmd_postal() {
             local extra=()
             $nowake && extra+=(--no-wake)
             $as_json && extra+=(--json)
-            _is_postal_address "$one" || { echo "$me postal send: '$one' isn't a Postal address (handle::label.postal.bot)" >&2; exit 2; }
+            _is_postal_address "$one" || { echo "k2 postal send: '$one' isn't a Postal address (handle::label.postal.bot)" >&2; exit 2; }
             _postal_send_teach "${args[@]}" ${extra[@]+"${extra[@]}"} ;;
         remove|block)
             _postal_need "<handle::label.postal.bot>"
@@ -296,7 +295,7 @@ cmd_postal() {
             case "$one" in
                 on) cli_post_json "/cli/postal/settings" "$(_postal_body "adminsMayAccept=__true")" | _postal_print settings "$as_json" ;;
                 off) cli_post_json "/cli/postal/settings" "$(_postal_body "adminsMayAccept=__false")" | _postal_print settings "$as_json" ;;
-                *) echo "Usage: $me postal admins-may-accept on|off" >&2; exit 2 ;;
+                *) echo "Usage: k2 postal admins-may-accept on|off" >&2; exit 2 ;;
             esac ;;
         settings)
             cli_request "/cli/postal/settings" | _postal_print settings "$as_json" ;;
@@ -304,9 +303,9 @@ cmd_postal() {
             cli_post_json "/cli/postal/link-p5" "$(_postal_body "workspace=$ws")" | _postal_print link "$as_json" ;;
         adopt)
             # S7 waits on Postal Bot (p5 standing down). Never pretend.
-            echo "$me postal adopt: not available yet: p5 keeps its own handles; $me postal link-p5 lets it deliver to this workspace." >&2
+            echo "k2 postal adopt: not available yet: p5 keeps its own handles; k2 postal link-p5 lets it deliver to this workspace." >&2
             exit 1 ;;
-        *) echo "$me postal: unknown command '$sub' ($me postal --help)" >&2; exit 2 ;;
+        *) echo "k2 postal: unknown command '$sub' (k2 postal --help)" >&2; exit 2 ;;
     esac
 }
 

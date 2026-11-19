@@ -4762,12 +4762,14 @@ dependencies = [
  "toml 0.8.2",
  "toml_edit 0.25.11+spec-1.1.0",
  "trash",
+ "ulid",
  "unicode-segmentation",
  "url",
  "uuid",
  "vte",
  "windows-sys 0.61.2",
  "x509-parser",
+ "zeroize",
  "zip 9.0.5",
 ]
 

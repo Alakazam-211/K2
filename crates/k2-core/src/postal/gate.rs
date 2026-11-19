@@ -4,61 +4,58 @@
 //! returns**: a person answers later, and the host calls back into the SDK
 //! with the answer and the pairing code. K2's person is a permission card.
 //!
-//! **What is real today and what waits.** K2 links postal-sdk (pinned at
-//! postal-bot `d33b0fde532607bdf4213cceeaba2859fbfc6f73`, wire v2) and
-//! implements its host traits: [`HumanGate`] in the daemon
-//! (`postal_routes::K2Gate`, which presents the cards) and `FriendStore` on
-//! the friend rows ([`super::friend_store`]). The requests themselves come
-//! from the **plane's pair API (P-1, P-2, P-3, P-7, K2 Web)** and the
-//! receive and send paths are S4–S6, so in this release nothing outside
-//! tests calls them:
-//! - the pairing code ([`set_code`]) is **this box's** six digits from the
-//!   SDK's SAS v2 pairing (`FriendRequest::show_code`), for the owner to
-//!   read **out** to the other side. It is never shown to an agent (not on
-//!   a card, not in `friends`, not in a log): the person types the code
-//!   shown on the **other** box, and the SDK's `Handshake::confirm` checks
-//!   it. K2 can't check it without the SDK's handshake, so a request that
-//!   carries a code answers [`CODE_NOT_YET`] on accept in this release. It
-//!   lives here, in memory, like the SDK's pairing state: a restart loses
-//!   it, and the pairing starts again;
-//! - every person's answer is queued with [`record_answer`] for the network
-//!   half to send ([`take_answers`]). The friend row is the durable record;
-//!   this queue is the callback seam. [`network_available`] is `false`, and
-//!   nothing here pretends a request was sent.
+//! K2 links postal-sdk (pinned at postal-bot
+//! `d33b0fde532607bdf4213cceeaba2859fbfc6f73`, wire v2) and implements its
+//! host traits: [`HumanGate`] in the daemon (`postal_routes::K2Gate`, which
+//! presents the cards) and `FriendStore` on the friend rows
+//! ([`super::friend_store`]). The daemon's pairing (`postal_net::pairing`)
+//! raises the gate on both boxes once its SAS v2 handshake is done:
+//! - the pairing code ([`set_code`]) is **this box's** six digits
+//!   (`FriendRequest::show_code`), for the owner to read **out** to the
+//!   other side. It is never shown to an agent (not on a card, not in
+//!   `friends`, not in a log; `GET /cli/postal/code` refuses a passport):
+//!   the person types the code shown on the **other** box, and the SDK's
+//!   `Handshake::confirm` checks it. It lives here, in memory, like the
+//!   handshake: a restart loses both, and the pairing starts again;
+//! - a person's revoke is queued with [`record_answer`] for the daemon's
+//!   loop to retry when the plane didn't take it at once.
 //!
-//! **Rules for the S3–S5 wiring** (K2's review of postal-sdk wire v2 at
-//! postal-bot `80d13e5ccd489b776c6e93c2d2403cf2f6146ef3`, branch
-//! `feat/sdk-s1-wire-v2`; the pin waits on the Steward's OK and is not in
-//! this release):
+//! **K2's rules for the wiring** (its review of postal-sdk wire v2), all
+//! in the daemon's `postal_net`:
 //! 1. K2's `SeenStore` **is** the insert on `msg_deliveries`' unique
 //!    `postal_msg_id` index, in the same transaction as storing the
-//!    message. That is what makes the SDK's `disposition()` Ack on a replay
-//!    safe; never a separate seen table or a second write.
+//!    message ([`super::seen`]). That is what makes the SDK's
+//!    `disposition()` Ack on a replay safe; never a separate seen table.
 //! 2. On live delivery (`/p5/msg`, S6) verify the `p5-msg-v1` hop proof
-//!    before anything else.
-//! 3. Stop the hold pull loop when `next_after` doesn't advance (a plane
-//!    that returns the same cursor must not spin the daemon).
+//!    before anything else (`postal_net::live`, not mounted until S6).
+//! 3. Stop the hold pull loop when `next_after` doesn't advance.
 //! 4. Check the box's own key (the handle's key in the vault) is the one
-//!    the message is sealed to before calling `open`.
+//!    it registered before calling `open`.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
 use serde::Serialize;
 
-/// Is K2 connected to the Postal network? **Not in this release**: native
-/// pairing, receive and send wait on SDK wire v2 (S1) and the plane's
-/// P-1..P-8. Every answer that would go out says so instead.
+static NETWORK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Is K2 connected to the Postal network right now? The daemon's Postal
+/// loop sets it once a plane session works (the box's Connect credential
+/// was accepted) and clears it when the plane can't be reached or refuses
+/// the box. While it is false, every answer that would go out says so.
 pub fn network_available() -> bool {
-    false
+    NETWORK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The daemon's Postal loop reports whether the plane answers this box.
+pub fn set_network_available(on: bool) {
+    NETWORK.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The machine-readable state every "would go out" answer carries while
 /// [`network_available`] is false.
 pub const NOT_YET: &str = "not_available_yet";
 
-/// Accepting a request that carries a pairing code: not in this release.
-pub const CODE_NOT_YET: &str = "postal_code_check_not_available";
 
 /// The SDK's human-gate types, used as they are (postal-sdk `host`):
 /// `FriendRequest` carries `show_code` (this box's six digits, people only)
@@ -171,8 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn answers_queue_for_the_network_half_and_nothing_is_sent() {
-        assert!(!network_available(), "native Postal waits on SDK wire v2 and the plane");
+    fn answers_queue_for_the_network_half() {
         let id = format!("f-{}", uuid::Uuid::new_v4());
         record_answer(Answer::Reject { friend_id: id.clone(), pair_id: None, peer: "a::bcd.postal.bot".into() });
         assert_eq!(answers_for(&id).len(), 1);

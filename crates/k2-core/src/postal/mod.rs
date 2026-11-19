@@ -22,19 +22,29 @@
 //!   request; this box's pairing code kept for people only; every answer
 //!   queued for the SDK) and its `FriendStore` on the friend rows.
 //!
-//! **Waits on others (never pretended):** native pairing, receive, send
-//! and held mail need postal-sdk wire v2 (S1, Postal Bot) and the plane's
-//! P-1..P-8 (K2 Web); [`gate::network_available`] is `false` until then,
-//! and every answer that would go out says "not available yet". The
-//! address grammar here matches p5's `PostalAddr` so both sides parse one
-//! identity the same way.
+//! - **The network half (S3–S5)** lives in the daemon (`postal_net`): the
+//!   plane session from the box's K2 Connect credential, SAS v2 pairing
+//!   with K2's handshake object and the owner-only confirm, held-mail
+//!   receive ([`seen`]: the seen list is the delivery row), routing
+//!   ([`route`]), and send through the outbox ([`files`]); keys in the
+//!   vault ([`keys`]).
+//!
+//! **Waits on others (never pretended):** live delivery to a K2 box
+//! (`<label>.postal.bot` routed to its tunnel, the plane's P-6, K2 Web):
+//! until then every message goes by the plane's hold. The address grammar
+//! here matches p5's `PostalAddr` so both sides parse one identity the
+//! same way.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
+pub mod files;
 pub mod friend_store;
 pub mod gate;
+pub mod keys;
+pub mod route;
+pub mod seen;
 pub mod store;
 
 /// postal-sdk (MIT), pinned by full sha in k2-core's Cargo.toml.
@@ -56,6 +66,11 @@ pub fn set_enabled(on: bool) {
 /// Is Postal on for this server? **Default OFF.**
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
+}
+
+/// A new Postal id (a message or a pair): a canonical ULID.
+pub fn new_id() -> String {
+    ulid::Ulid::new().to_string()
 }
 
 /// The Postal network's zone: every address is `handle::<label>.postal.bot`.

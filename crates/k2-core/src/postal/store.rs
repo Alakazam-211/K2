@@ -456,6 +456,88 @@ pub fn block(conn: &Connection, handle: &Handle, peer: &super::Address, by: &str
     friend(conn, &id).ok_or(StoreError::NotFound)
 }
 
+// ---------------------------------------------------------------- network half (S3–S5)
+
+/// The handle's state on the Postal network: `claimed` once the plane has
+/// its key (`PUT /me`), `local` until then.
+pub fn set_handle_status(conn: &Connection, id: &str, status: &str, key_name: Option<&str>) -> Result<(), StoreError> {
+    let t = now();
+    conn.execute(
+        "UPDATE postal_handles SET status = ?2, key_name = COALESCE(?3, key_name), updated_at = ?4 WHERE id = ?1",
+        params![id, status, key_name, t],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
+/// The handle row by id (any status).
+pub fn handle(conn: &Connection, id: &str) -> Option<Handle> {
+    conn.query_row(&format!("SELECT {HANDLE_COLS} FROM postal_handles WHERE id = ?1"), params![id], handle_row).optional().ok().flatten()
+}
+
+/// The friend row a plane pair belongs to.
+pub fn friend_by_pair(conn: &Connection, pair_id: &str) -> Option<Friend> {
+    conn.query_row(&format!("SELECT {FRIEND_COLS} FROM postal_friends WHERE pair_id = ?1"), params![pair_id], friend_row).optional().ok().flatten()
+}
+
+/// An allowed outgoing request was sent: it carries the plane's pair id.
+pub fn set_pair_id(conn: &Connection, friend_id: &str, pair_id: &str) -> Result<(), StoreError> {
+    let t = now();
+    conn.execute("UPDATE postal_friends SET pair_id = ?2, sas_version = 2, updated_at = ?3 WHERE id = ?1", params![friend_id, pair_id, t]).map_err(db)?;
+    Ok(())
+}
+
+/// This box's person accepted (the code they typed matched and this box
+/// signed): the request waits for the other side's signed accept, still
+/// untrusted (`pending_out`, decided by that person).
+pub fn confirmed_waiting_peer(conn: &Connection, friend_id: &str, by: &str) -> Result<Friend, StoreError> {
+    let f = friend(conn, friend_id).ok_or(StoreError::NotFound)?;
+    if !matches!(f.status.as_str(), "pending_in" | "rekey_pending") {
+        return Err(StoreError::NotPending(f.status));
+    }
+    let t = now();
+    conn.execute(
+        "UPDATE postal_friends SET status = 'pending_out', decided_by = ?2, decided_at = ?3, updated_at = ?3 WHERE id = ?1",
+        params![friend_id, by, t],
+    )
+    .map_err(db)?;
+    friend(conn, friend_id).ok_or(StoreError::NotFound)
+}
+
+/// Both owners confirmed and the other side's signature verified over this
+/// box's own transcript: a friend, with the key pinned (the SDK's
+/// `Pinned`, the only value a friend is made from).
+pub fn pin_accepted(conn: &Connection, friend_id: &str, fingerprint: &str, pem: &str) -> Result<Friend, StoreError> {
+    let t = now();
+    conn.execute(
+        "UPDATE postal_friends SET status = 'accepted', peer_fingerprint = ?2, peer_key_pem = ?3, pinned_at = ?4, sas_version = 2, updated_at = ?4 WHERE id = ?1",
+        params![friend_id, fingerprint, pem, t],
+    )
+    .map_err(db)?;
+    friend(conn, friend_id).ok_or(StoreError::NotFound)
+}
+
+/// What the network says ended a request or a friendship (`rejected`,
+/// `revoked`): kept as history, by `postal-network`.
+pub fn network_status(conn: &Connection, friend_id: &str, status: &str) -> Result<Friend, StoreError> {
+    set_status(conn, friend_id, status, Some("postal-network"))?;
+    friend(conn, friend_id).ok_or(StoreError::NotFound)
+}
+
+/// The agent's own routing rule (`None`: the default).
+pub fn set_handle_route(conn: &Connection, handle_id: &str, route: Option<&str>) -> Result<(), StoreError> {
+    let t = now();
+    conn.execute("UPDATE postal_handles SET route = ?2, updated_at = ?3 WHERE id = ?1", params![handle_id, route, t]).map_err(db)?;
+    Ok(())
+}
+
+/// One friend's routing rule (`None`: the agent's).
+pub fn set_friend_route(conn: &Connection, friend_id: &str, route: Option<&str>) -> Result<(), StoreError> {
+    let t = now();
+    conn.execute("UPDATE postal_friends SET route = ?2, updated_at = ?3 WHERE id = ?1", params![friend_id, route, t]).map_err(db)?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;

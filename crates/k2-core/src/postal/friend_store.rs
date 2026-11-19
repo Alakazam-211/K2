@@ -13,8 +13,9 @@
 //!   otherwise;
 //! - `remove` revokes (kept as history).
 //!
-//! Nothing calls it outside tests in this release: the receive and send
-//! paths (S4, S5) wait on the plane's hold API (P-4, P-5, K2 Web).
+//! The daemon's pairing pins friends through [`super::store::pin_accepted`]
+//! (only after both signed accepts verify); this is the SDK-shaped view of
+//! the same rows.
 
 use postal_sdk::host::{Friend, FriendStore, StoreError};
 use rusqlite::Connection;

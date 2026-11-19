@@ -421,6 +421,12 @@ pub const AUTHOR_AGENT: &str = "agent";
 /// refuses this kind. An older viewer treats it as an unknown kind (someone
 /// else's post) and shows the body, which keeps K2's words.
 pub const AUTHOR_SYSTEM: &str = "system";
+/// [`PostAuthor::kind`] for a Postal message K2 put on a person's Thread
+/// (prd-postal-in-k2-v1 §5.2, P35): `login` is the sender's Postal
+/// address, so viewers never show it as the agent's or a person's. Only
+/// the daemon's Postal delivery stamps it. An older viewer treats it as
+/// an unknown kind and shows its `from` (the same address).
+pub const AUTHOR_POSTAL: &str = "postal";
 
 impl PostAuthor {
     pub fn owner() -> Self {
@@ -438,6 +444,11 @@ impl PostAuthor {
 
     pub fn user(username: &str) -> Self {
         Self { kind: AUTHOR_USER.to_string(), login: username.trim().to_string(), name: None }
+    }
+
+    /// A Postal sender, by its address (see [`AUTHOR_POSTAL`]).
+    pub fn postal(address: &str) -> Self {
+        Self { kind: AUTHOR_POSTAL.to_string(), login: address.trim().to_string(), name: None }
     }
 
     pub fn guest(username: &str) -> Self {

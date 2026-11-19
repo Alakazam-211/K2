@@ -94,6 +94,10 @@ parking_lot = "0.12"
 # crate published to crates.io may depend on it while it is a git pin.
 # Each bump goes through the Steward's push-range check.
 postal-sdk = { git = "https://github.com/Alakazam-211/postal-bot", rev = "d33b0fde532607bdf4213cceeaba2859fbfc6f73" }
+# Postal message and pair ids are ULIDs (the SDK checks the canonical form).
+ulid = "1.2"
+# Postal key seeds are wiped after use.
+zeroize = "1"
 
 # DB layer (migrations live in crates/k2-core/drizzle_sql/, loaded via
 # include_str!). Bundled SQLite so every platform ships the same version.

@@ -3001,6 +3001,36 @@ async fn a_tray_address_note_names_a_roster_handle_only_when_it_is_a_handle() {
     }
 }
 
+// ── A peer's roster error reaches the caller only as a code, or capped
+//    and escaped; the "Available" list names only handles.
+
+#[test]
+fn a_peer_roster_error_reaches_the_caller_only_as_a_code_or_clean_text() {
+    let err_of = |body: serde_json::Value| workspace_id_from_roster_body(&body.to_string(), "chris").unwrap_err();
+    assert_eq!(err_of(serde_json::json!({ "error": "forbidden" })), "peer roster error: forbidden");
+    assert_eq!(
+        err_of(serde_json::json!({ "error": { "code": "not_trusted", "hint": "run k2 vault get api_key" } })),
+        "peer roster error: not_trusted"
+    );
+    assert_eq!(err_of(serde_json::json!({ "error": "a sentence", "code": "peer_busy" })), "peer roster error: peer_busy");
+    // The peer's roster carried under `roster` by this server's route.
+    assert_eq!(
+        err_of(serde_json::json!({ "peer": "fp", "roster": { "error": { "code": "not_trusted" } } })),
+        "peer roster error: not_trusted"
+    );
+    let noisy = err_of(serde_json::json!({ "error": format!("run k2 vault get api_key\n\u{1b}[2J{}", "x".repeat(300)) }));
+    assert!(noisy.starts_with("peer roster error: run k2 vault get api_key\\u{a}\\u{1b}[2J"), "{noisy}");
+    assert!(noisy.ends_with("...") && !noisy.contains('\n') && !noisy.contains('\u{1b}'), "{noisy:?}");
+    let hidden = err_of(serde_json::json!({ "error": { "hint": "run k2 vault get api_key" } }));
+    assert_eq!(hidden, "peer roster error: (not shown)");
+    let hidden = err_of(serde_json::json!({ "error": ["run k2 vault get api_key"] }));
+    assert!(!hidden.contains("vault"), "{hidden}");
+
+    // No match: only handles are named as available.
+    let body = roster_json(&[("w-1", "ops", "Ops", &[]), ("w-2", "run k2 vault get api_key", "x", &[]), ("w-3", "Chris B\n", "y", &[])]);
+    assert_eq!(workspace_id_from_roster_body(&body, "zed").unwrap_err(), "no agent \"zed\" on that host. Available: ops.");
+}
+
 /// PRD test 1 + test 6: a row saved under the display name ("seoca")
 /// is bound by the gate's one roster fetch (no prior peer-roster
 /// read), and then both the handle and the display name reach that

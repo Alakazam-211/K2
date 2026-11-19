@@ -1680,11 +1680,40 @@ fn slugify_agent(s: &str) -> String {
     k2_core::workspace::handle::dash_fold_name(s)
 }
 
+/// A peer's `error` as the caller may see it: its code (`error` or a
+/// `code` beside it, when it is a code), else the error text capped and
+/// escaped. Any other value is not passed on; the raw value goes to this
+/// daemon's log.
+pub(crate) fn peer_error_text(body: &serde_json::Value, err: &serde_json::Value) -> String {
+    let code = [err.get("code"), body.get("code"), Some(err)]
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .find(|c| is_reason_code(c));
+    match (code, err.as_str()) {
+        (Some(code), _) => code.to_string(),
+        (None, Some(text)) => escape_capped(text, PEER_TEXT_CAP),
+        (None, None) => {
+            k2_core::log_debug!(
+                "[federation] a peer's error is not a code or text; not passed on. Raw: {}",
+                reason_for_log(err)
+            );
+            "(not shown)".to_string()
+        }
+    }
+}
+
 pub(crate) fn workspace_id_from_roster_body(body: &str, agent: &str) -> Result<String, String> {
     let d: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("parse peer roster: {e}"))?;
-    if let Some(err) = d.get("error") {
-        return Err(format!("peer roster error: {err}"));
+    // The error of this server's roster route, or of the peer's roster it
+    // carries under `roster`.
+    let holder = match d.get("roster") {
+        Some(r) if d.get("error").is_none() && r.get("error").is_some() => r,
+        _ => &d,
+    };
+    if let Some(err) = holder.get("error") {
+        return Err(format!("peer roster error: {}", peer_error_text(holder, err)));
     }
     let agents = d
         .get("roster")
@@ -1733,9 +1762,11 @@ pub(crate) fn workspace_id_from_roster_body(body: &str, agent: &str) -> Result<S
     }
     match ids.len() {
         0 => {
+            // Only handles are named back to the caller.
             let names: Vec<&str> = agents
                 .iter()
                 .filter_map(|a| a.get("agent").and_then(|v| v.as_str()))
+                .filter(|h| is_handle(h))
                 .collect();
             if names.is_empty() {
                 Err(format!("no agent \"{agent}\" on that host (its roster is empty)"))

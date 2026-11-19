@@ -276,6 +276,28 @@ assert_eq "profile: one project=, this workspace" "$(project_params /cli/workspa
 run workspace launch
 assert_eq "launch: one project=, this workspace" "$(project_params "$ENSURE")" "$WS"
 
+echo "== launch: flags first; --json honoured, --no-attach and unknown words refused =="
+answer "$ENSURE" 200 '{"success":true,"session_id":"s-1"}'
+run workspace launch --json
+assert_eq "launch --json: exit 0" "$rc" "0"
+assert_eq "launch --json: this workspace" "$(project_params "$ENSURE")" "$WS"
+assert_eq "launch --json: K2's JSON answer" "$out" '{"success":true,"session_id":"s-1"}'
+run workspace launch --json "$WS2"
+assert_eq "launch --json <path>: the path" "$(project_params "$ENSURE")" "$WS2"
+run workspace launch "$WS2" --json
+assert_eq "launch <path> --json: the path" "$(project_params "$ENSURE")" "$WS2"
+for c in "--no-attach|Error: --no-attach: k2 workspace launch never attaches a terminal" \
+         "$WS2 --no-attach|Error: --no-attach: k2 workspace launch never attaches a terminal" \
+         "--bogus|Unknown flag: --bogus" \
+         "$WS $WS2|Unexpected extra argument: $WS2"; do
+    args="${c%%|*}"; want="${c#*|}"
+    # shellcheck disable=SC2086
+    run workspace launch $args
+    assert_eq "launch $args: exit 2" "$rc" "2"
+    assert_contains "launch $args: says why" "$err" "$want"
+    assert_eq "launch $args: no request" "$(wc -l <"$LOG_FILE" | tr -d ' ')" "0"
+done
+
 echo
 echo "workspace_verb_answers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

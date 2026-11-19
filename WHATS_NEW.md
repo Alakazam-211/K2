@@ -29,6 +29,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **The workspace commands say when K2's server doesn't answer.** `k2 workspace list`, `create`, `open`, `launch`, `profile` and `update` print the usual "K2's server didn't answer" line and exit 1 when the server never answers or nothing takes the connection, instead of ending silently with exit 7 or 141.
 - **`k2 workspace launch <name>` launches only a folder K2 named.** When K2 can't find the workspace, or answers with no folder, the command says so and exits 1, instead of launching a workspace called "None" or the name as typed.
 - **`k2 workspace launch <path>` and `profile <path>` name only that workspace.** Each request carries the one workspace you named, instead of that one and the workspace you are in.
+- **`k2 workspace launch` reads its flags before its target.** `k2 workspace launch --json` launches the workspace you are in (the answer is K2's JSON either way) instead of looking for a workspace named "--json". `--no-attach` is refused with exit 2, since launch never attaches a terminal; an unknown flag or a second target is refused with exit 2 too, instead of being dropped.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

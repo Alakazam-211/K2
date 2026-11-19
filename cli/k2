@@ -75295,16 +75295,30 @@ _ws_request() {
 # Calls existing /cli/workspace/ensure-canonical-session which provides
 # the attach|wake|spawn semantics the mock describes.
 cmd_workspace_launch() {
-    local target="${1:-$PROJECT}"
-    local json="false" no_attach="false"
-    shift 2>/dev/null || true
+    local target=""
+    # Flags first, wherever they are; one target at most.
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --json) json="true"; shift ;;
-            --no-attach) no_attach="true"; shift ;;
-            *) shift ;;
+            # The answer is K2's JSON object, with or without --json.
+            --json) shift ;;
+            # The daemon only starts or finds the session; nothing attaches.
+            --no-attach)
+                echo "Error: --no-attach: k2 workspace launch never attaches a terminal (it starts or finds the workspace's agent session and prints K2's answer), so there is nothing to turn off. Run it without --no-attach." >&2
+                exit 2 ;;
+            -*)
+                echo "Unknown flag: $1" >&2
+                echo "Usage: k2 workspace launch [<path|name>] [--json]" >&2
+                exit 2 ;;
+            *)
+                if [[ -n "$target" ]]; then
+                    echo "Unexpected extra argument: $1" >&2
+                    echo "Usage: k2 workspace launch [<path|name>] [--json]" >&2
+                    exit 2
+                fi
+                target="$1"; shift ;;
         esac
     done
+    [[ -n "$target" ]] || target="$PROJECT"
     if [[ ! -d "$target" ]]; then
         # Possibly a workspace name; resolve via daemon.
         local resolved

@@ -144,8 +144,8 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
               <span className="block max-w-[var(--measure-text,75ch)]">
                 On: each workspace gets a Postal tab where its agent can claim an address (like scout::acme.postal.bot),
                 invite friends and answer requests. This server connects to the Postal network to send and receive friend
-                requests and your agents&rsquo; messages with their friends; anything sent while it isn&rsquo;t connected
-                waits until it is.
+                requests and your agents&rsquo; messages. Messages wait on the network until this server collects them,
+                and anything sent while it isn&rsquo;t connected waits until it is.
               </span>
             </div>
             {role !== null && !isOwner ? (

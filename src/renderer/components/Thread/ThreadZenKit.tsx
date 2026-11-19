@@ -103,6 +103,10 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-warn-text': 'var(--color-status-warn-text, var(--color-status-needs-you))',
   '--zen-ok-text': 'var(--color-status-ok-soft, var(--color-status-ok))',
   '--zen-control-radius': 'var(--radius-pill)',
+  // A destructive button: the strong danger fill under its own label, as the
+  // confirm dialog's (4.5:1 in every look).
+  '--zen-danger-fill': 'var(--color-danger-muted, var(--color-danger))',
+  '--zen-on-danger': 'var(--color-on-danger)',
   '--zen-control-edge': 'var(--color-control-edge, var(--color-border))',
   '--zen-focus-ring': 'var(--color-accent-text, var(--color-accent))',
   // The message box's edge: a control on the page, so the control edge
@@ -152,6 +156,9 @@ export const THREAD_CARD_TOKENS = {
   '--thread-card-link': 'var(--zen-link, var(--zen-accent))',
   '--thread-card-warn-text': 'var(--zen-warn-text, var(--zen-needs-you))',
   '--thread-card-ok-text': 'var(--zen-ok-text, var(--zen-ok))',
+  '--thread-card-control-edge': 'var(--zen-control-edge, var(--zen-border))',
+  '--thread-card-danger-fill': 'var(--zen-danger-fill, var(--zen-danger))',
+  '--thread-card-on-danger': 'var(--zen-on-danger, var(--zen-accent-text))',
 } as CSSProperties
 
 /** Where the shared rules apply: a Zen root, or the desktop Thread's box. */

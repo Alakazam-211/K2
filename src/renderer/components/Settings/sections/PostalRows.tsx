@@ -124,22 +124,13 @@ export function PeerRow({
   return (
     <div className="px-4 py-3" data-testid="postal-peer-row" data-peer={friend.peer} data-status={friend.status}>
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
-        <div className="min-w-0 grow basis-40">
+        {/* Narrow, the actions wrap under the address rather than squeeze it. */}
+        <div className="min-w-0 grow basis-72">
           <div className={`${SETTING_ROW_LABEL} flex flex-wrap items-center gap-2 break-all`}>
             <span className="font-mono">{friend.peer}</span>
             {tag ? <Tag tone={tag.tone}>{tag.text}</Tag> : null}
           </div>
           {meta ? <div className={SETTING_ROW_HINT}>{meta}</div> : null}
-          {explainer ? (
-            <div className={`${POSTAL_HINT}`} data-testid="postal-row-explainer">
-              {explainer}
-            </div>
-          ) : null}
-          {note ? (
-            <p className={`${POSTAL_HINT} whitespace-pre-wrap break-words`} data-testid="postal-peer-note">
-              {friend.status === 'pending_out' ? 'Your note: ' : 'Their note: '}“{note}”
-            </p>
-          ) : null}
         </div>
         {actions ? (
           <div className="flex flex-wrap items-center gap-2 flex-shrink-0" data-testid="postal-row-actions">
@@ -147,6 +138,17 @@ export function PeerRow({
           </div>
         ) : null}
       </div>
+      {/* What the row means and the note run the row's full width. */}
+      {explainer ? (
+        <div className={POSTAL_HINT} data-testid="postal-row-explainer">
+          {explainer}
+        </div>
+      ) : null}
+      {note ? (
+        <p className={`${POSTAL_HINT} whitespace-pre-wrap break-words`} data-testid="postal-peer-note">
+          {friend.status === 'pending_out' ? 'Your note: ' : 'Their note: '}“{note}”
+        </p>
+      ) : null}
       {below ? (
         <div className="mt-3" data-testid="postal-row-below">
           {below}

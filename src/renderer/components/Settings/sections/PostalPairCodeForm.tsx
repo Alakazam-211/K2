@@ -17,6 +17,21 @@ import { decidePostalRequest, fetchPostalCode, isPairingCode, postalErrorText, p
 
 const MEASURE = 'max-w-[var(--measure-text,75ch)]'
 
+/** The code as two groups of three with one small, even gap (a space in
+ *  the code face is a whole digit wide). The space stays in the text, for
+ *  copying and screen readers. */
+function PairCode({ code }: { code: string | null }): React.JSX.Element {
+  const digits = (code ?? '').replace(/\D/g, '')
+  if (digits.length !== 6) return <span className="font-mono" data-testid="postal-code-mine">{code ?? '…'}</span>
+  return (
+    <span className="inline-flex gap-1 font-mono" data-testid="postal-code-mine">
+      <span>{digits.slice(0, 3)}</span>
+      <span className="sr-only"> </span>
+      <span>{digits.slice(3)}</span>
+    </span>
+  )
+}
+
 /** Who to read the code to: the owner by name, else the peer's person. */
 export function readCodeTo(peer: string, owner: string | null | undefined): string {
   const name = owner?.trim()
@@ -79,7 +94,7 @@ export function PostalPairCodeForm({
   const card = variant === 'card'
   const lead = (
     <>
-      Your code: <span className="font-mono" data-testid="postal-code-mine">{mine ?? '…'}</span>. Read it to {readCodeTo(peer, owner)}.
+      Your code: <PairCode code={mine} />. Read it to {readCodeTo(peer, owner)}.
     </>
   )
   // The card's own words already say why the codes match; it keeps the consequence.

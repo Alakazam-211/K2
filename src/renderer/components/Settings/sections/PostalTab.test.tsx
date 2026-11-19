@@ -193,7 +193,10 @@ describe('PostalTab', () => {
     await act(async () => {
       fireEvent.click(accept)
     })
-    expect((await screen.findByTestId('postal-code-mine')).textContent).toBe('123 456')
+    // Two groups with one even gap; the space stays in the text.
+    const mine = await screen.findByTestId('postal-code-mine')
+    expect(mine.textContent).toBe('123 456')
+    expect(mine.className).toContain('gap-1')
     fireEvent.change(screen.getByTestId('postal-code-input'), { target: { value: '654 321' } })
     await act(async () => {
       fireEvent.submit(screen.getByTestId('postal-code-form'))
@@ -524,7 +527,7 @@ describe('PostalServerSwitch', () => {
     const text = group.textContent ?? ''
     expect(text).toContain('On: each workspace gets a Postal tab')
     expect(text).toContain(
-      'This server connects to the Postal network to send and receive friend requests and your agents’ messages with their friends; anything sent while it isn’t connected waits until it is.',
+      'This server connects to the Postal network to send and receive friend requests and your agents’ messages. Messages wait on the network until this server collects them, and anything sent while it isn’t connected waits until it is.',
     )
     expect(text).not.toMatch(/nothing\s+leaves/)
     expect(text).not.toMatch(/later release/)

@@ -33,6 +33,14 @@ export const CARD_LINK = `var(--thread-card-link,${CARD_ACCENT})`
 export const CARD_WARN_TEXT = 'var(--thread-card-warn-text,var(--zen-needs-you,var(--color-status-warn-text)))'
 export const CARD_OK_TEXT = 'var(--thread-card-ok-text,var(--zen-ok,var(--color-status-ok)))'
 export const CARD_DANGER_TEXT = `var(--zen-danger-text,${CARD_DANGER})`
+/** A control's edge (a field, an outlined button): 3:1 on the card, as the
+ *  Settings fields' edge. */
+export const CARD_CONTROL_EDGE = `var(--thread-card-control-edge,${CARD_EDGE})`
+/** A field's placeholder: the muted words, 4.5:1 on the card. */
+export const CARD_PLACEHOLDER_CLASS = 'placeholder:text-[var(--thread-card-muted,var(--color-text-muted))]'
+/** The strong danger fill (as the confirm dialog's destructive button) and its label. */
+export const CARD_DANGER_FILL = `var(--thread-card-danger-fill,${CARD_DANGER})`
+export const CARD_ON_DANGER = 'var(--thread-card-on-danger,var(--color-on-danger))'
 /** A control's corner: a button, a field or a tag. */
 export const CARD_CONTROL_RADIUS = 'rounded-[var(--thread-card-control-radius,var(--thread-card-radius,var(--radius-field)))]'
 
@@ -44,21 +52,23 @@ export function CardField({ testId, className, ...input }: InputHTMLAttributes<H
     <div
       data-chamfer=""
       data-card-field=""
-      style={chamferVars({ cut: chamferCutFor(24), fill: CARD_FILL, edge: CARD_EDGE, border: 1 })}
-      className={`box-border w-full min-w-0 border border-[var(--thread-card-border,var(--color-border))] focus-within:border-[var(--thread-card-accent,var(--color-accent))] ${CARD_CONTROL_RADIUS} ${className ?? ''}`}
+      style={{ ...chamferVars({ cut: chamferCutFor(24), fill: CARD_FILL, edge: CARD_CONTROL_EDGE, border: 1 }), borderColor: CARD_CONTROL_EDGE }}
+      className={`box-border w-full min-w-0 border focus-within:!border-[var(--thread-card-accent,var(--color-accent))] ${CARD_CONTROL_RADIUS} ${className ?? ''}`}
     >
       <input
         data-testid={testId}
         {...input}
-        className="block w-full min-w-0 box-border bg-transparent border-0 px-2.5 py-1 text-[11px] outline-none"
+        className={`block w-full min-w-0 box-border bg-transparent border-0 px-2.5 py-1 text-[11px] outline-none ${CARD_PLACEHOLDER_CLASS}`}
         style={{ color: CARD_TEXT, ...input.style }}
       />
     </div>
   )
 }
 
-/** A card button: ChoiceCard's chip, side by side. `primary` is the
- *  accent's fill with its own label colour, as the Settings accent button. */
+/** A card button, side by side. `primary` is the accent's fill with its own
+ *  label colour, as the Settings accent button; `danger` the strong danger
+ *  fill with its own label, as the confirm dialog's destructive button; any
+ *  other is outlined, as the Settings quiet button. */
 export function CardButton({
   label,
   testId,
@@ -76,11 +86,10 @@ export function CardButton({
   disabled?: boolean
   type?: 'button' | 'submit'
 }): JSX.Element {
-  const edge = primary ? CARD_ACCENT_FILL : danger ? `color-mix(in srgb, ${CARD_DANGER} 60%, ${CARD_EDGE})` : CARD_EDGE
-  // The square Style draws the fill on a layer over the edge, so a
-  // see-through fill shows the edge colour (ChoiceCard's chips look the
-  // same); the primary fill is solid.
-  const fill = primary ? CARD_ACCENT_FILL : 'transparent'
+  const edge = primary ? CARD_ACCENT_FILL : danger ? CARD_DANGER_FILL : CARD_CONTROL_EDGE
+  // The square Style draws the fill on a layer over the edge, so every fill
+  // here is opaque: an outlined button takes the card's own fill.
+  const fill = primary ? CARD_ACCENT_FILL : danger ? CARD_DANGER_FILL : CARD_FILL
   return (
     <button
       type={type}
@@ -88,13 +97,16 @@ export function CardButton({
       data-label={label}
       data-chamfer=""
       data-card-primary={primary ? '' : undefined}
+      data-card-danger={danger && !primary ? '' : undefined}
       disabled={disabled}
       onClick={onClick}
-      style={{ ...chamferVars({ cut: chamferCutFor(24), fill, edge, border: 1 }), borderColor: edge, background: fill, color: primary ? CARD_ON_ACCENT : CARD_TEXT2 }}
+      style={{ ...chamferVars({ cut: chamferCutFor(24), fill, edge, border: 1 }), borderColor: edge, background: fill, color: primary ? CARD_ON_ACCENT : danger ? CARD_ON_DANGER : CARD_TEXT2 }}
       className={`${CARD_CONTROL_RADIUS} border px-2.5 py-1 text-[11px] font-medium whitespace-nowrap transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
         primary
           ? 'hover:enabled:!bg-[var(--thread-card-accent-fill-hover,var(--thread-card-accent-fill,var(--thread-card-accent,var(--color-accent))))]'
-          : 'hover:text-[var(--thread-card-text,var(--color-text-primary))]'
+          : danger
+            ? ''
+            : 'hover:text-[var(--thread-card-text,var(--color-text-primary))]'
       }`}
     >
       {label}

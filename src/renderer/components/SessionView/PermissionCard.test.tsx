@@ -571,4 +571,21 @@ describe('PermissionCard: words read at 4.5:1 in every look', () => {
     const tag = screen.getByTestId('permission-direction')
     expect(tag.getAttribute('style') ?? '').toContain('--thread-card-warn-text')
   })
+
+  it("Deny's step: the field has the control edge and muted placeholder; Deny is the strong danger with its own label; Back is outlined", () => {
+    draw(permissionDoc({}))
+    fireEvent.click(screen.getByTestId('permission-deny'))
+    const field = screen.getByTestId('permission-deny-reason')
+    const box = field.closest('[data-card-field]') as HTMLElement
+    expect(box.getAttribute('style') ?? '').toContain('--thread-card-control-edge')
+    expect(field.className).toContain('placeholder:text-[var(--thread-card-muted')
+    const send = screen.getByTestId('permission-deny-send')
+    expect(send.getAttribute('data-card-danger')).toBe('')
+    expect(send.getAttribute('style') ?? '').toContain('--thread-card-danger-fill')
+    expect(send.getAttribute('style') ?? '').toContain('--thread-card-on-danger')
+    const back = screen.getByTestId('permission-deny-back')
+    // Outlined: the card's own fill inside the control edge, never a see-through fill.
+    expect(back.getAttribute('style') ?? '').toContain('--ch-fill: var(--thread-card-bg')
+    expect(back.getAttribute('style') ?? '').toContain('--thread-card-control-edge')
+  })
 })

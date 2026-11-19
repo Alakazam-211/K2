@@ -49,7 +49,7 @@
    face. `ch` is the width of a code-face zero, so outside Terminal (whose UI
    font is the code face) the system font's narrower letters need fewer. */
 :root { --measure-text: 75ch; }
-html:not([data-style="terminal"]) { --measure-text: 62ch; }
+html:not([data-style="terminal"]) { --measure-text: 56ch; }
 
 /* Code inside a sentence (a command in a hint, a file name in a row) sits at
    the sentence's visual size. The code face runs large next to the system

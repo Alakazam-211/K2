@@ -540,6 +540,17 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
         AgentAddress::Workspace { workspace } => workspace.0.as_str(),
         _ => "peer",
     };
+    // The label is typed into an agent's terminal and written into its
+    // inbox: both parts must be in shape, or nothing is delivered.
+    if !is_handle(sender_agent) || !(host.is_empty() || is_peer_host(&host)) {
+        k2_core::log_debug!(
+            "[federation] inbound refused: peer {} sent a sender address that is not a handle. Raw name: {}; host: {}",
+            ingested.peer_fingerprint,
+            reason_for_log(&serde_json::Value::from(sender_agent)),
+            reason_for_log(&serde_json::Value::from(host.as_str()))
+        );
+        return bad_sender_response();
+    }
     let from_label = federated_from_label(sender_agent, &host);
 
     // Tray packages (`k2 msg agent::host --inbox-wake`) ride this same
@@ -647,6 +658,47 @@ pub(crate) fn declined_hint(target: &str, reason: &str) -> String {
 pub(crate) fn is_reason_code(reason: &str) -> bool {
     (1..=64).contains(&reason.len())
         && reason.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// The longest handle a peer's sender name or roster entry may be (the
+/// postal handle cap).
+const HANDLE_MAX: usize = 64;
+
+/// True when `name` is in the workspace handle shape: the address-token
+/// check `k2 msg` uses for a workspace (lowercase letters and digits,
+/// single hyphens between them), at most 64 characters. A peer's sender
+/// name reaches an agent only in this shape.
+pub(crate) fn is_handle(name: &str) -> bool {
+    name.len() <= HANDLE_MAX && k2_core::workspace_session_handles::is_address_token(name)
+}
+
+/// True when a pinned peer's host is a host name or IP, with an optional
+/// port: `name` or `name:port`.
+pub(crate) fn is_peer_host(host: &str) -> bool {
+    let (name, port) = match host.rsplit_once(':') {
+        Some((name, port)) => (name, Some(port)),
+        None => (host, None),
+    };
+    let port_ok = port.is_none_or(|p| {
+        !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok_and(|v| v > 0)
+    });
+    port_ok && k2_core::tunnel::relay_list::valid_host(name)
+}
+
+/// 400 for a message whose sender name (or this server's pin of its host)
+/// is not in shape: nothing is delivered or recorded. `code` is the stable
+/// reason; the sender's drain dead-letters any 4xx.
+pub(crate) fn bad_sender_response() -> CliResponse {
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "bad_sender: a sender's name reaches an agent only when it is a handle \
+                      (lowercase letters, digits and single hyphens, at most 64 characters)",
+            "code": "bad_sender",
+        })
+        .to_string(),
+    }
 }
 
 /// A peer's raw `reason` for this daemon's log only: the first 200

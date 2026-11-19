@@ -142,7 +142,7 @@ function board(rows: FeedbackListRow[] = [mine, julies]): ReturnType<typeof rend
 }
 
 describe('TicketBoard filters', () => {
-  it('opens on Waiting on me (GitHub #75); Mine and All are one click away', async () => {
+  it('opens on Waiting on you (GitHub #75); Mine and All are one click away', async () => {
     const answeredMine = makeRow({
       id: 'cccccccc-0000-4000-8000-00000000000c',
       title: 'Answered mine',
@@ -165,7 +165,7 @@ describe('TicketBoard filters', () => {
     expect(screen.getAllByTestId('ticket-card')).toHaveLength(3)
   })
 
-  it("Waiting on me includes my Needs discussion tickets, not someone else's or unassigned ones", async () => {
+  it("Waiting on you includes my Needs discussion tickets, not someone else's or unassigned ones", async () => {
     const discussMine = makeRow({
       id: 'dddddddd-0000-4000-8000-00000000000d',
       title: 'Discuss mine',
@@ -191,8 +191,9 @@ describe('TicketBoard filters', () => {
       expect.stringContaining('Mine ticket'),
       expect.stringContaining('Discuss mine'),
     ])
-    expect(screen.getByTestId('ticket-scope-waiting').textContent).toBe('Waiting on me 2')
-    // Waiting on me comes first, as on the phone.
+    // The tab's count is what it lists (and what the Tickets badge counts).
+    expect(screen.getByTestId('ticket-scope-waiting').textContent).toBe('Waiting on you 2')
+    // Waiting on you comes first, as on the phone.
     expect(screen.getAllByRole('radio').map((r) => r.getAttribute('data-testid'))).toEqual([
       'ticket-scope-waiting',
       'ticket-scope-mine',
@@ -363,6 +364,9 @@ describe('ticket detail', () => {
     expect(screen.getByTestId('ticket-detail-title').textContent).toBe('Which DB?')
     // "ada asked Owner": who asked whom, in words.
     expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked Owner · /)
+    // The status line leads with what can change: the status, then priority.
+    expect(screen.getByTestId('ticket-detail-status-line').contains(screen.getByTestId('ticket-status'))).toBe(true)
+    expect(screen.getByTestId('ticket-detail-status-line').contains(screen.getByTestId('ticket-reassign'))).toBe(false)
     for (const t of ['ticket-expand', 'ticket-open-window', 'ticket-status', 'ticket-reassign']) {
       expect(header.contains(screen.getByTestId(t)), t).toBe(true)
     }
@@ -386,14 +390,22 @@ describe('ticket detail', () => {
     detail(makeRow({ agentName: 'ada', projectName: 'Ada', assignees: [] }))
     await screen.findByTestId('ticket-rail-thread')
     const byline = screen.getByTestId('ticket-detail-byline')
-    expect(byline.textContent).toMatch(/^ada asked no one assigned · \d/)
+    expect(byline.textContent).toMatch(/^ada asked no one yet · \d/)
     expect(byline.textContent!.match(/ada/gi)).toHaveLength(1)
   })
 
   it('byline keeps the workspace only when it differs from the agent name', async () => {
     detail(makeRow({ agentName: 'ada', projectName: 'Alpha', assignees: [] }))
     await screen.findByTestId('ticket-rail-thread')
-    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked no one assigned · Alpha · \d/)
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked no one yet · Alpha · \d/)
+  })
+
+  it('byline says “you” for the person looking', async () => {
+    const row = makeRow({ agentName: 'ada', projectName: 'Alpha', assignees: ['owner', 'julie'] })
+    api.fetchFeedbackShow.mockResolvedValue(show(row))
+    render(<FeedbackItemView id={row.id} listRow={row} nowSec={NOW} revision={0} onMutated={vi.fn()} me={['owner']} />)
+    await screen.findByTestId('ticket-rail-thread')
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked you and julie · Alpha · /)
   })
 
   it('a ticket with no brief has no comments/history section either; its comments are only in the rail Thread', async () => {
@@ -536,15 +548,17 @@ describe('ticket detail', () => {
       'Waiting',
       'Needs discussion',
       'Answered',
+      'Planned',
       'Resolved',
+      'Dismissed',
     ])
     fireEvent.click(screen.getByTestId('ticket-status-option-needs_discussion'))
-    await waitFor(() => expect(api.resolveFeedback).toHaveBeenCalledWith(row.id, 'needs_discussion', undefined))
+    await waitFor(() => expect(api.resolveFeedback).toHaveBeenCalledWith(row.id, 'needs_discussion'))
     await waitFor(() => expect(screen.queryByTestId('ticket-header-status-menu')).toBeNull())
 
     fireEvent.click(screen.getByTestId('ticket-status'))
     fireEvent.click(screen.getByTestId('ticket-status-option-resolved'))
-    await waitFor(() => expect(api.resolveFeedback).toHaveBeenLastCalledWith(row.id, 'resolved', undefined))
+    await waitFor(() => expect(api.resolveFeedback).toHaveBeenLastCalledWith(row.id, 'resolved'))
     await waitFor(() => expect(screen.queryByTestId('ticket-header-status-menu')).toBeNull())
     // Picking the current status sends nothing.
     fireEvent.click(screen.getByTestId('ticket-status'))

@@ -8,13 +8,11 @@
 // keeps its identifying line (Appa A1) — agent, filing date, short id —
 // because it has nothing else to tell it apart.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
+import React, { useCallback, useState } from 'react'
 import { Surface } from '@/components/ui'
-import { CheckIcon, ChevronDownIcon } from '@/components/icons/K2Icons'
-import { focusMenuStart, onMenuKeyDown, TICKET_MENU_BOX, TICKET_MENU_ROW } from './ticket-menu'
+import { ChevronDownIcon } from '@/components/icons/K2Icons'
+import { TicketStatusMenu } from './TicketStatusMenu'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
-import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { presenceDisplayName } from '@/components/Presence/PresenceAvatar'
@@ -26,13 +24,10 @@ import {
   assigneeInitials,
   cardSummary,
   isUnlinked,
-  resolveFeedback,
-  selectableStatusesFor,
+  menuStatusesFor,
   statusLabel,
   unlinkedDetails,
   type FeedbackListRow,
-  type FeedbackStatus,
-  type SelectableStatus,
 } from './feedback-api'
 import { FileCountBadge, HtmlBriefBadge, StatusMark, statusDotColor } from './badges'
 import type { FilterableWorkspace } from './WorkspaceFilterDropdown'
@@ -40,12 +35,11 @@ import type { FilterableWorkspace } from './WorkspaceFilterDropdown'
 // The status colours live with the badges; re-exported for callers.
 export { statusDotColor, statusTextClass } from './badges'
 
-/** The picked row's mark, the same in every ticket menu. */
-export function MenuCheck(): React.JSX.Element {
-  return <CheckIcon className="w-3 h-3 flex-shrink-0 text-[var(--color-accent-text)]" />
-}
+// The picked row's mark lives with the status menu; re-exported for callers.
+export { MenuCheck } from './TicketStatusMenu'
 
-/** The card's status chip, which is also its status menu. */
+/** The card's status chip, which is also its status menu (the board's one
+ *  status menu, TicketStatusMenu). */
 export function CardStatusDropdown({
   row,
   onMutated,
@@ -54,76 +48,24 @@ export function CardStatusDropdown({
   onMutated: () => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const close = useCallback(() => setOpen(false), [])
   // The app's anchored menu: portalled and fixed to the chip, it opens
   // below and flips upward when there isn't room below (a ticket at the
   // bottom of the list; Rosson 2026-10-24), kept inside the window.
   // Outside clicks close it.
   const menu = useAnchoredMenu<HTMLDivElement>({
     open,
-    onClose: () => setOpen(false),
+    onClose: close,
     width: 'min',
-    minWidth: 140,
-    estimatedHeight: 160,
+    minWidth: 180,
+    estimatedHeight: 220,
   })
 
-  const boxRef = useRef<HTMLDivElement | null>(null)
-  const anchoredRef = menu.menuRef
-  const setBox = useCallback(
-    (el: HTMLDivElement | null) => {
-      boxRef.current = el
-      anchoredRef(el)
-    },
-    [anchoredRef],
-  )
-  // Into the menu as it opens (the picked row, else the first).
-  useEffect(() => {
-    if (!open) return
-    const frame = requestAnimationFrame(() => focusMenuStart(boxRef.current))
-    return () => cancelAnimationFrame(frame)
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    // Capture-phase so the first Esc closes THIS popover instead of
-    // reaching the board's Esc (clear selection / close page).
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        setOpen(false)
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [open])
-
-  // Manually selectable statuses (Answered is display-only, via a reply).
-  // An unlinked ticket offers only Resolve and Dismiss (TB18).
-  const statuses = selectableStatusesFor(row)
-  const setStatus = async (status: SelectableStatus): Promise<void> => {
-    if (busy || status === row.status) {
-      setOpen(false)
-      return
-    }
-    setBusy(true)
-    try {
-      await resolveFeedback(row.id, status)
-      onMutated()
-    } catch (e) {
-      useToastStore
-        .getState()
-        .addToast(`Status change failed: ${e instanceof Error ? e.message : String(e)}`, 'error')
-    } finally {
-      setBusy(false)
-      setOpen(false)
-    }
-  }
-
   return (
-    // stopPropagation everywhere — the status control must not select the
+    // stopPropagation everywhere: the status control must not select the
     // card. The card is the list's option, so the chip is a pointer
     // shortcut out of the tab order (no control nested in a control); the
-    // keyboard changes status from the open ticket's header.
+    // keyboard changes status from the open ticket's status line.
     <div
       ref={menu.anchorRef}
       className="relative min-w-0"
@@ -132,7 +74,6 @@ export function CardStatusDropdown({
     >
       <button
         type="button"
-        disabled={busy}
         tabIndex={-1}
         data-testid="card-status"
         data-status={row.status}
@@ -153,54 +94,21 @@ export function CardStatusDropdown({
         </StatusMark>
       </button>
 
-      {open && menu.portal(
-        <div
-          ref={setBox}
-          role="menu"
-          aria-label="Change status"
-          data-testid="ticket-status-menu"
-          data-placement={menu.placement}
-          data-k2-chamfer="surface"
-          style={menu.style}
-          onKeyDown={(e) => onMenuKeyDown(e, boxRef.current, () => setOpen(false))}
-          {...floatMaterial('menu')}
-          {...MENU_LIST}
-          className={`min-w-[140px] ${TICKET_MENU_BOX}`}
-        >
-          {/* Answered shows as the current state but is not offered. */}
-          {row.status === 'answered' && (
-            <div
-              className="flex items-center gap-2 px-3 py-1.5 type-control text-[var(--color-status-ok-soft)] cursor-default select-none"
-              title="Answered is set by an option pick or by the agent, not by hand"
-            >
-              <span className="flex-1">Answered</span>
-              <MenuCheck />
-            </div>
-          )}
-          {statuses.map((s) => {
-            const current = row.status === s
-            return (
-              <button
-                key={s}
-                type="button"
-                role="menuitemradio"
-                aria-checked={current}
-                disabled={busy}
-                onClick={() => void setStatus(s)}
-                data-k2-focus=""
-                {...MENU_ROW}
-                className={`${TICKET_MENU_ROW} ${
-                  current ? 'text-[var(--color-text-primary)] bg-[var(--color-wash-1)]' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-                }`}
-                title={s === 'waiting' ? 'Reopen — back to waiting' : undefined}
-              >
-                <span className="flex-1">{statusLabel(s)}</span>
-                {current && <MenuCheck />}
-              </button>
-            )
-          })}
-        </div>,
-      )}
+      {open &&
+        menu.portal(
+          <TicketStatusMenu
+            ticketId={row.id}
+            status={row.status}
+            currentAnswer={row.answer ?? null}
+            statuses={menuStatusesFor(row)}
+            onChanged={onMutated}
+            onClose={close}
+            setBox={menu.menuRef}
+            style={menu.style}
+            placement={menu.placement}
+            testId="ticket-status-menu"
+          />,
+        )}
     </div>
   )
 }
@@ -216,9 +124,23 @@ export function cardAssigneeNames(assignees: readonly string[] | null | undefine
   return out
 }
 
+/** Is this assignee name (as the card shows it) the person looking? */
+export function isViewer(name: string, me: readonly string[] | null | undefined): boolean {
+  if (!me || me.length === 0) return false
+  const key = (name === 'Owner' ? 'owner' : name).trim().toLowerCase()
+  return me.includes(key)
+}
+
 /** Bottom-row assignees: one initials chip per person (max 3, then +N),
- *  or a subtle "Unassigned". Names ride the tooltip. */
-function CardAssigneeInitials({ assignees }: { assignees: readonly string[] | null | undefined }): React.JSX.Element {
+ *  or a subtle "Unassigned". Each chip is named: its tooltip and its
+ *  accessible name say who it is ("You" for the person looking). */
+function CardAssigneeInitials({
+  assignees,
+  me,
+}: {
+  assignees: readonly string[] | null | undefined
+  me?: readonly string[] | null
+}): React.JSX.Element {
   const names = cardAssigneeNames(assignees)
   if (names.length === 0) {
     return (
@@ -233,36 +155,56 @@ function CardAssigneeInitials({ assignees }: { assignees: readonly string[] | nu
     )
   }
   const shown = names.slice(0, 3)
-  return <AssigneeChips names={names} shown={shown} />
+  return <AssigneeChips names={names} shown={shown} me={me} />
 }
 
 /** The assignee chips, in the daemon's person colours (the roster's
  *  `colors` map; a name it doesn't know hashes). */
-function AssigneeChips({ names, shown }: { names: string[]; shown: string[] }): React.JSX.Element {
+function AssigneeChips({
+  names,
+  shown,
+  me,
+}: {
+  names: string[]
+  shown: string[]
+  me?: readonly string[] | null
+}): React.JSX.Element {
   const colors = usePresenceStore((s) => s.colors)
   // 0.46.0: real names ride the tooltip and the initials; the assignee is
   // still the username.
   const nameMap = usePresenceStore((s) => s.names)
   const keyOf = (n: string): string => (n === 'Owner' ? 'owner' : n)
   const label = (n: string): string => {
+    if (isViewer(n, me)) return 'You'
     const real = realName(nameMap[keyOf(n)])
     return real && real !== n ? `${real} (${n})` : n
   }
+  const rest = names.slice(shown.length)
   return (
-    <span
-      data-testid="card-assignee"
-      className="inline-flex items-center gap-0.5 flex-shrink-0"
-      title={`Assigned to ${names.map(label).join(', ')}`}
-    >
+    <span data-testid="card-assignee" className="inline-flex items-center gap-0.5 flex-shrink-0">
       {/* People chips (plan-agent-status-unify-v1 §3.5): chamfered, the
-          person's colour, no overlap. */}
+          person's colour, no overlap. Each is named for its tooltip and
+          for a screen reader. */}
       {shown.map((n) => (
-        <span key={n} data-testid="card-assignee-initials" className="flex">
+        <span
+          key={n}
+          role="img"
+          aria-label={`Assigned to ${label(n)}`}
+          title={`Assigned to ${label(n)}`}
+          data-testid="card-assignee-initials"
+          className="flex"
+        >
           <PresenceChip name={n} role="member" size={16} title="" color={colors[keyOf(n)]} names={nameMap[keyOf(n)]} />
         </span>
       ))}
-      {names.length > shown.length && (
-        <span className="pl-1.5 type-badge tabular-nums">+{names.length - shown.length}</span>
+      {rest.length > 0 && (
+        <span
+          className="pl-1.5 type-hint tabular-nums"
+          title={`Also assigned to ${rest.map(label).join(', ')}`}
+          aria-label={`Also assigned to ${rest.map(label).join(', ')}`}
+        >
+          +{rest.length}
+        </span>
       )}
     </span>
   )
@@ -287,6 +229,7 @@ export function FeedbackCard({
   onSelect,
   onMutated,
   tabStop = false,
+  me = null,
 }: {
   row: FeedbackListRow
   /** Kept for callers; the compact card no longer shows the workspace. */
@@ -297,6 +240,8 @@ export function FeedbackCard({
   onMutated: () => void
   /** This card is the list's one stop in the tab order. */
   tabStop?: boolean
+  /** Who's looking (assignee names), so their own chip says "You". */
+  me?: readonly string[] | null
 }): React.JSX.Element {
   const unlinked = isUnlinked(row)
   const details = unlinked ? unlinkedDetails(row) : null
@@ -330,7 +275,7 @@ export function FeedbackCard({
       )}
       <p
         data-testid="card-title"
-        className="type-name leading-snug text-[var(--color-text-primary)] truncate select-none"
+        className="type-name leading-snug text-[var(--color-text-primary)] line-clamp-2 break-words select-none"
         title={row.title}
       >
         {row.title}
@@ -364,7 +309,7 @@ export function FeedbackCard({
             card the files, report mark and age wrap to their own line. */}
         <span className="flex items-center gap-1.5 flex-shrink-0">
           <CardStatusDropdown row={row} onMutated={onMutated} />
-          <CardAssigneeInitials assignees={row.assignees} />
+          <CardAssigneeInitials assignees={row.assignees} me={me} />
         </span>
         <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
           <FileCountBadge count={row.fileCount} />

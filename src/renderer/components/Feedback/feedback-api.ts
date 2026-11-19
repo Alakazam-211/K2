@@ -365,9 +365,10 @@ export function quickAnswerOptions(
 
 export type TicketScope = 'mine' | 'waiting' | 'all'
 
-/** The list's tabs, in the phone's order: Waiting on me (the default) first. */
+/** The list's tabs, in the phone's order: Waiting on you (the default)
+ *  first. Its count is the Tickets badge's: the same tickets. */
 export const TICKET_SCOPES: ReadonlyArray<{ value: TicketScope; label: string }> = [
-  { value: 'waiting', label: 'Waiting on me' },
+  { value: 'waiting', label: 'Waiting on you' },
   { value: 'mine', label: 'Mine' },
   { value: 'all', label: 'All' },
 ]
@@ -420,16 +421,19 @@ export function isWaitingOnSomeone(status: FeedbackStatus): boolean {
   return status === 'waiting' || status === 'needs_discussion'
 }
 
-/** Mine = assigned to me; Waiting on me = assigned to me AND waiting for an
- *  answer or needing discussion (`isWaitingOnSomeone`); All = everything. */
-export function filterByScope<T extends { status: FeedbackStatus; assignees?: string[] | null }>(
+/** Mine = assigned to me; Waiting on you = assigned to me AND waiting for
+ *  an answer or needing discussion (`isWaitingOnSomeone`), on a workspace
+ *  that's still on this server: exactly what the Tickets badge counts
+ *  (`waiting-count?me=1`), so the tab and the badge show one number.
+ *  All = everything. */
+export function filterByScope<T extends { status: FeedbackStatus; assignees?: string[] | null; linked?: boolean }>(
   rows: T[],
   scope: TicketScope,
   me: readonly string[],
 ): T[] {
   if (scope === 'all') return rows
   const mine = rows.filter((r) => isAssignedToMe(r, me))
-  return scope === 'waiting' ? mine.filter((r) => isWaitingOnSomeone(r.status)) : mine
+  return scope === 'waiting' ? mine.filter((r) => isWaitingOnSomeone(r.status) && !isUnlinked(r)) : mine
 }
 
 /** Up to two initials for an assignee chip: "julie" → "J",
@@ -629,6 +633,26 @@ export const SELECTABLE_STATUSES = [
   'resolved',
   'dismissed',
 ] as const
+
+/** Every status a ticket can have, in the order the status menus offer
+ *  them and the list groups them: one list everywhere. Answered needs the
+ *  agreed outcome, so a menu asks for it before setting it. */
+export const TICKET_STATUSES = [
+  'waiting',
+  'needs_discussion',
+  'answered',
+  'planned',
+  'resolved',
+  'dismissed',
+] as const satisfies readonly FeedbackStatus[]
+export type TicketStatus = (typeof TICKET_STATUSES)[number]
+
+/** The statuses a ticket's menu offers: all of them, or for a ticket whose
+ *  workspace is gone only Resolved and Dismissed (no agent is left to
+ *  answer or plan with). */
+export function menuStatusesFor(row: { linked?: boolean }): readonly TicketStatus[] {
+  return isUnlinked(row) ? ['resolved', 'dismissed'] : TICKET_STATUSES
+}
 export type SelectableStatus = (typeof SELECTABLE_STATUSES)[number]
 const UNLINKED_STATUSES: readonly SelectableStatus[] = ['resolved', 'dismissed']
 

@@ -94,6 +94,7 @@ export function StateReason({ reason }: { reason: string }): React.JSX.Element {
   return (
     <p
       data-load-detail=""
+      data-k2-chamfer="chip"
       title="What the server said"
       className="mt-1 max-w-full px-2.5 py-1 type-hint text-[var(--color-text-secondary)] bg-[var(--color-wash-1)] rounded-[var(--radius-field)] break-words"
     >

@@ -22,14 +22,9 @@ export interface TicketSection {
   rows: FeedbackListRow[]
 }
 
-/** The default no-tickets hint: what the page is for, and how tickets
- *  arrive (agents file them with the CLI). */
-export const DEFAULT_TICKETS_EMPTY_HINT: React.ReactNode = (
-  <>
-    Agents ask you things here with <code className="font-mono">k2 tickets ask</code>. New tickets show up as they’re
-    filed.
-  </>
-)
+/** The default no-tickets hint: what the page is for, and where an
+ *  agent's question shows up. */
+export const DEFAULT_TICKETS_EMPTY_HINT: React.ReactNode = 'Agents ask you things here. Each question shows up in this list.'
 
 /** The card that holds the list's one tab stop: the open ticket when it's in
  *  the list, else the first card. */
@@ -70,6 +65,7 @@ export function TicketListBody({
   setScope,
   otherWaiting,
   emptyHint,
+  me = null,
 }: {
   /** All rows the board was given (`null` = still loading). */
   rows: FeedbackListRow[] | null
@@ -90,6 +86,8 @@ export function TicketListBody({
   setScope: (scope: TicketScope) => void
   otherWaiting: number
   emptyHint: React.ReactNode
+  /** Who's looking (assignee names), for "You" on the cards' people. */
+  me?: readonly string[] | null
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const idBase = useId()
@@ -128,7 +126,7 @@ export function TicketListBody({
           <ProjectStateCard
             kind="error"
             title="Couldn’t load tickets"
-            detail={error}
+            detail={error ? `What the server said: ${error}` : null}
             testId="ticket-list-error"
             action={<StateRetry onClick={onRetry} busy={retrying} />}
           >
@@ -222,6 +220,7 @@ export function TicketListBody({
                       nowSec={nowSec}
                       selected={selectedId === row.id}
                       tabStop={tabStop === row.id}
+                      me={me}
                       onSelect={() => onSelect(row.id)}
                       onMutated={onMutated}
                     />

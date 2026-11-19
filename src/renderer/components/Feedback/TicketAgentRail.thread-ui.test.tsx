@@ -98,16 +98,16 @@ function activityRow(over: Partial<ActivityRow> = {}): ActivityRow {
   }
 }
 
-function rail(opts: { projectPath?: string | null; zen?: boolean } = {}): HTMLElement {
+function rail(opts: { projectPath?: string | null; zen?: boolean; item?: FeedbackShow; live?: boolean } = {}): HTMLElement {
   const projectPath = opts.projectPath === undefined ? '/ws' : opts.projectPath
   const el = (
     <TicketAgentRail
       feedbackId={TICKET}
-      item={ITEM}
+      item={opts.item ?? ITEM}
       error={null}
       nowSec={NOW}
       options={OPTIONS}
-      optionsLive
+      optionsLive={opts.live ?? true}
       onChanged={() => {}}
       projectId="p1"
       projectPath={projectPath}
@@ -227,7 +227,8 @@ describe('a ticket’s discussion in the Thread look', () => {
   it('Enter sends a free-text comment; Shift+Enter does not; a pill sends the answer', async () => {
     rail()
     const input = screen.getByTestId('ticket-compose-input') as HTMLTextAreaElement
-    expect(input.placeholder).toBe('Pick an option above, or message ada')
+    // Short enough for one line beside the quick answers.
+    expect(input.placeholder).toBe('Or write your own answer')
     fireEvent.change(input, { target: { value: 'what about **both**?' } })
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
     // 0.46.3: the ticket's file links ask `fs/resolve-links`; only the
@@ -242,6 +243,13 @@ describe('a ticket’s discussion in the Thread look', () => {
       expect(cli.post).toHaveBeenLastCalledWith('feedback/comment', { id: TICKET, body: 'Postgres', optionPick: true }),
     )
     expect(comments()).toHaveLength(2)
+  })
+
+  it('a resolved ticket hides its quick answers and says how to answer anyway', () => {
+    rail({ item: { ...ITEM, status: 'resolved' }, live: false })
+    expect(screen.queryByTestId('ticket-quick-answer')).toBeNull()
+    expect(screen.getByTestId('ticket-quick-answers-closed').textContent).toBe('Resolved. Reopen it to answer.')
+    expect((screen.getByTestId('ticket-compose-input') as HTMLTextAreaElement).placeholder).toBe('Message ada')
   })
 
   it('the working strip of the workspace agent a reply lands in rides on the box', () => {

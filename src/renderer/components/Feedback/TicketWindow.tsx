@@ -11,6 +11,7 @@ import { Surface } from '@/components/ui'
 import { fetchFeedbackShow, type FeedbackListRow } from './feedback-api'
 import { briefOverlayStoplightInset } from './BriefFrame'
 import { FeedbackItemView } from './FeedbackItemView'
+import { useTicketMe } from './useTicketMe'
 import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
@@ -18,6 +19,7 @@ const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 
 export function TicketWindow({ ticketId }: { ticketId: string }): React.JSX.Element {
   const revision = useFeedbackStore((s) => s.revision)
+  const me = useTicketMe()
   const [row, setRow] = useState<FeedbackListRow | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
@@ -91,6 +93,7 @@ export function TicketWindow({ ticketId }: { ticketId: string }): React.JSX.Elem
           revision={revision}
           onMutated={() => void load()}
           inOwnWindow
+          me={me}
         />
       ) : (
         <div className="flex-1 flex items-center justify-center type-row text-[var(--color-text-muted)]">

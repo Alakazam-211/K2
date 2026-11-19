@@ -23,7 +23,7 @@
 // no reassign, no chat — only Resolve and Dismiss.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
+import { MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
@@ -33,6 +33,7 @@ import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { DrawerHeaderButton, DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 import { ChevronDownIcon, ExpandIcon, PopOutIcon } from '@/components/icons/K2Icons'
 import { focusMenuStart, onMenuKeyDown, TICKET_MENU_BOX, TICKET_MENU_ROW } from './ticket-menu'
+import { MenuCheck, TICKET_FLOAT, TicketStatusMenu } from './TicketStatusMenu'
 import { isWebClient } from '@/lib/is-web'
 import {
   assignFeedback,
@@ -42,16 +43,16 @@ import {
   isUnlinked,
   quickAnswerOptions,
   resolveFeedback,
-  statusLabel,
+  TICKET_STATUSES,
   UNLINKED_WORKSPACE_LABEL,
   type FeedbackBrief,
   type FeedbackListRow,
   type FeedbackShow,
   type FeedbackStatus,
 } from './feedback-api'
-import { HtmlBriefBadge, PriorityBadge, StatusBadge, StatusMark } from './badges'
+import { PriorityBadge, StatusBadge, StatusMark } from './badges'
 import { BriefFrame } from './BriefFrame'
-import { cardAssigneeNames, MenuCheck } from './TicketCard'
+import { cardAssigneeNames, isViewer } from './TicketCard'
 import { TicketAgentRail } from './TicketAgentRail'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
@@ -67,7 +68,8 @@ import {
   type TicketDiscussionMode,
 } from '@/lib/ticket-board-chrome'
 import { useElementWidth } from '@/hooks/useElementWidth'
-import { Button, Input, ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { Button, ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { briefColumnStyle } from './brief-srcdoc'
 import { ResizeEdge } from '@/components/Layout/ResizeEdge'
 import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
@@ -96,6 +98,8 @@ interface FeedbackItemViewProps {
   /** The next ticket waiting on this person, offered once this one is
    *  answered or resolved, so the flow loops instead of dead-ending. */
   nextWaiting?: { title: string; open: () => void } | null
+  /** Who's looking (assignee names), so the byline says "asked you". */
+  me?: readonly string[] | null
 }
 
 /** Where the discussion sits and how wide, and the report's width beside
@@ -124,9 +128,19 @@ export function quickAnswersLive(status: FeedbackStatus): boolean {
   return status !== 'resolved' && status !== 'dismissed'
 }
 
-/** The header status dropdown's choices (Rosson). */
-export const HEADER_STATUSES = ['waiting', 'needs_discussion', 'answered', 'resolved'] as const
-export type HeaderStatus = (typeof HEADER_STATUSES)[number]
+/** The status line's menu offers every status: one list everywhere
+ *  (TICKET_STATUSES). */
+export const HEADER_STATUSES = TICKET_STATUSES
+
+/** Who a ticket asked, for its byline: "you" for the person looking, the
+ *  others by name, or "no one yet". */
+export function askedLabel(names: readonly string[], me: readonly string[] | null | undefined): string {
+  if (names.length === 0) return 'no one yet'
+  const you = names.filter((n) => isViewer(n, me))
+  const others = names.filter((n) => !isViewer(n, me))
+  const parts = [...(you.length > 0 ? ['you'] : []), ...others]
+  return parts.length <= 2 ? parts.join(' and ') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+}
 
 /** Open the ticket in its own app window (desktop only). */
 export function openTicketWindow(ticketId: string): Promise<unknown> {
@@ -147,6 +161,7 @@ export function FeedbackItemView({
   onChatOpenChange,
   discussion,
   nextWaiting = null,
+  me = null,
 }: FeedbackItemViewProps): React.JSX.Element {
   const [item, setItem] = useState<FeedbackShow | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -333,8 +348,21 @@ export function FeedbackItemView({
   // shown above the rail's text area.
   const quick = unlinked || !item ? [] : quickAnswerOptions(item, brief?.html)
 
-  // Who answers it: the people's names, or "no one assigned".
-  const assignedLabel = assigneeNames.length > 0 ? assigneeNames.join(', ') : 'no one assigned'
+  // Who answers it: "you" for the person looking, the others by name, or
+  // "no one yet".
+  const assignedLabel = askedLabel(assigneeNames, me)
+
+  // The status and the priority: the first thing the status line says.
+  const statusLine = (
+    <>
+      {unlinked ? (
+        <StatusBadge status={view.status} />
+      ) : (
+        <HeaderStatusMenu ticketId={id} status={view.status} currentAnswer={item?.answer ?? null} onChanged={onChanged} />
+      )}
+      <PriorityBadge priority={view.priority} />
+    </>
+  )
 
   return (
     <div
@@ -349,7 +377,7 @@ export function FeedbackItemView({
         material="tile"
         bordered={false}
         data-ticket-report=""
-        className="flex-1 flex flex-col min-h-0 min-w-0"
+        className="relative flex-1 flex flex-col min-h-0 min-w-0"
         data-testid="ticket-detail"
       >
         {/* The header stays put: the title and its controls on one row,
@@ -357,16 +385,22 @@ export function FeedbackItemView({
             open downward over the body, hence the stacking context. */}
         <div data-testid="ticket-detail-header" className="relative z-20 flex-shrink-0">
           <div
-            className="flex items-center gap-1 min-w-0 px-4 border-b border-[var(--color-border)]"
+            className="flex items-center gap-2 min-w-0 px-4 border-b border-[var(--color-border)]"
             style={{ height: PROJECT_BAR_ROW_HEIGHT }}
           >
-            <span
-              data-testid="ticket-detail-title"
-              className="type-heading text-[var(--color-text-primary)] truncate flex-1 selectable-copy"
-              title={view.title}
-            >
-              {view.title}
-            </span>
+            {/* The title, once: in its own window the window's bar names
+                the ticket, so this row leads with the status instead. */}
+            {inOwnWindow ? (
+              <span className="flex flex-1 min-w-0 items-center gap-x-2">{statusLine}</span>
+            ) : (
+              <span
+                data-testid="ticket-detail-title"
+                className="type-heading text-[var(--color-text-primary)] truncate flex-1 selectable-copy"
+                title={view.title}
+              >
+                {view.title}
+              </span>
+            )}
             {/* The header's controls are glyphs with tooltips, so the title
                 keeps its line: full screen, its own window, and (while the
                 discussion is hidden) » to show it, as the list's « and ». */}
@@ -407,26 +441,20 @@ export function FeedbackItemView({
               </span>
             )}
           </div>
-          {/* The report's first line: its status, and who asked whom. */}
-          <div className="px-4 pt-2 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 type-hint text-[var(--color-text-muted)]">
-            {unlinked ? (
-              <StatusBadge status={view.status} />
-            ) : (
-              <HeaderStatusMenu
-                ticketId={id}
-                status={view.status}
-                currentAnswer={item?.answer ?? null}
-                onChanged={onChanged}
-              />
+          {/* The report's status line leads with what you can change (the
+              status, then the priority); who asked whom and when sit on a
+              quieter line under it, the person a chip that reassigns. */}
+          <div className="px-4 pt-2 flex flex-col gap-1 min-w-0">
+            {!inOwnWindow && (
+              <div data-testid="ticket-detail-status-line" className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
+                {statusLine}
+              </div>
             )}
-            <PriorityBadge priority={view.priority} />
-            {hasBrief && <HtmlBriefBadge />}
-            {/* "atlas asked Owner · 25m ago": who asked whom, the person a
-                chip that reassigns. */}
-            <span data-testid="ticket-detail-byline" className="flex flex-wrap items-center gap-x-1 gap-y-1 min-w-0 selectable-copy">
-              <span className="flex-shrink-0">
-                <span className="text-[var(--color-text-secondary)]">{view.agentName}</span> asked
-              </span>{' '}
+            <div
+              data-testid="ticket-detail-byline"
+              className="flex flex-wrap items-center gap-x-1 gap-y-1 min-w-0 type-hint text-[var(--color-text-muted)] selectable-copy"
+            >
+              <span className="flex-shrink-0">{view.agentName} asked</span>{' '}
               {unlinked ? (
                 <span className="flex-shrink-0">{assignedLabel}</span>
               ) : (
@@ -436,7 +464,7 @@ export function FeedbackItemView({
                 · {showWorkspace ? `${workspaceName} · ` : ''}
                 {unlinked ? formatFiledDate(view.createdAt) : formatRelativeTime(view.createdAt, nowSec)}
               </span>
-            </span>
+            </div>
           </div>
         </div>
 
@@ -471,6 +499,21 @@ export function FeedbackItemView({
           onExpandedChange={setExpanded}
           onChanged={onChanged}
         />
+        {asDrawer && !drawerOpen && (
+          // The closed drawer's tab, inside the report by its right edge,
+          // so the discussion is always one click away.
+          <button
+            type="button"
+            data-testid="ticket-discussion-tab"
+            aria-expanded={false}
+            onClick={() => setDrawerOpen(true)}
+            title="Show the discussion"
+            data-k2-chamfer="control"
+            className="k2-focus absolute right-2 top-1/2 -translate-y-1/2 z-20 flex items-center gap-1.5 px-1.5 py-3 [writing-mode:vertical-rl] type-hint font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-[var(--radius-field)] [box-shadow:var(--shadow-2)] hover:bg-[var(--color-wash-1)] cursor-pointer"
+          >
+            Discussion{item ? ` · ${item.comments.length}` : ''}
+          </button>
+        )}
       </Surface>
 
       {discussionMode === 'side' && (
@@ -486,20 +529,6 @@ export function FeedbackItemView({
           testId="ticket-discussion-resize"
           style={{ right: `calc(${discussionWidth}px + var(--gap-pane) / 2)`, transform: 'translateX(50%)' }}
         />
-      )}
-      {asDrawer && !drawerOpen && (
-        // The closed drawer's tab, on the report's right edge, so the
-        // discussion is always one click away.
-        <button
-          type="button"
-          data-testid="ticket-discussion-tab"
-          aria-expanded={false}
-          onClick={() => setDrawerOpen(true)}
-          title="Show the discussion"
-          className="k2-focus absolute right-0 top-1/2 -translate-y-1/2 z-20 flex items-center gap-1.5 px-1.5 py-3 [writing-mode:vertical-rl] type-hint font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-surface)] border border-r-0 border-[var(--color-border)] hover:bg-[var(--color-wash-1)] cursor-pointer"
-        >
-          Discussion{item ? ` · ${item.comments.length}` : ''}
-        </button>
       )}
       {discussionShown && (
         <TicketAgentRail
@@ -616,7 +645,13 @@ function TicketBody({
           heavy
           testId="ticket-report-scroll"
         >
-        <div className="flex-1 flex flex-col" data-ticket-thread={ticketId}>
+        <div
+          className="flex-1 flex flex-col w-full"
+          data-ticket-thread={ticketId}
+          // A readable measure: the summary and the report keep one column,
+          // left where the report sits, however wide the pane gets.
+          style={briefColumnStyle()}
+        >
           {item.body && (
             // The short summary: an inset well above the report.
             <Surface role2="inset" chamfer data-testid="ticket-summary" className="mb-3 px-3 py-2">
@@ -692,11 +727,9 @@ function useMenuBox(menuRef: React.RefCallback<HTMLDivElement>): {
   return { box, ref }
 }
 
-/** The header's status chip, which is also the status dropdown: waiting,
- *  needs discussion, answered, resolved — all over `POST
- *  /cli/feedback/resolve`. Answered asks for the agreed outcome first (the
- *  daemon refuses `answered` without one). The menu floats from the chip
- *  (the app's anchored menu: never clipped by the tile, flips up when
+/** The status line's status, which is also the board's one status menu
+ *  (TicketStatusMenu): every status, Answered asking what was agreed. The
+ *  menu floats from the chip (never clipped by the tile, flips up when
  *  there's no room below), focus moves into it, and ↑ / ↓ move. */
 export function HeaderStatusMenu({
   ticketId,
@@ -710,61 +743,8 @@ export function HeaderStatusMenu({
   onChanged: () => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [menuError, setMenuError] = useState<string | null>(null)
-  const [answering, setAnswering] = useState(false)
-  const [answer, setAnswer] = useState(currentAnswer ?? '')
-  const close = useCallback(() => {
-    setOpen(false)
-    setAnswering(false)
-    setMenuError(null)
-  }, [])
-  const menu = useAnchoredMenu<HTMLDivElement>({ open, onClose: close, width: 'min', minWidth: 200, estimatedHeight: 200 })
-  const { box, ref } = useMenuBox(menu.menuRef)
-  useEffect(() => {
-    if (!open) return
-    const frame = requestAnimationFrame(() => focusMenuStart(box.current))
-    return () => cancelAnimationFrame(frame)
-  }, [open, box])
-  useEffect(() => {
-    if (!open) return
-    // Capture-phase so Esc closes this menu before the board's Esc.
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.stopPropagation()
-      close()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [open, close])
-
-  const apply = async (next: HeaderStatus, agreed?: string): Promise<void> => {
-    if (busy) return
-    setBusy(true)
-    setMenuError(null)
-    try {
-      await resolveFeedback(ticketId, next, agreed)
-      onChanged()
-      close()
-    } catch (e) {
-      setMenuError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const choose = (next: HeaderStatus): void => {
-    if (next === status) {
-      close()
-      return
-    }
-    if (next === 'answered') {
-      setAnswer(currentAnswer ?? '')
-      setAnswering(true)
-      return
-    }
-    void apply(next)
-  }
+  const close = useCallback(() => setOpen(false), [])
+  const menu = useAnchoredMenu<HTMLDivElement>({ open, onClose: close, width: 'min', minWidth: 200, estimatedHeight: 240 })
 
   return (
     <div ref={menu.anchorRef} className="relative flex-shrink-0">
@@ -773,8 +753,7 @@ export function HeaderStatusMenu({
         data-testid="ticket-status"
         aria-haspopup="menu"
         aria-expanded={open}
-        disabled={busy}
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={() => setOpen((o) => !o)}
         data-status={status}
         className="k2-focus inline-flex items-center cursor-pointer disabled:opacity-50"
         title="Change status"
@@ -787,79 +766,18 @@ export function HeaderStatusMenu({
       </button>
       {open &&
         menu.portal(
-          <div
-            ref={ref}
-            role="menu"
-            aria-label="Change status"
-            data-testid="ticket-header-status-menu"
-            data-placement={menu.placement}
-            data-k2-chamfer="surface"
+          <TicketStatusMenu
+            ticketId={ticketId}
+            status={status}
+            currentAnswer={currentAnswer}
+            statuses={TICKET_STATUSES}
+            onChanged={onChanged}
+            onClose={close}
+            setBox={menu.menuRef}
             style={menu.style}
-            onKeyDown={(e) => onMenuKeyDown(e, box.current, close)}
-            {...floatMaterial('menu')}
-            {...MENU_LIST}
-            className={`min-w-[180px] ${TICKET_MENU_BOX}`}
-          >
-            {HEADER_STATUSES.map((s) => {
-              const current = status === s
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={current}
-                  data-testid={`ticket-status-option-${s}`}
-                  disabled={busy}
-                  onClick={() => choose(s)}
-                  data-k2-focus=""
-                  {...MENU_ROW}
-                  className={`${TICKET_MENU_ROW} ${
-                    current ? 'text-[var(--color-text-primary)] bg-[var(--color-wash-1)]' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-                  }`}
-                >
-                  <span className="flex-1">{statusLabel(s)}</span>
-                  {current && <MenuCheck />}
-                </button>
-              )
-            })}
-            {answering && (
-              <div className="border-t border-[var(--color-border)] mt-0.5 px-3 py-2">
-                <label className="block mb-1 type-hint text-[var(--color-text-secondary)]" htmlFor={`answered-${ticketId}`}>
-                  What was agreed?
-                </label>
-                <Input
-                  id={`answered-${ticketId}`}
-                  data-testid="ticket-answered-input"
-                  autoFocus
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && answer.trim()) {
-                      e.preventDefault()
-                      void apply('answered', answer.trim())
-                    }
-                  }}
-                  className="w-full"
-                />
-                <div className="mt-2 flex justify-end gap-2">
-                  <Button variant="ghost" onClick={() => setAnswering(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="accent"
-                    data-testid="ticket-answered-save"
-                    disabled={busy || answer.trim().length === 0}
-                    onClick={() => void apply('answered', answer.trim())}
-                  >
-                    Mark answered
-                  </Button>
-                </div>
-              </div>
-            )}
-            {menuError && (
-              <div className="px-3 py-1 type-hint text-[var(--color-status-error-text)] selectable-copy">{menuError}</div>
-            )}
-          </div>,
+            placement={menu.placement}
+            testId="ticket-header-status-menu"
+          />,
         )}
     </div>
   )
@@ -999,7 +917,7 @@ function ReassignMenu({
       data-k2-chamfer="surface"
       style={style}
       onKeyDown={(e) => onMenuKeyDown(e, box.current, onClose)}
-      {...floatMaterial('menu')}
+      {...TICKET_FLOAT}
       {...MENU_LIST}
       className={`min-w-[180px] max-h-56 overflow-y-auto ${TICKET_MENU_BOX}`}
     >

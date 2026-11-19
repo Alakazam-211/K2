@@ -177,7 +177,9 @@ function FileRowContent({ file }: { file: ThreadFileObject }): JSX.Element {
         <span
           data-thread-file-meta=""
           className="truncate"
-          style={{ fontSize: '0.72em', color: changed ? 'var(--thread-file-changed)' : 'var(--zen-text-muted)' }}
+          // A host may lift the details to its own small type (Tickets sets
+          // --thread-file-meta-size to its hint size).
+          style={{ fontSize: 'var(--thread-file-meta-size, 0.72em)', color: changed ? 'var(--thread-file-changed)' : 'var(--zen-text-muted)' }}
         >
           {fileMetaLine(file)}
         </span>

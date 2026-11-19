@@ -23,8 +23,9 @@
 // which Home's Add Agent picker uses too; this wrapper keeps the trigger,
 // the popover, its close rules and the store reads.
 
-import React, { useEffect, useMemo, useState } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import React, { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { TICKET_FLOAT } from './TicketStatusMenu'
+import { chamferCutFor } from '@/components/Thread/chamfer'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { ChevronDownIcon } from '@/components/icons/K2Icons'
 import { TICKET_MENU_BOX } from './ticket-menu'
@@ -301,7 +302,7 @@ export function WorkspaceFilterDropdown({
           style={menu.style}
           data-testid="workspace-filter-menu"
           data-k2-chamfer="surface"
-          {...floatMaterial('menu')}
+          {...TICKET_FLOAT}
           className={`w-64 flex flex-col ${TICKET_MENU_BOX}`}
         >
           {/* Search + rows: the shared list (search, sections, keyboard). */}
@@ -314,6 +315,9 @@ export function WorkspaceFilterDropdown({
             placeholder="Search workspaces…"
             emptyText="No workspaces match"
             ariaLabel="Workspaces"
+            // The app's search field (cut in Terminal, a pill in Glass), as
+            // the list's own search above.
+            searchStyle="field"
             autoFocus
           />
         </div>,
@@ -409,10 +413,21 @@ function workspaceFilterListSections({
   return out
 }
 
+/** A glyph tile takes the avatars' shape beside it: round in Glass, cut in
+ *  Terminal (ProjectAvatar's `data-k2-avatar` and its cut, sized the same
+ *  way). */
+function glyphTile(size: number): Record<string, unknown> {
+  return {
+    'data-k2-chamfer': 'surface',
+    'data-k2-avatar': '',
+    style: { '--k2-ch-cut': `${chamferCutFor(size)}px`, width: size, height: size } as CSSProperties,
+  }
+}
+
 /** Stand-in glyph for the All row, so its label aligns with avatar rows. */
 export function AllWorkspacesGlyph(): React.JSX.Element {
   return (
-    <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center border border-[var(--color-border)] text-[var(--color-text-muted)]">
+    <span {...glyphTile(20)} className="flex-shrink-0 flex items-center justify-center border border-[var(--color-border)] text-[var(--color-text-muted)]">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <rect x="3" y="3" width="7" height="7" />
         <rect x="14" y="3" width="7" height="7" />
@@ -426,7 +441,7 @@ export function AllWorkspacesGlyph(): React.JSX.Element {
 /** The Unlinked row's dashed "?" box. */
 function UnlinkedGlyph(): React.JSX.Element {
   return (
-    <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]">
+    <span {...glyphTile(20)} className="flex-shrink-0 flex items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]">
       ?
     </span>
   )
@@ -437,8 +452,8 @@ function UnlinkedGlyph(): React.JSX.Element {
 function ProjectGroupGlyph({ size }: { size: number }): React.JSX.Element {
   return (
     <span
+      {...glyphTile(size)}
       className="flex-shrink-0 flex items-center justify-center border border-[var(--color-accent)]/40 text-[var(--color-accent)]"
-      style={{ width: size, height: size }}
     >
       <svg width={size - 8} height={size - 8} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polygon points="12 2 2 7 12 12 22 7 12 2" />

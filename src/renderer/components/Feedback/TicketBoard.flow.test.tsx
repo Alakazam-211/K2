@@ -200,13 +200,32 @@ describe('a failed load', () => {
     expect(screen.queryByTestId('ticket-list-error')).toBeNull()
   })
 
-  it('a list that loaded empty says so, with the command as code', async () => {
+  it('a list that loaded empty says so in plain words, and so does the middle', async () => {
     board([])
     const empty = await screen.findByTestId('ticket-list-empty')
     expect(empty.textContent).toContain('No tickets yet')
     const hint = screen.getByTestId('ticket-list-empty-hint')
-    expect(hint.textContent).not.toContain('`')
-    expect(hint.querySelector('code')?.textContent).toBe('k2 tickets ask')
+    expect(hint.textContent).toBe('Agents ask you things here. Each question shows up in this list.')
+    expect(hint.querySelector('code')).toBeNull()
+    // The middle never asks for a pick the list can't give.
+    expect(screen.getByTestId('ticket-middle-line').textContent).toBe('When an agent asks you something, its report opens here.')
+    expect(screen.queryByTestId('ticket-start-oldest')).toBeNull()
+  })
+
+  it('a search with no match offers Clear search in the middle, not the oldest waiting ticket', async () => {
+    board()
+    fireEvent.change(screen.getByLabelText('Search tickets'), { target: { value: 'zzz nothing' } })
+    expect(screen.getByTestId('ticket-middle-line').textContent).toBe('No ticket matches your search.')
+    expect(screen.queryByTestId('ticket-start-oldest')).toBeNull()
+    fireEvent.click(screen.getByTestId('ticket-clear-search'))
+    expect((screen.getByLabelText('Search tickets') as HTMLInputElement).value).toBe('')
+    await waitFor(() => expect(screen.getAllByTestId('ticket-card').length).toBeGreaterThan(0))
+  })
+
+  it('while the list loads, no tab claims 0 and the middle asks for nothing', () => {
+    render(<TicketBoard rows={null} error={null} revision={0} onMutated={vi.fn()} />)
+    expect(document.querySelectorAll('[data-scope-count]')).toHaveLength(0)
+    expect(screen.queryByTestId('ticket-middle-line')).toBeNull()
   })
 })
 
@@ -383,7 +402,7 @@ describe('shared controls', () => {
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(within(menu).getByTestId('ticket-status-option-needs_discussion'))
     fireEvent.keyDown(document.activeElement!, { key: 'End' })
-    expect(document.activeElement).toBe(within(menu).getByTestId('ticket-status-option-resolved'))
+    expect(document.activeElement).toBe(within(menu).getByTestId('ticket-status-option-dismissed'))
     fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByTestId('ticket-header-status-menu')).toBeNull())
     // The ticket stays open.
@@ -443,7 +462,8 @@ describe('words and the flow’s loop', () => {
     await screen.findByTestId('ticket-rail-thread')
     // Priority 3 is the everyday level: nothing shown.
     expect(screen.queryByTestId('ticket-priority')).toBeNull()
-    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked Owner/)
+    // The person looking is "you".
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked you/)
     fireEvent.click(card(urgent.id))
     await waitFor(() => expect(screen.getByTestId('ticket-priority').textContent).toBe('Urgent'))
   })
@@ -510,6 +530,6 @@ describe('after-shot fixes', () => {
     await screen.findByTestId('ticket-detail')
     const byline = screen.getByTestId('ticket-detail-byline')
     expect(byline.className).toContain('flex-wrap')
-    expect(byline.parentElement!.className).toContain('flex-wrap')
+    expect(screen.getByTestId('ticket-detail-status-line').className).toContain('flex-wrap')
   })
 })

@@ -119,7 +119,7 @@ describe('Settings → Tickets: server rules', () => {
     expect(trigger('Require an HTML brief').textContent).toContain('Require')
     expect(trigger('Require an assignee').textContent).toContain('Warn')
     expect(trigger('Default assignee').textContent).toContain('julie')
-    expect(trigger('Open the Tickets page on').textContent).toContain('Waiting on me')
+    expect(trigger('Open the Tickets page on').textContent).toContain('Waiting on you')
     for (const id of ['tickets.require-brief', 'tickets.require-assignee', 'tickets.default-assignee', 'tickets.open-on']) {
       expect(document.querySelector(`[data-settings-id="${id}"]`)).not.toBeNull()
     }

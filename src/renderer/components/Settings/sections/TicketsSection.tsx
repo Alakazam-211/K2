@@ -73,7 +73,7 @@ export const TICKETS_MANIFEST: SettingEntry[] = [
     id: 'tickets.open-on',
     section: 'tickets',
     label: 'Open the Tickets Page On',
-    description: 'Waiting on me, All, or the tab you used last',
+    description: 'Waiting on you, All, or the tab you used last',
     keywords: ['ticket', 'tickets', 'waiting', 'all', 'tab', 'default', 'open'],
     group: 'Just for you',
   },

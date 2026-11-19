@@ -262,8 +262,11 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     // fill, its border and the menu shadow token.
     expect(popover.getAttribute('class')).toMatchInlineSnapshot(`"w-64 flex flex-col bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:var(--shadow-3)]"`)
     expect(classTree(input.parentElement as Element)).toMatchInlineSnapshot(`
-      "div .p-1.5 border-b border-[var(--color-border)]
-        input .w-full px-2 py-1.5 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)]"
+      "span .relative inline-flex items-center w-full
+        svg .pointer-events-none absolute left-3 z-[2] w-[var(--control-search-icon)] h-[var(--control-search-icon)] text-[var(--color-text-secondary)]
+          circle .
+          path .
+        input .k2-focus no-drag w-full min-w-0 outline-none h-[calc(var(--control-search-height)*var(--density-scale,1))] pl-9 pr-3 type-row text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] border border-[var(--color-control-edge)] focus:border-[var(--color-accent)] rounded-[var(--radius-field)] [box-shadow:var(--ring-field)] [background-color:var(--color-bg)] disabled:opacity-50 disabled:cursor-not-allowed [&::-webkit-search-cancel-button]:hidden [&::-webkit-search-decoration]:hidden"
     `)
     const scroller = popover.querySelector('.overflow-y-auto')
     if (!scroller) throw new Error('no scroll body')
@@ -272,7 +275,7 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     // and a plain workspace with the letter.
     expect(classTree(rowFor('all'))).toMatchInlineSnapshot(`
       "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]
-        span .flex-shrink-0 w-5 h-5 flex items-center justify-center border border-[var(--color-border)] text-[var(--color-text-muted)]
+        span .flex-shrink-0 flex items-center justify-center border border-[var(--color-border)] text-[var(--color-text-muted)] {--k2-ch-cut: 4px; width: 20px; height: 20px;}
           svg .
             rect .
             rect .
@@ -282,12 +285,12 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     `)
     expect(classTree(rowFor(UNLINKED_FILTER_VALUE))).toMatchInlineSnapshot(`
       "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]
-        span .flex-shrink-0 w-5 h-5 flex items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]
+        span .flex-shrink-0 flex items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] {--k2-ch-cut: 4px; width: 20px; height: 20px;}
         span .text-xs truncate flex-1 italic"
     `)
     expect(classTree(rowFor('project:pg1'))).toMatchInlineSnapshot(`
       "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left bg-[var(--color-wash-2)] text-[var(--color-text-primary)]
-        span .flex-shrink-0 flex items-center justify-center border border-[var(--color-accent)]/40 text-[var(--color-accent)] {width: 20px; height: 20px;}
+        span .flex-shrink-0 flex items-center justify-center border border-[var(--color-accent)]/40 text-[var(--color-accent)] {--k2-ch-cut: 4px; width: 20px; height: 20px;}
           svg .
             polygon .
             polyline .

@@ -122,7 +122,8 @@ describe('ticket status menu', () => {
     const menu = screen.getByTestId('ticket-status-menu')
     expectLifted(menu, trigger, clip)
     const labels = Array.from(menu.querySelectorAll('button')).map((button) => button.textContent?.trim())
-    expect(labels).toEqual(['Waiting', 'Needs discussion', 'Planned', 'Resolved', 'Dismissed'])
+    // One list of statuses everywhere: the card's menu and the report's.
+    expect(labels).toEqual(['Waiting', 'Needs discussion', 'Answered', 'Planned', 'Resolved', 'Dismissed'])
 
     fireEvent.mouseDown(menu)
     expect(screen.getByTestId('ticket-status-menu')).toBeTruthy()
@@ -189,6 +190,7 @@ describe('ticket status menu placement in the list', () => {
     expect(Array.from(menu.querySelectorAll('button')).map((b) => b.textContent?.trim())).toEqual([
       'Waiting',
       'Needs discussion',
+      'Answered',
       'Planned',
       'Resolved',
       'Dismissed',

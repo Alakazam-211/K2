@@ -304,7 +304,8 @@ export function TicketAgentRail({
       className={`relative flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 ${
         drawer ? 'absolute inset-y-0 right-0 z-30' : ''
       }`}
-      style={{ width }}
+      // A file's details ("2 KB · CSV") at the app's hint size, never below.
+      style={{ width, '--thread-file-meta-size': 'var(--type-sm)' } as React.CSSProperties}
     >
       {(terminal || onHide) && (
         // Its top row, level with the report's header and the list's.
@@ -452,6 +453,8 @@ export function ThreadTab({
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
+  // The quick answers show while the ticket takes a pick.
+  const quickShown = options.length > 0 && optionsLive
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Focus the reply box ONCE per ticket id when the thread first becomes
@@ -817,17 +820,23 @@ export function ThreadTab({
             />
           </StashDrawerSlot>
         }
-        // One line, as the Thread's "Message <agent>" (an empty box stays
-        // one line tall, so a longer hint would be cut off).
-        placeholder={
-          options.length > 0 ? `Pick an option above, or message ${item.agentName}` : `Message ${item.agentName}`
-        }
+        // One short line, as the Thread's "Message <agent>" (an empty box
+        // stays one line tall, so a longer hint would be cut off). Under
+        // live quick answers it offers your own words instead.
+        placeholder={quickShown ? 'Or write your own answer' : `Message ${item.agentName}`}
         above={
           <>
             {actionError && <ThreadChatNote error>{actionError}</ThreadChatNote>}
             {attach.on && <TicketComposeFileChips files={composeFiles.files} onRemove={composeFiles.remove} />}
             {deliveryMiss && <ThreadChatNote>Saved. The agent did not receive it ({deliveryMiss}).</ThreadChatNote>}
-            {options.length > 0 && (
+            {/* A closed ticket takes no pick: say so, and how to answer
+                anyway, instead of greyed answers with no reason. */}
+            {options.length > 0 && !optionsLive && (
+              <ThreadChatNote testId="ticket-quick-answers-closed">
+                {item.status === 'dismissed' ? 'Dismissed' : 'Resolved'}. Reopen it to answer.
+              </ThreadChatNote>
+            )}
+            {quickShown && (
               <ThreadChatChips testId="ticket-quick-answers">
                 {options.map((opt) => (
                   <ThreadChatChip

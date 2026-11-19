@@ -9,21 +9,23 @@
 import React from 'react'
 import { statusLabel, type FeedbackKind, type FeedbackStatus } from './feedback-api'
 import { PaperclipIcon } from '@/components/icons/K2Icons'
+import { Tag } from '@/components/ui/Tag'
 
 /** A status's word colour (waiting = needs you, needs discussion orange,
  *  answered green, planned accent, closed muted). Each reads at 4.5:1 or
- *  more on the cards in every look: the text-grade status tokens, and needs
- *  discussion's orange taken toward the text colour, which alone falls to
- *  about 3.3:1 on Paper. */
+ *  more on the cards in every look, a selected card's accent fill too: the
+ *  text-grade status tokens taken a little toward the text colour (as the
+ *  app's tags take theirs), and needs discussion's orange further, which
+ *  alone falls to about 3.3:1 on Paper. */
 export function statusTextClass(status: FeedbackStatus): string {
   return status === 'waiting'
-    ? 'text-[var(--color-status-warn-text)]'
+    ? 'text-[color-mix(in_srgb,var(--color-status-warn-text)_80%,var(--color-text-primary))]'
     : status === 'needs_discussion'
       ? 'text-[color-mix(in_srgb,var(--color-status-working-soft)_70%,var(--color-text-primary))]'
       : status === 'answered'
-        ? 'text-[var(--color-status-ok-soft)]'
+        ? 'text-[color-mix(in_srgb,var(--color-status-ok-soft)_80%,var(--color-text-primary))]'
         : status === 'planned'
-          ? 'text-[var(--color-accent-text)]'
+          ? 'text-[color-mix(in_srgb,var(--color-accent-text)_80%,var(--color-text-primary))]'
           : 'text-[var(--color-text-muted)]'
 }
 
@@ -89,14 +91,12 @@ export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.E
 /** The ticket carries a report (the agent's HTML brief, prd-ticket-html-
  *  brief-v1 H19): called Report, the word for the board's middle part. */
 export function HtmlBriefBadge(): React.JSX.Element {
+  // The app's tag (ui/Tag): a pill in Glass, a cut chip in Terminal, at the
+  // hint size, its ink clearing 4.5:1 on a card and on a selected card.
   return (
-    <span
-      data-testid="html-badge"
-      title="This ticket has a report to read"
-      className="inline-flex items-center px-1.5 rounded-[var(--radius-pill)] type-badge align-middle bg-[var(--color-wash-2)] text-[var(--color-accent-text)]"
-    >
+    <Tag tone="accent" data-case="as-written" data-testid="html-badge" title="This ticket has a report to read" className="align-middle">
       Report
-    </span>
+    </Tag>
   )
 }
 

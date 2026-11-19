@@ -51,6 +51,7 @@ import {
   groupByStatus,
   isUnlinked,
   isWaitingOnSomeone,
+  statusLabel,
   TICKET_SCOPES,
   UNLINKED_WORKSPACE_LABEL,
   type FeedbackListRow,
@@ -85,6 +86,25 @@ export interface TicketBoardProps {
 /** The list's fades take its tile's fill (the nav panel's surface in
  *  Terminal). */
 const TICKET_LIST_EDGE_TINT = 'var(--tile-fill, var(--color-bg-surface))'
+
+export type TicketMiddleState = 'loading' | 'failed' | 'none' | 'no-match' | 'empty-tab' | 'pick'
+
+/** What the empty middle says while no ticket is open: it follows the list,
+ *  so it never asks for a pick the list can't give. */
+export function ticketMiddleState(list: {
+  loading: boolean
+  failed: boolean
+  noTickets: boolean
+  noMatch: boolean
+  emptyTab: boolean
+}): { state: TicketMiddleState; line: string | null } {
+  if (list.loading) return { state: 'loading', line: null }
+  if (list.failed) return { state: 'failed', line: 'The tickets didn’t load, so there’s nothing to open yet.' }
+  if (list.noTickets) return { state: 'none', line: 'When an agent asks you something, its report opens here.' }
+  if (list.noMatch) return { state: 'no-match', line: 'No ticket matches your search.' }
+  if (list.emptyTab) return { state: 'empty-tab', line: 'Nothing to open in this tab.' }
+  return { state: 'pick', line: 'Pick a ticket to read its report and answer the agent.' }
+}
 
 /** The board's pane gap, as the page draws it (0 in Terminal). */
 function paneGap(el: HTMLElement | null): number {
@@ -192,14 +212,17 @@ export function TicketBoard({
     null,
   )
 
+  // The sections are the statuses, named as the status menus name them
+  // (TICKET_STATUSES), so a card's status and its section always agree.
   const sections: TicketSection[] = grouped
     ? [
-        { label: 'Waiting on you', rows: grouped.waiting },
-        { label: 'Needs discussion', rows: grouped.needs_discussion },
-        { label: 'Answered', rows: grouped.answered },
-        { label: 'Planned', rows: grouped.planned },
+        { label: statusLabel('waiting'), rows: grouped.waiting },
+        { label: statusLabel('needs_discussion'), rows: grouped.needs_discussion },
+        { label: statusLabel('answered'), rows: grouped.answered },
+        { label: statusLabel('planned'), rows: grouped.planned },
         { label: UNLINKED_WORKSPACE_LABEL, rows: grouped.unlinked },
-        { label: 'Closed', rows: grouped.closed },
+        { label: statusLabel('resolved'), rows: grouped.closed.filter((r) => r.status === 'resolved') },
+        { label: statusLabel('dismissed'), rows: grouped.closed.filter((r) => r.status !== 'resolved') },
       ]
     : []
   const ordered = sections.flatMap((s) => s.rows)
@@ -264,9 +287,20 @@ export function TicketBoard({
 
   // A failed load is never an empty list (and its tabs don't claim 0).
   const failedEmpty = error !== null && (rows === null || rows.length === 0)
+  // A tab shows its count once it's known: the list loaded, and for Mine
+  // and Waiting on you, who "you" are (never a 0 while loading).
+  const countsKnown = (s: TicketScope): boolean => !failedEmpty && rows !== null && (s === 'all' || me !== null)
   // Mine / Waiting wait for whoami before saying the list is empty.
   const emptyList =
     !failedEmpty && filtered !== null && filtered.length === 0 && (me !== null || scope === 'all')
+  // The empty middle's line, by the list's state.
+  const middle = ticketMiddleState({
+    loading: rows === null && error === null,
+    failed: failedEmpty,
+    noTickets: rows !== null && rows.length === 0 && error === null,
+    noMatch: emptyList && search.trim().length > 0,
+    emptyTab: emptyList,
+  })
   // Waiting / needs-discussion tickets on someone else's board (or
   // nobody's): told in the empty Waiting state so "nothing is waiting on
   // you" is never a lie by omission.
@@ -300,7 +334,7 @@ export function TicketBoard({
             label: (
               <span className="inline-flex items-center gap-1.5">
                 <span>{s.label}</span>{' '}
-                {!failedEmpty && (
+                {countsKnown(s.value) && (
                   <span data-scope-count="" className="type-badge tabular-nums px-1.5 rounded-[var(--radius-pill)] bg-[var(--color-wash-2)]">
                     {scopeCounts[s.value]}
                   </span>
@@ -359,6 +393,7 @@ export function TicketBoard({
           setScope={setScope}
           otherWaiting={otherWaiting}
           emptyHint={emptyHint}
+          me={me}
         />
       </ScrollEdgeFrame>
     </>
@@ -464,6 +499,7 @@ export function TicketBoard({
             chatOpen={chrome.chatOpen}
             onChatOpenChange={setChatOpen}
             nextWaiting={nextWaitingRow ? { title: nextWaitingRow.title, open: () => select(nextWaitingRow.id) } : null}
+            me={me}
             discussion={{
               mode: layout.discussion,
               width: layout.discussionWidth,
@@ -472,17 +508,34 @@ export function TicketBoard({
             }}
           />
         ) : (
-          // Nothing open yet: what the middle is for, and where to start.
+          // Nothing open yet: what the middle is for and where to start,
+          // following the list (loading, failed, empty, no match).
           <Surface
             role2="solid"
             material="tile"
             bordered={false}
             data-ticket-none-open=""
-            className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6"
+            data-middle-state={middle.state}
+            className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6 min-w-0"
           >
-            <p className="type-row text-[var(--color-text-secondary)]">Pick a ticket to read its report and answer the agent.</p>
-            {oldestWaiting && (
-              <Button variant="accent" size="md" data-testid="ticket-start-oldest" onClick={() => select(oldestWaiting.id)}>
+            {middle.line && (
+              <p data-testid="ticket-middle-line" className="type-row text-[var(--color-text-secondary)] max-w-[40ch] text-balance">
+                {middle.line}
+              </p>
+            )}
+            {middle.state === 'no-match' && (
+              <Button variant="accent" size="md" data-testid="ticket-clear-search" onClick={() => setSearch('')}>
+                Clear search
+              </Button>
+            )}
+            {middle.state === 'pick' && oldestWaiting && (
+              <Button
+                variant="accent"
+                size="md"
+                data-testid="ticket-start-oldest"
+                className="!whitespace-normal max-w-full text-balance"
+                onClick={() => select(oldestWaiting.id)}
+              >
                 Start with the oldest waiting ticket
               </Button>
             )}

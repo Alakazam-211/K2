@@ -144,7 +144,10 @@ describe('FeedbackCard — assignee on the bottom row', () => {
     const a = screen.getByTestId('card-assignee')
     expect(a.getAttribute('data-unassigned')).toBeNull()
     expect(screen.getAllByTestId('card-assignee-initials').map((e) => e.textContent)).toEqual(['J'])
-    expect(a.getAttribute('title')).toBe('Assigned to julie')
+    // Each person's chip is named, for its tooltip and a screen reader.
+    const chip = screen.getByTestId('card-assignee-initials')
+    expect(chip.getAttribute('title')).toBe('Assigned to julie')
+    expect(chip.getAttribute('aria-label')).toBe('Assigned to julie')
     // Bottom row: status chip, initials, age, HTML mark — and no agent.
     const bottom = screen.getByTestId('card-bottom-row')
     expect(bottom.contains(a)).toBe(true)
@@ -157,7 +160,8 @@ describe('FeedbackCard — assignee on the bottom row', () => {
     expect(card0.textContent).not.toContain('Alpha')
     // Title, then the one-line summary (the --body).
     expect(screen.getByTestId('card-title').textContent).toBe('Deploy blocked: DNS?')
-    expect(screen.getByTestId('card-title').className).toContain('truncate')
+    // A long title gets two lines, then an ellipsis.
+    expect(screen.getByTestId('card-title').className).toContain('line-clamp-2')
     expect(screen.getByTestId('card-summary').textContent).toBe('Short summary.')
     expect(screen.getByTestId('card-summary').className).toContain('truncate')
   })
@@ -165,7 +169,10 @@ describe('FeedbackCard — assignee on the bottom row', () => {
   it('the wire owner reads Owner; several people are initials', () => {
     card({ ...row, assignees: ['owner', 'julie', 'owner', ' '] })
     expect(screen.getAllByTestId('card-assignee-initials').map((e) => e.textContent)).toEqual(['O', 'J'])
-    expect(screen.getByTestId('card-assignee').getAttribute('title')).toBe('Assigned to Owner, julie')
+    expect(screen.getAllByTestId('card-assignee-initials').map((e) => e.getAttribute('aria-label'))).toEqual([
+      'Assigned to Owner',
+      'Assigned to julie',
+    ])
   })
 
   it('assignee chips use the daemon colour map (owner via the wire key), else the hash', () => {
@@ -234,7 +241,8 @@ describe('FeedbackItemView — brief', () => {
     // The summary block comes before the brief in document order.
     const summary = screen.getByText('Short summary.')
     expect(summary.compareDocumentPosition(frame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getAllByTestId('html-badge').length).toBe(1)
+    // The report needs no Report tag over itself (the cards keep theirs).
+    expect(screen.queryByTestId('html-badge')).toBeNull()
 
     rerender(<FeedbackItemView {...props} revision={1} />)
     await waitFor(() => expect(api.fetchFeedbackShow).toHaveBeenCalledTimes(2))

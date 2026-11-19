@@ -23,7 +23,7 @@ export type TicketOpenOn = 'waiting' | 'all' | 'last'
 export const DEFAULT_TICKET_OPEN_ON: TicketOpenOn = 'waiting'
 
 export const TICKET_OPEN_ON_OPTIONS: { value: TicketOpenOn; label: string }[] = [
-  { value: 'waiting', label: 'Waiting on me' },
+  { value: 'waiting', label: 'Waiting on you' },
   { value: 'all', label: 'All' },
   { value: 'last', label: 'Remember my last tab' },
 ]

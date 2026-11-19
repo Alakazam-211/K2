@@ -71,6 +71,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Feedback/TicketWindow.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/BriefFrame.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/TicketListBody.tsx': 'the ticket list (a listbox, not a layer), inline in the Feedback page’s list',
+  'components/Feedback/TicketStatusMenu.tsx': 'the tickets status menu: portalled by its trigger’s anchored menu (TicketCard, FeedbackItemView) on the Feedback page or the Projects page, where the room is hidden',
   // A drag-capture layer: it exists only while the pointer holds the edge.
   'components/Layout/ResizeEdge.tsx': 'the transparent layer that holds a column drag; gone when the pointer lets go',
   'components/Wiki/WikiPage.tsx': 'Wiki page: the room is hidden',

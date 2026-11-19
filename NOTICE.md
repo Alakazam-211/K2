@@ -176,7 +176,7 @@ the public postal-bot repository, pinned by commit.
 
 | | |
 |--|--|
-| **What** | the `postal-sdk` crate (`crates/postal-sdk`), pinned at `d33b0fde532607bdf4213cceeaba2859fbfc6f73` |
+| **What** | the `postal-sdk` crate (`crates/postal-sdk`), pinned at `9da217afc59b68df744d030bf1b22ada9454bada` |
 | **Upstream** | [postal-bot](https://github.com/Alakazam-211/postal-bot) |
 | **License** | **MIT** (Copyright (c) 2026 Alakazam Labs) — text below |
 | **K2 code** | Is **MIT**. The SDK does **not** relicense the product. |

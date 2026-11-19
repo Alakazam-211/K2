@@ -5,7 +5,7 @@
 //! with the answer and the pairing code. K2's person is a permission card.
 //!
 //! K2 links postal-sdk (pinned at postal-bot
-//! `d33b0fde532607bdf4213cceeaba2859fbfc6f73`, wire v2) and implements its
+//! `9da217afc59b68df744d030bf1b22ada9454bada`, wire v2) and implements its
 //! host traits: [`HumanGate`] in the daemon (`postal_routes::K2Gate`, which
 //! presents the cards) and `FriendStore` on the friend rows
 //! ([`super::friend_store`]). The daemon's pairing (`postal_net::pairing`)

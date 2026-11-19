@@ -755,6 +755,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // (no workspace scope; the live log is machine-wide).
         SessionEvent::TokenUsageChanged {} => None,
         SessionEvent::LlmAccountsChanged { .. } => None,
+        // 0.46.17 — an agent ran out of usage: app-level (Home lists every agent).
+        SessionEvent::LlmOutOfUsage { .. } => None,
         // Usage v2 — limits written: app-level refetch signal.
         SessionEvent::SubscriptionUsageChanged { .. } => None,
         // Zen v1 — `~/.k2/zen` changed: app-level, payload-free refetch.
@@ -1212,6 +1214,15 @@ mod tests {
             SessionEvent::ChatHistoryChanged {},
             SessionEvent::TokenUsageChanged {},
             SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },
+            SessionEvent::LlmOutOfUsage {
+                address: "sales".into(),
+                workspace_id: "ws-1".into(),
+                tool: "claude".into(),
+                login: "Work Max".into(),
+                resets_at: Some(1_795_095_000),
+                switched_to: None,
+                notice_id: "doc-1".into(),
+            },
             SessionEvent::SubscriptionUsageChanged { tool: Some("claude".into()), account_id: None, source: "probe".into(), observed_at: None },
             SessionEvent::ZenChanged {},
             SessionEvent::ZenAgentsOrderChanged {},

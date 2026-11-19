@@ -36,6 +36,9 @@ export type SystemNoticeCall =
   /** Calendar S1: open Settings → Email Link with the calendar Connect
    *  form filled in (the person signs in; the agent never holds the link). */
   | { kind: 'link_calendar'; address: string; provider: 'gmail' | 'microsoft'; workspace: string }
+  /** Out of usage (0.46.17): open the add-a-login sheet on `tool` (the
+   *  person signs in or pastes a key; nothing is posted). */
+  | { kind: 'add_login'; tool: string }
 
 /** A button that already ran (the daemon's `doneAt` and `doneBy`). */
 export interface SystemNoticeDone {
@@ -68,6 +71,12 @@ export const RESEND_ACTION_ID = 'resend'
 export const OPEN_TERMINAL_ACTION_ID = 'open_terminal'
 /** "Link read-only" on a calendar link request (`k2 cal link --request`). */
 export const LINK_CALENDAR_ACTION_ID = 'link_calendar'
+/** Out of usage (0.46.17): switch the server default to the login with room. */
+export const LLM_SWITCH_ACTION_ID = 'llm_switch'
+/** The one route `llm_switch` posts to. */
+export const LLM_SWITCH_ROUTE = 'llm/accounts/switch'
+/** Out of usage (0.46.17): add a login for the tool. */
+export const LLM_ADD_LOGIN_ACTION_ID = 'llm_add_login'
 
 /** The most buttons one notice draws. */
 const MAX_ACTIONS = 4
@@ -118,6 +127,18 @@ function parseAction(raw: unknown): SystemNoticeAction | null {
     const workspace = str(body.workspace)
     if (!provider || !address || !workspace) return null
     return { id, label, call: { kind: 'link_calendar', address, provider, workspace }, done }
+  }
+  if (id === LLM_ADD_LOGIN_ACTION_ID) {
+    const tool = str(isRecord(raw.body) ? raw.body.tool : '')
+    if (!tool) return null
+    return { id, label, call: { kind: 'add_login', tool }, done }
+  }
+  // Switch to the login with room: only to the wallet's switch route,
+  // with only the login's id.
+  if (id === LLM_SWITCH_ACTION_ID) {
+    const accountId = str(isRecord(raw.body) ? raw.body.id : '')
+    if (systemNoticeRoute(raw.route) !== LLM_SWITCH_ROUTE || !accountId) return null
+    return { id, label, call: { kind: 'post', route: LLM_SWITCH_ROUTE, body: { id: accountId } }, done }
   }
   // Send again posts its body to its route. Any other id is one this
   // client doesn't know: no button.

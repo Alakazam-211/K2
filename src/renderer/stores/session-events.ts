@@ -658,6 +658,22 @@ export interface LlmAccountsChangedEvent {
   tool?: string | null
 }
 
+/** APP-LEVEL — an agent's LLM login ran out of usage (0.46.17) and K2
+ *  posted its notice on the agent's Thread (`noticeId`). The login by its
+ *  label only; never a token. */
+export interface LlmOutOfUsageEvent {
+  kind: 'llm_out_of_usage'
+  address: string
+  workspaceId: string
+  tool: string
+  login: string
+  /** Unix seconds, when known. */
+  resetsAt: number | null
+  /** The login auto-rotate switched the server default to. */
+  switchedTo: string | null
+  noticeId: string
+}
+
 /** APP-LEVEL — files under a workspace changed (multi-writer Files-drawer
  *  live refresh). Agent shell writes on the daemon machine, other clients'
  *  `/cli/fs/*` mutations, and compress/upload completions all land here so
@@ -1055,6 +1071,7 @@ export type SessionEventMessage =
   | TokenUsageChangedEvent
   | SubscriptionUsageChangedEvent
   | LlmAccountsChangedEvent
+  | LlmOutOfUsageEvent
   | FsChangedEvent
   | BoardFileChangedEvent
   | DocStructureChangedEvent

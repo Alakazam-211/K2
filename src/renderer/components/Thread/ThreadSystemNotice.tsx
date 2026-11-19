@@ -17,13 +17,15 @@
 //     with a tick, "by <name>" when someone else pressed it, from the
 //     notice's `doneAt` and `doneBy` so a reload says so too; a refusal
 //     says why in muted words); open_terminal puts the terminal of the
-//     agent it names on screen. A button this view can't carry out (no
+//     agent it names on screen. Out of usage (0.46.17): Switch to <login>
+//     posts the wallet's switch (then a quiet "Switched"), Add a login
+//     opens the add-a-login sheet here. A button this view can't carry out (no
 //     server here, no terminal here) isn't drawn, and an App guest sees
 //     none (they are for people).
 //   - The row takes focus (a note named by its label and words), and its
 //     buttons follow it in the tab order.
 
-import { useCallback, useId, useState, type CSSProperties, type JSX } from 'react'
+import { lazy, Suspense, useCallback, useId, useState, type CSSProperties, type JSX } from 'react'
 import { CheckIcon, TriangleAlertIcon } from 'lucide-react'
 import k2Logo from '@/assets/k2-logo.png'
 import { PRODUCT_NAME } from '@/lib/brand'
@@ -36,7 +38,12 @@ import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { CHAMFER_CUT, CHAMFER_SCOPE, chamferCutFor, chamferPolygon, chamferVars } from './chamfer'
 import { useThreadAttachmentSource } from './ThreadImageObjects'
-import type { SystemNotice, SystemNoticeAction, SystemNoticeCall, SystemNoticeDone, SystemNoticeKind } from './systemNotice'
+import { LLM_SWITCH_ACTION_ID, type SystemNotice, type SystemNoticeAction, type SystemNoticeCall, type SystemNoticeDone, type SystemNoticeKind } from './systemNotice'
+
+// Loaded on press: Settings' stores stay out of the Thread.
+const LlmLoginSheet = lazy(() =>
+  import('@/components/Settings/shared/LlmLoginSheet').then((m) => ({ default: m.LlmLoginSheet })),
+)
 
 /** Which look the row wears: hairline rules beside the label, or a quiet
  *  tinted band behind the row. */
@@ -101,6 +108,8 @@ const fold = (s: string): string => s.trim().toLowerCase()
 
 /** Send again's own words: busy while it goes, a quiet done line after. */
 export const RESEND_WORDS = { busy: 'Sending…', done: 'Sent again' } as const
+/** Switch to <login>'s words (out of usage). */
+export const SWITCH_WORDS = { busy: 'Switching…', done: 'Switched' } as const
 
 /** What a refused Send again says (the daemon's 409 codes), in plain muted
  *  words in place of the button: pressing again would change nothing. */
@@ -138,6 +147,8 @@ function NoticePostButton({
   const [pressed, setPressed] = useState(false)
   const [refused, setRefused] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const switching = action.id === LLM_SWITCH_ACTION_ID
+  const copy = switching ? SWITCH_WORDS : RESEND_WORDS
   const run = useCallback(async () => {
     if (!scope || busy) return
     setBusy(true)
@@ -146,7 +157,7 @@ function NoticePostButton({
       await daemonCliPost(scope, call.route, call.body)
       setPressed(true)
     } catch (err) {
-      const words = httpStatusOf(err) === 409 ? RESEND_REFUSAL_WORDS[httpCodeOf(err) ?? ''] : undefined
+      const words = !switching && httpStatusOf(err) === 409 ? RESEND_REFUSAL_WORDS[httpCodeOf(err) ?? ''] : undefined
       if (words) setRefused(words)
       else {
         console.warn('[thread] notice action failed:', err)
@@ -155,12 +166,12 @@ function NoticePostButton({
     } finally {
       setBusy(false)
     }
-  }, [call, scope, busy])
+  }, [call, scope, busy, switching])
   if (!scope || !scopeMayWrite(scope, call.route)) return null
   if (action.done || pressed) {
     return (
       <span data-notice-done="" role="status">
-        {resendDoneText(action.done ?? 'you', viewer)}
+        {switching ? SWITCH_WORDS.done : resendDoneText(action.done ?? 'you', viewer)}
         <CheckIcon data-notice-tick="" aria-hidden="true" strokeWidth={2.5} />
       </span>
     )
@@ -175,7 +186,7 @@ function NoticePostButton({
   return (
     <>
       <NoticeButton
-        label={busy ? RESEND_WORDS.busy : action.label}
+        label={busy ? copy.busy : action.label}
         testId={`notice-action-${action.id}`}
         primary={primary}
         busy={busy}
@@ -210,6 +221,34 @@ function NoticeLinkCalendarButton({
   }, [call.address, call.provider, call.workspace])
   if (!source || !source.scope.isWindowHost()) return null
   return <NoticeButton label={action.label} testId={`notice-action-${action.id}`} primary={primary} onClick={open} />
+}
+
+/** Add a login (out of usage): the add-a-login sheet on the action's tool,
+ *  for the Thread's own server. The person signs in or pastes a key there;
+ *  the notice posts nothing. Null where this view can't write. */
+function NoticeAddLoginButton({
+  action,
+  tool,
+  primary,
+}: {
+  action: SystemNoticeAction
+  tool: string
+  primary: boolean
+}): JSX.Element | null {
+  const source = useThreadAttachmentSource()
+  const [open, setOpen] = useState(false)
+  const scope = source?.scope ?? null
+  if (!scope || !scopeMayWrite(scope, 'llm/accounts/add')) return null
+  return (
+    <>
+      <NoticeButton label={action.label} testId={`notice-action-${action.id}`} primary={primary} onClick={() => setOpen(true)} />
+      {open && (
+        <Suspense fallback={null}>
+          <LlmLoginSheet scope={scope} start={{ kind: 'new', tool }} onClose={() => setOpen(false)} />
+        </Suspense>
+      )}
+    </>
+  )
 }
 
 /** What Open its terminal says when the window's server has no agent at
@@ -275,6 +314,7 @@ function NoticeActionButton({
   const call = action.call
   if (call.kind === 'open_terminal') return <NoticeTerminalButton action={action} workspace={call.workspace} primary={primary} />
   if (call.kind === 'link_calendar') return <NoticeLinkCalendarButton action={action} call={call} primary={primary} />
+  if (call.kind === 'add_login') return <NoticeAddLoginButton action={action} tool={call.tool} primary={primary} />
   return <NoticePostButton action={action} call={call} primary={primary} viewer={viewer} />
 }
 
@@ -333,7 +373,9 @@ export function ThreadSystemNoticeRow({
   const labelId = `${id}-label`
   const textId = `${id}-text`
   const actions = viewer?.guest ? [] : notice.actions
-  const firstPost = actions.findIndex((a) => a.call.kind === 'post' && !a.done)
+  const post = actions.findIndex((a) => a.call.kind === 'post' && !a.done)
+  // With nothing to post, Add a login (out of usage) is the step to take.
+  const firstPost = post >= 0 ? post : actions.findIndex((a) => a.call.kind === 'add_login')
   return (
     <div
       data-testid="thread-system-notice"

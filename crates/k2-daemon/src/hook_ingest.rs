@@ -176,17 +176,22 @@ pub fn ingest(headers: &HookHeaders, body: &[u8]) -> IngestVerdict {
     // claim or activity rows.
     if is_statusline(headers) {
         crate::usage_live::ingest_statusline(&headers.pane, body);
+        crate::llm_out_notice::on_statusline(&headers.pane, body);
         return IngestVerdict::Accepted;
     }
-    ingest_with(
+    let (verdict, env) = ingest_with(
         headers,
         body,
         &LiveProcessTable,
         &live_pane_facts,
         OwnerCheckMode::for_this_platform(),
         now_ms(),
-    )
-    .0
+    );
+    // Out of usage (0.46.17): an owner `StopFailure` that ran out.
+    if let Some(env) = env {
+        crate::llm_out_notice::on_hook(&env);
+    }
+    verdict
 }
 
 /// `statusline.sh` (event `StatusLine`, source `claude`).

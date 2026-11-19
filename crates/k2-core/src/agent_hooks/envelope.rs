@@ -185,6 +185,12 @@ pub struct HookEnvelope {
     /// ([`super::owner::Verdict::Descendant`]). The row merges its events
     /// into the pane's turn but never lets it change the session.
     pub from_descendant: bool,
+    /// `StopFailure`'s `error` (`rate_limit`, `billing_error`, ...): a
+    /// short code, never the details text (out of usage, 0.46.17).
+    pub stop_error: Option<String>,
+    /// A reset time `StopFailure`'s details carried (Claude's old
+    /// `...limit reached|<unix>`), unix seconds. The text itself is dropped.
+    pub stop_resets_at: Option<i64>,
 }
 
 /// Why a body didn't parse. Every case is answered 204 and counted
@@ -239,6 +245,8 @@ pub fn parse(headers: &HookHeaders, body: &[u8]) -> Result<HookEnvelope, Envelop
         cli_version: headers.cli_version.clone(),
         truncated: headers.truncated,
         from_descendant: false,
+        stop_error: None,
+        stop_resets_at: None,
     };
     if headers.truncated {
         env.event = headers.event_hint.clone().ok_or(EnvelopeError::NoEventName)?;
@@ -268,6 +276,10 @@ pub fn parse(headers: &HookHeaders, body: &[u8]) -> Result<HookEnvelope, Envelop
     env.notification_type = s("notification_type");
     env.is_interrupt = obj.get("is_interrupt").and_then(Value::as_bool);
     env.source_field = s("source").or_else(|| s("trigger")).or_else(|| s("reason"));
+    if env.event == "StopFailure" {
+        env.stop_error = s("error").filter(|e| e.len() <= 40 && e.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'));
+        env.stop_resets_at = s("error_details").as_deref().and_then(crate::llm_accounts::out_of_usage::reset_from_text);
+    }
     if let Some(name) = env.tool_name.as_deref() {
         let input = obj.get("tool_input").cloned().unwrap_or(Value::Null);
         env.tool_line = Some(super::tool_line::describe(name, &input));
@@ -622,5 +634,23 @@ mod tests {
         assert_eq!(h.hook_version, Some(2));
         assert!(h.truncated);
         assert_eq!(h.event_hint.as_deref(), Some("AfterTool"));
+    }
+
+    /// Out of usage (0.46.17): `StopFailure` keeps its error code and any
+    /// reset time; the details text is dropped. Other events carry none.
+    #[test]
+    fn stop_failure_keeps_the_error_code_and_reset_only() {
+        let env = parse_json(json!({
+            "hook_event_name": "StopFailure",
+            "error": "rate_limit",
+            "error_details": "Claude AI usage limit reached|1795095000 secret-ish words",
+        }));
+        assert_eq!(env.stop_error.as_deref(), Some("rate_limit"));
+        assert_eq!(env.stop_resets_at, Some(1_795_095_000));
+        assert!(!format!("{env:?}").contains("secret-ish"), "the details text is dropped");
+        let env = parse_json(json!({"hook_event_name": "StopFailure", "error": "Not A Code; rm -rf"}));
+        assert_eq!(env.stop_error, None, "only a short lowercase code is kept");
+        let env = parse_json(json!({"hook_event_name": "Stop", "error": "rate_limit"}));
+        assert_eq!(env.stop_error, None, "only StopFailure carries it");
     }
 }

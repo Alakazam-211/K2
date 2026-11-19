@@ -415,6 +415,8 @@ fn read_due(f: &mut Follower, sid: &str, view: &crate::activity_store::FollowVie
         crate::activity_store::apply_at(sid, Evidence::Transcript(&signal), now);
         let _ = bus().send(TranscriptEvent { session_id: sid.to_string(), signal, at: now });
     }
+    // Out of usage (0.46.17): a limit record in the new lines.
+    crate::llm_out_notice::on_transcript_lines(sid, &f.facts.harness, f.facts.project_id.as_deref(), &poll.lines);
 }
 
 fn detach(f: &mut Follower, sid: &str) {

@@ -4274,3 +4274,7 @@ mod ask_once;
 // 0.46.15: K2's own Thread notices (thread-system-notice-v1) and Send again.
 #[path = "system_notice_tests.rs"]
 mod system_notice;
+
+// 0.46.17: an agent out of usage gets one K2 system row on its Thread.
+#[path = "out_of_usage_notice_tests.rs"]
+mod out_of_usage_notice;

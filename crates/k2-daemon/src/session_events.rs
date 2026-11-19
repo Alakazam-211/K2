@@ -541,6 +541,28 @@ pub enum SessionEvent {
         tool: Option<String>,
     },
 
+    /// Out of usage (0.46.17): an agent's LLM login ran out (a subscription
+    /// limit, an API key's credit) and K2 posted its notice on the agent's
+    /// Thread (`noticeId`). APP-LEVEL: Home and the Threads list show every
+    /// agent. Never a token: the login by its label.
+    /// Wire: `{ "kind": "llm_out_of_usage", "address": "sales",
+    /// "workspaceId": "…", "tool": "claude", "login": "Work Max",
+    /// "resetsAt": 1795…|null, "switchedTo": "Home Pro"|null,
+    /// "noticeId": "<doc id>" }`.
+    LlmOutOfUsage {
+        address: String,
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        tool: String,
+        login: String,
+        #[serde(rename = "resetsAt")]
+        resets_at: Option<i64>,
+        #[serde(rename = "switchedTo")]
+        switched_to: Option<String>,
+        #[serde(rename = "noticeId")]
+        notice_id: String,
+    },
+
     /// Usage v2 (P9, B20) — subscription limits were written: the shared
     /// cache (a probe) or one login's reading (a probe of an idle login, or
     /// a live feed from a running session). APP-LEVEL refetch signal; never
@@ -1281,6 +1303,7 @@ impl SessionEvent {
             SessionEvent::ChatHistoryChanged {} => "chat_history_changed",
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
             SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",
+            SessionEvent::LlmOutOfUsage { .. } => "llm_out_of_usage",
             SessionEvent::SubscriptionUsageChanged { .. } => "subscription_usage_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
             SessionEvent::ZenAgentsOrderChanged {} => "zen_agents_order_changed",
@@ -1432,6 +1455,20 @@ pub fn emit_domains_changed(reason: &str, apex: Option<&str>) {
 /// Best-effort: the LLM login wallet changed (refetch signal).
 pub fn emit_llm_accounts_changed(tool: Option<&str>) {
     let _ = emit(SessionEvent::LlmAccountsChanged { tool: tool.map(str::to_string) });
+}
+
+/// Best-effort: an agent ran out of usage and its Thread has K2's notice
+/// (`llm_out_notice`).
+pub fn emit_llm_out_of_usage(p: &crate::llm_out_notice::Posted) {
+    let _ = emit(SessionEvent::LlmOutOfUsage {
+        address: p.addr.clone(),
+        workspace_id: p.workspace_id.clone(),
+        tool: p.tool.as_str().to_string(),
+        login: p.login.clone(),
+        resets_at: p.resets_at,
+        switched_to: p.switched_to.clone(),
+        notice_id: p.doc_id.clone(),
+    });
 }
 
 /// Best-effort: subscription limits were written (Usage v2, B20).

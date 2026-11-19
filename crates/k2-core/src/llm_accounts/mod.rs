@@ -26,6 +26,7 @@
 
 pub mod auto_next;
 pub mod identity;
+pub mod out_of_usage;
 pub mod pins;
 pub mod slots;
 pub mod store;

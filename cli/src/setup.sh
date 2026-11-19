@@ -188,6 +188,20 @@ _setup_jfield() {
     _setup_junesc "${BASH_REMATCH[1]}"
 }
 
+# _setup_token: the credential k2 setup sends, in _SETUP_TOK. In an
+# agent's session (the session marker, $K2_HOOK_SOCK under any of its
+# names) it is the session's own passport, and nothing when it has none:
+# never the owner token, which `setup` (an Open verb) would otherwise read
+# from disk. Outside a session (the owner's own terminal) it is $TOKEN, as
+# before. Read on every try, so a healed passport is the one sent.
+_setup_token() {
+    if _envn_any HOOK_SOCK; then
+        _SETUP_TOK="${SCOPED_TOKEN:-}"
+    else
+        _SETUP_TOK="${TOKEN:-}"
+    fi
+}
+
 # _setup_send <GET|POST> <path> <as_json> [<body>]: the answer, then a
 # newline and the HTTP code. The token rides curl's config, never argv.
 _setup_send() {
@@ -196,7 +210,8 @@ _setup_send() {
     while :; do
         _K2_CFG=""
         _k2_cfg_add url "${BASE_URL}${path}${q}"
-        _k2_cfg_auth "$TOKEN"
+        _setup_token
+        _k2_cfg_auth "$_SETUP_TOK"
         if [ "$method" = "GET" ]; then
             out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 30 -w $'\n%{http_code}' 2>/dev/null; printf x)"
         else
@@ -211,7 +226,7 @@ _setup_send() {
             try=$((try + 1)); sleep 1; continue
         fi
         # A passport the daemon refused while restarting: once with the new
-        # one (the loop builds the header again from $TOKEN).
+        # one (the loop builds the header again, _setup_token).
         if _cli_retry_with_healed_passport "${out%$'\n'*}"; then
             continue
         fi

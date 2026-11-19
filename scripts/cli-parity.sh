@@ -217,7 +217,8 @@ check_native_without_python3() {
 # passport, K2_HOOK_SOCK set (no socket there, so both go over TCP),
 # K2_PROJECT_PATH set (so `activity` and `feedback list` ask no
 # /cli/whoami first) and the owner token on disk, against a stub that logs
-# each request's token.
+# each request's credential: its Authorization: Bearer header (neither CLI
+# puts one in the query any more; one there is logged as "query:<T>").
 check_owner_token_with_passport() {
     local d="$WORK/owner-token" port="" pid rc side tok problems=()
     local owner="owner-tok-parity" passport="sessP.parity1"
@@ -230,8 +231,12 @@ d = sys.argv[1]
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        auth = self.headers.get("Authorization") or ""
+        tok = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+        if q.get("token"):
+            tok = "query:" + q["token"][0]
         with open(os.path.join(d, "log"), "a") as f:
-            f.write((q.get("token") or [""])[0] + "\n")
+            f.write(tok + "\n")
         body = json.dumps({"role": "canonical"}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

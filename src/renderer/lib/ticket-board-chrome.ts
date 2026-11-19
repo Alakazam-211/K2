@@ -134,8 +134,10 @@ export function writeTicketBoardChrome(
 //      leave the row: it becomes a drawer over the report's right edge,
 //      opened from a tab.
 //
-// With no ticket open there is no report or discussion to make room for, so
-// the list keeps the person's width and the empty middle the rest.
+// The middle never goes below TICKET_REPORT_MIN_WIDTH while there's a way to
+// keep it: with no ticket open the list keeps the person's width and the
+// empty middle the rest, the list narrowing toward its minimum and then
+// folding to its rail by itself, as it does with a ticket open.
 //
 // Widths are the board's inner width in CSS px. 0 means not measured yet
 // (and test DOMs, which have no layout): the person's widths are used.
@@ -153,6 +155,19 @@ export const TICKET_DISCUSSION_DEFAULT_WIDTH = 360
 export const TICKET_REPORT_LEAD_PX = 24
 /** With no ticket open, the empty middle keeps at least this much. */
 export const TICKET_EMPTY_PANE_MIN_WIDTH = 320
+/** The report's floor: below it a line of the report or the empty middle's
+ *  prompt breaks a word a line. The list folds before the report passes it. */
+export const TICKET_REPORT_MIN_WIDTH = TICKET_EMPTY_PANE_MIN_WIDTH
+/** The narrowest board that keeps the list open beside the middle: a page
+ *  that lays the board out beside other columns (the Projects page's chat)
+ *  gives way below it. */
+export const TICKET_BOARD_MIN_WIDTH = TICKET_LIST_MIN_WIDTH + TICKET_REPORT_MIN_WIDTH
+
+/** Would a column of `sideWidth` beside the board leave it under its
+ *  narrowest, in a row `rowWidth` wide (0 = not measured: never)? */
+export function boardSqueezedBy(rowWidth: number, sideWidth: number): boolean {
+  return rowWidth > 0 && rowWidth - sideWidth < TICKET_BOARD_MIN_WIDTH
+}
 
 export type TicketListMode = 'open' | 'rail' | 'none'
 export type TicketDiscussionMode = 'side' | 'drawer' | 'off'
@@ -228,14 +243,18 @@ export function ticketBoardLayout(input: TicketBoardLayoutInput): TicketBoardLay
 
   if (!ticketOpen) {
     const openWidth = Math.max(TICKET_LIST_MIN_WIDTH, Math.min(userList, width - gap - TICKET_EMPTY_PANE_MIN_WIDTH))
-    const lw = listW(userMode, openWidth)
+    // Too narrow for the narrowest list beside the middle's floor: the list
+    // folds to its rail by itself, so the prompt never breaks a word a line.
+    const fold = userMode === 'open' && width - gap - openWidth < TICKET_EMPTY_PANE_MIN_WIDTH
+    const mode: TicketListMode = fold ? 'rail' : userMode
+    const lw = listW(mode, openWidth)
     return {
-      list: userMode,
+      list: mode,
       listWidth: lw,
       discussion: 'off',
       discussionWidth: 0,
-      reportWidth: Math.max(0, width - lw - (userMode === 'none' ? 0 : gap)),
-      listAutoFolded: false,
+      reportWidth: Math.max(0, width - lw - (mode === 'none' ? 0 : gap)),
+      listAutoFolded: fold,
     }
   }
 
@@ -245,7 +264,10 @@ export function ticketBoardLayout(input: TicketBoardLayoutInput): TicketBoardLay
     const room = width - lw - (withList ? gap : 0) - (wantChat ? gap : 0)
     const d = wantChat ? ticketDiscussionWidth(room, dragged) : 0
     const r = room - d
-    return { d, r, ok: r >= Math.max(withList ? lw : 0, d) + TICKET_REPORT_LEAD_PX }
+    // The report leads both side parts, and an open list never pushes it
+    // under its floor.
+    const floor = withList && lw > TICKET_LIST_RAIL_WIDTH ? TICKET_REPORT_MIN_WIDTH : 0
+    return { d, r, ok: r >= Math.max(withList ? lw : 0, d) + TICKET_REPORT_LEAD_PX && r >= floor }
   }
   const side: TicketDiscussionMode = wantChat ? 'side' : 'off'
 

@@ -10,6 +10,8 @@ import {
   TICKET_LIST_MIN_WIDTH,
   TICKET_LIST_RAIL_WIDTH,
   TICKET_REPORT_LEAD_PX,
+  TICKET_REPORT_MIN_WIDTH,
+  boardSqueezedBy,
   ticketBoardLayout,
   ticketDiscussionWidth,
   type TicketBoardLayoutInput,
@@ -120,6 +122,40 @@ describe('ticket board width rules', () => {
     expect(l.list).toBe('open')
     expect(l.listWidth).toBe(400)
     expect(l.discussion).toBe('off')
+  })
+
+  it('with no ticket open and too little room, the list folds to its rail so the middle keeps its floor', () => {
+    // A board squeezed beside other columns (the Projects page at 900 px).
+    for (const width of [284, 400, 532]) {
+      const l = ticketBoardLayout({ width, gap: 8, listWidth: 400, collapsed: false, ticketOpen: false, chatOpen: true })
+      expect(l.list, `at ${width}`).toBe('rail')
+      expect(l.listAutoFolded, `at ${width}`).toBe(true)
+      expect(l.reportWidth, `at ${width}`).toBe(width - TICKET_LIST_RAIL_WIDTH - 8)
+    }
+    // Room for the narrowest list beside the floor: it stays open.
+    const wide = ticketBoardLayout({ width: 600, gap: 8, listWidth: 400, collapsed: false, ticketOpen: false, chatOpen: true })
+    expect(wide.list).toBe('open')
+    expect(wide.reportWidth).toBeGreaterThanOrEqual(TICKET_REPORT_MIN_WIDTH)
+  })
+
+  it('a column beside the board (the Projects chat) gives way when it would squeeze the board under its narrowest', () => {
+    // A 900 px window: the Projects nav leaves about 600 for the project, the chat takes 320.
+    expect(boardSqueezedBy(600, 320)).toBe(true)
+    // 1280: about 976 for the project; the chat stays.
+    expect(boardSqueezedBy(976, 320)).toBe(false)
+    // Not measured yet: nothing moves.
+    expect(boardSqueezedBy(0, 320)).toBe(false)
+  })
+
+  it('an open list never pushes the report under its floor', () => {
+    for (let w = 560; w <= 1400; w += 10) {
+      for (const look of [GLASS, TERMINAL]) {
+        for (const chatOpen of [true, false]) {
+          const l = open(w, look, { chatOpen })
+          if (l.list === 'open') expect(l.reportWidth, `at ${w}`).toBeGreaterThanOrEqual(TICKET_REPORT_MIN_WIDTH)
+        }
+      }
+    }
   })
 
   it('before the board is measured, the person’s widths are used as they are', () => {

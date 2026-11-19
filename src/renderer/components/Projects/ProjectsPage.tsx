@@ -58,6 +58,8 @@ import {
 import { requestPaneShortcut } from './dashboard-dnd'
 import { primaryScope } from '@/kessel/server-scope'
 import { onSessionAddedApp, onSessionRemovedApp } from '@/stores/session-events'
+import { useElementWidth } from '@/hooks/useElementWidth'
+import { boardSqueezedBy } from '@/lib/ticket-board-chrome'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
@@ -106,6 +108,20 @@ function SelectedProjectView({
   // (per-project, never per-dashboard); open/closed is the persisted
   // store flag the bar's Chat button and the chat's own × flip.
   const chatOpen = useProjectGroupsStore((s) => !s.chatCollapsed)
+  const chatWidth = useProjectGroupsStore((s) => s.chatWidth)
+
+  // On the Feedback tab, a chat that would squeeze the tickets board under
+  // its narrowest (the list beside the report) gives way, as the board's
+  // own list folds: the bar's Chat button shows it again, over the board's
+  // room, until it's closed or there's room. The stored choice stays.
+  const [viewEl, setViewEl] = useState<HTMLDivElement | null>(null)
+  const viewWidth = useElementWidth(viewEl)
+  const boardSqueezed = activeTab === FEEDBACK_TAB && boardSqueezedBy(viewWidth, chatWidth)
+  const [chatOverBoard, setChatOverBoard] = useState(false)
+  useEffect(() => {
+    if (!boardSqueezed || !chatOpen) setChatOverBoard(false)
+  }, [boardSqueezed, chatOpen])
+  const chatFolded = chatOpen && boardSqueezed && !chatOverBoard
 
   // P5 — a member-row click (open/focus its canonical pane) lands on a
   // DASHBOARD tab (the first one when Feedback is active); the mounted
@@ -125,7 +141,7 @@ function SelectedProjectView({
   const activeDashboard = dashboards.find((d) => d.id === activeTab) ?? null
 
   return (
-    <div className="flex-1 flex min-h-0 min-w-0">
+    <div ref={setViewEl} className="flex-1 flex min-h-0 min-w-0">
       <div className="flex-1 flex flex-col min-h-0 min-w-0">
         {/* The project bar (projects-reorg-draft §3.2): which project
             this is, its dashboards as tabs + Feedback, and its actions. */}
@@ -135,6 +151,8 @@ function SelectedProjectView({
           activeTab={activeTab}
           onTab={setTab}
           onChanged={onReload}
+          chatFolded={chatFolded}
+          onOpenChat={() => setChatOverBoard(true)}
         />
 
         {activeTab === FEEDBACK_TAB ? (
@@ -165,7 +183,7 @@ function SelectedProjectView({
           update props without remounting, so the composer draft
           survives them (SelectedProjectView is keyed by group id
           upstream: a project switch is a fresh panel). */}
-      <AnimatedDrawer open={chatOpen} side="right" bordered={false} clipAtRest={false}>
+      <AnimatedDrawer open={chatOpen && !chatFolded} side="right" bordered={false} clipAtRest={false}>
         <ProjectChatPanel show={show} />
       </AnimatedDrawer>
     </div>

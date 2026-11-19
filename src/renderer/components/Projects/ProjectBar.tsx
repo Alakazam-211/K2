@@ -714,6 +714,8 @@ export default function ProjectBar({
   activeTab,
   onTab,
   onChanged,
+  chatFolded = false,
+  onOpenChat,
 }: {
   show: ProjectGroupShow
   dashboards: ProjectGroupDashboard[]
@@ -721,12 +723,16 @@ export default function ProjectBar({
   onTab: (id: string | null) => void
   /** Refetch the project (a change made from the bar). */
   onChanged: () => void
+  /** The page set the open chat aside for now (a narrow Feedback board):
+   *  the Chat button shows, and `onOpenChat` brings it back. */
+  chatFolded?: boolean
+  onOpenChat?: () => void
 }): React.JSX.Element {
   const role = useViewerRole()
   const caps = projectSettingsCaps(role)
   const viewerWindow = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const rail = useProjectGroupsStore((s) => s.navCollapsed)
-  const chatOpen = useProjectGroupsStore((s) => !s.chatCollapsed)
+  const chatOpen = useProjectGroupsStore((s) => !s.chatCollapsed) && !chatFolded
   const unread = useUnreadEntry('project', show.id)
   const unreadCount = unread && !unread.muted ? unread.unread + unread.waiting : 0
   const barRef = useRef<HTMLDivElement>(null)
@@ -777,7 +783,7 @@ export default function ProjectBar({
             className="relative flex items-center gap-1.5"
             aria-label={narrow ? 'Open the project chat' : undefined}
             title="Open the project chat"
-            onClick={() => useProjectGroupsStore.getState().setChatCollapsed(false)}
+            onClick={() => (chatFolded && onOpenChat ? onOpenChat() : useProjectGroupsStore.getState().setChatCollapsed(false))}
             data-project-chat-button=""
           >
             {CHAT_ICON}

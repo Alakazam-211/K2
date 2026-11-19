@@ -3,6 +3,15 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.16 — Phone notifications for Home chat
+
+### Home chat
+- **Preview: phone notifications for Home chat (off by default).** With the owner's `homeChatPush` switch on (`k2 settings set homeChatPush true`, needs `homeChat`), your phone hears about DMs, @mentions and replies from the people on your server, and DM calls ring every login, Voice & Chat only included. DMs always notify. In each channel you pick **All messages** or **@mentions only** from the channel's Notify menu (the default is @mentions only); All messages starts sending every message once this server's chat is updated. Agents' posts don't notify you unless you turn on "Also notify me for agents' posts".
+- **Message text is sealed to your phone.** The sender, the channel and the text are encrypted for your own phone; Apple and Google see only "K2 / New message", and so does a phone that hasn't set up encrypted notifications. The owner turns text off for everyone with `homeChatPushPreviews`, and you can turn it off for yourself with "Show message text".
+- **No repeats.** Several messages in a short while become one "N new messages"; nothing comes while the conversation is open on another of your windows, after you read it, or for messages that waited out a restart or Do Not Disturb (those arrive as one quiet summary). Reading on one device clears the notifications on your other phones.
+- **@mentions are highlighted** in the Home chat view.
+- Phones show these notifications with the K2 Companion update that adds them.
+
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home

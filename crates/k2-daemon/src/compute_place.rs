@@ -465,8 +465,12 @@ impl Cand {
     pub fn starts_now(&self, w: &Want) -> bool {
         if let Some(v) = self.shared_view() {
             // A10: a shared node's quote doesn't know its GPU is held, so
-            // a GPU job also needs a free GPU in the offer.
-            return self.online
+            // a GPU job also needs a free GPU in the offer. A node its owner
+            // paused or drains starts nothing, whatever its quote says
+            // (11-19: a job "started now" on a draining node and sat there
+            // 3 h): `usable` checks the node's control and this server's
+            // share, as a solo node's `offer_refusal` does below.
+            return self.usable()
                 && share::starts_now(v, w.cpu_millis, w.mem_bytes)
                 // The node's own slots, every server's jobs (the offer is newer than a
                 // quote: why_not), behind ours held here for it (backlog).
@@ -1473,7 +1477,9 @@ impl Cand {
             Some(Tier::Now)
         } else if self.usable() {
             Some(Tier::Busy)
-        } else if !self.online {
+        } else if !self.online && self.offer.control == frames::Control::Active {
+            // Offline, last seen taking jobs (one last seen paused or
+            // draining is no target either).
             Some(Tier::Offline)
         } else {
             None
@@ -2123,6 +2129,11 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
     if !compute_ws::is_online(&node.id) {
         return (now - offline_since(node, now) >= t.replace_after_secs).then_some(("node_offline", true));
     }
+    // Its owner paused or drains it: a hard reason, as offline (a drain
+    // for an update can take hours).
+    if let Some(why) = node_held(&node.id) {
+        return Some((why, true));
+    }
     let d = decisions.entry(node.id.clone()).or_insert_with(|| compute_ws::decision_for(&node.id));
     let (_, why) = d.waiting.get(&j.id)?;
     let busy = [
@@ -2146,6 +2157,36 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
     } else {
         Some(("node_refused", true))
     }
+}
+
+/// The node is online but its owner paused, drains or stopped it (its
+/// live offer's `control`): `node_paused`, `node_draining` or
+/// `node_stopped`. `None` when it takes jobs, or isn't online.
+pub fn node_held(node_id: &str) -> Option<&'static str> {
+    let (online, _, live) = compute_ws::live_view(node_id);
+    live.filter(|_| online).and_then(|o| held_code(o.control))
+}
+
+/// [`node_held`]'s code for a node's control.
+pub fn held_code(c: frames::Control) -> Option<&'static str> {
+    match c {
+        frames::Control::Active => None,
+        frames::Control::Paused => Some("node_paused"),
+        frames::Control::Draining => Some("node_draining"),
+        frames::Control::Stopped => Some("node_stopped"),
+    }
+}
+
+/// Why nothing of this server's goes to a node now because of its
+/// owner's control (paused, draining, stopped), as the node itself would
+/// refuse it; the drain's author when the offer names one. A job pinned
+/// to the node waits with this; an `--any` job leaves it.
+pub fn control_wait(offer: &Offer) -> Option<frames::Refusal> {
+    let mut r = refusal::control_refusal(offer.control)?;
+    if let Some(by) = offer.control_by.as_deref().filter(|b| !b.is_empty()) {
+        r.message = format!("{} (by {by})", r.message);
+    }
+    Some(r)
 }
 
 /// A node the job may move to at all: not one it avoids or keeps off its
@@ -2179,9 +2220,24 @@ pub fn move_target<'a>(
     if pinned {
         return None;
     }
+    leave_target(false, policy, cands, w, prefer_not, project_key, commit)
+}
+
+/// [`move_target`] for an `--any` job: `hard` (its node is paused,
+/// draining or gone) also takes a node where it only waits its turn;
+/// else only one that starts it now.
+pub fn leave_target<'a>(
+    hard: bool,
+    policy: compute::PlacementPolicy,
+    cands: &'a [Cand],
+    w: &Want,
+    prefer_not: &[String],
+    project_key: Option<&str>,
+    commit: Option<&str>,
+) -> Option<&'a Cand> {
     let ok: Vec<Cand> = cands.iter().filter(|c| movable(c, w)).cloned().collect();
     let (c, tier) = choose_by(policy, &ok, w, prefer_not, project_key, commit)?;
-    if tier != Tier::Now {
+    if !(tier == Tier::Now || (hard && tier == Tier::Busy)) {
         return None;
     }
     cands.iter().find(|x| x.node.id == c.node.id)
@@ -2585,7 +2641,11 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
         let cands = candidates(&w, std::slice::from_ref(&j.node_id), now);
         let pk = plan.src.as_ref().map(|s| s.project_key.clone());
         let commit = plan.src.as_ref().map(|s| s.commit.clone());
-        let Some(target) = move_target(false, compute::placement_policy(), &cands, &w, &[], pk.as_deref(), commit.as_deref()) else { continue };
+        // A node its owner paused or drains starts nothing until it is
+        // resumed: the job leaves for any node where it can wait its turn;
+        // else only for one that starts it now.
+        let hard = node_held(&n.id).is_some();
+        let Some(target) = leave_target(hard, compute::placement_policy(), &cands, &w, &[], pk.as_deref(), commit.as_deref()) else { continue };
         // Hold the target's place while the node answers.
         note_hold(&target.node.id, &j.id, w.mem_on(&target.offer), w.cpu_millis, now);
         {
@@ -3993,5 +4053,71 @@ mod tests {
         assert!(bounced["note"].as_str().expect("note").contains("next try in 100s"), "{bounced}");
         j.state = "running".into();
         assert!(move_state_json(&j, now).is_none(), "a started job has no mover state");
+    }
+
+    /// 11-19: a job was placed "starts now" on a shared node its owner was
+    /// draining for an update, and sat there over 3 hours. A node its
+    /// owner drains or pauses never starts a job now, whatever its quote
+    /// says; it is no target for placement or the mover (an offline node
+    /// last seen so is no fallback either); a busy node wins over it, and
+    /// the why-not line names the drain.
+    #[test]
+    fn a_draining_or_paused_node_never_starts_now_or_gets_an_auto_job() {
+        use compute::PlacementPolicy::{V1, V2};
+        let w = want(2);
+        for control in [frames::Control::Draining, frames::Control::Paused] {
+            let name = format!("{control:?}").to_lowercase();
+            // Shared, idle, its quote says "starts now" (the field case).
+            let mut sh = shared(cand("held-shared", 30, 32, 0, 2), Some((true, None)));
+            assert!(sh.starts_now(&w), "{name}: active, the same node starts it now");
+            sh.offer.control = control;
+            assert!(!sh.starts_now(&w), "{name}: a shared node's quote never overrides its owner's {name}");
+            assert_eq!(sh.tier(&w), None, "{name}: shared");
+            let (code, words) = why_not::reason(&sh, &w).expect("a reason");
+            assert_eq!(code, why_not::UNAVAILABLE, "{name}: {words}");
+            assert!(words.contains(&format!("the node is {name}")), "{words}");
+            // Solo, idle.
+            let mut solo = cand("held-solo", 30, 32, 0, 2);
+            solo.offer.control = control;
+            assert!(!solo.starts_now(&w), "{name}: solo");
+            assert_eq!(solo.tier(&w), None, "{name}: solo");
+            // Offline, last seen held: no fallback.
+            let mut off = cand("held-off", 30, 32, 0, 2);
+            off.online = false;
+            off.offer.control = control;
+            assert_eq!(off.tier(&w), None, "{name}: offline, last seen {name}");
+            // A full node (2 of 2 running) is only busy: it wins.
+            let busy = cand("busy", 30, 32, 2, 2);
+            assert_eq!(busy.tier(&w), Some(Tier::Busy));
+            let cands = vec![sh.clone(), solo.clone(), off.clone(), busy];
+            for policy in [V1, V2] {
+                let ranked = rank(policy, &cands, &w, &[], None, None);
+                let names: Vec<(&str, Tier)> = ranked.iter().map(|(c, t)| (c.node.id.as_str(), *t)).collect();
+                assert_eq!(names, vec![("busy", Tier::Busy)], "{name} {policy:?}: only the busy node is a target");
+            }
+            // The mover never takes a job there, hard reason or not.
+            let held = [sh, solo, off];
+            assert!(move_target(false, V2, &held, &w, &[], None, None).is_none(), "{name}");
+            assert!(leave_target(true, V2, &held, &w, &[], None, None).is_none(), "{name}");
+        }
+    }
+
+    /// A node's control in words and codes: the wait a pinned job shows
+    /// (with who drains it), the mover's hard reason.
+    #[test]
+    fn a_held_node_says_why_and_who() {
+        let mut o = cand("n", 30, 32, 0, 2).offer;
+        assert!(control_wait(&o).is_none());
+        assert_eq!(held_code(o.control), None);
+        o.control = frames::Control::Draining;
+        o.control_by = Some("k2-web-test".into());
+        let r = control_wait(&o).expect("a wait");
+        assert_eq!(r.code, refusal::LOCAL_DRAINING);
+        assert_eq!(r.message, "the machine's owner is draining this node (by k2-web-test)");
+        assert_eq!(held_code(o.control), Some("node_draining"));
+        assert_eq!(held_code(frames::Control::Paused), Some("node_paused"));
+        assert_eq!(held_code(frames::Control::Stopped), Some("node_stopped"));
+        o.control_by = None;
+        assert_eq!(control_wait(&o).expect("a wait").message, "the machine's owner is draining this node");
     }
 }

@@ -99,7 +99,9 @@ pub struct JobAsk<'a> {
     pub gpus: u32,
 }
 
-fn control_refusal(c: Control) -> Option<Refusal> {
+/// The refusal for a node its owner paused, drains or stopped (`None`:
+/// active). The controller uses it for shared nodes too.
+pub fn control_refusal(c: Control) -> Option<Refusal> {
     match c {
         Control::Active => None,
         Control::Paused => Some(Refusal::new(LOCAL_PAUSED, "the machine's owner paused this node")),

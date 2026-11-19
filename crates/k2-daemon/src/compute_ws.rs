@@ -1428,7 +1428,10 @@ fn given_back_job(node_id: &str, job: &store::JobRow) {
     // another node that can start it now) or it bounces.
     crate::compute_place::drop_hold(&job.id);
     if let Some(r) = row.filter(|r| r.ctl.any.is_some()) {
-        if crate::compute_place::try_move(&r, &[], false, "withdrawn").is_some() {
+        // Given back by a node its owner paused or drains: any node where
+        // it can wait its turn will do (as the sweeper's hard moves).
+        let held = crate::compute_place::node_held(node_id);
+        if crate::compute_place::try_move(&r, &[], held.is_some(), held.unwrap_or("withdrawn")).is_some() {
             return;
         }
         // A bounce: back into its node's queue; the mover tries again
@@ -2840,6 +2843,11 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
     let mut batch_sent = store::jobs_in_states(conn, node_id, store::ACTIVE_STATES).iter().any(|j| j.tier() == Tier::Batch);
     let blocked = if let Some(p) = pause {
         Some(frames::Refusal::new(scheduler::CONTROLLER_PAUSED, format!("the server's owner {p} this node")))
+    } else if let Some(r) = crate::compute_place::control_wait(offer) {
+        // The node's owner paused or drains it (an update's drain, 11-19):
+        // nothing goes into its queue. A pinned job waits here, saying
+        // so; an `--any` job is moved by the sweeper.
+        Some(r)
     } else {
         match view.state {
             pshare::ServerStatus::Active => None,

@@ -1315,3 +1315,86 @@ async fn an_auto_job_holds_on_this_server_while_the_shared_node_is_full() {
     assert_eq!(assigns(&a.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![job.clone()], "a slot is free: sent");
     compute_ws::test_detach("ah-a");
 }
+
+/// 11-19: a job was placed "starts now" on a shared node its owner was
+/// draining for a k2-node update, and sat in its queue over 3 hours. A
+/// draining node takes no auto job (and never claims "starts now"),
+/// whatever its quote says; an auto job already in its queue leaves for a
+/// node where it can wait its turn; a job named on it stays here, saying
+/// the node is draining, and goes in once the node is active again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_draining_node_takes_no_auto_job_and_its_queued_auto_jobs_leave() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "drainer");
+    active_node("dr-a", "dr-a", "linux", &ws);
+    active_node("dr-b", "dr-b", "linux", &ws);
+    // A: shared, our share's running slot taken: an auto job waits in its queue.
+    let busy = || offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0)));
+    let mut a = compute_ws::test_attach("dr-a", busy());
+    let queued = queued_any_on(d.port, &ws, "dr-a", &mut a).await;
+    // B: shared and busy the same way (a place to wait, not to start now).
+    let mut b = compute_ws::test_attach("dr-b", busy());
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert!(cancels(&a.frames()).is_empty(), "both only busy: the job keeps its place on A");
+
+    // A's owner drains it. Its share is empty and its quote says a 1G job
+    // starts now: the quote doesn't know about the drain.
+    let mut drained = offer(&["artifacts", "stall", FEATURE_QUEUE], 0, Some(view(Role::Tenant, 0, 0)));
+    drained.revision = 2;
+    drained.control = Control::Draining;
+    drained.control_by = Some("k2-web-test".into());
+    drained.share.as_mut().unwrap().quotes =
+        vec![k2_core::compute::proto::share::Quote { cpu_millis: 0, mem_bytes: 1 << 30, starts_now: true, eta_secs: None, eta_p90_secs: None, blocked_by: None }];
+    compute_ws::test_frame("dr-a", Frame::Offer(drained.clone()));
+
+    // A new auto job: never A, never "starts now".
+    let r = run(d.port, OWNER, json!({"any": true, "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let fresh = j(&r);
+    assert_eq!(fresh["job"]["nodeId"], "dr-b", "{fresh}");
+    assert_eq!(fresh["placement"]["startsNow"], false, "{fresh}");
+    let code = fresh["placement"]["code"].as_str().unwrap();
+    assert!(!code.starts_with("starts_now"), "{fresh}");
+    assert!(!fresh["placement"]["why"].as_str().unwrap().contains("starts now"), "{fresh}");
+
+    // A job named on A: placed there, held here, saying why.
+    let r = run(d.port, OWNER, json!({"node": "dr-a", "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pinned = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let rp = row(&pinned);
+    assert_eq!((rp.node_id.as_str(), rp.state.as_str(), rp.reason.as_deref()), ("dr-a", "queued", Some("local_draining")), "{rp:?}");
+    assert_eq!(rp.detail.as_deref(), Some("the machine's owner is draining this node (by k2-web-test)"), "{rp:?}");
+    assert!(assigns(&a.frames()).is_empty(), "nothing goes into a draining node's queue");
+
+    // The sweep asks A to give the queued auto job back, though B can
+    // only queue it: A starts nothing until its drain ends.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(cancels(&a.frames()), vec![(queued.clone(), 1, CANCEL_WITHDRAW.to_string())], "withdrawn from the draining node");
+    compute_ws::test_frame("dr-a", state(&queued, 1, JobState::Cancelled, Some("withdrawn"), None));
+    let rq = row(&queued);
+    assert_eq!((rq.node_id.as_str(), rq.generation), ("dr-b", 2), "moved to B: {rq:?}");
+    let p = rq.ctl.placement.expect("placement");
+    assert_eq!(p.code, "moved_node_draining", "{p:?}");
+    assert!(p.why.starts_with("moved from dr-a: "), "{}", p.why);
+    assert!(assigns(&a.frames()).is_empty(), "never sent back to A");
+    assert!(assigns(&b.frames()).iter().any(|x| x.0 == queued), "B has it");
+
+    // The pinned job stays, still saying why, through another sweep.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    let rp = row(&pinned);
+    assert_eq!((rp.node_id.as_str(), rp.reason.as_deref()), ("dr-a", Some("local_draining")), "{rp:?}");
+    assert!(cancels(&a.frames()).is_empty());
+    let g = get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={pinned}")).await;
+    assert!(g.body.contains("draining this node"), "{}", g.body);
+
+    // The drain ends: the pinned job goes into A's queue.
+    let mut active = drained;
+    active.revision = 3;
+    active.control = Control::Active;
+    active.control_by = None;
+    compute_ws::test_frame("dr-a", Frame::Offer(active));
+    assert_eq!(assigns(&a.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![pinned.clone()], "active again: sent");
+    compute_ws::test_detach("dr-a");
+    compute_ws::test_detach("dr-b");
+}

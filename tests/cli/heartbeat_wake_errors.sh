@@ -49,6 +49,13 @@ bad() {
 # once: the nth request gets the nth answer, the last one repeats. Status 0
 # closes the connection with no answer. A route the plan does not name
 # answers 404.
+# "#passport": {"route", "old", "new", "from", "again", "card"} plays a
+# daemon that lost its passport store: from the route's "from"-th request
+# on (0 = the first), a request that presents "old" is refused with the
+# passport refusal, and the first refusal writes "new" into the session's
+# secrets dir (the adoption finishing meanwhile). With "again", "new" is
+# refused too ("card": with a permission card). Refused requests do not
+# count toward "seq".
 cat >"$T/stub.py" <<'PY'
 import http.server, json, os, sys
 log, plan, portfile = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -63,11 +70,26 @@ class H(http.server.BaseHTTPRequestHandler):
             routes = json.load(f)
         route = self.path.split("?", 1)[0]
         entry = routes.get(route, [404, '{"error":"not found"}'])
+        counts = {}
+        if os.path.exists(plan + ".counts"):
+            with open(plan + ".counts") as f:
+                counts = json.load(f)
+        pp = routes.get("#passport")
+        if pp and route == pp["route"]:
+            n = counts.get("#" + route, 0)
+            counts["#" + route] = n + 1
+            with open(plan + ".counts", "w") as f:
+                json.dump(counts, f)
+            bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+            if n >= pp.get("from", 0) and (bearer == pp["old"] or (bearer == pp["new"] and pp.get("again"))):
+                if not os.path.exists(pp["secrets"] + "/.k2-passport"):
+                    with open(pp["secrets"] + "/.k2-passport", "w") as f:
+                        f.write(pp["new"] + "\n")
+                err = {"error": "Invalid or missing auth token"}
+                if bearer == pp["new"] and pp.get("card"):
+                    err["permission"] = {"command": 'k2 permission request heartbeats.read --why "<what you need it for>"'}
+                entry = [403, json.dumps(err)]
         if isinstance(entry, dict):
-            counts = {}
-            if os.path.exists(plan + ".counts"):
-                with open(plan + ".counts") as f:
-                    counts = json.load(f)
             n = counts.get(route, 0)
             counts[route] = n + 1
             with open(plan + ".counts", "w") as f:
@@ -101,6 +123,8 @@ STUB_PORT="$(cat "$T/stub.port")"
 DEAD_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 
 SESSION="sess-wake-err.passport1"
+HEALED="sess-wake-err.passport2"
+mkdir -p "$T/secrets"
 WS="$T/ws"
 mkdir -p "$WS/.k2" "$HOME/.k2"
 NOOP='{"status":"noop","reason":"no inbox work found"}'
@@ -109,7 +133,7 @@ NOOP='{"status":"noop","reason":"no inbox work found"}'
 ITEM='[{"id":"review-the-plan","filename":"review-the-plan.md","folder":"","title":"Review the plan","priority":"normal","created":"2026-11-18T09:00:00Z","source":"msg","from":"acme-site","bodyPreview":"Please read the plan and say what is missing.","summary":"Read the plan"}]'
 ASK='k2 permission request heartbeats.read --why "<what you need it for>"'
 
-plan() { rm -f "$T/plan.json.counts"; printf '%s\n' "$1" >"$T/plan.json"; }
+plan() { rm -f "$T/plan.json.counts" "$T/secrets/.k2-passport"; printf '%s\n' "$1" >"$T/plan.json"; }
 # js <text>: text as a JSON string, for a body inside a plan.
 js() { python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
 
@@ -117,7 +141,7 @@ js() { python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
 wake() {
     : >"$T/requests.log"
     RC=0
-    env K2_PROJECT_PATH="$WS" K2_PORT="${1:-$STUB_PORT}" K2_HOOK_TOKEN="$SESSION" \
+    env K2_PROJECT_PATH="$WS" K2_PORT="${1:-$STUB_PORT}" K2_HOOK_TOKEN="$SESSION" K2_SECRETS_DIR="$T/secrets" \
         "$K2_CLI" heartbeat wake >"$T/out" 2>"$T/err" || RC=$?
 }
 
@@ -405,6 +429,102 @@ plan '{'"$WORK"', "/cli/agents/launch": [200, '"$(js "$LAUNCHED")"'], "/cli/term
 wake
 not_told "launched, then the write fails" && is_error "launched, then the write fails" 1 \
     "Error: k2 heartbeat wake: K2's server answered /cli/terminal/write with HTTP 500: pty write failed: broken pipe"
+
+echo "a stale passport heals once and retries, as the CLI's other senders do"
+# pp <route> <from> [again] [card] [new]: the "#passport" plan entry.
+pp() {
+    printf '"#passport": {"route": "%s", "from": %s, "old": "%s", "new": "%s", "secrets": "%s", "again": %s, "card": %s}' \
+        "$1" "$2" "$SESSION" "${5:-$HEALED}" "$T/secrets" "${3:-false}" "${4:-false}"
+}
+# auths <method> <route>: the passports that route was sent with, in order.
+auths() {
+    grep "^$1 $2?" "$T/requests.log" | sed 's/.* auth=Bearer //' | tr '\n' ' ' | sed 's/ $//'
+}
+# healed_ok <case> <method> <route> <want stdout tail>: exit 0, nothing on
+# stderr, that tail line, and route sent twice: refused, then the retry
+# with the new passport. Every request after the heal uses it.
+healed_ok() {
+    if [ "$RC" = 0 ] && [ ! -s "$T/err" ] && [ "$(tail -n 1 "$T/out")" = "$4" ] &&
+        [ "$(auths "$2" "$3")" = "$SESSION $HEALED" -o "$(auths "$2" "$3")" = "$SESSION $SESSION $HEALED" ] &&
+        [ "$(awk '/auth=Bearer '"$HEALED"'$/ {seen = 1; next} seen && /auth=Bearer '"$SESSION"'$/ {bad = 1} END {print bad + 0}' "$T/requests.log")" = 0 ]; then
+        ok "$1"
+    else
+        bad "$1"
+    fi
+}
+TOLD='{"success":true}{"status":"notified","terminalId":"agent-chat:p1:manager"}'
+UP='"/cli/agents/running": {"seq": [[200, "[]"], [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}'
+UP_TOLD="$LAUNCHED"'{"success":true}{"status":"launched_and_notified","terminalId":"agent-chat-manager"}'
+
+plan '{'"$WORK"', '"$RUNNING"', '"$(pp /cli/agents/running 0)"'}'
+wake
+healed_ok "the scan: refused, healed, retried once" GET /cli/agents/running "$TOLD"
+plan '{'"$WORK"', '"$LAUNCH"', '"$UP"', '"$(pp /cli/agents/running 1)"'}'
+wake
+healed_ok "the poll: refused, healed, retried once" GET /cli/agents/running "$UP_TOLD"
+[ "$(auths GET /cli/agents/running)" = "$SESSION $SESSION $HEALED" ] || bad "the poll: want the scan, the refused poll and its retry"
+plan '{'"$WORK"', '"$LAUNCH"', '"$UP"', '"$(pp /cli/agents/launch 0)"'}'
+wake
+healed_ok "the launch: refused, healed, retried once" POST /cli/agents/launch "$UP_TOLD"
+plan '{'"$WORK"', '"$RUNNING"', '"$(pp /cli/terminal/write 0)"'}'
+wake
+healed_ok "the write to the running manager: refused, healed, retried once" POST /cli/terminal/write "$TOLD"
+plan '{'"$WORK"', '"$LAUNCH"', '"$UP"', '"$(pp /cli/terminal/write 0)"'}'
+wake
+healed_ok "the write after a launch: refused, healed, retried once" POST /cli/terminal/write "$UP_TOLD"
+
+REFUSED="Error: k2 heartbeat wake: K2's server refused"
+plan '{'"$WORK"', '"$RUNNING"', '"$(pp /cli/agents/running 0 true true)"'}'
+wake
+if [ "$(auths GET /cli/agents/running)" = "$SESSION $HEALED" ] && never_launched "the scan refused again after the heal"; then
+    is_error "the scan refused again after the heal (a card)" 3 \
+        "$REFUSED /cli/agents/running with HTTP 403: Invalid or missing auth token" "Ask with: $ASK"
+else
+    bad "the scan refused again after the heal (a card): want one retry and no post"
+fi
+plan '{'"$WORK"', '"$LAUNCH"', '"$UP"', '"$(pp /cli/agents/launch 0 true)"'}'
+wake
+if [ "$(auths POST /cli/agents/launch)" = "$SESSION $HEALED" ] && [ "$(gets /cli/agents/running)" = 1 ]; then
+    is_error "the launch refused again after the heal: no poll" 1 \
+        "$REFUSED /cli/agents/launch with HTTP 403: Invalid or missing auth token"
+else
+    bad "the launch refused again after the heal: want one retry and no poll"
+fi
+plan '{'"$WORK"', '"$RUNNING"', '"$(pp /cli/terminal/write 0 true)"'}'
+wake
+if [ "$(auths POST /cli/terminal/write)" = "$SESSION $HEALED" ] && not_told "the write refused again after the heal"; then
+    is_error "the write refused again after the heal" 1 \
+        "$REFUSED /cli/terminal/write with HTTP 403: Invalid or missing auth token"
+else
+    bad "the write refused again after the heal: want one retry and no notified line"
+fi
+# Send once: only a refusal is sent again. The retried write gets no
+# answer; it may have gone out, so it is never sent a third time.
+plan '{'"$WORK"', '"$SCAN"', "/cli/terminal/write": [0, ""], '"$(pp /cli/terminal/write 0)"'}'
+wake
+if [ "$(auths POST /cli/terminal/write)" = "$SESSION $HEALED" ] && not_told "a retried write that gets no answer"; then
+    err_like "a retried write that gets no answer is not sent again" 1 \
+        "Error: k2 heartbeat wake: K2's server closed the connection on /cli/terminal/write: *; run k2 daemon status"
+else
+    bad "a retried write that gets no answer is not sent again"
+fi
+plan '{'"$WORK"', '"$SCAN"', "/cli/terminal/write": [0, ""]}'
+printf '%s\n' "$HEALED" >"$T/secrets/.k2-passport"
+wake
+if [ "$(auths POST /cli/terminal/write)" = "$HEALED" ] && not_told "a write with no answer"; then
+    err_like "a write with no answer is not sent again, a new passport on disk or not" 1 \
+        "Error: k2 heartbeat wake: K2's server closed the connection on /cli/terminal/write: *; run k2 daemon status"
+else
+    bad "a write with no answer is not sent again, a new passport on disk or not"
+fi
+plan '{'"$WORK"', '"$RUNNING"', '"$(pp /cli/agents/running 0 false false sess-other.passport9)"'}'
+wake
+if [ "$(auths GET /cli/agents/running)" = "$SESSION" ]; then
+    is_error "another session's passport on disk is never used" 1 \
+        "$REFUSED /cli/agents/running with HTTP 403: Invalid or missing auth token"
+else
+    bad "another session's passport on disk is never used"
+fi
 
 echo "paths with a quote and a space: the wake works"
 # The workspace and the K2 home reach the wake's Python through the

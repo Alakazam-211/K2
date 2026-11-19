@@ -7253,7 +7253,7 @@ cmd_heartbeat_wake() {
     # source: a path with a quote in it would end the string.
     _K2_WAKE_PROJECT="$PROJECT" _K2_WAKE_HOME="$K2_HOME" \
         _K2_WAKE_NO_OWNER_FALLBACK="${_k2_no_owner_fallback:-}" python3 -c "
-import json, os, socket, sys, time, urllib.error, urllib.parse, urllib.request
+import json, os, re, socket, sys, time, urllib.error, urllib.parse, urllib.request
 
 def fail(msg, code=1):
     print('Error: k2 heartbeat wake: ' + msg, file=sys.stderr)
@@ -7309,17 +7309,41 @@ def refused(route, code, data, raw):
             sys.exit(3)
     sys.exit(1)
 
+# A refused passport heals once per run, by the rules of the CLI's other
+# senders (_cli_healed_passport, _cli_retry_with_healed_passport): a
+# daemon restart that lost the passport store mints a new one for this
+# same session into the session's secrets dir. A refusal ran no handler,
+# so the same request goes again once with it, a write included. Any
+# other failure of a request is never sent again here.
+healed = False
+
+def healed_passport():
+    cur = token
+    sd = os.environ.get('K5_SECRETS_DIR') or os.environ.get('K2_SECRETS_DIR') or os.environ.get('K2SO_SECRETS_DIR') or ''
+    f = os.path.join(sd, '.k2-passport')
+    if not sd or '.' not in cur or not os.path.isfile(f) or os.path.islink(f):
+        return ''
+    try:
+        with open(f) as fh:
+            t = fh.readline().rstrip('\\n')
+    except OSError:
+        return ''
+    if not re.fullmatch(r'[A-Za-z0-9-]+[.][A-Za-z0-9]+', t) or t == cur or t.split('.')[0] != cur.split('.')[0]:
+        return ''
+    return t
+
 def request(route, method='GET', **params):
     # The daemon's status and body for route; no answer ends the command.
+    global token, auth, healed
     query = 'project=' + urllib.parse.quote(project)
     query += ''.join('&' + k + '=' + urllib.parse.quote(v, safe='') for k, v in params.items())
     body = b'' if method == 'POST' else None
     req = urllib.request.Request(f'{base}{route}?{query}', data=body, headers=auth, method=method)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status, resp.read()
+            code, raw = resp.status, resp.read()
     except urllib.error.HTTPError as e:
-        return e.code, e.read()
+        code, raw = e.code, e.read()
     except (socket.timeout, TimeoutError):
         fail(f\"K2's server didn't answer {route} within 5 s; run k2 daemon status\")
     except urllib.error.URLError as e:
@@ -7328,6 +7352,13 @@ def request(route, method='GET', **params):
         fail(f\"can't reach K2's server at {base}: {e.reason}; run k2 daemon status\")
     except OSError as e:
         fail(f\"K2's server closed the connection on {route}: {e}; run k2 daemon status\")
+    if code in (401, 403) and not healed and b'Invalid or missing auth token' in raw:
+        new = healed_passport()
+        if new:
+            healed = True
+            token, auth = new, {'Authorization': 'Bearer ' + new}
+            return request(route, method, **params)
+    return code, raw
 
 def checked(route, method='GET', **params):
     # The JSON the daemon answered on route with HTTP 200 (a change: and

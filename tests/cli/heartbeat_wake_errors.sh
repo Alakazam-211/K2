@@ -171,6 +171,7 @@ RUNNING='"/cli/agents/running": [200, "[{\"terminalId\":\"agent-chat:p1:manager\
 told() {
     if [ "$RC" = 0 ] && [ "$(tail -n 1 "$T/out")" = '{"ok":true}{"status":"notified","terminalId":"agent-chat:p1:manager"}' ] &&
         [ ! -s "$T/err" ] && [ "$(gets /cli/agents/list)" = 1 ] && [ "$(gets /cli/inbox/list)" = 1 ] && root_asked &&
+        [ "$(gets /cli/agents/running)" = 1 ] &&
         [ "$(grep -cF 'POST /cli/terminal/write?' "$T/requests.log" || true)" = 1 ] &&
         grep -qF 'id=agent-chat%3Ap1%3Amanager&message=New%20work%20detected' "$T/requests.log"; then
         ok "$1"
@@ -184,6 +185,22 @@ told "an agent's inbox has work: the running manager gets the triage message"
 plan '{"/cli/agents/list": [200, "[]"], "/cli/inbox/list": [200, '"$(js "$ITEM")"'], '"$RUNNING"'}'
 wake
 told "an item at the workspace inbox's root: the running manager gets the triage message"
+# A k2.db from before migration 0039 (agent_sessions became
+# workspace_sessions there) that names another terminal as the running
+# manager: the wake never reads it, the daemon's live sessions decide.
+python3 - "$HOME/.k2/k2.db" "$WS" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("CREATE TABLE projects (id TEXT PRIMARY KEY, path TEXT NOT NULL)")
+c.execute("CREATE TABLE agent_sessions (project_id TEXT, agent_name TEXT, terminal_id TEXT, status TEXT)")
+c.execute("INSERT INTO projects VALUES ('p1', ?)", (sys.argv[2],))
+c.execute("INSERT INTO agent_sessions VALUES ('p1', 'manager', 'agent-chat:p1:stale', 'running')")
+c.commit()
+PY
+plan '{"/cli/agents/list": [200, "[{\"name\":\"a\",\"inboxCount\":1}]"], "/cli/inbox/list": [200, "[]"], '"$RUNNING"'}'
+wake
+rm -f "$HOME/.k2/k2.db"
+told "a leftover agent_sessions row is never read: the live sessions name the manager"
 
 echo "errors say why"
 plan '{"/cli/agents/list": [200, "[]"], "/cli/inbox/list": [200, "[]"]}'

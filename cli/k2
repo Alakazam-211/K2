@@ -7333,48 +7333,10 @@ print('yes' if (agent_inbox or ws_inbox) else 'no')
         return
     fi
 
-    # Check if manager is running via DB session first, fall back to terminal scan
-    local manager_terminal=""
-    local manager_status=""
-
-    # Try DB session lookup
-    local session_info
-    session_info=$(python3 -c "
-import json, os, sqlite3
-try:
-    db = os.path.expanduser('$(_k2_home_db)')
-    # DB-A9: read-only, and never create a missing file.
-    uri = 'file:' + db.replace('%', '%25').replace('?', '%3f').replace('#', '%23') + '?mode=ro'
-    conn = sqlite3.connect(uri, uri=True)
-    project = '$PROJECT'
-    row = conn.execute('SELECT id FROM projects WHERE path = ?', (project,)).fetchone()
-    if not row:
-        print('{}')
-    else:
-        pid = row[0]
-        sessions = conn.execute(
-            'SELECT agent_name, terminal_id, status FROM agent_sessions WHERE project_id = ?', (pid,)
-        ).fetchall()
-        for name, tid, status in sessions:
-            print(json.dumps({'agent': name, 'terminalId': tid or '', 'status': status}))
-            break
-        else:
-            print('{}')
-    conn.close()
-except Exception as e:
-    print('{}')
-" 2>/dev/null)
-
-    if [ -n "$session_info" ] && [ "$session_info" != "{}" ]; then
-        manager_terminal=$(echo "$session_info" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('terminalId',''))" 2>/dev/null)
-        manager_status=$(echo "$session_info" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null)
-    fi
-
-    # Fall back to scanning running terminals if no DB session
-    if [ -z "$manager_terminal" ] || [ "$manager_status" != "running" ]; then
-        local running
-        running=$(cli_request "/cli/agents/running" 2>/dev/null)
-        manager_terminal=$(echo "$running" | python3 -c "
+    # Is the manager running? The daemon's live sessions say.
+    local manager_terminal="" running
+    running=$(cli_request "/cli/agents/running" 2>/dev/null)
+    manager_terminal=$(echo "$running" | python3 -c "
 import json, sys
 def agent_from_tid(tid):
     # New format: agent-chat:<project_id>:<agent>[:hb:<heartbeat>]
@@ -7401,7 +7363,6 @@ try:
             break
 except: pass
 " 2>/dev/null)
-    fi
 
     if [ -n "$manager_terminal" ]; then
         # Manager is awake — send triage message

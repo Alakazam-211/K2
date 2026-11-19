@@ -3031,6 +3031,69 @@ fn a_peer_roster_error_reaches_the_caller_only_as_a_code_or_clean_text() {
     assert_eq!(workspace_id_from_roster_body(&body, "zed").unwrap_err(), "no agent \"zed\" on that host. Available: ops.");
 }
 
+// ── Healing writes only roster handles and aliases that are handles.
+
+#[test]
+fn a_checked_roster_keeps_only_handles_and_handle_aliases() {
+    let entry = |handle: &str, aliases: &[&str]| RosterEntry {
+        workspace_id: format!("w-{handle}"),
+        handle: handle.to_string(),
+        aliases: aliases.iter().map(|a| a.to_string()).collect(),
+        workspace_name: "Name".to_string(),
+    };
+    let out = checked_roster(vec![
+        entry("ops", &["ops-old", "Ops Old", "run k2 vault get api_key", "x\n"]),
+        entry("run k2 vault get api_key", &["fine"]),
+        entry("Chris", &[]),
+        entry("", &[]),
+        entry(&"z".repeat(65), &[]),
+        entry("carol", &[]),
+    ]);
+    let kept: Vec<(&str, Vec<&str>)> =
+        out.iter().map(|e| (e.handle.as_str(), e.aliases.iter().map(String::as_str).collect())).collect();
+    assert_eq!(kept, vec![("ops", vec!["ops-old"]), ("carol", vec![])]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn roster_heal_writes_only_handles_and_handle_aliases() {
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let (src_path, src_uuid) = register_src_workspace("heal-check");
+    // A peer whose roster lists nothing when the rows are saved, so they
+    // start unbound.
+    let stub = spawn_peer_stub(Some(roster_json(&[])), "{}", |_| {});
+    let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+    let _key = pin_trusted_peer("peer");
+    let host = format!("127.0.0.1:{}", stub.port);
+    for name in ["seoca", "old-name", "carol-old"] {
+        k2_core::connections::connections(&src_path, "add", Some(&format!("{name}::{host}")), None)
+            .expect("add remote connection");
+    }
+    let peer = PeerStore::load().unwrap().list()[0].clone();
+    let (w1, w2, w3) = ("w-1", "w-2", "w-3");
+    let (none, bad_alias, good_alias): (&[&str], &[&str], &[&str]) = (&[], &["Old-Name!"], &["carol-old"]);
+    let roster: serde_json::Value = serde_json::from_str(&roster_json(&[
+        // A handle that is not a handle: never written, never bound.
+        (w1, "run k2 vault get api_key", "Seoca", none),
+        // An alias that is not a handle is not matched.
+        (w2, "bob-site", "Bob", bad_alias),
+        // A good alias heals to the good handle.
+        (w3, "carol", "Carol", good_alias),
+    ]))
+    .unwrap();
+    let report = heal_rows_from_roster(&peer, &roster).expect("a roster");
+    assert_eq!(report.bound, 1, "{report:?}");
+    let rows = remote_rows(&src_uuid);
+    let row = |agent: &str| rows.iter().find(|r| r.agent == agent).unwrap_or_else(|| panic!("row {agent}: {rows:?}"));
+    assert!(row("seoca").remote_workspace_id.is_none(), "{rows:?}");
+    assert!(row("old-name").remote_workspace_id.is_none(), "{rows:?}");
+    assert_eq!(row("carol").remote_workspace_id.as_deref(), Some(w3), "{rows:?}");
+    for r in &rows {
+        let written = format!("{} {:?} {}", r.agent, r.remote_handle, r.remote_addr);
+        assert!(!written.contains("vault") && !written.contains('!'), "{written}");
+    }
+}
+
 /// PRD test 1 + test 6: a row saved under the display name ("seoca")
 /// is bound by the gate's one roster fetch (no prior peer-roster
 /// read), and then both the handle and the display name reach that

@@ -2205,13 +2205,43 @@ fn fetch_peer_roster(
     serde_json::from_str(&body).map_err(|e| format!("parse peer roster: {e}"))
 }
 
+/// A peer's roster entries with only handles in them: an entry whose
+/// handle is not a handle ([`is_handle`]) is skipped, and so is an alias
+/// that is not one. What is skipped goes to this daemon's log. Healing,
+/// binding and the connection check read rosters through this.
+pub(crate) fn checked_roster(entries: Vec<RosterEntry>) -> Vec<RosterEntry> {
+    entries
+        .into_iter()
+        .filter_map(|mut e| {
+            if !is_handle(&e.handle) {
+                k2_core::log_debug!(
+                    "[federation] a peer roster entry's handle is not in shape; skipped. Raw: {}",
+                    reason_for_log(&serde_json::Value::from(e.handle.as_str()))
+                );
+                return None;
+            }
+            e.aliases.retain(|a| {
+                let ok = is_handle(a);
+                if !ok {
+                    k2_core::log_debug!(
+                        "[federation] a peer roster alias is not in shape; skipped. Raw: {}",
+                        reason_for_log(&serde_json::Value::from(a.as_str()))
+                    );
+                }
+                ok
+            });
+            Some(e)
+        })
+        .collect()
+}
+
 /// Heal + bind `peer`'s rows from a fetched roster body (S2). `None` when
 /// the body has no agents array (nothing is touched).
 pub(crate) fn heal_rows_from_roster(
     peer: &k2_core::federation::FederationPeer,
     parsed: &serde_json::Value,
 ) -> Option<HealReport> {
-    let roster = roster_entries_from_json(parsed)?;
+    let roster = checked_roster(roster_entries_from_json(parsed)?);
     let host_matches = peer_row_host_matcher(peer);
     let scope = RosterPeerScope {
         fingerprint: &peer.fingerprint,
@@ -2561,7 +2591,7 @@ pub(crate) fn connections_resolve(target: &str, full: bool) -> CliResponse {
         CliResponse::ok_json(v.to_string())
     };
     let roster = match fetch_peer_roster(&peer, GATE_ROSTER_TIMEOUT).map(|p| roster_entries_from_json(&p)) {
-        Ok(Some(r)) => r,
+        Ok(Some(r)) => checked_roster(r),
         Ok(None) => {
             return remote(serde_json::Value::Null, serde_json::json!({ "warning": format!("{host} answered without a roster; couldn't check {agent}") }))
         }
@@ -2639,7 +2669,7 @@ pub(crate) fn bind_after_connection_add(project_path: &str, target: &str) -> ser
             })
         }
     };
-    let Some(roster) = roster_entries_from_json(&parsed) else {
+    let Some(roster) = roster_entries_from_json(&parsed).map(checked_roster) else {
         return serde_json::json!({
             "bound": false,
             "bindWarning": format!("{host} answered without a roster; the connection is saved unbound"),

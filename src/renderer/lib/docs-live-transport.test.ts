@@ -366,6 +366,9 @@ describe('LiveTransport', () => {
     expect(closeFromCode(undefined)).toEqual({ reason: 'network', retry: true })
     expect(parseClose({ type: 'closed', reason: 'released', retry: true })).toEqual({ reason: 'released', retry: false })
     expect(parseClose({ type: 'closed', reason: 'cut_off' })).toEqual({ reason: 'cut_off', retry: true })
+    // Kit v0.23.0, grouped saves: a rollback's close is retried (the socket joins again).
+    expect(parseClose({ type: 'closed', reason: 'rolled_back', retry: true })).toEqual({ reason: 'rolled_back', retry: true })
+    expect(parseClose({ type: 'closed', reason: 'rolled_back', retry: false })).toEqual({ reason: 'rolled_back', retry: true })
     expect(liveUrl('ws://127.0.0.1:1', 't k', '/w/notes a.md', { resume: 5 })).toBe(
       'ws://127.0.0.1:1/cli/docs/live?doc=%2Fw%2Fnotes+a.md&root=source&resume=5&token=t+k',
     )

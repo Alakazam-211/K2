@@ -54,11 +54,25 @@ export interface DocCore {
   lastChange: DocCoreLastChange | null
 }
 
+/** The docs store's saves (`saves` on `GET /cli/docs/cores`, kit v0.23.0). */
+export interface DocSaves {
+  /** The owner's "Save every change immediately" (`docsSaveImmediately`). */
+  saveEveryChangeImmediately: boolean
+  /** Only the server's owner changes it. */
+  canChange: boolean
+  /** What the docs store runs with now; null while live docs are off. */
+  running: 'grouped' | 'immediate' | null
+  /** The setting takes effect after K2 restarts, and it hasn't yet. */
+  restartNeeded: boolean
+}
+
 export interface DocCores {
   canChange: boolean
   /** `.k5board` files open in a Board tab on this server (the preview switch);
    *  null on a server from before Board files, which has no such switch. */
   boardFilePreview: boolean | null
+  /** "Save every change immediately" (kit v0.23.0); null on a server from before it. */
+  saves: DocSaves | null
   /** Cores still to come, plain words ("CSV grid", "Word"). */
   later: string[]
   cores: DocCore[]
@@ -133,6 +147,19 @@ function parseLastChange(v: unknown, what: string): DocCoreLastChange | null {
   }
 }
 
+function parseSaves(v: unknown): DocSaves {
+  const w = "the reply's saves"
+  const o = obj(v, w)
+  const running = o.running
+  if (running !== null && running !== 'grouped' && running !== 'immediate') throw new Error(`${w}.running is not grouped, immediate or null`)
+  return {
+    saveEveryChangeImmediately: bool(o, 'saveEveryChangeImmediately', w),
+    canChange: bool(o, 'canChange', w),
+    running,
+    restartNeeded: bool(o, 'restartNeeded', w),
+  }
+}
+
 /** `GET /cli/docs/cores`'s body. Throws on any field it can't read. */
 export function parseDocCores(body: unknown): DocCores {
   const o = obj(body, 'the reply')
@@ -140,6 +167,7 @@ export function parseDocCores(body: unknown): DocCores {
   return {
     canChange: bool(o, 'canChange', 'the reply'),
     boardFilePreview: o.boardFilePreview === undefined || o.boardFilePreview === null ? null : bool(o, 'boardFilePreview', 'the reply'),
+    saves: o.saves === undefined || o.saves === null ? null : parseSaves(o.saves),
     later: o.later === undefined || o.later === null ? [] : strings(o.later, "the reply's later"),
     cores: o.cores.map((c, i) => {
       const what = `cores[${i}]`
@@ -169,6 +197,12 @@ export async function fetchDocCores(scope: ServerScope = primaryScope()): Promis
  *  refusal (403 for a Member, 400 for bad input). */
 export async function setDocCore(id: string, on: boolean, scope: ServerScope = primaryScope()): Promise<void> {
   await daemonCliPost<unknown>(scope, 'settings/update', { multiplayerCores: { [id]: on } })
+}
+
+/** "Save every change immediately" on or off: `{"docsSaveImmediately": <on>}`. The
+ *  owner's; the daemon refuses anyone else. It takes effect after K2 restarts. */
+export async function setSaveImmediately(on: boolean, scope: ServerScope = primaryScope()): Promise<void> {
+  await daemonCliPost<unknown>(scope, 'settings/update', { docsSaveImmediately: on })
 }
 
 /** Board files in a tab on or off: `{"boardFilePreview": <on>}`. The owner's;

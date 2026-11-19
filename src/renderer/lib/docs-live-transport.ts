@@ -135,6 +135,9 @@ export type LiveCloseReason =
   | 'auth'
   | 'network'
   | 'closed'
+  /** Kit v0.23.0, grouped saves: saving to disk failed and the doc went back to what was
+   *  last saved; the socket joins again. */
+  | 'rolled_back'
 
 /** Why a socket ended (the daemon's `closed` frame, G2). */
 export interface LiveClose {
@@ -254,11 +257,12 @@ const REASONS: ReadonlySet<string> = new Set<LiveCloseReason>([
   'auth',
   'network',
   'closed',
+  'rolled_back',
 ])
 
-/** WIRE.md v2 "Closing", the retry column: only `cut_off` and `network`. */
+/** WIRE.md v2 "Closing", the retry column: `cut_off`, `network` and (kit v0.23.0) `rolled_back`. */
 export function canRetry(reason: LiveCloseReason): boolean {
-  return reason === 'cut_off' || reason === 'network'
+  return reason === 'cut_off' || reason === 'network' || reason === 'rolled_back'
 }
 
 /** A `closed` frame's fields, checked. Unknown reasons are `network`; `retry`

@@ -172,6 +172,8 @@ export function closedWords(c: LiveDocClose): string {
       return 'Sign in again to edit live.'
     case 'released':
       return 'The server is restarting. Reopen in a moment.'
+    case 'rolled_back':
+      return 'Saving to disk failed, so this file went back to what was last saved: your last fraction of a second of edits was rolled back. Reopen it and check your last change.'
     default:
       return 'The server closed live editing for this file.'
   }

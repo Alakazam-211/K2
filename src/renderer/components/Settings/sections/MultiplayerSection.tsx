@@ -20,18 +20,21 @@ import {
   fetchDocCores,
   multiplayerCoresAvailable,
   setBoardFilePreview,
+  setSaveImmediately,
   openNowLine,
   setDocCore,
   turnOffMessage,
   turnOffTitle,
   type DocCore,
   type DocCores,
+  type DocSaves,
 } from './multiplayer-cores-api'
 import { BetaTag, Button, Callout, Spinner, Toggle } from '@/components/ui'
 import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState, SettingSwitchRow } from '../controls/SettingControls'
 import { ActionNote, readFailure, useActionNote } from './ActionNote'
 import { LivePreviewSwitches } from '@/components/LiveView/LivePreviewSwitches'
 import { EditorPreviewSwitch } from '@/components/Editor/EditorPreviewSwitch'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const MULTIPLAYER_INTRO =
   "People and agents work in the same file at the same time, with presence, history and everyone's own undo. " +
@@ -49,6 +52,14 @@ export const BOARD_FILE_PREVIEW_LABEL = `${BOARD_FILE_PREVIEW_NAME} (Beta)`
 export const BOARD_FILE_PREVIEW_LINE =
   'A board file in a workspace opens in its own tab, where agents can work on it too. When this is off, the file shows a card instead. Single-person for now.'
 
+/** "Save every change immediately" (kit v0.23.0): the owner's, off by default. */
+export const SAVE_IMMEDIATELY_NAME = 'Save every change immediately'
+export const SAVE_IMMEDIATELY_LINE =
+  `Off: ${PRODUCT_NAME} saves live documents to disk in small groups, a few times a second, and at once when you save, close or leave a file. ` +
+  `If the disk fails, the last fraction of a second of edits can be lost. On: every change is saved to disk before ${PRODUCT_NAME} goes on, which is slower. ` +
+  `A change here takes effect after ${PRODUCT_NAME} restarts.`
+export const SAVE_IMMEDIATELY_OWNER_LINE = "Only the server's owner can change this."
+export const SAVE_IMMEDIATELY_RESTART_LINE = `Restart ${PRODUCT_NAME} for this to take effect.`
 
 export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
   {
@@ -57,6 +68,17 @@ export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
     label: 'Multiplayer',
     description: 'Turn each multiplayer core on or off for this server: Markdown, Text and code, Any other file (PSD, CAD, 3D and .blend files), Board. And open .k5board files in a Board tab.',
     keywords: ['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard', 'PSD', 'CAD', '3D', 'blend', 'DWG', 'STEP', 'STL', 'any other file', 'file lock', 'versions'],
+  },
+]
+
+/** The page's "Save every change immediately" row, for Settings search (beside the cores). */
+export const SAVE_IMMEDIATELY_MANIFEST: SettingEntry[] = [
+  {
+    id: 'multiplayer.save-immediately',
+    section: 'multiplayer',
+    label: SAVE_IMMEDIATELY_NAME,
+    description: `Save every live document change to disk before going on, instead of in small groups. The owner's; takes effect after ${PRODUCT_NAME} restarts.`,
+    keywords: ['save', 'saves', 'saving', 'disk', 'durability', 'fsync', 'grouped', 'immediately'],
   },
 ]
 
@@ -136,6 +158,21 @@ function MultiplayerCoresPage({ scope }: { scope: ServerScope }): React.JSX.Elem
     let out: FlipResult = { ok: true }
     try {
       await setBoardFilePreview(!data.boardFilePreview, scope)
+    } catch (err) {
+      out = { ok: false, cancelled: false, err }
+    } finally {
+      setBusy(null)
+    }
+    await load()
+    return out
+  }, [busy, data, load, scope])
+
+  const flipSaves = useCallback(async (): Promise<FlipResult> => {
+    if (!data?.saves?.canChange || busy) return { ok: false, cancelled: true }
+    setBusy('save-immediately')
+    let out: FlipResult = { ok: true }
+    try {
+      await setSaveImmediately(!data.saves.saveEveryChangeImmediately, scope)
     } catch (err) {
       out = { ok: false, cancelled: false, err }
     } finally {
@@ -236,6 +273,11 @@ function MultiplayerCoresPage({ scope }: { scope: ServerScope }): React.JSX.Elem
           <PreviewRow on={data.boardFilePreview} canChange={data.canChange} busy={busy === 'board-file-preview'} onFlip={flipPreview} />
         </SettingsGroup>
       ) : null}
+      {data?.saves ? (
+        <SettingsGroup title="Saving" card testId="multiplayer-saves">
+          <SaveImmediatelyRow saves={data.saves} busy={busy === 'save-immediately'} onFlip={flipSaves} />
+        </SettingsGroup>
+      ) : null}
       <EditorPreviewSwitch />
       {data?.canChange ? <LivePreviewSwitches /> : null}
       {data && later.length > 0 ? (
@@ -314,6 +356,60 @@ function PreviewRow({
       {note ? (
         <div className="mt-2">
           <ActionNote note={note} />
+        </div>
+      ) : null}
+    </SettingSwitchRow>
+  )
+}
+
+function SaveImmediatelyRow({
+  saves,
+  busy,
+  onFlip,
+}: {
+  saves: DocSaves
+  busy: boolean
+  onFlip: () => Promise<FlipResult>
+}): React.JSX.Element {
+  const { note, run } = useFlipNote()
+  const on = saves.saveEveryChangeImmediately
+  return (
+    <SettingSwitchRow
+      settingId="multiplayer.save-immediately"
+      control={
+        <>
+          {busy ? <SavingNote /> : null}
+          <Toggle
+            checked={on}
+            onChange={() =>
+              void run(
+                onFlip,
+                on ? `Off. ${PRODUCT_NAME} saves in small groups after it restarts.` : `On. ${PRODUCT_NAME} saves every change at once after it restarts.`,
+                on ? 'Couldn’t turn this off. It’s still on.' : 'Couldn’t turn this on. It’s still off.',
+              )
+            }
+            aria-label={SAVE_IMMEDIATELY_NAME}
+            aria-busy={busy || undefined}
+            disabled={!saves.canChange || busy}
+          />
+        </>
+      }
+    >
+      <div className="type-row text-[var(--color-text-primary)]">{SAVE_IMMEDIATELY_NAME}</div>
+      <div className={SETTING_ROW_HINT}>{SAVE_IMMEDIATELY_LINE}</div>
+      {!saves.canChange ? (
+        <div className={SETTING_ROW_HINT} data-testid="multiplayer-saves-owner-line">
+          {SAVE_IMMEDIATELY_OWNER_LINE}
+        </div>
+      ) : null}
+      {saves.restartNeeded ? (
+        <div className="type-hint text-[var(--color-text-primary)] mt-1" data-testid="multiplayer-saves-restart">
+          {SAVE_IMMEDIATELY_RESTART_LINE}
+        </div>
+      ) : null}
+      {note ? (
+        <div className="mt-2">
+          <ActionNote note={note} testId="multiplayer-note-save-immediately" />
         </div>
       ) : null}
     </SettingSwitchRow>

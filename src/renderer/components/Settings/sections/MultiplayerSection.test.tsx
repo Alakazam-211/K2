@@ -60,7 +60,7 @@ vi.mock('@/stores/session-events', async (orig) => ({
 
 import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
-import { BOARD_FILE_PREVIEW_LABEL, MultiplayerSection, MULTIPLAYER_EDITORS_ONLY_INTRO, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE } from './MultiplayerSection'
+import { BOARD_FILE_PREVIEW_LABEL, MultiplayerSection, MULTIPLAYER_EDITORS_ONLY_INTRO, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE, SAVE_IMMEDIATELY_LINE, SAVE_IMMEDIATELY_MANIFEST, SAVE_IMMEDIATELY_NAME, SAVE_IMMEDIATELY_OWNER_LINE, SAVE_IMMEDIATELY_RESTART_LINE } from './MultiplayerSection'
 import { EDITOR_PREVIEW_MANIFEST } from '@/components/Editor/EditorPreviewSwitch'
 import { primaryScope } from '@/kessel/server-scope'
 import { useSettingsStore } from '@/stores/settings'
@@ -428,6 +428,56 @@ describe('Settings → Cores → Multiplayer: Board files in a tab', () => {
     const e = MULTIPLAYER_MANIFEST[0]
     expect(e.description).toContain('Board')
     expect(e.keywords).toContain('Board')
+  })
+})
+
+describe('Settings → Cores → Multiplayer: Save every change immediately (kit v0.23.0)', () => {
+  const saves = (over: Json = {}): Json => ({ saveEveryChangeImmediately: false, canChange: true, running: 'grouped', restartNeeded: false, ...over })
+  async function mountWith(): Promise<void> {
+    render(<MultiplayerSection />)
+    await waitFor(() => expect(coreSwitches()).toHaveLength(4))
+  }
+
+  it('the owner sees it off by default, says it takes effect after a restart, and posts exactly the setting', async () => {
+    h.cores = answer({ saves: saves() })
+    await mountWith()
+    const toggle = sw(SAVE_IMMEDIATELY_NAME)
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(toggle.disabled).toBe(false)
+    expect(within(row('save-immediately')).getByText(SAVE_IMMEDIATELY_LINE)).toBeTruthy()
+    expect(SAVE_IMMEDIATELY_LINE).toMatch(/takes effect after \S+ restarts\.$/)
+    expect(screen.queryByTestId('multiplayer-saves-restart')).toBeNull()
+    h.cores = answer({ saves: saves({ saveEveryChangeImmediately: true, restartNeeded: true }) })
+    fireEvent.click(toggle)
+    await waitFor(() => expect(sw(SAVE_IMMEDIATELY_NAME).getAttribute('aria-checked')).toBe('true'))
+    expect(h.posts).toEqual([{ route: 'settings/update', body: { docsSaveImmediately: true } }])
+    expect(screen.getByTestId('multiplayer-saves-restart').textContent).toBe(SAVE_IMMEDIATELY_RESTART_LINE)
+  })
+
+  it('is the owner’s alone: disabled with a line for anyone else, and a click writes nothing', async () => {
+    h.cores = answer({ saves: saves({ canChange: false }) })
+    await mountWith()
+    expect(sw(SAVE_IMMEDIATELY_NAME).disabled).toBe(true)
+    expect(screen.getByTestId('multiplayer-saves-owner-line').textContent).toBe(SAVE_IMMEDIATELY_OWNER_LINE)
+    fireEvent.click(sw(SAVE_IMMEDIATELY_NAME))
+    await settle()
+    expect(h.posts).toEqual([])
+  })
+
+  it('has no row on a server from before it, and a malformed one is an error, never a guess', async () => {
+    h.cores = answer()
+    render(<MultiplayerSection />)
+    await waitFor(() => expect(coreSwitches()).toHaveLength(3))
+    expect(screen.queryByRole('switch', { name: SAVE_IMMEDIATELY_NAME })).toBeNull()
+    expect(() => parseDocCores(answer({ saves: saves({ running: 'sometimes' }) }))).toThrow(/running/)
+    expect(() => parseDocCores(answer({ saves: saves({ canChange: 'yes' }) }))).toThrow(/canChange/)
+    expect(parseDocCores(answer({ saves: saves({ running: null }) })).saves?.running).toBeNull()
+  })
+
+  it('is found by searching for saving, apart from the cores', () => {
+    expect(searchManifest(SAVE_IMMEDIATELY_MANIFEST, 'save every change').map((e) => e.id)).toEqual(['multiplayer.save-immediately'])
+    expect(searchManifest(SAVE_IMMEDIATELY_MANIFEST, 'disk').map((e) => e.id)).toEqual(['multiplayer.save-immediately'])
+    expect(searchManifest(MULTIPLAYER_MANIFEST, 'disk')).toEqual([])
   })
 })
 

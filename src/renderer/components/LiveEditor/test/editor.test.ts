@@ -890,6 +890,21 @@ describe("mountLiveEditor", () => {
     expect(ts[0].connects).toBe(1);
   });
 
+  it("rolled back by the host (kit v0.23.0, grouped saves): the note, and it joins again", async () => {
+    const { net, eds, ts, logs } = setup("abc\n");
+    await settle(net);
+    ts[0].closeWith("rolled_back");
+    await settle(net);
+    const note = eds[0].view.dom.closest(".mpc-editor")!.querySelector(".mpc-note") as HTMLElement;
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toBe(DEFAULT_STRINGS.rolledBack);
+    expect(DEFAULT_STRINGS.rolledBack).toContain("last fraction of a second of edits was rolled back");
+    expect(logs[0].closed).toEqual([]);
+    expect(ts[0].connects).toBe(2);
+    expect(eds[0].state).toBe("live");
+    expect(doc(eds[0])).toBe("abc\n");
+  });
+
   it("a welcome too big for one frame: closed (declined, MPC-E401), no retry", async () => {
     const net = new Net();
     const server = new FakeServer(net, "x".repeat(5000));

@@ -27,6 +27,7 @@ import type {
   Welcome,
 } from "@k2/mpc-client";
 import { Binding, caretKey, type CaretView } from "./binding";
+import { CLOSED_WORDS, ROLLED_BACK_NOTE } from "./close-words";
 import { readableOn } from "./colour";
 import type { ClaimEvent, RemovedTextNote } from "./notes";
 import { editorTheme, injectFrameStyles } from "./theme";
@@ -61,6 +62,8 @@ export interface EditorStrings {
   duplicateRisk: string;
   /** After Re-apply couldn't tell (nothing re-applied). */
   cantTell: string;
+  /** After a `rolled_back` close (grouped saves): the doc went back to what was on disk. */
+  rolledBack: string;
   /** After Re-apply refused a change that met someone else's change since (nothing re-applied). */
   conflictReapply: string;
   /** After Re-apply couldn't work out where a change goes now (nothing re-applied). */
@@ -101,21 +104,8 @@ export const DEFAULT_STRINGS: EditorStrings = {
   reconnecting: "Reconnecting…",
   retryNow: "Retry now",
   readOnly: "Read-only",
-  closed: {
-    left: "You left this document.",
-    idle: "Disconnected after a while without activity.",
-    kicked: "You were removed from this document.",
-    rights_lost: "You no longer have access to this document.",
-    deleted: "This document was deleted.",
-    moved: "This document was moved.",
-    released: "This document was handed over.",
-    cut_off: "The connection fell too far behind.",
-    declined: "This document can't be edited live.",
-    not_found: "This document wasn't found.",
-    auth: "Sign in again to keep editing.",
-    network: "The connection was lost.",
-    closed: "Live editing of this document was closed.",
-  },
+  closed: CLOSED_WORDS,
+  rolledBack: ROLLED_BACK_NOTE,
   notApplied: "Not applied:",
   reapply: "Re-apply",
   dismiss: "Dismiss",
@@ -811,6 +801,7 @@ class LiveEditor implements LiveEditorHandle {
     this.abort?.abort();
     this.connecting = false;
     this.live?.disconnected();
+    if (info.reason === "rolled_back") this.showNote(this.strings.rolledBack); // then joins again
     if (!info.retry || this.opts.reconnect === false) return this.close(info);
     this.setState(this.live ? "reconnecting" : "connecting");
     this.retryLater();

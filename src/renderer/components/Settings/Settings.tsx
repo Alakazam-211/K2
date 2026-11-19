@@ -51,7 +51,7 @@ import { MailReaderLogSection, MAIL_READER_LOG_MANIFEST } from './sections/MailR
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
-import { MultiplayerSection, MULTIPLAYER_MANIFEST } from './sections/MultiplayerSection'
+import { MultiplayerSection, MULTIPLAYER_MANIFEST, SAVE_IMMEDIATELY_MANIFEST } from './sections/MultiplayerSection'
 import { EDITOR_PREVIEW_MANIFEST } from '@/components/Editor/EditorPreviewSwitch'
 import { OrgChartSection, ORG_CHART_MANIFEST } from './sections/OrgChartSection'
 import { multiplayerCoresAvailable } from './sections/multiplayer-cores-api'
@@ -412,6 +412,7 @@ export default function Settings(): React.JSX.Element {
       ...COMPUTE_MANIFEST,
       ...(multiplayerShown() ? MULTIPLAYER_MANIFEST : []),
       ...EDITOR_PREVIEW_MANIFEST,
+      ...(multiplayerShown() ? SAVE_IMMEDIATELY_MANIFEST : []),
       ...(remoteDesktopShown() ? REMOTE_DESKTOP_MANIFEST : []),
       ...APPS_SERVER_MANIFEST,
       ...APPS_RESOURCES_MANIFEST,

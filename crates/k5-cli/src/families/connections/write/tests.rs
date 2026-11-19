@@ -61,10 +61,7 @@ fn the_python() {
             18,
             "code in ('agents_create_connections_disabled', 'gated', 'forbidden')",
         ),
-        (
-            line::ALLOW,
-            "or 'Agents can add connections' in hint",
-        ),
+        (line::ALLOW, "or 'Agents can add connections' in hint"),
         (
             line::NOT_ALLOWED,
             r#"or \"isn't allowed to create or remove connections\" in hint"#,
@@ -87,10 +84,7 @@ fn the_python() {
             28,
             r"'\u2192 Workspaces / Agents \u2192 <workspace> \u2192 Connections '",
         ),
-        (
-            29,
-            r#"'\u2192 \"Let this agent add connections\").'"#,
-        ),
+        (29, r#"'\u2192 \"Let this agent add connections\").'"#),
         (
             31,
             r"sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')",

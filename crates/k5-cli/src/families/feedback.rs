@@ -304,9 +304,13 @@ fn list(client: &mut Client, closing: &mut Closing, all: bool, status: &str, jso
 
 fn show(client: &mut Client, closing: &mut Closing, id: &str, json: bool, html: bool) -> Exit {
     let id_arg = format!("id={}", quote(id));
-    fetch(client, closing, SHOW, &[id_arg.as_str(), "brief=1"], |raw| {
-        show_reader(&String::from_utf8_lossy(raw), json, html, now())
-    })
+    fetch(
+        client,
+        closing,
+        SHOW,
+        &[id_arg.as_str(), "brief=1"],
+        |raw| show_reader(&String::from_utf8_lossy(raw), json, html, now()),
+    )
 }
 
 /// `resp=$(cli_request <ep> <args>) || resp=""`, then the reader on it:

@@ -883,7 +883,6 @@ impl Client {
         }
     }
 
-
     fn send_json_as(&mut self, kind: Kind, path: &str, payload: &str) -> Result<Response, Error> {
         let post = kind == Kind::SendJsonPost;
         let t0 = Instant::now();
@@ -1303,7 +1302,9 @@ impl Client {
                     }),
                 )
             }
-            Kind::PostJson | Kind::PostJsonStdin => (Method::Post, endpoint.to_string(), json(&mut headers)),
+            Kind::PostJson | Kind::PostJsonStdin => {
+                (Method::Post, endpoint.to_string(), json(&mut headers))
+            }
             Kind::SendJsonGet | Kind::SidecarGet | Kind::PassportProject | Kind::Cards => {
                 let payload = String::from_utf8_lossy(body);
                 let path = if payload.is_empty() {
@@ -1528,7 +1529,7 @@ mod tests {
     #[test]
     fn each_failure_has_the_shell_s_code() {
         let ep = || "/cli/x".to_string();
-        let rows: [(Error, i32); 10] = [
+        let rows: [(Error, i32); 11] = [
             (
                 Error::NoAnswer(NoAnswer {
                     endpoint: ep(),
@@ -1872,7 +1873,12 @@ mod tests {
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(
             names,
-            ["Authorization", VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]
+            [
+                "Authorization",
+                VERSION_HEADER,
+                VIA_HEADER,
+                OWNER_SOURCE_HEADER
+            ]
         );
         assert_eq!(r.headers[0].1, "Bearer t.k/+= z");
         let (_, r) = c

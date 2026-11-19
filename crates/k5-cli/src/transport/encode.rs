@@ -60,4 +60,3 @@ pub fn quote_bytes(bytes: &[u8]) -> String {
 fn is_unreserved(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~')
 }
-

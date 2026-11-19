@@ -179,16 +179,13 @@ pub const FEED_HEAD: &str = "feed_head";
 /// a person's level over mgmt. Without it K2 sets the level on the person's
 /// own held session.
 pub const PERSON_CHANNEL_NOTIFY: &str = "person_channel_notify";
-/// Sew 0.11.0 (S-2): feed kinds `all` (channel messages at level All
-/// messages) and `keyword`. Without it All messages is saved in Sew but
-/// pushes come for @mentions only.
+/// Sew 0.11.0: the person feed's second version, one flag for all of it:
+/// the kinds `message` (a channel at level All messages), `keyword`, `read`
+/// (with `thread_root_id`, a thread's read) and `call_ring_stopped`, and
+/// `from_external_id` / `thread_root_id` on items. Without it All messages
+/// is saved in Sew but pushes come for @mentions only. K2 acts on each kind
+/// and field whenever it comes (additive).
 pub const FEED_ALL_MESSAGES: &str = "feed_all_messages";
-/// Sew 0.11.0 (S-3): the feed kind `read` (`channel_id` + read-up-to
-/// `message_id`). K2 acts on the kind whenever it comes (additive).
-pub const FEED_READ_MARKER: &str = "feed_read_marker";
-/// Sew 0.11.0 (S-4): `from_external_id` on feed items. K2 uses it when an
-/// item carries it, else maps the member id.
-pub const FEED_FROM_EXTERNAL_ID: &str = "feed_from_external_id";
 
 /// Sew 0.10.6's flags exactly as its published x86_64 build reports them
 /// (`sew version --json`, binary sha256 5512be01…5dc4, run on a compute node
@@ -215,8 +212,6 @@ pub struct HomePushFeatures {
     pub feed_head: bool,
     pub person_channel_notify: bool,
     pub feed_all_messages: bool,
-    pub feed_read_marker: bool,
-    pub feed_from_external_id: bool,
 }
 
 impl HomePushFeatures {
@@ -227,8 +222,6 @@ impl HomePushFeatures {
             feed_head: has(FEED_HEAD),
             person_channel_notify: has(PERSON_CHANNEL_NOTIFY),
             feed_all_messages: has(FEED_ALL_MESSAGES),
-            feed_read_marker: has(FEED_READ_MARKER),
-            feed_from_external_id: has(FEED_FROM_EXTERNAL_ID),
         }
     }
 

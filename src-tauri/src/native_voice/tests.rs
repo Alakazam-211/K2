@@ -422,7 +422,7 @@ fn a_refusal_that_quotes_a_token_loses_its_detail() {
 
 #[test]
 fn the_join_body_asks_for_the_credential_and_sends_no_e2ee() {
-    let req = |muted, deafened, rejoin| JoinRequest { target: "h".into(), room: "room-2".into(), muted, deafened, rejoin, recording_notice: None };
+    let req = |muted, deafened, rejoin| JoinRequest::new("h", "room-2").with_muted(muted).with_deafened(deafened).with_rejoin_opt(rejoin);
     assert_eq!(join_body(&req(false, false, None)), json!({"room": "room-2", "join": {"call_credential": true, "self_mute": false, "self_deaf": false}}));
     assert_eq!(join_body(&req(false, true, None)), json!({"room": "room-2", "join": {"call_credential": true, "self_mute": true, "self_deaf": true}}));
     for r in [RejoinReason::AdmitLost, RejoinReason::CredentialExpired] {
@@ -435,7 +435,7 @@ fn the_join_body_asks_for_the_credential_and_sends_no_e2ee() {
 /// the daemon passes it through unchanged.
 #[test]
 fn a_dm_call_joins_by_dm_and_says_how_its_answer_is_read() {
-    let req = JoinRequest { target: "h".into(), room: "dm:900".into(), muted: true, deafened: false, rejoin: None, recording_notice: None };
+    let req = JoinRequest::new("h", "dm:900").with_muted(true);
     assert_eq!(
         join_body(&req),
         json!({"dm": "900", "join": {"call_credential": true, "self_mute": true, "self_deaf": false}, "callAnswer": true})
@@ -477,14 +477,12 @@ fn a_dm_call_answer_passed_through_unchanged_is_read() {
 /// no answer sends no key.
 #[test]
 fn the_join_body_carries_the_recording_notice_only_when_there_is_one() {
-    let without = JoinRequest { target: "h".into(), room: "room-2".into(), muted: false, deafened: false, rejoin: None, recording_notice: None };
+    let without = JoinRequest::new("h", "room-2");
     assert!(join_body(&without)["join"].get("recording_notice").is_none(), "{}", join_body(&without));
     let notice = json!({"recording_id": "77", "consent": true, "notice_version": 3141});
-    let with = JoinRequest {
-        rejoin: Some(RejoinReason::AdmitLost),
-        recording_notice: Some(serde_json::from_value(notice.clone()).expect("Sew's RecordingNotice")),
-        ..without
-    };
+    let with = without
+        .with_rejoin(RejoinReason::AdmitLost)
+        .with_recording_notice(serde_json::from_value(notice.clone()).expect("Sew's RecordingNotice"));
     assert_eq!(
         join_body(&with),
         json!({"room": "room-2", "join": {"call_credential": true, "self_mute": false, "self_deaf": false, "recording_notice": notice}})
@@ -560,7 +558,7 @@ fn provider_for(base: &str) -> K2Provider<Table> {
 }
 
 fn request(rejoin: Option<RejoinReason>) -> JoinRequest {
-    JoinRequest { target: "host-1".into(), room: "room-1".into(), muted: true, deafened: false, rejoin, recording_notice: None }
+    JoinRequest::new("host-1", "room-1").with_muted(true).with_rejoin_opt(rejoin)
 }
 
 #[tokio::test]
@@ -683,7 +681,7 @@ fn world(p: Arc<dyn JoinProvider>) -> World {
 }
 
 fn join_args() -> JoinArgs {
-    JoinArgs { target: "host-1".into(), room: "room-1".into(), muted: None, deafened: None }
+    JoinArgs::new("host-1", "room-1")
 }
 
 async fn until(what: &str, mut pred: impl FnMut() -> bool) {

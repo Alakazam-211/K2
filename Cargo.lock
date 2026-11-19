@@ -2212,7 +2212,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2577,7 +2577,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4381,7 +4381,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5762,7 +5762,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5810,7 +5810,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.18",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6494,7 +6494,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6939,33 +6939,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pbjson-build"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ed4d5c6ae95e08ac768883c8401cf0e8deb4e6e1d6a4e1fd3d2ec4f0ec63200"
-dependencies = [
- "heck 0.5.0",
- "itertools 0.14.0",
- "prost 0.14.4",
- "prost-types 0.14.4",
-]
-
-[[package]]
-name = "pbjson-types"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a14e2757d877c0f607a82ce1b8560e224370f159d66c5d52eb55ea187ef0350e"
-dependencies = [
- "bytes",
- "chrono",
- "pbjson",
- "pbjson-build",
- "prost 0.14.4",
- "prost-build 0.14.4",
- "serde",
-]
-
-[[package]]
 name = "pbkdf2"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7071,7 +7044,7 @@ dependencies = [
  "glob",
  "itertools 0.10.5",
  "prost 0.13.5",
- "prost-build 0.13.5",
+ "prost-build",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -7679,26 +7652,7 @@ dependencies = [
  "petgraph 0.6.5",
  "prettyplease",
  "prost 0.13.5",
- "prost-types 0.13.5",
- "regex",
- "syn 2.0.117",
- "tempfile",
-]
-
-[[package]]
-name = "prost-build"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
-dependencies = [
- "heck 0.5.0",
- "itertools 0.14.0",
- "log",
- "multimap",
- "petgraph 0.8.3",
- "prettyplease",
- "prost 0.14.4",
- "prost-types 0.14.4",
+ "prost-types",
  "regex",
  "syn 2.0.117",
  "tempfile",
@@ -7737,15 +7691,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
  "prost 0.13.5",
-]
-
-[[package]]
-name = "prost-types"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
-dependencies = [
- "prost 0.14.4",
 ]
 
 [[package]]
@@ -7856,7 +7801,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8507,7 +8452,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8586,7 +8531,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8607,7 +8552,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9118,9 +9063,9 @@ dependencies = [
 
 [[package]]
 name = "sew-call-client"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86bf8b14b05bc2c3e04fe125f5584bf5920c4e27b6205bfe1b063d33b89593ef"
+checksum = "46e3ee4ae26d8ea9dbf2c9d0d741302c5f271ebb9ac9a2166e0ff37c48ef837e"
 dependencies = [
  "bytes",
  "futures-util",
@@ -9142,7 +9087,7 @@ dependencies = [
  "sew-lk-compat",
  "sew-lkproto",
  "sew-noise",
- "sew-proto 0.10.5",
+ "sew-proto 0.11.0",
  "sew-str0m",
  "sha1",
  "thiserror 2.0.18",
@@ -9179,9 +9124,9 @@ dependencies = [
 
 [[package]]
 name = "sew-e2ee"
-version = "0.10.5"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37bb3078101d36bacfa48821a96de2e4b69315ba81ff3f882d485adbc52f26de"
+checksum = "5ec05cd810799b3f75d7e1868aef6494b8543e13eeafbe6afd624feffb5d40d6"
 dependencies = [
  "aes-gcm 0.10.3",
  "ed25519-dalek",
@@ -9195,7 +9140,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-mls-crypto",
- "sew-proto 0.10.5",
+ "sew-proto 0.11.0",
  "sha2 0.10.9",
  "subtle",
  "thiserror 2.0.18",
@@ -9206,9 +9151,9 @@ dependencies = [
 
 [[package]]
 name = "sew-lk-compat"
-version = "0.10.5"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc8d238e88fab24a7eca444575bebe6cd1ac5c489045cc1dd5b6d6a21e5d6da1"
+checksum = "487571332a2f1e5b89fe6e510c5e8f549673ce39b25c213f0ec349725221a961"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -9225,21 +9170,20 @@ dependencies = [
 
 [[package]]
 name = "sew-lkproto"
-version = "0.10.5"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e72b2b17cc36515d3d7e16a3445880128d112dbc65c5b7be6308475869dd4003"
+checksum = "ca4d70da6fc9be12469dffd68d9e9755cce4b4338030f318200c46ee68104456"
 dependencies = [
  "pbjson",
- "pbjson-types",
  "prost 0.14.4",
  "serde",
 ]
 
 [[package]]
 name = "sew-mls-crypto"
-version = "0.10.5"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7677e46770de87a0e589aec376c622b762a43fa5a9f60bd74f22f923f3fae6f8"
+checksum = "7ebf5441e25ab1f7c9224d60884ac3030baad17d71c79b20cc0b95f9fcb67df5"
 dependencies = [
  "aes-gcm 0.10.3",
  "chacha20poly1305 0.10.1",
@@ -9262,9 +9206,9 @@ dependencies = [
 
 [[package]]
 name = "sew-noise"
-version = "0.10.5"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "604c93516c5976a98e9ea47b7491431ab02474b2fb723a41a12cc817f7a4cd5d"
+checksum = "b6f36a86bafb2b5be5e577cac2f036a39d0cb80254c1d349ebfd36a43b9f6e5e"
 dependencies = [
  "nnnoiseless",
  "realfft",
@@ -9283,11 +9227,10 @@ dependencies = [
 
 [[package]]
 name = "sew-proto"
-version = "0.10.5"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e1a29d73dd7209bd61a06a1ef18d4f6a6f7675708687b4581fc45e141c779ce"
+checksum = "2093c9c61671ce45045979fc6f894127c3882f114e8cdc9096b1d5fce3672fce"
 dependencies = [
- "chrono",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -9295,9 +9238,9 @@ dependencies = [
 
 [[package]]
 name = "sew-str0m"
-version = "0.25.5"
+version = "0.25.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94bff30d9f4099611473df4168f8c95095b31e382bd19db61b71276f6cd6b552"
+checksum = "011c4ff154db157e8cad7f7fb25fe979772693ed69664ff76cbc18045c2f78d3"
 dependencies = [
  "arrayvec",
  "base64ct",
@@ -9503,7 +9446,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10279,9 +10222,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-sew-voice"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6cb6618ca76e9708ef488b7c7a04dc4f8bf2ec3a9829bccd7601afdd66375d1"
+checksum = "ab0e8549c67e2e1fb753dfd6d0684564241ecadac6d02e4ca462e44af435d291"
 dependencies = [
  "base64 0.22.1",
  "cpal",
@@ -10289,7 +10232,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-call-client",
- "sew-proto 0.10.5",
+ "sew-proto 0.11.0",
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",
@@ -10467,7 +10410,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10984,7 +10927,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.18",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11106,7 +11049,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11766,7 +11709,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11787,7 +11730,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "raw-window-handle",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "windows-version",
 ]
 

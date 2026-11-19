@@ -110,7 +110,10 @@ parking_lot = "0.12"
 # stepped down from DeepFilterNet3 (step_down_reason, in_grace, …); no Builder change.
 # Sew 0.10.5 (0.8.3): the recording's started_at (RFC 3339) on `recording` and
 # state.recording; the contract files moved from the crate's tests/ to contracts/.
-tauri-plugin-sew-voice = { version = "=0.8.3", optional = true, features = ["video", "dfn3"] }
+# Sew 0.11.0 (0.9.0, with sew-call-client 0.9.0 and the other Sew crates 0.11.0):
+# JoinRequest and JoinArgs are #[non_exhaustive] (constructors in native_voice/tests.rs);
+# recordings carry audio_keep_days.
+tauri-plugin-sew-voice = { version = "=0.9.0", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

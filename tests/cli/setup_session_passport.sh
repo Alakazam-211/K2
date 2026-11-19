@@ -120,12 +120,15 @@ run() { # env words..., then --, then the k2 args
     err="$(cat "$WORK/err")"
     set -e
 }
-# field <name>: that field of every logged request, one per line.
+# field <name> [<path prefix>]: that field of every logged request (or of
+# those whose path starts with the prefix), one per line.
 field() {
     "$PY" -c 'import json, sys
 for line in open(sys.argv[1]):
-    v = json.loads(line).get(sys.argv[2])
-    print(repr(v))' "$LOG_FILE" "$1"
+    r = json.loads(line)
+    if len(sys.argv) > 3 and not r.get("path", "").startswith(sys.argv[3]):
+        continue
+    print(repr(r.get(sys.argv[2])))' "$LOG_FILE" "$@"
 }
 setup_requests() { grep -c '"path": "/cli/first-run/' "$LOG_FILE" || true; }
 owner_never_sent() { # label
@@ -159,7 +162,10 @@ check_sends() { # case label, want auth repr, env words...
         run "$@" -- $args
         assert_eq "$label: $name: exit 0" "$rc" "0"
         assert_eq "$label: $name: one request" "$(setup_requests)" "1"
-        assert_eq "$label: $name: the Bearer header" "$(field auth)" "$want"
+        assert_eq "$label: $name: the Bearer header" "$(field auth /cli/first-run/)" "$want"
+        # A locked tool's session check may probe whoami first (the socket
+        # is missing here): every request carries the same passport.
+        assert_eq "$label: $name: every request's Bearer header" "$(field auth | sort -u)" "$want"
         case "$(field query)" in
             *token*) bad "$label: $name: a credential in the query: $(field query)" ;;
             *) ok "$label: $name: no credential in the query" ;;

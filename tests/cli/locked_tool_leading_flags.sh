@@ -16,7 +16,13 @@
 #      the form without the flag, and no request at all;
 #   3. k2 setup --json chief-of-staff with a passport sends the passport;
 #   4. unlocked forms are unchanged (Open verbs, help, a flag's value that
-#      happens to spell a locked sub-verb).
+#      happens to spell a locked sub-verb);
+#   5. the session-passport check (_cli_check_session_passport) reads the
+#      same tool: every form, with and without the flag, is refused exactly
+#      as a first-word id verb is when the passport is stale (socket gone,
+#      the daemon rejects it: only the whoami probe is sent) and when it
+#      runs under a shared Codex app-server (no request at all). Open forms
+#      get neither check.
 #
 # Never touches the real ~/.k2 (HOME is sandboxed, env -i).
 # bash-only: evals the CLI's tool policy block and reads its table from the bash source.
@@ -168,8 +174,14 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode() if n else ""
         with open(LOG_FILE, "a") as f:
             f.write(json.dumps({"method": method, "path": self.path, "auth": self.headers.get("Authorization"), "body": body}) + "\n")
-        data = b"Made your Chief of Staff: Ada (ada) at /home/me/k2-agents/ada\n"
-        self.send_response(200)
+        # With a `reject` file, whoami answers with the daemon's auth
+        # refusal: the passport names no live session.
+        if self.path.startswith("/cli/whoami") and os.path.exists(os.path.join(os.path.dirname(LOG_FILE), "reject")):
+            data = json.dumps({"error": "Invalid or missing auth token"}).encode()
+            self.send_response(401)
+        else:
+            data = b"Made your Chief of Staff: Ada (ada) at /home/me/k2-agents/ada\n"
+            self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -199,13 +211,15 @@ printf '%s' "$OWNER" >"$WORK/home/.k2/heartbeat.token"
 chmod 600 "$WORK/home/.k2/heartbeat.token"
 printf '%s' "$PORT" >"$WORK/home/.k2/heartbeat.port"
 
+# VIA: words to run the CLI under (empty: run it directly).
+VIA=()
 run() { # env words..., then --, then the k2 args
     local envs=()
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
     : >"$LOG_FILE"
     set +e
-    out="$(cd "$WORK" && env -i PATH="/usr/bin:/bin" HOME="$WORK/home" ${envs[@]+"${envs[@]}"} "$K2_CLI" "$@" 2>"$WORK/err" </dev/null)"
+    out="$(cd "$WORK" && env -i PATH="/usr/bin:/bin" HOME="$WORK/home" ${envs[@]+"${envs[@]}"} ${VIA[@]+"${VIA[@]}"} "$K2_CLI" "$@" 2>"$WORK/err" </dev/null)"
     rc=$?
     err="$(cat "$WORK/err")"
     set -e
@@ -227,11 +241,17 @@ while read -r verb sub tid lk; do
 done <"$WORK/table"
 
 echo "== end to end: k2 setup --json chief-of-staff with a passport =="
+# The session socket is missing, so the passport check probes whoami first
+# (the daemon accepts the passport), then the command's own request.
 run K2_PORT="$PORT" K2_HOOK_SOCK="$WORK/cell.sock" K2_HOOK_TOKEN="$PASSPORT" -- setup --json chief-of-staff --name Ada --about ops --tool claude
 assert_eq "with a passport: exit 0" "$rc" "0"
-assert_eq "with a passport: one request" "$(requests)" "1"
-case "$(cat "$LOG_FILE")" in
-    *"\"auth\": \"Bearer $PASSPORT\""*) ok "with a passport: the passport is sent" ;;
+assert_eq "with a passport: the whoami probe, then one request" "$(requests)" "2"
+case "$(head -1 "$LOG_FILE")" in
+    *'"path": "/cli/whoami"'*"\"auth\": \"Bearer $PASSPORT\""*) ok "with a passport: the probe is whoami with the passport" ;;
+    *) bad "with a passport: the first request is not the whoami probe with the passport: $(head -1 "$LOG_FILE")" ;;
+esac
+case "$(sed -n 2p "$LOG_FILE")" in
+    *'"path": "/cli/first-run/'*"\"auth\": \"Bearer $PASSPORT\""*) ok "with a passport: the passport is sent" ;;
     *) bad "with a passport: not the passport: $(cat "$LOG_FILE")" ;;
 esac
 if grep -Fq -- "$OWNER" "$LOG_FILE"; then bad "with a passport: the owner token was sent"; else ok "with a passport: the owner token never sent"; fi
@@ -243,6 +263,89 @@ case "$(cat "$LOG_FILE")" in
     *"\"auth\": \"Bearer $OWNER\""*) ok "owner: the owner token, as before" ;;
     *) bad "owner: not the owner token: $(cat "$LOG_FILE")" ;;
 esac
+
+# ── 5. The session-passport check reads the same tool ──────────────────
+# The reference is a first-word id verb (`k2 compute`): every form, with and
+# without the flag, must be refused exactly as it is.
+GONE="$WORK/gone.sock"
+STALE=(K2_PORT="$PORT" K2_HOOK_SOCK="$GONE" K2_HOOK_TOKEN="$PASSPORT")
+# Names a shell like Codex's shared app-server and runs k2 as its child
+# (the trailing exit keeps bash from exec'ing k2 in its place).
+cat >"$WORK/codex-shared.sh" <<'SH'
+exec -a "codex app-server --listen unix://" /bin/bash -c '"$0" "$@"; exit $?' "$@"
+SH
+CODEX_VIA=(/bin/bash "$WORK/codex-shared.sh")
+both_forms() { # <verb> <sub or -> sets plain and flagged
+    if [ "$2" = "-" ]; then plain=("$1"); flagged=("$1" --json); else plain=("$1" "$2"); flagged=("$1" --json "$2"); fi
+}
+
+echo "== passport check: a stale passport (socket gone, the daemon rejects it) =="
+touch "$WORK/reject"
+VIA=()
+run "${STALE[@]}" -- compute
+ref_rc="$rc"; ref_err="$err"
+assert_eq "k2 compute: exit 3" "$ref_rc" "3"
+case "$ref_err" in
+    *"credentials are stale"*"$GONE"*) ok "k2 compute: the stale-passport error naming the socket" ;;
+    *) bad "k2 compute: not the stale-passport error: $ref_err" ;;
+esac
+while read -r verb sub tid lk; do
+    both_forms "$verb" "$sub"
+    for form in plain flagged; do
+        if [ "$form" = plain ]; then args=("${plain[@]}"); else args=("${flagged[@]}"); fi
+        run "${STALE[@]}" -- "${args[@]}"
+        label="stale: k2 ${args[*]} ($tid)"
+        assert_eq "$label: exit as k2 compute" "$rc" "$ref_rc"
+        assert_eq "$label: stderr as k2 compute" "$err" "$ref_err"
+        assert_eq "$label: only the whoami probe" "$(requests)" "1"
+        case "$(cat "$LOG_FILE")" in
+            *'"path": "/cli/whoami"'*"\"auth\": \"Bearer $PASSPORT\""*) ok "$label: the probe is whoami with the passport" ;;
+            *) bad "$label: not the whoami probe: $(cat "$LOG_FILE")" ;;
+        esac
+        if grep -Fq -- "$OWNER" "$LOG_FILE"; then bad "$label: the owner token was sent"; else ok "$label: the owner token never sent"; fi
+    done
+done <"$WORK/table"
+
+echo "== passport check: under a shared Codex app-server =="
+rm -f "$WORK/reject"
+SHARED=("${STALE[@]}" CODEX_THREAD_ID="thread-1")
+VIA=("${CODEX_VIA[@]}")
+run "${SHARED[@]}" -- compute
+ref_rc="$rc"; ref_err="$err"
+assert_eq "shared: k2 compute: exit 3" "$ref_rc" "3"
+case "$ref_err" in
+    *"shared Codex app-server started by another session"*) ok "shared: k2 compute: the shared-server error" ;;
+    *) bad "shared: k2 compute: not the shared-server error: $ref_err" ;;
+esac
+while read -r verb sub tid lk; do
+    both_forms "$verb" "$sub"
+    for form in plain flagged; do
+        if [ "$form" = plain ]; then args=("${plain[@]}"); else args=("${flagged[@]}"); fi
+        run "${SHARED[@]}" -- "${args[@]}"
+        label="shared: k2 ${args[*]} ($tid)"
+        assert_eq "$label: exit as k2 compute" "$rc" "$ref_rc"
+        assert_eq "$label: stderr as k2 compute" "$err" "$ref_err"
+        assert_eq "$label: no request" "$(requests)" "0"
+    done
+done <"$WORK/table"
+
+echo "== passport check: Open forms get neither check =="
+# Open forms that send no whoami of their own (`k2 activity` asks whoami for
+# the passport's workspace, so it is not one of them).
+touch "$WORK/reject"
+for form in "setup --json hide" "agent --help team" "organization --help" "help" "whats-new"; do
+    # shellcheck disable=SC2206
+    args=($form)
+    VIA=()
+    run "${STALE[@]}" -- "${args[@]}"
+    case "$err" in *"credentials are stale"*) bad "stale: k2 $form: refused as stale" ;; *) ok "stale: k2 $form: no stale refusal" ;; esac
+    if grep -q '"/cli/whoami' "$LOG_FILE"; then bad "stale: k2 $form: a whoami probe"; else ok "stale: k2 $form: no whoami probe"; fi
+    VIA=("${CODEX_VIA[@]}")
+    run "${STALE[@]}" CODEX_THREAD_ID="thread-1" -- "${args[@]}"
+    case "$err" in *"shared Codex app-server"*) bad "shared: k2 $form: refused as shared" ;; *) ok "shared: k2 $form: no shared-server refusal" ;; esac
+done
+VIA=()
+rm -f "$WORK/reject"
 
 echo
 echo "locked_tool_leading_flags: $pass passed, $fail failed"

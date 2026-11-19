@@ -1086,13 +1086,21 @@ _cli_passport_stale_die() {
 # this session's (shared Codex app-server) or that is dead (socket gone AND
 # the daemon rejects the token). A missing socket alone is not enough — a
 # failed socket bind still serves the scoped token over TCP.
+# The tool is the one the whole command names (_cli_tool_id_for_args, the
+# same as the credential choice), so a tool keyed on a sub-verb (`k2 agent
+# team`, `k2 setup --json chief-of-staff`) gets the check too. Only ever
+# stricter: a verb whose first word alone names an id tool keeps it.
 _cli_check_session_passport() {
     local verb="${1:-}"
     local hook_sock="${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}"
     [ -n "$hook_sock" ] || return 0
     local tool_id mode
-    tool_id="$(_cli_tool_id_for_verb "$verb")"
+    tool_id="$(_cli_tool_id_for_args "$@")"
     mode="$(_cli_tool_default_mode "$tool_id")"
+    if [ "$mode" != "id" ]; then
+        tool_id="$(_cli_tool_id_for_verb "$verb")"
+        mode="$(_cli_tool_default_mode "$tool_id")"
+    fi
     [ "$mode" = "id" ] || return 0
     if _cli_under_shared_codex_server; then
         _cli_passport_stale_die codex_shared "$hook_sock"
@@ -110864,8 +110872,8 @@ cmd_organization() {
 # It reads every argument: a locked tool's name after leading flags
 # (`k2 setup --json chief-of-staff`) is the same locked tool.
 # A passport from a shared Codex app-server or a dead session is refused
-# with a clear error first (never an owner fallback).
-_cli_check_session_passport "${1:-help}"
+# with a clear error first (never an owner fallback), for the same tool.
+_cli_check_session_passport "${1:-help}" "${@:2}"
 _cli_apply_auth_for_verb "${1:-help}" "${@:2}"
 
 # Permission cards (Beta): print the refusal's closing line, if a transport

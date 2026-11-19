@@ -216,10 +216,16 @@ def reads_as_command(line, m, known):
     return False
 
 
+def is_stamp(before, after):
+    """`[k2 ...]` or `[k2]`: a log or stamp prefix, a name that is not the
+    CLI's. `before` and `after` are the text on each side of the word."""
+    return before.endswith("[") and (after.startswith("]") or after.startswith(" "))
+
+
 def classify(line, m, where, known):
     before = line[:m.start()]
     after = line[m.end():]
-    if before.endswith("[") and (after.startswith("]") or after.startswith(" ")):
+    if is_stamp(before, after):
         return "kept", "a [k2 ...] prefix or stamp"
     if where == "comment":
         return "comment", "comment"
@@ -361,7 +367,7 @@ def classify_rust_file(path, known):
         lm = WORD.match(line, col)
         where = ctx[m.start()]
         before, after = line[:col], line[col + 2:]
-        if before.endswith("[") and (after.startswith("]") or after.startswith(" ")):
+        if is_stamp(before, after):
             cls = ("kept", "a [k2 ...] prefix or stamp")
         elif where == "comment":
             cls = ("comment", "comment")

@@ -11,9 +11,10 @@
 #   2. scripts/garden/brand-gate.py, one read of each file for every kind:
 #      - the product's names (K2, K5, the release repo), allowlist
 #        scripts/brand-allowlist.txt. Use k2_core::brand or @/lib/brand.
-#      - the command's name (k2, k5): typed out as a command (cli), a Rust
-#        string that is only the name (value), a brand name built into a
-#        token (glued), allowlist scripts/cli-name-allowlist.txt. Use
+#      - the command's name (k2, k5): typed out as a command (cli), a
+#        string that is only the name in Rust or the renderer (value: each
+#        row says its class, kept or the command), a brand name built into
+#        a token (glued), allowlist scripts/cli-name-allowlist.txt. Use
 #        CLI_NAME or cli_name!().
 #      - the bash CLI's unsure uses of the command name, one ceiling per
 #        reason, scripts/garden/cli-name-unsure-ceilings.txt.

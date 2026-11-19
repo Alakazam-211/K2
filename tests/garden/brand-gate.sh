@@ -133,7 +133,7 @@ case "$1" in
 esac
 SH
 printf 'fn clean() {}\n' > "$C/crates/b/src/lib.rs"
-crun 0 "brand-gate: ok (0 cli, 0 value, 0 glued lines in 0 rows type the command name; 0 value rows unsorted)."
+crun 0 "brand-gate: ok (0 cli, 0 value, 0 glued lines in 0 rows type the command name; 0 value lines are the command)."
 
 # Gate 1, cli. A new command line in a Rust string with no row fails.
 printf 'fn a() -> &'"'"'static str { "run k2 msg <addr>" }\n' > "$C/crates/b/src/lib.rs"
@@ -186,12 +186,18 @@ crun 1 "crates/b/src/lib.rs:1 spells out value and has no value row: use CLI_NAM
 printf 'fn v() -> [&'"'"'static str; 2] { ["k2 ", "k2so"] }\n' > "$C/crates/b/src/lib.rs"
 crun 0 "brand-gate: ok (0 cli, 0 value,"
 printf 'fn v() -> &'"'"'static str { "k5" }\n' > "$C/crates/b/src/lib.rs"
+# B1's seed, `debt: unsorted value`, is refused now: a new exact value
+# needs its class the day it is written. --unsorted still lists such rows
+# (a tree that has some), and prints nothing when there are none.
 rows "1 value crates/b/src/lib.rs debt: unsorted value"
-crun 0 "0 glued lines in 1 rows type the command name; 1 value rows unsorted"
+crun 1 "the value row for crates/b/src/lib.rs: 'debt: unsorted value' is not a reason any more: read who reads each line and give it a class"
 crun 0 "brand-gate: 1 value row(s) unsorted (1 lines)." --unsorted
 crun 0 "1 value crates/b/src/lib.rs" --unsorted
 rows "1 value crates/b/src/lib.rs keeper: stored; the config file's tool key"
-crun 0 "brand-gate: 0 value row(s) unsorted (0 lines)." --unsorted
+crun 0 "0 glued lines in 1 rows type the command name; 0 value lines are the command"
+out="$(python3 "$GATE" --root "$C" --allowlist "$C/a.txt" --cli-allowlist "$C/c.txt" --unsure-ceilings "$C/u.txt" --list value --unsorted 2>&1)"
+[ -z "$out" ] || { echo "FAIL: --unsorted with none left printed: $out" >&2; exit 1; }
+pass=$((pass + 1))
 mv "$C/crates/b/src/lib.rs" "$C/crates/b/src/lib_test.rs"
 rows
 crun 0 "brand-gate: ok (0 cli, 0 value,"
@@ -238,6 +244,7 @@ crun 0 "2 crates/b/src/lib.rs B3" --list value --debt
 crun 0 "1 src/renderer/lib/v.ts B9" --list value --debt
 crun 0 "brand-gate: 3 value lines are the command (B3 2, B9 1)." --list value --debt
 crun 1 "--debt goes with --list value" --list cli --debt
+crun 0 "0 glued lines in 2 rows type the command name; 3 value lines are the command)."
 rm "$C/src/renderer/lib/v.ts"
 rows
 crun 0 "brand-gate: 0 value lines are the command." --list value --debt
@@ -359,7 +366,7 @@ crun 0 "brand-gate: c.txt tightened: 3 lines in 3 rows." --tighten
 want="$(printf '# the command name\n\n1 cli crates/b/src/lib.rs debt: the command name typed out; use CLI_NAME or cli_name!()\n1 value crates/b/src/lib.rs keeper: stored; the session file'"'"'s tool key\n1 glued crates/b/src/lib.rs keeper: the session cookie'"'"'s reader')"
 [ "$(cat "$C/c.txt")" = "$want" ] || { echo "FAIL: tightened cli allowlist: $(cat "$C/c.txt")" >&2; exit 1; }
 pass=$((pass + 1))
-crun 0 "brand-gate: ok (1 cli, 1 value, 1 glued lines in 3 rows type the command name; 0 value rows unsorted)."
+crun 0 "brand-gate: ok (1 cli, 1 value, 1 glued lines in 3 rows type the command name; 0 value lines are the command)."
 
 # The real tree passes, through the script CI runs.
 out="$(bash "$HERE/scripts/brand-gate.sh" 2>&1)" || { echo "FAIL: the real tree: $out" >&2; exit 1; }

@@ -10,8 +10,9 @@ renderer code.
     python3 scripts/garden/brand-gate.py --list value --debt
                                                      print the `value` rows that are
                                                      the command, and their total
-    python3 scripts/garden/brand-gate.py --unsorted  print the `value` rows not yet
-                                                     sorted, and their total
+    python3 scripts/garden/brand-gate.py --unsorted  print the `value` rows still
+                                                     `debt: unsorted value` (none
+                                                     after B2; the check refuses one)
 
 The product's names live in one module each: crates/k2-client/src/brand.rs
 (`k2_core::brand`, with `product_name!()` / `cli_name!()` for `concat!`) and
@@ -52,9 +53,12 @@ the word scripts/garden/cli-name-flip.py matches, either digit):
          file's name on disk), which a later step moves to CLI_NAME. A row
          is `keeper: <class>[+<class>]; <who reads it>`, or
          `debt: command (<n> lines); <step>` with `; keeps: <class>; <who
-         reads it>` after it when the file has other lines too, or
-         `debt: unsorted value` until someone reads it. --unsorted prints
-         the rows still unsorted; --list value --debt the command's lines.
+         reads it>` after it when the file has other lines too. A new
+         exact value needs its class the day it is written: `debt:
+         unsorted value`, B1's seed, is refused. The rule: a kept value
+         never becomes CLI_NAME; a brand does not rename it. The line by
+         line record is the gardener's cli-name-values.md. --list value
+         --debt prints the command's lines and their total.
   glued  a brand name built into a token, with no space between: Rust
          `{CLI_NAME}`, `{PRODUCT_NAME}`, `{BRAND_ID}` in a string, or
          `cli_name!()`, `product_name!()` beside a literal in a `concat!`;
@@ -401,12 +405,16 @@ VALUE_FORMS = ("'keeper: <class>[+<class>]; <who reads it>' or "
                "'debt: command (<n> lines); <step>[; keeps: <class>[+<class>]; <who reads it>]'")
 
 
-def value_reason_error(lines, reason):
+def value_reason_error(lines, reason, allow_unsorted=False):
     """What is wrong with a `value` row's reason, or None. The classes:
     stored, wire, outside, inert (kept in every brand), and command (a
-    debt that names the step that moves it)."""
+    debt that names the step that moves it). `debt: unsorted value` was the
+    seed until every line had a class; only --unsorted still reads it."""
     if reason == VALUE_UNSORTED:
-        return None
+        if allow_unsorted:
+            return None
+        return (f"'{VALUE_UNSORTED}' is not a reason any more: read who reads each line and give it a class, "
+                f"{VALUE_FORMS}")
     m = VALUE_KEEPER.match(reason)
     if reason.startswith("keeper: "):
         if not m:
@@ -440,7 +448,7 @@ def classes_error(classes):
     return None
 
 
-def read_allowlist(path, kinds):
+def read_allowlist(path, kinds, allow_unsorted=False):
     head, rows = [], {}
     with open(path, encoding="utf-8") as f:
         for n, raw in enumerate(f.read().split("\n"), 1):
@@ -457,7 +465,7 @@ def read_allowlist(path, kinds):
             if parts[1] == "glued" and not parts[3].startswith("keeper: "):
                 sys.exit(f"brand-gate: {path} line {n}: a glued row is always 'keeper: <who reads this name>', got '{parts[3]}'")
             if parts[1] == "value":
-                why = value_reason_error(int(parts[0]), parts[3])
+                why = value_reason_error(int(parts[0]), parts[3], allow_unsorted)
                 if why:
                     sys.exit(f"brand-gate: {path} line {n}: the value row for {parts[2]}: {why}")
             key = (parts[1], parts[2])
@@ -542,11 +550,14 @@ def main(argv):
     ceilings = ceilings or os.path.join(root, "scripts", "garden", "cli-name-unsure-ceilings.txt")
 
     if mode == "unsorted":
-        _, rows = read_allowlist(cli_allowlist, CLI_KINDS)
-        left = sorted((k, v) for k, v in rows.items() if k[0] == "value" and v[1].startswith("debt: unsorted"))
+        # Read as the seed allowed, so a tree that still has some can list
+        # them; the check refuses them. Prints nothing when none are left.
+        _, rows = read_allowlist(cli_allowlist, CLI_KINDS, allow_unsorted=True)
+        left = sorted((k, v) for k, v in rows.items() if k[0] == "value" and v[1] == VALUE_UNSORTED)
         for (kind, rel), (n, _) in left:
             print(f"{n} value {rel}")
-        print(f"brand-gate: {len(left)} value row(s) unsorted ({sum(n for _, (n, _) in left)} lines).")
+        if left:
+            print(f"brand-gate: {len(left)} value row(s) unsorted ({sum(n for _, (n, _) in left)} lines).")
         return 0
 
     if debt:
@@ -630,9 +641,9 @@ def main(argv):
         return sum(len(v) for (k, _), v in found.items() if k == kind)
 
     brand_mine, cli_mine = results[0][4], results[1][4]
-    unsorted = sum(1 for k, v in results[1][3].items() if k[0] == "value" and v[1].startswith("debt: unsorted"))
+    command = sum(int(m.group(1)) for k, v in results[1][3].items() if k[0] == "value" for m in [VALUE_DEBT.match(v[1])] if m)
     print("brand-gate: ok (" + ", ".join(f"{total(k)} {k}" for k in BRAND_KINDS) + f" lines in {len(brand_mine)} rows still spell a name out).")
-    print("brand-gate: ok (" + ", ".join(f"{total(k)} {k}" for k in CLI_KINDS) + f" lines in {len(cli_mine)} rows type the command name; {unsorted} value rows unsorted).")
+    print("brand-gate: ok (" + ", ".join(f"{total(k)} {k}" for k in CLI_KINDS) + f" lines in {len(cli_mine)} rows type the command name; {command} value lines are the command).")
     print("brand-gate: ok (unsure in the CLI's parts: " + (", ".join(f"{unsure[r]} {r}" for r in sorted(unsure, key=lambda r: (-unsure[r], r))) or "none") + ").")
     return 0
 

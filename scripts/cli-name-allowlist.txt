@@ -7,13 +7,21 @@
 # with --tighten; the steps that rewrite the text do that in every commit.
 #
 # Kinds: cli (the command name typed out: a verb, a flag or a placeholder
-# after it), value (Rust: a string that is exactly "k2" or "k5"), glued (a
-# brand name built into a token: a header, a key, a path, a prefix).
+# after it), value (a string that is exactly "k2" or "k5": a Rust literal,
+# or '...', "..." or `...` on a renderer code line), glued (a brand name
+# built into a token: a header, a key, a path, a prefix).
 # Reasons: `keeper:` stays on purpose (who reads it); `debt:` should move to
-# the brand module. A value row says `debt: unsorted value` until someone
-# reads it and says who reads it, or moves it to CLI_NAME
-# (scripts/garden/brand-gate.py --unsorted lists those left). A glued row is
-# always `keeper:`.
+# the brand module. A glued row is always `keeper:`.
+# A value row says the class of its lines:
+#   keeper: <class>[+<class>]; <who reads it>
+#   debt: command (<n> lines); <step>[; keeps: <class>; <who reads it>]
+# Kept in every brand: stored (on this machine's disk or database, read back
+# by our own code), wire (another program of ours reads it: another server,
+# the app, an App, the CLI's JSON), outside (a program that is not ours
+# holds it), inert (no reader cares). command: the command a person or agent
+# types, or its file's name on disk; the step named moves it to CLI_NAME
+# (--list value --debt prints them and their total).
+# The rule: a kept value never becomes CLI_NAME; a brand does not rename it.
 # These rows are kept apart from scripts/brand-allowlist.txt (the product's
 # names) so the commits that lower them stay apart too.
 

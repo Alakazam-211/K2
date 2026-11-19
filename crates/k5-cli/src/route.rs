@@ -240,7 +240,16 @@ pub static TABLE: &[Noun] = &[
     bash(&["remote-session"]),
     bash(&["zen"]),
     bash(&["wiki"]),
-    bash(&["connect"]),
+    // Only `status`; `login`, `logout`, the old publish words and
+    // `connect` alone are the shell's.
+    Noun {
+        words: &["connect"],
+        owner: Owner::Bash,
+        verbs: &[Verb {
+            words: &["status"],
+            owner: Owner::Native,
+        }],
+    },
     bash(&["skills"]),
     bash(&["app-update"]),
     // Each form behind its own switch (`families::update`): a form whose

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.1.12: pairs with kit v0.23.0
+
+**Requires `k2-mpc-base` v0.23.0**. PSD and PSB files behave as in v0.1.11.
+
+- Pairs with kit v0.23.0. It changes no pack API but one: a blob pack's `merge3_known` is also asked
+  for a revert (`SaveBase::Revert`, base the version taken away, ours head, theirs the version
+  before it; the default calls `merge3_bytes`). Its other changes are the host's (undo, redo and
+  revert on a blob doc, a batch of verbs, a blob verb that plans with no lease, holds that bind an
+  agent's whole-file write, the store's cache at 64 MiB, grouped commits as an opt-in) and the
+  native engine's (off).
+- On a PSD or PSB file, `undo`, `redo` and `revert` are refused with `MPC-E730`
+  `revert_unsupported` (this pack has no merge); the next step is `restore`.
+- `crates/psd/Cargo.toml`'s kit comment names v0.23.0; `Cargo.lock` and `fuzz/Cargo.lock`:
+  k2-mpc-base 0.23.0 and the crate version 0.1.12. As for v0.1.11, the tag is a cut commit that
+  leaves out `fuzz/` and `scripts/oracle/`.
+
 ## v0.1.11: pairs with kit v0.22.0
 
 **Requires `k2-mpc-base` v0.22.0**, checked out beside this repo. The crate version is `0.1.11`;

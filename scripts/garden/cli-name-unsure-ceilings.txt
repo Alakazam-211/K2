@@ -1,0 +1,11 @@
+# Ceilings for the command name's `unsure` uses in the bash CLI's parts:
+# `<count> <reason>`, the reason as scripts/garden/cli-name-flip.py --unsure
+# prints it. Checked by scripts/garden/brand-gate.py (scripts/brand-gate.sh
+# runs it). A reason may not go over its ceiling, and a reason with no row
+# may have none. Never raise one by hand: write the line so it is plainly
+# text or plainly code. Lower them with scripts/garden/brand-gate.py --tighten.
+
+101 k2 followed by a word that is not a command
+63 a string that is exactly k2 (a value)
+27 interpreter code, not in a string
+6 k2 as a word in shell code

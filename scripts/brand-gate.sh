@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
-# The brand gate: no NEW hard-coded product name or k2.dev in Rust or
-# renderer code outside the brand and hosts modules.
+# The brand gate: no NEW hard-coded product name, command name or k2.dev in
+# Rust or renderer code outside the brand and hosts modules.
 #
 #   bash scripts/brand-gate.sh
 #
-# Two checks, both ratchets (a file's count may only fall):
+# Two scripts, all ratchets (a count may only fall):
 #   1. k2.dev: scripts/garden/zone-gate.py for Rust and for the renderer,
 #      ceilings in scripts/garden/zone-ceilings*.txt. Use k2_core::hosts or
 #      @/lib/hosts.
-#   2. the product's names (K2, K5, the release repo): scripts/garden/brand-gate.py,
-#      allowlist scripts/brand-allowlist.txt, one reason per row (keeper or
-#      debt). Use k2_core::brand or @/lib/brand.
+#   2. scripts/garden/brand-gate.py, one read of each file for every kind:
+#      - the product's names (K2, K5, the release repo), allowlist
+#        scripts/brand-allowlist.txt. Use k2_core::brand or @/lib/brand.
+#      - the command's name (k2, k5): typed out as a command (cli), a Rust
+#        string that is only the name (value), a brand name built into a
+#        token (glued), allowlist scripts/cli-name-allowlist.txt. Use
+#        CLI_NAME or cli_name!().
+#      - the bash CLI's unsure uses of the command name, one ceiling per
+#        reason, scripts/garden/cli-name-unsure-ceilings.txt.
+#      Every allowlist row has a reason (keeper or debt).
 # Run in CI by .github/workflows/checks.yml and scripts/ci/checks.sh.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"

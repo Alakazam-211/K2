@@ -162,9 +162,10 @@ jobs:
       - name: k2-home gate's .k2 half on broken trees
         run: bash tests/garden/k2-home-dot-gate.sh
 
-      # k2.dev (the zone gate, Rust and renderer) and the product's names
-      # (K2, K5, the release repo) outside the brand and hosts modules.
-      - name: Brand gate (no new hard-coded product name or k2.dev)
+      # k2.dev (the zone gate, Rust and renderer), the product's names
+      # (K2, K5, the release repo) and the command's name (k2, k5) outside
+      # the brand and hosts modules.
+      - name: Brand gate (no new hard-coded product name, command name or k2.dev)
         run: bash scripts/brand-gate.sh
 
       - name: Zone gate on broken trees

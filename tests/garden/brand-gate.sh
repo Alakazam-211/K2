@@ -12,7 +12,7 @@ pass=0
 # run <want exit> <want text> <args...>: the exit code and the text must both match.
 run() {
     local want="$1" text="$2" out code; shift 2
-    set +e; out="$(python3 "$GATE" --root "$T" --allowlist "$T/a.txt" "$@" 2>&1)"; code=$?; set -e
+    set +e; out="$(python3 "$GATE" --root "$T" --allowlist "$T/a.txt" --cli-allowlist "$T/c.txt" --unsure-ceilings "$T/u.txt" "$@" 2>&1)"; code=$?; set -e
     if [ "$code" != "$want" ]; then echo "FAIL: exit $code, wanted $want: $out" >&2; exit 1; fi
     case "$out" in *"$text"*) ;; *) echo "FAIL: output lacks '$text': $out" >&2; exit 1 ;; esac
     pass=$((pass + 1))
@@ -20,13 +20,15 @@ run() {
 # lacks <text> <args...>: the output must not have the text.
 lacks() {
     local text="$1" out; shift
-    out="$(python3 "$GATE" --root "$T" --allowlist "$T/a.txt" "$@" 2>&1 || true)"
+    out="$(python3 "$GATE" --root "$T" --allowlist "$T/a.txt" --cli-allowlist "$T/c.txt" --unsure-ceilings "$T/u.txt" "$@" 2>&1 || true)"
     case "$out" in *"$text"*) echo "FAIL: output has '$text': $out" >&2; exit 1 ;; esac
     pass=$((pass + 1))
 }
 
 mkdir -p "$T/crates/a/src" "$T/crates/a/tests" "$T/crates/k2-client/src" "$T/src-tauri/src" "$T/src/renderer/lib"
 printf '# a comment\n\n2 K2 crates/a/src/old.rs debt: copy\n1 K5 crates/a/src/old.rs keeper: the K5 Space\n' > "$T/a.txt"
+printf '# the command name\n' > "$T/c.txt"
+printf '# unsure ceilings\n' > "$T/u.txt"
 cat > "$T/crates/a/src/old.rs" <<'RS'
 // K2 in a comment is not counted
 /// nor in a doc comment: K2 Connect
@@ -95,10 +97,204 @@ run 1 "want '<lines> <K2|K5|repo> <path> <keeper|debt>: <reason>'"
 # --tighten lowers a row to today's count, drops one at zero, keeps reasons.
 printf '# head\n\n5 K2 crates/a/src/old.rs debt: copy\n1 K5 crates/a/src/old.rs keeper: the K5 Space\n3 repo crates/a/src/gone.rs debt: gone\n' > "$T/a.txt"
 run 0 "row(s) are above today's count"
-run 0 "brand-gate: allowlist tightened: 3 lines in 2 rows." --tighten
+run 0 "brand-gate: a.txt tightened: 3 lines in 2 rows." --tighten
 want="$(printf '# head\n\n2 K2 crates/a/src/old.rs debt: copy\n1 K5 crates/a/src/old.rs keeper: the K5 Space')"
 [ "$(cat "$T/a.txt")" = "$want" ] || { echo "FAIL: tightened allowlist: $(cat "$T/a.txt")" >&2; exit 1; }
 pass=$((pass + 1))
+
+# ── The command's name: the kinds cli, value and glued, and the unsure
+# ceilings of the bash CLI's parts, on a second small tree. ──────────────
+C="$T/cmd"
+# crun / clacks: as run / lacks, on this tree and its three files.
+crun() {
+    local want="$1" text="$2" out code; shift 2
+    set +e; out="$(python3 "$GATE" --root "$C" --allowlist "$C/a.txt" --cli-allowlist "$C/c.txt" --unsure-ceilings "$C/u.txt" "$@" 2>&1)"; code=$?; set -e
+    if [ "$code" != "$want" ]; then echo "FAIL: exit $code, wanted $want: $out" >&2; exit 1; fi
+    case "$out" in *"$text"*) ;; *) echo "FAIL: output lacks '$text': $out" >&2; exit 1 ;; esac
+    pass=$((pass + 1))
+}
+clacks() {
+    local text="$1" out; shift
+    out="$(python3 "$GATE" --root "$C" --allowlist "$C/a.txt" --cli-allowlist "$C/c.txt" --unsure-ceilings "$C/u.txt" "$@" 2>&1 || true)"
+    case "$out" in *"$text"*) echo "FAIL: output has '$text': $out" >&2; exit 1 ;; esac
+    pass=$((pass + 1))
+}
+# rows <c.txt rows...>: the cli allowlist, after its header.
+rows() { { printf '# the command name\n\n'; for r in "$@"; do printf '%s\n' "$r"; done; } > "$C/c.txt"; }
+mkdir -p "$C/cli/src" "$C/crates/b/src" "$C/crates/k2-brand/src" "$C/src/renderer/lib"
+printf '# product names\n' > "$C/a.txt"
+printf '# unsure ceilings\n' > "$C/u.txt"
+rows
+# The CLI's verbs come from its router, as the flip reads them.
+cat > "$C/cli/src/router.sh" <<'SH'
+case "$1" in
+    msg|send) cmd_msg "$@" ;;
+    inbox|mail|study|app|sidecar) cmd_other "$@" ;;
+esac
+SH
+printf 'fn clean() {}\n' > "$C/crates/b/src/lib.rs"
+crun 0 "brand-gate: ok (0 cli, 0 value, 0 glued lines in 0 rows type the command name; 0 value rows unsorted)."
+
+# Gate 1, cli. A new command line in a Rust string with no row fails.
+printf 'fn a() -> &'"'"'static str { "run k2 msg <addr>" }\n' > "$C/crates/b/src/lib.rs"
+crun 1 "crates/b/src/lib.rs:1 spells out cli and has no cli row: use CLI_NAME or cli_name!()"
+# At its row it passes; one more line fails; one line fewer passes.
+rows "1 cli crates/b/src/lib.rs debt: the command name typed out; use CLI_NAME or cli_name!()"
+crun 0 "brand-gate: ok (1 cli, 0 value, 0 glued lines in 1 rows"
+printf 'fn b() -> String { format!("then k2 msg {}", 1) }\n' >> "$C/crates/b/src/lib.rs"
+crun 1 "crates/b/src/lib.rs has 2 cli lines, its row allows 1: use CLI_NAME or cli_name!()"
+printf 'fn b() -> String { format!("then {}", 1) }\n' > "$C/crates/b/src/lib.rs"
+crun 0 "row(s) are above today's count in c.txt"
+# A line with two uses is one line.
+printf 'fn a() -> &'"'"'static str { "k2 msg a, or k2 inbox read" }\n' > "$C/crates/b/src/lib.rs"
+crun 0 "brand-gate: ok (1 cli,"
+# A comment, a test module, a test file, the brand crate: not counted.
+cat > "$C/crates/b/src/lib.rs" <<'RS'
+// run k2 msg <addr> in a comment
+fn a() -> u8 { 1 } // run k2 msg <addr> after code
+/// run k2 msg <addr> in a doc comment
+/* run k2 msg <addr> in a block comment */
+fn b() -> [&'static str; 5] { ["open k2.dev", "K2_PORT msg", "~/.k2 msg", "k2-daemon msg", "[k2 sidecar] up"] }
+#[cfg(test)]
+mod tests {
+    fn t() -> &'static str { "run k2 msg <addr>" }
+}
+RS
+printf 'fn t() -> &'"'"'static str { "run k2 msg <addr>" }\n' > "$C/crates/b/src/foo_tests.rs"
+printf 'pub const L: &str = "run k2 msg <addr>";\n' > "$C/crates/k2-brand/src/lib.rs"
+rows
+crun 0 "brand-gate: ok (0 cli, 0 value, 0 glued lines in 0 rows"
+clacks "lib.rs" --list
+clacks "foo_tests.rs" --list
+# The same words in a Rust string are counted: the [k2 ...] stamp only is kept.
+printf 'fn c() -> &'"'"'static str { "[k2 sidecar] up; k2 sidecar list" }\n' > "$C/crates/b/src/lib.rs"
+crun 0 "cli crates/b/src/lib.rs:1: fn c()" --list cli
+# k5 is the command's name too.
+printf 'fn k() -> &'"'"'static str { "ask with: k5 msg <addr>" }\n' > "$C/crates/b/src/lib.rs"
+crun 1 "crates/b/src/lib.rs:1 spells out cli and has no cli row"
+printf 'fn clean() {}\n' > "$C/crates/b/src/lib.rs"
+# The renderer: any code line, not a test file.
+printf 'export const open = (id: string) => `Open: k2 inbox read ${id}`\n' > "$C/src/renderer/lib/x.ts"
+crun 1 "src/renderer/lib/x.ts:1 spells out cli and has no cli row"
+mv "$C/src/renderer/lib/x.ts" "$C/src/renderer/lib/x.test.tsx"
+crun 0 "brand-gate: ok (0 cli,"
+rm "$C/src/renderer/lib/x.test.tsx"
+
+# Gate 2, value: a Rust string that is exactly the name.
+printf 'fn v() -> &'"'"'static str { "k2" }\n' > "$C/crates/b/src/lib.rs"
+crun 1 "crates/b/src/lib.rs:1 spells out value and has no value row: use CLI_NAME, or add a keeper: row"
+printf 'fn v() -> [&'"'"'static str; 2] { ["k2 ", "k2so"] }\n' > "$C/crates/b/src/lib.rs"
+crun 0 "brand-gate: ok (0 cli, 0 value,"
+printf 'fn v() -> &'"'"'static str { "k5" }\n' > "$C/crates/b/src/lib.rs"
+rows "1 value crates/b/src/lib.rs debt: unsorted value"
+crun 0 "0 glued lines in 1 rows type the command name; 1 value rows unsorted"
+crun 0 "brand-gate: 1 value row(s) unsorted (1 lines)." --unsorted
+crun 0 "1 value crates/b/src/lib.rs" --unsorted
+rows "1 value crates/b/src/lib.rs keeper: the config file's tool key"
+crun 0 "brand-gate: 0 value row(s) unsorted (0 lines)." --unsorted
+mv "$C/crates/b/src/lib.rs" "$C/crates/b/src/lib_test.rs"
+rows
+crun 0 "brand-gate: ok (0 cli, 0 value,"
+mv "$C/crates/b/src/lib_test.rs" "$C/crates/b/src/lib.rs"
+rows "1 value crates/b/src/lib.rs because"
+crun 1 "the reason must start 'keeper: ' or 'debt: '"
+rows "1 K2 crates/b/src/lib.rs debt: x"
+crun 1 "want '<lines> <cli|value|glued> <path> <keeper|debt>: <reason>'"
+printf 'fn clean() {}\n' > "$C/crates/b/src/lib.rs"
+rows
+
+# Gate 4, glued: a brand name built into a token fails with no row and
+# passes with a keeper row.
+glued() {
+    local file="$1" body="$2"
+    printf '%s\n' "$body" > "$C/$file"
+    crun 1 "$file:1 spells out glued and has no glued row"
+    rows "1 glued $file keeper: the other side's header parser"
+    crun 0 "0 value, 1 glued lines in 1 rows"
+    rm "$C/$file"; rows
+}
+glued crates/b/src/g.rs 'fn g() -> String { format!("X-{PRODUCT_NAME}-Sig") }'
+glued crates/b/src/g.rs 'fn g() -> String { format!("{CLI_NAME}_session") }'
+glued crates/b/src/g.rs 'fn g() -> String { format!("{BRAND_ID}.json") }'
+glued crates/b/src/g.rs 'fn g() -> String { format!("{CLI_NAME}:{id}") }'
+glued crates/b/src/g.rs 'const P: &str = concat!(cli_name!(), "skn_");'
+glued crates/b/src/g.rs 'const P: &str = concat!("https://x/", product_name!());'
+glued src/renderer/lib/g.ts 'export const bin = `${CLI_NAME}-cli`'
+# Prose beside the name is not glued.
+cat > "$C/crates/b/src/g.rs" <<'RS'
+fn p() -> Vec<String> { vec![format!("run {CLI_NAME} app list"), format!("Use {CLI_NAME}."), format!("{CLI_NAME}: no such command"), format!("in {PRODUCT_NAME}, ok")] }
+const S: &str = concat!("see `", cli_name!(), " study`");
+const T: &str = concat!("Nobody saves a drawing whole in ", product_name!(), ": a .dxf changes");
+const U: &str = concat!("run ", cli_name!(), "\n");
+RS
+printf 'export const t = `Run ${CLI_NAME} study, in ${PRODUCT_NAME}.`\n' > "$C/src/renderer/lib/g.ts"
+crun 0 "0 value, 0 glued lines in 0 rows"
+rm "$C/crates/b/src/g.rs" "$C/src/renderer/lib/g.ts"
+rows "1 glued crates/b/src/lib.rs debt: should move"
+crun 1 "a glued row is always 'keeper: <who reads this name>'"
+rows
+
+# Gate 3: the unsure uses of the CLI's parts, one ceiling per reason.
+cat > "$C/cli/src/a.sh" <<'SH'
+cmd_a() {
+    MODE="k2"
+    OTHER="k2"
+    bin="$(command -v k2 || true)"
+}
+SH
+crun 1 "2 unsure uses of the command name in the CLI's parts (a string that is exactly k2 (a value)), the ceiling is 0"
+printf '# unsure ceilings\n\n2 a string that is exactly k2 (a value)\n1 k2 as a word in shell code\n' > "$C/u.txt"
+crun 0 "unsure in the CLI's parts: 2 a string that is exactly k2 (a value), 1 k2 as a word in shell code)"
+cat > "$C/cli/src/a.sh" <<'SH'
+cmd_a() {
+    MODE="k2"
+    OTHER="k2"
+    bin="$(command -v k2 || true)"
+    THIRD="k2"
+}
+SH
+crun 1 "3 unsure uses of the command name in the CLI's parts (a string that is exactly k2 (a value)), the ceiling is 2"
+# --tighten never raises a ceiling, and leaves the file as it was.
+cp "$C/u.txt" "$C/u.before"
+crun 1 "its ceiling is 2; --tighten never raises one" --tighten
+cmp -s "$C/u.txt" "$C/u.before" || { echo "FAIL: --tighten changed the ceilings on a failure" >&2; exit 1; }
+pass=$((pass + 1))
+cat > "$C/cli/src/a.sh" <<'SH'
+cmd_a() {
+    MODE="k2"
+    bin="$(command -v k2 || true)"
+}
+SH
+crun 0 "brand-gate: 1 unsure ceiling(s) are above today's count"
+crun 0 "brand-gate: u.txt tightened: 2 unsure uses for 2 reasons." --tighten
+want="$(printf '# unsure ceilings\n\n1 a string that is exactly k2 (a value)\n1 k2 as a word in shell code')"
+[ "$(cat "$C/u.txt")" = "$want" ] || { echo "FAIL: tightened ceilings: $(cat "$C/u.txt")" >&2; exit 1; }
+pass=$((pass + 1))
+printf '# unsure ceilings\n\n1 a string that is exactly k2 (a value)\nx k2 as a word in shell code\n' > "$C/u.txt"
+crun 1 "want '<count> <reason>'"
+rm "$C/cli/src/a.sh"
+printf '# unsure ceilings\n' > "$C/u.txt"
+
+# All kinds: --tighten lowers rows to today's counts, drops rows at zero and
+# keeps reasons; --list KIND prints every counted line.
+cat > "$C/crates/b/src/lib.rs" <<'RS'
+fn a() -> &'static str { "run k2 msg <addr>" }
+fn v() -> &'static str { "k2" }
+fn g() -> String { format!("{CLI_NAME}_session") }
+RS
+rows "5 cli crates/b/src/lib.rs debt: the command name typed out; use CLI_NAME or cli_name!()" \
+     "2 value crates/b/src/lib.rs keeper: the session file's tool key" \
+     "1 glued crates/b/src/lib.rs keeper: the session cookie's reader" \
+     "3 cli crates/b/src/gone.rs debt: gone"
+crun 0 "cli crates/b/src/lib.rs:1: fn a()" --list cli
+crun 0 "value crates/b/src/lib.rs:2: fn v()" --list value
+crun 0 "glued crates/b/src/lib.rs:3: fn g()" --list glued
+clacks "value crates" --list cli
+crun 0 "brand-gate: c.txt tightened: 3 lines in 3 rows." --tighten
+want="$(printf '# the command name\n\n1 cli crates/b/src/lib.rs debt: the command name typed out; use CLI_NAME or cli_name!()\n1 value crates/b/src/lib.rs keeper: the session file'"'"'s tool key\n1 glued crates/b/src/lib.rs keeper: the session cookie'"'"'s reader')"
+[ "$(cat "$C/c.txt")" = "$want" ] || { echo "FAIL: tightened cli allowlist: $(cat "$C/c.txt")" >&2; exit 1; }
+pass=$((pass + 1))
+crun 0 "brand-gate: ok (1 cli, 1 value, 1 glued lines in 3 rows type the command name; 0 value rows unsorted)."
 
 # The real tree passes, through the script CI runs.
 out="$(bash "$HERE/scripts/brand-gate.sh" 2>&1)" || { echo "FAIL: the real tree: $out" >&2; exit 1; }

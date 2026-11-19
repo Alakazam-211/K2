@@ -361,7 +361,7 @@ def spawn_runs(argv, run_env, extra=(), runs=RUNS, want=None, trace=False):
             err = tempfile.TemporaryFile(dir=work + "/tmp")
             fa = [(os.POSIX_SPAWN_DUP2, devnull, 1), (os.POSIX_SPAWN_DUP2, err.fileno() if trace else devnull, 2), *extra]
             t0 = time.perf_counter_ns()
-            e = dict(run_env, K5_CLI_TRACE_TIMING=str(t0)) if trace else run_env
+            e = dict(run_env, K5_CLI_TRACE_TIMING=str(time.clock_gettime_ns(getattr(time, "CLOCK_UPTIME_RAW", time.CLOCK_MONOTONIC)))) if trace else run_env
             pid = os.posix_spawn(argv[0], argv, e, file_actions=fa)
             _, status = os.waitpid(pid, 0)
             ms = (time.perf_counter_ns() - t0) / 1e6

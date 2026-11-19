@@ -11,9 +11,11 @@
 //! `total`, is the time from [`start`] to the last mark. When the
 //! variable's value is a number, it is read as the spawner's clock in
 //! nanoseconds just before it started this process (`CLOCK_MONOTONIC` on
-//! Linux, `CLOCK_UPTIME_RAW` on macOS: Python's `time.perf_counter_ns()`
-//! on both), and a first line, `spawn to main`, gives the time from then
-//! to [`start`].
+//! Linux, `CLOCK_UPTIME_RAW` on macOS, both counted from boot), and a
+//! first line, `spawn to main`, gives the time from then to [`start`].
+//! A spawner in Python reads it with `time.clock_gettime_ns`, not
+//! `time.perf_counter_ns()`: on macOS Python's perf counter can count
+//! from the interpreter's start, and the line then reads as the uptime.
 //!
 //! It changes nothing else: the lines go to stderr only, and only when
 //! asked for. The variable is the front's own, one name, never read by
@@ -106,7 +108,7 @@ fn spawn_to_now_ms(then: u64) -> Option<f64> {
     Some(d as f64 / 1e6)
 }
 
-/// The clock Python's `time.perf_counter_ns()` reads, in nanoseconds.
+/// The spawner's clock (see the top), in nanoseconds since boot.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn clock_ns() -> Option<u64> {
     #[cfg(target_os = "linux")]

@@ -757,6 +757,171 @@ pub(crate) fn bad_tray_response() -> CliResponse {
     }
 }
 
+/// The largest `fileCount` a peer's inbox answer may give.
+const REPLY_FILE_COUNT_MAX: u64 = 1000;
+
+/// The longest inbox id: its cover `<id>.md` is one file name.
+const INBOX_ID_MAX: usize = 252;
+
+/// The longest path a peer's inbox answer may give.
+const PEER_PATH_MAX: usize = 4096;
+
+/// True when a peer's inbox package id is in the shape the inbox mints
+/// (a title slug, maybe with `-2`: the address-token shape), at most 252
+/// characters.
+pub(crate) fn is_inbox_id(id: &str) -> bool {
+    id.len() <= INBOX_ID_MAX && k2_core::workspace_session_handles::is_address_token(id)
+}
+
+/// The parts of a peer's inbox path after its `inbox/` under a workspace
+/// folder (any of `WORKSPACE_DOT_DIR_NAMES`: `.k5`, `.k2`, `.k2so`):
+/// `None` unless the path is absolute (`/…` or `C:\…`),
+/// printable ASCII, at most 4096 bytes, and has no `.` or `..` part.
+fn peer_inbox_parts(path: &str) -> Option<Vec<&str>> {
+    let b = path.as_bytes();
+    if b.is_empty() || b.len() > PEER_PATH_MAX || !b.iter().all(|&c| c == b' ' || c.is_ascii_graphic()) {
+        return None;
+    }
+    let absolute = b[0] == b'/' || (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'/' | b'\\'));
+    if !absolute {
+        return None;
+    }
+    let parts: Vec<&str> = path.split(['/', '\\']).collect();
+    if parts.iter().any(|p| *p == "." || *p == "..") {
+        return None;
+    }
+    let at = (1..parts.len())
+        .rev()
+        .find(|&i| parts[i] == "inbox" && k2_core::paths::WORKSPACE_DOT_DIR_NAMES.contains(&parts[i - 1]))?;
+    Some(parts[at + 1..].to_vec())
+}
+
+/// True when `path` is the cover of inbox package `id`: `<…>/.k2/inbox/<id>.md`.
+pub(crate) fn is_peer_cover_path(path: &str, id: &str) -> bool {
+    peer_inbox_parts(path).is_some_and(|rest| rest.len() == 1 && rest[0] == format!("{id}.md"))
+}
+
+/// True when `path` is a file of inbox package `id`:
+/// `<…>/.k2/inbox/<id>.files/<plain file name>`.
+pub(crate) fn is_peer_sidecar_path(path: &str, id: &str) -> bool {
+    peer_inbox_parts(path).is_some_and(|rest| {
+        rest.len() == 2 && rest[0] == format!("{id}.files") && is_tray_file_name(rest[1])
+    })
+}
+
+/// True for a session id: 1 to 128 of `A-Z a-z 0-9 - _`.
+fn is_plain_id(s: &str) -> bool {
+    (1..=128).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn log_left_out(peer_fp: &str, key: &str, raw: &serde_json::Value) {
+    k2_core::log_debug!(
+        "[federation/send] peer {peer_fp}'s inbox answer: {key} is not in shape and is left out. Raw: {}",
+        reason_for_log(raw)
+    );
+}
+
+/// A peer's `wake` result rebuilt from the fields in shape: `success` (a
+/// bool, or no `wake` at all), `reason` (a code), `woke`, `wakeMs`,
+/// `attempts` and `targetSessionId` (an id). Free text (`hint`) and any
+/// other field are never passed on.
+fn checked_wake(raw: &serde_json::Value, peer_fp: &str) -> Option<serde_json::Value> {
+    let obj = raw.as_object()?;
+    let success = obj.get("success")?.as_bool()?;
+    let mut out = serde_json::Map::new();
+    out.insert("success".into(), serde_json::Value::Bool(success));
+    for (key, v) in obj {
+        let keep = match key.as_str() {
+            "success" => continue,
+            "hint" if v.is_null() => continue,
+            "reason" => v.is_null() || v.as_str().is_some_and(is_reason_code),
+            "targetSessionId" => v.is_null() || v.as_str().is_some_and(is_plain_id),
+            "woke" => v.is_boolean(),
+            "wakeMs" => v.is_null() || v.is_u64(),
+            "attempts" => v.as_u64().is_some_and(|n| n <= u64::from(u8::MAX)),
+            _ => false,
+        };
+        if keep {
+            out.insert(key.clone(), v.clone());
+        } else {
+            log_left_out(peer_fp, &format!("wake.{key}"), v);
+        }
+    }
+    Some(serde_json::Value::Object(out))
+}
+
+/// The fields of a peer's inbox answer (`mode: "inbox"`) that reach the
+/// caller, each checked by its shape: `id` an inbox id; `filename` its
+/// `<id>.md`; `coverPath` and `sidecarPaths` that package's paths under a
+/// `.k2/inbox/`; `fileCount` a whole number from 1 to 1000; `wake` as
+/// [`checked_wake`]. `title` and `from` are capped and escaped. A field
+/// that fails is left out and its raw value goes to this daemon's log.
+pub(crate) fn checked_inbox_answer(
+    parsed: &serde_json::Value,
+    peer_fp: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::Value;
+    let mut out = serde_json::Map::new();
+    let id = match parsed.get("id") {
+        Some(Value::String(id)) if is_inbox_id(id) => Some(id.as_str()),
+        Some(raw) => {
+            log_left_out(peer_fp, "id", raw);
+            None
+        }
+        None => None,
+    };
+    if let Some(id) = id {
+        out.insert("id".into(), Value::from(id));
+    }
+    let mut keep = |key: &str, ok: bool| {
+        if let Some(raw) = parsed.get(key) {
+            if ok {
+                out.insert(key.into(), raw.clone());
+            } else {
+                log_left_out(peer_fp, key, raw);
+            }
+        }
+    };
+    let str_of = |key: &str| parsed.get(key).and_then(Value::as_str);
+    keep("filename", id.zip(str_of("filename")).is_some_and(|(id, f)| f == format!("{id}.md")));
+    keep("coverPath", id.zip(str_of("coverPath")).is_some_and(|(id, p)| is_peer_cover_path(p, id)));
+    keep(
+        "sidecarPaths",
+        id.zip(parsed.get("sidecarPaths").and_then(Value::as_array)).is_some_and(|(id, paths)| {
+            paths.iter().all(|p| p.as_str().is_some_and(|p| is_peer_sidecar_path(p, id)))
+        }),
+    );
+    keep(
+        "fileCount",
+        parsed.get("fileCount").and_then(Value::as_u64).is_some_and(|n| (1..=REPLY_FILE_COUNT_MAX).contains(&n)),
+    );
+    if let Some(raw) = parsed.get("wake") {
+        match checked_wake(raw, peer_fp) {
+            Some(wake) => {
+                out.insert("wake".into(), wake);
+            }
+            None => log_left_out(peer_fp, "wake", raw),
+        }
+    }
+    for key in ["title", "from"] {
+        match parsed.get(key) {
+            Some(Value::String(text)) => {
+                let clean = escape_capped(text, PEER_TEXT_CAP);
+                if clean != *text {
+                    k2_core::log_debug!(
+                        "[federation/send] peer {peer_fp}'s inbox answer: {key} is capped and escaped. Raw: {}",
+                        reason_for_log(&Value::from(text.as_str()))
+                    );
+                }
+                out.insert(key.into(), Value::from(clean));
+            }
+            Some(raw) => log_left_out(peer_fp, key, raw),
+            None => {}
+        }
+    }
+    out
+}
+
 /// Fail-closed: map each ingress reject to a status. Auth/authorization
 /// failures are 403; malformed/bad-sig are 400; replay/skew/ttl/loop are
 /// 409 (the request was well-formed but not acceptable now).
@@ -1323,10 +1488,9 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 if parsed.get("mode").and_then(|v| v.as_str()) == Some("inbox") {
                     out["ok"] = serde_json::json!(true);
                     out["mode"] = serde_json::json!("inbox");
-                    for key in ["id", "title", "filename", "coverPath", "sidecarPaths", "fileCount", "wake", "from"] {
-                        if let Some(v) = parsed.get(key) {
-                            out[key] = v.clone();
-                        }
+                    // Only fields in shape reach the caller.
+                    for (key, v) in checked_inbox_answer(&parsed, &peer.fingerprint) {
+                        out[key.as_str()] = v;
                     }
                 }
                 CliResponse::ok_json(out.to_string())

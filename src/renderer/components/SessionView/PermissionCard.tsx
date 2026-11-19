@@ -19,6 +19,7 @@
 // the floor and the confirm at the click; nothing here decides who may.
 
 import { SitePinForm } from '@/components/WorkspacePanel/SitePinForm'
+import { PostalPairCodeForm } from '@/components/Settings/sections/PostalPairCodeForm'
 import { GitAccessSetupForm } from './GitAccessSetupForm'
 import { useCallback, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { ConfirmStep } from '@/components/Settings/sections/DataSourceConfirm'
@@ -254,7 +255,7 @@ export function PermissionNoteBox({
   )
 }
 
-type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string } | { kind: 'pin' } | { kind: 'git' }
+type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string } | { kind: 'pin' } | { kind: 'git' } | { kind: 'code' }
 
 type CardConfirmAction =
   | 'app-approve'
@@ -280,6 +281,10 @@ const PUBLISH_PIN_ACTION = 'publish.pin'
 
 /** This server's GitHub credential for compute git access (0.46.10). */
 const GIT_ACCESS_SETUP_ACTION = 'compute.git-access-setup'
+
+/** A Postal friend request (0.46.16); `pairing=code` when it carries a
+ *  pairing code, which K2's own form takes. */
+const POSTAL_PAIR_ACCEPT_ACTION = 'postal.pair.accept'
 
 /** The vault confirm actions a permission card may ask for (§17.4). */
 function confirmActionOf(action: string | undefined): CardConfirmAction | null {
@@ -446,6 +451,41 @@ function AnswerControls({
           <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
         </div>
         <Muted testId="permission-git-note">You enter the key or token in K2's form. The agent never sees it.</Muted>
+        <ErrorLine text={error} />
+      </div>
+    )
+  }
+  // `postal.pair.accept` with a pairing code (0.46.16): Allow opens K2's own
+  // form, which shows this server's code (for the person to read out) and
+  // posts the code from the OTHER side's screen straight to the decide
+  // route as this person; only then is Allow sent. Neither code passes
+  // through the card, the Thread or the agent.
+  const pairing = item.values.find((v) => v.key === 'pairing')?.value
+  if (item.action === POSTAL_PAIR_ACCEPT_ACTION && pairing === 'code' && actions.confirmScope) {
+    const requestId = item.values.find((v) => v.key === 'id')?.value ?? ''
+    const workspace = item.values.find((v) => v.key === 'workspace')?.value ?? ''
+    if (step.kind === 'code') {
+      return (
+        <div className="flex flex-col gap-1">
+          <PostalPairCodeForm
+            scope={actions.confirmScope}
+            workspace={workspace}
+            requestId={requestId}
+            peer="the other agent"
+            onDone={() => void send({ answer: PERMISSION_LABEL.allow })}
+            onCancel={() => setStep({ kind: 'idle' })}
+          />
+          <ErrorLine text={error} />
+        </div>
+      )
+    }
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap gap-1.5">
+          <CardButton label="Type their code" testId="permission-allow" primary disabled={busy} onClick={() => setStep({ kind: 'code' })} />
+          <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
+        </div>
+        <Muted testId="permission-code-note">You read your code to them and type theirs in this form. The agent never sees either.</Muted>
         <ErrorLine text={error} />
       </div>
     )

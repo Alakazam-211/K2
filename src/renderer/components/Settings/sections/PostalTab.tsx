@@ -1,19 +1,19 @@
 // Settings → Workspaces / Agents → <workspace> → Postal (Beta)
 // (prd-postal-in-k2-v1 §5.5, vs-live P34). Postal lets an agent have
 // friends: agents on other machines, at addresses like
-// `scout::acme.postal.bot`. This release ships the local half only, behind
-// the server's Postal switch (off by default; Settings → General → Server).
-// Nothing here talks to the Postal network yet; the daemon's `plane.note`
-// says so under the address.
+// `scout::acme.postal.bot`, behind the server's Postal switch (off by
+// default; Settings → General → Server). The daemon talks to the Postal
+// network; its `plane.note` under the address says whether it is connected.
 //
 // Sections, all read from the daemon (postal-api.ts):
 //   - Address: the workspace's Postal address, or (Owner/Admin) a form to
 //     claim one;
 //   - Friends: accepted friends (a changed key and blocked ones marked), each
 //     with Remove and Block;
-//   - Invitations: incoming (Accept / Reject), outgoing (waiting), history,
-//     and an Invite form;
-//   - Routing: the default rule, read-only until native Postal.
+//   - Invitations: incoming (Accept opens K2's code form when the request
+//     carries a pairing code; Reject), outgoing (waiting), history, and an
+//     Invite form;
+//   - Routing: the default rule (k2 postal route changes it).
 //
 // The tab shows only while the server lists `postal` in `/boot-status`
 // features, never for a Voice & Chat only login (usePostalTabShown). Every
@@ -25,6 +25,7 @@ import type { SettingEntry } from '../searchManifest'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { BetaTag, Button, Input, Tag, type TagTone } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
+import { PostalPairCodeForm } from './PostalPairCodeForm'
 import {
   blockPostalFriend,
   claimPostalAddress,
@@ -43,7 +44,7 @@ import {
 } from './postal-api'
 
 export const POSTAL_ROUTING_LINE =
-  "Postal mail lands in this agent's terminal and wakes it (the default). Per-friend routing comes with native Postal."
+  "Postal mail lands in this agent's terminal and wakes it (the default); long messages, files, or mail while it's busy go to its inbox with a pointer. k2 postal route changes it, per agent or per friend."
 
 export const POSTAL_MANIFEST: SettingEntry[] = [
   { id: 'projects.postal', section: 'projects', label: 'Postal address', description: "This agent's Postal address, so agents on other machines can be its friends", keywords: ['postal', 'postal.bot', 'address', 'handle', 'claim', 'friends', 'other machines', 'p5'], beta: true },
@@ -151,6 +152,8 @@ export function PostalTab({
   const [claimAddress, setClaimAddress] = useState('')
   const [inviteTo, setInviteTo] = useState('')
   const [inviteWhy, setInviteWhy] = useState('')
+  // The incoming request whose code form is open.
+  const [codeFor, setCodeFor] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const mounted = useRef(true)
   useEffect(() => {
@@ -419,7 +422,7 @@ export function PostalTab({
 
       <SettingsGroup
         title="Invitations"
-        hint="Requests never wake this agent. Nothing is sent to other machines yet: the Postal network connection comes in a later release."
+        hint="Requests never wake this agent. A request that carries a pairing code is accepted by typing the code shown on the other side's screen."
         card
         settingId="projects.postal-invitations"
         state={friendsState}
@@ -435,18 +438,31 @@ export function PostalTab({
             actions={
               canManage ? (
                 <>
-                  {f.codeWaiting ? (
-                    <span className={SETTING_ROW_HINT} data-testid={`postal-code-note-${f.id}`}>
-                      Has a pairing code: it can be accepted once the Postal network connection comes (a later release).
-                    </span>
-                  ) : null}
-                  <Button
-                    variant="accent"
-                    disabled={busy !== null || f.codeWaiting === true}
-                    onClick={() => void run(`decide:${f.id}`, () => decidePostalRequest(scope, workspace, f.id, 'accept'), `${f.peer} is now a friend.`)}
-                  >
-                    Accept
-                  </Button>
+                  {f.codeWaiting && codeFor === f.id ? (
+                    <PostalPairCodeForm
+                      scope={scope}
+                      workspace={workspace}
+                      requestId={f.id}
+                      peer={f.peer}
+                      onDone={() => {
+                        setCodeFor(null)
+                        reload()
+                      }}
+                      onCancel={() => setCodeFor(null)}
+                    />
+                  ) : (
+                    <Button
+                      variant="accent"
+                      disabled={busy !== null}
+                      onClick={() =>
+                        f.codeWaiting
+                          ? setCodeFor(f.id)
+                          : void run(`decide:${f.id}`, () => decidePostalRequest(scope, workspace, f.id, 'accept'), `${f.peer} is now a friend.`)
+                      }
+                    >
+                      Accept
+                    </Button>
+                  )}
                   <Button
                     variant="quiet"
                     disabled={busy !== null}

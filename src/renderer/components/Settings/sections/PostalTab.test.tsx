@@ -5,8 +5,9 @@
 //     features, and never for a Voice & Chat only login;
 //   - it shows the address card (with a claim form when there is no
 //     address), Friends, Invitations and Routing;
-//   - Accept posts postal/decide {workspace, id, decision: 'accept'}; a
-//     request with a pairing code can't be accepted yet (Accept is off);
+//   - Accept posts postal/decide {workspace, id, decision: 'accept'}; on a
+//     request with a pairing code it opens K2's code form, which shows this
+//     server's code and sends the one typed from the other side;
 //   - a 409 postal_off answer shows the daemon's hint inline;
 //   - the owner's switch posts postal/settings {enabled} and re-reads
 //     /boot-status so the tab appears.
@@ -20,6 +21,7 @@ const cli = vi.hoisted(() => ({
   status: null as unknown,
   friends: [] as unknown[],
   settings: { enabled: false, adminsMayAccept: false },
+  code: '' as string,
   getFail: null as Error | null,
   gets: [] as { route: string; params: unknown }[],
   posts: [] as { route: string; body: unknown }[],
@@ -35,6 +37,7 @@ vi.mock('@/lib/daemon-cli', () => ({
     if (route === 'postal/status') return cli.status
     if (route === 'postal/friends') return { ok: true, state: 'on', handle: null, friends: cli.friends }
     if (route === 'postal/settings') return cli.settings
+    if (route === 'postal/code') return { ok: true, code: cli.code }
     throw new Error(`unexpected GET ${route}`)
   }),
   daemonCliPost: vi.fn(async (_s: unknown, route: string, body: unknown) => {
@@ -96,6 +99,7 @@ beforeEach(() => {
   cli.status = statusBody()
   cli.friends = []
   cli.settings = { enabled: false, adminsMayAccept: false }
+  cli.code = ''
   cli.getFail = null
   cli.gets = []
   cli.posts = []
@@ -171,12 +175,26 @@ describe('PostalTab', () => {
     expect(cli.posts).toContainEqual({ route: 'postal/decide', body: { workspace: '/ws/ada', id: 'f1', decision: 'accept' } })
   })
 
-  it('a request with a pairing code says it waits, and Accept is off (Reject still works)', async () => {
+  it("a request with a pairing code: Accept opens K2's code form, which sends the other side's code", async () => {
+    cli.friends = [{ id: 'f9', peer: 'lab::gamma.postal.bot', status: 'pending_in', ownerName: 'Dana', codeWaiting: true }]
+    cli.code = '123 456'
+    render(<PostalTab project={project} scope={scope} />)
+    const accept = await screen.findByRole('button', { name: 'Accept' })
+    await act(async () => {
+      fireEvent.click(accept)
+    })
+    expect((await screen.findByTestId('postal-code-mine')).textContent).toBe('123 456')
+    fireEvent.change(screen.getByTestId('postal-code-input'), { target: { value: '654 321' } })
+    await act(async () => {
+      fireEvent.submit(screen.getByTestId('postal-code-form'))
+    })
+    expect(cli.posts).toContainEqual({ route: 'postal/decide', body: { workspace: '/ws/ada', id: 'f9', decision: 'accept', code: '654321' } })
+  })
+
+  it('a request with a pairing code can still be rejected without a code', async () => {
     cli.friends = [{ id: 'f9', peer: 'lab::gamma.postal.bot', status: 'pending_in', ownerName: 'Dana', codeWaiting: true }]
     render(<PostalTab project={project} scope={scope} />)
-    const accept = (await screen.findByRole('button', { name: 'Accept' })) as HTMLButtonElement
-    expect(accept.disabled).toBe(true)
-    expect(screen.getByTestId('postal-code-note-f9').textContent).toContain('once the Postal network connection comes')
+    await screen.findByRole('button', { name: 'Accept' })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
     })

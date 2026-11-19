@@ -1,7 +1,7 @@
-// Postal (Beta), the local half (prd-postal-in-k2-v1 §5.5, vs-live P34):
-// a workspace's Postal address, its friends and its invitations, read from
-// and written to this server's daemon. Nothing here talks to the Postal
-// network; the daemon says so in `plane.note`.
+// Postal (Beta) (prd-postal-in-k2-v1 §5.5, vs-live P34): a workspace's
+// Postal address, its friends and its invitations, read from and written
+// to this server's daemon. The daemon talks to the Postal network; its
+// `plane.note` says whether it is connected.
 //
 // The whole surface is behind a server-wide switch, off by default. While
 // it is on, the daemon lists `postal` in `/boot-status` `features`; the
@@ -60,8 +60,8 @@ export interface PostalFriend {
   ownerName?: string | null
   route?: string | null
   sasVersion?: number | string | null
-  /** The request carries a pairing code: it can't be accepted until the
-   *  Postal network connection comes (the code itself is never listed). */
+  /** The request carries a pairing code: a person accepts it by typing the
+   *  code shown on the other side's screen (the code itself is never listed). */
   codeWaiting?: boolean
   pinnedAt?: string | null
   decidedBy?: string | null
@@ -125,8 +125,22 @@ export function decidePostalRequest(
   workspace: string,
   id: string,
   decision: 'accept' | 'reject',
+  code?: string,
 ): Promise<unknown> {
-  return daemonCliPost(scope, 'postal/decide', { workspace, id, decision })
+  return daemonCliPost(scope, 'postal/decide', code ? { workspace, id, decision, code } : { workspace, id, decision })
+}
+
+/** This server's 6-digit pairing code for a request (`123 456`): for the
+ *  person who answers it, to read out to the other side. The daemon
+ *  refuses an agent. */
+export async function fetchPostalCode(scope: ServerScope, workspace: string, id: string): Promise<string> {
+  const v = await daemonCliGet<{ code?: unknown }>(scope, 'postal/code', { workspace, id })
+  return typeof v.code === 'string' ? v.code : ''
+}
+
+/** Six digits, as a person may type them (`123 456`, `123-456`). */
+export function isPairingCode(value: string): boolean {
+  return /^\d{6}$/.test(value.replace(/[\s-]/g, ''))
 }
 
 export function invitePostalFriend(scope: ServerScope, workspace: string, to: string, why: string): Promise<unknown> {

@@ -491,3 +491,29 @@ describe('routing and the wire', () => {
     expect('permission' in choiceOf(badState)).toBe(false)
   })
 })
+
+describe('PermissionCard: a Postal request with a pairing code (0.46.16)', () => {
+  it("Allow becomes K2's code form; the code never comes from the card", async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    draw(
+      permissionDoc({
+        view: {
+          action: 'postal.pair.accept',
+          values: [
+            { key: 'workspace', value: 'billing' },
+            { key: 'id', value: 'f-9' },
+            { key: 'pairing', value: 'code' },
+          ],
+        },
+      }),
+    )
+    const allow = screen.getByTestId('permission-allow')
+    expect(allow.textContent).toBe('Type their code')
+    expect(text('permission-code-note')).toContain('The agent never sees either')
+    expect(document.body.textContent ?? '').not.toMatch(/\d{3} \d{3}/)
+    fireEvent.click(allow)
+    await waitFor(() => expect(screen.getByTestId('postal-code-form')).toBeTruthy())
+    vi.unstubAllGlobals()
+  })
+})

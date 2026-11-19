@@ -225,6 +225,13 @@ export const REPORTED_FEATURES = {
    *  the server's `homeChat` switch is on and Sew runs there. Home's Add
    *  picker offers Add a person, New channel and Add a channel only then. */
   'home-chat-v1': 'home-chat-v1',
+  /** prd-home-chat-pushes-v1 (0.46.15): phone pushes for Home chat.
+   *  `/cli/home-chat/notify` (+ `/set`), `/cli/home-chat/push-prefs` (+
+   *  `/set`), the `{"t":"viewing"}` lease frames a client sends on `WS
+   *  /cli/home-chat/events` and the daemon's `notify` frame. Listed only
+   *  while the owner's `homeChatPush` switch is on and Home chat runs. The
+   *  chat header's Notify menu and the viewing lease show and run only then. */
+  'home-chat-push-v1': 'home-chat-push-v1',
   /** Typing in agent Threads: the overlay socket carries `{"t":"typing",
    *  "thread"}` from a person's composer and `collection: "typing"` frames
    *  to the Thread's other readers. Without it the composer sends nothing

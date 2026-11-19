@@ -3,7 +3,9 @@
 // (click: jump to the original), reaction chips under it, and the action
 // bar (React, Reply, ⋯). A long press on touch, or a right-click, opens the
 // same three as a menu (`useThreadMessageGestures`, the Thread's). No
-// @mentions: `@name` is plain text in the body (D18).
+// @mentions to write: `@name` is plain text in the body (D18). A message
+// that mentions the viewer (never one of theirs) gets a quiet accent edge
+// on its left and a faint wash (the jump wash's accent, fainter).
 //
 // The action bar (the hover row) sits on the bubble's top corner away from
 // the sender, as chat apps put it: top right on theirs, top left on yours.
@@ -59,6 +61,9 @@ export interface HomeChatRowActions {
 export const JUMP_WASH_MS = 1200
 /** How much of the accent the wash is, over the page (%). */
 export const JUMP_WASH_PCT = 12
+
+/** How much of the accent a mention's wash is, over the page (%). */
+export const MENTION_WASH_PCT = 6
 
 /** The row while washed: its own layer, its muted words the secondary text. */
 const WASHED_ROW = { isolation: 'isolate', '--zen-text-muted': 'var(--color-text-secondary)' } as CSSProperties
@@ -179,6 +184,14 @@ function quoteText(p: ReplyPreview): { from: string; line: string } {
   return { from: 'Reply', line: 'Original not loaded: click to find it' }
 }
 
+/** A mention: the accent's edge on the left, clear of the bubble, and a
+ *  faint wash. */
+const MENTION_ROW: CSSProperties = {
+  background: `color-mix(in srgb, var(--zen-accent) ${MENTION_WASH_PCT}%, transparent)`,
+  boxShadow: 'inset 2px 0 0 var(--zen-accent)',
+  paddingLeft: 6,
+}
+
 function prefersReducedMotion(): boolean {
   try {
     return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -197,6 +210,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
   tail,
   reply,
   flash,
+  mention = false,
   readOnly,
   actions,
 }: {
@@ -211,6 +225,8 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
   reply: ReplyPreview | null
   /** Just jumped to: a soft wash that fades. */
   flash: boolean
+  /** It mentions the viewer: a quiet accent edge and wash. */
+  mention?: boolean
   /** No react or reply (an archived channel, a DM with a disabled login). */
   readOnly: boolean
   actions: HomeChatRowActions
@@ -322,11 +338,17 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
       data-home-chat-message=""
       data-mine={mine ? '' : undefined}
       data-flash={flash ? '' : undefined}
+      data-mention={mention && !mine ? '' : undefined}
       role={m.deleted ? undefined : 'article'}
       aria-label={m.deleted ? undefined : mine ? 'Your message' : `Message from ${author}`}
       tabIndex={m.deleted ? undefined : 0}
       className="k2-focus relative flex flex-col rounded-[calc(var(--radius-box)/2)]"
-      style={{ alignItems: mine ? 'flex-end' : 'flex-start', minWidth: 0, ...(flash ? WASHED_ROW : null) }}
+      style={{
+        alignItems: mine ? 'flex-end' : 'flex-start',
+        minWidth: 0,
+        ...(mention && !mine ? MENTION_ROW : null),
+        ...(flash ? WASHED_ROW : null),
+      }}
       {...reveal}
       {...(m.deleted ? {} : gestures)}
     >

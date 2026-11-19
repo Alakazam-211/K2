@@ -3,8 +3,13 @@
 // person and sends `hello` (with the DM calls already ringing), `message`,
 // `message_updated` (a call's record), `deleted`, `read`, `reaction`,
 // `typing`, `member_removed`, `summary_changed`, `status`, and the DM call
-// frames `call_ring` and `call_updated` (§11a.3). Nothing from any other
-// person or server.
+// frames `call_ring` and `call_updated` (§11a.3), and `notify` (the
+// person's push level for a conversation changed, on any device;
+// prd-home-chat-pushes-v1 §7). Nothing from any other person or server.
+//
+// The client sends one kind of frame up: the viewing lease
+// (`{"t":"viewing"}`, `lib/home-chat/viewing-lease.ts`), through the `send`
+// that `onLink(true, send)` hands over while the socket is open.
 //
 // A Home chat socket of its own (not the app socket): a Voice & Chat only
 // login never gets `/cli/sessions/events`. One per server per window
@@ -21,6 +26,7 @@ import { withCliTokenQuery } from '@/web/session-token'
 import { notePoolSocketClose } from '@/lib/pool-hooks'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { parseCall, parseRing, type HomeChatCall, type HomeChatRing } from './calls'
+import type { HomeChatNotifyLevel } from './api'
 
 export const HOME_CHAT_EVENTS_PATH = '/cli/home-chat/events'
 
@@ -47,6 +53,7 @@ export type HomeChatFrame =
   | { type: 'member_removed'; conv: string }
   | { type: 'summary_changed'; conv: string | null }
   | { type: 'status'; chat: string | null }
+  | { type: 'notify'; conv: string; level: HomeChatNotifyLevel | null }
 
 function idOf(v: unknown): string | null {
   if (typeof v === 'string' && v) return v
@@ -105,6 +112,11 @@ export function parseHomeChatFrame(data: unknown): HomeChatFrame | null {
       return conv ? { type: 'member_removed', conv } : null
     case 'summary_changed':
       return { type: 'summary_changed', conv }
+    case 'notify': {
+      // A level the client doesn't know (or none): the store reads it again.
+      const level = v.level === 'all' || v.level === 'mentions' || v.level === 'none' ? v.level : null
+      return conv ? { type: 'notify', conv, level } : null
+    }
     case 'typing': {
       const member = idOf(v.member)
       return conv && member ? { type: 'typing', conv, member } : null
@@ -141,12 +153,19 @@ const realDeps: HomeChatEventsDeps = {
   clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
 }
 
-/** Listen to `scope`'s Home chat frames. `onLink(true)` when a socket opens,
- *  `onLink(false)` when it closes. Returns the unsubscribe. */
+/** A WebSocket's OPEN readyState (no global needed under test). */
+const WS_OPEN = 1
+
+/** Sends a text frame on the open socket; false when there is none. */
+export type HomeChatEventsSend = (text: string) => boolean
+
+/** Listen to `scope`'s Home chat frames. `onLink(true, send)` when a socket
+ *  opens (`send` writes on it, and on each later socket), `onLink(false)`
+ *  when it closes. Returns the unsubscribe. */
 export function subscribeHomeChatEvents(
   scope: ServerScope,
   fn: (frame: HomeChatFrame) => void,
-  onLink: (up: boolean) => void = () => {},
+  onLink: (up: boolean, send?: HomeChatEventsSend) => void = () => {},
   deps: HomeChatEventsDeps = realDeps,
 ): () => void {
   let stopped = false
@@ -154,6 +173,18 @@ export function subscribeHomeChatEvents(
   let timer: unknown = null
   let tries = 0
   let deadTries = 0
+
+  const send: HomeChatEventsSend = (text) => {
+    const s = ws
+    if (stopped || !s || s.readyState !== WS_OPEN) return false
+    try {
+      s.send(text)
+      return true
+    } catch (err) {
+      console.warn(`[home-chat] ${scope.hostKey}: send failed:`, err)
+      return false
+    }
+  }
 
   const schedule = (): void => {
     if (stopped) return
@@ -200,7 +231,7 @@ export function subscribeHomeChatEvents(
       opened = true
       tries = 0
       deadTries = 0
-      onLink(true)
+      onLink(true, send)
     }
     sock.onmessage = (ev: MessageEvent) => {
       const f = parseHomeChatFrame(ev.data)

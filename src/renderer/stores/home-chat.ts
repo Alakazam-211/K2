@@ -12,6 +12,12 @@
 // The open chat is per-window view state, like the Grok Bot chat: opening
 // one closes a Grok Bot chat and a remote room on Home; picking an agent
 // closes it.
+//
+// Pushes (prd-home-chat-pushes-v1, on a server listing `home-chat-push-v1`):
+// each conversation's push level and the person's push prefs are cached
+// here as the daemon last said them (a `notify` frame from any device
+// updates the level), and the viewing lease rides the events socket
+// (`setHomeChatViewing`, `lib/home-chat/viewing-lease.ts`).
 
 import { create, useStore } from 'zustand'
 import { rememberPeopleNames } from '@/lib/home-chat/known-names'
@@ -23,15 +29,24 @@ import { usePageViewStore } from '@/stores/page-view'
 import { closeGrokChat, useGrokBotsStore } from '@/stores/grokbots'
 import {
   HOME_CHAT_FEATURE,
+  HOME_CHAT_PUSH_FEATURE,
+  fetchHomeChatNotify,
   fetchHomeChatPeople,
+  fetchHomeChatPushPrefs,
   fetchHomeChatStatus,
   fetchHomeChatSummary,
+  setHomeChatNotify,
+  setHomeChatPushPrefs,
   type HomeChatBadge,
+  type HomeChatNotify,
+  type HomeChatNotifyChoice,
   type HomeChatPeople,
+  type HomeChatPushPrefs,
   type HomeChatStatus,
   type HomeChatSummary,
 } from '@/lib/home-chat/api'
-import { subscribeHomeChatEvents, type HomeChatFrame } from '@/lib/home-chat/events-socket'
+import { subscribeHomeChatEvents, type HomeChatEventsSend, type HomeChatFrame } from '@/lib/home-chat/events-socket'
+import { createViewingLease, type ViewingLease } from '@/lib/home-chat/viewing-lease'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
 import { applyCallFrame, resetHomeChatCallsForTests } from '@/stores/home-chat-calls'
 
@@ -51,6 +66,10 @@ export interface HomeChatHostState {
   link: boolean
   /** Person (external id) → their DM's conversation, once known here. */
   dms: Record<string, string>
+  /** Conversation → its push level, as the daemon last said (pushes). */
+  notify: Record<string, HomeChatNotify>
+  /** This person's push prefs on the server, once read. */
+  pushPrefs: HomeChatPushPrefs | null
 }
 
 const EMPTY_HOST: HomeChatHostState = {
@@ -61,6 +80,8 @@ const EMPTY_HOST: HomeChatHostState = {
   peopleAt: 0,
   link: false,
   dms: {},
+  notify: {},
+  pushPrefs: null,
 }
 
 interface HomeChatStore {
@@ -72,6 +93,7 @@ interface HomeChatStore {
   closeChat: () => void
   patchHost: (hostKey: string, patch: Partial<HomeChatHostState>) => void
   noteDm: (hostKey: string, ext: string, conv: string) => void
+  noteNotify: (hostKey: string, n: HomeChatNotify) => void
   noteTyping: (hostKey: string, conv: string, member: string, now: number) => void
   clearTyping: (hostKey: string, conv: string, member: string) => void
   pruneTyping: (now: number) => void
@@ -97,6 +119,11 @@ export const useHomeChatStore = create<HomeChatStore>((set, get) => ({
       const h = s.byHost[hostKey] ?? EMPTY_HOST
       if (h.dms[ext] === conv) return s
       return { byHost: { ...s.byHost, [hostKey]: { ...h, dms: { ...h.dms, [ext]: conv } } } }
+    }),
+  noteNotify: (hostKey, n) =>
+    set((s) => {
+      const h = s.byHost[hostKey] ?? EMPTY_HOST
+      return { byHost: { ...s.byHost, [hostKey]: { ...h, notify: { ...h.notify, [n.conv]: n } } } }
     }),
   noteTyping: (hostKey, conv, member, now) =>
     set((s) => {
@@ -155,6 +182,14 @@ export function useHomeChatOffered(): boolean {
     primary = false
   }
   return pooled || primary
+}
+
+/** Does `hostKey` say it has Home chat pushes (`home-chat-push-v1` in its
+ *  `/boot-status`)? Only what the server said: the switch is off by
+ *  default, so an unchecked server never counts. */
+export function useHomeChatPushOffered(hostKey: string): boolean {
+  const pooled = useStore(hostPool.store, (s) => s.entries[hostKey]?.boot?.features?.includes(HOME_CHAT_PUSH_FEATURE) ?? false)
+  return pooled || reportedSupports(hostKey, HOME_CHAT_PUSH_FEATURE)
 }
 
 /** Close the open Home chat (an agent or a Grok Bot was picked). */
@@ -229,6 +264,140 @@ export function refreshHomeChatPeople(hostKey: string, force = false): Promise<v
   })
 }
 
+// ── Pushes (prd-home-chat-pushes-v1 §7) ────────────────────────────────
+
+/** Read a conversation's push level. Throws what the daemon said. */
+export async function refreshHomeChatNotify(hostKey: string, conv: string): Promise<HomeChatNotify> {
+  const n = await fetchHomeChatNotify(scopeForChatHost(hostKey), conv)
+  useHomeChatStore.getState().noteNotify(hostKey, n)
+  return n
+}
+
+/** Read this person's push prefs on `hostKey`. Throws what the daemon said. */
+export async function refreshHomeChatPushPrefs(hostKey: string): Promise<HomeChatPushPrefs> {
+  const p = await fetchHomeChatPushPrefs(scopeForChatHost(hostKey))
+  useHomeChatStore.getState().patchHost(hostKey, { pushPrefs: p })
+  return p
+}
+
+/** Pick a channel's level: shown at once, the daemon's answer kept, put
+ *  back as it was when refused (then the refusal is thrown, for its hint). */
+export async function pickHomeChatNotify(hostKey: string, conv: string, level: HomeChatNotifyChoice): Promise<HomeChatNotify> {
+  const st = useHomeChatStore.getState()
+  const before = st.byHost[hostKey]?.notify[conv]
+  if (before) st.noteNotify(hostKey, { ...before, level, effective: level, inherited: false })
+  const mine = useHomeChatStore.getState().byHost[hostKey]?.notify[conv]
+  try {
+    const n = await setHomeChatNotify(scopeForChatHost(hostKey), conv, level)
+    useHomeChatStore.getState().noteNotify(hostKey, n)
+    return n
+  } catch (e) {
+    // Only if nothing newer (a `notify` frame, another pick) came since.
+    if (before && useHomeChatStore.getState().byHost[hostKey]?.notify[conv] === mine) {
+      useHomeChatStore.getState().noteNotify(hostKey, before)
+    }
+    throw e
+  }
+}
+
+/** Change push prefs: shown at once, the daemon's answer kept, put back
+ *  when refused (then the refusal is thrown). */
+export async function changeHomeChatPushPrefs(
+  hostKey: string,
+  patch: { previews?: boolean; agents?: boolean },
+): Promise<HomeChatPushPrefs> {
+  const st = useHomeChatStore.getState()
+  const before = st.byHost[hostKey]?.pushPrefs ?? null
+  if (before) st.patchHost(hostKey, { pushPrefs: { ...before, ...patch } })
+  const mine = useHomeChatStore.getState().byHost[hostKey]?.pushPrefs ?? null
+  try {
+    const p = await setHomeChatPushPrefs(scopeForChatHost(hostKey), patch)
+    useHomeChatStore.getState().patchHost(hostKey, { pushPrefs: p })
+    return p
+  } catch (e) {
+    if (before && useHomeChatStore.getState().byHost[hostKey]?.pushPrefs === mine) {
+      useHomeChatStore.getState().patchHost(hostKey, { pushPrefs: before })
+    }
+    throw e
+  }
+}
+
+/** A `notify` frame: the person's level changed (on any device). The level
+ *  shows at once; the rest (effective, inherited) is read again. */
+function applyNotifyFrame(hostKey: string, conv: string, level: HomeChatNotify['level'] | null): void {
+  const st = useHomeChatStore.getState()
+  const known = st.byHost[hostKey]?.notify[conv]
+  if (!known) return
+  if (level) st.noteNotify(hostKey, { ...known, level, effective: level, inherited: false })
+  refreshHomeChatNotify(hostKey, conv).catch((e: unknown) => console.warn(`[home-chat] ${hostKey}: notify:`, e))
+}
+
+// ── The viewing lease (HC-15) ──────────────────────────────────────────
+
+const senders = new Map<string, HomeChatEventsSend>()
+const leases = new Map<string, ViewingLease>()
+
+function leaseFor(hostKey: string): ViewingLease {
+  let l = leases.get(hostKey)
+  if (!l) {
+    l = createViewingLease({
+      send: (text) => senders.get(hostKey)?.(text) ?? false,
+      setInterval: (fn, ms) => setInterval(fn, ms),
+      clearInterval: (t) => clearInterval(t as ReturnType<typeof setInterval>),
+    })
+    leases.set(hostKey, l)
+  }
+  return l
+}
+
+/** The conversation this window views on `hostKey` now (open, on screen,
+ *  focused), or null. Sent as the lease on that server's events socket. */
+export function setHomeChatViewing(hostKey: string, conv: string | null): void {
+  if (conv === null && !leases.has(hostKey)) return
+  leaseFor(hostKey).set(conv)
+}
+
+/** A view of `conv` closes: its lease ends, unless another conversation
+ *  took it already. */
+export function endHomeChatViewing(hostKey: string, conv: string): void {
+  const l = leases.get(hostKey)
+  if (l?.current() === conv) l.set(null)
+}
+
+function noteLink(hostKey: string, up: boolean, send?: HomeChatEventsSend): void {
+  if (up && send) senders.set(hostKey, send)
+  else senders.delete(hostKey)
+  useHomeChatStore.getState().patchHost(hostKey, { link: up })
+  if (up) leases.get(hostKey)?.linked()
+}
+
+/** The view's half: while `conv` is open here, this window is visible and
+ *  focused, and the server has pushes, hold the lease; let it go at once on
+ *  blur, hidden, another conversation or close. */
+export function useHomeChatViewingLease(hostKey: string, conv: string | null, enabled: boolean): void {
+  useEffect(() => {
+    if (!enabled || !conv || typeof document === 'undefined') return
+    const viewing = (): boolean => document.visibilityState === 'visible' && document.hasFocus()
+    const update = (on: boolean): void => {
+      if (on) setHomeChatViewing(hostKey, conv)
+      else endHomeChatViewing(hostKey, conv)
+    }
+    const onFocus = (): void => update(viewing())
+    const onBlur = (): void => update(false)
+    const onVisibility = (): void => update(viewing())
+    update(viewing())
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onBlur)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('blur', onBlur)
+      document.removeEventListener('visibilitychange', onVisibility)
+      endHomeChatViewing(hostKey, conv)
+    }
+  }, [hostKey, conv, enabled])
+}
+
 // ── Live frames ────────────────────────────────────────────────────────
 
 type FrameListener = (frame: HomeChatFrame) => void
@@ -283,6 +452,9 @@ export function applyHomeChatFrame(hostKey: string, f: HomeChatFrame, now: numbe
       break
     case 'typing':
       st.noteTyping(hostKey, f.conv, f.member, now)
+      break
+    case 'notify':
+      applyNotifyFrame(hostKey, f.conv, f.level)
       break
     case 'message': {
       // Their message ends their typing at once (§9.1).
@@ -340,7 +512,7 @@ export function retainHomeChatHost(hostKey: string): () => void {
       entry.stop = subscribeHomeChatEvents(
         scopeForChatHost(hostKey),
         (f) => applyHomeChatFrame(hostKey, f, Date.now()),
-        (up) => useHomeChatStore.getState().patchHost(hostKey, { link: up }),
+        (up, send) => noteLink(hostKey, up, send),
       )
     }
     const check = (): void => {
@@ -374,6 +546,10 @@ export function retainHomeChatHost(hostKey: string): () => void {
     cur.count -= 1
     if (cur.count > 0) return
     cur.released = true
+    // The lease goes with the socket (the daemon drops it on close too).
+    leases.get(hostKey)?.stop()
+    leases.delete(hostKey)
+    senders.delete(hostKey)
     cur.stop?.()
     cur.unwatch()
     if (cur.retry !== null) clearTimeout(cur.retry)
@@ -430,6 +606,9 @@ export function resetHomeChatForTests(): void {
     if (h.retry !== null) clearTimeout(h.retry)
   }
   held.clear()
+  for (const l of leases.values()) l.stop()
+  leases.clear()
+  senders.clear()
   for (const t of summaryTimers.values()) clearTimeout(t)
   summaryTimers.clear()
   inflight.clear()

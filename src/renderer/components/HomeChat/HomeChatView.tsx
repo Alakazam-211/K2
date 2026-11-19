@@ -15,7 +15,12 @@
 //     Sew's inline `reference {message_id, kind:"reply"}` (§11); the sent
 //     bubble's quote strip jumps to the original, paging back for it;
 //   - names over every run in a channel; in a DM only the other person's;
-//   - no @mentions: `@name` is plain text (D18);
+//   - no @mentions to write: `@name` is plain text (D18); a message that
+//     mentions the viewer (Sew's `mentions`, or @channel / @here) is marked
+//     as such (prd-home-chat-pushes-v1 §12);
+//   - on a server with Home chat pushes (`home-chat-push-v1`): the header's
+//     Notify menu, and the viewing lease on the events socket while the chat
+//     is open and the window visible and focused (HC-15);
 //   - a DM has a Call button, the caller's "Calling…" bar, the in-call strip,
 //     and each call's record as a line ("Missed call", "Call · 12:04") with
 //     Call back, never a bubble (§11a.4).
@@ -53,6 +58,7 @@ import {
   fetchHomeChatMembers,
   fetchHomeChatMessages,
   fetchHomeChatReactors,
+  mentionsMe,
   openHomeChatDm,
   parseHomeChatMessage,
   reactHomeChat,
@@ -87,8 +93,11 @@ import {
   scopeForChatHost,
   typingMembers,
   useHomeChatHost,
+  useHomeChatPushOffered,
   useHomeChatStore,
+  useHomeChatViewingLease,
 } from '@/stores/home-chat'
+import { HomeChatNotifyMenu } from './HomeChatNotifyMenu'
 import { HomeChatMessageRow, JUMP_WASH_MS, type HomeChatRowActions } from './HomeChatMessageRow'
 import { HomeChatMembersSheet } from './HomeChatMembersSheet'
 import { HomeChatTyping } from './HomeChatTyping'
@@ -236,6 +245,10 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   useEffect(() => {
     if (conv && messages) rememberHomeChat(hostKey, conv, messages)
   }, [conv, hostKey, messages])
+
+  // Pushes: the phone stays quiet for a chat open here (HC-15).
+  const pushes = useHomeChatPushOffered(hostKey)
+  useHomeChatViewingLease(hostKey, conv, pushes)
 
   // A DM whose person has left this server's list: their last known name
   // (never "this person" or "Someone"), else "Former member". It heads the
@@ -610,6 +623,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
           </span>
         )}
         <div className="flex-1" />
+        {pushes && !chatOff && <HomeChatNotifyMenu hostKey={hostKey} conv={conv} kind={dm ? 'dm' : 'channel'} />}
         {dm && <HomeChatCallButton disabledReason={callBlocked} state={dmCallButtonState(dmCall)} onCall={dmCall.call} />}
         {target.kind === 'channel' && (
           <button
@@ -711,6 +725,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                       tail={runs.ends[j]}
                       reply={m.replyTo ? replyPreview(original, me, names) : null}
                       flash={flashId === m.id}
+                      mention={mentionsMe(m, me)}
                       readOnly={readOnly || chatOff}
                       actions={actions}
                     />

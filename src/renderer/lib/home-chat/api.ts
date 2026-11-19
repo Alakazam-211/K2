@@ -13,6 +13,10 @@ import { parseCallSummary, type HomeChatCallSummary } from './calls'
 import { parseRecordingSummary, transcriptRootOf, type HomeChatRecordingSummary } from './recordings'
 
 export const HOME_CHAT_FEATURE = 'home-chat-v1'
+/** Phone pushes for Home chat (prd-home-chat-pushes-v1 §7): the Notify
+ *  menu, the push-prefs toggles and the viewing lease show and run only on
+ *  a server that lists it. */
+export const HOME_CHAT_PUSH_FEATURE = 'home-chat-push-v1'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -98,6 +102,53 @@ export interface HomeChatMessage {
   /** A transcript line: the card (or recording) it belongs to. Never on the
    *  DM's timeline; Show transcript reads it. */
   transcriptOf?: string | null
+  /** Who the message mentions (Sew's `mentions`); null when it says none. */
+  mentions?: HomeChatMentions | null
+}
+
+/** Sew's `message.mentions`: member ids, and `@channel` / `@here`. */
+export interface HomeChatMentions {
+  members: string[]
+  channel: boolean
+  here: boolean
+}
+
+/** A conversation's push level (prd-home-chat-pushes-v1 §7). `none` is
+ *  only ever set elsewhere (Sew's own client): K2 offers two levels. */
+export type HomeChatNotifyLevel = 'all' | 'mentions' | 'none'
+/** What this client may set: All messages or @mentions only. */
+export type HomeChatNotifyChoice = 'all' | 'mentions'
+
+/** `GET /cli/home-chat/notify` (and the answer to `notify/set`). */
+export interface HomeChatNotify {
+  conv: string
+  convKind: 'dm' | 'channel'
+  level: HomeChatNotifyLevel
+  effective: HomeChatNotifyLevel
+  /** No level of its own: the Space's (or the server's) default. */
+  inherited: boolean
+  /** A DM: it always notifies, nothing to pick. */
+  fixed: boolean
+  muted: boolean
+  /** False until this server's chat can push every message: All messages
+   *  reaches the phone as @mentions until then. */
+  allMessagesLive: boolean
+}
+
+/** `GET /cli/home-chat/push-prefs`: this person's Home chat push choices. */
+export interface HomeChatPushPrefs {
+  /** The owner's `homeChatPush` switch. */
+  on: boolean
+  /** Show message text on the phone. */
+  previews: boolean
+  /** Also notify for agents' posts. */
+  agents: boolean
+  /** The owner allows message text in pushes on this server. */
+  serverPreviews: boolean
+  bell: boolean
+  /** This person's registered phones. */
+  devices: number
+  allMessagesLive: boolean
 }
 
 export interface HomeChatPage {
@@ -190,7 +241,27 @@ export function parseHomeChatMessage(v: unknown): HomeChatMessage | null {
     call: m.call ? parseCallSummary(m.call) : null,
     recording: m.recording ? parseRecordingSummary(m.recording, m.transcript_failure) : null,
     transcriptOf: transcriptRootOf(m),
+    mentions: mentionsOf(m.mentions),
   }
+}
+
+function mentionsOf(v: unknown): HomeChatMentions | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as { members?: unknown; channel?: unknown; here?: unknown }
+  const members = Array.isArray(o.members) ? o.members.map(idOf).filter((x): x is string => x !== null) : []
+  const channel = o.channel === true
+  const here = o.here === true
+  if (members.length === 0 && !channel && !here) return null
+  return { members, channel, here }
+}
+
+/** Does `m` mention the viewer (member id `me`)? Their id in Sew's
+ *  `mentions.members`, or `@channel` / `@here`. Never their own message. */
+export function mentionsMe(m: Pick<HomeChatMessage, 'authorId' | 'mentions'>, me: string | null): boolean {
+  const x = m.mentions
+  if (!x) return false
+  if (me !== null && m.authorId === me) return false
+  return x.channel || x.here || (me !== null && x.members.includes(me))
 }
 
 /** A page answer (`{page: {items, has_more}}`): oldest first. */
@@ -248,6 +319,42 @@ export function parseHomeChatPeople(v: unknown): HomeChatPeople {
     })
   }
   return { me: { ext: str(o.me?.ext), memberId: idOf(o.me?.memberId) }, people }
+}
+
+function levelOf(v: unknown): HomeChatNotifyLevel | null {
+  return v === 'all' || v === 'mentions' || v === 'none' ? v : null
+}
+
+/** A `notify` answer. Throws on one without a conversation or a level: the
+ *  menu never shows a guess. */
+export function parseHomeChatNotify(v: unknown): HomeChatNotify {
+  const o = (v ?? {}) as Record<string, unknown>
+  const conv = idOf(o.conv)
+  const level = levelOf(o.level)
+  if (!conv || !level) throw new Error('the server answered no notify level for that conversation')
+  return {
+    conv,
+    convKind: o.convKind === 'dm' ? 'dm' : 'channel',
+    level,
+    effective: levelOf(o.effective) ?? level,
+    inherited: o.inherited === true,
+    fixed: o.fixed === true,
+    muted: o.muted === true,
+    allMessagesLive: o.allMessagesLive === true,
+  }
+}
+
+export function parseHomeChatPushPrefs(v: unknown): HomeChatPushPrefs {
+  const o = (v ?? {}) as Record<string, unknown>
+  return {
+    on: o.on === true,
+    previews: o.previews === true,
+    agents: o.agents === true,
+    serverPreviews: o.serverPreviews === true,
+    bell: o.bell === true,
+    devices: typeof o.devices === 'number' && Number.isFinite(o.devices) ? o.devices : 0,
+    allMessagesLive: o.allMessagesLive === true,
+  }
 }
 
 // ── Calls ──────────────────────────────────────────────────────────────
@@ -400,4 +507,30 @@ export async function renameHomeChatChannel(scope: ServerScope, conv: string, na
 
 export async function deleteHomeChatChannel(scope: ServerScope, conv: string): Promise<void> {
   await daemonCliPost(scope, 'home-chat/channels/delete', { conv })
+}
+
+// ── Pushes (prd-home-chat-pushes-v1 §7, HC-14) ─────────────────────────
+
+export async function fetchHomeChatNotify(scope: ServerScope, conv: string): Promise<HomeChatNotify> {
+  return parseHomeChatNotify(await daemonCliGet(scope, 'home-chat/notify', { conv }))
+}
+
+/** Set a channel's level. A DM answers 409 `dm_always_notifies`. */
+export async function setHomeChatNotify(scope: ServerScope, conv: string, level: HomeChatNotifyChoice): Promise<HomeChatNotify> {
+  return parseHomeChatNotify(await daemonCliPost(scope, 'home-chat/notify/set', { conv, level }))
+}
+
+export async function fetchHomeChatPushPrefs(scope: ServerScope): Promise<HomeChatPushPrefs> {
+  return parseHomeChatPushPrefs(await daemonCliGet(scope, 'home-chat/push-prefs'))
+}
+
+/** Change only what `patch` names. */
+export async function setHomeChatPushPrefs(
+  scope: ServerScope,
+  patch: { previews?: boolean; agents?: boolean },
+): Promise<HomeChatPushPrefs> {
+  const body: { previews?: boolean; agents?: boolean } = {}
+  if (patch.previews !== undefined) body.previews = patch.previews
+  if (patch.agents !== undefined) body.agents = patch.agents
+  return parseHomeChatPushPrefs(await daemonCliPost(scope, 'home-chat/push-prefs/set', body))
 }

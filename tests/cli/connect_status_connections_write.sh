@@ -76,6 +76,8 @@ class H(BaseHTTPRequestHandler):
         u = urlsplit(self.path)
         with open(LOG_FILE, "a") as f:
             f.write("%s %s %s\n" % (method, u.path, u.query))
+        with open(LOG_FILE + ".auth", "a") as f:
+            f.write("%s %s\n" % (u.path, self.headers.get("Authorization") or "-"))
         mode = open(MODE_FILE).read().strip()
         if mode == "close" or (mode == "close_status" and u.path == "/cli/tunnel/status"):
             self.close_connection = True
@@ -200,7 +202,8 @@ run added connections add beta
 assert_eq "add: exit 0" "$rc" "0"
 assert_eq "add: the line" "$out" "Connected to beta"
 assert_eq "add: one POST" "$(requests)" "POST /cli/connections;"
-case "$(cat "$LOG_FILE")" in "POST /cli/connections token=owner-tok-connect&project="*"$Q_TAIL") ok "add: the query" ;; *) bad "add: the query ($(cat "$LOG_FILE"))" ;; esac
+case "$(cat "$LOG_FILE")" in "POST /cli/connections project="*"$Q_TAIL") ok "add: the query" ;; *) bad "add: the query ($(cat "$LOG_FILE"))" ;; esac
+assert_eq "add: the token rides the Bearer header" "$(tail -1 "$LOG_FILE.auth")" "/cli/connections Bearer owner-tok-connect"
 run noop connections add beta
 assert_eq "already connected" "$out" "Already connected to beta (already connected)"
 run bound connections add 'seoca::quahog.example'
@@ -208,7 +211,7 @@ assert_eq "a remote add: the lines" "$out" "$(printf 'Connected to seoca::quahog
 assert_eq "a remote add: the warning" "$err" "warning: slow peer"
 run gated connections add beta
 assert_eq "the gate: exit 3" "$rc" "3"
-assert_eq "the gate: JSON on stderr" "$err" '{"error": {"code": "agents_create_connections_disabled", "hint": "no — this agent isn'"'"'t allowed to create or remove connections — the owner can enable it in Settings → K2 Connect (Allow agents to create connections) or Workspaces → (workspace) → Allow agents to create connections"}}'
+assert_eq "the gate: JSON on stderr" "$err" '{"error": {"code": "agents_create_connections_disabled", "hint": "no — this agent isn'"'"'t allowed to create or remove connections — Owner can turn on: Settings → Network → Tunnel → Policies → \"Agents can add connections\" (or Settings → Workspaces / Agents → <workspace> → Connections → \"Let this agent add connections\")."}}'
 assert_eq "the gate: nothing on stdout" "$out" ""
 run missing connections remove nope
 assert_eq "remove, not found: exit 1" "$rc" "1"

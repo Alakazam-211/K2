@@ -2631,10 +2631,10 @@ exit: 0
     },
     {
       "name": "tunnel switch",
-      "usage": "k2 tunnel switch <subdomain> [--token <t>] [--start|--no-start]",
+      "usage": "k2 tunnel switch <subdomain> [--token-stdin | --token <t>] [--start|--no-start]",
       "description": "Move this device to another subdomain without a daemon restart: binds the new name and moves the encrypted listener, its certificate and renewer, nested routes and frpc. Rolls back to the old name if any step fails.",
       "args": [{"name": "subdomain", "required": true, "description": "The new subdomain label."}],
-      "flags": [{"name": "--token", "arg": "t", "description": "The new subdomain's tunnel token (not needed to re-run the switch for the current name)."}, {"name": "--start", "arg": null, "description": "Start the tunnel on the new name (default: keep it running if it was)."}, {"name": "--no-start", "arg": null, "description": "Only bind the new name."}]
+      "flags": [{"name": "--token-stdin", "arg": null, "description": "Read the new subdomain's tunnel token from stdin (not needed to re-run the switch for the current name)."}, {"name": "--token", "arg": "t", "description": "The tunnel token on the command line, where other users on this machine can see it; prefer --token-stdin."}, {"name": "--start", "arg": null, "description": "Start the tunnel on the new name (default: keep it running if it was)."}, {"name": "--no-start", "arg": null, "description": "Only bind the new name."}]
     },
     {
       "name": "tunnel release",

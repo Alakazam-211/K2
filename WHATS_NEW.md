@@ -14,6 +14,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 hostchat recording policy` runs again.** It showed and changed nothing: every use was refused as an unknown or unexpected word. It now shows the server's recording policies and, with `set KEY VALUE`, changes them (in person, with a confirm), as its help says.
 - **App user passwords you type stay out of other programs' view.** The password of `k2 app user add --password-stdin` and `k2 app user password --password-stdin` now reaches the request on a pipe, never in a helper program's environment.
 - **`k2 connect login` keeps your tunnel token out of other programs' view.** The subdomain's tunnel token now reaches K2 on a pipe, never in a helper program's environment.
+- **`k2 tunnel switch` takes the tunnel token on stdin.** `--token-stdin` reads it from stdin, so it is never on the command line, where other users on the machine can see it. `--token <t>` still works.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

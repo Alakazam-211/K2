@@ -22,7 +22,7 @@
 # set --secret-stdin, k2 hostmail config --relay-pass-stdin, k2 hostmail
 # import --pass-stdin, of App users (k2 app user add and password
 # --password-stdin), the tunnel token k2 connect login binds, and of the
-# logins: k2 users add and set-password
+# logins, and k2 tunnel switch --token-stdin: k2 users add and set-password
 # --password-stdin, k2 users pair-phone, k2 connect login; and the remote
 # server's token of k2 clone (--host, --token).
 #
@@ -395,6 +395,10 @@ K2_CONNECT_DB_URL="http://127.0.0.1:$(cat "$W/tcp-port")/" \
 assert_tcp_got "connect login tunnel" /cli/tunnel/config "tunnel token" "$TUNNEL_SENTINEL"
 assert_children_seen "connect login tunnel"
 assert_off_children "connect login tunnel" "tunnel token" "$TUNNEL_SENTINEL"
+
+# 19. k2 tunnel switch <sub> --token-stdin: the tunnel token reaches the
+#     switch and no child's argv or environment, nor k2's own argv.
+sec_case "tunnel switch --token-stdin" /cli/tunnel/switch "tunnel token" "$TUNNEL_SENTINEL" tunnel switch acme --token-stdin
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

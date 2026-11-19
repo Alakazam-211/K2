@@ -821,10 +821,11 @@ elif d.get("autoStart") is False:
         # back to the old name if any step fails. No daemon restart.
         switch)
             _k2_refuse_if_airgap
-            local subdomain="" token="" start=""
+            local subdomain="" token="" token_stdin=0 start=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --token) token="$2"; shift 2 ;;
+                    --token-stdin) token_stdin=1; shift ;;
                     --start) start="true"; shift ;;
                     --no-start) start="false"; shift ;;
                     -*) echo "k2 tunnel switch: unknown flag $1" >&2; exit 2 ;;
@@ -832,14 +833,23 @@ elif d.get("autoStart") is False:
                 esac
             done
             if [ -z "$subdomain" ]; then
-                echo "usage: k2 tunnel switch <subdomain> [--token <tunnel token>] [--start|--no-start]" >&2
+                echo "usage: k2 tunnel switch <subdomain> [--token-stdin | --token <tunnel token>] [--start|--no-start]" >&2
                 exit 2
             fi
+            if [ "$token_stdin" = 1 ]; then
+                [ -z "$token" ] || { echo "k2 tunnel switch: --token-stdin or --token, not both" >&2; exit 2; }
+                _cli_read_secret_stdin "Tunnel token: "
+                token="$_K2_SECRET"; _K2_SECRET=""
+                [ -n "$token" ] || { echo "k2 tunnel switch: --token-stdin: no token on stdin" >&2; exit 2; }
+            fi
+            # The token reaches python on stdin, never argv or the environment
+            # (ps shows both to every process of this user).
             local body
-            body=$(SUB="$subdomain" TOK="$token" START="$start" python3 -c '
-import json, os
+            body=$(printf '%s' "$token" | SUB="$subdomain" START="$start" python3 -c '
+import json, os, sys
 b = {"subdomain": os.environ["SUB"]}
-if os.environ.get("TOK"): b["token"] = os.environ["TOK"]
+t = sys.stdin.read()
+if t: b["token"] = t
 if os.environ.get("START"): b["start"] = os.environ["START"] == "true"
 print(json.dumps(b))
 ')
@@ -901,7 +911,7 @@ except Exception:
                 echo "  - your ACCOUNT keeps the subdomain — pair it on any device any time" >&2
                 echo "  - this is NOT a pause; for that use: k2 tunnel disable" >&2
                 echo "  - stale config from another machine? use: k2 tunnel forget --confirm" >&2
-                echo "  - moving to another subdomain? use: k2 tunnel switch <subdomain> --token <t>" >&2
+                echo "  - moving to another subdomain? use: k2 tunnel switch <subdomain> --token-stdin" >&2
                 echo "Re-run with --confirm to proceed: k2 tunnel release --confirm" >&2
                 exit 1
             fi
@@ -1146,7 +1156,10 @@ USAGE
   k2 tunnel start [--subdomain <s>]
   k2 tunnel stop | disable
   k2 tunnel enable [--subdomain <s>] [--no-auto-start]   (persists auto-start on by default)
-  k2 tunnel switch <subdomain> [--token <t>] [--start|--no-start]
+  k2 tunnel switch <subdomain> [--token-stdin | --token <t>] [--start|--no-start]
+                                   --token-stdin reads the tunnel token from stdin;
+                                   a token on the command line (--token <t>) is
+                                   visible to other users on this machine
   k2 tunnel release --confirm      (tells K2 Connect only when this device holds the name)
   k2 tunnel forget --confirm       (local only: stale config from another machine)
   k2 tunnel status [--json]

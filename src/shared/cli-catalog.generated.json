@@ -1675,7 +1675,7 @@
    },
    {
     "name": "tunnel switch",
-    "usage": "k2 tunnel switch <subdomain> [--token <t>] [--start|--no-start]",
+    "usage": "k2 tunnel switch <subdomain> [--token-stdin | --token <t>] [--start|--no-start]",
     "description": "Move this device to another subdomain without a daemon restart: binds the new name and moves the encrypted listener, its certificate and renewer, nested routes and frpc. Rolls back to the old name if any step fails."
    },
    {

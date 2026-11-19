@@ -186,6 +186,15 @@
 #   ./scripts/release.sh --gates-only [<commit>]   only the pre-flight gates,
 #       at <commit> (default HEAD): no lock, no signing, no version, nothing
 #       published. For trying the gates without a release.
+#   ./scripts/release.sh --dry-run <version> [notes-file]   (or K2_RELEASE_DRY=1)
+#       a rehearsal of the whole release on z3mbpZ, while the release is
+#       still being put together: the lock, every gate, the bump, the builds,
+#       Developer ID signing, notarization, the VM smoke, the compute Linux
+#       builds, Windows and both manifests run for real, in a scratch
+#       worktree (this checkout is never touched); every publishing command
+#       prints "[dry] would: ..." instead, and update-key signing is skipped
+#       (a rehearsal signature would block the real one). Ends with a
+#       per-step summary and DRY_EXIT=<n>. scripts/lib/release-dry.sh.
 
 set -euo pipefail
 
@@ -203,6 +212,20 @@ if [ "${1:-}" = "--gates-only" ]; then
     k2rg_gates_only "${2:-HEAD}"
     exit $?
 fi
+
+# Dry release (rehearsal): --dry-run as the first argument, or
+# K2_RELEASE_DRY=1. scripts/lib/release-dry.sh has what runs, what is
+# skipped and what only prints "[dry] would: ...".
+if [ "${1:-}" = "--dry-run" ]; then
+    K2_RELEASE_DRY=1
+    shift
+fi
+case "${K2_RELEASE_DRY:-0}" in
+    0|1) K2_RELEASE_DRY="${K2_RELEASE_DRY:-0}"; export K2_RELEASE_DRY ;;
+    *) echo "ERROR: K2_RELEASE_DRY must be 0 or 1 (got ${K2_RELEASE_DRY})" >&2; exit 1 ;;
+esac
+# shellcheck source=scripts/lib/release-dry.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/release-dry.sh"
 
 # Staple with retry: after `notarytool --wait` reports Accepted, the ticket
 # can take a minute to propagate to CloudKit — a premature staple fails with
@@ -225,8 +248,9 @@ staple_with_retry() {
 VERSION="${1:-}"
 NOTES_FILE="${2:-}"
 if [ -z "$VERSION" ]; then
-    echo "Usage: ./scripts/release.sh <version> [notes-file]" >&2
+    echo "Usage: ./scripts/release.sh [--dry-run] <version> [notes-file]" >&2
     echo "Example: ./scripts/release.sh 0.25.0 release-notes.md" >&2
+    echo "--dry-run (or K2_RELEASE_DRY=1): a rehearsal in a scratch worktree; nothing is published." >&2
     echo "" >&2
     echo "If notes-file is provided, its contents are used as GitHub release notes." >&2
     echo "Otherwise, a placeholder is used (edit on GitHub after release)." >&2
@@ -247,6 +271,21 @@ if [ "$(uname -s)" = "Darwin" ]; then
     trap 'exit 130' INT
     trap 'exit 143' TERM
     k2_release_wait_node_idle
+fi
+
+# ── Dry release: the rehearsal runs in a scratch worktree, under this lock ──
+# The switch execs the scratch tree's release.sh (same pid, so the lock
+# stays this run's: k2_release_lock_acquire keeps a lock that names its own
+# pid). Everything below then runs there.
+if k2dry_on; then
+    if [ "${K2_RELEASE_DRY_INNER:-0}" != 1 ]; then
+        k2dry_prepare "$(cd "$(dirname "$0")/.." && pwd)" "$VERSION" "$NOTES_FILE" || exit 1
+        echo "FATAL: the dry-run switch returned without starting the rehearsal" >&2
+        exit 1
+    fi
+    k2dry_inner_check "$(cd "$(dirname "$0")/.." && pwd)" || exit 1
+    trap '_k2dry_rc=$?; k2dry_finish "$_k2dry_rc"; k2_release_lock_release; exit "$_k2dry_rc"' EXIT
+    k2dry_step start "Lock, scratch tree, .env, settings"
 fi
 
 TAG="v${VERSION}"
@@ -290,6 +329,7 @@ fi
 
 echo "═══════════════════════════════════════════════════"
 echo "  K2 Release: ${TAG}  →  ${RELEASE_REPO}"
+if k2dry_on; then echo "  DRY RUN: a rehearsal; nothing below is published"; fi
 echo "═══════════════════════════════════════════════════"
 
 # Load .env file if present (K2_GMAIL_CLIENT_ID / K2_GMAIL_CLIENT_SECRET
@@ -359,6 +399,9 @@ case "$K2_SIGNER" in
 esac
 # shellcheck source=scripts/lib/sign-approve.sh
 source "$PROJECT_DIR/scripts/lib/sign-approve.sh"
+# Dry run: placeholders for the update-key signatures and no approval
+# session (scripts/lib/release-dry.sh says why). Nothing in a real run.
+k2dry_install_overrides
 
 cd "$PROJECT_DIR"
 
@@ -749,6 +792,7 @@ k2_linux_builds_preflight() {
         github) echo "  Linux: GitHub (K2_LINUX_BUILDS=github)." ;;
     esac
 }
+k2dry_step 0.3 "Linux builds pre-flight (compute ready, repo variable settable)"
 k2_linux_builds_preflight
 
 # Right before the tag push (from k2_shadow_tree_check): the repo variable
@@ -758,6 +802,10 @@ k2_linux_builds_set_var() {
     want="$(k2_linux_builds_want_var)"
     if k2_linux_builds_var_is "$want"; then
         echo "  repo variable LINUX_BUILDS: ${want} (GitHub builds $(k2_linux_builds_github_part "$want"))."
+        return 0
+    fi
+    if [ "${K2_RELEASE_DRY:-0}" = 1 ]; then
+        k2dry_would "gh variable set LINUX_BUILDS -b ${want} --repo $RELEASE_REPO (it reads '$(k2_linux_builds_get_var)' now; GitHub would build $(k2_linux_builds_github_part "$want"))"
         return 0
     fi
     if ! gh variable set LINUX_BUILDS -b "$want" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
@@ -930,7 +978,9 @@ k2_shadow_collect() {
 k2_shadow_tree_check() {
     if k2_compute_on && [ -n "$K2_SHADOW_STATE" ]; then
         local tagged
-        tagged="$(git rev-parse 'HEAD^{tree}')"
+        # K2_RELEASE_TREE_REF: a dry run's release commit (a commit object
+        # only; Step 8.9). Otherwise HEAD, the release commit just made.
+        tagged="$(git rev-parse "${K2_RELEASE_TREE_REF:-HEAD}^{tree}")"
         if [ "$tagged" = "$K2CR_TREE" ]; then
             echo "  ✓ the release commit's tree is the tree K2 Compute built (${tagged:0:12})." | tee -a "$K2_SHADOW_STATE/summary.txt"
         else
@@ -986,6 +1036,10 @@ k2_shadow_report() {
     fi
     echo ""
     echo "Step 10.7: Shadow report, K2 Compute vs GitHub Linux assets..."
+    if [ "${K2_RELEASE_DRY:-0}" = 1 ]; then
+        k2dry_skip_step "the shadow report compares with the release's GitHub-built assets (no release in a rehearsal); audit: ${K2_SHADOW_STATE:-none}"
+        return 0
+    fi
     if [ "$K2_SHADOW_LATE" = "1" ] && [ -n "$K2_SHADOW_STATE" ]; then
         echo "  collecting the compute jobs Step 7.9c left running (up to ${K2_COMPUTE_LATE_WAIT_MIN:-60} min more)..."
         k2cr_wait "${K2_COMPUTE_LATE_WAIT_MIN:-60}" || k2_shadow_warn "jobs still not done after ${K2_COMPUTE_LATE_WAIT_MIN:-60} more min"
@@ -1012,6 +1066,8 @@ k2_arch_gate_on_exit() {
         k2ccr_cancel_open || true
     fi
     k2rg_cancel_open || true
+    # Dry run: the per-step summary and DRY_EXIT (scripts/lib/release-dry.sh).
+    if [ "${K2_RELEASE_DRY:-0}" = 1 ]; then k2dry_finish "$rc"; fi
     k2_release_lock_release
     exit "$rc"
 }
@@ -1020,6 +1076,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # ── Step 0.4: Rust pin (rust-toolchain.toml) ──
+k2dry_step 0.4 "Rust toolchain pin"
 # Every build of this release (here, the K2 Compute nodes, GitHub) uses the
 # same rustc. scripts/lib/rust-pin.sh. Escape: K2_SKIP_RUST_PIN_CHECK=1.
 echo ""
@@ -1027,6 +1084,7 @@ echo "Step 0.4: Rust toolchain pin..."
 k2_rust_pin_check
 
 # ── Step 0.45: Update-signing preflight (SS1/SS2) ──
+k2dry_step 0.45 "Update-signing preflight + key copies test"
 # Before any build, and on resumed runs too (Step 8.5 and 10.5 still sign):
 # the key file (0600 in a 0700 dir), its keychain password, minisign, a
 # self-test signature that verifies with the source tree's public key, and
@@ -1045,6 +1103,7 @@ bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"
 export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
 
 # ── Step 0.5: Pre-flight quality gates ──
+k2dry_step 0.5 "Pre-flight gates (cargo, typecheck, vitest, vite:build:web)"
 # Added at 0.40.31 when the tree first reached warning-zero / typecheck-zero.
 # Fail the release BEFORE any version bump or build if regressions slipped in.
 # NOTE: bare `tsc --noEmit` is vacuous here (root tsconfig has files:[] +
@@ -1104,6 +1163,7 @@ if [ "$K2_GATES_WHERE" = compute ]; then
 fi
 
 # ── Step 0.55: Root-helper signing preflight (prd-k2-root-helper-v1 §9.1) ──
+k2dry_step 0.55 "Root-helper key preflights (helper, k2-node, engine)"
 # The helper is signed after CI builds it (Step 10.5) with the SEPARATE
 # root-helper key that lives only on this Mac. Fail now, not after a
 # 30-minute build, if the key / keychain password / RELEASE_KEYS are not
@@ -1142,6 +1202,7 @@ else
 fi
 
 # ── Step 0.6: Linux build gate (a K2 Compute job; K2_LINUX_GATE=ssh = the old box) ──
+k2dry_step 0.6 "Linux build gate"
 # Shared with scripts/build-app.sh — full rationale and settings live in
 # scripts/linux-build-gate.sh: `cargo check --workspace --all-targets`
 # (the k2 crate too) at HEAD on a Linux node, --tier ci, the pinned Rust.
@@ -1155,6 +1216,7 @@ else
 fi
 
 # ── Step 1: Bump version ──
+k2dry_step 1 "Version bump (scratch tree only)"
 echo ""
 echo "Step 1: Bumping version to ${VERSION}..."
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json src-tauri/tauri.conf.json
@@ -1170,6 +1232,7 @@ bash scripts/build-cli.sh
 echo "  Done."
 
 # ── Step 1.5: Verify WHATS_NEW.md has an entry for this version ──
+k2dry_step 1.5 "WHATS_NEW.md entry"
 #
 # 0.38.7 release-script contract: every released version MUST have a
 # matching `## <version>` header in WHATS_NEW.md (the user-facing
@@ -1215,6 +1278,7 @@ echo "  Found '## ${VERSION}' entry. OK to proceed."
 fi # SKIP_BUILD (the checks before the approval)
 
 # ── Step 1.55: Signing approval, once: Touch ID or the login password (prd-signing-user-v1 S2) ──
+k2dry_step 1.55 "Signing approval (skipped in a rehearsal)"
 # After every check that builds nothing (Steps 0.4–1.5: the pin, the
 # signing preflights, the pre-flight gates, the Linux build gate, the version
 # bump in the working tree, WHATS_NEW) and before anything is built, signed
@@ -1248,9 +1312,11 @@ fi
 
 if [ "$SKIP_BUILD" = 0 ]; then
 # ── Step 1.6c: Linux builds on K2 Compute (shadow or compute mode, background) ──
+k2dry_step 1.6c "Linux builds on K2 Compute (submit)"
 k2_shadow_start
 
 # ── Step 2: Build K2.app + every sidecar binary ──
+k2dry_step 2 "Build K2.app + sidecars"
 #
 # One shared build step for dev-build.sh, build-app.sh and release.sh:
 # scripts/lib/build-binaries.sh. It runs `tauri build` (frontend + the `k2`
@@ -1286,6 +1352,7 @@ k2_build_mac_binaries "target/release/bundle/macos/K2.app"
 echo "  Build complete."
 
 # ── Step 3: Sign with hardened runtime ──
+k2dry_step 3 "Developer ID signing (hardened runtime)"
 echo ""
 echo "Step 3: Signing with hardened runtime..."
 # 0.37.9: pass --entitlements so codesign attaches our requested
@@ -1346,6 +1413,7 @@ k2_screen_helper_verify "target/release/bundle/macos/K2.app"
 k2_screen_helper_verify_signed "target/release/bundle/macos/K2.app"
 
 # ── Step 3.5: Launch smoke-test — catch AMFI exec rejections (0.40.6 regression) ──
+k2dry_step 3.5 "Launch smoke-test (AMFI)"
 # A signed Developer-ID app carrying a RESTRICTED entitlement (e.g.
 # keychain-access-groups) with NO embedded provisioning profile is SIGKILL'd by
 # AMFI at exec — it notarizes fine but users get the Finder "K2 can't be opened"
@@ -1384,6 +1452,7 @@ else
 fi
 
 # ── Step 3.6: Start what can run during the notarization waits (0.46.13) ──
+k2dry_step 3.6 "Standalone daemon build (background)"
 # Steps 4–7.5 are mostly waiting on Apple (three notarizations, 3–5 min
 # each) with the CPU idle, so:
 #  - Step 8.5's standalone daemon (k2-daemon recompiled with the k2-ptyd and
@@ -1405,6 +1474,7 @@ if [ "${K2_STANDALONE_DAEMON_EARLY:-1}" = "1" ]; then
 fi
 
 # ── Step 4: Notarize app via ZIP ──
+k2dry_step 4 "Notarize + staple the app (k2-node submitted)"
 echo ""
 echo "Step 4: Notarizing app..."
 # k2-node (Step 8.55's standalone asset) goes in first, without waiting: it
@@ -1453,6 +1523,7 @@ k2_screen_helper_verify_shipped "K2.app"
 k2_standalone_macos_daemon_poll "$STANDALONE_STAGE" || exit 1
 
 # ── Step 5: Create update bundle (tar.gz) from notarized app + sign it ──
+k2dry_step 5 "Update bundle (tar.gz) + its signatures"
 echo ""
 echo "Step 5: Creating and signing update bundle..."
 cd "$PROJECT_DIR"
@@ -1477,6 +1548,7 @@ k2u_sign u2 "target/release/bundle/macos/K2.app.tar.gz" K2.app.tar.gz "$VERSION"
 echo "  Update bundle signed (U1 + U2)."
 
 # ── Step 6: Create DMG from notarized app ──
+k2dry_step 6 "DMG"
 echo ""
 echo "Step 6: Creating DMG..."
 rm -f "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
@@ -1521,6 +1593,7 @@ codesign --force --timestamp \
     "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
 
 # ── Step 7: Notarize DMG ──
+k2dry_step 7 "Notarize + staple the DMG"
 echo ""
 echo "Step 7: Notarizing DMG..."
 xcrun notarytool submit "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
@@ -1531,6 +1604,7 @@ k2_standalone_macos_daemon_poll "$STANDALONE_STAGE" || exit 1
 fi # SKIP_BUILD
 
 # ── Step 7.5: Clean-VM new-user pairing smoke (0.40.33/34 regression class) ──
+k2dry_step 7.5 "Clean-VM new-user pairing smoke"
 # Fresh Sequoia guest, empty ~/.k2*, install this DMG, start bundled daemon,
 # assert ~/.k2so → ~/.k2 symlink + /boot-status via the thin-client path.
 # Hard gate before latest.json / GitHub publish. Escape: K2_SKIP_VM_PAIRING_SMOKE=1
@@ -1553,9 +1627,11 @@ fi
 fi # SKIP_SMOKE
 
 # ── Step 7.9c: Collect the shadow compute builds ──
+k2dry_step 7.9c "K2 Compute Linux builds: wait, fetch, verify"
 k2_shadow_collect
 
 # ── Step 8: Generate latest.json ──
+k2dry_step 8 "latest.json"
 echo ""
 echo "Step 8: Generating latest.json..."
 # Dual-signing is fail closed both ways: without the U1 (bridge) signature
@@ -1582,7 +1658,10 @@ PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # patch). Publishing darwin-only is fine for Mac; Windows "Check for
 # updates" fails with "None of the fallback platforms windows-x86_64 were
 # found" until that merge (0.40.95 incident).
-cat > "/tmp/latest.json" <<MANIFEST
+# A dry run writes it to its run dir (never uploaded).
+LATEST_JSON="/tmp/latest.json"
+if k2dry_on; then LATEST_JSON="$K2_RELEASE_DRY_RUN_DIR/latest.json"; fi
+cat > "$LATEST_JSON" <<MANIFEST
 {
   "version": "${VERSION}",
   "notes": "K2 ${TAG}",
@@ -1599,6 +1678,7 @@ MANIFEST
 echo "  latest.json generated (darwin-aarch64; windows-x86_64 added after NSIS if present)."
 
 # ── Step 8.5: Standalone per-OS daemon binary + signature + manifest ──
+k2dry_step 8.5 "Standalone macOS daemon + daemon-latest.json (+ compute stage)"
 #
 # Remote-update P1: publish a STANDALONE k2-daemon binary (no .app
 # wrapper) so headless servers and the daemon self-update path (P3) can
@@ -1699,8 +1779,10 @@ k2_daemon_manifest "${VERSION}" "${PUB_DATE}" "${ARTIFACTS_JSON}" "$PROJECT_DIR/
 grep -q '"notes"' "$DIST_DIR/daemon-latest.json" \
     || { echo "ERROR: daemon-latest.json has no notes (WHATS_NEW.md '## ${VERSION}' section?)" >&2; exit 1; }
 echo "  daemon-latest.json generated at $DIST_DIR/daemon-latest.json (with notes)"
+if k2dry_on; then cp "$DIST_DIR/daemon-latest.json" "$K2_RELEASE_DRY_RUN_DIR/daemon-latest.json"; fi
 
 # ── Step 8.55: Standalone k2-node for macOS (prd-k2-node-admin-v1 §8.2) ──
+k2dry_step 8.55 "Standalone macOS k2-node (notarization collected)"
 # A Mac compute node runs /Library/Application Support/K2/node/k2-node,
 # outside K2.app, and self-updates from the release asset
 # k2-node-macos-aarch64 (the bare Mach-O; the controller downloads it,
@@ -1752,6 +1834,7 @@ fi
 echo "  $NODE_MAC_ASSET staged (+ .sha256); minisign .sig comes at Step 10.5."
 
 # ── Step 8.6: Publish hosted-web SPA to Cloudflare R2 ──
+k2dry_step 8.6 "Web SPA bundle to R2 (--dry-run)"
 #
 # Additive, versioned layout: app/<ver>/index.html + content-hashed assets.
 # Separate artifact from the DMG — desktop release must not die on R2 TLS
@@ -1762,6 +1845,11 @@ echo "Step 8.6: Publishing web SPA bundle to R2 (app/${VERSION}/)..."
 WEB_PUBLISH_ARGS=("$VERSION" --skip-if-no-creds)
 if [ "${K2_WEB_BUNDLE_PRUNE:-0}" = "1" ]; then
     WEB_PUBLISH_ARGS+=(--prune)
+fi
+if k2dry_on; then
+    # The script's own dry run: it prints each upload, writes nothing.
+    k2dry_would "bash scripts/publish-web-bundles.sh ${WEB_PUBLISH_ARGS[*]} (uploads app/${VERSION}/, the loader and app/current.json to R2); its --dry-run below lists them"
+    WEB_PUBLISH_ARGS+=(--dry-run)
 fi
 set +e
 "$PROJECT_DIR/scripts/publish-web-bundles.sh" "${WEB_PUBLISH_ARGS[@]}"
@@ -1780,6 +1868,7 @@ else
 fi
 
 # ── Step 9: Create GitHub Release ──
+k2dry_step 9a "Release assets and notes"
 echo ""
 echo "Step 9: Creating GitHub release ${TAG}..."
 ASSETS=(
@@ -1787,7 +1876,7 @@ ASSETS=(
     "target/release/bundle/macos/K2.app.tar.gz"
 )
 [ -f "$SIG_FILE" ] && ASSETS+=("$SIG_FILE")
-ASSETS+=("/tmp/latest.json")
+ASSETS+=("$LATEST_JSON")
 
 # Standalone daemon assets (remote-update P1): the native macos-aarch64
 # binary + its .sig, plus the daemon manifest. The Linux daemons come from
@@ -1852,7 +1941,14 @@ else
     ' WHATS_NEW.md > "$NOTES_SRC"
     echo "  Using WHATS_NEW.md '## ${VERSION}' section as the release body."
 fi
+if k2dry_on; then
+    cp "$NOTES_SRC" "$K2_RELEASE_DRY_RUN_DIR/release-notes.md"
+    [ -s "$NOTES_SRC" ] || k2dry_fail "the release body would be empty ($NOTES_SRC): WHATS_NEW.md has no '## ${VERSION} — <title>' section"
+    echo "  [dry] what Step 9 would upload:"
+    k2dry_release_assets_check "${ASSETS[@]}" || true
+fi
 # ── Step 8.9: Commit + push the version bump, then create + push the tag ──
+k2dry_step 8.9 "Release commit, tree check, push + tag"
 # Historically release.sh bumped the version files only to BUILD the installers
 # and never committed them, so `main` lagged at the prior version after every
 # release and `gh release create` below tagged origin's stale HEAD (the tag
@@ -1864,6 +1960,15 @@ fi
 # BEFORE publishing — safer than the old after-the-fact state.
 echo ""
 echo "Step 8.9: Committing version bump + pushing tag ${TAG}..."
+if k2dry_on; then
+    # The release commit as a commit object only (HEAD's tree plus the
+    # bumped files, as `git add` + `git commit` below would make it): no
+    # index, no HEAD, no branch or tag moves; never pushed. Step 9.5 builds
+    # Windows from it, as the real run does from the tag.
+    K2_RELEASE_TREE_REF="$(k2_release_preview_commit)"
+    echo "  [dry] release commit ${K2_RELEASE_TREE_REF:0:12} (tree $(git rev-parse --short "${K2_RELEASE_TREE_REF}^{tree}")): a commit object only; no branch or tag points at it"
+    k2dry_would "git add + git commit -m \"chore(release): ${TAG}\" on $(git rev-parse --short HEAD) (the release commit above)"
+else
 git add -- "${RELEASE_COMMIT_FILES[@]}"
 if git diff --cached --quiet; then
     echo "  (version files already committed — nothing new to commit)"
@@ -1871,24 +1976,37 @@ else
     git commit -m "chore(release): ${TAG}"
     echo "  Committed version bump."
 fi
+fi
 # HEAD:main, not bare HEAD — release worktrees run DETACHED (worktrees
 # can't check out a branch already held by the main checkout), and a
 # bare `git push origin HEAD` fails there ("not a full refname") AFTER
 # the build/sign/notarize already succeeded (v0.40.39 hit this; the
 # tail had to be run by hand).
 k2_shadow_tree_check
+if k2dry_on; then
+    k2dry_would "git push origin HEAD:main (main would get the release commit: tree $(git rev-parse --short "${K2_RELEASE_TREE_REF}^{tree}") on $(git rev-parse --short HEAD))"
+    k2dry_would "git tag -fa $TAG -m \"K2 ${TAG}\" (a tag is a shared ref: not even made locally)"
+    k2dry_would "git push origin refs/tags/${TAG} --force"
+else
 git push origin HEAD:main
 git tag -fa "$TAG" -m "K2 ${TAG}"
 git push origin "refs/tags/${TAG}" --force
 echo "  Pushed main + tag ${TAG} at $(git rev-parse --short HEAD)."
+fi
 
 # ── Step 9: Create the GitHub release (attaches to the tag pushed above) ──
+k2dry_step 9 "GitHub release"
+if k2dry_on; then
+    k2dry_would "gh release create $TAG <the ${#ASSETS[@]} assets listed above> --repo $RELEASE_REPO --title $TAG --notes-file <release-notes.md in the run dir> (a LIVE release)"
+else
 gh release create "$TAG" "${ASSETS[@]}" \
     --repo "$RELEASE_REPO" \
     --title "$TAG" \
     --notes-file "$NOTES_SRC"
+fi
 
 # ── Step 9.5: Windows NSIS (Alpha) on K2-WIN-AX41 ──
+k2dry_step 9.5 "Windows NSIS (Alpha) on K2-WIN-AX41"
 #
 # scripts/windows-nsis-build.sh sends the tag to the box as a git bundle,
 # builds there, and copies the unsigned installer back to dist-windows/.
@@ -1901,6 +2019,8 @@ export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
 echo ""
 echo "Step 9.5: Windows NSIS installer, Alpha (${K2_WINDOWS_SSH_HOST:-k2-win-ax41})..."
 WIN_PATCH_FAILED=""
+# Dry run: no tag; the box builds the release commit Step 8.9 made.
+if k2dry_on; then export K2_WINDOWS_REF="$K2_RELEASE_TREE_REF"; fi
 set +e
 "$PROJECT_DIR/scripts/windows-nsis-build.sh" "$VERSION"
 WIN_NSIS_RC=$?
@@ -1908,7 +2028,12 @@ set -e
 if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
     WIN_SETUP="$PROJECT_DIR/dist-windows/K2_${VERSION}_x64-setup.exe"
     WIN_SUMS="$PROJECT_DIR/dist-windows/SHA256SUMS-windows-x86_64.txt"
-    if [ -f "$WIN_SETUP" ]; then
+    if [ -f "$WIN_SETUP" ] && k2dry_on; then
+        echo "  [dry] Windows installer built: $WIN_SETUP"
+        k2dry_would "gh release upload $TAG $(basename "$WIN_SETUP")#Windows installer (Alpha, x64) $(basename "$WIN_SUMS") --repo $RELEASE_REPO --clobber"
+        k2dry_would "gh release edit $TAG --notes-file <the notes + a Windows (Alpha) paragraph>"
+        k2dry_would "bash scripts/windows-patch-latest-json.sh $VERSION $WIN_SETUP (signs the setup U1+U2, adds windows-x86_64 to the published latest.json, re-uploads it)"
+    elif [ -f "$WIN_SETUP" ]; then
         # `file#label`: the release page shows the label, the download
         # keeps the file name.
         gh release upload "$TAG" "${WIN_SETUP}#Windows installer (Alpha, x64)" \
@@ -1948,6 +2073,7 @@ if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
     fi
 fi
 if [ "$WIN_NSIS_RC" -ne 0 ] && [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
+    if k2dry_on; then k2dry_fail "the Windows NSIS build failed (rc=$WIN_NSIS_RC); a real run goes out without it unless K2_REQUIRE_WINDOWS_NSIS=1"; fi
     if [ "${K2_REQUIRE_WINDOWS_NSIS:-0}" = "1" ]; then
         echo "  FATAL: Windows NSIS failed (rc=$WIN_NSIS_RC) and K2_REQUIRE_WINDOWS_NSIS=1." >&2
         exit 1
@@ -1958,6 +2084,7 @@ if [ "$WIN_NSIS_RC" -ne 0 ] && [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
 fi
 
 # ── Step 10: Verify the updater can actually FETCH valid JSON ──
+k2dry_step 10 "Updater manifests"
 # We GENERATE latest.json + daemon-latest.json above, but a release is only
 # good if the updater's real endpoints serve valid JSON. The app updater +
 # the daemon self-update both fetch via GitHub's
@@ -1990,8 +2117,12 @@ verify_manifest() {
         VERIFY_FAILED=1
     fi
 }
+if k2dry_on; then
+    k2dry_skip "fetching the published latest.json and daemon-latest.json (no release in a rehearsal; the files as written are checked below)"
+else
 verify_manifest "app latest.json"    "${VERIFY_BASE}/latest.json"
 verify_manifest "daemon-latest.json" "${VERIFY_BASE}/daemon-latest.json"
+fi
 
 # SS4/SS5: the published manifests carry U2 signatures that verify with the
 # SOURCE tree's UPDATER_KEYS, checked the way a 0.46.6+ install checks them.
@@ -2049,9 +2180,16 @@ PY
     rm -rf "$d"
     echo "  ✓ latest.json k2_signatures and ${MAC_ASSET}.sig2 verify with UPDATER_KEYS; the U1 bridge signatures verify too"
 }
+if k2dry_on; then
+    k2dry_check_manifests "$LATEST_JSON" "$DIST_DIR/daemon-latest.json" "$DIST_DIR/$MAC_ASSET" "$VERSION" "$RELEASE_REPO" "$TAG" "$U2_KEY_ID" \
+        || k2dry_fail "the updater manifests as written are wrong (above)"
+    k2dry_skip "the U2 + U1 signature checks (placeholders in a rehearsal)"
+else
 k2_verify_published_u2 || U2_VERIFY_FAILED=1
+fi
 
 # ── Step 10.5: Sign the Linux daemons (prd-security-sweep-0464-v1 SS1) ──
+k2dry_step 10.5 "Linux signing (root helper, k2-node, engine, daemons)"
 # daemon-binaries.yml uploads k2-daemon-linux-<arch> + .sha256 UNSIGNED;
 # this Mac checks and signs them with the update key, uploads the .sig and
 # then merges them into daemon-latest.json. Until it does, Linux daemons
@@ -2078,6 +2216,17 @@ ROOT_KEY_SIGN_ARGS=()
 if [ "$K2_LINUX_BUILDS" = compute ] && k2_ci_client; then
     if [ "$K2_COMPUTE_ARM" = compute ]; then ROOT_KEY_SIGN_ARGS=(--verdict x86_64,aarch64); else ROOT_KEY_SIGN_ARGS=(--verdict x86_64); fi
 fi
+ROOT_HELPER_SIGN_FAILED=""
+K2_NODE_SIGN_FAILED=""
+APP_ENGINE_SIGN_FAILED=""
+if k2dry_on; then
+    # Every sign-* script needs the published release, and the signers
+    # record each signature for the version: the checks that need neither
+    # run (scripts/lib/release-dry.sh), the rest say "would".
+    echo ""
+    echo "Step 10.5: [dry] Linux signing: the checks before signing; nothing is signed or uploaded..."
+    k2dry_linux_sign_rehearsal
+else
 if [ "${K2_SKIP_DAEMON_SIGN:-0}" = "1" ]; then
     echo ""
     echo "  ⚠⚠ LINUX DAEMON SIGNING SKIPPED (K2_SKIP_DAEMON_SIGN=1) ⚠⚠" >&2
@@ -2132,8 +2281,10 @@ if [ "${K2_SKIP_APP_ENGINE_SIGN:-0}" != "1" ]; then
         echo "  ✗ k2-app-engine NOT signed — re-run: bash scripts/sign-app-engine.sh ${VERSION}" >&2
     fi
 fi
+fi # dry run (Step 10.5)
 
 # ── Step 10.6: Every Linux package has a SHA256SUMS line ──
+k2dry_step 10.6 "Linux packages vs SHA256SUMS"
 # app-linux.yml (deb/rpm/AppImage) and arch-package.yml (pkg.tar.zst) each
 # merge their lines into SHA256SUMS-linux-x86_64.txt after the tag. The
 # desktop updater refuses a Linux package with no line (v0.46.0 shipped
@@ -2148,6 +2299,10 @@ ARCH_PKG_RUN_URL=""
 if [ "${K2_SKIP_LINUX_SUMS_CHECK:-0}" = "1" ]; then
     echo ""
     echo "  ⚠⚠ LINUX SHA256SUMS CHECK SKIPPED (K2_SKIP_LINUX_SUMS_CHECK=1) ⚠⚠"
+elif k2dry_on; then
+    echo ""
+    echo "Step 10.6: [dry] the staged Linux packages vs their SHA256SUMS lines..."
+    k2dry_linux_sums_local
 else
     echo ""
     if [ "$K2_LINUX_BUILDS" = compute ]; then
@@ -2164,12 +2319,17 @@ else
     fi
 fi
 
+k2dry_step 10.7 "Shadow report / compute audit"
 k2_shadow_report
 
 echo ""
 echo "═══════════════════════════════════════════════════"
+if k2dry_on; then
+echo "  Dry release ${TAG} (rehearsal) finished: nothing was published. The summary follows."
+else
 echo "  Release ${TAG} complete!"
 echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
+fi
 [ -n "$VERIFY_FAILED" ] && echo "  ⚠  UPDATER MANIFEST CHECK FAILED — see Step 10 above (updater may 'Could not fetch a valid release JSON' until it clears)"
 [ -n "$WIN_PATCH_FAILED" ] && echo "  ⚠  WINDOWS latest.json NOT PATCHED — bash scripts/windows-patch-latest-json.sh ${VERSION} dist-windows/K2_${VERSION}_x64-setup.exe"
 [ -n "$U2_VERIFY_FAILED" ] && echo "  ⚠  U2 OR U1 SIGNATURES MISSING OR BAD IN THE PUBLISHED MANIFESTS — some installs can't update (Step 10)"
@@ -2182,4 +2342,6 @@ echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "${ARCH_PKG_PENDING:-}" ] && echo "  …  Arch package still building on k2-arch (not waited for): bash scripts/linux-sums.sh check ${VERSION} --wait-min 60"
 [ -n "$K2_COMPUTE_FELL_BACK" ] && echo "  ⚠  K2 COMPUTE FELL BACK TO GITHUB — ${K2_COMPUTE_FELL_BACK}"
 echo "═══════════════════════════════════════════════════"
+# Dry run: a failed check ends it DRY_EXIT=1 (the EXIT trap prints the summary).
+if k2dry_on && k2dry_failed; then exit 1; fi
 [ -z "$WIN_PATCH_FAILED" ] && [ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ] && [ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] && [ -z "$ARCH_PKG_FAILED" ] || exit 1

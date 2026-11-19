@@ -44,7 +44,14 @@ k2_release_lock_acquire() {
         fi
         [ -e "$K2_RELEASE_LOCK" ] || { echo "FATAL: cannot write ${K2_RELEASE_LOCK}" >&2; return 1; }
         holder="$(_k2_lock_pid "$K2_RELEASE_LOCK")"
-        if [ -n "$holder" ] && [ "$holder" != "$$" ] && kill -0 "$holder" 2>/dev/null; then
+        # Our own pid: this process took it before an exec (release.sh's
+        # dry-run switch execs the scratch tree's release.sh). Keep it.
+        if [ "$holder" = "$$" ]; then
+            K2_RELEASE_LOCK_OURS=1
+            echo "  Release lock kept: ${K2_RELEASE_LOCK} (pid $$ took it before switching to the dry-run scratch tree)." >&2
+            return 0
+        fi
+        if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
             echo "FATAL: ${K2_RELEASE_LOCK} is held by a running process (pid ${holder}):" >&2
             sed 's/^/FATAL:   /' "$K2_RELEASE_LOCK" >&2
             echo "FATAL: another release.sh is running on this Mac. If it is not, remove the file and retry." >&2

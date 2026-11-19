@@ -186,6 +186,13 @@ chmod +x "$stubs"/*
 # The size ratchet is a script of the repo, run from its root.
 mkdir -p "$proj/scripts/garden"
 printf 'echo "ratchet" >> "$STUB_LOG"\n' > "$proj/scripts/garden/ratchet.sh"
+# The no-build checks before it (release-gates.sh K2RG_NO_BUILD_CHECKS):
+# the Mac test lists' `check` and the zone gate. Silent passes here, so
+# the ratchet is still the first thing the log shows.
+mkdir -p "$proj/scripts/ci"
+printf 'exit 0\n' > "$proj/scripts/ci/k2-node-mac-tests.sh"
+printf 'exit 0\n' > "$proj/scripts/ci/k2-daemon-mac-tests.sh"
+printf 'import sys\nsys.exit(0)\n' > "$proj/scripts/garden/zone-gate.py"
 printf '%s\n' "$block" > "$tmp/step05.sh"
 set +e
 out="$(cd "$proj" && env -u SDKROOT -u CMAKE_POLICY_VERSION_MINIMUM PATH="$stubs:$PATH" STUB_LOG="$tmp/step05.log" \

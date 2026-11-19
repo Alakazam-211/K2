@@ -500,23 +500,26 @@ title.date_prefix = DATE
 /// content inside the reference's block (as a converter writes it): the copy's rows are
 /// `REVISION_1` `A` and `REVISION_2` `B`.
 pub fn nested_title_sheet() -> Built {
-    let mut s = base().block(
-        "SHEETNO",
-        [0.0, 0.0],
-        vec![Ent::line([0.0, 0.0], [2.0, 0.0])],
-    );
-    s.blocks.push(k2_mpc_dxf::testgen::Block {
-        name: "TB".into(),
-        base: [0.0, 0.0],
-        ents: vec![Ent::insert("TITLE", [0.0, 0.0])
-            .attrib("REVISION_1", "A")
-            .attrib("DATE_1", "2026-01-05")
-            .attrib("REVISION_2", "B")
-            .attrib("DATE_2", "2026-02-01")],
-        flags: 4,
-        path: "..\\xrefs\\tb.dwg".into(),
-        rep_of: None,
-    });
+    let copy = Ent::insert("TITLE", [0.0, 0.0])
+        .attrib("REVISION_1", "A")
+        .attrib("DATE_1", "2026-01-05")
+        .attrib("REVISION_2", "B")
+        .attrib("DATE_2", "2026-02-01");
+    // the generator's external reference (`Spec::xref`: flags 4 and the path), with the copy of
+    // its content a converter writes inside it; no `Block` literal, so the generator's later
+    // fields keep their defaults
+    let mut s = base()
+        .block(
+            "SHEETNO",
+            [0.0, 0.0],
+            vec![Ent::line([0.0, 0.0], [2.0, 0.0])],
+        )
+        .xref("TB", "..\\xrefs\\tb.dwg");
+    let tb = s
+        .blocks
+        .last_mut()
+        .expect("nested_title_sheet: the reference just added");
+    tb.ents = vec![copy];
     s.paper(Ent::insert("TB", [0.0, 0.0]))
         .paper(Ent::insert("SHEETNO", [100.0, 5.0]).attrib("SHEET_NO", "201"))
         .build()

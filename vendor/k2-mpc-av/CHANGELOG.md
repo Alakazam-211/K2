@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.0: pairs with kit v0.23.0 and k2-mpc-cad v0.4.1
+
+It builds with **`k2-mpc-cad` v0.4.1** (the drawing model and the DXF reader) and **`k2-mpc-base`
+v0.23.0**, the kit `k2-mpc-cad` v0.4.1 pairs with, both checked out beside this repo (a host
+vendors the three side by side); `Cargo.lock` names them. The library's code is unchanged from
+v0.1.0: still read-only, with no edit verbs. A minor release because the CAD reader it builds on
+moves from v0.1.0 to v0.4.1; the known limits of `k2-mpc-cad` v0.4.1 apply.
+
+- **Tests:** the nested title sheet takes the CAD generator's external reference
+  (`Spec::xref`) and sets its content, where it built a `testgen::Block` whole; that literal
+  didn't compile against the generator's newer fields. The drawing is the same.
+- `Cargo.lock`: k2-mpc-base 0.23.0, k2-mpc-cad-model and k2-mpc-dxf 0.4.1, and their dependencies
+  as cargo resolves them; the crate version 0.2.0.
+
 ## v0.1.0: pairs with kit v0.21.0
 
 The first release of the AV reading layer. It builds with **`k2-mpc-cad` v0.1.0** (the drawing

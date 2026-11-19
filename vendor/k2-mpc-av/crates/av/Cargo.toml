@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-av"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reads a set of AV system drawings as a technician does: devices across sheets, the boundaries a cable is pulled through, off-sheet flag pairs, title-block revisions and a sheet index."
 edition.workspace = true
 rust-version.workspace = true

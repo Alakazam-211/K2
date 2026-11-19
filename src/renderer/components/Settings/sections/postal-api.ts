@@ -143,7 +143,9 @@ export function isPairingCode(value: string): boolean {
   return /^\d{6}$/.test(value.replace(/[\s-]/g, ''))
 }
 
-export function invitePostalFriend(scope: ServerScope, workspace: string, to: string, why: string): Promise<unknown> {
+/** `sent` is true once the daemon handed the request to the Postal
+ *  network; otherwise it goes out when the server connects. */
+export function invitePostalFriend(scope: ServerScope, workspace: string, to: string, why: string): Promise<{ sent?: boolean }> {
   return daemonCliPost(scope, 'postal/invite', why ? { workspace, to, why } : { workspace, to })
 }
 

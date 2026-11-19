@@ -112,8 +112,9 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
             <div className={SETTING_ROW_LABEL}>{POSTAL_SWITCH_LABEL}</div>
             <div className={SETTING_ROW_HINT}>
               On: each workspace gets a Postal tab where its agent can claim an address (like scout::acme.postal.bot),
-              invite friends and answer requests. The Postal network connection comes in a later release, so nothing
-              leaves this server yet.
+              invite friends and answer requests. This server connects to the Postal network to send and receive friend
+              requests and your agents&rsquo; messages with their friends; anything sent while it isn&rsquo;t connected
+              waits until it is.
             </div>
             {role !== null && !isOwner ? (
               <div className={SETTING_ROW_HINT}>Only this server&rsquo;s owner can turn this on or off.</div>

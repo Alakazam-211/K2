@@ -25,6 +25,7 @@ const cli = vi.hoisted(() => ({
   getFail: null as Error | null,
   gets: [] as { route: string; params: unknown }[],
   posts: [] as { route: string; body: unknown }[],
+  inviteResult: { ok: true } as unknown,
 }))
 const feature = vi.hoisted(() => ({ on: true }))
 const noted = vi.hoisted(() => ({ calls: [] as unknown[][] }))
@@ -46,6 +47,7 @@ vi.mock('@/lib/daemon-cli', () => ({
       cli.settings = { ...cli.settings, ...(body as object) }
       return { ok: true, ...cli.settings }
     }
+    if (route === 'postal/invite') return cli.inviteResult
     return { ok: true }
   }),
   isHostSwitchedError: () => false,
@@ -103,6 +105,7 @@ beforeEach(() => {
   cli.getFail = null
   cli.gets = []
   cli.posts = []
+  cli.inviteResult = { ok: true }
   feature.on = true
   noted.calls = []
 })
@@ -201,6 +204,64 @@ describe('PostalTab', () => {
     expect(cli.posts).toContainEqual({ route: 'postal/decide', body: { workspace: '/ws/ada', id: 'f9', decision: 'reject' } })
   })
 
+  it('lists blocked peers in their own Blocked group, not under Friends, with Unblock', async () => {
+    cli.friends = [
+      { id: 'f2', peer: 'bee::hive.postal.bot', status: 'accepted' },
+      { id: 'f4', peer: 'pest::spam.postal.bot', status: 'blocked' },
+    ]
+    render(<PostalTab project={project} scope={scope} />)
+    const blocked = await screen.findByTestId('postal-blocked')
+    const rows = blocked.querySelectorAll('[data-testid="postal-peer-row"]')
+    expect(Array.from(rows).map((r) => r.getAttribute('data-peer'))).toEqual(['pest::spam.postal.bot'])
+    // Friends lists only the accepted one, with Remove; Unblock lives under Blocked.
+    expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Block' })).toHaveLength(1)
+    const friendsRows = Array.from(document.querySelectorAll('[data-testid="postal-peer-row"]')).filter((r) => !blocked.contains(r))
+    expect(friendsRows.map((r) => r.getAttribute('data-status'))).toEqual(['accepted'])
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Unblock' }))
+    })
+    expect(cli.posts).toContainEqual({ route: 'postal/remove', body: { workspace: '/ws/ada', peer: 'pest::spam.postal.bot' } })
+    expect(screen.getByTestId('postal-notice').textContent).toBe('Unblocked pest::spam.postal.bot. It can send friend requests again.')
+  })
+
+  it('shows no Blocked group when nobody is blocked; Remove on a friend says Removed', async () => {
+    cli.friends = [{ id: 'f2', peer: 'bee::hive.postal.bot', status: 'accepted' }]
+    render(<PostalTab project={project} scope={scope} />)
+    const remove = await screen.findByRole('button', { name: 'Remove' })
+    expect(screen.queryByTestId('postal-blocked')).toBeNull()
+    await act(async () => {
+      fireEvent.click(remove)
+    })
+    expect(screen.getByTestId('postal-notice').textContent).toBe('Removed bee::hive.postal.bot.')
+  })
+
+  async function invite(to: string): Promise<void> {
+    cli.status = statusBody({ id: 'h1', address: 'ada::acme.postal.bot', status: 'claimed', createdAt: '2026-11-17T00:00:00Z' })
+    render(<PostalTab project={project} scope={scope} />)
+    const field = await screen.findByLabelText('Address to invite')
+    await waitFor(() => expect((field as HTMLInputElement).disabled).toBe(false))
+    fireEvent.change(field, { target: { value: to } })
+    await act(async () => {
+      fireEvent.submit(screen.getByTestId('postal-invite-form'))
+    })
+  }
+
+  it('the invite notice says sent when the daemon sent it', async () => {
+    cli.inviteResult = { ok: true, sent: true, network: 'sent' }
+    await invite('bee::hive.postal.bot')
+    expect(cli.posts).toContainEqual({ route: 'postal/invite', body: { workspace: '/ws/ada', to: 'bee::hive.postal.bot' } })
+    expect(screen.getByTestId('postal-notice').textContent).toBe('Invitation sent to bee::hive.postal.bot.')
+  })
+
+  it('the invite notice says it goes out later when the daemon could not send it yet', async () => {
+    cli.inviteResult = { ok: true, sent: false, network: 'not_yet' }
+    await invite('bee::hive.postal.bot')
+    expect(screen.getByTestId('postal-notice').textContent).toBe(
+      'Invitation to bee::hive.postal.bot goes out once this server connects to the Postal network.',
+    )
+  })
+
   it("shows the daemon's hint when Postal was turned off meanwhile", async () => {
     cli.getFail = new DaemonHttpError('Postal is off on this server. The owner turns it on in Settings.', 409, 'postal_off')
     render(<PostalTab project={project} scope={scope} />)
@@ -223,6 +284,18 @@ describe('PostalServerSwitch', () => {
     expect(cli.posts).toContainEqual({ route: 'postal/settings', body: { enabled: true } })
     await waitFor(() => expect(noted.calls).toContainEqual(['local', '0.46.14', ['postal']]))
     expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe('http://127.0.0.1:1/boot-status')
+  })
+
+  it('the hint says what the server sends over the Postal network, not that nothing leaves', async () => {
+    render(<PostalServerSwitch scope={scope} />)
+    const group = await screen.findByTestId('postal-server-switch')
+    const text = group.textContent ?? ''
+    expect(text).toContain('On: each workspace gets a Postal tab')
+    expect(text).toContain(
+      'This server connects to the Postal network to send and receive friend requests and your agents’ messages with their friends; anything sent while it isn’t connected waits until it is.',
+    )
+    expect(text).not.toMatch(/nothing\s+leaves/)
+    expect(text).not.toMatch(/later release/)
   })
 
   it('a non-owner sees it read-only', async () => {

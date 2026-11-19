@@ -8,11 +8,13 @@
 // Sections, all read from the daemon (postal-api.ts):
 //   - Address: the workspace's Postal address, or (Owner/Admin) a form to
 //     claim one;
-//   - Friends: accepted friends (a changed key and blocked ones marked), each
-//     with Remove and Block;
+//   - Friends: accepted friends (a changed key marked), each with Remove and
+//     Block;
 //   - Invitations: incoming (Accept opens K2's code form when the request
 //     carries a pairing code; Reject), outgoing (waiting), history, and an
 //     Invite form;
+//   - Blocked (only when there is one): Unblock lifts the block (the daemon's
+//     remove), so the peer can send friend requests again;
 //   - Routing: the default rule (k2 postal route changes it).
 //
 // The tab shows only while the server lists `postal` in `/boot-status`
@@ -54,7 +56,7 @@ export const POSTAL_MANIFEST: SettingEntry[] = [
 
 type Load<T> = { kind: 'loading' } | { kind: 'ready'; value: T } | { kind: 'error'; message: string }
 
-const FRIEND_STATUSES: ReadonlySet<PostalFriendStatus> = new Set(['accepted', 'rekey_pending', 'blocked'])
+const FRIEND_STATUSES: ReadonlySet<PostalFriendStatus> = new Set(['accepted', 'rekey_pending'])
 const HISTORY_STATUSES: ReadonlySet<PostalFriendStatus> = new Set(['rejected', 'revoked'])
 
 function statusTag(status: PostalFriendStatus): { text: string; tone: TagTone } | null {
@@ -201,9 +203,10 @@ export function PostalTab({
 
   const reload = useCallback(() => setNonce((n) => n + 1), [])
 
-  /** Run one write under `key`; its error shows by that key. */
+  /** Run one write under `key`; its error shows by that key. `done` is the
+   *  notice, or reads it from the write's result. */
   const run = useCallback(
-    async (key: string, write: () => Promise<unknown>, done?: string): Promise<boolean> => {
+    async <T,>(key: string, write: () => Promise<T>, done?: string | ((result: T) => string)): Promise<boolean> => {
       if (busy) return false
       setBusy(key)
       setNotice(null)
@@ -213,9 +216,9 @@ export function PostalTab({
         return rest
       })
       try {
-        await write()
+        const result = await write()
         if (!mounted.current) return true
-        if (done) setNotice(done)
+        if (done) setNotice(typeof done === 'function' ? done(result) : done)
         reload()
         return true
       } catch (err) {
@@ -234,6 +237,7 @@ export function PostalTab({
       friends: list.filter((f) => FRIEND_STATUSES.has(f.status)),
       incoming: list.filter((f) => f.status === 'pending_in'),
       outgoing: list.filter((f) => f.status === 'pending_out'),
+      blocked: list.filter((f) => f.status === 'blocked'),
       history: list.filter((f) => HISTORY_STATUSES.has(f.status)),
     }
   }, [friends])
@@ -277,7 +281,9 @@ export function PostalTab({
       setErrors((e) => ({ ...e, invite: 'Use a full address: handle::label.postal.bot' }))
       return
     }
-    const ok = await run('invite', () => invitePostalFriend(scope, workspace, to, inviteWhy.trim()), `Invitation to ${to} saved.`)
+    const ok = await run('invite', () => invitePostalFriend(scope, workspace, to, inviteWhy.trim()), (r) =>
+      r?.sent === true ? `Invitation sent to ${to}.` : `Invitation to ${to} goes out once this server connects to the Postal network.`,
+    )
     if (ok && mounted.current) {
       setInviteTo('')
       setInviteWhy('')
@@ -403,15 +409,13 @@ export function PostalTab({
                     >
                       Remove
                     </Button>
-                    {f.status !== 'blocked' ? (
-                      <Button
-                        variant="danger-quiet"
-                        disabled={busy !== null}
-                        onClick={() => void run(`block:${f.peer}`, () => blockPostalFriend(scope, workspace, f.peer), `Blocked ${f.peer}.`)}
-                      >
-                        Block
-                      </Button>
-                    ) : null}
+                    <Button
+                      variant="danger-quiet"
+                      disabled={busy !== null}
+                      onClick={() => void run(`block:${f.peer}`, () => blockPostalFriend(scope, workspace, f.peer), `Blocked ${f.peer}.`)}
+                    >
+                      Block
+                    </Button>
                   </>
                 ) : undefined
               }
@@ -525,6 +529,31 @@ export function PostalTab({
           </SettingRow>
         ) : null}
       </SettingsGroup>
+
+      {friends.kind === 'ready' && groups.blocked.length > 0 ? (
+        <SettingsGroup title="Blocked" card testId="postal-blocked">
+          {groups.blocked.map((f) => (
+            <PeerRow
+              key={f.id}
+              friend={f}
+              error={errors[`remove:${f.peer}`] ?? null}
+              actions={
+                canManage ? (
+                  <Button
+                    variant="quiet"
+                    disabled={busy !== null}
+                    onClick={() =>
+                      void run(`remove:${f.peer}`, () => removePostalFriend(scope, workspace, f.peer), `Unblocked ${f.peer}. It can send friend requests again.`)
+                    }
+                  >
+                    Unblock
+                  </Button>
+                ) : undefined
+              }
+            />
+          ))}
+        </SettingsGroup>
+      ) : null}
 
       {friends.kind === 'ready' && groups.history.length > 0 ? (
         <SettingsGroup title="History" card testId="postal-history">

@@ -257,6 +257,9 @@ pub fn handle_vault_handoff(body: &[u8]) -> CliResponse {
         reply_to: p.reply_to.clone(),
         auto_land: (listed && connected) || replied,
         remote_off: !opt_in,
+        // `handle` here is the sealed payload's own `from.handle`: peer data,
+        // not checked. Nothing reads `sender_label` today; do not show or
+        // trust it without checking it first (is_handle / escape_capped).
         sender_label: format!("{handle} on {host}"),
     };
     let got = match vault.handoff_receive(inc, value) {

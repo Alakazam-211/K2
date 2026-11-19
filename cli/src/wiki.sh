@@ -1053,13 +1053,26 @@ for e in items:
 # Unwrap daemon {"error": ...} (string or {hint,code}) to stderr and exit 1.
 # Success bodies print as-is. curl is not --fail, so HTTP 400 still returns
 # JSON with curl exit 0 (prd-workspace-already-exists-copy-v1 C6).
+# cli_print_or_fail RESP [ENDPOINT]: with ENDPOINT, the answer must be a
+# JSON object; an empty answer, one that is not JSON or JSON that is not an
+# object is no success: one line on stderr naming ENDPOINT, exit 1.
 cli_print_or_fail() {
-    local resp="$1"
-    local err
-    err=$(printf '%s' "$resp" | python3 -c 'import json,sys
+    local resp="$1" endpoint="${2:-}"
+    local err rc=0
+    err=$(printf '%s' "$resp" | K2_ANSWER_OF="$endpoint" python3 -c 'import json,os,sys
+raw = sys.stdin.read()
+of = os.environ.get("K2_ANSWER_OF") or ""
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(raw)
 except Exception:
+    if of and not raw.strip():
+        print("K2\x27s server gave an empty answer to %s" % of)
+    elif of:
+        print("K2\x27s server answered %s with something that is not JSON: %r" % (of, raw[:200]))
+    sys.exit(0)
+if not isinstance(d, dict):
+    if of:
+        print("K2\x27s server answered %s with JSON that is not an object: %s" % (of, raw[:200]))
     sys.exit(0)
 e = d.get("error")
 if not e:
@@ -1069,7 +1082,10 @@ if isinstance(e, dict):
 elif e in ("folder_trust_pending", "folder_trust_denied") and d.get("message"):
     print("%s: %s" % (e, d["message"]))
 else:
-    print(e)' 2>/dev/null)
+    print(e)' 2>/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ] && [ -z "$err" ]; then
+        err="could not read K2's server answer${endpoint:+ to $endpoint}"
+    fi
     if [ -n "$err" ]; then
         echo "Error: $err" >&2
         # Permission cards (vs-live C4): a refusal that teaches is a
@@ -1109,7 +1125,7 @@ cmd_workspace_create() {
     else
         resp=$(cli_request_post "/cli/workspace/create" "path=$(urlencode "$target_path")")
     fi
-    cli_print_or_fail "$resp"
+    cli_print_or_fail "$resp" /cli/workspace/create
 }
 
 # P13: re-assert Claude/Codex/Grok/Gemini folder trust for every registered
@@ -1574,7 +1590,7 @@ cmd_workspace_open() {
     else
         resp=$(cli_request_post "/cli/workspace/open" "path=$(urlencode "$target_path")")
     fi
-    cli_print_or_fail "$resp"
+    cli_print_or_fail "$resp" /cli/workspace/open
 }
 
 cmd_heartbeat_toggle() {

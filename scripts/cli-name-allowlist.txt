@@ -654,7 +654,7 @@
 2 value src/renderer/components/Settings/sections/ZenWidgetData.tsx keeper: wire; madeBy, from the Garden data JSON
 2 value src/renderer/components/Settings/sections/sew-api.ts keeper: wire; the Sew identity the daemon reads
 2 value src/renderer/lib/zen/zen-rail-views.ts keeper: inert; a built-in view's source label that nothing compares
-1 value crates/k2-client/src/account_session.rs keeper: outside; the bundle layout, the app's own binary name (src-tauri [[bin]]); B9 reads it again
+1 value crates/k2-client/src/account_session.rs debt: command (1 line); B9
 1 value crates/k2-client/src/cli_install.rs debt: command (1 line); B3
 1 value crates/k2-core/src/cli_folder_trust.rs keeper: outside; Cursor's marker file holds trustMethod; our revoke matches it
 1 value crates/k2-core/src/cli_folder_trust/gate.rs keeper: wire; a trust finding's tool, in the card's and the CLI's JSON

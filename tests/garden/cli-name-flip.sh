@@ -85,9 +85,9 @@ case "$out" in *"will change: text 10, comment 2"*) ok ;; *) die "the dry run co
 case "$out" in *"will not:    kept 1, unsure 9"*) ok ;; *) die "the dry run counts: $out" ;; esac
 
 # The dry run and --show change nothing.
-before="$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | shasum)"
+before="$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | cksum)"
 python3 "$FLIP" --root "$S" >/dev/null; python3 "$FLIP" --root "$S" --unsure >/dev/null
-[ "$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | shasum)" = "$before" ] || die "a dry run changed a file"; ok
+[ "$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | cksum)" = "$before" ] || die "a dry run changed a file"; ok
 
 # --apply rewrites text and comments, and nothing else.
 python3 "$FLIP" --apply --root "$S" | grep -q "rewrote 12 uses of k2 to k5 in 2 files" || die "--apply said: $(python3 "$FLIP" --apply --root "$S")"; ok
@@ -169,7 +169,7 @@ out="$(python3 "$FLIP" --root "$C")"
 case "$out" in *"the reader lost its place"*) die "the reader lost its place in a real part: $out" ;; esac; ok
 # (file, line, reason) of every unsure use; the line's text may change when
 # a text use shares the line.
-unsure_list() { python3 "$FLIP" --root "$C" --unsure | sed 's/\] .*/]/' | shasum; }
+unsure_list() { python3 "$FLIP" --root "$C" --unsure | sed 's/\] .*/]/' | cksum; }
 unsure_before="$(unsure_list)"
 python3 "$FLIP" --apply --root "$C" | grep -qE "rewrote [0-9]{4,} uses of k2 to k5 in [0-9]+ files" || die "--apply on the copy rewrote too little"; ok
 # The uses it would not touch are still there, each still k2.

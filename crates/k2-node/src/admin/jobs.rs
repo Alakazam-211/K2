@@ -795,7 +795,7 @@ pub const IP_ACCESS_KEYWORDS: &[&str] = &["any", "localhost", "link-local", "mul
 /// [`IP_ACCESS_KEYWORDS`] alone, or space-separated addresses/prefixes and
 /// no keyword. A keyword beside a prefix is "Failed to parse IP address
 /// prefix: localhost" and systemd-run exits 1 before any unit exists (the
-/// 0.46.15 `--netns-dummy` start failure on k2n11).
+/// 0.46.15 `--netns-dummy` start failure on a compute node).
 pub fn ip_access_value_ok(v: &str) -> bool {
     if IP_ACCESS_KEYWORDS.contains(&v) {
         return true;
@@ -2297,7 +2297,7 @@ mod tests {
         assert!(has("IPAddressDeny=any"));
         // Two assignments (systemd merges them): the keyword alone, then the
         // prefixes. Never `localhost 10.254.254.1/32` in one: systemd-run
-        // can't parse that and exits 1 before the unit exists (k2n11).
+        // can't parse that and exits 1 before the unit exists (on a compute node).
         assert!(has("IPAddressAllow=localhost"), "{a:?}");
         assert!(has("IPAddressAllow=10.254.254.1/32 fd00::1/128"), "{a:?}");
         assert_eq!(a.iter().filter(|x| x.starts_with("IPAddressAllow=")).count(), 2, "{a:?}");

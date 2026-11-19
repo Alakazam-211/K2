@@ -3152,7 +3152,7 @@ pub(super) mod tests {
         assert!(failed.starts_with("network: none: the no-lan proxy couldn't start (no free proxy port), so this job has no network"), "{failed}");
     }
 
-    /// 0.46.15 k2n11: a refused start carries systemd-run's own lines (it
+    /// 0.46.15, on a compute node: a refused start carries systemd-run's own lines (it
     /// exits before any unit exists, so nothing else has them); a refusal
     /// that blames systemd-run but has no lines says so; any other refusal
     /// adds nothing.
@@ -3183,7 +3183,7 @@ pub(super) mod tests {
         drop(w);
     }
 
-    /// 0.46.15 k2n11 (`--netns-dummy` jobs failed with "its message is in
+    /// 0.46.15, on a compute node (`--netns-dummy` jobs failed with "its message is in
     /// the job's log" and nothing there): a fake executor writes what
     /// systemd-run writes to the job's stderr fd and refuses the start, as
     /// root's does when systemd-run exits before the unit exists. The

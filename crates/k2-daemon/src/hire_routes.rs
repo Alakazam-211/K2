@@ -940,7 +940,7 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
     if req.template.as_deref().is_some_and(|t| !t.trim().is_empty()) {
         return cli_template_hire(who, &caller, &req, &extra, take_app.as_deref(), brief.as_deref());
     }
-    // A plain dry run (`dryRun: true`, no template; 0.46.17): the gate
+    // A plain dry run (`dryRun: true`, no template; 0.46.16): the gate
     // above is the whole answer. It refused already (hire_off / main_only,
     // taught like the real hire) or the real hire would pass it. Nothing
     // else in the body is read and nothing is written; `k2 agent hire
@@ -988,7 +988,7 @@ const HIRE_ACTION: &str = "agents.hire";
 /// adds `Ask with: k2 permission request agents.hire …` under it. Off,
 /// `k2 permission` is an unknown command for it (`k2 study permissions`,
 /// "Off"), so the hint says what the person clicks and how they turn cards
-/// on so the next ask is a card (0.46.17: an agent that had hired before
+/// on so the next ask is a card (0.46.16: an agent that had hired before
 /// 0.46.12 got `hire_off` with neither).
 pub(crate) fn hire_off_hint(workspace_id: &str, ws: &str) -> String {
     let base = HIRE_OFF_HINT.replace("{ws}", ws);

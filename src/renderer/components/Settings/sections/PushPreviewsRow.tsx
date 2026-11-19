@@ -19,7 +19,7 @@ import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 export const PUSH_PREVIEWS_KEY = 'pushMessagePreviews'
 export const PUSH_PREVIEWS_LABEL = 'Show message text in push notifications'
 export const PUSH_PREVIEWS_HINT =
-  "On, a push shows the start of the agent’s message; the text passes through K2's push relay and Apple or Google to reach the phone. Off, every phone on this server gets “New message in Thread” instead."
+  "With previews on, the sender’s name and the start of each message go through K2's push relay and Apple’s and Google’s push services to reach phones. Turn previews off to send every phone on this server only “New message in Thread”."
 
 /** The switch's value, or `null` when this server doesn't have the key (an
  *  older daemon): the row hides. */

@@ -235,7 +235,10 @@ the body is fixed words (`New message`, `Mentioned you`, `Replied to you`,
 previews, the App's (`k2 app push set <app> --previews`), the device's own
 `previews`, and the server's chat previews. Only then the title is the
 sender's name and the body the start of the message. No channel name rides
-a chat push.
+a chat push. With previews on, the sender's name and the start of each
+message go through Apple's and Google's push services to reach phones. Turn
+previews off (`k2 app push set <app> --previews off`) to send only
+`New message`.
 
 ### Sensitive content
 

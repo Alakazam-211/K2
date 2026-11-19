@@ -1217,7 +1217,7 @@ pub(crate) fn prepare_core(opts: &PrepareOpts, pod: &super::podman_install::Podm
 /// next start), and, while its slice still differs, a reboot for the
 /// memory floor (`daemonSlice`). Never a stop and start.
 /// How the owner applies a prepare with a cores floor (`apply` in its
-/// answer; the 0.46.17 "Get this server ready" card reads it):
+/// answer; a later "Get this server ready" card reads it):
 /// `reboot_tonight` while the daemon's slice moved (only a reboot applies
 /// it; a stop then start with live agents fails to start the daemon), else
 /// `restart` (the restart guard and Delegate= apply at the next start). Never

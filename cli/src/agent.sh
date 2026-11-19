@@ -2447,7 +2447,7 @@ if dry_run:
         else:
             take_template_rows(ta_, resp, applied=False)
     elif core_token:
-        # 0.46.17: an agent's own hire. The daemon's gate ("Let this agent
+        # 0.46.16: an agent's own hire. The daemon's gate ("Let this agent
         # hire agents", main session only) runs only when the hire core is
         # called, so ask it the same question now: a plan of "would apply"
         # for a hire it refuses is a lie. No path in the body: a daemon from

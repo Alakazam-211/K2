@@ -429,9 +429,12 @@ agent and other Apps can use the keys, never read them.
                                        pushes for the App's users in its Sew
                                        Space (off by default; the server also
                                        needs K2_APP_CHAT_PUSH=1); a tap opens
-                                       your phone app (k2Kind chat). Names and
-                                       text show only with every preview
-                                       switch on. --max-devices: phones
+                                       your phone app (k2Kind chat). With
+                                       every preview switch on, the sender's
+                                       name and the start of each message go
+                                       through Apple's and Google's push
+                                       services to reach phones; --previews
+                                       off sends only "New message". --max-devices: phones
                                        that can get this App's notifications,
                                        everyone together (owner; not sign-ins:
                                        k2 app login settings --max-devices).

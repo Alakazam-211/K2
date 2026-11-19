@@ -517,7 +517,7 @@ fn apply_claim(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     let addr = v.pointer("/handle/address").and_then(Value::as_str).unwrap_or(address);
     Applied::Done {
         message: format!(
-            "{} has the Postal address {addr}, kept on this server: the Postal network confirms it in a later release. Ask for friends with {} postal invite <address> --why \"…\".",
+            "{} has the Postal address {addr}, kept on this server; it is registered with the Postal network once this server is connected. Ask for friends with {} postal invite <address> --why \"…\".",
             ctx.workspace_handle,
             cli_name!()
         ),

@@ -18220,9 +18220,12 @@ agent and other Apps can use the keys, never read them.
                                        pushes for the App's users in its Sew
                                        Space (off by default; the server also
                                        needs K2_APP_CHAT_PUSH=1); a tap opens
-                                       your phone app (k2Kind chat). Names and
-                                       text show only with every preview
-                                       switch on. --max-devices: phones
+                                       your phone app (k2Kind chat). With
+                                       every preview switch on, the sender's
+                                       name and the start of each message go
+                                       through Apple's and Google's push
+                                       services to reach phones; --previews
+                                       off sends only "New message". --max-devices: phones
                                        that can get this App's notifications,
                                        everyone together (owner; not sign-ins:
                                        k2 app login settings --max-devices).
@@ -65723,10 +65726,10 @@ FROM THE APP
   Only this App's guests; anyone else is skipped.not_a_guest.
 
 CHAT PUSHES (DMs and channels in the App's Sew Space; off by default)
-  k2 app push set <app> --chat on (and the server's K2_APP_CHAT_PUSH=1). DMs
-  always push (to this App only when both people use only it); a channel at
-  the person's level, @mentions by default. A tap opens YOUR phone app. The
-  levels, data keys and preview rules: docs/app-push-mobile.md, Chat pushes.
+  k2 app push set <app> --chat on (and K2_APP_CHAT_PUSH=1). DMs always push; a
+  channel at the person's level. A tap opens YOUR phone app. With previews on,
+  the sender's name and the start of each message go through Apple's and
+  Google's push services; off, only "New message". docs/app-push-mobile.md
 
 THE APP'S AGENT
   k2 app push status|log <app> (Build and run Apps); send, test, set
@@ -72495,7 +72498,7 @@ if dry_run:
         else:
             take_template_rows(ta_, resp, applied=False)
     elif core_token:
-        # 0.46.17: an agent's own hire. The daemon's gate ("Let this agent
+        # 0.46.16: an agent's own hire. The daemon's gate ("Let this agent
         # hire agents", main session only) runs only when the hire core is
         # called, so ask it the same question now: a plan of "would apply"
         # for a hire it refuses is a lie. No path in the body: a daemon from

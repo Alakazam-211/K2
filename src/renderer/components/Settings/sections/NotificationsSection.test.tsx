@@ -760,7 +760,7 @@ describe('Settings → Notifications: message previews (pushMessagePreviews)', (
     expect(sw.getAttribute('aria-checked')).toBe('true')
     const row = screen.getByTestId('notifications-push-previews')
     expect(within(row).getByText(PUSH_PREVIEWS_HINT)).toBeTruthy()
-    expect(PUSH_PREVIEWS_HINT).toContain("K2's push relay and Apple or Google")
+    expect(PUSH_PREVIEWS_HINT).toContain("go through K2's push relay and Apple’s and Google’s push services")
     expect(screen.getByText('Message previews')).toBeTruthy()
   })
 

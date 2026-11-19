@@ -1608,13 +1608,24 @@ pub fn handle_send_user_tray(
 }
 
 /// The roster `agent` (handle) listed for `workspace_id` in a peer-roster
-/// route body, if any.
+/// route body, if any. It becomes a peer address an agent sees and
+/// answers, so only a handle ([`is_handle`]) counts: anything else is no
+/// match, and the raw value goes to this daemon's log.
 pub(crate) fn handle_for_workspace_in_roster_body(body: &str, workspace_id: &str) -> Option<String> {
     let d: serde_json::Value = serde_json::from_str(body).ok()?;
-    roster_entries_from_json(&d)?
+    let handle = roster_entries_from_json(&d)?
         .into_iter()
         .find(|e| e.workspace_id == workspace_id)
-        .map(|e| e.handle)
+        .map(|e| e.handle)?;
+    if is_handle(&handle) {
+        Some(handle)
+    } else {
+        k2_core::log_debug!(
+            "[federation] a peer roster lists a handle that is not in shape; taken as no match. Raw: {}",
+            reason_for_log(&serde_json::Value::from(handle.as_str()))
+        );
+        None
+    }
 }
 
 fn bare_host(h: &str) -> String {

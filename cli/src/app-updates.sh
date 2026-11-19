@@ -776,7 +776,7 @@ else:
         print("guests copied onto the App: %d (%s)" % (len(c.get("added") or []), ", ".join(c.get("added") or []) or "none"))
         if c.get("keptExisting"):
             print("already on the App (kept as they were): %s" % ", ".join(k.get("user", "") for k in c["keptExisting"]))
-        for k, why in (("skippedOtherAppRole", "their role is another App's"), ("skippedOtherWorkspaceAgent", "another workspace's agent added them")):
+        for k, why in (("skippedOtherAppRole", "their role is another App\u2019s"), ("skippedOtherWorkspaceAgent", "another workspace\u2019s agent added them")):
             if c.get(k):
                 print("not copied (%s): %s" % (why, ", ".join(c[k])))
         for r in c.get("rolesCopied") or []:

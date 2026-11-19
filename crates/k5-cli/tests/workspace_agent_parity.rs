@@ -53,7 +53,7 @@ fn shell(c: Case) -> Case {
 /// (141); macOS's bash 3.2 runs the reader on nothing and exits 1.
 fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::InPipe {
+        compare: Compare::Bash32PipeReader {
             stdout: "",
             stderr: "",
         },

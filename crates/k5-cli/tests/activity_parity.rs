@@ -61,7 +61,7 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 
 fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::Bash32GetPipe {
+        compare: Compare::Bash32PipeReader {
             stdout: "",
             stderr: "Error: the K2 daemon gave no usable answer: ''\n",
         },

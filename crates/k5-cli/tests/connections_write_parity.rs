@@ -47,7 +47,7 @@ fn traceback(c: Case) -> Case {
 /// macOS's bash 3.2 runs the reader on an empty input instead.
 fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::Bash32GetPipe {
+        compare: Compare::Bash32PipeReader {
             stdout: UNPARSEABLE,
             stderr: "",
         },

@@ -86,7 +86,7 @@ fn words(v: Vec<&'static str>) -> &'static [&'static str] {
 }
 
 /// What the shell's readers print on an empty input (macOS's bash 3.2
-/// runs them after a request with no answer: [`Compare::Bash32GetPipe`]).
+/// runs them after a request with no answer: [`Compare::Bash32PipeReader`]).
 const NO_ITEMS: &str = "No items.\n";
 const NO_FOLDERS: &str =
     "No folders yet. Create one by moving an item:\n  k2 inbox move <id> projects\n";
@@ -94,7 +94,7 @@ const READ_NO_ANSWER: &str = "Error: no answer from the K2 daemon (neither this 
 
 fn in_pipe(c: Case, stdout: &'static str, stderr: &'static str) -> Case {
     Case {
-        compare: Compare::Bash32GetPipe { stdout, stderr },
+        compare: Compare::Bash32PipeReader { stdout, stderr },
         ..c
     }
 }

@@ -62,12 +62,12 @@ fn waited(c: Case) -> Case {
 fn in_pipe(c: Case, json: bool) -> Case {
     Case {
         compare: if json {
-            Compare::InPipe {
+            Compare::Bash32PipeReader {
                 stdout: "",
                 stderr: BAD_JSON,
             }
         } else {
-            Compare::InPipe {
+            Compare::Bash32PipeReader {
                 stdout: UNPARSEABLE,
                 stderr: "",
             }

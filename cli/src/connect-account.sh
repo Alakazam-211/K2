@@ -169,18 +169,24 @@ os.replace(tmp, path)
 '
 }
 
-_connect_account_load() {
-    # Prints access_token\nrefresh_token\nemail or empty on miss.
-    python3 -c '
+# Read the saved session into _CONNECT_ACC_ACCESS, _CONNECT_ACC_REFRESH
+# and _CONNECT_ACC_EMAIL (all empty on a miss). Python prints the three
+# fields in that order, each ended by a NUL byte, and the shell reads each
+# by its place, so a newline inside one never moves another.
+_connect_account_read() {
+    _CONNECT_ACC_ACCESS="" _CONNECT_ACC_REFRESH="" _CONNECT_ACC_EMAIL=""
+    { IFS= read -r -d '' _CONNECT_ACC_ACCESS &&
+        IFS= read -r -d '' _CONNECT_ACC_REFRESH &&
+        IFS= read -r -d '' _CONNECT_ACC_EMAIL; } < <(python3 -c '
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(0)
-print((d.get("access_token") or "").strip())
-print((d.get("refresh_token") or "").strip())
-print((d.get("email") or "").strip())
-' "$(_connect_account_file)" 2>/dev/null || true
+for key in ("access_token", "refresh_token", "email"):
+    value = (d.get(key) or "").strip().replace("\0", "")
+    sys.stdout.buffer.write(value.encode("utf-8", "replace") + b"\0")
+' "$(_connect_account_file)" 2>/dev/null) || true
 }
 
 _connect_account_clear() {
@@ -398,9 +404,8 @@ cmd_connect_login() {
         refresh_token=""
         # Optional: if we already have a saved session for display, ignore.
         if [ -z "$account_email" ]; then
-            local _loaded
-            _loaded="$(_connect_account_load)"
-            account_email="$(printf '%s\n' "$_loaded" | sed -n '3p')"
+            _connect_account_read
+            account_email="$_CONNECT_ACC_EMAIL"
         fi
         [ -z "$account_email" ] && account_email="(token)"
     else
@@ -591,7 +596,8 @@ cmd_connect_status() {
     local acc_email="" acc_present="no"
     if [ -f "$(_connect_account_file)" ]; then
         acc_present="yes"
-        acc_email="$(printf '%s\n' "$(_connect_account_load)" | sed -n '3p')"
+        _connect_account_read
+        acc_email="$_CONNECT_ACC_EMAIL"
     fi
     local sub="" token_set="no"
     if [ -f "${K2_HOME}/tunnel.json" ]; then
@@ -679,9 +685,9 @@ cmd_connect_logout() {
         esac
     done
     # Best-effort server-side logout when we still have an access token.
-    local loaded access
-    loaded="$(_connect_account_load)"
-    access="$(printf '%s\n' "$loaded" | sed -n '1p')"
+    local access
+    _connect_account_read
+    access="$_CONNECT_ACC_ACCESS"
     if [ -n "$access" ]; then
         ACCESS="$access" SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
 import os, urllib.request

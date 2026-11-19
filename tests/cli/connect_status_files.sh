@@ -11,12 +11,15 @@
 #      no subdomain, no token, exit 0.
 #   3. No pairing prints "(none)", without quotes (cases in section 2 and
 #      with no tunnel.json at all).
-#   4. A passport healed during the first daemon call (the token check) is
+#   4. connect-account.json is read field by field: an access or refresh
+#      token holding a newline never moves another value into the email
+#      place, and an email holding shell text prints as text.
+#   5. A passport healed during the first daemon call (the token check) is
 #      the one the second call (the tunnel status) sends.
 #
-# Sections 1 to 3 have no daemon: HOME is a sandbox with no port or token
+# Sections 1 to 4 have no daemon: HOME is a sandbox with no port or token
 # files, and the env carries no session, so the last line is the "daemon
-# not running" one. Section 4 talks to a small Python stub. HOME is
+# not running" one. Section 5 talks to a small Python stub. HOME is
 # sandboxed throughout.
 
 set -euo pipefail
@@ -122,6 +125,28 @@ rm -f "$HOME/.k2/tunnel.json"
 run status
 assert_eq "no file: exit 0" "$rc" "0"
 assert_eq "no file: (none), no quotes" "$(sed -n 3p "$WORK/out")" "  Paired subdomain: (none)"
+
+echo "== connect-account.json fields by place, not by line =="
+account() {
+    python3 -c 'import ast, json, sys; json.dump(ast.literal_eval(sys.argv[1]), open(sys.argv[2], "w"))' "$1" "$HOME/.k2/connect-account.json"
+}
+while IFS='|' read -r label value want; do
+    rm -f "$MARK"
+    account "$value"
+    run status
+    assert_eq "$label: exit 0" "$rc" "0"
+    assert_eq "$label: nothing ran" "$([ -e "$MARK" ] && echo ran || echo none)" "none"
+    assert_eq "$label: the account line" "$(sed -n 2p "$WORK/out")" "  Account session: yes$want"
+done <<EOF
+plain|{'access_token': 'acc', 'refresh_token': 'ref', 'email': 'pat@example.com'}|  (pat@example.com)
+access token with a newline|{'access_token': 'acc\\nother@example.com', 'refresh_token': 'ref', 'email': 'pat@example.com'}|  (pat@example.com)
+refresh token with a newline|{'access_token': 'acc', 'refresh_token': 'ref\\nother@example.com', 'email': 'pat@example.com'}|  (pat@example.com)
+no email|{'access_token': 'acc\\nother@example.com', 'refresh_token': 'ref'}|
+email that is not a string|{'access_token': 'acc', 'refresh_token': 'ref', 'email': 7}|
+email holding shell text|{'access_token': 'acc', 'email': "it's\$(touch $MARK)\`touch $MARK\`"}|  (it's\$(touch $MARK)\`touch $MARK\`)
+a JSON string|"x"|
+EOF
+rm -f "$HOME/.k2/connect-account.json"
 
 echo "== a passport healed in the first call is sent by the second =="
 OLD="sess42.oldsecretaaaa"

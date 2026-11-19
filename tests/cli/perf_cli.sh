@@ -36,6 +36,8 @@
 #   connect status k5 connect status (no pairing on   <= 30 ms + the stub's
 #                  disk: the daemon's token, then the    p95 handler time
 #                  tunnel; two requests)
+#   workspace list k5 workspace list (the table,      <= 30 ms + the stub's
+#                  three workspaces)                     p95 handler time
 #   fallthrough    k5 heartbeat list (a verb the      median <= cli/k2's
 #                  shell answers)                        median for the same
 #                                                        + 5 ms (see below)
@@ -165,7 +167,12 @@ BODIES = {"/cli/permission/enabled": b'{"enabled":true}', "/cli/whoami": WHOAMI,
           "/boot-status": b'{"phase":"ready","version":"0.0.0"}',
           "/cli/first-run/status": SETUP,
           "/cli/tunnel/config": b'{"tokenSet":true}',
-          "/cli/tunnel/status": b'{"running":true,"public_url":"https://acme.k2.dev"}'}
+          "/cli/tunnel/status": b'{"running":true,"public_url":"https://acme.k2.dev"}',
+          "/cli/projects/list": json.dumps([
+              {"name": "acme", "agentMode": "agent", "path": work + "/ws", "agentEnabled": True},
+              {"name": "globex", "agentMode": None, "path": "/srv/globex", "agentEnabled": False},
+              {"name": "initech", "agentMode": "managed", "path": "/srv/initech ws", "agentEnabled": True},
+          ]).encode()}
 handler_ns = []
 lock = threading.Lock()
 
@@ -264,6 +271,7 @@ check_same("feedback show", [k5, "feedback", "show", "fb_1"], bash_argv("feedbac
 check_same("update --cli", [k5, "update", "--cli"], bash_argv("update", "--cli"))
 check_same("setup", [k5, "setup"], bash_argv("setup"))
 check_same("connect status", [k5, "connect", "status"], bash_argv("connect", "status"))
+check_same("workspace list", [k5, "workspace", "list"], bash_argv("workspace", "list"))
 check_same("fallthrough (heartbeat list)", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
 
 results = []
@@ -304,6 +312,7 @@ measure_native("feedback show", ["feedback", "show", "fb_1"])
 measure_native("update --cli", ["update", "--cli"])
 measure_native("setup", ["setup"])
 measure_native("connect status", ["connect", "status"])
+measure_native("workspace list", ["workspace", "list"])
 FALLTHROUGH_ALLOWANCE_MS = 5.0
 def measure_fallthrough(words):
     """k5's median against cli/k2's median + a fixed allowance (see the top)."""
@@ -322,9 +331,10 @@ def measure_fallthrough(words):
 measure_fallthrough(["heartbeat", "list"])
 for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"],
               ["activity"], ["sessions"], ["connections", "list"], ["feedback", "list"],
-              ["feedback", "show", "fb_1"], ["update", "--cli"], ["setup"], ["connect", "status"]):
+              ["feedback", "show", "fb_1"], ["update", "--cli"], ["setup"], ["connect", "status"],
+              ["workspace", "list"]):
     bash_p95 = p95(timed(bash_argv(*words)))
-    name = ' '.join(words[:2]) if words[0] in ('connections', 'feedback', 'update', 'connect') else words[0]
+    name = ' '.join(words[:2]) if words[0] in ('connections', 'feedback', 'update', 'connect', 'workspace') else words[0]
     print(f"perf_cli: info: cli/k2 {name}: p95 {bash_p95:.2f} ms (for comparison)")
 print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not native yet)")
 

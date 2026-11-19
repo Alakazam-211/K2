@@ -20,8 +20,8 @@
 //! - No answer (an empty reply, a 5xx with no body, none in time): the
 //!   line and exit 1; a reset (56), not HTTP (1), TMPDIR unusable (75) and
 //!   no daemon (7): curl's code, nothing printed.
-//! - What the binary hands to the shell: `connections` alone, `add`, help,
-//!   a port that is no port.
+//! - What the binary hands to the shell: `connections` alone, help, a
+//!   port that is no port (`add` and `remove`: connections_write_parity.rs).
 
 #![cfg(unix)]
 

@@ -367,11 +367,12 @@ fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
     }
 }
 
-/// `connections`' one verb row: `list`, and `--json` and `--users`, which
-/// `cmd_connections` (`cli/src/usage.sh`) reads as `list` and them.
+/// `connections`' verb rows: the first is `list`, and `--json` and
+/// `--users`, which `cmd_connections` (`cli/src/usage.sh`) reads as `list`
+/// and them; each other is one word, an arm of its `case`.
 fn connections_verbs_are_its_list(noun: &k5_cli::route::Noun) {
     let words: Vec<&[&str]> = noun.verbs.iter().map(|v| v.words).collect();
-    assert_eq!(words, [&["list", "--json", "--users"][..]]);
+    assert_eq!(words[0], &["list", "--json", "--users"][..]);
     let sources = common::shell_sources();
     let text = &sources
         .iter()
@@ -391,6 +392,15 @@ fn connections_verbs_are_its_list(noun: &k5_cli::route::Noun) {
         assert!(
             body.lines().any(|l| l == line),
             "cmd_connections no longer has {line:?}"
+        );
+    }
+    for verb in &words[1..] {
+        assert_eq!(verb.len(), 1, "{verb:?}: one word per verb row");
+        let arm = format!("        {})", verb[0]);
+        assert!(
+            body.lines().any(|l| l == arm),
+            "cmd_connections has no {:?} arm",
+            verb[0]
         );
     }
 }

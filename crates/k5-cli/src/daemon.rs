@@ -31,7 +31,7 @@
 use crate::transport::{Auth, Client, Passport, SecretsDir};
 use k2_client::brand::PRODUCT_NAME;
 use k2_client::env_names;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -228,8 +228,8 @@ fn logical(_pwd: &Path) -> Option<PathBuf> {
 /// The git the shell may run (`_k2_git_usable`, `cli/src/prelude.sh`):
 /// the first `git` on `PATH`, unless it is macOS's `/usr/bin/git` with no
 /// developer tools behind it (that one opens Apple's install dialog);
-/// then `xcode-select -p` must name a folder with a real git in it. Found
-/// once per run.
+/// then the developer tools folder ([`developer_dir`]) must have a real
+/// git in it. Found once per run.
 pub fn usable_git() -> Option<&'static Path> {
     static GIT: OnceLock<Option<PathBuf>> = OnceLock::new();
     GIT.get_or_init(|| {
@@ -245,25 +245,90 @@ pub fn usable_git() -> Option<&'static Path> {
     .as_deref()
 }
 
-/// macOS: the developer tools folder `xcode-select -p` names (Xcode's or
-/// the command line tools'), or `None` when it names none (they are not
-/// installed). Asked once per run; nothing in `/usr/bin` that stands in
-/// for a developer tool is ever run to find out.
+/// The variable that picks the developer tools folder for this process
+/// (Apple's: `xcode-select -p` and the `/usr/bin` stand-ins read it).
+pub const DEVELOPER_DIR_VAR: &str = "DEVELOPER_DIR";
+
+/// The places `xcode-select -p` looks for the developer tools folder,
+/// after [`DEVELOPER_DIR_VAR`], in its order.
+#[derive(Debug, Clone, Copy)]
+pub struct DeveloperPlaces<'a> {
+    /// The link `xcode-select -s` writes.
+    pub link: &'a Path,
+    /// Xcode's own folder, when nothing was chosen.
+    pub xcode: &'a Path,
+    /// The command line tools, when there is no Xcode.
+    pub command_line_tools: &'a Path,
+}
+
+/// macOS's places.
+pub fn developer_places() -> DeveloperPlaces<'static> {
+    DeveloperPlaces {
+        link: Path::new("/var/db/xcode_select_link"),
+        xcode: Path::new("/Applications/Xcode.app/Contents/Developer"),
+        command_line_tools: Path::new("/Library/Developer/CommandLineTools"),
+    }
+}
+
+/// macOS: the developer tools folder (Xcode's or the command line
+/// tools'), as `xcode-select -p` names it, or `None` when there is none
+/// (they are not installed). Found by looking, not by starting
+/// `xcode-select` (about 3 ms on a Mac): [`developer_dir_in`] with this
+/// process's [`DEVELOPER_DIR_VAR`]. Nothing in `/usr/bin` that stands in
+/// for a developer tool is ever run to find out. Found once per run.
 pub fn developer_dir() -> Option<&'static Path> {
     static DEV: OnceLock<Option<PathBuf>> = OnceLock::new();
     DEV.get_or_init(|| {
-        let out = Command::new("/usr/bin/xcode-select")
-            .arg("-p")
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let dev = String::from_utf8_lossy(&out.stdout)
-            .trim_end_matches('\n')
-            .to_string();
-        (!dev.is_empty()).then(|| PathBuf::from(dev))
+        developer_dir_in(
+            std::env::var_os(DEVELOPER_DIR_VAR).as_deref(),
+            &developer_places(),
+        )
     })
     .as_deref()
+}
+
+/// The developer tools folder for `var` (the value of
+/// [`DEVELOPER_DIR_VAR`]) and `places`, as `xcode-select -p` names it:
+///
+/// 1. `var` when it is set and not empty, as written (a last `/` taken
+///    off), whether or not it is a folder: `xcode-select -p` prints it
+///    as it is, and the stand-ins use it as it is;
+/// 2. else the target of `places.link` when there is that link, as it is;
+/// 3. else `places.xcode`, then `places.command_line_tools`, the first
+///    that is a folder;
+/// 4. else none.
+pub fn developer_dir_in(var: Option<&OsStr>, places: &DeveloperPlaces) -> Option<PathBuf> {
+    if let Some(v) = var.filter(|v| !v.is_empty()) {
+        return Some(without_last_slashes(v));
+    }
+    if let Ok(target) = std::fs::read_link(places.link) {
+        return Some(match places.link.parent() {
+            Some(parent) if target.is_relative() => parent.join(target),
+            _ => target,
+        });
+    }
+    [places.xcode, places.command_line_tools]
+        .into_iter()
+        .find(|p| p.is_dir())
+        .map(Path::to_path_buf)
+}
+
+/// `v` with its last `/`s taken off (`/` alone stays).
+fn without_last_slashes(v: &OsStr) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let b = v.as_bytes();
+        let mut end = b.len();
+        while end > 1 && b[end - 1] == b'/' {
+            end -= 1;
+        }
+        PathBuf::from(OsStr::from_bytes(&b[..end]))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(v)
+    }
 }
 
 /// The first executable file `name` in the folders of `path` (an empty
@@ -637,6 +702,100 @@ mod tests {
             settings(env(&[("K2_PROJECT_PATH", "/set")]), &dir, &deep).project,
             "/set"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The places of one test, all under `dir`.
+    fn places(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        (
+            dir.join("db/xcode_select_link"),
+            dir.join("Xcode.app/Contents/Developer"),
+            dir.join("CommandLineTools"),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_developer_folder_in_xcode_select_s_order() {
+        let dir = scratch("developer");
+        let (link, xcode, clt) = places(&dir);
+        let at = DeveloperPlaces {
+            link: &link,
+            xcode: &xcode,
+            command_line_tools: &clt,
+        };
+        let find = |var: Option<&str>| developer_dir_in(var.map(OsStr::new), &at);
+        // Nothing installed: none.
+        assert_eq!(find(None), None);
+        // The command line tools, then Xcode before them.
+        std::fs::create_dir_all(&clt).unwrap();
+        assert_eq!(find(None), Some(clt.clone()));
+        std::fs::create_dir_all(&xcode).unwrap();
+        assert_eq!(find(None), Some(xcode.clone()));
+        // The link `xcode-select -s` writes beats both; a relative target
+        // is read from the link's folder.
+        let chosen = dir.join("chosen");
+        std::fs::create_dir_all(&chosen).unwrap();
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&chosen, &link).unwrap();
+        assert_eq!(find(None), Some(chosen.clone()));
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("../chosen", &link).unwrap();
+        assert_eq!(find(None), Some(dir.join("db/../chosen")));
+        // A link to nothing is still the answer, as `xcode-select -p`
+        // prints it: no Xcode or tools folder is tried after it.
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(dir.join("gone"), &link).unwrap();
+        assert_eq!(find(None), Some(dir.join("gone")));
+        // DEVELOPER_DIR beats them all, as written (a last `/` off),
+        // folder or not; empty counts as unset.
+        assert_eq!(find(Some(clt.to_str().unwrap())), Some(clt.clone()));
+        let slash = format!("{}//", clt.to_str().unwrap());
+        assert_eq!(find(Some(&slash)), Some(clt.clone()));
+        let missing = dir.join("missing");
+        assert_eq!(find(Some(missing.to_str().unwrap())), Some(missing));
+        assert_eq!(
+            find(Some("relative/dir")),
+            Some(PathBuf::from("relative/dir"))
+        );
+        assert_eq!(find(Some("/")), Some(PathBuf::from("/")));
+        assert_eq!(find(Some("")), Some(dir.join("gone")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// On a Mac, the lookup names the folder `xcode-select -p` prints, for
+    /// this machine and for each kind of DEVELOPER_DIR. `xcode-select -p`
+    /// never opens Apple's install dialog, so running it here is safe.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_developer_folder_is_the_one_xcode_select_prints() {
+        let dir = scratch("xcode-select");
+        let missing = dir.join("missing");
+        let cases: Vec<Option<&str>> = vec![
+            None,
+            Some(""),
+            Some(dir.to_str().unwrap()),
+            Some(missing.to_str().unwrap()),
+            Some("relative/dir"),
+            Some("/Library/Developer/CommandLineTools/"),
+        ];
+        for var in cases {
+            let mut cmd = Command::new("/usr/bin/xcode-select");
+            cmd.arg("-p").stdin(Stdio::null()).stderr(Stdio::null());
+            cmd.env_remove(DEVELOPER_DIR_VAR);
+            if let Some(v) = var {
+                cmd.env(DEVELOPER_DIR_VAR, v);
+            }
+            let out = cmd.output().expect("xcode-select runs");
+            let printed = String::from_utf8(out.stdout).unwrap();
+            let printed = printed.trim_end_matches('\n');
+            let want = (!printed.is_empty()).then(|| PathBuf::from(printed));
+            assert_eq!(
+                developer_dir_in(var.map(OsStr::new), &developer_places()),
+                want,
+                "DEVELOPER_DIR {var:?}"
+            );
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

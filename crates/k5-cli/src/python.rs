@@ -10,8 +10,10 @@
 //! found is macOS's `/usr/bin/python3` with no developer tools behind it.
 //! That file is Apple's stand-in: run, it opens the dialog that offers to
 //! install the command line tools and runs no Python. It is never run
-//! here: `xcode-select -p` must name a folder with `usr/bin/python3` in
-//! it (the rule [`crate::daemon::usable_git`] keeps for `/usr/bin/git`).
+//! here: the developer tools folder `xcode-select -p` would name must
+//! have `usr/bin/python3` in it (the rule [`crate::daemon::usable_git`]
+//! keeps for `/usr/bin/git`). The folder is found by looking
+//! ([`crate::daemon::developer_dir_in`]); `xcode-select` is not started.
 //!
 //! [`Python3::Unknown`]: the binary can't tell what the shell's `python3`
 //! is. On Windows the shell's prelude tries `py -3` and `python` too
@@ -61,7 +63,12 @@ pub fn in_env(env: &Env) -> Python3 {
         found.as_deref(),
         cfg!(target_os = "macos"),
         Path::new(MACOS_STAND_IN),
-        || daemon::developer_dir().map(Path::to_path_buf),
+        || {
+            daemon::developer_dir_in(
+                env.get(daemon::DEVELOPER_DIR_VAR),
+                &daemon::developer_places(),
+            )
+        },
     )
 }
 

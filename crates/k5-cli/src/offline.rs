@@ -322,7 +322,7 @@ fn has_dot_dir(dir: &OsStr) -> bool {
 
 /// The project as the prelude finds it, then the rename heads-up.
 fn project(env: &Env, home: &OsStr, path: &SearchPath, cwd: &Path) -> Result<(), Handoff> {
-    let mut git = Git::new(path);
+    let mut git = Git::new(path, env.get(crate::daemon::DEVELOPER_DIR_VAR));
     let project: OsString = match env.first(env_names::PROJECT_PATH) {
         Some(p) => p.to_os_string(),
         None => {
@@ -365,17 +365,25 @@ fn project(env: &Env, home: &OsStr, path: &SearchPath, cwd: &Path) -> Result<(),
 /// `_k2_git_usable` and the two git calls, as the prelude makes them.
 struct Git<'a> {
     path: &'a SearchPath<'a>,
+    /// `DEVELOPER_DIR`, which picks the developer tools folder.
+    developer_dir: Option<&'a OsStr>,
     usable: Option<Option<String>>,
 }
 
 impl<'a> Git<'a> {
-    fn new(path: &'a SearchPath<'a>) -> Self {
-        Git { path, usable: None }
+    fn new(path: &'a SearchPath<'a>, developer_dir: Option<&'a OsStr>) -> Self {
+        Git {
+            path,
+            developer_dir,
+            usable: None,
+        }
     }
 
     /// The git to run, when the shell would run one: the one on `PATH`,
     /// except Apple's `/usr/bin/git` shim with no developer folder (it
-    /// opens an install dialog). `uname` missing reads as not macOS.
+    /// opens an install dialog): the folder `xcode-select -p` would name
+    /// ([`crate::daemon::developer_dir_in`]) must have a git in it.
+    /// `uname` missing reads as not macOS.
     fn usable(&mut self) -> bool {
         if self.usable.is_none() {
             let git = self.path.find("git").filter(|g| {
@@ -383,18 +391,9 @@ impl<'a> Git<'a> {
                 if !(darwin && g == "/usr/bin/git") {
                     return true;
                 }
-                let dev = Command::new("/usr/bin/xcode-select")
-                    .arg("-p")
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::null())
-                    .output()
-                    .map(|o| trim_newlines(o.stdout))
-                    .unwrap_or_default();
-                !dev.is_empty() && {
-                    let mut p = dev;
-                    p.extend_from_slice(b"/usr/bin/git");
-                    access(&bytes_path(p), Access::Exec)
-                }
+                let places = crate::daemon::developer_places();
+                crate::daemon::developer_dir_in(self.developer_dir, &places)
+                    .is_some_and(|dev| access(&dev.join("usr/bin/git"), Access::Exec))
             });
             self.usable = Some(git);
         }

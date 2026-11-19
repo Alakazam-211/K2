@@ -35,3 +35,8 @@ pub mod correct_auto_pin_filter_0_39_1;
 // (not deleted) so already-run boxes keep a stable sentinel; its `run` now
 // applies nothing. See the module docs for the full rationale.
 pub mod enable_fanout_for_enabled_agents_v1;
+// `agents_hire_restore_0319` — 0.46.16: "Let this agent hire agents" back
+// on for the workspaces from before 0299 that a person hasn't set since
+// (migration 0319's candidates, decided once at boot against the Access
+// Audit).
+pub mod agents_hire_restore_0319;

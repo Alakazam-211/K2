@@ -1443,6 +1443,12 @@ async fn async_main() {
     run_enable_fanout_for_enabled_agents_migration();
     boot_clock.phase("fan-out migration");
 
+    // 0.46.16 (Rosson): "Let this agent hire agents" back on for the
+    // workspaces from before 0299 that a person hasn't set since (migration
+    // 0319's candidates against the Access Audit). Once per DB.
+    run_agents_hire_restore_migration();
+    boot_clock.phase("hire switch restore");
+
     // Phase 2 Unit 4 — workspace_layouts one-shot migration moved
     // from `src-tauri/src/lib.rs::migrate_workspace_layouts_to_db`.
     // Reads `~/.k2so/settings.json#workspaceLayouts`, inserts each
@@ -2798,6 +2804,70 @@ fn run_enable_fanout_for_enabled_agents_migration() {
     log_debug!(
         "[daemon/migrations] enable_fanout_for_enabled_agents_v1: neutered (applied {} — always 0); sentinel recorded, future boots will skip",
         outcome.enabled_count
+    );
+}
+
+/// 0.46.16 (Rosson) — daemon-side runner for migration 0319's second half,
+/// [`k2_core::migrations::agents_hire_restore_0319`]: "Let this agent hire
+/// agents" back on for the workspaces from before 0299 that a person
+/// hasn't set since. The Access Audit (where a person's
+/// `agent-access-set … agents_hire=` lines live) is read first, without
+/// the DB lock; an unreadable audit leaves everything undecided for the
+/// next boot rather than guessing. Each workspace turned on gets its own
+/// Access Audit line. Gated by `code_migrations`: once per DB.
+pub(crate) fn run_agents_hire_restore_migration() {
+    use k2_core::migrations::agents_hire_restore_0319 as mig;
+
+    let needs_run = {
+        let db_arc = k2_core::db::shared();
+        let conn = db_arc.lock();
+        !k2_core::db::has_code_migration_applied(&conn, mig::MIGRATION_ID)
+    };
+    if !needs_run {
+        return;
+    }
+    let lines = match k2_core::auth_audit::read_all() {
+        Ok(l) => l,
+        Err(e) => {
+            log_debug!("[daemon/migrations] {}: the Access Audit can't be read ({e}); will retry on next boot", mig::MIGRATION_ID);
+            return;
+        }
+    };
+    let explicit = mig::explicit_hire_sets(&lines);
+    let outcome = {
+        let db_arc = k2_core::db::shared();
+        let conn = db_arc.lock();
+        match mig::run(&conn, &explicit) {
+            Ok(o) => {
+                k2_core::db::mark_code_migration_applied(
+                    &conn,
+                    mig::MIGRATION_ID,
+                    Some(&format!("restored {}, kept off {}, unchanged {}", o.restored.len(), o.kept_off.len(), o.unchanged)),
+                );
+                o
+            }
+            Err(e) => {
+                log_debug!("[daemon/migrations] {} failed: {e}; will retry on next boot", mig::MIGRATION_ID);
+                return;
+            }
+        }
+    };
+    for (_, address) in &outcome.restored {
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            mig::AUDIT_EVENT,
+            "k2",
+            format!("{address} agents_hire=true (had it before 0.46.12)"),
+            "boot",
+            "-",
+            "daemon",
+        ));
+    }
+    log_debug!(
+        "[daemon/migrations] {}: hiring back on for {} workspace(s), {} left off (a person set it), {} unchanged; future boots will skip",
+        mig::MIGRATION_ID,
+        outcome.restored.len(),
+        outcome.kept_off.len(),
+        outcome.unchanged
     );
 }
 

@@ -29,6 +29,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **What isn't here yet.** Mail reaches your server through the Postal network's hold (within about a minute); live delivery straight to your server comes with a later Postal network update. Taking over p5's handles (`k2 postal adopt`) isn't available yet; p5 still delivers through `k2 postal link-p5`.
 
 ### Agents
+- **Agents that could hire before 0.46.12 can hire again.** 0.46.12 made "Let this agent hire agents" its own switch and left it off for most workspaces, so agents that had been hiring got `hire_off`. On the first start of 0.46.16, every workspace from before that update gets the switch back on, except where you or an admin set it since (in Settings, with `k2 agent access set`, or on a card). Each one turned on gets a line in the Access Audit. New workspaces still start with it off.
 - **An agent's `k2 agent hire --dry-run` shows the refusal its real hire would get.** While "Let this agent hire agents" is off (or from a sidecar), the dry run marks the hire FAILED (`hire_off` or `main_only`), the other steps "not run", and exits 3 with the same closing line as the hire, instead of "would apply" for every step. A `--template` dry run still shows the whole hire, and now says the real hire needs that switch and the card to ask with. With permission cards off for the agent, the `hire_off` refusal also says how a person turns them on, so the next ask can be a card.
 
 ### Servers

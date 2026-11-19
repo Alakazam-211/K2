@@ -479,3 +479,66 @@ fn every_app_device_change_logs_a_push_record_with_its_reason() {
         assert!(line.starts_with("[push] device ") && line.contains(&format!(" app={}", f.app)), "{line}");
     }
 }
+
+/// HC-25: chat pushes are off by default and per App; the people K2 reads
+/// the feed for are the App's users with a live device there, in that
+/// App's Space (K2's ledger), on an App with chat pushes on; and the Apps
+/// a person is a user of come from K2's grants.
+#[test]
+fn chat_pushes_default_off_and_pick_only_space_members_with_devices() {
+    let f = fx("chat");
+    let c = config(&f.app).expect("cfg");
+    assert!(!c.chat_pushes, "off by default");
+    for u in [&f.dana, &f.eli] {
+        let name = if u == &f.dana { "dana" } else { "eli" };
+        let token = if u == &f.dana { APNS_A } else { APNS_B };
+        register(&f.app, u, &session(name, &f.app), &reg(&format!("ph-{name}"), "apns", token)).expect("register");
+    }
+    let member = |pid: &str, state: &str| {
+        with_skin_conn(|c| {
+            c.execute(
+                "INSERT INTO tool_app_space_members (space_id, app_id, external_id, state, updated_at) VALUES ('900', ?1, ?2, ?3, 1)",
+                params![f.app, format!("k2:principal:{pid}"), state],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
+        .expect("ledger row")
+    };
+    member(&f.dana, "added");
+    member(&f.eli, "pending_add");
+    assert!(chat_push_people().expect("people").is_empty(), "chat pushes off: nobody");
+    let c = set_switches(&f.app, Switches { chat_pushes: Some(true), ..Default::default() }, "owner").expect("chat on");
+    assert!(c.chat_pushes && c.previews && !c.agent_replies, "{c:?}");
+    assert!(config(&f.other_app).expect("cfg").chat_pushes.eq(&false), "per App");
+    assert_eq!(chat_push_people().expect("people"), vec![(f.app.clone(), f.dana.clone())], "eli isn't added yet");
+    set_switches(&f.app, Switches { enabled: Some(false), ..Default::default() }, "owner").expect("off");
+    assert!(chat_push_people().expect("people").is_empty(), "the owner's kill switch wins");
+    set_switches(&f.app, Switches { enabled: Some(true), ..Default::default() }, "owner").expect("on");
+    assert_eq!(user_apps(&f.dana).expect("apps"), vec![f.app.clone()]);
+    assert!(user_apps("no-such-principal").expect("apps").is_empty());
+    // The chat grant decides membership at flush.
+    assert!(!still_chat_member(&f.app, &f.dana, None).expect("check"), "no chat member grant yet");
+    crate::skin::create_grant(&crate::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: f.dana.clone(),
+        kind: "chat".into(),
+        target_id: String::new(),
+        role: None,
+        scope: Some("member".into()),
+        created_by: Some("owner".into()),
+    })
+    .expect("chat grant");
+    assert!(still_chat_member(&f.app, &f.dana, None).expect("check"), "a DM: the chat grant is enough");
+    assert!(!still_chat_member(&f.app, &f.dana, Some("900")).expect("check"), "the Space isn't bound to the App");
+    with_skin_conn(|c| {
+        c.execute("INSERT INTO tool_app_spaces (app_id, space_id, bound_at, bound_by) VALUES (?1, '900', 1, 'owner')", params![f.app])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .expect("bind");
+    assert!(still_chat_member(&f.app, &f.dana, Some("900")).expect("check"));
+    assert!(!still_chat_member(&f.other_app, &f.dana, Some("900")).expect("check"), "never another App's Space");
+    assert_eq!(principal_chat_name(&f.dana).expect("name").as_deref(), Some("dana"));
+    assert!(!principal_is_agent(&f.dana).expect("agent"));
+}

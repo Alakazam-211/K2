@@ -99,6 +99,12 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
         conn.execute("ALTER TABLE app_push_config ADD COLUMN server_only INTEGER NOT NULL DEFAULT 0", [])
             .map_err(|e| format!("skin.db app_push_config.server_only: {e}"))?;
     }
+    // 0.46.16: DM and channel pushes for the App's users in its Sew Space
+    // (prd-home-chat-pushes-v1 HC-25), off by default (additive at open).
+    if !super::column_exists(conn, "app_push_config", "chat_pushes")? {
+        conn.execute("ALTER TABLE app_push_config ADD COLUMN chat_pushes INTEGER NOT NULL DEFAULT 0", [])
+            .map_err(|e| format!("skin.db app_push_config.chat_pushes: {e}"))?;
+    }
     Ok(())
 }
 
@@ -838,6 +844,98 @@ pub fn apps_with_agent_replies() -> Result<Vec<String>, String> {
     })
 }
 
+/// The App users whose Sew feed K2 reads for App chat pushes (HC-25):
+/// `(App, principal id)` for every App with chat pushes on (and not turned
+/// off by the owner), every principal with an `app`-channel device there
+/// that still holds a live grant and sign-in, who K2 added to that App's
+/// Space (`tool_app_space_members`, `added`). Agents' logins are left out.
+/// Sorted; one row per (App, principal).
+pub fn chat_push_people() -> Result<Vec<(String, String)>, String> {
+    with_conn(|conn| {
+        let sql = format!(
+            "SELECT DISTINCT d.app_id, d.principal_id FROM app_push_devices d
+               JOIN app_push_config c ON c.app_id = d.app_id AND c.chat_pushes = 1 AND c.enabled = 1
+              WHERE d.channel = 'app' AND {LIVE_GRANT} AND {LIVE_SIGN_IN}
+                AND EXISTS (SELECT 1 FROM tool_app_space_members m
+                             WHERE m.app_id = d.app_id AND m.external_id = 'k2:principal:' || d.principal_id AND m.state = 'added')
+                AND NOT EXISTS (SELECT 1 FROM principals p WHERE p.id = d.principal_id
+                                 AND p.agent_workspace IS NOT NULL AND TRIM(p.agent_workspace) != '')
+              ORDER BY d.app_id, d.principal_id"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("chat push people: {e}"))?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| format!("chat push people: {e}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("chat push people: {e}"))
+    })
+}
+
+/// The Apps `principal_id` is a user of right now: its enabled `kind=app`
+/// grants, sorted (K2's grants, never Sew's word: Sew's S-8 answer).
+pub fn user_apps(principal_id: &str) -> Result<Vec<String>, String> {
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT target_id FROM grants
+                  WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = 'app' AND enabled != 0
+                  ORDER BY target_id",
+            )
+            .map_err(|e| format!("user apps: {e}"))?;
+        let rows = stmt.query_map(params![principal_id], |r| r.get::<_, String>(0)).map_err(|e| format!("user apps: {e}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("user apps: {e}"))
+    })
+}
+
+/// Is `principal_id` still a chat member here (an enabled `chat` grant of
+/// scope `member`) and, for a channel, still in K2's ledger of `space_id`
+/// as `added` for `app`? Checked again at flush (HC-7).
+pub fn still_chat_member(app: &str, principal_id: &str, space_id: Option<&str>) -> Result<bool, String> {
+    let app = normalize_app_target(Some(app));
+    with_conn(|conn| {
+        let chat: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM grants WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = 'chat' AND enabled != 0 AND scope = 'member'",
+                params![principal_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("chat member check: {e}"))?;
+        if chat == 0 {
+            return Ok(false);
+        }
+        let Some(space) = space_id else { return Ok(true) };
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tool_app_space_members m JOIN tool_app_spaces b ON b.space_id = m.space_id AND b.app_id = m.app_id
+                  WHERE m.space_id = ?1 AND m.app_id = ?2 AND m.external_id = 'k2:principal:' || ?3 AND m.state = 'added'",
+                params![space, app, principal_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("chat member check: {e}"))?;
+        Ok(n > 0)
+    })
+}
+
+/// A principal's name as its App's chat shows it (profile display name,
+/// else full name, else username), or `None` when it isn't a principal
+/// here. Only for a push whose every preview switch is on.
+pub fn principal_chat_name(principal_id: &str) -> Result<Option<String>, String> {
+    with_conn(|conn| {
+        let Some(p) = crate::tool_hook::chat::principal_by_id(conn, principal_id)? else { return Ok(None) };
+        crate::tool_hook::chat::principal_display_name(conn, &p.id, p.full_name.as_deref(), &p.username).map(Some)
+    })
+}
+
+/// Is `principal_id` an agent's App login (`k2 app user agent`)?
+pub fn principal_is_agent(principal_id: &str) -> Result<bool, String> {
+    with_conn(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM principals WHERE id = ?1 AND agent_workspace IS NOT NULL AND TRIM(agent_workspace) != ''",
+            params![principal_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|e| format!("principal agent check: {e}"))
+    })
+}
+
 // ── cleanup (CP6) ────────────────────────────────────────────────────
 
 /// The rows that outlived their sign-in: a row tied to a device sign-in
@@ -949,8 +1047,11 @@ pub struct PushConfig {
     pub owner_on: bool,
     /// Agent-reply pushes (§9). Default off.
     pub agent_replies: bool,
-    /// Agent-reply previews for this App. Default on.
+    /// Agent-reply and chat previews for this App. Default on.
     pub previews: bool,
+    /// DM and channel pushes for the App's users in its Sew Space
+    /// (HC-25). Default off.
+    pub chat_pushes: bool,
     /// The owner's device ceiling; `None` = [`DEFAULT_MAX_DEVICES_PER_APP`].
     pub max_devices: Option<i64>,
     /// `push.register` and `push.viewing` only through the App's own link
@@ -973,6 +1074,7 @@ impl PushConfig {
             owner_on: false,
             agent_replies: false,
             previews: true,
+            chat_pushes: false,
             max_devices: None,
             server_only: false,
             apns: None,
@@ -991,7 +1093,7 @@ fn config_conn(conn: &Connection, app: &str) -> Result<PushConfig, String> {
             "SELECT enabled, owner_on, agent_replies, previews, max_devices,
                     apns_key_id, apns_team_id, apns_bundle_id, apns_key_fpr, apns_set_at,
                     fcm_project_id, fcm_client_email, fcm_key_fpr, fcm_set_at,
-                    cred_error, cred_error_at, updated_at, updated_by, apns_ok_at, fcm_ok_at, server_only
+                    cred_error, cred_error_at, updated_at, updated_by, apns_ok_at, fcm_ok_at, server_only, chat_pushes
                FROM app_push_config WHERE app_id = ?1",
             params![app],
             |r| {
@@ -1022,6 +1124,7 @@ fn config_conn(conn: &Connection, app: &str) -> Result<PushConfig, String> {
                     owner_on: r.get::<_, i64>(1)? != 0,
                     agent_replies: r.get::<_, i64>(2)? != 0,
                     previews: r.get::<_, i64>(3)? != 0,
+                    chat_pushes: r.get::<_, i64>(21)? != 0,
                     max_devices: r.get(4)?,
                     server_only: r.get::<_, i64>(20)? != 0,
                     apns,
@@ -1078,6 +1181,7 @@ pub struct Switches {
     pub agent_replies: Option<bool>,
     pub previews: Option<bool>,
     pub server_only: Option<bool>,
+    pub chat_pushes: Option<bool>,
 }
 
 /// Write switches; returns the settings after.
@@ -1091,7 +1195,7 @@ pub fn set_switches(app: &str, s: Switches, actor: &str) -> Result<PushConfig, S
         ensure_row(&tx, &app, actor)?;
         let cur = config_conn(&tx, &app)?;
         tx.execute(
-            "UPDATE app_push_config SET enabled = ?2, owner_on = ?3, agent_replies = ?4, previews = ?5, server_only = ?8, updated_at = ?6, updated_by = ?7
+            "UPDATE app_push_config SET enabled = ?2, owner_on = ?3, agent_replies = ?4, previews = ?5, server_only = ?8, chat_pushes = ?9, updated_at = ?6, updated_by = ?7
               WHERE app_id = ?1",
             params![
                 app,
@@ -1101,7 +1205,8 @@ pub fn set_switches(app: &str, s: Switches, actor: &str) -> Result<PushConfig, S
                 s.previews.unwrap_or(cur.previews) as i64,
                 now_secs(),
                 actor,
-                s.server_only.unwrap_or(cur.server_only) as i64
+                s.server_only.unwrap_or(cur.server_only) as i64,
+                s.chat_pushes.unwrap_or(cur.chat_pushes) as i64
             ],
         )
         .map_err(|e| format!("push config write: {e}"))?;

@@ -559,3 +559,47 @@ fn an_agent_marked_app_login_is_not_in_the_apps_space_ag5() {
     assert_eq!(p, serde_json::json!({"space_id": SPACE, "app_id": "hearth", "external_id": pext(&raw.id)}));
     assert_eq!(ledger_state(SPACE, &pext(&raw.id)).as_deref(), Some(PENDING_REMOVE));
 }
+
+/// HC-25 (Sew's S-8 answer): K2's own bind history answers which App a
+/// Space was bound to at a given second, across an unbind and a rebind to
+/// another App, so a push for an old item never goes to the App bound now.
+#[test]
+fn bind_history_answers_the_app_at_a_time() {
+    let _e = setup();
+    let at = |t: i64| skin::with_skin_conn(|c| bound_app_at(c, SPACE, t)).expect("history read");
+    skin::with_skin_conn(|c| super::bind(c, "hearth", SPACE, "owner-token", 100).map(|_| ())).unwrap();
+    assert_eq!(at(99), None, "before the bind");
+    assert_eq!(at(100).as_deref(), Some("hearth"), "from the bind's own second");
+    assert_eq!(at(150).as_deref(), Some("hearth"));
+    skin::with_skin_conn(|c| super::unbind(c, "hearth", SPACE, false, "owner-token", 200).map(|_| ())).unwrap();
+    assert_eq!(at(199).as_deref(), Some("hearth"));
+    assert_eq!(at(200), None, "unbound from that second");
+    assert_eq!(at(250), None);
+    skin::with_skin_conn(|c| super::bind(c, "booking", SPACE, "owner-token", 300).map(|_| ())).unwrap();
+    assert_eq!(at(150).as_deref(), Some("hearth"), "a rebind never rewrites the past");
+    assert_eq!(at(250), None);
+    assert_eq!(at(300).as_deref(), Some("booking"));
+    assert_eq!(skin::with_skin_conn(|c| bound_app_at(c, SPACE2, 150)).unwrap(), None, "another Space: nothing");
+    // Opening the store again neither duplicates nor reopens a row.
+    skin::with_skin_conn(ensure_schema).unwrap();
+    let rows: i64 = skin::with_skin_conn(|c| {
+        c.query_row("SELECT COUNT(*) FROM tool_app_space_history WHERE space_id = ?1", rusqlite::params![SPACE], |r| r.get(0)).map_err(|e| e.to_string())
+    })
+    .unwrap();
+    assert_eq!(rows, 2);
+}
+
+/// A binding made before the history existed is seeded at open from its
+/// own `bound_at`.
+#[test]
+fn bind_history_is_seeded_from_existing_bindings() {
+    let _e = setup();
+    skin::with_skin_conn(|c| {
+        c.execute("INSERT INTO tool_app_spaces (app_id, space_id, bound_at, bound_by) VALUES ('hearth', ?1, 50, 'owner-token')", rusqlite::params![SPACE2])
+            .map_err(|e| e.to_string())?;
+        ensure_schema(c)
+    })
+    .unwrap();
+    assert_eq!(skin::with_skin_conn(|c| bound_app_at(c, SPACE2, 49)).unwrap(), None);
+    assert_eq!(skin::with_skin_conn(|c| bound_app_at(c, SPACE2, 60)).unwrap().as_deref(), Some("hearth"));
+}

@@ -130,9 +130,66 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             done_at       INTEGER,
             orphaned_from TEXT,
             cause         TEXT NOT NULL
-         );",
+         );
+         CREATE TABLE IF NOT EXISTS tool_app_space_history (
+            space_id   TEXT NOT NULL,
+            app_id     TEXT NOT NULL,
+            bound_at   INTEGER NOT NULL,
+            unbound_at INTEGER
+         );
+         CREATE INDEX IF NOT EXISTS tool_app_space_history_space
+            ON tool_app_space_history(space_id, bound_at);
+         INSERT INTO tool_app_space_history (space_id, app_id, bound_at, unbound_at)
+            SELECT b.space_id, b.app_id, b.bound_at, NULL FROM tool_app_spaces b
+             WHERE NOT EXISTS (SELECT 1 FROM tool_app_space_history h
+                                WHERE h.space_id = b.space_id AND h.app_id = b.app_id AND h.unbound_at IS NULL);",
     )
     .map_err(|e| format!("skin.db app spaces schema: {e}"))
+}
+
+// ── bind history (App chat pushes, prd-home-chat-pushes-v1 HC-25) ────
+//
+// Sew reads a feed item's `app_id` when the feed is read, not when the
+// message was written (Sew's S-8 answer, 11-18): an unbind or a rebind
+// between the two shows the binding now. So K2 keeps its own history,
+// one row per binding (`bound_at`, `unbound_at` NULL while it lasts),
+// written by [`bind`] and [`unbind`] in the same transaction as the
+// binding itself, and seeded at open from the bindings already there. A
+// push for an item goes to an App only when this history says the Space
+// was that App's at the item's own time ([`bound_app_at`]).
+
+/// The App `space_id` was bound to at unix second `at` (`None`: no App
+/// then, by K2's history). A binding counts from its `bound_at` second up
+/// to (not including) its `unbound_at` second.
+pub fn bound_app_at(conn: &Connection, space_id: &str, at: i64) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT app_id FROM tool_app_space_history
+          WHERE space_id = ?1 AND bound_at <= ?2 AND (unbound_at IS NULL OR unbound_at > ?2)
+          ORDER BY bound_at DESC LIMIT 1",
+        params![space_id, at],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| format!("app space history read: {e}"))
+}
+
+fn history_bound(conn: &Connection, app_id: &str, space_id: &str, now: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO tool_app_space_history (space_id, app_id, bound_at, unbound_at) VALUES (?1, ?2, ?3, NULL)",
+        params![space_id, app_id, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("app space history write: {e}"))
+}
+
+fn history_unbound(conn: &Connection, app_id: &str, space_id: &str, now: i64) -> Result<(), String> {
+    conn.execute(
+        "UPDATE tool_app_space_history SET unbound_at = ?3
+          WHERE space_id = ?1 AND app_id = ?2 AND unbound_at IS NULL",
+        params![space_id, app_id, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("app space history write: {e}"))
 }
 
 pub fn subject_key(space_id: &str, ext: &ExternalId) -> String {
@@ -204,6 +261,7 @@ pub fn bind(
                 params![app_id, space_id, now, actor],
             )
             .map_err(|e| format!("app spaces insert: {e}"))?;
+            history_bound(conn, app_id, space_id, now)?;
             // Bound again: K2 manages its members again.
             conn.execute("DELETE FROM tool_app_space_kept WHERE space_id = ?1", params![space_id])
                 .map_err(|e| format!("app spaces kept: {e}"))?;
@@ -230,6 +288,7 @@ pub fn unbind(conn: &Connection, app_id: &str, space_id: &str, remove_members: b
     if n == 0 {
         return Ok(false);
     }
+    history_unbound(conn, app_id, space_id, now)?;
     // Sew 0.6.0: Sew's unbind resets the Space to `sew` governance, and a
     // rebind comes back `sew` (AG-26): K2 forgets its wish and its sync
     // ledger there, so a sweep never re-sends `app` the owner didn't flip.

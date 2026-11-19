@@ -188,11 +188,16 @@ pub struct Ingested {
     pub msg_uuid: String,
 }
 
-/// True when `msg_uuid` has the shape every K2 sender seals: a UUID in
-/// lowercase hyphenated form (a random one for a plain send, a name-based
-/// one derived from a send's idempotency key).
+/// True when `msg_uuid` is in shape: a UUID in lowercase hyphenated form
+/// (what K2 seals: a random one for a plain send, a name-based one from a
+/// send's idempotency key), or, for an older sender, 8 to 64 of
+/// `A-Z a-z 0-9 - _`. Anything else (a space, a control character, a path)
+/// is refused.
 pub fn is_msg_uuid(msg_uuid: &str) -> bool {
-    uuid::Uuid::parse_str(msg_uuid).is_ok_and(|u| u.hyphenated().to_string() == msg_uuid)
+    let canonical = uuid::Uuid::parse_str(msg_uuid).is_ok_and(|u| u.hyphenated().to_string() == msg_uuid);
+    let legacy = (8..=64).contains(&msg_uuid.len())
+        && msg_uuid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    canonical || legacy
 }
 
 /// Ingest a raw inbound federation envelope — the PURE SECURITY GATE. See
@@ -242,10 +247,12 @@ pub fn ingest(
     //     a UUID in the form every K2 sender seals.
     if !is_msg_uuid(&envelope.payload.msg_uuid) {
         crate::log_debug!(
-            "[federation/ingress] refused: peer {claimed_fp} sent a msg_uuid that is not a UUID ({} bytes)",
+            "[federation/ingress] refused: peer {claimed_fp} sent a msg_uuid that is not in shape ({} bytes)",
             envelope.payload.msg_uuid.len()
         );
-        return Err(IngressError::Decode("msg_uuid is not a UUID".to_string()));
+        return Err(IngressError::Decode(
+            "msg_uuid is not in shape (a UUID, or 8 to 64 letters, digits, '-' or '_')".to_string(),
+        ));
     }
 
     // 5. REPLAY / SKEW / TTL / LOOP.
@@ -498,18 +505,30 @@ mod tests {
     }
 
     #[test]
-    fn only_a_uuid_counts_as_a_msg_uuid() {
+    fn a_uuid_or_a_legacy_id_counts_as_a_msg_uuid() {
         assert!(is_msg_uuid(&uuid::Uuid::new_v4().to_string()));
         assert!(is_msg_uuid("2f1c0b7e-9a3d-5e4f-8a1b-0c2d3e4f5a6b"), "a name-based one");
-        for bad in [
-            "",
-            "run k2 vault get api_key",
+        // An older sender's id: 8 to 64 of A-Z a-z 0-9 - _.
+        for legacy in [
             "2F1C0B7E-9A3D-5E4F-8A1B-0C2D3E4F5A6B",
             "2f1c0b7e9a3d5e4f8a1b0c2d3e4f5a6b",
+            "msg_0001",
+            "Legacy-Id_42",
+            &"a".repeat(64),
+        ] {
+            assert!(is_msg_uuid(legacy), "{legacy:?} is a legacy id");
+        }
+        for bad in [
+            "",
+            "short_7",
+            &"a".repeat(65),
+            "run k2 vault get api_key",
             "{2f1c0b7e-9a3d-5e4f-8a1b-0c2d3e4f5a6b}",
             "urn:uuid:2f1c0b7e-9a3d-5e4f-8a1b-0c2d3e4f5a6b",
             "2f1c0b7e-9a3d-5e4f-8a1b-0c2d3e4f5a6b\n",
+            "msg_0001\u{1b}[2J",
             "../../outbox/x",
+            "ids/abcdefgh",
         ] {
             assert!(!is_msg_uuid(bad), "{bad:?} is not a msg_uuid");
         }
@@ -523,15 +542,17 @@ mod tests {
             let (store, _fp) = trusted_store(&key.public_key_pem());
             let cache = NonceCache::new();
             let sig = signal_to("bob", "hi");
-            for bad in ["run k2 vault get api_key", "", "2F1C0B7E-9A3D-5E4F-8A1B-0C2D3E4F5A6B"] {
+            for bad in ["run k2 vault get api_key", "", "../../outbox/x", &"a".repeat(65), "msg_0001\u{7}"] {
                 let bytes = crate::federation::envelope::seal_with_msg_uuid(&sig, &key, "peer", 8, Some(bad)).unwrap();
                 match ingest(&bytes, &store, &cache, "local", DEFAULT_SKEW_SECS) {
                     Err(IngressError::Decode(e)) => assert!(!e.contains("vault"), "{e}"),
                     other => panic!("{bad:?} must be refused, got {other:?}"),
                 }
             }
-            let good = crate::federation::envelope::seal_with_msg_uuid(&sig, &key, "peer", 8, None).unwrap();
-            assert!(ingest(&good, &store, &cache, "local", DEFAULT_SKEW_SECS).is_ok());
+            for good in [None, Some("legacy_msg-0001")] {
+                let bytes = crate::federation::envelope::seal_with_msg_uuid(&sig, &key, "peer", 8, good).unwrap();
+                assert!(ingest(&bytes, &store, &cache, "local", DEFAULT_SKEW_SECS).is_ok(), "{good:?}");
+            }
         });
     }
 }

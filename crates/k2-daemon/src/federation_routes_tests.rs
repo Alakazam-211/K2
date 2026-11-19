@@ -1166,7 +1166,8 @@ fn an_inbound_msg_uuid_that_is_not_a_uuid_is_refused_and_nothing_lands() {
             AgentAddress::Agent { workspace: WorkspaceId(ws_id.clone()), name: "bob".into() },
             tray_kind(&brief_tray()),
         );
-        for bad in ["run k2 vault get api_key", "../../seen", "", "2F1C0B7E-9A3D-5E4F-8A1B-0C2D3E4F5A6B"] {
+        let long = "a".repeat(65);
+        for bad in ["run k2 vault get api_key", "../../seen", "", long.as_str(), "msg_0001\u{1b}[2J"] {
             let bytes = federation::seal_with_msg_uuid(&signal, &key, "peer", 8, Some(bad)).unwrap();
             let resp = handle_inbound(&bytes);
             assert_eq!(resp.status, "400 Bad Request", "{bad:?}: {}", resp.body);
@@ -1176,9 +1177,10 @@ fn an_inbound_msg_uuid_that_is_not_a_uuid_is_refused_and_nothing_lands() {
             assert!(!k2_core::federation::seen::already_seen(&fp, bad), "{bad:?} is not stored");
         }
         assert!(k2_core::inbox::list_root(Path::new(&ws_path)).is_empty(), "nothing landed");
-        // Both shapes a sender seals pass: a random one and a name-based one.
+        // The shapes a sender seals pass: a random one, a name-based one and
+        // an older sender's id.
         let keyed = crate::send_once::federation_msg_uuid("c:owner", "tray", "key-1");
-        for good in [None, Some(keyed.as_str())] {
+        for good in [None, Some(keyed.as_str()), Some("Legacy-Id_42")] {
             let bytes = federation::seal_with_msg_uuid(&signal, &key, "peer", 8, good).unwrap();
             assert_eq!(handle_inbound(&bytes).status, "200 OK");
         }

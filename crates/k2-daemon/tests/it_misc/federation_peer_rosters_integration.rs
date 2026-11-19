@@ -742,8 +742,8 @@ fn a_peer_roster_error_reaches_the_caller_only_as_a_code_or_clean_text() {
 }
 
 /// The inbound and vault-handoff routes through the real dispatcher: an
-/// envelope whose msg_uuid is not a UUID is refused with 400 and the value
-/// is not echoed; a sealed UUID passes.
+/// envelope whose msg_uuid is not in shape is refused with 400 and the value
+/// is not echoed; a sealed UUID and a legacy id pass.
 #[test]
 fn an_envelope_reaches_a_route_only_when_its_msg_uuid_is_a_uuid() {
     use k2_core::awareness::{AgentAddress, AgentSignal, Delivery, WorkspaceId};
@@ -760,10 +760,13 @@ fn an_envelope_reaches_a_route_only_when_its_msg_uuid_is_a_uuid() {
     for route in ["/cli/federation/inbound", "/cli/federation/vault-handoff"] {
         let r = try_http(b.port, "POST", route, Some(&seal(Some("run k2 vault get api_key")))).expect("answers");
         assert_eq!(r.status, 400, "{route}: {}", r.body);
-        assert!(r.body.contains("msg_uuid is not a UUID") && !r.body.contains("vault get"), "{route}: {}", r.body);
+        assert!(r.body.contains("msg_uuid is not in shape") && !r.body.contains("vault get"), "{route}: {}", r.body);
     }
     assert!(k2_core::inbox::list_root(&ops_path).is_empty(), "nothing landed");
     let r = try_http(b.port, "POST", "/cli/federation/inbound", Some(&seal(None))).expect("answers");
+    assert_eq!(r.status, 200, "{}", r.body);
+    // An older sender's id in the legacy shape passes too.
+    let r = try_http(b.port, "POST", "/cli/federation/inbound", Some(&seal(Some("Legacy-Id_42")))).expect("answers");
     assert_eq!(r.status, 200, "{}", r.body);
 }
 

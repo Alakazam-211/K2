@@ -61,21 +61,21 @@ impl Transport for Arc<Scripted> {
     }
 }
 
-struct Box1 {
-    _home: crate::test_support::TempHome,
-    scout: Identity,
-    scout_addr: String,
-    ws_path: std::path::PathBuf,
-    handle_id: String,
+pub(crate) struct Box1 {
+    pub(crate) _home: crate::test_support::TempHome,
+    pub(crate) scout: Identity,
+    pub(crate) scout_addr: String,
+    pub(crate) ws_path: std::path::PathBuf,
+    pub(crate) handle_id: String,
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     super::super::pairing::now()
 }
 
 /// A workspace with the claimed handle `scout::acme.postal.bot`, its key
 /// registered, and routing to the inbox (no agent to type into here).
-fn setup() -> Box1 {
+pub(crate) fn setup() -> Box1 {
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     k2_core::postal::keys::install(Arc::new(k2_core::postal::keys::MemorySecrets::default()));
@@ -100,7 +100,7 @@ fn setup() -> Box1 {
 }
 
 /// `peer` becomes an accepted friend with its key pinned.
-fn befriend(b: &Box1, peer: &str, key: &Identity) {
+pub(crate) fn befriend(b: &Box1, peer: &str, key: &Identity) {
     let shared = k2_core::db::shared();
     let conn = shared.lock();
     let h = store::handle(&conn, &b.handle_id).unwrap();
@@ -136,7 +136,7 @@ fn plane_with(pages: Vec<Value>) -> (Plane, Arc<Scripted>) {
     (p, s)
 }
 
-fn rows_for(msg_id: &str) -> i64 {
+pub(crate) fn rows_for(msg_id: &str) -> i64 {
     k2_core::db::read(|c| c.query_row("SELECT COUNT(*) FROM msg_deliveries WHERE postal_msg_id = ?1", [msg_id], |r| r.get(0)).unwrap())
 }
 

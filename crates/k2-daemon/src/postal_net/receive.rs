@@ -507,4 +507,4 @@ fn write_inbox(i: &Inbound, ws: &crate::postal_routes::Ws, text: &str) -> Result
 
 #[cfg(test)]
 #[path = "receive_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -26,8 +26,11 @@
 //!    `postal_msg_id` index, in the same transaction as storing the
 //!    message ([`super::seen`]). That is what makes the SDK's
 //!    `disposition()` Ack on a replay safe; never a separate seen table.
-//! 2. On live delivery (`/p5/msg`, S6) verify the `p5-msg-v1` hop proof
-//!    before anything else (`postal_net::live`, not mounted until S6).
+//! 2. On live delivery (`POST /postal/v2/msg`, S6) run `wire::precheck`
+//!    before looking the sender up, and answer an unknown sender and a bad
+//!    signature the same (`postal_net::live`, not mounted until S6). Wire
+//!    v2 has no hop proof: the `p5-msg-v1` proof is p5's old `/p5/msg`,
+//!    which K2 never serves.
 //! 3. Stop the hold pull loop when `next_after` doesn't advance.
 //! 4. Check the box's own key (the handle's key in the vault) is the one
 //!    it registered before calling `open`.

@@ -162,11 +162,10 @@ pub fn handle_vault_handoff(body: &[u8]) -> CliResponse {
         SignalKind::Custom { kind, payload } if kind == REVOKE_KIND => return receive_revoke(&vault, &peer_fp, &host, &signal, payload),
         _ => return reply("400 Bad Request", "wrong_kind", "this route takes vault-handoff/1 and vault-handoff-revoke/1 only"),
     };
-    let sender_agent = match &signal.from {
-        AgentAddress::Agent { name, .. } => name.trim().to_ascii_lowercase(),
-        _ => "peer".to_string(),
+    let (sender_agent, peer_addr) = match checked_peer_addr(&signal, &host, &peer_fp) {
+        Ok(a) => a,
+        Err(resp) => return resp,
     };
-    let peer_addr = crate::federation_routes::federated_from_label(&sender_agent, &host);
     let deny = |code: &str| {
         routes::audit(&format!("handoff:{peer_addr}"), &format!("deny receive from {peer_addr}: {code}"), "federation");
         vault.handoff_audit("receive", &format!("handoff:{peer_addr}"), &peer_addr, &format!("deny:{code}"));
@@ -288,16 +287,45 @@ pub fn handle_vault_handoff(body: &[u8]) -> CliResponse {
     )
 }
 
+/// The sender's name and `agent::host` for vault cards, audit lines and
+/// handoff records: the signed sender name trimmed and lowercased, then a
+/// handle (the same rule as a chat message), and the pinned host in shape.
+/// Anything else is refused with `bad_sender` and the raw value goes to
+/// this daemon's log only.
+fn checked_peer_addr(signal: &AgentSignal, host: &str, peer_fp: &str) -> Result<(String, String), CliResponse> {
+    let raw = match &signal.from {
+        AgentAddress::Agent { name, .. } => name.as_str(),
+        _ => "peer",
+    };
+    match crate::federation_routes::sender_handle(raw) {
+        Some(name) if host.is_empty() || crate::federation_routes::is_peer_host(host) => {
+            let addr = crate::federation_routes::federated_from_label(&name, host);
+            Ok((name, addr))
+        }
+        _ => {
+            k2_core::log_debug!(
+                "[federation/vault] handoff refused: peer {peer_fp} sent a sender address that is not a handle. Raw name: {}; host: {}",
+                crate::federation_routes::reason_for_log(&Value::from(raw)),
+                crate::federation_routes::reason_for_log(&Value::from(host))
+            );
+            Err(reply(
+                "400 Bad Request",
+                "bad_sender",
+                "a sender's name reaches a vault card only when it is a handle (lowercase letters, digits and single hyphens, at most 64 characters)",
+            ))
+        }
+    }
+}
+
 /// A peer takes back a delivery it sent us (§9): only the peer the row
 /// came from; the copy is disabled if it is still the version that
 /// delivery wrote; a pending copy is dropped and its card closed.
 fn receive_revoke(vault: &LocalVault, peer_fp: &str, host: &str, signal: &AgentSignal, payload: &Value) -> CliResponse {
     let id = payload.get("deliveryId").and_then(Value::as_str).unwrap_or_default();
-    let sender_agent = match &signal.from {
-        AgentAddress::Agent { name, .. } => name.trim().to_ascii_lowercase(),
-        _ => "peer".to_string(),
+    let (_, peer_addr) = match checked_peer_addr(signal, host, peer_fp) {
+        Ok(a) => a,
+        Err(resp) => return resp,
     };
-    let peer_addr = crate::federation_routes::federated_from_label(&sender_agent, host);
     let before = match vault.handoff_get(id, "in") {
         Ok(r) => r,
         Err(e) => return vault_reply(&e),

@@ -15,7 +15,6 @@ use k5_cli::out::json::{self, Value};
 use k5_cli::route::TABLE;
 use k5_cli::transport::skew;
 use std::ffi::OsString;
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -116,10 +115,9 @@ impl Drop for Rig {
     }
 }
 
-/// A port nothing listens on.
+/// A port nothing listens on, and no stub can be given ([`common::stub::dead_port`]).
 fn dead_port() -> String {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port().to_string()
+    common::stub::dead_port().to_string()
 }
 
 fn headed(status: u16, version: Option<&str>, body: &str) -> Reply {

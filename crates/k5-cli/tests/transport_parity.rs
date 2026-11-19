@@ -1030,10 +1030,7 @@ fn a_refused_connect_is_tried_again_unless_stdin_was_read() {
         format!("{}\n", w.stub.port),
     )
     .unwrap();
-    let dead = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
+    let dead = common::stub::dead_port();
     let rows = [
         Row {
             name: "a URL with @- in it, refused: tried again on the moved port",

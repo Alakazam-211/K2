@@ -46,7 +46,6 @@
 use super::stub::{Logged, Reply, Stub};
 use std::cell::OnceCell;
 use std::ffi::OsString;
-use std::net::TcpListener;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::Command;
@@ -925,10 +924,10 @@ pub fn case(
     }
 }
 
-/// A port nothing listens on.
+/// A port nothing listens on, and no stub can be given
+/// ([`super::stub::dead_port`]).
 pub fn dead_port() -> String {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port().to_string()
+    super::stub::dead_port().to_string()
 }
 
 /// A symlink to the workspace folder, for a PWD through a link.

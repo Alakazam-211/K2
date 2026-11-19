@@ -41,7 +41,6 @@ mod common;
 
 use common::stub::{Logged, Reply, Stub};
 use std::ffi::OsString;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -525,10 +524,9 @@ fn check_parity(rig: &Rig, c: &Case) -> (Out, Vec<String>) {
     (r.clone(), rl)
 }
 
-/// A port nothing listens on.
+/// A port nothing listens on, and no stub can be given ([`common::stub::dead_port`]).
 fn dead_port() -> String {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port().to_string()
+    common::stub::dead_port().to_string()
 }
 
 fn heal(rig: &Rig) -> Reply {

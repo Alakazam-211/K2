@@ -125,6 +125,30 @@ impl Drop for Stub {
     }
 }
 
+/// The loopback port [`dead_port`] hands out.
+const DEAD_PORT: u16 = 1;
+
+/// A loopback port nothing listens on, and nothing will: 1, below every
+/// system's range for a port given out by a bind to port 0, so no stub
+/// (in this test or one running beside it) can be given it. Picking a
+/// free port and closing it again would let the next such bind anywhere
+/// get it, and a request meant for nothing would land in that stub's
+/// log. Checked once per process: a connect there must be refused.
+pub fn dead_port() -> u16 {
+    static CHECKED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    CHECKED.get_or_init(|| {
+        let at = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, DEAD_PORT));
+        let err = std::net::TcpStream::connect_timeout(&at, Duration::from_secs(5))
+            .expect_err("something listens on the dead port");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::ConnectionRefused,
+            "a connect to {at}: {err}"
+        );
+    });
+    DEAD_PORT
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }

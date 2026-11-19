@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::stub::{Reply, Stub};
+use common::stub::{dead_port, Reply, Stub};
 use k5_cli::transport::{Auth, Call, Channel, Client, Error, Passport, SecretsDir};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -42,7 +42,7 @@ fn stub(tag: &str) -> Stub {
     )))
 }
 
-/// A loopback port nothing listens on.
+/// A loopback port free now, for a listener the test starts on it later.
 fn free_port() -> u16 {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     l.local_addr().unwrap().port()
@@ -60,7 +60,7 @@ fn text(bytes: &[u8]) -> String {
 
 #[test]
 fn nothing_listening_is_tried_four_times_then_unreachable() {
-    let mut c = owner(free_port());
+    let mut c = owner(dead_port());
     let t0 = Instant::now();
     let err = c
         .call(Channel::Tcp, "/cli/x", Call::Request(&[]))
@@ -76,7 +76,7 @@ fn nothing_listening_is_tried_four_times_then_unreachable() {
 
 #[test]
 fn a_body_from_stdin_is_never_tried_twice() {
-    let mut c = owner(free_port());
+    let mut c = owner(dead_port());
     c.pause = Duration::from_secs(5);
     let t0 = Instant::now();
     let err = c.post_json_stdin("/cli/x", b"{}").unwrap_err();
@@ -119,7 +119,7 @@ fn a_refused_loopback_port_follows_daemon_port() {
     let dir = scratch("port");
     let file = dir.join("daemon.port");
     std::fs::write(&file, format!("{}\n", s.port)).unwrap();
-    let mut c = owner(free_port());
+    let mut c = owner(dead_port());
     c.port_file = Some(file);
     s.reset(&[]);
     let r = c

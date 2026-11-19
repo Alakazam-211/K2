@@ -786,7 +786,7 @@ publish-visibility, publish-dev, compute, compute-shared, ci, ci-release, ci-sta
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
 garden-access, garden-changes, changes, docs, sim, design, db-upgrade, app-databases, jobs, heartbeats, mail-watch, mail-reader, folder-trust,
 email-notifications, box-move, board, chat-refresh, desktop, send-feedback, organization,
-agent-templates, suite-apps.
+agent-templates, suite-apps, postal.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and
 what never to infer.

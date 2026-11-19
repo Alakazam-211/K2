@@ -43152,13 +43152,15 @@ else:
             # a failed add looked identical to success with no output.
             # C1 (0.40.45): gated agents get exit 3 + JSON teaching
             # Settings path (agents_create_connections_disabled).
+            # 0.46.16: every error goes to stderr; stdout carries only the
+            # result lines. Exit codes are unchanged.
             cli_request_post "/cli/connections" "action=add&target=$(urlencode "$target")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
 try:
     d = json.loads(raw)
 except Exception:
-    sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
+    sys.stderr.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
 err = d.get('error')
 if err is not None:
@@ -43184,7 +43186,7 @@ if err is not None:
             )
         sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')
         sys.exit(3)
-    sys.stdout.write('Error: %s\n' % hint)
+    sys.stderr.write('Error: %s\n' % hint)
     sys.exit(1)
 if d.get('noop'):
     print('Already connected to %s (%s)' % (d.get('target', '?'), d.get('message', '')))
@@ -43207,14 +43209,15 @@ if d.get('warning'):
         remove)
             local target="${1:-}"
             [[ -z "$target" ]] && { echo "Usage: k2 connections remove <workspace-name>" >&2; exit 1; }
-            # C1 (0.40.45): same gated exit-3 teaching as add.
+            # C1 (0.40.45): same gated exit-3 teaching as add; errors on
+            # stderr, as add.
             cli_request_post "/cli/connections" "action=remove&target=$(urlencode "$target")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
 try:
     d = json.loads(raw)
 except Exception:
-    sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
+    sys.stderr.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
 err = d.get('error')
 if err is not None:
@@ -43240,7 +43243,7 @@ if err is not None:
             )
         sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')
         sys.exit(3)
-    sys.stdout.write('Error: %s\n' % hint)
+    sys.stderr.write('Error: %s\n' % hint)
     sys.exit(1)
 print('Disconnected.')
 "

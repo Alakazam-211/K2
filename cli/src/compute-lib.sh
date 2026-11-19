@@ -340,6 +340,53 @@ def update_lines(n):
     if r.get("node") == "rolled_back":
         return ["%-14s k2-node %s rolled back here; the rollout paused (k2 compute node rollout)" % ("", r.get("toVersion") or "")]
     return []
+def reserve_lines(n):
+    # 0.46.16: which jobs of this server hold the reservation of the node (a
+    # node with no free CPU and a live job is busy, not stuck), and how
+    # many jobs of other servers run there (counted, never named).
+    rows = n.get("reservedBy") if isinstance(n.get("reservedBy"), list) else []
+    room = n.get("room") if isinstance(n.get("room"), dict) else {}
+    others = room.get("otherServers") or 0
+    if not rows and not others:
+        return []
+    def one(r):
+        bits = [r.get("state") or "?"]
+        if r.get("startedAt"):
+            bits.append("started " + ago(r["startedAt"]))
+        elif r.get("createdAt"):
+            bits.append("queued " + ago(r["createdAt"]))
+        if r.get("cpuMillis"):
+            bits.append("%s CPUs" % cores(r["cpuMillis"]))
+        if r.get("memBytes"):
+            bits.append("%.1f GB" % (r["memBytes"] / (1 << 30)))
+        return "%s (%s)" % (r.get("short") or "?", ", ".join(bits))
+    shown = [one(r) for r in rows[:4]]
+    if len(rows) > 4:
+        shown.append("%d more (k2 compute jobs --node %s)" % (len(rows) - 4, n.get("name")))
+    if others:
+        shown.append("%d job(s) of other servers" % others)
+    return ["%-14s reserved by %s" % ("", ", ".join(shown))]
+def leftover_lines(n):
+    # 0.46.16: processes of the job user that no live job owns (the last
+    # health report of the node). Reported, never killed by the check.
+    l = n.get("leftovers") if isinstance(n.get("leftovers"), dict) else None
+    if not l or not l.get("count"):
+        return []
+    def age(s):
+        if s is None: return "?"
+        return "%dd" % (s // 86400) if s >= 86400 else ("%dh" % (s // 3600) if s >= 3600 else "%dm" % (s // 60))
+    out = ["%-14s %d leftover process(es) of the job user with no live job (not killed; the owner ends them at the machine)" % ("", l["count"])]
+    for p in (l.get("procs") or [])[:3]:
+        out.append("%-14s   pid %s, %s old%s: %s" % ("", p.get("pid"), age(p.get("age_secs")), (", from job %s" % p["job_id"][:8]) if p.get("job_id") else "", (p.get("cmd") or "")[:90]))
+    return out
+def when_col(j):
+    # 0.46.16: from the real start (not the submission), and the queued time.
+    if j.get("startedAt"):
+        w = "started %s" % ago(j["startedAt"])
+        if j.get("createdAt"):
+            w += " (queued %s)" % ago(j["createdAt"])
+        return w
+    return "queued %s" % ago(j.get("createdAt")) if j.get("createdAt") else "-"
 def share_lines(n):
     # Shared nodes only (0.46.3); a solo node prints exactly as before.
     s = n.get("share")
@@ -375,6 +422,8 @@ if verb == "nodes":
     for n in rows:
         # 0.46.8: a node off the node list of this workspace says so.
         print(node_line(n) + ("  [off the node list]" if n.get("allowed") is False else ""))
+        for l in reserve_lines(n) + leftover_lines(n):
+            print(l)
         for l in share_lines(n):
             print(l)
         for l in update_lines(n):
@@ -385,6 +434,8 @@ if verb == "nodes":
         print("node list (%s): jobs go only to %s (k2 compute allow-nodes)" % (v.get("allowNodesWorkspace") or "this workspace", ", ".join(v["allowNodes"]) or "nothing"))
 elif verb == "info":
     print(node_line(v))
+    for l in reserve_lines(v) + leftover_lines(v):
+        print(l)
     for l in share_lines(v):
         print(l)
     # 0.46.9 (protocol 7): what the machine is, and its package manager.
@@ -439,7 +490,8 @@ elif verb == "jobs":
         state = j["state"]
         if state == "queued" and "pinned" in j:
             state += " (pin)" if j["pinned"] else " (auto)"
-        print("%s  %-2s %-12s %-15s exit %-4s %-22s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
+        # 0.46.16: WHEN = started (the real start) and queued.
+        print("%s  %-2s %-12s %-15s exit %-4s %-22s %-34s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", when_col(j), (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":
     j = v
     print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
@@ -484,6 +536,18 @@ elif verb == "get":
     if (j.get("move") or {}).get("note"):
         # A waiting job: may K2 move it, and how its last tries went.
         print("  move: %s" % j["move"]["note"])
+    # 0.46.16: when it was queued, started (the real start, not the
+    # submission) and ended.
+    hms = lambda t: time.strftime("%m-%d %H:%M:%S", time.localtime(t))
+    times = ["queued %s (%s)" % (hms(j["createdAt"]), ago(j["createdAt"]))] if j.get("createdAt") else []
+    if j.get("startedAt"):
+        times.append("started %s (%s)" % (hms(j["startedAt"]), ago(j["startedAt"])))
+    elif j.get("state") not in ("queued", "assigned", "preparing"):
+        times.append("never started")
+    if j.get("endedAt"):
+        times.append("ended %s (%s)" % (hms(j["endedAt"]), ago(j["endedAt"])))
+    if times:
+        print("  " + " · ".join(times))
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or j.get("submitCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
     rows = j.get("attempts") or []
@@ -553,7 +617,7 @@ elif verb == "get":
     if j.get("reason") == "tenant_disk_full" and r.get("detail"):
         print("  " + r["detail"])
     for n in r.get("notes") or []:
-        if n.startswith("evicted ") or n.startswith("network: no-lan proxy: "):
+        if n.startswith("evicted ") or n.startswith("network: no-lan proxy: ") or n.startswith("killed "):
             print("  " + n)
     nh = r.get("networkHosts") or []
     if nh:

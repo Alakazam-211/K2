@@ -818,6 +818,11 @@ else:
     if ex and not ex.get("reachable"): print("  executor      not answering")
     if ex.get("wall_restart_pending"): print("  wall restart  owed: a restart onto the job wall is owed; run wall.enable again (or approve the held restart): k2 compute node wall %s" % v["node"])
     for s in f.get("stuck_jobs") or []: print("  stuck job     %s (quiet %dm)" % (s["job_id"][:8], s.get("quiet_secs", 0) // 60))
+    lo = f.get("leftovers")
+    if isinstance(lo, dict):
+        # 0.46.16: job-user processes no live job owns (reported, never killed).
+        print("  leftovers     %s" % ("none (no job-user process outlives its job)" if not lo.get("count") else "%d process(es) of the job user with no live job (not killed by the check)" % lo["count"]))
+        for p in lo.get("procs") or []: print("  leftover      pid %s, %s s old%s: %s" % (p.get("pid"), p.get("age_secs", "?"), (", from job %s" % p["job_id"][:8]) if p.get("job_id") else "", (p.get("cmd") or "")[:100]))
     sec = f.get("security")
     if sec:
         print("  job wall      %s%s" % (sec.get("wall"), (" (jobs run as %s)" % sec["job_user"]) if sec.get("wall") == "job_user" and sec.get("job_user") else ""))

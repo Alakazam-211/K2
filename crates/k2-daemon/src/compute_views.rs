@@ -27,14 +27,20 @@ use crate::compute_ws;
 fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     let (online, route, live_offer) = compute_ws::live_view(&n.id);
     let offer = live_offer.or_else(|| n.last_offer.clone());
-    let (queued, active, pinned_only) = {
+    let (queued, running, pinned_only, health) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         // Node-queued jobs (a shared node's queue) count as queued, not
         // running: their rows stay `assigned` until the node starts them.
         let (node_queued, running): (Vec<_>, Vec<_>) = store::jobs_in_states(&conn, &n.id, store::ACTIVE_STATES).into_iter().partition(|r| r.node_queued);
-        (store::jobs_in_states(&conn, &n.id, &["queued"]).len() + node_queued.len(), running.len(), k2_core::compute::pinned_only::is_on(&conn, &n.id))
+        (
+            store::jobs_in_states(&conn, &n.id, &["queued"]).len() + node_queued.len(),
+            running,
+            k2_core::compute::pinned_only::is_on(&conn, &n.id),
+            compute::admin::health(&conn, &n.id),
+        )
     };
+    let active = running.len();
     let mut v = serde_json::to_value(n).unwrap_or_default();
     // Only when on: the node takes only jobs that name it.
     if pinned_only {
@@ -62,6 +68,13 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
         }
         None => serde_json::Value::Null,
     };
+    // 0.46.16: which of this server's jobs hold the node's reservation, so
+    // a node with no free CPU and a live job never reads as stuck (other
+    // servers' jobs are counted in `room`, never named).
+    v["reservedBy"] = reserved_by_json(&running);
+    // 0.46.16: processes of the job user that no live job owns, from the
+    // node's last health report (≤ 15 min old). A report, never a kill.
+    v["leftovers"] = leftovers_json(health.as_ref(), compute::now());
     // CE-8: idle CPU beside unreserved CPU ("8 idle, 0 unreserved").
     v["idleCpuMillis"] = idle_cpu_millis(&n.id, offer.as_ref()).into();
     // Protocol 7 (§4.3): what the node is, and its short column
@@ -108,6 +121,43 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
         v["role"] = n.role.clone().into();
     }
     v
+}
+
+/// This server's jobs holding a node's reservation (assigned, preparing,
+/// running, finishing; not one the node still queues): id, state, when it
+/// started and what it reserved.
+pub(crate) fn reserved_by_json(running: &[store::JobRow]) -> serde_json::Value {
+    let mut rows: Vec<&store::JobRow> = running.iter().filter(|r| !r.node_queued).collect();
+    rows.sort_by_key(|r| (r.started_at.or(r.assigned_at).unwrap_or(r.created_at), r.id.clone()));
+    rows.iter()
+        .map(|r| {
+            // The plan's own limits (what the node reserved), read as JSON so
+            // a plan this build can't fully parse still says them.
+            let limits = serde_json::from_str::<serde_json::Value>(&r.plan_json).ok().map(|v| v["limits"].clone()).unwrap_or_default();
+            serde_json::json!({
+                "job": r.id,
+                "short": compute::message::short(&r.id),
+                "state": r.state,
+                "startedAt": r.started_at,
+                "createdAt": r.created_at,
+                "cpuMillis": limits["cpu_millis"].as_u64(),
+                "memBytes": limits["mem_bytes"].as_u64(),
+            })
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
+/// The leftover check of a node's last health report, when it is fresh
+/// (≤ 15 min) and the node runs the check: `{count, procs, at}`, else null.
+pub(crate) fn leftovers_json(health: Option<&(i64, k2_core::compute::proto::health::Health)>, now: i64) -> serde_json::Value {
+    match health {
+        Some((at, h)) if now - at <= 900 => match &h.leftovers {
+            Some(l) => serde_json::json!({"count": l.count, "procs": l.procs, "at": at}),
+            None => serde_json::Value::Null,
+        },
+        _ => serde_json::Value::Null,
+    }
 }
 
 /// CE-8: CPU the OS sees idle on a node: its cores minus the 1-minute load
@@ -1671,5 +1721,60 @@ mod test_history_tests {
         with_test_history(&mut none, &Recorded { state: "none".into(), ..Default::default() }, &Default::default());
         assert!(none["tests"].is_null(), "{none}");
         assert_eq!(none["testHistory"]["state"], "none");
+    }
+}
+
+#[cfg(test)]
+mod reserved_and_leftover_tests {
+    use super::{leftovers_json, reserved_by_json};
+    use k2_core::compute::proto::health::{Health, LeftoverProc, Leftovers};
+    use k2_core::compute::store::JobRow;
+
+    fn row(id: &str, state: &str, started: Option<i64>, node_queued: bool) -> JobRow {
+        JobRow {
+            id: id.into(),
+            state: state.into(),
+            created_at: 100,
+            started_at: started,
+            node_queued,
+            plan_json: r#"{"limits":{"max_secs":60,"cpu_millis":8000,"mem_bytes":17179869184,"disk_bytes":0,"log_cap_bytes":1}}"#.into(),
+            ..Default::default()
+        }
+    }
+
+    /// 0.46.16: the jobs holding a node's reservation, oldest start first,
+    /// with what each reserved; a job the node still queues holds nothing.
+    #[test]
+    fn reserved_by_names_the_holding_jobs_and_skips_node_queued_ones() {
+        let rows = vec![row("bbbbbbbb22222222", "running", Some(300), false), row("aaaaaaaa11111111", "running", Some(200), false), row("cccccccc33333333", "assigned", None, true)];
+        let v = reserved_by_json(&rows);
+        let list = v.as_array().unwrap();
+        assert_eq!(list.len(), 2, "{v}");
+        assert_eq!(list[0]["short"], "aaaaaaaa");
+        assert_eq!(list[0]["startedAt"], 200);
+        assert_eq!(list[0]["createdAt"], 100);
+        assert_eq!(list[0]["cpuMillis"], 8000);
+        assert_eq!(list[0]["memBytes"], 16u64 << 30);
+        assert_eq!(list[1]["short"], "bbbbbbbb");
+        let mut bad = row("dddddddd44444444", "running", Some(1), false);
+        bad.plan_json = "not json".into();
+        let v = reserved_by_json(&[bad]);
+        assert!(v[0]["cpuMillis"].is_null() && v[0]["memBytes"].is_null(), "unknown limits stay null: {v}");
+    }
+
+    /// The node's leftover check reaches `nodes` only from a fresh report.
+    #[test]
+    fn leftovers_come_from_a_fresh_health_report_only() {
+        let h = Health {
+            leftovers: Some(Leftovers { count: 1, procs: vec![LeftoverProc { pid: 42, age_secs: Some(9000), cmd: "sleep 3600".into(), job_id: Some("j".into()) }] }),
+            ..Default::default()
+        };
+        let v = leftovers_json(Some(&(1000, h.clone())), 1000 + 60);
+        assert_eq!(v["count"], 1);
+        assert_eq!(v["procs"][0]["pid"], 42);
+        assert_eq!(v["procs"][0]["job_id"], "j");
+        assert!(leftovers_json(Some(&(1000, h)), 1000 + 901).is_null(), "a stale report says nothing");
+        assert!(leftovers_json(Some(&(1000, Health::default())), 1000).is_null(), "an older node runs no check");
+        assert!(leftovers_json(None, 1000).is_null());
     }
 }

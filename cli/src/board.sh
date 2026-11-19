@@ -728,6 +728,12 @@ else:
 }
 
 _study_page_send_feedback() {
+    # 0.46.17: one line for an agent while agents may not report, so one
+    # that knows the command doesn't loop (_sf_agents_off_here).
+    if _sf_agents_off_here; then
+        _sf_off_line
+        return 0
+    fi
     cat <<'EOF'
 k2 study send-feedback — telling K2's makers about K2
 

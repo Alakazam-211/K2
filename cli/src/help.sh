@@ -64,12 +64,18 @@ ASK A HUMAN
                                         (ask/list/show/comment/resolve — see `k2 feedback --help`)
   approve request --payload <file>      Ask a person to approve exact bytes on their phone
                                         (Face ID); status / cancel — `k2 approve --help`
+EOF
+    # 0.46.17: not in an agent's help while agents may not report
+    # (_sf_agents_off_here). Everyone else: today's text.
+    if ! _sf_agents_off_here; then
+        cat <<'EOF'
 
 K2 ITSELF
   send-feedback "<text>"                Tell Alakazam Labs (K2's makers) about K2: a bug, an
                                         idea (not your human: that's feedback ask)
                                         (list/show/retry — `k2 send-feedback --help`)
 EOF
+    fi
     # Permission cards (Beta): one line, only while both switches are on
     # for this agent (PRD rev 3.1 §11.4). Off = today's text.
     if _permission_cli_enabled; then

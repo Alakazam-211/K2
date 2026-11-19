@@ -8,7 +8,9 @@
 #
 # 0.46.17, the agent opt-in: agents report only after a person said yes
 # (`settings --agents off|cli|all`, `--attach`), each report says its
-# scope (`--scope cli --command "<what it ran>"` or `--scope platform`).
+# scope (`--scope cli --command "<what it ran>"` or `--scope platform`),
+# and while agents are off an agent's `k2 help` leaves this command out
+# and its study page is one line (_sf_agents_off_here).
 
 # The product's name in the lines this part writes: brand/k2/brand.toml
 # [names] product (tests/cli/send_feedback_optin.sh checks they agree).
@@ -126,6 +128,55 @@ refusal prints one JSON line on stderr: {"error": <code>, "hint": <why>}.
 A later refusal by the service shows as refused in list. More:
 k2 study send-feedback.
 EOF
+}
+
+# Hidden from agents while off (0.46.17, K2's ruling): in an agent's
+# session (a session passport) `k2 help` leaves send-feedback out and
+# `k2 study send-feedback` is one line, while this server's settings answer
+# agents:false (the switch itself, not canSend or why: a drain hold wins
+# over agents_off there). One read per process, cached. Any failure (no
+# daemon, a refusal, an answer without the switch) shows everything as
+# before. A terminal outside K2 (the owner token) never asks.
+_K2_SF_AGENTS_OFF=""
+_sf_agents_off_here() {
+    if [ -z "$_K2_SF_AGENTS_OFF" ]; then
+        _K2_SF_AGENTS_OFF=0
+        if [ -n "${SCOPED_TOKEN:-}" ] && _sf_agents_off_probe; then
+            _K2_SF_AGENTS_OFF=1
+        fi
+    fi
+    [ "$_K2_SF_AGENTS_OFF" = 1 ]
+}
+
+# One settings read with the session passport, the cell socket first (as
+# _permission_probe). Succeeds only on 200 with "agents": false.
+_sf_agents_off_probe() {
+    local sock out="" _K2_CFG=""
+    sock="$(_hook_sock)"
+    if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds; then
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+        out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/product-feedback/settings" \
+            --connect-timeout 1 --max-time 2 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+    elif [ -n "${PORT:-}" ]; then
+        _k2_cfg_auth "$SCOPED_TOKEN"
+        out="$(_k2_curl "$_K2_CFG" -s -G "http://${HOST}:${PORT}/cli/product-feedback/settings" \
+            --connect-timeout 1 --max-time 2 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+    fi
+    [[ "$out" == *$'\n200' ]] || return 1
+    out="${out%$'\n200'}"
+    printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(v, dict) and v.get("agents") is False else 1)
+' 2>/dev/null
+}
+
+# The study page's one line while agents are off.
+_sf_off_line() {
+    echo "Agents don't report $_SF_PRODUCT problems on this server: a person turns it on in Settings, then Feedback."
 }
 
 _sf_onoff() {

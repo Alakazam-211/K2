@@ -87047,17 +87047,6 @@ if v.get("hint"):
     print("  " + v["hint"])'
 }
 
-# k2 hostchat recording <sub>: `policy` here. The recorder's own install
-# (status, preflight, enable, disable, uninstall) is another build's.
-_hostchat_recording() {
-    local sub="${1:-}"
-    case "$sub" in
-        policy|policies) shift; _hostchat_recording_policy "$@" ;;
-        -h|--help|help|"") _hostchat_recording_usage ;;
-        *) echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat recording $sub isn't in this build; here: k2 hostchat recording policy [set KEY VALUE] (k2 hostchat recording --help)\"}" >&2; exit 2 ;;
-    esac
-}
-
 _hostchat_recording_policy() {
     local as_json=0 set_mode=0 pos=()
     while [ $# -gt 0 ]; do
@@ -87327,11 +87316,15 @@ Recording (Sew, this box's chat and voice service: its recorder and transcriber;
 EOF
 }
 
-# k2 hostchat recording (0.46.11 K-a): Sew's recorder install. Enable is an
-# Owner's or Admin's, in person (a vault confirm bound to this install); in
-# a K2 terminal the daemon answers person_only with the card's Ask-with line.
+# k2 hostchat recording (0.46.11 K-a): Sew's recorder install, and the
+# server's recording policies (policy). Enable is an Owner's or Admin's, in
+# person (a vault confirm bound to this install); in a K2 terminal the
+# daemon answers person_only with the card's Ask-with line.
 _hostchat_recording() {
     local sub="${1:-}"; [ $# -gt 0 ] && shift
+    case "$sub" in
+        policy|policies) _hostchat_recording_policy "$@"; return ;;
+    esac
     local as_json=0 yes=0 wait=1 rec="" tra="" model=""
     while [ $# -gt 0 ]; do
         case "$1" in

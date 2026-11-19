@@ -11,6 +11,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Mail passwords you type stay out of other programs' view.** The password of `k2 mail link add --pass-stdin`, `k2 hostmail config --relay-pass-stdin` and `k2 hostmail import --pass-stdin`, and the secret of `k2 mail oauth-config set --secret-stdin`, now reach K2's mail helper on a pipe, never in its environment, where other programs of the same user could read them.
 - **Login passwords you type stay out of other programs' view.** The password of `k2 users add`, `k2 users set-password`, `k2 users pair-phone` and `k2 connect login` now reaches the request on a pipe, never in a helper program's environment.
 - **`k2 clone` keeps the other server's token to itself.** The token for `--host` now reaches only the helper that talks to that server, on a pipe; before, every helper program the command started could see it in its environment.
+- **`k2 hostchat recording policy` runs again.** It showed and changed nothing: every use was refused as an unknown or unexpected word. It now shows the server's recording policies and, with `set KEY VALUE`, changes them (in person, with a confirm), as its help says.
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

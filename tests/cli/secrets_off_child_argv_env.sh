@@ -15,8 +15,9 @@
 #
 # Covered: k2 vault backup key, k2 sources secret (the token and the
 # secret's name), k2 app recording <app> set, k2 hostchat app-space
-# recording, k2 hostchat app-space recording-lock (callers of
-# _rec_send_confirmed), k2 api-key create --hire, and the typed passwords
+# recording, k2 hostchat app-space recording-lock, k2 hostchat recording
+# policy set (the four callers of _rec_send_confirmed), k2 api-key create
+# --hire, and the typed passwords
 # of the mail family: k2 mail link add --pass-stdin, k2 mail oauth-config
 # set --secret-stdin, k2 hostmail config --relay-pass-stdin, k2 hostmail
 # import --pass-stdin, and of the logins: k2 users add and set-password
@@ -298,8 +299,8 @@ assert_children_seen "sources secret" curl
 assert_off_children "sources secret" "confirm token" "$TOKEN_SENTINEL"
 assert_off_children "sources secret" "secret's name" "$SECRET_SENTINEL"
 
-# 3-5. Callers of _rec_send_confirmed: the stub asks for the confirm, the
-#      CLI gets it and sends the change again with the token.
+# 3-5b. The four callers of _rec_send_confirmed: the stub asks for the
+#       confirm, the CLI gets it and sends the change again with the token.
 rec_case() {
     local label="$1" path="$2"; shift 2
     fresh
@@ -311,6 +312,7 @@ rec_case() {
 rec_case "app recording set" /cli/app/recording/set app recording acme set --start-level admin
 rec_case "app-space recording" /cli/sew/app-spaces/recording hostchat app-space recording acme 5 --start-level admin
 rec_case "app-space recording-lock" /cli/sew/app-spaces/recording-lock hostchat app-space recording-lock 5 off
+rec_case "recording policy set" /cli/sew/recording/policy hostchat recording policy set audio_max_days 60
 
 # 6. k2 api-key create --hire: the hire key's confirm token joins the body
 #    on stdin.

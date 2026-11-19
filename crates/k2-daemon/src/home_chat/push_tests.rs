@@ -187,12 +187,19 @@ fn the_cursor_survives_a_restart_and_a_reset_forgets_it() {
     finish();
 }
 
+/// The flags a Sew 0.10.6 box reports (its published build's own list).
+fn sew_0_10_6() -> HomePushFeatures {
+    let f = HomePushFeatures::from_flags(&k2_core::tool_hook::features::SEW_0_10_6_REPORTED);
+    assert_eq!(f, HomePushFeatures { feed_head: true, person_channel_notify: true, ..Default::default() }, "0.10.6's two push gates");
+    f
+}
+
 /// P2 (Sew 0.10.6, `feed_head`): a person K2 never read starts at Sew's
 /// head, so nothing retained is replayed.
 #[test]
 fn a_first_start_with_feed_head_begins_at_the_head() {
     let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let (_home, _api, _feed, mgmt, _env) = push_box(HomePushFeatures { feed_head: true, ..Default::default() });
+    let (_home, _api, _feed, mgmt, _env) = push_box(sew_0_10_6());
     assert_eq!(call_push::initial_cursor(ALEX), 40);
     let calls = mgmt.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
@@ -334,18 +341,26 @@ fn notify_levels_on_the_persons_session() {
 }
 
 /// P2 (Sew 0.10.6, `person_channel_notify`): the level goes over mgmt for
-/// the person, never their session.
+/// the person, never their session: read at `GET
+/// /mgmt/v1/people/{ext}/channels/{id}/notify`, set at `POST …/notify/set`
+/// (sew-proto 0.10.6's `MGMT_PERSON_CHANNEL_NOTIFY[_SET]`).
 #[test]
 fn notify_goes_over_mgmt_with_person_channel_notify() {
     let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let (_home, api, _feed, mgmt, _env) = push_box(HomePushFeatures { person_channel_notify: true, ..Default::default() });
+    let (_home, api, _feed, mgmt, _env) = push_box(sew_0_10_6());
+    let v = routes::route("/cli/home-chat/notify", &member(), &q(&[("conv", "901")]), b"").expect("GET notify");
+    assert_eq!(v["convKind"], json!("channel"));
     let v = routes::route("/cli/home-chat/notify/set", &member(), &HashMap::new(), br#"{"conv":"901","level":"mentions"}"#).expect("set");
     assert_eq!(v["ok"], true);
     let calls = mgmt.lock().unwrap().clone();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "POST");
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0, "GET");
     assert!(calls[0].1.starts_with("/mgmt/v1/people/") && calls[0].1.ends_with("/channels/901/notify"), "{}", calls[0].1);
-    assert_eq!(calls[0].2, Some(json!({"level": "mentions"})));
+    assert_eq!(calls[0].2, None);
+    assert_eq!(calls[1].0, "POST");
+    assert!(calls[1].1.starts_with("/mgmt/v1/people/") && calls[1].1.ends_with("/channels/901/notify/set"), "{}", calls[1].1);
+    assert_eq!(calls[1].2, Some(json!({"level": "mentions"})));
+    assert!(api.calls_to("/api/v1/channels/901/notify").is_empty(), "not the session");
     assert!(api.calls_to("/api/v1/channels/901/notify/set").is_empty(), "not the session");
     finish();
 }

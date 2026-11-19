@@ -11,6 +11,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **No repeats.** Several messages in a short while become one "N new messages"; nothing comes while the conversation is open on another of your windows, after you read it, or for messages that waited out a restart or Do Not Disturb (those arrive as one quiet summary). Reading on one device clears the notifications on your other phones.
 - **@mentions are highlighted** in the Home chat view.
 - Phones show these notifications with the K2 Companion update that adds them.
+- **Sew 0.10.6.** With the chat server K2 installs, Home chat's phone notifications for someone new start at the newest message instead of older ones, and K2 sets each person's All messages or @mentions choice on the server directly. Sew updates how it stores chat when it starts, so going back to an older Sew afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
 
 ### Apps
 - **Preview: chat notifications for your App's users (off by default).** An App that uses DMs or channels in its own Sew Space can notify its users on its own phone app, the way it does for agent replies: `k2 app push set <app> --chat on` (the owner, an Admin, or the App's agent with "…and manage them end to end"), with `K2_APP_CHAT_PUSH=1` on the server while this is a preview. DMs always notify; in a channel each person gets All messages or @mentions only (the default), which your phone app sets. A tap opens your phone app at that chat (`k2Kind: chat`, with the chat and message ids).

@@ -536,7 +536,8 @@ Server:
                                              taken just before the upgrade>. Sew and its voice engine
                                              (sew-media) go back together. K2 0.46.15: Sew 0.10.5's migration
                                              1000501 does the same, so going back from 0.10.5 to any older
-                                             Sew needs this rollback too)
+                                             Sew needs this rollback too; K2 0.46.16: Sew 0.10.6's 1000601
+                                             too, so going back from 0.10.6 needs it as well)
   k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
                                             (no flags: downloads the pin, as enable does; --tarball and
                                              --media-tarball (the sew-media release, used when voice is on)
@@ -545,12 +546,12 @@ Server:
                                              The order: Sew itself, then (voice on) its voice engine, then
                                              (only where the recorder is installed) the recorder and
                                              transcriber, when no call is being recorded.
-                                             To Sew 0.10.5 (K2 0.46.15): no new config; Sew and its voice
-                                             engine upgrade together. Sew runs one migration (1000501) when it
+                                             To Sew 0.10.6 (K2 0.46.16): no new config; Sew and its voice
+                                             engine upgrade together. Sew runs one migration (1000601) when it
                                              starts, so from any older Sew the way back is k2 hostchat rollback
                                              --accept-data-loss, never the plain one (from 0.9.x it also crosses
                                              0.10.0's 1000101). A box on Sew 0.8.2, 0.8.3, 0.9.0, 0.9.2, 0.9.3,
-                                             0.10.0, 0.10.2, 0.10.3 or 0.10.4 upgrades like any release)
+                                             0.10.0, 0.10.2, 0.10.3, 0.10.4 or 0.10.5 upgrades like any release)
   k2 hostchat upgrade --accept-binary SHA256 [--tarball FILE] [...]
                                             (the owner, from a terminal outside K2, with a confirm: upgrade
                                              FROM a /usr/local/bin/sew K2 doesn't know, only if its sha256 is

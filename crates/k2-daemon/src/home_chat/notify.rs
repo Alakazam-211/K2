@@ -13,7 +13,8 @@
 //!
 //! Levels live in Sew: K2 reads and sets them on the person's own held
 //! session (`/api/v1/channels/{id}/notify[/set]`), or over mgmt once Sew
-//! has `person_channel_notify` (0.10.6, P2). A DM answers `fixed: true`
+//! has `person_channel_notify` (0.10.6, P2: `GET /mgmt/v1/people/{ext}/channels/{id}/notify`
+//! and `POST …/notify/set`, as sew-proto 0.10.6's routes name them). A DM answers `fixed: true`
 //! ("DMs always notify") and a set on one is 409 `dm_always_notifies`; any
 //! level but the two is 400 `usage`; a channel the person isn't in answers
 //! Sew's own refusal (422 `not_a_member`). `level` is the conversation's own
@@ -59,6 +60,8 @@ fn answer(conv: &str, dm: bool, prefs: &Value) -> Value {
     })
 }
 
+/// Sew 0.10.6's `GET /mgmt/v1/people/{ext}/channels/{id}/notify`; its set
+/// is this plus `/set` (`MGMT_PERSON_CHANNEL_NOTIFY_SET`), as on the session.
 fn mgmt_path(c: &Caller, conv: &str) -> String {
     format!("/mgmt/v1/people/{}/channels/{conv}/notify", k2_core::tool_hook::sew_wire::pct_path(&c.ext))
 }
@@ -112,7 +115,7 @@ pub fn set(c: &Caller, b: SetBody) -> R<Value> {
     }
     let body = json!({"level": level});
     let prefs = if (deps().push_flags)().person_channel_notify {
-        let (status, got) = (deps().mgmt)("POST", &mgmt_path(c, &conv), Some(&body)).map_err(|e| Refusal::new(503, "chat_unavailable", e))?;
+        let (status, got) = (deps().mgmt)("POST", &format!("{}/set", mgmt_path(c, &conv)), Some(&body)).map_err(|e| Refusal::new(503, "chat_unavailable", e))?;
         mgmt_ok(status, got)?
     } else {
         ok_or_refuse(sew_as(&c.ext, "POST", &format!("/api/v1/channels/{conv}/notify/set"), Some(&body))?)?

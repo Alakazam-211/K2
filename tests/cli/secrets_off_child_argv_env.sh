@@ -26,6 +26,7 @@
 # into k2 llm tokens add, and k2 fed pair-join --token-stdin: k2 users add and set-password
 # --password-stdin, k2 users pair-phone, k2 connect login; and the remote
 # server's token of k2 clone (--host, --token).
+# Also the remote token of k2 read <ws>@<host> --token-stdin.
 #
 # No daemon build; a throwaway HOME with its own vault socket; never
 # touches the real ~/.k2.
@@ -427,6 +428,11 @@ printf '%s\n' "$FED_TOKEN" | k2run fed pair-join --token-stdin >/dev/null 2>&1 |
 assert_tcp_got "fed pair-join --token-stdin" /cli/federation/pair/v2/respond "pairing token" "$PASS_SENTINEL"
 assert_children_seen "fed pair-join --token-stdin" curl
 assert_off_children "fed pair-join --token-stdin" "pairing token" "$FED_TOKEN"
+
+# 22. k2 read <ws>@<host> --token-stdin: the remote server's token reaches
+#     that server's terminal read and no child's argv or environment, nor
+#     k2's own argv.
+sec_case "read --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINEL" read "ws1@http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

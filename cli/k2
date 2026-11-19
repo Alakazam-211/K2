@@ -6791,7 +6791,7 @@ cmd_read() {
     local lines=50
     local agent=""
     local session=""
-    local token=""
+    local token="" token_stdin=0
     shift || true
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -6799,12 +6799,20 @@ cmd_read() {
             --agent) agent="$2"; shift 2 ;;
             --session) session="$2"; shift 2 ;;
             --token) token="$2"; shift 2 ;;
+            --token-stdin) token_stdin=1; shift ;;
             *) shift ;;
         esac
     done
     if [ -z "$workspace" ] && [ -z "$session" ]; then
-        echo "Usage: k2 read <workspace>[@<host>] [--lines N] [--agent <name>] [--session <id>] [--token <tok>]" >&2
+        echo "Usage: k2 read <workspace>[@<host>] [--lines N] [--agent <name>] [--session <id>] [--token-stdin | --token <tok>]" >&2
+        echo "  --token-stdin reads the remote token from stdin; a token on the command line (--token <tok>) is visible to other users on this machine" >&2
         exit 1
+    fi
+    if [ "$token_stdin" = 1 ]; then
+        [ -z "$token" ] || { echo "k2 read: --token-stdin or --token, not both" >&2; exit 2; }
+        _cli_read_secret_stdin "Token: "
+        token="$_K2_SECRET"; _K2_SECRET=""
+        [ -n "$token" ] || { echo "k2 read: --token-stdin: no token on stdin" >&2; exit 2; }
     fi
     # Remote addressing (K2-as-a-server): <workspace>@<host> reads a
     # workspace on a CONNECTED remote daemon (owner token over the tunnel).

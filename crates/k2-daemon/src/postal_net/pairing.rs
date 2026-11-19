@@ -134,23 +134,13 @@ pub fn register_handles(net: &Plane) -> Result<(), CallError> {
             continue;
         }
         let sdk_addr = Address::parse(&h.address).map_err(|_| CallError::NoConnect(format!("{} isn't a Postal address", h.address)))?;
-        let req = me_put(&sdk_addr, &ident.public_key());
+        let req = plane::me_put(&sdk_addr, &ident.public_key(), Typ::Session);
         let (s, b) = net.box_call(&req)?;
         plane::parse::<serde_json::Value>(s, &b).map_err(CallError::Plane)?;
         db(|c| store::set_handle_status(c, &h.id, "claimed", Some(&key_name))).map_err(|e| CallError::NoConnect(e.hint()))?;
         k2_core::log_debug!("[postal] {} is on the Postal network (key {})", h.address, &fp[..16]);
     }
     Ok(())
-}
-
-/// `PUT /me {addr, public_key_pem, typ}` (the plane's register call; not in
-/// the pinned SDK yet, so built here to its contract).
-fn me_put(addr: &Address, key: &PublicKey) -> plane::Request {
-    plane::Request {
-        method: plane::Method::Put,
-        path: format!("{}/me", plane::API),
-        body: Some(serde_json::json!({ "addr": addr.to_string(), "public_key_pem": key.pem(), "typ": "session" }).to_string()),
-    }
 }
 
 /// The fingerprint this box registered for a handle (from `key_name`).
@@ -355,10 +345,11 @@ fn pin(item: &PairItem, h: &store::Handle, friend: Option<store::Friend>) -> Res
         put(&item.id, State::Awaiting(w));
         return Ok(());
     };
-    let decision = match pc.decision.as_str() {
-        "accept" => Decision::Accept,
-        "reject" => Decision::Reject,
-        _ => Decision::Mismatch,
+    let Some(decision) = Decision::parse(&pc.decision) else {
+        // Not a decision this SDK knows: nothing to verify yet.
+        k2_core::log_debug!("[postal] pair {}: the other side's decision isn't one this server knows", item.id);
+        put(&item.id, State::Awaiting(w));
+        return Ok(());
     };
     match w.peer_confirmation(decision, pc.sig.as_deref().unwrap_or("")) {
         Ok(pinned) => {

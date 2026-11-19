@@ -164,7 +164,7 @@ fn _k2_refuse_owner_fallback cmd_heartbeat_wake -- _k2_no_owner_fallback=1 K2_HO
     "SCOPED_TOKEN='$SESSION'; cmd_heartbeat_wake"
 [ "$RC" = 0 ] && [ "$OUT" = "$NOOP" ] || die "wake function with a passport: exit $RC: $OUT"
 sent "wake function, passport: agents list" /cli/agents/list "$SESSION"
-sent "wake function, passport: work inbox" /cli/work/inbox "$SESSION"
+sent "wake function, passport: workspace inbox" /cli/inbox/list "$SESSION"
 never_sent "wake function, passport" "$OWNER"
 run K2_NO_OWNER_FALLBACK=1 K2_HOOK_TOKEN="$SESSION" -- heartbeat wake
 [ "$RC" = 0 ] && [ "$OUT" = "$NOOP" ] || die "wake with a passport: exit $RC: $OUT"

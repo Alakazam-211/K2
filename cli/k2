@@ -7211,7 +7211,9 @@ cmd_heartbeat_wake() {
     # 1. Check if any agents have inbox work
     # 2. If manager is running → send triage message
     # 3. If manager is asleep → launch with triage prompt
-    # Check both agent inboxes and workspace inbox for work
+    # Work is an agent's inbox count above 0, or an item at the root of
+    # the workspace inbox (/cli/inbox/list with folder=: arrivals nobody
+    # has filed yet; filed items sit in folders).
     # K2_NO_OWNER_FALLBACK with no session passport: refuse as the
     # connection guard does; the block below never reads the token file.
     if [ -n "${_k2_no_owner_fallback:-}" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
@@ -7279,10 +7281,12 @@ def refused(route, code, data, raw):
             sys.exit(3)
     sys.exit(1)
 
-def answer(route):
-    # The JSON the daemon answered on route, or None for the retired
-    # /cli/work/inbox (every daemon since 0.39 answers it 410 Gone).
-    req = urllib.request.Request(f'{base}{route}?project={urllib.parse.quote(project)}', headers=auth)
+def answer(route, **params):
+    # The JSON the daemon answered on route with HTTP 200; anything else
+    # ends the command with its error line.
+    query = 'project=' + urllib.parse.quote(project)
+    query += ''.join('&' + k + '=' + urllib.parse.quote(v, safe='') for k, v in params.items())
+    req = urllib.request.Request(f'{base}{route}?{query}', headers=auth)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             code, raw = resp.status, resp.read()
@@ -7296,8 +7300,6 @@ def answer(route):
         fail(f\"can't reach K2's server at {base}: {e.reason}; run k2 daemon status\")
     except OSError as e:
         fail(f\"K2's server closed the connection on {route}: {e}; run k2 daemon status\")
-    if code == 410 and route == '/cli/work/inbox':
-        return None
     try:
         data = json.loads(raw)
     except ValueError:
@@ -7313,8 +7315,10 @@ try:
     if not isinstance(agents, list) or not all(isinstance(a, dict) for a in agents):
         fail(f\"K2's server answered /cli/agents/list with a {type(agents).__name__}, not a list of agents\")
     agent_inbox = any(a.get('inboxCount', 0) > 0 for a in agents)
-    items = answer('/cli/work/inbox')
-    ws_inbox = len(items) > 0 if isinstance(items, list) else False
+    items = answer('/cli/inbox/list', folder='')
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        fail(f\"K2's server answered /cli/inbox/list with a {type(items).__name__}, not a list of inbox items\")
+    ws_inbox = len(items) > 0
 except SystemExit:
     raise
 except Exception as e:

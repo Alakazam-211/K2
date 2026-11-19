@@ -86,7 +86,7 @@ wake() {
 # token in the query.
 check_token() { # check_token <case> <wanted token>
     local n
-    for route in /cli/agents/list /cli/work/inbox; do
+    for route in /cli/agents/list /cli/inbox/list; do
         n="$(grep -cF "GET ${route}?project=" "$T/requests.log" || true)"
         [ "$n" = 1 ] || die "$1: wanted one GET ${route}?project=..., saw $n"
         n="$(awk -v pre="GET ${route}?project=" -v want=" auth=Bearer ${2}" \

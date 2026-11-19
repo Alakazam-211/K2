@@ -230,9 +230,10 @@ echo "work to do: the manager is told, as before"
 WROTE='"/cli/terminal/write": [200, "{\"success\":true}"]'
 SCAN='"/cli/agents/running": [200, "[{\"terminalId\":\"agent-chat:p1:manager\",\"cwd\":\"/w\"}]"]'
 RUNNING="$SCAN, $WROTE"
-# told <case>: the running manager got the triage message, once.
+# told <case>: the running manager got the triage message, once, and
+# stdout is the notified line alone (the write's answer is not printed).
 told() {
-    if [ "$RC" = 0 ] && [ "$(tail -n 1 "$T/out")" = '{"success":true}{"status":"notified","terminalId":"agent-chat:p1:manager"}' ] &&
+    if [ "$RC" = 0 ] && [ "$(cat "$T/out")" = '{"status":"notified","terminalId":"agent-chat:p1:manager"}' ] &&
         [ ! -s "$T/err" ] && [ "$(gets /cli/agents/list)" = 1 ] && [ "$(gets /cli/inbox/list)" = 1 ] && root_asked &&
         [ "$(gets /cli/agents/running)" = 1 ] &&
         [ "$(grep -cF 'POST /cli/terminal/write?' "$T/requests.log" || true)" = 1 ] &&
@@ -422,7 +423,7 @@ MIGRATING='[503, "{\"state\":\"migrating\",\"error\":\"daemon is completing firs
 plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [0, ""], ["down", "7"], ["slow", "[]"], '"$MIGRATING"', [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}}'
 wake
 if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&
-    [ "$(tail -n 1 "$T/out")" = "$LAUNCHED"'{"success":true}{"status":"launched_and_notified","terminalId":"agent-chat-manager"}' ] &&
+    [ "$(cat "$T/out")" = '{"status":"launched_and_notified","terminalId":"agent-chat-manager"}' ] &&
     [ "$(gets /cli/agents/running)" = 6 ] && [ "$(posted /cli/agents/launch?)" = 1 ] && [ "$(posted /cli/terminal/write?)" = 1 ]; then
     ok "the launch poll: no answer, refused, a timeout and a 503 while migrating are tried again"
 else
@@ -442,7 +443,7 @@ fi
 plan '{'"$WORK"', '"$LAUNCH"', "/cli/agents/running": {"seq": [[200, "[]"], [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}}'
 wake
 if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&
-    [ "$(tail -n 1 "$T/out")" = "$LAUNCHED"'{"success":true}{"status":"launched_and_notified","terminalId":"agent-chat-manager"}' ] &&
+    [ "$(cat "$T/out")" = '{"status":"launched_and_notified","terminalId":"agent-chat-manager"}' ] &&
     [ "$(gets /cli/agents/running)" = 2 ] && [ "$(posted /cli/agents/launch?)" = 1 ] &&
     [ "$(posted /cli/terminal/write?)" = 1 ] && grep -qF 'POST /cli/agents/launch?project=' "$T/requests.log" &&
     grep -qF '&agent=manager ' "$T/requests.log" && grep -qF 'id=agent-chat-manager&message=New%20work%20detected' "$T/requests.log"; then
@@ -517,7 +518,7 @@ auths() {
 # stderr, that tail line, and route sent twice: refused, then the retry
 # with the new passport. Every request after the heal uses it.
 healed_ok() {
-    if [ "$RC" = 0 ] && [ ! -s "$T/err" ] && [ "$(tail -n 1 "$T/out")" = "$4" ] &&
+    if [ "$RC" = 0 ] && [ ! -s "$T/err" ] && [ "$(cat "$T/out")" = "$4" ] &&
         [ "$(auths "$2" "$3")" = "$SESSION $HEALED" -o "$(auths "$2" "$3")" = "$SESSION $SESSION $HEALED" ] &&
         [ "$(awk '/auth=Bearer '"$HEALED"'$/ {seen = 1; next} seen && /auth=Bearer '"$SESSION"'$/ {bad = 1} END {print bad + 0}' "$T/requests.log")" = 0 ]; then
         ok "$1"
@@ -525,9 +526,9 @@ healed_ok() {
         bad "$1"
     fi
 }
-TOLD='{"success":true}{"status":"notified","terminalId":"agent-chat:p1:manager"}'
+TOLD='{"status":"notified","terminalId":"agent-chat:p1:manager"}'
 UP='"/cli/agents/running": {"seq": [[200, "[]"], [200, "[{\"terminalId\":\"agent-chat-manager\",\"cwd\":\"/w/.k2/agents/manager\"}]"]]}'
-UP_TOLD="$LAUNCHED"'{"success":true}{"status":"launched_and_notified","terminalId":"agent-chat-manager"}'
+UP_TOLD='{"status":"launched_and_notified","terminalId":"agent-chat-manager"}'
 
 plan '{'"$WORK"', '"$RUNNING"', '"$(pp /cli/agents/running 0)"'}'
 wake
@@ -640,7 +641,7 @@ RC=0
 env -u K2_PORT -u K2_HOOK_TOKEN HOME="$QHOME" K2_PROJECT_PATH="$QWS" \
     "$K2_CLI" heartbeat wake >"$T/out" 2>"$T/err" || RC=$?
 if [ "$RC" = 0 ] && [ ! -s "$T/err" ] &&
-    [ "$(tail -n 1 "$T/out")" = '{"success":true}{"status":"notified","terminalId":"agent-chat:p1:manager"}' ] &&
+    [ "$(cat "$T/out")" = '{"status":"notified","terminalId":"agent-chat:p1:manager"}' ] &&
     grep -qF "POST /cli/terminal/write?project=$QPROJ&id=agent-chat%3Ap1%3Amanager&message=" "$T/requests.log"; then
     ok "end to end, quoted paths: the manager is told"
 else

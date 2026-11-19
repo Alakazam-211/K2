@@ -718,9 +718,9 @@ def answer(route, soft=False, **params):
 
 def post(route, **params):
     # A change, checked: a write or a launch that failed ends the command
-    # before its success line. The answer is printed as before.
-    raw = checked(route, 'POST', **params)[1]
-    sys.stdout.write(raw.decode('utf-8', 'replace'))
+    # before its success line. A good answer is not printed: the status
+    # line says what happened, on a line of its own.
+    checked(route, 'POST', **params)
 
 def say(**fields):
     print(json.dumps(fields, separators=(',', ':'), ensure_ascii=False))

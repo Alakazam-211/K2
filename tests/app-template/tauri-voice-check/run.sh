@@ -31,7 +31,7 @@ echo "tao:   $(cargo tree -i tao --depth 0 2>/dev/null | head -1)"
 wry=$(cargo tree -i wry --depth 0 2>/dev/null | head -1)
 echo "wry:   $wry"
 case "$wry" in
-  *Alakazam-211/K2*) echo "PASS  wry is K2's patched copy" ;;
+  *Alakazam-211/K2[?#/.]*|*AlakazamLabs/K5[?#/.]*) echo "PASS  wry is K2's patched copy (the repo under its old or new name)" ;;
   *) echo "FAIL: wry is not K2's patched copy (the [patch.crates-io] row)"; exit 1 ;;
 esac
 bin="$CARGO_TARGET_DIR/debug/k2-voice-check"

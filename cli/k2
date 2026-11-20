@@ -11,6 +11,13 @@
 
 K2_CLI_VERSION="0.46.16"
 
+# The GitHub repo releases come from (owner/name): every release URL this
+# CLI fetches or prints is built from it. The repo is moving from
+# Alakazam-211/K2 to AlakazamLabs/K5 (a transfer and rename, which GitHub
+# redirects); on move day this line becomes the new name. brand.test.ts
+# keeps it equal to release_repo!() in crates/k2-client/src/brand.rs.
+_K2_RELEASE_REPO="Alakazam-211/K2"
+
 set -euo pipefail
 
 # The name this script was called by changes nothing it prints: every
@@ -6896,8 +6903,8 @@ _DAEMON_UPDATE_PUBKEYS="RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv
 # Releases before this carry no .sig2 (signed with the retired key only).
 _DAEMON_FIRST_U2_VERSION="0.46.6"
 
-_DAEMON_DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
-_DAEMON_VERSION_URL_TMPL="https://github.com/Alakazam-211/K2/releases/download/v%s/daemon-latest.json"
+_DAEMON_DEFAULT_LATEST_URL="https://github.com/${_K2_RELEASE_REPO}/releases/latest/download/daemon-latest.json"
+_DAEMON_VERSION_URL_TMPL="https://github.com/${_K2_RELEASE_REPO}/releases/download/v%s/daemon-latest.json"
 
 # Map uname → manifest artifact key (e.g. "macos-aarch64"). Echoes the
 # key on stdout; on an unknown platform prints an error and returns 1.
@@ -71928,7 +71935,7 @@ cmd_app_update() {
     _k2_refuse_if_airgap
     if [ "${1:-}" = "--list" ]; then
         local releases
-        releases=$(_app_update_get "https://api.github.com/repos/Alakazam-211/K2/releases?per_page=10") || exit 1
+        releases=$(_app_update_get "https://api.github.com/repos/${_K2_RELEASE_REPO}/releases?per_page=10") || exit 1
         echo "Available K2 releases:"
         printf '%s' "$releases" | python3 -c "
 import json, sys
@@ -71945,14 +71952,14 @@ for r in data:
     # Check for latest and show info
     echo "Checking for app updates..."
     local latest
-    latest=$(_app_update_get "https://api.github.com/repos/Alakazam-211/K2/releases/latest") || exit 1
+    latest=$(_app_update_get "https://api.github.com/repos/${_K2_RELEASE_REPO}/releases/latest") || exit 1
     local tag
     tag=$(echo "$latest" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('tag_name','unknown'))" 2>/dev/null)
     echo "  Current: v$K2_CLI_VERSION"
     echo "  Latest:  $tag"
     echo ""
     echo "To update the app, download from:"
-    echo "  https://github.com/Alakazam-211/K2/releases/tag/$tag"
+    echo "  https://github.com/${_K2_RELEASE_REPO}/releases/tag/$tag"
     echo ""
     echo "Or use: k2 update --app --list  to see all versions"
 }

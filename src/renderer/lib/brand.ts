@@ -45,14 +45,28 @@ export const HOSTED_ZONES: readonly string[] = [ZONE]
 /** Where people write for help. */
 export const SUPPORT_EMAIL = 'support@k2.dev'
 
-/** The repo releases come from, `owner/name`. */
+/** The repo releases come from, `owner/name`: every release URL is built
+ *  from this. The repo is moving from Alakazam-211/K2 to AlakazamLabs/K5 (a
+ *  transfer and rename, which GitHub redirects); this stays the old name
+ *  until the move, and on move day this line is the whole change here. */
 export const RELEASE_REPO = 'Alakazam-211/K2'
+
+/** Every name the release repo answers to, `owner/name`: its name before the
+ *  move and its name after. A check that compares a name accepts exactly
+ *  these, never any other; a URL is built from {@link RELEASE_REPO}. */
+export const RELEASE_REPO_NAMES: readonly string[] = ['Alakazam-211/K2', 'AlakazamLabs/K5']
 
 /** The repo's page. */
 export const RELEASE_REPO_URL = `https://github.com/${RELEASE_REPO}`
 
 /** The prefix every release page and release file URL starts with. */
 export const RELEASES_URL_PREFIX = `${RELEASE_REPO_URL}/releases/`
+
+/** `url` is a release page or a release file of the release repo, under
+ *  either of its names. */
+export function isReleaseUrl(url: string): boolean {
+  return RELEASE_REPO_NAMES.some((name) => url.startsWith(`https://github.com/${name}/releases/`))
+}
 
 /** The page of one release (`v` is added; a leading one is not doubled). */
 export function releaseTagUrl(version: string): string {

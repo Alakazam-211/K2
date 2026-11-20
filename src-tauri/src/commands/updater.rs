@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-// 0.40.x: releases publish to the new Alakazam-211/K2 repo (release.sh
+// 0.40.x: releases publish to the repo k2_client::brand names (release.sh
 // RELEASE_REPO default). The old Alakazam-211/K2SO repo is archived — point
 // the desktop "Check for updates" path here so every update channel (this,
 // the Tauri auto-updater's latest.json, and the daemon's daemon-latest.json)
@@ -535,10 +535,12 @@ mod tests {
     #[test]
     fn app_update_downloads_only_from_k2_release_hosts() {
         let ok = |u: &str| app_update_url_allowed(&reqwest::Url::parse(u).expect("url"));
-        assert!(ok("https://github.com/Alakazam-211/K2/releases/download/v0.46.4/K2.app.tar.gz"));
+        for name in k2_client::brand::RELEASE_REPO_NAMES {
+            assert!(ok(&format!("https://github.com/{name}/releases/download/v0.46.4/K2.app.tar.gz")), "{name}");
+        }
         assert!(ok("https://objects.githubusercontent.com/x/y"));
         assert!(ok("https://release-assets.githubusercontent.com/x/y"));
-        assert!(!ok("http://github.com/Alakazam-211/K2/releases/download/v0.46.4/K2.app.tar.gz"), "plain http");
+        assert!(!ok(&format!("http://github.com/{}/releases/download/v0.46.4/K2.app.tar.gz", k2_client::brand::RELEASE_REPO)), "plain http");
         assert!(!ok("https://github.com.evil.example/K2.app.tar.gz"));
         assert!(!ok("https://evil.example/K2.app.tar.gz"));
         assert!(!ok("https://github.com:8443/K2.app.tar.gz"), "odd port");
@@ -554,8 +556,9 @@ mod tests {
         }
     }"#;
 
-    const ZST_0412: &str =
-        "https://github.com/Alakazam-211/K2/releases/download/v0.41.2/k2-0.41.2-x86_64.pkg.tar.zst";
+    fn zst_0412() -> String {
+        format!("{}/v0.41.2/k2-0.41.2-x86_64.pkg.tar.zst", k2_client::brand::RELEASE_DOWNLOAD_BASE)
+    }
 
     #[test]
     fn arch_newer_manifest_ignores_darwin_platform_and_uses_zst() {
@@ -563,7 +566,7 @@ mod tests {
         assert_eq!(probe.kind, "arch");
         assert!(probe.has_update);
         assert_eq!(probe.version.as_deref(), Some("0.41.2"));
-        assert_eq!(probe.download_url.as_deref(), Some(ZST_0412));
+        assert_eq!(probe.download_url, Some(zst_0412()));
         assert!(!format!("{probe:?}").contains("darwin-aarch64"));
     }
 
@@ -598,7 +601,7 @@ mod tests {
         assert!(is_newer("0.9.0", "0.10.0"));
         assert!(!is_newer("v0.41.2", "0.41.2"));
         assert!(is_newer("v0.41.1", "0.41.2"));
-        assert_eq!(arch_pacman_download_url("v0.41.2"), ZST_0412);
+        assert_eq!(arch_pacman_download_url("v0.41.2"), zst_0412());
     }
 
     #[test]
@@ -619,7 +622,7 @@ mod tests {
                 kind: "linux-package".into(),
                 version: Some("0.41.2".into()),
                 has_update: true,
-                download_url: Some("https://github.com/Alakazam-211/K2/releases/tag/v0.41.2".into()),
+                download_url: Some(k2_client::brand::release_tag_url("0.41.2")),
                 can_install: false,
             }
         );

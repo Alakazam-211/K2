@@ -690,3 +690,16 @@ fn small_parsers() {
     assert_eq!(doctor::wry_patch("[patch.crates-io]\nwry = \"0.57\"\n"), doctor::WryPatch::Other("\"0.57\"".into()));
     assert_eq!(doctor::wry_patch("not toml ["), doctor::WryPatch::Missing);
 }
+
+/// The wry patch row counts as K2's under the repo's old name and its new
+/// one (Alakazam-211/K2 became AlakazamLabs/K5), and under no third name.
+#[test]
+fn wry_patch_is_k2s_under_either_repo_name() {
+    let row = |repo: &str| format!("[patch.crates-io]\nwry = {{ git = \"https://github.com/{repo}\", rev = \"{}\" }}\n", store::WRY_PATCH_REV);
+    for name in crate::brand::RELEASE_REPO_NAMES {
+        assert_eq!(doctor::wry_patch(&row(name)), doctor::WryPatch::K2, "{name}");
+    }
+    for third in ["AlakazamLabs/K2", "Alakazam-211/K5", "Alakazam-211/K2SO", "someone/K5"] {
+        assert!(matches!(doctor::wry_patch(&row(third)), doctor::WryPatch::Other(_)), "{third}");
+    }
+}

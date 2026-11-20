@@ -51,7 +51,7 @@ cmd_app_update() {
     _k2_refuse_if_airgap
     if [ "${1:-}" = "--list" ]; then
         local releases
-        releases=$(_app_update_get "https://api.github.com/repos/Alakazam-211/K2/releases?per_page=10") || exit 1
+        releases=$(_app_update_get "https://api.github.com/repos/${_K2_RELEASE_REPO}/releases?per_page=10") || exit 1
         echo "Available K2 releases:"
         printf '%s' "$releases" | python3 -c "
 import json, sys
@@ -68,14 +68,14 @@ for r in data:
     # Check for latest and show info
     echo "Checking for app updates..."
     local latest
-    latest=$(_app_update_get "https://api.github.com/repos/Alakazam-211/K2/releases/latest") || exit 1
+    latest=$(_app_update_get "https://api.github.com/repos/${_K2_RELEASE_REPO}/releases/latest") || exit 1
     local tag
     tag=$(echo "$latest" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('tag_name','unknown'))" 2>/dev/null)
     echo "  Current: v$K2_CLI_VERSION"
     echo "  Latest:  $tag"
     echo ""
     echo "To update the app, download from:"
-    echo "  https://github.com/Alakazam-211/K2/releases/tag/$tag"
+    echo "  https://github.com/${_K2_RELEASE_REPO}/releases/tag/$tag"
     echo ""
     echo "Or use: k2 update --app --list  to see all versions"
 }

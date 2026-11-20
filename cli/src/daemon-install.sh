@@ -20,8 +20,8 @@ _DAEMON_UPDATE_PUBKEYS="RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv
 # Releases before this carry no .sig2 (signed with the retired key only).
 _DAEMON_FIRST_U2_VERSION="0.46.6"
 
-_DAEMON_DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
-_DAEMON_VERSION_URL_TMPL="https://github.com/Alakazam-211/K2/releases/download/v%s/daemon-latest.json"
+_DAEMON_DEFAULT_LATEST_URL="https://github.com/${_K2_RELEASE_REPO}/releases/latest/download/daemon-latest.json"
+_DAEMON_VERSION_URL_TMPL="https://github.com/${_K2_RELEASE_REPO}/releases/download/v%s/daemon-latest.json"
 
 # Map uname → manifest artifact key (e.g. "macos-aarch64"). Echoes the
 # key on stdout; on an unknown platform prints an error and returns 1.

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
+import { RELEASES_URL_PREFIX } from '@/lib/brand'
 import {
   LS_AUTO_UPDATE_CHECKS,
   LS_LAST_UPDATE_CHECK,
@@ -95,6 +96,8 @@ describe('last update check', () => {
       `{"at":${NOW + 1},"offer":null}`,
       `{"at":${NOW},"offer":{"version":"9.9.9; rm","notes":null,"downloadUrl":null,"canInstall":false}}`,
       `{"at":${NOW},"offer":{"version":"9.9.9","notes":null,"downloadUrl":"https://github.com/other/K2/releases/x","canInstall":true}}`,
+      `{"at":${NOW},"offer":{"version":"9.9.9","notes":null,"downloadUrl":"https://github.com/AlakazamLabs/K2/releases/x","canInstall":true}}`,
+      `{"at":${NOW},"offer":{"version":"9.9.9","notes":null,"downloadUrl":"https://github.com/Alakazam-211/K5/releases/x","canInstall":true}}`,
     ]) {
       expect(parseLastUpdateCheck(raw, NOW), raw).toBeNull()
     }
@@ -104,9 +107,16 @@ describe('last update check', () => {
     const offer = {
       version: '9.9.9',
       notes: null,
-      downloadUrl: 'https://github.com/Alakazam-211/K2/releases/download/v9.9.9/k2-9.9.9-x86_64.pkg.tar.zst',
+      downloadUrl: `${RELEASES_URL_PREFIX}download/v9.9.9/k2-9.9.9-x86_64.pkg.tar.zst`,
       canInstall: true,
     }
     expect(parseLastUpdateCheck(JSON.stringify({ at: NOW, offer }), NOW)).toEqual({ at: NOW, offer })
+  })
+
+  it('reads an offer under either of the release repo\'s names', () => {
+    for (const name of ['Alakazam-211/K2', 'AlakazamLabs/K5']) {
+      const offer = { version: '9.9.9', notes: null, downloadUrl: `https://github.com/${name}/releases/tag/v9.9.9`, canInstall: false }
+      expect(parseLastUpdateCheck(JSON.stringify({ at: NOW, offer }), NOW), name).toEqual({ at: NOW, offer })
+    }
   })
 })

@@ -2,7 +2,7 @@
  *  Thin-client localStorage — not daemon SSOT. Manual "Check for Updates"
  *  still runs. Default ON. */
 
-import { RELEASES_URL_PREFIX } from '@/lib/brand'
+import { isReleaseUrl } from '@/lib/brand'
 
 export const LS_AUTO_UPDATE_CHECKS = 'k2.autoUpdateChecks'
 export const AUTO_UPDATE_CHECKS_EVENT = 'k2-auto-update-checks'
@@ -63,8 +63,8 @@ export interface LastUpdateCheck {
 }
 
 const VERSION_SHAPE = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$/
-// The Download button opens this URL, so it must be K2's release page or asset.
-const RELEASES_PREFIX = RELEASES_URL_PREFIX
+// The Download button opens this URL, so it must be K2's release page or
+// asset, under the repo's old name or its new one.
 
 function isUpdateOffer(raw: unknown): raw is UpdateOffer {
   if (typeof raw !== 'object' || raw === null) return false
@@ -74,7 +74,7 @@ function isUpdateOffer(raw: unknown): raw is UpdateOffer {
     VERSION_SHAPE.test(o.version) &&
     (o.notes === null || typeof o.notes === 'string') &&
     (o.downloadUrl === null ||
-      (typeof o.downloadUrl === 'string' && o.downloadUrl.startsWith(RELEASES_PREFIX))) &&
+      (typeof o.downloadUrl === 'string' && isReleaseUrl(o.downloadUrl))) &&
     typeof o.canInstall === 'boolean'
   )
 }

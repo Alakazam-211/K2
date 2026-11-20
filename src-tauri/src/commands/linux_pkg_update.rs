@@ -588,7 +588,7 @@ mod tests {
         assert_eq!(PackageKind::Rpm.asset_name("0.46.1"), "K2-0.46.1-1.x86_64.rpm");
         assert_eq!(
             release_asset_url("0.46.1", LINUX_SUMS_ASSET),
-            "https://github.com/Alakazam-211/K2/releases/download/v0.46.1/SHA256SUMS-linux-x86_64.txt"
+            format!("{RELEASE_DOWNLOAD_BASE}/v0.46.1/SHA256SUMS-linux-x86_64.txt")
         );
         for k in [PackageKind::Arch, PackageKind::Deb, PackageKind::Rpm] {
             assert!(k2_client::release_sums::is_plain_file_name(&k.asset_name("0.46.1")));

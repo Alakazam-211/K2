@@ -145,7 +145,7 @@ pub fn check(folder: &Path, voice: Option<bool>) -> Result<Report, TemplateError
     };
     let root_patch = read(root_rel).map(|t| wry_patch(&t)).unwrap_or(WryPatch::Missing);
     let wry_k2 = match &wry {
-        Some((_, src)) => src.contains(crate::brand::RELEASE_REPO),
+        Some((_, src)) => crate::brand::mentions_release_repo(src),
         None => root_patch == WryPatch::K2,
     };
     if wry_k2 {
@@ -244,7 +244,7 @@ fn tauri_too_old(what: &str, have: (u32, u32, u32), path: &str) -> Finding {
 
 /// `registry+…` or `git+…` as a word.
 fn source_word(src: &str) -> String {
-    if src.contains(crate::brand::RELEASE_REPO) {
+    if crate::brand::mentions_release_repo(src) {
         "K2's patched copy".into()
     } else if src.starts_with("registry+") {
         "crates.io".into()
@@ -593,7 +593,7 @@ pub fn wry_patch(cargo_toml: &str) -> WryPatch {
     let Ok(v) = toml::from_str::<toml::Value>(cargo_toml) else { return WryPatch::Missing };
     match v.get("patch").and_then(|p| p.get("crates-io")).and_then(|p| p.get("wry")) {
         None => WryPatch::Missing,
-        Some(row) if row.get("git").and_then(toml::Value::as_str).is_some_and(|g| g.contains(crate::brand::RELEASE_REPO)) => WryPatch::K2,
+        Some(row) if row.get("git").and_then(toml::Value::as_str).is_some_and(crate::brand::mentions_release_repo) => WryPatch::K2,
         Some(row) => WryPatch::Other(row.to_string()),
     }
 }

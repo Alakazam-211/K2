@@ -2226,7 +2226,7 @@ mod tests {
         let cmd = install_command();
         assert!(
             cmd.starts_with(&format!(
-                "curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v{v}/install-root-helper.sh | sudo bash -s -- --version {v} --user "
+                "curl -fsSL {RELEASE_DOWNLOAD_BASE}/v{v}/install-root-helper.sh | sudo bash -s -- --version {v} --user "
             )),
             "{cmd}"
         );

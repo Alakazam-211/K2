@@ -11,6 +11,13 @@
 
 K2_CLI_VERSION="0.46.16"
 
+# The GitHub repo releases come from (owner/name): every release URL this
+# CLI fetches or prints is built from it. The repo is moving from
+# Alakazam-211/K2 to AlakazamLabs/K5 (a transfer and rename, which GitHub
+# redirects); on move day this line becomes the new name. brand.test.ts
+# keeps it equal to release_repo!() in crates/k2-client/src/brand.rs.
+_K2_RELEASE_REPO="Alakazam-211/K2"
+
 set -euo pipefail
 
 # The name this script was called by changes nothing it prints: every

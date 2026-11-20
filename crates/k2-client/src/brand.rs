@@ -31,7 +31,14 @@
 use k2_brand::product_name;
 pub use k2_brand::{AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, PRODUCT_NAME};
 
-/// The repo releases come from (`owner/name`), as a literal.
+/// The repo releases come from (`owner/name`), as a literal: every
+/// release URL is built from this. The repo is moving from Alakazam-211/K2
+/// to AlakazamLabs/K5 (a transfer and rename, which GitHub redirects). This
+/// stays the old name until the move; on move day it becomes the repo's new
+/// name, and this line is the whole change on the Rust side. Code that
+/// compares a repo name accepts every name in [`RELEASE_REPO_NAMES`], so a
+/// build made before the move accepts the new name and one made after
+/// still accepts the old.
 #[macro_export]
 macro_rules! release_repo {
     () => {
@@ -65,6 +72,27 @@ pub const SUPPORT_EMAIL: &str = "support@k2.dev";
 
 /// The repo releases come from, `owner/name`.
 pub const RELEASE_REPO: &str = release_repo!();
+
+/// Every name the release repo answers to, `owner/name`: its name before
+/// the move and its name after. A check that compares a name (is this our
+/// repo, our patched wry) accepts exactly these, never any other; code
+/// that builds a URL uses [`RELEASE_REPO`], which is one of them.
+pub const RELEASE_REPO_NAMES: &[&str] = &["Alakazam-211/K2", "AlakazamLabs/K5"];
+
+/// `text` names the release repo by one of [`RELEASE_REPO_NAMES`], as a
+/// whole `owner/name` (in a URL, a git source, `git+https://…/K2.git?rev=…`):
+/// not `Alakazam-211/K2SO`, not `xAlakazam-211/K2`. Case is compared
+/// exactly.
+pub fn mentions_release_repo(text: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    RELEASE_REPO_NAMES.iter().any(|name| {
+        text.match_indices(name).any(|(i, _)| {
+            let before = text[..i].chars().next_back();
+            let after = text[i + name.len()..].chars().next();
+            !before.is_some_and(|c| word(c) || c == '.') && !after.is_some_and(word)
+        })
+    })
+}
 
 /// The repo's page.
 pub const RELEASE_REPO_URL: &str = concat!("https://github.com/", release_repo!());
@@ -108,7 +136,36 @@ mod tests {
         assert_eq!(PUBLIC_SITE, "https://k2.dev");
         assert_eq!(INFRA_ZONE, "k2.dev");
         assert_eq!(SUPPORT_EMAIL, "support@k2.dev");
-        assert_eq!(RELEASE_REPO, "Alakazam-211/K2");
+        assert_eq!(RELEASE_REPO_NAMES, &["Alakazam-211/K2", "AlakazamLabs/K5"]);
+        assert!(RELEASE_REPO_NAMES.contains(&RELEASE_REPO), "the repo releases come from is one of its names");
+    }
+
+    /// Both of the repo's names count as the repo; a third name, a longer
+    /// name and a name inside another word do not.
+    #[test]
+    fn brand_release_repo_is_known_by_both_names_and_no_other() {
+        for yes in [
+            "https://github.com/Alakazam-211/K2",
+            "https://github.com/AlakazamLabs/K5",
+            "git+https://github.com/Alakazam-211/K2?rev=abc#abc",
+            "git+https://github.com/AlakazamLabs/K5.git?rev=abc#abc",
+            "Alakazam-211/K2",
+            "AlakazamLabs/K5",
+        ] {
+            assert!(mentions_release_repo(yes), "{yes}");
+        }
+        for no in [
+            "https://github.com/Alakazam-211/K2SO",
+            "https://github.com/AlakazamLabs/K2",
+            "https://github.com/Alakazam-211/K5",
+            "https://github.com/someone/K2",
+            "https://github.com/xAlakazam-211/K2",
+            "https://github.com/AlakazamLabs/K5-fork",
+            "https://github.com/alakazamlabs/k5",
+            "",
+        ] {
+            assert!(!mentions_release_repo(no), "{no}");
+        }
     }
 
     #[test]
@@ -129,17 +186,19 @@ mod tests {
         assert!(!HOSTED_ZONES.contains(&"k5.dev"));
     }
 
-    /// Every release URL, spelled out: installed copies fetch these.
+    /// Every release URL's shape, spelled out around the repo's name:
+    /// installed copies fetch these.
     #[test]
     fn brand_release_urls_are_what_they_were() {
-        assert_eq!(RELEASE_REPO_URL, "https://github.com/Alakazam-211/K2");
-        assert_eq!(RELEASE_DOWNLOAD_BASE, "https://github.com/Alakazam-211/K2/releases/download");
-        assert_eq!(RELEASES_URL_PREFIX, "https://github.com/Alakazam-211/K2/releases/");
-        assert_eq!(RELEASES_LATEST_API, "https://api.github.com/repos/Alakazam-211/K2/releases/latest");
-        assert_eq!(APP_FEED_URL, "https://github.com/Alakazam-211/K2/releases/latest/download/latest.json");
-        assert_eq!(DAEMON_FEED_URL, "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json");
-        assert_eq!(release_tag_url("0.46.14"), "https://github.com/Alakazam-211/K2/releases/tag/v0.46.14");
-        assert_eq!(release_tag_url("v0.46.14"), "https://github.com/Alakazam-211/K2/releases/tag/v0.46.14");
+        let r = RELEASE_REPO;
+        assert_eq!(RELEASE_REPO_URL, format!("https://github.com/{r}"));
+        assert_eq!(RELEASE_DOWNLOAD_BASE, format!("https://github.com/{r}/releases/download"));
+        assert_eq!(RELEASES_URL_PREFIX, format!("https://github.com/{r}/releases/"));
+        assert_eq!(RELEASES_LATEST_API, format!("https://api.github.com/repos/{r}/releases/latest"));
+        assert_eq!(APP_FEED_URL, format!("https://github.com/{r}/releases/latest/download/latest.json"));
+        assert_eq!(DAEMON_FEED_URL, format!("https://github.com/{r}/releases/latest/download/daemon-latest.json"));
+        assert_eq!(release_tag_url("0.46.14"), format!("https://github.com/{r}/releases/tag/v0.46.14"));
+        assert_eq!(release_tag_url("v0.46.14"), format!("https://github.com/{r}/releases/tag/v0.46.14"));
     }
 
     /// The desktop app's feed is the same URL its Tauri config names.

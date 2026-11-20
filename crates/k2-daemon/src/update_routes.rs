@@ -1968,7 +1968,7 @@ const DEFAULT_MANIFEST_URL: &str = k2_core::brand::DAEMON_FEED_URL;
 fn manifest_url() -> String {
     // Prefer the K2-named override; fall back to the legacy K2SO_ name so
     // existing self-hosted setups keep working. Default points at the NEW
-    // repo (Alakazam-211/K2) where release.sh now publishes daemon-latest.json.
+    // repo (k2_core::brand::RELEASE_REPO) where release.sh publishes daemon-latest.json.
     // An airgap-tagged build has no default URL — env override still exists
     // for tests, but `handle_check` refuses before fetch because air-gap is
     // baked on.
@@ -2340,7 +2340,7 @@ mod tests {
         let _env = ManifestUrlEnv::unset();
         let url = manifest_url();
         assert_eq!(
-            url, "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json",
+            url, k2_core::brand::DAEMON_FEED_URL,
             "cloud daemon must ping GitHub for update availability; got {url}"
         );
     }
@@ -2715,7 +2715,7 @@ mod tests {
     }
 
     fn dual_manifest(version: &str, platform: &str, sig2: bool) -> String {
-        let base = format!("https://github.com/Alakazam-211/K2/releases/download/v{version}");
+        let base = format!("{}/v{version}", k2_core::brand::RELEASE_DOWNLOAD_BASE);
         let asset = daemon_asset_name(platform);
         let mut entry = serde_json::json!({
             "url": format!("{base}/{asset}"),

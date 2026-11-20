@@ -380,8 +380,10 @@ async fn writes_run_in_its_own_workspace_only() {
     assert_eq!(r.status, 200, "owner done other: {}", r.raw);
     let r = http(e.port, "POST", &format!("/cli/review/approve?project={other}&branch=agent%2Fx%2Fy&agent=x"), Some(OWNER));
     assert_eq!(r.status, 400, "owner review approve: {}", r.raw);
+    // `x` is no skill of its workspace, so whose branch it is can't be told:
+    // a person's step (the card), never the handler.
     let r = http(e.port, "POST", &format!("/cli/review/approve?project={own}&branch=agent%2Fx%2Fy&agent=x"), Some(e.passport.as_str()));
-    assert_eq!(r.status, 400, "passport review approve, own: the handler's answer: {}", r.raw);
+    assert_eq!((r.status, code(&r, "approve")), (403, "merge_needs_person".to_string()), "passport review approve, own workspace: {}", r.raw);
 }
 
 /// Owner-only routes keep refusing a passport, for its own workspace too.

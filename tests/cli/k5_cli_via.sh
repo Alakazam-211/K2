@@ -432,8 +432,6 @@ pycheck "preset list, the owner token from disk, VIA=rust" $P "fallthrough|prese
     clean_env K5_CLI_VIA=rust "$K2_CLI" preset list --json
 pycheck "preset list, the owner token from disk, VIA unset" $P "-|-|-|-|Python-urllib" \
     clean_env "$K2_CLI" preset list --json
-pycheck "tickets show (an alias), a passport, VIA=rust" /cli/feedback/show "fallthrough|tickets|-|-|Python-urllib" \
-    tcp K5_CLI_VIA=rust "$K2_CLI" tickets show fb_1 --json
 # heartbeat wake: a python3 -c block that reads its own token (here the
 # owner's, from disk).
 pycheck "heartbeat wake, the owner token from disk, VIA=rust" /cli/agents/list "fallthrough|heartbeat|disk|-|Python-urllib" \
@@ -443,6 +441,10 @@ pycheck "heartbeat wake, the owner token from disk, VIA unset" /cli/agents/list 
 # And curl's side of the same call, for the comparison: the same values.
 pycheck "heartbeat list (curl), the owner token from disk, VIA=rust" /cli/heartbeat/list "fallthrough|heartbeat|disk|-|curl" \
     clean_env K5_CLI_VIA=rust "$K2_CLI" heartbeat list --json
+# An alias noun on curl's side: tickets show fetches through cli_request
+# (curl), as every other tickets verb does, and names the noun as typed.
+pycheck "tickets show (an alias), a passport, VIA=rust" /cli/feedback/show "fallthrough|tickets|-|-|curl" \
+    tcp K5_CLI_VIA=rust "$K2_CLI" tickets show fb_1 --json
 
 echo "== _K5_NOTICE_DONE and _K5_CLI_VIA, from bash's trace =="
 # traced <var> <env…>: the value the prelude gave <var>.

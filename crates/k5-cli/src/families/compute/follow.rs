@@ -131,7 +131,7 @@ fn arith(v: &str) -> i64 {
 
 /// The detached line the `INT` trap prints, then exit 130.
 #[cfg(unix)]
-mod int_trap {
+pub mod int_trap {
     use std::sync::OnceLock;
 
     static LINE: OnceLock<Vec<u8>> = OnceLock::new();
@@ -166,7 +166,7 @@ mod int_trap {
 }
 
 #[cfg(not(unix))]
-mod int_trap {
+pub mod int_trap {
     pub fn set(_line: String) {}
     pub fn clear() {}
 }
@@ -327,7 +327,7 @@ fn end(cp: &mut Cp<'_>, f: &Follow, st: &State) -> Exit {
 }
 
 /// `_compute_print_result <job>`: the job's `result` as indented JSON.
-fn print_result(cp: &mut Cp<'_>, job: &str) -> Result<(), Exit> {
+pub fn print_result(cp: &mut Cp<'_>, job: &str) -> Result<(), Exit> {
     let body = cp.call(false, GET, &format!("job={}", quote(job)), false)?;
     let r = load(&body, 1).and_then(|v| {
         let res = p::get(&v, "result").map_err(|e| Raise::at(1, e))?;

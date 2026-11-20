@@ -488,7 +488,7 @@ fn pkg_held(body: &[u8]) -> bool {
 }
 
 /// `_compute_pkg_held_exit`: `None` when nothing is held (it returns 0).
-fn held_exit(body: &[u8]) -> Option<Exit> {
+pub fn held_exit(body: &[u8]) -> Option<Exit> {
     if !pkg_held(body) {
         return None;
     }

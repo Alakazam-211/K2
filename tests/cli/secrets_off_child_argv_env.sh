@@ -387,8 +387,18 @@ pw_case() {
     assert_children_seen "$label"
     assert_off_children "$label" "password" "$PASS_SENTINEL"
 }
-pw_case "mail link add" /cli/mail/external/add mail link add a@example.test --host imap.example.test --workspace ws1 --pass-stdin --json
-pw_case "mail oauth-config set" /cli/mail/oauth-config/set mail oauth-config set --provider gmail --client-id cid --secret-stdin --json
+# pw_case_native: the same, for a command the k5 binary answers itself
+# (it starts no python3; the bash CLI's children are logged as above).
+pw_case_native() {
+    local label="$1" path="$2"; shift 2
+    fresh
+    printf '%s\n' "$PASS_SENTINEL" | "$K2_CLI" "$@" >/dev/null 2>&1 || true
+    assert_tcp_got "$label" "$path" "password" "$PASS_SENTINEL"
+    assert_children_native "$label"
+    assert_off_children "$label" "password" "$PASS_SENTINEL"
+}
+pw_case_native "mail link add" /cli/mail/external/add mail link add a@example.test --host imap.example.test --workspace ws1 --pass-stdin --json
+pw_case_native "mail oauth-config set" /cli/mail/oauth-config/set mail oauth-config set --provider gmail --client-id cid --secret-stdin --json
 pw_case "hostmail config relay" /cli/mail/config/set hostmail config --relay-pass-stdin --json
 pw_case "hostmail import" /cli/mail/import hostmail import --address a@example.test --imapsync from=imap.example.test --user u --pass-stdin --json
 

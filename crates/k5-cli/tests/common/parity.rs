@@ -910,8 +910,12 @@ impl Rig {
                 let class = last.split(':').next().unwrap_or_default().to_string();
                 (before.to_string(), class)
             };
+            let (before, mut class) = split(&r.stderr, "the binary");
+            if older_slice_error(&r.stderr, &b.stderr) {
+                class = "TypeError".to_string();
+            }
             assert_eq!(
-                split(&r.stderr, "the binary"),
+                (as_this_python(&before, &b.stderr), class),
                 split(&b.stderr, "bash"),
                 "{name}: stderr before the traceback, and its exception\nrust: {}\nbash: {}",
                 r.stderr,
@@ -988,7 +992,7 @@ impl Rig {
 ///   the two lines is the same; the place can't be worked out from the
 ///   binary's line alone.
 fn as_this_python(rust: &str, bash: &str) -> String {
-    let older = as_before_311(rust);
+    let older = as_before_312_warning(&as_before_311(rust));
     if python3_version() < (3, 13) || older == bash {
         return older;
     }
@@ -1008,6 +1012,43 @@ fn as_this_python(rust: &str, bash: &str) -> String {
                 (Some(x), Some(y)) if x == y => (*bl).to_string(),
                 _ => (*rl).to_string(),
             }
+        })
+        .collect()
+}
+
+/// `python-version-error-text`'s dict sliced: from 3.12 Python raises
+/// KeyError (`KeyError: slice(None, 3, None)`), which the binary follows;
+/// before 3.12 slices are unhashable, so the shell's Python raises
+/// `TypeError: unhashable type: 'slice'` there. Only then, and only when
+/// that is the line the shell's traceback ends with.
+fn older_slice_error(rust: &str, bash: &str) -> bool {
+    python3_version() < (3, 12)
+        && rust
+            .lines()
+            .last()
+            .is_some_and(|l| l.starts_with("KeyError: slice("))
+        && bash.lines().last() == Some("TypeError: unhashable type: 'slice'")
+}
+
+/// Python 3.12's warning for `utcfromtimestamp`, after `<string>:<n>: `.
+const UTC_WARNING: &str = k5_cli::families::remote_session::UTC_WARNING;
+
+/// Before 3.12 `datetime.utcfromtimestamp` is not deprecated, so the
+/// shell's Python prints no warning where the binary prints 3.12's
+/// (`<string>:<n>: DeprecationWarning: …`, one line): those lines go.
+fn as_before_312_warning(text: &str) -> String {
+    if python3_version() >= (3, 12) {
+        return text.to_string();
+    }
+    text.split_inclusive('\n')
+        .filter(|l| {
+            !l.strip_prefix("<string>:")
+                .and_then(|r| r.split_once(": "))
+                .is_some_and(|(n, w)| {
+                    !n.is_empty()
+                        && n.bytes().all(|b| b.is_ascii_digit())
+                        && w.trim_end_matches('\n') == UTC_WARNING
+                })
         })
         .collect()
 }

@@ -32,6 +32,10 @@ fn the_readers() {
             "TypeError: can only concatenate str (not \"int\") to str"
         )
     );
+    // The log's times are local (`time.localtime`): pin the zone, or a
+    // host west of UTC prints 1969-12-31. nextest runs each test in its
+    // own process.
+    std::env::set_var("TZ", "UTC");
     let l = log_reader(br#"{"items":[{"createdAt":0,"id":"m1","status":"sent","to":["a@x","b@x"],"subject":"hi"},{"id":"m2","to":[5]}]}"#);
     assert_eq!(l.stdout, "1970-01-01 00:00  m1  sent       a@x +1  hi\n");
     assert_eq!(

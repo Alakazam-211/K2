@@ -49,7 +49,8 @@
 # workspace_verbs_parity.rs and wiki_parity.rs, through the rig's
 # Compare::Bash32PipeReader on macOS. They meet python-version-error-text
 # wherever the shell's Python words an error otherwise than 3.12: the rig
-# takes it for every row (common/parity.rs, as_this_python), and
+# takes it for every row (common/parity.rs, as_this_python, and
+# older_slice_error for a traceback's dict sliced), and
 # compute_render_oracle.rs for a dict sliced. They meet nul-in-answer in
 # feedback_parity.rs's "a NUL in a string" rows of list and show, through
 # Compare::NulInAnswer. They meet feedback-optin-without-python3 in
@@ -170,7 +171,7 @@ EXPECTED_DIFFS=(
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
     "env-answer-large|K2 ruling, the K5 lanes' large answers|bash hands a daemon answer to Python in an environment variable, so above the kernel's argument limit bash stops with 'Argument list too long' (exit 126) and k5 prints the answer. The cases, each with its own large-answer row: \`wiki status\` with an index above 1 MiB (wiki_parity.rs, wiki_status_with_a_large_answer; on macOS its /bin/bash 3.2 exits 1, and both send the same two requests), \`mail send --body-file\` with a body above 128 KiB (mail_writes_parity.rs, a_large_body; the body rides M_BODY: on Linux bash sends nothing, the binary sends it once; macOS has one limit for the whole environment, where both send it), and \`zen\`'s large answer (zen_parity.rs, with the zen lane)"
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
-    "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words three of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError; from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
+    "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words four of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError (the parity rig's tracebacks, mail forward show's \"events that are a dict\"); before 3.12 datetime.utcfromtimestamp prints no DeprecationWarning, where the binary prints 3.12's one line (\"<string>:<n>: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated ...\", remote-session's times); from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
     "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via; \`thread bob --from\`, also --limit and --before-seq, and \`thread unread --kind\`; \`talk ws hi --lines\`, also --from, --command, --agent, --session, --token, --answer, --respond, --answers and --wake-timeout) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Neither sends anything"
     "exec-child-env|K2 ruling 1b, vault run (db run's ruling 2a child the same)|the program a command runs in its place (vault run's helper, db run's command, named in families::vault::run and families::db::run): bash's child also gets bash's own environment changes, SHLVL and _K2_PY_PROXY_RULE (the shell CLI's Python proxy rule), and _ (the program's path) where bash's exec sets it, none of which the binary's child gets; and an exec that fails (a folder the daemon named) exits 126 on both, worded \"<path to cli/k2>: line <n>: <helper>: Is a directory\" by bash and \"exec: <helper>: Permission denied (os error 13)\" by the binary. The request each sends is the same"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
@@ -553,9 +554,9 @@ check_bash32_pipe_reader() {
 # substitution: ignored null byte in input", from 4.4 on, none before;
 # stderr is otherwise the same. On a bash before 4.4 the check says so
 # and returns 3: the two are exact there.
-# check_python_version_error_text: the python3 on PATH words the three
-# errors as its version says it does (above). On a 3.12, which words all
-# three as the binary does, the check says the difference itself was not
+# check_python_version_error_text: the python3 on PATH words the four
+# cases as its version says it does (above). On a 3.12, which words all
+# four as the binary does, the check says the difference itself was not
 # proven here and returns 3.
 check_python_version_error_text() {
     local got ver want problems=()
@@ -575,6 +576,10 @@ try:
 except ValueError as e:
     print(e)
 ')" || { echo "python3 failed: $got"; return 1; }
+    local warned utc_line
+    utc_line="<string>:1: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC)."
+    warned="$(python3 -I -c 'import datetime; datetime.datetime.utcfromtimestamp(0)' 2>&1 >/dev/null)" \
+        || { echo "python3 failed on utcfromtimestamp: $warned"; return 1; }
     ver="$(printf '%s\n' "$got" | sed -n 1p)"
     local major="${ver%%.*}" minor="${ver#*.}"
     [ "$major" = 3 ] || { echo "python3 is $ver, not 3.x"; return 1; }
@@ -584,12 +589,14 @@ except ValueError as e:
     [ "$(printf '%s\n' "$got" | sed -n 3p)" = "$want" ] || problems+=("python3 $ver raises $(printf '%s\n' "$got" | sed -n 3p) for a dict sliced, want $want")
     if [ "$minor" -ge 13 ]; then want="Illegal trailing comma before end of array: line 1 column 3 (char 2)"; else want="Expecting value: line 1 column 4 (char 3)"; fi
     [ "$(printf '%s\n' "$got" | sed -n 4p)" = "$want" ] || problems+=("python3 $ver says '$(printf '%s\n' "$got" | sed -n 4p)' at a trailing comma, want '$want'")
+    if [ "$minor" -ge 12 ]; then want="$utc_line"; else want=""; fi
+    [ "$warned" = "$want" ] || problems+=("python3 $ver warns '$warned' for utcfromtimestamp, want '$want'")
     if [ ${#problems[@]} -gt 0 ]; then
         printf '%s\n' "${problems[@]}"
         return 1
     fi
     [ "$minor" = 12 ] || return 0
-    echo "python3 here is 3.12, which words all three as the binary does, so the difference itself was not proven on this host (the macOS job's 3.9 proves the first two; a python3 of 3.13 or later, the third)"
+    echo "python3 here is 3.12, which words all four as the binary does, so the difference itself was not proven on this host (the macOS job's 3.9 proves the first two and the warning; a python3 of 3.13 or later, the trailing comma)"
     return 3
 }
 

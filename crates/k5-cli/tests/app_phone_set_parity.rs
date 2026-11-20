@@ -827,23 +827,28 @@ fn bash_bugs_copied() {
         // app-auth.sh:881-885: a list value that names a list (`--to
         // --cc`) switches which list the Python fills, so the To list is
         // sent empty and the address goes to Cc. Flips when the fix lands.
-        one(
-            "email send: a list value switches the list (bash bug)",
-            &[
-                "email",
-                "send",
-                "acme",
-                "--to",
-                "--cc",
-                "--cc",
-                "b@acme.example",
-                "--subject",
-                "s",
-                "--text",
-                "t",
-            ],
-            r#"{"id":"em_3","status":"queued","recipients":1}"#,
-            0,
+        // No --bcc, --reply-to, --header or --tag: macOS's bash 3.2 stops at
+        // the first empty array too (`bash32-empty-array`).
+        empty_list(
+            one(
+                "email send: a list value switches the list (bash bug)",
+                &[
+                    "email",
+                    "send",
+                    "acme",
+                    "--to",
+                    "--cc",
+                    "--cc",
+                    "b@acme.example",
+                    "--subject",
+                    "s",
+                    "--text",
+                    "t",
+                ],
+                r#"{"id":"em_3","status":"queued","recipients":1}"#,
+                0,
+            ),
+            &["bccs", "rts", "hdrs", "tags"],
         ),
     ];
     for c in v {

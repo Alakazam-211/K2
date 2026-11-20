@@ -21,9 +21,10 @@
 //!   line and exit 1; a reset (56), not HTTP (1), TMPDIR unusable (76) and
 //!   no daemon (7): curl's code, nothing printed.
 //! - The rest of `cmd_connections` (the whole row): `connections` alone
-//!   and an empty action (`list`), an action it has no arm for (`help`, a
-//!   word, a flag after one: the usage lines, exit 1), with the gates and
-//!   the id tool's checks in front of them; one answer above 256 KiB.
+//!   and an empty action (`list`), `help` first (the help page, exit 0),
+//!   an action it has no arm for (a word, a flag after one: the usage
+//!   lines, exit 1), with the gates and the id tool's checks in front of
+//!   them; one answer above 256 KiB.
 //! - What the binary hands to the shell: help with `-h` or `--help` in a
 //!   place that is not a help page, a port that is no port (`add` and
 //!   `remove`: connections_write_parity.rs).
@@ -763,12 +764,30 @@ fn connections_the_rest_of_the_row() {
             0,
         ),
         case(
-            "help is no action: the usage lines",
+            "help: the help page, nothing sent",
             &["help"],
             &[],
             vec![],
             owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "help with no port: the gate first",
+            &["help"],
+            &[],
+            vec![],
+            owner_only,
             1,
+            0,
+        ),
+        case(
+            "help and words after it: the help page",
+            &["help", "add", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
             0,
         ),
         case(

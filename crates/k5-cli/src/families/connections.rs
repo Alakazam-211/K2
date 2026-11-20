@@ -27,10 +27,12 @@
 //!
 //! The route table sends the whole `connections` row here: `list` (also
 //! `connections` alone, an empty action, `--json` and `--users`), `add`
-//! and `remove` ([`write`]), and an action `cmd_connections` has no arm
-//! for (`help` among it), which prints [`UNKNOWN`] on stderr and exits 1
-//! after the gates and the id tool's checks. Still the shell's: a command line with `-h` or
-//! `--help` that is not a help page ([`crate::front`]), a word that is not
+//! and `remove` ([`write`]), `help` first (the router's
+//! `cmd_help_connections`: the help page on stdout, exit 0), and an action
+//! `cmd_connections` has no arm for, which prints [`UNKNOWN`] on stderr
+//! and exits 1; both after the gates and the id tool's checks (the word
+//! `help` is no offline form). Still the shell's: a command line with `-h`
+//! or `--help` that is not a help page ([`crate::front`]), a word that is not
 //! UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a port that
 //! is set but is no port curl takes, and a `python3` the binary can't
 //! tell, as for [`super::inbox`].
@@ -133,6 +135,8 @@ enum Form<'a> {
     Write(write::Verb, Vec<&'a str>),
     /// An action `cmd_connections` has no arm for: [`UNKNOWN`], exit 1.
     Unknown,
+    /// `help` first: the router's `cmd_help_connections`, exit 0.
+    Help,
 }
 
 /// What `cmd_connections`'s `*)` arm prints on stderr, then exit 1.
@@ -161,6 +165,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     let form = match words.first().and_then(|w| write::Verb::of(w)) {
+        _ if words.first() == Some(&"help") => Form::Help,
         Some(verb) => Form::Write(verb, words[1..].to_vec()),
         None => match parse(&words) {
             Some(list) => Form::List(list),
@@ -217,6 +222,14 @@ fn run_with(
                 out::stderr_line(l);
             }
             return Exit::Error;
+        }
+        Form::Help => {
+            let page = crate::text::help("connections")
+                .expect("the connections help page is embedded");
+            return match out::stdout(page) {
+                Ok(()) => Exit::Ok,
+                Err(e) => out::after_stdout_error(&e),
+            };
         }
     };
     // `run` hands a port curl won't take to the shell.

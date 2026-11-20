@@ -165,12 +165,18 @@ RUN
   --max-wait 9m stops waiting first (exit 3, still_running, with the
   wait line to run next), so a shell tool capped at 10 minutes can loop.
   K2 has no cap on --max-wait: the 9m is for your shell tool, not K2.
-  (In wait, --max-wait counts from that call.) A command that itself
-  exited 3 also gives exit 3: the stderr JSON (or --json) tells them apart.
+  A command that itself exited 3 also gives exit 3: the stderr JSON (or
+  --json) tells them apart.
+  k2 compute wait <id> --timeout 9m: the same wait limit with its own
+  exit, 124 (still_running; the job is left alone), so a script tells
+  "not done yet" from "failed" (3) by the code. It counts from that call.
+  Use it, not timeout(1): macOS has no timeout command (exit 127 at once,
+  and a retry loop around it polls). In wait, --max-wait is the older
+  spelling (exit 3); on run, --timeout is the job's own time limit, so
+  run --wait keeps --max-wait.
   A long job: run --detach (or let a run --wait be killed) and wait for
   the [compute] message, which arrives whenever nobody follows the job;
-  or call k2 compute wait <id> --max-wait 9m again while it exits 3
-  still_running.
+  or call k2 compute wait <id> --timeout 9m again while it exits 124.
   k2 compute wait <a> <b> <c> --any returns when the FIRST of them ends
   (exit = its code) and names the ones still running: for your own
   scheduler (start the next part when one finishes).

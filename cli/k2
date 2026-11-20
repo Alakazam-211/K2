@@ -31346,17 +31346,19 @@ Agents:
                                              the relay too (up to 500 MB);
                                              --attempt N: an earlier attempt's files
                                              (from the node it ran on; get lists them)
-  k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]
+  k2 compute wait <job>... [--any] [--follow] [--failures] [--timeout 9m] [--quiet] [--json]
                  block until the jobs end, no log text; exit = the job's exit
-                 code (first failing job for several); 3 = a job was cancelled,
-                 failed or timed out, OR --max-wait passed first (still_running),
-                 OR a job's own command exited 3: the stderr JSON says which.
+                 code (first failing job for several); 124 = --timeout passed
+                 first (still_running; the job is left alone); 3 = a job was
+                 cancelled, failed or timed out, OR a job's own command
+                 exited 3: the stderr JSON says which.
                  --any: return when the FIRST of them ends (exit = its code)
                  and name the ones still running.
-                 --max-wait counts from this call and has no K2 cap; 9m suits
+                 --timeout counts from this call and has no K2 cap; 9m suits
                  a shell tool killed at ~10 minutes: call it again while it
-                 exits 3 still_running. A command that itself exited 3 also
-                 gives 3: the stderr JSON (or --json) says which.
+                 exits 124. Use it, not timeout(1): macOS has no timeout
+                 command (it exits 127 there). --max-wait is the older
+                 spelling: the same, but exit 3 when it passes.
                  --follow (one job): stream its output too (resume a run --wait
                  whose shell timed out). While queued it prints where it waits,
                  "N of M" and why.
@@ -32585,7 +32587,8 @@ _compute_print_result() {
 # json=1: every log line goes to stderr and the result object is printed
 # on stdout at the end (same exit code).
 # Callers may set _CP_DEADLINE (epoch seconds: run --wait --max-wait, wait
-# --follow --max-wait; past it: still_running, exit 3, the job keeps going)
+# --follow --timeout/--max-wait; past it: still_running, exit
+# $_CP_DEADLINE_RC (124 for wait --timeout, else 3), the job keeps going)
 # and _CP_FAILURES=1 (after a failing exit, the failing tests).
 _compute_follow() {
     local job="$1" raw="${2:-0}" start="${3:-0}" as_json="${4:-0}"
@@ -32604,8 +32607,8 @@ _compute_follow() {
             if [ "$left" -le 0 ]; then
                 rm -f "$state_file" "$state_file.err" "$state_file.q"
                 trap - INT
-                echo "{\"error\":\"still_running\",\"jobs\":[\"${job:0:8}\"],\"hint\":\"--max-wait passed; the job keeps going: k2 compute wait ${job:0:8} --follow\"}" >&2
-                exit 3
+                echo "{\"error\":\"still_running\",\"jobs\":[\"${job:0:8}\"],\"hint\":\"the wait limit passed; the job keeps going: k2 compute wait ${job:0:8} --follow\"}" >&2
+                exit "${_CP_DEADLINE_RC:-3}"
             fi
             [ "$left" -lt "$poll" ] && poll="$left"
         fi
@@ -33928,36 +33931,45 @@ else:
     rm -f "$tmp" "$tmp.meta"
 }
 
-# k2 compute wait <job>... [--failures] [--max-wait D] [--quiet] [--json]
+# k2 compute wait <job>... [--failures] [--timeout D] [--quiet] [--json]
 # Blocks until every job ends; exits like an attached run's end (the job's
 # exit code, 128+signal, or 3 for cancelled/failed/timeout/interrupted/
-# unknown). --max-wait: exit 3 + still_running when D passes first.
+# unknown). --timeout: exit 124 + still_running when D passes first (the
+# job is left alone; coreutils timeout's code, and macOS has no timeout
+# command). --max-wait: the older spelling, still exit 3 there.
 cmd_compute_wait() {
-    local failures=0 quiet=0 max_wait="" as_json=0 follow=0 any=0
+    local failures=0 quiet=0 max_wait="" as_json=0 follow=0 any=0 limit_rc=3
     local -a jobs=()
+    local usage="usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--timeout 9m] [--quiet] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --failures) failures=1; shift ;;
             --quiet|-q) quiet=1; shift ;;
             --json) as_json=1; shift ;;
             --follow|-f) follow=1; shift ;;
-            --max-wait) max_wait="${2:-}"; shift 2 ;;
+            --timeout|--max-wait)
+                [ -n "$max_wait" ] && { echo "$usage   (--timeout or --max-wait, once)" >&2; exit 2; }
+                [ -n "${2:-}" ] || { echo "$usage   ($1 takes a duration: 9m, 90s, 1h)" >&2; exit 2; }
+                [ "$1" = "--timeout" ] && limit_rc=124
+                max_wait="$2"; shift 2 ;;
             --any) any=1; shift ;;
-            -*) echo "usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2 ;;
+            -*) echo "$usage" >&2; exit 2 ;;
             *) jobs+=("$1"); shift ;;
         esac
     done
-    [ "${#jobs[@]}" -gt 0 ] || { echo "usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2; }
+    [ "${#jobs[@]}" -gt 0 ] || { echo "$usage" >&2; exit 2; }
     local deadline=""
     if [ -n "$max_wait" ]; then
         local mw; mw="$(_compute_secs "$max_wait")" || exit 2
         deadline=$(( $(date +%s) + mw ))
     fi
+    # Past the deadline: 124 with --timeout, 3 with --max-wait (compat).
+    _CP_DEADLINE_RC="$limit_rc"
     # --follow (0.46.6, L8): stream one job's output from where it is now,
     # like run --wait (resuming after a shell timeout).
     if [ "$follow" = "1" ]; then
         if [ "${#jobs[@]}" -ne 1 ] || [ "$as_json" = "1" ] || [ "$quiet" = "1" ]; then
-            echo "usage: k2 compute wait <job> --follow [--failures] [--max-wait 9m]   (one job; no --json or --quiet)" >&2; exit 2
+            echo "usage: k2 compute wait <job> --follow [--failures] [--timeout 9m]   (one job; no --json or --quiet)" >&2; exit 2
         fi
         _CP_DEADLINE="$deadline"
         _CP_FAILURES="$failures"
@@ -34032,7 +34044,7 @@ print("%d\t%s\t%s" % (1 if term else 0, key, line))' "$dir/$n.json")"
         n=$((n + 1))
     done
     local out rc
-    out="$(K2_CP_JSON="$as_json" K2_CP_N="$n" python3 -c '
+    out="$(K2_CP_JSON="$as_json" K2_CP_N="$n" K2_CP_LIMIT_RC="$limit_rc" python3 -c '
 import json, os, sys
 d = sys.argv[1]
 n = int(os.environ["K2_CP_N"])
@@ -34068,8 +34080,10 @@ for j in bodies:
 for e in errs:
     sys.stderr.write(e + "\n")
 if unfinished:
+    # The wait limit passed first; the jobs are left alone. 124 with
+    # --timeout (the code coreutils timeout uses), 3 with --max-wait.
     sys.stderr.write(json.dumps({"error": "still_running", "jobs": unfinished, "hint": "k2 compute wait " + " ".join(unfinished)}) + "\n")
-    rc = 3
+    rc = int(os.environ["K2_CP_LIMIT_RC"])
 if os.environ.get("K2_CP_JSON") == "1":
     print(json.dumps(bodies))
 print("RC %d %s" % (rc or 0, " ".join(i for i in failed_ids if i)))' "$dir")"
@@ -34091,7 +34105,8 @@ print("RC %d %s" % (rc or 0, " ".join(i for i in failed_ids if i)))' "$dir")"
 # wait --any (CE-21): one short poll per job per round (wait=1, so the
 # daemon counts each as followed: no duplicate [compute] line), until the
 # first ends. Prints that job's line (JSON: its get body) and exits with
-# its code; --max-wait past: still_running, exit 3.
+# its code; the wait limit past: still_running, exit $_CP_DEADLINE_RC
+# (124 with --timeout, 3 with --max-wait).
 _compute_wait_any() {
     local deadline="$1" quiet="$2" as_json="$3" failures="$4"
     shift 4
@@ -34146,7 +34161,7 @@ print("RC %d %s" % (code, j.get("id") or ""))')"
         done
         if [ -n "$deadline" ] && [ "$(date +%s)" -ge "$deadline" ]; then
             echo "{\"error\":\"still_running\",\"jobs\":\"$*\",\"hint\":\"none ended yet: k2 compute wait $* --any\"}" >&2
-            exit 3
+            exit "${_CP_DEADLINE_RC:-3}"
         fi
         [ "$quiet" = "0" ] && [ -z "$last" ] && { echo "[k2 compute] waiting for the first of $# job(s) to end" >&2; last=1; }
     done
@@ -57418,14 +57433,15 @@ cmd_schema() {
     },
     {
       "name": "compute wait",
-      "usage": "k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]",
-      "description": "Block until the jobs end, no log text. Exit: the job's exit code (the first failing job for several); 3 = a job was cancelled, failed or timed out, or --max-wait passed first (still_running), or a job's own command exited 3: the stderr JSON says which.",
+      "usage": "k2 compute wait <job>... [--any] [--follow] [--failures] [--timeout 9m] [--quiet] [--json]",
+      "description": "Block until the jobs end, no log text. Exit: the job's exit code (the first failing job for several); 124 = --timeout passed first (still_running; the job is left alone); 3 = a job was cancelled, failed or timed out, or --max-wait passed first, or a job's own command exited 3: the stderr JSON says which. Use --timeout, not timeout(1): macOS has no timeout command.",
       "args": [{"name": "job", "required": true}],
       "flags": [
         {"name": "--any", "arg": null, "description": "Return when the first of them ends (exit = its code) and name the ones still running. Not with --follow."},
         {"name": "--follow", "arg": null, "description": "One job: stream its output too (resume a run --wait whose shell timed out). No --json or --quiet."},
         {"name": "--failures", "arg": null, "description": "Failing tests first."},
-        {"name": "--max-wait", "arg": "9m", "description": "Give up waiting after this long (exit 3 still_running); counts from this call."},
+        {"name": "--timeout", "arg": "9m", "description": "Stop waiting after this long: exit 124 still_running, the job left alone; counts from this call. The one to use (macOS has no timeout command)."},
+        {"name": "--max-wait", "arg": "9m", "description": "The older spelling of --timeout: the same, but exit 3 when it passes."},
         {"name": "--quiet", "arg": null, "description": "No output, only the exit."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -69887,12 +69903,18 @@ RUN
   --max-wait 9m stops waiting first (exit 3, still_running, with the
   wait line to run next), so a shell tool capped at 10 minutes can loop.
   K2 has no cap on --max-wait: the 9m is for your shell tool, not K2.
-  (In wait, --max-wait counts from that call.) A command that itself
-  exited 3 also gives exit 3: the stderr JSON (or --json) tells them apart.
+  A command that itself exited 3 also gives exit 3: the stderr JSON (or
+  --json) tells them apart.
+  k2 compute wait <id> --timeout 9m: the same wait limit with its own
+  exit, 124 (still_running; the job is left alone), so a script tells
+  "not done yet" from "failed" (3) by the code. It counts from that call.
+  Use it, not timeout(1): macOS has no timeout command (exit 127 at once,
+  and a retry loop around it polls). In wait, --max-wait is the older
+  spelling (exit 3); on run, --timeout is the job's own time limit, so
+  run --wait keeps --max-wait.
   A long job: run --detach (or let a run --wait be killed) and wait for
   the [compute] message, which arrives whenever nobody follows the job;
-  or call k2 compute wait <id> --max-wait 9m again while it exits 3
-  still_running.
+  or call k2 compute wait <id> --timeout 9m again while it exits 124.
   k2 compute wait <a> <b> <c> --any returns when the FIRST of them ends
   (exit = its code) and names the ones still running: for your own
   scheduler (start the next part when one finishes).

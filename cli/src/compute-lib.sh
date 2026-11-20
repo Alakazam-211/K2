@@ -838,7 +838,8 @@ _compute_print_result() {
 # json=1: every log line goes to stderr and the result object is printed
 # on stdout at the end (same exit code).
 # Callers may set _CP_DEADLINE (epoch seconds: run --wait --max-wait, wait
-# --follow --max-wait; past it: still_running, exit 3, the job keeps going)
+# --follow --timeout/--max-wait; past it: still_running, exit
+# $_CP_DEADLINE_RC (124 for wait --timeout, else 3), the job keeps going)
 # and _CP_FAILURES=1 (after a failing exit, the failing tests).
 _compute_follow() {
     local job="$1" raw="${2:-0}" start="${3:-0}" as_json="${4:-0}"
@@ -857,8 +858,8 @@ _compute_follow() {
             if [ "$left" -le 0 ]; then
                 rm -f "$state_file" "$state_file.err" "$state_file.q"
                 trap - INT
-                echo "{\"error\":\"still_running\",\"jobs\":[\"${job:0:8}\"],\"hint\":\"--max-wait passed; the job keeps going: k2 compute wait ${job:0:8} --follow\"}" >&2
-                exit 3
+                echo "{\"error\":\"still_running\",\"jobs\":[\"${job:0:8}\"],\"hint\":\"the wait limit passed; the job keeps going: k2 compute wait ${job:0:8} --follow\"}" >&2
+                exit "${_CP_DEADLINE_RC:-3}"
             fi
             [ "$left" -lt "$poll" ] && poll="$left"
         fi

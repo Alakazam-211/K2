@@ -324,36 +324,45 @@ else:
     rm -f "$tmp" "$tmp.meta"
 }
 
-# k2 compute wait <job>... [--failures] [--max-wait D] [--quiet] [--json]
+# k2 compute wait <job>... [--failures] [--timeout D] [--quiet] [--json]
 # Blocks until every job ends; exits like an attached run's end (the job's
 # exit code, 128+signal, or 3 for cancelled/failed/timeout/interrupted/
-# unknown). --max-wait: exit 3 + still_running when D passes first.
+# unknown). --timeout: exit 124 + still_running when D passes first (the
+# job is left alone; coreutils timeout's code, and macOS has no timeout
+# command). --max-wait: the older spelling, still exit 3 there.
 cmd_compute_wait() {
-    local failures=0 quiet=0 max_wait="" as_json=0 follow=0 any=0
+    local failures=0 quiet=0 max_wait="" as_json=0 follow=0 any=0 limit_rc=3
     local -a jobs=()
+    local usage="usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--timeout 9m] [--quiet] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --failures) failures=1; shift ;;
             --quiet|-q) quiet=1; shift ;;
             --json) as_json=1; shift ;;
             --follow|-f) follow=1; shift ;;
-            --max-wait) max_wait="${2:-}"; shift 2 ;;
+            --timeout|--max-wait)
+                [ -n "$max_wait" ] && { echo "$usage   (--timeout or --max-wait, once)" >&2; exit 2; }
+                [ -n "${2:-}" ] || { echo "$usage   ($1 takes a duration: 9m, 90s, 1h)" >&2; exit 2; }
+                [ "$1" = "--timeout" ] && limit_rc=124
+                max_wait="$2"; shift 2 ;;
             --any) any=1; shift ;;
-            -*) echo "usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2 ;;
+            -*) echo "$usage" >&2; exit 2 ;;
             *) jobs+=("$1"); shift ;;
         esac
     done
-    [ "${#jobs[@]}" -gt 0 ] || { echo "usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2; }
+    [ "${#jobs[@]}" -gt 0 ] || { echo "$usage" >&2; exit 2; }
     local deadline=""
     if [ -n "$max_wait" ]; then
         local mw; mw="$(_compute_secs "$max_wait")" || exit 2
         deadline=$(( $(date +%s) + mw ))
     fi
+    # Past the deadline: 124 with --timeout, 3 with --max-wait (compat).
+    _CP_DEADLINE_RC="$limit_rc"
     # --follow (0.46.6, L8): stream one job's output from where it is now,
     # like run --wait (resuming after a shell timeout).
     if [ "$follow" = "1" ]; then
         if [ "${#jobs[@]}" -ne 1 ] || [ "$as_json" = "1" ] || [ "$quiet" = "1" ]; then
-            echo "usage: k2 compute wait <job> --follow [--failures] [--max-wait 9m]   (one job; no --json or --quiet)" >&2; exit 2
+            echo "usage: k2 compute wait <job> --follow [--failures] [--timeout 9m]   (one job; no --json or --quiet)" >&2; exit 2
         fi
         _CP_DEADLINE="$deadline"
         _CP_FAILURES="$failures"
@@ -428,7 +437,7 @@ print("%d\t%s\t%s" % (1 if term else 0, key, line))' "$dir/$n.json")"
         n=$((n + 1))
     done
     local out rc
-    out="$(K2_CP_JSON="$as_json" K2_CP_N="$n" python3 -c '
+    out="$(K2_CP_JSON="$as_json" K2_CP_N="$n" K2_CP_LIMIT_RC="$limit_rc" python3 -c '
 import json, os, sys
 d = sys.argv[1]
 n = int(os.environ["K2_CP_N"])
@@ -464,8 +473,10 @@ for j in bodies:
 for e in errs:
     sys.stderr.write(e + "\n")
 if unfinished:
+    # The wait limit passed first; the jobs are left alone. 124 with
+    # --timeout (the code coreutils timeout uses), 3 with --max-wait.
     sys.stderr.write(json.dumps({"error": "still_running", "jobs": unfinished, "hint": "k2 compute wait " + " ".join(unfinished)}) + "\n")
-    rc = 3
+    rc = int(os.environ["K2_CP_LIMIT_RC"])
 if os.environ.get("K2_CP_JSON") == "1":
     print(json.dumps(bodies))
 print("RC %d %s" % (rc or 0, " ".join(i for i in failed_ids if i)))' "$dir")"
@@ -487,7 +498,8 @@ print("RC %d %s" % (rc or 0, " ".join(i for i in failed_ids if i)))' "$dir")"
 # wait --any (CE-21): one short poll per job per round (wait=1, so the
 # daemon counts each as followed: no duplicate [compute] line), until the
 # first ends. Prints that job's line (JSON: its get body) and exits with
-# its code; --max-wait past: still_running, exit 3.
+# its code; the wait limit past: still_running, exit $_CP_DEADLINE_RC
+# (124 with --timeout, 3 with --max-wait).
 _compute_wait_any() {
     local deadline="$1" quiet="$2" as_json="$3" failures="$4"
     shift 4
@@ -542,7 +554,7 @@ print("RC %d %s" % (code, j.get("id") or ""))')"
         done
         if [ -n "$deadline" ] && [ "$(date +%s)" -ge "$deadline" ]; then
             echo "{\"error\":\"still_running\",\"jobs\":\"$*\",\"hint\":\"none ended yet: k2 compute wait $* --any\"}" >&2
-            exit 3
+            exit "${_CP_DEADLINE_RC:-3}"
         fi
         [ "$quiet" = "0" ] && [ -z "$last" ] && { echo "[k2 compute] waiting for the first of $# job(s) to end" >&2; last=1; }
     done

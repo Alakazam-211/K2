@@ -228,14 +228,15 @@
     },
     {
       "name": "compute wait",
-      "usage": "k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]",
-      "description": "Block until the jobs end, no log text. Exit: the job's exit code (the first failing job for several); 3 = a job was cancelled, failed or timed out, or --max-wait passed first (still_running), or a job's own command exited 3: the stderr JSON says which.",
+      "usage": "k2 compute wait <job>... [--any] [--follow] [--failures] [--timeout 9m] [--quiet] [--json]",
+      "description": "Block until the jobs end, no log text. Exit: the job's exit code (the first failing job for several); 124 = --timeout passed first (still_running; the job is left alone); 3 = a job was cancelled, failed or timed out, or --max-wait passed first, or a job's own command exited 3: the stderr JSON says which. Use --timeout, not timeout(1): macOS has no timeout command.",
       "args": [{"name": "job", "required": true}],
       "flags": [
         {"name": "--any", "arg": null, "description": "Return when the first of them ends (exit = its code) and name the ones still running. Not with --follow."},
         {"name": "--follow", "arg": null, "description": "One job: stream its output too (resume a run --wait whose shell timed out). No --json or --quiet."},
         {"name": "--failures", "arg": null, "description": "Failing tests first."},
-        {"name": "--max-wait", "arg": "9m", "description": "Give up waiting after this long (exit 3 still_running); counts from this call."},
+        {"name": "--timeout", "arg": "9m", "description": "Stop waiting after this long: exit 124 still_running, the job left alone; counts from this call. The one to use (macOS has no timeout command)."},
+        {"name": "--max-wait", "arg": "9m", "description": "The older spelling of --timeout: the same, but exit 3 when it passes."},
         {"name": "--quiet", "arg": null, "description": "No output, only the exit."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]

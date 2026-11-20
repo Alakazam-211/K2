@@ -314,17 +314,19 @@ Agents:
                                              the relay too (up to 500 MB);
                                              --attempt N: an earlier attempt's files
                                              (from the node it ran on; get lists them)
-  k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]
+  k2 compute wait <job>... [--any] [--follow] [--failures] [--timeout 9m] [--quiet] [--json]
                  block until the jobs end, no log text; exit = the job's exit
-                 code (first failing job for several); 3 = a job was cancelled,
-                 failed or timed out, OR --max-wait passed first (still_running),
-                 OR a job's own command exited 3: the stderr JSON says which.
+                 code (first failing job for several); 124 = --timeout passed
+                 first (still_running; the job is left alone); 3 = a job was
+                 cancelled, failed or timed out, OR a job's own command
+                 exited 3: the stderr JSON says which.
                  --any: return when the FIRST of them ends (exit = its code)
                  and name the ones still running.
-                 --max-wait counts from this call and has no K2 cap; 9m suits
+                 --timeout counts from this call and has no K2 cap; 9m suits
                  a shell tool killed at ~10 minutes: call it again while it
-                 exits 3 still_running. A command that itself exited 3 also
-                 gives 3: the stderr JSON (or --json) says which.
+                 exits 124. Use it, not timeout(1): macOS has no timeout
+                 command (it exits 127 there). --max-wait is the older
+                 spelling: the same, but exit 3 when it passes.
                  --follow (one job): stream its output too (resume a run --wait
                  whose shell timed out). While queued it prints where it waits,
                  "N of M" and why.

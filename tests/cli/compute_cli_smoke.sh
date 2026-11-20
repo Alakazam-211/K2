@@ -463,6 +463,13 @@ k2 compute wait "$JWS" --max-wait 2s >/dev/null 2>"$SANDBOX/err"; rc=$?
 set -e
 expect_eq "--max-wait expiry exits 3" "$rc" "3"
 expect_has "and says still_running with the next wait line" "$(cat "$SANDBOX/err")" "\"hint\": \"k2 compute wait $JWS\""
+# --timeout: the same limit with its own exit, 124, and the job left alone.
+set +e
+k2 compute wait "$JWS" --timeout 2s >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "--timeout expiry exits 124" "$rc" "124"
+expect_has "and says still_running" "$(cat "$SANDBOX/err")" '"error": "still_running"'
+expect_has "the job was left running" "$(k2 compute get "$JWS")" ": running"
 k2 compute cancel "$JWS" --force >/dev/null
 set +e
 k2 compute wait nosuchjob >/dev/null 2>"$SANDBOX/err"; rc=$?

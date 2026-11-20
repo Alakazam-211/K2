@@ -12,6 +12,10 @@
 //!   an old helper (no `"tokenFd": true`) never runs;
 //! - the helper's exit code is the command's.
 //!
+//! A run line with `-h` or `--help` anywhere is the front's, and so the
+//! shell's when it is no page ([`help_runs_nothing`]), even when the
+//! `--help` is the command's own, after `--`.
+//!
 //! What the command itself gets (no passport, nothing K2-private,
 //! `K2_NO_OWNER_FALLBACK=1`) is the real helper's work:
 //! `tests/cli/vault_run_child_identity.sh` proves it through the binary
@@ -151,13 +155,6 @@ fn the_passport_goes_on_fd_3_and_nowhere_else() {
             &log,
             0,
         )),
-        session(asks(
-            "the command's own --help: it runs",
-            &["run", "--secret", "A", "--", "grep", "--help"],
-            ok(&named),
-            &log,
-            0,
-        )),
         cell,
         three,
         asks(
@@ -281,46 +278,44 @@ fn what_runs_nothing() {
         cases.push(session(refused(name, args, &log)));
     }
     // The command's own -h, and no secret: the usage, no gate.
-    let mut no_gate = refused(
-        "no secret, the command's --help, no owner",
-        &["run", "--", "ls", "--help"],
-        &log,
-    );
-    no_gate.owner_on_disk = false;
-    cases.push(no_gate);
     for c in cases {
         rig.check(&c);
     }
 }
 
+/// A run line with `-h` or `--help` anywhere is the front's: a page, or
+/// the shell (the binary hands it on), the `-h` before `--` or after it.
+/// On both sides it sends nothing and runs nothing, with an owner or with
+/// none (the shell skips its connection gate for these).
 #[test]
 fn help_runs_nothing() {
     let rig = VRig::new();
     let (_, log) = helper(rig.path());
-    for (name, args) in [
-        ("-h", &["run", "-h"][..]),
+    for (name, args, code) in [
+        ("-h", &["run", "-h"][..], 0),
         (
             "--help after a name",
             &["run", "--secret", "A", "--help", "--", "ls"][..],
+            0,
         ),
         (
             "-h as the last word before --",
             &["run", "A", "-h", "--", "ls"][..],
+            0,
+        ),
+        ("an unknown flag, then -h", &["run", "--bogus", "-h"][..], 2),
+        (
+            "no secret, and the command's --help",
+            &["run", "--", "ls", "--help"][..],
+            2,
         ),
     ] {
-        let mut c = refused(name, args, &log);
-        c.code = 0;
-        rig.check(&c);
-        // No owner, no port: the shell skips its gate for these.
-        let mut c = refused(name, args, &log);
-        c.code = 0;
-        c.owner_on_disk = false;
-        rig.check(&c);
+        for owner in [true, false] {
+            let mut c = refused(name, args, &log);
+            c.code = code;
+            c.owner_on_disk = owner;
+            c.handed = true;
+            rig.check(&c);
+        }
     }
-    // An unknown flag before the -h: the flag's line, exit 2.
-    rig.check(&session(refused(
-        "an unknown flag, then -h",
-        &["run", "--bogus", "-h"],
-        &log,
-    )));
 }

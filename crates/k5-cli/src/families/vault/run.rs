@@ -16,6 +16,11 @@
 //!   environment and sets `K2_NO_OWNER_FALLBACK=1`: the command gets its
 //!   secrets, not the caller's identity.
 //!
+//! A line with `-h` or `--help` anywhere is the front's (a page, or the
+//! shell), so `vault run --secret A -- grep --help`, where the `--help`
+//! is the command's, runs in the shell still: the front would have to
+//! stop reading at `--` for the binary to run it.
+//!
 //! Where this differs from the shell (named, for K2): the helper's
 //! environment is the one this process was given with the changes above;
 //! bash's helper also gets bash's own (`SHLVL` one higher, `_` set to the

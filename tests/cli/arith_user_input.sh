@@ -14,6 +14,7 @@
 # Flags covered:
 #   compute node servers add --for          (7d, 12h, none)
 #   compute node servers limits for= / --for
+#   compute node servers add --max-time, limits max_job_secs=<n>h|m|s
 #   sources simulate --for, sources trigger add --cooldown and
 #     --on stale_for:<duration>
 #   sources mute --for, sources history --from
@@ -176,6 +177,16 @@ r="$(sent "${LIM[@]}" for=2d)"
 expect_eq "limits for=2d" "$(field "$r" 'v["path"], v["body"].get("forSecs")')" '["/cli/compute/nodes/servers/limits", 172800]'
 r="$(sent "${LIM[@]}" --for 90m)"
 expect_eq "limits --for 90m" "$(field "$r" 'v["body"].get("forSecs")')" '5400'
+
+echo "== compute node servers add --max-time, limits max_job_secs=: a bad value stops =="
+refused "add --max-time <subscript>h" "usage: bad duration" -- "${ADD[@]}" --max-time "${P}h"
+refused "add --max-time 5x" "usage: bad duration" -- "${ADD[@]}" --max-time 5x
+refused "limits max_job_secs=<subscript>h" "usage: bad duration" -- "${LIM[@]}" "max_job_secs=${P}h"
+refused "limits max_job_secs=xh" "usage: bad duration" -- "${LIM[@]}" max_job_secs=xh
+r="$(sent "${ADD[@]}" --max-time 2h)"
+expect_eq "add --max-time 2h" "$(field "$r" 'v["body"]["set"].get("max_job_secs")')" '7200'
+r="$(sent "${LIM[@]}" max_job_secs=1h30m)"
+expect_eq "limits max_job_secs=1h30m" "$(field "$r" 'v["body"]["set"].get("max_job_secs")')" '5400'
 
 echo "== sources simulate --for, trigger add --cooldown / --on stale_for: =="
 refused "simulate --for <subscript>d" "usage: bad duration" -- sources simulate fleet crit --for "${P}d"

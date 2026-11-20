@@ -602,7 +602,7 @@ cmd_compute_node_servers() {
                     --max-running) pairs+=("max_running=${2:-}"); shift 2 ;;
                     --max-queued) pairs+=("max_queued=${2:-}"); shift 2 ;;
                     --cpu-hours) pairs+=("cpu_hours_day=${2:-}"); shift 2 ;;
-                    --max-time) pairs+=("max_job_secs=$(_compute_secs "${2:-}")"); shift 2 ;;
+                    --max-time) local mt; mt="$(_compute_secs "${2:-}")" || exit 2; pairs+=("max_job_secs=$mt"); shift 2 ;;
                     --cpus) pairs+=("max_cpus=${2:-}"); shift 2 ;;
                     --mem) local m="${2:-}"; pairs+=("max_mem_gb=${m%[Gg]}"); shift 2 ;;
                     --disk) local d="${2:-}"; pairs+=("disk_gb=${d%[Gg]}"); shift 2 ;;
@@ -667,7 +667,7 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
                     --weight) pairs+=("weight=${2:-}"); shift 2 ;;
                     for=*) forv="${1#for=}"; shift ;;
                     --for) forv="${2:-}"; shift 2 ;;
-                    max_job_secs=*h|max_job_secs=*m|max_job_secs=*s) pairs+=("max_job_secs=$(_compute_secs "${1#max_job_secs=}")"); shift ;;
+                    max_job_secs=*h|max_job_secs=*m|max_job_secs=*s) local mt; mt="$(_compute_secs "${1#max_job_secs=}")" || exit 2; pairs+=("max_job_secs=$mt"); shift ;;
                     network=*|top_class=*) pairs+=("${1%%=*}=\"${1#*=}\""); shift ;;
                     *=*) pairs+=("$1"); shift ;;
                     --json) shift ;;

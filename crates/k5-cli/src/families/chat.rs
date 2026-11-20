@@ -1361,7 +1361,7 @@ fn within(from: u32, name: &'static str, r: Raise) -> Raise {
 
 /// `when(t)`: `time.strftime("%Y-%m-%d %H:%M", time.localtime(int(t)))`,
 /// or `str(t)` where any of it raises.
-fn when(v: &Value) -> String {
+pub(crate) fn when(v: &Value) -> String {
     voice::int_of(v, 0)
         .ok()
         .and_then(|n| i64::try_from(n).ok())

@@ -33,6 +33,7 @@
 //! `_compute_json` reads from the environment, and the verbs not native
 //! yet.
 
+mod admin;
 mod main_verbs;
 mod media;
 pub mod print;
@@ -75,6 +76,8 @@ pub enum Plan {
     Media(media::Media),
     /// `users …`.
     Users(users::Users),
+    /// `people`, `approvals`, `on-behalf` and `log`.
+    Admin(admin::Admin),
 }
 
 /// The flags and words of `cmd_hostchat`'s own verbs.
@@ -316,8 +319,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "agents" | "agent" => {
             return chat::start(args, &words, chat::access(&words[1..]), skip, TOOL)
         }
-        "meet" | "people" | "person"
-        | "approvals" | "approval" | "on-behalf" | "behalf" | "log" | "app-space"
+        "meet" | "app-space"
         | "app-spaces" | "home" | "pass-keys" => return None,
         _ => {}
     }
@@ -325,6 +327,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some("recording") => recording::parse(&words[1..]),
         Some("media") => media::parse(&words[1..]),
         Some("users" | "user") => users::parse(&words[1..]),
+        Some("people" | "person") => admin::people(&words[1..]),
+        Some("approvals" | "approval") => admin::approvals(&words[1..]),
+        Some("on-behalf" | "behalf") => admin::on_behalf(&words[1..]),
+        Some("log") => admin::log(&words[1..]),
         _ => parse(&words),
     };
     if plan == Plan::Shell || !python::family_native(python::here()) {
@@ -374,7 +380,11 @@ fn run_with(
             return Exit::Usage;
         }
         Plan::Shell => unreachable!("run hands it to the shell"),
-        p @ (Plan::Main(_) | Plan::Rec(_) | Plan::Media(_) | Plan::Users(_)) => p,
+        p @ (Plan::Main(_)
+        | Plan::Rec(_)
+        | Plan::Media(_)
+        | Plan::Users(_)
+        | Plan::Admin(_)) => p,
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let client = match settings.client(would_refuse) {
@@ -395,6 +405,7 @@ fn run_with(
         Plan::Rec(r) => recording::run(&mut ctx, r),
         Plan::Media(m) => media::run(&mut ctx, m),
         Plan::Users(u) => users::run(&mut ctx, u),
+        Plan::Admin(a) => admin::run(&mut ctx, a),
         _ => unreachable!("printed above"),
     };
     ctx.closing.flush(&mut ctx.client, exit);

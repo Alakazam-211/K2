@@ -1144,3 +1144,138 @@ fn hostchat_users_as_the_shell_does() {
         rig.check(&c);
     }
 }
+
+const HELD: &str = r#"{"error":{"code":"confirm_required","hint":"in person","details":{"action":"chat-approve","secretId":"out_1"}}}"#;
+
+#[test]
+fn hostchat_chat_administration_as_the_shell_does() {
+    let rig = Rig::new(VERB, "admin");
+    let utc = |c: Case| with(vec![("TZ", "UTC".to_string())], c);
+    let v = vec![
+        // covers: hostchat people
+        one(
+            "people",
+            &["people"],
+            r#"{"people":[{"user":"ann","subjectKind":"person","scope":"box"},{"user":"bot","subjectKind":"agent","scope":"ws","enabled":false}]}"#,
+        ),
+        one("people: none", &["person", "list"], r#"{"people":[]}"#),
+        one("people --json", &["people", "--json"], r#"{"people":[]}"#),
+        one("people add, a guest", &["people", "add", "@ann", "--guest"], r#"{"ok":true,"user":"ann","guest":true}"#),
+        one("people grant --guest off", &["people", "grant", "ann", "--guest", "off"], r#"{"ok":true}"#),
+        one("people set", &["people", "set", "ann", "--guest", "yes"], r#"{"user":"ann"}"#),
+        one("people remove", &["people", "remove", "ann", "--json"], r#"{"ok":true}"#),
+        bad("people add: no user", &["people", "add"]),
+        bad("people set: no --guest", &["people", "set", "ann"]),
+        bad("people: a bad verb", &["people", "kick"]),
+        bad("people: an unknown flag", &["people", "--x"]),
+        // covers: hostchat approvals
+        one(
+            "approvals",
+            &["approvals"],
+            r#"{"items":[{"id":"out_1","status":"queued","addr":"s/c","body":"hi"}]}"#,
+        ),
+        one("approvals: an id first is a list", &["approvals", "out_1", "--workspace", "w b"], r#"{"items":[]}"#),
+        one("approvals approve", &["approvals", "approve", "out_1", "--note", "ok"], r#"{"ok":true,"id":"out_1"}"#),
+        one(
+            "approvals approve: two",
+            &["approval", "approve", "out_1", "out_2"],
+            r#"{"ok":true,"approved":["out_1","out_2"]}"#,
+        ),
+        case(
+            "approvals approve: refused",
+            &["approvals", "approve", "out_1"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"not_yours","hint":"h"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "approvals approve: held, no action named",
+            &["approvals", "approve", "out_1"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"confirm_required","hint":"h"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        with(
+            with_passport(&[]),
+            case(
+                "approvals approve in a session: held",
+                &["approvals", "approve", "out_1"],
+                &[],
+                vec![Reply::Answer(403, HELD.into())],
+                port_only,
+                3,
+                1,
+            ),
+        ),
+        one("approvals deny", &["approvals", "deny", "out_1", "--note", "no \"way\""], r#"{"ok":true}"#),
+        bad("approvals deny: no note", &["approvals", "deny", "out_1"]),
+        bad("approvals approve: none", &["approvals", "approve"]),
+        bad("approvals --note: empty", &["approvals", "approve", "out_1", "--note", ""]),
+        bad("approvals: a bad verb", &["approvals", "skip"]),
+        // covers: hostchat on-behalf
+        one(
+            "on-behalf",
+            &["on-behalf", "--state", "all", "--limit", "5"],
+            r#"{"person":"ann","items":[{"write":"post","messageId":"m1","action":"posted","state":"approved","workspace":"w","decidedBy":"ann","decidedKind":"person","note":7},{"write":"edit","state":"pending"}]}"#,
+        ),
+        one("on-behalf: none", &["behalf", "list"], r#"{"person":"ann","items":[]}"#),
+        one("on-behalf approve", &["on-behalf", "approve", "act_1", "--note", "fine"], r#"{"ok":true,"state":"approved"}"#),
+        one("on-behalf decline --json", &["on-behalf", "decline", "msg_1", "--json"], r#"{"ok":true}"#),
+        with(
+            with_passport(&[]),
+            case(
+                "on-behalf approve in a session: a person's step",
+                &["on-behalf", "approve", "act_1"],
+                &[],
+                vec![],
+                port_only,
+                3,
+                0,
+            ),
+        ),
+        bad("on-behalf approve: no id", &["on-behalf", "approve"]),
+        bad("on-behalf: --state empty", &["on-behalf", "--state", ""]),
+        bad("on-behalf: a bad verb", &["on-behalf", "undo"]),
+        // covers: hostchat log
+        utc(one(
+            "log",
+            &["log", "--limit", "5"],
+            r#"{"entries":[{"at":1790000000,"outcome":"ok","actor":"ann","op":"people.grant","workspace":"w","target":"bob","reason":"asked"},{"at":"x","outcome":"denied"},{"at":null}]}"#,
+        )),
+        one("log: none", &["log"], r#"{"entries":[]}"#),
+        one("log --json", &["log", "--json"], r#"{"entries":[]}"#),
+        bad("log: a word", &["log", "x"]),
+        bad("log --limit: none", &["log", "--limit"]),
+        traceback(one("log: a reason that is no string", &["log"], r#"{"entries":[{"at":1,"reason":5}]}"#)),
+        traceback(one("people: a list", &["people"], "[]")),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn hostchat_chat_administration_a_person_s_steps() {
+    let rig = VRig::new();
+    let v = vec![
+        person(
+            "approvals approve: held, then confirmed",
+            &["approvals", "approve", "out_1", "--note", "ok"],
+            vec![Reply::Answer(403, HELD.into()), ok(r#"{"ok":true,"id":"out_1"}"#)],
+            0,
+        ),
+        person(
+            "on-behalf approve: held, then confirmed",
+            &["on-behalf", "approve", "act_1"],
+            vec![Reply::Answer(403, HELD.into()), ok(r#"{"ok":true,"state":"approved"}"#)],
+            0,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}

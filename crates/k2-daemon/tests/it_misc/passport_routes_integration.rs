@@ -734,3 +734,32 @@ async fn approve_in_a_folder_inside_another_repo_is_the_card() {
     assert_eq!(head_of(&outer), base, "the repo above is untouched");
     assert!(branch_tip(&outer, "agent/backend/task").is_some(), "its branch is still there");
 }
+
+/// Ticket ids that share a prefix with another workspace's: the passport's
+/// own ticket by its unique prefix answers with that ticket; the shared
+/// prefix is a plain not-found that lists no ids.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ticket_show_never_lists_other_workspaces_ids() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let mine = ticket(&e.own_id, "Own question");
+    let theirs = ticket(&e.other_id, "Other question");
+    let (mine_id, theirs_id) = ("abcd1111-0000-4000-8000-000000000001", "abcd2222-0000-4000-8000-000000000002");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE feedback SET id = ?1 WHERE id = ?2", [mine_id, mine.as_str()]).expect("own id");
+        conn.execute("UPDATE feedback SET id = ?1 WHERE id = ?2", [theirs_id, theirs.as_str()]).expect("other id");
+    }
+    let r = http(e.port, "GET", "/cli/feedback/show?id=abcd1", Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "its own ticket by a unique prefix: {}", r.raw);
+    assert_eq!(r.json("show")["id"], mine_id, "{}", r.raw);
+    for prefix in ["abcd", "abcd2"] {
+        let r = http(e.port, "GET", &format!("/cli/feedback/show?id={prefix}"), Some(e.passport.as_str()));
+        assert_eq!(r.status, 404, "{prefix}: {}", r.raw);
+        assert_eq!(code(&r, "show"), "not_found", "{}", r.raw);
+        assert!(!r.raw.contains(theirs_id) && !r.raw.contains(mine_id), "{prefix}: an id leaked: {}", r.raw);
+    }
+    let r = http(e.port, "GET", "/cli/feedback/show?id=abcd", Some(OWNER));
+    assert_eq!(code(&r, "show"), "ambiguous_id", "the owner is told: {}", r.raw);
+}

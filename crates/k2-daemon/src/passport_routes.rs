@@ -227,6 +227,9 @@ pub(crate) async fn serve_tcp(
     crate::caller_workspace::strip_request_stamps(&mut params);
     crate::caller_workspace::keep_client_project(&mut params);
     crate::caller_workspace::stamp_principal(&mut params, &principal);
+    if path == "/cli/feedback/show" {
+        pin_own_ticket(&mut params, &principal.workspace_uuid);
+    }
     if let Some(r) = merge_needs_person(path, &params, &principal).or_else(|| actor_is_the_passport(path, &mut params, &principal)) {
         http::send_response(stream, r.status, r.content_type, &r.body).await;
         return;
@@ -490,6 +493,21 @@ fn other_workspace(params: &HashMap<String, String>) -> Option<CliResponse> {
         None => None,
         Some(claim) if found(claim).as_deref() == Some(own.as_str()) => None,
         Some(_) => Some(own_only(hint)),
+    }
+}
+
+/// `GET /cli/feedback/show`: when `id` names exactly one ticket, filed in
+/// the passport's own workspace, hand the handler that ticket's full id, so
+/// it never resolves the prefix again (and can't list another workspace's
+/// ids as candidates). Anything else stays as sent and [`ticket_outside`]
+/// refuses it.
+fn pin_own_ticket(params: &mut HashMap<String, String>, workspace_id: &str) {
+    use k2_core::feedback::{get_item, resolve_id_prefix};
+    let id = params.get("id").map(|s| s.trim()).unwrap_or("");
+    if let Ok(full) = resolve_id_prefix(id) {
+        if get_item(&full).is_some_and(|i| i.project_id == workspace_id) {
+            params.insert("id".to_string(), full);
+        }
     }
 }
 

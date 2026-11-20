@@ -2009,7 +2009,8 @@ cmd_publish_subdomain() {
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --transfer) transfer=1; shift ;;
-                    --*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
+                    # A label never begins with '-' (so -h can't be one).
+                    -*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
                     *) [ -z "$label" ] && label="$1"; shift ;;
                 esac
             done
@@ -2075,6 +2076,8 @@ else:
                     --target) target="${2:-}"; shift 2 ;;
                     --transfer) transfer=1; shift ;;
                     --*) shift ;;
+                    # A label never begins with '-' (so -h can't be one).
+                    -*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
                     *) [ -z "$label" ] && label="$1"; shift ;;
                 esac
             done

@@ -13,8 +13,14 @@
 # keep their own pages. Then the plain forms still send their request, so
 # the stub is known to see one when it is sent.
 #
+# A subdomain label never begins with '-': `claim -x`, `unclaim -x` and
+# `create -x --target x` are a usage error (exit 2, "Error: unknown flag
+# '-x'" on stderr) and send nothing.
+#
 # `--`: the router has no end-of-options rule for publish; -h after `--`
-# is still help, like anywhere else on the line.
+# is still help, like anywhere else on the line. claim refuses `--` itself
+# as an unknown flag (as before), and create skips it as it skips any
+# unknown long flag, so a dash label after it is still refused.
 #
 # How: a python stub daemon on a free loopback port records every request
 # (any method, any path). HOME is a temp dir, no real daemon, no network.
@@ -138,6 +144,21 @@ page() {
     sent_nothing "$label"
 }
 
+# dash <args...>: a usage error, exit 2, one line on stderr naming the
+# word, nothing on stdout, sends nothing.
+dash() {
+    local word="$1"; shift
+    local label="k2 $*"
+    : >"$REQ_LOG"
+    run "$@"
+    [ "$RC" -eq 2 ] && ok "$label: exit 2" || bad "$label: exit $RC (want 2)"
+    [ "$ERR" = "Error: unknown flag '$word'" ] && ok "$label: refuses '$word'" \
+        || { bad "$label: stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2; }
+    [ -z "$OUT" ] && ok "$label: nothing on stdout" \
+        || { bad "$label: stdout"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2; }
+    sent_nothing "$label"
+}
+
 echo "== the reference: k2 publish --help =="
 : >"$REQ_LOG"
 run publish --help
@@ -165,6 +186,15 @@ check publish -h
 echo "== -h after -- is still help =="
 check publish subdomain claim -- -h
 check publish subdomain create --target x -- -h
+
+echo "== a label beginning with '-' is a usage error =="
+dash -x publish subdomain claim -x
+dash -x publish subdomain claim --transfer -x
+dash -x publish subdomain unclaim -x
+dash -x publish subdomain create -x --target x
+dash -x publish subdomain create --target x -x
+dash -x publish subdomain create -- -x --target x
+dash -- publish subdomain claim -- acme
 
 echo "== pages that stay their own =="
 page publish/subdomain/list.txt publish subdomain list -h

@@ -32,7 +32,7 @@ fn the_shell_s_lines() {
     }
     let router = source("router.sh");
     assert!(router.contains(
-        "    connections)\n        # 0.40.24 (B4): --help/-h on any connections subcommand prints help\n        # and exits 0 instead of being consumed as a workspace name.\n        if _wants_help \"${@:2}\"; then\n            cmd_help_connections\n            exit 0\n        fi\n        shift; cmd_connections \"$@\"\n"
+        "    connections)\n        # 0.40.24 (B4): --help/-h on any connections subcommand prints help\n        # and exits 0 instead of being consumed as a workspace name.\n        # 0.46.17: so does `k2 connections help` (it printed the usage and\n        # exited 1).\n        if [ \"${2:-}\" = help ] || _wants_help \"${@:2}\"; then\n            cmd_help_connections\n            exit 0\n        fi\n        shift; cmd_connections \"$@\"\n"
     ));
     let policy = source("cli-tools-policy.sh");
     assert!(policy.contains(r#"        connections|reserve|release) echo "connections" ;;"#));

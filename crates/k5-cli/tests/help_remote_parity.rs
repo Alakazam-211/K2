@@ -44,8 +44,33 @@ fn help_remote_as_the_shell_does() {
                 0,
             )
         },
-        case("no port: the gate", &["remote"], &[], vec![], owner_only, 1, 0),
-        case("no token: the gate", &["remote"], &[], vec![], port_only, 1, 0),
+        case(
+            "no port: the gate",
+            &["remote"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
+        case(
+            "the virtual desktop's switch, no token: the connection gate",
+            &["remote"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            port_only,
+            1,
+            0,
+        ),
+        case(
+            "no token: the gate",
+            &["remote"],
+            &[],
+            vec![],
+            port_only,
+            1,
+            0,
+        ),
     ] {
         answered_here(&rig, &c);
     }

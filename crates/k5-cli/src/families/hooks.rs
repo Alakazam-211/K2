@@ -730,12 +730,12 @@ mod tests {
             Ok("1s ago".into())
         );
         assert_eq!(
-            ago(Some(&Value::Int("1000".into())), 7000.0),
-            Ok("99m ago".into())
+            ago(Some(&Value::Int("1000000".into())), 7000.0),
+            Ok("100m ago".into())
         );
         assert_eq!(
-            ago(Some(&Value::Int("1000".into())), 9000.0),
-            Ok("2h ago".into())
+            ago(Some(&Value::Int("1000000".into())), 8199.0),
+            Ok("1h ago".into())
         );
         assert_eq!(
             ago(Some(&Value::Int("9999999".into())), 1000.0),

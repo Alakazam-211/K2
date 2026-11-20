@@ -343,6 +343,7 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
                 "\n    daemon)\n        case \"${2:-status}\" in\n",
                 &[],
             ),
+            ["help", "--help", "-h"] => help_verbs_are_its_arms(noun),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -643,6 +644,28 @@ fn app_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
 
 /// `connect`'s verb rows: each is one arm of `cmd_connect`'s `case`
 /// (`cli/src/connect-account.sh`), which hands it to its own function.
+/// `help`'s verb rows: each is one word with an arm of `cmd_help`'s case
+/// (`cli/src/wiki.sh`) that prints a usage function and reads no more
+/// words, and the binary answers it.
+fn help_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "wiki.sh")
+        .expect("cli/src/wiki.sh")
+        .1;
+    let body = &text[text.find("\ncmd_help() {\n").expect("cmd_help")..];
+    let body = &body[..body.find("\n}\n").expect("its end")];
+    for verb in noun.verb_rows() {
+        assert_eq!(verb.words, ["remote"], "a help verb row with no check");
+        assert_eq!(verb.owner, k5_cli::route::Owner::Native);
+        assert!(
+            body.contains("        remote)                   _remote_usage ;;\n"),
+            "cmd_help has no remote arm printing _remote_usage"
+        );
+    }
+}
+
 fn connect_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
     let sources = common::shell_sources();
     let text = &sources

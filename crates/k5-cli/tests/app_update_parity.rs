@@ -28,7 +28,15 @@ fn app_update_answers_as_the_shell_does() {
     for c in [
         // native: app-update
         case("alone", &[], &[], vec![], owner_and_port, 1, 0),
-        case("with words", &["--check", "x"], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "with words",
+            &["--check", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         case("the gate: no port", &[], &[], vec![], owner_only, 1, 0),
         case("the gate: no token", &[], &[], vec![], port_only, 1, 0),
         Case {
@@ -40,7 +48,15 @@ fn app_update_answers_as_the_shell_does() {
     }
     rig.check(&Case {
         compare: Compare::Shell,
-        ..case("-h is the shell's", &["-h"], &[], vec![], owner_and_port, 1, 0)
+        ..case(
+            "-h is the shell's",
+            &["-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        )
     });
 }
 

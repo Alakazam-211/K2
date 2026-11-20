@@ -38,18 +38,29 @@ pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
     owner: crate::route::Owner::Native,
 }];
 
-/// `k5 help remote`: `_remote_usage` on stdout, exit 0, as the front
-/// prints a help page: the connection gate needs a port and a token, and
-/// `help` is an open tool, so the session checks pass it. `None`: the
-/// shell answers (any other line, or a prelude the shell must read).
+/// `k5 help remote`: after the connection gate (the virtual desktop's
+/// guard passes `help`),
+/// `_remote_usage` on stdout, exit 0. `help` is an open tool, so the
+/// session checks pass it. `None`: the shell answers any other line.
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     if words != ["help", "remote"] {
         return None;
     }
-    let (_, p) = shell_prelude()?;
-    if !(p.port && p.token) {
+    if !crate::python::family_native(crate::python::here()) {
         return None;
+    }
+    let settings = match crate::daemon::current() {
+        Ok(s) => s,
+        Err(e) => {
+            out::stderr_line(&format!("Error: {e}"));
+            return Some(Exit::Error);
+        }
+    };
+    // `help` is an offline verb for the virtual desktop's guard, so with
+    // no token only the connection gate speaks.
+    if crate::prelude::gate(&settings).is_some() {
+        return Some(crate::prelude::Gate::CannotConnect.stop());
     }
     Some(show(&Page {
         text: super::remote::usage().into(),

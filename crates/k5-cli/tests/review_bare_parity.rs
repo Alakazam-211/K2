@@ -54,6 +54,12 @@ fn review_with_no_verb_as_the_shell_does() {
 fn review_with_no_verb_and_a_passport() {
     let rig = Rig::new("review", "passport");
     for c in common::cards::daily_rows(&rig, &[], 1, 1) {
-        answered_here(&rig, &c);
+        // The rows the tier hands to the shell (named so) compare as the
+        // shell's; every other row is the binary's own answer.
+        if c.name.ends_with("the shell's") {
+            rig.check(&c);
+        } else {
+            answered_here(&rig, &c);
+        }
     }
 }

@@ -2556,9 +2556,10 @@ async fn a_pinned_job_that_waited_long_gets_one_note() {
         active_node(n);
         grant(n, &me, None, 2);
     }
-    // pw-a: every slot taken; pw-b: idle.
-    let _a = compute_ws::test_attach("pw-a", offer(1, 30, 32, 4));
+    // pw-a: its one slot taken by this server's own job; pw-b: idle.
+    let _a = compute_ws::test_attach("pw-a", one_slot_full(1));
     let _b = compute_ws::test_attach("pw-b", offer(1, 30, 32, 0));
+    hold_one_slot(d.port, "pw-a", &me, 2).await;
     let sid = SessionId::new();
     let agent = k2_daemon::session_token::mint_session_token(
         &sid,

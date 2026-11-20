@@ -1339,8 +1339,13 @@ async fn an_auto_priority_job_holds_on_this_server_until_a_node_can_start_it() {
     let std_job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     assert_eq!(assigns(&a.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![std_job], "Standard: into the queue");
     assert_eq!(row(&pri).reason.as_deref(), Some("any_hold"), "Priority still holds here");
-    // A slot frees: the Priority job goes.
+    // While this server's own job still waits in the node's queue, the
+    // node quotes nothing as "starts now" for it: Priority stays here.
     compute_ws::test_frame("ph-a", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 0, 1)))));
+    assert!(assigns(&a.frames()).is_empty(), "behind this server's own queued job: still held");
+    assert_eq!(row(&pri).reason.as_deref(), Some("any_hold"));
+    // A slot is free and nothing of this server waits there: it goes.
+    compute_ws::test_frame("ph-a", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 0, 0)))));
     assert_eq!(assigns(&a.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![pri.clone()], "a slot is free: sent");
     compute_ws::test_detach("ph-a");
 }

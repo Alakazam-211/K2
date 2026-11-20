@@ -30,6 +30,15 @@ pub(crate) fn ct_eq_token(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.ct_eq(b).into()
 }
 
+/// Presented bearer for dual-auth failure classification (query token or
+/// Authorization header). Empty when neither is present.
+pub(crate) fn presented_bearer<'a>(query: &'a str, bearer: Option<&'a str>) -> &'a str {
+    bearer
+        .filter(|s| !s.is_empty())
+        .or_else(|| extract_token(query))
+        .unwrap_or("")
+}
+
 /// Extract the raw `token=<value>` from a URL-encoded query string. No
 /// full urlencoded decoding — the token is always hex so there's nothing
 /// to decode. Returns the first `token=` value seen (the contract callers

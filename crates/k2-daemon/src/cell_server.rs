@@ -554,6 +554,17 @@ mod unix_impl {
             return;
         }
 
+        // A Codex call must come from this tab's conversation, and from a
+        // process under this tab's terminal (session_token::check_conversation).
+        let via = crate::session_token::Via::Socket {
+            peer_pid: crate::session_token::socket_peer_pid(stream.as_raw_fd()),
+            vmm_peer: peer_uid != self_uid && cell_uid == Some(peer_uid),
+        };
+        if let Some(body) = crate::session_token::socket_refusal(validated.as_ref(), path, &head, via).await {
+            write_response(&mut stream, "403 Forbidden", "application/json", &body, k5_version).await;
+            return;
+        }
+
         // DA12: the full-payload hook ingest. Same parser + owner check as
         // the TCP route; 204 unless the body is over 1 MiB (413).
         if hook_event {

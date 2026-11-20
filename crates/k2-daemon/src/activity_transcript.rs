@@ -300,6 +300,79 @@ pub fn conversation_of(session_id: &str) -> Option<(String, ConversationSource)>
     f.conversation.clone()
 }
 
+/// The per-tab passport check's one re-check (`session_token::conversation`):
+/// a hook-less tab (Codex) tells K2 nothing on `/new`, `/clear` or fork, so
+/// a call from its new conversation finds K2's record stale. Switch the
+/// tab to `wanted` only when K2's own record shows that log is this tab's
+/// next one: a log with that id for the tab's folder that began after the
+/// tab's current log (or after the spawn, with none) and after the current
+/// log went quiet, and that no live follower has claimed. True when the
+/// tab is on `wanted` afterwards. The caller has already refused an id
+/// another live tab holds.
+pub fn recheck_for(session_id: &str, wanted: &str) -> bool {
+    let Some(slot) = slots().lock().get(session_id).cloned() else { return false };
+    let mut f = slot.follower.lock();
+    if f.reader.is_none() {
+        return false;
+    }
+    if f.conversation.is_none() {
+        if let Some(id) = argv_conversation(session_id) {
+            set_conversation(&mut f, id, ConversationSource::Argv);
+        }
+    }
+    let current = f.conversation.as_ref().map(|(c, _)| c.clone());
+    if current.as_deref() == Some(wanted) {
+        return true;
+    }
+    let Some(cwd) = f.facts.cwd.clone() else { return false };
+    let harness = f.facts.harness.clone();
+    // The current log: the followed file, else the one its id names.
+    let current_file = match f.follow.as_ref() {
+        Some(follow) => Some(follow.path().to_path_buf()),
+        None => current
+            .as_deref()
+            .and_then(|c| k2_core::chat_continue::locate_continue_transcript(&harness, c, &cwd)),
+    };
+    let (since, quiet_at) = match current_file.as_deref() {
+        Some(p) => {
+            let born = if f.follow.is_some() && f.followed_born > 0 { f.followed_born } else { file_birth_ms(p) };
+            let quiet = std::fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as i64);
+            (born, quiet)
+        }
+        None => (f.registered_at - ADOPT_SLACK_MS, 0),
+    };
+    let candidates = k2_core::chat_continue::adoptable_transcripts(&harness, &cwd, since);
+    let pick = {
+        let owned = claimed().lock();
+        candidates.into_iter().find(|c| {
+            c.id == wanted
+                && Some(&c.id) != current.as_ref()
+                && c.created_ms + ADOPT_SLACK_MS >= quiet_at
+                && !owned.contains(&(harness.clone(), c.id.clone()))
+        })
+    };
+    let Some(pick) = pick else { return false };
+    log_debug!("[activity/transcript] {session_id}: passport re-check moved the tab to {}", pick.path.display());
+    set_conversation(&mut f, pick.id.clone(), ConversationSource::Adopted);
+    stamp_tab_session(&f.facts, &pick.id);
+    let was_following = f.follow.is_some();
+    f.followed_born = pick.created_ms;
+    f.follow = Some(TranscriptFollow::new(pick.path, FollowStart::CatchUp));
+    if let Some(reader) = f.reader.as_mut() {
+        reader.reset();
+    }
+    f.backoff_ms = 0;
+    f.next_poll_at = now_ms();
+    if !was_following {
+        crate::activity_store::set_transcript_resolvable(session_id, true);
+    }
+    true
+}
+
 fn release_claim(f: &Follower) {
     if let Some((conv, _)) = f.conversation.as_ref() {
         claimed().lock().remove(&(f.facts.harness.clone(), conv.clone()));

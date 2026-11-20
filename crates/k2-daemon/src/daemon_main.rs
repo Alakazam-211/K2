@@ -1688,6 +1688,8 @@ async fn async_main() {
     // S2: the activity store consumes the hook plane and runs its timers
     // (row deadlines, 10 s liveness sweep) before any route can take a hook.
     activity_store::spawn();
+    // One line when the owner turned the Codex per-tab passport check off.
+    crate::session_token::log_switch_at_boot();
     // S4: rows go out as `activity_changed` (+ seq) and the compat events.
     activity_events::spawn();
     // S6: Thread turns follow the store and the transcripts.

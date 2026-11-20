@@ -28,6 +28,8 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
+use super::http::presented_bearer;
+
 /// Where a connection came from (PRD `prd-connect-login-edge-only-v1.md`
 /// §2 — ingress provenance). Decided by the LISTENER that accepted the
 /// socket, never by anything the client sends:
@@ -1669,6 +1671,13 @@ async fn handle_one_request(
     if method == "OPTIONS" {
         let _ = stream.read(&mut buf).await;
         super::http::send_cors_preflight(&mut *stream).await;
+        return DispatchOutcome::Done;
+    }
+
+    // A tab passport's Codex call must come from that tab's conversation.
+    if let Some(body) = crate::session_token::tcp_refusal(path_and_query, bearer_token.as_deref(), &req).await {
+        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+        super::http::send_response(&mut *stream, "403 Forbidden", "application/json", &body).await;
         return DispatchOutcome::Done;
     }
 
@@ -16649,15 +16658,6 @@ fn scoped_hook_auth(
         Some(v) => (true, Some(v.principal)),
         None => (false, None),
     }
-}
-
-/// Presented bearer for dual-auth failure classification (query token or
-/// Authorization header). Empty when neither is present.
-fn presented_bearer<'a>(query: &'a str, bearer: Option<&'a str>) -> &'a str {
-    bearer
-        .filter(|s| !s.is_empty())
-        .or_else(|| super::http::extract_token(query))
-        .unwrap_or("")
 }
 
 /// #34: when dual-auth fails on a mail route, distinguish a **valid

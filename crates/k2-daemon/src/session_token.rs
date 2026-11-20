@@ -2240,6 +2240,18 @@ fn restrict_mode(_file: &std::path::Path) {}
 // feedback_test_discipline; prevents live hook-sessions.json pollution).
 // ─────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────
+// Codex per-tab passport binding (the call's conversation is the tab's)
+// ─────────────────────────────────────────────────────────────────────
+
+#[path = "session_token_conversation.rs"]
+mod conversation;
+#[cfg(unix)]
+pub use conversation::socket_peer_pid;
+pub use conversation::{
+    check_conversation, log_switch_at_boot, route_is_checked, socket_refusal, tcp_refusal, CodexHeaders, Refusal, Via,
+};
+
 #[cfg(test)]
 #[path = "session_token_tests.rs"]
 mod tests;

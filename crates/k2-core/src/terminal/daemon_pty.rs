@@ -953,6 +953,18 @@ impl DaemonPtySession {
                 }
             }
         }
+        // The isolated-tab marker the `k2` CLI checks before a Codex tool
+        // call may use this tab's credentials: the passport's session id
+        // when the exec argv has `--no-daemon` or the tab is a microVM cell
+        // (its Codex runs in its own guest). Set here, by the spawner only:
+        // a marker the caller's env or the daemon's own env carried is
+        // overwritten or blanked, for every program.
+        {
+            use crate::terminal::codex_no_daemon as cnd;
+            let cell = matches!(cfg.sandbox, crate::terminal::SandboxSpec::Microvm);
+            let value = cnd::tab_marker(guarded_program.as_deref().unwrap_or(""), &spawn_args, &child_env, cell);
+            cnd::set_tab_marker(&mut child_env, value, cnd::marker_in_process_env());
+        }
         // Owner switch `agentProcessNames` (off by default): an agent's
         // Claude Code runs from `~/.k2/bin/agents/<agent>`, a hard link to
         // the version PATH resolves to now, so Activity Monitor shows the

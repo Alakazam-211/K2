@@ -28,6 +28,11 @@
 //!
 //! Escape hatch: `K2_CODEX_NO_DAEMON=0` in the daemon's env turns this off;
 //! `K2_CODEX_NO_DAEMON=1` adds the flag without probing.
+//!
+//! A tab that ends up with `--no-daemon` (or is a microVM cell) also gets
+//! [`ISOLATED_ENV`], bound to its passport. The `k2` CLI refuses a Codex
+//! tool call without a matching marker: it can't tell that call from one
+//! under a shared app-server.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -239,6 +244,76 @@ pub fn apply(program: &str, args: &mut Vec<String>, search_path: &str, policy: P
     }
     args.insert(at, NO_DAEMON_FLAG.to_string());
     Outcome::Added(at)
+}
+
+/// The marker K2 sets on a Codex tab it KNOWS runs its own app-server.
+///
+/// The `k2` CLI keeps a Codex tool call's usual credentials only when this
+/// marker equals the session id of the passport the call carries; any other
+/// Codex call is treated as running under a shared app-server and sends
+/// nothing. The value is the tab's passport session id (the part of
+/// `K2_HOOK_TOKEN` before the first `.`), so a marker that reaches another
+/// tab's call (through a server that tab did not start) does not match.
+///
+/// Only the spawner sets it: [`tab_marker`] decides the value and
+/// [`set_tab_marker`] writes it over anything the env already held.
+pub const ISOLATED_ENV: &str = "K2_CODEX_TAB_ISOLATED";
+
+/// The passport env key the marker is bound to.
+const PASSPORT_ENV: &str = "K2_HOOK_TOKEN";
+
+/// True when `--no-daemon` is in a Codex exec argv as a flag (before any
+/// `--`, after which everything is the prompt).
+pub fn argv_has_no_daemon(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|a| a.as_str() != "--")
+        .any(|a| a == NO_DAEMON_FLAG)
+}
+
+/// The session id of the passport in a spawn env: `K2_HOOK_TOKEN` is
+/// `<session id>.<secret>`. `None` when there is no passport or it has
+/// another shape (an owner token has no `.`).
+pub fn passport_session(env: &HashMap<String, String>) -> Option<&str> {
+    let (sid, secret) = env.get(PASSPORT_ENV)?.split_once('.')?;
+    let sid_ok = !sid.is_empty() && sid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    let secret_ok = !secret.is_empty() && secret.bytes().all(|b| b.is_ascii_alphanumeric());
+    (sid_ok && secret_ok).then_some(sid)
+}
+
+/// The marker value for a launch: the passport's session id when `program`
+/// is Codex and the tab is known to run its own app-server, else empty.
+///
+/// Known isolated means either the exec argv carries `--no-daemon` (K2 put
+/// it there, or the launch already had it), or `isolated_cell` (a microVM
+/// cell: its Codex runs inside its own guest, so no other tab can share
+/// its server). Never set for `K2_CODEX_NO_DAEMON=0`, a binary too old or
+/// that could not be probed, a non-TUI Codex command, or no passport.
+pub fn tab_marker(
+    program: &str,
+    exec_args: &[String],
+    env: &HashMap<String, String>,
+    isolated_cell: bool,
+) -> String {
+    if !is_codex_program(program) || !(isolated_cell || argv_has_no_daemon(exec_args)) {
+        return String::new();
+    }
+    passport_session(env).map(str::to_string).unwrap_or_default()
+}
+
+/// Write the marker into a spawn env. A non-empty value always lands; an
+/// empty one is written only when the key is already in `env` or in the
+/// spawner's own environment (`inherited`), so a marker the caller's env
+/// or the daemon's env carried is blanked, never passed on, and a plain
+/// tab gets no empty variable.
+pub fn set_tab_marker(env: &mut HashMap<String, String>, value: String, inherited: bool) {
+    if !value.is_empty() || inherited || env.contains_key(ISOLATED_ENV) {
+        env.insert(ISOLATED_ENV.to_string(), value);
+    }
+}
+
+/// True when the spawner's own process environment holds the marker.
+pub fn marker_in_process_env() -> bool {
+    std::env::var_os(ISOLATED_ENV).is_some()
 }
 
 /// Identity of an installed binary for the probe cache. A reinstall in
@@ -560,6 +635,107 @@ mod tests {
         new_codex(&dir);
         assert!(binary_supports_no_daemon("codex", &path).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn passport_env(token: &str) -> HashMap<String, String> {
+        let mut env = HashMap::new();
+        env.insert("K2_HOOK_TOKEN".to_string(), token.to_string());
+        env
+    }
+
+    #[test]
+    fn no_daemon_flag_counts_only_before_the_prompt() {
+        assert!(argv_has_no_daemon(&v(&["--no-daemon", "--yolo"])));
+        assert!(argv_has_no_daemon(&v(&["resume", "--no-daemon", "x"])));
+        assert!(!argv_has_no_daemon(&v(&["--yolo"])));
+        assert!(!argv_has_no_daemon(&v(&["--", "--no-daemon"])));
+        assert!(!argv_has_no_daemon(&v(&[])));
+    }
+
+    #[test]
+    fn passport_session_is_the_token_selector() {
+        assert_eq!(passport_session(&passport_env("sess-a1.Secret9")), Some("sess-a1"));
+        // An owner token has no dot; odd shapes are no passport.
+        assert_eq!(passport_session(&passport_env("ownertoken")), None);
+        assert_eq!(passport_session(&passport_env(".secret")), None);
+        assert_eq!(passport_session(&passport_env("sid.")), None);
+        assert_eq!(passport_session(&passport_env("s d.secret")), None);
+        assert_eq!(passport_session(&passport_env("sid.sec.ret")), None);
+        assert_eq!(passport_session(&HashMap::new()), None);
+    }
+
+    #[test]
+    fn marker_is_set_only_when_no_daemon_is_in_the_exec_argv() {
+        let env = passport_env("sess-a.secret");
+        // Added by apply, or already present: the tab's passport session.
+        assert_eq!(tab_marker("codex", &v(&["--no-daemon", "--yolo"]), &env, false), "sess-a");
+        assert_eq!(tab_marker("/usr/local/bin/codex", &v(&["resume", "--no-daemon", "x"]), &env, false), "sess-a");
+        // Off, too old, unprobed, or not the TUI: argv has no flag, no marker.
+        assert_eq!(tab_marker("codex", &v(&["--yolo"]), &env, false), "");
+        assert_eq!(tab_marker("codex", &v(&["exec", "hi"]), &env, false), "");
+        assert_eq!(tab_marker("codex", &v(&["--", "--no-daemon"]), &env, false), "");
+        // Never for another program.
+        assert_eq!(tab_marker("claude", &v(&["--no-daemon"]), &env, false), "");
+        assert_eq!(tab_marker("bash", &v(&[]), &env, true), "");
+    }
+
+    #[test]
+    fn marker_follows_apply_outcomes() {
+        let env = passport_env("sess-b.secret");
+        let mut a = v(&["--yolo"]);
+        assert_eq!(apply("codex", &mut a, "", Policy::Force), Outcome::Added(0));
+        assert_eq!(tab_marker("codex", &a, &env, false), "sess-b");
+        let mut a = v(&["--yolo"]);
+        assert_eq!(apply("codex", &mut a, "", Policy::Off), Outcome::Disabled);
+        assert_eq!(tab_marker("codex", &a, &env, false), "");
+        let dir = scratch("marker-missing");
+        let mut a = v(&["--yolo"]);
+        let out = apply("codex", &mut a, &dir.to_string_lossy(), Policy::Probe);
+        assert!(matches!(out, Outcome::Unsupported(_)), "got {out:?}");
+        assert_eq!(tab_marker("codex", &a, &env, false), "");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn marker_is_bound_to_the_passport_in_the_same_env() {
+        let args = v(&["--no-daemon"]);
+        assert_eq!(tab_marker("codex", &args, &passport_env("tab-one.s1"), false), "tab-one");
+        assert_eq!(tab_marker("codex", &args, &passport_env("tab-two.s2"), false), "tab-two");
+        // No passport (scoped passports off) or an owner token: no marker.
+        assert_eq!(tab_marker("codex", &args, &HashMap::new(), false), "");
+        assert_eq!(tab_marker("codex", &args, &passport_env("ownertoken"), false), "");
+    }
+
+    #[test]
+    fn microvm_cell_is_marked_without_the_flag() {
+        let env = passport_env("cell-9.secret");
+        // apply() is skipped for a cell, so its argv has no flag.
+        assert_eq!(tab_marker("codex", &v(&["--yolo"]), &env, true), "cell-9");
+        assert_eq!(tab_marker("codex", &v(&["--yolo"]), &HashMap::new(), true), "");
+    }
+
+    #[test]
+    fn a_marker_the_spawner_did_not_set_is_overwritten() {
+        // The caller's env (or a cell's user env) claims another tab's marker.
+        let mut env = passport_env("cell-9.secret");
+        env.insert(ISOLATED_ENV.to_string(), "someone-else".to_string());
+        let value = tab_marker("codex", &v(&["--yolo"]), &env, true);
+        set_tab_marker(&mut env, value, false);
+        assert_eq!(env.get(ISOLATED_ENV).map(String::as_str), Some("cell-9"));
+        // Not isolated: the claimed marker is blanked, not passed on.
+        let mut env = passport_env("tab-a.secret");
+        env.insert(ISOLATED_ENV.to_string(), "tab-a".to_string());
+        let value = tab_marker("codex", &v(&["--yolo"]), &env, false);
+        set_tab_marker(&mut env, value, false);
+        assert_eq!(env.get(ISOLATED_ENV).map(String::as_str), Some(""));
+        // Inherited from the spawner's own env only: blanked too.
+        let mut env = passport_env("tab-a.secret");
+        set_tab_marker(&mut env, String::new(), true);
+        assert_eq!(env.get(ISOLATED_ENV).map(String::as_str), Some(""));
+        // A plain tab with nothing to blank gets no variable.
+        let mut env = passport_env("tab-a.secret");
+        set_tab_marker(&mut env, String::new(), false);
+        assert!(!env.contains_key(ISOLATED_ENV));
     }
 
     #[test]

@@ -1670,3 +1670,77 @@ fn kill_is_idempotent() {
     // Drop fires kill() a third time — no panic, no double free.
     drop(s);
 }
+
+/// A Codex stand-in whose `--help` lists `--no-daemon` (Codex 0.155+) and
+/// whose launch writes the marker it saw and its argv to `seen.codex`
+/// beside it. Every agent CLI name gets the same body; only `codex` runs.
+#[cfg(unix)]
+const MARKER_SHIM: &str = r#"if [ "$1" = "--help" ]; then
+  printf '      --no-daemon\n          Run without the shared background server\n'
+  exit 0
+fi
+out="$(dirname "$0")/seen.$(basename "$0")"
+printf '%s\n%s\n' "${K2_CODEX_TAB_ISOLATED-<unset>}" "$*" > "$out.tmp" && mv "$out.tmp" "$out"
+exec sleep 30"#;
+
+/// Launch the stand-in `codex --yolo` through the v2 spawn with `env` and
+/// return (the marker it saw, its argv).
+#[cfg(unix)]
+fn codex_tab_marker_seen(env: HashMap<String, String>) -> (String, String) {
+    let shim = crate::test_env::AgentShim::with_body(MARKER_SHIM);
+    let cfg = DaemonPtyConfig {
+        session_id: SessionId::new(),
+        cwd: Some(PathBuf::from("/tmp")),
+        program: Some("codex".to_string()),
+        args: vec!["--yolo".to_string()],
+        env,
+        ..Default::default()
+    };
+    let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn the codex stand-in");
+    let seen = shim.dir().join("seen.codex");
+    let started = std::time::Instant::now();
+    while !seen.exists() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the codex stand-in never wrote {}",
+            seen.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    s.kill();
+    let text = std::fs::read_to_string(&seen).expect("read seen.codex");
+    let mut lines = text.lines();
+    let marker = lines.next().expect("marker line").to_string();
+    let argv = lines.next().expect("argv line").to_string();
+    (marker, argv)
+}
+
+/// The passport env a v2 spawn hands a tab, plus a marker the caller's env
+/// claims for another tab (the spawner must overwrite it).
+#[cfg(unix)]
+fn tab_env_with_claimed_marker() -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    env.insert("K2_HOOK_TOKEN".to_string(), "tab-a.secretA1".to_string());
+    env.insert(crate::terminal::codex_no_daemon::ISOLATED_ENV.to_string(), "tab-b".to_string());
+    env
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_tab_is_marked_with_its_own_passport_session() {
+    let _policy = crate::test_env::EnvVar::remove(crate::terminal::codex_no_daemon::OVERRIDE_ENV);
+    // The daemon's own env carries a marker too: never passed on.
+    let _own = crate::test_env::EnvVar::set(crate::terminal::codex_no_daemon::ISOLATED_ENV, "daemon-own");
+    let (marker, argv) = codex_tab_marker_seen(tab_env_with_claimed_marker());
+    assert_eq!(argv, "--no-daemon --yolo");
+    assert_eq!(marker, "tab-a", "the marker is the tab's passport session, set by the spawner");
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_tab_without_no_daemon_gets_a_blank_marker() {
+    let _policy = crate::test_env::EnvVar::set(crate::terminal::codex_no_daemon::OVERRIDE_ENV, "0");
+    let (marker, argv) = codex_tab_marker_seen(tab_env_with_claimed_marker());
+    assert_eq!(argv, "--yolo");
+    assert_eq!(marker, "", "K2_CODEX_NO_DAEMON=0: the claimed marker is blanked");
+}

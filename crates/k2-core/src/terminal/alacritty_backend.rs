@@ -353,6 +353,10 @@ impl TerminalManager {
             ..Default::default()
         };
 
+        // The program and exec argv a launch runs, for the isolated-tab
+        // marker set below (empty for a plain shell).
+        let mut marker_exec: (String, Vec<String>) = (String::new(), Vec::new());
+
         // Set shell and optional command
         if let Some(ref requested_command) = command {
             // The same spawn guard as the v2 path (daemon_pty.rs): under a
@@ -412,6 +416,7 @@ impl TerminalManager {
                     args = Some(a);
                 }
             }
+            marker_exec = (user_command.clone(), args.clone().unwrap_or_default());
             if let Some(ref user_args) = args {
                 for arg in user_args {
                     shell_cmd.push(' ');
@@ -469,6 +474,15 @@ impl TerminalManager {
                     }
                 }
             }
+        }
+
+        // The isolated-tab marker, as on the v2 path (daemon_pty.rs): set
+        // here by the spawner only, after the passport is in the env, and
+        // never a value the daemon's own env carried.
+        {
+            use crate::terminal::codex_no_daemon as cnd;
+            let value = cnd::tab_marker(&marker_exec.0, &marker_exec.1, &pty_options.env, false);
+            cnd::set_tab_marker(&mut pty_options.env, value, cnd::marker_in_process_env());
         }
 
         // K2 CLI: add cli/ directory to PATH so agents can call `k2so` commands

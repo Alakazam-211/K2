@@ -1081,6 +1081,38 @@ mod tests {
         );
     }
 
+    /// A microVM cell's isolated-tab marker (set by the spawner in
+    /// `DaemonPtySession::spawn`, bound to the cell passport) reaches the
+    /// guest env verbatim, beside the passport it names.
+    #[test]
+    fn build_worker_invocation_carries_the_codex_tab_marker() {
+        let mut env = HashMap::new();
+        env.insert("K2_HOOK_TOKEN".to_string(), "cell-9.secret".to_string());
+        let value = crate::terminal::codex_no_daemon::tab_marker("codex", &[], &env, true);
+        crate::terminal::codex_no_daemon::set_tab_marker(&mut env, value, false);
+        let req = SpawnRequest {
+            shell: None,
+            cwd: None,
+            env,
+            window_size: win(80, 24),
+            drain_on_exit: false,
+            cell_socket: None,
+            workspace_root: None,
+            tool_roots: vec![],
+            session_id: None,
+            cell_uid: None,
+            overlay: None,
+        };
+        let inv = build_worker_invocation(&req, &VmCaps::default());
+        assert_eq!(
+            inv.guest_env
+                .iter()
+                .find(|(k, _)| k == crate::terminal::codex_no_daemon::ISOLATED_ENV)
+                .map(|(_, v)| v.as_str()),
+            Some("cell-9"),
+        );
+    }
+
     /// Sandbox B2: the guest `K2_HOOK_SOCK` is rewritten to the in-guest
     /// forwarder path, `K2_HOOK_TOKEN` is preserved verbatim, and the source
     /// `req.env` (the host-side staged env) is left unaffected.

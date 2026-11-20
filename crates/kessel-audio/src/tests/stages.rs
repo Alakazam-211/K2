@@ -1,6 +1,6 @@
 //! Capture stages for the tests: a pass-through (a pure 10 ms delay), a
-//! scripted pass-through that can take time (on a manual clock), panic or
-//! return NaN on cue,
+//! scripted pass-through that can take time (on a manual clock: working, or
+//! preempted), panic or return NaN on cue,
 //! and an RNNoise-like denoiser of about RNNoise's cost.
 //!
 //! No real RNNoise model is used (it would be a new dependency). The
@@ -21,7 +21,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use crate::frame::BLOCK_SAMPLES;
-use crate::stage::{CaptureStage, StageClock};
+use crate::stage::{CaptureStage, ManualTime, TimeSource};
 use crate::testkit::Rng;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
@@ -61,12 +61,15 @@ pub(crate) struct Script {
     pub(crate) calls: AtomicU64,
     /// `reset` calls so far.
     pub(crate) resets: AtomicU64,
-    /// The stage's clock (nanoseconds; see [`Script::clock`]). The stage
-    /// "takes" time by advancing it, never by sleeping, so the budget tests
-    /// don't depend on the machine's load.
-    pub(crate) now_ns: Arc<AtomicU64>,
-    /// Every call takes this long (µs) while non-zero.
+    /// The stage's clock (see [`Script::clock`]). The stage "takes" time by
+    /// advancing it, never by sleeping, so the budget tests don't depend on
+    /// the machine's load.
+    pub(crate) time: Arc<ManualTime>,
+    /// Every call works this long (µs: CPU and wall time) while non-zero.
     pub(crate) cost_us: AtomicU64,
+    /// Every call is also preempted this long (µs: wall time only) while
+    /// non-zero.
+    pub(crate) preempt_us: AtomicU64,
     /// Calls whose number (from 1) is a multiple of this (0: never) take
     /// `slow_us` instead.
     pub(crate) slow_every: AtomicU64,
@@ -81,15 +84,15 @@ pub(crate) struct Script {
 
 impl Script {
     /// The clock to time this script's stage with.
-    pub(crate) fn clock(&self) -> StageClock {
-        StageClock::Manual(self.now_ns.clone())
+    pub(crate) fn clock(&self) -> TimeSource {
+        TimeSource::Manual(self.time.clone())
     }
 }
 
 /// A clock that never moves: every call takes no time, so a stage is never
 /// over budget, whatever the machine's load.
-pub(crate) fn still_clock() -> StageClock {
-    StageClock::Manual(Arc::new(AtomicU64::new(0)))
+pub(crate) fn still_clock() -> TimeSource {
+    TimeSource::Manual(Arc::new(ManualTime::default()))
 }
 
 /// A [`PassThrough`] that follows a [`Script`].
@@ -124,7 +127,8 @@ impl CaptureStage for Scripted {
         } else {
             s.cost_us.load(Ordering::Relaxed)
         };
-        s.now_ns.fetch_add(took_us * 1_000, Ordering::Relaxed);
+        s.time.work_us(took_us);
+        s.time.preempt_us(s.preempt_us.load(Ordering::Relaxed));
         self.inner.process(block);
         if s.nan_on.load(Ordering::Relaxed) == n {
             block[7] = f32::NAN;

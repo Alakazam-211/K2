@@ -15,9 +15,11 @@
 //!   port of WebRTC's audio processing), with the playback mix as the echo
 //!   reference;
 //! - **a capture stage** of your own (a noise-removal model, say) between
-//!   echo cancellation and gain control, held to a time budget with a
-//!   bypass that never shifts the timing, and a grace window for the host's
-//!   transient events ([`CaptureStage`], [`AudioEngine::transient_event`]);
+//!   echo cancellation and gain control, held to a time budget (on the
+//!   processing thread's CPU time where the platform has it, [`StageClock`])
+//!   with a bypass that never shifts the timing, and a grace window for the
+//!   host's transient events ([`CaptureStage`],
+//!   [`AudioEngine::transient_event`]);
 //! - **Opus** encode and decode (ropus), 48 kHz mono, 20 ms frames, with
 //!   the caller's bitrate, FEC, DTX and complexity;
 //! - **a jitter buffer per participant** with loss concealment and FEC
@@ -60,22 +62,27 @@
 //! the engine is bounded and lock-free, and the audio side never blocks on
 //! one: a full queue drops (and counts) instead.
 
-// macOS's microphone permission calls (`mic::macos`) and the phone
+// The thread CPU clock (`stage::thread_cpu`, on macOS, iOS, Linux and
+// Android), macOS's microphone permission calls (`mic::macos`) and the phone
 // backends' OS calls (`phone::ios`, `phone::android`) are the only `unsafe`
 // outside tests.
 #![cfg_attr(
     not(any(
         test,
-        all(feature = "cpal", target_os = "macos"),
-        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
     )),
     forbid(unsafe_code)
 )]
 #![cfg_attr(
     any(
         test,
-        all(feature = "cpal", target_os = "macos"),
-        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
     ),
     deny(unsafe_code)
 )]
@@ -135,7 +142,8 @@ pub use jitter::JitterConfig;
 #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
 pub use phone::{OsEffects, OsVoiceConfig, PhoneMode, PhoneModeChange, RawCapture};
 pub use stage::{
-    CaptureStage, CaptureStageStats, StageBypassReason, TransientEvent, DEFAULT_STAGE_GRACE,
-    MAX_STAGE_GRACE, MAX_STAGE_LATENCY_SAMPLES,
+    CaptureStage, CaptureStageStats, StageBypassReason, StageClock, TransientEvent,
+    DEFAULT_STAGE_GRACE, DEFAULT_STAGE_STARVATION_CUTOFF, MAX_STAGE_GRACE,
+    MAX_STAGE_LATENCY_SAMPLES,
 };
 pub use stats::{CaptureStats, ParticipantStats, Stats};

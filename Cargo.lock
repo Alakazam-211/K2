@@ -5314,13 +5314,14 @@ dependencies = [
 
 [[package]]
 name = "kessel-audio"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "block2",
  "bytes",
  "coreaudio-rs",
  "cpal",
  "crossbeam-queue",
+ "libc",
  "ndk",
  "objc2",
  "objc2-audio-toolbox",

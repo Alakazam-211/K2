@@ -166,7 +166,7 @@ impl Shared {
             levels_interval_ms: cfg.levels_interval_ms,
             speaking_threshold_dbov: cfg.speaking_threshold_dbov,
             max_participants: cfg.max_participants,
-            stage_grace: cfg.processing.stage_grace,
+            stage_timing: cfg.processing.stage_timing(),
         };
         let mut snapshot = Snapshot::default();
         snapshot.levels.participants.reserve(cfg.max_participants);

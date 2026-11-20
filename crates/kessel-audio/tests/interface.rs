@@ -5,8 +5,8 @@ use kessel_audio::bytes::Bytes;
 use kessel_audio::{
     AudioEngine, CaptureSource, CaptureStage, CaptureStageStats, DeviceChoice, DeviceSelection,
     EncodedFrame, EncoderCfg, EngineConfig, ErrorCode, Event, FrameRx, NullDevice,
-    ProcessingConfig, RecvFrame, StageBypassReason, TransientEvent, DEFAULT_STAGE_GRACE,
-    FRAME_SAMPLES, MAX_STAGE_GRACE,
+    ProcessingConfig, RecvFrame, StageBypassReason, StageClock, TransientEvent,
+    DEFAULT_STAGE_GRACE, DEFAULT_STAGE_STARVATION_CUTOFF, FRAME_SAMPLES, MAX_STAGE_GRACE,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -464,13 +464,23 @@ impl CaptureStage for TestStage {
 
 /// A real-time engine with a [`TestStage`], DTX off (a frame every 20 ms),
 /// and no grace window: the budget applies from the first call (the grace
-/// window has its own tests).
+/// window has its own tests). On the wall clock: the stage sleeps, which
+/// costs no CPU time.
 fn staged_engine() -> (AudioEngine, Arc<Ctl>) {
     staged_engine_with(Duration::ZERO)
 }
 
 /// [`staged_engine`] with a grace window of `grace`.
 fn staged_engine_with(grace: Duration) -> (AudioEngine, Arc<Ctl>) {
+    staged_engine_on(
+        grace,
+        ProcessingConfig::off().with_stage_clock(StageClock::Wall),
+    )
+}
+
+/// [`staged_engine`] with a grace window of `grace` and the stage clock and
+/// starvation cutoff of `timing`.
+fn staged_engine_on(grace: Duration, timing: ProcessingConfig) -> (AudioEngine, Arc<Ctl>) {
     let ctl = Arc::new(Ctl::default());
     let stage = TestStage {
         prev: [0.0; 480],
@@ -483,6 +493,8 @@ fn staged_engine_with(grace: Duration) -> (AudioEngine, Arc<Ctl>) {
         })
         .with_capture_stage(Box::new(stage));
     cfg.processing.stage_grace = grace;
+    cfg.processing.stage_clock = timing.stage_clock;
+    cfg.processing.stage_starvation_cutoff = timing.stage_starvation_cutoff;
     let engine = AudioEngine::start(cfg).expect("start");
     (engine, ctl)
 }
@@ -697,6 +709,64 @@ fn a_transient_event_holds_off_the_budget_for_the_grace_window() {
 }
 
 /// The default grace window is 1.5 s, and more than 10 s is refused.
+/// On the thread's CPU time (the default here), a stage the OS keeps from
+/// running (here: it sleeps 9 ms a call) isn't bypassed, and every such
+/// call is reported.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+))]
+#[test]
+fn on_thread_cpu_time_a_preempted_stage_is_not_bypassed() {
+    assert_eq!(StageClock::default(), StageClock::ThreadCpu);
+    // No starvation cutoff, so a loaded machine's long sleeps can't strike:
+    // only the CPU time is on trial.
+    let (engine, ctl) = staged_engine_on(
+        Duration::ZERO,
+        ProcessingConfig::off().with_stage_starvation_cutoff(Duration::MAX),
+    );
+    let rx = engine.capture_frames();
+    let _ = collect(&rx, 25, Duration::from_secs(5));
+    let before = engine.stats().capture_stage.expect("stage stats");
+    assert_eq!(before.clock, StageClock::ThreadCpu, "{before:?}");
+    ctl.sleep_us.store(9_000, Ordering::Relaxed);
+    let s = stage_stats_until(&engine, Duration::from_secs(5), "preempted calls", |s| {
+        s.preempted_over_budget >= before.preempted_over_budget + 20
+    });
+    assert!(s.active && s.strikes == before.strikes, "{s:?}");
+    assert!(s.max_wall_us >= 9_000, "{s:?}");
+    assert!(s.max_block_us < 6_000, "{s:?}");
+    assert_eq!(s.starved, 0, "{s:?}");
+}
+
+/// The stage clock defaults to the thread's CPU time where the platform has
+/// it; the starvation cutoff to 20 ms, and under 9 ms is refused.
+#[test]
+fn the_stage_clock_and_starvation_cutoff_defaults_and_limits() {
+    assert_eq!(DEFAULT_STAGE_STARVATION_CUTOFF, Duration::from_millis(20));
+    let p = ProcessingConfig::default();
+    assert_eq!(p.stage_clock, StageClock::default());
+    assert_eq!(p.stage_starvation_cutoff, DEFAULT_STAGE_STARVATION_CUTOFF);
+    assert_eq!(
+        StageClock::default() == StageClock::ThreadCpu,
+        StageClock::ThreadCpu.is_supported()
+    );
+    assert!(StageClock::Wall.is_supported());
+    let at_least = config(fast_null(None)).with_processing(
+        ProcessingConfig::off().with_stage_starvation_cutoff(Duration::from_millis(9)),
+    );
+    AudioEngine::start(at_least).expect("9 ms is accepted");
+    let under = config(fast_null(None)).with_processing(
+        ProcessingConfig::off().with_stage_starvation_cutoff(Duration::from_micros(8_999)),
+    );
+    match AudioEngine::start(under) {
+        Ok(_) => panic!("a starvation cutoff under 9 ms was accepted"),
+        Err(e) => assert_eq!(e.code, ErrorCode::InvalidConfig),
+    }
+}
+
 #[test]
 fn the_grace_window_defaults_to_1_5_s_and_is_at_most_10_s() {
     assert_eq!(DEFAULT_STAGE_GRACE, Duration::from_millis(1_500));

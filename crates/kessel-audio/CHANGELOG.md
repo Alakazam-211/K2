@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.2.3
+
+### Changed
+
+- **Behaviour change: the capture stage's time budget is measured on the
+  processing thread's CPU time by default**, not the wall clock. On a busy
+  device (a phone with the camera and a video encoder running) the OS
+  preempts the processing thread mid-call, and 0.2.2 counted that wait
+  against the stage: a fast stage could be bypassed again and again for
+  the OS's work. Now only the time the stage's own thread runs counts
+  (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)` on macOS, iOS, Linux and
+  Android). Real starvation is still caught: a call that takes 20 ms or more
+  on the wall clock counts as slow toward the 2-in-a-row rule whatever its
+  CPU time. Windows keeps the wall clock (`GetThreadTimes` counts in 15.6 ms
+  ticks, too coarse for the 6 ms budget). **To get 0.2.2's timing back:**
+  `ProcessingConfig::with_stage_clock(StageClock::Wall)`. Otherwise
+  additions only: code written against 0.2.2 builds unchanged.
+
+### Added
+
+- `StageClock` (`#[non_exhaustive]`): `ThreadCpu` and `Wall`.
+  `StageClock::default()` is `ThreadCpu` where the platform supports it,
+  else `Wall`; `StageClock::is_supported(self) -> bool`.
+- `ProcessingConfig::stage_clock` / `with_stage_clock(StageClock)`: the
+  clock that times the stage. Asking for `ThreadCpu` where it isn't
+  supported times by the wall clock.
+- `ProcessingConfig::stage_starvation_cutoff` /
+  `with_stage_starvation_cutoff(Duration)`: with `ThreadCpu`, a call this
+  long or longer on the wall clock counts as slow toward the 2-in-a-row
+  rule (not the percentile rule) whatever its CPU time. Default
+  `DEFAULT_STAGE_STARVATION_CUTOFF` (20 ms: two blocks, more than twice the
+  9 ms hard budget); at least 9 ms (less is refused with
+  `invalid_config`); `Duration::MAX` leaves CPU time alone to decide. The
+  grace window excuses starved calls like any other slow call.
+- New `CaptureStageStats` fields, so nothing is hidden: `clock` (the clock
+  in use), `max_wall_us` (the longest call on the wall clock),
+  `preempted_over_budget` (calls over 6 ms on the wall clock that weren't in
+  CPU time) and `starved` (calls past the cutoff). With `ThreadCpu`,
+  `max_block_us` and `p99_block_us` are CPU time.
+- A dependency on `libc` (MIT OR Apache-2.0) on macOS, iOS, Linux and
+  Android, for the thread CPU clock. Declarations only: no C is built.
+
 ## 0.2.2
 
 ### Changed

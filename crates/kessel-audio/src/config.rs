@@ -343,6 +343,9 @@ impl EngineConfig {
         if self.processing.stage_grace > crate::stage::MAX_STAGE_GRACE {
             return bad("processing.stage_grace must be at most 10 s");
         }
+        if self.processing.stage_starvation_cutoff < crate::stage::HARD_BUDGET {
+            return bad("processing.stage_starvation_cutoff must be at least 9 ms");
+        }
         #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
         if let Backend::OsVoiceProcessing(c) = &self.backend {
             c.validate(self.phone_mode)?;

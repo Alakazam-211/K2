@@ -29,7 +29,7 @@ macro_rules! line {
 }
 
 /// Text on stderr as it is.
-fn stderr_text(text: &str) {
+pub fn stderr_text(text: &str) {
     let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
 }
 
@@ -56,7 +56,7 @@ pub fn held(body: &[u8]) -> bool {
 /// it printed and, if it raised, the traceback. Python's stdout is a
 /// file then, written when Python exits, after the traceback; on a
 /// terminal each line goes out as it is printed.
-fn to_stderr(cx: Cx, r: Result<(), Raise>) -> Result<(), Exit> {
+pub fn to_stderr(cx: Cx, r: Result<(), Raise>) -> Result<(), Exit> {
     match r {
         Ok(()) => {
             stderr_text(&cx.out);
@@ -78,7 +78,7 @@ fn to_stderr(cx: Cx, r: Result<(), Raise>) -> Result<(), Exit> {
 /// `x="$(printf '%s' "$_CP_BODY" | python3 -c '…print(<one value>)')"`
 /// under `set -e`: the value as `print` writes it, trailing newlines
 /// gone; a raise is the traceback and exit 1.
-fn captured(r: Result<Value, Raise>) -> Result<String, Exit> {
+pub fn captured(r: Result<Value, Raise>) -> Result<String, Exit> {
     match r {
         Ok(v) => Ok(p::str_of(&v).trim_end_matches('\n').to_string()),
         Err(e) => {
@@ -88,7 +88,7 @@ fn captured(r: Result<Value, Raise>) -> Result<String, Exit> {
     }
 }
 
-fn confirm<'a>(cp: &'a mut Cp<'_>, sock: &'a Path) -> Confirm<'a> {
+pub fn confirm<'a>(cp: &'a mut Cp<'_>, sock: &'a Path) -> Confirm<'a> {
     let passport = cp.client.passport().is_some();
     Confirm {
         client: &mut *cp.client,

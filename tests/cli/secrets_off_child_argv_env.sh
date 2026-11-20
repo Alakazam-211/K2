@@ -350,7 +350,7 @@ fresh
 printf '\n' | "$K2_CLI" sources secret "a-source" "$SECRET_SENTINEL" >/dev/null 2>&1 || true
 assert_tcp_got "sources secret" /cli/sources/secret "confirm token" "$TOKEN_SENTINEL"
 assert_tcp_got "sources secret" /cli/sources/secret "secret's name" "$SECRET_SENTINEL"
-assert_children_seen "sources secret" curl
+assert_children_native "sources secret" curl
 assert_off_children "sources secret" "confirm token" "$TOKEN_SENTINEL"
 assert_off_children "sources secret" "secret's name" "$SECRET_SENTINEL"
 
@@ -409,8 +409,8 @@ pw_case_native() {
 }
 pw_case_native "mail link add" /cli/mail/external/add mail link add a@example.test --host imap.example.test --workspace ws1 --pass-stdin --json
 pw_case_native "mail oauth-config set" /cli/mail/oauth-config/set mail oauth-config set --provider gmail --client-id cid --secret-stdin --json
-pw_case "hostmail config relay" /cli/mail/config/set hostmail config --relay-pass-stdin --json
-pw_case "hostmail import" /cli/mail/import hostmail import --address a@example.test --imapsync from=imap.example.test --user u --pass-stdin --json
+pw_case_native "hostmail config relay" /cli/mail/config/set hostmail config --relay-pass-stdin --json
+pw_case_native "hostmail import" /cli/mail/import hostmail import --address a@example.test --imapsync from=imap.example.test --user u --pass-stdin --json
 
 # 11-14. Login passwords: typed on stdin, they reach the request body and
 #        no child's argv or environment.

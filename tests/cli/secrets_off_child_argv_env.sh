@@ -277,17 +277,18 @@ assert_children_seen() {
     fi
 }
 
-# assert_children_native LABEL: for a command the k5 binary answers
-# itself, the binary under test (K5_CLI_UNDER_TEST) starts no python3 at
-# all; the bash CLI's python3 children are logged as above.
+# assert_children_native LABEL [curl]: for a command the k5 binary
+# answers itself, the binary under test (K5_CLI_UNDER_TEST) starts no
+# python3 and no curl at all; the bash CLI's python3 children (and curl's,
+# with curl) are logged as above.
 assert_children_native() {
-    local label="$1"
+    local label="$1" need_curl="${2:-}"
     if [ -z "${K5_CLI_UNDER_TEST:-}" ]; then
-        assert_children_seen "$label"
-    elif grep -q '^python3 ' "$ARGLOG"; then
-        bad "$label: the binary started a python3 child"
+        assert_children_seen "$label" "$need_curl"
+    elif grep -Eq '^(python3|curl) ' "$ARGLOG"; then
+        bad "$label: the binary started a python3 or curl child"
     else
-        ok "$label: the binary started no python3 child"
+        ok "$label: the binary started no python3 or curl child"
     fi
 }
 
@@ -479,7 +480,7 @@ FED_TOKEN="k2pair1:$("$REAL_PY" -c 'import base64,json,sys; print(base64.urlsafe
 fresh
 printf '%s\n' "$FED_TOKEN" | k2run fed pair-join --token-stdin >/dev/null 2>&1 || true
 assert_tcp_got "fed pair-join --token-stdin" /cli/federation/pair/v2/respond "pairing token" "$PASS_SENTINEL"
-assert_children_seen "fed pair-join --token-stdin" curl
+assert_children_native "fed pair-join --token-stdin" curl
 assert_off_children "fed pair-join --token-stdin" "pairing token" "$FED_TOKEN"
 
 # 22. k2 read <ws>@<host> --token-stdin: the remote server's token reaches

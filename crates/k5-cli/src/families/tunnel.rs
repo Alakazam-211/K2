@@ -565,7 +565,7 @@ fn released(client: &mut Client, closing: &mut Closing, extra: &[&str]) -> Exit 
 /// `cli_post_json <endpoint> <body>` on the left of a pipe, over TCP:
 /// what the reader reads and the call's code. No answer: its line, then
 /// death by SIGPIPE ([`super::end_in_pipe`]).
-fn post_json_piped(
+pub fn post_json_piped(
     client: &mut Client,
     closing: &mut Closing,
     endpoint: &str,
@@ -591,19 +591,7 @@ fn post_json_piped(
 /// command in a UTF-8 locale (exit 1), and are kept as stand-ins
 /// (`surrogateescape`) in C or POSIX. `None`: no token.
 fn read_token(decode: Decode) -> Result<Option<Text>, Shown> {
-    let mut bytes = Vec::new();
-    let mut stdin = std::io::stdin().lock();
-    let mut one = [0u8; 1];
-    loop {
-        match stdin.read(&mut one) {
-            Ok(0) => break,
-            Ok(_) if one[0] == b'\n' => break,
-            Ok(_) if one[0] == 0 => {}
-            Ok(_) => bytes.push(one[0]),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => break,
-        }
-    }
+    let bytes = first_line();
     if bytes.is_empty() {
         return Ok(None);
     }
@@ -623,6 +611,26 @@ fn read_token(decode: Decode) -> Result<Option<Text>, Shown> {
         }
         Err(e) => Ok(Some(escaped(e.as_bytes()))),
     }
+}
+
+/// `IFS= read -r` on stdin (not a terminal): the first line, without its
+/// newline, NULs dropped; read a byte at a time, so nothing after it is
+/// taken.
+pub fn first_line() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut stdin = std::io::stdin().lock();
+    let mut one = [0u8; 1];
+    loop {
+        match stdin.read(&mut one) {
+            Ok(0) => break,
+            Ok(_) if one[0] == b'\n' => break,
+            Ok(_) if one[0] == 0 => {}
+            Ok(_) => bytes.push(one[0]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    bytes
 }
 
 /// Bytes read with `surrogateescape`: each byte that is not part of UTF-8

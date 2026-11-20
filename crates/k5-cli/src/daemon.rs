@@ -56,6 +56,9 @@ pub struct Settings {
     pub auth: Auth,
     /// The owner token was read from the K2 home's files.
     pub owner_from_disk: bool,
+    /// `HOOK_SOCK` is set (any of its names): a session, with a passport
+    /// or without one.
+    pub session: bool,
     /// `SECRETS_DIR`, where a refused passport may have been minted again.
     pub secrets_dir: Option<PathBuf>,
     /// The K2 home the files were read from.
@@ -158,6 +161,7 @@ pub fn settings_with(
             }
         }
     };
+    let session = env_names::first_nonempty_os_in(env_names::HOOK_SOCK, &lookup).is_some();
     let user_home = lookup("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
     let project = match text(env_names::PROJECT_PATH) {
         Some(p) => p,
@@ -175,6 +179,7 @@ pub fn settings_with(
         project,
         auth,
         owner_from_disk,
+        session,
         secrets_dir,
         home: home.to_path_buf(),
     }
@@ -414,6 +419,7 @@ impl Settings {
         );
         c.would_refuse = would_refuse;
         c.owner_from_disk = self.owner_from_disk;
+        c.session = self.session;
         c.port_file = Some(self.home.join("daemon.port"));
         c.healer = self
             .secrets_dir

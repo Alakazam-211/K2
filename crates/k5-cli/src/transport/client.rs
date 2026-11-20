@@ -408,6 +408,11 @@ pub enum Error {
     /// A call that needs a credential, on a client with none
     /// ([`Auth::None`]).
     NoCredential { endpoint: String },
+    /// A socket-first call (`cli_send`, `cli_send_json`, `_sidecar_send`)
+    /// in a session with no passport, whose TCP credential would be the
+    /// owner token from disk: nothing is sent ([`NO_OWNER_IN_SESSION`],
+    /// exit 1; `_k2_session_tcp_token`, `cli/src/cli-tools-policy.sh`).
+    NoOwnerInSession { endpoint: String },
     /// A POST went out on the cell socket and no usable answer came back
     /// (no answer in time, a connection closed or reset before the answer
     /// ended, or a 5xx with an empty body). The daemon may have run it,
@@ -420,6 +425,15 @@ pub enum Error {
     /// no-answer line. See [`local_failure`].
     Denied { endpoint: String, code: i32 },
 }
+
+/// `_K2_NO_OWNER_WRITE_LINE` (`cli/src/cli-tools-policy.sh`): a
+/// socket-first call in a session with no passport sends nothing, not
+/// even with the owner token from disk, and ends the command with 1.
+pub const NO_OWNER_IN_SESSION: &str = concat!(
+    "Error: in a session, ",
+    k2_client::product_name!(),
+    " doesn't act as the owner; this session has no passport, so nothing was sent."
+);
 
 /// `_CLI_LOCAL_TRANSPORT_DENIED` (`cli/src/cli-tools-policy.sh`): the code
 /// `_cli_curl` returns in place of curl's 7 when the OS refused the
@@ -442,6 +456,7 @@ impl fmt::Display for Error {
             Error::BadTarget { target, byte } => write!(f, "won't send {target:?}: byte 0x{byte:02x} can't be in a URL"),
             Error::NoCellSocket { endpoint } => write!(f, "no session passport and cell socket for {endpoint}"),
             Error::NoCredential { endpoint } => write!(f, "no owner token or session passport for {endpoint}"),
+            Error::NoOwnerInSession { .. } => f.write_str(NO_OWNER_IN_SESSION),
             Error::MaybeApplied { endpoint, waited } => write!(
                 f,
                 "Error: {PRODUCT_NAME}'s server didn't answer {endpoint} ({waited} s); the request may have been applied. Check before running it again."
@@ -471,6 +486,7 @@ impl Error {
             Error::Denied { code, .. } => *code,
             Error::NoCellSocket { .. }
             | Error::NoCredential { .. }
+            | Error::NoOwnerInSession { .. }
             | Error::MaybeApplied { .. } => 1,
         }
     }
@@ -551,6 +567,10 @@ pub struct Client {
     /// `X-K5-Owner-Source: disk` on every call made with it. Never sent
     /// with a passport or no credential.
     pub owner_from_disk: bool,
+    /// `HOOK_SOCK` is set: a session. With no passport, a socket-first
+    /// call refuses to send the owner token from disk
+    /// ([`Error::NoOwnerInSession`]).
+    pub session: bool,
     /// For `User-Agent: k5/<version>` and `X-K5-Cli-Version`, and the
     /// version a server's is compared with ([`skew`]).
     pub version: String,
@@ -587,6 +607,7 @@ impl Client {
             auth,
             would_refuse: false,
             owner_from_disk: false,
+            session: false,
             version: crate::embedded::version().to_string(),
             force_tcp: false,
             post_max_time: None,
@@ -708,6 +729,9 @@ impl Client {
     /// never sent again.
     pub fn send(&mut self, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
         let t0 = Instant::now();
+        if uds_eligible(endpoint) {
+            self.no_owner_in_session(endpoint)?;
+        }
         if self.cell_socket().is_some() && uds_eligible(endpoint) {
             match self.call_from(Channel::Uds, endpoint, call, t0) {
                 Ok(r) if contains(&r.body, NOT_SERVED) => {}
@@ -886,6 +910,7 @@ impl Client {
     fn send_json_as(&mut self, kind: Kind, path: &str, payload: &str) -> Result<Response, Error> {
         let post = kind == Kind::SendJsonPost;
         let t0 = Instant::now();
+        self.no_owner_in_session(path)?;
         if self.cell_socket().is_some() {
             // A POST goes on to TCP only after a failed connect (curl 7) or
             // "not served on cell socket", as `cli_send`'s.
@@ -902,6 +927,24 @@ impl Client {
         }
         self.run(kind, Channel::Tcp, path, &[], payload.as_bytes(), t0)
             .map_err(|f| f.error)
+    }
+
+    /// `_k2_sock_fallback_token`'s refusal: a session (`HOOK_SOCK` set)
+    /// with no passport, on this machine, whose TCP request would carry
+    /// the owner token from disk. With a passport there is no owner token
+    /// here at all ([`Auth`]), so the TCP request carries the passport, as
+    /// the shell's does since 0.46.17.
+    fn no_owner_in_session(&self, endpoint: &str) -> Result<(), Error> {
+        if self.session
+            && !self.force_tcp
+            && self.owner_from_disk
+            && matches!(self.auth, Auth::Owner(_))
+        {
+            return Err(Error::NoOwnerInSession {
+                endpoint: endpoint.to_string(),
+            });
+        }
+        Ok(())
     }
 
     /// The cell socket, when there is a passport, the socket is a socket
@@ -1602,6 +1645,7 @@ mod tests {
                 1,
             ),
             (Error::NoCredential { endpoint: ep() }, 1),
+            (Error::NoOwnerInSession { endpoint: ep() }, 1),
         ];
         for (e, want) in rows {
             assert_eq!(e.curl_code(), want, "{e:?}");
@@ -1814,6 +1858,52 @@ mod tests {
         assert!(r.body.is_none());
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
+    }
+
+    /// A session with no passport (`HOOK_SOCK` set) and the owner token
+    /// from disk: a socket-first call sends nothing and ends with 1
+    /// (`_k2_session_tcp_token`). A remote host, or an owner token that
+    /// did not come from disk, goes on to TCP as before (port 1: nothing
+    /// listens, so that call fails to connect).
+    #[test]
+    fn a_session_with_no_passport_never_sends_the_owner_token() {
+        let session_owner = || {
+            let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
+            c.owner_from_disk = true;
+            c.session = true;
+            c.pause = Duration::ZERO;
+            c
+        };
+        let mut c = session_owner();
+        let refused = |r: Result<Response, Error>| matches!(r, Err(Error::NoOwnerInSession { .. }));
+        assert!(refused(c.send_json(false, "/cli/x", "")));
+        assert!(refused(c.send_json(true, "/cli/x", "{}")));
+        assert!(refused(c.sidecar_get("/cli/x", "")));
+        assert!(refused(c.send("/cli/inbox/list", Call::Request(&[]))));
+        let e = Error::NoOwnerInSession { endpoint: "/cli/x".into() };
+        assert_eq!(e.to_string(), NO_OWNER_IN_SESSION);
+        assert_eq!(e.curl_code(), 1);
+        // A request function that is not socket-first keeps its rule.
+        assert!(!refused(c.call(Channel::Tcp, "/cli/x", Call::Request(&[]))));
+        let mut remote = session_owner();
+        remote.force_tcp = true;
+        assert!(!refused(remote.send_json(false, "/cli/x", "")));
+        let mut typed = session_owner();
+        typed.owner_from_disk = false;
+        assert!(!refused(typed.send_json(false, "/cli/x", "")));
+        let mut no_session = session_owner();
+        no_session.session = false;
+        assert!(!refused(no_session.send_json(false, "/cli/x", "")));
+        // The line is the shell's.
+        let policy = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh"),
+        )
+        .unwrap();
+        let shell = NO_OWNER_IN_SESSION.replacen(k2_client::product_name!(), "K2", 1);
+        assert!(
+            policy.contains(&format!("_K2_NO_OWNER_WRITE_LINE=\"{shell}\"\n")),
+            "_K2_NO_OWNER_WRITE_LINE moved"
+        );
     }
 
     /// `k2 update --cli`'s GET: the path as it is, no token, the

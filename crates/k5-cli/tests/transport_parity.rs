@@ -53,7 +53,8 @@ const BODY: &str = "{\"name\":\"bob\",\"note\":\"a \\\"q\\\" \\\\ b\\nline2 é\"
 const REFUSED: &str = r#"{"error":"Invalid or missing auth token"}"#;
 
 /// The shell's transport, from the built `cli/k2`: the env reader, the
-/// healed passport, the curl config and `_k2_curl`, the request
+/// healed passport, the curl config and `_k2_curl`, the socket-first
+/// senders' TCP credential, the request
 /// functions, `urlencode`, `cli_post_form` and the cell-socket arms.
 fn bash_lib() -> String {
     let k2 = common::cli_script();
@@ -71,6 +72,12 @@ fn bash_lib() -> String {
             "# END_CLI_HEALED_PASSPORT",
         ),
         common::block(&k2, "# BEGIN_CLI_CURL_CFG", "# END_CLI_CURL_CFG"),
+        // The socket-first senders' TCP credential (0.46.17).
+        common::block(
+            &k2,
+            "# BEGIN_CLI_SOCKET_FIRST_AUTH",
+            "# END_CLI_SOCKET_FIRST_AUTH",
+        ),
         requests,
         common::block(&k2, "urlencode() {", "}"),
         common::block(&k2, "cli_post_form() {", "}"),

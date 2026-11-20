@@ -235,8 +235,10 @@ if not v["signers"]:
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --code-stdin) code_stdin=1; shift ;;
-                    --hello) hello="${2:-}"; shift 2 ;;
-                    --out) out="${2:-}"; shift 2 ;;
+                    # A value flag with no word after it is the usage error
+                    # (exit 2), never a shift 2 that can't shift.
+                    --hello) [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }; hello="$2"; shift 2 ;;
+                    --out) [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }; out="$2"; shift 2 ;;
                     *) echo "$usage" >&2; exit 2 ;;
                 esac
             done

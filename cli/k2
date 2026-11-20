@@ -42176,8 +42176,10 @@ if not v["signers"]:
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --code-stdin) code_stdin=1; shift ;;
-                    --hello) hello="${2:-}"; shift 2 ;;
-                    --out) out="${2:-}"; shift 2 ;;
+                    # A value flag with no word after it is the usage error
+                    # (exit 2), never a shift 2 that can't shift.
+                    --hello) [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }; hello="$2"; shift 2 ;;
+                    --out) [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }; out="$2"; shift 2 ;;
                     *) echo "$usage" >&2; exit 2 ;;
                 esac
             done
@@ -102588,7 +102590,9 @@ cmd_zen_data_restore() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) _GD_JSON=1; shift ;;
-            --*) pass+=("$1"); [ "$1" = "--dry-run" ] && { shift; continue; }; pass+=("${2-}"); shift 2 || true ;;
+            # A flag as the last word goes on alone (its own shift), and
+            # _gd_restore_body names it: "--rev takes a value", exit 2.
+            --*) pass+=("$1"); { [ "$1" = "--dry-run" ] || [ $# -lt 2 ]; } && { shift; continue; }; pass+=("$2"); shift 2 ;;
             *) if [ -z "$widget" ]; then widget="$1"; shift; else echo "Error: unexpected '$1'" >&2; exit 2; fi ;;
         esac
     done

@@ -144,8 +144,7 @@ pub fn email_post(
     loop {
         let s = rt_post(ctx, path, &body)?;
         let wants = s.status == "403"
-            && s
-                .body
+            && s.body
                 .windows(24)
                 .any(|w| w == b"\"vault_confirm_required\"")
             && ctx.client.passport().is_none()
@@ -162,12 +161,18 @@ pub fn email_post(
             Ok(p::or(e, Value::Object(vec![])))
         };
         let e = error(1)?;
-        let action = p::or(p::dget(&e, "action", 1).map_err(|r| raised(&r))?, p::text(""));
+        let action = p::or(
+            p::dget(&e, "action", 1).map_err(|r| raised(&r))?,
+            p::text(""),
+        );
         let action = held(&action);
         let e = error(1)?;
         let mut sid = p::dget(&e, "secretId", 1).map_err(|r| raised(&r))?;
         if !p::truthy(&sid) {
-            sid = p::or(p::dget(&e, "serviceId", 1).map_err(|r| raised(&r))?, p::text(""));
+            sid = p::or(
+                p::dget(&e, "serviceId", 1).map_err(|r| raised(&r))?,
+                p::text(""),
+            );
         }
         let sid = held(&sid);
         if action.is_empty() || sid.is_empty() {
@@ -271,7 +276,7 @@ pub struct Run {
 
 /// The settings, the gates and the client; `None` from `Err`: the shell's.
 pub fn start(args: &[OsString]) -> Result<Run, Option<Exit>> {
-    match cp::open(args, false) {
+    match open(args, false) {
         Opened::Shell => Err(None),
         Opened::Stop(e) => Err(Some(e)),
         Opened::Ready(ctx, home) => Ok(Run { ctx, home }),

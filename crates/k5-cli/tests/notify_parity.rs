@@ -35,7 +35,11 @@ fn stop(name: &'static str, args: &'static [&'static str], code: i32) -> Case {
 
 fn notice_file(rig: &Rig) {
     owner_and_port(rig);
-    std::fs::write(rig.proj.join("notice.txt"), "Line one é\n\nline three\n\n\n").unwrap();
+    std::fs::write(
+        rig.proj.join("notice.txt"),
+        "Line one é\n\nline three\n\n\n",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -49,34 +53,88 @@ fn notify_answers_as_the_shell_does() {
         // covers: notify email off
         run("email off", &["email", "off"], vec![ok("{}")], 0),
         stop("email off: a word after", &["email", "off", "x"], 2),
-        run("email off: refused", &["email", "off"], vec![Reply::Answer(403, PERMISSION_ASK.into())], 3),
+        run(
+            "email off: refused",
+            &["email", "off"],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            3,
+        ),
         // covers: notify email mute
-        run("email mute", &["email", "mute", "ws"], vec![ok(r#"{"muted":true,"workspace":"ws"}"#)], 0),
+        run(
+            "email mute",
+            &["email", "mute", "ws"],
+            vec![ok(r#"{"muted":true,"workspace":"ws"}"#)],
+            0,
+        ),
         // covers: notify email unmute
-        run("email unmute", &["email", "unmute", "ws é"], vec![ok(r#"{"muted":false,"workspace":null}"#)], 0),
+        run(
+            "email unmute",
+            &["email", "unmute", "ws é"],
+            vec![ok(r#"{"muted":false,"workspace":null}"#)],
+            0,
+        ),
         stop("email mute: no workspace", &["email", "mute"], 2),
         // covers: notify email
         run(
             "a notice",
-            &["email", "owner", "--subject", "Build done é", "--text", "It passed."],
-            vec![Reply::Answer(202, r#"{"to":"owner","id":"n1","status":"queued"}"#.into())],
+            &[
+                "email",
+                "owner",
+                "--subject",
+                "Build done é",
+                "--text",
+                "It passed.",
+            ],
+            vec![Reply::Answer(
+                202,
+                r#"{"to":"owner","id":"n1","status":"queued"}"#.into(),
+            )],
             0,
         ),
         case(
             "a notice from a file",
-            &["email", "ada", "--text-file", "notice.txt", "--subject", "s"],
+            &[
+                "email",
+                "ada",
+                "--text-file",
+                "notice.txt",
+                "--subject",
+                "s",
+            ],
             &[],
             vec![ok(r#"{"to":"ada","id":"n2","status":"sent"}"#)],
             notice_file,
             0,
             1,
         ),
-        stop("no file", &["email", "ada", "--text-file", "none.txt", "--subject", "s"], 2),
-        stop("--text and --text-file", &["email", "ada", "--text", "t", "--text-file", "none.txt", "--subject", "s"], 2),
+        stop(
+            "no file",
+            &["email", "ada", "--text-file", "none.txt", "--subject", "s"],
+            2,
+        ),
+        stop(
+            "--text and --text-file",
+            &[
+                "email",
+                "ada",
+                "--text",
+                "t",
+                "--text-file",
+                "none.txt",
+                "--subject",
+                "s",
+            ],
+            2,
+        ),
         stop("no subject", &["email", "ada", "--text", "t"], 2),
         stop("--subject last", &["email", "ada", "--subject"], 1),
         stop("a stray word", &["email", "ada", "now"], 2),
-        traceback(run("the answer is not JSON", &["email", "ada", "--subject", "s", "--text", "t"], vec![ok("<html>")], 1)),
+        traceback(run(
+            "the answer is not JSON",
+            &["email", "ada", "--subject", "s", "--text", "t"],
+            vec![ok("<html>")],
+            1,
+        )),
         shell(stop("-h: the help", &["email", "ada", "-h"], 0)),
     ];
     for c in v {
@@ -91,8 +149,14 @@ fn the_lines_say_the_brand_s_name() {
     let cli = k2_client::brand::CLI_NAME;
     let rig = Rig::new("notify", "brand");
     for (args, want) in [
-        (&["email", "off", "x"][..], format!("usage: {cli} notify email off\n")),
-        (&["email", "mute"], format!("usage: {cli} notify email mute <workspace>\n")),
+        (
+            &["email", "off", "x"][..],
+            format!("usage: {cli} notify email off\n"),
+        ),
+        (
+            &["email", "mute"],
+            format!("usage: {cli} notify email mute <workspace>\n"),
+        ),
     ] {
         let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
         let (out, log) = rig.binary(&c, false);

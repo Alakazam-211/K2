@@ -27,13 +27,19 @@ fn the_readers() {
     let a = agents_reader(br#"{"agents":[{"workspace":"w","on":false,"offReason":3}]}"#);
     assert_eq!(
         a.stderr,
-        traceback(&[(7, "<module>")], "TypeError: can only concatenate str (not \"int\") to str")
+        traceback(
+            &[(7, "<module>")],
+            "TypeError: can only concatenate str (not \"int\") to str"
+        )
     );
     let l = log_reader(br#"{"items":[{"createdAt":0,"id":"m1","status":"sent","to":["a@x","b@x"],"subject":"hi"},{"id":"m2","to":[5]}]}"#);
     assert_eq!(l.stdout, "1970-01-01 00:00  m1  sent       a@x +1  hi\n");
     assert_eq!(
         l.stderr,
-        traceback(&[(10, "<module>")], "TypeError: unsupported operand type(s) for +: 'int' and 'str'")
+        traceback(
+            &[(10, "<module>")],
+            "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
+        )
     );
     let sup = suppressions_reader(br#"{"suppressions":[]}"#, "a@x");
     assert_eq!(sup.stdout, "No suppressed addresses matching that one.\n");

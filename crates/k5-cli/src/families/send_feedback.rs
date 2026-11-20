@@ -126,10 +126,7 @@ pub struct Report {
 
 /// `_sf_send`'s words and checks, in its order: the report, or the
 /// usage line (exit 2). `stdin` is read for a `-`.
-pub fn parse_report(
-    words: &[&str],
-    stdin: &mut dyn FnMut() -> Vec<u8>,
-) -> Result<Report, String> {
+pub fn parse_report(words: &[&str], stdin: &mut dyn FnMut() -> Vec<u8>) -> Result<Report, String> {
     let mut r = Report::default();
     let (mut have_text, mut have_scope, mut have_command) = (false, false, false);
     let mut i = 0;
@@ -145,7 +142,9 @@ pub fn parse_report(
         let next = words.get(i + 1).copied();
         match w {
             "--category" => {
-                r.category = next.ok_or("usage: --category bug|idea|praise|other")?.into();
+                r.category = next
+                    .ok_or("usage: --category bug|idea|praise|other")?
+                    .into();
                 i += 2;
             }
             "--scope" => {
@@ -269,7 +268,9 @@ pub fn parse_report(
 }
 
 fn send(ctx: &mut Ctx, words: &[&str]) -> Exit {
-    let r = match parse_report(words, &mut || crate::prompt::read_all_stdin().expose().to_vec()) {
+    let r = match parse_report(words, &mut || {
+        crate::prompt::read_all_stdin().expose().to_vec()
+    }) {
         Ok(r) => r,
         Err(line) => return usage(&line),
     };
@@ -346,8 +347,8 @@ fn send(ctx: &mut Ctx, words: &[&str]) -> Exit {
             Value::Object(vec![(json::Text::from("draftId"), p::text(&draft))]),
         ));
     }
-    let payload = json::to_string(&Value::Object(b), &Options::default())
-        .expect("json.dumps of strings");
+    let payload =
+        json::to_string(&Value::Object(b), &Options::default()).expect("json.dumps of strings");
     let answer = match cp::call(ctx, true, "/cli/product-feedback/send", &payload) {
         Ok(b) => b,
         Err(e) => return e,
@@ -423,9 +424,8 @@ fn item_json(body: &[u8]) -> Shown {
     let r = (|| {
         let v = p::load(body, 1)?;
         let it = p::idx(&v, "item", 1)?;
-        let text = json::to_string(&it, &Options::default()).map_err(|e| {
-            Raise::at(1, format!("ValueError: {e}"))
-        })?;
+        let text = json::to_string(&it, &Options::default())
+            .map_err(|e| Raise::at(1, format!("ValueError: {e}")))?;
         o.line(&text);
         Ok(Exit::Ok)
     })();
@@ -894,10 +894,7 @@ fn settings(ctx: &mut Ctx, rest: &[&str]) -> Exit {
             _ => {}
         }
         if let Some(at) = &a.attach {
-            parts.push(format!(
-                "\"agentAttach\": {}",
-                super::setup::jstr(at)
-            ));
+            parts.push(format!("\"agentAttach\": {}", super::setup::jstr(at)));
         }
         if let Some(on) = a.agent_diag {
             parts.push(format!("\"agentDiagnostics\": {on}"));
@@ -1040,7 +1037,10 @@ pub fn render(body: &[u8]) -> Vec<u8> {
         o.push(b'\n');
     };
     line(&[format!("Send feedback to {PRODUCT} on this server").as_bytes()]);
-    line(&[b"  enabled:            ", oo(jbool("enabled", &v)).as_bytes()]);
+    line(&[
+        b"  enabled:            ",
+        oo(jbool("enabled", &v)).as_bytes(),
+    ]);
     if contains(&v, b"\"agentsAsked\"") || contains(&v, b"\"attachParts\"") {
         let agents = jbool("agents", &v);
         let platform = jbool("agentPlatform", &v);
@@ -1099,7 +1099,10 @@ pub fn render(body: &[u8]) -> Vec<u8> {
             line(&[b"    ", &pad(state, 3), b"  ", &pad(&id, 13), b"  ", &label]);
         }
     } else {
-        line(&[b"  agents:             ", oo(jbool("agents", &v)).as_bytes()]);
+        line(&[
+            b"  agents:             ",
+            oo(jbool("agents", &v)).as_bytes(),
+        ]);
         line(&[
             b"  agent diagnostics:  ",
             oo(jbool("agentDiagnostics", &v)).as_bytes(),

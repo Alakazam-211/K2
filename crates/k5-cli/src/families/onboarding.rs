@@ -87,8 +87,16 @@ pub fn parse(words: &[&str]) -> Ask {
             let file = arg(1);
             if file.is_empty() {
                 return Ask::Stop(vec![
-                    concat!("Usage: ", cli_name!(), " onboarding adopt <file> [project-path]"),
-                    concat!("Run '", cli_name!(), " onboarding scan' to see candidate files."),
+                    concat!(
+                        "Usage: ",
+                        cli_name!(),
+                        " onboarding adopt <file> [project-path]"
+                    ),
+                    concat!(
+                        "Run '",
+                        cli_name!(),
+                        " onboarding scan' to see candidate files."
+                    ),
                 ]);
             }
             Ask::Send {

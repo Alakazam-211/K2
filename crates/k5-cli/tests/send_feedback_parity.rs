@@ -22,7 +22,8 @@ mod common;
 use common::parity::*;
 use common::stub::Reply;
 
-const SENT: &str = r#"{"item":{"id":"pf_1","state":"sent","category":"bug","hasDiagnostics":false}}"#;
+const SENT: &str =
+    r#"{"item":{"id":"pf_1","state":"sent","category":"bug","hasDiagnostics":false}}"#;
 const QUEUED_ERR: &str = r#"{"item":{"id":"pf_1","state":"queued","category":"idea","error":"offline","errorMessage":"No K2 Connect pairing yet."}}"#;
 const SHOW: &str = r#"{"item":{"id":"pf_1","state":"sent","category":"bug","sender":"ada","senderKind":"person","client":"cli","scope":"cli","createdAt":1763600000000,"sentAt":1763600005000,"remoteId":"r-9","text":"It broke é\ntwice","diagnostics":[{"title":"Versions","text":"k2 0.46.16"}]}}"#;
 const NEW_SETTINGS: &str = r#"{"enabled":true,"agents":true,"agentPlatform":true,"agentsAsked":true,"agentsAskedBy":"owner","agentsAskedAt":1763600000000,"agentAttach":["logs"],"attachParts":[{"id":"logs","label":"Recent logs"},{"id":"config","label":"Settings"}],"canSend":false,"message":"Pair with K2 Connect first.","service":{"ok":false,"message":"unreachable"},"pending":3,"endpoint":"https://feedback.example"}"#;
@@ -56,7 +57,15 @@ fn stop(name: &'static str, args: &'static [&'static str], code: i32) -> Case {
 fn the_pages_and_a_report() {
     let rig = Rig::new("send-feedback", "send");
     let v = vec![
-        case("no verb: the help on stderr", &[], &[], vec![], nothing, 2, 0),
+        case(
+            "no verb: the help on stderr",
+            &[],
+            &[],
+            vec![],
+            nothing,
+            2,
+            0,
+        ),
         case("an empty word", &[""], &[], vec![], nothing, 2, 0),
         case("help", &["help"], &[], vec![], nothing, 0, 0),
         case(
@@ -68,13 +77,35 @@ fn the_pages_and_a_report() {
             3,
             0,
         ),
-        case("a report needs the daemon", &["hi"], &[], vec![], nothing, 1, 0),
+        case(
+            "a report needs the daemon",
+            &["hi"],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
         // covers: send-feedback
-        run("a report: sent", &["It broke"], vec![ok(r#"{"id":"pf_1"}"#), ok(SENT)], 0),
+        run(
+            "a report: sent",
+            &["It broke"],
+            vec![ok(r#"{"id":"pf_1"}"#), ok(SENT)],
+            0,
+        ),
         // covers: send-feedback --json
         run(
             "a report with every word, --json",
-            &["--category", "bug", "--scope=cli", "--command", "k2 x é", "--json", "--", "-dash first"],
+            &[
+                "--category",
+                "bug",
+                "--scope=cli",
+                "--command",
+                "k2 x é",
+                "--json",
+                "--",
+                "-dash first",
+            ],
             vec![ok(r#"{"id":"pf_1"}"#), ok(SENT)],
             0,
         ),
@@ -90,14 +121,21 @@ fn the_pages_and_a_report() {
             vec![
                 ok(r#"{"id":"pf 1"}"#),
                 ok(r#"{"item":{"id":"pf 1","state":"sending","category":"other"}}"#),
-                ok(r#"{"item":{"id":"pf 1","state":"refused","category":"other","error":"too_long","hasDiagnostics":true}}"#),
+                ok(
+                    r#"{"item":{"id":"pf 1","state":"refused","category":"other","error":"too_long","hasDiagnostics":true}}"#,
+                ),
             ],
             0,
         ),
         Case {
             stdin: Some(b"from\nstdin \xc3\xa9\n\n"),
             env: vec![("LANG", "en_US.UTF-8".to_string())],
-            ..run("text on stdin, a locale", &["-"], vec![ok(r#"{"id":"pf_1"}"#), ok(SENT)], 0)
+            ..run(
+                "text on stdin, a locale",
+                &["-"],
+                vec![ok(r#"{"id":"pf_1"}"#), ok(SENT)],
+                0,
+            )
         },
         run(
             "--diagnostics-preview",
@@ -129,23 +167,39 @@ fn the_pages_and_a_report() {
             vec![ok(r#"{"ok":true}"#)],
             3,
         ),
-        traceback(run("the state is not JSON", &["x"], vec![ok(r#"{"id":"a"}"#), ok("<html>")], 1)),
+        traceback(run(
+            "the state is not JSON",
+            &["x"],
+            vec![ok(r#"{"id":"a"}"#), ok("<html>")],
+            1,
+        )),
         run(
             "refused: turned off",
             &["x"],
-            vec![Reply::Answer(403, r#"{"error":{"code":"feedback_off","hint":"Turned off on this server."}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"feedback_off","hint":"Turned off on this server."}}"#.into(),
+            )],
             3,
         ),
         run("no answer", &["x"], vec![Reply::Close], 3),
         stop("two texts", &["a", "b"], 2),
         stop("an unknown flag", &["--bogus", "a"], 2),
         stop("--category last", &["a", "--category"], 2),
-        stop("a category it doesn't know", &["--category", "rant", "a"], 2),
+        stop(
+            "a category it doesn't know",
+            &["--category", "rant", "a"],
+            2,
+        ),
         stop("--scope cli with no command", &["--scope", "cli", "a"], 2),
         stop("--scope of another word", &["--scope", "web", "a"], 2),
         stop("--command on two lines", &["--command", "a\nb", "a"], 2),
         stop("no text", &["--json"], 2),
-        stop("both diagnostics", &["--diagnostics", "--diagnostics-preview", "a"], 2),
+        stop(
+            "both diagnostics",
+            &["--diagnostics", "--diagnostics-preview", "a"],
+            2,
+        ),
         shell(stop("-h: the help", &["a", "-h"], 0)),
     ];
     for c in v {
@@ -173,17 +227,31 @@ fn list_show_retry_and_cancel() {
         run(
             "list",
             &["list"],
-            vec![ok(r#"{"items":[{"id":"pf_1","state":"sent","category":"bug","createdAt":1763600000000,"text":"short","mine":true},{"id":"pf_2","state":"failed","category":"praise","createdAt":1763600000500.5,"text":"x","sender":"bo","errorMessage":"gone"}]}"#)],
+            vec![ok(
+                r#"{"items":[{"id":"pf_1","state":"sent","category":"bug","createdAt":1763600000000,"text":"short","mine":true},{"id":"pf_2","state":"failed","category":"praise","createdAt":1763600000500.5,"text":"x","sender":"bo","errorMessage":"gone"}]}"#,
+            )],
             0,
         ),
         run("list: none", &["list"], vec![ok(r#"{"items":[]}"#)], 0),
-        run("list: none on the server", &["list", "--state", "queued"], vec![ok(r#"{"all":true}"#)], 0),
+        run(
+            "list: none on the server",
+            &["list", "--state", "queued"],
+            vec![ok(r#"{"all":true}"#)],
+            0,
+        ),
         run("list: many", &["list"], vec![ok(&many)], 0),
-        run("list --json", &["list", "--json"], vec![ok(r#"{"items":[]}"#)], 0),
+        run(
+            "list --json",
+            &["list", "--json"],
+            vec![ok(r#"{"items":[]}"#)],
+            0,
+        ),
         traceback(run(
             "list: a sender that is a number",
             &["list"],
-            vec![ok(r#"{"items":[{"id":"a","state":"s","category":"c","createdAt":0,"sender":7}]}"#)],
+            vec![ok(
+                r#"{"items":[{"id":"a","state":"s","category":"c","createdAt":0,"sender":7}]}"#,
+            )],
             1,
         )),
         stop("list: --state last", &["list", "--state"], 2),
@@ -192,15 +260,25 @@ fn list_show_retry_and_cancel() {
         run(
             "show: queued",
             &["show", "pf 1"],
-            vec![ok(r#"{"item":{"id":"pf_1","state":"queued","category":"idea","createdAt":0,"nextAttemptAt":1763600060000,"attempts":2,"errorMessage":"offline","contactEmail":"a@example.com"}}"#)],
+            vec![ok(
+                r#"{"item":{"id":"pf_1","state":"queued","category":"idea","createdAt":0,"nextAttemptAt":1763600060000,"attempts":2,"errorMessage":"offline","contactEmail":"a@example.com"}}"#,
+            )],
             0,
         ),
-        run("show --json", &["show", "--json", "pf_1"], vec![ok(SHOW)], 0),
+        run(
+            "show --json",
+            &["show", "--json", "pf_1"],
+            vec![ok(SHOW)],
+            0,
+        ),
         traceback(run("show: no item", &["show", "pf_1"], vec![ok("{}")], 1)),
         run(
             "show: not found",
             &["show", "pf_9"],
-            vec![Reply::Answer(404, r#"{"error":"not_found","message":"no such feedback"}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":"not_found","message":"no such feedback"}"#.into(),
+            )],
             3,
         ),
         stop("show: no id", &["show"], 2),
@@ -221,9 +299,24 @@ fn list_show_retry_and_cancel() {
 fn settings_answer_as_the_shell_does() {
     let rig = Rig::new("send-feedback", "settings");
     let v = vec![
-        run("settings: a 0.46.17 server", &["settings"], vec![ok(NEW_SETTINGS)], 0),
-        run("settings: an older server", &["settings"], vec![ok(OLD_SETTINGS)], 0),
-        run("settings --json", &["settings", "--json"], vec![ok(OLD_SETTINGS)], 0),
+        run(
+            "settings: a 0.46.17 server",
+            &["settings"],
+            vec![ok(NEW_SETTINGS)],
+            0,
+        ),
+        run(
+            "settings: an older server",
+            &["settings"],
+            vec![ok(OLD_SETTINGS)],
+            0,
+        ),
+        run(
+            "settings --json",
+            &["settings", "--json"],
+            vec![ok(OLD_SETTINGS)],
+            0,
+        ),
         run(
             "--enabled off: one write",
             &["settings", "--enabled", "off", "--agent-diagnostics", "yes"],
@@ -248,17 +341,30 @@ fn settings_answer_as_the_shell_does() {
             vec![ok(OLD_SETTINGS)],
             1,
         ),
-        run("--agents off", &["settings", "--agents", "0"], vec![ok(NEW_SETTINGS)], 0),
+        run(
+            "--agents off",
+            &["settings", "--agents", "0"],
+            vec![ok(NEW_SETTINGS)],
+            0,
+        ),
         run(
             "a write refused",
             &["settings", "--enabled", "on"],
             vec![Reply::Answer(403, PERMISSION_ASK.into())],
             3,
         ),
-        stop("--enabled with a word it doesn't know", &["settings", "--enabled", "maybe"], 2),
+        stop(
+            "--enabled with a word it doesn't know",
+            &["settings", "--enabled", "maybe"],
+            2,
+        ),
         stop("--agents last", &["settings", "--agents"], 2),
         stop("--attach blank", &["settings", "--attach", " "], 2),
-        stop("--attach and --agent-diagnostics", &["settings", "--attach", "a", "--agent-diagnostics", "on"], 2),
+        stop(
+            "--attach and --agent-diagnostics",
+            &["settings", "--attach", "a", "--agent-diagnostics", "on"],
+            2,
+        ),
         stop("a stray word", &["settings", "on"], 2),
     ];
     for c in v {

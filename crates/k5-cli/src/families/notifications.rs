@@ -403,9 +403,15 @@ fn sender(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
                 b.push(("via", p::text(via)));
             }
             if !rts.is_empty() {
-                b.push(("replyTo", Value::Array(rts.iter().map(|r| p::text(r)).collect())));
+                b.push((
+                    "replyTo",
+                    Value::Array(rts.iter().map(|r| p::text(r)).collect()),
+                ));
             }
-            shown(cp::email_post(ctx, home, &format!("{E}/sender/add"), &dumps(b)).map(|b| sender_reader(&b)))
+            shown(
+                cp::email_post(ctx, home, &format!("{E}/sender/add"), &dumps(b))
+                    .map(|b| sender_reader(&b)),
+            )
         }
         "list" | "ls" => {
             let (mut q, mut json_out) = ("", false);
@@ -416,13 +422,15 @@ fn sender(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
                     w => return usage(&format!("Unknown flag: {w}")),
                 }
             }
-            shown(cp::call_tcp(ctx, false, &format!("{E}/senders"), q).map(|b| {
-                if json_out {
-                    Shown::out(json_text(&b))
-                } else {
-                    senders_reader(&b)
-                }
-            }))
+            shown(
+                cp::call_tcp(ctx, false, &format!("{E}/senders"), q).map(|b| {
+                    if json_out {
+                        Shown::out(json_text(&b))
+                    } else {
+                        senders_reader(&b)
+                    }
+                }),
+            )
         }
         "resume" => {
             let who = match rest {
@@ -436,14 +444,16 @@ fn sender(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
                 }
             };
             let body = dumps(vec![("sender", p::text(who))]);
-            shown(cp::email_post(ctx, home, &format!("{E}/sender/resume"), &body).map(|b| {
-                one_line(&b, |v| {
-                    Ok(format!(
-                        "resumed {}: its sends go out again (a new 24-hour count starts now)",
-                        gs(v, "sender", 1)?
-                    ))
-                })
-            }))
+            shown(
+                cp::email_post(ctx, home, &format!("{E}/sender/resume"), &body).map(|b| {
+                    one_line(&b, |v| {
+                        Ok(format!(
+                            "resumed {}: its sends go out again (a new 24-hour count starts now)",
+                            gs(v, "sender", 1)?
+                        ))
+                    })
+                }),
+            )
         }
         "check" | "set" | "rm" | "remove" => {
             let (mut who, mut name) = ("", "");
@@ -474,7 +484,11 @@ fn sender(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
             }
             if who.is_empty() {
                 return usage(&format!(
-                    concat!("usage: ", cli_name!(), " notifications email sender {} <sender>"),
+                    concat!(
+                        "usage: ",
+                        cli_name!(),
+                        " notifications email sender {} <sender>"
+                    ),
                     verb
                 ));
             }
@@ -487,7 +501,10 @@ fn sender(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
                 b.push(("nameLocked", Value::Bool(l)));
             }
             if !rts.is_empty() {
-                b.push(("replyTo", Value::Array(rts.iter().map(|r| p::text(r)).collect())));
+                b.push((
+                    "replyTo",
+                    Value::Array(rts.iter().map(|r| p::text(r)).collect()),
+                ));
             }
             let answer = cp::email_post(ctx, home, &format!("{E}/sender/{verb}"), &dumps(b));
             shown(answer.map(|b| {
@@ -571,13 +588,17 @@ fn system(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
                 ));
             };
             let body = Cj::new().s("sender", s).body();
-            shown(cp::email_post(ctx, home, &format!("{path}/set"), &body).map(|b| sender_reader(&b)))
+            shown(
+                cp::email_post(ctx, home, &format!("{path}/set"), &body).map(|b| sender_reader(&b)),
+            )
         }
         "clear" => match cp::email_post(ctx, home, &format!("{path}/clear"), "{}") {
             Ok(_) => stdout_line("no system sender"),
             Err(e) => e,
         },
-        "test" => shown(cp::email_post(ctx, home, &format!("{path}/test"), "{}").map(|b| test_reader(&b))),
+        "test" => {
+            shown(cp::email_post(ctx, home, &format!("{path}/test"), "{}").map(|b| test_reader(&b)))
+        }
         _ => usage(concat!(
             "usage: ",
             cli_name!(),
@@ -670,30 +691,32 @@ fn relay(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
                 o.done(r)
             }))
         }
-        "list" | "ls" => shown(cp::call_tcp(ctx, false, &format!("{E}/relays"), "").map(|b| {
-            let mut o = Out::default();
-            let r = (|| {
-                let v = p::load(&b, 3)?;
-                let rows = p::or(p::dget(&v, "relays", 3)?, p::empty_list());
-                if !p::truthy(&rows) {
-                    o.line("No relays.");
-                    return Ok(Exit::Ok);
-                }
-                for r in p::iter(&rows, 6)? {
-                    let f = ["id", "host", "port", "tls", "username", "fromDomain"]
-                        .iter()
-                        .map(|k| gs(&r, k, 7))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let t = test_word(&p::dget(&r, "lastTestOk", 7)?, 7)?;
-                    o.line(&format!(
-                        "{}  {}:{} {}  user {}  for {}  last test {t}",
-                        f[0], f[1], f[2], f[3], f[4], f[5]
-                    ));
-                }
-                Ok(Exit::Ok)
-            })();
-            o.done(r)
-        })),
+        "list" | "ls" => shown(
+            cp::call_tcp(ctx, false, &format!("{E}/relays"), "").map(|b| {
+                let mut o = Out::default();
+                let r = (|| {
+                    let v = p::load(&b, 3)?;
+                    let rows = p::or(p::dget(&v, "relays", 3)?, p::empty_list());
+                    if !p::truthy(&rows) {
+                        o.line("No relays.");
+                        return Ok(Exit::Ok);
+                    }
+                    for r in p::iter(&rows, 6)? {
+                        let f = ["id", "host", "port", "tls", "username", "fromDomain"]
+                            .iter()
+                            .map(|k| gs(&r, k, 7))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let t = test_word(&p::dget(&r, "lastTestOk", 7)?, 7)?;
+                        o.line(&format!(
+                            "{}  {}:{} {}  user {}  for {}  last test {t}",
+                            f[0], f[1], f[2], f[3], f[4], f[5]
+                        ));
+                    }
+                    Ok(Exit::Ok)
+                })();
+                o.done(r)
+            }),
+        ),
         "rm" | "remove" => {
             let Some(id) = rest.first().filter(|s| !s.is_empty()) else {
                 return usage(concat!(
@@ -716,9 +739,9 @@ fn relay(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
                     "--from" => f.value().map(|v| from = v),
                     w if w.starts_with('-') => Err(usage(&format!("Unknown flag: {w}"))),
                     w => {
-                    relay = w;
-                    Ok(())
-                }
+                        relay = w;
+                        Ok(())
+                    }
                 };
                 if let Err(e) = r {
                     return e;
@@ -732,7 +755,10 @@ fn relay(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
                 ));
             }
             let body = Cj::new().s("relay", relay).s("from", from).body();
-            shown(cp::email_post(ctx, home, &format!("{E}/relay/test"), &body).map(|b| test_reader(&b)))
+            shown(
+                cp::email_post(ctx, home, &format!("{E}/relay/test"), &body)
+                    .map(|b| test_reader(&b)),
+            )
         }
         _ => usage(concat!(
             "usage: ",
@@ -971,22 +997,24 @@ fn suppressions(ctx: &mut Ctx, words: &[&str]) -> Exit {
             if all {
                 b.push(("all", Value::Bool(true)));
             }
-            shown(cp::rt_post_ok(ctx, &format!("{path}/{verb}"), &dumps(b), &["200"]).map(|b| {
-                if json_out {
-                    return Shown::out(json_text(&b));
-                }
-                one_line(&b, |v| {
-                    if verb == "add" {
-                        Ok(if p::truthy(&p::dget(v, "added", 1)?) {
-                            format!("suppressed ({})", gs(v, "scope", 1)?)
-                        } else {
-                            "already suppressed".to_string()
-                        })
-                    } else {
-                        Ok(format!("removed {} suppression(s)", gs(v, "removed", 1)?))
+            shown(
+                cp::rt_post_ok(ctx, &format!("{path}/{verb}"), &dumps(b), &["200"]).map(|b| {
+                    if json_out {
+                        return Shown::out(json_text(&b));
                     }
-                })
-            }))
+                    one_line(&b, |v| {
+                        if verb == "add" {
+                            Ok(if p::truthy(&p::dget(v, "added", 1)?) {
+                                format!("suppressed ({})", gs(v, "scope", 1)?)
+                            } else {
+                                "already suppressed".to_string()
+                            })
+                        } else {
+                            Ok(format!("removed {} suppression(s)", gs(v, "removed", 1)?))
+                        }
+                    })
+                }),
+            )
         }
     }
 }
@@ -1118,7 +1146,11 @@ pub fn agents_reader(body: &[u8]) -> Shown {
         }
         for r in p::iter(&rows, 6)? {
             let ws = p::dget(&r, "workspace", 7)?;
-            let on = if p::truthy(&p::dget(&r, "on", 7)?) { "on" } else { "off" };
+            let on = if p::truthy(&p::dget(&r, "on", 7)?) {
+                "on"
+            } else {
+                "off"
+            };
             let sender = p::or(p::dget(&r, "sender", 7)?, p::text("(sender removed)"));
             let off = if p::truthy(&p::dget(&r, "offReason", 7)?) {
                 p::concat("  (", &p::idx(&r, "offReason", 7)?, 7)? + ")"
@@ -1300,17 +1332,19 @@ fn settings(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
     if set_owner {
         b.push(("ownerEmail", p::text(owner)));
     }
-    shown(cp::email_post(ctx, home, &format!("{E}/settings"), &dumps(b)).map(|b| {
-        one_line(&b, |v| {
-            let s = p::or(p::dget(v, "settings", 1)?, Value::Object(vec![]));
-            let owner = p::or(p::dget(&s, "ownerEmail", 1)?, p::text("not set"));
-            Ok(format!(
-                "log kept {} days; owner address {}",
-                gs(&s, "logRetentionDays", 1)?,
-                py::str_of(&owner)
-            ))
-        })
-    }))
+    shown(
+        cp::email_post(ctx, home, &format!("{E}/settings"), &dumps(b)).map(|b| {
+            one_line(&b, |v| {
+                let s = p::or(p::dget(v, "settings", 1)?, Value::Object(vec![]));
+                let owner = p::or(p::dget(&s, "ownerEmail", 1)?, p::text("not set"));
+                Ok(format!(
+                    "log kept {} days; owner address {}",
+                    gs(&s, "logRetentionDays", 1)?,
+                    py::str_of(&owner)
+                ))
+            })
+        }),
+    )
 }
 
 #[cfg(test)]

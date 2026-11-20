@@ -234,7 +234,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
                 out::stderr_line(l);
             }
             // The unknown verb's help follows its line.
-            if lines.first().is_some_and(|l| l.starts_with("Error: unknown")) {
+            if lines
+                .first()
+                .is_some_and(|l| l.starts_with("Error: unknown"))
+            {
                 let _ = out::write_flushed(&mut std::io::stderr().lock(), help().as_bytes());
             }
             exit
@@ -408,8 +411,8 @@ fn request(ctx: &mut Ctx, payload: &str, to: &str, wait: bool, out: &str, json: 
     if !to.is_empty() {
         body.push((Text::from("to"), p::text(to)));
     }
-    let body = json::to_string(&Value::Object(body), &Options::default())
-        .expect("json.dumps of strings");
+    let body =
+        json::to_string(&Value::Object(body), &Options::default()).expect("json.dumps of strings");
     let answer = match cp::call(ctx, true, "/cli/approve/request", &body) {
         Ok(b) => b,
         Err(e) => return e,
@@ -504,9 +507,7 @@ fn cancel(ctx: &mut Ctx, id: &str) -> Exit {
     if let Err(e) = cp::call(ctx, true, "/cli/approve/cancel", &body) {
         return e;
     }
-    stdout_line(&format!(
-        "Cancelled: {id}. The card on the Thread says so."
-    ))
+    stdout_line(&format!("Cancelled: {id}. The card on the Thread says so."))
 }
 
 fn agents_set(ctx: &mut Ctx, ws: &str, on: bool) -> Exit {

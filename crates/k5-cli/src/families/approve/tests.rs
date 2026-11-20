@@ -9,12 +9,29 @@ fn the_words_are_the_shells() {
         parse(&["verify", "a", "b"]),
         Ask::Local(vec!["verify".into(), "a".into(), "b".into()])
     );
-    assert_eq!(parse(&["request", "--payload"]), Ask::Stop(vec![], Exit::Error));
-    assert_eq!(parse(&["status", "--out"]), Ask::Stop(vec![], Exit::Error));
-    assert!(matches!(parse(&["request"]), Ask::Stop(l, Exit::Usage) if l[0].starts_with("Usage: ")));
-    assert!(matches!(parse(&["request", "--x"]), Ask::Stop(l, Exit::Usage) if l[0].contains("'--x'")));
     assert_eq!(
-        parse(&["request", "--payload", "p", "--wait", "--to", "ada", "--json", "--out", "o"]),
+        parse(&["request", "--payload"]),
+        Ask::Stop(vec![], Exit::Error)
+    );
+    assert_eq!(parse(&["status", "--out"]), Ask::Stop(vec![], Exit::Error));
+    assert!(
+        matches!(parse(&["request"]), Ask::Stop(l, Exit::Usage) if l[0].starts_with("Usage: "))
+    );
+    assert!(
+        matches!(parse(&["request", "--x"]), Ask::Stop(l, Exit::Usage) if l[0].contains("'--x'"))
+    );
+    assert_eq!(
+        parse(&[
+            "request",
+            "--payload",
+            "p",
+            "--wait",
+            "--to",
+            "ada",
+            "--json",
+            "--out",
+            "o"
+        ]),
         Ask::Request {
             payload: "p".into(),
             to: "ada".into(),
@@ -31,14 +48,26 @@ fn the_words_are_the_shells() {
             json: true
         }
     );
-    assert!(matches!(parse(&["status", "--out", "f"]), Ask::Stop(_, Exit::Usage)));
-    assert!(matches!(parse(&["status", "-x"]), Ask::Stop(_, Exit::Usage)));
+    assert!(matches!(
+        parse(&["status", "--out", "f"]),
+        Ask::Stop(_, Exit::Usage)
+    ));
+    assert!(matches!(
+        parse(&["status", "-x"]),
+        Ask::Stop(_, Exit::Usage)
+    ));
     assert!(matches!(parse(&["cancel", ""]), Ask::Stop(_, Exit::Usage)));
     assert_eq!(parse(&["cancel", "ap_1", "x"]), Ask::Cancel("ap_1".into()));
     assert_eq!(parse(&["agents"]), Ask::AgentsList);
     assert_eq!(parse(&["agents", ""]), Ask::AgentsList);
-    assert_eq!(parse(&["agents", "w", "on"]), Ask::AgentsSet("w".into(), true));
-    assert!(matches!(parse(&["agents", "w", "On"]), Ask::Stop(_, Exit::Usage)));
+    assert_eq!(
+        parse(&["agents", "w", "on"]),
+        Ask::AgentsSet("w".into(), true)
+    );
+    assert!(matches!(
+        parse(&["agents", "w", "On"]),
+        Ask::Stop(_, Exit::Usage)
+    ));
     assert!(matches!(parse(&["nope"]), Ask::Stop(l, Exit::Usage) if l[0].ends_with(": nope")));
 }
 
@@ -78,7 +107,9 @@ fn a_request_and_a_list() {
 
 #[test]
 fn the_agents_list() {
-    let s = agents_reader(br#"{"agents":[{"workspace":"w","grantedBy":"owner"},{"workspace":2,"grantedBy":null}]}"#);
+    let s = agents_reader(
+        br#"{"agents":[{"workspace":"w","grantedBy":"owner"},{"workspace":2,"grantedBy":null}]}"#,
+    );
     assert_eq!(
         s.stdout,
         "w  (turned on by owner)\n2  (turned on by None)\n"

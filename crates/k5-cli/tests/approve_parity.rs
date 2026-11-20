@@ -23,7 +23,8 @@ use common::parity::*;
 use common::stub::Reply;
 use std::os::unix::fs::PermissionsExt;
 
-const ASKED: &str = r#"{"id":"ap_1","state":"waiting","kind":"release","person":"ada","answerBy":1763600000}"#;
+const ASKED: &str =
+    r#"{"id":"ap_1","state":"waiting","kind":"release","person":"ada","answerBy":1763600000}"#;
 const APPROVED: &str = r#"{"id":"ap_1","state":"approved","kind":"release","person":"ada","answerBy":1763600000,"device":"Ada's phone","recordText":"K2-APPROVAL-RECORD\nsig\n"}"#;
 const DECLINED: &str = r#"{"id":"ap_1","state":"declined","kind":"release","person":"ada","answerBy":0,"device":"phone"}"#;
 
@@ -127,7 +128,8 @@ fn the_pages_that_need_no_daemon() {
 #[test]
 fn request_answers_as_the_shell_does() {
     let rig = Rig::new("approve", "request");
-    let req = |name, args, replies: Vec<Reply>, code, n| case(name, args, &[], replies, payload, code, n);
+    let req =
+        |name, args, replies: Vec<Reply>, code, n| case(name, args, &[], replies, payload, code, n);
     let v = vec![
         req(
             "request",
@@ -138,14 +140,28 @@ fn request_answers_as_the_shell_does() {
         ),
         req(
             "request --to --json",
-            &["request", "--to", "bé", "--payload", "payload.bin", "--json"],
+            &[
+                "request",
+                "--to",
+                "bé",
+                "--payload",
+                "payload.bin",
+                "--json",
+            ],
             vec![ok(ASKED)],
             0,
             1,
         ),
         req(
             "request --wait: waiting, then approved, the record written",
-            &["request", "--payload", "payload.bin", "--wait", "--out", "rec.txt"],
+            &[
+                "request",
+                "--payload",
+                "payload.bin",
+                "--wait",
+                "--out",
+                "rec.txt",
+            ],
             vec![ok(ASKED), ok(r#"{"state":"waiting"}"#), ok(APPROVED)],
             0,
             3,
@@ -159,19 +175,39 @@ fn request_answers_as_the_shell_does() {
         ),
         req(
             "request --wait --out: no record",
-            &["request", "--payload", "payload.bin", "--wait", "--out", "rec.txt"],
+            &[
+                "request",
+                "--payload",
+                "payload.bin",
+                "--wait",
+                "--out",
+                "rec.txt",
+            ],
             vec![ok(ASKED), ok(r#"{"id":"ap_1","state":"approved"}"#)],
             1,
             2,
         ),
         traceback(req(
             "request --wait --out: a folder that isn't there",
-            &["request", "--payload", "payload.bin", "--wait", "--out", "no/rec.txt"],
+            &[
+                "request",
+                "--payload",
+                "payload.bin",
+                "--wait",
+                "--out",
+                "no/rec.txt",
+            ],
             vec![ok(ASKED), ok(APPROVED)],
             1,
             2,
         )),
-        req("no payload file", &["request", "--payload", "none.bin"], vec![], 2, 0),
+        req(
+            "no payload file",
+            &["request", "--payload", "none.bin"],
+            vec![],
+            2,
+            0,
+        ),
         req(
             "--out with no --wait",
             &["request", "--payload", "payload.bin", "--out", "x"],
@@ -179,9 +215,21 @@ fn request_answers_as_the_shell_does() {
             2,
             0,
         ),
-        req("--payload last: shift fails", &["request", "--payload"], vec![], 1, 0),
+        req(
+            "--payload last: shift fails",
+            &["request", "--payload"],
+            vec![],
+            1,
+            0,
+        ),
         req("no --payload", &["request", "--wait"], vec![], 2, 0),
-        req("an unexpected word", &["request", "payload.bin"], vec![], 2, 0),
+        req(
+            "an unexpected word",
+            &["request", "payload.bin"],
+            vec![],
+            2,
+            0,
+        ),
         req(
             "a refusal: the Ask with: line",
             &["request", "--payload", "payload.bin"],
@@ -192,7 +240,10 @@ fn request_answers_as_the_shell_does() {
         req(
             "a bad request",
             &["request", "--payload", "payload.bin"],
-            vec![Reply::Answer(400, r#"{"error":"bad_payload","message":"answer_by is past"}"#.into())],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":"bad_payload","message":"answer_by is past"}"#.into(),
+            )],
             2,
             1,
         ),
@@ -258,8 +309,18 @@ fn status_cancel_and_agents_answer_as_the_shell_does() {
         one("status: many", &["status"], &many, 0),
         // covers: approve --json
         one("status --json", &["status", "ap 1", "--json"], APPROVED, 0),
-        one("status --out", &["status", "ap_1", "--out", "rec.txt"], APPROVED, 0),
-        one("status --out: not approved", &["status", "ap_1", "--out", "rec.txt"], DECLINED, 1),
+        one(
+            "status --out",
+            &["status", "ap_1", "--out", "rec.txt"],
+            APPROVED,
+            0,
+        ),
+        one(
+            "status --out: not approved",
+            &["status", "ap_1", "--out", "rec.txt"],
+            DECLINED,
+            1,
+        ),
         traceback(one("status: not JSON", &["status"], "<html>", 1)),
         traceback(one(
             "status: a row with no state",
@@ -267,34 +328,76 @@ fn status_cancel_and_agents_answer_as_the_shell_does() {
             r#"{"requests":[{"id":"a","state":"x"},{"id":"b"}]}"#,
             1,
         )),
-        stop("status: --out with no id", &["status", "--out", "rec.txt"], 2),
+        stop(
+            "status: --out with no id",
+            &["status", "--out", "rec.txt"],
+            2,
+        ),
         stop("status: an unknown flag", &["status", "--all"], 2),
-        stop("status --out last: shift fails", &["status", "ap_1", "--out"], 1),
-        case("status: no answer", &["status"], &[], vec![Reply::Close], owner_and_port, 3, 1),
+        stop(
+            "status --out last: shift fails",
+            &["status", "ap_1", "--out"],
+            1,
+        ),
+        case(
+            "status: no answer",
+            &["status"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            3,
+            1,
+        ),
         case(
             "status: 404",
             &["status", "ap_9"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no such request"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"not_found","hint":"no such request"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
         ),
         Case {
             env: with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
-            ..case("status: on the cell socket", &["status"], &[], vec![ok(ASKED)], port_only, 0, 1)
+            ..case(
+                "status: on the cell socket",
+                &["status"],
+                &[],
+                vec![ok(ASKED)],
+                port_only,
+                0,
+                1,
+            )
         },
         one("cancel", &["cancel", "ap_1"], "{}", 0),
         stop("cancel: no id", &["cancel"], 2),
-        one("agents: the list", &["agents"], r#"{"agents":[{"workspace":"w","grantedBy":"owner"}]}"#, 0),
+        one(
+            "agents: the list",
+            &["agents"],
+            r#"{"agents":[{"workspace":"w","grantedBy":"owner"}]}"#,
+            0,
+        ),
         one("agents: many", &["agents"], &agents, 0),
         one("agents: none", &["agents"], r#"{"agents":[]}"#, 0),
         one("agents on", &["agents", "w é", "on"], "{}", 0),
         one("agents off", &["agents", "w", "off"], "{}", 0),
         stop("agents: neither on nor off", &["agents", "w"], 2),
         // Help never acts: bash sends these (a bug K2 fixes; flip the rows then).
-        shell(one("cancel -h: bash sends it", &["cancel", "ap_1", "-h"], "{}", 0)),
-        shell(one("agents --help: bash sends it", &["agents", "w", "on", "--help"], "{}", 0)),
+        shell(one(
+            "cancel -h: bash sends it",
+            &["cancel", "ap_1", "-h"],
+            "{}",
+            0,
+        )),
+        shell(one(
+            "agents --help: bash sends it",
+            &["agents", "w", "on", "--help"],
+            "{}",
+            0,
+        )),
     ];
     for c in v {
         rig.check(&c);
@@ -308,8 +411,14 @@ fn the_lines_say_the_brand_s_name() {
     let rig = Rig::new("approve", "brand");
     let cli = k2_client::brand::CLI_NAME;
     for (args, want) in [
-        (&["cancel"][..], format!("Usage: {cli} approve cancel <id>\n")),
-        (&["agents", "w"], format!("Usage: {cli} approve agents [<workspace> on|off]\n")),
+        (
+            &["cancel"][..],
+            format!("Usage: {cli} approve cancel <id>\n"),
+        ),
+        (
+            &["agents", "w"],
+            format!("Usage: {cli} approve agents [<workspace> on|off]\n"),
+        ),
         (
             &["request", "--x"],
             format!("Error: unexpected argument '--x' ({cli} approve --help)\n"),

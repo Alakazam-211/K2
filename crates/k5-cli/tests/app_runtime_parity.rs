@@ -760,3 +760,51 @@ fn runtime_help_never_acts() {
         });
     }
 }
+
+/// The lines name the command and the product by the brand's names (in a
+/// build with `K2_BRAND_DIR=brand/xy` they say `xy` and `XY`), never a
+/// typed `k2`, `k5` or `K2`.
+#[test]
+fn the_lines_say_the_brand_s_name() {
+    let rig = Rig::new(VERB, "brand");
+    let cli = k2_client::brand::CLI_NAME;
+    let product = k2_client::brand::PRODUCT_NAME;
+    for (args, want, code) in [
+        (
+            &["status"][..],
+            format!("usage: {cli} app status <app-id> [--json] [--no-checks] [--public]\n"),
+            2,
+        ),
+        (
+            &["sdk", "nope"],
+            format!("usage: {cli} app sdk add|status|kit \u{2026} ({cli} app sdk --help)\n"),
+            2,
+        ),
+        (
+            &["validate", "--zap"],
+            format!("Error: unknown flag '--zap' \u{2014} usage: {cli} app validate [<folder|seed|name>] [--dir <path>] [--manifest <file>] [--types] [--json]\n"),
+            2,
+        ),
+        (
+            &["recording", "a", "--zap"],
+            format!("Unknown flag: --zap ({cli} app recording --help)\n"),
+            2,
+        ),
+        (
+            &["room-names", "sales"],
+            format!("usage: {cli} app room-names <room> hide|show   (the owner, outside {product})\n"),
+            2,
+        ),
+        (
+            &["user", "show", "bob"],
+            format!("Usage: {cli} app user show <username> --app <app> [--json]\n"),
+            1,
+        ),
+    ] {
+        let c = case("brand", args, &[], vec![], owner_and_port, code, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(code), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
+    }
+}

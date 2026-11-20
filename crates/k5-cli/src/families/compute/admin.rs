@@ -11,6 +11,7 @@
 //!   --all-mine|--workspace-all [...]`.
 //! - [`cache`]: `cache [list] [...]`, `cache --lineage L` and `cache
 //!   clear`.
+//! - [`node`]: the `node` subverbs made native so far.
 //!
 //! What runs is what [`super::writes`] runs, in the shell's order: the
 //! settings, a re-minted passport, the two gates, the `id` tool's lines,
@@ -38,6 +39,7 @@ use std::ffi::OsString;
 
 pub mod cache;
 pub mod moves;
+pub mod node;
 pub mod retier;
 pub mod switch;
 
@@ -57,6 +59,7 @@ pub const ANSWERS: &[&str] = &[
     "tier",
     "move",
     "cache",
+    "node",
 ];
 
 /// A verb this module answers, with its words read.
@@ -65,6 +68,7 @@ enum Ask {
     Retier(retier::Ask),
     Move(moves::Ask),
     Cache(cache::Ask),
+    Node(node::Ask),
 }
 
 /// Which verb: `None` for a form the binary leaves to another module or
@@ -75,6 +79,7 @@ enum Which {
     Retier,
     Move,
     Cache,
+    Node,
 }
 
 fn which(words: &[&str]) -> Option<Which> {
@@ -86,6 +91,7 @@ fn which(words: &[&str]) -> Option<Which> {
         "retier" | "tier" => Some(Which::Retier),
         "move" => Some(Which::Move),
         "cache" => Some(Which::Cache),
+        "node" => Some(Which::Node),
         _ => None,
     }
 }
@@ -106,6 +112,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return None;
     }
     let which = which(&words)?;
+    // The node subverbs not made native are the shell's.
+    let node_words = match which {
+        Which::Node => Some(node::parse(&words[1..])?),
+        _ => None,
+    };
     let max_time = writes::post_max_time(std::env::var_os("K2_CP_MAX_TIME"))?;
     if writes::shell_settings(std::env::vars_os()) {
         return None;
@@ -142,6 +153,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Which::Cache => {
             ready(cache::parse(rest, writes::in_session(&settings.auth))).map(Ask::Cache)
         }
+        Which::Node => ready(node_words.expect("parsed above")).map(Ask::Node),
     };
     let ask = match ask {
         Ok(a) => a,
@@ -169,6 +181,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Ask::Retier(a) => retier::send(&mut cp, a),
         Ask::Move(a) => moves::send(&mut cp, a),
         Ask::Cache(a) => cache::send(&mut cp, a),
+        Ask::Node(a) => node::send(&mut cp, a),
     };
     let closing = std::mem::take(&mut cp.closing);
     closing.flush(&mut client, exit);

@@ -2,7 +2,7 @@
 //! `cmd_compute` and its Python do with them.
 
 use super::super::writes::Words;
-use super::{cache, moves, retier, switch};
+use super::{cache, moves, node, retier, switch};
 use crate::exit::Exit;
 use k2_client::cli_name;
 
@@ -174,10 +174,32 @@ fn the_lines_say_the_brand_s_name() {
         cache::USAGE,
         cache::CLEAR_USAGE,
         cache::LINEAGE_LIST_USAGE,
+        node::USAGE,
+        node::ADD_USAGE,
+        node::CONFIRM_USAGE,
+        node::REMOVE_USAGE,
+        node::RETIRE_USAGE,
+        node::RENAME_USAGE,
+        node::PINNED_USAGE,
+        node::ROUTE_USAGE,
+        node::ALERTS_USAGE,
     ]
     .map(String::from)
     .to_vec();
     lines.push(usage(retier::parse(&["abc", "--priority"])));
+    match node::parse(&["drain"]) {
+        Some(w) => lines.push(usage(w)),
+        None => panic!("node drain is native"),
+    }
+    let enrolled = node::reader(
+        &node::Reader::Enroll,
+        br#"{"name":"n","enroll":"c","install":{"linux":"l","macos":"m","servers":"s"},"confirm":"c"}"#,
+    );
+    assert!(enrolled.stdout.contains(&format!("({cli} vault set NAME")));
+    assert!(enrolled.stdout.contains(&format!("Scripts: {cli} compute node add n --json")));
+    if cli != "k2" {
+        assert!(!enrolled.stdout.contains("k2 ") && !enrolled.stdout.contains("k5 "));
+    }
     let moved = moves::reader(br#"{"warnings":["w"],"matched":0,"moved":[]}"#);
     lines.push(moved.stderr.clone());
     let listed = cache::reader(br#"{"nodes":[]}"#, false, 0);

@@ -132,7 +132,8 @@ CLI TOOLS (gh, vercel: tools that read a token from the environment)
      (or ask: k2 thread secret <addr> --name GITHUB_CLI --delivery env)
   2. k2 vault grant GITHUB_CLI --to ws:<you> --env-name GH_TOKEN
      (vercel: --env-name VERCEL_TOKEN, then plain vercel …; both CLIs
-     read the env. Never --token "$VAR": ps shows argv to your user.)
+     read the env. Never --token "$VAR": ps shows a command line to every
+     account on this computer.)
   3. Restart the session: env arrives in new sessions only.
   4. Delete the tool's own login file, or it may keep using it:
      gh ~/.config/gh/hosts.yml; vercel com.vercel.cli/auth.json

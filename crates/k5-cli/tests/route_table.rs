@@ -336,6 +336,7 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
             ["app"] => app_verbs_are_its_arms(noun),
             ["chat"] => chat_verbs_are_its_arms(noun),
             ["mail"] => mail_verbs_are_its_arms(noun),
+            ["hostmail"] => hostmail_verbs_are_its_arms(noun),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -451,6 +452,40 @@ fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
                 || k5_cli::families::mail::owner::VERBS.contains(&word)
                 || k5_cli::families::mail::forward::VERBS.contains(&word),
             "{word}: a mail verb row no family module answers"
+        );
+    }
+}
+
+/// `hostmail`'s verb rows: each is one arm of `cmd_hostmail`'s case
+/// (`cli/src/hostmail-app-cert-backup.sh`), which hands it to its own
+/// function, and one the binary's family parses.
+fn hostmail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "hostmail-app-cert-backup.sh")
+        .expect("cli/src/hostmail-app-cert-backup.sh")
+        .1;
+    let body = &text[text.find("\ncmd_hostmail() {\n").expect("cmd_hostmail")..];
+    let body = &body[..body.find("\n}\n").expect("its end")];
+    for verb in noun.verbs {
+        assert_eq!(
+            verb.words.len(),
+            1,
+            "{:?}: one word per verb row",
+            verb.words
+        );
+        let word = verb.words[0];
+        let arm = format!("        {word})");
+        assert!(
+            body.lines()
+                .any(|l| l.starts_with(&arm) && l.contains(" \"$@\" ;;")),
+            "cmd_hostmail's case has no {word} arm"
+        );
+        assert_ne!(
+            k5_cli::families::hostmail::parse(word, &["--json"]),
+            k5_cli::families::mail::core::Plan::Shell,
+            "{word}: a hostmail verb row the family does not parse"
         );
     }
 }

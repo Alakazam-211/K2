@@ -89,8 +89,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
 }
 
-/// `_mail_py`'s verb chain: the branch for `M_VERB`.
-fn exec(py_: &mut core::Py) -> core::R<()> {
+/// `_mail_py`'s verb chain: the branch for `M_VERB`. `hostmail` runs the
+/// same Python.
+pub fn exec(py_: &mut core::Py) -> core::R<()> {
     let verb = py_.env("M_VERB").to_string();
     reads::exec(py_, &verb)
         .or_else(|| writes::exec(py_, &verb))

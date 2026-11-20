@@ -132,6 +132,20 @@ assert not any("passport-abc" in l for l in lines if not l.startswith("FD3=")), 
 PY
 ok "the CLI execs the daemon's helper; the passport on fd 3, never in its env; the child's words stay the child's"
 
+# Help after a bare `--` is the child's: no help page, the run goes on, and
+# the CLI's only call is still run-helper.
+rm -f "$HITS"
+out="$(k2s vault run --secret A -- grep --help)" || fail "vault run -- grep --help: $out"
+[ "$(cat "$HITS")" = "GET /cli/vault/run-helper" ] || fail "-- grep --help: the CLI's only call should be run-helper: $(cat "$HITS")"
+if <<<"$out" grep -Fq "k2 vault run "; then fail "-- grep --help printed the run help: $out"; fi
+python3 - "$WORK/helper.log" <<'PY' || fail "-- grep --help: helper argv: $(cat "$WORK/helper.log")"
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+args = [l[4:] for l in lines if l.startswith("ARG=")]
+assert args == ["--vault-run", "--token-fd", "3", "--secret", "A", "--", "grep", "--help"], args
+PY
+ok "vault run --secret A -- grep --help: --help is grep's, the run goes on"
+
 # A session whose passport is under K5_HOOK_TOKEN: the helper gets that one,
 # on fd 3, and no name of it in its env.
 out="$(env HOME="$WORK" K2_PORT="$PORT" K5_HOOK_TOKEN=passport-k5 K2_HOOK_TOKEN=passport-abc K2SO_HOOK_TOKEN=passport-so FAKE_HELPER_LOG="$WORK/helper.log" "$K2_CLI" vault run --secret A -- true)" || fail "vault run (K5_): $out"

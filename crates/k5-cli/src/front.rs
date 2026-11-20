@@ -10,7 +10,8 @@
 //!
 //! A family's help never reaches the family: a command line of a `Native`
 //! row or verb row with `-h` or
-//! `--help` anywhere in it (`setup`: or the word `help`) is a help page
+//! `--help` anywhere in it (`setup`: or the word `help`; `vault run`: only
+//! before a bare `--`, the rest being the child's) is a help page
 //! when it is exactly a form the shell only prints a file for
 //! ([`Route::Help`], [`help_route`]), and falls through
 //! otherwise, so the shell prints its help text (or its error for a flag
@@ -185,7 +186,7 @@ fn native(noun: &'static Noun, args: &[OsString]) -> Route {
         };
     }
     // A family's help is a page or the shell's, never the family's.
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    if help_words(&words).any(|w| matches!(*w, "-h" | "--help")) {
         return help_route(args).map_or(Route::Fallthrough, Route::Help);
     }
     // `cmd_setup`'s loop reads `help` as `--help`.
@@ -193,6 +194,23 @@ fn native(noun: &'static Noun, args: &[OsString]) -> Route {
         return help_route(args).map_or(Route::Fallthrough, Route::Help);
     }
     Route::Family(noun)
+}
+
+/// The words of a line the front reads for `-h` and `--help`. Words after
+/// a bare `--` belong to a child command and are never help flags, where
+/// the shell reads them so: `vault run` (`cmd_vault` hands `run` its words
+/// before its help scan, and `_vault_run` stops at `--`). Every other verb
+/// is scanned whole, as the shell's `_wants_help "$@"` scans it, `--` and
+/// all (a bash bug where the verb takes a command after `--`, as `compute
+/// run` and `job` do; copied until the shell's fix lands).
+fn help_words<'a>(words: &'a [&'a str]) -> impl Iterator<Item = &'a &'a str> + 'a {
+    let stops_at_dashes = matches!(words, ["vault", "run", ..]);
+    let end = if stops_at_dashes {
+        words.iter().position(|w| *w == "--").unwrap_or(words.len())
+    } else {
+        words.len()
+    };
+    words[..end].iter()
 }
 
 /// The help form `args` is, when the shell only prints a file for it
@@ -368,6 +386,42 @@ mod tests {
             assert_eq!(route(&args(line)), Route::Fallthrough, "{line:?}");
         }
         assert_eq!(route(&args(&["Whoami"])), Route::Unknown);
+    }
+
+    /// Words after a bare `--` are a child command's, never help flags,
+    /// where the shell reads them so (`vault run`); other verbs are
+    /// scanned whole, as the shell's `_wants_help` does.
+    #[test]
+    fn help_stops_at_dashes_for_vault_run() {
+        assert_eq!(
+            route(&args(&[
+                "vault", "run", "--secret", "A", "--", "grep", "--help"
+            ])),
+            family("vault")
+        );
+        assert_eq!(
+            route(&args(&["vault", "run", "--secret", "A", "--", "ls", "-h"])),
+            family("vault")
+        );
+        // Before the `--`: still help.
+        assert_eq!(
+            route(&args(&["vault", "run", "--help", "--", "grep"])),
+            help_route(&args(&["vault", "run", "--help", "--", "grep"]))
+                .map_or(Route::Fallthrough, Route::Help)
+        );
+        assert_ne!(
+            route(&args(&["vault", "run", "-h", "--", "grep"])),
+            family("vault")
+        );
+        // Other verbs: the shell's scan reads past `--`.
+        assert_ne!(
+            route(&args(&["vault", "fetch", "--", "--help"])),
+            family("vault")
+        );
+        assert_ne!(
+            route(&args(&["compute", "run", "--", "grep", "--help"])),
+            family("compute")
+        );
     }
 
     /// `done`'s front code: any `-h` or `--help` word goes to the shell,

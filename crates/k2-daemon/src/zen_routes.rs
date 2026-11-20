@@ -143,6 +143,21 @@ pub const GET_ROUTES: &[&str] = &[
 ];
 
 
+/// D1 (0.46.17): the reads a local passport may make, the ones the zen
+/// skill and RULES send agents to. Not here: `history` and `get` (the
+/// person's file history), `inspect` (any folder on the computer), `sync`
+/// and `news` (the person's, SD5), and every write.
+pub const PASSPORT_READS: &[&str] = &[
+    "/cli/zen/doctor",
+    "/cli/zen/gardens",
+    "/cli/zen/status",
+    "/cli/zen/theme/list",
+    "/cli/zen/validate",
+    "/cli/zen/widget/errors",
+    "/cli/zen/widget/show",
+    "/cli/zen/widgets",
+];
+
 /// Fingerprint of the last state announced with `zen_changed`.
 static LAST_FINGERPRINT: Mutex<Option<String>> = Mutex::new(None);
 
@@ -1499,7 +1514,13 @@ pub fn handle(
     // (the history modal's button).
     let garden_owner_login =
         garden_owner && !owner && (GARDEN_OWNER_ROUTES.contains(&path) || (access_on && path == "/cli/zen/widget/sign"));
-    if !owner && !garden_owner_login && access_on {
+    // D1 (0.46.17): an agent's reads of the Gardens it is told to build and
+    // check (`k2 zen validate`, the lists, a widget's errors), with or
+    // without Garden access; never a sandboxed agent or an API cell.
+    let passport_read = !owner && !garden_owner_login && is_local_passport(caller) && PASSPORT_READS.contains(&path);
+    if passport_read {
+        // A read: no Garden list or lock applies.
+    } else if !owner && !garden_owner_login && access_on {
         // G11/G12: the lock, then the Garden's list (zen_access_routes).
         if let Some(r) = crate::zen_access_routes::passport_gate(path, caller, body, ingress) {
             return r;

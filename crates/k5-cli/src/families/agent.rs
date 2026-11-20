@@ -2,7 +2,8 @@
 //! `agent)` arm and its `cmd_agent_*` functions answer it
 //! (`cli/src/router.sh`, `cli/src/agent.sh`).
 //!
-//! Native here: `conf`, `get`, `list`, `retire` and `restart`. Every other
+//! Native here: `conf`, `get`, `list`, `retire`, `restart` and `context`
+//! (`cli/src/agent-context.sh`). Every other
 //! verb, and the family alone, is still the shell's: [`run`] hands it
 //! back before anything is printed or sent.
 //!
@@ -47,6 +48,7 @@
 //! [`Opener`]: crate::transport::urllib::Opener
 
 mod conf;
+mod context;
 mod list;
 mod retire;
 
@@ -87,6 +89,7 @@ enum Form {
     List { json: bool },
     Retire(retire::RetireArgs),
     Restart(retire::RestartArgs),
+    Context(context::ContextArgs),
 }
 
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -105,12 +108,18 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "list" => list::parse(rest).map(|json| Form::List { json }),
         "retire" => retire::parse_retire(rest).map(Form::Retire),
         "restart" => retire::parse_restart(rest).map(Form::Restart),
+        "context" => Ok(Form::Context(context::parse(rest))),
         _ => return None,
     };
     if !python::family_native(python::here()) {
         return None;
     }
     std::env::var_os("HOME")?.to_str()?;
+    for name in k2_client::env_names::PROJECT_PATH {
+        if let Some(v) = std::env::var_os(name) {
+            v.to_str()?;
+        }
+    }
     let settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {
@@ -148,6 +157,7 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
         Form::List { json } => list::list(&mut client, &mut closing, json),
         Form::Retire(a) => retire::retire(&mut client, &mut closing, &a),
         Form::Restart(a) => retire::restart(&mut client, &mut closing, &a),
+        Form::Context(a) => context::run(&mut client, &mut closing, &a),
     };
     closing.flush(&mut client, exit);
     exit
@@ -297,7 +307,6 @@ mod tests {
             &["agent", "hire", "x"],
             &["agent", "set", "x"],
             &["agent", "template", "list"],
-            &["agent", "context", "list"],
             &["agent", "conf", "--help"],
             &["agent", "list", "-h"],
             &["agent", "nope"],

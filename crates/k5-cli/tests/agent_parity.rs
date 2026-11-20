@@ -1010,3 +1010,529 @@ fn the_lines_say_the_brand_s_name() {
         format!("No agents registered on this server. Hire one: {cli} agent hire <dir>\n")
     );
 }
+
+const LAYERS: &str = r#"{"ok":true,"pinned":[{"id":"pinned:agent","label":"Agent (persona)","path":".k2/agent/ROLE.md"},{"id":"pinned:project","label":"Project","path":".k2/PROJECT.md","enabled":"on"},{"id":"pinned:tooling","label":"Tooling","enabled":false}],"layers":[{"id":"lay-b","position":"1","path":"docs/runbook.md","label":"Runbook","enabled":true},{"id":"lay-a","position":0,"source":"catalog:wiki-index","exists":false,"path":".k2/wiki/_Index.md"},{"id":"lay-c","source":"preset:hygiene","path":"notes/a.long.name.md","enabled":0},{"id":"lay-d-0123456789abcdef"}]}"#;
+
+const CATALOG: &str = r#"{"ok":true,"catalog":[{"id":"wiki:index","label":"Wiki index","path":".k2/wiki/_Index.md","description":"  The vault's map. "},{"id":"team:roster","source":"connections-roster","name":"Roster"},{"id":"manager:pack","kind":" static ","defaultPath":"catalog/manager.md"},{"id":"x"},"a bare entry"]}"#;
+
+#[test]
+fn context_words() {
+    let rig = Rig::new(VERB, "ctxwords");
+    let mut v = vec![
+        // covers: agent context
+        case(
+            "the family's help",
+            &["context"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        // covers: agent context --json
+        case(
+            "--json alone: an unknown verb",
+            &["context", "--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+    ];
+    for args in [
+        &["context", "--help"][..],
+        &["context", "list", "-h"],
+        &["context", "add", "x.md", "--help"],
+        &["context", "remove", "x", "-h"],
+        &["context", "on", "agent", "--help"],
+        &["context", "off", "-h"],
+        &["context", "move", "a", "up", "-h"],
+        &["context", "regen", "--help"],
+        &["context", "show", "-h"],
+        &["context", "catalog", "--help"],
+        &["context", "--workspace", "x", "rm", "y", "--help"],
+    ] {
+        v.push(case(
+            "help, nothing sent",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ));
+    }
+    for args in [
+        &["context", "nope"][..],
+        &["context", "list", "x"],
+        &["context", "list", "--x"],
+        &["context", "add"],
+        &["context", "add", "--label"],
+        &["context", "add", "a", "b"],
+        &["context", "add", "-q"],
+        &["context", "remove"],
+        &["context", "rm", "a", "b"],
+        &["context", "delete", "--f"],
+        &["context", "on"],
+        &["context", "off", "--x"],
+        &["context", "move", "a"],
+        &["context", "move", "a", "sideways"],
+        &["context", "move", "a", "-1"],
+        &["context", "move", "a", "b", "c"],
+        &["context", "show", "x"],
+        &["context", "show", "--y"],
+        &["context", "regen", "x"],
+        &["context", "catalog", "--z"],
+        &["context", "list", "--workspace"],
+        &["context", "--project"],
+    ] {
+        v.push(case(
+            "a usage line",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ));
+    }
+    check(&rig, v);
+}
+
+#[test]
+fn context_reads() {
+    let rig = Rig::new(VERB, "ctxread");
+    let v = vec![
+        // covers: agent context list
+        case("list", &["context", "list"], &[], vec![ok(LAYERS)], owner_and_port, 0, 1),
+        // covers: agent context list --json
+        case(
+            "list --json",
+            &["context", "list", "--json"],
+            &[],
+            vec![ok(&*leak(&[&format!("{LAYERS}\n\n")])[0])],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list, nothing set",
+            &["context", "list"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list, soft warnings",
+            &["context", "list"],
+            &[],
+            vec![ok(r#"{"ok":true,"softWarn":["AGENTS.md is 40 KB",{"a":1}],"layers":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list --json, a soft warning",
+            &["context", "list", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true,"warn":{"message":"big"}}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a workspace folder",
+            &["context", "--workspace", "/tmp", "list"],
+            &[],
+            vec![ok(LAYERS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a workspace the daemon resolves",
+            &["context", "list", "--project=acme"],
+            &[],
+            vec![ok(r#"{"ok":true,"path":"/srv/acme"}"#), ok(LAYERS)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "a workspace it doesn't know",
+            &["context", "--workspace", "ghost", "show"],
+            &[],
+            vec![ok(r#"{"ok":false}"#), ok(r#"{"ok":true,"content":"x"}"#)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "PROJECT_PATH names the workspace",
+            &["context", "list"],
+            &[("K2_PROJECT_PATH", "~/w/../acme")],
+            vec![ok(LAYERS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent context catalog
+        case("catalog", &["context", "catalog"], &[], vec![ok(CATALOG)], owner_and_port, 0, 1),
+        // covers: agent context catalog --json
+        case(
+            "catalog --json",
+            &["context", "catalog", "--json"],
+            &[],
+            vec![ok(CATALOG)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "catalog, none",
+            &["context", "catalog"],
+            &[],
+            vec![ok(r#"{"ok":true,"catalog":[],"softWarn":"not shown"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent context show
+        case(
+            "show",
+            &["context", "show"],
+            &[],
+            vec![ok(r##"{"ok":true,"content":"# AGENTS\n\nbody"}"##)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "show --outline",
+            &["context", "show", "--outline"],
+            &[],
+            vec![ok(r#"{"ok":true,"outline":[{"level":1,"title":"AGENTS"},{"depth":"3","heading":"Deep"},{"title":"No level"},"bare"]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "show --outline, none: the text",
+            &["context", "show", "--outline"],
+            &[],
+            vec![ok(r#"{"ok":true,"outline":[],"text":"ends\n"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "show, the JSON when no text",
+            &["context", "show"],
+            &[],
+            vec![ok(r#"{"ok":true,"layers":[1,{"a":"é"}],"empty":{}}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent context show --json
+        case(
+            "show --json",
+            &["context", "show", "--json", "--outline"],
+            &[],
+            vec![ok(r#"{"ok":true,"outline":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "not found",
+            &["context", "list"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no workspace"}}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "refused",
+            &["context", "show"],
+            &[],
+            vec![Reply::Answer(409, r#"{"error":{"code":"Refused","hint":"no"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "bad usage",
+            &["context", "catalog"],
+            &[],
+            vec![ok(r#"{"error":{"code":"catalog_unknown"}}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "an error string",
+            &["context", "list"],
+            &[],
+            vec![ok(r#"{"error":"broken"}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        traceback(case(
+            "an error code that is not a string",
+            &["context", "list"],
+            &[],
+            vec![ok(r#"{"error":{"code":5}}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case(
+            "an HTTP error with no body",
+            &["context", "list"],
+            &[],
+            vec![Reply::Answer(500, String::new())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an empty answer",
+            &["context", "list"],
+            &[],
+            vec![ok(" \n")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case("not JSON", &["context", "list"], &[], vec![ok("<html>")], owner_and_port, 1, 1),
+        case(
+            "not ok",
+            &["context", "list"],
+            &[],
+            vec![ok(r#"{"ok":false,"why":"x"}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "a 404 with no context fields",
+            &["context", "catalog"],
+            &[],
+            vec![Reply::Answer(404, r#"{"msg":"no route"}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "no answer",
+            &["context", "list"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        Case {
+            compare: Compare::OwnerTokenWithPassport,
+            ..Case {
+                env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+                ..case(
+                    "a session with a passport, the owner on disk (PRD 13.9 #4)",
+                    &["context", "list"],
+                    &[],
+                    vec![ok(LAYERS)],
+                    owner_and_port,
+                    0,
+                    1,
+                )
+            }
+        },
+    ];
+    check(&rig, v);
+    let port = dead_port();
+    rig.check(&case(
+        "no daemon",
+        &["context", "list"],
+        &[("K2_PORT", port.as_str())],
+        vec![],
+        owner_only,
+        1,
+        0,
+    ));
+}
+
+#[test]
+fn context_writes() {
+    let rig = Rig::new(VERB, "ctxwrite");
+    let done = r#"{"ok":true,"regenerated":true}"#;
+    let v = vec![
+        // covers: agent context add
+        case(
+            "add a path, a label",
+            &["context", "add", "docs/runbook.md", "--label", "Runbook"],
+            &[],
+            vec![ok(r#"{"ok":true,"layer":{"id":"lay-b","label":"Runbook","path":"docs/runbook.md"},"regenerated":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "add a catalog id",
+            &["context", "add", "wiki:index"],
+            &[],
+            vec![ok(r#"{"ok":true,"added":{"id":"lay-w"},"path":".k2/wiki/_Index.md","regenerated":false}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "add, the id as the path",
+            &["context", "add", "~/notes"],
+            &[],
+            vec![ok(r#"{"ok":true,"id":"same","path":"same"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent context add --json
+        case(
+            "add --json",
+            &["context", "add", "x.markdown", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true,"layer":{"id":"x"},"softWarn":"large"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "add, a duplicate: exit 3",
+            &["context", "add", "./a"],
+            &[],
+            vec![Reply::Answer(409, r#"{"error":{"code":"duplicate_layer","hint":"already there"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        // covers: agent context remove
+        case(
+            "remove a pinned layer, no lookup",
+            &["context", "remove", "tooling"],
+            &[],
+            vec![ok(done)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "remove by label",
+            &["context", "rm", "runbook"],
+            &[],
+            vec![ok(LAYERS), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        // covers: agent context remove --json
+        case(
+            "remove by path, --json",
+            &["context", "delete", "a.long.name.md", "--json"],
+            &[],
+            vec![ok(LAYERS), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "remove, no such layer: exit 4",
+            &["context", "remove", "nothing-here"],
+            &[],
+            vec![ok(LAYERS)],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "remove, the lookup fails",
+            &["context", "remove", "x"],
+            &[],
+            vec![Reply::Answer(500, String::new())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: agent context on
+        case("on a pinned layer", &["context", "on", "pinned:project"], &[], vec![ok(done)], owner_and_port, 0, 1),
+        // covers: agent context on --json
+        case(
+            "on by id, --json",
+            &["context", "on", "lay-d-0123456789abcdef", "--json"],
+            &[],
+            vec![ok(LAYERS), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        // covers: agent context off
+        case("off by source", &["context", "off", "hygiene"], &[], vec![ok(LAYERS), ok(done)], owner_and_port, 0, 2),
+        // covers: agent context off --json
+        case("off --json", &["context", "off", "agent", "--json"], &[], vec![ok(done)], owner_and_port, 0, 1),
+        // covers: agent context move
+        case("move up", &["context", "move", "Runbook", "up"], &[], vec![ok(LAYERS), ok(done)], owner_and_port, 0, 2),
+        case("move to a place", &["context", "move", "lay-a", "007"], &[], vec![ok(LAYERS), ok(done)], owner_and_port, 0, 2),
+        // covers: agent context move --json
+        case(
+            "move --json, refused",
+            &["context", "move", "lay-a", "top", "--json"],
+            &[],
+            vec![ok(LAYERS), Reply::Answer(400, r#"{"error":{"code":"invalid_move","hint":"already top"}}"#.into())],
+            owner_and_port,
+            2,
+            2,
+        ),
+        // covers: agent context regen
+        case(
+            "regen",
+            &["context", "regen"],
+            &[],
+            vec![ok(r#"{"ok":true,"path":"/w/.k2/AGENTS.md","bytes":2048}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "regen, the default path",
+            &["context", "regen"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent context regen --json
+        case(
+            "regen --json",
+            &["context", "regen", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true,"size":3}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "no answer to the POST",
+            &["context", "regen"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+    ];
+    check(&rig, v);
+}

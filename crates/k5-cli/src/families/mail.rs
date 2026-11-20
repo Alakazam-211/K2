@@ -10,6 +10,8 @@
 //! - [`writes`]: the writes, each sent once (`send`, `reply`, `move`, …).
 //! - [`owner`]: the owner's verbs (`link`, `access`, `oauth-config`,
 //!   `sending`).
+//! - [`forward`]: `forward`, a person's own mailbox forwards (the
+//!   Python branch is `hostmail forward`'s too).
 //! - [`py`]: the Python value rules the printers share.
 //!
 //! The route table sends a verb here only once it has a row of its own
@@ -20,6 +22,7 @@ use crate::exit::Exit;
 use std::ffi::OsString;
 
 pub mod core;
+pub mod forward;
 pub mod owner;
 pub mod py;
 pub mod reads;
@@ -30,7 +33,7 @@ pub mod writes;
 pub const WORDS: &[&str] = &["mail"];
 /// The shell's but for [`VERBS`].
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// `watch`, the reads, the writes and the owner's verbs; every other
+/// `watch`, the reads, the writes, the owner's verbs and `forward`; every other
 /// verb, and `mail` alone, is the shell's. One verb row each, so each can turn back alone.
 pub const VERBS: &[crate::route::Verb] = &[
     native(&["watch"]),
@@ -59,6 +62,7 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["access"]),
     native(&["oauth-config"]),
     native(&["sending"]),
+    native(&["forward"]),
 ];
 
 /// A verb row the binary answers.
@@ -80,6 +84,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some(v) if reads::VERBS.contains(&v) => core::run(args, reads::parse, exec),
         Some(v) if writes::VERBS.contains(&v) => core::run(args, writes::parse, exec),
         Some(v) if owner::VERBS.contains(&v) => core::run(args, owner::parse, exec),
+        Some(v) if forward::VERBS.contains(&v) => core::run(args, forward::parse, exec),
         _ => None,
     }
 }
@@ -90,6 +95,7 @@ fn exec(py_: &mut core::Py) -> core::R<()> {
     reads::exec(py_, &verb)
         .or_else(|| writes::exec(py_, &verb))
         .or_else(|| owner::exec(py_, &verb))
+        .or_else(|| forward::exec(py_, &verb))
         .unwrap_or_else(|| unreachable!("no _mail_py branch for {verb}"))
 }
 

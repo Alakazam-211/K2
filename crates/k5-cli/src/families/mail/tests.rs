@@ -1580,6 +1580,92 @@ fn the_lines_that_raise_are_the_shell_s() {
     }
 }
 
+/// The lines of `_mail_py` the forward branch raises at.
+#[test]
+fn the_forward_lines_are_the_shell_s() {
+    use super::forward::line;
+    let s = mail_py_script();
+    let pins: &[(u32, &str)] = &[
+        (line::DIE_CODE, "code = (err or {}).get(\"code\", \"error\")"),
+        (line::DIE_HINT, "hint = (err or {}).get(\"hint\", \"\")"),
+        (line::DIE_ANY, "die(err, permission=permission)"),
+        (line::CALL_REQUEST, "d = request(method, route, params, body, timeout"),
+        (line::CALL_ERROR, "if d.get(\"error\"):"),
+        (line::CALL_DIE, "fwd_die(d[\"error\"], d.get(\"permission\"))"),
+        (line::CALL_OK, "if not d.get(\"ok\"):"),
+        (line::LINE_TO, "f.get(\"to\") or \"?\", \"true\" if f.get(\"keep\") else"),
+        (line::LINE_KIND, "f.get(\"kind\") or \"?\", f.get(\"state\") or \"?\")"),
+        (line::LINE_STATE, "if f.get(\"state\") == \"paused\" and f.get(\"pauseRe"),
+        (line::DETAIL_STATE, "if f.get(\"state\") == \"paused\" and f.get(\"pauseRe"),
+        (line::DETAIL_WORDS, "elif f.get(\"state\") == \"paused\" and f.get(\"pause"),
+        (line::DETAIL_REASON, "reason = f.get(\"pauseReason\") or \"\""),
+        (line::DETAIL_HELD, "if f.get(\"heldBy\"):"),
+        (line::DETAIL_CANT, "if f.get(\"cantArrive\"):"),
+        (line::DETAIL_NOTICE_WORDS, "if f.get(\"noticeWords\"):"),
+        (line::DETAIL_NOTICE, "elif f.get(\"notice\") == \"sent\" and f.get(\"notice"),
+        (line::DETAIL_TOLD, "out.append(\"  told %s: emailed it a stop link %s"),
+        (line::DETAIL_C, "c = f.get(\"last24h\") or {}"),
+        (line::DETAIL_ANY, "if f.get(\"kind\") == \"external\" or any(c.get(k) f"),
+        (line::DETAIL_COUNTS, "c.get(\"forwarded\", 0), c.get(\"delivered\", 0), c."),
+        (line::DETAIL_SET_BY, "if f.get(\"setBy\"):"),
+        (line::NOTE, "if d.get(\"note\"):"),
+        (line::GET_CALL, "d = fwd_call(\"GET\", base_route, params=params)"),
+        (line::GET_A, "a = d.get(\"address\") or addr_arg or \"?\""),
+        (line::GET_ROWS, "rows = d.get(\"forwards\")"),
+        (line::GET_FORWARD, "rows = [d[\"forward\"]] if d.get(\"forward\") else ["),
+        (line::GET_FOR, "for f in rows:"),
+        (line::GET_LINE, "print(\"%s  %s\" % (a, fwd_line(f)))"),
+        (line::GET_DETAIL, "for line in fwd_detail(f):"),
+        (line::GET_VOL, "vol = d.get(\"volume\") or {}"),
+        (line::GET_VOL_PRINT, "vol.get(\"copiesCounted\", 0), vol.get(\"copiesPerD"),
+        (line::GET_EVS, "evs = d.get(\"events\") or []"),
+        (line::GET_EV_FOR, "for e in evs[:5]:"),
+        (line::GET_EV_DETAIL, "det = e.get(\"detail\") or {}"),
+        (line::GET_EV_PRINT, "print(\"    %s  %-12s %s%s\" % (when(e.get(\"at\")),"),
+        (line::SET_CALL, "d = fwd_call(\"POST\", route, body=body, timeout=3"),
+        (line::SET_A, "a = d.get(\"address\") or addr_arg or \"?\""),
+        (line::SET_FOR, "for one in d.get(\"destinations\") or [d]:"),
+        (line::SET_TO, "dest = one.get(\"to\") or \"?\""),
+        (line::SET_KEEP, "keep = \"keeps a copy\" if one.get(\"keep\") else \"n"),
+        (line::SET_PRINT, "print(\"forward %s -> %s (%s): %s\" % (a, dest, ke"),
+        (line::SET_MESSAGE, "if one.get(\"message\"):"),
+        (line::SET_NOTE, "if one.get(\"note\") and one.get(\"note\") != d.get("),
+        (line::SET_NOTE_LINE, "note_line(d)"),
+        (line::RM_CALL, "d = fwd_call(\"POST\", base_route + \"/rm\", body=bo"),
+        (line::RM_A, "a = d.get(\"address\") or addr_arg or \"?\""),
+        (line::RM_PRINT, "print(\"%s no longer forwards to %s\" % (a, \", \".j"),
+        (line::RM_LEFT, "left = d.get(\"remaining\") or []"),
+        (line::RM_LEFT_PRINT, "print(\"still forwarding to: %s\" % (\", \".join(lef"),
+        (line::RM_NOTE_LINE, "note_line(d)"),
+        (line::UNSET_CALL, "d = fwd_call(\"POST\", base_route + \"/unset\", body"),
+        (line::UNSET_A, "a = d.get(\"address\") or addr_arg or \"?\""),
+        (line::UNSET_REMOVED, "if d.get(\"removed\") is False:"),
+        (line::UNSET_NOTE_LINE, "note_line(d)"),
+        (line::PAUSE_CALL, "d = fwd_call(\"POST\", base_route + \"/\" + op, body"),
+        (line::PAUSE_A, "a = d.get(\"address\") or addr_arg or \"?\""),
+        (line::PAUSE_ROWS, "rows = d.get(\"forwards\") or []"),
+        (line::PAUSE_WHICH, "which = \" (%s)\" % \", \".join(r.get(\"to\") or \"?\" f"),
+        (line::PAUSE_STATE, "print(\"forward resumed for %s%s (state %s)\" % (a"),
+        (line::PAUSE_SKIPPED, "for sk in d.get(\"skipped\") or []:"),
+        (line::PAUSE_SK, "print(\"left alone: %s: %s\" % (sk.get(\"to\") or \"?"),
+        (line::PAUSE_NOTE_LINE, "note_line(d)"),
+        (line::LIST_CALL, "d = fwd_call(\"GET\", \"/cli/mail/forwards\", params"),
+        (line::LIST_ROWS, "rows = d.get(\"forwards\") or []"),
+        (line::LIST_OC, "oc = d.get(\"outcomes\") or {}"),
+        (line::LIST_OC_OK, "if oc.get(\"ok\") is False:"),
+        (line::LIST_OC_ERROR, "print(\"warning: delivery reports aren't reaching"),
+        (line::LIST_FOR, "for f in rows:"),
+        (line::LIST_LINE, "print(\"%s  %s\" % (f.get(\"address\") or \"?\", fwd_l"),
+        (line::LIST_PAUSED, "if f.get(\"state\") == \"paused\" and f.get(\"pauseWo"),
+        (line::LIST_CANT, "if f.get(\"cantArrive\"):"),
+        (line::LIST_NOTICE, "if f.get(\"noticeWords\"):"),
+    ];
+    for (n, text) in pins {
+        let got = s[*n as usize - 1].trim();
+        assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
+    }
+}
+
 #[test]
 fn the_boot_script_runs_the_mail_script_at_its_line_13() {
     let path =

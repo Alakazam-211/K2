@@ -1938,3 +1938,52 @@ mod forward_words {
         assert_eq!(e.get("M_RESTART"), "false");
     }
 }
+
+mod hostmail_words {
+    use super::super::core::Plan;
+    use crate::families::hostmail::parse;
+    use k2_client::brand::CLI_NAME;
+
+    /// Each usage line that names a command names the brand's, and no
+    /// other.
+    #[test]
+    fn usage_lines_name_the_brand_s_command() {
+        for (verb, words) in [
+            ("forward", &["x"][..]),
+            ("forward", &["show"]),
+            ("forward", &["list", "x"]),
+            ("quota", &["x"]),
+            ("quota", &["get"]),
+            ("quota", &["set", "a", "--tb"]),
+            ("catchall", &["show"]),
+            ("catchall", &["set", "d", "-x"]),
+            ("alias", &["add", "m"]),
+            ("alias", &["list"]),
+            ("ooo", &["set", "a", "--x"]),
+            ("ooo", &["show"]),
+            ("footer", &["set", "w"]),
+            ("footer", &["x"]),
+        ] {
+            let h = match parse(verb, words) {
+                Plan::Usage(h) => h,
+                other => panic!("{verb} {words:?}: {other:?}"),
+            };
+            assert!(h.contains(&format!("{CLI_NAME} hostmail ")), "{verb}: {h}");
+            if CLI_NAME != "k2" {
+                assert!(!h.contains("k2 ") && !h.contains("k5 "), "{verb}: {h}");
+            }
+        }
+    }
+
+    /// `--text -` and a `--days` bash can't read are the shell's.
+    #[test]
+    fn the_shell_answers_what_it_alone_can() {
+        assert_eq!(parse("ooo", &["set", "a", "--text", "-"]), Plan::Shell);
+        assert_eq!(
+            parse("ooo", &["set", "a", "--text", "x", "--days", "99999999999999999999"]),
+            Plan::Shell
+        );
+        assert_eq!(parse("footer", &["set", "--text", "-"]), Plan::Shell);
+        assert_eq!(parse("status", &[]), Plan::Shell);
+    }
+}

@@ -33,11 +33,14 @@
 //! the named difference `zen-large-answer` (`scripts/cli-parity.sh`).
 
 pub mod call;
-pub mod verbs;
-pub mod widget;
 pub mod data;
+pub mod garden;
+pub mod guide;
+pub mod more;
 pub mod print;
 pub mod sign;
+pub mod verbs;
+pub mod widget;
 
 use super::curl_port;
 use crate::daemon;

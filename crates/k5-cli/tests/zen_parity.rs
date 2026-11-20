@@ -1345,7 +1345,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             "sync preview",
             &["sync", "g1", "preview"],
             vec![ok(
-                r#"{"garden":{"id":"g1","name":"Home"},"page":{"template":"texting","layout":{"split":"2"},"widgets":[1,2]},"theme":{"name":"nord","tokens":{"colors":{"light":{"accent":"#111"},"dark":{"accent":"#eee"}}}},"sync":{"preview":"both","page":{"mode":"synced"},"theme":{"mode":"own"}}}"#,
+                r##"{"garden":{"id":"g1","name":"Home"},"page":{"template":"texting","layout":{"split":"2"},"widgets":[1,2]},"theme":{"name":"nord","tokens":{"colors":{"light":{"accent":"#111"},"dark":{"accent":"#eee"}}}},"sync":{"preview":"both","page":{"mode":"synced"},"theme":{"mode":"own"}}}"##,
             )],
         ),
         case(

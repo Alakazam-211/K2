@@ -76,6 +76,15 @@ def clone_plain_http_ok(host):
     """True when a token may go to host, as written, over plain http."""
     return clone_loopback_literal(host) or clone_tailnet_literal(host)
 
+def clone_local_warns(host):
+    """True when this server'"'"'s owner token goes over plain http to host
+    (K2_HOST, as written) and host is not this computer, a Tailscale
+    address or a *.ts.net name."""
+    h = host.lower()
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    return not (clone_loopback_literal(h) or clone_tailnet_literal(h) or h.endswith(".ts.net"))
+
 def clone_url_refusal(url, password=False):
     """None when a token (with password=True, a password) may go to url,
     else the line that refuses it."""
@@ -93,6 +102,24 @@ def clone_url_refusal(url, password=False):
         return None
     return "refused: %s isn'"'"'t https, so K2 won'"'"'t send your token or password there; use https://%s" % (shown, shown)
 '
+
+# _clone_local_plain_http_warn: this server's side. The owner token goes
+# to $HOST over plain http; to a host that, as written, isn't this
+# computer, a Tailscale address or a *.ts.net name, one warning line per
+# command, before its first request. K2_PLAIN_HTTP_OK=1 silences it.
+_clone_local_plain_http_warn() {
+    local ok="" me
+    [ -z "${_K2_PLAIN_HTTP_WARNED:-}" ] || return 0
+    _envn_into ok PLAIN_HTTP_OK
+    [ "$ok" != 1 ] || return 0
+    python3 -c "$_CLONE_URL_RULE
+import sys
+sys.exit(0 if clone_local_warns(sys.argv[1]) else 1)" "${HOST:-127.0.0.1}" || return 0
+    # The command's own name (white-label).
+    me="${0##*/}"; case "$0" in /dev/fd/*) me=K2 ;; esac
+    echo "warning: ${me} is sending this server's owner token to ${HOST} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." >&2
+    _K2_PLAIN_HTTP_WARNED=1
+}
 
 # _clone_https_gate URL: refuse (exit 3, the line on stderr) a remote URL a
 # token may not go to, before anything is looked up or sent.
@@ -937,6 +964,8 @@ for k, n in (("threadsSince", "K2C_since"), ("dest", "K2C_dest"), ("why", "K2C_w
         o[k] = int(e[n]) if k == "threadsSince" else e[n]
 print(json.dumps(o))')"
     export K2C_OPTS
+    # Every verb parses first (help has exited by now): one warning, if any.
+    _clone_local_plain_http_warn
 }
 
 _clone_opt() {

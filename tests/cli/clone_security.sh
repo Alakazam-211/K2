@@ -30,7 +30,10 @@
 #   scheme, before any lookup, and the refusal never shows that name; a
 #   token may also go over plain http to a Tailscale address as written
 #   (100.64.0.0/10, fd7a:115c:a1e0::/48), never to a *.ts.net name, and a
-#   password still never goes over plain http.
+#   password still never goes over plain http; this server's own side
+#   (K2_HOST over plain http) warns once per command, except for a
+#   loopback or Tailscale address or a *.ts.net name as written, or with
+#   K2_PLAIN_HTTP_OK=1.
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -694,6 +697,29 @@ for h in box.ts.net 100.128.0.1 100.63.255.255 "[fd7a:115c:a1e1::1]"; do
     expect_eq "http://$h: the refusal line" "$ERR" "$(refused_line "$h:9")"
     no_contact "http://$h"
 done
+
+echo "== this server's side over plain http warns once =="
+ME="$(basename "$K2")"
+warn_line() { printf "warning: %s is sending this server's owner token to %s over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." "$ME" "$1"; }
+for h in 192.0.2.10 box.lan box.ts.net.evil.example 100.128.0.1; do
+    fresh
+    K2_HOST="$h" k2 clone to http://box.example ws1 --json
+    expect_eq "K2_HOST=$h: refused as before (exit 3)" "$RC" "3"
+    expect_eq "K2_HOST=$h: the warning first" "$(printf '%s\n' "$ERR" | head -1)" "$(warn_line "$h")"
+    expect_eq "K2_HOST=$h: one warning" "$(printf '%s\n' "$ERR" | grep -c '^warning:')" "1"
+done
+for h in 127.0.0.1 localhost ::1 100.100.1.2 fd7a:115c:a1e0::5 box.tail1234.ts.net; do
+    fresh
+    K2_HOST="$h" k2 clone to http://box.example ws1 --json
+    expect_not "K2_HOST=$h: no warning" "$ERR" "warning:"
+done
+fresh
+K2_HOST=192.0.2.10 K2_PLAIN_HTTP_OK=1 k2 clone to http://box.example ws1 --json
+expect_not "K2_PLAIN_HTTP_OK=1: no warning" "$ERR" "warning:"
+fresh
+K2_HOST=192.0.2.10 k2 clone to -h
+expect_eq "help: exit 0" "$RC" "0"
+expect_not "help: no warning" "$OUT$ERR" "warning:"
 
 echo
 echo "clone_security: $pass passed, $fail failed"

@@ -63,6 +63,7 @@ fn api_key_list_answers_as_the_shell_does() {
     );
     let v = vec![
         case("list", &["list"], &[], vec![ok(KEYS)], owner_and_port, 0, 1),
+        // covers: api-key list
         case(
             "a large list, above 256 KiB",
             &["list"],
@@ -72,6 +73,7 @@ fn api_key_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key list
         case(
             "no keys",
             &["list"],
@@ -81,6 +83,7 @@ fn api_key_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key list
         case(
             "the daemon's error",
             &["list"],
@@ -93,6 +96,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "a refusal with a permission card",
             &["list"],
@@ -102,6 +106,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "the bulletin",
             &["list"],
@@ -111,6 +116,7 @@ fn api_key_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key list
         case(
             "not JSON",
             &["list"],
@@ -120,6 +126,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "a trailing comma",
             &["list"],
@@ -129,6 +136,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "an empty 200",
             &["list"],
@@ -138,6 +146,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "a list answer",
             &["list"],
@@ -147,6 +156,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "keys is a string",
             &["list"],
@@ -156,6 +166,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "keys is a number",
             &["list"],
@@ -165,6 +176,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "capabilities is a list, after a row",
             &["list"],
@@ -174,6 +186,7 @@ fn api_key_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key list
         case(
             "a room that is a number",
             &["list"],
@@ -216,6 +229,7 @@ fn api_key_list_answers_as_the_shell_does() {
 fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "ids");
     let v = vec![
+        // covers: api-key revoke
         case(
             "revoke",
             &["revoke", "k1", "x"],
@@ -225,6 +239,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key revoke
         case(
             "revoke, none",
             &["revoke", "k1"],
@@ -234,6 +249,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key
         case(
             "disable",
             &["disable", "k \"1\""],
@@ -243,6 +259,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key disable
         case(
             "disable, none",
             &["disable", "k1"],
@@ -252,6 +269,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key enable
         case(
             "enable",
             &["enable", "k1"],
@@ -261,6 +279,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key enable
         case(
             "enable, none",
             &["enable", "k1"],
@@ -270,6 +289,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key revoke
         case(
             "the daemon's error",
             &["revoke", "k1"],
@@ -279,6 +299,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key enable
         case(
             "a string that says error",
             &["enable", "k1"],
@@ -288,6 +309,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key disable
         case(
             "a number",
             &["disable", "k1"],
@@ -297,6 +319,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key revoke
         case(
             "a list",
             &["revoke", "k1"],
@@ -306,6 +329,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key revoke
         case(
             "revoke with no id",
             &["revoke"],
@@ -315,6 +339,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: api-key disable
         case(
             "disable with an empty id",
             &["disable", ""],
@@ -324,6 +349,7 @@ fn api_key_revoke_disable_enable_answer_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: api-key enable
         case(
             "enable with no id",
             &["enable"],
@@ -390,6 +416,7 @@ fn api_key_create_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key create
         case(
             "every workspace",
             &["create", "--workspaces", "*"],
@@ -399,6 +426,7 @@ fn api_key_create_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key create
         case(
             "the daemon's error object",
             &["create", "--workspaces", "*"],
@@ -411,6 +439,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key create
         case(
             "capabilities is a list, after the first line",
             &["create", "--workspaces", "*"],
@@ -420,6 +449,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key create
         case(
             "not JSON",
             &["create"],
@@ -429,6 +459,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key create
         case(
             "an empty answer",
             &["create"],
@@ -438,6 +469,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key create
         case(
             "--key-stdin and nothing on stdin",
             &["create", "--key-stdin"],
@@ -447,6 +479,7 @@ fn api_key_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: api-key create
         case(
             "--key-stdin and --llm-key",
             &["create", "--key-stdin", "--llm-key", "k"],
@@ -456,6 +489,7 @@ fn api_key_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: api-key create
         case(
             "a hire limit with no --hire",
             &["create", "--max-live", "3"],
@@ -465,6 +499,7 @@ fn api_key_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: api-key create
         case(
             "an empty hire limit is none",
             &["create", "--reach", "", "--workspaces", "*"],
@@ -474,6 +509,7 @@ fn api_key_create_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key create
         case(
             "an unknown flag",
             &["create", "--label", "x", "wiki"],
@@ -483,6 +519,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: api-key create
         case(
             "a value flag last",
             &["create", "--provider"],
@@ -492,6 +529,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: api-key create
         case(
             "a status key",
             &["create", "--status", "--label", "fleet"],
@@ -501,6 +539,7 @@ fn api_key_create_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: api-key create
         case(
             "a status key, the daemon's error",
             &["create", "--status"],
@@ -510,6 +549,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key create
         case(
             "a status key, not JSON",
             &["create", "--status"],
@@ -519,6 +559,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: api-key create
         traceback(case(
             "a status key, a number",
             &["create", "--status"],
@@ -528,6 +569,7 @@ fn api_key_create_answers_as_the_shell_does() {
             1,
             1,
         )),
+        // covers: api-key create
         case(
             "a status key and another flag",
             &["create", "--status", "--allow", "db"],
@@ -537,6 +579,7 @@ fn api_key_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: api-key create
         case(
             "a reset: the reader's line",
             &["create", "--workspaces", "*"],
@@ -559,6 +602,7 @@ fn api_key_with_a_passport() {
     let v = vec![
         with(
             h(&[]),
+            // covers: api-key list
             case(
                 "a host session: the passport over TCP",
                 &["list"],
@@ -571,6 +615,7 @@ fn api_key_with_a_passport() {
         ),
         with(
             h(&[("K2_HOOK_SOCK", "{sock}")]),
+            // covers: api-key revoke
             case(
                 "a live cell socket: still TCP",
                 &["revoke", "k1"],
@@ -583,6 +628,7 @@ fn api_key_with_a_passport() {
         ),
         with(
             h(&[]),
+            // covers: api-key disable
             case(
                 "a refused passport heals once",
                 &["disable", "k1"],
@@ -593,6 +639,7 @@ fn api_key_with_a_passport() {
                 2,
             ),
         ),
+        // covers: api-key list
         case(
             "HOOK_SOCK set and no passport: the require-passport lines",
             &["list"],
@@ -602,6 +649,7 @@ fn api_key_with_a_passport() {
             3,
             0,
         ),
+        // covers: api-key list
         case(
             "the virtual desktop's guard",
             &["list"],
@@ -622,6 +670,7 @@ fn api_key_with_no_daemon() {
     let rig = Rig::new(VERB, "dead");
     let port = dead_port();
     let v = vec![
+        // covers: api-key list
         case(
             "list, nothing listens: the reader's line",
             &["list"],
@@ -631,6 +680,7 @@ fn api_key_with_no_daemon() {
             1,
             0,
         ),
+        // covers: api-key create
         case(
             "create, nothing listens: sent once",
             &["create"],

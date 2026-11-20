@@ -85,6 +85,7 @@ fn skin_user_reads() {
     check(
         &rig,
         vec![
+            // covers: skin user list
             case(
                 "user list",
                 &["user", "list"],
@@ -94,6 +95,7 @@ fn skin_user_reads() {
                 0,
                 2,
             ),
+            // covers: skin user list
             case(
                 "user alone is the list",
                 &["users"],
@@ -103,6 +105,7 @@ fn skin_user_reads() {
                 0,
                 2,
             ),
+            // covers: skin user list
             case(
                 "a large user list, above 256 KiB",
                 &["user", "list"],
@@ -112,6 +115,7 @@ fn skin_user_reads() {
                 0,
                 2,
             ),
+            // covers: skin user list
             case(
                 "user list: the roles answer refused",
                 &["user", "list"],
@@ -124,6 +128,7 @@ fn skin_user_reads() {
                 3,
                 2,
             ),
+            // covers: skin user list
             traceback(case(
                 "user list: an answer over two lines",
                 &["user", "list"],
@@ -133,6 +138,7 @@ fn skin_user_reads() {
                 1,
                 2,
             )),
+            // covers: skin user list
             traceback(case(
                 "user list: a role name that is a list",
                 &["user", "list"],
@@ -185,6 +191,7 @@ fn skin_user_reads() {
                 0,
             ),
             words("user show with no --app", &["user", "show", "bob"], 1),
+            // covers: skin user password
             words(
                 "user password with no --password-stdin",
                 &["user", "password", "bob"],
@@ -196,6 +203,7 @@ fn skin_user_reads() {
                 1,
             ),
             words("an unknown user verb", &["user", "nope"], 1),
+            // covers: skin user add
             words(
                 "--role with no --app",
                 &["user", "add", "bob", "--role", "r"],
@@ -214,6 +222,7 @@ fn skin_user_writes() {
     check(
         &rig,
         vec![
+            // covers: skin user add
             one(
                 "user add",
                 &["user", "add", "bob", "--temp-password"],
@@ -228,19 +237,23 @@ fn skin_user_writes() {
                 r#"{"username":"bob"}"#,
                 0,
             ),
+            // covers: skin user add
             one(
                 "user add held",
                 &["user", "add", "bob"],
                 r#"{"status":"held","request":{"id":"r1","summary":"add bob"},"hint":"wait","afterApproval":"then go"}"#,
                 2,
             ),
+            // covers: skin user add
             traceback(one(
                 "user add: waiting rooms that are a number",
                 &["user", "add", "bob"],
                 r#"{"username":"bob","waitingForReset":{"rooms":5}}"#,
                 1,
             )),
+            // covers: skin user add
             words("user add with no name", &["user", "add"], 1),
+            // covers: skin user add
             words(
                 "user add with both password forms",
                 &["user", "add", "b", "--password-stdin", "--temp-password"],
@@ -295,18 +308,21 @@ fn skin_user_writes() {
                 r#"{"status":"held","request":{}}"#,
                 2,
             ),
+            // covers: skin user unlock
             one(
                 "user unlock",
                 &["user", "unlock", "bob"],
                 r#"{"cleared":true,"username":"bob"}"#,
                 0,
             ),
+            // covers: skin user unlock --json
             one(
                 "user unlock --json",
                 &["user", "unlock", "bob", "--json"],
                 r#"{"cleared":1}"#,
                 0,
             ),
+            // covers: skin user email
             one(
                 "user email",
                 &["user", "email", "bob", "--email=b@x"],
@@ -336,6 +352,7 @@ fn skin_user_writes() {
                 &["user", "agent", "bob", "w", "--clear"],
                 1,
             ),
+            // covers: skin user remove
             one(
                 "user remove",
                 &["user", "rm", "bob"],
@@ -350,40 +367,47 @@ fn skin_user_writes() {
                 &format!(r#"{{"app":"a","roomHandles":["sales"],"username":"bob",{waiting}}}"#),
                 0,
             ),
+            // covers: skin user rooms
             one(
                 "user rooms, default rooms",
                 &["user", "rooms", "bob"],
                 r#"{"username":"bob","default_room_handles":[]}"#,
                 0,
             ),
+            // covers: skin user rooms
             words(
                 "user rooms --agent as the last word",
                 &["user", "rooms", "bob", "--agent"],
                 1,
             ),
+            // covers: skin user rooms
             words(
                 "user rooms --apply-tokens",
                 &["user", "rooms", "bob", "--apply-tokens"],
                 2,
             ),
+            // covers: skin user role
             one(
                 "user role",
                 &["user", "role", "bob", "staff"],
                 r#"{"username":"bob","role_name":"staff"}"#,
                 0,
             ),
+            // covers: skin user unassign
             one(
                 "user unassign",
                 &["user", "unassign", "bob"],
                 r#"{"username":"bob"}"#,
                 0,
             ),
+            // covers: skin user unassign
             one(
                 "a refusal",
                 &["user", "unassign", "bob"],
                 r#"{"error":{"code":"forbidden","hint":"Not yours"}}"#,
                 3,
             ),
+            // covers: skin user remove
             traceback(one(
                 "an answer that is a list",
                 &["user", "remove", "bob"],
@@ -416,31 +440,38 @@ fn skin_roles() {
     check(
         &rig,
         vec![
+            // covers: skin role list
             one("role list", &["role", "list"], ROLES, 0),
+            // covers: skin role list
             one("roles alone is the list", &["roles"], r#"{"roles":[]}"#, 0),
+            // covers: skin role list
             one(
                 "a large role list, above 256 KiB",
                 &["role", "list"],
                 &big,
                 0,
             ),
+            // covers: skin role create
             one(
                 "role create",
                 &["role", "create", "staff", "--agent", "sales", "--app", "a"],
                 access,
                 0,
             ),
+            // covers: skin role create
             one(
                 "role create, no rooms",
                 &["role", "create", "staff"],
                 r#"{"name":"staff"}"#,
                 0,
             ),
+            // covers: skin role create
             words(
                 "role create --caps",
                 &["role", "create", "staff", "--caps", "x"],
                 2,
             ),
+            // covers: skin role create
             words("role --user", &["role", "create", "x", "--user", "bob"], 2),
             one(
                 "role room",
@@ -497,18 +528,21 @@ fn skin_roles() {
                 &["role", "paths", "staff", "sales", "x"],
                 1,
             ),
+            // covers: skin role update
             one(
                 "role update --clear",
                 &["role", "update", "staff", "--clear"],
                 r#"{"name":"staff","roomAccess":[]}"#,
                 0,
             ),
+            // covers: skin role update
             one(
                 "role update rooms",
                 &["role", "update", "staff", "--agent", "sales"],
                 access,
                 0,
             ),
+            // covers: skin role remove
             one("role remove", &["role", "rm", "staff"], r#"{}"#, 0),
             one(
                 "role add from a template",
@@ -586,12 +620,14 @@ fn skin_grants_doors_and_hydra() {
                 0,
             ),
             words("an unknown grant verb", &["grant", "nope"], 1),
+            // covers: skin front-door
             one(
                 "front-door",
                 &["front-door"],
                 r#"{"mode":"connect","url":"https://x","applied":true,"caddy":{"running":true,"pid":9},"nested":{"label":"n"},"hint":"ok"}"#,
                 0,
             ),
+            // covers: skin front-door --json
             one(
                 "front-door --json",
                 &["frontdoor", "--json"],
@@ -611,35 +647,41 @@ fn skin_grants_doors_and_hydra() {
                 r#"{"mode":"direct","url":"https://x","listen":":443","applied":true}"#,
                 0,
             ),
+            // covers: skin front-door
             one(
                 "front-door direct: caddy missing",
                 &["front-door", "direct"],
                 r#"{"mode":"direct","error":"caddy_missing","applied":false}"#,
                 1,
             ),
+            // covers: skin front-door
             one(
                 "front-door connect: an owner refusal",
                 &["front-door", "connect"],
                 r#"{"error":{"code":"owner_only","hint":"No"}}"#,
                 3,
             ),
+            // covers: skin front-door --json
             one(
                 "front-door connect --json: a string refusal",
                 &["front-door", "connect", "--json"],
                 r#"{"error":"Owner token needed"}"#,
                 3,
             ),
+            // covers: skin front-door
             one(
                 "front-door connect: not JSON",
                 &["front-door", "connect"],
                 "<html>",
                 1,
             ),
+            // covers: skin front-door
             words(
                 "front-door: two modes",
                 &["front-door", "connect", "direct"],
                 1,
             ),
+            // covers: skin front-door
             words(
                 "front-door: --url last",
                 &["front-door", "direct", "--url"],
@@ -706,6 +748,7 @@ fn skin_with_a_passport() {
                     1,
                 )),
             ),
+            // covers: skin role list
             case(
                 "HOOK_SOCK set and no passport: the require-passport lines",
                 &["role", "list"],
@@ -726,6 +769,7 @@ fn skin_with_no_answer() {
     check(
         &rig,
         vec![
+            // covers: skin role list
             case(
                 "nothing listens (7)",
                 &["role", "list"],
@@ -735,6 +779,7 @@ fn skin_with_no_answer() {
                 7,
                 0,
             ),
+            // covers: skin user remove
             case(
                 "nothing listens (7), a POST",
                 &["user", "remove", "bob"],
@@ -828,6 +873,7 @@ fn app_reaches_the_same_code() {
     check(
         &rig,
         vec![
+            // covers: app user list
             case(
                 "app user list",
                 &["user", "list"],
@@ -837,21 +883,27 @@ fn app_reaches_the_same_code() {
                 0,
                 2,
             ),
+            // covers: app role list
             one("app role list", &["roles"], ROLES, 0),
+            // covers: app grant list
             one("app grant list", &["grant"], r#"{"grants":[]}"#, 0),
+            // covers: app hydra
             one(
                 "app hydra off",
                 &["hydra", "off"],
                 r#"{"enabled":false}"#,
                 0,
             ),
+            // covers: app front-door
             one(
                 "app front-door",
                 &["front-door"],
                 r#"{"mode":"connect"}"#,
                 0,
             ),
+            // covers: app token list
             one("app token list", &["token", "list"], r#"{"tokens":[]}"#, 0),
+            // covers: app token
             words("app tokens with no verb", &["tokens"], 1),
             words("app user: an unknown verb", &["user", "nope"], 1),
             shell(words("app user add -h", &["user", "add", "bob", "-h"], 0)),

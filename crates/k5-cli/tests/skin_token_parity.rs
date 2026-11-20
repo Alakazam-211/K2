@@ -63,6 +63,7 @@ fn skin_token_list_answers_as_the_shell_does() {
         big.len()
     );
     let v = vec![
+        // covers: skin-token list
         case(
             "list",
             &["list"],
@@ -72,6 +73,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token list
         case(
             "words after list are not read",
             &["list", "--json", "x"],
@@ -81,6 +83,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token list
         case(
             "a large list, above 256 KiB",
             &["list"],
@@ -90,6 +93,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token list
         case(
             "none",
             &["list"],
@@ -99,6 +103,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token list
         case(
             "no tokens key",
             &["list"],
@@ -108,6 +113,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token list
         case(
             "tokens null",
             &["list"],
@@ -117,6 +123,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token list
         case(
             "the owner-only refusal",
             &["list"],
@@ -129,6 +136,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             3,
             1,
         ),
+        // covers: skin-token list
         case(
             "the refusal already says ask your human",
             &["list"],
@@ -141,6 +149,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             3,
             1,
         ),
+        // covers: skin-token list
         case(
             "a usage error",
             &["list"],
@@ -153,6 +162,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             2,
             1,
         ),
+        // covers: skin-token list
         case(
             "an error object with no code",
             &["list"],
@@ -162,6 +172,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: skin-token list
         case(
             "an error that names the owner",
             &["list"],
@@ -174,6 +185,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             3,
             1,
         ),
+        // covers: skin-token list
         case(
             "an error that is a number",
             &["list"],
@@ -183,6 +195,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: skin-token list
         case(
             "ok false",
             &["list"],
@@ -192,6 +205,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: skin-token list
         case(
             "not JSON",
             &["list"],
@@ -201,6 +215,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: skin-token list
         case(
             "an empty 200",
             &["list"],
@@ -210,6 +225,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: skin-token list
         case(
             "the bulletin",
             &["list"],
@@ -219,6 +235,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token list
         case(
             "a refusal with a permission card",
             &["list"],
@@ -228,6 +245,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             3,
             1,
         ),
+        // covers: skin-token list
         traceback(case(
             "tokens is a string",
             &["list"],
@@ -237,6 +255,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             1,
             1,
         )),
+        // covers: skin-token list
         traceback(case(
             "a list answer",
             &["list"],
@@ -246,6 +265,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             1,
             1,
         )),
+        // covers: skin-token list
         traceback(case(
             "a cap that is a number, after the first row",
             &["list"],
@@ -255,6 +275,7 @@ fn skin_token_list_answers_as_the_shell_does() {
             1,
             1,
         )),
+        // covers: skin-token list
         traceback(case(
             "a hint that is a number",
             &["list"],
@@ -267,6 +288,7 @@ fn skin_token_list_answers_as_the_shell_does() {
         // The gates.
         case("no port", &["list"], &[], vec![], owner_only, 1, 0),
         case("no token", &["list"], &[], vec![], port_only, 1, 0),
+        // covers: skin-token list
         case(
             "the virtual desktop's guard",
             &["list"],
@@ -324,6 +346,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token create
         case(
             "an empty agent: no rooms",
             &["create", "--name", "n", "--agent", ""],
@@ -333,6 +356,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token create
         case(
             "no name",
             &["create", "--agent", "a"],
@@ -342,6 +366,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: skin-token create
         case(
             "an empty name",
             &["create", "--name", "", "--agent", "a"],
@@ -351,6 +376,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: skin-token create
         case(
             "no agent",
             &["create", "--name", "n"],
@@ -360,6 +386,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: skin-token create
         case(
             "a positional word",
             &["create", "site"],
@@ -369,6 +396,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: skin-token create
         case(
             "--user",
             &["create", "--user", "u"],
@@ -378,6 +406,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: skin-token create
         case(
             "an unknown flag",
             &["create", "--x"],
@@ -387,6 +416,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: skin-token create
         case(
             "a lone dash",
             &["create", "-"],
@@ -396,6 +426,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: skin-token create
         case(
             "--name as the last word",
             &["create", "--name"],
@@ -405,6 +436,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: skin-token create
         case(
             "--agent as the last word",
             &["create", "--name", "n", "--agent"],
@@ -414,6 +446,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: skin-token create
         case(
             "the daemon's error",
             &["create", "--name", "n", "--agent", "a"],
@@ -426,6 +459,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: skin-token create
         case(
             "a 5xx with no body: the empty line",
             &["create", "--name", "n", "--agent", "a"],
@@ -435,6 +469,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: skin-token create
         traceback(case(
             "caps that is a number",
             &["create", "--name", "n", "--agent", "a"],
@@ -444,6 +479,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             1,
             1,
         )),
+        // covers: skin-token create
         traceback(case(
             "a room that is not a string",
             &["create", "--name", "n", "--agent", "a"],
@@ -453,6 +489,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             1,
             1,
         )),
+        // covers: skin-token create
         case(
             "a reset (56): curl's code",
             &["create", "--name", "n", "--agent", "a"],
@@ -462,6 +499,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             56,
             1,
         ),
+        // covers: skin-token create
         waited(case(
             "an empty reply (52): the line, exit 1",
             &["create", "--name", "n", "--agent", "a"],
@@ -481,6 +519,7 @@ fn skin_token_create_answers_as_the_shell_does() {
 fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "rooms");
     let v = vec![
+        // covers: skin-token
         case(
             "rooms",
             &[
@@ -492,6 +531,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token rooms
         case(
             "rooms --clear drops the agents",
             &["rooms", "--agent", "a", "--clear", "t1"],
@@ -501,6 +541,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token rooms
         case(
             "rooms with no id",
             &["rooms", "--clear"],
@@ -510,6 +551,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: skin-token rooms
         case(
             "rooms, an unknown flag",
             &["rooms", "t", "--x"],
@@ -519,6 +561,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: skin-token rooms
         case(
             "rooms, --agent last",
             &["rooms", "t", "--agent"],
@@ -528,6 +571,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: skin-token rooms
         case(
             "rooms, the error",
             &["rooms", "t1", "--clear"],
@@ -537,6 +581,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: skin-token revoke
         case(
             "revoke",
             &["revoke", "t1", "extra"],
@@ -546,6 +591,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token revoke
         case(
             "revoke, nothing to revoke",
             &["revoke", "t1"],
@@ -555,6 +601,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: skin-token revoke
         traceback(case(
             "revoke, a string answer",
             &["revoke", "t1"],
@@ -564,6 +611,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             1,
             1,
         )),
+        // covers: skin-token revoke
         case(
             "revoke with no id",
             &["revoke"],
@@ -584,6 +632,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             1,
             0,
         ),
+        // covers: skin-token
         case(
             "no verb and no port: the gate first",
             &[],
@@ -606,6 +655,7 @@ fn skin_token_with_a_passport() {
     let v = vec![
         with(
             h(&[]),
+            // covers: skin-token list
             case(
                 "a host session: the passport over TCP",
                 &["list"],
@@ -618,6 +668,7 @@ fn skin_token_with_a_passport() {
         ),
         with(
             h(&[("K2_HOOK_SOCK", "{sock}")]),
+            // covers: skin-token revoke
             case(
                 "a live cell socket: still TCP",
                 &["revoke", "t1"],
@@ -630,6 +681,7 @@ fn skin_token_with_a_passport() {
         ),
         with(
             h(&[]),
+            // covers: skin-token create
             case(
                 "a refused passport heals once",
                 &["create", "--name", "n", "--agent", "a"],
@@ -642,6 +694,7 @@ fn skin_token_with_a_passport() {
         ),
         with(
             h(&[]),
+            // covers: skin-token list
             case(
                 "a re-minted passport is used from the start",
                 &["list"],
@@ -652,6 +705,7 @@ fn skin_token_with_a_passport() {
                 1,
             ),
         ),
+        // covers: skin-token list
         case(
             "HOOK_SOCK set and no passport: the require-passport lines",
             &["list"],
@@ -663,6 +717,7 @@ fn skin_token_with_a_passport() {
         ),
         with(
             h(&[("K2_HOOK_SOCK", "{nosock}")]),
+            // covers: skin-token list
             case(
                 "HOOK_SOCK gone and the passport refused: the stale lines",
                 &["list"],
@@ -684,6 +739,7 @@ fn skin_token_with_no_answer() {
     let rig = Rig::new(VERB, "dead");
     let port = dead_port();
     let v = vec![
+        // covers: skin-token list
         case(
             "nothing listens (7): tried again, then curl's code",
             &["list"],
@@ -693,6 +749,7 @@ fn skin_token_with_no_answer() {
             7,
             0,
         ),
+        // covers: skin-token revoke
         case(
             "nothing listens (7), a POST",
             &["revoke", "t"],

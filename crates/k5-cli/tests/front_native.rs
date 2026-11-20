@@ -355,6 +355,8 @@ fn cli_status_as_the_owner_shows_the_counts() {
     let body = rows(&[
         ("fallthrough", "doc", 3),
         ("fallthrough", "docs", 2),
+        ("fallthrough", "help", 2),
+        ("fallthrough", "-h", 1),
         ("fallthrough", "msg", 4),
         ("fallthrough", "other", 1),
         ("would_refuse", "ws", 9),
@@ -391,7 +393,11 @@ fn cli_status_as_the_owner_shows_the_counts() {
     };
     assert_eq!(
         get("doc|docs"),
-        ("doc|docs".into(), "bash".into(), Some("5".into()))
+        ("doc|docs".into(), "native".into(), Some("5".into()))
+    );
+    assert_eq!(
+        get("help|--help|-h"),
+        ("help|--help|-h".into(), "bash".into(), Some("3".into()))
     );
     assert_eq!(
         get("msg"),

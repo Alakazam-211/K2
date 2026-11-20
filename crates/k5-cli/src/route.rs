@@ -645,7 +645,12 @@ mod tests {
             assert!(found.noun.is_none(), "{list:?}");
             assert_eq!(found.owner, Owner::Bash, "{list:?}");
         }
-        assert_eq!(owner(TABLE, &["docs", "list"]), Owner::Bash);
+        // An alias is read as its row: `--help` is the shell's help row,
+        // `docs` is doc's (native).
+        let found = find(TABLE, &args(&["--help", "list"]));
+        assert!(found.noun.is_some_and(|n| n.names("help")));
+        assert_eq!(found.owner, Owner::Bash);
+        assert_eq!(owner(TABLE, &["docs", "list"]), Owner::Native);
     }
 
     #[cfg(unix)]

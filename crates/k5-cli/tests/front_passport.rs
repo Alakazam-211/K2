@@ -188,15 +188,43 @@ impl Drop for Rig {
     }
 }
 
-const LIST: &[&str] = &["heartbeat", "list", "--json"];
-const PATH: &str = "/cli/heartbeat/list";
+/// Lines that each make one request to the daemon when the shell answers
+/// them, with that request's path. The counted tests use the first one
+/// the front still hands to the shell ([`shell_line`]), so a lane that
+/// makes one native moves the pick on by itself.
+const CANDIDATES: &[(&[&str], &str)] = &[
+    (&["heartbeat", "list", "--json"], "/cli/heartbeat/list"),
+    (&["publish", "ps", "--json"], "/cli/publish/list"),
+    (&["release", "--agent", "ada"], "/cli/release"),
+    (&["reserve", "--agent", "ada", "src"], "/cli/reserve"),
+];
+
+/// The first candidate the route table still gives the shell; it fails
+/// loudly when every one is native.
+fn shell_line() -> (&'static [&'static str], &'static str) {
+    for &(line, path) in CANDIDATES {
+        let args: Vec<std::ffi::OsString> = line.iter().map(Into::into).collect();
+        if k5_cli::front::route(&args) == k5_cli::front::Route::Fallthrough {
+            return (line, path);
+        }
+    }
+    panic!("every line in CANDIDATES is native now: add one the shell still answers");
+}
+
+fn list() -> &'static [&'static str] {
+    shell_line().0
+}
+
+fn path() -> &'static str {
+    shell_line().1
+}
 
 #[test]
 fn no_passport_inside_a_session_is_counted() {
     let rig = Rig::new("counted");
     for marker in ["CLAUDECODE", "K2_PANE_ID", "K5_CELL", "CODEX_THREAD_ID"] {
         assert_eq!(
-            rig.refuse(LIST, &[(marker, "1")], PATH),
+            rig.refuse(list(), &[(marker, "1")], path()),
             [["1"]],
             "{marker}"
         );
@@ -206,9 +234,10 @@ fn no_passport_inside_a_session_is_counted() {
 #[test]
 fn a_passport_is_never_counted() {
     let rig = Rig::new("passport");
+    let (line, path) = shell_line();
     for name in ["K2_HOOK_TOKEN", "K5_HOOK_TOKEN", "K2SO_HOOK_TOKEN"] {
         assert_eq!(
-            rig.refuse(LIST, &[("CLAUDECODE", "1"), (name, "test-token")], PATH),
+            rig.refuse(line, &[("CLAUDECODE", "1"), (name, "test-token")], path),
             [Vec::<String>::new()],
             "{name}"
         );
@@ -218,14 +247,14 @@ fn a_passport_is_never_counted() {
 #[test]
 fn outside_a_session_nothing_is_counted_whatever_the_caller_set() {
     let rig = Rig::new("outside");
-    assert_eq!(rig.refuse(LIST, &[], PATH), [Vec::<String>::new()]);
+    assert_eq!(rig.refuse(list(), &[], path()), [Vec::<String>::new()]);
     assert_eq!(
-        rig.refuse(LIST, &[("K5_CLI_WOULD_REFUSE", "1")], PATH),
+        rig.refuse(list(), &[("K5_CLI_WOULD_REFUSE", "1")], path()),
         [Vec::<String>::new()]
     );
     // An empty marker counts as unset.
     assert_eq!(
-        rig.refuse(LIST, &[("CLAUDECODE", "")], PATH),
+        rig.refuse(list(), &[("CLAUDECODE", "")], path()),
         [Vec::<String>::new()]
     );
 }
@@ -233,7 +262,8 @@ fn outside_a_session_nothing_is_counted_whatever_the_caller_set() {
 #[test]
 fn no_owner_fallback_is_left_to_the_shell() {
     let rig = Rig::new("nofb");
-    let out = rig.run(LIST, &[("CLAUDECODE", "1"), ("K2_NO_OWNER_FALLBACK", "1")]);
+    let line = list();
+    let out = rig.run(line, &[("CLAUDECODE", "1"), ("K2_NO_OWNER_FALLBACK", "1")]);
     assert_eq!(out.code, "3", "{out:?}");
     assert!(
         out.stderr.contains("won't act as this server's owner"),
@@ -273,7 +303,7 @@ fn offline_verbs_and_the_version_never_count() {
         );
     }
     // And the same trace does show it for a verb that is counted.
-    let out = rig.run(LIST, &[("CLAUDECODE", "1"), ("SHELLOPTS", "xtrace")]);
+    let out = rig.run(list(), &[("CLAUDECODE", "1"), ("SHELLOPTS", "xtrace")]);
     assert!(
         out.stderr
             .lines()
@@ -285,5 +315,5 @@ fn offline_verbs_and_the_version_never_count() {
         .stub
         .take()
         .iter()
-        .all(|s| s.path == PATH && s.refuse == ["1"]));
+        .all(|s| s.path == path() && s.refuse == ["1"]));
 }

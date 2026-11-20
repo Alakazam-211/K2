@@ -156,14 +156,24 @@ fn the_version() {
     }
 }
 
-/// The check bites: a line the binary hands to the shell (`compute
-/// help`: `help` is no verb row, and only the bare line moved) leaves the
-/// shell CLI written out.
+/// The check bites: a line the binary hands to the shell (`<noun> help`
+/// for a family whose bare line moved by its own row: `help` is no verb
+/// row) leaves the shell CLI written out. The family is read from the
+/// table, so a lane that moves one moves this check with it.
 #[test]
 fn the_native_check_bites() {
-    let rig = Rig::new("compute", "bite");
+    use k5_cli::front::{route, Route};
+    use k5_cli::route::{Owner, TABLE};
+    let noun = TABLE
+        .iter()
+        .find(|n| {
+            let help: [std::ffi::OsString; 2] = [n.words[0].into(), "help".into()];
+            n.owner == Owner::Bash && n.bare_row().is_some() && route(&help) == Route::Fallthrough
+        })
+        .expect("a family with a bare row of its own and its help the shell's");
+    let rig = Rig::new(noun.words[0], "bite");
     let c = case(
-        "compute help: the shell's",
+        "help: the shell's",
         &["help"],
         &[],
         vec![],

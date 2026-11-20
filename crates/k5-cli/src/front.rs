@@ -936,20 +936,38 @@ mod tests {
     /// help are where they were, and a composed page stays the front's.
     #[test]
     fn the_bare_rows() {
-        // compute: the bare row is Native, its verb rows unchanged.
-        assert_eq!(route(&args(&["compute"])), family("compute"));
-        assert_eq!(route(&args(&["compute", "--json"])), family("compute"));
-        assert_eq!(route(&args(&["compute", "nodes"])), family("compute"));
-        for shell in [
-            &["compute", "x"][..],
-            &["compute", ""],
-            &["compute", "help"],
-            &["compute", "--json", "x"],
-        ] {
-            assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
-        }
-        for help in [&["compute", "--help"][..], &["compute", "-h"]] {
-            assert_ne!(route(&args(help)), family("compute"), "{help:?}");
+        // Each family whose bare row is Native while the rest is the
+        // shell's (and whose bare line is no composed page): its bare line
+        // is its family's, its native verb rows unchanged, and its other
+        // lines and its help the shell's. Read from the table, so a lane
+        // that moves a family moves this check with it.
+        let moved: Vec<_> = route::TABLE
+            .iter()
+            .filter(|n| n.owner == Owner::Bash && n.bare_row().is_some())
+            .filter(|n| !composed_line(&args(&[n.words[0]])))
+            .collect();
+        assert!(
+            !moved.is_empty(),
+            "no family has a bare row of its own with the rest the shell's"
+        );
+        for n in moved {
+            let w = n.words[0];
+            assert_eq!(route(&args(&[w])), Route::Family(n), "{w}");
+            assert_eq!(route(&args(&[w, "--json"])), Route::Family(n), "{w}");
+            for v in n.verb_rows().filter(|v| v.owner == Owner::Native) {
+                assert_eq!(
+                    route(&args(&[w, v.words[0]])),
+                    Route::Family(n),
+                    "{w} {:?}",
+                    v.words
+                );
+            }
+            for shell in [&[w, "x"][..], &[w, ""], &[w, "help"], &[w, "--json", "x"]] {
+                assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
+            }
+            for help in [&[w, "--help"][..], &[w, "-h"]] {
+                assert_ne!(route(&args(help)), Route::Family(n), "{help:?}");
+            }
         }
         // chat: `chat --json` is the family's; `chat` alone is still the
         // composed page, and so is its help.
@@ -961,13 +979,16 @@ mod tests {
         );
         assert_eq!(route(&args(&["chat", "spaces"])), family("chat"));
         assert_eq!(route(&args(&["chat", "nope"])), Route::Fallthrough);
-        // A family with no bare row: its bare line is not the family's.
-        for (line, name) in [
-            (&["app"][..], "app"),
-            (&["connect"], "connect"),
-            (&["hostmail", "--json"], "hostmail"),
-        ] {
-            assert_ne!(route(&args(line)), family(name), "{line:?}");
+        // A family of the shell's with no bare row: its bare line, with
+        // or without --json, is not the family's.
+        let no_bare = route::TABLE
+            .iter()
+            .filter(|n| n.owner == Owner::Bash && n.bare_row().is_none());
+        for n in no_bare {
+            let w = n.words[0];
+            for line in [&[w][..], &[w, "--json"]] {
+                assert_ne!(route(&args(line)), Route::Family(n), "{line:?}");
+            }
         }
     }
 

@@ -1579,3 +1579,389 @@ fn staged_marked(r: &Rig) {
     staged(r);
     std::fs::write(r.k2home.join("garden-access-on"), "").unwrap();
 }
+
+/// Many runtime errors, for the large list (under what bash's variable
+/// holds).
+fn many_errors(n: usize) -> String {
+    let rows: Vec<String> = (0..n)
+        .map(|i| {
+            format!(
+                r#"{{"seq":{i},"at":"t{i}","current":{},"message":"boom é {i}","stack":"a\nb\nc","suggestion":"fix {i}"}}"#,
+                i % 2 == 0
+            )
+        })
+        .collect();
+    format!(r#"{{"widget":"w","errors":[{}],"last":{n}}}"#, rows.join(","))
+}
+
+#[test]
+fn zen_widgets_answer_as_the_shell_does() {
+    let rig = Rig::new(VERB, "widgets");
+    let proj = rig.proj.to_string_lossy().into_owned();
+    let folder = leak(format!("{proj}/staged-w"));
+    let html = leak(format!("{proj}/staged-w/index.html"));
+    let png = leak(format!("{proj}/staged-w/logo.png"));
+    let put_dir: &'static [&'static str] = Box::leak(
+        vec!["widget", "put", "w2", "--dir", folder, "--prune", "--note", "n", "--json"].into_boxed_slice(),
+    );
+    let apply: &'static [&'static str] =
+        Box::leak(vec!["widget", "apply", "--from", folder].into_boxed_slice());
+    let put_one: &'static [&'static str] = Box::leak(
+        vec!["widget", "put", "w", "index.html", "--from", html, "--note", "x"].into_boxed_slice(),
+    );
+    let put_bin: &'static [&'static str] = Box::leak(
+        vec!["widget", "put", "w", "logo.png", "--from", png].into_boxed_slice(),
+    );
+    let preview: &'static [&'static str] = Box::leak(
+        vec![
+            "widget", "preview", "--dir", folder, "w3", "--config", " size =big", "--config=a=b",
+        ]
+        .into_boxed_slice(),
+    );
+    let bad_cfg: &'static [&'static str] = Box::leak(
+        vec!["widget", "preview", "--dir", folder, "--config", "nokey"].into_boxed_slice(),
+    );
+    let mid: &'static str = leak(many_errors(800));
+    let cases = vec![
+        // covers: zen widget
+        ok_owner("widget alone: the help", &["widget"], vec![]),
+        case("widget grant: no permissions", &["widget", "grant"], &[], vec![], nothing, 0, 0),
+        case("widget revoke --from is new's", &["widget", "revoke", "--from", "x"], &[], vec![], nothing, 2, 0),
+        ok_owner(
+            "widget list",
+            &["widget", "list"],
+            vec![ok(
+                r#"{"widgets":[{"name":"board","state":"ok","title":"Board","caps":["store"],"errors":[{"file":"a.js","line":1,"col":1,"message":"e1"},{"file":"a.js","line":2,"col":1,"message":"e2","suggestion":"s"},{"file":"a.js","line":3,"col":1,"message":"e3"},{"file":"a.js","line":4,"col":1,"message":"e4"}],"placements":[{"garden":"g1","placement":"w1","paused":true},{"garden":"g2","placement":"w2"}]},{"name":"empty","state":"new","placements":[]}]}"#,
+            )],
+        ),
+        ok_owner("widget list, none", &["widgets", "list"], vec![ok(r#"{"widgets":[]}"#)]),
+        // covers: zen widget --json
+        ok_owner(
+            "widget new --json",
+            &["widget", "new", "board", "--from", "k2:diary", "--json"],
+            vec![ok(r#"{"name":"board","path":"/z/widgets/board","files":["index.html"]}"#)],
+        ),
+        ok_owner(
+            "widget new",
+            &["widget", "new", "board"],
+            vec![ok(r#"{"name":"board","path":"/z/widgets/board","files":["index.html","manifest.json"]}"#)],
+        ),
+        ok_owner(
+            "widget sign --ask",
+            &["widget", "sign", "board", "--ask"],
+            vec![ok(r#"{"widget":"board","asked":true,"card":"c1","waiting":true,"changes":"new caps"}"#)],
+        ),
+        ok_owner(
+            "widget sign, a built-in",
+            &["widget", "sign", "diary"],
+            vec![ok(r#"{"widget":"diary","madeBy":{"kind":"k2"}}"#)],
+        ),
+        case(
+            "widget sign, the person must",
+            &["widget", "sign", "board"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"sign_needs_person","hint":"Ask the person."},"changes":"caps","card":"c2"}"#.into(),
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        ok_owner(
+            "widget claim",
+            &["widget", "claim", "board"],
+            vec![ok(r#"{"widget":"board","madeBy":{"kind":"owner"},"stamped":true}"#)],
+        ),
+        ok_owner(
+            "widget claim, retired: it signs",
+            &["widget", "claim", "board", "--json"],
+            vec![
+                Reply::Answer(410, r#"{"error":{"code":"retired"}}"#.into()),
+                ok(r#"{"widget":"board","madeBy":{"kind":"owner"},"stamped":true,"vouched":true}"#),
+            ],
+        ),
+        case(
+            "widget nope",
+            &["widget", "nope"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "widget list --widget",
+            &["widget", "list", "--widget", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        Case {
+            setup: access_marked,
+            ..ok_owner(
+                "widget history",
+                &["widget", "history", "board"],
+                vec![ok(r#"{"ok":true}"#), ok(ACCESS_HISTORY)],
+            )
+        },
+        ok_owner(
+            "widget show",
+            &["widget", "show", "board"],
+            vec![ok(
+                r#"{"widget":"board","name":"Board","state":"ok","requested":["store"],"caps":[],"reach":"posts","sources":["mail:inbox"],"reads":["notes"],"runtime":{"ran":true},"size":{"code":100,"codeMax":2048,"page":10,"pageMax":20},"placements":[{"gardenName":"Home","placement":"w1","locked":true,"paused":true,"note":"ok","sources":["a"]}]}"#,
+            )],
+        ),
+        case(
+            "widget show, no such widget",
+            &["widget", "show", "nope"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":"not_found","message":"No widget nope."}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        // covers: zen widget errors
+        case(
+            "widget errors",
+            &["widget", "errors", "board", "--since", "3"],
+            &[],
+            vec![ok(
+                r#"{"widget":"board","errors":[{"seq":4,"at":"t4","current":true,"kind":"refusal","class":"read","code":"denied","address":"mail:inbox","line":3,"redacted":true,"stack":"s1\ns2"},{"seq":5,"at":"t5","staleReason":"old","message":"boom","counted":false,"suggestion":"wait"}]}"#,
+            )],
+            owner_and_port,
+            1,
+            1,
+        ),
+        ok_owner(
+            "widget errors, none",
+            &["widget", "errors", "board"],
+            vec![ok(r#"{"widget":"board","errors":[]}"#)],
+        ),
+        case(
+            "widget errors, a long list",
+            &["widget", "errors", "board"],
+            &[],
+            vec![ok(mid)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: zen widget errors --json
+        ok_owner(
+            "widget errors --clear --all --json",
+            &["widget", "errors", "board", "--clear", "--all", "--json"],
+            vec![ok(r#"{"widget":"board","cleared":3,"all":true,"left":0}"#)],
+        ),
+        ok_owner(
+            "widget errors --clear",
+            &["widget", "errors", "board", "--clear"],
+            vec![ok(r#"{"widget":"board","cleared":1,"left":2}"#)],
+        ),
+        case(
+            "widget errors, unknown widget",
+            &["widget", "errors", "nope"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":"not_found","message":"No widget."}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "widget errors --all without --clear",
+            &["widget", "errors", "board", "--all"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "widget errors --since x",
+            &["widget", "errors", "board", "--since", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: zen widget put
+        Case {
+            setup: staged,
+            ..ok_owner(
+                "widget put one file",
+                put_one,
+                vec![ok(
+                    r#"{"file":"widgets/w/index.html","snapshot":"s7","validate":{"errors":[{"file":"index.html","line":1,"col":1,"message":"bad","suggestion":"fix"}],"size":{"code":5000000,"codeMax":4194304,"codeWarnAt":1048576,"page":1,"pageMax":2,"libs":0}}}"#,
+                )],
+            )
+        },
+        Case {
+            setup: staged,
+            ..case(
+                "widget put, not UTF-8",
+                put_bin,
+                &[],
+                vec![],
+                staged,
+                2,
+                0,
+            )
+        },
+        // covers: zen widget put --json
+        Case {
+            setup: staged,
+            ..ok_owner(
+                "widget put --dir --json",
+                put_dir,
+                vec![ok(r#"{"file":"widgets/w2","written":["index.html"],"removed":["old.js"],"kept":["x.css"]}"#)],
+            )
+        },
+        Case {
+            setup: staged,
+            ..ok_owner(
+                "widget apply --from",
+                apply,
+                vec![ok(
+                    r#"{"proposed":true,"proposals":[{"id":"p1","kind":"folder","target":"wid","files":["a","b"]},{"id":"p2","target":"wid","file":"c.js"}],"message":"Asked."}"#,
+                )],
+            )
+        },
+        case(
+            "widget apply, no --from",
+            &["widget", "apply", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "widget put, --prune without --dir",
+            &["widget", "put", "w", "a.js", "--from", "-", "--prune"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: zen widget delete
+        ok_owner(
+            "widget delete",
+            &["widget", "delete", "board"],
+            vec![ok(r#"{"file":"widgets/board","snapshot":"s8","undo":"k2 zen reset --to s8"}"#)],
+        ),
+        // covers: zen widget delete --json
+        case(
+            "widget delete --json, placed",
+            &["widget", "delete", "board", "--json"],
+            &[],
+            vec![Reply::Answer(409, r#"{"error":"widget_placed","message":"Take it out first."}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "widget delete, two names",
+            &["widget", "delete", "a", "b"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: zen widget preview
+        Case {
+            setup: staged,
+            ..ok_owner(
+                "widget preview --dir",
+                preview,
+                vec![ok(
+                    r#"{"widget":"w3","preview":"preview-w3","garden":{"name":"Preview","id":"gp"},"validate":{"warnings":[{"file":"a","line":1,"col":1,"message":"w"}]},"open":"Open Zen."}"#,
+                )],
+            )
+        },
+        Case {
+            setup: staged,
+            ..case(
+                "widget preview, a bad --config",
+                bad_cfg,
+                &[],
+                vec![],
+                staged,
+                2,
+                0,
+            )
+        },
+        // covers: zen widget preview --json
+        ok_owner(
+            "widget preview --clear --json",
+            &["widget", "preview", "--clear", "--json"],
+            vec![ok(r#"{"removed":["preview-w3"],"garden":true}"#)],
+        ),
+        ok_owner(
+            "widget preview --clear",
+            &["widget", "preview", "--clear"],
+            vec![ok(r#"{"removed":["preview-w3","preview-w4"],"garden":true}"#)],
+        ),
+        case(
+            "widget preview, no --dir",
+            &["widget", "preview", "w"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        shell(case(
+            "widget errors --follow stays the shell's",
+            &["widget", "errors", "board", "--follow", "--since", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        )),
+        shell(case(
+            "widget delete -h: help, nothing sent",
+            &["widget", "delete", "board", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "widget put --help: help, nothing sent",
+            &["widget", "put", "w", "a.js", "--from", "-", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "widget preview -h: help, nothing sent",
+            &["widget", "preview", "--clear", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "widget sign -h: help, nothing sent",
+            &["widget", "sign", "board", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+    ];
+    for c in &cases {
+        rig.check(c);
+    }
+}

@@ -10,7 +10,7 @@
 //! `reset`, `doctor` and `path`, printed by `_zen_print` ([`print`]);
 //! `garden` (with Garden access, History and `put`) and `proposals`
 //! ([`garden`]); `theme`, `sync`, `news`, `links`, `agents-order` and
-//! `inspect` ([`more`]).
+//! `inspect` ([`more`]); `widget` and the widget dev loop ([`widget`]).
 //!
 //! Still the shell's ([`run`] returns `None` before anything is printed
 //! or sent): a line with `-h` or `--help` (the router's help arms), the
@@ -33,6 +33,7 @@
 
 pub mod call;
 pub mod verbs;
+pub mod widget;
 pub mod data;
 pub mod print;
 pub mod sign;
@@ -70,7 +71,13 @@ fn native(words: &[&str]) -> bool {
         "garden" | "gardens" => {
             !(words.get(1) == Some(&"new") && crate::transport::client::tmpdir_unusable())
         }
-        "widget" | "widgets" | "guide" => false,
+        "widget" | "widgets" => {
+            let w = &words[1..];
+            let dir = w.iter().any(|a| *a == "--dir" || a.starts_with("--dir="))
+                || w.first() == Some(&"apply");
+            !widget::shells(w) && !(dir && crate::transport::client::tmpdir_unusable())
+        }
+        "guide" => false,
         _ => true,
     }
 }
@@ -114,6 +121,19 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         changes_hint(&words);
         return Some(verbs::help(false, Exit::Ok));
     }
+    let widget_no_gate = matches!(sub, "widget" | "widgets") && widget::no_gate(&words[1..]);
+    if widget_no_gate {
+        // These print only; no request, so no port is needed.
+        if settings.no_owner_fallback && settings.auth == Auth::None {
+            return Some(Gate::VirtualDesktop.stop());
+        }
+        changes_hint(&words);
+        let mut z = call::Zen::new(settings, false);
+        let exit = match widget::widget(&mut z, &words[1..]) {
+            Ok(e) | Err(e) => e,
+        };
+        return Some(z.finish(exit));
+    }
     if let Some(gate) = prelude::gate(&settings) {
         return Some(gate.stop());
     }
@@ -144,6 +164,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "links" => more::links(&mut z, rest),
         "agents-order" => more::agents_order(&mut z, rest),
         "inspect" => more::inspect(&mut z, rest),
+        "widget" | "widgets" => widget::widget(&mut z, rest),
         s if verbs::is_core(s) => verbs::run(&mut z, verbs::plan(s, rest)),
         _ => Ok(verbs::unknown(sub)),
     };

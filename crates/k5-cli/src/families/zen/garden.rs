@@ -1226,7 +1226,7 @@ pub fn proposals(z: &mut Zen, words: &[&str]) -> Step {
         cli_name!(),
         " zen garden access <garden> (edit when you're on its list, else ask)"
     );
-    if retired(&raw) {
+    if is_retired(&raw) {
         return Ok(retired_refuse(as_json, &name, repl).print());
     }
     let mut raw = raw;
@@ -1244,7 +1244,7 @@ const RETIRED_IN: &str = "0.47.0";
 const RETIRED_SEE: &str = concat!(cli_name!(), " study garden-changes");
 
 /// `_zen_is_retired RAW`.
-fn retired(raw: &[u8]) -> bool {
+pub fn is_retired(raw: &[u8]) -> bool {
     let text = String::from_utf8_lossy(raw);
     let Ok(d) = crate::out::pylib::json::loads(&text) else {
         return false;
@@ -1258,7 +1258,7 @@ fn retired(raw: &[u8]) -> bool {
 }
 
 /// `_zen_retired_notice VERB REPLACEMENT`.
-fn retired_notice(verb: &str, repl: &str) -> String {
+pub fn retired_notice(verb: &str, repl: &str) -> String {
     format!(
         "Notice: `{verb}` is retired (Gardens use access lists since 0.46.3) and is removed in {RETIRED_IN}. Use: {repl}. See `{RETIRED_SEE}`."
     )
@@ -1274,7 +1274,7 @@ fn retired_object(verb: &str, repl: &str) -> Value {
 }
 
 /// `_zen_retired_tag RAW VERB REPLACEMENT`.
-fn retired_tag(raw: &[u8], verb: &str, repl: &str) -> Vec<u8> {
+pub fn retired_tag(raw: &[u8], verb: &str, repl: &str) -> Vec<u8> {
     let text = String::from_utf8_lossy(raw).into_owned();
     match crate::out::pylib::json::loads(&text) {
         Ok(Value::Object(mut d)) => {

@@ -139,6 +139,14 @@ impl Zen {
         self.took(&c, sent, soft)
     }
 
+    /// `raw=$(_zen_session_post <endpoint> <body>) || raw=""`: any failed
+    /// call is an empty answer.
+    pub fn session_post_soft(&mut self, endpoint: &str, body: &[u8]) -> Result<Vec<u8>, Exit> {
+        let mut c = self.client(true)?;
+        let sent = c.call(Channel::Tcp, endpoint, Call::PostJson(body));
+        self.took(&c, sent, true)
+    }
+
     /// `raw=$(_zen_session_get <endpoint> <pairs>)`.
     pub fn session_get(&mut self, endpoint: &str, pairs: &[&str]) -> Result<Vec<u8>, Exit> {
         let mut c = self.client(true)?;

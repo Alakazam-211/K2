@@ -9,9 +9,15 @@
 //! 1. `ip netns add k2job-<key>` (a bind mount under [`NETNS_DIR`]);
 //! 2. `lo` up; each dummy `ip link add <name> type dummy`, its address
 //!    (`nodad` for IPv6, so it is usable at once), up;
-//! 3. the unit joins it with `NetworkNamespacePath=` instead of
-//!    `PrivateNetwork=yes` ([`super::jobs::systemd_run_argv`]). It has no
-//!    route out: no internet, no LAN, as under `PrivateNetwork`.
+//! 3. an IPv4 default route through the first dummy (0.46.18,
+//!    `ip -4 route add default dev <first>`; no IPv6 default): a browser's
+//!    local-address lookup (a UDP connect to a public IP) then finds the
+//!    dummy's address, so it gathers an ICE host candidate. A dummy
+//!    discards everything sent to it, so the route leads nowhere;
+//! 4. the unit joins it with `NetworkNamespacePath=` instead of
+//!    `PrivateNetwork=yes` ([`super::jobs::systemd_run_argv`]). Nothing
+//!    leaves it: no internet, no LAN, as under `PrivateNetwork` (and the
+//!    unit's address filter denies all but loopback and the dummies).
 //!
 //! The namespace goes when the node releases the unit (`release`), when a
 //! start fails, and, for one whose unit is gone (an executor that died),
@@ -104,7 +110,22 @@ pub fn make_argvs(name: &str, dummies: &[Dummy]) -> Vec<Vec<String>> {
             s("up"),
         ]);
     }
+    // 0.46.18: the IPv4 default route through the first dummy (it is up by
+    // now), so a local-address lookup finds an address (a browser's ICE
+    // host candidate); the dummy drops what reaches it. No IPv6 default.
+    if let Some(first) = dummies.first() {
+        out.push(default_route_argv(name, &first.name));
+    }
     out
+}
+
+/// `ip -n <ns> -4 route add default dev <dummy>`: the job namespace's IPv4
+/// default route, through its first dummy.
+pub fn default_route_argv(name: &str, dummy: &str) -> Vec<String> {
+    ["-n", name, "-4", "route", "add", "default", "dev", dummy]
+        .iter()
+        .map(|x| x.to_string())
+        .collect()
 }
 
 fn ip(args: &[String]) -> Result<(), String> {
@@ -298,13 +319,20 @@ mod tests {
                 "-n k2job-j1-g1 link add v6 type dummy",
                 "-n k2job-j1-g1 addr add fd00::1/128 dev v6 nodad",
                 "-n k2job-j1-g1 link set v6 up",
+                // 0.46.18: IPv4 default via the first dummy only, last.
+                "-n k2job-j1-g1 -4 route add default dev sewlane0",
             ]
         );
-        assert_eq!(
-            make_argvs("k2job-x-g1", &[]).len(),
-            2,
-            "no dummies: the namespace and its lo"
-        );
+        let routes = |a: &[Vec<String>]| a.iter().filter(|x| x.iter().any(|w| w == "route")).count();
+        assert_eq!(routes(&a), 1, "one default route, IPv4, no IPv6 default");
+        assert!(!lines.iter().any(|l| l.contains("route") && (l.contains(" -6 ") || l.contains("dev v6"))), "{lines:?}");
+        let none = make_argvs("k2job-x-g1", &[]);
+        assert_eq!(none.len(), 2, "no dummies: the namespace and its lo");
+        assert_eq!(routes(&none), 0, "no dummies: no default route");
+        // An IPv6-only first dummy still carries the IPv4 default (the ask:
+        // the first dummy, IPv4).
+        let v6_first = make_argvs("k2job-y-g1", &d[1..]);
+        assert_eq!(v6_first.last().unwrap().join(" "), "-n k2job-y-g1 -4 route add default dev v6");
     }
 
     #[test]

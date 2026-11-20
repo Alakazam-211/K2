@@ -195,9 +195,11 @@ Agents:
                                 exit 3). k2 study compute: NETWORK
                  [--netns-dummy NAME=ADDR/PREFIX]  (repeatable, at most 4;
                                 Linux nodes) a dummy interface in the job's own
-                                namespace, up before it starts (dummy0=
-                                10.254.254.1/32: a browser gets an ICE host
-                                candidate that isn't loopback). Private,
+                                namespace, up before it starts; from k2-node
+                                0.46.18 the first one is the IPv4 default
+                                route (dummy0=10.254.254.1/32: a browser
+                                gets an ICE host candidate that isn't
+                                loopback; nothing leaves). Private,
                                 link-local or test ranges only (exit 2 else);
                                 implies --network none
                  [--receipt-v2]  the node signs receipt v2 (how and where the job

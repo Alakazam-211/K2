@@ -127,7 +127,7 @@
         {"name": "--gpu", "arg": "[any|amd|intel]", "description": "One GPU of the node, to this job alone (bare --gpu = any). Needs a grant with --gpu (else no_gpu_node or gpu_needs_grant, exit 3)."},
         {"name": "--gpu-mem", "arg": "4G", "description": "Only with --gpu (alone: exit 2): the job's GPU memory budget."},
         {"name": "--network", "arg": "none", "description": "No network for this job (loopback only), whatever the node's setting; the one value is none (on, no-lan: exit 2, job_network_invalid)."},
-        {"name": "--netns-dummy", "arg": "NAME=ADDR/PREFIX", "description": "Linux nodes: a dummy interface in the job's own network namespace, e.g. dummy0=10.254.254.1/32. NAME 1-15 of A-Z a-z 0-9 . _ - (not lo); the address from a private, link-local or test range only. Repeatable, at most 4; implies --network none."},
+        {"name": "--netns-dummy", "arg": "NAME=ADDR/PREFIX", "description": "Linux nodes: a dummy interface in the job's own network namespace, e.g. dummy0=10.254.254.1/32; from k2-node 0.46.18 the first is the IPv4 default route (a browser gets an ICE host candidate; nothing leaves). NAME 1-15 of A-Z a-z 0-9 . _ - (not lo); the address from a private, link-local or test range only. Repeatable, at most 4; implies --network none."},
         {"name": "--receipt-v2", "arg": null, "description": "The node signs receipt v2; only nodes on protocol 9 take it (preview: ciPreview)."},
         {"name": "--retry-interrupted", "arg": null, "description": "Retry a job that an infrastructure failure interrupted."},
         {"name": "--no-retry", "arg": null, "description": "Never retry (the same as --retries 0)."},

@@ -1097,13 +1097,18 @@ NETWORK (--network none, --netns-dummy; k2-node 0.46.15 on the node)
     loopback for every job).
   - --netns-dummy NAME=ADDR/PREFIX (Linux only, repeatable, at most 4):
     the node adds a dummy interface with that address to the job's own
-    namespace, up before the job starts. For browsers that need an ICE
-    host candidate that isn't loopback:
+    namespace, up before the job starts. From k2-node 0.46.18 the node
+    also adds an IPv4 default route through the first dummy (ip route:
+    default dev dummy0; no IPv6 default), so a browser's local-address
+    lookup finds the dummy's address and it gets an ICE host candidate
+    that isn't loopback (an older node adds no route: no candidate):
       k2 compute run --netns-dummy dummy0=10.254.254.1/32 -- pnpm e2e
     NAME: 1-15 of A-Z a-z 0-9 . _ - (not lo). ADDR/PREFIX: inside 10/8,
     172.16/12, 192.168/16, 169.254/16, 192.0.2/24, 198.51.100/24,
     203.0.113/24, fc00::/7, fe80::/10 or 2001:db8::/32, the whole prefix
-    inside it. Still no route out: no internet.
+    inside it. Still nothing leaves: a dummy drops what is routed to it,
+    and the job's address filter allows only loopback and the dummies'
+    prefixes. No internet.
   - K2 places such a job only on a node that offers it; a node that can't
     (an older k2-node, no job wall, a Mac for --netns-dummy) never runs it
     with more network: job_network_needs_update (exit 3), or the job

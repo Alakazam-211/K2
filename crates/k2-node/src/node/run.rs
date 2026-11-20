@@ -323,13 +323,16 @@ pub fn asked_network_line(n: &k2_node_proto::jobnet::JobNet, mac: bool) -> Strin
     }
     let mut s = format!("network: none (this job asked, --network none): a network namespace of its own, loopback only; {FAILS}");
     if !n.dummies.is_empty() {
+        // 0.46.18: root adds the IPv4 default route through the first
+        // dummy (`admin::netns::make_argvs`); a dummy drops what it gets.
         s.push_str(&format!(
-            ". Dummy interfaces, up: {} (no route out)",
+            ". Dummy interfaces, up: {} (IPv4 default route via {}, which leads nowhere: nothing leaves the namespace)",
             n.dummies
                 .iter()
                 .map(k2_node_proto::jobnet::Dummy::line)
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
+            n.dummies[0].name
         ));
     }
     s
@@ -3138,7 +3141,7 @@ pub(super) mod tests {
         let line = asked_network_line(&sew, false);
         assert!(
             line.ends_with(
-                ". Dummy interfaces, up: sewlane0 10.254.254.1/32, v6 fd00::1/128 (no route out)"
+                ". Dummy interfaces, up: sewlane0 10.254.254.1/32, v6 fd00::1/128 (IPv4 default route via sewlane0, which leads nowhere: nothing leaves the namespace)"
             ),
             "{line}"
         );

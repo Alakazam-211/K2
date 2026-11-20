@@ -300,6 +300,20 @@ fn root_makes_and_removes_a_job_namespace_with_dummies() {
             .all(|l| l.contains("UP")),
         "{links}"
     );
+    // 0.46.18: the IPv4 default route through the first dummy, and no
+    // IPv6 default.
+    let ip_out = |args: &[&str]| {
+        let o = std::process::Command::new("ip").args(args).output().unwrap();
+        assert!(o.status.success(), "ip {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    let r4 = ip_out(&["-n", &name, "-4", "route", "show"]);
+    assert!(r4.lines().any(|l| l.trim() == "default dev sewlane0 scope link"), "{r4}");
+    let r6 = ip_out(&["-n", &name, "-6", "route", "show"]);
+    assert!(!r6.lines().any(|l| l.starts_with("default")), "no IPv6 default: {r6}");
+    // The local-address lookup a browser does finds the dummy's address.
+    let get = ip_out(&["-n", &name, "-4", "route", "get", "192.0.2.1"]);
+    assert!(get.contains("dev sewlane0") && get.contains("src 10.254.254.1"), "{get}");
     // Its unit isn't loaded: the sweep takes it.
     assert!(
         netns::sweep().contains(&name),
@@ -432,8 +446,47 @@ async fn a_job_asking_network_none_gets_loopback_only_and_its_dummies() {
     );
     let log = text(&logs_of(&fr, "jn2"), LogStream::Sys);
     assert!(
-        log.contains("Dummy interfaces, up: sewlane0 10.254.254.1/32, sewv6 fd00:6b32::7/128"),
+        log.contains("Dummy interfaces, up: sewlane0 10.254.254.1/32, sewv6 fd00:6b32::7/128 (IPv4 default route via sewlane0"),
         "{log}"
+    );
+
+    // 0.46.18: inside the job, `ip route` shows the IPv4 default through
+    // the first dummy (no IPv6 default), and a local-address lookup (what
+    // Chrome's ICE host-candidate gathering does) finds the dummy's
+    // address; nothing has to leave for that.
+    let ip = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .expect("iproute2");
+    let script = format!("{ip} -4 route show; echo ---; {ip} -6 route show; echo ---; {ip} -4 route get 192.0.2.1");
+    let mut p = plan("jn3", &["/bin/sh", "-c", script.as_str()]);
+    p.network = Some(JobNet {
+        mode: JobNetMode::None,
+        dummies: vec![
+            Dummy {
+                name: "sewlane0".into(),
+                addr: "10.254.254.1/32".into(),
+            },
+            Dummy {
+                name: "sewv6".into(),
+                addr: "fd00:6b32::7/128".into(),
+            },
+        ],
+    });
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "jn3").await;
+    assert_eq!(last(&fr, "jn3").state, JobState::Done, "{fr:?}");
+    let out = text(&logs_of(&fr, "jn3"), LogStream::Out);
+    let parts: Vec<&str> = out.split("---\n").collect();
+    assert_eq!(parts.len(), 3, "{out}");
+    assert!(
+        parts[0].lines().any(|l| l.trim() == "default dev sewlane0 scope link"),
+        "ip route in the job: {out}"
+    );
+    assert!(!parts[1].lines().any(|l| l.starts_with("default")), "no IPv6 default: {out}");
+    assert!(
+        parts[2].contains("dev sewlane0") && parts[2].contains("src 10.254.254.1"),
+        "the local-address lookup finds the dummy: {out}"
     );
     assert!(
         !unit_loaded("k2job-jn2-g1.service"),

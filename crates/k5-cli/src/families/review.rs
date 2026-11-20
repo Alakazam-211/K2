@@ -13,8 +13,11 @@
 //!    T5 row: `owner-fallback-impact.md`).
 //! 4. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
-//! The shell answers: no verb or one it doesn't know (its line, then the
-//! whole help), `--reason`, `--message` or `-m` as the last word (`$2:
+//! No verb, or one it doesn't know: `Unknown review subcommand: <word>` on
+//! stderr, then `cmd_help`'s daily tier on stdout (asked as the front asks
+//! it, [`crate::pages::daily_tier`]), exit 1.
+//!
+//! The shell answers: `--reason`, `--message` or `-m` as the last word (`$2:
 //! unbound variable`), `-h` or `--help` anywhere (the front sends those
 //! on; the shell prints the usage and sends nothing), a word that is not
 //! UTF-8, a port curl won't take, and a `python3` the binary
@@ -50,11 +53,16 @@ pub enum Ask {
     Send(&'static str, String),
     /// Lines on stderr and exit 1.
     Stop(Vec<&'static str>),
+    /// No verb or one `review` has no arm for: its line, then the daily
+    /// tier.
+    Unknown(String),
 }
 
 /// The words after `review`. `None`: the shell's.
 pub fn parse(words: &[&str]) -> Option<Ask> {
-    let (verb, rest) = words.split_first()?;
+    let Some((verb, rest)) = words.split_first() else {
+        return Some(Ask::Unknown(String::new()));
+    };
     let arg = |i: usize| rest.get(i).copied().unwrap_or("");
     match *verb {
         "approve" => {
@@ -116,7 +124,7 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
                 format!("agent={}&feedback={}", quote(agent), quote(&value)),
             ))
         }
-        _ => None,
+        other => Some(Ask::Unknown(other.to_string())),
     }
 }
 
@@ -151,6 +159,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
         Ask::Send(e, p) => (e, p),
+        Ask::Unknown(word) => return unknown(&word, args),
     };
     let would_refuse = passport::current(args).would_refuse();
     let mut client = match settings.client(would_refuse) {
@@ -180,14 +189,29 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     Some(exit)
 }
 
+/// `echo "Unknown review subcommand: ${2:-}" >&2; cmd_help; exit 1`,
+/// after the gates. `None`: the shell answers the daily tier's questions
+/// ([`crate::pages::daily_tier`]), decided before anything is printed.
+fn unknown(word: &str, args: &[OsString]) -> Option<Exit> {
+    let (env, p) = super::help::shell_prelude()?;
+    let text = crate::pages::daily_tier(&p, &env, || passport::current(args).would_refuse())?;
+    Some(super::help::show(&crate::pages::Page {
+        text: text.into(),
+        stderr: false,
+        exit: Exit::Error,
+        lead: Some(format!("Unknown review subcommand: {word}\n")),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn the_words_are_the_shells() {
-        assert_eq!(parse(&[]), None);
-        assert_eq!(parse(&["merge"]), None);
+        assert_eq!(parse(&[]), Some(Ask::Unknown(String::new())));
+        assert_eq!(parse(&["merge"]), Some(Ask::Unknown("merge".into())));
+        assert_eq!(parse(&[""]), Some(Ask::Unknown(String::new())));
         assert_eq!(parse(&["reject"]), Some(Ask::Stop(vec![])));
         assert_eq!(parse(&["reject", "a", "--reason"]), None);
         assert_eq!(parse(&["feedback", "a", "-m"]), None);

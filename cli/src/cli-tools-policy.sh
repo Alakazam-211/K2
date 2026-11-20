@@ -286,11 +286,12 @@ _cli_apply_auth_for_verb() {
 
 # Open verbs that still act as the caller in an agent's session: the
 # workspace verbs that list, create, open, start or change a workspace and
-# its agent profile (`k2 agent profile|update` are the same commands).
+# its agent profile (`k2 agent profile|update` are the same commands), and
+# `workspace triage`, which lists an inbox.
 # Outside a session they send $TOKEN, as every Open verb does.
 _cli_verb_sends_session_passport() {
     case "${1:-} ${2:-}" in
-        "workspace list"|"workspace create"|"workspace open"|"workspace launch"|"workspace profile"|"workspace update") return 0 ;;
+        "workspace list"|"workspace create"|"workspace open"|"workspace launch"|"workspace profile"|"workspace update"|"workspace triage") return 0 ;;
         "agent profile"|"agent update") return 0 ;;
     esac
     return 1

@@ -760,11 +760,12 @@ _cli_apply_auth_for_verb() {
 
 # Open verbs that still act as the caller in an agent's session: the
 # workspace verbs that list, create, open, start or change a workspace and
-# its agent profile (`k2 agent profile|update` are the same commands).
+# its agent profile (`k2 agent profile|update` are the same commands), and
+# `workspace triage`, which lists an inbox.
 # Outside a session they send $TOKEN, as every Open verb does.
 _cli_verb_sends_session_passport() {
     case "${1:-} ${2:-}" in
-        "workspace list"|"workspace create"|"workspace open"|"workspace launch"|"workspace profile"|"workspace update") return 0 ;;
+        "workspace list"|"workspace create"|"workspace open"|"workspace launch"|"workspace profile"|"workspace update"|"workspace triage") return 0 ;;
         "agent profile"|"agent update") return 0 ;;
     esac
     return 1
@@ -76105,10 +76106,16 @@ cmd_workspace_triage() {
         echo "This workspace's inbox list (same as k2 inbox list). Extra arguments are not accepted." >&2
         exit 2
     fi
-    # 0.39.0f Phase 2.1b: /cli/work/inbox is HTTP 410 now. Use the
-    # inbox-first endpoint and the inbox formatter so the output
-    # matches the rest of the inbox surface.
-    cli_request "/cli/inbox/list" | format_inbox
+    # The inbox list, sent as `k2 inbox list` sends it: in an agent's
+    # session the session's cell socket first, with its passport (TCP
+    # falls back with the passport too, never the owner token), so it
+    # lists only what K2 lets the session see. A session with no passport
+    # sends nothing.
+    if [ -n "$(_hook_sock)" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
+        echo "Error: k2 workspace triage in an agent's session needs the session's passport, and this session has none." >&2
+        exit 1
+    fi
+    cli_send cli_request "/cli/inbox/list" | format_inbox
 }
 
 # ── Phase 2.1: 3-tier help (verbatim mock text) ───────────────────────

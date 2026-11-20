@@ -1542,9 +1542,15 @@ cmd_workspace_triage() {
         echo "This workspace's inbox list (same as k2 inbox list). Extra arguments are not accepted." >&2
         exit 2
     fi
-    # 0.39.0f Phase 2.1b: /cli/work/inbox is HTTP 410 now. Use the
-    # inbox-first endpoint and the inbox formatter so the output
-    # matches the rest of the inbox surface.
-    cli_request "/cli/inbox/list" | format_inbox
+    # The inbox list, sent as `k2 inbox list` sends it: in an agent's
+    # session the session's cell socket first, with its passport (TCP
+    # falls back with the passport too, never the owner token), so it
+    # lists only what K2 lets the session see. A session with no passport
+    # sends nothing.
+    if [ -n "$(_hook_sock)" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
+        echo "Error: k2 workspace triage in an agent's session needs the session's passport, and this session has none." >&2
+        exit 1
+    fi
+    cli_send cli_request "/cli/inbox/list" | format_inbox
 }
 

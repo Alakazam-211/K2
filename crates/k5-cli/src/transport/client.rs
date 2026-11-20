@@ -1643,9 +1643,7 @@ impl Client {
             Kind::SidecarGet | Kind::SidecarPost => SIDECAR_MAX_TIME,
             Kind::ComputeGet => COMPUTE_GET_MAX_TIME,
             Kind::ComputePost => self.compute_post_max_time.unwrap_or(COMPUTE_POST_MAX_TIME),
-            Kind::VaultSockGet | Kind::VaultSockPost if self.migrate_sock => {
-                MIGRATE_SOCK_MAX_TIME
-            }
+            Kind::VaultSockGet | Kind::VaultSockPost if self.migrate_sock => MIGRATE_SOCK_MAX_TIME,
             Kind::VaultSockGet | Kind::VaultSockPost => VAULT_SOCK_MAX_TIME,
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
             Kind::Cards => CARDS_TIME,

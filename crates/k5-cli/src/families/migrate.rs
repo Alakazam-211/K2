@@ -41,7 +41,8 @@
 //! a type it doesn't expect), this prints a Python 3.12 traceback and
 //! exits 1, as the shell's `set -e` does.
 
-use super::{curl_port, get, ljust, py_get, py_iter, raised, Raise, Shown};
+use super::{curl_port, ljust, py_get, py_iter, raised, Raise, Shown};
+use crate::out::pylib::ops;
 use crate::confirm::{self, Confirm, Split};
 use crate::daemon;
 use crate::exit::Exit;
@@ -75,7 +76,11 @@ pub const APPROVE_HELP: &str = concat!(
     " migrate approve <mv_\u{2026}> \u{2014} run a held move step (box owner, own terminal; asks the vault confirm)"
 );
 /// `approve` with a flag it doesn't have.
-pub const APPROVE_FLAG: &str = concat!("usage: ", cli_name!(), " migrate approve <mv_\u{2026}> [--json]");
+pub const APPROVE_FLAG: &str = concat!(
+    "usage: ",
+    cli_name!(),
+    " migrate approve <mv_\u{2026}> [--json]"
+);
 /// `approve` with no id.
 pub const APPROVE_USAGE: &str = concat!(
     "usage: ",
@@ -510,7 +515,8 @@ pub fn step(cx: &mut Cx, call: &Call) -> Result<Exit, Exit> {
 fn print_body(body: &[u8]) -> Result<(), Exit> {
     let mut text = body.to_vec();
     text.push(b'\n');
-    out::write_flushed(&mut std::io::stdout().lock(), &text).map_err(|e| out::after_stdout_error(&e))
+    out::write_flushed(&mut std::io::stdout().lock(), &text)
+        .map_err(|e| out::after_stdout_error(&e))
 }
 
 /// `_migrate_finish <as_json> <render>`.
@@ -592,24 +598,6 @@ fn plus(prefix: &str, x: &Value, line: u32) -> R<String> {
     }
 }
 
-/// `key in v`.
-fn py_in(key: &str, v: &Value, line: u32) -> R<bool> {
-    match v {
-        Value::Object(pairs) => Ok(get(pairs, key).is_some()),
-        Value::Array(items) => Ok(items
-            .iter()
-            .any(|i| matches!(i, Value::Str(t) if *t == Text::from(key)))),
-        Value::Str(_) => Ok(py::str_of(v).contains(key)),
-        other => Err(Raise::at(
-            line,
-            format!(
-                "TypeError: argument of type '{}' is not iterable",
-                py::type_name(other)
-            ),
-        )),
-    }
-}
-
 /// `key(k)`, called from line `from`.
 fn key(k: Option<&Value>, from: u32) -> R<String> {
     let k = or_object(k);
@@ -660,13 +648,13 @@ fn render_into(out: &mut String, body: &[u8], render: Render) -> R<()> {
     let v = confirm::load(body).map_err(|r| Raise::at(3, r.exception))?;
     let mut kind = render;
     if kind == Render::Plain {
-        kind = if py_in("out", &v, 7)? {
+        kind = if ops::contains(&v, "out", 7)? {
             Render::Export
-        } else if py_in("wasFrozen", &v, 7)? {
+        } else if ops::contains(&v, "wasFrozen", 7)? {
             Render::Unfreeze
-        } else if py_in("undone", &v, 7)? {
+        } else if ops::contains(&v, "undone", 7)? {
             Render::Undo
-        } else if py_in("replaced", &v, 7)? {
+        } else if ops::contains(&v, "replaced", 7)? {
             Render::Import
         } else {
             Render::Plain
@@ -886,7 +874,10 @@ mod tests {
     fn the_words_are_the_shell_s() {
         assert_eq!(parse(&[], &pwd), Parsed::Help);
         assert_eq!(parse(&["approve", "-h"], &pwd), Parsed::ApproveHelp);
-        assert_eq!(parse(&["approve", "--x", "-h"], &pwd), Parsed::Usage(APPROVE_FLAG));
+        assert_eq!(
+            parse(&["approve", "--x", "-h"], &pwd),
+            Parsed::Usage(APPROVE_FLAG)
+        );
         assert_eq!(parse(&["approve"], &pwd), Parsed::Usage(APPROVE_USAGE));
         assert_eq!(parse(&["export-secrets", "--to"], &pwd), Parsed::ShiftFails);
         assert_eq!(parse(&["nope"], &pwd), Parsed::Usage(USAGE));
@@ -898,7 +889,10 @@ mod tests {
         let Parsed::Call(c) = parse(&["import-secrets", "begin", "--new", "--json"], &pwd) else {
             panic!("a call")
         };
-        assert_eq!((c.payload.as_str(), c.json, c.step), (r#"{"new": true}"#, true, false));
+        assert_eq!(
+            (c.payload.as_str(), c.json, c.step),
+            (r#"{"new": true}"#, true, false)
+        );
     }
 
     #[test]

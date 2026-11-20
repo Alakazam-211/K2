@@ -84,17 +84,22 @@ fn help_and_usage() {
         case("help word", &["help"], 0),
         case("--help", &["--help"], 0),
         case("-h", &["-h"], 0),
-        case("approve -h", &["approve", "-h"], 0),
-        case("approve --json --help", &["approve", "--json", "--help"], 0),
         case("an unknown verb", &["nope"], 2),
         case("a flag for a verb", &["--json"], 2),
         case("approve with no id", &["approve"], 2),
         case("approve --json alone", &["approve", "--json"], 2),
-        case("approve, a flag before -h", &["approve", "--x", "-h"], 2),
         case("export with nothing", &["export-secrets"], 2),
         case("export, --to only", &["export-secrets", "--to", "age1x"], 2),
-        case("export, an empty --out", &["export-secrets", "--to", "age1x", "--out", ""], 2),
-        case("export, a word it doesn't take", &["export-secrets", "x"], 2),
+        case(
+            "export, an empty --out",
+            &["export-secrets", "--to", "age1x", "--out", ""],
+            2,
+        ),
+        case(
+            "export, a word it doesn't take",
+            &["export-secrets", "x"],
+            2,
+        ),
         // The shell's `shift 2` fails under `set -e`: exit 1, nothing
         // printed.
         case("export, --to last", &["export-secrets", "--to"], 1),
@@ -105,10 +110,22 @@ fn help_and_usage() {
     ] {
         rig.check(&c);
     }
+    // A line with `-h` or `--help` is the front's (a help page, or the
+    // shell's): the binary hands it on.
+    for (name, args, code) in [
+        ("approve -h", &["approve", "-h"][..], 0),
+        ("approve --json --help", &["approve", "--json", "--help"], 0),
+        ("approve, a flag before -h", &["approve", "--x", "-h"], 2),
+    ] {
+        let mut c = case(name, args, code);
+        c.handed = true;
+        rig.check(&c);
+    }
 }
 
 /// Help never acts (K2's rule): `-h` or `--help` on the line of a step
-/// that changes something prints the help and sends nothing.
+/// that changes something prints the help and sends nothing. The binary
+/// hands these lines on (the front's rule for a family's help).
 #[test]
 fn help_never_acts() {
     let rig = VRig::new();
@@ -122,19 +139,35 @@ fn help_never_acts() {
         &["approve", "mv_1", "-h"],
         &["approve", "mv_1", "--json", "--help"],
     ] {
-        rig.check(&case("help", args, 0));
+        let mut c = case("help", args, 0);
+        c.handed = true;
+        rig.check(&c);
     }
-    // A bash bug, copied until bash's fix lands: `--to` and `--out` take
-    // `-h` as their value, so the export is sent (cli/src/migrate.sh,
-    // cmd_migrate's export-secrets arm). FLIPS when the fix lands: then
-    // this prints the help and sends nothing.
+}
+
+/// A bash bug, reported: `--to` and `--out` take `-h` as their value, so
+/// `k2 migrate export-secrets --to -h --out f` sends the export
+/// (cli/src/migrate.sh, cmd_migrate's export-secrets arm). The binary
+/// hands the line to the shell (the front's rule for `-h`), so both send
+/// it. FLIP: when bash's fix lands this fails; then the line prints the
+/// help and sends nothing, and this becomes a help_never_acts row.
+#[test]
+fn export_to_takes_help_as_its_value_bash_bug() {
+    let rig = VRig::new();
     let c = sock(
         "export, -h as --to's value (bash bug)",
         &["export-secrets", "--to", "-h", "--out", "f"],
         vec![ok(EXPORT)],
         0,
     );
-    rig.check(&c);
+    let bash = rig.run(true, false, &c);
+    assert_eq!(bash.out.code, Some(0), "{bash:#?}");
+    assert_eq!(
+        bash.vault.len(),
+        1,
+        "FLIP: bash no longer sends it: {bash:#?}"
+    );
+    assert!(bash.vault[0].contains("\"to\": \"-h\""), "{bash:#?}");
 }
 
 #[test]
@@ -160,11 +193,19 @@ fn status() {
         sock("status, a large answer", &["status"], vec![ok(big)], 0),
         // covers: migrate status --json
         sock("status --json", &["status", "--json"], vec![ok(STATUS)], 0),
-        sock("status --json, large", &["status", "--json"], vec![ok(big)], 0),
+        sock(
+            "status --json, large",
+            &["status", "--json"],
+            vec![ok(big)],
+            0,
+        ),
         // Only the first word after the verb is read.
-        sock("status x --json", &["status", "x", "--json"], vec![ok(STATUS)], 0),
-        // `-h` skips the gate; status still asks.
-        sock("status -h", &["status", "-h"], vec![ok(STATUS)], 0),
+        sock(
+            "status x --json",
+            &["status", "x", "--json"],
+            vec![ok(STATUS)],
+            0,
+        ),
         session("status in a K2 terminal", &["status"], vec![ok(STATUS)], 0),
         session(
             "status --json in a K2 terminal",
@@ -194,7 +235,12 @@ fn status() {
             4,
         ),
         sock("status, no answer", &["status"], vec![Reply::Close], 1),
-        sock("status --json, no answer", &["status", "--json"], vec![Reply::Close], 1),
+        sock(
+            "status --json, no answer",
+            &["status", "--json"],
+            vec![Reply::Close],
+            1,
+        ),
         traceback(sock("status, not JSON", &["status"], vec![ok("nope")], 1)),
         traceback(sock(
             "status, a held row that is no object",
@@ -227,6 +273,7 @@ fn status() {
     rig.check(&c);
     let mut c = case("help with no port", &["import-secrets", "-h"], 0);
     c.owner_on_disk = false;
+    c.handed = true;
     rig.check(&c);
 }
 
@@ -258,7 +305,10 @@ fn begin_and_the_dry_run() {
         sock(
             "begin held",
             &["import-secrets", "begin"],
-            vec![Reply::Answer(202, r#"{"status":"held","hint":"ask the owner"}"#.into())],
+            vec![Reply::Answer(
+                202,
+                r#"{"status":"held","hint":"ask the owner"}"#.into(),
+            )],
             2,
         ),
         traceback(sock(
@@ -405,7 +455,10 @@ fn the_steps_and_their_confirm() {
         sock(
             "export held --json",
             &["export-secrets", "--to", "age1new", "--out", "/m", "--json"],
-            vec![Reply::Answer(202, r#"{"status":"held","id":"mv_9"}"#.into())],
+            vec![Reply::Answer(
+                202,
+                r#"{"status":"held","id":"mv_9"}"#.into(),
+            )],
             2,
         ),
         traceback(sock(
@@ -473,14 +526,24 @@ fn approve() {
     for c in [
         // covers: migrate approve
         confirmed,
-        sock("approve: an unfreeze", &["approve", "mv_2"], vec![ok(r#"{"wasFrozen":true}"#)], 0),
+        sock(
+            "approve: an unfreeze",
+            &["approve", "mv_2"],
+            vec![ok(r#"{"wasFrozen":true}"#)],
+            0,
+        ),
         sock(
             "approve: an undo",
             &["approve", "mv_3"],
             vec![ok(r#"{"undone":"v1","vault":{}}"#)],
             0,
         ),
-        sock("approve: an import", &["approve", "mv_4"], vec![ok(IMPORT)], 0),
+        sock(
+            "approve: an import",
+            &["approve", "mv_4"],
+            vec![ok(IMPORT)],
+            0,
+        ),
         sock(
             "approve: something else",
             &["approve", "mv_5"],
@@ -542,7 +605,6 @@ fn the_lines_say_the_brand_s_name() {
     for (args, code, out, err) in [
         (&["nope"][..], 2, String::new(), format!("usage: {cli} migrate status | import-secrets … | export-secrets … | approve mv_… ({cli} migrate --help)\n")),
         (&["approve"][..], 2, String::new(), format!("usage: {cli} migrate approve <mv_…> ({cli} migrate status lists held steps)\n")),
-        (&["approve", "-h"][..], 0, format!("{cli} migrate approve <mv_…> — run a held move step (box owner, own terminal; asks the vault confirm)\n"), String::new()),
         (&["export-secrets", "x"][..], 2, String::new(), format!("usage: {cli} migrate export-secrets --to <age1…> --out <file> | --unfreeze ({cli} migrate --help)\n")),
         (&["import-secrets"][..], 2, String::new(), format!("usage: {cli} migrate import-secrets <file> [--apply] (or: begin, --undo)\n")),
     ] {
@@ -559,8 +621,12 @@ fn the_lines_say_the_brand_s_name() {
     );
     let ran = rig.run(false, false, &c);
     assert!(
-        ran.out.stdout.contains(&format!("({cli} migrate export-secrets --unfreeze to call it off)"))
-            && ran.out.stdout.contains(&format!("none ({cli} migrate import-secrets begin)")),
+        ran.out.stdout.contains(&format!(
+            "({cli} migrate export-secrets --unfreeze to call it off)"
+        )) && ran
+            .out
+            .stdout
+            .contains(&format!("none ({cli} migrate import-secrets begin)")),
         "{ran:#?}"
     );
     let mut c = sock("brand: no answer", &["status"], vec![Reply::Close], 1);

@@ -78,6 +78,9 @@ pub mod browser_snapshot;
 // Remote Gmail OAuth — bind/wait on the desktop's 127.0.0.1 loopback so
 // Google's redirect lands on the machine with a browser (not the daemon).
 pub mod oauth_loopback;
+// The one-use owner link (chat as owner): opened through a private redirect
+// page so the link is never on a command line.
+pub mod owner_link;
 
 // Style System — macOS traffic-light inset for floating-chrome styles.
 pub mod traffic_lights;

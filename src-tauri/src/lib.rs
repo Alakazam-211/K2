@@ -1502,6 +1502,8 @@ pub fn run() {
             commands::oauth_loopback::oauth_loopback_bind,
             commands::oauth_loopback::oauth_loopback_wait,
             commands::oauth_loopback::oauth_loopback_cancel,
+            // The one-use owner link, opened off the command line.
+            commands::owner_link::open_owner_link,
             // Projects — host-only verbs (folder picker, icon upload,
             // OS-integration "open in" actions, editor discovery, focus
             // window). All DB-backed project CRUD moved off the Tauri

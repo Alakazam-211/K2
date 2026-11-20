@@ -3606,4 +3606,57 @@ mod tests {
         let remote = std::fs::read_to_string(src.join("transport/remote.rs")).unwrap();
         assert_eq!(remote.matches(&reader).count(), 1, "remote.rs");
     }
+
+    /// No credential ever follows a redirect: a 3xx is the answer, on the
+    /// transport's calls and the urllib adapter's alike. A first server
+    /// answers 302 with a `Location` at a second one, which must get
+    /// nothing (K2's rule from the clone engine's redirect ruling).
+    #[test]
+    fn a_redirect_is_the_answer_and_never_followed() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let second = TcpListener::bind("127.0.0.1:0").unwrap();
+        let p2 = second.local_addr().unwrap().port();
+        second.set_nonblocking(true).unwrap();
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let p1 = first.local_addr().unwrap().port();
+        let answer = format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{p2}/cli/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let served = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut c, _) = first.accept().unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                let mut got = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match c.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => got.extend_from_slice(&buf[..n]),
+                    }
+                }
+                c.write_all(answer.as_bytes()).unwrap();
+            }
+        });
+        let mut c = Client::new("127.0.0.1", p1, "/p", Auth::Owner("owner-tok".into()));
+        c.pause = Duration::from_millis(1);
+        let r = c
+            .call(Channel::Tcp, "/cli/x", Call::Request(&[]))
+            .expect("the 302 is the answer");
+        assert_eq!(r.status, 302);
+        let opener = super::super::urllib::Opener::from_client(&c);
+        let req = super::super::urllib::Request::new(
+            super::super::urllib::Method::Get,
+            "/cli/x",
+            Duration::from_secs(5),
+        );
+        assert_eq!(opener.open(&req).status(), Some(302));
+        served.join().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        match second.accept() {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Ok((_, from)) => panic!("the redirect was followed: a connection from {from}"),
+            Err(e) => panic!("accept: {e}"),
+        }
+    }
 }

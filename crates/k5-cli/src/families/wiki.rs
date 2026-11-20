@@ -650,15 +650,20 @@ impl Run {
         let serve = self.took(sent, true)?;
         let status = self.get(STATUS, &[], true)?;
         let (port_num, url) = publish::port_and_url(&serve, &status);
-        let shown = |r: Result<String, super::Raise>| match r {
-            Ok(v) => v,
-            Err(raise) => {
-                let _ = out::write_flushed(&mut std::io::stderr().lock(), raise.text().as_bytes());
-                String::new()
-            }
+        // `port_num=$(… python3 …)` under `set -e`: a reader that raises
+        // ends the command there with 1, its traceback on stderr.
+        let raised = |raise: super::Raise| {
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), raise.text().as_bytes());
+            Exit::Error
         };
-        let port_num = shown(port_num);
-        let url = shown(url);
+        let port_num = match port_num {
+            Ok(p) => p,
+            Err(raise) => return Ok(raised(raise)),
+        };
+        let url = match url {
+            Ok(u) => u,
+            Err(raise) => return Ok(raised(raise)),
+        };
         if port_num.is_empty() {
             wiki_err(
                 o.json,

@@ -219,3 +219,43 @@ pub fn retry_reader(body: &[u8]) -> Shown {
         Err(e) => raised(std::mem::take(&mut cx.out), String::new(), &e),
     }
 }
+
+/// [`super::lines::py_line`] for a Python whose text has the shell's
+/// `'"'"'` (a quote in it): the marker may come after that quote.
+pub const fn py_line_q(src: &str, after: &str, marker: &str) -> u32 {
+    const fn find(h: &[u8], n: &[u8], from: usize) -> Option<usize> {
+        let mut i = from;
+        while i + n.len() <= h.len() {
+            let mut k = 0;
+            while k < n.len() && h[i + k] == n[k] {
+                k += 1;
+            }
+            if k == n.len() {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+    let h = src.as_bytes();
+    let Some(a) = find(h, after.as_bytes(), 0) else {
+        panic!("no such place in the shell's source");
+    };
+    let open = b"python3 -c '";
+    let Some(p) = find(h, open, a) else {
+        panic!("no python3 -c ' after it");
+    };
+    let start = p + open.len();
+    let Some(m) = find(h, marker.as_bytes(), start) else {
+        panic!("a marker is not in the shell's Python");
+    };
+    let mut line = 1;
+    let mut i = start;
+    while i < m {
+        if h[i] == b'\n' {
+            line += 1;
+        }
+        i += 1;
+    }
+    line
+}

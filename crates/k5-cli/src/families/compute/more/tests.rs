@@ -107,6 +107,11 @@ fn the_seats_and_trust_words() {
     );
     assert_eq!(
         trust::parse("owners", &["consent", "", "off"]),
-        post("/cli/compute/owners/consent", r#"{"on": false}"#, false, false)
+        post(
+            "/cli/compute/owners/consent",
+            r#"{"on": false}"#,
+            false,
+            false
+        )
     );
 }

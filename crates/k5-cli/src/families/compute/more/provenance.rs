@@ -9,7 +9,6 @@
 //!   [--json]`: the daemon's check of a statement, exit 1 when it is not
 //!   verified.
 
-use super::super::lines::py_line;
 use super::super::pyrt::{self as p, s};
 use super::super::render::{self, Cx};
 use super::super::writes::{dumps, object, str_value, Cp, Words};
@@ -24,9 +23,10 @@ use k2_client::{brand::CLI_NAME, cli_name};
 /// `cli/src/compute-provenance.sh`.
 pub const SRC: &str = include_str!("../../../../../../cli/src/compute-provenance.sh");
 
-macro_rules! line {
+/// The `line!` lookup for a Python with the shell's `'"'"'` in it.
+macro_rules! line_q {
     ($after:expr, $marker:literal) => {
-        const { py_line(SRC, $after, $marker) }
+        const { super::py_line_q(SRC, $after, $marker) }
     };
 }
 
@@ -192,16 +192,15 @@ fn provenance(cp: &mut Cp<'_>, job: &str, out_path: &str, json: bool) -> Exit {
 
 /// The `--out` Python: the line written to `path`, then what it names.
 fn written(cx: &mut Cx, body: &[u8], path: &str) -> Result<(), Raise> {
-    const AFTER: &str = "path = sys.argv[1]";
-    // The Python starts a line before its `import`.
-    let l = line!(AFTER, "v = json.load(sys.stdin)");
+    const AFTER: &str = "sys.stdout.write(json.load(sys.stdin)[\"line\"])'";
+    let l = line_q!(AFTER, "v = json.load(sys.stdin)");
     let v = render::load(cx, body, l)?;
-    let l = line!(AFTER, "with open(path, \"w\") as f:");
+    let l = line_q!(AFTER, "with open(path, \"w\") as f:");
     let mut f = std::fs::File::create(path).map_err(|e| {
         let f = pyjson::os_error(&e, path);
         cx.raise(l, f.last_line())
     })?;
-    let l = line!(AFTER, "f.write(v[\"line\"])");
+    let l = line_q!(AFTER, "f.write(v[\"line\"])");
     let text = cx.at(l, p::idx(&v, "line"))?;
     let Value::Str(_) = &text else {
         return Err(cx.raise(
@@ -220,18 +219,18 @@ fn written(cx: &mut Cx, body: &[u8], path: &str) -> Result<(), Raise> {
         })?;
     }
     drop(f);
-    let l = line!(AFTER, "subs = v.get(\"subjects\") or []");
+    let l = line_q!(AFTER, "subs = v.get(\"subjects\") or []");
     let subs = p::or(cx.at(l, p::get(&v, "subjects"))?, Value::Array(vec![]));
-    let l = line!(AFTER, "print(\"wrote %s: job %s");
+    let l = line_q!(AFTER, "print(\"wrote %s: job %s");
     let short = cx.at(l, p::idx(&v, "short"))?;
     let node = p::or(cx.at(l, p::get(&v, "node"))?, s("?"));
     let n = cx.at(l, p::len(&subs))?;
     let fmt = "wrote %s: job %s's build statement, signed by node %s, naming %d file(s):";
     let t = cx.at(l, p::pct(fmt, &[s(path), short, node, p::int(n as i128)]))?;
     cx.print(&t);
-    let l = line!(AFTER, "for s in subs:");
+    let l = line_q!(AFTER, "for s in subs:");
     for x in cx.at(l, p::iter(&subs))? {
-        let l = line!(AFTER, "print(\"  %s  sha256 %s\"");
+        let l = line_q!(AFTER, "print(\"  %s  sha256 %s\"");
         let name = cx.at(l, p::idx(&x, "name"))?;
         let sum = cx.at(l, p::idx(&x, "sha256"))?;
         let t = cx.at(l, p::pct("  %s  sha256 %s", &[name, sum]))?;
@@ -338,12 +337,12 @@ fn verify(cp: &mut Cp<'_>, target: &str, file: &str, owner: &str, json: bool) ->
 /// The verify answer's reader.
 fn checks(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     const AFTER: &str = "_compute_call POST /cli/compute/verify";
-    let v = render::load(cx, body, line!(AFTER, "v = json.load(sys.stdin)"))?;
-    let l = line!(AFTER, "what = \"job %s");
+    let v = render::load(cx, body, line_q!(AFTER, "v = json.load(sys.stdin)"))?;
+    let l = line_q!(AFTER, "what = \"job %s");
     let short = cx.at(l, p::idx(&v, "short"))?;
     let node = p::or(cx.at(l, p::get(&v, "node"))?, s("?"));
     let what = cx.at(l, p::pct("job %s's build statement (node %s)", &[short, node]))?;
-    let l = line!(AFTER, "print((\"verified: \" + what)");
+    let l = line_q!(AFTER, "print((\"verified: \" + what)");
     let t = if p::truthy(&cx.at(l, p::idx(&v, "verified"))?) {
         format!("verified: {what}")
     } else {
@@ -351,9 +350,9 @@ fn checks(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         cx.at(l, p::pct("NOT verified: %s: %s", &[s(&what), failed]))?
     };
     cx.print(&t);
-    let l = line!(AFTER, "for c in v[\"checks\"]:");
+    let l = line_q!(AFTER, "for c in v[\"checks\"]:");
     for c in cx.at(l, p::idx(&v, "checks").and_then(|c| p::iter(&c)))? {
-        let l = line!(AFTER, "print(\"  %-8s %-10s %s\"");
+        let l = line_q!(AFTER, "print(\"  %-8s %-10s %s\"");
         let ok = if p::truthy(&cx.at(l, p::idx(&c, "ok"))?) {
             "checked"
         } else {
@@ -364,7 +363,7 @@ fn checks(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         let t = cx.at(l, p::pct("  %-8s %-10s %s", &[s(ok), check, detail]))?;
         cx.print(&t);
     }
-    let l = line!(AFTER, "print(\"not checked: \"");
+    let l = line_q!(AFTER, "print(\"not checked: \"");
     let n = cx.at(l, p::idx(&v, "notChecked"))?;
     let t = cx.at(l, p::add(&s("not checked: "), &n))?;
     cx.print(&p::str_of(&t));

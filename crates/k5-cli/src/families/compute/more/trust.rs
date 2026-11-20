@@ -40,6 +40,13 @@ macro_rules! line {
     };
 }
 
+/// The `line!` lookup for a Python with the shell's `'"'"'` in it.
+macro_rules! line_q {
+    ($after:expr, $marker:literal) => {
+        const { super::py_line_q(SRC, $after, $marker) }
+    };
+}
+
 pub const ROSTER_USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
@@ -454,7 +461,10 @@ fn owners(rest: &[&str]) -> Words<Ask> {
         "on" => Words::Ask(Ask::ConsentOn(owner.to_string())),
         "off" => Words::Ask(Ask::Post {
             path: "/cli/compute/owners/consent",
-            body: body(vec![("owner", str_value(owner)), ("on", Value::Bool(false))]),
+            body: body(vec![
+                ("owner", str_value(owner)),
+                ("on", Value::Bool(false)),
+            ]),
             tcp: false,
             long: false,
         }),
@@ -692,10 +702,7 @@ fn seats_list(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         let nodes = if nodes.is_empty() { s("-") } else { s(&nodes) };
         let note = if p::truthy(&cx.at(l, p::get(&x, "note"))?) {
             let n = cx.at(l, p::idx(&x, "note"))?;
-            cx.at(
-                l,
-                p::add(&s("  ("), &n).and_then(|t| p::add(&t, &s(")"))),
-            )?
+            cx.at(l, p::add(&s("  ("), &n).and_then(|t| p::add(&t, &s(")"))))?
         } else {
             s("")
         };
@@ -707,8 +714,7 @@ fn seats_list(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         )?;
     }
     let l = line!(AFTER, "if not v[\"offered\"] and not v[\"held\"]:");
-    if !p::truthy(&cx.at(l, p::idx(&v, "offered"))?) && !p::truthy(&cx.at(l, p::idx(&v, "held"))?)
-    {
+    if !p::truthy(&cx.at(l, p::idx(&v, "offered"))?) && !p::truthy(&cx.at(l, p::idx(&v, "held"))?) {
         cx.print("no seats");
     }
     Ok(())
@@ -931,7 +937,7 @@ fn consent_on(cp: &mut Cp<'_>, sock: &Path, owner: &str) -> Exit {
         let l = line!(TEXT, "print(v[\"text\"])");
         let t = cx.at(l, p::idx(&v, "text"))?;
         cx.print(&p::str_of(&t));
-        let l = line!(TEXT, "node-roster key: %s");
+        let l = line_q!(TEXT, "node-roster key: %s");
         let o = cx.at(l, p::idx(&v, "owner"))?;
         let k = cx.at(l, p::idx(&v, "keyFp"))?;
         print(&mut cx, l, "  %s's node-roster key: %s", &[o, k])

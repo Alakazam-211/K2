@@ -77,8 +77,18 @@ fn compute_retry() {
         ),
         one("a state", &["retry", "abcd"], r#"{"state":"queued"}"#, 0),
         one("no state", &["retry", "abcd"], "{}", 0),
-        one("a dict state", &["retry", "abcd"], r#"{"state":{"a":[1,true,null]}}"#, 0),
-        raises(one("a job with no attempt", &["retry", "abcd"], r#"{"job":{}}"#, 1)),
+        one(
+            "a dict state",
+            &["retry", "abcd"],
+            r#"{"state":{"a":[1,true,null]}}"#,
+            0,
+        ),
+        raises(one(
+            "a job with no attempt",
+            &["retry", "abcd"],
+            r#"{"job":{}}"#,
+            1,
+        )),
         raises(one("a list", &["retry", "abcd"], "[1]", 1)),
         raises(one("no JSON", &["retry", "abcd"], "<html>", 1)),
         reply("the daemon's error", &["retry", "abcd"], daemon_error(), 3),
@@ -113,47 +123,146 @@ fn compute_roster() {
     let v = vec![
         // covers: compute roster
         one("a roster", &["roster"], ROSTER, 0),
-        one("show, not stale", &["roster", "show"], r#"{"latest":{"seq":1,"keyFingerprint":"k","issuedAt":"t","entries":[]}}"#, 0),
-        one("no roster yet", &["roster"], r#"{"latest":null,"nodes":[]}"#, 0),
+        one(
+            "show, not stale",
+            &["roster", "show"],
+            r#"{"latest":{"seq":1,"keyFingerprint":"k","issuedAt":"t","entries":[]}}"#,
+            0,
+        ),
+        one(
+            "no roster yet",
+            &["roster"],
+            r#"{"latest":null,"nodes":[]}"#,
+            0,
+        ),
         // covers: compute roster --json
         one("--json", &["roster", "--json"], ROSTER, 0),
         one("show --json", &["roster", "show", "--json"], PROPOSED, 0),
         raises(one("no key", &["roster"], r#"{"latest":{"seq":1}}"#, 1)),
         raises(one("a list", &["roster"], "[]", 1)),
-        raises(one("a statement that is a string", &["roster"], r#"{"nodes":[{"name":"n","statement":"x"}]}"#, 1)),
+        raises(one(
+            "a statement that is a string",
+            &["roster"],
+            r#"{"nodes":[{"name":"n","statement":"x"}]}"#,
+            1,
+        )),
         raises(one("--json, no JSON", &["roster", "--json"], "", 1)),
-        in_session(case("in a session, over the socket", &["roster"], &[], vec![ok(ROSTER)], port_only, 0, 1)),
+        in_session(case(
+            "in a session, over the socket",
+            &["roster"],
+            &[],
+            vec![ok(ROSTER)],
+            port_only,
+            0,
+            1,
+        )),
         reply("the daemon's error", &["roster"], daemon_error(), 3),
         words("an unknown word", &["roster", "frob"], 2),
         // covers: compute roster set
         one(
             "set",
-            &["roster", "set", "mini", "--host", "h1", "--provider", "p", "--site", "s", "--admin-reach", "a,b", "--attest", "ok", "--why", "w", "--json"],
+            &[
+                "roster",
+                "set",
+                "mini",
+                "--host",
+                "h1",
+                "--provider",
+                "p",
+                "--site",
+                "s",
+                "--admin-reach",
+                "a,b",
+                "--attest",
+                "ok",
+                "--why",
+                "w",
+                "--json",
+            ],
             PROPOSED,
             0,
         ),
-        one("attest, --reason", &["roster", "attest", "mini", "--reason", "r"], PROPOSED, 0),
+        one(
+            "attest, --reason",
+            &["roster", "attest", "mini", "--reason", "r"],
+            PROPOSED,
+            0,
+        ),
         raises(one("set, no JSON", &["roster", "set", "mini"], "<html>", 1)),
-        reply("set, an empty reply", &["roster", "set", "mini"], Reply::Close, 3),
+        reply(
+            "set, an empty reply",
+            &["roster", "set", "mini"],
+            Reply::Close,
+            3,
+        ),
         words("set, no node", &["roster", "set"], 2),
-        words("set, a flag for the node", &["roster", "set", "--host", "h"], 2),
-        words("set, an unknown flag", &["roster", "set", "mini", "--frob"], 2),
+        words(
+            "set, a flag for the node",
+            &["roster", "set", "--host", "h"],
+            2,
+        ),
+        words(
+            "set, an unknown flag",
+            &["roster", "set", "mini", "--frob"],
+            2,
+        ),
         words("set, --host last", &["roster", "set", "mini", "--host"], 1),
         // covers: compute roster retire
-        one("retire", &["roster", "retire", "mini", "--reason", "key_lost"], PROPOSED, 0),
+        one(
+            "retire",
+            &["roster", "retire", "mini", "--reason", "key_lost"],
+            PROPOSED,
+            0,
+        ),
         words("retire, no node", &["roster", "retire"], 2),
-        words("retire, an unknown word", &["roster", "retire", "mini", "x"], 2),
-        words("retire, --reason last", &["roster", "retire", "mini", "--reason"], 1),
+        words(
+            "retire, an unknown word",
+            &["roster", "retire", "mini", "x"],
+            2,
+        ),
+        words(
+            "retire, --reason last",
+            &["roster", "retire", "mini", "--reason"],
+            1,
+        ),
         // covers: compute roster revoke
-        one("revoke", &["roster", "revoke", "mini", "--json"], PROPOSED, 0),
+        one(
+            "revoke",
+            &["roster", "revoke", "mini", "--json"],
+            PROPOSED,
+            0,
+        ),
         words("revoke, no node", &["roster", "revoke", ""], 2),
         // covers: compute roster publish
         one("publish", &["roster", "publish"], r#"{"seq":5}"#, 0),
-        one("publish --resign", &["roster", "publish", "x", "--resign"], r#"{"seq":5,"resigned":true}"#, 0),
-        reply("publish, the daemon's error", &["roster", "publish"], daemon_error(), 3),
+        one(
+            "publish --resign",
+            &["roster", "publish", "x", "--resign"],
+            r#"{"seq":5,"resigned":true}"#,
+            0,
+        ),
+        reply(
+            "publish, the daemon's error",
+            &["roster", "publish"],
+            daemon_error(),
+            3,
+        ),
         // covers: compute roster key
-        one("key", &["roster", "key"], r#"{"fingerprint":"fp1","key":"pub"}"#, 0),
-        in_session(case("key in a session", &["roster", "key"], &[], vec![], port_only, 3, 0)),
+        one(
+            "key",
+            &["roster", "key"],
+            r#"{"fingerprint":"fp1","key":"pub"}"#,
+            0,
+        ),
+        in_session(case(
+            "key in a session",
+            &["roster", "key"],
+            &[],
+            vec![],
+            port_only,
+            3,
+            0,
+        )),
     ];
     for c in v {
         rig.check(&c);
@@ -168,40 +277,124 @@ fn compute_seats() {
     let v = vec![
         // covers: compute seats
         one("seats", &["seats"], SEATS, 0),
-        one("list, none", &["seats", "list"], r#"{"offered":[],"held":[]}"#, 0),
+        one(
+            "list, none",
+            &["seats", "list"],
+            r#"{"offered":[],"held":[]}"#,
+            0,
+        ),
         // covers: compute seats --json
         one("--json", &["seats", "--json"], SEATS, 0),
         one("list --json", &["seats", "list", "--json"], SEATS, 0),
-        raises(one("a note that is a number", &["seats"], r#"{"offered":[],"held":[{"id":"s","ownerId":"o","lane":"l","state":"x","nodes":[],"note":5}]}"#, 1)),
-        raises(one("a node that is a number", &["seats"], r#"{"offered":[{"id":"s","clientLabel":"c","lane":"l","state":"x","nodes":[1]}],"held":[]}"#, 1)),
+        raises(one(
+            "a note that is a number",
+            &["seats"],
+            r#"{"offered":[],"held":[{"id":"s","ownerId":"o","lane":"l","state":"x","nodes":[],"note":5}]}"#,
+            1,
+        )),
+        raises(one(
+            "a node that is a number",
+            &["seats"],
+            r#"{"offered":[{"id":"s","clientLabel":"c","lane":"l","state":"x","nodes":[1]}],"held":[]}"#,
+            1,
+        )),
         raises(one("no held", &["seats"], r#"{"offered":[]}"#, 1)),
         words("an unknown word", &["seats", "frob"], 2),
         // covers: compute seats request
         one(
             "request",
-            &["seats", "request", "box.example", "--lane", "ci", "--seat", "seat_1", "--secrets", "--why", "builds", "--json"],
+            &[
+                "seats",
+                "request",
+                "box.example",
+                "--lane",
+                "ci",
+                "--seat",
+                "seat_1",
+                "--secrets",
+                "--why",
+                "builds",
+                "--json",
+            ],
             PROPOSED,
             0,
         ),
-        one("request, secrets off", &["seats", "request", "box.example", "--secrets", "--no-secrets"], PROPOSED, 0),
+        one(
+            "request, secrets off",
+            &[
+                "seats",
+                "request",
+                "box.example",
+                "--secrets",
+                "--no-secrets",
+            ],
+            PROPOSED,
+            0,
+        ),
         words("request, no owner", &["seats", "request"], 2),
-        words("request, an unknown flag", &["seats", "request", "box", "--frob"], 2),
-        words("request, --lane last", &["seats", "request", "box", "--lane"], 1),
+        words(
+            "request, an unknown flag",
+            &["seats", "request", "box", "--frob"],
+            2,
+        ),
+        words(
+            "request, --lane last",
+            &["seats", "request", "box", "--lane"],
+            1,
+        ),
         // covers: compute seats offer
-        one("offer", &["seats", "offer", "ctr_1", "--nodes", "a,b", "--json"], PROPOSED, 0),
+        one(
+            "offer",
+            &["seats", "offer", "ctr_1", "--nodes", "a,b", "--json"],
+            PROPOSED,
+            0,
+        ),
         words("offer, no nodes", &["seats", "offer", "ctr_1"], 2),
         words("offer, no request", &["seats", "offer", "--nodes", "a"], 2),
-        words("offer, --nodes last", &["seats", "offer", "ctr_1", "--nodes"], 1),
-        reply("offer, a permission card", &["seats", "offer", "r", "--nodes", "a"], Reply::Answer(403, PERMISSION_ASK.into()), 3),
+        words(
+            "offer, --nodes last",
+            &["seats", "offer", "ctr_1", "--nodes"],
+            1,
+        ),
+        reply(
+            "offer, a permission card",
+            &["seats", "offer", "r", "--nodes", "a"],
+            Reply::Answer(403, PERMISSION_ASK.into()),
+            3,
+        ),
         // covers: compute seats end
         words("end, no seat", &["seats", "end"], 2),
         words("end, an unknown word", &["seats", "end", "seat_1", "x"], 2),
         words("end, --why last", &["seats", "end", "seat_1", "--why"], 1),
-        in_session(case("end in a session", &["seats", "end", "seat_1"], &[], vec![], port_only, 3, 0)),
+        in_session(case(
+            "end in a session",
+            &["seats", "end", "seat_1"],
+            &[],
+            vec![],
+            port_only,
+            3,
+            0,
+        )),
         // covers: compute seats suspend
-        in_session(case("suspend in a session", &["seats", "suspend", "seat_1", "--why", "w"], &[], vec![], port_only, 3, 0)),
+        in_session(case(
+            "suspend in a session",
+            &["seats", "suspend", "seat_1", "--why", "w"],
+            &[],
+            vec![],
+            port_only,
+            3,
+            0,
+        )),
         // covers: compute seats resume
-        in_session(case("resume in a session", &["seats", "resume", "seat_1"], &[], vec![], port_only, 3, 0)),
+        in_session(case(
+            "resume in a session",
+            &["seats", "resume", "seat_1"],
+            &[],
+            vec![],
+            port_only,
+            3,
+            0,
+        )),
         words("resume, no seat", &["seats", "resume", "--json"], 2),
     ];
     for c in v {
@@ -221,27 +414,98 @@ fn compute_trust() {
         one("--all", &["trust", "--all"], r#"{"requests":[]}"#, 0),
         // covers: compute trust --json
         one("--json", &["trust", "--json"], REQUESTS, 0),
-        one("list --json", &["trust", "list", "--json", "--all"], REQUESTS, 0),
-        raises(one("no kind", &["trust"], r#"{"requests":[{"id":"x","state":"s","summary":"y"}]}"#, 1)),
-        in_session(case("in a session", &["trust", "requests"], &[], vec![ok(REQUESTS)], port_only, 0, 1)),
+        one(
+            "list --json",
+            &["trust", "list", "--json", "--all"],
+            REQUESTS,
+            0,
+        ),
+        raises(one(
+            "no kind",
+            &["trust"],
+            r#"{"requests":[{"id":"x","state":"s","summary":"y"}]}"#,
+            1,
+        )),
+        in_session(case(
+            "in a session",
+            &["trust", "requests"],
+            &[],
+            vec![ok(REQUESTS)],
+            port_only,
+            0,
+            1,
+        )),
         words("an unknown word", &["trust", "frob"], 2),
         // covers: compute trust deny
-        one("deny", &["trust", "deny", "ctr_1", "--why", "no"], PROPOSED, 0),
-        one("deny, --why first", &["trust", "deny", "--why", "x"], PROPOSED, 0),
-        one("deny, --why with no text", &["trust", "deny", "ctr_1", "--why"], PROPOSED, 0),
+        one(
+            "deny",
+            &["trust", "deny", "ctr_1", "--why", "no"],
+            PROPOSED,
+            0,
+        ),
+        one(
+            "deny, --why first",
+            &["trust", "deny", "--why", "x"],
+            PROPOSED,
+            0,
+        ),
+        one(
+            "deny, --why with no text",
+            &["trust", "deny", "ctr_1", "--why"],
+            PROPOSED,
+            0,
+        ),
         words("deny, no id", &["trust", "deny"], 2),
         // covers: compute trust withdraw
         one("withdraw", &["trust", "withdraw", "ctr_1"], PROPOSED, 0),
-        reply("withdraw, the daemon's error", &["trust", "withdraw", "ctr_1"], daemon_error(), 3),
+        reply(
+            "withdraw, the daemon's error",
+            &["trust", "withdraw", "ctr_1"],
+            daemon_error(),
+            3,
+        ),
         words("withdraw, no id", &["trust", "withdraw"], 2),
         // covers: compute trust approve
         words("approve, no id", &["trust", "approve"], 2),
-        in_session(case("approve in a session", &["trust", "approve", "ctr_abc"], &[], vec![], port_only, 3, 0)),
-        one("approve, no request matches", &["trust", "approve", "ctr_nope"], REQUESTS, 3),
-        one("approve, two match", &["trust", "approve", "ctr_"], REQUESTS, 3),
-        one("approve, not pending", &["trust", "approve", "ctr_xyz"], REQUESTS, 3),
-        raises(one("approve, an id that is a number", &["trust", "approve", "1"], r#"{"requests":[{"id":1}]}"#, 3)),
-        reply("approve, the list refused", &["trust", "approve", "ctr_abc"], daemon_error(), 3),
+        in_session(case(
+            "approve in a session",
+            &["trust", "approve", "ctr_abc"],
+            &[],
+            vec![],
+            port_only,
+            3,
+            0,
+        )),
+        one(
+            "approve, no request matches",
+            &["trust", "approve", "ctr_nope"],
+            REQUESTS,
+            3,
+        ),
+        one(
+            "approve, two match",
+            &["trust", "approve", "ctr_"],
+            REQUESTS,
+            3,
+        ),
+        one(
+            "approve, not pending",
+            &["trust", "approve", "ctr_xyz"],
+            REQUESTS,
+            3,
+        ),
+        raises(one(
+            "approve, an id that is a number",
+            &["trust", "approve", "1"],
+            r#"{"requests":[{"id":1}]}"#,
+            3,
+        )),
+        reply(
+            "approve, the list refused",
+            &["trust", "approve", "ctr_abc"],
+            daemon_error(),
+            3,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -261,13 +525,45 @@ fn compute_owners() {
         one("--json", &["owners", "--json"], OWNERS, 0),
         raises(one("no trusted", &["owners"], r#"{"self":null}"#, 1)),
         // covers: compute owners consent
-        one("consent off", &["owners", "consent", "globex", "off", "--json"], r#"{"owner":"globex","on":false}"#, 0),
-        one("consent off, no owner", &["owners", "consent", "", "off"], r#"{"on":false}"#, 0),
+        one(
+            "consent off",
+            &["owners", "consent", "globex", "off", "--json"],
+            r#"{"owner":"globex","on":false}"#,
+            0,
+        ),
+        one(
+            "consent off, no owner",
+            &["owners", "consent", "", "off"],
+            r#"{"on":false}"#,
+            0,
+        ),
         words("consent, no on|off", &["owners", "consent", "globex"], 2),
-        words("consent, a bad word", &["owners", "consent", "globex", "yes"], 2),
-        in_session(case("consent on in a session", &["owners", "consent", "globex", "on"], &[], vec![], port_only, 3, 0)),
-        one("consent on, not pinned", &["owners", "consent", "nobody", "on"], OWNERS, 3),
-        raises(one("consent on, a list", &["owners", "consent", "globex", "on"], "[]", 1)),
+        words(
+            "consent, a bad word",
+            &["owners", "consent", "globex", "yes"],
+            2,
+        ),
+        in_session(case(
+            "consent on in a session",
+            &["owners", "consent", "globex", "on"],
+            &[],
+            vec![],
+            port_only,
+            3,
+            0,
+        )),
+        one(
+            "consent on, not pinned",
+            &["owners", "consent", "nobody", "on"],
+            OWNERS,
+            3,
+        ),
+        raises(one(
+            "consent on, a list",
+            &["owners", "consent", "globex", "on"],
+            "[]",
+            1,
+        )),
         raises(case(
             "consent on, a preview with no text",
             &["owners", "consent", "fp2", "on"],
@@ -321,10 +617,30 @@ fn person(name: &'static str, args: &[&'static str], daemon: Vec<Reply>, code: i
 fn compute_trust_a_person_s_steps() {
     let rig = VRig::new();
     let mut v = vec![
-        person("seats end", &["seats", "end", "seat_1", "--why", "done"], vec![ok(PROPOSED)], 0),
-        person("seats suspend", &["seats", "suspend", "seat_1"], vec![ok(r#"{"state":"suspended"}"#)], 0),
-        person("seats resume", &["seats", "resume", "seat_1", "--json"], vec![ok(r#"{"state":"active"}"#)], 0),
-        person("seats end, refused", &["seats", "end", "seat_1"], vec![daemon_error()], 3),
+        person(
+            "seats end",
+            &["seats", "end", "seat_1", "--why", "done"],
+            vec![ok(PROPOSED)],
+            0,
+        ),
+        person(
+            "seats suspend",
+            &["seats", "suspend", "seat_1"],
+            vec![ok(r#"{"state":"suspended"}"#)],
+            0,
+        ),
+        person(
+            "seats resume",
+            &["seats", "resume", "seat_1", "--json"],
+            vec![ok(r#"{"state":"active"}"#)],
+            0,
+        ),
+        person(
+            "seats end, refused",
+            &["seats", "end", "seat_1"],
+            vec![daemon_error()],
+            3,
+        ),
         person(
             "trust approve",
             &["trust", "approve", "ctr_abc"],
@@ -345,7 +661,9 @@ fn compute_trust_a_person_s_steps() {
             &["owners", "consent", "globex", "on"],
             vec![
                 ok(OWNERS),
-                ok(r#"{"text":"Send vault secrets to globex's nodes?","owner":"globex","keyFp":"fp2"}"#),
+                ok(
+                    r#"{"text":"Send vault secrets to globex's nodes?","owner":"globex","keyFp":"fp2"}"#,
+                ),
                 ok(r#"{"owner":"globex","on":true}"#),
             ],
             0,
@@ -360,10 +678,16 @@ fn compute_trust_a_person_s_steps() {
     raised.compare = VCompare::Traceback;
     v.push(raised);
     // The vault refuses the confirm: nothing more is sent.
-    let mut refused = vcase("seats end, the confirm refused", &["seats", "end", "seat_1"]);
+    let mut refused = vcase(
+        "seats end, the confirm refused",
+        &["seats", "end", "seat_1"],
+    );
     refused.vault = Some(vec![
         ok(r#"{"methods":["vault-password"]}"#),
-        Reply::Answer(403, r#"{"error":{"code":"bad_password","hint":"wrong"}}"#.into()),
+        Reply::Answer(
+            403,
+            r#"{"error":{"code":"bad_password","hint":"wrong"}}"#.into(),
+        ),
     ]);
     refused.vault_requests = 2;
     refused.stdin = b"pass-9191\n".to_vec();

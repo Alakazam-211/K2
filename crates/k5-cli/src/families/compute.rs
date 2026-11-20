@@ -188,9 +188,14 @@ pub const VERBS: &[Verb] = &[
 
 /// Whether this family's code answers `verb` (a second word).
 pub fn answers(verb: &str) -> bool {
-    [reads::ANSWERS, writes::ANSWERS, admin::ANSWERS, more::ANSWERS]
-        .iter()
-        .any(|a| a.contains(&verb))
+    [
+        reads::ANSWERS,
+        writes::ANSWERS,
+        admin::ANSWERS,
+        more::ANSWERS,
+    ]
+    .iter()
+    .any(|a| a.contains(&verb))
 }
 
 /// Runs `args` (the whole command line after `argv[0]`). `None`: the

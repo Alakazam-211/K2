@@ -275,6 +275,57 @@ fn a_passport_never_sends_the_owner_token() {
     }
 }
 
+/// `cli_send cli_post`: the cell socket first (`cli_post_uds`: the pairs
+/// alone, the passport as Bearer); its answer is the answer. "Not served
+/// on cell socket" sends it again over TCP (`cli_post`: `project=` first),
+/// with the passport, never the owner token.
+#[test]
+fn cli_send_cli_post_is_socket_first_then_tcp_when_not_served() {
+    let s = stub("qpost");
+    let mut c = Client::new(
+        "127.0.0.1",
+        s.port,
+        "/p",
+        Auth::Passport {
+            passport: Passport::new("sessA.pp").unwrap(),
+            sock: Some(s.sock.clone()),
+        },
+    );
+    c.pause = PAUSE;
+    let not_served = Reply::Answer(404, r#"{"error":"not served on cell socket"}"#.into());
+    let ok = Reply::Answer(200, r#"{"success":true}"#.into());
+    s.reset(&[ok.clone(), not_served, ok]);
+    let ep = "/cli/publish/subdomain/claim";
+    let pairs = ["label=acme", "check=1"];
+    let r = c.send(ep, Call::QueryPost(&pairs)).unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Uds));
+    let r = c.send(ep, Call::QueryPost(&pairs)).unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(text(&r.body), r#"{"success":true}"#);
+    let log = s.log();
+    assert_eq!(
+        log.iter().map(|l| l.channel).collect::<Vec<_>>(),
+        vec!["uds", "uds", "tcp"]
+    );
+    let lines: Vec<String> = log
+        .iter()
+        .map(|l| text(&l.bytes).lines().next().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "POST /cli/publish/subdomain/claim?label=acme&check=1 HTTP/1.1",
+            "POST /cli/publish/subdomain/claim?label=acme&check=1 HTTP/1.1",
+            "POST /cli/publish/subdomain/claim?project=%2Fp&label=acme&check=1 HTTP/1.1",
+        ]
+    );
+    for l in &log {
+        let t = text(&l.bytes);
+        assert!(t.contains("\r\nAuthorization: Bearer sessA.pp\r\n"), "{t}");
+        assert!(!t.contains("owner"), "{t}");
+    }
+}
+
 #[test]
 fn a_cell_socket_that_is_gone_goes_to_tcp() {
     let s = stub("gone");
@@ -477,9 +528,12 @@ type CallFn = fn(&mut Client) -> Result<k5_cli::transport::Response, Error>;
 fn a_post_the_cell_socket_read_is_never_sent_again_over_tcp() {
     let d = door("post", Act::CloseNoAnswer, Act::Answer);
     let mut c = with_passport(d.port, &d.sock);
-    let posts: [(&str, CallFn); 4] = [
+    let posts: [(&str, CallFn); 5] = [
         ("cli_request_post", |c| {
             c.send("/cli/inbox/claim", Call::RequestPost(&["id=7"]))
+        }),
+        ("cli_post", |c| {
+            c.send("/cli/publish/subdomain/claim", Call::QueryPost(&["label=a"]))
         }),
         ("cli_post_form", |c| {
             c.send("/cli/workspace/msg", Call::PostForm(&["text=x"]))
@@ -510,12 +564,12 @@ fn a_post_the_cell_socket_read_is_never_sent_again_over_tcp() {
     );
     let r = c.send("/cli/inbox/list", Call::Request(&[])).unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
-    assert_eq!(d.counts(), (5, 1), "a GET: (cell socket, TCP) requests");
+    assert_eq!(d.counts(), (6, 1), "a GET: (cell socket, TCP) requests");
     let r = c.send_json(false, "/cli/compute/nodes", "").unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
     assert_eq!(
         d.counts(),
-        (6, 2),
+        (7, 2),
         "a cli_send_json GET: (cell socket, TCP) requests"
     );
 }
@@ -634,7 +688,11 @@ fn a_refused_cell_socket_sends_nothing_and_tcp_answers() {
         .compute_send(true, "/cli/compute/cancel", "{}", false)
         .unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
-    assert_eq!(d.counts(), (0, 4));
+    let r = c
+        .send("/cli/publish/subdomain/claim", Call::QueryPost(&["label=a"]))
+        .unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(d.counts(), (0, 5));
     std::fs::remove_file(&dead).unwrap();
 }
 

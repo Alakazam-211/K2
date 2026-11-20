@@ -220,6 +220,11 @@ pub enum Call<'a> {
     /// an empty one from stdin with `$(cat)`, which drops its trailing
     /// newlines; that is the caller's.
     PostJson(&'a [u8]),
+    /// `cli_post` / `cli_post_uds` (`cli/src/usage.sh`): a POST with an
+    /// empty body and the pairs in the query, after `project=` over TCP
+    /// and alone on the cell socket ([`Kind::QueryPost`]). Through
+    /// [`Client::send`] it is `cli_send cli_post`: sent once, as any POST.
+    QueryPost(&'a [&'a str]),
 }
 
 impl Call<'_> {
@@ -315,6 +320,8 @@ enum Kind {
     /// POST --data-raw ""`, connect 5 s, at most 30 s, over TCP. Only
     /// `_k2_curl`'s tries (a refused connect, a moved port); no status read,
     /// no 503 tries, no heal, no line. The answer gets `_permission_note`.
+    /// On the cell socket it is `cli_post_uds`: the passport as Bearer and
+    /// the pairs alone in the query (no `project=`).
     QueryPost,
     /// `_k2_curl` with a config the caller writes itself
     /// (`cli/src/federation.sh`): see [`OwnCurl`]. Over TCP, the path as
@@ -1363,6 +1370,9 @@ impl Client {
             }
             Call::PostForm(args) => self.run(Kind::PostForm, channel, endpoint, args, &[], t0),
             Call::PostJson(body) => self.run(Kind::PostJson, channel, endpoint, &[], body, t0),
+            Call::QueryPost(args) => {
+                self.run(Kind::QueryPost, channel, endpoint, args, &[], t0)
+            }
         }
     }
 
@@ -1771,11 +1781,19 @@ impl Client {
                 )
             }
             Kind::QueryPost => {
-                let mut q = format!("{endpoint}?{}", with_project());
-                for a in args {
-                    q.push('&');
-                    q.push_str(a);
-                }
+                // `cli_post_uds`: no `project=`, and no `?` with no pairs.
+                let q = if tcp {
+                    let mut q = format!("{endpoint}?{}", with_project());
+                    for a in args {
+                        q.push('&');
+                        q.push_str(a);
+                    }
+                    q
+                } else if joined.is_empty() {
+                    endpoint.to_string()
+                } else {
+                    format!("{endpoint}?{joined}")
+                };
                 (
                     Method::Post,
                     q,
@@ -3117,6 +3135,50 @@ mod tests {
             o.post_form_bearer("/cli/respond", &["message=x"]),
             Err(Error::NoCredential { .. })
         ));
+    }
+
+    /// `cli_post` over TCP: `project=` first, then the pairs, the token as
+    /// Bearer. `cli_post_uds` on the cell socket: the pairs alone (no `?`
+    /// with none), the passport as Bearer. Both an empty POST body.
+    #[cfg(unix)]
+    #[test]
+    fn the_query_post_request() {
+        let p = Client::new(
+            "127.0.0.1",
+            4000,
+            "/w s",
+            Auth::Passport {
+                passport: Passport::new("s.x").unwrap(),
+                sock: Some(PathBuf::from("/tmp/k5-qp.sock")),
+            },
+        );
+        let pairs = ["label=acme", "check=1"];
+        let shape = |p: &Client, channel, args: &[&str]| {
+            let (_, r) = p
+                .build(Kind::QueryPost, channel, "/cli/publish/subdomain/claim", args, &[])
+                .unwrap();
+            let body = r.body.as_ref().expect("a body");
+            assert!(body.bytes.is_empty() && body.curl_form_type);
+            assert_eq!(r.method, Method::Post);
+            assert_eq!(r.headers[0], ("Authorization".into(), "Bearer s.x".into()));
+            r.target
+        };
+        assert_eq!(
+            shape(&p, Channel::Tcp, &pairs),
+            "/cli/publish/subdomain/claim?project=%2Fw%20s&label=acme&check=1"
+        );
+        assert_eq!(
+            shape(&p, Channel::Uds, &pairs),
+            "/cli/publish/subdomain/claim?label=acme&check=1"
+        );
+        assert_eq!(
+            shape(&p, Channel::Uds, &[]),
+            "/cli/publish/subdomain/claim"
+        );
+        assert_eq!(
+            shape(&p, Channel::Tcp, &[]),
+            "/cli/publish/subdomain/claim?project=%2Fw%20s"
+        );
     }
 
     #[test]

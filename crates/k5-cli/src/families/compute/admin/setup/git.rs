@@ -268,28 +268,13 @@ fn newlines(t: &str) -> String {
 }
 
 /// `sys.stdin.read().strip()`: all of stdin as Python reads it (UTF-8, a
-/// byte that isn't kept as its surrogate escape; universal newlines),
+/// byte that isn't kept as its surrogate escape; `\r\n` kept as it is),
 /// with Python's spaces taken off both ends.
 fn stdin_text() -> Value {
     use std::io::Read;
     let mut raw = Vec::new();
     let _ = std::io::stdin().lock().read_to_end(&mut raw);
-    let raw = Secret::new(raw);
-    let mut b = Vec::with_capacity(raw.expose().len());
-    let mut i = 0;
-    let r = raw.expose();
-    while i < r.len() {
-        if r[i] == b'\r' {
-            b.push(b'\n');
-            if r.get(i + 1) == Some(&b'\n') {
-                i += 1;
-            }
-        } else {
-            b.push(r[i]);
-        }
-        i += 1;
-    }
-    let b = Secret::new(b);
+    let b = Secret::new(raw);
     if let Ok(t) = std::str::from_utf8(b.expose()) {
         return Value::Str(t.trim_matches(py_space).into());
     }

@@ -127,8 +127,9 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
             Ask::PolicySet(set)
         }
         "enable" => match enable(rest) {
-            Ok(e) => Ask::Enable(e),
-            Err(w) => return w,
+            Words::Ask(e) => Ask::Enable(e),
+            Words::Usage(l) => return Words::Usage(l),
+            Words::ShiftFailed => return Words::ShiftFailed,
         },
         "remote-admin" if matches!(first, "off" | "policy" | "full") => {
             Ask::RemoteAdmin(first.to_string())
@@ -141,7 +142,7 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
     })
 }
 
-fn enable(words: &[&str]) -> Result<Enable, Words<Ask>> {
+fn enable(words: &[&str]) -> Words<Enable> {
     let mut e = Enable::default();
     let mut i = 0;
     while i < words.len() {
@@ -164,12 +165,12 @@ fn enable(words: &[&str]) -> Result<Enable, Words<Ask>> {
                     }
                 }
                 if short {
-                    return Err(Words::ShiftFailed);
+                    return Words::ShiftFailed;
                 }
                 if w == "--remote-admin"
                     && !matches!(e.remote_admin.as_str(), "off" | "policy" | "full")
                 {
-                    return Err(Words::Usage(LEVEL_LINE.to_string()));
+                    return Words::Usage(LEVEL_LINE.to_string());
                 }
                 i += 2;
                 continue;
@@ -178,11 +179,11 @@ fn enable(words: &[&str]) -> Result<Enable, Words<Ask>> {
             "--ticket-stdin" => e.ticket_stdin = true,
             "--private-home" => e.private = Some(true),
             "--no-private-home" => e.private = Some(false),
-            _ => return Err(Words::Usage(ENABLE_USAGE.to_string())),
+            _ => return Words::Usage(ENABLE_USAGE.to_string()),
         }
         i += 1;
     }
-    Ok(e)
+    Words::Ask(e)
 }
 
 /// `_cli_read_secret_stdin "<prompt>"; v="${_K2_SECRET%$'\r'}"`.

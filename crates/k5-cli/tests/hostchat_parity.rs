@@ -827,6 +827,41 @@ fn hostchat_help_never_acts() {
         ),
         shell("backup --help", &["backup", "--help"], vec![], 0),
         shell("restart -h", &["-h", "restart"], vec![], 0),
+        // covers: hostchat recording policy
+        shell(
+            "recording policy set -h",
+            &["recording", "policy", "set", "dm_enabled", "on", "-h"],
+            vec![],
+            0,
+        ),
+        shell(
+            "recording policies set --help",
+            &["recording", "policies", "set", "enabled", "off", "--help"],
+            vec![],
+            0,
+        ),
+        // Before the verb: bash said "unexpected 'policy'" (exit 2) until
+        // its recording dispatcher looked for -h anywhere first.
+        shell(
+            "recording -h policy set",
+            &["recording", "-h", "policy", "set", "dm_enabled", "on"],
+            vec![],
+            0,
+        ),
+        shell(
+            "recording --help policy",
+            &["recording", "--help", "policy"],
+            vec![],
+            0,
+        ),
+        // A value flag no longer eats the help word: bash installed with
+        // "-h" as the file until the same fix.
+        shell(
+            "recording install --recorder-tarball -h",
+            &["recording", "install", "--recorder-tarball", "-h"],
+            vec![],
+            0,
+        ),
         // The bash bug, copied: a value flag eats the help word and the
         // verb runs (flips when the fix lands).
         shell(

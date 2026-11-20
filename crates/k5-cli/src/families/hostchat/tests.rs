@@ -98,3 +98,49 @@ fn the_lines_say_the_brand_s_name() {
     let tie = out("status", r#"{"mirror":{"tie":{"state":"pending"}}}"#);
     assert!(tie.contains(&format!("{PRODUCT_NAME} retries")), "{tie}");
 }
+
+/// `recording policy`'s usage lines name the command by the brand's name
+/// (in a build with `K2_BRAND_DIR=brand/xy` they say `xy`), never a typed
+/// `k2` or `k5`.
+#[test]
+fn recording_policy_lines_say_the_brand_s_name() {
+    let lines: &[(&[&str], String)] = &[
+        (
+            &["policy", "x"],
+            format!("{CLI_NAME} hostchat recording policy [--json] | {CLI_NAME} hostchat recording policy set KEY VALUE"),
+        ),
+        (
+            &["policy", "--x"],
+            format!("unknown flag --x ({CLI_NAME} hostchat recording policy [set KEY VALUE])"),
+        ),
+        (
+            &["policy", "set"],
+            format!("{CLI_NAME} hostchat recording policy set KEY VALUE [KEY VALUE \u{2026}] ({CLI_NAME} hostchat recording --help lists the keys)"),
+        ),
+        (
+            &["policy", "set", "dm_enabled"],
+            format!("{CLI_NAME} hostchat recording policy set KEY VALUE [KEY VALUE \u{2026}] ({CLI_NAME} hostchat recording --help lists the keys)"),
+        ),
+    ];
+    for (words, hint) in lines {
+        let Plan::Bad(line) = recording::parse(words) else {
+            panic!("not a usage line: {words:?}")
+        };
+        assert_eq!(
+            line,
+            format!("{{\"error\":\"usage\",\"hint\":\"{hint}\"}}"),
+            "{words:?}"
+        );
+        if CLI_NAME != "k2" {
+            assert!(!line.contains("k2 ") && !line.contains("k5 "), "{line}");
+        }
+    }
+    // A key error names no command: the same in every brand.
+    let Plan::Bad(line) = recording::parse(&["policy", "set", "dm_enabled", "maybe"]) else {
+        panic!("not a usage line")
+    };
+    assert_eq!(
+        line,
+        r#"{"error": "usage", "hint": "recording.dm_enabled is on or off"}"#
+    );
+}

@@ -29,11 +29,8 @@ fn source() -> String {
 #[test]
 fn the_shell_hands_these_on() {
     for w in [
-        &[] as &[&str],
-        &["nope"],
-        &["user", "chat", "bob"],
+        &["user", "chat", "bob"] as &[&str],
         &["user", "add", "bob", "--test"],
-        &["role", "suggest"],
         &["grant", "hooks", "retry", "o1", "-h"],
         &["grant", "copy-host", "acme"],
         &["front-door", "direct", "--ui-port", "\u{663}"],
@@ -41,6 +38,14 @@ fn the_shell_hands_these_on() {
         assert_eq!(ask(w), Ok(Ask::Shell), "{w:?}");
     }
     assert!(matches!(ask(&["grant", "hooks"]), Ok(Ask::Hooks(_))));
+}
+
+#[test]
+fn skin_alone_and_role_suggest_are_the_binary_s() {
+    assert_eq!(ask(&[]), Ok(Ask::Usage));
+    assert_eq!(ask(&["nope"]), Ok(Ask::Usage));
+    assert_eq!(ask(&["role", "suggest"]), Ok(Ask::RoleSuggest { json: false }));
+    assert_eq!(ask(&["roles", "templates", "--json"]), Ok(Ask::RoleSuggest { json: true }));
 }
 
 #[test]

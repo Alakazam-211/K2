@@ -157,6 +157,11 @@ pub enum Ask {
     FrontDoorSet { body: String, json: bool },
     /// `grant hooks …` ([`hooks`]).
     Hooks(hooks::Ask),
+    /// `skin` alone or an unknown verb: `_skin_usage` (the App family's
+    /// page through `_perm_lines`) on stderr, exit 1.
+    Usage,
+    /// `role suggest [--json]`: `_compute_call GET /cli/skin/roles/suggest`.
+    RoleSuggest { json: bool },
     /// The shell answers it.
     Shell,
 }
@@ -307,7 +312,8 @@ pub fn parse(words: &[&str]) -> Result<Ask, Stop> {
         "grant" | "grants" => grant(rest),
         "front-door" | "frontdoor" => front_door(rest),
         "hydra" => hydra(rest),
-        _ => Ok(Ask::Shell),
+        "--help" | "-h" => Ok(Ask::Shell),
+        _ => Ok(Ask::Usage),
     }
 }
 
@@ -977,7 +983,9 @@ fn role(words: &[&str]) -> Result<Ask, Stop> {
                 Reader::RoleRemove,
             ))
         }
-        "suggest" | "suggestions" | "templates" => Ok(Ask::Shell),
+        "suggest" | "suggestions" | "templates" => Ok(Ask::RoleSuggest {
+            json: rest.first() == Some(&"--json"),
+        }),
         "add" => role_add(rest),
         "--help" | "-h" => Err(Stop::err(&[USAGE], Exit::Ok)),
         _ => Err(Stop::err(&[USAGE], Exit::Error)),
@@ -1740,7 +1748,20 @@ fn run_as(args: &[OsString], teach: bool) -> Option<Exit> {
             return None;
         }
     }
-    Some(run_with(args, ask, hook_sock.as_deref(), settings, teach))
+    // `_skin_usage` asks whether permission cards are on (with a
+    // passport); the probe's settings must be ones the binary can send.
+    let cards = if matches!(ask, Ok(Ask::Usage)) {
+        let env = crate::offline::Env::current();
+        let pre = crate::offline::shell_pwd(&env)
+            .and_then(|cwd| crate::offline::prelude(&env, &cwd))
+            .ok()?;
+        Some(crate::cards::ask(&env, &pre, || {
+            passport::current(args).would_refuse()
+        })?)
+    } else {
+        None
+    };
+    Some(run_with(args, ask, hook_sock.as_deref(), settings, teach, cards))
 }
 
 fn run_with(
@@ -1749,6 +1770,7 @@ fn run_with(
     hook_sock: Option<&Path>,
     mut settings: Settings,
     teach: bool,
+    cards: Option<crate::cards::Ask>,
 ) -> Exit {
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
@@ -1801,6 +1823,29 @@ fn run_with(
                 }
                 Ok(raw) => print::front_door_set(&String::from_utf8_lossy(&raw)).print(),
             }
+        }
+        Ask::Usage => {
+            let on = cards.is_some_and(crate::cards::on);
+            let page = crate::text::help("app").expect("the App family's page is embedded");
+            let text = crate::cards::perm_lines(page, on);
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
+            Exit::Error
+        }
+        Ask::RoleSuggest { json } => {
+            let mut ctx = super::app::call::Ctx::new(client, false);
+            let exit = match super::approve::cp::call(&mut ctx, false, "/cli/skin/roles/suggest", "")
+            {
+                Err(exit) => exit,
+                Ok(body) if json => super::approve::cp::body_line(&body),
+                Ok(body) => print::role_suggest(&body).print(),
+            };
+            let super::app::call::Ctx {
+                mut client,
+                closing: cp_closing,
+                ..
+            } = ctx;
+            cp_closing.flush(&mut client, exit);
+            return finish(&mut client, closing, exit);
         }
         Ask::Shell => unreachable!("handed to the shell before the run"),
     };

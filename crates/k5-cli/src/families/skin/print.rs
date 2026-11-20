@@ -1445,3 +1445,89 @@ fn set_body(d: &Value, o: &mut Out) -> Ends {
     }
     Ok(Exit::Ok)
 }
+
+/// `role suggest`'s Python on `$_CP_BODY`: each template, then the line
+/// that says how to make one.
+pub fn role_suggest(body: &[u8]) -> Shown {
+    use crate::families::{py_get, Raise};
+    use crate::out::pylib::ops::index;
+    let text = String::from_utf8_lossy(&crate::families::without_nuls(body)).into_owned();
+    let mut out = String::new();
+    let v = match crate::out::pylib::json::loads(&text) {
+        Ok(v) => v,
+        Err(f) => {
+            return crate::families::raised(out, String::new(), &Raise::at(3, f.last_line()))
+        }
+    };
+    let templates = match py_get(&v, "templates", 3) {
+        Ok(t) => t.filter(|t| crate::out::py::truthy(t)).cloned(),
+        Err(r) => return crate::families::raised(out, String::new(), &r),
+    };
+    let rows = match templates {
+        Some(t) => match crate::families::py_iter(&t, 3) {
+            Ok(r) => r,
+            Err(r) => return crate::families::raised(out, String::new(), &r),
+        },
+        None => Vec::new(),
+    };
+    let s = |v: Option<&Value>| v.map_or_else(|| "None".to_string(), crate::out::py::str_of);
+    let join = |v: Option<&Value>| -> String {
+        match v {
+            Some(Value::Array(a)) => a
+                .iter()
+                .map(crate::out::py::str_of)
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => String::new(),
+        }
+    };
+    let dash = |j: String| if j.is_empty() { "-".to_string() } else { j };
+    for t in rows {
+        let head = (|| -> Result<String, Raise> {
+            Ok(format!(
+                "{} {}: {}",
+                crate::families::ljust(&crate::out::py::str_of(index(&t, "id", 4)?), 8),
+                crate::out::py::str_of(index(&t, "label", 4)?),
+                crate::out::py::str_of(index(&t, "description", 4)?)
+            ))
+        })();
+        match head {
+            Ok(h) => {
+                out.push_str(&h);
+                out.push('\n');
+            }
+            Err(r) => return crate::families::raised(out, String::new(), &r),
+        }
+        let get = |k: &str| crate::families::py_get(&t, k, 5).ok().flatten();
+        let caps = join(get("caps"));
+        out.push_str(&format!(
+            "         caps: {}\n",
+            if caps.is_empty() {
+                "none (the App decides)".to_string()
+            } else {
+                caps
+            }
+        ));
+        if let Some(f) = get("folders").filter(|f| crate::out::py::truthy(f)) {
+            let fg = |k: &str| crate::families::py_get(f, k, 8).ok().flatten();
+            let up = fg("uploadDir")
+                .filter(|u| crate::out::py::truthy(u))
+                .map_or_else(|| "-".to_string(), crate::out::py::str_of);
+            out.push_str(&format!(
+                "         folders: read {}; write {}; uploads to {}\n",
+                dash(join(fg("read"))),
+                dash(join(fg("write"))),
+                up
+            ));
+        }
+        if let Some(n) = get("note").filter(|n| crate::out::py::truthy(n)) {
+            out.push_str(&format!("         note: {}\n", s(Some(n))));
+        }
+    }
+    out.push_str(concat!(
+        "Make one: ",
+        k2_client::cli_name!(),
+        " app roles add --from <id> --app <app> [--name <name>] [--agent <room> …]\n"
+    ));
+    Shown::out(out)
+}

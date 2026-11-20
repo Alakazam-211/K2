@@ -825,8 +825,6 @@ fn skin_hands_these_to_the_shell() {
     check(
         &rig,
         vec![
-            shell(words("skin alone", &[], 1)),
-            shell(words("an unknown verb", &["nope"], 1)),
             shell(words("--help", &["--help"], 0)),
             shell(words("user add -h", &["user", "add", "bob", "-h"], 0)),
             shell(words(
@@ -847,15 +845,6 @@ fn skin_hands_these_to_the_shell() {
             )),
             shell(words("hydra on --help", &["hydra", "on", "--help"], 0)),
             shell(case(
-                "role suggest",
-                &["role", "suggest"],
-                &[],
-                vec![ok(r#"{"templates":[]}"#)],
-                owner_and_port,
-                0,
-                1,
-            )),
-            shell(case(
                 "a port that is no port",
                 &["role", "list"],
                 &[("K2_PORT", "41o0")],
@@ -864,6 +853,64 @@ fn skin_hands_these_to_the_shell() {
                 3,
                 0,
             )),
+        ],
+    );
+}
+
+const TEMPLATES: &str = r#"{"templates":[{"id":"viewer","label":"Viewer","description":"Reads é","caps":["read"],"folders":{"read":["docs"],"write":[],"uploadDir":"up"},"note":"safe"},{"id":"a-long-id","label":"Editor","description":"Writes","caps":[]}]}"#;
+
+/// `skin` alone and an unknown verb print the App family's page through
+/// the permission-card filter; `role suggest` is a `_compute_call`.
+#[test]
+fn skin_alone_and_role_suggest() {
+    let rig = Rig::new(VERB, "usage");
+    check(
+        &rig,
+        vec![
+            // covers: skin
+            words("skin alone: the page, exit 1", &[], 1),
+            words("an unknown verb", &["nope"], 1),
+            words("--json is no verb", &["--json"], 1),
+            case("skin alone, no daemon", &[], &[], vec![], nothing, 1, 0),
+            with(
+                with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+                case(
+                    "skin alone, cards on",
+                    &[],
+                    &[],
+                    vec![ok(r#"{"enabled":true}"#)],
+                    port_only,
+                    1,
+                    1,
+                ),
+            ),
+            with(
+                with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+                case(
+                    "skin alone, cards off",
+                    &["nope"],
+                    &[],
+                    vec![ok(r#"{"enabled":false}"#)],
+                    port_only,
+                    1,
+                    1,
+                ),
+            ),
+            // covers: skin role
+            one("role suggest", &["role", "suggest"], TEMPLATES, 0),
+            one("roles templates --json", &["roles", "templates", "--json"], TEMPLATES, 0),
+            one("role suggestions, none", &["role", "suggestions"], r#"{"templates":[]}"#, 0),
+            traceback(one("role suggest, a template with no id", &["role", "suggest"], r#"{"templates":[{"label":"x"}]}"#, 1)),
+            traceback(one("role suggest, not JSON", &["role", "suggest"], "<html>", 1)),
+            case(
+                "role suggest, refused",
+                &["role", "suggest"],
+                &[],
+                vec![Reply::Answer(403, r#"{"error":"owner_only"}"#.into())],
+                owner_and_port,
+                3,
+                1,
+            ),
         ],
     );
 }

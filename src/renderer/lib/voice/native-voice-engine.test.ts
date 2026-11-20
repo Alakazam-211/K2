@@ -182,6 +182,8 @@ describe("Sew's 0.7.2 additions", () => {
     expect(parseCallState(sew.state_snapshot.consent_required)).toMatchObject({ state: 'consent_required', noticeVersion: 3141 })
     expect(parseRecording(sew.recording.held.recording)).toEqual({
       recordingId: '48831765147549720',
+      // Sew 0.11.0's contract carries audio_keep_days (30).
+      audioKeepDays: 30,
       myConsent: 'pending',
       recorderPresent: false,
       trigger: 'manual',

@@ -5,12 +5,15 @@
 //! - One job and several: done at once, the progress lines as the state
 //!   or the queue changes (one per change, none with `--quiet`), each way
 //!   a job ends (its exit code, a signal, failed with its reason, a code
-//!   above 255), `--json`, `--max-wait 0` (still running, exit 3).
-//! - `--any`: the first to end, the round with none ended, `--max-wait`,
-//!   `--json`.
+//!   above 255), a job's hint under its line (a stalled job's), `--json`,
+//!   `--timeout 0` (still running, exit 124, nothing sent but the polls),
+//!   `--max-wait 0` (the older spelling: exit 3).
+//! - `--any`: the first to end, the round with none ended, `--timeout`
+//!   (124), `--max-wait` (3), `--json`.
 //! - No answer once, then the answer (the lost line, 10 s); the daemon's
 //!   refusals (404 is exit 4); Python's raise; the cell socket.
-//! - The words: none, an unknown flag, `--max-wait` last.
+//! - The words: none, an unknown flag, `--timeout` or `--max-wait` last
+//!   or empty, both limits, one twice.
 //! - What the binary hands to the shell: `--follow`, `--failures`, no
 //!   temp folder (Linux; macOS's mktemp falls back, so it is native
 //!   there), help. A duration that is none goes to the shell too;
@@ -30,6 +33,7 @@ const RUNNING: &str = r#"{"id":"aaaa1111bbbb","short":"aaaa1111","state":"runnin
 const QUEUED: &str = r#"{"id":"aaaa1111bbbb","short":"aaaa1111","state":"queued","node":"mini","queue":{"position":2,"of":3,"reason":"cpu"}}"#;
 const QUEUED_LINE: &str = r#"{"short":"aaaa1111","state":"queued","queue":{"line":"queued 1st on mini","position":1,"waitReason":"slot"},"wait":{"elsewhere":"linux-2 can start it now"}}"#;
 const B_RUNNING: &str = r#"{"id":"bbbb2222cccc","short":"bbbb2222","state":"running","node":"n2"}"#;
+const STALLED: &str = r#"{"id":"ssss3333dddd","short":"stalled1","state":"timeout","reason":"stalled","node":"linux-1","startedAt":1000,"endedAt":2900,"hint":"stopped by the stall guard: no output and no CPU for its whole --stall-timeout; set it with --stall-timeout (e.g. --stall-timeout 2h, or off for a quiet job), or stall_timeout in .k2/compute.toml"}"#;
 const B_DONE: &str = r#"{"id":"bbbb2222cccc","short":"bbbb2222","state":"done","node":"n2","exitCode":2,"assignedAt":10.5,"endedAt":75}"#;
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
@@ -123,6 +127,64 @@ fn compute_wait_for_each_job() {
             vec![ok(RUNNING)],
             owner_and_port,
             3,
+            1,
+        ),
+        case(
+            "--timeout 0: still running, 124, the job left alone",
+            &["wait", "aaaa1111", "--timeout", "0"],
+            &[],
+            vec![ok(QUEUED)],
+            owner_and_port,
+            124,
+            1,
+        ),
+        case(
+            "--timeout 0, two jobs, one done, --json: 124",
+            &["wait", "aaaa1111", "bbbb2222", "--timeout", "0", "--json"],
+            &[],
+            vec![ok(DONE), ok(B_RUNNING)],
+            owner_and_port,
+            124,
+            2,
+        ),
+        case(
+            "--timeout, a failed job: 3, not 124",
+            &["wait", "j", "--timeout", "30s"],
+            &[],
+            vec![ok(
+                r#"{"id":"jj","short":"j","state":"failed","reason":"spawn_failed","node":"n"}"#,
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "a stalled job: its hint under its line",
+            &["wait", "stalled1"],
+            &[],
+            vec![ok(STALLED)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "a done job's hint that is no string",
+            &["wait", "j"],
+            &[],
+            vec![ok(
+                r#"{"short":"j","state":"done","exitCode":0,"node":"n","hint":["a",1,{"b":null}]}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "an empty hint says nothing",
+            &["wait", "j"],
+            &[],
+            vec![ok(r#"{"short":"j","state":"done","exitCode":0,"hint":""}"#)],
+            owner_and_port,
+            0,
             1,
         ),
         case(
@@ -241,6 +303,24 @@ fn compute_wait_any() {
             2,
         ),
         case(
+            "--timeout 0: 124",
+            &["wait", "--any", "--timeout", "0", "aaaa1111", "bbbb2222"],
+            &[],
+            vec![ok(RUNNING), ok(B_RUNNING)],
+            owner_and_port,
+            124,
+            2,
+        ),
+        case(
+            "--timeout, the first ends in time",
+            &["wait", "--any", "--timeout", "9m", "aaaa1111", "bbbb2222"],
+            &[],
+            vec![ok(RUNNING), ok(B_DONE)],
+            owner_and_port,
+            2,
+            2,
+        ),
+        case(
             "404 is exit 4",
             &["wait", "--any", "x"],
             &[],
@@ -296,7 +376,52 @@ fn compute_wait_words() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
+            0,
+        ),
+        case(
+            "--timeout last",
+            &["wait", "a", "--timeout"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "--max-wait empty",
+            &["wait", "a", "--max-wait", ""],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "--timeout with --max-wait",
+            &["wait", "a", "--timeout", "1s", "--max-wait", "1s"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "--timeout twice",
+            &["wait", "a", "--timeout", "1s", "--timeout", "2s"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "--timeout twice, with --follow: the words stop it first",
+            &["wait", "a", "--follow", "--timeout", "1s", "--timeout", "2s"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
             0,
         ),
         case("the gate", &["wait", "a"], &[], vec![], nothing, 1, 0),
@@ -403,4 +528,51 @@ fn compute_wait_with_no_temp_folder() {
         no_tmpdir: true,
         ..c
     });
+}
+
+/// The wait's own lines name the command by the brand's name (in a build
+/// with `K2_BRAND_DIR=brand/xy` they say `xy`), never a typed `k2` or
+/// `k5`: the two new usage lines and `--timeout`'s still_running.
+#[test]
+fn the_wait_lines_say_the_brand_s_name() {
+    let rig = Rig::new(VERB, "waitbrand");
+    let cli = k2_client::brand::CLI_NAME;
+    let usage = format!(
+        "usage: {cli} compute wait <job>... [--any] [--follow] [--failures] [--timeout 9m] [--quiet] [--json]"
+    );
+    for (args, want) in [
+        (
+            &["wait", "a", "--timeout", "1s", "--max-wait", "1s"][..],
+            format!("{usage}   (--timeout or --max-wait, once)\n"),
+        ),
+        (
+            &["wait", "a", "--timeout"],
+            format!("{usage}   (--timeout takes a duration: 9m, 90s, 1h)\n"),
+        ),
+        (&["wait", "a", "--bogus"], format!("{usage}\n")),
+    ] {
+        let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(2), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
+    }
+    let c = case(
+        "brand",
+        &["wait", "aaaa1111", "--timeout", "0"],
+        &[],
+        vec![ok(RUNNING)],
+        owner_and_port,
+        124,
+        1,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stderr,
+        format!(
+            "[{cli} compute] aaaa1111 running on mini\n{{\"error\": \"still_running\", \"jobs\": [\"aaaa1111\"], \"hint\": \"{cli} compute wait aaaa1111\"}}\n"
+        )
+    );
+    assert_eq!(out.code, Some(124));
+    assert_eq!(log.len(), 1, "one poll, nothing else sent: {log:?}");
 }

@@ -25,8 +25,8 @@
 //! number that is more than digits (`--cpus`); a value checked by a bash
 //! regex that is not ASCII (the locale's ranges); a temp file or folder the
 //! shell's `mktemp` can't make; and the shell's own follow settings in the
-//! environment (`_CP_DEADLINE`, `_CP_FAILURES`, `_CP_LAST_Q`,
-//! `_CP_OWNER_WARNED`).
+//! environment (`_CP_DEADLINE`, `_CP_DEADLINE_RC`, `_CP_FAILURES`,
+//! `_CP_LAST_Q`, `_CP_OWNER_WARNED`).
 
 use super::writes::{self, Cp, Words};
 use crate::daemon;
@@ -81,6 +81,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let busy = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
     if [
         "_CP_DEADLINE",
+        "_CP_DEADLINE_RC",
         "_CP_FAILURES",
         "_CP_LAST_Q",
         "_CP_OWNER_WARNED",

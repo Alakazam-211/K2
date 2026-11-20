@@ -602,7 +602,15 @@ mod wait_verb {
             r#"            --quiet|-q) quiet=1; shift ;;"#,
             r#"            --json) as_json=1; shift ;;"#,
             r#"            --follow|-f) follow=1; shift ;;"#,
-            r#"            --max-wait) max_wait="${2:-}"; shift 2 ;;"#,
+            r#"            --timeout|--max-wait)"#,
+            r#"                [ -n "$max_wait" ] && { echo "$usage   (--timeout or --max-wait, once)" >&2; exit 2; }"#,
+            r#"                [ -n "${2:-}" ] || { echo "$usage   ($1 takes a duration: 9m, 90s, 1h)" >&2; exit 2; }"#,
+            r#"                [ "$1" = "--timeout" ] && limit_rc=124"#,
+            r#"                max_wait="$2"; shift 2 ;;"#,
+            r#"    _CP_DEADLINE_RC="$limit_rc""#,
+            r#"            exit "${_CP_DEADLINE_RC:-3}""#,
+            r#"        sys.stderr.write("  hint: %s\n" % j["hint"])"#,
+            r#"    rc = int(os.environ["K2_CP_LIMIT_RC"])"#,
             r#"            --any) any=1; shift ;;"#,
             r#"            w=20"#,
             r#"            resp="$(_compute_send GET /cli/compute/jobs/get "job=$(urlencode "$j")&wait=$w")""#,
@@ -624,8 +632,14 @@ mod wait_verb {
             );
         }
         if k2_client::brand::CLI_NAME == "k2" {
-            let line = format!(r#"            -*) echo "{}" >&2; exit 2 ;;"#, wait::USAGE);
+            let line = format!(r#"    local usage="{}""#, wait::USAGE);
             assert!(jobs.lines().any(|l| l == line), "the usage moved");
+            for (rust, shell) in [
+                (wait::ONCE, "   (--timeout or --max-wait, once)"),
+                (wait::TAKES, "   ($1 takes a duration: 9m, 90s, 1h)"),
+            ] {
+                assert_eq!(rust.replace("%s", "$1"), shell);
+            }
         }
     }
 
@@ -673,6 +687,9 @@ mod wait_verb {
     #[test]
     fn the_words() {
         let usage = || Some(Words::Usage(wait::USAGE.to_string()));
+        let once = || Some(Words::Usage(format!("{}{}", wait::USAGE, wait::ONCE)));
+        let takes =
+            |f: &str| Some(Words::Usage(format!("{}{}", wait::USAGE, wait::TAKES.replace("%s", f))));
         let rows: Vec<(&[&str], Option<Words<Ask>>)> = vec![
             (&["a"], ask(|a| a.jobs = vec!["a".into()])),
             (
@@ -691,15 +708,30 @@ mod wait_verb {
                     a.max_wait = Some(5400);
                 }),
             ),
-            (&["a", "--max-wait", ""], ask(|a| a.jobs = vec!["a".into()])),
+            (
+                &["a", "--timeout", "9m"],
+                ask(|a| {
+                    a.jobs = vec!["a".into()];
+                    a.max_wait = Some(540);
+                    a.timeout = true;
+                }),
+            ),
+            (&["a", "--max-wait", ""], takes("--max-wait")),
+            (&["a", "--timeout"], takes("--timeout")),
+            (&["a", "--max-wait"], takes("--max-wait")),
+            (&["a", "--timeout", "1s", "--max-wait", "1s"], once()),
+            (&["a", "--max-wait", "1s", "--max-wait", "2s"], once()),
+            (&["a", "--timeout", "1s", "--timeout"], once()),
+            (&["a", "--timeout", "1s", "--follow", "--timeout", "2s"], once()),
+            (&["a", "--x", "--timeout"], usage()),
             (&[], usage()),
             (&["--json"], usage()),
             (&["a", "--x"], usage()),
-            (&["a", "--max-wait"], Some(Words::ShiftFailed)),
             (&["a", "--follow"], None),
             (&["a", "-f", "--x"], usage()),
             (&["a", "--failures"], None),
             (&["a", "--max-wait", "5x"], None),
+            (&["a", "--timeout", "5x"], None),
             (&["--max-wait", "5x"], usage()),
         ];
         for (words, want) in rows {
@@ -779,6 +811,7 @@ mod wait_verb {
         let s = wait::end_of(
             &[br#"{"state":"done","exitCode":0,"short":"a","node":"n","startedAt":100,"endedAt":225}"#.to_vec()],
             false,
+            Exit::Refused,
         );
         assert_eq!((s.stdout.as_str(), s.exit), ("", Exit::Ok));
         let s = wait::end_of(
@@ -787,23 +820,30 @@ mod wait_verb {
                 br#"{"state":"running","short":"b"}"#.to_vec(),
             ],
             true,
+            Exit::Refused,
         );
         assert_eq!(s.exit, Exit::Refused, "still running wins");
         assert_eq!(
             s.stdout,
             "[{\"state\": \"done\", \"exitCode\": 2, \"short\": \"a\", \"id\": \"aaaa\"}, {\"state\": \"running\", \"short\": \"b\"}]\n"
         );
-        let s = wait::end_of(&[br#"{"state":"done","signal":9}"#.to_vec()], false);
+        let s = wait::end_of(&[br#"{"state":"done","signal":9}"#.to_vec()], false, Exit::Refused);
         assert_eq!(s.exit.code(), 137);
-        let s = wait::end_of(&[br#"{"state":"done","exitCode":300}"#.to_vec()], false);
+        let s = wait::end_of(&[br#"{"state":"done","exitCode":300}"#.to_vec()], false, Exit::Refused);
         assert_eq!(s.exit.code(), 44);
-        let s = wait::end_of(&[br#"{"state":"failed","reason":"oom"}"#.to_vec()], false);
+        let s = wait::end_of(&[br#"{"state":"failed","reason":"oom"}"#.to_vec()], false, Exit::Refused);
         assert_eq!(s.exit, Exit::Refused);
-        let s = wait::end_of(&[br#"{"state":"done","exitCode":"x"}"#.to_vec()], false);
+        let s = wait::end_of(&[br#"{"state":"done","exitCode":"x"}"#.to_vec()], false, Exit::Refused);
         assert_eq!(s.exit, Exit::Error);
         assert!(s
             .stderr
             .ends_with("ValueError: invalid literal for int() with base 10: 'x'\n"));
+        let s = wait::end_of(
+            &[br#"{"state":"running","short":"b"}"#.to_vec()],
+            false,
+            Exit::WaitTimedOut,
+        );
+        assert_eq!(s.exit.code(), 124, "past --timeout");
     }
 
     #[test]

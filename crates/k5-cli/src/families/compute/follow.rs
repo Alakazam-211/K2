@@ -195,8 +195,11 @@ fn follow_on(cp: &mut Cp<'_>, f: &Follow, job8: &str) -> Exit {
             let left = deadline - now();
             if left <= 0 {
                 out::stderr_line(&format!(
-                    "{{\"error\":\"still_running\",\"jobs\":[\"{job8}\"],\"hint\":\"--max-wait passed; the job keeps going: {CLI_NAME} compute wait {job8} --follow\"}}"
+                    "{{\"error\":\"still_running\",\"jobs\":[\"{job8}\"],\"hint\":\"the wait limit passed; the job keeps going: {CLI_NAME} compute wait {job8} --follow\"}}"
                 ));
+                // `${_CP_DEADLINE_RC:-3}`: the binary follows only with it
+                // unset (run hands the line to the shell when it is set;
+                // wait --follow is the shell's), so 3.
                 return Exit::Refused;
             }
             poll = poll.min(left);

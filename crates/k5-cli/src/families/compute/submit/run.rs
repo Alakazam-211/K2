@@ -969,6 +969,8 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
                 json: a.as_json,
                 any: false,
                 max_wait: a.max_wait,
+                // run passes it on as --max-wait: 3 past it.
+                timeout: false,
             },
         );
     }

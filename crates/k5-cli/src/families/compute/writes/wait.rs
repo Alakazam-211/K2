@@ -1,4 +1,4 @@
-//! `k5 compute wait <job>... [--any] [--max-wait D] [--quiet] [--json]`,
+//! `k5 compute wait <job>... [--any] [--timeout D] [--quiet] [--json]`,
 //! as `cmd_compute_wait` and `_compute_wait_any` answer it
 //! (`cli/src/compute-jobs.sh`).
 //!
@@ -9,16 +9,19 @@
 //!   (none with `--quiet`). Then one line per job that ended, the error
 //!   lines, `still_running` for the ones that didn't, and the exit: the
 //!   first failed job's code (its exit code, 128 plus its signal, or 3),
-//!   3 when one is still running. `--json` prints every job's answer.
+//!   124 when one is still running past `--timeout` (3 past `--max-wait`,
+//!   the older spelling; only one of them, once). A job's `hint` goes
+//!   under its line. `--json` prints every job's answer.
 //! - `--any`: one short poll (`wait=1`) per job per round until the first
-//!   ends: its line, the others still running, its code.
+//!   ends: its line, the others still running, its code; past the limit,
+//!   `still_running` and 124 (3 with `--max-wait`).
 //! - No answer (status 000): "lost the server" once, 10 s, and again; after
 //!   60 in a row, `lost_contact` and exit 3. Any other status but 200 is
 //!   `_compute_fail`'s line, 404 exit 4.
 //!
 //! What goes to the shell: `--follow` (it streams the job's output),
-//! `--failures` (it prints `compute logs`), a `--max-wait` that is no
-//! duration (the shell's arithmetic fails on it), and, without `--any`, a
+//! `--failures` (it prints `compute logs`), a `--timeout` or `--max-wait`
+//! that is no duration (the shell's arithmetic fails on it), and, without `--any`, a
 //! temp folder `mktemp -d` can't make.
 
 use super::{dumps, int_of, load, object, stopped, str_at, str_value, Cp, Words, NO_STATUS};
@@ -35,8 +38,12 @@ pub const ENDPOINT: &str = "/cli/compute/jobs/get";
 pub const USAGE: &str = concat!(
     "usage: ",
     k2_client::cli_name!(),
-    " compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]"
+    " compute wait <job>... [--any] [--follow] [--failures] [--timeout 9m] [--quiet] [--json]"
 );
+/// After [`USAGE`]: both limits, or one of them twice.
+pub const ONCE: &str = "   (--timeout or --max-wait, once)";
+/// After [`USAGE`]: a limit with no duration (`%s` is the flag).
+pub const TAKES: &str = "   (%s takes a duration: 9m, 90s, 1h)";
 /// The longest poll, in seconds.
 pub const LONG_POLL: u64 = 20;
 /// Between tries when no answer came.
@@ -71,8 +78,8 @@ pub mod line {
         pub const EXIT: u32 = 23;
         pub const SIGNAL: u32 = 25;
         pub const ST: u32 = 27;
-        pub const STILL: u32 = 37;
-        pub const RC: u32 = 41;
+        pub const STILL: u32 = 41;
+        pub const RC: u32 = 45;
     }
     /// `--any`'s reader of one answer.
     pub mod any {
@@ -92,8 +99,22 @@ pub struct Ask {
     pub quiet: bool,
     pub json: bool,
     pub any: bool,
-    /// `--max-wait`, in seconds.
+    /// `--timeout` or `--max-wait`, in seconds.
     pub max_wait: Option<u64>,
+    /// The limit was `--timeout`: past it, 124 (else 3).
+    pub timeout: bool,
+}
+
+impl Ask {
+    /// The exit past the wait limit: 124 with `--timeout`, 3 with
+    /// `--max-wait` (`limit_rc`).
+    pub fn limit_exit(&self) -> Exit {
+        if self.timeout {
+            Exit::WaitTimedOut
+        } else {
+            Exit::Refused
+        }
+    }
 }
 
 /// The words after `wait`. `None`: the shell answers (see the module's
@@ -110,11 +131,15 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             "--json" => a.json = true,
             "--follow" | "-f" => follow = true,
             "--any" => a.any = true,
-            "--max-wait" => {
-                max_wait = words.get(i + 1).copied().unwrap_or("").to_string();
-                if i + 2 > words.len() {
-                    return Some(Words::ShiftFailed);
+            w @ ("--timeout" | "--max-wait") => {
+                if !max_wait.is_empty() {
+                    return Some(Words::Usage(format!("{USAGE}{ONCE}")));
                 }
+                max_wait = words.get(i + 1).copied().unwrap_or("").to_string();
+                if max_wait.is_empty() {
+                    return Some(Words::Usage(format!("{USAGE}{}", TAKES.replace("%s", w))));
+                }
+                a.timeout = w == "--timeout";
                 i += 2;
                 continue;
             }
@@ -319,7 +344,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
         }
         bodies.push(answer);
     }
-    end_of(&bodies, a.json).print()
+    end_of(&bodies, a.json, a.limit_exit()).print()
 }
 
 /// `_compute_fail` with 4 for a 404 (`wait` and `wait --any` pass it).
@@ -597,7 +622,7 @@ type EndRead = (Option<String>, Vec<String>, Vec<Value>);
 /// The end's reader on every job's last answer: the lines on stderr,
 /// `--json`'s list on stdout, and the exit. The stderr lines are
 /// written as the reader goes, so a raise comes after the ones before it.
-pub fn end_of(bodies: &[Vec<u8>], json: bool) -> Shown {
+pub fn end_of(bodies: &[Vec<u8>], json: bool, limit: Exit) -> Shown {
     use line::end as l;
     let r = (|| -> Result<EndRead, Raise> {
         let mut values = Vec::new();
@@ -660,6 +685,9 @@ pub fn end_of(bodies: &[Vec<u8>], json: bool) -> Shown {
                 took
             );
             out::stderr_line(line.trim_end_matches('\n'));
+            if let Some(hint) = get(p, "hint").filter(|h| py::truthy(h)) {
+                out::stderr_line(&format!("  hint: {}", py::str_of(hint)));
+            }
             if code != "0" {
                 failed.push(get(p, "id").cloned().unwrap_or(Value::Null));
                 if rc.is_none() {
@@ -697,7 +725,7 @@ pub fn end_of(bodies: &[Vec<u8>], json: bool) -> Shown {
                     )),
                 ),
             ])));
-            rc = Some("3".to_string());
+            rc = Some(limit.code().to_string());
         }
         let mut ids = Vec::new();
         for (i, f) in failed.iter().filter(|f| py::truthy(f)).enumerate() {
@@ -808,7 +836,7 @@ fn any(cp: &mut Cp<'_>, a: &Ask, deadline: Option<u64>) -> Result<Exit, Exit> {
                 ),
                 all = all
             ));
-            return Ok(Exit::Refused);
+            return Ok(a.limit_exit());
         }
         if !a.quiet && !said {
             out::stderr_line(&format!(

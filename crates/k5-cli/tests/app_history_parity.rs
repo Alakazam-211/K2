@@ -397,14 +397,23 @@ fn logs_client_since_answers_as_the_shell_does() {
             name,
             args,
             &[("APP_LOGS_TEST_NOW", NOW)],
-            if requests == 0 { vec![] } else { vec![ok(client)] },
+            if requests == 0 {
+                vec![]
+            } else {
+                vec![ok(client)]
+            },
             owner_and_port,
             code,
             requests,
         )
     };
     let v = vec![
-        since("--since days", &["logs", "acme", "--client", "--since", "2d"], 0, 1),
+        since(
+            "--since days",
+            &["logs", "acme", "--client", "--since", "2d"],
+            0,
+            1,
+        ),
         since(
             "--since a duration, every filter",
             &[
@@ -414,9 +423,24 @@ fn logs_client_since_answers_as_the_shell_does() {
             0,
             1,
         ),
-        since("--since seconds, --json", &["logs", "acme", "--client", "--since", "0300", "--json"], 0, 1),
-        since("--since a bad duration", &["logs", "acme", "--client", "--since", "2w"], 2, 0),
-        since("--since days in a bad form", &["logs", "acme", "--client", "--since", "d"], 2, 0),
+        since(
+            "--since seconds, --json",
+            &["logs", "acme", "--client", "--since", "0300", "--json"],
+            0,
+            1,
+        ),
+        since(
+            "--since a bad duration",
+            &["logs", "acme", "--client", "--since", "2w"],
+            2,
+            0,
+        ),
+        since(
+            "--since days in a bad form",
+            &["logs", "acme", "--client", "--since", "d"],
+            2,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

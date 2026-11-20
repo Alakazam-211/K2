@@ -30,10 +30,10 @@ use super::py::{self, Out};
 use super::{Answer, Stop};
 use crate::exit::Exit;
 use crate::families::Raise;
-use crate::transport::encode::quote;
 use crate::out;
 use crate::out::json::Value;
 use crate::out::py as pyfmt;
+use crate::transport::encode::quote;
 use k2_client::{cli_name, product_name};
 
 /// `_app_approve`'s line in a session.
@@ -59,13 +59,18 @@ pub mod usage {
         product_name!(),
         ")"
     );
-    pub const APPROVALS_TAIL: &str = concat!(" (", cli_name!(), " app approvals [--app A] [--all])");
+    pub const APPROVALS_TAIL: &str =
+        concat!(" (", cli_name!(), " app approvals [--app A] [--all])");
     pub const REVOKE: &str = concat!(
         "usage: ",
         cli_name!(),
         " app approvals revoke <request-id> | --app <name> [--json]   (the owner)"
     );
-    pub const DENY: &str = concat!("usage: ", cli_name!(), " app deny <request-id> [--reason TEXT]");
+    pub const DENY: &str = concat!(
+        "usage: ",
+        cli_name!(),
+        " app deny <request-id> [--reason TEXT]"
+    );
 }
 
 /// The verbs here.
@@ -108,7 +113,10 @@ fn list(words: &[&str]) -> Result<Ask, Stop> {
         match w {
             "--app" => {
                 // `app="${2:-}"; shift 2`: with one word left, set -e ends it.
-                app = rest.get(1).ok_or_else(|| Stop::silent(Exit::Error))?.to_string();
+                app = rest
+                    .get(1)
+                    .ok_or_else(|| Stop::silent(Exit::Error))?
+                    .to_string();
                 rest = &rest[2..];
                 continue;
             }
@@ -137,7 +145,10 @@ fn revoke(words: &[&str]) -> Result<Ask, Stop> {
     while let Some(w) = rest.first().copied() {
         match w {
             "--app" => {
-                app = rest.get(1).ok_or_else(|| Stop::usage(usage::REVOKE))?.to_string();
+                app = rest
+                    .get(1)
+                    .ok_or_else(|| Stop::usage(usage::REVOKE))?
+                    .to_string();
                 rest = &rest[2..];
                 continue;
             }
@@ -164,7 +175,10 @@ fn deny(words: &[&str]) -> Result<Ask, Stop> {
     while let Some(w) = rest.first().copied() {
         match w {
             "--reason" => {
-                reason = rest.get(1).ok_or_else(|| Stop::silent(Exit::Error))?.to_string();
+                reason = rest
+                    .get(1)
+                    .ok_or_else(|| Stop::silent(Exit::Error))?
+                    .to_string();
                 rest = &rest[2..];
                 continue;
             }
@@ -241,11 +255,7 @@ fn list_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
             } else {
                 String::new()
             };
-            o.line(&format!(
-                "    {} by {}{via}",
-                py::s(&status),
-                py::s(&by)
-            ));
+            o.line(&format!("    {} by {}{via}", py::s(&status), py::s(&by)));
         }
     }
     Ok(Exit::Ok)
@@ -321,10 +331,7 @@ pub fn approve(ctx: &mut Ctx, id: &str) -> Answer {
     // `_compute_json` puts a token first (it rides stdin, one line), then
     // the rest.
     let first = tok.split('\n').next().unwrap_or("");
-    let body = Cj::new()
-        .s("confirmToken", first)
-        .s("request", full)
-        .body();
+    let body = Cj::new().s("confirmToken", first).s("request", full).body();
     drop(tok);
     let answer = ctx.call_on(true, "/cli/app/approve", &body, true)?;
     let mut o = Out::default();
@@ -498,8 +505,14 @@ mod tests {
                 json: false
             }))
         );
-        assert_eq!(parse("deny", &["--x"]), Some(Err(Stop::usage("Unknown flag: --x"))));
-        assert_eq!(parse("approve", &[]), Some(Err(Stop::usage(usage::APPROVE))));
+        assert_eq!(
+            parse("deny", &["--x"]),
+            Some(Err(Stop::usage("Unknown flag: --x")))
+        );
+        assert_eq!(
+            parse("approve", &[]),
+            Some(Err(Stop::usage(usage::APPROVE)))
+        );
         assert_eq!(
             parse("approve", &["r", "x"]),
             Some(Ok(Ask::Approve { id: "r".into() }))

@@ -52,7 +52,11 @@ fn approvals_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "apprs");
     let v = vec![
         read("approvals", &["approvals"], LIST),
-        read("approvals: none", &["approvals", "--all", "--app", "acme é"], r#"{"requests":[]}"#),
+        read(
+            "approvals: none",
+            &["approvals", "--all", "--app", "acme é"],
+            r#"{"requests":[]}"#,
+        ),
         read("approvals --json", &["approvals", "--json"], LIST),
         stop("approvals: an unknown argument", &["approvals", "req-1"], 2),
         stop("approvals: --app given last", &["approvals", "--app"], 1),
@@ -84,12 +88,36 @@ fn approvals_answer_as_the_shell_does() {
             &["approvals", "revoke", "--app", "acme", "--json"],
             r#"{"revoked":[]}"#,
         ),
-        read("approvals revoke: no note", &["approvals", "revoke", "w-1"], r#"{}"#),
-        stop("approvals revoke: nothing named", &["approvals", "revoke"], 2),
-        stop("approvals revoke: both", &["approvals", "revoke", "w-1", "--app", "a"], 2),
-        stop("approvals revoke: two ids", &["approvals", "revoke", "a", "b"], 2),
-        stop("approvals revoke: --app given last", &["approvals", "revoke", "--app"], 2),
-        stop("approvals revoke: an unknown flag", &["approvals", "revoke", "--x"], 2),
+        read(
+            "approvals revoke: no note",
+            &["approvals", "revoke", "w-1"],
+            r#"{}"#,
+        ),
+        stop(
+            "approvals revoke: nothing named",
+            &["approvals", "revoke"],
+            2,
+        ),
+        stop(
+            "approvals revoke: both",
+            &["approvals", "revoke", "w-1", "--app", "a"],
+            2,
+        ),
+        stop(
+            "approvals revoke: two ids",
+            &["approvals", "revoke", "a", "b"],
+            2,
+        ),
+        stop(
+            "approvals revoke: --app given last",
+            &["approvals", "revoke", "--app"],
+            2,
+        ),
+        stop(
+            "approvals revoke: an unknown flag",
+            &["approvals", "revoke", "--x"],
+            2,
+        ),
         case(
             "approvals revoke: a refusal",
             &["approvals", "revoke", "w-1"],
@@ -111,13 +139,29 @@ fn deny_answers_as_the_shell_does() {
     let denied = r#"{"request":{"id":"req-1","status":"denied","summary":"reach x é"}}"#;
     let v = vec![
         read("deny", &["deny", "req-1"], denied),
-        read("deny --reason, the last id", &["deny", "a", "req-1", "--reason", "no é"], denied),
+        read(
+            "deny --reason, the last id",
+            &["deny", "a", "req-1", "--reason", "no é"],
+            denied,
+        ),
         read("deny --json", &["deny", "req-1", "--json"], denied),
         stop("deny: no id", &["deny"], 2),
         stop("deny: an empty id", &["deny", ""], 2),
         stop("deny: an unknown flag", &["deny", "req-1", "--x"], 2),
-        stop("deny: --reason given last", &["deny", "req-1", "--reason"], 1),
-        traceback(read("deny: no request", &["deny", "req-1"], r#"{}"#)),
+        stop(
+            "deny: --reason given last",
+            &["deny", "req-1", "--reason"],
+            1,
+        ),
+        traceback(case(
+            "deny: no request",
+            &["deny", "req-1"],
+            &[],
+            vec![ok(r#"{}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
         case(
             "deny: a refusal",
             &["deny", "req-1"],
@@ -225,7 +269,15 @@ fn approvals_a_large_list() {
     let body = format!(r#"{{"requests":[{}]}}"#, rows.join(","));
     assert!(body.len() > 256 * 1024, "{}", body.len());
     for args in [&["approvals"][..], &["approvals", "--json"]] {
-        rig.check(&case("a large list", args, &[], vec![ok(&body)], owner_and_port, 0, 1));
+        rig.check(&case(
+            "a large list",
+            args,
+            &[],
+            vec![ok(&body)],
+            owner_and_port,
+            0,
+            1,
+        ));
     }
 }
 

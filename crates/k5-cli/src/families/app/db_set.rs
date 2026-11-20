@@ -372,7 +372,8 @@ fn connect(ctx: &mut Ctx, w: &Words) -> Answer {
                         (
                             Text::from("hint"),
                             Value::Str(Text::from(
-                                format!("approved, but connecting failed: {}", py::s(&hint)).as_str(),
+                                format!("approved, but connecting failed: {}", py::s(&hint))
+                                    .as_str(),
                             )),
                         ),
                     ]);
@@ -426,7 +427,11 @@ pub fn print_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     let c = py::or(py::dget(&v, "check", 8)?, Value::Object(Vec::new()));
     let db = |line| py::dget(&v, "db", line);
     if py::contains(&v, "created", 9)? || py::contains(&v, "rehost", 9)? {
-        let (d, major, cluster) = (db(10)?, py::dget(&v, "major", 10)?, py::dget(&v, "cluster", 10)?);
+        let (d, major, cluster) = (
+            db(10)?,
+            py::dget(&v, "major", 10)?,
+            py::dget(&v, "cluster", 10)?,
+        );
         let new = if py::truthy(&py::dget(&v, "created", 10)?) {
             "  [new]"
         } else {
@@ -440,7 +445,11 @@ pub fn print_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
             py::s(&cluster)
         ));
     } else {
-        let (d, major, cluster) = (db(12)?, py::dget(&v, "major", 12)?, py::dget(&v, "cluster", 12)?);
+        let (d, major, cluster) = (
+            db(12)?,
+            py::dget(&v, "major", 12)?,
+            py::dget(&v, "cluster", 12)?,
+        );
         o.line(&format!(
             "{} \u{2192} {} (Postgres {}, cluster {})",
             py::s(&app),
@@ -677,13 +686,23 @@ mod tests {
     fn the_words_read_as_the_shell_reads_them() {
         let w = words(
             "connect",
-            &["acme", "--new", "--major=17", "--timeout", "1h30m", "--wait"],
+            &[
+                "acme",
+                "--new",
+                "--major=17",
+                "--timeout",
+                "1h30m",
+                "--wait",
+            ],
         )
         .unwrap();
         assert_eq!(w.timeout, 5400);
         assert!(w.new && w.wait);
         assert_eq!(w.major, "17");
-        assert_eq!(words("check", &["a", "--timeout", "007"]).unwrap().timeout, 7);
+        assert_eq!(
+            words("check", &["a", "--timeout", "007"]).unwrap().timeout,
+            7
+        );
         let bad = words("check", &[]).unwrap_err();
         assert_eq!(bad.exit, Exit::Error);
         assert!(bad.line.contains("app db check <app-id>"), "{}", bad.line);
@@ -708,6 +727,9 @@ mod tests {
             "connected acme \u{2192} acme_main (Postgres 17, cluster main)  [new]\nroles    l, o\nsecrets  DATABASE_URL, other (granted to the App; not shown)\ndoor     open (container door, in-wall 127.0.0.1:5432)\nreplaced OLD (it was granted under the same name)\nrehost   done (d1)\nswitch   s turned on\ncheck    FAIL \u{b7} login: e\nfix      h\nApp output (last 2 lines, untrusted):\n  | a\n  | b\n"
         );
         let e = print_lines(br#"{"secrets":[1]}"#, &mut Out::default()).unwrap_err();
-        assert_eq!(e.frames, vec![(14, "<module>"), (14, "<genexpr>"), (7, "env")]);
+        assert_eq!(
+            e.frames,
+            vec![(14, "<module>"), (14, "<genexpr>"), (7, "env")]
+        );
     }
 }

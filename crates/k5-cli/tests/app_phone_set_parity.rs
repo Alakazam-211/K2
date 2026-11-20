@@ -795,7 +795,9 @@ fn bash_bugs_copied() {
         // key=value check, exit 2). Flips when the fix lands.
         stop(
             "push send: --to -- moves the split (bash bug)",
-            &["push", "send", "acme", "--to", "--", "--to", "b", "--data", "k=v"],
+            &[
+                "push", "send", "acme", "--to", "--", "--to", "b", "--data", "k=v",
+            ],
             2,
         ),
         // app-auth.sh:881-885: a list value that names a list (`--to

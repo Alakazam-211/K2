@@ -159,7 +159,11 @@ fn box_service_answers_as_the_shell_does() {
             &["box-service", "acme"],
             r#"{"app":"a","wall":"w","note":5}"#,
         ),
-        stop("box-service revoke: no name", &["box-service", "revoke", "acme"], 2),
+        stop(
+            "box-service revoke: no name",
+            &["box-service", "revoke", "acme"],
+            2,
+        ),
     ];
     for c in v {
         rig.check(&c);

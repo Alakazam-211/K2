@@ -193,10 +193,7 @@ pub fn audit_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         let state = if py::truthy(&py::dget(&d, "ok", 16)?) {
             format!("ok, {} rows", py::s(&py::idx(&d, "rows", 16)?))
         } else {
-            format!(
-                "BROKEN at row {}",
-                py::s(&py::dget(&d, "brokenAt", 16)?)
-            )
+            format!("BROKEN at row {}", py::s(&py::dget(&d, "brokenAt", 16)?))
         };
         o.line(&format!("chain {}: {state}", py::s(&day)));
     }
@@ -229,7 +226,10 @@ mod tests {
         );
         assert!(a.verify && !a.json);
         assert_eq!(parse(&[]), Some(Err(Stop::usage(USAGE))));
-        assert_eq!(parse(&["a", "--since"]), Some(Err(Stop::silent(Exit::Error))));
+        assert_eq!(
+            parse(&["a", "--since"]),
+            Some(Err(Stop::silent(Exit::Error)))
+        );
         assert_eq!(parse(&["a", "-h"]), None);
     }
 
@@ -246,6 +246,6 @@ mod tests {
         assert_eq!(lines[1], "1 call, oldest first (--newest-first to flip):");
         assert!(lines[2].ends_with("  403 scope  ann  db.query  in 1 out 2  3 ms"));
         assert_eq!(lines[3], "chain 2026-11-20: ok, 4 rows");
-        assert_eq!(lines[4], "chain 2026-11-21: BROKEN at row None");
+        assert_eq!(lines[4], "chain 2026-11-21: BROKEN at row 7");
     }
 }

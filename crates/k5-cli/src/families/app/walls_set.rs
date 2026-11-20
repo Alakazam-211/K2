@@ -30,7 +30,11 @@ pub mod usage {
         cli_name!(),
         " app egress add <app-id> <host[:port]>... [--reason TEXT]"
     );
-    pub const EGRESS_RM: &str = concat!("usage: ", cli_name!(), " app egress rm <app-id> <host[:port]>");
+    pub const EGRESS_RM: &str = concat!(
+        "usage: ",
+        cli_name!(),
+        " app egress rm <app-id> <host[:port]>"
+    );
     pub const EGRESS_MODE: &str = concat!(
         "usage: ",
         cli_name!(),
@@ -310,9 +314,8 @@ fn mode(s: &Split, app: &str, json: bool) -> Shown {
     }
     // `echo "$app: egress mode $(… print(json.load(sys.stdin)["mode"]))"`:
     // a raise inside leaves the word empty, and echo still prints.
-    let m = (|| -> Result<String, Raise> {
-        Ok(py::s(&py::idx(&py::load(&s.body, 1)?, "mode", 1)?))
-    })();
+    let m =
+        (|| -> Result<String, Raise> { Ok(py::s(&py::idx(&py::load(&s.body, 1)?, "mode", 1)?)) })();
     let m = match m {
         Ok(m) => m.trim_end_matches('\n').to_string(),
         Err(e) => {
@@ -379,7 +382,7 @@ mod tests {
             post(
                 Write::EgressAdd,
                 "acme",
-                r#"{"app": "acme", "hosts": ["a.example", "b é"], "reason": "r"}"#,
+                r#"{"app": "acme", "hosts": ["a.example", "b \u00e9"], "reason": "r"}"#,
                 false
             )
         );
@@ -389,7 +392,12 @@ mod tests {
         );
         assert_eq!(
             parse("egress", &["remove", "acme", "h", "--json"]),
-            post(Write::EgressRm, "acme", r#"{"app": "acme", "host": "h"}"#, true)
+            post(
+                Write::EgressRm,
+                "acme",
+                r#"{"app": "acme", "host": "h"}"#,
+                true
+            )
         );
         assert_eq!(
             parse("egress", &["mode", "acme"]),
@@ -399,14 +407,14 @@ mod tests {
             parse("egress", &["mode", "acme", "broad", "--tail"]),
             Some(Err(Stop::silent(Exit::Error)))
         );
-        assert_eq!(
-            parse("egress", &["add"]),
-            Some(Ok(Ask::Page("app/egress")))
-        );
+        assert_eq!(parse("egress", &["add"]), Some(Ok(Ask::Page("app/egress"))));
         assert_eq!(parse("egress", &["acme"]), None);
         assert_eq!(parse("egress", &["add", "a", "h", "-h"]), None);
         assert_eq!(
-            parse("box-service", &["request", "acme", "pg", "5432", "--app-port", "15432"]),
+            parse(
+                "box-service",
+                &["request", "acme", "pg", "5432", "--app-port", "15432"]
+            ),
             post(
                 Write::BoxRequest,
                 "acme",
@@ -420,7 +428,12 @@ mod tests {
         );
         assert_eq!(
             parse("box-service", &["rm", "acme", "pg"]),
-            post(Write::BoxRevoke, "acme", r#"{"app": "acme", "name": "pg"}"#, false)
+            post(
+                Write::BoxRevoke,
+                "acme",
+                r#"{"app": "acme", "name": "pg"}"#,
+                false
+            )
         );
         assert!(matches!(
             parse("box-service", &["revoke", "acme", "--tail", "1"]),

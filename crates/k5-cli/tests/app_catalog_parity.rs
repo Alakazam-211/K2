@@ -230,7 +230,8 @@ fn catalog_a_large_list() {
 
 const FREE: &str = r#"{"ok":true,"app":"forgejo","address":{"label":"git","kind":"label"},"tier":{"hint":"a custom domain é with Pro"}}"#;
 
-const TAKEN: &str = r#"{"ok":false,"error":{"code":"address_taken","hint":"git is taken","suggestion":"git-2"}}"#;
+const TAKEN: &str =
+    r#"{"ok":false,"error":{"code":"address_taken","hint":"git is taken","suggestion":"git-2"}}"#;
 
 #[test]
 fn check_answers_as_the_shell_does() {
@@ -239,7 +240,14 @@ fn check_answers_as_the_shell_does() {
         read("check: free", &["catalog", "check", "forgejo", "git"], FREE),
         read(
             "check: free at a URL, --id",
-            &["catalog", "check", "forgejo", "https://git.acme.example", "--id", "g 1"],
+            &[
+                "catalog",
+                "check",
+                "forgejo",
+                "https://git.acme.example",
+                "--id",
+                "g 1",
+            ],
             r#"{"ok":1,"app":"g 1","address":{"url":"https://git.acme.example","label":"x","kind":"domain"}}"#,
         ),
         ends(
@@ -254,7 +262,11 @@ fn check_answers_as_the_shell_does() {
             r#"{"error":{"code":"address_reserved"}}"#,
             2,
         ),
-        read("check --json: free", &["catalog", "check", "--json", "forgejo", "git"], FREE),
+        read(
+            "check --json: free",
+            &["catalog", "check", "--json", "forgejo", "git"],
+            FREE,
+        ),
         ends(
             "check --json: not free",
             &["catalog", "check", "forgejo", "git", "--json"],
@@ -274,8 +286,16 @@ fn check_answers_as_the_shell_does() {
             )
         },
         stop("check: one word", &["catalog", "check", "forgejo"], 2),
-        stop("check: three words", &["catalog", "check", "a", "b", "c"], 2),
-        stop("check: --id given last", &["catalog", "check", "a", "b", "--id"], 1),
+        stop(
+            "check: three words",
+            &["catalog", "check", "a", "b", "c"],
+            2,
+        ),
+        stop(
+            "check: --id given last",
+            &["catalog", "check", "a", "b", "--id"],
+            1,
+        ),
         traceback(ends(
             "check: an answer that is a list",
             &["catalog", "check", "a", "b"],
@@ -320,7 +340,11 @@ fn retry_answers_as_the_shell_does() {
         read("retry: an empty id", &["catalog", "retry", ""], r#"{}"#),
         stop("retry: no id", &["catalog", "retry"], 2),
         stop("retry: two ids", &["catalog", "retry", "a", "b"], 2),
-        stop("retry: an unknown flag", &["catalog", "retry", "a", "--x"], 2),
+        stop(
+            "retry: an unknown flag",
+            &["catalog", "retry", "a", "--x"],
+            2,
+        ),
         case(
             "retry: a 400",
             &["catalog", "retry", "cj-9"],

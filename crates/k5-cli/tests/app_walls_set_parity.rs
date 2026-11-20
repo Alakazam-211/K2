@@ -33,7 +33,13 @@ fn traceback(c: Case) -> Case {
 }
 
 /// One answer with `status`, and the exit it ends with.
-fn one(name: &'static str, args: &'static [&'static str], status: u16, body: &str, code: i32) -> Case {
+fn one(
+    name: &'static str,
+    args: &'static [&'static str],
+    status: u16,
+    body: &str,
+    code: i32,
+) -> Case {
     case(
         name,
         args,
@@ -68,7 +74,15 @@ fn egress_writes_answer_as_the_shell_does() {
     let v = vec![
         one(
             "egress add: allowed",
-            &["egress", "add", "acme", "api.example", "b é", "--reason", "sync é"],
+            &[
+                "egress",
+                "add",
+                "acme",
+                "api.example",
+                "b é",
+                "--reason",
+                "sync é",
+            ],
             200,
             ALLOWED,
             0,
@@ -80,7 +94,13 @@ fn egress_writes_answer_as_the_shell_does() {
             r#"{"status":"allowed","alreadyAllowed":["c.example:443"],"hint":"nothing new"}"#,
             0,
         ),
-        one("egress add: held", &["egress", "add", "acme", "api.example"], 202, HELD, 2),
+        one(
+            "egress add: held",
+            &["egress", "add", "acme", "api.example"],
+            202,
+            HELD,
+            2,
+        ),
         one(
             "egress add: not applied",
             &["egress", "add", "acme", "api.example"],
@@ -136,8 +156,16 @@ fn egress_writes_answer_as_the_shell_does() {
             1,
         )),
         stop("egress add: no App", &["egress", "add"], 2),
-        stop("egress add: --reason given last", &["egress", "add", "a", "h", "--reason"], 1),
-        stop("egress add: an unknown flag", &["egress", "add", "a", "h", "--app-port", "1"], 2),
+        stop(
+            "egress add: --reason given last",
+            &["egress", "add", "a", "h", "--reason"],
+            1,
+        ),
+        stop(
+            "egress add: an unknown flag",
+            &["egress", "add", "a", "h", "--app-port", "1"],
+            2,
+        ),
         one(
             "egress rm: removed",
             &["egress", "rm", "acme", "api.example:443"],
@@ -166,7 +194,11 @@ fn egress_writes_answer_as_the_shell_does() {
             r#"{"removed":true,"host":"x"}"#,
             0,
         ),
-        stop("egress rm: two hosts", &["egress", "rm", "acme", "a", "b"], 2),
+        stop(
+            "egress rm: two hosts",
+            &["egress", "rm", "acme", "a", "b"],
+            2,
+        ),
         one(
             "egress mode: set",
             &["egress", "mode", "acme", "broad", "--reason", "r"],
@@ -251,13 +283,21 @@ fn box_service_writes_answer_as_the_shell_does() {
             REFUSED,
             3,
         ),
-        stop("box-service request: no name", &["box-service", "request", "acme"], 2),
+        stop(
+            "box-service request: no name",
+            &["box-service", "request", "acme"],
+            2,
+        ),
         stop(
             "box-service request: three words",
             &["box-service", "request", "acme", "a", "1", "2"],
             2,
         ),
-        stop("box-service request: no App", &["box-service", "request"], 2),
+        stop(
+            "box-service request: no App",
+            &["box-service", "request"],
+            2,
+        ),
         one(
             "box-service revoke: revoked",
             &["box-service", "revoke", "acme", "postgres"],
@@ -303,7 +343,13 @@ fn db_connect_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "dbcon");
     let v = vec![
         // covers: app db connect
-        one("db connect --new: PASS", &["db", "connect", "acme", "--new", "--major", "17"], 200, PASS, 0),
+        one(
+            "db connect --new: PASS",
+            &["db", "connect", "acme", "--new", "--major", "17"],
+            200,
+            PASS,
+            0,
+        ),
         one(
             "db connect --db: FAIL",
             &[
@@ -333,9 +379,27 @@ fn db_connect_answers_as_the_shell_does() {
             0,
         ),
         // covers: app db connect --json
-        one("db connect --json: PASS", &["db", "connect", "--json", "acme", "--new"], 200, PASS, 0),
-        one("db connect --json: FAIL", &["db", "connect", "acme", "--new", "--json"], 200, FAIL, 1),
-        one("db connect: held", &["db", "connect", "acme", "--new"], 202, DB_HELD, 2),
+        one(
+            "db connect --json: PASS",
+            &["db", "connect", "--json", "acme", "--new"],
+            200,
+            PASS,
+            0,
+        ),
+        one(
+            "db connect --json: FAIL",
+            &["db", "connect", "acme", "--new", "--json"],
+            200,
+            FAIL,
+            1,
+        ),
+        one(
+            "db connect: held",
+            &["db", "connect", "acme", "--new"],
+            202,
+            DB_HELD,
+            2,
+        ),
         one(
             "db connect: held, the diff's first line",
             &["db", "connect", "acme", "--new"],
@@ -343,7 +407,13 @@ fn db_connect_answers_as_the_shell_does() {
             r#"{"request":{"id":"card-2"},"diff":{"lines":["connect é"]}}"#,
             2,
         ),
-        one("db connect --json: held", &["db", "connect", "acme", "--new", "--json"], 202, DB_HELD, 2),
+        one(
+            "db connect --json: held",
+            &["db", "connect", "acme", "--new", "--json"],
+            202,
+            DB_HELD,
+            2,
+        ),
         traceback(one(
             "db connect: held with no request",
             &["db", "connect", "acme", "--new"],
@@ -360,7 +430,11 @@ fn db_connect_answers_as_the_shell_does() {
         )),
         stop("db connect: which database", &["db", "connect", "acme"], 1),
         stop("db connect: no App", &["db", "connect", "--new"], 1),
-        stop("db connect: a bad major", &["db", "connect", "acme", "--new", "--major=9"], 1),
+        stop(
+            "db connect: a bad major",
+            &["db", "connect", "acme", "--new", "--major=9"],
+            1,
+        ),
         one(
             "db connect: a 400",
             &["db", "connect", "acme", "--new"],
@@ -406,7 +480,16 @@ fn db_connect_waits_for_the_owner() {
         ),
         wait(
             "--wait --json: approved, FAIL",
-            &["db", "connect", "acme", "--new", "--wait", "--timeout", "5s", "--json"],
+            &[
+                "db",
+                "connect",
+                "acme",
+                "--new",
+                "--wait",
+                "--timeout",
+                "5s",
+                "--json",
+            ],
             status(&format!(r#""status":"approved","result":{FAIL}"#)),
             1,
         ),
@@ -445,10 +528,22 @@ fn db_check_and_disconnect_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "dbchk");
     let v = vec![
         // covers: app db check
-        one("db check: PASS", &["db", "check", "acme", "--as", "DATABASE_URL"], 200, PASS, 0),
+        one(
+            "db check: PASS",
+            &["db", "check", "acme", "--as", "DATABASE_URL"],
+            200,
+            PASS,
+            0,
+        ),
         one("db check: FAIL", &["db", "check", "acme"], 200, FAIL, 1),
         // covers: app db check --json
-        one("db check --json: FAIL", &["db", "check", "acme", "--json"], 200, FAIL, 1),
+        one(
+            "db check --json: FAIL",
+            &["db", "check", "acme", "--json"],
+            200,
+            FAIL,
+            1,
+        ),
         one(
             "db check: a 400",
             &["db", "check", "acme"],
@@ -460,7 +555,14 @@ fn db_check_and_disconnect_answer_as_the_shell_does() {
         // covers: app db disconnect
         one(
             "db disconnect",
-            &["db", "disconnect", "acme", "--as", "REPORTS_URL", "--drop-roles"],
+            &[
+                "db",
+                "disconnect",
+                "acme",
+                "--as",
+                "REPORTS_URL",
+                "--drop-roles",
+            ],
             200,
             r#"{"ok":true,"app":"acme","db":"reports","as":"REPORTS_URL","roles":["r_login"],"sessionsCut":2,"rolesDropped":true,"doorOpen":true,"secrets":["app-db.acme.REPORTS_URL"],"note":"done é"}"#,
             0,

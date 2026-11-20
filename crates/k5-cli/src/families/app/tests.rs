@@ -667,11 +667,17 @@ fn group_two_helpers() {
     use super::history;
     assert!(matches!(
         history::parse("logs", &["acme", "--client", "--since", "1d"]),
-        Some(Ok(history::Ask::ClientLogs { since: Some(86400), .. }))
+        Some(Ok(history::Ask::ClientLogs {
+            since: Some(86400),
+            ..
+        }))
     ));
     assert!(matches!(
         history::parse("logs", &["acme", "--client", "--since", "1h30m"]),
-        Some(Ok(history::Ask::ClientLogs { since: Some(5400), .. }))
+        Some(Ok(history::Ask::ClientLogs {
+            since: Some(5400),
+            ..
+        }))
     ));
     assert!(matches!(
         history::parse("logs", &["acme", "--client", "--since", "1x"]),

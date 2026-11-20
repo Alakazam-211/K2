@@ -1,4 +1,5 @@
-//! `k5 workspace`: the verbs a first run uses, as the shell CLI's
+//! `k5 workspace`: the verbs a first run uses here, and the rest in
+//! [`verbs`], as the shell CLI's
 //! `workspace` arm (`cli/src/router.sh`) hands them to their functions
 //! (`cli/src/agent-context.sh`, `cli/src/wiki.sh`).
 //!
@@ -28,10 +29,10 @@
 //!    its own: the daemon does the work.
 //! 3. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
-//! The route table sends each of these verbs here on its own verb row
-//! ([`crate::route`]), so each can turn back to the shell alone; every
-//! other verb, `workspace` alone and its help stay the shell's. The shell
-//! CLI also answers these forms itself ([`run`] returns `None`): a command
+//! The route table sends every `workspace` command line here
+//! ([`crate::route`]); every other verb, and `workspace` alone, is
+//! [`verbs`]'s. Its help stays a page or the shell's. The shell CLI also
+//! answers these forms itself ([`run`] returns `None`): a command
 //! line with `-h` or `--help` (the front sends those on,
 //! [`crate::front`]); a word that is not UTF-8; a port that is set but is
 //! no port curl takes; a `python3` the binary can't tell
@@ -65,45 +66,20 @@ use crate::transport::{permission, Auth, Call, Client, Error};
 use k2_client::brand::PRODUCT_NAME;
 use std::ffi::OsString;
 
-/// The router arm's words: this family's row of [`crate::route::TABLE`].
-pub const WORDS: &[&str] = &["workspace"];
-/// The shell's but for [`VERBS`].
-pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// `list`, `profile`, `launch`, `update`, `create` and `open`, the
-/// verbs a first run uses; every other verb, and `workspace` alone, is
-/// the shell's. One verb row each, so each can turn back alone.
-pub const VERBS: &[crate::route::Verb] = &[
-    crate::route::Verb {
-        words: &["list"],
-        owner: crate::route::Owner::Native,
-    },
-    crate::route::Verb {
-        words: &["profile"],
-        owner: crate::route::Owner::Native,
-    },
-    crate::route::Verb {
-        words: &["create"],
-        owner: crate::route::Owner::Native,
-    },
-    crate::route::Verb {
-        words: &["open"],
-        owner: crate::route::Owner::Native,
-    },
-    crate::route::Verb {
-        words: &["launch"],
-        owner: crate::route::Owner::Native,
-    },
-    crate::route::Verb {
-        words: &["update"],
-        owner: crate::route::Owner::Native,
-    },
-];
-
 pub mod agent;
 pub mod list;
 pub mod register;
+pub mod verbs;
 
-/// The verbs the binary answers, as the router's `case` names them.
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["workspace"];
+/// The binary answers every form; [`run`] hands the ones it names to
+/// the shell.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
+
+/// The verbs a first run uses, answered here (the rest: [`verbs`]).
 pub const NATIVE_VERBS: [&str; 6] = ["list", "launch", "profile", "update", "create", "open"];
 
 /// Lines that stop a verb before it sends anything, and the exit.
@@ -172,7 +148,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let form = parse(&words)?;
+    let Some(form) = parse(&words) else {
+        // Every other verb, and `workspace` alone.
+        return verbs::run(args, &words);
+    };
     if !python::family_native(python::here()) {
         return None;
     }

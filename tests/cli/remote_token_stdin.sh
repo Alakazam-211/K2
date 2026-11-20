@@ -163,9 +163,10 @@ assert_off_children() {
         ok "$label: the token is in no child's environment"
     fi
     # The wrappers really ran (doc cores --json needs only curl). A command
-    # the k5 binary answers itself (NATIVE_IN_K5=1) starts no python3 and
-    # no curl there at all.
-    if [ "${NATIVE_IN_K5:-0}" = 1 ] && [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    # the k5 binary answers itself (NATIVE_IN_K5=1 on the case, or `native`
+    # as this function's second argument) starts no python3 and no curl
+    # there at all, with the k5 binary under test.
+    if { [ "${NATIVE_IN_K5:-0}" = 1 ] || [ "${2:-}" = native ]; } && [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
         if grep -q -e '^python3 ' -e '^curl ' "$ARGLOG"; then bad "$label: the binary started a python3 or curl child"; else ok "$label: the binary started no python3 or curl child"; fi
     elif grep -q -e '^python3 ' -e '^curl ' "$ARGLOG"; then ok "$label: python3 or curl children were logged"; else bad "$label: no python3 or curl child was logged"; fi
 }
@@ -219,7 +220,7 @@ fresh
 run_k2 "" connect logout
 expect_eq "connect logout: exit 0" "$RC" "0"
 assert_sent "connect logout" /auth/v1/logout
-assert_off_children "connect logout (the saved token)"
+assert_off_children "connect logout (the saved token)" native
 run_k2 "" connect --help
 case "$ERR$OUT" in *"k2 connect login [--email <e>] [--token-stdin] [--subdomain <label>]"*) ok "connect help: --token-stdin is shown" ;; *) bad "connect help: no --token-stdin" ;; esac
 unset K2_CONNECT_DB_URL

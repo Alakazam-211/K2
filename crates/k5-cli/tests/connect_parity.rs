@@ -733,6 +733,129 @@ fn connect_other_arms_answer_as_the_shell_does() {
 }
 
 /// The lines name the command by the brand's name.
+fn account_only(r: &Rig) {
+    owner_and_port(r);
+    files(r, Some(ACCOUNT), None);
+}
+
+fn no_account(r: &Rig) {
+    owner_and_port(r);
+    files(r, None, None);
+}
+
+fn db_setting(r: &Rig) {
+    no_account(r);
+    put(
+        r,
+        "settings.json",
+        Some(br#"{"connectDbUrl":" https://db.example/ "}"#),
+    );
+}
+
+fn bad_db_setting(r: &Rig) {
+    no_account(r);
+    put(r, "settings.json", Some(br#"{"connectDbUrl":"http://db.example"}"#));
+}
+
+/// `connect logout`: the account server's line, the usage stop, the saved
+/// session cleared with the best-effort logout to a server that isn't
+/// there (nothing reaches any stub, and nothing it meets is shown). The
+/// logout that reaches the account server is tests/cli/remote_token_stdin.sh's
+/// (that server is no daemon, so the rig can't tell its sides apart).
+#[test]
+fn connect_logout_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "logout");
+    let dead = format!("http://127.0.0.1:{}/", dead_port());
+    let v = vec![
+        // covers: connect logout
+        case("no saved session", &["logout"], &[], vec![], no_account, 0, 0),
+        case(
+            "a saved session, the account server not there",
+            &["logout"],
+            &[("K2_CONNECT_DB_URL", dead.as_str())],
+            vec![],
+            account_only,
+            0,
+            0,
+        ),
+        case(
+            "K2_CONNECT_DB_URL that is not https",
+            &["logout"],
+            &[("K2_CONNECT_DB_URL", "ftp://db.example")],
+            vec![],
+            no_account,
+            0,
+            0,
+        ),
+        case(
+            "K2_CONNECT_DB_URL with a user part, then the setting",
+            &["logout"],
+            &[("K2_CONNECT_DB_URL", "https://u@db.example")],
+            vec![],
+            db_setting,
+            0,
+            0,
+        ),
+        case(
+            "the connectDbUrl setting",
+            &["logout"],
+            &[],
+            vec![],
+            db_setting,
+            0,
+            0,
+        ),
+        case(
+            "a connectDbUrl setting that is plain http",
+            &["logout"],
+            &[],
+            vec![],
+            bad_db_setting,
+            0,
+            0,
+        ),
+        case(
+            "a word after logout: its note first, then the usage",
+            &["logout", "now"],
+            &[("K2_CONNECT_DB_URL", "https://db.example")],
+            vec![],
+            account_only,
+            2,
+            0,
+        ),
+        case(
+            "-h: help, nothing cleared or sent",
+            &["logout", "-h"],
+            &[],
+            vec![],
+            account_only,
+            0,
+            0,
+        ),
+        case(
+            "HOOK_SOCK set and no passport",
+            &["logout"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            account_only,
+            3,
+            0,
+        ),
+        case(
+            "the virtual desktop's guard",
+            &["logout"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            account_only,
+            3,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
 #[test]
 fn connect_lines_say_the_brand_s_name() {
     let cli = k2_client::brand::CLI_NAME;
@@ -745,4 +868,34 @@ fn connect_lines_say_the_brand_s_name() {
     );
     assert_eq!(out.code, Some(2));
     assert!(log.is_empty());
+    let dead = format!("http://127.0.0.1:{}", dead_port());
+    let c = case(
+        "brand: logout",
+        &["logout"],
+        &[("K2_CONNECT_DB_URL", dead.as_str())],
+        vec![],
+        account_only,
+        0,
+        0,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(out.code, Some(0));
+    assert!(log.is_empty());
+    assert!(
+        out.stderr
+            .starts_with(&format!("{cli} connect: account server {dead} (from K2_CONNECT_DB_URL)\n")),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stdout.ends_with(&format!(
+            "To unpair this device: {cli} tunnel release --confirm\n"
+        )),
+        "{}",
+        out.stdout
+    );
+    assert!(!rig.k2home.join("connect-account.json").exists());
+    let c = case("brand: logout's usage", &["logout", "x"], &[], vec![], no_account, 2, 0);
+    let (out, _) = rig.binary(&c, false);
+    assert_eq!(out.stderr, format!("Usage: {cli} connect logout\n"));
 }

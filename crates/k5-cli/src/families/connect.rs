@@ -61,8 +61,7 @@ use std::path::Path;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["connect"];
-/// The binary's but for `login` and `logout`, which [`run`] hands to the
-/// shell (they talk to the account service over HTTPS).
+/// The binary's but for `login`, which [`run`] hands to the shell.
 pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
 /// No verb rows: every form is [`OWNER`]'s.
 pub const VERBS: &[crate::route::Verb] = &[];
@@ -107,7 +106,30 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .collect::<Option<_>>()?;
     match words.first().copied().unwrap_or("") {
         "status" => {}
-        "login" | "logout" => return None,
+        "login" => return None,
+        "logout" => {
+            if !python::family_native(python::here()) {
+                return None;
+            }
+            let settings = match daemon::current() {
+                Ok(s) => s,
+                Err(e) => {
+                    out::stderr_line(&format!("Error: {e}"));
+                    return Some(Exit::Error);
+                }
+            };
+            if let Some(Gate::VirtualDesktop) = prelude::gate(&settings) {
+                return Some(Gate::VirtualDesktop.stop());
+            }
+            let would_refuse = passport::current(args).would_refuse();
+            if let Some(stop) =
+                prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL)
+            {
+                return Some(stop);
+            }
+            let home = crate::home::k2_home().ok()?;
+            return logout::run(&words[1..], &home);
+        }
         _ => {
             if !python::family_native(python::here()) {
                 return None;
@@ -260,6 +282,13 @@ fn as_text(cps: &[u32]) -> String {
         .filter(|cp| **cp != 0)
         .map(|cp| char::from_u32(*cp).unwrap_or('?'))
         .collect()
+}
+
+/// `(d.get(key) or "").strip()` as the shell reads the field back, or
+/// `None` where Python raises (a value that is not a string, an object
+/// that is not a dict).
+pub fn field_text(d: &Value, key: &str) -> Option<String> {
+    field(d, key).map(|cps| as_text(&cps))
 }
 
 /// The account line's email: `_connect_account_read` writes the access
@@ -506,3 +535,5 @@ fn run_with(
 
 #[cfg(test)]
 mod tests;
+
+pub mod logout;

@@ -1985,3 +1985,285 @@ fn template_writes() {
     });
     check(&rig, v);
 }
+
+const IDENTITY: &str = r##"{"ok":true,"handle":"qa","displayName":"QA Bot","color":"#33aa77","image":"data:image/png;base64,AA==","canEditIdentity":true,"canEditHandle":true}"##;
+
+fn pictures(r: &Rig) {
+    owner_and_port(r);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend((0u8..=255).cycle().take(3000));
+    std::fs::write(r.proj.join("pic.png"), png).unwrap();
+    std::fs::write(r.proj.join("pic.gif"), b"GIF89a....").unwrap();
+    std::fs::write(r.proj.join("pic.webp"), b"RIFF\x10\0\0\0WEBPVP8 ").unwrap();
+}
+
+#[test]
+fn identity() {
+    let rig = Rig::new(VERB, "identity");
+    let mut v = vec![
+        // covers: agent identity
+        case("read by name", &["identity", "qa"], &[], vec![ok(IDENTITY)], owner_and_port, 0, 1),
+        case(
+            "read this workspace",
+            &["identity"],
+            &[],
+            vec![ok(r#"{"handle":"me","displayName":"","canEditIdentity":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "read by path",
+            &["identity", "sub/agent one"],
+            &[],
+            vec![ok(r#"{"handle":"one"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent identity --json
+        case("read --json", &["identity", "qa", "--json"], &[], vec![ok(IDENTITY)], owner_and_port, 0, 1),
+        case(
+            "change the color and name",
+            &["identity", "qa", "--color", " rgb(51, 170, 119) ", "--name", "QA Bot"],
+            &[],
+            vec![ok(r#"{"ok":true,"handle":"qa","changed":["name","color"],"displayName":"QA Bot","color":"#33aa77"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a color the daemon checks",
+            &["identity", "qa", "--color", "1,2,300"],
+            &[],
+            vec![Reply::Answer(400, r#"{"error":"bad_color","message":"use #rgb or #rrggbb"}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an empty name, no change",
+            &["identity", "--name", "", "qa"],
+            &[],
+            vec![ok(r#"{"ok":true,"handle":"qa","changed":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "clear the picture --json",
+            &["identity", "qa", "--clear-image", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true,"handle":"qa","changed":["image"]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a PNG picture",
+            &["identity", "qa", "--image", "pic.png"],
+            &[],
+            vec![ok(r#"{"ok":true,"handle":"qa","changed":["image"],"image":"x"}"#)],
+            pictures,
+            0,
+            1,
+        ),
+        case(
+            "a WebP picture",
+            &["identity", "--image", "pic.webp"],
+            &[],
+            vec![ok(r#"{"ok":true,"handle":"me","changed":["image"]}"#)],
+            pictures,
+            0,
+            1,
+        ),
+        case(
+            "a GIF: refused here",
+            &["identity", "qa", "--image", "pic.gif"],
+            &[],
+            vec![],
+            pictures,
+            2,
+            0,
+        ),
+        case(
+            "not found",
+            &["identity", "nobody"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":"not_found","message":"no agent nobody"}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "refused",
+            &["identity", "qa", "--name", "X"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":"agents can't rename themselves"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "rate limited",
+            &["identity", "qa", "--color", "#fff"],
+            &[],
+            vec![Reply::Answer(429, r#"{"error":"rate_limited","retryAfterSecs":12}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an answer that is not JSON",
+            &["identity", "qa"],
+            &[],
+            vec![Reply::Answer(500, "oops".into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case("an empty answer", &["identity", "qa"], &[], vec![ok("")], owner_and_port, 1, 1),
+        case("no answer", &["identity", "qa"], &[], vec![Reply::Close], owner_and_port, 1, 1),
+        case(
+            "a session with no passport: refused",
+            &["identity", "qa"],
+            &[("K2_HOOK_SOCK", "{nosock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        Case {
+            env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+            ..case(
+                "a session with a passport: its own workspace",
+                &["identity", "--color", "#123456"],
+                &[],
+                vec![ok(r#"{"ok":true,"handle":"me","changed":["color"]}"#)],
+                owner_and_port,
+                0,
+                1,
+            )
+        },
+    ];
+    for args in [
+        &["identity", "--name"][..],
+        &["identity", "qa", "--zz"],
+        &["identity", "a", "b"],
+        &["identity", "qa", "--image", "pic.png", "--clear-image"],
+        &["identity", "qa", "--image", "missing.png"],
+    ] {
+        v.push(case(
+            "a usage line",
+            leak(args),
+            &[],
+            vec![],
+            pictures,
+            2,
+            0,
+        ));
+    }
+    check(&rig, v);
+}
+
+#[test]
+fn access() {
+    let rig = Rig::new(VERB, "access");
+    let mut v = vec![
+        // covers: agent access
+        case("alone: the switches, exit 2", &["access"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "chat_manage on",
+            &["access", "set", "qa", "chat_manage", "on"],
+            &[],
+            vec![ok(r#"{"ok":true,"workspace":"qa","agentsCanManageChat":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "chat_refresh off",
+            &["access", "set", "qa", "chat_refresh", "off"],
+            &[],
+            vec![ok(r#"{"ok":true,"agentsCanRefreshChat":false,"workspace":"qa"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "agents_hire on",
+            &["access", "set", "/srv/qa", "agents_hire", "on"],
+            &[],
+            vec![ok(r#"{"ok":true,"agentsCanHire":true,"workspace":"/srv/qa"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "agents_manage on",
+            &["access", "set", "qa", "agents_manage", "on"],
+            &[],
+            vec![ok(r#"{"ok":true,"toggle":"agents_manage","agentsCanManage":true,"workspace":"qa"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent access --json
+        case(
+            "--json",
+            &["access", "set", "--json", "qa", "chat_manage", "off"],
+            &[],
+            vec![ok(r#"{"ok":true,"workspace":"qa","agentsCanManageChat":false}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "refused",
+            &["access", "set", "qa", "chat_manage", "on"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":"owner or admin only"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "a bad request",
+            &["access", "set", "qa", "chat_manage", "on"],
+            &[],
+            vec![Reply::Answer(400, r#"{"error":"unknown workspace qa"}"#.into())],
+            owner_and_port,
+            2,
+            1,
+        ),
+        traceback(case(
+            "an answer that is not JSON",
+            &["access", "set", "qa", "agents_hire", "off"],
+            &[],
+            vec![ok("nope")],
+            owner_and_port,
+            1,
+            1,
+        )),
+    ];
+    for args in [
+        &["access", "get"][..],
+        &["access", "set"],
+        &["access", "set", "qa"],
+        &["access", "set", "qa", "nope", "on"],
+        &["access", "set", "qa", "chat_manage", "maybe"],
+        &["access", "set", "--x"],
+        &["access", "set", "a", "chat_manage", "on", "d"],
+    ] {
+        v.push(case(
+            "a usage line",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ));
+    }
+    check(&rig, v);
+}

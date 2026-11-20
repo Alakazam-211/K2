@@ -3,8 +3,9 @@
 //! (`cli/src/router.sh`, `cli/src/agent.sh`).
 //!
 //! Native here: `conf`, `get`, `list`, `retire`, `restart`, `context`
-//! (`cli/src/agent-context.sh`) and `template` (`cli/src/agent-template.sh`;
-//! its help forms stay the shell's). Every other
+//! (`cli/src/agent-context.sh`), `template` (`cli/src/agent-template.sh`;
+//! its help forms stay the shell's), `identity` (an `id` tool: the
+//! session rules of [`crate::prelude::id_tool`]) and `access`. Every other
 //! verb, and the family alone, is still the shell's: [`run`] hands it
 //! back before anything is printed or sent.
 //!
@@ -50,6 +51,7 @@
 
 mod conf;
 mod context;
+mod identity;
 mod list;
 mod retire;
 mod template;
@@ -95,6 +97,10 @@ enum Form {
     Template(template::Verb, bool),
     /// A template verb's usage line: plain text, not JSON.
     TemplateUsage(String),
+    Identity(identity::IdentityArgs),
+    Access(identity::Access),
+    /// Plain lines on stderr, exit 2.
+    Lines(Vec<String>),
 }
 
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -107,7 +113,27 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if rest.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
+    let hook_sock = super::hook_sock();
+    // The `id` tools: the shell looks for a shared Codex server first.
+    let tool = match *verb {
+        "identity" => Some(identity::IDENTITY_TOOL),
+        _ => None,
+    };
+    if tool.is_some()
+        && hook_sock.is_some()
+        && prelude::codex_env(std::env::vars_os().map(|(name, _)| name))
+    {
+        return None;
+    }
     let form = match *verb {
+        "identity" => {
+            let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
+            match identity::parse_identity(rest, pwd.to_str()?)? {
+                Ok(a) => Ok(Form::Identity(a)),
+                Err(lines) => Ok(Form::Lines(lines)),
+            }
+        }
+        "access" => Ok(Form::Access(identity::parse_access(rest))),
         "conf" => conf::parse_conf(rest).map(Form::Conf),
         "get" => conf::parse_get(rest).map(Form::Get),
         "list" => list::parse(rest).map(|json| Form::List { json }),
@@ -140,6 +166,12 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return Some(gate.stop());
     }
     curl_port(settings.port_text.as_deref()?)?;
+    if let Some(tool) = tool {
+        let would_refuse = passport::current(args).would_refuse();
+        if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, tool) {
+            return Some(stop);
+        }
+    }
     Some(run_form(args, form, settings))
 }
 
@@ -152,12 +184,20 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
         }
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
+    let project = settings.project.clone();
+    // `_cli_caller_is_agent_passport`: a cell socket set and a passport.
+    let agent_passport = settings.session
+        && matches!(settings.auth, crate::transport::Auth::Passport { .. });
     let mut client = match settings.client(passport::current(args).would_refuse()) {
         Ok(c) => c,
         Err(e) => {
             out::stderr_line(&format!("Error: {e}"));
             return Exit::Error;
         }
+    };
+    let form = match form {
+        Form::Access(identity::Access::Set(a)) => return identity::access(client, &a),
+        other => other,
     };
     let mut closing = Closing::default();
     let exit = match form {
@@ -172,6 +212,20 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
             out::stderr_line(&line);
             Exit::Usage
         }
+        Form::Identity(a) => {
+            identity::identity(&mut client, &mut closing, &a, &project, agent_passport)
+        }
+        Form::Access(identity::Access::Page) => {
+            Shown::out(identity::access_page()).print();
+            Exit::Usage
+        }
+        Form::Access(identity::Access::Usage(lines)) | Form::Lines(lines) => {
+            for l in lines {
+                out::stderr_line(&l);
+            }
+            Exit::Usage
+        }
+        Form::Access(identity::Access::Set(_)) => unreachable!("sent above"),
     };
     closing.flush(&mut client, exit);
     exit

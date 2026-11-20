@@ -353,45 +353,11 @@ fn or(v: Option<Value>, default: Value) -> Value {
 /// `when(ts)`: `time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ts)))`,
 /// or `?` where any step raises.
 fn when(ts: Option<&Value>) -> String {
-    let Some(n) = ts.and_then(py_int) else {
+    let Some(n) = ts.and_then(|v| p::py_int(v).ok()) else {
         return "?".into();
     };
     crate::families::app::py::local_time(&Value::Int(n), "%Y-%m-%d %H:%M", 0)
         .unwrap_or_else(|_| "?".into())
-}
-
-/// `int(v)`'s digits, or `None` where it raises.
-fn py_int(v: &Value) -> Option<String> {
-    match v {
-        Value::Int(d) => Some(d.clone()),
-        Value::Bool(b) => Some(if *b { "1" } else { "0" }.into()),
-        Value::Float(f) if f.is_finite() => Some(format!("{:.0}", f.trunc())),
-        Value::Str(t) => {
-            let text = p::text(t);
-            let w = text.trim_matches(super::super::py_space);
-            let (sign, digits) = match w.strip_prefix('-') {
-                Some(r) => ("-", r),
-                None => ("", w.strip_prefix('+').unwrap_or(w)),
-            };
-            let ok = !digits.is_empty()
-                && !digits.starts_with('_')
-                && !digits.ends_with('_')
-                && !digits.contains("__")
-                && digits.chars().all(|c| c.is_ascii_digit() || c == '_');
-            if !ok {
-                return None;
-            }
-            let clean: String = digits.chars().filter(|c| *c != '_').collect();
-            let trimmed = clean.trim_start_matches('0');
-            let body = if trimmed.is_empty() { "0" } else { trimmed };
-            Some(if body == "0" {
-                "0".into()
-            } else {
-                format!("{sign}{body}")
-            })
-        }
-        _ => None,
-    }
 }
 
 /// `evs[:5]`, or the exception's text.

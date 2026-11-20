@@ -489,7 +489,9 @@ fn err_bytes(lines: &[Vec<u8>]) {
 
 /// `cmd_remote_logout` after the router's checks. `None`: the shell
 /// answers (nothing read, nothing sent).
-pub fn run(words: &[&str], home: &Path) -> Option<Exit> {
+/// `hand`: whether the shell's own token came from disk, and whether
+/// the passport rule would refuse (its hand-over headers).
+pub fn run(words: &[&str], home: &Path, hand: (bool, bool)) -> Option<Exit> {
     let (host, base, from_stdin) = match parse(words) {
         Form::Usage(line) => {
             out::stderr_line(&line);
@@ -516,10 +518,16 @@ pub fn run(words: &[&str], home: &Path) -> Option<Exit> {
     ) {
         return None;
     }
-    Some(send(&host, &target, from_stdin, home))
+    Some(send(&host, &target, from_stdin, home, hand))
 }
 
-fn send(host: &str, target: &remote::Base, from_stdin: bool, home: &Path) -> Exit {
+fn send(
+    host: &str,
+    target: &remote::Base,
+    from_stdin: bool,
+    home: &Path,
+    hand: (bool, bool),
+) -> Exit {
     let c = cli_name!();
     let token = if from_stdin {
         let secret = prompt::read_secret_stdin(&format!("Token for {host}: "));
@@ -547,8 +555,11 @@ fn send(host: &str, target: &remote::Base, from_stdin: bool, home: &Path) -> Exi
         }
     };
     let mut client = Client::new(target.host.clone(), target.port, "", Auth::None);
-    remote::apply(&mut client, target, String::new());
-    client.auth = Auth::None;
+    remote::apply(&mut client, target, token.clone());
+    // The hand-over headers are the shell's: `X-K5-Owner-Source: disk`
+    // when its own token came from disk, whatever token this request
+    // carries.
+    (client.owner_from_disk, client.would_refuse) = hand;
     let how = OwnCurl {
         post: true,
         credential: Some(&token),

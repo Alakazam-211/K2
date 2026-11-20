@@ -103,7 +103,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             Ok(h) => h,
             Err(_) => return None,
         };
-        return logout::run(&words[1..], &home);
+        let from_disk = settings.client_on(0, would_refuse).owner_from_disk;
+        return logout::run(&words[1..], &home, (from_disk, would_refuse));
     }
     let (stdout, stderr, exit) = lines(sub);
     if !stdout.is_empty() {

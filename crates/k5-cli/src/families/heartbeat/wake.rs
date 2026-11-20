@@ -58,6 +58,9 @@ pub struct Setup {
     /// `Host` header); empty: none.
     pub port: String,
     pub token: String,
+    /// The token is the session's (`*_HOOK_TOKEN`): the shell's start
+    /// has switched it to a passport minted again ([`Wake::new`]).
+    pub from_env: bool,
 }
 
 /// `.strip()` of a file's text; `Some(None)`: no file to read (OSError);
@@ -81,6 +84,7 @@ impl Setup {
         };
         let mut port = env(env_names::PORT)?;
         let mut token = env(env_names::HOOK_TOKEN)?;
+        let from_env = !token.is_empty();
         if port.is_empty() {
             port = read_stripped(&home.join("heartbeat.port"))?.unwrap_or_default();
         }
@@ -99,7 +103,11 @@ impl Setup {
         {
             return None;
         }
-        Some(Setup { port, token })
+        Some(Setup {
+            port,
+            token,
+            from_env,
+        })
     }
 }
 
@@ -296,6 +304,16 @@ impl Wake {
     /// The block for `setup` with `client`'s hand-over headers and
     /// workspace. `client` comes back as it was.
     pub fn new(client: &mut Client, setup: &Setup) -> Wake {
+        // The prelude's `_cli_use_healed_passport` exports the passport it
+        // switched to as `*_HOOK_TOKEN`, which the block then reads.
+        let mut setup = setup.clone();
+        if setup.from_env {
+            client.use_healed_passport();
+            if let Auth::Passport { passport, .. } = &client.auth {
+                setup.token = passport.as_str().to_string();
+            }
+        }
+        let setup = &setup;
         let saved = std::mem::replace(&mut client.auth, Auth::Owner(setup.token.clone()));
         let opener = Opener::from_client(client);
         client.auth = saved;

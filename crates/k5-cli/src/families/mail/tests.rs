@@ -742,6 +742,85 @@ fn the_lines_that_raise_are_the_shell_s() {
         (super::core::line::INBOXES_GSUM, "gsum = \", \".join(\"%s:%s\" % (g.get(\"workspace\") o"),
         (super::core::line::INBOXES_OWNER_ROW, "print((\"%-\" + str(w) + \"s%-9s%-22s%s\") % ("),
         (super::core::line::INBOXES_SORTED, "for ws in sorted(set(b[2] for b in blocked)):"),
+        (super::reads::line::DOMAINS_CALL, "d = call(\"GET\", \"/cli/mail/domain/list\", params="),
+        (super::reads::line::DOMAINS_ROWS, "rows = d.get(\"domains\") or []"),
+        (super::reads::line::DOMAINS_PENDING, "pending = d.get(\"pending\") or []"),
+        (super::reads::line::DOMAINS_NAMES, "names = \", \".join(p if isinstance(p, str) else s"),
+        (super::reads::line::DOMAINS_FOR, "for r in rows:"),
+        (super::reads::line::DOMAINS_ROW, "print(\"%s%s\" % (r.get(\"domain\", \"?\"), \"   (defau"),
+        (super::reads::line::MESSAGES_CALL, "d = call(\"GET\", \"/cli/mail/messages\", params=par"),
+        (super::reads::line::MESSAGES_MSGS, "msgs = d.get(\"messages\") or []"),
+        (super::reads::line::MESSAGES_NEXT, "next_offset = d.get(\"nextOffset\")"),
+        (super::reads::line::MESSAGES_ERRORS, "inbox_errors = d.get(\"inboxErrors\") or []"),
+        (super::reads::line::MESSAGES_FOR, "for m in msgs:"),
+        (super::reads::line::MESSAGES_ATT, "if m.get(\"hasAttachment\"):"),
+        (super::reads::line::MESSAGES_UNREAD, "if m.get(\"unread\"):"),
+        (super::reads::line::MESSAGES_ROW, "print(\"%s · %s · %s · %s%s\" % (m.get(\"id\", \"\"), "),
+        (super::reads::line::MESSAGES_WINDOW, "hint = (d.get(\"searchWindow\") or {}).get(\"hint\")"),
+        (super::reads::line::MESSAGES_NOTE, "print(\"note:     %d inbox(es) had errors and wer"),
+        (super::reads::line::READ_CALL, "d = call(\"GET\", \"/cli/mail/read\", params=params)"),
+        (super::reads::line::READ_RAW, "sys.stdout.buffer.write(base64.b64decode(d.get(\""),
+        (super::reads::line::READ_FULL, "print_full(d.get(\"message\") or {})"),
+        (super::reads::line::ATT_POST, "d = call(\"POST\", \"/cli/mail/attachments\", params"),
+        (super::reads::line::ATT_GET, "d = call(\"GET\", \"/cli/mail/attachments\", params="),
+        (super::reads::line::ATT_WROTE, "print(\"wrote attachment #%s: %s (%s, %s bytes) -"),
+        (super::reads::line::ATT_ATTS, "atts = d.get(\"attachments\") or []"),
+        (super::reads::line::ATT_NONE, "print(\"No attachments on %s.\" % d.get(\"id\", \"\"))"),
+        (super::reads::line::ATT_FOR, "for a in atts:"),
+        (super::reads::line::ATT_ROW, "print(\"  %s. %s (%s, %s bytes)\" % (a.get(\"index\""),
+        (super::reads::line::ATT_FETCH, "print(\"fetch one: k2 mail attachments %s --get <"),
+        (super::reads::line::WAIT_CALL, "d = call(\"GET\", \"/cli/mail/wait\", params=params,"),
+        (super::reads::line::WAIT_TIMED_OUT, "if d.get(\"timedOut\"):"),
+        (super::reads::line::WAIT_DIE, "die({\"code\": \"timeout\","),
+        (super::reads::line::WAIT_FULL, "print_full(d.get(\"message\") or {})"),
+        (super::reads::line::CANCEL_CALL, "d = call(\"POST\", \"/cli/mail/outbox/cancel\","),
+        (super::reads::line::CANCEL_PRINT, "print(d.get(\"hint\") or (\"cancelled %s\" % d.get(\""),
+        (super::reads::line::OUTBOX_CALL, "d = call(\"GET\", \"/cli/mail/outbox\", params=param"),
+        (super::reads::line::OUTBOX_DETAIL, "print_outbound_detail(d.get(\"outbound\") or {})"),
+        (super::reads::line::OUTBOX_ROWS, "rows = d.get(\"outbox\") or []"),
+        (super::reads::line::OUTBOX_FOR, "for r in rows:"),
+        (super::reads::line::OUTBOX_ROW, "print_outbound_row(r)"),
+        (super::reads::line::DRAFTS_CALL, "d = call(\"GET\", \"/cli/mail/drafts\", params=param"),
+        (super::reads::line::DRAFTS_ROWS, "rows = d.get(\"drafts\") or []"),
+        (super::reads::line::DRAFTS_FOR, "for r in rows:"),
+        (super::reads::line::DRAFTS_ST, "st = r.get(\"status\") or \"?\""),
+        (super::reads::line::DRAFTS_LINE, "line = \"%s  %-9s %-34s answers %s\" % (r.get(\"id\""),
+        (super::reads::line::DRAFTS_EDITED, "if r.get(\"editedBy\"):"),
+        (super::reads::line::DRAFTS_EDITED_BY, "line += \"  · edited by %s\" % r[\"editedBy\"]"),
+        (super::reads::line::DRAFTS_STATE, "if st in (\"sent\", \"held\", \"discarded\") and r.get"),
+        (super::reads::line::DRAFTS_STATE_BY, "line += \"  · %s by %s\" % (st, r[\"stateBy\"])"),
+        (super::reads::line::DRAFTS_OUTBOUND, "if r.get(\"outboundId\"):"),
+        (super::reads::line::DRAFTS_OUTBOUND_ID, "line += \"  · outbox %s\" % r[\"outboundId\"]"),
+        (super::reads::line::CAPS_REQUEST, "d = request(\"GET\", \"/cli/mail/capabilities\", par"),
+        (super::reads::line::CAPS_ERR, "err = d.get(\"error\") if isinstance(d.get(\"error\""),
+        (super::reads::line::CAPS_HINT, "if err and \"project\" in params and str(err.get(\""),
+        (super::reads::line::CAPS_AGAIN, "d = request(\"GET\", \"/cli/mail/capabilities\", par"),
+        (super::reads::line::CAPS_IS_ERR, "if isinstance(d.get(\"error\"), dict):"),
+        (super::reads::line::CAPS_DIE_ERR, "die(d[\"error\"])"),
+        (super::reads::line::CAPS_ROWS, "rows = [d] if env(\"M_ADDRESS\") else (d.get(\"inbo"),
+        (super::reads::line::CAPS_FOR, "for r in rows:"),
+        (super::reads::line::CAPS_C, "c = r.get(\"capabilities\") or {}"),
+        (super::reads::line::CAPS_MAIL, "mail = c.get(\"mail\") or {}"),
+        (super::reads::line::CAPS_CAL, "cal = c.get(\"calendar\") or {}"),
+        (super::reads::line::CAPS_ON, "on = lambda m: \",\".join(k for k in (\"read\", \"dra"),
+        (super::reads::line::CAPS_LVL, "lvl = r.get(\"yourLevel\")"),
+        (super::reads::line::CAPS_FIRST, "print(\"%s  [%s]%s\" % (r.get(\"address\", \"?\"), c.g"),
+        (super::reads::line::CAPS_SECOND, "print(\"  mail: %s   calendar: %s   free/busy: %s"),
+        (super::reads::line::CAPS_ACCT, "acct = c.get(\"account\")"),
+        (super::reads::line::CAPS_ACCT_LINE, "print(\"  account: %s%s%s\""),
+        (super::reads::line::CAPS_MISSING, "for m in c.get(\"missing\") or []:"),
+        (super::reads::line::CAPS_MISSING_LINE, "print(\"  - %s off (%s): %s\" % (m.get(\"cap\"), m.g"),
+        (super::reads::line::INBOXES_CALL, "d = call(\"GET\", \"/cli/mail/inboxes\", params={\"pr"),
+        (super::reads::line::INBOXES_ROWS, "rows = d.get(\"inboxes\") or []"),
+        (super::reads::line::INBOXES_OWNER, "owner_catalog = bool(rows) and all(r.get(\"yourLe"),
+        (super::reads::line::INBOXES_PRINT, "print_inboxes(rows, agent_view=not owner_catalog"),
+        (super::reads::line::FOLDERS_CALL, "d = call(\"GET\", \"/cli/mail/folder/list\","),
+        (super::reads::line::FOLDERS_LIST, "folders = d.get(\"folders\") or []"),
+        (super::reads::line::FOLDERS_FOR, "for f in folders:"),
+        (super::reads::line::FOLDER_CREATE_CALL, "d = call(\"POST\", \"/cli/mail/folder/create\","),
+        (super::reads::line::FOLDER_CREATE_PRINT, "print(\"created folder '%s' in %s\" % (d.get(\"fold"),
+        (super::reads::line::FOLDER_RENAME_CALL, "d = call(\"POST\", \"/cli/mail/folder/rename\","),
+        (super::reads::line::FOLDER_RENAME_PRINT, "print(\"renamed '%s' -> '%s' in %s\""),
     ];
     for (n, text) in pins {
         let got = s[*n as usize - 1].trim();
@@ -763,6 +842,99 @@ fn the_boot_script_runs_the_mail_script_at_its_line_13() {
         .position(|l| l.starts_with("exec(compile(_b, \"<stdin>\""))
         .expect("the exec line");
     assert_eq!(line as u32 + 1, super::core::BOOT_LINE);
+}
+
+mod reads_words {
+    use super::super::core::{Env, Plan};
+    use super::super::reads::{b64decode, parse};
+    use crate::out::json::Value;
+    use k2_client::brand::CLI_NAME;
+
+    fn hint(verb: &str, words: &[&str]) -> String {
+        match parse(verb, words) {
+            Plan::Usage(h) => h,
+            other => panic!("{verb} {words:?}: {other:?}"),
+        }
+    }
+
+    fn env(verb: &str, words: &[&str]) -> Env {
+        match parse(verb, words) {
+            Plan::Run(e) => e,
+            other => panic!("{verb} {words:?}: {other:?}"),
+        }
+    }
+
+    /// Under any brand: the usage lines name the brand's command, never
+    /// another.
+    #[test]
+    fn usage_lines_name_the_brand_s_command() {
+        for (verb, words) in [
+            ("inboxes", &["x"][..]),
+            ("messages", &["--nope"]),
+            ("read", &[]),
+            ("read", &["-x"]),
+            ("attachments", &[]),
+            ("wait", &["--nope"]),
+            ("drafts", &["x"]),
+            ("outbox", &["--x"]),
+            ("outbox", &["cancel", "a", "-x"]),
+            ("capabilities", &["-x"]),
+            ("folder", &["move"]),
+            ("folder", &["list"]),
+        ] {
+            let h = hint(verb, words);
+            assert!(h.contains(&format!("{CLI_NAME} mail ")), "{verb}: {h}");
+            if CLI_NAME != "k2" {
+                assert!(!h.contains("k2 ") && !h.contains("k5 "), "{verb}: {h}");
+            }
+        }
+    }
+
+    #[test]
+    fn folder_fills_its_words_as_bash_does() {
+        let e = env("folder", &["rename", "", "a@x", "", "Old", "New"]);
+        assert_eq!(
+            (e.get("M_ADDRESS"), e.get("M_FOLDER_FROM"), e.get("M_FOLDER_TO")),
+            ("a@x", "Old", "New")
+        );
+        assert_eq!(parse("folder", &[]), Plan::Help("mail/delete"));
+        assert!(crate::text::help("mail/delete").is_some());
+    }
+
+    #[test]
+    fn numbers_bash_cannot_read_are_the_shell_s() {
+        assert_eq!(parse("messages", &["--limit", "99999999999999999999"]), Plan::Shell);
+        assert_eq!(parse("wait", &["--timeout", "99999999999999999999"]), Plan::Shell);
+        assert_eq!(
+            parse("attachments", &["m", "--get", "99999999999999999999", "--out", "f"]),
+            Plan::Shell
+        );
+        assert_eq!(parse("outbox", &["--limit", "99999999999999999999"]), Plan::Shell);
+        assert!(matches!(parse("messages", &["--limit", "0200"]), Plan::Run(_)));
+        assert!(matches!(parse("wait", &["--timeout", "0900"]), Plan::Run(_)));
+    }
+
+    #[test]
+    fn base64_as_python_decodes_it() {
+        let s = |t: &str| Value::Str(t.into());
+        assert_eq!(b64decode(&s("QUJD")).unwrap(), b"ABC");
+        assert_eq!(b64decode(&s("QU JD\n")).unwrap(), b"ABC");
+        assert_eq!(b64decode(&s("QQ==")).unwrap(), b"A");
+        assert_eq!(b64decode(&s("QQ==QUJD")).unwrap(), b"A");
+        assert_eq!(b64decode(&s("=QUJD")).unwrap(), b"ABC");
+        assert_eq!(
+            b64decode(&s("QUJDR")),
+            Err("binascii.Error: Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4".into())
+        );
+        assert_eq!(
+            b64decode(&s("QUJDRA")),
+            Err("binascii.Error: Incorrect padding".into())
+        );
+        assert_eq!(
+            b64decode(&Value::Int("1".into())),
+            Err("TypeError: argument should be a bytes-like object or ASCII string, not 'int'".into())
+        );
+    }
 }
 
 mod core_rules {

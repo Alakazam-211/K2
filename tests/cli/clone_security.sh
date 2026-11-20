@@ -17,7 +17,10 @@
 #   this computer's confirm goes through the vault socket only (none: no
 #   prompt, no TCP); a password is read from a real terminal only, with
 #   echo off (no controlling terminal: confirm_needs_a_person, never stdin);
-#   Ctrl-C stops with 130 and the cancelled line, echo back on.
+#   Ctrl-C stops with 130 and the cancelled line, echo back on; clone-tmp
+#   is a folder of ours at 0700 (a link there is refused); the download's
+#   .part is 0600 and is gone after a refused range, a short download,
+#   Ctrl-C or SIGTERM.
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -310,6 +313,25 @@ import json, sys
 for l in open(sys.argv[1]):
     r = json.loads(l)
     if r["path"] == sys.argv[2]: print(r["body"])' "$W/log-$1.jsonl" "$2"; }
+mode() { "$PY" -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$1"; }
+parts() { find "$KH/clone-tmp" -name '*.part' 2>/dev/null | sort; }
+# bg K2-ARGS…: run the CLI in the background (BG = its pid) with SIGINT at
+# its default (bash would start it with SIGINT ignored).
+bg() {
+    "$PY" -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' \
+        "$K2" "$@" </dev/null >"$W/out" 2>"$W/err" &
+    BG=$!
+}
+bg_wait() { set +e; wait "$BG"; RC=$?; set -e; OUT="$(cat "$W/out")"; ERR="$(cat "$W/err")"; }
+# hanging: wait until the remote holds the second range, then ENGINE = the
+# clone engine's pid (the one python3 running the stdin boot).
+hanging() {
+    local i
+    for i in $(seq 1 300); do [ -f "$W/hanging" ] && break; sleep 0.1; done
+    [ -f "$W/hanging" ] || { bad "the download never reached the second range"; return 1; }
+    ENGINE="$(pgrep -f K2_STDIN_SECRETS)"
+    [ "$(printf '%s\n' "$ENGINE" | wc -l)" = 1 ] && [ -n "$ENGINE" ] || { bad "not exactly one clone engine: '$ENGINE'"; return 1; }
+}
 refused_line() { printf "refused: %s isn't https, so k2 won't send your token or password there; use https://%s" "$1" "$1"; }
 printf '%s\n' "$REMOTE_TOKEN" >"$W/token-in"
 save_token() {
@@ -420,6 +442,59 @@ expect_has "Ctrl-C: the cancelled line" "$ERR" '{"error": "cancelled", "hint": "
 expect_eq "Ctrl-C: echo is on again after" "$ECHO" "on"
 expect_not "Ctrl-C: no confirm finished" "$(paths vault)" "confirm/finish"
 expect_not "Ctrl-C: nothing bundled" "$(paths local)" "/cli/clone/bundle"
+
+echo "== clone-tmp and the download's .part =="
+fresh
+k2 clone from "$REMOTE:ws1" --token "$REMOTE_TOKEN" --yes --json
+expect_eq "pull: ok" "$RC" "0"
+expect_eq "a new clone-tmp is 0700" "$(mode "$KH/clone-tmp")" "700"
+expect_eq "the downloaded bundle is 0600" "$(mode "$KH/clone-tmp/bundle-job-1.tar")" "600"
+expect_has "this server unpacked the download" "$(body local /cli/clone/unpack)" "$KH/clone-tmp/bundle-job-1.tar"
+fresh
+mkdir -m 755 "$KH/clone-tmp"
+chmod 755 "$KH/clone-tmp"
+k2 clone from "$REMOTE:ws1" --token "$REMOTE_TOKEN" --yes --json
+expect_eq "pull into an old 0755 clone-tmp: ok" "$RC" "0"
+expect_eq "an old 0755 clone-tmp is 0700 after" "$(mode "$KH/clone-tmp")" "700"
+fresh
+mkdir "$W/elsewhere"
+ln -s "$W/elsewhere" "$KH/clone-tmp"
+k2 clone from "$REMOTE:ws1" --token "$REMOTE_TOKEN" --yes --json
+expect_eq "clone-tmp is a link: exit 3" "$RC" "3"
+expect_has "clone-tmp is a link: clone_tmp_unsafe" "$ERR" '"error": "clone_tmp_unsafe"'
+expect_eq "clone-tmp is a link: nothing written where it points" "$(ls -A "$W/elsewhere")" ""
+expect_has "clone-tmp is a link: the remote pack is cleaned up" "$(paths remote)" "POST /cli/clone/pack-cleanup"
+fresh
+scn remote '{"rr": "fail2"}'
+k2 clone from "$REMOTE:ws1" --token "$REMOTE_TOKEN" --yes --json
+expect_eq "a refused second range: exit 3" "$RC" "3"
+expect_has "a refused second range: read_failed" "$ERR" "read_failed"
+expect_eq "a refused second range: no .part left" "$(parts)" ""
+expect_has "a refused second range: the remote pack is cleaned up" "$(paths remote)" "POST /cli/clone/pack-cleanup"
+fresh
+scn remote '{"rr": "short"}'
+k2 clone from "$REMOTE:ws1" --token "$REMOTE_TOKEN" --yes --json
+expect_eq "a short download: exit 3" "$RC" "3"
+expect_has "a short download: download_failed" "$ERR" '"error": "download_failed"'
+expect_eq "a short download: no .part left" "$(parts)" ""
+for sig in TERM INT; do
+    fresh
+    scn remote '{"rr": "hang2"}'
+    bg clone from "$REMOTE:ws1" --token "$REMOTE_TOKEN" --yes --json
+    if hanging; then
+        expect_eq "SIG$sig: the .part is 0600 while it is written" "$(mode "$KH/clone-tmp/bundle-job-1.tar.part")" "600"
+        kill -"$sig" "$ENGINE"
+    fi
+    bg_wait
+    if [ "$sig" = TERM ]; then
+        expect_eq "SIGTERM: exit 143" "$RC" "143"
+    else
+        expect_eq "Ctrl-C (SIGINT): exit 130" "$RC" "130"
+        expect_has "Ctrl-C (SIGINT): the cancelled line" "$ERR" '{"error": "cancelled", "hint": "stopped"}'
+    fi
+    expect_eq "SIG$sig: no .part left" "$(parts)" ""
+    expect_has "SIG$sig: the remote pack is cleaned up" "$(paths remote)" "POST /cli/clone/pack-cleanup"
+done
 
 echo
 echo "clone_security: $pass passed, $fail failed"

@@ -94,7 +94,7 @@ _clone_py() {
     K2C_LOCAL_URL="$BASE_URL" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" _CLONE_URL_RULE="$_CLONE_URL_RULE" \
     K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && echo 1 || echo 0)" \
     _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 -c "$_K2_PY_STDIN_BOOT" "$@"
-import base64, http.client, json, os, socket, stat, sys, termios, time, uuid
+import base64, http.client, json, os, signal, socket, stat, sys, termios, time, uuid
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
@@ -511,26 +511,75 @@ def upload(side, local_path, dest_dir):
     return final
 
 
-def download(side, remote_path, size):
+def clone_tmp():
+    """K2_HOME/clone-tmp, opened as a directory of ours at 0700 (a bundle
+    can hold .env files). A link there, or anything not ours, is refused.
+    Returns its path and an open descriptor."""
     tmp = os.path.join(K2_HOME, "clone-tmp")
-    os.makedirs(tmp, exist_ok=True)
-    out = os.path.join(tmp, os.path.basename(remote_path))
-    part = out + ".part"
-    off = 0
-    with open(part, "wb") as f:
-        while True:
-            r = call(side, "GET", "/cli/fs/read-range", params={"path": remote_path, "offset": off, "len": CHUNK}, timeout=600)
-            data = base64.b64decode(r.get("base64") or "")
-            f.write(data)
-            off += len(data)
-            if r.get("eof") or not data:
-                break
-    if size and off != size:
-        os.unlink(part)
-        raise Fail("download_failed", "got %d of %d bytes" % (off, size), 3)
-    os.chmod(part, 0o600)
-    os.replace(part, out)
-    return out
+    os.makedirs(K2_HOME, exist_ok=True)
+    try:
+        os.mkdir(tmp, 0o700)
+    except FileExistsError:
+        pass
+    unsafe = "%s isn't a folder of yours (a link, or another account's); move it away and try again" % tmp
+    try:
+        dfd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise Fail("clone_tmp_unsafe", unsafe, 3)
+    st = os.fstat(dfd)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        os.close(dfd)
+        raise Fail("clone_tmp_unsafe", unsafe, 3)
+    os.fchmod(dfd, 0o700)
+    return tmp, dfd
+
+
+def _stopped(signum, frame):
+    raise SystemExit(128 + signum)
+
+
+def download(side, remote_path, size):
+    """The remote bundle into clone-tmp: written to NAME.part (created new,
+    0600, never through a link), renamed when whole, and removed on every
+    failure, Ctrl-C and SIGTERM or SIGHUP included."""
+    name = os.path.basename(remote_path)
+    if name in ("", ".", ".."):
+        raise Fail("download_failed", "the remote server named no bundle file", 3)
+    tmp, dfd = clone_tmp()
+    part = name + ".part"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    kept = {s: signal.signal(s, _stopped) for s in (signal.SIGTERM, signal.SIGHUP)}
+    done = False
+    try:
+        try:
+            fd = os.open(part, flags, 0o600, dir_fd=dfd)
+        except FileExistsError:
+            # Left by a run that was killed outright (SIGKILL).
+            os.unlink(part, dir_fd=dfd)
+            fd = os.open(part, flags, 0o600, dir_fd=dfd)
+        off = 0
+        with os.fdopen(fd, "wb") as f:
+            while True:
+                r = call(side, "GET", "/cli/fs/read-range", params={"path": remote_path, "offset": off, "len": CHUNK}, timeout=600)
+                data = base64.b64decode(r.get("base64") or "")
+                f.write(data)
+                off += len(data)
+                if r.get("eof") or not data:
+                    break
+        if size and off != size:
+            raise Fail("download_failed", "got %d of %d bytes" % (off, size), 3)
+        os.replace(part, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        done = True
+    finally:
+        if not done:
+            try:
+                os.unlink(part, dir_fd=dfd)
+            except FileNotFoundError:
+                pass
+        for s, h in kept.items():
+            signal.signal(s, h)
+        os.close(dfd)
+    return os.path.join(tmp, name)
 
 
 def remote_home(side):

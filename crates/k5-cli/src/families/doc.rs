@@ -661,11 +661,15 @@ impl Ctx {
                         Value::Int(py::int_text(n).expect("digits read as an int"))
                     }
                     Some(n) => {
-                        let _ = self.usage(format!("{k} takes a whole number, not {}", opy::repr(&s(n))));
+                        let _ = self.usage(format!(
+                            "{k} takes a whole number, not {}",
+                            opy::repr(&s(n))
+                        ));
                         return Err(NoBody::Refused);
                     }
                     None => {
-                        let _ = self.usage(format!("{k}: {} is not a value marker", opy::repr(&s(v))));
+                        let _ =
+                            self.usage(format!("{k}: {} is not a value marker", opy::repr(&s(v))));
                         return Err(NoBody::Refused);
                     }
                 },

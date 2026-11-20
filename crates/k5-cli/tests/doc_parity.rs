@@ -1435,34 +1435,53 @@ fn a_typed_value_is_plain_text() {
         // covers: doc version
         r(
             "version --name @int:x",
-            &["version", "--name", "@int:x", "-w", "ws1", "--json", "notes.md"],
+            &[
+                "version", "--name", "@int:x", "-w", "ws1", "--json", "notes.md",
+            ],
             vec![ok(r#"{"version":3,"name":"@int:x"}"#)],
             0,
         ),
         r(
             "version --name @true --version 3",
-            &["version", "--name", "@true", "--version", "3", "-w", "ws1", "notes.md"],
+            &[
+                "version",
+                "--name",
+                "@true",
+                "--version",
+                "3",
+                "-w",
+                "ws1",
+                "notes.md",
+            ],
             vec![ok(r#"{"version":3,"name":"@true"}"#)],
             0,
         ),
         // covers: doc say
         r(
             "say --to @text --at @int:x --time @false",
-            &["say", "--to", "@text", "--at", "@int:x", "--time", "@false", "-w", "ws1", "notes.md", "hi"],
+            &[
+                "say", "--to", "@text", "--at", "@int:x", "--time", "@false", "-w", "ws1",
+                "notes.md", "hi",
+            ],
             vec![ok(r#"{"say":{"id":"s1","to":"@text"}}"#)],
             0,
         ),
         // covers: doc share
         r(
             "share --with @int:1",
-            &["share", "--with", "@int:1", "-w", "ws1", "--json", "notes.md"],
+            &[
+                "share", "--with", "@int:1", "-w", "ws1", "--json", "notes.md",
+            ],
             vec![ok("{}")],
             0,
         ),
         // covers: doc claim
         r(
             "claim --note @true --id @int:9, and --hold built",
-            &["claim", "--lines", "1,2", "--note", "@true", "--id", "@int:9", "--hold", "-w", "ws1", "--json", "notes.md"],
+            &[
+                "claim", "--lines", "1,2", "--note", "@true", "--id", "@int:9", "--hold", "-w",
+                "ws1", "--json", "notes.md",
+            ],
             vec![ok("{}")],
             0,
         ),
@@ -1475,7 +1494,15 @@ fn a_typed_value_is_plain_text() {
         ),
         r(
             "the CLI's own numbers and flags",
-            &["revert", "12", "--partial", "-w", "ws1", "--json", "notes.md"],
+            &[
+                "revert",
+                "12",
+                "--partial",
+                "-w",
+                "ws1",
+                "--json",
+                "notes.md",
+            ],
             vec![ok("{}")],
             0,
         ),

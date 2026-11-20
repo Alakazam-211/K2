@@ -96,6 +96,7 @@ fn zen_data_answers_as_the_shell_does() {
     let cases = vec![
         // covers: zen data
         ok_owner("no verb: the help page", &["data"], vec![]),
+        // native: zen data help
         ok_owner("help", &["data", "help"], vec![]),
         case(
             "an unknown verb",
@@ -106,6 +107,7 @@ fn zen_data_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen data list
         ok_owner(
             "list",
             &["data", "list"],
@@ -113,18 +115,21 @@ fn zen_data_answers_as_the_shell_does() {
                 r#"{"spaces":[{"widget":"board","bytes":2048,"keys":3,"grants":1,"admins":["ag"],"madeBy":{"kind":"owner"}},{"widget":"old","bytes":10,"keys":0,"grants":0,"admins":[],"madeBy":{"kind":"k2"},"orphanedAt":5},{"widget":"x","bytes":3145728,"keys":9,"grants":0,"admins":[],"madeBy":null}],"saves":[{"widget":"notes","bytes":100,"keys":2}]}"#,
             )],
         ),
+        // native: zen data ls
         ok_owner(
             "list, nothing yet",
             &["data", "ls"],
             vec![ok(r#"{"spaces":[],"saves":[]}"#)],
         ),
         // covers: zen data --json
+        // native: zen data list --json
         ok_owner(
             "list --json",
             &["data", "list", "--json"],
             vec![ok(r#"{"spaces":[],"saves":[]}"#)],
         ),
         ok_owner("list, thousands", &["data", "list"], vec![ok(big)]),
+        // native: zen data show
         ok_owner(
             "show",
             &["data", "show", "board"],
@@ -141,6 +146,7 @@ fn zen_data_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen data grant
         ok_owner(
             "grant",
             &[
@@ -150,6 +156,7 @@ fn zen_data_answers_as_the_shell_does() {
                 r#"{"grant":{"level":"write","prefix":"","subjectKind":"agent","subjectId":"ag"}}"#,
             )],
         ),
+        // native: zen data revoke
         ok_owner(
             "revoke",
             &[
@@ -163,6 +170,7 @@ fn zen_data_answers_as_the_shell_does() {
             ],
             vec![ok(r#"{"ok":true}"#)],
         ),
+        // native: zen data admin
         ok_owner(
             "admin",
             &[
@@ -189,6 +197,7 @@ fn zen_data_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen data unadmin
         ok_owner(
             "unadmin --yes",
             &["data", "unadmin", "board", "--agent", "ag", "--yes"],
@@ -214,6 +223,7 @@ fn zen_data_answers_as_the_shell_does() {
                 1,
             ),
         ),
+        // native: zen data delete
         fed(
             b"board\n",
             ok_owner(
@@ -224,6 +234,7 @@ fn zen_data_answers_as_the_shell_does() {
                 )],
             ),
         ),
+        // native: zen data rm
         case(
             "delete, nothing on stdin",
             &["data", "rm", "board"],
@@ -233,11 +244,13 @@ fn zen_data_answers_as_the_shell_does() {
             1,
             0,
         ),
+        // native: zen data mv
         ok_owner(
             "move",
             &["data", "mv", "old", "new"],
             vec![ok(r#"{"grantsMoved":3}"#)],
         ),
+        // native: zen data move
         case(
             "move, one name",
             &["data", "move", "old"],
@@ -247,6 +260,7 @@ fn zen_data_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen data export
         ok_owner(
             "export",
             &["data", "export", "board", "--at", "2026-10-13"],
@@ -274,6 +288,7 @@ fn zen_data_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen data import
         fed(
             b"{\"space\":\"data:board\"}\n{\"key\":\"a\",\"value\":{\"n\":1}}\n",
             ok_owner(
@@ -308,6 +323,7 @@ fn zen_data_answers_as_the_shell_does() {
                 0,
             ),
         ),
+        // native: zen data restore
         ok_owner(
             "restore",
             &[
@@ -514,6 +530,7 @@ fn zen_core_verbs_answer_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen pages
         case(
             "pages is gone",
             &["pages"],
@@ -523,6 +540,7 @@ fn zen_core_verbs_answer_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen grants
         case(
             "grant is no verb",
             &["grants"],
@@ -1087,7 +1105,9 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
     let cases = vec![
         // covers: zen garden
         ok_owner("garden alone: the help", &["garden"], vec![]),
+        // native: zen garden list
         ok_owner("garden list", &["garden", "list"], vec![ok(GARDENS), ok(SYNC)]),
+        // native: zen gardens
         ok_owner(
             "garden list, no sync route",
             &["gardens", "list"],
@@ -1095,6 +1115,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
         ),
         ok_owner("garden list, a long list", &["garden", "list"], vec![ok(mid), ok("{}")]),
         // covers: zen garden --json
+        // native: zen garden list --json
         ok_owner(
             "garden list --json",
             &["garden", "list", "--json"],
@@ -1118,6 +1139,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen garden new
         Case {
             setup: access_unmarked,
             ..ok_owner(
@@ -1166,11 +1188,13 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen garden rename
         ok_owner(
             "garden rename",
             &["garden", "rename", "g1", "New", "name"],
             vec![ok(r#"{"garden":{"id":"g1","name":"New name"},"changed":true}"#)],
         ),
+        // native: zen garden reorder
         ok_owner(
             "garden reorder",
             &["garden", "reorder", "g2", "1"],
@@ -1185,6 +1209,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen garden template
         ok_owner(
             "garden template --force",
             &["garden", "template", "g1", "blank", "--force"],
@@ -1204,6 +1229,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             1,
             1,
         ),
+        // native: zen garden delete
         ok_owner(
             "garden delete",
             &["garden", "delete", "Work"],
@@ -1221,11 +1247,13 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             3,
             1,
         ),
+        // native: zen garden lock
         ok_owner(
             "garden lock",
             &["garden", "lock", "g1"],
             vec![ok(r#"{"garden":{"id":"g1","name":"Home"},"locked":true,"changed":true}"#)],
         ),
+        // native: zen garden unlock
         case(
             "garden unlock, an agent",
             &["garden", "unlock", "g1"],
@@ -1235,6 +1263,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             3,
             1,
         ),
+        // native: zen garden access
         Case {
             setup: access_marked,
             ..ok_owner(
@@ -1251,6 +1280,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
                 vec![ok(r#"{"ok":true}"#), ok(r#"{"name":"Home","listed":false}"#)],
             )
         },
+        // native: zen garden access add
         Case {
             setup: access_marked,
             ..ok_owner(
@@ -1262,6 +1292,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
                 ],
             )
         },
+        // native: zen garden access ask
         Case {
             setup: access_marked,
             ..ok_owner(
@@ -1285,6 +1316,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
                 2,
             )
         },
+        // native: zen garden history
         Case {
             setup: access_marked,
             ..ok_owner(
@@ -1326,6 +1358,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
                 1,
             )
         },
+        // native: zen garden put
         Case {
             setup: staged,
             ..ok_owner(
@@ -1346,6 +1379,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             0,
         ),
         // covers: zen theme
+        // native: zen theme list
         ok_owner(
             "theme list",
             &["theme", "list", "--garden", "g1"],
@@ -1354,11 +1388,14 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             )],
         ),
         // covers: zen theme --json
+        // native: zen theme next
         ok_owner(
             "theme next --json",
             &["theme", "next", "--json"],
             vec![ok(r#"{"theme":"nord"}"#)],
         ),
+        // native: zen theme set
+        // native: zen themes
         ok_owner(
             "theme set for a Garden",
             &["themes", "set", "nord", "--garden=g1"],
@@ -1369,6 +1406,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             &["theme", "set", "--clear", "--garden", "g1"],
             vec![ok(r#"{"theme":"nord","garden":"g1","scope":"computer"}"#)],
         ),
+        // native: zen theme new
         ok_owner(
             "theme new",
             &["theme", "new", "mine", "--from", "nord"],
@@ -1389,6 +1427,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
         // covers: zen sync
         ok_owner("sync", &["sync"], vec![ok(SYNC)]),
         // covers: zen sync --json
+        // native: zen sync on
         ok_owner(
             "sync on --page --json",
             &["sync", "g1", "on", "--page", "--json"],
@@ -1401,11 +1440,13 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
                 r#"{"changed":true,"garden":{"id":"g1","name":"Home","page":{"mode":"own","defaults":"v4"},"theme":{"mode":"synced"},"undo":{"parts":["page"]}}}"#,
             )],
         ),
+        // native: zen sync keep-previous
         ok_owner(
             "sync keep-previous --theme",
             &["sync", "g1", "keep-previous", "--theme"],
             vec![ok(r#"{"changed":false,"garden":{"id":"g1","name":"Home"}}"#)],
         ),
+        // native: zen sync preview
         ok_owner(
             "sync preview",
             &["sync", "g1", "preview"],
@@ -1422,6 +1463,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen sync undo
         case(
             "sync, an agent",
             &["sync", "g1", "undo"],
@@ -1441,6 +1483,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
         ),
         ok_owner("news, none", &["news"], vec![ok(r#"{"items":[],"copiesWithNewerDefault":1}"#)]),
         // covers: zen news --json
+        // native: zen news seen
         ok_owner(
             "news seen --json",
             &["news", "seen", "n1", "n2", "--json"],
@@ -1499,6 +1542,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             &["links", "g1"],
             vec![ok(r#"{"sites":["a.example","b.example"]}"#)],
         ),
+        // native: zen links forget
         ok_owner(
             "links forget",
             &["links", "forget", "g1", "a.example"],
@@ -1567,6 +1611,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             1,
             0,
         ),
+        // native: zen proposals
         Case {
             setup: access_marked,
             ..ok_owner(
@@ -1580,6 +1625,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
                 ],
             )
         },
+        // native: zen proposals approve
         case(
             "proposals approve, retired --json",
             &["proposals", "approve", "p1", "--json"],
@@ -1719,8 +1765,11 @@ fn zen_widgets_answer_as_the_shell_does() {
     let cases = vec![
         // covers: zen widget
         ok_owner("widget alone: the help", &["widget"], vec![]),
+        // native: zen widget grant
         case("widget grant: no permissions", &["widget", "grant"], &[], vec![], nothing, 0, 0),
+        // native: zen widget revoke
         case("widget revoke --from is new's", &["widget", "revoke", "--from", "x"], &[], vec![], nothing, 2, 0),
+        // native: zen widget list
         ok_owner(
             "widget list",
             &["widget", "list"],
@@ -1728,6 +1777,7 @@ fn zen_widgets_answer_as_the_shell_does() {
                 r#"{"widgets":[{"name":"board","state":"ok","title":"Board","caps":["store"],"errors":[{"file":"a.js","line":1,"col":1,"message":"e1"},{"file":"a.js","line":2,"col":1,"message":"e2","suggestion":"s"},{"file":"a.js","line":3,"col":1,"message":"e3"},{"file":"a.js","line":4,"col":1,"message":"e4"}],"placements":[{"garden":"g1","placement":"w1","paused":true},{"garden":"g2","placement":"w2"}]},{"name":"empty","state":"new","placements":[]}]}"#,
             )],
         ),
+        // native: zen widgets
         ok_owner("widget list, none", &["widgets", "list"], vec![ok(r#"{"widgets":[]}"#)]),
         // covers: zen widget --json
         ok_owner(
@@ -1735,11 +1785,13 @@ fn zen_widgets_answer_as_the_shell_does() {
             &["widget", "new", "board", "--from", "k2:diary", "--json"],
             vec![ok(r#"{"name":"board","path":"/z/widgets/board","files":["index.html"]}"#)],
         ),
+        // native: zen widget new
         ok_owner(
             "widget new",
             &["widget", "new", "board"],
             vec![ok(r#"{"name":"board","path":"/z/widgets/board","files":["index.html","manifest.json"]}"#)],
         ),
+        // native: zen widget sign
         ok_owner(
             "widget sign --ask",
             &["widget", "sign", "board", "--ask"],
@@ -1762,6 +1814,7 @@ fn zen_widgets_answer_as_the_shell_does() {
             3,
             1,
         ),
+        // native: zen widget claim
         ok_owner(
             "widget claim",
             &["widget", "claim", "board"],
@@ -1793,6 +1846,7 @@ fn zen_widgets_answer_as_the_shell_does() {
             2,
             0,
         ),
+        // native: zen widget history
         Case {
             setup: access_marked,
             ..ok_owner(
@@ -1801,6 +1855,7 @@ fn zen_widgets_answer_as_the_shell_does() {
                 vec![ok(r#"{"ok":true}"#), ok(ACCESS_HISTORY)],
             )
         },
+        // native: zen widget show
         ok_owner(
             "widget show",
             &["widget", "show", "board"],
@@ -1913,6 +1968,7 @@ fn zen_widgets_answer_as_the_shell_does() {
                 vec![ok(r#"{"file":"widgets/w2","written":["index.html"],"removed":["old.js"],"kept":["x.css"]}"#)],
             )
         },
+        // native: zen widget apply
         Case {
             setup: staged,
             ..ok_owner(
@@ -2114,7 +2170,9 @@ fn zen_guide_answers_as_the_shell_does() {
         page("guide api (generated)", &["guide", "api"]),
         page("guide libs (generated)", &["guide", "libs"]),
         page("guide services", &["guide", "services"]),
+        // native: zen guide example
         page("guide example", &["guide", "example"]),
+        // native: zen guide examples
         page("guide example --list", &["guide", "examples", "--list"]),
         page("guide example rail-top", &["guide", "example", "rail-top"]),
         page(
@@ -2175,6 +2233,321 @@ fn zen_guide_answers_as_the_shell_does() {
         ),
         usage("guide, an unknown flag", &["guide", "--nope"]),
         ok_owner("guide with a daemon", &["guide", "undo"], vec![]),
+    ];
+    for c in &cases {
+        rig.check(c);
+    }
+}
+
+/// No Garden access mark, the port only on disk (no owner token).
+fn port_unmarked(r: &Rig) {
+    port_only(r);
+    let _ = std::fs::remove_file(r.k2home.join("garden-access-on"));
+}
+
+/// The Garden access mark, the port only on disk.
+fn port_marked(r: &Rig) {
+    port_only(r);
+    std::fs::write(r.k2home.join("garden-access-on"), "").unwrap();
+}
+
+/// `c` inside a K2 terminal: the stub's socket, the passport.
+fn in_session(c: Case) -> Case {
+    with(with_passport(&[("K2_HOOK_SOCK", "{sock}")]), c)
+}
+
+/// The person-only changes (`_zen_person_post`: Garden lock and unlock,
+/// access add and remove, sync, news seen, links forget) and the session
+/// wrappers (`_zen_session_post`, `_zen_session_get`) inside a K2
+/// terminal: the passport, never the owner token from disk, and with no
+/// passport no credential at all. Also the router forms the other rows
+/// leave out.
+#[test]
+fn zen_person_and_session_lines_answer_as_the_shell_does() {
+    let rig = Rig::new(VERB, "person");
+    let mut dead_session = with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
+    for (name, value) in dead_session.iter_mut() {
+        if *name == "K2_PORT" {
+            *value = dead_port();
+        }
+    }
+    let cases = vec![
+        // native: zen garden lock
+        in_session(case(
+            "a session: garden lock sends the passport, the daemon refuses",
+            &["garden", "lock", "g1"],
+            &[],
+            vec![answer(403, r#"{"error":"owner_only"}"#)],
+            port_only,
+            3,
+            1,
+        )),
+        // native: zen garden unlock
+        with(
+            vec![("K2_HOOK_SOCK", "{sock}".to_string())],
+            case(
+                "a session with no passport, the owner on disk: unlock sends no credential",
+                &["garden", "unlock", "g1", "--json"],
+                &[],
+                vec![ok(r#"{"garden":{"id":"g1","name":"Home"},"locked":false,"changed":true}"#)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
+        in_session(case(
+            "a session, an empty reply: lock",
+            &["garden", "lock", "g1"],
+            &[],
+            vec![Reply::Close],
+            port_only,
+            1,
+            1,
+        )),
+        Case {
+            compare: Compare::Waited,
+            ..with(
+                dead_session,
+                case(
+                    "a session, nothing listening: lock",
+                    &["garden", "lock", "g1"],
+                    &[],
+                    vec![],
+                    port_only,
+                    1,
+                    0,
+                ),
+            )
+        },
+        case(
+            "garden lock, two Gardens",
+            &["garden", "lock", "g1", "g2"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        in_session(case(
+            "a session: a locked Garden can't be renamed",
+            &["garden", "rename", "g1", "New"],
+            &[],
+            vec![answer(423, r#"{"error":"garden_locked","garden":"g1"}"#)],
+            port_only,
+            3,
+            1,
+        )),
+        in_session(case(
+            "a session: delete, the person must",
+            &["garden", "delete", "g1", "--json"],
+            &[],
+            vec![answer(
+                403,
+                r#"{"error":"garden_delete_person","name":"Home","card":{"card":"c9"}}"#,
+            )],
+            port_only,
+            3,
+            1,
+        )),
+        // native: zen garden access
+        in_session(case(
+            "a session: access reads with the passport",
+            &["garden", "access", "Home"],
+            &[],
+            vec![ok(r#"{"ok":true}"#), ok(ACCESS)],
+            port_marked,
+            0,
+            2,
+        )),
+        // native: zen garden access add
+        in_session(case(
+            "a session: access add, the person only",
+            &["garden", "access", "Home", "add", "ag"],
+            &[],
+            vec![
+                ok(r#"{"ok":true}"#),
+                answer(403, r#"{"error":"owner_only","message":"Only the person lists agents."}"#),
+            ],
+            port_marked,
+            3,
+            2,
+        )),
+        Case {
+            setup: access_marked,
+            ..ok_owner(
+                "access remove",
+                &["garden", "access", "Home", "remove", "ag", "--json"],
+                vec![
+                    ok(r#"{"ok":true}"#),
+                    ok(r#"{"agent":{"handle":"ag"},"garden":{"name":"Home"},"listed":false,"changed":true}"#),
+                ],
+            )
+        },
+        case(
+            "access add, no agent",
+            &["garden", "access", "Home", "add"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            access_marked,
+            2,
+            1,
+        ),
+        case(
+            "access ask, an extra word",
+            &["garden", "access", "Home", "ask", "x"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            access_marked,
+            2,
+            1,
+        ),
+        case(
+            "access, an unknown act",
+            &["garden", "access", "Home", "nope"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            access_marked,
+            2,
+            1,
+        ),
+        case(
+            "access --reason with nothing",
+            &["garden", "access", "Home", "ask", "--reason"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            access_marked,
+            2,
+            1,
+        ),
+        // native: zen garden access ask
+        in_session(case(
+            "a session: access ask with the passport",
+            &["garden", "access", "Home", "ask"],
+            &[],
+            vec![ok(r#"{"ok":true}"#), ok(r#"{"message":"Asked the person."}"#)],
+            port_marked,
+            0,
+            2,
+        )),
+        // native: zen garden history
+        case(
+            "garden history --limit, not a number",
+            &["garden", "history", "Home", "--limit", "x"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            access_marked,
+            2,
+            1,
+        ),
+        // native: zen sync on
+        in_session(case(
+            "a session: sync on, the person only",
+            &["sync", "g1", "on"],
+            &[],
+            vec![answer(403, r#"{"error":"zen_local_only"}"#)],
+            port_only,
+            1,
+            1,
+        )),
+        // native: zen news seen
+        in_session(case(
+            "a session: news seen with the passport",
+            &["news", "seen", "--all"],
+            &[],
+            vec![ok(r#"{"seen":["n1"]}"#)],
+            port_only,
+            0,
+            1,
+        )),
+        // native: zen links forget
+        in_session(case(
+            "a session: links forget, the person only",
+            &["links", "forget", "g1", "a.example"],
+            &[],
+            vec![answer(403, r#"{"error":{"code":"owner_only","hint":"The person forgets sites."}}"#)],
+            port_only,
+            3,
+            1,
+        )),
+        // native: zen theme prev
+        ok_owner(
+            "theme prev",
+            &["theme", "prev", "--garden", "g1"],
+            vec![ok(r#"{"theme":"mono","garden":"g1"}"#)],
+        ),
+        in_session(case(
+            "a session: theme next with the passport",
+            &["theme", "next"],
+            &[],
+            vec![ok(r#"{"theme":"nord"}"#)],
+            port_only,
+            0,
+            1,
+        )),
+        // native: zen widget allow
+        case("widget allow: no permissions", &["widget", "allow"], &[], vec![], nothing, 0, 0),
+        // native: zen proposal
+        // native: zen proposals list
+        Case {
+            setup: access_unmarked,
+            ..ok_owner(
+                "proposal list --all",
+                &["proposal", "list", "--all"],
+                vec![ok(r#"{"proposals":[]}"#)],
+            )
+        },
+        // native: zen proposals show
+        Case {
+            setup: access_unmarked,
+            ..ok_owner(
+                "proposals show",
+                &["proposals", "show", "p1"],
+                vec![ok(
+                    r#"{"proposal":{"id":"p1","status":"pending","path":"gardens/g1.toml","madeBy":"ag","stale":true,"note":"tidy","content":"x = 1"}}"#,
+                )],
+            )
+        },
+        case(
+            "proposals show, no id",
+            &["proposals", "show"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // native: zen proposals reject
+        in_session(case(
+            "a session: proposals reject with the passport",
+            &["proposals", "reject", "p1"],
+            &[],
+            vec![ok(r#"{"id":"p1","status":"rejected"}"#)],
+            port_unmarked,
+            0,
+            1,
+        )),
+        // native: zen grant
+        case("grant is gone", &["grant"], &[], vec![], owner_and_port, 2, 0),
+        // native: zen allow
+        case("allow is gone", &["allow", "w"], &[], vec![], owner_and_port, 2, 0),
+        shell(case(
+            "garden lock -h: help, nothing sent",
+            &["garden", "lock", "g1", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "garden access add --help: help, nothing sent",
+            &["garden", "access", "Home", "add", "ag", "--help"],
+            &[],
+            vec![],
+            access_marked,
+            0,
+            0,
+        )),
     ];
     for c in &cases {
         rig.check(c);

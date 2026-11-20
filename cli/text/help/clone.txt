@@ -8,7 +8,9 @@ People:
   k2 clone here <ws> [--dest DIR] [flags]           a second copy on this server
   k2 clone <ws> --dest DIR [flags]                  same as `here`
   k2 clone proposals [--all] [--json]               agent proposals waiting for a person
-  k2 clone approve <id> [--yes]                     approve (asks you to confirm) and run it
+  k2 clone approve <id> [--yes]                     approve (asks you to confirm) and run it;
+                                   to another server it asks first, and sends
+                                   only the token saved for that host
   k2 clone deny <id> [--reason TEXT]
 
 Agents (a person approves):

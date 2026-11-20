@@ -21,7 +21,10 @@
 #   is a folder of ours at 0700 (a link there is refused); the download's
 #   .part is 0600 and is gone after a refused range, a short download,
 #   Ctrl-C or SIGTERM; the remote token can come on stdin (--token-stdin),
-#   and --token T still works with a note that every account sees it.
+#   and --token T still works with a note that every account sees it;
+#   clone approve sends nothing to an agent-proposed host before the
+#   person reads the host in full and says yes at the terminal, and then
+#   only the token saved for that host (never $K2_REMOTE_TOKEN or --token).
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -511,6 +514,61 @@ fresh
 IN="$W/token-in" k2 clone preview ws1 --host "$REMOTE" --token-stdin --token "$REMOTE_TOKEN" --json
 expect_eq "--token-stdin and --token: usage, exit 2" "$RC" "2"
 expect_eq "--token-stdin and --token: nothing sent" "$(paths remote)" ""
+
+echo "== clone approve: the person says yes before a token goes to the proposed host =="
+fresh
+scn local "{\"target\": \"$REMOTE\"}"
+K2_REMOTE_TOKEN="k2rt_CLONESEC_env_token" k2pty ctty '[]' clone approve prop-1abc --json
+expect_eq "no saved token for the host: exit 3" "$RC" "3"
+expect_has "no saved token for the host: says how to sign in" "$ERR" '"error": "no_saved_token"'
+expect_has "no saved token for the host: names the host" "$ERR" "$REMOTE"
+expect_eq "no saved token: the remote got nothing (not the env token)" "$(paths remote)" ""
+fresh
+scn local "{\"target\": \"$REMOTE\"}"
+save_token "$REMOTE" "$REMOTE_TOKEN"
+k2pty ctty '[["Send your token to ", "n\n"]]' clone approve prop-1abc --json
+expect_eq "the person says no: exit 3" "$RC" "3"
+expect_has "the person says no: not_approved" "$ERR" '"error": "not_approved"'
+expect_has "the confirm names the host first" "$TTY" "<<Send your token to >>$REMOTE?"
+expect_eq "the person says no: the remote got nothing" "$(paths remote)" ""
+expect_not "the person says no: nothing approved" "$(paths local)" "/cli/clone-proposal/approve"
+fresh
+scn local "{\"target\": \"$REMOTE\"}"
+save_token "$REMOTE" "$REMOTE_TOKEN"
+k2pty noctty '[]' clone approve prop-1abc --yes --json
+expect_eq "no terminal (even with --yes): exit 3" "$RC" "3"
+expect_has "no terminal: confirm_needs_a_person" "$ERR" '"error": "confirm_needs_a_person"'
+expect_eq "no terminal: the remote got nothing" "$(paths remote)" ""
+fresh
+scn local "{\"target\": \"$REMOTE\"}"
+save_token "$REMOTE" "$REMOTE_TOKEN"
+k2pty ctty '[["Send your token to ", "y\n"], ["Vault password", "pw-CLONESEC-typed\n"]]' clone approve prop-1abc --json
+expect_eq "the person says yes: the clone runs" "$RC" "0"
+expect_has "the person says yes: the remote got the upload" "$(paths remote)" "POST /cli/fs/upload-chunk"
+expect_eq "the person says yes: the remote got the saved token" "$(auth remote /cli/fs/info)" "Bearer $REMOTE_TOKEN"
+expect_has "the person says yes: approved" "$(paths local)" "POST /cli/clone-proposal/approve"
+LONG="acme-build-box-in-the-north-rack.globex.example.test"
+fresh
+scn local "{\"target\": \"$LONG\"}"
+save_token "$LONG" "$REMOTE_TOKEN"
+k2pty ctty '[["Send your token to ", "n\n"]]' clone approve prop-1abc --json
+expect_has "the confirm shows the proposed host in full" "$TTY" "<<Send your token to >>$LONG? (https://$LONG)"
+expect_eq "the long host: no lookup or connect" "$(cat "$W/audit.log")" ""
+fresh
+scn local '{"target": "http://box.example"}'
+save_token "http://box.example" "$REMOTE_TOKEN"
+k2pty ctty '[]' clone approve prop-1abc --json
+expect_eq "an http proposed host: exit 3" "$RC" "3"
+expect_eq "an http proposed host: the refusal line" "$ERR" "$(refused_line box.example)"
+expect_not "an http proposed host: no lookup" "$(cat "$W/audit.log")" "box.example"
+for f in "--token $REMOTE_TOKEN" "--token-stdin"; do
+    fresh
+    scn local "{\"target\": \"$REMOTE\"}"
+    # shellcheck disable=SC2086
+    IN="$W/token-in" k2 clone approve prop-1abc $f --json
+    expect_eq "approve $f: usage, exit 2" "$RC" "2"
+    expect_eq "approve $f: the remote got nothing" "$(paths remote)" ""
+done
 
 echo
 echo "clone_security: $pass passed, $fail failed"

@@ -3724,6 +3724,15 @@ _remote_token_for_host() {
     local host="$1" explicit="${2:-}"
     if [ -n "$explicit" ]; then printf '%s' "$explicit"; return 0; fi
     if _envn_any REMOTE_TOKEN; then _envn REMOTE_TOKEN; return 0; fi
+    _remote_saved_token_for_host "$host"
+}
+
+# The token saved for <host> only: steps 3 and 4 above (connect-tokens.json,
+# then the OS keychain), never --token or $K2_REMOTE_TOKEN. For a host an
+# agent named (k2 clone approve), where a token not tied to that host must
+# not go.
+_remote_saved_token_for_host() {
+    local host="$1"
     if ! command -v python3 >/dev/null 2>&1; then
         return 0
     fi
@@ -48051,7 +48060,9 @@ People:
   k2 clone here <ws> [--dest DIR] [flags]           a second copy on this server
   k2 clone <ws> --dest DIR [flags]                  same as `here`
   k2 clone proposals [--all] [--json]               agent proposals waiting for a person
-  k2 clone approve <id> [--yes]                     approve (asks you to confirm) and run it
+  k2 clone approve <id> [--yes]                     approve (asks you to confirm) and run it;
+                                   to another server it asks first, and sends
+                                   only the token saved for that host
   k2 clone deny <id> [--reason TEXT]
 
 Agents (a person approves):
@@ -48778,12 +48789,41 @@ def find_proposal(token):
     return hit[0]
 
 
+def shown(text):
+    """text with anything a terminal wouldn't print as itself spelled out,
+    so the person reads exactly what an agent wrote."""
+    return "".join(c if c.isprintable() else ("\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)) for c in text)
+
+
+def confirm_host(target):
+    """Before anything goes to a host an agent proposed: the person reads
+    the host in full and says yes at the terminal. --yes doesn't skip it."""
+    fd = open_tty()
+    if fd is None:
+        raise Fail("confirm_needs_a_person", "this proposal sends your token to %s: approve it from a terminal, where k2 asks first" % shown(target), 3)
+    try:
+        url = "" if REMOTE[1] == target else " (%s)" % shown(REMOTE[1])
+        os.write(fd, ("Send your token to %s?%s The agent proposed this host. [y/N] " % (shown(target), url)).encode())
+        typed = b""
+        while not typed.endswith(b"\n"):
+            more = os.read(fd, 1024)
+            if not more:
+                raise KeyboardInterrupt  # Ctrl-D: stopped
+            typed += more
+    finally:
+        os.close(fd)
+    if typed.strip().lower() not in (b"y", b"yes"):
+        raise Fail("not_approved", "nothing was sent to %s; the proposal is still open" % shown(target), 3)
+
+
 def approve(token):
     p = find_proposal(token)
     if p["status"] != "open":
         raise Fail("proposal_not_open", "%s is %s" % (p["id"], p["status"]), 3)
     say("%s: %s" % (p["id"], p["summary"]))
     say("asked by %s%s" % (p["proposedBy"], (": " + p["why"]) if p.get("why") else ""))
+    if p["target"] != "here":
+        confirm_host(p["target"])
     # The approve happens inside the run, right before the bundle, with the
     # same single confirm that covers copying secrets (bundle_body).
     run = {"workspacePath": p.get("workspacePath"), "target": p["target"]}
@@ -48933,18 +48973,25 @@ _clone_opt() {
     printf '%s' "$K2C_OPTS" | python3 -c 'import json,sys; v=json.load(sys.stdin).get(sys.argv[1]); print("" if v in (None, False) else (json.dumps(v) if isinstance(v,(list,dict)) else v))' "$1"
 }
 
-# Point K2C_REMOTE_* at a Connect host (token from --token / env / file).
+# Point K2C_REMOTE_* at a Connect host (token from --token / env / file;
+# with `saved`, for a host an agent proposed, only the token saved for it).
 # Not exported: _clone_py hands the URL to its python3 and the token on its
 # stdin, so no other child sees the token.
 _clone_remote() {
-    local host="$1" url tok
+    local host="$1" saved="${2:-}" url tok
     case "$host" in
         http://*|https://*) url="${host%/}" ;;
         *) url="https://${host}" ;;
     esac
     # Before the token is even looked up: https, or a loopback address.
     _clone_https_gate "$url" || exit $?
-    tok="$(_remote_token_for_host "$host" "$_CLONE_TOKEN")"
+    if [ "$saved" = saved ]; then
+        # A host an agent proposed: only the token saved for that host.
+        tok="$(_remote_saved_token_for_host "$host")"
+        [ -n "$tok" ] || _clone_die no_saved_token "no saved token for '$host': sign in to it in K2 with Remember on (or add it to ${K2_HOME}/connect-tokens.json), then approve again; a proposal never takes --token or \$K2_REMOTE_TOKEN"
+    else
+        tok="$(_remote_token_for_host "$host" "$_CLONE_TOKEN")"
+    fi
     [ -n "$tok" ] || _clone_die no_remote_token "no token for '$host': sign in to it in K2 with Remember on, pass --token-stdin, set \$K2_REMOTE_TOKEN, or add it to ${K2_HOME}/connect-tokens.json"
     K2C_REMOTE_URL="$url"
     K2C_REMOTE_TOKEN="$tok"
@@ -49044,11 +49091,13 @@ print("  " + v.get("hint", ""))'
         approve)
             _clone_parse "$@"
             [ "${#_CLONE_ARGS[@]}" -eq 1 ] || _clone_die usage "usage: k2 clone approve <id>" 2
+            [ -z "$_CLONE_TOKEN" ] || _clone_die usage "approve takes only the token saved for the proposal's host (signed in to in K2 with Remember on, or in connect-tokens.json); drop --token / --token-stdin" 2
             _clone_person_guard
             local shown target
             shown="$(_clone_py show "${_CLONE_ARGS[0]}")" || exit $?
             target="$(printf '%s' "$shown" | python3 -c 'import json,sys; print(json.load(sys.stdin)["target"])')"
-            [ "$target" = "here" ] || _clone_remote "$target"
+            # The engine asks the person before anything goes to the host.
+            [ "$target" = "here" ] || _clone_remote "$target" saved
             _clone_py approve "${_CLONE_ARGS[0]}"
             ;;
         *)

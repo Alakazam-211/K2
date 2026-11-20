@@ -398,6 +398,15 @@ _remote_token_for_host() {
     local host="$1" explicit="${2:-}"
     if [ -n "$explicit" ]; then printf '%s' "$explicit"; return 0; fi
     if _envn_any REMOTE_TOKEN; then _envn REMOTE_TOKEN; return 0; fi
+    _remote_saved_token_for_host "$host"
+}
+
+# The token saved for <host> only: steps 3 and 4 above (connect-tokens.json,
+# then the OS keychain), never --token or $K2_REMOTE_TOKEN. For a host an
+# agent named (k2 clone approve), where a token not tied to that host must
+# not go.
+_remote_saved_token_for_host() {
+    local host="$1"
     if ! command -v python3 >/dev/null 2>&1; then
         return 0
     fi

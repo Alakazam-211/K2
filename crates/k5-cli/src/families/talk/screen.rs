@@ -302,12 +302,12 @@ pub fn option_lines(screen: &str, utf8: bool) -> String {
                 i += "❯".len();
             }
         } else {
-            // `❯?` in bytes: E2 9D, then BF or not.
+            // `❯?` in bytes: E2 9D, then AF or not.
             if !b[i..].starts_with(&[0xe2, 0x9d]) {
                 continue;
             }
             i += 2;
-            if b.get(i) == Some(&0xbf) {
+            if b.get(i) == Some(&0xaf) {
                 i += 1;
             }
         }

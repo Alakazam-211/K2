@@ -521,7 +521,12 @@ assert_off_children "daemon restart --token-stdin" "token" "$REMOTE_SENTINEL"
 # 24. k2 talk <ws>@<host> "text" --token-stdin: the remote server's token
 #     reaches that server's terminal read (talk reads first) and no
 #     child's argv or environment, nor k2's own argv, through the send.
-sec_case "talk --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINEL" talk "ws1@http://127.0.0.1:$(cat "$W/tcp-port")" "hello" --token-stdin
+#     The k5 binary answers talk itself: no python3 or curl child at all.
+fresh
+printf '%s\n' "$REMOTE_SENTINEL" | k2run talk "ws1@http://127.0.0.1:$(cat "$W/tcp-port")" "hello" --token-stdin >/dev/null 2>&1 || true
+assert_tcp_got "talk --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINEL"
+assert_children_native "talk --token-stdin" curl
+assert_off_children "talk --token-stdin" "remote token" "$REMOTE_SENTINEL"
 
 # 25-26. k2 remote-session --token-stdin: an owner token for a remote host
 #        (status --host) and a grant token on this daemon (write) reach the

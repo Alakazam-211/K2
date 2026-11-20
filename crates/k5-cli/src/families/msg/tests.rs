@@ -299,12 +299,23 @@ fn the_words() {
         &["--help"][..],
         &["ws", "t", "-h"],
         &["ws", "--signal", "x"],
-        &["ws", "--inbox-silent", "f"],
-        &["ws", "--inbox-wake", "f"],
         // The vault's handoff leaves a value typed in to the shell.
         &["ws", "t", "--secret", "--stdin"],
     ] {
         assert_eq!(parse(shell), Parsed::Shell, "{shell:?}");
+    }
+    // The tray forms: the module's own words.
+    for (words, mode) in [
+        (&["ws", "--inbox-silent", "f"][..], "silent"),
+        (&["ws", "f", "--inbox-wake"], "wake"),
+    ] {
+        let Parsed::Tray(f) = parse(words) else {
+            panic!("{words:?} is a tray form");
+        };
+        assert_eq!(
+            (f.target.as_str(), f.mode.as_str(), f.positional.as_slice()),
+            ("ws", mode, &["f".to_string()][..])
+        );
     }
     // `--secret NAME`: the handoff, with the text as its note.
     let Parsed::Secret(m, name) = parse(&["ws", "t", "--secret", "N", "--summary", "s"]) else {

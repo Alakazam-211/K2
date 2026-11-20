@@ -375,7 +375,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            lookup("box", &[d.clone()]),
+            lookup("box", std::slice::from_ref(&d)),
             Some(Found::Token("tok\tmore".into()))
         );
         std::fs::write(d.join("connect-tokens.json"), "{not json").unwrap();
@@ -385,7 +385,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            lookup("box", &[d.clone()]),
+            lookup("box", std::slice::from_ref(&d)),
             Some(Found::HostId("42".into()))
         );
         // A hostname that is not a string stops the Python: no answer.
@@ -394,7 +394,7 @@ mod tests {
             r#"[{"hostname": 5, "id": "h1"}, {"hostname": "box", "id": "h2"}]"#,
         )
         .unwrap();
-        assert_eq!(lookup("box", &[d.clone()]), None);
+        assert_eq!(lookup("box", std::slice::from_ref(&d)), None);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

@@ -331,6 +331,8 @@ fn tray_packages_as_the_shell_sends_them() {
     }
 }
 
+/// The tray forms' loop reads `-h` and `--help` as unknown flags: the
+/// shell's line, exit 2, nothing sent (no help either).
 #[test]
 fn tray_help_never_acts() {
     let rig = Rig::new(VERB, "trayhelp");
@@ -346,7 +348,7 @@ fn tray_help_never_acts() {
     ] {
         rig.check(&Case {
             compare: Compare::Shell,
-            ..plain(name, args, vec![], 0, 0)
+            ..plain(name, args, vec![], 2, 0)
         });
     }
 }
@@ -431,7 +433,8 @@ fn b64decode(s: &str) -> Vec<u8> {
 /// A request with the upload's archive (its base64, its random file name
 /// and its length) masked; the archive's contents beside it.
 fn mask_archive(r: &str) -> (String, Option<Vec<(String, u8, u32, Vec<u8>)>>) {
-    if !r.starts_with("POST /cli/fs/upload-binary") {
+    // A normalised request starts with its channel's line (`[tcp]`).
+    if !r.contains("POST /cli/fs/upload-binary ") {
         return (r.to_string(), None);
     }
     let start = r.find(r#""base64":""#).expect("an upload's base64") + r#""base64":""#.len();

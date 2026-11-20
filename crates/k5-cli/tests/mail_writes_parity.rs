@@ -19,7 +19,7 @@
 //! - A body above 128 KiB (from `--body-file`): the shell hands `M_BODY` to
 //!   its Python in the environment, which Linux refuses for one string
 //!   past 128 KiB (exit 126, nothing sent); the binary sends it
-//!   ([`a_large_body`]): the named difference `mail-body-large`.
+//!   ([`a_large_body`]): the named difference `env-answer-large`.
 
 #![cfg(unix)]
 
@@ -816,8 +816,8 @@ fn big_file(r: &Rig) {
 /// Linux refuses past 128 KiB: `python3` never starts (exit 126,
 /// `Argument list too long`) and nothing is sent. The binary sends it
 /// once and prints the answer. Elsewhere (macOS: one limit for the whole
-/// environment) both send it. The named difference `mail-body-large`, for
-/// K2's sign-off.
+/// environment) both send it. The named difference `env-answer-large`
+/// (K2's ruling).
 #[test]
 fn a_large_body() {
     let rig = Rig::new(VERB, "large");

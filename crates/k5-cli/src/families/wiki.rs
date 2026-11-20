@@ -31,8 +31,8 @@
 //! answer bigger than the system lets one variable be (128 KiB on Linux,
 //! about 1 MiB in all on macOS) stops bash there ("Argument list too
 //! long", exit 126); the binary reads the answers itself and prints the
-//! status. That is the named difference `wiki-status-large-answer`
-//! (`scripts/cli-parity.sh`), for K2 to rule on.
+//! status. That is the named difference `env-answer-large`
+//! (`scripts/cli-parity.sh`), K2's ruling.
 //!
 //! Still the shell's ([`run`] returns `None`): `wiki publish`, a word that
 //! is not UTF-8, a command line with `-h` or `--help` ([`crate::front`]),

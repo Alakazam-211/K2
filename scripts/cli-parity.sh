@@ -55,8 +55,10 @@
 # Compare::NulInAnswer. They meet feedback-optin-without-python3 in
 # help_feedback_optin_parity.rs: every row's run with no python3 prints
 # what the binary prints with one, and its no-python3 test checks the
-# rows that answer otherwise there. They meet wiki-status-large-answer in
-# wiki_parity.rs's wiki_status_with_a_large_answer.)
+# rows that answer otherwise there. They meet env-answer-large in
+# wiki_parity.rs's wiki_status_with_a_large_answer and
+# mail_writes_parity.rs's a_large_body (and zen_parity.rs's, with the zen
+# lane).)
 # garden_blobs.sh meets expect-100-continue against a real daemon: its
 # one-chunk put of a body over 1 MiB goes through a relay that records each
 # request, and the test checks each side's head by the difference's name.
@@ -166,7 +168,7 @@ EXPECTED_DIFFS=(
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show, api) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token. Also workspace_swap_canonical.sh's swap lookup: bash looks the workspace up with the owner token; the binary's passport is refused there, so it sends the typed name and the swap gets 400 not registered (K2 ruling; until the daemon's handle_swap_canonical resolves names itself, after r3)"
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\`, \`connections remove beta\`, \`api on\` and \`api-key revoke k1\` (POSTs), and \`api-key list\` (a GET). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), api on the same line on stdout, api-key list and revoke \"Error: Expecting value: line 1 column 1 (char 0)\" on stderr, connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
-    "wiki-status-large-answer|K5 lane r8c, for K2 to rule on|\`wiki status\` hands both of the daemon's answers (the serve status and the index) to its Python in environment variables; an index above what one variable may hold (128 KiB on Linux, about 1 MiB in all on macOS) stops bash there: \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 126 (exit 1 on macOS, with its /bin/bash 3.2). The binary reads the answers itself and prints the status, exit 0. Both send the same two requests"
+    "env-answer-large|K2 ruling, the K5 lanes' large answers|bash hands a daemon answer to Python in an environment variable, so above the kernel's argument limit bash stops with 'Argument list too long' (exit 126) and k5 prints the answer. The cases, each with its own large-answer row: \`wiki status\` with an index above 1 MiB (wiki_parity.rs, wiki_status_with_a_large_answer; on macOS its /bin/bash 3.2 exits 1, and both send the same two requests), \`mail send --body-file\` with a body above 128 KiB (mail_writes_parity.rs, a_large_body; the body rides M_BODY: on Linux bash sends nothing, the binary sends it once; macOS has one limit for the whole environment, where both send it), and \`zen\`'s large answer (zen_parity.rs, with the zen lane)"
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
     "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words three of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError; from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
     "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via; \`thread bob --from\`, also --limit and --before-seq, and \`thread unread --kind\`; \`talk ws hi --lines\`, also --from, --command, --agent, --session, --token, --answer, --respond, --answers and --wake-timeout) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Neither sends anything"
@@ -371,9 +373,10 @@ s.serve_forever()
 # whose title holds a NUL byte, anything else {"role":"canonical"}. Mode
 # optin: /cli/product-feedback/settings says agents may not report (to an
 # agent), /cli/permission/enabled says cards are off, anything else
-# {"role":"canonical"}. Mode wikibig: /cli/wiki/serve/status answers
-# {"enabled":false} and /cli/wiki/index 60,000 notes (about 1.4 MiB),
-# anything else {"role":"canonical"}. Mode heads: the log holds each
+# {"role":"canonical"}. Mode envbig: /cli/wiki/serve/status answers
+# {"enabled":false}, /cli/wiki/index 60,000 notes (about 1.4 MiB) and
+# /cli/mail/send a queued send (out_9), anything else
+# {"role":"canonical"}. Mode heads: the log holds each
 # request's whole head (the request line and every header, in order, as
 # sent), then "body <bytes> <sha256>" and an empty line; the stub speaks
 # HTTP/1.1, so it answers "Expect: 100-continue" with a 100 as a daemon
@@ -398,7 +401,9 @@ WIKIBIG = {
     "/cli/wiki/serve/status": b"{\"enabled\":false}",
     "/cli/wiki/index": b"{\"nodes\":[" + b",".join(b"{\"id\":\"note-%05d.md\"}" % i for i in range(60000)) + b"]}",
 }
-TABLE = {"nul": NUL, "optin": OPTIN, "wikibig": WIKIBIG}.get(mode, {})
+ENVBIG = dict(WIKIBIG)
+ENVBIG["/cli/mail/send"] = b"{\"ok\":true,\"queued\":true,\"id\":\"out_9\"}"
+TABLE = {"nul": NUL, "optin": OPTIN, "envbig": ENVBIG}.get(mode, {})
 HELPERS = {"vaultrun": "helper", "vaultrun-dir": "dir-helper"}
 if mode in HELPERS:
     TABLE = {"/cli/vault/run-helper": json.dumps({"helper": os.path.join(d, HELPERS[mode]), "tokenFd": True}).encode()}
@@ -674,35 +679,67 @@ check_exec_child_env() {
     return 1
 }
 
-# check_wiki_status_large_answer: the stub answers the wiki index with
-# about 1.4 MiB of notes (mode wikibig), the owner token and port on disk,
-# and both CLIs run `wiki status`. Bash exits 126 (1 on macOS, with its
-# /bin/bash 3.2) with "Argument list too long" on stderr and nothing on
-# stdout; the binary exits 0, prints the
-# status with "  Notes:      60000" and nothing on stderr; both send the
-# same requests, the serve status then the index.
-check_wiki_status_large_answer() {
-    local d="$WORK/wiki-large" rc rr want=126 problems=()
+# check_env_answer_large: each case of the difference, the owner token
+# and port on disk (stub mode envbig).
+# - `wiki status`, the index about 1.4 MiB of notes: bash exits 126 (1 on
+#   macOS, with its /bin/bash 3.2) with "Argument list too long" on stderr
+#   and nothing on stdout; the binary exits 0, prints the status with
+#   "  Notes:      60000" and nothing on stderr; both send the same
+#   requests, the serve status then the index.
+# - `mail send --body-file` of a body above 128 KiB: on Linux bash exits
+#   126 with "Argument list too long" and sends nothing; the binary sends
+#   it once and prints the queued line, exit 0. On macOS (one limit for
+#   the whole environment) both send it and print the same: what was
+#   checked there held, and the check says the mail case was not proven.
+check_env_answer_large() {
+    local d="$WORK/env-large" rc rr want=126 mail_proven=1 problems=()
+    local queued="queued for approval (out_9) — track with 'k2 mail outbox out_9'"
     mkdir -p "$d/home/.k2" "$d/ws/.k2"
     printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
-    start_stub "$d" wikibig || { echo "the stub daemon didn't start"; return 1; }
+    python3 -I -c 'import sys; open(sys.argv[1], "w", encoding="utf-8").write("é and some words of the body " * 7000)' "$d/ws/big.txt"
+    start_stub "$d" envbig || { echo "the stub daemon didn't start"; return 1; }
     printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    # wiki status
     rc=0; run_side "$d" bash wiki status || rc=$?
     cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
     rr=0; run_side "$d" binary wiki status || rr=$?
-    stop_stub
     [ "$(uname -s)" != Darwin ] || want=1
-    [ "$rc" = "$want" ] || problems+=("bash exited $rc, want $want: $(head -c 300 "$d/err.bash")")
-    grep -q 'Argument list too long' "$d/err.bash" || problems+=("bash's stderr has no 'Argument list too long': $(head -c 300 "$d/err.bash")")
-    [ ! -s "$d/out.bash" ] || problems+=("bash printed on stdout: $(head -c 300 "$d/out.bash")")
-    [ "$rr" = 0 ] || problems+=("the binary exited $rr, want 0: $(head -c 300 "$d/err")")
-    grep -qx '  Notes:      60000' "$d/out" || problems+=("the binary printed no note count: $(head -c 300 "$d/out")")
-    [ ! -s "$d/err" ] || problems+=("the binary wrote on stderr: $(head -c 300 "$d/err")")
-    [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 2 ] || problems+=("bash sent, want two requests: $(head -c 300 "$d/log.bash")")
-    cmp -s "$d/log.bash" "$d/log" || problems+=("the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
-    [ ${#problems[@]} -eq 0 ] && return 0
-    printf '%s\n' "${problems[@]}"
-    return 1
+    [ "$rc" = "$want" ] || problems+=("wiki status: bash exited $rc, want $want: $(head -c 300 "$d/err.bash")")
+    grep -q 'Argument list too long' "$d/err.bash" || problems+=("wiki status: bash's stderr has no 'Argument list too long': $(head -c 300 "$d/err.bash")")
+    [ ! -s "$d/out.bash" ] || problems+=("wiki status: bash printed on stdout: $(head -c 300 "$d/out.bash")")
+    [ "$rr" = 0 ] || problems+=("wiki status: the binary exited $rr, want 0: $(head -c 300 "$d/err")")
+    grep -qx '  Notes:      60000' "$d/out" || problems+=("wiki status: the binary printed no note count: $(head -c 300 "$d/out")")
+    [ ! -s "$d/err" ] || problems+=("wiki status: the binary wrote on stderr: $(head -c 300 "$d/err")")
+    [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 2 ] || problems+=("wiki status: bash sent, want two requests: $(head -c 300 "$d/log.bash")")
+    cmp -s "$d/log.bash" "$d/log" || problems+=("wiki status: the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
+    # mail send --body-file
+    local mail=(mail send a@x.example --subject S --body-file big.txt)
+    rc=0; run_side "$d" bash "${mail[@]}" || rc=$?
+    cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
+    rr=0; run_side "$d" binary "${mail[@]}" || rr=$?
+    stop_stub
+    [ "$rr" = 0 ] || problems+=("mail send: the binary exited $rr, want 0: $(head -c 300 "$d/err")")
+    [ "$(cat "$d/out")" = "$queued" ] || problems+=("mail send: the binary printed '$(head -c 300 "$d/out")', want '$queued'")
+    [ ! -s "$d/err" ] || problems+=("mail send: the binary wrote on stderr: $(head -c 300 "$d/err")")
+    [ "$(wc -l <"$d/log" | tr -d ' ')" = 1 ] && grep -q '^POST /cli/mail/send' "$d/log" \
+        || problems+=("mail send: the binary sent, want one POST /cli/mail/send: $(head -c 300 "$d/log")")
+    if [ "$(uname -s)" = Darwin ]; then
+        mail_proven=0
+        [ "$rc" = 0 ] || problems+=("mail send: bash on macOS exited $rc, want 0: $(head -c 300 "$d/err.bash")")
+        cmp -s "$d/out.bash" "$d/out" || problems+=("mail send: bash on macOS printed '$(head -c 300 "$d/out.bash")'")
+        cmp -s "$d/log.bash" "$d/log" || problems+=("mail send: bash on macOS sent '$(head -c 300 "$d/log.bash")'")
+    else
+        [ "$rc" = 126 ] || problems+=("mail send: bash exited $rc, want 126: $(head -c 300 "$d/err.bash")")
+        grep -q 'Argument list too long' "$d/err.bash" || problems+=("mail send: bash's stderr has no 'Argument list too long': $(head -c 300 "$d/err.bash")")
+        [ ! -s "$d/log.bash" ] || problems+=("mail send: bash sent: $(head -c 300 "$d/log.bash")")
+    fi
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    [ "$mail_proven" = 1 ] && return 0
+    echo "mail send: macOS has one limit for the whole environment, so bash sends the body as the binary does; the mail case is proven on Linux"
+    return 3
 }
 
 # check_feedback_optin_without_python3: the stub says agents may not

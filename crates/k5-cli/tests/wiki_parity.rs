@@ -17,7 +17,7 @@
 //! - `wiki publish` and the edges the binary hands to the shell.
 //! - `status` with an index above 1 MiB: bash can't hand it to its Python
 //!   in an environment variable; the named difference
-//!   `wiki-status-large-answer`.
+//!   `env-answer-large`.
 
 #![cfg(unix)]
 
@@ -831,7 +831,7 @@ fn wiki_hands_these_to_the_shell() {
     }
 }
 
-/// `wiki-status-large-answer`: the index above what an environment
+/// `env-answer-large`: the index above what an environment
 /// variable may hold. Bash stops at its Python ("Argument list too long";
 /// exit 126, or 1 on macOS with its /bin/bash 3.2); the binary prints the
 /// status. Both send the same two requests.

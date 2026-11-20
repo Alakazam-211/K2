@@ -1826,3 +1826,57 @@ mod core_rules {
         assert_eq!(iso::timestamp("1970-01-01T00:00:00.5+00:00"), Some(0.5));
     }
 }
+
+mod forward_words {
+    use super::super::core::Plan;
+    use super::super::forward::{parse, parse_set, Family};
+    use k2_client::brand::CLI_NAME;
+
+    fn hint(words: &[&str]) -> String {
+        match parse("forward", words) {
+            Plan::Usage(h) => h,
+            other => panic!("{words:?}: {other:?}"),
+        }
+    }
+
+    /// Each usage line names the brand's command, and no other.
+    #[test]
+    fn usage_lines_name_the_brand_s_command() {
+        let mut lines: Vec<String> = [
+            &["x"][..],
+            &["set"],
+            &["add", "--to", "a", "--keep", "--no-keep"],
+            &["rm", "--keep"],
+            &["show", "--to", "a"],
+            &["pause", "x"],
+        ]
+        .iter()
+        .map(|w| hint(w))
+        .collect();
+        for words in [&[][..], &["--to", "a", "x", "y"]] {
+            match parse_set(Family::Hostmail, "set", words, "forward_set") {
+                Err(Plan::Usage(h)) => lines.push(h),
+                other => panic!("{words:?}: {other:?}"),
+            }
+        }
+        for h in lines {
+            assert!(h.contains(&format!("{CLI_NAME} ")), "{h}");
+            if CLI_NAME != "k2" {
+                assert!(!h.contains("k2 ") && !h.contains("k5 "), "{h}");
+            }
+        }
+    }
+
+    /// `--to` repeats, one address a line; an empty one adds nothing, as
+    /// bash's `${_fw_to:+…}` does.
+    #[test]
+    fn to_repeats_one_a_line() {
+        let Plan::Run(e) = parse("forward", &["add", "--to", "", "--to", "a", "--to", "b"]) else {
+            panic!("not run");
+        };
+        assert_eq!(e.get("M_TO"), "a\nb");
+        assert_eq!(e.get("M_VERB"), "self_forward_add");
+        assert_eq!(e.get("M_KEEP_ARG"), "");
+        assert_eq!(e.get("M_RESTART"), "false");
+    }
+}

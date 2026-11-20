@@ -1215,3 +1215,254 @@ fn wiki_status_with_a_large_answer() {
         r.stdout
     );
 }
+
+/// The control plane's answer to a create, through the tunnel.
+const CREATED: &str = r#"{"label":"acme","target":"127.0.0.1:4711","status":"active"}"#;
+const PROXY_USER: &str = "acme-proxy";
+const PROXY_PASS: &str = "pr0xy-s3cret";
+const TUN_TOK: &str = "tun-tok";
+
+/// No daemon to make the Connect call (404 from /cli/connect/proxy):
+/// serve on, its status, the claim check, the create through the
+/// daemon (404), then the stamp and the nudge after a create the
+/// control plane made.
+fn cp_made() -> Vec<Reply> {
+    vec![
+        ok(SERVED),
+        ok(STATUS),
+        ok(CHECKED),
+        Reply::Answer(404, "not found".into()),
+        ok(CHECKED),
+        ok("{}"),
+    ]
+}
+
+/// The same when the control plane can't be reached: the create and the
+/// point both go to the daemon (404) and on to the control plane.
+fn cp_failed() -> Vec<Reply> {
+    vec![
+        ok(SERVED),
+        ok(STATUS),
+        ok(CHECKED),
+        Reply::Answer(404, "not found".into()),
+        Reply::Answer(404, "not found".into()),
+    ]
+}
+
+fn cp_case(
+    name: &'static str,
+    env: Vec<(&'static str, String)>,
+    replies: Vec<Reply>,
+    requests: usize,
+) -> Case {
+    Case {
+        env,
+        ..case(
+            name,
+            &["publish", "--label", "acme"],
+            &[],
+            replies,
+            tunnel_token,
+            0,
+            requests,
+        )
+    }
+}
+
+/// `wiki publish` calls the control plane itself through the person's
+/// proxy (K2's ruling on the shared transport): a throwaway CA trusted
+/// through SSL_CERT_FILE on both sides, a recording proxy, and the
+/// control plane as a TLS stub under a name that never resolves.
+#[test]
+fn wiki_publish_through_the_proxy() {
+    use common::tunnel::{self, ProxyMode, ProxyStub, TlsStub, HOST};
+    let rig = Rig::new(VERB, "proxy");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let cp = TlsStub::start(&pki, 201, CREATED);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let target = format!("{HOST}:{}", cp.port);
+    let base = format!("https://{target}");
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let with = |extra: &[(&'static str, String)]| {
+        let mut env = vec![
+            ("K2_CONNECT_BASE", base.clone()),
+            ("SSL_CERT_FILE", ca.clone()),
+        ];
+        env.extend(extra.iter().cloned());
+        env
+    };
+    let authed = proxy.url(Some((PROXY_USER, PROXY_PASS)));
+    let basic = tunnel::basic_line(PROXY_USER, PROXY_PASS);
+
+    // https_proxy with a user and password: Basic in the CONNECT, the
+    // token only inside the tunnel.
+    let c = cp_case(
+        "https_proxy with user:pass",
+        with(&[("https_proxy", authed.clone())]),
+        cp_made(),
+        6,
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &cp);
+    // The binary's side first: the bite (a stand-in that puts the token
+    // in the CONNECT head) must fail right here.
+    for run in [&r, &b] {
+        tunnel::assert_tunnel_only(c.name, run, &target, Some(&basic), TUN_TOK);
+        assert_eq!(run.tls.len(), 1, "one create: {run:?}");
+    }
+    tunnel::assert_same(c.name, &b, &r);
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+    assert!(r.out.stdout.contains("acme"), "{r:?}");
+    tunnel::assert_unprinted(c.name, &[b, r], &[PROXY_PASS, TUN_TOK]);
+
+    // HTTPS_PROXY with no user part: no Proxy-Authorization.
+    let c = cp_case(
+        "HTTPS_PROXY, no user",
+        with(&[("HTTPS_PROXY", proxy.url(None))]),
+        cp_made(),
+        6,
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &cp);
+    tunnel::assert_same(c.name, &b, &r);
+    for run in [&b, &r] {
+        tunnel::assert_tunnel_only(c.name, run, &target, None, TUN_TOK);
+    }
+
+    // Every proxy variable set: the daemon's calls (loopback) never reach
+    // the proxy; only the control plane's CONNECT does.
+    let every: Vec<(&'static str, String)> = [
+        "http_proxy",
+        "HTTP_PROXY",
+        "https_proxy",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+    ]
+    .iter()
+    .map(|n| (*n, authed.clone()))
+    .collect();
+    let c = cp_case("every proxy variable set", with(&every), cp_made(), 6);
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &cp);
+    tunnel::assert_same(c.name, &b, &r);
+    for run in [&b, &r] {
+        assert_eq!(run.daemon.len(), 6, "the daemon got every call: {run:?}");
+        tunnel::assert_tunnel_only(c.name, run, &target, Some(&basic), TUN_TOK);
+        assert_eq!(run.proxy.len(), 1, "only the control plane's CONNECT: {run:?}");
+    }
+
+    // Direct: no_proxy naming the host, NO_PROXY=*, and HTTP_PROXY alone
+    // (never read). The name never resolves, so the control plane is
+    // quiet on both sides, and the proxy sees nothing.
+    for (name, extra) in [
+        (
+            "no_proxy names the host",
+            vec![("https_proxy", authed.clone()), ("no_proxy", HOST.to_string())],
+        ),
+        (
+            "no_proxy names its domain",
+            vec![
+                ("https_proxy", authed.clone()),
+                ("no_proxy", "other.example,.example.invalid".to_string()),
+            ],
+        ),
+        (
+            "NO_PROXY=*",
+            vec![("HTTPS_PROXY", authed.clone()), ("NO_PROXY", "*".to_string())],
+        ),
+        ("HTTP_PROXY alone", vec![("HTTP_PROXY", authed.clone())]),
+    ] {
+        let c = cp_case(name, with(&extra), cp_failed(), 5);
+        let [b, r] = tunnel::both(&rig, &c, &proxy, &cp);
+        tunnel::assert_same(name, &b, &r);
+        for run in [&b, &r] {
+            assert_eq!(run.proxy, Vec::<String>::new(), "{name}: {run:?}");
+            assert!(run.tls.is_empty(), "{name}: {run:?}");
+            assert_eq!(run.daemon.len(), 5, "{name}: {run:?}");
+        }
+        tunnel::assert_unprinted(name, &[b, r], &[PROXY_PASS, TUN_TOK]);
+    }
+
+    // A 407, and a proxy that is down: quiet on both sides, the password
+    // printed nowhere, nothing in the tunnel.
+    let refusing = ProxyStub::start(ProxyMode::Refuse);
+    let dead = format!("http://{PROXY_USER}:{PROXY_PASS}@127.0.0.1:{}", dead_tcp_port());
+    for (name, url, p) in [
+        (
+            "the proxy answers 407",
+            refusing.url(Some((PROXY_USER, PROXY_PASS))),
+            &refusing,
+        ),
+        ("the proxy is down", dead, &proxy),
+    ] {
+        let c = cp_case(name, with(&[("https_proxy", url)]), cp_failed(), 5);
+        let [b, r] = tunnel::both(&rig, &c, p, &cp);
+        tunnel::assert_same(name, &b, &r);
+        for run in [&b, &r] {
+            assert!(run.tls.is_empty(), "{name}: {run:?}");
+            assert_eq!(run.daemon.len(), 5, "{name}: {run:?}");
+            for h in &run.proxy {
+                assert!(!h.contains(TUN_TOK), "{name}: {h:?}");
+            }
+        }
+        tunnel::assert_unprinted(name, &[b, r], &[PROXY_PASS, TUN_TOK]);
+    }
+}
+
+/// A port nothing listens on.
+fn dead_tcp_port() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    l.local_addr().unwrap().port()
+}
+
+/// K2's rulings on `K2_CONNECT_BASE`, checked as publish starts: no
+/// scheme, or plain http to a host that is not this computer, is one
+/// line and exit 2, with nothing sent. The bash side flips by itself
+/// once cli/k2 carries the fix (pending-bash-fix until then: the
+/// binary's side alone is checked, and bash must not print the line
+/// half-fixed).
+#[test]
+fn wiki_publish_refuses_a_base_that_would_leak_the_token() {
+    let rig = Rig::new(VERB, "base");
+    for (name, base, line) in [
+        (
+            "a base with no scheme",
+            "cp.example.invalid",
+            "Error: K2_CONNECT_BASE must start with https:// (got: cp.example.invalid)",
+        ),
+        (
+            "plain http to another machine",
+            "http://cp.example.invalid:9",
+            "Error: plain http:// only to this computer; use https:// (got: http://cp.example.invalid:9)",
+        ),
+    ] {
+        let c = Case {
+            env: vec![("K2_CONNECT_BASE", base.to_string())],
+            ..case(
+                name,
+                &["publish", "--label", "acme"],
+                &[],
+                vec![],
+                tunnel_token,
+                2,
+                0,
+            )
+        };
+        let fixed = common::tunnel::bash_has(line.split(" (got").next().unwrap());
+        if fixed {
+            rig.check(&c);
+            continue;
+        }
+        println!("PENDING bash fix: {name}: the binary's side alone");
+        rig.prepare(Side::Rust, &c);
+        let out = rig.run(false, &c);
+        assert_eq!(
+            (out.code, out.stdout.as_str(), out.stderr.as_str()),
+            (Some(2), "", format!("{line}\n").as_str()),
+            "{name}"
+        );
+        assert_eq!(rig.read(Side::Rust, true, name).len(), 0, "{name}: sent");
+        rig.prepare(Side::Bash, &c);
+        let out = rig.run(true, &c);
+        assert!(!out.stderr.contains(line), "{name}: bash half-fixed: {out:?}");
+        rig.read(Side::Bash, false, name);
+    }
+}

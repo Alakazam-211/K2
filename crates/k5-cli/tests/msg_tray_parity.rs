@@ -565,3 +565,42 @@ fn tray_value_flag_last_is_the_d6_line() {
         );
     }
 }
+
+/// The tray's upload goes to this machine's daemon, which never goes
+/// through a proxy (K2's ruling on the shared transport): with every
+/// proxy variable set and no no_proxy, both sides send the upload, the
+/// deliver and the delete to the daemon, and the proxy sees nothing.
+#[test]
+fn tray_upload_never_reaches_a_proxy() {
+    use common::tunnel::{self, ProxyMode, ProxyStub};
+    let rig = Rig::new(VERB, "proxy");
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let url = proxy.url(Some(("acme-proxy", "pr0xy-s3cret")));
+    let mut c = plain(
+        "not readable there, every proxy variable set: upload, deliver, delete",
+        &["ws", "--inbox-wake", "note.md", "--idempotency-key", KEY],
+        vec![
+            ok(ON),
+            Reply::Answer(400, NOT_READABLE.into()),
+            ok(r#"{"path":"/srv/ws"}"#),
+            ok(r#"{"path":"/srv/ws/.k2/tmp/msg-inbox/note.md"}"#),
+            ok(LANDED),
+            ok("{}"),
+        ],
+        0,
+        6,
+    );
+    for n in [
+        "http_proxy",
+        "HTTP_PROXY",
+        "https_proxy",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+    ] {
+        c.env.push((n, url.clone()));
+    }
+    rig.check(&c);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(tunnel::take(&proxy.heads), Vec::<String>::new());
+}

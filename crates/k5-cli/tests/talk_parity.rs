@@ -602,3 +602,86 @@ fn talk_agent_and_scout_cap_as_fixed_in_bash() {
         rig.check(&c);
     }
 }
+
+fn words(w: Vec<&'static str>) -> &'static [&'static str] {
+    Box::leak(w.into_boxed_slice())
+}
+
+/// `talk ws@https://<host>` through the person's proxy (K2's ruling on
+/// the shared transport): Basic in the CONNECT, the host's token only
+/// inside the tunnel, the same screen on both sides.
+#[test]
+fn talk_at_a_remote_host_through_the_proxy() {
+    use common::tunnel::{self, ProxyMode, ProxyStub, TlsStub, HOST};
+    let rig = Rig::new(VERB, "proxy");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let remote = TlsStub::start(&pki, 200, SCREEN);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let target = format!("{HOST}:{}", remote.port);
+    let addr = leak(format!("ws@https://{target}"));
+    let authed = proxy.url(Some(("acme-proxy", "pr0xy-s3cret")));
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let c = env(
+        plain(
+            "ws@https://host --read-only through https_proxy",
+            words(vec![addr, "--read-only"]),
+            vec![],
+            0,
+            0,
+        ),
+        &[
+            ("K2_REMOTE_TOKEN", "remote-tok-9"),
+            ("https_proxy", authed.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &remote);
+    let basic = tunnel::basic_line("acme-proxy", "pr0xy-s3cret");
+    for run in [&r, &b] {
+        tunnel::assert_tunnel_only(c.name, run, &target, Some(&basic), "remote-tok-9");
+        assert!(run.daemon.is_empty(), "never this machine's daemon: {run:?}");
+    }
+    tunnel::assert_same(c.name, &b, &r);
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+    assert!(r.out.stdout.contains("$ build"), "{r:?}");
+    tunnel::assert_unprinted(c.name, &[b, r], &["pr0xy-s3cret", "remote-tok-9"]);
+}
+
+/// K2's shared transport rule: a token goes to another machine over
+/// https only. `ws@http://<not this computer>` is one line, exit 2, with
+/// nothing sent. The bash side flips by itself once cli/k2 carries the
+/// fix (pending-bash-fix until then).
+#[test]
+fn talk_refuses_plain_http_to_another_machine() {
+    let rig = Rig::new(VERB, "plain");
+    let line =
+        "Error: plain http:// only to this computer; use https:// (got: http://cp.example.invalid:9)";
+    let c = env(
+        plain(
+            "ws@http://another machine",
+            &["ws@http://cp.example.invalid:9", "hi"],
+            vec![],
+            2,
+            0,
+        ),
+        &[("K2_REMOTE_TOKEN", "remote-tok-9")],
+    );
+    if common::tunnel::bash_has("Error: plain http:// only to this computer; use https://") {
+        rig.check(&c);
+        return;
+    }
+    println!("PENDING bash fix: {}: the binary's side alone", c.name);
+    rig.prepare(Side::Rust, &c);
+    let out = rig.run(false, &c);
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (Some(2), "", format!("{line}\n").as_str()),
+        "{}",
+        c.name
+    );
+    assert_eq!(rig.read(Side::Rust, true, c.name).len(), 0, "sent");
+    rig.prepare(Side::Bash, &c);
+    let out = rig.run(true, &c);
+    assert!(!out.stderr.contains(line), "bash half-fixed: {out:?}");
+    rig.read(Side::Bash, false, c.name);
+}

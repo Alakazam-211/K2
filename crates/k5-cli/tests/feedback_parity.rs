@@ -815,15 +815,6 @@ fn feedback_hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");
     let v = vec![
         shell(case(
-            "feedback alone",
-            &[],
-            &[],
-            vec![],
-            owner_and_port,
-            0,
-            0,
-        )),
-        shell(case(
             "--help",
             &["--help"],
             &[],
@@ -844,15 +835,6 @@ fn feedback_hands_these_to_the_shell() {
         shell(case(
             "list --status --help",
             &["list", "--status", "--help"],
-            &[],
-            vec![],
-            owner_and_port,
-            0,
-            0,
-        )),
-        shell(case(
-            "template",
-            &["template"],
             &[],
             vec![],
             owner_and_port,

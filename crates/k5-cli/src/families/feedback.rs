@@ -1,5 +1,5 @@
-//! `k5 feedback list` and `k5 feedback show <id>` (`tickets` is the same
-//! command), as the shell CLI's `cmd_feedback_list` and
+//! `k5 feedback` (`tickets` is the same command). Here: `list` and
+//! `show <id>`, as the shell CLI's `cmd_feedback_list` and
 //! `cmd_feedback_show` answer them (`cli/src/feedback.sh`).
 //!
 //! What runs, in the shell's order:
@@ -35,10 +35,11 @@
 //! The daemon's error is one line of JSON on stderr, exit 4 for
 //! `not_found` and `ambiguous_id`, 2 for `usage`, else 1.
 //!
-//! The route table sends only `list` and `show` here (two verb rows,
-//! [`crate::route`]); `feedback` alone, its help and every other verb
-//! (`ask`, `comment`, `resolve` and the rest) stay the shell's. So does a
-//! command line with `-h` or `--help` ([`crate::front`]), a word that is
+//! Every other form (`feedback` alone, an unknown verb, `ask`,
+//! `template`, `comment`, `resolve`, `assign`, `settings`) is
+//! [`write`]'s, and `ask` [`ask`]'s. A command line with `-h` or
+//! `--help` is the front's ([`crate::front`]): a help page, or the
+//! shell's. So is a word that is
 //! not UTF-8, a port that is set but is no port curl takes, and a
 //! `python3` the binary can't tell ([`crate::families`], Without Python).
 //! The binary's own transport never uses a proxy (loopback and plain http
@@ -63,20 +64,11 @@ use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["feedback", "tickets"];
-/// The shell's but for [`VERBS`].
-pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// Only `list` and `show`; every other verb, and `feedback` alone, is
-/// the shell's. One verb row each, so either can turn back alone.
-pub const VERBS: &[crate::route::Verb] = &[
-    crate::route::Verb {
-        words: &["list"],
-        owner: crate::route::Owner::Native,
-    },
-    crate::route::Verb {
-        words: &["show"],
-        owner: crate::route::Owner::Native,
-    },
-];
+/// Every form is the family's; a line with `-h` or `--help` is the
+/// front's (a help page, or the shell's).
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
 
 /// The routes.
 pub const LIST: &str = "/cli/feedback/list";
@@ -248,7 +240,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let ask = parse(&words)?;
+    let Some(ask) = parse(&words) else {
+        return write::run(args, &words);
+    };
     if !python::family_native(python::here()) {
         return None;
     }
@@ -479,7 +473,12 @@ fn str_of(v: &Value) -> String {
 
 /// `str(d.get(key, ""))[:8]`.
 fn short_id(d: &Value) -> String {
-    PyStr::of(&at_or(d, "id", s(""))).head(8).render()
+    short_text(&at_or(d, "id", s("")))
+}
+
+/// `str(v)[:8]`.
+fn short_text(v: &Value) -> String {
+    PyStr::of(v).head(8).render()
 }
 
 /// A Python `int`: its digits, `-` first when negative, never `-0`.
@@ -977,7 +976,17 @@ fn show_lines(
 /// `_ticket_files_check_py`'s `ticket_file_lines(atts, root, indent)`
 /// (`cli/src/browser.sh`), called from `show`'s line [`line::S_FILES`].
 pub fn ticket_file_lines(atts: &Value, root: &Value, indent: &str) -> Result<Vec<String>, Raise> {
-    let raise = |l: u32, e: String| Raise::inside(line::S_FILES, l, "ticket_file_lines", e);
+    ticket_file_lines_from(atts, root, indent, line::S_FILES)
+}
+
+/// [`ticket_file_lines`], called from line `from` of the module.
+pub fn ticket_file_lines_from(
+    atts: &Value,
+    root: &Value,
+    indent: &str,
+    from: u32,
+) -> Result<Vec<String>, Raise> {
+    let raise = |l: u32, e: String| Raise::inside(from, l, "ticket_file_lines", e);
     let mut out = Vec::new();
     if !py::truthy(atts) {
         return Ok(out);
@@ -1042,7 +1051,7 @@ pub fn ticket_file_lines(atts: &Value, root: &Value, indent: &str) -> Result<Vec
         };
         let size = size(&n, line::T_SIZE_KB, line::T_SIZE_MB).map_err(|(l, e)| Raise {
             frames: vec![
-                (line::S_FILES, "<module>"),
+                (from, "<module>"),
                 (line::T_SIZE, "ticket_file_lines"),
                 (l, "ticket_size"),
             ],
@@ -1052,6 +1061,9 @@ pub fn ticket_file_lines(atts: &Value, root: &Value, indent: &str) -> Result<Vec
     }
     Ok(out)
 }
+
+pub mod ask;
+pub mod write;
 
 #[cfg(test)]
 mod tests;

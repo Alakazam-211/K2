@@ -482,8 +482,9 @@ assert_children_native "tunnel switch --token-stdin"
 assert_off_children "tunnel switch --token-stdin" "tunnel token" "$TUNNEL_SENTINEL"
 
 # 20. k2 llm tokens add: the sign-in code pasted on stdin reaches
-#     login/input and no child's argv or environment.
-K2_LLMA_POLL_SECS=0 sec_case "llm tokens add (code)" /cli/llm/accounts/login/input "sign-in code" "$PASS_SENTINEL" llm tokens add claude work
+#     login/input and no child's argv or environment. llm is native in
+#     the k5 binary, which starts no child at all.
+K2_LLMA_POLL_SECS=0 SEC_CASE_CHILDREN=assert_children_native sec_case "llm tokens add (code)" /cli/llm/accounts/login/input "sign-in code" "$PASS_SENTINEL" llm tokens add claude work
 
 # 21. k2 fed pair-join --token-stdin: the other owner's pairing token
 #     reaches the pairing route (decoded) and, as typed, no child's argv

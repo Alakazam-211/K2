@@ -10,10 +10,12 @@
 //! `rm` and `drop` takes `--json`; those two read `D_JSON` from the
 //! caller's environment, as the shell's `_db_py` does.
 //!
+//! A line with `--widget` anywhere is Garden data (`cmd_store_widget`,
+//! shared with `zen data`): [`widget`], after the same settings, gates
+//! and id tool check, with no `--workspace` taken.
+//!
 //! The binary hands these to the shell before it prints or sends
-//! anything: a line with `--widget` anywhere (Garden data,
-//! `cmd_store_widget`, shared with `zen data`), and the cases
-//! [`super::db`] hands back.
+//! anything: the cases [`super::db`] hands back.
 
 use super::db::py::{err_line, Ask, Verb};
 use super::db::{self, Form, Line, Words};
@@ -25,6 +27,7 @@ use std::ffi::OsString;
 
 #[cfg(test)]
 mod tests;
+pub mod widget;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["store"];
@@ -50,6 +53,7 @@ pub fn parse(words: &[&str], env_json: bool) -> Line {
             form: Form::Help,
         };
     }
+    // Garden data: [`widget`], which takes its own words.
     if words.contains(&"--widget") {
         return Line {
             sels: Vec::new(),
@@ -181,7 +185,13 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     let line = parse(&words, env_json());
-    let settings = match db::settings_for(&line.sels, line.form == Form::Shell)? {
+    // `--widget` anywhere: Garden data, after the same checks. A
+    // `_K2_NOANSWER_SOFT` from outside changes `_compute_send`: the shell's.
+    let garden = line.form == Form::Shell;
+    if garden && std::env::var_os("_K2_NOANSWER_SOFT").is_some_and(|v| !v.is_empty()) {
+        return None;
+    }
+    let settings = match db::settings_for(&line.sels, false)? {
         Ok(s) => s,
         Err(e) => return Some(e),
     };
@@ -196,6 +206,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
+    if garden {
+        return Some(widget::store(&mut client, &words));
+    }
     let mut closing = Closing::default();
     let mut project = settings.project.clone();
     for sel in &line.sels {
@@ -220,7 +233,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             Exit::Usage
         }
         Form::Shift => Exit::Error,
-        Form::Home { .. } | Form::Cap { .. } | Form::Cp(_) | Form::Run(_) | Form::Shell => {
+        Form::Shell => unreachable!("Garden data is answered above"),
+        Form::Home { .. } | Form::Cap { .. } | Form::Cp(_) | Form::Run(_) => {
             unreachable!("store has no such form")
         }
     };

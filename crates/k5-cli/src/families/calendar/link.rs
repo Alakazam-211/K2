@@ -69,6 +69,36 @@ const PAUSE: Duration = Duration::from_secs(3);
 
 const PASTE_PROMPT: &str = "3. Paste it here and press Enter (it isn't shown or kept): ";
 
+const NOT_GOOGLE: &str = concat!(
+    "that isn't the address Google redirected to (it has code= and state=) — run '",
+    cli_name!(),
+    " cal link' again"
+);
+const EXPIRED: &str = concat!(
+    "the link expired or the daemon restarted — start again with '",
+    cli_name!(),
+    " cal link'"
+);
+const TIMED_OUT: &str = concat!(
+    "the link did not complete in time — run '",
+    cli_name!(),
+    " cal link' again"
+);
+const NO_BROWSER: &str = concat!(
+    "This ",
+    product_name!(),
+    " can't open a browser here — using paste-back instead.\n"
+);
+
+/// `owner_hint`'s words.
+fn owner_ask(address: &str, provider: &str) -> String {
+    format!(
+        "linking a calendar is your human's (owner or Admin) — ask with '{} cal link --request {address} --provider {}'",
+        cli_name!(),
+        if provider.is_empty() { "google" } else { provider }
+    )
+}
+
 /// `20000 + secrets.randbelow(40000)`.
 fn random_port() -> u32 {
     use std::hash::{BuildHasher, Hasher};
@@ -191,11 +221,7 @@ impl Py {
         if !(is_str(code, "forbidden") || is_str(code, "owner_only")) {
             return err.clone();
         }
-        let hint = format!(
-            "linking a calendar is your human's (owner or Admin) — ask with '{} cal link --request {address} --provider {}'",
-            cli_name!(),
-            if provider.is_empty() { "google" } else { provider }
-        );
+        let hint = owner_ask(address, provider);
         let Value::Object(mut pairs) = err.clone() else {
             return err.clone();
         };
@@ -273,10 +299,7 @@ impl Py {
             dict(&got, line::REMOTE, MODULE)?;
             let remote = matches!(at(&got, "error"), Some(e @ Value::Object(_)) if is_str(at(e, "code"), "remote_unsupported"));
             if remote {
-                eprint(&format!(
-                    "This {} can't open a browser here — using paste-back instead.\n",
-                    product_name!()
-                ));
+                eprint(NO_BROWSER);
                 paste = true;
             } else {
                 d = self.must(got, line::START_MUST, provider, &address)?;
@@ -337,11 +360,7 @@ impl Py {
                         ("code", s("usage")),
                         (
                             "hint",
-                            s(concat!(
-                                "that isn't the address Google redirected to (it has code= and state=) — run '",
-                                cli_name!(),
-                                " cal link' again"
-                            )),
+                            s(NOT_GOOGLE),
                         ),
                     ]),
                     None,
@@ -367,11 +386,7 @@ impl Py {
                         ("code", s("expired")),
                         (
                             "hint",
-                            s(concat!(
-                                "the link expired or the daemon restarted — start again with '",
-                                cli_name!(),
-                                " cal link'"
-                            )),
+                            s(EXPIRED),
                         ),
                     ]),
                     None,
@@ -433,11 +448,7 @@ impl Py {
                     ("code", s("timeout")),
                     (
                         "hint",
-                        s(concat!(
-                            "the link did not complete in time — run '",
-                            cli_name!(),
-                            " cal link' again"
-                        )),
+                        s(TIMED_OUT),
                     ),
                 ]),
                 Some(Exit::Usage),
@@ -593,6 +604,34 @@ mod tests {
         assert_eq!(one("x?code", "code"), "");
         assert_eq!(one("x?error=access_denied%zz", "error"), "access_denied%zz");
         assert_eq!(one("x?c%6Fde=%C3%A9", "code"), "é");
+    }
+
+    /// Every name a line prints is the brand's: an xy build says `xy`
+    /// and `XY`, and no line says k2, k5 or K2.
+    #[test]
+    fn the_lines_name_the_brand() {
+        use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
+        let lines = [
+            NOT_GOOGLE.to_string(),
+            EXPIRED.to_string(),
+            TIMED_OUT.to_string(),
+            NO_BROWSER.to_string(),
+            owner_ask("a@x", ""),
+        ];
+        for l in &lines {
+            assert!(
+                l.contains(&format!("'{CLI_NAME} cal link")) || l.contains(PRODUCT_NAME),
+                "{l:?}"
+            );
+        }
+        assert!(owner_ask("a@x", "").ends_with(&format!("'{CLI_NAME} cal link --request a@x --provider google'")));
+        if CLI_NAME != "k2" {
+            for l in &lines {
+                for name in ["k2 ", "k5 ", "'k2", "K2", "K5"] {
+                    assert!(!l.contains(name), "{name:?} in {l:?}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -1212,6 +1212,50 @@ fn poll(body: &[u8], seen: &str, json_out: bool) -> (String, Shown) {
 mod tests {
     use super::*;
 
+    /// Every name a line prints is the brand's: an xy build says `xy`
+    /// and `XY`, and no line says k2, k5 or K2.
+    #[test]
+    fn the_lines_name_the_brand() {
+        use super::super::{parse, Form};
+        use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
+        let hint = |w: &[&str]| match parse(w).form {
+            Form::Usage(h) => h,
+            other => panic!("{w:?}: {other:?}"),
+        };
+        let mut lines = vec![
+            hint(&["versions-access", "x"]),
+            hint(&["cluster", "x"]),
+            hint(&["cluster", "create", "x"]),
+            hint(&["cluster", "create", "17"]),
+            hint(&["cluster", "create", "17", "--x"]),
+            hint(&["cluster", "restart"]),
+            hint(&["create", "--cluster", "c", "--test"]),
+            hint(&["upgrade", "--status"]),
+            hint(&["run"]),
+            hint(&["run", "x"]),
+            NO_ANSWER.to_string(),
+        ];
+        let cluster = named_show(What::Cluster, br#"{"cluster":{"name":"n"}}"#).stdout;
+        lines.push(cluster.lines().last().unwrap_or_default().to_string());
+        let live = live_show(br#"{"live":{"db":"d","from":1,"to":2,"state":"syncing"}}"#).stdout;
+        lines.push(live.lines().last().unwrap_or_default().to_string());
+        let status = status_show(br#"{"live":[{"db":"d","from":1,"to":2,"state":"streaming"}]}"#).stdout;
+        lines.push(status.lines().last().unwrap_or_default().to_string());
+        for l in &lines {
+            assert!(
+                l.contains(&format!("{CLI_NAME} db ")) || l.contains(PRODUCT_NAME),
+                "{l:?}"
+            );
+        }
+        if CLI_NAME != "k2" {
+            for l in &lines {
+                for name in ["k2 ", "k5 ", "'k2", "K2", "K5"] {
+                    assert!(!l.contains(name), "{name:?} in {l:?}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn shr20_is_python_s() {
         for (d, want) in [

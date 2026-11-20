@@ -57,7 +57,9 @@ impl Pki {
         let ca = ca_params.self_signed(&ca_key).unwrap();
         let leaf_key = KeyPair::generate().unwrap();
         let mut leaf_params = CertificateParams::new(vec![HOST.to_string()]).unwrap();
-        leaf_params.distinguished_name.push(DnType::CommonName, HOST);
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, HOST);
         leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         leaf_params.use_authority_key_identifier_extension = true;
@@ -303,7 +305,7 @@ pub fn basic_line(user: &str, pass: &str) -> String {
 /// One side's run of a row: its output, its requests to the stub daemon
 /// (normalised, the stub's port as `{port}`), the proxy's records and the
 /// TLS stub's requests (masked, with who sent each).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SideRun {
     pub out: super::parity::Out,
     pub daemon: Vec<String>,
@@ -409,6 +411,32 @@ pub fn assert_same(name: &str, b: &SideRun, r: &SideRun) {
         r.tls.iter().all(|(_, native)| *native),
         "{name}: the binary's own"
     );
+}
+
+/// [`assert_same`] for a proxy that refuses the tunnel: curl 8.5 fails
+/// such a CONNECT with exit 56, which `_k2_curl` never tries again (the
+/// binary's code); newer curl (8.23 on one node) fails it with exit 7,
+/// which `_k2_curl` tries 4 times. So bash's heads are the binary's,
+/// each once or each 4 times in a row; everything else is the same.
+pub fn assert_same_retried(name: &str, b: &SideRun, r: &SideRun) {
+    let k = b.proxy.len() / r.proxy.len().max(1);
+    assert!(
+        !r.proxy.is_empty() && (k == 1 || k == 4) && b.proxy.len() == k * r.proxy.len(),
+        "{name}: bash's CONNECTs are not the binary's once or 4 times: {b:?} {r:?}"
+    );
+    let mut once = b.clone();
+    once.proxy = b
+        .proxy
+        .chunks(k)
+        .map(|tries| {
+            assert!(
+                tries.iter().all(|t| *t == tries[0]),
+                "{name}: bash's tries differ: {tries:?}"
+            );
+            tries[0].clone()
+        })
+        .collect();
+    assert_same(name, &once, r);
 }
 
 /// K2's rule for a token and a proxy: the proxy saw a CONNECT for

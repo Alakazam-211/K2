@@ -1410,7 +1410,12 @@ fn wiki_publish_through_the_proxy() {
     ] {
         let c = cp_case(name, with(&[("https_proxy", url)]), cp_failed(), 5);
         let [b, r] = tunnel::both(&rig, &c, p, &cp);
-        tunnel::assert_same(name, &b, &r);
+        if p.port == refusing.port {
+            assert_eq!(r.proxy.len(), 2, "{name}: one CONNECT per call: {r:?}");
+            tunnel::assert_same_retried(name, &b, &r);
+        } else {
+            tunnel::assert_same(name, &b, &r);
+        }
         for run in [&b, &r] {
             assert!(run.tls.is_empty(), "{name}: {run:?}");
             assert_eq!(run.daemon.len(), 5, "{name}: {run:?}");

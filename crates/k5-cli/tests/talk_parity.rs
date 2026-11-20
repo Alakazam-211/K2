@@ -674,13 +674,15 @@ fn talk_refuses_plain_http_to_another_machine() {
     let fixed =
         common::tunnel::bash_has("Error: plain http:// only to this computer; use https://");
     for (name, addr) in [
-        ("ws@http://another machine", "ws@http://cp.example.invalid:9"),
+        (
+            "ws@http://another machine",
+            "ws@http://cp.example.invalid:9",
+        ),
         ("ws@http://x.localhost", "ws@http://x.localhost:9"),
         ("ws@http://127.<a name>", "ws@http://127.example.invalid:9"),
     ] {
         let url = addr.strip_prefix("ws@").unwrap();
-        let line =
-            format!("Error: plain http:// only to this computer; use https:// (got: {url})");
+        let line = format!("Error: plain http:// only to this computer; use https:// (got: {url})");
         let c = env(
             plain(name, words(vec![addr, "hi"]), vec![], 2, 0),
             &[("K2_REMOTE_TOKEN", "remote-tok-9")],
@@ -700,7 +702,10 @@ fn talk_refuses_plain_http_to_another_machine() {
         assert_eq!(rig.read(Side::Rust, true, name).len(), 0, "{name}: sent");
         rig.prepare(Side::Bash, &c);
         let out = rig.run(true, &c);
-        assert!(!out.stderr.contains(&line), "{name}: bash half-fixed: {out:?}");
+        assert!(
+            !out.stderr.contains(&line),
+            "{name}: bash half-fixed: {out:?}"
+        );
         rig.read(Side::Bash, false, name);
     }
 }

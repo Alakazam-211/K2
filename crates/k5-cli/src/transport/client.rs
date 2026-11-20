@@ -758,6 +758,9 @@ pub struct Client {
     /// ([`super::proxy`]). Only [`super::remote::apply`] sets it; it is
     /// used only with [`Client::tls`], and a new client has none.
     pub(in crate::transport) via: Option<super::proxy::Proxy>,
+    /// [`super::remote::apply`] pointed it at another K2 server (its own
+    /// rules there; never the daemon's plain-http note).
+    pub(in crate::transport) remote: bool,
     /// The `Host` header curl writes for the `BASE_URL`, when it is not
     /// `<HOST>:<PORT>` (a remote URL with the scheme's own port leaves the
     /// port out).
@@ -830,6 +833,7 @@ impl Client {
             force_tcp: false,
             tls: false,
             via: None,
+            remote: false,
             host_header: None,
             post_max_time: None,
             send_max_time: None,
@@ -1650,6 +1654,14 @@ impl Client {
         let mut request = request.clone();
         let mut tries = 1;
         self.refused.set(0);
+        // A token to this machine's daemon over plain http on a host that
+        // is not this computer: the one warning, once per run.
+        if let Target::Tcp { host, .. } = &target {
+            let token = request.headers.iter().any(|(k, _)| k == "Authorization");
+            if token && !self.remote {
+                super::remote::plain_http_daemon_note(host);
+            }
+        }
         loop {
             let deadline = Instant::now() + max;
             match wire::connect(&target, kind.connect_timeout(), deadline) {

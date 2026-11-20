@@ -23,6 +23,10 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["fetch"],
         owner: crate::route::Owner::Native,
     },
+    crate::route::Verb {
+        words: &["grant"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// A command line the route sends here: [`writes::run`].

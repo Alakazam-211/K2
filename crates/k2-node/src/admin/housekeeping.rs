@@ -359,11 +359,28 @@ mod tests {
     fn a_groups_cpu_is_read_for_a_live_group_and_absent_for_an_empty_one() {
         // SAFETY: getpgrp only reads this process's group id.
         let own = unsafe { libc::getpgrp() };
-        // Burn a little CPU so the answer can't be a default.
-        let t0 = std::time::Instant::now();
+        // Burn a little CPU so the answer can't be a default: until this
+        // process's own CPU time (not the wall clock, which a busy or
+        // CPU-capped node stretches) has grown 1.2 s. A 30 s wall cap fails
+        // loudly rather than spinning forever.
+        fn process_cpu() -> std::time::Duration {
+            let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            // SAFETY: clock_gettime writes one timespec we own.
+            let rc = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut ts) };
+            assert_eq!(rc, 0, "clock_gettime(CLOCK_PROCESS_CPUTIME_ID) failed");
+            std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+        }
+        let cpu0 = process_cpu();
+        let wall0 = std::time::Instant::now();
         let mut x = 0u64;
-        while t0.elapsed() < std::time::Duration::from_millis(1200) {
-            x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+        while process_cpu() - cpu0 < std::time::Duration::from_millis(1200) {
+            for _ in 0..100_000 {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+            }
+            assert!(
+                wall0.elapsed() < std::time::Duration::from_secs(30),
+                "1.2 s of CPU took over 30 s of wall time: the node is too starved for this test"
+            );
         }
         std::hint::black_box(x);
         let secs = group_cpu_secs(own).expect("this test's own group has processes");

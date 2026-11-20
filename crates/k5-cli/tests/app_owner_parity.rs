@@ -47,7 +47,11 @@ fn files(rig: &Rig) {
 /// `BAD.md`, bytes that aren't UTF-8, and `NUL.md`, with NULs in it.
 fn odd_briefs(rig: &Rig) {
     files(rig);
-    std::fs::write(rig.proj.join("BAD.md"), b"caf\xc3\xa9 \xff\xfe \xe2\x82 end\n\n").unwrap();
+    std::fs::write(
+        rig.proj.join("BAD.md"),
+        b"caf\xc3\xa9 \xff\xfe \xe2\x82 end\n\n",
+    )
+    .unwrap();
     std::fs::write(rig.proj.join("NUL.md"), b"a\x00b\n\x00\n").unwrap();
 }
 

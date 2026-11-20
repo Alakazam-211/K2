@@ -50,8 +50,8 @@ use super::{Answer, Stop};
 use crate::exit::Exit;
 use crate::families::{Raise, Shown};
 use crate::out::json::{Text, Value};
-use crate::out::pylib;
 use crate::out::py as pyfmt;
+use crate::out::pylib;
 use crate::transport::{urllib, Auth};
 use k2_client::cli_name;
 use std::io::{Read, Write};
@@ -89,9 +89,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
                 i += 1;
                 break;
             }
-            _ if w.starts_with('-') => {
-                return Some(Err(Stop::usage(format!("Unknown flag: {w}"))))
-            }
+            _ if w.starts_with('-') => return Some(Err(Stop::usage(format!("Unknown flag: {w}")))),
             _ if app.is_empty() => {
                 app = w.to_string();
                 i += 1;
@@ -173,10 +171,7 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// `json.dumps(v)`.
 fn dumps(pairs: Vec<(&str, Value)>) -> String {
     crate::confirm::dumps(&Value::Object(
-        pairs
-            .into_iter()
-            .map(|(k, v)| (Text::from(k), v))
-            .collect(),
+        pairs.into_iter().map(|(k, v)| (Text::from(k), v)).collect(),
     ))
 }
 
@@ -240,7 +235,10 @@ fn session(host: &str, port: u16, token: &str, a: &Ask) -> Shown {
     let mut s = match urllib::connect(host, port, Duration::from_secs(15)) {
         Ok(s) => s,
         Err(r) => {
-            let e = raised(&[(22, "<module>")], format!("{}: {}", r.class.name(), r.text()));
+            let e = raised(
+                &[(22, "<module>")],
+                format!("{}: {}", r.class.name(), r.text()),
+            );
             return Shown::err(e.text(), Exit::Error);
         }
     };
@@ -488,7 +486,8 @@ impl Ws {
                         }
                         err_write(&format!("\r\n{}\r\n", pyfmt::str_of(&text)));
                     } else if is("error") {
-                        let line = dumps(vec![("error", get(&v, "code")), ("hint", get(&v, "hint"))]);
+                        let line =
+                            dumps(vec![("error", get(&v, "code")), ("hint", get(&v, "hint"))]);
                         err_write(&format!("{line}\r\n"));
                         self.code = Value::Int("3".to_string());
                     } else if is("exit") {

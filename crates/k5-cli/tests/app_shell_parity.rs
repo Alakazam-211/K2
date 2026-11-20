@@ -213,19 +213,21 @@ fn serve(mut c: TcpStream, steps: &[Step]) -> Log {
                     push(&mut frames, op, data);
                 }
             }
-            Step::Text(want) => loop {
-                let Some((op, data)) = read_frame(&mut c) else {
-                    panic!("the client ended before a text frame with {want:?}; it sent {frames:?}");
-                };
-                let hit = op == 1 && holds(&data, want.as_bytes());
-                if op == 2 {
-                    bin.extend_from_slice(&data);
+            Step::Text(want) => {
+                loop {
+                    let Some((op, data)) = read_frame(&mut c) else {
+                        panic!("the client ended before a text frame with {want:?}; it sent {frames:?}");
+                    };
+                    let hit = op == 1 && holds(&data, want.as_bytes());
+                    if op == 2 {
+                        bin.extend_from_slice(&data);
+                    }
+                    push(&mut frames, op, data);
+                    if hit {
+                        break;
+                    }
                 }
-                push(&mut frames, op, data);
-                if hit {
-                    break;
-                }
-            },
+            }
             Step::Pong => loop {
                 let Some((op, data)) = read_frame(&mut c) else {
                     panic!("the client ended before a pong; it sent {frames:?}");
@@ -304,7 +306,15 @@ fn shell_words_and_refusals_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "shellno");
     let ws = WsStub::start();
     // native: app shell
-    rig.check(&case("no App: the usage line", &["shell"], &[], vec![], owner_and_port, 2, 0));
+    rig.check(&case(
+        "no App: the usage line",
+        &["shell"],
+        &[],
+        vec![],
+        owner_and_port,
+        2,
+        0,
+    ));
     // native: app shell
     rig.check(&case(
         "a flag before the command",
@@ -327,7 +337,11 @@ fn shell_words_and_refusals_answer_as_the_shell_does() {
     }
     assert!(ws.take().is_empty(), "help or a usage line connected");
     let refused = |status: &str, body: &str| {
-        let mut b = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        let mut b = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
         b.extend_from_slice(body.as_bytes());
         vec![Step::Raw(b), Step::Hangup]
     };
@@ -341,10 +355,16 @@ fn shell_words_and_refusals_answer_as_the_shell_does() {
         ),
         (
             "refused: an error that is a string",
-            refused("401 Unauthorized", r#"{"error":"Invalid or missing auth token"}"#),
+            refused(
+                "401 Unauthorized",
+                r#"{"error":"Invalid or missing auth token"}"#,
+            ),
         ),
         ("refused: no body", refused("500 Internal Server Error", "")),
-        ("refused: not JSON", refused("502 Bad Gateway", "<html>no</html>")),
+        (
+            "refused: not JSON",
+            refused("502 Bad Gateway", "<html>no</html>"),
+        ),
         (
             "refused: no hint",
             refused("404 Not Found", r#"{"error":{"code":"no_such_app"}}"#),
@@ -356,7 +376,13 @@ fn shell_words_and_refusals_answer_as_the_shell_does() {
         ("closed with nothing", vec![Step::Hangup]),
     ] {
         // native: app shell
-        let logs = check(&rig, &ws, &row(&ws, name, &["shell", "acme"], None, 3), steps, 3);
+        let logs = check(
+            &rig,
+            &ws,
+            &row(&ws, name, &["shell", "acme"], None, 3),
+            steps,
+            3,
+        );
         assert_eq!(
             logs[0].head,
             vec![
@@ -374,7 +400,15 @@ fn shell_words_and_refusals_answer_as_the_shell_does() {
     // native: app shell
     rig.check(&traceback(Case {
         env: vec![("K2_PORT", dead_port())],
-        ..case("no daemon", &["shell", "acme"], &[], vec![], owner_only, 1, 0)
+        ..case(
+            "no daemon",
+            &["shell", "acme"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        )
     }));
 }
 
@@ -393,7 +427,13 @@ fn a_session_with_stdin_not_a_terminal() {
     let mid: &'static [u8] = Box::leak(vec![b'y'; 300].into_boxed_slice());
     let rows: Vec<(Case, Vec<Step>)> = vec![
         (
-            row(&ws, "a command: its output, then its exit code", &["shell", "acme", "--", "ls", "-l", "é"], None, 5),
+            row(
+                &ws,
+                "a command: its output, then its exit code",
+                &["shell", "acme", "--", "ls", "-l", "é"],
+                None,
+                5,
+            ),
             session(vec![
                 text(r#"{"type":"banner","text":"acme é: a shell"}"#),
                 binary(b"line1\nline2 \xc3\xa9\n"),
@@ -403,7 +443,13 @@ fn a_session_with_stdin_not_a_terminal() {
             ]),
         ),
         (
-            row(&ws, "stdin sent, then its end", &["shell", "acme", "cat"], Some(b"echo hi\nbye"), 0),
+            row(
+                &ws,
+                "stdin sent, then its end",
+                &["shell", "acme", "cat"],
+                Some(b"echo hi\nbye"),
+                0,
+            ),
             session(vec![
                 Step::Binary(b"echo hi\nbye\x04"),
                 binary(b"hi\n"),
@@ -412,7 +458,13 @@ fn a_session_with_stdin_not_a_terminal() {
             ]),
         ),
         (
-            row(&ws, "an error, then the server closes", &["shell", "acme"], None, 3),
+            row(
+                &ws,
+                "an error, then the server closes",
+                &["shell", "acme"],
+                None,
+                3,
+            ),
             session(vec![
                 eot.clone(),
                 text(r#"{"type":"error","code":"no_such_app","hint":"gone é"}"#),
@@ -429,19 +481,43 @@ fn a_session_with_stdin_not_a_terminal() {
             ]),
         ),
         (
-            row(&ws, "an exit code out of range", &["shell", "acme"], None, 1),
+            row(
+                &ws,
+                "an exit code out of range",
+                &["shell", "acme"],
+                None,
+                1,
+            ),
             session(vec![eot.clone(), exit("300"), close()]),
         ),
         (
-            row(&ws, "an exit code that is true", &["shell", "acme"], None, 1),
+            row(
+                &ws,
+                "an exit code that is true",
+                &["shell", "acme"],
+                None,
+                1,
+            ),
             session(vec![eot.clone(), exit("true"), close()]),
         ),
         (
-            row(&ws, "an exit code that is a string", &["shell", "acme"], None, 1),
+            row(
+                &ws,
+                "an exit code that is a string",
+                &["shell", "acme"],
+                None,
+                1,
+            ),
             session(vec![eot.clone(), exit("\"2\""), close()]),
         ),
         (
-            row(&ws, "a ping, its pong; a notice", &["shell", "acme"], None, 0),
+            row(
+                &ws,
+                "a ping, its pong; a notice",
+                &["shell", "acme"],
+                None,
+                0,
+            ),
             session(vec![
                 eot.clone(),
                 Step::Raw(frame(9, b"p1")),
@@ -451,7 +527,13 @@ fn a_session_with_stdin_not_a_terminal() {
             ]),
         ),
         (
-            row(&ws, "frames that are no JSON, or not UTF-8, or no message", &["shell", "acme"], None, 0),
+            row(
+                &ws,
+                "frames that are no JSON, or not UTF-8, or no message",
+                &["shell", "acme"],
+                None,
+                0,
+            ),
             session(vec![
                 eot.clone(),
                 text("not json"),
@@ -462,15 +544,33 @@ fn a_session_with_stdin_not_a_terminal() {
             ]),
         ),
         (
-            row(&ws, "long frames: 16-bit and 64-bit lengths", &["shell", "acme"], None, 0),
+            row(
+                &ws,
+                "long frames: 16-bit and 64-bit lengths",
+                &["shell", "acme"],
+                None,
+                0,
+            ),
             session(vec![binary(mid), binary(big), eot.clone(), close()]),
         ),
         (
-            row(&ws, "the server hangs up, no close", &["shell", "acme"], None, 0),
+            row(
+                &ws,
+                "the server hangs up, no close",
+                &["shell", "acme"],
+                None,
+                0,
+            ),
             session(vec![eot.clone(), binary(b"bye\n"), Step::Hangup]),
         ),
         (
-            row(&ws, "frames in the handshake's own packet", &["shell", "acme"], None, 7),
+            row(
+                &ws,
+                "frames in the handshake's own packet",
+                &["shell", "acme"],
+                None,
+                7,
+            ),
             vec![
                 Step::Raw(
                     [
@@ -493,17 +593,39 @@ fn a_session_with_stdin_not_a_terminal() {
                     ("K2_SECRETS_DIR", "{secrets}".to_string()),
                 ],
                 setup: nothing,
-                ..row(&ws, "the passport is the credential", &["shell", "acme"], None, 0)
+                ..row(
+                    &ws,
+                    "the passport is the credential",
+                    &["shell", "acme"],
+                    None,
+                    0,
+                )
             },
             session(vec![eot.clone(), close()]),
         ),
         (
-            traceback(row(&ws, "a text frame that is JSON but no object", &["shell", "acme"], None, 1)),
+            traceback(row(
+                &ws,
+                "a text frame that is JSON but no object",
+                &["shell", "acme"],
+                None,
+                1,
+            )),
             session(vec![eot.clone(), text("[1]"), close()]),
         ),
         (
-            traceback(row(&ws, "a banner whose text is a number", &["shell", "acme"], None, 1)),
-            session(vec![eot.clone(), text(r#"{"type":"banner","text":5}"#), close()]),
+            traceback(row(
+                &ws,
+                "a banner whose text is a number",
+                &["shell", "acme"],
+                None,
+                1,
+            )),
+            session(vec![
+                eot.clone(),
+                text(r#"{"type":"banner","text":5}"#),
+                close(),
+            ]),
         ),
     ];
     for (c, steps) in rows {
@@ -514,7 +636,9 @@ fn a_session_with_stdin_not_a_terminal() {
             assert_eq!(last, &(8u8, Vec::new()), "{}: the close frame last", c.name);
         }
         if c.name == "the passport is the credential" {
-            assert!(logs[0].head.contains(&format!("Authorization: Bearer {PASSPORT}")));
+            assert!(logs[0]
+                .head
+                .contains(&format!("Authorization: Bearer {PASSPORT}")));
         }
         if c.name == "a command: its output, then its exit code" {
             assert_eq!(
@@ -637,7 +761,10 @@ fn pty_run(rig: &Rig, ws: &WsStub, bash: bool, steps: &str, args: &[&str]) -> At
     }
     cmd.arg(VERB).args(args);
     let o = run_within(&mut cmd, None, Duration::from_secs(150), "the pty driver");
-    let read = |f: &str| std::fs::read(w.join(f)).unwrap_or_else(|e| panic!("{f}: {e}; driver: {}", String::from_utf8_lossy(&o.stderr)));
+    let read = |f: &str| {
+        std::fs::read(w.join(f))
+            .unwrap_or_else(|e| panic!("{f}: {e}; driver: {}", String::from_utf8_lossy(&o.stderr)))
+    };
     AtTty {
         code: o.status.code(),
         out: read("out"),
@@ -696,9 +823,16 @@ fn at_a_terminal() {
     let (run, log) = bash;
     assert_eq!(run.code, Some(7), "{run:?}");
     assert_eq!(run.out, b"file1\r\n");
-    assert_eq!(run.raw, "echo=off icanon=off isig=off", "raw mode while it runs");
+    assert_eq!(
+        run.raw, "echo=off icanon=off isig=off",
+        "raw mode while it runs"
+    );
     assert_eq!(run.after, "as before", "the terminal put back");
-    assert!(!run.tty.contains("ls"), "what was typed was echoed: {:?}", run.tty);
+    assert!(
+        !run.tty.contains("ls"),
+        "what was typed was echoed: {:?}",
+        run.tty
+    );
     assert_eq!(
         log.head[0],
         "GET /cli/app/shell?app=acme&cols=100&rows=30 HTTP/1.1"
@@ -707,7 +841,10 @@ fn at_a_terminal() {
         log.frames,
         vec![
             (2, b"ls\r".to_vec()),
-            (1, br#"{"type": "resize", "cols": 120, "rows": 40}"#.to_vec()),
+            (
+                1,
+                br#"{"type": "resize", "cols": 120, "rows": 40}"#.to_vec()
+            ),
             (8, Vec::new()),
         ]
     );

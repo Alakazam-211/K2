@@ -337,7 +337,9 @@ fn inspect_answers_as_the_shell_does() {
             "--resources: a bare answer",
             &["inspect", "--resources", "acme"],
             &[],
-            vec![ok(r#"{"box":{"checkedAt":1700000000},"guard":{"modeSource":"env"},"scan":{"appsAt":5}}"#)],
+            vec![ok(
+                r#"{"box":{"checkedAt":1700000000},"guard":{"modeSource":"env"},"scan":{"appsAt":5}}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -415,9 +417,25 @@ fn the_app_page_through_the_card_filter() {
     let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
     let v = vec![
         // covers: app
-        case("no passport: off, nothing asked", &[], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "no passport: off, nothing asked",
+            &[],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         // native: app --json
-        case("--json: the same page", &["--json"], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "--json: the same page",
+            &["--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         // covers: app
         Case {
             env: tcp(),

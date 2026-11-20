@@ -575,6 +575,9 @@ mod tests {
         let g = Given::new()
             .put("app", "a")
             .put_bytes("brief", b"caf\xc3\xa9 \xff\xfe!");
-        assert_eq!(g.body(), r#"{"app": "a", "brief": "caf\u00e9 \udcff\udcfe!"}"#);
+        assert_eq!(
+            g.body(),
+            r#"{"app": "a", "brief": "caf\u00e9 \udcff\udcfe!"}"#
+        );
     }
 }

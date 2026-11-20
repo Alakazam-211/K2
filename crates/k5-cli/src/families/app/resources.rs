@@ -17,8 +17,8 @@ use super::Answer;
 use crate::exit::Exit;
 use crate::families::Raise;
 use crate::out::json::{Text, Value};
-use crate::out::pylib;
 use crate::out::py as pyfmt;
+use crate::out::pylib;
 use crate::transport::encode::quote;
 use k2_client::{cli_name, product_name};
 
@@ -64,18 +64,15 @@ fn float(b: &Value, line: u32) -> Result<f64, Raise> {
             }
             Ok(f)
         }
-        Value::Str(t) => t
-            .as_str()
-            .and_then(pylib::ops::float)
-            .ok_or_else(|| {
-                Raise::at(
-                    line,
-                    format!(
-                        "ValueError: could not convert string to float: {}",
-                        pyfmt::repr(b)
-                    ),
-                )
-            }),
+        Value::Str(t) => t.as_str().and_then(pylib::ops::float).ok_or_else(|| {
+            Raise::at(
+                line,
+                format!(
+                    "ValueError: could not convert string to float: {}",
+                    pyfmt::repr(b)
+                ),
+            )
+        }),
         other => Err(Raise::at(
             line,
             format!(
@@ -197,7 +194,11 @@ fn parts(r: &Value, n: usize, line: u32) -> Result<String, Raise> {
     keyed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut out = Vec::new();
     for (_, k, x) in keyed.into_iter().take(n) {
-        out.push(format!("{} {}", py::s(&Value::Str(k.clone())), gb(x, line)?));
+        out.push(format!(
+            "{} {}",
+            py::s(&Value::Str(k.clone())),
+            gb(x, line)?
+        ));
     }
     Ok(out.join(" \u{b7} "))
 }
@@ -290,7 +291,10 @@ pub fn lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
         py::s(&critical)
     ));
     let m = dict_at(&v, "mem", 43)?;
-    let mut ram = vec![format!("{} total", gib(&py::dget(&m, "totalBytes", 45)?, 45)?)];
+    let mut ram = vec![format!(
+        "{} total",
+        gib(&py::dget(&m, "totalBytes", 45)?, 45)?
+    )];
     if py::dget(&m, "availableBytes", 46)? != Value::Null {
         ram.push(format!(
             "{} available",
@@ -483,6 +487,9 @@ mod tests {
     #[test]
     fn parts_biggest_first_ties_in_order() {
         let r = crate::out::json::parse(r#"{"parts":{"a":1000,"b":3000,"c":3000,"d":5}}"#).unwrap();
-        assert_eq!(parts(&r, 3, 1).unwrap(), "b 3.0 KB \u{b7} c 3.0 KB \u{b7} a 1.0 KB");
+        assert_eq!(
+            parts(&r, 3, 1).unwrap(),
+            "b 3.0 KB \u{b7} c 3.0 KB \u{b7} a 1.0 KB"
+        );
     }
 }

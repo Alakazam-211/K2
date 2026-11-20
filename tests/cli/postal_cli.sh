@@ -13,8 +13,10 @@
 # accept --code carries the code; `k2 msg <postal address>` and postal send
 # post to /cli/postal/send (exit 0 held, 3 not a friend or a secret in the
 # text, 2 for a K2-only flag); `k2 msg -- <postal address> "-x"` (and with
-# --help as the text, flags before `--`, or the address before `--`) sends
-# the text as typed; route sends its targets; owner-link reads a
+# --help as the text, or flags before `--`) sends the text as typed; a value
+# flag before the address is refused with the address-first form's line
+# (--from, --summary, --no-wake then --from, --idempotency-key, --secret),
+# never dropped; route sends its targets; owner-link reads a
 # token from stdin; adopt says "not available yet". Hermetic: HOME is a
 # throwaway dir, every K2_*/K2SO_* var is unset, the daemon is a python stub.
 
@@ -252,12 +254,36 @@ run msg --no-wake --json -- ops::beta.postal.bot "-x"
 assert_eq "msg --no-wake --json -- <address> -x: exit 0" "$rc" "0"
 assert_eq "msg --no-wake --json -- <address> -x: no wake" "$(last /cli/postal/send)" 'POST {"text": "-x", "to": "ops::beta.postal.bot", "wake": false}'
 assert_contains "msg --json -- <address>: the JSON answer" "$out" '"badge": "p_3f9a0c41d27be6058a1c"'
-# A value flag first: the address is read by msg's own loop, then mailed.
-run msg --from me ops::beta.postal.bot -- "-x"
-assert_eq "msg --from me <address> -- -x: exit 0" "$rc" "0"
-assert_eq "msg --from me <address> -- -x: the text as typed" "$(last /cli/postal/send)" 'POST {"text": "-x", "to": "ops::beta.postal.bot", "wake": true}'
-run msg --from me ops::beta.postal.bot -- "--help"
-assert_eq "msg --from me <address> -- --help: sent as text" "$(last /cli/postal/send)" 'POST {"text": "--help", "to": "ops::beta.postal.bot", "wake": true}'
+
+echo "== sending: a flag before the address =="
+# msg's own loop reads the address when a value flag comes first. A flag
+# Postal mail can't honour is refused there with the address-first form's
+# line, exit 2, nothing sent; it is never dropped.
+same_refusal() { # <name> <flag-first words> VS <address-first words>
+    local name="$1" first=() second=() b
+    shift
+    while [ "$1" != "VS" ]; do first+=("$1"); shift; done
+    shift; second=("$@")
+    run "${second[@]}"; local want="$out" want_rc="$rc"
+    b="$(nreq)"
+    run "${first[@]}"
+    assert_eq "$name: exit 2" "$rc" "2"
+    assert_eq "$name: the address-first form also exits 2" "$want_rc" "2"
+    assert_eq "$name: the address-first form's line" "$out" "$want"
+    assert_eq "$name: nothing sent" "$(nreq)" "$b"
+}
+same_refusal "msg --from me <address> hi" msg --from me ops::beta.postal.bot hi VS msg ops::beta.postal.bot hi --from me
+assert_contains "msg --from me <address> hi: says why" "$out" "--from is for messages to agents on this server; Postal mail to ops::beta.postal.bot takes only the text, --no-wake and --json."
+same_refusal "msg --summary s <address> hi" msg --summary s ops::beta.postal.bot hi VS msg ops::beta.postal.bot hi --summary s
+assert_contains "msg --summary s <address> hi: says why" "$out" "--summary is for messages to agents on this server"
+same_refusal "msg --no-wake --from me <address> hi" msg --no-wake --from me ops::beta.postal.bot hi VS msg ops::beta.postal.bot hi --no-wake --from me
+assert_contains "msg --no-wake --from me <address> hi: --from is the one refused" "$out" "--from is for messages"
+same_refusal "msg --from me <address> -- -x" msg --from me ops::beta.postal.bot -- "-x" VS msg ops::beta.postal.bot --from me -- "-x"
+same_refusal "msg --idempotency-key <key> <address> hi" msg --idempotency-key abcdefgh ops::beta.postal.bot hi VS msg ops::beta.postal.bot hi --idempotency-key abcdefgh
+assert_contains "msg --idempotency-key <key> <address> hi: unknown for Postal mail" "$out" "unknown flag '--idempotency-key' for Postal mail"
+same_refusal "msg --secret K <address> hi" msg --secret K ops::beta.postal.bot hi VS msg ops::beta.postal.bot hi --secret K
+same_refusal "msg --from me <address> (no text)" msg --from me ops::beta.postal.bot VS msg ops::beta.postal.bot --from me
+assert_contains "msg --from me <address> (no text): --from is refused first" "$out" "--from is for messages"
 
 echo "== routing =="
 run postal route inbox+pointer thread:rosson --no-wake

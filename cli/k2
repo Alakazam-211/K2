@@ -25505,7 +25505,14 @@ cmd_msg() {
     local summary=""
     local session_id=""
     local idem_key=""
+    # The flags as typed, in order, without their values: Postal mail
+    # refuses the first one it can't honour, as the address-first form does.
+    local flags_seen=()
     while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --idempotency-key|--session|--summary|--secret|--from|--command|--wake|--no-wake|--wake-timeout|--via)
+                flags_seen+=("$1") ;;
+        esac
         case "$1" in
             --idempotency-key)
                 # 0.46.15: ask again for a send that may have landed (the
@@ -25575,6 +25582,14 @@ cmd_msg() {
         target="${PROJECT:-$PWD}"
     fi
 
+    # A Postal address that msg's own loop read (a value flag came first):
+    # Postal mail, as the address-first form is. The flags first, so one
+    # Postal mail can't honour is refused, never dropped; then `--` and the
+    # text, sent as typed.
+    if [[ -z "$session_id" ]] && _is_postal_address "$target"; then
+        _postal_send_teach "$target" ${flags_seen[@]+"${flags_seen[@]}"} -- ${text:+"$text"}
+    fi
+
     [[ -z "$target" ]] && {
         echo "Error: workspace required" >&2
         echo "Usage: k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]" >&2
@@ -25619,8 +25634,6 @@ cmd_msg() {
         return 2
     fi
     if [ -n "$_REMOTE_HOST" ]; then
-        # `--`: the text is sent as typed, even when it starts with a dash.
-        _postal_send_teach "$target" -- "$text"
         _send_remote_msg "$_BARE_TARGET" "$_REMOTE_HOST" "$text" "$PROJECT"
         return $?
     fi

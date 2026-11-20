@@ -326,6 +326,57 @@ fn cli_send_cli_post_is_socket_first_then_tcp_when_not_served() {
     }
 }
 
+/// `_connect_curl_daemon`'s requests: the JSON body POSTed to
+/// /cli/connect/proxy as it is (no `project=`), the cell socket first.
+/// Its answer is the answer whatever the status; "not served on cell
+/// socket" goes on to TCP. A socket that read a non-GET request and gave
+/// no answer: never sent again. A GET goes on to TCP.
+#[test]
+fn the_connect_proxy_requests() {
+    let s = stub("proxy");
+    let mut c = with_passport(s.port, &s.sock);
+    let not_served = Reply::Answer(404, r#"{"error":"not served on cell socket"}"#.into());
+    let relayed = Reply::Answer(200, r#"{"status":201,"body":"{}"}"#.into());
+    s.reset(&[
+        Reply::Answer(403, r#"{"code":"forbidden"}"#.into()),
+        not_served,
+        relayed,
+    ]);
+    let req = br#"{"method": "POST", "endpoint": "/subdomains", "body": "{}"}"#;
+    let r = c.connect_proxy(false, req).unwrap();
+    assert_eq!((r.status, r.channel), (403, Channel::Uds));
+    let r = c.connect_proxy(false, req).unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    let log = s.log();
+    assert_eq!(
+        log.iter().map(|l| l.channel).collect::<Vec<_>>(),
+        vec!["uds", "uds", "tcp"]
+    );
+    for l in &log {
+        let t = text(&l.bytes);
+        assert!(t.starts_with("POST /cli/connect/proxy HTTP/1.1\r\n"), "{t}");
+        assert!(t.contains("\r\nAuthorization: Bearer sessA.pp\r\n"), "{t}");
+        assert!(t.contains("\r\nContent-Type: application/json\r\n"), "{t}");
+        assert!(t.ends_with(std::str::from_utf8(req).unwrap()), "{t}");
+    }
+
+    let d = door("proxy", Act::CloseNoAnswer, Act::Answer);
+    let mut c = with_passport(d.port, &d.sock);
+    let err = c.connect_proxy(false, req).unwrap_err();
+    assert!(matches!(err, Error::MaybeApplied { .. }), "{err:?}");
+    assert!(err.to_string().contains("didn't answer /cli/connect/proxy"), "{err}");
+    assert_eq!(d.counts(), (1, 0), "(cell socket, TCP) requests");
+    let r = c.connect_proxy(true, req).unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(d.counts(), (2, 1));
+
+    // No daemon on TCP: curl's 7 comes back, for the caller's fallback.
+    let mut o = owner(dead_port());
+    o.pause = Duration::ZERO;
+    let err = o.connect_proxy(false, req).unwrap_err();
+    assert_eq!(err.curl_code(), 7, "{err:?}");
+}
+
 #[test]
 fn a_cell_socket_that_is_gone_goes_to_tcp() {
     let s = stub("gone");

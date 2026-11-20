@@ -61,6 +61,11 @@ pub const BOOT_STATUS_MAX_TIME: Duration = Duration::from_secs(10);
 pub const SEND_ONCE_ENDPOINT: &str = "/boot-status";
 /// The word in that answer's `features` that says it does.
 pub const SEND_ONCE_FEATURE: &str = r#""send-once""#;
+/// `_connect_curl_daemon`'s route: the daemon makes the Connect control
+/// plane's call with the tunnel token it holds.
+pub const CONNECT_PROXY_ENDPOINT: &str = "/cli/connect/proxy";
+/// `_connect_curl_daemon`'s `--max-time 45`.
+pub const CONNECT_PROXY_MAX_TIME: Duration = Duration::from_secs(45);
 /// `_K2_CURL_TRIES`: each retry loop's tries, the first included.
 pub const TRIES: u32 = 4;
 /// The `sleep 1` between tries.
@@ -345,6 +350,13 @@ enum Kind {
     /// there is one. Over TCP, one try, no query; no heal, no line, no
     /// note.
     SendOnce,
+    /// `_connect_curl_daemon` (`cli/src/connect.sh`): `_k2_curl` POSTs of
+    /// a JSON body to [`CONNECT_PROXY_ENDPOINT`] as it is (no `project=`),
+    /// `-sS -X POST -H "Content-Type: application/json"`, connect 5 s, at
+    /// most 45 s; the passport as Bearer on the cell socket, `$TOKEN` over
+    /// TCP. Only `_k2_curl`'s tries (a refused connect, a moved port); no
+    /// status read, no heal, no line, no note.
+    ConnectProxy,
 }
 
 impl Kind {
@@ -390,6 +402,7 @@ impl Kind {
                 | Kind::Own { .. }
                 | Kind::BootStatus
                 | Kind::SendOnce
+                | Kind::ConnectProxy
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -418,6 +431,7 @@ impl Kind {
                 | Kind::Own { .. }
                 | Kind::BootStatus
                 | Kind::SendOnce
+                | Kind::ConnectProxy
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -444,6 +458,7 @@ impl Kind {
                 | Kind::Own { note: false, .. }
                 | Kind::BootStatus
                 | Kind::SendOnce
+                | Kind::ConnectProxy
         )
     }
     /// `--connect-timeout`.
@@ -1165,6 +1180,42 @@ impl Client {
         .map_err(|f| f.error)
     }
 
+    /// `_connect_curl_daemon <method> …`'s requests ([`Kind::ConnectProxy`]):
+    /// `req` (the `{"method", "endpoint"[, "body"]}` JSON) POSTed to
+    /// [`CONNECT_PROXY_ENDPOINT`]. On the cell socket first when there is
+    /// a passport with a live socket (any route, as the shell's `$TOKEN =
+    /// $SCOPED_TOKEN` test); its answer is the answer, whatever the
+    /// status, unless it holds "not served on cell socket". Then over TCP.
+    /// A request that is not a `get` goes on only when the connect failed
+    /// (curl 7): any other failure may have reached the daemon, which may
+    /// have made the call, so it is [`Error::MaybeApplied`] and never sent
+    /// again. A TCP failure comes back as it is (curl 7: no daemon).
+    /// [`Error::NoCredential`]: no token for TCP (the shell's empty
+    /// `$TOKEN`, no daemon either).
+    pub fn connect_proxy(&mut self, get: bool, req: &[u8]) -> Result<Response, Error> {
+        let t0 = Instant::now();
+        let ep = CONNECT_PROXY_ENDPOINT;
+        let sent_once = |e: &Error| !get && e.curl_code() != wire::curl::COULDNT_CONNECT;
+        if self.cell_socket().is_some() {
+            match self.run(Kind::ConnectProxy, Channel::Uds, ep, &[], req, t0) {
+                Ok(r) if contains(&r.body, NOT_SERVED) => {}
+                Ok(r) => return Ok(r),
+                Err(f) if sent_once(&f.error) => return Err(maybe_applied(ep, t0)),
+                Err(_) => {}
+            }
+        }
+        if self.tcp_token().is_none() {
+            return Err(Error::NoCredential {
+                endpoint: ep.to_string(),
+            });
+        }
+        match self.run(Kind::ConnectProxy, Channel::Tcp, ep, &[], req, t0) {
+            Ok(r) => Ok(r),
+            Err(f) if sent_once(&f.error) => Err(maybe_applied(ep, t0)),
+            Err(f) => Err(f.error),
+        }
+    }
+
     /// `cli_send_json METHOD PATH [payload]`: GET with `payload` as a
     /// pre-encoded query, or POST with it as a JSON body. The cell socket
     /// when there is a passport with a live socket (any route), then TCP
@@ -1530,6 +1581,7 @@ impl Client {
             Kind::UpdateVersion => UPDATE_MAX_TIME,
             Kind::Own { .. } => self.own.as_ref().map_or(MAX_TIME, |o| o.1),
             Kind::BootStatus => BOOT_STATUS_MAX_TIME,
+            Kind::ConnectProxy => CONNECT_PROXY_MAX_TIME,
         }
     }
 
@@ -1840,6 +1892,7 @@ impl Client {
             | Kind::ComputePost
             | Kind::SidecarPost
             | Kind::VaultSockPost
+            | Kind::ConnectProxy
             | Kind::Own { post: true, .. } => {
                 (Method::Post, endpoint.to_string(), json(&mut headers))
             }
@@ -2352,6 +2405,7 @@ mod tests {
             (Kind::QueryPost, 30),
             (Kind::BootStatus, 10),
             (Kind::SendOnce, 5),
+            (Kind::ConnectProxy, 45),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }

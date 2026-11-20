@@ -31,15 +31,25 @@ use crate::transport::permission::Note;
 use crate::transport::{Auth, Client, Response};
 use std::path::Path;
 
-/// The virtual desktop's guard (LD-10): exit 3.
-pub const VIRTUAL_DESKTOP: [&str; 3] = [
-    "Error: k2 won't act as this server's owner here.",
+/// The no-owner refusal (LD-10: a virtual desktop, or a command under
+/// `k2 vault run`): exit 3.
+pub const VIRTUAL_DESKTOP: [&str; 2] = [
     concat!(
-        "This program runs on a ",
+        "Error: ",
+        k2_client::cli_name!(),
+        " won't act as this server's owner here: no session passport (K2_NO_OWNER_FALLBACK=1, a ",
         k2_client::product_name!(),
-        " virtual desktop (K2_NO_OWNER_FALLBACK=1) and has no session passport, so k2 doesn't read the owner token (~/.k2/daemon.token)."
+        " virtual desktop or ",
+        k2_client::cli_name!(),
+        " vault run)."
     ),
-    concat!("Use k2 from a ", k2_client::product_name!(), " terminal tab, or from your own device signed in to this server."),
+    concat!(
+        "Run ",
+        k2_client::cli_name!(),
+        " from a ",
+        k2_client::product_name!(),
+        " terminal tab or your signed-in device, not under vault run, or give the command the secret it needs."
+    ),
 ];
 
 /// The connection gate: exit 1.
@@ -158,10 +168,10 @@ pub enum Gate {
 }
 
 impl Gate {
-    pub fn lines(self) -> &'static [&'static str; 3] {
+    pub fn lines(self) -> &'static [&'static str] {
         match self {
-            Gate::VirtualDesktop => &VIRTUAL_DESKTOP,
-            Gate::CannotConnect => &CANNOT_CONNECT,
+            Gate::VirtualDesktop => &VIRTUAL_DESKTOP[..],
+            Gate::CannotConnect => &CANNOT_CONNECT[..],
         }
     }
 

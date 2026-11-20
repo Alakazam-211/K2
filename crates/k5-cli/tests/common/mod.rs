@@ -11,6 +11,7 @@
 pub mod cards;
 pub mod parity;
 pub mod stub;
+pub mod vault;
 
 use std::path::PathBuf;
 

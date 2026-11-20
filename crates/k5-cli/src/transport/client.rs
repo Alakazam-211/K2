@@ -75,6 +75,17 @@ pub const NOT_SERVED: &str = "not served on cell socket";
 pub const METHOD_NOT_ALLOWED: &str = "method not allowed for this route";
 /// The daemon's refusal of a passport it doesn't know.
 pub const PASSPORT_REFUSAL: &str = "Invalid or missing auth token";
+/// The whole body of that refusal from the daemon's auth gate (TCP and
+/// the cell socket), sent before any route's handler runs.
+pub const GATE_REFUSAL: &str = r#"{"error":"Invalid or missing auth token"}"#;
+
+/// An answer from the daemon's auth gate refusing the credential: status
+/// 401 or 403 and exactly [`GATE_REFUSAL`]. No handler ran, so nothing
+/// was done. A handler's own answer (a 200, a 409 conflict) may hold
+/// [`PASSPORT_REFUSAL`] too, in a document's text; that is not one.
+pub fn gate_refusal(status: u16, body: &[u8]) -> bool {
+    matches!(status, 401 | 403) && body == GATE_REFUSAL.as_bytes()
+}
 
 /// The header that says which CLI sent the request.
 pub const VIA_HEADER: &str = "X-K5-Cli-Via";
@@ -725,6 +736,10 @@ pub struct Client {
     pub port_file: Option<PathBuf>,
     /// Where a refused passport may have been minted again.
     pub healer: Option<Box<dyn Healer>>,
+    /// The one heal on a refusal only when the answer is the auth gate's
+    /// ([`gate_refusal`]), not on any answer that holds its words. Off by
+    /// default (the shell's rule: the words anywhere in the answer).
+    pub heal_on_gate_only: bool,
     healed: bool,
     /// Refused connects `_k2_curl` tried again before the last answer.
     refused: std::cell::Cell<u32>,
@@ -779,6 +794,7 @@ impl Client {
             pause: PAUSE,
             port_file: None,
             healer: None,
+            heal_on_gate_only: false,
             healed: false,
             refused: std::cell::Cell::new(0),
             vault_sock: None,
@@ -1408,7 +1424,11 @@ impl Client {
         {
             return self.run(Kind::Request, Channel::Tcp, endpoint, args, &[], t0);
         }
-        if kind.heals() && contains(&answer.body, PASSPORT_REFUSAL) && self.heal() {
+        if kind.heals()
+            && contains(&answer.body, PASSPORT_REFUSAL)
+            && (!self.heal_on_gate_only || gate_refusal(answer.status, &answer.body))
+            && self.heal()
+        {
             return self.run(kind, channel, endpoint, args, body, t0);
         }
         let permission = if kind.notes_permission() {
@@ -3083,6 +3103,19 @@ mod tests {
         }
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn only_the_auth_gate_s_answer_is_its_refusal() {
+        assert!(gate_refusal(403, GATE_REFUSAL.as_bytes()));
+        assert!(gate_refusal(401, GATE_REFUSAL.as_bytes()));
+        // The words in a handler's answer: a document's text, a conflict.
+        let text = format!(r#"{{"stdout":"{PASSPORT_REFUSAL}\n","exit":0}}"#);
+        assert!(!gate_refusal(200, text.as_bytes()));
+        assert!(!gate_refusal(409, GATE_REFUSAL.as_bytes()));
+        assert!(!gate_refusal(403, text.as_bytes()));
+        assert!(!gate_refusal(403, b""));
+        assert!(!gate_refusal(403, format!("{GATE_REFUSAL}\n").as_bytes()));
     }
 
     #[test]

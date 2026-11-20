@@ -47,6 +47,10 @@ pub(crate) enum Scope {
     /// or a connected one (`comms::gate_cross_workspace`). A name K2 doesn't
     /// know gets the handler's own not-found answer.
     Named,
+    /// A read with no workspace in it (release notes, the glossary, the
+    /// preset and focus-group lists, the context catalog, the settings copy
+    /// a Member login reads).
+    Shared,
     /// `/cli/agent/list`: every workspace's row, narrowed to the passport's
     /// own and its connected workspaces ([`narrow`]).
     AgentList,
@@ -76,11 +80,30 @@ pub(crate) const ROUTES: &[Route] = &[
     // `k2 agent conf|get|set|retire|restart` and `k2 agent hire` read it first.
     route("/cli/agent/conf", Scope::Named),
     route("/cli/agent/list", Scope::AgentList),
+    // `k2 agent context list|show|catalog`.
+    route("/cli/context/catalog", Scope::Shared),
+    route("/cli/context/layers", Scope::Own),
+    route("/cli/context/show", Scope::Own),
+    // `k2 activity`.
+    route("/cli/feed", Scope::Own),
+    route("/cli/focus-groups/list", Scope::Shared),
+    route("/cli/glossary", Scope::Shared),
+    route("/cli/glossary/get", Scope::Shared),
+    route("/cli/glossary/list", Scope::Shared),
+    route("/cli/onboarding/scan", Scope::Own),
+    route("/cli/presets/list", Scope::Shared),
+    route("/cli/reviews", Scope::Own),
+    route("/cli/settings", Scope::Own),
+    // `k2 fed status`, `k2 api status`: the copy a Member login reads
+    // (credentials taken out); the full one stays the owner token's.
+    route("/cli/settings/get", Scope::Shared),
+    route("/cli/whats_new", Scope::Shared),
     // `k2 workspace profile` (0.46.16; its handler also refuses another
     // workspace: `workspace_profile_route::other_workspace_refusal`).
     route("/cli/workspace/agent-display-name", Scope::Own),
     // Name resolution for `k2 msg`, `k2 workspace …` and friends.
     route("/cli/workspace/resolve", Scope::Named),
+    route("/cli/workspace/resume-chat-args", Scope::Own),
 ];
 
 /// The admitted route for `path`, if any.
@@ -175,7 +198,7 @@ pub(crate) fn refusal(path: &str, params: &HashMap<String, String>) -> Option<Cl
         }
     }
     match route.scope {
-        Scope::AgentList => None,
+        Scope::Shared | Scope::AgentList => None,
         Scope::Own => other_workspace(params),
         Scope::Named => {
             let q = params.get("q").map(|s| s.trim()).unwrap_or("");

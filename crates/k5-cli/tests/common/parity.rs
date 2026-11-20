@@ -3,7 +3,7 @@
 //! against a logging stub daemon ([`super::stub`]). For every case both
 //! get the same environment, folder and answers, and must send the same
 //! requests and print the same stdout and stderr with the same exit code.
-//! `tests/whoami_parity.rs` is the first of these, written before the rig.
+//! `tests/whoami_parity.rs` was the first of these, written before the rig.
 //!
 //! Each side ([`Side`]) has its own stub: its own port (the stub binds it
 //! and reads it back), its own socket and its own request log. A case's

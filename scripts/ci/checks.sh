@@ -8,7 +8,7 @@
 #   web         packaging tests, bun install, gates, typecheck, vitest,
 #               SDK typecheck, zen widget CLI, vite build   (checks.yml web)
 #   rust-check  cargo check -D warnings, all targets + the airgap feature,
-#               and clippy's deny-level lints on k2-core
+#               and clippy's deny-level lints on k2-core and k2-daemon
 #   rust-test   the test subsets of checks.yml's rust job, run with
 #               cargo-nextest (profile ci, .config/nextest.toml; the node
 #               needs cargo-nextest: run-checks.sh asks for it)
@@ -125,6 +125,8 @@ part_rust_check() {
     # trailing -W warnings puts clippy's own warnings back to warnings.
     step "clippy deny-level lints, k2-core"
     RUSTFLAGS="-D warnings" cargo clippy --locked -p k2-core --all-targets --no-deps -- -W warnings
+    step "clippy deny-level lints, k2-daemon"
+    RUSTFLAGS="-D warnings" cargo clippy --locked -p k2-daemon --all-targets --no-deps -- -W warnings
 }
 
 # Advisories K2 lets through are listed with a reason and a review-by date

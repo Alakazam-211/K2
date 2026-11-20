@@ -249,6 +249,11 @@ jobs:
           RUSTFLAGS: -D warnings
         run: cargo clippy --locked -p k2-core --all-targets --no-deps -- -W warnings
 
+      - name: clippy deny-level lints (k2-daemon)
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo clippy --locked -p k2-daemon --all-targets --no-deps -- -W warnings
+
       # The test steps below run cargo-nextest with the repo's `ci` profile
       # (.config/nextest.toml: every test in its own process, no retries,
       # JUnit). They all share RUSTFLAGS=-D warnings: a RUSTFLAGS change

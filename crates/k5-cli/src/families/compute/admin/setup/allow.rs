@@ -223,7 +223,10 @@ mod tests {
         let Words::Ask(a) = parse(&["a", "b", "--add", "c", "--add", "d", "--json"]) else {
             panic!("not an ask");
         };
-        assert_eq!((a.nodes.as_str(), a.add.as_str(), a.json), ("a,b", "c,d", true));
+        assert_eq!(
+            (a.nodes.as_str(), a.add.as_str(), a.json),
+            ("a,b", "c,d", true)
+        );
         assert_eq!(
             parse(&["--add"]),
             Words::Usage(format!("{USAGE} (--add needs a value)"))
@@ -268,6 +271,8 @@ mod tests {
         );
         let r = reader(br#"{"list":true,"nodes":[{"name":5,"granted":true}]}"#);
         assert_eq!(r.exit, Exit::Error);
-        assert!(r.stderr.ends_with("TypeError: sequence item 0: expected str instance, int found\n"));
+        assert!(r
+            .stderr
+            .ends_with("TypeError: sequence item 0: expected str instance, int found\n"));
     }
 }

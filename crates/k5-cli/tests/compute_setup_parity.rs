@@ -56,7 +56,15 @@ fn compute_allow_nodes() {
     let rig = Rig::new(VERB, "allow");
     let v = vec![
         // covers: compute allow-nodes
-        case("the list", &["allow-nodes"], &[], vec![ok(ALLOW_LIST)], owner_and_port, 0, 1),
+        case(
+            "the list",
+            &["allow-nodes"],
+            &[],
+            vec![ok(ALLOW_LIST)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: compute allow-nodes --json
         case(
             "the list as JSON",
@@ -69,7 +77,16 @@ fn compute_allow_nodes() {
         ),
         case(
             "a change",
-            &["allow-nodes", "mini", "big", "--add", "x", "--remove", "y,z", "--clear"],
+            &[
+                "allow-nodes",
+                "mini",
+                "big",
+                "--add",
+                "x",
+                "--remove",
+                "y,z",
+                "--clear",
+            ],
             &[],
             vec![ok(ALLOW_SET)],
             owner_and_port,
@@ -112,7 +129,15 @@ fn compute_allow_nodes() {
             1,
             1,
         )),
-        case("--add last", &["allow-nodes", "--add"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "--add last",
+            &["allow-nodes", "--add"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "an empty workspace",
             &["allow-nodes", "--workspace", ""],
@@ -122,7 +147,15 @@ fn compute_allow_nodes() {
             2,
             0,
         ),
-        case("an unknown flag", &["allow-nodes", "-x"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "an unknown flag",
+            &["allow-nodes", "-x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -135,7 +168,11 @@ const GIT_SET: &str = r#"{"credential":{"kind":"app","appId":12,"app":"acme-bot"
 
 fn key_files(r: &Rig) {
     owner_and_port(r);
-    std::fs::write(r.proj.join("app.pem"), "-----BEGIN KEY-----\r\nabc\r\n-----END KEY-----\n").unwrap();
+    std::fs::write(
+        r.proj.join("app.pem"),
+        "-----BEGIN KEY-----\r\nabc\r\n-----END KEY-----\n",
+    )
+    .unwrap();
     std::fs::write(r.proj.join("tok.txt"), "  ghp_file\n\n").unwrap();
 }
 
@@ -144,7 +181,15 @@ fn compute_git_access() {
     let rig = Rig::new(VERB, "git");
     let v = vec![
         // covers: compute git-access
-        case("the list", &["git-access"], &[], vec![ok(GIT_LIST)], owner_and_port, 0, 1),
+        case(
+            "the list",
+            &["git-access"],
+            &[],
+            vec![ok(GIT_LIST)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: compute git-access --json
         case(
             "the list as JSON",
@@ -158,7 +203,14 @@ fn compute_git_access() {
         // covers: compute git-access setup
         case(
             "setup with an app key",
-            &["git-access", "setup", "--github-app", "12", "--key-file", "app.pem"],
+            &[
+                "git-access",
+                "setup",
+                "--github-app",
+                "12",
+                "--key-file",
+                "app.pem",
+            ],
             &[],
             vec![ok(GIT_SET)],
             key_files,
@@ -195,7 +247,15 @@ fn compute_git_access() {
             0,
             1,
         ),
-        case("setup alone", &["git-access", "setup"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "setup alone",
+            &["git-access", "setup"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "setup with no key file",
             &["git-access", "setup", "--github-app", "12"],
@@ -207,7 +267,14 @@ fn compute_git_access() {
         ),
         case(
             "setup with a key file not there",
-            &["git-access", "setup", "--github-app", "12", "--key-file", "none.pem"],
+            &[
+                "git-access",
+                "setup",
+                "--github-app",
+                "12",
+                "--key-file",
+                "none.pem",
+            ],
             &[],
             vec![],
             owner_and_port,
@@ -217,9 +284,24 @@ fn compute_git_access() {
         // covers: compute git-access grant
         case(
             "grant",
-            &["git-access", "grant", "--github", "o/r", "--github", "o/s", "--nodes", "all", "--shared", "--read-only", "--workspace", "acme"],
+            &[
+                "git-access",
+                "grant",
+                "--github",
+                "o/r",
+                "--github",
+                "o/s",
+                "--nodes",
+                "all",
+                "--shared",
+                "--read-only",
+                "--workspace",
+                "acme",
+            ],
             &[],
-            vec![ok(r#"{"workspace":"acme","credential":{"kind":"app","appId":12},"granted":["o/r","o/s"],"grants":[{"repo":"o/r","nodes":"all","shared":true}]}"#)],
+            vec![ok(
+                r#"{"workspace":"acme","credential":{"kind":"app","appId":12},"granted":["o/r","o/s"],"grants":[{"repo":"o/r","nodes":"all","shared":true}]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -233,7 +315,15 @@ fn compute_git_access() {
             3,
             1,
         )),
-        case("grant with no repo", &["git-access", "grant"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "grant with no repo",
+            &["git-access", "grant"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         // covers: compute git-access revoke
         case(
             "revoke --all",
@@ -244,8 +334,24 @@ fn compute_git_access() {
             0,
             1,
         ),
-        case("revoke with nothing", &["git-access", "revoke"], &[], vec![], owner_and_port, 2, 0),
-        case("an unknown word", &["git-access", "show"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "revoke with nothing",
+            &["git-access", "revoke"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "an unknown word",
+            &["git-access", "show"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "--github last",
             &["git-access", "grant", "--github"],
@@ -287,18 +393,73 @@ fn compute_lanes() {
     let some = r#"{"lanes":[{"name":"ci-standard","summary":"4 cpus","approvedBy":"owner"}]}"#;
     let v = vec![
         // covers: compute lanes
-        case("some lanes", &["lanes"], &[], vec![ok(some)], owner_and_port, 0, 1),
-        case("no lanes", &["lanes"], &[], vec![ok(r#"{"lanes":[]}"#)], owner_and_port, 0, 1),
-        case("3000 lanes", &["lanes"], &[], vec![ok(&big)], owner_and_port, 0, 1),
+        case(
+            "some lanes",
+            &["lanes"],
+            &[],
+            vec![ok(some)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "no lanes",
+            &["lanes"],
+            &[],
+            vec![ok(r#"{"lanes":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "3000 lanes",
+            &["lanes"],
+            &[],
+            vec![ok(&big)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: compute lanes --json
-        case("as JSON", &["lanes", "--json"], &[], vec![ok(some)], owner_and_port, 0, 1),
-        case("3000 lanes as JSON", &["lanes", "--json"], &[], vec![ok(&big)], owner_and_port, 0, 1),
+        case(
+            "as JSON",
+            &["lanes", "--json"],
+            &[],
+            vec![ok(some)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "3000 lanes as JSON",
+            &["lanes", "--json"],
+            &[],
+            vec![ok(&big)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: compute lanes set
         case(
             "set",
-            &["lanes", "set", "ci", "--from", "ci-standard", "cpus=4", "isolation=vm,net", "x=[1, 2.50]", "cpus=8", "--why", "release gate", "--json"],
+            &[
+                "lanes",
+                "set",
+                "ci",
+                "--from",
+                "ci-standard",
+                "cpus=4",
+                "isolation=vm,net",
+                "x=[1, 2.50]",
+                "cpus=8",
+                "--why",
+                "release gate",
+                "--json",
+            ],
             &[],
-            vec![ok(r#"{"lane":{"name":"ci","state":"waiting"},"request":"ctr_1"}"#)],
+            vec![ok(
+                r#"{"lane":{"name":"ci","state":"waiting"},"request":"ctr_1"}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -312,9 +473,33 @@ fn compute_lanes() {
             0,
             1,
         )),
-        case("set with no name", &["lanes", "set"], &[], vec![], owner_and_port, 2, 0),
-        case("set --from last", &["lanes", "set", "ci", "--from"], &[], vec![], owner_and_port, 1, 0),
-        case("set with a stray word", &["lanes", "set", "ci", "big"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "set with no name",
+            &["lanes", "set"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "set --from last",
+            &["lanes", "set", "ci", "--from"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "set with a stray word",
+            &["lanes", "set", "ci", "big"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         traceback(case(
             "a lane with no name",
             &["lanes"],
@@ -340,9 +525,25 @@ fn compute_local() {
     let rig = Rig::new(VERB, "local");
     let v = vec![
         // covers: compute local
-        case("no word: the status", &["local"], &[], vec![ok(NOT_A_NODE)], owner_and_port, 0, 1),
+        case(
+            "no word: the status",
+            &["local"],
+            &[],
+            vec![ok(NOT_A_NODE)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: compute local status
-        case("a node", &["local", "status"], &[], vec![ok(A_NODE)], owner_and_port, 0, 1),
+        case(
+            "a node",
+            &["local", "status"],
+            &[],
+            vec![ok(A_NODE)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "not a node, nothing known",
             &["local", "status"],
@@ -353,7 +554,15 @@ fn compute_local() {
             1,
         ),
         // covers: compute local status --json
-        case("as JSON", &["local", "status", "--json"], &[], vec![ok(A_NODE)], owner_and_port, 0, 1),
+        case(
+            "as JSON",
+            &["local", "status", "--json"],
+            &[],
+            vec![ok(A_NODE)],
+            owner_and_port,
+            0,
+            1,
+        ),
         traceback(case(
             "an elevation that is a list",
             &["local", "status"],
@@ -364,22 +573,57 @@ fn compute_local() {
             1,
         )),
         // covers: compute local pause
-        case("pause --now", &["local", "pause", "--now"], &[], vec![ok(SAID)], owner_and_port, 0, 1),
-        sess(case("pause in a session, over TCP", &["local", "pause"], &[], vec![ok(SAID)], port_only, 0, 1)),
+        case(
+            "pause --now",
+            &["local", "pause", "--now"],
+            &[],
+            vec![ok(SAID)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        sess(case(
+            "pause in a session, over TCP",
+            &["local", "pause"],
+            &[],
+            vec![ok(SAID)],
+            port_only,
+            0,
+            1,
+        )),
         // covers: compute local drain
-        case("drain", &["local", "drain"], &[], vec![ok(SAID)], owner_and_port, 0, 1),
+        case(
+            "drain",
+            &["local", "drain"],
+            &[],
+            vec![ok(SAID)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: compute local resume
         case(
             "resume, refused",
             &["local", "resume"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"run it outside K2"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"owner_only","hint":"run it outside K2"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
         ),
         // covers: compute local policy
-        case("policy", &["local", "policy"], &[], vec![ok(A_NODE)], owner_and_port, 0, 1),
+        case(
+            "policy",
+            &["local", "policy"],
+            &[],
+            vec![ok(A_NODE)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "policy set",
             &["local", "policy", "max-jobs=3", "gpu=on", "max-jobs=4"],
@@ -389,12 +633,31 @@ fn compute_local() {
             0,
             1,
         ),
-        case("policy with a bare word", &["local", "policy", "a=1", "b"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "policy with a bare word",
+            &["local", "policy", "a=1", "b"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         // covers: compute local enable
         stdin(
             case(
                 "enable, the code on stdin",
-                &["local", "enable", "--controller", "https://ctl.example", "--code-stdin", "--name", "mini", "--no-private-home", "--remote-admin", "policy"],
+                &[
+                    "local",
+                    "enable",
+                    "--controller",
+                    "https://ctl.example",
+                    "--code-stdin",
+                    "--name",
+                    "mini",
+                    "--no-private-home",
+                    "--remote-admin",
+                    "policy",
+                ],
                 &[],
                 vec![ok(MESSAGE)],
                 owner_and_port,
@@ -424,7 +687,15 @@ fn compute_local() {
             0,
             1,
         ),
-        case("enable, nothing", &["local", "enable"], &[], vec![ok(r#"{}"#)], owner_and_port, 0, 1),
+        case(
+            "enable, nothing",
+            &["local", "enable"],
+            &[],
+            vec![ok(r#"{}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "enable, both on stdin",
             &["local", "enable", "--code-stdin", "--ticket-stdin"],
@@ -473,19 +744,45 @@ fn compute_local() {
             2,
             0,
         ),
-        case("enable, --name last", &["local", "enable", "--name"], &[], vec![], owner_and_port, 1, 0),
-        case("enable, a stray word", &["local", "enable", "now"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "enable, --name last",
+            &["local", "enable", "--name"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "enable, a stray word",
+            &["local", "enable", "now"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         // covers: compute local remote-admin
         case(
             "remote-admin",
             &["local", "remote-admin", "full"],
             &[],
-            vec![ok(r#"{"message":"remote admin is full","command":"sudo k2-node admin full"}"#)],
+            vec![ok(
+                r#"{"message":"remote admin is full","command":"sudo k2-node admin full"}"#,
+            )],
             owner_and_port,
             0,
             1,
         ),
-        case("remote-admin, no level", &["local", "remote-admin"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "remote-admin, no level",
+            &["local", "remote-admin"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         // covers: compute local disable
         case(
             "disable, nothing running",
@@ -496,12 +793,23 @@ fn compute_local() {
             0,
             2,
         ),
-        case("disable, jobs running", &["local", "disable"], &[], vec![ok(A_NODE)], owner_and_port, 2, 1),
+        case(
+            "disable, jobs running",
+            &["local", "disable"],
+            &[],
+            vec![ok(A_NODE)],
+            owner_and_port,
+            2,
+            1,
+        ),
         case(
             "disable --yes, jobs running",
             &["local", "disable", "--yes"],
             &[],
-            vec![ok(A_NODE), ok(r#"{"message":"stopped","command":"sudo rm"}"#)],
+            vec![
+                ok(A_NODE),
+                ok(r#"{"message":"stopped","command":"sudo rm"}"#),
+            ],
             owner_and_port,
             0,
             2,
@@ -515,8 +823,24 @@ fn compute_local() {
             1,
             1,
         )),
-        case("an unknown word", &["local", "start"], &[], vec![], owner_and_port, 2, 0),
-        case("--json alone", &["local", "--json"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "an unknown word",
+            &["local", "start"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "--json alone",
+            &["local", "--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

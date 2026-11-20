@@ -36,7 +36,8 @@ pub const USAGE: &str = concat!(
     cli_name!(),
     " compute local status|pause [--now]|drain|resume|policy|enable|remote-admin|disable"
 );
-pub const POLICY_USAGE: &str = concat!("usage: ", cli_name!(), " compute local policy key=value...");
+pub const POLICY_USAGE: &str =
+    concat!("usage: ", cli_name!(), " compute local policy key=value...");
 pub const ENABLE_USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
@@ -80,22 +81,28 @@ pub struct Enable {
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
-    Status { json: bool },
-    Pause { now: bool },
+    Status {
+        json: bool,
+    },
+    Pause {
+        now: bool,
+    },
     /// `drain` or `resume`.
     Control(&'static str),
     PolicyShow,
     PolicySet(Vec<(String, String)>),
     Enable(Enable),
     RemoteAdmin(String),
-    Disable { yes: bool },
+    Disable {
+        yes: bool,
+    },
 }
 
 /// The words after `local`.
 pub fn parse(words: &[&str]) -> Words<Ask> {
     let sub = match words.first() {
         None | Some(&"") => "status",
-        Some(w) => w,
+        Some(w) => *w,
     };
     let rest = words.get(1..).unwrap_or(&[]);
     let first = rest.first().copied().unwrap_or("");
@@ -159,7 +166,8 @@ fn enable(words: &[&str]) -> Result<Enable, Words<Ask>> {
                 if short {
                     return Err(Words::ShiftFailed);
                 }
-                if w == "--remote-admin" && !matches!(e.remote_admin.as_str(), "off" | "policy" | "full")
+                if w == "--remote-admin"
+                    && !matches!(e.remote_admin.as_str(), "off" | "policy" | "full")
                 {
                     return Err(Words::Usage(LEVEL_LINE.to_string()));
                 }
@@ -214,10 +222,7 @@ fn secrets(e: &Enable) -> Result<(Secret, Secret), String> {
     };
     let enroll = if e.code_stdin {
         if !e.enroll.is_empty() {
-            return Err(format!(
-                "{me}: --code-stdin or {}, not both",
-                e.enroll_flag
-            ));
+            return Err(format!("{me}: --code-stdin or {}, not both", e.enroll_flag));
         }
         let c = read_secret("Enroll code: ");
         if c.is_empty() {
@@ -271,12 +276,9 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
             let body = dumps(&object(vec![("now", Value::Bool(*now))]));
             said(cp.call(true, "/cli/compute/local/pause", &body, true))
         }
-        Ask::Control(verb) => said(cp.call(
-            true,
-            &format!("/cli/compute/local/{verb}"),
-            "{}",
-            true,
-        )),
+        Ask::Control(verb) => {
+            said(cp.call(true, &format!("/cli/compute/local/{verb}"), "{}", true))
+        }
         Ask::PolicyShow => match cp.call(false, STATUS, "", false) {
             Ok(b) => policy(&b, false).print(),
             Err(e) => e,
@@ -387,11 +389,11 @@ fn said(answer: Result<Vec<u8>, Exit>) -> Exit {
         ];
         p::pct("%s: %s", &args).map_err(at(1))
     });
-    match r {
+    let shown = match r {
         Ok(line) => Shown::out(line + "\n"),
         Err(e) => stopped(String::new(), &e),
-    }
-    .print()
+    };
+    shown.print()
 }
 
 /// The policy as indented JSON: `.get("policy")` (the status) or
@@ -417,13 +419,22 @@ fn policy(body: &[u8], set: bool) -> Shown {
 pub fn message_reader(body: &[u8], sas: bool) -> Shown {
     let mut out = String::new();
     let r = (|| -> Result<(), Raise> {
-        let l = said_line!("_compute_call POST /cli/compute/local/enable", "v = json.load");
+        let l = said_line!(
+            "_compute_call POST /cli/compute/local/enable",
+            "v = json.load"
+        );
         let v = load(body, l)?;
-        let l = said_line!("_compute_call POST /cli/compute/local/enable", "print(v.get(\"message\"");
+        let l = said_line!(
+            "_compute_call POST /cli/compute/local/enable",
+            "print(v.get(\"message\""
+        );
         let m = p::get_or(&v, "message", s("")).map_err(at(l))?;
         out.push_str(&p::str_of(&m));
         out.push('\n');
-        let l = said_line!("_compute_call POST /cli/compute/local/enable", "if v.get(\"command\")");
+        let l = said_line!(
+            "_compute_call POST /cli/compute/local/enable",
+            "if v.get(\"command\")"
+        );
         if p::truthy(&p::get(&v, "command").map_err(at(l))?) {
             let l = l + 1;
             let c = p::idx(&v, "command").map_err(at(l))?;
@@ -431,7 +442,10 @@ pub fn message_reader(body: &[u8], sas: bool) -> Shown {
             out.push('\n');
         }
         if sas {
-            let l = said_line!("_compute_call POST /cli/compute/local/enable", "if v.get(\"sas\")");
+            let l = said_line!(
+                "_compute_call POST /cli/compute/local/enable",
+                "if v.get(\"sas\")"
+            );
             if p::truthy(&p::get(&v, "sas").map_err(at(l))?) {
                 let l = l + 1;
                 let code = p::idx(&v, "sas").map_err(at(l))?;
@@ -465,14 +479,13 @@ fn elevation(e: &Value) -> Result<&'static str, String> {
         ),
     ];
     match e {
-        Value::Array(_) | Value::Object(_) => Err(format!(
-            "TypeError: unhashable type: '{}'",
-            p::tname(e)
-        )),
+        Value::Array(_) | Value::Object(_) => {
+            Err(format!("TypeError: unhashable type: '{}'", p::tname(e)))
+        }
         Value::Str(t) => Ok(ROOT
             .iter()
             .find(|(k, _)| *t == Text::from(*k))
-            .map_or("one sudo command", |(_, v)| v)),
+            .map_or("one sudo command", |(_, v)| *v)),
         _ => Ok("one sudo command"),
     }
 }
@@ -490,9 +503,13 @@ fn status_read(body: &[u8], out: &mut String) -> Result<(), Raise> {
     let cli = CLI_NAME;
     let v = load(body, status_line!("v = json.load"))?;
     let l = status_line!("b = v.get(\"binary\")");
-    let b = p::get(&v, "binary").map(|x| p::or(x, Value::Object(vec![]))).map_err(at(l))?;
+    let b = p::get(&v, "binary")
+        .map(|x| p::or(x, Value::Object(vec![])))
+        .map_err(at(l))?;
     let l = status_line!("hc = v.get(\"homeCheck\")");
-    let hc = p::get(&v, "homeCheck").map(|x| p::or(x, Value::Object(vec![]))).map_err(at(l))?;
+    let hc = p::get(&v, "homeCheck")
+        .map(|x| p::or(x, Value::Object(vec![])))
+        .map_err(at(l))?;
     let l = status_line!("if not v.get(\"installed\")");
     if !p::truthy(&p::get(&v, "installed").map_err(at(l))?) {
         out.push_str("This computer is not a compute node.\n");
@@ -529,9 +546,13 @@ fn status_read(body: &[u8], out: &mut String) -> Result<(), Raise> {
         return Ok(());
     }
     let l = status_line!("n = v.get(\"node\")");
-    let n = p::get(&v, "node").map(|x| p::or(x, Value::Object(vec![]))).map_err(at(l))?;
+    let n = p::get(&v, "node")
+        .map(|x| p::or(x, Value::Object(vec![])))
+        .map_err(at(l))?;
     let l = status_line!("c = v.get(\"control\")");
-    let c = p::get(&v, "control").map(|x| p::or(x, Value::Object(vec![]))).map_err(at(l))?;
+    let c = p::get(&v, "control")
+        .map(|x| p::or(x, Value::Object(vec![])))
+        .map_err(at(l))?;
     let l = status_line!("print(\"node %s");
     let name = p::get_or(&n, "name", s("?")).map_err(at(l))?;
     let state = p::get_or(&n, "state", s("unknown")).map_err(at(l))?;
@@ -555,7 +576,9 @@ fn status_read(body: &[u8], out: &mut String) -> Result<(), Raise> {
     out.push('\n');
     let l = status_line!("if n.get(\"running\")");
     if p::truthy(&p::get(&n, "running").map_err(at(l))?) {
-        let r = p::idx(&n, "running").and_then(|r| p::join(" ", &r)).map_err(at(l))?;
+        let r = p::idx(&n, "running")
+            .and_then(|r| p::join(" ", &r))
+            .map_err(at(l))?;
         out.push_str(&format!("running: {r}\n"));
     }
     let l = status_line!("if n.get(\"last_error\")");
@@ -566,20 +589,29 @@ fn status_read(body: &[u8], out: &mut String) -> Result<(), Raise> {
     let l = status_line!("if n.get(\"sas\")");
     if p::truthy(&p::get(&n, "sas").map_err(at(l))?) {
         let e = p::idx(&n, "sas").map_err(at(l))?;
-        out.push_str(&format!("waiting for confirmation, code {}\n", p::str_of(&e)));
+        out.push_str(&format!(
+            "waiting for confirmation, code {}\n",
+            p::str_of(&e)
+        ));
     }
     let l = status_line!("r = v.get(\"enrollResult\")");
-    let r = p::get(&v, "enrollResult").map(|x| p::or(x, Value::Object(vec![]))).map_err(at(l))?;
+    let r = p::get(&v, "enrollResult")
+        .map(|x| p::or(x, Value::Object(vec![])))
+        .map_err(at(l))?;
     let l = status_line!("if r and not r.get(\"ok\")");
     if p::truthy(&r) && !p::truthy(&p::get(&r, "ok").map_err(at(l))?) {
         let m = p::get(&r, "message").map_err(at(l))?;
         out.push_str(&format!("last enroll request failed: {}\n", p::str_of(&m)));
     }
     let l = status_line!("p = v.get(\"packages\")");
-    let pk = p::get(&v, "packages").map(|x| p::or(x, Value::Object(vec![]))).map_err(at(l))?;
+    let pk = p::get(&v, "packages")
+        .map(|x| p::or(x, Value::Object(vec![])))
+        .map_err(at(l))?;
     let l = status_line!("if p.get(\"approved\")");
     if p::truthy(&p::get(&pk, "approved").map_err(at(l))?) {
-        let a = p::idx(&pk, "approved").and_then(|a| p::join(" ", &a)).map_err(at(l))?;
+        let a = p::idx(&pk, "approved")
+            .and_then(|a| p::join(" ", &a))
+            .map_err(at(l))?;
         out.push_str(&format!("approved packages: {a}\n"));
     }
     let l = status_line!("if hc and not hc.get(\"private\")");
@@ -624,7 +656,10 @@ mod tests {
     #[test]
     fn the_words() {
         assert_eq!(parse(&[]), Words::Ask(Ask::Status { json: false }));
-        assert_eq!(parse(&["", "--json"]), Words::Ask(Ask::Status { json: true }));
+        assert_eq!(
+            parse(&["", "--json"]),
+            Words::Ask(Ask::Status { json: true })
+        );
         assert_eq!(parse(&["--json"]), Words::Usage(USAGE.into()));
         assert_eq!(parse(&["policy", "a"]), Words::Usage(POLICY_USAGE.into()));
         assert_eq!(
@@ -633,7 +668,10 @@ mod tests {
         );
         assert_eq!(parse(&["enable", "--remote-admin"]), Words::ShiftFailed);
         assert_eq!(parse(&["enable", "--x"]), Words::Usage(ENABLE_USAGE.into()));
-        assert_eq!(parse(&["remote-admin"]), Words::Usage(REMOTE_ADMIN_USAGE.into()));
+        assert_eq!(
+            parse(&["remote-admin"]),
+            Words::Usage(REMOTE_ADMIN_USAGE.into())
+        );
     }
 
     #[test]

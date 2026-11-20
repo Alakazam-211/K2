@@ -139,7 +139,11 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
     while i < words.len() {
         let w = words[i];
         match w {
-            "--github" | "--nodes" | "--workspace" | "--github-app" | "--key-file"
+            "--github"
+            | "--nodes"
+            | "--workspace"
+            | "--github-app"
+            | "--key-file"
             | "--github-token-file" => {
                 let v = match words.get(i + 1) {
                     Some(v) if !v.is_empty() => *v,
@@ -172,7 +176,11 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
 /// `_compute_json`'s body for grant and revoke.
 fn change_body(a: &Ask, ws: &str) -> String {
     let mut pairs = vec![];
-    for (k, v) in [("workspace", ws), ("github", &a.github), ("nodes", &a.nodes)] {
+    for (k, v) in [
+        ("workspace", ws),
+        ("github", &a.github),
+        ("nodes", &a.nodes),
+    ] {
         if !v.is_empty() {
             pairs.push((k, str_value(v)));
         }
@@ -297,7 +305,10 @@ fn stdin_text() -> Value {
     }
     let space = |u: &U| matches!(u, U::C(c) if py_space(*c));
     let start = units.iter().position(|u| !space(u)).unwrap_or(units.len());
-    let end = units.iter().rposition(|u| !space(u)).map_or(start, |e| e + 1);
+    let end = units
+        .iter()
+        .rposition(|u| !space(u))
+        .map_or(start, |e| e + 1);
     let mut lit = String::from("\"");
     for u in &units[start..end] {
         match u {
@@ -417,7 +428,10 @@ fn read(body: &[u8], out: &mut String) -> Result<(), Raise> {
         let l = line!("print(\"credential: %s\"");
         let kind = p::get(&c, "kind").map_err(at(l))?;
         let what = if p::eq_s(&kind, "app") {
-            format!("GitHub App {}", p::str_of(&p::get(&c, "appId").map_err(at(l))?))
+            format!(
+                "GitHub App {}",
+                p::str_of(&p::get(&c, "appId").map_err(at(l))?)
+            )
         } else {
             "a fine-grained token (nodes get the token itself)".to_string()
         };
@@ -546,7 +560,10 @@ mod tests {
         else {
             panic!("not an ask");
         };
-        assert_eq!((a.verb, a.github.as_str(), a.shared), (Verb::Grant, "o/r,o/s", true));
+        assert_eq!(
+            (a.verb, a.github.as_str(), a.shared),
+            (Verb::Grant, "o/r,o/s", true)
+        );
         let Words::Ask(a) = parse(&["--json"]) else {
             panic!("not an ask");
         };

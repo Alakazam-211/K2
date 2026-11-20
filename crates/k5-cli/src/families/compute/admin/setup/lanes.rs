@@ -10,7 +10,7 @@
 //! given again keeps its first place.
 
 use super::super::super::lines::py_line;
-use super::super::super::pyrt::{self as p, s};
+use super::super::super::pyrt as p;
 use super::super::super::writes::{dumps, load, object, stopped, str_value, Cp, Words};
 use super::{at, LOCAL_SRC};
 use crate::exit::Exit;
@@ -29,7 +29,13 @@ pub const SET_USAGE: &str = concat!(
 
 macro_rules! line {
     ($m:literal) => {
-        const { py_line(LOCAL_SRC, "            _compute_call GET /cli/compute/lanes \"\"", $m) }
+        const {
+            py_line(
+                LOCAL_SRC,
+                "            _compute_call GET /cli/compute/lanes \"\"",
+                $m,
+            )
+        }
     };
 }
 
@@ -173,7 +179,9 @@ fn read(body: &[u8], out: &mut String) -> Result<(), Raise> {
         ));
     }
     let l = line!("for l in v[\"lanes\"]");
-    let lanes = p::idx(&v, "lanes").and_then(|x| p::iter(&x)).map_err(at(l))?;
+    let lanes = p::idx(&v, "lanes")
+        .and_then(|x| p::iter(&x))
+        .map_err(at(l))?;
     let l = line!("print(\"%s: %s (approved by %s)\"");
     for x in &lanes {
         let args = [
@@ -210,8 +218,14 @@ mod tests {
         );
         assert_eq!(parse(&["set"]), Words::Usage(SET_USAGE.into()));
         assert_eq!(parse(&["set", "ci", "--from"]), Words::ShiftFailed);
-        assert_eq!(parse(&["set", "ci", "nope"]), Words::Usage(SET_USAGE.into()));
-        assert_eq!(parse(&["x", "--json"]), Words::Ask(Ask::List { json: true }));
+        assert_eq!(
+            parse(&["set", "ci", "nope"]),
+            Words::Usage(SET_USAGE.into())
+        );
+        assert_eq!(
+            parse(&["x", "--json"]),
+            Words::Ask(Ask::List { json: true })
+        );
         assert_eq!(line!("v = json.load"), 3);
         assert_eq!(line!("print(\"%s: %s (approved by %s)\""), 7);
     }
@@ -219,8 +233,7 @@ mod tests {
     #[test]
     fn the_reader() {
         assert_eq!(
-            reader(br#"{"lanes":[{"name":"ci","summary":"4 cpus","approvedBy":"owner"}]}"#)
-                .stdout,
+            reader(br#"{"lanes":[{"name":"ci","summary":"4 cpus","approvedBy":"owner"}]}"#).stdout,
             "ci: 4 cpus (approved by owner)\n"
         );
         assert_eq!(

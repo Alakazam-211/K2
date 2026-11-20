@@ -7,6 +7,7 @@
 //!   client, which every other verb runs: its `request`, `call` and
 //!   `die`, and the printers its verbs share.
 //! - [`reads`]: the reads (`inboxes`, `messages`, `read`, `wait`, …).
+//! - [`writes`]: the writes, each sent once (`send`, `reply`, `move`, …).
 //! - [`py`]: the Python value rules the printers share.
 //!
 //! The route table sends a verb here only once it has a row of its own
@@ -20,6 +21,7 @@ pub mod core;
 pub mod py;
 pub mod reads;
 pub mod watch;
+pub mod writes;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["mail"];
@@ -60,6 +62,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     match args.get(1).and_then(|w| w.to_str()) {
         Some("watch") => watch::run(args),
         Some(v) if reads::VERBS.contains(&v) => core::run(args, reads::parse, exec),
+        Some(v) if writes::VERBS.contains(&v) => core::run(args, writes::parse, exec),
         _ => None,
     }
 }
@@ -67,10 +70,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// `_mail_py`'s verb chain: the branch for `M_VERB`.
 fn exec(py_: &mut core::Py) -> core::R<()> {
     let verb = py_.env("M_VERB").to_string();
-    match reads::exec(py_, &verb) {
-        Some(r) => r,
-        None => unreachable!("no _mail_py branch for {verb}"),
-    }
+    reads::exec(py_, &verb)
+        .or_else(|| writes::exec(py_, &verb))
+        .unwrap_or_else(|| unreachable!("no _mail_py branch for {verb}"))
 }
 
 #[cfg(test)]

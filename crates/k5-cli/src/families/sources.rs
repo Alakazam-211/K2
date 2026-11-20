@@ -612,8 +612,10 @@ fn run_with(
             "Remove {name}? Gardens on other computers that show it will say removed; the name is held for 7 days. [y/N] "
         ));
         // `read -r ans`: the end of the input with no newline ends the
-        // command (`set -e`); that is read here as an empty answer.
-        let answer = prompt::read_line(prompt::Echo::Shown, prompt::AtEof::Drop);
+        // command (`set -e`): exit 1, nothing said.
+        let Some(answer) = prompt::read_line_or_end(prompt::Echo::Shown) else {
+            return Exit::Error;
+        };
         let text = String::from_utf8_lossy(answer.expose()).into_owned();
         if !matches!(text.trim_matches([' ', '\t', '\n']), "y" | "Y" | "yes") {
             out::stderr_line("Not removed.");

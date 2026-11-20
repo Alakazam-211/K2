@@ -10,6 +10,7 @@
 //! | `IFS= read -r v \|\| v=""` | [`read_line`]`(Echo::Shown, AtEof::Drop)` |
 //! | `IFS= read -r v \|\| true` | [`read_line`]`(Echo::Shown, AtEof::Keep)` |
 //! | `IFS= read -rs v \|\| v=""` | [`read_line`]`(Echo::Hidden, AtEof::Drop)` |
+//! | `read -r v` under `set -e` (the end of the input ends the command) | [`read_line_or_end`] |
 //! | `printf '<p>' >&2; IFS= read -rs v \|\| v=""; echo >&2` | [`ask_hidden`] |
 //! | `printf '<p>' >&2; IFS= read -r v \|\| v=""` | [`ask`] |
 //! | `_cli_read_secret_stdin "<p>"` (`cli/src/cli-tools-policy.sh`) | [`read_secret_stdin`] |
@@ -147,6 +148,24 @@ pub fn read_line(echo: Echo, at_eof: AtEof) -> Secret {
     let (line, ended) = read_until_newline(&mut Fd0);
     drop(guard);
     finish(line, ended, at_eof)
+}
+
+/// `read -r[s] v` with no `||` under `set -e`: the line, or `None` when
+/// the input ended before a newline (`read` fails, and the command ends
+/// there with exit 1, saying nothing). A terminal's Ctrl-D on an empty
+/// line is such an end, not an empty answer.
+pub fn read_line_or_end(echo: Echo) -> Option<Secret> {
+    let hidden = echo == Echo::Hidden && stdin_is_tty();
+    let guard = if hidden { NoEcho::start(0) } else { None };
+    let (line, ended) = read_until_newline(&mut Fd0);
+    drop(guard);
+    line_or_end(line, ended)
+}
+
+/// [`read_line_or_end`]'s outcome from what was read.
+fn line_or_end(line: Vec<u8>, ended: bool) -> Option<Secret> {
+    let line = Secret::new(line);
+    ended.then_some(line)
 }
 
 /// `printf '%s' "$prompt" >&2; IFS= read -rs v || v=""; echo >&2`: the
@@ -425,6 +444,21 @@ mod tests {
         assert!(finish(b"abc".to_vec(), false, AtEof::Drop).is_empty());
         assert_eq!(finish(b"abc".to_vec(), false, AtEof::Keep).expose(), b"abc");
         assert_eq!(finish(b"abc".to_vec(), true, AtEof::Drop).expose(), b"abc");
+    }
+
+    #[test]
+    fn the_end_of_the_input_is_not_an_empty_line() {
+        let got = |l: Vec<u8>, e: bool| line_or_end(l, e).map(|s| s.expose().to_vec());
+        assert_eq!(got(Vec::new(), true), Some(Vec::new()));
+        assert_eq!(got(b"y".to_vec(), true), Some(b"y".to_vec()));
+        // Ctrl-D at once, or after a word with no newline: read fails.
+        assert_eq!(got(Vec::new(), false), None);
+        assert_eq!(got(b"y".to_vec(), false), None);
+        let mut src = b"yes\nno".bytes();
+        let (l, e) = read_until_newline(&mut src);
+        assert_eq!(got(l, e), Some(b"yes".to_vec()));
+        let (l, e) = read_until_newline(&mut src);
+        assert_eq!(got(l, e), None);
     }
 
     #[test]

@@ -10,8 +10,11 @@
 //! - [`words`]: how a `cmd_hostmail_*` function's loop reads its words.
 //!
 //! The route table sends a verb here only once it has a row of its own
-//! ([`crate::route`]); [`run`] returns `None` for anything else, and the
-//! shell answers it.
+//! ([`crate::route`]), and the bare line by its bare row ([`bare`]):
+//! `hostmail` alone is the family's help page, exit 0, and
+//! `hostmail --json` is `cmd_hostmail`'s unknown-command usage line, exit
+//! 2, each after the gates. [`run`] returns `None` for anything else, and
+//! the shell answers it.
 
 use super::mail::core::{self, Plan};
 use crate::exit::Exit;
@@ -34,9 +37,11 @@ pub mod words;
 pub const WORDS: &[&str] = &["hostmail"];
 /// The shell's but for [`VERBS`].
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// The verbs the binary answers; every other verb, and `hostmail` alone,
-/// is the shell's. One verb row each, so each can turn back alone.
+/// The verbs the binary answers, and the bare line ([`bare`]); every
+/// other verb is the shell's. One verb row each, so each can turn back
+/// alone.
 pub const VERBS: &[crate::route::Verb] = &[
+    crate::route::Verb::bare(crate::route::Owner::Native),
     native(&["forward"]),
     native(&["quota"]),
     native(&["catchall"]),
@@ -92,7 +97,40 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some(v) if VERBS.iter().any(|r| r.words.contains(&v)) => {
             core::run(args, parse, super::mail::exec)
         }
+        _ if crate::route::is_bare(args) => bare(args),
         _ => None,
+    }
+}
+
+/// The verbs `cmd_hostmail`'s usage line names, in its order.
+pub const USAGE_VERBS: &str = "status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|outbound|bans|allowlist|calendar|group|profile|audit-sieve";
+
+/// `cmd_hostmail`'s `*)` hint for an unknown command.
+pub fn unknown_command(sub: &str) -> String {
+    format!(
+        "unknown hostmail command '{sub}' \u{2014} usage: {} hostmail <{USAGE_VERBS}>",
+        k2_client::brand::CLI_NAME
+    )
+}
+
+/// The bare line (`hostmail`, `hostmail --json`), through the gates the
+/// verbs take ([`core::run`]): `hostmail` alone is read there as an empty
+/// verb word, which no verb is.
+pub fn bare(args: &[OsString]) -> Option<Exit> {
+    if args.len() == 1 {
+        let padded = [args[0].clone(), OsString::new()];
+        return core::run(&padded, bare_plan, super::mail::exec);
+    }
+    core::run(args, bare_plan, super::mail::exec)
+}
+
+/// `cmd_hostmail` with no verb: the help (`$# -eq 0`), or `--json` as an
+/// unknown command.
+pub fn bare_plan(verb: &str, words: &[&str]) -> Plan {
+    match (verb, words) {
+        ("", []) => Plan::Help("hostmail"),
+        ("--json", []) => core::usage(unknown_command("--json")),
+        _ => Plan::Shell,
     }
 }
 

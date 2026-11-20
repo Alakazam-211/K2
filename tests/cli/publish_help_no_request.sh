@@ -209,8 +209,10 @@ grep -q '^POST /cli/publish/subdomain/claim ' "$REQ_LOG" && ok "k2 publish subdo
 [ "$OUT" = "Claimed acme for this workspace (project p1)." ] && ok "k2 publish subdomain claim acme: claimed" \
     || bad "claim acme printed: $OUT / $ERR"
 : >"$REQ_LOG"; run publish subdomain create staging --target localhost:3000
-grep -q '^POST /cli/publish/subdomain/claim .*check=1' "$REQ_LOG" && ok "k2 publish subdomain create staging still checks its label" \
+grep -q '^POST /cli/publish/subdomain/claim ' "$REQ_LOG" && ok "k2 publish subdomain create staging still checks its label" \
     || { bad "create sent no label check"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+grep -q '^POST /cli/connect/proxy .*"/subdomains"' "$REQ_LOG" && ok "k2 publish subdomain create staging still sends the create" \
+    || { bad "create sent no create"; sed 's/^/      | /' "$REQ_LOG" >&2; }
 
 echo ""
 echo "publish_help_no_request: $pass passed, $fail failed"

@@ -99,6 +99,8 @@ part_web() {
     step "k2 heartbeat wake says why when it cannot run (stub daemon)"; bash tests/cli/heartbeat_wake_errors.sh
     step "k2 heartbeat log says why when it cannot show the log (stub daemon)"; bash tests/cli/heartbeat_log_errors.sh
     step "k2 fed never sends the owner token from a session"; bash tests/cli/fed_passport.sh
+    step "a socket-first sender's TCP fallback never carries the owner token in a session (stub daemon)"; bash tests/cli/socket_first_no_owner.sh
+    step "a socket-first sender's TCP fallback never carries the owner token in a session (lint)"; bash tests/cli/socket_first_no_owner_lint.sh
     step "the CLI name rewrite, on a copy";        bash tests/garden/cli-name-flip.sh
     step "the dispatcher arm reader";              bash tests/garden/dispatcher-arms.sh
     step "k2 zen widget CLI (no daemon)";          bash tests/cli/zen_widget_offline.sh

@@ -165,7 +165,7 @@ done
 # The named expected differences: "name|PRD reference|what differs".
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
-    "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and hostmail (not built in yet) prints one line naming Python 3 and exits 69 without starting bash"
+    "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and a family still handed to the shell (the first of a list the check walks) prints one line naming Python 3 and exits 69 without starting bash"
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show, api) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token. Also workspace_swap_canonical.sh's swap lookup: bash looks the workspace up with the owner token; the binary's passport is refused there, so it sends the typed name and the swap gets 400 not registered (K2 ruling; until the daemon's handle_swap_canonical resolves names itself, after r3)"
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\`, \`connections remove beta\`, \`api on\` and \`api-key revoke k1\` (POSTs), and \`api-key list\` (a GET). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), api on the same line on stdout, api-key list and revoke \"Error: Expecting value: line 1 column 1 (char 0)\" on stderr, connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
@@ -278,9 +278,12 @@ path_without_python3() {
 # check_native_without_python3: a PATH with no python3 (each folder that
 # has one replaced by a folder of links to its other files). With it,
 # `study errors --json` (whose JSON the shell's Python writes) prints the
-# binary's JSON exactly as with python3, and bash's prints none; `hostmail`
-# (not built in) prints the one line naming Python 3 on stderr and
-# exits 69, and bash never starts (the shell CLI is not written out).
+# binary's JSON exactly as with python3, and bash's prints none; a family
+# the binary still hands to the shell prints the one line naming Python 3
+# on stderr and exits 69, and bash never starts (the shell CLI is not
+# written out). The family is the first of a list, in the order they are
+# planned to go native, that the binary does not answer itself, so the
+# check moves on as lanes land; it fails when none is left.
 check_native_without_python3() {
     local d="$WORK/no-python3" nopath rc want got problems=()
     mkdir -p "$d/home/.k2" "$d/ws/.k2"
@@ -295,12 +298,21 @@ check_native_without_python3() {
         || problems+=("the binary with no python3 exited $rc and printed: $(printf '%s' "$got" | head -c 200)")
     got="$(run_in "$nopath" bash "$ROOT/cli/k2" study errors --json 2>/dev/null)" || true
     [ "$got" != "$want" ] || problems+=("bash printed the JSON page with no python3: the difference is gone")
-    rc=0; got="$(run_in "$nopath" "$WORK/bin/k5" hostmail 2>"$d/err")" || rc=$?
-    [ "$rc" = 69 ] || problems+=("the binary's hostmail with no python3 exited $rc, want 69")
-    [ -z "$got" ] || problems+=("the binary's hostmail with no python3 printed on stdout: $(printf '%s' "$got" | head -c 200)")
-    [ "$(wc -l <"$d/err" | tr -d ' ')" = 1 ] && grep -q '^k5 hostmail: this command is not built into k5 yet and needs Python 3\. ' "$d/err" \
-        || problems+=("the binary's hostmail with no python3 wrote: $(head -c 300 "$d/err")")
-    [ ! -e "$d/home/.k2/run/cli" ] || problems+=("the binary's hostmail with no python3 wrote the shell CLI out")
+    local fam="" try seen=()
+    for try in daemon desktop hooks ci app-update release reserve migrate llm publish; do
+        rc=0; got="$(run_in "$nopath" "$WORK/bin/k5" "$try" 2>"$d/err")" || rc=$?
+        if [ "$rc" = 69 ]; then fam="$try"; break; fi
+        seen+=("$try: exit $rc")
+        rm -rf "$d/home/.k2/run/cli"
+    done
+    if [ -z "$fam" ]; then
+        problems+=("no family in the list is handed to the shell any more (${seen[*]}): name one the binary still hands over")
+    else
+        [ -z "$got" ] || problems+=("the binary's $fam with no python3 printed on stdout: $(printf '%s' "$got" | head -c 200)")
+        [ "$(wc -l <"$d/err" | tr -d ' ')" = 1 ] && grep -q "^k5 $fam: this command is not built into k5 yet and needs Python 3\\. " "$d/err" \
+            || problems+=("the binary's $fam with no python3 wrote: $(head -c 300 "$d/err")")
+        [ ! -e "$d/home/.k2/run/cli" ] || problems+=("the binary's $fam with no python3 wrote the shell CLI out")
+    fi
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

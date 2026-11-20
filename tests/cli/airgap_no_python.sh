@@ -183,7 +183,7 @@ for mode in nopy standin normal; do
     esac
     echo "== $mode =="
     BIN_NOPY=""
-    [ "$mode" != nopy ] || [ -z "${K5_CLI_UNDER_TEST:-}" ] || BIN_NOPY=1
+    [ "$mode" != nopy ] || [ "$CLI_UNDER_TEST" = "$CLI_BASH_SOURCE" ] || BIN_NOPY=1
 
     setup_home "$mode-on" on
     run_install "$P"
@@ -222,7 +222,7 @@ done
 echo "== the refusal reads the same with and without python3 =="
 # The HOME path differs per mode; compare with it taken out.
 norm() { printf '%s' "$1" | sed "s#$WORK/home-[a-z]*-on#HOME#g"; }
-if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+if [ "$CLI_UNDER_TEST" != "$CLI_BASH_SOURCE" ]; then
     # The binary's no-python3 run is its one line (checked above), not bash's.
     case "$OUT_ON_nopy" in
         "$NO_PYTHON_LINE"*) ok "no python3: the k5 binary's one line" ;;

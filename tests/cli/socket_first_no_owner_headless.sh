@@ -231,7 +231,7 @@ fi
 
 echo "== 3. a TCP-only Open verb from the session (today's behaviour; a later change to the TCP-only senders ends it) =="
 agent "$SOCK" "$DPORT" feedback list
-if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+if [ "$CLI_UNDER_TEST" != "$CLI_BASH_SOURCE" ]; then
     # The k5 binary answers feedback list itself and never holds the owner
     # token beside a passport (scripts/cli-parity.sh's named difference
     # owner-token-with-passport, PRD 13.9 #4): it sends the session's

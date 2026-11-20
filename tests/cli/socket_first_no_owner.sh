@@ -327,7 +327,7 @@ k2 "$LIVE_SOCK" "$PASSPORT" send-feedback settings --enabled off
 if [ "$(count uds POST /cli/product-feedback/settings "$P")" = 1 ]; then ok "send-feedback settings: the socket was asked first"; else bad "send-feedback settings: the socket was not asked"; show; fi
 expect_tcp_owner "send-feedback settings, not served on the socket" POST /cli/product-feedback/settings
 k2 "$LIVE_SOCK" "$PASSPORT" read acme
-if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+if [ "$CLI_UNDER_TEST" != "$CLI_BASH_SOURCE" ]; then
     # The k5 binary answers read itself and never holds the owner token
     # beside a passport: scripts/cli-parity.sh's named difference
     # owner-token-with-passport (PRD 13.9 #4). Its TCP try carries the

@@ -320,14 +320,14 @@ pub fn marker_in_process_env() -> bool {
 /// place (npm normalizes mtimes, so mtime alone repeats across versions)
 /// still changes the inode change time.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Fingerprint {
+pub(crate) struct Fingerprint {
     len: u64,
     mtime: Option<SystemTime>,
     ctime: i64,
     ctime_nsec: i64,
 }
 
-fn fingerprint(p: &Path) -> Option<Fingerprint> {
+pub(crate) fn fingerprint(p: &Path) -> Option<Fingerprint> {
     let md = std::fs::metadata(p).ok()?;
     #[cfg(unix)]
     let (ctime, ctime_nsec) = {
@@ -377,7 +377,7 @@ pub fn binary_supports_no_daemon(program: &str, search_path: &str) -> Result<(),
             }
         }
     }
-    let help = probe_help(&found, search_path)?;
+    let help = probe(&found, "--help", search_path)?;
     let supported = help_lists_no_daemon(&help);
     cache().lock().unwrap_or_else(|e| e.into_inner()).insert(
         key.clone(),
@@ -394,12 +394,12 @@ pub fn binary_supports_no_daemon(program: &str, search_path: &str) -> Result<(),
     }
 }
 
-/// Run `<binary> --help` (stdin closed, `PROBE_TIMEOUT` cap) and return
-/// stdout. Never a TUI: `--help` prints and exits.
-fn probe_help(binary: &Path, search_path: &str) -> Result<String, String> {
+/// Run `<binary> <flag>` (stdin closed, `PROBE_TIMEOUT` cap) and return
+/// stdout. Only `--help` or `--version`: each prints and exits, never a TUI.
+pub(crate) fn probe(binary: &Path, flag: &str, search_path: &str) -> Result<String, String> {
     let program = binary.to_string_lossy().into_owned();
     let (prog, args) =
-        crate::terminal::win_cmd::resolve_command(&program, &["--help".to_string()], search_path);
+        crate::terminal::win_cmd::resolve_command(&program, &[flag.to_string()], search_path);
     let mut cmd = crate::bg_proc::command(&prog);
     cmd.args(&args)
         .stdin(Stdio::null())
@@ -410,7 +410,7 @@ fn probe_help(binary: &Path, search_path: &str) -> Result<String, String> {
     }
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("probe {} --help: {e}", binary.display()))?;
+        .map_err(|e| format!("probe {} {flag}: {e}", binary.display()))?;
     let mut stdout = child.stdout.take().expect("piped stdout");
     let reader = std::thread::spawn(move || {
         let mut s = String::new();
@@ -424,15 +424,15 @@ fn probe_help(binary: &Path, search_path: &str) -> Result<String, String> {
             Ok(None) if started.elapsed() >= PROBE_TIMEOUT => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("probe {} --help timed out", binary.display()));
+                return Err(format!("probe {} {flag} timed out", binary.display()));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            Err(e) => return Err(format!("probe {} --help: {e}", binary.display())),
+            Err(e) => return Err(format!("probe {} {flag}: {e}", binary.display())),
         }
     }
     reader
         .join()
-        .map_err(|_| format!("probe {} --help: reader panicked", binary.display()))
+        .map_err(|_| format!("probe {} {flag}: reader panicked", binary.display()))
 }
 
 #[cfg(test)]

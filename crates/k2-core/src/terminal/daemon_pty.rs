@@ -935,6 +935,11 @@ impl DaemonPtySession {
         // cells, whose program runs in their own guest.
         let mut spawn_args = spawn_args;
         if let Some(prog) = guarded_program.as_deref() {
+            // The daemon's per-tab passport check reads this tab's Codex
+            // version later, from the same binary and PATH. Nothing runs here.
+            if crate::terminal::codex_no_daemon::is_codex_program(prog) {
+                crate::terminal::codex_version::note_session(&cfg.session_id.to_string(), prog, path_for_resolve);
+            }
             if !matches!(cfg.sandbox, crate::terminal::SandboxSpec::Microvm) {
                 let outcome = crate::terminal::codex_no_daemon::apply(
                     prog,

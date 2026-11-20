@@ -8,6 +8,8 @@
 //!   `die`, and the printers its verbs share.
 //! - [`reads`]: the reads (`inboxes`, `messages`, `read`, `wait`, …).
 //! - [`writes`]: the writes, each sent once (`send`, `reply`, `move`, …).
+//! - [`owner`]: the owner's verbs (`link`, `access`, `oauth-config`,
+//!   `sending`).
 //! - [`py`]: the Python value rules the printers share.
 //!
 //! The route table sends a verb here only once it has a row of its own
@@ -18,6 +20,7 @@ use crate::exit::Exit;
 use std::ffi::OsString;
 
 pub mod core;
+pub mod owner;
 pub mod py;
 pub mod reads;
 pub mod watch;
@@ -71,6 +74,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some("watch") => watch::run(args),
         Some(v) if reads::VERBS.contains(&v) => core::run(args, reads::parse, exec),
         Some(v) if writes::VERBS.contains(&v) => core::run(args, writes::parse, exec),
+        Some(v) if owner::VERBS.contains(&v) => core::run(args, owner::parse, exec),
         _ => None,
     }
 }
@@ -80,6 +84,7 @@ fn exec(py_: &mut core::Py) -> core::R<()> {
     let verb = py_.env("M_VERB").to_string();
     reads::exec(py_, &verb)
         .or_else(|| writes::exec(py_, &verb))
+        .or_else(|| owner::exec(py_, &verb))
         .unwrap_or_else(|| unreachable!("no _mail_py branch for {verb}"))
 }
 

@@ -24,10 +24,12 @@
 #   5. Outside Codex, open verbs and non-cell shells are untouched.
 #   6. Codex tab binding (K2_CODEX_TAB_ISOLATED, switch on by default), one
 #      case per source: a confirmed tab sends today's credential plus the
-#      conversation headers (socket and TCP); hand-typed codex (outside K2
-#      and in a K2 shell tab), a tab from before the marker, a Codex K2
-#      could not probe (blank marker), a shared ancestor and a marker from
-#      another tab each exit 3 with nothing sent, open and id verbs alike.
+#      conversation headers (socket and TCP); no K2 session marks (outside
+#      K2) is today's behaviour under both passport settings; hand-typed
+#      codex in a K2 tab, a pane id with a passport, a tab from before the
+#      marker, a Codex K2 could not probe (blank marker), a shared ancestor
+#      and a marker from another tab each exit 3 with nothing sent, open
+#      and id verbs alike.
 #      The owner token is never sent and the headers are never in argv.
 #   7. K2_CODEX_PASSPORT_BIND=0 restores today's behaviour (no headers).
 #   8. Unconfirmed: help, schema, version and explain run; `<verb> --help`
@@ -397,13 +399,18 @@ run_codex() {
     rc=$?
     set -e
 }
-# k2 as a Codex tool call in a terminal outside K2: no passport, no socket.
+# k2 as a Codex tool call with no K2 session marks (no socket, no pane
+# id): run_codex_outside NAME=VALUE... -- ARGS...
 run_codex_outside() {
+    local -a envs=()
+    while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
+    shift
     reset_logs
     set +e
     env -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K5_HOOK_SOCK -u K2_HOOK_TOKEN -u K2SO_HOOK_TOKEN -u K5_HOOK_TOKEN \
         -u K2SO_PORT -u K2_CODEX_TAB_ISOLATED -u K2_CODEX_PASSPORT_BIND -u K2_PANE_ID -u K5_PANE_ID -u K2SO_PANE_ID \
         K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" K2_PROJECT_PATH="$WORK/proj" "${CODEX_ENV[@]}" \
+        PATH="$WORK/psbin:$WORK/bin:$PATH" ${envs[@]+"${envs[@]}"} \
         "$K2_CLI" "$@" >"$WORK/out" 2>"$WORK/err"
     rc=$?
     set -e
@@ -485,10 +492,30 @@ off_auth="$(auths)"
 assert_eq "confirmed tab, TCP: today's credential (as with the switch off)" "$on_auth" "$off_auth"
 [ -n "$on_auth" ] || { echo "  FAIL: confirmed tab, TCP: no credential was sent" >&2; fail=$((fail + 1)); }
 
-# Hand-typed codex in a terminal outside K2: the owner token on disk is
-# never used; nothing is sent.
-run_codex_outside activity
-assert_refused "hand-typed codex outside K2, open verb"
+# No K2 session marks (a terminal outside K2, under a shared server):
+# today's behaviour, under both passport settings, as with the switch off.
+# Passports off: no passport.
+assert_today() { # label, then the run as with the switch off
+    local label="$1" t_rc="$rc" t_auth t_err
+    t_auth="$(auths)"; t_err="$(cat "$WORK/err")"
+    assert_absent "$label: no Codex tab refusal" "$t_err" "reopen it from K2"
+    [ -n "$t_auth" ] || { echo "  FAIL: $label: no request was sent" >&2; fail=$((fail + 1)); }
+    assert_headers_on "$label"
+    shift
+    "$@"
+    assert_eq "$label: exit as with the switch off" "$t_rc" "$rc"
+    assert_eq "$label: today's credential" "$t_auth" "$(auths)"
+}
+run_codex_outside -- activity
+assert_today "no session marks, passports off" run_codex_outside K2_CODEX_PASSPORT_BIND=0 -- activity
+# Passports on: a passport in the env, still no socket and no pane id.
+run_codex_outside K2_HOOK_TOKEN="$SCOPED" -- activity
+assert_today "no session marks, passports on" run_codex_outside K2_HOOK_TOKEN="$SCOPED" K2_CODEX_PASSPORT_BIND=0 -- activity
+
+# A pane id with a passport and no socket (its bind failed) is a K2
+# session: no marker, refused.
+run_codex K2_PANE_ID="pane-7" -- activity
+assert_refused "pane id and passport, no socket, no marker"
 
 # Hand-typed codex in a K2 shell tab: the tab's passport, no marker.
 run_codex K2_HOOK_SOCK="$LIVE_SOCK" -- thread k2/cortana hello

@@ -853,11 +853,12 @@ _cli_check_session_passport() {
 # tab's credentials only when K2 can tell it runs in a tab K2 started with
 # its own Codex server. K2 sets K2_CODEX_TAB_ISOLATED to the session id of
 # the tab's passport when it starts Codex with --no-daemon, or in a microVM
-# cell. Any other Codex call may run under a Codex server another tab
-# started, with that tab's credentials, so it counts as shared: no marker
-# (a tab opened before this update, codex typed in a shell, a Codex K2
-# could not check), a marker for another passport, or a shared Codex
-# app-server above this process. A shared call sends nothing: a command
+# cell. Any other Codex call in a K2 session may run under a Codex server
+# another tab started, with that tab's credentials, so it counts as shared:
+# no marker (a tab opened before this update, codex typed in a tab's shell,
+# a Codex K2 could not check), a marker for another passport, or a shared
+# Codex app-server above this process. Outside a K2 session nothing changes
+# (_cli_codex_gate_applies). A shared call sends nothing: a command
 # that would make a request ends with exit 3. Only help, schema, version
 # and explain run, and `<command> -h|--help` prints `k2 help <command>`
 # without running the command (some commands' own help path asks the
@@ -1046,25 +1047,26 @@ _cli_codex_tab_refuse() {
     exit 3
 }
 
-# True in a K2 terminal on a server with scoped passports off: K2 named the
-# tab (K2_PANE_ID, set whatever the passport switch says) but gave it no
-# passport and no cell socket, the session marks the rest of this CLI
-# reads (_k2_token_is_session_owner). Every tab there acts as the owner
-# today and has no identity of its own to mix up, so the gate changes
-# nothing. A terminal outside K2 has no pane id and stays refused.
-_cli_codex_passports_off() {
+# True when the Codex tab gate applies: this runs in a K2 session. The
+# session marks are the cell socket ($K2_HOOK_SOCK, any of its names) or a
+# pane id with a passport. Without them it is today's behaviour, like k2 in
+# your own terminal: a terminal outside K2 (no marks at all), or a K2
+# terminal on a server with scoped passports off (a pane id, but no
+# passport and no socket: every tab there acts as the owner today and has
+# no identity of its own to mix up). Codex typed by hand in a K2 tab has
+# the socket and stays gated.
+_cli_codex_gate_applies() {
     local pane
-    [ -z "${SCOPED_TOKEN:-}" ] || return 1
-    [ -z "${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}" ] || return 1
+    [ -z "${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}" ] || return 0
     _envn_into pane PANE_ID
-    [ -n "$pane" ]
+    [ -n "$pane" ] && [ -n "${SCOPED_TOKEN:-}" ]
 }
 
 # Before any command: a Codex call K2 can't confirm runs only the local
 # words, never the owner token from disk.
 _cli_codex_tab_gate() {
     _cli_codex_bind_on || return 0
-    if _cli_codex_passports_off; then
+    if ! _cli_codex_gate_applies; then
         return 0
     fi
     _cli_codex_tab_confirmed && return 0

@@ -2,6 +2,7 @@
 //! `cmd_hostmail` (`cli/src/hostmail-*.sh`) answers it. Every verb runs
 //! `_mail_py`, the same Python `mail` runs ([`super::mail::core`]).
 //!
+//! - [`approvals`]: `approvals` (list, show, save, approve, deny).
 //! - [`forward`]: `forward` (set, add, rm, show, unset, pause, resume,
 //!   list), whose Python branch `mail forward` shares
 //!   ([`super::mail::forward`]).
@@ -21,6 +22,7 @@ use crate::exit::Exit;
 use std::ffi::OsString;
 
 pub mod admin;
+pub mod approvals;
 pub mod bans;
 pub mod cert;
 pub mod dns;
@@ -80,6 +82,7 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["delete"]),
     native(&["doctor"]),
     native(&["config"]),
+    native(&["approvals"]),
 ];
 
 /// A verb row the binary answers.
@@ -148,6 +151,7 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
         v if groups::VERBS.contains(&v) => groups::parse(v, words),
         v if lists::VERBS.contains(&v) => lists::parse(v, words),
         v if admin::VERBS.contains(&v) => admin::parse(v, words),
+        v if approvals::VERBS.contains(&v) => approvals::parse(v, words),
         _ => Plan::Shell,
     }
 }
@@ -164,6 +168,7 @@ pub fn branch(py_: &mut core::Py, verb: &str) -> Option<core::R<()>> {
         .or_else(|| groups::exec(py_, verb))
         .or_else(|| lists::exec(py_, verb))
         .or_else(|| admin::exec(py_, verb))
+        .or_else(|| approvals::exec(py_, verb))
 }
 
 /// `v="$(cat)"` for a secret flag (`--pass-stdin`, `--relay-pass-stdin`):

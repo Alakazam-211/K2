@@ -1,10 +1,9 @@
 //! The vault verbs with parsers of their own: sync (`_vault_sync`,
 //! `cli/src/vault.sh`) and placement and placements (`_vault_placement`,
-//! `cli/src/job.sh`), fetch (`_vault_fetch`) and systemd-cred
-//! ([`super::systemd`]). run (`_vault_run`) is the shell's still: it hands
-//! the passport to the run helper in its environment, which waits on
-//! K2's ruling. So is a fetch line the binary can't be sure of
-//! ([`fetch_native`]).
+//! `cli/src/job.sh`), fetch (`_vault_fetch`), systemd-cred
+//! ([`super::systemd`]) and run ([`super::run`]). A fetch line the binary
+//! can't be sure of is the shell's ([`fetch_native`]), and so is run where
+//! there is no `exec` (not Unix).
 
 use super::py::{self, get, idx, items, left, or_list, render, s, t, Lines, R};
 use super::verbs::{merge, scope_json};
@@ -20,6 +19,7 @@ use k2_client::brand::CLI_NAME as CLI;
 pub fn native(sub: &str, rest: &[&str]) -> bool {
     match sub {
         "sync" | "placements" | "systemd-cred" => true,
+        "run" => cfg!(unix),
         "fetch" => fetch_native(rest),
         "placement" => matches!(
             rest.first().copied().unwrap_or("list"),
@@ -40,6 +40,7 @@ pub fn run(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Exit {
         "sync" => sync(ctx, rest),
         "fetch" => fetch(ctx, rest),
         "systemd-cred" => super::systemd::run(ctx, rest),
+        "run" => super::run::run(ctx, rest),
         _ => placement(ctx, sub, rest),
     };
     match r {

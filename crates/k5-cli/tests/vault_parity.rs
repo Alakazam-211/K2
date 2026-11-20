@@ -197,6 +197,9 @@ fn the_lines_say_the_brand_s_name() {
         (&["fetch", "-s", "A"][..], format!("usage: {cli} vault fetch --secret NAME URL\n")),
         (&["send", "A"][..], format!("usage: {cli} vault send NAME --to <agent>|<agent>::<host> [--note …]\n")),
         (&["placements", "--scope", "server"][..], format!("usage: --scope picks which secret NAME is: {cli} vault placements NAME --scope <s>\n")),
+        (&["run", "--secret", "A"][..], format!("usage: {cli} vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]\nPut -- before the command: {cli} vault run --secret API_KEY -- node app.js\n")),
+        (&["run", "--bogus", "-h"][..], format!("usage: unknown flag '--bogus' ({cli} vault run --help)\n")),
+        (&["exec", "--help"][..], format!("usage: unknown vault verb 'exec' ({cli} vault --help)\ndid you mean run? ({cli} vault run --help)\n")),
     ] {
         let mut c = VCase::new("brand", args);
         c.code = 2;
@@ -206,5 +209,112 @@ fn the_lines_say_the_brand_s_name() {
         if cli != "k2" {
             assert!(!ran.out.stderr.contains("k2 ") && !ran.out.stderr.contains("k5 "));
         }
+    }
+}
+
+/// `vault` alone, `help`, and a line with `-h` or `--help` anywhere: the
+/// page, nothing sent to the daemon or the vault socket, and no
+/// connection gate (the shell skips it for these).
+#[test]
+fn help_lines_send_nothing() {
+    let rig = VRig::new();
+    let page = |name: &'static str, args: &[&'static str], code: i32| {
+        let mut c = VCase::new(name, args);
+        c.code = code;
+        c
+    };
+    // covers: vault
+    let mut alone_no_owner = page("vault alone, no owner and no port", &[], 0);
+    alone_no_owner.owner_on_disk = false;
+    let mut alone_no_fallback = page("vault alone under the no-owner rule", &[], 3);
+    alone_no_fallback.env = vec![("K2_NO_OWNER_FALLBACK", "1".to_string())];
+    let mut h_no_fallback = page("-h under the no-owner rule", &["list", "--json", "-h"], 0);
+    h_no_fallback.env = vec![("K2_NO_OWNER_FALLBACK", "1".to_string())];
+    let mut h_no_owner = page("-h, no owner and no port", &["set", "API", "-h"], 0);
+    h_no_owner.owner_on_disk = false;
+    let mut h_no_passport = page(
+        "-h in a session with no passport",
+        &["list", "--json", "-h"],
+        3,
+    );
+    h_no_passport.env = vec![("K2_HOOK_SOCK", "{sock}".to_string())];
+    for c in [
+        page("vault alone", &[], 0),
+        alone_no_owner,
+        alone_no_fallback,
+        page("help", &["help"], 0),
+        page("help, more words", &["help", "set", "--json"], 0),
+        page("an empty verb", &[""], 0),
+        page("--help, more words", &["--help", "list"], 0),
+        h_no_fallback,
+        h_no_owner,
+        h_no_passport,
+        page("an unknown verb with --help", &["exec", "--help"], 2),
+        page("a flag first, then -h", &["--json", "-h"], 2),
+    ] {
+        rig.check(&c);
+    }
+    // Every verb that changes something (and the reads), with -h or
+    // --help after other words: its page, nothing sent.
+    for args in [
+        &["list", "--json", "-h"][..],
+        &["ls", "--help"][..],
+        &["status", "--json", "--help"][..],
+        &["show", "API", "-h"][..],
+        &["set", "API", "--for", "a.com", "-h"][..],
+        &["rotate", "API", "--help"][..],
+        &["hosts", "API", "--add", "x", "-h"][..],
+        &["sign", "API", "ovh", "-h"][..],
+        &["public-key", "K", "-h"][..],
+        &["agent-limit", "API", "--burst", "2", "-h"][..],
+        &["delivery", "API", "env", "-h"][..],
+        &["grant", "API", "--to", "ws:a", "-h"][..],
+        &["revoke", "--grant", "g1", "--help"][..],
+        &["open", "--json", "-h"][..],
+        &["disable", "API", "-h"][..],
+        &["enable", "API", "--help"][..],
+        &["destroy", "API", "--yes", "-h"][..],
+        &["get", "API", "-h"][..],
+        &["audit", "API", "-h"][..],
+        &["requests", "--json", "-h"][..],
+        &["presets", "--json", "-h"][..],
+        &["doctor", "--transcripts", "-h"][..],
+        &["env-file", "A", "--ttl", "9s", "-h"][..],
+        &["file", "A", "-h"][..],
+        &["proxy-url", "A", "-h"][..],
+        &["sync", "--json", "-h"][..],
+        &["import", "x.env", "-h"][..],
+        &["service", "web", "clean", "-h"][..],
+        &["reveal", "API", "-h"][..],
+        &["recovery", "rotate", "-h"][..],
+        &["confirm-password", "set", "-h"][..],
+        &["kek", "rotate", "-h"][..],
+        &["rekey", "-h"][..],
+        &["rollback", "API", "--to", "2", "-h"][..],
+        &["recipient", "--json", "-h"][..],
+        &["carry", "export", "-h"][..],
+        &["backup", "key", "-h"][..],
+        &["restore", "--from", "x", "-h"][..],
+        &["systemd-cred", "API", "-h"][..],
+        &["placement", "add", "API", "--where", "w", "-h"][..],
+        &["placement", "done", "p", "--help"][..],
+        &["placements", "API", "-h"][..],
+        &["fetch", "-s", "A", "https://h/x", "-h"][..],
+        &["fetch", "https://h/x", "--secret", "A", "--json", "--help"][..],
+        &["send", "API", "--to", "bob::h", "-h"][..],
+        &["incoming", "accept", "d1", "-h"][..],
+        &["incoming", "decline", "d1", "--help"][..],
+        &["sent", "--json", "-h"][..],
+        &["accept-from", "add", "b", "--workspace", "p", "-h"][..],
+        &["accept-from", "remove", "b", "--workspace", "p", "-h"][..],
+        &["send-allow", "add", "API", "--to", "b::h", "--workspace", "p", "-h"][..],
+        &["send-allow", "remove", "API", "--to", "b::h", "--workspace", "p", "-h"][..],
+        &["ask", "b::h", "API", "-h"][..],
+        &["asks", "--json", "-h"][..],
+        &["unsend", "d1", "-h"][..],
+        &["run", "--secret", "A", "-h", "--", "ls"][..],
+    ] {
+        let name: &'static str = Box::leak(format!("help: {}", args.join(" ")).into_boxed_str());
+        rig.check(&page(name, args, 0));
     }
 }

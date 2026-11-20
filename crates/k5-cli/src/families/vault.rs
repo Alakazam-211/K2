@@ -34,12 +34,21 @@
 //! - [`tools`]: the verbs with parsers of their own: fetch, run,
 //!   systemd-cred, placement, placements and sync.
 //!
-//! The shell CLI answers ([`run`] returns `None`): `vault` alone, `help`,
-//! and any command line with `-h` or `--help` in it (the shell skips its
-//! connection gate for those); a word that is not UTF-8; `HOOK_SOCK` set
-//! with a `CODEX_` variable exported; a port that is set but is no port
-//! curl takes; a `python3` the binary can't tell; and every form a module
-//! doesn't answer yet ([`native`]).
+//! - [`run`](mod@run): `_vault_run`, the run helper in this process's
+//!   place, the passport on fd 3.
+//!
+//! The help lines ([`help_line`]): `vault` alone, `help`, and any command
+//! line with `-h` or `--help` in it. The shell skips its connection gate
+//! for those, and its no-owner refusal too when `-h` or `--help` is in
+//! it; then the page ([`sub_page`]), with nothing sent. A `run` line
+//! whose `-h` is the command's own (after `--`) runs, gate or none: the
+//! binary runs it when the gate would let it through and hands it to the
+//! shell otherwise.
+//!
+//! The shell CLI answers ([`run`] returns `None`): a word that is not
+//! UTF-8; `HOOK_SOCK` set with a `CODEX_` variable exported; a port that
+//! is set but is no port curl takes; a `python3` the binary can't tell;
+//! and every form a module doesn't answer yet ([`native`]).
 
 use super::curl_port;
 use crate::confirm::{self, Confirm, Split};
@@ -64,6 +73,7 @@ pub mod carry;
 pub mod handoff;
 pub mod person;
 pub mod py;
+pub mod run;
 pub mod systemd;
 pub mod tools;
 pub mod verbs;
@@ -244,6 +254,105 @@ pub fn native(sub: &str, rest: &[&str]) -> bool {
     }
 }
 
+/// The words after `vault` make a help line: the shell's connection gate
+/// skips it (`cli/src/cli-tools-policy.sh`): `vault` alone, `help`, `-h`
+/// or `--help` first, or `-h` or `--help` anywhere.
+pub fn help_line(words: &[&str]) -> bool {
+    matches!(words.first(), None | Some(&("" | "help" | "--help" | "-h")))
+        || words.iter().any(|w| matches!(*w, "-h" | "--help"))
+}
+
+/// The page `_vault_sub_usage <sub>` prints (`cli/src/vault.sh`): the
+/// verb's own, or the top page for a verb with none.
+pub fn sub_page(sub: &str) -> &'static str {
+    match sub {
+        "open" => "vault/open",
+        "status" => "vault/status",
+        "list" | "ls" => "vault/list",
+        "show" => "vault/show",
+        "set" => "vault/set",
+        "rotate" => "vault/rotate",
+        "hosts" => "vault/hosts",
+        "sign" => "vault/sign",
+        "delivery" => "vault/delivery",
+        "grant" => "vault/grant",
+        "revoke" => "vault/revoke",
+        "disable" | "enable" => "vault/disable",
+        "destroy" => "vault/destroy",
+        "get" => "vault/get",
+        "audit" => "vault/audit",
+        "requests" => "vault/requests",
+        "presets" => "vault/presets",
+        "doctor" => "vault/doctor",
+        "env-file" => "vault/env-file",
+        "run" => "vault/run",
+        "proxy-url" => "vault/proxy-url",
+        "file" => "vault/file",
+        "sync" => "vault/sync",
+        "import" => "vault/import",
+        "service" => "vault/service",
+        "reveal" => "vault/reveal",
+        "recovery" => "vault/recovery",
+        "confirm-password" => "vault/confirm-password",
+        "kek" | "rekey" => "vault/kek",
+        "rollback" => "vault/rollback",
+        "backup" => "vault/backup",
+        "restore" => "vault/restore",
+        "recipient" => "vault/recipient",
+        "public-key" => "vault/public-key",
+        "agent-limit" => "vault/agent-limit",
+        "systemd-cred" => "vault/systemd-cred",
+        "placement" | "placements" => "vault/placement",
+        "carry" => "vault/carry",
+        _ => "vault",
+    }
+}
+
+/// `cat <<'EOF'` of a help page on stdout, exit 0.
+pub fn help_page(key: &str) -> Exit {
+    match crate::text::help(key) {
+        Some(page) => match out::stdout(page) {
+            Ok(()) => Exit::Ok,
+            Err(e) => out::after_stdout_error(&e),
+        },
+        None => {
+            out::stderr_line(&format!("Error: no help page {key}"));
+            Exit::Error
+        }
+    }
+}
+
+/// What `cmd_vault` prints for a help line, after the gates: `None` for a
+/// `run` line whose `-h` is the command's (it runs).
+fn help_answer(sub: &str, rest: &[&str]) -> Option<Exit> {
+    if matches!(sub, "" | "help" | "--help" | "-h") {
+        return Some(help_page("vault"));
+    }
+    if !VAULT_VERBS.contains(&sub) {
+        for l in unknown_verb(sub) {
+            out::stderr_line(&l);
+        }
+        return Some(Exit::Usage);
+    }
+    Some(match sub {
+        // `_vault_fetch`: `-h` anywhere is `--help`.
+        "fetch" => help_page("vault/fetch"),
+        "run" => match run::parse(rest) {
+            run::Parsed::Help => help_page("vault/run"),
+            run::Parsed::Usage(lines) => {
+                for l in lines {
+                    out::stderr_line(&l);
+                }
+                Exit::Usage
+            }
+            run::Parsed::Run { .. } => return None,
+        },
+        // `_vault_handoff_usage`.
+        _ if HANDOFF.contains(&sub) => help_page("vault/send"),
+        _ => help_page(sub_page(sub)),
+    })
+}
+
 /// `None`: the shell CLI answers it (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let hook_sock = super::hook_sock();
@@ -255,15 +364,20 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let (sub, rest) = words.split_first()?;
-    if matches!(*sub, "" | "help" | "--help" | "-h")
-        || rest.iter().any(|w| matches!(*w, "-h" | "--help"))
-    {
+    let help = help_line(&words);
+    let (sub, rest) = match words.split_first() {
+        Some((sub, rest)) => (*sub, rest),
+        None => ("", &[][..]),
+    };
+    if !(help || native(sub, rest)) || !python::family_native(python::here()) {
         return None;
     }
-    if !native(sub, rest) || !python::family_native(python::here()) {
-        return None;
-    }
+    // A run line whose -h is the command's: it runs with no gate in the
+    // shell, the same as with one when the gate lets it through.
+    let runs = help
+        && sub == "run"
+        && cfg!(unix)
+        && matches!(run::parse(rest), run::Parsed::Run { .. });
     let settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {
@@ -271,19 +385,34 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if prelude::gate(&settings).is_none()
-        && settings.port_text.as_deref().and_then(curl_port).is_none()
-    {
-        return None;
-    }
-    if let Some(gate) = prelude::gate(&settings) {
-        return Some(gate.stop());
+    if help && !runs {
+        // `_k2_offline_verb`: -h or --help anywhere skips the no-owner
+        // refusal too; `vault` alone and `vault help` don't.
+        let offline = words.iter().any(|w| matches!(*w, "-h" | "--help"));
+        if !offline && prelude::gate(&settings) == Some(prelude::Gate::VirtualDesktop) {
+            return Some(prelude::Gate::VirtualDesktop.stop());
+        }
+    } else {
+        if prelude::gate(&settings).is_none()
+            && settings.port_text.as_deref().and_then(curl_port).is_none()
+        {
+            return None;
+        }
+        if let Some(gate) = prelude::gate(&settings) {
+            if runs {
+                return None;
+            }
+            return Some(gate.stop());
+        }
     }
     let would_refuse = passport::current(args).would_refuse();
     if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL) {
         return Some(stop);
     }
-    if !VAULT_VERBS.contains(sub) {
+    if help && !runs {
+        return help_answer(sub, rest);
+    }
+    if !VAULT_VERBS.contains(&sub) {
         for l in unknown_verb(sub) {
             out::stderr_line(&l);
         }
@@ -304,9 +433,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         sock: confirm::sock_path(&settings.home),
         args: args.to_vec(),
     };
-    let exit = if HANDOFF.contains(sub) {
+    let exit = if HANDOFF.contains(&sub) {
         handoff::run(&mut ctx, sub, rest)
-    } else if TOOLS.contains(sub) {
+    } else if TOOLS.contains(&sub) {
         tools::run(&mut ctx, sub, rest)
     } else {
         verbs::run(&mut ctx, sub, rest)
@@ -343,6 +472,54 @@ mod tests {
         for v in HANDOFF.iter().chain(TOOLS) {
             assert!(VAULT_VERBS.contains(v), "{v}");
         }
+    }
+
+    /// `_vault_sub_usage`'s arms, page for page, and every verb it can be
+    /// given has a page the binary holds.
+    #[test]
+    fn the_sub_pages_are_the_shell_s() {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/vault.sh"),
+        )
+        .unwrap();
+        let start = src.find("_vault_sub_usage() {").expect("_vault_sub_usage");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").expect("its end")];
+        let lines: Vec<&str> = body.lines().collect();
+        let mut arms = 0;
+        for (i, l) in lines.iter().enumerate() {
+            let Some(labels) = l.trim().strip_suffix(") cat <<'EOF'") else {
+                continue;
+            };
+            let page = lines[i + 1]
+                .strip_prefix("%include cli/text/help/")
+                .and_then(|p| p.strip_suffix(".txt"))
+                .unwrap_or_else(|| panic!("no page after {l}"));
+            for verb in labels.split('|') {
+                assert_eq!(sub_page(verb), page, "{verb}");
+                arms += 1;
+            }
+        }
+        assert!(arms > 30, "{arms} arms");
+        assert!(body.contains("*) _vault_usage ;;"));
+        assert_eq!(sub_page("nope"), "vault");
+        for v in VAULT_VERBS {
+            assert!(crate::text::help(sub_page(v)).is_some(), "{v}");
+        }
+        for p in ["vault", "vault/fetch", "vault/send", "vault/run"] {
+            assert!(crate::text::help(p).is_some(), "{p}");
+        }
+    }
+
+    #[test]
+    fn help_lines_are_the_gate_s() {
+        assert!(help_line(&[]));
+        assert!(help_line(&[""]));
+        assert!(help_line(&["help", "x"]));
+        assert!(help_line(&["list", "--json", "-h"]));
+        assert!(help_line(&["run", "--secret", "A", "--", "ls", "--help"]));
+        assert!(!help_line(&["list", "--json"]));
+        assert!(!help_line(&["run", "--secret", "A", "--", "ls"]));
     }
 
     #[test]

@@ -496,6 +496,21 @@ fn zen_widget_shot_answers_as_the_shell_does() {
     for c in &cases {
         rig.check(c);
     }
+    // No temp folder: the system's mktemp says why (the binary runs it),
+    // then the shell's line. GNU mktemp names the template in its error.
+    if cfg!(target_os = "linux") {
+        rig.check(&Case {
+            no_tmpdir: true,
+            ..run(
+                "preview --shot: no temp folder, mktemp's line, then ours",
+                vec!["widget", "preview", "--dir", folder, "--shot", "o.png"],
+                vec![],
+                vec![],
+                1,
+                0,
+            )
+        });
+    }
 }
 
 /// `PATH` as the tests run with it, without `node`: each folder that has

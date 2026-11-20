@@ -22,7 +22,8 @@
 #      as a first-word id verb is when the passport is stale (socket gone,
 #      the daemon rejects it: only the whoami probe is sent) and when it
 #      runs under a shared Codex app-server (no request at all). Open forms
-#      get neither check.
+#      get neither check. The shared cases run with K2_CODEX_PASSPORT_BIND=0,
+#      so the Codex tab gate (on by default) doesn't answer first.
 #
 # Never touches the real ~/.k2 (HOME is sandboxed, env -i).
 # bash-only: evals the CLI's tool policy block and reads its table from the bash source.
@@ -308,7 +309,10 @@ done <"$WORK/table"
 
 echo "== passport check: under a shared Codex app-server =="
 rm -f "$WORK/reject"
-SHARED=("${STALE[@]}" CODEX_THREAD_ID="thread-1")
+# With K2_CODEX_PASSPORT_BIND=0: this pins the id-tool check's choice of
+# tool. With the switch on (the default), the Codex tab gate refuses every
+# command first (tests/cli/codex_shared_appserver_passport.sh).
+SHARED=("${STALE[@]}" CODEX_THREAD_ID="thread-1" K2_CODEX_PASSPORT_BIND=0)
 VIA=("${CODEX_VIA[@]}")
 run "${SHARED[@]}" -- compute
 ref_rc="$rc"; ref_err="$err"
@@ -341,7 +345,7 @@ for form in "setup --json hide" "agent --help team" "organization --help" "help"
     case "$err" in *"credentials are stale"*) bad "stale: k2 $form: refused as stale" ;; *) ok "stale: k2 $form: no stale refusal" ;; esac
     if grep -q '"/cli/whoami' "$LOG_FILE"; then bad "stale: k2 $form: a whoami probe"; else ok "stale: k2 $form: no whoami probe"; fi
     VIA=("${CODEX_VIA[@]}")
-    run "${STALE[@]}" CODEX_THREAD_ID="thread-1" -- "${args[@]}"
+    run "${STALE[@]}" CODEX_THREAD_ID="thread-1" K2_CODEX_PASSPORT_BIND=0 -- "${args[@]}"
     case "$err" in *"shared Codex app-server"*) bad "shared: k2 $form: refused as shared" ;; *) ok "shared: k2 $form: no shared-server refusal" ;; esac
 done
 VIA=()

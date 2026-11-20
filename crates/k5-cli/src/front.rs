@@ -531,8 +531,8 @@ mod tests {
         }
     }
 
-    /// `update`, likewise: the shell reads `-h` and `--help` as words it
-    /// skips, so they go to the shell (which asks GitHub for them).
+    /// `update`, likewise: `-h` or `--help` anywhere is the shell's
+    /// usage (`_k2_update_form`), so the line goes to the shell.
     #[test]
     fn the_update_forms() {
         let row = route::TABLE

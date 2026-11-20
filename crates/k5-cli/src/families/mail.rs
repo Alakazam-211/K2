@@ -1,17 +1,22 @@
 //! `k5 mail`: the agent surface of K2 Mail, as the shell CLI's `mail`
 //! arm of `cli/src/router.sh` answers it.
 //!
-//! Every verb but `watch` goes through `_mail_py` (`cli/src/mail.sh`), the
-//! shell's own urllib client over TCP. Those wait for the shared
-//! urllib-shaped adapter (the plan's D4) and stay the shell's here
-//! ([`run`] returns `None`).
-//!
 //! - [`watch`]: `k5 mail watch`, the mail notices, over `cli_send_json`
 //!   (the transport's [`crate::transport::Client::send_json`]).
+//! - [`core`]: `_mail_py` (`cli/src/mail.sh`), the shell's own urllib
+//!   client, which every other verb runs: its `request`, `call` and
+//!   `die`, and the printers its verbs share. No verb runs it yet.
+//! - [`py`]: the Python value rules the printers share.
+//!
+//! The route table sends a verb here only once it has a row of its own
+//! ([`crate::route`]); [`run`] returns `None` for anything else, and the
+//! shell answers it.
 
 use crate::exit::Exit;
 use std::ffi::OsString;
 
+pub mod core;
+pub mod py;
 pub mod watch;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].

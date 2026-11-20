@@ -1,4 +1,5 @@
-use super::watch::{self, big, Plan, Printer};
+use super::py::big;
+use super::watch::{self, Plan, Printer};
 use crate::exit::Exit;
 use crate::transport::{Channel, Error, Response};
 use k2_client::brand::CLI_NAME;
@@ -614,20 +615,178 @@ fn errors_are_mw_pythons() {
 fn int_is_pythons() {
     use crate::out::json::Value;
     let s = |t: &str| Value::Str(t.into());
-    assert_eq!(watch::py_int(&s(" -1_000 ")).as_deref(), Ok("-1000"));
-    assert_eq!(watch::py_int(&s("+007")).as_deref(), Ok("7"));
-    assert_eq!(watch::py_int(&Value::Float(-2.9)).as_deref(), Ok("-2"));
+    assert_eq!(super::py::py_int(&s(" -1_000 ")).as_deref(), Ok("-1000"));
+    assert_eq!(super::py::py_int(&s("+007")).as_deref(), Ok("7"));
+    assert_eq!(super::py::py_int(&Value::Float(-2.9)).as_deref(), Ok("-2"));
     assert_eq!(
-        watch::py_int(&Value::Float(1e20)).as_deref(),
+        super::py::py_int(&Value::Float(1e20)).as_deref(),
         Ok("100000000000000000000")
     );
-    assert_eq!(watch::py_int(&Value::Bool(true)).as_deref(), Ok("1"));
+    assert_eq!(super::py::py_int(&Value::Bool(true)).as_deref(), Ok("1"));
     assert_eq!(
-        watch::py_int(&s("1__0")),
+        super::py::py_int(&s("1__0")),
         Err("ValueError: invalid literal for int() with base 10: '1__0'".into())
     );
     assert_eq!(
-        watch::py_int(&Value::Array(vec![])),
+        super::py::py_int(&Value::Array(vec![])),
         Err("TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'".into())
     );
+}
+
+/// `_mail_py`'s script as python3 compiles it: line 1 is the one after
+/// the command line that feeds the heredoc.
+fn mail_py_script() -> Vec<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/mail.sh");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let body = text
+        .split_once("python3 -c \"$_K2_PY_STDIN_BOOT\"\n")
+        .expect("_mail_py's command line")
+        .1;
+    let end = body.find("\nPYEOF\n").expect("the heredoc's end");
+    body[..end].split('\n').map(str::to_string).collect()
+}
+
+#[test]
+fn the_lines_that_raise_are_the_shell_s() {
+    let s = mail_py_script();
+    assert_eq!(s[0], "import base64, json, os, socket, sys, time");
+    let pins: &[(u32, &str)] = &[
+        (super::core::line::DIE, "def die(err, exit_code=None, permission=None):"),
+        (super::core::line::DIE_CODE, "code = err.get(\"code\", \"error\")"),
+        (super::core::line::DIE_HINT, "hint = err.get(\"hint\", \"\")"),
+        (super::core::line::DIE_IN, "if code in (\"forbidden\", \"owner_only\") and \"ask "),
+        (super::core::line::DIE_CONCAT, "hint = (hint + \" — \" if hint else \"\") + \"require"),
+        (super::core::line::DIE_CAP, "if err.get(k):"),
+        (super::core::line::REQUEST_FLOAT, "timeout = float(env_t)"),
+        (super::core::line::REQUEST_READ, "raw = e.read().decode(\"utf-8\", \"replace\")"),
+        (super::core::line::CALL_REQUEST, "d = request(method, route, params, body, timeout"),
+        (super::core::line::CALL_TIMEOUT, "if timeout_hint and (d.get(\"error\") or {}).get(\""),
+        (super::core::line::CALL_DIE_TIMEOUT, "die({\"code\": \"timeout\", \"hint\": timeout_hint(d[\""),
+        (super::core::line::CALL_ERROR, "if d.get(\"error\"):"),
+        (super::core::line::CALL_DIE_ERROR, "die(d[\"error\"], permission=d.get(\"permission\"))"),
+        (super::core::line::CALL_OK, "if not d.get(\"ok\"):"),
+        (super::core::line::FMT_ADDR, "name = a.get(\"name\")"),
+        (super::core::line::FMT_ADDR_EMAIL, "email = a.get(\"address\") or \"?\""),
+        (super::core::line::FMT_ADDRS, "return \", \".join(fmt_addr(a) for a in (lst or []"),
+        (super::core::line::CAP_USED, "used = (cap or {}).get(\"used\", \"?\")"),
+        (super::core::line::CAP_LIMIT, "limit = (cap or {}).get(\"cap\", 0)"),
+        (super::core::line::FULL_ID, "print(\"message  : %s\" % m.get(\"id\", \"\"))"),
+        (super::core::line::FULL_ADDRESS, "print(\"mailbox  : %s\" % m.get(\"address\", \"?\"))"),
+        (super::core::line::FULL_FROM, "print(\"from     : %s\" % fmt_addr(m.get(\"from\")))"),
+        (super::core::line::FULL_TO, "print(\"to       : %s\" % (fmt_addrs(m.get(\"to\")) "),
+        (super::core::line::FULL_CC_IF, "if m.get(\"cc\"):"),
+        (super::core::line::FULL_CC, "print(\"cc       : %s\" % fmt_addrs(m.get(\"cc\")))"),
+        (super::core::line::FULL_SUBJECT, "print(\"subject  : %s\" % (m.get(\"subject\") or \"(n"),
+        (super::core::line::FULL_DATE, "print(\"date     : %s  (%s)\" % (m.get(\"date\") or "),
+        (super::core::line::FULL_AUTH, "ar = m.get(\"authResults\") or {}"),
+        (super::core::line::FULL_ANY, "if any(ar.get(k) for k in (\"spf\", \"dkim\", \"dmarc"),
+        (super::core::line::FULL_AUTH_LINE, "print(\"auth     : %s\" % \"  \".join("),
+        (super::core::line::FULL_ATTS, "atts = m.get(\"attachments\") or []"),
+        (super::core::line::FULL_FOR, "for a in atts:"),
+        (super::core::line::FULL_ATT, "print(\"  %s. %s (%s, %s bytes)\" % (a.get(\"index\""),
+        (super::core::line::FULL_FETCH, "print(\"  fetch one: k2 mail attachments %s --get"),
+        (super::core::line::FULL_TEXT, "print(m.get(\"text\") or \"\")"),
+        (super::core::line::FULL_HTML_IF, "if m.get(\"html\"):"),
+        (super::core::line::FULL_HTML, "print(m.get(\"html\"))"),
+        (super::core::line::ROW_FIRST, "print(\"%s  %-17s %-11s to %s — %s\" % ("),
+        (super::core::line::ROW_BCC_IF, "if r.get(\"bcc\"):"),
+        (super::core::line::ROW_BCC, "print(\"    bcc: %s\" % \", \".join(r[\"bcc\"]))"),
+        (super::core::line::ROW_POLICY_IF, "if r.get(\"policyBcc\"):"),
+        (super::core::line::ROW_POLICY, "print(\"    bcc (owner policy): %s\" % \", \".join(r"),
+        (super::core::line::ROW_REPLY_IF, "if r.get(\"replyTo\"):"),
+        (super::core::line::ROW_REPLY, "print(\"    reply-to: %s\" % \", \".join(r[\"replyTo\""),
+        (super::core::line::ROW_FWD_IF, "if r.get(\"forwardOf\"):"),
+        (super::core::line::ROW_FWD, "print(\"    forwards: %s\" % forward_line(r[\"forwa"),
+        (super::core::line::ROW_ATT, "att = r.get(\"attachments\") or {}"),
+        (super::core::line::ROW_ATT_IF, "if att.get(\"count\"):"),
+        (super::core::line::ROW_ATT_LINE, "print(\"    attachments: %d (%s)\" % (att[\"count\"]"),
+        (super::core::line::ROW_NOTE_IF, "if r.get(\"note\"):"),
+        (super::core::line::ROW_NOTE, "print(\"    note from your human: %s\" % r[\"note\"]"),
+        (super::core::line::FWD_LINE, "return \"a message in %s from %s (unverified)%s\" "),
+        (super::core::line::FWD_MAILBOX, "term_line(f.get(\"mailbox\") or \"?\"), term_line(f."),
+        (super::core::line::FWD_EML, "\", whole, as an .eml file\" if f.get(\"asEml\") els"),
+        (super::core::line::DETAIL_ID, "print(\"outbound : %s\" % r.get(\"id\", \"\"))"),
+        (super::core::line::DETAIL_STATUS, "print(\"status   : %s — %s\" % (r.get(\"status\", \"?"),
+        (super::core::line::DETAIL_FROM, "print(\"from     : %s\" % (r.get(\"from\") or \"?\"))"),
+        (super::core::line::DETAIL_TO, "print(\"to       : %s\" % (\", \".join(r.get(\"to\") o"),
+        (super::core::line::DETAIL_CC_IF, "if r.get(\"cc\"):"),
+        (super::core::line::DETAIL_CC, "print(\"cc       : %s\" % \", \".join(r[\"cc\"]))"),
+        (super::core::line::DETAIL_BCC_IF, "if r.get(\"bcc\"):"),
+        (super::core::line::DETAIL_BCC, "print(\"bcc      : %s\" % \", \".join(r[\"bcc\"]))"),
+        (super::core::line::DETAIL_POLICY_IF, "if r.get(\"policyBcc\"):"),
+        (super::core::line::DETAIL_POLICY, "print(\"bcc (owner policy): %s\" % \", \".join(r[\"po"),
+        (super::core::line::DETAIL_REPLY_IF, "if r.get(\"replyTo\"):"),
+        (super::core::line::DETAIL_REPLY, "print(\"reply-to : %s\" % \", \".join(r[\"replyTo\"]))"),
+        (super::core::line::DETAIL_FWD_IF, "if r.get(\"forwardOf\"):"),
+        (super::core::line::DETAIL_FWD, "print(\"forwards : %s\" % forward_line(r[\"forwardO"),
+        (super::core::line::DETAIL_SUBJECT, "print(\"subject  : %s\" % (r.get(\"subject\") or \"(n"),
+        (super::core::line::DETAIL_ATT, "att = r.get(\"attachments\") or {}"),
+        (super::core::line::DETAIL_ATT_IF, "if att.get(\"count\"):"),
+        (super::core::line::DETAIL_ATT_LINE, "print(\"attach   : %d (%s)\" % (att[\"count\"], \", \""),
+        (super::core::line::DETAIL_QUEUED, "print(\"queued   : %s\" % unix_ago(r.get(\"createdA"),
+        (super::core::line::DETAIL_DECIDED_IF, "if r.get(\"decidedAt\"):"),
+        (super::core::line::DETAIL_BY, "by = \" by %s\" % r[\"decidedBy\"] if r.get(\"decided"),
+        (super::core::line::DETAIL_DECIDED, "print(\"decided  : %s%s\" % (unix_ago(r.get(\"decid"),
+        (super::core::line::DETAIL_SENT_IF, "if r.get(\"sentAt\"):"),
+        (super::core::line::DETAIL_SENT, "print(\"submitted: %s\" % unix_ago(r.get(\"sentAt\")"),
+        (super::core::line::DETAIL_NOTE_IF, "if r.get(\"note\"):"),
+        (super::core::line::DETAIL_NOTE, "print(\"note     : %s\" % r[\"note\"])"),
+        (super::core::line::DOMAIN_FIRST, "print(\"domain  : %s  (%s)\" % (d.get(\"domain\", \"?"),
+        (super::core::line::DOMAIN_FOR, "for r in d.get(\"records\") or []:"),
+        (super::core::line::DOMAIN_NOTE, "if d.get(\"note\"):"),
+        (super::core::line::INBOXES_W, "w = max(max(len(r.get(\"address\", \"\")) for r in r"),
+        (super::core::line::INBOXES_ST, "st = r.get(\"yourSendState\")"),
+        (super::core::line::INBOXES_ROW, "print((\"%-\" + str(w) + \"s%-9s%-7s%-10s%-7s%s\") %"),
+        (super::core::line::INBOXES_PRI, "pri = r.get(\"primary\") or {}"),
+        (super::core::line::INBOXES_LVL, "st = e.get(\"sendState\")"),
+        (super::core::line::INBOXES_GSUM, "gsum = \", \".join(\"%s:%s\" % (g.get(\"workspace\") o"),
+        (super::core::line::INBOXES_OWNER_ROW, "print((\"%-\" + str(w) + \"s%-9s%-22s%s\") % ("),
+        (super::core::line::INBOXES_SORTED, "for ws in sorted(set(b[2] for b in blocked)):"),
+    ];
+    for (n, text) in pins {
+        let got = s[*n as usize - 1].trim();
+        assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
+    }
+}
+
+#[test]
+fn the_boot_script_runs_the_mail_script_at_its_line_13() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let boot = text
+        .split_once("_K2_PY_STDIN_BOOT='")
+        .expect("the boot script")
+        .1;
+    let boot = &boot[..boot.find("\n'\n").expect("its end")];
+    let line = boot
+        .split('\n')
+        .position(|l| l.starts_with("exec(compile(_b, \"<stdin>\""))
+        .expect("the exec line");
+    assert_eq!(line as u32 + 1, super::core::BOOT_LINE);
+}
+
+mod core_rules {
+    use super::super::core::{iso, py_float};
+
+    #[test]
+    fn float_is_pythons() {
+        assert_eq!(py_float(" 1.5 "), Some(1.5));
+        assert_eq!(py_float("1_0"), Some(10.0));
+        assert_eq!(py_float("1e3"), Some(1000.0));
+        assert_eq!(py_float("-inf"), Some(f64::NEG_INFINITY));
+        assert!(py_float("nan").is_some_and(f64::is_nan));
+        for bad in ["", "soon", "1__0", "_1", "1_", "--1", "0x10"] {
+            assert_eq!(py_float(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn iso_dates_with_an_offset() {
+        assert_eq!(iso::timestamp("1970-01-01T00:00:00+00:00"), Some(0.0));
+        assert_eq!(iso::timestamp("1970-01-02T01:00:00+01:00"), Some(86400.0));
+        assert_eq!(iso::timestamp("19700101T000010-0000"), Some(10.0));
+        assert_eq!(iso::timestamp("2020-02-30T00:00:00+00:00"), None);
+        assert_eq!(iso::timestamp("not a date"), None);
+        assert_eq!(iso::timestamp("1970-01-01T00:00:00.5+00:00"), Some(0.5));
+    }
 }

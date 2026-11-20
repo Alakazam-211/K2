@@ -1172,6 +1172,10 @@ pub async fn tools_used(env: &[(String, String)], cwd: &Path, explicit: &[Need])
     if crate::sysinfo::which("cargo-nextest", &env).is_some() {
         probes.push(Probe { key: "cargo-nextest".into(), prog: "cargo".into(), args: vec!["nextest", "--version"] });
     }
+    // 0.46.17: the everyday tools a script leans on (python3, curl, bash).
+    for (key, prog) in crate::sysinfo::HOST_TOOL_PROBES {
+        probes.push(Probe { key: key.into(), prog: prog.into(), args: vec!["--version"] });
+    }
     for n in explicit {
         if let Need::Tool { tool, .. } = n {
             if let Some(bin) = needs::expected_bins(tool).first() {
@@ -1217,6 +1221,8 @@ pub async fn tools_used(env: &[(String, String)], cwd: &Path, explicit: &[Need])
 pub fn tool_version(s: &str) -> Option<String> {
     for w in s.split_whitespace() {
         let w = w.trim_start_matches("go").trim_start_matches('v').trim_end_matches(',');
+        // bash: "5.2.21(1)-release" is 5.2.21.
+        let w = w.split('(').next().unwrap_or(w);
         if w.chars().next().is_some_and(|c| c.is_ascii_digit()) && w.contains('.') {
             return Some(w.chars().take(64).collect());
         }
@@ -1839,6 +1845,8 @@ mod tests {
             ("rustc", "#!/bin/sh\n[ \"$RUSTUP_AUTO_INSTALL\" = 0 ] || exit 3\necho \"rustc 1.99.0 (abc 2026-09-01)\"\n"),
             ("node", "#!/bin/sh\necho v22.23.4\n"),
             ("python3", "#!/bin/sh\nexit 1\n"),
+            ("curl", "#!/bin/sh\necho 'curl 8.7.1 (x86_64-apple-darwin24.0) libcurl/8.7.1'\n"),
+            ("bash", "#!/bin/sh\necho 'GNU bash, version 3.2.57(1)-release (arm64-apple-darwin24)'\n"),
         ] {
             crate::util::write_executable(&bin.join(name), body);
         }
@@ -1847,8 +1855,10 @@ mod tests {
         let t = tools_used(&env, &d, &explicit).await;
         assert_eq!(t.get("rustc").map(String::as_str), Some("1.99.0"), "{t:?}");
         assert_eq!(t.get("node").map(String::as_str), Some("22.23.4"), "{t:?}");
-        assert!(!t.contains_key("python"), "a failing probe is absent: {t:?}");
+        assert!(!t.contains_key("python") && !t.contains_key("python3"), "a failing probe is absent: {t:?}");
         assert!(!t.contains_key("cargo-nextest"), "{t:?}");
+        // 0.46.17: curl and bash on every job's tools line.
+        assert_eq!((t.get("curl").map(String::as_str), t.get("bash").map(String::as_str)), (Some("8.7.1"), Some("3.2.57")), "{t:?}");
     }
 
     /// CE-18: over the cap, the least recently used versions no job needs

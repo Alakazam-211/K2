@@ -241,9 +241,9 @@ Agents:
                                 the per-submitter cap, and the views (not security)
                  [--plan]     (or --dry-run) dry run: the node it would pick and why, queue, warm
                                 slot, estimate from earlier runs, grant left, each
-                                need ready or to install there, the next nodes,
-                                the limits that end it, the settings and where each
-                                came from (JSON)
+                                need ready or to install there, its python3, curl
+                                and bash versions, the next nodes, the limits that
+                                end it, the settings and where each came from (JSON)
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch> (clippy and rustfmt come with it on a 0.46.9 node;

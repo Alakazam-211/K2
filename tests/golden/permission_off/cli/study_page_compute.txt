@@ -798,6 +798,11 @@ WHAT A JOB HAS WITHOUT --needs
   whose command calls python3, pip, uv, node, npm, npx, bun, cargo, … that
   isn't there gets a line before it starts: "python3 isn't on this node's
   PATH for jobs; add --needs python@3.12".
+  Versions differ between nodes (one has python3 3.13 and curl 8.12, a
+  Mac 3.9 and 8.7). The placement line and --plan say what the picked
+  node has: "python3 3.12.4 · curl 8.5.0 · bash 5.2.21" (k2-node 0.46.17
+  and newer). Pin python with --needs python@3.12. curl can't be pinned:
+  check its exit code or JSON, never its error text.
   Cargo builds in $CARGO_TARGET_DIR (the warm slot's target dir, kept
   between jobs), not ./target: the log's CARGO_TARGET_DIR= line says
   where, so use $CARGO_TARGET_DIR/release/<name> for built binaries.

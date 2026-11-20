@@ -31273,9 +31273,9 @@ Agents:
                                 the per-submitter cap, and the views (not security)
                  [--plan]     (or --dry-run) dry run: the node it would pick and why, queue, warm
                                 slot, estimate from earlier runs, grant left, each
-                                need ready or to install there, the next nodes,
-                                the limits that end it, the settings and where each
-                                came from (JSON)
+                                need ready or to install there, its python3, curl
+                                and bash versions, the next nodes, the limits that
+                                end it, the settings and where each came from (JSON)
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch> (clippy and rustfmt come with it on a 0.46.9 node;
@@ -57367,7 +57367,7 @@ cmd_schema() {
         {"name": "--critical", "arg": null, "description": "The same as --priority."},
         {"name": "--supersede", "arg": "KEY", "description": "Cancel your older queued jobs with the same KEY (never a running one)."},
         {"name": "--submitter", "arg": "NAME", "description": "Your own turn in the queue, the per-submitter cap and the views (not security)."},
-        {"name": "--plan", "arg": null, "description": "Dry run: the node it would pick and why, queue, estimate, needs, limits and where each setting came from (JSON)."},
+        {"name": "--plan", "arg": null, "description": "Dry run: the node it would pick and why, queue, estimate, needs, its python3, curl and bash versions, limits and where each setting came from (JSON)."},
         {"name": "--dry-run", "arg": null, "description": "The same as --plan."},
         {"name": "--needs", "arg": "tool@ver,…", "description": "Tools the job needs (node@22, python@3.12, rust@stable, cargo-nextest, cmake@3, sys:<pkg>, profile:<name>). A package the node's owner hasn't approved: package_not_approved, exit 3; an unknown tool: tool_unsupported, exit 2."}
       ]
@@ -70548,6 +70548,11 @@ WHAT A JOB HAS WITHOUT --needs
   whose command calls python3, pip, uv, node, npm, npx, bun, cargo, … that
   isn't there gets a line before it starts: "python3 isn't on this node's
   PATH for jobs; add --needs python@3.12".
+  Versions differ between nodes (one has python3 3.13 and curl 8.12, a
+  Mac 3.9 and 8.7). The placement line and --plan say what the picked
+  node has: "python3 3.12.4 · curl 8.5.0 · bash 5.2.21" (k2-node 0.46.17
+  and newer). Pin python with --needs python@3.12. curl can't be pinned:
+  check its exit code or JSON, never its error text.
   Cargo builds in $CARGO_TARGET_DIR (the warm slot's target dir, kept
   between jobs), not ./target: the log's CARGO_TARGET_DIR= line says
   where, so use $CARGO_TARGET_DIR/release/<name> for built binaries.

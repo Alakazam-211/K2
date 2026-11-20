@@ -3200,7 +3200,7 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
         })),
         "limits": {"timeoutSecs": f.timeout, "diskGb": f.disk_gb, "stallSecs": f.stall, "queueTimeoutSecs": f.queue_timeout, "retries": f.retries},
         "needs": need_states.iter().map(crate::compute_place::NeedStatus::json).collect::<Vec<_>>(),
-        "toolsLine": crate::compute_place::tools_words(&need_states),
+        "toolsLine": crate::compute_place::tools_line(&need_states, offer.as_ref().or(n.last_offer.as_ref())),
         "ranking": ranking,
         "artifacts": f.artifacts,
         "warnings": f.warnings,

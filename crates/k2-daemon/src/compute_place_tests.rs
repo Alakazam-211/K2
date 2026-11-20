@@ -1396,3 +1396,25 @@ fn priority_and_ci_get_a_longer_default_stall() {
     assert_eq!(plan_for_node(&plan, &ctl, JobTier::Priority, &node_row("big"), Some(&g), &o).stall_secs, Some(7200));
     assert_eq!(plan_for_node(&plan, &ctl, JobTier::Normal, &node_row("big"), Some(&g), &o).stall_secs, Some(1800));
 }
+
+/// 0.46.17: the placement line and `--plan`'s tools line show the node's
+/// python3, curl and bash after the needs' state; a node that reports
+/// none of them (an older k2-node) adds nothing.
+#[test]
+fn the_tools_line_shows_the_nodes_python_curl_and_bash() {
+    let mut c = cand("k2n4", 30, 32, 0, 2);
+    assert_eq!(host_tools_words(&c.offer), None, "an older node reports none");
+    c.offer.tools.insert("python3".into(), "3.13.1".into());
+    c.offer.tools.insert("curl".into(), "8.12.1".into());
+    c.offer.tools.insert("bash".into(), "5.2.37".into());
+    assert_eq!(host_tools_words(&c.offer).as_deref(), Some("python3 3.13.1 · curl 8.12.1 · bash 5.2.37"));
+    assert_eq!(tools_line(&[], Some(&c.offer)).as_deref(), Some("python3 3.13.1 · curl 8.12.1 · bash 5.2.37"));
+    let ready = vec![NeedStatus { need: "node@22".into(), state: NeedState::Ready, have: Some("22.1.0".into()), native: None }];
+    assert_eq!(tools_line(&ready, Some(&c.offer)).as_deref(), Some("tools ready · python3 3.13.1 · curl 8.12.1 · bash 5.2.37"));
+    assert_eq!(tools_line(&ready, None).as_deref(), Some("tools ready"));
+    assert_eq!(tools_line(&[], None), None);
+    // The placement record's why carries them.
+    let w = want(2);
+    let rec = placement_record(&c, Tier::Now, &w, &Explain { policy: V2, cands: std::slice::from_ref(&c), skipped: &BTreeMap::new(), project_key: None, commit: None }, 1);
+    assert!(rec.why.contains("python3 3.13.1 · curl 8.12.1 · bash 5.2.37"), "{}", rec.why);
+}

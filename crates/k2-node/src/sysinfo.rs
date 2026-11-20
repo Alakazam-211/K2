@@ -229,8 +229,14 @@ pub fn host_facts(macos_version: Option<&str>) -> k2_node_proto::host::HostFacts
 fn first_version(s: &str) -> Option<String> {
     s.split_whitespace()
         .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()) && w.contains('.'))
-        .map(|w| w.trim_end_matches(',').to_string())
+        // bash says "5.2.21(1)-release": the version is before the "(".
+        .map(|w| w.split('(').next().unwrap_or(w).trim_end_matches(',').to_string())
 }
+
+/// The everyday tools a job's script leans on, probed beside the build
+/// tools so the placement line shows how nodes differ (agent feedback,
+/// 0.46.17): `(offer key, program)`, each run with `--version`.
+pub const HOST_TOOL_PROBES: [(&str, &str); 3] = [("python3", "python3"), ("curl", "curl"), ("bash", "bash")];
 
 /// Probe tool versions with the job env (never the node's own env).
 pub async fn probe_tools(env: &[(String, String)]) -> BTreeMap<String, String> {
@@ -242,6 +248,9 @@ pub async fn probe_tools(env: &[(String, String)]) -> BTreeMap<String, String> {
         ("git", "git", &["--version"]),
         ("bun", "bun", &["--version"]),
         ("cargo-nextest", "cargo", &["nextest", "--version"]),
+        (HOST_TOOL_PROBES[0].0, HOST_TOOL_PROBES[0].1, &["--version"]),
+        (HOST_TOOL_PROBES[1].0, HOST_TOOL_PROBES[1].1, &["--version"]),
+        (HOST_TOOL_PROBES[2].0, HOST_TOOL_PROBES[2].1, &["--version"]),
     ];
     for (name, prog, args) in probes {
         if let Some(path) = which(prog, env) {
@@ -292,6 +301,8 @@ mod tests {
         assert_eq!(first_version("git version 2.50.0").as_deref(), Some("2.50.0"));
         assert_eq!(first_version("1.4.2").as_deref(), Some("1.4.2"));
         assert_eq!(first_version("nothing here"), None);
+        assert_eq!(first_version("GNU bash, version 3.2.57(1)-release (arm64-apple-darwin24)").as_deref(), Some("3.2.57"));
+        assert_eq!(first_version("Python 3.9.6").as_deref(), Some("3.9.6"));
     }
 
     #[test]
@@ -319,6 +330,30 @@ mod tests {
             assert_ne!(h.distro, "linux", "/etc/os-release names the distro");
         }
         assert!(!h.line().is_empty() && !h.short().is_empty());
+    }
+
+    /// 0.46.17: python3, curl and bash are probed with the job env (its
+    /// PATH), so the offer says which versions a job there gets; a probe
+    /// that fails is absent.
+    #[tokio::test]
+    async fn python3_curl_and_bash_are_probed_on_the_job_path() {
+        let d = crate::util::temp_dir("probe-host-tools");
+        let bin = d.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for (name, body) in [
+            ("python3", "#!/bin/sh\necho 'Python 3.12.4'\n"),
+            ("curl", "#!/bin/sh\necho 'curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0'\necho 'Release-Date: 2023-12-06'\n"),
+            ("bash", "#!/bin/sh\necho 'GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)'\n"),
+        ] {
+            crate::util::write_executable(&bin.join(name), body);
+        }
+        let env = vec![("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display()))];
+        let tools = probe_tools(&env).await;
+        assert_eq!(tools.get("python3").map(String::as_str), Some("3.12.4"), "{tools:?}");
+        assert_eq!(tools.get("curl").map(String::as_str), Some("8.5.0"), "{tools:?}");
+        assert_eq!(tools.get("bash").map(String::as_str), Some("5.2.21"), "{tools:?}");
+        crate::util::write_executable(&bin.join("python3"), "#!/bin/sh\nexit 1\n");
+        assert!(!probe_tools(&env).await.contains_key("python3"), "a failing probe is absent");
     }
 
     #[tokio::test]

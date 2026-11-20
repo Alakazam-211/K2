@@ -4312,7 +4312,7 @@ exit: 0
         {"name": "--critical", "arg": null, "description": "The same as --priority."},
         {"name": "--supersede", "arg": "KEY", "description": "Cancel your older queued jobs with the same KEY (never a running one)."},
         {"name": "--submitter", "arg": "NAME", "description": "Your own turn in the queue, the per-submitter cap and the views (not security)."},
-        {"name": "--plan", "arg": null, "description": "Dry run: the node it would pick and why, queue, estimate, needs, limits and where each setting came from (JSON)."},
+        {"name": "--plan", "arg": null, "description": "Dry run: the node it would pick and why, queue, estimate, needs, its python3, curl and bash versions, limits and where each setting came from (JSON)."},
         {"name": "--dry-run", "arg": null, "description": "The same as --plan."},
         {"name": "--needs", "arg": "tool@ver,…", "description": "Tools the job needs (node@22, python@3.12, rust@stable, cargo-nextest, cmake@3, sys:<pkg>, profile:<name>). A package the node's owner hasn't approved: package_not_approved, exit 3; an unknown tool: tool_unsupported, exit 2."}
       ]

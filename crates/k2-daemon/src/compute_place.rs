@@ -964,6 +964,27 @@ pub fn tools_words(states: &[NeedStatus]) -> Option<String> {
     Some(parts.join(" · "))
 }
 
+/// The everyday tools a job's script leans on, as a node reports them in
+/// its offer (k2-node 0.46.17 probes them with the job env).
+pub const HOST_TOOLS: [&str; 3] = ["python3", "curl", "bash"];
+
+/// "python3 3.12.4 · curl 8.5.0 · bash 5.2.21" from a node's offer, so the
+/// placement line shows how nodes differ before a script trips on it;
+/// `None` when the node reports none of them (an older k2-node).
+pub fn host_tools_words(offer: &Offer) -> Option<String> {
+    let parts: Vec<String> = HOST_TOOLS.iter().filter_map(|k| offer.tools.get(*k).map(|v| format!("{k} {v}"))).collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// The tools part of a placement line and `--plan`'s `toolsLine`: the
+/// needs' state ([`tools_words`]), then the node's everyday tools.
+pub fn tools_line(states: &[NeedStatus], offer: Option<&Offer>) -> Option<String> {
+    match (tools_words(states), offer.and_then(host_tools_words)) {
+        (Some(a), Some(b)) => Some(format!("{a} · {b}")),
+        (a, b) => a.or(b),
+    }
+}
+
 /// Features a plan needs from the node's k2-node.
 pub fn required_features(w: &Want) -> Vec<&'static str> {
     let mut f = Vec::new();
@@ -1840,8 +1861,9 @@ pub fn placement_record(c: &Cand, tier: Tier, w: &Want, ex: &Explain<'_>, now: i
     let considered = ex.cands.len() as u32 - unavailable;
     let warm = warmth(c, ex.project_key, ex.commit);
     let free = free_words(c);
-    // CE-1/CE-2: "tools ready" or what it installs first.
-    let tools = tools_words(&c.needs(w));
+    // CE-1/CE-2: "tools ready" or what it installs first; then the node's
+    // python3, curl and bash (0.46.17).
+    let tools = tools_line(&c.needs(w), Some(&c.offer));
     let with_tools = |s: String| match &tools {
         Some(t) => format!("{s} · {t}"),
         None => s,

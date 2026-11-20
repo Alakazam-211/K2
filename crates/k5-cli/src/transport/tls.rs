@@ -4,7 +4,11 @@
 //! rustls with the ring provider, over our own HTTP/1.1 client
 //! ([`super::wire`]): no aws-lc-rs, no reqwest, no async runtime. The
 //! roots are the OS's, as curl trusts them (rustls-native-certs, which
-//! reads `SSL_CERT_FILE` and `SSL_CERT_DIR` first). One small piece every
+//! reads `SSL_CERT_FILE` and `SSL_CERT_DIR` first), and the certificates
+//! in `CURL_CA_BUNDLE` as extra roots, as curl reads that variable. curl's
+//! own config files (`~/.curlrc`, `CURL_HOME`) are NEVER read: one can
+//! carry options that change where the token goes (the named difference
+//! `curl-config-files`). One small piece every
 //! family that reaches another machine shares: `talk` and `read` at
 //! `ws@host`, a Connect host's tray upload, and wiki publish's Connect
 //! fallback.
@@ -18,7 +22,8 @@
 //! - Any other handshake failure (a server that speaks no TLS, a reset,
 //!   no protocol in common) is curl's exit 35.
 //! - No root store at all (the OS has none and `SSL_CERT_FILE` names
-//!   nothing usable) is curl's exit 77.
+//!   nothing usable), or a `CURL_CA_BUNDLE` with no certificate it can
+//!   read, is curl's exit 77.
 //!
 //! None of these sent a byte of the request, so none may be applied.
 //!
@@ -28,10 +33,11 @@
 //! the stream does in plain HTTP.
 
 use super::wire::{curl, Failure};
-use rustls::pki_types::ServerName;
+use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io;
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -58,14 +64,44 @@ pub fn config(roots: RootCertStore) -> Result<Arc<ClientConfig>, String> {
     Ok(Arc::new(cfg))
 }
 
-/// The OS's roots. Certificates that don't parse are skipped, as curl's
-/// bundle loading skips them; none at all is an error.
+/// The OS's roots, plus `CURL_CA_BUNDLE`'s ([`roots_with`]).
 pub fn native_roots() -> Result<RootCertStore, String> {
+    let bundle = std::env::var_os("CURL_CA_BUNDLE")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
     let found = rustls_native_certs::load_native_certs();
+    let why = found.errors.first().map(ToString::to_string);
+    roots_with(found.certs, why, bundle.as_deref())
+}
+
+/// `os` (the OS's roots; `os_error` the first error reading them), plus
+/// the certificates in `bundle` (`CURL_CA_BUNDLE`) as extra roots.
+/// Certificates that don't parse are skipped, as curl's bundle loading
+/// skips them. A bundle that can't be read or holds no certificate is an
+/// error (curl's 77), and so is no root at all.
+pub fn roots_with(
+    os: Vec<CertificateDer<'static>>,
+    os_error: Option<String>,
+    bundle: Option<&Path>,
+) -> Result<RootCertStore, String> {
     let mut roots = RootCertStore::empty();
-    let (added, _skipped) = roots.add_parsable_certificates(found.certs);
+    let (added, _skipped) = roots.add_parsable_certificates(os);
+    if let Some(path) = bundle {
+        let extra = rustls_native_certs::load_certs_from_paths(Some(path), None);
+        if let Some(e) = extra.errors.first() {
+            return Err(format!("CURL_CA_BUNDLE {}: {e}", path.display()));
+        }
+        let (more, _skipped) = roots.add_parsable_certificates(extra.certs);
+        if more == 0 {
+            return Err(format!(
+                "CURL_CA_BUNDLE {}: no certificate in it",
+                path.display()
+            ));
+        }
+        return Ok(roots);
+    }
     if added == 0 {
-        return Err(match found.errors.first() {
+        return Err(match os_error {
             Some(e) => format!("no root certificates: {e}"),
             None => "no root certificates".to_string(),
         });
@@ -343,6 +379,61 @@ mod tests {
         assert_eq!(f.curl_code(), SSL_CONNECT_ERROR, "{f:?}");
         assert!(!f.sent(), "{f:?}");
         h.join().unwrap();
+    }
+
+    fn pem_file(name: &str, ders: &[&CertificateDer<'static>]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("k5-tls-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bundle.pem");
+        let mut text = String::new();
+        for d in ders {
+            let b64 = crate::transport::proxy::base64(d.as_ref());
+            text.push_str("-----BEGIN CERTIFICATE-----\n");
+            for line in b64.as_bytes().chunks(64) {
+                text.push_str(std::str::from_utf8(line).unwrap());
+                text.push('\n');
+            }
+            text.push_str("-----END CERTIFICATE-----\n");
+        }
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn curl_ca_bundle_adds_roots_to_the_os_ones() {
+        let os = pki();
+        let extra = pki();
+        let path = pem_file("extra", &[&extra.ca]);
+        let roots = roots_with(vec![os.ca.clone()], None, Some(&path)).unwrap();
+        assert_eq!(roots.len(), 2, "the OS's root and the bundle's");
+        // Both servers' certificates are taken.
+        for p in [&os, &extra] {
+            let (port, h) = server(p, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            connect_with(config(roots.clone()).unwrap(), tcp, "localhost", limit()).unwrap();
+            drop(h);
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_curl_ca_bundle_with_nothing_usable_is_curl_77() {
+        let os = pki();
+        let found = || vec![os.ca.clone()];
+        let missing = std::env::temp_dir().join("k5-tls-no-such-bundle.pem");
+        let Err(why) = roots_with(found(), None, Some(&missing)) else {
+            panic!("a missing CURL_CA_BUNDLE was taken");
+        };
+        assert!(why.starts_with("CURL_CA_BUNDLE "), "{why}");
+        let path = pem_file("empty", &[]);
+        let Err(why) = roots_with(found(), None, Some(&path)) else {
+            panic!("a CURL_CA_BUNDLE with no certificate was taken");
+        };
+        assert!(why.ends_with("no certificate in it"), "{why}");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        // Unset: the OS's roots alone; none at all is an error.
+        assert_eq!(roots_with(found(), None, None).unwrap().len(), 1);
+        assert!(roots_with(Vec::new(), None, None).is_err());
     }
 
     #[test]

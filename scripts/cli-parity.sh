@@ -174,6 +174,7 @@ EXPECTED_DIFFS=(
     "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words four of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError (the parity rig's tracebacks, mail forward show's \"events that are a dict\"); before 3.12 datetime.utcfromtimestamp prints no DeprecationWarning, where the binary prints 3.12's one line (\"<string>:<n>: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated ...\", remote-session's times); from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
     "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via; \`thread bob --from\`, also --limit and --before-seq, and \`thread unread --kind\`; \`talk ws hi --lines\`, also --from, --command, --agent, --session, --token, --answer, --respond, --answers and --wake-timeout) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Neither sends anything"
     "exec-child-env|K2 ruling 1b, vault run (db run's ruling 2a child the same)|the program a command runs in its place (vault run's helper, db run's command, named in families::vault::run and families::db::run): bash's child also gets bash's own environment changes, SHLVL and _K2_PY_PROXY_RULE (the shell CLI's Python proxy rule), and _ (the program's path) where bash's exec sets it, none of which the binary's child gets; and an exec that fails (a folder the daemon named) exits 126 on both, worded \"<path to cli/k2>: line <n>: <helper>: Is a directory\" by bash and \"exec: <helper>: Permission denied (os error 13)\" by the binary. The request each sends is the same"
+    "curl-config-files|K2 and the Steward, K5 shared transport|the binary never reads curl's config files (~/.curlrc, CURL_HOME): one can carry options that change where the token goes. Bash's curl reads ~/.curlrc on every call it makes, so a header that file adds (the check: header = \"X-From-Curlrc: acme\") is on bash's request to the daemon and not on the binary's. The rest of the request, stdout, stderr and the exit code are the same (\`feedback list\`). The binary does read CURL_CA_BUNDLE and SSL_CERT_FILE, as curl does"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything"
@@ -846,6 +847,75 @@ check_feedback_optin_without_python3() {
 # line and body for body; the big put's differ in one line only, bash's
 # "Expect: 100-continue". Both print the chunk's ref, write nothing on
 # stderr and exit 0.
+# check_curl_config_files: a ~/.curlrc that adds a header, the stub in
+# mode heads (each request's head logged), the owner token and port on
+# disk, and both CLIs run `feedback list`. Bash's request carries
+# "X-From-Curlrc: acme" once; the binary's never does. With that line
+# and the hand-over headers masked, the requests are the same, and so are
+# stdout, stderr and the exit code.
+check_curl_config_files() {
+    local d="$WORK/curlrc" rc=0 rr=0 r side tmp problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    printf 'header = "X-From-Curlrc: acme"\n' >"$d/home/.curlrc"
+    start_stub "$d" heads || { echo "the stub daemon didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    for side in bash binary; do
+        : >"$d/log"
+        tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+        if [ "$side" = bash ]; then set -- K5_CLI_VIA=rust bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
+        r=0
+        (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" "$@" feedback list) \
+            >"$d/out.$side" 2>"$d/err.$side" </dev/null || r=$?
+        cp "$d/log" "$d/log.$side"
+        if [ "$side" = bash ]; then rc=$r; else rr=$r; fi
+    done
+    stop_stub
+    [ "$rc" = "$rr" ] || problems+=("bash exited $rc, the binary $rr")
+    cmp -s "$d/out.bash" "$d/out.binary" || problems+=("stdout differs: bash '$(head -c 300 "$d/out.bash")', the binary '$(head -c 300 "$d/out.binary")'")
+    cmp -s "$d/err.bash" "$d/err.binary" || problems+=("stderr differs: bash '$(head -c 300 "$d/err.bash")', the binary '$(head -c 300 "$d/err.binary")'")
+    python3 -I - "$d/log.bash" "$d/log.binary" >"$d/verdict" <<'PY' || problems+=("$(cat "$d/verdict")")
+import sys
+RC = "X-From-Curlrc: acme"
+bad = []
+
+def blocks(p):
+    return [b.split("\n") for b in open(p).read().split("\n\n") if b.strip()]
+
+def norm(lines, native):
+    out = []
+    for l in lines:
+        if l.startswith("User-Agent: "):
+            out.append("User-Agent: <ua>")
+        elif l.startswith("X-K5-Cli-Version: ") or l.startswith("X-K5-Cli-Noun: "):
+            continue
+        elif l.startswith("X-K5-Cli-Via: "):
+            out.append("X-K5-Cli-Via: <via>")
+        else:
+            out.append(l)
+    return out
+
+b, r = blocks(sys.argv[1]), blocks(sys.argv[2])
+if not b or len(b) != len(r):
+    bad.append("bash sent %d requests, the binary %d" % (len(b), len(r)))
+for i, (bl, rl) in enumerate(zip(b, r)):
+    if bl.count(RC) != 1:
+        bad.append("bash request %d has no %r: ~/.curlrc was not read, the difference is gone: %r" % (i, RC, bl))
+    if RC in rl:
+        bad.append("the binary's request %d has %r: it read ~/.curlrc: %r" % (i, RC, rl))
+    bn = [l for l in norm(bl, False) if l != RC]
+    rn = norm(rl, True)
+    if bn != rn:
+        bad.append("request %d differs beyond %r: bash %r, the binary %r" % (i, RC, bn, rn))
+if bad:
+    print("\n".join(bad))
+    sys.exit(1)
+PY
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
 check_expect_100_continue() {
     local d="$WORK/expect100" size side rc tmp want problems=()
     mkdir -p "$d/home/.k2" "$d/ws/.k2"

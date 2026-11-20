@@ -89,6 +89,15 @@ pub fn log_noise_removal<R: Runtime>(app: &AppHandle<R>) {
 /// DeepFilterNet3 not in play). `reason` says why the model isn't DeepFilterNet3
 /// (`model_reason`, else the latest `step_down_reason`), else why less runs than
 /// was asked (`reason`), else `none`.
+///
+/// Then (Sew 0.11.1) where DeepFilterNet3 is (`dfn3`: `idle`, `warming`,
+/// `running`, `stepped_down`, `retired`, else `none`), the step-downs a grace
+/// window excused (`grace_step_downs`), and kessel-audio's view of the stage:
+/// its grace window (`stage_grace` open now, `grace_blocks`,
+/// `grace_over_budget`, `last_transient`: the last busy moment reported to it,
+/// e.g. `call_start` or `camera_start`) and how it times the stage (`clock`
+/// `thread_cpu` or `wall`, `max_wall_us`, `preempted_over_budget`, `starved`).
+/// A field the payload leaves out is `none` or 0, as Sew means it.
 pub fn noise_removal_line(payload: &str) -> Option<String> {
     let s: NoiseRemovalState = serde_json::from_str(payload).ok()?;
     let model = s.model.map_or("none", NoiseModel::as_str);
@@ -99,11 +108,23 @@ pub fn noise_removal_line(payload: &str) -> Option<String> {
     };
     let reason = model_why.or(s.reason.map(|r| r.as_str())).unwrap_or("none");
     Some(format!(
-        "noise removal: mode {}, active {}, model {model}, reason {reason}, step_downs {}, in_grace {}",
+        "noise removal: mode {}, active {}, model {model}, reason {reason}, step_downs {}, in_grace {}, \
+         dfn3 {}, grace_step_downs {}, stage_grace {}, grace_blocks {}, grace_over_budget {}, last_transient {}, \
+         clock {}, max_wall_us {}, preempted_over_budget {}, starved {}",
         s.mode.as_str(),
         s.active.as_str(),
         s.step_downs,
-        s.in_grace
+        s.in_grace,
+        s.dfn3_state.map_or("none", |d| d.as_str()),
+        s.grace_step_downs,
+        s.capture_stage_grace,
+        s.capture_stage_grace_blocks,
+        s.capture_stage_grace_over_budget,
+        s.capture_stage_last_transient.map_or("none", |t| t.as_str()),
+        s.capture_stage_clock.map_or("none", |c| c.as_str()),
+        s.capture_stage_max_wall_us.map_or_else(|| "none".to_string(), |us| us.to_string()),
+        s.capture_stage_preempted_over_budget,
+        s.capture_stage_starved
     ))
 }
 

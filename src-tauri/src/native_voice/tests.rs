@@ -929,7 +929,11 @@ fn the_recording_commands_are_the_plugins() {
     assert_eq!(f["recordingCommands"], json!(tauri_plugin_sew_voice::RECORDING_COMMANDS));
 }
 
-// ── noise removal: one log line per change (Sew 0.10.4) ──
+// ── noise removal: one log line per change (Sew 0.10.4; Sew 0.11.1's fields) ──
+
+/// What a payload without Sew 0.11.1's fields ends with: each unset.
+const QUIET: &str = ", dfn3 none, grace_step_downs 0, stage_grace false, grace_blocks 0, grace_over_budget 0, \
+                     last_transient none, clock none, max_wall_us none, preempted_over_budget 0, starved 0";
 
 /// Each `noise_removal` payload becomes one line that says which model ran and,
 /// when it isn't DeepFilterNet3, why; the payloads are the plugin's own JSON.
@@ -938,29 +942,50 @@ fn a_noise_removal_event_is_one_log_line() {
     let line = |v: Value| super::noise_removal_line(&v.to_string()).unwrap_or_else(|| panic!("{v} is a noise_removal payload"));
     assert_eq!(
         line(json!({"mode": "standard", "active": "standard", "model": "dfn3", "in_grace": true})),
-        "noise removal: mode standard, active standard, model dfn3, reason none, step_downs 0, in_grace true"
+        format!("noise removal: mode standard, active standard, model dfn3, reason none, step_downs 0, in_grace true{QUIET}")
     );
-    // A step-down: RNNoise runs, and the stage's rule says why (counters ride along, unlogged).
+    // A step-down: RNNoise runs, and the stage's rule says why (the per-block counters ride along, unlogged).
     assert_eq!(
         line(json!({"mode": "standard", "active": "standard", "model": "rnnoise", "step_downs": 2, "step_down_reason": "slow_window",
                     "last_step_down_ms_ago": 1200, "slowest_block_us": 9100, "blocks_over_budget": 7})),
-        "noise removal: mode standard, active standard, model rnnoise, reason slow_window, step_downs 2, in_grace false"
+        format!("noise removal: mode standard, active standard, model rnnoise, reason slow_window, step_downs 2, in_grace false{QUIET}")
     );
     // Still loading: model_reason wins over an older step-down.
     assert_eq!(
         line(json!({"mode": "standard", "active": "standard", "model": "rnnoise", "model_reason": "loading", "step_down_reason": "heavy", "step_downs": 1})),
-        "noise removal: mode standard, active standard, model rnnoise, reason loading, step_downs 1, in_grace false"
+        format!("noise removal: mode standard, active standard, model rnnoise, reason loading, step_downs 1, in_grace false{QUIET}")
     );
     // Back on DeepFilterNet3 after a step-down: the old rule is not the reason now.
     assert_eq!(
         line(json!({"mode": "standard", "active": "standard", "model": "dfn3", "step_down_reason": "heavy", "step_downs": 1})),
-        "noise removal: mode standard, active standard, model dfn3, reason none, step_downs 1, in_grace false"
+        format!("noise removal: mode standard, active standard, model dfn3, reason none, step_downs 1, in_grace false{QUIET}")
     );
     // Off, and a stage the audio pipeline stopped: no model, the state's own reason.
-    assert_eq!(line(json!({"mode": "off", "active": "off"})), "noise removal: mode off, active off, model none, reason none, step_downs 0, in_grace false");
+    assert_eq!(line(json!({"mode": "off", "active": "off"})), format!("noise removal: mode off, active off, model none, reason none, step_downs 0, in_grace false{QUIET}"));
     assert_eq!(
         line(json!({"mode": "standard", "active": "off", "reason": "budget"})),
-        "noise removal: mode standard, active off, model none, reason budget, step_downs 0, in_grace false"
+        format!("noise removal: mode standard, active off, model none, reason budget, step_downs 0, in_grace false{QUIET}")
+    );
+    // Sew 0.11.1: the camera started mid-call; kessel-audio's grace window is open and
+    // excused four slow blocks, and it times the stage on the thread's CPU clock.
+    assert_eq!(
+        line(json!({"mode": "standard", "active": "standard", "model": "dfn3", "in_grace": true, "dfn3_state": "running",
+                    "grace_step_downs": 1, "step_downs": 1, "slowest_block_cpu_us": 1300, "p99_block_us": 6900,
+                    "capture_stage_grace": true, "capture_stage_grace_blocks": 150, "capture_stage_grace_over_budget": 4,
+                    "capture_stage_last_transient": "camera_start", "capture_stage_clock": "thread_cpu",
+                    "capture_stage_max_wall_us": 21000, "capture_stage_preempted_over_budget": 5, "capture_stage_starved": 1})),
+        "noise removal: mode standard, active standard, model dfn3, reason none, step_downs 1, in_grace true, \
+         dfn3 running, grace_step_downs 1, stage_grace true, grace_blocks 150, grace_over_budget 4, last_transient camera_start, \
+         clock thread_cpu, max_wall_us 21000, preempted_over_budget 5, starved 1"
+    );
+    // Stepped down because the audio thread fell behind (the new rule), waiting for a retry.
+    assert_eq!(
+        line(json!({"mode": "standard", "active": "standard", "model": "rnnoise", "step_down_reason": "starved", "step_downs": 1,
+                    "dfn3_state": "stepped_down", "retry_in_ms": 4200, "capture_stage_last_transient": "call_start",
+                    "capture_stage_clock": "wall"})),
+        "noise removal: mode standard, active standard, model rnnoise, reason starved, step_downs 1, in_grace false, \
+         dfn3 stepped_down, grace_step_downs 0, stage_grace false, grace_blocks 0, grace_over_budget 0, last_transient call_start, \
+         clock wall, max_wall_us none, preempted_over_budget 0, starved 0"
     );
     assert_eq!(super::noise_removal_line("{}"), None);
     assert_eq!(super::noise_removal_line(r#"{"mode":"standard","active":"standard","model":"vroom"}"#), None);

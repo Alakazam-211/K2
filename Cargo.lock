@@ -9075,9 +9075,9 @@ dependencies = [
 
 [[package]]
 name = "sew-call-client"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46e3ee4ae26d8ea9dbf2c9d0d741302c5f271ebb9ac9a2166e0ff37c48ef837e"
+checksum = "a0bb64b4318e11f457643021878fab2283bcd5506de445968feef201221d4046"
 dependencies = [
  "bytes",
  "futures-util",
@@ -9099,7 +9099,7 @@ dependencies = [
  "sew-lk-compat",
  "sew-lkproto",
  "sew-noise",
- "sew-proto 0.11.0",
+ "sew-proto 0.11.1",
  "sew-str0m",
  "sha1",
  "thiserror 2.0.18",
@@ -9136,9 +9136,9 @@ dependencies = [
 
 [[package]]
 name = "sew-e2ee"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ec05cd810799b3f75d7e1868aef6494b8543e13eeafbe6afd624feffb5d40d6"
+checksum = "f6f0648bea9d867060298381e0900e337e57e6d68f34f1c928f80237015e9e5b"
 dependencies = [
  "aes-gcm 0.10.3",
  "ed25519-dalek",
@@ -9152,7 +9152,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-mls-crypto",
- "sew-proto 0.11.0",
+ "sew-proto 0.11.1",
  "sha2 0.10.9",
  "subtle",
  "thiserror 2.0.18",
@@ -9163,9 +9163,9 @@ dependencies = [
 
 [[package]]
 name = "sew-lk-compat"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "487571332a2f1e5b89fe6e510c5e8f549673ce39b25c213f0ec349725221a961"
+checksum = "55b4f1f3be5e02c3367714c010753c05067c1c52041e07c7592e2ff32030ebb7"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -9182,9 +9182,9 @@ dependencies = [
 
 [[package]]
 name = "sew-lkproto"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca4d70da6fc9be12469dffd68d9e9755cce4b4338030f318200c46ee68104456"
+checksum = "0c302a2174dffaf2358c88072dc471ac6b148c7f1db984986e0cf5ad4dc1e60b"
 dependencies = [
  "pbjson",
  "prost 0.14.4",
@@ -9193,9 +9193,9 @@ dependencies = [
 
 [[package]]
 name = "sew-mls-crypto"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ebf5441e25ab1f7c9224d60884ac3030baad17d71c79b20cc0b95f9fcb67df5"
+checksum = "0da849bb8795846c887dd4ccf2cda41e8f03b435657d57865cd7b1d83be46be7"
 dependencies = [
  "aes-gcm 0.10.3",
  "chacha20poly1305 0.10.1",
@@ -9218,12 +9218,13 @@ dependencies = [
 
 [[package]]
 name = "sew-noise"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6f36a86bafb2b5be5e577cac2f036a39d0cb80254c1d349ebfd36a43b9f6e5e"
+checksum = "85d94f2f076b4bf6694319ca5f670fa8b43202eb82c764907016ca67d59a4f1f"
 dependencies = [
  "nnnoiseless",
  "realfft",
+ "rustix 1.1.6",
  "sha2 0.10.9",
 ]
 
@@ -9239,9 +9240,9 @@ dependencies = [
 
 [[package]]
 name = "sew-proto"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2093c9c61671ce45045979fc6f894127c3882f114e8cdc9096b1d5fce3672fce"
+checksum = "91d1d38840d48e93004c0afb94a5a98221f9fd2b671c311d85da622024dae603"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -10234,9 +10235,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-sew-voice"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab0e8549c67e2e1fb753dfd6d0684564241ecadac6d02e4ca462e44af435d291"
+checksum = "76f8c1b71eaf1f23b4633abfd2f1e78c19bb6958c6da2d3574e59f3255ccd3f7"
 dependencies = [
  "base64 0.22.1",
  "cpal",
@@ -10244,7 +10245,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-call-client",
- "sew-proto 0.11.0",
+ "sew-proto 0.11.1",
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",

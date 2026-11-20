@@ -113,7 +113,11 @@ parking_lot = "0.12"
 # Sew 0.11.0 (0.9.0, with sew-call-client 0.9.0 and the other Sew crates 0.11.0):
 # JoinRequest and JoinArgs are #[non_exhaustive] (constructors in native_voice/tests.rs);
 # recordings carry audio_keep_days.
-tauri-plugin-sew-voice = { version = "=0.9.0", optional = true, features = ["video", "dfn3"] }
+# Sew 0.11.1 (0.9.1, with sew-call-client 0.9.1 and the other Sew crates 0.11.1; needs
+# kessel-audio 0.2.3, K2's in-tree crate): additive. The plugin tells kessel-audio about a
+# call's busy moments (call start, audio session, route, camera, scene), and noise_removal
+# carries the grace counters and the stage's clock stats (logged by native_voice).
+tauri-plugin-sew-voice = { version = "=0.9.1", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

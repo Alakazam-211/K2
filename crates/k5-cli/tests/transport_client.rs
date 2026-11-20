@@ -520,6 +520,35 @@ fn a_post_the_cell_socket_read_is_never_sent_again_over_tcp() {
     );
 }
 
+/// `_compute_send`: a POST the cell socket read and closed with no answer
+/// is never sent again over TCP; a GET is; `tcp` never tries the socket.
+#[test]
+fn compute_send_keeps_the_send_once_rule() {
+    let d = door("cp", Act::CloseNoAnswer, Act::Answer);
+    let mut c = with_passport(d.port, &d.sock);
+    let err = c
+        .compute_send(true, "/cli/compute/cancel", "{}", false)
+        .unwrap_err();
+    assert!(matches!(err, Error::MaybeApplied { .. }), "{err:?}");
+    assert_eq!(err.to_string(), "Error: K2's server didn't answer /cli/compute/cancel (0 s); the request may have been applied. Check before running it again.");
+    assert_eq!(d.counts(), (1, 0), "(cell socket, TCP) requests");
+    let r = c
+        .compute_send(false, "/cli/compute/stats", "job=abcd", false)
+        .unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(d.counts(), (2, 1));
+    let r = c
+        .compute_send(false, "/cli/compute/stats", "job=abcd", true)
+        .unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    let r = c
+        .compute_send(true, "/cli/compute/cancel", "{}", true)
+        .unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(d.counts(), (2, 3), "tcp: never the cell socket");
+    assert!(!c.force_tcp, "tcp is for the one call");
+}
+
 /// A whole answer followed by a reset is the answer, on both channels,
 /// and nothing is sent again.
 #[test]
@@ -601,7 +630,11 @@ fn a_refused_cell_socket_sends_nothing_and_tcp_answers() {
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
     let r = c.send("/cli/inbox/list", Call::Request(&[])).unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
-    assert_eq!(d.counts(), (0, 3));
+    let r = c
+        .compute_send(true, "/cli/compute/cancel", "{}", false)
+        .unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(d.counts(), (0, 4));
     std::fs::remove_file(&dead).unwrap();
 }
 

@@ -50,6 +50,8 @@
 //! | `cli_post_json_stdin` | as `cli_post_json` | none |
 //! | `cli_send_json GET` | `GET <ep>?payload` (-G; no `?` with no payload) | `GET <ep>?payload` (-G) |
 //! | `cli_send_json POST` | `POST <ep>`, JSON | `POST <ep>`, JSON |
+//! | `_compute_send GET` | `GET <ep>?payload` (-G; no `?` with no payload) | `GET <ep>?payload` (-G); never with `tcp` |
+//! | `_compute_send POST` | `POST <ep>`, JSON | `POST <ep>`, JSON; never with `tcp` |
 //! | (none: [`client::Client::get_public`]) | `GET <ep>`: no credential, no `project=`, no Owner-Source | none |
 //! | `k2 respond`'s own curl ([`client::Client::post_form_bearer`]) | `POST <ep>`, the passport as Bearer, body `args`, the form type; no query | none |
 //! | `_permission_probe` ([`client::Client::permission_enabled`]) | `GET /cli/permission/enabled` (-G); connect 1 s, at most 1 s | `GET /cli/permission/enabled` (-G), likewise; never both |
@@ -94,7 +96,7 @@
 //! - An answer holding `Invalid or missing auth token`: once per client,
 //!   the same call again with a healed passport ([`client::Healer`]).
 //!   Every call on either channel but `cli_post_json_stdin`.
-//! - `cli_send` and `cli_send_json`, from the cell socket to TCP: when
+//! - `cli_send`, `cli_send_json` and `_compute_send`, from the cell socket to TCP: when
 //!   nothing of the request went out on the socket (the connect failed or
 //!   timed out, or the first write took no byte), or the daemon answered
 //!   `not served on cell socket` (no handler ran). A GET also goes to TCP
@@ -112,6 +114,8 @@
 //! `cli_post_json` and `cli_post_form` ([`client::Client::post_max_time`]),
 //! and 60 s or `_K2_SEND_MAX_TIME` for `cli_send_json`
 //! ([`client::Client::send_max_time`]). `cli_post_json_stdin` is 30 s.
+//! `_compute_send` is 60 s for a GET and `K2_CP_MAX_TIME` or 120 s for a
+//! POST ([`client::Client::compute_post_max_time`]).
 //!
 //! A request the daemon never answered (a timeout, a connection closed
 //! with nothing, or a 5xx with an empty body for the two that read the

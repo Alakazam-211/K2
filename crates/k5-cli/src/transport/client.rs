@@ -26,6 +26,10 @@ pub const PROBE_ENDPOINT: &str = "/cli/whoami";
 pub const SEND_JSON_MAX_TIME: Duration = Duration::from_secs(60);
 /// `_sidecar_send`'s `--max-time 120` (`cli/src/sidecar.sh`).
 pub const SIDECAR_MAX_TIME: Duration = Duration::from_secs(120);
+/// `_compute_send GET`'s `--max-time 60` (`cli/src/compute-lib.sh`).
+pub const COMPUTE_GET_MAX_TIME: Duration = Duration::from_secs(60);
+/// `_compute_send POST`'s `--max-time "${K2_CP_MAX_TIME:-120}"`.
+pub const COMPUTE_POST_MAX_TIME: Duration = Duration::from_secs(120);
 /// `_cli_use_passport_project`'s `--max-time 15` (`cli/src/cell-socket.sh`).
 pub const PASSPORT_PROJECT_MAX_TIME: Duration = Duration::from_secs(15);
 /// Where `_permission_probe` asks whether permission cards are on
@@ -229,6 +233,13 @@ enum Kind {
     /// request, at most 120 s, and nothing else: no heal, no line, and no
     /// note (the caller notes a refusal itself).
     SidecarGet,
+    /// `_compute_send GET` (`cli/src/compute-lib.sh`): `cli_send_json
+    /// GET`'s request, at most 60 s, and nothing else: no heal, no line,
+    /// no note (`_compute_split` notes the body itself).
+    ComputeGet,
+    /// `_compute_send POST`: `cli_send_json POST`'s request, at most
+    /// `K2_CP_MAX_TIME` or 120 s; likewise nothing else.
+    ComputePost,
     /// `_cli_use_passport_project`'s `/cli/whoami` (`cli/src/cell-socket.sh`):
     /// `cli_send_json GET`'s request with no query of the caller's, at
     /// most 15 s; no heal, no line, no note.
@@ -292,6 +303,8 @@ impl Kind {
                 | Kind::Probe
                 | Kind::BearerForm
                 | Kind::SidecarGet
+                | Kind::ComputeGet
+                | Kind::ComputePost
                 | Kind::PassportProject
                 | Kind::Cards
                 | Kind::FeedbackOptin
@@ -311,6 +324,8 @@ impl Kind {
                 | Kind::Probe
                 | Kind::BearerForm
                 | Kind::SidecarGet
+                | Kind::ComputeGet
+                | Kind::ComputePost
                 | Kind::PassportProject
                 | Kind::Cards
                 | Kind::FeedbackOptin
@@ -329,6 +344,8 @@ impl Kind {
                 | Kind::Probe
                 | Kind::BearerForm
                 | Kind::SidecarGet
+                | Kind::ComputeGet
+                | Kind::ComputePost
                 | Kind::PassportProject
                 | Kind::Cards
                 | Kind::FeedbackOptin
@@ -614,6 +631,8 @@ pub struct Client {
     pub post_max_time: Option<Duration>,
     /// `_K2_SEND_MAX_TIME`: `cli_send_json` only.
     pub send_max_time: Option<Duration>,
+    /// `K2_CP_MAX_TIME`: `_compute_send POST` only.
+    pub compute_post_max_time: Option<Duration>,
     /// Between tries. [`PAUSE`]; a test may shorten it.
     pub pause: Duration,
     /// `daemon.port` in the K2 home: a refused loopback connect tries the
@@ -647,6 +666,7 @@ impl Client {
             force_tcp: false,
             post_max_time: None,
             send_max_time: None,
+            compute_post_max_time: None,
             pause: PAUSE,
             port_file: None,
             healer: None,
@@ -982,8 +1002,47 @@ impl Client {
         }
     }
 
+    /// `_compute_send METHOD PATH [payload] [tcp]`: `cli_send_json`'s
+    /// requests and channels (the cell socket when there is a passport with
+    /// a live socket and `tcp` is false, then TCP when that failed, said
+    /// "not served on cell socket" or gave status 0), with `_compute_send`'s
+    /// time limits ([`COMPUTE_GET_MAX_TIME`], [`Client::compute_post_max_time`])
+    /// and no heal and no note. A POST goes on to TCP only after a failed
+    /// connect (curl 7: `_compute_send` reads `_k2_curl`'s own code, so a
+    /// connect the OS refused is 7 too) or "not served on cell socket"; any
+    /// other failure there is [`Error::MaybeApplied`], never sent again. The
+    /// shell prints `<body>\n<status>`; [`Response`] holds both, and an
+    /// error stands for its `000` (see [`Client::refused_before_answer`]
+    /// for the `-w` lines of the tries before).
+    ///
+    /// The credential is the shell's: the passport on the socket, and over
+    /// TCP the passport when there is one, else the owner token. In a
+    /// session (`HOOK_SOCK` set) whose cell socket failed, TCP never carries
+    /// the owner token from disk (`_k2_sock_fallback_token`): with no
+    /// passport nothing is sent ([`Error::NoOwnerInSession`], exit 1), as
+    /// for every socket-first sender. A `tcp` caller, or a remote host,
+    /// keeps its own token, as the shell's does.
+    pub fn compute_send(
+        &mut self,
+        post: bool,
+        path: &str,
+        payload: &str,
+        tcp: bool,
+    ) -> Result<Response, Error> {
+        let kind = if post {
+            Kind::ComputePost
+        } else {
+            Kind::ComputeGet
+        };
+        let before = self.force_tcp;
+        self.force_tcp = before || tcp;
+        let r = self.send_json_as(kind, path, payload);
+        self.force_tcp = before;
+        r
+    }
+
     fn send_json_as(&mut self, kind: Kind, path: &str, payload: &str) -> Result<Response, Error> {
-        let post = kind == Kind::SendJsonPost;
+        let post = matches!(kind, Kind::SendJsonPost | Kind::ComputePost);
         let t0 = Instant::now();
         self.no_owner_in_session(path)?;
         if self.cell_socket().is_some() {
@@ -1193,6 +1252,8 @@ impl Client {
             | Kind::SetupPost => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
             Kind::SidecarGet => SIDECAR_MAX_TIME,
+            Kind::ComputeGet => COMPUTE_GET_MAX_TIME,
+            Kind::ComputePost => self.compute_post_max_time.unwrap_or(COMPUTE_POST_MAX_TIME),
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
             Kind::Cards => CARDS_TIME,
             Kind::FeedbackOptin => FEEDBACK_MAX_TIME,
@@ -1444,6 +1505,7 @@ impl Client {
             }
             Kind::SendJsonGet
             | Kind::SidecarGet
+            | Kind::ComputeGet
             | Kind::PassportProject
             | Kind::Cards
             | Kind::FeedbackOptin => {
@@ -1455,7 +1517,9 @@ impl Client {
                 };
                 (Method::Get, path, None)
             }
-            Kind::SendJsonPost => (Method::Post, endpoint.to_string(), json(&mut headers)),
+            Kind::SendJsonPost | Kind::ComputePost => {
+                (Method::Post, endpoint.to_string(), json(&mut headers))
+            }
             Kind::Public | Kind::Probe | Kind::UpdateVersion => {
                 (Method::Get, endpoint.to_string(), None)
             }
@@ -1816,6 +1880,8 @@ mod tests {
             (Probe, false, false, false, false, false, false, false),
             (BearerForm, false, false, false, false, false, false, false),
             (SidecarGet, false, false, false, false, false, false, false),
+            (ComputeGet, false, false, false, false, false, false, false),
+            (ComputePost, false, false, false, false, false, false, false),
             (
                 PassportProject,
                 false,
@@ -1896,6 +1962,8 @@ mod tests {
             (Kind::Probe, 5),
             (Kind::BearerForm, 30),
             (Kind::SidecarGet, 120),
+            (Kind::ComputeGet, 60),
+            (Kind::ComputePost, 120),
             (Kind::PassportProject, 15),
             (Kind::Cards, 1),
             (Kind::FeedbackOptin, 2),
@@ -1905,6 +1973,11 @@ mod tests {
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }
+        // K2_CP_MAX_TIME: the compute POST only.
+        c.compute_post_max_time = Some(Duration::from_secs(3700));
+        assert_eq!(c.max_time(Kind::ComputePost), Duration::from_secs(3700));
+        assert_eq!(c.max_time(Kind::ComputeGet), Duration::from_secs(60));
+        assert_eq!(c.max_time(Kind::SendJsonPost), Duration::from_secs(330));
     }
 
     #[test]
@@ -2037,6 +2110,11 @@ mod tests {
         assert!(refused(c.send_json(true, "/cli/x", "{}")));
         assert!(refused(c.sidecar_get("/cli/x", "")));
         assert!(refused(c.send("/cli/inbox/list", Call::Request(&[]))));
+        let stats = |c: &mut Client, tcp| c.compute_send(false, "/cli/compute/stats", "", tcp);
+        assert!(refused(stats(&mut c, false)));
+        assert!(refused(c.compute_send(true, "/cli/compute/x", "{}", false)));
+        // `_compute_send ... tcp` chose TCP: `$TOKEN`, as the shell's.
+        assert!(!refused(stats(&mut c, true)));
         let e = Error::NoOwnerInSession {
             endpoint: "/cli/x".into(),
         };
@@ -2252,6 +2330,8 @@ mod tests {
                 SendJsonGet,
                 SendJsonPost,
                 SidecarGet,
+                ComputeGet,
+                ComputePost,
                 PassportProject,
                 Cards,
                 FeedbackOptin,
@@ -2297,6 +2377,20 @@ mod tests {
             .build(SendJsonGet, Channel::Tcp, "/cli/x", &[], b"a=1")
             .unwrap();
         assert_eq!(r.target, "/cli/x?a=1");
+        // `_compute_send`: no `project=`, the payload as the query or the
+        // JSON body.
+        let (_, r) = owner
+            .build(ComputeGet, Channel::Tcp, "/cli/x", &[], b"job=a")
+            .unwrap();
+        assert_eq!((r.method, r.target.as_str()), (Method::Get, "/cli/x?job=a"));
+        let (_, r) = owner
+            .build(ComputePost, Channel::Tcp, "/cli/x", &[], b"{}")
+            .unwrap();
+        assert_eq!((r.method, r.target.as_str()), (Method::Post, "/cli/x"));
+        assert_eq!(
+            r.headers.last(),
+            Some(&("Content-Type".into(), "application/json".into()))
+        );
         let (_, r) = owner
             .build(PostForm, Channel::Tcp, "/cli/x", &["a=1"], &[])
             .unwrap();

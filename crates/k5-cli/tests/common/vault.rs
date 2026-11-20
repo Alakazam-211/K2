@@ -72,6 +72,9 @@ pub struct VCase {
     /// The binary hands this line to the shell, so with no `python3` it
     /// prints the missing-Python line instead: that side isn't run.
     pub handed: bool,
+    /// Files the verb writes: each is removed before every side runs, and
+    /// what each side left there (its bytes and mode, or none) must match.
+    pub files: Vec<PathBuf>,
 }
 
 impl VCase {
@@ -91,6 +94,7 @@ impl VCase {
             compare: VCompare::Exact,
             secrets: Vec::new(),
             handed: false,
+            files: Vec::new(),
         }
     }
 }
@@ -101,6 +105,8 @@ pub struct Ran {
     pub out: Out,
     pub daemon: Vec<String>,
     pub vault: Vec<String>,
+    /// [`VCase::files`] after the run: bytes and permission bits.
+    pub files: Vec<Option<(Vec<u8>, u32)>>,
 }
 
 pub struct VRig {
@@ -195,6 +201,9 @@ impl VRig {
             .unwrap();
         }
         let _ = std::fs::remove_file(&self.spy_log);
+        for f in &c.files {
+            let _ = std::fs::remove_file(f);
+        }
         let fill = |v: &str| {
             v.replace("{port}", &daemon.port.to_string())
                 .replace("{sock}", &daemon.sock.to_string_lossy())
@@ -279,10 +288,21 @@ impl VRig {
                 })
                 .collect()
         };
+        let files = c
+            .files
+            .iter()
+            .map(|f| {
+                use std::os::unix::fs::PermissionsExt;
+                let meta = std::fs::metadata(f).ok()?;
+                let bytes = std::fs::read(f).expect("read a file the verb wrote");
+                Some((bytes, meta.permissions().mode() & 0o777))
+            })
+            .collect();
         Ran {
             out,
             daemon: norm(daemon.take_log(), daemon.port),
             vault: vault.map_or_else(Vec::new, |v| norm(v.take_log(), 0)),
+            files,
         }
     }
 
@@ -342,6 +362,7 @@ impl VRig {
                 "{}: {side}: vault socket requests",
                 c.name
             );
+            assert_eq!(rust.files, bash.files, "{}: {side}: files", c.name);
             self.no_secret_to_a_child(c);
         }
     }

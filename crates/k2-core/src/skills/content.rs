@@ -396,7 +396,7 @@ Only workspaces linked via `k2 connections` are reachable.
 ### Ask a human
 ```
 k2 tickets template > brief.html
-k2 tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
+k2 tickets ask "<title>" --html brief.html --assign <user> [--option "..."]... [--wait]
 # (`k2 feedback` is a compatibility alias. Product "Feedback" for K2 itself is separate/future.)
 ```
 Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2 tickets list` / `k2 tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2 tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2 tickets resolve <id> --answered "<outcome>"`) or resolved (`k2 tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
@@ -549,7 +549,7 @@ Only workspaces linked via `k2 connections` are reachable.
 
 ```
 k2 tickets template > brief.html
-k2 tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
+k2 tickets ask "<title>" --html brief.html --assign <user> [--option "..."]... [--wait]
 ```
 
 Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2 tickets list` / `k2 tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2 tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2 tickets resolve <id> --answered "<outcome>"`) or resolved (`k2 tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
@@ -765,7 +765,7 @@ Only workspaces linked via `k2 connections` are reachable.
 
 ```
 k2 tickets template > brief.html
-k2 tickets ask "<title>" --html brief.html --assign <user> [--options "a,b,c"] [--wait]
+k2 tickets ask "<title>" --html brief.html --assign <user> [--option "..."]... [--wait]
 ```
 
 Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `k2 study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `k2 connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `k2 tickets list` / `k2 tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `k2 tickets comment <id> "<reply>"`, settle it, then mark it answered (`k2 tickets resolve <id> --answered "<outcome>"`) or resolved (`k2 tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.

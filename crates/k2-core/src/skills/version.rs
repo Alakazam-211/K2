@@ -86,9 +86,11 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// Bumped to 16 in 0.46.15: the email, database and heartbeat notes name
 /// the Settings pages by their current labels (Cores → Email Hosting,
 /// Email Link, Cores → Database, the agent's Heartbeats tab).
-pub const SKILL_VERSION_MANAGER: u32 = 16;
-pub const SKILL_VERSION_K2_AGENT: u32 = 16;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 16;
+/// Bumped to 17 in 0.46.17: "Ask a human" shows the repeatable
+/// `--option "..."` (a card's `--options` splits on `;`, never a comma).
+pub const SKILL_VERSION_MANAGER: u32 = 17;
+pub const SKILL_VERSION_K2_AGENT: u32 = 17;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 17;
 pub const SKILL_VERSION_TEMPLATE: u32 = 5;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 /// v2 = authored persona file is `.k2/agent/ROLE.md`.
@@ -352,7 +354,9 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 63 (0.46.16): the Study topics list names postal.
 /// Bumped to 64 (0.46.17): `k2 thread ask` leads with the repeatable
 /// `--option "…"` (commas inside are fine); `--options` is for short labels.
-pub const SKILL_VERSION_WORKSPACE: u32 = 64;
+/// Bumped to 65 (0.46.17): `--options` splits on `;` only, never a comma;
+/// tickets ask shows the repeatable `--option "..."`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 65;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

@@ -8,7 +8,7 @@
 //! - [`claimed`]: the `subdomain claim` and `unclaim` reader.
 //! - [`resp_code`], [`asks_pin`], [`needs_yes_line`]: the small readers
 //!   `visibility` asks between its requests.
-//! - [`probe_timeout`]: `_publish_probe_timeout_check`.
+//! - [`probe_timeout`][]: `_publish_probe_timeout_check`.
 //!
 //! The answer reaches each reader as the shell's `$(…)` holds it (NULs and
 //! trailing newlines gone), read as UTF-8 with U+FFFD for a bad byte.
@@ -65,7 +65,10 @@ pub fn compact(v: &Value) -> String {
 /// `Error: <hint>`; without its newline.
 pub fn err_line(code: &str, hint: &str, as_json: bool) -> String {
     if as_json {
-        dumps(&obj(vec![("error", obj(vec![("code", s(code)), ("hint", s(hint))]))]))
+        dumps(&obj(vec![(
+            "error",
+            obj(vec![("code", s(code)), ("hint", s(hint))]),
+        )]))
     } else {
         format!("Error: {hint}")
     }
@@ -221,7 +224,12 @@ fn fail(o: &mut Out, verb: &str, as_json: bool, code: &Value, hint: &str) -> Exi
     let is = |set: &[&str]| matches!(code, Value::Str(t) if t.as_str().is_some_and(|c| set.contains(&c)));
     let mut exit = Exit::Error;
     if verb == "frame" {
-        if is(&["usage", "bad_frame_origin", "frame_too_many", "bad_frame_policy"]) {
+        if is(&[
+            "usage",
+            "bad_frame_origin",
+            "frame_too_many",
+            "bad_frame_policy",
+        ]) {
             exit = Exit::Usage;
         } else if is(&["owner_only", "role_required"]) {
             exit = Exit::Refused;
@@ -301,7 +309,7 @@ fn url_or_target(s: &Pairs) -> R<String> {
         return Ok(t);
     }
     match get(s, "port") {
-        Some(p) if *p != Value::Null && py::str_of(p) != "" => {
+        Some(p) if *p != Value::Null && !py::str_of(p).is_empty() => {
             Ok(format!("localhost:{}", py::str_of(p)))
         }
         _ => Ok("-".to_string()),
@@ -392,10 +400,23 @@ pub fn handle(raw: &str, as_json: bool, mode: Mode, verb: &str, long: bool) -> S
     o.end(r)
 }
 
-fn handle_into(o: &mut Out, raw: &str, as_json: bool, mode: Mode, verb: &str, long: bool) -> R<Exit> {
+fn handle_into(
+    o: &mut Out,
+    raw: &str,
+    as_json: bool,
+    mode: Mode,
+    verb: &str,
+    long: bool,
+) -> R<Exit> {
     let stripped = strip(raw);
     if stripped.is_empty() {
-        return Ok(fail(o, verb, as_json, &s("unreachable"), "no response from the daemon"));
+        return Ok(fail(
+            o,
+            verb,
+            as_json,
+            &s("unreachable"),
+            "no response from the daemon",
+        ));
     }
     let d = loads(raw).ok();
     if mode == Mode::Logs && !matches!(d, Some(Value::Object(_))) {
@@ -432,9 +453,14 @@ fn handle_into(o: &mut Out, raw: &str, as_json: bool, mode: Mode, verb: &str, lo
             || matches!(err, Value::Str(t) if t.code_points().is_empty());
         if !skip {
             let (code, hint) = if let Value::Object(e) = err {
-                let code = or(get(e, "code"), None).cloned().unwrap_or_else(|| s("error"));
-                let hint = or(or(or(get(e, "hint"), get(e, "message")), get(e, "detail")), None)
-                    .map_or_else(|| py::str_of(&code), py::str_of);
+                let code = or(get(e, "code"), None)
+                    .cloned()
+                    .unwrap_or_else(|| s("error"));
+                let hint = or(
+                    or(or(get(e, "hint"), get(e, "message")), get(e, "detail")),
+                    None,
+                )
+                .map_or_else(|| py::str_of(&code), py::str_of);
                 (code, hint)
             } else if truthy(get(d, "code")) {
                 let code = s(&py::str_of(get(d, "code").expect("truthy")));
@@ -446,9 +472,8 @@ fn handle_into(o: &mut Out, raw: &str, as_json: bool, mode: Mode, verb: &str, lo
             } else {
                 let e = py::str_of(err);
                 let bare = e.replace('_', "");
-                let word = !bare.is_empty()
-                    && bare.chars().all(char::is_alphanumeric)
-                    && chars(&e) < 48;
+                let word =
+                    !bare.is_empty() && bare.chars().all(char::is_alphanumeric) && chars(&e) < 48;
                 let code = s(if word { &e } else { "error" });
                 let mut hint = e;
                 if truthy(get(d, "hint")) {
@@ -674,7 +699,10 @@ fn list(o: &mut Out, d: &Pairs, long: bool) -> R<Exit> {
             u,
         ]);
         if truthy(get(sv, "bindWarning")) {
-            warnings.push((name.clone(), py::str_of(get(sv, "bindWarning").expect("truthy"))));
+            warnings.push((
+                name.clone(),
+                py::str_of(get(sv, "bindWarning").expect("truthy")),
+            ));
         }
         if long {
             let empty: Vec<(Text, Value)> = Vec::new();
@@ -705,12 +733,18 @@ fn list(o: &mut Out, d: &Pairs, long: bool) -> R<Exit> {
                     ),
                 ));
                 if truthy(get(dv, "warning")) {
-                    warnings.push((name.clone(), py::str_of(get(dv, "warning").expect("truthy"))));
+                    warnings.push((
+                        name.clone(),
+                        py::str_of(get(dv, "warning").expect("truthy")),
+                    ));
                 }
             }
         }
         if truthy(get(sv, "frameWarning")) {
-            warnings.push((name.clone(), py::str_of(get(sv, "frameWarning").expect("truthy"))));
+            warnings.push((
+                name.clone(),
+                py::str_of(get(sv, "frameWarning").expect("truthy")),
+            ));
         }
         if truthy(get(sv, "reason")) {
             reasons.push((
@@ -910,7 +944,10 @@ pub fn site(raw: &str, as_json: bool, verb: &str) -> Shown {
 
 fn bail(o: &mut Out, as_json: bool, code: &Value, text: &Value, exit: Exit) -> Exit {
     if as_json {
-        let v = obj(vec![("error", obj(vec![("code", code.clone()), ("hint", text.clone())]))]);
+        let v = obj(vec![(
+            "error",
+            obj(vec![("code", code.clone()), ("hint", text.clone())]),
+        )]);
         o.err(&format!("{}\n", compact(&v)));
     } else {
         o.err(&format!("Error: {}\n", py::str_of(text)));
@@ -931,7 +968,8 @@ fn when(ts: Option<&Value>) -> String {
     if !(-62_135_510_400..=253_402_214_400).contains(&secs) {
         return "-".to_string();
     }
-    crate::out::pylib::time::strftime_local(secs, "%Y-%m-%d %H:%M").unwrap_or_else(|_| "-".to_string())
+    crate::out::pylib::time::strftime_local(secs, "%Y-%m-%d %H:%M")
+        .unwrap_or_else(|_| "-".to_string())
 }
 
 fn site_into(o: &mut Out, raw: &str, as_json: bool, verb: &str) -> R<Exit> {
@@ -939,7 +977,11 @@ fn site_into(o: &mut Out, raw: &str, as_json: bool, verb: &str) -> R<Exit> {
         Ok(Value::Object(d)) => d,
         _ => {
             let head: String = strip(raw).chars().take(200).collect();
-            let head = if head.is_empty() { "(empty)".to_string() } else { head };
+            let head = if head.is_empty() {
+                "(empty)".to_string()
+            } else {
+                head
+            };
             return Ok(bail(
                 o,
                 as_json,
@@ -970,14 +1012,18 @@ fn site_into(o: &mut Out, raw: &str, as_json: bool, verb: &str) -> R<Exit> {
     if let Some(err) = get(d, "error").filter(|e| py::truthy(e)) {
         let (code, mut text) = if let Value::Object(e) = err {
             (
-                or(get(e, "code"), None).cloned().unwrap_or_else(|| s("error")),
+                or(get(e, "code"), None)
+                    .cloned()
+                    .unwrap_or_else(|| s("error")),
                 or(or(get(e, "hint"), get(e, "message")), None)
                     .cloned()
                     .unwrap_or_else(|| s("refused")),
             )
         } else {
             (
-                or(get(d, "code"), None).cloned().unwrap_or_else(|| s("error")),
+                or(get(d, "code"), None)
+                    .cloned()
+                    .unwrap_or_else(|| s("error")),
                 s(&py::str_of(err)),
             )
         };
@@ -1041,7 +1087,10 @@ fn site_into(o: &mut Out, raw: &str, as_json: bool, verb: &str) -> R<Exit> {
         }
         "open" => {
             if truthy(get(d, "opened")) {
-                o.line(&format!("Opened {} in your browser.", or_s(get(d, "label"), "the site")));
+                o.line(&format!(
+                    "Opened {} in your browser.",
+                    or_s(get(d, "label"), "the site")
+                ));
             } else {
                 o.line(&or_s(get(d, "url"), ""));
                 if truthy(get(d, "oneTime")) {
@@ -1052,49 +1101,47 @@ fn site_into(o: &mut Out, raw: &str, as_json: bool, verb: &str) -> R<Exit> {
                 }
             }
         }
-        "sessions" => {
-            match get(d, "revoked") {
-                Some(n) if *n != Value::Null => {
-                    let one = py_eq(n, &Value::Int("1".to_string()));
-                    o.line(&format!(
-                        "Ended {} session{} on {}.",
-                        py::str_of(n),
-                        if one { "" } else { "s" },
+        "sessions" => match get(d, "revoked") {
+            Some(n) if *n != Value::Null => {
+                let one = py_eq(n, &Value::Int("1".to_string()));
+                o.line(&format!(
+                    "Ended {} session{} on {}.",
+                    py::str_of(n),
+                    if one { "" } else { "s" },
+                    or_s(get(d, "label"), "?")
+                ));
+            }
+            _ => {
+                let rows = or(get(d, "sessions"), None).cloned();
+                match rows {
+                    None => o.line(&format!(
+                        "Nobody is signed in to {}.",
                         or_s(get(d, "label"), "?")
-                    ));
-                }
-                _ => {
-                    let rows = or(get(d, "sessions"), None).cloned();
-                    match rows {
-                        None => o.line(&format!(
-                            "Nobody is signed in to {}.",
-                            or_s(get(d, "label"), "?")
-                        )),
-                        Some(rows) => {
+                    )),
+                    Some(rows) => {
+                        o.line(&format!(
+                            "{}  {}  {}  ENDS",
+                            pad("KIND", 8),
+                            pad("WHO", 24),
+                            pad("STARTED", 16)
+                        ));
+                        let items = py_iter(&rows, 1371)?;
+                        for r in &items {
+                            let Value::Object(p) = r else {
+                                return Err(Raise::no_attribute(1373, r, "get"));
+                            };
                             o.line(&format!(
-                                "{}  {}  {}  ENDS",
-                                pad("KIND", 8),
-                                pad("WHO", 24),
-                                pad("STARTED", 16)
+                                "{}  {}  {}  {}",
+                                pad(&or_s(get(p, "kind"), "?"), 8),
+                                pad(&or_s(get(p, "user"), "-"), 24),
+                                pad(&when(get(p, "createdAt")), 16),
+                                when(get(p, "expiresAt"))
                             ));
-                            let items = py_iter(&rows, 1371)?;
-                            for r in &items {
-                                let Value::Object(p) = r else {
-                                    return Err(Raise::no_attribute(1373, r, "get"));
-                                };
-                                o.line(&format!(
-                                    "{}  {}  {}  {}",
-                                    pad(&or_s(get(p, "kind"), "?"), 8),
-                                    pad(&or_s(get(p, "user"), "-"), 24),
-                                    pad(&when(get(p, "createdAt")), 16),
-                                    when(get(p, "expiresAt"))
-                                ));
-                            }
                         }
                     }
                 }
             }
-        }
+        },
         _ => {}
     }
     Ok(Exit::Ok)
@@ -1154,7 +1201,10 @@ pub fn asks_pin(raw: &str) -> bool {
 /// dict (its code was read from it).
 pub fn needs_yes_line(raw: &str) -> String {
     match loads(raw) {
-        Ok(Value::Object(p)) => format!("{}\n", get(&p, "error").map_or_else(String::new, py::str_of)),
+        Ok(Value::Object(p)) => format!(
+            "{}\n",
+            get(&p, "error").map_or_else(String::new, py::str_of)
+        ),
         _ => "\n".to_string(),
     }
 }
@@ -1172,9 +1222,13 @@ pub fn probe_timeout(value: &str) -> Result<(), String> {
     }
     let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
     let num = |t: &str| -> u128 {
-        t.trim_start_matches('0')
-            .parse::<u128>()
-            .unwrap_or(if t.trim_start_matches('0').is_empty() { 0 } else { u128::MAX })
+        t.trim_start_matches('0').parse::<u128>().unwrap_or(
+            if t.trim_start_matches('0').is_empty() {
+                0
+            } else {
+                u128::MAX
+            },
+        )
     };
     let ms: u128 = if digits(&raw) {
         num(&raw).saturating_mul(1000)
@@ -1223,16 +1277,29 @@ mod tests {
 
     #[test]
     fn the_probe_timeout_rule() {
-        for ok in ["90s", "10m", "1m30s", "1500ms", "default", " DEFAULT ", "900", "15m"] {
+        for ok in [
+            "90s",
+            "10m",
+            "1m30s",
+            "1500ms",
+            "default",
+            " DEFAULT ",
+            "900",
+            "15m",
+        ] {
             assert_eq!(probe_timeout(ok), Ok(()), "{ok}");
         }
         for bad in ["", "0", "0s", "1d", "m", "5x", "1msm", "1.5s"] {
             assert!(
-                probe_timeout(bad).unwrap_err().starts_with("--probe-timeout must be"),
+                probe_timeout(bad)
+                    .unwrap_err()
+                    .starts_with("--probe-timeout must be"),
                 "{bad}"
             );
         }
-        assert!(probe_timeout("16m").unwrap_err().starts_with("--probe-timeout is at most 15m (got 16m)"));
+        assert!(probe_timeout("16m")
+            .unwrap_err()
+            .starts_with("--probe-timeout is at most 15m (got 16m)"));
         assert!(probe_timeout("99999999999999999999999999999999999999999h")
             .unwrap_err()
             .starts_with("--probe-timeout is at most"));

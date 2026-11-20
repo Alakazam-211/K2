@@ -61,7 +61,13 @@ fn stdin(input: &'static [u8], c: Case) -> Case {
 
 /// The owner from disk and the stub's port, `answers`, `code`, the
 /// number of requests.
-fn on(name: &'static str, args: &'static [&'static str], answers: Vec<Reply>, code: i32, n: usize) -> Case {
+fn on(
+    name: &'static str,
+    args: &'static [&'static str],
+    answers: Vec<Reply>,
+    code: i32,
+    n: usize,
+) -> Case {
     case(name, args, &[], answers, owner_and_port, code, n)
 }
 
@@ -89,29 +95,55 @@ fn ps_and_logs_answer_as_the_shell_does() {
             on("ps --long", &["ps", "--long"], vec![ok(LIST)], 0, 1),
             on("list -l", &["list", "-l"], vec![ok(LIST)], 0, 1),
             on("ls", &["ls"], vec![ok(r#"{"services":[]}"#)], 0, 1),
-            on("services not a list", &["ps"], vec![ok(r#"{"services":{"a":1}}"#)], 0, 1),
             on(
-                "one legacy service, the end now",
+                "services not a list",
                 &["ps"],
-                vec![ok(r#"{"services":[{"name":"a","envMode":"legacy","envRemovedIn":"0.46.17","cutoverNow":true,"legacyLabel":1,"legacyHint":"move it"}]}"#)],
+                vec![ok(r#"{"services":{"a":1}}"#)],
                 0,
                 1,
             ),
-            on("not JSON", &["ps"], vec![ok("Upgrade to Pro: https://k2.dev")], 1, 1),
+            on(
+                "one legacy service, the end now",
+                &["ps"],
+                vec![ok(
+                    r#"{"services":[{"name":"a","envMode":"legacy","envRemovedIn":"0.46.17","cutoverNow":true,"legacyLabel":1,"legacyHint":"move it"}]}"#,
+                )],
+                0,
+                1,
+            ),
+            on(
+                "not JSON",
+                &["ps"],
+                vec![ok("Upgrade to Pro: https://k2.dev")],
+                1,
+                1,
+            ),
             on("an empty answer", &["ps"], vec![ok("")], 1, 1),
             on("a JSON list", &["ps"], vec![ok("[1,2]")], 1, 1),
-            on("a JSON list, --json", &["ps", "--json"], vec![ok("[1,\"\u{e9}\"]")], 0, 1),
+            on(
+                "a JSON list, --json",
+                &["ps", "--json"],
+                vec![ok("[1,\"\u{e9}\"]")],
+                0,
+                1,
+            ),
             on(
                 "a refusal",
                 &["ps"],
-                vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"Only the owner."}}"#.into())],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"owner_only","hint":"Only the owner."}}"#.into(),
+                )],
                 1,
                 1,
             ),
             on(
                 "a refusal, --json",
                 &["ps", "--json"],
-                vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","message":"mé"}}"#.into())],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"owner_only","message":"mé"}}"#.into(),
+                )],
                 1,
                 1,
             ),
@@ -125,7 +157,9 @@ fn ps_and_logs_answer_as_the_shell_does() {
             on(
                 "an error with a code",
                 &["ps"],
-                vec![ok(r#"{"error":"label taken","code":"label_owned_by_other_workspace","hint":"ask"}"#)],
+                vec![ok(
+                    r#"{"error":"label taken","code":"label_owned_by_other_workspace","hint":"ask"}"#,
+                )],
                 1,
                 1,
             ),
@@ -137,8 +171,20 @@ fn ps_and_logs_answer_as_the_shell_does() {
                 1,
             ),
             on("error 0", &["ps"], vec![ok(r#"{"error":0}"#)], 1, 1),
-            on("error false", &["ps"], vec![ok(r#"{"error":false,"services":[]}"#)], 0, 1),
-            on("success false", &["ps"], vec![ok(r#"{"success":false}"#)], 1, 1),
+            on(
+                "error false",
+                &["ps"],
+                vec![ok(r#"{"error":false,"services":[]}"#)],
+                0,
+                1,
+            ),
+            on(
+                "success false",
+                &["ps"],
+                vec![ok(r#"{"success":false}"#)],
+                1,
+                1,
+            ),
             traceback(on(
                 "a url that is no string",
                 &["ps"],
@@ -149,17 +195,51 @@ fn ps_and_logs_answer_as_the_shell_does() {
             traceback(on(
                 "an idle that is no number",
                 &["ps", "--long"],
-                vec![ok(r#"{"services":[{"name":"a","dev":{"idleSecs":"soon"}}]}"#)],
+                vec![ok(
+                    r#"{"services":[{"name":"a","dev":{"idleSecs":"soon"}}]}"#,
+                )],
                 1,
                 1,
             )),
             on("ps: an extra word", &["ps", "x"], vec![], 2, 0),
-            on("ps: a flag, --json first", &["ps", "--json", "--nope"], vec![], 2, 0),
+            on(
+                "ps: a flag, --json first",
+                &["ps", "--json", "--nope"],
+                vec![],
+                2,
+                0,
+            ),
             // covers: publish logs
-            on("logs: text", &["logs", "web"], vec![ok("line 1\nline 2\n")], 0, 1),
-            on("logs --tail: a log", &["logs", "web", "--tail"], vec![ok(r#"{"log":"a\nb"}"#)], 0, 1),
-            on("logs: lines", &["logs", "w e"], vec![ok(r#"{"lines":["a",1,null]}"#)], 0, 1),
-            on("logs: a refusal", &["logs", "web"], vec![ok(r#"{"error":{"code":"not_found","hint":"no such service"}}"#)], 1, 1),
+            on(
+                "logs: text",
+                &["logs", "web"],
+                vec![ok("line 1\nline 2\n")],
+                0,
+                1,
+            ),
+            on(
+                "logs --tail: a log",
+                &["logs", "web", "--tail"],
+                vec![ok(r#"{"log":"a\nb"}"#)],
+                0,
+                1,
+            ),
+            on(
+                "logs: lines",
+                &["logs", "w e"],
+                vec![ok(r#"{"lines":["a",1,null]}"#)],
+                0,
+                1,
+            ),
+            on(
+                "logs: a refusal",
+                &["logs", "web"],
+                vec![ok(
+                    r#"{"error":{"code":"not_found","hint":"no such service"}}"#,
+                )],
+                1,
+                1,
+            ),
             on("logs: no name", &["logs"], vec![], 2, 0),
             on("logs: a flag", &["logs", "web", "--follow"], vec![], 2, 0),
             waited(on("ps: no answer", &["ps"], vec![Reply::Close], 1, 1)),
@@ -174,7 +254,15 @@ fn ps_and_logs_answer_as_the_shell_does() {
             ),
             with(
                 with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
-                case("the cell socket: ps", &["ps"], &[], vec![ok(LIST)], port_only, 0, 1),
+                case(
+                    "the cell socket: ps",
+                    &["ps"],
+                    &[],
+                    vec![ok(LIST)],
+                    port_only,
+                    0,
+                    1,
+                ),
             ),
         ],
     );
@@ -190,65 +278,297 @@ fn run_start_stop_rm_answer_as_the_shell_does() {
         &rig,
         vec![
             // covers: publish run
-            on("run", &["run", "web", "--cmd", "npm start", "--port", "3000"], vec![ok(started)], 0, 1),
+            on(
+                "run",
+                &["run", "web", "--cmd", "npm start", "--port", "3000"],
+                vec![ok(started)],
+                0,
+                1,
+            ),
             // covers: publish run --json
-            on("run --json: held", &["run", "web", "--cmd=x", "--port=3000", "--json"], vec![ok(held)], 2, 1),
-            on("run: held", &["run", "web", "--cmd", "x", "--port", "3000", "--transfer", "--no-tunnel"], vec![ok(held)], 2, 1),
+            on(
+                "run --json: held",
+                &["run", "web", "--cmd=x", "--port=3000", "--json"],
+                vec![ok(held)],
+                2,
+                1,
+            ),
+            on(
+                "run: held",
+                &[
+                    "run",
+                    "web",
+                    "--cmd",
+                    "x",
+                    "--port",
+                    "3000",
+                    "--transfer",
+                    "--no-tunnel",
+                ],
+                vec![ok(held)],
+                2,
+                1,
+            ),
             on(
                 "run: the stderr lines",
-                &["run", "web", "--cmd", "x", "--port", "3000", "--dev", "--idle", "30m", "--mem=4G", "--cpus", "2", "--disk-override", " full ", "--probe-timeout", "1m30s"],
+                &[
+                    "run",
+                    "web",
+                    "--cmd",
+                    "x",
+                    "--port",
+                    "3000",
+                    "--dev",
+                    "--idle",
+                    "30m",
+                    "--mem=4G",
+                    "--cpus",
+                    "2",
+                    "--disk-override",
+                    " full ",
+                    "--probe-timeout",
+                    "1m30s",
+                ],
                 vec![ok(noisy)],
                 0,
                 1,
             ),
             on(
                 "run: E2E off, a legacy wall",
-                &["run", "web", "--cmd", "x", "--port", "00080", "--cwd", "sub/../x"],
-                vec![ok(r#"{"name":"web","port":80,"visibility":{"mode":"public","enforced":false},"wall":{"path":"legacy"},"envDeprecation":1,"envRemovedIn":"0.47","error":"crashed"}"#)],
+                &[
+                    "run", "web", "--cmd", "x", "--port", "00080", "--cwd", "sub/../x",
+                ],
+                vec![ok(
+                    r#"{"service":{"name":"web","port":80,"visibility":{"mode":"public","enforced":false},"envDeprecation":1,"envRemovedIn":"0.47","error":"crashed"},"wall":{"path":"legacy"}}"#,
+                )],
                 0,
                 1,
             ),
-            case("run --skin", &["run", "site", "--skin", "site", "--port", "8080"], &[], vec![ok(r#"{"service":{"name":"site","status":"running","port":8080}}"#)], site_dir, 0, 1),
-            on("run --skin=: no root", &["run", "s", "--skin=", "--port", "1", "--cwd", "~"], vec![], 2, 0),
-            on("run: a refusal, disk_low", &["run", "web", "--cmd", "x", "--port", "1"], vec![ok(r#"{"error":{"code":"disk_low","hint":"Disk is full"}}"#)], 3, 1),
-            on("run: skin_retired, --json", &["run", "web", "--skin", "--port", "1", "--json"], vec![ok(r#"{"error":{"code":"skin_retired","hint":"use an App"}}"#)], 3, 1),
+            case(
+                "run --skin",
+                &["run", "site", "--skin", "site", "--port", "8080"],
+                &[],
+                vec![ok(
+                    r#"{"service":{"name":"site","status":"running","port":8080}}"#,
+                )],
+                site_dir,
+                0,
+                1,
+            ),
+            on(
+                "run --skin=: no root",
+                &["run", "s", "--skin=", "--port", "1", "--cwd", "~"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: a refusal, disk_low",
+                &["run", "web", "--cmd", "x", "--port", "1"],
+                vec![ok(r#"{"error":{"code":"disk_low","hint":"Disk is full"}}"#)],
+                3,
+                1,
+            ),
+            on(
+                "run: skin_retired, --json",
+                &["run", "web", "--skin", "--port", "1", "--json"],
+                vec![ok(
+                    r#"{"error":{"code":"skin_retired","hint":"use an App"}}"#,
+                )],
+                3,
+                1,
+            ),
             on("run: no port", &["run", "web", "--cmd", "x"], vec![], 2, 0),
             on("run: no cmd", &["run", "web", "--port", "1"], vec![], 2, 0),
-            on("run: port 0", &["run", "web", "--cmd", "x", "--port", "0"], vec![], 2, 0),
-            on("run: port 65536", &["run", "web", "--cmd", "x", "--port", "65536", "--json"], vec![], 2, 0),
-            on("run: port abc", &["run", "web", "--cmd", "x", "--port", "3k"], vec![], 2, 0),
-            on("run: a bad probe timeout", &["run", "web", "--cmd", "x", "--port", "1", "--probe-timeout", "5 x"], vec![], 2, 0),
-            on("run: a long probe timeout", &["run", "web", "--cmd", "x", "--port", "1", "--probe-timeout", "16M"], vec![], 2, 0),
-            on("run: --cmd and --skin", &["run", "web", "--cmd", "x", "--skin"], vec![], 2, 0),
-            on("run: --dev --skin", &["run", "web", "--dev", "--skin", "--port", "1"], vec![], 2, 0),
-            on("run: --dev --no-tunnel", &["run", "web", "--dev", "--no-tunnel", "--json"], vec![], 2, 0),
-            on("run: --idle without --dev", &["run", "web", "--idle", "5m"], vec![], 2, 0),
-            on("run: --cwd and --skin", &["run", "web", "--skin", "--cwd", "/x"], vec![], 2, 0),
-            on("run: an absolute skin root", &["run", "web", "--skin", "/srv", "--port", "1"], vec![], 2, 0),
-            on("run: a skin root with ..", &["run", "web", "--skin", "a/../b", "--port", "1"], vec![], 2, 0),
-            on("run: a skin root not there", &["run", "web", "--skin", "nope", "--port", "1"], vec![], 2, 0),
-            on("run: an unknown flag", &["run", "web", "--fast"], vec![], 2, 0),
-            on("run: a flag with no value", &["run", "web", "--cmd"], vec![], 2, 0),
+            on(
+                "run: port 0",
+                &["run", "web", "--cmd", "x", "--port", "0"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: port 65536",
+                &["run", "web", "--cmd", "x", "--port", "65536", "--json"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: port abc",
+                &["run", "web", "--cmd", "x", "--port", "3k"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: a bad probe timeout",
+                &[
+                    "run",
+                    "web",
+                    "--cmd",
+                    "x",
+                    "--port",
+                    "1",
+                    "--probe-timeout",
+                    "5 x",
+                ],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: a long probe timeout",
+                &[
+                    "run",
+                    "web",
+                    "--cmd",
+                    "x",
+                    "--port",
+                    "1",
+                    "--probe-timeout",
+                    "16M",
+                ],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: --cmd and --skin",
+                &["run", "web", "--cmd", "x", "--skin"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: --dev --skin",
+                &["run", "web", "--dev", "--skin", "--port", "1"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: --dev --no-tunnel",
+                &["run", "web", "--dev", "--no-tunnel", "--json"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: --idle without --dev",
+                &["run", "web", "--idle", "5m"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: --cwd and --skin",
+                &["run", "web", "--skin", "--cwd", "/x"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: an absolute skin root",
+                &["run", "web", "--skin", "/srv", "--port", "1"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: a skin root with ..",
+                &["run", "web", "--skin", "a/../b", "--port", "1"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: a skin root not there",
+                &["run", "web", "--skin", "nope", "--port", "1"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: an unknown flag",
+                &["run", "web", "--fast"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run: a flag with no value",
+                &["run", "web", "--cmd"],
+                vec![],
+                2,
+                0,
+            ),
             on("run: two names", &["run", "a", "b"], vec![], 2, 0),
             // covers: publish start
             on("start", &["start", "web"], vec![ok(noisy)], 0, 1),
             // covers: publish start --json
-            on("start --json", &["start", "--json", "web"], vec![ok(started)], 0, 1),
+            on(
+                "start --json",
+                &["start", "--json", "web"],
+                vec![ok(started)],
+                0,
+                1,
+            ),
             // covers: publish stop
-            on("stop: legacy env", &["stop", "web"], vec![ok(r#"{"service":{"name":"web","status":"stopped","envMode":"legacy","envRemovedIn":"0.47.0","cutoverNow":true}}"#)], 0, 1),
+            on(
+                "stop: legacy env",
+                &["stop", "web"],
+                vec![ok(
+                    r#"{"service":{"name":"web","status":"stopped","envMode":"legacy","envRemovedIn":"0.47.0","cutoverNow":true}}"#,
+                )],
+                0,
+                1,
+            ),
             // covers: publish stop --json
-            on("stop --json", &["stop", "web", "--json"], vec![ok(r#"{"ok":true}"#)], 0, 1),
+            on(
+                "stop --json",
+                &["stop", "web", "--json"],
+                vec![ok(r#"{"ok":true}"#)],
+                0,
+                1,
+            ),
             on("stop: no name", &["stop"], vec![], 2, 0),
             on("stop: a flag", &["stop", "web", "--now"], vec![], 2, 0),
             // covers: publish rm
-            on("rm", &["rm", "web", "--keep-hostname"], vec![ok(r#"{"service":{"name":"web","envDeprecation":true}}"#)], 0, 1),
-            on("rm --json: a refusal", &["rm", "web", "--json"], vec![ok(r#"{"error":"nope"}"#)], 1, 1),
+            on(
+                "rm",
+                &["rm", "web", "--keep-hostname"],
+                vec![ok(r#"{"service":{"name":"web","envDeprecation":true}}"#)],
+                0,
+                1,
+            ),
+            on(
+                "rm --json: a refusal",
+                &["rm", "web", "--json"],
+                vec![ok(r#"{"error":"nope"}"#)],
+                1,
+                1,
+            ),
             on("rm: no name", &["rm"], vec![], 2, 0),
             on("rm: a flag", &["rm", "web", "--hostname"], vec![], 2, 0),
-            waited(on("run: no answer", &["run", "web", "--cmd", "x", "--port", "1"], vec![Reply::Close], 1, 1)),
+            waited(on(
+                "run: no answer",
+                &["run", "web", "--cmd", "x", "--port", "1"],
+                vec![Reply::Close],
+                1,
+                1,
+            )),
             waited(with(
                 with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
-                case("the cell socket: stop with no answer, not sent again", &["stop", "web"], &[], vec![Reply::Close], port_only, 1, 1),
+                case(
+                    "the cell socket: stop with no answer, not sent again",
+                    &["stop", "web"],
+                    &[],
+                    vec![Reply::Close],
+                    port_only,
+                    1,
+                    1,
+                ),
             )),
         ],
     );
@@ -263,51 +583,160 @@ fn frame_open_sessions_visibility_answer_as_the_shell_does() {
         &rig,
         vec![
             // covers: publish frame
-            on("frame --allow", &["frame", "web", "--allow", "https://a.example", "--allow=https://b.example"], vec![ok(r#"{"service":{"name":"web","framePolicy":"'self' https://a.example","frameAncestors":"https://a.example https://b.example"},"restarted":true}"#)], 0, 1),
-            // covers: publish frame --json
-            on("frame --none --json", &["frame", "web", "--none", "--json"], vec![ok(r#"{"service":{"name":"web"}}"#)], 0, 1),
-            on("frame --reset", &["frame", "web", "--reset"], vec![ok(r#"{"name":"web","framePolicy":"'self'"}"#)], 0, 1),
-            on("frame: a bad origin", &["frame", "web", "--allow", "x"], vec![ok(r#"{"error":{"code":"bad_frame_origin","hint":"not an origin"}}"#)], 2, 1),
-            on("frame: owner only", &["frame", "web", "--none"], vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"owner"}}"#.into())], 3, 1),
-            on("frame: --none --reset", &["frame", "web", "--none", "--reset"], vec![], 2, 0),
-            on("frame: --allow after --none", &["frame", "web", "--none", "--allow", "x"], vec![], 2, 0),
-            on("frame: no mode", &["frame", "web"], vec![], 2, 0),
-            on("frame: --allow with no value", &["frame", "web", "--allow"], vec![], 2, 0),
-            // covers: publish visibility
-            on("visibility: the read", &["visibility", "web"], vec![ok(vis)], 0, 1),
-            // covers: publish visibility --json
-            on("visibility --json: the read", &["visibility", "w b", "--json"], vec![ok(vis)], 0, 1),
-            on("visibility: private", &["visibility", "web", "private", "--reason", "done", "--yes"], vec![ok(r#"{"label":"web","mode":"private"}"#)], 0, 1),
-            stdin(b"secret-pin-1\n", on(
-                "visibility: pin, the PIN on stdin over TCP",
-                &["visibility", "web", "pin", "--pin-days", "7"],
-                vec![ok(r#"{"check":true}"#), ok(r#"{"label":"web","mode":"pin"}"#)],
-                0,
-                2,
-            )),
-            stdin(b"", on(
-                "visibility: pin, no PIN",
-                &["visibility", "web", "pin"],
-                vec![ok(r#"{"check":true}"#)],
-                2,
-                1,
-            )),
             on(
-                "visibility: public needs yes, no terminal",
-                &["visibility", "web", "public"],
-                vec![ok(r#"{"error":"moving it changes how K2 carries it","code":"needs_yes"}"#)],
+                "frame --allow",
+                &[
+                    "frame",
+                    "web",
+                    "--allow",
+                    "https://a.example",
+                    "--allow=https://b.example",
+                ],
+                vec![ok(
+                    r#"{"service":{"name":"web","framePolicy":"'self' https://a.example","frameAncestors":"https://a.example https://b.example"},"restarted":true}"#,
+                )],
+                0,
+                1,
+            ),
+            // covers: publish frame --json
+            on(
+                "frame --none --json",
+                &["frame", "web", "--none", "--json"],
+                vec![ok(r#"{"service":{"name":"web"}}"#)],
+                0,
+                1,
+            ),
+            on(
+                "frame --reset",
+                &["frame", "web", "--reset"],
+                vec![ok(r#"{"name":"web","framePolicy":"'self'"}"#)],
+                0,
+                1,
+            ),
+            on(
+                "frame: a bad origin",
+                &["frame", "web", "--allow", "x"],
+                vec![ok(
+                    r#"{"error":{"code":"bad_frame_origin","hint":"not an origin"}}"#,
+                )],
                 2,
                 1,
             ),
-            on("visibility: public dev, no --yes", &["visibility", "web", "public", "--dev-is-public"], vec![], 2, 0),
+            on(
+                "frame: owner only",
+                &["frame", "web", "--none"],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"owner_only","hint":"owner"}}"#.into(),
+                )],
+                3,
+                1,
+            ),
+            on(
+                "frame: --none --reset",
+                &["frame", "web", "--none", "--reset"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "frame: --allow after --none",
+                &["frame", "web", "--none", "--allow", "x"],
+                vec![],
+                2,
+                0,
+            ),
+            on("frame: no mode", &["frame", "web"], vec![], 2, 0),
+            on(
+                "frame: --allow with no value",
+                &["frame", "web", "--allow"],
+                vec![],
+                2,
+                0,
+            ),
+            // covers: publish visibility
+            on(
+                "visibility: the read",
+                &["visibility", "web"],
+                vec![ok(vis)],
+                0,
+                1,
+            ),
+            // covers: publish visibility --json
+            on(
+                "visibility --json: the read",
+                &["visibility", "w b", "--json"],
+                vec![ok(vis)],
+                0,
+                1,
+            ),
+            on(
+                "visibility: private",
+                &["visibility", "web", "private", "--reason", "done", "--yes"],
+                vec![ok(r#"{"label":"web","mode":"private"}"#)],
+                0,
+                1,
+            ),
+            stdin(
+                b"secret-pin-1\n",
+                on(
+                    "visibility: pin, the PIN on stdin over TCP",
+                    &["visibility", "web", "pin", "--pin-days", "7"],
+                    vec![
+                        ok(r#"{"check":true}"#),
+                        ok(r#"{"label":"web","mode":"pin"}"#),
+                    ],
+                    0,
+                    2,
+                ),
+            ),
+            stdin(
+                b"",
+                on(
+                    "visibility: pin, no PIN",
+                    &["visibility", "web", "pin"],
+                    vec![ok(r#"{"check":true}"#)],
+                    2,
+                    1,
+                ),
+            ),
+            on(
+                "visibility: public needs yes, no terminal",
+                &["visibility", "web", "public"],
+                vec![ok(
+                    r#"{"error":"moving it changes how K2 carries it","code":"needs_yes"}"#,
+                )],
+                2,
+                1,
+            ),
+            on(
+                "visibility: public dev, no --yes",
+                &["visibility", "web", "public", "--dev-is-public"],
+                vec![],
+                2,
+                0,
+            ),
             on(
                 "visibility: public dev --yes",
-                &["visibility", "web", "public", "--dev-is-public", "-y", "--reason=demo"],
+                &[
+                    "visibility",
+                    "web",
+                    "public",
+                    "--dev-is-public",
+                    "-y",
+                    "--reason=demo",
+                ],
                 vec![ok(r#"{"label":"web","mode":"public"}"#)],
                 0,
                 1,
             ),
-            on("visibility: held", &["visibility", "web", "public"], vec![ok(r#"{"status":"held","request":"req_9"}"#)], 2, 1),
+            on(
+                "visibility: held",
+                &["visibility", "web", "public"],
+                vec![ok(r#"{"status":"held","request":"req_9"}"#)],
+                2,
+                1,
+            ),
             on(
                 "visibility: refused, a card",
                 &["visibility", "web", "private", "--json"],
@@ -315,26 +744,114 @@ fn frame_open_sessions_visibility_answer_as_the_shell_does() {
                 3,
                 1,
             ),
-            on("visibility: --pin on argv", &["visibility", "web", "--pin", "1234"], vec![], 2, 0),
-            on("visibility: a bad mode", &["visibility", "web", "secret"], vec![], 2, 0),
-            on("visibility: --pin-days 300", &["visibility", "web", "pin", "--pin-days", "300"], vec![], 2, 0),
-            on("visibility: no name", &["visibility", "--json"], vec![], 2, 0),
-            on("visibility: not JSON", &["visibility", "web"], vec![ok("oops")], 1, 1),
+            on(
+                "visibility: --pin on argv",
+                &["visibility", "web", "--pin", "1234"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "visibility: a bad mode",
+                &["visibility", "web", "secret"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "visibility: --pin-days 300",
+                &["visibility", "web", "pin", "--pin-days", "300"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "visibility: no name",
+                &["visibility", "--json"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "visibility: not JSON",
+                &["visibility", "web"],
+                vec![ok("oops")],
+                1,
+                1,
+            ),
             // covers: publish open
-            on("open --no-browser", &["open", "web", "--no-browser", "--path", "/docs"], vec![ok(r#"{"url":"https://web.acme.k2.dev/?t=1","oneTime":true,"expiresInSecs":30}"#)], 0, 1),
+            on(
+                "open --no-browser",
+                &["open", "web", "--no-browser", "--path", "/docs"],
+                vec![ok(
+                    r#"{"url":"https://web.acme.k2.dev/?t=1","oneTime":true,"expiresInSecs":30}"#,
+                )],
+                0,
+                1,
+            ),
             // covers: publish open --json
-            on("open --json", &["open", "web", "--json"], vec![ok(r#"{"url":"https://web.acme.k2.dev/?t=1"}"#)], 0, 1),
-            on("open: person only", &["open", "web"], vec![ok(r#"{"error":{"code":"person_only","hint":"agents can't"}}"#)], 3, 1),
+            on(
+                "open --json",
+                &["open", "web", "--json"],
+                vec![ok(r#"{"url":"https://web.acme.k2.dev/?t=1"}"#)],
+                0,
+                1,
+            ),
+            on(
+                "open: person only",
+                &["open", "web"],
+                vec![ok(
+                    r#"{"error":{"code":"person_only","hint":"agents can't"}}"#,
+                )],
+                3,
+                1,
+            ),
             on("open: no name", &["open"], vec![], 2, 0),
             // covers: publish sessions
             on("sessions", &["sessions", "web"], vec![ok(sessions)], 0, 1),
             // covers: publish sessions --json
-            on("sessions --json", &["sessions", "web", "--json"], vec![ok(sessions)], 0, 1),
-            on("sessions: none", &["sessions", "web"], vec![ok(r#"{"label":"web","sessions":[]}"#)], 0, 1),
-            on("sessions --revoke-all", &["sessions", "web", "--revoke-all"], vec![ok(r#"{"label":"web","revoked":1}"#)], 0, 1),
-            on("sessions --revoke-all: two", &["sessions", "web", "--revoke-all"], vec![ok(r#"{"label":"web","revoked":2}"#)], 0, 1),
-            traceback(on("sessions: a row that is no dict", &["sessions", "web"], vec![ok(r#"{"sessions":["x"]}"#)], 1, 1)),
-            on("sessions: a flag", &["sessions", "web", "--all"], vec![], 2, 0),
+            on(
+                "sessions --json",
+                &["sessions", "web", "--json"],
+                vec![ok(sessions)],
+                0,
+                1,
+            ),
+            on(
+                "sessions: none",
+                &["sessions", "web"],
+                vec![ok(r#"{"label":"web","sessions":[]}"#)],
+                0,
+                1,
+            ),
+            on(
+                "sessions --revoke-all",
+                &["sessions", "web", "--revoke-all"],
+                vec![ok(r#"{"label":"web","revoked":1}"#)],
+                0,
+                1,
+            ),
+            on(
+                "sessions --revoke-all: two",
+                &["sessions", "web", "--revoke-all"],
+                vec![ok(r#"{"label":"web","revoked":2}"#)],
+                0,
+                1,
+            ),
+            traceback(on(
+                "sessions: a row that is no dict",
+                &["sessions", "web"],
+                vec![ok(r#"{"sessions":["x"]}"#)],
+                1,
+                1,
+            )),
+            on(
+                "sessions: a flag",
+                &["sessions", "web", "--all"],
+                vec![],
+                2,
+                0,
+            ),
         ],
     );
 }
@@ -411,12 +928,25 @@ fn help_never_acts() {
 #[test]
 fn claim_takes_help_as_its_label_bash_bug() {
     let rig = Rig::new(VERB, "claimbug");
-    let c = on("claim acme -h", &["subdomain", "claim", "acme", "-h"], vec![ok(r#"{"success":true,"projectId":"p1"}"#)], 0, 1);
+    let c = on(
+        "claim acme -h",
+        &["subdomain", "claim", "acme", "-h"],
+        vec![ok(r#"{"success":true,"projectId":"p1"}"#)],
+        0,
+        1,
+    );
     rig.prepare(Side::Bash, &c);
     let bash = rig.run(true, &c);
     assert_eq!(bash.code, Some(0), "{bash:?}");
-    assert_eq!(bash.stdout, "Claimed acme for this workspace (project p1).\n");
-    assert_eq!(rig.read(Side::Bash, false, c.name).len(), 1, "bash claimed it");
+    assert_eq!(
+        bash.stdout,
+        "Claimed acme for this workspace (project p1).\n"
+    );
+    assert_eq!(
+        rig.read(Side::Bash, false, c.name).len(),
+        1,
+        "bash claimed it"
+    );
 }
 
 /// The binary's lines name the brand's command and product.
@@ -445,7 +975,11 @@ fn the_lines_say_the_brand_s_name() {
         if args.first() == Some(&"deploy") {
             assert!(ran.stderr.starts_with(&err), "{args:?}: {}", ran.stderr);
         } else {
-            assert_eq!((ran.stdout.as_str(), ran.stderr.as_str()), (out.as_str(), err.as_str()), "{args:?}");
+            assert_eq!(
+                (ran.stdout.as_str(), ran.stderr.as_str()),
+                (out.as_str(), err.as_str()),
+                "{args:?}"
+            );
         }
         assert_eq!(ran.code, Some(code), "{args:?}");
     }
@@ -460,7 +994,10 @@ fn ps_large() {
         .collect();
     let body = format!(r#"{{"services":[{}]}}"#, rows.join(","));
     assert!(body.len() > 256 * 1024, "{}", body.len());
-    let mut want = format!("{:<9}  {:<7}  {:<5}  {:<10}  {:<10}  URL/TARGET\n", "NAME", "STATUS", "PORT", "VISIBILITY", "FRAME");
+    let mut want = format!(
+        "{:<9}  {:<7}  {:<5}  {:<10}  {:<10}  URL/TARGET\n",
+        "NAME", "STATUS", "PORT", "VISIBILITY", "FRAME"
+    );
     for i in 0..3000 {
         want.push_str(&format!(
             "{:<9}  {:<7}  {:<5}  {:<10}  {:<10}  https://svc-{i:05}.acme.k2.dev\n",
@@ -474,15 +1011,31 @@ fn ps_large() {
     let c = on("a large list", &["ps"], vec![ok(&body)], 0, 1);
     let (out, log) = rig.binary(&c, false);
     assert_eq!((out.code, out.stderr.as_str()), (Some(0), ""), "the binary");
-    assert!(out.stdout == want, "the binary's stdout differs ({} bytes, want {})", out.stdout.len(), want.len());
+    assert!(
+        out.stdout == want,
+        "the binary's stdout differs ({} bytes, want {})",
+        out.stdout.len(),
+        want.len()
+    );
     assert_eq!(log.len(), 1, "the binary's requests");
     rig.prepare(Side::Bash, &c);
     let bash = rig.run(true, &c);
-    assert_eq!(rig.read(Side::Bash, false, c.name).len(), 1, "bash's requests");
+    assert_eq!(
+        rig.read(Side::Bash, false, c.name).len(),
+        1,
+        "bash's requests"
+    );
     if bash.code == Some(0) {
-        assert!(bash.stdout == want, "bash's stdout differs from the binary's");
+        assert!(
+            bash.stdout == want,
+            "bash's stdout differs from the binary's"
+        );
     } else {
         assert_eq!(bash.code, Some(126), "bash: {}", bash.stderr);
-        assert!(bash.stderr.contains("Argument list too long"), "bash: {}", bash.stderr);
+        assert!(
+            bash.stderr.contains("Argument list too long"),
+            "bash: {}",
+            bash.stderr
+        );
     }
 }

@@ -362,7 +362,10 @@ fn flow(cx: &mut Cx, act: Act, project: &str) -> Result<Shown, Exit> {
             Ok(read::handle(&raw, json, mode, verb, long))
         }
         Act::VisGet { label, json } => {
-            let raw = cx.send(VISIBILITY, &Req::Get(vec![format!("label={}", quote(&label))]))?;
+            let raw = cx.send(
+                VISIBILITY,
+                &Req::Get(vec![format!("label={}", quote(&label))]),
+            )?;
             Ok(read::site(&raw, json, "visibility"))
         }
         Act::VisSet(v) => visibility(cx, &v, project),
@@ -505,14 +508,20 @@ fn visibility(cx: &mut Cx, v: &Vis, project: &str) -> Result<Shown, Exit> {
             let first = prompt::ask_hidden(&format!("PIN for {label} (6 to 64 characters): "));
             let again = prompt::ask_hidden("The same PIN again: ");
             if first.expose() != again.expose() {
-                return Err(usage_err("usage", "the two PINs don't match; nothing changed"));
+                return Err(usage_err(
+                    "usage",
+                    "the two PINs don't match; nothing changed",
+                ));
             }
             first
         } else {
             prompt::read_line(Echo::Shown, AtEof::Keep)
         };
         if pin.is_empty() {
-            return Err(usage_err("pin_required", "no PIN on stdin; nothing changed"));
+            return Err(usage_err(
+                "pin_required",
+                "no PIN on stdin; nothing changed",
+            ));
         }
         // `_K2_FORCE_TCP=1`, then `cli_post_json` itself: TCP only.
         let body = vis_body(v, yes, false, project, Some(pin.expose()));
@@ -751,7 +760,11 @@ fn parse_run(rest: &[&str], project: &str, home: Option<&str>) -> Act {
         let b = r.as_bytes();
         let drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
         if r.starts_with('/') || r.starts_with('~') || drive {
-            return usage("usage", "skinRoot must be a workspace-relative directory", json);
+            return usage(
+                "usage",
+                "skinRoot must be a workspace-relative directory",
+                json,
+            );
         }
         if r.contains("..") {
             return usage("usage", "skinRoot must not contain ..", json);
@@ -765,7 +778,8 @@ fn parse_run(rest: &[&str], project: &str, home: Option<&str>) -> Act {
         cwd = project.to_string();
     }
     let b = cwd.as_bytes();
-    let drive_path = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/');
+    let drive_path =
+        b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/');
     let resolved = cwd.is_empty() || cwd.starts_with('/') || drive_path;
     if !resolved {
         if cwd == "~" || cwd.starts_with("~/") {
@@ -782,7 +796,14 @@ fn parse_run(rest: &[&str], project: &str, home: Option<&str>) -> Act {
         ("name", read::s(&l.name)),
         (
             "port",
-            Value::Int(if port_digits.is_empty() { "0" } else { port_digits }.to_string()),
+            Value::Int(
+                if port_digits.is_empty() {
+                    "0"
+                } else {
+                    port_digits
+                }
+                .to_string(),
+            ),
         ),
         ("project", read::s(project)),
     ];
@@ -876,7 +897,10 @@ fn named(rest: &[&str], verb: &'static str, endpoint: &'static str, project: &st
     }
     Act::Service {
         endpoint,
-        call: Req::Post(body(vec![("name", read::s(&name)), ("project", read::s(project))])),
+        call: Req::Post(body(vec![
+            ("name", read::s(&name)),
+            ("project", read::s(project)),
+        ])),
         json,
         mode: Mode::Service,
         verb,
@@ -887,7 +911,9 @@ fn named(rest: &[&str], verb: &'static str, endpoint: &'static str, project: &st
 fn parse_rm(rest: &[&str], project: &str) -> Act {
     let (name, json, flags) = match name_and_json(
         rest,
-        &format!("usage: {CLI} publish rm <name> [--keep-hostname]  (not: {CLI} publish subdomain rm)"),
+        &format!(
+            "usage: {CLI} publish rm <name> [--keep-hostname]  (not: {CLI} publish subdomain rm)"
+        ),
         &["--keep-hostname"],
     ) {
         Ok(x) => x,
@@ -925,7 +951,13 @@ fn parse_ps(rest: &[&str]) -> Act {
             f if f.starts_with('-') => {
                 return usage("usage", format!("unknown flag '{f}' \u{2014} {line}"), json)
             }
-            a => return usage("usage", format!("unexpected argument '{a}' \u{2014} {line}"), json),
+            a => {
+                return usage(
+                    "usage",
+                    format!("unexpected argument '{a}' \u{2014} {line}"),
+                    json,
+                )
+            }
         }
     }
     Act::Service {
@@ -946,7 +978,11 @@ fn parse_logs(rest: &[&str]) -> Act {
         match *w {
             "--tail" => tail = true,
             f if f.starts_with('-') => {
-                return usage("usage", format!("unknown flag '{f}' \u{2014} {line}"), false)
+                return usage(
+                    "usage",
+                    format!("unknown flag '{f}' \u{2014} {line}"),
+                    false,
+                )
             }
             a if name.is_empty() => name = a.to_string(),
             a => return usage("usage", format!("unexpected argument '{a}'"), false),
@@ -994,7 +1030,11 @@ fn parse_frame(rest: &[&str], project: &str) -> Act {
         match w {
             "--allow" => {
                 let Some(v) = rest.get(i + 1) else {
-                    return usage("usage", "--allow needs an origin, e.g. https://partner.example", json);
+                    return usage(
+                        "usage",
+                        "--allow needs an origin, e.g. https://partner.example",
+                        json,
+                    );
                 };
                 if !add(&mut mode, v) {
                     return usage("usage", line, json);
@@ -1035,7 +1075,10 @@ fn parse_frame(rest: &[&str], project: &str) -> Act {
     if mode == "allow" {
         pairs.push(("allow", read::s(&allow)));
     } else {
-        pairs.push((if mode == "none" { "none" } else { "reset" }, Value::Bool(true)));
+        pairs.push((
+            if mode == "none" { "none" } else { "reset" },
+            Value::Bool(true),
+        ));
     }
     Act::Service {
         endpoint: FRAME,
@@ -1063,7 +1106,11 @@ fn parse_visibility(rest: &[&str]) -> Act {
         let w = rest[i];
         match w {
             _ if w == "--pin" || w.starts_with("--pin=") => {
-                let name = if v.label.is_empty() { "<name>" } else { &v.label };
+                let name = if v.label.is_empty() {
+                    "<name>"
+                } else {
+                    &v.label
+                };
                 return usage(
                     "pin_in_argv",
                     format!("a PIN on the command line lands in your shell history and process lists. Pipe it, or leave it out and type it when asked: {CLI} publish visibility {name} pin < pin.txt"),
@@ -1093,7 +1140,11 @@ fn parse_visibility(rest: &[&str]) -> Act {
             "--dev-is-public" => v.dev_public = true,
             "--json" => v.json = true,
             f if f.starts_with('-') => {
-                return usage("usage", format!("unknown flag '{f}' \u{2014} {line}"), v.json)
+                return usage(
+                    "usage",
+                    format!("unknown flag '{f}' \u{2014} {line}"),
+                    v.json,
+                )
             }
             a if v.label.is_empty() => v.label = a.to_string(),
             a if v.mode.is_empty() => v.mode = a.to_string(),
@@ -1207,7 +1258,10 @@ fn parse_sessions(rest: &[&str], project: &str) -> Act {
     if revoke {
         Act::Sessions {
             endpoint: SESSIONS_REVOKE,
-            call: Req::Post(body(vec![("label", read::s(&label)), ("project", read::s(project))])),
+            call: Req::Post(body(vec![
+                ("label", read::s(&label)),
+                ("project", read::s(project)),
+            ])),
             json,
         }
     } else {
@@ -1293,7 +1347,11 @@ mod tests {
         assert_eq!(is_port("0"), Some(false));
         assert_eq!(is_port("99999999999999999999"), None);
         assert_eq!(
-            parse(&["run", "a", "--cmd", "x", "--port", "99999999999999999999"], "/p", None),
+            parse(
+                &["run", "a", "--cmd", "x", "--port", "99999999999999999999"],
+                "/p",
+                None
+            ),
             Act::Shell
         );
     }
@@ -1301,7 +1359,19 @@ mod tests {
     #[test]
     fn the_run_body_is_python_s() {
         let Act::Service { call, .. } = parse(
-            &["run", "web", "--cmd", "npm start", "--port", "08080", "--cwd", "/srv", "--probe-timeout", " 90s ", "--no-tunnel"],
+            &[
+                "run",
+                "web",
+                "--cmd",
+                "npm start",
+                "--port",
+                "08080",
+                "--cwd",
+                "/srv",
+                "--probe-timeout",
+                " 90s ",
+                "--no-tunnel",
+            ],
             "/p",
             None,
         ) else {

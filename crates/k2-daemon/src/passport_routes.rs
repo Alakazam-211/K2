@@ -89,10 +89,20 @@ pub(crate) const ROUTES: &[Route] = &[
     // `k2 agent conf|get|set|retire|restart` and `k2 agent hire` read it first.
     route("/cli/agent/conf", Scope::Named),
     route("/cli/agent/list", Scope::AgentList),
+    // `k2 skills create|remove|list|profile`: the workspace's own skills.
+    named("/cli/agents/create", Scope::Own, &["name"]),
+    named("/cli/agents/delete", Scope::Own, &["name"]),
+    route("/cli/agents/list", Scope::Own),
+    named("/cli/agents/profile", Scope::Own, &["agent"]),
+    // `k2 commit [--merge]` (manager skill).
+    route("/cli/commit", Scope::Own),
+    route("/cli/commit-merge", Scope::Own),
     // `k2 agent context list|show|catalog`.
     route("/cli/context/catalog", Scope::Shared),
     route("/cli/context/layers", Scope::Own),
     route("/cli/context/show", Scope::Own),
+    // `k2 done` (wakeup templates).
+    named("/cli/done", Scope::Own, &["agent"]),
     // `k2 activity`.
     route("/cli/feed", Scope::Own),
     // `k2 tickets list|show`.
@@ -104,11 +114,16 @@ pub(crate) const ROUTES: &[Route] = &[
     route("/cli/glossary/list", Scope::Shared),
     route("/cli/onboarding/scan", Scope::Own),
     route("/cli/presets/list", Scope::Shared),
+    // `k2 review approve|reject|feedback` and `k2 reviews` (manager skill).
+    named("/cli/review/approve", Scope::Own, &["agent"]),
+    named("/cli/review/feedback", Scope::Own, &["agent"]),
+    named("/cli/review/reject", Scope::Own, &["agent"]),
     route("/cli/reviews", Scope::Own),
     route("/cli/settings", Scope::Own),
     // `k2 fed status`, `k2 api status`: the copy a Member login reads
     // (credentials taken out); the full one stays the owner token's.
     route("/cli/settings/get", Scope::Shared),
+    route("/cli/skills/regenerate", Scope::Own),
     route("/cli/whats_new", Scope::Shared),
     // `k2 wiki index|note|status`.
     route("/cli/wiki/index", Scope::WikiIndex),

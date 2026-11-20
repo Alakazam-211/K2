@@ -4,7 +4,8 @@
 //!
 //! GitHub is never asked: a stub `curl` first on `PATH`, on every side,
 //! answers `https://api.github.com/…` from the case's `UPDATE_GH_BODY`
-//! and `UPDATE_GH_RC`, writes noise on stderr, and logs its arguments,
+//! and `UPDATE_GH_RC`, writes `UPDATE_GH_ERR` on stderr (noise when it is
+//! not set), and logs its arguments,
 //! its folder and the settings curl reads (proxies, CA files, its config
 //! file's places) to the rig's tool log, which must be the same on every
 //! side. Any other `https://` address is logged as unexpected and
@@ -20,11 +21,19 @@
 //!   goes to the shell.
 //! - `update`, `--app`: the newest tag, none (`unknown`), not a string,
 //!   with newlines after it, not JSON, a list, nothing, curl failing
-//!   (before and after an answer), the proxy settings passed through, the
-//!   gate; `--help` goes to the shell (which asks GitHub for it).
+//!   (before and after an answer, with curl's message, with none, with
+//!   noise), no temp folder for mktemp, the proxy settings passed
+//!   through, no daemon (no gate), the virtual desktop's guard, the forms
+//!   the words pick; `--help` goes to the shell (which prints the usage
+//!   and asks nothing, with or without a daemon).
 //! - `--list`: releases (a pre-release, no date, a date that is a list),
 //!   none, an object, a raise part way, curl failing (with and without an
-//!   answer), not JSON, the flags around it.
+//!   answer), not JSON, the flags around it, no daemon.
+//! - air-gap (`update`, `--app`, `--list`): on and off by `K2_AIRGAP` (and
+//!   it winning over the file), by `settings.json` (true, false, a true
+//!   anywhere), the file unreadable (a value that is neither, a key with
+//!   no value, a folder, a link to nothing), none; with no daemon too;
+//!   `--cli` and `--help` are not refused.
 
 #![cfg(unix)]
 
@@ -92,7 +101,11 @@ case "$url" in
             printf 'pwd=%s\n' "$(pwd)"
             {vars}
         }} >> '{log}'
-        printf 'curl: noise on stderr\n' >&2
+        if [ "${{UPDATE_GH_ERR+x}}" = x ]; then
+            printf '%s' "$UPDATE_GH_ERR" >&2
+        else
+            printf 'curl: noise on stderr\n' >&2
+        fi
         printf '%s' "${{UPDATE_GH_BODY-}}"
         exit "${{UPDATE_GH_RC:-0}}"
         ;;
@@ -133,8 +146,23 @@ fn gh_rc(body: &str, rc: i32) -> Vec<(&'static str, String)> {
     ]
 }
 
+fn gh_err(body: &str, rc: i32, err: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("UPDATE_GH_BODY", body.to_string()),
+        ("UPDATE_GH_RC", rc.to_string()),
+        ("UPDATE_GH_ERR", err.to_string()),
+    ]
+}
+
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
+}
+
+fn no_tmpdir(c: Case) -> Case {
+    Case {
+        no_tmpdir: true,
+        ..c
+    }
 }
 
 fn shell(c: Case) -> Case {
@@ -462,7 +490,7 @@ fn update_app_answers_as_the_shell_does() {
         ),
         with(
             gh_rc("", 6),
-            case("curl fails", &[], &[], vec![], owner_and_port, 6, 0),
+            case("curl fails", &[], &[], vec![], owner_and_port, 1, 0),
         ),
         with(
             gh_rc(newest, 56),
@@ -472,10 +500,50 @@ fn update_app_answers_as_the_shell_does() {
                 &[],
                 vec![],
                 owner_and_port,
-                56,
+                1,
                 0,
             ),
         ),
+        with(
+            gh_err(
+                "<html>404</html>",
+                22,
+                "curl: (22) The requested URL returned error: 404\nmore\n",
+            ),
+            case(
+                "curl fails with its message",
+                &["--app"],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            ),
+        ),
+        with(
+            gh_err("", 28, ""),
+            case(
+                "curl fails and says nothing",
+                &[],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            ),
+        ),
+        no_tmpdir(with(
+            gh(newest),
+            case(
+                "no temp folder for mktemp",
+                &[],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            ),
+        )),
         with(
             [
                 gh(newest),
@@ -499,7 +567,67 @@ fn update_app_answers_as_the_shell_does() {
         ),
         with(
             gh(newest),
-            case("the gate", &[], &[], vec![], nothing, 1, 0),
+            case("no daemon: no gate", &[], &[], vec![], nothing, 0, 0),
+        ),
+        with(
+            [gh(newest), vec![("K2_PORT", "1x".into())]].concat(),
+            case(
+                "--app, a port that is no port: unused",
+                &["--app"],
+                &[],
+                vec![],
+                owner_only,
+                0,
+                0,
+            ),
+        ),
+        with(
+            [gh(newest), vec![("K2_NO_OWNER_FALLBACK", "1".into())]].concat(),
+            case(
+                "the virtual desktop's guard",
+                &["--app"],
+                &[],
+                vec![],
+                owner_and_port,
+                3,
+                0,
+            ),
+        ),
+        with(
+            gh(newest),
+            case(
+                "--check alone: the app",
+                &["--check"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh(newest),
+            case(
+                "-c and -l: the app",
+                &["-c", "-l"],
+                &[],
+                vec![],
+                nothing,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh(newest),
+            case(
+                "--cli, then --app last",
+                &["--cli", "-c", "--app"],
+                &[],
+                vec![],
+                nothing,
+                0,
+                0,
+            ),
         ),
         shell(with(
             gh(newest),
@@ -509,6 +637,18 @@ fn update_app_answers_as_the_shell_does() {
                 &[],
                 vec![],
                 owner_and_port,
+                0,
+                0,
+            ),
+        )),
+        shell(with(
+            gh(newest),
+            case(
+                "--cli -h, no daemon: the shell's",
+                &["--cli", "-h"],
+                &[],
+                vec![],
+                nothing,
                 0,
                 0,
             ),
@@ -609,17 +749,77 @@ fn update_list_answers_as_the_shell_does() {
                 &[],
                 vec![],
                 owner_and_port,
-                56,
+                1,
                 0,
             ),
         ),
+        with(
+            gh_err(
+                "",
+                7,
+                "curl: (7) Failed to connect to api.github.com port 443: Couldn't connect to server\n",
+            ),
+            case(
+                "curl fails with its message",
+                &["--list"],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            ),
+        ),
+        no_tmpdir(with(
+            gh(releases),
+            case(
+                "no temp folder for mktemp",
+                &["--list"],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            ),
+        )),
         with(
             gh("<html>"),
             case("not JSON", &["--list"], &[], vec![], owner_and_port, 1, 0),
         ),
         with(
             gh(releases),
-            case("the gate", &["--list"], &[], vec![], nothing, 1, 0),
+            case(
+                "no daemon: no gate",
+                &["--list"],
+                &[],
+                vec![],
+                nothing,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh(releases),
+            case(
+                "--app, --list, --cli: the list",
+                &["--app", "--list", "--cli"],
+                &[],
+                vec![],
+                nothing,
+                0,
+                0,
+            ),
+        ),
+        with(
+            [gh(releases), vec![("K2_NO_OWNER_FALLBACK", "1".into())]].concat(),
+            case(
+                "the virtual desktop's guard",
+                &["--list"],
+                &[],
+                vec![],
+                owner_and_port,
+                3,
+                0,
+            ),
         ),
     ];
     for c in &v {
@@ -628,8 +828,295 @@ fn update_list_answers_as_the_shell_does() {
     assert_native(&rig, &v[0]);
 }
 
-/// The stub curl is the one both sides run: a GitHub call in the shell
-/// reaches it, and logs what it was given.
+/// The K2 home's `settings.json`, made as `body` says (`None`: none);
+/// what was there before is gone.
+fn settings_file(r: &Rig, body: Option<&str>) -> std::path::PathBuf {
+    let f = k2_client::paths::k2_home_in(&r.home).join("settings.json");
+    if let Ok(m) = std::fs::symlink_metadata(&f) {
+        if m.is_dir() {
+            std::fs::remove_dir(&f).unwrap();
+        } else {
+            std::fs::remove_file(&f).unwrap();
+        }
+    }
+    if let Some(body) = body {
+        std::fs::write(&f, body).unwrap();
+    }
+    f
+}
+
+fn no_settings(r: &Rig) {
+    owner_and_port(r);
+    settings_file(r, None);
+}
+
+fn airgap_true(r: &Rig) {
+    owner_and_port(r);
+    settings_file(
+        r,
+        Some("{\n  \"theme\": \"dark\",\n  \"airgap\": true\n}\n"),
+    );
+}
+
+fn airgap_false(r: &Rig) {
+    owner_and_port(r);
+    settings_file(
+        r,
+        Some("{\n  \"airgap\": false,\n  \"theme\": \"dark\"\n}\n"),
+    );
+}
+
+fn airgap_true_somewhere(r: &Rig) {
+    owner_and_port(r);
+    settings_file(r, Some(r#"{"airgap":false,"x":{"airgap":true}}"#));
+}
+
+fn airgap_neither(r: &Rig) {
+    owner_and_port(r);
+    settings_file(r, Some(r#"{"airgap":"yes"}"#));
+}
+
+fn airgap_no_value(r: &Rig) {
+    owner_and_port(r);
+    settings_file(r, Some(r#"{"airgap":false,"keys":["airgap"]}"#));
+}
+
+fn airgap_folder(r: &Rig) {
+    owner_and_port(r);
+    let f = settings_file(r, None);
+    std::fs::create_dir(&f).unwrap();
+}
+
+fn airgap_link_to_nothing(r: &Rig) {
+    owner_and_port(r);
+    let f = settings_file(r, None);
+    std::os::unix::fs::symlink(r.dir.join("nowhere.json"), &f).unwrap();
+}
+
+fn airgap_true_no_daemon(r: &Rig) {
+    settings_file(r, Some(r#"{"airgap":true}"#));
+}
+
+#[test]
+fn update_under_air_gap_answers_as_the_shell_does() {
+    let rig = rig("airgap");
+    let newest = r#"{"tag_name":"v0.46.20"}"#;
+    let releases = r#"[{"tag_name":"v0.46.20","published_at":"2026-11-18T01:02:03Z"}]"#;
+    let env = |pairs: &[(&'static str, &str)], body: &str| -> Vec<(&'static str, String)> {
+        let mut v = gh(body);
+        v.extend(pairs.iter().map(|(k, v)| (*k, v.to_string())));
+        v
+    };
+    let v = vec![
+        with(
+            env(&[], newest),
+            case(
+                "on in the file: update",
+                &[],
+                &[],
+                vec![],
+                airgap_true,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[], releases),
+            case(
+                "on in the file: --list",
+                &["--list"],
+                &[],
+                vec![],
+                airgap_true,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[], newest),
+            case(
+                "on in the file, no daemon: refused, not the gate",
+                &["--app"],
+                &[],
+                vec![],
+                airgap_true_no_daemon,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[], newest),
+            case(
+                "a true anywhere",
+                &["--app"],
+                &[],
+                vec![],
+                airgap_true_somewhere,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[], newest),
+            case("off in the file", &[], &[], vec![], airgap_false, 0, 0),
+        ),
+        with(
+            env(&[], releases),
+            case(
+                "no settings file",
+                &["--list"],
+                &[],
+                vec![],
+                no_settings,
+                0,
+                0,
+            ),
+        ),
+        with(
+            env(&[], newest),
+            case(
+                "unreadable: a value that is neither",
+                &[],
+                &[],
+                vec![],
+                airgap_neither,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[], releases),
+            case(
+                "unreadable: a key with no value",
+                &["--list"],
+                &[],
+                vec![],
+                airgap_no_value,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[], newest),
+            case(
+                "unreadable: a folder",
+                &["--app"],
+                &[],
+                vec![],
+                airgap_folder,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[], newest),
+            case(
+                "unreadable: a link to nothing",
+                &[],
+                &[],
+                vec![],
+                airgap_link_to_nothing,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[("K2_AIRGAP", "1")], newest),
+            case("K2_AIRGAP=1", &[], &[], vec![], no_settings, 1, 0),
+        ),
+        with(
+            env(&[("K2_AIRGAP", "")], releases),
+            case(
+                "K2_AIRGAP empty is on",
+                &["--list"],
+                &[],
+                vec![],
+                airgap_false,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[("K2_AIRGAP", "maybe")], newest),
+            case(
+                "K2_AIRGAP neither is on",
+                &[],
+                &[],
+                vec![],
+                no_settings,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[("K2_AIRGAP", "OFF")], newest),
+            case(
+                "K2_AIRGAP=OFF wins over the file",
+                &["--app"],
+                &[],
+                vec![],
+                airgap_true,
+                0,
+                0,
+            ),
+        ),
+        with(
+            env(&[("K2_AIRGAP", "no\n")], releases),
+            case(
+                "K2_AIRGAP=no and a newline is off",
+                &["--list"],
+                &[],
+                vec![],
+                airgap_neither,
+                0,
+                0,
+            ),
+        ),
+        with(
+            env(&[("K2_AIRGAP", " no")], newest),
+            case(
+                "K2_AIRGAP with a space is on",
+                &[],
+                &[],
+                vec![],
+                no_settings,
+                1,
+                0,
+            ),
+        ),
+        with(
+            env(&[], newest),
+            case(
+                "--cli is not refused",
+                &["--cli"],
+                &[],
+                vec![version(ours())],
+                airgap_true,
+                0,
+                1,
+            ),
+        ),
+        shell(with(
+            env(&[], newest),
+            case(
+                "--help is not refused",
+                &["--help"],
+                &[],
+                vec![],
+                airgap_true,
+                0,
+                0,
+            ),
+        )),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+    assert_native(&rig, &v[0]);
+}
+
+/// The stub curl is the one both sides run: a GitHub call reaches it,
+/// and logs what it was given. Neither side leaves its temp file.
 #[test]
 fn the_stub_curl_answers_for_github() {
     let rig = rig("stub");
@@ -638,18 +1125,26 @@ fn the_stub_curl_answers_for_github() {
         case("stub", &["--app"], &[], vec![], owner_and_port, 0, 0),
     );
     (c.setup)(&rig);
-    let out = rig.run(true, &c);
-    assert_eq!(out.code, Some(0), "{out:?}");
-    assert!(out.stdout.contains("  Latest:  v9\n"), "{out:?}");
-    let log = rig.take_tool_log();
-    assert!(
-        log.starts_with(&format!(
-            "curl [-sH] [Accept: application/vnd.github.v3+json] [{}]\n",
-            k5_cli::families::update::LATEST_URL
-        )),
-        "{log}"
-    );
-    assert!(!log.contains("UNEXPECTED"), "{log}");
+    for (bash, tmp) in [(true, "tmp-bash"), (false, "tmp-rust")] {
+        let out = rig.run(bash, &c);
+        assert_eq!(out.code, Some(0), "{out:?}");
+        assert!(out.stdout.contains("  Latest:  v9\n"), "{out:?}");
+        let log = rig.take_tool_log();
+        let mut want = String::from("curl");
+        for a in k5_cli::families::update::CURL_ARGS
+            .iter()
+            .chain([&k5_cli::families::update::LATEST_URL])
+        {
+            want.push_str(&format!(" [{a}]"));
+        }
+        assert!(log.starts_with(&format!("{want}\n")), "{log}");
+        assert!(!log.contains("UNEXPECTED"), "{log}");
+        let left: Vec<_> = std::fs::read_dir(rig.dir.join(tmp))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(left.is_empty(), "{tmp}: {left:?}");
+    }
     assert!(Path::new(rig.path_first.as_ref().unwrap())
         .join("curl")
         .is_file());

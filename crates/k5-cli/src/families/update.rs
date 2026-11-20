@@ -1,21 +1,24 @@
 //! `k5 update`: what the shell CLI's `k2 update` prints
-//! (`cmd_update_v2`, `cli/src/update-flags.sh`; `cmd_update` and
-//! `cmd_app_update`, `cli/src/update.sh`). Nothing here downloads,
-//! installs or replaces anything, and neither does the shell: `k2 update`
-//! only reports versions and says how K2 updates.
+//! (`cmd_update_v2`, `cli/src/update-flags.sh`; `cmd_update`,
+//! `cmd_app_update` and `_app_update_get`, `cli/src/update.sh`). Nothing
+//! here downloads, installs or replaces anything, and neither does the
+//! shell: `k2 update` only reports versions and says how K2 updates.
 //!
-//! The words after `update` are read as `cmd_update_v2` reads them
-//! ([`form`]): `--list` anywhere is the list at once; else the last of
-//! `--app` and `--cli` picks the form (`--app` when neither);
-//! `--check` and `-c` are the CLI form's; any other word is skipped. `-h`
-//! and `--help` never get here: the front sends a command line holding
-//! either to the shell CLI ([`crate::front`]).
+//! The words after `update` are read as `_k2_update_form`
+//! (`cli/src/cli-tools-policy.sh`) reads them ([`form`]): help when `-h`
+//! or `--help` is anywhere; else the list when `--list` is anywhere; else
+//! the last of `--app` and `--cli` (`--app` when neither). `--check` and
+//! `-c` are the CLI form's; any other word is skipped. Help is the
+//! shell's: the front sends a command line with `-h` or `--help` in it to
+//! the shell CLI ([`crate::front`]), which prints `_update_usage`.
 //!
 //! What runs, in the shell's order:
 //!
-//! 1. The settings ([`crate::daemon`]) and the two gates
-//!    ([`crate::prelude`]): `update` is not a verb the gates skip,
-//!    and no tool of the shell's tool policy.
+//! 1. The settings ([`crate::daemon`]) and the gates ([`crate::prelude`]):
+//!    the virtual desktop's guard for every form; the connection gate
+//!    for `--cli` only. `update`, `--app` and `--list` skip it, as the
+//!    shell does (they need no daemon). No form is a tool of the shell's
+//!    tool policy.
 //! 2. The form:
 //!    - [`Form::Cli`] (`update --cli [--check|-c]`): one
 //!      `GET /boot-status` to `127.0.0.1` on the port, whatever the host
@@ -24,38 +27,49 @@
 //!      answer is read, whatever its status; no answer is "didn't
 //!      answer". The body is read as the shell's Python reads it
 //!      ([`daemon_version`]). Then the lines ([`cli_lines`]) and exit 0.
-//!    - [`Form::App`] (`update`, `update --app`): `Checking for app
-//!      updates...`, then `curl -sH "Accept: …" <latest>` with its stderr
-//!      dropped and its stdout read ([`latest_tag`]); then the lines
-//!      ([`app_lines`]) and exit 0. A curl that fails ends the command
-//!      with curl's code; an answer the shell's Python can't read (not
-//!      JSON, not an object) ends it with 1, as `set -e` does.
-//!    - [`Form::List`] (`update --list`): `Available K2 releases:`, then
-//!      `curl -sH "Accept: …" <releases?per_page=10>` read by the shell's
-//!      Python's loop ([`list_lines`]). Its lines, then the exit
-//!      `pipefail` gives: 1 when the Python raised, else curl's code.
+//!    - [`Form::App`] (`update`, `update --app`): the air-gap refusal
+//!      ([`crate::airgap`], exit 1); then `Checking for app updates...`;
+//!      then the newest release from GitHub ([`Github::get`]), read as
+//!      the shell's Python reads it ([`latest_tag`]); then the lines
+//!      ([`app_lines`]) and exit 0. An answer the shell's Python can't
+//!      read (not JSON, not an object) ends it with 1, as `set -e` does.
+//!    - [`Form::List`] (`update --list`): the air-gap refusal; then the
+//!      releases from GitHub; then `Available K2 releases:` and the
+//!      shell's Python's loop's lines ([`list_lines`]), and exit 1 when
+//!      the Python raised, else 0.
 //!
-//! curl is the shell's: the `curl` on `PATH`, run with the shell's
-//! arguments (its `argv[0]` is `curl`), this process's environment and
-//! folder, stdin as it is, stderr to nowhere. When there is no such
-//! curl, or bash would run something else for it (an exported function,
-//! a startup file), the command goes to the shell, before anything is
-//! printed. So does every form when the binary can't tell what the
-//! shell's `python3` is ([`crate::python`]).
+//! [`Github::get`] is `_app_update_get`: `mktemp` makes the file curl's
+//! stderr goes to (`${TMPDIR:-/tmp}/k2-update.XXXXXX`; when it fails, its
+//! own words and [`MKTEMP_FAILED`], exit 1); then `curl -fsS
+//! --connect-timeout 10 --max-time 30 -H "Accept: …" <url>`, its stdout
+//! read. The file's first line, less a leading `curl: (N) `, is curl's
+//! message; the file is removed. A curl that fails prints
+//! [`unreachable_line`] and the command exits 1.
+//!
+//! mktemp and curl are the shell's: the ones on `PATH`, run with the
+//! shell's arguments (`argv[0]` their name), this process's environment
+//! and folder, stdin as it is; mktemp's stderr is this one's. When either
+//! is missing, or bash would run something else for them (an exported
+//! function, a startup file), the command goes to the shell, before
+//! anything is printed. So does every form when the binary can't tell
+//! what the shell's `python3` is ([`crate::python`]).
 //!
 //! Without `python3` ([`crate::python::NATIVE_WITHOUT_PYTHON3`]) each form
 //! prints what it prints with one; the shell there says the daemon
-//! didn't answer (`--cli`), or exits 127 after its first line (`--app`,
-//! `--list`).
+//! didn't answer (`--cli`), or exits 127 once GitHub has answered
+//! (`--app`, `--list`).
 //!
 //! Where this can differ from the shell: a NUL in what curl or the daemon
 //! sends is dropped here as bash drops it, but bash 4.4 and later also
 //! print a warning of their own; an answer that is not UTF-8 is read as
 //! the shell's Python reads it in a UTF-8 locale (a version the daemon
 //! didn't say, an exception), where in the C locale Python passes the
-//! bytes through. GitHub and the daemon send UTF-8 JSON with no NUL.
+//! bytes through. GitHub and the daemon send UTF-8 JSON with no NUL. When
+//! the file mktemp named can't be opened, or curl can't be started, the
+//! shell also prints its own words, which the binary doesn't.
 
 use super::curl_port;
+use crate::airgap;
 use crate::daemon::{self, Settings};
 use crate::embedded;
 use crate::exit::Exit;
@@ -63,12 +77,13 @@ use crate::offline::{self, Env};
 use crate::out::json::{self, Value};
 use crate::out::{self, py};
 use crate::passport;
-use crate::prelude;
+use crate::prelude::{self, Gate};
 use crate::python;
 use crate::transport::skew;
 use k2_client::brand::{RELEASES_LATEST_API, RELEASES_URL_PREFIX};
 use k2_client::{product_name, release_repo};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -99,6 +114,24 @@ pub const LIST_URL: &str = concat!(
 );
 /// The program both GitHub calls run.
 pub const CURL: &str = "curl";
+/// curl's arguments before the URL (`_app_update_get`).
+pub const CURL_ARGS: [&str; 7] = [
+    "-fsS",
+    "--connect-timeout",
+    "10",
+    "--max-time",
+    "30",
+    "-H",
+    ACCEPT,
+];
+/// The program that makes the file curl's stderr goes to.
+pub const MKTEMP: &str = "mktemp";
+/// That file's name, in `${TMPDIR:-/tmp}`.
+pub const TEMP_NAME: &str = "k2-update.XXXXXX";
+/// The line when mktemp fails.
+pub const MKTEMP_FAILED: &str = "Error: couldn't make a temp file to ask GitHub";
+/// The line when curl fails, up to its code.
+pub const UNREACHABLE_HEAD: &str = "Error: couldn't reach GitHub (curl exit ";
 
 /// The form a command line asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,21 +143,26 @@ pub enum Form {
     App,
     /// The ten newest releases on GitHub.
     List,
+    /// `-h` or `--help`: the usage (the shell's).
+    Help,
 }
 
-/// The words after `update`, as `cmd_update_v2` reads them.
+/// The words after `update`, as `_k2_update_form` reads them, with
+/// `cmd_update_v2`'s `--check` and `-c`.
 pub fn form(words: &[&str]) -> Form {
-    let (mut cli, mut check) = (false, false);
-    for w in words {
-        match *w {
-            "--app" => cli = false,
-            "--cli" => cli = true,
-            "--list" => return Form::List,
-            "--check" | "-c" => check = true,
-            _ => {}
-        }
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return Form::Help;
     }
+    if words.contains(&"--list") {
+        return Form::List;
+    }
+    let cli = words
+        .iter()
+        .rev()
+        .find(|w| matches!(**w, "--app" | "--cli"))
+        .is_some_and(|w| *w == "--cli");
     if cli {
+        let check = words.iter().any(|w| matches!(*w, "--check" | "-c"));
         Form::Cli { check }
     } else {
         Form::App
@@ -137,6 +175,7 @@ pub fn native(form: Form) -> bool {
         Form::Cli { .. } => CLI_NATIVE,
         Form::App => APP_NATIVE,
         Form::List => LIST_NATIVE,
+        Form::Help => false,
     }
 }
 
@@ -294,30 +333,31 @@ pub fn list_lines(body: &[u8]) -> (String, bool) {
     (out, true)
 }
 
-/// What curl gave: its stdout and its exit code (128 plus the signal
-/// that ended it, as bash reports one).
+/// What a program gave: its stdout and its exit code (128 plus the
+/// signal that ended it, as bash reports one).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ran {
     pub stdout: Vec<u8>,
     pub code: i32,
 }
 
-/// Runs `curl` (`program`, the one on the shell's `PATH`) with `args` as
-/// the shell does: `argv[0]` `curl`, this environment and folder, stdin
-/// as it is, stdout read, stderr to nowhere. `None`: it could not be
-/// started.
-pub fn run_curl(program: &Path, args: &[&str]) -> Option<Ran> {
+/// Runs `program` (`name` on the shell's `PATH`) with `args` as the shell
+/// does: `argv[0]` `name`, this environment and folder, stdin as it is,
+/// stdout read, stderr to `stderr`. `None`: it could not be started.
+pub fn run_program(program: &Path, name: &str, args: &[&OsStr], stderr: Stdio) -> Option<Ran> {
     let mut cmd = Command::new(program);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        cmd.arg0(CURL);
+        cmd.arg0(name);
     }
+    #[cfg(not(unix))]
+    let _ = name;
     let out = cmd
         .args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .output()
         .ok()?;
     #[cfg(unix)]
@@ -338,16 +378,152 @@ pub fn run_curl(program: &Path, args: &[&str]) -> Option<Ran> {
     })
 }
 
-/// The `curl` bash runs for the GitHub forms in `env`: the first
-/// executable `curl` on `PATH`. `None` when there is none, or when bash
-/// could run something else for it (a startup file or setting, an
-/// exported function): the shell answers then.
-pub fn shell_curl(env: &Env) -> Option<PathBuf> {
+/// The program `name` bash runs in `env`: the first executable `name` on
+/// `PATH`. `None` when there is none, or when bash could run something
+/// else for it (a startup file or setting, an exported function): the
+/// shell answers then.
+pub fn shell_program(env: &Env, name: &str) -> Option<PathBuf> {
     if offline::STARTUP.iter().any(|n| env.get(n).is_some()) || env.any_named("BASH_FUNC_") {
         return None;
     }
     let path = env.get("PATH")?;
-    daemon::find_on_path(CURL, path.to_os_string())
+    daemon::find_on_path(name, path.to_os_string())
+}
+
+/// `"${TMPDIR:-/tmp}/k2-update.XXXXXX"`, mktemp's argument.
+pub fn temp_template(tmpdir: Option<&OsStr>) -> OsString {
+    let mut s = match tmpdir {
+        Some(t) if !t.is_empty() => t.to_os_string(),
+        _ => OsString::from("/tmp"),
+    };
+    s.push("/");
+    s.push(TEMP_NAME);
+    s
+}
+
+/// `msg=$(head -n 1 "$errf" | sed 's/^curl: ([0-9]*) //')`: the first
+/// line of what curl wrote on stderr, less a leading `curl: (N) `.
+pub fn curl_message(stderr: &[u8]) -> Vec<u8> {
+    let line = match stderr.iter().position(|b| *b == b'\n') {
+        Some(i) => &stderr[..=i],
+        None => stderr,
+    };
+    let line = line
+        .strip_prefix(b"curl: (")
+        .and_then(|rest| {
+            let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+            rest[digits..].strip_prefix(b") ")
+        })
+        .unwrap_or(line);
+    substituted(line)
+}
+
+/// The line when curl ended with `rc`, with its message `msg`.
+pub fn unreachable_line(rc: i32, msg: &[u8]) -> Vec<u8> {
+    let mut line = format!("{UNREACHABLE_HEAD}{rc}").into_bytes();
+    if !msg.is_empty() {
+        line.extend_from_slice(b": ");
+        line.extend_from_slice(msg);
+    }
+    line.push(b')');
+    line
+}
+
+/// A path from what `$(mktemp …)` kept.
+fn path_of(bytes: Vec<u8>) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(OsString::from_vec(bytes))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+/// Writes `line` and a newline to stderr, flushed.
+fn stderr_bytes_line(line: &[u8]) {
+    let mut bytes = line.to_vec();
+    bytes.push(b'\n');
+    let _ = out::write_flushed(&mut std::io::stderr().lock(), &bytes);
+}
+
+/// What the GitHub forms need, found before anything is printed.
+#[derive(Debug, Clone)]
+pub struct Github {
+    curl: PathBuf,
+    mktemp: PathBuf,
+    template: OsString,
+    airgap: airgap::State,
+    settings_file: PathBuf,
+}
+
+impl Github {
+    /// The shell's curl and mktemp, the temp file's place and the
+    /// air-gap setting in `env`. `None`: the shell answers.
+    pub fn find(env: &Env) -> Option<Github> {
+        let curl = shell_program(env, CURL)?;
+        let mktemp = shell_program(env, MKTEMP)?;
+        let (airgap, settings_file) = airgap::state(env)?;
+        Some(Github {
+            curl,
+            mktemp,
+            template: temp_template(env.get("TMPDIR")),
+            airgap,
+            settings_file,
+        })
+    }
+
+    /// `_k2_refuse_if_airgap`: its line and exit 1 when air-gap is on.
+    fn refuse(&self) -> Option<Exit> {
+        let line = airgap::refusal(self.airgap, &self.settings_file)?;
+        stderr_bytes_line(&line);
+        Some(Exit::Error)
+    }
+
+    /// `$(mktemp …)`: the file it made, or `None` when it failed.
+    fn temp_file(&self) -> Option<PathBuf> {
+        let ran = run_program(
+            &self.mktemp,
+            MKTEMP,
+            &[self.template.as_os_str()],
+            Stdio::inherit(),
+        )?;
+        (ran.code == 0).then(|| path_of(substituted(&ran.stdout)))
+    }
+
+    /// `_app_update_get <url>`: the body as `$(…)` keeps it, or the exit
+    /// once its line is printed.
+    pub fn get(&self, url: &str) -> Result<Vec<u8>, Exit> {
+        let Some(errf) = self.temp_file() else {
+            out::stderr_line(MKTEMP_FAILED);
+            return Err(Exit::Error);
+        };
+        let mut args: Vec<&OsStr> = CURL_ARGS.iter().map(|a| OsStr::new(*a)).collect();
+        args.push(OsStr::new(url));
+        // `2>"$errf"`; a file that can't be opened runs no curl, and the
+        // command's code is 1.
+        let ran = match File::create(&errf) {
+            Ok(f) => run_program(&self.curl, CURL, &args, Stdio::from(f)).unwrap_or(Ran {
+                stdout: Vec::new(),
+                code: 126,
+            }),
+            Err(_) => Ran {
+                stdout: Vec::new(),
+                code: 1,
+            },
+        };
+        let msg = std::fs::read(&errf)
+            .map(|b| curl_message(&b))
+            .unwrap_or_default();
+        let _ = std::fs::remove_file(&errf);
+        if ran.code != 0 {
+            stderr_bytes_line(&unreachable_line(ran.code, &msg));
+            return Err(Exit::Error);
+        }
+        Ok(substituted(&ran.stdout))
+    }
 }
 
 /// `k5 update ...`: `args` is the whole command line after `argv[0]`.
@@ -362,9 +538,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if !native(form) || !python::family_native(python::here()) {
         return None;
     }
-    let curl = match form {
-        Form::Cli { .. } => None,
-        Form::App | Form::List => Some(shell_curl(&Env::current())?),
+    let github = match form {
+        Form::Cli { .. } | Form::Help => None,
+        Form::App | Form::List => Some(Github::find(&Env::current())?),
     };
     let settings = match daemon::current() {
         Ok(s) => s,
@@ -373,28 +549,34 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if prelude::gate(&settings).is_none() {
+    if matches!(form, Form::Cli { .. }) && prelude::gate(&settings).is_none() {
         // A port curl won't take is the shell's: its URL is the port's
         // text as it is.
         settings.port_text.as_deref().and_then(curl_port)?;
     }
-    Some(run_with(args, form, curl.as_deref(), &settings))
+    Some(run_with(args, form, github.as_ref(), &settings))
 }
 
-fn run_with(args: &[OsString], form: Form, curl: Option<&Path>, settings: &Settings) -> Exit {
-    if let Some(gate) = prelude::gate(settings) {
-        return gate.stop();
+fn run_with(args: &[OsString], form: Form, github: Option<&Github>, settings: &Settings) -> Exit {
+    // The virtual desktop's guard stops every form; the connection gate
+    // only `--cli`.
+    match (prelude::gate(settings), form) {
+        (Some(gate @ Gate::VirtualDesktop), _) | (Some(gate), Form::Cli { .. }) => {
+            return gate.stop();
+        }
+        _ => {}
     }
     let ours = embedded::version();
-    match (form, curl) {
+    match (form, github) {
         (Form::Cli { check }, _) => {
             let theirs = ask_daemon(args, settings);
             print(&cli_lines(ours, theirs.as_deref(), check), Exit::Ok)
         }
-        (Form::App, Some(curl)) => app(ours, curl),
-        (Form::List, Some(curl)) => list(curl),
-        // `run` finds curl for both GitHub forms.
-        (Form::App | Form::List, None) => Exit::Error,
+        (Form::App, Some(github)) => app(ours, github),
+        (Form::List, Some(github)) => list(github),
+        // `run` finds the tools for both GitHub forms, and help is the
+        // shell's.
+        (Form::App | Form::List, None) | (Form::Help, _) => Exit::Error,
     }
 }
 
@@ -425,36 +607,37 @@ fn ask_daemon(args: &[OsString], settings: &Settings) -> Option<String> {
 }
 
 /// The App form after the gates.
-fn app(ours: &str, curl: &Path) -> Exit {
+fn app(ours: &str, github: &Github) -> Exit {
+    if let Some(exit) = github.refuse() {
+        return exit;
+    }
     if let Err(e) = out::stdout_line(CHECKING) {
         return out::after_stdout_error(&e);
     }
-    let Some(ran) = run_curl(curl, &["-sH", ACCEPT, LATEST_URL]) else {
-        return Exit::from_curl(126);
+    let latest = match github.get(LATEST_URL) {
+        Ok(body) => body,
+        Err(exit) => return exit,
     };
-    if ran.code != 0 {
-        return Exit::from_curl(ran.code);
-    }
-    match latest_tag(&ran.stdout) {
+    match latest_tag(&latest) {
         Some(tag) => print(&app_lines(ours, &tag), Exit::Ok),
         None => Exit::Error,
     }
 }
 
 /// The list form after the gates.
-fn list(curl: &Path) -> Exit {
+fn list(github: &Github) -> Exit {
+    if let Some(exit) = github.refuse() {
+        return exit;
+    }
+    let releases = match github.get(LIST_URL) {
+        Ok(body) => body,
+        Err(exit) => return exit,
+    };
     if let Err(e) = out::stdout_line(LIST_HEAD) {
         return out::after_stdout_error(&e);
     }
-    let Some(ran) = run_curl(curl, &["-sH", ACCEPT, LIST_URL]) else {
-        return Exit::from_curl(126);
-    };
-    let (lines, ok) = list_lines(&ran.stdout);
-    let exit = if !ok {
-        Exit::Error
-    } else {
-        Exit::from_curl(ran.code)
-    };
+    let (lines, ok) = list_lines(&releases);
+    let exit = if ok { Exit::Ok } else { Exit::Error };
     if lines.is_empty() {
         return exit;
     }
@@ -468,7 +651,7 @@ mod tests {
     fn source() -> String {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src");
         let mut s = String::new();
-        for f in ["update.sh", "update-flags.sh"] {
+        for f in ["update.sh", "update-flags.sh", "cli-tools-policy.sh"] {
             let p = dir.join(f);
             s.push_str(
                 &std::fs::read_to_string(&p)
@@ -479,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn the_forms_as_cmd_update_v2_reads_them() {
+    fn the_forms_as_k2_update_form_reads_them() {
         for (words, want) in [
             (&[][..], Form::App),
             (&["--app"], Form::App),
@@ -489,48 +672,83 @@ mod tests {
             (&["-c", "--cli"], Form::Cli { check: true }),
             (&["--cli", "--app"], Form::App),
             (&["--app", "--cli"], Form::Cli { check: false }),
+            (
+                &["--cli", "--app", "-c", "--cli"],
+                Form::Cli { check: true },
+            ),
             (&["--cli", "--list"], Form::List),
             (&["--list", "--cli"], Form::List),
+            (&["--app", "--list", "--cli"], Form::List),
             (&["x", "--list"], Form::List),
             (&["--cli", "x", "--bogus"], Form::Cli { check: false }),
             (&["--CLI"], Form::App),
+            (&["--LIST"], Form::App),
             (&["--check"], Form::App),
+            (&["-c"], Form::App),
+            (&["-l"], Form::App),
+            (&["--help"], Form::Help),
+            (&["--list", "-h"], Form::Help),
+            (&["--cli", "--help", "--check"], Form::Help),
+            (&["help"], Form::App),
+            (&["-H"], Form::App),
         ] {
             assert_eq!(form(words), want, "{words:?}");
         }
     }
 
-    /// The flag loop and the words the binary reads are the shell's.
+    /// The form's words, the dispatch and the gate's skip are the
+    /// shell's.
     #[test]
     fn the_flag_loop_is_the_shell_s() {
         let s = source();
         for line in [
-            r#"            --app)  target="app";  shift ;;"#,
-            r#"            --cli)  target="cli";  shift ;;"#,
-            r#"            --list) cmd_app_update --list; return ;;"#,
-            r#"            --check|-c) cli_args+=("$1"); shift ;;"#,
-            r#"            *) shift ;;"#,
-            r#"            --check|-c) check_only=1; shift ;;"#,
+            // _k2_update_form.
+            "_k2_update_form() {\n    local a form=app\n",
+            "        case \"$a\" in -h|--help) echo help; return 0 ;; esac\n",
+            "            --list) echo list; return 0 ;;\n            --app) form=app ;;\n            --cli) form=cli ;;\n",
+            "    echo \"$form\"\n}\n",
+            // The connection gate skips every form but --cli.
+            "if [ \"${1:-}\" = \"update\" ]; then\n    case \"$(_k2_update_form \"${@:2}\")\" in help|app|list) _skip_conn_gate=1 ;; esac\nfi\n",
+            // cmd_update_v2.
+            "        case \"$a\" in --check|-c) cli_args+=(\"$a\") ;; esac\n",
+            "    case \"$(_k2_update_form \"$@\")\" in\n        help) _update_usage ;;\n        list) cmd_app_update --list ;;\n        cli)  cmd_update ${cli_args[@]+\"${cli_args[@]}\"} ;;\n        *)    cmd_app_update ;;\n    esac\n",
+            // cmd_update.
+            "            --check|-c) check_only=1; shift ;;\n",
+            // cmd_app_update: air-gap first, then the form.
+            "cmd_app_update() {\n    # Both forms ask GitHub: refused under air-gap, like k2 daemon install.\n    _k2_refuse_if_airgap\n    if [ \"${1:-}\" = \"--list\" ]; then\n",
         ] {
-            assert!(s.contains(line), "no `{line}` in update.sh/update-flags.sh");
+            assert!(s.contains(line), "no `{line}` in cli/src");
         }
     }
 
-    /// The URLs, the header and every line are the shell's.
+    /// The URLs, the programs' arguments and every line are the shell's.
     #[test]
     fn the_texts_are_the_shell_s() {
         let s = source();
+        let (head, tail) = CURL_ARGS.split_at(5);
         for want in [
-            format!(r#"curl -sH "{ACCEPT}" \"#),
-            format!(r#""{LIST_URL}" 2>/dev/null | \"#),
-            format!(r#""{LATEST_URL}" 2>/dev/null)"#),
+            format!(
+                "    body=$({CURL} {} \\\n        {} \"{}\" \"$1\" 2>\"$errf\") || rc=$?\n",
+                head.join(" "),
+                tail[0],
+                tail[1]
+            ),
+            format!("    errf=$({MKTEMP} \"${{TMPDIR:-/tmp}}/{TEMP_NAME}\") || {{\n        echo \"{MKTEMP_FAILED}\" >&2\n        return 1\n    }}\n"),
+            "    msg=$(head -n 1 \"$errf\" | sed 's/^curl: ([0-9]*) //')\n    rm -f \"$errf\"\n    if [ \"$rc\" -ne 0 ]; then\n".to_string(),
+            format!("        echo \"{UNREACHABLE_HEAD}$rc${{msg:+: $msg}})\" >&2\n        return 1\n    fi\n    printf '%s' \"$body\"\n"),
+            format!("        releases=$(_app_update_get \"{LIST_URL}\") || exit 1\n        echo \"{LIST_HEAD}\"\n        printf '%s' \"$releases\" | python3 -c \""),
+            format!("    echo \"{CHECKING}\"\n    local latest\n    latest=$(_app_update_get \"{LATEST_URL}\") || exit 1\n"),
+            "    tag=$(echo \"$latest\" | python3 -c \"import json,sys; print(json.loads(sys.stdin.read()).get('tag_name','unknown'))\" 2>/dev/null)\n".to_string(),
             r#""http://127.0.0.1:${PORT}/boot-status" 2>/dev/null) || return 0"#.to_string(),
             "_K2_CURL_TRIES=1 _k2_curl \"\" -s --connect-timeout 2 --max-time 4 \\".to_string(),
-            format!(r#"echo "{CHECKING}""#),
-            format!(r#"echo "{LIST_HEAD}""#),
         ] {
-            assert!(s.contains(&want), "no `{want}` in update.sh");
+            assert!(s.contains(&want), "no `{want}` in cli/src");
         }
+        assert_eq!(ACCEPT, "Accept: application/vnd.github.v3+json");
+        assert_eq!(
+            unreachable_line(7, b"x y"),
+            b"Error: couldn't reach GitHub (curl exit 7: x y)".to_vec()
+        );
         let echoed = |text: &str| {
             for line in text.lines() {
                 let want = if line.is_empty() {
@@ -558,9 +776,147 @@ mod tests {
         assert!(s.contains("    date = r.get('published_at', '')[:10]"));
         assert!(s.contains("    tag = r.get('tag_name', '?')"));
         assert!(s.contains("    pre = ' (pre-release)' if r.get('prerelease') else ''"));
-        assert!(s.contains("get('tag_name','unknown')"));
+        assert!(s.contains("data = json.loads(sys.stdin.read())\nfor r in data:\n"));
         assert!(s.contains(r#"v = b.get("version") if isinstance(b, dict) else None"#));
         assert!(s.contains(r#"    b = json.loads(sys.stdin.read() or "null")"#));
+    }
+
+    #[test]
+    fn curl_s_message_as_head_and_sed_keep_it() {
+        for (stderr, want) in [
+            ("", ""),
+            (
+                "curl: (22) The requested URL returned error: 404\n",
+                "The requested URL returned error: 404",
+            ),
+            (
+                "curl: (6) Could not resolve host: x\nmore\n",
+                "Could not resolve host: x",
+            ),
+            ("curl: (7) a", "a"),
+            ("curl: () b\n", "b"),
+            ("curl: (7)b\n", "curl: (7)b"),
+            ("curl: (7x) c\n", "curl: (7x) c"),
+            ("curl: noise on stderr\n", "curl: noise on stderr"),
+            (" curl: (7) d\n", " curl: (7) d"),
+            ("curl: (7) curl: (8) e\n", "curl: (8) e"),
+            ("\nsecond\n", ""),
+            ("a\0b\n", "ab"),
+            ("tab\tand\r\n", "tab\tand\r"),
+        ] {
+            assert_eq!(
+                curl_message(stderr.as_bytes()),
+                want.as_bytes().to_vec(),
+                "{stderr:?}"
+            );
+        }
+        assert_eq!(curl_message(b"\xff\xfe\n"), b"\xff\xfe".to_vec());
+    }
+
+    #[test]
+    fn the_lines_when_github_is_out_of_reach() {
+        assert_eq!(
+            unreachable_line(22, b"The requested URL returned error: 404"),
+            b"Error: couldn't reach GitHub (curl exit 22: The requested URL returned error: 404)"
+                .to_vec()
+        );
+        assert_eq!(
+            unreachable_line(22, b""),
+            b"Error: couldn't reach GitHub (curl exit 22)".to_vec()
+        );
+        assert_eq!(
+            unreachable_line(141, b"\xff"),
+            b"Error: couldn't reach GitHub (curl exit 141: \xff)".to_vec()
+        );
+    }
+
+    #[test]
+    fn the_temp_file_s_place() {
+        for (tmpdir, want) in [
+            (None, "/tmp/k2-update.XXXXXX"),
+            (Some(""), "/tmp/k2-update.XXXXXX"),
+            (Some("/var/t"), "/var/t/k2-update.XXXXXX"),
+            (Some("/var/t/"), "/var/t//k2-update.XXXXXX"),
+            (Some("rel"), "rel/k2-update.XXXXXX"),
+        ] {
+            assert_eq!(
+                temp_template(tmpdir.map(OsStr::new)),
+                OsString::from(want),
+                "{tmpdir:?}"
+            );
+        }
+    }
+
+    /// `_app_update_get` against a stub curl and the real mktemp: the
+    /// arguments, the body, the code, and no file left.
+    #[cfg(unix)]
+    #[test]
+    fn the_get_runs_mktemp_and_curl_as_the_shell_does() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("k5-update-get-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let tmp = d.join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let log = d.join("argv");
+        let curl = d.join("curl");
+        let path = std::env::var_os("PATH").expect("a PATH");
+        let mktemp = daemon::find_on_path(MKTEMP, path).expect("a mktemp on PATH");
+        let github = |template: &Path| Github {
+            curl: curl.clone(),
+            mktemp: mktemp.clone(),
+            template: temp_template(Some(template.as_os_str())),
+            airgap: airgap::State::Off,
+            settings_file: d.join("settings.json"),
+        };
+        let left = || std::fs::read_dir(&tmp).unwrap().count();
+        // The stub curl logs its arguments, writes `err` on stderr and
+        // `body` on stdout, and exits `rc`, each read from a file (it is
+        // written once, before it first runs).
+        std::fs::write(
+            &curl,
+            format!(
+                "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done > '{log}'\ncat '{d}/err' >&2\ncat '{d}/body'\nexit \"$(cat '{d}/rc')\"\n",
+                log = log.display(),
+                d = d.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let call = |g: &Github, body: &str, err: &str, rc: i32| {
+            std::fs::write(d.join("body"), body).unwrap();
+            std::fs::write(d.join("err"), err).unwrap();
+            std::fs::write(d.join("rc"), rc.to_string()).unwrap();
+            g.get(LATEST_URL)
+        };
+        let g = github(&tmp);
+        assert_eq!(
+            call(&g, "{\"tag_name\":\"v1\"}\n\n", "curl: noise\n", 0),
+            Ok(b"{\"tag_name\":\"v1\"}".to_vec())
+        );
+        let mut want = String::new();
+        for a in CURL_ARGS.iter().chain([&LATEST_URL]) {
+            want.push_str(&format!("[{a}]"));
+        }
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), want);
+        assert_eq!(left(), 0, "a temp file left");
+        assert_eq!(
+            call(
+                &g,
+                "partial",
+                "curl: (22) The requested URL returned error: 404\n",
+                22
+            ),
+            Err(Exit::Error)
+        );
+        assert_eq!(left(), 0, "a temp file left");
+        // mktemp fails: curl never runs.
+        std::fs::remove_file(&log).unwrap();
+        assert_eq!(
+            call(&github(&d.join("no-such-folder")), "x", "", 0),
+            Err(Exit::Error)
+        );
+        assert!(!log.exists(), "curl ran with no temp file");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -671,5 +1027,6 @@ mod tests {
         assert_eq!(native(Form::Cli { check: true }), CLI_NATIVE);
         assert_eq!(native(Form::App), APP_NATIVE);
         assert_eq!(native(Form::List), LIST_NATIVE);
+        assert!(!native(Form::Help));
     }
 }

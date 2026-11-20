@@ -44,7 +44,8 @@ fn the_lines_are_the_shells() {
         assert!(src.contains(&shell(line)), "not in the shell: {line}");
     }
     // The judging notes, line by line.
-    for line in judge("$target").lines().skip(1) {
+    let notes = judge("$target").replace(&format!("'{CLI_NAME} "), "'k2 ");
+    for line in notes.lines().skip(1) {
         assert!(src.contains(&format!("\n{line}\n")), "not in the shell: {line}");
     }
     // The texts built here say the same, with the brand's name.

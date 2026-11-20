@@ -74065,6 +74065,56 @@ EOF
 # Re-running converges: satisfied steps report skipped(reason) and the
 # whole call reports changed:false — which is also the crash-recovery
 # story (a failed run is re-run to finish).
+
+# Where a person takes the hire steps a session may not take.
+_AGENT_HIRE_PERSON_LINE="A person does this in Settings → Workspaces / Agents → the agent, or with k2 agent hire from a terminal outside K2."
+
+# _agent_hire_session MODE ENABLED COLOR FOCUS LAUNCH TEMPLATE PRESET [CONTEXT...]
+# True in a session (the HOOK_SOCK marker): the hire acts as this agent,
+# with the session's passport only, through the routes a passport may use
+# (the hire core, project membership, connections, msg, the handover). A
+# step only the owner's routes take is refused before anything is sent:
+# --mode other than custom, --enabled, --color, --focus-group, a --context
+# path, --launch or --context with no template; --agent takes an exact
+# preset id (the label lookup is the owner's). No passport: refused too.
+# False outside a session and on a remote host: $TOKEN, as before.
+_agent_hire_session() {
+    local mode="$1" enabled="$2" color="$3" focus="$4" launch="$5" template="$6" preset="$7"
+    shift 7
+    [ -n "$(_hook_sock)" ] || return 1
+    _cli_skip_uds && return 1
+    if [ -z "${SCOPED_TOKEN:-}" ]; then
+        echo "Error: in a session, k2 agent hire doesn't act as this server's owner, and this session has no passport, so nothing was sent." >&2
+        echo "$_AGENT_HIRE_PERSON_LINE" >&2
+        exit 3
+    fi
+    local refused="" c
+    case "$mode" in ""|custom) ;; *) refused="${refused:+$refused, }--mode $mode" ;; esac
+    [ -z "$enabled" ] || refused="${refused:+$refused, }--enabled"
+    [ -z "$color" ] || refused="${refused:+$refused, }--color"
+    [ -z "$focus" ] || refused="${refused:+$refused, }--focus-group"
+    if [ "$launch" = true ] && [ -z "$template" ]; then
+        refused="${refused:+$refused, }--launch (with no --template)"
+    fi
+    for c in "$@"; do
+        case "$c" in
+            */*|.*|*.md|*.markdown|\~*) refused="${refused:+$refused, }--context $c (a path)" ;;
+            *) [ -z "$template" ] || refused="${refused:+$refused, }--context $c (with --template)" ;;
+        esac
+    done
+    if [ -n "$refused" ]; then
+        echo "Error: in a session, k2 agent hire acts as this agent, and these steps are a person's: $refused. Nothing was sent." >&2
+        echo "$_AGENT_HIRE_PERSON_LINE" >&2
+        exit 3
+    fi
+    if [ -n "$preset" ] && ! [[ "$preset" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+        echo "Error: in a session, --agent takes a preset's exact id, not '$preset'. Nothing was sent." >&2
+        echo "The ids are in k2 preset list (the id column), or a person passes the name from a terminal outside K2." >&2
+        exit 3
+    fi
+    return 0
+}
+
 cmd_agent_hire() {
     if _wants_help "$@"; then cmd_help_agent_hire; exit 0; fi
     local dir="" name="" template="" persona="" mode="" enabled="" onboard="" agent_preset=""
@@ -74196,14 +74246,26 @@ cmd_agent_hire() {
         _cli_refuse_agent_self_grant "db_agent_access" \
             "Settings → Workspaces / Agents → (workspace) → Permissions → Database → \"Let this agent create databases\", or \`k2 agent hire <dir> --db-access write\` from their own terminal"
     fi
-    # --onboard implies --launch (mockup contract).
-    [ -n "$onboard" ] && launch=true
     # 0.46.5 --take-app: after the hire, the App's handover to the new agent.
     local take_brief=""
     if [ -n "$take_brief_file" ]; then
         [ -n "$take_app" ] || { _agent_err "bad_usage" "--brief goes with --take-app"; exit 2; }
         [ -f "$take_brief_file" ] || { _agent_err "bad_usage" "brief file not found: $take_brief_file"; exit 2; }
         take_brief="$(cat "$take_brief_file")"
+    fi
+    # In a session the hire acts as this agent: every request carries the
+    # session's passport, never the owner token (_agent_hire_session).
+    local in_session=false
+    if _agent_hire_session "$mode" "$enabled" "$color" "$focus_group" "$launch" "$template" "$agent_preset" \
+        ${contexts[@]+"${contexts[@]}"}; then
+        in_session=true
+        TOKEN="$SCOPED_TOKEN"
+    fi
+    # --onboard implies --launch (mockup contract). In a session without a
+    # template the message's own wake starts the agent: the launch route is
+    # a person's.
+    if [ -n "$onboard" ] && { [ "$in_session" = false ] || [ -n "$template" ]; }; then
+        launch=true
     fi
     # 0.45.6: inside a K2 cell the hire core call carries the session
     # passport, so the DAEMON refuses an agent raising DB access (the check
@@ -74244,7 +74306,7 @@ print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
     NO_WIKI="$no_wiki" NO_AGENTS_MD="$no_agents_md" FANOUT="$fanout" \
     DB_ACCESS="$db_access" COLOR="$color" FOCUS_GROUP="$focus_group" \
     TAKE_APP="$take_app" TAKE_BRIEF="$take_brief" \
-    APROJTOKEN="$(_k2_project_token)" \
+    APROJTOKEN="$(_k2_project_token)" IN_SESSION="$in_session" AFROM="$(basename "${PROJECT:-$PWD}")" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" PTOKEN="$core_token" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
@@ -74279,6 +74341,10 @@ take_brief = os.environ.get("TAKE_BRIEF", "")
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
 core_token = os.environ.get("PTOKEN", "") or token
+# In a session every request below carries the session's passport (the
+# shell set ATOKEN to it), and the steps only the owner's routes take were
+# refused before this ran (_agent_hire_session).
+in_session = os.environ.get("IN_SESSION") == "true"
 
 # Permission cards on: the daemon's refusal ends with one closing line ("Ask
 # with: k2 permission request agents.hire" for a hire while "Let this agent
@@ -74350,9 +74416,13 @@ def http_post_json(route, body, timeout=30, tok=None):
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
-            return json.loads(e.read().decode("utf-8", "replace"))
+            d = json.loads(e.read().decode("utf-8", "replace"))
         except Exception:
             return {"error": "HTTP %s on %s" % (e.code, route)}
+        if in_session and isinstance(d, dict):
+            # A session's refusal exits 3 whatever its code (the core call).
+            d["httpStatus"] = e.code
+        return d
     except Exception as e:
         return {"error": "%s: %s" % (route, e)}
 
@@ -74427,7 +74497,11 @@ def normalize_color(raw):
 # which would silently re-introduce the Claude fallback this flag
 # exists to fix.
 resolved_preset = None
-if agent_preset:
+if agent_preset and in_session:
+    # The label lookup is the owner's route; the shell took only an exact
+    # preset id, which goes to the hire core as it is.
+    resolved_preset = {"id": agent_preset, "label": agent_preset, "enabled": True}
+elif agent_preset:
     presets = http_get("/cli/presets/list", {})
     if not isinstance(presets, list):
         err = presets.get("error") if isinstance(presets, dict) else None
@@ -74518,7 +74592,9 @@ if focus_group_arg:
         wanted_focus_label = hits[0].get("name") or sel
 
 # ── Probe current state (this is what makes hire idempotent) ─────
-conf = http_get("/cli/agent/conf", {"q": path})
+# In a session the probe is the owner's route: the hire core looks for
+# itself and reports each step done or skipped.
+conf = {} if in_session else http_get("/cli/agent/conf", {"q": path})
 probe_err = conf.get("error")
 if probe_err:
     if isinstance(probe_err, dict) and probe_err.get("code") == "not_found":
@@ -74647,7 +74723,11 @@ elif registered:
 else:
     actions.append({"step": "fanout", "status": "pending"})
 
-if registered and conf.get("mode") == desired_mode:
+if in_session:
+    # Only custom gets here (the shell refused the rest): the hire core
+    # makes a new workspace custom, and the mode route is the owner's.
+    pass
+elif registered and conf.get("mode") == desired_mode:
     actions.append({"step": "set-mode", "mode": desired_mode,
                     "status": "skipped", "reason": "already %s" % desired_mode})
 else:
@@ -75095,6 +75175,10 @@ def one(step):
 #      K2 cell it carries the session passport, so the daemon refuses an
 #      agent raising DB access (the 0.44.4 check, now daemon-side).
 core_steps = ("create-dir", "write-persona", "register-workspace", "set-db-access")
+if in_session:
+    # In a session the hire core also names the agent, sets its default
+    # tool and stacks catalog context: their own routes are the owner's.
+    core_steps += ("set-name", "set-default-agent")
 pending_core = [one(s) for s in core_steps if one(s) and one(s)["status"] == "pending"]
 tpl_action = one("apply-template")
 template_hello = None
@@ -75119,6 +75203,16 @@ if pending_core or tpl_action:
         core_body["takeApp"] = take_app
         if take_brief:
             core_body["brief"] = take_brief
+    if in_session:
+        sn = one("set-name")
+        if sn and sn["status"] == "pending":
+            core_body["name"] = sn["name"]
+        if resolved_preset:
+            core_body["preset"] = resolved_preset.get("id")
+        ctx_ids = [x["catalog"] for x in by_step.get("seed-context", [])
+                   if x["status"] == "pending" and x.get("kind") == "catalog"]
+        if ctx_ids:
+            core_body["context"] = ctx_ids
     # Daemon-first hello (0.46.12): only with --launch (or --onboard) does
     # the daemon start a new template agent and send its hello, then the
     # --onboard message after it, in order. Without it nothing starts.
@@ -75133,8 +75227,10 @@ if pending_core or tpl_action:
         code = err.get("code") if isinstance(err, dict) else "daemon_error"
         hint = err.get("hint") if isinstance(err, dict) else (err or json.dumps(resp)[:300])
         bad = dba_core if (code == "owner_only" and dba_core and dba_core["status"] == "pending") else (pending_core[0] if pending_core else tpl_action)
-        # Fatal: every later step needs the workspace.
-        exit_for = 3 if code in ("owner_only", "hire_off", "main_only") else (template_exit(code) if tpl_action else None)
+        # Fatal: every later step needs the workspace. In a session a
+        # refusal (403) exits 3 whatever its code.
+        refused = code in ("owner_only", "hire_off", "main_only") or resp.get("httpStatus") == 403
+        exit_for = 3 if refused else (template_exit(code) if tpl_action else None)
         step_failed(bad, code or "daemon_error", hint, exit_for, fatal=True)
     by_core = {x.get("step"): x for x in resp.get("steps", [])}
     if tpl_action:
@@ -75159,6 +75255,11 @@ if pending_core or tpl_action:
             a["status"] = got.get("status") or "done"
             if got.get("reason"):
                 a["reason"] = got["reason"]
+    if "context" in core_body:
+        # The core stacked them (a layer already there is left as it is).
+        for x in by_step.get("seed-context", []):
+            if x["status"] == "pending" and x.get("kind") == "catalog":
+                x["status"] = "done"
             changed = changed or a["status"] == "done"
     ra = one("register-workspace")
     if ra and ra["status"] == "done":
@@ -75399,9 +75500,16 @@ for a in by_step.get("seed-context", []):
     a["status"] = "done"
     changed = True
 
-# 7. launch
+# 7. launch. In a session only a template hire gets here (the shell refused
+#    the rest), and the hire core started it with its hello; the launch
+#    route is the owner's, so nothing more is sent.
 a = one("launch")
-if a and a["status"] == "pending":
+if a and a["status"] == "pending" and in_session:
+    if hello_by_daemon:
+        a.update(status="done", reason="started by K2 with its hello")
+    else:
+        a.update(status="skipped", reason="its hello went before: k2 msg wakes it")
+elif a and a["status"] == "pending":
     resp = http_post_query("/cli/workspace/ensure-canonical-session", {"project": path},
                     timeout=120)
     if resp.get("error") or not resp.get("success"):
@@ -75414,6 +75522,10 @@ if a and a["status"] == "pending":
             a["reused"] = True
         else:
             changed = True
+
+# Who the hello and --onboard messages are from: in a session, this agent
+# (the passport sends them, so "owner" would not be true).
+msg_from = (os.environ.get("AFROM") or "agent") if in_session else "owner"
 
 # 7b. hello (0.46.12, prd-agent-templates-v1 §3; T9): with --launch the
 #     daemon starts a template agent whose hello was never sent and sends it
@@ -75433,7 +75545,7 @@ if template_hello or hello_by_daemon:
         ha.update(status="not-run", reason="launch failed")
     else:
         resp = http_post_query("/cli/workspace/msg",
-                        {"workspace": path, "text": template_hello, "from": "owner",
+                        {"workspace": path, "text": template_hello, "from": msg_from,
                          "wake": "true", "wake_timeout": "120"},
                         timeout=180)
         if (isinstance(resp.get("error"), str) and resp["error"]) or not resp.get("success"):
@@ -75458,7 +75570,7 @@ elif a and a["status"] == "pending" and la and la["status"] == "failed":
     a["reason"] = "launch failed"
 elif a and a["status"] == "pending":
     resp = http_post_query("/cli/workspace/msg",
-                    {"workspace": path, "text": onboard, "from": "owner",
+                    {"workspace": path, "text": onboard, "from": msg_from,
                      "wake": "true", "wake_timeout": "120"},
                     timeout=180)
     if isinstance(resp.get("error"), str) and resp["error"]:

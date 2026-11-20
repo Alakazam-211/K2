@@ -8,6 +8,10 @@ k2 talk <workspace>@<host> "text" --token-stdin
                                       # token from stdin (--token <tok> works too,
                                       # but a token on the command line is visible
                                       # to other users on this machine)
+                                      # over https only, through https_proxy,
+                                      # HTTPS_PROXY or all_proxy (no_proxy
+                                      # honoured) as curl reads them; the macOS
+                                      # system proxy setting is not used
 
   ★ BETA — THE inter-agent interaction verb. ★
 

@@ -68,8 +68,7 @@ pub const VERBS: &[crate::route::Verb] = &[];
 fn native(words: &[&str]) -> bool {
     let sub = words.first().copied().unwrap_or("");
     match sub {
-        "data" => !data::shells(&words[1..]),
-        "" | "help" | "pages" | "grant" | "grants" | "allow" => true,
+        "" | "data" | "help" | "pages" | "grant" | "grants" | "allow" => true,
         s if verbs::is_core(s) => {
             !(s == "validate"
                 && words

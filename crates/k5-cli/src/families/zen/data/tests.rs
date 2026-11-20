@@ -1,15 +1,11 @@
 use super::*;
 
 #[test]
-fn a_restore_that_never_ends_in_bash_goes_to_the_shell() {
-    assert!(shells(&["restore", "w", "--rev"]));
-    assert!(shells(&["restore", "--prefix", "a/", "--at"]));
-    assert!(!shells(&["restore", "w", "--rev", "3"]));
-    assert!(!shells(&["restore", "w", "--dry-run"]));
-    assert!(!shells(&["restore", "w", "--json"]));
-    // An unexpected word ends the loop first.
-    assert!(!shells(&["restore", "w", "x", "--rev"]));
-    assert!(!shells(&["list", "--rev"]));
+fn a_restore_flag_with_no_value_is_one_line() {
+    assert_eq!(
+        needs_value("--rev"),
+        concat!("--rev needs a value (try '", cli_name!(), " zen data --help')")
+    );
 }
 
 #[test]

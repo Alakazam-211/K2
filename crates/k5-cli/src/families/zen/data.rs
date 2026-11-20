@@ -22,34 +22,12 @@ use k2_client::cli_name;
 #[cfg(test)]
 mod tests;
 
-/// Lines the binary leaves to the shell: `restore` whose loop meets a
-/// `--<flag>` as the last word (not `--json` or `--dry-run`). Bash's
-/// `shift 2 || true` shifts nothing there and the loop never ends (a bash
-/// bug, reported); the binary neither copies nor fixes it.
-pub fn shells(words: &[&str]) -> bool {
-    if words.first() != Some(&"restore") {
-        return false;
-    }
-    let w = &words[1..];
-    let mut seen = false;
-    let mut i = 0;
-    while i < w.len() {
-        let a = w[i];
-        if a == "--json" || a == "--dry-run" {
-            i += 1;
-        } else if a.starts_with("--") {
-            if i + 1 >= w.len() {
-                return true;
-            }
-            i += 2;
-        } else if !seen {
-            seen = true;
-            i += 1;
-        } else {
-            return false;
-        }
-    }
-    false
+/// A `restore` flag that takes a value, as the last word: bash's
+/// `shift 2 || true` shifts nothing there and its loop never ends (a bash
+/// bug, reported). The binary says what is missing and exits 2 (K2's D6,
+/// `edge-usage-exit-2`); nothing is sent.
+pub fn needs_value(flag: &str) -> String {
+    format!(concat!("{} needs a value (try '", cli_name!(), " zen data --help')"), flag)
 }
 
 /// `cmd_zen_data`: `words` are the words after `zen data`.
@@ -741,8 +719,12 @@ fn restore(gd: &mut Gd, words: &[String]) -> R<()> {
                 i += 1;
                 continue;
             }
-            // `pass+=("${2-}"); shift 2 || true`: an empty value at the end.
-            pass.push(words.get(i + 1).cloned().unwrap_or_default());
+            // `pass+=("${2-}"); shift 2 || true`: with no value after it,
+            // bash loops for ever ([`needs_value`]).
+            let Some(value) = words.get(i + 1) else {
+                return Err(usage(&needs_value(a)));
+            };
+            pass.push(value.clone());
             i += 2;
         } else if w.is_empty() {
             w = a.to_string();

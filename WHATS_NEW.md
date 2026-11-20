@@ -167,6 +167,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An inbox item's title is always one line.** A line break or other control character in a title is written escaped, whether it comes from `k2 msg --inbox-wake`, `--inbox-silent` or `k2 inbox compose`; accents and other letters stay as typed.
 - **A wake pointer's title is one line, with no control characters.** The `[inbox:<id>] <title>` line an agent is woken with holds its title on that one line, written the same way, whoever sent the pointer.
 
+### Voice
+- **Noise removal on phones stays on through busy moments**, such as the start of a call or a camera starting, from Sew 0.11.1.
+- **Sew 0.11.1.** With the chat server K2 installs, Home chat's phone notifications can cover channels you set to All messages, not only @mentions. Sew updates how it stores chat when it starts, so going back to an older Sew afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
+
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 
 ### Home chat

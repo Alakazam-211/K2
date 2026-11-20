@@ -152,7 +152,7 @@
     {
       "name": "db run",
       "usage": "k2 db run [--db <name|id>] [--test [--actor migrator]] [--as NAME] -- <command…>",
-      "description": "Run one command with the database's DSN in its environment as DATABASE_URL (or --as NAME), the way k2 vault run hands a secret: never on argv, never printed. The command replaces k2 (its exit code is the command's). Same database rules as k2 db dsn.",
+      "description": "Run one command with the connection string, password included, in its environment as DATABASE_URL (or --as NAME), where the command and anything it starts can read it, the way k2 vault run hands a secret: never on argv, never printed or logged. The command replaces k2 (its exit code is the command's). Same database rules as k2 db dsn.",
       "args": [{"name": "command", "required": true}],
       "flags": [
         {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (default: the workspace's default)."},

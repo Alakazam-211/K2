@@ -53509,7 +53509,7 @@ cmd_schema() {
     {
       "name": "db run",
       "usage": "k2 db run [--db <name|id>] [--test [--actor migrator]] [--as NAME] -- <command…>",
-      "description": "Run one command with the database's DSN in its environment as DATABASE_URL (or --as NAME), the way k2 vault run hands a secret: never on argv, never printed. The command replaces k2 (its exit code is the command's). Same database rules as k2 db dsn.",
+      "description": "Run one command with the connection string, password included, in its environment as DATABASE_URL (or --as NAME), where the command and anything it starts can read it, the way k2 vault run hands a secret: never on argv, never printed or logged. The command replaces k2 (its exit code is the command's). Same database rules as k2 db dsn.",
       "args": [{"name": "command", "required": true}],
       "flags": [
         {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (default: the workspace's default)."},
@@ -65700,9 +65700,12 @@ OWNER VERBS (agents exit 3)
 
 DSN
   `k2 db dsn` prints it without its password (0.46.11). A command that
-  needs it: k2 db run [--db <name>] -- <cmd> (DATABASE_URL in its env,
-  never printed). `k2 db dsn --reveal` prints it on purpose: never log
-  it, paste it into notes or commit it. Unflagged dsn is the live agent.
+  needs it: k2 db run [--db <name>] -- <cmd>. The connection string,
+  password included, is in that command's environment as DATABASE_URL
+  (or --as NAME), so the command and anything it starts can read it;
+  it is never on argv, printed or logged. `k2 db dsn --reveal` prints
+  it on purpose: never log it, paste it into notes or commit it.
+  Unflagged dsn is the live agent.
   Dump-table HTTP is the guest path that never holds a DSN.
 
 MIGRATIONS

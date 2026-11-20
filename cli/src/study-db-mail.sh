@@ -262,9 +262,12 @@ OWNER VERBS (agents exit 3)
 
 DSN
   `k2 db dsn` prints it without its password (0.46.11). A command that
-  needs it: k2 db run [--db <name>] -- <cmd> (DATABASE_URL in its env,
-  never printed). `k2 db dsn --reveal` prints it on purpose: never log
-  it, paste it into notes or commit it. Unflagged dsn is the live agent.
+  needs it: k2 db run [--db <name>] -- <cmd>. The connection string,
+  password included, is in that command's environment as DATABASE_URL
+  (or --as NAME), so the command and anything it starts can read it;
+  it is never on argv, printed or logged. `k2 db dsn --reveal` prints
+  it on purpose: never log it, paste it into notes or commit it.
+  Unflagged dsn is the live agent.
   Dump-table HTTP is the guest path that never holds a DSN.
 
 MIGRATIONS

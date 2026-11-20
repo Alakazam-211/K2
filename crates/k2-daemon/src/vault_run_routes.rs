@@ -106,7 +106,9 @@ fn run_helper() -> Result<Value, VaultError> {
     if !exe.is_file() {
         return Err(VaultError::new("run_helper_missing", 409, "the k2-daemon binary isn't where it started; restart the K2 daemon"));
     }
-    Ok(json!({ "helper": exe.display().to_string() }))
+    // tokenFd: this helper takes the passport on --token-fd and clears K2's
+    // credential variables from the command's environment.
+    Ok(json!({ "helper": exe.display().to_string(), "tokenFd": true }))
 }
 
 #[derive(Debug, Default, Deserialize)]

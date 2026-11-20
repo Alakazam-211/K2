@@ -341,3 +341,84 @@ fn usage_errors_are_exit_2() {
     assert_eq!(out.status.code(), Some(2));
     assert!(text(&out.stderr).contains("usage:"), "{}", text(&out.stderr));
 }
+
+/// The helper started the way the CLI starts it: the passport on fd 3 (here
+/// a file, in the CLI a pipe) and no token in its environment.
+fn helper_with_fd(f: &Fake, child_script: &str, extra_env: &[(&str, &str)]) -> Output {
+    let tok = f.root.join("passport");
+    std::fs::write(&tok, "passport-fd\n").expect("token file");
+    let script = r#"exec 3<"$TOKFILE"; exec "$HELPER" --vault-run --token-fd 3 --secret KEY -- /bin/sh -c "$CHILD""#;
+    let mut c = Command::new("/bin/sh");
+    c.args(["-c", script])
+        .env("TOKFILE", &tok)
+        .env("HELPER", env!("CARGO_BIN_EXE_k2-daemon"))
+        .env("CHILD", child_script)
+        .env("K2_HOOK_SOCK", &f.sock)
+        .env_remove("K2_HOOK_TOKEN")
+        .env_remove("K5_HOOK_TOKEN")
+        .env_remove("K2SO_HOOK_TOKEN")
+        .stdin(Stdio::null());
+    for (k, v) in extra_env {
+        c.env(k, v);
+    }
+    c.output().expect("run helper")
+}
+
+#[test]
+fn the_passport_comes_on_the_token_fd() {
+    let f = fake_daemon("200 OK", ok_env());
+    let out = helper_with_fd(&f, "echo ran", &[]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout).trim(), "ran");
+    let reqs = f.requests.lock().expect("lock");
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert!(reqs[0].contains("Authorization: Bearer passport-fd\r\n"), "{}", reqs[0]);
+}
+
+#[test]
+fn the_child_never_inherits_the_token_fd() {
+    let f = fake_daemon("200 OK", ok_env());
+    let out = helper_with_fd(&f, "if (exec 0<&3) 2>/dev/null; then echo fd3-open; else echo fd3-closed; fi", &[]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout).trim(), "fd3-closed");
+}
+
+#[test]
+fn the_child_gets_the_secret_not_the_identity() {
+    let f = fake_daemon("200 OK", ok_env());
+    let env = [
+        ("K2_HOOK_TOKEN", "leak-hook-token"),
+        ("K5_HOOK_TOKEN", "leak-k5-token"),
+        ("K2SO_HOOK_TOKEN", "leak-k2so-token"),
+        ("K2_HOOK_TOKEN_FILE", "/leak/token-file"),
+        ("K2_OWNER_TOKEN", "leak-owner-token"),
+        ("K2_REMOTE_TOKEN", "leak-remote-token"),
+        ("K2_CAPABILITY_TOKEN", "leak-capability-token"),
+        ("K5_SOME_PASSPORT", "leak-passport"),
+        ("K2_NEW_TOKEN_KIND", "leak-new-token"),
+        ("K5_NO_OWNER_FALLBACK", "0"),
+        ("K2SO_NO_OWNER_FALLBACK", "0"),
+    ];
+    let out = helper_with_fd(&f, "env", &env);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let dump = text(&out.stdout);
+    for (k, v) in env {
+        assert!(!dump.lines().any(|l| l.starts_with(&format!("{k}="))), "{k} reached the child:\n{dump}");
+        assert!(!dump.contains(v) || v == "0", "{v} reached the child:\n{dump}");
+    }
+    assert!(!dump.contains("passport-fd"), "the passport reached the child:\n{dump}");
+    assert!(dump.lines().any(|l| l == "K2_NO_OWNER_FALLBACK=1"), "no guard:\n{dump}");
+    assert!(dump.lines().any(|l| l.starts_with("K2_HOOK_SOCK=")), "the socket path stays:\n{dump}");
+    // The secret is there (masked on the way out, as every value is).
+    assert!(dump.lines().any(|l| l == format!("KEY={MASKED}")), "no secret:\n{dump}");
+}
+
+#[test]
+fn an_older_cli_passing_the_token_in_env_is_cleared_too() {
+    let f = fake_daemon("200 OK", ok_env());
+    let out = run(&f, &["--secret", "KEY"], &sh("env"));
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let dump = text(&out.stdout);
+    assert!(!dump.contains("passport-t"), "the passport reached the child:\n{dump}");
+    assert!(dump.lines().any(|l| l == "K2_NO_OWNER_FALLBACK=1"), "no guard:\n{dump}");
+}

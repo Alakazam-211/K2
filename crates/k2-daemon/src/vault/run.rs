@@ -6,6 +6,13 @@
 //! the values over the session's cell socket (policy, audit and per-run
 //! files are the daemon's), sets them on one child, and masks the child's
 //! stdout and stderr, because bash can't mask a stream safely.
+//!
+//! The session's passport reaches the helper on an inherited file
+//! descriptor (`--token-fd N`, a pipe the CLI writes), never in its
+//! environment. The child gets the secrets, not the agent's identity: the
+//! helper clears every K2 credential variable from the child's environment
+//! and sets `K2_NO_OWNER_FALLBACK=1`, so a `k2` the child runs refuses
+//! rather than read the owner token from disk.
 
 use std::ffi::OsString;
 
@@ -43,6 +50,22 @@ mod imp {
     use serde_json::{json, Value};
 
     const USAGE: &str = "usage: k2 vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]";
+    /// The credential variables the child never gets, by name. Any other
+    /// `K2_`, `K5_` or `K2SO_` variable whose name holds TOKEN or PASSPORT
+    /// goes too ([`private_var`]).
+    const CLEARED: &[&str] = &[
+        "K2_HOOK_TOKEN",
+        "K5_HOOK_TOKEN",
+        "K2SO_HOOK_TOKEN",
+        "K2_HOOK_TOKEN_FILE",
+        "K5_HOOK_TOKEN_FILE",
+        "K2_REMOTE_TOKEN",
+        "K2_CAPABILITY_TOKEN",
+        "K2_OWNER_TOKEN",
+    ];
+    /// The no-owner guard under its other names: only the `K2_` one is set,
+    /// so a `K5_` or `K2SO_` copy can't override it.
+    const GUARD_ALIASES: &[&str] = &["K5_NO_OWNER_FALLBACK", "K2SO_NO_OWNER_FALLBACK"];
     const SOCKET_TIMEOUT: Duration = Duration::from_secs(30);
     const MAX_ANSWER: usize = 64 * 1024 * 1024;
     /// How long output is still read after the child has exited, for a
@@ -55,6 +78,7 @@ mod imp {
         env_file: Option<PathBuf>,
         scope: Option<String>,
         no_mask: bool,
+        token_fd: Option<i32>,
         cmd: Vec<OsString>,
     }
 
@@ -88,6 +112,11 @@ mod imp {
                 Some("--env-file") => a.env_file = Some(PathBuf::from(value("--env-file")?)),
                 Some("--scope") => a.scope = Some(value("--scope")?),
                 Some("--no-mask") => a.no_mask = true,
+                Some("--token-fd") => {
+                    let v = value("--token-fd")?;
+                    let fd = v.parse::<i32>().ok().filter(|n| *n > 2);
+                    a.token_fd = Some(fd.ok_or_else(|| format!("usage: --token-fd takes a file descriptor above 2\n{USAGE}"))?);
+                }
                 _ => return Err(format!("usage: unknown flag (k2 vault run --help)\n{USAGE}")),
             }
         }
@@ -342,8 +371,20 @@ mod imp {
             }
         };
         let env_str = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        let (Some(sock), Some(token)) = (env_str("K2_HOOK_SOCK"), env_str("K2_HOOK_TOKEN")) else {
-            eprintln!("use_run_as_agent: k2 vault run runs inside a K2 session (it needs $K2_HOOK_SOCK and $K2_HOOK_TOKEN); people use k2 vault reveal");
+        // The passport: from --token-fd (the CLI's pipe), else, from an
+        // older CLI, $K2_HOOK_TOKEN. Either way the child never gets it.
+        let token = match args.token_fd {
+            Some(fd) => match read_token_fd(fd) {
+                Ok(t) => Some(t).filter(|t| !t.is_empty()),
+                Err(e) => {
+                    eprintln!("run_failed: can't read the passport on fd {fd} ({})", e.kind());
+                    return 1;
+                }
+            },
+            None => env_str("K2_HOOK_TOKEN"),
+        };
+        let (Some(sock), Some(token)) = (env_str("K2_HOOK_SOCK"), token) else {
+            eprintln!("use_run_as_agent: k2 vault run runs inside a K2 session (it needs $K2_HOOK_SOCK and the session's passport); people use k2 vault reveal");
             return 3;
         };
         block_signals();
@@ -351,6 +392,34 @@ mod imp {
             Ok(code) => code,
             Err(code) => code,
         }
+    }
+
+    /// The passport on an inherited descriptor, read to its end and closed,
+    /// so the child never inherits it. One trailing newline is dropped.
+    fn read_token_fd(fd: i32) -> std::io::Result<String> {
+        use std::os::fd::FromRawFd;
+        // SAFETY: the CLI opened this descriptor for us (a pipe on fd 3) and
+        // nothing else in this process owns it; the File closes it on drop.
+        let f = unsafe { std::fs::File::from_raw_fd(fd) };
+        let mut buf = Vec::new();
+        // `take` owns the File; it closes the descriptor at the end of this
+        // statement, before any child is started.
+        f.take(64 * 1024).read_to_end(&mut buf)?;
+        if buf.last() == Some(&b'\n') {
+            buf.pop();
+        }
+        String::from_utf8(buf).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))
+    }
+
+    /// A K2 credential variable the child never gets: one of [`CLEARED`],
+    /// or a `K2_`, `K5_` or `K2SO_` name holding TOKEN or PASSPORT.
+    pub(super) fn private_var(name: &OsStr) -> bool {
+        let Some(n) = name.to_str() else { return false };
+        if CLEARED.contains(&n) {
+            return true;
+        }
+        let k2 = n.starts_with("K2_") || n.starts_with("K5_") || n.starts_with("K2SO_");
+        k2 && (n.contains("TOKEN") || n.contains("PASSPORT"))
     }
 
     fn request(args: &Args, sock: &Path, token: &str) -> Result<i32, i32> {
@@ -444,6 +513,15 @@ mod imp {
 
         let mut cmd = k2_core::bg_proc::command(&args.cmd[0]);
         cmd.args(&args.cmd[1..]);
+        // The child gets the secrets, not the agent's identity: no K2
+        // credential variable, and the no-owner guard, so a k2 it runs
+        // refuses rather than read the owner token from disk.
+        for (k, _) in std::env::vars_os() {
+            if private_var(&k) || GUARD_ALIASES.iter().any(|a| k.as_os_str() == OsStr::new(a)) {
+                cmd.env_remove(&k);
+            }
+        }
+        cmd.env(k2_core::desktop::virtual_desktop::NO_OWNER_FALLBACK, "1");
         for (k, v) in &child_env {
             cmd.env(k, OsStr::from_bytes(v));
         }
@@ -549,6 +627,26 @@ mod imp {
             // Someone typing a value where a flag goes must not see it logged.
             let e = parse(&argv(&["sk-not-a-flag", "--secret", "A", "--", "ls"])).expect_err("refused");
             assert!(!e.contains("sk-not-a-flag"), "{e}");
+        }
+
+        #[test]
+        fn the_token_fd_is_a_flag_before_the_dashes() {
+            let a = parse(&argv(&["--token-fd", "3", "--secret", "A", "--", "env"])).expect("parse");
+            assert_eq!(a.token_fd, Some(3));
+            for bad in ["0", "2", "x", "-1"] {
+                let e = parse(&argv(&["--token-fd", bad, "--secret", "A", "--", "env"])).expect_err("refused");
+                assert!(e.contains("--token-fd"), "{e}");
+            }
+        }
+
+        #[test]
+        fn credential_variables_are_private() {
+            for n in ["K2_HOOK_TOKEN", "K5_HOOK_TOKEN", "K2SO_HOOK_TOKEN", "K2_HOOK_TOKEN_FILE", "K2_OWNER_TOKEN", "K2_SOME_PASSPORT", "K5_NEW_TOKEN_X"] {
+                assert!(private_var(OsStr::new(n)), "{n}");
+            }
+            for n in ["K2_HOOK_SOCK", "K2_SECRETS_DIR", "K2_PROJECT_PATH", "GITHUB_TOKEN", "MY_K2_TOKEN", "PATH"] {
+                assert!(!private_var(OsStr::new(n)), "{n}");
+            }
         }
 
         #[test]

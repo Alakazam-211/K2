@@ -294,17 +294,13 @@ pub fn is_postal(address: &str) -> bool {
         return false;
     };
     let hb = handle.as_bytes();
-    let lb = label.as_bytes();
     let first = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     !hb.is_empty()
         && first(hb[0])
         && hb[1..]
             .iter()
             .all(|b| first(*b) || *b == b'_' || *b == b'-')
-        && (3..=63).contains(&lb.len())
-        && first(lb[0])
-        && first(lb[lb.len() - 1])
-        && lb.iter().all(|b| first(*b) || *b == b'-')
+        && crate::families::postal::is_postal_label(label)
         && address.is_ascii()
 }
 

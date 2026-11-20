@@ -631,10 +631,14 @@ fn postal_mail_in_a_session() {
 fn addresses() {
     assert!(is_postal("a::abc.postal.bot"));
     assert!(is_postal("A-1_::a-b.POSTAL.bot"));
+    assert!(is_postal("a::z3.postal.bot"), "z3 is a live label");
     for not in [
         "::abc.postal.bot",
         "-a::abc.postal.bot",
-        "a::ab.postal.bot",
+        "a::acme.postal.bot",
+        "a::123.postal.bot",
+        "a::a--b.postal.bot",
+        "a::turn-x.postal.bot",
         "a::-bc.postal.bot",
         "a::abc-.postal.bot",
         "a::a.c.postal.bot",

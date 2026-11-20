@@ -208,6 +208,60 @@ pub fn parse(rest: &[&str]) -> Result<Words, String> {
     Ok(w)
 }
 
+/// The labels the Postal plane reserves (its list): `_is_postal_label`'s
+/// case pattern, in its order.
+pub const RESERVED_LABELS: &[&str] = &[
+    "www",
+    "api",
+    "app",
+    "admin",
+    "dashboard",
+    "account",
+    "billing",
+    "k2",
+    "k2c",
+    "connect",
+    "mail",
+    "smtp",
+    "ns1",
+    "ns2",
+    "status",
+    "help",
+    "support",
+    "blog",
+    "docs",
+    "k2-relay-probe",
+    "cert",
+    "relay",
+    "edge",
+    "frps",
+    "db",
+    "db-staging",
+    "supabase",
+    "dl",
+    "postal",
+    "postalbot",
+    "frp",
+    "acme",
+    "probe",
+];
+
+/// `_is_postal_label`: the Postal plane's label rule. 1 to 63 of a-z 0-9 -,
+/// not all digits, no hyphen first or last, no two in a row, not starting
+/// with `turn-`, not reserved.
+pub fn is_postal_label(l: &str) -> bool {
+    let b = l.as_bytes();
+    let allowed = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-';
+    (1..=63).contains(&b.len())
+        && b.iter().all(allowed)
+        && !b.iter().all(u8::is_ascii_digit)
+        && !l.starts_with('-')
+        && !l.ends_with('-')
+        && !l.contains("--")
+        && !l.starts_with("turn-")
+        && !RESERVED_LABELS.contains(&l)
+}
+
 /// `_is_postal_address`: `handle::label.postal.bot`, letters in any case.
 pub fn is_postal_address(a: &str) -> bool {
     let a = a.to_ascii_lowercase();
@@ -218,15 +272,11 @@ pub fn is_postal_address(a: &str) -> bool {
         return false;
     };
     let hb = handle.as_bytes();
-    let lb = label.as_bytes();
     let alnum = |b: &u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     !hb.is_empty()
         && alnum(&hb[0])
         && hb[1..].iter().all(|b| alnum(b) || *b == b'_' || *b == b'-')
-        && (3..=63).contains(&lb.len())
-        && alnum(&lb[0])
-        && alnum(&lb[lb.len() - 1])
-        && lb[1..lb.len() - 1].iter().all(|b| alnum(b) || *b == b'-')
+        && is_postal_label(label)
 }
 
 /// `_postal_body k=v…`: a JSON object of the pairs whose value is not
@@ -1167,12 +1217,49 @@ mod tests {
 
     #[test]
     fn addresses() {
-        assert!(is_postal_address("Scout::Acme.postal.bot"));
+        assert!(is_postal_address("Scout::Initech.postal.bot"));
         assert!(is_postal_address("a::abc.postal.bot"));
-        assert!(!is_postal_address("a::ab.postal.bot"));
-        assert!(!is_postal_address("_a::acme.postal.bot"));
-        assert!(!is_postal_address("a::-acme.postal.bot"));
-        assert!(!is_postal_address("a:acme.postal.bot"));
+        assert!(is_postal_address("a::z3.postal.bot"));
+        assert!(!is_postal_address("Scout::Acme.postal.bot"), "reserved");
+        assert!(!is_postal_address("_a::initech.postal.bot"));
+        assert!(!is_postal_address("a::-initech.postal.bot"));
+        assert!(!is_postal_address("a:initech.postal.bot"));
+    }
+
+    #[test]
+    fn labels_follow_the_planes_rule() {
+        for good in ["z3", "a", "ab", "k2n-lab", "a1-b2", "0a", "acme-box"] {
+            assert!(is_postal_label(good), "{good:?}");
+        }
+        assert!(is_postal_label(&"a".repeat(63)));
+        for bad in ["", "-a", "a-", "a.b", "a--b", "123", "7"] {
+            assert!(!is_postal_label(bad), "{bad:?}");
+        }
+        for bad in ["turn-x", "a_b", "A3"] {
+            assert!(!is_postal_label(bad), "{bad:?}");
+        }
+        assert!(!is_postal_label(&"a".repeat(64)));
+        assert_eq!(RESERVED_LABELS.len(), 33);
+        for name in RESERVED_LABELS {
+            assert!(!is_postal_label(name), "reserved {name:?}");
+        }
+    }
+
+    /// The list is bash's case pattern, name for name.
+    #[test]
+    fn reserved_labels_are_bashs() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../cli/src/remote-target.sh"
+        );
+        let src = std::fs::read_to_string(path).expect("remote-target.sh");
+        let line = src
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("www|") && l.ends_with(") return 1 ;;"))
+            .expect("_is_postal_label's reserved pattern");
+        let names: Vec<&str> = line.trim_end_matches(") return 1 ;;").split('|').collect();
+        assert_eq!(names, RESERVED_LABELS);
     }
 
     #[test]

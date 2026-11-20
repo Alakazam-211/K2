@@ -35,6 +35,7 @@ use serde_json::{json, Map, Value as J};
 use super::grace::{target, Target};
 use super::routes::{actor, json_body, need_credential, no, s, Refusal, Who, R};
 use crate::app_push::owner_routes::{admin_human, app_agent_at, fresh_confirm};
+use k2_core::brand::CLI_NAME;
 
 pub const READ: &str = "/cli/app/recording";
 pub const SET: &str = "/cli/app/recording/set";
@@ -297,7 +298,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
                 403,
                 format!(
                     "only the server's owner, in person, turns on {} for an App (each person's consent notice names it); \
-                     an agent asks on a card: k2 permission request apps.recording app={} {}--why \"…\"",
+                     an agent asks on a card: {CLI_NAME} permission request apps.recording app={} {}--why \"…\"",
                     class.owner_on.join(" and "),
                     t.name,
                     class.owner_on.iter().map(|k| format!("{}=on ", if *k == "server_read" { "server-read" } else { k })).collect::<String>(),

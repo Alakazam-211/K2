@@ -41,6 +41,7 @@ use super::ops::{MgmtError, RealOps, SewOps, UnitInfo};
 use super::secrets::{kek_id, SewSecrets, VaultSecrets};
 use super::sew_wire as wire;
 use super::store::{self, Row};
+use k2_core::cli_name;
 
 // ── environment ──────────────────────────────────────────────────────────
 
@@ -3099,13 +3100,13 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
 
 /// What a refused rollback across a schema change says next (Rosson
 /// 2026-10-28): the person-only emergency rollback.
-pub const ROLLBACK_ACROSS_SCHEMA_HINT: &str = "Nothing changed. The upgrade changed how Sew stores chat, so a plain rollback \
+pub const ROLLBACK_ACROSS_SCHEMA_HINT: &str = concat!("Nothing changed. The upgrade changed how Sew stores chat, so a plain rollback \
      would lose everything written since the upgrade, and it refuses to go back past it. To go back anyway (that chat \
      leaves the live chat; K2 backs it up first), the owner runs k2 hostchat rollback --accept-data-loss in a terminal \
      outside K2: K2 then runs Sew's rollback with --accept-data-loss-since=<the backup taken just before the upgrade> \
      (an upgrade to Sew 0.9.0 or later from 0.8.x, to 0.9.2 or 0.9.3 from 0.9.0, or to 0.10.0 or later from any 0.9.x, is one of \
-     these). An agent asks the owner on a card: k2 permission request \
-     sew.rollback-data-loss --why \"<why>\"";
+     these). An agent asks the owner on a card: ", cli_name!(), " permission request \
+     sew.rollback-data-loss --why \"<why>\"");
 
 /// Sew's verdict on the core's rollback is in (`v`, exit 0): K2's health
 /// check of the old core, the row, then (voice) the OLD core reinstalls its

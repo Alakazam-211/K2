@@ -49,6 +49,7 @@ use k2_root_proto::version::SEW_RECORDING_MIN_PROTOCOL;
 use super::fetch::ReleaseFile;
 use super::routes::{need_manage, need_person, PersonFloor, Who};
 use super::supervisor::{self as sup, no, Env, Fail, R};
+use k2_core::cli_name;
 
 /// Sew 0.9.0's flag for Apps' recording and the recorder install (a
 /// stand-in for `k2_core::tool_hook::features::APP_RECORDING`, K-h prep).
@@ -206,9 +207,9 @@ pub fn agent_refusal() -> Fail {
     no(
         "person_only",
         403,
-        "nothing changed: an Owner or Admin installs Sew's recorder in person (Touch ID, the vault password or their \
-         login), never an agent, even with Manage chat and voice. Ask on a permission card: k2 permission request \
-         sew.recording-enable --why \"<why>\"",
+        concat!("nothing changed: an Owner or Admin installs Sew's recorder in person (Touch ID, the vault password or their \
+         login), never an agent, even with Manage chat and voice. Ask on a permission card: ", cli_name!(), " permission request \
+         sew.recording-enable --why \"<why>\""),
     )
 }
 

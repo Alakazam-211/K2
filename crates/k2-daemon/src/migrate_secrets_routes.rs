@@ -36,6 +36,7 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::vault::actor::{Channel, VaultCaller};
+use k2_core::brand::CLI_NAME;
 
 pub const STATUS: &str = "/cli/migrate/secrets/status";
 pub const BEGIN: &str = "/cli/migrate/secrets/begin";
@@ -212,7 +213,7 @@ fn hold(home: &Path, step: &str, params: Value, c: &VaultCaller) -> Result<Value
         "hint": format!(
             "held for the box owner as {id} ({}). The owner approves it as a person, with the vault confirm: \
              k2 migrate approve {id} from their own terminal or SSH login, or the Thread card \
-             (an agent asks with: k2 permission request vault.move-approve request={id}). \
+             (an agent asks with: {CLI_NAME} permission request vault.move-approve request={id}). \
              Check with: k2 migrate status",
             step_words(step)
         ),

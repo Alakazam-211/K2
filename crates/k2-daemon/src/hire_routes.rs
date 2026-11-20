@@ -39,6 +39,7 @@ use k2_core::hire::{ledger, links, HireCaller, HireError};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use crate::routes::http::V1Principal;
+use k2_core::brand::CLI_NAME;
 
 pub const MAX_BODY: usize = 2 * 1024 * 1024;
 
@@ -996,7 +997,7 @@ pub(crate) fn hire_off_hint(workspace_id: &str, ws: &str) -> String {
         base
     } else {
         format!(
-            "{base} Permission cards are off for you, so no card can go up: to approve from a card instead, your human turns them on ({}) and you ask with k2 permission request {HIRE_ACTION}.",
+            "{base} Permission cards are off for you, so no card can go up: to approve from a card instead, your human turns them on ({}) and you ask with {CLI_NAME} permission request {HIRE_ACTION}.",
             crate::apps::user_hold::PERMISSION_CARDS_ON_PATH
         )
     }

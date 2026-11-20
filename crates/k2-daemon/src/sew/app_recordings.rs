@@ -48,6 +48,7 @@ use tokio::sync::broadcast;
 use crate::cli_response::CliResponse;
 use crate::guest_rooms_routes::{app_of, error, pass_invalid, OnLink};
 use crate::sew_mgmt::{long_poll_timeout, MgmtClient, MgmtResponse};
+use k2_core::cli_name;
 
 pub const LIST: &str = "/cli/sew/app/recordings";
 pub const ONE: &str = "/cli/sew/app/recording";
@@ -87,7 +88,7 @@ fn refusal(r: &ReadRefusal) -> CliResponse {
         ReadRefusal::ServerReadOff => error(
             403,
             sew_wire::reasons::RECORDING_SERVER_READ_OFF,
-            "this App's server may not read recordings: the server's owner turns server_read on, on a card (k2 permission request apps.recording app=<app> server-read=on --why \"…\")",
+            concat!("this App's server may not read recordings: the server's owner turns server_read on, on a card (", cli_name!(), " permission request apps.recording app=<app> server-read=on --why \"…\")"),
             None,
         ),
         ReadRefusal::NotGoverning => error(

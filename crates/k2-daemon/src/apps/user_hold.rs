@@ -42,6 +42,7 @@ use serde_json::{json, Value as J};
 use super::agent_grants::{hold, Step};
 use super::routes::{no, respond, ws_handle, Who, R};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 /// The routes a held request carries (never HTTP routes: the approval runs
 /// [`apply`] as the owner or admin who approved).
@@ -755,7 +756,7 @@ pub const PERMISSION_CARDS_ON_PATH: &str =
 /// the owner can do instead (0.46.14).
 pub(crate) fn box_login_hint(ws: Option<&str>, username: &str) -> String {
     let next = if ws.is_some_and(k2_core::permission::gate::enabled_for) {
-        format!("To give them access to your App, ask the owner on a card: k2 permission request apps.user-grant-box user={username} app=<your app> role=<role> --why \"<what you need it for>\"")
+        format!("To give them access to your App, ask the owner on a card: {CLI_NAME} permission request apps.user-grant-box user={username} app=<your app> role=<role> --why \"<what you need it for>\"")
     } else {
         box_login_grant_by_owner(username)
     };

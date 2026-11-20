@@ -36,6 +36,7 @@ use serde_json::{json, Value};
 
 use super::supervisor::{self as sup, no, Env, Fail, R};
 use crate::cli_response::CliResponse;
+use k2_core::cli_name;
 pub use crate::compute_routes::Who;
 
 pub const MAX_BODY: usize = 64 * 1024;
@@ -293,10 +294,10 @@ fn rollback_accept_data_loss(env: &Env, who: &Who, v: &Value, req: &sup::Rollbac
         let mut f = no(
             ROLLBACK_NEEDS_PERSON,
             403,
-            "nothing changed: only the owner can roll Sew back across a schema change (chat written since the upgrade \
-             leaves the live chat; K2 backs it up first). Ask the owner on a permission card: k2 permission request \
+            concat!("nothing changed: only the owner can roll Sew back across a schema change (chat written since the upgrade \
+             leaves the live chat; K2 backs it up first). Ask the owner on a permission card: ", cli_name!(), " permission request \
              sew.rollback-data-loss --why \"<why>\". The owner may instead run \
-             k2 hostchat rollback --accept-data-loss in a terminal outside K2",
+             k2 hostchat rollback --accept-data-loss in a terminal outside K2"),
         );
         f.extra = plan.map(|p| json!({"to": p["to"], "since": p["since"], "bundle": p["bundle"]}));
         return Err(f);

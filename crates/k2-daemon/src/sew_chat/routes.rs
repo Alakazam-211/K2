@@ -35,6 +35,7 @@ use k2_core::sew_chat::{self as core, store, Action, ApprovalMode, Level};
 use super::sew::{self, ActAs, Addr, Channel, Message, NewMessage, SewChat, SewError};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
 
 /// Largest request body (a 16 KiB message plus the envelope).
 pub const MAX_BODY: usize = 64 * 1024;
@@ -448,7 +449,7 @@ pub(crate) fn need_any_access(c: &Caller) -> R<Vec<store::Access>> {
                     format!(
                         "{h} has no chat account yet. To run chat for its Apps, it needs \"Manage chat and voice\", which also \
                          makes its chat account, and it then makes its own Spaces: {how}. Only to take part in chat, ask for the account \
-                         alone instead of that line: k2 permission request chat.account scope=coworker --why \"<what you need it for>\"; \
+                         alone instead of that line: {CLI_NAME} permission request chat.account scope=coworker --why \"<what you need it for>\"; \
                          a person then gives it a Space: k2 chat access grant <space> {h}",
                         h = c.handle,
                         how = manage_how(c)

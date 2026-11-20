@@ -114949,6 +114949,21 @@ case "${1:-help}" in
     publish)
         # Hosted services (run/ps/start/stop/rm/logs → /cli/publish/*) plus
         # nested-subdomain CP (status + subdomain *). P6: status stays plan.
+        # 0.46.17: -h or --help anywhere prints help and sends nothing
+        # (`k2 publish subdomain claim acme -h` claimed acme). status,
+        # secret, env and subdomain list keep their own pages.
+        if _wants_help "${@:2}"; then
+            case "${2:-}" in
+                status) cmd_publish_status --help ;;
+                secret|secrets) _publish_secret_usage ;;
+                env) cmd_vault service --help ;;
+                subdomain)
+                    if [ "${3:-}" = list ]; then cmd_publish_subdomain list --help; fi
+                    _publish_usage ;;
+                *) _publish_usage ;;
+            esac
+            exit 0
+        fi
         shift; cmd_publish "$@"
         ;;
     clone)

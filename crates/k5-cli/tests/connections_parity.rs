@@ -734,6 +734,7 @@ fn connections_with_a_daemon_that_never_answers() {
 fn connections_the_rest_of_the_row() {
     let rig = Rig::new(VERB, "row");
     let v = vec![
+        // covers: connections
         case(
             "connections alone",
             &[],

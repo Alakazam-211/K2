@@ -150,6 +150,7 @@ fn tunnel_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: tunnel disable
         case(
             "disable",
             &["disable"],
@@ -168,6 +169,7 @@ fn tunnel_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: tunnel enable
         case(
             "enable: running",
             &["enable"],
@@ -197,6 +199,7 @@ fn tunnel_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: tunnel switch
         case(
             "switch: steps and the new name",
             &["switch", "acme", "--token", "tk-1", "--start"],
@@ -300,6 +303,7 @@ fn tunnel_answers_as_the_shell_does() {
             2,
             0,
         ),
+        // covers: tunnel release
         case(
             "release without --confirm, no tunnel.json",
             &["release"],
@@ -356,6 +360,7 @@ fn tunnel_answers_as_the_shell_does() {
             1,
             1,
         ),
+        // covers: tunnel forget
         case(
             "forget without --confirm",
             &["forget"],
@@ -392,6 +397,7 @@ fn tunnel_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: tunnel
         case(
             "an empty action is status",
             &[""],
@@ -432,6 +438,7 @@ fn tunnel_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: tunnel subdomains
         case(
             "subdomains",
             &["subdomains"],
@@ -471,6 +478,7 @@ fn tunnel_answers_as_the_shell_does() {
             0,
             2,
         ),
+        // covers: tunnel subdomains --json
         case(
             "subdomains --json",
             &["subdomains", "--json"],

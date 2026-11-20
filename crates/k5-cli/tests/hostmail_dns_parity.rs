@@ -332,8 +332,8 @@ fn hostmail_dns_verbs_answer_as_the_shell_does() {
             r#"{"ok":true,"profile":5}"#,
         ),
         case(
-            "dmarc show, no answer",
-            &["dmarc", "show", "a"],
+            "dmarc report-to, no answer",
+            &["dmarc", "report-to", "a", "--address", "b@a"],
             &[],
             vec![Reply::Close],
             owner_and_port,

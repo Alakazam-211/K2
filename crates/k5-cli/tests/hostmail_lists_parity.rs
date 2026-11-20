@@ -177,8 +177,8 @@ fn hostmail_list_verbs_answer_as_the_shell_does() {
         ),
         traceback("audit-sieve, the summary not a dict", &["audit-sieve"], r#"{"ok":true,"installed":true,"summary":"x"}"#),
         case(
-            "acl show, no answer",
-            &["acl", "show", "m@x"],
+            "queue retry, no answer",
+            &["queue", "retry", "o1"],
             &[],
             vec![Reply::Close],
             owner_and_port,

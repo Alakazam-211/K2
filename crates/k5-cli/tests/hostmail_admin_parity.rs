@@ -227,7 +227,7 @@ fn hostmail_admin_verbs_answer_as_the_shell_does() {
             exit1("status, an unhashable port state", &["status"], r#"{"ok":true,"supported":true,"state":"running","cert":{"ports":[{"state":[1]}]}}"#),
         ),
         traceback("create, an endpoint not a dict", &["create", "bot"], r#"{"ok":true,"jmap":[1]}"#),
-        case("status, no answer", &["status"], &[], vec![Reply::Close], owner_and_port, 1, 1),
+        case("delete, no answer", &["delete", "a@x"], &[], vec![Reply::Close], owner_and_port, 1, 1),
         case(
             "doctor, the daemon down",
             &["doctor"],

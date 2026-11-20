@@ -997,7 +997,10 @@ fn status_cert(py_: &mut Py, cert: &Value) -> R<()> {
                 "stalwart-acme" => {
                     format!("Stalwart's own ACME; {PRODUCT_NAME} locks its names to the mail host")
                 }
-                "unknown" => format!("attached, but no {PRODUCT_NAME}-planted certificate yet ({CLI_NAME} hostmail cert renew)"),
+                "unknown" => format!(
+                    "attached, but no {}-planted certificate yet ({CLI_NAME} hostmail cert renew)",
+                    PRODUCT_NAME
+                ),
                 _ => "?".into(),
             },
             Value::Array(_) | Value::Object(_) => {

@@ -585,8 +585,8 @@ fn hostmail_access_verbs_answer_as_the_shell_does() {
             r#"{"ok":true,"calendars":[{"shares":["x"]}]}"#,
         ),
         case(
-            "group list, no answer",
-            &["group", "list"],
+            "group delete, no answer",
+            &["group", "delete", "team"],
             &[],
             vec![Reply::Close],
             owner_and_port,

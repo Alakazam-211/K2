@@ -275,7 +275,7 @@ fn calendar_share(sub: &str, words: &[&str]) -> Result<Plan, Plan> {
                     if !level.is_empty() {
                         return Err(usage("give ONE of --freebusy --read --write --editor"));
                     }
-                    level = w[2..].to_string();
+                    level = w.strip_prefix("--").unwrap_or(w).to_string();
                     i += 1;
                     continue;
                 }

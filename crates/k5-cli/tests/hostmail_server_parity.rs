@@ -436,7 +436,7 @@ fn hostmail_server_verbs_answer_as_the_shell_does() {
         ),
         ok_case(
             "person --all off, none changed",
-            &["person", "off", "--all", "--workspace", "alpha"],
+            &["person", "--all", "--workspace", "alpha", "off"],
             r#"{"ok":true}"#,
         ),
         ok_case(

@@ -41,9 +41,11 @@ pub fn escaped(b: u8) -> char {
 /// The byte [`escaped`] stands for.
 fn unescaped(c: char) -> Option<u8> {
     let n = u32::from(c);
-    (0x10_FF80..=0x10_FFFF)
-        .contains(&n)
-        .then(|| (n - 0x10_FF00) as u8)
+    if (0x10_FF80..=0x10_FFFF).contains(&n) {
+        u8::try_from(n - 0x10_FF00).ok()
+    } else {
+        None
+    }
 }
 
 /// The settings that say how `python3` decodes its stdin: the locale's,

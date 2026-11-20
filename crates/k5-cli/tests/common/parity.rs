@@ -86,6 +86,9 @@ pub fn cli_k2() -> PathBuf {
 
 static N: AtomicUsize = AtomicUsize::new(0);
 
+/// A run's stdout and stderr as the bytes it wrote.
+pub type Bytes = (Vec<u8>, Vec<u8>);
+
 /// A run of a case, each against its own stub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -156,7 +159,7 @@ pub struct Rig {
     pub tool_log: Option<PathBuf>,
     /// Each side's last run's stdout and stderr as bytes, in
     /// [`Side::ALL`]'s order ([`Rig::raw`]).
-    raw: RefCell<[Option<(Vec<u8>, Vec<u8>)>; 3]>,
+    raw: RefCell<[Option<Bytes>; 3]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -370,7 +373,7 @@ impl Rig {
     /// ([`Out`] holds them read as UTF-8, a bad byte as U+FFFD, so two
     /// runs that wrote different bytes there can compare equal). Panics
     /// when that side has not run.
-    pub fn raw(&self, side: Side) -> (Vec<u8>, Vec<u8>) {
+    pub fn raw(&self, side: Side) -> Bytes {
         self.raw.borrow()[side.index()]
             .clone()
             .unwrap_or_else(|| panic!("the {} side has not run", side.name()))

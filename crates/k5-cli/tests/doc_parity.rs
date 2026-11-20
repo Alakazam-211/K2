@@ -741,7 +741,8 @@ fn the_lines_say_the_brand_s_name() {
 }
 
 /// A tool answer whose text holds the passport refusal's words.
-const TOOL_WORDS: &str = r#"{"stdout":"Invalid or missing auth token\n","exit":0,"doc":{"path":"/w/a.md"}}"#;
+const TOOL_WORDS: &str =
+    r#"{"stdout":"Invalid or missing auth token\n","exit":0,"doc":{"path":"/w/a.md"}}"#;
 
 /// `_doc_xfer` (a tool call, a whole file): the shell never tries a
 /// healed passport there. The binary tries one once, and only on the
@@ -818,8 +819,15 @@ fn xfer_heals_once_on_the_gate_s_refusal() {
     let (out, log) = rig.binary(&healed, false);
     assert_eq!(out.code, Some(0), "the binary after its heal: {out:?}");
     assert_eq!(out.stdout, "line one\nline two é\n", "{out:?}");
-    assert_eq!(log.len(), 2, "the refused call and its one retry:\n{log:#?}");
-    assert!(log.iter().all(|r| r.contains("POST /cli/docs/tool ")), "{log:#?}");
+    assert_eq!(
+        log.len(),
+        2,
+        "the refused call and its one retry:\n{log:#?}"
+    );
+    assert!(
+        log.iter().all(|r| r.contains("POST /cli/docs/tool ")),
+        "{log:#?}"
+    );
     assert_eq!(auth(&log, 0), format!("Authorization: Bearer {PASSPORT}"));
     assert_eq!(auth(&log, 1), format!("Authorization: Bearer {HEALED}"));
     assert_eq!(body(&log, 0), body(&log, 1), "the same call, sent again");
@@ -878,9 +886,16 @@ fn raw_answer(status: u16, body: &[u8]) -> Reply {
 #[test]
 fn answers_that_are_not_utf8_pass_their_bytes() {
     let rig = Rig::new(VERB, "bytes");
-    let rows: Vec<(Case, &[u8], &[u8])> = vec![
+    fn row(
+        c: Case,
+        stdout: &'static [u8],
+        stderr: &'static [u8],
+    ) -> (Case, &'static [u8], &'static [u8]) {
+        (c, stdout, stderr)
+    }
+    let rows = vec![
         // covers: doc view
-        (
+        row(
             r(
                 "view: a path that is not UTF-8, on stdout",
                 &["view", "--region", "p1", "a.pdf"],
@@ -891,7 +906,7 @@ fn answers_that_are_not_utf8_pass_their_bytes() {
             b"",
         ),
         // covers: doc restore
-        (
+        row(
             r(
                 "restore: a value that is not UTF-8, on stderr",
                 &["restore", "--version", "2", "a.bin"],
@@ -905,7 +920,7 @@ fn answers_that_are_not_utf8_pass_their_bytes() {
             b"restored version v\\udcff as version 3 (5 bytes)\n",
         ),
         // covers: doc status
-        (
+        row(
             r(
                 "a refusal that is not UTF-8: the hint and its JSON",
                 &["status", "a.md"],
@@ -916,7 +931,7 @@ fn answers_that_are_not_utf8_pass_their_bytes() {
             b"Error: oops \\udcff\n{\"error\": {\"code\": \"error\", \"hint\": \"oops \\udcff\", \"status\": 500}}\n",
         ),
         // covers: doc append
-        (
+        row(
             r(
                 "a conflict that is not UTF-8: repr",
                 &["append", "--text", "x", "a.md"],
@@ -929,8 +944,8 @@ fn answers_that_are_not_utf8_pass_their_bytes() {
             b"",
             b"Error: h\n{\"error\": {\"code\": \"conflict\", \"hint\": \"h\", \"status\": 409}}\nconflict at lines 1-2:\n  yours:  'x\\udcff'\n  theirs: 'y'\n",
         ),
-        // covers: doc who --json
-        (
+        // covers: doc who
+        row(
             r(
                 "--json: the answer's bytes as they came",
                 &["who", "--json", "a.md"],

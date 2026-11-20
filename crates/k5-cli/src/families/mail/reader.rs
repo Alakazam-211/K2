@@ -72,8 +72,21 @@ pub const SUBS: &[&str] = &[
 
 /// The flags that take a value.
 const VALUE_FLAGS: &[&str] = &[
-    "--reason", "--folder", "--query", "--from", "--since", "--before", "--limit", "--offset",
-    "--out", "--inbox", "--actor", "--body", "--to", "--cc", "--subject",
+    "--reason",
+    "--folder",
+    "--query",
+    "--from",
+    "--since",
+    "--before",
+    "--limit",
+    "--offset",
+    "--out",
+    "--inbox",
+    "--actor",
+    "--body",
+    "--to",
+    "--cc",
+    "--subject",
 ];
 
 /// The route prefix.
@@ -317,10 +330,10 @@ fn env_key(flag: &str) -> &'static str {
 /// `daemon_unreachable` line (`Ok(Err(text))`). `Err(())`: a value the
 /// binary hands to the shell.
 fn timeout() -> Result<Result<Duration, String>, ()> {
-    let set = k2_client::env_names::first_nonempty_os_in(
-        k2_client::env_names::MAIL_HTTP_TIMEOUT,
-        |n| std::env::var_os(n),
-    );
+    let set =
+        k2_client::env_names::first_nonempty_os_in(k2_client::env_names::MAIL_HTTP_TIMEOUT, |n| {
+            std::env::var_os(n)
+        });
     let Some((_, raw)) = set else {
         return Ok(Ok(Duration::from_secs(60)));
     };
@@ -422,7 +435,10 @@ fn die(err: &Value) -> Ex {
 
 /// `die({"code": code, "hint": hint})`.
 fn die_with(code: &str, hint: &str) -> Ex {
-    die(&core::obj(vec![("code", p::sv(code)), ("hint", p::sv(hint))]))
+    die(&core::obj(vec![
+        ("code", p::sv(code)),
+        ("hint", p::sv(hint)),
+    ]))
 }
 
 /// The body as `E("MR_BODY")` gives it: the words' text, or stdin read now
@@ -483,17 +499,15 @@ fn call_inner(
         req = req.header("Authorization", format!("Bearer {t}"));
     }
     let d = match py_.opener.open(&req) {
-        Outcome::Answer { body: Ok(b), .. } => {
-            match pyjson::loads(&String::from_utf8_lossy(&b)) {
-                Ok(d) => d,
-                Err(f) => {
-                    return Err(die_with(
-                        "daemon_unreachable",
-                        &format!("{}{}", unreachable_head(), f.message),
-                    ))
-                }
+        Outcome::Answer { body: Ok(b), .. } => match pyjson::loads(&String::from_utf8_lossy(&b)) {
+            Ok(d) => d,
+            Err(f) => {
+                return Err(die_with(
+                    "daemon_unreachable",
+                    &format!("{}{}", unreachable_head(), f.message),
+                ))
             }
-        }
+        },
         Outcome::Answer { body: Err(r), .. } | Outcome::Raised(r) => {
             return Err(die_with(
                 "daemon_unreachable",
@@ -572,9 +586,7 @@ fn who(a: Option<&Value>) -> X<Value> {
     };
     let name = or_get(a, "name", p::sv(""), line::WHO_NAME, F)?;
     let n = match &name {
-        Value::Str(t) => p::text(t)
-            .trim_matches(super::super::py_space)
-            .to_string(),
+        Value::Str(t) => p::text(t).trim_matches(super::super::py_space).to_string(),
         other => {
             return Err(Ex::Raise(
                 vec![(line::WHO_NAME, F)],
@@ -725,8 +737,7 @@ fn message(py_: &mut Py, m: &Value) -> X<()> {
         ));
     }
     py_.print("");
-    let html = py_.env.on("MR_HTML")
-        && p::truthy(g(m, "html", line::MSG_HTML_IF, F)?.as_ref());
+    let html = py_.env.on("MR_HTML") && p::truthy(g(m, "html", line::MSG_HTML_IF, F)?.as_ref());
     if html {
         let h = raise(py_index(m, "html"), line::MSG_HTML, F)?;
         py_.print_v(&h);
@@ -770,7 +781,14 @@ fn main(py_: &mut Py) -> X<()> {
     let rs = |r: &str| format!("{R_}{r}");
     match sub.as_str() {
         "inboxes" => {
-            let d = call(py_, Method::Get, &rs("inboxes"), &[("reason", reason)], None, line::INBOXES_CALL)?;
+            let d = call(
+                py_,
+                Method::Get,
+                &rs("inboxes"),
+                &[("reason", reason)],
+                None,
+                line::INBOXES_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
@@ -809,7 +827,14 @@ fn main(py_: &mut Py) -> X<()> {
         }
         "folders" => {
             let params = [("inbox", a1.clone()), ("reason", reason)];
-            let d = call(py_, Method::Get, &rs("folders"), &params, None, line::FOLDERS_CALL)?;
+            let d = call(
+                py_,
+                Method::Get,
+                &rs("folders"),
+                &params,
+                None,
+                line::FOLDERS_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
@@ -825,7 +850,14 @@ fn main(py_: &mut Py) -> X<()> {
             let params = [
                 ("inbox", a1.clone()),
                 ("folder", e("MR_FOLDER")),
-                ("unread", if py_.env.on("MR_UNREAD") { "1".into() } else { String::new() }),
+                (
+                    "unread",
+                    if py_.env.on("MR_UNREAD") {
+                        "1".into()
+                    } else {
+                        String::new()
+                    },
+                ),
                 ("query", e("MR_QUERY")),
                 ("from", e("MR_FROM")),
                 ("since", e("MR_SINCE")),
@@ -834,7 +866,14 @@ fn main(py_: &mut Py) -> X<()> {
                 ("offset", e("MR_OFFSET")),
                 ("reason", reason),
             ];
-            let d = call(py_, Method::Get, &rs("messages"), &params, None, line::MESSAGES_CALL)?;
+            let d = call(
+                py_,
+                Method::Get,
+                &rs("messages"),
+                &params,
+                None,
+                line::MESSAGES_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
@@ -844,7 +883,11 @@ fn main(py_: &mut Py) -> X<()> {
             }
             for m in raise(iter(&items), line::MESSAGES_FOR, M)? {
                 let l = line::MESSAGES_ROW;
-                let star = if p::truthy(g(&m, "unread", l, M)?.as_ref()) { "*" } else { " " };
+                let star = if p::truthy(g(&m, "unread", l, M)?.as_ref()) {
+                    "*"
+                } else {
+                    " "
+                };
                 let id = s_get(&m, "id", l, M)?;
                 let date = or_get(&m, "date", p::sv(""), l, M)?;
                 let date = match raise(head(&date, 16), l, M)? {
@@ -879,7 +922,14 @@ fn main(py_: &mut Py) -> X<()> {
         }
         "show" => {
             let params = [("id", a1.clone()), ("reason", reason)];
-            let d = call(py_, Method::Get, &rs("message"), &params, None, line::SHOW_CALL)?;
+            let d = call(
+                py_,
+                Method::Get,
+                &rs("message"),
+                &params,
+                None,
+                line::SHOW_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
@@ -892,7 +942,14 @@ fn main(py_: &mut Py) -> X<()> {
                 ("folder", py_.env("MR_FOLDER").to_string()),
                 ("reason", reason),
             ];
-            let d = call(py_, Method::Get, &rs("thread"), &params, None, line::THREAD_CALL)?;
+            let d = call(
+                py_,
+                Method::Get,
+                &rs("thread"),
+                &params,
+                None,
+                line::THREAD_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
@@ -940,16 +997,20 @@ fn main(py_: &mut Py) -> X<()> {
         }
         "drafts" => {
             let params = [("inbox", a1.clone()), ("reason", reason)];
-            let d = call(py_, Method::Get, &rs("drafts"), &params, None, line::DRAFTS_CALL)?;
+            let d = call(
+                py_,
+                Method::Get,
+                &rs("drafts"),
+                &params,
+                None,
+                line::DRAFTS_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
             let rows = or_get(&d, "drafts", empty_list(), line::DRAFTS_ROWS, M)?;
             if !py::truthy(&rows) {
-                py_.print(&format!(
-                    "No drafts {} tracks in {a1}.",
-                    product_name!()
-                ));
+                py_.print(&format!("No drafts {} tracks in {a1}.", product_name!()));
             }
             for r in raise(iter(&rows), line::DRAFTS_FOR, M)? {
                 let a = or_get(&r, "author", empty_dict(), line::DRAFTS_AUTHOR, M)?;
@@ -977,10 +1038,11 @@ fn main(py_: &mut Py) -> X<()> {
                 let state_by = g(&r, "stateBy", line::DRAFTS_STATE, M)?;
                 if p::truthy(state_by.as_ref()) {
                     let st = g(&r, "status", line::DRAFTS_STATE, M)?;
-                    if st
-                        .as_ref()
-                        .is_some_and(|s| ["sent", "held", "discarded"].iter().any(|x| p::eq_str(s, x)))
-                    {
+                    if st.as_ref().is_some_and(|s| {
+                        ["sent", "held", "discarded"]
+                            .iter()
+                            .any(|x| p::eq_str(s, x))
+                    }) {
                         let st = raise(py_index(&r, "status"), line::DRAFTS_STATE + 1, M)?;
                         let by = raise(py_index(&r, "stateBy"), line::DRAFTS_STATE + 1, M)?;
                         row.push_str(&format!("  · {} by {}", s_(&st), s_(&by)));
@@ -991,7 +1053,14 @@ fn main(py_: &mut Py) -> X<()> {
         }
         "draft-show" => {
             let params = [("id", a1.clone()), ("reason", reason)];
-            let d = call(py_, Method::Get, &rs("draft-open"), &params, None, line::DRAFT_SHOW_CALL)?;
+            let d = call(
+                py_,
+                Method::Get,
+                &rs("draft-open"),
+                &params,
+                None,
+                line::DRAFT_SHOW_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
@@ -1020,7 +1089,14 @@ fn main(py_: &mut Py) -> X<()> {
                 }
             }
             let body = core::obj(body);
-            let d = call(py_, Method::Post, &rs(&sub), &[], Some(&body), line::DRAFT_STATE_CALL)?;
+            let d = call(
+                py_,
+                Method::Post,
+                &rs(&sub),
+                &[],
+                Some(&body),
+                line::DRAFT_STATE_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
@@ -1029,7 +1105,9 @@ fn main(py_: &mut Py) -> X<()> {
                     let st = s_get(&d, "status", line::DRAFT_SEND_STATUS, M)?;
                     let l = line::DRAFT_SEND_PRINT;
                     let id = match g(&d, "id", l, M)?.filter(py::truthy) {
-                        Some(_) => raise(p::concat(" — ", &raise(py_index(&d, "id"), l, M)?), l, M)?,
+                        Some(_) => {
+                            raise(p::concat(" — ", &raise(py_index(&d, "id"), l, M)?), l, M)?
+                        }
                         None => String::new(),
                     };
                     let ds = s_get(&d, "draftStatus", l, M)?;
@@ -1044,8 +1122,10 @@ fn main(py_: &mut Py) -> X<()> {
             if !reason.is_empty() {
                 body.push(("reason", p::sv(&reason)));
             }
-            if matches!(sub.as_str(), "flag" | "move" | "archive" | "delete" | "reply")
-                || (sub == "draft" && !a1.is_empty())
+            if matches!(
+                sub.as_str(),
+                "flag" | "move" | "archive" | "delete" | "reply"
+            ) || (sub == "draft" && !a1.is_empty())
             {
                 body.push(("id", p::sv(&a1)));
             }
@@ -1073,7 +1153,14 @@ fn main(py_: &mut Py) -> X<()> {
                 body.push(("subject", p::sv(py_.env("MR_SUBJECT"))));
             }
             let body = core::obj(body);
-            let d = call(py_, Method::Post, &rs(&sub), &[], Some(&body), line::ACT_CALL)?;
+            let d = call(
+                py_,
+                Method::Post,
+                &rs(&sub),
+                &[],
+                Some(&body),
+                line::ACT_CALL,
+            )?;
             if json_out(py_, &d) {
                 return Ok(());
             }
@@ -1088,8 +1175,7 @@ fn main(py_: &mut Py) -> X<()> {
             } else if sub == "move" {
                 let f = or_get(&d, "folder", p::sv(&a2), line::ACT_MOVE, M)?;
                 py_.print(&format!("moved to {}", s_(&f)));
-            } else if sub == "draft"
-                && p::truthy(g(&d, "draftId", line::ACT_DRAFT_IF, M)?.as_ref())
+            } else if sub == "draft" && p::truthy(g(&d, "draftId", line::ACT_DRAFT_IF, M)?.as_ref())
             {
                 let id = raise(py_index(&d, "draftId"), line::ACT_DRAFT, M)?;
                 let f = or_get(&d, "folder", p::sv("Drafts"), line::ACT_DRAFT, M)?;
@@ -1141,9 +1227,7 @@ fn attachment(py_: &mut Py, a1: &str, a2: &str, reason: String) -> X<()> {
         Err(_) => {
             return Err(die_with(
                 "usage",
-                &format!(
-                    "the attachment number is 1, 2, … (from '{CLI_NAME} mail reader show')"
-                ),
+                &format!("the attachment number is 1, 2, … (from '{CLI_NAME} mail reader show')"),
             ))
         }
     };
@@ -1155,7 +1239,14 @@ fn attachment(py_: &mut Py, a1: &str, a2: &str, reason: String) -> X<()> {
         ));
     }
     let params = [("id", a1.to_string()), ("part", part), ("reason", reason)];
-    let d = call(py_, Method::Get, &format!("{R_}attachment"), &params, None, line::ATT_CALL)?;
+    let d = call(
+        py_,
+        Method::Get,
+        &format!("{R_}attachment"),
+        &params,
+        None,
+        line::ATT_CALL,
+    )?;
     let b = or_get(&d, "dataBase64", p::sv(""), line::ATT_DATA, M)?;
     let data = raise(b64decode(&b), line::ATT_DATA, M)?;
     raise(write_new(&out_path, &data), line::ATT_OPEN, M)?;
@@ -1165,7 +1256,10 @@ fn attachment(py_: &mut Py, a1: &str, a2: &str, reason: String) -> X<()> {
         };
         pairs.retain(|(k, _)| k.as_str() != Some("dataBase64"));
         let saved = p::sv(&out_path);
-        match pairs.iter_mut().find(|(k, _)| k.as_str() == Some("savedTo")) {
+        match pairs
+            .iter_mut()
+            .find(|(k, _)| k.as_str() == Some("savedTo"))
+        {
             Some(slot) => slot.1 = saved,
             None => pairs.push((Text::from("savedTo"), saved)),
         }
@@ -1219,7 +1313,10 @@ mod tests {
         assert_eq!(s[0], "import base64, json, os, sys, time");
         let pins: &[(u32, &str)] = &[
             (line::CALL_DATA, "data = dumps(body).encode() if body"),
-            (line::CALL_HTTP_ERROR, "if isinstance(d.get(\"error\"), str):"),
+            (
+                line::CALL_HTTP_ERROR,
+                "if isinstance(d.get(\"error\"), str):",
+            ),
             (line::CALL_ERROR, "if isinstance(d.get(\"error\"), dict):"),
             (line::CALL_OK, "if not d.get(\"ok\"):"),
             (line::WHO_NAME, "n, ad = (a.get(\"name\") or \"\").strip()"),
@@ -1228,17 +1325,29 @@ mod tests {
             (line::DRAFT_KIND, "kind = \"agent\" if a.get(\"kind\")"),
             (line::DRAFT_EDITED, "edited = time.strftime("),
             (line::DRAFT_EDITED_BY, "if m.get(\"editedBy\"):"),
-            (line::DRAFT_ID, "print(\"Draft:   %s\" % (m.get(\"draftId\")"),
+            (
+                line::DRAFT_ID,
+                "print(\"Draft:   %s\" % (m.get(\"draftId\")",
+            ),
             (line::DRAFT_HINT, "if m.get(\"hint\"):"),
             (line::MSG_DRAFT, "if m.get(\"draft\"):"),
             (line::MSG_HEAD, "print_draft_head(m)"),
-            (line::MSG_FROM, "print(\"From:    %s\" % who(m.get(\"from\")))"),
+            (
+                line::MSG_FROM,
+                "print(\"From:    %s\" % who(m.get(\"from\")))",
+            ),
             (line::MSG_TO_IF, "if m.get(\"to\"):"),
             (line::MSG_TO, "print(\"To:      %s\" % \", \".join(who(x)"),
             (line::MSG_CC_IF, "if m.get(\"cc\"):"),
             (line::MSG_CC, "print(\"Cc:      %s\" % \", \".join(who(x)"),
-            (line::MSG_DATE, "print(\"Date:    %s\" % m.get(\"date\", \"\"))"),
-            (line::MSG_SUBJECT, "print(\"Subject: %s\" % (m.get(\"subject\")"),
+            (
+                line::MSG_DATE,
+                "print(\"Date:    %s\" % m.get(\"date\", \"\"))",
+            ),
+            (
+                line::MSG_SUBJECT,
+                "print(\"Subject: %s\" % (m.get(\"subject\")",
+            ),
             (line::MSG_ID_IF, "if not m.get(\"draft\"):"),
             (line::MSG_ID, "print(\"Id:      %s\" % m.get(\"id\", \"\"))"),
             (line::MSG_AUTH, "ar = m.get(\"authResults\") or {}"),
@@ -1246,17 +1355,32 @@ mod tests {
             (line::MSG_CHECKS, "print(\"Checks:  SPF %s · DKIM %s"),
             (line::MSG_ATTS, "for a in m.get(\"attachments\") or []:"),
             (line::MSG_ATT, "print(\"Attach:  %s. %s (%s, %s bytes)\""),
-            (line::MSG_HTML_IF, "if E(\"MR_HTML\") == \"true\" and m.get(\"html\"):"),
+            (
+                line::MSG_HTML_IF,
+                "if E(\"MR_HTML\") == \"true\" and m.get(\"html\"):",
+            ),
             (line::MSG_HTML, "print(m[\"html\"])"),
             (line::MSG_BLOCKED, "if m.get(\"remoteContentBlocked\"):"),
-            (line::MSG_TEXT, "print(m.get(\"text\") or \"(no text part)\")"),
+            (
+                line::MSG_TEXT,
+                "print(m.get(\"text\") or \"(no text part)\")",
+            ),
             (line::INBOXES_CALL, "d = call(\"GET\", R + \"inboxes\""),
             (line::INBOXES_ROWS, "rows = d.get(\"inboxes\") or []"),
             (line::INBOXES_NONE, "print(\"No inboxes you can open.\""),
             (line::INBOXES_FOR, "for i in rows:"),
-            (line::INBOXES_OWNER, "owner = i.get(\"person\") or i.get(\"workspace\")"),
-            (line::INBOXES_TAG, "tag = \" (you)\" if i.get(\"own\") else \"\""),
-            (line::INBOXES_ROW, "print(\"%-40s %-9s %-6s %s%s\" % (i[\"address\"]"),
+            (
+                line::INBOXES_OWNER,
+                "owner = i.get(\"person\") or i.get(\"workspace\")",
+            ),
+            (
+                line::INBOXES_TAG,
+                "tag = \" (you)\" if i.get(\"own\") else \"\"",
+            ),
+            (
+                line::INBOXES_ROW,
+                "print(\"%-40s %-9s %-6s %s%s\" % (i[\"address\"]",
+            ),
             (line::FOLDERS_CALL, "d = call(\"GET\", R + \"folders\""),
             (line::FOLDERS_FOR, "for f in d.get(\"folders\") or []:"),
             (line::FOLDERS_ROW, "print(\"%-30s %s\" % (f[\"name\"]"),
@@ -1266,14 +1390,23 @@ mod tests {
             (line::MESSAGES_ROW, "print(\"%s %s  %-20s  %-30s  %s\""),
             (line::MESSAGES_ROW + 1, "who(m.get(\"from\"))[:30]"),
             (line::MESSAGES_NEXT, "if d.get(\"nextOffset\") is not None:"),
-            (line::MESSAGES_MORE, "print(\"more: k2 mail reader messages %s"),
+            (
+                line::MESSAGES_MORE,
+                "print(\"more: k2 mail reader messages %s",
+            ),
             (line::SHOW_CALL, "d = call(\"GET\", R + \"message\""),
             (line::SHOW_PRINT, "print_message(d[\"message\"])"),
             (line::THREAD_CALL, "d = call(\"GET\", R + \"thread\""),
-            (line::THREAD_FOR, "for n, m in enumerate(d.get(\"messages\") or []):"),
+            (
+                line::THREAD_FOR,
+                "for n, m in enumerate(d.get(\"messages\") or []):",
+            ),
             (line::THREAD_PRINT, "print_message(m)"),
             (line::ATT_CALL, "d = call(\"GET\", R + \"attachment\""),
-            (line::ATT_DATA, "data = base64.b64decode(d.get(\"dataBase64\") or \"\")"),
+            (
+                line::ATT_DATA,
+                "data = base64.b64decode(d.get(\"dataBase64\") or \"\")",
+            ),
             (line::ATT_OPEN, "with open(out, \"xb\") as f:"),
             (line::ATT_PRINT, "print(\"saved %s (%s, %d bytes) to %s\""),
             (line::LOG_CALL, "d = call(\"GET\", R + \"log\""),
@@ -1289,18 +1422,36 @@ mod tests {
             (line::DRAFTS_EDITED, "edited = time.strftime("),
             (line::DRAFTS_ROW, "line = \"%s  %-9s by %-20s edited %s\""),
             (line::DRAFTS_EDITED_BY, "if r.get(\"editedBy\"):"),
-            (line::DRAFTS_STATE, "if r.get(\"stateBy\") and r.get(\"status\") in"),
-            (line::DRAFTS_STATE + 1, "line += \"  · %s by %s\" % (r[\"status\"]"),
-            (line::DRAFT_SHOW_CALL, "d = call(\"GET\", R + \"draft-open\""),
+            (
+                line::DRAFTS_STATE,
+                "if r.get(\"stateBy\") and r.get(\"status\") in",
+            ),
+            (
+                line::DRAFTS_STATE + 1,
+                "line += \"  · %s by %s\" % (r[\"status\"]",
+            ),
+            (
+                line::DRAFT_SHOW_CALL,
+                "d = call(\"GET\", R + \"draft-open\"",
+            ),
             (line::DRAFT_SHOW_PRINT, "print_message(d[\"draft\"])"),
-            (line::DRAFT_STATE_CALL, "d = call(\"POST\", R + sub, None, body)"),
+            (
+                line::DRAFT_STATE_CALL,
+                "d = call(\"POST\", R + sub, None, body)",
+            ),
             (line::DRAFT_SEND_STATUS, "st = d.get(\"status\")"),
             (line::DRAFT_SEND_PRINT, "print(\"send %s%s — draft %s %s\""),
             (line::ACT_CALL, "d = call(\"POST\", R + sub, None, body)"),
             (line::ACT_STATUS, "status = d.get(\"status\")"),
             (line::ACT_SEND, "print(\"send %s%s\" % (status"),
-            (line::ACT_MOVE, "print(\"moved to %s\" % (d.get(\"folder\") or a2))"),
-            (line::ACT_DRAFT_IF, "elif sub == \"draft\" and d.get(\"draftId\"):"),
+            (
+                line::ACT_MOVE,
+                "print(\"moved to %s\" % (d.get(\"folder\") or a2))",
+            ),
+            (
+                line::ACT_DRAFT_IF,
+                "elif sub == \"draft\" and d.get(\"draftId\"):",
+            ),
             (line::ACT_DRAFT, "print(\"draft %s saved to %s\""),
         ];
         for (n, text) in pins {
@@ -1371,13 +1522,18 @@ mod tests {
         let e = env(&["show", "-x"]);
         assert_eq!(e.get("MR_A1"), "-x");
         // `draft` with --inbox takes no id; without, one.
-        assert_eq!(env(&["draft", "--inbox", "a@x", "--body", "b"]).get("MR_A1"), "");
+        assert_eq!(
+            env(&["draft", "--inbox", "a@x", "--body", "b"]).get("MR_A1"),
+            ""
+        );
         assert_eq!(env(&["draft", "m1", "--body", "b"]).get("MR_A1"), "m1");
         // `--unread` is read=false for flag, the filter elsewhere.
         assert_eq!(env(&["flag", "m", "--unread"]).get("MR_READ"), "false");
         assert_eq!(env(&["messages", "a", "--unread"]).get("MR_UNREAD"), "true");
         // --to and --cc gather one a line.
-        let e = env(&["send", "--inbox", "a", "--body", "b", "--to", "x", "--to", "y,z"]);
+        let e = env(&[
+            "send", "--inbox", "a", "--body", "b", "--to", "x", "--to", "y,z",
+        ]);
         assert_eq!(e.get("MR_TO"), "x\ny,z");
         // `--body -` reads stdin once; a second one reads nothing.
         let e = env(&["reply", "m", "--body", "-"]);
@@ -1405,7 +1561,10 @@ mod tests {
             &["inboxes", "x"],
         ] {
             let h = hint(words);
-            assert!(h.contains(&format!("{CLI_NAME} mail reader")), "{words:?}: {h}");
+            assert!(
+                h.contains(&format!("{CLI_NAME} mail reader")),
+                "{words:?}: {h}"
+            );
             if CLI_NAME != "k2" {
                 assert!(!h.contains("k2 ") && !h.contains("k5 "), "{words:?}: {h}");
             }
@@ -1414,7 +1573,10 @@ mod tests {
 
     #[test]
     fn a_slice_is_python_s() {
-        assert_eq!(head(&p::sv("2026-11-20T10:11:12Z"), 16), Ok(p::sv("2026-11-20T10:11")));
+        assert_eq!(
+            head(&p::sv("2026-11-20T10:11:12Z"), 16),
+            Ok(p::sv("2026-11-20T10:11"))
+        );
         assert_eq!(
             head(&Value::Array(vec![p::sv("a"), p::sv("b")]), 1),
             Ok(Value::Array(vec![p::sv("a")]))

@@ -11,8 +11,8 @@ use crate::families::mail::core::{self, print, run_env, usage, At, Plan, Py, Sec
 use crate::families::mail::py::{self as p, attr_get, iter, join, py_index};
 use crate::families::mail::reads::b64decode;
 use crate::out::json::Value;
-use crate::out::pylib::json as pyjson;
 use crate::out::py;
+use crate::out::pylib::json as pyjson;
 use k2_client::brand::CLI_NAME;
 
 /// The verbs (second words) this module answers.
@@ -109,9 +109,7 @@ pub fn parse(_verb: &str, words: &[&str]) -> Plan {
                 if id.is_empty() {
                     id = w;
                 } else {
-                    return usage(format!(
-                        "unexpected extra argument '{w}' — one <id> only"
-                    ));
+                    return usage(format!("unexpected extra argument '{w}' — one <id> only"));
                 }
                 i += 1;
                 continue;
@@ -195,7 +193,8 @@ fn s_or_empty(d: &Value, key: &str, l: u32) -> R<String> {
 pub fn human_size(n: Option<&Value>) -> Result<String, String> {
     let v = p::or(n.cloned(), Value::Int("0".into()));
     let digits = p::py_int(&v)?;
-    let small = digits.starts_with('-') || (digits.len() < 5 && digits.parse::<u32>().is_ok_and(|n| n < 1024));
+    let small = digits.starts_with('-')
+        || (digits.len() < 5 && digits.parse::<u32>().is_ok_and(|n| n < 1024));
     if small {
         return Ok(format!("{digits} bytes"));
     }
@@ -271,7 +270,11 @@ fn detail(py_: &mut Py, r: &Value, pad: &str, first: u32, files_at: u32) -> R<()
         ("cc", "cc      : ", ""),
         ("bcc", "bcc     : ", ""),
         ("policyBcc", "bcc (owner policy): ", ""),
-        ("replyTo", "reply-to: ", " (answers go here, not to the sender)"),
+        (
+            "replyTo",
+            "reply-to: ",
+            " (answers go here, not to the sender)",
+        ),
     ];
     let mut l = first + 1;
     for (key, label, tail) in lines {
@@ -393,7 +396,10 @@ fn show_py(py_: &mut Py) -> R<()> {
         py_.print_json(&d);
         return Ok(());
     }
-    let m = p::or(g(&d, "message", line::SHOW_MESSAGE)?, Value::Object(Vec::new()));
+    let m = p::or(
+        g(&d, "message", line::SHOW_MESSAGE)?,
+        Value::Object(Vec::new()),
+    );
     let who = who(&m, line::SHOW_WHO)?;
     let l = line::SHOW_HEAD;
     let id = s_or_empty(&m, "id", l)?;
@@ -444,7 +450,10 @@ fn save_py(py_: &mut Py) -> R<()> {
     if let Err(e) = write_new(&out, &data) {
         return Err(py_.die_with(
             "usage",
-            &format!("can't write --out '{out}': {}", pyjson::os_error(&e, &out).message),
+            &format!(
+                "can't write --out '{out}': {}",
+                pyjson::os_error(&e, &out).message
+            ),
             None,
         ));
     }
@@ -550,20 +559,41 @@ mod tests {
         let s = script();
         let pins: &[(u32, &str)] = &[
             (line::HUMAN_SIZE, "n = int(n or 0)"),
-            (line::FILE_LINE, "return \"%s (%s, %s%s)\" % (term_line(f.get(\"name\")"),
+            (
+                line::FILE_LINE,
+                "return \"%s (%s, %s%s)\" % (term_line(f.get(\"name\")",
+            ),
             (line::FILE_LINE + 1, "term_line(f.get(\"contentType\")"),
             (line::FILE_LINE + 2, "\"\" if f.get(\"scanned\") else"),
-            (line::SHOWN_AS, "return \" shown as \\\"%s\\\"\" % term_line(r[\"fromName\"])"),
-            (line::LIST_CALL, "d = call(\"GET\", \"/cli/mail/approvals/list\")"),
+            (
+                line::SHOWN_AS,
+                "return \" shown as \\\"%s\\\"\" % term_line(r[\"fromName\"])",
+            ),
+            (
+                line::LIST_CALL,
+                "d = call(\"GET\", \"/cli/mail/approvals/list\")",
+            ),
             (line::LIST_ROWS, "rows = d.get(\"pending\") or []"),
-            (line::LIST_COUNT, "print(\"%s send(s) waiting for approval:\""),
+            (
+                line::LIST_COUNT,
+                "print(\"%s send(s) waiting for approval:\"",
+            ),
             (line::LIST_FOR, "for r in rows:"),
-            (line::LIST_WHO, "who = r.get(\"workspace\") or r.get(\"agentName\")"),
+            (
+                line::LIST_WHO,
+                "who = r.get(\"workspace\") or r.get(\"agentName\")",
+            ),
             (line::LIST_EXP_IF, "if r.get(\"expiresAt\"):"),
             (line::LIST_EXP, "u = until(r[\"expiresAt\"])"),
-            (line::LIST_HEAD, "print(\"%s  from %s%s (%s) — queued %s%s\""),
+            (
+                line::LIST_HEAD,
+                "print(\"%s  from %s%s (%s) — queued %s%s\"",
+            ),
             (line::LIST_HEAD + 1, "r.get(\"from\") or \"?\", shown_as(r)"),
-            (line::LIST_TO, "print(\"  to      : %s\" % (\", \".join(r.get(\"to\")"),
+            (
+                line::LIST_TO,
+                "print(\"  to      : %s\" % (\", \".join(r.get(\"to\")",
+            ),
             (line::LIST_CC_IF, "if r.get(\"cc\"):"),
             (line::LIST_CC_IF + 2, "if r.get(\"bcc\"):"),
             (line::LIST_CC_IF + 4, "if r.get(\"policyBcc\"):"),
@@ -574,14 +604,35 @@ mod tests {
             (line::LIST_CC_IF + 13, "if r.get(\"sourceCheck\"):"),
             (line::LIST_FILES, "for f in r.get(\"files\") or []:"),
             (line::LIST_FILE, "print(\"  file %-3s: %s\""),
-            (line::LIST_PREVIEW_IF, "if r.get(\"bodyPreview\") is not None:"),
-            (line::LIST_OPEN, "print(\"  open    : k2 hostmail approvals show"),
-            (line::LIST_DECIDE + 1, "% (r.get(\"id\", \"\"), r.get(\"id\", \"\")))"),
-            (line::SHOW_CALL, "d = call(\"GET\", \"/cli/mail/approvals/show\""),
+            (
+                line::LIST_PREVIEW_IF,
+                "if r.get(\"bodyPreview\") is not None:",
+            ),
+            (
+                line::LIST_OPEN,
+                "print(\"  open    : k2 hostmail approvals show",
+            ),
+            (
+                line::LIST_DECIDE + 1,
+                "% (r.get(\"id\", \"\"), r.get(\"id\", \"\")))",
+            ),
+            (
+                line::SHOW_CALL,
+                "d = call(\"GET\", \"/cli/mail/approvals/show\"",
+            ),
             (line::SHOW_MESSAGE, "m = d.get(\"message\") or {}"),
-            (line::SHOW_WHO, "who = m.get(\"workspace\") or m.get(\"agentName\")"),
-            (line::SHOW_HEAD, "print(\"%s  from %s%s (%s), waiting for approval\""),
-            (line::SHOW_TO, "print(\"to      : %s\" % (\", \".join(m.get(\"to\")"),
+            (
+                line::SHOW_WHO,
+                "who = m.get(\"workspace\") or m.get(\"agentName\")",
+            ),
+            (
+                line::SHOW_HEAD,
+                "print(\"%s  from %s%s (%s), waiting for approval\"",
+            ),
+            (
+                line::SHOW_TO,
+                "print(\"to      : %s\" % (\", \".join(m.get(\"to\")",
+            ),
             (line::SHOW_CC_IF, "if m.get(\"cc\"):"),
             (line::SHOW_CC_IF + 8, "if m.get(\"forwardOf\"):"),
             (line::SHOW_CC_IF + 10, "print(\"subject : %s\""),
@@ -591,13 +642,34 @@ mod tests {
             (line::SHOW_FILE, "print(\"file %-3s: %s\""),
             (line::SHOW_SAVE_IF, "if m.get(\"files\"):"),
             (line::SHOW_TEXT, "print(term_safe(m.get(\"text\") or \"\"))"),
-            (line::SAVE_CALL, "d = call(\"GET\", \"/cli/mail/approvals/show\","),
-            (line::SAVE_DATA, "data = base64.b64decode(d.get(\"dataBase64\")"),
-            (line::SAVE_JSON, "print(dumps({\"ok\": True, \"id\": d.get(\"id\")"),
-            (line::SAVE_PRINT + 2, "% (term_safe(d.get(\"name\") or \"?\")"),
-            (line::APPROVE_CALL, "d = call(\"POST\", \"/cli/mail/approvals/approve\""),
-            (line::APPROVE_PRINT, "print(\"%s %s\" % (d.get(\"id\", \"\"), d.get(\"hint\")"),
-            (line::DENY_CALL, "d = call(\"POST\", \"/cli/mail/approvals/deny\","),
+            (
+                line::SAVE_CALL,
+                "d = call(\"GET\", \"/cli/mail/approvals/show\",",
+            ),
+            (
+                line::SAVE_DATA,
+                "data = base64.b64decode(d.get(\"dataBase64\")",
+            ),
+            (
+                line::SAVE_JSON,
+                "print(dumps({\"ok\": True, \"id\": d.get(\"id\")",
+            ),
+            (
+                line::SAVE_PRINT + 2,
+                "% (term_safe(d.get(\"name\") or \"?\")",
+            ),
+            (
+                line::APPROVE_CALL,
+                "d = call(\"POST\", \"/cli/mail/approvals/approve\"",
+            ),
+            (
+                line::APPROVE_PRINT,
+                "print(\"%s %s\" % (d.get(\"id\", \"\"), d.get(\"hint\")",
+            ),
+            (
+                line::DENY_CALL,
+                "d = call(\"POST\", \"/cli/mail/approvals/deny\",",
+            ),
             (line::DENY_PRINT, "print(\"%s rejected — your note reaches"),
         ];
         for (n, text) in pins {
@@ -629,11 +701,23 @@ mod tests {
         );
         assert_eq!(verb(&["approve", "out_1"]), "approvals_approve");
         assert_eq!(verb(&["deny", "out_1", "--note", "no"]), "approvals_deny");
-        assert_eq!(parse("approvals", &["list", "-h"]), Plan::Help("hostmail/approvals"));
-        assert_eq!(hint(&["deny", "out_1"]), "deny requires --note — the reason flows back to the agent's outbox");
-        assert_eq!(hint(&["show", "a", "b"]), "unexpected extra argument 'b' — one <id> only");
+        assert_eq!(
+            parse("approvals", &["list", "-h"]),
+            Plan::Help("hostmail/approvals")
+        );
+        assert_eq!(
+            hint(&["deny", "out_1"]),
+            "deny requires --note — the reason flows back to the agent's outbox"
+        );
+        assert_eq!(
+            hint(&["show", "a", "b"]),
+            "unexpected extra argument 'b' — one <id> only"
+        );
         assert_eq!(hint(&["show", "--note"]), "--note requires a value");
-        assert_eq!(hint(&["save", "a", "--out"]), "--out requires a path to write the file to");
+        assert_eq!(
+            hint(&["save", "a", "--out"]),
+            "--out requires a path to write the file to"
+        );
     }
 
     /// Under any brand: the usage lines name the brand's command, never
@@ -651,7 +735,10 @@ mod tests {
             &["show", "--file"],
         ] {
             let h = hint(words);
-            assert!(h.contains(&format!("{CLI_NAME} hostmail approvals")), "{words:?}: {h}");
+            assert!(
+                h.contains(&format!("{CLI_NAME} hostmail approvals")),
+                "{words:?}: {h}"
+            );
             if CLI_NAME != "k2" {
                 assert!(!h.contains("k2 ") && !h.contains("k5 "), "{words:?}: {h}");
             }

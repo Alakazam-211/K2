@@ -106,7 +106,11 @@ pub const RESPOND_USAGE: &str = concat!(
     k2_client::cli_name!(),
     " inbox respond <id> \"text\""
 );
-pub const MOVE_USAGE: &str = concat!("Usage: ", k2_client::cli_name!(), " inbox move <id> <folder>");
+pub const MOVE_USAGE: &str = concat!(
+    "Usage: ",
+    k2_client::cli_name!(),
+    " inbox move <id> <folder>"
+);
 pub const ARCHIVE_USAGE: &str = concat!("Usage: ", k2_client::cli_name!(), " inbox archive <id>");
 pub const DELETE_USAGE: &str = concat!("Usage: ", k2_client::cli_name!(), " inbox delete <id>");
 /// `format_inbox` on an empty inbox.
@@ -198,7 +202,10 @@ fn compose(words: &[&str]) -> Option<Ask> {
     let mut vals: [&str; 6] = [""; 6];
     let mut i = 0;
     while let Some(w) = words.get(i) {
-        match w.strip_prefix("--").and_then(|f| FIELDS.iter().position(|x| *x == f)) {
+        match w
+            .strip_prefix("--")
+            .and_then(|f| FIELDS.iter().position(|x| *x == f))
+        {
             Some(k) => {
                 vals[k] = *words.get(i + 1)?;
                 i += 2;
@@ -369,6 +376,7 @@ fn run_with(
         Ask::List { .. } | Ask::Search { .. } => Shown::out(format_inbox(&piped.body)),
         Ask::Read { .. } => read_item(&piped.body),
         Ask::Folders => folders(&piped.body),
+        Ask::Compose { .. } | Ask::Write { .. } => unreachable!("a write returned above"),
     };
     let exit = pipefail(piped.exit, shown.print());
     closing.flush(&mut client, exit);
@@ -797,7 +805,10 @@ mod tests {
                 form: Some("title=a%20b&body=%C3%A9%26&from=o".into())
             })
         );
-        assert_eq!(parse(&["compose", "--body", "x"]), Some(Ask::Compose { form: None }));
+        assert_eq!(
+            parse(&["compose", "--body", "x"]),
+            Some(Ask::Compose { form: None })
+        );
         assert_eq!(parse(&["compose", "--title"]), None);
         assert_eq!(
             parse(&["move", "a", "f/g"]),

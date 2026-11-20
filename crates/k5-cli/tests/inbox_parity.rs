@@ -1394,7 +1394,13 @@ fn inbox_writes_as_the_shell_does() {
         ),
         case(
             "compose, a long body",
-            words(vec!["compose", "--title", "long", "--body", leak("b é".repeat(30000))]),
+            words(vec![
+                "compose",
+                "--title",
+                "long",
+                "--body",
+                leak("b é".repeat(30000)),
+            ]),
             &[],
             vec![ok(DONE)],
             owner_and_port,
@@ -1439,7 +1445,15 @@ fn inbox_writes_as_the_shell_does() {
             0,
             1,
         ),
-        case("move with no folder", &["move", "a1"], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "move with no folder",
+            &["move", "a1"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         // native: inbox archive
         case(
             "archive",
@@ -1450,7 +1464,15 @@ fn inbox_writes_as_the_shell_does() {
             0,
             1,
         ),
-        case("archive with no id", &["archive"], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "archive with no id",
+            &["archive"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         // native: inbox delete
         case(
             "delete",
@@ -1461,7 +1483,15 @@ fn inbox_writes_as_the_shell_does() {
             0,
             1,
         ),
-        case("delete with no id", &["delete"], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "delete with no id",
+            &["delete"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         case(
             "delete, not found",
             &["delete", "zzz"],
@@ -1612,7 +1642,15 @@ fn inbox_help_never_acts() {
     for line in LINES {
         rig.check(&Case {
             compare: Compare::Shell,
-            ..case("help, nothing sent", line, &[], vec![], owner_and_port, 0, 0)
+            ..case(
+                "help, nothing sent",
+                line,
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            )
         });
     }
 }

@@ -136,7 +136,10 @@ fn mail_reader_takes_the_words_as_the_shell_does() {
         ),
         usage_case("an unknown command", &["reader", "nope"]),
         usage_case("an unknown flag", &["reader", "show", "m1", "--nope"]),
-        usage_case("a value flag last", &["reader", "messages", "a@x", "--limit"]),
+        usage_case(
+            "a value flag last",
+            &["reader", "messages", "a@x", "--limit"],
+        ),
         usage_case("folders with no inbox", &["reader", "folders"]),
         usage_case("move with one word", &["reader", "move", "m1"]),
         usage_case("an extra word", &["reader", "show", "m1", "m2"]),
@@ -151,7 +154,10 @@ fn mail_reader_takes_the_words_as_the_shell_does() {
             "send with no inbox",
             &["reader", "send", "--to", "a@x", "--body", "b"],
         ),
-        usage_case("draft with neither id nor inbox", &["reader", "draft", "--body", "b"]),
+        usage_case(
+            "draft with neither id nor inbox",
+            &["reader", "draft", "--body", "b"],
+        ),
         usage_case("draft-send with no id", &["reader", "draft-send"]),
     ];
     for c in &v {
@@ -182,7 +188,11 @@ fn mail_reader_reads_as_the_shell_does() {
             r#"{"ok":true,"inboxes":null,"viewer":{"opensAny":1}}"#,
         ),
         // native: mail reader folders
-        ok_case("folders", &["reader", "folders", "bot@acme.example"], FOLDERS),
+        ok_case(
+            "folders",
+            &["reader", "folders", "bot@acme.example"],
+            FOLDERS,
+        ),
         // native: mail reader folders --json
         ok_case(
             "folders --json",
@@ -244,14 +254,26 @@ fn mail_reader_reads_as_the_shell_does() {
             THREAD,
         ),
         // native: mail reader thread --json
-        ok_case("thread --json", &["reader", "thread", "m1", "--json"], THREAD),
+        ok_case(
+            "thread --json",
+            &["reader", "thread", "m1", "--json"],
+            THREAD,
+        ),
         // native: mail reader log
         ok_case("log", &["reader", "log"], LOG),
         ok_case(
             "log, every filter",
             &[
-                "reader", "log", "--inbox", "bot@acme.example", "--actor", "ann", "--since", "1d",
-                "--limit", "5",
+                "reader",
+                "log",
+                "--inbox",
+                "bot@acme.example",
+                "--actor",
+                "ann",
+                "--since",
+                "1d",
+                "--limit",
+                "5",
             ],
             r#"{"ok":true,"rows":[]}"#,
         ),
@@ -273,7 +295,11 @@ fn mail_reader_reads_as_the_shell_does() {
         // native: mail reader draft-show
         ok_case("draft-show", &["reader", "draft-show", "d1"], DRAFT),
         // native: mail reader draft-show --json
-        ok_case("draft-show --json", &["reader", "draft-show", "d1", "--json"], DRAFT),
+        ok_case(
+            "draft-show --json",
+            &["reader", "draft-show", "d1", "--json"],
+            DRAFT,
+        ),
         // native: mail reader attachment
         case(
             "attachment",
@@ -287,7 +313,15 @@ fn mail_reader_reads_as_the_shell_does() {
         // native: mail reader attachment --json
         case(
             "attachment --json",
-            &["reader", "attachment", "m1", "1", "--out", "att.bin", "--json"],
+            &[
+                "reader",
+                "attachment",
+                "m1",
+                "1",
+                "--out",
+                "att.bin",
+                "--json",
+            ],
             &[],
             vec![ok(ATTACHMENT)],
             no_file,
@@ -337,14 +371,30 @@ fn mail_reader_writes_as_the_shell_does() {
             r#"{"ok":true,"folder":"Archive/2026"}"#,
         ),
         // native: mail reader move --json
-        ok_case("move --json", &["reader", "move", "m1", "Archive", "--json"], DONE),
-        ok_case("move, no folder in the answer", &["reader", "move", "m1", "X"], DONE),
+        ok_case(
+            "move --json",
+            &["reader", "move", "m1", "Archive", "--json"],
+            DONE,
+        ),
+        ok_case(
+            "move, no folder in the answer",
+            &["reader", "move", "m1", "X"],
+            DONE,
+        ),
         // native: mail reader archive
         ok_case("archive", &["reader", "archive", "m1"], DONE),
         // native: mail reader archive --json
-        ok_case("archive --json", &["reader", "archive", "m1", "--json"], DONE),
+        ok_case(
+            "archive --json",
+            &["reader", "archive", "m1", "--json"],
+            DONE,
+        ),
         // native: mail reader delete
-        ok_case("delete", &["reader", "delete", "m1", "--reason", "spam"], DONE),
+        ok_case(
+            "delete",
+            &["reader", "delete", "m1", "--reason", "spam"],
+            DONE,
+        ),
         // native: mail reader delete --json
         ok_case("delete --json", &["reader", "delete", "m1", "--json"], DONE),
         // native: mail reader reply
@@ -384,8 +434,20 @@ fn mail_reader_writes_as_the_shell_does() {
         ok_case(
             "draft, a new one",
             &[
-                "reader", "draft", "--inbox", "me@acme.example", "--to", "a@x, b@x", "--to", "c@x",
-                "--cc", "d@x", "--subject", "S", "--body", "x",
+                "reader",
+                "draft",
+                "--inbox",
+                "me@acme.example",
+                "--to",
+                "a@x, b@x",
+                "--to",
+                "c@x",
+                "--cc",
+                "d@x",
+                "--subject",
+                "S",
+                "--body",
+                "x",
             ],
             r#"{"ok":true,"draftId":"d8"}"#,
         ),
@@ -395,25 +457,52 @@ fn mail_reader_writes_as_the_shell_does() {
             &["reader", "draft", "m1", "--body", "x", "--json"],
             DONE,
         ),
-        ok_case("draft, no draft id", &["reader", "draft", "m1", "--body", "x"], DONE),
+        ok_case(
+            "draft, no draft id",
+            &["reader", "draft", "m1", "--body", "x"],
+            DONE,
+        ),
         // native: mail reader send
         ok_case(
             "send",
             &[
-                "reader", "send", "--inbox", "me@acme.example", "--to", "a@x", "--subject", "S",
-                "--body", "x",
+                "reader",
+                "send",
+                "--inbox",
+                "me@acme.example",
+                "--to",
+                "a@x",
+                "--subject",
+                "S",
+                "--body",
+                "x",
             ],
             r#"{"ok":true,"status":"queued","id":"out_2"}"#,
         ),
         // native: mail reader send --json
         ok_case(
             "send --json",
-            &["reader", "send", "--inbox", "me@acme.example", "--body", "", "--json"],
+            &[
+                "reader",
+                "send",
+                "--inbox",
+                "me@acme.example",
+                "--body",
+                "",
+                "--json",
+            ],
             DONE,
         ),
         ok_case(
             "send, no status",
-            &["reader", "send", "--inbox", "me@acme.example", "--body", "x"],
+            &[
+                "reader",
+                "send",
+                "--inbox",
+                "me@acme.example",
+                "--body",
+                "x",
+            ],
             DONE,
         ),
         // native: mail reader draft-save
@@ -437,20 +526,40 @@ fn mail_reader_writes_as_the_shell_does() {
             DONE,
         ),
         // native: mail reader draft-save --json
-        ok_case("draft-save --json", &["reader", "draft-save", "d1", "--json"], DONE),
+        ok_case(
+            "draft-save --json",
+            &["reader", "draft-save", "d1", "--json"],
+            DONE,
+        ),
         // native: mail reader draft-send
         ok_case(
             "draft-send",
             &["reader", "draft-send", "d1"],
             r#"{"ok":true,"status":"sent","id":"out_3","draftStatus":"sent"}"#,
         ),
-        ok_case("draft-send, a bare answer", &["reader", "draft-send", "d1"], DONE),
+        ok_case(
+            "draft-send, a bare answer",
+            &["reader", "draft-send", "d1"],
+            DONE,
+        ),
         // native: mail reader draft-send --json
-        ok_case("draft-send --json", &["reader", "draft-send", "d1", "--json"], DONE),
+        ok_case(
+            "draft-send --json",
+            &["reader", "draft-send", "d1", "--json"],
+            DONE,
+        ),
         // native: mail reader draft-discard
         ok_case(
             "draft-discard",
-            &["reader", "draft-discard", "d1", "--body", "ignored", "--to", "x"],
+            &[
+                "reader",
+                "draft-discard",
+                "d1",
+                "--body",
+                "ignored",
+                "--to",
+                "x",
+            ],
             DONE,
         ),
         // native: mail reader draft-discard --json
@@ -710,7 +819,15 @@ fn mail_reader_help_never_acts() {
     for line in LINES {
         rig.check(&compare(
             Compare::Shell,
-            case("help, nothing sent", line, &[], vec![], owner_and_port, 0, 0),
+            case(
+                "help, nothing sent",
+                line,
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
         ));
     }
 }

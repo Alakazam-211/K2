@@ -73,14 +73,20 @@ fn hostmail_approvals_take_the_words_as_the_shell_does() {
         usage_case("an unknown command", &["approvals", "nope"]),
         usage_case("list takes no id", &["approvals", "list", "out_1"]),
         usage_case("list takes no note", &["approvals", "--note", "x"]),
-        usage_case("an unknown flag", &["approvals", "show", "out_1", "--bogus"]),
+        usage_case(
+            "an unknown flag",
+            &["approvals", "show", "out_1", "--bogus"],
+        ),
         usage_case("a single dash", &["approvals", "show", "-"]),
         usage_case("two ids", &["approvals", "approve", "out_1", "out_2"]),
         usage_case("--note last", &["approvals", "approve", "out_1", "--note"]),
         usage_case("--file last", &["approvals", "save", "out_1", "--file"]),
         usage_case("--out last", &["approvals", "save", "out_1", "--out"]),
         usage_case("show with no id", &["approvals", "show"]),
-        usage_case("save with no --out", &["approvals", "save", "out_1", "--file", "1"]),
+        usage_case(
+            "save with no --out",
+            &["approvals", "save", "out_1", "--file", "1"],
+        ),
         usage_case("approve with no id", &["approvals", "approve", "--json"]),
         usage_case("deny with no id", &["approvals", "deny", "--note", "x"]),
         usage_case("deny with no note", &["approvals", "deny", "out_1"]),
@@ -118,11 +124,23 @@ fn hostmail_approvals_answer_as_the_shell_does() {
             r#"{"ok":true}"#,
         ),
         // native: hostmail approvals show --json
-        ok_case("show --json", &["approvals", "show", "out_1", "--json"], SHOW),
+        ok_case(
+            "show --json",
+            &["approvals", "show", "out_1", "--json"],
+            SHOW,
+        ),
         // native: hostmail approvals save
         case(
             "save",
-            &["approvals", "save", "out_1", "--file", "1", "--out", "saved.pdf"],
+            &[
+                "approvals",
+                "save",
+                "out_1",
+                "--file",
+                "1",
+                "--out",
+                "saved.pdf",
+            ],
             &[],
             vec![ok(SAVE)],
             no_file,
@@ -133,7 +151,14 @@ fn hostmail_approvals_answer_as_the_shell_does() {
         case(
             "save --json",
             &[
-                "approvals", "save", "out_1", "--file", "1", "--out", "saved.pdf", "--json",
+                "approvals",
+                "save",
+                "out_1",
+                "--file",
+                "1",
+                "--out",
+                "saved.pdf",
+                "--json",
             ],
             &[],
             vec![ok(SAVE)],
@@ -143,7 +168,15 @@ fn hostmail_approvals_answer_as_the_shell_does() {
         ),
         case(
             "save, the path is there",
-            &["approvals", "save", "out_1", "--file", "1", "--out", "saved.pdf"],
+            &[
+                "approvals",
+                "save",
+                "out_1",
+                "--file",
+                "1",
+                "--out",
+                "saved.pdf",
+            ],
             &[],
             vec![],
             a_file,
@@ -152,7 +185,15 @@ fn hostmail_approvals_answer_as_the_shell_does() {
         ),
         case(
             "save, into a folder that isn't there",
-            &["approvals", "save", "out_1", "--file", "1", "--out", "nodir/saved.pdf"],
+            &[
+                "approvals",
+                "save",
+                "out_1",
+                "--file",
+                "1",
+                "--out",
+                "nodir/saved.pdf",
+            ],
             &[],
             vec![ok(SAVE)],
             no_file,
@@ -263,12 +304,29 @@ fn hostmail_approvals_help_never_acts() {
     const LINES: &[&[&str]] = &[
         &["approvals", "approve", "out_1", "-h"],
         &["approvals", "deny", "out_1", "--note", "x", "--help"],
-        &["approvals", "save", "--help", "out_1", "--file", "1", "--out", "f"],
+        &[
+            "approvals",
+            "save",
+            "--help",
+            "out_1",
+            "--file",
+            "1",
+            "--out",
+            "f",
+        ],
     ];
     for line in LINES {
         rig.check(&compare(
             Compare::Shell,
-            case("help, nothing sent", line, &[], vec![], owner_and_port, 0, 0),
+            case(
+                "help, nothing sent",
+                line,
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
         ));
     }
 }

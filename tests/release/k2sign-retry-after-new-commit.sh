@@ -51,11 +51,18 @@ block = "\n".join(lines[start:end + 1])
 assert 'k2sa_open_session "$VERSION" "$K2_SIGN_BASE" "${K2_SIGN_ASSETS[@]}" || exit 1' in block, block
 open(sys.argv[2], "w").write(block + "\n")
 PY
-# step155: one release run's approval step, in the repo, as release.sh runs it.
+# step155: one release run's approval step, in the repo, as release.sh runs it:
+# with release.sh's real step timer (scripts/lib/release-timer.sh) loaded and
+# Step 1.55 open, so the block's own _rt_start / _rt_end calls run for real.
+# Its timings go to this test's own folder, never ~/k2-release-audit.
 step155() {
-    (cd "$tmp/repo" && VERSION="$V" TAG="v$V" K2_SIGNER=k2sign K2_SKIP_WINDOWS_NSIS=1 bash -c \
-        'set -euo pipefail; source "$1"; source "$2"; source "$3"; echo "approval step ok"' _ \
-        "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" "$tmp/approval-block.sh")
+    (cd "$tmp/repo" && VERSION="$V" TAG="v$V" K2_SIGNER=k2sign K2_SKIP_WINDOWS_NSIS=1 \
+        K2_RELEASE_AUDIT_DIR="$tmp/timings" bash -c \
+        'set -euo pipefail; source "$4"; _rt_init "$VERSION" "$PWD"; trap '"'"'_rt_finish "$?"'"'"' EXIT
+         _rt_step 1.55 "Signing approval"
+         source "$1"; source "$2"; source "$3"; echo "approval step ok"' _ \
+        "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" "$tmp/approval-block.sh" \
+        "$REPO/scripts/lib/release-timer.sh")
 }
 # A throwaway repo; no global or system git config (no signing, no hooks).
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -71,6 +78,9 @@ check "Step 0.45's preflight (its self-test signature is not a release signature
 check "try 1: one approval" 0 "approval step ok" step155
 [ "$(asks)" = 1 ] && pass "asked once" || fail "asks after try 1" "$(asks)"
 [ "$(field "$SESS/$V.json" base_commit)" = "$C1" ] && pass "the session is bound to try 1's commit" || fail "session base" "$(cat "$SESS/$V.json")"
+grep -q '"id":"1.55:approval".*"kind":"waiting"' "$tmp/timings/$V/timings.jsonl" 2>/dev/null \
+    && pass "the step timer recorded try 1's wait for the approval as waiting time" \
+    || fail "timer row for 1.55:approval" "$(cat "$tmp/timings/$V/timings.jsonl" 2>&1)"
 
 echo "== tries 2-6 (0.46.11 took six): a fix commit lands each time, the run is retried =="
 prev="$C1"

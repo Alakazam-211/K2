@@ -42,11 +42,11 @@ EOF
 
 # The job view → lines (stdin = {job:{…}}); `seen` = steps already printed.
 _app_catalog_print_job() {
-    K2_CJ_SEEN="${1:-}" python3 -c '
+    K2_AC_SEEN="${1:-}" python3 -c '
 import json, os, sys
 v = json.load(sys.stdin)
 j = v.get("job") or v
-seen = set(filter(None, os.environ.get("K2_CJ_SEEN", "").split(",")))
+seen = set(filter(None, os.environ.get("K2_AC_SEEN", "").split(",")))
 for s in j.get("steps", []):
     if s.get("state") == "done" and s["step"] not in seen:
         note = ("  " + s["note"]) if s.get("note") else ""

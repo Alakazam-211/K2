@@ -111,6 +111,9 @@ const JOB_FAILED_REASONS: &[&str] = &[
     "queue_timeout",
     // Over the node's caps (compute DX slice A): the job asks too much.
     "exceeds_node_caps",
+    // Its warm slot grew past the node's whole disk budget: it would do
+    // the same on the next node.
+    super::proto::share::codes::DISK_BUDGET,
     // Compute secret-env (SE11, SE20): the grant, the secret or the ask
     // decides these, the same on every node.
     super::proto::secret::codes::NOT_GRANTED,
@@ -252,6 +255,25 @@ mod tests {
         assert_eq!(node_lost_override(Some("6000"), true, true), None, "never longer than the default");
         assert_eq!(node_lost_override(Some("x"), true, true), None);
         assert_eq!(node_lost_override(None, true, true), None);
+    }
+
+    /// A job whose warm slot outgrew the node's whole disk budget would do
+    /// the same on any node: a result, never retried, never a strike
+    /// against the node, however often it happens.
+    #[test]
+    fn a_disk_budget_stop_is_the_jobs_own_result() {
+        let code = crate::compute::proto::share::codes::DISK_BUDGET;
+        assert_eq!(code, "disk_budget", "the code the node sends");
+        assert!(!is_infra(JobState::Failed, Some(code)), "never retried");
+        assert!(!retry_elsewhere_only(Some(code)), "not even on another node");
+        assert!(!counts_against_node(JobState::Failed, Some(code)));
+        let t = Tuning { quarantine_after: 2, quarantine_secs: 100, ..Tuning::default() };
+        let mut h = NodeHealth::default();
+        for at in 1..10 {
+            assert!(!h.record(JobState::Failed, Some(code), at, &t), "stop {at} set the node aside");
+        }
+        assert_eq!(h.consecutive, 0);
+        assert!(!h.is_set_aside(10));
     }
 
     #[test]

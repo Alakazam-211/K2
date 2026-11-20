@@ -161,6 +161,7 @@ pub fn end_words(state: &str, reason: Option<&str>, started: bool, node: &str) -
         "stalled" => "it printed nothing for its --stall-timeout".to_string(),
         "timeout" => "it ran past its --timeout".to_string(),
         "mem_cap" => "it used more memory than its --mem".to_string(),
+        "disk_budget" => format!("its build output grew past {node}'s whole disk budget"),
         _ => match state {
             "unknown" => format!("{node} lost track of it"),
             "interrupted" => format!("{node} interrupted it{}", if r.is_empty() { String::new() } else { format!(" ({r})") }),
@@ -396,6 +397,8 @@ mod tests {
         assert!(end_words("interrupted", Some("node_lost"), true, "k2n7").contains("offline"));
         assert_eq!(end_words("assigned", Some("withdraw_resend"), false, "k2n7"), "it never started on k2n7");
         assert!(end_words("failed", Some("weird_code"), true, "k2n7").contains("(weird_code)"));
+        let d = end_words("failed", Some(crate::compute::proto::share::codes::DISK_BUDGET), true, "node-1");
+        assert!(d.contains("whole disk budget") && !d.contains("infrastructure"), "the job's own result: {d}");
         let n = next_words(next::RETRY_AUTO, "k2n7", Some("k2n12"));
         assert!(n.starts_with("retried automatically on k2n12") && n.contains("--retries 0"), "{n}");
         assert!(next_words(next::RESENT, "k2n7", None).contains("new caps"));

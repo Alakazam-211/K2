@@ -93,8 +93,9 @@ pub fn warm_cap(policy: &crate::config::Policy) -> u64 {
 }
 
 /// `failed / disk_budget`: the job's warm slot grew past the node's whole
-/// disk budget while it ran.
-pub const DISK_BUDGET: &str = "disk_budget";
+/// disk budget while it ran (a job result for the controller: never
+/// retried, no node strike).
+pub const DISK_BUDGET: &str = k2_node_proto::share::codes::DISK_BUDGET;
 
 /// The `disk_budget` stop's detail, for the job's row and log.
 pub fn disk_budget_detail(bytes: u64, budget: u64) -> String {

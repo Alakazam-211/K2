@@ -101,6 +101,10 @@ pub mod codes {
     pub const GATE_NOT_ALLOWED: &str = "gate_not_allowed";
     pub const EXCLUSIVE_NOT_ALLOWED: &str = "exclusive_not_allowed";
     pub const TENANT_DISK_FULL: &str = "tenant_disk_full";
+    /// `failed/disk_budget`: the job's warm target slot grew past the
+    /// node's whole disk budget while it ran. The job's own doing: it
+    /// would do the same on any node (never retried, no node strike).
+    pub const DISK_BUDGET: &str = "disk_budget";
     pub const INSTALLING_TOOLS: &str = "installing_tools";
     pub const NOT_NODE_OWNER: &str = "not_node_owner";
     pub const SERVER_NOT_APPROVED: &str = "server_not_approved";
@@ -140,6 +144,7 @@ pub mod codes {
         GATE_NOT_ALLOWED,
         EXCLUSIVE_NOT_ALLOWED,
         TENANT_DISK_FULL,
+        DISK_BUDGET,
         INSTALLING_TOOLS,
         NOT_NODE_OWNER,
         SERVER_NOT_APPROVED,

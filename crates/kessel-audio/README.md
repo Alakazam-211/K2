@@ -196,6 +196,31 @@ stage is bypassed, sonora's noise suppression stands in (the step-down floor,
 processing thread before the first block, when the capture stream restarts,
 after a capture gap of more than a second and before a retry.
 
+#### The clock
+
+The budget is measured on **the processing thread's own CPU time** by default
+(`StageClock::ThreadCpu`, `clock_gettime(CLOCK_THREAD_CPUTIME_ID)`, on macOS,
+iOS, Linux and Android). Time the OS spends running other threads while the
+stage waits (a camera starting, a video encoder) doesn't count against the
+stage, so a fast stage on a busy phone isn't bypassed for the OS's work.
+
+Real starvation still counts: a call that takes **20 ms or more on the wall
+clock** (`ProcessingConfig::stage_starvation_cutoff`, at least 9 ms) is slow
+toward the 2-in-a-row rule whatever its CPU time. Two of those in a row are
+40 ms of real time for 20 ms of audio, more than the 30 ms of playout queued
+by default: the thread can't keep up, whoever is to blame. A single stall
+alone isn't a strike, and stalls don't count toward the percentile rule.
+
+Nothing is hidden: `CaptureStageStats::clock` says which clock is in use,
+`max_wall_us` is the longest call on the wall clock, `preempted_over_budget`
+counts calls over 6 ms on the wall clock that weren't in CPU time, and
+`starved` counts calls past the cutoff. `max_block_us` and `p99_block_us` are
+CPU time.
+
+`ProcessingConfig::with_stage_clock(StageClock::Wall)` times by the wall
+clock, as 0.2.2 and earlier did. Windows always does: `GetThreadTimes` counts
+in 15.6 ms clock ticks, too coarse for a 6 ms budget.
+
 #### The grace window
 
 OS work the stage doesn't control can make a few calls slow: the call

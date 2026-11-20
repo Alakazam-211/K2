@@ -1,6 +1,11 @@
 //! The capture stage on the processing core: where it sits, the bypass
 //! (the echo canceller's output, delayed by the stage's latency, bit for
 //! bit), the budget rules, faults, retries and resets.
+//!
+//! This file is two modules, `stage_thread_cpu` and `stage_wall` (see
+//! `tests/mod.rs`): every test here runs once on each [`StageClock`]. The
+//! scripted stages work (CPU and wall time alike), so the rules give the
+//! same results on both; `stage_clock.rs` tests where the clocks differ.
 
 use super::stages::{still_clock, PassThrough, Script, Scripted};
 use super::{aec_only, core_cfg};
@@ -11,8 +16,8 @@ use crate::error::ErrorCode;
 use crate::frame::{EncoderCfg, BLOCK_SAMPLES};
 use crate::pipeline::{Core, CoreConfig};
 use crate::stage::{
-    CaptureStage, CaptureStageStats, StageBypassReason, StageClock, TransientEvent,
-    DEFAULT_STAGE_GRACE, RETRY_BLOCKS,
+    CaptureStage, CaptureStageStats, StageBypassReason, StageClock, StageTiming, TimeSource,
+    TransientEvent, DEFAULT_STAGE_GRACE, RETRY_BLOCKS,
 };
 use crate::stats::Stats;
 use crate::testkit::{add_into, delay, floor_noise, scale, talker_track, Rng, TALKERS};
@@ -81,17 +86,46 @@ fn assert_delayed(staged: &[f32], plain: &[f32], latency: usize, what: &str) {
 }
 
 fn stage_stats(apm: &mut Apm) -> CaptureStageStats {
-    apm.stage_stats().expect("a stage is set")
+    let s = apm.stage_stats().expect("a stage is set");
+    assert_eq!(s.clock, clock(), "the stage runs on this module's clock");
+    s
+}
+
+/// The stage clock this module's tests run on: `stage_wall` times by the
+/// wall clock, `stage_thread_cpu` by the thread's CPU time.
+fn clock() -> StageClock {
+    let module = module_path!();
+    if module.ends_with("::stage_wall") {
+        StageClock::Wall
+    } else {
+        assert!(module.ends_with("::stage_thread_cpu"), "{module}");
+        StageClock::ThreadCpu
+    }
+}
+
+/// This module's clock, the default starvation cutoff and a grace window
+/// of `grace`.
+fn timing(grace: Duration) -> StageTiming {
+    StageTiming {
+        grace,
+        clock: clock(),
+        ..StageTiming::default()
+    }
+}
+
+/// The stage timed by `time` on this module's clock, with no grace window.
+fn staged_on(settings: ApmSettings, stage: Box<dyn CaptureStage>, time: TimeSource) -> Apm {
+    Apm::with_stage_timed(settings, stage, time, timing(Duration::ZERO)).expect("stage accepted")
 }
 
 /// The stage on a clock that never moves: never over budget.
 fn staged(settings: ApmSettings, stage: impl CaptureStage) -> Apm {
-    Apm::with_stage_clock(settings, Box::new(stage), still_clock()).expect("stage accepted")
+    staged_on(settings, Box::new(stage), still_clock())
 }
 
 /// A scripted stage, timed by its script's clock.
 fn staged_with(settings: ApmSettings, stage: Scripted, script: &Script) -> Apm {
-    Apm::with_stage_clock(settings, Box::new(stage), script.clock()).expect("stage accepted")
+    staged_on(settings, Box::new(stage), script.clock())
 }
 
 /// No processing, latency 0.
@@ -670,11 +704,12 @@ fn a_fault_steps_down_for_good_and_suppression_already_on_is_left_alone() {
     );
 }
 
-/// The wall clock, end to end (the other budget tests use a manual clock).
+/// The OS's clocks, end to end (the other budget tests use a manual clock).
 /// Tolerant of a loaded machine: the stage sleeps 30 ms when armed, and a
-/// sleep only ever runs long, so two armed calls are always a strike; before
-/// arming, load may cause a strike of its own, so this only asserts what
-/// arming must do.
+/// sleep only ever runs long, so two armed calls are always a strike: on
+/// the wall clock over the 9 ms budget, on the thread's CPU time past the
+/// 20 ms starvation cutoff. Before arming, load may cause a strike of its
+/// own, so this only asserts what arming must do.
 #[test]
 fn wall_clock_smoke_a_sleeping_stage_is_bypassed() {
     use std::sync::atomic::AtomicBool;
@@ -704,7 +739,7 @@ fn wall_clock_smoke_a_sleeping_stage_is_bypassed() {
             prev: [0.0; B],
         }),
         // No grace window: armed at block 50, inside the default one.
-        Duration::ZERO,
+        timing(Duration::ZERO),
     )
     .expect("stage");
     let out = run(&mut apm, 60, |b, _| {
@@ -745,6 +780,7 @@ fn no_dtx(processing: ProcessingConfig) -> CoreConfig {
             dtx: false,
             ..EncoderCfg::default()
         },
+        stage_timing: timing(Duration::ZERO),
         ..core_cfg(processing)
     }
 }
@@ -754,7 +790,7 @@ fn no_dtx(processing: ProcessingConfig) -> CoreConfig {
 #[test]
 fn the_stage_does_not_move_ts48k() {
     let (_, mic) = signals();
-    let stamps = |stage: Option<Box<dyn CaptureStage>>, clock: StageClock| -> Vec<u32> {
+    let stamps = |stage: Option<Box<dyn CaptureStage>>, clock: TimeSource| -> Vec<u32> {
         let mut core =
             Core::with_stage_clock(no_dtx(ProcessingConfig::off()), stage, clock).expect("core");
         let mut ts = Vec::new();
@@ -835,11 +871,11 @@ fn capture_goes_on_through_a_bypass_and_a_fault() {
 
 /// A scripted stage with a grace window of `grace`.
 fn graced(stage: Scripted, script: &Script, grace: Duration) -> Apm {
-    Apm::with_stage_clock_grace(
+    Apm::with_stage_timed(
         settings(ProcessingConfig::off()),
         Box::new(stage),
         script.clock(),
-        grace,
+        timing(grace),
     )
     .expect("stage accepted")
 }

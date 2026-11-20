@@ -8,7 +8,8 @@
 use crate::error::AudioError;
 use crate::frame::{BLOCK_SAMPLES, SAMPLE_RATE};
 use crate::stage::{
-    CaptureStage, CaptureStageStats, StageRunner, TransientEvent, DEFAULT_STAGE_GRACE,
+    CaptureStage, CaptureStageStats, StageClock, StageRunner, StageTiming, TransientEvent,
+    DEFAULT_STAGE_GRACE, DEFAULT_STAGE_STARVATION_CUTOFF,
 };
 use sonora::config::{
     AdaptiveDigital, EchoCanceller, FixedDigital, GainController2, HighPassFilter,
@@ -92,6 +93,23 @@ pub struct ProcessingConfig {
     /// applies from the first call, as in 0.2.1. Only applies with a stage
     /// set.
     pub stage_grace: Duration,
+    /// What times the capture stage's calls for its time budget (see
+    /// [`StageClock`]). Default [`StageClock::default`]: the processing
+    /// thread's CPU time ([`StageClock::ThreadCpu`]) where the platform
+    /// supports it (macOS, iOS, Linux and Android), else the wall clock.
+    /// [`StageClock::Wall`] times as 0.2.2 and earlier did. Only applies
+    /// with a stage set.
+    pub stage_clock: StageClock,
+    /// With [`StageClock::ThreadCpu`]: a call that takes this long or longer
+    /// on the wall clock counts as slow toward the 2-in-a-row rule whatever
+    /// its CPU time, so a thread that really is starved is still caught
+    /// (counted in [`CaptureStageStats::starved`]). Default
+    /// [`DEFAULT_STAGE_STARVATION_CUTOFF`] (20 ms); at least 9 ms (the hard
+    /// budget), or [`crate::AudioEngine::start`] refuses the config.
+    /// `Duration::MAX` leaves CPU time alone to decide. Ignored with
+    /// [`StageClock::Wall`] (every call counts its wall time there). Only
+    /// applies with a stage set.
+    pub stage_starvation_cutoff: Duration,
 }
 
 impl std::fmt::Debug for ProcessingConfig {
@@ -110,6 +128,8 @@ impl std::fmt::Debug for ProcessingConfig {
                 &self.stage_fallback_noise_suppression,
             )
             .field("stage_grace", &self.stage_grace)
+            .field("stage_clock", &self.stage_clock)
+            .field("stage_starvation_cutoff", &self.stage_starvation_cutoff)
             .finish()
     }
 }
@@ -126,6 +146,8 @@ impl Default for ProcessingConfig {
             capture_stage: None,
             stage_fallback_noise_suppression: Some(NoiseSuppressionStrength::Moderate),
             stage_grace: DEFAULT_STAGE_GRACE,
+            stage_clock: StageClock::default(),
+            stage_starvation_cutoff: DEFAULT_STAGE_STARVATION_CUTOFF,
         }
     }
 }
@@ -141,6 +163,8 @@ impl ProcessingConfig {
             capture_stage: None,
             stage_fallback_noise_suppression: Some(NoiseSuppressionStrength::Moderate),
             stage_grace: DEFAULT_STAGE_GRACE,
+            stage_clock: StageClock::default(),
+            stage_starvation_cutoff: DEFAULT_STAGE_STARVATION_CUTOFF,
         }
     }
 
@@ -191,6 +215,28 @@ impl ProcessingConfig {
     pub fn with_stage_grace(mut self, grace: Duration) -> Self {
         self.stage_grace = grace;
         self
+    }
+
+    /// Set [`stage_clock`](Self::stage_clock).
+    /// `with_stage_clock(StageClock::Wall)` times the stage as 0.2.2 did.
+    pub fn with_stage_clock(mut self, clock: StageClock) -> Self {
+        self.stage_clock = clock;
+        self
+    }
+
+    /// Set [`stage_starvation_cutoff`](Self::stage_starvation_cutoff).
+    pub fn with_stage_starvation_cutoff(mut self, cutoff: Duration) -> Self {
+        self.stage_starvation_cutoff = cutoff;
+        self
+    }
+
+    /// How the capture stage is timed.
+    pub(crate) fn stage_timing(&self) -> StageTiming {
+        StageTiming {
+            grace: self.stage_grace,
+            clock: self.stage_clock,
+            starvation_cutoff: self.stage_starvation_cutoff,
+        }
     }
 
     /// What sonora runs: everything but the stage.
@@ -507,35 +553,40 @@ impl Apm {
     /// noise suppression in one instance, then the stage, then gain control
     /// in a second instance; and the step-down suppressor if it applies.
     /// Build it on the thread that will run it (the stage is reset here).
-    /// `grace` is the stage's grace window ([`ProcessingConfig::stage_grace`]).
+    /// `timing` is how the stage is timed (the grace window, the clock and
+    /// the starvation cutoff, from [`ProcessingConfig`]).
     pub(crate) fn with_stage(
         cfg: impl Into<ApmSettings>,
         stage: Box<dyn CaptureStage>,
-        grace: Duration,
+        timing: StageTiming,
     ) -> Result<Self, AudioError> {
-        Self::with_runner(cfg.into(), StageRunner::new(stage, grace)?)
+        Self::with_runner(cfg.into(), StageRunner::new(stage, timing)?)
     }
 
-    /// [`Apm::with_stage`] with the stage timed by `clock` and no grace
-    /// window (tests: the budget applies from the first call).
+    /// [`Apm::with_stage`] with call times from `time`, the default clock
+    /// and no grace window (tests: the budget applies from the first call).
     #[cfg(test)]
     pub(crate) fn with_stage_clock(
         cfg: impl Into<ApmSettings>,
         stage: Box<dyn CaptureStage>,
-        clock: crate::stage::StageClock,
+        time: crate::stage::TimeSource,
     ) -> Result<Self, AudioError> {
-        Self::with_stage_clock_grace(cfg, stage, clock, Duration::ZERO)
+        let timing = StageTiming {
+            grace: Duration::ZERO,
+            ..StageTiming::default()
+        };
+        Self::with_stage_timed(cfg, stage, time, timing)
     }
 
-    /// [`Apm::with_stage`] with the stage timed by `clock` (tests).
+    /// [`Apm::with_stage`] with call times from `time` (tests).
     #[cfg(test)]
-    pub(crate) fn with_stage_clock_grace(
+    pub(crate) fn with_stage_timed(
         cfg: impl Into<ApmSettings>,
         stage: Box<dyn CaptureStage>,
-        clock: crate::stage::StageClock,
-        grace: Duration,
+        time: crate::stage::TimeSource,
+        timing: StageTiming,
     ) -> Result<Self, AudioError> {
-        Self::with_runner(cfg.into(), StageRunner::with_clock(stage, clock, grace)?)
+        Self::with_runner(cfg.into(), StageRunner::with_source(stage, time, timing)?)
     }
 
     fn with_runner(cfg: ApmSettings, stage: StageRunner) -> Result<Self, AudioError> {

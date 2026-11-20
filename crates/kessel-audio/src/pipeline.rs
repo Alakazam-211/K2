@@ -46,9 +46,11 @@ pub(crate) struct CoreConfig {
     pub(crate) levels_interval_ms: u32,
     pub(crate) speaking_threshold_dbov: f32,
     pub(crate) max_participants: usize,
-    /// The capture stage's grace window
-    /// ([`crate::ProcessingConfig::stage_grace`]).
-    pub(crate) stage_grace: std::time::Duration,
+    /// How the capture stage is timed: its grace window, clock and
+    /// starvation cutoff ([`crate::ProcessingConfig::stage_grace`],
+    /// [`crate::ProcessingConfig::stage_clock`],
+    /// [`crate::ProcessingConfig::stage_starvation_cutoff`]).
+    pub(crate) stage_timing: crate::stage::StageTiming,
 }
 
 /// One remote participant's receive chain.
@@ -147,21 +149,21 @@ impl Core {
     ) -> Result<Core, AudioError> {
         let apm = match stage {
             None => Apm::new(cfg.processing),
-            Some(s) => Apm::with_stage(cfg.processing, s, cfg.stage_grace)?,
+            Some(s) => Apm::with_stage(cfg.processing, s, cfg.stage_timing)?,
         };
         Self::with_apm(cfg, apm)
     }
 
-    /// [`Core::with_stage`] with the stage timed by `clock` (tests).
+    /// [`Core::with_stage`] with the stage's call times from `time` (tests).
     #[cfg(test)]
     pub(crate) fn with_stage_clock(
         cfg: CoreConfig,
         stage: Option<Box<dyn CaptureStage>>,
-        clock: crate::stage::StageClock,
+        time: crate::stage::TimeSource,
     ) -> Result<Core, AudioError> {
         let apm = match stage {
             None => Apm::new(cfg.processing),
-            Some(s) => Apm::with_stage_clock_grace(cfg.processing, s, clock, cfg.stage_grace)?,
+            Some(s) => Apm::with_stage_timed(cfg.processing, s, time, cfg.stage_timing)?,
         };
         Self::with_apm(cfg, apm)
     }

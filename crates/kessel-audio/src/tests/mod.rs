@@ -12,9 +12,17 @@ mod metrics;
 mod pause;
 #[cfg(feature = "speech-tests")]
 mod receive;
-mod stage;
+mod stage_clock;
 #[cfg(feature = "speech-tests")]
 mod stage_metrics;
+// The capture stage's tests run twice, once on each stage clock: the same
+// file as two modules (`stage.rs` reads which one it is from its module path).
+#[allow(clippy::duplicate_mod)]
+#[path = "stage.rs"]
+mod stage_thread_cpu;
+#[allow(clippy::duplicate_mod)]
+#[path = "stage.rs"]
+mod stage_wall;
 pub(crate) mod stages;
 
 use crate::apm::ProcessingConfig;
@@ -59,7 +67,10 @@ pub(crate) fn core_cfg(processing: impl Into<crate::apm::ApmSettings>) -> CoreCo
         max_participants: 8,
         // No grace window: the budget tests time the stage from its first
         // call (the grace has its own tests).
-        stage_grace: std::time::Duration::ZERO,
+        stage_timing: crate::stage::StageTiming {
+            grace: std::time::Duration::ZERO,
+            ..crate::stage::StageTiming::default()
+        },
     }
 }
 
@@ -72,7 +83,7 @@ pub(crate) fn aec_only() -> ProcessingConfig {
         high_pass: true,
         capture_stage: None,
         stage_fallback_noise_suppression: None,
-        stage_grace: crate::DEFAULT_STAGE_GRACE,
+        ..ProcessingConfig::off()
     }
 }
 

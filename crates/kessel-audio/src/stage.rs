@@ -43,6 +43,17 @@ use std::time::{Duration, Instant};
 /// within 60 s of capture make the bypass permanent (otherwise the count
 /// decays). A panic or a non-finite sample is a fault: bypassed for good.
 ///
+/// **The clock.** By default ([`StageClock::ThreadCpu`], where the platform
+/// has it) a call is timed by the processing thread's own CPU time, so time
+/// the OS spends running other threads (the camera, a video encoder) while
+/// the stage waits doesn't count against the stage. Real starvation still
+/// does: a call that takes the
+/// [starvation cutoff](crate::ProcessingConfig::stage_starvation_cutoff)
+/// (20 ms by default) or more on the wall clock counts as slow toward the
+/// 2-in-a-row rule, whatever its CPU time. [`StageClock::Wall`] times calls
+/// by the wall clock, as 0.2.2 and earlier did
+/// ([`stage_clock`](crate::ProcessingConfig::stage_clock)).
+///
 /// **The grace window.** OS work the stage doesn't control (the call
 /// starting, the audio session activating, a route change, the camera
 /// starting, the app changing scene) can make a few calls slow. For a
@@ -114,6 +125,148 @@ pub const DEFAULT_STAGE_GRACE: Duration = Duration::from_millis(1_500);
 
 /// The longest grace window the engine accepts: 10 s, the retry period.
 pub const MAX_STAGE_GRACE: Duration = Duration::from_secs(10);
+
+/// The default starvation cutoff
+/// ([`ProcessingConfig::stage_starvation_cutoff`](crate::ProcessingConfig::stage_starvation_cutoff)):
+/// with [`StageClock::ThreadCpu`], a call that takes 20 ms or more on the
+/// wall clock counts as slow toward the 2-in-a-row rule, whatever its CPU
+/// time.
+///
+/// Two blocks of real time, more than twice the 9 ms hard budget: a
+/// preempted call that still finishes within two blocks is left alone, and
+/// two in a row past it (a strike) are 40 ms of real time for 20 ms of
+/// audio, more than the 30 ms of playout queued by default. That is a
+/// thread that can't keep up, whoever is to blame.
+pub const DEFAULT_STAGE_STARVATION_CUTOFF: Duration = Duration::from_millis(20);
+
+/// What times the capture stage's calls for its time budget
+/// ([`ProcessingConfig::stage_clock`](crate::ProcessingConfig::stage_clock);
+/// see [`CaptureStage`]).
+///
+/// The default ([`StageClock::default`]) is [`StageClock::ThreadCpu`] where
+/// the platform supports it (macOS, iOS, Linux and Android), and
+/// [`StageClock::Wall`] elsewhere. Asking for `ThreadCpu` where it isn't
+/// supported times by the wall clock; [`CaptureStageStats::clock`] says
+/// which clock is in use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StageClock {
+    /// The processing thread's own CPU time
+    /// (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`), read around each call:
+    /// time the OS gives other threads while the stage is preempted doesn't
+    /// count. A call that takes the
+    /// [starvation cutoff](crate::ProcessingConfig::stage_starvation_cutoff)
+    /// or more on the wall clock still counts as slow toward the 2-in-a-row
+    /// rule, so a thread that really is starved is still caught.
+    ///
+    /// Supported on macOS, iOS, Linux and Android. Not on Windows:
+    /// `GetThreadTimes` counts in clock-interrupt ticks (15.6 ms by
+    /// default), coarser than the 6 and 9 ms budgets, so Windows times by
+    /// the wall clock.
+    ThreadCpu,
+    /// The wall clock ([`std::time::Instant`]): everything between the
+    /// call's start and end counts, the OS running other threads included.
+    /// 0.2.2 and earlier always timed this way.
+    Wall,
+}
+
+impl StageClock {
+    /// Whether this clock works on the platform the crate was built for.
+    /// [`StageClock::Wall`] always does; [`StageClock::ThreadCpu`] on macOS,
+    /// iOS, Linux and Android.
+    pub const fn is_supported(self) -> bool {
+        match self {
+            StageClock::ThreadCpu => thread_cpu::SUPPORTED,
+            StageClock::Wall => true,
+        }
+    }
+}
+
+impl Default for StageClock {
+    /// [`StageClock::ThreadCpu`] where it is supported, else
+    /// [`StageClock::Wall`].
+    fn default() -> Self {
+        if thread_cpu::SUPPORTED {
+            StageClock::ThreadCpu
+        } else {
+            StageClock::Wall
+        }
+    }
+}
+
+/// The calling thread's CPU time.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+))]
+pub(crate) mod thread_cpu {
+    use std::mem::MaybeUninit;
+    use std::time::Duration;
+
+    pub(crate) const SUPPORTED: bool = true;
+
+    /// The CPU time the calling thread has used, or `None` if the OS
+    /// refused (it never should).
+    #[allow(unsafe_code)]
+    pub(crate) fn now() -> Option<Duration> {
+        let mut ts = MaybeUninit::<libc::timespec>::uninit();
+        // SAFETY: `ts` is valid for writes of one `timespec`, which is all
+        // clock_gettime writes, and is read only after the call succeeded,
+        // when it has been written.
+        let ts = unsafe {
+            if libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, ts.as_mut_ptr()) != 0 {
+                return None;
+            }
+            ts.assume_init()
+        };
+        Some(Duration::new(
+            u64::try_from(ts.tv_sec).ok()?,
+            u32::try_from(ts.tv_nsec).ok()?,
+        ))
+    }
+}
+
+/// No thread CPU clock here: [`StageClock::ThreadCpu`] times by the wall
+/// clock.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+)))]
+pub(crate) mod thread_cpu {
+    use std::time::Duration;
+
+    pub(crate) const SUPPORTED: bool = false;
+
+    pub(crate) fn now() -> Option<Duration> {
+        None
+    }
+}
+
+/// How the capture stage is timed: the grace window, the clock and the
+/// starvation cutoff (from [`crate::ProcessingConfig`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StageTiming {
+    /// [`crate::ProcessingConfig::stage_grace`].
+    pub(crate) grace: Duration,
+    /// [`crate::ProcessingConfig::stage_clock`].
+    pub(crate) clock: StageClock,
+    /// [`crate::ProcessingConfig::stage_starvation_cutoff`].
+    pub(crate) starvation_cutoff: Duration,
+}
+
+impl Default for StageTiming {
+    fn default() -> Self {
+        StageTiming {
+            grace: DEFAULT_STAGE_GRACE,
+            clock: StageClock::default(),
+            starvation_cutoff: DEFAULT_STAGE_STARVATION_CUTOFF,
+        }
+    }
+}
 
 /// Something the host knows is happening that can stall the processing
 /// thread for a moment, for
@@ -191,11 +344,13 @@ pub struct CaptureStageStats {
     pub blocks_processed: u64,
     /// Blocks that went on as the delayed echo canceller output instead.
     pub blocks_bypassed: u64,
-    /// The longest single `process` call, microseconds.
+    /// The longest single `process` call, microseconds, on the stage's
+    /// [`clock`](Self::clock) (CPU time with [`StageClock::ThreadCpu`]; the
+    /// wall-clock reading is [`max_wall_us`](Self::max_wall_us)).
     pub max_block_us: u32,
     /// The 99th percentile (nearest rank) of the last 100 calls, or of all
-    /// calls since the last retry or reset if fewer, microseconds. Calls in a
-    /// grace window are included.
+    /// calls since the last retry or reset if fewer, microseconds, on the
+    /// stage's [`clock`](Self::clock). Calls in a grace window are included.
     pub p99_block_us: u32,
     /// A grace window is open now: slow calls don't count toward a strike
     /// (see [`CaptureStage`]).
@@ -208,6 +363,24 @@ pub struct CaptureStageStats {
     pub grace_over_budget: u64,
     /// The last [`TransientEvent`] the host reported, if any.
     pub last_transient: Option<TransientEvent>,
+    /// The clock timing the stage's calls: the configured
+    /// [`stage_clock`](crate::ProcessingConfig::stage_clock), or
+    /// [`StageClock::Wall`] where [`StageClock::ThreadCpu`] isn't supported.
+    pub clock: StageClock,
+    /// The longest single `process` call on the wall clock, microseconds,
+    /// whatever the [`clock`](Self::clock).
+    pub max_wall_us: u32,
+    /// With [`StageClock::ThreadCpu`]: calls over the budget (over 6 ms) on
+    /// the wall clock that weren't over it in CPU time, so didn't count as
+    /// slow (the thread was preempted; the stage wasn't slow), all of them.
+    /// Starved calls are included. Always 0 with [`StageClock::Wall`].
+    pub preempted_over_budget: u64,
+    /// With [`StageClock::ThreadCpu`]: calls that took the
+    /// [starvation cutoff](crate::ProcessingConfig::stage_starvation_cutoff)
+    /// or more on the wall clock, which count as slow whatever their CPU
+    /// time, all of them (in a grace window too). Always 0 with
+    /// [`StageClock::Wall`].
+    pub starved: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,27 +394,93 @@ enum Mode {
     Bypassed(Option<u64>),
 }
 
-/// What times the stage's calls: the wall clock, or (tests) a counter the
-/// test advances, so budget behaviour doesn't depend on machine load.
+/// Where the stage's call times come from: the OS's clocks, or (tests)
+/// counters the test advances, so budget behaviour doesn't depend on
+/// machine load.
 #[derive(Clone, Debug)]
-pub(crate) enum StageClock {
-    /// [`Instant`].
-    Wall,
-    /// Nanoseconds, advanced by the test (a stage that "takes" time adds
-    /// to it).
+pub(crate) enum TimeSource {
+    /// [`Instant`] and the thread's CPU time ([`thread_cpu::now`]).
+    Os,
+    /// See [`ManualTime`].
     #[cfg(test)]
-    Manual(std::sync::Arc<std::sync::atomic::AtomicU64>),
+    Manual(std::sync::Arc<ManualTime>),
 }
 
-impl StageClock {
-    /// Time since `base`.
-    fn now(&self, base: Instant) -> Duration {
+/// A test clock: a stage that "takes" time advances it. Work advances CPU
+/// and wall time; preemption ([`ManualTime::preempt_us`]) only wall time.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct ManualTime {
+    cpu_ns: std::sync::atomic::AtomicU64,
+    wall_ns: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(test)]
+impl ManualTime {
+    /// The thread works for `us`: CPU and wall time both advance.
+    pub(crate) fn work_us(&self, us: u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.cpu_ns.fetch_add(us * 1_000, Relaxed);
+        self.wall_ns.fetch_add(us * 1_000, Relaxed);
+    }
+
+    /// The thread is preempted (or sleeps) for `us`: only wall time
+    /// advances.
+    pub(crate) fn preempt_us(&self, us: u64) {
+        self.wall_ns
+            .fetch_add(us * 1_000, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// One reading of a [`TimeSource`].
+#[derive(Clone, Copy)]
+struct Reading {
+    wall: Duration,
+    /// `None` when not asked for, or the OS refused.
+    cpu: Option<Duration>,
+}
+
+impl TimeSource {
+    /// Read the wall clock (since `base`) and, if `cpu`, the thread's CPU
+    /// time. At a call's `start` the wall clock is read first, at its end
+    /// last, so the wall interval holds the CPU one.
+    fn read(&self, base: Instant, cpu: bool, start: bool) -> Reading {
         match self {
-            StageClock::Wall => base.elapsed(),
-            #[cfg(test)]
-            StageClock::Manual(ns) => {
-                Duration::from_nanos(ns.load(std::sync::atomic::Ordering::Relaxed))
+            TimeSource::Os => {
+                let cpu_now = || if cpu { thread_cpu::now() } else { None };
+                if start {
+                    let wall = base.elapsed();
+                    Reading {
+                        wall,
+                        cpu: cpu_now(),
+                    }
+                } else {
+                    let cpu = cpu_now();
+                    Reading {
+                        wall: base.elapsed(),
+                        cpu,
+                    }
+                }
             }
+            #[cfg(test)]
+            TimeSource::Manual(t) => {
+                use std::sync::atomic::Ordering::Relaxed;
+                Reading {
+                    wall: Duration::from_nanos(t.wall_ns.load(Relaxed)),
+                    cpu: cpu.then(|| Duration::from_nanos(t.cpu_ns.load(Relaxed))),
+                }
+            }
+        }
+    }
+
+    /// The clock to use for `want`: [`StageClock::ThreadCpu`] only if this
+    /// source can read the thread's CPU time.
+    fn resolve(&self, want: StageClock) -> StageClock {
+        match want {
+            StageClock::ThreadCpu if self.read(Instant::now(), true, true).cpu.is_some() => {
+                StageClock::ThreadCpu
+            }
+            _ => StageClock::Wall,
         }
     }
 }
@@ -249,7 +488,12 @@ impl StageClock {
 /// Runs a [`CaptureStage`] on the processing thread: the budget, the
 /// bypass delay line and the counters. Everything is allocated up front.
 pub(crate) struct StageRunner {
-    clock: StageClock,
+    time: TimeSource,
+    /// Timed by the thread's CPU time ([`StageClock::ThreadCpu`], resolved).
+    cpu_clock: bool,
+    /// With `cpu_clock`: a call this long or longer on the wall clock counts
+    /// as slow toward the 2-in-a-row rule.
+    starvation_cutoff: Duration,
     epoch: Instant,
     /// Consecutive calls at or above [`HARD_BUDGET`].
     slow_run: u32,
@@ -292,20 +536,20 @@ impl StageRunner {
     /// Build before any audio flows (it allocates the delay line), on the
     /// thread that will run it: it resets the stage once, so a stage that
     /// prepares itself in `reset` does so here, not in the first block.
-    /// `grace` is the grace window's length; the window opens here, for the
-    /// stage's first blocks.
+    /// `timing` holds the grace window's length (the window opens here, for
+    /// the stage's first blocks), the clock and the starvation cutoff.
     pub(crate) fn new(
         stage: Box<dyn CaptureStage>,
-        grace: Duration,
+        timing: StageTiming,
     ) -> Result<StageRunner, AudioError> {
-        Self::with_clock(stage, StageClock::Wall, grace)
+        Self::with_source(stage, TimeSource::Os, timing)
     }
 
-    /// [`StageRunner::new`] timed by `clock`.
-    pub(crate) fn with_clock(
+    /// [`StageRunner::new`] with call times from `time`.
+    pub(crate) fn with_source(
         stage: Box<dyn CaptureStage>,
-        clock: StageClock,
-        grace: Duration,
+        time: TimeSource,
+        timing: StageTiming,
     ) -> Result<StageRunner, AudioError> {
         let latency = stage.latency_samples();
         if latency > MAX_STAGE_LATENCY_SAMPLES {
@@ -316,8 +560,11 @@ impl StageRunner {
                 ),
             ));
         }
+        let clock = time.resolve(timing.clock);
         let mut runner = StageRunner {
-            clock,
+            time,
+            cpu_clock: clock == StageClock::ThreadCpu,
+            starvation_cutoff: timing.starvation_cutoff,
             epoch: Instant::now(),
             slow_run: 0,
             strike_blocks: [0; MAX_STRIKES],
@@ -338,12 +585,13 @@ impl StageRunner {
             stats: CaptureStageStats {
                 active: true,
                 latency_samples: latency as u32,
+                clock,
                 ..CaptureStageStats::default()
             },
             changed: false,
             dirty: false,
             used_stage: false,
-            grace_len: grace_blocks(grace),
+            grace_len: grace_blocks(timing.grace),
             grace_until: 0,
             grace_mark: 0,
         };
@@ -429,16 +677,36 @@ impl StageRunner {
             }
         }
 
-        let t = self.clock.now(self.epoch);
+        let t0 = self.time.read(self.epoch, self.cpu_clock, true);
         let r = catch_unwind(AssertUnwindSafe(|| self.stage.process(&mut self.work)));
-        let took = self.clock.now(self.epoch).saturating_sub(t);
+        let t1 = self.time.read(self.epoch, self.cpu_clock, false);
+        let wall = t1.wall.saturating_sub(t0.wall);
+        // What counts toward the budget: the thread's CPU time, or the wall
+        // time (the wall clock, or a CPU reading the OS refused). A starved
+        // call (wall time at or over the cutoff) is slow whatever its CPU
+        // time.
+        let (took, starved) = match (t0.cpu, t1.cpu) {
+            (Some(a), Some(b)) => {
+                let cpu = b.saturating_sub(a);
+                if wall > P99_BUDGET && cpu <= P99_BUDGET {
+                    self.stats.preempted_over_budget += 1;
+                }
+                let starved = wall >= self.starvation_cutoff;
+                if starved {
+                    self.stats.starved += 1;
+                }
+                (cpu, starved)
+            }
+            _ => (wall, false),
+        };
         self.dirty = true;
         self.stats.blocks_processed += 1;
-        let us = took.as_micros().min(u32::MAX as u128) as u32;
+        let us = micros(took);
         self.stats.max_block_us = self.stats.max_block_us.max(us);
+        self.stats.max_wall_us = self.stats.max_wall_us.max(micros(wall));
         if grace {
             self.stats.grace_blocks += 1;
-            if took > P99_BUDGET {
+            if took > P99_BUDGET || starved {
                 self.stats.grace_over_budget += 1;
             }
         }
@@ -450,9 +718,11 @@ impl StageRunner {
         }
         self.push_time(us, grace);
         // One late call alone is usually the thread being preempted: it
-        // takes two in a row, or the percentile, to strike. In a grace
+        // takes two in a row, or the percentile, to strike. A starved call
+        // counts toward the two in a row, not the percentile: one stall is
+        // the OS's, two in a row a thread that can't keep up. In a grace
         // window no call counts.
-        self.slow_run = if took >= HARD_BUDGET && !grace {
+        self.slow_run = if (took >= HARD_BUDGET || starved) && !grace {
             self.slow_run + 1
         } else {
             0
@@ -609,6 +879,11 @@ impl StageRunner {
         let rank = (n * 99).div_ceil(100).max(1) - 1;
         *s.select_nth_unstable(rank).1
     }
+}
+
+/// `d` in whole microseconds, at most `u32::MAX`.
+fn micros(d: Duration) -> u32 {
+    d.as_micros().min(u32::MAX as u128) as u32
 }
 
 /// A grace window's length in 10 ms blocks, rounded up.

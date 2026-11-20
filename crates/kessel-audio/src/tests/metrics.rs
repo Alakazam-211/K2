@@ -312,7 +312,7 @@ fn s4_noise_suppression_cuts_noise_in_pauses() {
         high_pass: true,
         capture_stage: None,
         stage_fallback_noise_suppression: None,
-        stage_grace: crate::DEFAULT_STAGE_GRACE,
+        ..ProcessingConfig::off()
     };
     let cfg = core_cfg(processing);
     let mut rng = Rng::new(4000);
@@ -384,7 +384,7 @@ fn s6_agc2_levels_speech() {
         high_pass: true,
         capture_stage: None,
         stage_fallback_noise_suppression: None,
-        stage_grace: crate::DEFAULT_STAGE_GRACE,
+        ..ProcessingConfig::off()
     };
     let cfg = core_cfg(processing);
     let room = &ROOMS[0];
@@ -515,7 +515,7 @@ fn s6_agc2_tuning_lifts_mid_levels_by_about_a_db() {
         high_pass: true,
         capture_stage: None,
         stage_fallback_noise_suppression: None,
-        stage_grace: crate::DEFAULT_STAGE_GRACE,
+        ..ProcessingConfig::off()
     };
     let room = &ROOMS[0];
     let mut rng = Rng::new(6100);

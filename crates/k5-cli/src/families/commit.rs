@@ -11,7 +11,9 @@
 //!   it came (its words are not read).
 //! - `commit [-m m] [--merge]`: `Requesting AI Commit...` (or `... &
 //!   Merge...`), then `cli_request_post /cli/commit` (or
-//!   `/cli/commit-merge`) and the answer as it came. A refusal's body is
+//!   `/cli/commit-merge`) and the answer as it came. `commit --merge`
+//!   alone posts as bash 4.4 and newer do; bash before 4.4 stops on the
+//!   empty `rest` array (the named difference `bash32-empty-array`). A refusal's body is
 //!   printed with exit 0, as the shell does (a known T5 row).
 //! - `reviews`: `cli_request /cli/reviews | python3 …` ([`reviews`]): the
 //!   rows, or one error line and exit 1 for an answer that is not JSON, an
@@ -25,8 +27,7 @@
 //! line, exit 1 (`reviews`: the line, then SIGPIPE). The shell answers:
 //! `-h` or `--help` (the front sends those on; the shell prints the usage
 //! and sends nothing), `commit`'s `-m` as the last
-//! word (`$2: unbound variable`) and `commit --merge` alone (bash before
-//! 4.4 stops on its empty array), a word that is not UTF-8, a port curl
+//! word (`$2: unbound variable`), a word that is not UTF-8, a port curl
 //! won't take, and a `python3` the binary can't tell.
 
 use super::{curl_port, ljust, pipefail, py_iter, raised, without_nuls, Raise, Shown};
@@ -171,9 +172,6 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
         "commit" => {
             let merge = rest.contains(&"--merge");
             let rest: Vec<&str> = rest.iter().copied().filter(|w| *w != "--merge").collect();
-            if merge && rest.is_empty() {
-                return None;
-            }
             let mut message = String::new();
             let mut i = 0;
             while i < rest.len() {
@@ -434,7 +432,14 @@ mod tests {
         );
         assert!(matches!(parse(&["checkin"]), Some(Ask::Lines(l, _)) if l.len() == 3));
         assert_eq!(parse(&["commit", "-m"]), None);
-        assert_eq!(parse(&["commit", "--merge"]), None);
+        assert_eq!(
+            parse(&["commit", "--merge"]),
+            Some(Ask::Commit(
+                "Requesting AI Commit & Merge...",
+                COMMIT_MERGE,
+                String::new()
+            ))
+        );
         assert_eq!(
             parse(&["commit", "x", "--merge", "-m", "fix é"]),
             Some(Ask::Commit(

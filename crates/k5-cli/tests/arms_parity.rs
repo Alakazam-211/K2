@@ -4,8 +4,9 @@
 //! exit code.
 //!
 //! - The pointer arms: their lines and exit, the gate with no port.
-//! - `trust-folders` and `commit` (`-m`, `--merge`): sent once, the
-//!   answer as it came; a refusal's body with exit 0 (a known T5 row).
+//! - `trust-folders` and `commit` (`-m`, `--merge`, `--merge` alone):
+//!   sent once, the answer as it came; a refusal's body with exit 0 (a
+//!   known T5 row).
 //! - `reviews`: rows, none, and an answer the reader can't use (not
 //!   JSON, empty, an error object: one error line, exit 1; a row it
 //!   can't read: the traceback); the caller's stdin is never read.
@@ -113,6 +114,14 @@ fn trust_folders_and_commit() {
             &["--message", "m", "--merge"],
             r#"{"ok":true}"#,
             0,
+        ),
+        // native: commit --merge
+        // bash before 4.4 stops on the empty `rest` array; the binary
+        // posts as bash 4.4 and newer do.
+        bash32_empty_array(
+            one("commit --merge alone", &["--merge"], r#"{"ok":true}"#, 0),
+            &["rest"],
+            Some((1, 0)),
         ),
         case(
             "a refusal: its body, exit 0 (known T5 row)",

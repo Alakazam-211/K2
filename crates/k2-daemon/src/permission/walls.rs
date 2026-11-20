@@ -177,7 +177,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 77] = [
+pub(crate) const V1_ACTIONS: [&str; 79] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -320,6 +320,10 @@ pub(crate) const V1_ACTIONS: [&str; 77] = [
     // 0.46.17: turn on CI on K2 Compute for the server (`ciPreview`, the
     // owner's). Its `ci.preview-off` twin is asked only.
     "ci.preview",
+    // D1 (0.46.17): a person approves an agent's own review branch, and
+    // makes its commit --merge.
+    "git.review-approve",
+    "git.commit-merge",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -1600,6 +1604,9 @@ mod tests {
             // 0.46.7 Workbench W1: an agent's `k2 sidecar land` / `retire`.
             (403, "POST", "/cli/sidecar/land", vec![], Some(json!({"name":"fix","expectTip":"abc1234"})), json!({"error":{"code":"land_needs_person","hint":"x","sidecar":"fix","tip":"abc1234def"}}), "git.land"),
             (403, "POST", "/cli/sidecar/retire", vec![], Some(json!({"name":"fix","discard":false})), json!({"error":{"code":"retire_needs_person","hint":"x","sidecar":"fix","discard":"no"}}), "sidecar.retire"),
+            // D1 (0.46.17): an agent approving its own review branch, and its commit --merge.
+            (403, "POST", "/cli/review/approve", vec![("agent", "scout"), ("branch", "agent/scout/fix")], None, json!({"error":{"code":"merge_needs_person","hint":"x","agent":"scout","branch":"agent/scout/fix"}}), "git.review-approve"),
+            (403, "POST", "/cli/commit-merge", vec![("message", "wip")], None, json!({"error":{"code":"merge_needs_person","hint":"x"}}), "git.commit-merge"),
             // 0.46.6: an agent's own reset (the owner's route) and a password
             // it may not set (a box login).
             (403, "POST", "/cli/skin/users/reset-link", vec![], Some(json!({"username":"adam","app":"agents.acme","code":true})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "apps.user-password-reset"),
@@ -2194,7 +2201,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 77);
+        assert_eq!(V1_ACTIONS.len(), 79);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

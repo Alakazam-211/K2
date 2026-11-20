@@ -1158,8 +1158,10 @@ ADDING A MACHINE (owner, or an agent with "Let this agent manage compute nodes")
   On the machine itself: Settings → Cores → Compute → This computer →
   "Let a server run jobs on this computer", or in a terminal outside K2:
     k2 compute local enable --controller https://you.k2.dev \
-      --enroll ABCDE-FGHJK.0123456789abcdef --name mini-1 --private-home
-  (the code comes from `k2 compute node add mini-1` on the controller).
+      --code-stdin --name mini-1 --private-home < code-file
+  (the code comes from `k2 compute node add mini-1` on the controller;
+  --enroll CODE.FP still works, but every user on this computer can see a
+  code on the command line while the command runs).
   Root is needed once: the root helper or passwordless sudo does it
   silently on Linux boxes; otherwise you get one command to run.
   Without K2 on that machine: copy k2-node there and run

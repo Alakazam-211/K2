@@ -5240,12 +5240,13 @@ exit: 0
     },
     {
       "name": "compute local enable",
-      "usage": "k2 compute local enable [--controller URL --enroll CODE.FP --name NAME] [--private-home | --no-private-home] [--remote-admin off|policy|full]",
+      "usage": "k2 compute local enable [--controller URL --code-stdin --name NAME] [--private-home | --no-private-home] [--remote-admin off|policy|full]",
       "description": "Let a server run jobs on this computer (Settings → Cores → Compute → This computer).",
       "args": [],
       "flags": [
         {"name": "--controller", "arg": "URL", "description": "The controller to enroll with."},
-        {"name": "--enroll", "arg": "CODE.FP", "description": "The enroll code."},
+        {"name": "--code-stdin", "arg": null, "description": "Read the enroll code from stdin (one line)."},
+        {"name": "--enroll", "arg": "CODE.FP", "description": "The enroll code on the command line, where every user on this computer can see it while the command runs: use --code-stdin."},
         {"name": "--name", "arg": "NAME", "description": "The node's name."},
         {"name": "--private-home", "arg": null, "description": "Keep the home folder private from jobs."},
         {"name": "--no-private-home", "arg": null, "description": "Don't."},

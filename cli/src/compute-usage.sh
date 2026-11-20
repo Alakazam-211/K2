@@ -681,8 +681,11 @@ Node admin, owner only (refused for agents and inside K2 terminals):
 This computer (its owner):
   k2 compute local status [--json]|pause [--now]|drain|resume
   k2 compute local policy key=value...    (cpu_cap_percent, mem_cap_gb, availability, …)
-  k2 compute local enable [--controller URL --enroll CODE.FP --name NAME]
+  k2 compute local enable [--controller URL --code-stdin --name NAME]
                           [--private-home | --no-private-home]
+                          (--code-stdin: the enroll code on stdin;
+                          --enroll CODE.FP still works, but every user on
+                          this computer can see it while the command runs)
                           [--remote-admin off|policy|full]   (default policy:
                           K2 keeps this node updated and healthy; full also
                           lets it run root actions, each approved by you)

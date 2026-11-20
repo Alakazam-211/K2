@@ -28,7 +28,8 @@
 //!
 //! Naming another workspace never retargets a request: it is refused
 //! (`own_workspace_only`), or, where the route names a workspace to look up,
-//! it goes through the connection gate (`comms::gate_cross_workspace`).
+//! the name must name exactly one workspace, its own or a connected one;
+//! anything else is a plain not-found that lists no candidates.
 
 use std::collections::HashMap;
 
@@ -46,9 +47,9 @@ pub(crate) enum Scope {
     /// The handler reads `project=` / `project_path=`. The stamp sets both
     /// to the passport's workspace; a claim naming any other is refused.
     Own,
-    /// The handler looks up the workspace named by `q=`: the passport's own
-    /// or a connected one (`comms::gate_cross_workspace`). A name K2 doesn't
-    /// know gets the handler's own not-found answer.
+    /// The handler looks up the workspace named by `q=`: it runs only when
+    /// `q` names exactly one workspace, the passport's own or a connected
+    /// one; anything else is a plain not-found ([`one_reachable_workspace`]).
     Named,
     /// A read with no workspace in it (release notes, the glossary, the
     /// preset and focus-group lists, the context catalog, the settings copy
@@ -391,15 +392,44 @@ pub(crate) fn refusal(path: &str, params: &HashMap<String, String>) -> Option<Cl
             if q.is_empty() {
                 return None;
             }
-            let principal = HookPrincipal {
-                workspace_uuid: ws.to_string(),
-                agent_address: params.get("from").cloned().unwrap_or_default(),
-            };
-            match crate::comms::gate_cross_workspace(Some(&principal), q) {
-                Ok(()) | Err(None) => None,
-                Err(Some(r)) => Some(r),
+            if one_reachable_workspace(ws, q) {
+                None
+            } else {
+                Some(not_found(q))
             }
         }
+    }
+}
+
+/// Whether `q` names exactly one workspace, and that one is the passport's
+/// own or one it is connected to. Anything else (a miss, a retired handle,
+/// a name more than one workspace answers to, a workspace it isn't
+/// connected to) is not, so the passport learns nothing about it.
+fn one_reachable_workspace(ws: &str, q: &str) -> bool {
+    // `sales/reviewer` is a sidecar address: the workspace is `sales`.
+    let token = k2_core::workspace_session_handles::split_workspace_handle(q).map(|(w, _)| w).unwrap_or(q);
+    let WorkspaceResolve::Found(path) = resolve_workspace_detailed(token) else {
+        return false;
+    };
+    let id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+    };
+    id.is_some_and(|id| id == ws || k2_core::connections::are_local_peers(ws, &id))
+}
+
+/// The not-found a passport gets for a name it can't reach: no candidates,
+/// no "did you mean".
+fn not_found(q: &str) -> CliResponse {
+    CliResponse {
+        status: "404 Not Found",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "not_found", "hint": format!("no workspace named '{q}' that this session can reach") },
+        })
+        .to_string(),
     }
 }
 

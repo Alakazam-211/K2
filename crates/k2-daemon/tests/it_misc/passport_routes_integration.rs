@@ -295,8 +295,8 @@ async fn named_lookups_reach_own_and_connected_workspaces_only() {
         }
         for q in [e.other.clone(), e.other_id.clone()] {
             let r = http(e.port, "GET", &format!("{route}?q={}", enc(&q)), Some(e.passport.as_str()));
-            assert_eq!(r.status, 403, "passport {route} not connected ({q}): {}", r.raw);
-            assert_eq!(code(&r, route), "not_connected", "{}", r.raw);
+            assert_eq!(r.status, 404, "passport {route} not connected ({q}): {}", r.raw);
+            assert_eq!(code(&r, route), "not_found", "{}", r.raw);
             assert!(!r.raw.contains(&e.other), "the other workspace's path leaked: {}", r.raw);
             let r = http(e.port, "GET", &format!("{route}?q={}", enc(&q)), Some(OWNER));
             assert_eq!(r.status, 200, "owner {route} other: {}", r.raw);
@@ -618,6 +618,34 @@ async fn only_a_live_local_passport_is_admitted() {
             assert!(session_token::validate_hook(p).is_some(), "{label}: the passport itself is valid");
             let r = http(e.port, "GET", route, Some(p.as_str()));
             assert_eq!(r.status, 403, "{label}, {route}: {}", r.raw);
+        }
+    }
+}
+
+/// A name more than one workspace answers to (one connected, one not), or
+/// a name it can't reach, is a plain not-found for a passport: no handles,
+/// no paths, no "did you mean". The owner still gets the candidates.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_lookups_never_list_other_workspaces() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for id in [&e.peer_id, &e.other_id] {
+            conn.execute("UPDATE projects SET name = 'Globex Team' WHERE id = ?1", [id]).expect("shared display name");
+        }
+    }
+    let owners = http(e.port, "GET", &format!("/cli/agent/conf?q={}", enc("Globex Team")), Some(OWNER));
+    assert_eq!(owners.status, 409, "the owner is told it's ambiguous: {}", owners.raw);
+    for route in ["/cli/agent/conf", "/cli/workspace/resolve"] {
+        for q in ["Globex Team", "Globex", "d1-othr"] {
+            let r = http(e.port, "GET", &format!("{route}?q={}", enc(q)), Some(e.passport.as_str()));
+            assert_eq!(r.status, 404, "passport {route} {q}: {}", r.raw);
+            assert_eq!(code(&r, route), "not_found", "{}", r.raw);
+            for leak in [e.other.as_str(), e.peer.as_str(), "d1-other", "d1-peer", "did you mean"] {
+                assert!(!r.raw.contains(leak), "passport {route} {q}: {leak} leaked: {}", r.raw);
+            }
         }
     }
 }

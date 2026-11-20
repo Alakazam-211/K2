@@ -505,15 +505,45 @@ fn voice_hands_these_to_the_shell() {
     rig.check(&Case {
         compare: Compare::Shell,
         ..case(
-            "_CP_404_EXIT set: the shell reads it",
+            "_K2_REFUSAL_AREA set: the shell reads it",
             &["rooms"],
-            &[("_CP_404_EXIT", "4")],
+            &[("_K2_REFUSAL_AREA", "app")],
             vec![ok(ROOMS)],
             owner_and_port,
             0,
             1,
         )
     });
+}
+
+/// `_CP_404_EXIT` exported: nothing in the shell reads it any more
+/// (`_compute_fail` takes its exit for a 404 from the caller), so the
+/// binary answers.
+#[test]
+fn voice_an_exported_404_exit_changes_nothing() {
+    let rig = Rig::new(VERB, "cp404");
+    for c in [
+        case(
+            "_CP_404_EXIT set: nothing reads it",
+            &["rooms"],
+            &[("_CP_404_EXIT", "4")],
+            vec![ok(ROOMS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "_CP_404_EXIT set: a 404 is 3",
+            &["rooms"],
+            &[("_CP_404_EXIT", "4")],
+            vec![Reply::Answer(404, r#"{"error":"x"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+    ] {
+        rig.check(&c);
+    }
 }
 
 /// The large list: above 256 KiB, thousands of rows. The answer reaches

@@ -27,9 +27,9 @@
 //!
 //! The binary leaves these to the shell ([`shells`]): a `K2_CJ_` variable
 //! in the environment (`_compute_json` puts it in the body),
-//! `_CP_404_EXIT`, `_K2_REFUSAL_AREA` or `_K2_NOANSWER_SOFT` set (the
-//! shell's internals), and `K2_CP_MAX_TIME` set for `versions-access`
-//! (the one call here that reads it).
+//! `_K2_REFUSAL_AREA` or `_K2_NOANSWER_SOFT` set (the shell's internals),
+//! and `K2_CP_MAX_TIME` set for `versions-access` (the one call here that
+//! reads it). `_CP_404_EXIT` is not one: nothing in the shell reads it.
 
 use super::py::{dumps_ascii, obj};
 use super::{is_major, usage, Form, Words};
@@ -361,10 +361,8 @@ pub fn shells(
         let name = name.to_string_lossy();
         name.starts_with("K2_CJ_")
             || (!value.is_empty()
-                && (matches!(
-                    name.as_ref(),
-                    "_CP_404_EXIT" | "_K2_REFUSAL_AREA" | "_K2_NOANSWER_SOFT"
-                ) || (name == "K2_CP_MAX_TIME" && matches!(ask, Ask::VersionsAccess { .. }))))
+                && (matches!(name.as_ref(), "_K2_REFUSAL_AREA" | "_K2_NOANSWER_SOFT")
+                    || (name == "K2_CP_MAX_TIME" && matches!(ask, Ask::VersionsAccess { .. }))))
     })
 }
 

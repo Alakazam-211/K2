@@ -443,6 +443,23 @@ fn compute_cancel_with_no_answer() {
     }
 }
 
+/// `_CP_404_EXIT` exported: nothing reads it any more (`_compute_fail`
+/// takes its exit for a 404 from the caller), so the binary answers and a
+/// 404 is cancel's own 3.
+#[test]
+fn compute_cancel_an_exported_404_exit_changes_nothing() {
+    let rig = Rig::new(VERB, "cancel404");
+    rig.check(&case(
+        "_CP_404_EXIT set: nothing reads it",
+        &["cancel", "j1"],
+        &[("_CP_404_EXIT", "4")],
+        vec![Reply::Answer(404, "{}".into())],
+        owner_and_port,
+        3,
+        1,
+    ));
+}
+
 /// What the binary hands to the shell, before it prints or sends
 /// anything: both sides are the shell's.
 #[test]
@@ -489,15 +506,6 @@ fn compute_cancel_hands_these_to_the_shell() {
             owner_and_port,
             0,
             0,
-        )),
-        shell(case(
-            "_CP_404_EXIT set",
-            &["cancel", "j1"],
-            &[("_CP_404_EXIT", "4")],
-            vec![Reply::Answer(404, "{}".into())],
-            owner_and_port,
-            4,
-            1,
         )),
         shell(case(
             "a K2_CJ_ variable",

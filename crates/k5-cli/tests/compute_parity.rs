@@ -483,6 +483,37 @@ fn compute_with_no_daemon() {
     ));
 }
 
+/// `_CP_404_EXIT` exported: nothing reads it any more (`_compute_fail`
+/// takes its exit for a 404 from the caller), so the binary answers and a
+/// 404 is the verb's own exit: 3, or 4 for `get`.
+#[test]
+fn compute_an_exported_404_exit_changes_nothing() {
+    let rig = Rig::new(VERB, "cp404");
+    let v = vec![
+        case(
+            "_CP_404_EXIT set: info's 404 is 3",
+            &["info", "zz"],
+            &[("_CP_404_EXIT", "9")],
+            vec![Reply::Answer(404, r#"{"error":{"code":"no_node"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "_CP_404_EXIT set: get's 404 is 4",
+            &["get", "j1"],
+            &[("_CP_404_EXIT", "0")],
+            vec![Reply::Answer(404, r#"{"error":{"code":"not_found"}}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
 /// What the binary hands to the shell, before it prints or sends
 /// anything: both sides are the shell's.
 #[test]
@@ -531,15 +562,6 @@ fn compute_hands_these_to_the_shell() {
             owner_and_port,
             0,
             0,
-        )),
-        shell(case(
-            "_CP_404_EXIT set",
-            &["info", "zz"],
-            &[("_CP_404_EXIT", "9")],
-            vec![Reply::Answer(404, r#"{"error":{"code":"no_node"}}"#.into())],
-            owner_and_port,
-            9,
-            1,
         )),
         shell(case(
             "a port curl won't take",

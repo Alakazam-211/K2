@@ -39,10 +39,11 @@
 //! The shell CLI answers these forms itself ([`run`] returns `None`), before
 //! anything is printed or sent: every other verb (another lane's, or not
 //! native yet), `compute` alone or `help`, a command line with `-h` or
-//! `--help`, `events --max-wait` with a duration `_compute_secs` refuses, a word that is not UTF-8,
-//! `HOOK_SOCK` set with a `CODEX_` variable exported, `_CP_404_EXIT` set in
-//! the environment (which the shell's `_compute_fail` reads), a port that
-//! is set but is no port curl takes, and a `python3` the binary can't tell.
+//! `--help`, `events --max-wait` with a duration `_compute_secs` refuses, a
+//! word that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable
+//! exported, a port that is set but is no port curl takes, and a `python3`
+//! the binary can't tell. The exit for a 404 is the verb's own:
+//! `_compute_fail` takes it from its caller, never from the environment.
 
 use super::{events, logs, pyrt, render, status};
 use crate::daemon::{self, Settings};
@@ -558,9 +559,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return None;
     }
     let ask = parse(&words[1..])?;
-    if std::env::var_os("_CP_404_EXIT").is_some_and(|v| !v.is_empty()) {
-        return None;
-    }
     if !python::family_native(python::here()) {
         return None;
     }

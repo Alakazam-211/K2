@@ -23,12 +23,10 @@
 //! - [`Cj`] is `_compute_json`: the body's keys in the order given, an
 //!   empty value left out, printed as Python's `json.dumps` prints.
 //!
-//! Where this differs from the shell: `_compute_fail` reads
-//! `_CP_404_EXIT` from the environment for a 404, which no App verb sets
-//! (the bash fix that stops it reading the environment is queued for
-//! 0.46.17); here a 404 is 3, as the shell's own verbs mean it. A body
-//! that is not UTF-8 makes the shell's Python fail on most locales, so its
-//! line is the no-answer one; that is what this prints.
+//! A 404 is 3: `_compute_fail` takes its exit for a 404 from the caller
+//! and never reads the environment. Where this differs from the shell: a
+//! body that is not UTF-8 makes the shell's Python fail on most locales,
+//! so its line is the no-answer one; that is what this prints.
 
 use crate::exit::Exit;
 use crate::out;

@@ -16,7 +16,8 @@
 //! - The owner from disk, a passport over TCP, a live cell socket, a dead
 //!   socket file, a socket that is gone (the stale-passport probe),
 //!   `HOOK_SOCK` with no passport; no port; nothing listening; a reset.
-//! - What the runner hands to the shell: `--help`, and `_CP_404_EXIT` set.
+//! - What the runner hands to the shell: `--help`. `_CP_404_EXIT`
+//!   exported changes nothing.
 
 #![cfg(unix)]
 
@@ -396,22 +397,31 @@ fn compute_stats_forms_the_shell_answers() {
             0,
             0,
         )),
-        shell(Case {
-            env: vec![("_CP_404_EXIT", "4".to_string())],
-            ..case(
-                "_CP_404_EXIT set: _compute_fail would read it",
-                &["stats", JOB],
-                &[],
-                answer(404, r#"{"error":{"code":"x"}}"#),
-                owner_and_port,
-                4,
-                1,
-            )
-        }),
     ];
     for c in cases {
         rig.check(&c);
     }
+}
+
+/// `_CP_404_EXIT` exported: nothing reads it any more (`_compute_fail`
+/// takes the exit for a 404 from its caller), so the runner answers and a
+/// 404 is the verb's own exit.
+#[test]
+fn an_exported_404_exit_changes_nothing() {
+    let rig = rig("cp404");
+    let c = Case {
+        env: vec![("_CP_404_EXIT", "4".to_string())],
+        ..case(
+            "_CP_404_EXIT set: nothing reads it",
+            &["stats", JOB],
+            &[],
+            answer(404, r#"{"error":{"code":"x"}}"#),
+            owner_and_port,
+            3,
+            1,
+        )
+    };
+    rig.check(&c);
 }
 
 /// The usage line is bash's, byte for byte.

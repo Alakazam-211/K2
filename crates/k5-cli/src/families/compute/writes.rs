@@ -254,17 +254,16 @@ pub fn post_max_time(v: Option<OsString>) -> Option<Option<Duration>> {
 /// Settings of the shell's own internals that an environment can carry
 /// into it and that change what a compute verb sends or prints: a
 /// `K2_CJ_` variable (`_compute_json` puts every one in the body),
-/// `_CP_404_EXIT` (`_compute_fail`'s exit for a 404), `_K2_REFUSAL_AREA`
-/// (the App refusal rows) and `_K2_NOANSWER_SOFT` (no line for a POST
-/// with no answer). Any of them set: the shell answers.
+/// `_K2_REFUSAL_AREA` (the App refusal rows) and `_K2_NOANSWER_SOFT` (no
+/// line for a POST with no answer). Any of them set: the shell answers.
+/// `_CP_404_EXIT` is not one: `_compute_fail` takes its exit for a 404
+/// from its caller and never reads the environment.
 pub fn shell_settings(vars: impl IntoIterator<Item = (OsString, OsString)>) -> bool {
     vars.into_iter().any(|(name, value)| {
         let name = name.to_string_lossy();
         name.starts_with("K2_CJ_")
-            || (matches!(
-                name.as_ref(),
-                "_CP_404_EXIT" | "_K2_REFUSAL_AREA" | "_K2_NOANSWER_SOFT"
-            ) && !value.is_empty())
+            || (matches!(name.as_ref(), "_K2_REFUSAL_AREA" | "_K2_NOANSWER_SOFT")
+                && !value.is_empty())
     })
 }
 

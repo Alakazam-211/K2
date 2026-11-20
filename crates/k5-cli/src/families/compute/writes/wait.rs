@@ -322,7 +322,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
     end_of(&bodies, a.json).print()
 }
 
-/// `_compute_fail` with `_CP_404_EXIT=4`.
+/// `_compute_fail` with 4 for a 404 (`wait` and `wait --any` pass it).
 fn fail_404_is_4(status: &str, body: &[u8]) -> Exit {
     let e = super::fail(status, body);
     if status == "404" {

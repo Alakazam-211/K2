@@ -14,9 +14,10 @@
 //! - No answer: no daemon, a reset, a closed connection.
 //! - The session: an agent on its cell socket and over TCP, `HOOK_SOCK`
 //!   with no passport (refused before anything is sent), the gates.
-//! - What the binary hands to the shell: `_CP_404_EXIT` set, a `CODEX_`
-//!   setting in a session, a line with a help flag that is no help page.
-//!   `capabilities --help` is a help page.
+//! - `_CP_404_EXIT` exported changes nothing (a 404 is 3).
+//! - What the binary hands to the shell: a `CODEX_` setting in a session,
+//!   a line with a help flag that is no help page. `capabilities --help`
+//!   is a help page.
 
 #![cfg(unix)]
 
@@ -273,6 +274,17 @@ fn refusals_and_no_answer() {
     let dead = dead_port();
     let refusal = r#"{"error":{"code":"app_box_not_ready","hint":"x"}}"#;
     let v = vec![
+        // `_compute_fail` takes its exit for a 404 from the caller: an
+        // exported `_CP_404_EXIT` changes nothing.
+        case(
+            "_CP_404_EXIT set: nothing reads it",
+            &[],
+            &[("_CP_404_EXIT", "5")],
+            vec![Reply::Answer(404, r#"{"error":"x"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
         case(
             "a refusal with its fix line",
             &[],
@@ -416,15 +428,6 @@ fn the_session_and_the_gates() {
 fn hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");
     let v = vec![
-        shell(case(
-            "_CP_404_EXIT set",
-            &[],
-            &[("_CP_404_EXIT", "5")],
-            vec![Reply::Answer(404, r#"{"error":"x"}"#.into())],
-            owner_and_port,
-            5,
-            1,
-        )),
         with(
             with_passport(&[("K2_HOOK_SOCK", "{sock}"), ("CODEX_THREAD_ID", "t1")]),
             shell(case(

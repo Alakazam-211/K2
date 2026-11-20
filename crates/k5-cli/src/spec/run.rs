@@ -25,8 +25,9 @@
 //! anything is printed or sent when: a word is not UTF-8, `-h` or `--help`
 //! is in it, `HOOK_SOCK` is set with a `CODEX_` variable exported, the
 //! row's tool is not an `id` tool, the binary can't tell what the shell's
-//! `python3` is, the port is set but is no port curl takes, or the
-//! environment sets `_CP_404_EXIT` (which `_compute_fail` would read).
+//! `python3` is, or the port is set but is no port curl takes. The exit
+//! for a 404 is the verb's own: `_compute_fail` takes it as an argument
+//! and never reads the environment.
 //!
 //! Where this differs from the shell: an answer whose bytes are not UTF-8
 //! is read with each bad byte as U+FFFD (Python's stdin depends on the
@@ -149,13 +150,6 @@ pub fn run(row: &'static SpecVerb, args: &[OsString]) -> Option<Exit> {
         return None;
     }
     let tool = id_tool_of(row)?;
-    match row.call.via {
-        Via::Compute => {
-            if std::env::var_os("_CP_404_EXIT").is_some_and(|v| !v.is_empty()) {
-                return None;
-            }
-        }
-    }
     if !python::family_native(python::here()) {
         return None;
     }

@@ -687,6 +687,36 @@ fn hostchat_backups_large() {
     rig.check(&one("a large list", &["backups"], &body));
 }
 
+/// `_CP_404_EXIT` exported: nothing in the shell reads it any more
+/// (`_compute_fail` takes its exit for a 404 from the caller), so the
+/// binary answers and a 404 is 3.
+#[test]
+fn hostchat_an_exported_404_exit_changes_nothing() {
+    let rig = Rig::new(VERB, "cp404");
+    for c in [
+        case(
+            "_CP_404_EXIT set: nothing reads it",
+            &["status"],
+            &[("_CP_404_EXIT", "4")],
+            vec![ok(r#"{"state":"x"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "_CP_404_EXIT set: a 404 is 3",
+            &["status"],
+            &[("_CP_404_EXIT", "4")],
+            vec![Reply::Answer(404, r#"{"error":"x"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}
+
 /// What the binary hands to the shell.
 #[test]
 fn hostchat_hands_these_to_the_shell() {
@@ -697,9 +727,9 @@ fn hostchat_hands_these_to_the_shell() {
     };
     for c in [
         shell(case(
-            "_CP_404_EXIT set: the shell reads it",
+            "_K2_REFUSAL_AREA set: the shell reads it",
             &["status"],
-            &[("_CP_404_EXIT", "4")],
+            &[("_K2_REFUSAL_AREA", "app")],
             vec![ok(r#"{"state":"x"}"#)],
             owner_and_port,
             0,

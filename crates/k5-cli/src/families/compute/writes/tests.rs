@@ -112,7 +112,8 @@ fn the_shell_s_lines() {
             r#"    [ -z "$line" ] && line="{\"error\":\"daemon_unreachable\",\"hint\":\"no answer from the K2 daemon (status ${status:-none})\"}""#,
         ),
         (&lib, r#"        400|413) exit 2 ;;"#),
-        (&lib, r#"        404) exit "${_CP_404_EXIT:-3}" ;;"#),
+        (&lib, r#"        404) exit "$not_found" ;;"#),
+        (&lib, r#"    _compute_call_nf 3 "$@""#),
         (&lib, r#"        *) exit 3 ;;"#),
         (
             &lib,
@@ -563,8 +564,9 @@ fn the_shell_s_own_settings_go_to_the_shell() {
             .map(|(k, v)| (OsString::from(k), OsString::from(v)))
             .collect()
     };
-    assert!(!shell_settings(v(&[("HOME", "/h"), ("_CP_404_EXIT", "")])));
-    assert!(shell_settings(v(&[("_CP_404_EXIT", "4")])));
+    assert!(!shell_settings(v(&[("HOME", "/h"), ("_K2_REFUSAL_AREA", "")])));
+    // Nothing in the shell reads it any more.
+    assert!(!shell_settings(v(&[("_CP_404_EXIT", "4")])));
     assert!(shell_settings(v(&[("K2_CJ_extra", "")])));
     assert!(shell_settings(v(&[("_K2_REFUSAL_AREA", "app")])));
     assert!(shell_settings(v(&[("_K2_NOANSWER_SOFT", "1")])));
@@ -604,7 +606,8 @@ mod wait_verb {
             r#"                [ "$fails" -eq 1 ] && echo "[k2 compute] lost the K2 server; retrying (the job keeps running on the node)" >&2"#,
             r#"                if [ "$fails" -gt 60 ]; then"#,
             r#"                sleep 10"#,
-            r#"                _CP_404_EXIT=4 _compute_fail "$_CP_STATUS" "$_CP_BODY""#,
+            r#"                _compute_fail "$_CP_STATUS" "$_CP_BODY" 4"#,
+            r#"            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY" 4"#,
             r#"                echo "[k2 compute] $line" >&2"#,
             r#"            resp="$(_compute_send GET /cli/compute/jobs/get "job=$(urlencode "$j")&wait=1")""#,
             r#"            [ "${#others[@]}" -gt 0 ] && [ "$quiet" = "0" ] && echo "[k2 compute] still running: ${others[*]} (k2 compute wait ${others[*]} --any)" >&2"#,

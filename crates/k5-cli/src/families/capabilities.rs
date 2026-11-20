@@ -22,10 +22,11 @@
 //! 5. The EXIT trap's lines.
 //!
 //! The shell answers these itself ([`run`] returns `None`): a session with
-//! `CODEX_*` set (the shared Codex lookup), a word that is not UTF-8,
-//! `_CP_404_EXIT` set (which `_compute_fail` reads from the environment
-//! for a 404), a port curl won't take, and a `python3` the binary can't
-//! tell ([`crate::families`], Without Python). Help forms never get here:
+//! `CODEX_*` set (the shared Codex lookup), a word that is not UTF-8, a
+//! port curl won't take, and a `python3` the binary can't tell
+//! ([`crate::families`], Without Python). A 404 exits 3 whatever the
+//! environment holds: `_compute_fail` takes its exit for a 404 from the
+//! caller and never reads `_CP_404_EXIT`. Help forms never get here:
 //! the front prints `capabilities --help` and `capabilities -h` as pages
 //! and hands any other line with a help flag to the shell.
 
@@ -54,8 +55,6 @@ pub const VERBS: &[crate::route::Verb] = &[];
 pub const ENDPOINT: &str = "/cli/capabilities";
 /// The session check's tool (`_cli_tool_for_verb`).
 pub const TOOL: &str = "skin";
-/// The setting `_compute_fail` reads for a 404.
-pub const CP_404_EXIT: &str = "_CP_404_EXIT";
 /// The usage line.
 pub const USAGE: &str = concat!(
     "usage: ",
@@ -109,9 +108,6 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let hook_sock = super::hook_sock();
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
-        return None;
-    }
-    if std::env::var_os(CP_404_EXIT).is_some() {
         return None;
     }
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;

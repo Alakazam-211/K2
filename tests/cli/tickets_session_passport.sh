@@ -102,6 +102,8 @@ os.rename(os.path.join(work, "stub.port.tmp"), os.path.join(work, "stub.port"))
 srv.serve_forever()
 PYEOF
 STUB_PID=$!
+# No job notice (bash 3.2 prints the stub's source when cleanup kills it).
+disown "$STUB_PID" 2>/dev/null || true
 
 for _ in $(seq 1 100); do
     [ -s "$WORK/stub.port" ] && break

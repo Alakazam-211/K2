@@ -665,6 +665,20 @@ fn carry_export_and_import() {
     }
 }
 
+/// systemd credentials are Linux only. Elsewhere both CLIs stop once the
+/// words are read, with the `linux_only` line and exit 2, before any
+/// request: a row that gets past the words answers so there (the rest
+/// already exit 2 with nothing sent).
+fn on_linux(mut c: VCase) -> VCase {
+    if cfg!(target_os = "linux") {
+        return c;
+    }
+    c.code = 2;
+    c.daemon_requests = 0;
+    c.vault_requests = 0;
+    c
+}
+
 #[test]
 fn systemd_cred() {
     let rig = VRig::new();
@@ -868,6 +882,6 @@ fn systemd_cred() {
         ),
         in_k2,
     ] {
-        rig.check(&c);
+        rig.check(&on_linux(c));
     }
 }

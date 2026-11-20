@@ -66,12 +66,15 @@ cmd_signal() {
     fi
     unset _k2_db
 
-    local body
-    body=$(python3 <<PY
+    # Every value reaches Python as data on stdin (NUL-separated fields),
+    # never inside its source: the script is a quoted heredoc and the shell
+    # expands nothing in it.
+    local _sig_py body
+    IFS= read -r -d '' _sig_py <<'PY' || true
 import json, sys
-kind = "$kind"
-raw = """$raw_payload"""
-# Map CLI kind argument → SignalKind JSON shape.
+fields = sys.stdin.buffer.read().decode("utf-8", "surrogateescape").split("\0")
+kind, raw, signal_id, workspace_id, from_name, target, delivery, now = fields[:8]
+# Map CLI kind argument to the SignalKind JSON shape.
 kind_map = {
     "msg":      lambda d: {"kind":"msg","data":{"text": d.get("text", "")}},
     "status":   lambda d: {"kind":"status","data":{"text": d.get("text", "")}},
@@ -87,17 +90,18 @@ else:
     kind_json = {"kind":"custom","data":{"kind": kind, "payload": payload_data}}
 
 signal = {
-    "id": "$signal_id",
-    "from": {"scope":"agent","workspace":"$workspace_id","name":"$from"},
-    "to":   {"scope":"agent","workspace":"$workspace_id","name":"$target"},
+    "id": signal_id,
+    "from": {"scope":"agent","workspace":workspace_id,"name":from_name},
+    "to":   {"scope":"agent","workspace":workspace_id,"name":target},
     "kind": kind_json,
     "priority": "normal",
-    "delivery": "$delivery",
-    "at": "$now",
+    "delivery": delivery,
+    "at": now,
 }
 print(json.dumps(signal))
 PY
-)
+    body=$(printf '%s\0' "$kind" "$raw_payload" "$signal_id" "$workspace_id" "$from" "$target" "$delivery" "$now" \
+        | python3 -c "$_sig_py")
 
     cli_send cli_post_json "/cli/awareness/publish" "$body"
     echo

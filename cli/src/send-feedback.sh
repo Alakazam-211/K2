@@ -68,6 +68,29 @@ sys.exit(0 if isinstance(v, dict) and v.get("agents") is False and v.get("sender
 ' 2>/dev/null
 }
 
+# _sf_session_token: in a session (the HOOK_SOCK marker) every
+# send-feedback request carries the session's passport, never the owner
+# token k2 read from disk, also when the cell socket doesn't serve the
+# route and the request goes over TCP. A session with no passport: one
+# line, exit 3, nothing sent. Outside a session (and on a remote host)
+# $TOKEN stays.
+_sf_session_token() {
+    [ -n "$(_hook_sock)" ] || return 0
+    _cli_skip_uds && return 0
+    if [ -z "${SCOPED_TOKEN:-}" ]; then
+        echo "Error: in a session, k2 send-feedback doesn't act as this server's owner, and this session has no passport, so nothing was sent." >&2
+        exit 3
+    fi
+    TOKEN="$SCOPED_TOKEN"
+}
+
+# _sf_call METHOD PATH [payload]: _compute_call for every send-feedback
+# route, as the session in a session (_sf_session_token).
+_sf_call() {
+    _sf_session_token
+    _compute_call "$@"
+}
+
 # The study page's one line while agents are off.
 _sf_off_line() {
     echo "Agents don't report $_SF_PRODUCT problems on this server: the owner or an admin turns it on with k2 send-feedback settings --agents cli|all (or k2 setup agent-reports)."
@@ -143,7 +166,7 @@ _sf_send() {
     if [ "$diag" = 1 ] || [ "$preview" = 1 ]; then
         local dpayload
         dpayload="$(_compute_json K2_CJ_client=cli K2_CJ_page=cli "K2_CJ_cliVersion=${K2_CLI_VERSION:-}")"
-        _compute_call POST /cli/product-feedback/diagnostics "$dpayload"
+        _sf_call POST /cli/product-feedback/diagnostics "$dpayload"
         local preview_body="$_CP_BODY"
         if [ "$preview" = 1 ] && [ "$json_out" = 1 ]; then
             printf '%s\n' "$preview_body"; return 0
@@ -189,14 +212,14 @@ if os.environ.get("K2_SF_DRAFT"):
     b["diagnostics"] = {"draftId": os.environ["K2_SF_DRAFT"]}
 print(json.dumps(b))
 ')"
-    _compute_call POST /cli/product-feedback/send "$payload"
+    _sf_call POST /cli/product-feedback/send "$payload"
     local id
     id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
     [ -n "$id" ] || { echo '{"error":"daemon_error","hint":"the daemon answered without an id"}' >&2; exit 3; }
     # The daemon sends right away; wait a moment to say what happened.
     local i=0 st="queued" show=""
     while [ "$i" -lt 10 ]; do
-        _compute_call GET /cli/product-feedback/show "id=$(urlencode "$id")"
+        _sf_call GET /cli/product-feedback/show "id=$(urlencode "$id")"
         show="$_CP_BODY"
         st="$(printf '%s' "$show" | python3 -c 'import json,sys; print(json.load(sys.stdin)["item"]["state"])')"
         case "$st" in queued|sending) ;; *) break ;; esac
@@ -241,7 +264,7 @@ _sf_list() {
     done
     local q=""
     [ -n "$state" ] && q="state=$(urlencode "$state")"
-    _compute_call GET /cli/product-feedback/list "$q"
+    _sf_call GET /cli/product-feedback/list "$q"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys, time
@@ -274,7 +297,7 @@ _sf_show() {
         esac
     done
     [ -n "$id" ] || { echo "usage: k2 send-feedback show <id> [--json]" >&2; exit 2; }
-    _compute_call GET /cli/product-feedback/show "id=$(urlencode "$id")"
+    _sf_call GET /cli/product-feedback/show "id=$(urlencode "$id")"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys, time
@@ -310,7 +333,7 @@ _sf_transition() {
     local verb="$1" id="${2:-}"
     [ -n "$id" ] && [ $# -eq 2 ] || { echo "usage: k2 send-feedback $verb <id>" >&2; exit 2; }
     case "$id" in -h|--help) _send_feedback_usage; return 0 ;; esac
-    _compute_call POST "/cli/product-feedback/$verb" "$(_compute_json "K2_CJ_id=$id")"
+    _sf_call POST "/cli/product-feedback/$verb" "$(_compute_json "K2_CJ_id=$id")"
     case "$verb" in
         retry) echo "Queued again: $id. It sends when it can (k2 send-feedback show $id)." ;;
         cancel) echo "Cancelled: $id. It will not be sent." ;;
@@ -330,7 +353,7 @@ _sf_agents_word() {
 
 # The settings route for _sf_settings_run: the answer in _CP_BODY.
 #   _sf_settings_call settings|setup GET|POST [body]
-# settings goes through _compute_call, as every send-feedback verb. setup
+# settings goes through _sf_call, as every send-feedback verb. setup
 # goes through _setup_send, bash and curl only like the rest of k2 setup
 # (the session's passport in an agent's session, never the owner token);
 # a refusal prints the standard {"error", "hint"} line and exits 2 for a
@@ -338,7 +361,7 @@ _sf_agents_word() {
 _sf_settings_call() {
     local who="$1" method="$2" body="${3:-}" raw code err="" hint=""
     if [ "$who" = settings ]; then
-        _compute_call "$method" /cli/product-feedback/settings "$body"
+        _sf_call "$method" /cli/product-feedback/settings "$body"
         return 0
     fi
     raw="$(_setup_send "$method" /cli/product-feedback/settings 1 "$body")"

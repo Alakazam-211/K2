@@ -28,7 +28,7 @@
 //!   ([`crate::prelude::codex_env`]);
 //! - a word that is not UTF-8;
 //! - the forms [`send`] names (`--signal`, `--inbox-silent`
-//!   and `--inbox-wake`, `<agent>::<host>`, `--secret`).
+//!   and `--inbox-wake`, `--secret`).
 
 use super::curl_port;
 use crate::daemon;
@@ -43,6 +43,7 @@ use std::path::Path;
 
 pub mod postal;
 pub mod py;
+pub mod remote;
 pub mod send;
 pub mod send_once;
 pub mod verify;

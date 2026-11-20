@@ -234,6 +234,11 @@ impl Closing {
         }
     }
 
+    /// `_permission_note_reset`: the refusal lines so far are dropped.
+    pub fn reset_note(&mut self) {
+        self.note = None;
+    }
+
     /// `_permission_note_flush`, as the command ends with `exit`: the
     /// dead-passport line (after the probe), the closing line when the
     /// command failed, the bulletin line when it worked.

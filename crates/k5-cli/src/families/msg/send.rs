@@ -40,8 +40,9 @@
 //! An address `handle::label.postal.bot` first is Postal mail
 //! ([`super::postal`]). The shell answers these forms itself ([`parse`]
 //! says [`Parsed::Shell`]): `--signal`,
-//! `--inbox-silent` and `--inbox-wake`, an address on another server
-//! (`agent::host`, `agent@host`) and `--secret NAME` (a vault handoff).
+//! `--inbox-silent` and `--inbox-wake`, and `--secret NAME` (a vault
+//! handoff). An address on another server (`agent::host`, `agent@host`)
+//! goes over federation ([`super::remote`]).
 //!
 //! A value flag (`--from`, `--command`, `--wake-timeout`, `--via`) as the
 //! last word is [`needs_value`]'s line and exit 2, where bash stops with
@@ -441,9 +442,6 @@ pub fn parse(words: &[&str]) -> Parsed {
         }
         return Parsed::Shell;
     }
-    if m.session.is_empty() && address(&m.target) == Address::Remote {
-        return Parsed::Shell;
-    }
     Parsed::Send(m)
 }
 
@@ -495,6 +493,20 @@ fn send_with(client: &mut Client, closing: &mut Closing, m: &mut Msg) -> Exit {
             wire_form(&m.target).as_bytes(),
         );
         return Exit::Usage;
+    } else if let Some(target) = super::remote::split(&m.target) {
+        // `_postal_send_teach "$target" "$text"`: Postal mail, the text
+        // alone.
+        if is_postal(&m.target) {
+            return match super::postal::parse(&[m.target.as_str(), m.text.as_str()], 0) {
+                Ok(mail) => super::postal::send(client, &mail),
+                Err(line) => {
+                    out::stderr_line(&line);
+                    Exit::Usage
+                }
+            };
+        }
+        let project = client.project.clone();
+        return super::remote::send(client, closing, &target, &m.text, &project, &key);
     }
     if m.from.is_empty() {
         m.from = match sender(client, closing) {

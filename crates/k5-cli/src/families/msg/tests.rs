@@ -301,8 +301,6 @@ fn the_words() {
         &["ws", "--signal", "x"],
         &["ws", "--inbox-silent", "f"],
         &["ws", "--inbox-wake", "f"],
-        &["agent::host.example", "t"],
-        &["agent@host", "t"],
         &["ws", "t", "--secret", "N"],
     ] {
         assert_eq!(parse(shell), Parsed::Shell, "{shell:?}");
@@ -834,5 +832,163 @@ fn the_lines_name_the_brand() {
                 assert!(!line.contains(name), "{name:?} in {line:?}");
             }
         }
+    }
+}
+
+#[test]
+fn remote_addresses_and_readers() {
+    use super::remote::{self, Target};
+    for w in [&["agent::host.example", "t"][..], &["agent@host", "t"]] {
+        assert!(matches!(parse(w), Parsed::Send(_)), "{w:?}");
+    }
+    let t = |a: &str, h: &str, at: bool| {
+        Some(Target {
+            agent: a.into(),
+            host: h.into(),
+            legacy_at: at,
+        })
+    };
+    assert_eq!(
+        remote::split("ada::box.example"),
+        t("ada", "box.example", false)
+    );
+    assert_eq!(remote::split("ada@box"), t("ada", "box", true));
+    assert_eq!(remote::split("a@b@c"), t("a@b", "c", true));
+    assert_eq!(remote::split("@box"), t("", "box", true));
+    for local in ["ada", "ada::box", "::box.x", "a::b::c", "ada@"] {
+        assert_eq!(remote::split(local), None, "{local}");
+    }
+    assert_eq!(remote::slug("  Field   Notes \n"), "field-notes");
+    assert_eq!(
+        remote::chat("ada/Field Notes"),
+        Ok(("ada".into(), Some("field-notes".into())))
+    );
+    assert_eq!(remote::chat("ada/a/b"), Err(remote::BAD_CHAT.to_string()));
+    assert_eq!(remote::chat("/x"), Err(remote::BAD_CHAT.to_string()));
+
+    let peers = |raw: &str, host: &str| remote::peers(raw.as_bytes(), host);
+    assert_eq!(peers("", "h.k2.dev").unwrap(), "ERR\tparse");
+    assert_eq!(peers("[]", "h.k2.dev").unwrap(), "NOFED");
+    assert_eq!(
+        peers(r#"{"error":{"code":"forbidden","hint":"no"}}"#, "h").unwrap(),
+        "FORBIDDEN\tno"
+    );
+    assert_eq!(peers(r#"{"error":"off"}"#, "h").unwrap(), "NOFED\toff");
+    assert_eq!(
+        peers(r#"{"error":{"code":"x"}}"#, "h").unwrap(),
+        "NOFED\t{'code': 'x'}"
+    );
+    let list = r#"{"peers":[{"subdomain":"other","label":"L"},{"subdomain":"box","fingerprint":"fp1","trust":"Trusted"}]}"#;
+    assert_eq!(peers(list, "box.k2.dev").unwrap(), "OK\tfp1\tTrusted");
+    assert_eq!(peers(list, "BOX").unwrap(), "OK\tfp1\tTrusted");
+    assert_eq!(
+        peers(list, "nope.example").unwrap(),
+        "NONE\tother.k2.dev, box.k2.dev"
+    );
+    assert_eq!(
+        peers(
+            r#"{"peers":[{"base_url":"https://lan.local:8443/x","fingerprint":"f"}]}"#,
+            "lan.local:8443"
+        )
+        .unwrap(),
+        "OK\tf\t"
+    );
+    let raised = peers(r#"{"peers":[5]}"#, "h.x").unwrap_err();
+    assert_eq!(
+        raised.exception,
+        "AttributeError: 'int' object has no attribute 'get'"
+    );
+    let raised = peers(r#"{"peers":[{"subdomain":5}]}"#, "h.x").unwrap_err();
+    assert_eq!(raised.frames, vec![(39, "<module>"), (6, "bare")]);
+    assert_eq!(
+        remote::read3("OK\t\ttrusted"),
+        ("OK".into(), "trusted".into(), String::new())
+    );
+    assert_eq!(
+        remote::read3("OK\ta\tb\tc\t\nnext"),
+        ("OK".into(), "a".into(), "b\tc".into())
+    );
+
+    let roster = |raw: &str, agent: &str| remote::roster(raw.as_bytes(), agent);
+    let r = r#"{"roster":{"agents":[{"agent":"ada","workspace_id":"w1","aliases":["Lovelace"]},{"agent":"bob","workspace_id":"w2","workspace_name":"Bob Shop"}]}}"#;
+    assert_eq!(roster(r, "Ada").unwrap(), "OK\tw1\t");
+    assert_eq!(roster(r, "lovelace").unwrap(), "OK\tw1\tada");
+    assert_eq!(roster(r, "bob_shop").unwrap(), "OK\tw2\tbob");
+    assert_eq!(roster(r, "carl").unwrap(), "NONE\tada, bob");
+    assert_eq!(roster(r#"{"error":null}"#, "a").unwrap(), "ERR\tNone");
+    assert_eq!(roster("5", "a").unwrap(), "ERR\t");
+    assert_eq!(
+        roster(r#"{"roster":{"agents":[{"agent":null}]}}"#, "x")
+            .unwrap_err()
+            .exception,
+        "TypeError: sequence item 0: expected str instance, NoneType found"
+    );
+    assert_eq!(
+        roster(r#"{"roster":{"agents":[{"agent":"a","aliases":7}]}}"#, "x")
+            .unwrap_err()
+            .exception,
+        "TypeError: 'int' object is not iterable"
+    );
+    let two = r#"{"roster":{"agents":[{"agent":"a","workspace_id":"w1","workspace_name":"A"},{"agent":"a","workspace_id":"w2"}]}}"#;
+    assert_eq!(roster(two, "a").unwrap(), "AMBIG\tA (w1); ? (w2)");
+
+    let sent = |raw: &str| remote::sent(raw.as_bytes());
+    assert_eq!(sent(r#"{"status":"sent"}"#).unwrap(), "SENT");
+    assert_eq!(
+        sent(r#"{"status":"queued","reason":"delivery deferred to retry: conn  refused"}"#)
+            .unwrap(),
+        "QUEUED\tconn refused"
+    );
+    assert_eq!(
+        sent(r#"{"error":{"code":"gated","hint":"on"}}"#).unwrap(),
+        "GATE\tgated\ton"
+    );
+    assert_eq!(sent(r#"{"error":"x"}"#).unwrap(), "ERROR\tx");
+    assert_eq!(
+        sent(r#"{"status":"declined"}"#).unwrap(),
+        "DECLINED\tdeclined by peer"
+    );
+    assert_eq!(sent("nope").unwrap(), "RAW");
+    assert_eq!(sent("{}").unwrap(), "OTHER");
+    assert_eq!(
+        sent(r#"{"status":"queued","reason":5}"#)
+            .unwrap_err()
+            .exception,
+        "AttributeError: 'int' object has no attribute 'startswith'"
+    );
+    assert_eq!(
+        remote::gate_line("forbidden", "é"),
+        r#"{"error":{"code":"forbidden","hint":"é"}}"#
+    );
+    assert_eq!(
+        remote::body("f::w::a", "hé", "/p", "k"),
+        r#"{"to": "f::w::a", "text": "h\u00e9", "from_workspace": "/p", "idempotency_key": "k"}"#
+    );
+
+    // The shell's lines, pinned: as the shell's `echo "..."` spells them.
+    let src = source("remote-msg.sh");
+    let esc = |t: &str| {
+        as_shell(t)
+            .replace(&format!("{PRODUCT_NAME} retries"), "K2 retries")
+            .replace('"', "\\\"")
+            .replace('`', "\\`")
+    };
+    let mut parts = vec![
+        esc(&remote::empty_agent()),
+        esc(remote::BAD_CHAT),
+        esc(&remote::at_hint("${agent}", "${host}")),
+        esc(&remote::no_fed("$host")),
+    ];
+    for text in [
+        remote::no_peer("$host", "$fp"),
+        remote::no_peer("$host", ""),
+        remote::no_agent("$agent", "$host", "$rdetail"),
+        remote::no_agent("$agent", "$host", ""),
+        remote::queued("${shown}", "${host}", "$sdetail"),
+    ] {
+        parts.extend(text.lines().map(esc));
+    }
+    for part in parts {
+        assert!(src.contains(&part), "{part}");
     }
 }

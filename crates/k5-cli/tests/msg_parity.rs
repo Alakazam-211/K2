@@ -944,3 +944,153 @@ fn msg_value_flag_last_is_the_d6_line() {
 fn leak_name(flag: &str, args: &[&str]) -> &'static str {
     Box::leak(format!("{flag} last in {}", args.join(" ")).into_boxed_str())
 }
+
+/// `msg <agent>::<host>` and `<agent>@<host>`: the peers, the roster and
+/// the federation send, each reader's lines and exits, the `@` hint, a
+/// chat, a reader that raises.
+#[test]
+fn msg_to_another_server() {
+    let rig = Rig::new(VERB, "remote");
+    const PEERS: &str = r#"{"peers":[{"subdomain":"box","fingerprint":"fp1","trust":"trusted"}]}"#;
+    const ROSTER: &str =
+        r#"{"roster":{"agents":[{"agent":"ada","workspace_id":"w1","aliases":["lovelace"]}]}}"#;
+    let to = |a: &'static str| -> &'static [&'static str] {
+        leak(vec![
+            a.into(),
+            "hi".into(),
+            "--idempotency-key".into(),
+            KEY.into(),
+        ])
+    };
+    let v = vec![
+        // covers: msg
+        plain(
+            "delivered",
+            to("ada::box.k2.dev"),
+            vec![ok(ON), ok(PEERS), ok(ROSTER), ok(r#"{"status":"sent"}"#)],
+            0,
+            4,
+        ),
+        plain(
+            "delivered by another name",
+            to("lovelace::box.k2.dev"),
+            vec![
+                ok(ON),
+                ok(PEERS),
+                ok(ROSTER),
+                ok(r#"{"status":"sent","replayed":true}"#),
+            ],
+            0,
+            4,
+        ),
+        plain(
+            "the @ form and a chat",
+            to("ada/Field Notes@box"),
+            vec![
+                ok(ON),
+                ok(PEERS),
+                ok(ROSTER),
+                ok(r#"{"status":"queued","reason":"delivery deferred to retry: refused"}"#),
+            ],
+            0,
+            4,
+        ),
+        plain("an empty agent", to("@box"), vec![ok(ON)], 2, 1),
+        plain("a bad chat", to("ada/a/b::box.x"), vec![ok(ON)], 2, 1),
+        plain(
+            "federation off",
+            to("ada::box.x"),
+            vec![
+                ok(ON),
+                Reply::Answer(404, r#"{"error":"federation is off"}"#.into()),
+            ],
+            2,
+            2,
+        ),
+        plain(
+            "the peers refused",
+            to("ada::box.x"),
+            vec![
+                ok(ON),
+                Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"forbidden","hint":"not yours"}}"#.into(),
+                ),
+            ],
+            3,
+            2,
+        ),
+        plain(
+            "no such peer",
+            to("ada::nope.x"),
+            vec![ok(ON), ok(PEERS)],
+            2,
+            2,
+        ),
+        plain(
+            "not trusted",
+            to("ada::box.k2.dev"),
+            vec![
+                ok(ON),
+                ok(r#"{"peers":[{"subdomain":"box","fingerprint":"fp1","trust":"Pending"}]}"#),
+            ],
+            2,
+            2,
+        ),
+        plain(
+            "no such agent",
+            to("carl::box.k2.dev"),
+            vec![ok(ON), ok(PEERS), ok(ROSTER)],
+            2,
+            3,
+        ),
+        plain(
+            "the gate",
+            to("ada::box.k2.dev"),
+            vec![
+                ok(ON),
+                ok(PEERS),
+                ok(ROSTER),
+                Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"not_connected","hint":"connect first"}}"#.into(),
+                ),
+            ],
+            3,
+            4,
+        ),
+        plain(
+            "declined",
+            to("ada::box.k2.dev"),
+            vec![
+                ok(ON),
+                ok(PEERS),
+                ok(ROSTER),
+                ok(r#"{"status":"declined","hint":"-n"}"#),
+            ],
+            2,
+            4,
+        ),
+        plain(
+            "unexpected",
+            to("ada::box.k2.dev"),
+            vec![ok(ON), ok(PEERS), ok(ROSTER), ok("[1]")],
+            1,
+            4,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+    let raises = Case {
+        compare: Compare::Traceback,
+        ..plain(
+            "a reader that raises",
+            to("ada::box.k2.dev"),
+            vec![ok(ON), ok(r#"{"peers":[7]}"#)],
+            1,
+            2,
+        )
+    };
+    rig.check(&raises);
+}

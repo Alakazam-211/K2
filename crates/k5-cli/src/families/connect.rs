@@ -61,14 +61,11 @@ use std::path::Path;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["connect"];
-/// The shell's but for [`VERBS`].
-pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// Only `status`; `login`, `logout`, the old publish words and
-/// `connect` alone are the shell's.
-pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
-    words: &["status"],
-    owner: crate::route::Owner::Native,
-}];
+/// The binary's but for `login` and `logout`, which [`run`] hands to the
+/// shell (they talk to the account service over HTTPS).
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
 
 /// Where the daemon says whether it holds the tunnel token.
 pub const CONFIG: &str = "/cli/tunnel/config";
@@ -108,8 +105,22 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.first() != Some(&"status") {
-        return None;
+    match words.first().copied().unwrap_or("") {
+        "status" => {}
+        "login" | "logout" => return None,
+        _ => {
+            if !python::family_native(python::here()) {
+                return None;
+            }
+            let settings = match daemon::current() {
+                Ok(s) => s,
+                Err(e) => {
+                    out::stderr_line(&format!("Error: {e}"));
+                    return Some(Exit::Error);
+                }
+            };
+            return Some(other(args, &words, hook_sock.as_deref(), settings));
+        }
     }
     let extra = words.len() > 1;
     if !python::family_native(python::here()) {
@@ -368,6 +379,55 @@ pub fn account_lines(f: &Facts, token_set: &str) -> String {
     }
     out.push_str(&format!("  Tunnel token:     {token_set}\n"));
     out
+}
+
+/// `cmd_connect`'s other arms: the usage, `help`, the old publish words
+/// and an unknown verb, after the guard and the tool's checks.
+fn other(args: &[OsString], words: &[&str], hook_sock: Option<&Path>, settings: Settings) -> Exit {
+    if let Some(Gate::VirtualDesktop) = prelude::gate(&settings) {
+        return Gate::VirtualDesktop.stop();
+    }
+    let would_refuse = passport::current(args).would_refuse();
+    if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
+        return stop;
+    }
+    let (lines, exit) = other_lines(words);
+    if !lines.is_empty() {
+        let _ = out::write_flushed(&mut std::io::stderr().lock(), lines.as_bytes());
+    }
+    exit
+}
+
+/// What `cmd_connect` prints on stderr for a word that is not `login`,
+/// `status` or `logout`, and its exit.
+pub fn other_lines(words: &[&str]) -> (String, Exit) {
+    let c = k2_client::brand::CLI_NAME;
+    let usage = crate::text::help("connect").unwrap_or_default();
+    let sub = words.first().copied().unwrap_or("");
+    let rest = words.get(1..).unwrap_or_default().join(" ");
+    match sub {
+        "" => (usage.to_string(), Exit::Usage),
+        "help" => (usage.to_string(), Exit::Ok),
+        "subdomain" | "publish" => {
+            let tail = if rest.is_empty() { String::new() } else { format!(" {rest}") };
+            (
+                format!(
+                    "Nested subdomains moved to: {c} publish {sub}{tail}\n  e.g. {c} publish subdomain list\n  e.g. {c} publish status\nAccount pairing is now: {c} connect login | status | logout\n"
+                ),
+                Exit::Usage,
+            )
+        }
+        "create" | "list" | "point" | "rm" | "claim" | "unclaim" => (
+            format!(
+                "Unknown '{c} connect' subcommand: {sub}\nDid you mean: {c} publish subdomain {sub} \u{2026} ?\nAccount pairing: {c} connect login | status | logout\n"
+            ),
+            Exit::Usage,
+        ),
+        _ => (
+            format!("Unknown '{c} connect' subcommand: {sub}\n{usage}"),
+            Exit::Usage,
+        ),
+    }
 }
 
 fn run_with(

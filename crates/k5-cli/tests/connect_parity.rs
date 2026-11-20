@@ -674,3 +674,67 @@ fn connect_status_hands_these_to_the_shell() {
         rig.check(&c);
     }
 }
+
+/// `cmd_connect`'s other arms: `connect` alone, `help`, the old publish
+/// words and an unknown verb (`login` and `logout` are the shell's).
+#[test]
+fn connect_other_arms_answer_as_the_shell_does() {
+    let rig = Rig::new(VERB, "arms");
+    let quiet = |r: &Rig| {
+        files(r, None, None);
+        owner_and_port(r)
+    };
+    let v = vec![
+        // covers: connect
+        case("alone: the usage, exit 2", &[], &[], vec![], quiet, 2, 0),
+        case("help", &["help"], &[], vec![], quiet, 0, 0),
+        case(
+            "subdomain moved",
+            &["subdomain", "list", "--json"],
+            &[],
+            vec![],
+            quiet,
+            2,
+            0,
+        ),
+        case("publish moved", &["publish"], &[], vec![], quiet, 2, 0),
+        case("an old publish verb", &["claim", "x"], &[], vec![], quiet, 2, 0),
+        case("an unknown verb", &["nope"], &[], vec![], quiet, 2, 0),
+        case(
+            "HOOK_SOCK set and no passport",
+            &["nope"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            quiet,
+            3,
+            0,
+        ),
+        case(
+            "the virtual desktop's guard",
+            &[],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            quiet,
+            3,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// The lines name the command by the brand's name.
+#[test]
+fn connect_lines_say_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let rig = Rig::new(VERB, "brand");
+    let c = case("brand", &["claim"], &[], vec![], owner_and_port, 2, 0);
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stderr,
+        format!("Unknown '{cli} connect' subcommand: claim\nDid you mean: {cli} publish subdomain claim \u{2026} ?\nAccount pairing: {cli} connect login | status | logout\n")
+    );
+    assert_eq!(out.code, Some(2));
+    assert!(log.is_empty());
+}

@@ -481,6 +481,11 @@ _vault_confirm_token() {
 # k2 vault fetch — K2 makes the HTTPS call and adds the secret where its
 # creator said; you never see the value. Echoes come back as [k2v:NAME].
 _vault_fetch() {
+    # -h/--help anywhere prints the fetch help and sends nothing, even where
+    # a value flag (--json, -d, -H, -o, -X, --dst, --fmt, --max-bytes,
+    # --timeout) would take it as its value (0.46.17: `k2 vault fetch URL
+    # --secret A --json --help` sent the fetch).
+    if _wants_help "$@"; then set -- --help; fi
     local url="" method="" max_bytes="" timeout="" include=0 out="" body_inline="" body_file="" ctype="" as_json=0
     local secrets=() headers=() dst="" fmt="" use_scope="" use_ws=""
     while [ $# -gt 0 ]; do

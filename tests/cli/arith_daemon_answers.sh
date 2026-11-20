@@ -7,6 +7,8 @@
 #
 # Answers covered:
 #   store blob get       each chunk's len (a bad one is a plain error)
+#   compute wait --follow  the job's startedAt, endedAt, signal and attempt
+#   compute run (a split run, --shards on the daemon's side)  the signal
 #
 # A stub daemon on loopback answers with crafted values: a subscript with
 # a command in it, and a name (ARITH_PROBE) of a variable this test puts in
@@ -149,6 +151,60 @@ run_k2 "blob len 5" store blob get r1 --widget board --out "$SANDBOX/got"
 expect_eq "blob len 5: exit" "$RC" "0"
 expect_eq "blob len 5: the file" "$(cat "$SANDBOX/got" 2>/dev/null || echo missing)" "hello"
 expect_eq "blob len 5: says what it got" "$OUT" "5 bytes, text/plain"
+
+echo "== compute wait --follow: startedAt, endedAt, signal, attempt =="
+# logs_end <job object as JSON> [more answers…]: the logs answers, in order.
+logs() { pyjson 'import json, sys
+print(json.dumps([{"chunks": [], "end": True, "cursor": 1, "generation": json.loads(a).pop("_gen", 1), "job": json.loads(a)} for a in sys.argv[1:]]))' "$@" > "$SANDBOX/logs.json"; }
+done_job() { # <signal> <startedAt> <endedAt>, each as JSON
+    printf '{"state": "done", "short": "job00001", "node": "n1", "exitCode": null, "signal": %s, "startedAt": %s, "endedAt": %s, "generation": 1}' "$1" "$2" "$3"
+}
+logs "$(done_job 9 1000 1125)"
+run_k2 "signal 9" compute wait job00001 --follow
+expect_eq "signal 9: exit 128+9" "$RC" "137"
+expect_has "signal 9: says so with the time" "$ERR" "killed by signal 9 after 2m5s"
+logs "$(done_job "$(J "\"$P\"")" 1000 1125)"
+run_k2 "signal <subscript>" compute wait job00001 --follow
+expect_eq "signal <subscript>: exit 128" "$RC" "128"
+logs "$(done_job '"ARITH_PROBE"' 1000 1125)"
+run_k2 "signal ARITH_PROBE (names a variable)" compute wait job00001 --follow
+expect_eq "signal ARITH_PROBE: exit 128" "$RC" "128"
+expect_has "signal ARITH_PROBE: no name printed" "$ERR" "killed by signal  after 2m5s"
+logs "$(done_job 9 '"ARITH_PROBE"' 1125)"
+run_k2 "startedAt ARITH_PROBE" compute wait job00001 --follow
+expect_eq "startedAt ARITH_PROBE: exit 137" "$RC" "137"
+expect_lacks "startedAt ARITH_PROBE: no time" "$ERR" " after "
+logs "$(done_job 9 1000 "$(J "\"$P\"")")"
+run_k2 "endedAt <subscript>" compute wait job00001 --follow
+expect_eq "endedAt <subscript>: exit 137" "$RC" "137"
+expect_lacks "endedAt <subscript>: no time" "$ERR" " after "
+retry_job() { # <attempt as JSON>: attempt 1 failed, the daemon queued another
+    printf '{"state": "queued", "short": "job00001", "node": "n2", "attempt": %s, "generation": 2, "ctl": {"failedAttempts": [{"reason": "node_lost"}]}}' "$1"
+}
+done0='{"state": "done", "short": "job00001", "node": "n2", "exitCode": 0, "generation": 2, "_gen": 2}'
+logs "$(retry_job 2)" "$done0"
+run_k2 "attempt 2" compute wait job00001 --follow
+expect_eq "attempt 2: the retry's exit" "$RC" "0"
+expect_has "attempt 2: names the failed attempt" "$ERR" "attempt 1 hit an infrastructure failure (node_lost); retrying as attempt 2 on n2"
+logs "$(retry_job '"ARITH_PROBE"')" "$done0"
+run_k2 "attempt ARITH_PROBE (names a variable)" compute wait job00001 --follow
+expect_eq "attempt ARITH_PROBE: the retry's exit" "$RC" "0"
+expect_has "attempt ARITH_PROBE: no number" "$ERR" "attempt ? hit an infrastructure failure"
+
+echo "== compute run, a split run: the signal =="
+printf '%s' '{"job": {"id": "jobset01-0000", "short": "jobset01", "state": "queued"}, "shards": [{"index": 0, "node": "n1"}, {"index": 1, "node": "n2"}]}' > "$SANDBOX/run.json"
+set_get() { # <signal as JSON>
+    printf '{"state": "done", "short": "jobset01", "result": {"exit": null, "signal": %s, "durationSecs": 65, "shards": [{"index": 0, "state": "done", "exit": 0, "node": "n1"}, {"index": 1, "state": "done", "exit": null, "node": "n2"}]}}' "$1" > "$SANDBOX/get.json"
+}
+set_get 9
+run_k2 "split run signal 9" compute run --no-source --mem 2G -- true
+expect_eq "split run signal 9: exit 128+9" "$RC" "137"
+set_get "$(J "\"$P\"")"
+run_k2 "split run signal <subscript>" compute run --no-source --mem 2G -- true
+expect_eq "split run signal <subscript>: exit 128" "$RC" "128"
+set_get '"ARITH_PROBE"'
+run_k2 "split run signal ARITH_PROBE (names a variable)" compute run --no-source --mem 2G -- true
+expect_eq "split run signal ARITH_PROBE: exit 128" "$RC" "128"
 
 echo
 echo "arith_daemon_answers: $pass passed, $fail failed"

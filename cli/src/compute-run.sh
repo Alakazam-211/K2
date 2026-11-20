@@ -680,7 +680,9 @@ print("|".join(["1" if term else "0", s(v.get("state")), s(r.get("exit")), s(r.g
             if [ "$state" = "done" ]; then
                 rm -f "$seen" "$seen.err"
                 [ -n "$code" ] && exit "$code"
-                exit $((128 + ${sig:-0}))
+                # The signal comes from the daemon: digits only reach $(( )).
+                [[ "$sig" =~ ^[0-9]+$ ]] || sig=""
+                exit $((128 + 10#${sig:-0}))
             fi
             cat "$seen.err" >&2
             rm -f "$seen" "$seen.err"

@@ -931,7 +931,11 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
         # The attempt we followed ended in an infrastructure failure and a
         # new attempt is queued: keep following that one.
         if [ "$end" = "1" ] && [ -n "$jgen" ] && [ "$jgen" != "$gen" ] && [ "$st" != "done" ] && [ "$st" != "failed" ] && [ "$st" != "cancelled" ] && [ "$st" != "timeout" ] && [ "$st" != "interrupted" ] && [ "$st" != "unknown" ]; then
-            echo "[k2 compute] attempt $((attempt - 1)) hit an infrastructure failure (${lastfail:-?}); retrying as attempt $attempt on $node" >&2
+            # attempt, started, ended and sig come from the daemon (and the
+            # node behind it): digits only reach $(( )).
+            local prev="?"
+            [[ "$attempt" =~ ^[0-9]+$ ]] && prev=$((10#$attempt - 1))
+            echo "[k2 compute] attempt $prev hit an infrastructure failure (${lastfail:-?}); retrying as attempt $attempt on $node" >&2
             gen="$jgen"
             cursor=0
             _CP_LAST_Q=""
@@ -955,8 +959,8 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
             [ "$st" = "done" ] && rm -f "$state_file.err"
             [ "$as_json" = "1" ] && _compute_print_result "$job"
             local took=""
-            if [ -n "$started" ] && [ -n "$ended" ]; then
-                took=" after $(( (ended - started) / 60 ))m$(( (ended - started) % 60 ))s"
+            if [[ "$started" =~ ^[0-9]+$ ]] && [[ "$ended" =~ ^[0-9]+$ ]]; then
+                took=" after $(( (10#$ended - 10#$started) / 60 ))m$(( (10#$ended - 10#$started) % 60 ))s"
             fi
             case "$st" in
                 done)
@@ -968,8 +972,9 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
                         fi
                         exit "$code"
                     fi
+                    [[ "$sig" =~ ^[0-9]+$ ]] || sig=""
                     echo "[k2 compute] killed by signal $sig$took" >&2
-                    exit $((128 + ${sig:-0}))
+                    exit $((128 + 10#${sig:-0}))
                     ;;
                 *)
                     echo "[k2 compute] job $short $st${reason:+ ($reason)}$took" >&2

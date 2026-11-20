@@ -40,6 +40,7 @@ fn root_helper_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: root-helper status --json
         case(
             "status --json",
             &["status", "--json"],
@@ -186,6 +187,7 @@ fn root_helper_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: root-helper install-command --json
         case(
             "install-command --json",
             &["install-command", "--json"],

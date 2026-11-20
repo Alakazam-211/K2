@@ -28,6 +28,21 @@ async fn wait_for_bytes(server: &TcpStream, len: usize) {
     }
 }
 
+/// Read a request head off the server side: until its blank line, or the
+/// end of the stream. One read may return part of it.
+async fn read_head(server: &mut TcpStream) -> Vec<u8> {
+    let mut head = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = server.read(&mut buf).await.expect("read the head");
+        if n == 0 {
+            break;
+        }
+        head.extend_from_slice(&buf[..n]);
+    }
+    head
+}
+
 const GIT_TOOLS_HEAD: &[u8] = b"GET /cli/git-tools?token=t HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
 const ANSWER: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
 
@@ -74,8 +89,7 @@ async fn the_same_request_sent_again_after_the_answer_is_a_new_request() {
         client.write_all(GIT_TOOLS_HEAD).await.expect("send request");
         wait_for_bytes(&server, GIT_TOOLS_HEAD.len()).await;
         start(GIT_TOOLS_HEAD);
-        let mut buf = [0u8; 1024];
-        server.read(&mut buf).await.expect("consume the head");
+        assert_eq!(read_head(&mut server).await, GIT_TOOLS_HEAD, "the arm consumes its whole request");
         before_answer(&server).await;
         server.write_all(ANSWER).await.expect("answer");
         let mut got = vec![0u8; ANSWER.len()];

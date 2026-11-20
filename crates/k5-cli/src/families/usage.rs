@@ -850,49 +850,6 @@ fn tokens_lines(r: &Value, by: &str, o: &mut String) -> Result<(), Raise> {
     Ok(())
 }
 
-/// `time.strftime(fmt, time.localtime(secs))`, by the C library's
-/// `localtime_r` and `strftime` as Python's is; `OSError` where
-/// `localtime_r` fails. (The same as `activity`'s, with a format: to
-/// share once the lanes land.)
-#[cfg(unix)]
-#[allow(clippy::unnecessary_cast)]
-fn local_strftime(secs: i64, fmt: &str) -> Result<String, String> {
-    let t = secs as libc::time_t;
-    let mut cfmt = fmt.as_bytes().to_vec();
-    cfmt.push(0);
-    // SAFETY: tzset reads TZ; localtime_r and strftime write only into the
-    // buffers given, each sized as passed; the format ends with a NUL.
-    unsafe {
-        extern "C" {
-            fn tzset();
-        }
-        tzset();
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&t, &mut tm).is_null() {
-            let e = std::io::Error::last_os_error();
-            let n = e.raw_os_error().unwrap_or(0);
-            let text = e.to_string();
-            let msg = text
-                .strip_suffix(&format!(" (os error {n})"))
-                .unwrap_or(&text);
-            return Err(format!("OSError: [Errno {n}] {msg}"));
-        }
-        let mut buf = [0u8; 64];
-        let n = libc::strftime(
-            buf.as_mut_ptr().cast(),
-            buf.len(),
-            cfmt.as_ptr().cast(),
-            &tm,
-        );
-        Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
-    }
-}
-
-#[cfg(not(unix))]
-fn local_strftime(_secs: i64, _fmt: &str) -> Result<String, String> {
-    Err("OSError: no local time here".into())
-}
-
 /// `turns`' `when` for a truthy `ms`.
 fn when(ms: &Value) -> Result<String, Raise> {
     let secs = match ms {
@@ -922,7 +879,8 @@ fn when(ms: &Value) -> Result<String, Raise> {
             "OverflowError: timestamp out of range for platform time_t",
         ));
     }
-    local_strftime(w as i64, "%Y-%m-%d %H:%M").map_err(|e| Raise::at(line::U_WHEN, e))
+    crate::out::pylib::time::strftime_local(w as i64, "%Y-%m-%d %H:%M")
+        .map_err(|e| Raise::at(line::U_WHEN, e))
 }
 
 /// `turns`' reader.

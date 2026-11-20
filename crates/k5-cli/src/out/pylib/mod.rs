@@ -11,6 +11,7 @@
 //! - [`difflib`]: `difflib.unified_diff` with its `SequenceMatcher`.
 //! - [`path`]: `posixpath`'s `normpath`, `realpath`, `relpath` and the
 //!   rest, on text.
+//! - [`time`]: `time.strftime(fmt, time.localtime(secs))`.
 //!
 //! The rest is in [`crate::families`] (`py_get`, `py_len`, `py_d`) and
 //! [`crate::out::py`].
@@ -19,3 +20,4 @@ pub mod difflib;
 pub mod json;
 pub mod ops;
 pub mod path;
+pub mod time;

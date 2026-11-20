@@ -50,6 +50,7 @@ use super::{
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};
+use crate::out::pylib::time;
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
@@ -303,66 +304,8 @@ fn events(d: &Value, now: i64, stdout: &mut String) -> Result<(), Raise> {
 /// `time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(at))`, or the
 /// exception's line. `now`: what `None` stands for.
 pub fn stamp(at: &Value, now: i64) -> Result<String, String> {
-    const RANGE: &str = "OverflowError: timestamp out of range for platform time_t";
-    let secs: i64 = match at {
-        Value::Null => now,
-        Value::Bool(b) => i64::from(*b),
-        Value::Int(digits) => digits.parse().map_err(|_| RANGE.to_string())?,
-        Value::Float(f) if f.is_nan() => {
-            return Err("ValueError: Invalid value NaN (not a number)".into())
-        }
-        Value::Float(f) => {
-            let w = f.floor();
-            // i64::MAX as f64 rounds up to 2^63, which is out of range.
-            if w < -9.223_372_036_854_776e18 || w >= 9.223_372_036_854_776e18 {
-                return Err(RANGE.into());
-            }
-            w as i64
-        }
-        other => {
-            return Err(format!(
-                "TypeError: '{}' object cannot be interpreted as an integer",
-                py::type_name(other)
-            ))
-        }
-    };
-    local_text(secs)
-}
-
-/// The local time of `secs` as `%Y-%m-%d %H:%M:%S`, by `localtime_r` and
-/// `strftime`; `OSError` where `localtime_r` fails.
-#[cfg(unix)]
-#[allow(clippy::unnecessary_cast)]
-fn local_text(secs: i64) -> Result<String, String> {
-    // `time_t` is 64 bits on every platform the binary ships for.
-    let t = secs as libc::time_t;
-    // SAFETY: tzset reads TZ; localtime_r and strftime write only into the
-    // buffers given, each sized as passed.
-    unsafe {
-        extern "C" {
-            fn tzset();
-        }
-        tzset();
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&t, &mut tm).is_null() {
-            let e = std::io::Error::last_os_error();
-            let n = e.raw_os_error().unwrap_or(0);
-            let text = e.to_string();
-            let msg = text
-                .strip_suffix(&format!(" (os error {n})"))
-                .unwrap_or(&text);
-            return Err(format!("OSError: [Errno {n}] {msg}"));
-        }
-        let mut buf = [0u8; 64];
-        let fmt = b"%Y-%m-%d %H:%M:%S\0";
-        let n = libc::strftime(buf.as_mut_ptr().cast(), buf.len(), fmt.as_ptr().cast(), &tm);
-        Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
-    }
-}
-
-#[cfg(not(unix))]
-fn local_text(_secs: i64) -> Result<String, String> {
-    Err("OSError: no local time here".into())
+    let secs = time::seconds(at, now)?;
+    time::strftime_local(secs, "%Y-%m-%d %H:%M:%S")
 }
 
 #[cfg(test)]

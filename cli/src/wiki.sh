@@ -868,7 +868,19 @@ print(json.dumps({
     fi
 }
 
+_skills_usage() {
+    echo "Usage: k2 skills <list|create|profile|remove|regenerate> [options]"
+    echo "  list                              Skill profiles in this workspace"
+    echo "  create <name> [--template <src>]  Create a new skill profile"
+    echo "                                    (optionally seeded from another skill)"
+    echo "  profile <name>                    Print the skill's SKILL.md body"
+    echo "  remove <name>                     Trash the skill profile"
+    echo "  regenerate                        Refresh every skill's SKILL.md"
+}
+
 cmd_skills() {
+    # -h/--help anywhere prints the usage and changes nothing (0.46.17).
+    if _wants_help "$@"; then _skills_usage; return 0; fi
     local subcmd="${1:-list}"
     shift || true
     case "$subcmd" in
@@ -983,13 +995,7 @@ except Exception as e:
 " 2>/dev/null
             ;;
         *)
-            echo "Usage: k2 skills <list|create|profile|remove|regenerate> [options]" >&2
-            echo "  list                              Skill profiles in this workspace" >&2
-            echo "  create <name> [--template <src>]  Create a new skill profile" >&2
-            echo "                                    (optionally seeded from another skill)" >&2
-            echo "  profile <name>                    Print the skill's SKILL.md body" >&2
-            echo "  remove <name>                     Trash the skill profile" >&2
-            echo "  regenerate                        Refresh every skill's SKILL.md" >&2
+            _skills_usage >&2
             exit 1
             ;;
     esac

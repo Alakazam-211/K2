@@ -4,10 +4,11 @@
 //! ends as [`Out::done`] says: what it printed, then the traceback and
 //! exit 1 when it raised.
 
-use super::super::{code_point, get, py_iter, raised, Raise, Shown};
+use super::super::{get, py_iter, raised, Raise, Shown};
 use crate::exit::Exit;
-use crate::out::json::{self, Text, Value};
+use crate::out::json::{Text, Value};
 use crate::out::py;
+use crate::out::pylib;
 
 /// What a printer printed so far.
 #[derive(Debug, Default)]
@@ -43,46 +44,15 @@ impl Out {
 }
 
 /// `json.load(sys.stdin)` on what `printf '%s'` handed the reader, at
-/// `line`.
+/// `line`: Python's own `JSONDecodeError` words ([`pylib::json::loads`]).
 pub fn load(body: &[u8], line: u32) -> Result<Value, Raise> {
     let text = String::from_utf8_lossy(body);
-    json::parse(&text).map_err(|e| {
-        let why = if text.trim_matches(super::super::py_space).is_empty() {
-            "Expecting value: line 1 column 1 (char 0)".to_string()
-        } else {
-            e.to_string()
-        };
-        Raise::at(line, format!("json.decoder.JSONDecodeError: {why}"))
-    })
+    pylib::json::loads(&text).map_err(|e| Raise::at(line, e.last_line()))
 }
 
-/// `repr(key)` for a string key, as a `KeyError` shows it.
-fn key_repr(key: &str) -> String {
-    py::repr(&Value::Str(Text::from(key)))
-}
-
-/// `v[key]` with a string key.
+/// `v[key]` with a string key ([`pylib::ops::index`]).
 pub fn idx(v: &Value, key: &str, line: u32) -> Result<Value, Raise> {
-    match v {
-        Value::Object(pairs) => get(pairs, key)
-            .cloned()
-            .ok_or_else(|| Raise::at(line, format!("KeyError: {}", key_repr(key)))),
-        Value::Array(_) => Err(Raise::at(
-            line,
-            "TypeError: list indices must be integers or slices, not str",
-        )),
-        Value::Str(_) => Err(Raise::at(
-            line,
-            "TypeError: string indices must be integers, not 'str'",
-        )),
-        other => Err(Raise::at(
-            line,
-            format!(
-                "TypeError: '{}' object is not subscriptable",
-                py::type_name(other)
-            ),
-        )),
-    }
+    pylib::ops::index(v, key, line).cloned()
 }
 
 /// `v.get(key)`: `None` for a missing key; `AttributeError` on anything
@@ -136,52 +106,14 @@ pub fn iter(v: &Value, line: u32) -> Result<Vec<Value>, Raise> {
     py_iter(v, line)
 }
 
-/// `sep.join(v)`: every item must be a string.
+/// `sep.join(v)`: every item must be a string ([`pylib::ops::join`]).
 pub fn join(sep: &str, v: &Value, line: u32) -> Result<String, Raise> {
-    let items = match v {
-        Value::Array(items) => items.clone(),
-        Value::Str(t) => t
-            .code_points()
-            .into_iter()
-            .map(|cp| Value::Str(code_point(cp)))
-            .collect(),
-        Value::Object(pairs) => pairs.iter().map(|(k, _)| Value::Str(k.clone())).collect(),
-        _ => {
-            return Err(Raise::at(line, "TypeError: can only join an iterable"));
-        }
-    };
-    let mut parts = Vec::with_capacity(items.len());
-    for (n, item) in items.iter().enumerate() {
-        match item {
-            Value::Str(_) => parts.push(py::str_of(item)),
-            other => {
-                return Err(Raise::at(
-                    line,
-                    format!(
-                        "TypeError: sequence item {n}: expected str instance, {} found",
-                        py::type_name(other)
-                    ),
-                ))
-            }
-        }
-    }
-    Ok(parts.join(sep))
+    pylib::ops::join(v, sep, line)
 }
 
-/// `needle in v` for a string needle.
+/// `needle in v` for a string needle ([`pylib::ops::contains`]).
 pub fn contains(v: &Value, needle: &str, line: u32) -> Result<bool, Raise> {
-    match v {
-        Value::Object(pairs) => Ok(get(pairs, needle).is_some()),
-        Value::Array(items) => Ok(items.contains(&text(needle))),
-        Value::Str(_) => Ok(py::str_of(v).contains(needle)),
-        other => Err(Raise::at(
-            line,
-            format!(
-                "TypeError: argument of type '{}' is not iterable",
-                py::type_name(other)
-            ),
-        )),
-    }
+    pylib::ops::contains(v, needle, line)
 }
 
 /// `v[:n]`: a string's or a list's first `n`.

@@ -234,11 +234,12 @@ pub fn help_route(args: &[OsString]) -> Option<&'static HelpForm> {
     text::help_form(&words?)
 }
 
-/// What the version prints: the shell CLI's line, `k2 <version>`
-/// (`cli/src/router.sh`, `echo "k2 $K2_CLI_VERSION"`). It says `k2` under
-/// either name, as the shell does.
+/// What the version prints: the shell CLI's line, `<cli> <version>`
+/// (`cli/src/router.sh`, `echo "k2 $K2_CLI_VERSION"`), the command named
+/// by the brand ([`k2_client::brand::CLI_NAME`]: `k2` in the default
+/// build, as the shell says it under either name).
 pub fn version_line(version: &str) -> String {
-    format!("k2 {version}\n")
+    format!("{} {version}\n", k2_client::brand::CLI_NAME)
 }
 
 #[cfg(test)]
@@ -1029,6 +1030,9 @@ mod tests {
 
     #[test]
     fn the_line_says_k2() {
-        assert_eq!(version_line("0.46.14"), "k2 0.46.14\n");
+        assert_eq!(
+            version_line("0.46.14"),
+            format!("{} 0.46.14\n", k2_client::brand::CLI_NAME)
+        );
     }
 }

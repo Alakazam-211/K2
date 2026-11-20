@@ -24,9 +24,12 @@
 //!    `versions-access`, `cluster`, `upgrade` and `create --cluster`
 //!    through the shell's compute library, `_compute_send` ([`cp`]).
 //!
+//! `run` gets the DSN from `_db_py` and runs the command in this
+//! process's place with the DSN in its environment ([`run`]).
+//!
 //! The binary hands these to the shell before it prints or sends
-//! anything: `run` (it puts the DSN in a child's environment: K2 rules
-//! first), a compute verb with the compute library's own settings in the
+//! anything: `run` with a command it can't place ([`run::program`]), a
+//! compute verb with the compute library's own settings in the
 //! environment ([`cp::shells`]), a word that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a
 //! port that is set but is no number, a `python3` the binary can't tell,
 //! and a `--workspace` folder bash's `cd` would treat apart (`CDPATH`
@@ -48,6 +51,7 @@ use std::path::{Path, PathBuf};
 pub mod cp;
 pub mod home;
 pub mod py;
+pub mod run;
 #[cfg(test)]
 mod tests;
 
@@ -76,6 +80,8 @@ pub enum Form {
     Py(Box<Ask>),
     /// A verb through `_compute_send`.
     Cp(Box<cp::Ask>),
+    /// `run`: the DSN, then the command in this process's place.
+    Run(Box<run::Run>),
     /// `_db_err "usage" <hint>`, exit 2.
     Usage(String),
     /// A failed `shift 2` under `set -e`: exit 1, nothing printed.
@@ -276,7 +282,7 @@ fn verb(words: &[&str]) -> Result<Form, Form> {
             }
             Form::Py(Box::new(k))
         }
-        "run" => Form::Shell,
+        "run" => run::parse(&mut a)?,
         "versions-access" => cp::versions_access(&mut a)?,
         "cluster" => cp::cluster(&mut a)?,
         "upgrade" => cp::upgrade(&mut a)?,
@@ -753,6 +759,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let shell = match &line.form {
         Form::Shell => true,
         Form::Cp(ask) => cp::shells(ask, std::env::vars_os()),
+        Form::Run(r) => r.cmd.first().and_then(|c| run::program(c)).is_none(),
         _ => false,
     };
     let settings = match settings_for(&line.sels, shell)? {
@@ -854,6 +861,10 @@ fn run_with(args: &[OsString], line: Line, settings: Settings) -> Exit {
             &project,
             &ask,
         ),
+        Form::Run(r) => {
+            let netloc = format!("{}:{port_text}", settings.host);
+            return run::run(&mut client, closing, &project, &r, netloc);
+        }
         Form::Py(ask) => {
             return run_py(
                 &mut client,

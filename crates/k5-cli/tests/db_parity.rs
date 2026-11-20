@@ -19,7 +19,9 @@
 //! - No answer: nothing listening, closed with nothing, a reset.
 //! - A passport over TCP, the `db` id tool's refusal, the gates.
 //! - One answer above 256 KiB: thousands of databases.
-//! - The shell's: `run`, and `-h` on a verb that changes something.
+//! - `run`: the DSN in the command's environment, never on its argv
+//!   (a spy program checks), and its errors.
+//! - The shell's: `-h` on a verb that changes something.
 //! - The compute verbs (`_compute_send`): `versions-access`, `cluster
 //!   create` and `restart`, `create --cluster`, `upgrade` (its status,
 //!   check, live, no-wait and watch forms), their refusals, answers the
@@ -939,15 +941,15 @@ fn db_answers_as_the_shell_does() {
             0,
         ),
         // The shell's.
-        shell(case(
-            "run goes to the shell",
+        case(
+            "run, no command",
             &["run"],
             &[],
             vec![],
             owner_and_port,
             2,
             0,
-        )),
+        ),
         case(
             "upgrade, a bad --to",
             &["upgrade", "d", "--to", "9"],
@@ -1602,6 +1604,166 @@ fn db_compute_verbs_answer_as_the_shell_does() {
         shell(case(
             "upgrade --rollback -h",
             &["upgrade", "app", "--rollback", "--yes", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+    ];
+    for c in &cases {
+        rig.check(c);
+    }
+}
+
+const DSN: &str = r#"{"ok":true,"dsn":"postgres://u:pw@127.0.0.1:5432/app"}"#;
+
+/// A rig whose `PATH` starts with `dbkid`: it logs its argv and the
+/// DSN names it was given, prints a line, and fails (98) when the DSN is
+/// on its argv.
+fn run_rig() -> Rig {
+    use std::os::unix::fs::PermissionsExt;
+    let mut rig = Rig::new(VERB, "run");
+    let shim = rig.dir.join("shim");
+    std::fs::create_dir_all(&shim).unwrap();
+    let log = rig.dir.join("kid.log");
+    let script = format!(
+        r#"#!/bin/sh
+for a in "$0" "$@"; do printf 'argv=%s\n' "$a" >> '{log}'; done
+printf 'DATABASE_URL=%s PG_URL=%s\n' "${{DATABASE_URL-unset}}" "${{PG_URL-unset}}" >> '{log}'
+echo "kid ran with $#"
+for a in "$@"; do case "$a" in *postgres://*) exit 98 ;; esac; done
+exit "${{KID_RC:-0}}"
+"#,
+        log = log.display()
+    );
+    let kid = shim.join("dbkid");
+    std::fs::write(&kid, script).unwrap();
+    std::fs::set_permissions(&kid, std::fs::Permissions::from_mode(0o755)).unwrap();
+    rig.path_first = Some(shim);
+    rig.tool_log = Some(log);
+    rig
+}
+
+#[test]
+fn db_run_answers_as_the_shell_does() {
+    let rig = run_rig();
+    let cases = vec![
+        // covers: db run
+        case(
+            "run a command",
+            &["run", "--", "dbkid", "a b", "--json"],
+            &[],
+            vec![ok(DSN)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "run --as, --db, --test --actor migrator",
+            &["run", "--db", "app", "--test", "--actor", "migrator", "--as", "PG_URL", "--", "dbkid"],
+            &[],
+            vec![ok(DSN)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "run, the command's own exit",
+            &["run", "--db=app", "--", "dbkid", "x"],
+            &[("KID_RC", "7")],
+            vec![ok(DSN)],
+            owner_and_port,
+            7,
+            1,
+        ),
+        case(
+            "run, --workspace after -- is the shell's",
+            &["run", "--", "dbkid", "--workspace", "sub", "y"],
+            &[],
+            vec![ok(DSN)],
+            with_sub,
+            0,
+            1,
+        ),
+        case(
+            "run, no DSN in the answer",
+            &["run", "--", "dbkid"],
+            &[],
+            vec![ok(r#"{"ok":true,"dsn":""}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "run, the permission note",
+            &["run", "--", "dbkid"],
+            &[],
+            vec![answer(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        traceback(case(
+            "run, an answer that is a list",
+            &["run", "--", "dbkid"],
+            &[],
+            vec![ok("[1]")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case(
+            "run, no answer",
+            &["run", "--", "dbkid"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case("run, no --", &["run", "dbkid"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "run, a bad --as",
+            &["run", "--as", "pg-url", "--", "dbkid"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "run, a bad --actor",
+            &["run", "--actor", "x", "--", "dbkid"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "run --as at the end",
+            &["run", "--as"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        // A command the binary can't place: the shell's.
+        shell(case(
+            "run, a command not on PATH",
+            &["run", "--", "no-such-command-k5"],
+            &[],
+            vec![ok(DSN)],
+            owner_and_port,
+            127,
+            1,
+        )),
+        // Help never acts, even after --.
+        shell(case(
+            "run -- dbkid -h",
+            &["run", "--", "dbkid", "-h"],
             &[],
             vec![],
             owner_and_port,

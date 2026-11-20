@@ -255,7 +255,17 @@ fn the_words_come_to_the_shell_s_forms() {
         hint(&["create", "--cluster", "c", "--bad"]),
         "unexpected '--bad'"
     );
-    assert_eq!(form(&["run", "x"]), Form::Shell);
+    assert_eq!(
+        hint(&["run", "x"]),
+        concat!(
+            cli_name!(),
+            " db run [--db <name>] [--test [--actor migrator]] [--as NAME] -- <command…> (unexpected 'x')"
+        )
+    );
+    match form(&["run", "--as", "PG", "--", "psql", "-c", "select 1"]) {
+        Form::Run(r) => assert_eq!((r.env_as.as_str(), r.cmd.len()), ("PG", 3)),
+        other => panic!("{other:?}"),
+    }
     assert_eq!(
         hint(&["create", "--major", "9"]),
         "--major takes a Postgres major, e.g. 16 or 17"

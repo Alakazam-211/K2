@@ -18,6 +18,16 @@
 #    remote-session, doc) and daemon restart --host (clone has its own
 #    gate: the same rule, its own line and exit 3). Plain
 #    http to loopback still works.
+# 4. A daemon on another computer over plain http (K2_HOST is a name or an
+#    address that isn't loopback as written) is allowed, with one stderr
+#    line per run, printed before the command's first request, however
+#    many requests it makes:
+#      warning: k2 is sending this server's owner token to <host> over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https.
+#    None for loopback, a literal Tailscale host (100.64.0.0/10,
+#    fd7a:115c:a1e0::/48, *.ts.net; never resolved), https, or with
+#    K2_PLAIN_HTTP_OK=1. A password flag there is refused before any
+#    request (exit 2), K2_PLAIN_HTTP_OK=1 or not. x.localhost stands in
+#    for another computer: curl sends it to loopback, where the stub is.
 # 3. Local traffic never goes through a proxy: a control-plane call the CLI
 #    makes itself (no daemon) to loopback gets --noproxy '*' like a daemon
 #    call, with every proxy variable set. https to a remote control plane
@@ -177,6 +187,7 @@ run() {
         envs+=(http_proxy="$PROXY" HTTP_PROXY="$PROXY" https_proxy="$PROXY" HTTPS_PROXY="$PROXY"
             all_proxy="$PROXY" ALL_PROXY="$PROXY")
     fi
+    envs+=(${RUN_ENV[@]+"${RUN_ENV[@]}"})
     : >"$LOG"
     RC=0
     env "${envs[@]}" "$K2" "$@" <"${RUN_STDIN:-/dev/null}" >"$WORK/out" 2>"$WORK/err" || RC=$?
@@ -289,6 +300,82 @@ reached "control plane on localhost, proxy set: the call went straight there" "^
 no_proxy_hit "control plane on localhost"
 run nodaemon proxy "https://k2-remote.example.test" publish subdomain list --json
 reached "control plane on remote https: the person's proxy got the CONNECT" "^proxy CONNECT k2-remote.example.test:443 "
+
+echo "== 4. K2_HOST on another computer over plain http: one warning per run =="
+mkdir -p "$WORK/bin"
+REAL_CURL="$(command -v curl)"
+# Unroutable or unresolvable hosts below: curl gives up quickly (the last
+# --connect-timeout and --max-time win).
+printf '#!/bin/sh\nexec "%s" "$@" --connect-timeout 2 --max-time 3\n' "$REAL_CURL" >"$WORK/bin/curl"
+chmod +x "$WORK/bin/curl"
+warn_line() { printf "warning: k2 is sending this server's owner token to %s over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." "$1"; }
+# warned <label> <host> <count>: the warning for <host> is on stderr <count> times.
+warned() {
+    local n
+    n="$(printf '%s\n' "$ERR" | grep -cxF "$(warn_line "$2")" || true)"
+    [ "$n" = "$3" ] && ok "$1: the warning $3 time(s)" || bad "$1: the warning $n time(s), want $3 (stderr: $(printf %q "$ERR"))"
+}
+no_warning() {
+    case "$ERR" in
+        *"over plain http, unencrypted"*) bad "$1: warned: $(printf %q "$ERR")" ;;
+        *) ok "$1: no warning" ;;
+    esac
+}
+# curl must send x.localhost to loopback here, or the rows below mean nothing.
+: >"$LOG"
+"$REAL_CURL" -s -o /dev/null --max-time 5 --noproxy '*' "http://x.localhost:$DPORT/probe" || true
+if grep -q '^daemon GET /probe ' "$LOG"; then ok "curl sends x.localhost to loopback"; else bad "curl did not send x.localhost to the stub: $(tr '\n' ';' <"$LOG")"; fi
+RUN_ENV=(K2_HOST=x.localhost)
+run daemon noproxy - publish subdomain create acme --target localhost:3000
+n="$(grep -c "^daemon .* Bearer $OWNER\$" "$LOG" || true)"
+[ "$n" -ge 2 ] && ok "K2_HOST=x.localhost: the command made $n daemon requests" || bad "K2_HOST=x.localhost: $n daemon requests, want 2 or more ($(tr '\n' ';' <"$LOG"); stderr: $(printf %q "$ERR"))"
+warned "K2_HOST=x.localhost, several requests" x.localhost 1
+run daemon noproxy - heartbeat list --json
+reached "K2_HOST=x.localhost: heartbeat list sent" "^daemon [A-Z]+ /cli/"
+warned "K2_HOST=x.localhost, heartbeat list" x.localhost 1
+run daemon noproxy - preset list --json
+warned "K2_HOST=x.localhost, a Python verb" x.localhost 1
+run daemon noproxy - --help
+no_warning "K2_HOST=x.localhost, --help"
+[ ! -s "$LOG" ] && ok "--help sent nothing" || bad "--help sent: $(tr '\n' ';' <"$LOG")"
+RUN_ENV=(K2_HOST=x.localhost K2_PLAIN_HTTP_OK=1)
+run daemon noproxy - heartbeat list --json
+reached "K2_PLAIN_HTTP_OK=1: heartbeat list sent" "^daemon [A-Z]+ /cli/"
+no_warning "K2_PLAIN_HTTP_OK=1"
+for h in 127.0.0.1 localhost; do
+    RUN_ENV=(K2_HOST="$h")
+    run daemon noproxy - heartbeat list --json
+    reached "K2_HOST=$h: heartbeat list sent" "^daemon [A-Z]+ /cli/"
+    no_warning "K2_HOST=$h"
+done
+for h in 100.64.0.1 100.127.255.254 fd7a:115c:a1e0::1 box.tail1234.ts.net; do
+    RUN_ENV=(K2_HOST="$h" PATH="$WORK/bin:$PATH")
+    run daemon noproxy - heartbeat list --json
+    no_warning "K2_HOST=$h (Tailscale, as written)"
+done
+for h in x.ts.net.evil.com 100.128.0.1 192.0.2.10; do
+    RUN_ENV=(K2_HOST="$h" PATH="$WORK/bin:$PATH")
+    run daemon noproxy - heartbeat list --json
+    warned "K2_HOST=$h" "$h" 1
+done
+RUN_ENV=(K2_HOST=https://k2-lan.example.test)
+run daemon proxy - heartbeat list --json
+reached "K2_HOST=https://k2-lan.example.test: through the person's proxy" "^proxy CONNECT k2-lan.example.test:$DPORT "
+no_warning "K2_HOST=https://k2-lan.example.test"
+printf 'pw-cbase-4444\n' >"$WORK/pw"
+WANTPW="Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: http://x.localhost:$DPORT)"
+RUN_ENV=(K2_HOST=x.localhost)
+RUN_STDIN="$WORK/pw" run daemon noproxy - users add bob --password-stdin
+refused "users add --password-stdin, K2_HOST=x.localhost" "$WANTPW"
+RUN_ENV=(K2_HOST=x.localhost K2_PLAIN_HTTP_OK=1)
+RUN_STDIN="$WORK/pw" run daemon noproxy - users add bob --password-stdin
+refused "users add --password-stdin, K2_PLAIN_HTTP_OK=1" "$WANTPW"
+RUN_ENV=(K2_HOST=box.tail1234.ts.net)
+RUN_STDIN="$WORK/pw" run daemon noproxy - users add bob --password-stdin
+refused "users add --password-stdin, a tailnet host" "Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: http://box.tail1234.ts.net:$DPORT)"
+RUN_ENV=()
+RUN_STDIN="$WORK/pw" run daemon noproxy - users add bob --password-stdin
+reached "K2_HOST unset: users add --password-stdin is sent" "^daemon POST /cli/"
 
 echo
 echo "connect_base_and_proxy: $pass passed, $fail failed"

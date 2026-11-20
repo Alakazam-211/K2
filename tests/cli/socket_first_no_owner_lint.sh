@@ -6,7 +6,8 @@
 # A socket-first sender is a function in cli/src that sends over the
 # session's cell socket (a curl with --unix-socket, not the vault's own
 # socket, or a call to a *_uds arm) and also over loopback TCP (a curl to
-# ${BASE_URL}, 127.0.0.1 or http://$HOST, or cli_send's "$fn" call). The
+# ${BASE_URL}, 127.0.0.1, http://$HOST or the URL _k2_daemon_base builds,
+# or cli_send's "$fn" call). The
 # TCP-only senders are not read here.
 #
 # Reads cli/src function by function and fails, naming file, line and
@@ -52,7 +53,7 @@ HEREDOC = re.compile(r"<<(-?)\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
 CURL = re.compile(r"(^|[\s;|&(`$\"])(_k2_curl|_cli_curl|curl)\s")
 SOCK = re.compile(r"--unix-socket\s")
 UDS_CALL = re.compile(r"(\"\$\{fn\}_uds\"|\b(cli_request_uds|cli_post_form_uds|cli_post_json_uds|cli_request_post_uds|cli_post_uds)\b)")
-TCP = re.compile(r"\$\{BASE_URL\}|\$BASE_URL\b|127\.0\.0\.1|http://\$\{?HOST\}?")
+TCP = re.compile(r"\$\{BASE_URL\}|\$BASE_URL\b|127\.0\.0\.1|http://\$\{?HOST\}?|_k2_daemon_base\b")
 FN_CALL = re.compile(r"^\"\$fn\"\s+\"\$endpoint\"")
 TOK = r"\$(TOKEN\b|\{TOKEN(:-)?\})"
 RAW = re.compile(r"_k2_cfg_auth\s+\"" + TOK + r"\"|Bearer\s+" + TOK)

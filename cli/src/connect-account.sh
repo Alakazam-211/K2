@@ -107,7 +107,7 @@ _connect_require_daemon() {
                 TOKEN="$DISK_OWNER_TOKEN"
             fi
         fi
-        BASE_URL="http://${HOST}:${PORT}"
+        _k2_daemon_base BASE_URL
     fi
     if [ -z "${PORT:-}" ] || [ -z "${TOKEN:-}" ]; then
         echo "Error: local K2 daemon is not reachable (need ~/.k2/heartbeat.port + token)." >&2

@@ -53,7 +53,8 @@ _sf_agents_off_probe() {
             --connect-timeout 1 --max-time 2 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     elif [ -n "${PORT:-}" ]; then
         _k2_cfg_auth "$SCOPED_TOKEN"
-        out="$(_k2_curl "$_K2_CFG" -s -G "http://${HOST}:${PORT}/cli/product-feedback/settings" \
+        local base
+        _k2_daemon_base base; out="$(_k2_curl "$_K2_CFG" -s -G "${base}/cli/product-feedback/settings" \
             --connect-timeout 1 --max-time 2 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi
     [[ "$out" == *$'\n200' ]] || return 1

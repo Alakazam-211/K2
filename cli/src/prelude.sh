@@ -137,7 +137,14 @@ esac
 # Connection details (set by K2 when creating terminal sessions)
 # Falls back to ~/.k2/heartbeat.{port,token} for external terminals
 _envn_into PORT PORT
-# LAN / remote daemon: override loopback. Default matches today's bind.
+# A daemon on another computer (LAN or remote): K2_HOST=<name or address>
+# is plain http, so the owner token crosses the network unencrypted. That
+# works, with one warning line per run; it's fine on a private network such
+# as a tailnet (a literal Tailscale address or *.ts.net name prints no
+# warning), and K2_PLAIN_HTTP_OK=1 silences it. Elsewhere use
+# K2_HOST=https://<name> (K2's TLS or K2 Connect in front of the daemon,
+# K2_PORT that front's port). A password never goes over plain http to
+# another computer. The default is today's loopback bind.
 _envn_into HOST HOST 127.0.0.1
 _envn_into TOKEN HOOK_TOKEN
 

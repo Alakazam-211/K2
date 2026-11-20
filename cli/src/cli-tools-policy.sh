@@ -541,6 +541,38 @@ _k2_url_is_literal_loopback() {
     [ "$h" = localhost ] && return 0
     [[ "$h" =~ $re ]]
 }
+# _k2_daemon_base VAR: sets VAR to the URL of the daemon at HOST:PORT.
+# HOST is a name or address (plain http), or https://<name> (https: K2's
+# TLS or K2 Connect in front of the daemon).
+_k2_daemon_base() {
+    local h="${HOST:-127.0.0.1}"
+    case "$h" in
+        https://*|HTTPS://*) h="${h#*://}"; printf -v "$1" 'https://%s:%s' "${h%/}" "${PORT:-}" ;;
+        *) printf -v "$1" 'http://%s:%s' "$h" "${PORT:-}" ;;
+    esac
+}
+# _k2_daemon_is_plain_remote: true when the daemon at HOST is reached over
+# plain http and HOST, as written, isn't this computer
+# (_k2_url_is_literal_loopback; a bare ::1 counts as [::1]).
+_k2_daemon_is_plain_remote() {
+    local h="${HOST:-127.0.0.1}"
+    case "$h" in https://*|HTTPS://*) return 1 ;; esac
+    case "$h" in \[*) ;; *:*) h="[$h]" ;; esac
+    ! _k2_url_is_literal_loopback "http://$h"
+}
+# _k2_host_is_tailnet_literal HOST: true when HOST, AS WRITTEN (never
+# resolved), is a Tailscale address: IPv4 in 100.64.0.0/10 as four
+# numbers, IPv6 in fd7a:115c:a1e0::/48, or a name ending in .ts.net.
+_k2_host_is_tailnet_literal() {
+    local h re='^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){2}$'
+    h="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+    h="${h#\[}"; h="${h%\]}"
+    case "$h" in
+        fd7a:115c:a1e0:*) return 0 ;;
+        ?*.ts.net) return 0 ;;
+    esac
+    [[ "$h" =~ $re ]]
+}
 # _k2_refuse_plain_http URL: a token goes over plain http only to this
 # computer. Run it before a request that carries a token to a URL that
 # isn't this computer's daemon, before the token is even looked up. https
@@ -1578,7 +1610,33 @@ if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
 fi
 unset _skip_conn_gate
 
-BASE_URL="http://${HOST}:${PORT}"
+_k2_daemon_base BASE_URL
+# A daemon on another computer over plain http (K2_HOST is a name or an
+# address that isn't loopback as written): the owner token crosses the
+# network unencrypted. Allowed, with one warning line per run, printed here
+# before the command's first request (the senders send curl's own stderr
+# to /dev/null, so a line printed at the request itself would be lost).
+# None for a literal Tailscale host or with K2_PLAIN_HTTP_OK=1. A password
+# never goes there: a command line with a password flag is refused before
+# any request. help, study, --schema, --version and -h/--help stay local
+# and print nothing.
+if [ -z "$_k2_offline_verb" ] && _k2_daemon_is_plain_remote; then
+    for _a in "$@"; do
+        case "$_a" in
+            --password|--password-stdin|--password=*)
+                echo "Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: ${BASE_URL})" >&2
+                exit 2
+                ;;
+        esac
+    done
+    unset _a
+    _envn_into _k2_plain_ok PLAIN_HTTP_OK
+    if [ "$_k2_plain_ok" != 1 ] && ! _k2_host_is_tailnet_literal "$HOST"; then
+        # The command's own name (white-label), not a typed one.
+        echo "warning: ${0##*/} is sending this server's owner token to ${HOST} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." >&2
+    fi
+    unset _k2_plain_ok
+fi
 
 # HTTP helper
 # 75 = local_transport_denied: curl 7, a connect the OS refused locally

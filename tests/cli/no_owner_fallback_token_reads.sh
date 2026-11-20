@@ -182,17 +182,17 @@ sent "wake without the variable: the owner token as before" /cli/agents/list "$O
 
 echo "connect account (_connect_require_daemon)"
 REQ='PORT=""; TOKEN=""; DISK_OWNER_TOKEN=""; _connect_require_daemon; echo "TOKEN=$TOKEN"'
-fn _k2_refuse_owner_fallback _connect_require_daemon -- _k2_no_owner_fallback=1 -- "$REQ"
+fn _k2_refuse_owner_fallback _k2_daemon_base _connect_require_daemon -- _k2_no_owner_fallback=1 -- "$REQ"
 refused "connect, no passport"
-fn _k2_refuse_owner_fallback _connect_require_daemon -- _k2_no_owner_fallback=1 -- \
+fn _k2_refuse_owner_fallback _k2_daemon_base _connect_require_daemon -- _k2_no_owner_fallback=1 -- \
     "PORT=''; TOKEN='$SESSION'; DISK_OWNER_TOKEN=''; _connect_require_daemon; echo \"TOKEN=\$TOKEN\""
 [ "$RC" = 0 ] && [ "$OUT" = "TOKEN=$SESSION" ] || die "connect with a passport: exit $RC: $OUT"
 ok "connect, passport: used as is"
-fn _k2_refuse_owner_fallback _connect_require_daemon -- -- "$REQ"
+fn _k2_refuse_owner_fallback _k2_daemon_base _connect_require_daemon -- -- "$REQ"
 [ "$RC" = 0 ] && [ "$OUT" = "TOKEN=$OWNER" ] || die "connect without the variable: exit $RC: $OUT"
 ok "connect without the variable: reads heartbeat.token as before"
 mv "$H/.k2/heartbeat.token" "$T/heartbeat.token.aside"
-fn _k2_refuse_owner_fallback _connect_require_daemon -- -- "$REQ"
+fn _k2_refuse_owner_fallback _k2_daemon_base _connect_require_daemon -- -- "$REQ"
 mv "$T/heartbeat.token.aside" "$H/.k2/heartbeat.token"
 [ "$RC" = 0 ] && [ "$OUT" = "TOKEN=$OWNER" ] || die "connect without the variable, daemon.token only: exit $RC: $OUT"
 ok "connect without the variable: reads daemon.token as before"

@@ -27,7 +27,8 @@ _permission_probe() {
             --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     elif [ -n "${PORT:-}" ]; then
         _k2_cfg_auth "$tok"
-        out="$(_k2_curl "$_K2_CFG" -s -G "http://${HOST}:${PORT}/cli/permission/enabled" \
+        local base
+        _k2_daemon_base base; out="$(_k2_curl "$_K2_CFG" -s -G "${base}/cli/permission/enabled" \
             --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi
     [[ "$out" == *$'\n200' ]] || return 1

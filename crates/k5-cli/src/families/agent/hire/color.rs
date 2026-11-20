@@ -102,7 +102,9 @@ pub fn normalize(raw: &str) -> Option<String> {
         return None;
     }
     let hexpart = st.strip_prefix('#').unwrap_or(st).to_lowercase();
-    let hex = |n: usize| hexpart.chars().count() == n && hexpart.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+    let hex = |n: usize| {
+        hexpart.chars().count() == n && hexpart.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+    };
     if hex(6) {
         return Some(format!("#{hexpart}"));
     }

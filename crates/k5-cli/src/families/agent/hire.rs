@@ -165,7 +165,9 @@ fn parse_words(rest: &[&str]) -> Result<Option<HireArgs>, String> {
                 }
                 answers.push(v.to_string());
             }
-            "--persona" => a.persona = value(rest, i, "--persona requires a file path")?.to_string(),
+            "--persona" => {
+                a.persona = value(rest, i, "--persona requires a file path")?.to_string()
+            }
             "--mode" => {
                 a.mode = value(
                     rest,
@@ -272,8 +274,7 @@ fn parse_words(rest: &[&str]) -> Result<Option<HireArgs>, String> {
         return Err("--answer goes with --template <id>".to_string());
     }
     // `[ ! -f ] || [ ! -r ]`.
-    if !a.persona.is_empty() && !(is_file(&a.persona) && std::fs::File::open(&a.persona).is_ok())
-    {
+    if !a.persona.is_empty() && !(is_file(&a.persona) && std::fs::File::open(&a.persona).is_ok()) {
         return Err(format!(
             "persona file not found or unreadable: {}",
             a.persona
@@ -386,7 +387,10 @@ fn escaped(bytes: &[u8]) -> Text {
             }
             Err(e) => {
                 let n = e.valid_up_to();
-                push_json(&mut json, std::str::from_utf8(&rest[..n]).unwrap_or_default());
+                push_json(
+                    &mut json,
+                    std::str::from_utf8(&rest[..n]).unwrap_or_default(),
+                );
                 let bad = e.error_len().unwrap_or(rest.len() - n);
                 for b in &rest[n..n + bad] {
                     json.push_str(&format!("\\udc{b:02x}"));
@@ -699,10 +703,7 @@ mod tests {
 
     #[test]
     fn the_checks_come_in_the_shells_order() {
-        assert_eq!(
-            words(&["--name"]).unwrap_err(),
-            "--name requires a value"
-        );
+        assert_eq!(words(&["--name"]).unwrap_err(), "--name requires a value");
         assert_eq!(
             words(&["--persona", "x", "--template", "t"]).unwrap_err(),
             "--template and --persona are mutually exclusive \u{2014} pass one or the other"
@@ -726,11 +727,23 @@ mod tests {
 
     #[test]
     fn params_keep_their_first_place() {
-        let a = words(&["--template", "t", "--param", "a=1", "--param", "b=2", "--param", "a=3=4"])
-            .unwrap();
+        let a = words(&[
+            "--template",
+            "t",
+            "--param",
+            "a=1",
+            "--param",
+            "b=2",
+            "--param",
+            "a=3=4",
+        ])
+        .unwrap();
         assert_eq!(
             a.params,
-            vec![("a".to_string(), "3=4".to_string()), ("b".to_string(), "2".to_string())]
+            vec![
+                ("a".to_string(), "3=4".to_string()),
+                ("b".to_string(), "2".to_string())
+            ]
         );
     }
 
@@ -742,8 +755,29 @@ mod tests {
     }
 
     #[test]
+    fn a_brief_the_environment_cant_hold_is_the_shells() {
+        let dir = std::env::temp_dir().join(format!("k5-hire-brief-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let nul = dir.join("nul.txt");
+        std::fs::write(&nul, b"a\0b\n").unwrap();
+        let big = dir.join("big.txt");
+        std::fs::write(&big, "x".repeat(ENV_MAX + 1)).unwrap();
+        let fits = dir.join("fits.txt");
+        std::fs::write(&fits, format!("{}\n\n", "x".repeat(ENV_MAX))).unwrap();
+        for (f, native) in [(&nul, false), (&big, false), (&fits, true)] {
+            let f = f.to_str().unwrap();
+            let got = parse(&["d", "--take-app", "a", "--brief", f]);
+            assert_eq!(got.is_some(), native, "{f}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_brief_is_read_as_the_environment_reads_it() {
-        assert_eq!(escaped(b"caf\xc3\xa9").code_points(), "caf\u{e9}".chars().map(u32::from).collect::<Vec<_>>());
+        assert_eq!(
+            escaped(b"caf\xc3\xa9").code_points(),
+            "caf\u{e9}".chars().map(u32::from).collect::<Vec<_>>()
+        );
         assert_eq!(escaped(b"a\xffb").code_points(), vec![0x61, 0xdcff, 0x62]);
     }
 }

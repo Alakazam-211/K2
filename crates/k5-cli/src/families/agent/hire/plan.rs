@@ -137,7 +137,12 @@ fn src_guess(ctx: &str) -> Option<&'static str> {
         "connections:roster" | "connections" | "roster" => "catalog:connections-roster",
         "heartbeats:roster" | "heartbeats" => "catalog:heartbeats-roster",
         "skills:roster" | "skills" | "skills-index" => "catalog:skills-roster",
-        "users:roster" | "users" | "users-roster" | "people" | "people-roster" | "user-roster"
+        "users:roster"
+        | "users"
+        | "users-roster"
+        | "people"
+        | "people-roster"
+        | "user-roster"
         | "catalog:users-roster" => "catalog:users-roster",
         _ => return None,
     })
@@ -265,10 +270,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
             }
         }
         if hits.len() > 1 && ids.0.len() > 1 {
-            let names = hits
-                .iter()
-                .map(|p| or(act::get(p, "id"), s("?")))
-                .collect();
+            let names = hits.iter().map(|p| or(act::get(p, "id"), s("?"))).collect();
             return Err(h.fail(
                 s("bad_usage"),
                 s(&format!(
@@ -313,7 +315,9 @@ pub fn plan(h: &mut Hire) -> R<()> {
             if ops::py_eq(&code, &s("not_found")) || ops::py_eq(&code, &s("ambiguous")) {
                 let hint = or(
                     hint.as_ref(),
-                    s(&format!("no project matches '{sel}' \u{2014} see: {cli} project list")),
+                    s(&format!(
+                        "no project matches '{sel}' \u{2014} see: {cli} project list"
+                    )),
                 );
                 return Err(h.fail(code, hint, Exit::NotFound));
             }
@@ -338,7 +342,10 @@ pub fn plan(h: &mut Hire) -> R<()> {
             ));
         }
         let id = act::get(&d, "id").cloned().unwrap_or(Value::Null);
-        if resolved_projects.iter().all(|(p, _, _)| !ops::py_eq(p, &id)) {
+        if resolved_projects
+            .iter()
+            .all(|(p, _, _)| !ops::py_eq(p, &id))
+        {
             let name = or(act::get(&d, "name"), s(sel));
             let memberless = !act::get(&d, "members").is_some_and(py::truthy);
             resolved_projects.push((id, name, memberless));
@@ -420,7 +427,14 @@ pub fn plan(h: &mut Hire) -> R<()> {
             if hits.len() > 1 {
                 let names = hits
                     .iter()
-                    .map(|g| or(act::get(g, "name").filter(|v| py::truthy(v)).or(act::get(g, "id")), s("?")))
+                    .map(|g| {
+                        or(
+                            act::get(g, "name")
+                                .filter(|v| py::truthy(v))
+                                .or(act::get(g, "id")),
+                            s("?"),
+                        )
+                    })
                     .collect();
                 return Err(h.fail(
                     s("ambiguous"),
@@ -486,7 +500,9 @@ pub fn plan(h: &mut Hire) -> R<()> {
     let persona_exists = persona_path.as_ref().is_some_and(py::truthy);
     if !a.persona.is_empty() {
         match std::fs::read(&a.persona) {
-            Ok(bytes) => h.persona_content = Some(universal_newlines(&String::from_utf8_lossy(&bytes))),
+            Ok(bytes) => {
+                h.persona_content = Some(universal_newlines(&String::from_utf8_lossy(&bytes)))
+            }
             Err(e) => {
                 let why = crate::out::pylib::json::os_error(&e, &a.persona).message;
                 return Err(h.fail(
@@ -527,8 +543,8 @@ pub fn plan(h: &mut Hire) -> R<()> {
         let l = or(act::get(&conf, "live"), obj(vec![]));
         live = ptrue(&l, "active", &[(329, "<module>")])?;
         let layers = h.get("/cli/context/layers", vec![("project", path.clone())]);
-        let has_layers = ptrue(&layers, "ok", &[(332, "<module>")])?
-            || act::get(&layers, "layers").is_some();
+        let has_layers =
+            ptrue(&layers, "ok", &[(332, "<module>")])? || act::get(&layers, "layers").is_some();
         if has_layers {
             let list = or(act::get(&layers, "layers"), Value::Array(vec![]));
             for l in py_iter(&list, 333)? {
@@ -707,16 +723,24 @@ pub fn plan(h: &mut Hire) -> R<()> {
         } else {
             None
         };
-        if rerr.as_ref().is_some_and(py::truthy) || !(is_dict && act::get(&r, "ok").is_some_and(py::truthy)) {
+        if rerr.as_ref().is_some_and(py::truthy)
+            || !(is_dict && act::get(&r, "ok").is_some_and(py::truthy))
+        {
             let rerr = match rerr {
                 Some(e @ Value::Object(_)) => e,
                 other => {
                     let why = or(other.as_ref(), s(&dumps_head(&r, 200)));
-                    obj(vec![("code", s("daemon_error")), ("hint", s(&py::str_of(&why)))])
+                    obj(vec![
+                        ("code", s("daemon_error")),
+                        ("hint", s(&py::str_of(&why))),
+                    ])
                 }
             };
             let code = or(act::get(&rerr, "code"), s("daemon_error"));
-            let hint = or(act::get(&rerr, "hint"), s(&format!("cannot resolve '{peer}'")));
+            let hint = or(
+                act::get(&rerr, "hint"),
+                s(&format!("cannot resolve '{peer}'")),
+            );
             act::set(&mut c, "status", s("failed"));
             act::set(&mut c, "error", obj(vec![("code", code), ("hint", hint)]));
         } else {
@@ -797,7 +821,11 @@ pub fn plan(h: &mut Hire) -> R<()> {
         } else {
             s("")
         };
-        let id_or_none = if py::truthy(id) { id.clone() } else { Value::Null };
+        let id_or_none = if py::truthy(id) {
+            id.clone()
+        } else {
+            Value::Null
+        };
         let mut f = obj(vec![
             ("step", s("assign-focus-group")),
             ("group", label.clone()),
@@ -950,7 +978,9 @@ pub fn take_template_rows(h: &mut Hire, i: usize, resp: &Value, applied: bool, f
         e.frames = fr(772).to_vec();
         e
     })? {
-        let st = pget(&r, "status", &fr(772))?.cloned().unwrap_or(Value::Null);
+        let st = pget(&r, "status", &fr(772))?
+            .cloned()
+            .unwrap_or(Value::Null);
         if ops::py_eq(&st, &s("write")) || ops::py_eq(&st, &s("done")) {
             let step = pget(&r, "step", &fr(772))?.cloned().unwrap_or(Value::Null);
             if !(ops::py_eq(&step, &s("folder")) || ops::py_eq(&step, &s("register"))) {
@@ -974,15 +1004,17 @@ pub fn take_template_rows(h: &mut Hire, i: usize, resp: &Value, applied: bool, f
 /// plan.
 pub fn dry_run(h: &mut Hire) -> R<()> {
     if let Some(i) = h.one("apply-template") {
-        let mut pb = h.template_body(vec![
-            ("path", s(&h.path)),
-            ("dryRun", Value::Bool(true)),
-        ]);
+        let mut pb = h.template_body(vec![("path", s(&h.path)), ("dryRun", Value::Bool(true))]);
         if let Some(p) = &h.resolved_preset {
-            act::set(&mut pb, "preset", act::get(p, "id").cloned().unwrap_or(Value::Null));
+            act::set(
+                &mut pb,
+                "preset",
+                act::get(p, "id").cloned().unwrap_or(Value::Null),
+            );
         }
         let resp = h.post_json("/cli/agents/hire", &pb);
-        let bad = ptrue(&resp, "error", &[(787, "<module>")])? || !ptrue(&resp, "ok", &[(787, "<module>")])?;
+        let bad = ptrue(&resp, "error", &[(787, "<module>")])?
+            || !ptrue(&resp, "ok", &[(787, "<module>")])?;
         if bad {
             h.note_permission(&resp);
             let (code, hint) = core_error(&resp, 789)?;
@@ -1005,7 +1037,10 @@ pub fn dry_run(h: &mut Hire) -> R<()> {
             })
             .collect();
         if let Some(&first) = core.first() {
-            let resp = h.post_json("/cli/agents/hire", &obj(vec![("dryRun", Value::Bool(true))]));
+            let resp = h.post_json(
+                "/cli/agents/hire",
+                &obj(vec![("dryRun", Value::Bool(true))]),
+            );
             let gerr = match &resp {
                 Value::Object(_) => act::get(&resp, "error").cloned(),
                 _ => None,

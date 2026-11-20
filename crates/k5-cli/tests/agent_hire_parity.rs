@@ -19,8 +19,10 @@
 //!   the rest go on, the workspace step that stops the rest (exit 3 and
 //!   the card's lines), an answer the block's Python can't read (its
 //!   traceback), no answer, no daemon.
-//! - A session with a passport and a brief with a NUL in it: the shell's
-//!   ([`Compare::Shell`]).
+//! - A session with a passport: the shell's ([`Compare::Shell`]). A brief
+//!   with a NUL in it is the shell's too, but bash's warning names its
+//!   own path, so that hand-back is the unit test's
+//!   (`families::agent::hire::tests`).
 
 #![cfg(unix)]
 
@@ -154,7 +156,15 @@ fn hire_words() {
         &["hire", "d", "--db-access", "all"],
         &["hire", "d", "--brief", "brief.txt"],
         &["hire", "d", "--take-app", "a1", "--brief", "no-such.txt"],
-        &["hire", "--template", "t", "--answer", "a=1", "--answer", " a =2"],
+        &[
+            "hire",
+            "--template",
+            "t",
+            "--answer",
+            "a=1",
+            "--answer",
+            " a =2",
+        ],
         &["hire", "d", "--json", "--mode", "k2x"],
     ] {
         v.push(case(
@@ -330,10 +340,36 @@ fn hire_a_new_folder() {
 
 /// Every step's flag at once (`--onboard` brings `--launch`).
 const EVERY: &[&str] = &[
-    "hire", "hire-me", "--name", "Ann", "--mode", "manager", "--enabled", "true", "--db-access",
-    "read", "--agent", "claude", "--connect", "ops", "--project", "Acme", "--color",
-    "rgb(1, 2, 3)", "--focus-group", "team", "--context", "wiki:index", "--context", "notes.md",
-    "--onboard", "hello there", "--take-app", "app1", "--fanout", "--no-wiki",
+    "hire",
+    "hire-me",
+    "--name",
+    "Ann",
+    "--mode",
+    "manager",
+    "--enabled",
+    "true",
+    "--db-access",
+    "read",
+    "--agent",
+    "claude",
+    "--connect",
+    "ops",
+    "--project",
+    "Acme",
+    "--color",
+    "rgb(1, 2, 3)",
+    "--focus-group",
+    "team",
+    "--context",
+    "wiki:index",
+    "--context",
+    "notes.md",
+    "--onboard",
+    "hello there",
+    "--take-app",
+    "app1",
+    "--fanout",
+    "--no-wiki",
 ];
 
 fn every_reply(rig: &Rig) -> Vec<Reply> {
@@ -376,7 +412,15 @@ fn hire_every_step() {
         // covers: agent hire
         case("every step", EVERY, &[], every_reply(&rig), files, 0, 17),
         // covers: agent hire --json
-        case("every step as JSON", plus(EVERY, &["--json"]), &[], every_reply(&rig), files, 0, 17),
+        case(
+            "every step as JSON",
+            plus(EVERY, &["--json"]),
+            &[],
+            every_reply(&rig),
+            files,
+            0,
+            17,
+        ),
         case(
             "every step's plan: the hire core refuses it",
             plus(EVERY, &["--dry-run"]),
@@ -395,11 +439,26 @@ fn hire_every_step() {
         ),
         case(
             "failed steps and the rest go on: the first failure's exit",
-            &["hire", "hire-me", "--connect", "ghost", "--context", "wiki:nope", "--context", "subagents", "--launch", "--onboard", "x"],
+            &[
+                "hire",
+                "hire-me",
+                "--connect",
+                "ghost",
+                "--context",
+                "wiki:nope",
+                "--context",
+                "subagents",
+                "--launch",
+                "--onboard",
+                "x",
+            ],
             &[],
             vec![
                 not_found(),
-                Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no agent ghost"}}"#.to_string()),
+                Reply::Answer(
+                    404,
+                    r#"{"error":{"code":"not_found","hint":"no agent ghost"}}"#.to_string(),
+                ),
                 ok(CORE_OK),
                 ok(r#"{"ok":false,"error":"settings locked"}"#),
                 ok(r#"{"error":{"code":"catalog_unknown","hint":"no such id"}}"#),
@@ -412,7 +471,19 @@ fn hire_every_step() {
         ),
         case(
             "failed steps as JSON",
-            &["hire", "hire-me", "--json", "--project", "Acme", "--color", "#ABC", "--focus-group", "none", "--context", "notes.md"],
+            &[
+                "hire",
+                "hire-me",
+                "--json",
+                "--project",
+                "Acme",
+                "--color",
+                "#ABC",
+                "--focus-group",
+                "none",
+                "--context",
+                "notes.md",
+            ],
             &[],
             vec![
                 ok(PROJECT),
@@ -439,19 +510,39 @@ fn hire_the_look_ups() {
         case(name, leak(args), &[], vec![reply], files, code, 1)
     };
     let v = vec![
-        one("no preset matches", &["hire", "d", "--agent", "zz"], ok(PRESETS), 4),
+        one(
+            "no preset matches",
+            &["hire", "d", "--agent", "zz"],
+            ok(PRESETS),
+            4,
+        ),
         one(
             "two presets by label",
             &["hire", "d", "--agent", "Claude"],
-            ok(r#"[{"id":"a","label":"Claude","enabled":true},{"id":"b","label":"claude","enabled":true}]"#),
+            ok(
+                r#"[{"id":"a","label":"Claude","enabled":true},{"id":"b","label":"claude","enabled":true}]"#,
+            ),
             2,
         ),
-        one("a preset that is off", &["hire", "d", "--agent", "codex"], ok(PRESETS), 2),
-        one("no preset list", &["hire", "d", "--agent", "x"], ok(r#"{"error":"boom"}"#), 1),
+        one(
+            "a preset that is off",
+            &["hire", "d", "--agent", "codex"],
+            ok(PRESETS),
+            2,
+        ),
+        one(
+            "no preset list",
+            &["hire", "d", "--agent", "x"],
+            ok(r#"{"error":"boom"}"#),
+            1,
+        ),
         one(
             "a project no one has",
             &["hire", "d", "--project", "X"],
-            Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no project X"}}"#.to_string()),
+            Reply::Answer(
+                404,
+                r#"{"error":{"code":"not_found","hint":"no project X"}}"#.to_string(),
+            ),
             4,
         ),
         one(
@@ -460,27 +551,93 @@ fn hire_the_look_ups() {
             ok(r#"{"error":{"code":"ambiguous_id"}}"#),
             4,
         ),
-        one("a project error as a string", &["hire", "d", "--project", "X"], ok(r#"{"error":"db locked"}"#), 1),
-        one("a project answer with no id", &["hire", "d", "--project", "X"], ok(r#"{"ok":true}"#), 1),
-        one("no focus group matches", &["hire", "d", "--focus-group", "zz"], ok(GROUPS), 4),
+        one(
+            "a project error as a string",
+            &["hire", "d", "--project", "X"],
+            ok(r#"{"error":"db locked"}"#),
+            1,
+        ),
+        one(
+            "a project answer with no id",
+            &["hire", "d", "--project", "X"],
+            ok(r#"{"ok":true}"#),
+            1,
+        ),
+        one(
+            "no focus group matches",
+            &["hire", "d", "--focus-group", "zz"],
+            ok(GROUPS),
+            4,
+        ),
         one(
             "two focus groups by name",
             &["hire", "d", "--focus-group", "team"],
             ok(r#"[{"id":"f1","name":"Team"},{"id":"f2","name":"team"}]"#),
             4,
         ),
-        one("no focus group list", &["hire", "d", "--focus-group", "x"], ok(r#"{"ok":false}"#), 1),
-        one("the conf's error", &["hire", "d"], ok(r#"{"error":{"code":"db","hint":"locked"}}"#), 1),
-        one("the conf's error as a string", &["hire", "d"], ok(r#"{"error":"locked"}"#), 1),
-        one("a context file not there", &["hire", "hire-me", "--context", "missing.md"], not_found(), 4),
-        one("a context file outside", &["hire", "hire-me", "--context", "../notes2.md"], not_found(), 2),
-        one("an empty context", &["hire", "hire-me", "--context", "  "], not_found(), 2),
+        one(
+            "no focus group list",
+            &["hire", "d", "--focus-group", "x"],
+            ok(r#"{"ok":false}"#),
+            1,
+        ),
+        one(
+            "the conf's error",
+            &["hire", "d"],
+            ok(r#"{"error":{"code":"db","hint":"locked"}}"#),
+            1,
+        ),
+        one(
+            "the conf's error as a string",
+            &["hire", "d"],
+            ok(r#"{"error":"locked"}"#),
+            1,
+        ),
+        one(
+            "a context file not there",
+            &["hire", "hire-me", "--context", "missing.md"],
+            not_found(),
+            4,
+        ),
+        one(
+            "a context file outside",
+            &["hire", "hire-me", "--context", "../notes2.md"],
+            not_found(),
+            2,
+        ),
+        one(
+            "an empty context",
+            &["hire", "hire-me", "--context", "  "],
+            not_found(),
+            2,
+        ),
         with(
-            one("a conf that is a list: the traceback", &["hire", "d"], ok("[]"), 1),
+            one(
+                "a conf that is a list: the traceback",
+                &["hire", "d"],
+                ok("[]"),
+                1,
+            ),
             Compare::Traceback,
         ),
-        case("a color the patterns don't take", &["hire", "d", "--color", "rgb(1,2,3 )"], &[], vec![], files, 2, 0),
-        case("a file where the folder goes", &["hire", "plain.txt"], &[], vec![], files, 2, 0),
+        case(
+            "a color the patterns don't take",
+            &["hire", "d", "--color", "rgb(1,2,3 )"],
+            &[],
+            vec![],
+            files,
+            2,
+            0,
+        ),
+        case(
+            "a file where the folder goes",
+            &["hire", "plain.txt"],
+            &[],
+            vec![],
+            files,
+            2,
+            0,
+        ),
     ];
     check(&rig, v);
 }
@@ -496,9 +653,25 @@ fn hire_an_agent_already_there() {
         case(
             "every step already so",
             &[
-                "hire", ".", "--name", "qa", "--enabled", "true", "--project", "Acme", "--color",
-                "#abc", "--focus-group", "none", "--connect", "ops", "--connect", "far",
-                "--context", "wiki:index", "--launch",
+                "hire",
+                ".",
+                "--name",
+                "qa",
+                "--enabled",
+                "true",
+                "--project",
+                "Acme",
+                "--color",
+                "#abc",
+                "--focus-group",
+                "none",
+                "--connect",
+                "ops",
+                "--connect",
+                "far",
+                "--context",
+                "wiki:index",
+                "--launch",
             ],
             &[],
             vec![
@@ -541,7 +714,10 @@ fn hire_an_agent_already_there() {
             vec![
                 ok(CONF_THERE),
                 ok(r#"{"ok":false}"#),
-                Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"not yours"}}"#.to_string()),
+                Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"owner_only","hint":"not yours"}}"#.to_string(),
+                ),
             ],
             files,
             3,
@@ -570,9 +746,22 @@ fn hire_a_template() {
         case(
             "under the hire root: the hello sent by the daemon",
             &[
-                "hire", "--template", " qa-bot ", "--name", "Ann", "--param", "team=Acme",
-                "--param", "tone=calm", "--answer", "stack=rust", "--launch", "--onboard", "go",
-                "--agent", "claude",
+                "hire",
+                "--template",
+                " qa-bot ",
+                "--name",
+                "Ann",
+                "--param",
+                "team=Acme",
+                "--param",
+                "tone=calm",
+                "--answer",
+                "stack=rust",
+                "--launch",
+                "--onboard",
+                "go",
+                "--agent",
+                "claude",
             ],
             &[],
             vec![
@@ -654,7 +843,11 @@ fn hire_a_template() {
             &[],
             vec![
                 not_found(),
-                Reply::Answer(409, r#"{"error":{"code":"template_conflict","hint":"another template"}}"#.to_string()),
+                Reply::Answer(
+                    409,
+                    r#"{"error":{"code":"template_conflict","hint":"another template"}}"#
+                        .to_string(),
+                ),
             ],
             files,
             3,
@@ -664,7 +857,10 @@ fn hire_a_template() {
             "an unknown template",
             &["hire", "--template", "nope"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"unknown_template","hint":"no template 'nope'"}}"#.to_string())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"unknown_template","hint":"no template 'nope'"}}"#.to_string(),
+            )],
             files,
             4,
             1,
@@ -693,7 +889,11 @@ fn hire_a_template() {
             &[],
             vec![
                 not_found(),
-                Reply::Answer(400, r#"{"error":{"code":"bad_template","hint":"template.toml: missing id"}}"#.to_string()),
+                Reply::Answer(
+                    400,
+                    r#"{"error":{"code":"bad_template","hint":"template.toml: missing id"}}"#
+                        .to_string(),
+                ),
             ],
             files,
             2,
@@ -701,7 +901,15 @@ fn hire_a_template() {
         ),
         case(
             "the hello not delivered",
-            &["hire", "hire-me", "--template", "qa-bot", "--launch", "--onboard", "go"],
+            &[
+                "hire",
+                "hire-me",
+                "--template",
+                "qa-bot",
+                "--launch",
+                "--onboard",
+                "go",
+            ],
             &[],
             vec![
                 not_found(),
@@ -722,36 +930,19 @@ fn hire_a_template() {
 #[test]
 fn hire_the_shell_s_cases() {
     let rig = Rig::new(VERB, "hireshell");
-    let v = vec![
-        Case {
-            env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
-            ..with(
-                case(
-                    "a session with a passport: the shell's (the owner token to the new workspace)",
-                    &["hire", "newbie", "--dry-run"],
-                    &[],
-                    vec![not_found(), ok(r#"{"ok":true}"#)],
-                    files,
-                    0,
-                    2,
-                ),
-                Compare::Shell,
-            )
-        },
-        with(
-            case(
-                "a brief with a NUL: the shell's",
-                &["hire", "newbie", "--take-app", "a1", "--brief", "nul.txt", "--dry-run"],
-                &[],
-                vec![not_found(), ok(r#"{"ok":true}"#)],
-                files,
-                0,
-                2,
-            ),
-            Compare::Shell,
-        ),
-    ];
-    check(&rig, v);
+    let c = case(
+        "a session with a passport: the shell's (the owner token to the new workspace)",
+        &["hire", "newbie", "--dry-run"],
+        &[],
+        vec![not_found(), ok(r#"{"ok":true}"#)],
+        files,
+        0,
+        2,
+    );
+    rig.check(&Case {
+        env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+        ..with(c, Compare::Shell)
+    });
 }
 
 /// The lines name the command by the brand's name (in a build with
@@ -776,7 +967,15 @@ fn the_lines_say_the_brand_s_name() {
         assert_eq!(out.code, Some(2), "{args:?}");
         assert!(log.is_empty(), "{args:?}");
     }
-    let c = case("brand", &["hire", "d", "--agent", "zz"], &[], vec![ok("[]")], files, 4, 1);
+    let c = case(
+        "brand",
+        &["hire", "d", "--agent", "zz"],
+        &[],
+        vec![ok("[]")],
+        files,
+        4,
+        1,
+    );
     let (out, _) = rig.binary(&c, false);
     assert_eq!(
         out.stderr,

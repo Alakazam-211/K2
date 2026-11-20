@@ -98,7 +98,11 @@ pub fn emit(h: &mut Hire, ok: bool, changed: bool, from: &[Frame]) -> R<()> {
             "set-mode" => format!("mode: {}", line_of(g("mode"))),
             "set-enabled" => format!(
                 "enabled: {}",
-                if truthy(g("enabled")) { "true" } else { "false" }
+                if truthy(g("enabled")) {
+                    "true"
+                } else {
+                    "false"
+                }
             ),
             "set-name" => format!("name: {}", line_of(g("name"))),
             "set-default-agent" => format!(
@@ -211,9 +215,7 @@ pub fn emit(h: &mut Hire, ok: bool, changed: bool, from: &[Frame]) -> R<()> {
                 Some("skipped") => "skipped",
                 Some("failed") => "FAILED",
                 Some("not-run") => "not run",
-                _ => {
-                    return Err(raise(&fr(688), format!("KeyError: {}", py::repr(&status))).into())
-                }
+                _ => return Err(raise(&fr(688), format!("KeyError: {}", py::repr(&status))).into()),
             },
             Value::Array(_) | Value::Object(_) => {
                 return Err(raise(
@@ -222,20 +224,19 @@ pub fn emit(h: &mut Hire, ok: bool, changed: bool, from: &[Frame]) -> R<()> {
                 )
                 .into())
             }
-            other => {
-                return Err(raise(&fr(688), format!("KeyError: {}", py::repr(&other))).into())
-            }
+            other => return Err(raise(&fr(688), format!("KeyError: {}", py::repr(&other))).into()),
         };
-        h.stdout.push_str(&format!(
-            "  {} {line}\n",
-            ljust(&format!("[{marker}]"), 14)
-        ));
+        h.stdout
+            .push_str(&format!("  {} {line}\n", ljust(&format!("[{marker}]"), 14)));
         if step == "apply-template" {
             template_rows(h, a, &fr)?;
         }
     }
     if !dry_run {
-        let n = actions.iter().filter(|a| act::is(a, "status", "done")).count();
+        let n = actions
+            .iter()
+            .filter(|a| act::is(a, "status", "done"))
+            .count();
         let tail = if n > 0 {
             format!("{n} change(s) applied.")
         } else {
@@ -268,11 +269,7 @@ fn template_rows(h: &mut Hire, a: &Value, fr: &dyn Fn(u32) -> Vec<Frame>) -> R<(
         if ops::py_eq(&step, &s("folder")) || ops::py_eq(&step, &s("register")) {
             continue;
         }
-        let mut txt = format!(
-            "{} {}",
-            py::str_of(&step),
-            line_of(act::get(r, "target"))
-        );
+        let mut txt = format!("{} {}", py::str_of(&step), line_of(act::get(r, "target")));
         if act::get(r, "reason").is_some_and(py::truthy) {
             txt.push_str(&format!("  ({})", line_of(act::get(r, "reason"))));
         }
@@ -391,7 +388,12 @@ pub fn finish(h: &mut Hire, changed: bool, from: u32) -> R<()> {
         .filter(|a| act::is(a, "status", "failed"))
         .cloned()
         .collect();
-    emit(h, failed.is_empty(), changed, &[(from, "<module>"), (747, "finish")])?;
+    emit(
+        h,
+        failed.is_empty(),
+        changed,
+        &[(from, "<module>"), (747, "finish")],
+    )?;
     let Some(first_failed) = failed.first() else {
         return Err(Stop::Exit(Exit::Ok));
     };
@@ -407,11 +409,7 @@ pub fn finish(h: &mut Hire, changed: bool, from: u32) -> R<()> {
                 .map(py::str_of)
                 .unwrap_or_default();
             let e = act::get(a, "error").cloned().unwrap_or(Value::Null);
-            format!(
-                "{} {who}: {}",
-                act::step(a),
-                line_of(act::get(&e, "hint"))
-            )
+            format!("{} {who}: {}", act::step(a), line_of(act::get(&e, "hint")))
         })
         .collect::<Vec<_>>()
         .join("; ");
@@ -452,7 +450,12 @@ pub fn step_failed(
         }
     }
     let changed = h.changed;
-    emit(h, false, changed, &[(from, "<module>"), (834, "step_failed")])?;
+    emit(
+        h,
+        false,
+        changed,
+        &[(from, "<module>"), (834, "step_failed")],
+    )?;
     let exit = match exit {
         Some(n) => n,
         None => exit_code_for(&code, &[(from, "<module>"), (835, "step_failed")])?,

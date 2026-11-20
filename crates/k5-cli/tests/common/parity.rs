@@ -511,7 +511,9 @@ impl Rig {
                 cmd.env("K5_CLI_WOULD_REFUSE", "1");
             }
         }
-        cmd.args(self.argv(case));
+        // `{port}` in a word is this side's stub too (a `ws@http://…`
+        // address on another server).
+        cmd.args(self.argv(case).into_iter().map(|a| self.fill(side, a)));
         let o = run_within(
             &mut cmd,
             case.stdin,

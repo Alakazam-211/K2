@@ -526,6 +526,30 @@ fn send(client: &mut Client, mut m: Msg) -> Exit {
     exit
 }
 
+/// `cmd_msg <words>` as `talk` calls it after its read (`--via talk`,
+/// `--wake` or `--no-wake`): the summary hint, then the send, on the
+/// caller's client (another server's, after `talk`'s swap) and its EXIT
+/// trap. The words never hold a form the shell answers: `talk` hands a
+/// text that starts with `-` to the shell before anything runs.
+pub fn deliver_live(client: &mut Client, closing: &mut Closing, words: &[&str]) -> Exit {
+    match parse(words) {
+        Parsed::Send(mut m) => {
+            if let Some(h) = summary_hint(&m.text, &m.summary) {
+                out::stderr_line(&h);
+            }
+            send_with(client, closing, &mut m)
+        }
+        Parsed::Stop(text, exit) => {
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
+            exit
+        }
+        other => {
+            debug_assert!(false, "talk's words came to {other:?}");
+            Exit::Error
+        }
+    }
+}
+
 fn send_with(client: &mut Client, closing: &mut Closing, m: &mut Msg) -> Exit {
     let key = match send_once::init(client, &m.idem_key) {
         Ok(k) => k,

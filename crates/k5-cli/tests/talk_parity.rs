@@ -1,0 +1,516 @@
+//! `k5-cli talk` against the shell CLI's `cli/k2 talk`, on the parity rig
+//! ([`common::parity`]): the same requests, stdout, stderr and exit code.
+//!
+//! - The words: no workspace, an unknown flag, `--token-stdin` beside
+//!   `--token` or with nothing on stdin, `--answer` with `--respond`, an
+//!   empty `--answers`, no text.
+//! - `--read-only`: the read and the judging notes; a 300 KiB screen.
+//! - The send: the read, the classify, then `msg`'s send (`--via talk`,
+//!   `--wake` or `--no-wake`; a new send key, masked); a human-in-the-loop
+//!   verdict holds the message and scouts the form; `--session` writes
+//!   straight to the session and reads it back.
+//! - `--scout` by the tab bar and by the screen settling; `--answers`
+//!   with the total warning; `--answer` and `--respond`; the screen read's
+//!   raw second request; no live session.
+//! - `<workspace>@http://…` with the token from stdin and from the
+//!   environment; no token for a host.
+//! - No answer: on the read's pipe (SIGPIPE), on a write (exit 1).
+//! - Help never acts: `-h` and `--help` anywhere send nothing.
+
+#![cfg(unix)]
+
+mod common;
+
+use common::parity::*;
+use common::stub::Reply;
+
+const VERB: &str = "talk";
+const SID: &str = "0123abcd-0000-4000-8000-00000000beef";
+const ON: &str = r#"{"version":"0","features":["send-once"]}"#;
+const SENT: &str = r#"{"success":true,"target_session_id":"s1","attempts":1}"#;
+const SCREEN: &str = r#"{"lines":["$ build","ok",""]}"#;
+const CLEAR: &str = r#"{"is_hitl":false,"source":"fastpath"}"#;
+const HITL: &str = r#"{"is_hitl":true,"source":"fastpath"}"#;
+const FORM: &str = r#"{"lines":["←  ☐ Colour  ☒ Size  ✔ Submit  →","","Which colour?","❯ 1. Red","  2. Blue","3) Green","Question 1 of 3"]}"#;
+const SESSIONS: &str = r#"[{"sessionId":"s-old","isV2":false},{"sessionId":"s-ada","isV2":true,"agentName":"ada"},{"sessionId":"s-bob","isV2":true,"agentName":"bob"}]"#;
+
+fn owner(c: Case) -> Case {
+    Case {
+        env: vec![
+            ("K2_PORT", PORT.to_string()),
+            ("K2_TALK_NAV_SETTLE", "0".into()),
+            ("K2_TALK_ANSWER_SETTLE", "0".into()),
+        ],
+        setup: owner_only,
+        ..c
+    }
+}
+
+fn plain(
+    name: &'static str,
+    args: &'static [&'static str],
+    replies: Vec<Reply>,
+    code: i32,
+    requests: usize,
+) -> Case {
+    owner(case(name, args, &[], replies, nothing, code, requests))
+}
+
+fn env(mut c: Case, extra: &[(&'static str, &str)]) -> Case {
+    c.env
+        .extend(extra.iter().map(|(k, v)| (*k, (*v).to_string())));
+    c
+}
+
+fn stdin(c: Case, input: &'static [u8]) -> Case {
+    Case {
+        stdin: Some(input),
+        ..c
+    }
+}
+
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+#[test]
+fn talk_words_as_the_shell_reads_them() {
+    let rig = Rig::new(VERB, "words");
+    let v = vec![
+        // covers: talk
+        plain("no workspace", &[], vec![], 1, 0),
+        plain("no workspace, flags only", &["--read-only"], vec![], 1, 0),
+        plain("an unknown flag", &["ws", "hi", "--bogus"], vec![], 1, 0),
+        plain(
+            "--token-stdin and --token",
+            &["ws@box.example", "hi", "--token", "t", "--token-stdin"],
+            vec![],
+            2,
+            0,
+        ),
+        stdin(
+            plain(
+                "--token-stdin with nothing on stdin",
+                &["ws@box.example", "hi", "--token-stdin"],
+                vec![],
+                2,
+                0,
+            ),
+            b"",
+        ),
+        plain(
+            "--answer and --respond",
+            &["ws", "--answer", "1", "--respond", "y"],
+            vec![],
+            1,
+            0,
+        ),
+        plain(
+            "no text",
+            &["ws"],
+            vec![],
+            1,
+            0,
+        ),
+        plain(
+            "no token for another server",
+            &["ws@box.example", "hi"],
+            vec![],
+            1,
+            0,
+        ),
+        plain(
+            "an empty --answers list",
+            &["ws", "--answers", " , ,", "--session", SID],
+            vec![],
+            1,
+            0,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
+#[test]
+fn talk_reads_and_holds() {
+    let rig = Rig::new(VERB, "read");
+    let big = format!(
+        r#"{{"lines":[{}]}}"#,
+        (0..6000)
+            .map(|i| format!("\"line {i} {}\"", "x".repeat(40)))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let v = vec![
+        plain(
+            "--read-only",
+            &["ws", "--read-only", "--lines", "3", "--agent", "ada"],
+            vec![ok(SCREEN)],
+            0,
+            1,
+        ),
+        plain(
+            "--peek with a held message",
+            &["ws", "later", "--peek"],
+            vec![ok(SCREEN)],
+            0,
+            1,
+        ),
+        plain(
+            "--dry-run on a session",
+            &["ws", "--dry-run", "--session", SID],
+            vec![ok(SCREEN)],
+            0,
+            1,
+        ),
+        plain(
+            "the read refused",
+            &["ws", "--read-only"],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"gated","hint":"turn it on"}}"#.into(),
+            )],
+            0,
+            1,
+        ),
+        plain(
+            "a 300 KiB screen",
+            &["ws", "--read-only"],
+            vec![ok(leak(big))],
+            0,
+            1,
+        ),
+        plain(
+            "a human-in-the-loop prompt holds the message and scouts",
+            &["ws", "hello", "--agent", "ada"],
+            vec![
+                ok(SCREEN),
+                ok(HITL),
+                ok(r#"{"path":"/w/ws"}"#),
+                ok(SESSIONS),
+                ok(FORM),
+                ok(FORM),
+                ok("{}"),
+                ok(FORM),
+                ok("{}"),
+            ],
+            0,
+            9,
+        ),
+        plain(
+            "a hold whose session is asleep",
+            &["ws", "hello"],
+            vec![ok(SCREEN), ok(HITL), ok("{}"), ok("[]")],
+            0,
+            4,
+        ),
+        plain(
+            "--session writes and reads back",
+            &["ws", "hello", "--session", SID],
+            vec![ok(SCREEN), ok(CLEAR), ok("{}"), ok(SCREEN)],
+            0,
+            4,
+        ),
+        // The token from stdin reaches the other server, and the requests
+        // go there.
+        stdin(
+            plain(
+                "another server, token from stdin",
+                &["ws@http://127.0.0.1:{port}", "--read-only", "--token-stdin"],
+                vec![ok(SCREEN)],
+                0,
+                1,
+            ),
+            b"remote-tok-1\n",
+        ),
+        env(
+            plain(
+                "another server, token from the environment",
+                &["ws@http://127.0.0.1:{port}/", "--answer", "2", "--session", SID],
+                vec![ok("{}"), ok(SCREEN)],
+                0,
+                2,
+            ),
+            &[("K2_REMOTE_TOKEN", "remote-tok-2")],
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
+#[test]
+fn talk_drives_forms() {
+    let rig = Rig::new(VERB, "drive");
+    let v = vec![
+        plain(
+            "--scout by the tab bar",
+            &["ws", "--scout", "--session", SID],
+            vec![ok(FORM), ok(FORM), ok("{}"), ok(FORM), ok("{}")],
+            0,
+            5,
+        ),
+        plain(
+            "--scout until the screen settles",
+            &["ws", "--scout", "--agent", "bob"],
+            vec![
+                ok(r#"{"path":7}"#),
+                ok(SESSIONS),
+                ok(SCREEN),
+                ok(SCREEN),
+                ok("{}"),
+                ok(SCREEN),
+                ok("{}"),
+            ],
+            0,
+            7,
+        ),
+        env(
+            plain(
+                "--scout capped",
+                &["ws", "--scout", "--session", SID],
+                vec![
+                    ok(r#"{"lines":[]}"#),
+                    ok(r#"{"lines":[]}"#),
+                    ok("{}"),
+                    ok(r#"{"lines":[]}"#),
+                    ok("{}"),
+                ],
+                0,
+                5,
+            ),
+            &[("K5_TALK_SCOUT_MAX", "2")],
+        ),
+        env(
+            plain(
+                "--answers with a total that differs",
+                &["ws", "--answers", "1, 2,,3,", "--session", SID],
+                vec![
+                    ok(r#"{"lines":["Question 1 of 2"]}"#),
+                    ok("{}"),
+                    ok("{}"),
+                    ok("{}"),
+                    ok("{}"),
+                    ok(SCREEN),
+                ],
+                0,
+                6,
+            ),
+            &[("K2_TALK_SUBMIT_KEY", "9")],
+        ),
+        plain(
+            "--answer",
+            &["ws", "--answer", "2", "--session", SID],
+            vec![ok("{}"), ok(SCREEN)],
+            0,
+            2,
+        ),
+        plain(
+            "--respond yes, the raw second read",
+            &["ws", "--respond", "yes", "--session", SID],
+            vec![ok("{}"), ok("not json"), ok("raw answer\n")],
+            0,
+            3,
+        ),
+        plain(
+            "no live session",
+            &["ws", "--answer", "1", "--agent", "zed"],
+            vec![ok(r#"{"path":"/w/ws"}"#), ok("[]")],
+            1,
+            2,
+        ),
+        plain(
+            "a write refused ends with the closing line",
+            &["ws", "--respond", "n", "--session", SID],
+            vec![Reply::Answer(403, PERMISSION_ASK.into()), ok(SCREEN)],
+            0,
+            2,
+        ),
+        plain(
+            "a write with no answer",
+            &["ws", "--answer", "1", "--session", SID],
+            vec![Reply::Close],
+            1,
+            1,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
+#[test]
+fn talk_read_with_no_answer_ends_in_the_pipe() {
+    let rig = Rig::new(VERB, "pipe");
+    rig.check(&Case {
+        compare: Compare::Bash32PipeReader {
+            stdout: "",
+            stderr: "\n",
+        },
+        ..plain(
+            "no answer to the read",
+            &["ws", "--read-only"],
+            vec![Reply::Close],
+            141,
+            1,
+        )
+    });
+}
+
+#[test]
+fn talk_help_never_acts() {
+    let rig = Rig::new(VERB, "help");
+    for (name, args) in [
+        ("--help", &["--help"][..]),
+        ("-h after the text", &["ws", "hi", "-h"]),
+        ("--help with --answer", &["ws", "--answer", "1", "--help"]),
+        ("-h with --scout", &["ws", "--scout", "-h"]),
+        ("--help with --session", &["ws", "hi", "--session", SID, "--help"]),
+    ] {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..plain(name, args, vec![], 0, 0)
+        });
+    }
+}
+
+/// A case whose send goes with a new key: the key masked on both sides.
+fn masked(rig: &Rig, c: &Case) {
+    let name = c.name;
+    let mask = |text: &str, port: u16| -> String {
+        let mut t = text.replace(&port.to_string(), "{port}");
+        while let Some(at) = t.find("idempotency_key=") {
+            let start = at + "idempotency_key=".len();
+            let end = t[start..]
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-'))
+                .map_or(t.len(), |e| start + e);
+            let key = t[start..end].to_string();
+            assert!(
+                key.len() == 36 && key.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'),
+                "{name}: a new key is a UUID: {t}"
+            );
+            t.replace_range(at..end, "idem=<key>");
+        }
+        t
+    };
+    rig.prepare(Side::Bash, c);
+    let b = rig.run(true, c);
+    assert_eq!(rig.stub_of(Side::Bash).left(), 0, "{name}: bash left answers: {b:?}");
+    let bl: Vec<String> = rig
+        .read(Side::Bash, false, name)
+        .iter()
+        .map(|r| mask(&normalise(r, false, VERB, name), rig.stub_of(Side::Bash).port))
+        .collect();
+    assert_eq!(b.code, Some(c.code), "{name}: bash's exit: {b:?}");
+    assert_eq!(bl.len(), c.requests, "{name}: bash's requests: {bl:#?}");
+    for without in [false, true] {
+        let side = if without { Side::NoPython3 } else { Side::Rust };
+        let (r, rl) = rig.binary(c, without);
+        assert_eq!(rig.stub_of(side).left(), 0, "{name}: left answers: {r:?}");
+        let port = rig.stub_of(side).port;
+        let rl: Vec<String> = rl
+            .iter()
+            .map(|l| mask(&l.replace("{port}", &port.to_string()), port))
+            .collect();
+        assert_eq!(rl, bl, "{name} ({side:?}): the requests");
+        assert_eq!(
+            (r.code, r.signal),
+            (b.code, b.signal),
+            "{name} ({side:?}): the exit\n{r:?}\n{b:?}"
+        );
+        assert_eq!(r.stdout, b.stdout, "{name} ({side:?}): stdout");
+        assert_eq!(r.stderr, b.stderr, "{name} ({side:?}): stderr");
+    }
+}
+
+#[test]
+fn talk_delivers_through_msg() {
+    let rig = Rig::new(VERB, "send");
+    for c in [
+        plain(
+            "read, classify, send",
+            &["ws", "hello", "--from", "me", "--command", "/x", "--wake-timeout", "9"],
+            vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
+            0,
+            4,
+        ),
+        plain(
+            "--no-wake, a classify that is not JSON",
+            &["ws", "hello", "--from", "me", "--no-wake"],
+            vec![ok(SCREEN), ok("nope"), ok(ON), ok(SENT)],
+            0,
+            4,
+        ),
+        plain(
+            "the send not delivered",
+            &["ws", "hello", "--from", "me", "--lines", "5"],
+            vec![
+                ok(SCREEN),
+                ok(r#"{"is_hitl":null,"source":"unavailable"}"#),
+                ok(ON),
+                ok(r#"{"success":false,"reason":"no_agent","hint":"nobody home"}"#),
+            ],
+            2,
+            4,
+        ),
+        stdin(
+            plain(
+                "another server: the send goes there too",
+                &["ws@http://127.0.0.1:{port}", "hi", "--from", "me", "--token-stdin"],
+                vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
+                0,
+                4,
+            ),
+            b"remote-tok-3\n",
+        ),
+    ] {
+        masked(&rig, &c);
+    }
+}
+
+/// A value flag as the last word: bash stops on its own `$2: unbound
+/// variable` line and exits 1; the binary prints one plain line and exits
+/// 2 (K2's D6, `scripts/cli-parity.sh`'s named difference
+/// `edge-usage-exit-2`). Neither sends anything.
+#[test]
+fn talk_value_flag_last_is_the_d6_line() {
+    let rig = Rig::new(VERB, "d6");
+    let cli = k2_client::brand::CLI_NAME;
+    for flag in [
+        "--from",
+        "--command",
+        "--lines",
+        "--agent",
+        "--session",
+        "--token",
+        "--answer",
+        "--respond",
+        "--answers",
+        "--wake-timeout",
+    ] {
+        let args: &'static [&'static str] =
+            Box::leak(vec!["ws", "hi", flag].into_boxed_slice());
+        let c = plain(leak(format!("{flag} last")), args, vec![], 1, 0);
+        let name = c.name;
+        rig.prepare(Side::Bash, &c);
+        let b = rig.run(true, &c);
+        assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
+        assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
+        assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
+        assert!(
+            b.stderr.ends_with(": $2: unbound variable\n"),
+            "{name}: bash's stderr: {b:?}"
+        );
+        assert!(rig.read(Side::Bash, false, name).is_empty(), "{name}: bash sent");
+        let (r, sent) = rig.binary(&c, false);
+        assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
+        assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");
+        assert!(r.stdout.is_empty(), "{name}: {r:?}");
+        assert_eq!(
+            r.stderr,
+            format!("Error: {flag} needs a value (try '{cli} talk --help')\n"),
+            "{name}"
+        );
+    }
+}

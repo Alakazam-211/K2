@@ -45,10 +45,14 @@
 #     sends, with curl and from its embedded python's urlopen alike, with
 #     those two headers (tests/cli/k5_cli_via.sh); the goldens are bash's
 #     bytes. A verb the binary answers itself sends its own request, as
-#     curl would but with `User-Agent: k5/<version>`, then
+#     curl would (or, for a family whose bash path is its embedded
+#     python's urlopen, as urllib would: crates/k5-cli/src/transport/
+#     urllib.rs) but with `User-Agent: k5/<version>`, then
 #     `X-K5-Cli-Version: <version>` and `X-K5-Cli-Via: native`
 #     (crates/k5-cli/src/transport/mod.rs); for those the two lines are
-#     dropped and the User-Agent becomes `curl/<VERSION>`. It is counted,
+#     dropped and the User-Agent becomes `curl/<VERSION>`, or
+#     `Python-urllib/<VERSION>` for a request of urllib's shape (an
+#     `Accept-Encoding: identity` line and no `Accept:` line). It is counted,
 #     not trusted (drop_via): each request in the log sent by curl
 #     (`User-Agent: curl/…`) or by the embedded python
 #     (`User-Agent: Python-urllib/…`, e.g. `k2 project create`) must carry
@@ -215,8 +219,10 @@ sys.stdout.write(t)
 #   * k5/<version> (the binary's own, native): exactly one
 #     `X-K5-Cli-Via: native` and one `X-K5-Cli-Version: <version>`, both
 #     dropped, <version> the CLI's and the User-Agent's; no X-K5-Cli-Noun
-#     line at all. Its `User-Agent: k5/<version>` becomes curl's
-#     `User-Agent: curl/<VERSION>`.
+#     line at all. Its `User-Agent: k5/<version>` becomes the bash
+#     transport's of the same shape: `Python-urllib/<VERSION>` when the
+#     request has `Accept-Encoding: identity` and no `Accept:` line (the
+#     urllib adapter's), else `curl/<VERSION>`.
 #   * anything else: none of these lines.
 # Fails (non-zero, naming the capture and what it found) on anything else,
 # or on such a line before any request. The bites below prove it refuses.
@@ -240,15 +246,21 @@ with open(src, encoding="utf-8", errors="surrogateescape", newline="") as f:
 kept, reqs, stray = [], [], 0
 for line in lines:
     if request.match(line):
-        reqs.append({"by": None, "via": [], "noun": 0, "anynoun": 0, "ver": [], "ua": None})
+        reqs.append({"by": None, "via": [], "noun": 0, "anynoun": 0, "ver": [], "ua": None,
+                     "ua_at": None, "identity": False, "accept": False})
         kept.append(line)
         continue
     r = reqs[-1] if reqs else None
     m = k5_agent.fullmatch(line)
     if r is not None and m:
         r["by"], r["ua"] = "k5", m.group(1)
-        kept.append("> User-Agent: curl/<VERSION>" + m.group(2))
+        r["ua_at"], r["cr"] = len(kept), m.group(2)
+        kept.append(None)
         continue
+    if r is not None and re.fullmatch(r"> Accept-Encoding: identity\r?", line):
+        r["identity"] = True
+    if r is not None and line.startswith("> Accept: "):
+        r["accept"] = True
     if r is not None and bash_agent.match(line):
         r["by"] = "bash"
     if any_noun.match(line) and r is not None:
@@ -283,6 +295,10 @@ if stray or bad:
     sys.stderr.write("  FAIL: %s: %d hand-over line(s) before any request; %d of %d request(s) wrong%s\n" % (
         name, stray, len(bad), len(reqs), "".join("\n    " + b for b in bad)))
     sys.exit(1)
+for r in reqs:
+    if r["ua_at"] is not None:
+        agent = "Python-urllib" if r["identity"] and not r["accept"] else "curl"
+        kept[r["ua_at"]] = "> User-Agent: " + agent + "/<VERSION>" + r["cr"]
 with open(dst, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
     f.write("\n".join(kept))
 ' "$1" "$2" "$3" "$4" "$CLI_VERSION"
@@ -299,6 +315,9 @@ drop_via_bites() {
     printf '%s\n> User-Agent: curl/8.5.0\n> Accept: */*\n> X-K5-Cli-Via: fallthrough\n> X-K5-Cli-Noun: sessions\n> body: \n' "$head" > "$d/good_bash"
     printf '%s\n> User-Agent: curl/<VERSION>\n> Accept: */*\n> body: \n' "$head" > "$d/want_k5"
     printf '%s\n> User-Agent: curl/8.5.0\n> Accept: */*\n> body: \n' "$head" > "$d/want_bash"
+    # The urllib adapter's shape (a family whose bash path is python's urlopen).
+    printf '> POST /cli/project-group/create\n> Accept-Encoding: identity\n> Content-Length: 2\n> Host: 127.0.0.1:1\n%s\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Via: native\n> Connection: close\n> body: {}\n' "$k5ua" "$CLI_VERSION" > "$d/good_k5_urllib"
+    printf '> POST /cli/project-group/create\n> Accept-Encoding: identity\n> Content-Length: 2\n> Host: 127.0.0.1:1\n> User-Agent: Python-urllib/<VERSION>\n> Connection: close\n> body: {}\n' > "$d/want_k5_urllib"
     # (1) a binary request with two Via lines
     printf '%s\n%s\n> Accept: */*\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Via: native\n> X-K5-Cli-Via: native\n> body: \n' "$head" "$k5ua" "$CLI_VERSION" > "$d/bite_two_vias"
     # (2) a curl request marked as the binary's own
@@ -313,7 +332,7 @@ drop_via_bites() {
     # (7) a curl request carrying the binary's X-K5-Cli-Version
     printf '%s\n> User-Agent: curl/8.5.0\n> Accept: */*\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Via: fallthrough\n> X-K5-Cli-Noun: sessions\n> body: \n' "$head" "$CLI_VERSION" > "$d/bite_curl_version"
     local k
-    for k in k5 bash; do
+    for k in k5 k5_urllib bash; do
         if ! drop_via "bite good_$k" "$d/good_$k" "$d/got_$k" sessions || ! cmp -s "$d/got_$k" "$d/want_$k"; then
             echo "FAIL: drop_via refused or changed a well-formed $k request (bites)" >&2
             exit 1
@@ -326,7 +345,7 @@ drop_via_bites() {
         fi
         grep -q "FAIL: bite $k:" "$d/err" || { echo "FAIL: drop_via refused the bite $k without naming it" >&2; cat "$d/err" >&2; exit 1; }
     done
-    echo "drop_via: 2 well-formed requests kept, 7 bites refused"
+    echo "drop_via: 3 well-formed requests kept, 7 bites refused"
 }
 drop_via_bites
 

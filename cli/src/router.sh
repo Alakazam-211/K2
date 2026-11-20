@@ -498,8 +498,10 @@ case "${1:-help}" in
         esac
         ;;
     daemon)
+        # A bare `k2 daemon` is `k2 daemon status` (the default below), as a
+        # bare `k2 daemon survive` is its status. It has one word to shift.
         case "${2:-status}" in
-            status)    shift 2; cmd_daemon_status "$@" ;;
+            status)    shift; [ $# -eq 0 ] || shift; cmd_daemon_status "$@" ;;
             start)     shift 2; cmd_daemon_start "$@" ;;
             stop)      shift 2; cmd_daemon_stop "$@" ;;
             restart)   shift 2; cmd_daemon_restart "$@" ;;

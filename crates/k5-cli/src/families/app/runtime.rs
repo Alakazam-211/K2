@@ -479,7 +479,11 @@ fn run_validate(ctx: &mut Ctx, v: &Validate) -> Answer {
             return Ok(Shown {
                 stdout: o.stdout,
                 stderr: o.stderr,
-                exit: if ok == Exit::Ok { Exit::Ok } else { Exit::Error },
+                exit: if ok == Exit::Ok {
+                    Exit::Ok
+                } else {
+                    Exit::Error
+                },
             });
         }
         if v.dir.is_empty() {
@@ -492,7 +496,11 @@ fn run_validate(ctx: &mut Ctx, v: &Validate) -> Answer {
             return Err(Exit::Usage);
         }
     }
-    let name = if v.dir.is_empty() { v.target.as_str() } else { "" };
+    let name = if v.dir.is_empty() {
+        v.target.as_str()
+    } else {
+        ""
+    };
     code_pass(ctx, name, &v.dir, v.json)
 }
 
@@ -703,11 +711,7 @@ pub fn report_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
             };
             let code = py::dget_or(&e, "code", py::text(""), line + 2)?;
             let msg = py::dget_or(&e, "message", py::text(""), line + 2)?;
-            o.line(&format!(
-                "{word} {}{at}: {}",
-                py::s(&code),
-                py::s(&msg)
-            ));
+            o.line(&format!("{word} {}{at}: {}", py::s(&code), py::s(&msg)));
         }
     }
     let checks = py::join(", ", &py::dget_or(&r, "checks", py::empty_list(), 11)?, 11)?;
@@ -999,7 +1003,10 @@ pub fn status_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         py::s(&devices)
     ));
     let u = dict_of(&v, "updates", 60)?;
-    o.line(&format!("  updates    feed {}", py::s(&dash(&u, "feed", 61)?)));
+    o.line(&format!(
+        "  updates    feed {}",
+        py::s(&dash(&u, "feed", 61)?)
+    ));
     let nx = py::or(py::dget(&v, "next", 62)?, py::empty_list());
     if py::truthy(&nx) {
         o.line("next");
@@ -1047,11 +1054,7 @@ pub fn sdk_add_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         } else {
             "  (already there)"
         };
-        o.line(&format!(
-            "  {} {}{tail}",
-            ljust(&label, w),
-            py::s(&file)
-        ));
+        o.line(&format!("  {} {}{tail}", ljust(&label, w), py::s(&file)));
     }
     let removed = py::or(py::dget(&v, "removed", 8)?, py::empty_list());
     for r in py::iter(&removed, 8)? {
@@ -1069,10 +1072,7 @@ pub fn sdk_add_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         line.push_str(&py::join(", ", &py::idx(&v, "overrides", 13)?, 13)?);
     }
     o.line(&format!("{line})"));
-    o.line(&format!(
-        "Next, in {}:",
-        py::s(&py::idx(&v, "folder", 15)?)
-    ));
+    o.line(&format!("Next, in {}:", py::s(&py::idx(&v, "folder", 15)?)));
     if py::truthy(&py::dget(&v, "install", 16)?) {
         o.line(&py::concat("  ", &py::idx(&v, "install", 17)?, 17)?);
         o.line("  (the peers and npm-registry dependencies of the Sew packages; it also installs the vendored ones)");

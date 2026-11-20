@@ -185,11 +185,21 @@ fn validate_answers_as_the_shell_does() {
                 2,
             ),
             // covers: app validate
-            one(
+            case(
                 "validate a folder --types, Apps off",
                 &["validate", "site", "--types"],
-                APPS_OFF,
+                &[],
+                vec![answer(404, APPS_OFF)],
+                files,
                 2,
+                1,
+            ),
+            // covers: app validate
+            one(
+                "validate a folder: the Apps-off answer as a 200",
+                &["validate", "site", "--types"],
+                APPS_OFF,
+                1,
             ),
             // covers: app validate
             case(
@@ -459,7 +469,11 @@ fn sdk_answers_as_the_shell_does() {
                 1,
             )),
             // covers: app sdk status
-            words("sdk status: --sew is no flag of its", &["sdk", "status", "site", "--sew"], 2),
+            words(
+                "sdk status: --sew is no flag of its",
+                &["sdk", "status", "site", "--sew"],
+                2,
+            ),
             // covers: app sdk status
             words("sdk status: not a folder", &["sdk", "status", "m.json"], 2),
             // covers: app sdk kit
@@ -554,13 +568,7 @@ fn recording_answers_as_the_shell_does() {
             // covers: app recording --json
             one(
                 "recording set --audio-max-days org --json",
-                &[
-                    "recording",
-                    "set",
-                    "acme",
-                    "--audio-max-days=org",
-                    "--json",
-                ],
+                &["recording", "set", "acme", "--audio-max-days=org", "--json"],
                 r#"{"changed":false}"#,
                 0,
             ),
@@ -625,7 +633,11 @@ fn recording_answers_as_the_shell_does() {
                 2,
             ),
             // covers: app recording
-            words("recording set with no change", &["recording", "a", "set"], 2),
+            words(
+                "recording set with no change",
+                &["recording", "a", "set"],
+                2,
+            ),
             // covers: app recording
             words(
                 "recording set: a level",
@@ -675,7 +687,11 @@ fn recording_answers_as_the_shell_does() {
                 2,
             ),
             // covers: app recording
-            words("recording: an unknown flag", &["recording", "a", "--zap"], 2),
+            words(
+                "recording: an unknown flag",
+                &["recording", "a", "--zap"],
+                2,
+            ),
         ],
     );
 }
@@ -745,7 +761,14 @@ fn runtime_help_never_acts() {
     let rig = Rig::new(VERB, "rthelp");
     let rows: [&'static [&'static str]; 8] = [
         &["recording", "acme", "set", "--required", "on", "-h"],
-        &["recording", "--help", "acme", "set", "--start-level", "admin"],
+        &[
+            "recording",
+            "--help",
+            "acme",
+            "set",
+            "--start-level",
+            "admin",
+        ],
         &["room-names", "sales", "hide", "-h"],
         &["room-names", "--help", "sales", "show"],
         &["sdk", "add", "site", "--sew", "-h"],

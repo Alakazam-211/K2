@@ -34,11 +34,23 @@ pub mod usage {
     pub const REQUIRED: &str = "usage: --required on|off";
     pub const SERVER_READ: &str = "usage: --server-read on|off";
     pub const FLAG_TAIL: &str = concat!(" (", cli_name!(), " app recording --help)");
-    pub const ONE_APP: &str = concat!("usage: one App only (", cli_name!(), " app recording --help)");
-    pub const TO_CHANGE: &str = concat!("usage: to change a setting: ", cli_name!(), " app recording ");
-    pub const TO_CHANGE_TAIL: &str =
-        concat!(" set --start-level \u{2026} (", cli_name!(), " app recording --help)");
-    pub const NAME_A_CHANGE: &str = concat!("usage: name a change: ", cli_name!(), " app recording ");
+    pub const ONE_APP: &str = concat!(
+        "usage: one App only (",
+        cli_name!(),
+        " app recording --help)"
+    );
+    pub const TO_CHANGE: &str = concat!(
+        "usage: to change a setting: ",
+        cli_name!(),
+        " app recording "
+    );
+    pub const TO_CHANGE_TAIL: &str = concat!(
+        " set --start-level \u{2026} (",
+        cli_name!(),
+        " app recording --help)"
+    );
+    pub const NAME_A_CHANGE: &str =
+        concat!("usage: name a change: ", cli_name!(), " app recording ");
     pub const NAME_A_CHANGE_TAIL: &str = " set [--start-level L] [--audio-max-days N|org] [--required on|off] [--server-read on|off]";
     pub const LEVELS: &str = "usage: --start-level takes none, admin, moderator or member";
     pub const DAYS_RANGE: &str =
@@ -173,7 +185,10 @@ fn recording(words: &[&str]) -> Result<Ask, Stop> {
             _ if w.starts_with("--required=") => required = after_eq(w),
             _ if w.starts_with("--server-read=") => server_read = after_eq(w),
             _ if w.starts_with('-') => {
-                return Err(Stop::usage(format!("Unknown flag: {w}{}", usage::FLAG_TAIL)))
+                return Err(Stop::usage(format!(
+                    "Unknown flag: {w}{}",
+                    usage::FLAG_TAIL
+                )))
             }
             _ => {
                 if !app.is_empty() {
@@ -228,8 +243,7 @@ fn recording(words: &[&str]) -> Result<Ask, Stop> {
         }
     }
     let req_j = switch_json(&required).ok_or_else(|| Stop::usage(usage::REQUIRED_ON_OFF))?;
-    let srv_j =
-        switch_json(&server_read).ok_or_else(|| Stop::usage(usage::SERVER_READ_ON_OFF))?;
+    let srv_j = switch_json(&server_read).ok_or_else(|| Stop::usage(usage::SERVER_READ_ON_OFF))?;
     let body = Cj::new()
         .s("app", &app)
         .s("startLevel", &level)

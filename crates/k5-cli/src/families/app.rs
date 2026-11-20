@@ -413,12 +413,8 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
             Some(walls::parse(v, rest)?.map(Ask::Walls))
         }
         "audit" => Some(traffic::parse(rest)?.map(Ask::Traffic)),
-        v if runtime::VERBS.contains(&v) => {
-            Some(runtime::parse(v, rest)?.map(Ask::Runtime))
-        }
-        v if recording::VERBS.contains(&v) => {
-            Some(recording::parse(v, rest)?.map(Ask::Recording))
-        }
+        v if runtime::VERBS.contains(&v) => Some(runtime::parse(v, rest)?.map(Ask::Runtime)),
+        v if recording::VERBS.contains(&v) => Some(recording::parse(v, rest)?.map(Ask::Recording)),
         v if approve::VERBS.contains(&v) => Some(approve::parse(v, rest)?.map(Ask::Approve)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),

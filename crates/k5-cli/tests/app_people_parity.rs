@@ -18,7 +18,8 @@ use common::parity::*;
 
 const VERB: &str = "app";
 const ACCESS: &str = r#"{"name":"staff","roomAccess":[{"handle":"sales","caps":["thread:read"],"folders":{"read":["docs/"],"write":["in/"],"upload":["drop/"],"download":["a.pdf"],"uploadDir":"in/x","hide":[".env"]}},{"handle":"ops","folders":{}}]}"#;
-const ROLES: &str = r#"{"roles":[{"name":"staff","roomHandles":["sales","ops"]},{"name":"empty"}]}"#;
+const ROLES: &str =
+    r#"{"roles":[{"name":"staff","roomHandles":["sales","ops"]},{"name":"empty"}]}"#;
 const WAITING: &str = r#"{"username":"bob","generatedPassword":"pw-1","waitingForReset":{"rooms":["sales","ops"],"ask":"ask them"}}"#;
 
 fn traceback(c: Case) -> Case {
@@ -106,14 +107,24 @@ fn app_user_reads_and_writes() {
             // covers: app user sessions --json
             one(
                 "user sessions --revoke-all --json",
-                &["user", "sessions", "bob", "--app", "a", "--revoke-all", "--json"],
+                &[
+                    "user",
+                    "sessions",
+                    "bob",
+                    "--app",
+                    "a",
+                    "--revoke-all",
+                    "--json",
+                ],
                 r#"{"ended":3}"#,
                 0,
             ),
             // covers: app user invite
             one(
                 "user invite sent",
-                &["user", "invite", "bob", "--app", "a", "--from", "me@x", "--role", "r"],
+                &[
+                    "user", "invite", "bob", "--app", "a", "--from", "me@x", "--role", "r",
+                ],
                 r#"{"delivered":"sent","sentTo":"b@x","from":"me@x","ttlSecs":259200}"#,
                 0,
             ),
@@ -434,7 +445,15 @@ fn app_people_help_never_acts() {
         &["user", "invite", "bob", "--app", "-h"],
         &["user", "reset", "bob", "--help"],
         &["user", "image", "bob", "--clear", "-h"],
-        &["user", "sessions", "bob", "--app", "a", "--revoke-all", "--help"],
+        &[
+            "user",
+            "sessions",
+            "bob",
+            "--app",
+            "a",
+            "--revoke-all",
+            "--help",
+        ],
         &["user", "unlock", "-h", "bob"],
         &["user", "remove", "bob", "--help"],
         &["user", "role", "bob", "staff", "-h"],

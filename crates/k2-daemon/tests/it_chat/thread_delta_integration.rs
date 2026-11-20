@@ -167,8 +167,8 @@ async fn thread_after_seq_pages_forward_and_carries_card_changes() {
 
     // Cards: the reader holds 1..=7 (both cards pending).
     // The agent's cards (its passport): it may withdraw only its own.
-    let a = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": "Ship A?", "options": "Ship,Wait" })).await;
-    let b = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": "Ship B?", "options": "Ship,Wait" })).await;
+    let a = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": "Ship A?", "options": "Ship;Wait" })).await;
+    let b = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": "Ship B?", "options": "Ship;Wait" })).await;
     let (a_id, b_id) = (a["id"].as_str().expect("a id").to_string(), b["id"].as_str().expect("b id").to_string());
     assert_eq!((a["seq"].as_i64(), b["seq"].as_i64()), (Some(6), Some(7)), "{a} {b}");
     let v = ok_get(port, "/cli/thread", OWNER, &format!("addr={h}&after_seq=5")).await;

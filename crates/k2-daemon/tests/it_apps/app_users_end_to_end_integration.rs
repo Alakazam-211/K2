@@ -677,7 +677,7 @@ async fn a_card_answer_says_who_set_up_the_login() {
     let s = session(port, &u, &b.shop).await;
 
     pin_chat(&b.sales);
-    let r = post(port, "/cli/thread/ask", &b.agent, json!({ "addr": b.sales.handle, "prompt": "Ship it?", "options": "Go,Stop", "from": b.sales.handle })).await;
+    let r = post(port, "/cli/thread/ask", &b.agent, json!({ "addr": b.sales.handle, "prompt": "Ship it?", "options": "Go;Stop", "from": b.sales.handle })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let id = r.json()["id"].as_str().expect("card id").to_string();
     let r = post(port, "/cli/thread/answer", &s, json!({ "addr": b.sales.handle, "id": id, "answer": "Go" })).await;

@@ -20,7 +20,7 @@ fn ask_as(params: &HashMap<String, String>, handle: &str, from: &str) -> String 
     let r = post_json(
         "/cli/thread/ask",
         params,
-        serde_json::json!({ "addr": handle, "prompt": "Ship it?", "options": "Go,Stop", "from": from }),
+        serde_json::json!({ "addr": handle, "prompt": "Ship it?", "options": "Go;Stop", "from": from }),
     );
     assert_eq!(r.status, "200 OK", "{}", r.body);
     json_body(&r)["id"].as_str().expect("id").to_string()

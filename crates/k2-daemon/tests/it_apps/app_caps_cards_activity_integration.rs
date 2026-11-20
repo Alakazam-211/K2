@@ -73,7 +73,7 @@ async fn an_agent_cant_answer_its_own_choice_card() {
     let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
     let (ws, _) = pinned_ws(&env, &format!("cpo{tag}"));
     let agent = passport(&ws);
-    let ask = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": ws.handle, "prompt": "Ship it?", "options": "Go,Stop", "from": ws.handle })).await;
+    let ask = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": ws.handle, "prompt": "Ship it?", "options": "Go;Stop", "from": ws.handle })).await;
     let id = ask["id"].as_str().expect("card id").to_string();
     let r = post(port, "/cli/thread/answer", &agent, json!({ "addr": ws.handle, "id": id, "answer": "Go" })).await;
     assert_eq!(r.status, 403, "{}", r.body);
@@ -94,7 +94,7 @@ async fn the_switch_off_is_the_old_path() {
     let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
     let (ws, _) = pinned_ws(&env, &format!("cpf{tag}"));
     let agent = passport(&ws);
-    let ask = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": ws.handle, "prompt": "Ship it?", "options": "Go,Stop", "from": ws.handle })).await;
+    let ask = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": ws.handle, "prompt": "Ship it?", "options": "Go;Stop", "from": ws.handle })).await;
     let id = ask["id"].as_str().expect("card id").to_string();
     let r = post(port, "/cli/thread/answer", &agent, json!({ "addr": ws.handle, "id": id, "answer": "Go" })).await;
     assert_eq!(r.status, 200, "K2_CARD_PERSON_ONLY=off: {}", r.body);
@@ -198,7 +198,7 @@ async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
         let agent = agent.clone();
         let h = ws.handle.clone();
         async move {
-            let v = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": prompt, "options": "Go,Stop", "from": h })).await;
+            let v = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": prompt, "options": "Go;Stop", "from": h })).await;
             v["id"].as_str().expect("card id").to_string()
         }
     };

@@ -1487,7 +1487,7 @@ async fn publish_run_skin_gateway_thread_answer_not_ask_or_fs() {
             "POST",
             &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
             Some(&format!(
-                r#"{{"addr":"{handle}","prompt":"Ship it?","options":"Go,Stop"}}"#
+                r#"{{"addr":"{handle}","prompt":"Ship it?","options":"Go;Stop"}}"#
             )),
         );
         assert_eq!(ask.status, 200, "owner ask; {}", ask.body);
@@ -1526,7 +1526,7 @@ async fn publish_run_skin_gateway_thread_answer_not_ask_or_fs() {
             "POST",
             "/cli/thread/ask",
             Some(&format!(
-                r#"{{"addr":"{handle}","prompt":"nope","options":"A,B"}}"#
+                r#"{{"addr":"{handle}","prompt":"nope","options":"A;B"}}"#
             )),
             &cookie,
         );
@@ -1608,7 +1608,7 @@ async fn skin_daemon_thread_answer_void_caps_and_rooms() {
             "POST",
             &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
             Some(&format!(
-                r#"{{"addr":"{handle}","prompt":"Ship it?","options":"Go,Stop"}}"#
+                r#"{{"addr":"{handle}","prompt":"Ship it?","options":"Go;Stop"}}"#
             )),
         );
         assert_eq!(ask.status, 200, "{}", ask.body);
@@ -1629,7 +1629,7 @@ async fn skin_daemon_thread_answer_void_caps_and_rooms() {
             "POST",
             &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
             Some(&format!(
-                r#"{{"addr":"{handle}","prompt":"Void?","options":"Go,Stop"}}"#
+                r#"{{"addr":"{handle}","prompt":"Void?","options":"Go;Stop"}}"#
             )),
         );
         assert_eq!(ask2.status, 200, "{}", ask2.body);
@@ -1672,7 +1672,7 @@ async fn skin_daemon_thread_answer_void_caps_and_rooms() {
             "POST",
             &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
             Some(&format!(
-                r#"{{"addr":"{other}","prompt":"Other?","options":"A,B"}}"#
+                r#"{{"addr":"{other}","prompt":"Other?","options":"A;B"}}"#
             )),
         );
         assert_eq!(other_ask.status, 200, "{}", other_ask.body);
@@ -2129,7 +2129,7 @@ async fn publish_run_skin_gateway_files_rooms_jail_and_ws() {
             "POST",
             "/cli/thread/ask",
             Some(&format!(
-                r#"{{"addr":"{anna}","prompt":"nope","options":"A,B"}}"#
+                r#"{{"addr":"{anna}","prompt":"nope","options":"A;B"}}"#
             )),
             &cookie,
         );
@@ -4373,7 +4373,7 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
             dport,
             "POST",
             &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
-            Some(&format!(r#"{{"addr":"{docs}","prompt":"Ship it?","options":"Go,Stop"}}"#)),
+            Some(&format!(r#"{{"addr":"{docs}","prompt":"Ship it?","options":"Go;Stop"}}"#)),
         );
         assert_eq!(ask.status, 200, "owner ask; {}", ask.body);
         let card = json(&ask.body)["id"].as_str().expect("card id").to_string();

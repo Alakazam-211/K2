@@ -673,7 +673,7 @@ fn only_the_person_dismisses_a_keep_card_and_the_daemon_replace_still_works() {
     assert_eq!(card(&conv, &id).status, "voided", "the daemon's replace still voids it");
     assert_eq!(card(&conv, &newer).status, "pending");
     // An ordinary choice card (no action) is unchanged: its agent dismisses it.
-    let ask = json!({"addr": "w-keepv-mgr", "prompt": "Ship it?", "options": "Go,Stop", "from": "w-keepv-mgr"}).to_string();
+    let ask = json!({"addr": "w-keepv-mgr", "prompt": "Ship it?", "options": "Go;Stop", "from": "w-keepv-mgr"}).to_string();
     let r = crate::overlay_routes::dispatch_post("/cli/thread/ask", &passport("w-keepv-mgr"), ask.as_bytes());
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let plain: J = serde_json::from_str(&r.body).expect("json");

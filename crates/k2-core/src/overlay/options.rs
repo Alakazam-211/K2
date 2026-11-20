@@ -1,6 +1,8 @@
-//! `--options` comma split. `\,` is a literal comma (copy tickets).
-//! A choice ask's list also keeps commas inside balanced (), [], {} and
-//! "…" together ([`split_ask_options`]).
+//! A choice card's `--options` list arrives as one string and splits on
+//! `;` only ([`split_ask_options`]); a comma is part of a label. The
+//! repeatable `--option` form arrives as a JSON array and never splits.
+//! [`split_options_csv`] is the comma list of a permission request's values
+//! (`nodes=a,b`), not a card's options.
 //! Plus the size caps on a choice ask (prd-agent-settings-cards-v1 §6.10).
 
 /// Most options one choice card offers (§6.10).
@@ -35,7 +37,8 @@ pub fn check_ask_caps(prompt: &str, options: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Split `a,b,c` on unescaped commas. `\,` → `,`. Trim; skip empty.
+/// A permission request's list value (`nodes=a,b`): split on unescaped
+/// commas, `\,` is a literal comma. Trim; skip empty. Never a card's options.
 pub fn split_options_csv(raw: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -63,158 +66,42 @@ pub fn split_options_csv(raw: &str) -> Vec<String> {
     out
 }
 
-/// A choice ask's `--options` list, split, plus a hint when a splitting
-/// comma reads like prose.
+/// The one line the CLI prints, and the ask's answer carries as `hint`,
+/// when an `--options` value has a comma and no `;`: it became one option.
+pub const OPTIONS_ONE_OPTION_NOTE: &str =
+    "--options splits on ';'; this became one option. Use ';' between options, or repeat --option";
+
+/// A choice ask's `--options` list, split, plus the note for a value that
+/// has commas and no `;`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskOptions {
     pub options: Vec<String>,
-    /// One line for the asker: a comma that split the list is followed by
-    /// a space and a lowercase letter or digit (`Yes, node-2 …`), so the
-    /// two halves may have been one option. The list still splits there.
+    /// [`OPTIONS_ONE_OPTION_NOTE`] when the value has a comma and no `;`
+    /// (it stayed one option); else None.
     pub hint: Option<String>,
 }
 
-/// The closer for an opening bracket or double quote.
-fn closer_of(c: char) -> Option<char> {
-    match c {
-        '(' => Some(')'),
-        '[' => Some(']'),
-        '{' => Some('}'),
-        '"' => Some('"'),
-        '\u{201C}' => Some('\u{201D}'),
-        _ => None,
-    }
-}
-
-fn is_quote_closer(c: char) -> bool {
-    c == '"' || c == '\u{201D}'
-}
-
-/// True when every (), [], {} and double-quoted span in `raw` opens and
-/// closes in order. `\,` is skipped; an apostrophe is never a quote.
-fn brackets_balance(raw: &str) -> bool {
-    let mut stack: Vec<char> = Vec::new();
-    let mut chars = raw.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\\' && chars.peek() == Some(&',') {
-            chars.next();
-            continue;
-        }
-        if let Some(&want) = stack.last() {
-            if is_quote_closer(want) {
-                if c == want {
-                    stack.pop();
-                }
-                continue;
-            }
-        }
-        if let Some(close) = closer_of(c) {
-            stack.push(close);
-        } else if matches!(c, ')' | ']' | '}' | '\u{201D}') && stack.pop() != Some(c) {
-            return false;
-        }
-    }
-    stack.is_empty()
-}
-
-/// Shorten one option for the hint: a parenthetical becomes `(…)`, and
-/// the label stops at 32 characters.
-fn hint_label(label: &str) -> String {
-    let short = match label.find(" (") {
-        Some(i) => format!("{} (…)", &label[..i]),
-        None => label.to_string(),
-    };
-    if short.chars().count() > 32 {
-        format!("{}…", short.chars().take(31).collect::<String>())
-    } else {
-        short
-    }
-}
-
-/// Split a choice ask's `--options` list (the CLI sends it as typed).
-///
-/// - A comma splits the list unless it is inside balanced (), [], {} or
-///   double quotes (straight or curly). `\,` is always a literal comma.
-/// - When the list's brackets or quotes don't balance, every unescaped
-///   comma splits (the plain rule), so a stray `(` never swallows the rest.
-/// - A splitting comma followed by a space and then a lowercase letter or
-///   a digit reads like prose (`Yes, node-2 …`): the list still splits
-///   there, and [`AskOptions::hint`] says to pass each label with `--option`.
-///
-/// Labels are trimmed; empty ones are skipped.
+/// Split a choice ask's `--options` value on `;` only. Labels are
+/// trimmed; empty ones are skipped. A comma never splits: a value with
+/// commas and no `;` is one option, and [`AskOptions::hint`] says so.
 pub fn split_ask_options(raw: &str) -> AskOptions {
-    let nest = brackets_balance(raw);
-    let chars: Vec<char> = raw.chars().collect();
-    let mut out: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut stack: Vec<char> = Vec::new();
-    // The first prose-like split: (the option before it, index of the one after).
-    let mut prose: Option<(String, usize)> = None;
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        i += 1;
-        if c == '\\' && chars.get(i) == Some(&',') {
-            i += 1;
-            cur.push(',');
-            continue;
-        }
-        if nest {
-            if stack.last().is_some_and(|w| is_quote_closer(*w)) {
-                if stack.last() == Some(&c) {
-                    stack.pop();
-                }
-                cur.push(c);
-                continue;
-            }
-            if let Some(close) = closer_of(c) {
-                stack.push(close);
-            } else if matches!(c, ')' | ']' | '}') {
-                stack.pop();
-            }
-        }
-        if c == ',' && stack.is_empty() {
-            let t = cur.trim().to_string();
-            cur.clear();
-            if t.is_empty() {
-                continue;
-            }
-            out.push(t.clone());
-            if prose.is_none() {
-                let mut j = i;
-                while chars.get(j) == Some(&' ') {
-                    j += 1;
-                }
-                if j > i && chars.get(j).is_some_and(|n| n.is_lowercase() || n.is_ascii_digit()) {
-                    prose = Some((t, out.len()));
-                }
-            }
-            continue;
-        }
-        cur.push(c);
-    }
-    let t = cur.trim();
-    if !t.is_empty() {
-        out.push(t.to_string());
-    }
-    let hint = prose.and_then(|(before, next)| {
-        out.get(next).map(|after| {
-            format!(
-                "an option looks like it continues after a comma (\"{}\" / \"{}\"); to keep commas inside an option, pass each one with --option \"…\"",
-                hint_label(&before),
-                hint_label(after)
-            )
-        })
-    });
-    AskOptions { options: out, hint }
+    let options: Vec<String> = raw
+        .split(';')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect();
+    let hint = (raw.contains(',') && !raw.contains(';')).then(|| OPTIONS_ONE_OPTION_NOTE.to_string());
+    AskOptions { options, hint }
 }
 
-/// JSON array, else a choice ask's comma list ([`split_ask_options`]).
+/// JSON array, else a choice ask's `;` list ([`split_ask_options`]).
 pub fn parse_options_value(raw: &str) -> Result<Vec<String>, String> {
     parse_ask_options(raw).map(|a| a.options)
 }
 
-/// [`parse_options_value`] plus the prose hint. A JSON array never hints.
+/// [`parse_options_value`] plus the one-option note. A JSON array never
+/// has one.
 pub fn parse_ask_options(raw: &str) -> Result<AskOptions, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -259,52 +146,35 @@ mod tests {
     }
 
     #[test]
-    fn ask_options_keep_commas_inside_brackets_and_quotes() {
-        let a = split_ask_options(r#"Go (fast, risky),Hold [until Monday, maybe],"Ship, then tell",Stop"#);
-        assert_eq!(a.options, vec!["Go (fast, risky)", "Hold [until Monday, maybe]", r#""Ship, then tell""#, "Stop"]);
+    fn ask_options_split_on_semicolons_only() {
+        let a = split_ask_options("No, the forward clean-up is enough; Yes, rewrite the history too");
+        assert_eq!(a.options, vec!["No, the forward clean-up is enough", "Yes, rewrite the history too"]);
         assert_eq!(a.hint, None);
-        let curly = split_ask_options("\u{201C}Yes, now\u{201D},No");
-        assert_eq!(curly.options, vec!["\u{201C}Yes, now\u{201D}", "No"]);
-        // An apostrophe is not a quote.
-        assert_eq!(split_ask_options("Don't,Do").options, vec!["Don't", "Do"]);
+        assert_eq!(split_ask_options("a; b").options, vec!["a", "b"]);
+        assert_eq!(split_ask_options("  Go ; Stop  ;;").options, vec!["Go", "Stop"]);
+        // No comma and no `;`: one option, no note.
+        let one = split_ask_options("Done");
+        assert_eq!(one.options, vec!["Done"]);
+        assert_eq!(one.hint, None);
     }
 
     #[test]
-    fn ask_options_plain_list_is_unchanged() {
-        let a = split_ask_options("a,b,c");
-        assert_eq!(a.options, vec!["a", "b", "c"]);
-        assert_eq!(a.hint, None);
-        // Capitalised labels after ", " read as a list, not prose.
-        let b = split_ask_options("Go, Stop, Wait");
-        assert_eq!(b.options, vec!["Go", "Stop", "Wait"]);
-        assert_eq!(b.hint, None);
-        // `\,` stays a literal comma.
-        assert_eq!(split_ask_options(r"Local 8B (slow\, private),Hosted").options, vec!["Local 8B (slow, private)", "Hosted"]);
-        assert_eq!(split_ask_options("  Go , Stop  ,,").options, vec!["Go", "Stop"]);
-    }
-
-    #[test]
-    fn ask_options_prose_comma_splits_and_hints() {
-        let a = split_ask_options("Yes, node-2 (an M1; Sew keeps the M4 and node-3),No, wait");
-        assert_eq!(a.options, vec!["Yes", "node-2 (an M1; Sew keeps the M4 and node-3)", "No", "wait"]);
+    fn ask_options_with_commas_and_no_semicolon_stay_one_option_with_the_note() {
+        let a = split_ask_options("No, the forward clean-up is enough, Yes, rewrite the history too");
+        assert_eq!(a.options, vec!["No, the forward clean-up is enough, Yes, rewrite the history too"]);
+        assert_eq!(a.hint.as_deref(), Some(OPTIONS_ONE_OPTION_NOTE));
         assert_eq!(
-            a.hint.as_deref(),
-            Some(r#"an option looks like it continues after a comma ("Yes" / "node-2 (…)"); to keep commas inside an option, pass each one with --option "…""#)
+            OPTIONS_ONE_OPTION_NOTE,
+            "--options splits on ';'; this became one option. Use ';' between options, or repeat --option"
         );
-        // A digit after ", " reads like prose too; no space does not.
-        assert!(split_ask_options("Ship, 2 boxes,Hold").hint.is_some());
-        assert_eq!(split_ask_options("yes,no").hint, None);
-        // A JSON array (the CLI's --option form) never hints.
+        // `\,` is not an escape any more: the backslash stays.
+        assert_eq!(split_ask_options(r"a\,b").options, vec![r"a\,b"]);
+        // A JSON array (the CLI's --option form) never splits and never has the note.
         let j = parse_ask_options(r#"["Yes, node-2 (an M1)","No"]"#).expect("json");
         assert_eq!(j.options, vec!["Yes, node-2 (an M1)", "No"]);
         assert_eq!(j.hint, None);
-    }
-
-    #[test]
-    fn ask_options_unbalanced_brackets_split_on_every_comma() {
-        assert_eq!(split_ask_options("Go (fast, risky,Stop").options, vec!["Go (fast", "risky", "Stop"]);
-        assert_eq!(split_ask_options("Go) now, later,Stop").options, vec!["Go) now", "later", "Stop"]);
-        assert_eq!(split_ask_options(r#""Go, now,Stop"#).options, vec![r#""Go"#, "now", "Stop"]);
+        // Only `;` and spaces: refused as empty.
+        assert!(parse_ask_options(" ; ;").is_err());
     }
 
     #[test]

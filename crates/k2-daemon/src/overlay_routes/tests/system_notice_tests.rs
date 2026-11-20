@@ -148,7 +148,7 @@ fn nobody_but_k2_posts_a_system_notice() {
         let guest = with_request_skin(Some(pass), || dispatch_post("/cli/thread/post", &HashMap::new(), body.to_string().as_bytes()));
         assert_error_code(&guest, "400 Bad Request", "system_notice_forbidden");
         // The other write doors refuse it the same way.
-        let ask = with(serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship,Wait" }), key);
+        let ask = with(serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship;Wait" }), key);
         assert_error_code(&post_json("/cli/thread/ask", &passport_params(&project_id, &handle), ask), "400 Bad Request", "system_notice_forbidden");
         let as_query = params_of(&[(key, "{\"kind\":\"info\",\"code\":\"x\"}")]);
         let q = post_json("/cli/thread/post", &as_query, serde_json::json!({ "addr": handle, "text": "hi" }));

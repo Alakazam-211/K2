@@ -17,7 +17,7 @@ fn ask(params: &HashMap<String, String>, handle: &str, prompt: &str, key: &str) 
     post_json(
         "/cli/thread/ask",
         params,
-        serde_json::json!({ "addr": handle, "prompt": prompt, "options": "Ship,Wait", "from": handle, "idempotency_key": key }),
+        serde_json::json!({ "addr": handle, "prompt": prompt, "options": "Ship;Wait", "from": handle, "idempotency_key": key }),
     )
 }
 

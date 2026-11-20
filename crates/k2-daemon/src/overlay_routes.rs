@@ -2252,7 +2252,7 @@ fn handle_ask(params: &HashMap<String, String>, session_author: &str) -> CliResp
                 "conversation_id": resolved.conversation_id,
                 "addr": resolved.addr,
             });
-            // A prose-like `--options` comma split anyway; the CLI prints this.
+            // An `--options` value with commas and no `;` stayed one option.
             if let Some(hint) = options_hint { body["hint"] = serde_json::Value::String(hint); }
             CliResponse::ok_json(with_moved_from(body, &resolved))
         }

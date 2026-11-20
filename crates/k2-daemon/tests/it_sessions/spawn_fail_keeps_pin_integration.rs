@@ -127,7 +127,7 @@ async fn failed_wakes_keep_the_thread(env: &Env, label: &str, expect_spawn_faile
     for i in 0..3 {
         ok_post(port, "/cli/thread/post", &agent, json!({ "addr": ws.handle, "text": format!("line {i}") })).await;
     }
-    let card = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": ws.handle, "prompt": "Ship it?", "options": "Ship,Wait" })).await;
+    let card = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": ws.handle, "prompt": "Ship it?", "options": "Ship;Wait" })).await;
     assert!(card["id"].is_string(), "card id: {card}");
     let before = ok_get(port, "/cli/thread", OWNER, &format!("addr={}&limit=0", ws.handle)).await;
     assert_eq!(before["conversation_id"], conv.as_str(), "{before}");

@@ -351,7 +351,7 @@ async fn every_thread_write_reaches_every_live_view() {
 
             // 5. Cards: ask → answer, secret → void.
             let ask = post_as(port, OWNER_TOKEN, "/cli/thread/ask", serde_json::json!({
-                "addr": sales, "prompt": "Ship?", "options": "Ship,Wait", "from": sales
+                "addr": sales, "prompt": "Ship?", "options": "Ship;Wait", "from": sales
             }));
             let ask_id = ask["id"].as_str().expect("id").to_string();
             for (ws, who) in [(&mut a, "window A"), (&mut b, "window B")] {
@@ -394,7 +394,7 @@ async fn every_thread_write_reaches_every_live_view() {
             //    a card first). Only the prose is a frame; the later tap
             //    is the card's frame, on every window.
             let ask2 = post_as(port, OWNER_TOKEN, "/cli/thread/ask", serde_json::json!({
-                "addr": sales, "prompt": "Color?", "options": "Red,Blue", "from": sales
+                "addr": sales, "prompt": "Color?", "options": "Red;Blue", "from": sales
             }));
             let ask2_id = ask2["id"].as_str().expect("id").to_string();
             frame_for(&mut a, &ask2_id, "ask2 on window A").await;

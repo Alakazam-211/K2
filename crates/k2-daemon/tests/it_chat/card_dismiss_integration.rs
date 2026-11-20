@@ -61,7 +61,7 @@ async fn dismiss_and_withdraw_are_daemon_states_read_headless() {
     let ask = |prompt: &'static str| {
         let (h, agent) = (h.clone(), agent.clone());
         async move {
-            let r = post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": prompt, "options": "Ship,Wait", "from": h })).await;
+            let r = post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": prompt, "options": "Ship;Wait", "from": h })).await;
             assert_eq!(r.status, 200, "ask: {}", r.body);
             r.json()["id"].as_str().expect("card id").to_string()
         }

@@ -141,7 +141,7 @@ async fn t2_1_thread_latest_previews_errors_limits_and_refusals() {
         let long = format!("Pushed   the fix.\n\nDetails: {}", "word ".repeat(80));
         post(port, "/cli/thread/post", serde_json::json!({ "addr": h1, "text": "older message" }));
         post(port, "/cli/thread/post", serde_json::json!({ "addr": h1, "text": long }));
-        post(port, "/cli/thread/ask", serde_json::json!({ "addr": h2, "prompt": "Want me to ship it?", "options": "Ship,Wait" }));
+        post(port, "/cli/thread/ask", serde_json::json!({ "addr": h2, "prompt": "Want me to ship it?", "options": "Ship;Wait" }));
 
         let r = http(port, "GET", &format!("/cli/thread/latest?token={OWNER_TOKEN}&addrs={h1},{h2},nosuch{tag},{h3}"), None);
         assert_eq!(r.status, 200, "{}", r.body);

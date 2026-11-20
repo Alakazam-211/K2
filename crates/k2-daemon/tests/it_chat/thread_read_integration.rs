@@ -426,7 +426,7 @@ async fn waiting_mute_and_project_chats_through_the_routes() {
         let (_ws, h, seeded) = seed_thread("tr2");
         let conv = warm_up(port, &h, &seeded);
         agent_post(port, &h, "context");
-        let card = ok(port, "POST", &format!("/cli/thread/ask?token={OWNER_TOKEN}"), Some(serde_json::json!({ "addr": h, "prompt": "Ship it?", "options": "Ship,Wait" })));
+        let card = ok(port, "POST", &format!("/cli/thread/ask?token={OWNER_TOKEN}"), Some(serde_json::json!({ "addr": h, "prompt": "Ship it?", "options": "Ship;Wait" })));
         let card_id = card["id"].as_str().expect("card id").to_string();
 
         let o = unread(port, OWNER_TOKEN);

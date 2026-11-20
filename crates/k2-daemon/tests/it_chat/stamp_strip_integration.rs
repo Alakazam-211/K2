@@ -52,7 +52,7 @@ async fn a_member_sending_the_server_stamps_is_still_a_member() {
     let r = post_q(
         d.port,
         format!("/cli/thread/ask?token={tok}&{stamp}&from=owner"),
-        json!({ "addr": a.handle, "prompt": "pick one", "options": "yes,no" }),
+        json!({ "addr": a.handle, "prompt": "pick one", "options": "yes;no" }),
     )
     .await;
     assert_eq!(r.status, 200, "{}", r.body);

@@ -75,7 +75,7 @@ fn a_persons_cards_are_theirs_never_the_agents() {
     let ask = dispatch_post_as(
         "/cli/thread/ask",
         &HashMap::new(),
-        serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship,Wait", "from": handle }).to_string().as_bytes(),
+        serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship;Wait", "from": handle }).to_string().as_bytes(),
         crate::session_author::OWNER_TOKEN,
     );
     let doc = stored(&handle, &id_of(&ask));
@@ -85,7 +85,7 @@ fn a_persons_cards_are_theirs_never_the_agents() {
     let ask = dispatch_post_as(
         "/cli/thread/ask",
         &HashMap::new(),
-        serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship,Wait", "from": handle }).to_string().as_bytes(),
+        serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship;Wait", "from": handle }).to_string().as_bytes(),
         "mallory",
     );
     let doc = stored(&handle, &id_of(&ask));
@@ -148,7 +148,7 @@ fn an_agents_posts_and_cards_carry_the_agent_author() {
     let ask = post_json(
         "/cli/thread/ask",
         &passport_params(&project_id, &handle),
-        serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship,Wait", "from": "mallory" }),
+        serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Ship;Wait", "from": "mallory" }),
     );
     let doc = stored(&handle, &id_of(&ask));
     assert_eq!(doc["author"], agent, "{doc}");

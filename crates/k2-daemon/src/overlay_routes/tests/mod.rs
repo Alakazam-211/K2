@@ -275,7 +275,7 @@ fn passport_answers_a_choice_card_only_with_the_switch_off() {
         serde_json::json!({
             "addr": handle,
             "prompt": "Ship it?",
-            "options": "Go,Stop",
+            "options": "Go;Stop",
             "from": "k2",
         }),
     );
@@ -1045,7 +1045,7 @@ fn an_unmarked_post_is_unchanged_by_the_widget_check() {
 #[test]
 fn a_widget_card_answer_is_checked_and_never_answers_a_secret() {
     let g = WidgetGarden::new(&["thread:read"]);
-    let card = ask_card(&g.handle, "Go,Stop");
+    let card = ask_card(&g.handle, "Go;Stop");
     let answer = |origin: serde_json::Value, extra: serde_json::Value| {
         let mut body = serde_json::json!({ "addr": g.handle, "id": card, "origin": origin });
         for (k, v) in extra.as_object().expect("extra").iter() {
@@ -1836,7 +1836,7 @@ fn ask_returns_immediately_pending_then_tap_injects() {
         serde_json::json!({
             "addr": handle,
             "prompt": "Ship it?",
-            "options": "Go,Stop",
+            "options": "Go;Stop",
             "from": "k2",
         })
         .to_string()
@@ -1909,7 +1909,7 @@ fn mix_options_and_option_is_400() {
         serde_json::json!({
             "addr": handle,
             "prompt": "?",
-            "options": "Go,Stop",
+            "options": "Go;Stop",
             "option": ["Hold"],
         })
         .to_string()
@@ -1923,31 +1923,32 @@ fn mix_options_and_option_is_400() {
 }
 
 #[test]
-fn ask_options_keep_parentheses_and_hint_on_a_prose_comma() {
+fn ask_options_split_on_semicolons_and_a_comma_list_stays_one_option() {
     let handle = format!("ovlcomma{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let (project_id, _) = seed(&handle);
     pin(&project_id, &uuid::Uuid::new_v4().to_string());
     let ask = |options: serde_json::Value, key: &str| {
-        let mut body = serde_json::json!({ "addr": handle, "prompt": "Which mini?", "from": "k2" });
+        let mut body = serde_json::json!({ "addr": handle, "prompt": "Rewrite the history?", "from": "k2" });
         body[key] = options;
         let resp = dispatch_post("/cli/thread/ask", &HashMap::new(), body.to_string().as_bytes());
         assert_eq!(resp.status, "200 OK", "ask failed: {}", resp.body);
         json_body(&resp)
     };
 
-    // Commas inside parentheses stay in the label; no hint.
-    let kept = ask(serde_json::json!("node-2 (an M1, small),node-3,Wait"), "options");
-    assert_eq!(kept["options"], serde_json::json!(["node-2 (an M1, small)", "node-3", "Wait"]), "{kept}");
-    assert!(kept.get("hint").is_none(), "no hint on a clean list: {kept}");
+    // `;` splits; the commas stay in each label; no hint.
+    let two = ask(serde_json::json!("No, the forward clean-up is enough; Yes, rewrite the history too"), "options");
+    assert_eq!(two["options"], serde_json::json!(["No, the forward clean-up is enough", "Yes, rewrite the history too"]), "{two}");
+    assert!(two.get("hint").is_none(), "no hint with a `;`: {two}");
 
-    // A prose-like comma still splits, and the answer carries the hint.
-    let prose = ask(serde_json::json!("Yes, node-2 (an M1; Sew keeps the M4 and node-3),No"), "options");
-    assert_eq!(prose["options"], serde_json::json!(["Yes", "node-2 (an M1; Sew keeps the M4 and node-3)", "No"]), "{prose}");
-    assert_eq!(
-        prose["hint"],
-        r#"an option looks like it continues after a comma ("Yes" / "node-2 (…)"); to keep commas inside an option, pass each one with --option "…""#,
-        "{prose}"
-    );
+    // Commas and no `;`: one button, and the answer carries the note.
+    let one = ask(serde_json::json!("No, the forward clean-up is enough, Yes, rewrite the history too"), "options");
+    assert_eq!(one["options"], serde_json::json!(["No, the forward clean-up is enough, Yes, rewrite the history too"]), "{one}");
+    assert_eq!(one["hint"], "--options splits on ';'; this became one option. Use ';' between options, or repeat --option", "{one}");
+
+    // No comma and no `;`: one button, no hint.
+    let done = ask(serde_json::json!("Done"), "options");
+    assert_eq!(done["options"], serde_json::json!(["Done"]), "{done}");
+    assert!(done.get("hint").is_none(), "no hint without a comma: {done}");
 
     // The repeatable --option form (a JSON array) keeps every comma.
     let each = ask(serde_json::json!(["Yes, node-2 (an M1)", "No, wait"]), "option");
@@ -2054,7 +2055,7 @@ fn prose_leaves_pending_cards_open_and_still_answerable() {
     let handle = format!("ovlprose{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let (project_id, _) = seed(&handle);
     pin(&project_id, &uuid::Uuid::new_v4().to_string());
-    let choice = ask_card(&handle, "Go,Stop");
+    let choice = ask_card(&handle, "Go;Stop");
     let secret = dispatch_post(
         "/cli/thread/secret",
         &HashMap::new(),
@@ -2106,7 +2107,7 @@ fn prose_leaves_pending_cards_open_and_still_answerable() {
 }
 
 fn ask_with(addr: &str, extra: serde_json::Value) -> serde_json::Value {
-    let mut body = serde_json::json!({ "addr": addr, "prompt": "Ship?", "options": "Go,Stop", "from": "k2" });
+    let mut body = serde_json::json!({ "addr": addr, "prompt": "Ship?", "options": "Go;Stop", "from": "k2" });
     for (k, v) in extra.as_object().expect("object") {
         body[k] = v.clone();
     }
@@ -2312,7 +2313,7 @@ fn card_answers_inject_and_record_the_real_answerer() {
     let guest_name = format!("guest{}", &uuid::Uuid::new_v4().to_string()[..6]);
     let mut pass = person_pass(&[project_id.clone()]);
     pass.username = guest_name.clone();
-    let g_card = ask_card(&handle, "GuestGo,Stop");
+    let g_card = ask_card(&handle, "GuestGo;Stop");
     let g = with_request_skin(Some(pass.clone()), || {
         dispatch_post(
             "/cli/thread/answer",
@@ -2333,7 +2334,7 @@ fn card_answers_inject_and_record_the_real_answerer() {
 
     // Connect user.
     let user = format!("cu{}", &uuid::Uuid::new_v4().to_string()[..6]);
-    let u_card = ask_card(&handle, "UserGo,Stop");
+    let u_card = ask_card(&handle, "UserGo;Stop");
     let u = dispatch_post_as(
         "/cli/thread/answer",
         &HashMap::new(),
@@ -2349,7 +2350,7 @@ fn card_answers_inject_and_record_the_real_answerer() {
     assert_eq!(answered_doc_by(&handle, &u_card), serde_json::json!({"kind": "user", "login": user}));
 
     // Owner token (desktop, CLI outside K2, Zen widgets).
-    let o_card = ask_card(&handle, "OwnerGo,Stop");
+    let o_card = ask_card(&handle, "OwnerGo;Stop");
     let o = dispatch_post_as(
         "/cli/thread/answer",
         &HashMap::new(),
@@ -2368,7 +2369,7 @@ fn card_answers_inject_and_record_the_real_answerer() {
     }
 
     // A guest dismissing a card: the agent hears the guest too.
-    let d_card = ask_card(&handle, "DismissMe,Stop");
+    let d_card = ask_card(&handle, "DismissMe;Stop");
     let d = with_request_skin(Some(pass), || {
         dispatch_post(
             "/cli/thread/void",
@@ -2854,7 +2855,7 @@ fn skin_answer_and_void_use_thread_rooms() {
         serde_json::json!({
             "addr": handle,
             "prompt": "Ship it?",
-            "options": "Go,Stop",
+            "options": "Go;Stop",
             "from": "k2",
         })
         .to_string()
@@ -2870,7 +2871,7 @@ fn skin_answer_and_void_use_thread_rooms() {
         serde_json::json!({
             "addr": other,
             "prompt": "Other?",
-            "options": "A,B",
+            "options": "A;B",
             "from": "k2",
         })
         .to_string()
@@ -2927,7 +2928,7 @@ fn skin_answer_and_void_use_thread_rooms() {
         serde_json::json!({
             "addr": handle,
             "prompt": "Void me?",
-            "options": "Go,Stop",
+            "options": "Go;Stop",
             "from": "k2",
         })
         .to_string()
@@ -3483,7 +3484,7 @@ fn ask_and_secret_follow_from_rules_and_echo_from() {
         serde_json::json!({
             "addr": handle,
             "prompt": "Stamp ask?",
-            "options": "Go,Stop",
+            "options": "Go;Stop",
             "from": "owner",
         })
         .to_string()
@@ -3536,7 +3537,7 @@ fn ask_and_secret_follow_from_rules_and_echo_from() {
         serde_json::json!({
             "addr": handle,
             "prompt": "Owner ask?",
-            "options": "Go,Stop",
+            "options": "Go;Stop",
             "from": "owner\n",
         })
         .to_string()
@@ -3557,7 +3558,7 @@ fn ask_and_secret_follow_from_rules_and_echo_from() {
         serde_json::json!({
             "addr": handle,
             "prompt": "Peer ask?",
-            "options": "Go,Stop",
+            "options": "Go;Stop",
             "from": other,
         })
         .to_string()
@@ -3796,7 +3797,7 @@ fn sidecar_card_answer_goes_to_the_sidecar_address() {
         serde_json::json!({
             "addr": format!("{handle}/reviewer"),
             "prompt": "Go?",
-            "options": format!("{label},Wait"),
+            "options": format!("{label};Wait"),
         })
         .to_string()
         .as_bytes(),
@@ -3897,7 +3898,7 @@ fn agent_posts_at_all_three_sites_push_previews_but_never_secrets() {
     let r = post_json(
         "/cli/thread/ask",
         &agent_of(&ask_ws),
-        serde_json::json!({ "addr": ask_ws, "prompt": "Ship *it*?", "options": "Go,Stop", "from": "k2" }),
+        serde_json::json!({ "addr": ask_ws, "prompt": "Ship *it*?", "options": "Go;Stop", "from": "k2" }),
     );
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let r = post_json(
@@ -3974,7 +3975,7 @@ fn every_thread_change_moves_rev_with_a_frame() {
         assert!(crate::overlay_ws::current_rev() > before, "{what}: a sinceRev of {before} is stale");
     };
     let ask = |expires: Option<&str>| -> String {
-        let mut body = serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Go,Stop", "from": "k2" });
+        let mut body = serde_json::json!({ "addr": handle, "prompt": "Ship?", "options": "Go;Stop", "from": "k2" });
         if let Some(e) = expires {
             body["expires"] = serde_json::json!(e);
         }
@@ -4190,7 +4191,7 @@ fn imported_thread_is_read_only_and_settles_on_resolve() {
     let asked = post_json(
         "/cli/thread/ask",
         &HashMap::new(),
-        serde_json::json!({ "addr": key, "prompt": "?", "options": "a,b", "from": "k2" }),
+        serde_json::json!({ "addr": key, "prompt": "?", "options": "a;b", "from": "k2" }),
     );
     assert_error_code(&asked, "409 Conflict", "imported_read_only");
     let tap = post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": key, "id": card, "answer": "Go" }));

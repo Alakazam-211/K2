@@ -96,7 +96,8 @@ impl fmt::Debug for Passport {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Auth {
     /// No credential: only [`Client::get_public`] goes out. Every other
-    /// call is [`Error::NoCredential`], never sent.
+    /// call is [`Error::NoCredential`], never sent, unless the client's
+    /// [`Client::no_token`] says to send it with none.
     None,
     /// No passport: the owner token, over TCP only.
     Owner(String),
@@ -406,7 +407,7 @@ pub enum Error {
     /// A cell-socket call without a passport and its socket.
     NoCellSocket { endpoint: String },
     /// A call that needs a credential, on a client with none
-    /// ([`Auth::None`]).
+    /// ([`Auth::None`]) and no [`Client::no_token`].
     NoCredential { endpoint: String },
     /// A socket-first call (`cli_send`, `cli_send_json`, `_sidecar_send`)
     /// in a session with no passport, whose TCP credential would be the
@@ -571,6 +572,11 @@ pub struct Client {
     /// call refuses to send the owner token from disk
     /// ([`Error::NoOwnerInSession`]).
     pub session: bool,
+    /// `$TOKEN` is empty on purpose: with [`Auth::None`], a TCP call goes
+    /// out with no `Authorization` header (`_k2_cfg_auth` adds none), as
+    /// the shell's open verbs that send a session's passport do in a
+    /// session that has none (`_cli_verb_sends_session_passport`).
+    pub no_token: bool,
     /// For `User-Agent: k5/<version>` and `X-K5-Cli-Version`, and the
     /// version a server's is compared with ([`skew`]).
     pub version: String,
@@ -608,6 +614,7 @@ impl Client {
             would_refuse: false,
             owner_from_disk: false,
             session: false,
+            no_token: false,
             version: crate::embedded::version().to_string(),
             force_tcp: false,
             post_max_time: None,
@@ -728,11 +735,28 @@ impl Client {
     /// empty answer, 76, ...) may have run it: [`Error::MaybeApplied`],
     /// never sent again.
     pub fn send(&mut self, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
+        self.send_on(endpoint, call, uds_eligible(endpoint))
+    }
+
+    /// `_K2_UDS_TRY=1 cli_send`: [`Client::send`] for any route, the cell
+    /// socket first whatever [`uds_eligible`] says, so a route agents
+    /// can't use answers with the socket's refusal (a permission card when
+    /// cards are on), where TCP has only a plain 403.
+    pub fn send_trying(&mut self, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
+        self.send_on(endpoint, call, true)
+    }
+
+    fn send_on(
+        &mut self,
+        endpoint: &str,
+        call: Call<'_>,
+        eligible: bool,
+    ) -> Result<Response, Error> {
         let t0 = Instant::now();
-        if uds_eligible(endpoint) {
+        if eligible {
             self.no_owner_in_session(endpoint)?;
         }
-        if self.cell_socket().is_some() && uds_eligible(endpoint) {
+        if self.cell_socket().is_some() && eligible {
             match self.call_from(Channel::Uds, endpoint, call, t0) {
                 Ok(r) if contains(&r.body, NOT_SERVED) => {}
                 Ok(r) if r.body.iter().any(|b| !matches!(b, b'\n' | 0)) => return Ok(r),
@@ -1248,6 +1272,8 @@ impl Client {
                         None
                     }
                     Kind::Probe | Kind::BearerForm => Some(self.passport().map(Passport::as_str)),
+                    // `$TOKEN` empty on purpose: no header.
+                    _ if self.no_token && self.auth == Auth::None => None,
                     _ => Some(self.tcp_token()),
                 };
                 if let Some(credential) = credential {
@@ -1867,6 +1893,57 @@ mod tests {
         assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
     }
 
+    /// `no_token`: a request goes out over TCP with no `Authorization`
+    /// header and no owner-source header (the shell's `$TOKEN` empty);
+    /// the probe still needs a passport. Without it, nothing is sent.
+    #[test]
+    fn no_token_sends_no_credential() {
+        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::None);
+        c.owner_from_disk = true;
+        assert!(matches!(
+            c.build(Kind::Request, Channel::Tcp, "/cli/x", &[], &[]),
+            Err(Error::NoCredential { .. })
+        ));
+        c.no_token = true;
+        for kind in [Kind::Request, Kind::RequestPost] {
+            let (_, r) = c
+                .build(kind, Channel::Tcp, "/cli/x", &["a=1"], &[])
+                .unwrap();
+            let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+            assert_eq!(names, [VERSION_HEADER, VIA_HEADER], "{kind:?}");
+            assert!(r.target.ends_with("&a=1"), "{}", r.target);
+        }
+        assert!(matches!(
+            c.build(Kind::Probe, Channel::Tcp, "/cli/whoami", &[], &[]),
+            Err(Error::NoCredential { .. })
+        ));
+        // An owner token is sent as before.
+        c.auth = Auth::Owner("o".into());
+        let (_, r) = c
+            .build(Kind::Request, Channel::Tcp, "/cli/x", &[], &[])
+            .unwrap();
+        assert_eq!(r.headers[0], ("Authorization".into(), "Bearer o".into()));
+    }
+
+    /// `send_trying` checks the owner rule for any route, as
+    /// `_K2_UDS_TRY=1 cli_send` makes every route socket-first; `send`
+    /// only for the routes the socket serves.
+    #[test]
+    fn send_trying_is_socket_first_for_any_route() {
+        let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
+        c.owner_from_disk = true;
+        c.session = true;
+        c.pause = Duration::ZERO;
+        assert!(matches!(
+            c.send_trying("/cli/projects/list", Call::Request(&[])),
+            Err(Error::NoOwnerInSession { .. })
+        ));
+        assert!(!matches!(
+            c.send("/cli/projects/list", Call::Request(&[])),
+            Err(Error::NoOwnerInSession { .. })
+        ));
+    }
+
     /// A session with no passport (`HOOK_SOCK` set) and the owner token
     /// from disk: a socket-first call sends nothing and ends with 1
     /// (`_k2_session_tcp_token`). A remote host, or an owner token that
@@ -1887,7 +1964,9 @@ mod tests {
         assert!(refused(c.send_json(true, "/cli/x", "{}")));
         assert!(refused(c.sidecar_get("/cli/x", "")));
         assert!(refused(c.send("/cli/inbox/list", Call::Request(&[]))));
-        let e = Error::NoOwnerInSession { endpoint: "/cli/x".into() };
+        let e = Error::NoOwnerInSession {
+            endpoint: "/cli/x".into(),
+        };
         assert_eq!(e.to_string(), NO_OWNER_IN_SESSION);
         assert_eq!(e.curl_code(), 1);
         // A request function that is not socket-first keeps its rule.
@@ -1903,7 +1982,8 @@ mod tests {
         assert!(!refused(no_session.send_json(false, "/cli/x", "")));
         // The line is the shell's.
         let policy = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../cli/src/cli-tools-policy.sh"),
         )
         .unwrap();
         let shell = NO_OWNER_IN_SESSION.replacen(k2_client::product_name!(), "K2", 1);

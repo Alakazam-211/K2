@@ -24,8 +24,9 @@
 //!    and the signer's fingerprint prefix, `ABCDE-FGHJK.<16 hex>`, for the
 //!    person to type at their server; and a [`Hello`] with the signer's key
 //!    and a **commitment** to a fresh signer nonce (the nonce stays here).
-//! 2. **`k2 ci signer add <code string>`** (owner/Admin at the server, with a
-//!    confirm token, never an agent, V17): the server checks the hello's key
+//! 2. **`k2 ci signer add --code-stdin --hello pair.json`** (the code string
+//!    on stdin; owner/Admin at the server, with a confirm token, never an
+//!    agent, V17): the server checks the hello's key
 //!    against the fingerprint prefix, picks its own nonce, and answers an
 //!    [`OfferMsg`]: the [`Offer`] signed with its tunnel key over
 //!    `k2-signer-pair-offer-v1`, plus an HMAC of it under a key derived from

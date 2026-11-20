@@ -1120,7 +1120,7 @@ fn admin_pair_begin(env: &Env, args: &[String]) -> R<Vec<u8>> {
     ctx::write_file(ctx, &pending_path(ctx), &serde_json::to_vec(&pending).map_err(|e| Fail::Internal(e.to_string()))?, 0o600)?;
     admin_audit(ctx, "PAIR-BEGIN", &format!("signer {}", identity.fingerprint()))?;
     env.say(format!(
-        "On your K2 server, as its owner or an Admin (never an agent): k2 ci signer add {code}\nThen, within {} minutes: sudo k2-signer-admin pair-reveal < offer.json, and type the 6-digit code the server then shows: sudo k2-signer-admin pair-accept <code>",
+        "On your K2 server, as its owner or an Admin (never an agent): k2 ci signer add --code-stdin --hello pair.json (pair.json holds what this command printed; give it the code {code} on stdin)\nThen, within {} minutes: sudo k2-signer-admin pair-reveal < offer.json, and type the 6-digit code the server then shows: sudo k2-signer-admin pair-accept <code>",
         pairing::CODE_TTL_SECS / 60
     ));
     json_out(&json!({"code": code, "hello": hello}))

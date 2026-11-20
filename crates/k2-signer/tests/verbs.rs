@@ -142,7 +142,12 @@ impl Approver {
 /// pair-begin, then the server's offer and the signer's reveal: `(hello
 /// JSON, server state, the SAS the server shows)`.
 fn pair_until_sas(r: &Root, controller: &SigningKey) -> (Value, pairing::ServerPending, String) {
-    let out = ok(run(&r.admin, "pair-begin", &["release-mac"], b"", None));
+    let (out, said) = run(&r.admin, "pair-begin", &["release-mac"], b"", None).expect("pair-begin");
+    // The code goes to `k2 ci signer add` on stdin, never on its command line.
+    let said = said.join("\n");
+    assert!(said.contains("k2 ci signer add --code-stdin --hello pair.json"), "{said}");
+    let code = serde_json::from_str::<Value>(&out).expect("pair-begin JSON")["code"].as_str().expect("code").to_string();
+    assert!(!said.contains(&format!("signer add {code}")), "{said}");
     // M-a: the pairing state and key are root's, never in the signing user's folder.
     assert!(r.dir.join("usr/local/etc/k2-signer/private/pairing.json").is_file());
     assert!(r.dir.join("usr/local/etc/k2-signer/private/identity.pem").is_file());

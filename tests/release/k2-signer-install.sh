@@ -84,7 +84,7 @@ check "the golden bundle: refused until the controller is paired" 3 "is not pair
 echo 'version = 1' >> "$K2_SIGNER_TEST_ROOT/usr/local/etc/k2-signer/projects/acme-desktop.toml"
 check "a policy edited without the admin's repin: refused" 3 "pins mismatch: etc/projects/acme-desktop.toml" "$tmp/bundle.json" "$S" rehearse acme-desktop
 check "root's repin pins the edit (admin only)" 0 "etc/projects/acme-desktop.toml" - "$A" repin
-check "pair-begin prints the code for k2 ci signer add" 0 "k2 ci signer add" - "$A" pair-begin z3mbpZ
+check "pair-begin prints the code for k2 ci signer add, on stdin" 0 "k2 ci signer add --code-stdin --hello pair.json" - "$A" pair-begin z3mbpZ
 check "identity: the pairing key" 0 '"fp":"' - "$S" identity
 
 echo "== the Approve sheet's text (M2) =="

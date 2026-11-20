@@ -255,7 +255,7 @@ function indicatorFor(entry: HeartbeatEntry): React.ReactNode {
   // muted squares, but those duplicated information already shown by
   // the section the row lives under. Removed to reduce visual noise.
   if (entry.state === 'live') {
-    return <span className="braille-spinner text-[10px] text-[var(--color-accent)]" />
+    return <span aria-hidden="true" className="braille-spinner text-[10px] text-[var(--color-accent)]" />
   }
   return null
 }

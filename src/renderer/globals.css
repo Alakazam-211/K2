@@ -1757,15 +1757,34 @@ html[data-style="terminal"] [data-limit-track] {
 
 /* Working: a 3×3 cell grid; a lit head runs clockwise round the 8 edge
    cells (0.8s a lap, 0.1s per cell) with a fading tail; the centre stays
-   dim. Reduced motion: still, the top row + right column lit. */
+   dim. Reduced motion: still, the top row + right column lit.
+   Each cell is a grid-sized HTML layer holding a still SVG of that one
+   cell (StatusGlyphs.tsx says why), and only the layer's opacity moves, on
+   the compositor (`will-change`), so a screen full of working agents costs
+   the page nothing per frame. */
 @keyframes agent-working-orbit {
   0% { opacity: 1; }
   37.5% { opacity: 0.3; }
   100% { opacity: 0.3; }
 }
+.agent-working {
+  display: inline-block;
+  position: relative;
+  flex: none;
+  shape-rendering: crispEdges;
+}
+.agent-working > i {
+  position: absolute;
+  inset: 0;
+  opacity: 0.3;
+}
+.agent-working svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .agent-working rect {
   fill: currentColor;
-  opacity: 0.3;
 }
 /* Status marks' corners (the working grid's cells, the needs-you, monitoring
    and no-update squares) follow `--radius-status`: 0 in Terminal, a full
@@ -1774,7 +1793,8 @@ html[data-style="terminal"] [data-limit-track] {
 [data-status-shape] {
   rx: var(--radius-status, 0px);
 }
-.agent-working rect.e {
+.agent-working > i.e {
+  will-change: opacity;
   animation: agent-working-orbit 0.8s linear infinite;
 }
 /* Narrow 2×3: the same 0.1s a cell round 6 cells (0.6s a lap), the same
@@ -1784,23 +1804,31 @@ html[data-style="terminal"] [data-limit-track] {
   50% { opacity: 0.3; }
   100% { opacity: 0.3; }
 }
-.agent-working.is-narrow rect.e {
+.agent-working.is-narrow > i.e {
   animation-name: agent-working-orbit-narrow;
   animation-duration: 0.6s;
 }
-.agent-working.is-still rect.e {
+.agent-working.is-still > i.e {
+  will-change: auto;
   animation: none;
 }
-.agent-working.is-still rect.e.p {
+.agent-working.is-still > i.e.p {
   opacity: 1;
 }
 @media (prefers-reduced-motion: reduce) {
-  [data-agent-working] rect.e {
+  [data-agent-working] > i.e,
+  [data-agent-working].is-narrow > i.e {
+    will-change: auto;
     animation: none;
   }
-  [data-agent-working] rect.e.p {
+  [data-agent-working] > i.e.p {
     opacity: 1;
   }
+}
+/* A hidden window (minimised, another Space, the lid shut) pauses the grid;
+   `data-doc-hidden` comes from lib/doc-hidden.ts. */
+html[data-doc-hidden] .agent-working > i.e {
+  animation-play-state: paused;
 }
 
 /* ── Icon rail active indicator ───────────────────────────────────── */
@@ -2513,19 +2541,21 @@ html[data-style="glass"] [data-k2-thread-zen] [data-zen-send]:not([data-zen-root
   box-shadow: var(--tile-sheen), var(--tile-shadow);
 }
 
-/* Braille spinner */
+/* Braille spinner. Its frames are stacked in one strip, one per line, and
+   the strip slides up a line at a time inside the 1em window. Moving it with
+   `transform` lets the compositor run it. (It used to swap the
+   pseudo-element's `content` every frame, which made the page redo style,
+   layout and paint each frame for every spinner on screen.) Stacking the
+   frames vertically keeps each one in the same spot whatever the fallback
+   font's glyph widths.
+
+   Same frames and timing as before: ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ in a 0.8s loop, a twelfth
+   of the loop each, with the last frame held for three twelfths. That's
+   why ⠏ is in the strip three times and there are 12 steps. The strip's
+   alternative text is empty, so screen readers skip it. */
 @keyframes braille-spin {
-  0%   { content: '⠋'; }
-  8%   { content: '⠙'; }
-  16%  { content: '⠹'; }
-  25%  { content: '⠸'; }
-  33%  { content: '⠼'; }
-  42%  { content: '⠴'; }
-  50%  { content: '⠦'; }
-  58%  { content: '⠧'; }
-  67%  { content: '⠇'; }
-  75%  { content: '⠏'; }
-  100% { content: '⠋'; }
+  from { transform: translateY(0); }
+  to { transform: translateY(-12em); }
 }
 
 .braille-spinner {
@@ -2537,8 +2567,18 @@ html[data-style="glass"] [data-k2-thread-zen] [data-zen-send]:not([data-zen-root
 }
 
 .braille-spinner::after {
-  content: '⠋';
-  animation: braille-spin 0.8s steps(1) infinite;
+  content: '⠋\A⠙\A⠹\A⠸\A⠼\A⠴\A⠦\A⠧\A⠇\A⠏\A⠏\A⠏';
+  content: '⠋\A⠙\A⠹\A⠸\A⠼\A⠴\A⠦\A⠧\A⠇\A⠏\A⠏\A⠏' / '';
+  display: block;
+  white-space: pre;
+  line-height: 1;
+  will-change: transform;
+  animation: braille-spin 0.8s steps(12) infinite;
+}
+
+/* Paused while the window is hidden (lib/doc-hidden.ts). */
+html[data-doc-hidden] .braille-spinner::after {
+  animation-play-state: paused;
 }
 
 /* The Thread's working strip animates in ZenActivityDrawer (ZEN_DRAWER_CSS:

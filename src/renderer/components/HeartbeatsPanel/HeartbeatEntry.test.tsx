@@ -291,3 +291,17 @@ describe('0.46.6: pausing a heartbeat on another server needs an Admin there', (
     expect(heartbeatToggleNeedsAdmin({ isPrimary: true }, 'member')).toBe(false)
   })
 })
+
+describe('the live indicator', () => {
+  it('a live heartbeat shows the braille spinner, hidden from screen readers', () => {
+    const view = renderRow({ ...entry({}), state: 'live', liveTerminalId: 't1' })
+    const spinner = view.container.querySelector('.braille-spinner')
+    expect(spinner).not.toBeNull()
+    expect(spinner?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('a row that isn’t live has no spinner', () => {
+    const view = renderRow(entry({}))
+    expect(view.container.querySelector('.braille-spinner')).toBeNull()
+  })
+})

@@ -7,6 +7,7 @@ import { ConnectionGate } from './components/ConnectionGate'
 import { installExternalLinkHandler } from './lib/external-link-handler'
 import { installRandomUUIDPolyfill } from './lib/random-uuid'
 import { desktopOsFromNavigator } from './lib/desktop-chrome'
+import { installDocHiddenAttr } from './lib/doc-hidden'
 import { bootWebHostIfNeeded } from './web/boot-host'
 import { installRendererHeartbeat } from './lib/renderer-heartbeat'
 import { bootZenPausedStart, noteZenWidgetsHeartbeat, noteZenWidgetsVisibility } from './lib/zen/zen-widgets-running'
@@ -24,6 +25,10 @@ installRandomUUIDPolyfill()
 // `data-os` on <html>: lets globals.css theme native form controls off
 // macOS (dark <select> on Linux/Windows) without touching macOS rendering.
 document.documentElement.setAttribute('data-os', desktopOsFromNavigator(navigator))
+
+// `data-doc-hidden` on <html> while the window is hidden: globals.css
+// pauses the always-on spinners under it (lib/doc-hidden.ts).
+installDocHiddenAttr()
 
 
 // 0.39.x (Issue #6): webview liveness HEARTBEAT.

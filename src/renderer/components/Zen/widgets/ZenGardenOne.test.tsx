@@ -438,13 +438,13 @@ describe('the activity drawer (`activity-drawer`)', () => {
     // not the braille.
     const spinner = el('[data-zen-drawer-count="subagents"] [data-zen-drawer-spinner]')
     expect(spinner.style.color).toBe('var(--zen-working)')
-    const svg = spinner.querySelector('svg[data-agent-working]') as SVGElement
-    expect([svg.getAttribute('data-cols'), svg.querySelectorAll('rect').length]).toEqual(['2', 6])
+    const grid = spinner.querySelector('[data-agent-working]') as HTMLElement
+    expect([grid.getAttribute('data-cols'), grid.querySelectorAll(':scope > i').length]).toEqual(['2', 6])
     // Sized in em of the count (follows the text size): the grid's ink
     // (14 of its 24 units tall, 9 wide) is 0.8em − 2px at 12px, centred on
     // the digits (no raise), with 2px between it and the count and 1px
     // more than the icon's usual gap between the agent icon and it.
-    expect([svg.getAttribute('width'), svg.getAttribute('height')]).toEqual([
+    expect([grid.style.width, grid.style.height]).toEqual([
       `${Number(((COUNTER_SPINNER_SVG_EM * 19) / 24).toFixed(3))}em`,
       `${COUNTER_SPINNER_SVG_EM}em`,
     ])

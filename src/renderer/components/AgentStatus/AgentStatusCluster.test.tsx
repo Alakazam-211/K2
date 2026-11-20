@@ -137,7 +137,7 @@ describe('glyphs: state, aria, shape', () => {
     const slot = container.querySelector<HTMLElement>('[data-slot="working"]')!
     expect(slot.style.color).toBe('var(--color-status-working)')
     expect(slot.getAttribute('aria-label')).toBe('Working')
-    expect(slot.querySelectorAll('rect')).toHaveLength(9)
+    expect(slot.querySelectorAll('[data-agent-working] > i')).toHaveLength(9)
   })
 
   it('the heartbeat slot is labelled', () => {
@@ -152,17 +152,17 @@ describe('reduced motion', () => {
   it('stills the working grid (static class)', () => {
     stubReducedMotion(true)
     const { container } = render(<AgentStatusCluster view={view({ working: true })} />)
-    const svg = container.querySelector('svg.agent-working')!
-    expect(svg.getAttribute('class')).toContain('is-still')
-    expect(svg.getAttribute('data-agent-working')).toBe('still')
+    const grid = container.querySelector('.agent-working')!
+    expect(grid.getAttribute('class')).toContain('is-still')
+    expect(grid.getAttribute('data-agent-working')).toBe('still')
   })
 
   it('moves without the preference', () => {
     stubReducedMotion(false)
     const { container } = render(<AgentStatusCluster view={view({ working: true })} />)
-    const svg = container.querySelector('svg.agent-working')!
-    expect(svg.getAttribute('class')).not.toContain('is-still')
-    expect(svg.getAttribute('data-agent-working')).toBe('moving')
+    const grid = container.querySelector('.agent-working')!
+    expect(grid.getAttribute('class')).not.toContain('is-still')
+    expect(grid.getAttribute('data-agent-working')).toBe('moving')
   })
 })
 
@@ -196,46 +196,60 @@ describe('AgentStatusSlot (one mark, for tabs and badges)', () => {
 })
 
 describe('WorkingGrid', () => {
-  function cells(svg: SVGElement): string[] {
-    return [...svg.querySelectorAll('rect')].map((r) => `${r.getAttribute('x')},${r.getAttribute('y')}`)
+  // `data-cell` is each cell's x,y in the 24-unit drawing.
+  function cells(grid: HTMLElement, sel = 'i'): string[] {
+    return [...grid.querySelectorAll(`:scope > ${sel}`)].map((c) => c.getAttribute('data-cell') ?? '')
   }
 
   it('default: the 3×3, 9 cells in a square box', () => {
     stubReducedMotion(false)
     const { container } = render(<WorkingGrid />)
-    const svg = container.querySelector('svg[data-agent-working]') as SVGElement
-    expect([svg.getAttribute('data-cols'), svg.getAttribute('width'), svg.getAttribute('height'), svg.getAttribute('viewBox')]).toEqual([
-      '3',
-      '14',
-      '14',
-      '0 0 24 24',
-    ])
-    expect(cells(svg)).toHaveLength(9)
+    const grid = container.querySelector('[data-agent-working]') as HTMLElement
+    expect([grid.getAttribute('data-cols'), grid.style.width, grid.style.height]).toEqual(['3', '14px', '14px'])
+    expect(cells(grid)).toEqual(['10,10', '5,5', '10,5', '15,5', '15,10', '15,15', '10,15', '5,15', '5,10'])
+  })
+
+  it('each cell is an HTML layer holding a still SVG of that cell (WebKit can’t composite SVG shapes)', () => {
+    stubReducedMotion(false)
+    const { container } = render(<WorkingGrid />)
+    const grid = container.querySelector('[data-agent-working]') as HTMLElement
+    expect(grid.tagName).toBe('SPAN')
+    expect(grid.getAttribute('aria-hidden')).toBe('true')
+    const layers = [...grid.querySelectorAll<HTMLElement>(':scope > i')]
+    for (const layer of layers) {
+      // One SVG per layer, the whole 24-unit drawing, one cell drawn at the
+      // layer's data-cell.
+      const svgs = layer.querySelectorAll(':scope > svg')
+      expect(svgs).toHaveLength(1)
+      expect(svgs[0].getAttribute('viewBox')).toBe('0 0 24 24')
+      const rects = svgs[0].querySelectorAll('rect')
+      expect(rects).toHaveLength(1)
+      expect(`${rects[0].getAttribute('x')},${rects[0].getAttribute('y')}`).toBe(layer.getAttribute('data-cell'))
+      // Nothing inside the SVG animates: the delay sits on the HTML layer.
+      expect((rects[0] as SVGElement).style.animationDelay).toBe('')
+    }
+    expect(layers.filter((l) => l.classList.contains('e')).every((l) => l.style.animationDelay !== '')).toBe(true)
   })
 
   it('cols={2}: the narrow 2×3, 6 cells, clockwise, width 19/24 of the height', () => {
     stubReducedMotion(false)
     const { container } = render(<WorkingGrid cols={2} size="1.2em" />)
-    const svg = container.querySelector('svg[data-agent-working]') as SVGElement
-    expect([svg.getAttribute('data-cols'), svg.getAttribute('width'), svg.getAttribute('height'), svg.getAttribute('viewBox')]).toEqual([
-      '2',
-      '0.95em',
-      '1.2em',
-      '0 0 19 24',
-    ])
-    expect(svg.getAttribute('class')).toContain('is-narrow')
-    expect(cells(svg)).toEqual(['5,5', '10,5', '10,10', '10,15', '5,15', '5,10'])
+    const grid = container.querySelector('[data-agent-working]') as HTMLElement
+    expect([grid.getAttribute('data-cols'), grid.style.width, grid.style.height]).toEqual(['2', '0.95em', '1.2em'])
+    expect(grid.getAttribute('class')).toContain('is-narrow')
+    expect(cells(grid)).toEqual(['5,5', '10,5', '10,10', '10,15', '5,15', '5,10'])
+    // Narrow cells draw in a 19-unit-wide drawing.
+    expect(grid.querySelector(':scope > i > svg')?.getAttribute('viewBox')).toBe('0 0 19 24')
     // Each cell 0.1s behind the last round a 0.6s lap.
-    const delays = [...svg.querySelectorAll('rect')].map((r) => (r as SVGElement).style.animationDelay)
+    const delays = [...grid.querySelectorAll<HTMLElement>(':scope > i')].map((c) => c.style.animationDelay)
     expect(delays).toEqual(['-0.6s', '-0.5s', '-0.4s', '-0.3s', '-0.2s', '-0.1s'])
   })
 
   it('cols={2} with reduced motion: still, the top row and right column lit', () => {
     stubReducedMotion(true)
     const { container } = render(<WorkingGrid cols={2} size={20} />)
-    const svg = container.querySelector('svg[data-agent-working]') as SVGElement
-    expect([svg.getAttribute('data-agent-working'), svg.getAttribute('width')]).toEqual(['still', '15.833'])
-    const lit = [...svg.querySelectorAll('rect.p')].map((r) => `${r.getAttribute('x')},${r.getAttribute('y')}`)
-    expect(lit).toEqual(['5,5', '10,5', '10,10', '10,15'])
+    const grid = container.querySelector('[data-agent-working]') as HTMLElement
+    expect([grid.getAttribute('data-agent-working'), grid.style.width]).toEqual(['still', '15.833px'])
+    expect(cells(grid, 'i.p')).toEqual(['5,5', '10,5', '10,10', '10,15'])
   })
 })

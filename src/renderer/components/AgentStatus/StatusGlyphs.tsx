@@ -77,37 +77,52 @@ function scaleLength(size: number | string, k: number): number | string {
  *  `cols={2}`: the narrow loader for tight spots, 2 columns × 3 rows. The
  *  head runs clockwise round its 6 cells at the same 0.1s a cell (0.6s a
  *  lap, the same tail); reduced motion lights the top row and right column.
- *  `size` is its height; its width is 19/24 of that. */
+ *  `size` is its height; its width is 19/24 of that.
+ *
+ *  Why each cell is its own layer: this grid is on every working agent's
+ *  row and tab, so dozens can spin at once. The browser can hand an opacity
+ *  animation on an ordinary HTML element to the compositor, which runs it
+ *  without touching the page. It can't do that for shapes inside an SVG
+ *  (WebKit, which the desktop app runs on, doesn't), so one SVG with
+ *  animated rects made the page redo style and paint every frame for every
+ *  grid. So each cell is an `<i>` the size of the whole grid, stacked on the
+ *  others, holding a still SVG that draws just that cell, and globals.css
+ *  fades only the `<i>`'s opacity. The drawing is the same 24-unit SVG as
+ *  before, so cells land on the same pixels; placing small HTML boxes
+ *  instead rounds them to whole pixels and changes their size and shape.
+ *  `data-cell` is the cell's x,y in the drawing. */
 export function WorkingGrid({ size = STATUS_SLOT_PX, cols = 3 }: { size?: number | string; cols?: 2 | 3 }): React.JSX.Element {
   const still = useReducedMotion()
   const narrow = cols === 2
   const edge = narrow ? EDGE_NARROW : EDGE
   const lap = edge.length * 0.1
   const lit = narrow ? 4 : 5
+  const viewBox = narrow ? `0 0 ${WORKING_NARROW_VIEW_W} 24` : '0 0 24 24'
+  const cell = (x: number, y: number): React.JSX.Element => (
+    <svg viewBox={viewBox}>
+      <rect x={x} y={y} width="4" height="4" />
+    </svg>
+  )
   return (
-    <svg
+    <span
       className={`agent-working${narrow ? ' is-narrow' : ''}${still ? ' is-still' : ''}`}
       data-agent-working={still ? 'still' : 'moving'}
       data-cols={cols}
-      width={narrow ? scaleLength(size, WORKING_NARROW_VIEW_W / 24) : size}
-      height={size}
-      viewBox={narrow ? `0 0 ${WORKING_NARROW_VIEW_W} 24` : '0 0 24 24'}
-      aria-hidden
-      shapeRendering="crispEdges"
+      aria-hidden="true"
+      style={{ width: narrow ? scaleLength(size, WORKING_NARROW_VIEW_W / 24) : size, height: size }}
     >
-      {narrow ? null : <rect x="10" y="10" width="4" height="4" />}
+      {narrow ? null : <i data-cell="10,10">{cell(10, 10)}</i>}
       {edge.map(([cx, cy], i) => (
-        <rect
+        <i
           key={i}
           className={i < lit ? 'e p' : 'e'}
-          x={5 + cx * 5}
-          y={5 + cy * 5}
-          width="4"
-          height="4"
+          data-cell={`${5 + cx * 5},${5 + cy * 5}`}
           style={{ animationDelay: `${(i * 0.1 - lap).toFixed(1)}s` }}
-        />
+        >
+          {cell(5 + cx * 5, 5 + cy * 5)}
+        </i>
       ))}
-    </svg>
+    </span>
   )
 }
 

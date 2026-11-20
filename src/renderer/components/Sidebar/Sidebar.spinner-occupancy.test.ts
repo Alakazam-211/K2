@@ -99,7 +99,7 @@ describe('.braille-spinner cannot change layout across frames (non-status uses)'
 
 describe('the working spinner stops for reduced motion', () => {
   it('one CSS rule stills every [data-agent-working] spinner', () => {
-    const at = globalsSrc.indexOf('[data-agent-working] rect.e {')
+    const at = globalsSrc.indexOf('[data-agent-working] > i.e,\n  [data-agent-working].is-narrow > i.e {')
     if (at < 0) throw new Error('missing the reduced-motion rule for [data-agent-working]')
     const media = globalsSrc.lastIndexOf('@media (prefers-reduced-motion: reduce)', at)
     expect(media).toBeGreaterThan(-1)

@@ -14,9 +14,10 @@
 //! socket they pass, and the page prints.
 //!
 //! The daily tier of the help (`k2`, `k2 help`, `k2 --help`:
-//! [`daily_page`]) is two files with one line between them while
-//! permission cards are on, which the shell asks the daemon with a
-//! passport ([`crate::cards`]); its switch is [`DAILY_NATIVE`]. The other
+//! [`daily_page`]) is its files: send-feedback's block unless an agent's
+//! server says agents may not report ([`crate::feedback_optin`]), and one
+//! line while permission cards are on ([`crate::cards`]), each asked of
+//! the daemon with a passport; its switch is [`DAILY_NATIVE`]. The other
 //! help pages bash puts together ([`Composed`]: the same tier for `-h`
 //! and `help <word with no arm>`, the deprecated tier, chat's usage) have
 //! [`COMPOSED_NATIVE`]; the router's `*)` arm for a word it has no arm
@@ -40,13 +41,17 @@
 //! prints the shell's page for the answer; off, the shell answers. Where
 //! the shell's answer for `permissions` is its error (cards off), the
 //! binary prints that error itself: the shell would ask again.
+//!
+//! With a passport, `send-feedback`'s page is one line while an agent's
+//! server says agents may not report ([`crate::feedback_optin`], its
+//! switch [`crate::feedback_optin::FEEDBACK_HIDE_NATIVE`]).
 
 use crate::exit::Exit;
 use crate::offline::{Env, Prelude};
 use crate::out::json::{self, Value};
 use crate::python::{self, Python3};
 use crate::text::{self, HelpForm};
-use crate::{cards, prelude, tools};
+use crate::{cards, feedback_optin, prelude, tools};
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -87,6 +92,10 @@ pub const CARDS_PAGE: &str = "apps";
 
 /// The topic only shown while permission cards are on.
 pub const CARDS_ONLY: &str = "permissions";
+
+/// The topic that is one line while agents may not report
+/// ([`feedback_optin::OFF_LINE`]).
+pub const FEEDBACK_PAGE: &str = "send-feedback";
 
 /// The list's line for [`CARDS_ONLY`] while cards are on, after each line
 /// that starts `  design   ` (`_study_catalog_all`'s awk).
@@ -273,14 +282,36 @@ pub fn native_json(env: &Env, page: &str) -> bool {
     }
 }
 
+/// `_study_page send-feedback` while hidden: [`feedback_optin::OFF_LINE`].
+fn off_page() -> Cow<'static, str> {
+    format!("{}\n", feedback_optin::OFF_LINE).into()
+}
+
 /// The study page, or `None` when the shell answers. `would_refuse`:
-/// the passport rule's count, for the cards probe's request.
+/// the passport rule's count, for the probe's request.
 pub fn study_page(
     s: Study,
     p: &Prelude,
     env: &Env,
-    would_refuse: impl FnOnce() -> bool,
+    would_refuse: impl Fn() -> bool,
 ) -> Option<Page> {
+    // `send-feedback` with a passport: the shell's `_sf_agents_off_here`.
+    let hidden = match s {
+        Study::Page { topic, json } if topic == FEEDBACK_PAGE && p.passport => {
+            if !feedback_optin::FEEDBACK_HIDE_NATIVE {
+                return None;
+            }
+            if json {
+                for page in [study_text(topic, false)?, off_page()] {
+                    if !native_json(env, &page) {
+                        return None;
+                    }
+                }
+            }
+            feedback_optin::hidden(feedback_optin::ask(env, p, &would_refuse)?)
+        }
+        _ => false,
+    };
     let cards_only = matches!(s, Study::Page { topic, .. } if topic == CARDS_ONLY);
     let on = match cards_switch(s) {
         None => false,
@@ -303,7 +334,7 @@ pub fn study_page(
                     }
                 }
             }
-            cards::on(cards::ask(env, p, would_refuse)?)
+            cards::on(cards::ask(env, p, &would_refuse)?)
         }
     };
     if cards_only && !on {
@@ -323,9 +354,14 @@ pub fn study_page(
     let text: Cow<'static, str> = match s {
         Study::Usage => usage(on)?,
         Study::Catalog => catalog(on)?,
+        Study::Page { json: false, .. } if hidden => off_page(),
         Study::Page { topic, json: false } => study_text(topic, on)?,
         Study::Page { topic, json: true } => {
-            let page = study_text(topic, on)?;
+            let page = if hidden {
+                off_page()
+            } else {
+                study_text(topic, on)?
+            };
             if !native_json(env, &page) {
                 return None;
             }
@@ -457,13 +493,15 @@ pub fn help_page(
 /// (`cmd_help_v2_daily`, `cli/src/help.sh`), the first thing anyone
 /// types: `k2` alone, `k2 help` and `k2 --help`. `tests/cli/help_native.sh`
 /// proves from bash's own trace that bash does nothing else for them
-/// but the cards probe. `-h`, an empty word and `help <word>` for a word
-/// `cmd_help` has no arm for print the same tier: [`Composed::Daily`].
+/// but the feedback probe and the cards probe. `-h`, an empty word and
+/// `help <word>` for a word `cmd_help` has no arm for print the same
+/// tier: [`Composed::Daily`].
 pub const DAILY_FORMS: &[&[&str]] = &[&[], &["help"], &["--help"]];
 
 /// The daily tier for [`DAILY_FORMS`]. True: the binary asks the daemon
-/// whether permission cards are on as the shell does ([`crate::cards`])
-/// and prints the tier for the answer. False: the shell answers them.
+/// whether agents may report ([`crate::feedback_optin`]) and whether
+/// permission cards are on ([`crate::cards`]) as the shell does, and
+/// prints the tier for the answers. False: the shell answers them.
 pub const DAILY_NATIVE: bool = true;
 
 /// The daily tier's line while permission cards are on, between
@@ -480,12 +518,21 @@ pub fn daily(args: &[&str]) -> bool {
     DAILY_FORMS.contains(&args)
 }
 
-/// `cmd_help_v2_daily`: `_daily.txt`, [`CARDS_HELP_LINE`] while cards
-/// are `on`, then `_daily-end.txt`.
-pub fn daily_text(on: bool) -> Option<String> {
-    let (head, end) = (text::help("_daily")?, text::help("_daily-end")?);
-    let mut out = String::with_capacity(head.len() + CARDS_HELP_LINE.len() + 1 + end.len());
+/// `cmd_help_v2_daily`: `_daily.txt`, `_daily-feedback.txt` unless
+/// send-feedback is `hidden`, [`CARDS_HELP_LINE`] while cards are `on`,
+/// then `_daily-end.txt`.
+pub fn daily_text(on: bool, hidden: bool) -> Option<String> {
+    let (head, block, end) = (
+        text::help("_daily")?,
+        text::help("_daily-feedback")?,
+        text::help("_daily-end")?,
+    );
+    let mut out =
+        String::with_capacity(head.len() + block.len() + CARDS_HELP_LINE.len() + 1 + end.len());
     out.push_str(head);
+    if !hidden {
+        out.push_str(block);
+    }
     if on {
         out.push_str(CARDS_HELP_LINE);
         out.push('\n');
@@ -494,20 +541,33 @@ pub fn daily_text(on: bool) -> Option<String> {
     Some(out)
 }
 
+/// The daily tier for the shell's two questions, as `cmd_help_v2_daily` asks them:
+/// whether send-feedback is hidden (`_sf_agents_off_here`), then whether
+/// permission cards are on (`_permission_cli_enabled`). With no passport
+/// neither asks anything: shown, and off. With one, the binary asks the
+/// same way ([`feedback_optin::ask`], [`cards::ask`]), each on its own
+/// connection as the shell's two curls are, or gives `None` (the shell
+/// answers) where it can't be sure to, before anything is sent.
+pub fn daily_tier(p: &Prelude, env: &Env, would_refuse: impl Fn() -> bool) -> Option<String> {
+    if p.passport && !feedback_optin::FEEDBACK_HIDE_NATIVE {
+        return None;
+    }
+    let feedback = feedback_optin::ask(env, p, &would_refuse)?;
+    let cards = cards::ask(env, p, &would_refuse)?;
+    let hidden = feedback_optin::hidden(feedback);
+    daily_text(cards::on(cards), hidden)
+}
+
 /// The daily tier, or `None` when the shell answers. The connection gate
 /// needs a port and a token for help. Its tool, `help`, is an open one,
-/// so the session checks pass it ([`open_tool`]). Then the shell asks
-/// whether permission cards are on (`_permission_cli_enabled`): with no
-/// passport it asks nothing and they are off; with one, the binary asks
-/// the same way ([`cards::ask`]), or hands the command over where it
-/// can't be sure to.
-pub fn daily_page(p: &Prelude, env: &Env, would_refuse: impl FnOnce() -> bool) -> Option<Page> {
+/// so the session checks pass it ([`open_tool`]). Then the shell's two
+/// questions ([`daily_tier`]).
+pub fn daily_page(p: &Prelude, env: &Env, would_refuse: impl Fn() -> bool) -> Option<Page> {
     if !DAILY_NATIVE || !(p.port && p.token) {
         return None;
     }
-    let on = cards::on(cards::ask(env, p, would_refuse)?);
     Some(Page {
-        text: daily_text(on)?.into(),
+        text: daily_tier(p, env, would_refuse)?.into(),
         stderr: false,
         exit: Exit::Ok,
         lead: None,
@@ -645,19 +705,19 @@ pub fn chat_text(env: &Env) -> Option<String> {
 /// A [`Composed`] page for `argv`, or `None` when the shell answers. The
 /// connection gate needs a port and a token (the shell skips it for some
 /// of chat's forms; the binary hands those over). The daily tier asks
-/// whether permission cards are on as [`daily_page`] does.
+/// as [`daily_page`] does ([`daily_tier`]).
 pub fn composed_page(
     c: Composed,
     argv: &[&str],
     p: &Prelude,
     env: &Env,
-    would_refuse: impl FnOnce() -> bool,
+    would_refuse: impl Fn() -> bool,
 ) -> Option<Page> {
     if !COMPOSED_NATIVE || !(p.port && p.token) {
         return None;
     }
     let text = match c {
-        Composed::Daily => daily_text(cards::on(cards::ask(env, p, would_refuse)?))?,
+        Composed::Daily => daily_tier(p, env, would_refuse)?,
         Composed::Deprecated => deprecated_text()?,
         Composed::Chat => {
             if p.hook_sock && !open_words(argv) {
@@ -694,8 +754,8 @@ pub const UNKNOWN_NATIVE: bool = true;
 /// ```
 ///
 /// A retired verb ([`crate::retired`]) is its one line on stderr, exit 1.
-/// Any other word is its line on stderr, then the daily tier (the cards
-/// probe as [`daily_page`] asks it), exit 1. The connection gate needs a
+/// Any other word is its line on stderr, then the daily tier (asked as
+/// [`daily_page`] asks it: [`daily_tier`]), exit 1. The connection gate needs a
 /// port and a token (and with a token the virtual desktop's guard
 /// passes). With `HOOK_SOCK` set, a word whose tool is an `id` tool (the
 /// tool table names a few words the router has no arm for) runs the
@@ -704,7 +764,7 @@ pub fn unknown_page(
     argv: &[&str],
     p: &Prelude,
     env: &Env,
-    would_refuse: impl FnOnce() -> bool,
+    would_refuse: impl Fn() -> bool,
 ) -> Option<Page> {
     let (verb, sub) = (*argv.first()?, argv.get(1).copied().unwrap_or(""));
     if !UNKNOWN_NATIVE || verb.is_empty() || !(p.port && p.token) {
@@ -723,9 +783,8 @@ pub fn unknown_page(
             lead: None,
         });
     }
-    let on = cards::on(cards::ask(env, p, would_refuse)?);
     Some(Page {
-        text: daily_text(on)?.into(),
+        text: daily_tier(p, env, would_refuse)?.into(),
         stderr: false,
         exit: Exit::Error,
         lead: Some(format!("Unknown command: {verb}\n")),
@@ -994,6 +1053,51 @@ mod tests {
         );
     }
 
+    /// `send-feedback`'s page: with a passport the feedback probe asks
+    /// (here: no HOME, so the shell's); without one, the page, nothing
+    /// asked. Hidden, it is the one line, and its `--json` that line.
+    #[test]
+    fn a_passport_and_send_feedback_s_page() {
+        let env = Env::of(&[]);
+        let with = prelude(true, true, true, false);
+        let without = prelude(true, true, false, false);
+        let never = || -> bool { panic!("nothing is asked") };
+        assert_eq!(
+            study(&[FEEDBACK_PAGE]),
+            Some(Study::Page {
+                topic: FEEDBACK_PAGE,
+                json: false
+            })
+        );
+        for json in [false, true] {
+            let s = Study::Page {
+                topic: FEEDBACK_PAGE,
+                json,
+            };
+            assert_eq!(study_page(s, &with, &env, || false), None, "{json}");
+            let page = study_page(s, &without, &env, never).expect("the page");
+            let full = text::study(FEEDBACK_PAGE).unwrap();
+            let want = if json {
+                study_json(FEEDBACK_PAGE, full)
+            } else {
+                full.to_string()
+            };
+            assert_eq!(
+                (page.text.as_ref(), page.stderr, page.exit),
+                (want.as_str(), false, Exit::Ok)
+            );
+        }
+        assert_eq!(off_page(), format!("{}\n", feedback_optin::OFF_LINE));
+        assert_eq!(
+            study_json(FEEDBACK_PAGE, &off_page()),
+            format!(
+                "{{\"id\":\"send-feedback\",\"body\":\"{}\"}}\n",
+                feedback_optin::OFF_LINE
+            )
+        );
+        assert!(off_page().is_ascii());
+    }
+
     #[test]
     fn the_pages_with_cards_on_are_the_shell_s() {
         let index = src("study-index.sh");
@@ -1123,7 +1227,8 @@ mod tests {
     }
 
     /// The router sends the three forms to `cmd_help` with no word, which
-    /// prints the daily tier as `cmd_help_v2_daily` puts it together.
+    /// prints the daily tier as `cmd_help_v2_daily` puts it together:
+    /// the feedback probe first, then the cards probe.
     #[test]
     fn the_daily_tier_is_the_shell_s() {
         let router = src("router.sh");
@@ -1136,19 +1241,37 @@ mod tests {
         ));
         assert!(src("wiki.sh").contains("        '')                       cmd_help_v2_daily ;;\n"));
         let daily = format!(
-            "cmd_help_v2_daily() {{\n    cat <<'EOF'\n%include cli/text/help/_daily.txt\nEOF\n    # Permission cards (Beta): one line, only while both switches are on\n    # for this agent (PRD rev 3.1 \u{a7}11.4). Off = today's text.\n    if _permission_cli_enabled; then\n        echo '{CARDS_HELP_LINE}'\n    fi\n    cat <<'EOF'\n%include cli/text/help/_daily-end.txt\nEOF\n}}\n"
+            "cmd_help_v2_daily() {{\n    cat <<'EOF'\n%include cli/text/help/_daily.txt\nEOF\n    # 0.46.17: not in an agent's help while agents may not report\n    # (_sf_agents_off_here). Everyone else: today's text.\n    if ! _sf_agents_off_here; then\n        cat <<'EOF'\n%include cli/text/help/_daily-feedback.txt\nEOF\n    fi\n    # Permission cards (Beta): one line, only while both switches are on\n    # for this agent (PRD rev 3.1 \u{a7}11.4). Off = today's text.\n    if _permission_cli_enabled; then\n        echo '{CARDS_HELP_LINE}'\n    fi\n    cat <<'EOF'\n%include cli/text/help/_daily-end.txt\nEOF\n}}\n"
         );
         assert!(src("help.sh").contains(&daily), "cmd_help_v2_daily moved");
-        let (head, end) = (
+        let (head, block, end) = (
             text::help("_daily").unwrap(),
+            text::help("_daily-feedback").unwrap(),
             text::help("_daily-end").unwrap(),
         );
-        assert_eq!(daily_text(false).unwrap(), format!("{head}{end}"));
         assert_eq!(
-            daily_text(true).unwrap(),
+            daily_text(false, false).unwrap(),
+            format!("{head}{block}{end}")
+        );
+        assert_eq!(
+            daily_text(true, false).unwrap(),
+            format!("{head}{block}{CARDS_HELP_LINE}\n{end}")
+        );
+        assert_eq!(daily_text(false, true).unwrap(), format!("{head}{end}"));
+        assert_eq!(
+            daily_text(true, true).unwrap(),
             format!("{head}{CARDS_HELP_LINE}\n{end}")
         );
-        assert!(head.ends_with('\n') && !CARDS_HELP_LINE.contains('\''));
+        assert!(head.ends_with('\n') && block.ends_with('\n'));
+        assert!(!CARDS_HELP_LINE.contains('\''));
+        // The block is the blank line, the heading and send-feedback's
+        // three lines.
+        let heading = concat!(
+            "\n",
+            k2_client::product_name!(),
+            " ITSELF\n  send-feedback "
+        );
+        assert!(block.starts_with(heading) && block.lines().count() == 5);
     }
 
     #[test]
@@ -1185,7 +1308,7 @@ mod tests {
             let page = page.expect("the tier");
             assert_eq!(
                 (page.text.as_ref(), page.stderr, page.exit),
-                (daily_text(false).unwrap().as_str(), false, Exit::Ok)
+                (daily_text(false, false).unwrap().as_str(), false, Exit::Ok)
             );
             let sock = prelude(true, true, false, true);
             assert!(daily_page(&sock, &env, never).is_some(), "HOOK_SOCK set");
@@ -1486,7 +1609,7 @@ mod tests {
                     lead: None,
                 })
             };
-            assert_eq!(tier, page(daily_text(false).unwrap()));
+            assert_eq!(tier, page(daily_text(false, false).unwrap()));
             assert_eq!(deprecated, page(deprecated_text().unwrap()));
             assert_eq!(chat, page(chat_text(&env).unwrap()));
         } else {
@@ -1496,7 +1619,7 @@ mod tests {
             assert_eq!(
                 unknown,
                 Some(Page {
-                    text: daily_text(false).unwrap().into(),
+                    text: daily_text(false, false).unwrap().into(),
                     stderr: false,
                     exit: Exit::Error,
                     lead: Some("Unknown command: nope\n".to_string()),

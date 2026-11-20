@@ -54,6 +54,9 @@
 //!   the binary print it.
 //! - [`cards`]: whether permission cards are on for this caller, asked
 //!   as the shell asks before a page that depends on them.
+//! - [`feedback_optin`]: whether send-feedback is hidden from this
+//!   caller while agents may not report, asked as the shell asks before
+//!   the daily tier of the help and send-feedback's study page.
 //! - [`tools`]: the shell's tool table, which catalog tool a command line
 //!   is and whether it needs the session's own passport.
 //! - [`python`]: whether the shell has a Python 3 to run, and whether a
@@ -70,6 +73,7 @@ pub mod embedded;
 pub mod exit;
 pub mod fallthrough;
 pub mod families;
+pub mod feedback_optin;
 pub mod front;
 pub mod home;
 pub mod notice;

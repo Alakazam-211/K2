@@ -51,7 +51,7 @@
 
 use crate::daemon::{self, Settings};
 use crate::offline::{self, Env, Prelude};
-use crate::out::json::{self, Value};
+use crate::out::json::{self, Text, Value};
 use crate::python::{self, Python3};
 use crate::transport::{Auth, Client};
 use std::borrow::Cow;
@@ -221,21 +221,34 @@ pub fn on(ask: Ask) -> bool {
 }
 
 /// The shell's Python on the body `$(…)` held (NULs dropped):
-/// `json.load(sys.stdin)`, then on only for a `dict` whose `"enabled"`
-/// is `True` (the last value of a key that comes twice).
-pub fn enabled(body: &[u8], decode: Decode) -> bool {
+/// `json.load(sys.stdin)`, when that is a `dict` (a key that comes twice
+/// holds its last value). `None` where the Python raises or reads
+/// something else.
+pub fn object(body: &[u8], decode: Decode) -> Option<Vec<(Text, Value)>> {
     let bytes: Vec<u8> = body.iter().copied().filter(|b| *b != 0).collect();
     let text: Cow<'_, str> = match std::str::from_utf8(&bytes) {
         Ok(t) => t.into(),
         Err(_) if decode == Decode::Lossy => String::from_utf8_lossy(&bytes),
-        Err(_) => return false,
+        Err(_) => return None,
     };
     match json::parse(&text) {
-        Ok(Value::Object(pairs)) => pairs
-            .iter()
-            .any(|(k, v)| k.as_str() == Some("enabled") && *v == Value::Bool(true)),
-        _ => false,
+        Ok(Value::Object(pairs)) => Some(pairs),
+        _ => None,
     }
+}
+
+/// `v.get(key)` on an [`object`].
+pub fn get<'a>(pairs: &'a [(Text, Value)], key: &str) -> Option<&'a Value> {
+    pairs
+        .iter()
+        .rev()
+        .find(|(k, _)| k.as_str() == Some(key))
+        .map(|(_, v)| v)
+}
+
+/// On only for a `dict` whose `"enabled"` is `True`.
+pub fn enabled(body: &[u8], decode: Decode) -> bool {
+    object(body, decode).is_some_and(|o| get(&o, "enabled") == Some(&Value::Bool(true)))
 }
 
 /// `_perm_lines`: a line ending ` #if-cards` only when `on` (without the

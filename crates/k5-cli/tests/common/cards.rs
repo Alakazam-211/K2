@@ -11,6 +11,11 @@
 //! answer, so neither counts) and the daemon that moved its port (no
 //! shell `$(…)` holds the refused try's `000`). Each reads the daemon's
 //! "on" as on ([`check_without_python3`]).
+//!
+//! The daily tier of the help asks the feedback probe first
+//! (`_sf_agents_off_here`, [`k5_cli::feedback_optin`]): its rows
+//! ([`daily_rows`]) are these, each after a settings read that shows
+//! send-feedback.
 
 #![cfg(unix)]
 
@@ -23,6 +28,9 @@ use std::time::Duration;
 
 pub const ON: &str = r#"{"enabled":true}"#;
 pub const OFF: &str = r#"{"enabled":false}"#;
+/// The feedback settings' answer in [`daily_rows`]: agents may report, so
+/// send-feedback shows.
+pub const AGENTS_ON: &str = r#"{"enabled":true,"agents":true,"canSend":true,"senderKind":"agent"}"#;
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
@@ -52,11 +60,11 @@ fn moved(r: &Rig) {
 pub const NO_SOCKET_NO_PORT: &str = "no socket and no port: nothing asked, off";
 
 /// The rows for a help page (the daily tier: `k2`, `k2 help`,
-/// `k2 --help`), which exits 0 either way: [`rows`], but the shell's
+/// `k2 --help`), which exits 0 either way: [`daily_rows`], but the shell's
 /// connection gate wants a port for help, so with none it stops at the
 /// gate (`Error: Cannot connect to K2.`, exit 1) before anything is asked.
 pub fn help_rows(rig: &Rig, args: &'static [&'static str]) -> Vec<Case> {
-    let mut all = rows(rig, args, 0, 0);
+    let mut all = daily_rows(rig, args, 0, 0);
     let gate = all
         .iter_mut()
         .find(|c| c.name == NO_SOCKET_NO_PORT)
@@ -324,6 +332,35 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
     ]
 }
 
+/// [`rows`] for a page that asks the feedback probe first, as the daily
+/// tier does: each row's answers after one that shows send-feedback
+/// ([`AGENTS_ON`]), and one more request where the row's reaches the
+/// daemon (the two probes ask the same way, each on its own connection).
+pub fn daily_rows(
+    rig: &Rig,
+    args: &'static [&'static str],
+    on_code: i32,
+    off_code: i32,
+) -> Vec<Case> {
+    rows(rig, args, on_code, off_code)
+        .into_iter()
+        .map(|c| {
+            let replies = if c.requests == 0 {
+                c.replies.clone()
+            } else {
+                std::iter::once(ok(AGENTS_ON))
+                    .chain(c.replies.iter().cloned())
+                    .collect()
+            };
+            Case {
+                replies,
+                requests: c.requests + usize::from(c.requests > 0),
+                ..c
+            }
+        })
+        .collect()
+}
+
 /// The rows that answer otherwise with no `python3` ([`NoPython3::Own`]):
 /// the binary sends what the row says and prints the page as it does for
 /// "on, on the cell socket" with `python3`, the daemon's "on" read as on.
@@ -333,7 +370,20 @@ pub fn check_without_python3(
     on_code: i32,
     off_code: i32,
 ) {
-    let all = rows(rig, args, on_code, off_code);
+    own_without_python3(rig, args, on_code, rows(rig, args, on_code, off_code));
+}
+
+/// [`check_without_python3`] for [`daily_rows`].
+pub fn check_daily_without_python3(
+    rig: &Rig,
+    args: &'static [&'static str],
+    on_code: i32,
+    off_code: i32,
+) {
+    own_without_python3(rig, args, on_code, daily_rows(rig, args, on_code, off_code));
+}
+
+fn own_without_python3(rig: &Rig, args: &'static [&'static str], on_code: i32, all: Vec<Case>) {
     let on = all
         .iter()
         .find(|c| c.name == "on, on the cell socket")

@@ -31,23 +31,29 @@
 #      never a subshell or command substitution, an echo or printf, a file
 #      or string test (-f, -n, ...), another program, or a step that spans
 #      lines.
-# The k2 help tiers made of pieces (`k2 --help` is _daily plus _daily-end,
-# with a line between them when permission cards are on) and every page
-# piped through the card filter fail rule 2, so they are not on the list.
+# The k2 help tiers made of pieces (`k2 --help` is _daily, _daily-feedback
+# unless an agent's server says agents may not report, a line when
+# permission cards are on, then _daily-end) and every page piped through
+# the card filter fail rule 2, so they are not on the list.
 #
 # The daily tier's three forms (`k2`, `k2 help`, `k2 --help`, which the
 # binary answers itself: crates/k5-cli/src/pages.rs, DAILY_FORMS) are
-# proved on their own, in A, As, B, T, Ton, C and Con (below): the
-# output is _daily, the cards line only where cards are on, then
-# _daily-end; and the trace from the router's case to the EXIT trap is
-# the same in all, but for that line's echo and the cards probe: plain
-# steps as in rule 2 with exactly two cats, one call of
-# _permission_cli_enabled, and inside that call only steps on lines of
-# the probe's own functions (_permission_cli_enabled and every function
-# its code names, again and again). The probe is the binary's
-# crates/k5-cli/src/cards.rs, whose answers the Rust parity tests prove
-# (crates/k5-cli/tests/help_daily_cards_parity.rs). Each run asks once
-# where a passport and a socket or a port are set, never elsewhere.
+# proved on their own, in A, As, B, T, Ton, Toff, C, Con and Coff
+# (below): the output is _daily, _daily-feedback but where agents are off
+# (Toff, Coff), the cards line only where cards are on, then _daily-end;
+# and the trace from the router's case to the EXIT trap is the same in
+# all, but for the block's cat, that line's echo and the two probes:
+# plain steps as in rule 2 with exactly two cats besides the block's, one
+# call of _sf_agents_off_here (the feedback probe) then one of
+# _permission_cli_enabled (the cards probe), the block's cat between them
+# exactly where agents are not off, and inside each call only steps on
+# lines of that probe's own functions (the function and every function
+# its code names, again and again). The probes are the binary's
+# crates/k5-cli/src/feedback_optin.rs and cards.rs, whose answers the
+# Rust parity tests prove (crates/k5-cli/tests/help_feedback_optin_parity.rs
+# and help_daily_cards_parity.rs). Each run asks twice (the settings,
+# then the cards) where a passport and a socket or a port are set, never
+# elsewhere.
 #
 # The environments, each env -i with a scratch HOME, stubs for curl and
 # the system tools (a call fails the form), stdin from /dev/null:
@@ -59,16 +65,21 @@
 #        in C instead).
 #   C    an agent in a K2 terminal: B and K2_HOOK_SOCK, a live socket. A
 #        stub daemon answers there, and only there: the permission cards
-#        probe (GET /cli/permission/enabled) says cards are off. curl runs
-#        for real only for a request to that socket, python3 for real
-#        always, so a form that asks reads the answer as it would.
+#        probe (GET /cli/permission/enabled) says cards are off, and the
+#        feedback settings (GET /cli/product-feedback/settings) that
+#        agents may report. curl runs for real only for a request to that
+#        socket, python3 for real always, so a form that asks reads the
+#        answer as it would.
 #   Con  C with cards on.
+#   Coff C with cards on and agents off (send-feedback hidden). Daily
+#        tier only.
 #   As   A with K2_HOOK_SOCK set to C's live socket (an owner in a K2
 #        terminal, no passport): nothing is asked. Daily tier only.
 #   T    B over TCP: K2_HOST 127.0.0.1 and K5_PORT a stub daemon there
 #        whose cards probe says off; curl runs for real only for a request
 #        to it, python3 for real. Daily tier only.
 #   Ton  T with cards on. Daily tier only.
+#   Toff T with agents off. Daily tier only.
 # Every form runs in A, C and Con, and a family's --help in B too. The
 # session checks pass in all of them (a passport, a live socket, no
 # CODEX_ setting): the binary runs the same checks for a family's help
@@ -86,25 +97,25 @@
 #     help-deprecated: _deprecated, then one printf step per row of
 #     _K2_RETIRED_VERBS (read from cli/src/deprecation.sh as bash reads
 #     it) on _retired_verbs_map's line, then _deprecated-end; nothing else
-#     but plain steps and two cats; nothing asked, in all seven.
+#     but plain steps and two cats; nothing asked, in all nine.
 #   chat, chat --help, chat -h, chat help (A, B, C, Con, T, Ton: chat is
 #     an id tool, so in As bash refuses it before the router) and help,
-#     --help or -h with chat (all seven): chat/_head, chat/_manage,
+#     --help or -h with chat (all nine): chat/_head, chat/_manage,
 #     chat/_end, plain steps with three cats; with _CHAT_HELP_MANAGE set to
 #     anything but empty or 1, two, and no manage piece.
 #   a word the router has no arm for, alone and with words after it (in
-#     all seven): `Unknown command: <word>` on stderr, the daily tier for
-#     the env's cards on stdout, exit 1, asking as the tier asks; the
+#     all nine): `Unknown command: <word>` on stderr, the daily tier for
+#     the env's cards and agents on stdout, exit 1, asking as the tier asks; the
 #     trace is the daily tier's but for two calls of _retired_verb_exit,
 #     inside which only its loop runs (local, for, a test of two words,
 #     continue), and the line's echo.
 #   every retired verb whose first word the router has no arm for, alone
-#     and with a word after it (all seven): the row's line on stderr,
+#     and with a word after it (all nine): the row's line on stderr,
 #     nothing on stdout, exit 1, nothing asked; inside _retired_verb_exit
 #     its loop, then the row's assignment, case, one echo and exit.
 #
-# Never touches ~/.k2. The stub daemon is this script's own, on two Unix
-# sockets in the scratch folder.
+# Never touches ~/.k2. The stub daemon is this script's own, on three Unix
+# sockets in the scratch folder and three loopback ports.
 set -euo pipefail
 export LC_ALL=C
 
@@ -211,7 +222,7 @@ def make_env(kind, base):
             "K2_CELL": "canonical", "K2_PANE_ID": "p9", "CLAUDECODE": "1", "NO_COLOR": "1",
             "TERM": "dumb", "COLUMNS": "40", "K2_JSON": "1", "K2_DEBUG": "1",
         })
-        if kind in ("C", "Con"):
+        if kind in ("C", "Con", "Coff"):
             env["K2_HOOK_SOCK"] = cards_sock[kind]
             env["PATH"] = os.path.join(sandbox, "stub-cell") + ":" + os.environ.get("PATH", "/usr/bin:/bin")
     return env, cwd
@@ -236,8 +247,10 @@ with open(os.path.join(sandbox, "stub-cell", "curl"), "w") as f:
             "echo \"stub curl $*\" >&2\nexit 97\n" % real_curl)
 os.chmod(os.path.join(sandbox, "stub-cell", "curl"), 0o755)
 
-# The stub daemon: the cards probe off on one socket, on on the other.
-hits = {"C": 0, "Con": 0}
+# The stub daemon: the cards probe off on one socket, on on the others;
+# the feedback settings say agents may report but where AGENTS_OFF.
+AGENTS_OFF = {"Coff", "Toff"}
+hits = {"C": 0, "Con": 0, "Coff": 0}
 hits_lock = threading.Lock()
 cards_sock = {}
 class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
@@ -251,8 +264,13 @@ def handler(kind, on):
         def do_GET(self):
             with hits_lock:
                 hits[self.kind_] += 1
-            if self.path.split("?", 1)[0] == "/cli/permission/enabled":
+            route = self.path.split("?", 1)[0]
+            if route == "/cli/permission/enabled":
                 status, body = 200, json.dumps({"enabled": self.on_}).encode()
+            elif route == "/cli/product-feedback/settings":
+                off = self.kind_ in AGENTS_OFF
+                status, body = 200, json.dumps({"enabled": True, "agents": not off, "canSend": not off,
+                                                "senderKind": "agent", "ok": True}).encode()
             else:
                 status, body = 404, b'{"error":"not found"}'
             self.send_response(status)
@@ -268,19 +286,19 @@ def handler(kind, on):
         def log_message(self, *a):
             pass
     return Cards
-for kind, on in (("C", False), ("Con", True)):
+for kind, on in (("C", False), ("Con", True), ("Coff", True)):
     # In the environment's own folder, so a path in a trace reads <base>.
     os.makedirs(os.path.join(sandbox, kind), exist_ok=True)
     path = os.path.join(sandbox, kind, "cards.sock")
     srv = UnixServer(path, handler(kind, on))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     cards_sock[kind] = path
-envs = {k: make_env(k, os.path.join(sandbox, k)) for k in ("A", "B", "C", "Con")}
+envs = {k: make_env(k, os.path.join(sandbox, k)) for k in ("A", "B", "C", "Con", "Coff")}
 
 # The daily tier's own environments: an owner with HOOK_SOCK set, and an
 # agent whose probe goes over TCP to a stub daemon on 127.0.0.1.
 tcp_port = {}
-for kind, on in (("T", False), ("Ton", True)):
+for kind, on in (("T", False), ("Ton", True), ("Toff", False)):
     hits[kind] = 0
     srv = TCPServer(("127.0.0.1", 0), handler(kind, on))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -292,7 +310,7 @@ for t in STUBBED:
     p = os.path.join(sandbox, "stub-tcp", t)
     with open(p, "w") as f:
         if t == "curl":
-            pats = "|".join("http://127.0.0.1:%d/*" % tcp_port[k] for k in ("T", "Ton"))
+            pats = "|".join("http://127.0.0.1:%d/*" % tcp_port[k] for k in ("T", "Ton", "Toff"))
             f.write("#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in %s) exec %s \"$@\" ;; esac; done\n"
                     "echo \"stub curl $*\" >&2\nexit 97\n" % (pats, real_curl))
         else:
@@ -304,7 +322,7 @@ def derive(kind, src, extra, stub_dir):
     env["PATH"] = os.path.join(sandbox, stub_dir) + ":" + os.environ.get("PATH", "/usr/bin:/bin")
     envs[kind] = (env, cwd)
 derive("As", "A", {"K2_HOOK_SOCK": cards_sock["C"]}, "stub-cell")
-for kind in ("T", "Ton"):
+for kind in ("T", "Ton", "Toff"):
     derive(kind, "B", {"K2_HOST": "127.0.0.1", "K5_PORT": str(tcp_port[kind])}, "stub-tcp")
 
 STEP = re.compile(r"^(\++)([0-9]+): (.*)$")
@@ -448,15 +466,25 @@ def names_in(name):
     for a, b in body_ranges(name):
         found |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", "\n".join(k2_lines[a - 1:b])))
     return {f for f in found if f in functions and f != name}
-probe_funcs, todo = {"_permission_cli_enabled"}, ["_permission_cli_enabled"]
-while todo:
-    for f in names_in(todo.pop()) - probe_funcs:
-        probe_funcs.add(f)
-        todo.append(f)
-probe_lines = set()
-for f in probe_funcs:
-    for a, b in body_ranges(f):
-        probe_lines.update(range(a, b + 1))
+def closure(name):
+    """The function and every function its code names, again and again,
+    and the lines of all their bodies."""
+    funcs, todo = {name}, [name]
+    while todo:
+        for f in names_in(todo.pop()) - funcs:
+            funcs.add(f)
+            todo.append(f)
+    lines = set()
+    for f in funcs:
+        for a, b in body_ranges(f):
+            lines.update(range(a, b + 1))
+    return funcs, lines
+# The two probes in cmd_help_v2_daily's order: the feedback settings, then
+# the cards.
+FEEDBACK_PROBE, CARDS_PROBE = "_sf_agents_off_here", "_permission_cli_enabled"
+feedback_funcs, feedback_lines = closure(FEEDBACK_PROBE)
+probe_funcs, probe_lines = closure(CARDS_PROBE)
+PROBES = {FEEDBACK_PROBE: feedback_lines, CARDS_PROBE: probe_lines}
 daily_def = body_ranges("cmd_help_v2_daily")
 if len(daily_def) != 1:
     sys.exit("FAIL: cmd_help_v2_daily is defined %d times" % len(daily_def))
@@ -472,20 +500,27 @@ if not m:
     sys.exit("FAIL: no cards line in cli/src/help.sh")
 cards_line = m.group(1).encode("utf-8") + b"\n"
 DAILY = [[], ["help"], ["--help"]]
-DAILY_ENVS = ["A", "As", "B", "T", "Ton", "C", "Con"]
-ON = {"Ton", "Con"}
-ASKS = {"T", "Ton", "C", "Con"}
+DAILY_ENVS = ["A", "As", "B", "T", "Ton", "Toff", "C", "Con", "Coff"]
+ON = {"Ton", "Con", "Coff"}
+ASKS = {"T", "Ton", "Toff", "C", "Con", "Coff"}
+HIDE = AGENTS_OFF
 
-def daily_split(steps):
-    """The steps outside the probe, the cards line's echo steps, and the number of probe calls."""
-    outside, echo, calls, in_probe = [], [], 0, False
+def daily_want(kind):
+    """The daily tier as bash prints it in `kind`."""
+    return (files["_daily"] + (b"" if kind in HIDE else files["_daily-feedback"])
+            + (cards_line if kind in ON else b"") + files["_daily-end"])
+
+def daily_split(steps, kind):
+    """The steps outside the probes (the block's cat taken out), the cards
+    line's echo steps, and the number of calls of each probe."""
+    outside, echo, calls, in_probe = [], [], {p: 0 for p in PROBES}, None
     for l in steps:
         m = STEP.match(l)
         if in_probe:
             if m and len(m.group(1)) == 1 and daily_lo <= int(m.group(2)) <= daily_hi:
-                in_probe = False
-            elif m and int(m.group(2)) not in probe_lines:
-                return None, "a step in the cards probe on a line of none of its functions: %r" % l
+                in_probe = None
+            elif m and int(m.group(2)) not in PROBES[in_probe]:
+                return None, "a step in %s on a line of none of its functions: %r" % (in_probe, l)
             else:
                 # A probe step, or the next line of one that spans lines.
                 continue
@@ -496,41 +531,52 @@ def daily_split(steps):
             echo.append(l)
             continue
         outside.append(l)
-        if body == "_permission_cli_enabled" and daily_lo <= n <= daily_hi:
-            calls += 1
-            in_probe = True
+        if body in PROBES and daily_lo <= n <= daily_hi:
+            calls[body] += 1
+            in_probe = body
     if in_probe:
-        return None, "the trace ends inside the cards probe"
+        return None, "the trace ends inside %s" % in_probe
+    calls_at = [i for i, l in enumerate(outside) if STEP.match(l).group(3) in PROBES
+                and daily_lo <= int(STEP.match(l).group(2)) <= daily_hi]
+    order = [STEP.match(outside[i]).group(3) for i in calls_at]
+    if order != [FEEDBACK_PROBE, CARDS_PROBE]:
+        return None, "the probes ran as %r, want %s then %s" % (order, FEEDBACK_PROBE, CARDS_PROBE)
+    between = outside[calls_at[0] + 1:calls_at[1]]
+    want_between = [] if kind in HIDE else ["cat"]
+    if [STEP.match(l).group(3) for l in between] != want_between:
+        return None, "between the probes %r, want %r" % (between, want_between)
+    outside = outside[:calls_at[0] + 1] + outside[calls_at[1]:]
     return (outside, echo, calls), None
 
 def daily_check(argv):
     label = "k2 " + " ".join(argv) if argv else "k2"
     outsides = []
     for kind in DAILY_ENVS:
-        want = files["_daily"] + (cards_line if kind in ON else b"") + files["_daily-end"]
+        want = daily_want(kind)
         got = []
         for trace in (False, True):
             before = dict(hits)
             got.append(run(argv, kind, trace))
             asked = {k: hits[k] - before[k] for k in hits}
-            want_asked = {k: (1 if k == kind and kind in ASKS else 0) for k in hits}
+            want_asked = {k: (2 if k == kind and kind in ASKS else 0) for k in hits}
             if asked != want_asked:
                 sys.exit("FAIL: %s in %s asked %r, want %r" % (label, kind, asked, want_asked))
         (code, out, err), (tcode, tout, trace_err) = got
         if (code, out, err) != (0, want, b""):
-            sys.exit("FAIL: %s in %s: exit %d, %d bytes on stdout (want the tier's %d, cards %s), stderr %r"
-                     % (label, kind, code, len(out), len(want), "on" if kind in ON else "off", err[-300:]))
+            sys.exit("FAIL: %s in %s: exit %d, %d bytes on stdout (want the tier's %d, cards %s, agents %s), stderr %r"
+                     % (label, kind, code, len(out), len(want), "on" if kind in ON else "off",
+                        "off" if kind in HIDE else "on", err[-300:]))
         if (tcode, tout) != (code, out):
             sys.exit("FAIL: %s in %s: the traced run differs from the untraced run" % (label, kind))
         w, why = window(trace_err, kind)
         if w is None:
             sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
-        split, why = daily_split(w)
+        split, why = daily_split(w, kind)
         if why:
             sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
         outside, echo, calls = split
-        if calls != 1:
-            sys.exit("FAIL: %s in %s: %d calls of the cards probe, want 1" % (label, kind, calls))
+        if calls != {p: 1 for p in PROBES}:
+            sys.exit("FAIL: %s in %s: the probes' calls %r, want one each" % (label, kind, calls))
         if len(echo) != (1 if kind in ON else 0) or any(not STEP.match(e).group(3).startswith("echo ") for e in echo):
             sys.exit("FAIL: %s in %s: the cards line's steps %r" % (label, kind, echo))
         why = plain(outside, want_cats=2)
@@ -538,15 +584,17 @@ def daily_check(argv):
             sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
         outsides.append(outside)
     if any(o != outsides[0] for o in outsides):
-        sys.exit("FAIL: %s: the trace outside the cards probe differs between the environments" % label)
+        sys.exit("FAIL: %s: the trace outside the probes differs between the environments" % label)
 
 for argv in DAILY:
     daily_check(argv)
-print("help_native: the daily tier (k2, k2 help, k2 --help) in %s: bash prints _daily, the cards line "
-      "only with cards on, then _daily-end, asking once with a passport and a socket or a port; the trace "
-      "is plain but for the line and the cards probe (%d functions)"
-      % (", ".join(DAILY_ENVS), len(probe_funcs)))
+print("help_native: the daily tier (k2, k2 help, k2 --help) in %s: bash prints _daily, _daily-feedback "
+      "but where agents are off, the cards line only with cards on, then _daily-end, asking twice (the "
+      "settings, then the cards) with a passport and a socket or a port; the trace is plain but for the "
+      "block, the line and the two probes (%d and %d functions)"
+      % (", ".join(DAILY_ENVS), len(feedback_funcs), len(probe_funcs)))
 if os.environ.get("HELP_NATIVE_WHY"):
+    print("  the feedback probe's functions: %s" % " ".join(sorted(feedback_funcs)))
     print("  the cards probe's functions: %s" % " ".join(sorted(probe_funcs)))
 
 # The other forms of the daily tier: -h, an empty word, and help, --help
@@ -648,14 +696,14 @@ def unknown_check(argv):
     label = form_label(argv)
     outsides = []
     for kind in DAILY_ENVS:
-        want = files["_daily"] + (cards_line if kind in ON else b"") + files["_daily-end"]
+        want = daily_want(kind)
         want_err = ("Unknown command: %s\n" % argv[0]).encode("utf-8")
         got = []
         for trace in (False, True):
             before = dict(hits)
             got.append(run(argv, kind, trace))
             asked = {k: hits[k] - before[k] for k in hits}
-            want_asked = {k: (1 if k == kind and kind in ASKS else 0) for k in hits}
+            want_asked = {k: (2 if k == kind and kind in ASKS else 0) for k in hits}
             if asked != want_asked:
                 sys.exit("FAIL: %s in %s asked %r, want %r" % (label, kind, asked, want_asked))
         (code, out, err), (tcode, tout, trace_err) = got
@@ -678,18 +726,18 @@ def unknown_check(argv):
         if len(lead) != 1 or not STEP.match(lead[0]).group(3).startswith("echo "):
             sys.exit("FAIL: %s in %s: the Unknown command line's steps %r" % (label, kind, lead))
         rest = [l for l in rest if l not in lead]
-        split, why = daily_split(rest)
+        split, why = daily_split(rest, kind)
         if why:
             sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
         outside, echo, calls = split
-        if calls != 1 or len(echo) != (1 if kind in ON else 0):
+        if calls != {p: 1 for p in PROBES} or len(echo) != (1 if kind in ON else 0):
             sys.exit("FAIL: %s in %s: %d probe calls, cards line steps %r" % (label, kind, calls, echo))
         why = plain(outside, want_cats=2)
         if why:
             sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
         outsides.append([l.replace(argv[0], "<w>") for l in outside])
     if any(o != outsides[0] for o in outsides):
-        sys.exit("FAIL: %s: the trace outside the cards probe differs between the environments" % label)
+        sys.exit("FAIL: %s: the trace outside the probes differs between the environments" % label)
 
 arms = set()
 rm_ = re.search(r'^case "\$\{1:-help\}" in\n(.*?)^esac\n', open(os.path.join(root, "cli/src/router.sh")).read(), re.S | re.M)
@@ -706,7 +754,7 @@ for argv in UNKNOWN:
         sys.exit("FAIL: %s is a router word" % argv[0])
     unknown_check(argv)
 print("help_native: the unknown command in %s: %d forms, each the line on stderr, then the daily tier "
-      "(asking once with a passport and a socket or a port), exit 1; inside _retired_verb_exit only "
+      "(asking twice with a passport and a socket or a port), exit 1; inside _retired_verb_exit only "
       "its loop, twice" % (", ".join(DAILY_ENVS), len(UNKNOWN)))
 
 def quiet_check(argv, want_code, want_out, want_err, kinds, judge):

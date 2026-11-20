@@ -2,8 +2,9 @@
 //! binary answers itself ([`k5_cli::pages::UNKNOWN_NATIVE`]): a retired
 //! verb's line on stderr and exit 1, or `Unknown command: <word>` on
 //! stderr, the daily tier on stdout and exit 1. With a passport the
-//! shell's `cmd_help` asks the daemon whether permission cards are on,
-//! and so does the binary: each probe row ([`common::cards::rows`]) on
+//! shell's `cmd_help` asks the daemon whether agents may report, then
+//! whether permission cards are on, and so does the binary: each probe
+//! row ([`common::cards::daily_rows`]) on
 //! `cli/k2` and the binary through the shared rig, the same request and
 //! the same bytes. Without one nothing is asked; the connection gate and
 //! the virtual desktop's guard (a word that is no help) stop it first.
@@ -12,7 +13,7 @@
 
 mod common;
 
-use common::cards::ON;
+use common::cards::{AGENTS_ON, ON};
 use common::parity::{
     case, nothing, ok, owner_and_port, owner_only, port_only, with_passport, Case, Compare, Rig,
 };
@@ -34,7 +35,7 @@ const FORMS: [(&str, &[&str], &str); 4] = [
 fn the_unknown_command_with_a_passport() {
     for (verb, args, tag) in FORMS {
         let rig = Rig::new(verb, tag);
-        for c in common::cards::rows(&rig, args, 1, 1) {
+        for c in common::cards::daily_rows(&rig, args, 1, 1) {
             rig.check(&c);
         }
     }
@@ -44,7 +45,7 @@ fn the_unknown_command_with_a_passport() {
 fn the_unknown_command_reads_the_daemon_itself_without_python3() {
     for (verb, args, tag) in FORMS {
         let rig = Rig::new(verb, tag);
-        common::cards::check_without_python3(&rig, args, 1, 1);
+        common::cards::check_daily_without_python3(&rig, args, 1, 1);
     }
 }
 
@@ -180,10 +181,10 @@ fn a_word_whose_tool_is_an_id_tool() {
                     "a passport and its socket: the shell's checks pass, then the tier",
                     &[],
                     &[],
-                    vec![ok(ON)],
+                    vec![ok(AGENTS_ON), ok(ON)],
                     nothing,
                     1,
-                    1,
+                    2,
                 )
             },
         ),

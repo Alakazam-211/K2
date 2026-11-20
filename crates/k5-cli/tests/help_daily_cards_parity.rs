@@ -3,9 +3,11 @@
 //! ([`k5_cli::pages::DAILY_NATIVE`]); and the other forms that print it
 //! (`-h`, an empty word, `help <a word cmd_help has no arm for>`:
 //! [`k5_cli::pages::COMPOSED_NATIVE`]). With a passport the shell asks the
-//! daemon whether permission cards are on, and so does the binary: each
-//! probe row ([`common::cards::help_rows`]) on `cli/k2` and the binary,
-//! the same request and the same page. Without one nothing is asked, and
+//! daemon whether agents may report, then whether permission cards are
+//! on, and so does the binary: each probe row
+//! ([`common::cards::help_rows`], after a settings read that shows
+//! send-feedback; `help_feedback_optin_parity.rs` has the rows that hide
+//! it) on `cli/k2` and the binary, the same requests and the same page. Without one nothing is asked, and
 //! the connection gate wants a port and a token, as for any help.
 
 #![cfg(unix)]
@@ -87,6 +89,6 @@ fn the_tier_without_a_passport() {
 fn the_tier_reads_the_daemon_itself_without_python3() {
     for (verb, args, tag) in FORMS {
         let rig = Rig::new(verb, tag);
-        common::cards::check_without_python3(&rig, args, 0, 0);
+        common::cards::check_daily_without_python3(&rig, args, 0, 0);
     }
 }

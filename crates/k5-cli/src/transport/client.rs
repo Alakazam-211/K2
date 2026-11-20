@@ -33,6 +33,13 @@ pub const PASSPORT_PROJECT_MAX_TIME: Duration = Duration::from_secs(15);
 pub const CARDS_ENDPOINT: &str = "/cli/permission/enabled";
 /// `_permission_probe`'s `--connect-timeout 1 --max-time 1`.
 pub const CARDS_TIME: Duration = Duration::from_secs(1);
+/// Where `_sf_agents_off_probe` reads whether agents may report
+/// (`cli/src/send-feedback.sh`).
+pub const FEEDBACK_SETTINGS_ENDPOINT: &str = "/cli/product-feedback/settings";
+/// `_sf_agents_off_probe`'s `--connect-timeout 1`.
+pub const FEEDBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+/// `_sf_agents_off_probe`'s `--max-time 2`.
+pub const FEEDBACK_MAX_TIME: Duration = Duration::from_secs(2);
 /// `k2 update --cli`'s `--connect-timeout 2` (`_update_daemon_version`,
 /// `cli/src/update.sh`).
 pub const UPDATE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -233,6 +240,10 @@ enum Kind {
     /// most 1 s; only `_k2_curl`'s tries (a refused connect, and a moved
     /// port over TCP); no heal, no line, no note.
     Cards,
+    /// `_sf_agents_off_probe` (`cli/src/send-feedback.sh`): the request of
+    /// [`Kind::Cards`] for [`FEEDBACK_SETTINGS_ENDPOINT`], connect 1 s, at
+    /// most 2 s.
+    FeedbackOptin,
     /// `_update_daemon_version` (`cli/src/update.sh`): `_K2_CURL_TRIES=1
     /// _k2_curl "" -s --connect-timeout 2 --max-time 4` of
     /// `http://127.0.0.1:$PORT/boot-status`. A GET with no credential and
@@ -283,6 +294,7 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::PassportProject
                 | Kind::Cards
+                | Kind::FeedbackOptin
                 | Kind::UpdateVersion
                 | Kind::SetupGet
                 | Kind::SetupPost
@@ -301,6 +313,7 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::PassportProject
                 | Kind::Cards
+                | Kind::FeedbackOptin
                 | Kind::UpdateVersion
                 | Kind::SetupGet
                 | Kind::SetupPost
@@ -318,6 +331,7 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::PassportProject
                 | Kind::Cards
+                | Kind::FeedbackOptin
                 | Kind::UpdateVersion
                 | Kind::SetupGet
                 | Kind::SetupPost
@@ -328,6 +342,7 @@ impl Kind {
         match self {
             Kind::Probe => PROBE_CONNECT_TIMEOUT,
             Kind::Cards => CARDS_TIME,
+            Kind::FeedbackOptin => FEEDBACK_CONNECT_TIMEOUT,
             Kind::UpdateVersion => UPDATE_CONNECT_TIMEOUT,
             _ => CONNECT_TIMEOUT,
         }
@@ -684,6 +699,28 @@ impl Client {
             Kind::Cards,
             channel,
             CARDS_ENDPOINT,
+            &[],
+            &[],
+            Instant::now(),
+        )
+        .map_err(|f| f.error)
+    }
+
+    /// `_sf_agents_off_probe`'s request ([`Kind::FeedbackOptin`]): the
+    /// GET of [`FEEDBACK_SETTINGS_ENDPOINT`], on the cell socket when
+    /// [`Client::has_cell_socket`], else over TCP, as
+    /// [`Client::permission_enabled`] sends its own. The caller reads the
+    /// answer. Needs a passport.
+    pub fn feedback_settings(&mut self) -> Result<Response, Error> {
+        let channel = if self.has_cell_socket() {
+            Channel::Uds
+        } else {
+            Channel::Tcp
+        };
+        self.run(
+            Kind::FeedbackOptin,
+            channel,
+            FEEDBACK_SETTINGS_ENDPOINT,
             &[],
             &[],
             Instant::now(),
@@ -1145,6 +1182,7 @@ impl Client {
             Kind::SidecarGet => SIDECAR_MAX_TIME,
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
             Kind::Cards => CARDS_TIME,
+            Kind::FeedbackOptin => FEEDBACK_MAX_TIME,
             Kind::UpdateVersion => UPDATE_MAX_TIME,
         }
     }
@@ -1391,7 +1429,11 @@ impl Client {
             Kind::PostJson | Kind::PostJsonStdin => {
                 (Method::Post, endpoint.to_string(), json(&mut headers))
             }
-            Kind::SendJsonGet | Kind::SidecarGet | Kind::PassportProject | Kind::Cards => {
+            Kind::SendJsonGet
+            | Kind::SidecarGet
+            | Kind::PassportProject
+            | Kind::Cards
+            | Kind::FeedbackOptin => {
                 let payload = String::from_utf8_lossy(body);
                 let path = if payload.is_empty() {
                     endpoint.to_string()
@@ -1729,6 +1771,7 @@ mod tests {
             Kind::SidecarGet,
             Kind::PassportProject,
             Kind::Cards,
+            Kind::FeedbackOptin,
         ] {
             assert!(!k.checks_local_denial(), "{k:?}");
         }
@@ -1772,6 +1815,16 @@ mod tests {
             ),
             (Cards, false, false, false, false, false, false, false),
             (
+                FeedbackOptin,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
+            (
                 UpdateVersion,
                 false,
                 false,
@@ -1809,6 +1862,11 @@ mod tests {
             Kind::UpdateVersion.connect_timeout(),
             Duration::from_secs(2)
         );
+        assert_eq!(Kind::Cards.connect_timeout(), Duration::from_secs(1));
+        assert_eq!(
+            Kind::FeedbackOptin.connect_timeout(),
+            Duration::from_secs(1)
+        );
         assert_eq!(c.max_time(Kind::PostJson), Duration::from_secs(30));
         assert_eq!(c.max_time(Kind::SendJsonGet), Duration::from_secs(60));
         c.post_max_time = Some(Duration::from_secs(150));
@@ -1826,6 +1884,8 @@ mod tests {
             (Kind::BearerForm, 30),
             (Kind::SidecarGet, 120),
             (Kind::PassportProject, 15),
+            (Kind::Cards, 1),
+            (Kind::FeedbackOptin, 2),
             (Kind::UpdateVersion, 4),
             (Kind::SetupGet, 30),
             (Kind::SetupPost, 30),
@@ -2172,6 +2232,7 @@ mod tests {
                 SidecarGet,
                 PassportProject,
                 Cards,
+                FeedbackOptin,
                 SetupGet,
                 SetupPost,
             ] {

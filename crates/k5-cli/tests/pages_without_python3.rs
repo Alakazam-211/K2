@@ -163,7 +163,7 @@ fn every_page_prints_the_same_without_python3() {
         );
     }
     // The daily tier: no passport, so cards are off and nothing is asked.
-    let tier = k5_cli::pages::daily_text(false).expect("the daily tier");
+    let tier = k5_cli::pages::daily_text(false, false).expect("the daily tier");
     for f in k5_cli::pages::DAILY_FORMS {
         let out = rig.run(f, false, &[]);
         assert_eq!(
@@ -187,7 +187,7 @@ fn every_page_prints_the_same_without_python3() {
 fn the_composed_pages_print_the_same_without_python3() {
     use k5_cli::pages::{self, Composed};
     let rig = Rig::new("composed");
-    let tier = pages::daily_text(false).expect("the daily tier");
+    let tier = pages::daily_text(false, false).expect("the daily tier");
     let deprecated = pages::deprecated_text().expect("the deprecated tier");
     let chat = pages::chat_text(&k5_cli::offline::Env::of(&[])).expect("chat's usage");
     let lines: &[&[&str]] = &[
@@ -272,7 +272,7 @@ fn without_python3_the_json_pages_are_the_binary_s_whatever_python_s_settings_sa
 #[test]
 fn the_unknown_command_prints_the_same_without_python3() {
     let rig = Rig::new("unknown");
-    let tier = k5_cli::pages::daily_text(false).expect("the daily tier");
+    let tier = k5_cli::pages::daily_text(false, false).expect("the daily tier");
     for (args, stdout, stderr) in [
         (&["nope"][..], tier.as_str(), "Unknown command: nope\n"),
         (&["nope", "x", "--json"], tier.as_str(), "Unknown command: nope\n"),

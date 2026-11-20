@@ -331,7 +331,11 @@ fn answer(cp: &mut Cp, form: Form) -> Exit {
                 (Text::from("blank"), list(&o.blank)),
                 (Text::from("skip"), list(&o.skip)),
             ];
-            for (k, v) in [("why", &o.why), ("dest", &o.dest), ("workspace", &o.workspace)] {
+            for (k, v) in [
+                ("why", &o.why),
+                ("dest", &o.dest),
+                ("workspace", &o.workspace),
+            ] {
                 if !v.is_empty() {
                     b.push((Text::from(k), s(v)));
                 }
@@ -457,14 +461,19 @@ mod tests {
         assert_eq!(parse(&["preview", "w"]), None);
         assert_eq!(parse(&["propose", "--to", "here", "--token", "t"]), None);
         assert_eq!(parse(&["proposals", "--why"]), None);
-        assert!(matches!(parse(&["withdraw"]), Some(Form::Die("usage", _, Exit::Usage))));
-        let Some(Form::Propose(o)) = parse(&["propose", "--to", "h", "--copy", "a, b", "--copy", ",c"]) else {
+        assert!(matches!(
+            parse(&["withdraw"]),
+            Some(Form::Die("usage", _, Exit::Usage))
+        ));
+        let Some(Form::Propose(o)) =
+            parse(&["propose", "--to", "h", "--copy", "a, b", "--copy", ",c"])
+        else {
             panic!("not propose");
         };
         assert_eq!(o.copy, vec!["a", "b", "c"]);
         assert_eq!(
             die_line("usage", "x \u{2026}"),
-            r#"{"error": "usage", "hint": "x …"}"#
+            "{\"error\": \"usage\", \"hint\": \"x \\u2026\"}"
         );
     }
 }

@@ -28,7 +28,7 @@ use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
-use crate::transport::encode::quote;
+use crate::transport::urllib::quote_plus;
 use crate::transport::{Auth, OwnCurl};
 use k2_client::cli_name;
 use std::ffi::OsString;
@@ -152,9 +152,7 @@ pub fn parse(words: &[&str]) -> Ask {
                         i += 1;
                         dev = args.get(i).copied().unwrap_or("").to_string();
                         if dev.is_empty() {
-                            return usage(format!(
-                                "usage: {c} push log [--json] [--device <id>]"
-                            ));
+                            return usage(format!("usage: {c} push log [--json] [--device <id>]"));
                         }
                     }
                     a if a.starts_with("--device=") => dev = a["--device=".len()..].to_string(),
@@ -169,7 +167,7 @@ pub fn parse(words: &[&str]) -> Ask {
             let endpoint = if dev.is_empty() {
                 LOG.to_string()
             } else {
-                format!("{LOG}?device={}", quote(&dev))
+                format!("{LOG}?device={}", quote_plus(&dev))
             };
             send(&endpoint, None, "log")
         }
@@ -421,9 +419,7 @@ fn devices(p: &mut Py, d: &Value) -> R<()> {
     }
     for r in iter(&rows)? {
         let e2e = or(dget_v(&r, "e2e")?, Value::Object(Vec::new()));
-        let get = |k: &str| -> R<Value> {
-            crate::families::heartbeat::py::dget_or(&r, k, s(""))
-        };
+        let get = |k: &str| -> R<Value> { crate::families::heartbeat::py::dget_or(&r, k, s("")) };
         let previews = if py::truthy(&dget_v(&r, "previews")?) {
             "on"
         } else {
@@ -437,7 +433,10 @@ fn devices(p: &mut Py, d: &Value) -> R<()> {
             get("status")?,
         ];
         if py::truthy(&dget_v(&r, "tokenFingerprint")?) {
-            bits.push(s(&format!("token {}", st(&dget_v(&r, "tokenFingerprint")?))));
+            bits.push(s(&format!(
+                "token {}",
+                st(&dget_v(&r, "tokenFingerprint")?)
+            )));
         }
         if py::truthy(&e2e) {
             bits.push(s(&format!("key {}", st(&dget_v(&e2e, "keyId")?))));
@@ -476,7 +475,9 @@ fn stamp(ms: &Value) -> R<String> {
     let secs = match ms {
         Value::Int(d) => match d.parse::<i64>() {
             Ok(n) => n.div_euclid(1000),
-            Err(_) => return Err("OverflowError: timestamp out of range for platform time_t".into()),
+            Err(_) => {
+                return Err("OverflowError: timestamp out of range for platform time_t".into())
+            }
         },
         other => {
             let f = at_ms(other)? / 1000.0;
@@ -609,7 +610,7 @@ mod tests {
             parse(&["device", "rm", "a\u{e9}"]),
             Ask::Send {
                 endpoint: DEVICE_REMOVE.into(),
-                body: Some(r#"{"deviceId": "aé"}"#.into()),
+                body: Some("{\"deviceId\": \"a\\u00e9\"}".into()),
                 view: "removed",
                 json: false
             }
@@ -617,7 +618,7 @@ mod tests {
         assert_eq!(
             parse(&["log", "--device", "a b", "--json"]),
             Ask::Send {
-                endpoint: "/cli/push/log?device=a%20b".into(),
+                endpoint: "/cli/push/log?device=a+b".into(),
                 body: None,
                 view: "log",
                 json: true

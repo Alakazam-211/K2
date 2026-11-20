@@ -81,11 +81,26 @@ pub enum Form {
     Help,
     /// `_preset_err "usage" <hint>`, exit 2.
     Usage(String),
-    List { json: bool },
-    Show { selector: String, json: bool },
-    Add { f: Fields, json: bool },
-    Set { selector: String, f: Fields, json: bool },
-    Remove { selector: String, json: bool },
+    List {
+        json: bool,
+    },
+    Show {
+        selector: String,
+        json: bool,
+    },
+    Add {
+        f: Fields,
+        json: bool,
+    },
+    Set {
+        selector: String,
+        f: Fields,
+        json: bool,
+    },
+    Remove {
+        selector: String,
+        json: bool,
+    },
 }
 
 /// The words after `preset`.
@@ -142,14 +157,14 @@ pub fn parse(words: &[&str]) -> Form {
 
 /// A value flag of `add` and `set`: `Err` with its usage hint when it is
 /// the last word.
-fn value<'a>(rest: &[&'a str], i: usize, hint: &str) -> Result<&'a str, Form> {
+fn value<'a>(rest: &[&'a str], i: usize, hint: &str) -> Result<&'a str, String> {
     rest.get(i + 1)
         .copied()
-        .ok_or_else(|| Form::Usage(hint.to_string()))
+        .ok_or_else(|| hint.to_string())
 }
 
 /// The flags both verbs take; `Ok(false)`: not one of them.
-fn shared(f: &mut Fields, rest: &[&str], i: usize, set: bool) -> Result<bool, Form> {
+fn shared(f: &mut Fields, rest: &[&str], i: usize, set: bool) -> Result<bool, String> {
     let dflag = if set {
         "--danger-flag requires a flag value"
     } else {
@@ -182,7 +197,7 @@ fn add(rest: &[&str]) -> Form {
     let mut i = 0;
     while i < rest.len() {
         match shared(&mut f, rest, i, false) {
-            Err(stop) => return stop,
+            Err(hint) => return Form::Usage(hint),
             Ok(true) => {
                 i += 2;
                 continue;
@@ -196,7 +211,7 @@ fn add(rest: &[&str]) -> Form {
                     i += 2;
                     continue;
                 }
-                Err(stop) => return stop,
+                Err(hint) => return Form::Usage(hint),
             },
             "--json" => json = true,
             a => {
@@ -223,7 +238,7 @@ fn set(rest: &[&str]) -> Form {
     let mut i = 0;
     while i < rest.len() {
         match shared(&mut f, rest, i, true) {
-            Err(stop) => return stop,
+            Err(hint) => return Form::Usage(hint),
             Ok(true) => {
                 i += 2;
                 continue;
@@ -237,7 +252,7 @@ fn set(rest: &[&str]) -> Form {
                     i += 2;
                     continue;
                 }
-                Err(stop) => return stop,
+                Err(hint) => return Form::Usage(hint),
             },
             "--enable" => f.enable = "1".into(),
             "--disable" => f.enable = "0".into(),
@@ -402,7 +417,9 @@ fn put(body: &mut Vec<(Text, Value)>, key: &str, v: Value) {
 
 /// Python's `str.split()`.
 fn split(text: &str) -> Vec<&str> {
-    text.split(super::py_space).filter(|w| !w.is_empty()).collect()
+    text.split(super::py_space)
+        .filter(|w| !w.is_empty())
+        .collect()
 }
 
 /// `(v or "")` as a string, the exception for one that isn't.
@@ -429,7 +446,12 @@ impl Block {
     }
 
     /// `request(method, route, body=body)`: `None` for any exception.
-    fn request(&mut self, method: Method, route: &str, body: Option<&Value>) -> (Option<u16>, Option<Value>) {
+    fn request(
+        &mut self,
+        method: Method,
+        route: &str,
+        body: Option<&Value>,
+    ) -> (Option<u16>, Option<Value>) {
         let mut req = Request::new(method, route, TIMEOUT);
         if let Some(b) = body {
             req = req
@@ -590,7 +612,10 @@ impl Block {
     fn list(&mut self, json: bool) -> R<()> {
         let presets = self.presets()?;
         if json {
-            let v = obj(vec![("ok", Value::Bool(true)), ("presets", Value::Array(presets))]);
+            let v = obj(vec![
+                ("ok", Value::Bool(true)),
+                ("presets", Value::Array(presets)),
+            ]);
             self.p.out(dumps(&v));
             return Ok(());
         }
@@ -648,7 +673,12 @@ impl Block {
                 cell(or(dget_v(p, "id")?, s("?")))?,
                 cell(or(dget_v(p, "label")?, s("?")))?,
                 cmd,
-                (if py::truthy(&dget_v(p, "enabled")?) { "yes" } else { "no" }).into(),
+                (if py::truthy(&dget_v(p, "enabled")?) {
+                    "yes"
+                } else {
+                    "no"
+                })
+                .into(),
                 (if py::truthy(&dget_v(p, "is_built_in")?) {
                     "built-in"
                 } else {
@@ -682,7 +712,8 @@ impl Block {
     fn show(&mut self, selector: &str, json: bool) -> R<()> {
         let p = self.resolve(selector)?;
         if json {
-            self.p.out(dumps(&obj(vec![("ok", Value::Bool(true)), ("preset", p)])));
+            self.p
+                .out(dumps(&obj(vec![("ok", Value::Bool(true)), ("preset", p)])));
             return Ok(());
         }
         let parse = |raw: Value, default: Value| -> Value {
@@ -700,7 +731,11 @@ impl Block {
         self.p.out(format!("id:        {}", f("id")?));
         self.p.out(format!("label:     {}", f("label")?));
         self.p.out(format!("command:   {}", f("command")?));
-        let yes = if py::truthy(&dget_v(&p, "enabled")?) { "yes" } else { "no" };
+        let yes = if py::truthy(&dget_v(&p, "enabled")?) {
+            "yes"
+        } else {
+            "no"
+        };
         self.p.out(format!("enabled:   {yes}"));
         let src = if py::truthy(&dget_v(&p, "is_built_in")?) {
             "built-in"
@@ -740,7 +775,8 @@ impl Block {
                 let mut keys: Vec<&(Text, Value)> = pairs.iter().collect();
                 keys.sort_by(|a, b| a.0.cmp(&b.0));
                 for (k, v) in keys {
-                    self.p.out(format!("  {}={}", st(&Value::Str(k.clone())), st(v)));
+                    self.p
+                        .out(format!("  {}={}", st(&Value::Str(k.clone())), st(v)));
                 }
             }
             Value::Str(_) => self.p.out(format!("env:       {}", st(&env))),
@@ -805,7 +841,8 @@ impl Block {
             }
             let d = self.call(Method::Post, CREATE, Some(&Value::Object(body)))?;
             if json {
-                self.p.out(dumps(&obj(vec![("ok", Value::Bool(true)), ("preset", d)])));
+                self.p
+                    .out(dumps(&obj(vec![("ok", Value::Bool(true)), ("preset", d)])));
             } else {
                 let id = st(&dget_v(&d, "id")?);
                 let cmd = st(&dget_v(&d, "command")?);
@@ -844,7 +881,8 @@ impl Block {
         }
         let d = self.call(Method::Post, UPDATE, Some(&Value::Object(body)))?;
         if json {
-            self.p.out(dumps(&obj(vec![("ok", Value::Bool(true)), ("preset", d)])));
+            self.p
+                .out(dumps(&obj(vec![("ok", Value::Bool(true)), ("preset", d)])));
         } else {
             self.p
                 .out(format!("Updated preset '{}'.", st(&dget_v(&d, "id")?)));
@@ -866,7 +904,10 @@ impl Block {
         }
         self.call(Method::Post, DELETE, Some(&obj(vec![("id", id.clone())])))?;
         if json {
-            self.p.out(dumps(&obj(vec![("ok", Value::Bool(true)), ("removed", id)])));
+            self.p.out(dumps(&obj(vec![
+                ("ok", Value::Bool(true)),
+                ("removed", id),
+            ])));
         } else {
             self.p.out(format!("Removed preset '{}'.", st(&id)));
         }
@@ -888,7 +929,16 @@ mod tests {
             parse(&["set", "a", "--env", "K=V", "--clear-env"]),
             Form::Usage(_)
         ));
-        let Form::Add { f, json } = parse(&["add", "--id", "x", "--command", "x --y", "--danger-flag", "--yes", "--json"]) else {
+        let Form::Add { f, json } = parse(&[
+            "add",
+            "--id",
+            "x",
+            "--command",
+            "x --y",
+            "--danger-flag",
+            "--yes",
+            "--json",
+        ]) else {
             panic!("not add");
         };
         assert!(json);

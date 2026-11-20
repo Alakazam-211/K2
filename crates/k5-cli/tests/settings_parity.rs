@@ -23,7 +23,15 @@ fn settings_answers_as_the_shell_does() {
     let v = vec![
         // covers: settings
         case("the show", &[], &[], vec![ok(SHOWN)], owner_and_port, 0, 1),
-        case("the show, stray words", &["x", "y"], &[], vec![ok("{}")], owner_and_port, 0, 1),
+        case(
+            "the show, stray words",
+            &["x", "y"],
+            &[],
+            vec![ok("{}")],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "--mode with no value: the show",
             &["--mode"],
@@ -72,8 +80,24 @@ fn settings_answers_as_the_shell_does() {
             3,
             1,
         ),
-        case("the show: not JSON", &[], &[], vec![ok("<html>")], owner_and_port, 1, 1),
-        case("the show: a list", &[], &[], vec![ok("[]")], owner_and_port, 1, 1),
+        case(
+            "the show: not JSON",
+            &[],
+            &[],
+            vec![ok("<html>")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "the show: a list",
+            &[],
+            &[],
+            vec![ok("[]")],
+            owner_and_port,
+            1,
+            1,
+        ),
         case(
             "an unknown flag",
             &["--frob"],
@@ -156,7 +180,15 @@ fn settings_answers_as_the_shell_does() {
             1,
             0,
         ),
-        case("set: one word", &["set", "ciPreview"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "set: one word",
+            &["set", "ciPreview"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "set: a key it doesn't change",
             &["set", "apiEnabled", "true"],
@@ -202,7 +234,10 @@ fn settings_answers_as_the_shell_does() {
                 "the show in a session: TCP",
                 &[],
                 &[],
-                vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"agents can't"}}"#.into())],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"owner_only","hint":"agents can't"}}"#.into(),
+                )],
                 port_only,
                 3,
                 1,
@@ -220,10 +255,19 @@ fn settings_answers_as_the_shell_does() {
 fn settings_lines_say_the_brand_s_name() {
     let cli = k2_client::brand::CLI_NAME;
     let rig = Rig::new(VERB, "brand");
-    let c = case("brand", &["set", "x", "on"], &[], vec![], owner_and_port, 2, 0);
+    let c = case(
+        "brand",
+        &["set", "x", "on"],
+        &[],
+        vec![],
+        owner_and_port,
+        2,
+        0,
+    );
     let (out, log) = rig.binary(&c, false);
     assert!(
-        out.stderr.starts_with(&format!("Error: {cli} settings set doesn't change 'x'.")),
+        out.stderr
+            .starts_with(&format!("Error: {cli} settings set doesn't change 'x'.")),
         "{}",
         out.stderr
     );
@@ -241,7 +285,10 @@ fn settings_help_never_acts() {
     };
     for c in [
         shell("--mode -h", &["--mode", "k2", "-h"]),
-        shell("set --help", &["set", "ciPreview", "on", "--help"]),
+        Case {
+            code: 2,
+            ..shell("set --help: three words, its usage line", &["set", "ciPreview", "on", "--help"])
+        },
         shell("set -h first", &["set", "-h"]),
     ] {
         rig.check(&c);

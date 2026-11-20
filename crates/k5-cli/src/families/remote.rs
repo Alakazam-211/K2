@@ -114,7 +114,11 @@ pub fn lines(sub: &str) -> (String, String, Exit) {
         "" => (String::new(), usage(), Exit::Usage),
         other => (
             String::new(),
-            format!("{} remote: unknown verb '{other}'\n{}", cli_name!(), usage()),
+            format!(
+                "{} remote: unknown verb '{other}'\n{}",
+                cli_name!(),
+                usage()
+            ),
             Exit::Usage,
         ),
     }

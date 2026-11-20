@@ -35,7 +35,15 @@ fn preset_answers_as_the_shell_does() {
     let v = vec![
         case("the help", &[], &[], vec![], owner_and_port, 0, 0),
         // covers: preset list
-        case("list", &["list"], &[], vec![ok(PRESETS)], owner_and_port, 0, 1),
+        case(
+            "list",
+            &["list"],
+            &[],
+            vec![ok(PRESETS)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: preset list --json
         case(
             "list --json",
@@ -46,7 +54,15 @@ fn preset_answers_as_the_shell_does() {
             0,
             1,
         ),
-        case("list: none", &["list"], &[], vec![ok("[]")], owner_and_port, 0, 1),
+        case(
+            "list: none",
+            &["list"],
+            &[],
+            vec![ok("[]")],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "list: not a list",
             &["list"],
@@ -69,7 +85,10 @@ fn preset_answers_as_the_shell_does() {
             "list: refused",
             &["list"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"no"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"owner_only","hint":"no"}}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -157,7 +176,15 @@ fn preset_answers_as_the_shell_does() {
             4,
             1,
         ),
-        case("show: no selector", &["show"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "show: no selector",
+            &["show"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "show: a flag",
             &["show", "a", "--x"],
@@ -205,7 +232,16 @@ fn preset_answers_as_the_shell_does() {
         // covers: preset add --json
         case(
             "add --json",
-            &["add", "--json", "--id", "mine", "--command", "mine", "--label", "Mine é"],
+            &[
+                "add",
+                "--json",
+                "--id",
+                "mine",
+                "--command",
+                "mine",
+                "--label",
+                "Mine é",
+            ],
             &[],
             vec![ok(created)],
             owner_and_port,
@@ -261,7 +297,10 @@ fn preset_answers_as_the_shell_does() {
             "add: the daemon refuses",
             &["add", "--id", "m", "--command", "m"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"forbidden"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"forbidden"}}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -288,7 +327,15 @@ fn preset_answers_as_the_shell_does() {
         // covers: preset set --json
         case(
             "set --json",
-            &["set", "claude", "--enable", "--json", "--clear-danger-flags", "--clear-readiness", "--clear-inject-flow"],
+            &[
+                "set",
+                "claude",
+                "--enable",
+                "--json",
+                "--clear-danger-flags",
+                "--clear-readiness",
+                "--clear-inject-flow",
+            ],
             &[],
             vec![ok(PRESETS), ok(r#"{"id":"claude","enabled":1}"#)],
             owner_and_port,
@@ -346,7 +393,10 @@ fn preset_answers_as_the_shell_does() {
             "remove --json",
             &["remove", "--json", "codex"],
             &[],
-            vec![ok(r#"[{"id":"c","label":"C","command":"codex"}]"#), ok(r#"{"ok":true}"#)],
+            vec![
+                ok(r#"[{"id":"c","label":"C","command":"codex"}]"#),
+                ok(r#"{"ok":true}"#),
+            ],
             owner_and_port,
             0,
             2,
@@ -452,7 +502,11 @@ fn preset_lines_say_the_brand_s_name() {
     for args in [&["list", "x"][..], &["nope"]] {
         let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
         let (out, log) = rig.binary(&c, false);
-        assert!(out.stderr.contains(&format!("{cli} preset")), "{args:?}: {}", out.stderr);
+        assert!(
+            out.stderr.contains(&format!("{cli} preset")),
+            "{args:?}: {}",
+            out.stderr
+        );
         assert!(!out.stderr.contains("k5 "), "{args:?}");
         assert_eq!(out.code, Some(2), "{args:?}");
         assert!(log.is_empty(), "{args:?}");

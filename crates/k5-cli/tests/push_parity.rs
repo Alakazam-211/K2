@@ -111,14 +111,16 @@ fn push_answers_as_the_shell_does() {
         Case {
             compare: Compare::Traceback,
             ..case(
-            "devices: a row that can't be shown",
-            &["devices"],
-            &[],
-            vec![ok(r#"{"mode":"off","devices":[{"deviceId":5,"status":"ok"}]}"#)],
-            owner_and_port,
-            1,
-            1,
-        )
+                "devices: a row that can't be shown",
+                &["devices"],
+                &[],
+                vec![ok(
+                    r#"{"mode":"off","devices":[{"deviceId":5,"status":"ok"}]}"#,
+                )],
+                owner_and_port,
+                1,
+                1,
+            )
         },
         case(
             "devices: an extra word",
@@ -247,7 +249,15 @@ fn push_answers_as_the_shell_does() {
             0,
         ),
         // covers: push log
-        case("log", &["log"], &[("TZ", "UTC")], vec![ok(LOG)], owner_and_port, 0, 1),
+        case(
+            "log",
+            &["log"],
+            &[("TZ", "UTC")],
+            vec![ok(LOG)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: push log --json
         case(
             "log --device --json",
@@ -399,7 +409,10 @@ fn push_devices_large() {
         "bash's requests"
     );
     if bash.code == Some(0) {
-        assert!(bash.stdout == want, "bash's stdout differs from the binary's");
+        assert!(
+            bash.stdout == want,
+            "bash's stdout differs from the binary's"
+        );
     } else {
         assert_eq!(bash.code, Some(126), "bash: {}", bash.stderr);
         assert!(
@@ -417,7 +430,10 @@ fn push_lines_say_the_brand_s_name() {
     let cli = k2_client::brand::CLI_NAME;
     let rig = Rig::new(VERB, "brand");
     for (args, want) in [
-        (&["devices", "x"][..], format!("usage: {cli} push devices [--json]\n")),
+        (
+            &["devices", "x"][..],
+            format!("usage: {cli} push devices [--json]\n"),
+        ),
         (
             &["log", "x"],
             format!("usage: {cli} push log [--json] [--device <id>] (got 'x')\n"),
@@ -443,7 +459,10 @@ fn push_help_never_acts() {
     };
     for c in [
         shell("e2e set -h", &["e2e", "sealed-only", "-h"]),
-        shell("device e2e --help", &["device", "e2e", "d1", "off", "--help"]),
+        shell(
+            "device e2e --help",
+            &["device", "e2e", "d1", "off", "--help"],
+        ),
         shell("device remove -h", &["device", "remove", "-h", "d1"]),
     ] {
         rig.check(&c);

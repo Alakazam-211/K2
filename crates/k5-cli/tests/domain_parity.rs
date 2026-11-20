@@ -261,7 +261,9 @@ fn domain_writes_answer_as_the_shell_does() {
             "refresh --json",
             &["refresh", "acme.example", "--json"],
             &[],
-            vec![ok(r#"{"ok":true,"domains":[{"apex":"acme.example"}],"checked":true}"#)],
+            vec![ok(
+                r#"{"ok":true,"domains":[{"apex":"acme.example"}],"checked":true}"#,
+            )],
             owner_and_port,
             0,
             1,

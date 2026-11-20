@@ -500,11 +500,7 @@ mod tests {
     type Fields = (i64, u32, u32, u32, u32, u32, Option<i64>);
 
     fn dt(s: &str) -> Option<Fields> {
-        fromisoformat(s).map(|d| {
-            (
-                d.year, d.month, d.day, d.hour, d.minute, d.second, d.offset,
-            )
-        })
+        fromisoformat(s).map(|d| (d.year, d.month, d.day, d.hour, d.minute, d.second, d.offset))
     }
 
     #[test]
@@ -513,14 +509,8 @@ mod tests {
             dt("2026-11-20T10:00:00+00:00"),
             Some((2026, 11, 20, 10, 0, 0, Some(0)))
         );
-        assert_eq!(
-            dt("2026-11-20 10:00"),
-            Some((2026, 11, 20, 10, 0, 0, None))
-        );
-        assert_eq!(
-            dt("20261120T1000"),
-            Some((2026, 11, 20, 10, 0, 0, None))
-        );
+        assert_eq!(dt("2026-11-20 10:00"), Some((2026, 11, 20, 10, 0, 0, None)));
+        assert_eq!(dt("20261120T1000"), Some((2026, 11, 20, 10, 0, 0, None)));
         assert_eq!(
             dt("2026-11-20T10:00:00.1234567+01:30"),
             Some((2026, 11, 20, 10, 0, 0, Some(5400)))
@@ -528,7 +518,10 @@ mod tests {
         assert_eq!(dt("2026-11-20x10"), Some((2026, 11, 20, 10, 0, 0, None)));
         assert_eq!(dt("2026-11-20"), Some((2026, 11, 20, 0, 0, 0, None)));
         assert_eq!(dt("2026-W47-5"), Some((2026, 11, 20, 0, 0, 0, None)));
-        assert_eq!(dt("2026-11-20T10:00:00-07:00"), Some((2026, 11, 20, 10, 0, 0, Some(-25200))));
+        assert_eq!(
+            dt("2026-11-20T10:00:00-07:00"),
+            Some((2026, 11, 20, 10, 0, 0, Some(-25200)))
+        );
         for bad in [
             "2026-11-20T10:00:00 ",
             "2026-13-01",

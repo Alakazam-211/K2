@@ -67,7 +67,10 @@ pub const KEYS: &[&str] = &[
 pub enum Form {
     Show,
     Mode(String),
-    Set { key: String, value: bool },
+    Set {
+        key: String,
+        value: bool,
+    },
     /// A line on stderr, exit 2.
     Usage(String),
 }
@@ -211,7 +214,11 @@ fn run_with(
                     let status = format!("{:03}", r.status);
                     set_reader(&String::from_utf8_lossy(&body), &status, &key, value).print()
                 }
-                Err(e @ (Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. } | Error::NoAnswer(_))) => {
+                Err(
+                    e @ (Error::MaybeApplied { .. }
+                    | Error::NoOwnerInSession { .. }
+                    | Error::NoAnswer(_)),
+                ) => {
                     out::stderr_line(&e.to_string());
                     Exit::Error
                 }
@@ -302,9 +309,17 @@ pub fn print(raw: &str, set: bool) -> Shown {
                 other => (s(""), s(&st(other))),
             };
             let low = err_text(&mut p, &code, &hint)?;
-            let refused = ["owner", "admin", "forbidden", "token", "not allowed", "refused", "passport"]
-                .iter()
-                .any(|w| low.contains(w));
+            let refused = [
+                "owner",
+                "admin",
+                "forbidden",
+                "token",
+                "not allowed",
+                "refused",
+                "passport",
+            ]
+            .iter()
+            .any(|w| low.contains(w));
             if refused {
                 p.err(format!("Workspace settings are the owner's or an admin's: ask your human, or run it from a terminal outside a {} agent session.", product_name!()));
                 return Ok(Exit::Refused);
@@ -316,11 +331,25 @@ pub fn print(raw: &str, set: bool) -> Shown {
             return Ok(Exit::Ok);
         }
         p.out("Workspace Settings:");
-        p.out(format!("  Name:      {}", st(&dget_or(&d, "name", s("?"))?)));
-        p.out(format!("  Mode:      {}", st(&dget_or(&d, "mode", s("off"))?)));
-        let on = if py::truthy(&dget_v(&d, "heartbeatEnabled")?) { "on" } else { "off" };
+        p.out(format!(
+            "  Name:      {}",
+            st(&dget_or(&d, "name", s("?"))?)
+        ));
+        p.out(format!(
+            "  Mode:      {}",
+            st(&dget_or(&d, "mode", s("off"))?)
+        ));
+        let on = if py::truthy(&dget_v(&d, "heartbeatEnabled")?) {
+            "on"
+        } else {
+            "off"
+        };
         p.out(format!("  Heartbeat: {on}"));
-        let pinned = if py::truthy(&dget_v(&d, "pinned")?) { "yes" } else { "no" };
+        let pinned = if py::truthy(&dget_v(&d, "pinned")?) {
+            "yes"
+        } else {
+            "no"
+        };
         p.out(format!("  Pinned:    {pinned}"));
         Ok(Exit::Ok)
     })();
@@ -382,16 +411,23 @@ pub fn set_reader(raw: &str, status: &str, key: &str, want: bool) -> Shown {
             }
             let low = err_text(&mut p, &code, &hint)?;
             let refused = matches!(status, "401" | "403")
-                || ["owner", "admin", "forbidden", "not allowed", "refused", "passport"]
-                    .iter()
-                    .any(|w| low.contains(w));
+                || [
+                    "owner",
+                    "admin",
+                    "forbidden",
+                    "not allowed",
+                    "refused",
+                    "passport",
+                ]
+                .iter()
+                .any(|w| low.contains(w));
             if refused {
                 let perm = match &d {
                     Some(v @ Value::Object(_)) => dget_v(v, "permission")?,
                     _ => Value::Null,
                 };
-                let card = matches!(perm, Value::Object(_))
-                    && py::truthy(&dget_v(&perm, "command")?);
+                let card =
+                    matches!(perm, Value::Object(_)) && py::truthy(&dget_v(&perm, "command")?);
                 if card {
                     p.err("Server settings are the owner's: ask the owner on a permission card.");
                 } else {
@@ -399,7 +435,11 @@ pub fn set_reader(raw: &str, status: &str, key: &str, want: bool) -> Shown {
                 }
                 return Ok(Exit::Refused);
             }
-            return Ok(if status == "400" { Exit::Usage } else { Exit::Error });
+            return Ok(if status == "400" {
+                Exit::Usage
+            } else {
+                Exit::Error
+            });
         }
         let d = d.clone().unwrap_or(Value::Null);
         let got = dget_v(&d, key)?;
@@ -450,6 +490,8 @@ mod tests {
         );
         let r = set_reader(r#"{"homeChat":true}"#, "200", "homeChat", true);
         assert_eq!(r.exit, Exit::Ok);
-        assert!(r.stdout.starts_with("homeChat is now true on this server.\nNext: "));
+        assert!(r
+            .stdout
+            .starts_with("homeChat is now true on this server.\nNext: "));
     }
 }

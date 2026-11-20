@@ -698,7 +698,15 @@ fn connect_other_arms_answer_as_the_shell_does() {
             0,
         ),
         case("publish moved", &["publish"], &[], vec![], quiet, 2, 0),
-        case("an old publish verb", &["claim", "x"], &[], vec![], quiet, 2, 0),
+        case(
+            "an old publish verb",
+            &["claim", "x"],
+            &[],
+            vec![],
+            quiet,
+            2,
+            0,
+        ),
         case("an unknown verb", &["nope"], &[], vec![], quiet, 2, 0),
         case(
             "HOOK_SOCK set and no passport",

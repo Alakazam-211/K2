@@ -101,5 +101,8 @@ fn the_stops() {
     let Some(Form::Stop(lines, _)) = form(&["edit", "a", "--instructions", " \n"]) else {
         panic!("not a stop");
     };
-    assert_eq!(lines, vec!["Error: instructions cannot be blank".to_string()]);
+    assert_eq!(
+        lines,
+        vec!["Error: instructions cannot be blank".to_string()]
+    );
 }

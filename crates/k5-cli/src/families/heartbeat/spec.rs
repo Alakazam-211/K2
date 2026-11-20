@@ -30,7 +30,8 @@ fn hh_mm(t: &str) -> bool {
     match b.len() {
         4 => d(b[0]) && mm(&b[1..]),
         5 => {
-            ((b[0] == b'0' || b[0] == b'1') && d(b[1]) || b[0] == b'2' && (b'0'..=b'3').contains(&b[1]))
+            ((b[0] == b'0' || b[0] == b'1') && d(b[1])
+                || b[0] == b'2' && (b'0'..=b'3').contains(&b[1]))
                 && mm(&b[2..])
         }
         _ => false,
@@ -186,8 +187,18 @@ pub fn parse(args: &[&str]) -> Spec {
         for tok in toks {
             if !matches!(
                 tok.to_ascii_lowercase().as_str(),
-                "jan" | "feb" | "mar" | "apr" | "may" | "jun" | "jul" | "aug" | "sep" | "oct"
-                    | "nov" | "dec"
+                "jan"
+                    | "feb"
+                    | "mar"
+                    | "apr"
+                    | "may"
+                    | "jun"
+                    | "jul"
+                    | "aug"
+                    | "sep"
+                    | "oct"
+                    | "nov"
+                    | "dec"
             ) {
                 return stop(
                     format!("Error: --months takes a comma list of jan,feb,mar,apr,may,jun,jul,aug,sep,oct,nov,dec (got '{tok}')"),
@@ -247,7 +258,10 @@ pub fn parse(args: &[&str]) -> Spec {
         }
         let n: u128 = n.parse().unwrap_or(0);
         let mul = if unit == "minutes" { 60 } else { 3600 };
-        spec.push((Text::from("every_seconds"), Value::Int((n * mul).to_string())));
+        spec.push((
+            Text::from("every_seconds"),
+            Value::Int((n * mul).to_string()),
+        ));
     }
     if !start.is_empty() {
         spec.push((Text::from("start"), text(start)));
@@ -279,7 +293,10 @@ mod tests {
     fn the_specs_python_writes() {
         assert_eq!(
             made(&["--daily", "--time", "07:00"]),
-            (r#"{"frequency": "daily", "time": "07:00"}"#.into(), "daily".into())
+            (
+                r#"{"frequency": "daily", "time": "07:00"}"#.into(),
+                "daily".into()
+            )
         );
         assert_eq!(
             made(&["--weekly", "--days", "Mon, TUE", "--time", "7:05"]).0,
@@ -306,10 +323,22 @@ mod tests {
         );
         assert_eq!(parse(&["--daily", "--time"]), Spec::Shell);
         assert_eq!(parse(&["--weekly", "--days", "*"]), Spec::Shell);
-        assert!(matches!(parse(&["--daily", "--every", "0"]), Spec::Stop(_, Exit::Usage)));
-        assert!(matches!(parse(&["--daily", "--time", "24:00"]), Spec::Stop(_, Exit::Usage)));
-        assert!(matches!(parse(&["--monthly", "--days", "32"]), Spec::Stop(_, Exit::Usage)));
-        assert!(matches!(parse(&["--daily", "--in"]), Spec::Stop(_, Exit::Usage)));
+        assert!(matches!(
+            parse(&["--daily", "--every", "0"]),
+            Spec::Stop(_, Exit::Usage)
+        ));
+        assert!(matches!(
+            parse(&["--daily", "--time", "24:00"]),
+            Spec::Stop(_, Exit::Usage)
+        ));
+        assert!(matches!(
+            parse(&["--monthly", "--days", "32"]),
+            Spec::Stop(_, Exit::Usage)
+        ));
+        assert!(matches!(
+            parse(&["--daily", "--in"]),
+            Spec::Stop(_, Exit::Usage)
+        ));
         assert!(hh_mm("9:59") && hh_mm("23:00") && !hh_mm("24:00") && !hh_mm("1:60"));
     }
 }

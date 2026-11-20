@@ -209,7 +209,15 @@ fn clone_proposals_answer_as_the_shell_does() {
             0,
             1,
         ),
-        case("withdraw: no id", &["withdraw"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "withdraw: no id",
+            &["withdraw"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "deny",
             &["deny", "cp-1", "--reason", "not now"],

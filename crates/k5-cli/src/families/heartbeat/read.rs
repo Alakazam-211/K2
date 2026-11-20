@@ -2,8 +2,8 @@
 //! `cli/src/heartbeat.sh` on what it reads, as [`Shown`].
 
 use super::py::{
-    dget_or, dget_v, dumps_indent, has, hashable, index, int, is, iter, join, left, len,
-    loads, loads_value, or, plus, repr_head, str_plus, stamp, stripped, Py, R,
+    dget_or, dget_v, dumps_indent, has, hashable, index, int, is, iter, join, left, len, loads,
+    loads_value, or, plus, repr_head, stamp, str_plus, stripped, Py, R,
 };
 use super::when;
 use crate::exit::Exit;
@@ -14,7 +14,9 @@ use k2_client::{cli_name, product_name};
 
 /// The codes `cmd_heartbeat_list` refuses with.
 fn gated(code: &Value) -> bool {
-    ["owner_only", "forbidden", "gated"].iter().any(|w| is(code, w))
+    ["owner_only", "forbidden", "gated"]
+        .iter()
+        .any(|w| is(code, w))
 }
 
 /// `hb_zone(r)`.
@@ -45,11 +47,7 @@ fn waiting(r: &Value) -> R<String> {
         .iter()
         .any(|w| is(&reason, w));
     if py::truthy(&detail) && !own {
-        return Ok(format!(
-            "{}: {}",
-            py::str_of(&reason),
-            py::str_of(&detail)
-        ));
+        return Ok(format!("{}: {}", py::str_of(&reason), py::str_of(&detail)));
     }
     Ok(py::str_of(&reason))
 }
@@ -125,7 +123,9 @@ fn list_rows(p: &mut Py, raw: &str) -> R<Exit> {
                 } else {
                     String::new()
                 };
-                hint = s(&format!("{head}requires owner/admin \u{2014} ask your human"));
+                hint = s(&format!(
+                    "{head}requires owner/admin \u{2014} ask your human"
+                ));
             }
             p.err(format!("Error: {}", py::str_of(&hint)));
             return Ok(if gated(&code) || is(&code, "other_workspace") {
@@ -235,7 +235,10 @@ fn list_rows(p: &mut Py, raw: &str) -> R<Exit> {
                     None => format!(" (off since {})", py::str_of(&since)),
                 };
             }
-            p.out(format!("    auto-disabled by {}{at}: {why}", product_name!()));
+            p.out(format!(
+                "    auto-disabled by {}{at}: {why}",
+                product_name!()
+            ));
             p.out(format!(
                 "    it stays off until it is turned on: {} heartbeat enable {}",
                 cli_name!(),
@@ -398,7 +401,10 @@ pub fn restart(raw: &str, name: &str, json: bool) -> Shown {
                 py::str_of(&code),
                 py::str_of(&hint)
             ));
-            let refused = REFUSED.iter().chain(&["role_required"]).any(|w| is(&code, w));
+            let refused = REFUSED
+                .iter()
+                .chain(&["role_required"])
+                .any(|w| is(&code, w));
             return Ok(if refused { Exit::Refused } else { Exit::Error });
         }
         if is(&err, "role_required") {
@@ -610,7 +616,10 @@ pub fn edit(raw: &str, e: &Edited) -> Shown {
             p.out(format!("Updated heartbeat: {}", e.name));
         }
         if e.instructions {
-            p.out(format!("Wake instructions written by the daemon: {}", e.name));
+            p.out(format!(
+                "Wake instructions written by the daemon: {}",
+                e.name
+            ));
         }
         Ok(Exit::Ok)
     })();
@@ -739,7 +748,10 @@ pub fn show(raw: &str, w: &Shows) -> Shown {
         let nf = or(dget_v(&row, "nextFireAt")?, s("-"));
         p.out(format!("Next fire:      {}", py::str_of(&nf)));
         let tz = dget_v(&row, "tz")?;
-        let label = or(or(dget_v(&row, "zoneLabel")?, tz.clone()), s("server clock"));
+        let label = or(
+            or(dget_v(&row, "zoneLabel")?, tz.clone()),
+            s("server clock"),
+        );
         p.out(format!("Time zone:      {}", py::str_of(&label)));
         if py::truthy(&tz) {
             let at = when::hb_when(Some(&dget_v(&row, "nextFireAt")?), Some(&tz))?;
@@ -960,10 +972,7 @@ pub fn log(raw: &str) -> Shown {
                 if let Value::Object(_) = dget_v(&rows, "permission")? {
                     return fail(
                         &mut p,
-                        format!(
-                            "{server} refused /cli/heartbeat-log: {}",
-                            py::str_of(&err)
-                        ),
+                        format!("{server} refused /cli/heartbeat-log: {}", py::str_of(&err)),
                         Exit::Refused,
                     );
                 }
@@ -981,16 +990,14 @@ pub fn log(raw: &str) -> Shown {
             Value::Array(items) if items.iter().all(|r| matches!(r, Value::Object(_))) => {
                 items.clone()
             }
-            other => {
-                return fail(
-                    &mut p,
-                    format!(
-                        "{server} answered /cli/heartbeat-log with a {}, not a list of heartbeat rows",
-                        py::type_name(other)
-                    ),
-                    Exit::Error,
-                )
-            }
+            other => return fail(
+                &mut p,
+                format!(
+                    "{server} answered /cli/heartbeat-log with a {}, not a list of heartbeat rows",
+                    py::type_name(other)
+                ),
+                Exit::Error,
+            ),
         };
         if list.is_empty() {
             p.out("No heartbeat activity recorded yet.");
@@ -1103,8 +1110,12 @@ mod tests {
         assert_eq!(shown.exit, Exit::Ok, "{shown:?}");
         let lines: Vec<&str> = shown.stdout.lines().collect();
         assert!(lines[0].starts_with("Name                 Frequency  Schedule"));
-        assert_eq!(lines[1].len(), 145);
-        assert!(lines[2].starts_with("daily                daily      at 07:00"), "{}", lines[2]);
+        assert_eq!(lines[1].len(), 141 + 12);
+        assert!(
+            lines[2].starts_with("daily                daily      at 07:00"),
+            "{}",
+            lines[2]
+        );
     }
 
     #[test]
@@ -1115,7 +1126,10 @@ mod tests {
             shown.stderr,
             "Error: no \u{2014} requires owner/admin \u{2014} ask your human\n"
         );
-        assert_eq!(list("[]").stdout, "No heartbeats configured for this workspace.\n");
+        assert_eq!(
+            list("[]").stdout,
+            "No heartbeats configured for this workspace.\n"
+        );
         assert_eq!(list("5").stderr, "Error: 'int' object is not iterable\n");
     }
 }

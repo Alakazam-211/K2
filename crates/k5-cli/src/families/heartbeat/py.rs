@@ -320,7 +320,10 @@ mod tests {
             int(&s("x")).unwrap_err(),
             "ValueError: invalid literal for int() with base 10: 'x'"
         );
-        assert_eq!(stamp(&s("2026-11-20T10:00:00.123Z")).unwrap(), "2026-11-20 10:00:00");
+        assert_eq!(
+            stamp(&s("2026-11-20T10:00:00.123Z")).unwrap(),
+            "2026-11-20 10:00:00"
+        );
         assert_eq!(join(&s("ab"), ",").unwrap(), "a,b");
     }
 }

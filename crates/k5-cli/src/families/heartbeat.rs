@@ -38,7 +38,7 @@ use self::read::{Edited, Shows};
 use self::spec::Spec;
 use super::remind::shared::post_piped;
 use super::workspace::register::{self, Verb as RegisterVerb};
-use super::{curl_port, hook_sock, pipefail, piped_body, request_piped, Piped, Shown};
+use super::{curl_port, hook_sock, piped_body, pipefail, request_piped, Piped, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out;
@@ -328,7 +328,10 @@ fn toggle(action: &str) -> Option<Form> {
                 "{c} heartbeat schedule add/edit --name <n> <spec>  (see '{c} help heartbeat')"
             ),
         ),
-        "get" => deprecated("heartbeat get", &format!("{c} heartbeat show <name> [--json]")),
+        "get" => deprecated(
+            "heartbeat get",
+            &format!("{c} heartbeat show <name> [--json]"),
+        ),
         _ => usage2(
             format!("Unknown 'heartbeat' subcommand: {action}"),
             format!("Run '{c} help heartbeat' for the schedule/signal/inspection surface."),
@@ -458,7 +461,12 @@ fn named(
     empty: Exit,
     resolve: &dyn Fn(&str) -> Option<String>,
 ) -> Option<Result<Named, Form>> {
-    let stop2 = |a: String| Some(Err(Form::Stop(vec![a, usage_line.to_string()], Exit::Usage)));
+    let stop2 = |a: String| {
+        Some(Err(Form::Stop(
+            vec![a, usage_line.to_string()],
+            Exit::Usage,
+        )))
+    };
     let (mut name, mut ws, mut json) = (String::new(), String::new(), false);
     let mut i = 0;
     while i < args.len() {
@@ -522,7 +530,8 @@ fn session(args: &[&str]) -> Option<Form> {
         "Usage: {} heartbeat session <name> [--pinned | --auto | --set <session-id|workspace/handle> [--provider <p>]]",
         cli_name!()
     );
-    let (mut name, mut mode, mut id, mut provider) = (String::new(), "", String::new(), String::new());
+    let (mut name, mut mode, mut id, mut provider) =
+        (String::new(), "", String::new(), String::new());
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -660,15 +669,18 @@ fn flags(args: &[&str], name_first: bool) -> Option<Result<Flags, Form>> {
                 f.file = v?.to_string();
                 f.have_instructions = true;
             }
-            "--tz" => match v {
-                Some(z) => f.tz = Some(z.to_string()),
-                None => {
-                    return Some(Err(Form::Stop(
-                        vec!["Error: --tz needs a zone (for example America/New_York), or server".into()],
+            "--tz" => {
+                match v {
+                    Some(z) => f.tz = Some(z.to_string()),
+                    None => return Some(Err(Form::Stop(
+                        vec![
+                            "Error: --tz needs a zone (for example America/New_York), or server"
+                                .into(),
+                        ],
                         Exit::Usage,
-                    )))
+                    ))),
                 }
-            },
+            }
             _ => {
                 f.spec.push(a.to_string());
                 i += 1;
@@ -822,8 +834,7 @@ fn editor_runs(_editor: &str) -> bool {
 fn editor_runs(editor: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     let runs = |p: &Path| {
-        p.is_file()
-            && std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+        p.is_file() && std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
     };
     if editor.contains('/') {
         return runs(Path::new(editor));
@@ -1010,7 +1021,9 @@ fn name_param(name: &str) -> String {
 }
 
 fn ws_param(ws: &Option<String>) -> Vec<String> {
-    ws.iter().map(|w| format!("workspace={}", quote(w))).collect()
+    ws.iter()
+        .map(|w| format!("workspace={}", quote(w)))
+        .collect()
 }
 
 fn text(body: &[u8]) -> String {
@@ -1042,7 +1055,13 @@ impl Hb {
     /// `out="$(cli_send <call> …)"`: the answer as `$(…)` holds it.
     /// `Err`: the command ends there. A failed call holds nothing when
     /// `soft` (`|| true`), else ends the command with its code (`set -e`).
-    fn held(&mut self, endpoint: &str, post: bool, params: &[String], soft: bool) -> Result<Vec<u8>, Exit> {
+    fn held(
+        &mut self,
+        endpoint: &str,
+        post: bool,
+        params: &[String],
+        soft: bool,
+    ) -> Result<Vec<u8>, Exit> {
         let p: Vec<&str> = params.iter().map(String::as_str).collect();
         let call = if post {
             Call::RequestPost(&p)
@@ -1119,7 +1138,10 @@ impl Hb {
             }
             Form::Remove { name, purge } => {
                 let (endpoint, line) = if purge {
-                    (REMOVE, format!("Purged heartbeat: {name} (row deleted, folder removed)"))
+                    (
+                        REMOVE,
+                        format!("Purged heartbeat: {name} (row deleted, folder removed)"),
+                    )
                 } else {
                     (ARCHIVE, format!("Archived heartbeat: {name}"))
                 };
@@ -1240,7 +1262,13 @@ impl Hb {
     }
 
     /// `cmd_heartbeat_add` after its flags.
-    fn add(&mut self, name: &str, spec: (String, String), instructions: &str, tz: Option<String>) -> Exit {
+    fn add(
+        &mut self,
+        name: &str,
+        spec: (String, String),
+        instructions: &str,
+        tz: Option<String>,
+    ) -> Exit {
         let (spec_json, freq) = spec;
         let mut params = format!(
             "{}&frequency={freq}&spec={}",
@@ -1281,7 +1309,11 @@ impl Hb {
         use crate::out::py::{str_of, truthy};
         let wakeup_abs = {
             let v = get("wakeupAbs");
-            let mut s = if truthy(&v) { str_of(&v) } else { String::new() };
+            let mut s = if truthy(&v) {
+                str_of(&v)
+            } else {
+                String::new()
+            };
             while s.ends_with('\n') {
                 s.pop();
             }
@@ -1326,7 +1358,9 @@ impl Hb {
         out::stderr_line(&format!(
             "      A sidecar + `{c} heartbeat session {name} --set sales/reviewer`"
         ));
-        out::stderr_line("      (or --set <session-id> --provider <p>) is often better for a trained flow.");
+        out::stderr_line(
+            "      (or --set <session-id> --provider <p>) is often better for a trained flow.",
+        );
         if let Err(e) = out::stdout("\n") {
             return out::after_stdout_error(&e);
         }
@@ -1334,7 +1368,9 @@ impl Hb {
             out::stderr_line(
                 "Error: this daemon is older than 'heartbeat add --instructions' and did not write them.",
             );
-            out::stderr_line("       The heartbeat exists with an empty WAKEUP.md. Write the instructions to");
+            out::stderr_line(
+                "       The heartbeat exists with an empty WAKEUP.md. Write the instructions to",
+            );
             out::stderr_line(&format!(
                 "       {wakeup_abs} on the daemon's machine, or update the daemon."
             ));
@@ -1351,9 +1387,13 @@ impl Hb {
             o.push_str(&format!("Kept the existing WAKEUP.md ({body_bytes} bytes); --instructions were NOT written over it.\n"));
             o.push_str(&format!("Edit it with: {c} heartbeat signal wakeup {name} --edit (or change the file on the daemon's machine).\n"));
         } else if gt0 {
-            o.push_str(&format!("Using the existing WAKEUP.md ({body_bytes} bytes).\n"));
+            o.push_str(&format!(
+                "Using the existing WAKEUP.md ({body_bytes} bytes).\n"
+            ));
         } else if body_bytes == "0" {
-            o.push_str("Needs instructions: WAKEUP.md is empty. The heartbeat stays enabled and waits;\n");
+            o.push_str(
+                "Needs instructions: WAKEUP.md is empty. The heartbeat stays enabled and waits;\n",
+            );
             o.push_str("it fires at the next scheduled slot after you add them (or re-run with --instructions).\n");
         }
         if let Err(e) = out::stdout(&o) {
@@ -1431,15 +1471,14 @@ impl Hb {
         };
         let rel = rel.trim_end_matches('\n');
         if rel.is_empty() {
-            out::stderr_line(&format!(
-                "Heartbeat '{name}' has no wakeup path on file."
-            ));
+            out::stderr_line(&format!("Heartbeat '{name}' has no wakeup path on file."));
             return Exit::Error;
         }
-        let base = k2_client::env_names::first_nonempty_in(k2_client::env_names::PROJECT_PATH, |n| {
-            std::env::var(n).ok()
-        })
-        .map_or_else(|| pwd.to_string(), |(_, v)| v);
+        let base =
+            k2_client::env_names::first_nonempty_in(k2_client::env_names::PROJECT_PATH, |n| {
+                std::env::var(n).ok()
+            })
+            .map_or_else(|| pwd.to_string(), |(_, v)| v);
         let abs = format!("{base}/{rel}");
         let file = Path::new(&abs).is_file();
         match mode {

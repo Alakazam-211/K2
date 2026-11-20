@@ -16,10 +16,34 @@ fn remote_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "all");
     let v = vec![
         // covers: remote
-        case("alone: the usage, exit 2", &[], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "alone: the usage, exit 2",
+            &[],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case("help", &["help"], &[], vec![], owner_and_port, 0, 0),
-        case("an unknown verb", &["login", "x"], &[], vec![], owner_and_port, 2, 0),
-        case("no daemon: still the usage", &[], &[], vec![], nothing, 2, 0),
+        case(
+            "an unknown verb",
+            &["login", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "no daemon: still the usage",
+            &[],
+            &[],
+            vec![],
+            nothing,
+            2,
+            0,
+        ),
         case(
             "HOOK_SOCK set and no passport",
             &["help"],
@@ -52,7 +76,9 @@ fn remote_lines_say_the_brand_s_name() {
     let c = case("brand", &["nope"], &[], vec![], owner_and_port, 2, 0);
     let (out, log) = rig.binary(&c, false);
     assert!(
-        out.stderr.starts_with(&format!("{cli} remote: unknown verb 'nope'\n{cli} remote \u{2014}")),
+        out.stderr.starts_with(&format!(
+            "{cli} remote: unknown verb 'nope'\n{cli} remote \u{2014}"
+        )),
         "{}",
         out.stderr
     );

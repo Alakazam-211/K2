@@ -1584,7 +1584,7 @@ if ! _k2_takes_dashdash "$@"; then
             if [ "${1:-}" = "--" ]; then
                 echo "usage: name a command before '--' (k2 help)" >&2
             else
-                echo "usage: k2 ${1:-} takes no '--' (k2 ${1:-} --help)" >&2
+                echo "usage: ${1:-} takes no '--' (k2 help ${1:-})" >&2
             fi
             exit 2
         fi

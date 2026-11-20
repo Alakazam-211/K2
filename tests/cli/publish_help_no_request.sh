@@ -164,6 +164,21 @@ dash() {
     sent_nothing "$label"
 }
 
+# nodash <args...>: publish takes no bare '--' (only the verbs that run a
+# command or send typed text do): the router's usage error, exit 2, one line
+# on stderr, nothing on stdout, sends nothing.
+nodash() {
+    local label="k2 $*"
+    : >"$REQ_LOG"
+    run "$@"
+    [ "$RC" -eq 2 ] && ok "$label: exit 2" || bad "$label: exit $RC (want 2)"
+    [ "$ERR" = "usage: publish takes no '--' (k2 help publish)" ] && ok "$label: publish takes no '--'" \
+        || { bad "$label: stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2; }
+    [ -z "$OUT" ] && ok "$label: nothing on stdout" \
+        || { bad "$label: stdout"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2; }
+    sent_nothing "$label"
+}
+
 echo "== the reference: k2 publish --help =="
 : >"$REQ_LOG"
 run publish --help
@@ -188,9 +203,9 @@ check publish subdomain rm acme -h
 check publish subdomain -h
 check publish -h
 
-echo "== -h after -- is not help (help scans stop at --): a usage error, nothing sent =="
-dash -- publish subdomain claim -- -h
-dash -h publish subdomain create --target x -- -h
+echo "== publish takes no bare -- (help scans stop at it too): a usage error, nothing sent =="
+nodash publish subdomain claim -- -h
+nodash publish subdomain create --target x -- -h
 
 echo "== a label beginning with '-' is a usage error =="
 dash -x publish subdomain claim -x
@@ -198,8 +213,8 @@ dash -x publish subdomain claim --transfer -x
 dash -x publish subdomain unclaim -x
 dash -x publish subdomain create -x --target x
 dash -x publish subdomain create --target x -x
-dash -x publish subdomain create -- -x --target x
-dash -- publish subdomain claim -- acme
+nodash publish subdomain create -- -x --target x
+nodash publish subdomain claim -- acme
 dash -x publish subdomain point -x --target x
 dash -x publish subdomain point --target x -x
 dash -x publish subdomain target -x x

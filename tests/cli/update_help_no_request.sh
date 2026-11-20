@@ -101,7 +101,7 @@ for how in conn noconn; do
         [ -z "$OUT" ] && ok "$label: nothing on stdout" \
             || { bad "$label: stdout"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2; }
         case "$ERR" in
-            *"k2 update takes no '--'"*) ok "$label: says why" ;;
+            *"usage: update takes no '--' (k2 help update)"*) ok "$label: says why" ;;
             *) bad "$label: stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2 ;;
         esac
         if [ -s "$LOG" ]; then

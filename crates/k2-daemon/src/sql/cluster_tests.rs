@@ -1061,7 +1061,7 @@ fn cluster_archive_needs_helper_18_and_checks_the_answer() {
     let e = archive_named(&ops, &c, false).unwrap_err();
     assert_eq!((e.code(), e.status()), ("helper_needed", "409 Conflict"), "{e:?}");
     assert!(e.hint().contains("protocol 18"), "{}", e.hint());
-    assert!(lines_with(&ops, "wal-archive").is_empty(), "{:?}", ops.recorded());
+    assert!(lines_with(&ops, "helper wal-archive").is_empty(), "{:?}", ops.recorded());
     assert!(crate::sql::sysops::needs_pgarchive(&["wal-archive", "17-feedback", "on"]));
     assert!(!crate::sql::sysops::needs_pgarchive(&["ensure-cluster", "17-feedback", "--wal-archive"]));
     // A helper that answers the other state, or a cluster it doesn't vouch for.

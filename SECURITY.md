@@ -1,5 +1,7 @@
 # Security policy
 
+How agents share a server, and what is and isn't separated: see [How agents share a K2 server](README.md#how-agents-share-a-k2-server).
+
 ## Reporting a vulnerability
 
 Please report security problems **privately**. Do not open a public issue, pull request or discussion.

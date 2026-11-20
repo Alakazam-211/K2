@@ -140,6 +140,23 @@ Architecture map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
+## How agents share a K2 server
+
+K2 runs your agents on one server, the way hosted agent products give their agents one shared computer ([Grok Bot's works the same way](https://docs.x.ai/grok-bot/computer-and-apps): its Bots share files, sessions and command-line credentials). On a K2 server, every agent runs as the same operating-system user as K2 itself. So an agent can read what that user can read, including the server owner's credentials, and it can act with the owner's reach.
+
+K2's permissions, cards and audit records guide what agents do and record it. They're designed for agents working on your behalf, not as walls between agents or between people who share a server. Give an agent the kind of access you'd give the server's owner. If people need to be kept apart from each other's agents, give each of them their own server. Isolation between agents is a planned update, coming soon.
+
+What's separate today:
+- **People who use K2 only through an App, as its guests,** see only what the App and their role allow. A login that can open a terminal or direct an agent isn't limited this way. The **Voice & Chat only** role can't open a terminal or use K2's agent controls, though an agent that reads its chat may still act on what such a person writes there.
+- **Compute jobs on a Linux node** from different servers run as different users, each in their own folders, and can't read each other's code, caches, results or logs. They share the machine's kernel, can reach the internet and services on the machine, and the node's owner can read everything on it.
+
+### What this means for security, and what to be careful of
+- **An agent can do what the server's owner can do.** Treat any agent on the server as you would the owner's own terminal.
+- **Be careful what agents read.** Instructions hidden in a web page, an email, a document or another person's chat message can steer an agent, and an agent acting on them has the owner's reach. Prefer agents that only read sources you trust, and use permission cards for anything that changes access.
+- **Keep secrets in K2's vault, not in files.** A plain file in a workspace is readable by every agent; the vault keeps secrets encrypted and out of the workspace, and hands them to tools without printing them.
+- **Separate people, separate servers.** If people or clients mustn't see each other's work, give each of them their own K2 server rather than sharing one.
+- **Check what happened.** K2's permission cards and audit records show what agents asked for and did. Review them, especially on a server several people use.
+
 ## Community
 
 - **[Discord](https://discord.gg/73b3sg6pSQ)** — K2 community  

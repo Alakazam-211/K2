@@ -668,8 +668,10 @@ async fn named_lookups_never_list_other_workspaces() {
 /// Skills by name: a passport names a skill with letters, digits, - and _
 /// only, and never reaches the workspace's own agent folder (`.k2/agent/`):
 /// "", "." and any name while the workspace has a persona are refused for
-/// create, delete and profile, and the folder stays. Another skill is the
-/// agent's to read and remove.
+/// delete and profile, and the folder stays. Another skill is the agent's
+/// to read and remove. Creating a skill is never a passport's (it always
+/// writes the workspace's own agent folder): the route's own refusal,
+/// with or without a persona, and nothing is written.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skills_never_reach_the_workspaces_own_agent_folder() {
     let t = k2_core::test_env::TempHome::new();
@@ -695,11 +697,23 @@ async fn skills_never_reach_the_workspaces_own_agent_folder() {
     let r = http(e.port, "POST", &format!("/cli/agents/delete?project={own}&name=backend"), Some(e.passport.as_str()));
     assert_eq!(r.status, 200, "delete another skill: {}", r.raw);
     assert!(!skill.exists(), "the skill is gone");
+    let create_refused = |when: &str| {
+        for name in ["", ".", "d1", "backend", "newskill", "a/b"] {
+            let r = http(e.port, "POST", &format!("/cli/agents/create?project={own}&name={}&role=x", enc(name)), Some(e.passport.as_str()));
+            assert_eq!(r.status, 403, "create {name:?}, {when}: {}", r.raw);
+            assert!(r.raw.contains(REFUSED), "create {name:?}, {when}: the route's own refusal: {}", r.raw);
+        }
+    };
+    assert!(!k2_daemon::passport_routes::is_route("/cli/agents/create"), "create is not a passport route");
+    create_refused("no persona");
+    assert!(!persona_dir.exists(), "a refused create wrote no agent folder");
+    assert!(!k2_core::workspace::agent_identity::skills_dir(&e.own).join("newskill").exists(), "a refused create wrote no skill");
 
     // The workspace's own persona.
     std::fs::create_dir_all(&persona_dir).expect("persona dir");
     std::fs::write(persona_dir.join("AGENT.md"), "---\nname: d1\nrole: lead\n---\nLead.\n").expect("persona");
-    for (method, route, key) in [("POST", "/cli/agents/create", "name"), ("POST", "/cli/agents/delete", "name"), ("GET", "/cli/agents/profile", "agent")] {
+    create_refused("with a persona");
+    for (method, route, key) in [("POST", "/cli/agents/delete", "name"), ("GET", "/cli/agents/profile", "agent")] {
         for name in ["", ".", "..", "d1", "backend", "a/b"] {
             let path = format!("{route}?project={own}&{key}={}&role=x", enc(name));
             let r = http(e.port, method, &path, Some(e.passport.as_str()));

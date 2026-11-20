@@ -93,8 +93,9 @@ pub(crate) const ROUTES: &[Route] = &[
     // `k2 agent conf|get|set|retire|restart` and `k2 agent hire` read it first.
     route("/cli/agent/conf", Scope::Named),
     route("/cli/agent/list", Scope::AgentList),
-    // `k2 skills create|remove|list|profile`: the workspace's own skills.
-    named("/cli/agents/create", Scope::Own, &["name"]),
+    // `k2 skills remove|list|profile`: the workspace's own skills. Never
+    // `agents/create`: it always writes the workspace's own agent folder,
+    // a person's ([`own_agent_folder`]).
     named("/cli/agents/delete", Scope::Own, &["name"]),
     route("/cli/agents/list", Scope::Own),
     named("/cli/agents/profile", Scope::Own, &["agent"]),
@@ -536,20 +537,21 @@ fn is_agent_name(v: &str) -> bool {
     !v.is_empty() && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Creating, removing or reading a skill never reaches the workspace's own
-/// agent folder (`.k2/agent/`): `agents/create` always writes there, and
-/// `agents/delete` / `profile` resolve to it whenever the workspace has a
-/// persona (`agent_identity::agent_dir`). A person does those.
+/// Removing or reading a skill never reaches the workspace's own agent
+/// folder (`.k2/agent/`): `agents/delete` / `profile` resolve to it
+/// whenever the workspace has a persona (`agent_identity::agent_dir`). A
+/// person does those. (`agents/create` always writes there, so it is not
+/// one of [`ROUTES`] at all.)
 fn own_agent_folder(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
     use k2_core::workspace::agent_identity::{agent_dir, workspace_agent_path};
     let key = match path {
-        "/cli/agents/create" | "/cli/agents/delete" => "name",
+        "/cli/agents/delete" => "name",
         "/cli/agents/profile" => "agent",
         _ => return None,
     };
     let project = params.get("project").map(String::as_str).unwrap_or("");
     let own = workspace_agent_path(project);
-    let target = if path == "/cli/agents/create" { own.clone() } else { agent_dir(project, params.get(key).map(String::as_str).unwrap_or("")) };
+    let target = agent_dir(project, params.get(key).map(String::as_str).unwrap_or(""));
     (target == own).then(|| own_only("this is the workspace's own agent folder; a person changes or reads it"))
 }
 
@@ -603,7 +605,8 @@ mod tests {
             assert_eq!(crate::session_token::is_agent_verb(r.path), before, "{}", r.path);
         }
         // The owner-only surface stays closed whatever this table says.
-        for p in ["/cli/tunnel/status", "/cli/workspace/set", "/cli/feedback/create", "/cli/context/add", "/cli/projects/list"] {
+        // `agents/create` always writes the workspace's own agent folder.
+        for p in ["/cli/tunnel/status", "/cli/workspace/set", "/cli/feedback/create", "/cli/context/add", "/cli/projects/list", "/cli/agents/create"] {
             assert!(!is_route(p), "{p} must not be admitted here");
         }
     }

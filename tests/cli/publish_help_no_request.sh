@@ -188,9 +188,9 @@ check publish subdomain rm acme -h
 check publish subdomain -h
 check publish -h
 
-echo "== -h after -- is still help =="
-check publish subdomain claim -- -h
-check publish subdomain create --target x -- -h
+echo "== -h after -- is not help (help scans stop at --): a usage error, nothing sent =="
+dash -- publish subdomain claim -- -h
+dash -h publish subdomain create --target x -- -h
 
 echo "== a label beginning with '-' is a usage error =="
 dash -x publish subdomain claim -x

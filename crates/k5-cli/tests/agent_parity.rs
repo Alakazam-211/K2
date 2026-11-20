@@ -1111,7 +1111,7 @@ fn context_reads() {
             "list --json",
             &["context", "list", "--json"],
             &[],
-            vec![ok(&*leak(&[&format!("{LAYERS}\n\n")])[0])],
+            vec![ok(leak(&[&format!("{LAYERS}\n\n")])[0])],
             owner_and_port,
             0,
             1,

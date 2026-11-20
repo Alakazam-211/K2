@@ -59,18 +59,61 @@ fn status_and_its_refusals() {
     ];
     for c in [
         daemon("status", &["status"], ok(STATUS), 0),
-        daemon("status, little in it", &["status"], ok(r#"{"proxy":{"hint":"off"},"tamper":"ok"}"#), 0),
-        daemon("closed", &["status"], ok(r#"{"open":false,"error":{"code":"locked","hint":"unlock"}}"#), 0),
+        daemon(
+            "status, little in it",
+            &["status"],
+            ok(r#"{"proxy":{"hint":"off"},"tamper":"ok"}"#),
+            0,
+        ),
+        daemon(
+            "closed",
+            &["status"],
+            ok(r#"{"open":false,"error":{"code":"locked","hint":"unlock"}}"#),
+            0,
+        ),
         daemon("--json", &["status", "--json"], ok(STATUS), 0),
-        daemon("a permission card", &["status"], Reply::Answer(403, PERMISSION_ASK.into()), 3),
-        daemon("not found", &["status"], Reply::Answer(404, r#"{"error":{"code":"nope","hint":"h"}}"#.into()), 4),
-        daemon("a 410", &["status"], Reply::Answer(410, r#"{"error":"card_dismissed"}"#.into()), 5),
-        daemon("a 422", &["status"], Reply::Answer(422, "not json".into()), 2),
-        daemon("an empty 500", &["status"], Reply::Answer(500, String::new()), 1),
+        daemon(
+            "a permission card",
+            &["status"],
+            Reply::Answer(403, PERMISSION_ASK.into()),
+            3,
+        ),
+        daemon(
+            "not found",
+            &["status"],
+            Reply::Answer(404, r#"{"error":{"code":"nope","hint":"h"}}"#.into()),
+            4,
+        ),
+        daemon(
+            "a 410",
+            &["status"],
+            Reply::Answer(410, r#"{"error":"card_dismissed"}"#.into()),
+            5,
+        ),
+        daemon(
+            "a 422",
+            &["status"],
+            Reply::Answer(422, "not json".into()),
+            2,
+        ),
+        daemon(
+            "an empty 500",
+            &["status"],
+            Reply::Answer(500, String::new()),
+            1,
+        ),
         daemon("an empty reply", &["status"], Reply::Close, 1),
-        traceback(daemon("a 200 Python can't read", &["status"], ok("nope"), 1)),
+        traceback(daemon(
+            "a 200 Python can't read",
+            &["status"],
+            ok("nope"),
+            1,
+        )),
         traceback(daemon("a 200 that is a list", &["status"], ok("[1]"), 1)),
-        refused("a flag status doesn't take", &["status", "--scope", "server"]),
+        refused(
+            "a flag status doesn't take",
+            &["status", "--scope", "server"],
+        ),
         session,
     ] {
         rig.check(&c);
@@ -92,32 +135,124 @@ fn list_show_and_the_reads() {
     for c in [
         daemon("list", &["list"], ok(list), 0),
         daemon("ls, none", &["ls"], ok(r#"{"secrets":[]}"#), 0),
-        daemon("list, none of yours", &["list", "--system"], ok(r#"{"systemHidden":{"count":1,"why":"w"}}"#), 0),
-        daemon("list --scope ws:a b", &["list", "--scope", "ws:a b&c", "--system"], ok(list), 0),
+        daemon(
+            "list, none of yours",
+            &["list", "--system"],
+            ok(r#"{"systemHidden":{"count":1,"why":"w"}}"#),
+            0,
+        ),
+        daemon(
+            "list --scope ws:a b",
+            &["list", "--scope", "ws:a b&c", "--system"],
+            ok(list),
+            0,
+        ),
         daemon("list: above 256 KiB", &["list"], ok(&big), 0),
         refused("a scope that isn't one", &["list", "--scope", "galaxy"]),
         refused("--system on show", &["show", "A", "--system"]),
         daemon("show", &["show", "API", "--scope", "server"], ok(SECRET), 0),
-        daemon("show, an ovh signer", &["show", "B"], ok(r#"{"secret":{"name":"B","inject":{"sign":{"scheme":"ovh"}}}}"#), 0),
-        daemon("show, oauth", &["show", "B"], ok(r#"{"secret":{"name":"B","inject":{"sign":{"scheme":"oauth-refresh","tokenUrl":"https://t"}},"oauth":{"expiresAt":"t5"}}}"#), 0),
-        daemon("show, hmac and no sites", &["show", "B"], ok(r#"{"secret":{"name":"B","inject":{"sign":{"scheme":"hmac-sha256","header":"X"}}}}"#), 0),
-        daemon("show, injected", &["show", "B"], ok(r#"{"secret":{"inject":{"dst":"header:A","fmt":"Bearer {}"}}}"#), 0),
+        daemon(
+            "show, an ovh signer",
+            &["show", "B"],
+            ok(r#"{"secret":{"name":"B","inject":{"sign":{"scheme":"ovh"}}}}"#),
+            0,
+        ),
+        daemon(
+            "show, oauth",
+            &["show", "B"],
+            ok(
+                r#"{"secret":{"name":"B","inject":{"sign":{"scheme":"oauth-refresh","tokenUrl":"https://t"}},"oauth":{"expiresAt":"t5"}}}"#,
+            ),
+            0,
+        ),
+        daemon(
+            "show, hmac and no sites",
+            &["show", "B"],
+            ok(
+                r#"{"secret":{"name":"B","inject":{"sign":{"scheme":"hmac-sha256","header":"X"}}}}"#,
+            ),
+            0,
+        ),
+        daemon(
+            "show, injected",
+            &["show", "B"],
+            ok(r#"{"secret":{"inject":{"dst":"header:A","fmt":"Bearer {}"}}}"#),
+            0,
+        ),
         daemon("show --json", &["show", "B", "--json"], ok(SECRET), 0),
         refused("show with no name", &["show"]),
-        daemon("public-key", &["public-key", "K"], ok(r#"{"publicKey":"ssh-ed25519 AAAA","fingerprint":"SHA256:x"}"#), 0),
-        traceback(daemon("public-key, none in it", &["public-key", "K"], ok(r#"{}"#), 1)),
-        daemon("audit", &["audit", "API", "--since", "2d ago"], ok(r#"{"audit":[{"ts":"t","action":"fetch","outcome":"ok","actor":"me","targetHost":"h","count":2},{"ts":"t2","action":"get","outcome":"refused","actor":"x"}]}"#), 0),
+        daemon(
+            "public-key",
+            &["public-key", "K"],
+            ok(r#"{"publicKey":"ssh-ed25519 AAAA","fingerprint":"SHA256:x"}"#),
+            0,
+        ),
+        traceback(daemon(
+            "public-key, none in it",
+            &["public-key", "K"],
+            ok(r#"{}"#),
+            1,
+        )),
+        daemon(
+            "audit",
+            &["audit", "API", "--since", "2d ago"],
+            ok(
+                r#"{"audit":[{"ts":"t","action":"fetch","outcome":"ok","actor":"me","targetHost":"h","count":2},{"ts":"t2","action":"get","outcome":"refused","actor":"x"}]}"#,
+            ),
+            0,
+        ),
         daemon("audit, all", &["audit"], ok(r#"{"audit":[]}"#), 0),
-        daemon("requests", &["requests"], ok(r#"{"requests":[{"createdAt":"t","status":"open","name":"N","requestedBy":"ws","inject":{"dst":"header:X","fmt":"{}"}},{"name":"M"}]}"#), 0),
+        daemon(
+            "requests",
+            &["requests"],
+            ok(
+                r#"{"requests":[{"createdAt":"t","status":"open","name":"N","requestedBy":"ws","inject":{"dst":"header:X","fmt":"{}"}},{"name":"M"}]}"#,
+            ),
+            0,
+        ),
         daemon("requests, none", &["requests"], ok("{}"), 0),
-        daemon("presets", &["presets"], ok(r#"{"presets":[{"id":"gh","label":"GitHub","hosts":["api.github.com"],"dst":"header:Authorization","fmt":"Bearer {}"},{"id":"ovh","label":"OVH","hosts":[],"sign":"ovh"}]}"#), 0),
-        daemon("doctor, findings", &["doctor", "--transcripts"], ok(r#"{"findings":[{"level":"warn","message":"m","files":["a","b","c","d","e","f"],"fileCount":9},{"level":"info","message":"n"}],"checkedNames":"A B","summary":"s","ok":false}"#), 1),
+        daemon(
+            "presets",
+            &["presets"],
+            ok(
+                r#"{"presets":[{"id":"gh","label":"GitHub","hosts":["api.github.com"],"dst":"header:Authorization","fmt":"Bearer {}"},{"id":"ovh","label":"OVH","hosts":[],"sign":"ovh"}]}"#,
+            ),
+            0,
+        ),
+        daemon(
+            "doctor, findings",
+            &["doctor", "--transcripts"],
+            ok(
+                r#"{"findings":[{"level":"warn","message":"m","files":["a","b","c","d","e","f"],"fileCount":9},{"level":"info","message":"n"}],"checkedNames":"A B","summary":"s","ok":false}"#,
+            ),
+            1,
+        ),
         daemon("doctor, nothing", &["doctor"], ok(r#"{"ok":true}"#), 0),
         refused("--transcripts elsewhere", &["status", "--transcripts"]),
-        daemon("recipient", &["recipient"], ok(r#"{"recipient":"age1xyz","vaultId":"v1"}"#), 0),
-        daemon("proxy-url", &["proxy-url", "API", "--ttl", "2h", "--scope", "session"], ok(r#"{"envName":"API_KEY","placeholder":"k2p_x","baseUrlEnv":"API_BASE","baseUrl":"http://127.0.0.1:1/x"}"#), 0),
-        daemon("proxy-url --secret", &["proxy-url", "--secret", "API"], ok(r#"{"envName":"A","placeholder":"p","baseUrlEnv":"B","baseUrl":"u"}"#), 0),
-        refused("proxy-url, two", &["proxy-url", "--secret", "A", "--secret", "B"]),
+        daemon(
+            "recipient",
+            &["recipient"],
+            ok(r#"{"recipient":"age1xyz","vaultId":"v1"}"#),
+            0,
+        ),
+        daemon(
+            "proxy-url",
+            &["proxy-url", "API", "--ttl", "2h", "--scope", "session"],
+            ok(
+                r#"{"envName":"API_KEY","placeholder":"k2p_x","baseUrlEnv":"API_BASE","baseUrl":"http://127.0.0.1:1/x"}"#,
+            ),
+            0,
+        ),
+        daemon(
+            "proxy-url --secret",
+            &["proxy-url", "--secret", "API"],
+            ok(r#"{"envName":"A","placeholder":"p","baseUrlEnv":"B","baseUrl":"u"}"#),
+            0,
+        ),
+        refused(
+            "proxy-url, two",
+            &["proxy-url", "--secret", "A", "--secret", "B"],
+        ),
     ] {
         rig.check(&c);
     }
@@ -128,25 +263,125 @@ fn set_and_rotate_take_the_value_on_stdin() {
     let rig = VRig::new();
     let saved = r#"{"created":true,"ref":"k2v:API","secret":{"name":"API","latestVersion":1,"inject":{"sign":{"scheme":"hmac-sha256"}}},"trimmed":true,"use":"k2 vault fetch","ttlCut":true}"#;
     for c in [
-        with_stdin(daemon("set", &["set", "API", "--for", "a.com, b.com,", "--kind", "token"], ok(saved), 0), b"hunter2-value\n", &["hunter2-value", "aHVudGVyMi12YWx1ZQ=="]),
-        with_stdin(daemon("set, two newlines kept", &["set", "API"], ok(r#"{"secret":{"name":"API"}}"#), 0), b"multi\nline\n", &["multi\nline"]),
         with_stdin(
-            daemon("set, signed", &["set", "API", "--sign", "hmac-sha256-ts", "--sign-prefix", "", "--sign-template", "{ts}", "--sign-header", "X", "--json"], ok(saved), 0),
+            daemon(
+                "set",
+                &["set", "API", "--for", "a.com, b.com,", "--kind", "token"],
+                ok(saved),
+                0,
+            ),
+            b"hunter2-value\n",
+            &["hunter2-value", "aHVudGVyMi12YWx1ZQ=="],
+        ),
+        with_stdin(
+            daemon(
+                "set, two newlines kept",
+                &["set", "API"],
+                ok(r#"{"secret":{"name":"API"}}"#),
+                0,
+            ),
+            b"multi\nline\n",
+            &["multi\nline"],
+        ),
+        with_stdin(
+            daemon(
+                "set, signed",
+                &[
+                    "set",
+                    "API",
+                    "--sign",
+                    "hmac-sha256-ts",
+                    "--sign-prefix",
+                    "",
+                    "--sign-template",
+                    "{ts}",
+                    "--sign-header",
+                    "X",
+                    "--json",
+                ],
+                ok(saved),
+                0,
+            ),
             b"s3cr3t-signing-key",
             &["s3cr3t-signing-key"],
         ),
-        with_stdin(daemon("set, injected", &["set", "API", "--inject-header", "X-Key", "--inject-format", "k {}", "--ttl", "2h", "--rotate-every", "30", "--describe", "d é"], ok(saved), 0), b"v", &[]),
+        with_stdin(
+            daemon(
+                "set, injected",
+                &[
+                    "set",
+                    "API",
+                    "--inject-header",
+                    "X-Key",
+                    "--inject-format",
+                    "k {}",
+                    "--ttl",
+                    "2h",
+                    "--rotate-every",
+                    "30",
+                    "--describe",
+                    "d é",
+                ],
+                ok(saved),
+                0,
+            ),
+            b"v",
+            &[],
+        ),
         with_stdin(refused("set, no value", &["set", "API"]), b"", &[]),
         with_stdin(refused("set, only a newline", &["set", "API"]), b"\n", &[]),
         refused("set, a value on argv", &["set", "API", "hunter2"]),
         refused("set --value=", &["set", "API", "--value=hunter2"]),
-        refused("set, signed and injected", &["set", "API", "--sign", "ovh", "--inject-dst", "header:X"]),
-        refused("set, header and dst", &["set", "API", "--inject-header", "X", "--inject-dst", "header:Y"]),
-        refused("set, signer options with no signer", &["set", "API", "--sign-header", "X"]),
-        traceback(with_stdin(refused("set, --rotate-every not a number", &["set", "API", "--rotate-every", "soon"]), b"v", &[])),
+        refused(
+            "set, signed and injected",
+            &["set", "API", "--sign", "ovh", "--inject-dst", "header:X"],
+        ),
+        refused(
+            "set, header and dst",
+            &[
+                "set",
+                "API",
+                "--inject-header",
+                "X",
+                "--inject-dst",
+                "header:Y",
+            ],
+        ),
+        refused(
+            "set, signer options with no signer",
+            &["set", "API", "--sign-header", "X"],
+        ),
+        traceback(with_stdin(
+            refused(
+                "set, --rotate-every not a number",
+                &["set", "API", "--rotate-every", "soon"],
+            ),
+            b"v",
+            &[],
+        )),
         refused("set, no name", &["set"]),
-        with_stdin(daemon("set, refused", &["set", "API"], Reply::Answer(403, PERMISSION_ASK.into()), 3), b"pw-refused", &["pw-refused"]),
-        with_stdin(daemon("rotate", &["rotate", "API"], ok(r#"{"secret":{"name":"API"},"version":3,"replaced":[{"ok":true,"unit":"u","credName":"c","restarted":true},{"unit":"v","error":{"hint":"h"}}]}"#), 0), b"new-value-9", &["new-value-9"]),
+        with_stdin(
+            daemon(
+                "set, refused",
+                &["set", "API"],
+                Reply::Answer(403, PERMISSION_ASK.into()),
+                3,
+            ),
+            b"pw-refused",
+            &["pw-refused"],
+        ),
+        with_stdin(
+            daemon(
+                "rotate",
+                &["rotate", "API"],
+                ok(
+                    r#"{"secret":{"name":"API"},"version":3,"replaced":[{"ok":true,"unit":"u","credName":"c","restarted":true},{"unit":"v","error":{"hint":"h"}}]}"#,
+                ),
+                0,
+            ),
+            b"new-value-9",
+            &["new-value-9"],
+        ),
         refused("rotate, a value on argv", &["rotate", "API", "x"]),
         refused("rotate, no name", &["rotate"]),
     ] {
@@ -160,36 +395,306 @@ fn the_policy_writes() {
     let sec = r#"{"secret":{"name":"API","hosts":["a","b"],"defaultDelivery":"env","deliveryCeiling":"file","inject":{"sign":{"scheme":"ovh"}}},"agentPolicy":{"burst":5,"perMinute":60,"allowForwarded":true}}"#;
     let gone = r#"{"recall":"2 files were deleted","stillRunning":[{"short":"j1","node":"n","env":"API","state":"running"}]}"#;
     for c in [
-        daemon("hosts", &["hosts", "API", "--add", "a.com", "--add", "b.com", "--remove", "c.com"], ok(sec), 0),
-        daemon("hosts, none left", &["hosts", "API", "--remove", "a"], ok(r#"{"secret":{"name":"API"}}"#), 0),
+        daemon(
+            "hosts",
+            &[
+                "hosts", "API", "--add", "a.com", "--add", "b.com", "--remove", "c.com",
+            ],
+            ok(sec),
+            0,
+        ),
+        daemon(
+            "hosts, none left",
+            &["hosts", "API", "--remove", "a"],
+            ok(r#"{"secret":{"name":"API"}}"#),
+            0,
+        ),
         refused("hosts, no name", &["hosts"]),
-        daemon("sign none", &["sign", "API", "none"], ok(r#"{"secret":{"name":"API"}}"#), 0),
+        daemon(
+            "sign none",
+            &["sign", "API", "none"],
+            ok(r#"{"secret":{"name":"API"}}"#),
+            0,
+        ),
         daemon("sign ovh", &["sign", "API", "ovh"], ok(sec), 0),
-        daemon("sign hmac", &["sign", "API", "hmac-sha256", "--sign-header", "X", "--sign-encoding", "base64", "--sign-prefix", "p="], ok(sec), 0),
-        refused("sign none with options", &["sign", "API", "none", "--sign-value", ""]),
+        daemon(
+            "sign hmac",
+            &[
+                "sign",
+                "API",
+                "hmac-sha256",
+                "--sign-header",
+                "X",
+                "--sign-encoding",
+                "base64",
+                "--sign-prefix",
+                "p=",
+            ],
+            ok(sec),
+            0,
+        ),
+        refused(
+            "sign none with options",
+            &["sign", "API", "none", "--sign-value", ""],
+        ),
         refused("sign with --sign", &["sign", "API", "ovh", "--sign", "ovh"]),
         refused("sign, no scheme", &["sign", "API"]),
-        daemon("agent-limit", &["agent-limit", "API", "--burst", "05", "--per-minute", "60", "--no-forwarded"], ok(sec), 0),
-        refused("agent-limit, both", &["agent-limit", "API", "--allow-forwarded", "--no-forwarded"]),
-        refused("agent-limit, not a number", &["agent-limit", "API", "--burst", "x"]),
-        daemon("delivery", &["delivery", "API", "env", "--ceiling", "file"], ok(sec), 0),
-        refused("delivery --env-name", &["delivery", "API", "env", "--env-name", "X"]),
-        refused("delivery --file-name", &["delivery", "API", "file", "--file-name", "f"]),
+        daemon(
+            "agent-limit",
+            &[
+                "agent-limit",
+                "API",
+                "--burst",
+                "05",
+                "--per-minute",
+                "60",
+                "--no-forwarded",
+            ],
+            ok(sec),
+            0,
+        ),
+        refused(
+            "agent-limit, both",
+            &["agent-limit", "API", "--allow-forwarded", "--no-forwarded"],
+        ),
+        refused(
+            "agent-limit, not a number",
+            &["agent-limit", "API", "--burst", "x"],
+        ),
+        daemon(
+            "delivery",
+            &["delivery", "API", "env", "--ceiling", "file"],
+            ok(sec),
+            0,
+        ),
+        refused(
+            "delivery --env-name",
+            &["delivery", "API", "env", "--env-name", "X"],
+        ),
+        refused(
+            "delivery --file-name",
+            &["delivery", "API", "file", "--file-name", "f"],
+        ),
         refused("delivery, no mode", &["delivery", "API"]),
         daemon("revoke --grant", &["revoke", "--grant", "g1"], ok(gone), 0),
-        daemon("revoke --from", &["revoke", "API", "--from", "ws:a", "--scope", "server"], ok(r#"{}"#), 0),
-        daemon("revoke --json", &["revoke", "API", "--from", "ws:a", "--json"], ok(gone), 0),
+        daemon(
+            "revoke --from",
+            &["revoke", "API", "--from", "ws:a", "--scope", "server"],
+            ok(r#"{}"#),
+            0,
+        ),
+        daemon(
+            "revoke --json",
+            &["revoke", "API", "--from", "ws:a", "--json"],
+            ok(gone),
+            0,
+        ),
         daemon("open", &["open"], ok("{}"), 0),
         daemon("open --json", &["open", "--json"], ok(r#"{"ok":true}"#), 0),
         daemon("disable", &["disable", "API"], ok(gone), 0),
         daemon("enable", &["enable", "API"], ok("{}"), 0),
         refused("enable, no name", &["enable"]),
         daemon("destroy", &["destroy", "API", "--yes"], ok(gone), 0),
-        daemon("destroy, refused", &["destroy", "API"], Reply::Answer(400, r#"{"error":{"code":"confirm","hint":"add --yes"}}"#.into()), 2),
-        daemon("get", &["get", "API"], ok(r#"{"valueB64":"c2VjcmV0LXZhbHVlLTQyAA=="}"#), 0),
-        daemon("get --json", &["get", "API", "--json"], ok(r#"{"valueB64":"eA=="}"#), 0),
+        daemon(
+            "destroy, refused",
+            &["destroy", "API"],
+            Reply::Answer(
+                400,
+                r#"{"error":{"code":"confirm","hint":"add --yes"}}"#.into(),
+            ),
+            2,
+        ),
+        daemon(
+            "get",
+            &["get", "API"],
+            ok(r#"{"valueB64":"c2VjcmV0LXZhbHVlLTQyAA=="}"#),
+            0,
+        ),
+        daemon(
+            "get --json",
+            &["get", "API", "--json"],
+            ok(r#"{"valueB64":"eA=="}"#),
+            0,
+        ),
         traceback(daemon("get, no value in it", &["get", "API"], ok("{}"), 1)),
         refused("get, no name", &["get"]),
+    ] {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn file_env_file_grant_and_service() {
+    let rig = VRig::new();
+    let waiting = r#"{"waiting":true,"card":"c1","waitSecs":0}"#;
+    let mut confirm = daemon(
+        "grant: the confirm over the vault socket",
+        &["grant", "API", "--to", "ws:a", "--as", "env"],
+        Reply::Answer(
+            403,
+            r#"{"error":{"code":"vault_confirm_required","hint":"confirm"}}"#.into(),
+        ),
+        0,
+    );
+    confirm.vault = Some(vec![
+        ok(r#"{"secret":{"id":"sec-1"}}"#),
+        ok(r#"{"methods":["vault-password"]}"#),
+        ok(r#"{"token":"ctok-7788"}"#),
+        ok(r#"{"grant":{"id":"g9"}}"#),
+    ]);
+    confirm.vault_requests = 4;
+    confirm.stdin = b"vault-pw-5150\n".to_vec();
+    confirm.secrets = vec!["vault-pw-5150", "ctok-7788"];
+    let mut no_method = daemon(
+        "grant: no confirm method",
+        &["grant", "API", "--to", "ws:a"],
+        Reply::Answer(403, r#"{"error":{"code":"vault_confirm_required"}}"#.into()),
+        3,
+    );
+    no_method.vault = Some(vec![
+        ok(r#"{"secret":{"id":"s"}}"#),
+        ok(r#"{"methods":[]}"#),
+    ]);
+    no_method.vault_requests = 2;
+    let mut in_session = daemon(
+        "grant: a K2 terminal never confirms",
+        &["grant", "API", "--to", "ws:a"],
+        Reply::Answer(
+            403,
+            r#"{"error":{"code":"vault_confirm_required","hint":"ask a person"}}"#.into(),
+        ),
+        3,
+    );
+    in_session.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
+    for c in [
+        daemon(
+            "file",
+            &["file", "API", "--ttl", "90s"],
+            ok(r#"{"path":"/s/API"}"#),
+            0,
+        ),
+        daemon(
+            "file --done",
+            &["file", "--done", "/s/API"],
+            ok(r#"{"removed":true}"#),
+            0,
+        ),
+        daemon(
+            "file: no answer yet",
+            &["file", "API", "--wait", "1m"],
+            ok(waiting),
+            3,
+        ),
+        daemon(
+            "file: an empty card",
+            &["file", "API"],
+            ok(r#"{"waiting":true,"card":"","waitSecs":30}"#),
+            3,
+        ),
+        refused(
+            "file, two secrets",
+            &["file", "--secret", "A", "--secret", "B"],
+        ),
+        refused("file, nothing named", &["file"]),
+        refused(
+            "file, --wait and --done",
+            &["file", "--done", "/x", "--wait", "1m"],
+        ),
+        daemon(
+            "env-file",
+            &["env-file", "A", "B", "--secret", "C", "--scope", "server"],
+            ok(r#"{"path":"/s/.env"}"#),
+            0,
+        ),
+        refused("env-file, nothing named", &["env-file"]),
+        daemon(
+            "grant",
+            &["grant", "API", "--to", "ws:a", "--ttl", "2h"],
+            ok(
+                r#"{"grant":{"id":"g1","expiresAt":"t"},"reach":"they get it now","warning":"another server's node"}"#,
+            ),
+            0,
+        ),
+        daemon(
+            "grant: an old server drops --ttl",
+            &["grant", "API", "--to", "ws:a", "--ttl", "2h"],
+            ok(r#"{"grant":{"id":"g1"}}"#),
+            1,
+        ),
+        daemon(
+            "grant --json",
+            &["grant", "API", "--to", "ws:a", "--json"],
+            ok(r#"{"grant":{}}"#),
+            0,
+        ),
+        refused("grant, no --to", &["grant", "API"]),
+        confirm,
+        no_method,
+        in_session,
+        daemon(
+            "service",
+            &["service", "web"],
+            ok(
+                r#"{"service":"web","mode":"legacy","envFile":".env.k2","secrets":[{"name":"A","delivery":"env","envName":"A_KEY"}],"inheritedNames":["PATH","HOME"],"envRemovedIn":"0.47","restart":"restart web"}"#,
+            ),
+            0,
+        ),
+        daemon(
+            "service clean",
+            &["service", "web", "clean", "--env-file", ".env.k2"],
+            ok(r#"{"service":"web","mode":"clean"}"#),
+            0,
+        ),
+        refused("service, no name", &["service"]),
+        daemon(
+            "sync",
+            &["sync"],
+            ok(
+                r#"{"dir":"/s","delivered":["a"],"present":["b"],"restart":["c"],"skipped":["d"],"hint":"h"}"#,
+            ),
+            1,
+        ),
+        daemon("sync --json", &["sync", "--json"], ok("{}"), 0),
+        refused("sync, a word", &["sync", "now"]),
+        daemon(
+            "placements",
+            &["placements", "API", "--scope", "server"],
+            ok(
+                r#"{"placements":[{"id":"p1","name":"API","version":1,"latestVersion":2,"state":"due","where":"h:/x","note":"n"},{"id":"p2","target":"systemd_cred","credName":"c","unit":"u"}],"needNewerK2":2}"#,
+            ),
+            0,
+        ),
+        daemon("placement list, none", &["placement"], ok("{}"), 0),
+        daemon(
+            "placement add",
+            &[
+                "placement",
+                "add",
+                "API",
+                "--where",
+                "h:/etc/x",
+                "--note",
+                "n",
+            ],
+            ok(r#"{"placement":{"name":"API","where":"h:/etc/x","version":2,"id":"p3"}}"#),
+            0,
+        ),
+        daemon(
+            "placement done",
+            &["placement", "done", "p3"],
+            ok(r#"{"placement":{"name":"API","where":"w","version":3}}"#),
+            0,
+        ),
+        daemon("placement rm", &["placement", "rm", "p3"], ok("{}"), 0),
+        refused("placement add, no --where", &["placement", "add", "API"]),
+        refused(
+            "placement done, a flag it doesn't take",
+            &["placement", "done", "p", "--note", "x"],
+        ),
+        refused(
+            "placements --scope, no name",
+            &["placements", "--scope", "server"],
+        ),
     ] {
         rig.check(&c);
     }

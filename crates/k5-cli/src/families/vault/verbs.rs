@@ -4,7 +4,9 @@
 //! (`cli/src/migrate.sh`, `cli/src/vault.sh`). The verbs not in it are
 //! the shell's still ([`native`]).
 
-use super::py::{self, cat, get, get_or, idx, is, items, left, or_list, or_obj, render, s, t, Lines, R};
+use super::py::{
+    self, cat, get, get_or, idx, is, items, left, or_list, or_obj, render, s, t, Lines, R,
+};
 use super::Ctx;
 use crate::confirm::{self, dumps, Split};
 use crate::exit::Exit;
@@ -40,6 +42,10 @@ pub const NATIVE: &[&str] = &[
     "doctor",
     "proxy-url",
     "recipient",
+    "file",
+    "env-file",
+    "grant",
+    "service",
 ];
 
 /// Whether the binary answers `vault <sub> <rest>` (no I/O).
@@ -130,7 +136,9 @@ pub fn parse(sub: &str, rest: &[&str]) -> Result<Opts, Exit> {
             "--json" => o.json = true,
             "--system" => {
                 if !matches!(sub, "list" | "ls") {
-                    return Err(usage(format!("usage: only {CLI} vault list takes --system")));
+                    return Err(usage(format!(
+                        "usage: only {CLI} vault list takes --system"
+                    )));
                 }
                 o.system = true;
             }
@@ -163,13 +171,40 @@ pub fn parse(sub: &str, rest: &[&str]) -> Result<Opts, Exit> {
                 }
                 step = 2;
             }
-            "--recipient" | "--target" | "--target-workspace" | "--workspace" | "--server"
-            | "--out" | "--holder" | "--sign" | "--sign-header" | "--sign-encoding"
-            | "--sign-ts-header" | "--oauth-token-url" | "--oauth-client-auth" | "--scope"
-            | "--kind" | "--for" | "--preset" | "--delivery" | "--ceiling" | "--describe"
-            | "--rotate-every" | "--ttl" | "--inject-header" | "--inject-format"
-            | "--inject-dst" | "--to" | "--from" | "--as" | "--env-name" | "--file-name"
-            | "--grant" | "--add" | "--remove" | "--since" => {
+            "--recipient"
+            | "--target"
+            | "--target-workspace"
+            | "--workspace"
+            | "--server"
+            | "--out"
+            | "--holder"
+            | "--sign"
+            | "--sign-header"
+            | "--sign-encoding"
+            | "--sign-ts-header"
+            | "--oauth-token-url"
+            | "--oauth-client-auth"
+            | "--scope"
+            | "--kind"
+            | "--for"
+            | "--preset"
+            | "--delivery"
+            | "--ceiling"
+            | "--describe"
+            | "--rotate-every"
+            | "--ttl"
+            | "--inject-header"
+            | "--inject-format"
+            | "--inject-dst"
+            | "--to"
+            | "--from"
+            | "--as"
+            | "--env-name"
+            | "--file-name"
+            | "--grant"
+            | "--add"
+            | "--remove"
+            | "--since" => {
                 let v = value(i).to_string();
                 if v.is_empty() {
                     return Err(usage(format!("usage: {w} needs a value")));
@@ -336,7 +371,10 @@ pub fn takes(sub: &str, first: Option<&str>) -> (&'static str, &'static str, Str
 /// `_vault_scope_json`: the scope's fields, or its usage line (exit 2).
 pub fn scope_json(s: &str) -> Result<Vec<(Text, Value)>, Exit> {
     let f = |k: &str, v: &str| (Text::from(k), py::text(v));
-    if let Some(ws) = s.strip_prefix("ws:").or_else(|| s.strip_prefix("workspace:")) {
+    if let Some(ws) = s
+        .strip_prefix("ws:")
+        .or_else(|| s.strip_prefix("workspace:"))
+    {
         Ok(vec![f("scope", "workspace"), f("workspace", ws)])
     } else if matches!(s, "server" | "session" | "workspace") {
         Ok(vec![f("scope", s)])
@@ -434,12 +472,18 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             shown(&r, list)
         }
         "show" => {
-            need(!name.is_empty(), format!("usage: {CLI} vault show NAME [--scope <s>]"))?;
+            need(
+                !name.is_empty(),
+                format!("usage: {CLI} vault show NAME [--scope <s>]"),
+            )?;
             let r = ctx.call(false, "show", &py::urlencode(&merge(&[&sj, &nj])))?;
             shown(&r, show)
         }
         "set" => {
-            need(!name.is_empty(), format!("usage: {CLI} vault set NAME [options] < value"))?;
+            need(
+                !name.is_empty(),
+                format!("usage: {CLI} vault set NAME [options] < value"),
+            )?;
             need(
                 o.pos.len() == 1,
                 format!("value_on_argv: values are read from stdin, never an argument ({CLI} vault set NAME < file)"),
@@ -460,7 +504,10 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             shown(&r, set_printer)
         }
         "rotate" => {
-            need(!name.is_empty(), format!("usage: {CLI} vault rotate NAME < value"))?;
+            need(
+                !name.is_empty(),
+                format!("usage: {CLI} vault rotate NAME < value"),
+            )?;
             need(
                 o.pos.len() == 1,
                 "value_on_argv: values are read from stdin, never an argument".into(),
@@ -485,11 +532,18 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                         .collect(),
                 )
             };
-            let hj = vec![kv("addHosts", list(&o.add)), kv("removeHosts", list(&o.remove))];
+            let hj = vec![
+                kv("addHosts", list(&o.add)),
+                kv("removeHosts", list(&o.remove)),
+            ];
             let r = ctx.call(true, "policy", &obj(merge(&[&sj, &nj, &hj])))?;
             shown(&r, |v, l| {
                 let m = or_obj(get(v, "secret")?);
-                l.p(format!("{} sites: {}", s(&get(&m, "name")?), joined_or(&get(&m, "hosts")?, ", ", "none")?));
+                l.p(format!(
+                    "{} sites: {}",
+                    s(&get(&m, "name")?),
+                    joined_or(&get(&m, "hosts")?, ", ", "none")?
+                ));
                 Ok(0)
             })
         }
@@ -501,7 +555,10 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             )?;
             need(
                 o.sign_scheme.is_empty(),
-                format!("usage: the scheme is the second word: {CLI} vault sign NAME {}", o.sign_scheme),
+                format!(
+                    "usage: the scheme is the second word: {CLI} vault sign NAME {}",
+                    o.sign_scheme
+                ),
             )?;
             let gj = if scheme == "none" {
                 let any = !(o.sign_header.is_empty()
@@ -512,7 +569,10 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                     || o.sign_prefix.is_some()
                     || o.sign_template.is_some()
                     || o.sign_value.is_some();
-                need(!any, format!("usage: {CLI} vault sign NAME none takes no --sign-* options"))?;
+                need(
+                    !any,
+                    format!("usage: {CLI} vault sign NAME none takes no --sign-* options"),
+                )?;
                 vec![kv("sign", py::text("none"))]
             } else {
                 let sg = sign_json(
@@ -540,7 +600,10 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             })
         }
         "public-key" => {
-            need(!name.is_empty(), format!("usage: {CLI} vault public-key NAME [--scope <s>]"))?;
+            need(
+                !name.is_empty(),
+                format!("usage: {CLI} vault public-key NAME [--scope <s>]"),
+            )?;
             let r = ctx.call(false, "public-key", &py::urlencode(&merge(&[&sj, &nj])))?;
             shown(&r, |v, l| {
                 l.p(s(&idx(v, "publicKey")?));
@@ -637,7 +700,10 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                         o.from
                     )
                 } else {
-                    format!("share {} removed; the secret itself is still in the vault", o.grant)
+                    format!(
+                        "share {} removed; the secret itself is still in the vault",
+                        o.grant
+                    )
                 };
                 let e = echo(&first);
                 if e != Exit::Ok {
@@ -684,7 +750,10 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             }
         }
         "destroy" => {
-            need(!name.is_empty(), format!("usage: {CLI} vault destroy NAME --yes"))?;
+            need(
+                !name.is_empty(),
+                format!("usage: {CLI} vault destroy NAME --yes"),
+            )?;
             let yj = if o.yes {
                 vec![kv("yes", Value::Bool(true))]
             } else {
@@ -813,8 +882,16 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             }
             let r = ctx.call(true, "proxy-url", &obj(merge(&[&pj, &sj])))?;
             shown(&r, |v, l| {
-                l.p(format!("{}={}", s(&idx(v, "envName")?), s(&idx(v, "placeholder")?)));
-                l.p(format!("{}={}", s(&idx(v, "baseUrlEnv")?), s(&idx(v, "baseUrl")?)));
+                l.p(format!(
+                    "{}={}",
+                    s(&idx(v, "envName")?),
+                    s(&idx(v, "placeholder")?)
+                ));
+                l.p(format!(
+                    "{}={}",
+                    s(&idx(v, "baseUrlEnv")?),
+                    s(&idx(v, "baseUrl")?)
+                ));
                 Ok(0)
             })
         }
@@ -831,8 +908,353 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                 Ok(0)
             })
         }
+        "file" | "env-file" => {
+            let mut j = Vec::new();
+            if sub == "env-file" {
+                need(
+                    o.wait.is_empty() || o.done.is_empty(),
+                    "usage: --wait doesn't go with --done".into(),
+                )?;
+                let efs: Vec<&String> = o.pos.iter().chain(o.secrets.iter()).collect();
+                need(
+                    !efs.is_empty() || !o.done.is_empty(),
+                    format!(
+                        "usage: {CLI} vault env-file NAME [NAME2 …] [--ttl 90s] | --done <path>"
+                    ),
+                )?;
+                if !o.done.is_empty() {
+                    j.push(kv("done", py::text(&o.done)));
+                }
+                if !o.ttl.is_empty() {
+                    j.push(kv("ttl", py::text(&o.ttl)));
+                }
+                if !o.wait.is_empty() {
+                    j.push(kv("wait", py::text(&o.wait)));
+                }
+                j.push(kv(
+                    "secrets",
+                    Value::Array(
+                        efs.iter()
+                            .filter(|x| !x.is_empty())
+                            .map(|x| py::text(x))
+                            .collect(),
+                    ),
+                ));
+            } else {
+                let fsecret = o.secrets.first().cloned().unwrap_or_else(|| name.clone());
+                need(
+                    o.secrets.len() <= 1,
+                    format!("usage: {CLI} vault file NAME [--ttl 90s]  (one secret per file)"),
+                )?;
+                need(
+                    !fsecret.is_empty() || !o.done.is_empty(),
+                    format!("usage: {CLI} vault file NAME [--ttl 90s] | --done <path>"),
+                )?;
+                need(
+                    o.wait.is_empty() || o.done.is_empty(),
+                    "usage: --wait doesn't go with --done".into(),
+                )?;
+                if !o.done.is_empty() {
+                    j.push(kv("done", py::text(&o.done)));
+                }
+                if !o.ttl.is_empty() {
+                    j.push(kv("ttl", py::text(&o.ttl)));
+                }
+                if !fsecret.is_empty() && o.done.is_empty() {
+                    j.push(kv("secret", py::text(&fsecret)));
+                }
+                if !o.wait.is_empty() {
+                    j.push(kv("wait", py::text(&o.wait)));
+                }
+            }
+            let r = wait_call(ctx, sub, merge(&[&j, &sj]))?;
+            shown(&r, |v, l| {
+                let p = get(v, "path")?;
+                l.p(if t(&p) {
+                    s(&p)
+                } else {
+                    format!("removed {}", s(&get(v, "removed")?))
+                });
+                Ok(0)
+            })
+        }
+        "grant" => grant(ctx, &o, &name, &sj, &nj)?,
+        "service" => {
+            need(
+                !name.is_empty(),
+                format!("usage: {CLI} vault service <published service> [clean|legacy] [--env-file .env.k2]"),
+            )?;
+            let mode = o.pos.get(1).cloned().unwrap_or_default();
+            let r = if !mode.is_empty() || !o.env_file.is_empty() {
+                let mut j = vec![kv("service", py::text(&name))];
+                if !mode.is_empty() {
+                    j.push(kv("mode", py::text(&mode)));
+                }
+                if !o.env_file.is_empty() {
+                    j.push(kv("envFile", py::text(&o.env_file)));
+                }
+                ctx.call(true, "service", &obj(j))?
+            } else {
+                ctx.call(
+                    false,
+                    "service",
+                    &format!("service={}", crate::transport::encode::quote(&name)),
+                )?
+            };
+            shown(&r, service)
+        }
         _ => Exit::Error,
     })
+}
+
+/// `_vault_wait_call <route> <body>`: one blocking call, then again until
+/// the file is there, a person answered, or this command's own deadline.
+fn wait_call(ctx: &mut Ctx, route: &str, first: Vec<(Text, Value)>) -> Result<Split, Exit> {
+    let start = std::time::Instant::now();
+    let secs = || start.elapsed().as_secs() as i64;
+    let mut deadline: Option<i64> = None;
+    let mut body = first;
+    loop {
+        let r = ctx.call(true, route, &obj(body.clone()))?;
+        // `IFS=$'\t' read -r waiting card wsecs` of the Python's
+        // "%d\t%s\t%d": tabs are IFS white space, so an empty card leaves
+        // the seconds in `card` and none in `wsecs`.
+        let fields = match wait_fields(&r.body) {
+            Ok(f) => f,
+            Err(e) => {
+                out::stderr_line(e.text().trim_end_matches('\n'));
+                [String::new(), String::new(), String::new()]
+            }
+        };
+        let line = fields_line(&fields);
+        let words: Vec<&str> = line.split('\t').filter(|w| !w.is_empty()).collect();
+        let waiting = words.first().copied().unwrap_or("");
+        let card = words.get(1).copied().unwrap_or("").to_string();
+        let wsecs: i64 = words.get(2).and_then(|w| w.parse().ok()).unwrap_or(0);
+        if waiting != "1" {
+            return Ok(r);
+        }
+        let dl = match deadline {
+            Some(d) => d,
+            None => {
+                out::stderr_line(&format!(
+                    "{CLI} vault: waiting for a person to save the card ({card})…"
+                ));
+                deadline = Some(wsecs);
+                wsecs
+            }
+        };
+        let left = dl - secs();
+        if left <= 0 {
+            out::stderr_line(&format!(
+                "no_answer: no answer yet; the card is still open (card {card})"
+            ));
+            return Err(Exit::Refused);
+        }
+        body = merge(&[
+            &body,
+            &[
+                kv("wait", Value::Int(left.to_string())),
+                kv("waitCard", py::text(&card)),
+            ],
+        ]);
+    }
+}
+
+/// The wait's Python: `waiting` as 1 or 0, `card` or "", `waitSecs` or 0.
+fn wait_fields(body: &[u8]) -> R<[String; 3]> {
+    let v = confirm::load(body)?;
+    let waiting = if t(&get(&v, "waiting")?) { "1" } else { "0" };
+    let c = get(&v, "card")?;
+    let c = if t(&c) { s(&c) } else { String::new() };
+    let w = get(&v, "waitSecs")?;
+    let w = if t(&w) { py::d(&w)? } else { "0".into() };
+    Ok([waiting.into(), c, w])
+}
+
+fn fields_line(f: &[String; 3]) -> String {
+    format!("{}\t{}\t{}", f[0], f[1], f[2])
+}
+
+/// `k2 vault grant NAME --to …`, with the person's confirm over the vault
+/// socket when the daemon asks for one from a terminal outside K2.
+fn grant(
+    ctx: &mut Ctx,
+    o: &Opts,
+    name: &str,
+    sj: &[(Text, Value)],
+    nj: &[(Text, Value)],
+) -> Result<Exit, Exit> {
+    if name.is_empty() || o.to.is_empty() {
+        return Err(usage(format!(
+            "usage: {CLI} vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node> [--as <d>] [--ttl 2h]"
+        )));
+    }
+    let mut gj = vec![kv("to", py::text(&o.to))];
+    for (k, v) in [
+        ("as", &o.as_d),
+        ("envName", &o.env_name),
+        ("fileName", &o.file_name),
+        ("ttl", &o.ttl),
+    ] {
+        if !v.is_empty() {
+            gj.push(kv(k, py::text(v)));
+        }
+    }
+    let body = obj(merge(&[sj, nj, &gj]));
+    let mut r = ctx.send(true, "/cli/vault/grant", &body)?;
+    let needs_confirm = r.status == "403"
+        && r.body
+            .windows(24)
+            .any(|w| w == b"\"vault_confirm_required\"")
+        && !confirm::in_k2_terminal()
+        && crate::families::live_socket(Some(&ctx.sock));
+    if needs_confirm {
+        let shown_q = py::urlencode(&merge(&[sj, nj]));
+        let sh = ctx.sock(false, &format!("show?{shown_q}"), b"");
+        if !sh.ok() {
+            return Err(ctx.fail(&sh));
+        }
+        let gsid = match confirm::load(&sh.body).and_then(|v| idx(&idx(&v, "secret")?, "id")) {
+            Ok(id) => s(&id),
+            Err(e) => {
+                out::stderr_line(e.text().trim_end_matches('\n'));
+                return Err(Exit::Error);
+            }
+        };
+        out::stderr_line(&format!(
+            "Sharing {name} this way lets {} read the value: confirm to go ahead (nothing is shared if you cancel).",
+            o.to
+        ));
+        let label = format!("share {name} with {}", o.to);
+        let Some(tok) = confirm::confirm_token(&mut ctx.confirm(), "grant-read", &gsid, &label)
+        else {
+            return Err(Exit::Refused);
+        };
+        let Some(b) = confirm::with_confirm_token(&body, &tok, None) else {
+            return Err(Exit::Error);
+        };
+        r = ctx.sock(true, "grant", b.as_bytes());
+    }
+    if !r.ok() {
+        return Err(ctx.fail(&r));
+    }
+    if !o.ttl.is_empty() {
+        let ends = confirm::load(&r.body)
+            .and_then(|v| get(&or_obj(get(&v, "grant")?), "expiresAt"))
+            .map(|x| t(&x));
+        if !matches!(ends, Ok(true)) {
+            if let Err(e) = &ends {
+                out::stderr_line(e.text().trim_end_matches('\n'));
+            }
+            let id =
+                match confirm::load(&r.body).and_then(|v| get(&or_obj(get(&v, "grant")?), "id")) {
+                    Ok(x) if t(&x) => s(&x),
+                    Ok(_) => String::new(),
+                    Err(e) => {
+                        out::stderr_line(e.text().trim_end_matches('\n'));
+                        String::new()
+                    }
+                };
+            out::stderr_line(&format!(
+                "grant_ttl_ignored: this {PRODUCT} server made the share WITHOUT an end time (it is older than 0.46.11 and drops --ttl). Take it back when you're done: {CLI} vault revoke --grant {id}"
+            ));
+            return Ok(Exit::Error);
+        }
+    }
+    if o.json {
+        return Ok(print_body(&r));
+    }
+    let (n, to) = (name.to_string(), o.to.clone());
+    let e = render(&r.body, |v, l| {
+        let g = or_obj(get(v, "grant")?);
+        let until = if t(&get(&g, "expiresAt")?) {
+            cat(" until ", &idx(&g, "expiresAt")?)?
+        } else {
+            String::new()
+        };
+        l.p(format!("shared {n} with {to}{until}"));
+        Ok(0)
+    })
+    .print();
+    if e != Exit::Ok {
+        return Ok(e);
+    }
+    let e = render(&r.body, |v, l| {
+        let x = get(v, "reach")?;
+        if t(&x) {
+            l.p(format!("note: {}", s(&x)));
+        }
+        Ok(0)
+    })
+    .print();
+    if e != Exit::Ok {
+        return Ok(e);
+    }
+    Ok(render(&r.body, |v, l| {
+        let w = get(v, "warning")?;
+        if t(&w) {
+            l.err.push_str(&cat("", &w)?);
+            l.err.push('\n');
+        }
+        Ok(0)
+    })
+    .print())
+}
+
+fn service(v: &Value, l: &mut Lines) -> R<i32> {
+    let ef = get(v, "envFile")?;
+    let ef = if t(&ef) {
+        cat(", .env.k2 = ", &idx(v, "envFile")?)?
+    } else {
+        String::new()
+    };
+    l.p(format!(
+        "{}: environment {}{ef}",
+        s(&get(v, "service")?),
+        s(&get(v, "mode")?)
+    ));
+    for x in items(&or_list(get(v, "secrets")?))? {
+        let en = if t(&get(&x, "envName")?) {
+            format!("{})", cat(" (", &idx(&x, "envName")?)?)
+        } else {
+            String::new()
+        };
+        l.p(format!(
+            "  {} as {}{en}",
+            s(&get(&x, "name")?),
+            s(&get(&x, "delivery")?)
+        ));
+    }
+    if t(&get(v, "inheritedNames")?) {
+        l.p(format!(
+            "  inherits the daemon environment: {}",
+            joined(&idx(v, "inheritedNames")?, ", ")?
+        ));
+    }
+    if is(&get(v, "mode")?, "legacy") {
+        let ends = get(v, "envRemovedIn")?;
+        if t(&ends) {
+            let when = if t(&get(v, "cutoverNow")?) {
+                format!("with this release ({PRODUCT} {})", s(&ends))
+            } else {
+                format!("in {PRODUCT} {}", s(&ends))
+            };
+            l.p(format!(
+                "  deprecated: inheriting the daemon environment ends {when} — switch with: {CLI} publish env {} clean",
+                s(&get(v, "service")?)
+            ));
+        } else {
+            l.p(format!(
+                "  inherits the daemon environment (it keeps it as a --cmd service) — start it clean with: {CLI} publish env {} clean",
+                s(&get(v, "service")?)
+            ));
+        }
+    }
+    if t(&get(v, "restart")?) {
+        l.p(s(&idx(v, "restart")?));
+    }
+    Ok(0)
 }
 
 /// `int(x)` of digits the parser checked: the digits with leading zeros
@@ -1015,8 +1437,16 @@ fn b64_encode(b: &[u8]) -> String {
             | u32::from(*c.get(2).unwrap_or(&0));
         out.push(A[(n >> 18) as usize & 63] as char);
         out.push(A[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { A[n as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 1 {
+            A[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            A[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -1057,8 +1487,13 @@ pub fn body_with_value(mut base: Vec<(Text, Value)>) -> Result<prompt::Secret, E
     };
     let enc = prompt::Secret::new(b64_encode(v.expose()).into_bytes());
     drop(v);
-    let field = Value::Str(Text::from(String::from_utf8_lossy(enc.expose()).into_owned()));
-    match base.iter_mut().find(|(k, _)| k.as_str() == Some("valueB64")) {
+    let field = Value::Str(Text::from(
+        String::from_utf8_lossy(enc.expose()).into_owned(),
+    ));
+    match base
+        .iter_mut()
+        .find(|(k, _)| k.as_str() == Some("valueB64"))
+    {
         Some((_, old)) => *old = field,
         None => base.push(kv("valueB64", field)),
     }
@@ -1196,7 +1631,10 @@ fn set_opts(o: &Opts, sign: Option<Value>) -> Result<Vec<(Text, Value)>, Exit> {
     }
     if !(ih.is_empty() && iformat.is_empty() && idst.is_empty()) {
         let dst = if idst.is_empty() {
-            format!("header:{}", if ih.is_empty() { "Authorization" } else { ih })
+            format!(
+                "header:{}",
+                if ih.is_empty() { "Authorization" } else { ih }
+            )
         } else {
             idst.clone()
         };
@@ -1257,12 +1695,20 @@ fn status(v: &Value, l: &mut Lines) -> R<i32> {
         return Ok(0);
     }
     l.p("vault:          open");
-    l.p(format!("key:            {} ({})", s(&get(v, "keyHomeLabel")?), s(&get(v, "keyHome")?)));
+    l.p(format!(
+        "key:            {} ({})",
+        s(&get(v, "keyHomeLabel")?),
+        s(&get(v, "keyHome")?)
+    ));
     l.p(format!("rollback guard: {}", s(&get(v, "rollbackGuard")?)));
     l.p(format!("recovery key:   {}", s(&get(v, "recovery")?)));
     l.p(format!(
         "vault password: {}",
-        if t(&get(v, "confirmPassword")?) { "set" } else { "not set" }
+        if t(&get(v, "confirmPassword")?) {
+            "set"
+        } else {
+            "not set"
+        }
     ));
     let px = or_obj(get(v, "proxy")?);
     let proxy = if t(&get(&px, "port")?) {
@@ -1352,7 +1798,11 @@ fn list(v: &Value, l: &mut Lines) -> R<i32> {
     if its.is_empty() {
         l.p(format!(
             "{} ({CLI} vault set NAME < value, or ask a person with {CLI} thread secret)",
-            if t(&hidden) { "none of yours to show" } else { "no secrets yet" }
+            if t(&hidden) {
+                "none of yours to show"
+            } else {
+                "no secrets yet"
+            }
         ));
     }
     for m in its {
@@ -1362,17 +1812,29 @@ fn list(v: &Value, l: &mut Lines) -> R<i32> {
             "server".to_string()
         } else if is(&kind, "workspace") {
             let w = get(&m, "workspace")?;
-            let w = if t(&w) { w } else { get_or(&sc, "id", py::text(""))? };
+            let w = if t(&w) {
+                w
+            } else {
+                get_or(&sc, "id", py::text(""))?
+            };
             cat("ws:", &w)?
         } else {
             let k = get_or(&sc, "kind", py::text(""))?;
             let id = get_or(&sc, "id", py::text(""))?;
             let id8 = match &id {
-                Value::Str(x) => x.code_points().into_iter().take(8).filter_map(char::from_u32).collect::<String>(),
+                Value::Str(x) => x
+                    .code_points()
+                    .into_iter()
+                    .take(8)
+                    .filter_map(char::from_u32)
+                    .collect::<String>(),
                 other => {
                     return Err(crate::families::Raise::at(
                         1,
-                        format!("TypeError: '{}' object is not subscriptable", crate::out::py::type_name(other)),
+                        format!(
+                            "TypeError: '{}' object is not subscriptable",
+                            crate::out::py::type_name(other)
+                        ),
                     ))
                 }
             };
@@ -1386,7 +1848,10 @@ fn list(v: &Value, l: &mut Lines) -> R<i32> {
                 other => {
                     return Err(crate::families::Raise::at(
                         1,
-                        format!("AttributeError: '{}' object has no attribute 'split'", crate::out::py::type_name(other)),
+                        format!(
+                            "AttributeError: '{}' object has no attribute 'split'",
+                            crate::out::py::type_name(other)
+                        ),
                     ))
                 }
             };
@@ -1394,9 +1859,21 @@ fn list(v: &Value, l: &mut Lines) -> R<i32> {
             let host = after.rsplit_once(':').map_or(after, |(a, _)| a);
             hosts.push(host.to_string());
         }
-        let hosts = if hosts.is_empty() { "-".to_string() } else { hosts.join(",") };
-        let see = if t(&get(&m, "agentCanSee")?) { " (agent can see it)" } else { "" };
-        let ns = if is(&get(&m, "namespace")?, "system") { " [system]" } else { "" };
+        let hosts = if hosts.is_empty() {
+            "-".to_string()
+        } else {
+            hosts.join(",")
+        };
+        let see = if t(&get(&m, "agentCanSee")?) {
+            " (agent can see it)"
+        } else {
+            ""
+        };
+        let ns = if is(&get(&m, "namespace")?, "system") {
+            " [system]"
+        } else {
+            ""
+        };
         let mut st = if is(&get(&m, "status")?, "active") {
             String::new()
         } else {
@@ -1442,7 +1919,11 @@ fn show(v: &Value, l: &mut Lines) -> R<i32> {
     ));
     l.p(format!(
         "sites:     {}",
-        joined_or(&get(&m, "hosts")?, ", ", "none (fetch is refused until a site is added)")?
+        joined_or(
+            &get(&m, "hosts")?,
+            ", ",
+            "none (fetch is refused until a site is added)"
+        )?
     ));
     let inj = or_obj(get(&m, "inject")?);
     let sg = get(&inj, "sign")?;
@@ -1489,18 +1970,30 @@ fn show(v: &Value, l: &mut Lines) -> R<i32> {
             ));
         }
     } else if t(&inj) {
-        l.p(format!("goes in:   {} as {}", s(&get(&inj, "dst")?), s(&get(&inj, "fmt")?)));
+        l.p(format!(
+            "goes in:   {} as {}",
+            s(&get(&inj, "dst")?),
+            s(&get(&inj, "fmt")?)
+        ));
     }
     l.p(format!(
         "delivery:  {} (at most {}){}",
         s(&get(&m, "defaultDelivery")?),
         s(&get(&m, "deliveryCeiling")?),
-        if t(&get(&m, "agentCanSee")?) { " — agents can see it" } else { "" }
+        if t(&get(&m, "agentCanSee")?) {
+            " — agents can see it"
+        } else {
+            ""
+        }
     ));
     l.p(format!(
         "given by:  {}{}",
         s(&get(&m, "createdBy")?),
-        if t(&get(&m, "humanGiven")?) { " (a person)" } else { "" }
+        if t(&get(&m, "humanGiven")?) {
+            " (a person)"
+        } else {
+            ""
+        }
     ));
     let ho = or_obj(get(&m, "handoff")?);
     if t(&ho) {
@@ -1535,8 +2028,16 @@ fn show(v: &Value, l: &mut Lines) -> R<i32> {
         ));
     }
     for g in items(&or_list(get(v, "grants")?))? {
-        let env = if t(&get(&g, "envName")?) { cat(" env ", &idx(&g, "envName")?)? } else { String::new() };
-        let until = if t(&get(&g, "expiresAt")?) { cat(" until ", &idx(&g, "expiresAt")?)? } else { String::new() };
+        let env = if t(&get(&g, "envName")?) {
+            cat(" env ", &idx(&g, "envName")?)?
+        } else {
+            String::new()
+        };
+        let until = if t(&get(&g, "expiresAt")?) {
+            cat(" until ", &idx(&g, "expiresAt")?)?
+        } else {
+            String::new()
+        };
         l.p(format!(
             "shared:    {} as {}{env}{until}",
             s(&get(&g, "consumerLabel")?),
@@ -1545,10 +2046,18 @@ fn show(v: &Value, l: &mut Lines) -> R<i32> {
     }
     for p in items(&or_list(get(v, "placements")?))? {
         let where_ = if is(&get(&p, "target")?, "systemd_cred") {
-            format!("systemd credential {} on {}", s(&get(&p, "credName")?), s(&get(&p, "unit")?))
+            format!(
+                "systemd credential {} on {}",
+                s(&get(&p, "credName")?),
+                s(&get(&p, "unit")?)
+            )
         } else {
             let w = get(&p, "where")?;
-            if t(&w) { s(&w) } else { String::new() }
+            if t(&w) {
+                s(&w)
+            } else {
+                String::new()
+            }
         };
         let st = get(&p, "state")?;
         let tail = if is(&st, "due") {
@@ -1564,16 +2073,25 @@ fn show(v: &Value, l: &mut Lines) -> R<i32> {
                 s(&get(&p, "unit")?)
             )
         } else if is(&st, "inactive") {
-            format!(" — the secret is {}; take it off", s(&get(&p, "secretStatus")?))
+            format!(
+                " — the secret is {}; take it off",
+                s(&get(&p, "secretStatus")?)
+            )
         } else if matches!(st, Value::Array(_) | Value::Object(_)) {
             return Err(crate::families::Raise::at(
                 1,
-                format!("TypeError: unhashable type: '{}'", crate::out::py::type_name(&st)),
+                format!(
+                    "TypeError: unhashable type: '{}'",
+                    crate::out::py::type_name(&st)
+                ),
             ));
         } else {
             String::new()
         };
-        l.p(format!("placed:    {where_} (v{}){tail}", s(&get(&p, "version")?)));
+        l.p(format!(
+            "placed:    {where_} (v{}){tail}",
+            s(&get(&p, "version")?)
+        ));
     }
     let audit = or_list(get(v, "audit")?);
     let rows = match &audit {
@@ -1582,7 +2100,10 @@ fn show(v: &Value, l: &mut Lines) -> R<i32> {
         other => {
             return Err(crate::families::Raise::at(
                 1,
-                format!("TypeError: '{}' object is not subscriptable", crate::out::py::type_name(other)),
+                format!(
+                    "TypeError: '{}' object is not subscriptable",
+                    crate::out::py::type_name(other)
+                ),
             ))
         }
     };
@@ -1603,7 +2124,11 @@ fn set_printer(v: &Value, l: &mut Lines) -> R<i32> {
     let m = or_obj(get(v, "secret")?);
     l.p(format!(
         "{} {} → {} (v{})",
-        if t(&get(v, "created")?) { "saved" } else { "new version of" },
+        if t(&get(v, "created")?) {
+            "saved"
+        } else {
+            "new version of"
+        },
         s(&get(&m, "name")?),
         s(&get(v, "ref")?),
         s(&get(&m, "latestVersion")?)
@@ -1623,7 +2148,11 @@ fn set_printer(v: &Value, l: &mut Lines) -> R<i32> {
     l.p(cat("use: ", &if t(&u) { u } else { py::text("") })?);
     if t(&get(v, "ttlCut")?) {
         let n = get(v, "ttlNote")?;
-        l.p(if t(&n) { s(&n) } else { "kept for 7 d (the most for one session)".into() });
+        l.p(if t(&n) {
+            s(&n)
+        } else {
+            "kept for 7 d (the most for one session)".into()
+        });
     }
     Ok(0)
 }
@@ -1640,11 +2169,19 @@ fn rotate_printer(v: &Value, l: &mut Lines) -> R<i32> {
                 "re-placed into {} (systemd credential {}){}",
                 s(&get(&r, "unit")?),
                 s(&get(&r, "credName")?),
-                if t(&get(&r, "restarted")?) { ", restart queued" } else { "" }
+                if t(&get(&r, "restarted")?) {
+                    ", restart queued"
+                } else {
+                    ""
+                }
             ));
         } else {
             let e = or_obj(get(&r, "error")?);
-            l.p(format!("NOT re-placed into {}: {}", s(&get(&r, "unit")?), s(&get(&e, "hint")?)));
+            l.p(format!(
+                "NOT re-placed into {}: {}",
+                s(&get(&r, "unit")?),
+                s(&get(&e, "hint")?)
+            ));
         }
     }
     Ok(0)
@@ -1656,7 +2193,11 @@ fn doctor(v: &Value, l: &mut Lines) -> R<i32> {
         l.p("vault: nothing to fix");
     }
     for x in f {
-        l.p(format!("{} {}", left(&get(&x, "level")?, 7), s(&get(&x, "message")?)));
+        l.p(format!(
+            "{} {}",
+            left(&get(&x, "level")?, 7),
+            s(&get(&x, "message")?)
+        ));
         let paths = or_list(get(&x, "files")?);
         let all = items(&paths)?;
         for p in all.iter().take(5) {
@@ -1708,7 +2249,11 @@ mod tests {
 
     #[test]
     fn the_parser_reads_the_shell_s_flags() {
-        let o = p("set", &["A", "--for", "a.com,b.com", "--sign-prefix", "", "--json"]).unwrap();
+        let o = p(
+            "set",
+            &["A", "--for", "a.com,b.com", "--sign-prefix", "", "--json"],
+        )
+        .unwrap();
         assert_eq!(o.pos, ["A"]);
         assert_eq!(o.hosts, "a.com,b.com");
         assert_eq!(o.sign_prefix.as_deref(), Some(""));
@@ -1718,7 +2263,10 @@ mod tests {
         assert_eq!(p("show", &["--value=x"]).unwrap_err(), Exit::Usage);
         assert_eq!(p("show", &["--nope"]).unwrap_err(), Exit::Usage);
         assert_eq!(p("recovery", &["--json"]).unwrap_err(), Exit::Usage);
-        assert_eq!(p("agent-limit", &["A", "--burst", "1x"]).unwrap_err(), Exit::Usage);
+        assert_eq!(
+            p("agent-limit", &["A", "--burst", "1x"]).unwrap_err(),
+            Exit::Usage
+        );
         // A single dash is a word.
         assert_eq!(p("show", &["-y"]).unwrap().pos, ["-y"]);
         // rollback's --to is the version.
@@ -1736,7 +2284,10 @@ mod tests {
     fn the_scope_s_fields() {
         let j = |s: &str| obj(scope_json(s).unwrap());
         assert_eq!(j("ws:a b"), r#"{"scope": "workspace", "workspace": "a b"}"#);
-        assert_eq!(j("workspace:"), r#"{"scope": "workspace", "workspace": ""}"#);
+        assert_eq!(
+            j("workspace:"),
+            r#"{"scope": "workspace", "workspace": ""}"#
+        );
         assert_eq!(j("server"), r#"{"scope": "server"}"#);
         assert_eq!(j("session:x"), r#"{"scope": "session", "session": "x"}"#);
         assert_eq!(j("engine:sew"), r#"{"scope": "engine:sew"}"#);
@@ -1746,7 +2297,10 @@ mod tests {
 
     #[test]
     fn merge_updates_in_order() {
-        let a = vec![kv("a", Value::Int("1".into())), kv("b", Value::Int("2".into()))];
+        let a = vec![
+            kv("a", Value::Int("1".into())),
+            kv("b", Value::Int("2".into())),
+        ];
         let b = vec![kv("a", Value::Int("3".into())), kv("c", Value::Null)];
         assert_eq!(obj(merge(&[&a, &b])), r#"{"a": 3, "b": 2, "c": null}"#);
     }
@@ -1777,7 +2331,9 @@ mod tests {
         status(&v, &mut l).unwrap();
         assert!(l.out.contains("proxy:          127.0.0.1:8899\n"));
         assert!(l.out.contains("  box key (this machine) ab\n"));
-        assert!(l.out.contains("  x key                  added t\n"));
+        assert!(l
+            .out
+            .contains(&format!("  x key{}   added t\n", " ".repeat(17))));
         assert!(l.out.ends_with("\nh\n"));
     }
 }

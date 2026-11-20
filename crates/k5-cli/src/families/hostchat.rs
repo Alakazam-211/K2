@@ -21,7 +21,9 @@
 //!    ([`crate::confirm::confirm_token`]); the token goes from that answer
 //!    into the next request's body and nowhere else.
 //!
-//! `recording`, `media` and `users` are their own modules'. `deliveries` and `agents` ride
+//! The sub-families are modules of their own: [`recording`], `media`,
+//! `users`, `admin` (people, approvals, on-behalf, log) and `apps`
+//! (app-space, home, pass-keys, meet). `deliveries` and `agents` ride
 //! [`super::chat`], as the shell's do.
 //!
 //! Handed to the shell, before anything is printed or sent: a word that
@@ -29,11 +31,11 @@
 //! with no value or an empty one (the shell stops on `${2:?…}` with a line
 //! naming its own path: the D6 class), `open` without `--print` (the
 //! shell starts a browser with the one-use owner link in its argv: that
-//! waits for a ruling), a variable `_compute_send`, `_compute_fail` or
-//! `_compute_json` reads from the environment, and the verbs not native
-//! yet.
+//! waits for a ruling), and a variable `_compute_send`, `_compute_fail`
+//! or `_compute_json` reads from the environment.
 
 mod admin;
+mod apps;
 mod main_verbs;
 mod media;
 pub mod print;
@@ -78,6 +80,11 @@ pub enum Plan {
     Users(users::Users),
     /// `people`, `approvals`, `on-behalf` and `log`.
     Admin(admin::Admin),
+    /// `app-space`, `home`, `pass-keys` and `meet`.
+    Apps(apps::Apps),
+    /// Nothing printed, this exit (the shell's `set -e` on a failed
+    /// `shift 2`).
+    Silent(Exit),
 }
 
 /// The flags and words of `cmd_hostchat`'s own verbs.
@@ -319,8 +326,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "agents" | "agent" => {
             return chat::start(args, &words, chat::access(&words[1..]), skip, TOOL)
         }
-        "meet" | "app-space"
-        | "app-spaces" | "home" | "pass-keys" => return None,
         _ => {}
     }
     let plan = match words.first().copied() {
@@ -331,6 +336,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some("approvals" | "approval") => admin::approvals(&words[1..]),
         Some("on-behalf" | "behalf") => admin::on_behalf(&words[1..]),
         Some("log") => admin::log(&words[1..]),
+        Some(w @ ("app-space" | "app-spaces")) => apps::app_space(w, &words[1..]),
+        Some("home") => apps::home(&words[1..]),
+        Some("pass-keys") => apps::pass_keys(&words[1..]),
+        Some("meet") => apps::meet(&words[1..]),
         _ => parse(&words),
     };
     if plan == Plan::Shell || !python::family_native(python::here()) {
@@ -375,6 +384,7 @@ fn run_with(
     let m = match plan {
         Plan::Help => return page("hostchat"),
         Plan::Text(key) => return page(key),
+        Plan::Silent(exit) => return exit,
         Plan::Bad(line) => {
             out::stderr_line(&line);
             return Exit::Usage;
@@ -384,7 +394,8 @@ fn run_with(
         | Plan::Rec(_)
         | Plan::Media(_)
         | Plan::Users(_)
-        | Plan::Admin(_)) => p,
+        | Plan::Admin(_)
+        | Plan::Apps(_)) => p,
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let client = match settings.client(would_refuse) {
@@ -406,6 +417,7 @@ fn run_with(
         Plan::Media(m) => media::run(&mut ctx, m),
         Plan::Users(u) => users::run(&mut ctx, u),
         Plan::Admin(a) => admin::run(&mut ctx, a),
+        Plan::Apps(a) => apps::run(&mut ctx, a),
         _ => unreachable!("printed above"),
     };
     ctx.closing.flush(&mut ctx.client, exit);

@@ -1279,3 +1279,188 @@ fn hostchat_chat_administration_a_person_s_steps() {
         rig.check(c);
     }
 }
+
+const APP_REC: &str = r#"{"app":{"name":"Acme","serviceId":"svc-1"},"spaces":[{"spaceId":5,"governance":"app","startLevel":"admin","required":true,"locked":true},{"spaceId":"s2"}]}"#;
+
+#[test]
+fn hostchat_apps_as_the_shell_does() {
+    let rig = Rig::new(VERB, "apps");
+    let utc = |c: Case| with(vec![("TZ", "UTC".to_string())], c);
+    let v = vec![
+        // covers: hostchat app-space
+        one(
+            "app-spaces",
+            &["app-spaces"],
+            r#"{"spaces":[{"appId":"acme","spaceId":"s1","members":{"added":3,"held":1},"governance":"app","governanceConfirmed":"sew"},{"appId":"b","spaceId":"s2","governance":"sew","governanceConfirmed":"sew"}],"unbound":[{"appId":"old","spaceId":"s0","doneAt":1},{"appId":"o2","spaceId":"s9"}],"note":"a note"}"#,
+        ),
+        one("app-space list: none", &["app-space", "list"], r#"{"spaces":[]}"#),
+        one("app-space --json", &["app-space", "--json"], r#"{"spaces":[]}"#),
+        one("app-space bind", &["app-space", "bind", "acme", "s1"], r#"{"ok":true,"bound":true}"#),
+        one(
+            "app-space unbind --remove-app-members",
+            &["app-space", "unbind", "acme", "s1", "--remove-app-members"],
+            r#"{"ok":true}"#,
+        ),
+        with(
+            with_passport(&[]),
+            // covers: hostchat app-space governance
+            case(
+                "app-space governance in a session: no confirm",
+                &["app-space", "governance", "acme", "s1", "app"],
+                &[],
+                vec![ok(r#"{"spaceId":"s1","governance":"app","changed":true,"hint":"h"}"#)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        bad("app-space bind: one word", &["app-spaces", "bind", "acme"]),
+        bad("app-space bind --remove-app-members", &["app-space", "bind", "a", "s", "--remove-app-members"]),
+        bad("app-space governance: no value", &["app-space", "governance", "a", "s"]),
+        bad("app-space governance: a bad value", &["app-space", "governance", "a", "s", "both"]),
+        bad("app-space: an unknown flag", &["app-space", "bind", "--x"]),
+        // covers: hostchat app-space recording
+        one("app-space recording: the rule", &["app-space", "recording", "acme", "5"], APP_REC),
+        one("app-space recording: another Space", &["app-space", "recording", "acme", "s2"], APP_REC),
+        case(
+            "app-space recording: not bound",
+            &["app-space", "recording", "acme", "s9"],
+            &[],
+            vec![ok(APP_REC)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        one("app-space recording --json", &["app-space", "recording", "acme", "5", "--json"], APP_REC),
+        one(
+            "app-space recording: a change",
+            &["app-space", "recording", "acme", "s1", "--start-level", "member", "--required=inherit"],
+            r#"{"spaceId":"s1","app":"acme","changed":true,"startLevel":"member","required":null,"locked":true}"#,
+        ),
+        one(
+            "app-space recording: down, already so",
+            &["app-space", "recording", "acme", "s1", "--start-level=none", "--required", "off"],
+            r#"{"spaceId":"s1","app":"acme","required":false}"#,
+        ),
+        with(
+            with_passport(&[]),
+            case(
+                "app-space recording in a session: held, refused",
+                &["app-space", "recording", "acme", "s1", "--required", "on"],
+                &[],
+                vec![Reply::Answer(403, r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into())],
+                port_only,
+                3,
+                1,
+            ),
+        ),
+        bad("app-space recording: one word", &["app-space", "recording", "acme"]),
+        bad("app-space recording: three words", &["app-space", "recording", "a", "s", "x"]),
+        bad("app-space recording: a bad level", &["app-space", "recording", "a", "s", "--start-level", "owner"]),
+        bad("app-space recording: a bad required", &["app-space", "recording", "a", "s", "--required", "maybe"]),
+        bad("app-space recording: --required with nothing", &["app-space", "recording", "a", "s", "--required"]),
+        // covers: hostchat app-space recording-lock
+        one(
+            "app-space recording-lock",
+            &["app-space", "recording-lock", "s1", "on"],
+            r#"{"spaceId":"s1","locked":true,"changed":true,"hint":"nobody records there"}"#,
+        ),
+        one(
+            "app-space recording-lock: already so",
+            &["app-space", "recording-lock", "s1", "no"],
+            r#"{"spaceId":"s1","locked":false}"#,
+        ),
+        bad("app-space recording-lock: maybe", &["app-space", "recording-lock", "s1", "maybe"]),
+        one(
+            "home",
+            &["home"],
+            r#"{"sew":{"appScopedSessions":false,"homeClient":true},"homeClient":"hearth","homeClientDelivered":false,"homeClientError":"no flag","apps":[{"app":"acme","name":"Acme","hiddenFromHome":true,"origin":"https://acme.example","delivered":true},{"app":"b"}]}"#,
+        ),
+        one(
+            "home: not ok",
+            &["home", "--json"],
+            r#"{"ok":false,"error":"x"}"#,
+        ),
+        one("home: not ok, the lines", &["home"], r#"{"ok":false,"error":"x"}"#),
+        one(
+            "home client",
+            &["home", "client", "acme"],
+            r#"{"sew":{"appScopedSessions":true},"homeClient":"acme","homeClientDelivered":false}"#,
+        ),
+        one("home client none", &["home", "client", "none"], r#"{"sew":{},"homeClient":null}"#),
+        one("home app", &["home", "app", "acme", "--hidden", "on"], r#"{"sew":{},"apps":[]}"#),
+        bad("home: a bad verb", &["home", "list"]),
+        bad("home app: no --hidden", &["home", "app", "acme"]),
+        bad("home client: no app", &["home", "client"]),
+        case(
+            "home app --hidden with nothing after: the shell's shift fails",
+            &["home", "app", "acme", "--hidden"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        // covers: hostchat pass-keys
+        utc(one(
+            "pass-keys",
+            &["pass-keys"],
+            r#"{"keys":[{"state":"current","kid":"k2","publishedAt":1790000000,"rotateDueAt":1792000000},{"state":"retiring","kid":"k1","publishedAt":1780000000,"retireAfter":1791000000}]}"#,
+        )),
+        one("pass-keys: none", &["pass-keys"], r#"{"keys":[]}"#),
+        one("pass-keys rotate", &["pass-keys", "rotate"], r#"{"keys":[]}"#),
+        one("pass-keys drop-previous --json", &["pass-keys", "drop-previous", "--json"], r#"{"ok":true}"#),
+        bad("pass-keys: a word", &["pass-keys", "list"]),
+        bad("pass-keys: a flag", &["pass-keys", "--x"]),
+        // covers: hostchat meet
+        one("meet bind", &["meet", "bind", "acme"], r#"{"ok":true,"app":"acme","url":"https://meet.example"}"#),
+        one("meet unbind", &["meet", "unbind"], r#"{"ok":true}"#),
+        case("meet alone: the help", &["meet"], &[], vec![], owner_and_port, 0, 0),
+        bad("meet bind: no app", &["meet", "bind"]),
+        bad("meet: a bad verb", &["meet", "start"]),
+        traceback(one("pass-keys: a time that is no number", &["pass-keys"], r#"{"keys":[{"publishedAt":"x"}]}"#)),
+        traceback(one("home: a list", &["home"], "[]")),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn hostchat_apps_a_person_s_steps() {
+    let rig = VRig::new();
+    let held = || Reply::Answer(403, r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into());
+    let mut gov = person(
+        "app-space governance",
+        &["app-space", "governance", "acme", "s1", "sew"],
+        vec![ok(r#"{"spaceId":"s1","governance":"sew","changed":false}"#)],
+        0,
+    );
+    gov.daemon_requests = 1;
+    let v = vec![
+        gov,
+        person(
+            "app-space recording: up, held for a confirm",
+            &["app-space", "recording", "acme", "s1", "--start-level", "admin"],
+            vec![held(), ok(APP_REC), ok(r#"{"spaceId":"s1","app":"acme","changed":true,"startLevel":"admin"}"#)],
+            0,
+        ),
+        person(
+            "app-space recording-lock: held for a confirm",
+            &["app-space", "recording-lock", "s1", "on", "--json"],
+            vec![held(), ok(r#"{"spaceId":"s1","locked":true,"changed":true}"#)],
+            0,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+    let mut none = vcase(
+        "app-space recording: held, no App by that name",
+        &["app-space", "recording", "nope", "s1", "--required", "on"],
+    );
+    none.daemon = vec![held(), ok(r#"{"app":null}"#)];
+    none.daemon_requests = 2;
+    none.code = 3;
+    rig.check(&none);
+}

@@ -163,8 +163,8 @@ mod tests {
         let d = detail(StallRule::NoOutputNoCpu, 1800, 0);
         let x = Extra { stall: Some(words_for(Some(&d))), ..Default::default() };
         assert_eq!(
-            completion_text("ab12cd34ffff", "k2n4", "timeout", None, None, Some("stalled"), Some(1900), None, &x),
-            format!("[compute] job ab12cd34 on k2n4: stopped by the stall guard after 31m40s: no output and no CPU for its whole --stall-timeout; {HOW_TO_SET}. k2 compute logs ab12cd34 --tail 50 · k2 compute get ab12cd34 --json")
+            completion_text("ab12cd34ffff", "node-4", "timeout", None, None, Some("stalled"), Some(1900), None, &x),
+            format!("[compute] job ab12cd34 on node-4: stopped by the stall guard after 31m40s: no output and no CPU for its whole --stall-timeout; {HOW_TO_SET}. k2 compute logs ab12cd34 --tail 50 · k2 compute get ab12cd34 --json")
         );
         let blind = Extra { stall: Some(words_for(Some(&detail(StallRule::CpuUnreadable, 60, 0)))), ..Default::default() };
         assert!(completion_text("j", "n", "timeout", None, None, Some("stalled"), None, None, &blind).contains("the node couldn't read its CPU"));

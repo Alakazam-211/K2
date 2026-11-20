@@ -1402,7 +1402,7 @@ fn priority_and_ci_get_a_longer_default_stall() {
 /// none of them (an older k2-node) adds nothing.
 #[test]
 fn the_tools_line_shows_the_nodes_python_curl_and_bash() {
-    let mut c = cand("k2n4", 30, 32, 0, 2);
+    let mut c = cand("node-4", 30, 32, 0, 2);
     assert_eq!(host_tools_words(&c.offer), None, "an older node reports none");
     c.offer.tools.insert("python3".into(), "3.13.1".into());
     c.offer.tools.insert("curl".into(), "8.12.1".into());

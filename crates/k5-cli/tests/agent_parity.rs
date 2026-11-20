@@ -2567,9 +2567,9 @@ fn set() {
         ),
         case(
             "every value already so",
-            &["set", "qa", "--enabled", "true", "--name", "qa", "--mode", "agent"],
+            &["set", "qa", "--enabled", "false", "--name", "qa", "--mode", "custom"],
             &[],
-            vec![ok(CONF)],
+            vec![ok(CONF_IDS)],
             owner_and_port,
             0,
             1,

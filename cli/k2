@@ -74075,8 +74075,8 @@ _AGENT_HIRE_PERSON_LINE="A person does this in Settings → Workspaces / Agents 
 # (the hire core, project membership, connections, msg, the handover). A
 # step only the owner's routes take is refused before anything is sent:
 # --mode other than custom, --enabled, --color, --focus-group, a --context
-# path, --launch or --context with no template; --agent takes an exact
-# preset id (the label lookup is the owner's). No passport: refused too.
+# path, --launch with no template, --context with one; --agent takes an
+# exact preset id (the label lookup is the owner's). No passport: refused.
 # False outside a session and on a remote host: $TOKEN, as before.
 _agent_hire_session() {
     local mode="$1" enabled="$2" color="$3" focus="$4" launch="$5" template="$6" preset="$7"

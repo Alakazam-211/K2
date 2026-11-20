@@ -30,6 +30,10 @@
 //! - [`runtime`]: `app validate`, `app status` and `app sdk
 //!   add|status|kit`; [`recording`]: `app recording [set]` and `app
 //!   room-names`.
+//! - [`guests`]: `app guest rooms|ceiling|list`, `app grant <app> --kind
+//!   …` and `app grant copy-host`, with [`grace`] for a held answer;
+//!   [`sign_in`]: `app auth` and `app login settings`; [`chat`]: `app
+//!   chat`; [`init`]: `app init` and `app doctor --store`.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
 //! - The verbs `cmd_app` hands to `cmd_skin` (`user`, `role`, `grant`'s
@@ -72,16 +76,20 @@ pub mod access;
 pub mod approve;
 pub mod call;
 pub mod catalog;
+pub mod chat;
 pub mod db_set;
 pub mod door;
 pub mod grace;
+pub mod guests;
 pub mod history;
+pub mod init;
 pub mod phone;
 pub mod phone_set;
 pub mod py;
 pub mod reads;
 pub mod recording;
 pub mod runtime;
+pub mod sign_in;
 pub mod traffic;
 pub mod updates;
 pub mod updates_set;
@@ -116,6 +124,10 @@ pub enum Ask {
     Traffic(traffic::Ask),
     Runtime(runtime::Ask),
     Recording(recording::Ask),
+    Guests(guests::Ask),
+    SignIn(sign_in::Ask),
+    Chat(chat::Ask),
+    Folder(init::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -188,6 +200,12 @@ pub const TAKES: &[&str] = &[
     "recording",
     "recordings",
     "room-names",
+    "guest",
+    "auth",
+    "login",
+    "chat",
+    "init",
+    "doctor",
 ];
 
 /// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
@@ -204,6 +222,30 @@ pub const SKIN_VERBS: &[&str] = &[
     "hydra",
     "token",
     "tokens",
+];
+
+/// `cmd_app`'s `grant|grants)` arm: the third words it hands to
+/// `cmd_skin` (the [`super::skin`] family, but `copy-host`, which
+/// [`guests`] answers). Any other is `cmd_app_grant_kind` ([`guests`]) or
+/// `cmd_app_grants` (the shell's).
+pub const SKIN_GRANT: &[&str] = &[
+    "",
+    "list",
+    "add",
+    "create",
+    "rm",
+    "remove",
+    "delete",
+    "revoke",
+    "set",
+    "update",
+    "role",
+    "hooks",
+    "hook",
+    "copy-host",
+    "copyhost",
+    "-h",
+    "--help",
 ];
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -362,6 +404,30 @@ pub const VERBS: &[crate::route::Verb] = &[
         owner: crate::route::Owner::Native,
     },
     crate::route::Verb {
+        words: &["guest"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["auth"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["login"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["chat"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["init"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["doctor"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
         words: &["user", "users"],
         owner: crate::route::Owner::Native,
     },
@@ -416,6 +482,13 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "audit" => Some(traffic::parse(rest)?.map(Ask::Traffic)),
         v if runtime::VERBS.contains(&v) => Some(runtime::parse(v, rest)?.map(Ask::Runtime)),
         v if recording::VERBS.contains(&v) => Some(recording::parse(v, rest)?.map(Ask::Recording)),
+        "guest" => Some(guests::parse_guest(rest)?.map(Ask::Guests)),
+        "auth" => Some(sign_in::parse_auth(rest)?.map(Ask::SignIn)),
+        "login" => Some(sign_in::parse_login(rest)?.map(Ask::SignIn)),
+        "chat" => Some(chat::parse(rest)?.map(Ask::Chat)),
+        "init" => Some(init::parse_init(rest)?.map(Ask::Folder)),
+        "doctor" => Some(init::parse_doctor(rest)?.map(Ask::Folder)),
+        "grant" | "grants" => Some(guests::parse_grant(rest)?.map(Ask::Guests)),
         v if approve::VERBS.contains(&v) => Some(approve::parse(v, rest)?.map(Ask::Approve)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
@@ -432,6 +505,17 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
 pub fn run(args: &[OsString]) -> Option<Exit> {
     match args.get(1).and_then(|a| a.to_str()) {
         Some("token" | "tokens") => return super::skin_token::run_app(args),
+        Some(v @ ("grant" | "grants")) => {
+            let third = args.get(2).map_or(Some(""), |a| a.to_str())?;
+            if !SKIN_GRANT.contains(&third) {
+                // `grants <app>` is `cmd_app_grants`: the shell's.
+                if v == "grants" {
+                    return None;
+                }
+            } else if !matches!(third, "copy-host" | "copyhost") {
+                return super::skin::run_app(args);
+            }
+        }
         Some(v) if SKIN_VERBS.contains(&v) => return super::skin::run_app(args),
         _ => {}
     }
@@ -512,6 +596,10 @@ fn run_with(
         Ask::Traffic(t) => traffic::run(&mut ctx, t),
         Ask::Runtime(r) => runtime::run(&mut ctx, r),
         Ask::Recording(r) => recording::run(&mut ctx, r),
+        Ask::Guests(g) => guests::run(&mut ctx, g),
+        Ask::SignIn(s) => sign_in::run(&mut ctx, s),
+        Ask::Chat(c) => chat::run(&mut ctx, c),
+        Ask::Folder(f) => init::run(&mut ctx, f),
     };
     let exit = match shown {
         Ok(s) => s.print(),

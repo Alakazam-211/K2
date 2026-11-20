@@ -28,8 +28,10 @@
 //! is printed):
 //! - `skin` alone, an unknown verb, and the help forms: `_skin_usage`
 //!   prints the App family's page through `_perm_lines`;
-//! - `user chat` and `role suggest` (`_compute_call`), `grant hooks`
-//!   (`_app_grant_hooks`) and `grant copy-host` (`_app_rt_post`);
+//! - `user chat` and `role suggest` (`_compute_call`), and `grant
+//!   copy-host` (`_app_rt_post`; `app grant copy-host` is the App
+//!   family's, [`super::app::guests`]); `grant hooks` with `-h` or
+//!   `--help` ([`hooks`] answers the rest);
 //! - test guests (`user add|remove|password … --test`, `_app_test_guest`):
 //!   the shell's fix that takes the password on stdin is not on the line;
 //! - `grant add` and `grant rm` with a passport: `_grant_owner_next_step`
@@ -41,6 +43,7 @@
 //!   exported, a port curl won't take, and a `python3` the binary can't
 //!   tell.
 
+pub mod hooks;
 pub mod print;
 
 use super::curl_port;
@@ -152,6 +155,8 @@ pub enum Ask {
     OwnerOnly(Plain),
     /// `front-door connect|direct`: the POST, no `_skin_die_if_err`.
     FrontDoorSet { body: String, json: bool },
+    /// `grant hooks …` ([`hooks`]).
+    Hooks(hooks::Ask),
     /// The shell answers it.
     Shell,
 }
@@ -1301,7 +1306,11 @@ fn grant(words: &[&str]) -> Result<Ask, Stop> {
         "rm" | "remove" | "delete" | "revoke" => grant_rm(rest),
         "set" | "update" => grant_set(rest),
         "role" => grant_role(rest),
-        "hooks" | "hook" | "copy-host" | "copyhost" => Ok(Ask::Shell),
+        "hooks" | "hook" => match hooks::parse(rest) {
+            Some(r) => r.map(Ask::Hooks),
+            None => Ok(Ask::Shell),
+        },
+        "copy-host" | "copyhost" => Ok(Ask::Shell),
         "--help" | "-h" => Err(Stop::err(&[GRANT_USAGE], Exit::Ok)),
         _ => Err(Stop::err(&[GRANT_USAGE], Exit::Error)),
     }
@@ -1776,6 +1785,7 @@ fn run_with(
             plain_run(&mut client, &mut closing, &p)
         }
         Ask::UserList => user_list(&mut client, &mut closing),
+        Ask::Hooks(h) => hooks::run(&mut client, &mut closing, &h),
         Ask::FrontDoorSet { body, json } => {
             match send(
                 &mut client,

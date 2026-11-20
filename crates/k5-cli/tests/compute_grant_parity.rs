@@ -29,6 +29,7 @@ const PLAIN: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":3
 fn compute_grant() {
     let rig = Rig::new(VERB, "grant");
     let v = vec![
+        // covers: compute grant
         case(
             "every flag",
             &[

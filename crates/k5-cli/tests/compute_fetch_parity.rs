@@ -46,6 +46,7 @@ fn traceback(c: Case) -> Case {
 fn compute_fetch_files() {
     let rig = Rig::new(VERB, "fetch");
     let v = vec![
+        // covers: compute fetch
         case(
             "every kept file",
             &["fetch", "j1"],
@@ -55,6 +56,7 @@ fn compute_fetch_files() {
             0,
             3,
         ),
+        // covers: compute fetch --json
         case(
             "one named, --out, --json",
             &["fetch", "j1", "d/a.txt", "--out", "art/x", "--json"],

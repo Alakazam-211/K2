@@ -58,6 +58,7 @@ fn cell(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
 fn compute_cancel_one_job() {
     let rig = Rig::new(VERB, "cancel");
     let v = vec![
+        // covers: compute cancel
         case("queued: cancelled", &["cancel", "j1234567890ab"], &[], vec![ok(QUEUED)], owner_and_port, 0, 1),
         case("--force, a started job", &["cancel", "--force", "j1"], &[], vec![ok(STOPPING)], owner_and_port, 0, 1),
         case("-f after the id", &["cancel", "j1", "-f"], &[], vec![ok(r#"{"state":"stopping","cancel":"sigkill","ranSecs":-5}"#)], owner_and_port, 0, 1),
@@ -72,6 +73,7 @@ fn compute_cancel_one_job() {
         ),
         case("any other state", &["cancel", "j1"], &[], vec![ok(r#"{"state":"done"}"#)], owner_and_port, 0, 1),
         case("no state", &["cancel", "j1"], &[], vec![ok("{}")], owner_and_port, 0, 1),
+        // covers: compute cancel --json
         case("--json", &["cancel", "j1", "--json"], &[], vec![ok(QUEUED)], owner_and_port, 0, 1),
         case("a word that needs escaping", &["cancel", "j\"é\\x"], &[], vec![ok(QUEUED)], owner_and_port, 0, 1),
         case("the bulletin", &["cancel", "j1"], &[], vec![ok(r#"{"state":"done","bulletin":{"day":"2026-11-17","unread":true,"key":"ab12"}}"#)], owner_and_port, 0, 1),

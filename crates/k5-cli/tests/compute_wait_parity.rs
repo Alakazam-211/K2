@@ -39,6 +39,7 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 fn compute_wait_for_each_job() {
     let rig = Rig::new(VERB, "wait");
     let v = vec![
+        // covers: compute wait
         case(
             "done at once",
             &["wait", "aaaa1111"],
@@ -73,6 +74,7 @@ fn compute_wait_for_each_job() {
             0,
             3,
         ),
+        // covers: compute wait --json
         case(
             "two jobs, --json: the first failed code",
             &["wait", "aaaa1111", "bbbb2222", "--json"],

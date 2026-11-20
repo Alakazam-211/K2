@@ -24,7 +24,7 @@
 //!
 //! The texts are the shell's; `tests` below pins each to `cli/src`.
 
-use crate::daemon::{self, Settings};
+use crate::daemon::Settings;
 use crate::exit::Exit;
 use crate::out;
 use crate::transport::permission::Note;

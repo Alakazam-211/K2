@@ -416,7 +416,6 @@ impl<'a> Git<'a> {
             .collect();
         bytes_path(trim_newlines(lines.join(&b'\n'))).into_os_string()
     }
-
 }
 
 /// sed's `s|/.git$||` on one line: a `/`, any one character, `git`, at
@@ -513,7 +512,10 @@ mod tests {
         }
         // The 0.40.4 rename heads-up is gone from the shell: nothing here
         // copies it, and the prelude runs no `git ls-files` and no `head`.
-        assert!(!prelude.contains("ls-files"), "prelude.sh runs git ls-files again");
+        assert!(
+            !prelude.contains("ls-files"),
+            "prelude.sh runs git ls-files again"
+        );
         assert!(!prelude.contains("| head"), "prelude.sh runs head again");
     }
 
@@ -623,7 +625,10 @@ mod tests {
             project(env, env.get("HOME").unwrap(), &p, cwd)
         };
         let env = Env::of(&[("HOME", s(&d)), ("PATH", &path)]);
-        assert_eq!(found(&env, &ws.join("a/b")), Ok(ws.clone().into_os_string()));
+        assert_eq!(
+            found(&env, &ws.join("a/b")),
+            Ok(ws.clone().into_os_string())
+        );
         assert!(prelude(&env, &ws.join("a/b")).is_ok());
         // The user home is never the project: the walk goes on to /, then pwd.
         let home_is_ws = Env::of(&[("HOME", s(&ws)), ("PATH", &path)]);
@@ -633,11 +638,17 @@ mod tests {
         );
         // PROJECT_PATH wins.
         let other = Env::of(&[("HOME", s(&d)), ("PATH", &path), ("K2_PROJECT_PATH", s(&d))]);
-        assert_eq!(found(&other, &ws.join("a/b")), Ok(d.clone().into_os_string()));
+        assert_eq!(
+            found(&other, &ws.join("a/b")),
+            Ok(d.clone().into_os_string())
+        );
         // No dirname on PATH while the walk needs it: the shell's error.
         let nodirname = bin(&d.join("nodirname"), &["cat", "sed", "git"]);
         let env = Env::of(&[("HOME", s(&d)), ("PATH", &nodirname)]);
-        assert_eq!(prelude(&env, &ws.join("a/b")).err(), Some(Handoff::Missing("dirname")));
+        assert_eq!(
+            prelude(&env, &ws.join("a/b")).err(),
+            Some(Handoff::Missing("dirname"))
+        );
     }
 
     #[test]

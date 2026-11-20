@@ -1615,7 +1615,7 @@ mod tests {
     #[test]
     fn each_failure_has_the_shell_s_code() {
         let ep = || "/cli/x".to_string();
-        let rows: [(Error, i32); 11] = [
+        let rows: [(Error, i32); 12] = [
             (
                 Error::NoAnswer(NoAnswer {
                     endpoint: ep(),

@@ -7,9 +7,11 @@
 //! 1. The settings and the gates ([`crate::prelude`]). The virtual
 //!    desktop's guard always; the connection gate not for `postal` alone,
 //!    `help`, `send`, `route` and `adopt` (`_skip_conn_gate`).
-//! 2. The credential: `postal` is an open tool, so in a session with the
-//!    owner token on disk the shell sends the owner token, a passport or
-//!    not (COMPAT-58), and so does this ([`super::feedback::write::open_tool`]).
+//! 2. The credential (`_postal_session_token`): in a session (`HOOK_SOCK`
+//!    set) every verb that reaches the daemon sends the session's
+//!    passport, never the owner token from disk; a session with no
+//!    passport is two lines ([`NO_PASSPORT`], [`PERSON_LINE`]), exit 3,
+//!    nothing sent. Outside a session the credential is the settings'.
 //! 3. No verb or `help`: the usage ([`usage`]). Then every word after the
 //!    verb ([`parse`]): `--workspace`, `--why`, `--code` and `--friend`
 //!    take a value; `--json`, `--no-wake`, `--clear` and `--token-stdin`
@@ -17,17 +19,22 @@
 //!    are the verb's words.
 //! 4. The verb: a `cli_request` or `cli_post_json` (its body as
 //!    `_postal_body` writes it) on the left of a pipe into
-//!    `_postal_print` ([`print`]), which reads the answer from stdin. No
-//!    answer: the transport's line, then death by SIGPIPE
-//!    ([`super::end_in_pipe`]). The command ends with the reader's code
-//!    when it is not 0, else the call's (`send`: the reader's).
+//!    `_postal_print` ([`print`]), which reads the answer from stdin. The
+//!    routes the cell socket serves go through `cli_send` (the socket
+//!    first with a passport and a live socket, then TCP by its rules);
+//!    `code`, `settings`, `disable`, `admins-may-accept` and `owner-link`
+//!    go over TCP. No answer, or a POST the socket may have run: the line,
+//!    then death by SIGPIPE ([`super::end_in_pipe`]). The command ends
+//!    with the reader's code when it is not 0, else the call's (`send`:
+//!    the reader's). In a session, an `owner_only` or
+//!    `postal_people_only` refusal whose hint doesn't already say where
+//!    ends with [`PERSON_LINE`].
 //!
 //! Handed to the shell, before anything is printed or sent: a word that is
 //! not UTF-8, `-h` or `--help` anywhere (the front's), `send` or `route`
 //! with no port (the shell sends them to `http://HOST:`, a bash bug), a
 //! port curl won't take, and a `python3` the binary can't tell.
 
-use super::feedback::write::open_tool;
 use super::{curl_port, end_in_pipe, get, piped_body, py_d, Piped, Raise, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
@@ -37,7 +44,7 @@ use crate::passport;
 use crate::prelude::{self, Closing, Gate};
 use crate::python;
 use crate::transport::encode::quote;
-use crate::transport::{Auth, Call, Channel, Client, Error};
+use crate::transport::{Auth, Call, Client, Error};
 use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 use std::ffi::OsString;
 use std::io::BufRead as _;
@@ -286,6 +293,45 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     Some(run_verb(args, sub, &words[1..], settings))
 }
 
+/// `_postal_session_token`'s first line: a session with no passport.
+pub const NO_PASSPORT: &str = concat!(
+    "Error: in a session, ",
+    k2_client::cli_name!(),
+    " postal doesn't act as this server's owner, and this session has no passport, so nothing was sent."
+);
+
+/// `_POSTAL_PERSON_LINE`: where a person takes the steps a session may not
+/// take as the owner.
+pub const PERSON_LINE: &str = concat!(
+    "A person does this in the workspace's Postal tab or in Settings \u{2192} General \u{2192} Postal, or with ",
+    k2_client::cli_name!(),
+    " postal from a terminal outside ",
+    k2_client::product_name!(),
+    "."
+);
+
+/// The verbs that reach the daemon: in a session each acts as the
+/// session (`_postal_session_token`).
+const SESSION_VERBS: &[&str] = &[
+    "status",
+    "friends",
+    "claim",
+    "invite",
+    "accept",
+    "reject",
+    "code",
+    "route",
+    "owner-link",
+    "send",
+    "remove",
+    "block",
+    "enable",
+    "disable",
+    "admins-may-accept",
+    "settings",
+    "link-p5",
+];
+
 fn stop(line: &str, exit: Exit) -> Exit {
     out::stderr_line(line);
     exit
@@ -309,6 +355,16 @@ fn run_verb(args: &[OsString], sub: &str, rest: &[&str], mut settings: Settings)
         Ok(w) => w,
         Err(l) => return stop(&l, Exit::Usage),
     };
+    // In a session: the passport, never the owner token from disk.
+    let in_session = settings.session;
+    if in_session
+        && SESSION_VERBS.contains(&sub)
+        && !matches!(settings.auth, Auth::Passport { .. })
+    {
+        out::stderr_line(NO_PASSPORT);
+        out::stderr_line(PERSON_LINE);
+        return Exit::Refused;
+    }
     let ws = if w.workspace.is_empty() {
         settings.project.clone()
     } else {
@@ -486,7 +542,7 @@ fn run_verb(args: &[OsString], sub: &str, rest: &[&str], mut settings: Settings)
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let would_refuse = passport::current(args).would_refuse();
-    let mut client = match open_tool(&settings).client(would_refuse) {
+    let mut client = match settings.client(would_refuse) {
         Ok(c) => c,
         Err(e) => {
             out::stderr_line(&format!("Error: {e}"));
@@ -507,7 +563,7 @@ fn run_verb(args: &[OsString], sub: &str, rest: &[&str], mut settings: Settings)
             piped_call(&mut client, &mut closing, ep, Call::PostJson(b.as_bytes()))
         }
     };
-    let shown = print(&piped.body, view, w.json, local_minute);
+    let shown = print(&piped.body, view, w.json, in_session, local_minute);
     let reader = shown.print();
     let exit = if sub == "send" {
         reader
@@ -518,11 +574,13 @@ fn run_verb(args: &[OsString], sub: &str, rest: &[&str], mut settings: Settings)
     exit
 }
 
-/// One call on the left of a pipe, over TCP: what the reader reads, and
-/// the call's code. No answer: its line, then [`end_in_pipe`].
+/// One call on the left of a pipe, through `cli_send` (the cell socket
+/// first on the routes it serves, else TCP): what the reader reads, and
+/// the call's code. No answer, or a POST the socket may have run: its
+/// line, then [`end_in_pipe`] (`_K2_PIPE_MARK`: the reader stays quiet).
 fn piped_call(client: &mut Client, closing: &mut Closing, endpoint: &str, call: Call<'_>) -> Piped {
     let passport = client.passport().is_some();
-    match client.call(Channel::Tcp, endpoint, call) {
+    match client.send(endpoint, call) {
         Ok(r) => {
             closing.answer(&r, passport);
             Piped {
@@ -530,8 +588,10 @@ fn piped_call(client: &mut Client, closing: &mut Closing, endpoint: &str, call: 
                 exit: Exit::Ok,
             }
         }
-        Err(Error::NoAnswer(n)) => {
-            out::stderr_line(&n.to_string());
+        Err(
+            e @ (Error::NoAnswer(_) | Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. }),
+        ) => {
+            out::stderr_line(&e.to_string());
             end_in_pipe()
         }
         Err(e) => Piped {
@@ -686,19 +746,34 @@ fn sentence(hint: &Value) -> Result<String, String> {
 }
 
 /// `x in (…)` for a tuple of strings.
+/// `needle in hay`, as Python reads it for the JSON types.
+fn py_in(needle: &str, hay: &Value) -> Result<bool, String> {
+    match hay {
+        Value::Str(_) => Ok(st(hay).contains(needle)),
+        Value::Array(items) => Ok(items.iter().any(|i| *i == super::s(needle))),
+        Value::Object(pairs) => Ok(get(pairs, needle).is_some()),
+        other => Err(format!(
+            "TypeError: argument of type '{}' is not iterable",
+            py::type_name(other)
+        )),
+    }
+}
+
 fn among(v: &Value, list: &[&str]) -> bool {
     list.iter().any(|w| *v == super::s(w))
 }
 
-/// `_postal_print <view> <json>` on what it read from stdin.
+/// `_postal_print <view> <json>` on what it read from stdin; `in_session`:
+/// `HOOK_SOCK` is set (its `PS`).
 pub fn print(
     raw: &[u8],
     view: &str,
     as_json: bool,
+    in_session: bool,
     when: impl Fn(&Value) -> Result<String, String>,
 ) -> Shown {
     let mut o = Out::default();
-    let r = print_lines(raw, view, as_json, &when, &mut o);
+    let r = print_lines(raw, view, as_json, in_session, &when, &mut o);
     match r {
         Ok(exit) => Shown {
             stdout: o.stdout,
@@ -729,6 +804,7 @@ fn print_lines(
     raw: &[u8],
     v: &str,
     as_json: bool,
+    in_session: bool,
     when: &dyn Fn(&Value) -> Result<String, String>,
     o: &mut Out,
 ) -> Result<Exit, String> {
@@ -757,6 +833,14 @@ fn print_lines(
             String::new()
         };
         o.stderr.push_str(&format!("Error: {lead}{}\n", st(&hint)));
+        if in_session
+            && among(&code, &["owner_only", "postal_people_only"])
+            && !py_in("Postal tab", &hint)?
+            && !py_in("Settings", &hint)?
+        {
+            o.stderr.push_str(PERSON_LINE);
+            o.stderr.push('\n');
+        }
         if matches!(code, Value::Array(_) | Value::Object(_)) {
             return Err(format!(
                 "TypeError: unhashable type: '{}'",

@@ -10,7 +10,10 @@
 //!   code, route, owner-link, send, a friend's state, the JSON fallback.
 //! - The daemon's errors (each exit), a refusal's closing line, an answer
 //!   that is not JSON, no answer, no daemon.
-//! - The owner token in a session (COMPAT-58, as the shell sends it).
+//! - A session: the passport on every verb, never the owner token (the
+//!   cell socket first on its routes, TCP for code and settings), the
+//!   person line under an owner's step, no passport (nothing sent), a
+//!   POST the cell socket may have run.
 
 #![cfg(unix)]
 
@@ -600,36 +603,216 @@ fn the_daemon_s_errors() {
 
 /// An open tool: in a session with the owner token on disk the shell sends
 /// it (COMPAT-58), a passport or not, and so does the binary.
+/// In a session (`HOOK_SOCK` set) every verb that reaches the daemon
+/// sends the session's passport, never the owner token from disk, even
+/// when the owner token is there (`_postal_session_token`). Every row
+/// checks the requests carry the passport and never the owner token.
 #[test]
 fn the_owner_token_in_a_session() {
     let rig = Rig::new(VERB, "session");
-    check(
-        &rig,
-        vec![
+    let tcp = || with_passport(&[("K2_HOOK_SOCK", "{nosock}")]);
+    let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
+    let not_served = || Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into());
+    let with = |env: Vec<(&'static str, String)>, c: Case| Case { env, ..c };
+    let rows = vec![
+        with(
+            tcp(),
+            case(
+                "a passport and the owner token: the passport",
+                &["settings"],
+                &[],
+                vec![ok(r#"{"ok":true}"#)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
+        with(
+            tcp(),
+            case(
+                "a passport, no owner token",
+                &["settings"],
+                &[],
+                vec![ok(r#"{"ok":true}"#)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            tcp(),
+            case(
+                "a passport and the owner token: a POST",
+                &["enable", "--why", "mail"],
+                &[],
+                vec![ok(ASKED)],
+                owner_and_port,
+                2,
+                1,
+            ),
+        ),
+        // The cell socket serves the agent's routes: the passport there.
+        with(
+            cell(),
+            case(
+                "the cell socket: status",
+                &["status"],
+                &[],
+                vec![ok(r#"{"ok":true,"workspace":{"handle":"acme"}}"#)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
+        with(
+            cell(),
+            case(
+                "the cell socket: claim",
+                &["claim", ADDR, "--why", "x"],
+                &[],
+                vec![ok(ASKED)],
+                owner_and_port,
+                2,
+                1,
+            ),
+        ),
+        with(
+            cell(),
+            case(
+                "the cell socket: not served, then TCP with the passport",
+                &["friends"],
+                &[],
+                vec![not_served(), ok(r#"{"ok":true,"friends":[]}"#)],
+                owner_and_port,
+                0,
+                2,
+            ),
+        ),
+        // Not the cell socket's: TCP, still with the passport.
+        with(
+            cell(),
+            case(
+                "code: TCP with the passport",
+                &["code", "pr_7"],
+                &[],
+                vec![ok(r#"{"error":{"code":"not_found","hint":"no such request"}}"#)],
+                owner_and_port,
+                4,
+                1,
+            ),
+        ),
+        // An owner's step refused: where a person takes it.
+        with(
+            tcp(),
+            case(
+                "disable refused: the person line",
+                &["disable"],
+                &[],
+                vec![ok(r#"{"error":{"code":"owner_only","hint":"only the owner turns Postal off"}}"#)],
+                owner_and_port,
+                3,
+                1,
+            ),
+        ),
+        with(
+            tcp(),
+            case(
+                "people only: the person line",
+                &["accept", "pr_7"],
+                &[],
+                vec![ok(r#"{"error":{"code":"postal_people_only","hint":"a person accepts"}}"#)],
+                owner_and_port,
+                3,
+                1,
+            ),
+        ),
+        with(
+            tcp(),
+            case(
+                "a hint that says where: no person line",
+                &["disable"],
+                &[],
+                vec![ok(r#"{"error":{"code":"owner_only","hint":"open the Postal tab"}}"#)],
+                owner_and_port,
+                3,
+                1,
+            ),
+        ),
+        with(
+            tcp(),
+            traceback(case(
+                "a hint that is a number: the reader raises",
+                &["disable"],
+                &[],
+                vec![ok(r#"{"error":{"code":"owner_only","hint":5}}"#)],
+                owner_and_port,
+                1,
+                1,
+            )),
+        ),
+        // A POST the cell socket may have run: its line, never sent again.
+        with(
+            cell(),
             Case {
-                env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+                compare: Compare::Bash32PipeReader {
+                    stdout: "",
+                    stderr: "",
+                },
                 ..case(
-                    "a passport and the owner token",
-                    &["settings"],
+                    "a POST the cell socket may have run",
+                    &["enable"],
                     &[],
-                    vec![ok(r#"{"ok":true}"#)],
-                    owner_and_port,
-                    0,
-                    1,
-                )
-            },
-            Case {
-                env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
-                ..case(
-                    "a passport, no owner token",
-                    &["settings"],
-                    &[],
-                    vec![ok(r#"{"ok":true}"#)],
+                    vec![Reply::Close],
                     port_only,
-                    0,
+                    141,
                     1,
                 )
             },
-        ],
-    );
+        ),
+    ];
+    for c in &rows {
+        rig.check(c);
+    }
+    // A session with no passport: two lines, exit 3, nothing sent, for
+    // every verb that reaches the daemon, the owner token on disk or not.
+    for (args, setup) in [
+        (&["status"][..], owner_and_port as fn(&Rig)),
+        (&["settings"], owner_and_port),
+        (&["disable"], owner_and_port),
+        (&["code", "pr_7"], owner_and_port),
+        (&["accept"], owner_and_port),
+        (&["send", ADDR, "hi"], owner_and_port),
+        (&["route", "--clear"], owner_and_port),
+        (&["status"], port_only),
+    ] {
+        let c = case(
+            "a session with no passport: nothing sent",
+            leak(args),
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            setup,
+            3,
+            0,
+        );
+        rig.check(&c);
+    }
+    // Not a verb that reaches the daemon: as outside a session.
+    rig.check(&case(
+        "a session with no passport: adopt",
+        &["adopt"],
+        &[("K2_HOOK_SOCK", "{sock}")],
+        vec![],
+        owner_and_port,
+        1,
+        0,
+    ));
+    for c in rows.iter().filter(|c| c.requests > 0) {
+        let (_, log) = rig.binary(c, false);
+        assert!(
+            log.iter().all(|l| l.contains(&format!("Authorization: Bearer {PASSPORT}\n"))
+                && !l.contains(OWNER)),
+            "{}: the binary sent the owner token in a session: {log:?}",
+            c.name
+        );
+    }
 }

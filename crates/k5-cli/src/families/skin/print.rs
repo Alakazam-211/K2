@@ -242,9 +242,7 @@ pub fn read(reader: &Reader, raw: &str) -> Shown {
                 st(&at_or(d, "username", s("")))
             ));
             if truthy(&g(d, "passwordMustChange")) {
-                o.line(
-                    "At their next sign-in they choose a new password (no session until then).",
-                );
+                o.line("At their next sign-in they choose a new password (no session until then).");
             }
             Ok(Exit::Ok)
         }),

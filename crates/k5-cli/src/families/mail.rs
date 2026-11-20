@@ -18,8 +18,12 @@ pub mod watch;
 pub const WORDS: &[&str] = &["mail"];
 /// The shell's but for [`VERBS`].
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// None yet: the route table sends nothing here.
-pub const VERBS: &[crate::route::Verb] = &[];
+/// Only `watch`; every other verb, and `mail` alone, is the shell's. One
+/// verb row each, so each can turn back alone.
+pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
+    words: &["watch"],
+    owner: crate::route::Owner::Native,
+}];
 
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`): an
 /// `id` tool, locked.

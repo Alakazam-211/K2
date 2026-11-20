@@ -335,6 +335,7 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
             ["compute"] => compute_verbs_are_its_arms(noun),
             ["app"] => app_verbs_are_its_arms(noun),
             ["chat"] => chat_verbs_are_its_arms(noun),
+            ["mail"] => mail_verbs_are_its_arms(noun),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -367,6 +368,35 @@ fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
             body.lines()
                 .any(|l| l.starts_with(&arm) && l.ends_with(&call)),
             "the feedback|tickets case has no {word} arm calling cmd_feedback_{word}"
+        );
+    }
+}
+
+/// `mail`'s verb rows: each is one arm of the `mail)` case in
+/// `cli/src/router.sh`, which hands it to its own function.
+fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "router.sh")
+        .expect("cli/src/router.sh")
+        .1;
+    let body = &text[text.find("\n    mail)\n").expect("the mail arm")..];
+    let body = &body[..body.find("\n        ;;\n").expect("its end")];
+    for verb in noun.verbs {
+        assert_eq!(
+            verb.words.len(),
+            1,
+            "{:?}: one word per verb row",
+            verb.words
+        );
+        let word = verb.words[0];
+        let arm = format!("            {word})");
+        let call = format!(" shift 2; cmd_mail_{word} \"$@\" ;;");
+        assert!(
+            body.lines()
+                .any(|l| l.starts_with(&arm) && l.ends_with(&call)),
+            "the mail case has no {word} arm calling cmd_mail_{word}"
         );
     }
 }

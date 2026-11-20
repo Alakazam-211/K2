@@ -5,8 +5,8 @@
 //!
 //! What runs, in the shell's order:
 //!
-//! 1. The settings and the gates. `voice` alone and `voice help` only
-//!    print help, so the connection gate lets them by (the virtual
+//! 1. The settings and the gates. The connection gate lets `voice` alone,
+//!    `voice ""` and `voice help` by, as the shell's does (the virtual
 //!    desktop's guard does not).
 //! 2. `voice` rides the locked `hostchat` tool, an `id` tool: with
 //!    `HOOK_SOCK` set, the stale-passport or require-passport lines, exit 3.
@@ -483,25 +483,27 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    let help = plan == Plan::Help;
-    if !help
+    // The shell's gate lets `voice`, `voice ""` and `voice help …` by.
+    let skip = matches!(words.first(), None | Some(&("" | "help")));
+    if !skip
         && prelude::gate(&settings).is_none()
         && settings.port_text.as_deref().and_then(curl_port).is_none()
     {
         return None;
     }
-    Some(run_with(args, plan, hook_sock.as_deref(), settings))
+    Some(run_with(args, plan, skip, hook_sock.as_deref(), settings))
 }
 
 fn run_with(
     args: &[OsString],
     plan: Plan,
+    skip: bool,
     hook_sock: Option<&Path>,
     mut settings: Settings,
 ) -> Exit {
     match prelude::gate(&settings) {
         Some(g @ Gate::VirtualDesktop) => return g.stop(),
-        Some(g @ Gate::CannotConnect) if plan != Plan::Help => return g.stop(),
+        Some(g @ Gate::CannotConnect) if !skip => return g.stop(),
         _ => {}
     }
     let would_refuse = passport::current(args).would_refuse();

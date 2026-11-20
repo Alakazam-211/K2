@@ -357,6 +357,15 @@ fn voice_words_as_the_shell_reads_them() {
             0,
         ),
         case(
+            "an empty verb with no port: no gate, the unknown line",
+            &[""],
+            &[],
+            vec![],
+            owner_only,
+            2,
+            0,
+        ),
+        case(
             "rooms with no port: the gate",
             &["rooms"],
             &[],

@@ -7,7 +7,7 @@
 use super::py::{
     self, cat, get, get_or, idx, is, items, left, or_list, or_obj, render, s, t, Lines, R,
 };
-use super::Ctx;
+use super::{person, Ctx};
 use crate::confirm::{self, dumps, Split};
 use crate::exit::Exit;
 use crate::families::Shown;
@@ -51,9 +51,35 @@ pub const NATIVE: &[&str] = &[
 /// Whether the binary answers `vault <sub> <rest>` (no I/O).
 pub fn native(sub: &str, rest: &[&str]) -> bool {
     match sub {
-        "kek" | "rekey" | "reveal" | "confirm-password" => true,
-        // Not the recovery key's words, typed back here.
-        "recovery" => !rest.iter().any(|w| matches!(*w, "show-once" | "rotate")),
+        "kek" | "rekey" | "reveal" | "confirm-password" | "recovery" | "carry" => true,
+        // `--to` is a number Python's int() reads.
+        "rollback" => match parse_as(sub, rest, true) {
+            Ok(o) => o.to_version.is_empty() || py_int(&o.to_version).is_some(),
+            Err(_) => true,
+        },
+        // A folder the binary is sure `cd` and `pwd` give as bash's do.
+        "backup" | "restore" => match parse_as(sub, rest, true) {
+            Ok(o) => {
+                let dir = if sub == "restore" {
+                    o.from.clone()
+                } else {
+                    o.pos.first().cloned().unwrap_or_default()
+                };
+                dir.is_empty() || dir == "key" || person::folder(&dir).is_some()
+            }
+            Err(_) => true,
+        },
+        // A path `cli_abs_path` makes as bash's does.
+        "import" => match parse_as(sub, rest, true) {
+            Ok(o) => match (o.pos.first(), super::tools::pwd()) {
+                (None, _) => true,
+                (Some(p), Some(pwd)) => {
+                    crate::families::workspace::register::abs_path(p, &pwd).is_some()
+                }
+                (Some(_), None) => false,
+            },
+            Err(_) => true,
+        },
         _ => NATIVE.contains(&sub),
     }
 }
@@ -122,7 +148,7 @@ pub struct Opts {
 }
 
 /// One `usage:` (or other) line and exit 2.
-fn usage(line: String) -> Exit {
+pub(super) fn usage(line: String) -> Exit {
     out::stderr_line(&line);
     Exit::Usage
 }
@@ -130,6 +156,12 @@ fn usage(line: String) -> Exit {
 /// `cmd_vault`'s loop and each verb's flag check: the options, or the
 /// line the shell ends with (exit 2, printed).
 pub fn parse(sub: &str, rest: &[&str]) -> Result<Opts, Exit> {
+    parse_as(sub, rest, false)
+}
+
+/// [`parse`], printing nothing when `quiet` (for [`native`]).
+fn parse_as(sub: &str, rest: &[&str], quiet: bool) -> Result<Opts, Exit> {
+    let usage = |line: String| if quiet { Exit::Usage } else { usage(line) };
     let mut o = Opts::default();
     let mut i = 0;
     let value = |i: usize| rest.get(i + 1).copied().unwrap_or("");
@@ -410,16 +442,16 @@ pub fn merge(parts: &[&[(Text, Value)]]) -> Vec<(Text, Value)> {
     o
 }
 
-fn obj(o: Vec<(Text, Value)>) -> String {
+pub(super) fn obj(o: Vec<(Text, Value)>) -> String {
     dumps(&Value::Object(o))
 }
 
-fn kv(k: &str, v: Value) -> (Text, Value) {
+pub(super) fn kv(k: &str, v: Value) -> (Text, Value) {
     (Text::from(k), v)
 }
 
 /// `printf '%s\n' "$_SC_BODY"`, exit 0.
-fn print_body(s: &Split) -> Exit {
+pub(super) fn print_body(s: &Split) -> Exit {
     let mut b = s.body.clone();
     b.push(b'\n');
     match out::write_flushed(&mut std::io::stdout().lock(), &b) {
@@ -429,7 +461,7 @@ fn print_body(s: &Split) -> Exit {
 }
 
 /// `echo "<line>"`.
-fn echo(line: &str) -> Exit {
+pub(super) fn echo(line: &str) -> Exit {
     Shown::out(format!("{line}\n")).print()
 }
 
@@ -1086,6 +1118,9 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
         }
         "recovery" => {
             let act = o.pos.first().cloned().unwrap_or_else(|| "status".into());
+            if matches!(act.as_str(), "show-once" | "rotate") {
+                return person::recovery(ctx, &act);
+            }
             need(
                 act == "status",
                 format!("usage: {CLI} vault recovery status|show-once|rotate"),
@@ -1127,8 +1162,50 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             };
             shown(&r, service)
         }
+        "rollback" => person::rollback(ctx, &o, &name, &sj, &nj)?,
+        "backup" => person::backup(ctx, &o)?,
+        "restore" => person::restore(ctx, &o)?,
+        "carry" => super::carry::carry(ctx, &o)?,
+        "import" => import(ctx, &o, &name, &sj)?,
         _ => Exit::Error,
     })
+}
+
+/// `k2 vault import <.env file>`: the daemon moves the file's values
+/// into the vault and writes `.env.k2` beside it (references only).
+fn import(ctx: &mut Ctx, o: &Opts, name: &str, sj: &[(Text, Value)]) -> Result<Exit, Exit> {
+    if name.is_empty() {
+        return Err(usage(format!("usage: {CLI} vault import <.env file> [--scope ws:<name>|server] [--delivery env|file|fetch] [--remove-original]")));
+    }
+    // [`native`] took only a path the binary makes as bash's does.
+    let pwd = super::tools::pwd().unwrap_or_default();
+    let abs = crate::families::workspace::register::abs_path(name, &pwd).unwrap_or_default();
+    let mut ij = merge(&[sj, &[kv("path", py::text(&abs))]]);
+    if !o.delivery.is_empty() {
+        ij.push(kv("delivery", py::text(&o.delivery)));
+    }
+    if o.remove_original {
+        ij.push(kv("removeOriginal", Value::Bool(true)));
+    }
+    let r = ctx.call(true, "import", &obj(ij))?;
+    if o.json {
+        return Ok(print_body(&r));
+    }
+    Ok(render(&r.body, |v, l| {
+        l.p(format!(
+            "moved into the vault: {}",
+            joined_or(&get(v, "moved")?, ", ", "nothing")?
+        ));
+        l.p(format!(
+            "wrote {} (references only; safe to commit)",
+            s(&get(v, "envK2")?)
+        ));
+        if !t(&get(v, "originalRemoved")?) {
+            l.p("the original .env is still there; delete it when you are ready (or --remove-original)");
+        }
+        Ok(0)
+    })
+    .print())
 }
 
 /// `_vault_wait_call <route> <body>`: one blocking call, then again until

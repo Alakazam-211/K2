@@ -296,7 +296,7 @@ fn list(v: &Value, l: &mut Lines) -> R<i32> {
 }
 
 /// `$PWD` as the shell has it.
-fn pwd() -> Option<String> {
+pub(super) fn pwd() -> Option<String> {
     crate::daemon::logical_cwd(std::env::var_os("PWD"))
         .ok()?
         .to_str()

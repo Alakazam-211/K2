@@ -25,6 +25,10 @@
 //!   requests, presets, doctor, env-file, file, proxy-url, import,
 //!   service, reveal, recovery, confirm-password, kek, rekey, rollback,
 //!   recipient, carry, backup, restore).
+//! - [`person`]: the steps for people only that verbs hands on: the
+//!   recovery key's `show-once` and `rotate`, `rollback`, `backup` and
+//!   `restore`.
+//! - [`carry`]: `carry export` and `carry import`.
 //! - [`handoff`]: `_vault_handoff` (send, incoming, sent, accept-from,
 //!   send-allow, ask, asks, unsend).
 //! - [`tools`]: the verbs with parsers of their own: fetch, run,
@@ -56,7 +60,9 @@ pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
 /// No verb rows: every form is [`OWNER`]'s.
 pub const VERBS: &[crate::route::Verb] = &[];
 
+pub mod carry;
 pub mod handoff;
+pub mod person;
 pub mod py;
 pub mod tools;
 pub mod verbs;

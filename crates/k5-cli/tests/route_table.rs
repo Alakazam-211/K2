@@ -333,6 +333,7 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
             ["feedback", "tickets"] => feedback_verbs_are_its_arms(noun),
             ["workspace"] => workspace_verbs_are_its_arms(noun),
             ["compute"] => compute_verbs_are_its_arms(noun),
+            ["app"] => app_verbs_are_its_arms(noun),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -399,6 +400,40 @@ fn workspace_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
             body.lines()
                 .any(|l| l.starts_with(&arm) && l.ends_with(&call)),
             "the workspace case has no {word} arm calling cmd_workspace_{word}"
+        );
+    }
+}
+
+/// `app`'s verb rows: each is one arm of `cmd_app`'s `case`
+/// (`cli/src/app-wallet.sh`), with the row's words in the arm's order,
+/// which hands it to a `cmd_app_` function of its own, one the router's
+/// `app)` arm sends to `cmd_app`, and one the binary's family answers.
+fn app_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "app-wallet.sh")
+        .expect("cli/src/app-wallet.sh")
+        .1;
+    let body = &text[text.find("\ncmd_app() {\n").expect("cmd_app")..];
+    let body = &body[..body.find("\n}\n").expect("its end")];
+    for verb in noun.verbs {
+        for word in verb.words {
+            assert!(
+                k5_cli::families::app::TAKES.contains(word),
+                "the app family does not answer {word}"
+            );
+        }
+        let head = format!("\n        {})", verb.words.join("|"));
+        let at = body
+            .find(&head)
+            .unwrap_or_else(|| panic!("cmd_app has no arm{head}"));
+        let arm = &body[at + 1..];
+        let arm = &arm[..arm.find(";;").expect("the arm's end")];
+        assert!(
+            arm.contains("cmd_app_"),
+            "cmd_app's {:?} arm does not call a function of its own: {arm}",
+            verb.words
         );
     }
 }

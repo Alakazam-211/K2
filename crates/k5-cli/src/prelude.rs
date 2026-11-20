@@ -1,26 +1,23 @@
 //! What the shell CLI does around a verb that asks the daemon, for the
-//! binary's own families: the line its prelude may print first, its two
-//! gates, and what its EXIT trap prints once the verb is done
-//! (`cli/src/prelude.sh`, the end of `cli/src/cli-tools-policy.sh`, and
-//! `_permission_note` and `_permission_note_flush` in
-//! `cli/src/cell-socket.sh`).
+//! binary's own families: its two gates, and what its EXIT trap prints
+//! once the verb is done (`cli/src/prelude.sh`, the end of
+//! `cli/src/cli-tools-policy.sh`, and `_permission_note` and
+//! `_permission_note_flush` in `cli/src/cell-socket.sh`).
 //!
 //! In the shell's order:
 //!
-//! 1. [`rename_notice`]: while a workspace's `.k2so/` to `.k2/` rename is
-//!    not committed, one line on stderr (the 0.40.4 cutover heads-up).
-//! 2. [`gate`]: the virtual desktop's guard (`NO_OWNER_FALLBACK=1` and no
+//! 1. [`gate`]: the virtual desktop's guard (`NO_OWNER_FALLBACK=1` and no
 //!    passport: exit 3), then the connection gate (no port or no token:
 //!    exit 1). Each prints the shell's three lines.
-//! 3. For a verb the shell's tool policy calls an `id` tool, in a session
+//! 2. For a verb the shell's tool policy calls an `id` tool, in a session
 //!    with `HOOK_SOCK` set (`_cli_check_session_passport`,
 //!    `_cli_apply_auth_for_verb`): a passport the daemon no longer knows
 //!    with its socket gone ([`stale_passport_lines`], exit 3), and no
 //!    passport at all ([`require_passport_lines`], exit 3). The shared
 //!    Codex server check that comes first is the shell's own
 //!    ([`codex_env`]: a family hands such a line to the shell).
-//! 4. The verb. Each answer it gets goes through [`Closing::answer`].
-//! 5. [`Closing::flush`], the EXIT trap: when an answer refused the
+//! 3. The verb. Each answer it gets goes through [`Closing::answer`].
+//! 4. [`Closing::flush`], the EXIT trap: when an answer refused the
 //!    passport, a probe asks whether it is dead and says to restart the
 //!    tab; a refusal's closing line when the command failed; the Org
 //!    Chart's bulletin line when it worked.
@@ -33,14 +30,6 @@ use crate::out;
 use crate::transport::permission::Note;
 use crate::transport::{Auth, Client, Response};
 use std::path::Path;
-use std::process::{Command, Stdio};
-
-/// The 0.40.4 cutover heads-up (`cli/src/prelude.sh`).
-pub const RENAME_NOTICE: &str = concat!(
-    "i  ",
-    k2_client::product_name!(),
-    " 0.40.4 renamed this workspace's .k2so/ -> .k2/ (harness symlinks + .gitignore updated). Commit the rename when ready \u{2014} git tracks it as renames."
-);
 
 /// The virtual desktop's guard (LD-10): exit 3.
 pub const VIRTUAL_DESKTOP: [&str; 3] = [
@@ -160,29 +149,6 @@ pub fn id_tool(
 
 /// The bulletin line is shown at most this often per agent, in seconds.
 pub const BULLETIN_EVERY: u64 = 1800;
-
-/// The heads-up line, when `project`'s workspace folder is a `.k2/`
-/// folder, there is no `.k2so/` folder (the old name, the last of
-/// [`k2_client::paths::WORKSPACE_DOT_DIR_NAMES`]), git may run
-/// ([`daemon::usable_git`]) and `git ls-files .k2so` there still lists a
-/// file.
-pub fn rename_notice(project: &Path) -> Option<&'static str> {
-    let old = *k2_client::paths::WORKSPACE_DOT_DIR_NAMES.last()?;
-    let dot = k2_client::workspace_dir::workspace_dot_dir(project);
-    if !dot.is_dir() || dot == project.join(old) || project.join(old).is_dir() {
-        return None;
-    }
-    let git = daemon::usable_git()?;
-    let out = Command::new(git)
-        .arg("-C")
-        .arg(project)
-        .args(["ls-files", old])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    (!out.stdout.is_empty()).then_some(RENAME_NOTICE)
-}
 
 /// A gate that stops the command before its verb runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,7 +382,6 @@ mod tests {
 
     #[test]
     fn the_lines_are_the_shell_s() {
-        echoed("prelude.sh", RENAME_NOTICE);
         for line in VIRTUAL_DESKTOP.iter().chain(CANNOT_CONNECT.iter()) {
             echoed("cli-tools-policy.sh", line);
         }
@@ -438,25 +403,6 @@ mod tests {
             cell.contains(r#"stamp="${TMPDIR:-/tmp}/k2-bulletin.${key}""#),
             "the bulletin's stamp file moved"
         );
-    }
-
-    /// The folders that rule the line out before git is asked; git's
-    /// part is in `tests/whoami_parity.rs`.
-    #[test]
-    fn the_rename_line_needs_k2_and_no_k2so() {
-        assert_eq!(
-            k2_client::paths::WORKSPACE_DOT_DIR_NAMES.last(),
-            Some(&".k2so")
-        );
-        let dir = std::env::temp_dir().join(format!("k5-rename-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(rename_notice(&dir), None, "no folder");
-        std::fs::create_dir_all(dir.join(".k2so")).unwrap();
-        assert_eq!(rename_notice(&dir), None, ".k2so only");
-        std::fs::create_dir_all(dir.join(".k2")).unwrap();
-        assert_eq!(rename_notice(&dir), None, "both");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

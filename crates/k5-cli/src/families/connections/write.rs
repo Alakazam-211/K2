@@ -4,8 +4,8 @@
 //!
 //! What runs, in the shell's order:
 //!
-//! 1. The settings, the 0.40.4 rename line, the two gates and the `id`
-//!    tool's checks, as for `connections list` ([`super`]).
+//! 1. The settings, the two gates and the `id` tool's checks,
+//!    as for `connections list` ([`super`]).
 //! 2. The target: the word after the verb (`${1:-}`); none, or an empty
 //!    one, is `Usage: k2 connections <verb> <workspace-name>`, exit 1.
 //!    Any word after it is not read.

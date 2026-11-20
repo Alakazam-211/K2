@@ -11,17 +11,15 @@
 //!   (`BASH_FUNC_*`) change what runs, so any of them set hands the page
 //!   to the shell;
 //! - `set -u` on `$HOME`, and the programs the prelude starts from `PATH`
-//!   (`cat`, `dirname`, `sed`, `head`): one that is missing prints an
+//!   (`cat`, `dirname`, `sed`): one that is missing prints an
 //!   error or stops the run;
 //! - the port and token files, read as `$(cat …)` under `set -e`: one
 //!   that is there but can't be read stops the run, and a NUL in one is
 //!   a warning;
-//! - the 0.40.4 rename heads-up: one line on stderr while a workspace's
-//!   `.k2so/` to `.k2/` rename is not committed (`git ls-files .k2so`).
-//!   The project is found as the shell finds it (`PROJECT_PATH`, else the
-//!   nearest folder up from the shell's `pwd` with `.k2so/` or `.k2/` in
-//!   it, not `$HOME`, else git's main folder for a worktree); when the
-//!   line would print, the page goes to the shell;
+//! - the project search: with no `PROJECT_PATH`, the shell walks up from
+//!   its `pwd` with `dirname` to the nearest folder with `.k2so/` or
+//!   `.k2/` in it, not `$HOME`, else asks git for a worktree's main folder
+//!   (with `sed`); a program it needs that is missing stops the run;
 //! - the connection gate: no port or no token is an error for most verbs,
 //!   help included (`k2 study` skips it). [`Prelude`] says whether there
 //!   are both, as the shell reads them;
@@ -68,8 +66,6 @@ pub enum Handoff {
     Nul(PathBuf),
     /// `PWD` is a path the shell would tidy (`.`, `..`, `//`).
     Pwd,
-    /// The rename heads-up would print.
-    RenameNotice,
 }
 
 /// The environment, as one list.
@@ -320,8 +316,8 @@ fn has_dot_dir(dir: &OsStr) -> bool {
     cat_path(dir, OLD_NAME).is_dir() || cat_path(dir, NEW_NAME).is_dir()
 }
 
-/// The project as the prelude finds it, then the rename heads-up.
-fn project(env: &Env, home: &OsStr, path: &SearchPath, cwd: &Path) -> Result<(), Handoff> {
+/// The project as the prelude finds it.
+fn project(env: &Env, home: &OsStr, path: &SearchPath, cwd: &Path) -> Result<OsString, Handoff> {
     let mut git = Git::new(path, env.get(crate::daemon::DEVELOPER_DIR_VAR));
     let project: OsString = match env.first(env_names::PROJECT_PATH) {
         Some(p) => p.to_os_string(),
@@ -350,19 +346,10 @@ fn project(env: &Env, home: &OsStr, path: &SearchPath, cwd: &Path) -> Result<(),
             found.unwrap_or(start)
         }
     };
-    if cat_path(&project, NEW_NAME).is_dir()
-        && !cat_path(&project, OLD_NAME).is_dir()
-        && git.usable()
-    {
-        path.need("head")?;
-        if git.lists_old_folder(&project) {
-            return Err(Handoff::RenameNotice);
-        }
-    }
-    Ok(())
+    Ok(project)
 }
 
-/// `_k2_git_usable` and the two git calls, as the prelude makes them.
+/// `_k2_git_usable` and the git call, as the prelude makes them.
 struct Git<'a> {
     path: &'a SearchPath<'a>,
     /// `DEVELOPER_DIR`, which picks the developer tools folder.
@@ -430,18 +417,6 @@ impl<'a> Git<'a> {
         bytes_path(trim_newlines(lines.join(&b'\n'))).into_os_string()
     }
 
-    /// `git -C <dir> ls-files .k2so | head -1` is not empty.
-    fn lists_old_folder(&self, dir: &OsStr) -> bool {
-        let out = self.run(&[
-            OsStr::new("-C"),
-            dir,
-            OsStr::new("ls-files"),
-            OsStr::new(OLD_NAME),
-        ]);
-        out.split(|b| *b == b'\n')
-            .next()
-            .is_some_and(|l| !l.is_empty())
-    }
 }
 
 /// sed's `s|/.git$||` on one line: a `/`, any one character, `git`, at
@@ -529,8 +504,6 @@ mod tests {
             "K2_HOME=\"${HOME}/.k2\"",
             fallback.as_str(),
             "        if { [ -d \"$_dir/.k2so\" ] || [ -d \"$_dir/.k2\" ]; } && [ \"$_dir\" != \"$HOME\" ]; then",
-            "if [ -d \"$PROJECT/.k2\" ] && [ ! -d \"$PROJECT/.k2so\" ] && _k2_git_usable; then",
-            "    _k2so_pending=$(git -C \"$PROJECT\" ls-files .k2so 2>/dev/null | head -1 || true)",
             "            _main_root=$(git -C \"$(pwd)\" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/.git$||' || true)",
             "    PORT=\"${PORT:-$(cat \"${K2_HOME}/heartbeat.port\" 2>/dev/null)}\"",
             "if [ -z \"$_k2_no_owner_fallback\" ] && [ -r \"${K2_HOME}/heartbeat.token\" ]; then",
@@ -538,6 +511,10 @@ mod tests {
         ] {
             assert!(prelude.lines().any(|l| l == line), "prelude.sh changed: no line {line:?}");
         }
+        // The 0.40.4 rename heads-up is gone from the shell: nothing here
+        // copies it, and the prelude runs no `git ls-files` and no `head`.
+        assert!(!prelude.contains("ls-files"), "prelude.sh runs git ls-files again");
+        assert!(!prelude.contains("| head"), "prelude.sh runs head again");
     }
 
     #[test]
@@ -627,43 +604,40 @@ mod tests {
         assert!(matches!(prelude(&env, &d), Err(Handoff::Nul(_))));
     }
 
+    /// The project search, by what it finds (`project`): the nearest
+    /// folder up with `.k2/` in it, never the user home; `PROJECT_PATH`
+    /// wins; with none found and git listing nothing, the shell's `pwd`.
     #[test]
-    fn the_rename_notice_hands_off_only_when_git_lists_the_old_folder() {
-        let d = scratch("rename");
+    fn the_project_is_the_nearest_workspace_folder_up() {
+        let d = scratch("project");
         let ws = d.join("ws");
         std::fs::create_dir_all(ws.join(".k2")).unwrap();
         std::fs::create_dir_all(ws.join("a/b")).unwrap();
-        let path = bin(&d, &["cat", "dirname", "sed", "head", "uname"]);
-        // A git that lists a file for ls-files and fails anything else.
+        let path = bin(&d, &["cat", "dirname", "sed", "uname"]);
+        // A git that fails every call: no main folder.
         let git = d.join("bin/git");
-        std::fs::write(
-            &git,
-            "#!/bin/sh\ncase \"$3\" in ls-files) echo .k2so/x ;; *) exit 128 ;; esac\n",
-        )
-        .unwrap();
+        std::fs::write(&git, "#!/bin/sh\nexit 128\n").unwrap();
         std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let found = |env: &Env, cwd: &Path| {
+            let p = SearchPath::new(env.get("PATH").unwrap());
+            project(env, env.get("HOME").unwrap(), &p, cwd)
+        };
         let env = Env::of(&[("HOME", s(&d)), ("PATH", &path)]);
-        assert_eq!(prelude(&env, &ws.join("a/b")), Err(Handoff::RenameNotice));
-        // Not a workspace (.k2so there too, or no .k2): no notice.
-        std::fs::create_dir_all(ws.join(".k2so")).unwrap();
+        assert_eq!(found(&env, &ws.join("a/b")), Ok(ws.clone().into_os_string()));
         assert!(prelude(&env, &ws.join("a/b")).is_ok());
-        std::fs::remove_dir(ws.join(".k2so")).unwrap();
-        // The user home is never the project.
+        // The user home is never the project: the walk goes on to /, then pwd.
         let home_is_ws = Env::of(&[("HOME", s(&ws)), ("PATH", &path)]);
-        assert!(prelude(&home_is_ws, &ws.join("a/b")).is_ok());
+        assert_eq!(
+            found(&home_is_ws, &ws.join("a/b")),
+            Ok(ws.join("a/b").into_os_string())
+        );
         // PROJECT_PATH wins.
         let other = Env::of(&[("HOME", s(&d)), ("PATH", &path), ("K2_PROJECT_PATH", s(&d))]);
-        assert!(prelude(&other, &ws.join("a/b")).is_ok());
-        // A git that lists nothing: no notice.
-        std::fs::write(&git, "#!/bin/sh\nexit 0\n").unwrap();
-        assert!(prelude(&env, &ws.join("a/b")).is_ok());
-        // No head on PATH while the check would run: the shell's error.
-        let nohead = bin(&d.join("nohead"), &["cat", "dirname", "sed", "git"]);
-        let env = Env::of(&[("HOME", s(&d)), ("PATH", &nohead)]);
-        assert_eq!(
-            prelude(&env, &ws.join("a/b")),
-            Err(Handoff::Missing("head"))
-        );
+        assert_eq!(found(&other, &ws.join("a/b")), Ok(d.clone().into_os_string()));
+        // No dirname on PATH while the walk needs it: the shell's error.
+        let nodirname = bin(&d.join("nodirname"), &["cat", "sed", "git"]);
+        let env = Env::of(&[("HOME", s(&d)), ("PATH", &nodirname)]);
+        assert_eq!(prelude(&env, &ws.join("a/b")).err(), Some(Handoff::Missing("dirname")));
     }
 
     #[test]
@@ -672,17 +646,20 @@ mod tests {
         let main = d.join("main");
         std::fs::create_dir_all(main.join(".k2")).unwrap();
         std::fs::create_dir_all(d.join("wt/x")).unwrap();
-        let path = bin(&d, &["cat", "dirname", "sed", "head", "uname"]);
+        let path = bin(&d, &["cat", "dirname", "sed", "uname"]);
         let git = d.join("bin/git");
         let script = format!(
-            "#!/bin/sh\ncase \"$3\" in rev-parse) echo '{}/.git' ;; ls-files) [ \"$2\" = '{}' ] && echo .k2so/x ;; esac\nexit 0\n",
-            s(&main),
+            "#!/bin/sh\ncase \"$3\" in rev-parse) echo '{}/.git' ;; esac\nexit 0\n",
             s(&main)
         );
         std::fs::write(&git, script).unwrap();
         std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
         let env = Env::of(&[("HOME", s(&d)), ("PATH", &path)]);
-        assert_eq!(prelude(&env, &d.join("wt/x")), Err(Handoff::RenameNotice));
+        let p = SearchPath::new(env.get("PATH").unwrap());
+        assert_eq!(
+            project(&env, env.get("HOME").unwrap(), &p, &d.join("wt/x")),
+            Ok(main.into_os_string())
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    the 0.40.4 rename line, and the two gates ([`crate::prelude`]).
+//!    and the two gates ([`crate::prelude`]).
 //!    `read` is an open tool, so no passport check comes after them.
 //! 2. The words ([`parse`]): the first is the workspace, whatever it is
 //!    (`k2 read --session s` reads the workspace `--session`), then
@@ -64,7 +64,6 @@ use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::Auth;
 use std::ffi::OsString;
-use std::path::Path;
 
 /// The route.
 pub const ENDPOINT: &str = "/cli/terminal/read";
@@ -192,9 +191,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 }
 
 fn run_with(args: &[OsString], ask: &Ask, workspace: &str, mut settings: Settings) -> Exit {
-    if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(notice);
-    }
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }

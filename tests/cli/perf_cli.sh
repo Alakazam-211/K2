@@ -56,8 +56,7 @@
 # and the pages the binary prints itself, in an owner's terminal instead:
 # a port and an owner token in a second K2 home, no K2_* set, run from the
 # same workspace folder (.k2/), so the binary does every check of the
-# shell's prelude it makes for a page (the rename heads-up's git call
-# included). No daemon: pages never ask one.
+# shell's prelude it makes for a page. No daemon: pages never ask one.
 #
 #   page --version k5 --version                       <= 5 ms
 #   study errors   k5 study errors                    <= 30 ms

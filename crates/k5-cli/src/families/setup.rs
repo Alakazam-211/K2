@@ -4,7 +4,7 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    the 0.40.4 rename line, and the two gates ([`crate::prelude`]).
+//!    and the two gates ([`crate::prelude`]).
 //! 2. `_cli_apply_auth_for_verb setup <first word>`: `setup` is an open
 //!    tool, but with `chief-of-staff` as its first word it is the locked
 //!    `agent-harness` tool, so in a session with `HOOK_SOCK` set and no
@@ -393,9 +393,6 @@ fn run_with(
     hook_sock: Option<&Path>,
     mut settings: Settings,
 ) -> Exit {
-    if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(notice);
-    }
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }

@@ -1079,9 +1079,9 @@ fn whoami_with_a_broken_exchange() {
     }
 }
 
-/// git: the 0.40.4 rename line while `.k2so/` files are still in git's
-/// index, and a worktree's main folder when no folder up from here is a
-/// workspace.
+/// git: no line while `.k2so/` files are still in git's index (the
+/// 0.40.4 rename heads-up is gone from both), and a worktree's main
+/// folder when no folder up from here is a workspace.
 #[test]
 fn whoami_and_git() {
     let rig = Rig::new("git");
@@ -1100,14 +1100,14 @@ fn whoami_and_git() {
             String::from_utf8_lossy(&out.stderr)
         );
     };
-    // The rename line: a .k2so file in the index, the folder gone, .k2 there.
+    // No rename line: a .k2so file in the index, the folder gone, .k2 there.
     git(&rig.proj, &["init", "-q"]);
     std::fs::create_dir_all(rig.proj.join(".k2so")).unwrap();
     std::fs::write(rig.proj.join(".k2so/note.md"), "x").unwrap();
     git(&rig.proj, &["add", ".k2so/note.md"]);
     std::fs::remove_dir_all(rig.proj.join(".k2so")).unwrap();
     let mut c = case(
-        "the rename line",
+        "no rename line",
         &[],
         &[],
         vec![ok(FULL)],
@@ -1118,8 +1118,8 @@ fn whoami_and_git() {
     check(&rig, &c);
     let probe = rig.run(false, &c);
     assert!(
-        probe.stderr.starts_with("i  "),
-        "the rename line is not there: {probe:?}"
+        probe.stderr.is_empty(),
+        "the binary printed on stderr: {probe:?}"
     );
 
     // A worktree outside the workspace: the main folder is the project.

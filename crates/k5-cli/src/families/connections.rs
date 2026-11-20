@@ -5,7 +5,7 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    the 0.40.4 rename line, and the two gates ([`crate::prelude`]).
+//!    and the two gates ([`crate::prelude`]).
 //! 2. `connections` is an `id` tool, so with `HOOK_SOCK` set: the
 //!    stale-passport or require-passport lines, exit 3
 //!    ([`crate::prelude::id_tool`]).
@@ -162,9 +162,6 @@ fn run_with(
     hook_sock: Option<&Path>,
     mut settings: Settings,
 ) -> Exit {
-    if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(notice);
-    }
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }

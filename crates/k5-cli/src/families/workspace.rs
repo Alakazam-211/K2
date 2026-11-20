@@ -15,7 +15,7 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    the 0.40.4 rename line, and the two gates ([`crate::prelude`]).
+//!    and the two gates ([`crate::prelude`]).
 //!    `workspace` with any of these verbs is an ungoverned tool, so no
 //!    passport check comes after them.
 //! 2. The verb's words, its requests and its output (each module says
@@ -57,7 +57,6 @@ use crate::passport;
 use crate::prelude;
 use crate::python;
 use std::ffi::OsString;
-use std::path::Path;
 
 pub mod agent;
 pub mod list;
@@ -166,9 +165,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 }
 
 fn run_with(args: &[OsString], ready: Ready, mut settings: Settings) -> Exit {
-    if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(notice);
-    }
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }

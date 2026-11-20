@@ -5,7 +5,7 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    the 0.40.4 rename line, and the two gates ([`crate::prelude`]).
+//!    and the two gates ([`crate::prelude`]).
 //! 2. The words after `done`, as the shell's loop reads them: `--agent
 //!    <name>` (a next word that is there and doesn't start with `-`, else
 //!    `k2 done: '--agent' needs a name.`, exit 2), `--blocked <reason>`
@@ -50,7 +50,6 @@ use crate::transport::wire::curl;
 use crate::transport::{Call, Channel, Error};
 use k2_client::env_names;
 use std::ffi::OsString;
-use std::path::Path;
 
 /// The route.
 pub const ENDPOINT: &str = "/cli/done";
@@ -165,9 +164,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 }
 
 fn run_with(args: &[OsString], read: Result<Mark, Stop>, mut settings: Settings) -> Exit {
-    if let Some(line) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(line);
-    }
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }

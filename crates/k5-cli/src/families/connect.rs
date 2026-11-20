@@ -5,9 +5,9 @@
 //!
 //! What runs, in the shell's order:
 //!
-//! 1. The settings ([`crate::daemon`]), the 0.40.4 rename line and the
-//!    virtual desktop's guard ([`crate::prelude`]). `connect` skips the
-//!    connection gate: no port or no token is not an error here.
+//! 1. The settings ([`crate::daemon`]) and the virtual desktop's guard
+//!    ([`crate::prelude`]). `connect` skips the connection gate: no port
+//!    or no token is not an error here.
 //! 2. `connect` is the locked `connect-account` tool, so with `HOOK_SOCK`
 //!    set: the stale-passport or require-passport lines, exit 3
 //!    ([`crate::prelude::id_tool`]).
@@ -374,9 +374,6 @@ fn run_with(
     hook_sock: Option<&Path>,
     settings: Settings,
 ) -> Exit {
-    if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(notice);
-    }
     // `connect` skips the connection gate; the guard still stands.
     if let Some(Gate::VirtualDesktop) = prelude::gate(&settings) {
         return Gate::VirtualDesktop.stop();

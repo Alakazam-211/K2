@@ -5,7 +5,7 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    the 0.40.4 rename line, and the two gates ([`crate::prelude`]).
+//!    and the two gates ([`crate::prelude`]).
 //!    `feedback` is no tool in the shell's policy, so it is an open one:
 //!    no passport check comes after them.
 //! 2. The words ([`parse`]). A word the verb doesn't take, a missing
@@ -60,7 +60,6 @@ use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::{Call, Channel, Client, Error};
 use std::ffi::OsString;
-use std::path::Path;
 
 /// The routes.
 pub const LIST: &str = "/cli/feedback/list";
@@ -251,9 +250,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 }
 
 fn run_with(args: &[OsString], ask: Result<Ask, String>, mut settings: Settings) -> Exit {
-    if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(notice);
-    }
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }

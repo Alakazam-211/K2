@@ -13,8 +13,8 @@
 //!
 //! What runs, in the shell's order:
 //!
-//! 1. The settings ([`crate::daemon`]), the 0.40.4 rename line and the two
-//!    gates ([`crate::prelude`]): `update` is not a verb the gates skip,
+//! 1. The settings ([`crate::daemon`]) and the two gates
+//!    ([`crate::prelude`]): `update` is not a verb the gates skip,
 //!    and no tool of the shell's tool policy.
 //! 2. The form:
 //!    - [`Form::Cli`] (`update --cli [--check|-c]`): one
@@ -382,9 +382,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 }
 
 fn run_with(args: &[OsString], form: Form, curl: Option<&Path>, settings: &Settings) -> Exit {
-    if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(notice);
-    }
     if let Some(gate) = prelude::gate(settings) {
         return gate.stop();
     }

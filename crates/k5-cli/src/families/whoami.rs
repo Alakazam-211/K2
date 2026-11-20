@@ -4,7 +4,7 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    the 0.40.4 rename line, and the two gates ([`crate::prelude`]).
+//!    and the two gates ([`crate::prelude`]).
 //! 2. The flags: `--json`; any other word starting with `-` is
 //!    `Error: unknown flag '<word>' (try 'k2 whoami --help')` and exit 1;
 //!    other words are ignored. `-h` and `--help` never get here: the front
@@ -57,7 +57,6 @@ use crate::transport::wire::curl;
 use crate::transport::{Call, Error};
 use k2_client::env_names;
 use std::ffi::OsString;
-use std::path::Path;
 
 /// The route.
 pub const ENDPOINT: &str = "/cli/whoami";
@@ -133,9 +132,6 @@ pub fn run(args: &[OsString]) -> Exit {
 }
 
 fn run_with(args: &[OsString], mut settings: Settings) -> Exit {
-    if let Some(line) = prelude::rename_notice(Path::new(&settings.project)) {
-        out::stderr_line(line);
-    }
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }

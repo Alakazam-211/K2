@@ -176,15 +176,19 @@ pub fn run(ctx: &mut Ctx, rest: &[&str]) -> Result<Exit, Exit> {
         if o.json {
             return Ok(print_body(&d));
         }
-        render(&d.body, dry_printer).print();
-        return Ok(Exit::Ok);
+        // A printer that raised ends the command (`set -e`), else `exit 0`.
+        return Ok(match render(&d.body, dry_printer).print() {
+            Exit::Ok => Exit::Ok,
+            _ => Exit::Error,
+        });
     }
     let text = match confirm::load(&d.body).and_then(|v| get(&v, "confirmText")) {
         Ok(x) if t(&x) => s(&x).trim_end_matches('\n').to_string(),
         Ok(_) => String::new(),
         Err(e) => {
+            // `text="$(…)"` under `set -e`: the command ends.
             out::stderr_line(e.text().trim_end_matches('\n'));
-            String::new()
+            return Err(Exit::Error);
         }
     };
     let mut body = obj(body);
@@ -205,7 +209,7 @@ pub fn run(ctx: &mut Ctx, rest: &[&str]) -> Result<Exit, Exit> {
             Ok(b) => b,
             Err(e) => {
                 out::stderr_line(e.text().trim_end_matches('\n'));
-                String::new()
+                return Err(Exit::Error);
             }
         };
     }

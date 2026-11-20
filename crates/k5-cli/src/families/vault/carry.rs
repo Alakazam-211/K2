@@ -149,8 +149,7 @@ fn import(ctx: &mut Ctx, o: &Opts) -> Result<Exit, Exit> {
             "usage: {CLI} vault carry import takes one --workspace <id>"
         )));
     }
-    // `ib="$(python3 …)"`: a file Python can't read is its traceback and
-    // an empty body.
+    // `ib="$(python3 …)"`: a file Python can't read is its traceback.
     let ib = match std::fs::read(&f) {
         Ok(bytes) => {
             let mut b = vec![
@@ -163,8 +162,9 @@ fn import(ctx: &mut Ctx, o: &Opts) -> Result<Exit, Exit> {
             obj(b)
         }
         Err(e) => {
+            // `ib="$(python3 …)"` under `set -e`: the command ends.
             out::stderr_line(os_error(&e, &f).text().trim_end_matches('\n'));
-            String::new()
+            return Err(Exit::Error);
         }
     };
     let r = ctx.call(true, "carry/import", &ib)?;

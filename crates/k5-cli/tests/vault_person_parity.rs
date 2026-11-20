@@ -159,10 +159,9 @@ fn recovery_show_once_and_rotate() {
             vec![
                 ok(r#"{"recovery":"confirmed"}"#),
                 ok(r#"{"id":"r","phrase":"a b c d e"}"#),
-                ok("{}"),
             ],
             b"a\nb\nc\n",
-            0,
+            1,
         )),
         traceback(person(
             "show-once: no id, a status Python can't read",
@@ -172,10 +171,9 @@ fn recovery_show_once_and_rotate() {
                 methods("local-auth"),
                 ok(r#"{"token":"t"}"#),
                 ok(r#"{"phrase":"x"}"#),
-                ok("{}"),
             ],
             b"",
-            0,
+            1,
         )),
         person(
             "show-once: the vault is closed",
@@ -220,7 +218,12 @@ fn rollback() {
         person(
             "rollback: --to as Python's int() reads it",
             &["rollback", "API", "--to", " 0_2", "--accept-agent-value"],
-            vec![shown.clone(), methods("local-auth"), ok(r#"{"token":"t"}"#), ok("{}")],
+            vec![
+                shown.clone(),
+                methods("local-auth"),
+                ok(r#"{"token":"t"}"#),
+                ok("{}"),
+            ],
             b"",
             0,
         ),
@@ -243,7 +246,9 @@ fn rollback() {
             "rollback: a version Python can't compare",
             &["rollback", "API", "--to", "1"],
             vec![
-                ok(r#"{"secret":{"id":"s"},"placements":[{"target":"systemd_cred","version":"2"}]}"#),
+                ok(
+                    r#"{"secret":{"id":"s"},"placements":[{"target":"systemd_cred","version":"2"}]}"#,
+                ),
                 methods("local-auth"),
                 ok(r#"{"token":"t"}"#),
                 ok("{}"),
@@ -285,7 +290,10 @@ fn rollback() {
         ),
         refused("rollback with no --to", &["rollback", "API"]),
         refused("rollback with no name", &["rollback", "--to", "1"]),
-        refused("rollback takes no --json", &["rollback", "API", "--to", "1", "--json"]),
+        refused(
+            "rollback takes no --json",
+            &["rollback", "API", "--to", "1", "--json"],
+        ),
     ] {
         rig.check(&c);
     }
@@ -366,7 +374,9 @@ fn backup_and_its_key() {
             "backup key remove",
             &["backup", "key", "remove"],
             vec![
-                ok(r#"{"holders":[{"kind":"box","fingerprint":"b"},{"kind":"backup","fingerprint":"fp-1"}]}"#),
+                ok(
+                    r#"{"holders":[{"kind":"box","fingerprint":"b"},{"kind":"backup","fingerprint":"fp-1"}]}"#,
+                ),
                 methods("local-auth"),
                 ok(r#"{"token":"t"}"#),
                 ok(r#"{"removed":"fp-1","note":"old backups still open with it"}"#),
@@ -470,7 +480,10 @@ fn restore() {
             2,
         ),
         refused("restore with no --from", &["restore"]),
-        refused("restore takes no --json", &["restore", "--from", from, "--json"]),
+        refused(
+            "restore takes no --json",
+            &["restore", "--from", from, "--json"],
+        ),
     ] {
         rig.check(&c);
     }
@@ -495,7 +508,12 @@ fn import_an_env_file() {
             0,
         ),
         // covers: vault import --json
-        daemon("import --json", &["import", ".env", "--json"], moved.clone(), 0),
+        daemon(
+            "import --json",
+            &["import", ".env", "--json"],
+            moved.clone(),
+            0,
+        ),
         traceback(daemon(
             "import: names Python can't join",
             &["import", ".env"],
@@ -552,12 +570,16 @@ fn carry_export_and_import() {
         c.files = vec![out.clone()];
         c
     };
-    let dry = ok(r#"{"dryRun":true,"sourceVaultId":"v1","sourceKeyFingerprint":"k1","ownBoxMove":true,"madeForWorkspaceId":"w9","secrets":[{"scope":"ws:a","name":"A","hosts":["a.com","b.com"],"targetWorkspaceId":"w9","targetWorkspace":"acme"},{"scope":"server","name":"B","hosts":[],"skip":"name taken"},{"scope":"server","name":"C","hosts":["c"]}]}"#);
+    let dry = ok(
+        r#"{"dryRun":true,"sourceVaultId":"v1","sourceKeyFingerprint":"k1","ownBoxMove":true,"madeForWorkspaceId":"w9","secrets":[{"scope":"ws:a","name":"A","hosts":["a.com","b.com"],"targetWorkspaceId":"w9","targetWorkspace":"acme"},{"scope":"server","name":"B","hosts":[],"skip":"name taken"},{"scope":"server","name":"C","hosts":["c"]}]}"#,
+    );
     for c in [
         // covers: vault carry export
         export(
             "carry export",
-            ok(r#"{"carryB64":"c2VhbGVkIGJ5dGVz","count":2,"targetFingerprint":"fp","secrets":["A","B"]}"#),
+            ok(
+                r#"{"carryB64":"c2VhbGVkIGJ5dGVz","count":2,"targetFingerprint":"fp","secrets":["A","B"]}"#,
+            ),
             0,
         ),
         traceback(export(
@@ -601,7 +623,12 @@ fn carry_export_and_import() {
             ok(r#"{"imported":["A","B"],"skipped":["C: name taken"]}"#),
             0,
         ),
-        daemon("carry import, a dry run", &["carry", "import", "in.age"], dry.clone(), 0),
+        daemon(
+            "carry import, a dry run",
+            &["carry", "import", "in.age"],
+            dry.clone(),
+            0,
+        ),
         // covers: vault carry import --json
         daemon(
             "carry import --json",
@@ -615,10 +642,21 @@ fn carry_export_and_import() {
             ok(r#"{"imported":[]}"#),
             1,
         )),
-        refused("carry import, no such file", &["carry", "import", "nope.age"]),
+        refused(
+            "carry import, no such file",
+            &["carry", "import", "nope.age"],
+        ),
         refused(
             "carry import, two workspaces",
-            &["carry", "import", "in.age", "--workspace", "a", "--workspace", "b"],
+            &[
+                "carry",
+                "import",
+                "in.age",
+                "--workspace",
+                "a",
+                "--workspace",
+                "b",
+            ],
         ),
         refused("carry, no verb", &["carry"]),
         refused("carry, an unknown verb", &["carry", "nope", "--json"]),
@@ -630,10 +668,24 @@ fn carry_export_and_import() {
 #[test]
 fn systemd_cred() {
     let rig = VRig::new();
-    let place = ["systemd-cred", "API", "--unit", "web.service", "--cred-name", "api", "--restart"];
-    let ready = ok(r#"{"confirmText":"seal API v3 into web.service","version":3,"helperReady":true,"authorIsPerson":true,"plan":{"credPath":"/etc/credstore/api.cred","dropin":"/etc/systemd/system/web.service.d/k2.conf","dropinLine":"LoadCredentialEncrypted=api:/etc/credstore/api.cred","readAs":"$CREDENTIALS_DIRECTORY/api"}}"#);
-    let sealed = ok(r#"{"ok":true,"version":3,"plan":{"secret":"API","credPath":"/etc/credstore/api.cred","unit":"web.service","readAs":"$CREDENTIALS_DIRECTORY/api"},"restarted":true,"next":"systemctl status web.service"}"#);
-    let agent = ok(r#"{"confirmText":"seal API v4","version":4,"helperReady":true,"authorIsPerson":false,"behind":2}"#);
+    let place = [
+        "systemd-cred",
+        "API",
+        "--unit",
+        "web.service",
+        "--cred-name",
+        "api",
+        "--restart",
+    ];
+    let ready = ok(
+        r#"{"confirmText":"seal API v3 into web.service","version":3,"helperReady":true,"authorIsPerson":true,"plan":{"credPath":"/etc/credstore/api.cred","dropin":"/etc/systemd/system/web.service.d/k2.conf","dropinLine":"LoadCredentialEncrypted=api:/etc/credstore/api.cred","readAs":"$CREDENTIALS_DIRECTORY/api"}}"#,
+    );
+    let sealed = ok(
+        r#"{"ok":true,"version":3,"plan":{"secret":"API","credPath":"/etc/credstore/api.cred","unit":"web.service","readAs":"$CREDENTIALS_DIRECTORY/api"},"restarted":true,"next":"systemctl status web.service"}"#,
+    );
+    let agent = ok(
+        r#"{"confirmText":"seal API v4","version":4,"helperReady":true,"authorIsPerson":false,"behind":2}"#,
+    );
     let mut in_k2 = refused("systemd-cred in a K2 terminal", &place);
     in_k2.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
     in_k2.code = 3;
@@ -658,20 +710,42 @@ fn systemd_cred() {
             "systemd-cred --json",
             // covers: vault systemd-cred --json
             &["systemd-cred", "API", "--unit", "web.service", "--json"],
-            vec![ready.clone(), methods("vault-password"), ok(r#"{"token":"t"}"#), sealed.clone()],
+            vec![
+                ready.clone(),
+                methods("vault-password"),
+                ok(r#"{"token":"t"}"#),
+                sealed.clone(),
+            ],
             b"pw\n",
             0,
         ),
         person(
             "systemd-cred --dry-run",
-            &["systemd-cred", "API", "--unit", "web.service", "--dry-run", "--scope", "server"],
-            vec![ok(r#"{"confirmText":"seal it","allowed":false,"helperReady":false,"plan":{"credPath":"/c","dropin":"/d","dropinLine":"L","readAs":"R"}}"#)],
+            &[
+                "systemd-cred",
+                "API",
+                "--unit",
+                "web.service",
+                "--dry-run",
+                "--scope",
+                "server",
+            ],
+            vec![ok(
+                r#"{"confirmText":"seal it","allowed":false,"helperReady":false,"plan":{"credPath":"/c","dropin":"/d","dropinLine":"L","readAs":"R"}}"#,
+            )],
             b"",
             0,
         ),
         person(
             "systemd-cred --dry-run --json",
-            &["systemd-cred", "API", "--unit", "web.service", "--dry-run", "--json"],
+            &[
+                "systemd-cred",
+                "API",
+                "--unit",
+                "web.service",
+                "--dry-run",
+                "--json",
+            ],
             vec![ready.clone()],
             b"",
             0,
@@ -685,15 +759,28 @@ fn systemd_cred() {
         ),
         person(
             "systemd-cred: an agent's value, accepted",
-            &["systemd-cred", "API", "--unit", "web.service", "--accept-agent-value"],
-            vec![agent.clone(), methods("vault-password"), ok(r#"{"token":"t"}"#), sealed.clone()],
+            &[
+                "systemd-cred",
+                "API",
+                "--unit",
+                "web.service",
+                "--accept-agent-value",
+            ],
+            vec![
+                agent.clone(),
+                methods("vault-password"),
+                ok(r#"{"token":"t"}"#),
+                sealed.clone(),
+            ],
             b"pw\n",
             0,
         ),
         person(
             "systemd-cred --replace, nothing behind",
             &["systemd-cred", "API", "--replace"],
-            vec![ok(r#"{"confirmText":"nothing to re-place","behind":0,"version":2}"#)],
+            vec![ok(
+                r#"{"confirmText":"nothing to re-place","behind":0,"version":2}"#,
+            )],
             b"",
             0,
         ),
@@ -701,10 +788,14 @@ fn systemd_cred() {
             "systemd-cred --replace",
             &["systemd-cred", "API", "--replace"],
             vec![
-                ok(r#"{"confirmText":"re-place v4","behind":1,"rows":[{"id":"p1","version":3}],"version":4,"helperReady":true}"#),
+                ok(
+                    r#"{"confirmText":"re-place v4","behind":1,"rows":[{"id":"p1","version":3}],"version":4,"helperReady":true}"#,
+                ),
                 methods("vault-password"),
                 ok(r#"{"token":"t"}"#),
-                ok(r#"{"ok":false,"replaced":[{"ok":true,"version":4,"unit":"a.service","restarted":true},{"ok":true,"version":4,"unit":"b.service","restartError":"busy"},{"ok":false,"unit":"c.service","error":{"code":"gone","hint":"unit removed"}}]}"#),
+                ok(
+                    r#"{"ok":false,"replaced":[{"ok":true,"version":4,"unit":"a.service","restarted":true},{"ok":true,"version":4,"unit":"b.service","restartError":"busy"},{"ok":false,"unit":"c.service","error":{"code":"gone","hint":"unit removed"}}]}"#,
+                ),
             ],
             b"pw\n",
             1,
@@ -744,16 +835,37 @@ fn systemd_cred() {
             b"",
             3,
         ),
-        refused("systemd-cred, a scope it can't read", &["systemd-cred", "API", "--unit", "u", "--scope", "nope"]),
-        refused("systemd-cred with no name", &["systemd-cred", "--unit", "u"]),
+        refused(
+            "systemd-cred, a scope it can't read",
+            &["systemd-cred", "API", "--unit", "u", "--scope", "nope"],
+        ),
+        refused(
+            "systemd-cred with no name",
+            &["systemd-cred", "--unit", "u"],
+        ),
         refused("systemd-cred with no unit", &["systemd-cred", "API"]),
-        refused("systemd-cred, two names", &["systemd-cred", "A", "B", "--unit", "u"]),
-        refused("systemd-cred --replace --unit", &["systemd-cred", "A", "--replace", "--unit", "u"]),
-        refused("systemd-cred --remove --restart", &["systemd-cred", "A", "--unit", "u", "--remove", "--restart"]),
-        refused("systemd-cred --unit with no value", &["systemd-cred", "A", "--unit"]),
+        refused(
+            "systemd-cred, two names",
+            &["systemd-cred", "A", "B", "--unit", "u"],
+        ),
+        refused(
+            "systemd-cred --replace --unit",
+            &["systemd-cred", "A", "--replace", "--unit", "u"],
+        ),
+        refused(
+            "systemd-cred --remove --restart",
+            &["systemd-cred", "A", "--unit", "u", "--remove", "--restart"],
+        ),
+        refused(
+            "systemd-cred --unit with no value",
+            &["systemd-cred", "A", "--unit"],
+        ),
         refused("systemd-cred --value", &["systemd-cred", "A", "--value=x"]),
         refused("systemd-cred --system", &["systemd-cred", "A", "--system"]),
-        refused("systemd-cred, an unknown flag", &["systemd-cred", "A", "--nope"]),
+        refused(
+            "systemd-cred, an unknown flag",
+            &["systemd-cred", "A", "--nope"],
+        ),
         in_k2,
     ] {
         rig.check(&c);

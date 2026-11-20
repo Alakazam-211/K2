@@ -19,14 +19,14 @@ use crate::prompt;
 use k2_client::brand::{CLI_NAME as CLI, PRODUCT_NAME as PRODUCT};
 
 /// `x="$(printf '%s' "$_SC_BODY" | python3 -c '<f>')"`: what the Python
-/// prints, its last newlines dropped. A raise prints its traceback on
-/// stderr and leaves it empty; the shell goes on.
-fn py_text(body: &[u8], f: impl FnOnce(&Value) -> R<String>) -> String {
+/// prints, its last newlines dropped. A raise prints its traceback, and
+/// `set -e` ends the command with the Python's exit 1.
+fn py_text(body: &[u8], f: impl FnOnce(&Value) -> R<String>) -> Result<String, Exit> {
     match confirm::load(body).and_then(|v| f(&v)) {
-        Ok(x) => x.trim_end_matches('\n').to_string(),
+        Ok(x) => Ok(x.trim_end_matches('\n').to_string()),
         Err(e) => {
             out::stderr_line(e.text().trim_end_matches('\n'));
-            String::new()
+            Err(Exit::Error)
         }
     }
 }
@@ -105,7 +105,7 @@ pub fn recovery(ctx: &mut Ctx, act: &str) -> Result<Exit, Exit> {
         with_token("{}", &tok)
     };
     let r = sock_post(ctx, &format!("recovery/{act}"), rb.as_bytes())?;
-    let rid = py_text(&r.body, |v| at(v, "id"));
+    let rid = py_text(&r.body, |v| at(v, "id"))?;
     // The printer's stdout goes to stderr too (`>&2`): off a terminal
     // Python writes its traceback first and its buffered lines at exit.
     let shown = render(&r.body, phrase);
@@ -115,6 +115,10 @@ pub fn recovery(ctx: &mut Ctx, act: &str) -> Result<Exit, Exit> {
     } else {
         prompt::prompt(&shown.stderr);
         prompt::prompt(&shown.stdout);
+    }
+    // A printer that raised ends the command (`set -e`).
+    if shown.exit != Exit::Ok {
+        return Err(Exit::Error);
     }
     let mut words = Vec::new();
     for n in [3, 11, 20] {
@@ -240,7 +244,7 @@ pub fn rollback(
     ctx.person_guard()?;
     let base = merge(&[sj, nj]);
     let sh = sock_get(ctx, &format!("show?{}", py::urlencode(&base)))?;
-    let sid = py_text(&sh.body, |v| at(&idx(v, "secret")?, "id"));
+    let sid = py_text(&sh.body, |v| at(&idx(v, "secret")?, "id"))?;
     let placed = py_test(&sh.body, |v| {
         for p in items(&or_list(get(v, "placements")?))? {
             if is(&get(&p, "target")?, "systemd_cred") && above_zero(&get(&p, "version")?)? {
@@ -343,7 +347,7 @@ pub fn backup(ctx: &mut Ctx, o: &Opts) -> Result<Exit, Exit> {
                     }
                 }
                 Ok(String::new())
-            });
+            })?;
             if bfp.is_empty() {
                 out::stderr_line("not_found: this vault has no backup key");
                 return Err(Exit::Error);
@@ -440,9 +444,7 @@ pub fn restore(ctx: &mut Ctx, o: &Opts) -> Result<Exit, Exit> {
         prompt::read_all_stdin()
     };
     if secret.is_empty() {
-        return Err(usage(
-            "usage: no recovery words or backup key given".into(),
-        ));
+        return Err(usage("usage: no recovery words or backup key given".into()));
     }
     // `sys.stdin.read().strip()` of the value.
     let text = confirm::text_of_bytes(py_strip(secret.expose()));

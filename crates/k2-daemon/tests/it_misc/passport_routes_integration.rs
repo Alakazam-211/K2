@@ -112,6 +112,7 @@ fn code(r: &Resp, what: &str) -> String {
 
 struct Env {
     port: u16,
+    tunnel_port: u16,
     passport: String,
     own: String,
     other: String,
@@ -151,6 +152,7 @@ async fn env(t: &k2_core::test_env::TempHome) -> (Env, test_harness::TestDaemon)
     let s = |p: &Path| p.to_string_lossy().to_string();
     let e = Env {
         port,
+        tunnel_port: d.tunnel_port,
         passport,
         own: s(&paths[0]),
         other: s(&paths[1]),
@@ -364,4 +366,19 @@ async fn owner_only_routes_still_refuse_a_passport() {
     }
     let r = http(e.port, "GET", "/cli/zen/history", Some(e.passport.as_str()));
     assert_eq!(r.status, 403, "{}", r.raw);
+}
+
+/// Never through the tunnel: the same passport that is admitted locally
+/// gets the route's own refusal when the request came in through it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_passport_through_the_tunnel_is_refused() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    for path in [format!("/cli/agent/conf?q={}", enc(&e.own)), format!("/cli/context/layers?project={}", enc(&e.own)), "/cli/presets/list".to_string()] {
+        let r = http(e.port, "GET", &path, Some(e.passport.as_str()));
+        assert_eq!(r.status, 200, "locally, {path}: {}", r.raw);
+        let r = http(e.tunnel_port, "GET", &path, Some(e.passport.as_str()));
+        assert_eq!(r.status, 403, "through the tunnel, {path}: {}", r.raw);
+        assert!(r.raw.contains(REFUSED), "through the tunnel, {path}: the route's own refusal: {}", r.raw);
+    }
 }

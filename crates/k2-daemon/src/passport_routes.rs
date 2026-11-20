@@ -12,6 +12,9 @@
 //!   ([`tcp_passport`]: `session_token::validate_hook`, a session on this
 //!   computer only), so no route's owner-token arm sees it; every other
 //!   credential misses that arm and meets the route's arm as before;
+//! - never through the tunnel: a request that came in through it misses
+//!   the arm whatever it carries (as a chat pass is never minted there), so
+//!   a passport there meets the route's own arm, which refuses it;
 //! - [`serve_tcp`] strips any identity keys the request sent, keeps its own
 //!   `project=` claim (`caller_workspace::keep_client_project`) and stamps
 //!   the passport (`caller_workspace::stamp_principal`): `project`,

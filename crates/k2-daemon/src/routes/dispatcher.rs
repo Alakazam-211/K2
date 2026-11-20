@@ -2133,7 +2133,7 @@ async fn handle_one_request(
     }
 
     match path.as_str() {
-        p if crate::passport_routes::tcp_passport(p, &query, bearer_token.as_deref(), state.token.as_str()).is_some() => crate::passport_routes::serve_tcp(&mut *stream, &mut buf, is_post, p, &query, bearer_token.as_deref(), state.token.as_str()).await,
+        p if ingress != Ingress::Tunnel && crate::passport_routes::tcp_passport(p, &query, bearer_token.as_deref(), state.token.as_str()).is_some() => crate::passport_routes::serve_tcp(&mut *stream, &mut buf, is_post, p, &query, bearer_token.as_deref(), state.token.as_str()).await,
         // phone-web-off: the pairing link's landing page and the iOS
         // universal-link file. Static, no credential, not under /cli/ (so
         // never behind the web-access wall). See `crate::pair_page`.

@@ -564,7 +564,10 @@ fn the_shell_s_own_settings_go_to_the_shell() {
             .map(|(k, v)| (OsString::from(k), OsString::from(v)))
             .collect()
     };
-    assert!(!shell_settings(v(&[("HOME", "/h"), ("_K2_REFUSAL_AREA", "")])));
+    assert!(!shell_settings(v(&[
+        ("HOME", "/h"),
+        ("_K2_REFUSAL_AREA", "")
+    ])));
     // Nothing in the shell reads it any more.
     assert!(!shell_settings(v(&[("_CP_404_EXIT", "4")])));
     assert!(shell_settings(v(&[("K2_CJ_extra", "")])));

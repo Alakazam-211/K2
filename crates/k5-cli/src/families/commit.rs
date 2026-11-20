@@ -346,7 +346,11 @@ pub fn reviews(raw: &str) -> Shown {
         Ok(d) => d,
         // `except ValueError:` does not catch a RecursionError.
         Err(f) if f.class == "RecursionError" => {
-            return raised(String::new(), String::new(), &Raise::at(line::LOADS, f.last_line()));
+            return raised(
+                String::new(),
+                String::new(),
+                &Raise::at(line::LOADS, f.last_line()),
+            );
         }
         Err(_) => {
             let why = if raw.chars().all(super::py_space) {
@@ -398,7 +402,10 @@ fn rows(data: &Value, out: &mut String) -> Result<(), Raise> {
         };
         let agent = g("agentName", super::s("?"), line::AGENT)?;
         let branch = g("branch", super::s(""), line::BRANCH)?;
-        let items = super::py_len(&g("workItems", Value::Array(vec![]), line::ITEMS)?, line::ITEMS)?;
+        let items = super::py_len(
+            &g("workItems", Value::Array(vec![]), line::ITEMS)?,
+            line::ITEMS,
+        )?;
         let files = super::py_len(
             &g("diffSummary", Value::Array(vec![]), line::FILES)?,
             line::FILES,
@@ -487,10 +494,12 @@ mod tests {
                 "{raw:?}"
             );
         }
-        assert!(reviews("5").stderr.ends_with("TypeError: 'int' object is not iterable\n"));
-        assert!(reviews(r#"["x"]"#)
+        assert!(reviews("5")
             .stderr
-            .ends_with("line 19, in <module>\nAttributeError: 'str' object has no attribute 'get'\n"));
+            .ends_with("TypeError: 'int' object is not iterable\n"));
+        assert!(reviews(r#"["x"]"#).stderr.ends_with(
+            "line 19, in <module>\nAttributeError: 'str' object has no attribute 'get'\n"
+        ));
     }
 
     /// The reader's lines, as the shell has them.

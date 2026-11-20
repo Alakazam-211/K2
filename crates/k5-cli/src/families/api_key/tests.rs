@@ -18,12 +18,14 @@ fn echoed(line: &str) -> String {
 fn the_shell_s_lines() {
     let f = cmd_api_key();
     // -h or --help anywhere: the usage on stdout, exit 0, nothing sent.
-    assert!(f.contains("    if _wants_help \"$@\"; then\n        _api_key_usage\n        return 0\n"));
+    assert!(
+        f.contains("    if _wants_help \"$@\"; then\n        _api_key_usage\n        return 0\n")
+    );
     // An unknown verb: the usage on stderr, exit 1.
     assert!(f.contains("        *)\n            _api_key_usage >&2\n            exit 1 ;;"));
     let text = source("talk-and-workspace.sh");
     let usage = text
-        .split_once("_api_key_usage() {\n")
+        .split_once("\n_api_key_usage() {\n")
         .expect("_api_key_usage")
         .1
         .split_once("\n}\n")

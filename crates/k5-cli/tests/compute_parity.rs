@@ -503,7 +503,10 @@ fn compute_an_exported_404_exit_changes_nothing() {
             "_CP_404_EXIT set: get's 404 is 4",
             &["get", "j1"],
             &[("_CP_404_EXIT", "0")],
-            vec![Reply::Answer(404, r#"{"error":{"code":"not_found"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"not_found"}}"#.into(),
+            )],
             owner_and_port,
             4,
             1,

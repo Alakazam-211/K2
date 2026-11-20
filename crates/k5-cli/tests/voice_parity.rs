@@ -377,7 +377,10 @@ fn voice_words_as_the_shell_reads_them() {
         bad("an unknown verb", &["nope"]),
         // `_voice_bad` builds its line with json.dumps: quotes,
         // backslashes and characters outside ASCII are escaped.
-        bad("an unknown flag with a quote: escaped", &["rooms", "--x\"y"]),
+        bad(
+            "an unknown flag with a quote: escaped",
+            &["rooms", "--x\"y"],
+        ),
         bad("an unknown flag with a backslash", &["rooms", "--x\\y"]),
         bad("an unknown verb outside ASCII", &["n\u{e9}pe \u{1f600}"]),
         bad("a room with a quote", &["kick", "l\"x"]),

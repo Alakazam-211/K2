@@ -32,7 +32,7 @@ fn the_shell_s_lines() {
     assert!(f.contains("            _api_usage >&2\n            exit 2\n"));
     let text = source("talk-and-workspace.sh");
     let usage = text
-        .split_once("_api_usage() {\n")
+        .split_once("\n_api_usage() {\n")
         .expect("_api_usage")
         .1
         .split_once("\n}\n")

@@ -695,7 +695,9 @@ fn the_owner_token_in_a_session() {
                 "code: TCP with the passport",
                 &["code", "pr_7"],
                 &[],
-                vec![ok(r#"{"error":{"code":"not_found","hint":"no such request"}}"#)],
+                vec![ok(
+                    r#"{"error":{"code":"not_found","hint":"no such request"}}"#,
+                )],
                 owner_and_port,
                 4,
                 1,
@@ -708,7 +710,9 @@ fn the_owner_token_in_a_session() {
                 "disable refused: the person line",
                 &["disable"],
                 &[],
-                vec![ok(r#"{"error":{"code":"owner_only","hint":"only the owner turns Postal off"}}"#)],
+                vec![ok(
+                    r#"{"error":{"code":"owner_only","hint":"only the owner turns Postal off"}}"#,
+                )],
                 owner_and_port,
                 3,
                 1,
@@ -720,7 +724,9 @@ fn the_owner_token_in_a_session() {
                 "people only: the person line",
                 &["accept", "pr_7"],
                 &[],
-                vec![ok(r#"{"error":{"code":"postal_people_only","hint":"a person accepts"}}"#)],
+                vec![ok(
+                    r#"{"error":{"code":"postal_people_only","hint":"a person accepts"}}"#,
+                )],
                 owner_and_port,
                 3,
                 1,
@@ -732,7 +738,9 @@ fn the_owner_token_in_a_session() {
                 "a hint that says where: no person line",
                 &["disable"],
                 &[],
-                vec![ok(r#"{"error":{"code":"owner_only","hint":"open the Postal tab"}}"#)],
+                vec![ok(
+                    r#"{"error":{"code":"owner_only","hint":"open the Postal tab"}}"#,
+                )],
                 owner_and_port,
                 3,
                 1,
@@ -775,15 +783,18 @@ fn the_owner_token_in_a_session() {
     }
     // A session with no passport: two lines, exit 3, nothing sent, for
     // every verb that reaches the daemon, the owner token on disk or not.
-    for (args, setup) in [
-        (&["status"][..], owner_and_port as fn(&Rig)),
-        (&["settings"], owner_and_port),
-        (&["disable"], owner_and_port),
-        (&["code", "pr_7"], owner_and_port),
-        (&["accept"], owner_and_port),
-        (&["send", ADDR, "hi"], owner_and_port),
-        (&["route", "--clear"], owner_and_port),
-        (&["status"], port_only),
+    // With no token at all, the connection gate stops `status` first
+    // (exit 1); `send` and `route` skip that gate and still stop here.
+    for (args, setup, code) in [
+        (&["status"][..], owner_and_port as fn(&Rig), 3),
+        (&["settings"], owner_and_port, 3),
+        (&["disable"], owner_and_port, 3),
+        (&["code", "pr_7"], owner_and_port, 3),
+        (&["accept"], owner_and_port, 3),
+        (&["send", ADDR, "hi"], owner_and_port, 3),
+        (&["route", "--clear"], owner_and_port, 3),
+        (&["status"], port_only, 1),
+        (&["send", ADDR, "hi"], port_only, 3),
     ] {
         let c = case(
             "a session with no passport: nothing sent",
@@ -791,7 +802,7 @@ fn the_owner_token_in_a_session() {
             &[("K2_HOOK_SOCK", "{sock}")],
             vec![],
             setup,
-            3,
+            code,
             0,
         );
         rig.check(&c);
@@ -809,8 +820,10 @@ fn the_owner_token_in_a_session() {
     for c in rows.iter().filter(|c| c.requests > 0) {
         let (_, log) = rig.binary(c, false);
         assert!(
-            log.iter().all(|l| l.contains(&format!("Authorization: Bearer {PASSPORT}\n"))
-                && !l.contains(OWNER)),
+            log.iter().all(
+                |l| l.contains(&format!("Authorization: Bearer {PASSPORT}\n"))
+                    && !l.contains(OWNER)
+            ),
             "{}: the binary sent the owner token in a session: {log:?}",
             c.name
         );

@@ -357,9 +357,7 @@ fn run_verb(args: &[OsString], sub: &str, rest: &[&str], mut settings: Settings)
     };
     // In a session: the passport, never the owner token from disk.
     let in_session = settings.session;
-    if in_session
-        && SESSION_VERBS.contains(&sub)
-        && !matches!(settings.auth, Auth::Passport { .. })
+    if in_session && SESSION_VERBS.contains(&sub) && !matches!(settings.auth, Auth::Passport { .. })
     {
         out::stderr_line(NO_PASSPORT);
         out::stderr_line(PERSON_LINE);

@@ -387,17 +387,15 @@ fn compute_stats_forms_the_shell_answers() {
         compare: Compare::Shell,
         ..c
     };
-    let cases = vec![
-        shell(case(
-            "--help",
-            &["stats", JOB, "--help"],
-            &[],
-            vec![],
-            owner_and_port,
-            0,
-            0,
-        )),
-    ];
+    let cases = vec![shell(case(
+        "--help",
+        &["stats", JOB, "--help"],
+        &[],
+        vec![],
+        owner_and_port,
+        0,
+        0,
+    ))];
     for c in cases {
         rig.check(&c);
     }

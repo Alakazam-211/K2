@@ -427,20 +427,18 @@ fn the_session_and_the_gates() {
 #[test]
 fn hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");
-    let v = vec![
-        with(
-            with_passport(&[("K2_HOOK_SOCK", "{sock}"), ("CODEX_THREAD_ID", "t1")]),
-            shell(case(
-                "a CODEX_ setting",
-                &[],
-                &[],
-                vec![ok(CAPS)],
-                nothing,
-                0,
-                1,
-            )),
-        ),
-    ];
+    let v = vec![with(
+        with_passport(&[("K2_HOOK_SOCK", "{sock}"), ("CODEX_THREAD_ID", "t1")]),
+        shell(case(
+            "a CODEX_ setting",
+            &[],
+            &[],
+            vec![ok(CAPS)],
+            nothing,
+            0,
+            1,
+        )),
+    )];
     for c in v {
         rig.check(&c);
     }

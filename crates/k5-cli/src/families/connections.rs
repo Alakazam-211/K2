@@ -224,8 +224,8 @@ fn run_with(
             return Exit::Error;
         }
         Form::Help => {
-            let page = crate::text::help("connections")
-                .expect("the connections help page is embedded");
+            let page =
+                crate::text::help("connections").expect("the connections help page is embedded");
             return match out::stdout(page) {
                 Ok(()) => Exit::Ok,
                 Err(e) => out::after_stdout_error(&e),

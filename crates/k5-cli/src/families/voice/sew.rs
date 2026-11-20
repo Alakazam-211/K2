@@ -285,9 +285,9 @@ pub fn env_text(bytes: &[u8]) -> Value {
 /// A variable the shell's helpers read from the environment and no caller
 /// here sets (see the module's notes): the command is the shell's.
 pub fn env_shell(names: impl IntoIterator<Item = OsString>) -> bool {
-    names.into_iter().any(|n| {
-        n.to_str().is_some_and(|n| n == "_K2_REFUSAL_AREA")
-    })
+    names
+        .into_iter()
+        .any(|n| n.to_str().is_some_and(|n| n == "_K2_REFUSAL_AREA"))
 }
 
 #[cfg(test)]
@@ -412,8 +412,11 @@ mod tests {
             r#"        404) exit "$not_found" ;;"#,
             r#"    _compute_call_nf 3 "$@""#,
             r#"        *) exit 3 ;;"#,
-            r#"        out[key[:-2]] = float(v) if "." in v else int(v)"#,
-            r#"        out[key[:-2]] = v == "1""#,
+            // `_compute_json` reads its arguments on stdin, never the
+            // environment.
+            r#"            out[key[:-2]] = float(v) if "." in v else int(v)"#,
+            r#"            out[key[:-2]] = v == "1""#,
+            r#"    _k2_stdin_secrets ${_pairs[@]+"${_pairs[@]}"} | python3 -c '"#,
         ] {
             assert!(
                 text.lines().any(|l| l == shell),

@@ -164,8 +164,22 @@ fn fetch_json_then_help_sends_nothing() {
             "--json",
             "--help",
         ][..],
-        &["fetch", "https://api.example.com/x", "--secret", "API", "-d", "-h"],
-        &["fetch", "https://api.example.com/x", "-H", "--help", "--secret", "API"],
+        &[
+            "fetch",
+            "https://api.example.com/x",
+            "--secret",
+            "API",
+            "-d",
+            "-h",
+        ],
+        &[
+            "fetch",
+            "https://api.example.com/x",
+            "-H",
+            "--help",
+            "--secret",
+            "API",
+        ],
     ] {
         let mut c = VCase::new("fetch: help where a value goes, nothing sent", args);
         c.handed = true;

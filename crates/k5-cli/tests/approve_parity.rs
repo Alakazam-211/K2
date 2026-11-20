@@ -396,7 +396,11 @@ fn status_cancel_and_agents_answer_as_the_shell_does() {
             &["agents", "w", "on", "--help"],
             0,
         )),
-        shell(stop("status -h: the usage, nothing sent", &["status", "-h"], 0)),
+        shell(stop(
+            "status -h: the usage, nothing sent",
+            &["status", "-h"],
+            0,
+        )),
     ];
     for c in v {
         rig.check(&c);

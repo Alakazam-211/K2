@@ -20,6 +20,7 @@
 #   2. sdk-server-dist.mjs     sdk/server/src -> sdk/server/dist (reads 1)
 #   3. gen-cli-explorer-catalog.mjs   cli/k2 -> cli-catalog.generated.json (reads 1)
 #      spec-census.py          cli/src -> crates/k5-cli/tests/data/spec_census.tsv
+#      router-forms.py         cli/src -> crates/k5-cli/tests/data/router_forms.tsv
 #   4. build-styles.mjs        styles -> styles.generated.css / .ts
 #   5. the CLI goldens (tests/golden/permission_off): only checked. They
 #      pin what the CLI prints with permissions off, so a difference is for
@@ -86,6 +87,10 @@ run "CLI explorer catalog" node scripts/gen-cli-explorer-catalog.mjs $(flag)
 if [ -f scripts/spec-census.py ]; then
     # shellcheck disable=SC2046
     run "spec census" python3 scripts/spec-census.py $(flag)
+fi
+if [ -f scripts/router-forms.py ]; then
+    # shellcheck disable=SC2046
+    run "router forms" python3 scripts/router-forms.py $(flag)
 fi
 # shellcheck disable=SC2046
 run "styles" node scripts/build-styles.mjs $(flag)

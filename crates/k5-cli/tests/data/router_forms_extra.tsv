@@ -1,0 +1,21 @@
+# Router forms the parser in scripts/router-forms.py does not find, kept by hand.
+# One form per row: the words to run it with, the code that answers it, and why
+# the parser misses it. A row the parser finds fails the generator: take it out.
+form	argv	anchor	reason
+compute node servers add	compute node servers n1 add	cli/src/compute-node.sh:cmd_compute_node_servers	the verb follows the node name
+compute node servers approve	compute node servers n1 approve	cli/src/compute-node.sh:cmd_compute_node_servers	the verb follows the node name
+compute node servers deny	compute node servers n1 deny	cli/src/compute-node.sh:cmd_compute_node_servers	the verb follows the node name
+compute node servers limits	compute node servers n1 limits	cli/src/compute-node.sh:cmd_compute_node_servers	the verb follows the node name
+compute node servers pause	compute node servers n1 pause	cli/src/compute-node.sh:cmd_compute_node_servers	the verb follows the node name
+compute node servers resume	compute node servers n1 resume	cli/src/compute-node.sh:cmd_compute_node_servers	the verb follows the node name
+compute node servers revoke	compute node servers n1 revoke	cli/src/compute-node.sh:cmd_compute_node_servers	the verb follows the node name
+compute node servers owner	compute node servers n1 owner	cli/src/compute-node.sh:cmd_compute_node_servers	the verb follows the node name
+compute node policy show	compute node policy n1 show	cli/src/compute-node.sh:cmd_compute_node	the verb follows the node name (act="${2:-show}")
+compute node policy set	compute node policy n1 set	cli/src/compute-node.sh:cmd_compute_node	the verb follows the node name (act="${2:-show}")
+zen garden access add	zen garden access g1 add	cli/src/garden-access.sh:cmd_zen_garden_access	the verb follows the garden name (pos[1])
+zen garden access ask	zen garden access g1 ask	cli/src/garden-access.sh:cmd_zen_garden_access	the verb follows the garden name (pos[1])
+zen sync on	zen sync g1 on	cli/src/garden-access.sh:cmd_zen_sync	the verb follows the garden name (pos[1])
+zen sync undo	zen sync g1 undo	cli/src/garden-access.sh:cmd_zen_sync	the verb follows the garden name (pos[1])
+zen sync keep-previous	zen sync g1 keep-previous	cli/src/garden-access.sh:cmd_zen_sync	the verb follows the garden name (pos[1])
+zen sync preview	zen sync g1 preview	cli/src/garden-access.sh:cmd_zen_sync	the verb follows the garden name (pos[1])
+doc replace-section	doc replace-section notes.md	cli/src/doc.sh:cmd_doc	a verb of the doc's own pack: the `*)` arm hands any word to the daemon's tools

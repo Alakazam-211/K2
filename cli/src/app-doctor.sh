@@ -1911,9 +1911,13 @@ _app_rt_post_file() {
             return 0
         fi
     fi
+    # TCP: in a session whose cell socket failed, the passport, never the
+    # owner token from disk (_k2_sock_fallback_token).
+    local _K2_TCP_TOKEN="${TOKEN:-}"
+    _k2_sock_fallback_token "$sock" "$out"
     _K2_CFG=""
     _k2_cfg_add url "${BASE_URL}${path}"
-    _k2_cfg_auth "$TOKEN"
+    _k2_cfg_auth "$_K2_TCP_TOKEN"
     _k2_cfg_add data-binary "@$file"
     out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" \
         -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000')"

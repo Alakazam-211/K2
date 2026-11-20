@@ -475,15 +475,23 @@ _doc_xfer() {
             return 0
         fi
     fi
+    # TCP: in a session whose cell socket failed, the passport, never the
+    # owner token from disk (_k2_sock_fallback_token). The socket's "not
+    # served" answer, if any, is in OUTFILE.
+    local _K2_TCP_TOKEN="${TOKEN:-}" sock_said=""
+    if grep -q "not served on cell socket" "$outf" 2>/dev/null; then
+        sock_said="not served on cell socket"
+    fi
+    _k2_sock_fallback_token "$sock" "$sock_said"
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         [ -n "$query" ] && _k2_cfg_add data "$query"
         code="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 300 -o "$outf" -w '%{http_code}' 2>/dev/null)" || code="000"
     else
         _k2_cfg_add url "${BASE_URL}${path}"
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         _k2_cfg_add data-binary "@$bodyf"
         code="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 300 \
             -H "Content-Type: application/json" -o "$outf" -w '%{http_code}' 2>/dev/null)" || code="000"

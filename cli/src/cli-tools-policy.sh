@@ -565,6 +565,56 @@ _k2_follow_port_move() {
 }
 # END_CLI_CURL_CFG
 
+# BEGIN_CLI_SOCKET_FIRST_AUTH
+# A socket-first sender (cli_send, cli_send_json, _compute_send,
+# _sidecar_send, _doc_xfer, _app_rt_post_file) tries the session's cell
+# socket with the passport, then goes on over loopback TCP. In a session,
+# when the socket failed (its file is missing, the connect failed, or it
+# gave no answer), that TCP request carries the session's passport, never
+# the owner token k2 read from disk ($DISK_OWNER_TOKEN). With no passport,
+# nothing is sent. When the socket works, nothing changes, and a route the
+# socket says it doesn't serve goes on over TCP as before.
+#
+# A session: a passport ($SCOPED_TOKEN) or the session marker
+# ($K2_HOOK_SOCK, any of its names).
+_K2_NO_OWNER_WRITE_LINE="Error: in a session, K2 doesn't act as the owner; this session has no passport, so nothing was sent."
+
+# True when $TOKEN is the owner token from disk and this is a session.
+_k2_token_is_session_owner() {
+    [ -n "${DISK_OWNER_TOKEN:-}" ] && [ "${TOKEN:-}" = "$DISK_OWNER_TOKEN" ] || return 1
+    [ -n "${SCOPED_TOKEN:-}" ] || [ -n "${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}" ]
+}
+
+# _k2_session_tcp_token: set _K2_TCP_TOKEN to $TOKEN, or to the session's
+# passport in place of the owner token from disk. A session with no
+# passport: the line above, and the command ends with 1 before anything is
+# sent (_k2_end_command, so a sender inside $(...) ends the whole command).
+_k2_session_tcp_token() {
+    _K2_TCP_TOKEN="${TOKEN:-}"
+    _k2_token_is_session_owner || return 0
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        _K2_TCP_TOKEN="$SCOPED_TOKEN"
+        return 0
+    fi
+    echo "$_K2_NO_OWNER_WRITE_LINE" >&2
+    _k2_end_command 1
+}
+
+# _k2_sock_fallback_token SOCK OUT: set _K2_TCP_TOKEN for a socket-first
+# sender's TCP request. SOCK is the session's cell socket path ("" when
+# this shell has none: TCP is the normal path, $TOKEN as before); OUT is
+# what the socket answered, if it was tried. The socket's own "not served
+# on cell socket" answer keeps $TOKEN: the socket works, and the route is
+# served over TCP. A remote host (_cli_skip_uds) keeps its own token.
+_k2_sock_fallback_token() {
+    _K2_TCP_TOKEN="${TOKEN:-}"
+    [ -n "${1:-}" ] || return 0
+    _cli_skip_uds && return 0
+    case "${2:-}" in *"not served on cell socket"*) return 0 ;; esac
+    _k2_session_tcp_token
+}
+# END_CLI_SOCKET_FIRST_AUTH
+
 # BEGIN_CLI_STALE_PASSPORT
 # Codex 0.155+ runs every interactive session's tool commands under ONE
 # shared, detached app-server per CODEX_HOME (`codex app-server --listen

@@ -1039,6 +1039,56 @@ _k2_follow_port_move() {
 }
 # END_CLI_CURL_CFG
 
+# BEGIN_CLI_SOCKET_FIRST_AUTH
+# A socket-first sender (cli_send, cli_send_json, _compute_send,
+# _sidecar_send, _doc_xfer, _app_rt_post_file) tries the session's cell
+# socket with the passport, then goes on over loopback TCP. In a session,
+# when the socket failed (its file is missing, the connect failed, or it
+# gave no answer), that TCP request carries the session's passport, never
+# the owner token k2 read from disk ($DISK_OWNER_TOKEN). With no passport,
+# nothing is sent. When the socket works, nothing changes, and a route the
+# socket says it doesn't serve goes on over TCP as before.
+#
+# A session: a passport ($SCOPED_TOKEN) or the session marker
+# ($K2_HOOK_SOCK, any of its names).
+_K2_NO_OWNER_WRITE_LINE="Error: in a session, K2 doesn't act as the owner; this session has no passport, so nothing was sent."
+
+# True when $TOKEN is the owner token from disk and this is a session.
+_k2_token_is_session_owner() {
+    [ -n "${DISK_OWNER_TOKEN:-}" ] && [ "${TOKEN:-}" = "$DISK_OWNER_TOKEN" ] || return 1
+    [ -n "${SCOPED_TOKEN:-}" ] || [ -n "${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}" ]
+}
+
+# _k2_session_tcp_token: set _K2_TCP_TOKEN to $TOKEN, or to the session's
+# passport in place of the owner token from disk. A session with no
+# passport: the line above, and the command ends with 1 before anything is
+# sent (_k2_end_command, so a sender inside $(...) ends the whole command).
+_k2_session_tcp_token() {
+    _K2_TCP_TOKEN="${TOKEN:-}"
+    _k2_token_is_session_owner || return 0
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        _K2_TCP_TOKEN="$SCOPED_TOKEN"
+        return 0
+    fi
+    echo "$_K2_NO_OWNER_WRITE_LINE" >&2
+    _k2_end_command 1
+}
+
+# _k2_sock_fallback_token SOCK OUT: set _K2_TCP_TOKEN for a socket-first
+# sender's TCP request. SOCK is the session's cell socket path ("" when
+# this shell has none: TCP is the normal path, $TOKEN as before); OUT is
+# what the socket answered, if it was tried. The socket's own "not served
+# on cell socket" answer keeps $TOKEN: the socket works, and the route is
+# served over TCP. A remote host (_cli_skip_uds) keeps its own token.
+_k2_sock_fallback_token() {
+    _K2_TCP_TOKEN="${TOKEN:-}"
+    [ -n "${1:-}" ] || return 0
+    _cli_skip_uds && return 0
+    case "${2:-}" in *"not served on cell socket"*) return 0 ;; esac
+    _k2_session_tcp_token
+}
+# END_CLI_SOCKET_FIRST_AUTH
+
 # BEGIN_CLI_STALE_PASSPORT
 # Codex 0.155+ runs every interactive session's tool commands under ONE
 # shared, detached app-server per CODEX_HOME (`codex app-server --listen
@@ -2082,7 +2132,11 @@ _uds_eligible() {
 #   UDS arm  → $SCOPED_TOKEN (Bearer)
 #   TCP arm  → $TOKEN, which _cli_apply_auth_for_verb already chose:
 #              Open tools may be disk-owner (COMPAT-58); ID/locked tools are
-#              SCOPED_TOKEN only (never the owner inversion).
+#              SCOPED_TOKEN only (never the owner inversion). For a route
+#              the cell socket serves, in a session whose socket failed
+#              (its file is missing, or it gave no answer), the TCP arm
+#              runs with the passport, never the owner token from disk
+#              (_k2_sock_fallback_token).
 #
 # 0.46.15: a POST goes again over TCP only when the cell socket took none
 # of it: the connect failed (curl 7, or 75 when the OS refused it
@@ -2101,13 +2155,14 @@ cli_send() {
         "$fn" "$endpoint" "$@"
         return
     fi
+    local out=""
     if [ -n "$sock" ] && [ -S "$sock" ] && _uds_eligible "$endpoint"; then
         # `|| rc=$?`, never `; rc=$?`: under `set -e` a cell socket that
         # refused or timed out ended the command right here, before the TCP
         # fallback, and the caller printed an empty answer (0.46.12:
         # `k2 inbox read` → "no usable answer: ''" from a session whose
         # socket nobody served).
-        local out rc=0 t0="$SECONDS"
+        local rc=0 t0="$SECONDS"
         out="$(_K2_NOANSWER_SOFT=1 "${fn}_uds" "$endpoint" "$@")" || rc=$?
         if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]]; then
             printf '%s' "$out"
@@ -2124,6 +2179,17 @@ cli_send() {
                     ;;
             esac
         fi
+    fi
+    if [ -n "$sock" ] && _uds_eligible "$endpoint"; then
+        # The TCP arm reads $TOKEN: the passport in its place for this one
+        # request when the socket failed in a session, then $TOKEN again.
+        local _K2_TCP_TOKEN="${TOKEN:-}" _K2_TOKEN_SAVED="${TOKEN:-}" trc
+        _k2_sock_fallback_token "$sock" "$out"
+        TOKEN="$_K2_TCP_TOKEN"
+        "$fn" "$endpoint" "$@"
+        trc=$?
+        TOKEN="$_K2_TOKEN_SAVED"
+        return "$trc"
     fi
     "$fn" "$endpoint" "$@"
 }
@@ -2176,8 +2242,10 @@ _cli_skip_uds() {
 #   passport's own workspace.
 #   Otherwise, or when the cell socket doesn't serve the route (an older
 #   daemon answers "not served on cell socket"), loopback TCP with
-#   `?token=$TOKEN` (owner outside K2; the passport inside, which the
-#   owner-only routes refuse with 403 rather than elevate).
+#   $TOKEN as Bearer (owner outside K2; the passport inside, which the
+#   owner-only routes refuse with 403 rather than elevate). In a session
+#   whose cell socket failed, that request carries the passport, never
+#   the owner token from disk (_k2_sock_fallback_token).
 # Credentials and bodies ride curl config on stdin (_k2_curl), never argv.
 # Status 000 = the daemon did not answer.
 # Each request may take up to 60 s; a caller whose route blocks longer
@@ -2216,15 +2284,19 @@ cli_send_json() {
             return
         fi
     fi
+    # TCP: in a session whose cell socket failed, the passport, never the
+    # owner token from disk (_k2_sock_fallback_token).
+    local _K2_TCP_TOKEN="${TOKEN:-}"
+    _k2_sock_fallback_token "$sock" "$out"
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     else
         _k2_cfg_add url "${BASE_URL}${path}"
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         _k2_cfg_add data-raw "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "$mt" \
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
@@ -12666,9 +12738,13 @@ _app_rt_post_file() {
             return 0
         fi
     fi
+    # TCP: in a session whose cell socket failed, the passport, never the
+    # owner token from disk (_k2_sock_fallback_token).
+    local _K2_TCP_TOKEN="${TOKEN:-}"
+    _k2_sock_fallback_token "$sock" "$out"
     _K2_CFG=""
     _k2_cfg_add url "${BASE_URL}${path}"
-    _k2_cfg_auth "$TOKEN"
+    _k2_cfg_auth "$_K2_TCP_TOKEN"
     _k2_cfg_add data-binary "@$file"
     out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" \
         -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000')"
@@ -27795,9 +27871,13 @@ _sidecar_send() {
             return
         fi
     fi
+    # TCP: in a session whose cell socket failed, the passport, never the
+    # owner token from disk (_k2_sock_fallback_token).
+    local _K2_TCP_TOKEN="${TOKEN:-}"
+    _k2_sock_fallback_token "$sock" "$out"
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         if [ -n "$payload" ]; then
             _k2_cfg_add data "$payload"
         fi
@@ -27806,7 +27886,7 @@ _sidecar_send() {
             -w $'\n%{http_code}' 2>/dev/null || true
     else
         _k2_cfg_add url "${BASE_URL}${path}"
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         _k2_cfg_add data-raw "$payload"
         _k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 120 \
@@ -30907,15 +30987,20 @@ _compute_send() {
             return
         fi
     fi
+    # TCP: in a session whose cell socket failed, the passport, never the
+    # owner token from disk (_k2_sock_fallback_token). `tcp` callers chose
+    # TCP: $TOKEN, as before.
+    local _K2_TCP_TOKEN="${TOKEN:-}"
+    [ "$force_tcp" = "tcp" ] || _k2_sock_fallback_token "$sock" "$out"
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
         _k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null || printf '\n000'
     else
         _k2_cfg_add url "${BASE_URL}${path}"
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         _k2_cfg_add data-raw "$payload"
         _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" \
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'
@@ -109429,15 +109514,23 @@ _doc_xfer() {
             return 0
         fi
     fi
+    # TCP: in a session whose cell socket failed, the passport, never the
+    # owner token from disk (_k2_sock_fallback_token). The socket's "not
+    # served" answer, if any, is in OUTFILE.
+    local _K2_TCP_TOKEN="${TOKEN:-}" sock_said=""
+    if grep -q "not served on cell socket" "$outf" 2>/dev/null; then
+        sock_said="not served on cell socket"
+    fi
+    _k2_sock_fallback_token "$sock" "$sock_said"
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         [ -n "$query" ] && _k2_cfg_add data "$query"
         code="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 300 -o "$outf" -w '%{http_code}' 2>/dev/null)" || code="000"
     else
         _k2_cfg_add url "${BASE_URL}${path}"
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         _k2_cfg_add data-binary "@$bodyf"
         code="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 300 \
             -H "Content-Type: application/json" -o "$outf" -w '%{http_code}' 2>/dev/null)" || code="000"

@@ -125,7 +125,11 @@ _uds_eligible() {
 #   UDS arm  → $SCOPED_TOKEN (Bearer)
 #   TCP arm  → $TOKEN, which _cli_apply_auth_for_verb already chose:
 #              Open tools may be disk-owner (COMPAT-58); ID/locked tools are
-#              SCOPED_TOKEN only (never the owner inversion).
+#              SCOPED_TOKEN only (never the owner inversion). For a route
+#              the cell socket serves, in a session whose socket failed
+#              (its file is missing, or it gave no answer), the TCP arm
+#              runs with the passport, never the owner token from disk
+#              (_k2_sock_fallback_token).
 #
 # 0.46.15: a POST goes again over TCP only when the cell socket took none
 # of it: the connect failed (curl 7, or 75 when the OS refused it
@@ -144,13 +148,14 @@ cli_send() {
         "$fn" "$endpoint" "$@"
         return
     fi
+    local out=""
     if [ -n "$sock" ] && [ -S "$sock" ] && _uds_eligible "$endpoint"; then
         # `|| rc=$?`, never `; rc=$?`: under `set -e` a cell socket that
         # refused or timed out ended the command right here, before the TCP
         # fallback, and the caller printed an empty answer (0.46.12:
         # `k2 inbox read` → "no usable answer: ''" from a session whose
         # socket nobody served).
-        local out rc=0 t0="$SECONDS"
+        local rc=0 t0="$SECONDS"
         out="$(_K2_NOANSWER_SOFT=1 "${fn}_uds" "$endpoint" "$@")" || rc=$?
         if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]]; then
             printf '%s' "$out"
@@ -167,6 +172,17 @@ cli_send() {
                     ;;
             esac
         fi
+    fi
+    if [ -n "$sock" ] && _uds_eligible "$endpoint"; then
+        # The TCP arm reads $TOKEN: the passport in its place for this one
+        # request when the socket failed in a session, then $TOKEN again.
+        local _K2_TCP_TOKEN="${TOKEN:-}" _K2_TOKEN_SAVED="${TOKEN:-}" trc
+        _k2_sock_fallback_token "$sock" "$out"
+        TOKEN="$_K2_TCP_TOKEN"
+        "$fn" "$endpoint" "$@"
+        trc=$?
+        TOKEN="$_K2_TOKEN_SAVED"
+        return "$trc"
     fi
     "$fn" "$endpoint" "$@"
 }
@@ -219,8 +235,10 @@ _cli_skip_uds() {
 #   passport's own workspace.
 #   Otherwise, or when the cell socket doesn't serve the route (an older
 #   daemon answers "not served on cell socket"), loopback TCP with
-#   `?token=$TOKEN` (owner outside K2; the passport inside, which the
-#   owner-only routes refuse with 403 rather than elevate).
+#   $TOKEN as Bearer (owner outside K2; the passport inside, which the
+#   owner-only routes refuse with 403 rather than elevate). In a session
+#   whose cell socket failed, that request carries the passport, never
+#   the owner token from disk (_k2_sock_fallback_token).
 # Credentials and bodies ride curl config on stdin (_k2_curl), never argv.
 # Status 000 = the daemon did not answer.
 # Each request may take up to 60 s; a caller whose route blocks longer
@@ -259,15 +277,19 @@ cli_send_json() {
             return
         fi
     fi
+    # TCP: in a session whose cell socket failed, the passport, never the
+    # owner token from disk (_k2_sock_fallback_token).
+    local _K2_TCP_TOKEN="${TOKEN:-}"
+    _k2_sock_fallback_token "$sock" "$out"
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     else
         _k2_cfg_add url "${BASE_URL}${path}"
-        _k2_cfg_auth "$TOKEN"
+        _k2_cfg_auth "$_K2_TCP_TOKEN"
         _k2_cfg_add data-raw "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "$mt" \
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"

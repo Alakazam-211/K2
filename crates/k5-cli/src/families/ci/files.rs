@@ -361,12 +361,17 @@ fn provenance_lines(body: &[u8], d: &str, n_st: usize, n_trust: usize, o: &mut S
     }
     let missing = p::or(at(8, p::get(&v, "missing"))?, empty());
     for (name, why) in sorted_items(&missing, 8)? {
-        let t = at(9, p::pct("  %-16s no statement: %s", &[Value::Str(name), why]))?;
+        let t = at(
+            9,
+            p::pct("  %-16s no statement: %s", &[Value::Str(name), why]),
+        )?;
         pl(o, &t);
     }
     pl(
         o,
-        &format!("check one: {CLI} compute verify {d}/provenance/<check>.intoto.jsonl --file <its file>"),
+        &format!(
+            "check one: {CLI} compute verify {d}/provenance/<check>.intoto.jsonl --file <its file>"
+        ),
     );
     Ok(())
 }
@@ -795,7 +800,8 @@ fn check_lines(body: &[u8], check: &str) -> R<String> {
     for c in at(5, p::iter(&checks))? {
         if !want.is_empty() {
             let name = at(6, p::idx(&c, "name"))?;
-            let wanted = matches!(&name, Value::Str(_)) && want.contains(&p::str_of(&name).as_str());
+            let wanted =
+                matches!(&name, Value::Str(_)) && want.contains(&p::str_of(&name).as_str());
             if !wanted {
                 continue;
             }
@@ -807,7 +813,10 @@ fn check_lines(body: &[u8], check: &str) -> R<String> {
         let desc = p::or(at(8, p::get(&c, "description"))?, s(""));
         let t = at(
             8,
-            p::pct("%s\t%s · job %s · %s · %s", &[job, name, short, state, desc]),
+            p::pct(
+                "%s\t%s · job %s · %s · %s",
+                &[job, name, short, state, desc],
+            ),
         )?;
         pl(&mut o, &t);
     }

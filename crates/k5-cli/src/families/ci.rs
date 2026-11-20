@@ -1,7 +1,8 @@
 //! `k5 ci`, as the shell CLI's `cmd_ci` answers it (`cli/src/ci.sh`): CI
 //! on K2 Compute, daemon-owned. Every form is the binary's: the help
-//! (`ci` alone, `help`, `-h` or `--help`, or `-h`/`--help` after a verb
-//! before any `--`), and these verbs, each with `--json`: `status`, `run
+//! (`ci` alone and `help` here; `-h` and `--help` are the front's page,
+//! and a longer line with either the front hands to the shell), and
+//! these verbs, each with `--json`: `status`, `run
 //! [--wait]`, `release [--plan|--wait]`, `stats`, `monitors`, `monitor
 //! add|mute|rm`, `tests`, `setup --plan`, `watch [on|off]`, `init`,
 //! `freeze`, `cache trust`, `evidence`, `provenance`, `logs` (`log`), and
@@ -10,7 +11,7 @@
 //!
 //! What runs, in the shell's order: the settings, the virtual desktop's
 //! guard (skipped with `-h` or `--help` anywhere), the connection gate
-//! (skipped for the help forms the shell's prelude names), `ci`'s tool
+//! (skipped for the help forms the shell's prelude names; [`gate_skipped`]), `ci`'s tool
 //! (`compute`, an `id` tool: a session with no passport is refused, exit
 //! 3), the words ([`parse`]; each problem is one `usage:` line, exit 2),
 //! the verb's requests through `_compute_send` ([`Cp`]) with `_ci_call`'s

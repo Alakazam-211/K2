@@ -108,5 +108,8 @@ fn the_files_helpers_read_paths_as_python_and_lines_as_read() {
             ("lab".to_string(), "job\tmore".to_string()),
         ]
     );
-    assert_eq!(tab_fields("-\tdocs\n"), vec![("-".to_string(), "docs".to_string())]);
+    assert_eq!(
+        tab_fields("-\tdocs\n"),
+        vec![("-".to_string(), "docs".to_string())]
+    );
 }

@@ -821,7 +821,12 @@ fn check_files(rig: &Rig, c: &Case, dir: &str, want: &[&str]) {
     let _ = std::fs::remove_dir_all(&d);
     assert_eq!(got[0], got[1], "{}: the files each side wrote", c.name);
     for w in want {
-        assert!(got[0].contains_key(*w), "{}: no {w} in {:?}", c.name, got[0].keys());
+        assert!(
+            got[0].contains_key(*w),
+            "{}: no {w} in {:?}",
+            c.name,
+            got[0].keys()
+        );
     }
 }
 
@@ -987,12 +992,7 @@ fn ci_evidence_writes_and_fetches_as_the_shell_does() {
             "evidence: the bundle, the statements, trust and each job's files",
             &["evidence", "r9", "--out", "ev"],
             &[],
-            vec![
-                ok(&evidence_json()),
-                ok(J2_LIST),
-                ok(J1_LIST),
-                ok(J1_A),
-            ],
+            vec![ok(&evidence_json()), ok(J2_LIST), ok(J1_LIST), ok(J1_A)],
             owner_and_port,
             0,
             4,
@@ -1011,12 +1011,7 @@ fn ci_evidence_writes_and_fetches_as_the_shell_does() {
             "evidence --reported: the named file in the bundle",
             &["evidence", "r9", "--out", "evr", "--reported", "a.txt"],
             &[],
-            vec![
-                ok(&evidence_json()),
-                ok(J2_LIST),
-                ok(J1_LIST),
-                ok(J1_A),
-            ],
+            vec![ok(&evidence_json()), ok(J2_LIST), ok(J1_LIST), ok(J1_A)],
             owner_and_port,
             0,
             4,
@@ -1069,12 +1064,7 @@ fn ci_evidence_writes_and_fetches_as_the_shell_does() {
             "evidence --reported: no job wrote it",
             &["evidence", "r9", "--out", "evn", "--reported", "b.txt"],
             &[],
-            vec![
-                ok(&evidence_json()),
-                ok(J2_LIST),
-                ok(J1_LIST),
-                ok(J1_A),
-            ],
+            vec![ok(&evidence_json()), ok(J2_LIST), ok(J1_LIST), ok(J1_A)],
             owner_and_port,
             1,
             4,
@@ -1083,12 +1073,7 @@ fn ci_evidence_writes_and_fetches_as_the_shell_does() {
             "evidence --reported: a path out of the job's files",
             &["evidence", "r9", "--out", "evp", "--reported", "../a.txt"],
             &[],
-            vec![
-                ok(&evidence_json()),
-                ok(J2_LIST),
-                ok(J1_LIST),
-                ok(J1_A),
-            ],
+            vec![ok(&evidence_json()), ok(J2_LIST), ok(J1_LIST), ok(J1_A)],
             owner_and_port,
             1,
             4,
@@ -1169,9 +1154,16 @@ const LOG_TESTED: &str = r#"{"short":"abcd1234","state":"done","result":{"tests"
 fn ci_logs_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "logs");
     let many: Vec<String> = (0..4000)
-        .map(|i| format!(r#"{{"name":"check-{i:05}-é","state":"queued","description":"waits for a node"}}"#))
+        .map(|i| {
+            format!(
+                r#"{{"name":"check-{i:05}-é","state":"queued","description":"waits for a node"}}"#
+            )
+        })
         .collect();
-    let big = format!(r#"{{"run":{{"short":"r1","checks":[{}]}}}}"#, many.join(","));
+    let big = format!(
+        r#"{{"run":{{"short":"r1","checks":[{}]}}}}"#,
+        many.join(",")
+    );
     let v = vec![
         case(
             "logs: each check's heading and log",
@@ -1220,7 +1212,10 @@ fn ci_logs_answer_as_the_shell_does() {
             &[],
             vec![
                 ok(&run_json("failure")),
-                Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no job"}}"#.into()),
+                Reply::Answer(
+                    404,
+                    r#"{"error":{"code":"not_found","hint":"no job"}}"#.into(),
+                ),
             ],
             owner_and_port,
             0,
@@ -1275,7 +1270,9 @@ fn ci_logs_answer_as_the_shell_does() {
             "logs: a job that can't be cut",
             &["logs", "r1"],
             &[],
-            vec![ok(r#"{"run":{"checks":[{"name":"a","state":"x","job":7}]}}"#)],
+            vec![ok(
+                r#"{"run":{"checks":[{"name":"a","state":"x","job":7}]}}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -1286,8 +1283,9 @@ fn ci_logs_answer_as_the_shell_does() {
     }
 }
 
-/// The help is the binary's: every form the shell's prelude reads as
-/// the help, with no daemon set up and behind the guard too.
+/// The help: `ci -h` and `ci --help` are the front's pages, `ci help` is
+/// the family's; any other line with `-h` or `--help` the front hands to
+/// the shell. Each with no daemon set up and behind the guard too.
 #[test]
 fn ci_help_forms() {
     let rig = Rig::new(VERB, "help");
@@ -1299,7 +1297,10 @@ fn ci_help_forms() {
         ("evidence -h", &["evidence", "r9", "--out", "d", "-h"]),
         ("provenance --help", &["provenance", "--help"]),
         ("logs -h", &["logs", "r1", "-h"]),
-        ("status --help after a flag", &["status", "--json", "--help"]),
+        (
+            "status --help after a flag",
+            &["status", "--json", "--help"],
+        ),
         ("an unknown verb with -h", &["bogus", "-h"]),
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 0, 0));
@@ -1347,19 +1348,23 @@ fn ci_help_forms() {
         3,
         0,
     ));
-    // A bash bug, copied (cli/src/ci.sh, cmd_ci's signer branch reads
-    // only the word after `signer` for the help): `signer remove <fp> -h`
-    // removes the signer. This row flips to "sends nothing" when the
-    // shell is fixed.
-    v.push(case(
-        "signer remove <fp> -h: the shell acts (a bash bug)",
-        &["signer", "remove", "fp1", "-h"],
-        &[],
-        vec![ok(r#"{"ok":true}"#)],
-        owner_and_port,
-        0,
-        1,
-    ));
+    // A bash bug (cli/src/ci.sh, cmd_ci's signer branch reads only the
+    // word after `signer` for the help): `signer remove <fp> -h` removes
+    // the signer. The front hands a `-h` line that is no help page to the
+    // shell, so both sides are the shell's. This row flips to "sends
+    // nothing" when the shell is fixed.
+    v.push(Case {
+        compare: Compare::Shell,
+        ..case(
+            "signer remove <fp> -h: the shell acts (a bash bug)",
+            &["signer", "remove", "fp1", "-h"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        )
+    });
     for c in v {
         rig.check(&c);
     }

@@ -104,6 +104,36 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
 }
 
+/// The rig's check, each side on its own stub's port: `daemon.port` holds
+/// that side's port, which the status prints, so it is masked as `{port}`
+/// in what each side prints and sends. Bash, the binary, and the binary
+/// with no `python3` on `PATH`.
+fn check_on_own_port(rig: &Rig, c: &Case) {
+    let mask =
+        |side: Side, t: &str| t.replace(&rig.stub_of(side).port.to_string(), "{port}");
+    rig.prepare(Side::Bash, c);
+    let out = rig.run(true, c);
+    let log: Vec<String> = rig
+        .read(Side::Bash, false, c.name)
+        .iter()
+        .map(|r| mask(Side::Bash, &normalise(r, false, VERB, c.name)))
+        .collect();
+    let bash = (
+        out.code,
+        mask(Side::Bash, &out.stdout),
+        mask(Side::Bash, &out.stderr),
+        log,
+    );
+    assert_eq!(bash.0, Some(c.code), "{}: bash's exit", c.name);
+    assert_eq!(bash.3.len(), c.requests, "{}: bash's requests", c.name);
+    for (side, without) in [(Side::Rust, false), (Side::NoPython3, true)] {
+        let (out, log) = rig.binary(c, without);
+        let log: Vec<String> = log.iter().map(|l| mask(side, l)).collect();
+        let got = (out.code, mask(side, &out.stdout), mask(side, &out.stderr), log);
+        assert_eq!(got, bash, "{}: {side:?} against bash", c.name);
+    }
+}
+
 #[test]
 fn daemon_status_answers_as_the_shell_does() {
     let rig = rig("status");
@@ -211,7 +241,7 @@ fn daemon_status_answers_as_the_shell_does() {
         ),
     ];
     for c in v {
-        rig.check(&c);
+        check_on_own_port(&rig, &c);
     }
 }
 

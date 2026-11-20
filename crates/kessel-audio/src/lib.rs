@@ -58,12 +58,16 @@
 //! [`AudioEngine`] is a `Send + Sync` handle; no async runtime is needed.
 //! Device callbacks only move samples through lock-free rings; one
 //! processing thread does the signal processing and codec work; a control
-//! thread handles devices and events. Every queue between the caller and
+//! thread handles devices and events. On macOS and iOS the processing thread
+//! runs real-time (the QoS class, Mach's time-constraint policy, and on iOS
+//! the audio unit's OS workgroup) and the capture callback wakes it;
+//! [`Stats::dsp_scheduling`] says which it got ([`DspScheduling`]). Every queue between the caller and
 //! the engine is bounded and lock-free, and the audio side never blocks on
 //! one: a full queue drops (and counts) instead.
 
 // The thread CPU clock (`stage::thread_cpu`, on macOS, iOS, Linux and
-// Android), macOS's microphone permission calls (`mic::macos`) and the phone
+// Android), the processing thread's scheduling (`sched::apple`, on macOS and
+// iOS), macOS's microphone permission calls (`mic::macos`) and the phone
 // backends' OS calls (`phone::ios`, `phone::android`) are the only `unsafe`
 // outside tests.
 #![cfg_attr(
@@ -107,6 +111,7 @@ mod null;
 mod phone;
 mod pipeline;
 mod resample;
+mod sched;
 mod stage;
 mod stats;
 #[cfg(feature = "cpal")]
@@ -141,6 +146,7 @@ pub use frame::{
 pub use jitter::JitterConfig;
 #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
 pub use phone::{OsEffects, OsVoiceConfig, PhoneMode, PhoneModeChange, RawCapture};
+pub use sched::DspScheduling;
 pub use stage::{
     CaptureStage, CaptureStageStats, StageBypassReason, StageClock, TransientEvent,
     DEFAULT_STAGE_GRACE, DEFAULT_STAGE_STARVATION_CUTOFF, MAX_STAGE_GRACE,

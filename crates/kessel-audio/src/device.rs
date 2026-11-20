@@ -9,18 +9,41 @@
 use crate::events::DeviceInfo;
 use crate::resample::{FromPipeline, ToPipeline};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::thread::Thread;
 use std::time::Duration;
 
-/// Counters the device threads bump.
+/// Counters the device threads bump, and the processing thread they wake.
 #[derive(Default)]
 pub(crate) struct IoCounters {
     pub(crate) capture_overruns: AtomicU64,
     pub(crate) playout_underruns: AtomicU64,
+    /// The processing thread, where the capture callback wakes it (macOS and
+    /// iOS: `sched::WAKE_FROM_IO`). Unset, nothing is woken and the thread
+    /// polls.
+    dsp: OnceLock<Thread>,
+}
+
+impl IoCounters {
+    /// Have [`push_capture`] wake `thread` (the processing thread, which
+    /// parks between passes). Set once; later calls are ignored.
+    pub(crate) fn set_dsp_waker(&self, thread: Thread) {
+        let _ = self.dsp.set(thread);
+    }
+
+    /// Wake the processing thread, if one is set. Safe in a device
+    /// callback: an atomic read, and an atomic swap plus a semaphore signal
+    /// only if the thread is parked. No allocation, lock or wait.
+    pub(crate) fn wake_dsp(&self) {
+        if let Some(t) = self.dsp.get() {
+            t.unpark();
+        }
+    }
 }
 
 /// Device thread side, capture: downmix interleaved device samples to mono
-/// and push them to the ring. Samples that don't fit are dropped and
-/// counted.
+/// and push them to the ring, then wake the processing thread (where it is
+/// set to be woken). Samples that don't fit are dropped and counted.
 pub(crate) fn push_capture<T: Copy>(
     tx: &mut rtrb::Producer<f32>,
     data: &[T],
@@ -46,6 +69,7 @@ pub(crate) fn push_capture<T: Copy>(
             .capture_overruns
             .fetch_add((frames - n) as u64, Ordering::Relaxed);
     }
+    counters.wake_dsp();
 }
 
 /// Device thread side, playback: pop mono samples from the ring and write
@@ -211,6 +235,40 @@ mod tests {
         // 6 more mono frames into a ring with room for 4.
         push_capture(&mut tx, &[0.1f32; 6], 1, |s| s, &c);
         assert_eq!(c.capture_overruns.load(Ordering::Relaxed), 2);
+    }
+
+    /// The capture callback wakes a parked processing thread at once,
+    /// instead of it waiting out its timeout.
+    #[test]
+    fn capture_wakes_the_processing_thread() {
+        let counters = std::sync::Arc::new(IoCounters::default());
+        counters.set_dsp_waker(std::thread::current());
+        let (mut tx, rx) = rtrb::RingBuffer::<f32>::new(480);
+        let c = counters.clone();
+        let device = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            push_capture(&mut tx, &[0.1f32; 480], 1, |v| v, &c);
+        });
+        let t0 = std::time::Instant::now();
+        // As the processing thread waits (a spurious early return parks
+        // again until there is audio).
+        while rx.slots() == 0 {
+            std::thread::park_timeout(Duration::from_secs(5));
+        }
+        let waited = t0.elapsed();
+        device.join().expect("device thread");
+        assert!(
+            waited < Duration::from_secs(2),
+            "woke after {waited:?}: the capture callback didn't wake the thread"
+        );
+    }
+
+    #[test]
+    fn without_a_waker_capture_still_works() {
+        let (mut tx, mut rx) = rtrb::RingBuffer::<f32>::new(4);
+        let c = IoCounters::default();
+        push_capture(&mut tx, &[0.5f32; 2], 1, |v| v, &c);
+        assert_eq!(rx.pop().unwrap(), 0.5);
     }
 
     #[test]

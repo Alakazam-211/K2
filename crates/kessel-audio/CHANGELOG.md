@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.2.4
+
+### Changed
+
+- **On macOS and iOS the processing thread (`kessel-audio-dsp`) runs
+  real-time.** It was a default-QoS thread that slept 2 ms between passes,
+  and on a phone the OS could move it to an efficiency core or a low clock:
+  a capture stage's CPU time per block could climb several times over
+  shortly after the start of a call. Now, as it starts, it asks for:
+  1. the QoS class `QOS_CLASS_USER_INTERACTIVE`;
+  2. then Mach's time-constraint policy (`THREAD_TIME_CONSTRAINT_POLICY`):
+     a 10 ms period (one block), 6 ms of computation and a 9 ms constraint
+     (the capture stage's percentile and hard budgets);
+  3. on iOS with `Backend::OsVoiceProcessing`, once the audio unit runs,
+     it joins the unit's I/O thread's OS workgroup
+     (`kAudioOutputUnitProperty_OSWorkgroup`, `os_workgroup_join`; iOS 14
+     or later), and leaves it when the unit closes. Only a thread that got
+     the time-constraint policy joins.
+
+  Whatever the OS refuses leaves the thread on the step before (an older
+  iOS has no workgroups: the thread stays on the time-constraint policy).
+  The workgroup calls are looked up at run time, so the crate still runs on
+  systems older than macOS 11 and iOS 14.
+- **On macOS and iOS the capture callback wakes the processing thread**,
+  instead of it only polling: it processes each block as it arrives, in
+  step with the audio I/O thread. It still wakes at least every
+  `EngineConfig::processing_poll` (2 ms by default) for playback and the
+  paths without capture.
+- Linux, Android and Windows: no change; the thread keeps the OS's default
+  scheduling and polls.
+
+### Added
+
+- `DspScheduling` (`#[non_exhaustive]`): how the OS schedules the processing
+  thread: `Workgroup`, `TimeConstraint`, `Qos` or `None` (the default:
+  other platforms, or everything refused); `as_str()` for logs
+  (`"workgroup"`, `"time_constraint"`, `"qos"`, `"none"`).
+- `Stats::dsp_scheduling` and `CaptureStageStats::dsp_scheduling` (the same
+  value), so call logs show it next to the stage's timings. A change (the
+  thread joining or leaving a workgroup) is published at once.
+
 ## 0.2.3
 
 ### Changed

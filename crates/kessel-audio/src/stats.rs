@@ -1,5 +1,6 @@
 //! Statistics.
 
+use crate::sched::DspScheduling;
 use crate::stage::CaptureStageStats;
 
 /// Receive statistics for one participant, cumulative since it was added.
@@ -88,4 +89,7 @@ pub struct Stats {
     /// How long the device was stopped for the last phone mode change that
     /// restarted it (`None` before one). See `PhoneModeChange::gap`.
     pub last_phone_mode_gap: Option<std::time::Duration>,
+    /// How the OS schedules the processing thread (real-time on macOS and
+    /// iOS). The same as in [`CaptureStageStats::dsp_scheduling`].
+    pub dsp_scheduling: DspScheduling,
 }

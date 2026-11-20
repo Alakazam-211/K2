@@ -199,6 +199,7 @@ impl PhoneIo for FakeDev {
             } else {
                 vec![AudioError::new(ErrorCode::NoPermission, "scripted refusal")]
             },
+            workgroup: None,
         })
     }
 }

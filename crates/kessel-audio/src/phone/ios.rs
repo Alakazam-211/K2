@@ -10,18 +10,24 @@
 //! rate, mono f32; the engine resamples to 48 kHz. Both units have the same
 //! elements, formats and callbacks; only the subtype and the gain control
 //! property differ.
+//!
+//! Once the unit runs, its I/O thread's OS workgroup (iOS 14 or later) goes
+//! to the processing thread to join (see `sched`).
 #![allow(unsafe_code)]
 
 use super::{ios_unit, Ends, IosUnit, Opened, OsEffects, PhoneIo, PhoneMode};
 use crate::device::{pop_playback, push_capture};
 use crate::error::{AudioError, ErrorCode};
+use crate::sched::Workgroup;
 use coreaudio::audio_unit::audio_format::LinearPcmFlags;
 use coreaudio::audio_unit::render_callback::{data, Args};
 use coreaudio::audio_unit::{AudioUnit, Element, IOType, SampleFormat, Scope, StreamFormat};
 use objc2_audio_toolbox::{
     kAUVoiceIOProperty_VoiceProcessingEnableAGC, kAudioOutputUnitProperty_EnableIO,
+    kAudioOutputUnitProperty_OSWorkgroup,
 };
 use objc2_avf_audio::{AVAudioSession, AVAudioSessionRecordPermission};
+use std::ffi::c_void;
 
 fn ca_err(what: &str, e: coreaudio::Error) -> AudioError {
     AudioError::new(ErrorCode::Backend, format!("audio unit: {what}: {e}"))
@@ -45,6 +51,23 @@ fn mic_refused() -> bool {
     #[allow(deprecated)]
     let denied = AVAudioSessionRecordPermission::Denied;
     p == denied
+}
+
+/// The running unit's I/O thread's OS workgroup, or `None` where the OS
+/// has none (before iOS 14) or won't say.
+fn io_workgroup(unit: &AudioUnit) -> Option<Box<Workgroup>> {
+    let wg = unit
+        .get_property::<*mut c_void>(
+            kAudioOutputUnitProperty_OSWorkgroup,
+            Scope::Global,
+            Element::Output,
+        )
+        .ok()?;
+    // SAFETY: AudioUnitGetProperty(kAudioOutputUnitProperty_OSWorkgroup)
+    // returns a +1 reference to an os_workgroup_t, or nothing
+    // (AudioUnitProperties.h); `Workgroup` takes that reference over and
+    // releases it.
+    unsafe { Workgroup::from_retained(wg) }.map(Box::new)
 }
 
 /// The I/O unit: VoiceProcessingIO or RemoteIO, picked per open by
@@ -150,6 +173,9 @@ impl PhoneIo for RemoteUnit {
         }
         unit.initialize().map_err(|e| ca_err("initialise", e))?;
         unit.start().map_err(|e| ca_err("start", e))?;
+        // Without it the processing thread stays on the time-constraint
+        // policy.
+        let workgroup = io_workgroup(&unit);
         Ok(Opened {
             // Dropping the unit stops, uninitialises and disposes of it.
             stream: Box::new(unit),
@@ -160,6 +186,7 @@ impl PhoneIo for RemoteUnit {
                 IosUnit::RemoteIo => "Raw",
             },
             warnings,
+            workgroup,
         })
     }
 }

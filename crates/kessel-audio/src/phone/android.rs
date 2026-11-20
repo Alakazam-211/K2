@@ -183,6 +183,9 @@ impl PhoneIo for AAudioIo {
             playback_rate,
             name,
             warnings,
+            // AAudio has no workgroups; the processing thread's scheduling
+            // doesn't change on Android in this release.
+            workgroup: None,
         })
     }
 }

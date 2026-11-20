@@ -1,6 +1,6 @@
 [package]
 name = "kessel-audio"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 # sonora's MSRV.
 rust-version = "1.91"
@@ -19,7 +19,7 @@ categories = ["multimedia::audio"]
 # repository's own publish check), scripts/ and deny.toml. The leading / anchors each
 # pattern at the crate root: a bare "README.md" also matches tests/data/README.md.
 # The unit tests and their helpers (src/tests/, src/testkit.rs,
-# src/phone/tests.rs) are `#[cfg(test)]` modules: they stay out too (the `!`
+# src/phone/tests.rs, src/sched/tests.rs) are `#[cfg(test)]` modules: they stay out too (the `!`
 # patterns, gitignore style, come after "/src/"). The library builds without
 # them; `cargo package` checks that.
 include = [
@@ -27,6 +27,7 @@ include = [
     "!/src/tests/",
     "!/src/testkit.rs",
     "!/src/phone/tests.rs",
+    "!/src/sched/tests.rs",
     "/README.md",
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
@@ -77,7 +78,9 @@ rubato = "5.0.1"
 cpal = { version = "0.18.2", optional = true, default-features = false }
 
 # The thread CPU clock that times the capture stage (`StageClock::ThreadCpu`):
-# clock_gettime(CLOCK_THREAD_CPUTIME_ID). Declarations only: no C is built.
+# clock_gettime(CLOCK_THREAD_CPUTIME_ID); on macOS and iOS also the processing
+# thread's real-time scheduling (thread_policy_set, dlsym for the OS
+# workgroup calls). Declarations only: no C is built.
 [target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))'.dependencies]
 libc = "0.2.155"
 

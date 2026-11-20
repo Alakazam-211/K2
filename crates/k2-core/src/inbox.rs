@@ -120,6 +120,65 @@ pub fn slug_for_title(title: &str) -> String {
     }
 }
 
+/// The longest value a cover line keeps, in characters: far over any title
+/// people write, and over a peer's title once it is escaped
+/// ([`crate::federation::PEER_TEXT_CAP`] characters, at most 10 each), so a
+/// peer's title is never cut a second time.
+pub const COVER_LINE_CAP: usize = 2048;
+
+/// A character a cover line writes as `\u{..}`: a line break, a C0 or C1
+/// control, a bidi control or an invisible character. Everything else
+/// printable stays as it is, accents and other scripts included.
+fn hidden_or_break(c: char) -> bool {
+    let u = c as u32;
+    c.is_control()
+        || matches!(u, 0x2028 | 0x2029)
+        || matches!(u, 0x061c | 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
+        || matches!(u, 0x200b..=0x200d | 0x2060 | 0xfeff | 0xe0000..=0xe007f)
+}
+
+/// One line of an inbox cover's frontmatter: the title, and every other
+/// value. Trimmed; each [`hidden_or_break`] character written as `\u{..}`
+/// (the [`crate::federation::escape_capped`] form, which keeps only ASCII:
+/// local titles keep their accents); capped at [`COVER_LINE_CAP`]; and a
+/// third `-` in a row written as `\u{2d}`, because the frontmatter ends at
+/// the first `---`. So a value is always one line, and it reads back from
+/// the cover exactly as written.
+pub fn one_line(text: &str) -> String {
+    let escaped =
+        crate::federation::escape_capped_keeping(text.trim(), COVER_LINE_CAP, |c| !hidden_or_break(c));
+    let mut out = String::with_capacity(escaped.len());
+    let mut dashes = 0;
+    for c in escaped.chars() {
+        if c != '-' {
+            dashes = 0;
+            out.push(c);
+        } else if dashes == 2 {
+            dashes = 0;
+            out.push_str("\\u{2d}");
+        } else {
+            dashes += 1;
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// An inbox cover: its frontmatter, each value made [`one_line`], then
+/// `body`. Every cover is written here. Returns the title as written and
+/// the cover's text.
+fn cover_text(title: &str, priority: &str, created: &str, source: &str, from: &str, body: &str) -> (String, String) {
+    let title = one_line(title);
+    let text = format!(
+        "---\ntitle: {title}\npriority: {}\ncreated: {}\nsource: {}\nfrom: {}\n---\n\n{body}",
+        one_line(priority),
+        one_line(created),
+        one_line(source),
+        one_line(from),
+    );
+    (title, text)
+}
+
 /// Parse a `.md` file into an [`InboxItem`]. Returns `None` if the
 /// file can't be read.
 pub fn read_item(path: &Path, folder: &str) -> Option<InboxItem> {
@@ -156,6 +215,7 @@ pub fn set_summary(item_path: &Path, raw: &str) -> Result<Option<String>, String
     let Some(summary) = crate::overlay::summary::clean_sender_summary(raw) else {
         return Ok(None);
     };
+    let summary = one_line(&summary);
     let content = safe_read_to_string(item_path)?;
     let line = format!("summary: {summary}");
     let updated = match content.strip_prefix("---\n").and_then(|rest| rest.find("\n---").map(|end| (rest, end))) {
@@ -311,9 +371,7 @@ pub fn compose(
     let from = from.unwrap_or("self").to_string();
     let created = simple_date_now();
 
-    let content = format!(
-        "---\ntitle: {title}\npriority: {priority}\ncreated: {created}\nsource: {source}\nfrom: {from}\n---\n\n{body}\n"
-    );
+    let (title, content) = cover_text(title, &priority, &created, &source, &from, &format!("{body}\n"));
     let path = root.join(&filename);
     atomic_write(&path, &content)?;
 
@@ -322,7 +380,7 @@ pub fn compose(
         id,
         filename,
         folder: String::new(),
-        title: title.to_string(),
+        title,
         priority,
         created,
         source,
@@ -523,9 +581,7 @@ pub fn deliver_files(
 
     let created = simple_date_now();
     let body = body_lines.join("\n");
-    let written = format!(
-        "---\ntitle: {title}\npriority: normal\ncreated: {created}\nsource: {source_tag}\nfrom: {from_tag}\n---\n\n{body}"
-    );
+    let (title, written) = cover_text(&title, "normal", &created, &source_tag, &from_tag, &body);
     let cover_path = root.join(&filename);
     atomic_write(&cover_path, &written)?;
 
@@ -835,9 +891,7 @@ fn deliver_markdown_file(
         .cloned()
         .unwrap_or_else(|| "normal".to_string());
 
-    let written = format!(
-        "---\ntitle: {title}\npriority: {priority}\ncreated: {created}\nsource: {source}\nfrom: {from}\n---\n\n{body}\n"
-    );
+    let (title, written) = cover_text(&title, &priority, &created, source, from, &format!("{body}\n"));
     let path = root.join(&filename);
     atomic_write(&path, &written)?;
 
@@ -893,9 +947,7 @@ fn deliver_binary_file(
          Open this cover note with `k2 inbox read {id}`. Open the sidecar path on disk for the file bytes.\n"
     );
     let body = cover_body_with_note(note, &rest);
-    let written = format!(
-        "---\ntitle: {title}\npriority: normal\ncreated: {created}\nsource: {source}\nfrom: {from}\n---\n\n{body}"
-    );
+    let (title, written) = cover_text(&title, "normal", &created, source, from, &body);
     let cover_path = root.join(&filename);
     atomic_write(&cover_path, &written)?;
 
@@ -1272,6 +1324,10 @@ fn move_md_files(src_dir: &Path, dst_dir: &Path, errors: &mut Vec<String>) -> us
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[path = "inbox_one_line_tests.rs"]
+mod one_line_tests;
 
 #[cfg(test)]
 mod tests {

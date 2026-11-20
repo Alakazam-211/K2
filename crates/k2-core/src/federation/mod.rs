@@ -84,9 +84,17 @@ pub const PEER_TEXT_CAP: usize = 200;
 /// A peer's free text cleaned: the first `cap` characters, every character
 /// outside printable ASCII escaped (`\u{1b}`), `...` when cut.
 pub fn escape_capped(text: &str, cap: usize) -> String {
+    escape_capped_keeping(text, cap, |c| c == ' ' || c.is_ascii_graphic())
+}
+
+/// The [`escape_capped`] form with the characters to keep given: the first
+/// `cap` characters, each one `keep` refuses written as `\u{..}`, `...` when
+/// cut. An inbox cover's own lines use it with a wider `keep`
+/// ([`crate::inbox::one_line`]).
+pub fn escape_capped_keeping(text: &str, cap: usize, keep: impl Fn(char) -> bool) -> String {
     let mut out = String::new();
     for c in text.chars().take(cap) {
-        if c == ' ' || c.is_ascii_graphic() {
+        if keep(c) {
             out.push(c);
         } else {
             out.extend(c.escape_unicode());

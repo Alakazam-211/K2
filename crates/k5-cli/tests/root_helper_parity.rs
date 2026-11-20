@@ -177,6 +177,16 @@ fn root_helper_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: root-helper rollback --json
+        case(
+            "rollback --json",
+            &["rollback", "--json"],
+            &[],
+            vec![ok(r#"{"heal":{"result":"rolled_back"}}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: root-helper install-command
         case(
             "install-command",

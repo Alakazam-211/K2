@@ -111,8 +111,10 @@ workspace/host-session-cell-cap.txt|workspace host-session-cell-cap help
 # Commands that print pieces: <argv>|<piece> <piece> ... (in order; a
 # trailing " 2>" on the argv: on stderr, stdout empty). "..." stands for
 # output bash makes between the pieces (at most one per row):
-#   the daily tier's permission line (cards on only) sits between _daily
-#     and _daily-end; with cards off nothing does;
+#   the daily tier's permission line (cards on only) sits between
+#     _daily-feedback and _daily-end; with cards off nothing does;
+#     _daily-feedback (the K2 ITSELF block) is left out only for an
+#     agent while agents may not report (0.46.17's opt-in), never here;
 #   _retired_verbs_map lists the retired verbs inside the deprecated tier;
 #   sources propose|add|edit|try --help print their own first line, then
 #     the shared sources/_flags.txt;
@@ -123,7 +125,7 @@ workspace/host-session-cell-cap.txt|workspace host-session-cell-cap help
 # `k2 app <runtime verb> --help` prints, and `k2 app --help` prints it
 # after the App family page (app.txt).
 PAGES='
---help|_daily.txt _daily-end.txt
+--help|_daily.txt _daily-feedback.txt _daily-end.txt
 help --advanced|_advanced.txt
 help --internal|_internal.txt
 help deprecated|_deprecated.txt ... _deprecated-end.txt

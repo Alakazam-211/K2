@@ -93,7 +93,11 @@ fn fixture(r: &Rig) {
     let d = r.proj.join("staged-w");
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
-    std::fs::write(d.join("manifest.json"), r#"{"id":"wid","entry":"index.html"}"#).unwrap();
+    std::fs::write(
+        d.join("manifest.json"),
+        r#"{"id":"wid","entry":"index.html"}"#,
+    )
+    .unwrap();
     std::fs::write(d.join("index.html"), "<p>é</p>\n").unwrap();
     std::fs::write(d.join("notes.txt"), "skipped with a note").unwrap();
     let f = r.proj.join("fixture");
@@ -130,7 +134,8 @@ fn fixture(r: &Rig) {
     std::fs::write(f.join("bad.json"), "{\"a\": 1,}").unwrap();
 }
 
-const PAGE: &str = "{\"ok\":true,\"host\":\"<!doctype html><p>\u{e9}</p>\",\"frame\":{\"w\":1}}\n\n";
+const PAGE: &str =
+    "{\"ok\":true,\"host\":\"<!doctype html><p>\u{e9}</p>\",\"frame\":{\"w\":1}}\n\n";
 const SHOT: &str = r#"{"ok":true,"png":"out.png","scheme":"dark","width":800,"height":600,"ms":412,"ready":true,"errors":[],"refusals":[]}"#;
 const SHOT_SAD: &str = r#"{"ok":false,"png":"out.png","scheme":"light","width":1,"height":2.5,"ms":9,"ready":false,"errors":["TypeError: x is undefined",{"at":"a.js"}],"refusals":["store.get","agent.send"]}"#;
 
@@ -156,12 +161,37 @@ fn zen_widget_shot_answers_as_the_shell_does() {
                requests: usize| {
         let mut e = script_dir();
         e.extend(env);
-        with(e, case(name, words(args), &[], replies, fixture, code, requests))
+        with(
+            e,
+            case(name, words(args), &[], replies, fixture, code, requests),
+        )
     };
     let full = vec![
-        "widget", "preview", "--dir", folder, "w3", "--shot", "out.png", "--theme", "dark",
-        "--zen-theme", "nord", "--width", "0800", "--height", "600", "--data", data, "--libs",
-        "/opt/zen-lib", "--wait-ms", "250", "--config", " k = v", "--config=a=b", "--config",
+        "widget",
+        "preview",
+        "--dir",
+        folder,
+        "w3",
+        "--shot",
+        "out.png",
+        "--theme",
+        "dark",
+        "--zen-theme",
+        "nord",
+        "--width",
+        "0800",
+        "--height",
+        "600",
+        "--data",
+        data,
+        "--libs",
+        "/opt/zen-lib",
+        "--wait-ms",
+        "250",
+        "--config",
+        " k = v",
+        "--config=a=b",
+        "--config",
         "k=again",
     ];
     let cases = vec![
@@ -177,7 +207,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
         // covers: zen widget preview --json
         run(
             "preview --shot --json: the runner's report as it is",
-            vec!["widget", "preview", "--json", "--dir", folder, "--shot", "o.png"],
+            vec![
+                "widget", "preview", "--json", "--dir", folder, "--shot", "o.png",
+            ],
             vec![("SHOT_OUT", SHOT_SAD.into()), ("SHOT_RC", "1".into())],
             vec![ok(PAGE)],
             1,
@@ -185,7 +217,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
         ),
         run(
             "preview --shot: not ready, errors, refusals, the runner's own exit",
-            vec!["widget", "preview", "--dir", folder, "--shot", "o.png", "--theme", "light"],
+            vec![
+                "widget", "preview", "--dir", folder, "--shot", "o.png", "--theme", "light",
+            ],
             vec![
                 ("SHOT_OUT", SHOT_SAD.into()),
                 ("SHOT_RC", "1".into()),
@@ -243,7 +277,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
         ),
         run(
             "preview --shot --json: an error answer",
-            vec!["widget", "preview", "--dir", folder, "--shot", "o.png", "--json"],
+            vec![
+                "widget", "preview", "--dir", folder, "--shot", "o.png", "--json",
+            ],
             vec![],
             vec![ok(r#"{"error":"zen_off","message":"Zen is off"}"#)],
             1,
@@ -311,7 +347,16 @@ fn zen_widget_shot_answers_as_the_shell_does() {
         ),
         run(
             "preview --shot, no --data file",
-            vec!["widget", "preview", "--dir", folder, "--shot", "o.png", "--data", "nope.json"],
+            vec![
+                "widget",
+                "preview",
+                "--dir",
+                folder,
+                "--shot",
+                "o.png",
+                "--data",
+                "nope.json",
+            ],
             vec![],
             vec![],
             2,
@@ -319,7 +364,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
         ),
         run(
             "preview --shot, a --config with no =",
-            vec!["widget", "preview", "--dir", folder, "--shot", "o.png", "--config", "nokey"],
+            vec![
+                "widget", "preview", "--dir", folder, "--shot", "o.png", "--config", "nokey",
+            ],
             vec![],
             vec![],
             2,
@@ -335,7 +382,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
         ),
         run(
             "preview --shot, a theme that is neither",
-            vec!["widget", "preview", "--dir", folder, "--shot", "o.png", "--theme", "blue"],
+            vec![
+                "widget", "preview", "--dir", folder, "--shot", "o.png", "--theme", "blue",
+            ],
             vec![],
             vec![],
             2,
@@ -351,7 +400,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
         ),
         run(
             "preview --shot, a width that is no number",
-            vec!["widget", "preview", "--dir", folder, "--shot", "o.png", "--width", "8x"],
+            vec![
+                "widget", "preview", "--dir", folder, "--shot", "o.png", "--width", "8x",
+            ],
             vec![],
             vec![],
             2,
@@ -391,7 +442,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
         ),
         run(
             "preview --libs with no value",
-            vec!["widget", "preview", "--dir", folder, "--shot", "o.png", "--libs", ""],
+            vec![
+                "widget", "preview", "--dir", folder, "--shot", "o.png", "--libs", "",
+            ],
             vec![],
             vec![],
             2,
@@ -409,7 +462,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
             compare: Compare::Shell,
             ..run(
                 "preview --shot -h: help, nothing sent, nothing run",
-                vec!["widget", "preview", "--dir", folder, "--shot", "o.png", "-h"],
+                vec![
+                    "widget", "preview", "--dir", folder, "--shot", "o.png", "-h",
+                ],
                 vec![],
                 vec![],
                 0,
@@ -420,7 +475,9 @@ fn zen_widget_shot_answers_as_the_shell_does() {
             compare: Compare::Shell,
             ..run(
                 "preview --shot --help: help, nothing sent, nothing run",
-                vec!["widget", "preview", "--help", "--shot", "o.png", "--dir", folder],
+                vec![
+                    "widget", "preview", "--help", "--shot", "o.png", "--dir", folder,
+                ],
                 vec![],
                 vec![],
                 0,
@@ -470,7 +527,9 @@ fn zen_widget_shot_with_no_node() {
         vec![("K5_CLI_SCRIPT_DIR", inst), ("PATH", path)],
         case(
             "preview --shot, no node",
-            words(vec!["widget", "preview", "--dir", folder, "--shot", "o.png"]),
+            words(vec![
+                "widget", "preview", "--dir", folder, "--shot", "o.png",
+            ]),
             &[],
             vec![],
             fixture,

@@ -4,8 +4,8 @@ use super::*;
 /// `_zen_widget_shot`, by program line (line 1 is the empty line after
 /// the quote).
 fn program(marker: &str) -> Vec<String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../cli/src/zen-widget-dev.sh");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/zen-widget-dev.sh");
     let text =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let body = text
@@ -14,10 +14,7 @@ fn program(marker: &str) -> Vec<String> {
         .1;
     let body = &body[body.find(marker).unwrap_or_else(|| panic!("no {marker:?}"))..];
     let start = body.find("python3 -c '\n").expect("python3 -c '") + "python3 -c '".len();
-    body[start..]
-        .split('\n')
-        .map(str::to_string)
-        .collect()
+    body[start..].split('\n').map(str::to_string).collect()
 }
 
 #[test]
@@ -100,7 +97,11 @@ fn the_answer_is_checked_as_the_shell_does() {
     // `ok` must be true itself, not 1.
     assert_eq!(
         checked(false, br#"{"ok":1}"#),
-        Some(shown("", "The folder has errors; nothing was shot:\n", Exit::Error))
+        Some(shown(
+            "",
+            "The folder has errors; nothing was shot:\n",
+            Exit::Error
+        ))
     );
     assert_eq!(
         checked(false, br#"[1]"#),
@@ -183,7 +184,10 @@ fn the_runner_s_report_is_printed_as_the_shell_does() {
     assert_eq!(r.stdout, "Shot o.png (dark, 1x2) in 3 ms\n");
     assert_eq!(
         r.stderr,
-        tb(10, "TypeError: sequence item 0: expected str instance, int found")
+        tb(
+            10,
+            "TypeError: sequence item 0: expected str instance, int found"
+        )
     );
     assert_eq!(r.exit, Exit::Error);
     let r = report("not json");
@@ -218,7 +222,10 @@ fn a_key_set_twice_keeps_its_first_place() {
     ];
     set(&mut d, "blobs", Value::Bool(true));
     set(&mut d, "new", Value::Bool(false));
-    let keys: Vec<String> = d.iter().map(|(k, _)| k.as_str().unwrap().to_string()).collect();
+    let keys: Vec<String> = d
+        .iter()
+        .map(|(k, _)| k.as_str().unwrap().to_string())
+        .collect();
     assert_eq!(keys, ["a", "blobs", "z", "new"]);
     assert_eq!(d[1].1, Value::Bool(true));
 }
@@ -245,16 +252,16 @@ fn the_blobs_folder_is_read_as_the_shell_does() {
         "k2blob:sha256-{}",
         k2_client::release_sums::sha256_hex(&[1u8, 2, 3])
     );
-    let keys: Vec<String> = got.iter().map(|(k, _)| k.as_str().unwrap().to_string()).collect();
+    let keys: Vec<String> = got
+        .iter()
+        .map(|(k, _)| k.as_str().unwrap().to_string())
+        .collect();
     assert_eq!(keys, [hello.clone(), bytes]);
     let first = &got[0].1;
     assert_eq!(print::g(first, "name"), Some(&jstr("c.png")));
     assert_eq!(print::g(first, "mime"), Some(&jstr("image/png")));
     assert_eq!(print::g(first, "base64"), Some(&jstr("aGVsbG8=")));
-    assert_eq!(
-        print::g(&got[1].1, "base64"),
-        Some(&jstr("AQID"))
-    );
+    assert_eq!(print::g(&got[1].1, "base64"), Some(&jstr("AQID")));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

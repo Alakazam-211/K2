@@ -157,14 +157,18 @@ impl Zen {
 
     /// `_zen_session_post_file <endpoint> <file> || true` in `$(…)`.
     pub fn post_file(&mut self, endpoint: &str, body: &[u8]) -> Result<Vec<u8>, Exit> {
-        Ok(self.send_file(endpoint, body)?.map_or_else(Vec::new, |r| held(&r)))
+        Ok(self
+            .send_file(endpoint, body)?
+            .map_or_else(Vec::new, |r| held(&r)))
     }
 
     /// `_zen_session_post_file <endpoint> <file> > "$answer" || true`:
     /// the answer as the file holds it (NULs and trailing newlines kept);
     /// any failure is an empty file.
     pub fn post_file_bytes(&mut self, endpoint: &str, body: &[u8]) -> Result<Vec<u8>, Exit> {
-        Ok(self.send_file(endpoint, body)?.map_or_else(Vec::new, |r| r.body))
+        Ok(self
+            .send_file(endpoint, body)?
+            .map_or_else(Vec::new, |r| r.body))
     }
 
     /// `_zen_session_post_file`'s request: the answer, or `None` for any

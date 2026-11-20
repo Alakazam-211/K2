@@ -512,7 +512,11 @@ mod tests {
             "# a comment line\n\napplication/x-acme png acme\r\ntext/x-one one #two\nimage/x-old woff2\n",
         )
         .unwrap();
-        std::fs::write(&second, "font/woff2\twoff2\u{2028}x-extra\n  \nimage/x-cap PNG\n").unwrap();
+        std::fs::write(
+            &second,
+            "font/woff2\twoff2\u{2028}x-extra\n  \nimage/x-cap PNG\n",
+        )
+        .unwrap();
         let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
         let (first, second, missing, folder) = (
             s(&first),
@@ -522,8 +526,14 @@ mod tests {
         );
         let db = init(&[&missing, &first, &folder, &second]).unwrap();
         // The custom entry overrides the built-in map.
-        assert_eq!(db.guess_type("a.png").as_deref(), Some("application/x-acme"));
-        assert_eq!(db.guess_type("a.acme").as_deref(), Some("application/x-acme"));
+        assert_eq!(
+            db.guess_type("a.png").as_deref(),
+            Some("application/x-acme")
+        );
+        assert_eq!(
+            db.guess_type("a.acme").as_deref(),
+            Some("application/x-acme")
+        );
         assert_eq!(db.guess_type("a.one").as_deref(), Some("text/x-one"));
         // `#two` and what follows it is a comment.
         assert_eq!(db.guess_type("a.two"), None);
@@ -533,7 +543,10 @@ mod tests {
         assert_eq!(db.guess_type("a.x-extra").as_deref(), Some("font/woff2"));
         // An upper-case extension in a file is never matched (the name's
         // extension is looked up in lower case).
-        assert_eq!(db.guess_type("a.PNG").as_deref(), Some("application/x-acme"));
+        assert_eq!(
+            db.guess_type("a.PNG").as_deref(),
+            Some("application/x-acme")
+        );
         // The built-in map is still there for the rest.
         assert_eq!(db.guess_type("a.gif").as_deref(), Some("image/gif"));
 

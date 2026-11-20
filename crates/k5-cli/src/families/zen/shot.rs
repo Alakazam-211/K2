@@ -201,14 +201,17 @@ pub fn shot(z: &mut Zen, a: &Shot<'_>) -> Step {
             .map_or_else(|| PathBuf::from(RUNNER), |d| d.join(RUNNER));
         return stop(Shown::err(
             format!(
-                concat!("Error: this ", product_name!(), " has no shot runner ({})\n"),
+                concat!(
+                    "Error: this ",
+                    product_name!(),
+                    " has no shot runner ({})\n"
+                ),
                 looked.to_string_lossy()
             ),
             Exit::Refused,
         ));
     };
-    let node = std::env::var_os("PATH")
-        .and_then(|p| crate::daemon::find_on_path("node", p));
+    let node = std::env::var_os("PATH").and_then(|p| crate::daemon::find_on_path("node", p));
     let Some(node) = node else {
         return stop(Shown::err(
             "Error: --shot needs Node.js and Playwright's WebKit: install Node, then npm install -g playwright && npx playwright install webkit\n",
@@ -229,12 +232,7 @@ pub fn shot(z: &mut Zen, a: &Shot<'_>) -> Step {
     }
     let page = match page_file(&answer) {
         Ok(p) => p,
-        Err(_) => {
-            return stop(Shown::err(
-                "Error: can't make a temp file\n",
-                Exit::Error,
-            ))
-        }
+        Err(_) => return stop(Shown::err("Error: can't make a temp file\n", Exit::Error)),
     };
     let ran = run_runner(&node, &runner, &page, f);
     let _ = std::fs::remove_file(&page);
@@ -325,10 +323,16 @@ fn extra(a: &Shot<'_>) -> Result<Vec<(Text, Value)>, Shown> {
         b.push((Text::from("theme"), jstr(&f.zen_theme)));
     }
     if !f.width.is_empty() {
-        b.push((Text::from("width"), int_of(&f.width, line::WIDTH).map_err(raise)?));
+        b.push((
+            Text::from("width"),
+            int_of(&f.width, line::WIDTH).map_err(raise)?,
+        ));
     }
     if !f.height.is_empty() {
-        b.push((Text::from("height"), int_of(&f.height, line::HEIGHT).map_err(raise)?));
+        b.push((
+            Text::from("height"),
+            int_of(&f.height, line::HEIGHT).map_err(raise)?,
+        ));
     }
     if !f.data.is_empty() {
         let read = read_text_file(&f.data).and_then(|t| loads(&t));
@@ -361,7 +365,11 @@ fn extra(a: &Shot<'_>) -> Result<Vec<(Text, Value)>, Shown> {
                 py::repr(&jstr(kv))
             )));
         };
-        set(&mut config, k.trim_matches(crate::families::py_space), jstr(v));
+        set(
+            &mut config,
+            k.trim_matches(crate::families::py_space),
+            jstr(v),
+        );
     }
     b[0].1 = Value::Object(config);
     Ok(b)
@@ -370,9 +378,8 @@ fn extra(a: &Shot<'_>) -> Result<Vec<(Text, Value)>, Shown> {
 /// The `blobs/` folder: each file (not a hidden one) by its sha256 ref,
 /// with its name, its type and its bytes in base64, in name order.
 fn blobs(bdir: &str) -> Result<Vec<(Text, Value)>, Raise> {
-    let entries = std::fs::read_dir(bdir).map_err(|e| {
-        Raise::at(line::LISTDIR, os_error(&e, bdir).last_line())
-    })?;
+    let entries = std::fs::read_dir(bdir)
+        .map_err(|e| Raise::at(line::LISTDIR, os_error(&e, bdir).last_line()))?;
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -392,9 +399,7 @@ fn blobs(bdir: &str) -> Result<Vec<(Text, Value)>, Raise> {
             k2_client::release_sums::sha256_hex(&raw)
         );
         if db.is_none() {
-            db = Some(
-                mimetypes::system().map_err(|x| Raise::at(line::GUESS, x.last_line()))?,
-            );
+            db = Some(mimetypes::system().map_err(|x| Raise::at(line::GUESS, x.last_line()))?);
         }
         let mime = db
             .as_ref()
@@ -624,7 +629,10 @@ fn report_lines(d: &Value, o: &mut Out) -> Result<(), Raise> {
     }
     let refusals = ops::index(d, "refusals", line::REFUSALS)?;
     if py::truthy(refusals) {
-        o.o(format!("refused: {}", ops::join(refusals, ", ", line::JOIN)?));
+        o.o(format!(
+            "refused: {}",
+            ops::join(refusals, ", ", line::JOIN)?
+        ));
     }
     o.o(concat!(
         "The data is the ",

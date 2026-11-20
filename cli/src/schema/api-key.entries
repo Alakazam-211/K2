@@ -1,7 +1,7 @@
     {
       "name": "api-key",
       "usage": "k2 api-key <create|list|hire-ceiling|revoke|disable|enable> ...",
-      "description": "API keys for the public /v1 API. Owner only (every route is owner-gated). Capabilities gate which /v1 doors a key may open: host-sessions (default on for new keys), canonical-message, sandboxes, db (default off), and hire with --hire. Not k2 workspace api-key (a workspace's Anthropic key). No --help: a bare or unknown verb prints the usage and exits 1.",
+      "description": "API keys for the public /v1 API. Owner only (every route is owner-gated). Capabilities gate which /v1 doors a key may open: host-sessions (default on for new keys), canonical-message, sandboxes, db (default off), and hire with --hire. Not k2 workspace api-key (a workspace's Anthropic key). -h or --help anywhere prints the usage and sends nothing; a bare or unknown verb prints it on stderr and exits 1.",
       "args": [{"name": "verb", "required": true, "description": "create | list | hire-ceiling | revoke | disable | enable"}],
       "flags": []
     },

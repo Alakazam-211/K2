@@ -25,7 +25,9 @@
 #   clone approve sends nothing to an agent-proposed host before the
 #   person reads the host in full and says yes at the terminal, and then
 #   only the token saved for that host (never $K2_REMOTE_TOKEN or --token);
-#   no request follows a redirect (the place it names gets nothing).
+#   no request follows a redirect (the place it names gets nothing); an
+#   address with a name before an @ (user info) is refused whatever its
+#   scheme, before any lookup, and the refusal never shows that name.
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -631,6 +633,36 @@ for to in "http://127.0.0.1:$PO/elsewhere" "https://127.0.0.1:$PO/other-host"; d
     expect_eq "302 to $to: the place it named got nothing" "$(paths other)" ""
     expect_not "302 to $to: no connect to it" "$(cat "$W/audit.log")" ", $PO)"
 done
+
+echo "== an address with a name before an @ is refused, and the name never shown =="
+for spec in "to|https://real-k2-dev.example@evil.example" "to|http://user:secret-CLONESEC@127.0.0.1:$PR" "preview|https://real-k2-dev.example@127.0.0.1:$PR"; do
+    verb="${spec%%|*}"; url="${spec#*|}"
+    fresh
+    if [ "$verb" = to ]; then
+        IN="$W/token-in" k2 clone to "$url" ws1 --token-stdin --yes --json
+    else
+        IN="$W/token-in" k2 clone preview ws1 --host "$url" --token-stdin --json
+    fi
+    expect_eq "$verb $url: exit 3" "$RC" "3"
+    expect_has "$verb $url: refused for the name before the @" "$ERR" "has a name before an @"
+    expect_not "$verb $url: the output shows no user info (real-k2-dev)" "$OUT$ERR" "real-k2-dev"
+    expect_not "$verb $url: the output shows no user info (secret)" "$OUT$ERR" "secret-CLONESEC"
+    expect_not "$verb $url: the output shows no user info (user:)" "$OUT$ERR" "user:"
+    no_contact "$verb $url"
+done
+fresh
+scn local '{"target": "https://real-k2-dev.example@evil.example"}'
+save_token "https://real-k2-dev.example@evil.example" "$REMOTE_TOKEN"
+k2pty ctty '[]' clone approve prop-1abc --json
+expect_eq "a proposal target with a name before an @: exit 3" "$RC" "3"
+expect_has "a proposal target with a name before an @: refused" "$ERR" "has a name before an @"
+expect_not "a proposal target with a name before an @: no user info shown" "$OUT$ERR" "real-k2-dev"
+expect_eq "a proposal target with a name before an @: the remote got nothing" "$(paths remote)" ""
+expect_not "a proposal target with a name before an @: no lookup" "$(cat "$W/audit.log")" "evil.example"
+fresh
+IN="$W/token-in" k2 clone preview ws1 --host "http://127.0.0.1:$PR/a@b" --token-stdin --json
+expect_eq "an @ in the path, after the host: allowed" "$RC" "0"
+expect_has "an @ in the path, after the host: the remote got the request" "$(paths remote)" "POST /a@b/cli/clone/preview"
 
 echo
 echo "clone_security: $pass passed, $fail failed"

@@ -48382,7 +48382,9 @@ _clone_person_guard() {
 # or over plain http only to a loopback address as written in the URL:
 # 127.0.0.0/8, ::1 or the name localhost. A name is never looked up to
 # decide. A password goes over https only (this computer's own confirm
-# takes the vault socket). clone_plain_http_ok is the one place the
+# takes the vault socket). An address with anything before an @ in its
+# host part (user info) is refused whatever its scheme, and the refusal
+# never shows what came before the @. clone_plain_http_ok is the one place the
 # loopback rule lives. Run by _clone_https_gate before any request, and by
 # the engine again before each request and each password.
 _CLONE_URL_RULE='
@@ -48408,11 +48410,13 @@ def clone_url_refusal(url, password=False):
         host = u.hostname or ""
     except ValueError:
         u, host = None, ""
+    shown = (u.netloc.rpartition("@")[2] if u is not None else "") or url.rpartition("@")[2]
+    if u is not None and "@" in u.netloc:
+        return "refused: the address for %s has a name before an @, so K2 won'"'"'t send your token or password there; give the server'"'"'s address alone" % shown
     if u is not None and u.scheme == "https":
         return None
-    if u is not None and u.scheme == "http" and not password and "@" not in u.netloc and clone_plain_http_ok(host):
+    if u is not None and u.scheme == "http" and not password and clone_plain_http_ok(host):
         return None
-    shown = (u.netloc.rpartition("@")[2] if u is not None else "") or url
     return "refused: %s isn'"'"'t https, so K2 won'"'"'t send your token or password there; use https://%s" % (shown, shown)
 '
 

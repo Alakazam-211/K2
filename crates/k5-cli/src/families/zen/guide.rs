@@ -137,9 +137,11 @@ fn emit_json(id: &str, page: &str, toml: Option<&str>) -> String {
 }
 
 fn out(text: String) -> Shown {
-    let mut o = Out::default();
-    o.out = text;
-    o.done(Exit::Ok)
+    Out {
+        out: text,
+        ..Out::default()
+    }
+    .done(Exit::Ok)
 }
 
 fn line(text: String) -> Shown {
@@ -346,7 +348,7 @@ mod tests {
 
     #[test]
     fn every_page_example_and_title_is_found() {
-        assert_eq!(topics().len(), 16, "{:?}", topics());
+        assert_eq!(topics().len(), 15, "{:?}", topics());
         for t in topics().into_iter().chain(["index"]) {
             let p = page(t).unwrap_or_else(|| panic!("no page for {t}"));
             assert!(p.ends_with('\n') && p.len() > 100, "{t}");

@@ -932,7 +932,7 @@ fn zen_core_verbs_answer_as_the_shell_does() {
 #[test]
 fn zen_history_with_a_large_answer() {
     let rig = Rig::new(VERB, "large");
-    let big = leak(many_files(9000));
+    let big = leak(many_files(12000));
     assert!(big.len() > 1024 * 1024, "above macOS's whole ARG_MAX too");
     let c = Case {
         no_python3: NoPython3::Own,
@@ -974,7 +974,7 @@ fn zen_history_with_a_large_answer() {
     );
     assert_eq!(r.code, Some(0), "the binary: {r:?}");
     assert_eq!(r.stderr, "");
-    assert_eq!(r.stdout.lines().count(), 9000 * 2);
+    assert_eq!(r.stdout.lines().count(), 12000 * 2);
     assert!(
         r.stdout.starts_with(
             "gardens/g0.toml (1 snapshot)\n  snap-0-é  2026-11-01T10:00:00Z  (has errors)\n"
@@ -1127,18 +1127,15 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
                 ],
             )
         },
-        Case {
-            setup: staged,
-            ..case(
-                "garden new --from on an older daemon",
-                new_args,
-                &[],
-                vec![],
-                staged,
-                2,
-                0,
-            )
-        },
+        case(
+            "garden new --from on an older daemon",
+            new_args,
+            &[],
+            vec![],
+            staged_unmarked,
+            2,
+            0,
+        ),
         case(
             "garden new --at must be a number",
             &["garden", "new", "x", "--at", "two"],
@@ -1629,6 +1626,13 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
     for c in &cases {
         rig.check(c);
     }
+}
+
+/// A staged widget and no Garden access mark (an earlier case may have
+/// left one in the shared K2 home).
+fn staged_unmarked(r: &Rig) {
+    staged(r);
+    let _ = std::fs::remove_file(r.k2home.join("garden-access-on"));
 }
 
 fn staged_marked(r: &Rig) {

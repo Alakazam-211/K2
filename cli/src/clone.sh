@@ -14,7 +14,8 @@
 # prints a secret value: --json prints names, choices and counts.
 #
 # Exit codes: 0 ok · 2 bad usage / bad request · 3 refused or unreachable
-# (clone_not_allowed, clone_personal_computers_off, confirm_required, …).
+# (clone_not_allowed, clone_personal_computers_off, confirm_required, …)
+# · 130 stopped (Ctrl-C).
 
 _clone_usage() {
     cat <<'EOF'
@@ -729,8 +730,10 @@ def main():
         print(e.hint if e.plain else json.dumps({"error": e.code, "hint": e.hint}), file=sys.stderr)
         return e.rc
     except KeyboardInterrupt:
+        # Ctrl-C: the shared 130. A password prompt has put the terminal's
+        # echo back already (password()'s finally).
         print(json.dumps({"error": "cancelled", "hint": "stopped"}), file=sys.stderr)
-        return 3
+        return 130
     if JSON_OUT:
         print(json.dumps(res, indent=2))
     else:

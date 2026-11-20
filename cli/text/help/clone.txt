@@ -36,4 +36,4 @@ Flags:
 
 Agents can't clone: `k2 clone propose` holds the plan for a person, who runs
 `k2 clone approve <id>` from a terminal outside K2 (or approves in K2).
-Exit: 0 ok · 2 bad usage · 3 refused or unreachable.
+Exit: 0 ok · 2 bad usage · 3 refused or unreachable · 130 stopped (Ctrl-C).

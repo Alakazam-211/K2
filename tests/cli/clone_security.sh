@@ -16,7 +16,8 @@
 #   no request and no name lookup; a password never goes over plain http;
 #   this computer's confirm goes through the vault socket only (none: no
 #   prompt, no TCP); a password is read from a real terminal only, with
-#   echo off (no controlling terminal: confirm_needs_a_person, never stdin).
+#   echo off (no controlling terminal: confirm_needs_a_person, never stdin);
+#   Ctrl-C stops with 130 and the cancelled line, echo back on.
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -409,6 +410,16 @@ expect_eq "at a terminal: the push finishes" "$RC" "0"
 expect_has "at a terminal: the typed password reached the vault socket" "$(body vault /cli/vault/confirm/finish)" "pw-CLONESEC-typed"
 expect_not "at a terminal: the password was not echoed" "$TTY" "pw-CLONESEC-typed"
 expect_eq "at a terminal: echo is on again after" "$ECHO" "on"
+
+echo "== Ctrl-C at the password prompt =="
+fresh
+save_token "$REMOTE" "$REMOTE_TOKEN"
+k2pty ctty '[["Vault password", "\u0003"]]' clone to "$REMOTE" ws1 --copy API_KEY --json
+expect_eq "Ctrl-C: exit 130" "$RC" "130"
+expect_has "Ctrl-C: the cancelled line" "$ERR" '{"error": "cancelled", "hint": "stopped"}'
+expect_eq "Ctrl-C: echo is on again after" "$ECHO" "on"
+expect_not "Ctrl-C: no confirm finished" "$(paths vault)" "confirm/finish"
+expect_not "Ctrl-C: nothing bundled" "$(paths local)" "/cli/clone/bundle"
 
 echo
 echo "clone_security: $pass passed, $fail failed"

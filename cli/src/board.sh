@@ -762,7 +762,7 @@ Your name, login, workspace or agent name; files, screenshots, terminal output; 
 
 ## Agents
 
-- You may send only after a person on this server said yes (Settings, then Feedback; or `k2 send-feedback settings --agents cli|all`, which only the owner or an admin runs). Until someone answers, agents report nothing. Off: `agents_off` (exit 3). Check first with `k2 send-feedback settings`.
+- You may send only after a person on this server said yes (`k2 send-feedback settings --agents cli|all` or `k2 setup agent-reports`, which only the owner or an admin runs). Until someone answers, agents report nothing. Off: `agents_off` (exit 3). Check first with `k2 send-feedback settings`.
 - Say what the report is about. A problem with a K2 command: `--scope cli --command "<the command you ran>"` (one line, at most 1000 bytes; without it `command_required`, exit 2). Anything else about K2: `--scope platform`, only where the person allowed that too; otherwise `scope_off` (exit 3). One report per problem: check `k2 send-feedback list` for one you already sent.
 - At most 1 in any 60 seconds and 3 in any 24 hours per workspace, and 10 in any 24 hours for all agents on this server: `agent_limit` (exit 3, with `retryAfterSecs`). Every saved send counts; cancelled ones don't, and refusals and previews save nothing.
 - There is no contact email from the CLI: only a person, in the desktop dialog, can ask Alakazam to write back.

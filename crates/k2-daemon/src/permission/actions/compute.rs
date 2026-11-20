@@ -746,7 +746,7 @@ fn and_list(items: &[String]) -> String {
 }
 
 /// The card's words for `compute.grant`: `{change}` ("Let k2-engine run
-/// jobs of up to 4 hours on k2n15 (now 2 hours)"), `{effects}` (the limits
+/// jobs of up to 4 hours on node-2 (now 2 hours)"), `{effects}` (the limits
 /// that stay, a grant it doesn't have yet, the waiting jobs a new
 /// max-parallel re-sends) and `{node}`. "(now …)" shows only while it
 /// differs, so the decided card reads true too.

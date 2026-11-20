@@ -179,7 +179,7 @@ sys.exit(0 if isinstance(v, dict) and v.get("agents") is False and v.get("sender
 
 # The study page's one line while agents are off.
 _sf_off_line() {
-    echo "Agents don't report $_SF_PRODUCT problems on this server: a person turns it on in Settings, then Feedback."
+    echo "Agents don't report $_SF_PRODUCT problems on this server: the owner or an admin turns it on with k2 send-feedback settings --agents cli|all (or k2 setup agent-reports)."
 }
 
 _sf_onoff() {

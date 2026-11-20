@@ -1,4 +1,4 @@
-//! `permission.approvers to=<login>[,<login>…]|everyone` (0.46.16): who
+//! `permission.approvers to=<login>[,<login>…]|everyone` (0.46.17): who
 //! agents' permission cards go to when the agent names no one (`--to`).
 //!
 //! The owner sets it in Settings → Access → Permission Cards → Who agents

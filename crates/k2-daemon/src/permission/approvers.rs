@@ -1,4 +1,4 @@
-//! Who a permission card asks (0.46.16; migration 0318).
+//! Who a permission card asks (0.46.17; migration 0318).
 //!
 //! Before, a card went to every owner or admin who may answer it, with a
 //! push to each. On a server where some owners are clients that agents must

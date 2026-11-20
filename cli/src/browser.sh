@@ -779,7 +779,7 @@ print(json.dumps(obj))
     _k2_moved_from_note "$response"
     _k2_idem_replay_note "$response"
     # 0.46.17: the daemon keeps commas inside (), [] and "…" in one option;
-    # a comma that reads like prose ("Yes, k2n2…") still splits, and the
+    # a comma that reads like prose ("Yes, node-2…") still splits, and the
     # answer's `hint` says so. One stderr line, never a refusal.
     printf '%s' "$response" | python3 -c 'import json,sys
 try:
@@ -1202,7 +1202,7 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread ask <addr> "prompt" --option "…" --option "…"  # choice card; do not wait
       --option "…"       repeatable, one per button; commas inside are fine
       --options "a,b,c"  short labels without commas (commas inside (), [] or "…" stay
-                         in one label; a prose-like comma, "Yes, k2n2…", splits and warns)
+                         in one label; a prose-like comma, "Yes, node-2…", splits and warns)
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
       [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|proxy|file|env|agent]

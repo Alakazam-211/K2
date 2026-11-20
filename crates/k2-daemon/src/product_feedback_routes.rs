@@ -412,7 +412,7 @@ fn need_owner() -> CliResponse {
     refuse(
         "403 Forbidden",
         "diagnostics_need_owner",
-        concat!("An agent can't consent for a person. No part of the ", product_name!(), " details is allowed for agents on this server; send it again without them, or ask your owner which parts agents may attach (Settings, then Feedback)."),
+        concat!("An agent can't consent for a person. No part of the ", product_name!(), " details is allowed for agents on this server; send it again without them, or ask your owner which parts agents may attach (", cli_name!(), " setup agent-reports --attach)."),
     )
 }
 
@@ -500,7 +500,7 @@ fn agents_off() -> CliResponse {
     refuse(
         "403 Forbidden",
         "agents_off",
-        concat!("Agents don't report ", product_name!(), " problems on this server: a person hasn't allowed it. Don't send it; your person turns it on in Settings, then Feedback (or tell them and they send it)."),
+        concat!("Agents don't report ", product_name!(), " problems on this server: a person hasn't allowed it. Don't send it; your person turns it on with ", cli_name!(), " setup agent-reports (or tell them and they send it)."),
     )
 }
 
@@ -509,7 +509,7 @@ fn scope_off() -> CliResponse {
     refuse(
         "403 Forbidden",
         "scope_off",
-        concat!("On this server agents report only ", product_name!(), " CLI problems (--scope cli, with the command you ran). Anything else about ", product_name!(), " needs your person to allow it in Settings, then Feedback."),
+        concat!("On this server agents report only ", product_name!(), " CLI problems (--scope cli, with the command you ran). Anything else about ", product_name!(), " needs your person to allow it (", cli_name!(), " setup agent-reports --agents all)."),
     )
 }
 
@@ -1145,7 +1145,7 @@ fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
         return refuse(
             "403 Forbidden",
             "settings_people_only",
-            "Only a person signed in to this server changes these settings (the owner or an admin in Settings, then Feedback).",
+            concat!("Only a person signed in to this server changes these settings (the owner or an admin, with ", cli_name!(), " setup agent-reports or ", cli_name!(), " send-feedback settings)."),
         );
     }
     let agent_keys = b.agents.is_some() || b.agent_platform.is_some() || b.agent_attach.is_some() || b.agent_diagnostics.is_some();

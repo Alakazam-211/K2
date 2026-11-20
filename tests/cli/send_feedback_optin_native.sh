@@ -169,7 +169,7 @@ del lines[i - 1:i + 4]
 print("\n".join(lines))
 PY2
 }
-OFF_LINE="Agents don't report K2 problems on this server: a person turns it on in Settings, then Feedback."
+OFF_LINE="Agents don't report K2 problems on this server: the owner or an admin turns it on with k2 send-feedback settings --agents cli|all (or k2 setup agent-reports)."
 SF_BLOCK='K2 ITSELF
   send-feedback "<text>"                Tell Alakazam Labs (K2'"'"'s makers) about K2: a bug, an'
 PAGE_HEAD="k2 study send-feedback — telling K2's makers about K2"
@@ -203,7 +203,7 @@ for mode in off off-held; do
     want_eq "$mode: one settings read for study" "$(reqs $S)" "GET "
     run agent study send-feedback --json
     want_rc 0 "$mode: study --json"
-    want_eq "$mode: study --json is the one line" "$OUT" "{\"id\":\"send-feedback\",\"body\":\"Agents don't report K2 problems on this server: a person turns it on in Settings, then Feedback.\"}"
+    want_eq "$mode: study --json is the one line" "$OUT" "{\"id\":\"send-feedback\",\"body\":\"Agents don't report K2 problems on this server: the owner or an admin turns it on with k2 send-feedback settings --agents cli|all (or k2 setup agent-reports).\"}"
 done
 
 echo "== an agent while agents are on, or when the read fails =="

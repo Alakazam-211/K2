@@ -12,7 +12,7 @@
         {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--option", "arg": "label", "description": "Repeatable choice label, one per button; commas inside are fine. Mix with --options is 400."},
-        {"name": "--options", "arg": "a,b,c", "description": "Short choice labels without commas (comma list; commas inside (), [] or \"…\" stay in one label; \\, = literal comma). A prose-like comma (\"Yes, k2n2…\") still splits and prints a hint. Mix with --option is 400."},
+        {"name": "--options", "arg": "a,b,c", "description": "Short choice labels without commas (comma list; commas inside (), [] or \"…\" stay in one label; \\, = literal comma). A prose-like comma (\"Yes, node-2…\") still splits and prints a hint. Mix with --option is 400."},
         {"name": "--allow-custom", "arg": null, "description": "Allow a free-text answer on the choice card."},
         {"name": "--expires", "arg": "2h|3d|90m|secs", "description": "How long the choice card stays open (default 7 days). Talking never shortens it."},
         {"name": "--no-expiry", "arg": null, "description": "Keep the choice card open until answered, dismissed or withdrawn."},

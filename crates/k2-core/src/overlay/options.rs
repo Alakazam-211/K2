@@ -69,7 +69,7 @@ pub fn split_options_csv(raw: &str) -> Vec<String> {
 pub struct AskOptions {
     pub options: Vec<String>,
     /// One line for the asker: a comma that split the list is followed by
-    /// a space and a lowercase letter or digit (`Yes, k2n2-m1 …`), so the
+    /// a space and a lowercase letter or digit (`Yes, node-2 …`), so the
     /// two halves may have been one option. The list still splits there.
     pub hint: Option<String>,
 }
@@ -138,7 +138,7 @@ fn hint_label(label: &str) -> String {
 /// - When the list's brackets or quotes don't balance, every unescaped
 ///   comma splits (the plain rule), so a stray `(` never swallows the rest.
 /// - A splitting comma followed by a space and then a lowercase letter or
-///   a digit reads like prose (`Yes, k2n2-m1 …`): the list still splits
+///   a digit reads like prose (`Yes, node-2 …`): the list still splits
 ///   there, and [`AskOptions::hint`] says to pass each label with `--option`.
 ///
 /// Labels are trimmed; empty ones are skipped.
@@ -285,18 +285,18 @@ mod tests {
 
     #[test]
     fn ask_options_prose_comma_splits_and_hints() {
-        let a = split_ask_options("Yes, k2n2-m1 (an M1; Sew keeps the M4 and k2n3),No, wait");
-        assert_eq!(a.options, vec!["Yes", "k2n2-m1 (an M1; Sew keeps the M4 and k2n3)", "No", "wait"]);
+        let a = split_ask_options("Yes, node-2 (an M1; Sew keeps the M4 and node-3),No, wait");
+        assert_eq!(a.options, vec!["Yes", "node-2 (an M1; Sew keeps the M4 and node-3)", "No", "wait"]);
         assert_eq!(
             a.hint.as_deref(),
-            Some(r#"an option looks like it continues after a comma ("Yes" / "k2n2-m1 (…)"); to keep commas inside an option, pass each one with --option "…""#)
+            Some(r#"an option looks like it continues after a comma ("Yes" / "node-2 (…)"); to keep commas inside an option, pass each one with --option "…""#)
         );
         // A digit after ", " reads like prose too; no space does not.
         assert!(split_ask_options("Ship, 2 boxes,Hold").hint.is_some());
         assert_eq!(split_ask_options("yes,no").hint, None);
         // A JSON array (the CLI's --option form) never hints.
-        let j = parse_ask_options(r#"["Yes, k2n2-m1 (an M1)","No"]"#).expect("json");
-        assert_eq!(j.options, vec!["Yes, k2n2-m1 (an M1)", "No"]);
+        let j = parse_ask_options(r#"["Yes, node-2 (an M1)","No"]"#).expect("json");
+        assert_eq!(j.options, vec!["Yes, node-2 (an M1)", "No"]);
         assert_eq!(j.hint, None);
     }
 

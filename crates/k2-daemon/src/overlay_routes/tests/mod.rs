@@ -1936,22 +1936,22 @@ fn ask_options_keep_parentheses_and_hint_on_a_prose_comma() {
     };
 
     // Commas inside parentheses stay in the label; no hint.
-    let kept = ask(serde_json::json!("k2n2-m1 (an M1, small),k2n1-m4,Wait"), "options");
-    assert_eq!(kept["options"], serde_json::json!(["k2n2-m1 (an M1, small)", "k2n1-m4", "Wait"]), "{kept}");
+    let kept = ask(serde_json::json!("node-2 (an M1, small),k2n1-m4,Wait"), "options");
+    assert_eq!(kept["options"], serde_json::json!(["node-2 (an M1, small)", "k2n1-m4", "Wait"]), "{kept}");
     assert!(kept.get("hint").is_none(), "no hint on a clean list: {kept}");
 
     // A prose-like comma still splits, and the answer carries the hint.
-    let prose = ask(serde_json::json!("Yes, k2n2-m1 (an M1; Sew keeps the M4 and k2n3),No"), "options");
-    assert_eq!(prose["options"], serde_json::json!(["Yes", "k2n2-m1 (an M1; Sew keeps the M4 and k2n3)", "No"]), "{prose}");
+    let prose = ask(serde_json::json!("Yes, node-2 (an M1; Sew keeps the M4 and node-3),No"), "options");
+    assert_eq!(prose["options"], serde_json::json!(["Yes", "node-2 (an M1; Sew keeps the M4 and node-3)", "No"]), "{prose}");
     assert_eq!(
         prose["hint"],
-        r#"an option looks like it continues after a comma ("Yes" / "k2n2-m1 (…)"); to keep commas inside an option, pass each one with --option "…""#,
+        r#"an option looks like it continues after a comma ("Yes" / "node-2 (…)"); to keep commas inside an option, pass each one with --option "…""#,
         "{prose}"
     );
 
     // The repeatable --option form (a JSON array) keeps every comma.
-    let each = ask(serde_json::json!(["Yes, k2n2-m1 (an M1)", "No, wait"]), "option");
-    assert_eq!(each["options"], serde_json::json!(["Yes, k2n2-m1 (an M1)", "No, wait"]), "{each}");
+    let each = ask(serde_json::json!(["Yes, node-2 (an M1)", "No, wait"]), "option");
+    assert_eq!(each["options"], serde_json::json!(["Yes, node-2 (an M1)", "No, wait"]), "{each}");
     assert!(each.get("hint").is_none(), "--option never hints: {each}");
 }
 

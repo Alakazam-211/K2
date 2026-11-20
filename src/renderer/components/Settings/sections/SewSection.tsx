@@ -1130,11 +1130,15 @@ function BackupsGroup({ status, sample, canMutate, reload, notify }: PanelProps)
   const shipText =
     ship?.kind === 'dir'
       ? `To ${ship.path ?? 'a folder'}`
-      : ship?.kind === 'box-backup'
-        ? ship.boxBackup?.ok
-          ? 'With this server’s own backup'
-          : 'With this server’s own backup, not confirmed yet'
-        : 'Not yet'
+      : ship?.external
+        ? ship.external.fresh
+          ? `With ${ship.external.label}`
+          : `With ${ship.external.label}, but no recent copy`
+        : ship?.kind === 'box-backup'
+          ? ship.boxBackup?.ok
+            ? 'With this server’s own backup'
+            : 'With this server’s own backup, not confirmed yet'
+          : 'Not yet'
   const rows = [...(list ?? [])].sort((x, y) => (x.created_at < y.created_at ? 1 : -1))
 
   return (
@@ -1162,6 +1166,11 @@ function BackupsGroup({ status, sample, canMutate, reload, notify }: PanelProps)
                   The last copy didn’t reach the other machine. Check that its folder is there and has room.
                   <span className="block text-[var(--color-text-muted)]">The server said: {ship.lastError.replace(/[.\s]+$/, '')}.</span>
                 </>
+              ) : ship?.external && !ship.external.fresh ? (
+                <>
+                  No copy of chat’s backups in {ship.external.staleAfterHours ?? 36} hours. Check that the server’s scheduled backup runs.
+                  {ship.external.line ? <span className="block text-[var(--color-text-muted)]">The server said: {ship.external.line.replace(/[.\s]+$/, '')}.</span> : null}
+                </>
               ) : ship?.kind === 'box-backup' && !ship.boxBackup?.ok ? (
                 <>
                   K2 can’t see the server’s backup keep them on another machine yet. Check that scheduled backups are turned on.
@@ -1170,7 +1179,7 @@ function BackupsGroup({ status, sample, canMutate, reload, notify }: PanelProps)
               ) : undefined
             }
           >
-            <span className={ship?.kind === 'dir' || ship?.boxBackup?.ok ? VALUE : 'type-row text-[var(--color-status-warn-text)]'} data-testid="sew-ship-box-backup">
+            <span className={ship?.kind === 'dir' || (ship?.boxBackup?.ok && ship?.external?.fresh !== false) ? VALUE : 'type-row text-[var(--color-status-warn-text)]'} data-testid="sew-ship-box-backup">
               {shipText}
             </span>
           </SettingRow>

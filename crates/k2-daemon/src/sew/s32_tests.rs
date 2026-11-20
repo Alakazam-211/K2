@@ -294,11 +294,19 @@ fn ship_box_backup_clears_the_offbox_alarm_only_on_evidence() {
     let t = t();
     let _fs = memfs();
     t.enable();
-    // Kind none never reads the box backup.
+    // Kind none with no box backup client: the alarm, no evidence shown
+    // (0.46.18: none reads the box backup too, see offbox_tests).
     let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
     assert!(has_alarm(&s, "k2_backup_offbox_none"), "{s}");
-    assert_eq!(*t.ops.box_backup_reads.lock().unwrap(), 0, "kind none reads nothing");
+    assert!(*t.ops.box_backup_reads.lock().unwrap() > 0, "kind none reads the box backup");
     assert!(s["backup"]["ship"].get("boxBackup").is_none(), "{s}");
+    // A good run 2 h ago (systemd's k2-backup.service), for the fresh case.
+    *t.ops.box_backup_run.lock().unwrap() = crate::sew::offbox::RunFacts {
+        result: "success".into(),
+        exit_status: Some(0),
+        finished_at: Some(*t.ops.clock.lock().unwrap() - 7200),
+        state: "inactive".into(),
+    };
 
     // No client on this box yet: recorded, the alarm stays, and why.
     let _ = take_emitted();
@@ -361,15 +369,17 @@ fn ship_box_backup_clears_the_offbox_alarm_only_on_evidence() {
     assert!(has_alarm(&s, "k2_backup_offbox_none"), "{s}");
     assert!(s["backup"]["ship"]["boxBackup"]["reason"].as_str().unwrap().contains("can't read /etc/k2-backup/paths"), "{s}");
 
-    // Switching back: none raises the alarm whatever the box backup does;
-    // dir clears it the usual way.
+    // Switching back to none while the box backup carries the bundles:
+    // the ship is external (0.46.18), no alarm; dir clears it the usual way.
     *t.ops.box_backup.lock().unwrap() = box_backup_facts("/", None, "enabled");
     let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "none"}));
     assert_eq!(st, "200 OK", "{v}");
     assert!(v["ship"].get("boxBackup").is_none(), "{v}");
+    assert_eq!(v["note"], crate::sew::offbox::NONE_BUT_CARRIED, "{v}");
     let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
-    assert!(has_alarm(&s, "k2_backup_offbox_none"), "none is none: {s}");
-    assert!(s["backup"]["ship"].get("boxBackup").is_none(), "{s}");
+    assert!(!has_alarm(&s, "k2_backup_offbox_none"), "{s}");
+    assert_eq!(s["backup"]["ship"]["kind"], "external", "{s}");
+    assert_eq!(s["backup"]["ship"]["boxBackup"]["ok"], true, "{s}");
     let (st, _) = t.call(&Who::Owner, SHIP, json!({"kind": "dir", "path": OFFBOX}));
     assert_eq!(st, "200 OK");
     let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
@@ -516,6 +526,7 @@ fn picking_a_ship_folder_ties_the_keyring_mirror_and_clearing_it_unties() {
         "ready": true,
         "missing": [],
         "line": "Ready to move off K2: a backup bundle, the keyring mirror and the owner's sew-launch-key are enough",
+        "offbox": null,
     }));
     // The same folder again: nothing to make, no restart.
     t.ops.clear();
@@ -630,10 +641,19 @@ fn move_off_k2_names_each_missing_piece() {
     // With evidence it counts as the off-box bundle copy.
     let v = crate::sew::supervisor::move_off_k2(&row, true, true);
     assert_eq!(v["missing"], json!(["keyring_mirror"]));
-    // Evidence for another kind counts for nothing.
+    // Setting none carried by the box backup counts too (0.46.18, the
+    // external ship) and the line names it; evidence for dir counts for
+    // nothing.
     row.ship_kind = "none".into();
-    assert_eq!(crate::sew::supervisor::move_off_k2(&row, true, true)["missing"], json!(["ship_folder", "keyring_mirror"]));
+    let v = crate::sew::supervisor::move_off_k2(&row, true, true);
+    assert_eq!(v["missing"], json!(["keyring_mirror"]));
+    assert_eq!(v["offbox"], "K2 backups (restic)");
+    assert!(v["line"].as_str().unwrap().starts_with("Not ready to move off K2 (bundles off the box in K2 backups (restic)): missing"), "{v}");
+    assert_eq!(crate::sew::supervisor::move_off_k2(&row, true, false)["missing"], json!(["ship_folder", "keyring_mirror"]));
     row.ship_kind = "dir".into();
+    row.mirror_kind = "none".into();
+    assert_eq!(crate::sew::supervisor::move_off_k2(&row, true, true)["missing"], json!(["keyring_mirror"]));
+    assert_eq!(crate::sew::supervisor::move_off_k2(&row, true, true)["offbox"], Value::Null);
     row.mirror_kind = "dir".into();
     let v = crate::sew::supervisor::move_off_k2(&row, false, false);
     assert_eq!((v["ready"].as_bool(), v["missing"].clone()), (Some(false), json!(["launch_key"])));

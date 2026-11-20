@@ -216,9 +216,7 @@ pub fn decorate_status(env: &Env, body: &mut Value, who: &Who) {
         "lastError": rec.get("lastError").cloned().unwrap_or(Value::Null),
         "lastErrorAt": rec.get("lastErrorAt").cloned().unwrap_or(Value::Null),
     });
-    if row.ship_kind == super::box_backup::KIND {
-        ship["boxBackup"] = super::box_backup::evidence(env).json();
-    }
+    super::offbox::decorate_ship(env, &row, &mut ship);
     if body.get("backup").is_some_and(Value::is_object) {
         body["backup"]["ship"] = ship;
     } else {
@@ -637,10 +635,12 @@ fn set_ship(env: &Env, who: &Who, v: &Value) -> R<Value> {
     if let Some(e) = evidence {
         out["ship"]["boxBackup"] = e.json();
         out["note"] = json!(if e.ok {
-            "K2 sees the box backup carry Sew's bundles: k2_backup_offbox_none clears"
+            "K2 sees the box backup carry Sew's bundles: k2_backup_offbox_none clears (k2_backup_offbox_stale while its newest snapshot is over 36 h old)"
         } else {
             "recorded, but k2_backup_offbox_none stays until K2 sees the box backup carry Sew's bundles (ship.boxBackup.reason says what is missing)"
         });
+    } else if kind == "none" && super::box_backup::evidence(env).ok {
+        out["note"] = json!(super::offbox::NONE_BUT_CARRIED);
     }
     if restarted {
         out["note"] = json!("Sew restarted to use its new keyring mirror (calls and chat reconnect on their own)");

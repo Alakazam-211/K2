@@ -582,7 +582,14 @@ Copies on another machine (a folder on ANOTHER disk you mounted: NFS, SMB, sshfs
            by the root helper; one older than protocol 13 keeps the alarm and
            says so. Nothing restarts. Undo: ship dir <path> or ship none.
            The keyring mirror stays separate (mirror below).
-         none = backups stay on this box only (alarm k2_backup_offbox_none).
+         none = K2 copies nothing (alarm k2_backup_offbox_none), unless the
+           box backup carries the folder as above: then status shows the
+           ship as external ("K2 backups (restic)", backup.ship.external).
+         External (none or box-backup with that evidence): lastShippedAt is
+           the newest good k2-backup.service run K2 has seen (systemd, no
+           restic call). Over 36 h old, or none seen yet: k2_backup_offbox_stale
+           instead of k2_backup_offbox_none. The keys stay out of it on
+           purpose (no_offbox_key_copy until key escrow lands).
   k2 hostchat mirror dir <path> | none [--json]
          Sew's keyring mirror (restarts Sew). Never the K2 vault or ~/.k2.
 App Spaces (members: the App's users who also have chat; never Connect owners/admins by role):
@@ -852,7 +859,10 @@ if verb in ("status",):
     if v.get("owner") not in (None, "none"):
         line("owner in Sew", v.get("owner"))
     sh = (v.get("backup") or {}).get("ship") or {}
-    if sh.get("kind") == "box-backup":
+    ex = sh.get("external") or {}
+    if ex.get("line"):
+        line("off-box copy", ex.get("line"))
+    elif sh.get("kind") == "box-backup":
         line("off-box copy", (sh.get("boxBackup") or {}).get("line") or "the box backup (k2-backup)")
     elif sh.get("kind"):
         line("off-box copy", sh.get("path") if sh.get("kind") == "dir" else "none (backups stay on this box)")

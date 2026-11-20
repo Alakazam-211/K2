@@ -1486,16 +1486,9 @@ pub fn k2_alarms(env: &Env, row: &Row, sew_status: Option<&Value>, now: i64) -> 
     if env.ops.record_load(JWKS_RECORD).is_some() {
         a.push(ALARM_JWKS_DRIFT.into());
     }
-    // `box-backup` (0.46.9) clears it only while K2 sees the box backup
-    // carry Sew's bundles (`status.backup.ship.boxBackup` says why not).
-    let offbox_none = match row.ship_kind.as_str() {
-        "none" => true,
-        super::box_backup::KIND => !super::box_backup::evidence(env).ok,
-        _ => false,
-    };
-    if offbox_none {
-        a.push("k2_backup_offbox_none".into());
-    }
+    // `k2_backup_offbox_none` / `_stale`: the box backup carrying Sew's
+    // bundles clears it while its newest snapshot is fresh (0.46.18).
+    a.extend(super::offbox::alarms(env, row));
     if row.upgrade_progress.as_ref().and_then(|p| p.get("result")).and_then(Value::as_str) == Some("rollback_failed") {
         a.push("k2_upgrade_rollback_failed".into());
     }
@@ -1522,14 +1515,11 @@ fn backup_status(env: &Env, row: &Row, sew_status: Option<&Value>) -> Value {
     })
 }
 
-/// The ship setting for status and `backups`: `{kind, path}`, plus
-/// `boxBackup` (the evidence, [`super::box_backup::Evidence::json`]) for
-/// kind `box-backup`.
+/// The ship setting for status and `backups`: `{kind, path}`, plus the
+/// box backup's evidence and the external ship ([`super::offbox::decorate_ship`]).
 pub fn ship_json(env: &Env, row: &Row) -> Value {
     let mut v = json!({"kind": row.ship_kind, "path": row.ship_path});
-    if row.ship_kind == super::box_backup::KIND {
-        v["boxBackup"] = super::box_backup::evidence(env).json();
-    }
+    super::offbox::decorate_ship(env, row, &mut v);
     v
 }
 
@@ -1581,14 +1571,16 @@ pub fn split_setup_warnings(alarms: &mut Vec<String>, sew_status: Option<&Value>
 /// `launch_key` = the vault's `sew-launch-key` holds the current master
 /// key. Answers `{ready, missing: [ship_folder|keyring_mirror|launch_key],
 /// line}`; without a ship folder (the default) only the "the box still
-/// runs" path works, and the line says what to set. `box_backup` = the
-/// ship kind is `box-backup` and K2 sees the box backup carry Sew's
-/// bundles (0.46.9): that counts as the off-box bundle copy.
+/// runs" path works, and the line says what to set. `box_backup` = K2
+/// sees the box backup carry Sew's bundles ([`super::offbox::carries`],
+/// setting `none` or `box-backup`): that counts as the off-box bundle copy
+/// and the line names it (`offbox`).
 pub fn move_off_k2(row: &Row, launch_key: bool, box_backup: bool) -> Value {
     let mut missing: Vec<&str> = Vec::new();
     let mut words: Vec<&str> = Vec::new();
     let boxed = row.ship_kind == super::box_backup::KIND;
-    if row.ship_kind != "dir" && !(boxed && box_backup) {
+    let external = box_backup && row.ship_kind != "dir";
+    if row.ship_kind != "dir" && !external {
         missing.push("ship_folder");
         words.push(if boxed {
             "the box backup carrying Sew's bundles (k2 hostchat status says what K2 can't see)"
@@ -1600,6 +1592,8 @@ pub fn move_off_k2(row: &Row, launch_key: bool, box_backup: bool) -> Value {
         missing.push("keyring_mirror");
         words.push(if row.ship_kind == "dir" {
             "the keyring mirror (K2 sets it in the backup folder on its own; k2 hostchat status shows why it waits)"
+        } else if external {
+            "the keyring mirror (K2 backups (restic) leave the keys out until key escrow lands: k2 hostchat mirror dir <folder on another disk>)"
         } else if boxed {
             "the keyring mirror (the box backup doesn't set it: k2 hostchat mirror dir <folder on another disk>)"
         } else {
@@ -1610,12 +1604,13 @@ pub fn move_off_k2(row: &Row, launch_key: bool, box_backup: bool) -> Value {
         missing.push("launch_key");
         words.push("the launch key in the K2 vault (sew-launch-key; K2 copies it on its own once the vault is open)");
     }
+    let copy = if external { format!(" (bundles off the box in {})", super::offbox::LABEL) } else { String::new() };
     let line = if missing.is_empty() {
-        "Ready to move off K2: a backup bundle, the keyring mirror and the owner's sew-launch-key are enough".to_string()
+        format!("Ready to move off K2: a backup bundle{copy}, the keyring mirror and the owner's sew-launch-key are enough")
     } else {
-        format!("Not ready to move off K2: missing {}", words.join("; "))
+        format!("Not ready to move off K2{copy}: missing {}", words.join("; "))
     };
-    json!({"ready": missing.is_empty(), "missing": missing, "line": line})
+    json!({"ready": missing.is_empty(), "missing": missing, "line": line, "offbox": external.then_some(super::offbox::LABEL)})
 }
 
 /// The subset of Sew's alarms named in `which`.
@@ -1769,7 +1764,7 @@ pub(super) fn status_body(env: &Env, with_health: bool) -> Value {
         "recoveryKeyInVault": in_vault,
         "recoveryKeyVaultName": super::secrets::LAUNCH_NAME,
         // 0.46.8 (SW-8): what moving off K2 still needs.
-        "moveOffK2": move_off_k2(&row, in_vault, row.ship_kind == super::box_backup::KIND && super::box_backup::evidence(env).ok),
+        "moveOffK2": move_off_k2(&row, in_vault, super::offbox::carries(env, &row)),
         "masterKeyAgeDays": row.master_key_created_at.map(|t| (now - t) / 86_400),
         "rotationInProgress": row.master_prev_ref.is_some(),
         "backup": backup_status(env, &row, sew_status.as_ref()),

@@ -1134,6 +1134,8 @@ fn upgrade_machine_with_flip(env: &Env, req: &UpgradeRequest, from: &str, ops: &
         fn voice_save(&self, v: Option<&Value>) -> Result<(), String> { self.inner.voice_save(v) }
         fn record_load(&self, name: &str) -> Option<Value> { self.inner.record_load(name) }
         fn record_save(&self, name: &str, v: Option<&Value>) -> Result<(), String> { self.inner.record_save(name, v) }
+        fn box_backup_facts(&self) -> crate::sew::box_backup::BoxBackupFacts { self.inner.box_backup_facts() }
+        fn box_backup_run(&self) -> crate::sew::offbox::RunFacts { self.inner.box_backup_run() }
     }
     let w = Watch { inner: ops };
     let env2 = Env { ops: &w, secrets: env.secrets, latch: env.latch, token: env.token };

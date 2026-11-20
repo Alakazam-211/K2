@@ -267,6 +267,12 @@ pub trait SewOps: Send + Sync {
         use super::box_backup as bb;
         bb::cached(|| bb::read_with(&self.helper_state(), bb::direct_read, bb::timer_word, |argv| self.helper(argv, None)))
     }
+    /// What systemd says of the box backup's last run (0.46.18,
+    /// [`super::offbox`]): `systemctl show k2-backup.service`, no root,
+    /// cached for [`super::offbox::CACHE_SECS`].
+    fn box_backup_run(&self) -> super::offbox::RunFacts {
+        super::offbox::cached(super::offbox::read_run)
+    }
 
     // ── the plan tier (voice rooms PRD v1.9 §8, S7) ───────────────────────
     /// This box's plan tier, cached by the tunnel's refresh loop
@@ -961,6 +967,8 @@ pub mod fake {
         pub box_backup: Mutex<crate::sew::box_backup::BoxBackupFacts>,
         /// How many times [`SewOps::box_backup_facts`] was read.
         pub box_backup_reads: Mutex<usize>,
+        /// [`SewOps::box_backup_run`] (default: systemd knows no run).
+        pub box_backup_run: Mutex<crate::sew::offbox::RunFacts>,
         /// What `sew recording status` reports (0.46.11 K-a): `installed`,
         /// `enabled`, `model`, and the sidecars' `versions`.
         pub recording: Mutex<Value>,
@@ -1099,6 +1107,7 @@ pub mod fake {
                     timer: "not-found".into(),
                 }),
                 box_backup_reads: Mutex::new(0),
+                box_backup_run: Mutex::new(crate::sew::offbox::RunFacts::default()),
                 recording: Mutex::new(json!({"installed": false, "enabled": false, "model": null})),
                 policies: Mutex::new(serde_json::Map::new()),
             }
@@ -1849,6 +1858,9 @@ pub mod fake {
         fn box_backup_facts(&self) -> crate::sew::box_backup::BoxBackupFacts {
             *self.box_backup_reads.lock().unwrap() += 1;
             self.box_backup.lock().unwrap().clone()
+        }
+        fn box_backup_run(&self) -> crate::sew::offbox::RunFacts {
+            self.box_backup_run.lock().unwrap().clone()
         }
         fn mirror_dir(&self, path: &str) -> Result<(), String> {
             if let Some(e) = self.mirror_dir_fail.lock().unwrap().clone() {

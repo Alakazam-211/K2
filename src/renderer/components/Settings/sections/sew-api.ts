@@ -90,11 +90,27 @@ export interface SewBoxBackup {
   line?: string
 }
 
+/** The box backup (K2 backups, restic) carrying chat's backups (0.46.18). */
+export interface SewExternalShip {
+  label: string
+  /** The newest snapshot with them (unix seconds), when K2 has seen one. */
+  lastShippedAt?: number | null
+  ageHours?: number | null
+  staleAfterHours?: number
+  fresh: boolean
+  line?: string
+}
+
 export interface SewShip {
+  /** `dir`, `box-backup`, `none`, or `external` (setting none, carried by the box backup). */
   kind: string
+  /** The stored choice (0.46.18): `dir`, `box-backup` or `none`. */
+  setting?: string
   path?: string | null
-  /** Kind `box-backup` only. */
+  /** Kind `box-backup`, or whenever the box backup carries them. */
   boxBackup?: SewBoxBackup | null
+  label?: string | null
+  external?: SewExternalShip | null
   lastShippedId?: string | null
   lastShippedAt?: number | string | null
   lastError?: string | null
@@ -344,6 +360,7 @@ export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
   k2_owner_blocked: { severity: 'warn', title: 'Setting you up as owner failed', fix: 'Try again from User Access, where it syncs people to chat.' },
   k2_backup_offbox_none: { severity: 'warn', title: 'Backups stay on this server', fix: 'Choose where copies of the backups go, so a disk loss doesn’t take them too.', action: 'offbox' },
   k2_backup_not_shipped: { severity: 'warn', title: 'The last backup wasn’t copied to another machine', fix: 'Check where copies of the backups go, under Backups and keys.', action: 'offbox' },
+  k2_backup_offbox_stale: { severity: 'warn', title: 'The copy on another machine is behind', fix: 'K2 backups haven’t taken a new copy of chat’s backups in 36 hours. Check that the server’s scheduled backup runs.' },
   k2_upgrade_rollback_failed: { severity: 'error', title: 'An update failed and couldn’t go back', fix: 'Someone has to fix this on the server itself.', ask: 'Ask an admin to read the update’s record on the server.', command: 'cat /usr/local/lib/sew/upgrade-state.json' },
   k2_turn_cert_missing: { severity: 'error', title: 'Voice calls have no certificate', fix: 'Calls can’t connect securely.', ...RENEW },
   k2_turn_cert_expired: { severity: 'error', title: 'The voice certificate expired', fix: 'Calls can’t connect securely.', ...RENEW },

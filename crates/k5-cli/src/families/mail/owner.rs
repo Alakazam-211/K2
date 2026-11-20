@@ -18,9 +18,9 @@ use super::py::{self as p, attr_get, big, iter};
 use crate::exit::Exit;
 use crate::out::json::Value;
 use crate::out::py;
+use crate::prompt::{self, AtEof, Echo};
 use crate::transport::urllib::Method;
 use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
-use std::io::Read as _;
 use std::time::{Duration, Instant};
 
 /// The verbs (second words) this module answers.
@@ -111,20 +111,11 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
     r.unwrap_or_else(|p| p)
 }
 
-/// `IFS= read -r line || true` on stdin: the bytes up to the first
-/// newline (or the end), the NULs bash drops gone. `None`: not UTF-8.
+/// `IFS= read -r line || true` on stdin ([`crate::prompt::read_line`]):
+/// the line, or what came before the end. `None`: not UTF-8.
 fn read_line() -> Option<String> {
-    let mut line = Vec::new();
-    let mut byte = [0u8; 1];
-    let mut stdin = std::io::stdin().lock();
-    while let Ok(1) = stdin.read(&mut byte) {
-        match byte[0] {
-            b'\n' => break,
-            0 => {}
-            b => line.push(b),
-        }
-    }
-    String::from_utf8(line).ok()
+    let secret = prompt::read_line(Echo::Shown, AtEof::Keep);
+    String::from_utf8(secret.expose().to_vec()).ok()
 }
 
 /// A value flag's value: `[ $# -ge 2 ] || { _mail_err "usage" <hint>; exit 2; }`.

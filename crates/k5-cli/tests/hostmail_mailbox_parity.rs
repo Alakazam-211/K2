@@ -55,37 +55,73 @@ fn hostmail_mailbox_verbs_take_the_words_as_the_shell_does() {
         usage_case("quota, an unknown sub-command", &["quota", "show"]),
         usage_case("quota get, no address", &["quota", "get"]),
         usage_case("quota get, two addresses", &["quota", "get", "a@x", "b@x"]),
-        usage_case("quota get, an unknown flag", &["quota", "get", "a@x", "--gb"]),
-        usage_case("quota get, --address with no value", &["quota", "get", "--address"]),
+        usage_case(
+            "quota get, an unknown flag",
+            &["quota", "get", "a@x", "--gb"],
+        ),
+        usage_case(
+            "quota get, --address with no value",
+            &["quota", "get", "--address"],
+        ),
         usage_case("quota set, no address", &["quota", "set", "--gb", "1"]),
         usage_case("quota set, nothing to set", &["quota", "set", "a@x"]),
         usage_case(
             "quota set, bytes and gb",
             &["quota", "set", "a@x", "--bytes", "1", "--gb", "1"],
         ),
-        usage_case("quota set, gb not a number", &["quota", "set", "a@x", "--gb", "1.5"]),
+        usage_case(
+            "quota set, gb not a number",
+            &["quota", "set", "a@x", "--gb", "1.5"],
+        ),
         usage_case(
             "quota set, messages negative",
             &["quota", "set", "a@x", "--messages", "-1"],
         ),
-        usage_case("quota set, --bytes with no value", &["quota", "set", "a@x", "--bytes"]),
-        usage_case("quota set, an unknown flag", &["quota", "set", "a@x", "--tb", "1"]),
+        usage_case(
+            "quota set, --bytes with no value",
+            &["quota", "set", "a@x", "--bytes"],
+        ),
+        usage_case(
+            "quota set, an unknown flag",
+            &["quota", "set", "a@x", "--tb", "1"],
+        ),
         usage_case("catchall, an unknown sub-command", &["catchall", "get"]),
-        usage_case("catchall set, no domain", &["catchall", "set", "--address", "a@x"]),
-        usage_case("catchall set, no address", &["catchall", "set", "acme.example"]),
+        usage_case(
+            "catchall set, no domain",
+            &["catchall", "set", "--address", "a@x"],
+        ),
+        usage_case(
+            "catchall set, no address",
+            &["catchall", "set", "acme.example"],
+        ),
         usage_case(
             "catchall set, --address with no value",
             &["catchall", "set", "acme.example", "--address"],
         ),
         usage_case("catchall unset, no domain", &["catchall", "unset"]),
-        usage_case("catchall unset, --address", &["catchall", "unset", "x", "--address", "a"]),
-        usage_case("catchall show, two domains", &["catchall", "show", "a", "b"]),
-        usage_case("catchall show, --domain with no value", &["catchall", "show", "--domain"]),
+        usage_case(
+            "catchall unset, --address",
+            &["catchall", "unset", "x", "--address", "a"],
+        ),
+        usage_case(
+            "catchall show, two domains",
+            &["catchall", "show", "a", "b"],
+        ),
+        usage_case(
+            "catchall show, --domain with no value",
+            &["catchall", "show", "--domain"],
+        ),
         usage_case("alias, an unknown sub-command", &["alias", "rm"]),
         usage_case("alias add, no alias", &["alias", "add", "a@x"]),
-        usage_case("alias add, three words", &["alias", "add", "a@x", "b@x", "c@x"]),
+        usage_case(
+            "alias add, three words",
+            &["alias", "add", "a@x", "b@x", "c@x"],
+        ),
         usage_case("alias remove, nothing", &["alias", "remove"]),
-        usage_case("alias remove, an unknown flag", &["alias", "remove", "a@x", "-x"]),
+        usage_case(
+            "alias remove, an unknown flag",
+            &["alias", "remove", "a@x", "-x"],
+        ),
         usage_case("alias list, no mailbox", &["alias", "list", "--json"]),
         usage_case("alias list, two", &["alias", "list", "a@x", "b@x"]),
     ];
@@ -114,13 +150,28 @@ fn hostmail_mailbox_verbs_answer_as_the_shell_does() {
         // covers: hostmail quota set
         ok_case(
             "quota set, gb and messages",
-            &["quota", "set", "sales@acme.example", "--gb", "007", "--messages", "5000"],
+            &[
+                "quota",
+                "set",
+                "sales@acme.example",
+                "--gb",
+                "007",
+                "--messages",
+                "5000",
+            ],
             QUOTA,
         ),
         // covers: hostmail quota set --json
         ok_case(
             "quota set, bytes --json",
-            &["quota", "set", "--bytes", "0", "sales@acme.example", "--json"],
+            &[
+                "quota",
+                "set",
+                "--bytes",
+                "0",
+                "sales@acme.example",
+                "--json",
+            ],
             r#"{"ok":true}"#,
         ),
         ok_case(
@@ -131,7 +182,13 @@ fn hostmail_mailbox_verbs_answer_as_the_shell_does() {
         // covers: hostmail catchall
         ok_case(
             "catchall set",
-            &["catchall", "set", "acme.example", "--address", "sales@acme.example"],
+            &[
+                "catchall",
+                "set",
+                "acme.example",
+                "--address",
+                "sales@acme.example",
+            ],
             r#"{"ok":true,"domain":"acme.example","catchAllAddress":"sales@acme.example"}"#,
         ),
         // covers: hostmail catchall --json
@@ -159,12 +216,23 @@ fn hostmail_mailbox_verbs_answer_as_the_shell_does() {
         // covers: hostmail alias --json
         ok_case(
             "alias remove --json",
-            &["alias", "remove", "--json", "sales@acme.example", "deals@acme.example"],
+            &[
+                "alias",
+                "remove",
+                "--json",
+                "sales@acme.example",
+                "deals@acme.example",
+            ],
             r#"{"ok":true,"removed":"deals@acme.example"}"#,
         ),
         ok_case(
             "alias remove",
-            &["alias", "remove", "sales@acme.example", "deals@acme.example"],
+            &[
+                "alias",
+                "remove",
+                "sales@acme.example",
+                "deals@acme.example",
+            ],
             r#"{"ok":true}"#,
         ),
         ok_case(
@@ -186,8 +254,16 @@ fn hostmail_mailbox_verbs_answer_as_the_shell_does() {
             3,
             1,
         ),
-        traceback("quotas that are a list", &["quota", "get", "a@x"], r#"{"ok":true,"quotas":[1]}"#),
-        traceback("an answer that is a list", &["catchall", "show", "x"], "[1]"),
+        traceback(
+            "quotas that are a list",
+            &["quota", "get", "a@x"],
+            r#"{"ok":true,"quotas":[1]}"#,
+        ),
+        traceback(
+            "an answer that is a list",
+            &["catchall", "show", "x"],
+            "[1]",
+        ),
         traceback(
             "aliases that are numbers",
             &["alias", "list", "a@x"],

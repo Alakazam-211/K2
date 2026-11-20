@@ -90,13 +90,18 @@ fn quota(words: &[&str]) -> Result<Plan, Plan> {
             if wants_help(rest) {
                 return Ok(Plan::Help("hostmail/quota/set"));
             }
-            let use_ = format!("{CLI_NAME} hostmail quota set <addr> --bytes N|--gb N [--messages N]");
+            let use_ =
+                format!("{CLI_NAME} hostmail quota set <addr> --bytes N|--gb N [--messages N]");
             let g = scan(
                 rest,
                 &Spec {
                     slots: &["address"],
                     values: &[
-                        ("--bytes", "bytes", "--bytes requires a number (0 = unlimited)"),
+                        (
+                            "--bytes",
+                            "bytes",
+                            "--bytes requires a number (0 = unlimited)",
+                        ),
                         ("--gb", "gb", "--gb requires a number (0 = unlimited)"),
                         (
                             "--messages",
@@ -175,7 +180,11 @@ fn catchall(words: &[&str]) -> Result<Plan, Plan> {
     let set = *sub == "set";
     let values: &[(&str, &str, &str)] = if set {
         &[
-            ("--address", "address", "--address requires a minted mailbox"),
+            (
+                "--address",
+                "address",
+                "--address requires a minted mailbox",
+            ),
             ("--domain", "domain", "--domain requires a value"),
         ]
     } else {
@@ -225,8 +234,8 @@ fn alias(words: &[&str]) -> Result<Plan, Plan> {
         "--help" | "-h" => return Ok(Plan::Help("hostmail/alias")),
         other => {
             return Err(usage(format!(
-                "unknown alias command '{other}' — usage: {CLI_NAME} hostmail alias <add|remove|list>"
-            )))
+            "unknown alias command '{other}' — usage: {CLI_NAME} hostmail alias <add|remove|list>"
+        )))
         }
     };
     if wants_help(rest) {
@@ -257,9 +266,7 @@ fn alias(words: &[&str]) -> Result<Plan, Plan> {
         if mailbox.is_empty() {
             return Err(usage(format!("{CLI_NAME} hostmail alias list <mailbox>")));
         }
-        return Ok(Plan::Run(
-            run_env(verb, g.json).with("M_MAILBOX", mailbox),
-        ));
+        return Ok(Plan::Run(run_env(verb, g.json).with("M_MAILBOX", mailbox)));
     }
     if mailbox.is_empty() || alias.is_empty() {
         return Err(usage(if *sub == "add" {
@@ -413,7 +420,10 @@ fn alias_list_py(py_: &mut Py) -> R<()> {
         py_.print_json(&d);
         return Ok(());
     }
-    let rows = p::or(g(&d, "aliases", line::ALIAS_LIST_ROWS)?, Value::Array(Vec::new()));
+    let rows = p::or(
+        g(&d, "aliases", line::ALIAS_LIST_ROWS)?,
+        Value::Array(Vec::new()),
+    );
     if !py::truthy(&rows) {
         let m = or_env(py_, &d, "mailbox", "M_MAILBOX", line::ALIAS_LIST_NONE)?;
         py_.print(&format!("{m}  aliases=none"));
@@ -432,7 +442,11 @@ fn alias_change_py(py_: &mut Py, add: bool) -> R<()> {
         ("alias", sv(py_.env("M_ALIAS"))),
     ]);
     let (route, lc, lp) = if add {
-        ("/cli/mail/alias", line::ALIAS_ADD_CALL, line::ALIAS_ADD_PRINT)
+        (
+            "/cli/mail/alias",
+            line::ALIAS_ADD_CALL,
+            line::ALIAS_ADD_PRINT,
+        )
     } else {
         (
             "/cli/mail/alias/remove",

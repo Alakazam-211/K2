@@ -211,8 +211,8 @@ fn footer(words: &[&str]) -> Result<Plan, Plan> {
         "--help" | "-h" => return Ok(Plan::Help("hostmail/footer")),
         other => {
             return Err(usage(format!(
-                "unknown footer command '{other}' — usage: {CLI_NAME} hostmail footer <set|unset|show>"
-            )))
+            "unknown footer command '{other}' — usage: {CLI_NAME} hostmail footer <set|unset|show>"
+        )))
         }
     };
     if wants_help(rest) {
@@ -234,9 +234,7 @@ fn footer(words: &[&str]) -> Result<Plan, Plan> {
                 i += 1;
             }
             "--domain" if *sub == "show" => {
-                return Err(usage(
-                    "--domain is reserved — footer is host-wide this cut",
-                ));
+                return Err(usage("--domain is reserved — footer is host-wide this cut"));
             }
             "--domain" => {
                 domain = value(rest, i, reserved)?.to_string();

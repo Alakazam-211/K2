@@ -35,7 +35,11 @@ fn usage_case(name: &'static str, args: &'static [&'static str]) -> Case {
 /// A text file in the workspace, its trailing newlines to be dropped.
 fn note_file(r: &Rig) {
     owner_and_port(r);
-    std::fs::write(r.proj.join("note.txt"), "Away until Monday.\nAsk Acme support.\n\n\n").unwrap();
+    std::fs::write(
+        r.proj.join("note.txt"),
+        "Away until Monday.\nAsk Acme support.\n\n\n",
+    )
+    .unwrap();
 }
 
 const OOO_ON: &str = r#"{"ok":true,"address":"sales@acme.example","enabled":true,"days":3,"until":"2026-12-01","text":"Away.\nBack soon."}"#;
@@ -44,12 +48,31 @@ const OOO_ON: &str = r#"{"ok":true,"address":"sales@acme.example","enabled":true
 fn hostmail_notices_take_the_words_as_the_shell_does() {
     let rig = Rig::new(VERB, "nwords");
     let v = vec![
-        case("ooo alone: the help", &["ooo"], &[], vec![], owner_and_port, 0, 0),
-        case("footer alone: the help", &["footer"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "ooo alone: the help",
+            &["ooo"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "footer alone: the help",
+            &["footer"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         usage_case("ooo, an unknown sub-command", &["ooo", "on"]),
         usage_case("ooo set, no address", &["ooo", "set", "--text", "x"]),
         usage_case("ooo set, no text", &["ooo", "set", "a@x"]),
-        usage_case("ooo set, --text with no value", &["ooo", "set", "a@x", "--text"]),
+        usage_case(
+            "ooo set, --text with no value",
+            &["ooo", "set", "a@x", "--text"],
+        ),
         usage_case("ooo set, @ alone", &["ooo", "set", "a@x", "--text", "@"]),
         usage_case(
             "ooo set, no such file, before a bad flag",
@@ -59,19 +82,43 @@ fn hostmail_notices_take_the_words_as_the_shell_does() {
             "ooo set, a bad flag before a missing file",
             &["ooo", "set", "a@x", "--bogus", "--text", "@missing.txt"],
         ),
-        usage_case("ooo set, days 0", &["ooo", "set", "a@x", "--text", "x", "--days", "0"]),
-        usage_case("ooo set, days 32", &["ooo", "set", "a@x", "--text", "x", "--days", "32"]),
-        usage_case("ooo set, days a word", &["ooo", "set", "a@x", "--text", "x", "--days", "two"]),
-        usage_case("ooo set, --until with no value", &["ooo", "set", "a@x", "--until"]),
-        usage_case("ooo set, two addresses", &["ooo", "set", "a@x", "b@x", "--text", "x"]),
+        usage_case(
+            "ooo set, days 0",
+            &["ooo", "set", "a@x", "--text", "x", "--days", "0"],
+        ),
+        usage_case(
+            "ooo set, days 32",
+            &["ooo", "set", "a@x", "--text", "x", "--days", "32"],
+        ),
+        usage_case(
+            "ooo set, days a word",
+            &["ooo", "set", "a@x", "--text", "x", "--days", "two"],
+        ),
+        usage_case(
+            "ooo set, --until with no value",
+            &["ooo", "set", "a@x", "--until"],
+        ),
+        usage_case(
+            "ooo set, two addresses",
+            &["ooo", "set", "a@x", "b@x", "--text", "x"],
+        ),
         usage_case("ooo unset, no address", &["ooo", "unset"]),
-        usage_case("ooo show, an unknown flag", &["ooo", "show", "a@x", "--text", "x"]),
+        usage_case(
+            "ooo show, an unknown flag",
+            &["ooo", "show", "a@x", "--text", "x"],
+        ),
         usage_case("footer, an unknown sub-command", &["footer", "on"]),
         usage_case("footer set, no text", &["footer", "set"]),
         usage_case("footer set, a word", &["footer", "set", "--text", "x", "y"]),
-        usage_case("footer set, --domain with no value", &["footer", "set", "--domain"]),
+        usage_case(
+            "footer set, --domain with no value",
+            &["footer", "set", "--domain"],
+        ),
         usage_case("footer unset, --text", &["footer", "unset", "--text", "x"]),
-        usage_case("footer show, --domain", &["footer", "show", "--domain", "acme.example"]),
+        usage_case(
+            "footer show, --domain",
+            &["footer", "show", "--domain", "acme.example"],
+        ),
         usage_case("footer show, a word", &["footer", "show", "all"]),
     ];
     for c in &v {
@@ -102,7 +149,15 @@ fn hostmail_notices_answer_as_the_shell_does() {
         // covers: hostmail ooo set --json
         case(
             "ooo set --json, from a file",
-            &["ooo", "set", "--address", "sales@acme.example", "--text", "@note.txt", "--json"],
+            &[
+                "ooo",
+                "set",
+                "--address",
+                "sales@acme.example",
+                "--text",
+                "@note.txt",
+                "--json",
+            ],
             &[],
             vec![ok(r#"{"ok":true}"#)],
             note_file,
@@ -131,9 +186,17 @@ fn hostmail_notices_answer_as_the_shell_does() {
             r#"{"ok":true}"#,
         ),
         // covers: hostmail ooo show
-        ok_case("ooo show, on", &["ooo", "show", "sales@acme.example"], OOO_ON),
+        ok_case(
+            "ooo show, on",
+            &["ooo", "show", "sales@acme.example"],
+            OOO_ON,
+        ),
         // covers: hostmail ooo show --json
-        ok_case("ooo show --json", &["ooo", "show", "--json", "sales@acme.example"], OOO_ON),
+        ok_case(
+            "ooo show --json",
+            &["ooo", "show", "--json", "sales@acme.example"],
+            OOO_ON,
+        ),
         ok_case(
             "ooo show, on with no days or text",
             &["ooo", "show", "sales@acme.example"],
@@ -145,11 +208,23 @@ fn hostmail_notices_answer_as_the_shell_does() {
             r#"{"ok":true,"enabled":false}"#,
         ),
         // covers: hostmail footer set
-        ok_case("footer set", &["footer", "set", "--text", "Sent by Acme.\n"], r#"{"ok":true}"#),
+        ok_case(
+            "footer set",
+            &["footer", "set", "--text", "Sent by Acme.\n"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail footer set --json
         ok_case(
             "footer set --json, a domain",
-            &["footer", "set", "--domain", "acme.example", "--text", "", "--json"],
+            &[
+                "footer",
+                "set",
+                "--domain",
+                "acme.example",
+                "--text",
+                "",
+                "--json",
+            ],
             r#"{"ok":true}"#,
         ),
         // covers: hostmail footer unset
@@ -167,7 +242,11 @@ fn hostmail_notices_answer_as_the_shell_does() {
             r#"{"ok":true,"enabled":true,"text":"Sent by Acme."}"#,
         ),
         // covers: hostmail footer show --json
-        ok_case("footer show --json", &["footer", "show", "--json"], r#"{"ok":true,"enabled":false}"#),
+        ok_case(
+            "footer show --json",
+            &["footer", "show", "--json"],
+            r#"{"ok":true,"enabled":false}"#,
+        ),
         ok_case(
             "footer show, on with no text",
             &["footer", "show"],
@@ -234,7 +313,15 @@ fn help_never_acts() {
     for line in LINES {
         rig.check(&compare(
             Compare::Shell,
-            case("help, nothing sent", line, &[], vec![], owner_and_port, 0, 0),
+            case(
+                "help, nothing sent",
+                line,
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
         ));
     }
 }

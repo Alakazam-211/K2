@@ -84,22 +84,56 @@ fn hostmail_forward_takes_the_words_as_the_shell_does() {
         ),
         usage_case(
             "add, --address and a word",
-            &["forward", "add", "--address", "a@acme.example", "b@acme.example"],
+            &[
+                "forward",
+                "add",
+                "--address",
+                "a@acme.example",
+                "b@acme.example",
+            ],
         ),
         usage_case(
             "rm, --no-keep",
-            &["forward", "rm", "a@acme.example", "--to", "x@y", "--no-keep"],
+            &[
+                "forward",
+                "rm",
+                "a@acme.example",
+                "--to",
+                "x@y",
+                "--no-keep",
+            ],
         ),
         usage_case(
             "set, --keep twice then --no-keep",
-            &["forward", "set", "a@acme.example", "--keep", "--keep", "--no-keep", "--to", "x"],
+            &[
+                "forward",
+                "set",
+                "a@acme.example",
+                "--keep",
+                "--keep",
+                "--no-keep",
+                "--to",
+                "x",
+            ],
         ),
         usage_case("show, no address", &["forward", "show"]),
-        usage_case("show, --to", &["forward", "show", "a@acme.example", "--to", "x"]),
-        usage_case("unset, an unknown flag", &["forward", "unset", "a@acme.example", "--all"]),
+        usage_case(
+            "show, --to",
+            &["forward", "show", "a@acme.example", "--to", "x"],
+        ),
+        usage_case(
+            "unset, an unknown flag",
+            &["forward", "unset", "a@acme.example", "--all"],
+        ),
         usage_case("pause, two addresses", &["forward", "pause", "a@x", "b@x"]),
-        usage_case("resume, --to with no value", &["forward", "resume", "a@x", "--to"]),
-        usage_case("show, --address with no value", &["forward", "show", "--address"]),
+        usage_case(
+            "resume, --to with no value",
+            &["forward", "resume", "a@x", "--to"],
+        ),
+        usage_case(
+            "show, --address with no value",
+            &["forward", "show", "--address"],
+        ),
         usage_case("list, a word", &["forward", "list", "all"]),
         usage_case("list, an unknown flag", &["forward", "list", "--stopped"]),
     ];
@@ -112,7 +146,11 @@ fn hostmail_forward_takes_the_words_as_the_shell_does() {
 fn hostmail_forward_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "fanswer");
     let big = big_list();
-    assert!(big.len() > 256 * 1024, "the large list is {} bytes", big.len());
+    assert!(
+        big.len() > 256 * 1024,
+        "the large list is {} bytes",
+        big.len()
+    );
     let v = vec![
         // covers: hostmail forward
         ok_case("show", &["forward", "show", "sales@acme.example"], SHOW),
@@ -152,7 +190,13 @@ fn hostmail_forward_answers_as_the_shell_does() {
         ),
         ok_case(
             "rm",
-            &["forward", "rm", "sales@acme.example", "--to", "a@globex.example"],
+            &[
+                "forward",
+                "rm",
+                "sales@acme.example",
+                "--to",
+                "a@globex.example",
+            ],
             r#"{"ok":true,"removed":["a@globex.example"],"remaining":[]}"#,
         ),
         ok_case(
@@ -162,7 +206,13 @@ fn hostmail_forward_answers_as_the_shell_does() {
         ),
         ok_case(
             "pause, one destination",
-            &["forward", "pause", "sales@acme.example", "--to", "a@globex.example"],
+            &[
+                "forward",
+                "pause",
+                "sales@acme.example",
+                "--to",
+                "a@globex.example",
+            ],
             r#"{"ok":true,"forwards":[{"to":"a@globex.example"}]}"#,
         ),
         ok_case(
@@ -206,7 +256,13 @@ fn hostmail_forward_answers_as_the_shell_does() {
         ),
         case(
             "a destination stopped",
-            &["forward", "add", "sales@acme.example", "--to", "a@globex.example"],
+            &[
+                "forward",
+                "add",
+                "sales@acme.example",
+                "--to",
+                "a@globex.example",
+            ],
             &[],
             vec![answer(
                 409,

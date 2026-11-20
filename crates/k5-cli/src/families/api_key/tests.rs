@@ -353,3 +353,21 @@ fn the_readers() {
     );
     assert_eq!(status_reader(r#"{"error":"nope"}"#).stderr, "Error: nope\n");
 }
+
+#[test]
+fn the_lines_say_the_brand_s_name() {
+    let name = k2_client::brand::CLI_NAME;
+    let disabled = IdVerb::Disable.lines().0;
+    for l in [
+        USAGE[0],
+        USAGE[USAGE.len() - 2],
+        CEILING_USAGE,
+        IdVerb::Revoke.usage(),
+        disabled,
+    ] {
+        assert!(l.contains(&format!("{name} api-key")), "{l}");
+        if name != "k2" {
+            assert!(!l.contains("k2 "), "{l}");
+        }
+    }
+}

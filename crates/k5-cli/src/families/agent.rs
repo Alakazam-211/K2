@@ -5,7 +5,8 @@
 //! Native here: `conf`, `get`, `list`, `retire`, `restart`, `context`
 //! (`cli/src/agent-context.sh`), `template` (`cli/src/agent-template.sh`;
 //! its help forms stay the shell's), `identity` (an `id` tool: the
-//! session rules of [`crate::prelude::id_tool`]) and `access`. Every other
+//! session rules of [`crate::prelude::id_tool`]), `access`, and `harness`
+//! and `refresh` (the `id` tool `agent-harness`). Every other
 //! verb, and the family alone, is still the shell's: [`run`] hands it
 //! back before anything is printed or sent.
 //!
@@ -51,6 +52,7 @@
 
 mod conf;
 mod context;
+mod harness;
 mod identity;
 mod list;
 mod retire;
@@ -101,6 +103,9 @@ enum Form {
     Access(identity::Access),
     /// Plain lines on stderr, exit 2.
     Lines(Vec<String>),
+    Harness(harness::Args),
+    /// One line on stderr and its exit.
+    Stop(String, Exit),
 }
 
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -117,6 +122,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     // The `id` tools: the shell looks for a shared Codex server first.
     let tool = match *verb {
         "identity" => Some(identity::IDENTITY_TOOL),
+        "harness" | "refresh" => Some(harness::TOOL),
         _ => None,
     };
     if tool.is_some()
@@ -134,6 +140,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             }
         }
         "access" => Ok(Form::Access(identity::parse_access(rest))),
+        "harness" | "refresh" => match harness::parse(*verb == "harness", rest) {
+            Ok(a) => Ok(Form::Harness(a)),
+            Err((line, exit)) => Ok(Form::Stop(line, exit)),
+        },
         "conf" => conf::parse_conf(rest).map(Form::Conf),
         "get" => conf::parse_get(rest).map(Form::Get),
         "list" => list::parse(rest).map(|json| Form::List { json }),
@@ -186,8 +196,8 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let project = settings.project.clone();
     // `_cli_caller_is_agent_passport`: a cell socket set and a passport.
-    let agent_passport = settings.session
-        && matches!(settings.auth, crate::transport::Auth::Passport { .. });
+    let scoped = matches!(settings.auth, crate::transport::Auth::Passport { .. });
+    let agent_passport = settings.session && scoped;
     let mut client = match settings.client(passport::current(args).would_refuse()) {
         Ok(c) => c,
         Err(e) => {
@@ -226,6 +236,17 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
             Exit::Usage
         }
         Form::Access(identity::Access::Set(_)) => unreachable!("sent above"),
+        Form::Harness(mut a) => match harness::check_refresh_ws(&mut a, scoped) {
+            Ok(()) => harness::run(&mut client, &mut closing, &a),
+            Err((line, exit)) => {
+                out::stderr_line(&line);
+                exit
+            }
+        },
+        Form::Stop(line, exit) => {
+            out::stderr_line(&line);
+            exit
+        }
     };
     closing.flush(&mut client, exit);
     exit

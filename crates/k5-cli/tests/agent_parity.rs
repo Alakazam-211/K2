@@ -2267,3 +2267,254 @@ fn access() {
     }
     check(&rig, v);
 }
+
+fn notes(r: &Rig) {
+    owner_and_port(r);
+    std::fs::write(r.proj.join("notes.md"), "Carry on with the release.\r\nThen \u{e9}cho.\n").unwrap();
+}
+
+const MOVED: &str = r#"{"ok":true,"workspace":"qa","harness":"codex","fromHarness":"claude","model":"o3","claudeSessionId":"conv-2","sessionId":"term-2","fromSessionId":"term-1","oldChatInHistory":false,"ownSessionHeartbeats":["nightly","weekly"],"messageDelivered":true,"seedError":"too large"}"#;
+
+#[test]
+fn harness() {
+    let rig = Rig::new(VERB, "harness");
+    let mut v = vec![
+        // covers: agent harness
+        case("move", &["harness", "qa", "codex"], &[], vec![ok(MOVED)], owner_and_port, 0, 1),
+        case(
+            "move a folder, the whole transcript, a model, a notes file",
+            &["harness", "/tmp", "codex", "--full", "--model", "o3", "--notes-file", "notes.md"],
+            &[],
+            vec![ok(r#"{"ok":true,"workspace":"/tmp","harness":"codex","messageDelivered":false,"messageHint":"Open the chat.","handoffPath":"/tmp/h.md"}"#)],
+            notes,
+            0,
+            1,
+        ),
+        case(
+            "already on it",
+            &["harness", "qa", "claude", "--recent"],
+            &[],
+            vec![ok(r#"{"ok":true,"workspace":"qa","harness":"claude","alreadyOn":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "the plan",
+            &["harness", "qa", "codex", "--dry-run"],
+            &[],
+            vec![ok(r#"{"ok":true,"dryRun":true,"workspace":"qa","harness":"codex","fromHarness":"claude","model":"o3","launches":"/usr/bin/codex","ownSessionHeartbeats":["n"]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "the plan, the same harness",
+            &["harness", "qa", "codex", "--dry-run"],
+            &[],
+            vec![ok(r#"{"ok":true,"dryRun":true,"workspace":"qa","harness":"codex","fromHarness":"codex"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent harness --json
+        case("--json", &["harness", "qa", "codex", "--json"], &[], vec![ok(MOVED)], owner_and_port, 0, 1),
+        case(
+            "an agent is refused: exit 3",
+            &["harness", "qa", "codex"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"harness_needs_person","hint":"ask a person"},"handoffPath":"/h.md"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "refused, --json",
+            &["harness", "qa", "codex", "--json"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"harness_needs_person","hint":"ask"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "an older daemon",
+            &["harness", "qa", "codex"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":"route not found"}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "an unknown harness: exit 2",
+            &["harness", "qa", "nope"],
+            &[],
+            vec![Reply::Answer(400, r#"{"error":{"code":"unknown_harness","message":"no harness nope"}}"#.into())],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "an error with no words",
+            &["harness", "qa", "codex"],
+            &[],
+            vec![Reply::Answer(500, r#"{"ok":false}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case("not JSON", &["harness", "qa", "codex"], &[], vec![ok("nope")], owner_and_port, 1, 1),
+        case("not a dict", &["harness", "qa", "codex"], &[], vec![ok("[1]")], owner_and_port, 1, 1),
+        case("no answer", &["harness", "qa", "codex"], &[], vec![Reply::Close], owner_and_port, 1, 1),
+        case(
+            "a notes file that isn't there",
+            &["harness", "qa", "codex", "--notes-file", "gone.md"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "a session with no passport: refused",
+            &["harness", "qa", "codex"],
+            &[("K2_HOOK_SOCK", "{nosock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        Case {
+            env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+            ..case(
+                "a session with a passport: the passport",
+                &["harness", "qa", "codex"],
+                &[],
+                vec![Reply::Answer(403, r#"{"error":{"code":"harness_needs_person","hint":"ask"}}"#.into())],
+                owner_and_port,
+                3,
+                1,
+            )
+        },
+    ];
+    for args in [
+        &["harness"][..],
+        &["harness", "qa"],
+        &["harness", "qa", "codex", "x"],
+        &["harness", "--zz"],
+        &["harness", "qa", "codex", "--notes-file"],
+        &["harness", "qa", "codex", "--model", ""],
+        &["harness", "qa", "codex", "--note", "x"],
+    ] {
+        v.push(case("a usage line", leak(args), &[], vec![], owner_and_port, 2, 0));
+    }
+    check(&rig, v);
+}
+
+const REFRESHED: &str = r#"{"ok":true,"workspace":"qa","harness":"claude","claudeSessionId":"conv-3","fromSessionId":"term-1","messageDelivered":true}"#;
+
+#[test]
+fn refresh() {
+    let rig = Rig::new(VERB, "refresh");
+    let mut v = vec![
+        // covers: agent refresh
+        case(
+            "refresh with a note",
+            &["refresh", "qa", "--note", "Pick up the review."],
+            &[],
+            vec![ok(REFRESHED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "refresh with a notes file, not delivered",
+            &["refresh", "/tmp", "--notes-file", "notes.md", "--full"],
+            &[],
+            vec![ok(r#"{"ok":true,"workspace":"/tmp","harness":"codex","sessionId":"t9","messageDelivered":false,"handoffPath":"/tmp/h.md"}"#)],
+            notes,
+            0,
+            1,
+        ),
+        case(
+            "this workspace from PROJECT_PATH",
+            &["refresh"],
+            &[("K2_PROJECT_PATH", "/srv/qa")],
+            vec![ok(REFRESHED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "the plan, a person must allow it",
+            &["refresh", "qa", "--dry-run"],
+            &[],
+            vec![ok(r#"{"ok":true,"dryRun":true,"workspace":"qa","harness":"claude","needsPerson":true,"launches":"/usr/bin/claude","noteChars":42}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent refresh --json
+        case("--json", &["refresh", "qa", "--json"], &[], vec![ok(REFRESHED)], owner_and_port, 0, 1),
+        case(
+            "refused",
+            &["refresh", "qa"],
+            &[],
+            vec![Reply::Answer(401, r#"{"error":"not allowed"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "an older daemon",
+            &["refresh", "qa"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":{"hint":"route /cli/agent/refresh not found"}}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "a usage error from the daemon",
+            &["refresh", "qa"],
+            &[],
+            vec![Reply::Answer(400, r#"{"error":{"code":"usage","hint":"bad mode"}}"#.into())],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case("no answer", &["refresh", "qa"], &[], vec![Reply::Close], owner_and_port, 1, 1),
+        case(
+            "no workspace and no passport",
+            &["refresh", "--dry-run"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        Case {
+            env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+            ..case(
+                "a session with a passport: its own chat",
+                &["refresh", "--note", "x"],
+                &[],
+                vec![ok(REFRESHED)],
+                owner_and_port,
+                0,
+                1,
+            )
+        },
+    ];
+    for args in [
+        &["refresh", "a", "b"][..],
+        &["refresh", "--note"],
+        &["refresh", "--note", "x", "--notes-file", "y"],
+        &["refresh", "--model", "x"],
+        &["refresh", "--zz"],
+    ] {
+        v.push(case("a usage line", leak(args), &[], vec![], owner_and_port, 2, 0));
+    }
+    check(&rig, v);
+}

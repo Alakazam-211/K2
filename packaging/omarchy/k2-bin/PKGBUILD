@@ -17,6 +17,10 @@ depends=(
     'libcap'
     # Same as packaging/arch/PKGBUILD: cpal's ALSA backend for native voice calls.
     'alsa-lib'
+    # Same as packaging/arch/PKGBUILD (namcap): k2-gui links libdbus-1; the
+    # icons go in the hicolor tree.
+    'dbus'
+    'hicolor-icon-theme'
 )
 optdepends=('gnome-keyring: Secret Service provider for K2 Connect tokens')
 provides=("${_pkgname}=${pkgver}")

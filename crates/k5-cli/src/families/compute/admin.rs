@@ -148,12 +148,15 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if prelude::gate(&settings).is_none()
-        && settings.port_text.as_deref().and_then(curl_port).is_none()
-    {
+    let gate = prelude::gate(&settings);
+    if gate.is_none() && settings.port_text.as_deref().and_then(curl_port).is_none() {
         return None;
     }
-    if let Some(gate) = prelude::gate(&settings) {
+    // `compute` alone only prints the help page: the shell skips its
+    // connection gate for it (`cli/src/cli-tools-policy.sh`), not the
+    // virtual desktop's guard.
+    let help_only = matches!(setup_words, Some(Words::Ask(setup::Ask::Usage)));
+    if let Some(gate) = gate.filter(|g| !(help_only && *g == prelude::Gate::CannotConnect)) {
         return Some(gate.stop());
     }
     let would_refuse = passport::current(args).would_refuse();
@@ -161,6 +164,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, writes::TOOL)
     {
         return Some(stop);
+    }
+    // Nothing to send, and no client to build with no port or token.
+    if help_only {
+        return Some(setup::usage());
     }
     // `compute` alone has no words after the verb.
     let rest = words.get(1..).unwrap_or_default();

@@ -3,8 +3,9 @@
 //! rig ([`common::parity`]): the same requests, stdout, stderr and exit
 //! code.
 //!
-//! - `compute` alone: the help page, after the gates and the `id` tool's
-//!   lines (`cmd_compute`'s `""` arm).
+//! - `compute` alone: the help page (`cmd_compute`'s `""` arm), after the
+//!   virtual desktop's guard and the `id` tool's lines. The shell skips
+//!   its connection gate for it, so it prints with no daemon too.
 //! - `chat --json`: `--json` is no verb, so `cmd_chat` says so
 //!   (`_chat_usage_err`, exit 2). `chat` alone stays the front's composed
 //!   page (`help_tiers_parity.rs` and `chat_parity.rs` have it).
@@ -59,12 +60,12 @@ fn compute_alone() {
             0,
         ),
         case(
-            "compute alone, no daemon: the connection gate",
+            "compute alone, no daemon: no connection gate",
             &[],
             &[],
             vec![],
             nothing,
-            1,
+            0,
             0,
         ),
         session(case(
@@ -76,6 +77,15 @@ fn compute_alone() {
             0,
             0,
         )),
+        case(
+            "compute alone: the virtual desktop's guard still stands",
+            &[],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
         case(
             "compute alone: HOOK_SOCK set and no passport",
             &[],

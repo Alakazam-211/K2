@@ -287,6 +287,7 @@ pub fn recording_start(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
     let dm = the_dm(p, b)?;
     let body = json!({ "audio_keep_days": dm_keep_days(ctx.audio_max_days) });
     let a = crate::home_chat::routes::sew_as(&p.ext.to_string(), "POST", &bff::paths::recording_start(&dm), Some(&body))?;
+    bff::note_recording_sew_status(a.status);
     if !a.ok() {
         return Err(bff::recording_act_refusal(&a));
     }

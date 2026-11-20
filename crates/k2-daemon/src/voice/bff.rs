@@ -1191,6 +1191,22 @@ pub(crate) fn recording_act_refusal(a: &SewAnswer) -> Refusal {
     Refusal::new(status, code, hint).details(json!({ "sew": sew }))
 }
 
+thread_local! {
+    /// The HTTP status Sew gave the last Record or Stop on this thread, for
+    /// the route's one log line (`routes::logged_recording`).
+    static RECORDING_SEW_STATUS: std::cell::Cell<Option<u16>> = const { std::cell::Cell::new(None) };
+}
+
+/// Note the status Sew gave a Record or Stop.
+pub(crate) fn note_recording_sew_status(status: u16) {
+    RECORDING_SEW_STATUS.with(|c| c.set(Some(status)));
+}
+
+/// The status noted since the last take (`None`: the call never reached Sew).
+pub(crate) fn take_recording_sew_status() -> Option<u16> {
+    RECORDING_SEW_STATUS.with(|c| c.take())
+}
+
 /// `POST /cli/voice/recording/start {room}` and `…/stop {recordingId}`:
 /// the person's own Record or Stop, sent to Sew as them (their own Sew
 /// session, as consent is). Sew decides who may; pressing Record is the
@@ -1204,6 +1220,7 @@ pub fn recording_act(p: &Person, act: &RecordingAct, rooms: &[RoomRow], d: &Deps
         RecordingAct::Stop { recording_id } => paths::recording_stop(recording_id),
     };
     let a = as_person(p, d, &path, &json!({}))?;
+    note_recording_sew_status(a.status);
     if !a.ok() {
         return Err(recording_act_refusal(&a));
     }

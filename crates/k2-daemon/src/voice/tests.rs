@@ -748,6 +748,108 @@ fn record_and_stop_reach_sew_as_the_person() {
     bff::forget_all();
 }
 
+/// Every Record and Stop writes ONE log line, success, refusal or Sew
+/// failure: info or warn, the person as a hash, the room, the outcome,
+/// K2's and Sew's status. No token, no Sew session, no recording content,
+/// no raw person or recording id.
+#[test]
+fn record_and_stop_log_one_line_each() {
+    let _l = lane::test_lock();
+    bff::forget_all();
+    let _ = routes::take_recording_log();
+    let start = bff::paths::recording_start("901");
+    let stop = bff::paths::recording_stop("4242");
+    let ada = person("ada", UUID_ADA, Role::Member, "tok-ada-rec");
+    let ada_login = Caller::Login { username: "ada".into(), role: Role::Member, token: "tok-ada-rec".into() };
+    let ada_hash = crate::thread_activity_limit::hashed_key("person", "login:ada");
+    let rooms = vec![room(1, "901", ROOM_ACTIVE)];
+    let answer = |r: Result<Value, bff::Refusal>| match r {
+        Ok(v) => crate::cli_response::CliResponse::ok_json(v.to_string()),
+        Err(r) => routes::refuse(&r),
+    };
+    // The line's fields, as key=value; the words before them.
+    let fields = |line: &str| -> BTreeMap<String, String> {
+        line.split(' ').filter_map(|w| w.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    };
+    let clean = |line: &str| {
+        for bad in ["tok-ada-rec", "sews_ada", "login:ada", UUID_ADA, "starting", "stopping", "4242", "901"] {
+            assert!(!line.contains(bad), "{bad:?} in {line}");
+        }
+        assert!(!line.split([' ', '=']).any(|w| w == "ada"), "the raw login in {line}");
+    };
+
+    // Success: Record, then Stop.
+    let sew = Arc::new(FakeSew::default());
+    session_ok(&sew, "sews_ada");
+    sew.answer(&start, 200, json!({"id": "4242", "state": "starting", "transcript": "secret words"}));
+    sew.answer(&stop, 200, json!({"id": "4242", "state": "stopping"}));
+    let d = deps(sew.clone());
+    let r = routes::logged_recording(&ada_login, routes::RECORDING_START, &json!({"room": "room-1"}), || {
+        answer(bff::recording_act(&ada, &bff::RecordingAct::Start { room: "room-1".into() }, &rooms, &d))
+    });
+    assert!(r.status.starts_with("200"), "{}", r.body);
+    let lines = routes::take_recording_log();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("[voice] info recording start "), "{}", lines[0]);
+    let f = fields(&lines[0]);
+    assert_eq!(f["person"], ada_hash);
+    assert_eq!(f["room"], "room-1");
+    assert_eq!(f["outcome"], "started");
+    assert_eq!(f["http"], "200");
+    assert_eq!(f["sew"], "200");
+    clean(&lines[0]);
+    assert!(!lines[0].contains("secret words"));
+    routes::logged_recording(&ada_login, routes::RECORDING_STOP, &json!({"recordingId": "4242"}), || {
+        answer(bff::recording_act(&ada, &bff::RecordingAct::Stop { recording_id: "4242".into() }, &rooms, &d))
+    });
+    let lines = routes::take_recording_log();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let f = fields(&lines[0]);
+    assert!(lines[0].starts_with("[voice] info recording stop "), "{}", lines[0]);
+    assert_eq!(f["recording"], crate::thread_activity_limit::hashed_key("recording", "4242"));
+    assert_eq!((f["outcome"].as_str(), f["sew"].as_str()), ("stopped", "200"));
+    clean(&lines[0]);
+
+    // A refusal (not allowed): an agent's Record never reaches Sew.
+    let r = routes::recording_act(&Caller::Passport, "owner-tok-rec", routes::RECORDING_START, &json!({"room": "1"}));
+    assert!(r.status.starts_with("403"), "{}", r.body);
+    let lines = routes::take_recording_log();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("[voice] warn recording start "), "{}", lines[0]);
+    let f = fields(&lines[0]);
+    assert_eq!(f["person"], "agent");
+    assert_eq!(f["room"], "1");
+    assert_eq!(f["outcome"], "agents_not_in_voice");
+    assert_eq!((f["http"].as_str(), f["sew"].as_str()), ("403", "-"));
+    assert!(!lines[0].contains("owner-tok-rec"), "{}", lines[0]);
+
+    // A Sew failure: Sew's status rides along with K2's code.
+    bff::forget_all();
+    let s = Arc::new(FakeSew::default());
+    session_ok(&s, "sews_ada");
+    s.answer(&start, 503, json!({"error": {"code": "unavailable", "hint": "tok-ada-rec", "details": {"reason": "recording_unavailable"}}}));
+    let d = deps(s);
+    let r = routes::logged_recording(&ada_login, routes::RECORDING_START, &json!({"room": "room-1"}), || {
+        answer(bff::recording_act(&ada, &bff::RecordingAct::Start { room: "room-1".into() }, &rooms, &d))
+    });
+    assert!(r.status.starts_with("503"), "{}", r.body);
+    let lines = routes::take_recording_log();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("[voice] warn recording start "), "{}", lines[0]);
+    let f = fields(&lines[0]);
+    assert_eq!(f["person"], ada_hash);
+    assert_eq!((f["outcome"].as_str(), f["http"].as_str(), f["sew"].as_str()), ("recording_unavailable", "503", "503"));
+    clean(&lines[0]);
+
+    // A room named by its channel id or a DM is logged as a hash.
+    let r = routes::recording_act(&Caller::Passport, "owner-tok-rec", routes::RECORDING_START, &json!({"dm": "901"}));
+    assert!(r.status.starts_with("403"), "{}", r.body);
+    let lines = routes::take_recording_log();
+    assert_eq!(fields(&lines[0])["dm"], crate::thread_activity_limit::hashed_key("dm", "901"));
+    clean(&lines[0]);
+    bff::forget_all();
+}
+
 /// Sew 0.9.0's plugin has no `can_record` / `can_stop` (0.9.2 adds them):
 /// K2 reads the person's own `my_perms` on the room's channel for the
 /// client's buttons (RECORD_CALLS bit 23, MANAGE_CHANNELS bit 32).

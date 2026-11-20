@@ -976,10 +976,85 @@ fn recording_id_ok(id: &str) -> bool {
     !id.is_empty() && id.len() <= 19 && !id.starts_with('0') && id.bytes().all(|x| x.is_ascii_digit())
 }
 
-/// `POST /cli/voice/recording/start {room}` / `{dm}` / `…/stop {recordingId}`:
-/// the caller's class first (a Voice & Chat only login never records), then
+/// `POST /cli/voice/recording/start {room}` / `{dm}` / `…/stop {recordingId}`,
+/// with its one log line.
+pub(crate) fn recording_act(c: &Caller, owner_token: &str, path: &str, b: &Value) -> CliResponse {
+    logged_recording(c, path, b, || recording_act_inner(c, owner_token, path, b))
+}
+
+/// Runs a Record or Stop and logs ONE line for it, whatever the outcome:
+/// info when it worked, warn when it was refused or failed. The line has
+/// the person as a hash, the room (a room number as typed, any other room
+/// key, a DM or a recording id as a hash), the outcome code, K2's status
+/// and Sew's status when the call reached Sew. Never a token, a password,
+/// the recording's content or a raw id.
+pub(crate) fn logged_recording(c: &Caller, path: &str, b: &Value, run: impl FnOnce() -> CliResponse) -> CliResponse {
+    let _ = bff::take_recording_sew_status();
+    let r = run();
+    let sew = bff::take_recording_sew_status();
+    let line = recording_log_line(c, path, b, &r, sew);
+    k2_core::log_debug!("{line}");
+    #[cfg(test)]
+    RECORDING_LOG.with(|l| l.borrow_mut().push(line));
+    r
+}
+
+#[cfg(test)]
+thread_local! {
+    static RECORDING_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The log lines [`logged_recording`] wrote on this thread since the last take.
+#[cfg(test)]
+pub(crate) fn take_recording_log() -> Vec<String> {
+    RECORDING_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
+/// `[voice] info|warn recording start|stop person=… room=…|dm=…|recording=… outcome=… http=… sew=…`.
+fn recording_log_line(c: &Caller, path: &str, b: &Value, r: &CliResponse, sew: Option<u16>) -> String {
+    use crate::thread_activity_limit::hashed_key;
+    let person = match c {
+        Caller::Login { username, .. } => hashed_key("person", &format!("login:{}", username.to_ascii_lowercase())),
+        Caller::OwnerToken => hashed_key("person", "owner"),
+        Caller::Passport | Caller::ChatManager => "agent".to_string(),
+        Caller::App => "app".to_string(),
+        Caller::DeviceEnded => "device-ended".to_string(),
+        Caller::Invalid => "invalid".to_string(),
+    };
+    let (act, target) = if path == RECORDING_START {
+        let target = match (field(b, "dm"), field(b, "room")) {
+            (Some(dm), _) => format!("dm={}", hashed_key("dm", &dm)),
+            (None, Some(room)) if room_number_key(&room) => format!("room={room}"),
+            (None, Some(room)) => format!("room={}", hashed_key("room", &room)),
+            (None, None) => "room=-".to_string(),
+        };
+        ("start", target)
+    } else {
+        let target = match field(b, "recordingId").or_else(|| field(b, "recording_id")) {
+            Some(id) => format!("recording={}", hashed_key("recording", &id)),
+            None => "recording=-".to_string(),
+        };
+        ("stop", target)
+    };
+    let http = r.status.split(' ').next().unwrap_or("").to_string();
+    let worked = http == "200";
+    let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+    let word = |k: &str| v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty() && s.len() <= 64 && s.bytes().all(|x| x.is_ascii_alphanumeric() || x == b'_' || x == b'-'));
+    let outcome = if worked { word("action").unwrap_or("ok") } else { word("code").unwrap_or("error") };
+    let sew = sew.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
+    let level = if worked { "info" } else { "warn" };
+    format!("[voice] {level} recording {act} person={person} {target} outcome={outcome} http={http} sew={sew}")
+}
+
+/// `3` or `room-3`: a room as K2 numbers it (no id, safe to log as typed).
+fn room_number_key(k: &str) -> bool {
+    let n = k.strip_prefix("room-").unwrap_or(k);
+    !n.is_empty() && n.len() <= 3 && n.bytes().all(|x| x.is_ascii_digit())
+}
+
+/// The caller's class first (a Voice & Chat only login never records), then
 /// the body, then the person's own login.
-fn recording_act(c: &Caller, owner_token: &str, path: &str, b: &Value) -> CliResponse {
+fn recording_act_inner(c: &Caller, owner_token: &str, path: &str, b: &Value) -> CliResponse {
     if let Some(r) = not_a_person(c) {
         return r;
     }

@@ -2201,7 +2201,19 @@ except Exception as e:
 # where one is set, `k2 api off` clears only the setting and `status`
 # explains why the surface is still up. The daemon 403s non-owner/admin
 # writers of apiEnabled server-side.
+_api_usage() {
+    echo "Usage: k2 api <on|off|status>"
+    echo "  on/off  — flip the public /v1 API surface (owner/admin; live immediately, no restart)"
+    echo "  status  — effective gate (env OR setting) plus the persisted Settings switch"
+}
+
 cmd_api() {
+    # -h/--help anywhere prints the usage and sends nothing (0.46.17:
+    # `k2 api on -h` used to turn the API on).
+    if _wants_help "$@"; then
+        _api_usage
+        return 0
+    fi
     local sub="${1:-status}"
     case "$sub" in
         on|off)
@@ -2258,9 +2270,7 @@ if eff and setting is False:
 PY
             ;;
         *)
-            echo "Usage: k2 api <on|off|status>" >&2
-            echo "  on/off  — flip the public /v1 API surface (owner/admin; live immediately, no restart)" >&2
-            echo "  status  — effective gate (env OR setting) plus the persisted Settings switch" >&2
+            _api_usage >&2
             exit 2
             ;;
     esac
@@ -2321,7 +2331,49 @@ PY
 # OPENAI_API_KEY [+ OPENAI_BASE_URL from --base-url]; google/gemini →
 # GEMINI_API_KEY+GOOGLE_API_KEY; xai/grok → XAI_API_KEY). All routes are
 # owner-token gated at the daemon.
+_api_key_usage() {
+    echo "Usage: k2 api-key <create|list|hire-ceiling|revoke|disable|enable>"
+    echo ""
+    echo "  create  [--label L] [--key-stdin]   (LLM key read from stdin; never an argument)"
+    echo "          [--provider anthropic|openai|google|xai] [--base-url U]"
+    echo "          [--workspaces '*'|ws1,ws2,...]"
+    echo "          [--allow host-sessions,canonical-message,sandboxes,db]"
+    echo "          [--deny  host-sessions,canonical-message,sandboxes,db]"
+    echo "          [--hire [--max-per-day N] [--max-live N] [--max-per-team N] [--hire-db off|read|write]"
+    echo "                  [--link] [--link-targets ws1,ws2] [--retire] [--reach none|message|host-sessions]"
+    echo "                  [--folder SUB] [--app-login APP[:ROOMS[:ROLES]]]...]   (asks for the owner confirm)"
+    echo "  create --status [--label L]   A read-only status key (fleet monitor): reads this"
+    echo "                 server's full /boot-status and opens nothing else (not /v1, not /cli)"
+    echo "  list"
+    echo "  hire-ceiling <id> (--app-login APP[:ROOMS[:ROLE]]... | --none)"
+    echo "                 A hire key's App access limit: the App, rooms (self = the hired agent's own)"
+    echo "                 and highest role its agents may get. Widening asks for the owner confirm."
+    echo "                 Also app-access."
+    echo "  disable <id>   Soft emergency kill (re-enableable)"
+    echo "  enable  <id>   Clear soft-disable"
+    echo "  revoke  <id>   Permanent (cannot re-enable same secret)"
+    echo ""
+    echo "Capabilities (Phase 0) gate which /v1 doors a key may open:"
+    echo "  host-sessions      → /v1/w/<ws>/host-sessions*   (default ON for new keys)"
+    echo "  canonical-message  → POST /v1/w/<ws>/message     (default OFF)"
+    echo "  sandboxes          → /v1/sandboxes* + sessions*  (default OFF)"
+    echo "  db                 → /v1/w/<ws>/db*              (default OFF)"
+    echo "  hire (--hire)      → /v1/agents/* + /v1/agent-teams/* and new workspaces on POST /v1/w"
+    echo "                       (hire-only unless --allow names other doors; defaults 20/day,"
+    echo "                        100 live, 12 per team, db off, no link/retire/reach)"
+    echo ""
+    echo "Wiki public-chat recipe:"
+    echo "  k2 api-key create --label wiki-public-chat \\"
+    echo "    --workspaces '<wiki-ws-slug>' --allow host-sessions"
+}
+
 cmd_api_key() {
+    # -h/--help anywhere prints the usage and sends nothing (0.46.17:
+    # `k2 api-key revoke <id> -h` used to revoke the key).
+    if _wants_help "$@"; then
+        _api_key_usage
+        return 0
+    fi
     local sub="${1:-}"
     shift || true
     case "$sub" in
@@ -2672,39 +2724,7 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;
         *)
-            echo "Usage: k2 api-key <create|list|hire-ceiling|revoke|disable|enable>" >&2
-            echo "" >&2
-            echo "  create  [--label L] [--key-stdin]   (LLM key read from stdin; never an argument)" >&2
-            echo "          [--provider anthropic|openai|google|xai] [--base-url U]" >&2
-            echo "          [--workspaces '*'|ws1,ws2,...]" >&2
-            echo "          [--allow host-sessions,canonical-message,sandboxes,db]" >&2
-            echo "          [--deny  host-sessions,canonical-message,sandboxes,db]" >&2
-            echo "          [--hire [--max-per-day N] [--max-live N] [--max-per-team N] [--hire-db off|read|write]" >&2
-            echo "                  [--link] [--link-targets ws1,ws2] [--retire] [--reach none|message|host-sessions]" >&2
-            echo "                  [--folder SUB] [--app-login APP[:ROOMS[:ROLES]]]...]   (asks for the owner confirm)" >&2
-            echo "  create --status [--label L]   A read-only status key (fleet monitor): reads this" >&2
-            echo "                 server's full /boot-status and opens nothing else (not /v1, not /cli)" >&2
-            echo "  list" >&2
-            echo "  hire-ceiling <id> (--app-login APP[:ROOMS[:ROLE]]... | --none)" >&2
-            echo "                 A hire key's App access limit: the App, rooms (self = the hired agent's own)" >&2
-            echo "                 and highest role its agents may get. Widening asks for the owner confirm." >&2
-            echo "                 Also app-access." >&2
-            echo "  disable <id>   Soft emergency kill (re-enableable)" >&2
-            echo "  enable  <id>   Clear soft-disable" >&2
-            echo "  revoke  <id>   Permanent (cannot re-enable same secret)" >&2
-            echo "" >&2
-            echo "Capabilities (Phase 0) gate which /v1 doors a key may open:" >&2
-            echo "  host-sessions      → /v1/w/<ws>/host-sessions*   (default ON for new keys)" >&2
-            echo "  canonical-message  → POST /v1/w/<ws>/message     (default OFF)" >&2
-            echo "  sandboxes          → /v1/sandboxes* + sessions*  (default OFF)" >&2
-            echo "  db                 → /v1/w/<ws>/db*              (default OFF)" >&2
-            echo "  hire (--hire)      → /v1/agents/* + /v1/agent-teams/* and new workspaces on POST /v1/w" >&2
-            echo "                       (hire-only unless --allow names other doors; defaults 20/day," >&2
-            echo "                        100 live, 12 per team, db off, no link/retire/reach)" >&2
-            echo "" >&2
-            echo "Wiki public-chat recipe:" >&2
-            echo "  k2 api-key create --label wiki-public-chat \\" >&2
-            echo "    --workspaces '<wiki-ws-slug>' --allow host-sessions" >&2
+            _api_key_usage >&2
             exit 1 ;;
     esac
 }

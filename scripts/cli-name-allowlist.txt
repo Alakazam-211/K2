@@ -759,6 +759,7 @@
 1 value crates/k2-root-proto/src/sew.rs keeper: wire; Sew's identity provider
 1 value crates/k2-signer/src/forge.rs keeper: outside; k2sign's project id for this repo's releases
 1 value crates/k2-signer/src/trust.rs keeper: outside; k2sign's project id for this repo's releases
+1 value crates/k5-cli/src/families/firewall.rs keeper: wire; the managedBy the daemon's firewall view sends (crates/k2-daemon/src/firewall)
 1 value src/renderer/components/Desktop/DesktopPane.tsx keeper: inert; the key router's own route name
 1 value src/renderer/components/Settings/sections/AgentSkillsSection.tsx keeper: inert; a search keyword, the product's name for its agent skill
 1 value src/renderer/components/Settings/sections/DomainsSection.tsx keeper: wire; the firewall's managedBy from the daemon

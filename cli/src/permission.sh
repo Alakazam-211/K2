@@ -572,6 +572,13 @@ print(json.dumps(out))
 }
 
 _approve_cmd() {
+    # -h/--help anywhere prints the usage and changes nothing (0.46.17:
+    # `k2 approve cancel <id> -h` cancelled it). verify, show and key-id
+    # hand their words to k2-approve, which has its own help.
+    case "${1:-}" in
+        verify|show|key-id) ;;
+        *) if _wants_help "$@"; then _approve_usage; return 0; fi ;;
+    esac
     local sub="${1:-}"
     [ $# -gt 0 ] && shift
     case "$sub" in

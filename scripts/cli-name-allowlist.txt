@@ -25,8 +25,8 @@
 # These rows are kept apart from scripts/brand-allowlist.txt (the product's
 # names) so the commits that lower them stay apart too.
 
-311 cli crates/k2-core/src/skills/content.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-164 cli crates/k2-core/src/workspace/skill_regen.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+316 cli crates/k2-core/src/skills/content.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
+165 cli crates/k2-core/src/workspace/skill_regen.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
 124 cli crates/k2-core/src/zen/skill.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 82 cli src/renderer/components/Help/k2Nouns.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 62 cli crates/k2-daemon/src/sew/supervisor.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -61,6 +61,7 @@
 17 cli crates/k2-daemon/src/sew/voice.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 17 cli src/renderer/components/Settings/sections/ProjectsSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 16 cli crates/k2-core/src/zen/store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+16 cli crates/k2-daemon/src/apps/box_prep.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B7
 16 cli crates/k2-daemon/src/apps/grace.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 16 cli crates/k2-daemon/src/ci_release.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 16 cli crates/k2-daemon/src/mail/routes_link_oauth.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -72,7 +73,6 @@
 14 cli crates/k2-core/src/jscheck/lint.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 14 cli crates/k2-core/src/org_chart/store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 14 cli crates/k2-daemon/src/app_user_invites.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-14 cli crates/k2-daemon/src/apps/box_prep.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 14 cli crates/k2-daemon/src/apps/catalog_job.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 14 cli crates/k2-daemon/src/docs/tier0.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 14 cli crates/k2-daemon/src/migrate_secrets_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -238,13 +238,13 @@
 4 cli crates/k2-daemon/src/email_notify/relay.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/handoff_setup.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/heartbeat_other.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+4 cli crates/k2-daemon/src/hire_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B7
 4 cli crates/k2-daemon/src/mail/backup.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/mail/bans.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/mail/cert_owner.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/mail/sieve_lockdown_live.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/mail/supervisor.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/permission/actions/postal.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-4 cli crates/k2-daemon/src/product_feedback_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/sew/governed.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/sew/recording_settings.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/sew/users.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -284,12 +284,12 @@
 3 cli crates/k2-daemon/src/domains/acme.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/domains/renew.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/heartbeat_launch.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-3 cli crates/k2-daemon/src/hire_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/mail/access.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/mail/cert_names.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/mail/domains.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/mail/drafts.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/permission/actions/chat_refresh.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+3 cli crates/k2-daemon/src/permission/actions/ci_preview.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B5
 3 cli crates/k2-daemon/src/permission/actions/gardens.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/permission/actions/recording.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/permission/actions/switches.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -310,8 +310,10 @@
 3 cli crates/k2-signer/src/check.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src-tauri/src/commands/settings.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/components/Settings/sections/AppsServerSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
+3 cli src/renderer/components/Settings/sections/CiPreviewRow.tsx debt: the command name typed out; use CLI_NAME from @/lib/brand; B9
 3 cli src/renderer/lib/context-stack.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/lib/published-subdomains.ts debt: the command name typed out; use CLI_NAME or cli_name!()
+2 cli crates/k2-core/src/agents_leaf.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
 2 cli crates/k2-core/src/app_grace/mod.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-core/src/board/ops.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-core/src/cli_folder_trust/gate.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -382,6 +384,7 @@
 2 cli crates/k2-daemon/src/permission/actions/sew.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-daemon/src/permission/actions/vault_send.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-daemon/src/pg_stale.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+2 cli crates/k2-daemon/src/product_feedback_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-daemon/src/remote_session_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-daemon/src/root_helper_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-daemon/src/sew_chat/home_gate.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -411,7 +414,6 @@
 2 cli src/renderer/components/WorkspacePanel/urls-ports.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli src/renderer/stores/session-event-kinds.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-app-engine/src/server.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-1 cli crates/k2-core/src/agents_leaf.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-core/src/app_settings.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-core/src/app_templates/text.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-core/src/app_updates/mod.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -507,6 +509,7 @@
 1 cli crates/k2-daemon/src/home_chat/people.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/home_chat/routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/label_owner.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+1 cli crates/k2-daemon/src/llm_accounts_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B7
 1 cli crates/k2-daemon/src/llm_accounts_runtime.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/mail/calendar_graph.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/mail/config.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -575,8 +578,6 @@
 1 cli src/renderer/components/CloneToDialog/CloneOptionsBlocks.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/components/Desktop/DesktopPane.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/components/Desktop/desktop-state.ts debt: the command name typed out; use CLI_NAME or cli_name!()
-1 cli src/renderer/components/Feedback/TicketBoard.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
-1 cli src/renderer/components/Feedback/TicketCard.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/components/Settings/ContextCatalogCreator.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/components/Settings/sections/AgentEmailNoticesRow.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/components/Settings/sections/AgentSkillsSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -604,10 +605,10 @@
 17 value src/renderer/components/Wiki/WikiPage.tsx keeper: wire+inert; the wiki index's scope (daemon); the page's own view mode
 10 value crates/k2-daemon/src/sql/cluster.rs keeper: stored; the Postgres cluster record's role
 10 value crates/k2-signer/src/verbs.rs keeper: outside; k2sign's project id for this repo's releases
+7 value crates/k2-daemon/src/docs/host.rs keeper: stored; the docs audit's actor
 7 value src-tauri/src/commands/settings.rs debt: command (6 lines); B9; keeps: outside; the package's lib folder
 6 value src/renderer/lib/zen/garden-access-api.ts keeper: wire; the Garden access actor and signer kind from the daemon
 5 value crates/k2-core/src/overlay/doc.rs keeper: stored+wire; the Thread sender, login and via; a collected line's origin
-5 value crates/k2-daemon/src/docs/host.rs keeper: stored; the docs audit's actor
 5 value src/renderer/components/Help/HelpExplorer.tsx keeper: stored; the CLI catalog's tool key
 5 value src/renderer/components/Help/cli-explorer.ts debt: command (2 lines); B9; keeps: stored; the CLI catalog's tool key
 5 value src/renderer/components/Thread/systemNotice.fixtures.ts keeper: wire; the Thread system author's login, from and via

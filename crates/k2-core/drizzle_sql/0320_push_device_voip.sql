@@ -1,0 +1,14 @@
+-- A phone's PushKit VoIP token (0.46.17, K2 Companion's CallKit ring):
+-- `POST /cli/push/register-device` `voipToken`, APNs push type `voip` on
+-- topic `<bundle>.voip`. A DM call's ring (kind call, callState ringing)
+-- goes to it so iOS shows its own call screen; every other push, the
+-- missed / ended / answered push included, stays on `token`.
+--
+-- Nullable: NULL = the phone sent none (an older build, or the flag off),
+-- and its ring stays today's time-sensitive alert. Every register states
+-- it again: absent or null clears it. Apple saying the VoIP token is dead
+-- clears the column only; the row and its alert token stay.
+--
+-- PRIVACY: like `token`, never logged (a short hash at most) and never in
+-- a route reply (`voip: true|false` only).
+ALTER TABLE push_devices ADD COLUMN voip_token TEXT;

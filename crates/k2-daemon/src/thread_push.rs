@@ -1167,6 +1167,7 @@ mod tests {
             updated_at: 1,
             last_seen_at: 1,
             previews,
+            voip_token: None,
         };
         let devices = [dev("on", true), dev("off", false)];
         let groups = k2_core::push::K2Cloud::payload_groups(&event, &devices);

@@ -80,6 +80,12 @@ pub struct PushAttempt {
     /// The relay's per-device outcome from `results[]`: `sent`, `failed`
     /// or `dead`; `None` when the response didn't list the device.
     pub vendor: Option<&'static str>,
+    /// A DM call's ring to a phone's PushKit VoIP token (0.46.17): the
+    /// relay's `results[].voip` outcome, `sent`, `failed` or `dead` (a
+    /// non-`sent` one fell back to the alert, whose outcome is `vendor`).
+    /// `None` when no VoIP send was tried.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voip: Option<&'static str>,
     /// Round trip to the relay, in ms (both calls when the shared token
     /// was the fallback).
     pub ms: u64,
@@ -105,6 +111,9 @@ impl PushAttempt {
         s.push_str(&format!(" path={} relay={}", self.path, self.relay));
         if let Some(v) = self.vendor {
             s.push_str(&format!(" vendor={v}"));
+        }
+        if let Some(v) = self.voip {
+            s.push_str(&format!(" voip={v}"));
         }
         s.push_str(&format!(" ms={}", self.ms));
         s
@@ -224,6 +233,21 @@ pub(crate) fn vendor_outcome(response: Option<&serde_json::Value>, token: &str) 
     }
 }
 
+/// The relay's VoIP outcome for `token` (`results[].voip`, 0.46.17): `None`
+/// when the entry has no `voip` object (no VoIP send was tried).
+pub(crate) fn voip_outcome(response: Option<&serde_json::Value>, token: &str) -> Option<&'static str> {
+    let results = response?.get("results")?.as_array()?;
+    let entry = results.iter().find(|e| e.get("token").and_then(|t| t.as_str()) == Some(token))?;
+    let voip = entry.get("voip")?.as_object()?;
+    if voip.get("dead").and_then(|d| d.as_bool()).unwrap_or(false) {
+        Some("dead")
+    } else if voip.get("sent").and_then(|d| d.as_bool()).unwrap_or(false) {
+        Some("sent")
+    } else {
+        Some("failed")
+    }
+}
+
 /// One device's part in one relay call.
 pub(crate) struct DeviceAttempt<'a> {
     pub device_id: &'a str,
@@ -255,6 +279,7 @@ pub(crate) fn record_call(
             path: out.path,
             relay: out.relay(),
             vendor: vendor_outcome(response, d.token),
+            voip: voip_outcome(response, d.token),
             ms: elapsed.as_millis() as u64,
         });
     }
@@ -274,6 +299,7 @@ pub(crate) fn record_skip(event: &PushEvent, device_id: &str, key_id: &str, clas
         path: "none",
         relay: "-",
         vendor: None,
+        voip: None,
         ms: 0,
     });
 }
@@ -293,6 +319,7 @@ pub(crate) fn record_recheck_skip(event: &PushEvent, device_id: &str, class: &st
         path: "none",
         relay: "-",
         vendor: None,
+        voip: None,
         ms: 0,
     });
 }
@@ -357,6 +384,7 @@ mod tests {
             path: "s0",
             relay: "s0",
             vendor: Some("sent"),
+            voip: None,
             ms: 3,
         }
     }

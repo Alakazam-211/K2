@@ -707,12 +707,15 @@ pub fn fit_nudge_in(v: &serde_json::Value, format: seal::Format) -> Result<Vec<u
 
 // ── Wire bodies ───────────────────────────────────────────────────────────
 
-/// One sealed device entry: `{platform, token, e2e}`.
+/// One sealed device entry: `{platform, token, e2e}`, plus `voipToken` on a
+/// DM call's ring to a phone that registered one (0.46.17,
+/// `K2Cloud::voip_lane`). The same blob goes either way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedEntry {
     pub platform: String,
     pub token: String,
     pub e2e: String,
+    pub voip_token: Option<String>,
 }
 
 /// The relay dispatch body for sealed devices: `payload.data` is exactly
@@ -727,7 +730,13 @@ pub fn sealed_dispatch_body_in(kind: SealKind, format: seal::Format, entries: &[
     serde_json::json!({
         "devices": entries
             .iter()
-            .map(|e| serde_json::json!({ "platform": e.platform, "token": e.token, "e2e": e.e2e }))
+            .map(|e| {
+                let mut v = serde_json::json!({ "platform": e.platform, "token": e.token, "e2e": e.e2e });
+                if let Some(t) = &e.voip_token {
+                    v["voipToken"] = serde_json::json!(t);
+                }
+                v
+            })
             .collect::<Vec<_>>(),
         "payload": { "data": { "kind": kind.wire_kind(), "v": format.wire_version() } },
     })

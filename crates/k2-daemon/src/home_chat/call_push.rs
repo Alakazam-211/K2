@@ -884,6 +884,7 @@ mod tests {
             updated_at: 0,
             last_seen_at: 0,
             previews: true,
+            voip_token: None,
         };
         let people = k2_core::notify_prefs::People::default();
         let (who, names) = devices_for("k2:owner", &people, &[dev("owner"), dev("sam")]).expect("the owner");

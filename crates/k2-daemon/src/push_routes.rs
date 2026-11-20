@@ -184,6 +184,9 @@ fn device_reply(device: &push_devices::PushDevice) -> CliResponse {
         // prd-e2e-push-v1 (V14): the vendor token never comes back (the
         // phone has it; an Admin reading another person's phone must not).
         map.remove("token");
+        // 0.46.17: whether a PushKit VoIP token is stored (its ring goes to
+        // CallKit). Never the token (`voip_token` is not serialized).
+        map.insert("voip".to_string(), serde_json::json!(device.voip_token.is_some()));
         // The phone's E2E state (§7.1), or null with no key.
         map.insert("e2e".to_string(), e2e_reply(&device.device_id));
         map.insert("ok".to_string(), serde_json::json!(true));
@@ -237,6 +240,11 @@ struct RegisterBody {
     /// from `null` (V14).
     #[serde(deserialize_with = "double_option")]
     e2e: Option<Option<serde_json::Value>>,
+    /// 0.46.17: the phone's PushKit VoIP token (hex, `apns` only). A DM
+    /// call's ring goes to it (CallKit); every other push stays on `token`.
+    /// Every register states it: absent, `null` or `""` clears it, so an
+    /// older build or the flag off never gets a VoIP push it can't report.
+    voip_token: Option<String>,
 }
 
 /// `Some(None)` for an explicit `null`, `Some(Some(v))` for a value; an
@@ -293,7 +301,11 @@ fn handle_register(body: &[u8], username: &str, ctx: &PushCallCtx) -> CliRespons
             }
         }
     };
-    match push_devices::upsert_device_e2e(
+    let voip = match push_devices::validate_voip_token(&b.platform, b.voip_token.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return usage_error(e),
+    };
+    match push_devices::upsert_device_voip(
         &b.device_id,
         &b.platform,
         &b.token,
@@ -301,6 +313,7 @@ fn handle_register(body: &[u8], username: &str, ctx: &PushCallCtx) -> CliRespons
         b.previews,
         ctx.session_sid,
         change,
+        voip,
     ) {
         Ok(device) => device_reply(&device),
         Err(e) => usage_error(e),
@@ -417,6 +430,8 @@ pub fn handle_owner_get(path: &str, owner: bool) -> CliResponse {
                         // K5 (0.46.7): two rows with one fingerprint hold
                         // one vendor token (a duplicate). Never the token.
                         "tokenFingerprint": push_devices::token_fingerprint(&d.token),
+                        // 0.46.17: a PushKit VoIP token is stored (never the token).
+                        "voip": d.voip_token.is_some(),
                         "status": e2e_label(&st, mode, sealed_ok, now),
                         "e2e": e2e_reply_with(&d.device_id, mode, sealed_ok, now),
                     })
@@ -1464,6 +1479,76 @@ mod tests {
         assert_eq!(resp.status, "400 Bad Request");
     }
 
+    /// A fresh 64-hex PushKit-shaped token.
+    fn voip_hex() -> String {
+        format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+    }
+
+    /// 0.46.17 (K2 Companion's CallKit ring): `voipToken` is stored per
+    /// device; every register states it again (absent, `null` or `""`
+    /// clears it, so an older build or the flag off never keeps one); the
+    /// reply and the owner's device list say `voip: true|false` and never
+    /// the token; a VoIP token on an `fcm` device, a non-hex one or a
+    /// non-string one is a usage error that changes nothing.
+    #[test]
+    fn register_device_voip_token_is_stored_restated_and_never_echoed() {
+        let _home = crate::test_support::TempHome::new();
+        let id = did("voip");
+        let alert = tok("voip");
+        let reg = |body: serde_json::Value| post_json("/cli/push/register-device", body, "owner");
+        // An old client (no field): works as before, no VoIP token.
+        let v = ok_json(reg(serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert })));
+        assert_eq!(v["voip"], false, "{v}");
+        assert_eq!(push_devices::get_device(&id).expect("get").expect("row").voip_token, None);
+
+        let vt = voip_hex();
+        let resp = reg(serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": vt }));
+        assert!(!resp.body.contains(&vt), "the reply never echoes the VoIP token: {}", resp.body);
+        assert!(!resp.body.contains(&alert), "nor the alert token: {}", resp.body);
+        let v = ok_json(resp);
+        assert_eq!(v["voip"], true, "{v}");
+        assert!(v.get("voipToken").is_none() && v.get("voip_token").is_none(), "{v}");
+        let row = push_devices::get_device(&id).expect("get").expect("row");
+        assert_eq!(row.voip_token.as_deref(), Some(vt.as_str()));
+        assert_eq!(row.token, alert, "the alert token is unchanged beside it");
+
+        // The owner's device list: a flag, never the token.
+        let list = handle_owner_get(DEVICES_PATH, true);
+        assert!(!list.body.contains(&vt), "{}", list.body);
+        let lv = ok_json(list);
+        let mine = lv["devices"].as_array().expect("devices").iter().find(|d| d["deviceId"] == id.as_str()).expect("listed").clone();
+        assert_eq!(mine["voip"], true, "{mine}");
+
+        // Refused: an fcm device, non-hex, too short, a non-string. Nothing changes.
+        for (body, why) in [
+            (serde_json::json!({ "deviceId": id, "platform": "fcm", "token": alert, "voipToken": voip_hex() }), "fcm"),
+            (serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": "zz".repeat(32) }), "non-hex"),
+            (serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": "abc123" }), "too short"),
+            (serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": 42 }), "not a string"),
+        ] {
+            let resp = reg(body);
+            assert_eq!(resp.status, "400 Bad Request", "{why}: {}", resp.body);
+            let e: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert_eq!(e["error"]["code"], "usage", "{why}");
+            let row = push_devices::get_device(&id).expect("get").expect("row");
+            assert_eq!(row.voip_token.as_deref(), Some(vt.as_str()), "{why}: unchanged");
+            assert_eq!(row.platform, "apns", "{why}: unchanged");
+        }
+
+        // Every register restates it: absent, null and "" each clear it.
+        for clear in [None, Some(serde_json::Value::Null), Some(serde_json::json!(""))] {
+            ok_json(reg(serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": voip_hex() })));
+            let mut body = serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert });
+            if let Some(c) = &clear {
+                body["voipToken"] = c.clone();
+            }
+            let v = ok_json(reg(body));
+            assert_eq!(v["voip"], false, "{clear:?} clears it: {v}");
+            assert_eq!(push_devices::get_device(&id).expect("get").expect("row").voip_token, None, "{clear:?}");
+        }
+        push_devices::remove_device(&id).expect("cleanup");
+    }
+
     #[test]
     fn unregister_device_removes_and_tolerates_misses() {
         let id = did("unreg");
@@ -2169,6 +2254,7 @@ mod tests {
             updated_at: 1,
             last_seen_at: 1,
             previews: true,
+            voip_token: None,
         };
         let cloud = K2Cloud::with_config(
             GatewayConfig {

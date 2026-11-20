@@ -63,6 +63,7 @@ pub(crate) fn golden_device(id: &str, platform: &str, token: &str, previews: boo
         updated_at: 1,
         last_seen_at: 1,
         previews,
+        voip_token: None,
     }
 }
 

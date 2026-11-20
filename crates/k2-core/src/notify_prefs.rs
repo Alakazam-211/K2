@@ -518,6 +518,7 @@ mod tests {
             updated_at: 1,
             last_seen_at: 1,
             previews: true,
+            voip_token: None,
         }
     }
 

@@ -59,6 +59,8 @@ pub mod seal;
 mod e2e_tests;
 mod legacy_golden;
 mod vectors;
+// The VoIP lane (0.46.17): only a DM call's ring carries `voipToken`.
+mod voip_tests;
 
 /// Events the daemon emits to the user's configured push target.
 #[derive(Debug, Clone)]
@@ -1046,6 +1048,15 @@ impl PushEvent {
             })),
             _ => None,
         }
+    }
+
+    /// True ONLY for a DM call's ring (kind `call`, `callState` `ringing`):
+    /// the one push that may go to a phone's PushKit VoIP token (0.46.17).
+    /// iOS ends an app that gets a VoIP push without reporting a call to
+    /// CallKit, so nothing else ever does: not the missed, ended or
+    /// answered push, not a badge, nudge or test push.
+    pub fn is_voip_ring(&self) -> bool {
+        matches!(self, Self::Call(c) if c.state == CallPushState::Ringing)
     }
 
     /// True for an alert that must make no sound: the push that replaces a
@@ -2103,18 +2114,46 @@ impl K2Cloud {
         payload
     }
 
-    /// One dispatch body: these devices + the payload.
+    /// One dispatch body: these devices + the payload. `voip` (only ever
+    /// [`Self::voip_lane`]) adds each `apns` device's `voipToken`.
     fn dispatch_body(
         devices: &[crate::push_devices::PushDevice],
         payload: &serde_json::Value,
+        voip: bool,
     ) -> serde_json::Value {
         serde_json::json!({
             "devices": devices
                 .iter()
-                .map(|d| serde_json::json!({ "platform": d.platform, "token": d.token }))
+                .map(|d| {
+                    let mut v = serde_json::json!({ "platform": d.platform, "token": d.token });
+                    if let Some(t) = Self::voip_token_of(voip, d) {
+                        v["voipToken"] = serde_json::json!(t);
+                    }
+                    v
+                })
                 .collect::<Vec<_>>(),
             "payload": payload,
         })
+    }
+
+    /// The VoIP lane (0.46.17, K2 Companion's CallKit ring) may carry this
+    /// push: a DM call's ring ([`PushEvent::is_voip_ring`]) AND a relay
+    /// that copies its clear `category` / `interruptionLevel` (`call-aps`):
+    /// those are how the relay tells a sealed ring from anything else, and
+    /// it refuses a `voipToken` on a push that isn't one. Every other push
+    /// carries no `voipToken` at all.
+    pub fn voip_lane(event: &PushEvent, call_aps: bool) -> bool {
+        event.is_voip_ring() && call_aps
+    }
+
+    /// The `voipToken` one device's entry carries: its stored VoIP token,
+    /// on an `apns` device, on the VoIP lane only.
+    fn voip_token_of(voip: bool, d: &crate::push_devices::PushDevice) -> Option<&str> {
+        if voip && d.platform == "apns" {
+            d.voip_token.as_deref()
+        } else {
+            None
+        }
     }
 
     /// POST one body (TP1, PR #13 review finding 2).
@@ -2429,11 +2468,13 @@ impl K2Cloud {
         devices: &[&crate::push_devices::PushDevice],
     ) -> Result<(), PushError> {
         let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
-        let payload = e2e::generic_payload_with(event, &stamp, badge_key, e2e::relay_call_aps(&self.config.url));
+        let call_aps = e2e::relay_call_aps(&self.config.url);
+        let payload = e2e::generic_payload_with(event, &stamp, badge_key, call_aps);
+        let voip = Self::voip_lane(event, call_aps);
         let url = format!("{}/push/dispatch", self.config.url);
         let devices: Vec<_> = devices.iter().map(|d| (*d).clone()).collect();
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
-            let body = Self::dispatch_body(chunk, &payload);
+            let body = Self::dispatch_body(chunk, &payload, voip);
             let response = self.post_observed(event, attempts::Lane::Generic, chunk, &payload, &url, &body)?;
             Self::prune_dead(&response);
         }
@@ -2455,11 +2496,20 @@ impl K2Cloud {
         let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
         let now_ms = unix_now_ms();
         let call_aps = e2e::relay_call_aps(&self.config.url);
+        let voip = Self::voip_lane(event, call_aps);
         let mut sealed: Vec<(e2e::SealedEntry, &SealedDevice<'_>)> = Vec::with_capacity(devices.len());
         for sd in devices {
             let d = sd.device;
             match Self::seal_for(event, kind, Self::seal_format(event, sd.format), d, &sd.key, &stamp, badge_key, now, now_ms) {
-                Ok(e2e) => sealed.push((e2e::SealedEntry { platform: d.platform.clone(), token: d.token.clone(), e2e }, sd)),
+                Ok(e2e) => sealed.push((
+                    e2e::SealedEntry {
+                        platform: d.platform.clone(),
+                        token: d.token.clone(),
+                        e2e,
+                        voip_token: Self::voip_token_of(voip, d).map(str::to_string),
+                    },
+                    sd,
+                )),
                 // A nudge that can't fit (a very long server name): skipped,
                 // logged once per device so it shows.
                 Err(SealFailure::Seal(seal::SealError::TooLarge { len, max })) if kind == seal::SealKind::Nudge => {
@@ -2661,15 +2711,26 @@ impl K2Cloud {
         sent
     }
 
-    /// Prune tokens the gateway marks `dead:true`.
+    /// Prune tokens the gateway marks `dead:true`, and clear the VoIP token
+    /// of a device whose `voip` result says `dead:true` (0.46.17: Apple
+    /// refused the VoIP token; the row and its alert token stay). A
+    /// malformed or missing results array is simply no prunes: the push
+    /// itself already succeeded.
     fn prune_dead(response: &serde_json::Value) {
         if let Some(results) = response.get("results").and_then(|r| r.as_array()) {
             for entry in results {
                 let dead = entry.get("dead").and_then(|d| d.as_bool()).unwrap_or(false);
-                let token = entry.get("token").and_then(|t| t.as_str());
-                if let (true, Some(token)) = (dead, token) {
+                let voip_dead = entry.pointer("/voip/dead").and_then(|d| d.as_bool()).unwrap_or(false);
+                let Some(token) = entry.get("token").and_then(|t| t.as_str()) else {
+                    continue;
+                };
+                if dead {
                     if let Err(e) = crate::push_devices::prune_device_by_token(token) {
                         crate::log_debug!("[push] dead-token prune failed: {e}");
+                    }
+                } else if voip_dead {
+                    if let Err(e) = crate::push_devices::clear_voip_token_by_token(token) {
+                        crate::log_debug!("[push] dead VoIP token clear failed: {e}");
                     }
                 }
             }
@@ -2690,27 +2751,17 @@ impl K2Cloud {
             subdomain: self.config.subdomain.clone(),
             instance_id: instance_id(),
         };
-        let payload = Self::payload_with(event, &stamp, badge_key, e2e::relay_call_aps(&self.config.url));
+        let call_aps = e2e::relay_call_aps(&self.config.url);
+        let payload = Self::payload_with(event, &stamp, badge_key, call_aps);
+        let voip = Self::voip_lane(event, call_aps);
         let url = format!("{}/push/dispatch", self.config.url);
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
-            let body = Self::dispatch_body(chunk, &payload);
+            let body = Self::dispatch_body(chunk, &payload, voip);
             let response = self.post_observed(event, attempts::Lane::Legacy, chunk, &payload, &url, &body)?;
             // Dead-token feedback: the gateway reports per-token outcomes;
             // `dead:true` (APNs 410 Unregistered / FCM NotRegistered)
-            // tokens are pruned so they never ride another dispatch. A
-            // malformed/missing results array is simply no prunes — the
-            // push itself already succeeded.
-            if let Some(results) = response.get("results").and_then(|r| r.as_array()) {
-                for entry in results {
-                    let dead = entry.get("dead").and_then(|d| d.as_bool()).unwrap_or(false);
-                    let token = entry.get("token").and_then(|t| t.as_str());
-                    if let (true, Some(token)) = (dead, token) {
-                        if let Err(e) = crate::push_devices::prune_device_by_token(token) {
-                            crate::log_debug!("[push] dead-token prune failed: {e}");
-                        }
-                    }
-                }
-            }
+            // tokens are pruned so they never ride another dispatch.
+            Self::prune_dead(&response);
         }
         Ok(())
     }
@@ -3240,6 +3291,7 @@ mod tests {
             updated_at: 1,
             last_seen_at: 1,
             previews: true,
+            voip_token: None,
         }
     }
 

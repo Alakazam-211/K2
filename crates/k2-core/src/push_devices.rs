@@ -49,6 +49,47 @@ pub struct PushDevice {
     /// migration 0189). A NULL column (never set) reads as `true`. The
     /// owner's `pushMessagePreviews` switch still overrides it.
     pub previews: bool,
+    /// The phone's PushKit VoIP token (0.46.17, migration 0320): a DM
+    /// call's ring goes to it with APNs push type `voip` (K2 Companion's
+    /// CallKit screen). `None` = the phone sent none; its ring stays the
+    /// time-sensitive alert. Never serialized: replies say `voip: bool`.
+    #[serde(skip_serializing)]
+    pub voip_token: Option<String>,
+}
+
+/// What a register does to the stored VoIP token ([`upsert_device_voip`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoipChange {
+    /// Leave it (every caller but the phone's own register).
+    Keep,
+    /// The phone sent none (absent, `null` or blank): clear it. An older
+    /// build, or the flag off, must never get a VoIP push it can't report.
+    Clear,
+    /// Store this token (checked by [`validate_voip_token`]).
+    Set(String),
+}
+
+/// Shortest and longest VoIP token accepted (APNs tokens are hex; 64
+/// characters today, and Apple says the length may change).
+pub const VOIP_TOKEN_MIN: usize = 16;
+pub const VOIP_TOKEN_MAX: usize = 512;
+
+/// The register route's `voipToken` as a [`VoipChange`]: `None` or a blank
+/// string clears it; anything else must be an APNs token (hex, within
+/// [`VOIP_TOKEN_MIN`]..=[`VOIP_TOKEN_MAX`]) on an `apns` device.
+pub fn validate_voip_token(platform: &str, voip_token: Option<&str>) -> Result<VoipChange, String> {
+    let Some(t) = voip_token.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Ok(VoipChange::Clear);
+    };
+    if platform != "apns" {
+        return Err(format!("usage: voipToken is for platform apns only — got '{platform}'"));
+    }
+    if t.len() < VOIP_TOKEN_MIN || t.len() > VOIP_TOKEN_MAX || !t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "usage: voipToken must be the PushKit token in hex ({VOIP_TOKEN_MIN}-{VOIP_TOKEN_MAX} characters)"
+        ));
+    }
+    Ok(VoipChange::Set(t.to_string()))
 }
 
 fn now_secs() -> i64 {
@@ -59,7 +100,7 @@ fn now_secs() -> i64 {
 }
 
 const DEVICE_SELECT: &str = "SELECT device_id, platform, token, username, \
-    created_at, updated_at, last_seen_at, previews FROM push_devices";
+    created_at, updated_at, last_seen_at, previews, voip_token FROM push_devices";
 
 fn row_to_device(row: &rusqlite::Row) -> rusqlite::Result<PushDevice> {
     Ok(PushDevice {
@@ -71,6 +112,7 @@ fn row_to_device(row: &rusqlite::Row) -> rusqlite::Result<PushDevice> {
         updated_at: row.get(5)?,
         last_seen_at: row.get(6)?,
         previews: row.get::<_, Option<i64>>(7)?.is_none_or(|v| v != 0),
+        voip_token: row.get(8)?,
     })
 }
 
@@ -144,6 +186,30 @@ pub fn upsert_device_e2e(
     session_sid: Option<&str>,
     e2e: crate::push_device_keys::E2eChange,
 ) -> Result<PushDevice, String> {
+    upsert_device_voip(device_id, platform, token, username, previews, session_sid, e2e, VoipChange::Keep)
+}
+
+/// [`upsert_device_e2e`] plus the phone's PushKit VoIP token (0.46.17,
+/// migration 0320), in the same transaction. The register route passes
+/// [`VoipChange::Clear`] when the phone sent none, so every register
+/// states the token again. A VoIP token on a non-`apns` row, or one that
+/// [`validate_voip_token`] would not return as is, is refused.
+#[allow(clippy::too_many_arguments)]
+pub fn upsert_device_voip(
+    device_id: &str,
+    platform: &str,
+    token: &str,
+    username: &str,
+    previews: Option<bool>,
+    session_sid: Option<&str>,
+    e2e: crate::push_device_keys::E2eChange,
+    voip: VoipChange,
+) -> Result<PushDevice, String> {
+    if let VoipChange::Set(v) = &voip {
+        if validate_voip_token(platform, Some(v))? != voip {
+            return Err("usage: voipToken must be the PushKit token in hex".to_string());
+        }
+    }
     let session_sid = session_sid.map(str::trim).filter(|s| !s.is_empty());
     let device_id = device_id.trim();
     let token = token.trim();
@@ -203,6 +269,15 @@ pub fn upsert_device_e2e(
         .into_iter()
         .next();
     let prev_user: Option<String> = prev.as_ref().map(|p| p.username.clone());
+    let prev_voip: Option<String> = match tx.query_row(
+        "SELECT voip_token FROM push_devices WHERE device_id = ?1",
+        params![device_id],
+        |r| r.get::<_, Option<String>>(0),
+    ) {
+        Ok(v) => v,
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(format!("push device upsert failed: {e}")),
+    };
     tx.execute(
         "INSERT INTO push_devices (device_id, platform, token, username, \
          created_at, updated_at, last_seen_at, previews, session_sid) \
@@ -216,6 +291,23 @@ pub fn upsert_device_e2e(
         params![device_id, platform, token, username, now, previews.map(i64::from), session_sid],
     )
     .map_err(|e| format!("push device upsert failed: {e}"))?;
+    let new_voip = match &voip {
+        VoipChange::Keep => prev_voip.clone(),
+        VoipChange::Clear => None,
+        VoipChange::Set(v) => Some(v.clone()),
+    };
+    if voip != VoipChange::Keep {
+        tx.execute("UPDATE push_devices SET voip_token = ?2 WHERE device_id = ?1", params![device_id, new_voip])
+            .map_err(|e| format!("push device voip token write failed: {e}"))?;
+    }
+    // Which way the VoIP token went, for the change line (never the token:
+    // its short hash when one is set).
+    let voip_note = match (&prev_voip, &new_voip) {
+        (None, Some(v)) => Some(format!("voip=set:{}", token_fingerprint(v))),
+        (Some(a), Some(b)) if a != b => Some(format!("voip=rotated:{}", token_fingerprint(b))),
+        (Some(_), None) => Some("voip=cleared".to_string()),
+        _ => None,
+    };
     if prev_user.as_deref().is_some_and(|u| u != username) {
         crate::push_device_keys::delete_key_in(&tx, device_id)?;
     }
@@ -234,7 +326,7 @@ pub fn upsert_device_e2e(
     tx.commit().map_err(|e| format!("push device upsert failed: {e}"))?;
     let row = device_log::Row::companion(device_id, platform, username, session_sid, token);
     events.push(match &prev {
-        None => device_log::event(Action::Add, Reason::Register, row, None),
+        None => device_log::event(Action::Add, Reason::Register, row, voip_note),
         Some(p) if p.username != username || p.session_sid.as_deref() != session_sid => device_log::event(
             Action::Update,
             Reason::Moved,
@@ -246,9 +338,9 @@ pub fn upsert_device_e2e(
             )),
         ),
         Some(p) if p.token != token || p.platform != platform => {
-            device_log::event(Action::Update, Reason::TokenRotated, row, None)
+            device_log::event(Action::Update, Reason::TokenRotated, row, voip_note)
         }
-        Some(_) => device_log::event(Action::Update, Reason::Refresh, row, None),
+        Some(_) => device_log::event(Action::Update, Reason::Refresh, row, voip_note),
     });
     drop(conn);
     for e in events {
@@ -526,6 +618,25 @@ pub fn prune_device_by_token(token: &str) -> Result<usize, String> {
     let conn = db.lock();
     delete_where_logged(&conn, "token = ?1", &token, Reason::VendorDead)
         .map_err(|e| format!("push device prune failed: {e}"))
+}
+
+/// Clear the VoIP token of the rows whose ALERT token is `token`: the relay
+/// said Apple refused the VoIP token (`results[].voip.dead`). The row and
+/// its alert token stay, so the next ring is the time-sensitive alert until
+/// the phone registers a new VoIP token. Returns how many rows changed.
+pub fn clear_voip_token_by_token(token: &str) -> Result<usize, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let rows = facts_where(&conn, "token = ?1 AND voip_token IS NOT NULL", &token)
+        .map_err(|e| format!("push device voip clear failed: {e}"))?;
+    let mut n = 0;
+    for f in &rows {
+        n += conn
+            .execute("UPDATE push_devices SET voip_token = NULL WHERE device_id = ?1", params![f.device_id])
+            .map_err(|e| format!("push device voip clear failed: {e}"))?;
+        device_log::record(Action::Update, Reason::VendorDead, f.row(), Some("voip=cleared".to_string()));
+    }
+    Ok(n)
 }
 
 /// Delete every row of one login, one logged line each (the Connect user
@@ -906,6 +1017,7 @@ mod tests {
             updated_at: seen,
             last_seen_at: seen,
             previews: true,
+            voip_token: None,
         };
         let out = dedupe_by_token(&[row("old", "t1", 10), row("other", "t2", 5), row("new", "t1", 20)]);
         let ids: Vec<_> = out.iter().map(|d| d.device_id.as_str()).collect();

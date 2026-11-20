@@ -206,7 +206,7 @@ pub(crate) fn build() -> serde_json::Value {
         assert_eq!(seal::open(kind, &sk, &psk, &b64).expect("opens"), json, "{name} round trip");
         let body = e2e::sealed_dispatch_body(
             kind,
-            &[SealedEntry { platform: "apns".into(), token: "<apns-device-token>".into(), e2e: b64.clone() }],
+            &[SealedEntry { platform: "apns".into(), token: "<apns-device-token>".into(), e2e: b64.clone(), voip_token: None }],
         );
         out_cases.push(serde_json::json!({
             "name": name,
@@ -504,7 +504,7 @@ pub(crate) fn build_v2() -> serde_json::Value {
         let body = e2e::sealed_dispatch_body_in(
             kind,
             f,
-            &[SealedEntry { platform: "apns".into(), token: "<apns-device-token>".into(), e2e: b64.clone() }],
+            &[SealedEntry { platform: "apns".into(), token: "<apns-device-token>".into(), e2e: b64.clone(), voip_token: None }],
         );
         out_cases.push(serde_json::json!({
             "name": name,

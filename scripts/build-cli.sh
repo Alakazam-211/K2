@@ -11,6 +11,13 @@
 # them as schema/<noun>.entries between schema-head.sh and schema-tail.sh.
 # Each one is checked on its own before any join (see check_entries).
 #
+# An entry may also say how the Rust CLI answers it: `impl` (bash, native
+# or spec) and, for a spec verb, `parse`, `call`, `output`, `exits` and
+# `auth`. contract-gen reads them into crates/k5-cli/src/spec/table.rs.
+# They come last in the entry, each key on its own line at six spaces,
+# and the join leaves them out: `k2 --schema` prints the entry without
+# them (see strip_spec_keys).
+#
 # Text the CLI prints (the `k2 study` pages and the static help) lives in
 # cli/text/, one file per page, so the Rust CLI can read the same files. The part keeps the
 # page's quoted heredoc with one line in it, `%include cli/text/<path>.txt`,
@@ -68,6 +75,53 @@ check_entries() {
     python3 - "$SRC" "$@" <<'PY'
 import json, os, re, sys
 src, seen, bad = sys.argv[1], {}, []
+BASE_KEYS = ["name", "usage", "description", "args", "flags"]
+SPEC_KEYS = ["impl", "parse", "call", "output", "exits", "auth"]
+# The words a spec entry's fields take, as far as the Rust runner answers
+# them today. contract-gen checks every field (crates/k2-core/src/contract/
+# cli_spec.rs, which reads this line); this catches a wrong word before cargo.
+SPEC_LISTS = {"impl": ["bash", "native", "spec"], "auth": ["session"], "via": ["compute"], "method": ["GET"], "style": ["none", "for"], "print": ["body", "lines"]}
+def spec_problems(e):
+    out = []
+    keys = list(e)
+    for k in keys:
+        if k not in BASE_KEYS and k not in SPEC_KEYS:
+            out.append('"%s" is not an entry key' % k)
+    spec_at = [i for i, k in enumerate(keys) if k in SPEC_KEYS]
+    if spec_at and any(k in BASE_KEYS for k in keys[spec_at[0]:]):
+        out.append("the keys %s come after %s" % ("/".join(SPEC_KEYS), "/".join(BASE_KEYS)))
+    if not spec_at:
+        return out
+    impl = e.get("impl")
+    if impl not in SPEC_LISTS["impl"]:
+        out.append('"impl" must be one of %s' % ", ".join(SPEC_LISTS["impl"]))
+        return out
+    rest = [k for k in SPEC_KEYS[1:] if k in e]
+    if impl != "spec":
+        if rest:
+            out.append('%s only go with "impl": "spec"' % ", ".join(rest))
+        return out
+    for k in ("parse", "call", "output", "auth"):
+        if k not in e:
+            out.append('a spec entry needs "%s"' % k)
+    def word(where, value, lst):
+        if value not in SPEC_LISTS[lst]:
+            out.append('%s must be one of %s, not %s' % (where, ", ".join(SPEC_LISTS[lst]), json.dumps(value)))
+    if "auth" in e:
+        word('"auth"', e["auth"], "auth")
+    p, c, o = e.get("parse"), e.get("call"), e.get("output")
+    if "parse" in e:
+        word('"parse" "style"', p.get("style") if isinstance(p, dict) else None, "style")
+    if "call" in e:
+        c = c if isinstance(c, dict) else {}
+        word('"call" "via"', c.get("via"), "via")
+        word('"call" "method"', c.get("method"), "method")
+    if "output" in e:
+        o = o if isinstance(o, dict) else {}
+        word('"output" "text"', o.get("text"), "print")
+        if "json" in o:
+            word('"output" "json"', o["json"], "print")
+    return out
 # The last entries stay in the shell part that closes the manifest.
 tail = src + "/schema-tail.sh"
 if os.path.isfile(tail):
@@ -102,6 +156,8 @@ for rel in sys.argv[2:]:
         for key in ("args", "flags"):
             if key in e and not isinstance(e[key], list):
                 no("%s: \"%s\" must be a list" % (what, key))
+        for why in spec_problems(e):
+            no("%s: %s" % (what, why))
         if isinstance(name, str):
             if name in seen:
                 no("%s is already in cli/src/%s" % (what, seen[name]))
@@ -125,19 +181,60 @@ fi
 # line, maybe sent to stderr with `>&2` before or after the word, or piped
 # on, then the line, then WORD), so the file prints exactly as written:
 # nothing in it expands.
+# A schema part goes in without its entries' spec keys (strip_spec_keys).
 # Exit 2 for a broken include or a file nobody includes, 1 for text that
-# can't sit in its heredoc. Writes the join to $1.
+# can't sit in its heredoc or spec keys the join can't leave out. Writes
+# the join to $1.
 join_parts() {
     command -v python3 >/dev/null || { echo "build-cli: python3 is required to join cli/src" >&2; return 2; }
     python3 - "$ROOT" "$1" "${parts[@]}" <<'PY'
-import os, re, sys
+import json, os, re, sys
 root, out, names = sys.argv[1], sys.argv[2], sys.argv[3:]
 INCLUDE = re.compile(r"%include (cli/text/[a-z0-9_-]+(?:/[a-z0-9_-]+)*\.txt)")
 OPEN = re.compile(r"\s*(?:[^\s()][^()]*\) )?cat(?: >&2)? <<'([A-Za-z_][A-Za-z_0-9]*)'(?: >&2| \| .*)?")
+SPEC_KEYS = ("impl", "parse", "call", "output", "exits", "auth")
+SPEC_LINE = re.compile(r'      "(?:%s)": ' % "|".join(SPEC_KEYS))
 used, pieces, broken, bad_text = {}, [], [], []
+# strip_spec_keys: an entry's lines from its first spec key up to the
+# entry's closing `    },`, and the comma before them, go. The rest must
+# parse as the same entries without those keys, or the file is refused.
+def strip_spec_keys(text):
+    lines, kept, i = text.split("\n"), [], 0
+    while i < len(lines):
+        if not SPEC_LINE.match(lines[i]):
+            kept.append(lines[i])
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and lines[j] != "    },":
+            j += 1
+        if j == len(lines) or not kept or not kept[-1].endswith(","):
+            return None
+        kept[-1] = kept[-1][:-1]
+        i = j
+    stripped = "\n".join(kept)
+    try:
+        want = [{k: v for k, v in e.items() if k not in SPEC_KEYS} for e in json.loads("[" + text[:-2] + "]")]
+        got = json.loads("[" + stripped[:-2] + "]")
+    except ValueError:
+        return None
+    return stripped if got == want else None
 for name in names:
     with open(root + "/cli/src/" + name, "rb") as f:
-        lines = f.read().split(b"\n")
+        raw = f.read()
+    if name.startswith("schema/"):
+        text = raw.decode("utf-8")
+        try:
+            entries = json.loads("[" + text[:-2] + "]")
+        except ValueError:
+            entries = []
+        if any(isinstance(e, dict) and any(k in e for k in SPEC_KEYS) for e in entries):
+            stripped = strip_spec_keys(text)
+            if stripped is None:
+                bad_text.append("cli/src/%s: an entry's spec keys must come last, each on its own line at six spaces, the entry closed by `    },`" % name)
+                continue
+            raw = stripped.encode("utf-8")
+    lines = raw.split(b"\n")
     for i, raw in enumerate(lines):
         if not raw.startswith(b"%include"):
             continue

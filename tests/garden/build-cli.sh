@@ -94,6 +94,53 @@ breaks 'entry 1 (db): "flags" must be a list' db.entries '    {"name": "db", "us
 breaks 'entry 1 (no name): "name" must be a string' db.entries '    {"usage": "u", "description": "d"},\n'
 breaks 'a line is the heredoc word EOF alone' db.entries '    {"name": "db", "usage": "u", "description": "d"},\nEOF\n'
 run 0 "is current" --check
+# The spec keys (impl, parse, call, output, exits, auth) come last and the
+# join leaves them out: the entry prints as it would without them.
+plain=(
+'    {' '      "name": "db",' '      "usage": "k2 db [--json]",' '      "description": "d",'
+'      "flags": [' '        {"name": "--json", "arg": null, "description": "JSON output."}' '      ]' '    },'
+)
+spec=(
+'    {' '      "name": "db",' '      "usage": "k2 db [--json]",' '      "description": "d",'
+'      "flags": [' '        {"name": "--json", "arg": null, "description": "JSON output."}' '      ],'
+'      "impl": "spec",' '      "parse": {"style": "for", "usage": "usage: k2 db",'
+'                "check": {"job": "^[a-z]{1,8}$"}},'
+'      "call": {"via": "compute", "method": "GET", "path": "/cli/db"},'
+'      "output": {"json": "body", "text": "lines"},' '      "exits": {"404": 4},' '      "auth": "session"' '    },'
+)
+cp "$S/schema/db.entries" "$T/db-before"
+printf '%s\n' "${plain[@]}" > "$S/schema/db.entries"
+run 0 "wrote cli/k2"
+cp "$T/cli/k2" "$T/plain.k2"
+printf '%s\n' "${spec[@]}" > "$S/schema/db.entries"
+# The keys don't change the join: cli/k2 is still current.
+run 0 "is current" --check
+run 0 "already current"
+cmp -s "$T/cli/k2" "$T/plain.k2" || { echo "FAIL: the spec keys reached the join: $(diff "$T/plain.k2" "$T/cli/k2")" >&2; exit 1; }
+! grep -q '"impl"\|"auth"\|"parse"' "$T/cli/k2" || { echo "FAIL: a spec key is in cli/k2" >&2; exit 1; }
+pass=$((pass + 1))
+printf '%s\n' "${plain[@]:0:6}" '      ],' '      "impl": "native"' '    },' > "$S/schema/db.entries"
+run 0 "already current"
+cmp -s "$T/cli/k2" "$T/plain.k2" || { echo "FAIL: impl reached the join" >&2; exit 1; }
+pass=$((pass + 1))
+# What check_entries refuses: a word not in its list, a key out of place
+# or unknown, a spec field without "impl": "spec", a spec entry missing a
+# field. And what the join refuses: spec keys it can't cut out whole.
+specwith() { local IFS=$'\n'; printf '%s\n' "${spec[@]}" | sed "$1"; }
+breaks 'entry 1 (db): "call" "via" must be one of compute, not "sidecar"' db.entries "$(specwith 's/"via": "compute"/"via": "sidecar"/')\n"
+breaks 'entry 1 (db): "auth" must be one of session, not "owner"' db.entries "$(specwith 's/"auth": "session"/"auth": "owner"/')\n"
+breaks 'entry 1 (db): "parse" "style" must be one of none, for, not "while"' db.entries "$(specwith 's/"style": "for"/"style": "while"/')\n"
+breaks 'entry 1 (db): "output" "text" must be one of body, lines, not "table"' db.entries "$(specwith 's/"text": "lines"/"text": "table"/')\n"
+breaks 'entry 1 (db): "impl" must be one of bash, native, spec' db.entries "$(specwith 's/"impl": "spec"/"impl": "rust"/')\n"
+breaks 'entry 1 (db): a spec entry needs "auth"' db.entries "$(specwith '/"auth": "session"/d; s/"exits": {"404": 4},/"exits": {"404": 4}/')\n"
+breaks 'entry 1 (db): parse, call, output, exits, auth only go with "impl": "spec"' db.entries "$(specwith 's/"impl": "spec"/"impl": "bash"/')\n"
+breaks 'entry 1 (db): "colour" is not an entry key' db.entries '    {"name": "db", "usage": "u", "description": "d", "colour": 1},\n'
+breaks 'entry 1 (db): the keys impl/parse/call/output/exits/auth come after name/usage/description/args/flags' db.entries '    {"name": "db", "impl": "bash", "usage": "u", "description": "d"},\n'
+breaks "an entry's spec keys must come last, each on its own line at six spaces" db.entries '    {"name": "db", "usage": "u", "description": "d", "impl": "native"},\n'
+breaks "an entry's spec keys must come last, each on its own line at six spaces" db.entries "$(specwith 's/^      "impl"/     "impl"/')\n"
+cp "$T/db-before" "$S/schema/db.entries"
+run 0 "wrote cli/k2"
+run 0 "is current" --check
 # A file in the folder that ORDER does not list, and any other folder.
 printf '%s\n' "$mail" > "$S/schema/stray.entries"
 run 2 "cli/src/schema/stray.entries is not in ORDER"

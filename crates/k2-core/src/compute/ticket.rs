@@ -15,10 +15,15 @@
 //! with `ticket_unsupported` (the capability check: enroll codes keep
 //! working). A valid ticket only makes the node **pending**; the SAS
 //! confirm still decides.
+//!
+//! A ticket works once. Used nonces are kept in
+//! `~/.k2/compute-ticket-used.json` until their ticket expires, so a
+//! restart doesn't make a used ticket good again. If that file can't be
+//! read or written, tickets are refused (enroll codes keep working).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use aws_lc_rs::signature::{UnparsedPublicKey, ED25519};
 use base64::Engine;
@@ -79,6 +84,9 @@ pub enum TicketRefusal {
     WrongController,
     WrongNode,
     Replayed,
+    /// The used-ticket file couldn't be read or written, so the ticket
+    /// can't be marked used and is refused.
+    StoreUnavailable,
 }
 
 impl TicketRefusal {
@@ -99,13 +107,101 @@ impl TicketRefusal {
             TicketRefusal::WrongController => "the ticket is for another server".into(),
             TicketRefusal::WrongNode => "the ticket is for another node key or name".into(),
             TicketRefusal::Replayed => "this ticket was already used".into(),
+            TicketRefusal::StoreUnavailable => {
+                "this server couldn't record the ticket as used, so it won't take it; use an enroll code".into()
+            }
         }
     }
 }
 
-fn used() -> &'static Mutex<HashMap<String, i64>> {
-    static U: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
-    U.get_or_init(|| Mutex::new(HashMap::new()))
+/// The file of used ticket nonces: `{"used": {"<kid>:<nonce>": exp}}`.
+pub fn used_path() -> PathBuf {
+    crate::paths::k2_home().join("compute-ticket-used.json")
+}
+
+/// Used ticket nonces (`kid:nonce` → the ticket's exp), kept until exp.
+/// A persistent set reads its file once, on first use, and writes the
+/// whole set back (atomically, 0600, expired entries dropped) before a
+/// new use counts. Any read or write failure refuses the ticket.
+pub struct UsedNonces {
+    /// `None`: memory only (tests of the pre-file behaviour).
+    path: Option<PathBuf>,
+    /// `None` until the file has been read.
+    used: Option<HashMap<String, i64>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct UsedFile {
+    used: HashMap<String, i64>,
+}
+
+impl UsedNonces {
+    pub fn persistent(path: PathBuf) -> Self {
+        Self { path: Some(path), used: None }
+    }
+
+    #[cfg(test)]
+    fn memory_only() -> Self {
+        Self { path: None, used: Some(HashMap::new()) }
+    }
+
+    fn load(path: &Path) -> Result<HashMap<String, i64>, String> {
+        let raw = match std::fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(e) => return Err(format!("can't read {}: {e}", path.display())),
+        };
+        serde_json::from_str::<UsedFile>(&raw).map(|f| f.used).map_err(|e| format!("{} isn't a used-ticket file: {e}", path.display()))
+    }
+
+    fn save(path: &Path, used: &HashMap<String, i64>) -> Result<(), String> {
+        let body = serde_json::to_vec(&UsedFile { used: used.clone() }).map_err(|e| e.to_string())?;
+        crate::fs_atomic::atomic_write_private(path, &body).map_err(|e| format!("can't write {}: {e}", path.display()))
+    }
+
+    /// Mark `key` used until `exp`. Refuses a key that is already used,
+    /// and any use this set can't load or record.
+    pub fn consume(&mut self, key: &str, exp: i64, now: i64) -> Result<(), TicketRefusal> {
+        let unavailable = |e: String| {
+            crate::log_debug!("[compute] refusing a ticket: the used-ticket file: {e}");
+            TicketRefusal::StoreUnavailable
+        };
+        let used = match self.used.take() {
+            Some(u) => u,
+            None => match &self.path {
+                Some(p) => Self::load(p).map_err(unavailable)?,
+                None => HashMap::new(),
+            },
+        };
+        let mut next: HashMap<String, i64> = used.into_iter().filter(|(_, e)| *e >= now).collect();
+        if next.contains_key(key) {
+            self.used = Some(next);
+            return Err(TicketRefusal::Replayed);
+        }
+        next.insert(key.to_string(), exp);
+        if let Some(p) = &self.path {
+            if let Err(e) = Self::save(p, &next) {
+                // Memory keeps matching the file: this use never counted.
+                next.remove(key);
+                self.used = Some(next);
+                return Err(unavailable(e));
+            }
+        }
+        self.used = Some(next);
+        Ok(())
+    }
+}
+
+/// This server's used-ticket set, under K2's home.
+fn used_store() -> MutexGuard<'static, UsedNonces> {
+    static STORE: OnceLock<Mutex<UsedNonces>> = OnceLock::new();
+    crate::guard_test_store_home("compute-ticket-used.json");
+    let path = used_path();
+    let mut store = STORE.get_or_init(|| Mutex::new(UsedNonces::persistent(path.clone()))).lock().unwrap_or_else(|e| e.into_inner());
+    if store.path.as_deref() != Some(path.as_path()) {
+        *store = UsedNonces::persistent(path);
+    }
+    store
 }
 
 /// Verify a ticket for this server (`own_sub`: the bare tunnel subdomain,
@@ -115,8 +211,22 @@ pub fn verify(ticket: &str, own_sub: &str, node_fp: &str, node_name: &str, now: 
     verify_with(&trusted_keys(), ticket, own_sub, node_fp, node_name, now)
 }
 
+/// [`verify`] with these keys, against this server's used-ticket set.
 pub fn verify_with(
     keys: &HashMap<String, [u8; 32]>,
+    ticket: &str,
+    own_sub: &str,
+    node_fp: &str,
+    node_name: &str,
+    now: i64,
+) -> Result<Ticket, TicketRefusal> {
+    verify_with_store(keys, &mut used_store(), ticket, own_sub, node_fp, node_name, now)
+}
+
+/// [`verify_with`] against the used-ticket set `used`.
+pub fn verify_with_store(
+    keys: &HashMap<String, [u8; 32]>,
+    used: &mut UsedNonces,
     ticket: &str,
     own_sub: &str,
     node_fp: &str,
@@ -147,13 +257,7 @@ pub fn verify_with(
     if t.node_fp != node_fp || t.node_name != node_name {
         return Err(TicketRefusal::WrongNode);
     }
-    let mut u = used().lock().unwrap_or_else(|e| e.into_inner());
-    u.retain(|_, exp| *exp >= now);
-    let key = format!("{}:{}", t.kid, t.nonce);
-    if u.contains_key(&key) {
-        return Err(TicketRefusal::Replayed);
-    }
-    u.insert(key, t.exp);
+    used.consume(&format!("{}:{}", t.kid, t.nonce), t.exp, now)?;
     Ok(t)
 }
 
@@ -213,20 +317,49 @@ mod tests {
         t.encode().unwrap()
     }
 
+    /// A used-ticket set in its own temp K2 home.
+    struct Home(PathBuf);
+
+    impl Home {
+        fn new() -> Self {
+            let home = crate::test_env::unique_temp_path("ticket-home");
+            std::fs::create_dir_all(&home).unwrap();
+            Self(home)
+        }
+        fn used_file(&self) -> PathBuf {
+            self.0.join("compute-ticket-used.json")
+        }
+        /// What a fresh daemon on this home starts with.
+        fn store(&self) -> UsedNonces {
+            UsedNonces::persistent(self.used_file())
+        }
+    }
+
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn one_key(k: &Ed25519KeyPair) -> HashMap<String, [u8; 32]> {
+        HashMap::from([(FIRST_KID.to_string(), <[u8; 32]>::try_from(k.public_key().as_ref()).unwrap())])
+    }
+
     #[test]
     fn a_good_ticket_verifies_once_and_everything_else_is_refused() {
         let k = kp();
         let other = kp();
-        let mut keys = HashMap::new();
-        keys.insert(FIRST_KID.to_string(), <[u8; 32]>::try_from(k.public_key().as_ref()).unwrap());
+        let keys = one_key(&k);
+        let home = Home::new();
+        let mut used = home.store();
         let fp = "ab".repeat(32);
         let now = 1_800_000_000;
         let good = mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "nonce-good-1");
-        let t = verify_with(&keys, &good, "rosson", &fp, "mini-1", now).unwrap();
+        let t = verify_with_store(&keys, &mut used, &good, "rosson", &fp, "mini-1", now).unwrap();
         assert_eq!(t.node_name, "mini-1");
-        assert_eq!(verify_with(&keys, &good, "rosson", &fp, "mini-1", now), Err(TicketRefusal::Replayed));
+        assert_eq!(verify_with_store(&keys, &mut used, &good, "rosson", &fp, "mini-1", now), Err(TicketRefusal::Replayed));
         let full_host = mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "nonce-host");
-        assert!(verify_with(&keys, &full_host, "rosson.k2.dev", &fp, "mini-1", now).is_ok(), "bare sub vs full host");
+        assert!(verify_with_store(&keys, &mut used, &full_host, "rosson.k2.dev", &fp, "mini-1", now).is_ok(), "bare sub vs full host");
 
         let cases = [
             (mint(&other, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "n1"), TicketRefusal::BadSignature),
@@ -238,12 +371,102 @@ mod tests {
             (mint(&k, FIRST_KID, "rosson", &fp, "mini-2", now + 600, "n7"), TicketRefusal::WrongNode),
         ];
         for (tk, want) in cases {
-            assert_eq!(verify_with(&keys, &tk, "rosson", &fp, "mini-1", now), Err(want));
+            assert_eq!(verify_with_store(&keys, &mut used, &tk, "rosson", &fp, "mini-1", now), Err(want));
         }
-        assert!(matches!(verify_with(&keys, "garbage", "rosson", &fp, "mini-1", now), Err(TicketRefusal::Malformed(_))));
-        assert_eq!(verify_with(&HashMap::new(), &good, "rosson", &fp, "mini-1", now), Err(TicketRefusal::Unsupported));
+        assert!(matches!(verify_with_store(&keys, &mut used, "garbage", "rosson", &fp, "mini-1", now), Err(TicketRefusal::Malformed(_))));
+        assert_eq!(verify_with_store(&HashMap::new(), &mut used, &good, "rosson", &fp, "mini-1", now), Err(TicketRefusal::Unsupported));
         assert_eq!(TicketRefusal::Unsupported.code(), "ticket_unsupported");
         assert_eq!(TicketRefusal::Expired.code(), "ticket_invalid");
+        assert_eq!(TicketRefusal::StoreUnavailable.code(), "ticket_invalid");
+    }
+
+    /// The restart case: a fresh used-ticket set on the same home (what a
+    /// restarted daemon builds) still refuses a ticket used before it.
+    fn use_then_restart_then_replay(first: &mut UsedNonces, after_restart: &mut UsedNonces) -> Result<Ticket, TicketRefusal> {
+        let k = kp();
+        let keys = one_key(&k);
+        let fp = "ab".repeat(32);
+        let now = 1_800_000_000;
+        let tk = mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "nonce-restart");
+        verify_with_store(&keys, first, &tk, "rosson", &fp, "mini-1", now).expect("first use");
+        verify_with_store(&keys, after_restart, &tk, "rosson", &fp, "mini-1", now + 60)
+    }
+
+    #[test]
+    fn a_ticket_used_before_a_restart_is_refused_after_it() {
+        let home = Home::new();
+        let got = use_then_restart_then_replay(&mut home.store(), &mut home.store());
+        assert_eq!(got, Err(TicketRefusal::Replayed));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(home.used_file()).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "the used-ticket file is owner-only");
+        }
+    }
+
+    /// The contrast: a set kept in memory only starts empty after a
+    /// restart, so the file is what carries uses across one.
+    #[test]
+    fn a_memory_only_set_forgets_a_used_ticket_on_restart() {
+        let got = use_then_restart_then_replay(&mut UsedNonces::memory_only(), &mut UsedNonces::memory_only());
+        assert!(got.is_ok(), "{got:?}");
+    }
+
+    #[test]
+    fn expired_entries_are_pruned_from_the_file() {
+        let home = Home::new();
+        let now = 1_800_000_000;
+        std::fs::write(home.used_file(), json_used(&[("k:old", now - 1), ("k:live", now + 300)])).unwrap();
+        let mut used = home.store();
+        used.consume("k:new", now + 600, now).unwrap();
+        let file: UsedFile = serde_json::from_str(&std::fs::read_to_string(home.used_file()).unwrap()).unwrap();
+        let mut keys: Vec<&str> = file.used.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["k:live", "k:new"]);
+        assert_eq!(home.store().consume("k:live", now + 300, now), Err(TicketRefusal::Replayed), "a live entry from the file still counts");
+    }
+
+    fn json_used(entries: &[(&str, i64)]) -> String {
+        let used: HashMap<String, i64> = entries.iter().map(|(k, e)| (k.to_string(), *e)).collect();
+        serde_json::to_string(&UsedFile { used }).unwrap()
+    }
+
+    #[test]
+    fn a_used_file_that_cant_be_read_refuses_every_ticket() {
+        let k = kp();
+        let keys = one_key(&k);
+        let fp = "ab".repeat(32);
+        let now = 1_800_000_000;
+        let tk = mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "nonce-closed");
+        let home = Home::new();
+        // Not JSON, then not a file at all.
+        std::fs::write(home.used_file(), "not json").unwrap();
+        assert_eq!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &fp, "mini-1", now), Err(TicketRefusal::StoreUnavailable));
+        std::fs::remove_file(home.used_file()).unwrap();
+        std::fs::create_dir(home.used_file()).unwrap();
+        assert_eq!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &fp, "mini-1", now), Err(TicketRefusal::StoreUnavailable));
+        // Once the file is good again the same ticket is taken: the refusals
+        // didn't count as uses.
+        std::fs::remove_dir(home.used_file()).unwrap();
+        assert!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &fp, "mini-1", now).is_ok());
+    }
+
+    #[test]
+    fn a_use_that_cant_be_written_is_refused_and_not_counted() {
+        let home = Home::new();
+        let now = 1_800_000_000;
+        let mut used = home.store();
+        used.consume("k:first", now + 600, now).unwrap();
+        // The file's place is taken by a folder with something in it: the
+        // atomic rename onto it fails.
+        std::fs::remove_file(home.used_file()).unwrap();
+        std::fs::create_dir(home.used_file()).unwrap();
+        std::fs::write(home.used_file().join("x"), "x").unwrap();
+        assert_eq!(used.consume("k:second", now + 600, now), Err(TicketRefusal::StoreUnavailable));
+        std::fs::remove_dir_all(home.used_file()).unwrap();
+        assert_eq!(used.consume("k:second", now + 600, now), Ok(()), "the failed write didn't mark it used");
+        assert_eq!(used.consume("k:first", now + 600, now), Err(TicketRefusal::Replayed));
     }
 
     /// The spec's reference vector (`.k2/prds/compute-polish-v1-notes.md`):
@@ -257,7 +480,8 @@ mod tests {
         assert_eq!(t.sig, "elSKSpTjMPZA4A0XR07r7117gxxi/kwgn1k0GiIIFpCn0DTznfltg/UbqhKp3zzGRyxD6cUZ8kIOAmzY+ueQBQ==");
         let mut keys = HashMap::new();
         keys.insert(FIRST_KID.to_string(), decode_pub(&pubk).unwrap());
-        assert!(verify_with(&keys, &tk, "rosson", &"ab".repeat(32), "mini-1", 1_800_000_000).is_ok());
+        let home = Home::new();
+        assert!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &"ab".repeat(32), "mini-1", 1_800_000_000).is_ok());
     }
 
     #[test]
@@ -266,5 +490,6 @@ mod tests {
             assert!(!BAKED_KEYS.iter().any(|(k, _)| k == kid), "{kid} must not mint tickets");
         }
         assert_ne!(override_path().file_name(), crate::edge_attest::override_path().file_name());
+        assert_ne!(used_path().file_name(), override_path().file_name());
     }
 }

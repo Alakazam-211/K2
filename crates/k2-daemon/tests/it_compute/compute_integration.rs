@@ -803,8 +803,10 @@ async fn one_click_tickets_and_declared_toolchains() {
     assert_eq!(row["state"], "pending", "a ticket only gets the node to pending: {row}");
     assert_eq!(row["enrolledVia"], "ticket");
     assert_eq!(row["enrolledBy"], format!("ticket:{kid}"));
-    // Single use.
+    // Single use, and the use is on disk so a restart keeps it.
     assert!(first_answer(enroll_raw(good, "tk1", &key)).await.1.contains("ticket_invalid"));
+    let used = std::fs::read_to_string(k2_core::paths::k2_home_in(&env.home).join("compute-ticket-used.json")).unwrap();
+    assert!(used.contains(&format!("\"{kid}:nonce-4\"")), "{used}");
 
     // ── --needs ─────────────────────────────────────────────────────
     let ws_ = seed_ws(&env, "epsilon");

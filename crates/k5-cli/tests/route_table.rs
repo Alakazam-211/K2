@@ -332,6 +332,7 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
             ["connect"] => connect_verbs_are_its_arms(noun),
             ["feedback", "tickets"] => feedback_verbs_are_its_arms(noun),
             ["workspace"] => workspace_verbs_are_its_arms(noun),
+            ["compute"] => compute_verbs_are_its_arms(noun),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -456,4 +457,35 @@ fn a_native_or_spec_row_has_a_schema_entry_or_a_named_reason() {
         bad.is_empty(),
         "Native or Spec rows with no `k2 --schema` entry and no reason in the exemptions: {bad:?}"
     );
+}
+
+/// `compute`'s verb rows: each is a word of one arm of `cmd_compute`'s
+/// `case` (`cli/src/compute-command.sh`).
+fn compute_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "compute-command.sh")
+        .expect("cli/src/compute-command.sh")
+        .1;
+    let body = &text[text.find("cmd_compute() {\n").expect("cmd_compute")..];
+    let body = &body[..body.find("\n}\n").expect("its end")];
+    for verb in noun.verbs {
+        assert_eq!(
+            verb.words.len(),
+            1,
+            "{:?}: one word per verb row",
+            verb.words
+        );
+        let word = verb.words[0];
+        assert!(
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(|c: char| c.is_ascii_lowercase())
+                    && l.split_once(')')
+                        .is_some_and(|(arm, _)| arm.split('|').any(|w| w == word))
+            }),
+            "cmd_compute's case has no {word} arm"
+        );
+    }
 }

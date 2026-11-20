@@ -580,7 +580,8 @@ expect_eq "no terminal (even with --yes): exit 3" "$RC" "3"
 expect_has "no terminal: confirm_needs_a_person" "$ERR" '"error": "confirm_needs_a_person"'
 expect_eq "no terminal: the remote got nothing" "$(paths remote)" ""
 fresh
-scn local "{\"target\": \"$REMOTE\"}"
+# No secret rows, so the only questions are the host and the approve.
+scn local "{\"target\": \"$REMOTE\", \"rows\": []}"
 save_token "$REMOTE" "$REMOTE_TOKEN"
 k2pty ctty '[["Send your token to ", "y\n"], ["Vault password", "pw-CLONESEC-typed\n"]]' clone approve prop-1abc --json
 expect_eq "the person says yes: the clone runs" "$RC" "0"

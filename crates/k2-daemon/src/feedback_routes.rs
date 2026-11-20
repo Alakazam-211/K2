@@ -122,7 +122,7 @@ pub enum CreateDoor {
     App,
     /// Connect-user session: a person. Brief optional.
     Connect,
-    /// The owner token (a human at the box, Rosson default 1) or an agent's
+    /// The owner token (the owner's default) or an agent's
     /// passport (`passport_routes::ticket_write`). The brief policy applies.
     Owner,
 }

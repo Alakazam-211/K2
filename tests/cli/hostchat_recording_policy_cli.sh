@@ -6,7 +6,9 @@
 #
 # Covers:
 #   1. Help without a daemon: the hostchat help and the recording help
-#      name the verb and its keys.
+#      name the verb and its keys; the recording page, which policy and
+#      the Space verbs (app-space recording, recording-lock) print, names
+#      them too.
 #   2. Help never acts: -h / --help anywhere on a policy line, also before
 #      the verb, prints the recording help and makes no request.
 #   3. show: GET /cli/sew/recording/policies with the owner token; the
@@ -67,6 +69,16 @@ assert_eq "recording --help exit 0" "$rc" "0"
 assert_contains "recording help: set" "$out" "k2 hostchat recording policy set KEY VALUE [KEY VALUE …] [--json]"
 assert_contains "recording help: dm_enabled" "$out" "recording.dm_enabled on|off        recordings in direct messages"
 assert_contains "recording help: who" "$out" "The owner or an admin, in person; recording.required the owner only."
+assert_contains "recording help: still the recorder's page" "$out" "k2 hostchat recording enable [--recorder-tarball FILE]"
+# The Space verbs' help is the same page, and it names them.
+for line in "app-space recording acme 5 --help" "app-space recording-lock 5 on -h" "recording policy --help"; do
+    # shellcheck disable=SC2086
+    run nodaemon hostchat $line
+    assert_eq "hostchat $line exit 0" "$rc" "0"
+    assert_contains "hostchat $line: app-space recording" "$out" "k2 hostchat app-space recording <app> <space-id> [--json]"
+    assert_contains "hostchat $line: recording-lock" "$out" "k2 hostchat app-space recording-lock <space-id> on|off [--json]"
+    assert_contains "hostchat $line: policy" "$out" "k2 hostchat recording policy [--json]"
+done
 
 # ── stub daemon + vault.sock ─────────────────────────────────────────
 OWNER="owner-disk-token-recpol"

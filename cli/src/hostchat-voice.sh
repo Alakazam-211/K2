@@ -1186,52 +1186,6 @@ _hostchat_app_space() {
     esac
 }
 
-# Recording in Apps (Sew 0.9.0, K2 0.46.11): a bound Space's own rule, the
-# owner's CUI/FCI lock, the server's recording policies.
-_hostchat_recording_usage() {
-    cat <<'EOF'
-Recording in Apps (needs Sew 0.9.0; every setting starts off, and each person in a call
-still answers their own consent notice):
-  k2 hostchat app-space recording <app> <space-id> [--json]
-          the Space's own rule: its start level and required (inherit = the App's rule,
-          k2 app recording <app>), and whether it is locked.
-  k2 hostchat app-space recording <app> <space-id> [--start-level none|admin|moderator|member|inherit]
-                                                   [--required on|off|inherit] [--json]
-          change it (each flag optional). Down (start level none, required off, inherit):
-          the owner, an admin, or the App's own agent (its "…and manage them end to end"
-          switch; "Manage chat and voice" isn't needed). Up (a start level above
-          none): the owner or an admin, in person. --required on: the owner only, in
-          person. In person = from a terminal outside K2, with a confirm (Touch ID or the
-          vault password); an agent is refused (person_only). A locked Space takes no
-          change up (space_locked). Refused too: space_unbound (bound to no App) and
-          app_mismatch (another App's Space).
-  k2 hostchat app-space recording-lock <space-id> on|off [--json]
-          the no-recording lock for a Space that holds CUI or FCI: on, nobody records
-          there, whatever its App or the server's policies say, even after an unbind.
-          The server's owner only, in person, both ways. An agent gets person_only (there
-          is no card: ask your human in your Thread), an admin owner_only.
-  k2 hostchat recording policy [--json]
-          the server's recording policies: what K2 asked for, what Sew shows, whether
-          Sew has it (delivered), the locked Spaces.
-  k2 hostchat recording policy set KEY VALUE [KEY VALUE …] [--json]
-          recording.enabled on|off           recordings at all on this server
-          recording.dm_enabled on|off        recordings in direct messages
-          recording.require_consent_to_join on|off
-                                             someone who says no to the notice can't join
-                                             (off: they join without being recorded)
-          recording.required off|multi_person
-                                             every call with two or more people is recorded
-          recording.audio_max_days N         the longest any App keeps audio (1 to 3650)
-          The owner or an admin, in person; recording.required the owner only.
-An App's own settings (who starts recordings, keep days, required, its server's
-transcript reads): k2 app recording <app> --help. Recordings themselves (holds,
-exports): Sew's own admin, k2 hostchat open (the owner). Uninstalling an App never
-deletes its recordings (k2 hostchat uninstall keeps them too; only purge deletes
-chat data). More: k2 study app-recording.
-Exit codes: 0 ok, 2 bad usage, 3 refused (sew_feature_missing: k2 hostchat upgrade).
-EOF
-}
-
 # A level for a Space: none|admin|moderator|member, or inherit (null).
 _rec_level_json() {
     case "$1" in
@@ -1546,6 +1500,8 @@ _hostchat_meet() {
     esac
 }
 
+# One page for the recorder, the server's recording policies and a Space's
+# rule and lock (recording policy, app-space recording and recording-lock).
 _hostchat_recording_usage() {
     cat <<'EOF'
 %include cli/text/help/hostchat/recording.txt

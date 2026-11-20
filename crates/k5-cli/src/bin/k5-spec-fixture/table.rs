@@ -15,7 +15,7 @@ pub static SPEC: &[SpecVerb] = &[
         words: &["compute", "stats"],
         parse: Parse {
             style: Style::For,
-            usage: "usage: k2 compute stats <job> [--json]  (a job id or its first 8 characters)",
+            usage: concat!("usage: ", k2_client::cli_name!(), " compute stats <job> [--json]  (a job id or its first 8 characters)"),
             args: &[Arg { name: "job", check: Some(Check { ranges: &[(b'A', b'Z'), (b'a', b'z'), (b'0', b'9'), (b'_', b'_'), (b'-', b'-')], min: 4, max: 64 }) }],
             json_flag: true,
         },

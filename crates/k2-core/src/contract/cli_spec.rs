@@ -596,6 +596,41 @@ pub fn parse_check(re: &str) -> Option<Check> {
     (!ranges.is_empty()).then_some(Check { ranges, min, max })
 }
 
+/// A usage line as a Rust expression: a plain literal, or, where the line
+/// types the command's name (the brand's, as a word before a space or at the
+/// end), a `concat!` that takes the name from the brand
+/// (`k2_client::cli_name!()`), so the table types no command name
+/// (`scripts/brand-gate.sh`).
+pub fn branded(s: &str) -> String {
+    const NAME: &str = crate::brand::CLI_NAME;
+    let mut parts: Vec<String> = Vec::new();
+    let mut rest = s;
+    let mut from = 0;
+    while let Some(at) = rest[from..].find(NAME).map(|i| i + from) {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + NAME.len()..].chars().next();
+        let word = before.is_none_or(|c| !(c.is_alphanumeric() || "_-/.".contains(c)))
+            && after.is_none_or(|c| c == ' ');
+        if !word {
+            from = at + NAME.len();
+            continue;
+        }
+        if at > 0 {
+            parts.push(format!("{:?}", &rest[..at]));
+        }
+        parts.push("k2_client::cli_name!()".to_string());
+        rest = &rest[at + NAME.len()..];
+        from = 0;
+    }
+    if parts.is_empty() {
+        return format!("{s:?}");
+    }
+    if !rest.is_empty() {
+        parts.push(format!("{rest:?}"));
+    }
+    format!("concat!({})", parts.join(", "))
+}
+
 /// The table's Rust source. `types`: the path of the spec types
 /// (`super` in the CLI, `k5_cli::spec` in the fixture binary); `source`:
 /// what the header says the rows came from.
@@ -668,7 +703,7 @@ pub fn render_table(rows: &[SpecRow], types: &str, source: &str) -> String {
                 Style::None => "None",
                 Style::For => "For",
             },
-            usage = q(&r.usage),
+            usage = branded(&r.usage),
             args = args.join(", "),
             json_flag = r.json_flag,
             path = q(&r.path),

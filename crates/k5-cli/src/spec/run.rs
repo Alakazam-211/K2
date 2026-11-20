@@ -47,7 +47,11 @@ use std::ffi::OsString;
 use std::path::Path;
 
 /// The line `_compute_text` prints for a 200 with no `text`.
-pub const NO_TEXT: &str = "(this server sent no text: k2 update)";
+pub const NO_TEXT: &str = concat!(
+    "(this server sent no text: ",
+    k2_client::cli_name!(),
+    " update)"
+);
 
 /// What the words ask for: the JSON form, and each positional word's
 /// value by name.

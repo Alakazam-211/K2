@@ -315,6 +315,7 @@ fn the_fixture_table_renders_its_row() {
         "        entry: \"compute stats\",\n        words: &[\"compute\", \"stats\"],",
         "            args: &[Arg { name: \"job\", check: Some(Check { ranges: &[(b'A', b'Z'), (b'a', b'z'), (b'0', b'9'), (b'_', b'_'), (b'-', b'-')], min: 4, max: 64 }) }],",
         "            query: &[Item { key: \"job\", from: Source::Arg(\"job\"), enc: Enc::Raw }],",
+        "            usage: concat!(\"usage: \", k2_client::cli_name!(), \" compute stats <job> [--json]  (a job id or its first 8 characters)\"),",
         "        output: Output { json: Some(Print::Body), text: Print::Lines },",
     ] {
         assert!(text.contains(want), "no {want:?} in:\n{text}");
@@ -326,4 +327,20 @@ fn the_fixture_table_renders_its_row() {
         .find(|o| o.path == FIXTURE_RS)
         .expect("the fixture table");
     assert_ne!(fixture.text.replace("min: 4", "min: 3"), fixture.text);
+}
+
+/// A usage line takes the command's name from the brand wherever it types
+/// it as a word, and is a plain literal where it doesn't.
+#[test]
+fn the_command_name_comes_from_the_brand() {
+    assert_eq!(branded("usage: x y"), "\"usage: x y\"");
+    assert_eq!(
+        branded("usage: k2 a, or k2"),
+        "concat!(\"usage: \", k2_client::cli_name!(), \" a, or \", k2_client::cli_name!())"
+    );
+    assert_eq!(branded("k2 a"), "concat!(k2_client::cli_name!(), \" a\")");
+    // Not a word: part of a path, a name or a token.
+    for s in ["~/.k2 x", "k2so x", "ak2 x", "k2-x y", "k2: x"] {
+        assert_eq!(branded(s), format!("{s:?}"), "{s}");
+    }
 }

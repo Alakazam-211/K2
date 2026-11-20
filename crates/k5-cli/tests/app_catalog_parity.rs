@@ -23,6 +23,11 @@
 //! - Help never acts: `-h` or `--help` anywhere prints the page and sends
 //!   nothing, but as a value flag's value (`--id -h`), where the shell
 //!   sends (a bash bug; the rows flip when the fix lands).
+//! - `app install --catalog` ([`install_catalog_answers_as_the_shell_does`]):
+//!   the dry run's plan, `--no-wait`, the watch (steps printed once as
+//!   they come, then done, failed or waiting), `--json` of each, an
+//!   address the daemon won't give (exit 2), a refusal, its loop's
+//!   mistakes, and the Python raising.
 
 #![cfg(unix)]
 
@@ -398,4 +403,183 @@ fn help_never_acts() {
             ..read("help as a value acts (bash bug)", args, r#"{"ok":true}"#)
         });
     }
+}
+
+const PLAN: &str = r#"{"plan":{"name":"Forgejo","version":"9.0.1","variant":"k2","app":"git-1","address":{"label":"git"},"willDo":["pull the image","make a database é"],"approves":[{"kind":"boxService","name":"postgres","why":"its data"},{"kind":"cap","name":"net"}],"setup":["admin","mail"],"steps":["pull","db","deploy"],"waits":[{"reason":"owner","text":"the owner approves","hint":"k2 app approve r1"},{"reason":"dns","hint":"point the name"}],"files":{"tag":"v9","file":"forgejo.tar","sha256":"ab12"}},"tier":"pro"}"#;
+const STARTED: &str = r#"{"job":{"id":"cj-7","state":"running"}}"#;
+const RUNNING: &str = r#"{"job":{"id":"cj-7","state":"running","step":"db","steps":[{"step":"pull","state":"done","note":"9.0.1 é"},{"step":"db","state":"running"}]}}"#;
+const DONE: &str = r#"{"job":{"id":"cj-7","state":"done","entry":"forgejo","app":"git-1","variant":"k2","version":"9.0.1","address":{"url":"https://git.acme.example"},"steps":[{"step":"pull","state":"done","note":"9.0.1 é"},{"step":"db","state":"done"},{"step":"deploy","state":"done","note":"live"}],"next":["open it"]}}"#;
+const FAILED: &str = r#"{"job":{"id":"cj-7","state":"failed","step":"db","error":{"code":"db_down","text":"the database is down","retry":true},"steps":[{"step":"pull","state":"done"}]}}"#;
+const WAITING: &str = r#"{"job":{"id":"cj-7","state":"waiting","step":"approve","waiting":{"reason":"owner","requests":["r1"],"text":"the owner approves","hint":"k2 app approve r1"},"steps":[]}}"#;
+const TAKEN: &str = r#"{"error":{"code":"address_taken","hint":"git is taken","suggestion":"git-2","holder":"","existing":{"app":"x"}}}"#;
+
+#[test]
+fn install_catalog_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "catinst");
+    let v = vec![
+        // native: app install --catalog
+        read(
+            "dry run: the plan",
+            &["install", "--catalog", "forgejo", "--dry-run", "--address", "git", "--variant", "k2"],
+            PLAN,
+        ),
+        // native: app install --catalog --json
+        read(
+            "dry run --json",
+            &["install", "--catalog=forgejo", "--dry-run", "--json", "git-1"],
+            PLAN,
+        ),
+        // native: app install --catalog
+        read(
+            "--no-wait: the job's name",
+            &["install", "--catalog", "forgejo", "--no-wait", "--id=git-1", "--version", "9.0.1", "--domain", "acme.example", "--rebind-meet"],
+            STARTED,
+        ),
+        // native: app install --catalog --json
+        read(
+            "--no-wait --json",
+            &["install", "--catalog", "forgejo", "--no-wait", "--json", "--workspace", "ws-b"],
+            STARTED,
+        ),
+        // native: app install --catalog
+        case(
+            "the watch: done at once",
+            &["install", "acme", "--catalog", "forgejo"],
+            &[],
+            vec![ok(STARTED), ok(DONE)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        // native: app install --catalog
+        case(
+            "the watch: running, then done; each step once",
+            &["install", "--catalog", "forgejo"],
+            &[],
+            vec![ok(STARTED), ok(RUNNING), ok(DONE)],
+            owner_and_port,
+            0,
+            3,
+        ),
+        // native: app install --catalog
+        case(
+            "the watch: failed",
+            &["install", "--catalog", "forgejo"],
+            &[],
+            vec![ok(STARTED), ok(FAILED)],
+            owner_and_port,
+            1,
+            2,
+        ),
+        // native: app install --catalog --json
+        case(
+            "the watch --json: waiting",
+            &["install", "--catalog", "forgejo", "--json"],
+            &[],
+            vec![ok(STARTED), ok(WAITING)],
+            owner_and_port,
+            2,
+            2,
+        ),
+        // native: app install --catalog
+        case(
+            "the watch: a read refused",
+            &["install", "--catalog", "forgejo"],
+            &[],
+            vec![
+                ok(STARTED),
+                Reply::Answer(404, r#"{"error":{"code":"no_such_job","hint":"gone"}}"#.to_string()),
+            ],
+            owner_and_port,
+            3,
+            2,
+        ),
+        // native: app install --catalog
+        case(
+            "an address that is taken",
+            &["install", "--catalog", "forgejo", "--address", "git"],
+            &[],
+            vec![Reply::Answer(409, TAKEN.to_string())],
+            owner_and_port,
+            2,
+            1,
+        ),
+        // native: app install --catalog
+        case(
+            "refused",
+            &["install", "--catalog", "forgejo"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"Only the owner."}}"#.to_string())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        // native: app install --catalog
+        case(
+            "an error that is a string",
+            &["install", "--catalog", "forgejo"],
+            &[],
+            vec![Reply::Answer(400, r#"{"error":"address_taken"}"#.to_string())],
+            owner_and_port,
+            2,
+            1,
+        ),
+        // native: app install --catalog
+        stop("no entry", &["install", "acme", "--catalog="], 2),
+        // native: app install --catalog
+        stop("an unknown flag", &["install", "--catalog", "x", "--zap"], 2),
+        // native: app install --catalog
+        stop("a second id", &["install", "--catalog", "x", "a", "b"], 2),
+        // native: app install --catalog
+        stop("a variant it doesn't know", &["install", "--catalog", "x", "--variant", "y"], 2),
+        // native: app install --catalog
+        stop("--version last", &["install", "--catalog", "x", "--version"], 1),
+        // native: app install --catalog
+        traceback(ends(
+            "no job in the answer",
+            &["install", "--catalog", "forgejo"],
+            r#"{"ok":true}"#,
+            1,
+        )),
+        // native: app install --catalog
+        traceback(case(
+            "a step that is not a string",
+            &["install", "--catalog", "forgejo"],
+            &[],
+            vec![
+                ok(STARTED),
+                ok(r#"{"job":{"id":"cj-7","state":"running","steps":[{"step":5,"state":"done"}]}}"#),
+            ],
+            owner_and_port,
+            1,
+            2,
+        )),
+        // native: app install --catalog
+        traceback(ends(
+            "a plan with no address",
+            &["install", "--catalog", "forgejo", "--dry-run"],
+            r#"{"plan":{"name":"F"}}"#,
+            1,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+    // native: app install --catalog
+    rig.check(&Case {
+        compare: Compare::Shell,
+        ..stop("help never acts", &["install", "--catalog", "x", "--dry-run", "-h"], 0)
+    });
+    // `--address` takes the next word as it comes, so `--help` there is a
+    // value and the install is sent (a bash bug, app-catalog.sh:110; the
+    // row flips when the fix lands).
+    // native: app install --catalog
+    rig.check(&Case {
+        compare: Compare::Shell,
+        ..read(
+            "help as a value acts (bash bug)",
+            &["install", "--catalog", "x", "--no-wait", "--address", "--help"],
+            STARTED,
+        )
+    });
 }

@@ -22,7 +22,7 @@
 //! - [`phone_set`]: the writes of `app links`, `app pairing`, `app push`
 //!   and `app email`, with their confirm steps.
 //! - [`catalog`]: `app catalog [list]`, `show`, `check`, `job|jobs` and
-//!   `retry`.
+//!   `retry`, and `app install --catalog`.
 //! - [`walls`]: `app egress [show]|log`, `app box-service <app>` and `app
 //!   db status`; [`walls_set`]: `app egress add|rm|mode` and `app
 //!   box-service request|revoke`, with [`approve`] when the owner is at
@@ -35,8 +35,8 @@
 //!   …` and `app grant copy-host`, with [`grace`] for a held answer;
 //!   [`sign_in`]: `app auth` and `app login settings`; [`chat`]: `app
 //!   chat`; [`init`]: `app init` and `app doctor --store`.
-//! - [`deploy`]: `app build`, `app install` (not `--catalog`), `app
-//!   deploy`, `app rollback`, `app stop|start|restart`, `app link`, `app
+//! - [`deploy`]: `app build`, `app install` (`--catalog` is
+//!   [`catalog`]'s), `app deploy`, `app rollback`, `app stop|start|restart`, `app link`, `app
 //!   seal` and `app config`.
 //! - [`owner`]: `app uninstall`, `app expose`, `app handover` (every
 //!   sub-act), `app unpark`, `app park`, `app release` and `app
@@ -618,6 +618,12 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
             }
         }
         v if boxes::VERBS.contains(&v) => Some(boxes::parse(v, rest)?.map(Ask::Boxes)),
+        "install" if deploy::catalog_install(rest) => {
+            if rest.iter().any(|w| matches!(*w, "-h" | "--help")) {
+                return None;
+            }
+            Some(catalog::parse_install(rest).map(Ask::Catalog))
+        }
         v if deploy::VERBS.contains(&v) => Some(deploy::parse(v, rest)?.map(Ask::Change)),
         v if owner::VERBS.contains(&v) => Some(owner::parse(v, rest)?.map(Ask::Owner)),
         "grant" | "grants" => Some(guests::parse_grant(rest)?.map(Ask::Guests)),

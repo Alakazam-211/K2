@@ -1,6 +1,6 @@
 //! The App runtime's change verbs, as the shell CLI answers them
 //! (`cli/src/app-doctor.sh`): `app build`, `app install` (not
-//! `--catalog`), `app deploy`, `app rollback`, `app stop|start|restart`,
+//! `--catalog`: [`super::catalog`]), `app deploy`, `app rollback`, `app stop|start|restart`,
 //! `app link`, `app seal` and `app config`.
 //!
 //! Each reads its words as the shell's loop does (a usage mistake is its
@@ -166,17 +166,19 @@ fn unknown(w: &str) -> Stop {
     Stop::usage(format!("Unknown flag: {w}"))
 }
 
-/// The words after the verb. `None`: a help form, or `install
-/// --catalog` (the shell's).
+/// `cmd_app_install`'s first look: a word `--catalog` (or
+/// `--catalog=…`) anywhere makes it the one-click install
+/// ([`super::catalog::parse_install`]).
+pub fn catalog_install(words: &[&str]) -> bool {
+    words
+        .iter()
+        .any(|w| *w == "--catalog" || w.starts_with("--catalog="))
+}
+
+/// The words after the verb (`install --catalog` is
+/// [`super::catalog`]'s). `None`: a help form.
 pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
     if help(words) {
-        return None;
-    }
-    if verb == "install"
-        && words
-            .iter()
-            .any(|w| *w == "--catalog" || w.starts_with("--catalog="))
-    {
         return None;
     }
     Some(match verb {

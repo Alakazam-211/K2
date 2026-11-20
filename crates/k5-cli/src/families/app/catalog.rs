@@ -9,9 +9,17 @@
 //!
 //! `catalog check <entry> <address>` asks whether an address is free (the
 //! workspace as `_compute_ws` names it) and exits 2 when it isn't;
-//! `catalog retry <job>` is the one write, sent once.
+//! `catalog retry <job>` is a write, sent once.
+//!
+//! `app install --catalog <entry> …` (`cmd_app_install_catalog`) is the
+//! one-click install ([`install`]): one POST, sent once; an address
+//! problem is its JSON line and exit 2 (`_app_catalog_fail`). `--dry-run`
+//! prints the plan. Else the daemon runs a job: `--no-wait` names it, and
+//! without, the job is watched every 2 seconds (600 reads at most), each
+//! step that is done printed once as it comes, then its end as `catalog
+//! job <id>` prints it, and the exit its state gives.
 
-use super::call::Ctx;
+use super::call::{Ctx, Given, Split};
 use super::py::{self, Out};
 use super::{Answer, Stop};
 use crate::exit::Exit;
@@ -39,7 +47,29 @@ pub mod usage {
         " app catalog check <entry> <address> [--id ID] [--json]"
     );
     pub const RETRY: &str = concat!("usage: ", cli_name!(), " app catalog retry <job-id>");
+    pub const INSTALL: &str = concat!(
+        "usage: ",
+        cli_name!(),
+        " app install --catalog <entry> [--address LABEL|auto] [--dry-run] (entries: ",
+        cli_name!(),
+        " app catalog)"
+    );
+    pub const INSTALL_ID: &str = concat!(
+        "usage: ",
+        cli_name!(),
+        " app install --catalog <entry> [--id ID] [--address LABEL|auto] (",
+        cli_name!(),
+        " app catalog --help)"
+    );
+    pub const VARIANT: &str = "--variant is k2 or standalone";
 }
+
+/// `"Started job %s (it runs in the daemon). Follow it: k2 app catalog job %s"`.
+const STARTED: &str = concat!(
+    " (it runs in the daemon). Follow it: ",
+    cli_name!(),
+    " app catalog job "
+);
 
 /// `"run: k2 app catalog retry %s"`.
 const RETRY: &str = concat!("run: ", cli_name!(), " app catalog retry ");
@@ -74,6 +104,85 @@ pub enum Ask {
     },
     /// `catalog retry <job>`.
     Retry { job: String, json: bool },
+    /// `app install --catalog <entry> …`.
+    Install(Install),
+}
+
+/// `app install --catalog <entry> [--address A] [--id ID] [--variant V]
+/// [--version V] [--workspace WS] [--domain D] [--dry-run] [--no-wait]
+/// [--rebind-meet] [--json]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Install {
+    pub entry: String,
+    pub address: String,
+    pub id: String,
+    pub variant: String,
+    pub version: String,
+    pub ws: String,
+    pub domain: String,
+    pub dry: bool,
+    pub wait: bool,
+    pub rebind: bool,
+    pub json: bool,
+}
+
+/// `cmd_app_install_catalog`'s loop and checks (a help form never comes
+/// here: [`super::deploy::parse`] hands it to the shell first).
+pub fn parse_install(words: &[&str]) -> Result<Ask, Stop> {
+    let mut a = Install {
+        wait: true,
+        ..Install::default()
+    };
+    let mut i = 0;
+    while let Some(w) = words.get(i).copied() {
+        let mut take = |slot: &mut String| -> Result<(), Stop> {
+            let (v, n) = super::deploy::value(words, i)?;
+            *slot = v.to_string();
+            i = n;
+            Ok(())
+        };
+        match w {
+            "--catalog" => take(&mut a.entry)?,
+            "--address" => take(&mut a.address)?,
+            "--id" => take(&mut a.id)?,
+            "--variant" => take(&mut a.variant)?,
+            "--version" => take(&mut a.version)?,
+            "--workspace" => take(&mut a.ws)?,
+            "--domain" => take(&mut a.domain)?,
+            _ => {
+                if let Some(v) = w.strip_prefix("--catalog=") {
+                    a.entry = v.to_string();
+                } else if let Some(v) = w.strip_prefix("--address=") {
+                    a.address = v.to_string();
+                } else if let Some(v) = w.strip_prefix("--id=") {
+                    a.id = v.to_string();
+                } else {
+                    match w {
+                        "--dry-run" => a.dry = true,
+                        "--no-wait" => a.wait = false,
+                        "--rebind-meet" => a.rebind = true,
+                        "--json" => a.json = true,
+                        _ if w.starts_with('-') => {
+                            return Err(Stop::usage(format!(
+                                "Unknown flag: {w}{}",
+                                usage::FLAG_TAIL
+                            )))
+                        }
+                        _ if !a.id.is_empty() => return Err(Stop::usage(usage::INSTALL_ID)),
+                        _ => a.id = w.to_string(),
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    if a.entry.is_empty() {
+        return Err(Stop::usage(usage::INSTALL));
+    }
+    if !matches!(a.variant.as_str(), "" | "k2" | "standalone") {
+        return Err(Stop::usage(usage::VARIANT));
+    }
+    Ok(Ask::Install(a))
 }
 
 /// The words after `catalog`. `None`: a help form (the shell's).
@@ -226,6 +335,7 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
             }
             Ok(shown)
         }
+        Ask::Install(a) => install(ctx, a),
         Ask::Retry { job, json } => {
             let body = super::call::Cj::new().s("job", job).body();
             let s = ctx.send(true, "/cli/app/catalog/retry", &body, false)?;
@@ -495,27 +605,21 @@ fn the_job(v: &Value, line: u32) -> Result<Value, Raise> {
 /// Python its own step (a raise ends the command, exit 1).
 fn one_job(body: &[u8]) -> Shown {
     let mut o = Out::default();
-    if let Err(e) = print_job(body, &mut o) {
+    if let Err(e) = print_job(body, "", &mut o) {
         return o.done(Err(e));
     }
-    // `state="$(… print((v.get("job") or v).get("state","")))"`.
-    let state = match job_state(body) {
-        Ok(s) => s,
-        Err(e) => return o.done(Err(e)),
-    };
-    if let Err(e) = end_lines(body, &mut o) {
-        return o.done(Err(e));
+    let end = job_end(body, false);
+    Shown {
+        stdout: o.stdout + &end.stdout,
+        stderr: o.stderr + &end.stderr,
+        exit: end.exit,
     }
-    let exit = match state.as_str() {
-        "done" => Exit::Ok,
-        "failed" => Exit::Error,
-        _ => Exit::Usage,
-    };
-    o.done(Ok(exit))
 }
 
-/// `_app_catalog_print_job`'s Python, with no step seen yet.
-fn print_job(body: &[u8], o: &mut Out) -> Result<(), Raise> {
+/// `_app_catalog_print_job "$seen"`'s Python: each done step not in
+/// `seen` (the steps `_app_catalog_done_steps` printed, by commas).
+fn print_job(body: &[u8], seen: &str, o: &mut Out) -> Result<(), Raise> {
+    let seen: Vec<&str> = seen.split(',').filter(|s| !s.is_empty()).collect();
     let v = py::load(body, 3)?;
     let j = the_job(&v, 4)?;
     let steps = py::dget_or(&j, "steps", py::empty_list(), 6)?;
@@ -530,6 +634,9 @@ fn print_job(body: &[u8], o: &mut Out) -> Result<(), Raise> {
                 7,
                 format!("TypeError: unhashable type: '{}'", pyfmt::type_name(&step)),
             ));
+        }
+        if matches!(&step, Value::Str(t) if t.as_str().is_some_and(|t| seen.contains(&t))) {
+            continue;
         }
         let note = if py::truthy(&py::dget(&s, "note", 8)?) {
             py::concat("  ", &py::idx(&s, "note", 8)?, 8)?
@@ -639,6 +746,269 @@ fn end_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
         ));
     }
     Ok(())
+}
+
+fn bit(b: bool) -> &'static str {
+    if b {
+        "1"
+    } else {
+        "0"
+    }
+}
+
+/// `cmd_app_install_catalog` after its loop.
+fn install(ctx: &mut Ctx, a: &Install) -> Answer {
+    let ws = ctx.ws(&a.ws);
+    let body = Given::new()
+        .put("entry", &a.entry)
+        .put("address", &a.address)
+        .put("id", &a.id)
+        .put("variant", &a.variant)
+        .put("version", &a.version)
+        .put("workspace", &ws)
+        .put("domain", &a.domain)
+        .put("dryRun_b", bit(a.dry))
+        .put("rebindMeet_b", bit(a.rebind))
+        .body();
+    let sp = ctx.send(true, "/cli/app/catalog/install", &body, false)?;
+    if !sp.ok() {
+        return Err(catalog_fail(ctx, &sp));
+    }
+    if a.dry {
+        if a.json {
+            return Ok(super::wallet::raw(&sp.body));
+        }
+        let mut o = Out::default();
+        let r = plan_lines(&sp.body, &mut o).map(|()| Exit::Ok);
+        return Ok(o.done(r));
+    }
+    // `job="$(… print(json.load(sys.stdin)["job"]["id"]))"`.
+    let job = match one_value(&sp.body, "id") {
+        Ok(j) => j,
+        Err(e) => return Ok(Out::default().done(Err(e))),
+    };
+    if !a.wait {
+        if a.json {
+            return Ok(super::wallet::raw(&sp.body));
+        }
+        return Ok(Shown::out(format!("Started job {job}{STARTED}{job}\n")));
+    }
+    if !a.json {
+        let lead = Shown::out(format!(
+            "Job {job}: the daemon runs it; Ctrl-C stops watching, not the job.\n"
+        ));
+        let printed = lead.print();
+        if printed != Exit::Ok {
+            return Err(printed);
+        }
+    }
+    let q = format!("id={}", quote(&job));
+    let mut seen = String::new();
+    let mut n = 0;
+    let body = loop {
+        let body = ctx.call(false, "/cli/app/catalog/job", &q)?;
+        if !a.json {
+            let mut o = Out::default();
+            let r = print_job(&body, &seen, &mut o).map(|()| Exit::Ok);
+            let printed = o.done(r).print();
+            if printed != Exit::Ok {
+                return Err(printed);
+            }
+            seen = match done_steps(&body) {
+                Ok(s) => s,
+                Err(e) => return Ok(Out::default().done(Err(e))),
+            };
+        }
+        let state = match one_value(&body, "state") {
+            Ok(s) => s,
+            Err(e) => return Ok(Out::default().done(Err(e))),
+        };
+        if matches!(state.as_str(), "done" | "failed" | "waiting") {
+            break body;
+        }
+        n += 1;
+        if n >= 600 {
+            break body;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    };
+    Ok(job_end(&body, a.json))
+}
+
+/// `$(… print(json.load(sys.stdin)["job"][key]))`: the value as `print`
+/// writes it, the newlines at its end gone.
+fn one_value(body: &[u8], key: &str) -> Result<String, Raise> {
+    let v = py::load(body, 1)?;
+    let j = py::idx(&v, "job", 1)?;
+    let x = py::idx(&j, key, 1)?;
+    Ok(py::s(&x).trim_end_matches('\n').to_string())
+}
+
+/// `_app_catalog_fail`: an address the daemon won't give (taken, one per
+/// box, reserved, not valid) is its JSON line on stderr and exit 2; any
+/// other is `_compute_fail`.
+fn catalog_fail(ctx: &Ctx, sp: &Split) -> Exit {
+    // `try: print((json.load(sys.stdin).get("error") or {}).get("code",""))
+    // except Exception: print("")`.
+    let code = (|| -> Result<String, Raise> {
+        let v = py::load(&sp.body, 2)?;
+        let e = py::or(py::dget(&v, "error", 2)?, empty_dict());
+        Ok(py::s(&py::dget_or(&e, "code", py::text(""), 2)?))
+    })()
+    .unwrap_or_default();
+    let code = code.trim_end_matches('\n');
+    if !matches!(
+        code,
+        "address_taken" | "one_per_box" | "address_reserved" | "address_invalid"
+    ) {
+        return ctx.fail(sp);
+    }
+    let line = (|| -> Result<String, Raise> {
+        let v = py::load(&sp.body, 3)?;
+        let e = py::idx(&v, "error", 3)?;
+        let mut out = vec![
+            (
+                crate::out::json::Text::from("error"),
+                py::dget(&e, "code", 4)?,
+            ),
+            (
+                crate::out::json::Text::from("hint"),
+                py::dget(&e, "hint", 4)?,
+            ),
+        ];
+        for k in ["suggestion", "holder", "existing"] {
+            if py::truthy(&py::dget(&e, k, 6)?) {
+                out.push((crate::out::json::Text::from(k), py::idx(&e, k, 7)?));
+            }
+        }
+        Ok(crate::confirm::dumps(&Value::Object(out)))
+    })();
+    match line {
+        Ok(l) => {
+            crate::out::stderr_line(&l);
+            Exit::Usage
+        }
+        Err(e) => {
+            let _ = crate::out::write_flushed(&mut std::io::stderr().lock(), e.text().as_bytes());
+            Exit::Error
+        }
+    }
+}
+
+/// The dry run's Python: the plan.
+fn plan_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
+    let v = py::load(body, 3)?;
+    let p = py::idx(&v, "plan", 4)?;
+    let a = py::idx(&p, "address", 5)?;
+    o.line("Dry run: nothing changed.");
+    let name = py::idx(&p, "name", 7)?;
+    let version = py::idx(&p, "version", 7)?;
+    let variant = py::idx(&p, "variant", 7)?;
+    let app = py::idx(&p, "app", 7)?;
+    let url = py::dget(&a, "url", 7)?;
+    let at = if py::truthy(&url) {
+        url
+    } else {
+        py::idx(&a, "label", 7)?
+    };
+    o.line(&format!(
+        "{} {} ({} variant) as App {} at {}",
+        py::s(&name),
+        py::s(&version),
+        py::s(&variant),
+        py::s(&app),
+        py::s(&at)
+    ));
+    o.line("It will:");
+    for line in py::iter(&py::dget_or(&p, "willDo", py::empty_list(), 9)?, 9)? {
+        o.line(&format!("  - {}", py::s(&line)));
+    }
+    if py::truthy(&py::dget(&p, "approves", 11)?) {
+        o.line("Deploying approves:");
+        for x in py::iter(&py::idx(&p, "approves", 13)?, 13)? {
+            let what = if py::idx(&x, "kind", 14)? == py::text("boxService") {
+                "box service"
+            } else {
+                "cap"
+            };
+            let name = py::idx(&x, "name", 14)?;
+            let why = if py::truthy(&py::dget(&x, "why", 14)?) {
+                py::concat(": ", &py::idx(&x, "why", 14)?, 14)?
+            } else {
+                String::new()
+            };
+            o.line(&format!("  - {what} {}{why}", py::s(&name)));
+        }
+    }
+    if py::truthy(&py::dget(&p, "setup", 15)?) {
+        o.line(&format!(
+            "Sew setup: {}",
+            py::join(", ", &py::idx(&p, "setup", 16)?, 16)?
+        ));
+    }
+    let steps = py::dget_or(&p, "steps", py::empty_list(), 17)?;
+    o.line(&format!("Steps: {}", py::join(" \u{2192} ", &steps, 17)?));
+    for w in py::iter(&py::dget_or(&p, "waits", py::empty_list(), 18)?, 18)? {
+        let reason = py::idx(&w, "reason", 19)?;
+        let text = py::or(py::dget(&w, "text", 19)?, py::dget(&w, "hint", 19)?);
+        o.line(&format!(
+            "It will wait at: {}: {}",
+            py::s(&reason),
+            py::s(&text)
+        ));
+        if py::truthy(&py::dget(&w, "text", 20)?) && py::truthy(&py::dget(&w, "hint", 20)?) {
+            o.line(&format!("  run: {}", py::s(&py::idx(&w, "hint", 21)?)));
+        }
+    }
+    o.line(&format!("Pro: {}", py::s(&py::dget(&v, "tier", 22)?)));
+    let f = py::or(py::dget(&p, "files", 23)?, empty_dict());
+    let tag = py::dget(&f, "tag", 24)?;
+    let file = py::dget(&f, "file", 24)?;
+    let sha = py::dget(&f, "sha256", 24)?;
+    o.line(&format!(
+        "File: {}/{} sha256 {}",
+        py::s(&tag),
+        py::s(&file),
+        py::s(&sha)
+    ));
+    Ok(())
+}
+
+/// `_app_catalog_done_steps`: the done steps, as `$(…)` holds the line.
+fn done_steps(body: &[u8]) -> Result<String, Raise> {
+    let v = py::load(body, 3)?;
+    let j = the_job(&v, 4)?;
+    let steps = py::dget_or(&j, "steps", py::empty_list(), 5)?;
+    let mut done = Vec::new();
+    for s in py::iter(&steps, 5)? {
+        if py::dget(&s, "state", 5)? == py::text("done") {
+            done.push(py::idx(&s, "step", 5)?);
+        }
+    }
+    Ok(py::join(",", &Value::Array(done), 5)?
+        .trim_end_matches('\n')
+        .to_string())
+}
+
+/// `_app_catalog_end`: the job's end (the answer as it came with
+/// `--json`), and the exit its state gives: done 0, failed 1, else 2.
+fn job_end(body: &[u8], json: bool) -> Shown {
+    let mut o = Out::default();
+    let state = match job_state(body) {
+        Ok(s) => s,
+        Err(e) => return o.done(Err(e)),
+    };
+    if json {
+        o.stdout.push_str(&super::wallet::raw(body).stdout);
+    } else if let Err(e) = end_lines(body, &mut o) {
+        return o.done(Err(e));
+    }
+    let exit = match state.as_str() {
+        "done" => Exit::Ok,
+        "failed" => Exit::Error,
+        _ => Exit::Usage,
+    };
+    o.done(Ok(exit))
 }
 
 #[cfg(test)]

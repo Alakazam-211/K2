@@ -204,7 +204,7 @@ mod docs_tests {
     /// code's number.
     #[test]
     fn the_app_deploys_page_states_the_default_memory_limit() {
-        let page = include_str!("../../../../cli/src/app-doctor.sh");
+        let page = include_str!("../../../../cli/text/study/app-deploys.txt");
         let want = format!("A new App gets a {} MiB memory limit (memory.max)", DEFAULT_MEMORY >> 20);
         assert!(page.contains(&want), "k2 study app-deploys must say: {want}");
         assert!(!page.contains("No per-App memory limit by default"), "the old claim is gone");

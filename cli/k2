@@ -48095,13 +48095,62 @@ _clone_person_guard() {
     fi
 }
 
+# Where a token or a password may go. A token goes to an https:// server,
+# or over plain http only to a loopback address as written in the URL:
+# 127.0.0.0/8, ::1 or the name localhost. A name is never looked up to
+# decide. A password goes over https only (this computer's own confirm
+# takes the vault socket). clone_plain_http_ok is the one place the
+# loopback rule lives. Run by _clone_https_gate before any request, and by
+# the engine again before each request and each password.
+_CLONE_URL_RULE='
+import ipaddress as _k2c_ip, urllib.parse as _k2c_up
+
+def clone_plain_http_ok(host):
+    """True when host, as written in the URL, is a loopback address."""
+    if host == "localhost":
+        return True
+    try:
+        a = _k2c_ip.ip_address(host)
+    except ValueError:
+        return False
+    if a.version == 4:
+        return a in _k2c_ip.ip_network("127.0.0.0/8")
+    return a == _k2c_ip.ip_address("::1")
+
+def clone_url_refusal(url, password=False):
+    """None when a token (with password=True, a password) may go to url,
+    else the line that refuses it."""
+    try:
+        u = _k2c_up.urlsplit(url)
+        host = u.hostname or ""
+    except ValueError:
+        u, host = None, ""
+    if u is not None and u.scheme == "https":
+        return None
+    if u is not None and u.scheme == "http" and not password and "@" not in u.netloc and clone_plain_http_ok(host):
+        return None
+    shown = (u.netloc.rpartition("@")[2] if u is not None else "") or url
+    return "refused: %s isn'"'"'t https, so k2 won'"'"'t send your token or password there; use https://%s" % (shown, shown)
+'
+
+# _clone_https_gate URL: refuse (exit 3, the line on stderr) a remote URL a
+# token may not go to, before anything is looked up or sent.
+_clone_https_gate() {
+    python3 -c "$_CLONE_URL_RULE
+import sys
+line = clone_url_refusal(sys.argv[1])
+if line:
+    print(line, file=sys.stderr)
+    sys.exit(3)" "$1"
+}
+
 # The engine: preview, push, pull, here, show, approve. Python so the
 # chunked transfer and the JSON stay in one place. Passwords ride /dev/tty;
 # both tokens (this server's and the remote server's) ride stdin ahead of
 # the script (_k2_stdin_secrets), never argv or the environment.
 _clone_py() {
     { _k2_stdin_secrets K2C_REMOTE_TOKEN "${K2C_REMOTE_TOKEN:-}" K2C_LOCAL_TOKEN "$TOKEN"; cat; } <<'PY' | \
-    K2C_LOCAL_URL="$BASE_URL" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" \
+    K2C_LOCAL_URL="$BASE_URL" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" _CLONE_URL_RULE="$_CLONE_URL_RULE" \
     K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && [ -r /dev/tty ] && echo 1 || echo 0)" \
     _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 -c "$_K2_PY_STDIN_BOOT" "$@"
 import base64, getpass, http.client, json, os, socket, sys, time, uuid
@@ -48109,6 +48158,7 @@ import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
 exec(os.environ.pop("_K5_PY_HTTP"))
+exec(os.environ.pop("_CLONE_URL_RULE"))
 
 LOCAL = ("local", os.environ["K2C_LOCAL_URL"], K2_STDIN_SECRETS.get("K2C_LOCAL_TOKEN", ""))
 REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), K2_STDIN_SECRETS.get("K2C_REMOTE_TOKEN", ""))
@@ -48121,9 +48171,17 @@ CHUNK = 8 * 1024 * 1024
 
 
 class Fail(Exception):
-    def __init__(self, code, hint, rc=3):
+    def __init__(self, code, hint, rc=3, plain=False):
         super().__init__(hint)
-        self.code, self.hint, self.rc = code, hint, rc
+        self.code, self.hint, self.rc, self.plain = code, hint, rc, plain
+
+
+def https_gate(side, password=False):
+    """Refuse before anything goes to `side` that a token (or a password)
+    may not go to (_CLONE_URL_RULE)."""
+    line = clone_url_refusal(side[1], password)
+    if line:
+        raise Fail("https_required", line, 3, plain=True)
 
 
 def say(msg):
@@ -48145,6 +48203,8 @@ def call(side, method, route, body=None, params=None, timeout=120):
     name, base, tok = side
     if not base:
         raise Fail("usage", "no %s server" % name, 2)
+    if name != "local":
+        https_gate(side)
     q = {k: v for k, v in (params or {}).items() if v is not None}
     url = base + route + ("?" + urllib.parse.urlencode(q) if q else "")
     data = None
@@ -48212,6 +48272,7 @@ def confirm(side, action, secret_id, label):
     if local:
         methods = vault_sock("confirm/start", start).get("methods") or []
     else:
+        https_gate(side, password=True)
         methods = call(side, "POST", "/cli/vault/confirm/start", start).get("methods") or []
     body = {"action": action, "secretId": secret_id}
     if local and "local-auth" in methods:
@@ -48281,6 +48342,7 @@ def carry_confirm_call(side, ask, pv, proposal=None):
         r = vault_sock("confirm/finish", body)
         body.pop("password", None)
         return r
+    https_gate(side, password=True)
     methods = ((pv.get("secrets") or {}).get("confirm") or {}).get("methods") or []
     body = dict(ask)
     if proposal:
@@ -48638,6 +48700,8 @@ def main():
     verb = sys.argv[1]
     arg = sys.argv[2] if len(sys.argv) > 2 else ""
     try:
+        if REMOTE[1]:
+            https_gate(REMOTE)
         if verb == "preview":
             out = preview(REMOTE if REMOTE[1] else LOCAL, arg)
             if JSON_OUT:
@@ -48659,7 +48723,7 @@ def main():
             return 0
         res = {"push": push, "pull": pull, "here": here, "approve": approve}[verb](arg)
     except Fail as e:
-        print(json.dumps({"error": e.code, "hint": e.hint}), file=sys.stderr)
+        print(e.hint if e.plain else json.dumps({"error": e.code, "hint": e.hint}), file=sys.stderr)
         return e.rc
     except KeyboardInterrupt:
         print(json.dumps({"error": "cancelled", "hint": "stopped"}), file=sys.stderr)
@@ -48758,13 +48822,16 @@ _clone_opt() {
 # Not exported: _clone_py hands the URL to its python3 and the token on its
 # stdin, so no other child sees the token.
 _clone_remote() {
-    local host="$1" tok
+    local host="$1" url tok
+    case "$host" in
+        http://*|https://*) url="${host%/}" ;;
+        *) url="https://${host}" ;;
+    esac
+    # Before the token is even looked up: https, or a loopback address.
+    _clone_https_gate "$url" || exit $?
     tok="$(_remote_token_for_host "$host" "$_CLONE_TOKEN")"
     [ -n "$tok" ] || _clone_die no_remote_token "no token for '$host': sign in to it in K2 with Remember on, pass --token-stdin, set \$K2_REMOTE_TOKEN, or add it to ${K2_HOME}/connect-tokens.json"
-    case "$host" in
-        http://*|https://*) K2C_REMOTE_URL="${host%/}" ;;
-        *) K2C_REMOTE_URL="https://${host}" ;;
-    esac
+    K2C_REMOTE_URL="$url"
     K2C_REMOTE_TOKEN="$tok"
 }
 

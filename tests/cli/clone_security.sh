@@ -10,7 +10,10 @@
 # terminal (or a process with no terminal at all).
 #
 # Rows, by rule:
-#   the X-K5-* hand-over headers go to this computer's daemon only.
+#   the X-K5-* hand-over headers go to this computer's daemon only;
+#   a token goes to an https server, or over plain http only to a loopback
+#   address as written (127.0.0.0/8, ::1, localhost); a refused host gets
+#   no request and no name lookup; a password never goes over plain http.
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -283,6 +286,22 @@ k2pty() {
     OUT="$(cat "$W/out")"; ERR="$(cat "$W/err")"
     TTY="$(cat "$W/tty" 2>/dev/null || true)"; ECHO="$(cat "$W/echo" 2>/dev/null || true)"
 }
+# auth NAME PATH: the Authorization headers the stub NAME got on PATH.
+auth() { [ -f "$W/log-$1.jsonl" ] || return 0; "$PY" -c '
+import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l)
+    if r["path"] == sys.argv[2]: print(r["headers"].get("Authorization", ""))' "$W/log-$1.jsonl" "$2"; }
+# no_contact LABEL: no stub got a request and no python3 looked a name up
+# or connected anywhere.
+no_contact() {
+    expect_eq "$1: this server's daemon got nothing" "$(paths local)" ""
+    expect_eq "$1: the remote got nothing" "$(paths remote)" ""
+    expect_eq "$1: the vault socket got nothing" "$(paths vault)" ""
+    expect_eq "$1: no name lookup or connect" "$(cat "$W/audit.log")" ""
+}
+refused_line() { printf "refused: %s isn't https, so k2 won't send your token or password there; use https://%s" "$1" "$1"; }
+printf '%s\n' "$REMOTE_TOKEN" >"$W/token-in"
 save_token() {
     "$PY" -c 'import json,sys; json.dump({sys.argv[1]: sys.argv[2]}, open(sys.argv[3], "w"))' "$1" "$2" "$KH/connect-tokens.json"
     chmod 600 "$KH/connect-tokens.json"
@@ -300,6 +319,51 @@ K5_CLI_VIA=rust k2 clone from "$REMOTE:ws1" --token "$REMOTE_TOKEN" --yes --json
 expect_eq "pull with the front's headers succeeds" "$RC" "0"
 expect_has "the remote got the read-range" "$(paths remote)" "GET /cli/fs/read-range"
 if headers remote | grep -iq '^x-k5-'; then bad "pull: the remote got an X-K5-* header"; else ok "pull: the remote got no X-K5-* header"; fi
+
+echo "== a token goes over https, or plain http to a loopback address as written =="
+for h in box.example box.localhost 127.0.0.1.example localhost. "[::ffff:127.0.0.1]" 127.1; do
+    fresh
+    IN="$W/token-in" k2 clone to "http://$h:$PR" ws1 --token-stdin --yes --json
+    expect_eq "to http://$h: exit 3" "$RC" "3"
+    expect_eq "to http://$h: the refusal line" "$ERR" "$(refused_line "$h:$PR")"
+    expect_eq "to http://$h: nothing on stdout" "$OUT" ""
+    no_contact "to http://$h"
+done
+fresh
+IN="$W/token-in" k2 clone from "http://box.localhost:$PR:ws1" --token-stdin --yes --json
+expect_eq "from http://box.localhost: exit 3" "$RC" "3"
+expect_eq "from http://box.localhost: the refusal line" "$ERR" "$(refused_line "box.localhost:$PR")"
+no_contact "from http://box.localhost"
+fresh
+IN="$W/token-in" k2 clone preview ws1 --host "http://box.localhost:$PR" --token-stdin --json
+expect_eq "preview --host http://box.localhost: exit 3" "$RC" "3"
+expect_eq "preview --host http://box.localhost: the refusal line" "$ERR" "$(refused_line "box.localhost:$PR")"
+no_contact "preview --host http://box.localhost"
+fresh
+IN="$W/token-in" k2 clone preview ws1 --host "http://127.0.0.1:$PR" --token-stdin --json
+expect_eq "preview --host http://127.0.0.1: ok" "$RC" "0"
+expect_eq "http://127.0.0.1: the remote got the token" "$(auth remote /cli/clone/preview)" "Bearer $REMOTE_TOKEN"
+fresh
+IN="$W/token-in" k2 clone preview ws1 --host "http://localhost:$PR" --token-stdin --json
+expect_eq "preview --host http://localhost: ok" "$RC" "0"
+expect_eq "http://localhost: the remote got the token" "$(auth remote /cli/clone/preview)" "Bearer $REMOTE_TOKEN"
+for h in 127.0.0.2 "[::1]"; do
+    fresh
+    IN="$W/token-in" k2 clone preview ws1 --host "http://$h:1" --token-stdin --json
+    expect_eq "http://$h (nothing listening): exit 3" "$RC" "3"
+    expect_has "http://$h: allowed, so it tried and found nothing" "$ERR" "daemon_unreachable"
+    expect_not "http://$h: not refused" "$ERR" "refused:"
+done
+
+echo "== a password never goes over plain http, even to loopback =="
+fresh
+save_token "$REMOTE" "$REMOTE_TOKEN"
+k2pty ctty '[]' clone from "$REMOTE:ws1" --copy API_KEY --json
+expect_eq "pull with a password confirm over http: exit 3" "$RC" "3"
+expect_eq "pull with a password confirm over http: the refusal line" "$ERR" "$(refused_line "127.0.0.1:$PR")"
+expect_not "no password prompt on the terminal" "$TTY" "password"
+expect_not "the remote got no password confirm" "$(paths remote)" "/cli/clone/vault/confirm"
+expect_not "the remote packed nothing" "$(paths remote)" "/cli/clone/pack"
 
 echo
 echo "clone_security: $pass passed, $fail failed"

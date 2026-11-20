@@ -29,6 +29,9 @@ const VERB: &str = "compute";
 const NODES: &str = r#"{"criticalPath":[{"submitter":"agent-a","jobs":2,"workspace":"/w/a"}],"nodes":[{"name":"linux-1","platform":"ubuntu24.04-x86_64","online":true,"liveRoute":"lan","offer":{"control":"active","caps":{"cpu_millis":8000,"mem_bytes":17179869184},"free":{"cpu_millis":6500,"mem_bytes":12884901888,"disk_free_bytes":107374182400},"parallelMax":4},"idleCpuMillis":7250,"room":{"busy":"this_server","running":3,"otherServers":1},"mine":{"running":1,"queued":0},"running":2,"queued":1,"queueTiers":{"ci":1,"normal":2},"grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":5,"allowCi":true},"reservedBy":[{"short":"aaaa1111","state":"running","cpuMillis":2000,"memBytes":4294967296}],"share":{"role":"tenant","ownerLabel":"Acme","servers":3,"line":"run 1/2"},"rollout":{"code":"node_needs_manual_install"},"nodeVersion":"0.46.17","allowed":false},{"name":"mac-1","state":"pending","sas":"123456","os":"macos","arch":"arm64"}],"allowNodes":["linux-1"]}"#;
 const JOB: &str = r#"{"short":"abcd1234","node":"linux-1","state":"done","argv":["cargo","test"],"tier":"priority","ctl":{"placement":{"mode":"auto","code":"moved_node_draining","node":"linux-1","policy":"v2","why":"free cpu"}},"exitCode":0,"signal":null,"attempt":1,"generation":1,"result":{"exit":0,"tests":{"passed":3,"failed":0,"errors":0,"skipped":1},"artifacts":[{"name":"out.tar","bytes":100,"sha256":"0123456789abcdef0123"}]}}"#;
 const JOBS: &str = r#"{"jobs":[{"short":"abcd1234","tier":"ci","node":"linux-1","state":"queued","pinned":true,"submitter":"agent-a","via":"owner_token","tag":"t","argv":["cargo","test"]},{"short":"efgh5678","state":"done","exitCode":0,"reason":"","submittedBy":"owner"}]}"#;
+/// Running jobs that waited before they started: 10 minutes (shown
+/// apart), 59 s (not), over an hour, a float, none.
+const STATUS_WAITED: &str = r#"{"nodes":[{"name":"mini-1","os":"macos","arch":"arm64","status":{"state":"active","parallelMax":1,"running":[{"short":"run00001","state":"running","elapsedSecs":120,"queuedSecs":600,"workspace":"ws","argv":"cargo test","cpuMillis":4000},{"short":"run00002","elapsedSecs":5,"queuedSecs":59,"argv":"a"},{"short":"run00003","elapsedSecs":7300,"queuedSecs":3725,"tierWhy":"gate","tier":"priority"},{"short":"run00004","elapsedSecs":1,"queuedSecs":90.5,"cpuMillis":null},{"short":"run00005","queuedSecs":null}],"queued":[{"short":"que00001","state":"queued","ageSecs":300,"queuedSecs":300,"position":1,"workspace":"ws","argv":"true","pinned":false}]}}]}"#;
 const STATUS: &str = r#"{"nodes":[{"name":"linux-1","os":"linux","arch":"x86_64","status":{"state":"online","parallelMax":4,"running":[{"short":"abcd1234","elapsedSecs":125,"workspace":"/w","argv":"cargo test","tier":"ci"}],"queued":[{"short":"q1","position":2,"ageSecs":30,"pinned":true}],"free":{"cpuMillis":6500,"memBytes":12884901888},"caps":{"cpuMillis":8000,"memBytes":17179869184},"load":[1.25,0.5],"disk":{"freeBytes":107374182400}}}],"notYet":"GPU stats"}"#;
 const QUEUE: &str = r#"{"node":"linux-1","entries":[{"pos":1,"mine":true,"short":"abcd","state":"queued","pinned":false,"argv":"cargo test","etaSecs":61,"cpuMillis":2500,"why":"waits"},{"pos":2,"server":"Globex","state":"running","etaSecs":30}],"totals":[{"label":"this","running":1,"queued":2,"cpuSecsToday":5400}]}"#;
 const GRANTS: &str = r#"{"grants":[{"node":"n1","workspace":"/w","maxJobSecs":3600,"maxParallel":2,"maxQueued":3,"maxDiskGb":10,"allowCi":true,"grantedBy":"owner"}]}"#;
@@ -138,6 +141,19 @@ fn compute_reads_as_the_shell_does() {
             1,
         ),
         ok_case("status", &["status"], STATUS),
+        ok_case("status: the wait before a running job, apart", &["status"], STATUS_WAITED),
+        Case {
+            compare: Compare::Traceback,
+            ..case(
+                "status: a queuedSecs that is no number",
+                &["status"],
+                &[],
+                vec![ok(r#"{"nodes":[{"name":"n","status":{"running":[{"short":"r","elapsedSecs":1,"queuedSecs":"10m"}]}}]}"#)],
+                owner_and_port,
+                1,
+                1,
+            )
+        },
         // covers: compute status --json
         ok_case("status --json", &["status", "--json"], STATUS),
         usage_case("status --bad", &["status", "--bad"]),

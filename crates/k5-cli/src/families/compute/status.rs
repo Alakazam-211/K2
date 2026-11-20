@@ -315,20 +315,21 @@ fn node(cx: &mut Cx, n: &Value) -> Result<(), Raise> {
     let l = ln!("for j in st.get(\"running\") or []:");
     let running = p::or(g(cx, l, "running")?, list());
     for j in cx.at(l, p::iter(&running))? {
-        let l = ln!("print(\"    running %s%-9s %-8s %-12s %s%s%s\"");
+        let l = ln!("print(\"    running %s%-9s %-8s %-12s %s%s%s%s\"");
         let t = tag(cx, l, &j)?;
         let short = p::or(cx.at(l, p::get(&j, "short"))?, s("-"));
         let el = cx.at(l, p::get(&j, "elapsedSecs"))?;
         let el = mmss(cx, l, &el)?;
         let ws = p::or(cx.at(l, p::get(&j, "workspace"))?, s("(other)"));
         let argv = p::or(cx.at(l, p::get(&j, "argv"))?, s(""));
+        let q = waited(cx, l, &j)?;
         let h = held(cx, l, &j, &capc, &parm)?;
         let w = pwhy(cx, l, &j)?;
         let line = cx.at(
             l,
             p::pct(
-                "    running %s%-9s %-8s %-12s %s%s%s",
-                &[s(&t), short, s(&el), ws, argv, s(&h), s(&w)],
+                "    running %s%-9s %-8s %-12s %s%s%s%s",
+                &[s(&t), short, s(&el), ws, argv, s(&q), s(&h), s(&w)],
             ),
         )?;
         cx.print(&line);
@@ -430,6 +431,21 @@ fn pwhy(cx: &mut Cx, line: u32, j: &Value) -> Result<String, Raise> {
             String::new()
         };
         cx.at(l, p::pct("\n      why: %s%s", &[tw, s(&sub)]))
+    })
+}
+
+/// `waited`: the wait before a running job started, apart from its
+/// running time, once it is a minute or more.
+fn waited(cx: &mut Cx, line: u32, j: &Value) -> Result<String, Raise> {
+    cx.call(line, "<lambda>", |cx| {
+        let l = ln!("waited = lambda j:");
+        let q = p::or(cx.at(l, p::get(j, "queuedSecs"))?, p::int(0));
+        if !cx.at(l, p::cmp(">=", &q, &p::int(60)))? {
+            return Ok(String::new());
+        }
+        let x = cx.at(l, p::idx(j, "queuedSecs"))?;
+        let m = mmss(cx, l, &x)?;
+        cx.at(l, p::pct("  (queued %s first)", &[s(&m)]))
     })
 }
 

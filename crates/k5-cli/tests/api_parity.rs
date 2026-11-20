@@ -447,15 +447,57 @@ fn api_hands_these_to_the_shell() {
             2,
             0,
         )),
-        // The shell's cmd_api never reads -h: `on -h` turns it on.
+        // Help never acts (K2's rule): -h or --help anywhere on a verb
+        // that changes something prints help and sends nothing. bash's
+        // `api)` arm has no help check (cli/src/router.sh, `api)`) and
+        // cmd_api's on|off posts at once (cli/src/talk-and-workspace.sh,
+        // cmd_api `on|off)`), so the rows marked BASH BUG make the
+        // request. The binary hands them to the shell and does the same
+        // until K2 fixes the bash; then these rows send nothing.
         shell(case(
-            "on -h",
+            "BASH BUG, help acts: on -h turns the API on",
             &["on", "-h"],
             &[],
             vec![ok(r#"{"apiEnabled":true}"#)],
             owner_and_port,
             0,
             1,
+        )),
+        shell(case(
+            "BASH BUG, help acts: on --help turns the API on",
+            &["on", "--help"],
+            &[],
+            vec![ok(r#"{"apiEnabled":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        shell(case(
+            "BASH BUG, help acts: off -h turns the API off",
+            &["off", "-h"],
+            &[],
+            vec![ok(SET_OFF)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        shell(case(
+            "BASH BUG, help acts: off --help turns the API off",
+            &["off", "--help"],
+            &[],
+            vec![ok(SET_OFF)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        shell(case(
+            "-h before on: the usage, nothing sent",
+            &["-h", "on"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
         )),
         shell(case(
             "a port that is no port",

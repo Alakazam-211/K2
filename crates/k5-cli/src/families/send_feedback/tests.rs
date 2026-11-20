@@ -96,6 +96,6 @@ fn the_list_and_the_result() {
 
 #[test]
 fn surrogateescape() {
-    let v = env_text(b"a\xffb\"");
+    let v = cp::env_text(b"a\xffb\"");
     assert_eq!(json::to_string(&v, &Options::default()).unwrap(), r#""a\udcffb\"""#);
 }

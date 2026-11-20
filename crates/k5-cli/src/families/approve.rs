@@ -226,7 +226,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Opened::Shell => return None,
         Opened::Stop(Exit::Ok) if local => return local_run(&ask),
         Opened::Stop(e) => return Some(e),
-        Opened::Ready(c) => c,
+        Opened::Ready(c, _) => c,
     };
     let exit = match ask {
         Ask::Stop(lines, exit) => {

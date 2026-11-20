@@ -14,10 +14,10 @@
 //! - [`utc_time`]: `time.strftime(fmt, time.gmtime(v))`.
 
 use super::super::{curl_port, without_nuls, Raise, Shown};
-use crate::families::app::py as p;
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::families::app::call::{fail_exit, Ctx, Split};
+use crate::families::app::py::{self as p, Out};
 use crate::out;
 use crate::out::json::Value;
 use crate::out::py;
@@ -25,11 +25,13 @@ use crate::passport;
 use crate::prelude::{self, Gate};
 use crate::python;
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 /// What [`open`] found: the run's [`Ctx`], or the end of the command.
 pub enum Opened {
-    /// The gates passed; the client is ready.
-    Ready(Box<Ctx>),
+    /// The gates passed; the client is ready, and the K2 home the
+    /// settings came from.
+    Ready(Box<Ctx>, std::path::PathBuf),
     /// A gate stopped it (its lines printed), or the settings failed.
     Stop(Exit),
     /// The shell's: a `python3` the binary can't tell, or a port curl
@@ -74,7 +76,7 @@ pub fn open(args: &[OsString], local: bool) -> Opened {
 fn ready(args: &[OsString], settings: &Settings) -> Opened {
     let would_refuse = passport::current(args).would_refuse();
     match settings.client(would_refuse) {
-        Ok(c) => Opened::Ready(Box::new(Ctx::new(c, false))),
+        Ok(c) => Opened::Ready(Box::new(Ctx::new(c, false)), settings.home.clone()),
         Err(e) => {
             out::stderr_line(&format!("Error: {e}"));
             Opened::Stop(Exit::Error)
@@ -97,6 +99,98 @@ pub fn call(ctx: &mut Ctx, post: bool, path: &str, payload: &str) -> Result<Vec<
         Ok(s.body)
     } else {
         Err(fail(&s))
+    }
+}
+
+/// `_compute_call <GET|POST> <path> <payload> tcp`: TCP only.
+pub fn call_tcp(ctx: &mut Ctx, post: bool, path: &str, payload: &str) -> Result<Vec<u8>, Exit> {
+    let s = ctx.send(post, path, payload, true)?;
+    if s.ok() {
+        Ok(s.body)
+    } else {
+        Err(fail(&s))
+    }
+}
+
+/// `_app_rt_post <path> <body>`: the POST, its status and body, no
+/// check.
+pub fn rt_post(ctx: &mut Ctx, path: &str, body: &str) -> Result<Split, Exit> {
+    ctx.send(true, path, body, false)
+}
+
+/// `_app_rt_post`, then `_compute_fail` unless the status is one of `ok`.
+pub fn rt_post_ok(ctx: &mut Ctx, path: &str, body: &str, ok: &[&str]) -> Result<Vec<u8>, Exit> {
+    let s = rt_post(ctx, path, body)?;
+    if ok.contains(&s.status.as_str()) {
+        Ok(s.body)
+    } else {
+        Err(fail(&s))
+    }
+}
+
+/// `_email_post <path> <body>` (`cli/src/app-auth.sh`): the POST; a 403
+/// `vault_confirm_required` outside a session asks for a confirm token
+/// (at most three times) and sends the body again with it; then any
+/// status but 200 or 202 is `_compute_fail`. `home` is the K2 home whose
+/// `vault.sock` the confirm asks.
+pub fn email_post(
+    ctx: &mut Ctx,
+    home: &std::path::Path,
+    path: &str,
+    body: &str,
+) -> Result<Vec<u8>, Exit> {
+    let mut body = body.to_string();
+    let mut tries = 0;
+    loop {
+        let s = rt_post(ctx, path, &body)?;
+        let wants = s.status == "403"
+            && s
+                .body
+                .windows(24)
+                .any(|w| w == b"\"vault_confirm_required\"")
+            && ctx.client.passport().is_none()
+            && tries < 3;
+        if !wants {
+            if s.status == "200" || s.status == "202" {
+                return Ok(s.body);
+            }
+            return Err(fail(&s));
+        }
+        let error = |line: u32| -> Result<Value, Exit> {
+            let v = p::load(&s.body, line).map_err(|r| raised(&r))?;
+            let e = p::dget(&v, "error", line).map_err(|r| raised(&r))?;
+            Ok(p::or(e, Value::Object(vec![])))
+        };
+        let e = error(1)?;
+        let action = p::or(p::dget(&e, "action", 1).map_err(|r| raised(&r))?, p::text(""));
+        let action = held(&action);
+        let e = error(1)?;
+        let mut sid = p::dget(&e, "secretId", 1).map_err(|r| raised(&r))?;
+        if !p::truthy(&sid) {
+            sid = p::or(p::dget(&e, "serviceId", 1).map_err(|r| raised(&r))?, p::text(""));
+        }
+        let sid = held(&sid);
+        if action.is_empty() || sid.is_empty() {
+            return Err(fail(&s));
+        }
+        let sock = crate::confirm::sock_path(home);
+        let passport = ctx.client.passport().is_some();
+        let mut confirm = crate::confirm::Confirm {
+            client: &mut ctx.client,
+            sock: &sock,
+            closing: &mut ctx.closing,
+            passport,
+        };
+        let Some(tok) = crate::confirm::confirm_token(&mut confirm, &action, &sid, "") else {
+            return Err(Exit::Refused);
+        };
+        let field = if action == "app-email-any" {
+            "confirmAnyToken"
+        } else {
+            "confirmToken"
+        };
+        body = crate::confirm::with_confirm_token(&body, &tok, Some(field)).ok_or(Exit::Error)?;
+        tries += 1;
     }
 }
 
@@ -166,6 +260,85 @@ pub fn stdout_line(line: &str) -> Exit {
     match out::stdout_line(line) {
         Ok(()) => Exit::Ok,
         Err(e) => out::after_stdout_error(&e),
+    }
+}
+
+/// One run: the request context and the K2 home.
+pub struct Run {
+    pub ctx: Box<Ctx>,
+    pub home: PathBuf,
+}
+
+/// The settings, the gates and the client; `None` from `Err`: the shell's.
+pub fn start(args: &[OsString]) -> Result<Run, Option<Exit>> {
+    match cp::open(args, false) {
+        Opened::Shell => Err(None),
+        Opened::Stop(e) => Err(Some(e)),
+        Opened::Ready(ctx, home) => Ok(Run { ctx, home }),
+    }
+}
+
+/// A help page on stdout.
+pub fn page(key: &str) -> Exit {
+    let text = crate::text::help(key).expect("the help page is embedded");
+    match out::stdout(text) {
+        Ok(()) => Exit::Ok,
+        Err(e) => out::after_stdout_error(&e),
+    }
+}
+
+/// A usage line on stderr, exit 2.
+pub fn usage(line: &str) -> Exit {
+    out::stderr_line(line);
+    Exit::Usage
+}
+
+/// `printf '%s' "$_CP_BODY" | python3 -c '<one line>'`: `f` makes the
+/// line from the answer, Python's line 1.
+pub fn one_line(body: &[u8], f: impl FnOnce(&Value) -> Result<String, Raise>) -> Shown {
+    let mut o = Out::default();
+    let r = (|| {
+        let v = p::load(body, 1)?;
+        o.line(&f(&v)?);
+        Ok(Exit::Ok)
+    })();
+    o.done(r)
+}
+
+/// A value Python read from the environment: UTF-8, each byte that isn't
+/// as `\udcXX` (surrogateescape).
+pub fn env_text(bytes: &[u8]) -> Value {
+    let mut lit = String::from("\"");
+    let mut rest = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(s) => {
+                push_escaped(&mut lit, s);
+                break;
+            }
+            Err(e) => {
+                let (good, bad) = rest.split_at(e.valid_up_to());
+                push_escaped(&mut lit, std::str::from_utf8(good).unwrap_or(""));
+                let n = e.error_len().unwrap_or(bad.len());
+                for b in &bad[..n] {
+                    lit.push_str(&format!("\\udc{b:02x}"));
+                }
+                rest = &bad[n..];
+            }
+        }
+    }
+    lit.push('"');
+    crate::out::json::parse(&lit).unwrap_or_else(|_| p::text(&String::from_utf8_lossy(bytes)))
+}
+
+fn push_escaped(lit: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '"' => lit.push_str("\\\""),
+            '\\' => lit.push_str("\\\\"),
+            c if u32::from(c) < 0x20 => lit.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => lit.push(c),
+        }
     }
 }
 

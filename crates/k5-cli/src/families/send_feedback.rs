@@ -26,7 +26,7 @@
 
 use super::app::call::{Cj, Ctx};
 use super::app::py::{self as p, Out};
-use super::approve::cp::{self, body_line, raised, read_one, show, stdout_line, Opened};
+use super::approve::cp::{self, body_line, env_text, raised, read_one, show, stdout_line, Opened};
 use super::{py_space, Raise, Shown};
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Value};
@@ -81,7 +81,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             });
         }
         Opened::Stop(e) => return Some(e),
-        Opened::Ready(c) => c,
+        Opened::Ready(c, _) => c,
     };
     let rest = &words[1..];
     let exit = match first {
@@ -269,57 +269,8 @@ pub fn parse_report(
     Ok(r)
 }
 
-/// `"$(cat)"`: all of stdin, NULs and trailing newlines dropped.
-fn read_stdin() -> Vec<u8> {
-    use std::io::Read;
-    let mut b = Vec::new();
-    let _ = std::io::stdin().lock().read_to_end(&mut b);
-    b.retain(|c| *c != 0);
-    while b.last() == Some(&b'\n') {
-        b.pop();
-    }
-    b
-}
-
-/// A value Python read from the environment: UTF-8, each byte that isn't
-/// as `\udcXX` (surrogateescape).
-pub fn env_text(bytes: &[u8]) -> Value {
-    let mut lit = String::from("\"");
-    let mut rest = bytes;
-    loop {
-        match std::str::from_utf8(rest) {
-            Ok(s) => {
-                push_escaped(&mut lit, s);
-                break;
-            }
-            Err(e) => {
-                let (good, bad) = rest.split_at(e.valid_up_to());
-                push_escaped(&mut lit, std::str::from_utf8(good).unwrap_or(""));
-                let n = e.error_len().unwrap_or(bad.len());
-                for b in &bad[..n] {
-                    lit.push_str(&format!("\\udc{b:02x}"));
-                }
-                rest = &bad[n..];
-            }
-        }
-    }
-    lit.push('"');
-    json::parse(&lit).unwrap_or_else(|_| p::text(&String::from_utf8_lossy(bytes)))
-}
-
-fn push_escaped(lit: &mut String, s: &str) {
-    for c in s.chars() {
-        match c {
-            '"' => lit.push_str("\\\""),
-            '\\' => lit.push_str("\\\\"),
-            c if u32::from(c) < 0x20 => lit.push_str(&format!("\\u{:04x}", u32::from(c))),
-            c => lit.push(c),
-        }
-    }
-}
-
 fn send(ctx: &mut Ctx, words: &[&str]) -> Exit {
-    let r = match parse_report(words, &mut read_stdin) {
+    let r = match parse_report(words, &mut || crate::prompt::read_all_stdin().expose().to_vec()) {
         Ok(r) => r,
         Err(line) => return usage(&line),
     };
@@ -439,26 +390,17 @@ fn send(ctx: &mut Ctx, words: &[&str]) -> Exit {
 /// terminal and `IFS= read -r answer < /dev/tty || answer=""`. `None`:
 /// there is no terminal to ask on.
 fn ask_tty(question: &str) -> Option<String> {
-    use std::io::{Read, Write};
-    if !(crate::prompt::stdin_is_tty() && crate::prompt::stderr_is_tty()) {
+    use crate::prompt;
+    use std::io::Write;
+    if !(prompt::stdin_is_tty() && prompt::stderr_is_tty() && prompt::dev_tty_readable()) {
         return None;
     }
-    let mut tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .ok()?;
-    let _ = tty.write_all(question.as_bytes());
-    let _ = tty.flush();
-    let mut line = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        match tty.read(&mut byte) {
-            Ok(1) if byte[0] == b'\n' => return Some(String::from_utf8_lossy(&line).into_owned()),
-            Ok(1) => line.push(byte[0]),
-            _ => return Some(String::new()),
-        }
+    if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+        let _ = tty.write_all(question.as_bytes());
+        let _ = tty.flush();
     }
+    let line = prompt::read_dev_tty_line().ok()?;
+    Some(String::from_utf8_lossy(line.expose()).into_owned())
 }
 
 /// `print(json.load(sys.stdin)["item"]["state"])` held in `$(…)`.

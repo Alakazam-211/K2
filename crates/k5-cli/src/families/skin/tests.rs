@@ -15,6 +15,7 @@ fn body(words: &[&str]) -> (String, String) {
         Ok(Ask::Plain(p)) | Ok(Ask::OwnerOnly(p)) => match p.req {
             Req::Post(path, body) => (path.to_string(), body),
             Req::Get(path, pairs) => (path.to_string(), pairs.join("&")),
+            Req::PostPassword(path, body, _) => (path.to_string(), body),
         },
         other => panic!("{words:?}: {other:?}"),
     }
@@ -32,8 +33,6 @@ fn the_shell_hands_these_on() {
         &["nope"],
         &["user", "chat", "bob"],
         &["user", "add", "bob", "--test"],
-        &["user", "password", "bob", "--password-stdin"],
-        &["user", "add", "bob", "--password-stdin"],
         &["role", "suggest"],
         &["grant", "hooks"],
         &["grant", "copy-host", "acme"],
@@ -312,4 +311,36 @@ fn the_lines_say_the_brand_s_name() {
             assert!(!l.contains("k2 ") && !l.contains("k5 "), "{l}");
         }
     }
+}
+
+#[test]
+fn a_password_on_stdin_joins_the_body_when_sent() {
+    let Ok(Ask::Plain(p)) = ask(&["user", "password", "bob", "--password-stdin"]) else {
+        panic!("user password --password-stdin is native")
+    };
+    assert_eq!(
+        p.req,
+        Req::PostPassword("/cli/skin/users/password", r#"{"username": "bob"}"#.into(), 1)
+    );
+    assert!(p.held && p.reader == Reader::UserPassword);
+    let Ok(Ask::Plain(p)) = ask(&["user", "add", "bob", "--password-stdin", "--app", " a "]) else {
+        panic!("user add --password-stdin is native")
+    };
+    assert_eq!(
+        p.req,
+        Req::PostPassword(
+            "/cli/skin/users",
+            r#"{"username": "bob", "app": "a"}"#.into(),
+            1
+        )
+    );
+    let pw = Secret::new(b"p\xffw\"d\r".to_vec());
+    assert_eq!(
+        with_password(r#"{"username": "bob", "app": "a"}"#, 1, &pw).expose(),
+        br#"{"username": "bob", "password": "p\udcffw\"d\r", "app": "a"}"#
+    );
+    assert_eq!(
+        with_password(r#"{"username": "b"}"#, 1, &Secret::new(Vec::new())).expose(),
+        br#"{"username": "b", "password": ""}"#
+    );
 }

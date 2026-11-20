@@ -230,6 +230,25 @@ pub fn room_held(raw: &str) -> Shown {
 pub fn read(reader: &Reader, raw: &str) -> Shown {
     match reader {
         Reader::UserAdd { app } => user_add(raw, app),
+        Reader::UserPassword => printed(raw, |d, o| {
+            let d = need(d, 4)?;
+            let what = if truthy(&g(d, "hasPassword")) {
+                "set"
+            } else {
+                "cleared"
+            };
+            o.line(format!(
+                "Skin password {what} for {}",
+                st(&at_or(d, "username", s("")))
+            ));
+            if truthy(&g(d, "passwordMustChange")) {
+                o.line(
+                    "At their next sign-in they choose a new password (no session until then)."
+                        .to_string(),
+                );
+            }
+            Ok(Exit::Ok)
+        }),
         Reader::UserShow => user_show(raw),
         Reader::UserImage => one(raw, |d| {
             let fmt = if truthy(&g(d, "cleared")) {

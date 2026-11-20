@@ -11,6 +11,8 @@
 //! - A passport (`grant list` asks for the agent's own logins).
 //! - No answer: the line and exit 1; nothing listening: curl's code.
 //! - What the binary hands to the shell, and help that never acts.
+//! - A password on stdin (`user add|password --password-stdin`), on the
+//!   vault rig ([`common::vault`]), which has room for stdin.
 
 #![cfg(unix)]
 
@@ -18,6 +20,7 @@ mod common;
 
 use common::parity::*;
 use common::stub::Reply;
+use common::vault::{VCase, VRig};
 
 const VERB: &str = "skin";
 const USERS: &str = r#"{"users":[{"username":"bob","roleName":"staff","email":"b@x","fullName":"Bob B","nameSetBySelf":true},{"username":"cat","defaultRoomHandles":["ops"],"agentHandle":"sales","tiedTo":"sales","pendingReset":true},{"username":"dan","appGrants":[{"role":"member","app":"acme/site","rooms":["a","b"]},{"rooms":["b","c"]},{"app":"x"}],"test":{"app":"acme/site","expired":true}}]}"#;
@@ -909,4 +912,99 @@ fn app_reaches_the_same_code() {
             shell(words("app user add -h", &["user", "add", "bob", "-h"], 0)),
         ],
     );
+}
+
+/// A password on stdin: the body the daemon gets, the printer, and no
+/// child that sees it. `noun`: `skin` or `app`.
+fn on_stdin(
+    noun: &'static str,
+    name: &'static str,
+    args: &[&'static str],
+    stdin: &[u8],
+    answer: Reply,
+    code: i32,
+) -> VCase {
+    let mut c = VCase::new(name, args);
+    c.noun = noun;
+    c.daemon = vec![answer];
+    c.daemon_requests = 1;
+    c.stdin = stdin.to_vec();
+    c.code = code;
+    c
+}
+
+#[test]
+fn skin_password_on_stdin() {
+    let rig = VRig::new();
+    let mut v = vec![
+        // covers: skin user add
+        on_stdin(
+            "skin",
+            "user add --password-stdin: all of stdin, the trailing newlines off",
+            &["user", "add", "bob", "--password-stdin", "--email", "b@x"],
+            b"pw one\n\ntwo\n\n",
+            ok(r#"{"username":"bob"}"#),
+            0,
+        ),
+        // covers: app user add
+        on_stdin(
+            "app",
+            "app user add --password-stdin --app: a byte that isn't UTF-8 and a CR",
+            &[
+                "user",
+                "add",
+                "bob",
+                "--password-stdin",
+                "--app",
+                "acme/site",
+                "--role",
+                "member",
+            ],
+            b"p\xffw\"d\r\n",
+            ok(r#"{"username":"bob"}"#),
+            0,
+        ),
+        // covers: skin user password
+        on_stdin(
+            "skin",
+            "user password --password-stdin",
+            &["user", "password", "bob", "--password-stdin"],
+            b"pw-reset-1\n",
+            ok(r#"{"username":"bob","hasPassword":true,"passwordMustChange":true}"#),
+            0,
+        ),
+        // covers: app user password
+        on_stdin(
+            "app",
+            "app user password --password-stdin, nothing on stdin: cleared",
+            &["user", "password", "--password-stdin", "bob"],
+            b"",
+            ok(r#"{"username":"bob","hasPassword":false}"#),
+            0,
+        ),
+        // covers: app user password
+        on_stdin(
+            "app",
+            "app user password: the daemon's error",
+            &["user", "password", "bob", "--password-stdin"],
+            b"pw\n",
+            Reply::Answer(404, r#"{"error":"no such user"}"#.into()),
+            1,
+        ),
+        // covers: app user password
+        on_stdin(
+            "app",
+            "app user password: a list, Python's AttributeError",
+            &["user", "password", "bob", "--password-stdin"],
+            b"pw\n",
+            ok("[]"),
+            1,
+        ),
+    ];
+    v[5].compare = common::vault::VCompare::Traceback;
+    v[0].secrets = vec!["pw one"];
+    v[2].secrets = vec!["pw-reset-1"];
+    for c in v {
+        rig.check(&c);
+    }
 }

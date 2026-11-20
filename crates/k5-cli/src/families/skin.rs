@@ -30,9 +30,8 @@
 //!   prints the App family's page through `_perm_lines`;
 //! - `user chat` and `role suggest` (`_compute_call`), `grant hooks`
 //!   (`_app_grant_hooks`) and `grant copy-host` (`_app_rt_post`);
-//! - test guests (`user add|remove|password … --test`, `_app_test_guest`);
-//! - a password on stdin (`user add --password-stdin`, `user password
-//!   --password-stdin`): the secrets-on-stdin helper is not on the line;
+//! - test guests (`user add|remove|password … --test`, `_app_test_guest`):
+//!   the shell's fix that takes the password on stdin is not on the line;
 //! - `grant add` and `grant rm` with a passport: `_grant_owner_next_step`
 //!   may ask the permission probe after the answer;
 //! - a `K2_CJ_` name in the environment (`_compute_json` reads it);
@@ -46,12 +45,14 @@ pub mod print;
 
 use super::curl_port;
 use super::skin_token::{self, py};
+use crate::confirm;
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out;
-use crate::out::json::Value;
+use crate::out::json::{Text, Value};
 use crate::passport;
 use crate::prelude::{self, Closing};
+use crate::prompt::{self, Secret};
 use crate::python;
 use crate::transport::{encode, Call, Channel, Client};
 use k2_client::cli_name;
@@ -81,6 +82,10 @@ pub const TEACH: &str = concat!(
 pub enum Req {
     Get(&'static str, Vec<String>),
     Post(&'static str, String),
+    /// `pw=$(cat)` then a POST whose body has `password` at this place:
+    /// the body without it, and the place. The password is read from
+    /// stdin when the request is sent and never leaves the body.
+    PostPassword(&'static str, String, usize),
 }
 
 /// Which printer reads the answer, with what the shell hands it in its
@@ -88,6 +93,7 @@ pub enum Req {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reader {
     UserAdd { app: String },
+    UserPassword,
     UserShow,
     UserImage,
     UserEnded,
@@ -404,9 +410,6 @@ fn user_add(rest: &[&str]) -> Result<Ask, Stop> {
             Exit::Usage,
         ));
     }
-    if pw_stdin {
-        return Ok(Ask::Shell);
-    }
     let mut b = vec![("username", s(&username))];
     if temp {
         b.push(("generate", Value::Bool(true)));
@@ -422,11 +425,16 @@ fn user_add(rest: &[&str]) -> Result<Ask, Stop> {
     if !role_s.is_empty() {
         b.push(("role", s(role_s)));
     }
-    Ok(post_held(
-        "/cli/skin/users",
-        dumps(&obj(b)),
-        Reader::UserAdd { app },
-    ))
+    let body = dumps(&obj(b));
+    let req = if pw_stdin {
+        Req::PostPassword("/cli/skin/users", body, 1)
+    } else {
+        Req::Post("/cli/skin/users", body)
+    };
+    Ok(Ask::Plain(Plain {
+        held: true,
+        ..plain(req, Reader::UserAdd { app })
+    }))
 }
 
 fn user_show(rest: &[&str]) -> Result<Ask, Stop> {
@@ -679,7 +687,14 @@ fn user_password(rest: &[&str]) -> Result<Ask, Stop> {
     if username.is_empty() || !pw_stdin {
         return Err(Stop::err(&[HELP], Exit::Error));
     }
-    Ok(Ask::Shell)
+    let body = dumps(&obj(vec![("username", s(&username))]));
+    Ok(Ask::Plain(Plain {
+        held: true,
+        ..plain(
+            Req::PostPassword("/cli/skin/users/password", body, 1),
+            Reader::UserPassword,
+        )
+    }))
 }
 
 fn user_unlock(rest: &[&str]) -> Result<Ask, Stop> {
@@ -1795,8 +1810,23 @@ fn send(client: &mut Client, closing: &mut Closing, req: &Req) -> Result<Vec<u8>
             client.call(Channel::Tcp, path, Call::Request(&pairs))
         }
         Req::Post(path, body) => client.call(Channel::Tcp, path, Call::PostJson(body.as_bytes())),
+        Req::PostPassword(path, body, at) => {
+            let body = with_password(body, *at, &prompt::read_all_stdin());
+            client.call(Channel::Tcp, path, Call::PostJson(body.expose()))
+        }
     };
     skin_token::held(client, closing, r)
+}
+
+/// The body with `"password"` at `at`: what `sys.stdin.read()` gives
+/// Python of the bytes `$(cat)` kept ([`confirm::text_of_bytes`]).
+pub fn with_password(body: &str, at: usize, pw: &Secret) -> Secret {
+    let Ok(Value::Object(mut pairs)) = crate::out::json::parse(body) else {
+        unreachable!("the verb's own body is a JSON object")
+    };
+    let at = at.min(pairs.len());
+    pairs.insert(at, (Text::from("password"), confirm::text_of_bytes(pw.expose())));
+    Secret::new(dumps(&Value::Object(pairs)).into_bytes())
 }
 
 /// `printf '%s\n' "$raw"`.

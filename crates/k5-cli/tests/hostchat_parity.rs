@@ -1032,3 +1032,115 @@ fn hostchat_recording_a_person_s_steps() {
         rig.check(c);
     }
 }
+
+#[test]
+fn hostchat_media_as_the_shell_does() {
+    let rig = Rig::new(VERB, "media");
+    let v = vec![
+        // covers: hostchat media
+        one(
+            "media preflight",
+            &["media", "preflight"],
+            r#"{"ready":true,"checks":[{"status":"ok","id":"udp","detail":"open"}]}"#,
+        ),
+        one("media status", &["media", "status"], STATUS),
+        one("media status --json", &["media", "status", "--json"], STATUS),
+        one("media status --json: no voice", &["media", "status", "--json"], r#"{"state":"x"}"#),
+        one(
+            "media install",
+            &[
+                "media",
+                "install",
+                "--url",
+                "wss://v.example",
+                "--node-ip",
+                "192.0.2.10",
+                "--tarball",
+                "media.tgz",
+            ],
+            r#"{"voice":{"state":"installing"},"ok":true}"#,
+        ),
+        many(
+            "media install: waits on voice",
+            &["media", "install", "--media-tarball", "/m.tgz"],
+            &[
+                r#"{"voice":"installing"}"#,
+                r#"{"state":"running","voice":{"progress":{"step":"cert","result":"running"}}}"#,
+                r#"{"state":"running","voice":{"state":"on","progress":{"step":"cert","result":"done"}}}"#,
+            ],
+            0,
+        ),
+        one("media url", &["media", "url", "wss://v.example"], r#"{"ok":true,"publicUrl":"wss://v.example"}"#),
+        one("media url --url", &["media", "url", "--public-url", "wss://w.example"], r#"{"ok":true}"#),
+        one("media renew", &["media", "renew"], r#"{"renewed":true,"daysLeft":89}"#),
+        one("media rebind", &["media", "rebind"], r#"{"rebound":true}"#),
+        one("media tier", &["media", "tier", "tunnel"], r#"{"tier":"tunnel"}"#),
+        one(
+            "media probe",
+            &["media", "probe", "--udp", "ok", "--tcp", "fail", "--turn-tls", "ok"],
+            r#"{"exposure":{"note":"tcp blocked"}}"#,
+        ),
+        one("media uninstall --yes", &["media", "uninstall", "--yes"], r#"{"removed":true}"#),
+        case(
+            "media uninstall with no terminal",
+            &["media", "uninstall"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case("media alone: the help", &["media"], &[], vec![], owner_and_port, 0, 0),
+        bad("media url: none", &["media", "url"]),
+        bad("media tier: a bad tier", &["media", "tier", "fast"]),
+        bad("media probe: a flag missing", &["media", "probe", "--udp", "ok"]),
+        bad("media: --yes on renew", &["media", "renew", "-y"]),
+        bad("media: an unknown flag", &["media", "renew", "--x"]),
+        bad("media: an unknown verb", &["media", "start"]),
+        traceback(one("media status --json: a list", &["media", "status", "--json"], "[]")),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn hostchat_users_as_the_shell_does() {
+    let rig = Rig::new(VERB, "users");
+    let link = r#"{"username":"ann","installRole":"admin","setupLink":{"url":"https://chat.example/setup#t","expiresAt":"2026-12-01"}}"#;
+    let v = vec![
+        // covers: hostchat users
+        one(
+            "users",
+            &["users"],
+            r#"{"users":[{"username":"ann","installRole":"owner","kind":"person","displayName":"Ann é"},{"externalId":"x1","installRole":"member","kind":"guest","deactivated":true}]}"#,
+        ),
+        one("users list: none", &["users", "list"], r#"{"users":[]}"#),
+        one("user list --json", &["user", "list", "--json"], r#"{"users":[]}"#),
+        one("users owner", &["users", "owner", "ann", "--display-name", "Ann"], link),
+        one(
+            "users invite",
+            &["users", "invite", "bob", "--email", "bob@example.test", "--admin"],
+            link,
+        ),
+        one("users invite: a member", &["users", "invite", "cy"], r#"{"username":"cy","installRole":"member"}"#),
+        one("users reset", &["users", "reset", "ann"], link),
+        one(
+            "users revoke",
+            &["users", "revoke", "ann"],
+            r#"{"username":"ann","sessionsRevoked":0}"#,
+        ),
+        one("users reactivate --json", &["users", "reactivate", "ann", "--json"], link),
+        one("users role", &["users", "role", "ann", "member"], r#"{"username":"ann","installRole":"member"}"#),
+        one("users role --role", &["users", "role", "ann", "--role", "admin"], r#"{"username":"ann"}"#),
+        bad("users owner: no name", &["users", "owner"]),
+        bad("users role: no role", &["users", "role", "ann"]),
+        bad("users: an unknown verb", &["users", "kick", "ann"]),
+        bad("users: an unknown flag", &["users", "list", "--x"]),
+        case("users help", &["users", "help"], &[], vec![], owner_and_port, 0, 0),
+        traceback(one("users list: a list", &["users"], "[1]")),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

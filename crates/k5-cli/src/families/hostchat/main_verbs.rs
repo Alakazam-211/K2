@@ -37,7 +37,7 @@ fn line(text: &str, exit: Exit) -> Exit {
 }
 
 /// The shell's `abs`: a relative path under `$PWD`.
-fn abs(p: &str) -> String {
+pub(super) fn abs(p: &str) -> String {
     if p.is_empty() || p.starts_with('/') {
         return p.to_string();
     }
@@ -46,7 +46,7 @@ fn abs(p: &str) -> String {
 }
 
 /// `_hostchat_print <verb> <as_json>` on the body.
-fn show(body: &str, verb: &str, json: bool) -> Exit {
+pub(super) fn show(body: &str, verb: &str, json: bool) -> Exit {
     if json {
         return match out::stdout(&format!("{body}\n")) {
             Ok(()) => Exit::Ok,
@@ -808,7 +808,7 @@ fn after<'a>(s: &'a str, prefix: &str) -> &'a str {
 }
 
 /// `_hostchat_wait <voice> <as_json>`.
-fn wait_enable(ctx: &mut Ctx, voice: bool, json: bool) -> Exit {
+pub(super) fn wait_enable(ctx: &mut Ctx, voice: bool, json: bool) -> Exit {
     let mut last = String::new();
     for _ in 0..600 {
         let body = match ctx.call(false, "/cli/sew/status", "", false) {

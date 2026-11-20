@@ -21,7 +21,7 @@
 //!    ([`crate::confirm::confirm_token`]); the token goes from that answer
 //!    into the next request's body and nowhere else.
 //!
-//! `recording` is [`recording`]'s. `deliveries` and `agents` ride
+//! `recording`, `media` and `users` are their own modules'. `deliveries` and `agents` ride
 //! [`super::chat`], as the shell's do.
 //!
 //! Handed to the shell, before anything is printed or sent: a word that
@@ -34,8 +34,10 @@
 //! yet.
 
 mod main_verbs;
+mod media;
 pub mod print;
 mod recording;
+mod users;
 
 use super::voice::{self, sew, sew::Field};
 use super::{chat, curl_port};
@@ -69,6 +71,10 @@ pub enum Plan {
     Main(Main),
     /// `recording …`.
     Rec(recording::Rec),
+    /// `media …`.
+    Media(media::Media),
+    /// `users …`.
+    Users(users::Users),
 }
 
 /// The flags and words of `cmd_hostchat`'s own verbs.
@@ -310,13 +316,15 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "agents" | "agent" => {
             return chat::start(args, &words, chat::access(&words[1..]), skip, TOOL)
         }
-        "media" | "users" | "user" | "meet" | "people" | "person"
+        "meet" | "people" | "person"
         | "approvals" | "approval" | "on-behalf" | "behalf" | "log" | "app-space"
         | "app-spaces" | "home" | "pass-keys" => return None,
         _ => {}
     }
     let plan = match words.first().copied() {
         Some("recording") => recording::parse(&words[1..]),
+        Some("media") => media::parse(&words[1..]),
+        Some("users" | "user") => users::parse(&words[1..]),
         _ => parse(&words),
     };
     if plan == Plan::Shell || !python::family_native(python::here()) {
@@ -366,7 +374,7 @@ fn run_with(
             return Exit::Usage;
         }
         Plan::Shell => unreachable!("run hands it to the shell"),
-        p @ (Plan::Main(_) | Plan::Rec(_)) => p,
+        p @ (Plan::Main(_) | Plan::Rec(_) | Plan::Media(_) | Plan::Users(_)) => p,
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let client = match settings.client(would_refuse) {
@@ -385,6 +393,8 @@ fn run_with(
     let exit = match &m {
         Plan::Main(m) => main_verbs::run(&mut ctx, m),
         Plan::Rec(r) => recording::run(&mut ctx, r),
+        Plan::Media(m) => media::run(&mut ctx, m),
+        Plan::Users(u) => users::run(&mut ctx, u),
         _ => unreachable!("printed above"),
     };
     ctx.closing.flush(&mut ctx.client, exit);

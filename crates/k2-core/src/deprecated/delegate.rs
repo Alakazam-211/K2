@@ -34,7 +34,7 @@ use crate::workspace::work_item::{atomic_write, read_work_item};
 /// Shorten a slug to a maximum length, breaking at word boundaries.
 /// Strips common filler prefixes (`bug-`, `feature-`, `task-`).
 #[deprecated(
-    since = "0.39.0h",
+    since = "0.39.0",
     note = "Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23"
 )]
 pub fn shorten_slug(slug: &str, max_len: usize) -> String {
@@ -58,7 +58,7 @@ pub fn shorten_slug(slug: &str, max_len: usize) -> String {
 /// Overwrite the `assigned_by:` frontmatter field (creating the field
 /// is not this fn's job — caller ensures it exists).
 #[deprecated(
-    since = "0.39.0h",
+    since = "0.39.0",
     note = "Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23"
 )]
 pub fn update_assigned_by(content: &str, new_value: &str) -> String {
@@ -87,7 +87,7 @@ pub fn update_assigned_by(content: &str, new_value: &str) -> String {
 /// Called when moving an item from `inbox/` to `active/` during
 /// delegate.
 #[deprecated(
-    since = "0.39.0h",
+    since = "0.39.0",
     note = "Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23"
 )]
 pub fn add_worktree_to_frontmatter(
@@ -112,7 +112,7 @@ pub fn add_worktree_to_frontmatter(
 /// rejection/retry so the re-queued work item doesn't reference a
 /// worktree that was cleaned up.
 #[deprecated(
-    since = "0.39.0h",
+    since = "0.39.0",
     note = "Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23"
 )]
 pub fn strip_worktree_from_frontmatter(content: &str) -> String {
@@ -147,7 +147,7 @@ pub fn strip_worktree_from_frontmatter(content: &str) -> String {
 /// - `k2_agents_build_launch` when an agent's inbox has work but
 ///   no active worktree yet.
 #[deprecated(
-    since = "0.39.0h",
+    since = "0.39.0",
     note = "Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23"
 )]
 pub fn k2_agents_delegate(

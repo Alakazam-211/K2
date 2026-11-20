@@ -799,16 +799,18 @@ fn wiki_hands_these_to_the_shell() {
             0,
         )));
     }
-    // A proxy curl would use for the control plane: the shell's.
-    v.push(shell(case(
-        "publish: a tunnel token on disk and a proxy set",
+    // A proxy set for the control plane is no longer the shell's: the
+    // binary reads it (wiki_publish_through_the_proxy). Here the daemon
+    // makes the Connect call, so the proxy is never needed.
+    v.push(case(
+        "publish: a tunnel token on disk and a proxy set, the daemon makes the call",
         &["publish", "--label", "acme"],
         &[("https_proxy", "http://127.0.0.1:9")],
         made_replies(),
         tunnel_token,
         0,
         6,
-    )));
+    ));
     v.push(shell(case(
         "a port that is no port",
         &["status"],
@@ -1346,7 +1348,11 @@ fn wiki_publish_through_the_proxy() {
     for run in [&b, &r] {
         assert_eq!(run.daemon.len(), 6, "the daemon got every call: {run:?}");
         tunnel::assert_tunnel_only(c.name, run, &target, Some(&basic), TUN_TOK);
-        assert_eq!(run.proxy.len(), 1, "only the control plane's CONNECT: {run:?}");
+        assert_eq!(
+            run.proxy.len(),
+            1,
+            "only the control plane's CONNECT: {run:?}"
+        );
     }
 
     // Direct: no_proxy naming the host, NO_PROXY=*, and HTTP_PROXY alone
@@ -1355,7 +1361,10 @@ fn wiki_publish_through_the_proxy() {
     for (name, extra) in [
         (
             "no_proxy names the host",
-            vec![("https_proxy", authed.clone()), ("no_proxy", HOST.to_string())],
+            vec![
+                ("https_proxy", authed.clone()),
+                ("no_proxy", HOST.to_string()),
+            ],
         ),
         (
             "no_proxy names its domain",
@@ -1366,7 +1375,10 @@ fn wiki_publish_through_the_proxy() {
         ),
         (
             "NO_PROXY=*",
-            vec![("HTTPS_PROXY", authed.clone()), ("NO_PROXY", "*".to_string())],
+            vec![
+                ("HTTPS_PROXY", authed.clone()),
+                ("NO_PROXY", "*".to_string()),
+            ],
         ),
         ("HTTP_PROXY alone", vec![("HTTP_PROXY", authed.clone())]),
     ] {
@@ -1384,7 +1396,10 @@ fn wiki_publish_through_the_proxy() {
     // A 407, and a proxy that is down: quiet on both sides, the password
     // printed nowhere, nothing in the tunnel.
     let refusing = ProxyStub::start(ProxyMode::Refuse);
-    let dead = format!("http://{PROXY_USER}:{PROXY_PASS}@127.0.0.1:{}", dead_tcp_port());
+    let dead = format!(
+        "http://{PROXY_USER}:{PROXY_PASS}@127.0.0.1:{}",
+        dead_tcp_port()
+    );
     for (name, url, p) in [
         (
             "the proxy answers 407",

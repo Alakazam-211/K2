@@ -639,7 +639,10 @@ fn talk_at_a_remote_host_through_the_proxy() {
     let basic = tunnel::basic_line("acme-proxy", "pr0xy-s3cret");
     for run in [&r, &b] {
         tunnel::assert_tunnel_only(c.name, run, &target, Some(&basic), "remote-tok-9");
-        assert!(run.daemon.is_empty(), "never this machine's daemon: {run:?}");
+        assert!(
+            run.daemon.is_empty(),
+            "never this machine's daemon: {run:?}"
+        );
     }
     tunnel::assert_same(c.name, &b, &r);
     assert_eq!(r.out.code, Some(0), "{r:?}");

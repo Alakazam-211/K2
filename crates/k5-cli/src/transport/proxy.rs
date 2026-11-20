@@ -388,8 +388,20 @@ fn decode(part: &str) -> Option<Vec<u8>> {
         b.is_ascii_alphanumeric()
             || matches!(
                 b,
-                b'-' | b'.' | b'_' | b'~' | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*'
-                    | b'+' | b',' | b'=' | b':'
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b'='
+                    | b':'
             )
     };
     let b = part.as_bytes();
@@ -503,7 +515,11 @@ pub fn tunnel(
             Ok(0) => return Err(tunnel_failed("proxy: CONNECT aborted")),
             Ok(_) => got.push(byte[0]),
             Err(e) if is_timeout(&e) => return Err(Failure::ConnectTimedOut),
-            Err(e) => return Err(tunnel_failed(format!("proxy: read the CONNECT answer: {e}"))),
+            Err(e) => {
+                return Err(tunnel_failed(format!(
+                    "proxy: read the CONNECT answer: {e}"
+                )))
+            }
         }
     }
     match status(&got) {

@@ -70,6 +70,8 @@ pub fn take(log: &Log) -> Vec<String> {
 pub struct TlsStub {
     pub port: u16,
     pub log: Log,
+    /// A connection that ended before a whole request: why.
+    pub errors: Log,
 }
 
 impl TlsStub {
@@ -87,16 +89,17 @@ impl TlsStub {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         let log: Log = Arc::default();
-        let keep = Arc::clone(&log);
+        let errors: Log = Arc::default();
+        let (keep, errs) = (Arc::clone(&log), Arc::clone(&errors));
         std::thread::spawn(move || {
             for tcp in l.incoming() {
                 let Ok(tcp) = tcp else { continue };
                 let cfg = Arc::clone(&cfg);
-                let keep = Arc::clone(&keep);
-                std::thread::spawn(move || serve_tls(cfg, tcp, &keep, status, body));
+                let (keep, errs) = (Arc::clone(&keep), Arc::clone(&errs));
+                std::thread::spawn(move || serve_tls(cfg, tcp, &keep, &errs, status, body));
             }
         });
-        TlsStub { port, log }
+        TlsStub { port, log, errors }
     }
 }
 
@@ -104,14 +107,16 @@ fn serve_tls(
     cfg: Arc<rustls::ServerConfig>,
     tcp: TcpStream,
     log: &Log,
+    errors: &Log,
     status: u16,
     body: &str,
 ) {
     tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
     let conn = rustls::ServerConnection::new(cfg).unwrap();
     let mut s = rustls::StreamOwned::new(conn, tcp);
-    let got = read_request(&mut s);
+    let (got, why) = read_request(&mut s);
     if got.is_empty() {
+        errors.lock().unwrap().push(why);
         return;
     }
     log.lock()
@@ -129,7 +134,7 @@ fn serve_tls(
 
 /// A request's head and its `Content-Length` body; what came before a
 /// failure or the end.
-fn read_request(s: &mut impl Read) -> Vec<u8> {
+fn read_request(s: &mut impl Read) -> (Vec<u8>, String) {
     let mut got = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
@@ -140,11 +145,12 @@ fn read_request(s: &mut impl Read) -> Vec<u8> {
                 .find_map(|h| h.strip_prefix("content-length: "))
                 .map_or(0, |v| v.trim().parse::<usize>().unwrap());
             if got.len() >= end + 4 + len {
-                return got;
+                return (got, String::new());
             }
         }
         match s.read(&mut chunk) {
-            Ok(0) | Err(_) => return got,
+            Ok(0) => return (got, "closed".into()),
+            Err(e) => return (got, format!("read: {e}")),
             Ok(n) => got.extend_from_slice(&chunk[..n]),
         }
     }
@@ -264,7 +270,10 @@ pub fn basic_line(user: &str, pass: &str) -> String {
     let raw = format!("{user}:{pass}").into_bytes();
     let mut b64 = String::new();
     for c in raw.chunks(3) {
-        let n = c.iter().enumerate().fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+        let n = c
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
         for i in 0..4 {
             if i <= c.len() {
                 b64.push(T[((n >> (18 - 6 * i)) & 63) as usize] as char);
@@ -285,6 +294,8 @@ pub struct SideRun {
     pub daemon: Vec<String>,
     pub proxy: Vec<String>,
     pub tls: Vec<(String, bool)>,
+    /// The TLS stub's connections that ended with no whole request.
+    pub tls_errors: Vec<String>,
 }
 
 /// Runs `c` on bash, then on the binary, each against its own stub
@@ -302,6 +313,7 @@ pub fn both(
     for (bash, side) in [(true, Side::Bash), (false, Side::Rust)] {
         take(&proxy.heads);
         take(&tls.log);
+        take(&tls.errors);
         rig.prepare(side, c);
         let out = rig.run(bash, c);
         let port = format!(":{}", rig.stub_of(side).port);
@@ -318,7 +330,9 @@ pub fn both(
             daemon,
             proxy: take(&proxy.heads),
             tls: take(&tls.log).iter().map(|r| masked(r)).collect(),
+            tls_errors: take(&tls.errors),
         });
+        println!("-- {} side of {}: {:?}", if bash { "bash" } else { "the binary's" }, c.name, runs.last());
     }
     let rust = runs.pop().unwrap();
     let bash = runs.pop().unwrap();
@@ -359,12 +373,22 @@ pub fn assert_same(name: &str, b: &SideRun, r: &SideRun) {
         "{name}: the CONNECT heads"
     );
     for h in &r.proxy {
-        assert!(h.contains("\r\nUser-Agent: k5/"), "{name}: the binary's CONNECT: {h:?}");
+        assert!(
+            h.contains("\r\nUser-Agent: k5/"),
+            "{name}: the binary's CONNECT: {h:?}"
+        );
     }
     let only = |t: &[(String, bool)]| t.iter().map(|(r, _)| r.clone()).collect::<Vec<_>>();
-    assert_eq!(only(&b.tls), only(&r.tls), "{name}: the requests in the tunnel");
+    assert_eq!(
+        only(&b.tls),
+        only(&r.tls),
+        "{name}: the requests in the tunnel"
+    );
     assert!(b.tls.iter().all(|(_, native)| !native), "{name}: bash's");
-    assert!(r.tls.iter().all(|(_, native)| *native), "{name}: the binary's own");
+    assert!(
+        r.tls.iter().all(|(_, native)| *native),
+        "{name}: the binary's own"
+    );
 }
 
 /// K2's rule for a token and a proxy: the proxy saw a CONNECT for
@@ -378,13 +402,16 @@ pub fn assert_tunnel_only(
     basic: Option<&str>,
     token: &str,
 ) {
-    assert!(!run.proxy.is_empty(), "{name}: the proxy saw nothing");
+    assert!(!run.proxy.is_empty(), "{name}: the proxy saw nothing: {run:?}");
     for h in &run.proxy {
         assert!(
             h.starts_with(&format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n")),
             "{name}: not a CONNECT for {target}: {h:?}"
         );
-        assert!(!h.contains(token), "{name}: the token reached the proxy: {h:?}");
+        assert!(
+            !h.contains(token),
+            "{name}: the token reached the proxy: {h:?}"
+        );
         match basic {
             Some(line) => assert!(
                 h.split("\r\n").any(|l| l == line),
@@ -397,7 +424,10 @@ pub fn assert_tunnel_only(
             "{name}: {h:?}"
         );
     }
-    assert!(!run.tls.is_empty(), "{name}: nothing came through the tunnel");
+    assert!(
+        !run.tls.is_empty(),
+        "{name}: nothing came through the tunnel: {run:?}"
+    );
     for (r, _) in &run.tls {
         let with_token: Vec<&str> = r.split("\r\n").filter(|l| l.contains(token)).collect();
         assert_eq!(
@@ -426,6 +456,7 @@ pub fn assert_unprinted(name: &str, runs: &[SideRun], secrets: &[&str]) {
 /// says so (it flips by itself when cli/k2 carries the line).
 pub fn bash_has(line_start: &str) -> bool {
     let k2 = super::parity::cli_k2();
-    let text = std::fs::read_to_string(&k2).unwrap_or_else(|e| panic!("read {}: {e}", k2.display()));
+    let text =
+        std::fs::read_to_string(&k2).unwrap_or_else(|e| panic!("read {}: {e}", k2.display()));
     text.contains(line_start)
 }

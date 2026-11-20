@@ -351,7 +351,10 @@ fn talk(
     }
     // K2's shared transport rule, before any request: a token goes to
     // another machine over https only.
-    if let Some(line) = base.as_ref().and_then(|(b, h)| remote::plain_http_refusal(b, h)) {
+    if let Some(line) = base
+        .as_ref()
+        .and_then(|(b, h)| remote::plain_http_refusal(b, h))
+    {
         out::stderr_line(&line);
         return Exit::Usage;
     }

@@ -2,6 +2,13 @@ use super::*;
 use std::collections::HashMap;
 use std::net::TcpListener;
 
+/// The variables set, whether the target is https, and the proxy
+/// setting curl uses.
+type EnvRow = (&'static [(&'static str, &'static str)], bool, Option<&'static str>);
+
+/// A proxy URL as read: host, port, and whether it has a user part.
+type Parsed = (String, u16, bool);
+
 fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Lookup {
     let m: HashMap<String, String> = pairs
         .iter()
@@ -22,14 +29,30 @@ fn via(host: &str, port: u16) -> Route {
 /// curl's `detect_proxy` order, and an empty value counts as unset.
 #[test]
 fn which_variable_names_the_proxy() {
-    let rows: &[(&[(&str, &str)], bool, Option<&str>)] = &[
-        (&[("https_proxy", "a"), ("HTTPS_PROXY", "b"), ("all_proxy", "c")], true, Some("a")),
+    let rows: &[EnvRow] = &[
+        (
+            &[
+                ("https_proxy", "a"),
+                ("HTTPS_PROXY", "b"),
+                ("all_proxy", "c"),
+            ],
+            true,
+            Some("a"),
+        ),
         (&[("HTTPS_PROXY", "b"), ("all_proxy", "c")], true, Some("b")),
-        (&[("https_proxy", ""), ("HTTPS_PROXY", "b")], true, Some("b")),
+        (
+            &[("https_proxy", ""), ("HTTPS_PROXY", "b")],
+            true,
+            Some("b"),
+        ),
         (&[("all_proxy", "c"), ("ALL_PROXY", "d")], true, Some("c")),
         (&[("all_proxy", ""), ("ALL_PROXY", "d")], true, Some("d")),
         (&[("http_proxy", "e"), ("HTTP_PROXY", "f")], true, None),
-        (&[("http_proxy", "e"), ("https_proxy", "a")], false, Some("e")),
+        (
+            &[("http_proxy", "e"), ("https_proxy", "a")],
+            false,
+            Some("e"),
+        ),
         // HTTP_PROXY is never read (curl: the CGI `Proxy:` header).
         (&[("HTTP_PROXY", "f")], false, None),
         (&[("HTTP_PROXY", "f"), ("ALL_PROXY", "d")], false, Some("d")),
@@ -91,14 +114,17 @@ fn no_proxy_matches_as_curl_does() {
 #[test]
 fn proxy_urls_the_binary_reads_and_the_ones_it_leaves() {
     let p = |h: &str, port| Some((h.to_string(), port, false));
-    let rows: &[(&str, Option<(String, u16, bool)>)] = &[
+    let rows: &[(&str, Option<Parsed>)] = &[
         ("http://proxy.example:3128", p("proxy.example", 3128)),
         ("HTTP://proxy.example:3128/", p("proxy.example", 3128)),
         ("http://proxy.example", p("proxy.example", 1080)),
         ("proxy.example", p("proxy.example", 1080)),
         ("proxy.example:8080", p("proxy.example", 8080)),
         ("10.0.0.9:3128", p("10.0.0.9", 3128)),
-        ("http://proxy.example:3128/any/path", p("proxy.example", 3128)),
+        (
+            "http://proxy.example:3128/any/path",
+            p("proxy.example", 3128),
+        ),
         (
             "http://u:p@proxy.example:3128",
             Some(("proxy.example".into(), 3128, true)),
@@ -155,7 +181,10 @@ fn credentials_are_percent_decoded_and_never_printed() {
     }
     // A user with no password: an empty one, as curl sends it.
     let p = parse_proxy("http://only@proxy.example").unwrap();
-    assert_eq!(p.auth.unwrap().basic(), format!("Basic {}", base64(b"only:")));
+    assert_eq!(
+        p.auth.unwrap().basic(),
+        format!("Basic {}", base64(b"only:"))
+    );
 }
 
 #[test]
@@ -240,13 +269,22 @@ fn the_route_for_a_host() {
         decide("box.example", true, env(&[("HTTP_PROXY", "p.example")])),
         Route::Direct
     );
-    let named = [("https_proxy", "p.example:3128"), ("no_proxy", "box.example")];
+    let named = [
+        ("https_proxy", "p.example:3128"),
+        ("no_proxy", "box.example"),
+    ];
     assert_eq!(decide("box.example", true, env(&named)), Route::Direct);
     assert_eq!(decide("a.box.example", true, env(&named)), Route::Direct);
-    assert_eq!(decide("other.example", true, env(&named)), via("p.example", 3128));
+    assert_eq!(
+        decide("other.example", true, env(&named)),
+        via("p.example", 3128)
+    );
     let star = [("https_proxy", "p.example"), ("NO_PROXY", "*")];
     assert_eq!(decide("box.example", true, env(&star)), Route::Direct);
-    let blanks = [("https_proxy", "p.example"), ("no_proxy", "a.example b.example")];
+    let blanks = [
+        ("https_proxy", "p.example"),
+        ("no_proxy", "a.example b.example"),
+    ];
     assert_eq!(decide("box.example", true, env(&blanks)), Route::Shell);
     // No proxy at all: a no_proxy with blanks doesn't matter.
     let blanks = [("no_proxy", "a.example b.example")];

@@ -392,9 +392,7 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
         Target::Tls { host, port, via } => {
             let s = match via {
                 None => tcp(host, *port, limit)?,
-                Some(t) => {
-                    super::proxy::tunnel(&t.proxy, host, *port, &t.user_agent, limit, tcp)?
-                }
+                Some(t) => super::proxy::tunnel(&t.proxy, host, *port, &t.user_agent, limit, tcp)?,
             };
             super::tls::connect(s, host, limit).map(|t| Conn::Tls(Box::new(t)))
         }

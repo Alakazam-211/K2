@@ -175,6 +175,7 @@ EXPECTED_DIFFS=(
     "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via; \`thread bob --from\`, also --limit and --before-seq, and \`thread unread --kind\`; \`talk ws hi --lines\`, also --from, --command, --agent, --session, --token, --answer, --respond, --answers and --wake-timeout) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Neither sends anything"
     "exec-child-env|K2 ruling 1b, vault run (db run's ruling 2a child the same)|the program a command runs in its place (vault run's helper, db run's command, named in families::vault::run and families::db::run): bash's child also gets bash's own environment changes, SHLVL and _K2_PY_PROXY_RULE (the shell CLI's Python proxy rule), and _ (the program's path) where bash's exec sets it, none of which the binary's child gets; and an exec that fails (a folder the daemon named) exits 126 on both, worded \"<path to cli/k2>: line <n>: <helper>: Is a directory\" by bash and \"exec: <helper>: Permission denied (os error 13)\" by the binary. The request each sends is the same"
     "curl-config-files|K2 and the Steward, K5 shared transport|the binary never reads curl's config files (~/.curlrc, CURL_HOME): one can carry options that change where the token goes. Bash's curl reads ~/.curlrc on every call it makes, so a header that file adds (the check: header = \"X-From-Curlrc: acme\") is on bash's request to the daemon and not on the binary's. The rest of the request, stdout, stderr and the exit code are the same (\`feedback list\`). The binary does read CURL_CA_BUNDLE and SSL_CERT_FILE, as curl does"
+    "macos-system-proxy|K2 ruling, K5 shared transport|on macOS the system proxy (System Settings, Network, Proxies; no environment variable) is read by python3's urllib (urllib.request.getproxies_macosx_sysconf, when no proxy variable is set), so a bash Python block that reaches another machine over https may go through it; the binary reads only the proxy variables, as curl does, and never the system setting (it links no SystemConfiguration framework). Every bash request made with curl ignores the system setting too. Linux has no such setting: not proven there"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything"
@@ -875,7 +876,7 @@ check_curl_config_files() {
     cmp -s "$d/out.bash" "$d/out.binary" || problems+=("stdout differs: bash '$(head -c 300 "$d/out.bash")', the binary '$(head -c 300 "$d/out.binary")'")
     cmp -s "$d/err.bash" "$d/err.binary" || problems+=("stderr differs: bash '$(head -c 300 "$d/err.bash")', the binary '$(head -c 300 "$d/err.binary")'")
     python3 -I - "$d/log.bash" "$d/log.binary" >"$d/verdict" <<'PY' || problems+=("$(cat "$d/verdict")")
-import sys
+import re, sys
 RC = "X-From-Curlrc: acme"
 bad = []
 
@@ -883,8 +884,9 @@ def blocks(p):
     return [b.split("\n") for b in open(p).read().split("\n\n") if b.strip()]
 
 def norm(lines, native):
-    out = []
-    for l in lines:
+    # curl 8.5 and 8.7 write a query's %XX escapes in lower case.
+    out = [re.sub("%[0-9a-fA-F]{2}", lambda m: m.group(0).upper(), lines[0])] if lines else []
+    for l in lines[1:]:
         if l.startswith("User-Agent: "):
             out.append("User-Agent: <ua>")
         elif l.startswith("X-K5-Cli-Version: ") or l.startswith("X-K5-Cli-Noun: "):
@@ -911,6 +913,29 @@ if bad:
     print("\n".join(bad))
     sys.exit(1)
 PY
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_macos_system_proxy: on macOS, python3's urllib has the reader of
+# the system proxy setting and calls it when no proxy variable is set,
+# and the binary links no SystemConfiguration framework (the only place
+# that setting is read from). Elsewhere there is no such setting: 3.
+check_macos_system_proxy() {
+    local libs problems=()
+    if [ "$(uname -s)" != Darwin ]; then
+        echo "no system proxy setting outside the environment on $(uname -s); checked on macOS only"
+        return 3
+    fi
+    env -i PATH="$PATH" python3 -I -c '
+import sys, urllib.request as u
+ok = hasattr(u, "getproxies_macosx_sysconf") and u.getproxies is not u.getproxies_environment
+sys.exit(0 if ok else 1)
+' || problems+=("python3's urllib on this Mac does not read the system proxy setting: the difference is gone")
+    libs="$(otool -L "$WORK/bin/k5" 2>&1)" || problems+=("otool -L failed on the binary: $libs")
+    printf '%s\n' "$libs" | grep -q 'libSystem' || problems+=("otool -L listed no libSystem, so it read nothing: $(printf '%s' "$libs" | head -c 300)")
+    ! printf '%s\n' "$libs" | grep -q 'SystemConfiguration' || problems+=("the binary links SystemConfiguration: it may read the system proxy setting")
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

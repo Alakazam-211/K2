@@ -1,4 +1,4 @@
-//! `compute node health|servers ...`, as `cmd_compute_node` answers them
+//! `compute node health|servers|packages ...`, as `cmd_compute_node` answers them
 //! (`cli/src/compute-node.sh`); the other node subverbs are
 //! [`super::super::admin::node`]'s:
 //!
@@ -6,7 +6,8 @@
 //! - `servers <node> [list|ls] [--refresh] [--json]`, `servers <node> add
 //!   --url URL --code-stdin|--code C [...]`, `approve <request>`, `deny
 //!   <request> [--why T]`, `limits <server> ...`, `pause|resume <server>`,
-//!   `revoke <server> [--now] [--wipe]` and `owner <server> [...]`.
+//!   `revoke <server> [--now] [--wipe]` and `owner <server> [...]`;
+//! - `packages|pkg ...`: [`super::packages`].
 //!
 //! What goes to the shell, before anything is sent: a `--for` in days
 //! whose number is not plain digits or passes the shell's 64-bit
@@ -105,7 +106,7 @@ pub enum After {
 }
 
 /// What the words ask for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Ask {
     /// `health <node>`; `json`: a `--json` anywhere.
     Health { node: String, json: bool },
@@ -124,6 +125,8 @@ pub enum Ask {
     Approve(String),
     /// `servers <node> deny ...` (`cmd_compute_node_admin deny`).
     Deny(an::Ask),
+    /// `packages ...`.
+    Packages(super::packages::Ask),
 }
 
 fn usage(line: impl Into<String>) -> Option<Words<Ask>> {
@@ -146,6 +149,11 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             }))
         }
         "servers" => servers(rest),
+        "packages" | "pkg" => Some(match super::packages::parse(rest)? {
+            Words::Ask(a) => Words::Ask(Ask::Packages(a)),
+            Words::Usage(l) => Words::Usage(l),
+            Words::ShiftFailed => Words::ShiftFailed,
+        }),
         _ => None,
     }
 }
@@ -680,6 +688,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask, sock: &Path) -> Exit {
         }
         Ask::Approve(id) => flows::approve(cp, sock, id),
         Ask::Deny(a) => an::send(cp, a, sock),
+        Ask::Packages(a) => super::packages::send(cp, a, sock),
     }
 }
 

@@ -4,7 +4,7 @@
 //! - `retry <job>` ([`retry`]);
 //! - [`provenance`]: `provenance <job> [--out FILE]` and `verify <job |
 //!   FILE> [--file PATH] [--owner-key FP]`;
-//! - [`node`]: `node health` and `node servers` (the other `node`
+//! - [`node`]: `node health`, `node servers` and `node packages` (the other `node`
 //!   subverbs are [`super::admin`]'s);
 //! - [`trust`]: `roster`, `seats`, `trust` and `owners` (the node owners'
 //!   trust verbs of `cmd_compute_trust`; `lanes` is not here).
@@ -31,6 +31,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 pub mod node;
+pub mod packages;
 pub mod provenance;
 pub mod trust;
 

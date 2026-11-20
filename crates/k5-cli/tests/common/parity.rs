@@ -59,8 +59,9 @@ use std::cell::{Cell, OnceCell};
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 pub const BIN: &str = env!("CARGO_BIN_EXE_k5-cli");
 pub const OWNER: &str = "owner-tok-7171";
@@ -264,7 +265,14 @@ pub struct Case {
     pub no_python3: NoPython3,
     /// What each side reads on stdin; `None`: nothing (stdin is closed).
     pub stdin: Option<&'static [u8]>,
+    /// How long each side may run before the row fails as hung
+    /// ([`DEADLINE`] when `None`).
+    pub deadline: Option<Duration>,
 }
+
+/// How long one side of a row may run: a side still running then is
+/// killed (its whole process group) and the row fails, naming it.
+pub const DEADLINE: Duration = Duration::from_secs(60);
 
 impl Rig {
     pub fn new(verb: &'static str, tag: &str) -> Rig {
@@ -471,30 +479,12 @@ impl Rig {
             }
         }
         cmd.args(self.argv(case));
-        let o = match case.stdin {
-            None => cmd.output().unwrap_or_else(|e| panic!("run {cmd:?}: {e}")),
-            Some(input) => {
-                use std::io::Write;
-                cmd.stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped());
-                let mut child = cmd.spawn().unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
-                let mut pipe = child.stdin.take().expect("its stdin");
-                // A side that stops reading early closes the pipe; any
-                // other failure to hand it its input is.
-                if let Err(e) = pipe.write_all(input) {
-                    assert_eq!(
-                        e.kind(),
-                        std::io::ErrorKind::BrokenPipe,
-                        "stdin of {cmd:?}: {e}"
-                    );
-                }
-                drop(pipe);
-                child
-                    .wait_with_output()
-                    .unwrap_or_else(|e| panic!("wait {cmd:?}: {e}"))
-            }
-        };
+        let o = run_within(
+            &mut cmd,
+            case.stdin,
+            case.deadline.unwrap_or(DEADLINE),
+            &format!("{}: the {side:?} side", case.name),
+        );
         let signal = o.status.signal();
         Out {
             code: o.status.code().or_else(|| signal.map(|s| 128 + s)),
@@ -1195,6 +1185,84 @@ pub fn case(
         compare: Compare::Exact,
         no_python3: NoPython3::AsWith,
         stdin: None,
+        deadline: None,
+    }
+}
+
+/// Runs `cmd` in its own process group with `input` on stdin (closed
+/// when `None`) and its output read as it comes. When it is still running
+/// after `deadline`, its process group is killed and the row fails: `who`
+/// names the row and the side.
+pub fn run_within(
+    cmd: &mut Command,
+    input: Option<&'static [u8]>,
+    deadline: Duration,
+    who: &str,
+) -> std::process::Output {
+    use std::io::{Read, Write};
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
+    let started = Instant::now();
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                p.read_to_end(&mut buf).expect("read a side's output");
+            }
+            buf
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    if let Some(input) = input {
+        let mut pipe = child.stdin.take().expect("its stdin");
+        // A side that stops reading early closes the pipe; any other
+        // failure to hand it its input is.
+        if let Err(e) = pipe.write_all(input) {
+            assert_eq!(
+                e.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "stdin of {cmd:?}: {e}"
+            );
+        }
+    }
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .unwrap_or_else(|e| panic!("wait {cmd:?}: {e}"))
+        {
+            break status;
+        }
+        if started.elapsed() >= deadline {
+            let group = i32::try_from(child.id()).expect("a pid");
+            // SAFETY: a plain kill of the group the child leads.
+            unsafe {
+                libc::killpg(group, libc::SIGKILL);
+            }
+            let _ = child.wait();
+            let stdout = out.join().expect("its stdout");
+            let stderr = err.join().expect("its stderr");
+            panic!(
+                "{who} hung: still running after {deadline:?}, so its process group was killed\n\
+                 stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    std::process::Output {
+        status,
+        stdout: out.join().expect("its stdout"),
+        stderr: err.join().expect("its stderr"),
     }
 }
 

@@ -519,8 +519,11 @@ AGENT (workspace — identity from token, never body project=)
   dsn --test                     agent DSN on the test DB
   dsn --test --actor migrator    migrator DSN on the test DB (two-role tests)
   run [--db <name|id>] [--test [--actor migrator]] [--as NAME] -- <command…>
-                                 run a command with the DSN in $DATABASE_URL (or
-                                 NAME), never on argv or stdout:
+                                 run a command with the connection string,
+                                 password included, in its environment as
+                                 $DATABASE_URL (or NAME). The command and anything
+                                 it starts can read it there; it is never on argv,
+                                 stdout or in a log line:
                                  k2 db run -- node migrate.js (it reads
                                  process.env.DATABASE_URL)
   migrate [--dir .k2/db/migrations] [--db <name|id>]

@@ -101,7 +101,7 @@ fn the_shell_s_lines() {
         "Error: could not reach the K2 daemon (k2 setup)"
     );
     assert_eq!(
-        MEET_KESSEL,
+        MEET_KESSEL.replace(k2_client::brand::PRODUCT_NAME, "K2"),
         "Next: meet Kessel, the agent that runs K2: k2 setup kessel"
     );
     for (sub, word) in [

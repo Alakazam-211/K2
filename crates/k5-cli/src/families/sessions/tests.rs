@@ -760,7 +760,7 @@ fn the_main() {
     );
     let r = rendered(&["main"], r#"{"main":{"state":"custom"}}"#);
     assert_eq!(
-        r.stdout,
+        r.stdout.replace(k2_client::brand::PRODUCT_NAME, "K2"),
         "? main chat None (None): a custom preset; K2 cannot check it on disk.\n"
     );
     let r = rendered(

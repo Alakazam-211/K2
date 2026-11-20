@@ -9,7 +9,8 @@
 //!   uninstall, app-url, ship, mirror; deliveries and agents ride chat.
 //! - A person's steps, with a confirm over the vault socket: recovery-key,
 //!   purge, rotate-master --drop-prev, upgrade --accept-binary, rollback
-//!   --accept-data-loss and open --print; each refuses in a session.
+//!   --accept-data-loss, open --print and open (the browser gets a
+//!   private page that holds the link); each refuses in a session.
 //! - The refusals, Python's raise, the usage lines, help and the gate, a
 //!   passport and the cell socket, one large list, and the hand-backs.
 
@@ -20,6 +21,7 @@ mod common;
 use common::parity::*;
 use common::stub::Reply;
 use common::vault::{VCase, VCompare, VRig};
+use std::path::{Path, PathBuf};
 
 const VERB: &str = "hostchat";
 const STATUS: &str = r#"{"state":"running","released":false,"notice":"preview","identityProvider":"k2","installedVersion":"0.6.0","installId":"inst1","publicUrl":"https://chat.example","appUrl":"https://app.example","owner":"ann","backup":{"ship":{"kind":"box-backup","boxBackup":{"line":"nightly to /mnt/b"}}},"mirror":{"kind":"dir","path":"/mnt/m","tied":true,"tie":{"state":"pending"}},"recoveryKeyInVault":true,"moveOffK2":{"line":"export it"},"autoSetup":{"line":"done"},"meet":{"app":"meet1","url":"https://meet.example"},"upgradeAvailable":true,"alarms":["disk","cert"],"sewDbPostgres":{"stale":true,"package":"postgresql-16","installedVersion":"16.4","fix":"run x"},"warnings":[{"message":"w1"},{"code":"c2"}],"lastError":"boom","recording":{"installed":true,"enabled":false,"version":"0.9.0"},"voice":{"state":"on","publicUrl":"wss://v.example","turnHost":"turn.example","nodeIp":"192.0.2.10","cert":{"daysLeft":12},"turnTls":{"served":"ok"},"progress":{"step":"cert","result":"running"},"lastError":"late","exposure":{"note":"public é"}}}"#;
@@ -592,6 +594,15 @@ fn hostchat_words_as_the_shell_reads_them() {
             3,
             0,
         ),
+        case(
+            "open, HOOK_SOCK set and no passport: the require-passport lines",
+            &["open"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -679,6 +690,18 @@ fn hostchat_with_a_passport() {
                 0,
             ),
         ),
+        with(
+            with_passport(&[]),
+            case(
+                "open in a session: a person's step",
+                &["open"],
+                &[],
+                vec![],
+                port_only,
+                3,
+                0,
+            ),
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -751,15 +774,6 @@ fn hostchat_hands_these_to_the_shell() {
             owner_and_port,
             0,
             1,
-        )),
-        shell(case(
-            "open: a browser with the owner link (waits for a ruling)",
-            &["open"],
-            &[("K2_HOOK_SOCK", "{sock}")],
-            vec![],
-            owner_and_port,
-            3,
-            0,
         )),
     ] {
         rig.check(&c);
@@ -1054,6 +1068,142 @@ fn hostchat_a_person_s_steps() {
     tb.code = 1;
     tb.compare = VCompare::Traceback;
     v.push(tb);
+    for c in &v {
+        rig.check(c);
+    }
+}
+
+/// Stand-in openers, `open` and `xdg-open`, in a folder of their own:
+/// each writes what it was given to `<rig>/<name>.txt` (how many words,
+/// the page's path with mktemp's six characters masked, the page's mode
+/// and its folder's, and the page), then exits `code`. Never a browser.
+fn openers(rig: &VRig, name: &str, code: i32) -> (String, PathBuf) {
+    let dir = rig.path().join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let rec = rig.path().join(format!("{name}.txt"));
+    let script = format!(
+        r#"#!/bin/sh
+p="$1"
+{{
+  printf 'argc: %s\n' "$#"
+  case "$p" in
+    "$TMPDIR"/k2-hostchat-open.??????/open.html) printf 'page: $TMPDIR/k2-hostchat-open.XXXXXX/open.html\n' ;;
+    *) printf 'page: %s\n' "$p" ;;
+  esac
+  printf 'mode: %s\n' "$(ls -ld "$p" | cut -c1-10)"
+  printf 'folder: %s\n' "$(ls -ld "${{p%/*}}" | cut -c1-10)"
+  cat "$p"
+}} > '{}'
+exit {code}
+"#,
+        rec.display()
+    );
+    for prog in ["open", "xdg-open"] {
+        let p = dir.join(prog);
+        std::fs::write(&p, &script).unwrap();
+        std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    }
+    let path = std::env::var("PATH").expect("a PATH");
+    (format!("{}:{path}", dir.display()), rec)
+}
+
+/// This `PATH` with no `open` or `xdg-open` on it: each folder that has
+/// one is replaced by a folder of links to its other files.
+fn path_without_openers(rig: &VRig) -> String {
+    let path = std::env::var_os("PATH").expect("a PATH");
+    let mut dirs = Vec::new();
+    for (i, dir) in std::env::split_paths(&path).enumerate() {
+        let has = ["open", "xdg-open"]
+            .iter()
+            .any(|p| std::fs::symlink_metadata(dir.join(p)).is_ok());
+        if !has {
+            dirs.push(dir);
+            continue;
+        }
+        let shadow = rig.path().join(format!("no-opener-{i}"));
+        std::fs::create_dir_all(&shadow).unwrap();
+        for e in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
+            let name = e.unwrap().file_name();
+            if name != "open" && name != "xdg-open" {
+                std::os::unix::fs::symlink(dir.join(&name), shadow.join(&name)).unwrap();
+            }
+        }
+        dirs.push(shadow);
+    }
+    std::env::join_paths(dirs)
+        .expect("the folders join")
+        .into_string()
+        .expect("a UTF-8 PATH")
+}
+
+/// `open` without `--print`: the browser gets the path of a private page
+/// (0600, in a fresh 0700 folder under TMPDIR) that holds the link, and
+/// the link goes on no command line. The page each side made must be the
+/// same bytes. The test switch makes the removal's wait 0 s.
+#[test]
+fn hostchat_open_through_a_private_page() {
+    let rig = VRig::new();
+    let (ok_path, ok_rec) = openers(&rig, "opener-ok", 0);
+    let (fail_path, fail_rec) = openers(&rig, "opener-fails", 1);
+    let opened = |name: &'static str, app: &str, path: &str, rec: &Path, code: i32| {
+        let mut c = person(
+            name,
+            &["open"],
+            vec![
+                ok(&format!(r#"{{"appUrl":"{app}"}}"#)),
+                ok(r#"{"code":"k2sho_OPEN0001"}"#),
+            ],
+            code,
+        );
+        c.env = vec![
+            ("PATH", path.to_string()),
+            ("K2_TEST_HOSTCHAT_OPEN_WAIT", "0".to_string()),
+        ];
+        c.files = vec![rec.to_path_buf()];
+        c.secrets.push("k2sho_OPEN0001");
+        c
+    };
+    let mut v = vec![
+        opened(
+            "open: the opener gets one private page",
+            "https://chat.example/",
+            &ok_path,
+            &ok_rec,
+            0,
+        ),
+        opened(
+            "open: the page escapes a link with quotes and markup",
+            r#"https://chat.example/a&b<\"'>\u00e9/"#,
+            &ok_path,
+            &ok_rec,
+            0,
+        ),
+        opened(
+            "open: the opener fails: exit 3, nothing more said",
+            "https://chat.example",
+            &fail_path,
+            &fail_rec,
+            3,
+        ),
+        opened(
+            "open: no opener here",
+            "https://chat.example",
+            &path_without_openers(&rig),
+            &ok_rec,
+            3,
+        ),
+    ];
+    let mut no_tmp = opened(
+        "open: TMPDIR can't hold the page's folder: mktemp's line",
+        "https://chat.example",
+        &ok_path,
+        &ok_rec,
+        3,
+    );
+    no_tmp
+        .env
+        .push(("TMPDIR", rig.path().join("no-such-tmp").display().to_string()));
+    v.push(no_tmp);
     for c in &v {
         rig.check(c);
     }

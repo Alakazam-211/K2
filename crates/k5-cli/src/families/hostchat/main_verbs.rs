@@ -2,7 +2,7 @@
 //! enable (and its wait), disable, rollback, doctor, reconfigure, restart,
 //! adopt, backup, backups, job, upgrade (and its wait), restore,
 //! rotate-master, recovery-key, config, uninstall, app-url, ship, mirror,
-//! open --print and purge.
+//! open (with --print, or through a private page) and purge.
 
 use super::print::{self, g, is, load, or, st, sub, sv, t, Py, R};
 use super::{cj, usage, Ctx, Main};
@@ -273,7 +273,7 @@ fn verb(ctx: &mut Ctx, m: &Main) -> Result<Exit, Exit> {
             let body = ctx.call(true, &route, &payload, false)?;
             Ok(show(&body, sub, json))
         }
-        "open" => open_print(ctx),
+        "open" => open(ctx, m.print_only),
         "purge" => {
             if m.host.is_empty() {
                 return Ok(bad(&format!(
@@ -537,8 +537,9 @@ fn app_url(ctx: &mut Ctx, m: &Main) -> Result<Exit, Exit> {
     }
 }
 
-/// `open --print`: the owner's one-use link into chat, on stdout.
-fn open_print(ctx: &mut Ctx) -> Result<Exit, Exit> {
+/// `open`: the one-use owner link, printed with `--print`, else opened in
+/// the browser through a private page ([`super::open`]).
+fn open(ctx: &mut Ctx, print_only: bool) -> Result<Exit, Exit> {
     let c = CLI_NAME;
     person(ctx)?;
     let body = ctx.call(false, "/cli/sew/status", "", false)?;
@@ -585,7 +586,32 @@ fn open_print(ctx: &mut Ctx) -> Result<Exit, Exit> {
     while link.ends_with('\n') {
         link.pop();
     }
-    Ok(Shown::out(format!("{link}\n")).print())
+    if print_only {
+        return Ok(Shown::out(format!("{link}\n")).print());
+    }
+    open_in_browser(&link)
+}
+
+/// The browser half of `open`, from the opener's pick on.
+#[cfg(unix)]
+fn open_in_browser(link: &str) -> Result<Exit, Exit> {
+    let c = CLI_NAME;
+    let Some(opener) = super::open::opener() else {
+        return Ok(line(&format!("{{\"error\":\"no_opener\",\"hint\":\"no browser opener here: {c} hostchat open --print, then open the link within 60 s\"}}"), Exit::Refused));
+    };
+    if super::open::open_link(opener, link).is_err() {
+        return Err(Exit::Refused);
+    }
+    Ok(line(
+        "Opened chat as its owner (the link works once, for 60 s).",
+        Exit::Ok,
+    ))
+}
+
+/// Only the shell's on a system with no unix folders (parse hands it on).
+#[cfg(not(unix))]
+fn open_in_browser(_link: &str) -> Result<Exit, Exit> {
+    unreachable!("parse hands open without --print to the shell here")
 }
 
 /// `_hostchat_rollback_data_loss <media> <as_json>`.

@@ -16,7 +16,7 @@
 //!    The waits poll the status as the shell does (every 2 s for `enable`,
 //!    every 1 s for `upgrade`). The steps for a person (`recovery-key`,
 //!    `purge`, `rotate-master --drop-prev`, `upgrade --accept-binary`,
-//!    `rollback --accept-data-loss`, `open --print`) refuse in a session
+//!    `rollback --accept-data-loss`, `open`) refuse in a session
 //!    and take a confirm token over the vault socket
 //!    ([`crate::confirm::confirm_token`]); the token goes from that answer
 //!    into the next request's body and nowhere else.
@@ -29,15 +29,17 @@
 //! Handed to the shell, before anything is printed or sent: a word that
 //! is not UTF-8, `-h` or `--help` anywhere (help never acts), a value flag
 //! with no value or an empty one (the shell stops on `${2:?…}` with a line
-//! naming its own path: the D6 class), `open` without `--print` (the
-//! shell starts a browser with the one-use owner link in its argv: that
-//! waits for a ruling), and a variable `_compute_send`, `_compute_fail`
-//! or `_compute_json` reads from the environment.
+//! naming its own path: the D6 class), `open` without `--print` where
+//! there are no unix modes for its private page, and a variable
+//! `_compute_send`, `_compute_fail` or `_compute_json` reads from the
+//! environment.
 
 mod admin;
 mod apps;
 mod main_verbs;
 mod media;
+#[cfg(unix)]
+mod open;
 pub mod print;
 mod recording;
 mod users;
@@ -279,8 +281,8 @@ pub fn parse(words: &[&str]) -> Plan {
             "{{\"error\":\"usage\",\"hint\":\"unknown hostchat command '{sub}' ({c} hostchat --help)\"}}"
         ));
     }
-    // The shell starts a browser with the owner link in its argv.
-    if sub == "open" && !m.print_only {
+    // The page `open` hands the browser is made with unix modes.
+    if sub == "open" && !m.print_only && !cfg!(unix) {
         return Plan::Shell;
     }
     Plan::Main(m)

@@ -22,6 +22,7 @@
 #      start of the next run; one from a run still inside its wait is kept.
 #   4. Neither the link nor its code is in any child's argv or environment.
 #      The k5 binary answers --print itself: on it, no child runs at all.
+#      It answers open itself too: no python3 or curl runs there.
 #
 # The wait is 30 s in use. K2_TEST_HOSTCHAT_OPEN_WAIT shortens it here so the
 # test takes seconds; the CLI accepts only 0 to 30, so it can never keep the
@@ -333,7 +334,17 @@ PAGEDIR="$(dirname "$PAGE")"
 for _ in $(seq 1 60); do [ -e "$PAGEDIR" ] || break; sleep 0.5; done
 if [ -e "$PAGEDIR" ]; then bad "the page is still there 30 s after a 5 s wait"; else ok "the page is gone after the wait"; fi
 
-if grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG" && grep -q "^$OPENER " "$ARGLOG"; then
+if [ "$K2_CLI" != "$CLI_BASH_SOURCE" ]; then
+    # The k5 binary answers open itself: no python3 or curl runs, and the
+    # programs it does start (mktemp, the opener, sleep and rm) are logged.
+    if grep -Eq '^(python3|curl) ' "$ARGLOG"; then
+        bad "open: the binary started python3 or curl"
+        grep -E '^(python3|curl) ' "$ARGLOG" | head -3 >&2
+    else
+        ok "open: the binary started no python3 or curl"
+    fi
+    if grep -q "^$OPENER " "$ARGLOG"; then ok "open: the opener was logged"; else bad "open: the opener was not logged"; fi
+elif grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG" && grep -q "^$OPENER " "$ARGLOG"; then
     ok "open: python3, curl and the opener were logged"
 else
     bad "open: a child was not logged"

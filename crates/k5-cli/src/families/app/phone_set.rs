@@ -21,7 +21,7 @@ use super::phone::{self, usage as read_usage};
 use super::py::{self, Out};
 use super::{Answer, Stop};
 use crate::exit::Exit;
-use crate::families::{get, py_space, raised, Raise, Shown};
+use crate::families::{py_space, raised, Raise, Shown};
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::pylib;
 use k2_client::cli_name;
@@ -34,7 +34,8 @@ pub mod usage {
         cli_name!(),
         " app links --help)"
     );
-    pub const ANDROID: &str = "--android is <package>:<SHA-256 fingerprint>[,<fingerprint>\u{2026}]";
+    pub const ANDROID: &str =
+        "--android is <package>:<SHA-256 fingerprint>[,<fingerprint>\u{2026}]";
     pub const PAIRING_SETUP: &str = concat!(
         "usage: ",
         cli_name!(),
@@ -158,9 +159,9 @@ pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
         ("push", "setup") => push_setup(rest),
         ("push", "creds" | "credentials") => push_creds(rest),
         ("push", "check") => simple(rest, Kind::PushCheck, usage::PUSH_CHECK),
-        ("push", "on" | "off") => simple(rest, Kind::PushOnOff, usage::PUSH_ONOFF).map(|a| {
-            on_body(a, sub == "on")
-        }),
+        ("push", "on" | "off") => {
+            simple(rest, Kind::PushOnOff, usage::PUSH_ONOFF).map(|a| on_body(a, sub == "on"))
+        }
         ("push", "set") => push_set(rest),
         ("push", "send" | "test") => push_send(sub == "test", rest),
         ("push", "devices") if matches!(rest.first(), Some(&"rm" | &"remove")) => {
@@ -369,9 +370,15 @@ fn pairing_setup(words: &[&str]) -> Result<Ask, Stop> {
     let (mut appstore, mut playstore) = (String::new(), String::new());
     let mut rest = words;
     while let Some(w) = rest.first().copied() {
-        let slot = ["--ios", "--android", "--host", "--native-origin", "--link-path"]
-            .iter()
-            .position(|f| *f == w);
+        let slot = [
+            "--ios",
+            "--android",
+            "--host",
+            "--native-origin",
+            "--link-path",
+        ]
+        .iter()
+        .position(|f| *f == w);
         if let Some(i) = slot {
             acc[i].push_str(rest.get(1).copied().unwrap_or(""));
             acc[i].push('\n');
@@ -429,7 +436,11 @@ fn pairing_setup(words: &[&str]) -> Result<Ask, Stop> {
     if !andr.is_empty() {
         b.push((Text::from("android"), Value::Array(andr)));
     }
-    for (key, acc) in [("hosts", hosts), ("nativeOrigins", origins), ("linkPaths", paths)] {
+    for (key, acc) in [
+        ("hosts", hosts),
+        ("nativeOrigins", origins),
+        ("linkPaths", paths),
+    ] {
         let l = lines(&acc);
         if !l.is_empty() {
             b.push((Text::from(key), Value::Array(l)));
@@ -607,7 +618,10 @@ fn push_set(words: &[&str]) -> Result<Ask, Stop> {
     if !maxd.is_empty() && !maxd.bytes().all(|b| b.is_ascii_digit()) {
         return Err(Stop::usage(usage::PUSH_SET));
     }
-    if [r_b, c_b, p_b, maxd.as_str(), s_b].iter().all(|x| x.is_empty()) {
+    if [r_b, c_b, p_b, maxd.as_str(), s_b]
+        .iter()
+        .all(|x| x.is_empty())
+    {
         return Err(Stop::usage(usage::PUSH_SET));
     }
     let body = Cj::new()
@@ -950,12 +964,18 @@ fn email_send(words: &[&str]) -> Result<Ask, Stop> {
         Stop::usage(t)
     };
     if !text_file.is_empty() {
-        b.push((Text::from("text"), text(&read_file(&text_file, 26).map_err(traceback)?)));
+        b.push((
+            Text::from("text"),
+            text(&read_file(&text_file, 26).map_err(traceback)?),
+        ));
     } else if !txt.is_empty() {
         b.push((Text::from("text"), text(&txt)));
     }
     if !html_file.is_empty() {
-        b.push((Text::from("html"), text(&read_file(&html_file, 31).map_err(traceback)?)));
+        b.push((
+            Text::from("html"),
+            text(&read_file(&html_file, 31).map_err(traceback)?),
+        ));
     }
     if !key.is_empty() {
         b.push((Text::from("idempotencyKey"), text(&key)));
@@ -982,9 +1002,7 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
         }
         Kind::LinksOff => ctx.call(true, "/cli/app/links/off", &body)?,
         Kind::LinksCheck => ctx.call_on(true, "/cli/app/links/check", &body, true)?,
-        Kind::PairingSet => {
-            confirming(ctx, "/cli/app/pairing/set", body, "app-pairing-apps", "")?
-        }
+        Kind::PairingSet => confirming(ctx, "/cli/app/pairing/set", body, "app-pairing-apps", "")?,
         Kind::PairingOff => ctx.call(true, "/cli/app/pairing/off", &body)?,
         Kind::PairingCheck => ctx.call_on(true, "/cli/app/pairing/check", &body, true)?,
         Kind::PushSetup => confirming(
@@ -1170,8 +1188,7 @@ fn email_post(ctx: &mut Ctx, path: &str, mut body: String) -> Result<Vec<u8>, Ex
         if action.is_empty() || sid.is_empty() {
             return Err(ctx.fail(&s));
         }
-        let Some(tok) = crate::confirm::confirm_token(&mut ctx.confirm(), &action, &sid, "")
-        else {
+        let Some(tok) = crate::confirm::confirm_token(&mut ctx.confirm(), &action, &sid, "") else {
             return Err(Exit::Refused);
         };
         let field = if action == "app-email-any" {
@@ -1344,22 +1361,40 @@ mod tests {
     fn bodies_are_what_the_python_builds() {
         assert_eq!(
             body(
-                &["set", "acme", "--ios", " T.app \n", "--android", "com.a: AB , CD", "--drop", "/x"],
+                &[
+                    "set",
+                    "acme",
+                    "--ios",
+                    " T.app \n",
+                    "--android",
+                    "com.a: AB , CD",
+                    "--drop",
+                    "/x"
+                ],
                 "links"
             ),
             r#"{"app": "acme", "paths": [], "ios": ["T.app"], "android": [{"package": "com.a", "sha256": ["AB", "CD"]}], "drop": ["/x"]}"#
         );
         assert_eq!(
-            body(&["setup", "a", "--desktop-only", "--app-store", "u"], "pairing"),
+            body(
+                &["setup", "a", "--desktop-only", "--app-store", "u"],
+                "pairing"
+            ),
             r#"{"app": "a", "desktopOnly": true, "store": {"ios": "u"}}"#
         );
         assert_eq!(
-            body(&["set", "a", "--chat", "on", "--max-devices", "007"], "push"),
+            body(
+                &["set", "a", "--chat", "on", "--max-devices", "007"],
+                "push"
+            ),
             r#"{"app": "a", "chatPushes": true, "maxDevices": 7}"#
         );
         assert_eq!(
             body(
-                &["send", "a", "--to", "u", "--badge", " +1_0 ", "--data", "k=v=w", "--data", "k=z"],
+                &[
+                    "send", "a", "--to", "u", "--badge", " +1_0 ", "--data", "k=v=w", "--data",
+                    "k=z"
+                ],
                 "push"
             ),
             r#"{"app": "a", "to": {"guest": "u"}, "badge": 10, "data": {"k": "z"}}"#
@@ -1370,7 +1405,11 @@ mod tests {
     fn a_to_of_two_dashes_moves_the_split() {
         // `args.index("--")` finds the --to value first: "b" is data.
         assert_eq!(
-            stop(&["send", "a", "--to", "--", "--to", "b", "--data", "k=v"], "push").line,
+            stop(
+                &["send", "a", "--to", "--", "--to", "b", "--data", "k=v"],
+                "push"
+            )
+            .line,
             "--data is key=value"
         );
     }
@@ -1378,7 +1417,10 @@ mod tests {
     #[test]
     fn the_shells_mistakes_are_copied() {
         assert_eq!(stop(&["off", "a", "--ios", "x"], "links").exit, Exit::Usage);
-        assert_eq!(stop(&["set", "a", "--ios"], "links"), Stop::silent(Exit::Error));
+        assert_eq!(
+            stop(&["set", "a", "--ios"], "links"),
+            Stop::silent(Exit::Error)
+        );
         assert_eq!(
             stop(&["send", "a", "--to", "u", "--ttl", "x"], "push").line,
             "--ttlsecs is a number"

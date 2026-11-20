@@ -147,7 +147,10 @@ impl Ctx {
 
     /// `_compute_in_session`: the call carries a session passport.
     pub fn in_session(&self) -> bool {
-        matches!(self.client.auth, crate::transport::client::Auth::Passport { .. })
+        matches!(
+            self.client.auth,
+            crate::transport::client::Auth::Passport { .. }
+        )
     }
 
     /// `_compute_call`: [`Ctx::send`], and any status but 200 is

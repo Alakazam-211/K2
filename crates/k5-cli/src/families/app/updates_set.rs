@@ -75,14 +75,37 @@ pub mod usage {
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
-    KeyRead { app: String, json: bool },
-    KeySet { app: String, body: String, json: bool },
-    TokenRead { app: String, json: bool },
+    KeyRead {
+        app: String,
+        json: bool,
+    },
+    KeySet {
+        app: String,
+        body: String,
+        json: bool,
+    },
+    TokenRead {
+        app: String,
+        json: bool,
+    },
     /// The token is read when it runs: from `file`, else stdin.
-    TokenSet { app: String, file: String, json: bool },
-    Promote { body: String, json: bool },
-    Rollback { body: String, json: bool },
-    Pull { body: String, json: bool },
+    TokenSet {
+        app: String,
+        file: String,
+        json: bool,
+    },
+    Promote {
+        body: String,
+        json: bool,
+    },
+    Rollback {
+        body: String,
+        json: bool,
+    },
+    Pull {
+        body: String,
+        json: bool,
+    },
     Push(Push),
 }
 
@@ -227,7 +250,13 @@ fn token(ws: &[&str]) -> Result<Ask, Stop> {
     fn bad(w: &str) -> Stop {
         Stop::usage(format!("Unknown flag: {w}{}", usage::TOKEN_FLAG_TAIL))
     }
-    let w = words(ws, &["--file"], &["--stdin", "--json"], bad, usage::TOKEN_TWO)?;
+    let w = words(
+        ws,
+        &["--file"],
+        &["--stdin", "--json"],
+        bad,
+        usage::TOKEN_TWO,
+    )?;
     let (from_stdin, json) = (w.switches[0], w.switches[1]);
     if w.app.is_empty() {
         return Err(Stop::usage(usage::TOKEN));
@@ -301,10 +330,7 @@ fn pull(ws: &[&str]) -> Result<Ask, Stop> {
     if w.app.is_empty() || w.values[0].is_empty() {
         return Err(Stop::usage(usage::PULL));
     }
-    let body = Cj::new()
-        .s("app", &w.app)
-        .s("version", &w.values[0])
-        .body();
+    let body = Cj::new().s("app", &w.app).s("version", &w.values[0]).body();
     Ok(Ask::Pull {
         body,
         json: w.switches[0],
@@ -402,7 +428,10 @@ fn push(ws: &[&str]) -> Result<Ask, Stop> {
     for a in &arts {
         let (p, f) = platform_file(a, "--artifact", "<file>")?;
         if !std::path::Path::new(f).is_file() {
-            return Err(Stop::usage(format!("{}{f} is not a file", usage::PUSH_HEAD)));
+            return Err(Stop::usage(format!(
+                "{}{f} is not a file",
+                usage::PUSH_HEAD
+            )));
         }
         list.push((p.to_string(), abs(f)));
     }
@@ -491,7 +520,11 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
     let answer = super::access::answer;
     match ask {
         Ask::KeyRead { app, json } => {
-            let body = ctx.call(false, "/cli/app/updates/key", &format!("app={}", quote(app)))?;
+            let body = ctx.call(
+                false,
+                "/cli/app/updates/key",
+                &format!("app={}", quote(app)),
+            )?;
             Ok(answer(&body, *json, key_lines))
         }
         Ask::KeySet { body, json, .. } => {
@@ -937,14 +970,25 @@ mod tests {
                 json: false
             }))
         );
-        assert_eq!(parse(&["key", "acme", "--set"]), Some(Err(Stop::silent(Exit::Error))));
+        assert_eq!(
+            parse(&["key", "acme", "--set"]),
+            Some(Err(Stop::silent(Exit::Error)))
+        );
         assert_eq!(
             parse(&["key", "acme", "--set", ""]),
-            Some(Err(Stop::usage(format!("{}the key is empty", usage::KEY_HEAD))))
+            Some(Err(Stop::usage(format!(
+                "{}the key is empty",
+                usage::KEY_HEAD
+            ))))
         );
-        assert_eq!(parse(&["key", "a", "b"]), Some(Err(Stop::usage(usage::KEY))));
         assert_eq!(
-            parse(&["token", "a", "--x"]).and_then(Result::err).map(|s| s.line),
+            parse(&["key", "a", "b"]),
+            Some(Err(Stop::usage(usage::KEY)))
+        );
+        assert_eq!(
+            parse(&["token", "a", "--x"])
+                .and_then(Result::err)
+                .map(|s| s.line),
             Some(format!("Unknown flag: --x{}", usage::TOKEN_FLAG_TAIL))
         );
         assert_eq!(
@@ -955,7 +999,10 @@ mod tests {
             parse(&["promote", "a", "--to", "beta", "--version", "1.2"]),
             Some(Ok(Ask::Promote { body, .. })) if body == r#"{"app": "a", "to": "beta", "version": "1.2", "dropPlatforms": false}"#
         ));
-        assert_eq!(parse(&["push", "a", "--evidence"]), Some(Err(Stop::usage(usage::PUSH))));
+        assert_eq!(
+            parse(&["push", "a", "--evidence"]),
+            Some(Err(Stop::usage(usage::PUSH)))
+        );
         assert_eq!(parse(&["ls", "a"]), None);
         assert_eq!(parse(&["pull", "a", "-h"]), None);
     }

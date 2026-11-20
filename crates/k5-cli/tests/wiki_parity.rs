@@ -799,23 +799,16 @@ fn wiki_hands_these_to_the_shell() {
             0,
         )));
     }
+    // The control plane over HTTPS waits for the TLS client: with a token
+    // in tunnel.json (and air-gap off) publish is the shell's.
     v.push(shell(case(
-        "publish: the serve fails, no Connect step",
+        "publish: a tunnel token on disk",
         &["publish", "--label", "acme"],
         &[],
-        vec![ok(r#"{"error":"down"}"#), ok(r#"{"error":"down"}"#)],
-        owner_and_port,
-        1,
-        2,
-    )));
-    v.push(shell(case(
-        "publish: a reserved label",
-        &["publish", "--label", "Chat"],
-        &[],
-        vec![],
-        owner_and_port,
-        1,
+        made_replies(),
+        tunnel_token,
         0,
+        6,
     )));
     v.push(shell(case(
         "a port that is no port",
@@ -826,6 +819,229 @@ fn wiki_hands_these_to_the_shell() {
         3,
         0,
     )));
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+fn tunnel_token(r: &Rig) {
+    owner_and_port(r);
+    std::fs::write(r.k2home.join("tunnel.json"), r#"{"subdomain":"acme","token":"tun-tok"}"#)
+        .unwrap();
+}
+
+const SERVED: &str = r#"{"enabled":true,"port":4711,"url":"http://127.0.0.1:4711"}"#;
+const CHECKED: &str = r#"{"success":true}"#;
+
+/// The control plane's answer as the daemon relays it.
+fn relayed(status: u16, body: &str) -> Reply {
+    let b = body.replace('\\', "\\\\").replace('"', "\\\"");
+    ok(leak(format!(r#"{{"status":{status},"body":"{b}"}}"#)))
+}
+
+/// Serve on, its status, the claim check, the create, the stamp, the
+/// nudge.
+fn made_replies() -> Vec<Reply> {
+    vec![
+        ok(SERVED),
+        ok(STATUS),
+        ok(CHECKED),
+        relayed(
+            201,
+            r#"{"label":"acme","host":"acme.box.k2.dev","target":"127.0.0.1:4711","status":"active","effective":"acme.box.k2.dev"}"#,
+        ),
+        ok(CHECKED),
+        ok("{}"),
+    ]
+}
+
+/// `wiki publish`: serve on, the port, the claim check, then the Connect
+/// steps through the daemon (/cli/connect/proxy), create else point, the
+/// stamp and the nudge; the manual lines when none of it made the name.
+#[test]
+fn wiki_publish_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "publish");
+    let taken = relayed(409, r#"{"error":"label_taken"}"#);
+    let pointed = relayed(200, r#"{"label":"acme","target":"127.0.0.1:4711"}"#);
+    let v = vec![
+        // covers: wiki publish
+        case(
+            "publish: created through the daemon",
+            &["publish", "--label", "acme"],
+            &[],
+            made_replies(),
+            owner_and_port,
+            0,
+            6,
+        ),
+        // covers: wiki publish --json
+        case(
+            "publish --json, the folder's name as the label",
+            &["publish", "--json"],
+            &[],
+            made_replies(),
+            owner_and_port,
+            0,
+            6,
+        ),
+        case(
+            "publish --port: the create is taken, the point works",
+            &["publish", "--port", "4711", "--label", "acme"],
+            &[],
+            vec![
+                ok(SERVED),
+                ok(STATUS),
+                ok(CHECKED),
+                taken.clone(),
+                pointed,
+                ok(CHECKED),
+                ok("{}"),
+            ],
+            owner_and_port,
+            0,
+            7,
+        ),
+        case(
+            "publish: another workspace owns the label",
+            &["publish", "--label", "acme", "--json"],
+            &[],
+            vec![
+                ok(SERVED),
+                ok(STATUS),
+                ok(r#"{"error":"owned by another workspace","hint":"transfer it first"}"#),
+            ],
+            owner_and_port,
+            0,
+            3,
+        ),
+        case(
+            "publish: a daemon with no proxy route (404), no token on disk",
+            &["publish", "--label", "acme"],
+            &[],
+            vec![
+                ok(SERVED),
+                ok(STATUS),
+                ok(CHECKED),
+                Reply::Answer(404, "not found".into()),
+                Reply::Answer(405, "".into()),
+            ],
+            owner_and_port,
+            0,
+            5,
+        ),
+        case(
+            "publish: the daemon refuses the Connect call",
+            &["publish", "--label", "acme"],
+            &[],
+            vec![
+                ok(SERVED),
+                ok(STATUS),
+                ok(CHECKED),
+                Reply::Answer(403, r#"{"error":"forbidden"}"#.into()),
+                Reply::Answer(500, r#"{"code":"x","error":"boom"}"#.into()),
+            ],
+            owner_and_port,
+            0,
+            5,
+        ),
+        case(
+            "publish: both relayed answers are errors, one unreadable",
+            &["publish", "--label", "acme"],
+            &[],
+            vec![
+                ok(SERVED),
+                ok(STATUS),
+                ok(CHECKED),
+                taken,
+                ok(r#"{"status":"x"}"#),
+            ],
+            owner_and_port,
+            0,
+            5,
+        ),
+        case(
+            "publish: the stamp fails",
+            &["publish", "--label", "acme"],
+            &[],
+            vec![
+                ok(SERVED),
+                ok(STATUS),
+                ok(CHECKED),
+                relayed(201, "{}"),
+                ok(r#"{"error":"stamp refused"}"#),
+                Reply::Answer(500, "".into()),
+            ],
+            owner_and_port,
+            0,
+            6,
+        ),
+        case(
+            "publish: air-gap on, no Connect call",
+            &["publish", "--label", "acme"],
+            &[("K2_AIRGAP", "1")],
+            vec![ok(SERVED), ok(STATUS), ok(CHECKED)],
+            owner_and_port,
+            0,
+            3,
+        ),
+        case(
+            "publish: the serve fails",
+            &["publish", "--label", "acme"],
+            &[],
+            vec![ok(r#"{"error":"down"}"#), ok(r#"{"error":"down"}"#)],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "publish --json: the serve fails",
+            &["publish", "--json"],
+            &[],
+            vec![ok(r#"{"error":"down"}"#), ok(r#"{"enabled":false}"#)],
+            owner_and_port,
+            1,
+            2,
+        ),
+        traceback(case(
+            "publish: the port reader raises",
+            &["publish", "--label", "acme"],
+            &[],
+            vec![ok("[1]"), ok("{}")],
+            owner_and_port,
+            1,
+            2,
+        )),
+        case(
+            "publish: a reserved label",
+            &["publish", "--label", " Chat"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "publish: a bad flag",
+            &["publish", "--nope"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        with(
+            with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(
+                "publish in a session: the claim and Connect calls on the cell socket",
+                &["publish", "--label", "acme"],
+                &[],
+                made_replies(),
+                port_only,
+                0,
+                6,
+            ),
+        ),
+    ];
     for c in v {
         rig.check(&c);
     }

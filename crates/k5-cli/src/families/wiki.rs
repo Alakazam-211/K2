@@ -34,14 +34,24 @@
 //! status. That is the named difference `env-answer-large`
 //! (`scripts/cli-parity.sh`), K2's ruling.
 //!
-//! Still the shell's ([`run`] returns `None`): `wiki publish`, a word that
-//! is not UTF-8, a command line with `-h` or `--help` ([`crate::front`]),
+//! `publish` ([`Run::publish`], [`publish`]): serve on and its port, the
+//! claim check (`cli_send cli_post`), then the Connect steps through the
+//! daemon (`_connect_curl_daemon`, [`Client::connect_proxy`]): create,
+//! else point, each followed by the attribution stamp and the refresh
+//! nudge. Their failures are quiet, as the shell hides them; a Connect
+//! request that may have reached the daemon ends the command with 1.
+//!
+//! Still the shell's ([`run`] returns `None`): `wiki publish` with a token
+//! in `tunnel.json` and air-gap off (with no daemon to make the call, the
+//! shell calls the control plane itself over HTTPS; that waits for the
+//! TLS client), a word that is not UTF-8, a command line with `-h` or `--help` ([`crate::front`]),
 //! a `--workspace` folder that `cd` reads as an option or that `CDPATH`
 //! would move (bash's own edges, D6), a port that is set but is no port
 //! curl takes, and a `python3` the binary can't tell. An answer that is
 //! not UTF-8 is read with U+FFFD for each bad byte, as
 //! [`super::inbox`].
 
+pub mod publish;
 pub mod read;
 
 use super::{curl_port, without_nuls};
@@ -72,6 +82,11 @@ pub const SEED: &str = "/cli/wiki/seed";
 pub const SERVE: &str = "/cli/wiki/serve";
 pub const CHAT: &str = "/cli/wiki/chat";
 pub const RESOLVE: &str = "/cli/workspace/resolve";
+/// `_subdomain_attrib_post claim`'s route (the ownership check and the
+/// attribution stamp).
+pub const CLAIM: &str = "/cli/publish/subdomain/claim";
+/// `_nudge_subdomain_refresh`'s route.
+pub const REFRESH: &str = "/cli/tunnel/subdomains/refresh";
 
 /// `wiki chat on`'s refusal, exit 3.
 pub const CHAT_UNAVAILABLE: &str = concat!(
@@ -100,6 +115,7 @@ pub enum Verb {
     Serve(bool),
     ChatOff,
     Unpublish,
+    Publish,
 }
 
 /// What a command line does.
@@ -121,8 +137,6 @@ pub enum Form {
     ChatOn {
         json: bool,
     },
-    /// `wiki publish`: the shell's.
-    Publish,
     Ask(Verb, Opts),
 }
 
@@ -263,7 +277,7 @@ pub fn parse(words: &[&str]) -> Form {
         "index" => ask(Verb::Index, rest),
         "note" => note_words(rest),
         "seed" => ask(Verb::Seed, rest),
-        "publish" => Form::Publish,
+        "publish" => ask(Verb::Publish, rest),
         "unpublish" => ask(Verb::Unpublish, rest),
         "serve" => {
             let mode = rest.first().copied().unwrap_or("");
@@ -316,12 +330,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return None;
     }
     let form = parse(&words);
-    // `wiki publish` falls back to the Connect control plane over remote
-    // HTTPS when the daemon can't make the call, and this binary has no
-    // TLS client yet. Flip it native when the rustls client (D5) lands.
-    if form == Form::Publish {
-        return None;
-    }
     if let Form::Ask(_, o) = &form {
         if handed_back(&o.workspace) {
             return None;
@@ -345,14 +353,25 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         if settings.no_owner_fallback && settings.auth == Auth::None {
             return Some(Gate::VirtualDesktop.stop());
         }
-        return Some(run_with(args, form, settings));
+        return Some(run_with(args, form, settings, false));
     }
     if let Some(gate) = prelude::gate(&settings) {
         return Some(gate.stop());
     }
     // A port curl won't take is the shell's.
     settings.port_text.as_deref().and_then(curl_port)?;
-    Some(run_with(args, form, settings))
+    let mut airgap_off = false;
+    if matches!(form, Form::Ask(Verb::Publish, _)) {
+        let (state, _) = crate::airgap::state(&crate::offline::Env::current())?;
+        airgap_off = state == crate::airgap::State::Off;
+        // With a token in `tunnel.json` and no daemon to make the call,
+        // the shell calls the Connect control plane itself over HTTPS.
+        // That leg waits for the TLS client: the shell keeps the line.
+        if airgap_off && publish::has_tunnel_token(&settings.home.join("tunnel.json")) {
+            return None;
+        }
+    }
+    Some(run_with(args, form, settings, airgap_off))
 }
 
 /// A `--workspace` folder bash's `cd` reads otherwise: an option (a
@@ -383,7 +402,7 @@ fn page(key: &str, exit: Exit) -> Exit {
     }
 }
 
-fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
+fn run_with(args: &[OsString], form: Form, mut settings: Settings, airgap_off: bool) -> Exit {
     let (verb, o) = match form {
         Form::Help => return page("wiki", Exit::Ok),
         Form::Page(key, exit) => return page(key, exit),
@@ -401,7 +420,6 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
             wiki_err(json, "public_chat_unavailable", CHAT_UNAVAILABLE);
             return Exit::Refused;
         }
-        Form::Publish => return Exit::Error,
         Form::Ask(verb, o) => (verb, o),
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
@@ -415,12 +433,14 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
     let mut run = Run {
         client,
         closing: Closing::default(),
+        airgap_off,
     };
     run.apply_project(&o.workspace);
     let exit = run.verb(&verb, &o);
     let Run {
         mut client,
         closing,
+        ..
     } = run;
     closing.flush(&mut client, exit);
     exit
@@ -438,6 +458,8 @@ fn held(r: &Response) -> Vec<u8> {
 struct Run {
     client: Client,
     closing: Closing,
+    /// `_k2_airgap_state` is off: `_connect_curl` may phone Connect.
+    airgap_off: bool,
 }
 
 impl Run {
@@ -549,7 +571,167 @@ impl Run {
             }
             Verb::ChatOff => read::chat_off(&self.post(CHAT, &["enabled=false"])?).print(),
             Verb::Unpublish => self.unpublish(o)?,
+            Verb::Publish => self.publish(o)?,
         })
+    }
+
+    /// Text on stdout; a broken stdout ends the command.
+    fn say(&self, text: &str) -> Result<(), Exit> {
+        out::stdout(text).map_err(|e| out::after_stdout_error(&e))
+    }
+
+    /// `cmd_wiki_publish`: serve on, read the port, then the Connect
+    /// steps when this workspace may take the label.
+    fn publish(&mut self, o: &Opts) -> Result<Exit, Exit> {
+        let label = if o.label.is_empty() {
+            publish::default_label(&self.client.project)
+        } else {
+            o.label.clone()
+        };
+        if let Some(line) = publish::reserved_refusal(&label) {
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), line.as_bytes());
+            return Ok(Exit::Error);
+        }
+        let port = format!("port={}", quote(&o.port));
+        let mut pairs = vec!["enabled=true"];
+        if !o.port.is_empty() {
+            pairs.push(port.as_str());
+        }
+        let sent = self
+            .client
+            .call(Channel::Tcp, SERVE, Call::PostForm(&pairs));
+        let serve = self.took(sent, true)?;
+        let status = self.get(STATUS, &[], true)?;
+        let (port_num, url) = publish::port_and_url(&serve, &status);
+        let shown = |r: Result<String, super::Raise>| match r {
+            Ok(v) => v,
+            Err(raise) => {
+                let _ = out::write_flushed(&mut std::io::stderr().lock(), raise.text().as_bytes());
+                String::new()
+            }
+        };
+        let port_num = shown(port_num);
+        let url = shown(url);
+        if port_num.is_empty() {
+            wiki_err(
+                o.json,
+                "serve_failed",
+                "could not start wiki serve or read port from daemon status",
+            );
+            let name = cli_name!();
+            out::stderr_line(&format!("  Check: {name} wiki serve on && {name} wiki status"));
+            return Ok(Exit::Error);
+        }
+        let target = format!("127.0.0.1:{port_num}");
+        let site = if url.is_empty() {
+            format!("http://127.0.0.1:{port_num}")
+        } else {
+            url.clone()
+        };
+        self.say(&format!(
+            "Wiki local site: {site}\n  target for publish: {target}\n  label:              {label}\n\n"
+        ))?;
+        let mut made = false;
+        if self.preflight(&label)? {
+            let body = publish::create_body(&label, &target);
+            if let Some(raw) = self.connect("POST", "/subdomains", &body)? {
+                if publish::made(&raw) {
+                    if let Some(lines) = publish::created(&raw) {
+                        self.say(&lines)?;
+                        made = true;
+                        self.stamp(&label)?;
+                        self.nudge()?;
+                    }
+                }
+            }
+            if !made {
+                let body = publish::point_body(&target);
+                let ep = format!("/subdomains/{}", quote(&label));
+                if let Some(raw) = self.connect("PUT", &ep, &body)? {
+                    if publish::made(&raw) {
+                        if let Some(lines) = publish::pointed(&raw) {
+                            self.say(&lines)?;
+                            made = true;
+                            self.stamp(&label)?;
+                            self.nudge()?;
+                        }
+                    }
+                }
+            }
+        }
+        self.say(&publish::closing_lines(&label, &target, made))?;
+        if o.json {
+            self.say(&publish::json_line(&label, &target, &url, &port_num, made))?;
+        }
+        Ok(Exit::Ok)
+    }
+
+    /// `resp=$(_subdomain_attrib_post claim <label> "" <pairs>) ||
+    /// resp=""`: `cli_send cli_post`. A send that may have run ends the
+    /// command with its line; any other failure is an empty answer.
+    fn attrib(&mut self, pairs: &[&str]) -> Result<Vec<u8>, Exit> {
+        let passport = self.client.passport().is_some();
+        match self.client.send(CLAIM, Call::QueryPost(pairs)) {
+            Ok(r) => {
+                self.closing.answer(&r, passport);
+                Ok(held(&r))
+            }
+            Err(e @ (Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. })) => {
+                out::stderr_line(&e.to_string());
+                Err(Exit::Error)
+            }
+            Err(_) => Ok(Vec::new()),
+        }
+    }
+
+    /// `_subdomain_label_preflight <label> 0`: may this workspace take it?
+    fn preflight(&mut self, label: &str) -> Result<bool, Exit> {
+        let pair = format!("label={}", quote(label));
+        let resp = self.attrib(&[pair.as_str(), "check=1"])?;
+        Ok(match publish::preflight(&resp) {
+            Ok(()) => true,
+            Err(lines) => {
+                let _ = out::write_flushed(&mut std::io::stderr().lock(), lines.as_bytes());
+                false
+            }
+        })
+    }
+
+    /// `_stamp_subdomain_attrib claim <label> || true`.
+    fn stamp(&mut self, label: &str) -> Result<(), Exit> {
+        let pair = format!("label={}", quote(label));
+        let resp = self.attrib(&[pair.as_str()])?;
+        if let Err(lines) = publish::stamp(&resp, label) {
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), lines.as_bytes());
+        }
+        Ok(())
+    }
+
+    /// `_nudge_subdomain_refresh`: `cli_post_form` with everything hidden.
+    fn nudge(&mut self) -> Result<(), Exit> {
+        let sent = self.client.call(Channel::Tcp, REFRESH, Call::PostForm(&[]));
+        self.took(sent, true).map(|_| ())
+    }
+
+    /// `cp_raw=$(_connect_curl <method> <endpoint> <body> 2>/dev/null)`:
+    /// the relayed answer, or `None` when it failed (its lines unseen). The
+    /// air-gap refuses before any request. With no daemon to make the call
+    /// `tunnel.json` has no token here ([`run`] hands the other case to
+    /// the shell), so that fails too. A request that may have reached the
+    /// daemon ends the command with 1.
+    fn connect(&mut self, method: &str, endpoint: &str, body: &str) -> Result<Option<String>, Exit> {
+        if !self.airgap_off {
+            return Ok(None);
+        }
+        let req = publish::proxy_request(method, endpoint, body);
+        match self.client.connect_proxy(method == "GET", req.as_bytes()) {
+            Ok(r) => Ok(match publish::proxied(r.status, &r.body) {
+                publish::Proxied::Relayed(raw) => Some(raw),
+                publish::Proxied::NoDaemon | publish::Proxied::Failed => None,
+            }),
+            Err(Error::MaybeApplied { .. }) => Err(Exit::Error),
+            Err(_) => Ok(None),
+        }
     }
 
     fn unpublish(&mut self, o: &Opts) -> Result<Exit, Exit> {

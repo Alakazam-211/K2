@@ -898,10 +898,30 @@ fn skin_alone_and_role_suggest() {
             ),
             // covers: skin role
             one("role suggest", &["role", "suggest"], TEMPLATES, 0),
-            one("roles templates --json", &["roles", "templates", "--json"], TEMPLATES, 0),
-            one("role suggestions, none", &["role", "suggestions"], r#"{"templates":[]}"#, 0),
-            traceback(one("role suggest, a template with no id", &["role", "suggest"], r#"{"templates":[{"label":"x"}]}"#, 1)),
-            traceback(one("role suggest, not JSON", &["role", "suggest"], "<html>", 1)),
+            one(
+                "roles templates --json",
+                &["roles", "templates", "--json"],
+                TEMPLATES,
+                0,
+            ),
+            one(
+                "role suggestions, none",
+                &["role", "suggestions"],
+                r#"{"templates":[]}"#,
+                0,
+            ),
+            traceback(one(
+                "role suggest, a template with no id",
+                &["role", "suggest"],
+                r#"{"templates":[{"label":"x"}]}"#,
+                1,
+            )),
+            traceback(one(
+                "role suggest, not JSON",
+                &["role", "suggest"],
+                "<html>",
+                1,
+            )),
             case(
                 "role suggest, refused",
                 &["role", "suggest"],

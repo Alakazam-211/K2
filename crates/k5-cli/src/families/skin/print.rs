@@ -1455,9 +1455,7 @@ pub fn role_suggest(body: &[u8]) -> Shown {
     let mut out = String::new();
     let v = match crate::out::pylib::json::loads(&text) {
         Ok(v) => v,
-        Err(f) => {
-            return crate::families::raised(out, String::new(), &Raise::at(3, f.last_line()))
-        }
+        Err(f) => return crate::families::raised(out, String::new(), &Raise::at(3, f.last_line())),
     };
     let templates = match py_get(&v, "templates", 3) {
         Ok(t) => t.filter(|t| crate::out::py::truthy(t)).cloned(),

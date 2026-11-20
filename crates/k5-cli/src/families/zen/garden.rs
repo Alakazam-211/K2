@@ -6,8 +6,8 @@
 
 use super::call::Zen;
 use super::print::{
-    self, compact, diag, g, human, indented, int, is, items, or, read, s, t, text_of,
-    zen_print, Env, Out, Read,
+    self, compact, diag, g, human, indented, int, is, items, or, read, s, t, text_of, zen_print,
+    Env, Out, Read,
 };
 use super::verbs::{dir_body, help, read_text, usage, NameKey};
 use crate::exit::Exit;
@@ -122,7 +122,12 @@ pub fn access_print(view: &str, as_json: bool, raw: &[u8]) -> Shown {
         ]) {
             return o.done(Exit::Refused);
         }
-        if any(&["unknown_garden", "unknown_agent", "not_found", "unknown_widget"]) {
+        if any(&[
+            "unknown_garden",
+            "unknown_agent",
+            "not_found",
+            "unknown_widget",
+        ]) {
             return o.done(Exit::NotFound);
         }
         return o.done(Exit::Error);
@@ -342,11 +347,7 @@ pub fn agent_print(view: &str, as_json: bool, raw: &[u8]) -> Shown {
     }
     if t(err) {
         if !as_json {
-            o.e(format!(
-                "Error: {}: {}",
-                s(err),
-                or(g(&d, "message"), "")
-            ));
+            o.e(format!("Error: {}: {}", s(err), or(g(&d, "message"), "")));
         }
         let any = |ws: &[&str]| ws.iter().any(|w| is(err, w));
         if any(&[
@@ -679,7 +680,11 @@ fn access(z: &mut Zen, words: &[&str]) -> Step {
         "add" | "remove" => {
             if pos.len() != 3 {
                 return stop(usage(format!(
-                    concat!("Error: ", cli_name!(), " zen garden access <garden> {} <agent>"),
+                    concat!(
+                        "Error: ",
+                        cli_name!(),
+                        " zen garden access <garden> {} <agent>"
+                    ),
                     act
                 )));
             }
@@ -910,7 +915,8 @@ pub fn garden(z: &mut Zen, words: &[&str]) -> Step {
     if !at.is_empty() && !digits(&at) {
         return stop(usage("Error: --at needs a whole number (1 is the first)"));
     }
-    if verb != "new" && (texting || !at.is_empty() || !new_from.is_empty() || !new_widgets.is_empty())
+    if verb != "new"
+        && (texting || !at.is_empty() || !new_from.is_empty() || !new_widgets.is_empty())
     {
         return stop(usage(concat!(
             "Error: --texting, --at, --from and --widgets are for ",
@@ -1129,8 +1135,8 @@ fn new_v2_body(
     let mut ws = Vec::new();
     for dir in widgets {
         let body = dir_body(dir, Vec::new(), NameKey::Widget)?;
-        let v = crate::out::pylib::json::loads(&String::from_utf8_lossy(&body))
-            .unwrap_or(Value::Null);
+        let v =
+            crate::out::pylib::json::loads(&String::from_utf8_lossy(&body)).unwrap_or(Value::Null);
         ws.push(Value::Object(vec![
             (
                 Text::from("widget"),

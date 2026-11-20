@@ -76,7 +76,11 @@ pub fn print(verb: &str, as_json: bool, raw: &[u8]) -> Shown {
                 }
                 if t(g(&d, "card")) {
                     o.e(format!(
-                        concat!("Card: {} (", product_name!(), " tells you when the person answers)"),
+                        concat!(
+                            "Card: {} (",
+                            product_name!(),
+                            " tells you when the person answers)"
+                        ),
                         s(g(&d, "card"))
                     ));
                 }
@@ -149,7 +153,8 @@ pub fn print(verb: &str, as_json: bool, raw: &[u8]) -> Shown {
     } else {
         "its"
     };
-    let has_vouched = matches!(&d, Value::Object(p) if p.iter().any(|(k, _)| k.as_str() == Some("vouched")));
+    let has_vouched =
+        matches!(&d, Value::Object(p) if p.iter().any(|(k, _)| k.as_str() == Some("vouched")));
     if verb == "claim" {
         o.o(format!(
             "It's yours: this version of {w} now reads and writes data with your rights."

@@ -44,8 +44,14 @@ fn the_shell_hands_these_on() {
 fn skin_alone_and_role_suggest_are_the_binary_s() {
     assert_eq!(ask(&[]), Ok(Ask::Usage));
     assert_eq!(ask(&["nope"]), Ok(Ask::Usage));
-    assert_eq!(ask(&["role", "suggest"]), Ok(Ask::RoleSuggest { json: false }));
-    assert_eq!(ask(&["roles", "templates", "--json"]), Ok(Ask::RoleSuggest { json: true }));
+    assert_eq!(
+        ask(&["role", "suggest"]),
+        Ok(Ask::RoleSuggest { json: false })
+    );
+    assert_eq!(
+        ask(&["roles", "templates", "--json"]),
+        Ok(Ask::RoleSuggest { json: true })
+    );
 }
 
 #[test]

@@ -1761,7 +1761,14 @@ fn run_as(args: &[OsString], teach: bool) -> Option<Exit> {
     } else {
         None
     };
-    Some(run_with(args, ask, hook_sock.as_deref(), settings, teach, cards))
+    Some(run_with(
+        args,
+        ask,
+        hook_sock.as_deref(),
+        settings,
+        teach,
+        cards,
+    ))
 }
 
 fn run_with(
@@ -1833,12 +1840,12 @@ fn run_with(
         }
         Ask::RoleSuggest { json } => {
             let mut ctx = super::app::call::Ctx::new(client, false);
-            let exit = match super::approve::cp::call(&mut ctx, false, "/cli/skin/roles/suggest", "")
-            {
-                Err(exit) => exit,
-                Ok(body) if json => super::approve::cp::body_line(&body),
-                Ok(body) => print::role_suggest(&body).print(),
-            };
+            let exit =
+                match super::approve::cp::call(&mut ctx, false, "/cli/skin/roles/suggest", "") {
+                    Err(exit) => exit,
+                    Ok(body) if json => super::approve::cp::body_line(&body),
+                    Ok(body) => print::role_suggest(&body).print(),
+                };
             let super::app::call::Ctx {
                 mut client,
                 closing: cp_closing,

@@ -441,7 +441,11 @@ fn staged(r: &Rig) {
     let d = r.proj.join("staged-w");
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(d.join("sub")).unwrap();
-    std::fs::write(d.join("manifest.json"), r#"{"id":"wid","entry":"index.html"}"#).unwrap();
+    std::fs::write(
+        d.join("manifest.json"),
+        r#"{"id":"wid","entry":"index.html"}"#,
+    )
+    .unwrap();
     std::fs::write(d.join("index.html"), "<p>é</p>\n").unwrap();
     std::fs::write(d.join("logo.png"), [0u8, 1, 2, 250, 255]).unwrap();
     std::fs::write(d.join("README.md"), "skipped quietly").unwrap();
@@ -482,12 +486,52 @@ fn zen_core_verbs_answer_as_the_shell_does() {
         // covers: zen
         ok_owner("zen alone: the help", &[], vec![]),
         ok_owner("zen help", &["help"], vec![]),
-        case("zen alone, no daemon: still the help", &[], &[], vec![], nothing, 0, 0),
+        case(
+            "zen alone, no daemon: still the help",
+            &[],
+            &[],
+            vec![],
+            nothing,
+            0,
+            0,
+        ),
         // covers: zen --json
-        case("--json is no verb", &["--json"], &[], vec![], owner_and_port, 2, 0),
-        case("an unknown verb", &["nope"], &[], vec![], owner_and_port, 2, 0),
-        case("pages is gone", &["pages"], &[], vec![], owner_and_port, 2, 0),
-        case("grant is no verb", &["grants"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "--json is no verb",
+            &["--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "an unknown verb",
+            &["nope"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "pages is gone",
+            &["pages"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "grant is no verb",
+            &["grants"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case("no daemon", &["path"], &[], vec![], nothing, 1, 0),
         // covers: zen path
         ok_owner(
@@ -560,7 +604,9 @@ fn zen_core_verbs_answer_as_the_shell_does() {
         ok_owner(
             "reload",
             &["reload"],
-            vec![ok(r#"{"ok":true,"changed":true,"errors":[],"warnings":[]}"#)],
+            vec![ok(
+                r#"{"ok":true,"changed":true,"errors":[],"warnings":[]}"#,
+            )],
         ),
         case(
             "reload with errors: the guide topics",
@@ -590,7 +636,9 @@ fn zen_core_verbs_answer_as_the_shell_does() {
         ok_owner(
             "reset",
             &["reset", "--garden", "g1", "--to", "s1"],
-            vec![ok(r#"{"file":"gardens/g1.toml","restored":"s1","snapshot":"s9"}"#)],
+            vec![ok(
+                r#"{"file":"gardens/g1.toml","restored":"s1","snapshot":"s9"}"#,
+            )],
         ),
         case(
             "reset, the Garden is locked",
@@ -693,7 +741,9 @@ fn zen_core_verbs_answer_as_the_shell_does() {
             &["validate", "--widget", "w", "--sign"],
             vec![
                 ok(r#"{"ok":true,"files":["widgets/w/index.html"]}"#),
-                ok(r#"{"widget":"w","stamped":true,"madeBy":{"kind":"agent","handle":"ag"},"vouched":true}"#),
+                ok(
+                    r#"{"widget":"w","stamped":true,"madeBy":{"kind":"agent","handle":"ag"},"vouched":true}"#,
+                ),
             ],
         ),
         ok_owner(
@@ -776,10 +826,7 @@ fn zen_core_verbs_answer_as_the_shell_does() {
             "the daemon refuses",
             &["doctor"],
             &[],
-            vec![Reply::Answer(
-                403,
-                r#"{"error":"zen_local_only"}"#.into(),
-            )],
+            vec![Reply::Answer(403, r#"{"error":"zen_local_only"}"#.into())],
             owner_and_port,
             1,
             1,
@@ -929,8 +976,9 @@ fn zen_history_with_a_large_answer() {
     assert_eq!(r.stderr, "");
     assert_eq!(r.stdout.lines().count(), 9000 * 2);
     assert!(
-        r.stdout
-            .starts_with("gardens/g0.toml (1 snapshot)\n  snap-0-é  2026-11-01T10:00:00Z  (has errors)\n"),
+        r.stdout.starts_with(
+            "gardens/g0.toml (1 snapshot)\n  snap-0-é  2026-11-01T10:00:00Z  (has errors)\n"
+        ),
         "the binary: {}",
         &r.stdout[..200]
     );
@@ -1005,14 +1053,22 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
     let folder = leak(format!("{proj}/staged-w"));
     let new_args: &'static [&'static str] = Box::leak(
         vec![
-            "garden", "new", "My", "Garden", "--texting", "--at", "2", "--from", page, "--widgets",
+            "garden",
+            "new",
+            "My",
+            "Garden",
+            "--texting",
+            "--at",
+            "2",
+            "--from",
+            page,
+            "--widgets",
             folder,
         ]
         .into_boxed_slice(),
     );
-    let put_args: &'static [&'static str] = Box::leak(
-        vec!["garden", "put", "g1", "--from", page, "--note", "tidy"].into_boxed_slice(),
-    );
+    let put_args: &'static [&'static str] =
+        Box::leak(vec!["garden", "put", "g1", "--from", page, "--note", "tidy"].into_boxed_slice());
     let inspect_args: &'static [&'static str] =
         Box::leak(vec!["inspect", folder].into_boxed_slice());
     let mid: &'static str = leak(many_gardens(400));
@@ -1591,7 +1647,10 @@ fn many_errors(n: usize) -> String {
             )
         })
         .collect();
-    format!(r#"{{"widget":"w","errors":[{}],"last":{n}}}"#, rows.join(","))
+    format!(
+        r#"{{"widget":"w","errors":[{}],"last":{n}}}"#,
+        rows.join(",")
+    )
 }
 
 #[test]
@@ -1602,19 +1661,38 @@ fn zen_widgets_answer_as_the_shell_does() {
     let html = leak(format!("{proj}/staged-w/index.html"));
     let png = leak(format!("{proj}/staged-w/logo.png"));
     let put_dir: &'static [&'static str] = Box::leak(
-        vec!["widget", "put", "w2", "--dir", folder, "--prune", "--note", "n", "--json"].into_boxed_slice(),
+        vec![
+            "widget", "put", "w2", "--dir", folder, "--prune", "--note", "n", "--json",
+        ]
+        .into_boxed_slice(),
     );
     let apply: &'static [&'static str] =
         Box::leak(vec!["widget", "apply", "--from", folder].into_boxed_slice());
     let put_one: &'static [&'static str] = Box::leak(
-        vec!["widget", "put", "w", "index.html", "--from", html, "--note", "x"].into_boxed_slice(),
+        vec![
+            "widget",
+            "put",
+            "w",
+            "index.html",
+            "--from",
+            html,
+            "--note",
+            "x",
+        ]
+        .into_boxed_slice(),
     );
-    let put_bin: &'static [&'static str] = Box::leak(
-        vec!["widget", "put", "w", "logo.png", "--from", png].into_boxed_slice(),
-    );
+    let put_bin: &'static [&'static str] =
+        Box::leak(vec!["widget", "put", "w", "logo.png", "--from", png].into_boxed_slice());
     let preview: &'static [&'static str] = Box::leak(
         vec![
-            "widget", "preview", "--dir", folder, "w3", "--config", " size =big", "--config=a=b",
+            "widget",
+            "preview",
+            "--dir",
+            folder,
+            "w3",
+            "--config",
+            " size =big",
+            "--config=a=b",
         ]
         .into_boxed_slice(),
     );
@@ -1986,26 +2064,62 @@ fn zen_guide_answers_as_the_shell_does() {
         page("guide example", &["guide", "example"]),
         page("guide example --list", &["guide", "examples", "--list"]),
         page("guide example rail-top", &["guide", "example", "rail-top"]),
-        page("guide example --toml", &["guide", "example", "column-corner", "--toml"]),
-        page("guide example board-lite", &["guide", "example", "board-lite"]),
-        page("guide example board-lite --toml", &["guide", "example", "board-lite", "--toml"]),
-        page("guide example board-lite --script", &["guide", "example", "board-lite", "--script"]),
+        page(
+            "guide example --toml",
+            &["guide", "example", "column-corner", "--toml"],
+        ),
+        page(
+            "guide example board-lite",
+            &["guide", "example", "board-lite"],
+        ),
+        page(
+            "guide example board-lite --toml",
+            &["guide", "example", "board-lite", "--toml"],
+        ),
+        page(
+            "guide example board-lite --script",
+            &["guide", "example", "board-lite", "--script"],
+        ),
         // covers: zen guide --json
         page("guide --json: the index", &["guide", "--json"]),
         page("guide themes --json", &["guide", "themes", "--json"]),
-        page("guide example --list --json", &["guide", "example", "--list", "--json"]),
-        page("guide example --json", &["guide", "example", "menu-both", "--json"]),
+        page(
+            "guide example --list --json",
+            &["guide", "example", "--list", "--json"],
+        ),
+        page(
+            "guide example --json",
+            &["guide", "example", "menu-both", "--json"],
+        ),
         page("guide examples --json", &["guide", "examples", "--json"]),
-        page("guide board-lite --json", &["guide", "example", "board-lite", "--json"]),
+        page(
+            "guide board-lite --json",
+            &["guide", "example", "board-lite", "--json"],
+        ),
         usage("guide, no topic", &["guide", "nope"]),
         usage("guide, no example", &["guide", "example", "nope"]),
-        usage("guide --toml, no example name", &["guide", "example", "--toml"]),
-        usage("guide --list with a name", &["guide", "example", "x", "--list"]),
-        usage("guide --toml and --script", &["guide", "example", "board-lite", "--toml", "--script"]),
-        usage("guide --script not board-lite", &["guide", "example", "rail-top", "--script"]),
+        usage(
+            "guide --toml, no example name",
+            &["guide", "example", "--toml"],
+        ),
+        usage(
+            "guide --list with a name",
+            &["guide", "example", "x", "--list"],
+        ),
+        usage(
+            "guide --toml and --script",
+            &["guide", "example", "board-lite", "--toml", "--script"],
+        ),
+        usage(
+            "guide --script not board-lite",
+            &["guide", "example", "rail-top", "--script"],
+        ),
         usage("guide --toml on a topic", &["guide", "gardens", "--toml"]),
         usage("guide, an extra word", &["guide", "gardens", "x"]),
-        usage("guide, a third word", &["guide", "example", "rail-top", "x"]),
+        usage(
+            "guide, a third word",
+            &["guide", "example", "rail-top", "x"],
+        ),
         usage("guide, an unknown flag", &["guide", "--nope"]),
         ok_owner("guide with a daemon", &["guide", "undo"], vec![]),
     ];

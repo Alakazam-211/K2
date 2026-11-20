@@ -38,7 +38,9 @@ fn list(src: &'static str, name: &str) -> Vec<&'static str> {
         return Vec::new();
     };
     let rest = &src[at + key.len()..];
-    rest[..rest.find('"').unwrap_or(0)].split_whitespace().collect()
+    rest[..rest.find('"').unwrap_or(0)]
+        .split_whitespace()
+        .collect()
 }
 
 pub fn topics() -> Vec<&'static str> {
@@ -117,12 +119,7 @@ fn compact(v: Value) -> String {
 }
 
 fn obj(pairs: Vec<(&str, Value)>) -> Value {
-    Value::Object(
-        pairs
-            .into_iter()
-            .map(|(k, v)| (Text::from(k), v))
-            .collect(),
-    )
+    Value::Object(pairs.into_iter().map(|(k, v)| (Text::from(k), v)).collect())
 }
 
 /// `_zen_guide_emit_json ID TITLE [TOML]` on a page.
@@ -202,7 +199,12 @@ pub fn guide(words: &[&str]) -> Shown {
             if as_json {
                 let ex: Vec<Value> = examples()
                     .into_iter()
-                    .map(|n| obj(vec![("id", print::jstr(n)), ("title", print::jstr(&title(n)))]))
+                    .map(|n| {
+                        obj(vec![
+                            ("id", print::jstr(n)),
+                            ("title", print::jstr(&title(n))),
+                        ])
+                    })
                     .collect();
                 // This one is `json.dumps(…, separators=(",", ":"))`, ASCII.
                 return line(
@@ -311,7 +313,12 @@ pub fn guide(words: &[&str]) -> Shown {
     if topic == "index" {
         let ts: Vec<Value> = topics()
             .into_iter()
-            .map(|t| obj(vec![("id", print::jstr(t)), ("title", print::jstr(&title(t)))]))
+            .map(|t| {
+                obj(vec![
+                    ("id", print::jstr(t)),
+                    ("title", print::jstr(&title(t))),
+                ])
+            })
             .collect();
         return line(compact(obj(vec![
             ("id", print::jstr("index")),

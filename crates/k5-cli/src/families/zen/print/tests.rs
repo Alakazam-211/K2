@@ -25,7 +25,11 @@ fn the_raise_lines_are_the_shell_s() {
     assert!(at(line::SET_UP).contains(r#"d.get("setUp") is False"#));
     assert!(at(line::LOCKED).contains(r#"isinstance(d.get("locked"), dict)"#));
     for (verb, n) in line::VERBS {
-        assert!(at(*n).contains("d.get("), "{verb}: line {n} is {:?}", at(*n));
+        assert!(
+            at(*n).contains("d.get("),
+            "{verb}: line {n} is {:?}",
+            at(*n)
+        );
         let arm = (1..*n)
             .rev()
             .map(&at)

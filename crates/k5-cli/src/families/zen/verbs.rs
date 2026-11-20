@@ -51,7 +51,11 @@ pub fn args(words: &[&str]) -> Result<Args, Shown> {
             *slot = need(i, msg)?;
             Ok(())
         };
-        let after = |w: &str| w.split_once('=').map(|(_, v)| v.to_string()).unwrap_or_default();
+        let after = |w: &str| {
+            w.split_once('=')
+                .map(|(_, v)| v.to_string())
+                .unwrap_or_default()
+        };
         match w {
             "--no-sign" => a.no_sign = true,
             "--sign" => a.sign = true,
@@ -191,13 +195,25 @@ pub fn is_core(sub: &str) -> bool {
 pub enum Plan {
     Stop(Shown),
     /// `validate --dir`: the folder's body, built (or its usage error).
-    Dir { a: Args, body: Vec<u8> },
+    Dir {
+        a: Args,
+        body: Vec<u8>,
+    },
     /// `validate --garden … --from <file>|-`: the text read.
-    From { a: Args, text: String },
-    Read { sub: String, a: Args },
+    From {
+        a: Args,
+        text: String,
+    },
+    Read {
+        sub: String,
+        a: Args,
+    },
     Reload(Args),
     Reset(Args),
-    Plain { sub: String, a: Args },
+    Plain {
+        sub: String,
+        a: Args,
+    },
 }
 
 /// The checks `cmd_zen` makes before its request.
@@ -337,11 +353,7 @@ pub enum NameKey {
 /// `_zen_dir_body DIR OUT EXTRA NAME_KEY`: the JSON body (`json.dump`'s
 /// bytes), or its usage error (exit 2). A note about skipped files goes
 /// to stderr at once, as the shell's Python prints it.
-pub fn dir_body(
-    dir: &str,
-    extra: Vec<(Text, Value)>,
-    key: NameKey,
-) -> Result<Vec<u8>, Shown> {
+pub fn dir_body(dir: &str, extra: Vec<(Text, Value)>, key: NameKey) -> Result<Vec<u8>, Shown> {
     use std::path::Path;
     let d = Path::new(dir);
     if !d.is_dir() {
@@ -372,7 +384,10 @@ pub fn dir_body(
             continue;
         }
         let pp = Path::new(&p);
-        if pp.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+        if pp
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
             return Err(usage(format!(
                 "Error: {p} is a link; put the file itself in the folder"
             )));
@@ -456,9 +471,11 @@ pub fn dir_body(
         }
         NameKey::Fallback => set(&mut body, "fallback", print::jstr(&own)),
     }
-    Ok(crate::out::json::to_string(&Value::Object(body), &Default::default())
-        .unwrap_or_default()
-        .into_bytes())
+    Ok(
+        crate::out::json::to_string(&Value::Object(body), &Default::default())
+            .unwrap_or_default()
+            .into_bytes(),
+    )
 }
 
 /// `json.dumps({"k": v, …})` of the pairs with a value, in order.
@@ -498,8 +515,7 @@ pub fn run(z: &mut Zen, p: Plan) -> Result<Exit, Exit> {
                 (Text::from("garden"), print::jstr(&a.garden)),
                 (Text::from("text"), print::jstr(&text)),
             ]);
-            let body = crate::out::json::to_string(&body, &Default::default())
-                .unwrap_or_default();
+            let body = crate::out::json::to_string(&body, &Default::default()).unwrap_or_default();
             let raw = z.session_post("/cli/zen/garden/check", body.as_bytes())?;
             zen_print("validate", a.json, &raw, env(&a)).print()
         }

@@ -45,7 +45,13 @@ pub fn shells(words: &[&str]) -> bool {
         "preview" => rest.iter().any(|w| {
             matches!(
                 *w,
-                "--shot" | "--theme" | "--zen-theme" | "--width" | "--height" | "--data" | "--libs"
+                "--shot"
+                    | "--theme"
+                    | "--zen-theme"
+                    | "--width"
+                    | "--height"
+                    | "--data"
+                    | "--libs"
                     | "--wait-ms"
             )
         }),
@@ -602,7 +608,11 @@ fn errors(z: &mut Zen, words: &[&str]) -> Step {
     let raw = z.get_soft("/cli/zen/widget/errors", &q, false)?;
     let shown = errors_print(as_json, &since, &raw);
     let exit = shown.print();
-    Ok(if exit == Exit::Refused { Exit::Error } else { exit })
+    Ok(if exit == Exit::Refused {
+        Exit::Error
+    } else {
+        exit
+    })
 }
 
 fn cleared_print(as_json: bool, raw: &[u8]) -> Shown {
@@ -841,8 +851,7 @@ fn show_print(as_json: bool, raw: &[u8]) -> Shown {
         ));
     }
     if let Some(rt @ Value::Object(_)) = g(&d, "runtime") {
-        let errs = get_or(rt, "errorsSinceSave", None)
-            .map_or_else(|| "0".to_string(), py::str_of);
+        let errs = get_or(rt, "errorsSinceSave", None).map_or_else(|| "0".to_string(), py::str_of);
         o.o(format!(
             "  this version: {}, {errs} runtime error(s) since saved",
             if t(g(rt, "ran")) {
@@ -896,7 +905,10 @@ fn show_print(as_json: bool, raw: &[u8]) -> Shown {
             s(g(&p, "note"))
         ));
         if t(g(&p, "sources")) {
-            o.o(format!("      reads: {}", print::join(g(&p, "sources"), ", ")));
+            o.o(format!(
+                "      reads: {}",
+                print::join(g(&p, "sources"), ", ")
+            ));
         }
     }
     o.done(Exit::Ok)

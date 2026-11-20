@@ -92,7 +92,11 @@ pub fn items(v: Option<&Value>) -> Vec<Value> {
 
 /// `", ".join(x or [])`, each item as `str()`.
 pub fn join(v: Option<&Value>, sep: &str) -> String {
-    items(v).iter().map(py::str_of).collect::<Vec<_>>().join(sep)
+    items(v)
+        .iter()
+        .map(py::str_of)
+        .collect::<Vec<_>>()
+        .join(sep)
 }
 
 /// `x == "word"`.
@@ -276,8 +280,7 @@ pub fn zen_print(verb: &str, as_json: bool, raw: &[u8], env: Env<'_>) -> Shown {
         o.e(or(g(&d, "message"), NOT_SET_UP));
         return o.done(Exit::Refused);
     }
-    if is_err("garden_access_needed") || is_err("garden_delete_person") || is_err("session_gone")
-    {
+    if is_err("garden_access_needed") || is_err("garden_delete_person") || is_err("session_gone") {
         if as_json {
             o.o(compact(&d));
         }
@@ -506,9 +509,20 @@ fn sync_word(row: &Value) -> String {
         _ => false,
     };
     if same {
-        return if is(p, "synced") { "synced" } else { "own copy" }.to_string();
+        return if is(p, "synced") {
+            "synced"
+        } else {
+            "own copy"
+        }
+        .to_string();
     }
-    let word = |m: Option<&Value>| if is(m, "synced") { "synced" } else { "own copy" };
+    let word = |m: Option<&Value>| {
+        if is(m, "synced") {
+            "synced"
+        } else {
+            "own copy"
+        }
+    };
     format!("page: {} · theme: {}", word(p), word(th))
 }
 
@@ -586,7 +600,14 @@ fn topic(e: &Value) -> Option<&'static str> {
     }
     let any = |ws: &[&str]| ws.iter().any(|w| m.contains(w));
     Some(
-        if any(&["slot = \"menu\"", "a menu", "menu '", "menu = ", "menus", "menu.label"]) {
+        if any(&[
+            "slot = \"menu\"",
+            "a menu",
+            "menu '",
+            "menu = ",
+            "menus",
+            "menu.label",
+        ]) {
             "menus"
         } else if any(&["slot", "band", "edge", "align", "column"]) {
             "bands"
@@ -683,10 +704,7 @@ fn body(verb: &str, dv: &Value, env: Env<'_>, mut o: Out) -> Shown {
                         ps.join(", ")
                     };
                     let extra = if t(g(&w, "stale")) {
-                        format!(
-                            "; {} old runtime error(s), not counted",
-                            s(g(&w, "stale"))
-                        )
+                        format!("; {} old runtime error(s), not counted", s(g(&w, "stale")))
                     } else {
                         String::new()
                     };
@@ -1161,10 +1179,7 @@ fn body(verb: &str, dv: &Value, env: Env<'_>, mut o: Out) -> Shown {
                 s(g(dv, "from"))
             ));
             if t(g(dv, "copiedImage")) {
-                o.o(format!(
-                    "copied its background {}",
-                    s(g(dv, "copiedImage"))
-                ));
+                o.o(format!("copied its background {}", s(g(dv, "copiedImage"))));
             }
             o.o(format!(
                 concat!(

@@ -69,7 +69,9 @@ fn native(words: &[&str]) -> bool {
         "" | "help" | "pages" | "grant" | "grants" | "allow" => true,
         s if verbs::is_core(s) => {
             !(s == "validate"
-                && words.iter().any(|w| *w == "--dir" || w.starts_with("--dir="))
+                && words
+                    .iter()
+                    .any(|w| *w == "--dir" || w.starts_with("--dir="))
                 && crate::transport::client::tmpdir_unusable())
         }
         "garden" | "gardens" => {

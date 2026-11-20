@@ -819,3 +819,216 @@ fn hostchat_a_person_s_steps() {
         rig.check(c);
     }
 }
+
+const REC: &str = r#"{"installed":true,"enabled":true,"version":{"recorder":"0.9.0","transcriber":"1.2"},"model":"base","policies":{"b":true,"a":{"x":1}},"flags":{"appRecording":true,"x":false,"c":1},"progress":{"step":"fetch","result":"error"},"lastError":"e","ready":{"ok":false,"code":"no_gpu","hint":"h"}}"#;
+const POLICIES: &str = r#"{"flags":{"appRecording":false,"voiceRecordCap":true},"policies":[{"key":"recording.enabled","want":true,"seen":false,"delivered":false,"setBy":"ann"},{"key":"recording.audio_max_days","want":30,"seen":30,"delivered":true},{"key":"recording.required","seen":null}],"locks":[{"spaceId":"s1","lockedBy":"ann","lockedAt":1790000000},{"spaceId":"s2"}],"k5SpaceId":"k5s"}"#;
+
+#[test]
+fn hostchat_recording_as_the_shell_does() {
+    let rig = Rig::new(VERB, "rec");
+    let utc = |c: Case| with(vec![("TZ", "UTC".to_string())], c);
+    let v = vec![
+        // covers: hostchat recording
+        one("recording status", &["recording", "status"], REC),
+        one("recording status --json", &["recording", "status", "--json"], REC),
+        one(
+            "recording status: not installed",
+            &["recording", "status"],
+            r#"{"installed":false,"policies":{},"flags":{}}"#,
+        ),
+        one(
+            "recording preflight",
+            &["recording", "preflight"],
+            r#"{"ready":false,"checks":[{"status":"fail","id":"disk","detail":"2 GB","hint":"free 10 GB"}]}"#,
+        ),
+        one(
+            "recording install: the files, no wait needed",
+            &[
+                "recording",
+                "install",
+                "--recorder-tarball",
+                "rec.tgz",
+                "--model-file",
+                "/m/base.bin",
+                "--transcriber-tarball",
+                "",
+            ],
+            r#"{"state":"installed","enabled":false,"version":"0.9.0","model":"base","next":"enable it"}"#,
+        ),
+        many(
+            "recording install: waits until done",
+            &["recording", "install"],
+            &[
+                r#"{"state":"installing"}"#,
+                r#"{"installed":false,"progress":{"step":"fetch","result":"running"}}"#,
+                r#"{"installed":true,"enabled":false,"progress":{"step":"done","result":"done"}}"#,
+            ],
+            0,
+        ),
+        many(
+            "recording install --json: the wait ends in an error",
+            &["recording", "install", "--json"],
+            &[
+                r#"{"state":"installing"}"#,
+                r#"{"installed":false,"progress":{"step":"fetch","result":"error"},"lastError":"no net"}"#,
+            ],
+            3,
+        ),
+        one(
+            "recording install --no-wait",
+            &["recording", "install", "--no-wait"],
+            r#"{"state":"installing"}"#,
+        ),
+        one(
+            "recording disable",
+            &["recording", "disable"],
+            r#"{"installed":true,"kept":"recordings","warnings":["w1"]}"#,
+        ),
+        one(
+            "recording uninstall --yes",
+            &["recording", "uninstall", "-y"],
+            r#"{"installed":false}"#,
+        ),
+        case(
+            "recording uninstall with no terminal: confirm_required",
+            &["recording", "uninstall"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "recording enable: not ready",
+            &["recording", "enable"],
+            &[],
+            vec![ok(REC)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        with(
+            with_passport(&[]),
+            case(
+                "recording enable in a session: the daemon answers",
+                &["recording", "enable"],
+                &[],
+                vec![ok(r#"{"state":"installing","version":"0.9.0"}"#)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        case("recording alone: its help", &["recording"], &[], vec![], owner_and_port, 0, 0),
+        case("recording help", &["recording", "help"], &[], vec![], owner_and_port, 0, 0),
+        bad("recording: --yes on status", &["recording", "status", "--yes"]),
+        bad("recording: --model-file on status", &["recording", "status", "--model-file", "m"]),
+        bad("recording: --model-file with no file", &["recording", "install", "--model-file"]),
+        bad("recording: an unknown flag", &["recording", "status", "--x"]),
+        bad("recording: a word", &["recording", "status", "now"]),
+        bad("recording: an unknown verb", &["recording", "start"]),
+        // covers: hostchat recording policy
+        utc(one("recording policy", &["recording", "policy"], POLICIES)),
+        one("recording policies --json", &["recording", "policies", "--json"], POLICIES),
+        one(
+            "recording policy: no flags, no locks list",
+            &["recording", "policy"],
+            r#"{"policies":[],"locks":[]}"#,
+        ),
+        utc(one(
+            "recording policy set",
+            &[
+                "recording",
+                "policy",
+                "set",
+                "enabled",
+                "on",
+                "recording.audio_max_days",
+                "030d",
+                "required",
+                "multi_person",
+                "enabled",
+                "off",
+            ],
+            r#"{"changed":["recording.enabled","recording.audio_max_days"],"policies":[]}"#,
+        )),
+        one(
+            "recording policy set: nothing changed",
+            &["recording", "policy", "set", "dm_enabled", "no"],
+            r#"{"changed":[]}"#,
+        ),
+        case(
+            "recording policy set: refused",
+            &["recording", "policy", "set", "required", "off"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"the owner"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        with(
+            with_passport(&[]),
+            case(
+                "recording policy set in a session: held, no confirm",
+                &["recording", "policy", "set", "enabled", "on"],
+                &[],
+                vec![Reply::Answer(403, r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into())],
+                port_only,
+                3,
+                1,
+            ),
+        ),
+        bad("recording policy: a word", &["recording", "policy", "x"]),
+        bad("recording policy: an unknown flag", &["recording", "policy", "--x"]),
+        bad("recording policy set: nothing", &["recording", "policy", "set"]),
+        bad("recording policy set: odd", &["recording", "policy", "set", "enabled"]),
+        bad("recording policy set: unknown key", &["recording", "policy", "set", "color", "é"]),
+        bad("recording policy set: not on or off", &["recording", "policy", "set", "enabled", "maybe"]),
+        bad("recording policy set: required", &["recording", "policy", "set", "required", "all"]),
+        bad("recording policy set: days 0", &["recording", "policy", "set", "audio_max_days", "0"]),
+        bad("recording policy set: days 3651", &["recording", "policy", "set", "audio_max_days", "3651"]),
+        bad("recording policy set: days x", &["recording", "policy", "set", "audio_max_days", "d"]),
+        traceback(one("recording status: a list", &["recording", "status"], "[]")),
+        traceback(one(
+            "recording policy: a lock time that is no number",
+            &["recording", "policy"],
+            r#"{"locks":[{"lockedAt":"x"}]}"#,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn hostchat_recording_a_person_s_steps() {
+    let rig = VRig::new();
+    let mut v = vec![
+        person(
+            "recording enable",
+            &["recording", "enable", "--model-file", "m.bin"],
+            vec![
+                ok(r#"{"installed":true,"ready":{"ok":true}}"#),
+                ok(INSTALL),
+                ok(r#"{"state":"on","version":"0.9.0","model":"m","next":"n"}"#),
+            ],
+            0,
+        ),
+        person(
+            "recording policy set: held for a confirm",
+            &["recording", "policy", "set", "required", "multi_person"],
+            vec![
+                Reply::Answer(403, r#"{"error":{"code":"owner_confirm_required","hint":"in person"}}"#.into()),
+                ok(INSTALL),
+                ok(r#"{"changed":["recording.required"]}"#),
+            ],
+            0,
+        ),
+    ];
+    let mut tty = vcase("recording uninstall: no terminal", &["recording", "uninstall"]);
+    tty.code = 2;
+    v.push(tty);
+    for c in &v {
+        rig.check(c);
+    }
+}

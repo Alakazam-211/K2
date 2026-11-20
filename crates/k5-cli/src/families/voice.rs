@@ -46,7 +46,7 @@ pub const TOOL: &str = "hostchat";
 
 /// The server's own voice Space: its name is K5 by design, whatever the
 /// brand.
-const SPACE: &str = "K5";
+pub(crate) const SPACE: &str = "K5";
 
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -58,7 +58,7 @@ fn show(body: &str, verb: &str, json: bool) -> Exit {
 
 /// `$(_hostchat_field <k>)`: a top-level string field ("" otherwise), or
 /// where its Python raised (the traceback is printed on the way).
-fn field(body: &str, k: &str) -> Result<String, Exit> {
+pub(super) fn field(body: &str, k: &str) -> Result<String, Exit> {
     let r = load(body, 1).and_then(|v| g(&v, k, 1));
     match r {
         Ok(Value::Str(t)) => {
@@ -87,7 +87,7 @@ fn person(ctx: &Ctx) -> Result<(), Exit> {
 
 /// `id="$(_hostchat_install_id)"`: the install a person's confirm is
 /// bound to (`none` when there is none).
-fn install_id(ctx: &mut Ctx) -> Result<String, Exit> {
+pub(super) fn install_id(ctx: &mut Ctx) -> Result<String, Exit> {
     let body = ctx.call(false, "/cli/sew/status", "", false)?;
     let r = load(&body, 1).and_then(|v| g(&v, "installId", 1));
     match r {
@@ -106,7 +106,7 @@ fn install_id(ctx: &mut Ctx) -> Result<String, Exit> {
 }
 
 /// `tok="$(_vault_confirm_token <action> <id> <label>)" || exit 3`.
-fn token(ctx: &mut Ctx, action: &str, id: &str, label: &str) -> Result<String, Exit> {
+pub(super) fn token(ctx: &mut Ctx, action: &str, id: &str, label: &str) -> Result<String, Exit> {
     let passport = ctx.client.passport().is_some();
     let mut c = Confirm {
         client: &mut ctx.client,

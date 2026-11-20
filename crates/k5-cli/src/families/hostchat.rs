@@ -21,7 +21,8 @@
 //!    ([`crate::confirm::confirm_token`]); the token goes from that answer
 //!    into the next request's body and nowhere else.
 //!
-//! `deliveries` and `agents` ride [`super::chat`], as the shell's do.
+//! `recording` is [`recording`]'s. `deliveries` and `agents` ride
+//! [`super::chat`], as the shell's do.
 //!
 //! Handed to the shell, before anything is printed or sent: a word that
 //! is not UTF-8, `-h` or `--help` anywhere (help never acts), a value flag
@@ -34,6 +35,7 @@
 
 mod main_verbs;
 pub mod print;
+mod recording;
 
 use super::voice::{self, sew, sew::Field};
 use super::{chat, curl_port};
@@ -61,8 +63,12 @@ pub enum Plan {
     Bad(String),
     /// The shell's (see the module's notes).
     Shell,
+    /// A help page by its key ([`text::help`]), exit 0.
+    Text(&'static str),
     /// One of `cmd_hostchat`'s own verbs.
     Main(Main),
+    /// `recording …`.
+    Rec(recording::Rec),
 }
 
 /// The flags and words of `cmd_hostchat`'s own verbs.
@@ -304,12 +310,15 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "agents" | "agent" => {
             return chat::start(args, &words, chat::access(&words[1..]), skip, TOOL)
         }
-        "media" | "recording" | "users" | "user" | "meet" | "people" | "person"
+        "media" | "users" | "user" | "meet" | "people" | "person"
         | "approvals" | "approval" | "on-behalf" | "behalf" | "log" | "app-space"
         | "app-spaces" | "home" | "pass-keys" => return None,
         _ => {}
     }
-    let plan = parse(&words);
+    let plan = match words.first().copied() {
+        Some("recording") => recording::parse(&words[1..]),
+        _ => parse(&words),
+    };
     if plan == Plan::Shell || !python::family_native(python::here()) {
         return None;
     }
@@ -345,19 +354,19 @@ fn run_with(
     if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
         return stop;
     }
+    let page = |key: &str| match out::stdout(text::help(key).unwrap_or_default()) {
+        Ok(()) => Exit::Ok,
+        Err(e) => out::after_stdout_error(&e),
+    };
     let m = match plan {
-        Plan::Help => {
-            return match out::stdout(text::help("hostchat").unwrap_or_default()) {
-                Ok(()) => Exit::Ok,
-                Err(e) => out::after_stdout_error(&e),
-            }
-        }
+        Plan::Help => return page("hostchat"),
+        Plan::Text(key) => return page(key),
         Plan::Bad(line) => {
             out::stderr_line(&line);
             return Exit::Usage;
         }
         Plan::Shell => unreachable!("run hands it to the shell"),
-        Plan::Main(m) => m,
+        p @ (Plan::Main(_) | Plan::Rec(_)) => p,
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let client = match settings.client(would_refuse) {
@@ -373,7 +382,11 @@ fn run_with(
         closing: Closing::default(),
         sock: crate::confirm::sock_path(&settings.home),
     };
-    let exit = main_verbs::run(&mut ctx, &m);
+    let exit = match &m {
+        Plan::Main(m) => main_verbs::run(&mut ctx, m),
+        Plan::Rec(r) => recording::run(&mut ctx, r),
+        _ => unreachable!("printed above"),
+    };
     ctx.closing.flush(&mut ctx.client, exit);
     exit
 }

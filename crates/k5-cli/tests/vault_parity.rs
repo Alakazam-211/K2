@@ -147,18 +147,15 @@ fn help_never_acts() {
     }
 }
 
-/// A bash bug, copied until bash's fix lands (help never acts, K2's
-/// ruling): `cli/src/vault.sh`, `_vault_fetch`'s `--json` arm reads the
-/// `--help` after it as the request body, so the fetch is SENT and no help
-/// is printed. The binary hands every `-h`/`--help` line to the shell, so
-/// it sends it too until then (the rig can't compare a handed line's
-/// requests, so this pins bash's side). FLIP when the bash fix lands: help
-/// on stdout, exit 0, and NO request.
+/// Help never acts (K2's ruling), even where a value flag would take the
+/// word: `_vault_fetch` checks every word first (`_wants_help`), so
+/// `--json --help` prints the fetch help, exit 0, and sends NO request
+/// (it used to send the fetch with `--help` as its body). The binary
+/// hands the line to the shell; both sides must send nothing.
 #[test]
-fn fetch_json_then_help_sends_the_fetch_bash_bug() {
+fn fetch_json_then_help_sends_nothing() {
     let rig = VRig::new();
-    let mut c = VCase::new(
-        "fetch --json --help (bash bug: sends)",
+    for args in [
         &[
             "fetch",
             "https://api.example.com/x",
@@ -166,23 +163,21 @@ fn fetch_json_then_help_sends_the_fetch_bash_bug() {
             "API",
             "--json",
             "--help",
-        ],
-    );
-    c.daemon = vec![common::stub::Reply::Answer(
-        200,
-        r#"{"status":200,"body":"{\"ok\":true}\n"}"#.to_string(),
-    )];
-    let bash = rig.run(true, false, &c);
-    assert_eq!(bash.out.code, Some(0), "{bash:#?}");
-    assert_eq!(
-        bash.daemon.len(),
-        1,
-        "FLIP: bash no longer sends it: {bash:#?}"
-    );
-    assert!(
-        bash.daemon[0].contains("\"bodyB64\": \"LS1oZWxw\""),
-        "{bash:#?}"
-    );
+        ][..],
+        &["fetch", "https://api.example.com/x", "--secret", "API", "-d", "-h"],
+        &["fetch", "https://api.example.com/x", "-H", "--help", "--secret", "API"],
+    ] {
+        let mut c = VCase::new("fetch: help where a value goes, nothing sent", args);
+        c.handed = true;
+        rig.check(&c);
+        let bash = rig.run(true, false, &c);
+        assert_eq!(
+            (bash.out.code, bash.daemon.len(), bash.vault.len()),
+            (Some(0), 0, 0),
+            "{bash:#?}"
+        );
+        assert!(!bash.out.stdout.is_empty(), "no help printed: {bash:#?}");
+    }
 }
 
 /// The lines name the command by the brand's name (in a build with

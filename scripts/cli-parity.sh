@@ -155,8 +155,8 @@ done
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
     "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and msg prints one line naming Python 3 and exits 69 without starting bash"
-    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
-    "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\` and \`connections remove beta\` (POSTs). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
+    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show, api) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
+    "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\`, \`connections remove beta\` and \`api on\` (POSTs). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), api on the same line on stdout, connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
     "wiki-status-large-answer|K5 lane r8c, for K2 to rule on|\`wiki status\` hands both of the daemon's answers (the serve status and the index) to its Python in environment variables; an index above what one variable may hold (128 KiB on Linux, about 1 MiB in all on macOS) stops bash there: \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 126. The binary reads the answers itself and prints the status, exit 0. Both send the same two requests"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
@@ -294,7 +294,7 @@ s.serve_forever()
     fi
     # (read left it in 0.46.17: its cli_send arm sends the passport on
     # TCP when the session's socket failed, as the binary does.)
-    for verb in "whoami --json" done activity "feedback list" "feedback show x"; do
+    for verb in "whoami --json" done activity "feedback list" "feedback show x" "api off"; do
         for side in bash binary; do
             : >"$d/log"
             rc=0
@@ -427,17 +427,17 @@ check_bash32_pipe_reader() {
     local d="$WORK/bash32-pipe" shell=bash ver i rc rr words problems=()
     local -a all_words reader_out reader_err has_line
     local unparseable=$'Error: daemon returned an unparseable response: \'\'\n'
-    all_words=("inbox" "inbox read a1" "inbox folders" "read acme" "activity" "connect status" "connections add beta" "connections remove beta")
-    reader_out=($'No items.\n' "" $'No folders yet. Create one by moving an item:\n  k2 inbox move <id> projects\n' "" "" "" "" "")
-    reader_err=("" $'Error: no answer from the K2 daemon (neither this session\'s cell socket nor the loopback port answered). Is K2 running? Try again: k2 inbox read <id>\n' "" $'\n' $'Error: the K2 daemon gave no usable answer: \'\'\n' "" "$unparseable" "$unparseable")
-    has_line=(1 1 1 1 1 1 1 1)
+    all_words=("inbox" "inbox read a1" "inbox folders" "read acme" "activity" "connect status" "connections add beta" "connections remove beta" "api on")
+    reader_out=($'No items.\n' "" $'No folders yet. Create one by moving an item:\n  k2 inbox move <id> projects\n' "" "" "" "" "" "$unparseable")
+    reader_err=("" $'Error: no answer from the K2 daemon (neither this session\'s cell socket nor the loopback port answered). Is K2 running? Try again: k2 inbox read <id>\n' "" $'\n' $'Error: the K2 daemon gave no usable answer: \'\'\n' "" "$unparseable" "$unparseable" "")
+    has_line=(1 1 1 1 1 1 1 1 1)
     mkdir -p "$d/home/.k2" "$d/ws/.k2"
     printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
     [ "$(uname -s)" != Darwin ] || shell=/bin/bash
     ver="$("$shell" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')"
     start_stub "$d" close || { echo "the stub daemon didn't start"; return 1; }
     printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
-    for i in 0 1 2 3 4 5 6 7; do
+    for i in 0 1 2 3 4 5 6 7 8; do
         words="${all_words[$i]}"
         # shellcheck disable=SC2086
         rc=0; run_side "$d" "$shell" $words || rc=$?
@@ -472,7 +472,7 @@ check_bash32_pipe_reader() {
         return 1
     fi
     [ "$ver" = 3.2 ] && return 0
-    echo "checked only on bash 3.2, macOS's /bin/bash (the macOS parity job runs it); here $shell is bash $ver, where bash and the binary answer alike on all eight (SIGPIPE 141, nothing on stdout, the same stderr), so the difference itself was not proven on this host"
+    echo "checked only on bash 3.2, macOS's /bin/bash (the macOS parity job runs it); here $shell is bash $ver, where bash and the binary answer alike on all nine (SIGPIPE 141, nothing on stdout, the same stderr), so the difference itself was not proven on this host"
     return 3
 }
 

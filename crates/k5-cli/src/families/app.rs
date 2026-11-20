@@ -43,6 +43,7 @@
 //!   exception`.
 //! - [`boxes`]: `app doctor` (the box and reach doctors), `app box`
 //!   (every sub-verb), `app engine`, `app rehost` and `app sessions`.
+//! - [`exec`]: `app exec`; [`history`] also answers `app logs --follow`.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
 //! - The verbs `cmd_app` hands to `cmd_skin` (`user`, `role`, `grant`'s
@@ -89,6 +90,7 @@ pub mod catalog;
 pub mod chat;
 pub mod db_set;
 pub mod deploy;
+pub mod exec;
 pub mod door;
 pub mod grace;
 pub mod guests;
@@ -143,6 +145,7 @@ pub enum Ask {
     Change(deploy::Ask),
     Owner(owner::Ask),
     Boxes(boxes::Ask),
+    Exec(exec::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -242,6 +245,7 @@ pub const TAKES: &[&str] = &[
     "engine",
     "rehost",
     "sessions",
+    "exec",
 ];
 
 /// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
@@ -536,6 +540,10 @@ pub const VERBS: &[crate::route::Verb] = &[
         owner: crate::route::Owner::Native,
     },
     crate::route::Verb {
+        words: &["exec"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
         words: &["user", "users"],
         owner: crate::route::Owner::Native,
     },
@@ -598,6 +606,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "chat" => Some(chat::parse(rest)?.map(Ask::Chat)),
         "init" => Some(init::parse_init(rest)?.map(Ask::Folder)),
         "doctor" => doctor(rest),
+        "exec" => Some(exec::parse(rest)?.map(Ask::Exec)),
         "box" => {
             if rest.iter().any(|w| matches!(*w, "-h" | "--help")) {
                 return None;
@@ -739,6 +748,7 @@ fn run_with(
         Ask::Change(c) => deploy::run(&mut ctx, c),
         Ask::Owner(o) => owner::run(&mut ctx, o),
         Ask::Boxes(b) => boxes::run(&mut ctx, b),
+        Ask::Exec(e) => exec::run(&mut ctx, e),
     };
     let exit = match shown {
         Ok(s) => s.print(),

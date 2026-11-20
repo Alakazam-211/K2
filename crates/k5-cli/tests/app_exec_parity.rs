@@ -1,0 +1,115 @@
+//! `k5-cli app exec` against the shell CLI's (`cli/src/app-doctor.sh`),
+//! on the parity rig ([`common::parity`]): the same request (the body
+//! with the stdin in base64, the timeout), stdout, stderr and exit code.
+//!
+//! - No stdin, `--no-stdin`, a pipe on stdin (bytes that aren't UTF-8 too);
+//!   `--timeout` plain and as a duration; `--json`; the command's exit,
+//!   124 at its timeout, 1 for one out of range; a refusal; the words.
+//! - An answer above 256 KiB; help never acts.
+
+#![cfg(unix)]
+
+mod common;
+
+use common::parity::*;
+use common::stub::Reply;
+
+const VERB: &str = "app";
+
+fn with_stdin(c: Case, input: &'static [u8]) -> Case {
+    Case {
+        stdin: Some(input),
+        ..c
+    }
+}
+
+#[test]
+fn exec_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "exec");
+    let ran = |code: i32| format!(r#"{{"framed":"--- untrusted ---\nhello é\n--- end ---","exitCode":{code}}}"#);
+    let v = vec![
+        // covers: app exec
+        case("no stdin, exit 0", &["exec", "acme", "--", "ls", "-l"], &[], vec![ok(&ran(0))], owner_and_port, 0, 1),
+        // covers: app exec
+        case("the command's exit", &["exec", "acme", "sh", "-c", "exit 7"], &[], vec![ok(&ran(7))], owner_and_port, 7, 1),
+        // covers: app exec
+        case("an exit out of range: 1", &["exec", "acme", "x"], &[], vec![ok(&ran(300))], owner_and_port, 1, 1),
+        // covers: app exec
+        case(
+            "timed out: 124, the note",
+            &["exec", "acme", "--timeout", "1m30s", "--", "sleep", "99"],
+            &[],
+            vec![ok(r#"{"framed":"f","timedOut":true,"exitCode":0}"#)],
+            owner_and_port,
+            124,
+            1,
+        ),
+        // covers: app exec
+        with_stdin(
+            case("a pipe on stdin", &["exec", "acme", "--timeout", "30", "--", "cat"], &[], vec![ok(&ran(0))], owner_and_port, 0, 1),
+            b"line one\nline two \xff\xfe\n",
+        ),
+        // covers: app exec
+        with_stdin(
+            case("an empty pipe on stdin", &["exec", "acme", "--", "wc"], &[], vec![ok(&ran(0))], owner_and_port, 0, 1),
+            b"",
+        ),
+        // covers: app exec
+        with_stdin(
+            case("--no-stdin with a pipe", &["exec", "--no-stdin", "acme", "--", "cat"], &[], vec![ok(&ran(0))], owner_and_port, 0, 1),
+            b"not sent",
+        ),
+        // covers: app exec
+        case("--json", &["exec", "acme", "--json", "--", "ls"], &[], vec![ok(&ran(3))], owner_and_port, 3, 1),
+        // covers: app exec
+        case(
+            "refused",
+            &["exec", "acme", "--", "ls"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"no"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        // covers: app exec
+        Case {
+            compare: Compare::Traceback,
+            ..case("no framed text", &["exec", "acme", "ls"], &[], vec![ok(r#"{"exitCode":0}"#)], owner_and_port, 1, 1)
+        },
+        // covers: app exec
+        case("no command", &["exec", "acme"], &[], vec![], owner_and_port, 2, 0),
+        // covers: app exec
+        case("an unknown flag", &["exec", "acme", "--zap", "--", "ls"], &[], vec![], owner_and_port, 2, 0),
+        // covers: app exec
+        case("a bad duration", &["exec", "acme", "--timeout", "soon", "ls"], &[], vec![], owner_and_port, 2, 0),
+        // covers: app exec
+        case("--timeout last", &["exec", "acme", "--timeout"], &[], vec![], owner_and_port, 2, 0),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// One answer above 256 KiB: a command that printed a lot.
+#[test]
+fn exec_a_large_answer() {
+    let rig = Rig::new(VERB, "execbig");
+    let lines: Vec<String> = (0..12000).map(|n| format!("output line {n:08} é")).collect();
+    let body = format!(r#"{{"framed":"{}","exitCode":0}}"#, lines.join("\\n"));
+    assert!(body.len() > 256 * 1024, "{}", body.len());
+    for args in [&["exec", "acme", "--", "ls"][..], &["exec", "acme", "--json", "--", "ls"]] {
+        rig.check(&case("a large answer", args, &[], vec![ok(&body)], owner_and_port, 0, 1));
+    }
+}
+
+/// Help never acts.
+#[test]
+fn exec_help_never_acts() {
+    let rig = Rig::new(VERB, "exechelp");
+    for args in [&["exec", "acme", "-h"][..], &["exec", "--help", "acme", "--", "rm", "x"]] {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..case("help never acts", args, &[], vec![], owner_and_port, 0, 0)
+        });
+    }
+}

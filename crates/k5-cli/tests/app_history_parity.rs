@@ -11,8 +11,8 @@
 //!   kind, `--follow`, usage.
 //! - `logs`: one read, `--deployment`, `--tail`; `--client` (bundles,
 //!   none, `--user`, `--kind`, `--limit`, `--json`) and its usage lines;
-//!   the `--client`-only flags without it. (`--follow` is the shell's:
-//!   the family's unit tests check the hand-off.)
+//!   the `--client`-only flags without it. (`--follow`:
+//!   `tests/app_follow_parity.rs`.)
 //! - `logs --client --since`: days, a duration, plain seconds and a bad
 //!   one (exit 2). The time sent is now less the window: the shell reads
 //!   now from a stub `date` first on PATH, the binary from the fixed time

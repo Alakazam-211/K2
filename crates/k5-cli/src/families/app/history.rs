@@ -5,15 +5,16 @@
 //! the shell's Python line for line.
 //!
 //! `app logs --client --since` names a time the shell reads from the
-//! clock (`date +%s`): here [`epoch_now`]. Still the shell's: `app logs
-//! --follow` (a poll loop).
+//! clock (`date +%s`): here [`epoch_now`]. `app logs --follow` polls
+//! every 2 seconds and prints each answer's new lines as they come; it
+//! ends where a request or the Python ends it.
 
 use super::access::answer;
 use super::call::Ctx;
 use super::py::{self, Out};
 use super::{Answer, Stop};
 use crate::exit::Exit;
-use crate::families::Raise;
+use crate::families::{Raise, Shown};
 use crate::out::json::{self, Options, Value};
 use crate::transport::encode::quote;
 use k2_client::{cli_name, product_name};
@@ -81,6 +82,8 @@ pub enum Ask {
         app: String,
         deployment: String,
         tail: String,
+        /// `--follow`: poll every 2 seconds, printing what is new.
+        follow: bool,
     },
     ClientLogs {
         app: String,
@@ -193,7 +196,7 @@ fn errors(words: &[&str]) -> Result<Ask, Stop> {
     })
 }
 
-/// `cmd_app_logs`'s loop. `None`: `--follow` (the shell's).
+/// `cmd_app_logs`'s loop.
 fn logs(words: &[&str]) -> Option<Result<Ask, Stop>> {
     let mut app = String::new();
     let mut deployment = String::new();
@@ -262,13 +265,11 @@ fn logs(words: &[&str]) -> Option<Result<Ask, Stop>> {
     if app.is_empty() {
         return Some(Err(Stop::usage(usage::LOGS)));
     }
-    if follow {
-        return None;
-    }
     Some(Ok(Ask::Logs {
         app,
         deployment,
         tail,
+        follow,
     }))
 }
 
@@ -313,13 +314,18 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
             app,
             deployment,
             tail,
+            follow,
         } => {
             let mut q = format!("app={}&tail={}", quote(app), quote(tail));
             if !deployment.is_empty() {
                 q.push_str(&format!("&deployment={}", quote(deployment)));
             }
             let body = ctx.call(false, "/cli/app/logs", &q)?;
-            Ok(answer(&body, false, framed_line))
+            let first = answer(&body, false, framed_line);
+            if !*follow || first.exit != Exit::Ok {
+                return Ok(first);
+            }
+            follow_logs(ctx, &q, first, body)
         }
         Ask::ClientLogs {
             app,
@@ -610,6 +616,60 @@ pub fn errors_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     }
     o.line(&py::s(&py::idx(&v, "framed", 25)?));
     Ok(Exit::Ok)
+}
+
+/// `cmd_app_logs --follow`'s poll: `while sleep 2; do _compute_call …`,
+/// each answer's new lines printed as they come. It ends where a request
+/// or the Python ends it.
+fn follow_logs(ctx: &mut Ctx, q: &str, first: Shown, mut last: Vec<u8>) -> Answer {
+    let printed = first.print();
+    if printed != Exit::Ok {
+        return Err(printed);
+    }
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let body = ctx.call(false, "/cli/app/logs", q)?;
+        let mut o = Out::default();
+        let r = new_lines(&last, &body, &mut o);
+        let printed = o.done(r.map(|()| Exit::Ok)).print();
+        if printed != Exit::Ok {
+            return Err(printed);
+        }
+        last = body;
+    }
+}
+
+/// `json.loads(…)["framed"].splitlines()[2:-1]`: the framed lines between
+/// the frame's head and its end.
+fn framed_body(body: &[u8], line: u32) -> Result<Vec<String>, Raise> {
+    let v = py::load(body, line)?;
+    let f = py::idx(&v, "framed", line)?;
+    if !matches!(f, Value::Str(_)) {
+        return Err(Raise::no_attribute(line, &f, "splitlines"));
+    }
+    let lines = crate::out::pylib::ops::splitlines(&py::s(&f));
+    let n = lines.len();
+    Ok(if n > 2 { lines[2..n - 1].to_vec() } else { Vec::new() })
+}
+
+/// The follow loop's Python: the new answer's lines after the longest
+/// run that ends the last one.
+fn new_lines(old: &[u8], new: &[u8], o: &mut Out) -> Result<(), Raise> {
+    let old = framed_body(old, 3)?;
+    let new = framed_body(new, 4)?;
+    let mut i = 0;
+    if !old.is_empty() {
+        for k in (1..=new.len()).rev() {
+            if new[..k] == old[old.len().saturating_sub(k)..] {
+                i = k;
+                break;
+            }
+        }
+    }
+    for l in &new[i..] {
+        o.line(l);
+    }
+    Ok(())
 }
 
 /// `cmd_app_logs`' Python (one line): `print(json.load(sys.stdin)["framed"])`.

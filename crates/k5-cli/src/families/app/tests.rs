@@ -683,7 +683,10 @@ fn group_two_helpers() {
         history::parse("logs", &["acme", "--client", "--since", "1x"]),
         Some(Err(s)) if s.exit == Exit::Usage && s.line.contains("bad duration '1x'")
     ));
-    assert!(history::parse("logs", &["acme", "--follow"]).is_none());
+    assert!(matches!(
+        history::parse("logs", &["acme", "-f"]),
+        Some(Ok(history::Ask::Logs { follow: true, .. }))
+    ));
     assert!(history::parse("logs", &["acme", "--client", "--follow"]).is_some());
     let s = printed(
         history::errors_lines,

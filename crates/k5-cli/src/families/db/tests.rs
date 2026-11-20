@@ -425,10 +425,21 @@ fn cp_ask(words: &[&str]) -> cp::Ask {
 #[test]
 fn the_compute_verbs_words_are_the_shell_s() {
     use cp::{Ask as C, What};
-    match cp_ask(&["create", "--cluster=c", "--json", "--name", "n", "--major", "17"]) {
+    match cp_ask(&[
+        "create",
+        "--cluster=c",
+        "--json",
+        "--name",
+        "n",
+        "--major",
+        "17",
+    ]) {
         C::Named(k) => {
             assert_eq!((k.what, k.json), (What::CreateDb, true));
-            assert_eq!((k.cluster.as_str(), k.name.as_str(), k.major.as_str()), ("c", "n", "17"));
+            assert_eq!(
+                (k.cluster.as_str(), k.name.as_str(), k.major.as_str()),
+                ("c", "n", "17")
+            );
         }
         other => panic!("{other:?}"),
     }
@@ -445,12 +456,18 @@ fn the_compute_verbs_words_are_the_shell_s() {
     );
     assert_eq!(
         cp_ask(&["versions-access", "on", "--json"]),
-        C::VersionsAccess { on: true, json: true }
+        C::VersionsAccess {
+            on: true,
+            json: true
+        }
     );
     // The action is the first word, whatever it is.
     assert_eq!(
         hint(&["versions-access", "--json", "on"]),
-        concat!(cli_name!(), " db versions-access on|off [--workspace WS] [--json]")
+        concat!(
+            cli_name!(),
+            " db versions-access on|off [--workspace WS] [--json]"
+        )
     );
     assert_eq!(
         hint(&["cluster", "create", "17", "--name", "n", "--port", "5450"]),
@@ -474,7 +491,10 @@ fn the_compute_verbs_words_are_the_shell_s() {
         other => panic!("{other:?}"),
     }
     assert_eq!(hint(&["upgrade", "a", "b"]), "one database");
-    assert_eq!(hint(&["upgrade", "--to", "9"]), "--to takes a Postgres major, e.g. 17");
+    assert_eq!(
+        hint(&["upgrade", "--to", "9"]),
+        "--to takes a Postgres major, e.g. 17"
+    );
     assert_eq!(
         hint(&["upgrade", "--status"]),
         concat!(cli_name!(), " db upgrade <db> --status")

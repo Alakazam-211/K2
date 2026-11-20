@@ -316,9 +316,7 @@ fn verb(words: &[&str]) -> Result<Form, Form> {
                 }
             }
             if !cluster.is_empty() {
-                return cp::create_db(
-                    k.json, cluster, &k.name, &k.id, &k.major, k.test, &k.access,
-                );
+                return cp::create_db(k.json, cluster, &k.name, &k.id, &k.major, k.test, &k.access);
             }
             if !k.major.is_empty() && !is_major(&k.major) {
                 return Err(usage("--major takes a Postgres major, e.g. 16 or 17"));

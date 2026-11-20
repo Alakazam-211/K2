@@ -220,7 +220,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             Exit::Usage
         }
         Form::Shift => Exit::Error,
-        Form::Home { .. } | Form::Cap { .. } | Form::Shell => {
+        Form::Home { .. } | Form::Cap { .. } | Form::Cp(_) | Form::Run(_) | Form::Shell => {
             unreachable!("store has no such form")
         }
     };

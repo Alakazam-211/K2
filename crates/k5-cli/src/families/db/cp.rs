@@ -40,7 +40,7 @@ use crate::out::pylib::json::loads;
 use crate::out::pylib::ops::{contains, index, py_eq};
 use crate::out::{self, py};
 use crate::prelude::Closing;
-use crate::spec::run;
+use crate::spec::run as spec_run;
 use crate::transport::client::Auth;
 use crate::transport::encode::quote;
 use crate::transport::{permission, Channel, Client, Error, Response};
@@ -252,7 +252,11 @@ pub fn cluster(a: &mut Words) -> Result<Form, Form> {
 /// `case "$c_port" in 54[3-4][0-9])`.
 fn is_named_port(p: &str) -> bool {
     let b = p.as_bytes();
-    b.len() == 4 && b[0] == b'5' && b[1] == b'4' && matches!(b[2], b'3' | b'4') && b[3].is_ascii_digit()
+    b.len() == 4
+        && b[0] == b'5'
+        && b[1] == b'4'
+        && matches!(b[2], b'3' | b'4')
+        && b[3].is_ascii_digit()
 }
 
 /// `create --cluster <c>`: the loop's values, after it.
@@ -349,7 +353,10 @@ pub fn upgrade(a: &mut Words) -> Result<Form, Form> {
 /// Whether the shell answers `ask`, from the environment's names and
 /// values: its compute library's internals, or `K2_CP_MAX_TIME` for the
 /// one call that reads it.
-pub fn shells(ask: &Ask, vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>) -> bool {
+pub fn shells(
+    ask: &Ask,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> bool {
     vars.into_iter().any(|(name, value)| {
         let name = name.to_string_lossy();
         name.starts_with("K2_CJ_")
@@ -394,7 +401,8 @@ impl Body {
     /// with no leading zero through.
     pub fn n(mut self, key: &str, v: &str) -> Body {
         if !v.is_empty() {
-            self.pairs.push((Text::from(key), Value::Int(v.to_string())));
+            self.pairs
+                .push((Text::from(key), Value::Int(v.to_string())));
         }
         self
     }
@@ -424,13 +432,19 @@ impl Cp<'_> {
     /// `_compute_split "$(_compute_send …)"`: the status and the body.
     /// `Err`: a POST that may have been applied, or a session's TCP call
     /// that would carry the owner token: its line, exit 1.
-    fn send(&mut self, post: bool, path: &str, payload: &str, tcp: bool) -> Result<(String, Vec<u8>), Exit> {
+    fn send(
+        &mut self,
+        post: bool,
+        path: &str,
+        payload: &str,
+        tcp: bool,
+    ) -> Result<(String, Vec<u8>), Exit> {
         let r = self.client.compute_send(post, path, payload, tcp);
         if let Err(e @ (Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. })) = &r {
             out::stderr_line(&e.to_string());
             return Err(Exit::Error);
         }
-        let (status, body) = run::split(&run::raw(&r, self.client.refused_before_answer()));
+        let (status, body) = spec_run::split(&spec_run::raw(&r, self.client.refused_before_answer()));
         let noted = Response {
             status: 0,
             permission: permission::note(&body),
@@ -474,7 +488,7 @@ fn print_body(body: &[u8]) -> Exit {
 
 /// `_compute_fail` (no refusal rows): its line, and its exit.
 fn compute_fail(status: &str, body: &[u8]) -> Exit {
-    out::stderr_line(&run::fail_line(status, body));
+    out::stderr_line(&spec_run::fail_line(status, body));
     match status {
         "400" | "413" => Exit::Usage,
         _ => Exit::Refused,
@@ -584,7 +598,16 @@ fn upgrade_send(cp: &mut Cp, u: &Upgrade) -> Result<Exit, Exit> {
         });
     }
     let live_only = u.live && !u.check;
-    if u.json && (u.no_wait || u.check || u.rollback || u.forget || u.ack || u.abort || !u.prep.is_empty() || live_only) {
+    if u.json
+        && (u.no_wait
+            || u.check
+            || u.rollback
+            || u.forget
+            || u.ack
+            || u.abort
+            || !u.prep.is_empty()
+            || live_only)
+    {
         return Ok(print_body(&answer));
     }
     if live_only || u.abort || !u.prep.is_empty() {
@@ -709,7 +732,10 @@ fn cat(text: &str, v: &Value, line: u32) -> Result<String, Raise> {
 fn not_subscriptable(v: &Value, line: u32) -> Raise {
     Raise::at(
         line,
-        format!("TypeError: '{}' object is not subscriptable", py::type_name(v)),
+        format!(
+            "TypeError: '{}' object is not subscriptable",
+            py::type_name(v)
+        ),
     )
 }
 
@@ -815,7 +841,10 @@ fn named_fail(body: &[u8]) -> Shown {
         let v = loads(&raw).unwrap_or_else(|_| {
             obj(vec![(
                 "error",
-                obj(vec![("code", s("daemon_unreachable")), ("hint", hint_of(&raw))]),
+                obj(vec![
+                    ("code", s("daemon_unreachable")),
+                    ("hint", hint_of(&raw)),
+                ]),
             )])
         });
         let e = py_get(&v, "error", 5)?.cloned();
@@ -823,12 +852,18 @@ fn named_fail(body: &[u8]) -> Shown {
             Some(e @ Value::Object(_)) => e,
             other => {
                 let code = or(other.as_ref(), s("error"));
-                obj(vec![("code", code), ("hint", get_or(&v, "hint", s(""), 6)?)])
+                obj(vec![
+                    ("code", code),
+                    ("hint", get_or(&v, "hint", s(""), 6)?),
+                ])
             }
         };
         let code = py_get(&e, "code", 7)?.cloned().unwrap_or(Value::Null);
         let hint = get_or(&e, "hint", s(""), 7)?;
-        refusal(&mut p, &obj(vec![("error", obj(vec![("code", code), ("hint", hint)]))]));
+        refusal(
+            &mut p,
+            &obj(vec![("error", obj(vec![("code", code), ("hint", hint)]))]),
+        );
         Ok(Exit::Ok)
     })();
     p.done(r)
@@ -921,7 +956,10 @@ fn upgrade_fail(body: &[u8]) -> Shown {
     let r = (|| -> Result<Exit, Raise> {
         let raw = String::from_utf8_lossy(body);
         let v = loads(&raw).unwrap_or_else(|_| {
-            obj(vec![("error", s("daemon_unreachable")), ("hint", hint_of(&raw))])
+            obj(vec![
+                ("error", s("daemon_unreachable")),
+                ("hint", hint_of(&raw)),
+            ])
         });
         let error = py_get(&v, "error", 5)?.cloned().unwrap_or(Value::Null);
         let hint = get_or(&v, "hint", s(""), 5)?;
@@ -1218,7 +1256,11 @@ mod tests {
 
     #[test]
     fn a_poll_says_what_the_shell_s_reader_says() {
-        let (out, shown) = poll(br#"{"moves":[{"step":"copy","state":"running"}]}"#, "", false);
+        let (out, shown) = poll(
+            br#"{"moves":[{"step":"copy","state":"running"}]}"#,
+            "",
+            false,
+        );
         assert_eq!(out, "seen:copy/running\n");
         assert_eq!(shown.stderr, "  copy/running\n");
         let (out, shown) = poll(

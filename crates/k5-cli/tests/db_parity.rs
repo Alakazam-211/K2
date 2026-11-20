@@ -1097,7 +1097,15 @@ fn db_compute_verbs_answer_as_the_shell_does() {
     let running = || ok(r#"{"moves":[{"step":"copy","state":"running"}]}"#);
     let cases = vec![
         // versions-access: over TCP, `_compute_fail` on a refusal.
-        case("versions-access on", &["versions-access", "on"], &[], vec![ok(VA_ON)], owner_and_port, 0, 1),
+        case(
+            "versions-access on",
+            &["versions-access", "on"],
+            &[],
+            vec![ok(VA_ON)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "versions-access off --json",
             &["versions-access", "off", "--json"],
@@ -1168,7 +1176,16 @@ fn db_compute_verbs_answer_as_the_shell_does() {
         // covers: db cluster create
         case(
             "cluster create",
-            &["cluster", "create", "17", "--name", "fb", "--port", "5434", "--wal-archive"],
+            &[
+                "cluster",
+                "create",
+                "17",
+                "--name",
+                "fb",
+                "--port",
+                "5434",
+                "--wal-archive",
+            ],
             &[],
             vec![ok(NAMED)],
             owner_and_port,
@@ -1315,7 +1332,15 @@ fn db_compute_verbs_answer_as_the_shell_does() {
         ))),
         case(
             "create --cluster",
-            &["create", "--cluster", "17/fb", "--name", "app", "--id", "i1"],
+            &[
+                "create",
+                "--cluster",
+                "17/fb",
+                "--name",
+                "app",
+                "--id",
+                "i1",
+            ],
             &[],
             vec![ok(
                 r#"{"ok":true,"name":"app","cluster":"17/fb","existing":true,"dsn":"postgres://x","dsnHint":"run dsn --reveal"}"#,
@@ -1374,7 +1399,9 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             "upgrade --status, a lag that is a float",
             &["upgrade", "app", "--status"],
             &[],
-            vec![ok(r#"{"live":[{"db":"a","from":1,"to":2,"state":"x","lagBytes":1.5}]}"#)],
+            vec![ok(
+                r#"{"live":[{"db":"a","from":1,"to":2,"state":"x","lagBytes":1.5}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -1421,7 +1448,9 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             "upgrade --rollback, no check in the answer",
             &["upgrade", "app", "--rollback", "--yes"],
             &[],
-            vec![ok(r#"{"ok":true,"rolledBack":"app","n":[1,"é",{"a":null}]}"#)],
+            vec![ok(
+                r#"{"ok":true,"rolledBack":"app","n":[1,"é",{"a":null}]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1430,7 +1459,9 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             "upgrade --live",
             &["upgrade", "app", "--live", "--to", "17", "--app", "web"],
             &[],
-            vec![ok(r#"{"live":{"db":"app","from":16,"to":17,"state":"syncing"}}"#)],
+            vec![ok(
+                r#"{"live":{"db":"app","from":16,"to":17,"state":"syncing"}}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1439,7 +1470,9 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             "upgrade --abort",
             &["upgrade", "app", "--abort"],
             &[],
-            vec![ok(r#"{"live":{"db":"app","from":16,"to":17,"state":"aborted","lastError":"stopped"}}"#)],
+            vec![ok(
+                r#"{"live":{"db":"app","from":16,"to":17,"state":"aborted","lastError":"stopped"}}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1455,7 +1488,13 @@ fn db_compute_verbs_answer_as_the_shell_does() {
         ),
         case(
             "upgrade --no-wait",
-            &["upgrade", "app", "--no-wait", "--force-now", "--allow-adopted"],
+            &[
+                "upgrade",
+                "app",
+                "--no-wait",
+                "--force-now",
+                "--allow-adopted",
+            ],
             &[],
             vec![ok(r#"{"started":["app"]}"#)],
             owner_and_port,
@@ -1470,7 +1509,9 @@ fn db_compute_verbs_answer_as_the_shell_does() {
                 ok(r#"{"started":["app"]}"#),
                 running(),
                 answer(500, "{}"),
-                ok(r#"{"moves":[{"step":"done","state":"succeeded","warnings":["w1"],"diff":["d1"]}]}"#),
+                ok(
+                    r#"{"moves":[{"step":"done","state":"succeeded","warnings":["w1"],"diff":["d1"]}]}"#,
+                ),
             ],
             owner_and_port,
             0,
@@ -1494,7 +1535,9 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             &[],
             vec![
                 ok(r#"{"started":["app"]}"#),
-                ok(r#"{"moves":[{"step":"copy","state":"failed","lastError":"disk full","warnings":["w"]}]}"#),
+                ok(
+                    r#"{"moves":[{"step":"copy","state":"failed","lastError":"disk full","warnings":["w"]}]}"#,
+                ),
             ],
             owner_and_port,
             1,

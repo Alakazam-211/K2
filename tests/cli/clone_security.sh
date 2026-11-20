@@ -364,7 +364,7 @@ hanging() {
     ENGINE="$(pgrep -P "$BG" -f K2_STDIN_SECRETS || true)"
     [ "$(printf '%s\n' "$ENGINE" | wc -l)" = 1 ] && [ -n "$ENGINE" ] || { bad "not exactly one clone engine under $BG: '$ENGINE'"; ps -o pid,ppid,args -e >&2; return 1; }
 }
-refused_line() { printf "refused: %s isn't https, so k2 won't send your token or password there; use https://%s" "$1" "$1"; }
+refused_line() { printf "refused: %s isn't https, so K2 won't send your token or password there; use https://%s" "$1" "$1"; }
 printf '%s\n' "$REMOTE_TOKEN" >"$W/token-in"
 save_token() {
     "$PY" -c 'import json,sys; json.dump({sys.argv[1]: sys.argv[2]}, open(sys.argv[3], "w"))' "$1" "$2" "$KH/connect-tokens.json"
@@ -626,7 +626,7 @@ for to in "http://127.0.0.1:$PO/elsewhere" "https://127.0.0.1:$PO/other-host"; d
     IN="$W/token-in" k2 clone preview ws1 --host "$REMOTE" --token-stdin --json
     expect_eq "302 to $to: exit 3" "$RC" "3"
     expect_has "302 to $to: redirect_refused" "$ERR" '"error": "redirect_refused"'
-    expect_has "302 to $to: names where it pointed" "$ERR" "sending k2 to 127.0.0.1:$PO"
+    expect_has "302 to $to: names where it pointed" "$ERR" "sending K2 to 127.0.0.1:$PO"
     expect_eq "302 to $to: the remote got the one request" "$(paths remote)" "POST /cli/clone/preview"
     expect_eq "302 to $to: the place it named got nothing" "$(paths other)" ""
     expect_not "302 to $to: no connect to it" "$(cat "$W/audit.log")" ", $PO)"

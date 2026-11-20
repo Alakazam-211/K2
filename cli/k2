@@ -48142,7 +48142,7 @@ def clone_url_refusal(url, password=False):
     if u is not None and u.scheme == "http" and not password and "@" not in u.netloc and clone_plain_http_ok(host):
         return None
     shown = (u.netloc.rpartition("@")[2] if u is not None else "") or url
-    return "refused: %s isn'"'"'t https, so k2 won'"'"'t send your token or password there; use https://%s" % (shown, shown)
+    return "refused: %s isn'"'"'t https, so K2 won'"'"'t send your token or password there; use https://%s" % (shown, shown)
 '
 
 # _clone_https_gate URL: refuse (exit 3, the line on stderr) a remote URL a
@@ -48215,7 +48215,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         fp.close()
         to = urllib.parse.urlsplit(newurl)
-        raise Fail("redirect_refused", "%s answered %s, sending k2 to %s; k2 doesn't follow a redirect with your token or password, so nothing was sent there" % (
+        raise Fail("redirect_refused", "%s answered %s, sending K2 to %s; K2 doesn't follow a redirect with your token or password, so nothing was sent there" % (
             urllib.parse.urlsplit(req.full_url).netloc.rpartition("@")[2], code, shown(to.netloc.rpartition("@")[2] or newurl)), 3)
 
 
@@ -48824,7 +48824,7 @@ def shown(text):
 def confirm_host(target):
     """Before anything goes to a host an agent proposed: the person reads
     the host in full and says yes at the terminal. --yes doesn't skip it."""
-    needs = "this proposal sends your token to %s: approve it from a terminal, where k2 asks first" % shown(target)
+    needs = "this proposal sends your token to %s: approve it from a terminal, where K2 asks first" % shown(target)
     fd = open_tty()
     if fd is None:
         raise Fail("confirm_needs_a_person", needs, 3)

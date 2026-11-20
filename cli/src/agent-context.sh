@@ -200,6 +200,7 @@ if token in sys_map:
     print(sys_map[token]); sys.exit(0)
 for p in pinned:
     pid = str(p.get("id") or "")
+    if not pid: continue
     if pid == token or pid == sys_map.get(token, ""):
         print(pid or token); sys.exit(0)
     lab = (p.get("label") or "").strip().lower()

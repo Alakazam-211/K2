@@ -154,7 +154,11 @@ pub fn port_and_url(serve: &[u8], status: &[u8]) -> (Result<String, Raise>, Resu
 /// the daemon said `success`, else its lines on stderr.
 pub fn preflight(resp: &[u8]) -> Result<(), String> {
     let raw = text(resp);
-    let raw = if raw.is_empty() { "{}".to_string() } else { raw };
+    let raw = if raw.is_empty() {
+        "{}".to_string()
+    } else {
+        raw
+    };
     let d = loads(&raw).unwrap_or_else(|_| Value::Object(Vec::new()));
     let pairs = match &d {
         Value::Object(p) => Some(p),
@@ -178,7 +182,11 @@ pub fn preflight(resp: &[u8]) -> Result<(), String> {
 /// else its two lines on stderr.
 pub fn stamp(resp: &[u8], label: &str) -> Result<(), String> {
     let raw = text(resp);
-    let raw = if raw.is_empty() { "{}".to_string() } else { raw };
+    let raw = if raw.is_empty() {
+        "{}".to_string()
+    } else {
+        raw
+    };
     let parsed = loads(&raw);
     // `(json.loads(…) or {}).get("success")`, errors hidden: a falsy
     // value is `{}`, a truthy one that is no dict raises.
@@ -204,7 +212,10 @@ pub fn stamp(resp: &[u8], label: &str) -> Result<(), String> {
 
 /// `json.dumps({"label": label, "target": target})`.
 pub fn create_body(label: &str, target: &str) -> String {
-    dumps(&obj(vec![("label", s(label)), ("target", s(target))]), false)
+    dumps(
+        &obj(vec![("label", s(label)), ("target", s(target))]),
+        false,
+    )
 }
 
 /// `json.dumps({"target": target})`.

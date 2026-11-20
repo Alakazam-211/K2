@@ -411,9 +411,15 @@ fn connect_base() -> String {
 
 /// A proxy setting curl would use for the control plane's URL.
 fn proxy_set() -> bool {
-    ["http_proxy", "https_proxy", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"]
-        .iter()
-        .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
+    [
+        "http_proxy",
+        "https_proxy",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "all_proxy",
+    ]
+    .iter()
+    .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
 }
 
 /// A `--workspace` folder bash's `cd` reads otherwise: an option (a
@@ -660,7 +666,9 @@ impl Run {
                 "could not start wiki serve or read port from daemon status",
             );
             let name = cli_name!();
-            out::stderr_line(&format!("  Check: {name} wiki serve on && {name} wiki status"));
+            out::stderr_line(&format!(
+                "  Check: {name} wiki serve on && {name} wiki status"
+            ));
             return Ok(Exit::Error);
         }
         let target = format!("127.0.0.1:{port_num}");
@@ -760,7 +768,12 @@ impl Run {
     /// makes the call; with none to make it, the control plane itself
     /// with `tunnel.json`'s token (none: that fails too). A request that
     /// may have reached the daemon ends the command with 1.
-    fn connect(&mut self, method: &str, endpoint: &str, body: &str) -> Result<Option<String>, Exit> {
+    fn connect(
+        &mut self,
+        method: &str,
+        endpoint: &str,
+        body: &str,
+    ) -> Result<Option<String>, Exit> {
         if !self.connect.airgap_off {
             return Ok(None);
         }
@@ -779,10 +792,12 @@ impl Run {
         };
         let mut cp = Client::new(&base.host, base.port, "", Auth::Owner(token.clone()));
         crate::transport::remote::apply(&mut cp, base, token.clone());
-        Ok(match cp.control_plane(method == "PUT", endpoint, body.as_bytes()) {
-            Ok(r) => Some(publish::control_plane_raw(r.status, &r.body)),
-            Err(_) => None,
-        })
+        Ok(
+            match cp.control_plane(method == "PUT", endpoint, body.as_bytes()) {
+                Ok(r) => Some(publish::control_plane_raw(r.status, &r.body)),
+                Err(_) => None,
+            },
+        )
     }
 
     fn unpublish(&mut self, o: &Opts) -> Result<Exit, Exit> {

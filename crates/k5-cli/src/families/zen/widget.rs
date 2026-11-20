@@ -635,8 +635,7 @@ pub fn follow_since(raw: &[u8]) -> Option<String> {
     let Value::Object(pairs) = &d else {
         return None;
     };
-    let mut last = crate::families::get(pairs, "last")
-        .map_or_else(|| "0".to_string(), py::str_of);
+    let mut last = crate::families::get(pairs, "last").map_or_else(|| "0".to_string(), py::str_of);
     while last.ends_with('\n') {
         last.pop();
     }

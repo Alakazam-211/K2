@@ -364,7 +364,9 @@ enum Kind {
     /// there is one, connect 5 s, at most 30 s. No hand-over headers (it
     /// is not the daemon), no `project=`; only `_k2_curl`'s tries; no
     /// heal, no line, no note. The token is only ever that header.
-    ControlPlane { put: bool },
+    ControlPlane {
+        put: bool,
+    },
 }
 
 impl Kind {
@@ -1444,9 +1446,7 @@ impl Client {
             }
             Call::PostForm(args) => self.run(Kind::PostForm, channel, endpoint, args, &[], t0),
             Call::PostJson(body) => self.run(Kind::PostJson, channel, endpoint, &[], body, t0),
-            Call::QueryPost(args) => {
-                self.run(Kind::QueryPost, channel, endpoint, args, &[], t0)
-            }
+            Call::QueryPost(args) => self.run(Kind::QueryPost, channel, endpoint, args, &[], t0),
         }
     }
 
@@ -3250,7 +3250,13 @@ mod tests {
         let pairs = ["label=acme", "check=1"];
         let shape = |p: &Client, channel, args: &[&str]| {
             let (_, r) = p
-                .build(Kind::QueryPost, channel, "/cli/publish/subdomain/claim", args, &[])
+                .build(
+                    Kind::QueryPost,
+                    channel,
+                    "/cli/publish/subdomain/claim",
+                    args,
+                    &[],
+                )
                 .unwrap();
             let body = r.body.as_ref().expect("a body");
             assert!(body.bytes.is_empty() && body.curl_form_type);
@@ -3266,10 +3272,7 @@ mod tests {
             shape(&p, Channel::Uds, &pairs),
             "/cli/publish/subdomain/claim?label=acme&check=1"
         );
-        assert_eq!(
-            shape(&p, Channel::Uds, &[]),
-            "/cli/publish/subdomain/claim"
-        );
+        assert_eq!(shape(&p, Channel::Uds, &[]), "/cli/publish/subdomain/claim");
         assert_eq!(
             shape(&p, Channel::Tcp, &[]),
             "/cli/publish/subdomain/claim?project=%2Fw%20s"

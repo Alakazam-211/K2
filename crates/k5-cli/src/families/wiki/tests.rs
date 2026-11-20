@@ -454,7 +454,10 @@ fn the_other_readers() {
 #[test]
 fn the_publish_readers_lines() {
     let blocks = python("cmd_wiki_publish");
-    assert_eq!(line(&blocks[0], 8), r#"if isinstance(d, dict) and d.get("error"): continue"#);
+    assert_eq!(
+        line(&blocks[0], 8),
+        r#"if isinstance(d, dict) and d.get("error"): continue"#
+    );
     assert_eq!(line(&blocks[0], 9), r#"p=d.get("port")"#);
     assert_eq!(line(&blocks[1], 9), r#"u=d.get("url")"#);
     let (p, u) = super::publish::port_and_url(b"[1]", b"");
@@ -472,14 +475,26 @@ fn publish_reads_the_port_and_url() {
         let (p, u) = port_and_url(a.as_bytes(), b.as_bytes());
         (p.unwrap(), u.unwrap())
     };
-    assert_eq!(got(r#"{"port":7}"#, ""), ("7".into(), "http://127.0.0.1:7".into()));
+    assert_eq!(
+        got(r#"{"port":7}"#, ""),
+        ("7".into(), "http://127.0.0.1:7".into())
+    );
     assert_eq!(
         got(r#"{"error":"x","port":1}"#, r#"{"port":"8","url":"u"}"#),
         ("8".into(), "u".into())
     );
-    assert_eq!(got("not json", r#"{"url":"u"}"#), (String::new(), "u".into()));
-    assert_eq!(got(r#"{"port":null}"#, "{}"), (String::new(), String::new()));
-    assert_eq!(got(r#"{"port":1.0}"#, ""), ("1.0".into(), "http://127.0.0.1:1.0".into()));
+    assert_eq!(
+        got("not json", r#"{"url":"u"}"#),
+        (String::new(), "u".into())
+    );
+    assert_eq!(
+        got(r#"{"port":null}"#, "{}"),
+        (String::new(), String::new())
+    );
+    assert_eq!(
+        got(r#"{"port":1.0}"#, ""),
+        ("1.0".into(), "http://127.0.0.1:1.0".into())
+    );
 }
 
 #[test]
@@ -496,7 +511,9 @@ fn publish_s_label_rules() {
         reserved_refusal(" Sk in\t").unwrap(),
         format!("Error: reserved_label: 'skin' is reserved. Pick another nested label for your UI ({cli} study apps; leftover: {cli} study skins).\n")
     );
-    assert!(reserved_refusal("CHAT").unwrap().contains("'chat' is reserved for"));
+    assert!(reserved_refusal("CHAT")
+        .unwrap()
+        .contains("'chat' is reserved for"));
     assert!(reserved_refusal("Ｃhat").is_none());
     assert!(reserved_refusal("acme").is_none());
 }
@@ -509,13 +526,19 @@ fn publish_reads_the_relayed_answer() {
         proxy_request("POST", "/subdomains", r#"{"label": "a"}"#),
         r#"{"method": "POST", "endpoint": "/subdomains", "body": "{\"label\": \"a\"}"}"#
     );
-    assert_eq!(proxy_request("GET", "/x", ""), r#"{"method": "GET", "endpoint": "/x"}"#);
+    assert_eq!(
+        proxy_request("GET", "/x", ""),
+        r#"{"method": "GET", "endpoint": "/x"}"#
+    );
     assert_eq!(proxied(404, b""), Proxied::NoDaemon);
     assert_eq!(proxied(405, b""), Proxied::NoDaemon);
     assert_eq!(proxied(403, b"{}"), Proxied::Failed);
     assert_eq!(proxied(200, b"[]"), Proxied::Failed);
     assert_eq!(proxied(200, br#"{"status":201}"#), Proxied::Failed);
-    assert_eq!(proxied(200, br#"{"status":"x","body":""}"#), Proxied::Failed);
+    assert_eq!(
+        proxied(200, br#"{"status":"x","body":""}"#),
+        Proxied::Failed
+    );
     let raw = |b: &[u8]| match proxied(200, b) {
         Proxied::Relayed(r) => r,
         other => panic!("{other:?}"),
@@ -525,21 +548,28 @@ fn publish_reads_the_relayed_answer() {
     assert_eq!(raw(br#"{"status":true,"body":null}"#), "1\nNone");
     assert!(made("201\n{}") && made(" 200 \nx") && !made("2010\n") && !made("409\n{}"));
     assert_eq!(
-        created(r#"201
-{"label":"acme","target":"127.0.0.1:7","status":"ok"}"#)
+        created(
+            r#"201
+{"label":"acme","target":"127.0.0.1:7","status":"ok"}"#
+        )
         .unwrap(),
         "Published acme.k2.dev\n  target:    127.0.0.1:7\n  status:    ok\n  effective: ?\n"
     );
     assert_eq!(
-        pointed(r#"200
-{"host":"a.b.k2.dev","target":"t"}"#)
+        pointed(
+            r#"200
+{"host":"a.b.k2.dev","target":"t"}"#
+        )
         .unwrap(),
         "Repointed a.b.k2.dev -> t\n"
     );
     // No body: `$(…)` dropped the newline, so there is no status line.
     assert_eq!(created("201"), None);
     assert_eq!(created("201\n[1]"), None);
-    assert_eq!(created("201\nnot json").unwrap().lines().next(), Some("Published ?.k2.dev"));
+    assert_eq!(
+        created("201\nnot json").unwrap().lines().next(),
+        Some("Published ?.k2.dev")
+    );
 }
 
 /// The claim check's and the stamp's lines.
@@ -561,7 +591,9 @@ fn publish_reads_the_claims() {
         stamp(b"[1]", "a"),
         Err(format!("Error: workspace attribution was not recorded on the daemon: no response from the daemon\n  Adopt it later from the owning workspace: {cli} publish subdomain claim a\n"))
     );
-    assert!(stamp(br#"{"error":"nope"}"#, "a").unwrap_err().contains("daemon: nope\n"));
+    assert!(stamp(br#"{"error":"nope"}"#, "a")
+        .unwrap_err()
+        .contains("daemon: nope\n"));
 }
 
 /// `tunnel.json`'s token as `_connect_bearer_token` reads it.

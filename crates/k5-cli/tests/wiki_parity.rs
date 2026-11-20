@@ -825,8 +825,11 @@ fn wiki_hands_these_to_the_shell() {
 
 fn tunnel_token(r: &Rig) {
     owner_and_port(r);
-    std::fs::write(r.k2home.join("tunnel.json"), r#"{"subdomain":"acme","token":"tun-tok"}"#)
-        .unwrap();
+    std::fs::write(
+        r.k2home.join("tunnel.json"),
+        r#"{"subdomain":"acme","token":"tun-tok"}"#,
+    )
+    .unwrap();
 }
 
 const SERVED: &str = r#"{"enabled":true,"port":4711,"url":"http://127.0.0.1:4711"}"#;
@@ -1076,7 +1079,9 @@ fn control_plane(body: &'static str) -> (u16, std::sync::Arc<std::sync::Mutex<Ve
                     }
                 }
             }
-            keep.lock().unwrap().push(String::from_utf8_lossy(&buf).into_owned());
+            keep.lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf).into_owned());
             let reply = format!(
                 "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -1094,7 +1099,8 @@ fn control_plane(body: &'static str) -> (u16, std::sync::Arc<std::sync::Mutex<Ve
 #[test]
 fn wiki_publish_calls_the_control_plane_itself() {
     let rig = Rig::new(VERB, "cplane");
-    let (port, seen) = control_plane(r#"{"label":"acme","target":"127.0.0.1:4711","status":"active"}"#);
+    let (port, seen) =
+        control_plane(r#"{"label":"acme","target":"127.0.0.1:4711","status":"active"}"#);
     let base = leak(format!("http://127.0.0.1:{port}"));
     rig.check(&case(
         "publish: no proxy route, the control plane with the tunnel token",
@@ -1119,7 +1125,13 @@ fn wiki_publish_calls_the_control_plane_itself() {
         .iter()
         .map(|r| {
             r.split("\r\n")
-                .map(|l| if l.starts_with("User-Agent: ") { "User-Agent: <ua>" } else { l })
+                .map(|l| {
+                    if l.starts_with("User-Agent: ") {
+                        "User-Agent: <ua>"
+                    } else {
+                        l
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\r\n")
         })

@@ -364,7 +364,10 @@ fn the_connect_proxy_requests() {
     let mut c = with_passport(d.port, &d.sock);
     let err = c.connect_proxy(false, req).unwrap_err();
     assert!(matches!(err, Error::MaybeApplied { .. }), "{err:?}");
-    assert!(err.to_string().contains("didn't answer /cli/connect/proxy"), "{err}");
+    assert!(
+        err.to_string().contains("didn't answer /cli/connect/proxy"),
+        "{err}"
+    );
     assert_eq!(d.counts(), (1, 0), "(cell socket, TCP) requests");
     let r = c.connect_proxy(true, req).unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
@@ -395,20 +398,26 @@ fn the_control_plane_call_sends_the_token_only_as_a_header() {
     let body = br#"{"label": "acme", "target": "127.0.0.1:7"}"#;
     let r = c.control_plane(false, "/subdomains", body).unwrap();
     assert_eq!((r.status, r.channel), (201, Channel::Tcp));
-    let r = c.control_plane(true, "/subdomains/acme", br#"{"target": "x"}"#).unwrap();
+    let r = c
+        .control_plane(true, "/subdomains/acme", br#"{"target": "x"}"#)
+        .unwrap();
     assert_eq!(r.status, 200);
     let log = s.log();
     assert_eq!(log.len(), 2);
-    for (l, line) in log.iter().zip([
-        "POST /subdomains HTTP/1.1",
-        "PUT /subdomains/acme HTTP/1.1",
-    ]) {
+    for (l, line) in log
+        .iter()
+        .zip(["POST /subdomains HTTP/1.1", "PUT /subdomains/acme HTTP/1.1"])
+    {
         let t = text(&l.bytes);
         let (head, rest) = t.split_once("\r\n\r\n").unwrap();
         let mut lines = head.split("\r\n");
         assert_eq!(lines.next(), Some(line), "{t}");
         let with_token: Vec<&str> = head.lines().filter(|h| h.contains(&token)).collect();
-        assert_eq!(with_token, [format!("Authorization: Bearer {token}").as_str()], "{t}");
+        assert_eq!(
+            with_token,
+            [format!("Authorization: Bearer {token}").as_str()],
+            "{t}"
+        );
         assert!(!rest.contains(&token), "{t}");
         assert!(!head.contains("X-K5-"), "{t}");
         assert!(head.contains("\r\nContent-Type: application/json"), "{t}");
@@ -622,7 +631,10 @@ fn a_post_the_cell_socket_read_is_never_sent_again_over_tcp() {
             c.send("/cli/inbox/claim", Call::RequestPost(&["id=7"]))
         }),
         ("cli_post", |c| {
-            c.send("/cli/publish/subdomain/claim", Call::QueryPost(&["label=a"]))
+            c.send(
+                "/cli/publish/subdomain/claim",
+                Call::QueryPost(&["label=a"]),
+            )
         }),
         ("cli_post_form", |c| {
             c.send("/cli/workspace/msg", Call::PostForm(&["text=x"]))
@@ -778,7 +790,10 @@ fn a_refused_cell_socket_sends_nothing_and_tcp_answers() {
         .unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
     let r = c
-        .send("/cli/publish/subdomain/claim", Call::QueryPost(&["label=a"]))
+        .send(
+            "/cli/publish/subdomain/claim",
+            Call::QueryPost(&["label=a"]),
+        )
         .unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
     assert_eq!(d.counts(), (0, 5));

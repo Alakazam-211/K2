@@ -51,7 +51,11 @@ pub const AFTER_DASHES: &str = concat!(
     cli_name!(),
     " compute run [<node>] -- <command…>"
 );
-pub const UNKNOWN: &str = concat!("usage: unknown flag '%s' (", cli_name!(), " compute --help)");
+pub const UNKNOWN: &str = concat!(
+    "usage: unknown flag '%s' (",
+    cli_name!(),
+    " compute --help)"
+);
 
 /// What the words ask for, as the shell's variables hold it after its
 /// checks.
@@ -191,9 +195,17 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 shift2!();
                 if v.is_empty() {
                     return usage(if w == "--avoid" {
-                        concat!("usage: --avoid <node> (a node ", product_name!(), " must not pick; repeatable)")
+                        concat!(
+                            "usage: --avoid <node> (a node ",
+                            product_name!(),
+                            " must not pick; repeatable)"
+                        )
                     } else {
-                        concat!("usage: --only <node> (", product_name!(), " picks only among the nodes you list; repeatable)")
+                        concat!(
+                            "usage: --only <node> (",
+                            product_name!(),
+                            " picks only among the nodes you list; repeatable)"
+                        )
                     });
                 }
                 if w == "--avoid" {
@@ -223,7 +235,9 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                     return None;
                 }
                 if !runs(&a.tag, &[("A-Za-z0-9._:/-", 1, 64)]) {
-                    return usage("usage: --tag NAME (1–64 of A-Z a-z 0-9 . _ : / -, e.g. fuzz:p3)");
+                    return usage(
+                        "usage: --tag NAME (1–64 of A-Z a-z 0-9 . _ : / -, e.g. fuzz:p3)",
+                    );
                 }
             }
             "--same-node-as" => {
@@ -694,9 +708,7 @@ fn supersede_ok(k: &str) -> bool {
 /// `[[ "$v" == ?*=?*/?* ]]`.
 fn dummy_shaped(v: &str) -> bool {
     let c: Vec<char> = v.chars().collect();
-    (1..c.len()).any(|i| {
-        c[i] == '=' && (i + 2..c.len().saturating_sub(1)).any(|j| c[j] == '/')
-    })
+    (1..c.len()).any(|i| c[i] == '=' && (i + 2..c.len().saturating_sub(1)).any(|j| c[j] == '/'))
 }
 
 /// `json.dumps(sys.argv[1:])`.
@@ -1057,7 +1069,10 @@ fn info_reader(cx: &Cx, body: &[u8], err: &mut String) -> Result<String, Raise> 
         let node = cx.at(l, p::get(&j, "node"))?;
         let mut line = cx.at(
             l,
-            p::pct(&format!("[{CLI_NAME} compute] job %s on %s"), &[short, node]),
+            p::pct(
+                &format!("[{CLI_NAME} compute] job %s on %s"),
+                &[short, node],
+            ),
         )?;
         if p::truthy(&c) {
             line = add(cx, line!("if c: line +="), &line, " \u{b7} commit ", &c)?;
@@ -1083,10 +1098,7 @@ fn info_reader(cx: &Cx, body: &[u8], err: &mut String) -> Result<String, Raise> 
         } else {
             s(&cx.at(l, plus("note: ", &w))?)
         };
-        err.push_str(&cx.at(
-            l,
-            p::pct(&format!("[{CLI_NAME} compute] %s\n"), &[text]),
-        )?);
+        err.push_str(&cx.at(l, p::pct(&format!("[{CLI_NAME} compute] %s\n"), &[text]))?);
     }
     let l = line!("for n in v.get(\"notices\")");
     let notices = p::or(cx.at(l, p::get(&v, "notices"))?, Value::Array(vec![]));
@@ -1199,12 +1211,12 @@ pub fn source_line(cx: &Cx, src: &Value, at: impl Fn(&str) -> u32) -> Result<Str
     let where_ = p::or(cx.at(l, p::get(src, "checkout"))?, s("workspace"));
     let l = at("repo");
     let repo = cx.at(l, p::get(src, "repo"))?;
-    let mut where_ = if p::truthy(&repo) && !p::eq_s(&cx.at(l, p::get(src, "checkout"))?, "worktree")
-    {
-        s("repo")
-    } else {
-        where_
-    };
+    let mut where_ =
+        if p::truthy(&repo) && !p::eq_s(&cx.at(l, p::get(src, "checkout"))?, "worktree") {
+            s("repo")
+        } else {
+            where_
+        };
     let l = at("path");
     if p::truthy(&cx.at(l, p::get(src, "path"))?) {
         let path = cx.at(l, p::idx(src, "path"))?;
@@ -1229,10 +1241,7 @@ pub fn source_line(cx: &Cx, src: &Value, at: impl Fn(&str) -> u32) -> Result<Str
         let untracked = cx.at(l, p::get(&d, "untracked"))?;
         line.push_str(&cx.at(
             l,
-            p::pct(
-                " +dirty (%s changed, %s untracked)",
-                &[changed, untracked],
-            ),
+            p::pct(" +dirty (%s changed, %s untracked)", &[changed, untracked]),
         )?);
     }
     Ok(line + "\n")

@@ -246,12 +246,14 @@ pub fn fixed() -> &'static Fixed {
         let at = super::SRC
             .find("\ncmd_compute_test() {")
             .expect("cmd_compute_test is in the shell's source");
-        let from = at + super::SRC[at..]
-            .find("lines = [")
-            .expect("its Python has its lines");
-        let to = from + super::SRC[from..]
-            .find("lines.append(\"exec \"")
-            .expect("its Python ends with the exec line");
+        let from = at
+            + super::SRC[at..]
+                .find("lines = [")
+                .expect("its Python has its lines");
+        let to = from
+            + super::SRC[from..]
+                .find("lines.append(\"exec \"")
+                .expect("its Python ends with the exec line");
         let lits = py_literals(&super::SRC[from..to]);
         let config_at = lits
             .iter()

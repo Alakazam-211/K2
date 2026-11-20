@@ -22,7 +22,9 @@ fn usage<T: std::fmt::Debug>(w: Option<Words<T>>) -> String {
 
 #[test]
 fn run_words() {
-    let a = ask(run::parse(&["mini", "--cpus", "4+8", "--mem", "2G", "--", "make", "-j"]));
+    let a = ask(run::parse(&[
+        "mini", "--cpus", "4+8", "--mem", "2G", "--", "make", "-j",
+    ]));
     assert_eq!(a.node, "mini");
     assert!(!a.any);
     assert_eq!(a.cpus, run::Num(Some("4".into())));
@@ -32,15 +34,15 @@ fn run_words() {
     let a = ask(run::parse(&["--", "true"]));
     assert!(a.any);
     assert_eq!(usage(run::parse(&["mini"])), run::USAGE);
-    assert_eq!(usage(run::parse(&["--any", "mini", "--", "x"])), run::AFTER_DASHES);
+    assert_eq!(
+        usage(run::parse(&["--any", "mini", "--", "x"])),
+        run::AFTER_DASHES
+    );
     assert_eq!(
         usage(run::parse(&["--bogus", "--", "x"])),
         format!("usage: unknown flag '--bogus' ({CLI_NAME} compute --help)")
     );
-    assert!(matches!(
-        run::parse(&["--os"]),
-        Some(Words::ShiftFailed)
-    ));
+    assert!(matches!(run::parse(&["--os"]), Some(Words::ShiftFailed)));
     assert_eq!(
         usage(run::parse(&["--timeout", "1x", "--", "x"])),
         "usage: bad duration '1x' (use 2h, 90m, 1h30m, 300s)"
@@ -71,8 +73,23 @@ fn run_words() {
 #[test]
 fn run_body() {
     let a = ask(run::parse(&[
-        "mini", "--label", "a=1", "--label", "b=2", "--label", "a=3", "--needs", "rust@stable, cmake@3",
-        "--cpus", "2.50", "--retries", "007", "--detach", "--", "echo", "hé",
+        "mini",
+        "--label",
+        "a=1",
+        "--label",
+        "b=2",
+        "--label",
+        "a=3",
+        "--needs",
+        "rust@stable, cmake@3",
+        "--cpus",
+        "2.50",
+        "--retries",
+        "007",
+        "--detach",
+        "--",
+        "echo",
+        "hé",
     ]));
     let body = run::body(&a, "sub", "/repo", "acme", "c0ffee");
     assert_eq!(
@@ -96,10 +113,16 @@ fn sizes_and_distros() {
     assert!(matches!(bytes::<()>("1T"), Some(Err(Words::Usage(_)))));
     assert!(matches!(bytes::<()>(""), Some(Err(Words::Usage(_)))));
     assert_eq!(bytes::<()>("99999999999999999999G"), None);
-    assert_eq!(distro::<()>("ubuntu@24.04"), Some(Ok("ubuntu@24.04".into())));
+    assert_eq!(
+        distro::<()>("ubuntu@24.04"),
+        Some(Ok("ubuntu@24.04".into()))
+    );
     assert_eq!(distro::<()>("debian"), Some(Ok("debian".into())));
     assert!(matches!(distro::<()>("Ubuntu"), Some(Err(Words::Usage(_)))));
-    assert!(matches!(distro::<()>("ubuntu@"), Some(Err(Words::Usage(_)))));
+    assert!(matches!(
+        distro::<()>("ubuntu@"),
+        Some(Err(Words::Usage(_)))
+    ));
 }
 
 #[test]
@@ -122,7 +145,14 @@ fn shlex_as_python() {
 
 #[test]
 fn test_script_and_words() {
-    let script = test::script("cargo nextest run", "", true, "count", &["-p".into(), "a b".into()]).unwrap();
+    let script = test::script(
+        "cargo nextest run",
+        "",
+        true,
+        "count",
+        &["-p".into(), "a b".into()],
+    )
+    .unwrap();
     assert!(script.ends_with(
         "exec cargo nextest run --config-file \"$cfg\" --profile k2 --partition count:{shard}/{shards} --no-tests=pass -p 'a b'"
     ));
@@ -143,7 +173,9 @@ fn test_script_and_words() {
 
 #[test]
 fn prewarm_words_and_body() {
-    let a = ask(prewarm::parse(&["--needs", "a,b", "--node", "n1", "--plan"]));
+    let a = ask(prewarm::parse(&[
+        "--needs", "a,b", "--node", "n1", "--plan",
+    ]));
     assert_eq!(
         prewarm::body(&a, "/r", "acme"),
         r#"{"needs": ["a", "b"], "nodes": ["n1"], "plan": true, "repoDir": "/r", "workspace": "acme"}"#
@@ -152,7 +184,10 @@ fn prewarm_words_and_body() {
         usage(prewarm::parse(&["--plan", "--wait"])),
         "usage: --plan submits nothing, so there is nothing to --wait for"
     );
-    assert!(matches!(prewarm::parse(&["--tag"]), Some(Words::ShiftFailed)));
+    assert!(matches!(
+        prewarm::parse(&["--tag"]),
+        Some(Words::ShiftFailed)
+    ));
 }
 
 #[test]

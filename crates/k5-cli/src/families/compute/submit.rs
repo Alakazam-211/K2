@@ -56,7 +56,7 @@ pub const SRC: &str = include_str!("../../../../../cli/src/compute-run.sh");
 /// A verb this module answers, with its words read.
 enum Ask {
     Run(Box<run::Ask>),
-    Prewarm(prewarm::Ask),
+    Prewarm(Box<prewarm::Ask>),
 }
 
 /// `k5 compute <verb> ...`: `args` is the whole command line after
@@ -79,9 +79,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return None;
     }
     let busy = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
-    if ["_CP_DEADLINE", "_CP_FAILURES", "_CP_LAST_Q", "_CP_OWNER_WARNED"]
-        .iter()
-        .any(|n| busy(n))
+    if [
+        "_CP_DEADLINE",
+        "_CP_FAILURES",
+        "_CP_LAST_Q",
+        "_CP_OWNER_WARNED",
+    ]
+    .iter()
+    .any(|n| busy(n))
     {
         return None;
     }
@@ -89,7 +94,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let parsed = match verb {
         "run" => map(run::parse(rest)?, |a| Ask::Run(Box::new(a))),
         "test" => map(test::parse(rest)?, |a| Ask::Run(Box::new(a))),
-        _ => map(prewarm::parse(rest)?, Ask::Prewarm),
+        _ => map(prewarm::parse(rest)?, |a| Ask::Prewarm(Box::new(a))),
     };
     let max_time = writes::post_max_time(std::env::var_os("K2_CP_MAX_TIME"))?;
     if writes::shell_settings(std::env::vars_os()) {

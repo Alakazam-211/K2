@@ -95,7 +95,10 @@ fn mask_client(text: &str, name: &str) -> (String, Vec<String>) {
         out.push_str(&rest[..start]);
         let id: String = rest[start..].chars().take(32).collect();
         assert!(
-            id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+            id.len() == 32
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
             "{name}: a clientJobId is 32 hex digits: {text}"
         );
         out.push_str("<id>");
@@ -130,7 +133,11 @@ fn submitted(rig: &Rig, c: &Case) {
     let name = c.name;
     rig.prepare(Side::Bash, c);
     let b = rig.run(true, c);
-    assert_eq!(rig.stub_of(Side::Bash).left(), 0, "{name}: bash left answers: {b:?}");
+    assert_eq!(
+        rig.stub_of(Side::Bash).left(),
+        0,
+        "{name}: bash left answers: {b:?}"
+    );
     let bl: Vec<String> = rig
         .read(Side::Bash, false, name)
         .iter()
@@ -147,7 +154,9 @@ fn submitted(rig: &Rig, c: &Case) {
         assert_eq!(rig.stub_of(side).left(), 0, "{name}: left answers: {r:?}");
         let port = rig.stub_of(side).port;
         let rl = masked_log(
-            rl.iter().map(|l| l.replace(PORT, &port.to_string())).collect(),
+            rl.iter()
+                .map(|l| l.replace(PORT, &port.to_string()))
+                .collect(),
             port,
             name,
         );
@@ -172,9 +181,16 @@ fn submitted(rig: &Rig, c: &Case) {
                         .split_once(HEAD)
                         .unwrap_or_else(|| panic!("{name}: no traceback: {text:?}"));
                     let last = tb.lines().last().unwrap_or_default();
-                    (before.to_string(), last.split(':').next().unwrap_or_default().to_string())
+                    (
+                        before.to_string(),
+                        last.split(':').next().unwrap_or_default().to_string(),
+                    )
                 };
-                assert_eq!(split(&r.stderr), split(&b.stderr), "{name} ({side:?}): stderr");
+                assert_eq!(
+                    split(&r.stderr),
+                    split(&b.stderr),
+                    "{name} ({side:?}): stderr"
+                );
             }
             Compare::Waited => {
                 let (bs, bn) = mask_waited(&b.stderr);
@@ -226,17 +242,86 @@ fn compute_run_detached_and_planned() {
         case(
             "a long submit line",
             &[
-                "run", "mini", "--os", "linux", "--distro", "ubuntu@24.04", "--arch", "x86_64",
-                "--avoid", "n9", "--label", "k=v", "--label", "k=w", "--env", "A=1=2", "--needs",
-                "rust@stable, cmake@3", "--needs", "bun", "--artifact", "out/*", "--secret",
-                "TOKEN=GH", "--secret", "PLAIN", "--queue-timeout", "1h30m", "--retries", "02",
-                "--stall-timeout", "off", "--dirty", "--sha", "abc", "--cpus", "2.50+8", "--mem",
-                "auto:8G", "--timeout", "90m", "--exclusive", "--why", "bench", "--retry-interrupted",
-                "--workspace", "acme", "--tier", "standard", "--supersede", "nightly", "--submitter",
-                "ci-bot", "--repo", "lib", "--cache", "target", "--with", "a@b@c", "--with", "plain",
-                "--preset", "ci", "--now", "--cache-required", "--tag", "fuzz:p3", "--same-node-as",
-                "j1", "--receipt-v2", "--gpu=amd", "--gpu-mem", "4G", "--netns-dummy",
-                "d0=10.254.254.1/32", "--detach", "--", "sh", "-c", "echo \"hé\"",
+                "run",
+                "mini",
+                "--os",
+                "linux",
+                "--distro",
+                "ubuntu@24.04",
+                "--arch",
+                "x86_64",
+                "--avoid",
+                "n9",
+                "--label",
+                "k=v",
+                "--label",
+                "k=w",
+                "--env",
+                "A=1=2",
+                "--needs",
+                "rust@stable, cmake@3",
+                "--needs",
+                "bun",
+                "--artifact",
+                "out/*",
+                "--secret",
+                "TOKEN=GH",
+                "--secret",
+                "PLAIN",
+                "--queue-timeout",
+                "1h30m",
+                "--retries",
+                "02",
+                "--stall-timeout",
+                "off",
+                "--dirty",
+                "--sha",
+                "abc",
+                "--cpus",
+                "2.50+8",
+                "--mem",
+                "auto:8G",
+                "--timeout",
+                "90m",
+                "--exclusive",
+                "--why",
+                "bench",
+                "--retry-interrupted",
+                "--workspace",
+                "acme",
+                "--tier",
+                "standard",
+                "--supersede",
+                "nightly",
+                "--submitter",
+                "ci-bot",
+                "--repo",
+                "lib",
+                "--cache",
+                "target",
+                "--with",
+                "a@b@c",
+                "--with",
+                "plain",
+                "--preset",
+                "ci",
+                "--now",
+                "--cache-required",
+                "--tag",
+                "fuzz:p3",
+                "--same-node-as",
+                "j1",
+                "--receipt-v2",
+                "--gpu=amd",
+                "--gpu-mem",
+                "4G",
+                "--netns-dummy",
+                "d0=10.254.254.1/32",
+                "--detach",
+                "--",
+                "sh",
+                "-c",
+                "echo \"hé\"",
             ],
             &[],
             vec![ok(PLAIN)],
@@ -247,8 +332,21 @@ fn compute_run_detached_and_planned() {
         case(
             "--gate, --no-retry, --network none, --mem 512M, --cpus 4",
             &[
-                "run", "--any", "--gate", "--no-retry", "--network", "none", "--mem", "512M",
-                "--cpus", "4", "--no-source", "--gpu", "--detach", "--", "true",
+                "run",
+                "--any",
+                "--gate",
+                "--no-retry",
+                "--network",
+                "none",
+                "--mem",
+                "512M",
+                "--cpus",
+                "4",
+                "--no-source",
+                "--gpu",
+                "--detach",
+                "--",
+                "true",
             ],
             &[],
             vec![ok(PLAIN)],
@@ -356,7 +454,9 @@ fn compute_run_detached_and_planned() {
             "an id that is no string",
             &["run", "--detach", "--", "x"],
             &[],
-            vec![ok(r#"{"job":{"id":7,"short":"7","node":"n","state":"queued"}}"#)],
+            vec![ok(
+                r#"{"job":{"id":7,"short":"7","node":"n","state":"queued"}}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -409,7 +509,11 @@ fn compute_run_followed() {
             &[],
             vec![
                 ok(PLAIN),
-                logs("", false, r#"{"state":"running","short":"abcd1234","node":"mini"}"#),
+                logs(
+                    "",
+                    false,
+                    r#"{"state":"running","short":"abcd1234","node":"mini"}"#,
+                ),
                 logs(&out_err(), true, &done("3")),
             ],
             owner_and_port,
@@ -483,7 +587,10 @@ fn compute_run_followed() {
             "a split run's reader raises",
             &["run", "--shards", "2", "--", "make"],
             &[],
-            vec![ok(SET), ok(r#"{"state":"running","result":{"shards":[{"index":1}]}}"#)],
+            vec![
+                ok(SET),
+                ok(r#"{"state":"running","result":{"shards":[{"index":1}]}}"#),
+            ],
             owner_and_port,
             1,
             2,
@@ -499,22 +606,38 @@ fn compute_run_words() {
     let rig = Rig::new(VERB, "runw");
     const STOPS: &[(&str, &[&str], i32)] = &[
         ("no command", &["run", "mini"], 2),
-        ("no dashes after --any", &["run", "--any", "mini", "--", "x"], 2),
+        (
+            "no dashes after --any",
+            &["run", "--any", "mini", "--", "x"],
+            2,
+        ),
         ("two nodes", &["run", "a", "b", "--", "x"], 2),
         ("an unknown flag", &["run", "--bogus", "--", "x"], 2),
         ("--avoid empty", &["run", "--avoid", "", "--", "x"], 2),
         ("--only last", &["run", "--only"], 1),
         ("--preset bad", &["run", "--preset", "Bad", "--", "x"], 2),
         ("--tag bad", &["run", "--tag", "a b", "--", "x"], 2),
-        ("--same-node-as empty", &["run", "--same-node-as", "", "--", "x"], 2),
+        (
+            "--same-node-as empty",
+            &["run", "--same-node-as", "", "--", "x"],
+            2,
+        ),
         ("--repo empty", &["run", "--repo", "", "--", "x"], 2),
         ("--with empty", &["run", "--with", "", "--", "x"], 2),
         ("--with no dir", &["run", "--with", "@abc", "--", "x"], 2),
         ("--cache bad", &["run", "--cache", "-x", "--", "x"], 2),
         ("--tier bad", &["run", "--tier", "fast", "--", "x"], 2),
         ("--tier last", &["run", "--tier"], 1),
-        ("--supersede with a space", &["run", "--supersede", " k", "--", "x"], 2),
-        ("--submitter bad", &["run", "--submitter", "A", "--", "x"], 2),
+        (
+            "--supersede with a space",
+            &["run", "--supersede", " k", "--", "x"],
+            2,
+        ),
+        (
+            "--submitter bad",
+            &["run", "--submitter", "A", "--", "x"],
+            2,
+        ),
         ("--distro bad", &["run", "--distro", "Ubuntu", "--", "x"], 2),
         ("--distro last", &["run", "--distro"], 2),
         ("--cpus N+M bad", &["run", "--cpus", "4+x", "--", "x"], 2),
@@ -522,31 +645,74 @@ fn compute_run_words() {
         ("--mem auto: bad", &["run", "--mem", "auto:x", "--", "x"], 2),
         ("--timeout bad", &["run", "--timeout", "1d", "--", "x"], 2),
         ("--timeout last", &["run", "--timeout"], 2),
-        ("--queue-timeout bad", &["run", "--queue-timeout", "soon", "--", "x"], 2),
+        (
+            "--queue-timeout bad",
+            &["run", "--queue-timeout", "soon", "--", "x"],
+            2,
+        ),
         ("--gpu=nvidia", &["run", "--gpu=nvidia", "--", "x"], 2),
         ("--gpu bogus", &["run", "--gpu", "bogus", "--", "x"], 2),
         ("--gpu-mem bad", &["run", "--gpu-mem", "x", "--", "x"], 2),
-        ("--gpu-mem with no --gpu", &["run", "--gpu-mem", "4G", "--", "x"], 2),
+        (
+            "--gpu-mem with no --gpu",
+            &["run", "--gpu-mem", "4G", "--", "x"],
+            2,
+        ),
         ("--network on", &["run", "--network", "on", "--", "x"], 2),
         ("--network last", &["run", "--network"], 2),
-        ("--netns-dummy bad", &["run", "--netns-dummy", "d0", "--", "x"], 2),
+        (
+            "--netns-dummy bad",
+            &["run", "--netns-dummy", "d0", "--", "x"],
+            2,
+        ),
         (
             "five --netns-dummy",
             &[
-                "run", "--netns-dummy", "a=1/2", "--netns-dummy", "b=1/2", "--netns-dummy",
-                "c=1/2", "--netns-dummy", "d=1/2", "--netns-dummy", "e=1/2", "--", "x",
+                "run",
+                "--netns-dummy",
+                "a=1/2",
+                "--netns-dummy",
+                "b=1/2",
+                "--netns-dummy",
+                "c=1/2",
+                "--netns-dummy",
+                "d=1/2",
+                "--netns-dummy",
+                "e=1/2",
+                "--",
+                "x",
             ],
             2,
         ),
         ("--retries bad", &["run", "--retries", "x", "--", "x"], 2),
         ("--shards bad", &["run", "--shards", "", "--", "x"], 2),
         ("--wait --detach", &["run", "--wait", "-d", "--", "x"], 2),
-        ("--priority with no why", &["run", "--priority", "--", "x"], 2),
-        ("--exclusive with no why", &["run", "--exclusive", "--", "x"], 2),
-        ("--now --shards", &["run", "--now", "--shards", "2", "--", "x"], 2),
-        ("batch --wait", &["run", "--tier", "batch", "--wait", "--", "x"], 2),
+        (
+            "--priority with no why",
+            &["run", "--priority", "--", "x"],
+            2,
+        ),
+        (
+            "--exclusive with no why",
+            &["run", "--exclusive", "--", "x"],
+            2,
+        ),
+        (
+            "--now --shards",
+            &["run", "--now", "--shards", "2", "--", "x"],
+            2,
+        ),
+        (
+            "batch --wait",
+            &["run", "--tier", "batch", "--wait", "--", "x"],
+            2,
+        ),
         ("--quiet with no --wait", &["run", "--quiet", "--", "x"], 2),
-        ("--max-wait with no --wait", &["run", "--max-wait", "9m", "--", "x"], 2),
+        (
+            "--max-wait with no --wait",
+            &["run", "--max-wait", "9m", "--", "x"],
+            2,
+        ),
         ("--label with no =", &["run", "--label", "k", "--", "x"], 2),
         ("--env with no =", &["run", "--env", "A", "--", "x"], 2),
         ("--secret =X", &["run", "--secret", "=X", "--", "x"], 2),
@@ -573,9 +739,24 @@ fn compute_test() {
         case(
             "a profile, a runner, shards, a need, run flags",
             &[
-                "test", "--shards", "3", "--partition", "count", "--profile", "ci", "--runner",
-                "cargo \"nextest\" run", "--needs", "cargo-nextest@0.9", "--os", "linux", "--gpu",
-                "--gpu-mem", "2G", "--detach", "--json",
+                "test",
+                "--shards",
+                "3",
+                "--partition",
+                "count",
+                "--profile",
+                "ci",
+                "--runner",
+                "cargo \"nextest\" run",
+                "--needs",
+                "cargo-nextest@0.9",
+                "--os",
+                "linux",
+                "--gpu",
+                "--gpu-mem",
+                "2G",
+                "--detach",
+                "--json",
             ],
             &[],
             vec![ok(SET), ok(RESULT)],
@@ -585,7 +766,15 @@ fn compute_test() {
         ),
         case(
             "another runner, a node, --plan",
-            &["test", "mini", "--runner", "cargo test", "--plan", "--", "--lib"],
+            &[
+                "test",
+                "mini",
+                "--runner",
+                "cargo test",
+                "--plan",
+                "--",
+                "--lib",
+            ],
             &[],
             vec![ok(PLAN_NOW)],
             owner_and_port,
@@ -601,7 +790,11 @@ fn compute_test() {
         ("two nodes", &["test", "a", "b"], 2),
         ("--shards bad", &["test", "--shards", "x"], 2),
         ("--partition bad", &["test", "--partition", "mod"], 2),
-        ("--shards with a node", &["test", "mini", "--shards", "2"], 2),
+        (
+            "--shards with a node",
+            &["test", "mini", "--shards", "2"],
+            2,
+        ),
         ("--profile last", &["test", "--profile"], 1),
         ("a run flag last", &["test", "--os"], 1),
         ("run's own usage", &["test", "--priority"], 2),
@@ -629,7 +822,8 @@ fn compute_test() {
 fn compute_prewarm() {
     let rig = Rig::new(VERB, "prewarm");
     let answer = r#"{"nodes":[{"node":"mini","state":"ready"},{"node":"big","state":"installing","installs":["rust@stable","cmake@3"],"short":"j1"},{"node":"n3","state":"would_install","installs":["bun"]},{"node":"n4","state":"asked","ask":["libssl"],"note":"owner asked"},{"node":"n5","state":"would_ask","ask":[]},{"node":"n6","state":"cant_install"},{"node":"n7","state":"refused","error":{"code":"no_grant","hint":"ask for one"}},{"node":"n8"}],"fits":"fits 2 nodes","request":{"id":"pkr_1","summary":"libssl on n4"},"jobs":["j1","j2"]}"#;
-    let not_filed = r#"{"nodes":[],"request":{"error":{"code":"not_allowed","hint":"policy"}},"jobs":[]}"#;
+    let not_filed =
+        r#"{"nodes":[],"request":{"error":{"code":"not_allowed","hint":"policy"}},"jobs":[]}"#;
     let held = r#"{"nodes":[{"node":"n4","state":"asked","ask":["libssl"]}],"request":{"id":"pkr_2","summary":"libssl"},"pkgHeld": true,"jobs":[]}"#;
     let j1 = r#"{"id":"j1","short":"j1","state":"done","node":"big","exitCode":0}"#;
     let j2 = r#"{"id":"j2","short":"j2","state":"done","node":"big","exitCode":1}"#;
@@ -822,9 +1016,33 @@ fn compute_run_failures_is_the_shells() {
 fn compute_alone() {
     let rig = Rig::new(VERB, "alone");
     // covers: compute
-    rig.check(&case("compute alone", &[], &[], vec![], owner_and_port, 0, 0));
-    rig.check(&case("compute help", &["help"], &[], vec![], owner_and_port, 0, 0));
-    rig.check(&case("compute \"\"", &[""], &[], vec![], owner_and_port, 0, 0));
+    rig.check(&case(
+        "compute alone",
+        &[],
+        &[],
+        vec![],
+        owner_and_port,
+        0,
+        0,
+    ));
+    rig.check(&case(
+        "compute help",
+        &["help"],
+        &[],
+        vec![],
+        owner_and_port,
+        0,
+        0,
+    ));
+    rig.check(&case(
+        "compute \"\"",
+        &[""],
+        &[],
+        vec![],
+        owner_and_port,
+        0,
+        0,
+    ));
 }
 
 /// The lines name the command and the product by the brand's names (in a

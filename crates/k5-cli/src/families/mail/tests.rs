@@ -2132,6 +2132,48 @@ fn the_hostmail_cert_lines_are_the_shell_s() {
 }
 
 
+/// The lines of `_mail_py` dns raises at.
+#[test]
+fn the_hostmail_dns_lines_are_the_shell_s() {
+    use crate::families::hostmail::dns::line;
+    let s = mail_py_script();
+    let pins: &[(u32, &str)] = &[
+        (line::DKIM_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/dkim\", params={\"d"),
+        (line::DKIM_SHOW_FOR, "for s in d.get(\"signatures\") or []:"),
+        (line::DKIM_SHOW_ROW, "s.get(\"selector\") or \"?\","),
+        (line::DKIM_SHOW_EXPECTED, "if s.get(\"expected\"):"),
+        (line::DKIM_SHOW_NAME, "print(\"    TXT %s\" % (s.get(\"name\") or \"\"))"),
+        (line::DKIM_ROTATE_CALL, "d = call(\"POST\", \"/cli/mail/dkim\", body={\"do"),
+        (line::DKIM_ROTATE_FOR, "for rec in d.get(\"records\") or []:"),
+        (line::DKIM_ROTATE_ROW, "print(\"%s  TXT  %s\" % (rec.get(\"name\") or \"?"),
+        (line::DKIM_RETIRE_CALL, "d = call(\"POST\", \"/cli/mail/dkim/retire\","),
+        (line::DMARC_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/dmarc\", params={\""),
+        (line::DMARC_SHOW_REC, "print(\"  txt     : %s\" % (rec.get(\"expected\""),
+        (line::DMARC_SHOW_MATCH, "print(\"  live    : %s\" % (rec.get(\"match\") o"),
+        (line::DMARC_REPORT_CALL, "d = call(\"POST\", \"/cli/mail/dmarc\","),
+        (line::PTR_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/ptr\")"),
+        (line::PTR_SHOW_A, "print(\"A      : %s\" % (\", \".join(a) if a els"),
+        (line::PTR_SHOW_RELAY, "unresolved = (d.get(\"relayCheck\") or {}).get"),
+        (line::PTR_SHOW_UNRESOLVED, "print(\"relays : could not resolve %s (ptr se"),
+        (line::PTR_SET_CALL, "d = call(\"POST\", \"/cli/mail/ptr/set\", body={"),
+        (line::PTR_SET_SOURCE, "if d.get(\"ptrSource\") == \"authoritative\":"),
+        (line::PTR_SET_WARNING, "if settings.get(\"warning\"):"),
+        (line::PTR_SET_DC, "if dc.get(\"state\") == \"moved\":"),
+        (line::PTR_SET_DC_WARNING, "elif dc.get(\"warning\"):"),
+        (line::PROFILE_CALL, "d = call(\"POST\", \"/cli/mail/profile\", body={"),
+        (line::PROFILE_WRITE, "os.write(fd, xml.encode(\"utf-8\"))"),
+        (line::PROFILE_INCLUDES, "print(\"includes : %s\" % \", \".join(d.get(\"inc"),
+        (line::PROFILE_NOTES, "for n in d.get(\"notes\") or []:"),
+        (line::PROFILE_STDOUT, "sys.stdout.write(xml)"),
+        (line::PROFILE_STDERR_NOTES, "for n in d.get(\"notes\") or []:"),
+    ];
+    for (n, text) in pins {
+        let got = s[*n as usize - 1].trim();
+        assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
+    }
+}
+
+
 #[test]
 fn the_boot_script_runs_the_mail_script_at_its_line_13() {
     let path =
@@ -2393,6 +2435,13 @@ mod hostmail_words {
             ("backup", &["status", "x"]),
             ("backup", &["plan", "--x"]),
             ("backup", &["set", "--mode", "local"]),
+            ("dkim", &["x"]),
+            ("dkim", &["show"]),
+            ("dkim", &["retire", "-x"]),
+            ("dmarc", &["report-to", "d"]),
+            ("ptr", &["show", "x"]),
+            ("ptr", &["set"]),
+            ("profile", &["a"]),
         ] {
             let h = match parse(verb, words) {
                 Plan::Usage(h) => h,

@@ -18,6 +18,7 @@ use crate::exit::Exit;
 use std::ffi::OsString;
 
 pub mod cert;
+pub mod dns;
 pub mod forward;
 pub mod mailbox;
 pub mod notices;
@@ -50,6 +51,10 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["cert"]),
     native(&["outbound"]),
     native(&["backup"]),
+    native(&["dkim"]),
+    native(&["dmarc"]),
+    native(&["ptr"]),
+    native(&["profile"]),
 ];
 
 /// A verb row the binary answers.
@@ -80,6 +85,7 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
         v if notices::VERBS.contains(&v) => notices::parse(v, words),
         v if server::VERBS.contains(&v) => server::parse(v, words),
         v if cert::VERBS.contains(&v) => cert::parse(v, words),
+        v if dns::VERBS.contains(&v) => dns::parse(v, words),
         _ => Plan::Shell,
     }
 }
@@ -91,6 +97,7 @@ pub fn branch(py_: &mut core::Py, verb: &str) -> Option<core::R<()>> {
         .or_else(|| notices::exec(py_, verb))
         .or_else(|| server::exec(py_, verb))
         .or_else(|| cert::exec(py_, verb))
+        .or_else(|| dns::exec(py_, verb))
 }
 
 /// `v="$(cat)"` for a secret flag (`--pass-stdin`, `--relay-pass-stdin`):

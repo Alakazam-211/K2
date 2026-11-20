@@ -26,6 +26,7 @@ use super::{batch, limits, present, store};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) const REQUEST: &str = "/cli/permission/request";
 pub(crate) const UPDATE: &str = "/cli/permission/update";
@@ -113,7 +114,7 @@ pub(crate) fn handle_gated(path: &str, who: &Who, is_post: bool, body: &[u8], pa
         return err(
             403,
             "forbidden",
-            "an agent verb: agents ask with k2 permission request; people answer the card in the Thread (or k2 permission approve|deny)",
+            concat!("an agent verb: agents ask with ", cli_name!(), " permission request; people answer the card in the Thread (or ", cli_name!(), " permission approve|deny)"),
         );
     };
     let body = body_map(body, params);
@@ -357,13 +358,13 @@ fn not_cardable(id: &str) -> Option<CliResponse> {
 fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> CliResponse {
     let now = k2_core::overlay::now_secs();
     let Some(action_id) = str_field(body, "action") else {
-        return err(400, code::BAD_ACTION, "name the action: k2 permission request <action> (see k2 permission list)");
+        return err(400, code::BAD_ACTION, concat!("name the action: ", cli_name!(), " permission request <action> (see ", cli_name!(), " permission list)"));
     };
     let Some(registered) = present::find_action(action_id) else {
         if let Some(r) = not_cardable(action_id) {
             return r;
         }
-        return err(400, code::BAD_ACTION, format!("no action {action_id}; k2 permission list shows what can be asked"));
+        return err(400, code::BAD_ACTION, format!("no action {action_id}; {CLI_NAME} permission list shows what can be asked"));
     };
     let spec = registered.spec;
     let values = match check_params(spec, body.get("params")) {
@@ -603,7 +604,7 @@ fn agents(who: &Who, body: &Map<String, Value>) -> CliResponse {
         Who::Owner => {}
         Who::Login { role, .. } if *role >= k2_core::connect_users::Role::Admin => {}
         Who::Login { .. } => return err(403, "role_required", "an owner or an admin sees the agents' permission-card switches"),
-        _ => return err(403, "forbidden", "a people route: the Settings page's agent list (an agent asks with k2 permission request)"),
+        _ => return err(403, "forbidden", concat!("a people route: the Settings page's agent list (an agent asks with ", cli_name!(), " permission request)")),
     }
     let only = match str_field(body, "workspace") {
         Some(t) => match workspace_id_of(t) {

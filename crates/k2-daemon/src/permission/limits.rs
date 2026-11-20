@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 
 use super::actions::Check;
 use super::{inject, present, store};
+use k2_core::brand::CLI_NAME;
 
 pub(crate) use lim::CHECK_CACHE_SECS;
 
@@ -44,7 +45,7 @@ pub(crate) fn check_ask(workspace_id: &str, action: &str, params_hash: &str, now
             409,
             code::RECENTLY_DENIED,
             format!(
-                "{by} denied the same request at {}; asking again is blocked until {}. If something changed, run k2 permission update {} --why \"…\" once.",
+                "{by} denied the same request at {}; asking again is blocked until {}. If something changed, run {CLI_NAME} permission update {} --why \"…\" once.",
                 inject::when(at, now),
                 inject::when(retry, now),
                 d.display_id()

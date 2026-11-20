@@ -111,7 +111,11 @@ fn the_shell_s_lines() {
         r#"            out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \"#,
         r#"                --connect-timeout 5 --max-time 120 \"#,
         r#"        if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then"#,
-        r#"        _k2_cfg_auth "$TOKEN""#,
+        // 0.46.17: the TCP arm's credential is the passport in a session
+        // (`_k2_sock_fallback_token`); `sessions` is an id tool, so a
+        // session with no passport is refused before any send.
+        r#"    _k2_sock_fallback_token "$sock" "$out""#,
+        r#"        _k2_cfg_auth "$_K2_TCP_TOKEN""#,
         r#"            -w $'\n%{http_code}' 2>/dev/null || true"#,
     ] {
         assert!(

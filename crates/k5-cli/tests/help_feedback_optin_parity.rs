@@ -321,15 +321,43 @@ fn check_the_pages(rig: &Rig, args: &'static [&'static str], daily: bool) {
     );
 }
 
-#[test]
-fn the_opt_in_with_a_passport() {
-    for (verb, args, tag, daily) in FORMS {
-        let rig = Rig::new(verb, tag);
-        for c in rows(args, daily) {
-            rig.check(&c);
-        }
-        check_the_pages(&rig, args, daily);
+/// One test per form, so each stays well under nextest's time limit (its
+/// rows retry a dead socket or port a second apart, on three sides) and
+/// the forms run side by side; every form has its test.
+macro_rules! per_form {
+    ($run:ident: $($name:ident = $i:expr),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                $run($i);
+            }
+        )*
+        const _: () = assert!([$($i),*].len() == FORMS.len());
+    };
+}
+
+fn the_opt_in_with_a_passport(i: usize) {
+    let (verb, args, tag, daily) = FORMS[i];
+    let rig = Rig::new(verb, tag);
+    for c in rows(args, daily) {
+        rig.check(&c);
     }
+    check_the_pages(&rig, args, daily);
+}
+
+per_form! {
+    the_opt_in_with_a_passport:
+    the_opt_in_with_a_passport_bare = 0,
+    the_opt_in_with_a_passport_word = 1,
+    the_opt_in_with_a_passport_flag = 2,
+    the_opt_in_with_a_passport_h = 3,
+    the_opt_in_with_a_passport_empty = 4,
+    the_opt_in_with_a_passport_nope = 5,
+    the_opt_in_with_a_passport_flag_empty = 6,
+    the_opt_in_with_a_passport_h_app = 7,
+    the_opt_in_with_a_passport_json = 8,
+    the_opt_in_with_a_passport_study = 9,
+    the_opt_in_with_a_passport_study_json = 10,
 }
 
 /// The rows that answer otherwise with no `python3`

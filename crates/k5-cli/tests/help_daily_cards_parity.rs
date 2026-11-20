@@ -34,14 +34,40 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
 }
 
-#[test]
-fn the_tier_with_a_passport() {
-    for (verb, args, tag) in FORMS {
-        let rig = Rig::new(verb, tag);
-        for c in common::cards::help_rows(&rig, args) {
-            rig.check(&c);
-        }
+/// One test per form, so each stays well under nextest's time limit (its
+/// rows retry a dead socket or port a second apart, on three sides) and
+/// the forms run side by side; every form has its test.
+macro_rules! per_form {
+    ($run:ident: $($name:ident = $i:expr),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                $run($i);
+            }
+        )*
+        const _: () = assert!([$($i),*].len() == FORMS.len());
+    };
+}
+
+fn the_tier_with_a_passport(i: usize) {
+    let (verb, args, tag) = FORMS[i];
+    let rig = Rig::new(verb, tag);
+    for c in common::cards::help_rows(&rig, args) {
+        rig.check(&c);
     }
+}
+
+per_form! {
+    the_tier_with_a_passport:
+    the_tier_with_a_passport_bare = 0,
+    the_tier_with_a_passport_word = 1,
+    the_tier_with_a_passport_flag = 2,
+    the_tier_with_a_passport_h = 3,
+    the_tier_with_a_passport_empty = 4,
+    the_tier_with_a_passport_nope = 5,
+    the_tier_with_a_passport_flag_empty = 6,
+    the_tier_with_a_passport_h_app = 7,
+    the_tier_with_a_passport_json = 8,
 }
 
 #[test]

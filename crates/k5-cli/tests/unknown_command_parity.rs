@@ -31,14 +31,35 @@ const FORMS: [(&str, &[&str], &str); 4] = [
     ("Help", &["--json"], "upper"),
 ];
 
-#[test]
-fn the_unknown_command_with_a_passport() {
-    for (verb, args, tag) in FORMS {
-        let rig = Rig::new(verb, tag);
-        for c in common::cards::daily_rows(&rig, args, 1, 1) {
-            rig.check(&c);
-        }
+/// One test per form, so each stays well under nextest's time limit (its
+/// rows retry a dead socket or port a second apart, on three sides) and
+/// the forms run side by side; every form has its test.
+macro_rules! per_form {
+    ($run:ident: $($name:ident = $i:expr),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                $run($i);
+            }
+        )*
+        const _: () = assert!([$($i),*].len() == FORMS.len());
+    };
+}
+
+fn the_unknown_command_with_a_passport(i: usize) {
+    let (verb, args, tag) = FORMS[i];
+    let rig = Rig::new(verb, tag);
+    for c in common::cards::daily_rows(&rig, args, 1, 1) {
+        rig.check(&c);
     }
+}
+
+per_form! {
+    the_unknown_command_with_a_passport:
+    the_unknown_command_with_a_passport_nope = 0,
+    the_unknown_command_with_a_passport_flag = 1,
+    the_unknown_command_with_a_passport_agents = 2,
+    the_unknown_command_with_a_passport_upper = 3,
 }
 
 #[test]

@@ -125,11 +125,22 @@ fn probes() -> Vec<Probe> {
     let head = [
         "form", "argv", "alias_of", "anchor", "entry", "json", "source",
     ];
-    for r in rows(FORMS, &head) {
+    let forms = rows(FORMS, &head);
+    // A family is its router arm's first word: `docs` is `doc`'s.
+    let arm: std::collections::BTreeMap<String, String> = forms
+        .iter()
+        .filter(|r| !r[0].contains(' '))
+        .map(|r| {
+            let canon = if r[2] == "-" { &r[0] } else { &r[2] };
+            (r[0].clone(), canon.clone())
+        })
+        .collect();
+    let family_of = |word: &str| arm.get(word).cloned().unwrap_or_else(|| word.to_string());
+    for r in &forms {
         let (form, alias, json) = (&r[0], &r[2], &r[5]);
         let argv = words(if r[1] == "-" { form } else { &r[1] });
-        let family = argv[0].clone();
-        firsts.insert(family.clone());
+        let family = family_of(&argv[0]);
+        firsts.insert(argv[0].clone());
         let help = form
             .split(' ')
             .any(|w| matches!(w, "help" | "--help" | "-h"));
@@ -140,7 +151,11 @@ fn probes() -> Vec<Probe> {
             argv,
             env: Vec::new(),
         };
-        out.push(probe(if help { "H" } else { "V" }, form.clone(), argv.clone()));
+        out.push(probe(
+            if help { "H" } else { "V" },
+            form.clone(),
+            argv.clone(),
+        ));
         if alias == "-" && !help {
             let mut a = argv.clone();
             a.push("--help".into());
@@ -177,7 +192,7 @@ fn probes() -> Vec<Probe> {
         };
         out.push(Probe {
             class: r[0].clone(),
-            family: argv[0].clone(),
+            family: family_of(&argv[0]),
             form: r[1].clone(),
             argv,
             env,
@@ -212,10 +227,7 @@ fn scratch() -> Machine {
     for d in [&k2home, &proj.join(".k2"), &tmp, &tools] {
         fs::create_dir_all(d).unwrap();
     }
-    let stub = Stub::start(Path::new(&format!(
-        "/tmp/k5nb-{}.sock",
-        std::process::id()
-    )));
+    let stub = Stub::start(Path::new(&format!("/tmp/k5nb-{}.sock", std::process::id())));
     fs::write(k2home.join("heartbeat.token"), "owner-tok-7171\n").unwrap();
     fs::write(k2home.join("heartbeat.port"), format!("{}\n", stub.port)).unwrap();
     for name in STAND_INS {
@@ -224,11 +236,7 @@ fn scratch() -> Machine {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let path = format!(
-        "{}:{}",
-        tools.display(),
-        common::path_without_python3(&dir)
-    );
+    let path = format!("{}:{}", tools.display(), common::path_without_python3(&dir));
     Machine {
         dir,
         home,
@@ -378,21 +386,32 @@ fn the_native_bar_ceiling_holds() {
         problems += &format!(
             "these fall through and the ceiling doesn't list them ({}):\n  {}\n",
             rose.len(),
-            rose.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ")
+            rose.iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
         );
     }
     if !fell_off.is_empty() {
         problems += &format!(
             "these are native now: take them out of {CEILING} ({}):\n  {}\n",
             fell_off.len(),
-            fell_off.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ")
+            fell_off
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
         );
     }
     if !stray.is_empty() {
         problems += &format!(
             "these ceiling rows name no probe ({}):\n  {}\n",
             stray.len(),
-            stray.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ")
+            stray
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
         );
     }
     println!("{}", found.lines().nth(3).unwrap_or_default());

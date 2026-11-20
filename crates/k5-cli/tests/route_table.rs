@@ -732,7 +732,11 @@ fn every_router_form_is_a_k5_row_or_listed_in_the_native_bar_ceiling() {
     for noun in TABLE {
         for verb in noun.verb_rows() {
             for word in verb.words {
-                if !noun.words.iter().any(|n| forms.contains(&format!("{n} {word}"))) {
+                if !noun
+                    .words
+                    .iter()
+                    .any(|n| forms.contains(&format!("{n} {word}")))
+                {
                     problems.push(format!(
                         "{:?} has a verb row {word:?} that is no form of its arm in router_forms.tsv",
                         noun.words

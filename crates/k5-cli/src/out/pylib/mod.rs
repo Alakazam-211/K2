@@ -8,6 +8,7 @@
 //!   (`v[k]`, `k in v`, `sep.join(v)`, `x or default`, `float(word)`), with
 //!   the exception Python raises where the value is not what it expects.
 //!
+//! - [`base64`]: `base64.b64encode`.
 //! - [`difflib`]: `difflib.unified_diff` with its `SequenceMatcher`.
 //! - [`mimetypes`]: `mimetypes.guess_type`, the built-in map and the
 //!   system's `mime.types` files.
@@ -18,6 +19,7 @@
 //! The rest is in [`crate::families`] (`py_get`, `py_len`, `py_d`) and
 //! [`crate::out::py`].
 
+pub mod base64;
 pub mod difflib;
 pub mod json;
 pub mod mimetypes;

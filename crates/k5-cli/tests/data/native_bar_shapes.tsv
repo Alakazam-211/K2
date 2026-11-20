@@ -1,0 +1,67 @@
+# Shapes the native bar runs besides the router forms (crates/k5-cli/tests/native_bar.rs):
+# documented flags and positional shapes (F), error and environment edges on a
+# k5 code path (E), and edges that exist only because python3 is missing (P,
+# listed, not counted). env is `-` or NAME=value pairs joined by `,`.
+class	form	argv	env	reason
+F	app logs --follow	app logs a1 --follow	-	a documented flag of a native verb (the poll loop)
+F	app inspect --resources	app inspect a1 --resources	-	a documented flag of a native verb
+F	app doctor --store	app doctor --store	-	a documented flag (census entry app doctor store)
+F	app grant --kind chat-key	app grant a1 --kind chat-key	-	a documented shape (census entry app grant chat-key)
+F	app grant --kind guests-rooms	app grant a1 --kind guests-rooms	-	a documented shape (census entry app grant guests-rooms)
+F	app user add	app user add alice	-	the password step of a native verb
+F	skin user add	skin user add alice	-	the password step of a native verb (skin is app's old name)
+F	sessions --past	sessions --past	-	a documented flag (census entry)
+F	store --widget	store --widget w1	-	a documented flag (census entry)
+F	remote-session status --host	remote-session status --host https://h.example	-	every remote-session verb takes --host
+F	remote-session enable --host	remote-session enable --host https://h.example	-	every remote-session verb takes --host
+F	remote-session grant --host	remote-session grant --host https://h.example	-	every remote-session verb takes --host
+F	remote-session grants --host	remote-session grants --host https://h.example	-	every remote-session verb takes --host
+F	remote-session revoke --host	remote-session revoke --host https://h.example	-	every remote-session verb takes --host
+F	remote-session shell --host	remote-session shell --host https://h.example	-	every remote-session verb takes --host
+F	remote-session write --host	remote-session write --host https://h.example	-	every remote-session verb takes --host
+F	remote-session read --host	remote-session read --host https://h.example	-	every remote-session verb takes --host
+F	vault run --	vault run -- true	-	the run helper's form
+F	hostmail ooo set --text -	hostmail ooo set a@example.com --text -	-	--text - reads stdin (documented)
+F	hostmail footer set --text -	hostmail footer set a@example.com --text -	-	--text - reads stdin (documented)
+F	hostchat open	hostchat open	-	the default form (no --print)
+F	compute wait --follow	compute wait j1 --follow	-	a documented flag of a native verb
+F	compute wait --failures	compute wait j1 --failures	-	a documented flag of a native verb
+F	compute run --failures	compute run --failures -- true	-	a documented flag of a native verb
+F	compute test --failures	compute test --failures	-	a documented flag of a native verb
+F	commit --merge	commit --merge	-	the merge form
+F	workspace remove --apps	workspace remove w1 --apps uninstall	-	the --apps confirm step
+F	workspace trust	workspace trust	-	the bare verb
+F	done (API cell)	done	API_CELL=1	an API lifecycle session's whole form
+F	read <ws>@<host>	read w1@https://h.example	-	the remote form
+F	read --token-stdin	read w1 --token-stdin	-	a documented flag
+F	talk <ws> -<text>	talk w1 -hello	-	text that starts with a dash
+F	talk <ws>@<host>	talk w1@https://h.example hello	-	the remote form
+F	study --json	study --json	-	the catalog as JSON
+F	explain MPC-<id>	explain MPC-1	-	a kit id
+F	clone <ws>	clone w1	-	a bare workspace
+E	commit -m	commit -m	-	a value flag as the last word
+E	terminal spawn --title	terminal spawn --title	-	a value flag as the last word
+E	review reject --reason	review reject --reason	-	a value flag as the last word
+E	tunnel start --subdomain	tunnel start --subdomain	-	a value flag as the last word
+E	read --lines	read w1 --lines	-	a value flag as the last word
+E	root-helper update --from	root-helper update --from	-	a value flag as the last word
+E	inbox list --folder	inbox list --folder	-	a value flag as the last word
+E	thread export --since-days x	thread export --since-days x	-	not plain digits
+E	organization bulletin set --file <missing>	organization bulletin set --file /nonexistent/k5-bar	-	a file that can't be read
+E	heartbeat wakeup --edit	heartbeat wakeup --edit	-	no EDITOR
+E	heartbeat list --workspace <missing>	heartbeat list --workspace /nonexistent/k5-bar	-	a folder that isn't there
+E	wiki status --workspace <missing>	wiki status --workspace /nonexistent/k5-bar	-	a folder that isn't there
+E	sessions open --brief -	sessions open --brief -	-	the brief on stdin
+E	msg --inbox-silent ~user/path	msg w1 --inbox-silent ~nobody/k5-bar	-	a ~user file path
+E	help <word> <more>	help msg x	-	more words after a topic
+E	help-advanced <word>	help-advanced x	-	more words
+E	help-internal <word>	help-internal x	-	more words
+E	help-deprecated <word>	help-deprecated x	-	more words
+E	version <word>	version x	-	more words
+E	-v --check	-v --check	-	only --version --check is the check
+E	cli <word>	cli x	-	a word the front has no form for
+E	study <topic> <word>	study cli x	-	a second topic
+E	study permissions	study permissions	-	a cards-only topic with no passport
+P	thread --file ~user/x	thread w1 hello --file ~nobody/k5-bar	-	the shell's Python resolves the path; its error is Python's
+P	app front-door --ui-port x	app front-door direct --ui-port x	-	the shell's Python int() reads the port; its error is Python's
+P	skin front-door --ui-port x	skin front-door direct --ui-port x	-	the shell's Python int() reads the port; its error is Python's

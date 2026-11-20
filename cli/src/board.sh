@@ -502,9 +502,16 @@ fenced(["settings " + json.dumps(v.get("settings") or {}, ensure_ascii=False), "
 }
 
 cmd_board() {
+    # -h/--help anywhere prints the help and sends nothing, for a Garden
+    # board and a .k5board file alike (0.46.17: `k2 board add --help` used
+    # to add a sticky with a field "help").
     case "${1:-}" in
-        ""|-h|--help|help) cmd_help_board; return 0 ;;
+        ""|help) cmd_help_board; return 0 ;;
     esac
+    if _wants_help "$@"; then
+        cmd_help_board
+        return 0
+    fi
     local _a _has_file=0 _has_board=0
     # Path last, as k2 doc: k2 board read s-1 plan.k5board --json. The target is
     # the last argument ending .k5board (or the last argument, when it's a file

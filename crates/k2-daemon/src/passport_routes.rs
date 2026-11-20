@@ -88,8 +88,9 @@ const fn named(path: &'static str, scope: Scope, names: &'static [&'static str])
 
 /// Every route this module admits a passport on, sorted by path.
 pub(crate) const ROUTES: &[Route] = &[
-    // `k2 agent complete` (sub-agent template).
-    named("/cli/agent/complete", Scope::Own, &["agent", "file"]),
+    // `k2 agent complete` (sub-agent template). Its agent is the
+    // passport's own name ([`actor_is_the_passport`]).
+    named("/cli/agent/complete", Scope::Own, &["file"]),
     // `k2 agent conf|get|set|retire|restart` and `k2 agent hire` read it first.
     route("/cli/agent/conf", Scope::Named),
     route("/cli/agent/list", Scope::AgentList),
@@ -317,13 +318,18 @@ fn own_branch(params: &HashMap<String, String>, principal: &HookPrincipal) -> bo
     !k2_core::git::list_worktrees(project).iter().any(|w| !w.is_main && w.branch == branch)
 }
 
-/// `k2 done` records the passport's own name as its actor, never a name
-/// the request gives: `agent=` absent takes the passport's, the same name
-/// passes, any other is refused (`not_this_agent`), never replaced.
+/// Every record an agent writes about itself names the passport, never a
+/// name the request gives: `k2 done` (its actor) and `k2 agent complete`
+/// (whose work item moves to done). `agent=` absent takes the passport's
+/// name, the same name passes, any other is refused (`not_this_agent`),
+/// never replaced. `agent complete` reads that name as a folder, so a
+/// passport whose name isn't a plain agent name is refused there.
 fn actor_is_the_passport(path: &str, params: &mut HashMap<String, String>, principal: &HookPrincipal) -> Option<CliResponse> {
-    if path != "/cli/done" {
-        return None;
-    }
+    let what = match path {
+        "/cli/done" => "done",
+        "/cli/agent/complete" => "agent complete",
+        _ => return None,
+    };
     let me = principal.agent_address.trim();
     match params.get("agent").map(|s| s.trim()).filter(|s| !s.is_empty()) {
         Some(named) if named != me => Some(CliResponse {
@@ -331,11 +337,14 @@ fn actor_is_the_passport(path: &str, params: &mut HashMap<String, String>, princ
             content_type: "application/json",
             body: serde_json::json!({ "error": {
                 "code": "not_this_agent",
-                "hint": format!("this session is '{me}'; done records the session's own agent: send that name or none"),
+                "hint": format!("this session is '{me}'; {what} records the session's own agent: send that name or none"),
                 "agent": me,
             } })
             .to_string(),
         }),
+        _ if path == "/cli/agent/complete" && !is_agent_name(me) => {
+            Some(own_only("this session's name is not an agent's work folder; a person completes this item"))
+        }
         _ => {
             params.insert("agent".to_string(), me.to_string());
             None
@@ -631,6 +640,28 @@ mod tests {
         assert!(!local_entry("tab-pane-1", false, "api-key1"), "an API cell's passport");
         assert!(!local_entry("tab-pane-1", false, "job:nightly"), "a k2 job run's passport");
         assert!(!local_session("no-such-session", &HookPrincipal { workspace_uuid: "w".into(), agent_address: "Acme".into() }), "no live session");
+    }
+
+    #[test]
+    fn done_and_agent_complete_take_the_passports_name() {
+        let me = HookPrincipal { workspace_uuid: "w".into(), agent_address: "d1-agent".into() };
+        for path in ["/cli/done", "/cli/agent/complete"] {
+            let mut p = HashMap::new();
+            assert!(actor_is_the_passport(path, &mut p, &me).is_none(), "{path}: no agent= runs");
+            assert_eq!(p.get("agent").map(String::as_str), Some("d1-agent"), "{path}: the passport's name");
+            assert!(actor_is_the_passport(path, &mut p, &me).is_none(), "{path}: its own name runs");
+            for other in ["backend", "../x"] {
+                p.insert("agent".into(), other.into());
+                let r = actor_is_the_passport(path, &mut p, &me).unwrap_or_else(|| panic!("{path}: {other} must be refused"));
+                assert!(r.status.starts_with("403") && r.body.contains("not_this_agent"), "{path} {other}: {}", r.body);
+                assert_eq!(p.get("agent").map(String::as_str), Some(other), "{path}: a refused name is never replaced");
+            }
+        }
+        // `agent complete` reads the name as a folder.
+        let odd = HookPrincipal { workspace_uuid: "w".into(), agent_address: "acme/scout".into() };
+        let r = actor_is_the_passport("/cli/agent/complete", &mut HashMap::new(), &odd).expect("not a folder name");
+        assert!(r.body.contains("own_workspace_only"), "{}", r.body);
+        assert!(actor_is_the_passport("/cli/review/approve", &mut HashMap::new(), &me).is_none(), "not a record about itself");
     }
 
     #[test]

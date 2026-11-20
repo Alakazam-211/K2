@@ -628,6 +628,47 @@ async fn the_actor_is_the_passport() {
     assert_eq!(review_file("owner feedback", "owner-note"), "reviewer", "the owner's file");
 }
 
+/// `k2 agent complete` moves the passport's own work item, as `k2 done`
+/// records its own name: no `agent=` takes the passport's name, the same
+/// name passes, another name (or a path) is refused and moves nothing.
+/// The owner still names the agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_complete_is_the_passports_own_work() {
+    use k2_core::workspace::scheduler::agent_work_dir;
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let own = enc(&e.own);
+    // No persona, so each agent has its own work folders.
+    let persona_dir = k2_core::workspace::agent_identity::workspace_agent_path(&e.own);
+    if persona_dir.exists() {
+        std::fs::remove_dir_all(&persona_dir).expect("clear the persona");
+    }
+    let item = |agent: &str, file: &str| {
+        let active = agent_work_dir(&e.own, agent, "active");
+        std::fs::create_dir_all(&active).expect("active dir");
+        std::fs::write(active.join(file), "---\ntitle: t\n---\nwork\n").expect("work item");
+    };
+    let is_in = |agent: &str, folder: &str, file: &str| agent_work_dir(&e.own, agent, folder).join(file).exists();
+    for (label, q, file) in [("no agent=", "", "one.md"), ("agent= its own name", "&agent=d1-agent", "two.md")] {
+        item("d1-agent", file);
+        let r = http(e.port, "POST", &format!("/cli/agent/complete?project={own}&file={file}{q}"), Some(e.passport.as_str()));
+        assert_eq!(r.status, 200, "{label}: {}", r.raw);
+        assert_eq!(r.json(label)["agent"], "d1-agent", "{label}: the record names the passport: {}", r.raw);
+        assert!(is_in("d1-agent", "done", file) && !is_in("d1-agent", "active", file), "{label}: its own item moved to done");
+    }
+    item("backend", "theirs.md");
+    for (label, agent) in [("another agent", "backend"), ("a path", "..%2F..%2Fx")] {
+        let r = http(e.port, "POST", &format!("/cli/agent/complete?project={own}&agent={agent}&file=theirs.md"), Some(e.passport.as_str()));
+        assert_eq!(r.status, 403, "{label}: {}", r.raw);
+        let v = r.json(label);
+        assert_eq!((v["error"]["code"].as_str(), v["error"]["agent"].as_str()), (Some("not_this_agent"), Some("d1-agent")), "{label}: {v}");
+    }
+    assert!(is_in("backend", "active", "theirs.md") && !is_in("backend", "done", "theirs.md"), "a refused complete moves nothing");
+    let r = http(e.port, "POST", &format!("/cli/agent/complete?project={own}&agent=backend&file=theirs.md"), Some(OWNER));
+    assert_eq!(r.status, 200, "owner: {}", r.raw);
+    assert!(is_in("backend", "done", "theirs.md"), "the owner still names the agent");
+}
+
 /// Only a passport of a live, local session: an API cell's, a `k2 job`
 /// run's, and one whose session isn't live are refused on the D1 routes
 /// and the Zen reads, where the live one is admitted. (A microVM agent:

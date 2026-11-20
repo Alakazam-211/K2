@@ -414,9 +414,9 @@ pw_case "hostmail import" /cli/mail/import hostmail import --address a@example.t
 
 # 11-14. Login passwords: typed on stdin, they reach the request body and
 #        no child's argv or environment.
-pw_case "users add" /cli/users/add users add alice --password-stdin
-pw_case "users set-password" /cli/users/set-password users set-password alice --password-stdin
-pw_case "users pair-phone" /cli/auth/device/pair-code users pair-phone
+pw_case_native "users add" /cli/users/add users add alice --password-stdin
+pw_case_native "users set-password" /cli/users/set-password users set-password alice --password-stdin
+pw_case_native "users pair-phone" /cli/auth/device/pair-code users pair-phone
 # k2 connect login asks with getpass, which reads stdin when there is no
 # terminal: setsid drops the controlling terminal so the test can type.
 SETSID="$(command -v setsid)" || { echo "FAIL: setsid not found (util-linux)" >&2; exit 1; }
@@ -532,7 +532,7 @@ assert_off_children "talk --token-stdin" "remote token" "$REMOTE_SENTINEL"
 #        (status --host) and a grant token on this daemon (write) reach the
 #        route and no child's argv or environment, nor k2's own argv.
 sec_case "remote-session status --token-stdin" /cli/remote-session/status "owner token" "$REMOTE_SENTINEL" remote-session status --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
-sec_case "remote-session write --token-stdin" /cli/terminal/write "grant token" "$REMOTE_SENTINEL" remote-session write sess-1 "ls" --token-stdin
+SEC_CASE_CHILDREN=assert_children_native sec_case "remote-session write --token-stdin" /cli/terminal/write "grant token" "$REMOTE_SENTINEL" remote-session write sess-1 "ls" --token-stdin
 
 # 27. k2 compute node servers <node> add --code -: the pairing code reaches
 #     the add route and no child's argv or environment, nor k2's own argv.

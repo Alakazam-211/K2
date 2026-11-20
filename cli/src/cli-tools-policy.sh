@@ -866,21 +866,170 @@ _cli_check_session_passport() {
 # with it (_cli_codex_bind_on and _k2_codex_headers, with the curl config
 # helpers in BEGIN_CLI_CURL_CFG).
 
+# The processes above this call, for the shared-server check. `ps` first;
+# where it can't run or gives an answer that can't be read, a walk of the
+# parent chain from python3 (/proc on Linux; libproc and sysctl on macOS,
+# where Codex's own sandbox refuses `ps`). Either answer is used only when
+# it is complete: every process from this shell up to pid 1.
+#
+# _cli_ps_chain START: stdin is `ps -axo pid=,ppid=,command=`; prints the
+# chain from START up to pid 1, one row each. Exit 3 when a row can't be
+# read or the chain is missing a process.
+_cli_ps_chain() {
+    awk -v start="${1:-}" '
+        !/^[ \t]*[0-9]+[ \t]+[0-9]+([ \t]|$)/ { bad = 1; exit }
+        { line[$1] = $0; parent[$1] = $2 }
+        END {
+            if (bad || NR == 0) exit 3
+            p = start; n = 0
+            while ((p + 0) > 1) {
+                if (!(p in line) || n >= 64) exit 3
+                print line[p]; p = parent[p]; n++
+            }
+            exit 0
+        }'
+}
+
+# The walk without ps. argv: k2-codex-ancestry START. Prints the chain as
+# _cli_ps_chain does; exit 2 when the host refuses to show a process
+# (EPERM, EACCES), 3 for anything else that stops a complete walk.
+_K2_ANCESTRY_PY='
+import ctypes, errno, struct, sys
+DENIED, BROKEN = 2, 3
+start = int(sys.argv[2])
+if sys.platform.startswith("linux"):
+    def info(pid):
+        with open("/proc/%d/stat" % pid, "rb") as f:
+            stat = f.read()
+        ppid = int(stat[stat.rindex(b")") + 2:].split()[1])
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            cmd = f.read()
+        return ppid, cmd.rstrip(b"\0").replace(b"\0", b" ").decode("utf-8", "replace")
+elif sys.platform == "darwin":
+    lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    lib.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                           ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+    def fail(what):
+        raise OSError(ctypes.get_errno() or errno.EIO, what)
+    argmax = ctypes.c_int(0)
+    size = ctypes.c_size_t(ctypes.sizeof(argmax))
+    if lib.sysctl((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(argmax), ctypes.byref(size), None, 0) != 0:
+        fail("kern.argmax")
+    def info(pid):
+        # struct proc_bsdinfo (PROC_PIDTBSDINFO, 136 bytes): pbi_ppid at 16.
+        bsd = ctypes.create_string_buffer(136)
+        if lib.proc_pidinfo(pid, 3, 0, bsd, 136) != 136:
+            fail("proc_pidinfo")
+        ppid = struct.unpack_from("I", bsd.raw, 16)[0]
+        comm = bsd.raw[48:64].split(b"\0")[0].decode("utf-8", "replace")
+        # kern.procargs2: argc, the exec path, NUL padding, then argv.
+        buf = ctypes.create_string_buffer(argmax.value)
+        size = ctypes.c_size_t(argmax.value)
+        if lib.sysctl((ctypes.c_int * 3)(1, 49, pid), 3, buf, ctypes.byref(size), None, 0) != 0:
+            # A process of another user: its name is enough to rule it out
+            # unless it could be a Codex server (codex, or a script runner).
+            low = comm.lower()
+            if not comm or "codex" in low or low in ("node", "bun", "deno"):
+                fail("kern.procargs2")
+            return ppid, comm
+        data = buf.raw[:size.value]
+        argc = struct.unpack_from("i", data, 0)[0]
+        rest = data[4:]
+        i = rest.index(b"\0")
+        while i < len(rest) and rest[i:i + 1] == b"\0":
+            i += 1
+        args = rest[i:].split(b"\0")[:argc]
+        if len(args) != argc:
+            raise ValueError("short argv")
+        return ppid, " ".join(a.decode("utf-8", "replace") for a in args)
+else:
+    sys.exit(BROKEN)
+rows = []
+pid = start
+try:
+    while pid > 1:
+        if len(rows) >= 64 or any(r[0] == pid for r in rows):
+            sys.exit(BROKEN)
+        ppid, cmd = info(pid)
+        rows.append((pid, ppid, cmd.replace("\n", " ")))
+        pid = ppid
+except OSError as e:
+    sys.exit(DENIED if e.errno in (errno.EPERM, errno.EACCES) else BROKEN)
+except Exception:
+    sys.exit(BROKEN)
+for r in rows:
+    print("%d %d %s" % r)
+'
+
+# _cli_codex_ancestry: set _K2_ANC_STATE for this shell ($$):
+#   shared  a shared Codex app-server is above it;
+#   clear   the chain is complete and has none;
+#   blind   every way to look was refused (permission denied or the
+#           command refused to run): the tab marker alone decides;
+#   broken  an answer was missing, partial or unreadable: counts as shared.
+# Called in this shell, never in $(...), so ps is this shell's child.
+_K2_ANC_STATE=""
+_cli_codex_ancestry() {
+    local out low rc=0 r_ps r_py rows=""
+    out="$(ps -axo pid=,ppid=,command= 2>&1)" || rc=$?
+    # A refusal reads "Operation not permitted" (bash, exit 126) or
+    # "operation not permitted" (zsh, exit 127), or "Permission denied".
+    low="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
+    if [ "$rc" -eq 0 ] && rows="$(printf '%s\n' "$out" | _cli_ps_chain "$$")"; then
+        r_ps=0
+    elif [ "$rc" -ne 0 ] && { [ "$rc" -eq 126 ] || [[ "$low" == *"operation not permitted"* ]] || [[ "$low" == *"permission denied"* ]]; }; then
+        r_ps=2
+    else
+        r_ps=3
+    fi
+    if [ "$r_ps" != 0 ]; then
+        rc=0
+        out="$(python3 -c "$_K2_ANCESTRY_PY" k2-codex-ancestry "$$" 2>/dev/null)" || rc=$?
+        case "$rc" in
+            0) rows="$out"; r_py=0 ;;
+            2|126) r_py=2 ;;
+            *) r_py=3 ;;
+        esac
+    fi
+    if [ "$r_ps" = 0 ] || [ "${r_py:-3}" = 0 ]; then
+        if printf '%s\n' "$rows" | _cli_ancestry_has_shared_codex_server "$$"; then
+            _K2_ANC_STATE=shared
+        else
+            _K2_ANC_STATE=clear
+        fi
+    elif [ "$r_ps" = 2 ] && [ "$r_py" = 2 ]; then
+        _K2_ANC_STATE=blind
+    else
+        _K2_ANC_STATE=broken
+    fi
+}
+
 # True when this Codex call runs in a tab K2 confirmed: the marker names the
-# session of the passport this call carries, and no shared Codex app-server
-# is above this process.
+# session of the passport this call carries, and the processes above it hold
+# no shared Codex app-server. Where the host lets nothing look at them
+# (blind), the marker alone confirms the tab, with one note on stderr.
 _cli_codex_tab_confirmed() {
     local m="${K2_CODEX_TAB_ISOLATED:-}" t="${SCOPED_TOKEN:-}"
     [ -n "$m" ] && [[ "$t" == *.* ]] && [ "${t%%.*}" = "$m" ] || return 1
-    ! _cli_under_shared_codex_server
+    _cli_codex_ancestry
+    case "$_K2_ANC_STATE" in
+        clear) return 0 ;;
+        blind)
+            echo "Note: this host lets nothing look at the processes above this Codex call, so K2's tab marker alone confirms the tab." >&2
+            return 0
+            ;;
+    esac
+    return 1
 }
 
 _cli_codex_tab_refuse() {
     echo "Error: this Codex tab was started before this update or outside K2: reopen it from K2." >&2
     echo "K2 can't tell this call from one under a Codex server another tab started, so nothing was sent." >&2
-    if _cli_under_shared_codex_server; then
-        echo "It runs under a shared Codex app-server; stop that server once: codex app-server daemon stop" >&2
-    fi
+    case "$_K2_ANC_STATE" in
+        shared) echo "It runs under a shared Codex app-server; stop that server once: codex app-server daemon stop" >&2 ;;
+        broken) echo "K2 couldn't read the processes above this call, so it can't rule out a shared Codex server." >&2 ;;
+    esac
     echo "If a tab K2 opened still says this, set K2_CODEX_NO_DAEMON=1 for the K2 daemon, then reopen the tab." >&2
     echo "Help still works here: k2 help ${1:-}" >&2
     exit 3

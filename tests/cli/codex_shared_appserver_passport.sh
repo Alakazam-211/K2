@@ -34,6 +34,9 @@
 #      Markdown kit id (answered by the daemon) is refused.
 #   9. The headers' sources: _k2_codex_cfg, _k5_py_headers, and _k2_curl
 #      (config on stdin, or a config file of its own for a stdin body).
+#  10. Where ps can't run: the parent walk from python3 decides; every way
+#      refused means the marker alone (one note); garbage or a partial
+#      answer counts as shared.
 #
 # No daemon build; HTTP is a tiny python stub. HOME is sandboxed.
 # bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
@@ -584,6 +587,91 @@ assert_contains "no config: the headers become one" "$got" "$(printf 'cfg:-\nhea
 got="$(CODEX_THREAD_ID=thread-1; CODEX_SESSION_ID=root-1; _K2_CURL_NOT_DAEMON=1; eval "$fake_curl"
     _k2_curl "" -s "https://example.invalid/")"
 assert_absent "not the daemon: no headers" "$got" "X-K2-"
+
+# ── 10. The process check where ps can't run ─────────────────────────
+# Codex's own macOS sandbox refuses `ps` (codex-cli 0.154.0, exit 127 under
+# zsh). The check then walks the parent chain from python3; it counts as
+# shared unless a walk is complete, and takes the tab marker alone only
+# when every way to look was refused.
+echo "== process check without ps =="
+REAL_PY="$(command -v python3)"
+mkdir -p "$WORK/psdeny" "$WORK/psjunk" "$WORK/pybin"
+cat >"$WORK/psdeny/ps" <<'EOF'
+#!/bin/sh
+echo "/bin/ps: Operation not permitted" >&2
+exit 126
+EOF
+cat >"$WORK/psjunk/ps" <<'EOF'
+#!/bin/sh
+echo "ps: this is not a process table"
+EOF
+# python3 as itself, except the ancestry walk when K2T_ANCESTRY says so.
+cat >"$WORK/pybin/python3" <<EOF
+#!/bin/sh
+if [ "\${3:-}" = k2-codex-ancestry ]; then
+    case "\${K2T_ANCESTRY:-}" in
+        denied) echo "PermissionError: [Errno 1] Operation not permitted" >&2; exit 2 ;;
+        broken) echo "1 2" ; exit 3 ;;
+    esac
+fi
+exec "$REAL_PY" "\$@"
+EOF
+chmod +x "$WORK/psdeny/ps" "$WORK/psjunk/ps" "$WORK/pybin/python3"
+CONFIRMED=(K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_TAB_ISOLATED="$MARK")
+note_lines() { grep -c "lets nothing look at the processes" "$WORK/err" || true; }
+
+# ps refused, the walk from python3 works, a shared server above: refused.
+reset_logs
+set +e
+cell "${CODEX_ENV[@]}" "${CONFIRMED[@]}" PATH="$WORK/psdeny:$WORK/bin:$PATH" K2="$K2_CLI" \
+    bash -c 'exec -a "codex app-server --listen unix://" bash -c "\"\$K2\" activity; exit \$?"' \
+    >"$WORK/out" 2>"$WORK/err"
+rc=$?
+set -e
+assert_refused "ps refused, python walk, shared server above"
+assert_contains "ps refused, python walk: finds the shared server" "$(cat "$WORK/err")" "It runs under a shared Codex app-server"
+
+# ps refused, the walk from python3 works, no shared server: sent.
+run_codex "${CONFIRMED[@]}" PATH="$WORK/psdeny:$WORK/bin:$PATH" -- msg cortana hello
+assert_absent "ps refused, python walk, clear: no refusal" "$(cat "$WORK/err")" "reopen it from K2"
+assert_eq "ps refused, python walk, clear: no marker-only note" "$(note_lines)" "0"
+assert_contains "ps refused, python walk, clear: sent with its passport" "$(requests)" "Bearer $SCOPED"
+
+# ps garbage, the walk from python3 works: the walk decides (sent).
+run_codex "${CONFIRMED[@]}" PATH="$WORK/psjunk:$WORK/bin:$PATH" -- msg cortana hello
+assert_absent "ps garbage, python walk: no refusal" "$(cat "$WORK/err")" "reopen it from K2"
+assert_contains "ps garbage, python walk: sent" "$(requests)" "Bearer $SCOPED"
+
+# Every way refused: the marker alone, one note on stderr, then sent.
+run_codex "${CONFIRMED[@]}" PATH="$WORK/psdeny:$WORK/pybin:$WORK/bin:$PATH" K2T_ANCESTRY=denied -- msg cortana hello
+assert_absent "all refused: no refusal" "$(cat "$WORK/err")" "reopen it from K2"
+assert_eq "all refused: one marker-only note" "$(note_lines)" "1"
+assert_contains "all refused: sent with its passport" "$(requests)" "Bearer $SCOPED"
+assert_headers_on "all refused"
+
+# ...but a marker from another tab is still refused there.
+run_codex K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_TAB_ISOLATED="sess99" PATH="$WORK/psdeny:$WORK/pybin:$WORK/bin:$PATH" K2T_ANCESTRY=denied -- activity
+assert_refused "all refused, marker from another tab"
+
+# ps garbage and the walk refused: not every way was refused: shared.
+run_codex "${CONFIRMED[@]}" PATH="$WORK/psjunk:$WORK/pybin:$WORK/bin:$PATH" K2T_ANCESTRY=denied -- activity
+assert_refused "ps garbage, walk refused"
+assert_contains "ps garbage, walk refused: says it can't rule it out" "$(cat "$WORK/err")" "couldn't read the processes above this call"
+assert_eq "ps garbage, walk refused: no marker-only note" "$(note_lines)" "0"
+
+# ps refused and the walk partial: shared.
+run_codex "${CONFIRMED[@]}" PATH="$WORK/psdeny:$WORK/pybin:$WORK/bin:$PATH" K2T_ANCESTRY=broken -- msg cortana hello
+assert_refused "ps refused, walk partial"
+assert_contains "ps refused, walk partial: says it can't rule it out" "$(cat "$WORK/err")" "couldn't read the processes above this call"
+
+# ps from the stand-in table missing this process: partial, shared, even
+# with the walk refused.
+cat >"$WORK/psjunk/ps" <<'EOF'
+#!/bin/sh
+printf '%s\n' "    1     0 /sbin/init" "  400     1 /bin/zsh"
+EOF
+run_codex "${CONFIRMED[@]}" PATH="$WORK/psjunk:$WORK/pybin:$WORK/bin:$PATH" K2T_ANCESTRY=denied -- activity
+assert_refused "ps table without this process, walk refused"
 
 echo
 echo "codex_shared_appserver_passport: $pass passed, $fail failed"

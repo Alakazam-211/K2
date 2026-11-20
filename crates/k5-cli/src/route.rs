@@ -270,6 +270,7 @@ pub static TABLE: &[Noun] = &[
     bash(&["publish"]),
     bash(&["clone"]),
     bash(&["users"]),
+    bash(&["remote"]),
     bash(&["remote-session"]),
     bash(&["zen"]),
     bash(&["wiki"]),

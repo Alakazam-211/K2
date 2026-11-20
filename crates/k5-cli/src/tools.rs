@@ -76,7 +76,7 @@ pub fn tool_id(verb: &str, sub: &str) -> &'static str {
         "store" | "board" => "store",
         "dns" | "domain" | "cert" | "firewall" | "front" => "dns",
         "publish" => "publish",
-        "connect" => "connect-account",
+        "connect" | "remote" => "connect-account",
         "sessions" | "terminal" => "sessions-spawn",
         "fs" => "fs",
         "daemon" => "daemon-admin",

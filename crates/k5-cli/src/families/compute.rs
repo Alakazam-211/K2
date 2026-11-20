@@ -13,6 +13,7 @@
 //!   `cache`, the `node` subverbs made native so far, and the setup verbs
 //!   `allow-nodes`, `git-access`, `lanes`, `local` and `attach`, and
 //!   `compute` alone). [`follow`] is `_compute_follow`.
+//! - [`more`]: `retry`, and `roster`, `seats`, `trust` and `owners`.
 //!
 //! Every other verb is the shell's. The modules below
 //! are shared: [`pyrt`] (the Python operations the shell's readers use),
@@ -24,6 +25,7 @@ pub mod events;
 pub mod follow;
 pub mod lines;
 pub mod logs;
+pub mod more;
 pub mod pyrt;
 pub mod reads;
 pub mod render;
@@ -169,11 +171,19 @@ pub const VERBS: &[Verb] = &[
         words: &["attach"],
         owner: Owner::Native,
     },
+    Verb {
+        words: &["retry"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["roster", "seats", "trust", "owners"],
+        owner: Owner::Native,
+    },
 ];
 
 /// Whether this family's code answers `verb` (a second word).
 pub fn answers(verb: &str) -> bool {
-    [reads::ANSWERS, writes::ANSWERS, admin::ANSWERS]
+    [reads::ANSWERS, writes::ANSWERS, admin::ANSWERS, more::ANSWERS]
         .iter()
         .any(|a| a.contains(&verb))
 }
@@ -187,4 +197,5 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     reads::run(args)
         .or_else(|| writes::run(args))
         .or_else(|| admin::run(args))
+        .or_else(|| more::run(args))
 }

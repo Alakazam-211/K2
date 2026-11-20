@@ -545,3 +545,88 @@ fn door_help_never_acts() {
         });
     }
 }
+
+const AUDIT: &str = r#"{"app":"acme","totals":{"calls":3,"denied":1,"bytesIn":120,"bytesOut":4096},"order":"newest first","calls":[{"atMs":1800000000123,"result":200,"actor":"ann é","verb":"db.query","bytesIn":40,"bytesOut":2048,"latencyMs":3},{"atMs":1800000001000,"result":403,"code":"scope","actor":"bo","verb":"files.put","bytesIn":80,"bytesOut":0,"latencyMs":1}],"chain":[{"day":"2026-11-19","ok":true,"rows":40},{"day":"2026-11-20","ok":false,"brokenAt":12}]}"#;
+
+#[test]
+fn resume_and_audit_answer_as_the_shell_does() {
+    let rig = Rig::new(VERB, "resaud");
+    let one = |name: &'static str, args: &'static [&'static str], body: &str, code: i32| {
+        case(name, args, &[], vec![ok(body)], owner_and_port, code, 1)
+    };
+    let stop = |name: &'static str, args: &'static [&'static str], code: i32| {
+        case(name, args, &[], vec![], owner_and_port, code, 0)
+    };
+    let v = vec![
+        one(
+            "resume --start",
+            &["resume", "acme", "--start"],
+            r#"{"app":"acme","deployment":"dep-3"}"#,
+            0,
+        ),
+        one("resume: already", &["resume", "acme"], r#"{"app":"acme","already":"not suspended é"}"#, 0),
+        one("resume: a note", &["resume", "acme"], r#"{"app":"acme","note":"start it yourself"}"#, 0),
+        one("resume --json", &["resume", "acme", "--json"], r#"{"app":"acme"}"#, 0),
+        Case {
+            env: with_passport(&[]),
+            ..case(
+                "resume: never in a session",
+                &["resume", "acme"],
+                &[],
+                vec![],
+                port_only,
+                3,
+                0,
+            )
+        },
+        stop("resume: no App", &["resume", "--start"], 2),
+        stop("resume: an unknown flag", &["resume", "acme", "--now"], 2),
+        traceback(one("resume: no app in the answer", &["resume", "acme"], r#"{}"#, 1)),
+        one("audit", &["audit", "acme"], AUDIT, 0),
+        one(
+            "audit, every filter, one call",
+            &[
+                "audit", "acme", "--since", "1h", "--verb", "db.query", "--denied", "--limit", "5",
+                "--oldest-first",
+            ],
+            r#"{"app":"acme","order":"oldest first","calls":[{"atMs":0,"result":500}]}"#,
+            0,
+        ),
+        one("audit --json", &["audit", "--json", "acme"], AUDIT, 0),
+        one("audit --verify: a broken chain", &["audit", "acme", "--verify"], AUDIT, 1),
+        one(
+            "audit --verify --json: a whole chain",
+            &["audit", "acme", "--verify", "--json", "--newest-first"],
+            r#"{"app":"acme","chain":[{"day":"d","ok":true,"rows":1}]}"#,
+            0,
+        ),
+        traceback(one(
+            "audit --verify: a chain day that is a number",
+            &["audit", "acme", "--verify", "--json"],
+            r#"{"app":"acme","chain":[5]}"#,
+            1,
+        )),
+        traceback(one("audit: a call with no time", &["audit", "acme"], r#"{"app":"a","calls":[{}]}"#, 1)),
+        stop("audit: no App", &["audit"], 2),
+        stop("audit: --limit given last", &["audit", "acme", "--limit"], 1),
+        stop("audit: an unknown flag", &["audit", "acme", "--x"], 2),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn resume_and_audit_help_never_acts() {
+    let rig = Rig::new(VERB, "resaudh");
+    for args in [
+        &["resume", "acme", "-h"][..],
+        &["resume", "--help", "acme"],
+        &["audit", "acme", "-h"],
+    ] {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..case("help never acts", args, &[], vec![], owner_and_port, 0, 0)
+        });
+    }
+}

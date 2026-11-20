@@ -26,6 +26,7 @@
 //!   db status`; [`walls_set`]: `app egress add|rm|mode` and `app
 //!   box-service request|revoke`, with [`approve`] when the owner is at
 //!   the terminal; [`db_set`]: `app db connect|check|disconnect`.
+//! - [`door`] also answers `app resume`; [`traffic`]: `app audit`.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
 //!
@@ -71,6 +72,7 @@ pub mod phone;
 pub mod phone_set;
 pub mod py;
 pub mod reads;
+pub mod traffic;
 pub mod updates;
 pub mod updates_set;
 pub mod wallet;
@@ -101,6 +103,7 @@ pub enum Ask {
     WallsSet(walls_set::Ask),
     Db(db_set::Ask),
     Approve(approve::Ask),
+    Traffic(traffic::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -165,6 +168,8 @@ pub const TAKES: &[&str] = &[
     "approvals",
     "approve",
     "deny",
+    "resume",
+    "audit",
 ];
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -294,6 +299,14 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["deny"],
         owner: crate::route::Owner::Native,
     },
+    crate::route::Verb {
+        words: &["resume"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["audit"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// The words after `app`, read by the group the verb names. `None`: the
@@ -322,6 +335,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
             }
             Some(walls::parse(v, rest)?.map(Ask::Walls))
         }
+        "audit" => Some(traffic::parse(rest)?.map(Ask::Traffic)),
         v if approve::VERBS.contains(&v) => Some(approve::parse(v, rest)?.map(Ask::Approve)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
@@ -410,6 +424,7 @@ fn run_with(
         Ask::WallsSet(w) => walls_set::run(&mut ctx, w),
         Ask::Db(d) => db_set::run(&mut ctx, d),
         Ask::Approve(a) => approve::run(&mut ctx, a),
+        Ask::Traffic(t) => traffic::run(&mut ctx, t),
     };
     let exit = match shown {
         Ok(s) => s.print(),

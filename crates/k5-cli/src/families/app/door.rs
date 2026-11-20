@@ -1,9 +1,12 @@
 //! An App's door and what it sees, as the shell CLI answers them
 //! (`cli/src/app-door.sh`, `cli/src/app-recording.sh`): `app suspend`,
-//! `app self`, `app usage`, `app members`, `app remote-pass` and
+//! `app resume`, `app self`, `app usage`, `app members`, `app remote-pass` and
 //! `app account-deletion`. Each is the shell's word loop, one
 //! `_compute_call`, `--json` as it came, else the shell's Python line for
 //! line.
+//!
+//! `app resume` is the owner's, outside a session: in one it is refused
+//! before anything is sent, and it goes over TCP.
 //!
 //! `app members` with no room: a usage line outside a session; in one
 //! (`_compute_in_session`: the passport is the token) it asks for the
@@ -18,11 +21,30 @@ use crate::exit::Exit;
 use crate::families::{Raise, Shown};
 use crate::out::json::Value;
 use crate::transport::encode::quote;
-use k2_client::cli_name;
+use k2_client::{cli_name, product_name};
+
+/// `cmd_app_resume`'s line in a session (exit 3).
+const RESUME_OWNER_ONLY: &str = concat!(
+    "{\"error\":{\"code\":\"owner_only\",\"hint\":\"only the owner resumes a suspended App: ",
+    cli_name!(),
+    " app resume <app> from a terminal outside ",
+    product_name!(),
+    "\"}}"
+);
+
+/// `"  starting: deployment %s (k2 app deployment %s)"`.
+const STARTING_TAIL: &str = concat!(" (", cli_name!(), " app deployment ");
 
 /// The usage lines (exit 2).
 pub mod usage {
-    use super::cli_name;
+    use super::{cli_name, product_name};
+    pub const RESUME: &str = concat!(
+        "usage: ",
+        cli_name!(),
+        " app resume <app-id> [--start]   (the owner, outside ",
+        product_name!(),
+        ")"
+    );
     pub const SUSPEND: &str = concat!(
         "usage: ",
         cli_name!(),
@@ -84,6 +106,11 @@ pub enum Ask {
         reason: String,
         json: bool,
     },
+    Resume {
+        app: String,
+        start: bool,
+        json: bool,
+    },
     SelfView {
         app: String,
         json: bool,
@@ -116,6 +143,7 @@ pub enum Ask {
 /// The verbs here.
 pub const VERBS: &[&str] = &[
     "suspend",
+    "resume",
     "self",
     "usage",
     "members",
@@ -131,6 +159,7 @@ pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
     }
     Some(match verb {
         "suspend" => suspend(words),
+        "resume" => resume(words),
         "self" => self_view(words),
         "usage" => usage_verb(words),
         "members" => members(words),
@@ -179,6 +208,23 @@ fn suspend(words: &[&str]) -> Result<Ask, Stop> {
         return Err(Stop::usage(usage::SUSPEND));
     }
     Ok(Ask::Suspend { app, reason, json })
+}
+
+/// `cmd_app_resume`'s loop.
+fn resume(words: &[&str]) -> Result<Ask, Stop> {
+    let (mut app, mut start, mut json) = (String::new(), false, false);
+    for w in words {
+        match *w {
+            "--start" => start = true,
+            "--json" => json = true,
+            _ if w.starts_with('-') => return Err(unknown_flag(w)),
+            _ => app = w.to_string(),
+        }
+    }
+    if app.is_empty() {
+        return Err(Stop::usage(usage::RESUME));
+    }
+    Ok(Ask::Resume { app, start, json })
 }
 
 fn self_view(words: &[&str]) -> Result<Ask, Stop> {
@@ -289,6 +335,18 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
             let body = ctx.call(true, "/cli/app/suspend", &b)?;
             Ok(answer(&body, *json, suspend_lines))
         }
+        Ask::Resume { app, start, json } => {
+            if ctx.in_session() {
+                crate::out::stderr_line(RESUME_OWNER_ONLY);
+                return Err(Exit::Refused);
+            }
+            let b = Cj::new()
+                .s("app", app)
+                .b("start", if *start { "1" } else { "0" })
+                .body();
+            let body = ctx.call_on(true, "/cli/app/resume", &b, true)?;
+            Ok(answer(&body, *json, resume_lines))
+        }
         Ask::SelfView { app, json } => {
             let body = ctx.call(false, "/cli/app/self", &format!("app={}", quote(app)))?;
             Ok(answer(&body, *json, self_lines))
@@ -364,6 +422,40 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
 }
 
 /// `cmd_app_suspend`'s Python.
+/// `cmd_app_resume`'s Python.
+pub fn resume_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
+    let v = py::load(body, 3)?;
+    if py::truthy(&py::dget(&v, "already", 4)?) {
+        let app = py::idx(&v, "app", 5)?;
+        let already = py::idx(&v, "already", 5)?;
+        o.line(&format!("{}: {}", py::s(&app), py::s(&already)));
+        return Ok(Exit::Ok);
+    }
+    o.line(&format!("{} resumed", py::s(&py::idx(&v, "app", 6)?)));
+    if py::truthy(&py::dget(&v, "deployment", 7)?) {
+        let dep = py::idx(&v, "deployment", 8)?;
+        let app = py::idx(&v, "app", 8)?;
+        o.line(&format!(
+            "  starting: deployment {}{STARTING_TAIL}{})",
+            py::s(&dep),
+            py::s(&app)
+        ));
+    } else {
+        let mut why = py::dget(&v, "hint", 9)?;
+        if !py::truthy(&why) {
+            why = py::dget(&v, "note", 9)?;
+        }
+        if py::truthy(&why) {
+            let mut text = py::dget(&v, "hint", 10)?;
+            if !py::truthy(&text) {
+                text = py::dget(&v, "note", 10)?;
+            }
+            o.line(&format!("  {}", py::s(&text)));
+        }
+    }
+    Ok(Exit::Ok)
+}
+
 pub fn suspend_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     let v = py::load(body, 3)?;
     let app = py::idx(&v, "app", 4)?;

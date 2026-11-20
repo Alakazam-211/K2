@@ -345,6 +345,25 @@ fn compute_wait_hands_these_to_the_shell() {
             0,
             0,
         )),
+        // Help never acts: -h or --help anywhere sends nothing.
+        shell(case(
+            "-h after the job",
+            &["wait", "aaaa1111", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "--help with --any",
+            &["wait", "a", "b", "--any", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
         shell(Case {
             no_tmpdir: true,
             ..case(

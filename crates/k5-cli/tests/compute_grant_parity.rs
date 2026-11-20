@@ -17,6 +17,11 @@ use common::parity::*;
 use common::stub::Reply;
 
 const VERB: &str = "compute";
+const HELP: &[&[&str]] = &[
+    &["grant", "mini", "--workspace", "acme", "-h"],
+    &["grant", "--help", "mini"],
+    &["grant", "mini", "--max-time", "2h", "--ci", "--help"],
+];
 const GRANTED: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"submitterMaxRunning":1,"allowCi":true},"note":"agents there can run jobs.","resent":2}"#;
 const PLAIN: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":3600,"maxParallel":1,"maxQueued":10,"maxDiskGb":40},"note":"ok."}"#;
 
@@ -210,5 +215,18 @@ fn compute_grant() {
     ];
     for c in v {
         rig.check(&c);
+    }
+}
+
+/// Help never acts: -h or --help anywhere prints help and sends nothing
+/// (the binary hands it to the shell, whose `_wants_help` answers first).
+#[test]
+fn compute_grant_help_never_acts() {
+    let rig = Rig::new(VERB, "granthelp");
+    for args in HELP {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..case("help", args, &[], vec![], owner_and_port, 0, 0)
+        });
     }
 }

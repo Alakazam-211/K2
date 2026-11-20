@@ -21,6 +21,11 @@ use common::parity::*;
 use common::stub::Reply;
 
 const VERB: &str = "compute";
+const HELP: &[&[&str]] = &[
+    &["fetch", "j1", "-h"],
+    &["fetch", "--help", "j1", "b.txt"],
+    &["fetch", "j1", "--out", "d", "--json", "-h"],
+];
 const HELLO_SHA: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 const LIST: &str = r#"{"short":"j1","artifacts":[{"name":"d/a.txt"},{"name":"b.txt"}]}"#;
 
@@ -266,5 +271,18 @@ fn compute_fetch_words() {
     ];
     for c in v {
         rig.check(&c);
+    }
+}
+
+/// Help never acts: -h or --help anywhere prints help and sends nothing
+/// (the binary hands it to the shell, whose `_wants_help` answers first).
+#[test]
+fn compute_fetch_help_never_acts() {
+    let rig = Rig::new(VERB, "fetchhelp");
+    for args in HELP {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..case("help", args, &[], vec![], owner_and_port, 0, 0)
+        });
     }
 }

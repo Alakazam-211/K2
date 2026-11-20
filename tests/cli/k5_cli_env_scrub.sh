@@ -55,8 +55,7 @@ class H(BaseHTTPRequestHandler):
         }
         with open(os.path.join(work, "requests.log"), "a") as f:
             f.write(json.dumps(rec) + "\n")
-        data = json.dumps([] if rec["path"] == "/cli/presets/list"
-                          else {"ok": True, "success": True, "heartbeats": []}).encode()
+        data = json.dumps({"ok": True}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -134,8 +133,10 @@ PY
         bad "$label: the request's headers: $(tr '\n' ' ' <<<"$heads"), wanted fallthrough|1|$noun|disk"
     fi
 }
-run "heartbeat list (curl)" /cli/heartbeat/list heartbeat curl heartbeat list --json
-run "preset list (python3 urlopen)" /cli/presets/list preset python3 preset list --json
+# Two verbs the binary still hands to the shell (heartbeat and preset are
+# native now): ci's curl and clone's engine, a python3 urlopen client.
+run "ci status (curl)" /cli/ci/status ci curl ci status --json
+run "clone preview (python3 urlopen)" /cli/clone/preview clone python3 clone preview w --json
 
 echo
 echo "k5_cli_env_scrub: $pass passed, $fail failed"

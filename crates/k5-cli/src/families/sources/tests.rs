@@ -200,3 +200,39 @@ fn the_renderer() {
     assert_eq!(r.exit, Exit::Error);
     assert!(r.stderr.ends_with("TypeError: sequence item 0: expected str instance, int found\n"), "{}", r.stderr);
 }
+
+#[test]
+fn simulate_and_refresh_words() {
+    assert_eq!(
+        ask("simulate", &w(&["web", "crit", "--for", "2h"]), 0),
+        Ok(Ask::Simulate {
+            body: r#"{"name": "web", "state": "crit", "forSecs": 7200}"#.into(),
+            json: false
+        })
+    );
+    assert_eq!(
+        ask("simulate", &w(&["-x", "crit"]), 0),
+        Err(Stop::Usage(format!(
+            "usage: {CLI} sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]"
+        )))
+    );
+    assert_eq!(
+        ask("simulate", &w(&["web", "ok", "--for"]), 0),
+        Err(Stop::Usage("usage: --for 1h".into()))
+    );
+    assert_eq!(
+        ask("simulate", &w(&["web", "ok", "--for", "5q"]), 0),
+        Err(Stop::Usage("usage: bad duration '5q' (use 30s, 5m, 2h, 1d)".into()))
+    );
+    assert_eq!(ask("simulate", &w(&["web", "ok", "--for", "xs"]), 0), Err(Stop::Shell));
+    assert_eq!(ask("simulate", &w(&["web", "ok", "--for", "5é"]), 0).is_err(), true);
+    assert_eq!(
+        ask("refresh", &w(&["--wait", "web"]), 0),
+        Ok(Ask::Refresh {
+            name: "web".into(),
+            wait: true
+        })
+    );
+    assert_eq!(utc_minutes(&Value::Int("3660".into())), Ok("01:01 UTC".into()));
+    assert_eq!(utc_minutes(&Value::Float(-0.5)), Ok("23:59 UTC".into()));
+}

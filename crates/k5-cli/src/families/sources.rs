@@ -67,7 +67,7 @@ pub const TOOL: &str = "sources";
 /// The verbs this answers; the rest go to the shell CLI.
 const NATIVE: [&str; 17] = [
     "list", "ls", "show", "read", "history", "status", "export", "pause", "resume", "mute",
-    "unmute", "remove", "rm", "pending", "access", "help", "",
+    "unmute", "remove", "rm", "pending", "access", "simulate", "refresh",
 ];
 
 /// What `cmd_sources` does with its words.
@@ -150,6 +150,10 @@ pub enum Ask {
     Remove { name: String, yes: bool },
     /// `pending --names`.
     Pending { names: String, json: bool },
+    /// `simulate <name> <state> [--for]`.
+    Simulate { body: String, json: bool },
+    /// `refresh <name> [--wait]`.
+    Refresh { name: String, wait: bool },
     /// `access on|off`.
     Access {
         on: bool,
@@ -208,6 +212,30 @@ pub fn secs(v: &str, flag: &str) -> Result<String, Stop> {
             } else {
                 Err(Stop::Shell)
             }
+        }
+    };
+    decimal(num)
+        .map(|n| (n * mult).to_string())
+        .ok_or(Stop::Shell)
+}
+
+/// `_sources_b2_secs "$v"` where its arithmetic runs: the seconds as
+/// text.
+pub fn b2_secs(v: &str) -> Result<String, Stop> {
+    let all_digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    let cut = v.char_indices().last().map_or(0, |(i, _)| i);
+    let (num, unit) = v.split_at(cut);
+    let mult = match unit {
+        "d" => 86_400,
+        "h" => 3_600,
+        "m" => 60,
+        // `echo "${v%s}"`: Python's int() takes digits only.
+        "s" => return if all_digits(num) { Ok(num.to_string()) } else { Err(Stop::Shell) },
+        _ if all_digits(v) => return Ok(v.to_string()),
+        _ => {
+            return Err(Stop::Usage(format!(
+                "usage: bad duration '{v}' (use 30s, 5m, 2h, 1d)"
+            )))
         }
     };
     decimal(num)
@@ -359,6 +387,59 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
         "remove" | "rm" => Ok(Ask::Remove {
             name: name_arg("remove", words)?,
             yes: words.iter().any(|w| w == "--yes"),
+        }),
+        "simulate" => {
+            let usage = || {
+                Stop::Usage(format!(
+                    "usage: {CLI} sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]"
+                ))
+            };
+            let name = words.first().cloned().unwrap_or_default();
+            let state = words.get(1).cloned().unwrap_or_default();
+            if name.is_empty() || name.starts_with('-') {
+                return Err(usage());
+            }
+            if !matches!(
+                state.as_str(),
+                "ok" | "warn" | "crit" | "stale" | "unknown" | "slow" | "off"
+            ) {
+                return Err(usage());
+            }
+            let (mut for_secs, mut json) = (String::new(), false);
+            let rest = &words[2..];
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--for" => {
+                        let v = rest
+                            .get(i + 1)
+                            .filter(|v| !v.is_empty())
+                            .ok_or_else(|| Stop::Usage("usage: --for 1h".into()))?;
+                        for_secs = b2_secs(v)?;
+                        i += 1;
+                    }
+                    "--json" => json = true,
+                    a => return Err(Stop::Usage(format!("Error: unknown flag '{a}'"))),
+                }
+                i += 1;
+            }
+            let mut b = vec![
+                (Text::from("name"), s(&name)),
+                (Text::from("state"), s(&state)),
+            ];
+            if !for_secs.is_empty() {
+                let n = for_secs.trim_start_matches('0');
+                let n = if n.is_empty() { "0" } else { n };
+                b.push((Text::from("forSecs"), Value::Int(n.to_string())));
+            }
+            Ok(Ask::Simulate {
+                body: dumps(&Value::Object(b)),
+                json,
+            })
+        }
+        "refresh" => Ok(Ask::Refresh {
+            name: name_arg(sub, words)?,
+            wait: words.iter().any(|w| w == "--wait"),
         }),
         "pending" => {
             let (mut names, mut json) = (String::new(), false);
@@ -589,6 +670,47 @@ fn go(c: &mut Client, ask: Ask, json_any: bool) -> Result<Exit, Exit> {
                 return Ok(Shown::out(print_json(&sent.resp)).print());
             }
             Ok(lay_out(&sent.resp, pending_lines).print())
+        }
+        Ask::Simulate { body, json } => {
+            let sent = call(c, true, "/cli/sources/simulate", &body, json_any)?;
+            if json {
+                return Ok(Shown::out(print_json(&sent.resp)).print());
+            }
+            Ok(lay_out(&sent.resp, simulate_lines).print())
+        }
+        Ask::Refresh { name, wait } => {
+            let q = format!("name={}", quote(&name));
+            let checked = |sent: &Sent| -> Result<String, Exit> {
+                let v = load(&sent.resp, 1).map_err(|r| raised(String::new(), String::new(), &r).print())?;
+                let at = py_get(&v, "checkedAt", 1)
+                    .map_err(|r| raised(String::new(), String::new(), &r).print())?;
+                Ok(ops::s_of(at))
+            };
+            let before = if wait {
+                let sent = call(c, false, "/cli/sources/read", &q, json_any)?;
+                Some(checked(&sent)?)
+            } else {
+                None
+            };
+            let sent = call(c, true, "/cli/sources/refresh", &name_body(&name), json_any)?;
+            let Some(before) = before else {
+                if json_any {
+                    return Ok(Shown::out(print_json(&sent.resp)).print());
+                }
+                return Ok(Shown::out(format!("{name}: check queued\n")).print());
+            };
+            for _ in 0..30 {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let sent = call(c, false, "/cli/sources/read", &q, json_any)?;
+                if checked(&sent)? != before {
+                    if json_any {
+                        return Ok(Shown::out(print_json(&sent.resp)).print());
+                    }
+                    return Ok(render("read", &sent.resp).print());
+                }
+            }
+            out::stderr_line("Error: no new check within 30 s");
+            Err(Exit::Error)
         }
         Ask::Access {
             on,
@@ -1488,6 +1610,47 @@ fn pending_lines(v: &Value, o: &mut String) -> Result<(), Raise> {
         );
     }
     Ok(())
+}
+
+fn simulate_lines(v: &Value, o: &mut String) -> Result<(), Raise> {
+    let sim = at(v, "simulated", 3)?;
+    let name = py::str_of(&at(v, "name", 5)?);
+    if !py::truthy(&sim) {
+        push_line(o, &format!("{name}: simulate off (real state shows again)"));
+        return Ok(());
+    }
+    let until = utc_minutes(&idx(&sim, "until", 7)?).map_err(|e| Raise::at(7, e))?;
+    let state = py::str_of(&idx(&sim, "state", 8)?);
+    push_line(o, &format!("{name}: TEST {state} until {until}. Triggers never fire for it; nothing is written to history."));
+    Ok(())
+}
+
+/// `datetime.datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M UTC")`.
+fn utc_minutes(t: &Value) -> Result<String, String> {
+    let secs: i64 = match t {
+        Value::Bool(b) => i64::from(*b),
+        Value::Int(d) => d
+            .parse()
+            .map_err(|_| "OverflowError: timestamp out of range for platform time_t".to_string())?,
+        Value::Float(f) if f.is_finite() => {
+            // Python rounds to the microsecond first.
+            let us = (f * 1e6).round_ties_even();
+            (us / 1e6).floor() as i64
+        }
+        Value::Float(_) => return Err("ValueError: Invalid value NaN (not a number)".into()),
+        other => {
+            return Err(format!(
+                "TypeError: '{}' object cannot be interpreted as an integer",
+                py::type_name(other)
+            ))
+        }
+    };
+    // Years 1 to 9999 only.
+    if !(-62_135_596_800..=253_402_300_799).contains(&secs) {
+        return Err("ValueError: year is out of range".to_string());
+    }
+    let day = secs.rem_euclid(86_400);
+    Ok(format!("{:02}:{:02} UTC", day / 3600, day % 3600 / 60))
 }
 
 fn access_lines(v: &Value, o: &mut String) -> Result<(), Raise> {

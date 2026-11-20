@@ -581,29 +581,75 @@ fn sources_refusals_and_no_answer() {
     }
 }
 
-/// The verbs the shell CLI still answers: both sides' requests are the
-/// shell's.
+/// `simulate` and `refresh`, and a verb the shell CLI still answers
+/// (both sides' requests are the shell's there).
 #[test]
-fn sources_verbs_the_shell_answers() {
-    let rig = Rig::new(VERB, "shell");
+fn sources_simulate_refresh_and_the_shell() {
+    let rig = Rig::new(VERB, "sim");
+    let read_at = |t: u32| ok(&format!(r#"{{"name":"web","label":"L","display":"ok","serverNow":9,"updatedAt":9,"checkedAt":{t}}}"#));
     let v = vec![
-        shell(case(
-            "simulate",
+        // covers: sources simulate
+        case(
+            "simulate crit --for",
+            &["simulate", "web", "crit", "--for", "1h"],
+            &[],
+            vec![ok(r#"{"name":"web","simulated":{"state":"crit","until":1763603600}}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "simulate off",
             &["simulate", "web", "off"],
             &[],
             vec![ok(r#"{"name":"web"}"#)],
             owner_and_port,
             0,
             1,
-        )),
-        shell(case(
-            "refresh",
-            &["refresh", "web"],
+        ),
+        // covers: sources simulate --json
+        case(
+            "simulate --json",
+            &["simulate", "web", "ok", "--json"],
             &[],
-            vec![ok(r#"{"ok":true}"#)],
+            vec![ok(r#"{"name":"web"}"#)],
             owner_and_port,
             0,
             1,
+        ),
+        case("simulate, a bad state", &["simulate", "web", "red"], &[], vec![], owner_and_port, 2, 0),
+        case("simulate, --for last", &["simulate", "web", "ok", "--for"], &[], vec![], owner_and_port, 2, 0),
+        case("simulate, a bad duration", &["simulate", "web", "ok", "--for", "9q"], &[], vec![], owner_and_port, 2, 0),
+        // covers: sources refresh
+        case("refresh", &["refresh", "web"], &[], vec![ok(r#"{"ok":true}"#)], owner_and_port, 0, 1),
+        // covers: sources refresh --json
+        case("refresh --json", &["refresh", "web", "--json"], &[], vec![ok(r#"{"ok":true}"#)], owner_and_port, 0, 1),
+        case(
+            "refresh --wait: a new check",
+            &["refresh", "web", "--wait"],
+            &[],
+            vec![read_at(1), ok(r#"{"ok":true}"#), read_at(1), read_at(2)],
+            owner_and_port,
+            0,
+            4,
+        ),
+        traceback(case(
+            "refresh --wait, not JSON",
+            &["refresh", "web", "--wait"],
+            &[],
+            vec![ok("<html>")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        shell(case(
+            "propose goes to the shell",
+            &["propose", "--from", "nope.json"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
         )),
     ];
     for c in v {

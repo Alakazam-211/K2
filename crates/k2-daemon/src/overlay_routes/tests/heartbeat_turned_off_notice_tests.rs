@@ -25,6 +25,7 @@ fn an_auto_disable_is_one_system_row_and_one_event() {
     let _home_lock = crate::test_support::lock_home();
     let handle = format!("hbto{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let (project_id, _) = seed(&handle);
+    pin(&project_id, &uuid::Uuid::new_v4().to_string());
     {
         let db = k2_core::db::shared();
         let conn = db.lock();

@@ -438,57 +438,53 @@ fn api_hands_these_to_the_shell() {
         ..c
     };
     let v = vec![
+        // Help never acts (K2's rule): -h or --help anywhere prints the
+        // usage on stdout, exit 0, and sends nothing (cmd_api's
+        // `_wants_help`). The front hands each line to the shell's help.
         shell(case(
-            "--help",
+            "--help: the usage, nothing sent",
             &["--help"],
             &[],
             vec![],
             owner_and_port,
-            2,
+            0,
             0,
         )),
-        // Help never acts (K2's rule): -h or --help anywhere on a verb
-        // that changes something prints help and sends nothing. bash's
-        // `api)` arm has no help check (cli/src/router.sh, `api)`) and
-        // cmd_api's on|off posts at once (cli/src/talk-and-workspace.sh,
-        // cmd_api `on|off)`), so the rows marked BASH BUG make the
-        // request. The binary hands them to the shell and does the same
-        // until K2 fixes the bash; then these rows send nothing.
         shell(case(
-            "BASH BUG, help acts: on -h turns the API on",
+            "on -h: the usage, nothing sent",
             &["on", "-h"],
             &[],
-            vec![ok(r#"{"apiEnabled":true}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "BASH BUG, help acts: on --help turns the API on",
+            "on --help: the usage, nothing sent",
             &["on", "--help"],
             &[],
-            vec![ok(r#"{"apiEnabled":true}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "BASH BUG, help acts: off -h turns the API off",
+            "off -h: the usage, nothing sent",
             &["off", "-h"],
             &[],
-            vec![ok(SET_OFF)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "BASH BUG, help acts: off --help turns the API off",
+            "off --help: the usage, nothing sent",
             &["off", "--help"],
             &[],
-            vec![ok(SET_OFF)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
             "-h before on: the usage, nothing sent",
@@ -496,7 +492,16 @@ fn api_hands_these_to_the_shell() {
             &[],
             vec![],
             owner_and_port,
-            2,
+            0,
+            0,
+        )),
+        shell(case(
+            "status -h: the usage, nothing sent",
+            &["status", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
             0,
         )),
         shell(case(

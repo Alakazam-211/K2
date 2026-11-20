@@ -710,22 +710,22 @@ fn api_key_hands_these_to_the_shell() {
     };
     let v = vec![
         shell(case(
-            "--help",
+            "--help: the usage, nothing sent",
             &["--help"],
             &[],
             vec![],
             owner_and_port,
-            1,
+            0,
             0,
         )),
         shell(case(
-            "list -h",
+            "list -h: the usage, nothing sent",
             &["list", "-h"],
             &[],
-            vec![ok(KEYS)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
             "a port that is no port",
@@ -742,15 +742,11 @@ fn api_key_hands_these_to_the_shell() {
     }
 }
 
-/// Help never acts (K2's rule): -h or --help anywhere on a verb that
-/// changes something prints help and sends nothing. bash's `api-key)` arm
-/// has no help check (cli/src/router.sh, `api-key)`): `revoke`, `disable`
-/// and `enable` take the first word as the id and post at once
-/// (cli/src/talk-and-workspace.sh, cmd_api_key `revoke)`, `disable)`,
-/// `enable)`), and `create --label -h` mints a key labelled `-h`. The rows
-/// marked BASH BUG make the request: the binary hands every -h line to
-/// the shell and does the same until K2 fixes the bash; then these rows
-/// send nothing.
+/// Help never acts (K2's rule): -h or --help anywhere prints the usage on
+/// stdout, exit 0, and sends nothing (cmd_api_key's `_wants_help`), even
+/// where the word would be a value: `revoke -h`, `create --label -h`,
+/// `hire-ceiling k1 --app-login -h`. The front hands each line to the
+/// shell's help.
 #[test]
 fn api_key_help_never_acts() {
     let rig = Rig::new(VERB, "helpacts");
@@ -760,66 +756,66 @@ fn api_key_help_never_acts() {
     };
     let v = vec![
         shell(case(
-            "BASH BUG, help acts: revoke -h revokes a key named -h",
+            "revoke -h: the usage, nothing sent",
             &["revoke", "-h"],
             &[],
-            vec![ok(r#"{"success":false}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "BASH BUG, help acts: revoke k1 --help revokes k1",
+            "revoke k1 --help: the usage, nothing sent",
             &["revoke", "k1", "--help"],
             &[],
-            vec![ok(r#"{"success":true}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "BASH BUG, help acts: disable k1 -h disables k1",
+            "disable k1 -h: the usage, nothing sent",
             &["disable", "k1", "-h"],
             &[],
-            vec![ok(r#"{"success":true}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "BASH BUG, help acts: enable --help enables a key named --help",
+            "enable --help: the usage, nothing sent",
             &["enable", "--help"],
             &[],
-            vec![ok(r#"{"success":false}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "BASH BUG, help acts: create --label -h mints a key",
+            "create --label -h: the usage, nothing sent",
             &["create", "--label", "-h", "--workspaces", "*"],
             &[],
-            vec![ok(r#"{"id":"k9","key":"k2sk_x","scope":"*"}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "create -h: an unknown flag, nothing sent",
+            "create -h: the usage, nothing sent",
             &["create", "-h"],
             &[],
             vec![],
             owner_and_port,
-            1,
+            0,
             0,
         )),
         shell(case(
-            "hire-ceiling k1 --help: an unknown flag, nothing sent",
+            "hire-ceiling k1 --help: the usage, nothing sent",
             &["hire-ceiling", "k1", "--help"],
             &[],
             vec![],
             owner_and_port,
-            2,
+            0,
             0,
         )),
         shell(case(
@@ -828,25 +824,25 @@ fn api_key_help_never_acts() {
             &[],
             vec![],
             owner_and_port,
-            2,
+            0,
             0,
         )),
         shell(case(
-            "BASH BUG, help acts: hire-ceiling k1 --app-login -h sends an App named -h",
+            "hire-ceiling k1 --app-login -h: the usage, nothing sent",
             &["hire-ceiling", "k1", "--app-login", "-h"],
             &[],
-            vec![ok(r#"{"id":"k1","hireLimits":{"apps":[{"app":"-h"}]}}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "create --hire -h: an unknown flag, nothing sent",
+            "create --hire -h: the usage, nothing sent",
             &["create", "--hire", "-h"],
             &[],
             vec![],
             owner_and_port,
-            1,
+            0,
             0,
         )),
     ];

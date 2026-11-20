@@ -9,7 +9,7 @@ fn cmd_api_key() -> String {
     text[start..end].to_string()
 }
 
-/// `echo "<text>" >&2` as bash prints it.
+/// `echo "<text>"` as bash prints it.
 fn echoed(line: &str) -> String {
     line.replace('\\', "\\\\")
 }
@@ -17,25 +17,23 @@ fn echoed(line: &str) -> String {
 #[test]
 fn the_shell_s_lines() {
     let f = cmd_api_key();
-    let usage = &f[f
-        .find("        *)\n            echo \"Usage: k2 api-key <")
-        .expect("the usage arm")..];
-    let lines: Vec<&str> = usage
-        .lines()
-        .skip(1)
-        .take_while(|l| l.trim_start().starts_with("echo "))
-        .collect();
+    // -h or --help anywhere: the usage on stdout, exit 0, nothing sent.
+    assert!(f.contains("    if _wants_help \"$@\"; then\n        _api_key_usage\n        return 0\n"));
+    // An unknown verb: the usage on stderr, exit 1.
+    assert!(f.contains("        *)\n            _api_key_usage >&2\n            exit 1 ;;"));
+    let text = source("talk-and-workspace.sh");
+    let usage = text
+        .split_once("_api_key_usage() {\n")
+        .expect("_api_key_usage")
+        .1
+        .split_once("\n}\n")
+        .expect("its end")
+        .0;
+    let lines: Vec<&str> = usage.lines().collect();
     assert_eq!(lines.len(), USAGE.len());
     for (shell, ours) in lines.iter().zip(USAGE) {
-        assert_eq!(
-            *shell,
-            format!("            echo \"{}\" >&2", echoed(&k2(ours)))
-        );
+        assert_eq!(*shell, format!("    echo \"{}\"", echoed(&k2(ours))));
     }
-    assert!(usage.contains(&format!(
-        "{}\n            exit 1 ;;",
-        lines[lines.len() - 1]
-    )));
     for shell in [
         r#"                    --label)        label="${2:-}"; shift 2 ;;"#,
         r#"                    *)              echo "Unknown flag: $1" >&2; exit 1 ;;"#,

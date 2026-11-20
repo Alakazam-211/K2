@@ -26,12 +26,23 @@ fn the_shell_s_lines() {
             "cmd_api no longer has {shell:?}"
         );
     }
-    for l in USAGE {
-        assert!(
-            f.contains(&format!("            echo \"{}\" >&2\n", k2(l))),
-            "{l:?}"
-        );
-    }
+    // -h or --help anywhere: the usage on stdout, exit 0, nothing sent.
+    assert!(f.contains("    if _wants_help \"$@\"; then\n        _api_usage\n        return 0\n"));
+    // An unknown verb: the usage on stderr, exit 2.
+    assert!(f.contains("            _api_usage >&2\n            exit 2\n"));
+    let text = source("talk-and-workspace.sh");
+    let usage = text
+        .split_once("_api_usage() {\n")
+        .expect("_api_usage")
+        .1
+        .split_once("\n}\n")
+        .expect("its end")
+        .0;
+    let want: Vec<String> = USAGE
+        .iter()
+        .map(|l| format!("    echo \"{}\"", k2(l)))
+        .collect();
+    assert_eq!(usage.lines().collect::<Vec<_>>(), want);
     assert!(f.contains(&format!("    print('{}')\n", k2(NOTE_OFF))));
     assert!(f.contains(&format!("    print('{FORCED}')\n")));
     let router = source("router.sh");

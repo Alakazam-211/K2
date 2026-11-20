@@ -52,6 +52,9 @@
 # what the binary prints with one, and its no-python3 test checks the
 # rows that answer otherwise there. They meet wiki-status-large-answer in
 # wiki_parity.rs's wiki_status_with_a_large_answer.)
+# garden_blobs.sh meets expect-100-continue against a real daemon: its
+# one-chunk put of a body over 1 MiB goes through a relay that records each
+# request, and the test checks each side's head by the difference's name.
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -159,6 +162,7 @@ EXPECTED_DIFFS=(
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\`, \`connections remove beta\`, \`api on\` and \`api-key revoke k1\` (POSTs), and \`api-key list\` (a GET). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), api on the same line on stdout, api-key list and revoke \"Error: Expecting value: line 1 column 1 (char 0)\" on stderr, connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
     "wiki-status-large-answer|K5 lane r8c, for K2 to rule on|\`wiki status\` hands both of the daemon's answers (the serve status and the index) to its Python in environment variables; an index above what one variable may hold (128 KiB on Linux, about 1 MiB in all on macOS) stops bash there: \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 126. The binary reads the answers itself and prints the status, exit 0. Both send the same two requests"
+    "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
 
@@ -330,13 +334,17 @@ s.serve_forever()
 # agent), /cli/permission/enabled says cards are off, anything else
 # {"role":"canonical"}. Mode wikibig: /cli/wiki/serve/status answers
 # {"enabled":false} and /cli/wiki/index 60,000 notes (about 1.4 MiB),
-# anything else {"role":"canonical"}. Sets STUB_PID and STUB_PORT; returns 1 when it
-# doesn't start.
+# anything else {"role":"canonical"}. Mode heads: the log holds each
+# request's whole head (the request line and every header, in order, as
+# sent), then "body <bytes> <sha256>" and an empty line; the stub speaks
+# HTTP/1.1, so it answers "Expect: 100-continue" with a 100 as a daemon
+# does, and /cli/zen/data/blob/put answers the ref of the chunk's bytes.
+# Sets STUB_PID and STUB_PORT; returns 1 when it doesn't start.
 start_stub() {
     local d="$1" mode="$2"
     rm -f "$d/port" "$d/port.tmp"
     python3 -I -c '
-import os, re, sys
+import base64, hashlib, json, os, re, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 d, mode = sys.argv[1], sys.argv[2]
 NUL = {
@@ -353,17 +361,29 @@ WIKIBIG = {
 }
 TABLE = {"nul": NUL, "optin": OPTIN, "wikibig": WIKIBIG}.get(mode, {})
 class H(BaseHTTPRequestHandler):
+    if mode == "heads":
+        protocol_version = "HTTP/1.1"
     def do_GET(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b""
         with open(os.path.join(d, "log"), "a") as f:
-            n = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
-            line = self.path + (" " + body if body else "")
-            line = re.sub("%[0-9a-fA-F]{2}", lambda m: m.group(0).upper(), line)
-            f.write(self.command + " " + line + "\n")
+            if mode == "heads":
+                f.write(self.requestline + "\n")
+                for k, v in self.headers.items():
+                    f.write(k + ": " + v + "\n")
+                f.write("body %d %s\n\n" % (len(raw), hashlib.sha256(raw).hexdigest()))
+            else:
+                body = raw.decode("utf-8", "replace")
+                line = self.path + (" " + body if body else "")
+                line = re.sub("%[0-9a-fA-F]{2}", lambda m: m.group(0).upper(), line)
+                f.write(self.command + " " + line + "\n")
         self.close_connection = True
         if mode == "close":
             return
         body = TABLE.get(self.path.split("?", 1)[0], b"{\"role\":\"canonical\"}")
+        if mode == "heads" and self.path == "/cli/zen/data/blob/put":
+            chunk = base64.b64decode(json.loads(raw)["base64"])
+            body = json.dumps({"ref": "k2blob:sha256-" + hashlib.sha256(chunk).hexdigest()}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -610,6 +630,104 @@ check_feedback_optin_without_python3() {
                 fi
             fi
         done
+    done
+    stop_stub
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_expect_100_continue: the stub logs each request's whole head (mode
+# heads), the owner token and port on disk, and both CLIs run `store blob
+# put <file> --widget board`: once with a 600,000-byte file (800,000 bytes
+# of base64, a body under 1 MiB) and once with a 1,200,000-byte file (a
+# body of about 1.6 MB, still one 2 MiB chunk). Bash runs with
+# K5_CLI_VIA=rust, as the parity rig runs it, so both sides send the
+# hand-over headers. With the rig's masks (each side's User-Agent and
+# X-K5-Cli-Via masked, the binary's X-K5-Cli-Version and bash's
+# X-K5-Cli-Noun dropped), the small put's requests are the same line for
+# line and body for body; the big put's differ in one line only, bash's
+# "Expect: 100-continue". Both print the chunk's ref, write nothing on
+# stderr and exit 0.
+check_expect_100_continue() {
+    local d="$WORK/expect100" size side rc tmp want problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    start_stub "$d" heads || { echo "the stub daemon didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    for size in 600000 1200000; do
+        python3 -I -c 'import os, sys; open(sys.argv[1], "wb").write(os.urandom(int(sys.argv[2])))' "$d/f$size.bin" "$size"
+        want="k2blob:sha256-$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$d/f$size.bin")"
+        for side in bash binary; do
+            : >"$d/log"
+            rc=0
+            tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+            if [ "$side" = bash ]; then set -- K5_CLI_VIA=rust bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
+            (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" "$@" store blob put "$d/f$size.bin" --widget board) \
+                >"$d/out.$side" 2>"$d/err.$side" </dev/null || rc=$?
+            cp "$d/log" "$d/log.$side"
+            [ "$rc" = 0 ] || problems+=("$side put of $size bytes exited $rc: $(head -c 300 "$d/err.$side")")
+            [ ! -s "$d/err.$side" ] || problems+=("$side put of $size bytes wrote on stderr: $(head -c 300 "$d/err.$side")")
+            [ "$(cat "$d/out.$side")" = "$want" ] || problems+=("$side put of $size bytes printed '$(head -c 200 "$d/out.$side")', want the chunk's ref $want")
+        done
+        python3 -I - "$d/log.bash" "$d/log.binary" "$size" >"$d/verdict" <<'PY' || problems+=("$(cat "$d/verdict")")
+import sys
+EXPECT = "Expect: 100-continue"
+bash_log, bin_log, size = sys.argv[1], sys.argv[2], int(sys.argv[3])
+bad = []
+
+def blocks(p):
+    return [b.split("\n") for b in open(p).read().split("\n\n") if b.strip()]
+
+def norm(lines, native, where):
+    out, seen = [], {"ua": 0, "via": 0, "ver": 0, "noun": 0}
+    for l in lines:
+        if l.startswith("User-Agent: " + ("k5/" if native else "curl/")):
+            seen["ua"] += 1
+            out.append("User-Agent: <ua>")
+        elif native and l.startswith("X-K5-Cli-Version: "):
+            seen["ver"] += 1
+        elif l == "X-K5-Cli-Via: " + ("native" if native else "fallthrough"):
+            seen["via"] += 1
+            out.append("X-K5-Cli-Via: <via>")
+        elif not native and l.startswith("X-K5-Cli-Noun: "):
+            seen["noun"] += 1
+        else:
+            out.append(l)
+    want = {"ua": 1, "via": 1, "ver": int(native), "noun": int(not native)}
+    if seen != want:
+        bad.append("%s: the masked lines %r, want %r: %r" % (where, seen, want, lines))
+    return out
+
+b, r = blocks(bash_log), blocks(bin_log)
+if len(b) != 1 or len(r) != 1:
+    bad.append("a put of %d bytes is one chunk, one request: bash sent %d, the binary %d" % (size, len(b), len(r)))
+for i, (bl, rl) in enumerate(zip(b, r)):
+    bn = norm(bl, False, "bash request %d" % i)
+    rn = norm(rl, True, "the binary's request %d" % i)
+    if bn[0] != "POST /cli/zen/data/blob/put HTTP/1.1":
+        bad.append("bash request %d is not the blob put: %r" % (i, bn[0]))
+    cl = [int(l.split(": ", 1)[1]) for l in bn if l.startswith("Content-Length: ")]
+    if len(cl) != 1:
+        bad.append("bash request %d has %d Content-Length lines" % (i, len(cl)))
+        continue
+    big = cl[0] > 1048576
+    if big != (size > 700000):
+        bad.append("the put of %d bytes sent a body of %d bytes: the case no longer straddles 1 MiB" % (size, cl[0]))
+    if EXPECT in rn:
+        bad.append("the binary sent %r (body %d bytes): the difference is gone" % (EXPECT, cl[0]))
+    if big:
+        if bn.count(EXPECT) != 1:
+            bad.append("bash sent no %r on a body of %d bytes: the difference is gone or changed" % (EXPECT, cl[0]))
+        bn = [l for l in bn if l != EXPECT]
+    elif EXPECT in bn:
+        bad.append("bash sent %r on a body of %d bytes, under 1 MiB" % (EXPECT, cl[0]))
+    if bn != rn:
+        bad.append("the put of %d bytes: the requests differ beyond %r: bash %r, the binary %r" % (size, EXPECT, bn, rn))
+if bad:
+    print("\n".join(bad))
+    sys.exit(1)
+PY
     done
     stop_stub
     [ ${#problems[@]} -eq 0 ] && return 0

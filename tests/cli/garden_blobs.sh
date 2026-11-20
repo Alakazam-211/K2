@@ -6,6 +6,11 @@
 #     exact bytes back (a 5 MiB file crosses several 2 MiB chunks), ls lists;
 #   - a value naming a blob this widget's data doesn't hold: blob_missing,
 #     exit 4, nothing written; after the upload it is accepted;
+#   - one put whose single chunk is a body over 1 MiB goes through a relay
+#     that records each request on its way to the daemon: the daemon takes
+#     it whole with or without "Expect: 100-continue" (bash's curl sends
+#     it; the k5 binary never does: scripts/cli-parity.sh's named
+#     difference expect-100-continue), and get gives the bytes back;
 #   - export --blobs copies each named file into <dir>/<hash>; import
 #     --blobs into a new widget brings the files with the data, and the same
 #     import without them fails whole with blob_missing (exit 4).
@@ -38,7 +43,9 @@ sha() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], 
 
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/k2gbl-XXXXXX")"
 DAEMON_PID=""
+RELAY_PID=""
 cleanup() {
+    [ -n "$RELAY_PID" ] && kill "$RELAY_PID" 2>/dev/null || true
     [ -n "$DAEMON_PID" ] && kill "$DAEMON_PID" 2>/dev/null || true
     sleep 0.3
     [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
@@ -109,6 +116,104 @@ expect_eq "ls exit 0" "$rc" "0"
 expect_has "ls shows the held blob with its key count" "$(cat "$SANDBOX/out")" "$REF"
 expect_has "ls says 1 key" "$(grep "$REF" "$SANDBOX/out")" "1 key"
 expect_has "ls says the big one is pending" "$(grep "$BIG" "$SANDBOX/out")" "pending"
+
+echo "== one POST over 1 MiB, through a recording relay =="
+# The relay passes each connection's bytes both ways untouched and keeps
+# what the CLI sent, one file per connection (each CLI request is its own
+# connection). K2_PORT points this one call at it; the token is the owner
+# token on disk, as above.
+mkdir -p "$SANDBOX/relay"
+python3 -I -c '
+import os, socket, sys, threading
+d, up = sys.argv[1], int(sys.argv[2])
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 0))
+s.listen(8)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.getsockname()[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+def pipe(a, b, keep):
+    try:
+        while True:
+            buf = a.recv(65536)
+            if not buf:
+                break
+            if keep:
+                keep.write(buf)
+                keep.flush()
+            b.sendall(buf)
+    except OSError:
+        pass
+    finally:
+        for c in (a, b):
+            try:
+                c.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+def serve(c, n):
+    u = socket.create_connection(("127.0.0.1", up))
+    keep = open(os.path.join(d, "conn-%03d" % n), "wb")
+    back = threading.Thread(target=pipe, args=(u, c, None), daemon=True)
+    back.start()
+    pipe(c, u, keep)
+    back.join()
+    keep.close()
+    c.close()
+    u.close()
+n = 0
+while True:
+    c, _ = s.accept()
+    n += 1
+    threading.Thread(target=serve, args=(c, n), daemon=True).start()
+' "$SANDBOX/relay" "$PORT" &
+RELAY_PID=$!
+for _ in $(seq 1 100); do [ -s "$SANDBOX/relay/port" ] && break; sleep 0.05; done
+[ -s "$SANDBOX/relay/port" ] || { bad "the relay wrote its port"; exit 1; }
+RELAY_PORT="$(cat "$SANDBOX/relay/port")"
+# 1,200,000 bytes: one 2 MiB chunk, about 1.6 MB of base64 in its JSON.
+python3 -c 'import os, sys; open(sys.argv[1], "wb").write(os.urandom(1200000))' "$SANDBOX/mid.bin"
+# covers: store --widget
+set +e
+HOME="$DHOME" K2_PORT="$RELAY_PORT" "$K2" store blob put "$SANDBOX/mid.bin" --widget board >"$SANDBOX/out" 2>"$SANDBOX/err"
+rc=$?
+set -e
+expect_eq "a put of one chunk over 1 MiB, through the relay, exits 0" "$rc" "0"
+MID="$(cat "$SANDBOX/out")"
+expect_eq "its ref is the sha256 of the bytes" "$MID" "k2blob:sha256-$(sha "$SANDBOX/mid.bin")"
+# Each request the relay saw: "<request line>|<Content-Length>|<bytes of
+# body seen>|<1 when the head has Expect: 100-continue, else 0>".
+python3 -c '
+import glob, os, sys
+for p in sorted(glob.glob(os.path.join(sys.argv[1], "conn-*"))):
+    raw = open(p, "rb").read()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    lines = head.decode("latin-1").split("\r\n")
+    hdr = {}
+    for l in lines[1:]:
+        k, _, v = l.partition(":")
+        hdr.setdefault(k.strip().lower(), []).append(v.strip())
+    expect = int(any(v.lower() == "100-continue" for v in hdr.get("expect", [])))
+    print("%s|%s|%d|%d" % (lines[0], ",".join(hdr.get("content-length", [])), len(body), expect))
+' "$SANDBOX/relay" >"$SANDBOX/relay.seen"
+kill "$RELAY_PID" 2>/dev/null || true
+wait "$RELAY_PID" 2>/dev/null || true
+RELAY_PID=""
+expect_eq "the relay saw one request" "$(wc -l <"$SANDBOX/relay.seen" | tr -d ' ')" "1"
+IFS='|' read -r SEEN_LINE SEEN_LEN SEEN_BODY SEEN_EXPECT <"$SANDBOX/relay.seen"
+expect_eq "it is the blob put" "$SEEN_LINE" "POST /cli/zen/data/blob/put HTTP/1.1"
+if [ "$SEEN_LEN" -gt 1048576 ]; then ok "its body is over 1 MiB ($SEEN_LEN bytes)"; else bad "its body is $SEEN_LEN bytes, want over 1 MiB"; fi
+expect_eq "the whole body reached the daemon" "$SEEN_BODY" "$SEEN_LEN"
+if [ "$CLI_UNDER_TEST" != "$CLI_BASH_SOURCE" ]; then
+    # The k5 binary never sends Expect: 100-continue: scripts/cli-parity.sh's
+    # named difference expect-100-continue. The daemon takes the body as it
+    # comes.
+    expect_eq "the k5 binary sent no Expect: 100-continue" "$SEEN_EXPECT" "0"
+else
+    expect_eq "bash's curl sent Expect: 100-continue on a body over 1 MiB" "$SEEN_EXPECT" "1"
+fi
+run store blob get "$MID" --widget board --out "$SANDBOX/mid.back"
+expect_eq "its get exits 0" "$rc" "0"
+expect_eq "its get gives the bytes back exactly" "$(sha "$SANDBOX/mid.back")" "$(sha "$SANDBOX/mid.bin")"
 
 echo "== blob_missing =="
 GHOST="k2blob:sha256-$(printf 'nobody uploaded this' | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"

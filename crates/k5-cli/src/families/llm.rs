@@ -39,8 +39,8 @@ use super::{curl_port, Shown};
 use crate::confirm::{self, Confirm, Split};
 use crate::daemon;
 use crate::exit::Exit;
-use crate::out::json::{Text, Value};
 use crate::out;
+use crate::out::json::{Text, Value};
 use crate::passport;
 use crate::prelude::{self, Closing, Gate};
 use crate::prompt;
@@ -205,8 +205,10 @@ pub fn skips_gate(words: &[&str]) -> bool {
     match words.first().copied().unwrap_or("") {
         "" | "help" | "--help" | "-h" => true,
         n if NOUNS.contains(&n) => {
-            matches!(words.get(1).copied().unwrap_or(""), "" | "help" | "--help" | "-h")
-                || words[1..].iter().any(|w| matches!(*w, "-h" | "--help"))
+            matches!(
+                words.get(1).copied().unwrap_or(""),
+                "" | "help" | "--help" | "-h"
+            ) || words[1..].iter().any(|w| matches!(*w, "-h" | "--help"))
         }
         _ => false,
     }
@@ -331,7 +333,7 @@ impl Cx {
 /// `_llma_json k1 v1 k2 v2 …`: `"__true__"` and `"__false__"` are
 /// booleans, an empty value is left out.
 pub fn json_of(pairs: &[(&str, &[u8])]) -> String {
-    let mut out = Vec::new();
+    let mut out: Vec<(Text, Value)> = Vec::new();
     for (k, v) in pairs {
         let value = match *v {
             b"__true__" => Value::Bool(true),
@@ -392,7 +394,11 @@ fn check(r: Result<(), String>) -> Result<(), Exit> {
 /// `cmd_llm_accounts`'s verbs.
 pub fn verb(cx: &mut Cx, l: &Line) -> Done {
     let p = |i: usize| l.pos[i].as_str();
-    let mode: &[u8] = if l.device { b"other_device" } else { b"this_computer" };
+    let mode: &[u8] = if l.device {
+        b"other_device"
+    } else {
+        b"this_computer"
+    };
     match l.sub.as_str() {
         "list" | "ls" => {
             need(l, 0, "list [--tool <tool>] [--json]")?;
@@ -519,10 +525,9 @@ pub fn verb(cx: &mut Cx, l: &Line) -> Done {
         "storage" => {
             let s = match l.pos.len() {
                 0 => cx.get("storage", "")?,
-                1 if matches!(p(0), "files" | "vault") => cx.post(
-                    "storage/set",
-                    &json_of(&[("storage", p(0).as_bytes())]),
-                )?,
+                1 if matches!(p(0), "files" | "vault") => {
+                    cx.post("storage/set", &json_of(&[("storage", p(0).as_bytes())]))?
+                }
                 _ => return Err(usage_err(&usage("storage [files|vault]"))),
             };
             if l.json {
@@ -679,7 +684,11 @@ fn add_key(cx: &mut Cx, l: &Line) -> Done {
             "usage: the API token is read from stdin, never an argument \u{2014} {CLI} llm tokens add-key <tool> <label>"
         )));
     }
-    need(l, 2, "add-key <tool> <label>   (the API token is read from stdin)")?;
+    need(
+        l,
+        2,
+        "add-key <tool> <label>   (the API token is read from stdin)",
+    )?;
     let (tool, label) = (l.pos[0].as_str(), l.pos[1].as_str());
     check(key_tool_ok(tool))?;
     let key = if prompt::stdin_is_tty() {
@@ -776,7 +785,10 @@ fn trap_signals(on: bool) {
 /// runs). `Err`: that exit.
 fn cancel(cx: &mut Cx, login_id: &str) -> Result<(), Exit> {
     let body = json_of(&[("loginId", login_id.as_bytes())]);
-    match cx.client.sidecar_post(&format!("{BASE}login/cancel"), &body) {
+    match cx
+        .client
+        .sidecar_post(&format!("{BASE}login/cancel"), &body)
+    {
         Ok(r) if r.status == 200 => Ok(()),
         Ok(r) => Err(exit_for(&format!("{:03}", r.status))),
         Err(_) => Err(Exit::Error),
@@ -794,10 +806,9 @@ fn stopped(cx: &mut Cx, login_id: &str) -> Exit {
 
 /// `_envn_into poll LLMA_POLL_SECS 2`, as `sleep` reads it.
 fn poll_secs() -> Duration {
-    let v = k2_client::env_names::first_nonempty_os_in(
-        k2_client::env_names::LLMA_POLL_SECS,
-        |n| std::env::var_os(n),
-    )
+    let v = k2_client::env_names::first_nonempty_os_in(k2_client::env_names::LLMA_POLL_SECS, |n| {
+        std::env::var_os(n)
+    })
     .and_then(|(_, v)| v.into_string().ok())
     .unwrap_or_else(|| "2".into());
     Duration::from_secs_f64(v.trim().parse::<f64>().unwrap_or(2.0).max(0.0))
@@ -878,10 +889,7 @@ fn follow(cx: &mut Cx, login_id: &str) -> Done {
         }
         match f.state.as_str() {
             "signed_in" => {
-                let mut lines = vec![format!(
-                    "Signed in: {} subscription '{}'.",
-                    f.tool, f.label
-                )];
+                let mut lines = vec![format!("Signed in: {} subscription '{}'.", f.tool, f.label)];
                 if f.offer == "1" {
                     lines.push(format!(
                         "It is not the server default. To use it now: {CLI} llm tokens switch {} '{}'",
@@ -968,7 +976,12 @@ mod tests {
     #[test]
     fn the_json_is_the_shell_s() {
         assert_eq!(
-            json_of(&[("id", &b"a"[..]), ("x", &b""[..]), ("on", &b"__true__"[..]), ("off", &b"__false__"[..])]),
+            json_of(&[
+                ("id", &b"a"[..]),
+                ("x", &b""[..]),
+                ("on", &b"__true__"[..]),
+                ("off", &b"__false__"[..])
+            ]),
             r#"{"id": "a", "on": true, "off": false}"#
         );
         assert_eq!(json_of(&[]), "{}");

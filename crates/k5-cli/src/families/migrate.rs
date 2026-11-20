@@ -42,11 +42,11 @@
 //! exits 1, as the shell's `set -e` does.
 
 use super::{curl_port, ljust, py_get, py_iter, raised, Raise, Shown};
-use crate::out::pylib::ops;
 use crate::confirm::{self, Confirm, Split};
 use crate::daemon;
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};
+use crate::out::pylib::ops;
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing, Gate};

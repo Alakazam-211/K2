@@ -382,16 +382,15 @@ pub fn list(body: &[u8], want: &str) -> Shown {
                     o.line(format!("      used by: {}{in_use}", parts.join(", ")));
                 }
                 if truthy(py_get(a, "detail", 69)?) {
-                    o.line(format!("      {}", py::str_of(ops::index(a, "detail", 70)?)));
+                    o.line(format!(
+                        "      {}",
+                        py::str_of(ops::index(a, "detail", 70)?)
+                    ));
                 }
                 if truthy(py_get(a, "signInEndsSoon", 71)?)
                     && truthy(py_get(a, "signInEndsAt", 71)?)
                 {
-                    let when = local(
-                        ops::index(a, "signInEndsAt", 72)?,
-                        "%Y-%m-%d %H:%M %Z",
-                        72,
-                    )?;
+                    let when = local(ops::index(a, "signInEndsAt", 72)?, "%Y-%m-%d %H:%M %Z", 72)?;
                     o.line(format!("      sign in again by {when}"));
                 }
             }
@@ -454,11 +453,7 @@ pub fn status(body: &[u8]) -> Shown {
             }
         }
         if truthy(g("signInEndsAt", 8)?) {
-            let when = local(
-                ops::index(&a, "signInEndsAt", 10)?,
-                "%Y-%m-%d %H:%M %Z",
-                10,
-            )?;
+            let when = local(ops::index(&a, "signInEndsAt", 10)?, "%Y-%m-%d %H:%M %Z", 10)?;
             if truthy(g("signInEndsSoon", 11)?) {
                 let label = confirm::dumps(g("label", 12)?.unwrap_or(&Value::Null));
                 o.line(format!(
@@ -700,7 +695,10 @@ pub fn auto_next(body: &[u8]) -> Shown {
             } else {
                 "off".into()
             };
-            o.line(format!("{} {state}", ljust(&s_of(py_get(&t, "tool", 14)?), 7)));
+            o.line(format!(
+                "{} {state}",
+                ljust(&s_of(py_get(&t, "tool", 14)?), 7)
+            ));
             if truthy(py_get(&t, "lastLine", 15)?) {
                 o.line(format!(
                     "        last: {}",
@@ -753,7 +751,9 @@ pub fn pins(pins_body: &[u8], list_body: &[u8]) -> Shown {
             }
         }
         if pins.is_empty() {
-            o.line("(no workspace or chat has its own token \u{2014} every chat uses Server default)");
+            o.line(
+                "(no workspace or chat has its own token \u{2014} every chat uses Server default)",
+            );
         }
         for p in &pins {
             let account = py_get(p, "accountId", 13)?;
@@ -873,8 +873,7 @@ pub fn for_agent(body: &[u8], addr: &str) -> Shown {
                 let d = py_d(mp, 25)?;
                 let mut parts = Vec::new();
                 for w in &wins {
-                    let label =
-                        py_get(w, "label", 25)?.map_or_else(|| "?".to_string(), py::str_of);
+                    let label = py_get(w, "label", 25)?.map_or_else(|| "?".to_string(), py::str_of);
                     parts.push(format!("{label} {}%", pct(w, 25)?));
                 }
                 o.line(format!("  usage: {d}% ({})", parts.join(" \u{b7} ")));

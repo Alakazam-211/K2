@@ -61,12 +61,24 @@ fn help_and_usage() {
         case("an unknown verb", &["tokens", "nope"], 2),
         case("an unknown flag", &["tokens", "list", "--nope"], 2),
         case("--tool with no value", &["tokens", "list", "--tool"], 2),
-        case("--workspace empty", &["tokens", "pin", "--workspace", ""], 2),
+        case(
+            "--workspace empty",
+            &["tokens", "pin", "--workspace", ""],
+            2,
+        ),
         case("list with a word", &["tokens", "list", "x"], 2),
-        case("list --tool gemini", &["tokens", "list", "--tool", "gemini"], 2),
+        case(
+            "list --tool gemini",
+            &["tokens", "list", "--tool", "gemini"],
+            2,
+        ),
         case("list --tool nope", &["tokens", "list", "--tool", "nope"], 2),
         case("status with one word", &["tokens", "status", "claude"], 2),
-        case("status, a tool with none", &["tokens", "status", "pi", "x"], 2),
+        case(
+            "status, a tool with none",
+            &["tokens", "status", "pi", "x"],
+            2,
+        ),
         case("usage with a word", &["tokens", "usage", "x"], 2),
         case("add with one word", &["tokens", "add", "claude"], 2),
         case("add gemini", &["tokens", "add", "gemini", "x"], 2),
@@ -81,20 +93,49 @@ fn help_and_usage() {
         case("storage nope", &["tokens", "storage", "nope"], 2),
         case("storage with two", &["tokens", "storage", "files", "x"], 2),
         case("auto-next with one", &["tokens", "auto-next", "claude"], 2),
-        case("auto-next maybe", &["tokens", "auto-next", "claude", "maybe"], 2),
+        case(
+            "auto-next maybe",
+            &["tokens", "auto-next", "claude", "maybe"],
+            2,
+        ),
         case("pins with a word", &["tokens", "pins", "x"], 2),
         case("for with none", &["tokens", "for"], 2),
         case("pin with no scope", &["tokens", "pin", "claude", "x"], 2),
         case("unpin with no scope", &["tokens", "unpin", "claude"], 2),
         case(
             "pin with both scopes",
-            &["tokens", "pin", "--workspace", "w", "--session", "s", "claude", "x"],
+            &[
+                "tokens",
+                "pin",
+                "--workspace",
+                "w",
+                "--session",
+                "s",
+                "claude",
+                "x",
+            ],
             2,
         ),
-        case("pin with one word", &["tokens", "pin", "--workspace", "w", "claude"], 2),
-        case("pin cursor", &["tokens", "pin", "--workspace", "w", "cursor", "x"], 2),
-        case("unpin nope", &["tokens", "unpin", "--session", "s", "nope"], 2),
-        case("add-key with three", &["tokens", "add-key", "claude", "x", "sk-1"], 2),
+        case(
+            "pin with one word",
+            &["tokens", "pin", "--workspace", "w", "claude"],
+            2,
+        ),
+        case(
+            "pin cursor",
+            &["tokens", "pin", "--workspace", "w", "cursor", "x"],
+            2,
+        ),
+        case(
+            "unpin nope",
+            &["tokens", "unpin", "--session", "s", "nope"],
+            2,
+        ),
+        case(
+            "add-key with three",
+            &["tokens", "add-key", "claude", "x", "sk-1"],
+            2,
+        ),
         case("add-key with one", &["tokens", "add-key", "claude"], 2),
         case("add-key pi", &["tokens", "add-key", "pi", "x"], 2),
     ] {
@@ -110,7 +151,11 @@ fn help_and_usage() {
         c.handed = true;
         rig.check(&c);
     }
-    let mut c = case("add-key, an empty stdin", &["tokens", "add-key", "claude", "x"], 2);
+    let mut c = case(
+        "add-key, an empty stdin",
+        &["tokens", "add-key", "claude", "x"],
+        2,
+    );
     c.stdin = b"\n".to_vec();
     rig.check(&c);
 }
@@ -163,13 +208,33 @@ fn reads() {
     for c in [
         // covers: llm tokens list
         daemon("list", &["tokens", "list"], vec![ok(LIST)], 0),
-        daemon("ls --tool claude", &["tokens", "ls", "--tool", "claude"], vec![ok(LIST)], 0),
+        daemon(
+            "ls --tool claude",
+            &["tokens", "ls", "--tool", "claude"],
+            vec![ok(LIST)],
+            0,
+        ),
         daemon("list, empty", &["accounts", "list"], vec![ok("{}")], 0),
         daemon("list, large", &["tokens", "list"], vec![ok(big)], 0),
         // covers: llm tokens list --json
-        daemon("list --json", &["tokens", "list", "--json"], vec![ok(LIST)], 0),
-        daemon("list --json, large", &["tokens", "list", "--json"], vec![ok(big)], 0),
-        in_session(daemon("list in a K2 terminal", &["tokens", "list"], vec![ok(LIST)], 0)),
+        daemon(
+            "list --json",
+            &["tokens", "list", "--json"],
+            vec![ok(LIST)],
+            0,
+        ),
+        daemon(
+            "list --json, large",
+            &["tokens", "list", "--json"],
+            vec![ok(big)],
+            0,
+        ),
+        in_session(daemon(
+            "list in a K2 terminal",
+            &["tokens", "list"],
+            vec![ok(LIST)],
+            0,
+        )),
         daemon(
             "list refused",
             &["tokens", "list"],
@@ -179,14 +244,24 @@ fn reads() {
             )],
             3,
         ),
-        daemon("list, no answer", &["tokens", "list"], vec![Reply::Close], 1),
+        daemon(
+            "list, no answer",
+            &["tokens", "list"],
+            vec![Reply::Close],
+            1,
+        ),
         daemon(
             "list, not JSON refused",
             &["tokens", "list"],
             vec![Reply::Answer(500, "boom".into())],
             1,
         ),
-        traceback(daemon("list, not JSON", &["tokens", "list"], vec![ok("nope")], 1)),
+        traceback(daemon(
+            "list, not JSON",
+            &["tokens", "list"],
+            vec![ok("nope")],
+            1,
+        )),
         traceback(daemon(
             "list, a used that is no number",
             &["tokens", "list"],
@@ -196,14 +271,26 @@ fn reads() {
             1,
         )),
         // covers: llm tokens status
-        daemon("status", &["tokens", "status", "claude", "Work one"], vec![ok(STATUS)], 0),
+        daemon(
+            "status",
+            &["tokens", "status", "claude", "Work one"],
+            vec![ok(STATUS)],
+            0,
+        ),
         daemon(
             "status, not soon",
             &["tokens", "status", "grok", "a/b?"],
-            vec![ok(r#"{"account":{"tool":"grok","signInEndsAt":1700003600}}"#)],
+            vec![ok(
+                r#"{"account":{"tool":"grok","signInEndsAt":1700003600}}"#,
+            )],
             0,
         ),
-        daemon("status, empty", &["tokens", "status", "codex", "x"], vec![ok("{}")], 0),
+        daemon(
+            "status, empty",
+            &["tokens", "status", "codex", "x"],
+            vec![ok("{}")],
+            0,
+        ),
         // covers: llm tokens status --json
         daemon(
             "status --json",
@@ -229,9 +316,19 @@ fn reads() {
             )],
             0,
         ),
-        daemon("usage, none", &["tokens", "usage"], vec![ok(r#"{"rows":[]}"#)], 0),
+        daemon(
+            "usage, none",
+            &["tokens", "usage"],
+            vec![ok(r#"{"rows":[]}"#)],
+            0,
+        ),
         // covers: llm tokens usage --json
-        daemon("usage --json", &["tokens", "usage", "--json"], vec![ok("{}")], 0),
+        daemon(
+            "usage --json",
+            &["tokens", "usage", "--json"],
+            vec![ok("{}")],
+            0,
+        ),
         // covers: llm tokens pins
         daemon(
             "pins",
@@ -251,7 +348,12 @@ fn reads() {
             0,
         ),
         // covers: llm tokens pins --json
-        daemon("pins --json", &["tokens", "pins", "--json"], vec![ok(r#"{"pins":[]}"#)], 0),
+        daemon(
+            "pins --json",
+            &["tokens", "pins", "--json"],
+            vec![ok(r#"{"pins":[]}"#)],
+            0,
+        ),
         // covers: llm tokens for
         daemon(
             "for",
@@ -278,11 +380,18 @@ fn reads() {
         daemon(
             "for --refresh",
             &["tokens", "for", "ws", "--refresh"],
-            vec![ok(r#"{"tool":"claude","source":"resumed","maxPercent":3,"live":true}"#)],
+            vec![ok(
+                r#"{"tool":"claude","source":"resumed","maxPercent":3,"live":true}"#,
+            )],
             0,
         ),
         // covers: llm tokens for --json
-        daemon("for --json", &["tokens", "for", "ws", "--json"], vec![ok("{}")], 0),
+        daemon(
+            "for --json",
+            &["tokens", "for", "ws", "--json"],
+            vec![ok("{}")],
+            0,
+        ),
         daemon(
             "storage",
             &["tokens", "storage"],
@@ -307,7 +416,12 @@ fn reads() {
             0,
         ),
         // covers: llm tokens auto-next --json
-        daemon("auto-next --json", &["tokens", "auto-rotate", "--json"], vec![ok("{}")], 0),
+        daemon(
+            "auto-next --json",
+            &["tokens", "auto-rotate", "--json"],
+            vec![ok("{}")],
+            0,
+        ),
     ] {
         rig.check(&c);
     }
@@ -506,11 +620,17 @@ fn secrets_from_stdin() {
         &["tokens", "add", "claude", "Work"],
         vec![
             ok(r#"{"login":{"loginId":"L 1/x"}}"#),
-            ok(r#"{"login":{"state":"waiting","url":"https://example.com/a","code":"AB-CD","banner":"Opening the sign-in"}}"#),
-            ok(r#"{"login":{"state":"waiting","url":"https://example.com/a","code":"AB-CD","banner":"Opening the sign-in"}}"#),
+            ok(
+                r#"{"login":{"state":"waiting","url":"https://example.com/a","code":"AB-CD","banner":"Opening the sign-in"}}"#,
+            ),
+            ok(
+                r#"{"login":{"state":"waiting","url":"https://example.com/a","code":"AB-CD","banner":"Opening the sign-in"}}"#,
+            ),
             ok(r#"{"login":{"state":"waiting_for_code"}}"#),
             ok("{}"),
-            ok(r#"{"login":{"state":"signed_in","tool":"claude","label":"Work","offerMakeActive":true}}"#),
+            ok(
+                r#"{"login":{"state":"signed_in","tool":"claude","label":"Work","offerMakeActive":true}}"#,
+            ),
             ok(r#"{"rows":[]}"#),
         ],
         0,
@@ -543,7 +663,9 @@ fn secrets_from_stdin() {
     let mut on = daemon(
         "auto-next on: the confirm",
         &["tokens", "auto-next", "claude", "on"],
-        vec![ok(r#"{"tools":[{"tool":"claude","on":true,"by":"owner-token","byCanAct":true}]}"#)],
+        vec![ok(
+            r#"{"tools":[{"tool":"claude","on":true,"by":"owner-token","byCanAct":true}]}"#,
+        )],
         0,
     );
     on.vault = Some(vec![
@@ -631,11 +753,30 @@ fn the_lines_say_the_brand_s_name() {
     let rig = VRig::new();
     let cli = k2_client::brand::CLI_NAME;
     for (args, err) in [
-        (&["nope"][..], format!("usage: unknown llm verb 'nope' ({cli} llm tokens --help)\n")),
-        (&["tokens", "list", "--x"][..], format!("usage: unknown flag '--x' ({cli} llm tokens --help)\n")),
-        (&["tokens", "usage", "x"][..], format!("usage: {cli} llm tokens usage [--json]\n")),
-        (&["tokens", "next", "nope"][..], format!("usage: unknown tool 'nope' (claude, codex or grok) — {cli} llm tokens --help\n")),
-        (&["tokens", "pin", "--session", "s", ""][..], format!("usage: {cli} llm tokens pin --workspace <ws>|--session <key> <tool> <label>\n")),
+        (
+            &["nope"][..],
+            format!("usage: unknown llm verb 'nope' ({cli} llm tokens --help)\n"),
+        ),
+        (
+            &["tokens", "list", "--x"][..],
+            format!("usage: unknown flag '--x' ({cli} llm tokens --help)\n"),
+        ),
+        (
+            &["tokens", "usage", "x"][..],
+            format!("usage: {cli} llm tokens usage [--json]\n"),
+        ),
+        (
+            &["tokens", "next", "nope"][..],
+            format!(
+                "usage: unknown tool 'nope' (claude, codex or grok) — {cli} llm tokens --help\n"
+            ),
+        ),
+        (
+            &["tokens", "pin", "--session", "s", ""][..],
+            format!(
+                "usage: {cli} llm tokens pin --workspace <ws>|--session <key> <tool> <label>\n"
+            ),
+        ),
     ] {
         let c = case("brand", args, 2);
         let ran = rig.run(false, false, &c);
@@ -645,14 +786,16 @@ fn the_lines_say_the_brand_s_name() {
     let c = daemon(
         "brand: list",
         &["tokens", "list"],
-        vec![ok(r#"{"tools":[{"tool":"codex","supported":true,"accounts":[]}]}"#)],
+        vec![ok(
+            r#"{"tools":[{"tool":"codex","supported":true,"accounts":[]}]}"#,
+        )],
         0,
     );
     let ran = rig.run(false, false, &c);
     assert!(
-        ran.out
-            .stdout
-            .contains(&format!("(add a subscription: {cli} llm tokens add codex <label>)")),
+        ran.out.stdout.contains(&format!(
+            "(add a subscription: {cli} llm tokens add codex <label>)"
+        )),
         "{ran:#?}"
     );
     if cli != "k2" {

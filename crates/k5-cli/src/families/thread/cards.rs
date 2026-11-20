@@ -2,10 +2,11 @@
 //! `cmd_thread_ask`, `cmd_thread_secret`, `cmd_thread_void` and
 //! `cmd_thread_delete` do them (`cli/src/browser.sh`).
 //!
-//! - `ask <addr> "prompt" --option … | --options "a,b,c"`: a card with
-//!   choices, sent once by its key (as a write is, [`super::post`]); the
-//!   answer's `hint` on stderr as `hint: …`; `<id>  card #<seq>`; the
-//!   markdown hint after it.
+//! - `ask <addr> "prompt" --option … | --options "a; b; c"`: a card with
+//!   choices, sent once by its key (as a write is, [`super::post`]);
+//!   `--options` goes as typed (the daemon splits it on `;` only), with
+//!   [`OPTIONS_ONE_NOTE`] on stderr when it has a comma and no `;`;
+//!   `<id>  card #<seq>`; the markdown hint after it.
 //! - `secret <addr> --name NAME`: a card that asks a person for a secret
 //!   into the vault. Nothing on this side ever holds the value, and
 //!   `--json` drops a `value` or `secret` field all the same.
@@ -113,8 +114,28 @@ fn extra(word: &str) -> String {
 /// `ask`'s usage block's second line.
 pub fn ask_usage() -> String {
     format!(
-        "Usage: {CLI_NAME} thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")\n"
+        "Usage: {CLI_NAME} thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")\n"
     )
+}
+
+/// The one stderr line `_k2_options_one_note` prints: an `--options`
+/// value with a comma and no `;` stayed one option.
+pub const OPTIONS_ONE_NOTE: &str =
+    "--options splits on ';'; this became one option. Use ';' between options, or repeat --option";
+
+/// `_k2_options_one_note "$1"`: the note when `raw` has a comma and no `;`.
+pub fn options_one_note(raw: &str) -> Option<&'static str> {
+    (raw.contains(',') && !raw.contains(';')).then_some(OPTIONS_ONE_NOTE)
+}
+
+/// `ask`'s note: none for a value whose first character after the
+/// shell's `[:space:]` is `[` (a JSON list the daemon reads whole).
+pub fn ask_options_note(raw: &str) -> Option<&'static str> {
+    let lead = raw.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
+    if lead.starts_with('[') {
+        return None;
+    }
+    options_one_note(raw)
 }
 
 const MIX: &str = "Error: mix of --options and --option is not allowed\n";
@@ -160,7 +181,7 @@ fn parse_ask(words: &[&str]) -> Result<Ask, (String, Exit)> {
             }
             "--options" => {
                 if next.is_none() {
-                    return err("Error: --options requires a comma-separated list\n");
+                    return err("Error: --options requires a list with ';' between options\n");
                 }
                 if !a.options.is_empty() {
                     return err(MIX);
@@ -215,7 +236,7 @@ fn parse_ask(words: &[&str]) -> Result<Ask, (String, Exit)> {
         ));
     }
     if a.options_csv.is_empty() && a.options.is_empty() {
-        return err("Error: ask requires --option \"…\" (repeatable) or --options \"a,b,c\"\n");
+        return err("Error: ask requires --option \"…\" (repeatable) or --options \"a; b; c\"\n");
     }
     if !a.expires.is_empty() && a.no_expiry {
         return err("Error: use --expires or --no-expiry, not both\n");
@@ -478,19 +499,11 @@ pub fn ask_body(a: &Ask, from: &str, key: &str) -> String {
     dumps(&Value::Object(o))
 }
 
-/// The answer's `hint`, as `hint: …` (nothing when there is none).
-pub fn hint(response: &[u8]) -> Option<String> {
-    match loads(response)? {
-        Value::Object(pairs) => match super::super::get(&pairs, "hint") {
-            Some(h @ Value::Str(_)) if truthy(h) => Some(format!("hint: {}", str_of(h))),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 fn ask(client: &mut Client, closing: &mut Closing, a: &Ask) -> Exit {
     let from = sender(client, closing, &a.from);
+    if let Some(note) = ask_options_note(&a.options_csv) {
+        out::stderr_line(note);
+    }
     let key = match send_once::init(client, &a.idem_key) {
         Ok(k) => k,
         Err(exit) => return exit,
@@ -505,9 +518,6 @@ fn ask(client: &mut Client, closing: &mut Closing, a: &Ask) -> Exit {
         return Exit::from_curl(soft.rc);
     }
     notes(&soft.out, true);
-    if let Some(h) = hint(&soft.out) {
-        out::stderr_line(&h);
-    }
     if a.json {
         return echo_out(&soft.out);
     }

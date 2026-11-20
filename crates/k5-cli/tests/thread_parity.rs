@@ -304,6 +304,40 @@ fn thread_reads_as_the_shell_does() {
     rig.check(&c);
 }
 
+/// A card's `--options` goes as typed (the daemon splits it on `;`
+/// only). A value with a comma and no `;` prints one note, exactly, and
+/// the daemon's `hint` with the same words is never printed again; no
+/// note for `a; b`, a value with no comma, a JSON list or `--option`.
+#[test]
+fn thread_ask_options_split_on_semicolons() {
+    const NOTE_HINT: &str = r#"{"ok":true,"id":"c1","seq":9,"hint":"--options splits on ';'; this became one option. Use ';' between options, or repeat --option"}"#;
+    const CARD: &str = r#"{"ok":true,"id":"c1","seq":9}"#;
+    const NO: &str = "No, the forward clean-up is enough";
+    const YES: &str = "Yes, rewrite the history too";
+    let rig = Rig::new(VERB, "optsemi");
+    let ask = |name: &'static str, opts: &[&str], reply: &'static str| {
+        let words: Vec<String> = ["ask", "bob", "Rewrite the history?"]
+            .iter()
+            .chain(opts)
+            .chain(&["--from", "me", "--idempotency-key", KEY])
+            .map(|w| w.to_string())
+            .collect();
+        plain(name, leak(words), vec![ok(ON), ok(reply)], 0, 2)
+    };
+    let commas = format!("{NO}, {YES}");
+    let semi = format!("{NO}; {YES}");
+    for c in [
+        ask("commas, no ';': the note once", &["--options", &commas], NOTE_HINT),
+        ask("'a; b': no note", &["--options", &semi], CARD),
+        ask("no comma: no note", &["--options", "Done"], CARD),
+        ask("a JSON list: no note", &["--options", r#" ["Yes, now","No"]"#], CARD),
+        ask("--json: the note on stderr", &["--options", "Yes, now", "--json"], NOTE_HINT),
+        ask("repeated --option: no note", &["--option", NO, "--option", YES], CARD),
+    ] {
+        rig.check(&c);
+    }
+}
+
 #[test]
 fn thread_cards_as_the_shell_does() {
     let rig = Rig::new(VERB, "cards");
@@ -514,6 +548,12 @@ fn thread_stops_before_it_sends() {
             &["ask", "bob", "p", "--option", "a", "--options", "b"],
             1,
         ),
+        (
+            "ask, both, commas: no note",
+            &["ask", "bob", "p", "--option", "a", "--options", "b,c"],
+            1,
+        ),
+        ("ask, --options last", &["ask", "bob", "p", "--options"], 1),
         ("ask --wait", &["ask", "bob", "p", "--wait"], 1),
         ("ask --style", &["ask", "bob", "p", "--style", "x"], 1),
         (
@@ -623,4 +663,22 @@ fn thread_help_never_acts() {
     ] {
         rig.check(&plain("help", args, vec![], 0, 0));
     }
+}
+
+/// `ask`'s usage names the command by the brand's name and shows `;`
+/// (in a build with `K2_BRAND_DIR=brand/xy` it says `xy`).
+#[test]
+fn ask_usage_says_the_brand_s_name_and_semicolons() {
+    let cli = k2_client::brand::CLI_NAME;
+    let rig = Rig::new(VERB, "brand");
+    let c = plain("brand", &["ask", "bob"], vec![], 1, 0);
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stderr,
+        format!(
+            "Error: prompt required\nUsage: {cli} thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")\n"
+        )
+    );
+    assert_eq!(out.code, Some(1));
+    assert!(log.is_empty(), "{log:?}");
 }

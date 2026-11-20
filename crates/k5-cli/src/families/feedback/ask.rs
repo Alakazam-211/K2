@@ -12,7 +12,8 @@
 //!    brief (`--html -` runs the shell's `mktemp -t k2-brief-XXXXXX` and
 //!    reads stdin; a file must be readable), `--timeout` only with
 //!    `--wait` and a whole number, at most 10 files, then the files as
-//!    `_thread_attachments_json` writes them ([`super::write::attachments`]).
+//!    `_thread_attachments_json` writes them ([`super::write::attachments`]),
+//!    then `--options`' one note (a comma and no `;`, [`options_one_note`]).
 //! 3. `_feedback_detect_session` ([`detect_session`]); with
 //!    `TEST_FEEDBACK_DETECT=1` only its kind is printed.
 //! 4. The shell's Python, a `python3 -` block with its own urllib client
@@ -29,6 +30,7 @@
 //! Python's own modules' frames.
 
 use super::write::{attachments, PyOut};
+use crate::families::thread::cards::{option_lines, options_one_note};
 use super::{at, at_or, dumps, err_line, join, obj, s, short_text, str_of, PyStr};
 use crate::exit::Exit;
 use crate::families::{get, py_iter, py_space, Raise, Shown};
@@ -52,21 +54,21 @@ pub const BRIEF_TEMP: &str = "k2-brief-XXXXXX";
 /// The lines of the Python block that raise (`<stdin>`).
 pub mod line {
     pub const DIE_CODE: u32 = 20;
-    pub const WARN_GET: u32 = 125;
-    pub const WARN_W: u32 = 127;
-    pub const ERROR: u32 = 119;
-    pub const DIE_ERROR: u32 = 120;
-    pub const FID: u32 = 132;
-    pub const SHORT: u32 = 138;
-    pub const JOIN: u32 = 140;
-    pub const FILES: u32 = 147;
-    pub const REVERSED: u32 = 171;
-    pub const ATTS: u32 = 175;
-    pub const ABSPATH: u32 = 179;
-    pub const NOTE: u32 = 185;
-    pub const HUMAN: u32 = 192;
-    pub const HUMAN_BODY: u32 = 195;
-    pub const HINT: u32 = 200;
+    pub const WARN_GET: u32 = 129;
+    pub const WARN_W: u32 = 131;
+    pub const ERROR: u32 = 123;
+    pub const DIE_ERROR: u32 = 124;
+    pub const FID: u32 = 136;
+    pub const SHORT: u32 = 142;
+    pub const JOIN: u32 = 144;
+    pub const FILES: u32 = 151;
+    pub const REVERSED: u32 = 175;
+    pub const ATTS: u32 = 179;
+    pub const ABSPATH: u32 = 183;
+    pub const NOTE: u32 = 189;
+    pub const HUMAN: u32 = 196;
+    pub const HUMAN_BODY: u32 = 199;
+    pub const HINT: u32 = 204;
 }
 
 /// What the words ask for.
@@ -77,7 +79,12 @@ pub struct Words {
     pub body_file: String,
     pub html: String,
     pub kind: String,
+    /// `--options`, one string split on `;` ([`options`]).
     pub options: String,
+    /// `options_set`: `--options` was given (even empty).
+    pub options_set: bool,
+    /// `--option`, repeated: each label whole.
+    pub option: Vec<String>,
     pub priority: String,
     pub assign: String,
     pub wait: bool,
@@ -96,8 +103,10 @@ impl Words {
 const ASK_USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
-    " tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--assign user[,user\u{2026}]] [--file path[:line]]\u{2026} [--wait [--timeout s]] [--json]"
+    " tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--option \"\u{2026}\"]\u{2026} [--options \"a; b\"] [--priority 1-5] [--assign user[,user\u{2026}]] [--file path[:line]]\u{2026} [--wait [--timeout s]] [--json]"
 );
+
+const MIX: &str = "mix of --options and --option is not allowed";
 
 fn usage(hint: &str) -> String {
     err_line("usage", hint)
@@ -129,8 +138,20 @@ pub fn parse(rest: &[&str]) -> Result<Words, String> {
             "--body-file" => w.body_file = value("--body-file requires a file path")?,
             "--kind" => w.kind = value("--kind requires a value (question | approval | fyi)")?,
             "--options" => {
-                w.options =
-                    value("--options requires a comma-separated list (e.g. \"Ship it,Hold\")")?
+                w.options = value(
+                    "--options requires a list with ';' between options (e.g. \"Ship it; Hold\")",
+                )?;
+                if !w.option.is_empty() {
+                    return Err(usage(MIX));
+                }
+                w.options_set = true;
+            }
+            "--option" => {
+                let label = value("--option requires a label")?;
+                if w.options_set {
+                    return Err(usage(MIX));
+                }
+                w.option.push(label);
             }
             "--priority" => w.priority = value("--priority requires a value (1-5)")?,
             "--assign" | "--to" => {
@@ -235,6 +256,11 @@ impl Ctx {
             Ok(c) => c,
             Err(e) => return e,
         };
+        if checked.words.options_set {
+            if let Some(note) = options_one_note(&checked.words.options) {
+                crate::out::stderr_line(note);
+            }
+        }
         if self.detect_only {
             return Shown::out(format!("{}\n", self.session.1)).print();
         }
@@ -412,11 +438,15 @@ impl Ctx {
         if !w.priority.is_empty() {
             payload.push(("priority", Value::Int(w.priority.clone())));
         }
-        if !w.options.is_empty() {
-            let opts = options(&w.options);
-            if !opts.is_empty() {
-                payload.push(("options", Value::Array(opts.iter().map(|x| s(x)).collect())));
-            }
+        let opts = if !w.options.is_empty() {
+            options(&w.options)
+        } else if !w.option.is_empty() {
+            option_list(&w.option)
+        } else {
+            Vec::new()
+        };
+        if !opts.is_empty() {
+            payload.push(("options", Value::Array(opts.iter().map(|x| s(x)).collect())));
         }
         if !w.assign.is_empty() {
             let names: Vec<Value> = w
@@ -762,25 +792,25 @@ fn strerror(e: &std::io::Error) -> String {
     }
 }
 
-/// `--options`: split on commas not after a backslash, each stripped and
-/// `\,` made a comma, the empty ones left out.
+/// `--options`: split on `;` only, each stripped, the empty ones left
+/// out. A comma is part of a label.
 pub fn options(raw: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut cur = String::new();
-    let mut prev = None;
-    for c in raw.chars() {
-        if c == ',' && prev != Some('\\') {
-            parts.push(std::mem::take(&mut cur));
-        } else {
-            cur.push(c);
-        }
-        prev = Some(c);
-    }
-    parts.push(cur);
-    parts
-        .into_iter()
-        .map(|p| p.trim_matches(py_space).replace("\\,", ","))
+    raw.split(';')
+        .map(|p| p.trim_matches(py_space))
         .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// `--option`, repeated: the labels as `printf '%s\n'` hands them to
+/// Python's `json.dumps` line by line, then each stripped, the empty ones
+/// left out.
+pub fn option_list(labels: &[String]) -> Vec<String> {
+    option_lines(labels)
+        .iter()
+        .map(|p| p.trim_matches(py_space))
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
         .collect()
 }
 
@@ -951,10 +981,18 @@ mod tests {
     }
 
     #[test]
-    fn options_split_on_commas_not_after_a_backslash() {
-        assert_eq!(options(" a , b\\,c ,, "), vec!["a", "b,c"]);
-        assert_eq!(options("\\,"), vec![","]);
-        assert!(options(" , ").is_empty());
+    fn options_split_on_semicolons_only() {
+        assert_eq!(
+            options("No, the forward clean-up is enough, Yes, rewrite the history too"),
+            vec!["No, the forward clean-up is enough, Yes, rewrite the history too"]
+        );
+        assert_eq!(options(" a ; b ;; "), vec!["a", "b"]);
+        assert_eq!(options("a\\,b"), vec!["a\\,b"]);
+        assert!(options(" ; ").is_empty());
+        assert_eq!(
+            option_list(&["No, wait".into(), " ".into(), "a\rb".into()]),
+            vec!["No, wait", "a", "b"]
+        );
     }
 
     #[test]

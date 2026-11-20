@@ -85,7 +85,7 @@ pub fn usage() -> String {
          Usage: {c} thread <addr> \"text\"     # write overlay text\n       \
          {c} thread <addr> [\"text\"] --file path[:line[-end]]   # attach files\n       \
          {c} thread <addr> [--json] [--limit N|--all] [--before-seq N]\n       \
-         {c} thread ask <addr> \"prompt\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")\n       \
+         {c} thread ask <addr> \"prompt\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")\n       \
          {c} thread secret <addr> --name NAME\n       \
          {c} thread withdraw <addr> <card-id> [--why \"…\"]\n       \
          {c} thread dismiss <addr> <card-id> [--why \"…\"]\n"

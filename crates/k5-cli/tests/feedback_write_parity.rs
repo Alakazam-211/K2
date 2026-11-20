@@ -165,6 +165,19 @@ fn ask_s_words() {
         ("--body-file with no value", &["ask", "t", "--body-file"]),
         ("--kind with no value", &["ask", "t", "--kind"]),
         ("--options with no value", &["ask", "t", "--options"]),
+        ("--option with no value", &["ask", "t", "--option"]),
+        (
+            "--options then --option",
+            &["ask", "t", "--options", "a; b", "--option", "c"],
+        ),
+        (
+            "--option then --options",
+            &["ask", "t", "--option", "c", "--options", "a, b"],
+        ),
+        (
+            "--options, then --option with no value",
+            &["ask", "t", "--options", "a", "--option"],
+        ),
         ("--priority with no value", &["ask", "t", "--priority"]),
         ("--assign with no value", &["ask", "t", "--assign"]),
         ("--to with no value", &["ask", "t", "--to"]),
@@ -206,6 +219,36 @@ fn ask_s_words() {
         v.push(case(name, args, &[], vec![], files, 2, 0));
     }
     check(&rig, v);
+}
+
+/// `--options` splits on `;` only; a value with a comma and no `;` stays
+/// one option and prints one note, exactly; `--option` repeated keeps
+/// each label whole. The payload's `options` and the lines match.
+#[test]
+fn ask_options_split_on_semicolons() {
+    const NO: &str = "No, the forward clean-up is enough";
+    const YES: &str = "Yes, rewrite the history too";
+    let rig = Rig::new(VERB, "optsemi");
+    let ask = |name: &'static str, opts: &[&str]| {
+        let words: Vec<String> = ["ask", "t"].iter().chain(opts).map(|w| w.to_string()).collect();
+        let words: Vec<&'static str> = words.into_iter().map(|w| &*w.leak()).collect();
+        case(name, words.leak(), &[], vec![ok(CREATED)], files, 0, 1)
+    };
+    let commas = format!("{NO}, {YES}");
+    let semi = format!(" {NO} ;; {YES} ");
+    check(
+        &rig,
+        vec![
+            ask("commas, no ';': one option, the note", &["--options", &commas]),
+            ask("'a; b': two, no note", &["--options", "a; b"]),
+            ask("';' with commas: two, commas kept", &["--options", &semi, "--json"]),
+            ask("no comma: one, no note", &["--options", "Done"]),
+            ask("an empty --options: none, no note", &["--options", ""]),
+            ask("JSON-looking: one option, the note", &["--options", r#"["a, b"]"#]),
+            ask("repeated --option: no note", &["--option", NO, "--option", " ", "--option", YES]),
+            ask("the note with --json", &["--options", "Yes, now", "--json"]),
+        ],
+    );
 }
 
 #[test]
@@ -1530,4 +1573,28 @@ fn answers_above_128_kib() {
             "{args:?}: the requests"
         );
     }
+}
+
+/// `ask`'s usage line names the command by the brand's name and shows
+/// `--option` and `;` (in a build with `K2_BRAND_DIR=brand/xy` it says
+/// `xy`).
+#[test]
+fn ask_usage_says_the_brand_s_name_and_semicolons() {
+    let cli = k2_client::brand::CLI_NAME;
+    let rig = Rig::new(VERB, "brand");
+    let c = case("brand", &["ask", "t", "--nope"], &[], vec![], files, 2, 0);
+    let (out, log) = rig.binary(&c, false);
+    assert!(
+        out.stderr.contains(&format!(" {cli} tickets ask <title> ")),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains(r#"[--options \"a; b\"]"#),
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("a,b,c"), "{}", out.stderr);
+    assert_eq!(out.code, Some(2));
+    assert!(log.is_empty(), "{log:?}");
 }

@@ -292,12 +292,15 @@ fn ask_s_words_body_and_lines() {
         stop(&["ask", "bob", "p", "--idempotency-key"]).1,
         Exit::Usage
     );
-    assert_eq!(
-        cards::hint(br#"{"hint":"split at ,"}"#),
-        Some("hint: split at ,".into())
+    let note = Some(
+        "--options splits on ';'; this became one option. Use ';' between options, or repeat --option",
     );
-    assert_eq!(cards::hint(br#"{"hint":""}"#), None);
-    assert_eq!(cards::hint(b"[1]"), None);
+    assert_eq!(cards::options_one_note("No, enough, Yes, rewrite"), note);
+    assert_eq!(cards::options_one_note("No, enough; Yes, rewrite"), None);
+    assert_eq!(cards::options_one_note("Done"), None);
+    assert_eq!(cards::ask_options_note("a, b"), note);
+    assert_eq!(cards::ask_options_note(" \t[\"a, b\",\"c\"]"), None);
+    assert_eq!(cards::ask_options_note("x [a, b]"), note);
     assert_eq!(
         cards::asked(b"{\"ok\":true,\"id\":\"c1\",\"seq\":7}\n"),
         shown("c1  card #7\n", "", 0)

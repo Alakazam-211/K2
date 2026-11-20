@@ -25,8 +25,8 @@
 //!
 //! - a command line with `-h` or `--help` (the front sends those on,
 //!   [`crate::front`]);
-//! - `export`, `import` and `imports` (a person's transfer of Threads,
-//!   through `_compute_call`);
+//! - `export --since-days` with a value that is not plain digits
+//!   ([`transfer`]);
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported
 //!   ([`crate::prelude::codex_env`]), a word that is not UTF-8, a port
 //!   curl won't take, and a `python3` the binary can't tell;
@@ -41,6 +41,7 @@ pub mod cards;
 pub mod marks;
 pub mod post;
 pub mod py;
+pub mod transfer;
 
 #[cfg(test)]
 mod tests;
@@ -132,7 +133,20 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let verb = first_word(&words);
     if matches!(verb, "export" | "import" | "imports") {
-        return None;
+        let parsed = transfer::parse(&words)?;
+        let (mut client, _) = match super::msg::client_for(args, hook_sock.as_deref(), TOOL)? {
+            Ok(c) => c,
+            Err(exit) => return Some(exit),
+        };
+        return Some(match parsed {
+            transfer::Parsed::Stop(line, exit) => {
+                if !line.is_empty() {
+                    crate::out::stderr_line(&line);
+                }
+                exit
+            }
+            transfer::Parsed::Ask(a) => transfer::run(&mut client, a),
+        });
     }
     let parsed = match verb {
         "ask" | "secret" | "void" | "withdraw" | "dismiss" | "delete" => {

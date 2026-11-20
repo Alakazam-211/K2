@@ -344,7 +344,11 @@ fn rooms_json(csv: &str) -> String {
 pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
     match ask {
         Ask::Ceiling { app, json } => {
-            let body = ctx.call(false, "/cli/app/guest/ceiling", &format!("app={}", quote(app)))?;
+            let body = ctx.call(
+                false,
+                "/cli/app/guest/ceiling",
+                &format!("app={}", quote(app)),
+            )?;
             answer(&body, *json, ceiling_lines)
         }
         Ask::List {
@@ -848,7 +852,10 @@ mod tests {
             p(&["rooms", "a", "u", "v"]),
             Some(Err(Stop::usage("unexpected: v")))
         );
-        assert_eq!(p(&["list", "--limit"]), Some(Err(Stop::silent(Exit::Error))));
+        assert_eq!(
+            p(&["list", "--limit"]),
+            Some(Err(Stop::silent(Exit::Error)))
+        );
         assert_eq!(p(&["nope"]), Some(Err(Stop::usage(usage::GUEST))));
         assert_eq!(p(&[]), None);
         assert_eq!(p(&["rooms", "a", "-h"]), None);
@@ -873,7 +880,10 @@ mod tests {
             parse_grant(&["acme", "--kind"]),
             Some(Err(Stop::silent(Exit::Error)))
         );
-        assert_eq!(parse_grant(&["acme", "--kind", "guests-chat", "--max", "x"]), None);
+        assert_eq!(
+            parse_grant(&["acme", "--kind", "guests-chat", "--max", "x"]),
+            None
+        );
         assert_eq!(
             parse_grant(&["copy-host", "a", "b", "--dry-run"]),
             Some(Ok(Ask::CopyHost {
@@ -895,7 +905,8 @@ mod tests {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../cli/src")
                 .join(file);
-            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
         };
         let cases: [(&str, &[&str]); 5] = [
             (

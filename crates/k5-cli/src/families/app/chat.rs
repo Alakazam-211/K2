@@ -35,7 +35,11 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
             "--json" => json = true,
             _ if w.starts_with('-') => {
                 return Some(Err(Stop::usage(format!(
-                    concat!("Unknown flag: {} (", cli_name!(), " app chat <app> [--json])"),
+                    concat!(
+                        "Unknown flag: {} (",
+                        cli_name!(),
+                        " app chat <app> [--json])"
+                    ),
                     w
                 ))))
             }
@@ -210,7 +214,10 @@ fn space(s: &Value, o: &mut Out) -> Result<(), Raise> {
         } else {
             String::new()
         };
-        let who = py::or(py::dget(&p, "username", 43)?, py::dget(&p, "externalId", 43)?);
+        let who = py::or(
+            py::dget(&p, "username", 43)?,
+            py::dget(&p, "externalId", 43)?,
+        );
         let level = py::dget(&p, "level", 44)?;
         let state = py::dget(&p, "state", 44)?;
         let chans = py::or(py::dget(&p, "channels", 44)?, py::empty_list());

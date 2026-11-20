@@ -34,12 +34,13 @@ fn the_shell_hands_these_on() {
         &["user", "chat", "bob"],
         &["user", "add", "bob", "--test"],
         &["role", "suggest"],
-        &["grant", "hooks"],
+        &["grant", "hooks", "retry", "o1", "-h"],
         &["grant", "copy-host", "acme"],
         &["front-door", "direct", "--ui-port", "\u{663}"],
     ] {
         assert_eq!(ask(w), Ok(Ask::Shell), "{w:?}");
     }
+    assert!(matches!(ask(&["grant", "hooks"]), Ok(Ask::Hooks(_))));
 }
 
 #[test]

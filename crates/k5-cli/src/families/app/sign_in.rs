@@ -364,7 +364,10 @@ fn auth_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         o.line(&format!("  extra page origins:    {origins}"));
         let po = py::or(py::dget(&a, "pairingOrigins", 16)?, py::empty_list());
         if py::truthy(&po) {
-            o.line(&format!("  from phone pairing:    {}", py::join(", ", &po, 18)?));
+            o.line(&format!(
+                "  from phone pairing:    {}",
+                py::join(", ", &po, 18)?
+            ));
         }
         let hosts = py::or(py::dget(&a, "hosts", 19)?, py::empty_list());
         let hosts = py::join(", ", &hosts, 19)?;
@@ -397,7 +400,8 @@ fn auth_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
 /// `int(n or 0)` in `life`, as an `i128`.
 fn int_or_zero(n: &Value, line: u32) -> Result<i128, Raise> {
     let n = py::or(n.clone(), Value::Int("0".into()));
-    let digits = crate::families::feedback::py_int(&n).map_err(|e| Raise::inside(10, line, "life", e))?;
+    let digits =
+        crate::families::feedback::py_int(&n).map_err(|e| Raise::inside(10, line, "life", e))?;
     digits.parse().map_err(|_| {
         Raise::inside(
             10,
@@ -493,9 +497,15 @@ mod tests {
                 json: false
             })
         );
-        assert_eq!(auth(&["door", "on", "off", "x"]).unwrap_err().exit, Exit::Usage);
+        assert_eq!(
+            auth(&["door", "on", "off", "x"]).unwrap_err().exit,
+            Exit::Usage
+        );
         assert_eq!(auth(&["--zap"]).unwrap_err().exit, Exit::Usage);
-        assert_eq!(auth(&["acme", "--origin", "x"]), Err(Stop::usage(usage::ORIGIN)));
+        assert_eq!(
+            auth(&["acme", "--origin", "x"]),
+            Err(Stop::usage(usage::ORIGIN))
+        );
         assert_eq!(
             auth(&["origins", "a", "--origin", " x ", "--origin", ""]),
             Ok(Ask::AuthOrigins {
@@ -507,7 +517,10 @@ mod tests {
             auth(&["origins", "a", "--origin", "x", "--clear"]),
             Err(Stop::usage(usage::BOTH))
         );
-        assert_eq!(auth(&["origins", "a", "--origin"]), Err(Stop::silent(Exit::Error)));
+        assert_eq!(
+            auth(&["origins", "a", "--origin"]),
+            Err(Stop::silent(Exit::Error))
+        );
     }
 
     #[test]
@@ -517,7 +530,17 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_eq!(
-            body(&["acme", "--invite-ttl", "48h", "--max-devices", "05", "--default", "inviteTtl resetBody", "--default", "app"]),
+            body(&[
+                "acme",
+                "--invite-ttl",
+                "48h",
+                "--max-devices",
+                "05",
+                "--default",
+                "inviteTtl resetBody",
+                "--default",
+                "app"
+            ]),
             r#"{"app": null, "inviteTtl": null, "maxDevices": 5, "resetBody": null}"#
         );
         assert_eq!(
@@ -528,7 +551,10 @@ mod tests {
             login(&["acme", "--invite-body-file"]),
             Some(Err(Stop::usage("no such file: ")))
         );
-        assert_eq!(login(&["acme", "--reset-ttl"]), Some(Err(Stop::silent(Exit::Error))));
+        assert_eq!(
+            login(&["acme", "--reset-ttl"]),
+            Some(Err(Stop::silent(Exit::Error)))
+        );
         assert_eq!(login(&[]), Some(Err(Stop::usage(usage::SETTINGS))));
     }
 

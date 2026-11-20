@@ -143,7 +143,10 @@ mod tests {
                 .unwrap(),
             "applied: a\nheld for the owner: r2  \n  +x\n  why: why\n  this is your earlier request r2 (asked a while ago), still pending; nothing new was filed\n  owner: Thread\n  card not raised: c\n\n"
         );
-        assert_eq!(lines("[]").unwrap_err(), "AttributeError: 'list' object has no attribute 'get'");
+        assert_eq!(
+            lines("[]").unwrap_err(),
+            "AttributeError: 'list' object has no attribute 'get'"
+        );
         assert_eq!(
             lines(r#"{"card":{"error":"x"}}"#).unwrap_err(),
             "AttributeError: 'str' object has no attribute 'get'"

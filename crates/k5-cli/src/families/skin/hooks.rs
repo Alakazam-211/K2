@@ -40,12 +40,22 @@ const ROW_USAGE: &str = concat!("Usage: ", cli_name!(), " app grant hooks ");
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
-    Status { json: bool },
-    Log { pairs: Vec<String>, json: bool },
+    Status {
+        json: bool,
+    },
+    Log {
+        pairs: Vec<String>,
+        json: bool,
+    },
     /// `retry` or `skip`, and the row's body.
-    Row { action: &'static str, body: String },
+    Row {
+        action: &'static str,
+        body: String,
+    },
     Reconcile,
-    Target { body: String },
+    Target {
+        body: String,
+    },
 }
 
 fn stop(line: &str) -> Stop {
@@ -237,11 +247,17 @@ fn when(ts: &Value, line: u32) -> Result<String, Raise> {
     }
     let secs: i64 = match ts {
         Value::Bool(b) => i64::from(*b),
-        Value::Int(d) => d
-            .parse()
-            .map_err(|_| Raise::at(line, "OverflowError: timestamp out of range for platform time_t"))?,
+        Value::Int(d) => d.parse().map_err(|_| {
+            Raise::at(
+                line,
+                "OverflowError: timestamp out of range for platform time_t",
+            )
+        })?,
         Value::Float(f) if f.is_nan() => {
-            return Err(Raise::at(line, "ValueError: Invalid value NaN (not a number)"))
+            return Err(Raise::at(
+                line,
+                "ValueError: Invalid value NaN (not a number)",
+            ))
         }
         Value::Float(f) if f.is_infinite() => {
             return Err(Raise::at(
@@ -275,7 +291,10 @@ fn when(ts: &Value, line: u32) -> Result<String, Raise> {
     let rem = secs.rem_euclid(86_400);
     let (y, m, d) = civil(days);
     if !(1..=9999).contains(&y) {
-        return Err(Raise::at(line, format!("ValueError: year {y} is out of range")));
+        return Err(Raise::at(
+            line,
+            format!("ValueError: year {y} is out of range"),
+        ));
     }
     Ok(format!(
         "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}Z",

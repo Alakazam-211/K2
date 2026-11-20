@@ -104,11 +104,7 @@ pub fn parse_init(words: &[&str]) -> Option<Result<Ask, Stop>> {
                     return Some(Err(Stop::usage(format!("Unknown flag: {w}{HELP}"))))
                 }
                 _ if folder.is_empty() => folder = w.to_string(),
-                _ => {
-                    return Some(Err(Stop::usage(format!(
-                        "Unexpected argument: {w}{HELP}"
-                    ))))
-                }
+                _ => return Some(Err(Stop::usage(format!("Unexpected argument: {w}{HELP}")))),
             }
         }
         rest = &rest[1..];
@@ -173,11 +169,7 @@ pub fn parse_doctor(words: &[&str]) -> Option<Result<Ask, Stop>> {
                 return Some(Err(Stop::usage(format!("Unknown flag: {w}{HELP}"))))
             }
             _ if folder.is_empty() => folder = w.to_string(),
-            _ => {
-                return Some(Err(Stop::usage(format!(
-                    "Unexpected argument: {w}{HELP}"
-                ))))
-            }
+            _ => return Some(Err(Stop::usage(format!("Unexpected argument: {w}{HELP}")))),
         }
     }
     if folder.is_empty() {
@@ -400,8 +392,13 @@ mod tests {
         assert!(usage(&["--template", "x"]).ends_with("not 'x'"));
         assert!(usage(&["--template", "static", "--voice"]).ends_with("not --template static"));
         assert!(usage(&["--template=tauri", "--app", "a", "--name", "n"]).contains("not both"));
-        assert!(usage(&["--template", "tauri", "/no/such/folder/here"]).ends_with("is not a folder"));
-        assert_eq!(parse_init(&["--template"]), Some(Err(Stop::silent(Exit::Error))));
+        assert!(
+            usage(&["--template", "tauri", "/no/such/folder/here"]).ends_with("is not a folder")
+        );
+        assert_eq!(
+            parse_init(&["--template"]),
+            Some(Err(Stop::silent(Exit::Error)))
+        );
         assert_eq!(parse_init(&["--template", "tauri", "-h"]), None);
     }
 
@@ -411,7 +408,10 @@ mod tests {
         assert_eq!(parse_doctor(&["x"]), None);
         assert!(matches!(
             parse_doctor(&["--store", "a", "b"]),
-            Some(Err(Stop { exit: Exit::Usage, .. }))
+            Some(Err(Stop {
+                exit: Exit::Usage,
+                ..
+            }))
         ));
     }
 }

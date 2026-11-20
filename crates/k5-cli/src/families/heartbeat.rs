@@ -447,6 +447,9 @@ fn fire(args: &[&str]) -> Option<Form> {
     Some(Form::Fire { name, force })
 }
 
+/// A verb's name, `--workspace` and `--json`.
+type Named = (String, Option<String>, bool);
+
 /// The loop `restart` and `enable`/`disable` share: the name,
 /// `--workspace` and `--json`.
 fn named(
@@ -454,7 +457,7 @@ fn named(
     usage_line: &str,
     empty: Exit,
     resolve: &dyn Fn(&str) -> Option<String>,
-) -> Option<Result<(String, Option<String>, bool), Form>> {
+) -> Option<Result<Named, Form>> {
     let stop2 = |a: String| Some(Err(Form::Stop(vec![a, usage_line.to_string()], Exit::Usage)));
     let (mut name, mut ws, mut json) = (String::new(), String::new(), false);
     let mut i = 0;
@@ -913,7 +916,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let all: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     let rest = all.get(1..).unwrap_or_default();
-    if let Some(&(w @ ("remind" | "reminders"))) = rest.first() {
+    if let Some(w) = rest
+        .first()
+        .copied()
+        .filter(|w| matches!(*w, "remind" | "reminders"))
+    {
         let mut again = vec![OsString::from(w)];
         again.extend(args.iter().skip(2).cloned());
         return super::remind::run(&again);

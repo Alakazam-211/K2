@@ -322,17 +322,16 @@ fn local_to_seconds(t: i64) -> Result<i64, String> {
     let a = lt(t)? - t;
     let u1 = t - a;
     let t1 = lt(u1)?;
-    let b;
-    if t1 == t {
+    let b = if t1 == t {
         let u2 = u1 - 86_400;
         let bb = lt(u2)? - u2;
         if a == bb {
             return Ok(u1);
         }
-        b = bb;
+        bb
     } else {
-        b = t1 - u1;
-    }
+        t1 - u1
+    };
     let u2 = t - b;
     let t2 = lt(u2)?;
     if t2 == t {
@@ -498,7 +497,9 @@ pub fn local_minute(s: &Value) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    fn dt(s: &str) -> Option<(i64, u32, u32, u32, u32, u32, Option<i64>)> {
+    type Fields = (i64, u32, u32, u32, u32, u32, Option<i64>);
+
+    fn dt(s: &str) -> Option<Fields> {
         fromisoformat(s).map(|d| {
             (
                 d.year, d.month, d.day, d.hour, d.minute, d.second, d.offset,

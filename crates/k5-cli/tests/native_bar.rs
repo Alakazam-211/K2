@@ -355,6 +355,15 @@ fn ceiling_text(fell: &[Probe], total: usize) -> String {
     s
 }
 
+/// Ceiling rows for a failure message, one per line, the columns split
+/// by ` | ` (a test runner's log may drop a tab).
+fn listing(rows: &[&String]) -> String {
+    rows.iter()
+        .map(|r| r.replace('\t', " | "))
+        .collect::<Vec<_>>()
+        .join("\n  ")
+}
+
 #[test]
 fn the_native_bar_ceiling_holds() {
     let probes = probes();
@@ -386,32 +395,21 @@ fn the_native_bar_ceiling_holds() {
         problems += &format!(
             "these fall through and the ceiling doesn't list them ({}):\n  {}\n",
             rose.len(),
-            rose.iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join("\n  ")
+            listing(&rose)
         );
     }
     if !fell_off.is_empty() {
         problems += &format!(
             "these are native now: take them out of {CEILING} ({}):\n  {}\n",
             fell_off.len(),
-            fell_off
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join("\n  ")
+            listing(&fell_off)
         );
     }
     if !stray.is_empty() {
         problems += &format!(
             "these ceiling rows name no probe ({}):\n  {}\n",
             stray.len(),
-            stray
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join("\n  ")
+            listing(&stray)
         );
     }
     println!("{}", found.lines().nth(3).unwrap_or_default());

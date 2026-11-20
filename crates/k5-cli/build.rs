@@ -17,12 +17,19 @@
 //! `study:<key>` for a study file). Writes `$OUT_DIR/text.rs` (read by
 //! `src/text.rs`). Fails the build when a row of the list names a page
 //! that is not there.
+//!
+//! And the manifest `k2 --schema` prints, joined from `cli/src` as the
+//! shell's build joins it (`src/families/schema/join.rs`): writes
+//! `$OUT_DIR/schema.rs` (read by `src/families/schema.rs`).
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+
+#[path = "src/families/schema/join.rs"]
+mod schema_join;
 
 /// How far into the script the version line may be (prelude.sh puts it
 /// on line 12; k2-client's script check reads 40 lines too).
@@ -78,6 +85,34 @@ fn main() {
     std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
 
     text(&manifest, &out);
+    schema(&manifest, &out);
+}
+
+/// `$OUT_DIR/schema.rs`: the body `k2 --schema` prints after its version
+/// line, joined from `cli/src` as `scripts/build-cli.sh` joins it
+/// (`src/families/schema/join.rs`).
+fn schema(manifest: &Path, out: &Path) {
+    let src = manifest.join("../../cli/src");
+    for name in ["ORDER", "schema-head.sh", "schema-tail.sh", "schema"] {
+        println!("cargo:rerun-if-changed={}", src.join(name).display());
+    }
+    let read = |name: &str| {
+        let p = src.join(name);
+        std::fs::read_to_string(&p).map_err(|e| format!("read {}: {e}", p.display()))
+    };
+    let order = read("ORDER").unwrap_or_else(|e| panic!("{e}"));
+    let body = schema_join::body(&order, read).unwrap_or_else(|e| panic!("--schema: {e}"));
+    let txt = out.join("schema.txt");
+    std::fs::write(&txt, body).unwrap_or_else(|e| panic!("write {}: {e}", txt.display()));
+    let lit = txt
+        .to_str()
+        .unwrap_or_else(|| panic!("OUT_DIR is not UTF-8: {}", txt.display()));
+    let rs = format!(
+        "/// The manifest `cmd_schema` prints after its version line.\n\
+         pub static BODY: &str = include_str!({lit:?});\n"
+    );
+    let rs_path = out.join("schema.rs");
+    std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
 }
 
 /// `$OUT_DIR/text.rs`: the study and help pages, and the help forms.

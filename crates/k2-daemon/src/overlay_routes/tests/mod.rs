@@ -1936,8 +1936,8 @@ fn ask_options_keep_parentheses_and_hint_on_a_prose_comma() {
     };
 
     // Commas inside parentheses stay in the label; no hint.
-    let kept = ask(serde_json::json!("node-2 (an M1, small),k2n1-m4,Wait"), "options");
-    assert_eq!(kept["options"], serde_json::json!(["node-2 (an M1, small)", "k2n1-m4", "Wait"]), "{kept}");
+    let kept = ask(serde_json::json!("node-2 (an M1, small),node-3,Wait"), "options");
+    assert_eq!(kept["options"], serde_json::json!(["node-2 (an M1, small)", "node-3", "Wait"]), "{kept}");
     assert!(kept.get("hint").is_none(), "no hint on a clean list: {kept}");
 
     // A prose-like comma still splits, and the answer carries the hint.

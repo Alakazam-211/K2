@@ -99,12 +99,12 @@ HINT_LINE='hint: an option looks like it continues after a comma ("Yes" / "node-
 
 echo "== --options with commas inside parentheses: sent as typed, no hint =="
 set +e
-out="$("$K2_CLI" thread ask ledger "Which mini?" --options "node-2 (an M1, small),k2n1-m4,Wait" 2>"$SANDBOX/err")"; rc=$?
+out="$("$K2_CLI" thread ask ledger "Which mini?" --options "node-2 (an M1, small),node-3,Wait" 2>"$SANDBOX/err")"; rc=$?
 set -e
 err="$(cat "$SANDBOX/err")"
 assert_eq "parens: exit 0" "$rc" "0"
 assert_eq "parens: card line" "$out" "card-opt  card #7"
-assert_eq "parens: the list goes to the daemon as typed" "$(sent options)" '"node-2 (an M1, small),k2n1-m4,Wait"'
+assert_eq "parens: the list goes to the daemon as typed" "$(sent options)" '"node-2 (an M1, small),node-3,Wait"'
 assert_eq "parens: no option list" "$(sent option)" "null"
 assert_not_contains "parens: no hint" "$err" "hint: an option"
 

@@ -1,8 +1,10 @@
 //! `k5 sources` (also `source`), as the shell CLI's `cmd_sources` answers
-//! it (`cli/src/sources.sh`). Native so far: the help (the noun's page and
-//! each verb's), `list` (`ls`), `show`, `read`, `history`, `status`,
-//! `export`, `pause`, `resume`, `mute`, `unmute`, `remove` (`rm`),
-//! `pending` and `access`, each with `--json`.
+//! it (`cli/src/sources.sh`). Every verb is native: the help (the noun's
+//! page and each verb's), `list` (`ls`), `show`, `read`, `history`,
+//! `status`, `export`, `pause`, `resume`, `mute`, `unmute`, `remove`
+//! (`rm`), `pending`, `access`, `simulate`, `refresh`, and in
+//! [`writes`] `propose`, `add`, `edit`, `try`, `approve`, `secret`, `pin`,
+//! `unpin` and `trigger` (`triggers`), each with `--json`.
 //!
 //! What runs, in the shell's order:
 //!
@@ -22,10 +24,8 @@
 //! 6. `--json` prints the body laid out as `json.dumps(indent=2)`; else the
 //!    shell's Python lays it out ([`render`]).
 //!
-//! The shell CLI answers these itself ([`run`] returns `None`): the verbs
-//! not listed above (`propose`, `add`, `edit`, `try`, `refresh`,
-//! `simulate`, `approve`, `secret`, `pin`, `unpin`, `trigger`), a word
-//! that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a
+//! The shell CLI answers these itself ([`run`] returns `None`): an unknown
+//! verb (its usage error), a word that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a
 //! port curl won't take, a `python3` the binary can't tell, a `PWD` bash
 //! would tidy, and a duration bash's own arithmetic fails on (it names
 //! the script's path: D6).
@@ -43,7 +43,7 @@ use crate::out::json::{self, Options, Text, Value};
 use crate::out::pylib::{json as pyjson, ops};
 use crate::out::{self, py};
 use crate::passport;
-use crate::prelude::{self, Gate};
+use crate::prelude::{self, Closing, Gate};
 use crate::prompt;
 use crate::python;
 use crate::transport::encode::quote;
@@ -65,10 +65,14 @@ pub const VERBS: &[crate::route::Verb] = &[];
 pub const TOOL: &str = "sources";
 
 /// The verbs this answers; the rest go to the shell CLI.
-const NATIVE: [&str; 17] = [
+const NATIVE: [&str; 28] = [
     "list", "ls", "show", "read", "history", "status", "export", "pause", "resume", "mute",
-    "unmute", "remove", "rm", "pending", "access", "simulate", "refresh",
+    "unmute", "remove", "rm", "pending", "access", "simulate", "refresh", "propose", "add",
+    "edit", "try", "approve", "secret", "pin", "unpin", "trigger", "triggers",
 ];
+
+mod spec;
+pub mod writes;
 
 /// What `cmd_sources` does with its words.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +132,9 @@ pub enum Stop {
     Shift,
     /// Bash's own error (its arithmetic): the shell CLI answers.
     Shell,
+    /// The shell's Python raised before any request: its traceback on
+    /// stderr, and the exit the caller's `|| exit` gives.
+    Raised(String, Exit),
 }
 
 /// What a verb asks for.
@@ -160,6 +167,30 @@ pub enum Ask {
         workspace: Option<String>,
         json: bool,
     },
+    /// `propose` or `add`: the source's JSON.
+    Create { route: &'static str, body: String },
+    /// `edit`: `{"name": …, "set": …}`.
+    Edit { body: String },
+    /// `try`: the draft (or the saved name) and `--tree-depth`.
+    Try {
+        body: String,
+        depth: String,
+        json: bool,
+    },
+    /// `approve`.
+    Approve(writes::Approve),
+    /// `secret`.
+    Bind(writes::Bind),
+    /// `pin` or `unpin`.
+    Pin {
+        verb: &'static str,
+        name: String,
+        json: bool,
+    },
+    /// `trigger <sub>`.
+    Trigger(writes::Trigger),
+    /// `trigger` alone or `trigger help`: its page.
+    TriggerPage,
 }
 
 /// `_sources_name_arg <verb>`: the first word that doesn't start `--`.
@@ -504,6 +535,15 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
                 json,
             })
         }
+        "propose" => writes::create("propose", words),
+        "add" => writes::create("add", words),
+        "edit" => writes::edit(words),
+        "try" => writes::try_(words),
+        "approve" => writes::approve(words),
+        "secret" => writes::secret(words),
+        "pin" => writes::pin("pin", words),
+        "unpin" => writes::pin("unpin", words),
+        "trigger" | "triggers" => Ok(writes::trigger(words)?.unwrap_or(Ask::TriggerPage)),
         _ => Err(Stop::Shell),
     }
 }
@@ -601,6 +641,10 @@ fn run_with(
             out::stderr_line(&line);
             return Exit::Usage;
         }
+        (_, Some(Err(Stop::Raised(text, exit)))) => {
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
+            return exit;
+        }
         (_, _) => return Exit::Error,
     };
     if let Ask::Remove { name, yes: false } = &ask {
@@ -630,9 +674,12 @@ fn run_with(
             return Exit::Error;
         }
     };
-    match go(&mut client, ask, json_any) {
+    let mut closing = Closing::default();
+    let exit = match go(&mut client, ask, json_any, &settings.home, &mut closing) {
         Ok(e) | Err(e) => e,
-    }
+    };
+    closing.flush(&mut client, exit);
+    exit
 }
 
 /// `${K5_HOOK_SOCK:-}${K2_HOOK_SOCK:-}${K2SO_HOOK_SOCK:-}` is not empty.
@@ -653,7 +700,13 @@ fn call(c: &mut Client, post: bool, path: &str, payload: &str, json: bool) -> Re
     Ok(sent)
 }
 
-fn go(c: &mut Client, ask: Ask, json_any: bool) -> Result<Exit, Exit> {
+fn go(
+    c: &mut Client,
+    ask: Ask,
+    json_any: bool,
+    home: &Path,
+    closing: &mut Closing,
+) -> Result<Exit, Exit> {
     match ask {
         Ask::Get { route, query, kind } => {
             let sent = call(c, false, &format!("/cli/sources/{route}"), &query, json_any)?;
@@ -758,6 +811,13 @@ fn go(c: &mut Client, ask: Ask, json_any: bool) -> Result<Exit, Exit> {
             }
             Ok(lay_out(&sent.resp, access_lines).print())
         }
+        Ask::TriggerPage => Ok(Shown::out(
+            crate::text::help("sources/trigger")
+                .unwrap_or_default()
+                .to_string(),
+        )
+        .print()),
+        other => writes::go(c, other, json_any, writes::Vault { home, closing }),
     }
 }
 

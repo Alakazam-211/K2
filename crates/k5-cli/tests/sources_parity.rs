@@ -911,8 +911,8 @@ fn sources_simulate_refresh_and_the_shell() {
             1,
         )),
         shell(case(
-            "propose goes to the shell",
-            &["propose", "--from", "nope.json"],
+            "a duration bash's arithmetic fails on goes to the shell",
+            &["trigger", "list", "--cooldown", "1.5d"],
             &[],
             vec![],
             owner_and_port,
@@ -949,6 +949,16 @@ fn sources_help_never_acts() {
         ],
         &["approve", "web"],
         &["refresh", "web"],
+        &["add", "--name", "n", "--label", "L", "--url", "https://e"],
+        &["edit", "web", "--label", "L"],
+        &["try", "--url", "https://e"],
+        &["approve", "web", "--secret", "S"],
+        &["secret", "web", "API"],
+        &["pin", "web"],
+        &["unpin", "web"],
+        &["trigger", "propose", "--source", "web", "--on", "went_crit"],
+        &["trigger", "pause", "abc"],
+        &["trigger", "edit", "abc", "--no-note"],
     ] {
         for (flag, at) in [("-h", 1), ("--help", words.len())] {
             let mut line = words.to_vec();

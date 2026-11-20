@@ -102,16 +102,28 @@ fn build_answers_as_the_shell_does() {
                 1,
             ),
             // covers: app build
-            one("held", &["build", "site", "--disk-override", "r"], answer(202, HELD), 2),
+            one(
+                "held",
+                &["build", "site", "--disk-override", "r"],
+                answer(202, HELD),
+                2,
+            ),
             // covers: app build --json
-            one("held, --json", &["build", "site", "--json"], answer(202, HELD), 2),
+            one(
+                "held, --json",
+                &["build", "site", "--json"],
+                answer(202, HELD),
+                2,
+            ),
             // covers: app build
             one("refused", &["build", "site"], answer(403, REFUSED_403), 3),
             // covers: app build
             one(
                 "a Seed in kilobytes, no ignore file, small",
                 &["build", "seedsrc"],
-                ok(r#"{"seed":{"hash":"0123456789abcdef","seedId":"s","sizeBytes":2},"seedSize":{"bytes":2048.5,"files":3,"largest":[{"path":"x","bytes":5000000000000}]}}"#),
+                ok(
+                    r#"{"seed":{"hash":"0123456789abcdef","seedId":"s","sizeBytes":2},"seedSize":{"bytes":2048.5,"files":3,"largest":[{"path":"x","bytes":5000000000000}]}}"#,
+                ),
                 0,
             ),
             // covers: app build
@@ -133,11 +145,19 @@ fn build_answers_as_the_shell_does() {
             // covers: app build
             words("not a folder", &["build", "nope é"], 2),
             // covers: app build
-            words("--manifest not a file", &["build", "site", "--manifest", "x.json"], 2),
+            words(
+                "--manifest not a file",
+                &["build", "site", "--manifest", "x.json"],
+                2,
+            ),
             // covers: app build
             words("an unknown flag", &["build", "site", "--zap"], 2),
             // covers: app build
-            words("--manifest last: set -e", &["build", "site", "--manifest"], 1),
+            words(
+                "--manifest last: set -e",
+                &["build", "site", "--manifest"],
+                1,
+            ),
         ],
     );
 }
@@ -168,7 +188,9 @@ fn install_answers_as_the_shell_does() {
                     "--disk-override",
                     "why",
                 ],
-                ok(r#"{"app":{"appId":"acme","memoryLimitBytes":8589934592},"frontPort":4100,"database":{"created":true,"name":"acme","major":17,"ref":"vault:db"},"deploy":{"deployment":{"id":"d-1","result":"live"},"seedSize":{"bytes":2000001,"files":4}},"memoryWarning":{"hint":"tight"}}"#),
+                ok(
+                    r#"{"app":{"appId":"acme","memoryLimitBytes":8589934592},"frontPort":4100,"database":{"created":true,"name":"acme","major":17,"ref":"vault:db"},"deploy":{"deployment":{"id":"d-1","result":"live"},"seedSize":{"bytes":2000001,"files":4}},"memoryWarning":{"hint":"tight"}}"#,
+                ),
                 0,
             ),
             // covers: app install
@@ -182,7 +204,9 @@ fn install_answers_as_the_shell_does() {
             one(
                 "a database already there, a failed deploy",
                 &["install", "acme"],
-                ok(r#"{"app":{"appId":"acme"},"frontPort":1,"database":{"name":"d","major":16},"deploy":{"deployment":{"id":"d","result":"failed","error":"boom"}}}"#),
+                ok(
+                    r#"{"app":{"appId":"acme"},"frontPort":1,"database":{"name":"d","major":16},"deploy":{"deployment":{"id":"d","result":"failed","error":"boom"}}}"#,
+                ),
                 0,
             ),
             // covers: app install --json
@@ -193,7 +217,12 @@ fn install_answers_as_the_shell_does() {
                 0,
             ),
             // covers: app install
-            one("held", &["install", "acme", "--engine", "process"], answer(202, HELD), 2),
+            one(
+                "held",
+                &["install", "acme", "--engine", "process"],
+                answer(202, HELD),
+                2,
+            ),
             // covers: app install
             one(
                 "a 202 that names frontPort: a refusal",
@@ -213,7 +242,11 @@ fn install_answers_as_the_shell_does() {
             // covers: app install
             words("no App", &["install"], 2),
             // covers: app install
-            words("--pg-major one digit", &["install", "acme", "--pg-major", "9"], 2),
+            words(
+                "--pg-major one digit",
+                &["install", "acme", "--pg-major", "9"],
+                2,
+            ),
             // covers: app install
             words("--pg-major=0x", &["install", "acme", "--pg-major=07"], 2),
             // covers: app install
@@ -227,7 +260,8 @@ fn install_answers_as_the_shell_does() {
 #[test]
 fn deploy_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "deploy");
-    let pending = r#"{"deployment":{"kind":"deploy","id":"d-2","result":"pending","appId":"acme"}}"#;
+    let pending =
+        r#"{"deployment":{"kind":"deploy","id":"d-2","result":"pending","appId":"acme"}}"#;
     check(
         &rig,
         vec![
@@ -253,7 +287,14 @@ fn deploy_answers_as_the_shell_does() {
             // covers: app deploy
             one(
                 "a Seed, pending: exit 2",
-                &["deploy", "acme", "0123abcd", "--no-wait", "--engine", "process"],
+                &[
+                    "deploy",
+                    "acme",
+                    "0123abcd",
+                    "--no-wait",
+                    "--engine",
+                    "process",
+                ],
                 ok(pending),
                 2,
             ),
@@ -272,17 +313,42 @@ fn deploy_answers_as_the_shell_does() {
                 1,
             ),
             // covers: app deploy
-            one("no deployment: exit 1", &["deploy", "acme", "s1"], ok("{}"), 1),
+            one(
+                "no deployment: exit 1",
+                &["deploy", "acme", "s1"],
+                ok("{}"),
+                1,
+            ),
             // covers: app deploy --json
-            one("--json, live", &["deploy", "acme", "site", "--json"], ok(LIVE), 0),
+            one(
+                "--json, live",
+                &["deploy", "acme", "site", "--json"],
+                ok(LIVE),
+                0,
+            ),
             // covers: app deploy --json
-            one("--json, pending", &["deploy", "--json", "acme", "s"], ok(pending), 2),
+            one(
+                "--json, pending",
+                &["deploy", "--json", "acme", "s"],
+                ok(pending),
+                2,
+            ),
             // covers: app deploy
-            one("a 422 report", &["deploy", "acme", "site"], answer(422, REPORT), 1),
+            one(
+                "a 422 report",
+                &["deploy", "acme", "site"],
+                answer(422, REPORT),
+                1,
+            ),
             // covers: app deploy
             one("held", &["deploy", "acme", "site"], answer(202, HELD), 2),
             // covers: app deploy
-            one("refused", &["deploy", "acme", "s"], answer(403, REFUSED_403), 3),
+            one(
+                "refused",
+                &["deploy", "acme", "s"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app deploy
             traceback(one(
                 "a deployment that is a list",
@@ -291,17 +357,34 @@ fn deploy_answers_as_the_shell_does() {
                 1,
             )),
             // covers: app deploy
-            traceback(one("an answer that is a list", &["deploy", "acme", "s"], ok("[1]"), 1)),
+            traceback(one(
+                "an answer that is a list",
+                &["deploy", "acme", "s"],
+                ok("[1]"),
+                1,
+            )),
             // covers: app deploy
             words("one word", &["deploy", "acme"], 2),
             // covers: app deploy
             words("a bad engine", &["deploy", "acme", "s", "--engine", "x"], 2),
             // covers: app deploy
-            words("--manifest with a Seed", &["deploy", "acme", "s", "--manifest", "m.json"], 2),
+            words(
+                "--manifest with a Seed",
+                &["deploy", "acme", "s", "--manifest", "m.json"],
+                2,
+            ),
             // covers: app deploy
-            words("--manifest not a file", &["deploy", "acme", "site", "--manifest", "no"], 2),
+            words(
+                "--manifest not a file",
+                &["deploy", "acme", "site", "--manifest", "no"],
+                2,
+            ),
             // covers: app deploy
-            words("--reason last: set -e", &["deploy", "acme", "s", "--reason"], 1),
+            words(
+                "--reason last: set -e",
+                &["deploy", "acme", "s", "--reason"],
+                1,
+            ),
         ],
     );
 }
@@ -322,7 +405,12 @@ fn rollback_and_lifecycle_answer_as_the_shell_does() {
                 2,
             ),
             // covers: app rollback --json
-            one("rollback --json", &["rollback", "acme", "--json"], ok(LIVE), 0),
+            one(
+                "rollback --json",
+                &["rollback", "acme", "--json"],
+                ok(LIVE),
+                0,
+            ),
             // covers: app rollback
             one(
                 "rollback refused",
@@ -333,21 +421,46 @@ fn rollback_and_lifecycle_answer_as_the_shell_does() {
             // covers: app rollback
             words("rollback, no App", &["rollback"], 2),
             // covers: app stop
-            one("stop", &["stop", "acme"], ok(r#"{"app":"acme","state":"stopped"}"#), 0),
+            one(
+                "stop",
+                &["stop", "acme"],
+                ok(r#"{"app":"acme","state":"stopped"}"#),
+                0,
+            ),
             // covers: app stop
-            one("stop, already", &["stop", "acme"], ok(r#"{"app":"acme","already":"stopped"}"#), 0),
+            one(
+                "stop, already",
+                &["stop", "acme"],
+                ok(r#"{"app":"acme","already":"stopped"}"#),
+                0,
+            ),
             // covers: app start
             one("start: ok", &["start", "acme"], ok(r#"{"app":["a"]}"#), 0),
             // covers: app restart
             one("restart: a deployment", &["restart", "acme"], ok(LIVE), 0),
             // covers: app restart --json
-            one("restart --json: a deployment", &["restart", "acme", "--json"], ok(LIVE), 0),
+            one(
+                "restart --json: a deployment",
+                &["restart", "acme", "--json"],
+                ok(LIVE),
+                0,
+            ),
             // covers: app stop --json
-            one("stop --json", &["stop", "--json", "acme"], ok(r#"{"app":"acme"}"#), 0),
+            one(
+                "stop --json",
+                &["stop", "--json", "acme"],
+                ok(r#"{"app":"acme"}"#),
+                0,
+            ),
             // covers: app start
             traceback(one("start: a number", &["start", "acme"], ok("5"), 1)),
             // covers: app start
-            one("start refused", &["start", "acme"], answer(403, REFUSED_403), 3),
+            one(
+                "start refused",
+                &["start", "acme"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app stop
             words("stop, no App", &["stop"], 2),
             // covers: app start
@@ -384,11 +497,26 @@ fn link_and_seal_answer_as_the_shell_does() {
             // covers: app link
             one("link --rotate", &["link", "acme", "--rotate"], ok(open), 0),
             // covers: app link --json
-            one("link --json, open", &["link", "acme", "--json"], ok(open), 0),
+            one(
+                "link --json, open",
+                &["link", "acme", "--json"],
+                ok(open),
+                0,
+            ),
             // covers: app link --json
-            one("link --json, none", &["link", "--json", "acme"], ok("{}"), 1),
+            one(
+                "link --json, none",
+                &["link", "--json", "acme"],
+                ok("{}"),
+                1,
+            ),
             // covers: app link
-            one("link refused", &["link", "acme", "--rotate"], answer(403, REFUSED_403), 3),
+            one(
+                "link refused",
+                &["link", "acme", "--rotate"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app link
             traceback(one(
                 "link: caps not strings",
@@ -416,7 +544,9 @@ fn link_and_seal_answer_as_the_shell_does() {
             one(
                 "seal: granted",
                 &["seal", "acme"],
-                ok(r#"{"app":"acme","seal":{"vaultOpen":true,"present":true,"granted":true,"version":2,"file":"/run/seal"}}"#),
+                ok(
+                    r#"{"app":"acme","seal":{"vaultOpen":true,"present":true,"granted":true,"version":2,"file":"/run/seal"}}"#,
+                ),
                 0,
             ),
             // covers: app seal
@@ -427,7 +557,12 @@ fn link_and_seal_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app seal --json
-            one("seal --json", &["seal", "acme", "--json"], ok(r#"{"seal":{"present":true}}"#), 0),
+            one(
+                "seal --json",
+                &["seal", "acme", "--json"],
+                ok(r#"{"seal":{"present":true}}"#),
+                0,
+            ),
             // covers: app seal
             one(
                 "seal rotate --yes",
@@ -450,7 +585,12 @@ fn link_and_seal_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app seal
-            one("seal rotate refused", &["seal", "rotate", "acme", "--yes"], answer(403, REFUSED_403), 3),
+            one(
+                "seal rotate refused",
+                &["seal", "rotate", "acme", "--yes"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app seal
             words("seal rotate, no terminal", &["seal", "rotate", "acme"], 2),
             // covers: app seal
@@ -522,23 +662,52 @@ fn config_answers_as_the_shell_does() {
             // covers: app config
             one(
                 "a name twice, the last empty; --io none",
-                &["config", "acme", "--memory", "8G", "--io", "none", "--memory", "", "--tasks", "1"],
+                &[
+                    "config", "acme", "--memory", "8G", "--io", "none", "--memory", "", "--tasks",
+                    "1",
+                ],
                 ok(r#"{"app":{"appId":"acme","memoryLimitBytes":null}}"#),
                 0,
             ),
             // covers: app config
             one(
                 "--io default and a ceiling: the ceiling wins",
-                &["config", "--io", "default", "acme", "--io-read-iops", "9", "--io-write", "1G"],
-                ok(r#"{"app":{"appId":"acme"},"io":{"rbps":null,"wbps":1073741824,"riops":9,"wiops":"x"},"note":null}"#),
+                &[
+                    "config",
+                    "--io",
+                    "default",
+                    "acme",
+                    "--io-read-iops",
+                    "9",
+                    "--io-write",
+                    "1G",
+                ],
+                ok(
+                    r#"{"app":{"appId":"acme"},"io":{"rbps":null,"wbps":1073741824,"riops":9,"wiops":"x"},"note":null}"#,
+                ),
                 0,
             ),
             // covers: app config --json
-            one("--json", &["config", "acme", "--risk", "normal", "--json"], ok(done), 0),
+            one(
+                "--json",
+                &["config", "acme", "--risk", "normal", "--json"],
+                ok(done),
+                0,
+            ),
             // covers: app config
-            one("held", &["config", "acme", "--memory", "none"], answer(202, HELD), 2),
+            one(
+                "held",
+                &["config", "acme", "--memory", "none"],
+                answer(202, HELD),
+                2,
+            ),
             // covers: app config
-            one("refused", &["config", "acme", "--memory", "none"], answer(403, REFUSED_403), 3),
+            one(
+                "refused",
+                &["config", "acme", "--memory", "none"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app config
             traceback(one(
                 "no app: KeyError",
@@ -551,9 +720,17 @@ fn config_answers_as_the_shell_does() {
             // covers: app config
             words("no App", &["config", "--memory", "1G"], 2),
             // covers: app config
-            words("--egress, not add or rm", &["config", "acme", "--egress", "x", "y"], 2),
+            words(
+                "--egress, not add or rm",
+                &["config", "acme", "--egress", "x", "y"],
+                2,
+            ),
             // covers: app config
-            words("--port add, no port: set -e", &["config", "acme", "--port", "add"], 1),
+            words(
+                "--port add, no port: set -e",
+                &["config", "acme", "--port", "add"],
+                1,
+            ),
             // covers: app config
             words("--io, a bad value", &["config", "acme", "--io", "max"], 2),
             // covers: app config
@@ -580,7 +757,15 @@ fn config_a_large_list() {
         &["config", "acme", "--memory", "1G"][..],
         &["config", "acme", "--memory", "1G", "--json"],
     ] {
-        rig.check(&case("a large list", args, &[], vec![ok(&body)], files, 0, 1));
+        rig.check(&case(
+            "a large list",
+            args,
+            &[],
+            vec![ok(&body)],
+            files,
+            0,
+            1,
+        ));
     }
 }
 

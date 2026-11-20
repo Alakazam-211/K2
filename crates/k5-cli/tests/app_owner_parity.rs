@@ -36,7 +36,11 @@ fn traceback(c: Case) -> Case {
 /// `NOTES.md`, a brief.
 fn files(rig: &Rig) {
     owner_and_port(rig);
-    std::fs::write(rig.proj.join("NOTES.md"), "Run the tests first.\nThen é.\n\n").unwrap();
+    std::fs::write(
+        rig.proj.join("NOTES.md"),
+        "Run the tests first.\nThen é.\n\n",
+    )
+    .unwrap();
 }
 
 fn answer(status: u16, body: &str) -> Reply {
@@ -86,7 +90,12 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app uninstall
-            one("uninstall refused", &["uninstall", "acme"], answer(403, REFUSED_403), 3),
+            one(
+                "uninstall refused",
+                &["uninstall", "acme"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app uninstall
             case(
                 "uninstall --purge, no vault socket",
@@ -100,19 +109,27 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
             // covers: app uninstall
             words("uninstall, no App", &["uninstall"], 2),
             // covers: app uninstall
-            words("uninstall, an unknown flag", &["uninstall", "a", "--zap"], 2),
+            words(
+                "uninstall, an unknown flag",
+                &["uninstall", "a", "--zap"],
+                2,
+            ),
             // covers: app expose
             one(
                 "expose --tunnel: changed, a URL",
                 &["expose", "acme", "--tunnel", "--transfer"],
-                ok(r#"{"app":"acme","changed":true,"expose":"tunnel","url":"https://acme.example","next":"done é"}"#),
+                ok(
+                    r#"{"app":"acme","changed":true,"expose":"tunnel","url":"https://acme.example","next":"done é"}"#,
+                ),
                 0,
             ),
             // covers: app expose
             one(
                 "expose --local: changed, a hostname left",
                 &["expose", "--local", "acme"],
-                ok(r#"{"app":"acme","changed":true,"expose":"local","hostnameLeft":"acme.example stays yours"}"#),
+                ok(
+                    r#"{"app":"acme","changed":true,"expose":"local","hostnameLeft":"acme.example stays yours"}"#,
+                ),
                 0,
             ),
             // covers: app expose
@@ -123,11 +140,26 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app expose --json
-            one("expose --json", &["expose", "acme", "--local", "--json"], ok(r#"{"changed":true}"#), 0),
+            one(
+                "expose --json",
+                &["expose", "acme", "--local", "--json"],
+                ok(r#"{"changed":true}"#),
+                0,
+            ),
             // covers: app expose
-            one("expose held", &["expose", "acme", "--tunnel"], answer(202, HELD), 2),
+            one(
+                "expose held",
+                &["expose", "acme", "--tunnel"],
+                answer(202, HELD),
+                2,
+            ),
             // covers: app expose
-            one("expose refused", &["expose", "acme", "--tunnel"], answer(403, REFUSED_403), 3),
+            one(
+                "expose refused",
+                &["expose", "acme", "--tunnel"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app expose
             traceback(one(
                 "expose: a URL that is a number",
@@ -138,21 +170,43 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
             // covers: app expose
             words("expose, no mode", &["expose", "acme"], 2),
             // covers: app expose
-            words("expose, both", &["expose", "acme", "--local", "--tunnel"], 2),
+            words(
+                "expose, both",
+                &["expose", "acme", "--local", "--tunnel"],
+                2,
+            ),
             // covers: app expose
             words("expose, two Apps", &["expose", "a", "b", "--local"], 2),
             // covers: app expose
-            words("expose --transfer --local", &["expose", "a", "--local", "--transfer"], 2),
+            words(
+                "expose --transfer --local",
+                &["expose", "a", "--local", "--transfer"],
+                2,
+            ),
             // covers: app park
             one("park", &["park", "acme", "--reason", "away é"], ok("{}"), 0),
             // covers: app park --json
-            one("park --json", &["park", "acme", "--json", "--to", "x"], ok(r#"{"parked":true}"#), 0),
+            one(
+                "park --json",
+                &["park", "acme", "--json", "--to", "x"],
+                ok(r#"{"parked":true}"#),
+                0,
+            ),
             // covers: app park
-            one("park refused", &["park", "acme"], answer(403, REFUSED_403), 3),
+            one(
+                "park refused",
+                &["park", "acme"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app park
             words("park, no App", &["park"], 2),
             // covers: app park
-            words("park --reason last: set -e", &["park", "acme", "--reason"], 1),
+            words(
+                "park --reason last: set -e",
+                &["park", "acme", "--reason"],
+                1,
+            ),
         ],
     );
 }
@@ -171,9 +225,19 @@ fn handover_answers_as_the_shell_does() {
             // covers: app handover status
             one("status: rows", &["handover", "status", "acme"], ok(rows), 0),
             // covers: app handover status
-            one("status --detail", &["handover", "status", "--detail"], ok(rows), 0),
+            one(
+                "status --detail",
+                &["handover", "status", "--detail"],
+                ok(rows),
+                0,
+            ),
             // covers: app handover status --json
-            one("status --json", &["handover", "status", "--json"], ok(rows), 0),
+            one(
+                "status --json",
+                &["handover", "status", "--json"],
+                ok(rows),
+                0,
+            ),
             // covers: app handover status
             traceback(one(
                 "status: a row with no id",
@@ -182,18 +246,35 @@ fn handover_answers_as_the_shell_does() {
                 1,
             )),
             // covers: app handover brief
-            one("brief", &["handover", "brief", "acme"], ok(r#"{"brief":"do X é"}"#), 0),
+            one(
+                "brief",
+                &["handover", "brief", "acme"],
+                ok(r#"{"brief":"do X é"}"#),
+                0,
+            ),
             // covers: app handover brief
-            one("brief: none", &["handover", "brief", "acme"], ok(r#"{"brief":""}"#), 0),
+            one(
+                "brief: none",
+                &["handover", "brief", "acme"],
+                ok(r#"{"brief":""}"#),
+                0,
+            ),
             // covers: app handover brief
-            one("brief --json", &["handover", "brief", "acme", "--json"], ok(r#"{"brief":"b"}"#), 0),
+            one(
+                "brief --json",
+                &["handover", "brief", "acme", "--json"],
+                ok(r#"{"brief":"b"}"#),
+                0,
+            ),
             // covers: app handover brief
             words("brief, no App: the page", &["handover", "brief"], 2),
             // covers: app handover accept
             one(
                 "accept: done",
                 &["handover", "accept", "acme"],
-                ok(r#"{"handover":{"id":"ho-1","state":"accepted","fromHandle":"ann","toHandle":"bob"},"already":true,"workspace":"bob"}"#),
+                ok(
+                    r#"{"handover":{"id":"ho-1","state":"accepted","fromHandle":"ann","toHandle":"bob"},"already":true,"workspace":"bob"}"#,
+                ),
                 0,
             ),
             // covers: app handover decline
@@ -204,13 +285,33 @@ fn handover_answers_as_the_shell_does() {
                 2,
             ),
             // covers: app handover undo
-            one("undo: held, no terminal", &["handover", "undo", "acme"], answer(202, OFFER), 2),
+            one(
+                "undo: held, no terminal",
+                &["handover", "undo", "acme"],
+                answer(202, OFFER),
+                2,
+            ),
             // covers: app handover cancel
-            one("cancel --json: held", &["handover", "cancel", "acme", "--json"], answer(202, OFFER), 2),
+            one(
+                "cancel --json: held",
+                &["handover", "cancel", "acme", "--json"],
+                answer(202, OFFER),
+                2,
+            ),
             // covers: app handover finish
-            one("finish --json", &["handover", "finish", "--json", "acme"], ok("{}"), 0),
+            one(
+                "finish --json",
+                &["handover", "finish", "--json", "acme"],
+                ok("{}"),
+                0,
+            ),
             // covers: app handover rekey
-            one("rekey refused", &["handover", "rekey", "acme"], answer(403, REFUSED_403), 3),
+            one(
+                "rekey refused",
+                &["handover", "rekey", "acme"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app handover accept
             words("accept, no App: the page", &["handover", "accept"], 2),
             // covers: app handover plan
@@ -236,7 +337,9 @@ fn handover_answers_as_the_shell_does() {
                     "--copy-source",
                     "--dry-run",
                 ],
-                ok(r#"{"plan":{"lines":["x"],"blockers":[{"code":"db","hint":"wait"}]},"ready":false}"#),
+                ok(
+                    r#"{"plan":{"lines":["x"],"blockers":[{"code":"db","hint":"wait"}]},"ready":false}"#,
+                ),
                 0,
             ),
             // covers: app handover --json
@@ -276,7 +379,12 @@ fn handover_answers_as_the_shell_does() {
                 0,
             ),
             // covers: app handover --json
-            one("the offer --json", &["handover", "acme", "--to", "bob", "--json"], answer(202, OFFER), 2),
+            one(
+                "the offer --json",
+                &["handover", "acme", "--to", "bob", "--json"],
+                answer(202, OFFER),
+                2,
+            ),
             // covers: app handover
             in_session(case(
                 "the offer in a session: the tip",
@@ -288,9 +396,19 @@ fn handover_answers_as_the_shell_does() {
                 1,
             )),
             // covers: app handover
-            one("refused", &["handover", "acme", "--to", "bob"], answer(403, REFUSED_403), 3),
+            one(
+                "refused",
+                &["handover", "acme", "--to", "bob"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app handover
-            one("a confirm, no vault socket", &["handover", "acme", "--to", "bob"], answer(403, CONFIRM), 3),
+            one(
+                "a confirm, no vault socket",
+                &["handover", "acme", "--to", "bob"],
+                answer(403, CONFIRM),
+                3,
+            ),
             // covers: app handover
             traceback(one(
                 "a card with no id",
@@ -301,11 +419,20 @@ fn handover_answers_as_the_shell_does() {
             // covers: app handover
             words("no --to: the page", &["handover", "acme"], 2),
             // covers: app handover
-            words("no brief file", &["handover", "acme", "--to", "b", "--brief", "nope.md"], 2),
+            words(
+                "no brief file",
+                &["handover", "acme", "--to", "b", "--brief", "nope.md"],
+                2,
+            ),
             // covers: app handover
             words("an unknown flag", &["handover", "acme", "--zap"], 2),
             // covers: app unpark
-            one("unpark", &["unpark", "acme", "--to", "bob"], answer(202, OFFER), 2),
+            one(
+                "unpark",
+                &["unpark", "acme", "--to", "bob"],
+                answer(202, OFFER),
+                2,
+            ),
             // covers: app unpark
             words("unpark, no App: the page", &["unpark"], 2),
         ],
@@ -322,7 +449,9 @@ fn release_and_exception_answer_as_the_shell_does() {
             one(
                 "release: done",
                 &["release", "ws", "--apps", "uninstall", "--drop-access"],
-                ok(r#"{"workspace":"ws","way":"uninstall","results":[{"app":"acme"},{"app":"globex"}]}"#),
+                ok(
+                    r#"{"workspace":"ws","way":"uninstall","results":[{"app":"acme"},{"app":"globex"}]}"#,
+                ),
                 0,
             ),
             // covers: app release
@@ -336,7 +465,10 @@ fn release_and_exception_answer_as_the_shell_does() {
             one(
                 "release: held cards, no terminal",
                 &["release", "ws", "--apps", "handover:bob"],
-                answer(202, r#"{"results":[{"app":"a","request":"req-1"},{"app":"b"}],"hint":"approve each"}"#),
+                answer(
+                    202,
+                    r#"{"results":[{"app":"a","request":"req-1"},{"app":"b"}],"hint":"approve each"}"#,
+                ),
                 2,
             ),
             // covers: app release --json
@@ -347,7 +479,12 @@ fn release_and_exception_answer_as_the_shell_does() {
                 2,
             ),
             // covers: app release
-            one("release refused", &["release", "ws", "--apps", "park"], answer(403, REFUSED_403), 3),
+            one(
+                "release refused",
+                &["release", "ws", "--apps", "park"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app release
             traceback(one(
                 "release: a row with no app",
@@ -358,12 +495,18 @@ fn release_and_exception_answer_as_the_shell_does() {
             // covers: app release
             words("release, no --apps", &["release", "ws"], 2),
             // covers: app release
-            words("release --drop-access, not uninstall", &["release", "ws", "--apps", "park", "--drop-access"], 2),
+            words(
+                "release --drop-access, not uninstall",
+                &["release", "ws", "--apps", "park", "--drop-access"],
+                2,
+            ),
             // covers: app exception
             one(
                 "exception off",
                 &["exception", "acme", "off"],
-                ok(r#"{"app":"acme","label":"guarded container","changed":true,"warning":"w","next":"n"}"#),
+                ok(
+                    r#"{"app":"acme","label":"guarded container","changed":true,"warning":"w","next":"n"}"#,
+                ),
                 0,
             ),
             // covers: app exception
@@ -374,13 +517,31 @@ fn release_and_exception_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app exception
-            one("exception off --json", &["exception", "acme", "off", "--json"], ok(r#"{"app":"a"}"#), 0),
+            one(
+                "exception off --json",
+                &["exception", "acme", "off", "--json"],
+                ok(r#"{"app":"a"}"#),
+                0,
+            ),
             // covers: app exception
-            one("exception off refused", &["exception", "acme", "off"], answer(403, REFUSED_403), 3),
+            one(
+                "exception off refused",
+                &["exception", "acme", "off"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app exception
             case(
                 "exception on, no vault socket",
-                &["exception", "acme", "on", "--device", "dri-render128", "--device", "x"],
+                &[
+                    "exception",
+                    "acme",
+                    "on",
+                    "--device",
+                    "dri-render128",
+                    "--device",
+                    "x",
+                ],
                 &[],
                 vec![],
                 files,
@@ -390,25 +551,26 @@ fn release_and_exception_answer_as_the_shell_does() {
             // covers: app exception
             words("exception, no mode", &["exception", "acme"], 2),
             // covers: app exception
-            words("exception --device last: set -e", &["exception", "acme", "on", "--device"], 1),
+            words(
+                "exception --device last: set -e",
+                &["exception", "acme", "on", "--device"],
+                1,
+            ),
         ],
     );
 }
 
 fn methods(m: &str) -> Reply {
-    ok(&format!(r#"{{"methods":["{m}"],"confirmText":"the owner in person"}}"#))
+    ok(&format!(
+        r#"{{"methods":["{m}"],"confirmText":"the owner in person"}}"#
+    ))
 }
 
 fn token(t: &str) -> Reply {
     ok(&format!(r#"{{"token":"{t}"}}"#))
 }
 
-fn confirming(
-    name: &'static str,
-    args: &[&'static str],
-    daemon: Vec<Reply>,
-    code: i32,
-) -> VCase {
+fn confirming(name: &'static str, args: &[&'static str], daemon: Vec<Reply>, code: i32) -> VCase {
     let mut c = VCase::new(name, args);
     c.noun = VERB;
     c.daemon_requests = daemon.len();
@@ -437,8 +599,20 @@ fn the_owner_confirms_in_person() {
         // covers: app exception
         confirming(
             "exception on, two devices",
-            &["exception", "acme", "on", "--device", "dri-render128", "--device", "kvm", "--reason", "gpu"],
-            vec![ok(r#"{"app":"acme","label":"process exception","changed":true}"#)],
+            &[
+                "exception",
+                "acme",
+                "on",
+                "--device",
+                "dri-render128",
+                "--device",
+                "kvm",
+                "--reason",
+                "gpu",
+            ],
+            vec![ok(
+                r#"{"app":"acme","label":"process exception","changed":true}"#,
+            )],
             0,
         ),
         // covers: app handover
@@ -453,7 +627,10 @@ fn the_owner_confirms_in_person() {
             "release: the confirm the daemon asks for",
             &["release", "ws", "--apps", "handover:bob"],
             vec![
-                answer(403, r#"{"error":{"code":"vault_confirm_required","action":"app-release","secretId":"ws"}}"#),
+                answer(
+                    403,
+                    r#"{"error":{"code":"vault_confirm_required","action":"app-release","secretId":"ws"}}"#,
+                ),
                 ok(r#"{"workspace":"ws","way":"handover","results":[]}"#),
             ],
             0,

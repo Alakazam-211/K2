@@ -67,7 +67,9 @@ fn doctors_answer_as_the_shell_does() {
             one(
                 "doctor: not ready, the box at the top",
                 &["doctor"],
-                ok(r#"{"ready":false,"runtime":"youki","autoPrepare":{"enabled":false,"outcome":{"why":"no root"},"undoneAt":5}}"#),
+                ok(
+                    r#"{"ready":false,"runtime":"youki","autoPrepare":{"enabled":false,"outcome":{"why":"no root"},"undoneAt":5}}"#,
+                ),
                 1,
             ),
             // covers: app doctor
@@ -98,7 +100,12 @@ fn doctors_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app doctor --json
-            one("doctor <app> --json", &["doctor", "acme", "--json"], ok(reach), 1),
+            one(
+                "doctor <app> --json",
+                &["doctor", "acme", "--json"],
+                ok(reach),
+                1,
+            ),
             // covers: app doctor --json
             traceback(one(
                 "doctor <app> --json: a reach that is a list",
@@ -115,7 +122,12 @@ fn doctors_answer_as_the_shell_does() {
             // covers: app box
             one("box", &["box"], ok(BOX), 0),
             // covers: app box doctor
-            one("box doctor --json", &["box", "doctor", "--json"], ok(BOX), 0),
+            one(
+                "box doctor --json",
+                &["box", "doctor", "--json"],
+                ok(BOX),
+                0,
+            ),
             // covers: app box doctor
             one("box status", &["box", "status"], ok(r#"{"ready":1}"#), 0),
             // covers: app box
@@ -127,7 +139,8 @@ fn doctors_answer_as_the_shell_does() {
 #[test]
 fn box_verbs_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "boxverbs");
-    let plan = r#"{"undoes":["the cgroup slice","subuid é"],"kept":["podman"],"runningApps":["acme"]}"#;
+    let plan =
+        r#"{"undoes":["the cgroup slice","subuid é"],"kept":["podman"],"runningApps":["acme"]}"#;
     let undone = r#"{"result":{"steps":[{"step":"slice","changed":true},{"step":"subuid"}],"kept":["x"]},"note":"done","box":{"ready":false}}"#;
     let dry = r#"{"podman":{"action":"install","have":"4.9","os":"ubuntu 24.04","bundle":{"version":"5.2","source":"k2","url":"https://x/p.tgz","sha256":"ab","size":10,"writes":["/opt/a","/opt/b"]}},"packages":{"manager":"apt","install":["uidmap","crun"],"alreadyInstalled":["x"],"distroPodman":"4.9 (too old)","note":"apt note"},"steps":["slice","subuid"],"box":{"ready":true}}"#;
     let done = r#"{"steps":[{"verb":"slice","result":{"changed":true,"apparmor":{"needed":true,"installed":["apparmor"],"parser":"4.0"}}},{"verb":"subuid","result":{"changed":false,"apparmor":{"needed":true,"note":"skip"}}},{"verb":"x","result":"plain"}],"notes":["one é"],"box":{"ready":true,"checks":[{"id":"coresSlice","status":"ok"},{"id":"agentsLeaf","status":"warn"}]}}"#;
@@ -142,32 +155,69 @@ fn box_verbs_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app box podman uninstall
-            one("podman uninstall: nothing", &["box", "podman", "uninstall"], ok("{}"), 0),
+            one(
+                "podman uninstall: nothing",
+                &["box", "podman", "uninstall"],
+                ok("{}"),
+                0,
+            ),
             // covers: app box podman uninstall
-            one("podman uninstall --json", &["box", "podman", "uninstall", "--json"], ok("{}"), 0),
+            one(
+                "podman uninstall --json",
+                &["box", "podman", "uninstall", "--json"],
+                ok("{}"),
+                0,
+            ),
             // covers: app box podman uninstall
             words("podman, not uninstall", &["box", "podman"], 2),
             // covers: app box unprep
-            one("unprep --dry-run", &["box", "unprep", "--dry-run"], ok(plan), 0),
+            one(
+                "unprep --dry-run",
+                &["box", "unprep", "--dry-run"],
+                ok(plan),
+                0,
+            ),
             // covers: app box unprep
-            one("unprep --dry-run --json", &["box", "unprep", "--json", "--dry-run"], ok(plan), 0),
+            one(
+                "unprep --dry-run --json",
+                &["box", "unprep", "--json", "--dry-run"],
+                ok(plan),
+                0,
+            ),
             // covers: app box unprep
             one("unprep, no terminal", &["box", "unprep"], ok(plan), 2),
             // covers: app box unprep
-            one("unprep --json, no terminal: the plan text", &["box", "unprep", "--json"], ok(plan), 2),
+            one(
+                "unprep --json, no terminal: the plan text",
+                &["box", "unprep", "--json"],
+                ok(plan),
+                2,
+            ),
             // covers: app box unprep
             one("unprep --yes", &["box", "unprep", "--yes"], ok(undone), 0),
             // covers: app box unprep
-            one("unprep -y --json", &["box", "unprep", "-y", "--json"], ok(undone), 0),
+            one(
+                "unprep -y --json",
+                &["box", "unprep", "-y", "--json"],
+                ok(undone),
+                0,
+            ),
             // covers: app box unprep
-            one("unprep refused", &["box", "unprep", "--yes"], answer(403, REFUSED_403), 3),
+            one(
+                "unprep refused",
+                &["box", "unprep", "--yes"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app box unprep
             words("unprep, an unknown word", &["box", "unprep", "now"], 2),
             // covers: app box auto-prepare
             one(
                 "auto-prepare status",
                 &["box", "auto-prepare", "status"],
-                ok(r#"{"autoPrepare":{"enabled":true,"outcome":{"state":"failed","error":"boom"}}}"#),
+                ok(
+                    r#"{"autoPrepare":{"enabled":true,"outcome":{"state":"failed","error":"boom"}}}"#,
+                ),
                 0,
             ),
             // covers: app box auto-prepare
@@ -178,7 +228,12 @@ fn box_verbs_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app box auto-prepare
-            one("auto-prepare status --json: none", &["box", "auto-prepare", "status", "--json"], ok("{}"), 0),
+            one(
+                "auto-prepare status --json: none",
+                &["box", "auto-prepare", "status", "--json"],
+                ok("{}"),
+                0,
+            ),
             // covers: app box auto-prepare
             one(
                 "auto-prepare on",
@@ -187,11 +242,26 @@ fn box_verbs_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app box auto-prepare
-            one("auto-prepare off --json", &["box", "auto-prepare", "off", "--json"], ok("{}"), 0),
+            one(
+                "auto-prepare off --json",
+                &["box", "auto-prepare", "off", "--json"],
+                ok("{}"),
+                0,
+            ),
             // covers: app box auto-prepare
-            one("auto-prepare retry", &["box", "auto-prepare", "retry"], ok("{}"), 0),
+            one(
+                "auto-prepare retry",
+                &["box", "auto-prepare", "retry"],
+                ok("{}"),
+                0,
+            ),
             // covers: app box auto-prepare
-            one("auto-prepare retry refused", &["box", "auto-prepare", "retry"], answer(403, REFUSED_403), 3),
+            one(
+                "auto-prepare retry refused",
+                &["box", "auto-prepare", "retry"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app box auto-prepare
             words("auto-prepare, no verb", &["box", "auto-prepare"], 2),
             // covers: app box prepare
@@ -215,43 +285,76 @@ fn box_verbs_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app box prepare
-            one("prepare --dry-run", &["box", "prepare", "--dry-run", "--runtime", "crun"], ok(dry), 0),
+            one(
+                "prepare --dry-run",
+                &["box", "prepare", "--dry-run", "--runtime", "crun"],
+                ok(dry),
+                0,
+            ),
             // covers: app box prepare
             one(
                 "prepare --dry-run: keep, no packages",
                 &["box", "prepare", "--dry-run"],
-                ok(r#"{"podman":{"action":"keep","have":"5.1","source":"distro"},"packages":{"note":"none here"}}"#),
+                ok(
+                    r#"{"podman":{"action":"keep","have":"5.1","source":"distro"},"packages":{"note":"none here"}}"#,
+                ),
                 0,
             ),
             // covers: app box prepare
-            one("prepare --json", &["box", "prepare", "--json", "-y"], ok(done), 0),
+            one(
+                "prepare --json",
+                &["box", "prepare", "--json", "-y"],
+                ok(done),
+                0,
+            ),
             // covers: app box prepare
             one(
                 "prepare: failed steps",
                 &["box", "prepare"],
-                answer(500, r#"{"error":{"code":"prepare_failed","hint":"a step failed","steps":[{"ok":true,"verb":"slice"},{"verb":"subuid","error":"denied"}]}}"#),
+                answer(
+                    500,
+                    r#"{"error":{"code":"prepare_failed","hint":"a step failed","steps":[{"ok":true,"verb":"slice"},{"verb":"subuid","error":"denied"}]}}"#,
+                ),
                 3,
             ),
             // covers: app box prepare
             one(
                 "prepare --json: failed",
                 &["box", "prepare", "--json"],
-                answer(409, r#"{"error":{"code":"podman_install_needed","hint":"old podman"}}"#),
+                answer(
+                    409,
+                    r#"{"error":{"code":"podman_install_needed","hint":"old podman"}}"#,
+                ),
                 3,
             ),
             // covers: app box prepare
             one(
                 "prepare: podman needed, no terminal",
                 &["box", "prepare"],
-                answer(409, r#"{"error":{"code":"podman_install_needed","hint":"old podman"}}"#),
+                answer(
+                    409,
+                    r#"{"error":{"code":"podman_install_needed","hint":"old podman"}}"#,
+                ),
                 3,
             ),
             // covers: app box prepare
-            words("prepare, a bad runtime", &["box", "prepare", "--runtime", "runc"], 2),
+            words(
+                "prepare, a bad runtime",
+                &["box", "prepare", "--runtime", "runc"],
+                2,
+            ),
             // covers: app box prepare
-            words("prepare, a size with a unit", &["box", "prepare", "--apps-mem-max", "4G"], 2),
+            words(
+                "prepare, a size with a unit",
+                &["box", "prepare", "--apps-mem-max", "4G"],
+                2,
+            ),
             // covers: app box prepare
-            words("prepare --runtime last: set -e", &["box", "prepare", "--runtime"], 1),
+            words(
+                "prepare --runtime last: set -e",
+                &["box", "prepare", "--runtime"],
+                1,
+            ),
         ],
     );
 }
@@ -272,22 +375,44 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app engine install
-            one("engine install --json", &["engine", "install", "--json"], ok("{}"), 0),
+            one(
+                "engine install --json",
+                &["engine", "install", "--json"],
+                ok("{}"),
+                0,
+            ),
             // covers: app engine install
-            one("engine install refused", &["engine", "install"], answer(403, REFUSED_403), 3),
+            one(
+                "engine install refused",
+                &["engine", "install"],
+                answer(403, REFUSED_403),
+                3,
+            ),
             // covers: app engine install
             words("engine install, a word", &["engine", "install", "now"], 2),
             // covers: app engine status
             one(
                 "engine status",
                 &["engine", "status"],
-                ok(r#"{"state":"running","want":{"version":"1.2","protocol":3},"installed":{"version":"1.1"},"running":null,"linger":false,"heal":{"state":"healing","why":"old"},"apps":{"waitingEngine":2}}"#),
+                ok(
+                    r#"{"state":"running","want":{"version":"1.2","protocol":3},"installed":{"version":"1.1"},"running":null,"linger":false,"heal":{"state":"healing","why":"old"},"apps":{"waitingEngine":2}}"#,
+                ),
                 0,
             ),
             // covers: app engine status
-            one("engine status: absent", &["engine", "status"], ok(r#"{"state":"absent"}"#), 0),
+            one(
+                "engine status: absent",
+                &["engine", "status"],
+                ok(r#"{"state":"absent"}"#),
+                0,
+            ),
             // covers: app engine status
-            one("engine status --json", &["engine", "status", "--json"], ok(r#"{"state":"x"}"#), 0),
+            one(
+                "engine status --json",
+                &["engine", "status", "--json"],
+                ok(r#"{"state":"x"}"#),
+                0,
+            ),
             // covers: app engine status
             traceback(one(
                 "engine status: a want that is a string",
@@ -307,7 +432,12 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
                 0,
             ),
             // covers: app rehost
-            one("rehost <app>: current", &["rehost", "--pause", "acme"], ok(r#"{"rehost":"current"}"#), 0),
+            one(
+                "rehost <app>: current",
+                &["rehost", "--pause", "acme"],
+                ok(r#"{"rehost":"current"}"#),
+                0,
+            ),
             // covers: app rehost
             one(
                 "rehost <app>: failed",
@@ -316,17 +446,37 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
                 1,
             ),
             // covers: app rehost
-            one("rehost --json", &["rehost", "acme", "--json"], ok(r#"{"rehost":"failed"}"#), 0),
+            one(
+                "rehost --json",
+                &["rehost", "acme", "--json"],
+                ok(r#"{"rehost":"failed"}"#),
+                0,
+            ),
             // covers: app rehost
             words("rehost: the page", &["rehost"], 0),
             // covers: app rehost
             words("rehost, an unknown flag", &["rehost", "acme", "--zap"], 2),
             // covers: app rehost status
-            one("rehost status: the wave", &["rehost", "status"], ok(wave), 0),
+            one(
+                "rehost status: the wave",
+                &["rehost", "status"],
+                ok(wave),
+                0,
+            ),
             // covers: app rehost status
-            one("rehost status <app>", &["rehost", "status", "acme é"], ok(one_app), 0),
+            one(
+                "rehost status <app>",
+                &["rehost", "status", "acme é"],
+                ok(one_app),
+                0,
+            ),
             // covers: app rehost status
-            one("rehost status --json", &["rehost", "status", "--json"], ok(wave), 0),
+            one(
+                "rehost status --json",
+                &["rehost", "status", "--json"],
+                ok(wave),
+                0,
+            ),
             // covers: app rehost status
             traceback(one(
                 "rehost status: apps that is a list",
@@ -337,29 +487,72 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
             // covers: app rehost policy
             one(
                 "rehost policy",
-                &["rehost", "policy", "acme", "--policy", "window", "--window", "02:00-04:00", "--when-no-overlap", "defer"],
-                ok(r#"{"app":"acme","rehost":{"policy":"window","window":"02:00-04:00","whenNoOverlap":"defer"},"warning":"late"}"#),
+                &[
+                    "rehost",
+                    "policy",
+                    "acme",
+                    "--policy",
+                    "window",
+                    "--window",
+                    "02:00-04:00",
+                    "--when-no-overlap",
+                    "defer",
+                ],
+                ok(
+                    r#"{"app":"acme","rehost":{"policy":"window","window":"02:00-04:00","whenNoOverlap":"defer"},"warning":"late"}"#,
+                ),
                 0,
             ),
             // covers: app rehost policy
-            one("rehost policy --json", &["rehost", "policy", "acme", "--json"], ok("{}"), 0),
+            one(
+                "rehost policy --json",
+                &["rehost", "policy", "acme", "--json"],
+                ok("{}"),
+                0,
+            ),
             // covers: app rehost policy
-            traceback(one("rehost policy: no rehost", &["rehost", "policy", "acme"], ok("{}"), 1)),
+            traceback(one(
+                "rehost policy: no rehost",
+                &["rehost", "policy", "acme"],
+                ok("{}"),
+                1,
+            )),
             // covers: app rehost policy
-            words("rehost policy, no App", &["rehost", "policy", "--policy", "auto"], 2),
+            words(
+                "rehost policy, no App",
+                &["rehost", "policy", "--policy", "auto"],
+                2,
+            ),
             // covers: app sessions
             one(
                 "sessions --live",
                 &["sessions", "--live"],
-                ok(r#"{"connected":1,"signedIn":4,"apps":[{"app":"acme","connected":1,"signedIn":3},{"app":"globex"}]}"#),
+                ok(
+                    r#"{"connected":1,"signedIn":4,"apps":[{"app":"acme","connected":1,"signedIn":3},{"app":"globex"}]}"#,
+                ),
                 0,
             ),
             // covers: app sessions
-            one("sessions --live: nobody", &["sessions", "--live"], ok("{}"), 0),
+            one(
+                "sessions --live: nobody",
+                &["sessions", "--live"],
+                ok("{}"),
+                0,
+            ),
             // covers: app sessions
-            one("sessions --live --count", &["sessions", "--count", "--live"], ok(r#"{"connected":2}"#), 0),
+            one(
+                "sessions --live --count",
+                &["sessions", "--count", "--live"],
+                ok(r#"{"connected":2}"#),
+                0,
+            ),
             // covers: app sessions
-            one("sessions --live --json", &["sessions", "--live", "--json"], ok("{}"), 0),
+            one(
+                "sessions --live --json",
+                &["sessions", "--live", "--json"],
+                ok("{}"),
+                0,
+            ),
             // covers: app sessions
             words("sessions without --live", &["sessions"], 2),
             // covers: app sessions
@@ -373,12 +566,22 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
 fn box_a_large_list() {
     let rig = Rig::new(VERB, "boxbig");
     let rows: Vec<String> = (0..4000)
-        .map(|n| format!(r#"{{"status":"ok","id":"check-{n:06}","detail":"a detail line é {n:030}"}}"#))
+        .map(|n| {
+            format!(r#"{{"status":"ok","id":"check-{n:06}","detail":"a detail line é {n:030}"}}"#)
+        })
         .collect();
     let body = format!(r#"{{"ready":true,"checks":[{}]}}"#, rows.join(","));
     assert!(body.len() > 256 * 1024, "{}", body.len());
     for args in [&["doctor"][..], &["box", "doctor", "--json"]] {
-        rig.check(&case("a large list", args, &[], vec![ok(&body)], files, 0, 1));
+        rig.check(&case(
+            "a large list",
+            args,
+            &[],
+            vec![ok(&body)],
+            files,
+            0,
+            1,
+        ));
     }
 }
 

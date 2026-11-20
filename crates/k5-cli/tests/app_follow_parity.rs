@@ -17,7 +17,11 @@ fn framed(lines: &[&str]) -> String {
     let mut f = vec!["--- untrusted App text ---".to_string(), "app: acme".into()];
     f.extend(lines.iter().map(|l| l.to_string()));
     f.push("--- end ---".into());
-    let text = f.join("\n").replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    let text = f
+        .join("\n")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
     format!(r#"{{"framed":"{text}"}}"#)
 }
 

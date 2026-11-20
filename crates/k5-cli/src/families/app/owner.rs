@@ -479,7 +479,12 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
                 out::stderr_line(&format!(
                     "This deletes App {app} and its data folder (~/.k2/apps/{app}). It can't be undone."
                 ));
-                tok = confirm(ctx, "app-purge", app, &format!("Delete App {app} and its data"))?;
+                tok = confirm(
+                    ctx,
+                    "app-purge",
+                    app,
+                    &format!("Delete App {app} and its data"),
+                )?;
             }
             let g = Given::new()
                 .put("app", app)
@@ -821,7 +826,10 @@ fn handover_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         o.line(&format!("Already: {}", py::s(&w)));
     }
     if py::truthy(&plan) && py::dget(&v, "status", 8)? != py::text("held") {
-        for b in py_iter(&py::or(py::dget(&plan, "blockers", 9)?, py::empty_list()), 9)? {
+        for b in py_iter(
+            &py::or(py::dget(&plan, "blockers", 9)?, py::empty_list()),
+            9,
+        )? {
             o.line(&format!(
                 "blocked ({}): {}",
                 py::s(&py::dget(&b, "code", 10)?),
@@ -864,10 +872,7 @@ fn status_lines(body: &[u8], o: &mut Out, detail: bool) -> Result<Exit, Raise> {
     for h in py_iter(&rows, 7)? {
         let mut extra = String::new();
         if py::truthy(&py::dget(&h, "inWindow", 9)?) {
-            extra = format!(
-                " (undo until {})",
-                py::s(&py::dget(&h, "windowUntil", 10)?)
-            );
+            extra = format!(" (undo until {})", py::s(&py::dget(&h, "windowUntil", 10)?));
         }
         if py::truthy(&py::dget(&h, "rekeyState", 11)?) {
             extra.push_str(&format!(
@@ -1013,33 +1018,54 @@ mod tests {
         assert_eq!(parse("handover", &[]), Some(Ok(Ask::HandoverUsage)));
         assert_eq!(parse("handover", &["a", "-h"]), None);
         assert_eq!(stop("uninstall", &[]).line, usage::UNINSTALL);
-        assert_eq!(stop("expose", &["a", "--tunnel", "--local"]).line, usage::EXPOSE_BOTH);
+        assert_eq!(
+            stop("expose", &["a", "--tunnel", "--local"]).line,
+            usage::EXPOSE_BOTH
+        );
         assert_eq!(stop("expose", &["a", "b"]).line, usage::EXPOSE_ONE);
-        assert_eq!(stop("expose", &["a", "--local", "--transfer"]).line, usage::EXPOSE_TRANSFER);
+        assert_eq!(
+            stop("expose", &["a", "--local", "--transfer"]).line,
+            usage::EXPOSE_TRANSFER
+        );
         assert_eq!(stop("park", &["--reason"]), Stop::silent(Exit::Error));
-        assert_eq!(stop("release", &["ws", "--apps", "park", "--drop-access"]).line, usage::RELEASE_DROP);
+        assert_eq!(
+            stop("release", &["ws", "--apps", "park", "--drop-access"]).line,
+            usage::RELEASE_DROP
+        );
         assert_eq!(stop("exception", &["on"]).line, usage::EXCEPTION);
         match parse("exception", &["on", "on"]) {
-            Some(Ok(Ask::Exception { app, on, .. })) => assert_eq!((app.as_str(), on), ("on", true)),
+            Some(Ok(Ask::Exception { app, on, .. })) => {
+                assert_eq!((app.as_str(), on), ("on", true))
+            }
             other => panic!("{other:?}"),
         }
         match parse("handover", &["status", "acme", "--detail"]) {
             Some(Ok(Ask::Handover(h))) => {
-                assert_eq!((h.sub.as_str(), h.app.as_str(), h.detail), ("status", "acme", true))
+                assert_eq!(
+                    (h.sub.as_str(), h.app.as_str(), h.detail),
+                    ("status", "acme", true)
+                )
             }
             other => panic!("{other:?}"),
         }
-        assert!(stop("handover", &["a", "--brief", "/no/such/file"]).line.contains("no brief file"));
+        assert!(stop("handover", &["a", "--brief", "/no/such/file"])
+            .line
+            .contains("no brief file"));
     }
 
     #[test]
     fn the_confirm_the_daemon_asks_for() {
         let asked = |b: &str| confirm_asked(b.as_bytes());
         assert_eq!(
-            asked(r#"{"error":{"code":"vault_confirm_required","action":"app-handover","secretId":"acme"}}"#),
+            asked(
+                r#"{"error":{"code":"vault_confirm_required","action":"app-handover","secretId":"acme"}}"#
+            ),
             Some(("app-handover".into(), "acme".into()))
         );
-        assert_eq!(asked(r#"{"error":{"code":"vault_confirm_required","action":"a"}}"#), None);
+        assert_eq!(
+            asked(r#"{"error":{"code":"vault_confirm_required","action":"a"}}"#),
+            None
+        );
         assert_eq!(asked(r#"{"error":"owner_only"}"#), None);
         assert_eq!(asked("[1]"), None);
     }

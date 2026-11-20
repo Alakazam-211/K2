@@ -55,7 +55,8 @@ pub mod usage {
         cli_name!(),
         " app deploy: --manifest goes with a folder (a stored Seed already has its manifest)"
     );
-    pub const ROLLBACK: &str = concat!("usage: ", cli_name!(), " app rollback <app-id> [--to SEED]");
+    pub const ROLLBACK: &str =
+        concat!("usage: ", cli_name!(), " app rollback <app-id> [--to SEED]");
     pub const LINK: &str = concat!(
         "usage: ",
         cli_name!(),
@@ -297,8 +298,7 @@ fn install(words: &[&str]) -> Result<Ask, Stop> {
     let mut g = Given::new();
     let (mut app, mut ws, mut json, mut pg, mut waits) = ("", "", false, "", false);
     let (mut tunnel, mut transfer) = ("0", "");
-    let (mut memory, mut engine, mut seed, mut folder, mut dov) =
-        ("", "", "", String::new(), "");
+    let (mut memory, mut engine, mut seed, mut folder, mut dov) = ("", "", "", String::new(), "");
     let mut i = 0;
     while let Some(w) = words.get(i) {
         match *w {
@@ -703,7 +703,8 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
                 Ok(true) => return Ok(deployment_exit(o, &body, *json)),
                 Ok(false) => {}
                 Err(e) => {
-                    let Shown { stderr, .. } = crate::families::raised(String::new(), String::new(), &e);
+                    let Shown { stderr, .. } =
+                        crate::families::raised(String::new(), String::new(), &e);
                     o.stderr.push_str(&stderr);
                 }
             }
@@ -879,7 +880,10 @@ fn build_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         py::s(&size)
     ));
     if py::truthy(&py::dget(&s, "sourceRef", 8)?) {
-        o.line(&format!("  commit {}", py::s(&py::idx(&s, "sourceRef", 9)?)));
+        o.line(&format!(
+            "  commit {}",
+            py::s(&py::idx(&s, "sourceRef", 9)?)
+        ));
     }
     let report = py::or(py::dget(&s, "report", 10)?, Value::Object(Vec::new()));
     for w in py::iter(&py::dget_or(&report, "warnings", py::empty_list(), 10)?, 10)? {
@@ -943,7 +947,11 @@ fn seed_size(body: &[u8], o: &mut Out) -> Result<(), Raise> {
     }
     let bytes = py::dget_or(&m, "bytes", Value::Int("0".into()), 15)?;
     let size = human(&bytes, 15)?;
-    let files = py::d(&py::dget_or(&m, "files", Value::Int("0".into()), 15)?, 0, 15)?;
+    let files = py::d(
+        &py::dget_or(&m, "files", Value::Int("0".into()), 15)?,
+        0,
+        15,
+    )?;
     let ignore = py::truthy(&py::dget(&m, "ignoreFile", 15)?);
     o.line(&format!(
         "Seed: {size}, {files} files{}",
@@ -1168,7 +1176,11 @@ fn link_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         g("inWallUrl", 11)?,
         g("passFile", 11)?
     ));
-    let caps = py::join(", ", &py::or(py::dget(&l, "caps", 12)?, py::empty_list()), 12)?;
+    let caps = py::join(
+        ", ",
+        &py::or(py::dget(&l, "caps", 12)?, py::empty_list()),
+        12,
+    )?;
     o.line(&format!(
         "  pass caps    {}",
         if caps.is_empty() {
@@ -1177,7 +1189,11 @@ fn link_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
             &caps
         }
     ));
-    let rooms = py::join(", ", &py::or(py::dget(&l, "rooms", 13)?, py::empty_list()), 13)?;
+    let rooms = py::join(
+        ", ",
+        &py::or(py::dget(&l, "rooms", 13)?, py::empty_list()),
+        13,
+    )?;
     o.line(&format!("  rooms        {rooms}"));
     let expires = when(&py::dget(&l, "passExpiresAt", 14)?, 14)?;
     let rotates = when(&py::dget(&l, "rotateAt", 14)?, 14)?;
@@ -1259,7 +1275,11 @@ fn seal_rotate(ctx: &mut Ctx, app: &str, yes: bool, json: bool) -> Answer {
             }
         } else {
             crate::out::stderr_line(&format!(
-                concat!("Not rotated: run ", cli_name!(), " app seal rotate {} --yes"),
+                concat!(
+                    "Not rotated: run ",
+                    cli_name!(),
+                    " app seal rotate {} --yes"
+                ),
                 app
             ));
             return Err(Exit::Usage);
@@ -1358,14 +1378,26 @@ mod tests {
         assert_eq!(stop("build", &["--x"]).line, "Unknown flag: --x");
         assert_eq!(parse("build", &["a", "-h"]), None);
         assert_eq!(parse("install", &["a", "--catalog=x"]), None);
-        assert_eq!(stop("install", &["a", "--pg-major", "1"]).line, usage::PG_MAJOR);
-        assert_eq!(stop("install", &["a", "--pg-major=09"]).line, usage::PG_MAJOR);
+        assert_eq!(
+            stop("install", &["a", "--pg-major", "1"]).line,
+            usage::PG_MAJOR
+        );
+        assert_eq!(
+            stop("install", &["a", "--pg-major=09"]).line,
+            usage::PG_MAJOR
+        );
         assert_eq!(stop("deploy", &["a"]).line, usage::DEPLOY);
-        assert_eq!(stop("deploy", &["a", "s", "--engine=x"]).line, usage::ENGINE);
+        assert_eq!(
+            stop("deploy", &["a", "s", "--engine=x"]).line,
+            usage::ENGINE
+        );
         assert_eq!(stop("restart", &[]).line.split(' ').nth(3), Some("restart"));
         assert_eq!(stop("config", &["a"]).line, usage::CONFIG);
         assert_eq!(stop("config", &["a", "--egress", "x"]).line, usage::EGRESS);
-        assert_eq!(stop("config", &["a", "--port", "add"]), Stop::silent(Exit::Error));
+        assert_eq!(
+            stop("config", &["a", "--port", "add"]),
+            Stop::silent(Exit::Error)
+        );
         assert_eq!(stop("config", &["a", "--io", "x"]).line, usage::IO);
     }
 
@@ -1377,7 +1409,9 @@ mod tests {
             .put("confirmToken", "t")
             .put("memory", "");
         assert_eq!(g.body(), r#"{"confirmToken": "t", "app": "a"}"#);
-        let g = Given::new().put("io", "none").put("io_j", r#"{"rbps": "1"}"#);
+        let g = Given::new()
+            .put("io", "none")
+            .put("io_j", r#"{"rbps": "1"}"#);
         assert_eq!(g.body(), r#"{"io": {"rbps": "1"}}"#);
     }
 

@@ -52,7 +52,11 @@ pub mod usage {
         cli_name!(),
         " app rehost policy <app> [--policy P] [--window HH:MM-HH:MM] [--when-no-overlap pause|defer]"
     );
-    pub const SESSIONS_TAIL: &str = concat!(" (", cli_name!(), " app sessions --live [--count] [--json])");
+    pub const SESSIONS_TAIL: &str = concat!(
+        " (",
+        cli_name!(),
+        " app sessions --live [--count] [--json])"
+    );
     pub const SESSIONS: &str = concat!(
         "usage: ",
         cli_name!(),
@@ -82,17 +86,49 @@ pub mod usage {
 pub enum Ask {
     /// The runtime page on stdout.
     Page,
-    BoxDoctor { json: bool },
-    Reach { app: String, json: bool },
-    EngineInstall { body: String, json: bool },
-    EngineStatus { json: bool },
-    RehostStatus { query: String, json: bool },
-    RehostPolicy { body: String, json: bool },
-    Rehost { app: String, body: String, json: bool },
-    Sessions { count: bool, json: bool },
-    Podman { json: bool },
-    Unprep { dry: bool, yes: bool, json: bool },
-    AutoPrepare { verb: String, json: bool },
+    BoxDoctor {
+        json: bool,
+    },
+    Reach {
+        app: String,
+        json: bool,
+    },
+    EngineInstall {
+        body: String,
+        json: bool,
+    },
+    EngineStatus {
+        json: bool,
+    },
+    RehostStatus {
+        query: String,
+        json: bool,
+    },
+    RehostPolicy {
+        body: String,
+        json: bool,
+    },
+    Rehost {
+        app: String,
+        body: String,
+        json: bool,
+    },
+    Sessions {
+        count: bool,
+        json: bool,
+    },
+    Podman {
+        json: bool,
+    },
+    Unprep {
+        dry: bool,
+        yes: bool,
+        json: bool,
+    },
+    AutoPrepare {
+        verb: String,
+        json: bool,
+    },
     Prepare(Prepare),
 }
 
@@ -208,7 +244,11 @@ pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
             _ => Err(Stop::usage(usage::AUTO_PREPARE)),
         },
         (_, Some("prepare")) => prepare(rest),
-        (_, Some(w)) => Err(Stop::usage(format!("{}{w}{}", usage::BOX_HEAD, usage::BOX_TAIL))),
+        (_, Some(w)) => Err(Stop::usage(format!(
+            "{}{w}{}",
+            usage::BOX_HEAD,
+            usage::BOX_TAIL
+        ))),
     })
 }
 
@@ -439,7 +479,11 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
             Ok(o.done(Ok(exit)))
         }
         Ask::Reach { app, json } => {
-            let body = ctx.call(false, "/cli/app/box-service", &format!("app={}", quote(app)))?;
+            let body = ctx.call(
+                false,
+                "/cli/app/box-service",
+                &format!("app={}", quote(app)),
+            )?;
             let mut o = Out::default();
             let r = if *json {
                 reach_json(&body, &mut o)
@@ -452,11 +496,13 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
             let r = (|| {
                 let v = py::load(&body, 1)?;
                 let reach = py::or(py::dget(&v, "reach", 1)?, Value::Object(Vec::new()));
-                Ok(if py::truthy(&py::dget_or(&reach, "ok", Value::Bool(true), 1)?) {
-                    Exit::Ok
-                } else {
-                    Exit::Error
-                })
+                Ok(
+                    if py::truthy(&py::dget_or(&reach, "ok", Value::Bool(true), 1)?) {
+                        Exit::Ok
+                    } else {
+                        Exit::Error
+                    },
+                )
             })();
             Ok(o.done(r))
         }
@@ -550,10 +596,7 @@ fn ask_yes(q: &str) -> bool {
     }
     let line = crate::prompt::read_line_or_end(crate::prompt::Echo::Shown);
     let yn = line.map(|l| super::deploy::ifs_trim(l.expose()).to_vec());
-    matches!(
-        yn.as_deref(),
-        Some(b"y" | b"Y" | b"yes" | b"YES")
-    )
+    matches!(yn.as_deref(), Some(b"y" | b"Y" | b"yes" | b"YES"))
 }
 
 fn auto_prepare(ctx: &mut Ctx, verb: &str, json: bool) -> Answer {
@@ -631,7 +674,12 @@ fn podman_needed(body: &[u8]) -> bool {
 }
 
 fn prepare_run(ctx: &mut Ctx, p: &Prepare) -> Answer {
-    let mut s = post(ctx, "/cli/app/box/prepare", &prepare_body(p, p.install, true), Some(900))?;
+    let mut s = post(
+        ctx,
+        "/cli/app/box/prepare",
+        &prepare_body(p, p.install, true),
+        Some(900),
+    )?;
     if s.status == "409"
         && !p.json
         && !p.install
@@ -649,7 +697,12 @@ fn prepare_run(ctx: &mut Ctx, p: &Prepare) -> Answer {
             out::stderr_line("Nothing changed.");
             return Err(Exit::Usage);
         }
-        s = post(ctx, "/cli/app/box/prepare", &prepare_body(p, true, false), Some(900))?;
+        s = post(
+            ctx,
+            "/cli/app/box/prepare",
+            &prepare_body(p, true, false),
+            Some(900),
+        )?;
     }
     let mut o = Out::default();
     if p.json {
@@ -708,7 +761,9 @@ pub fn box_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
             py::s(&runtime)
         ));
     } else {
-        o.line("App box: not a Linux box. Apps run on Linux only; there is no box prep to do here.");
+        o.line(
+            "App box: not a Linux box. Apps run on Linux only; there is no box prep to do here.",
+        );
     }
     for c in py_iter(&py::dget_or(&b, "checks", py::empty_list(), 11)?, 11)? {
         let status = py::dget_or(&c, "status", py::text("?"), 12)?;
@@ -769,12 +824,17 @@ pub fn box_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     }
     let legacy = py::or(py::dget(&v, "legacyServices", 28)?, py::empty_list());
     if py::truthy(&legacy) {
-        o.line("Legacy --cmd services (unwalled; they keep running, move each to an App when ready):");
+        o.line(
+            "Legacy --cmd services (unwalled; they keep running, move each to an App when ready):",
+        );
         for l in py_iter(&legacy, 32)? {
             o.line(&format!(
                 "  {} {} {}  -> {}",
                 py::left(&py::dget(&l, "name", 33)?, 20),
-                py::left(&py::or(py::dget(&l, "workspaceHandle", 33)?, py::text("")), 14),
+                py::left(
+                    &py::or(py::dget(&l, "workspaceHandle", 33)?, py::text("")),
+                    14
+                ),
                 py::s(&py::dget_or(&l, "label", py::text(""), 33)?),
                 py::s(&py::dget_or(&l, "hint", py::text(""), 33)?)
             ));
@@ -849,7 +909,10 @@ fn reach_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     if py::truthy(&rule) {
         let db = py::dget(&rule, "dbPorts", 9)?;
         let gw = py::dget(&rule, "gwPort", 10)?;
-        let boxp = joined_str(&py::or(py::dget(&rule, "boxPorts", 10)?, py::empty_list()), 10)?;
+        let boxp = joined_str(
+            &py::or(py::dget(&rule, "boxPorts", 10)?, py::empty_list()),
+            10,
+        )?;
         let pg = if db == Value::Null {
             "the whole band".to_string()
         } else {
@@ -870,7 +933,11 @@ fn reach_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     if py::truthy(&door) {
         let port = py::dget(&door, "inWallPort", 14)?;
         let sessions = py::dget(&door, "openSessions", 14)?;
-        let dbs = py::join(", ", &py::or(py::dget(&door, "databases", 15)?, py::empty_list()), 15)?;
+        let dbs = py::join(
+            ", ",
+            &py::or(py::dget(&door, "databases", 15)?, py::empty_list()),
+            15,
+        )?;
         o.line(&format!(
             "  db door   127.0.0.1:{} in the wall, {} open session(s), databases: {}",
             py::s(&port),
@@ -908,8 +975,18 @@ fn engine_status_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         if py::truthy(&x) {
             Ok(format!(
                 "v{} protocol {}",
-                py::s(&py::dget(&x, "version", 5).map_err(|e| Raise::inside(line, 5, "b", e.exception))?),
-                py::s(&py::dget(&x, "protocol", 5).map_err(|e| Raise::inside(line, 5, "b", e.exception))?)
+                py::s(&py::dget(&x, "version", 5).map_err(|e| Raise::inside(
+                    line,
+                    5,
+                    "b",
+                    e.exception
+                ))?),
+                py::s(&py::dget(&x, "protocol", 5).map_err(|e| Raise::inside(
+                    line,
+                    5,
+                    "b",
+                    e.exception
+                ))?)
             ))
         } else {
             Ok("-".into())
@@ -919,13 +996,22 @@ fn engine_status_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         o.line("App engine: not installed on this box");
         return Ok(Exit::Ok);
     }
-    o.line(&format!("App engine: {}", py::s(&py::dget(&v, "state", 9)?)));
+    o.line(&format!(
+        "App engine: {}",
+        py::s(&py::dget(&v, "state", 9)?)
+    ));
     o.line(&format!(
         concat!("  this ", product_name!(), ":   {}"),
         b(py::dget(&v, "want", 10)?, 10)?
     ));
-    o.line(&format!("  installed: {}", b(py::dget(&v, "installed", 11)?, 11)?));
-    o.line(&format!("  running:   {}", b(py::dget(&v, "running", 12)?, 12)?));
+    o.line(&format!(
+        "  installed: {}",
+        b(py::dget(&v, "installed", 11)?, 11)?
+    ));
+    o.line(&format!(
+        "  running:   {}",
+        b(py::dget(&v, "running", 12)?, 12)?
+    ));
     o.line(&format!(
         "  linger:    {}",
         if py::truthy(&py::dget(&v, "linger", 13)?) {
@@ -947,7 +1033,10 @@ fn engine_status_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         ));
     }
     let apps = py::or(py::dget(&v, "apps", 17)?, Value::Object(Vec::new()));
-    let w = py::or(py::dget(&apps, "waitingEngine", 17)?, Value::Int("0".into()));
+    let w = py::or(
+        py::dget(&apps, "waitingEngine", 17)?,
+        Value::Int("0".into()),
+    );
     if py::truthy(&w) {
         o.line(&format!(
             "  waiting:   {} App(s) wait for the engine",
@@ -1019,10 +1108,7 @@ fn rehost_status_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
                 } else {
                     concat!("started by ", product_name!(), " after an update")
                 };
-                o.line(&format!(
-                    "  last re-host: {} ({how}), {why}",
-                    py::s(&mode)
-                ));
+                o.line(&format!("  last re-host: {} ({how}), {why}", py::s(&mode)));
             }
         }
         return Ok(Exit::Ok);
@@ -1095,7 +1181,11 @@ fn rehost_lines(body: &[u8], o: &mut Out, arg: &str) -> Result<Exit, Raise> {
     )?;
     if r == py::text("current") {
         o.line(&format!(
-            concat!("{} already runs on this ", product_name!(), " (nothing to move)"),
+            concat!(
+                "{} already runs on this ",
+                product_name!(),
+                " (nothing to move)"
+            ),
             app
         ));
     } else if r == py::text("done") {
@@ -1124,10 +1214,7 @@ fn rehost_lines(body: &[u8], o: &mut Out, arg: &str) -> Result<Exit, Raise> {
                 16,
             )?
             .unwrap_or_default();
-            o.line(&format!(
-                "  how it was tried: {} ({tried})",
-                py::s(&mode)
-            ));
+            o.line(&format!("  how it was tried: {} ({tried})", py::s(&mode)));
         }
         o.line(&format!(
             concat!(
@@ -1182,7 +1269,10 @@ fn podman_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     } else {
         "nothing was installed".to_string()
     };
-    o.line(&format!(concat!(product_name!(), " Podman removed: {}"), what));
+    o.line(&format!(
+        concat!(product_name!(), " Podman removed: {}"),
+        what
+    ));
     for k in py_iter(&py::or(py::dget(&r, "kept", 6)?, py::empty_list()), 6)? {
         o.line(&py::concat("  kept ", &k, 7)?);
     }
@@ -1318,7 +1408,10 @@ fn prepare_dry_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     o.line("Dry run: nothing changed.");
     let a = py::dget(&p, "action", 6)?;
     let have_or_none = |line: u32| -> Result<String, Raise> {
-        Ok(py::s(&py::or(py::dget(&p, "have", line)?, py::text("none"))))
+        Ok(py::s(&py::or(
+            py::dget(&p, "have", line)?,
+            py::text("none"),
+        )))
     };
     if a == py::text("keep") {
         o.line(&format!(
@@ -1395,7 +1488,12 @@ fn prepare_dry_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     } else if py::truthy(&k) {
         o.line(&format!(
             "  Distro packages: none ({})",
-            py::s(&py::dget_or(&k, "note", py::text("no package manager"), 30)?)
+            py::s(&py::dget_or(
+                &k,
+                "note",
+                py::text("no package manager"),
+                30
+            )?)
         ));
     }
     if py::truthy(&py::dget(&k, "manager", 31)?) && py::truthy(&py::dget(&k, "note", 31)?) {
@@ -1423,10 +1521,7 @@ fn prepare_fail_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         let err = if ok {
             String::new()
         } else {
-            format!(
-                ": {}",
-                py::s(&py::dget_or(&s, "error", py::text(""), 8)?)
-            )
+            format!(": {}", py::s(&py::dget_or(&s, "error", py::text(""), 8)?))
         };
         o.line(&format!(
             "  {} {}{err}",
@@ -1545,17 +1640,42 @@ mod tests {
         assert_eq!(parse("box", &["status", "x"]), None);
         assert_eq!(parse("engine", &[]), Some(Ok(Ask::Page)));
         assert_eq!(stop("engine", &["x"]).line, usage::ENGINE);
-        assert_eq!(stop("engine", &["install", "a"]).line, "Unknown argument: a");
+        assert_eq!(
+            stop("engine", &["install", "a"]).line,
+            "Unknown argument: a"
+        );
         assert_eq!(stop("rehost", &["policy"]).line, usage::REHOST_POLICY);
         assert_eq!(stop("sessions", &[]).line, usage::SESSIONS);
         assert_eq!(stop("box", &["podman"]).line, usage::PODMAN);
-        assert_eq!(stop("box", &["auto-prepare", "x"]).line, usage::AUTO_PREPARE);
-        assert_eq!(stop("box", &["prepare", "--runtime", "runc"]).line, usage::RUNTIME);
-        assert_eq!(stop("box", &["prepare", "--apps-mem-max", "1G"]).line, usage::SIZES);
-        assert_eq!(stop("box", &["prepare", "--runtime"]), Stop::silent(Exit::Error));
+        assert_eq!(
+            stop("box", &["auto-prepare", "x"]).line,
+            usage::AUTO_PREPARE
+        );
+        assert_eq!(
+            stop("box", &["prepare", "--runtime", "runc"]).line,
+            usage::RUNTIME
+        );
+        assert_eq!(
+            stop("box", &["prepare", "--apps-mem-max", "1G"]).line,
+            usage::SIZES
+        );
+        assert_eq!(
+            stop("box", &["prepare", "--runtime"]),
+            Stop::silent(Exit::Error)
+        );
         assert!(stop("box", &["zap"]).line.ends_with("podman uninstall)"));
         assert_eq!(parse_doctor(&["--store"]), None);
-        assert_eq!(parse_doctor(&["--voice"]).and_then(Result::err).map(|s| s.line), Some(usage::DOCTOR_VOICE.to_string()));
-        assert_eq!(parse_doctor(&["a", "b"]).and_then(Result::err).map(|s| s.exit), Some(Exit::Usage));
+        assert_eq!(
+            parse_doctor(&["--voice"])
+                .and_then(Result::err)
+                .map(|s| s.line),
+            Some(usage::DOCTOR_VOICE.to_string())
+        );
+        assert_eq!(
+            parse_doctor(&["a", "b"])
+                .and_then(Result::err)
+                .map(|s| s.exit),
+            Some(Exit::Usage)
+        );
     }
 }

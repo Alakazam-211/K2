@@ -649,7 +649,11 @@ fn framed_body(body: &[u8], line: u32) -> Result<Vec<String>, Raise> {
     }
     let lines = crate::out::pylib::ops::splitlines(&py::s(&f));
     let n = lines.len();
-    Ok(if n > 2 { lines[2..n - 1].to_vec() } else { Vec::new() })
+    Ok(if n > 2 {
+        lines[2..n - 1].to_vec()
+    } else {
+        Vec::new()
+    })
 }
 
 /// The follow loop's Python: the new answer's lines after the longest

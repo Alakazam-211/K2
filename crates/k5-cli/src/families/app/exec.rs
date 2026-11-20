@@ -35,7 +35,8 @@ pub mod usage {
         cli_name!(),
         " app data put)"
     );
-    pub const TIMED_OUT: &str = concat!("[", cli_name!(), "] the command was stopped at its timeout");
+    pub const TIMED_OUT: &str =
+        concat!("[", cli_name!(), "] the command was stopped at its timeout");
 }
 
 /// The most stdin one exec carries.
@@ -53,7 +54,8 @@ pub struct Ask {
 
 /// The words after `exec`. `None`: a help form.
 pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
-    let (mut app, mut timeout, mut json, mut no_stdin) = (String::new(), String::new(), false, false);
+    let (mut app, mut timeout, mut json, mut no_stdin) =
+        (String::new(), String::new(), false, false);
     let mut i = 0;
     while let Some(w) = words.get(i) {
         match *w {
@@ -85,7 +87,10 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
             _ => break,
         }
     }
-    let argv: Vec<String> = words[i.min(words.len())..].iter().map(|w| w.to_string()).collect();
+    let argv: Vec<String> = words[i.min(words.len())..]
+        .iter()
+        .map(|w| w.to_string())
+        .collect();
     if app.is_empty() || argv.is_empty() {
         return Some(Err(Stop::usage(usage::EXEC)));
     }
@@ -220,8 +225,12 @@ mod tests {
         assert_eq!(a.argv, vec!["ls", "--json"]);
         assert!(!a.json);
         assert!(matches!(parse(&["acme"]), Some(Err(s)) if s.line == usage::EXEC));
-        assert!(matches!(parse(&["acme", "--zap", "x"]), Some(Err(s)) if s.line.ends_with("after --)")));
-        assert!(matches!(parse(&["acme", "--timeout", "x", "ls"]), Some(Err(s)) if s.exit == Exit::Usage));
+        assert!(
+            matches!(parse(&["acme", "--zap", "x"]), Some(Err(s)) if s.line.ends_with("after --)"))
+        );
+        assert!(
+            matches!(parse(&["acme", "--timeout", "x", "ls"]), Some(Err(s)) if s.exit == Exit::Usage)
+        );
         assert_eq!(parse(&["-h"]), None);
     }
 

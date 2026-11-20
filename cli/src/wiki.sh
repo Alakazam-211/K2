@@ -557,6 +557,9 @@ cmd_wiki_publish() {
     local as_json=false project_sel="" port="" label=""
     local -a wiki_pos=()
     _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    # Step 2 may call the K2 Connect control plane: check its base before
+    # any request, the daemon's included (that call's stderr is hidden).
+    _connect_base_check || exit 2
     if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
         project_sel="${wiki_pos[0]}"
     fi

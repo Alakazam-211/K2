@@ -12,6 +12,23 @@
 # integration tests.
 _envn_into K2_CONNECT_BASE CONNECT_BASE https://connect.k2.dev
 
+# _connect_base_check: the one check on $K2_CONNECT_BASE, run before a
+# verb that may call the control plane sends anything. A base with no
+# http:// or https:// in front is refused (curl would guess http and send
+# the tunnel token in clear). Prints why and returns 2.
+_connect_base_check() {
+    local scheme="${K2_CONNECT_BASE%%://*}"
+    [ "$scheme" != "$K2_CONNECT_BASE" ] || scheme=""
+    scheme="$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')"
+    case "$scheme" in
+        https|http) ;;
+        *)
+            echo "Error: K2_CONNECT_BASE must start with https:// (got: ${K2_CONNECT_BASE})" >&2
+            return 2
+            ;;
+    esac
+}
+
 # Read the tunnel bearer token from ~/.k2/tunnel.json. Returns empty when
 # missing so the caller can fail loud with guidance.
 _connect_bearer_token() {
@@ -1695,6 +1712,7 @@ EOF
         _publish_app_status "$app" "$as_json"
         return
     fi
+    _connect_base_check || exit 2
     # 0.45.7: no tunnel.json token check here — a desktop keeps the token
     # in the K2 vault; the daemon reports a missing one (_connect_curl).
     local self cp_raw
@@ -2087,6 +2105,7 @@ else:
                 exit 1
             fi
             _refuse_reserved_nested_label "$label"
+            _connect_base_check || exit 2
             _subdomain_label_preflight "$label" "$transfer" || exit 1
             local body
             body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
@@ -2126,6 +2145,7 @@ EOF
                         exit 2 ;;
                 esac
             done
+            _connect_base_check || exit 2
             local self
             self="$(_connect_self_subdomain)"
             cp_raw="$(_connect_curl GET "/subdomains")" || exit $?
@@ -2247,6 +2267,7 @@ else:
                 exit 1
             fi
             _refuse_reserved_nested_label "$label"
+            _connect_base_check || exit 2
             _subdomain_label_preflight "$label" "$transfer" || exit 1
             local body
             body="$(python3 -c 'import json,sys; print(json.dumps({"target": sys.argv[1]}))' "$target")"
@@ -2274,6 +2295,7 @@ print("  effective: %s" % d.get("effective","?"))
                 echo "Usage: k2 publish subdomain rm <label>" >&2
                 exit 1
             fi
+            _connect_base_check || exit 2
             # Never delete a name another workspace on this server owns.
             # (The reserved front-door label is box-level, not a workspace's.)
             if [ "$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')" != "skin" ]; then

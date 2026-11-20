@@ -779,7 +779,8 @@ impl Client {
     }
 
     /// `_setup_send <GET|POST> <ep> <as_json> [<body>]` (`cli/src/setup.sh`):
-    /// `ep`, then `?format=text` when `text`, the token as Bearer, over TCP; a POST
+    /// `ep`, then `?format=text` when `text`, the token as Bearer (in a
+    /// session with no passport, none: [`Client::session`]), over TCP; a POST
     /// carries `body` as JSON. Each exchange is `_k2_curl`'s (a refused
     /// connect is tried again, [`Client::refused_before_answer`] counts
     /// those of the last one). Then `_setup_send`'s loop: a GET whose
@@ -1240,6 +1241,12 @@ impl Client {
                 // read before the command line's `-H`s. Never the query.
                 let credential = match kind {
                     Kind::Public | Kind::UpdateVersion => None,
+                    // `_setup_token` (0.46.17): in a session (`HOOK_SOCK`
+                    // set) the passport, and with none no credential at
+                    // all, never the owner token.
+                    Kind::SetupGet | Kind::SetupPost if self.session && self.passport().is_none() => {
+                        None
+                    }
                     Kind::Probe | Kind::BearerForm => Some(self.passport().map(Passport::as_str)),
                     _ => Some(self.tcp_token()),
                 };
@@ -1904,6 +1911,32 @@ mod tests {
             policy.contains(&format!("_K2_NO_OWNER_WRITE_LINE=\"{shell}\"\n")),
             "_K2_NO_OWNER_WRITE_LINE moved"
         );
+    }
+
+    /// `_setup_token`: in a session with no passport, setup's requests
+    /// carry no credential at all (never the owner token), and the
+    /// owner's source header still goes; outside a session, the owner
+    /// token as before.
+    #[test]
+    fn setup_in_a_session_with_no_passport_sends_no_credential() {
+        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
+        c.owner_from_disk = true;
+        let names = |c: &Client, kind| {
+            let (_, r) = c.build(kind, Channel::Tcp, "/cli/first-run/status", &[], &[]).unwrap();
+            r.headers.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
+        };
+        for kind in [Kind::SetupGet, Kind::SetupPost] {
+            assert_eq!(names(&c, kind)[0], "Authorization", "{kind:?} outside a session");
+        }
+        c.session = true;
+        for kind in [Kind::SetupGet, Kind::SetupPost] {
+            let n = names(&c, kind);
+            assert!(!n.iter().any(|h| h == "Authorization"), "{kind:?}: {n:?}");
+            assert!(n.iter().any(|h| h == OWNER_SOURCE_HEADER), "{kind:?}: {n:?}");
+        }
+        // Every other kind keeps the token (the socket-first ones refuse
+        // instead, before they build).
+        assert_eq!(names(&c, Kind::Request)[0], "Authorization");
     }
 
     /// `k2 update --cli`'s GET: the path as it is, no token, the

@@ -18,8 +18,10 @@
 //!    `kessel` or `chief-of-staff`. A mistake is its line (or the usage),
 //!    exit 2, and nothing is sent.
 //! 4. One `_setup_send` ([`crate::transport::Client::setup_send`]): over
-//!    TCP, never the cell socket, the shell's TCP token as Bearer and
-//!    `?format=text` but with `--json`. `setup` alone is `GET
+//!    TCP, never the cell socket, the shell's TCP token as Bearer (in a
+//!    session, `HOOK_SOCK` set, the passport, and with none no credential
+//!    at all: `_setup_token`, 0.46.17) and `?format=text` but with
+//!    `--json`. `setup` alone is `GET
 //!    /cli/first-run/status`; each verb is a `POST` of its JSON body,
 //!    built as `_setup_jstr` writes it ([`body`]). A POST is sent once:
 //!    only a refused connect (nothing reached the daemon) is tried again,
@@ -48,11 +50,6 @@
 //!
 //! Where this differs from the shell:
 //!
-//! - PRD 13.9 #4: in a session with `HOOK_SOCK` set and the owner token
-//!   on disk, the shell's open-tool rule (COMPAT-58) sends the owner
-//!   token for every form but `chief-of-staff` as the first word; this
-//!   sends the passport, so an agent there gets the daemon's agent
-//!   refusal instead of the owner's list.
 //! - Without `python3` ([`crate::python::NATIVE_WITHOUT_PYTHON3`]) an
 //!   older daemon's JSON list and a refusal's closing line print as they
 //!   do with one; the shell there prints `python3: command not found`

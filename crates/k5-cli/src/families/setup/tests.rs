@@ -61,7 +61,12 @@ fn the_shell_s_lines() {
         // `_setup_send`.
         r#"    [ "$as_json" = "1" ] || q="?format=text""#,
         r#"        _k2_cfg_add url "${BASE_URL}${path}${q}""#,
-        r#"        _k2_cfg_auth "$TOKEN""#,
+        r#"        _setup_token"#,
+        r#"        _k2_cfg_auth "$_SETUP_TOK""#,
+        // `_setup_token` (0.46.17): in a session the passport or nothing.
+        r#"    if _envn_any HOOK_SOCK; then"#,
+        r#"        _SETUP_TOK="${SCOPED_TOKEN:-}""#,
+        r#"        _SETUP_TOK="${TOKEN:-}""#,
         r#"            out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 30 -w $'\n%{http_code}' 2>/dev/null; printf x)""#,
         r#"            _k2_cfg_add data-raw "$body""#,
         r#"                -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null; printf x)""#,

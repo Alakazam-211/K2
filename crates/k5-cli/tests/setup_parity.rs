@@ -7,7 +7,8 @@
 //!   set, an agent with no daemon, an agent over TCP and an agent in a K2
 //!   terminal (a live cell socket; the request still goes over TCP), each
 //!   with plain answers and with a refusal carrying the permission cards'
-//!   object; PRD 13.9 #4's owner token.
+//!   object; the owner token on disk in a session, which neither side
+//!   sends (0.46.17).
 //! - The answers: the daemon's lines as they came, its JSON and a newline,
 //!   each refusal kind `tests/cli/setup_no_python.sh` has (exit 2, 3, 4,
 //!   1), a body that is not JSON (cut at 200 bytes, or 200 characters in
@@ -57,7 +58,9 @@ type Environment = (&'static str, Vec<(&'static str, String)>, fn(&Rig), Compare
 /// The help_native environments, by name, as (env, setup, compare): the
 /// owner (A), the owner with `HOOK_SOCK` (As), an agent over TCP (T), an
 /// agent in a K2 terminal (C), and the last with the owner token on disk
-/// (PRD 13.9 #4).
+/// too: since 0.46.17 the shell sends the passport there, as the binary
+/// does (`_setup_token`), and the owner with `HOOK_SOCK` sends no
+/// credential at all.
 fn environments() -> Vec<Environment> {
     let sock = |extra: Vec<(&'static str, String)>| {
         let mut e = extra;
@@ -85,10 +88,10 @@ fn environments() -> Vec<Environment> {
             Compare::Exact,
         ),
         (
-            "agent, a cell socket, the owner token on disk (PRD 13.9 #4)",
+            "agent, a cell socket, the owner token on disk",
             sock(with_passport(&[])),
             owner_and_port,
-            Compare::OwnerTokenWithPassport,
+            Compare::Exact,
         ),
     ]
 }
@@ -1428,9 +1431,8 @@ fn the_writes() {
     }
 }
 
-/// The writes with a passport: the locked tool sends it in a K2 terminal
-/// even with the owner token on disk; the other verbs send the owner
-/// token there (PRD 13.9 #4: the binary, the passport).
+/// The writes with a passport: every verb sends it in a K2 terminal, even
+/// with the owner token on disk (0.46.17, `_setup_token`).
 #[test]
 fn the_writes_with_a_passport() {
     let rig = Rig::new(VERB, "wpass");
@@ -1481,21 +1483,18 @@ fn the_writes_with_a_passport() {
                 1,
             ),
         ),
-        Case {
-            compare: Compare::OwnerTokenWithPassport,
-            ..agent(
-                &sock,
-                case(
-                    "hide in a K2 terminal, the owner token on disk (PRD 13.9 #4)",
-                    &["hide"],
-                    &[],
-                    vec![text(LIST)],
-                    owner_and_port,
-                    0,
-                    1,
-                ),
-            )
-        },
+        agent(
+            &sock,
+            case(
+                "hide in a K2 terminal, the owner token on disk: the passport",
+                &["hide"],
+                &[],
+                vec![text(LIST)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
         agent(
             &[],
             case(

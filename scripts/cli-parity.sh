@@ -31,7 +31,9 @@
 # mapped to its difference here by name, never skipped broadly. (The
 # binary's own parity tests meet owner-token-with-passport:
 # crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, read_parity.rs,
-# activity_parity.rs, feedback_parity.rs and setup_parity.rs. They meet
+# activity_parity.rs and feedback_parity.rs; since 0.46.17 the shell's
+# setup sends the passport there too, so setup_parity.rs no longer meets
+# it. They meet
 # native-without-python3 in every case of the parity rig, in
 # whoami_parity.rs, pages_without_python3.rs and the study cards tests;
 # tests/cli runs with python3 on PATH. They meet bash32-pipe-reader in the

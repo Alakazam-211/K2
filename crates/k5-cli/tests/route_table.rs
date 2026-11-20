@@ -341,6 +341,46 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
     }
 }
 
+/// `compute`'s verb rows: each row's words are the words (or some of the
+/// words) of one arm of `cmd_compute`'s case (`cli/src/compute-command.sh`),
+/// and every word is one the binary's family answers.
+fn compute_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "compute-command.sh")
+        .expect("cli/src/compute-command.sh")
+        .1;
+    let arms: Vec<Vec<&str>> = text
+        .lines()
+        .filter_map(|l| {
+            let l = l.strip_prefix("        ")?;
+            if l.starts_with(' ') {
+                return None;
+            }
+            let (pat, _) = l.split_once(')')?;
+            (!pat.is_empty()
+                && pat
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '|' || c == '-'))
+            .then(|| pat.split('|').collect())
+        })
+        .collect();
+    for verb in noun.verbs {
+        let arm = arms
+            .iter()
+            .find(|a| a.contains(&verb.words[0]))
+            .unwrap_or_else(|| panic!("{:?} is no arm of cmd_compute", verb.words));
+        for w in verb.words {
+            assert!(arm.contains(w), "{w} is not in the arm {arm:?}");
+            assert!(
+                k5_cli::families::compute::answers(w),
+                "the compute family does not answer {w}"
+            );
+        }
+    }
+}
+
 /// `feedback`'s verb rows: each is one arm of the `feedback|tickets)`
 /// case in `cli/src/router.sh`, which hands it to its own function.
 fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
@@ -580,35 +620,4 @@ fn a_native_or_spec_row_has_a_schema_entry_or_a_named_reason() {
         bad.is_empty(),
         "Native or Spec rows with no `k2 --schema` entry and no reason in the exemptions: {bad:?}"
     );
-}
-
-/// `compute`'s verb rows: each is a word of one arm of `cmd_compute`'s
-/// `case` (`cli/src/compute-command.sh`).
-fn compute_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
-    let sources = common::shell_sources();
-    let text = &sources
-        .iter()
-        .find(|(name, _)| name == "compute-command.sh")
-        .expect("cli/src/compute-command.sh")
-        .1;
-    let body = &text[text.find("cmd_compute() {\n").expect("cmd_compute")..];
-    let body = &body[..body.find("\n}\n").expect("its end")];
-    for verb in noun.verbs {
-        assert_eq!(
-            verb.words.len(),
-            1,
-            "{:?}: one word per verb row",
-            verb.words
-        );
-        let word = verb.words[0];
-        assert!(
-            body.lines().any(|l| {
-                let l = l.trim_start();
-                l.starts_with(|c: char| c.is_ascii_lowercase())
-                    && l.split_once(')')
-                        .is_some_and(|(arm, _)| arm.split('|').any(|w| w == word))
-            }),
-            "cmd_compute's case has no {word} arm"
-        );
-    }
 }

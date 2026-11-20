@@ -59,6 +59,9 @@ mod tests;
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "compute";
 
+/// The verbs this module answers (the family's [`super::answers`]).
+pub const ANSWERS: &[&str] = &["cancel", "wait", "fetch", "grant"];
+
 /// The status `_compute_split` reads when no answer came (`printf '\n000'`).
 pub const NO_STATUS: &str = "000";
 

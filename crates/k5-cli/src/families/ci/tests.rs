@@ -16,9 +16,16 @@ fn until_reads_the_shell_s_forms() {
     assert_eq!(until_secs("3d", 100), Ok(100 + 3 * 86_400));
     assert_eq!(until_secs(" 1700000000 ", 0), Ok(1_700_000_000));
     assert_eq!(until_secs("2026-11-20T00:00:00Z", 0), Ok(1_795_132_800));
-    assert_eq!(until_secs("2026-11-20T01:00:00+01:00", 0), Ok(1_795_132_800));
-    assert!(until_secs("2026-11-20T00:00:00", 0).unwrap_err().contains("time zone"));
-    assert!(until_secs("soon", 0).unwrap_err().starts_with("usage: --until 3d"));
+    assert_eq!(
+        until_secs("2026-11-20T01:00:00+01:00", 0),
+        Ok(1_795_132_800)
+    );
+    assert!(until_secs("2026-11-20T00:00:00", 0)
+        .unwrap_err()
+        .contains("time zone"));
+    assert!(until_secs("soon", 0)
+        .unwrap_err()
+        .starts_with("usage: --until 3d"));
 }
 
 #[test]
@@ -41,7 +48,9 @@ fn the_words_as_cmd_ci_reads_them() {
     );
     assert_eq!(
         parse(&["status", "--timeout", "1x"]),
-        Some(Parsed::Usage("usage: bad duration '1x' (use 2h, 90m, 1h30m, 300s)".into()))
+        Some(Parsed::Usage(
+            "usage: bad duration '1x' (use 2h, 90m, 1h30m, 300s)".into()
+        ))
     );
     let Some(Parsed::Call(a)) = parse(&["init", "--mem", "16G", "--", "make", "-h"]) else {
         panic!()
@@ -53,7 +62,12 @@ fn the_words_as_cmd_ci_reads_them() {
 #[test]
 fn compute_json_puts_secrets_first() {
     assert_eq!(
-        compute_json(&[("name", "m"), ("count_n", "03"), ("code_s", "c"), ("for", "")]),
+        compute_json(&[
+            ("name", "m"),
+            ("count_n", "03"),
+            ("code_s", "c"),
+            ("for", "")
+        ]),
         r#"{"code": "c", "name": "m", "count": 3}"#
     );
 }

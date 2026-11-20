@@ -5,14 +5,16 @@
 
 use crate::families::{py_d, py_iter, Raise};
 use crate::out::json::{Text, Value};
-use crate::out::pylib::ops::{index, join};
 use crate::out::py;
+use crate::out::pylib::ops::{index, join};
 
 pub type R<T> = Result<T, Raise>;
 
 /// `v.get(k)`: `None` (Null) for a missing key.
 pub fn g(v: &Value, k: &str, l: u32) -> R<Value> {
-    Ok(crate::families::py_get(v, k, l)?.cloned().unwrap_or(Value::Null))
+    Ok(crate::families::py_get(v, k, l)?
+        .cloned()
+        .unwrap_or(Value::Null))
 }
 
 /// `v.get(k, default)`.

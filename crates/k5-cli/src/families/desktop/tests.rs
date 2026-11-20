@@ -11,7 +11,10 @@ fn call(words: &[&str]) -> Ask {
 fn the_words_as_the_shell_reads_them() {
     assert_eq!(
         parse(&[]),
-        Parsed::Call(Box::new(Ask { sub: "status".into(), ..Ask::default() }))
+        Parsed::Call(Box::new(Ask {
+            sub: "status".into(),
+            ..Ask::default()
+        }))
     );
     assert_eq!(parse(&["help"]), Parsed::Help);
     assert_eq!(

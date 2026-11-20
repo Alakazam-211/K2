@@ -77,7 +77,8 @@ pub fn parse(sub: &str, rest: &[&str]) -> Parsed {
                     rest = &rest[1..];
                 }
             }
-            let (mut code_stdin, mut hello, mut out) = (false, String::new(), "k2-signer-offer.json".to_string());
+            let (mut code_stdin, mut hello, mut out) =
+                (false, String::new(), "k2-signer-offer.json".to_string());
             let mut i = 0;
             while i < rest.len() {
                 match rest[i] {
@@ -114,7 +115,11 @@ pub fn parse(sub: &str, rest: &[&str]) -> Parsed {
         "reveal" | "finish" => {
             let id = rest.first().copied().unwrap_or("").to_string();
             let rest = if id.is_empty() { rest } else { &rest[1..] };
-            let flag = if verb == "reveal" { "--reveal" } else { "--done" };
+            let flag = if verb == "reveal" {
+                "--reveal"
+            } else {
+                "--done"
+            };
             let file = if rest.first() == Some(&flag) {
                 rest.get(1).copied().unwrap_or("").to_string()
             } else {

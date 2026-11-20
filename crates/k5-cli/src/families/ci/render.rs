@@ -2,7 +2,9 @@
 //! `cmd_ci` pipes its answer into (`cli/src/ci.sh`). Where the shell's
 //! Python raises, this prints a traceback with Python's exception.
 
-use super::py::{self, ago, d, g, g_or, has, head, int, items, ix, joined, left, or, s, t, when, R};
+use super::py::{
+    self, ago, d, g, g_or, has, head, int, items, ix, joined, left, or, s, t, when, R,
+};
 use crate::exit::Exit;
 use crate::families::{raised, Raise, Shown};
 use crate::out::json::{self, Options, Value};
@@ -51,7 +53,11 @@ pub fn render(verb: &str, body: &[u8]) -> Shown {
         "freeze" => run_shown(body, |v, o| {
             let f = g(v, "freeze", L)?;
             o.p(&if py_truthy(&f) {
-                format!("freeze until {}{}", when(&ix(&f, "until", L)?, L)?, why(&f)?)
+                format!(
+                    "freeze until {}{}",
+                    when(&ix(&f, "until", L)?, L)?,
+                    why(&f)?
+                )
             } else {
                 "no freeze".into()
             });
@@ -118,7 +124,11 @@ fn watch_line(w: &Value, now: i64) -> R<String> {
 fn checks_short(r: &Value) -> R<String> {
     let mut parts = Vec::new();
     for c in items(&or(g(r, "checks", L)?, Value::Array(Vec::new())), L)? {
-        parts.push(format!("{}={}", s(&ix(&c, "name", L)?), s(&ix(&c, "state", L)?)));
+        parts.push(format!(
+            "{}={}",
+            s(&ix(&c, "name", L)?),
+            s(&ix(&c, "state", L)?)
+        ));
     }
     let j = parts.join(" ");
     Ok(if j.is_empty() { "-".into() } else { j })
@@ -460,7 +470,11 @@ fn dur(v: &Value) -> R<String> {
     } else if n < 3600 {
         format!("{}m{:02}s", n.div_euclid(60), n.rem_euclid(60))
     } else {
-        format!("{}h{:02}m", n.div_euclid(3600), n.rem_euclid(3600).div_euclid(60))
+        format!(
+            "{}h{:02}m",
+            n.div_euclid(3600),
+            n.rem_euclid(3600).div_euclid(60)
+        )
     })
 }
 
@@ -592,7 +606,10 @@ fn cooldown(m: &Value) -> R<String> {
 
 fn monitors(v: &Value, o: &mut Out, now: i64) -> R<()> {
     let ms = or(g(v, "monitors", L)?, Value::Array(Vec::new()));
-    o.p(&format!("CI monitors \u{b7} {}", s(&ix(v, "workspace", L)?)));
+    o.p(&format!(
+        "CI monitors \u{b7} {}",
+        s(&ix(v, "workspace", L)?)
+    ));
     if !py_truthy(&ms) {
         o.p(&format!(
             "  none: {CLI} ci monitor add <name> --kind fail-streak --branch main ({CLI} study ci-stats)"
@@ -698,7 +715,10 @@ fn tests(v: &Value, o: &mut Out, now: i64) -> R<()> {
         let extra = match why.as_str_opt() {
             Some("flaky") => {
                 let tree = if py_truthy(&g(&r, "lastFlakeTree", L)?) {
-                    format!(" on tree {}", s(&head(&ix(&r, "lastFlakeTree", L)?, 12, L)?))
+                    format!(
+                        " on tree {}",
+                        s(&head(&ix(&r, "lastFlakeTree", L)?, 12, L)?)
+                    )
                 } else {
                     String::new()
                 };
@@ -816,7 +836,10 @@ pub fn watch_alone(body: &[u8], json_out: bool) -> Shown {
                 indent: Some(2),
                 ..Options::default()
             };
-            Shown::out(format!("{}\n", json::to_string(&w, &opts).unwrap_or_default()))
+            Shown::out(format!(
+                "{}\n",
+                json::to_string(&w, &opts).unwrap_or_default()
+            ))
         }
         Ok(_) => Shown::out(format!("watch: off ({CLI} ci watch on)\n")),
         Err(e) => raised(String::new(), String::new(), &e),

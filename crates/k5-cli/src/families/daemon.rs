@@ -146,7 +146,12 @@ fn on_path(prog: &str) -> bool {
 /// `tr -dc '0-9' < daemon.lock`.
 fn lock_pid(home: &Path) -> String {
     std::fs::read(home.join("daemon.lock"))
-        .map(|b| b.into_iter().filter(u8::is_ascii_digit).map(char::from).collect())
+        .map(|b| {
+            b.into_iter()
+                .filter(u8::is_ascii_digit)
+                .map(char::from)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -170,7 +175,11 @@ fn linux_unit(home: &Path) -> Option<(String, String)> {
                 .next_back()
                 .unwrap_or("")
                 .to_string();
-            let scope = if cg.contains("/user@") { "user" } else { "system" };
+            let scope = if cg.contains("/user@") {
+                "user"
+            } else {
+                "system"
+            };
             if !unit.is_empty() {
                 return Some((scope.into(), unit));
             }
@@ -245,8 +254,12 @@ pub fn status(s: &Settings, json: bool) -> Shown {
     let log = home.join("daemon.stdout.log");
     let log = log.to_string_lossy();
     if cfg!(target_os = "linux") {
-        let (mut scope, mut unit, mut active, mut pid) =
-            (String::new(), String::new(), "unknown".to_string(), String::new());
+        let (mut scope, mut unit, mut active, mut pid) = (
+            String::new(),
+            String::new(),
+            "unknown".to_string(),
+            String::new(),
+        );
         if let Some((sc, u)) = linux_unit(home) {
             active = systemctl(&sc, &["is-active", &u]).0;
             pid = systemctl(&sc, &["show", "-p", "MainPID", "--value", &u]).0;
@@ -272,7 +285,11 @@ pub fn status(s: &Settings, json: bool) -> Shown {
             o.push_str("  Unit:          none found (k2-daemon.service, user or system)\n");
         } else {
             o.push_str(&format!("  Unit:          {unit} ({scope})\n"));
-            let a = if active.is_empty() { "unknown" } else { &active };
+            let a = if active.is_empty() {
+                "unknown"
+            } else {
+                &active
+            };
             let pid_part = if pid.is_empty() {
                 String::new()
             } else {
@@ -290,7 +307,9 @@ pub fn status(s: &Settings, json: bool) -> Shown {
         ptyd_lines(&mut o, &p);
         return Shown::out(o);
     }
-    let user_home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let user_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     let agents = user_home.join("Library/LaunchAgents");
     let (mut label, mut plist) = ("dev.k2.daemon", agents.join("dev.k2.daemon.plist"));
     let old = agents.join("com.k2so.k2so-daemon.plist");
@@ -308,7 +327,11 @@ pub fn status(s: &Settings, json: bool) -> Shown {
             v.trim_matches(|c| c == ' ' || c == '\t').to_string()
         });
     }
-    let running = if !pid.is_empty() && pid != "0" { "yes" } else { "no" };
+    let running = if !pid.is_empty() && pid != "0" {
+        "yes"
+    } else {
+        "no"
+    };
     let port = file_text(&home.join("daemon.port"));
     let token = token_present(home);
     let p = ptyd(&port, &s.project);

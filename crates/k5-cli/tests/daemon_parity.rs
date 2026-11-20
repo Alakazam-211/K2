@@ -59,8 +59,16 @@ fn files(r: &Rig) {
     owner_and_port(r);
     std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub().port)).unwrap();
     std::fs::write(r.k2home.join("daemon.token"), "tok\n").unwrap();
-    std::fs::write(r.dir.join("user-unit"), "user k2-daemon.service active 4242\n").unwrap();
-    std::fs::write(r.dir.join("system-unit"), "system k2so-daemon.service inactive 0\n").unwrap();
+    std::fs::write(
+        r.dir.join("user-unit"),
+        "user k2-daemon.service active 4242\n",
+    )
+    .unwrap();
+    std::fs::write(
+        r.dir.join("system-unit"),
+        "system k2so-daemon.service inactive 0\n",
+    )
+    .unwrap();
     std::fs::write(
         r.dir.join("launchd"),
         "gui/501/dev.k2.daemon = {\n\tstate = running\n\tpid = 4242\n\tlast exit code = 1 \n}\n",
@@ -104,7 +112,15 @@ fn daemon_status_answers_as_the_shell_does() {
         // covers: daemon
         with(
             env(&rig, "user-unit"),
-            case("daemon alone: a user unit", &[], &[], vec![ptyd()], files, 0, 1),
+            case(
+                "daemon alone: a user unit",
+                &[],
+                &[],
+                vec![ptyd()],
+                files,
+                0,
+                1,
+            ),
         ),
         with(
             env(&rig, "user-unit"),
@@ -188,7 +204,15 @@ fn daemon_status_answers_as_the_shell_does() {
 fn daemon_gates() {
     let rig = rig("gates");
     let v = vec![
-        case("no daemon set up: the gate", &[], &[], vec![], nothing, 1, 0),
+        case(
+            "no daemon set up: the gate",
+            &[],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
         case(
             "the guard",
             &["status"],
@@ -232,9 +256,14 @@ fn daemon_lines_say_the_brand_s_name() {
     let (out, _) = rig.binary(&c, false);
     let product = k2_client::brand::PRODUCT_NAME;
     let cli = k2_client::brand::CLI_NAME;
-    assert!(out.stdout.starts_with(&format!("{product} Daemon\n")), "{}", out.stdout);
     assert!(
-        out.stdout.contains(&format!("(k2-ptyd; {cli} daemon survive status)")),
+        out.stdout.starts_with(&format!("{product} Daemon\n")),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains(&format!("(k2-ptyd; {cli} daemon survive status)")),
         "{}",
         out.stdout
     );

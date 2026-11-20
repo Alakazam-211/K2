@@ -31,8 +31,8 @@ use super::compute::writes::{self, dumps, object, str_value, Cp};
 use crate::daemon;
 use crate::exit::Exit;
 use crate::families::{curl_port, Shown};
-use crate::out::json::{self, Value};
 use crate::out;
+use crate::out::json::{self, Value};
 use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
@@ -204,7 +204,13 @@ pub fn compute_secs(v: &str) -> Result<Option<String>, String> {
                     return Ok(None);
                 }
                 let n: u64 = num.parse().unwrap_or(0);
-                total += n * if c == 'h' { 3600 } else if c == 'm' { 60 } else { 1 };
+                total += n * if c == 'h' {
+                    3600
+                } else if c == 'm' {
+                    60
+                } else {
+                    1
+                };
                 num.clear();
             }
             _ => return Err(bad()),
@@ -554,14 +560,19 @@ pub fn until_secs(v: &str, now: i64) -> Result<i64, &'static str> {
     if (9..=11).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit()) {
         return s.parse().map_err(|_| BAD);
     }
-    let dt = crate::families::heartbeat::when::fromisoformat(&s.replace('Z', "+00:00")).ok_or(BAD)?;
-    let off = dt.offset.ok_or("usage: --until needs a time zone (2026-11-20T00:00:00Z)")?;
+    let dt =
+        crate::families::heartbeat::when::fromisoformat(&s.replace('Z', "+00:00")).ok_or(BAD)?;
+    let off = dt
+        .offset
+        .ok_or("usage: --until needs a time zone (2026-11-20T00:00:00Z)")?;
     let days = crate::families::heartbeat::when::days_from_civil(dt.year, dt.month, dt.day);
-    Ok(days * 86_400
-        + i64::from(dt.hour) * 3600
-        + i64::from(dt.minute) * 60
-        + i64::from(dt.second)
-        - off)
+    Ok(
+        days * 86_400
+            + i64::from(dt.hour) * 3600
+            + i64::from(dt.minute) * 60
+            + i64::from(dt.second)
+            - off,
+    )
 }
 
 /// `_ci_call GET|POST <route> <payload>`: the body of a 200; else the
@@ -575,7 +586,10 @@ pub fn call(cp: &mut Cp<'_>, post: bool, route: &str, payload: &str) -> Result<V
         out::stderr_line(UNREACHABLE);
         return Err(Exit::Error);
     }
-    let _ = out::write_flushed(&mut std::io::stderr().lock(), fail_lines(&s.body).as_bytes());
+    let _ = out::write_flushed(
+        &mut std::io::stderr().lock(),
+        fail_lines(&s.body).as_bytes(),
+    );
     Err(match s.status.as_str() {
         "400" | "413" => Exit::Usage,
         "404" => Exit::NotFound,
@@ -681,7 +695,11 @@ fn verb(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     };
     match a.sub.as_str() {
         "status" => {
-            let q = r(vec![("workspace", ws), ("run", p0), ("limit", a.limit.as_str())]);
+            let q = r(vec![
+                ("workspace", ws),
+                ("run", p0),
+                ("limit", a.limit.as_str()),
+            ]);
             match call(cp, false, "status", &q) {
                 Ok(b) => show(a, "status", &b),
                 Err(e) => e,
@@ -760,7 +778,9 @@ fn verb(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
         "init" => init(cp, a, ws),
         "freeze" => freeze(cp, a, ws),
         "cache" => cache(cp, a, ws),
-        sub => usage(format!("usage: unknown {CLI} ci verb '{sub}' ({CLI} ci --help)")),
+        sub => usage(format!(
+            "usage: unknown {CLI} ci verb '{sub}' ({CLI} ci --help)"
+        )),
     }
 }
 
@@ -830,7 +850,14 @@ fn run_field(body: &[u8], key: &str) -> Result<String, Exit> {
 
 /// `run --wait` and `release --wait`: ask the run's status every
 /// `CI_WAIT_SECS` until it ends, up to `--wait-min` minutes.
-fn wait_run(cp: &mut Cp<'_>, a: &Ask, ws: &str, first: Vec<u8>, default_min: u64, release: bool) -> Exit {
+fn wait_run(
+    cp: &mut Cp<'_>,
+    a: &Ask,
+    ws: &str,
+    first: Vec<u8>,
+    default_min: u64,
+    release: bool,
+) -> Exit {
     let mut body = first;
     let id = match run_field(&body, "id") {
         Ok(t) => t,
@@ -841,7 +868,8 @@ fn wait_run(cp: &mut Cp<'_>, a: &Ask, ws: &str, first: Vec<u8>, default_min: u64
     } else {
         a.wait_min.parse().unwrap_or(u64::MAX / 120)
     };
-    let deadline = py::now().saturating_add(i64::try_from(mins.saturating_mul(60)).unwrap_or(i64::MAX));
+    let deadline =
+        py::now().saturating_add(i64::try_from(mins.saturating_mul(60)).unwrap_or(i64::MAX));
     let secs = wait_secs().unwrap_or(10.0);
     let state = loop {
         let state = match run_field(&body, "state") {
@@ -1009,7 +1037,11 @@ fn init(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     .filter(|(_, v)| !v.is_empty())
     .map(|(k, v)| (k, str_value(v)))
     .collect();
-    for (k, v) in [("memGb", a.mem.as_str()), ("cpus", a.cpus.as_str()), ("timeoutSecs", a.timeout.as_str())] {
+    for (k, v) in [
+        ("memGb", a.mem.as_str()),
+        ("cpus", a.cpus.as_str()),
+        ("timeoutSecs", a.timeout.as_str()),
+    ] {
         if !v.is_empty() {
             o.push((k, int_value(v)));
         }

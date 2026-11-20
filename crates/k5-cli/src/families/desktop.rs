@@ -641,7 +641,11 @@ pub fn render(as_json: bool, verb: &str, status: &str, body: &[u8]) -> Rendered 
         // `set -e`: a refusal its Python can't read ends the command there.
         let (stderr, ok) = refusal_lines(status, body);
         return Rendered {
-            stdout: if as_json && ok { with_newline() } else { Vec::new() },
+            stdout: if as_json && ok {
+                with_newline()
+            } else {
+                Vec::new()
+            },
             stderr,
             exit: if ok { exit_for(status) } else { Exit::Error },
         };

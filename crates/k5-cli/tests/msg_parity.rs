@@ -33,6 +33,8 @@ const ON: &str = r#"{"version":"0","features":["send-once"]}"#;
 const OFF: &str = r#"{"version":"0","features":[]}"#;
 const SENT: &str = r#"{"success":true,"target_session_id":"s1","attempts":1}"#;
 const NOT_SENT: &str = r#"{"success":false,"reason":"no_agent","hint":"nobody home"}"#;
+const POSTAL_SENT: &str =
+    r#"{"status":"delivered","to":"a::abc.postal.bot","badge":"B","deliveryId":"m_1"}"#;
 
 fn owner(c: Case) -> Case {
     Case {
@@ -573,6 +575,81 @@ fn msg_sends_as_the_shell_does() {
                 3,
                 0,
             )
+        },
+        // Postal mail in a session: the passport, the cell socket first
+        // (`cli_send`), then TCP by its rules; a person's step ends with
+        // where a person takes it.
+        session(case(
+            "Postal mail over the cell socket",
+            &["a::abc.postal.bot", "hi"],
+            &[],
+            vec![ok(POSTAL_SENT)],
+            nothing,
+            0,
+            1,
+        )),
+        session(case(
+            "Postal mail: not served, then TCP",
+            &["a::abc.postal.bot", "hi"],
+            &[],
+            vec![
+                Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into()),
+                ok(POSTAL_SENT),
+            ],
+            nothing,
+            0,
+            2,
+        )),
+        Case {
+            env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+            ..session(case(
+                "Postal mail: no socket, TCP with the passport",
+                &["a::abc.postal.bot", "hi"],
+                &[],
+                vec![ok(POSTAL_SENT)],
+                nothing,
+                0,
+                1,
+            ))
+        },
+        session(case(
+            "Postal mail: a person's step in a session",
+            &["a::abc.postal.bot", "hi"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"postal_people_only","hint":"a person sends this"}}"#.into(),
+            )],
+            nothing,
+            3,
+            1,
+        )),
+        session(case(
+            "Postal mail: a hint that says where",
+            &["a::abc.postal.bot", "hi"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"owner_only","hint":"in Settings"}}"#.into(),
+            )],
+            nothing,
+            3,
+            1,
+        )),
+        Case {
+            compare: Compare::Bash32PipeReader {
+                stdout: "",
+                stderr: "",
+            },
+            ..session(case(
+                "Postal mail the cell socket may have run",
+                &["a::abc.postal.bot", "hi"],
+                &[],
+                vec![Reply::Close],
+                nothing,
+                141,
+                1,
+            ))
         },
         case("no daemon", &["ws", "hi"], &[], vec![], nothing, 1, 0),
     ];

@@ -230,6 +230,20 @@ pub fn error_branch(
     exits: &[(&str, i32)],
     refused: bool,
 ) -> Result<Option<i32>, Raise> {
+    let lines = if refused { (12, 15) } else { (12, 13) };
+    error_branch_at(d, p, exits, refused, lines)
+}
+
+/// [`error_branch`] for a reader whose lines are elsewhere: `lines` is
+/// the line of the `Error:` print (`code + ": "`) and the line of the map
+/// (`unhashable type`).
+pub fn error_branch_at(
+    d: &Value,
+    p: &mut Printed,
+    exits: &[(&str, i32)],
+    refused: bool,
+    lines: (u32, u32),
+) -> Result<Option<i32>, Raise> {
     let err = match d {
         Value::Object(pairs) => get(pairs, "error").cloned().unwrap_or(Value::Null),
         _ => Value::Null,
@@ -245,7 +259,7 @@ pub fn error_branch(
         other => (s(""), s(&str_of(other))),
     };
     let prefix = if truthy(&code) {
-        plus_colon(&code, 12)?
+        plus_colon(&code, lines.0)?
     } else {
         String::new()
     };
@@ -273,10 +287,9 @@ pub fn error_branch(
             return Ok(Some(3));
         }
     }
-    let line = if refused { 15 } else { 13 };
     if matches!(code, Value::Array(_) | Value::Object(_)) {
         return Err(Raise::at(
-            line,
+            lines.1,
             format!("TypeError: unhashable type: '{}'", type_name(&code)),
         ));
     }

@@ -433,24 +433,30 @@ fn postal_mail() {
     let r = postal::reader(
         br#"{"status":"delivered","to":"a::b.postal.bot","badge":"B","deliveryId":"m_1"}"#,
         false,
+        false,
     );
     assert_eq!(
         as_shell(&r.stdout),
         "Postal mail to a::b.postal.bot: delivered\nBadge:    B\nRecord:   m_1 (k2 msg verify m_1)\nTheir server stored it.\n"
     );
     assert_eq!(r.exit, Exit::Ok);
-    let r = postal::reader(br#"{"status":"failed","to":"x","reason":"gone"}"#, false);
+    let r = postal::reader(
+        br#"{"status":"failed","to":"x","reason":"gone"}"#,
+        false,
+        false,
+    );
     assert_eq!(
         (r.stdout.as_str(), r.exit),
         ("Not sent to x: failed (gone)\n", Exit::Error)
     );
-    let r = postal::reader(br#"{"status":"queued"}"#, false);
+    let r = postal::reader(br#"{"status":"queued"}"#, false, false);
     assert_eq!(
         r.stdout,
         "Postal mail to None: queued\nQueued on this server; it goes out at the next try.\n"
     );
     let r = postal::reader(
         r#"{"asked":true,"card":"c1","waiting":true,"hint":"ßee"}"#.as_bytes(),
+        false,
         false,
     );
     assert_eq!(
@@ -463,22 +469,116 @@ fn postal_mail() {
     let r = postal::reader(
         br#"{"error":{"code":"postal_not_friends","hint":"ask first"}}"#,
         false,
+        false,
     );
     assert_eq!(
         (r.stderr.as_str(), r.exit),
         ("Error: postal_not_friends: ask first\n", Exit::Refused)
     );
-    let r = postal::reader(br#"{"error":{"code":"too_large","hint":"h"}}"#, false);
-    assert_eq!(r.exit, Exit::Usage);
-    let r = postal::reader(br#"{"status":"held"}"#, true);
-    assert_eq!(r.stdout, "{\n  \"status\": \"held\"\n}\n");
-    let r = postal::reader(br#"{"workspace":"x"}"#, false);
-    assert!(
-        r.stderr
-            .ends_with("AttributeError: 'str' object has no attribute 'get'\n"),
-        "{}",
-        r.stderr
+    let r = postal::reader(
+        br#"{"error":{"code":"too_large","hint":"h"}}"#,
+        false,
+        false,
     );
+    assert_eq!(r.exit, Exit::Usage);
+    let r = postal::reader(br#"{"status":"held"}"#, true, false);
+    assert_eq!(r.stdout, "{\n  \"status\": \"held\"\n}\n");
+    let r = postal::reader(br#"{"workspace":"x"}"#, false, false);
+    let want = format!(
+        "line {}, in <module>\nAttributeError: 'str' object has no attribute 'get'\n",
+        postal::line::WORKSPACE
+    );
+    assert!(r.stderr.ends_with(&want), "{}", r.stderr);
+}
+
+/// In a session (`PS`), a person's step ends with where a person takes
+/// it, unless the daemon's hint already says; outside a session it never
+/// does. Each line number names the line of `_postal_print`'s Python.
+#[test]
+fn postal_mail_in_a_session() {
+    use super::postal;
+    use crate::families::postal::PERSON_LINE;
+    let owner = br#"{"error":{"code":"owner_only","hint":"only the owner"}}"#;
+    let r = postal::reader(owner, false, true);
+    assert_eq!(
+        (r.stderr, r.exit),
+        (
+            format!("Error: owner_only: only the owner\n{PERSON_LINE}\n"),
+            Exit::Refused
+        )
+    );
+    let r = postal::reader(owner, false, false);
+    assert_eq!(
+        (r.stderr.as_str(), r.exit),
+        ("Error: owner_only: only the owner\n", Exit::Refused)
+    );
+    let people = br#"{"error":{"code":"postal_people_only","hint":"a person"}}"#;
+    let r = postal::reader(people, false, true);
+    let want = format!("Error: postal_people_only: a person\n{PERSON_LINE}\n");
+    assert_eq!(r.stderr, want);
+    for says in [
+        r#"{"error":{"code":"owner_only","hint":"open the Postal tab"}}"#,
+        r#"{"error":{"code":"owner_only","hint":"in Settings"}}"#,
+        r#"{"error":{"code":"owner_only","hint":["Settings"]}}"#,
+        r#"{"error":{"code":"postal_not_friends","hint":"ask first"}}"#,
+        r#"{"error":"owner_only"}"#,
+    ] {
+        let r = postal::reader(says.as_bytes(), false, true);
+        assert!(!r.stderr.contains(PERSON_LINE), "{says}: {}", r.stderr);
+    }
+    // A hint Python can't look in: the error line, then its traceback.
+    let r = postal::reader(br#"{"error":{"code":"owner_only","hint":5}}"#, false, true);
+    let want = format!(
+        "Error: owner_only: 5\nTraceback (most recent call last):\n  File \"<string>\", line {}, in <module>\nTypeError: argument of type 'int' is not iterable\n",
+        postal::line::PERSON
+    );
+    assert_eq!((r.stderr, r.exit), (want, Exit::Error));
+    // A code that is a list: the error line raises before the check.
+    let r = postal::reader(br#"{"error":{"code":["owner_only"]}}"#, false, true);
+    let want = format!(
+        "line {}, in <module>\nTypeError: can only concatenate list (not \"str\") to list\n",
+        postal::line::ERROR
+    );
+    assert!(r.stderr.ends_with(&want), "{}", r.stderr);
+    // An empty list: no prefix, the check passes it by, the map raises.
+    let r = postal::reader(br#"{"error":{"code":[],"hint":"h"}}"#, false, true);
+    let want = format!(
+        "Error: h\nTraceback (most recent call last):\n  File \"<string>\", line {}, in <module>\nTypeError: unhashable type: 'list'\n",
+        postal::line::EXIT
+    );
+    assert_eq!(r.stderr, want);
+    let r = postal::reader(b"[]", false, true);
+    let want = format!(
+        "line {}, in <module>\nAttributeError: 'list' object has no attribute 'get'\n",
+        postal::line::ASKED
+    );
+    assert!(r.stderr.ends_with(&want), "{}", r.stderr);
+    // The lines, as the shell's Python has them.
+    let src = source("postal.sh");
+    let body = src
+        .split_once("_postal_print() {\n")
+        .expect("_postal_print")
+        .1;
+    let py = body.split_once("python3 -c '").expect("its python").1;
+    let at = |n: u32| py.lines().nth(n as usize - 1).expect("the line").trim();
+    for (n, starts) in [
+        (postal::line::ERROR, r#"print("Error: %s%s""#),
+        (postal::line::PERSON, r#"if os.environ.get("PS")"#),
+        (postal::line::EXIT, "sys.exit(3 if code in perm"),
+        (postal::line::ASKED, r#"if d.get("asked"):"#),
+        (postal::line::CARD, r#"print("Asked: a card"#),
+        (postal::line::HINT, r#"hint = d.get("hint") or"#),
+        (postal::line::CAPITAL, "print(hint[0].upper()"),
+        (postal::line::HANDLE, r#"h = d.get("handle")"#),
+        (postal::line::WORKSPACE, r#"ws = (d.get("workspace")"#),
+        (postal::line::STATUS, r#"st = d.get("status")"#),
+        (postal::line::SENT, r#"print("%s to %s: %s%s""#),
+        (postal::line::BADGE, r#"if d.get("badge"):"#),
+        (postal::line::RECORD, r#"if d.get("deliveryId"):"#),
+        (postal::line::QUEUED, r#"if st == "queued":"#),
+    ] {
+        assert!(at(n).starts_with(starts), "line {n}: {}", at(n));
+    }
 }
 
 #[test]
@@ -836,6 +936,7 @@ fn the_lines_name_the_brand() {
         postal::usage("a::b.postal.bot"),
         postal::reader(
             br#"{"status":"delivered","to":"a::b.postal.bot","badge":"B","deliveryId":"m_1"}"#,
+            false,
             false,
         )
         .stdout,

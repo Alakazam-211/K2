@@ -743,9 +743,8 @@ fn sentence(hint: &Value) -> Result<String, String> {
     }
 }
 
-/// `x in (…)` for a tuple of strings.
 /// `needle in hay`, as Python reads it for the JSON types.
-fn py_in(needle: &str, hay: &Value) -> Result<bool, String> {
+pub(crate) fn py_in(needle: &str, hay: &Value) -> Result<bool, String> {
     match hay {
         Value::Str(_) => Ok(st(hay).contains(needle)),
         Value::Array(items) => Ok(items.iter().any(|i| *i == super::s(needle))),
@@ -757,6 +756,7 @@ fn py_in(needle: &str, hay: &Value) -> Result<bool, String> {
     }
 }
 
+/// `x in (…)` for a tuple of strings.
 fn among(v: &Value, list: &[&str]) -> bool {
     list.iter().any(|w| *v == super::s(w))
 }

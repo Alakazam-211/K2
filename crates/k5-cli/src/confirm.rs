@@ -51,6 +51,7 @@ use crate::prelude::Closing;
 use crate::prompt::{self, Secret};
 use crate::transport::client::TRIES;
 use crate::transport::{permission, Channel, Client, Error, Response};
+use k2_client::brand::PRODUCT_NAME;
 use std::path::{Path, PathBuf};
 
 /// `_vault_sock`: `${K2_HOME}/vault.sock`.
@@ -97,7 +98,13 @@ impl Split {
 /// `_vault_sock_call METHOD <route> [json]`: `out=$(curl … -w '\n%{http_code}'
 /// 2>/dev/null) || out=""`, then `_sidecar_split`. Any failure is status
 /// `000` with an empty body. Never ends the command.
-pub fn sock_call(client: &mut Client, sock: &Path, post: bool, route: &str, payload: &[u8]) -> Split {
+pub fn sock_call(
+    client: &mut Client,
+    sock: &Path,
+    post: bool,
+    route: &str,
+    payload: &[u8],
+) -> Split {
     match client.vault_sock(sock, post, route, payload, tty()) {
         Ok(r) => answered(client, &r),
         Err(_) => Split {
@@ -112,7 +119,12 @@ pub fn sock_call(client: &mut Client, sock: &Path, post: bool, route: &str, payl
 /// daemon may have run, or one the session may not send as the owner, is
 /// the transport's line and exit 1 (`_k2_end_command 1` from inside the
 /// `$(…)`): `Err` with that exit, the line printed.
-pub fn sidecar_call(client: &mut Client, post: bool, path: &str, payload: &str) -> Result<Split, Exit> {
+pub fn sidecar_call(
+    client: &mut Client,
+    post: bool,
+    path: &str,
+    payload: &str,
+) -> Result<Split, Exit> {
     let r = if post {
         client.sidecar_post(path, payload)
     } else {
@@ -203,16 +215,23 @@ pub fn fail(split: &Split, closing: &mut Closing, passport: bool) -> Exit {
 
 /// `_envn_any HOOK_SOCK HOOK_TOKEN`: inside a K2 terminal.
 pub fn in_k2_terminal() -> bool {
-    [k2_client::env_names::HOOK_SOCK, k2_client::env_names::HOOK_TOKEN]
-        .iter()
-        .any(|names| {
-            k2_client::env_names::first_nonempty_os_in(names, |n| std::env::var_os(n)).is_some()
-        })
+    [
+        k2_client::env_names::HOOK_SOCK,
+        k2_client::env_names::HOOK_TOKEN,
+    ]
+    .iter()
+    .any(|names| {
+        k2_client::env_names::first_nonempty_os_in(names, |n| std::env::var_os(n)).is_some()
+    })
 }
 
 /// `_vault_person_guard`'s first refusal: a K2 terminal.
 pub const OWNER_ONLY: [&str; 2] = [
-    "owner_only: this is for a person, from your own terminal or SSH login, not a K2 terminal.",
+    concat!(
+        "owner_only: this is for a person, from your own terminal or SSH login, not a ",
+        k2_client::product_name!(),
+        " terminal."
+    ),
     "Agents: don't run it; tell your owner.",
 ];
 
@@ -228,7 +247,7 @@ pub fn person_guard(sock: &Path) -> Result<(), Exit> {
     }
     if !crate::families::live_socket(Some(sock)) {
         out::stderr_line(&format!(
-            "vault_unavailable: {} isn't there (is the K2 daemon running on this machine?)",
+            "vault_unavailable: {} isn't there (is the {PRODUCT_NAME} daemon running on this machine?)",
             sock.display()
         ));
         return Err(Exit::Error);
@@ -315,10 +334,19 @@ pub const FIRST_SETUP: &[&str] = &[
     "owner-login",
 ];
 
-pub const NO_METHOD: &str =
-    "no_confirm_method: set a vault password first: k2 vault confirm-password set";
+pub const NO_METHOD: &str = concat!(
+    "no_confirm_method: set a vault password first: ",
+    k2_client::cli_name!(),
+    " vault confirm-password set"
+);
 
-pub const NO_PASSWORD_FOR_METHOD: &str = "no_confirm_method: K2_VAULT_CONFIRM_METHOD=vault-password, but no vault password is set (k2 vault confirm-password set)";
+/// The setting's name is the one the shell reads (a stored name, not the
+/// brand's).
+pub const NO_PASSWORD_FOR_METHOD: &str = concat!(
+    "no_confirm_method: K2_VAULT_CONFIRM_METHOD=vault-password, but no vault password is set (",
+    k2_client::cli_name!(),
+    " vault confirm-password set)"
+);
 
 /// One field of a 200's JSON, as the shell's one-line Pythons read it
 /// (`json.load(sys.stdin).get(key)`): `Err` with the traceback's last
@@ -350,11 +378,9 @@ pub fn load(body: &[u8]) -> Result<Value, Raise> {
 fn text_field(v: &Result<Value, Raise>, key: &str, join: bool) -> String {
     match field(v, key) {
         Ok(Some(x)) if py::truthy(x) => match (join, x) {
-            (true, Value::Array(items)) => items
-                .iter()
-                .map(py::str_of)
-                .collect::<Vec<_>>()
-                .join(" "),
+            (true, Value::Array(items)) => {
+                items.iter().map(py::str_of).collect::<Vec<_>>().join(" ")
+            }
             (true, other) => match crate::families::py_iter(other, 1) {
                 Ok(items) => items.iter().map(py::str_of).collect::<Vec<_>>().join(" "),
                 Err(r) => {
@@ -428,7 +454,12 @@ impl Confirm<'_> {
 /// owner login's password, or the vault password typed here). `None`: the
 /// caller ends the command with exit 3 (see the module's notes); what the
 /// shell prints on the way is printed.
-pub fn confirm_token(c: &mut Confirm<'_>, action: &str, secret_id: &str, label: &str) -> Option<String> {
+pub fn confirm_token(
+    c: &mut Confirm<'_>,
+    action: &str,
+    secret_id: &str,
+    label: &str,
+) -> Option<String> {
     let start = dumps(&object(vec![
         ("action", Value::Str(Text::from(action))),
         ("secretId", str_or_null(secret_id)),
@@ -481,7 +512,11 @@ pub fn confirm_token(c: &mut Confirm<'_>, action: &str, secret_id: &str, label: 
         ])
     } else if has_word(&methods, "owner-login-password") {
         if login.is_empty() {
-            let typed = prompt::ask("Which owner login on this server (k2 users lists them): ");
+            let typed = prompt::ask(concat!(
+                "Which owner login on this server (",
+                k2_client::cli_name!(),
+                " users lists them): "
+            ));
             login = String::from_utf8_lossy(typed.expose()).into_owned();
         }
         let pw = prompt::ask_hidden(&format!("Sign-in password for owner login {login}: "));
@@ -516,7 +551,12 @@ pub fn confirm_token(c: &mut Confirm<'_>, action: &str, secret_id: &str, label: 
 /// `systemdCred` or `rollbackPlan` key holds `plan`, a JSON text). Only
 /// the vault password or the K2 Connect password, typed here. `None`: the
 /// caller ends the command with exit 3.
-pub fn confirm_token_plan(c: &mut Confirm<'_>, action: &str, plan: &str, key: &str) -> Option<String> {
+pub fn confirm_token_plan(
+    c: &mut Confirm<'_>,
+    action: &str,
+    plan: &str,
+    key: &str,
+) -> Option<String> {
     let plan_v = match json::parse(plan) {
         Ok(v) => v,
         Err(_) => return None,
@@ -536,7 +576,11 @@ pub fn confirm_token_plan(c: &mut Confirm<'_>, action: &str, plan: &str, key: &s
         prompt::prompt("Vault password: ");
         "vault-password"
     } else if has_word(&methods, "connect-password") {
-        prompt::prompt("Your K2 Connect password: ");
+        prompt::prompt(concat!(
+            "Your ",
+            k2_client::product_name!(),
+            " Connect password: "
+        ));
         "connect-password"
     } else {
         out::stderr_line(NO_METHOD);
@@ -580,8 +624,8 @@ mod tests {
         );
         // Another field, and one already there keeps its place.
         assert_eq!(
-            with_confirm_token(r#"{"t": 1, "x": "é"}"#, "z", Some("t")).unwrap(),
-            r#"{"t": "z", "x": "é"}"#
+            with_confirm_token("{\"t\": 1, \"x\": \"\u{e9}\"}", "z", Some("t")).unwrap(),
+            "{\"t\": \"z\", \"x\": \"\\u00e9\"}"
         );
         // Only the token's first line.
         assert_eq!(
@@ -638,10 +682,11 @@ mod tests {
     #[test]
     fn typed_bytes_that_are_not_utf8_keep_their_escape() {
         assert_eq!(dumps(&text_of_bytes(b"p\xffw\"")), r#""p\udcffw\"""#);
-        assert_eq!(dumps(&text_of_bytes("pé".as_bytes())), r#""pé""#);
+        assert_eq!(dumps(&text_of_bytes("p\u{e9}".as_bytes())), "\"p\\u00e9\"");
     }
 
-    /// The texts are the shell's.
+    /// The texts are the shell's (in the default brand, whose names the
+    /// shell spells).
     #[test]
     fn the_lines_are_the_shell_s() {
         let src = std::fs::read_to_string(
@@ -659,12 +704,16 @@ mod tests {
                     "Which owner login on this server (k2 users lists them): ",
                     "Sign-in password for owner login %s: ",
                     "printf 'Vault password: '",
-                    "isn't there (is the K2 daemon running on this machine?)",
+                    "isn't there (is the ",
                 ]
                 .iter(),
             )
         {
-            assert!(src.contains(l), "not in vault.sh: {l}");
+            // The shell spells the default brand's names.
+            let l = l
+                .replace(PRODUCT_NAME, "K2")
+                .replace(&format!("{} ", k2_client::brand::CLI_NAME), "k2 ");
+            assert!(src.contains(&l), "not in vault.sh: {l}");
         }
         for action in FIRST_SETUP {
             assert!(src.contains(action), "{action}");

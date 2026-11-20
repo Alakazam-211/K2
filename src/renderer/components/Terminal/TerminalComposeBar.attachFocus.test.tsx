@@ -177,6 +177,12 @@ describe('after a file attaches, the box is ready to type in', () => {
 
   it('a dialog that opened while the file was on its way: the caret stays off the box', async () => {
     const box = renderBar()
+    // The bar's own mount-time focus (the "Message agent" switch) runs on
+    // the first frame; let it, then the person clicks away, so only the
+    // attach path could put the caret back.
+    await nextFrame()
+    act(() => box.blur())
+    expect(document.activeElement).not.toBe(box)
     let release: (paths: string[]) => void = () => {
       throw new Error('the picker never opened')
     }

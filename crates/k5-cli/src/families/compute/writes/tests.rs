@@ -1040,3 +1040,27 @@ mod grant_verb {
         );
     }
 }
+
+/// Under any brand, the lines name the brand's command and product, never
+/// a typed one (`K2_BRAND_DIR=brand/xy` builds this as `xy`).
+#[test]
+fn the_brand_s_names() {
+    use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
+    let lines = [
+        cancel::USAGE.to_string(),
+        super::wait::USAGE.to_string(),
+        super::fetch::USAGE.to_string(),
+        super::grant::USAGE.to_string(),
+        cancel::kept_reader(br#"{"error":{"code":"job_started"}}"#, "j").stdout,
+        fail_line("503", b""),
+    ];
+    for l in &lines {
+        assert!(
+            l.contains(&format!("{CLI_NAME} compute")) || l.contains(PRODUCT_NAME),
+            "{l:?}"
+        );
+        if CLI_NAME != "k2" {
+            assert!(!l.contains("k2 ") && !l.contains("K2 "), "{l:?}");
+        }
+    }
+}

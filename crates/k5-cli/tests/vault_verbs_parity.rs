@@ -52,6 +52,7 @@ const SECRET: &str = r#"{"secret":{"id":"s1","name":"API","kind":"token","status
 #[test]
 fn status_and_its_refusals() {
     let rig = VRig::new();
+    // covers: vault status
     let mut session = daemon("in a session: the cell socket", &["status"], ok(STATUS), 0);
     session.env = vec![
         ("K2_HOOK_SOCK", "{sock}".to_string()),
@@ -71,6 +72,7 @@ fn status_and_its_refusals() {
             ok(r#"{"open":false,"error":{"code":"locked","hint":"unlock"}}"#),
             0,
         ),
+        // covers: vault status --json
         daemon("--json", &["status", "--json"], ok(STATUS), 0),
         daemon(
             "a permission card",
@@ -133,6 +135,7 @@ fn list_show_and_the_reads() {
     );
     assert!(big.len() > 256 * 1024);
     for c in [
+        // covers: vault list
         daemon("list", &["list"], ok(list), 0),
         daemon("ls, none", &["ls"], ok(r#"{"secrets":[]}"#), 0),
         daemon(
@@ -149,6 +152,7 @@ fn list_show_and_the_reads() {
         ),
         daemon("list: above 256 KiB", &["list"], ok(&big), 0),
         refused("a scope that isn't one", &["list", "--scope", "galaxy"]),
+        // covers: vault show
         refused("--system on show", &["show", "A", "--system"]),
         daemon("show", &["show", "API", "--scope", "server"], ok(SECRET), 0),
         daemon(
@@ -179,10 +183,12 @@ fn list_show_and_the_reads() {
             ok(r#"{"secret":{"inject":{"dst":"header:A","fmt":"Bearer {}"}}}"#),
             0,
         ),
+        // covers: vault show --json
         daemon("show --json", &["show", "B", "--json"], ok(SECRET), 0),
         refused("show with no name", &["show"]),
         daemon(
             "public-key",
+            // covers: vault public-key
             &["public-key", "K"],
             ok(r#"{"publicKey":"ssh-ed25519 AAAA","fingerprint":"SHA256:x"}"#),
             0,
@@ -195,6 +201,7 @@ fn list_show_and_the_reads() {
         )),
         daemon(
             "audit",
+            // covers: vault audit
             &["audit", "API", "--since", "2d ago"],
             ok(
                 r#"{"audit":[{"ts":"t","action":"fetch","outcome":"ok","actor":"me","targetHost":"h","count":2},{"ts":"t2","action":"get","outcome":"refused","actor":"x"}]}"#,
@@ -204,6 +211,7 @@ fn list_show_and_the_reads() {
         daemon("audit, all", &["audit"], ok(r#"{"audit":[]}"#), 0),
         daemon(
             "requests",
+            // covers: vault requests
             &["requests"],
             ok(
                 r#"{"requests":[{"createdAt":"t","status":"open","name":"N","requestedBy":"ws","inject":{"dst":"header:X","fmt":"{}"}},{"name":"M"}]}"#,
@@ -213,6 +221,7 @@ fn list_show_and_the_reads() {
         daemon("requests, none", &["requests"], ok("{}"), 0),
         daemon(
             "presets",
+            // covers: vault presets
             &["presets"],
             ok(
                 r#"{"presets":[{"id":"gh","label":"GitHub","hosts":["api.github.com"],"dst":"header:Authorization","fmt":"Bearer {}"},{"id":"ovh","label":"OVH","hosts":[],"sign":"ovh"}]}"#,
@@ -221,6 +230,7 @@ fn list_show_and_the_reads() {
         ),
         daemon(
             "doctor, findings",
+            // covers: vault doctor
             &["doctor", "--transcripts"],
             ok(
                 r#"{"findings":[{"level":"warn","message":"m","files":["a","b","c","d","e","f"],"fileCount":9},{"level":"info","message":"n"}],"checkedNames":"A B","summary":"s","ok":false}"#,
@@ -231,12 +241,14 @@ fn list_show_and_the_reads() {
         refused("--transcripts elsewhere", &["status", "--transcripts"]),
         daemon(
             "recipient",
+            // covers: vault recipient
             &["recipient"],
             ok(r#"{"recipient":"age1xyz","vaultId":"v1"}"#),
             0,
         ),
         daemon(
             "proxy-url",
+            // covers: vault proxy-url
             &["proxy-url", "API", "--ttl", "2h", "--scope", "session"],
             ok(
                 r#"{"envName":"API_KEY","placeholder":"k2p_x","baseUrlEnv":"API_BASE","baseUrl":"http://127.0.0.1:1/x"}"#,
@@ -266,6 +278,7 @@ fn set_and_rotate_take_the_value_on_stdin() {
         with_stdin(
             daemon(
                 "set",
+                // covers: vault set
                 &["set", "API", "--for", "a.com, b.com,", "--kind", "token"],
                 ok(saved),
                 0,
@@ -373,6 +386,7 @@ fn set_and_rotate_take_the_value_on_stdin() {
         with_stdin(
             daemon(
                 "rotate",
+                // covers: vault rotate
                 &["rotate", "API"],
                 ok(
                     r#"{"secret":{"name":"API"},"version":3,"replaced":[{"ok":true,"unit":"u","credName":"c","restarted":true},{"unit":"v","error":{"hint":"h"}}]}"#,
@@ -405,6 +419,7 @@ fn the_policy_writes() {
         ),
         daemon(
             "hosts, none left",
+            // covers: vault hosts
             &["hosts", "API", "--remove", "a"],
             ok(r#"{"secret":{"name":"API"}}"#),
             0,
@@ -412,6 +427,7 @@ fn the_policy_writes() {
         refused("hosts, no name", &["hosts"]),
         daemon(
             "sign none",
+            // covers: vault sign
             &["sign", "API", "none"],
             ok(r#"{"secret":{"name":"API"}}"#),
             0,
@@ -455,6 +471,7 @@ fn the_policy_writes() {
         ),
         refused(
             "agent-limit, both",
+            // covers: vault agent-limit
             &["agent-limit", "API", "--allow-forwarded", "--no-forwarded"],
         ),
         refused(
@@ -463,6 +480,7 @@ fn the_policy_writes() {
         ),
         daemon(
             "delivery",
+            // covers: vault delivery
             &["delivery", "API", "env", "--ceiling", "file"],
             ok(sec),
             0,
@@ -476,6 +494,7 @@ fn the_policy_writes() {
             &["delivery", "API", "file", "--file-name", "f"],
         ),
         refused("delivery, no mode", &["delivery", "API"]),
+        // covers: vault revoke
         daemon("revoke --grant", &["revoke", "--grant", "g1"], ok(gone), 0),
         daemon(
             "revoke --from",
@@ -485,15 +504,21 @@ fn the_policy_writes() {
         ),
         daemon(
             "revoke --json",
+            // covers: vault revoke --json
             &["revoke", "API", "--from", "ws:a", "--json"],
             ok(gone),
             0,
         ),
+        // covers: vault open
         daemon("open", &["open"], ok("{}"), 0),
+        // covers: vault open --json
         daemon("open --json", &["open", "--json"], ok(r#"{"ok":true}"#), 0),
+        // covers: vault disable
         daemon("disable", &["disable", "API"], ok(gone), 0),
+        // covers: vault enable
         daemon("enable", &["enable", "API"], ok("{}"), 0),
         refused("enable, no name", &["enable"]),
+        // covers: vault destroy
         daemon("destroy", &["destroy", "API", "--yes"], ok(gone), 0),
         daemon(
             "destroy, refused",
@@ -506,12 +531,14 @@ fn the_policy_writes() {
         ),
         daemon(
             "get",
+            // covers: vault get
             &["get", "API"],
             ok(r#"{"valueB64":"c2VjcmV0LXZhbHVlLTQyAA=="}"#),
             0,
         ),
         daemon(
             "get --json",
+            // covers: vault get --json
             &["get", "API", "--json"],
             ok(r#"{"valueB64":"eA=="}"#),
             0,
@@ -529,6 +556,7 @@ fn file_env_file_grant_and_service() {
     let waiting = r#"{"waiting":true,"card":"c1","waitSecs":0}"#;
     let mut confirm = daemon(
         "grant: the confirm over the vault socket",
+        // covers: vault grant
         &["grant", "API", "--to", "ws:a", "--as", "env"],
         Reply::Answer(
             403,
@@ -569,6 +597,7 @@ fn file_env_file_grant_and_service() {
     for c in [
         daemon(
             "file",
+            // covers: vault file
             &["file", "API", "--ttl", "90s"],
             ok(r#"{"path":"/s/API"}"#),
             0,
@@ -602,6 +631,7 @@ fn file_env_file_grant_and_service() {
         ),
         daemon(
             "env-file",
+            // covers: vault env-file
             &["env-file", "A", "B", "--secret", "C", "--scope", "server"],
             ok(r#"{"path":"/s/.env"}"#),
             0,
@@ -623,6 +653,7 @@ fn file_env_file_grant_and_service() {
         ),
         daemon(
             "grant --json",
+            // covers: vault grant --json
             &["grant", "API", "--to", "ws:a", "--json"],
             ok(r#"{"grant":{}}"#),
             0,
@@ -633,6 +664,7 @@ fn file_env_file_grant_and_service() {
         in_session,
         daemon(
             "service",
+            // covers: vault service
             &["service", "web"],
             ok(
                 r#"{"service":"web","mode":"legacy","envFile":".env.k2","secrets":[{"name":"A","delivery":"env","envName":"A_KEY"}],"inheritedNames":["PATH","HOME"],"envRemovedIn":"0.47","restart":"restart web"}"#,
@@ -648,16 +680,19 @@ fn file_env_file_grant_and_service() {
         refused("service, no name", &["service"]),
         daemon(
             "sync",
+            // covers: vault sync
             &["sync"],
             ok(
                 r#"{"dir":"/s","delivered":["a"],"present":["b"],"restart":["c"],"skipped":["d"],"hint":"h"}"#,
             ),
             1,
         ),
+        // covers: vault sync --json
         daemon("sync --json", &["sync", "--json"], ok("{}"), 0),
         refused("sync, a word", &["sync", "now"]),
         daemon(
             "placements",
+            // covers: vault placements
             &["placements", "API", "--scope", "server"],
             ok(
                 r#"{"placements":[{"id":"p1","name":"API","version":1,"latestVersion":2,"state":"due","where":"h:/x","note":"n"},{"id":"p2","target":"systemd_cred","credName":"c","unit":"u"}],"needNewerK2":2}"#,
@@ -681,11 +716,14 @@ fn file_env_file_grant_and_service() {
         ),
         daemon(
             "placement done",
+            // covers: vault placement done
             &["placement", "done", "p3"],
             ok(r#"{"placement":{"name":"API","where":"w","version":3}}"#),
             0,
         ),
+        // covers: vault placement rm
         daemon("placement rm", &["placement", "rm", "p3"], ok("{}"), 0),
+        // covers: vault placement add
         refused("placement add, no --where", &["placement", "add", "API"]),
         refused(
             "placement done, a flag it doesn't take",
@@ -706,6 +744,7 @@ fn fetch() {
     for c in [
         daemon(
             "fetch",
+            // covers: vault fetch
             &["fetch", "--secret", "API", "https://api.example.com/x"],
             ok(r#"{"status":200,"body":"{\"ok\":true}\n"}"#),
             0,
@@ -809,6 +848,7 @@ fn the_person_verbs() {
     };
     let mut reveal = person(
         "reveal",
+        // covers: vault reveal
         &["reveal", "API", "--scope", "server"],
         vec![
             ok(r#"{"secret":{"id":"sec-9"}}"#),
@@ -823,6 +863,7 @@ fn the_person_verbs() {
     let mut in_k2 = refused("reveal in a K2 terminal", &["reveal", "API"]);
     in_k2.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
     in_k2.code = 3;
+    // covers: vault rekey
     let mut no_sock = refused("rekey with no vault socket", &["rekey"]);
     no_sock.vault = None;
     no_sock.code = 1;
@@ -878,6 +919,7 @@ fn the_person_verbs() {
         ),
         person(
             "kek rotate",
+            // covers: vault kek rotate
             &["kek", "rotate"],
             vec![pw("vault-password"), ok(r#"{"token":"t"}"#), ok("{}")],
             b"pw\n",
@@ -913,6 +955,7 @@ fn the_person_verbs() {
         no_sock,
         daemon(
             "recovery",
+            // covers: vault recovery
             &["recovery"],
             ok(r#"{"recovery":"confirmed","recoveryConfirmedAt":"t","recoveryHint":"h"}"#),
             0,
@@ -934,6 +977,7 @@ fn confirm_password_set() {
     let rig = VRig::new();
     let mut set = person(
         "confirm-password set, the first",
+        // covers: vault confirm-password set
         &["confirm-password", "set"],
         vec![
             ok(r#"{"confirmPassword":false}"#),

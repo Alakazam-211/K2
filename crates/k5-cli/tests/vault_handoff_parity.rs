@@ -56,6 +56,7 @@ fn send_and_its_answers() {
     let rig = VRig::new();
     let mut confirmed = person(
         "send: a person's confirm",
+        // covers: vault send
         &["send", "API", "--to", "bob::h"],
         vec![
             Reply::Answer(
@@ -187,6 +188,7 @@ fn send_and_its_answers() {
         refused("send, an unknown flag", &["send", "API", "--nope"], 2),
         refused(
             "send, a flag ask takes only",
+            // covers: vault unsend
             &["unsend", "d1", "--note", "x"],
             2,
         ),
@@ -216,6 +218,7 @@ fn the_lists_and_the_small_verbs() {
     );
     assert!(big.len() > 256 * 1024);
     for c in [
+        // covers: vault incoming
         person("incoming", &["incoming"], vec![ok(incoming)], 0),
         person(
             "incoming --workspace",
@@ -223,6 +226,8 @@ fn the_lists_and_the_small_verbs() {
             vec![ok(r#"{"items":[]}"#)],
             0,
         ),
+        // covers: vault sent
+        // covers: vault sent --json
         owner("sent", &["sent", "--json"], ok(incoming), 0),
         owner("sent, none", &["sent"], ok("{}"), 0),
         person("sent: above 256 KiB", &["sent"], vec![ok(&big)], 0),
@@ -245,12 +250,14 @@ fn the_lists_and_the_small_verbs() {
         ),
         person(
             "incoming decline",
+            // covers: vault incoming decline
             &["incoming", "decline", "d1"],
             vec![ok(
                 r#"{"delivery":{"status":"declined","name":"API","deliveryId":"d1"}}"#,
             )],
             0,
         ),
+        // covers: vault incoming accept
         refused("incoming accept, no id", &["incoming", "accept"], 2),
         refused(
             "incoming decline, a flag it doesn't take",
@@ -273,9 +280,11 @@ fn the_lists_and_the_small_verbs() {
             )],
             0,
         ),
+        // covers: vault ask
         refused("ask, no name", &["ask", "bob"], 2),
         owner(
             "asks",
+            // covers: vault asks
             &["asks"],
             ok(
                 r#"{"items":[{"name":"API","status":"open","direction":"out","peer":"bob","askId":"a1"},{"name":"B","direction":"in","peer":"c"}]}"#,
@@ -302,6 +311,7 @@ fn the_lists_and_the_small_verbs() {
         refused("unsend, no id", &["unsend"], 2),
         person(
             "accept-from",
+            // covers: vault accept-from
             &["accept-from"],
             vec![ok(
                 r#"{"entries":[{"sender":"bob::h","senderLabel":"Bob","addedBy":"me","addedAt":"t"},{"sender":"c"}]}"#,
@@ -310,6 +320,7 @@ fn the_lists_and_the_small_verbs() {
         ),
         person(
             "accept-from add",
+            // covers: vault accept-from add
             &["accept-from", "add", "bob::h", "--workspace", "proj"],
             vec![ok(r#"{"entries":[]}"#)],
             0,
@@ -322,6 +333,7 @@ fn the_lists_and_the_small_verbs() {
         refused("accept-from, a verb it lacks", &["accept-from", "nope"], 2),
         person(
             "send-allow",
+            // covers: vault send-allow
             &["send-allow", "--workspace", "proj"],
             vec![ok(
                 r#"{"workspace":"proj","entries":[{"name":"API","to":"bob::h","addedBy":"me","addedAt":"t"}]}"#,

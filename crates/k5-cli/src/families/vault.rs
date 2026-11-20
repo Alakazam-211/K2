@@ -49,9 +49,12 @@ use crate::transport::Client;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-// The row still hands every command line to the shell; [`answer`] is
-// the family's code until the flip makes it [`run`].
-crate::route::shell_family!(&["vault"]);
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["vault"];
+/// The binary answers it; [`run`] hands back a form only the shell answers.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
 
 pub mod handoff;
 pub mod py;
@@ -235,7 +238,7 @@ pub fn native(sub: &str, rest: &[&str]) -> bool {
 }
 
 /// `None`: the shell CLI answers it (see the module's notes).
-pub fn answer(args: &[OsString]) -> Option<Exit> {
+pub fn run(args: &[OsString]) -> Option<Exit> {
     let hook_sock = super::hook_sock();
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
         return None;

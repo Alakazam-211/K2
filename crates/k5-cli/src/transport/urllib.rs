@@ -539,8 +539,9 @@ fn timed_out() -> Raised {
     }
 }
 
-/// An I/O error as the `OSError` Python raises for it.
-fn os_error(e: &io::Error) -> Raised {
+/// An I/O error as the `OSError` Python raises for it (public: `app
+/// shell`'s socket raises the same).
+pub fn os_error(e: &io::Error) -> Raised {
     if matches!(
         e.kind(),
         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
@@ -579,7 +580,7 @@ fn is_timeout_errno(_code: i32) -> bool {
 
 /// `socket.create_connection((host, port), timeout)`: each address in
 /// turn; the first error when none connects.
-fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, Raised> {
+pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, Raised> {
     let addrs: Vec<_> = (host, port)
         .to_socket_addrs()
         .map_err(|e| gai_error(&e))?

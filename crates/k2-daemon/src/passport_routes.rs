@@ -107,7 +107,8 @@ pub(crate) const ROUTES: &[Route] = &[
     route("/cli/context/layers", Scope::Own),
     route("/cli/context/show", Scope::Own),
     // `k2 done` (wakeup templates).
-    named("/cli/done", Scope::Own, &["agent"]),
+    // Its actor is the passport's own name ([`actor_is_the_passport`]).
+    route("/cli/done", Scope::Own),
     // `k2 activity`.
     route("/cli/feed", Scope::Own),
     // `k2 tickets list|show`.
@@ -363,11 +364,14 @@ pub(crate) fn refusal(path: &str, params: &HashMap<String, String>) -> Option<Cl
         return Some(own_only("this session's workspace is not known"));
     }
     for key in route.names {
-        if let Some(v) = params.get(*key) {
-            if !is_plain_name(v) {
-                return Some(own_only(&format!("'{key}' is a name inside this workspace, not a path")));
-            }
+        let v = params.get(*key).map(String::as_str).unwrap_or("");
+        let ok = if *key == "file" { is_plain_name(v) && !matches!(v, "" | "." | "..") } else { is_agent_name(v) };
+        if !ok {
+            return Some(own_only(&format!("'{key}' must be a name inside this workspace (letters, digits, - and _), not a path")));
         }
+    }
+    if let Some(r) = own_agent_folder(path, params) {
+        return Some(r);
     }
     match route.scope {
         Scope::Shared | Scope::AgentList => None,
@@ -492,6 +496,29 @@ fn ticket_outside(params: &HashMap<String, String>, workspace_id: &str) -> Optio
     (!own).then(|| crate::feedback_routes::prefix_error_response(id, PrefixError::NotFound))
 }
 
+/// An agent's or a skill's name, as `agents/create` itself requires
+/// (`k2_core::workspace::agent::create`): letters, digits, `-` and `_`.
+fn is_agent_name(v: &str) -> bool {
+    !v.is_empty() && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Creating, removing or reading a skill never reaches the workspace's own
+/// agent folder (`.k2/agent/`): `agents/create` always writes there, and
+/// `agents/delete` / `profile` resolve to it whenever the workspace has a
+/// persona (`agent_identity::agent_dir`). A person does those.
+fn own_agent_folder(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
+    use k2_core::workspace::agent_identity::{agent_dir, workspace_agent_path};
+    let key = match path {
+        "/cli/agents/create" | "/cli/agents/delete" => "name",
+        "/cli/agents/profile" => "agent",
+        _ => return None,
+    };
+    let project = params.get("project").map(String::as_str).unwrap_or("");
+    let own = workspace_agent_path(project);
+    let target = if path == "/cli/agents/create" { own.clone() } else { agent_dir(project, params.get(key).map(String::as_str).unwrap_or("")) };
+    (target == own).then(|| own_only("this is the workspace's own agent folder; a person changes or reads it"))
+}
+
 /// A name, not a path: no separator, no `..`, no NUL.
 fn is_plain_name(v: &str) -> bool {
     !(v.contains('/') || v.contains('\\') || v.contains("..") || v.contains('\0'))
@@ -557,6 +584,16 @@ mod tests {
         assert!(!local_entry("tab-pane-1", false, "api-key1"), "an API cell's passport");
         assert!(!local_entry("tab-pane-1", false, "job:nightly"), "a k2 job run's passport");
         assert!(!local_session("no-such-session", &HookPrincipal { workspace_uuid: "w".into(), agent_address: "Acme".into() }), "no live session");
+    }
+
+    #[test]
+    fn agent_names_are_create_rule_names() {
+        for ok in ["backend", "agent-1", "a_b", "X9"] {
+            assert!(is_agent_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "a/b", "a b", "a.b", "../x", "x\0"] {
+            assert!(!is_agent_name(bad), "{bad:?}");
+        }
     }
 
     #[test]

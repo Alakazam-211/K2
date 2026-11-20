@@ -649,3 +649,48 @@ async fn named_lookups_never_list_other_workspaces() {
         }
     }
 }
+
+/// Skills by name: a passport names a skill with letters, digits, - and _
+/// only, and never reaches the workspace's own agent folder (`.k2/agent/`):
+/// "", "." and any name while the workspace has a persona are refused for
+/// create, delete and profile, and the folder stays. Another skill is the
+/// agent's to read and remove.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skills_never_reach_the_workspaces_own_agent_folder() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let own = enc(&e.own);
+    let persona_dir = k2_core::workspace::agent_identity::workspace_agent_path(&e.own);
+    let skill = k2_core::workspace::agent_identity::skills_dir(&e.own).join("backend");
+    // No persona: another skill is the agent's.
+    if persona_dir.exists() {
+        std::fs::remove_dir_all(&persona_dir).expect("clear the persona");
+    }
+    std::fs::create_dir_all(&skill).expect("skill dir");
+    std::fs::write(skill.join("SKILL.md"), "---\nname: backend\nrole: dev\n---\nBackend.\n").expect("skill");
+    let r = http(e.port, "GET", &format!("/cli/agents/profile?project={own}&agent=backend"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "profile of another skill: {}", r.raw);
+    assert!(r.raw.contains("Backend."), "{}", r.raw);
+    let r = http(e.port, "GET", &format!("/cli/agents/list?project={own}"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "skills list: {}", r.raw);
+    assert!(r.raw.contains("backend"), "{}", r.raw);
+    let r = http(e.port, "POST", &format!("/cli/skills/regenerate?project={own}"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "skills regenerate: {}", r.raw);
+    let r = http(e.port, "POST", &format!("/cli/agents/delete?project={own}&name=backend"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "delete another skill: {}", r.raw);
+    assert!(!skill.exists(), "the skill is gone");
+
+    // The workspace's own persona.
+    std::fs::create_dir_all(&persona_dir).expect("persona dir");
+    std::fs::write(persona_dir.join("AGENT.md"), "---\nname: d1\nrole: lead\n---\nLead.\n").expect("persona");
+    for (method, route, key) in [("POST", "/cli/agents/create", "name"), ("POST", "/cli/agents/delete", "name"), ("GET", "/cli/agents/profile", "agent")] {
+        for name in ["", ".", "..", "d1", "backend", "a/b"] {
+            let path = format!("{route}?project={own}&{key}={}&role=x", enc(name));
+            let r = http(e.port, method, &path, Some(e.passport.as_str()));
+            assert_eq!(r.status, 403, "{route} {key}={name:?}: {}", r.raw);
+            assert_eq!(code(&r, route), "own_workspace_only", "{route} {name:?}");
+            assert!(!r.raw.contains("Lead."), "{route} {name:?}: the persona leaked: {}", r.raw);
+        }
+    }
+    assert!(persona_dir.join("AGENT.md").exists(), "the workspace's own agent folder stays");
+}

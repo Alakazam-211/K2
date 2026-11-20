@@ -97,6 +97,11 @@ fn the_lines_say_the_brand_s_name() {
     for plan in [
         media::parse(&["install", "--url"]),
         users::parse(&["invite", "ann", "--role", ""]),
+        admin::owner_sessions(&["list", "x"]),
+        admin::owner_sessions(&["end"]),
+        admin::owner_sessions(&["end", "x"]),
+        admin::owner_sessions(&["nope"]),
+        admin::owner_sessions(&["--x"]),
     ] {
         let Plan::Bad(line) = plan else {
             panic!("not a usage line: {plan:?}")
@@ -175,4 +180,48 @@ fn a_value_flag_with_no_value_is_the_d6_line() {
     assert_eq!(media::parse(&["probe", "--udp"]), want("--udp"));
     assert_eq!(media::parse(&["install", "--voice-url", ""]), want("--voice-url"));
     assert_eq!(users::parse(&["invite", "ann", "--email"]), want("--email"));
+}
+
+/// `owner-sessions` (follows 5b6759be0d): the words as the 0.46.17
+/// queue's shell reads them.
+#[test]
+fn owner_sessions_words() {
+    use admin::Admin;
+    let list = |json| Plan::Admin(Admin::OwnerSessions { json });
+    assert_eq!(admin::owner_sessions(&[]), list(false));
+    assert_eq!(admin::owner_sessions(&[""]), list(false));
+    assert_eq!(admin::owner_sessions(&["--json"]), list(true));
+    assert_eq!(admin::owner_sessions(&["list", "--json"]), list(true));
+    assert_eq!(admin::owner_sessions(&["list", "-h"]), Plan::Shell);
+    assert_eq!(
+        admin::owner_sessions(&["revoke", "own_1"]),
+        Plan::Admin(Admin::OwnerSessionsEnd {
+            payload: r#"{"sid": "own_1"}"#.into(),
+            label: "End owner chat session own_1".into(),
+            json: false,
+        })
+    );
+    assert_eq!(
+        admin::owner_sessions(&["end", "--all", "--json"]),
+        Plan::Admin(Admin::OwnerSessionsEnd {
+            payload: r#"{"all": true}"#.into(),
+            label: "End every owner chat session".into(),
+            json: true,
+        })
+    );
+    let usage = |hint: &str| Plan::Bad(crate::families::chat::bad_line(hint));
+    assert_eq!(
+        admin::owner_sessions(&["end", "--all", "own_1"]),
+        usage(&format!("{CLI_NAME} hostchat owner-sessions end <own_\u{2026}> | end --all"))
+    );
+    assert_eq!(
+        admin::owner_sessions(&["end", "sid_1"]),
+        usage(&format!(
+            "an owner session's id starts with own_ ({CLI_NAME} hostchat owner-sessions)"
+        ))
+    );
+    assert_eq!(
+        admin::owner_sessions(&["list", "--all"]),
+        usage(&format!("{CLI_NAME} hostchat owner-sessions [list] [--json]"))
+    );
 }

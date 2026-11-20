@@ -1,19 +1,20 @@
 //! The chat administration verbs (`cli/src/hostmail-app-cert-backup.sh`):
-//! `people`, `approvals`, `on-behalf` and `log`. They ride chat's call,
-//! refusal line, usage line and printer ([`crate::families::chat`]), as
-//! the shell's ride `_chat_call`, `_chat_fail`, `_chat_usage_err` and
-//! `_chat_print`. A held approval is `_hostchat_confirmed_post`: the
-//! confirm the daemon names, over the vault socket, then the same body
-//! with the token.
+//! `people`, `approvals`, `on-behalf`, `owner-sessions` and `log`. They
+//! ride chat's call, refusal line, usage line and printer
+//! ([`crate::families::chat`]), as the shell's ride `_chat_call`,
+//! `_chat_fail`, `_chat_usage_err` and `_chat_print`. A held approval is
+//! `_hostchat_confirmed_post`: the confirm the daemon names, over the
+//! vault socket, then the same body with the token.
 
 use super::main_verbs::token;
-use super::print::{g, load, or, st, sub, sv, t, Py, R};
+use super::print::{g, is, load, or, st, sub, sv, t, Py, R};
 use super::{cj, Ctx, Plan};
 use crate::exit::Exit;
 use crate::families::voice::sew::{self, Field};
 use crate::families::{chat, ljust, py_iter, raised, Shown};
 use crate::out;
 use crate::out::json::Value;
+use crate::out::pylib::ops;
 use crate::transport::encode::quote;
 use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 
@@ -56,6 +57,16 @@ pub enum Admin {
     },
     Log {
         query: String,
+        json: bool,
+    },
+    /// `owner-sessions [list]` (follows 5b6759be0d).
+    OwnerSessions {
+        json: bool,
+    },
+    /// `owner-sessions end <own_…> | end --all` (follows 5b6759be0d).
+    OwnerSessionsEnd {
+        payload: String,
+        label: String,
         json: bool,
     },
 }
@@ -325,6 +336,83 @@ pub fn log(words: &[&str]) -> Plan {
     Plan::Admin(Admin::Log { query, json })
 }
 
+/// `owner-sessions …` (`_hostchat_owner_sessions`): the owner chat
+/// sessions K2 opened with an owner handoff code. Listing: the owner or
+/// an admin. Ending: a person, with a vault confirm bound to the session
+/// or "all"; never an agent.
+///
+/// TODO(follows 5b6759be0d): the shell on this line has no
+/// `owner-sessions` yet (it says "unknown hostchat command"); the
+/// 0.46.17 queue's does (5b6759be0d), and this is a copy of it. The
+/// parity rows marked `follows 5b6759be0d` compare both sides once the
+/// replay brings it.
+pub fn owner_sessions(words: &[&str]) -> Plan {
+    let c = CLI_NAME;
+    let (sub, rest): (&str, &[&str]) = match words.split_first() {
+        None => ("list", &[]),
+        Some((&"", r)) => ("list", r),
+        Some((s, _)) if s.starts_with('-') => ("list", words),
+        Some((&s, r)) => (s, r),
+    };
+    let (mut json, mut all) = (false, false);
+    let mut pos: Vec<&str> = Vec::new();
+    for &w in rest {
+        match w {
+            "--json" => json = true,
+            "--all" => all = true,
+            // Its own help page: the shell's.
+            "-h" | "--help" => return Plan::Shell,
+            w if w.starts_with('-') => {
+                return bad(format!(
+                    "unknown flag {w} ({c} hostchat owner-sessions --help)"
+                ))
+            }
+            w => pos.push(w),
+        }
+    }
+    let end_usage = || bad(format!("{c} hostchat owner-sessions end <own_\u{2026}> | end --all"));
+    match sub {
+        "list" => {
+            if all || !pos.is_empty() {
+                return bad(format!("{c} hostchat owner-sessions [list] [--json]"));
+            }
+            Plan::Admin(Admin::OwnerSessions { json })
+        }
+        "end" | "revoke" => {
+            let (payload, label) = if all {
+                if !pos.is_empty() {
+                    return end_usage();
+                }
+                (
+                    cj(&[("all", Field::B("1".to_string()))]),
+                    "End every owner chat session".to_string(),
+                )
+            } else {
+                if pos.len() != 1 {
+                    return end_usage();
+                }
+                if !pos[0].starts_with("own_") {
+                    return bad(format!(
+                        "an owner session's id starts with own_ ({c} hostchat owner-sessions)"
+                    ));
+                }
+                (
+                    cj(&[("sid", s(pos[0]))]),
+                    format!("End owner chat session {}", pos[0]),
+                )
+            };
+            Plan::Admin(Admin::OwnerSessionsEnd {
+                payload,
+                label,
+                json,
+            })
+        }
+        _ => bad(format!(
+            "{c} hostchat owner-sessions [list] | end <own_\u{2026}> | end --all"
+        )),
+    }
+}
+
 /// `_chat_call`: the body of a 200, or the exit after `_chat_fail`'s line.
 fn call(ctx: &mut Ctx, post: bool, path: &str, payload: &str, tcp: bool) -> Result<String, Exit> {
     chat::call(&mut ctx.client, &mut ctx.closing, post, path, payload, tcp)
@@ -470,6 +558,28 @@ fn step(ctx: &mut Ctx, a: &Admin) -> Result<Exit, Exit> {
             let body = call(ctx, true, "/cli/sew/on-behalf/review", payload, false)?;
             Ok(chat_show(&body, "on-behalf", *json))
         }
+        Admin::OwnerSessions { json } => {
+            let body = call(ctx, false, "/cli/sew/owner-sessions", "", false)?;
+            if *json {
+                return Ok(chat_show(&body, "", true));
+            }
+            Ok(owner_sessions_lines(&body))
+        }
+        Admin::OwnerSessionsEnd {
+            payload,
+            label,
+            json,
+        } => {
+            if ctx.in_session {
+                out::stderr_line(&format!("{{\"error\":\"person_only\",\"hint\":\"a person ends the owner's chat sessions, from a terminal outside {PRODUCT_NAME} (Touch ID or the vault password)\"}}"));
+                return Err(Exit::Refused);
+            }
+            let body = confirmed_post(ctx, "/cli/sew/owner-sessions/revoke", payload, label)?;
+            if *json {
+                return Ok(chat_show(&body, "", true));
+            }
+            Ok(owner_sessions_end_lines(&body))
+        }
         Admin::Log { query, json } => {
             let body = call(ctx, false, "/cli/sew/admin/log", query, false)?;
             if *json {
@@ -507,6 +617,66 @@ fn step(ctx: &mut Ctx, a: &Admin) -> Result<Exit, Exit> {
             Ok(lines(r, p))
         }
     }
+}
+
+/// `owner-sessions list`'s Python: one line a session, or the line for
+/// none.
+fn owner_sessions_lines(body: &str) -> Exit {
+    let mut p = Py::default();
+    let r = (|| -> R<()> {
+        let v = load(body, 3)?;
+        let rows = or(g(&v, "sessions", 4)?, Value::Array(Vec::new()));
+        if !t(&rows) {
+            p.print("(no owner chat sessions recorded in the last 30 days; end --all still ends any owner session)");
+        }
+        for r in py_iter(&rows, 12)? {
+            let end = g(&r, "end", 13)?;
+            let state = if !t(&end) {
+                "live until Sew ends it".to_string()
+            } else if t(&g(&r, "delivered", 16)?) {
+                format!(
+                    "ended (Sew took the end {})",
+                    chat::when(&g(&end, "queuedAt", 17)?)
+                )
+            } else {
+                let queued = chat::when(&g(&end, "queuedAt", 19)?);
+                let by = sv(&g(&end, "by", 19)?);
+                let all = if is(&g(&end, "via", 20)?, "all") {
+                    " (all)"
+                } else {
+                    ""
+                };
+                let outbox = sv(&or(g(&end, "outbox", 20)?, st("-")));
+                format!("end queued {queued} by {by}{all}, outbox {outbox}")
+            };
+            p.print(&format!(
+                "{}  minted {} by {}  opened {}  {state}",
+                sv(&g(&r, "sid", 21)?),
+                chat::when(&g(&r, "mintedAt", 21)?),
+                sv(&g(&r, "mintedBy", 21)?),
+                chat::when(&g(&r, "redeemedAt", 21)?)
+            ));
+        }
+        Ok(())
+    })();
+    lines(r, p)
+}
+
+/// `owner-sessions end`'s Python: what was queued, the sessions marked,
+/// and when it takes effect.
+fn owner_sessions_end_lines(body: &str) -> Exit {
+    let mut p = Py::default();
+    let r = (|| -> R<()> {
+        let v = load(body, 3)?;
+        p.print(&format!("end queued: {}", sv(&g(&v, "queued", 4)?)));
+        let ended = or(g(&v, "ended", 5)?, Value::Array(Vec::new()));
+        if t(&ended) {
+            p.print(&format!("marked: {}", ops::join(&ended, ", ", 7)?));
+        }
+        p.print(&sv(&or(g(&v, "takesEffect", 8)?, st(""))));
+        Ok(())
+    })();
+    lines(r, p)
 }
 
 /// `_hostchat_confirmed_post <path> <payload> <label>`: the answer's body.

@@ -1986,6 +1986,302 @@ fn hostchat_chat_administration_a_person_s_steps() {
     }
 }
 
+/// Whether the shell CLI on this line has `hostchat owner-sessions`: the
+/// 0.46.17 queue's 5b6759be0d. Until the replay brings it, the shell says
+/// "unknown hostchat command" there.
+fn shell_has_owner_sessions() -> bool {
+    std::fs::read_to_string(cli_k2())
+        .expect("read cli/k2")
+        .contains("_hostchat_owner_sessions()")
+}
+
+/// A request as the rig logs it: its request line and its body.
+fn line_and_body(r: &str) -> (String, String) {
+    let line = r.lines().nth(1).unwrap_or_default().to_string();
+    let body = r.split_once("\n\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+    (line, body)
+}
+
+/// What the binary must print and send for a `follows 5b6759be0d` row.
+struct Want {
+    stdout: String,
+    /// stderr exactly, or (for a traceback) its first and last line.
+    stderr: String,
+    traceback: bool,
+    sent: Vec<(&'static str, &'static str)>,
+}
+
+fn want(stdout: &str, stderr: &str, sent: &[(&'static str, &'static str)]) -> Want {
+    Want {
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+        traceback: false,
+        sent: sent.to_vec(),
+    }
+}
+
+/// The shell on this line has no `owner-sessions` yet: it answers the
+/// words with a usage line (an unknown command or flag), exit 2, and
+/// sends nothing.
+fn assert_shell_lacks_it(name: &str, out: &Out, sent: usize) {
+    assert_eq!(out.code, Some(2), "{name}: bash's exit: {out:?}");
+    assert!(out.stdout.is_empty(), "{name}: bash's stdout: {out:?}");
+    assert!(
+        out.stderr.starts_with(r#"{"error":"usage","hint":"#),
+        "{name}: bash's stderr: {out:?}"
+    );
+    assert_eq!(sent, 0, "{name}: bash sent");
+}
+
+fn check_want(name: &str, out: &Out, sent: &[String], code: i32, w: &Want) {
+    assert_eq!((out.code, out.signal), (Some(code), None), "{name}: {out:?}");
+    assert_eq!(out.stdout, w.stdout, "{name}: stdout");
+    if w.traceback {
+        assert!(
+            out.stderr.starts_with("Traceback (most recent call last):\n")
+                && out.stderr.ends_with(&w.stderr),
+            "{name}: stderr: {:?}",
+            out.stderr
+        );
+    } else {
+        assert_eq!(out.stderr, w.stderr, "{name}: stderr");
+    }
+    let got: Vec<(String, String)> = sent.iter().map(|r| line_and_body(r)).collect();
+    let want: Vec<(String, String)> = w
+        .sent
+        .iter()
+        .map(|(l, b)| (l.to_string(), b.to_string()))
+        .collect();
+    assert_eq!(got, want, "{name}: requests");
+}
+
+const OWNER_SESSIONS: &str = r#"{"sessions":[{"sid":"own_a","mintedAt":1790000000,"mintedBy":"ann","redeemedAt":1790000060},{"sid":"own_b","mintedAt":1790000000,"mintedBy":"ann","redeemedAt":null,"end":{"queuedAt":1790000120,"by":"bob"},"delivered":true},{"sid":"own_c","mintedAt":"x","mintedBy":"ann","end":{"queuedAt":1790000120,"by":"bob","via":"all","outbox":"ob_1"}},{"sid":"own_d","end":{"queuedAt":null,"by":null}}]}"#;
+
+/// `hostchat owner-sessions`, as the 0.46.17 queue's shell answers it.
+/// TODO(follows 5b6759be0d): every row is checked against what the
+/// binary must print and send; once the replay brings the shell's
+/// `owner-sessions`, each row is compared with the shell's answer too
+/// (and before that, the shell's "unknown" usage line is checked).
+#[test]
+fn hostchat_owner_sessions_follows_5b6759be0d() {
+    let rig = Rig::new(VERB, "owner-sessions");
+    let has = shell_has_owner_sessions();
+    let cli = k2_client::brand::CLI_NAME;
+    let product = k2_client::brand::PRODUCT_NAME;
+    let get = ("GET /cli/sew/owner-sessions HTTP/1.1", "");
+    let utc = |c: Case| with(vec![("TZ", "UTC".to_string())], c);
+    let usage = |hint: String| want("", &format!("{{\"error\": \"usage\", \"hint\": \"{hint}\"}}\n"), &[]);
+    let end_usage = || usage(format!("{cli} hostchat owner-sessions end <own_\\u2026> | end --all"));
+    let mut raise = want("", "TypeError: 'int' object is not iterable\n", &[get]);
+    raise.traceback = true;
+    let rows: Vec<(Case, Want)> = vec![
+        // TODO(follows 5b6759be0d): the tag "covers: hostchat owner-sessions"
+        // here once the replay puts the form in the census.
+        (
+            utc(one("follows 5b6759be0d: list: every state", &["owner-sessions"], OWNER_SESSIONS)),
+            want(
+                concat!(
+                    "own_a  minted 2026-09-21 14:13 by ann  opened 2026-09-21 14:14  live until Sew ends it\n",
+                    "own_b  minted 2026-09-21 14:13 by ann  opened None  ended (Sew took the end 2026-09-21 14:15)\n",
+                    "own_c  minted x by ann  opened None  end queued 2026-09-21 14:15 by bob (all), outbox ob_1\n",
+                    "own_d  minted None by None  opened None  end queued None by None, outbox -\n",
+                ),
+                "",
+                &[get],
+            ),
+        ),
+        // TODO(follows 5b6759be0d): the tag "covers: hostchat owner-sessions
+        // --json" here once the replay puts the form in the census.
+        (
+            one("follows 5b6759be0d: list --json", &["owner-sessions", "list", "--json"], OWNER_SESSIONS),
+            want(&format!("{OWNER_SESSIONS}\n"), "", &[get]),
+        ),
+        (
+            one("follows 5b6759be0d: --json alone is the list", &["owner-sessions", "--json"], r#"{"x":1}"#),
+            want("{\"x\":1}\n", "", &[get]),
+        ),
+        (
+            one("follows 5b6759be0d: owner-session \"\": none", &["owner-session", ""], r#"{"sessions":[]}"#),
+            want(
+                "(no owner chat sessions recorded in the last 30 days; end --all still ends any owner session)\n",
+                "",
+                &[get],
+            ),
+        ),
+        (
+            traceback(case(
+                "follows 5b6759be0d: list: sessions that are a number",
+                &["owner-sessions"],
+                &[],
+                vec![ok(r#"{"sessions":5}"#)],
+                owner_and_port,
+                1,
+                1,
+            )),
+            raise,
+        ),
+        (
+            case(
+                "follows 5b6759be0d: list refused",
+                &["owner-sessions"],
+                &[],
+                vec![Reply::Answer(403, r#"{"error":{"code":"forbidden","hint":"the owner or an admin"}}"#.into())],
+                owner_and_port,
+                3,
+                1,
+            ),
+            want("", "{\"error\": \"forbidden\", \"hint\": \"the owner or an admin\"}\n", &[get]),
+        ),
+        (
+            bad("follows 5b6759be0d: list with a word", &["owner-sessions", "list", "x"]),
+            usage(format!("{cli} hostchat owner-sessions [list] [--json]")),
+        ),
+        (
+            bad("follows 5b6759be0d: list --all", &["owner-sessions", "list", "--all"]),
+            usage(format!("{cli} hostchat owner-sessions [list] [--json]")),
+        ),
+        (
+            bad("follows 5b6759be0d: end with no id", &["owner-sessions", "end"]),
+            end_usage(),
+        ),
+        (
+            bad("follows 5b6759be0d: end with two ids", &["owner-sessions", "end", "own_1", "own_2"]),
+            end_usage(),
+        ),
+        (
+            bad("follows 5b6759be0d: end --all with an id", &["owner-sessions", "revoke", "--all", "own_1"]),
+            end_usage(),
+        ),
+        (
+            bad("follows 5b6759be0d: end, not an own_ id", &["owner-sessions", "end", "sid_1"]),
+            usage(format!("an owner session's id starts with own_ ({cli} hostchat owner-sessions)")),
+        ),
+        (
+            bad("follows 5b6759be0d: an unknown verb", &["owner-sessions", "nope"]),
+            usage(format!("{cli} hostchat owner-sessions [list] | end <own_\\u2026> | end --all")),
+        ),
+        (
+            bad("follows 5b6759be0d: an unknown flag", &["owner-sessions", "end", "--x"]),
+            usage(format!("unknown flag --x ({cli} hostchat owner-sessions --help)")),
+        ),
+        (
+            with(
+                with_passport(&[]),
+                case(
+                    "follows 5b6759be0d: end in a session: a person's step",
+                    &["owner-sessions", "end", "own_1"],
+                    &[],
+                    vec![],
+                    port_only,
+                    3,
+                    0,
+                ),
+            ),
+            want("", &format!("{{\"error\":\"person_only\",\"hint\":\"a person ends the owner's chat sessions, from a terminal outside {product} (Touch ID or the vault password)\"}}\n"), &[]),
+        ),
+        (
+            with(
+                with_passport(&[]),
+                case(
+                    "follows 5b6759be0d: end --all in a session: a person's step",
+                    &["owner-sessions", "end", "--all"],
+                    &[],
+                    vec![],
+                    port_only,
+                    3,
+                    0,
+                ),
+            ),
+            want("", &format!("{{\"error\":\"person_only\",\"hint\":\"a person ends the owner's chat sessions, from a terminal outside {product} (Touch ID or the vault password)\"}}\n"), &[]),
+        ),
+    ];
+    for (c, w) in &rows {
+        if has {
+            rig.check(c);
+        } else {
+            rig.prepare(Side::Bash, c);
+            let b = rig.run(true, c);
+            let sent = rig.read(Side::Bash, false, c.name).len();
+            assert_shell_lacks_it(c.name, &b, sent);
+        }
+        let (r, sent) = rig.binary(c, false);
+        check_want(c.name, &r, &sent, c.code, w);
+    }
+}
+
+const HELD_OWNER_SESSION: &str = r#"{"error":{"code":"confirm_required","hint":"in person","details":{"action":"chat-owner-session-end","secretId":"own_a"}}}"#;
+
+/// `owner-sessions end` as a person: the daemon holds it for a confirm,
+/// the vault gives the token, the same body goes again with it.
+/// TODO(follows 5b6759be0d): as above, compared with the shell's once
+/// the replay brings it.
+#[test]
+fn hostchat_owner_sessions_end_follows_5b6759be0d() {
+    let rig = VRig::new();
+    let has = shell_has_owner_sessions();
+    let post = "POST /cli/sew/owner-sessions/revoke HTTP/1.1";
+    let rows: Vec<(VCase, Want)> = vec![
+        (
+            person(
+                "follows 5b6759be0d: end own_a: held, then confirmed",
+                &["owner-sessions", "end", "own_a"],
+                vec![
+                    Reply::Answer(403, HELD_OWNER_SESSION.into()),
+                    ok(r#"{"queued":"own_a","ended":["own_a","own_b"],"takesEffect":"as soon as Sew receives it"}"#),
+                ],
+                0,
+            ),
+            want(
+                "end queued: own_a\nmarked: own_a, own_b\nas soon as Sew receives it\n",
+                "",
+                &[
+                    (post, r#"{"sid": "own_a"}"#),
+                    (post, r#"{"sid": "own_a", "confirmToken": "ctok-5150"}"#),
+                ],
+            ),
+        ),
+        (
+            person(
+                "follows 5b6759be0d: end --all --json: held, then confirmed",
+                &["owner-sessions", "end", "--all", "--json"],
+                vec![
+                    Reply::Answer(403, HELD_OWNER_SESSION.replace("own_a", "all")),
+                    ok(r#"{"queued":"all"}"#),
+                ],
+                0,
+            ),
+            want(
+                "{\"queued\":\"all\"}\n",
+                "",
+                &[
+                    (post, r#"{"all": true}"#),
+                    (post, r#"{"all": true, "confirmToken": "ctok-5150"}"#),
+                ],
+            ),
+        ),
+    ];
+    let mut at_once = vcase(
+        "follows 5b6759be0d: end own_a: answered at once",
+        &["owner-sessions", "end", "own_a"],
+    );
+    at_once.daemon = vec![ok(r#"{"queued":true,"ended":[]}"#)];
+    at_once.daemon_requests = 1;
+    let mut v = rows;
+    v.push((at_once, want("end queued: True\n\n", "", &[(post, r#"{"sid": "own_a"}"#)])));
+    for (c, w) in &v {
+        if has {
+            rig.check(c);
+        } else {
+            let b = rig.run(true, false, c);
+            assert_shell_lacks_it(c.name, &b.out, b.daemon.len() + b.vault.len());
+        }
+        let r = rig.run(false, false, c);
+        check_want(c.name, &r.out, &r.daemon, c.code, w);
+        assert_eq!(r.vault.len(), c.vault_requests, "{}: vault requests", c.name);
+        rig.no_secret_to_a_child(c);
+    }
+}
+
 const APP_REC: &str = r#"{"app":{"name":"Acme","serviceId":"svc-1"},"spaces":[{"spaceId":5,"governance":"app","startLevel":"admin","required":true,"locked":true},{"spaceId":"s2"}]}"#;
 
 #[test]

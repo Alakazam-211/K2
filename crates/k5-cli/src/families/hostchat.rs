@@ -349,6 +349,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some("people" | "person") => admin::people(&words[1..]),
         Some("approvals" | "approval") => admin::approvals(&words[1..]),
         Some("on-behalf" | "behalf") => admin::on_behalf(&words[1..]),
+        Some("owner-sessions" | "owner-session") => admin::owner_sessions(&words[1..]),
         Some("log") => admin::log(&words[1..]),
         Some(w @ ("app-space" | "app-spaces")) => apps::app_space(w, &words[1..]),
         Some("home") => apps::home(&words[1..]),

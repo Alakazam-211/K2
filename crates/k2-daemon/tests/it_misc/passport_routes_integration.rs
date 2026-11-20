@@ -419,7 +419,14 @@ async fn owner_only_routes_still_refuse_a_passport() {
 async fn a_passport_through_the_tunnel_is_refused() {
     let t = k2_core::test_env::TempHome::new();
     let (e, _d) = env(&t).await;
-    for path in [format!("/cli/agent/conf?q={}", enc(&e.own)), format!("/cli/context/layers?project={}", enc(&e.own)), "/cli/presets/list".to_string()] {
+    for path in [
+        format!("/cli/agent/conf?q={}", enc(&e.own)),
+        format!("/cli/context/layers?project={}", enc(&e.own)),
+        "/cli/presets/list".to_string(),
+        // `k2 workspace profile`, which took a passport through the tunnel
+        // before D1.
+        format!("/cli/workspace/agent-display-name?project={}", enc(&e.own)),
+    ] {
         let r = http(e.port, "GET", &path, Some(e.passport.as_str()));
         assert_eq!(r.status, 200, "locally, {path}: {}", r.raw);
         let r = http(e.tunnel_port, "GET", &path, Some(e.passport.as_str()));
@@ -704,7 +711,9 @@ async fn only_a_live_local_passport_is_admitted() {
     let job = mint("job:nightly");
     let gone = mint("d1-agent");
     let conf = format!("/cli/agent/conf?q={}", enc(&e.own));
-    for route in [conf.as_str(), "/cli/presets/list", "/cli/zen/gardens", "/cli/zen/status"] {
+    // `k2 workspace profile` too, which took any valid passport before D1.
+    let profile = format!("/cli/workspace/agent-display-name?project={}", enc(&e.own));
+    for route in [conf.as_str(), profile.as_str(), "/cli/presets/list", "/cli/zen/gardens", "/cli/zen/status"] {
         let r = http(e.port, "GET", route, Some(e.passport.as_str()));
         assert_eq!(r.status, 200, "the live passport, {route}: {}", r.raw);
         for (label, p) in [("an API cell", &api), ("a k2 job run", &job), ("no live session", &gone)] {

@@ -23,7 +23,9 @@ cmd_compute_fetch() {
     done
     [ -n "$job" ] && [ -n "$out" ] || { echo "$fusage" >&2; exit 2; }
     [ -n "$attempt" ] && aq="&attempt=$attempt"
-    _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")$aq"
+    local jq
+    jq="$(urlencode "$job")"
+    _compute_call GET /cli/compute/jobs/artifact "job=$jq$aq"
     local list
     list="$(printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
@@ -37,12 +39,15 @@ if missing:
 for n in (want or sorted(have)):
     print(n)' "${names[@]+"${names[@]}"}")" || exit 3
     mkdir -p "$out" || { echo "{\"error\":\"local_write\",\"hint\":\"can't create $out\"}" >&2; exit 3; }
-    local results="[]" name
+    # One JSON line per fetched file. The list grows with the job's files,
+    # so it reaches Python on stdin, never in argv: one argument over
+    # 128 KiB fails on Linux with "Argument list too long".
+    local results="" entry name
     while IFS= read -r name; do
         [ -n "$name" ] || continue
         local offset=0 eof=0 first=1
         while [ "$eof" != "1" ]; do
-            _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")&name=$(urlencode "$name")&offset=$offset&max=4194304&wait=20&over_relay=$over_relay$aq"
+            _compute_call GET /cli/compute/jobs/artifact "job=$jq&name=$(urlencode "$name")&offset=$offset&max=4194304&wait=20&over_relay=$over_relay$aq"
             local step
             step="$(printf '%s' "$_CP_BODY" | K2_CP_OUT="$out" K2_CP_FIRST="$first" python3 -c '
 import base64, json, os, sys
@@ -67,23 +72,22 @@ print("%d %d %s %s %s" % (v["offset"] + len(data), 1 if v["eof"] else 0, v["sha2
             read -r offset eof sha bytes path <<<"$step"
             first=0
         done
-        results="$(K2_CP_PATH="$path" K2_CP_SHA="$sha" K2_CP_BYTES="$bytes" K2_CP_NAME="$name" python3 -c '
+        entry="$(K2_CP_PATH="$path" K2_CP_SHA="$sha" K2_CP_BYTES="$bytes" K2_CP_NAME="$name" python3 -c '
 import hashlib, json, os, sys
-acc = json.loads(sys.argv[1])
 p = os.environ["K2_CP_PATH"]
 h = hashlib.sha256(open(p, "rb").read()).hexdigest()
 if h != os.environ["K2_CP_SHA"] or os.path.getsize(p) != int(os.environ["K2_CP_BYTES"]):
     sys.stderr.write(json.dumps({"error": "artifact_changed", "hint": "%s does not match the sha256 the node reported; fetch it again" % p}) + "\n")
     sys.exit(3)
-acc.append({"name": os.environ["K2_CP_NAME"], "path": p, "bytes": int(os.environ["K2_CP_BYTES"]), "sha256": h})
-print(json.dumps(acc))' "$results")" || exit 3
+print(json.dumps({"name": os.environ["K2_CP_NAME"], "path": p, "bytes": int(os.environ["K2_CP_BYTES"]), "sha256": h}))')" || exit 3
+        results+="$entry"$'\n'
     done <<<"$list"
     if [ "$as_json" = "1" ]; then
-        printf '%s' "$results" | K2_CP_JOB="$job" python3 -c 'import json,os,sys; print(json.dumps({"job": os.environ["K2_CP_JOB"], "files": json.load(sys.stdin)}, indent=2))'
+        printf '%s' "$results" | K2_CP_JOB="$job" python3 -c 'import json,os,sys; print(json.dumps({"job": os.environ["K2_CP_JOB"], "files": [json.loads(l) for l in sys.stdin if l.strip()]}, indent=2))'
     else
         printf '%s' "$results" | python3 -c '
 import json, sys
-fs = json.load(sys.stdin)
+fs = [json.loads(l) for l in sys.stdin if l.strip()]
 if not fs: print("(no artifacts kept for this job)")
 for f in fs: print("%s  %d bytes  sha256 %s…" % (f["path"], f["bytes"], f["sha256"][:12]))'
     fi

@@ -441,6 +441,9 @@ pub fn instantiate(
 ) -> Result<Instantiated, HireError> {
     let req: HireRequest = serde_json::from_value(raw.clone()).map_err(|e| HireError::usage(format!("invalid hire request: {e}")))?;
     let members = super::recipe::validate_request(&req)?;
+    for (i, m) in members.iter().enumerate() {
+        super::steps::check_preset(m.preset.as_deref()).map_err(|e| HireError { hint: format!("members[{i}].preset: {}", e.hint), ..e })?;
+    }
     let idem = idem_header
         .map(str::trim)
         .filter(|s| !s.is_empty())

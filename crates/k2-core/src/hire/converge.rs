@@ -403,6 +403,7 @@ pub fn converge(
         }
     };
     check_db_access(caller, req.db_access.as_deref(), auth.max_db)?;
+    steps::check_preset(req.preset.as_deref())?;
     if existing.is_none() {
         if !auth.may_create {
             return Err(HireError::new(

@@ -1228,3 +1228,68 @@ fn passport_hire_claims_the_folder_in_one_step() {
     k2_core::hire::converge::claim_new_folder(&k2_core::hire::converge::create_only_path(&fresh).expect("free")).expect("claimed");
     assert!(Path::new(&fresh).is_dir());
 }
+
+// ── the hire's preset must exist ─────────────────────────────────────
+
+/// Well formed, but no such preset.
+const NO_SUCH_PRESET: &str = "00000000-0000-4000-8000-0000000000ff";
+
+fn assert_no_such_preset(st: u16, v: &Value) {
+    assert_eq!((st, v["error"]["code"].as_str()), (400, Some("usage")), "{v}");
+    let hint = v["error"]["hint"].as_str().expect("hint");
+    assert!(hint.contains(&format!("preset '{NO_SUCH_PRESET}' doesn't exist")), "{hint}");
+}
+
+/// K2's ruling: every hire door refuses a preset that doesn't exist (400,
+/// nothing saved, nothing created), for every caller. A preset id or its
+/// command (`codex`) still works.
+#[test]
+fn preset_hire_refuses_a_preset_that_does_not_exist() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (_, agent) = hiring_agent("np");
+    // A new workspace, plain and template, dry run too: owner and passport.
+    for who in [Who::Owner, agent.clone()] {
+        let path = root.join(uniq("np-new")).to_string_lossy().into_owned();
+        for body in [
+            json!({ "path": path, "name": "No Preset", "preset": NO_SUCH_PRESET }),
+            json!({ "template": "writer", "path": path, "name": "No Preset", "preset": NO_SUCH_PRESET, "launch": false }),
+            json!({ "template": "writer", "path": path, "name": "No Preset", "preset": NO_SUCH_PRESET, "dryRun": true }),
+        ] {
+            let (st, v) = hire_as(&who, &body);
+            assert_no_such_preset(st, &v);
+            assert!(!Path::new(&path).exists() && !registered(&path), "{body}: nothing created");
+        }
+    }
+    // The owner on an existing workspace: nothing saved.
+    let theirs = owners_workspace("np-old");
+    let before = workspace_state(&theirs);
+    let (st, v) = hire_as(&Who::Owner, &json!({ "path": theirs, "name": "Renamed", "preset": NO_SUCH_PRESET }));
+    assert_no_such_preset(st, &v);
+    assert_eq!(workspace_state(&theirs), before, "nothing saved");
+    // The recipe door: the owner and an API key.
+    for who in [owner(), hire_key(hire_only(), json!({}), "[]")] {
+        let handle = uniq("np-key");
+        let (st, v) = call(V1_HIRE, &who, true, json!({ "agent": { "handle": handle, "preset": NO_SUCH_PRESET } }), None);
+        assert_no_such_preset(st, &v);
+        assert!(v["error"]["hint"].as_str().unwrap().starts_with("members[0].preset: "), "{v}");
+        assert!(project_by_handle(&handle).is_none(), "nothing created");
+    }
+    // A real preset by its id, and by its command.
+    let codex_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT id FROM agent_presets WHERE label = 'Codex' AND is_built_in = 1", [], |r| r.get::<_, String>(0)).expect("built-in Codex")
+    };
+    for preset in [codex_id.as_str(), "codex"] {
+        let path = root.join(uniq("np-ok")).to_string_lossy().into_owned();
+        let (st, v) = hire_as(&agent, &json!({ "path": path, "preset": preset }));
+        assert_eq!(st, 200, "{preset}: {v}");
+        let saved: Option<String> = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row("SELECT default_agent FROM projects WHERE path = ?1", rusqlite::params![path], |r| r.get(0)).expect("registered")
+        };
+        assert_eq!(saved.as_deref(), Some(preset), "saved as given");
+    }
+}

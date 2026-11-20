@@ -82,6 +82,28 @@ pub fn set_display_name(path: &str, name: &str) -> Result<bool, HireError> {
     Ok(true)
 }
 
+/// A hire's `preset` must name a preset that exists: its id, or the first
+/// word of its command (`claude`, `codex`), the two ways the launch
+/// resolver reads `default_agent`. Anything else is refused (400 `usage`)
+/// before anything is written. Disabled presets count: they exist.
+pub fn check_preset(value: Option<&str>) -> Result<(), HireError> {
+    let Some(v) = value.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    let presets = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        crate::db::schema::AgentPreset::list(&conn).map_err(|e| HireError::internal(format!("read presets: {e}")))?
+    };
+    if presets.iter().any(|p| p.id == v || p.command.split_whitespace().next() == Some(v)) {
+        return Ok(());
+    }
+    Err(HireError::usage(format!(
+        "preset '{v}' doesn't exist: use a preset id, or its command, from `{} preset list`",
+        crate::brand::CLI_NAME
+    )))
+}
+
 pub fn set_color(path: &str, color: &str) -> Result<bool, HireError> {
     let color = color.trim().to_ascii_lowercase();
     if !super::recipe::color_ok(&color) {

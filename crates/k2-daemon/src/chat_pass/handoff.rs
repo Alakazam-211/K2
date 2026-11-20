@@ -27,6 +27,10 @@ pub const TTL_SECS: i64 = 60;
 pub const MAX_OUTSTANDING: usize = 5;
 /// The vault confirm action a person completes before a code is minted.
 pub const CONFIRM_ACTION: &str = "chat-owner-handoff";
+/// The vault confirm action a person completes before ending owner chat
+/// sessions (`k2 hostchat owner-sessions end`). Its `secretId` is the
+/// `own_` sid being ended, or `all`.
+pub const END_CONFIRM_ACTION: &str = "chat-owner-sessions-end";
 
 fn digest_hex(code: &str) -> String {
     crate::es256::bytes_to_hex(&Sha256::digest(code.as_bytes()))

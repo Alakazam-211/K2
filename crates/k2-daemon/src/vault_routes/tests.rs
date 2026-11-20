@@ -2211,3 +2211,50 @@ fn an_owner_token_caller_cannot_create_a_login_that_passes_the_presence_check() 
         assert_eq!(status(&r), 200, "{}", r.body);
     }
 }
+
+#[test]
+fn ending_owner_chat_sessions_takes_a_confirm_bound_to_its_sid_or_all() {
+    let t = vault();
+    set_vault_password(&t, "correct horse battery");
+    let action = crate::chat_pass::handoff::END_CONFIRM_ACTION;
+    assert_eq!(action, "chat-owner-sessions-end");
+    assert!(CONFIRM_ACTIONS.contains(&action), "the action is on the confirm list");
+    let finish = |secret: &str| -> String {
+        let (s, v) = call(
+            &t,
+            CONFIRM_FINISH,
+            &owner(),
+            json!({ "action": action, "secretId": secret, "method": "vault-password", "password": "correct horse battery" }),
+        );
+        assert_eq!(s, 200, "{secret}: {v}");
+        v["token"].as_str().expect("token").to_string()
+    };
+    let stamp = Actor::Owner.stamp();
+    let sid = "own_0123456789abcdef0123456789abcdef";
+    // A confirm for one sid never ends another sid, nor every session.
+    let tok = finish(sid);
+    assert!(t.v.confirm.take(&tok, action, Some("own_ffffffffffffffffffffffffffffffff"), &stamp).is_err(), "bound to its sid");
+    let tok = finish(sid);
+    assert!(t.v.confirm.take(&tok, action, Some("all"), &stamp).is_err(), "a sid's confirm is not --all");
+    let tok = finish(sid);
+    assert!(t.v.confirm.take(&tok, "chat-owner-handoff", Some(sid), &stamp).is_err(), "bound to its action");
+    let tok = finish(sid);
+    match t.v.confirm.take(&tok, action, Some(sid), &stamp).expect("its own sid") {
+        k2_vault::HumanProof::Confirmed { method } => assert_eq!(method, "vault-password"),
+        k2_vault::HumanProof::None => panic!("a confirmed token is proof"),
+    }
+    assert!(t.v.confirm.take(&tok, action, Some(sid), &stamp).is_err(), "single use");
+    // --all's confirm is its own binding.
+    let tok = finish("all");
+    assert!(t.v.confirm.take(&tok, action, Some(sid), &stamp).is_err(), "--all's confirm never ends one sid");
+    let tok = finish("all");
+    assert!(matches!(t.v.confirm.take(&tok, action, Some("all"), &stamp), Ok(k2_vault::HumanProof::Confirmed { .. })));
+    // Agents never get one.
+    let (s, v) = call(
+        &t,
+        CONFIRM_FINISH,
+        &agent("ws1", true),
+        json!({ "action": action, "secretId": "all", "method": "vault-password", "password": "correct horse battery" }),
+    );
+    assert_eq!(s, 403, "{v}");
+}

@@ -2456,6 +2456,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Sew owner handoff (S32 §11.1, Rosson 2026-10-15): minting a code
     // that opens Sew as its install owner needs a person.
     "chat-owner-handoff",
+    // Ending owner chat sessions a handoff opened (`k2 hostchat
+    // owner-sessions end`): a person, never an agent (`secretId` = the
+    // `own_` sid, or `all`).
+    crate::chat_pass::handoff::END_CONFIRM_ACTION,
     // Sew chat S30 (K18, KM13 person-proof): approving one queued agent
     // post (`secretId` = the `out_…` id) or a batch (`secretId` = the
     // batch hash), and a person approving after the fact a post an

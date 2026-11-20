@@ -195,21 +195,7 @@ pub fn held(raw: &str) -> Shown {
         return Shown::out("");
     }
     let mut o = Out::default();
-    let r = (|| -> Result<(), Raise> {
-        let req = orv(g(&d, "request"), Value::Object(vec![]));
-        let req = need(&req, 10)?;
-        o.line(format!(
-            "Held for the owner (request {}): {}",
-            st(&orv(g(req, "id"), s("?"))),
-            st(&orv(g(req, "summary"), s("")))
-        ));
-        for (key, line) in [("hint", 12), ("afterApproval", 14)] {
-            if truthy(&g(&d, key)) {
-                o.line(format!("  {}", py::str_plus(&g(&d, key), line)?));
-            }
-        }
-        Ok(())
-    })();
+    let r = held_body(&d, &mut o);
     match r {
         Ok(()) => Shown {
             stdout: o.o,
@@ -775,129 +761,9 @@ fn readline(rest: &mut &str) -> String {
 
 /// `user list`'s printer, on both answers, each with a newline after it.
 pub fn user_list(stream: &str) -> Shown {
-    let mut rest = stream;
+    let rest = stream;
     let mut out = Out::default();
-    let r = (|| -> Result<(), Raise> {
-        let o = &mut out;
-        let first = readline(&mut rest);
-        let first = if first.is_empty() { "{}".into() } else { first };
-        let doc = load(&first, 3)?;
-        let users = at_or(need(&doc, 3)?, "users", Value::Array(vec![]));
-        let second = readline(&mut rest);
-        let second = if second.is_empty() { "{}".into() } else { second };
-        let doc = load(&second, 4)?;
-        let mut roles: Vec<(Value, Value)> = Vec::new();
-        for r in py_iter(&at_or(need(&doc, 4)?, "roles", Value::Array(vec![])), 4)? {
-            let key = orv(g(need(&r, 4)?, "name"), s(""));
-            hashable(&key, 4)?;
-            match roles.iter_mut().find(|(k, _)| py_eq(k, &key)) {
-                Some(slot) => slot.1 = r.clone(),
-                None => roles.push((key, r.clone())),
-            }
-        }
-        if !truthy(&users) {
-            o.line("No skin users.");
-            return Ok(());
-        }
-        let dash = || s("\u{2014}");
-        for u in py_iter(&users, 7)? {
-            let u = need(&u, 8)?;
-            let name = orv(g(u, "username"), s(""));
-            let mut role = orv(or2(u, "roleName", "role_name"), dash());
-            let handles = if truthy(&or2(u, "roleName", "role_name")) {
-                hashable(&role, 11)?;
-                let r = roles
-                    .iter()
-                    .find(|(k, _)| py_eq(k, &role))
-                    .map(|(_, v)| v.clone())
-                    .unwrap_or(Value::Null);
-                let r = orv(r, Value::Object(vec![]));
-                let r = need(&r, 12)?;
-                orv(or2(r, "roomHandles", "room_handles"), Value::Array(vec![]))
-            } else {
-                orv(
-                    or2(u, "defaultRoomHandles", "default_room_handles"),
-                    Value::Array(vec![]),
-                )
-            };
-            let mut rooms = joined(", ", &handles, "\u{2014}", 15)?;
-            if role == dash() && rooms == "\u{2014}" {
-                let mut gs = Vec::new();
-                for gr in py_iter(&orv(g(u, "appGrants"), Value::Array(vec![])), 18)? {
-                    let gd = need(&gr, 18)?;
-                    if truthy(&g(gd, "role")) || truthy(&g(gd, "rooms")) {
-                        gs.push(gr.clone());
-                    }
-                }
-                if !gs.is_empty() {
-                    let parts: Vec<String> = gs
-                        .iter()
-                        .filter(|gr| truthy(&g(gr, "role")))
-                        .map(|gr| {
-                            format!(
-                                "{} (App {})",
-                                st(&g(gr, "role")),
-                                st(&or2(gr, "app", "appServiceId"))
-                            )
-                        })
-                        .collect();
-                    role = orv(s(&parts.join(", ")), dash());
-                    let mut rh: Vec<Value> = Vec::new();
-                    for gr in &gs {
-                        for h in py_iter(&orv(g(gr, "rooms"), Value::Array(vec![])), 23)? {
-                            if !rh.iter().any(|x| py_eq(x, &h)) {
-                                rh.push(h);
-                            }
-                        }
-                    }
-                    let rh = Value::Array(rh);
-                    rooms = joined(", ", &rh, "\u{2014}", 26)?;
-                }
-            }
-            let email = orv(g(u, "email"), dash());
-            let mut full = orv(or2(u, "fullName", "full_name"), dash());
-            if truthy(&g(u, "nameSetBySelf")) && full != dash() {
-                full = s(&format!("{} (set by {})", st(&full), st(&name)));
-            }
-            let agent = orv(or2(u, "agentHandle", "agentWorkspace"), s(""));
-            let mut tail = if truthy(&agent) {
-                format!("  agent:{}", st(&agent))
-            } else {
-                String::new()
-            };
-            let test = g(u, "test");
-            if truthy(&test) {
-                let tt = need(&test, 35)?;
-                let app = or2(tt, "app", "appServiceId");
-                let when = if truthy(&g(tt, "expired")) {
-                    "expired".to_string()
-                } else {
-                    let at = orv(g(tt, "expiresAt"), Value::Int("0".into()));
-                    format!("ends {}", minute(&at).map_err(|e| Raise::at(35, e))?)
-                };
-                tail.push_str(&format!("  [test: App {}, {when}]", st(&app)));
-            }
-            if truthy(&g(u, "tiedTo")) {
-                tail.push_str(&format!(
-                    "  [{}: set up by {}'s agent]",
-                    if truthy(&g(u, "pendingReset")) {
-                        "waiting for reset"
-                    } else {
-                        "tied"
-                    },
-                    st(&g(u, "tiedTo"))
-                ));
-            }
-            o.line(format!(
-                "{}  {}  {}  {rooms}  {}{tail}",
-                st(&name),
-                st(&full),
-                st(&role),
-                st(&email)
-            ));
-        }
-        Ok(())
-    })();
+    let r = list_body(rest, &mut out);
     match r {
         Ok(()) => Shown::out(out.o),
         Err(r) => raised(out.o, String::new(), &r),
@@ -1299,25 +1165,7 @@ pub fn front_door_json_exit(raw: &str) -> Shown {
     let Ok(d) = crate::out::json::parse(raw) else {
         return Shown::err("", Exit::Error);
     };
-    let r = (|| -> Ends {
-        let d = need(&d, 7)?;
-        let err = g(d, "error");
-        if let Value::Object(_) = err {
-            let code = orv(g(&err, "code"), s(""));
-            return Ok(if owner_code(&code) {
-                Exit::Refused
-            } else {
-                Exit::Error
-            });
-        }
-        if let Value::Str(_) = err {
-            let e = st(&err);
-            if !py::strip(&e).is_empty() && !truthy(&g(d, "applied")) {
-                return Ok(str_err_exit(&e));
-            }
-        }
-        Ok(Exit::Ok)
-    })();
+    let r = json_exit_body(&d);
     match r {
         Ok(exit) => Shown::err("", exit),
         Err(r) => raised(String::new(), String::new(), &r),
@@ -1338,65 +1186,7 @@ pub fn front_door_set(raw: &str) -> Shown {
         }
     };
     let mut o = Out::default();
-    let r = (|| -> Ends {
-        let d = need(&d, 7)?;
-        let err = g(d, "error");
-        if let Value::Object(_) = err {
-            let code = orv(g(&err, "code"), s("error"));
-            let mut hint = orv(g(&err, "hint"), orv(g(&err, "message"), code.clone()));
-            let owner = owner_code(&code);
-            if owner && !py_in("ask your human", &hint, 11)? {
-                let head = if truthy(&hint) {
-                    plus_str(&hint, 12)? + " \u{2014} "
-                } else {
-                    String::new()
-                };
-                hint = s(&(head + "requires owner/admin \u{2014} ask your human"));
-            }
-            o.err(format!("Error: {}", st(&hint)));
-            return Ok(if owner { Exit::Refused } else { Exit::Error });
-        }
-        let text = match &err {
-            Value::Str(_) => Some(st(&err)),
-            _ => None,
-        };
-        let live = text.as_deref().filter(|e| !py::strip(e).is_empty());
-        let applied = truthy(&g(d, "applied"));
-        if let Some(e) = live {
-            if !applied && !truthy(&g(d, "mode")) {
-                o.err(format!("Error: {e}"));
-                return Ok(str_err_exit(e));
-            }
-            if ["caddy_missing", "bind_failed", "pro_required", "no_token"]
-                .iter()
-                .any(|w| e.contains(w))
-                && !applied
-            {
-                o.err(format!("Error: {e}"));
-                return Ok(Exit::Error);
-            }
-        }
-        o.line(format!(
-            "Front door: {}  {}",
-            st(&at_or(d, "mode", s("?"))),
-            st(&orv(or2(d, "url", "connectUrl"), s("(no url yet)")))
-        ));
-        o.line(format!(
-            "listen:  {}  applied={}",
-            st(&orv(g(d, "listen"), s("-"))),
-            st(&g(d, "applied"))
-        ));
-        if truthy(&g(d, "hint")) {
-            o.line(st(&g(d, "hint")));
-        }
-        if let Some(e) = live {
-            o.err(e);
-            if !applied {
-                return Ok(Exit::Error);
-            }
-        }
-        Ok(Exit::Ok)
-    })();
+    let r = set_body(&d, &mut o);
     match r {
         Ok(exit) => Shown {
             stdout: o.o,
@@ -1405,4 +1195,221 @@ pub fn front_door_set(raw: &str) -> Shown {
         },
         Err(r) => raised(o.o, o.e, &r),
     }
+}
+
+fn held_body(d: &Value, o: &mut Out) -> Result<(), Raise> {
+    let req = orv(g(d, "request"), Value::Object(vec![]));
+    let req = need(&req, 10)?;
+    o.line(format!(
+        "Held for the owner (request {}): {}",
+        st(&orv(g(req, "id"), s("?"))),
+        st(&orv(g(req, "summary"), s("")))
+    ));
+    for (key, line) in [("hint", 12), ("afterApproval", 14)] {
+        if truthy(&g(d, key)) {
+            o.line(format!("  {}", py::str_plus(&g(d, key), line)?));
+        }
+    }
+    Ok(())
+}
+
+fn list_body(mut rest: &str, o: &mut Out) -> Result<(), Raise> {
+    let first = readline(&mut rest);
+    let first = if first.is_empty() { "{}".into() } else { first };
+    let doc = load(&first, 3)?;
+    let users = at_or(need(&doc, 3)?, "users", Value::Array(vec![]));
+    let second = readline(&mut rest);
+    let second = if second.is_empty() { "{}".into() } else { second };
+    let doc = load(&second, 4)?;
+    let mut roles: Vec<(Value, Value)> = Vec::new();
+    for r in py_iter(&at_or(need(&doc, 4)?, "roles", Value::Array(vec![])), 4)? {
+        let key = orv(g(need(&r, 4)?, "name"), s(""));
+        hashable(&key, 4)?;
+        match roles.iter_mut().find(|(k, _)| py_eq(k, &key)) {
+            Some(slot) => slot.1 = r.clone(),
+            None => roles.push((key, r.clone())),
+        }
+    }
+    if !truthy(&users) {
+        o.line("No skin users.");
+        return Ok(());
+    }
+    let dash = || s("\u{2014}");
+    for u in py_iter(&users, 7)? {
+        let u = need(&u, 8)?;
+        let name = orv(g(u, "username"), s(""));
+        let mut role = orv(or2(u, "roleName", "role_name"), dash());
+        let handles = if truthy(&or2(u, "roleName", "role_name")) {
+            hashable(&role, 11)?;
+            let r = roles
+                .iter()
+                .find(|(k, _)| py_eq(k, &role))
+                .map(|(_, v)| v.clone())
+                .unwrap_or(Value::Null);
+            let r = orv(r, Value::Object(vec![]));
+            let r = need(&r, 12)?;
+            orv(or2(r, "roomHandles", "room_handles"), Value::Array(vec![]))
+        } else {
+            orv(
+                or2(u, "defaultRoomHandles", "default_room_handles"),
+                Value::Array(vec![]),
+            )
+        };
+        let mut rooms = joined(", ", &handles, "\u{2014}", 15)?;
+        if role == dash() && rooms == "\u{2014}" {
+            let mut gs = Vec::new();
+            for gr in py_iter(&orv(g(u, "appGrants"), Value::Array(vec![])), 18)? {
+                let gd = need(&gr, 18)?;
+                if truthy(&g(gd, "role")) || truthy(&g(gd, "rooms")) {
+                    gs.push(gr.clone());
+                }
+            }
+            if !gs.is_empty() {
+                let parts: Vec<String> = gs
+                    .iter()
+                    .filter(|gr| truthy(&g(gr, "role")))
+                    .map(|gr| {
+                        format!(
+                            "{} (App {})",
+                            st(&g(gr, "role")),
+                            st(&or2(gr, "app", "appServiceId"))
+                        )
+                    })
+                    .collect();
+                role = orv(s(&parts.join(", ")), dash());
+                let mut rh: Vec<Value> = Vec::new();
+                for gr in &gs {
+                    for h in py_iter(&orv(g(gr, "rooms"), Value::Array(vec![])), 23)? {
+                        if !rh.iter().any(|x| py_eq(x, &h)) {
+                            rh.push(h);
+                        }
+                    }
+                }
+                let rh = Value::Array(rh);
+                rooms = joined(", ", &rh, "\u{2014}", 26)?;
+            }
+        }
+        let email = orv(g(u, "email"), dash());
+        let mut full = orv(or2(u, "fullName", "full_name"), dash());
+        if truthy(&g(u, "nameSetBySelf")) && full != dash() {
+            full = s(&format!("{} (set by {})", st(&full), st(&name)));
+        }
+        let agent = orv(or2(u, "agentHandle", "agentWorkspace"), s(""));
+        let mut tail = if truthy(&agent) {
+            format!("  agent:{}", st(&agent))
+        } else {
+            String::new()
+        };
+        let test = g(u, "test");
+        if truthy(&test) {
+            let tt = need(&test, 35)?;
+            let app = or2(tt, "app", "appServiceId");
+            let when = if truthy(&g(tt, "expired")) {
+                "expired".to_string()
+            } else {
+                let at = orv(g(tt, "expiresAt"), Value::Int("0".into()));
+                format!("ends {}", minute(&at).map_err(|e| Raise::at(35, e))?)
+            };
+            tail.push_str(&format!("  [test: App {}, {when}]", st(&app)));
+        }
+        if truthy(&g(u, "tiedTo")) {
+            tail.push_str(&format!(
+                "  [{}: set up by {}'s agent]",
+                if truthy(&g(u, "pendingReset")) {
+                    "waiting for reset"
+                } else {
+                    "tied"
+                },
+                st(&g(u, "tiedTo"))
+            ));
+        }
+        o.line(format!(
+            "{}  {}  {}  {rooms}  {}{tail}",
+            st(&name),
+            st(&full),
+            st(&role),
+            st(&email)
+        ));
+    }
+    Ok(())
+}
+
+fn json_exit_body(d: &Value) -> Ends {
+    let d = need(d, 7)?;
+    let err = g(d, "error");
+    if let Value::Object(_) = err {
+        let code = orv(g(&err, "code"), s(""));
+        return Ok(if owner_code(&code) {
+            Exit::Refused
+        } else {
+            Exit::Error
+        });
+    }
+    if let Value::Str(_) = err {
+        let e = st(&err);
+        if !py::strip(&e).is_empty() && !truthy(&g(d, "applied")) {
+            return Ok(str_err_exit(&e));
+        }
+    }
+    Ok(Exit::Ok)
+}
+
+fn set_body(d: &Value, o: &mut Out) -> Ends {
+    let d = need(d, 7)?;
+    let err = g(d, "error");
+    if let Value::Object(_) = err {
+        let code = orv(g(&err, "code"), s("error"));
+        let mut hint = orv(g(&err, "hint"), orv(g(&err, "message"), code.clone()));
+        let owner = owner_code(&code);
+        if owner && !py_in("ask your human", &hint, 11)? {
+            let head = if truthy(&hint) {
+                plus_str(&hint, 12)? + " \u{2014} "
+            } else {
+                String::new()
+            };
+            hint = s(&(head + "requires owner/admin \u{2014} ask your human"));
+        }
+        o.err(format!("Error: {}", st(&hint)));
+        return Ok(if owner { Exit::Refused } else { Exit::Error });
+    }
+    let text = match &err {
+        Value::Str(_) => Some(st(&err)),
+        _ => None,
+    };
+    let live = text.as_deref().filter(|e| !py::strip(e).is_empty());
+    let applied = truthy(&g(d, "applied"));
+    if let Some(e) = live {
+        if !applied && !truthy(&g(d, "mode")) {
+            o.err(format!("Error: {e}"));
+            return Ok(str_err_exit(e));
+        }
+        if ["caddy_missing", "bind_failed", "pro_required", "no_token"]
+            .iter()
+            .any(|w| e.contains(w))
+            && !applied
+        {
+            o.err(format!("Error: {e}"));
+            return Ok(Exit::Error);
+        }
+    }
+    o.line(format!(
+        "Front door: {}  {}",
+        st(&at_or(d, "mode", s("?"))),
+        st(&orv(or2(d, "url", "connectUrl"), s("(no url yet)")))
+    ));
+    o.line(format!(
+        "listen:  {}  applied={}",
+        st(&orv(g(d, "listen"), s("-"))),
+        st(&g(d, "applied"))
+    ));
+    if truthy(&g(d, "hint")) {
+        o.line(st(&g(d, "hint")));
+    }
+    if let Some(e) = live {
+        o.err(e);
+        if !applied {
+            return Ok(Exit::Error);
+        }
+    }
+    Ok(Exit::Ok)
 }

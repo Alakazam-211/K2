@@ -49,7 +49,7 @@ use super::{curl_port, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::Value;
-use crate::out::{self};
+use crate::out;
 use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
@@ -209,7 +209,7 @@ impl<'a> Words<'a> {
         Words { w, i: 0 }
     }
 
-    fn next(&mut self) -> Option<&'a str> {
+    fn take(&mut self) -> Option<&'a str> {
         let w = self.w.get(self.i).copied();
         self.i += 1;
         w
@@ -382,7 +382,7 @@ fn user_add(rest: &[&str]) -> Result<Ask, Stop> {
         (String::new(), String::new(), String::new(), String::new());
     let (mut pw_stdin, mut temp) = (false, false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--password-stdin" => pw_stdin = true,
             "--temp-password" => temp = true,
@@ -442,7 +442,7 @@ fn user_show(rest: &[&str]) -> Result<Ask, Stop> {
     );
     let (mut username, mut app, mut json) = (String::new(), String::new(), false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--app" => app = w.soft(),
             "--json" => json = true,
@@ -477,7 +477,7 @@ fn user_image(rest: &[&str]) -> Result<Ask, Stop> {
     const USAGE: &str = concat!("Usage: ", cli_name!(), " app user image <username> --clear");
     let (mut username, mut clear) = (String::new(), false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--clear" => clear = true,
             _ => positional(a, &mut username, HELP)?,
@@ -507,7 +507,7 @@ fn user_sessions(rest: &[&str]) -> Result<Ask, Stop> {
     let (mut username, mut app, mut revoke) = (String::new(), String::new(), String::new());
     let (mut all, mut json) = (false, false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--app" => app = w.soft(),
             "--revoke" => revoke = w.soft(),
@@ -563,10 +563,16 @@ fn user_invite(rest: &[&str]) -> Result<Ask, Stop> {
         cli_name!(),
         " app user invite <username> --app <app> [--email e] [--role R] [--from <address>]"
     );
-    let (mut username, mut app, mut email, mut role, mut from) = Default::default();
+    let (mut username, mut app, mut email, mut role, mut from): (
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = Default::default();
     let mut json = false;
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--app" => app = w.soft(),
             "--email" => email = w.soft(),
@@ -580,11 +586,9 @@ fn user_invite(rest: &[&str]) -> Result<Ask, Stop> {
             _ => positional(a, &mut username, HELP)?,
         }
     }
-    let (username, app): (String, String) = (username, app);
     if username.is_empty() || app.is_empty() {
         return Err(Stop::err(&[USAGE], Exit::Error));
     }
-    let (email, role, from): (String, String, String) = (email, role, from);
     let body = compute_json(&[
         ("username", &username),
         ("app", &app),
@@ -609,10 +613,11 @@ fn user_reset(rest: &[&str]) -> Result<Ask, Stop> {
         cli_name!(),
         " app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>]"
     );
-    let (mut username, mut app, mut to, mut from) = Default::default();
+    let (mut username, mut app, mut to, mut from): (String, String, String, String) =
+        Default::default();
     let (mut code, mut json, mut revoke) = (false, false, false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--app" => app = w.soft(),
             "--revoke" => revoke = true,
@@ -626,7 +631,6 @@ fn user_reset(rest: &[&str]) -> Result<Ask, Stop> {
             _ => positional(a, &mut username, HELP)?,
         }
     }
-    let (username, app, to, from): (String, String, String, String) = (username, app, to, from);
     if username.is_empty() {
         return Err(Stop::err(&[USAGE], Exit::Error));
     }
@@ -663,7 +667,7 @@ fn user_password(rest: &[&str]) -> Result<Ask, Stop> {
     );
     let (mut username, mut pw_stdin) = (String::new(), false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--password-stdin" => pw_stdin = true,
             _ => positional(a, &mut username, HELP)?,
@@ -683,7 +687,7 @@ fn user_unlock(rest: &[&str]) -> Result<Ask, Stop> {
     );
     let (mut username, mut json) = (String::new(), false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--json" => json = true,
             _ => positional(a, &mut username, HELP)?,
@@ -712,7 +716,7 @@ fn user_email(rest: &[&str]) -> Result<Ask, Stop> {
     );
     let (mut username, mut email) = (String::new(), String::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--email" => email = w.soft(),
             _ if a.starts_with("--email=") => email = a["--email=".len()..].to_string(),
@@ -737,7 +741,7 @@ fn user_full_name(rest: &[&str]) -> Result<Ask, Stop> {
     );
     let (mut username, mut name) = (String::new(), String::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--name" => name = w.soft(),
             _ if a.starts_with("--name=") => name = a["--name=".len()..].to_string(),
@@ -767,7 +771,7 @@ fn user_agent(rest: &[&str]) -> Result<Ask, Stop> {
     );
     let (mut username, mut workspace, mut clear) = (String::new(), String::new(), false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--clear" | "--no-agent" => clear = true,
             "--workspace" => workspace = w.soft(),
@@ -831,7 +835,7 @@ fn user_rooms(rest: &[&str]) -> Result<Ask, Stop> {
     const GONE: &str = "--apply-tokens is gone: signed-in people get a rooms change at their next request, so there is nothing to apply. Run it without the flag.";
     let (mut username, mut app, mut agents) = (String::new(), String::new(), Vec::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--agent" | "--agents" => agents.push(w.hard()?),
             "--apply-tokens" | "--applyTokens" => return Err(Stop::err(&[GONE], Exit::Usage)),
@@ -970,7 +974,7 @@ fn role_create(rest: &[&str]) -> Result<Ask, Stop> {
     let (mut name, mut caps, mut app, mut agents) =
         (String::new(), String::new(), String::new(), Vec::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--caps" | "--cap" => caps = w.hard()?,
             "--agent" | "--agents" => agents.push(w.hard()?),
@@ -1011,7 +1015,7 @@ fn role_room(rest: &[&str]) -> Result<Ask, Stop> {
     let (mut role, mut handle, mut caps, mut clear) =
         (String::new(), String::new(), String::new(), false);
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--caps" | "--cap" => caps = w.hard()?,
             "--clear" => clear = true,
@@ -1054,7 +1058,13 @@ fn role_paths(rest: &[&str]) -> Result<Ask, Stop> {
         " app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] [--hide .k2,.env] [--unhide .env | --no-hide] | --clear"
     );
     let (mut role, mut handle) = (String::new(), String::new());
-    let (mut read, mut write, mut upload, mut drop, mut download) = Default::default();
+    let (mut read, mut write, mut upload, mut drop, mut download): (
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = Default::default();
     let (mut hide, mut unhide) = (String::new(), String::new());
     let (mut nodownload, mut clear, mut nohide) = (false, false, false);
     let mut w = Words::new(rest);
@@ -1066,7 +1076,7 @@ fn role_paths(rest: &[&str]) -> Result<Ask, Stop> {
         }
         to.push_str(&v);
     };
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--hide" => add(&mut hide, w.hard()?),
             "--unhide" => add(&mut unhide, w.hard()?),
@@ -1094,8 +1104,6 @@ fn role_paths(rest: &[&str]) -> Result<Ask, Stop> {
             }
         }
     }
-    let (read, write, upload, drop, download): (String, String, String, String, String) =
-        (read, write, upload, drop, download);
     if role.is_empty() || handle.is_empty() {
         return Err(Stop::err(&[USAGE], Exit::Error));
     }
@@ -1175,7 +1183,7 @@ fn role_update(rest: &[&str]) -> Result<Ask, Stop> {
     let (mut name, mut caps, mut clear, mut agents) =
         (String::new(), String::new(), false, Vec::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--caps" | "--cap" => caps = w.hard()?,
             "--agent" | "--agents" => agents.push(w.hard()?),
@@ -1212,7 +1220,7 @@ fn role_add(rest: &[&str]) -> Result<Ask, Stop> {
     let (mut from, mut app, mut name, mut agents) =
         (String::new(), String::new(), String::new(), Vec::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--from" | "--template" => from = w.hard()?,
             "--app" => app = w.hard()?,
@@ -1307,10 +1315,11 @@ fn grant_add(rest: &[&str]) -> Result<Ask, Stop> {
         cli_name!(),
         " app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role>] [--scope <text>]"
     );
-    let (mut subject_kind, mut subject, mut kind, mut target) = Default::default();
+    let (mut subject_kind, mut subject, mut kind, mut target): (String, String, String, String) =
+        Default::default();
     let (mut role, mut scope, mut rooms_nl) = (String::new(), String::new(), String::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         let (name, inline) = match a.split_once('=') {
             Some((n, v)) if n.starts_with("--") => (n, Some(v.to_string())),
             _ => (a, None),
@@ -1350,8 +1359,6 @@ fn grant_add(rest: &[&str]) -> Result<Ask, Stop> {
             }
         }
     }
-    let (subject_kind, subject, kind, mut target): (String, String, String, String) =
-        (subject_kind, subject, kind, target);
     if is_chat(&kind) && target.is_empty() {
         target = "sew".into();
     }
@@ -1390,9 +1397,15 @@ fn grant_rm(rest: &[&str]) -> Result<Ask, Stop> {
             " app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>"
         ),
     ];
-    let (mut gid, mut subject_kind, mut subject, mut kind, mut target) = Default::default();
+    let (mut gid, mut subject_kind, mut subject, mut kind, mut target): (
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = Default::default();
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         let (name, inline) = match a.split_once('=') {
             Some((n, v)) if n.starts_with("--") => (n, Some(v.to_string())),
             _ => (a, None),
@@ -1413,8 +1426,6 @@ fn grant_rm(rest: &[&str]) -> Result<Ask, Stop> {
         };
         *slot = inline.unwrap_or_else(|| w.soft());
     }
-    let (gid, subject_kind, subject, kind, mut target): (String, String, String, String, String) =
-        (gid, subject_kind, subject, kind, target);
     if gid.is_empty() && is_chat(&kind) && target.is_empty() {
         target = "sew".into();
     }
@@ -1448,7 +1459,7 @@ fn grant_set(rest: &[&str]) -> Result<Ask, Stop> {
     );
     let (mut gid, mut scope) = (String::new(), String::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--id" => gid = w.soft(),
             "--scope" => scope = w.soft(),
@@ -1478,7 +1489,7 @@ fn grant_role(rest: &[&str]) -> Result<Ask, Stop> {
     const MORE: &str = "  Re-roles the login in place: live logins stay signed in and get the new role's rooms now.";
     let (mut gid, mut role) = (String::new(), String::new());
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--id" => gid = w.soft(),
             "--role" => role = w.soft(),
@@ -1554,7 +1565,7 @@ fn front_door(rest: &[&str]) -> Result<Ask, Stop> {
         String::new(),
     );
     let mut w = Words::new(rest);
-    while let Some(a) = w.next() {
+    while let Some(a) = w.take() {
         match a {
             "--json" => json = true,
             "--url" => url = w.hard()?,

@@ -27,7 +27,7 @@ fn source() -> String {
 #[test]
 fn the_shell_hands_these_on() {
     for w in [
-        &[][..],
+        &[] as &[&str],
         &["nope"],
         &["user", "chat", "bob"],
         &["user", "add", "bob", "--test"],

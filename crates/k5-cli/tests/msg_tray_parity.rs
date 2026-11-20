@@ -72,22 +72,46 @@ fn tray_packages_as_the_shell_sends_them() {
         plain(
             "two files, wake, a brief and a failed wake",
             &[
-                "ws", "--inbox-wake", "a.txt", "b.bin", "read", "these", "--body", "B", "--from",
-                "me", "--summary", "S", "--idempotency-key", KEY,
+                "ws",
+                "--inbox-wake",
+                "a.txt",
+                "b.bin",
+                "read",
+                "these",
+                "--body",
+                "B",
+                "--from",
+                "me",
+                "--summary",
+                "S",
+                "--idempotency-key",
+                KEY,
             ],
             vec![
                 ok(ON),
-                ok(r#"{"ok":true,"id":"i2","wake":{"success":false,"reason":"asleep","hint":"later"},"addressNote":"ws is now ws2"}"#),
+                ok(
+                    r#"{"ok":true,"id":"i2","wake":{"success":false,"reason":"asleep","hint":"later"},"addressNote":"ws is now ws2"}"#,
+                ),
             ],
             0,
             2,
         ),
         plain(
             "--path and a gate",
-            &["ws", "--inbox-silent", "--path", "./a.txt", "--idempotency-key", KEY],
+            &[
+                "ws",
+                "--inbox-silent",
+                "--path",
+                "./a.txt",
+                "--idempotency-key",
+                KEY,
+            ],
             vec![
                 ok(ON),
-                Reply::Answer(403, r#"{"error":{"code":"gated","hint":"turn it on"}}"#.into()),
+                Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"gated","hint":"turn it on"}}"#.into(),
+                ),
             ],
             3,
             2,
@@ -141,7 +165,10 @@ fn tray_packages_as_the_shell_sends_them() {
                 ok(ON),
                 Reply::Answer(400, NOT_READABLE.into()),
                 ok(r#"{"path":"/srv/ws"}"#),
-                Reply::Answer(403, r#"{"error":{"code":"forbidden","hint":"owner only"}}"#.into()),
+                Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"forbidden","hint":"owner only"}}"#.into(),
+                ),
             ],
             3,
             4,
@@ -168,8 +195,16 @@ fn tray_packages_as_the_shell_sends_them() {
         plain(
             "compose, silent",
             &[
-                "ws", "--inbox-silent", "--title", "T", "--body", "B", "--priority", "high",
-                "--idempotency-key", KEY,
+                "ws",
+                "--inbox-silent",
+                "--title",
+                "T",
+                "--body",
+                "B",
+                "--priority",
+                "high",
+                "--idempotency-key",
+                KEY,
             ],
             vec![ok(ON), ok(r#"{"ok":true,"id":"c1","title":"T"}"#)],
             0,
@@ -177,18 +212,36 @@ fn tray_packages_as_the_shell_sends_them() {
         ),
         plain(
             "compose, wake: the pointer and the merged line",
-            &["ws", "--inbox-wake", "--title", "T", "--from", "me", "--idempotency-key", KEY],
+            &[
+                "ws",
+                "--inbox-wake",
+                "--title",
+                "T",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+            ],
             vec![
                 ok(ON),
                 ok(r#"{"ok":true,"id":"c1","title":"Tee"}"#),
-                ok(r#"{"success":true,"target_session_id":"s1","woke":true,"wake_ms":12,"attempts":1}"#),
+                ok(
+                    r#"{"success":true,"target_session_id":"s1","woke":true,"wake_ms":12,"attempts":1}"#,
+                ),
             ],
             0,
             3,
         ),
         plain(
             "compose, wake, the wake not delivered",
-            &["ws", "--inbox-wake", "--title", "T", "--idempotency-key", KEY],
+            &[
+                "ws",
+                "--inbox-wake",
+                "--title",
+                "T",
+                "--idempotency-key",
+                KEY,
+            ],
             vec![
                 ok(ON),
                 ok(r#"{"ok":true,"id":"c1","wake":1}"#),
@@ -199,14 +252,28 @@ fn tray_packages_as_the_shell_sends_them() {
         ),
         plain(
             "compose, wake, gated",
-            &["ws", "--inbox-wake", "--title", "T", "--idempotency-key", KEY],
+            &[
+                "ws",
+                "--inbox-wake",
+                "--title",
+                "T",
+                "--idempotency-key",
+                KEY,
+            ],
             vec![ok(ON), ok(r#"{"error":{"code":"gated","hint":"é"}}"#)],
             3,
             2,
         ),
         plain(
             "compose to another server",
-            &["ada::box.example", "--inbox-wake", "--title", "T", "--idempotency-key", KEY],
+            &[
+                "ada::box.example",
+                "--inbox-wake",
+                "--title",
+                "T",
+                "--idempotency-key",
+                KEY,
+            ],
             vec![ok(ON), ok(r#"{"ok":true,"id":"c9"}"#)],
             0,
             2,
@@ -220,7 +287,13 @@ fn tray_packages_as_the_shell_sends_them() {
         ),
         plain(
             "a file that isn't there",
-            &["ws", "--inbox-silent", "missing.md", "--idempotency-key", KEY],
+            &[
+                "ws",
+                "--inbox-silent",
+                "missing.md",
+                "--idempotency-key",
+                KEY,
+            ],
             vec![ok(ON)],
             2,
             1,
@@ -241,7 +314,13 @@ fn tray_packages_as_the_shell_sends_them() {
         ),
         plain(
             "a bad key",
-            &["ws", "--inbox-wake", "note.md", "--idempotency-key", "short"],
+            &[
+                "ws",
+                "--inbox-wake",
+                "note.md",
+                "--idempotency-key",
+                "short",
+            ],
             vec![],
             2,
             0,
@@ -256,8 +335,14 @@ fn tray_packages_as_the_shell_sends_them() {
 fn tray_help_never_acts() {
     let rig = Rig::new(VERB, "trayhelp");
     for (name, args) in [
-        ("-h after a file", &["ws", "--inbox-wake", "note.md", "-h"][..]),
-        ("--help with a title", &["ws", "--inbox-silent", "--title", "T", "--help"]),
+        (
+            "-h after a file",
+            &["ws", "--inbox-wake", "note.md", "-h"][..],
+        ),
+        (
+            "--help with a title",
+            &["ws", "--inbox-silent", "--title", "T", "--help"],
+        ),
     ] {
         rig.check(&Case {
             compare: Compare::Shell,
@@ -378,7 +463,13 @@ fn tray_bundle_by_contents() {
     let c = plain(
         "several files staged as one archive",
         &[
-            "ws", "--inbox-wake", "a.txt", "sub/a.txt", "b.bin", "ln.txt", "--idempotency-key",
+            "ws",
+            "--inbox-wake",
+            "a.txt",
+            "sub/a.txt",
+            "b.bin",
+            "ln.txt",
+            "--idempotency-key",
             KEY,
         ],
         vec![
@@ -407,7 +498,11 @@ fn tray_bundle_by_contents() {
     let barch: Vec<_> = barch.into_iter().flatten().collect();
     assert_eq!(barch.len(), 1, "{name}: bash uploaded one archive");
     let names: Vec<&str> = barch[0].iter().map(|e| e.0.as_str()).collect();
-    assert_eq!(names, ["a.txt", "a-2.txt", "b.bin", "ln.txt"], "{name}: bash's archive");
+    assert_eq!(
+        names,
+        ["a.txt", "a-2.txt", "b.bin", "ln.txt"],
+        "{name}: bash's archive"
+    );
     for without in [false, true] {
         let side = if without { Side::NoPython3 } else { Side::Rust };
         let (r, rl) = rig.binary(&c, without);
@@ -420,7 +515,11 @@ fn tray_bundle_by_contents() {
         let rarch: Vec<_> = rarch.into_iter().flatten().collect();
         assert_eq!(rl, bl, "{name} ({side:?}): the requests");
         assert_eq!(rarch, barch, "{name} ({side:?}): the archive's contents");
-        assert_eq!((r.code, r.signal), (b.code, b.signal), "{name} ({side:?}): {r:?}");
+        assert_eq!(
+            (r.code, r.signal),
+            (b.code, b.signal),
+            "{name} ({side:?}): {r:?}"
+        );
         assert_eq!(r.stdout, b.stdout, "{name} ({side:?}): stdout");
         assert_eq!(r.stderr, b.stderr, "{name} ({side:?}): stderr");
     }
@@ -441,8 +540,14 @@ fn tray_value_flag_last_is_the_d6_line() {
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
         assert_eq!(b.code, Some(1), "{flag}: bash: {b:?}");
-        assert!(b.stderr.ends_with(": $2: unbound variable\n"), "{flag}: bash: {b:?}");
-        assert!(rig.read(Side::Bash, false, flag).is_empty(), "{flag}: bash sent");
+        assert!(
+            b.stderr.ends_with(": $2: unbound variable\n"),
+            "{flag}: bash: {b:?}"
+        );
+        assert!(
+            rig.read(Side::Bash, false, flag).is_empty(),
+            "{flag}: bash sent"
+        );
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{flag}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{flag}: {r:?}");

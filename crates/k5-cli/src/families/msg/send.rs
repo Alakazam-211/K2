@@ -359,7 +359,7 @@ pub fn parse(words: &[&str]) -> Parsed {
     }
     if silent || wake {
         return match super::tray::parse(words, wake) {
-            super::tray::Parsed::Form(f) => Parsed::Tray(f),
+            super::tray::Parsed::Form(f) => Parsed::Tray(*f),
             super::tray::Parsed::Stop(text, exit) => Parsed::Stop(text, exit),
             super::tray::Parsed::Shell => Parsed::Shell,
         };

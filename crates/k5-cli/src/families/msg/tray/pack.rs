@@ -37,21 +37,21 @@ pub fn names(paths: &[String]) -> Vec<String> {
 }
 
 /// Packs `paths` into a temp archive (`mktemp`, as the shell does): its
-/// path, or the shell's line and `Err`.
-pub fn bundle(paths: &[String]) -> Result<PathBuf, ()> {
+/// path, or the shell's line and `None`.
+pub fn bundle(paths: &[String]) -> Option<PathBuf> {
     let Some(out) = super::mktemp(&format!(
         "{}/k2-msg-inbox-bundle.XXXXXX.tar.gz",
         super::tmpdir()
     )) else {
         crate::out::stderr_line("Error: cannot create temp archive for multi-file inbox");
-        return Err(());
+        return None;
     };
     if write_archive(&out, paths).is_err() {
         let _ = std::fs::remove_file(&out);
         crate::out::stderr_line("Error: failed to pack multi-file inbox bundle");
-        return Err(());
+        return None;
     }
-    Ok(out)
+    Some(out)
 }
 
 fn write_archive(out: &Path, paths: &[String]) -> std::io::Result<()> {
@@ -186,7 +186,9 @@ fn entry(w: &mut impl Write, path: &Path, name: &str) -> std::io::Result<()> {
         let mut f = std::fs::File::open(path)?;
         let copied = std::io::copy(&mut f, w)?;
         if copied != size {
-            return Err(std::io::Error::other("the file changed while it was packed"));
+            return Err(std::io::Error::other(
+                "the file changed while it was packed",
+            ));
         }
         pad(w, size)?;
     }
@@ -202,8 +204,16 @@ pub fn base64(data: &[u8]) -> String {
         let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
         out.push(A[(n >> 18) as usize & 63] as char);
         out.push(A[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { A[n as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 1 {
+            A[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            A[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -227,10 +237,12 @@ mod tests {
 
     #[test]
     fn repeats_get_a_number_before_the_last_extension() {
-        let paths: Vec<String> = ["/a/r.md", "/b/r.md", "/c/r.md", "/a/x", "/b/x", "/c/.env", "/d/.env"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let paths: Vec<String> = [
+            "/a/r.md", "/b/r.md", "/c/r.md", "/a/x", "/b/x", "/c/.env", "/d/.env",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         assert_eq!(
             names(&paths),
             ["r.md", "r-2.md", "r-3.md", "x", "x-2", ".env", ".env-2"]

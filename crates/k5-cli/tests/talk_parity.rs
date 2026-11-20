@@ -105,13 +105,7 @@ fn talk_words_as_the_shell_reads_them() {
             1,
             0,
         ),
-        plain(
-            "no text",
-            &["ws"],
-            vec![],
-            1,
-            0,
-        ),
+        plain("no text", &["ws"], vec![], 1, 0),
         plain(
             "no token for another server",
             &["ws@box.example", "hi"],
@@ -227,7 +221,13 @@ fn talk_reads_and_holds() {
         env(
             plain(
                 "another server, token from the environment",
-                &["ws@http://127.0.0.1:{port}/", "--answer", "2", "--session", SID],
+                &[
+                    "ws@http://127.0.0.1:{port}/",
+                    "--answer",
+                    "2",
+                    "--session",
+                    SID,
+                ],
                 vec![ok("{}"), ok(SCREEN)],
                 0,
                 2,
@@ -366,7 +366,10 @@ fn talk_help_never_acts() {
         ("-h after the text", &["ws", "hi", "-h"]),
         ("--help with --answer", &["ws", "--answer", "1", "--help"]),
         ("-h with --scout", &["ws", "--scout", "-h"]),
-        ("--help with --session", &["ws", "hi", "--session", SID, "--help"]),
+        (
+            "--help with --session",
+            &["ws", "hi", "--session", SID, "--help"],
+        ),
     ] {
         rig.check(&Case {
             compare: Compare::Shell,
@@ -396,11 +399,20 @@ fn masked(rig: &Rig, c: &Case) {
     };
     rig.prepare(Side::Bash, c);
     let b = rig.run(true, c);
-    assert_eq!(rig.stub_of(Side::Bash).left(), 0, "{name}: bash left answers: {b:?}");
+    assert_eq!(
+        rig.stub_of(Side::Bash).left(),
+        0,
+        "{name}: bash left answers: {b:?}"
+    );
     let bl: Vec<String> = rig
         .read(Side::Bash, false, name)
         .iter()
-        .map(|r| mask(&normalise(r, false, VERB, name), rig.stub_of(Side::Bash).port))
+        .map(|r| {
+            mask(
+                &normalise(r, false, VERB, name),
+                rig.stub_of(Side::Bash).port,
+            )
+        })
         .collect();
     assert_eq!(b.code, Some(c.code), "{name}: bash's exit: {b:?}");
     assert_eq!(bl.len(), c.requests, "{name}: bash's requests: {bl:#?}");
@@ -430,7 +442,16 @@ fn talk_delivers_through_msg() {
     for c in [
         plain(
             "read, classify, send",
-            &["ws", "hello", "--from", "me", "--command", "/x", "--wake-timeout", "9"],
+            &[
+                "ws",
+                "hello",
+                "--from",
+                "me",
+                "--command",
+                "/x",
+                "--wake-timeout",
+                "9",
+            ],
             vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
             0,
             4,
@@ -457,7 +478,13 @@ fn talk_delivers_through_msg() {
         stdin(
             plain(
                 "another server: the send goes there too",
-                &["ws@http://127.0.0.1:{port}", "hi", "--from", "me", "--token-stdin"],
+                &[
+                    "ws@http://127.0.0.1:{port}",
+                    "hi",
+                    "--from",
+                    "me",
+                    "--token-stdin",
+                ],
                 vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
                 0,
                 4,
@@ -489,8 +516,7 @@ fn talk_value_flag_last_is_the_d6_line() {
         "--answers",
         "--wake-timeout",
     ] {
-        let args: &'static [&'static str] =
-            Box::leak(vec!["ws", "hi", flag].into_boxed_slice());
+        let args: &'static [&'static str] = Box::leak(vec!["ws", "hi", flag].into_boxed_slice());
         let c = plain(leak(format!("{flag} last")), args, vec![], 1, 0);
         let name = c.name;
         rig.prepare(Side::Bash, &c);
@@ -502,7 +528,10 @@ fn talk_value_flag_last_is_the_d6_line() {
             b.stderr.ends_with(": $2: unbound variable\n"),
             "{name}: bash's stderr: {b:?}"
         );
-        assert!(rig.read(Side::Bash, false, name).is_empty(), "{name}: bash sent");
+        assert!(
+            rig.read(Side::Bash, false, name).is_empty(),
+            "{name}: bash sent"
+        );
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");

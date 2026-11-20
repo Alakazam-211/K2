@@ -125,7 +125,10 @@ pub fn person_refusal() -> String {
 pub fn abs_of(path: &str, pwd: &str) -> String {
     let trimmed = path.trim_end_matches('/');
     let (dir, base) = if trimmed.is_empty() {
-        (if path.is_empty() { "." } else { "/" }, if path.is_empty() { "" } else { "/" })
+        (
+            if path.is_empty() { "." } else { "/" },
+            if path.is_empty() { "" } else { "/" },
+        )
     } else {
         match trimmed.rsplit_once('/') {
             Some((d, b)) => {
@@ -164,7 +167,12 @@ pub fn abs_of(path: &str, pwd: &str) -> String {
 fn pwd() -> String {
     let here = std::env::current_dir().unwrap_or_default();
     match std::env::var("PWD") {
-        Ok(p) if p.starts_with('/') && Path::new(&p).canonicalize().ok() == here.canonicalize().ok() => p,
+        Ok(p)
+            if p.starts_with('/')
+                && Path::new(&p).canonicalize().ok() == here.canonicalize().ok() =>
+        {
+            p
+        }
         _ => here.to_string_lossy().into_owned(),
     }
 }
@@ -184,7 +192,9 @@ pub fn run(client: &mut Client, a: Ask) -> Exit {
         as_json: a.json,
     };
     let exit = verb(&mut cp, &a);
-    let Cp { client, closing, .. } = cp;
+    let Cp {
+        client, closing, ..
+    } = cp;
     closing.flush(client, exit);
     exit
 }
@@ -204,7 +214,11 @@ fn verb(cp: &mut Cp<'_>, a: &Ask) -> Exit {
     match a.sub.as_str() {
         "export" => {
             if a.ws.is_empty() {
-                return usage(concat!("usage: ", cli_name!(), " thread export <ws> [--since-days N]"));
+                return usage(concat!(
+                    "usage: ",
+                    cli_name!(),
+                    " thread export <ws> [--since-days N]"
+                ));
             }
             if let Some(e) = guard(cp) {
                 return e;
@@ -212,7 +226,10 @@ fn verb(cp: &mut Cp<'_>, a: &Ask) -> Exit {
             let mut pairs = vec![("ws", str_value(&a.ws))];
             if !a.since.is_empty() {
                 let n = a.since.trim_start_matches('0');
-                pairs.push(("sinceDays", Value::Int(if n.is_empty() { "0" } else { n }.into())));
+                pairs.push((
+                    "sinceDays",
+                    Value::Int(if n.is_empty() { "0" } else { n }.into()),
+                ));
             }
             match cp.call(true, EXPORT, &dumps(&object(pairs)), true) {
                 Ok(body) if a.json => print_body(&body),
@@ -222,13 +239,20 @@ fn verb(cp: &mut Cp<'_>, a: &Ask) -> Exit {
         }
         "import" => {
             if a.path.is_empty() || a.to.is_empty() {
-                return usage(concat!("usage: ", cli_name!(), " thread import <file> --to <ws>"));
+                return usage(concat!(
+                    "usage: ",
+                    cli_name!(),
+                    " thread import <file> --to <ws>"
+                ));
             }
             if let Some(e) = guard(cp) {
                 return e;
             }
             let abs = abs_of(&a.path, &pwd());
-            let body = dumps(&object(vec![("path", str_value(&abs)), ("to", str_value(&a.to))]));
+            let body = dumps(&object(vec![
+                ("path", str_value(&abs)),
+                ("to", str_value(&a.to)),
+            ]));
             match cp.call(true, IMPORT, &body, true) {
                 Ok(body) if a.json => print_body(&body),
                 Ok(body) => imported(&body).print(),
@@ -288,7 +312,10 @@ pub fn imported(body: &[u8]) -> Shown {
         let r = or_empty(py_get(&v, "report", 4)?, Value::Object(Vec::new()));
         let ws = s_of(py_get(&v, "workspace", 5)?);
         let docs = s_of(py_get(&r, "docsImported", 5)?);
-        let convs = py_len(&or_empty(py_get(&r, "conversations", 6)?, Value::Array(Vec::new())), 6)?;
+        let convs = py_len(
+            &or_empty(py_get(&r, "conversations", 6)?, Value::Array(Vec::new())),
+            6,
+        )?;
         let skipped = s_of(py_get(&r, "docsSkipped", 6)?);
         let pending = py_get(&r, "pending", 6)?.is_some_and(py::truthy);
         Ok(format!(

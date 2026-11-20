@@ -46,24 +46,50 @@ fn the_lines_are_the_shells() {
     // The judging notes, line by line.
     let notes = judge("$target").replace(&format!("'{CLI_NAME} "), "'k2 ");
     for line in notes.lines().skip(1) {
-        assert!(src.contains(&format!("\n{line}\n")), "not in the shell: {line}");
+        assert!(
+            src.contains(&format!("\n{line}\n")),
+            "not in the shell: {line}"
+        );
     }
     // The texts built here say the same, with the brand's name.
     let k = |s: &str| s.replace("k2 ", &format!("{CLI_NAME} "));
     assert!(usage().contains(&k("Run 'k2 talk --help' for the full BETA protocol.\n")));
-    assert_eq!(unknown_flag("--x"), k("Error: unknown flag '--x' (try 'k2 talk --help')"));
-    assert_eq!(BOTH_TOKENS, k("k2 talk: --token-stdin or --token, not both"));
-    assert_eq!(NO_STDIN_TOKEN, k("k2 talk: --token-stdin: no token on stdin"));
+    assert_eq!(
+        unknown_flag("--x"),
+        k("Error: unknown flag '--x' (try 'k2 talk --help')")
+    );
+    assert_eq!(
+        BOTH_TOKENS,
+        k("k2 talk: --token-stdin or --token, not both")
+    );
+    assert_eq!(
+        NO_STDIN_TOKEN,
+        k("k2 talk: --token-stdin: no token on stdin")
+    );
 }
 
 #[test]
 fn the_words_are_read_as_cmd_talk_reads_them() {
-    let Parsed::Ask(a) = parse(&["", "ws", "one", "two", "--lines", "9", "--no-wake", "--peek"])
-    else {
+    let Parsed::Ask(a) = parse(&[
+        "",
+        "ws",
+        "one",
+        "two",
+        "--lines",
+        "9",
+        "--no-wake",
+        "--peek",
+    ]) else {
         panic!("not an ask");
     };
     assert_eq!(
-        (a.target.as_str(), a.text.as_str(), a.lines.as_str(), a.wake, a.read_only),
+        (
+            a.target.as_str(),
+            a.text.as_str(),
+            a.lines.as_str(),
+            a.wake,
+            a.read_only
+        ),
         ("ws", "two", "9", false, true)
     );
     assert_eq!(
@@ -74,11 +100,17 @@ fn the_words_are_read_as_cmd_talk_reads_them() {
         parse(&["ws", "--lines"]),
         Parsed::Stop(needs_value("--lines"), Exit::Usage)
     );
-    let Parsed::Ask(a) = parse(&["--answers", "1,2", "--respond", "y", "--token-stdin", "x"]) else {
+    let Parsed::Ask(a) = parse(&["--answers", "1,2", "--respond", "y", "--token-stdin", "x"])
+    else {
         panic!("not an ask");
     };
     assert_eq!(
-        (a.answers.as_str(), a.respond.as_str(), a.token_stdin, a.target.as_str()),
+        (
+            a.answers.as_str(),
+            a.respond.as_str(),
+            a.token_stdin,
+            a.target.as_str()
+        ),
         ("1,2", "y", true, "x")
     );
 }
@@ -104,12 +136,15 @@ fn the_tuning_takes_what_sleep_and_test_take() {
 
 #[test]
 fn the_screen_readers_do_what_the_pythons_do() {
-    assert_eq!(read_raw(br#"{"lines":["a","b","",""]}"#), "a\nb");
-    assert_eq!(read_raw(br#"{"lines":"ab"}"#), "a\nb");
-    assert_eq!(read_raw(br#"{"lines":["a",1]}"#), "");
-    assert_eq!(read_raw(b"[1]"), "");
-    assert_eq!(read_raw(b"{}"), "");
-    assert_eq!(terminal_lines(br#"{"lines":["a",null,true]}"#).unwrap(), "a\nNone\nTrue\n");
+    assert_eq!(screen::read_raw(br#"{"lines":["a","b","",""]}"#), "a\nb");
+    assert_eq!(screen::read_raw(br#"{"lines":"ab"}"#), "a\nb");
+    assert_eq!(screen::read_raw(br#"{"lines":["a",1]}"#), "");
+    assert_eq!(screen::read_raw(b"[1]"), "");
+    assert_eq!(screen::read_raw(b"{}"), "");
+    assert_eq!(
+        terminal_lines(br#"{"lines":["a",null,true]}"#).unwrap(),
+        "a\nNone\nTrue\n"
+    );
     assert_eq!(terminal_lines(br#"{"lines":3}"#), None);
     assert_eq!(terminal_lines(b"nope"), None);
     assert_eq!(classify(br#"{"is_hitl":1,"source":"x|y"}"#), "true|x|y");
@@ -131,7 +166,8 @@ fn the_screen_readers_do_what_the_pythons_do() {
 
 #[test]
 fn the_form_parsers_do_what_the_shell_does() {
-    let form = "top\r\n←  ☐ Colour  ☒ Size → ✔ Submit  →\nWhich?\n❯ 1. Red\n  2. Blue\n3) Green\nfooter";
+    let form =
+        "top\r\n←  ☐ Colour  ☒ Size → ✔ Submit  →\nWhich?\n❯ 1. Red\n  2. Blue\n3) Green\nfooter";
     assert_eq!(tabbar(form), vec!["Colour".to_string(), "Size".into()]);
     assert_eq!(
         trim(form),
@@ -139,7 +175,10 @@ fn the_form_parsers_do_what_the_shell_does() {
     );
     assert_eq!(trim("a\r\nb\n\n"), "a\nb");
     assert_eq!(tabbar("no bar"), Vec::<String>::new());
-    assert_eq!(total("x\nquestion  2 OF 12 and Question 3 of 4", false), "12");
+    assert_eq!(
+        total("x\nquestion  2 OF 12 and Question 3 of 4", false),
+        "12"
+    );
     assert_eq!(total("Question 2 of", false), "");
     assert_eq!(
         option_lines(" ❯ 1. Red\n  2. Blue\n3) Green\n4.x", true),
@@ -150,7 +189,7 @@ fn the_form_parsers_do_what_the_shell_does() {
         option_lines(" ❯ 1. Red\n  2. Blue\n3) Green", false),
         "   ❯ 1. Red\n"
     );
-    assert_eq!(answers("1, 2,,3,\n4", false), vec!["1", "2", "3"]);
-    assert_eq!(answers(",", false), Vec::<String>::new());
+    assert_eq!(screen::answers("1, 2,,3,\n4", false), vec!["1", "2", "3"]);
+    assert_eq!(screen::answers(",", false), Vec::<String>::new());
     assert_eq!(splitlines("a\rb\r\nc\u{2028}d\n"), vec!["a", "b", "c", "d"]);
 }

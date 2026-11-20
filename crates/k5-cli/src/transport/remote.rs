@@ -182,7 +182,9 @@ fn py_strip(s: &str) -> &str {
 fn dict(pairs: &[(json::Text, Value)]) -> Vec<(String, Value)> {
     let mut out: Vec<(String, Value)> = Vec::new();
     for (k, v) in pairs {
-        let k = k.as_str().map_or_else(|| py::str_of(&Value::Str(k.clone())), str::to_string);
+        let k = k
+            .as_str()
+            .map_or_else(|| py::str_of(&Value::Str(k.clone())), str::to_string);
         match out.iter_mut().find(|(have, _)| *have == k) {
             Some(slot) => slot.1 = v.clone(),
             None => out.push((k, v.clone())),
@@ -226,7 +228,9 @@ pub fn lookup(want: &str, homes: &[PathBuf]) -> Option<Found> {
             continue;
         };
         for entry in entries {
-            let Value::Object(pairs) = entry else { continue };
+            let Value::Object(pairs) = entry else {
+                continue;
+            };
             let d = dict(&pairs);
             let get = |key: &str| d.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
             // `entry.get(x) or ""`: a falsy value is "".
@@ -271,12 +275,18 @@ pub const SERVICES: [&str; 2] = ["dev.k2.connect.host-token", "com.k2so.connect.
 /// (`$(…)`). The token comes back on the child's stdout, never on argv.
 pub fn keychain(host_id: &str) -> Option<String> {
     for svc in SERVICES {
-        if let Some(t) = run_quiet("security", &["find-generic-password", "-s", svc, "-a", host_id, "-w"]) {
+        if let Some(t) = run_quiet(
+            "security",
+            &["find-generic-password", "-s", svc, "-a", host_id, "-w"],
+        ) {
             return Some(t);
         }
     }
     for svc in SERVICES {
-        if let Some(t) = run_quiet("secret-tool", &["lookup", "service", svc, "account", host_id]) {
+        if let Some(t) = run_quiet(
+            "secret-tool",
+            &["lookup", "service", svc, "account", host_id],
+        ) {
             return Some(t);
         }
     }
@@ -374,7 +384,10 @@ mod tests {
             r#"[1, {"hostname": "a.example", "id": ""}, {"hostname": "", "label": "Box", "id": 42}]"#,
         )
         .unwrap();
-        assert_eq!(lookup("box", &[d.clone()]), Some(Found::HostId("42".into())));
+        assert_eq!(
+            lookup("box", &[d.clone()]),
+            Some(Found::HostId("42".into()))
+        );
         // A hostname that is not a string stops the Python: no answer.
         std::fs::write(
             d.join("connect-hosts.json"),
@@ -392,7 +405,10 @@ mod tests {
         assert_eq!(homes(&home, Some(d.clone())), vec![home.clone()]);
         let old = old_home(&d);
         std::fs::create_dir_all(&old).unwrap();
-        assert_eq!(homes(&home, Some(d.clone())), vec![home.clone(), old.clone()]);
+        assert_eq!(
+            homes(&home, Some(d.clone())),
+            vec![home.clone(), old.clone()]
+        );
         assert_eq!(homes(&old, Some(d.clone())), vec![old.clone()]);
         std::fs::remove_dir_all(&d).unwrap();
     }

@@ -92,7 +92,7 @@ pub struct Form {
 /// What the words come to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parsed {
-    Form(Form),
+    Form(Box<Form>),
     /// Stderr and the exit, nothing sent.
     Stop(String, Exit),
     /// The shell answers it.
@@ -209,7 +209,7 @@ pub fn parse(words: &[&str], wake: bool) -> Parsed {
     if file_paths(&f).iter().any(|p| tilde_user(p)) {
         return Parsed::Shell;
     }
-    Parsed::Form(f)
+    Parsed::Form(Box::new(f))
 }
 
 /// `~name…`: Python looks the name's home up.
@@ -240,9 +240,11 @@ pub fn file_paths(f: &Form) -> Vec<String> {
     let path_like = p0.starts_with("./")
         || p0.starts_with('/')
         || (!home.is_empty() && p0.starts_with(&format!("{home}/")))
-        || [".md", ".txt", ".pdf", ".png", ".jpg", ".zip", ".json", ".csv"]
-            .iter()
-            .any(|e| p0.ends_with(e));
+        || [
+            ".md", ".txt", ".pdf", ".png", ".jpg", ".zip", ".json", ".csv",
+        ]
+        .iter()
+        .any(|e| p0.ends_with(e));
     if path_like {
         vec![p0.clone()]
     } else {
@@ -453,22 +455,27 @@ fn package(
         }
         abs.push(a);
     }
-    let mut need_upload = !local(client);
+    let need_upload = !local(client);
     let target_q = quote(&f.target);
     if abs.len() > 1 {
         if !need_upload {
             let list = Value::Array(abs.iter().map(|p| s(p)).collect());
             let lead = format!("workspace={target_q}&paths={}", quote(&dumps(&list)));
             // `response=$(…) || true`.
-            let response = post(client, closing, key, DELIVER, &params(f, &lead, wake_flag, key))
-                .unwrap_or_default();
-            if not_readable(&response) {
-                need_upload = true;
-            } else {
+            let response = post(
+                client,
+                closing,
+                key,
+                DELIVER,
+                &params(f, &lead, wake_flag, key),
+            )
+            .unwrap_or_default();
+            // An answer that the daemon can't read the paths: the upload.
+            if !not_readable(&response) {
                 return Ok(map_response(&response, wake_flag == "true"));
             }
         }
-        let bundle = pack::bundle(&abs).map_err(|()| Exit::Error)?;
+        let bundle = pack::bundle(&abs).ok_or(Exit::Error)?;
         let staged = match stage(client, &f.target, &bundle) {
             Ok(p) => p,
             Err(rc) => {
@@ -484,7 +491,13 @@ fn package(
         };
         let _ = std::fs::remove_file(&bundle);
         let lead = format!("workspace={target_q}&path={}", quote(&staged));
-        let response = post(client, closing, key, DELIVER_BUNDLE, &params(f, &lead, wake_flag, key))?;
+        let response = post(
+            client,
+            closing,
+            key,
+            DELIVER_BUNDLE,
+            &params(f, &lead, wake_flag, key),
+        )?;
         let rc = map_response(&response, wake_flag == "true");
         if rc == Exit::Ok {
             delete_staged(client, &staged);
@@ -493,7 +506,13 @@ fn package(
     }
     let single = |client: &mut Client, closing: &mut Closing, path: &str| {
         let lead = format!("workspace={target_q}&path={}", quote(path));
-        post(client, closing, key, DELIVER, &params(f, &lead, wake_flag, key))
+        post(
+            client,
+            closing,
+            key,
+            DELIVER,
+            &params(f, &lead, wake_flag, key),
+        )
     };
     if !need_upload {
         let response = single(client, closing, &abs[0])?;
@@ -545,7 +564,11 @@ fn compose(
     closing.reset_note();
     let (_, host) = super::super::read::split_remote(&f.target);
     if !host.is_empty() {
-        p.push_str(&format!("&wake={}&mode={}", quote(wake_flag), quote(&f.mode)));
+        p.push_str(&format!(
+            "&wake={}&mode={}",
+            quote(wake_flag),
+            quote(&f.mode)
+        ));
         let response = post_held(client, closing, key, COMPOSE, &p)?;
         return Ok(map_response(&response, wake_flag == "true"));
     }
@@ -563,20 +586,33 @@ fn compose(
                 obj(vec![("code", s(&code)), ("hint", s(&hint))]),
             )]));
             out::stderr_line(&line);
-            return Ok(if matches!(code.as_str(), "not_connected" | "gated" | "forbidden") {
-                Exit::Refused
-            } else {
-                Exit::Error
-            });
+            return Ok(
+                if matches!(code.as_str(), "not_connected" | "gated" | "forbidden") {
+                    Exit::Refused
+                } else {
+                    Exit::Error
+                },
+            );
         }
-        Mapped::Ok(id, title) => (id, if title.is_empty() { f.title.clone() } else { title }),
+        Mapped::Ok(id, title) => (
+            id,
+            if title.is_empty() {
+                f.title.clone()
+            } else {
+                title
+            },
+        ),
         Mapped::Raise(tb) => {
             let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
             return echo(&response).map(|()| Exit::Ok);
         }
         Mapped::ParseFail => return echo(&response).map(|()| Exit::Ok),
     };
-    let from = if f.from.is_empty() { "external" } else { f.from.as_str() };
+    let from = if f.from.is_empty() {
+        "external"
+    } else {
+        f.from.as_str()
+    };
     let pointer = format!(
         concat!("[inbox:{}] {}\nOpen: ", cli_name!(), " inbox read {}"),
         id, title, id
@@ -750,7 +786,10 @@ pub fn mapped(response: &[u8]) -> Mapped {
 /// its traceback where it raises.
 pub fn merge(pkg: &[u8], wake: &[u8]) -> Result<(String, Option<String>), String> {
     let pkg = json::parse(&String::from_utf8_lossy(pkg)).map_err(|_| {
-        traceback(&[(3, "<module>")], "json.decoder.JSONDecodeError: Expecting value")
+        traceback(
+            &[(3, "<module>")],
+            "json.decoder.JSONDecodeError: Expecting value",
+        )
     })?;
     let Value::Object(mut pkg) = pkg else {
         return Err(traceback(
@@ -796,7 +835,10 @@ pub fn merge(pkg: &[u8], wake: &[u8]) -> Result<(String, Option<String>), String
         ("success", Value::Bool(success)),
         ("reason", g("reason")),
         ("hint", g("hint")),
-        ("targetSessionId", or("target_session_id", "targetSessionId")),
+        (
+            "targetSessionId",
+            or("target_session_id", "targetSessionId"),
+        ),
         ("woke", g("woke")),
         ("wakeMs", or("wake_ms", "wakeMs")),
         ("attempts", g("attempts")),
@@ -1133,10 +1175,11 @@ fn uploaded_path(resp: &[u8]) -> Option<String> {
 fn upload(client: &mut Client, local: &Path, dir: &str, filename: &str) -> Result<String, Exit> {
     let data = std::fs::read(local).unwrap_or_default();
     let size = data.len() as u64;
-    let body_file = mktemp(&format!("{}/k2-msg-inbox-upload.XXXXXX", tmpdir())).ok_or_else(|| {
-        out::stderr_line("Error: cannot create temp file for upload body");
-        Exit::Error
-    })?;
+    let body_file =
+        mktemp(&format!("{}/k2-msg-inbox-upload.XXXXXX", tmpdir())).ok_or_else(|| {
+            out::stderr_line("Error: cannot create temp file for upload body");
+            Exit::Error
+        })?;
     let fail_auth = |resp: &[u8]| -> Option<Exit> {
         fs_auth_error(resp).then(|| {
             let _ = out::write_flushed(&mut std::io::stderr().lock(), teach_fs_auth().as_bytes());
@@ -1150,8 +1193,17 @@ fn upload(client: &mut Client, local: &Path, dir: &str, filename: &str) -> Resul
             ("base64", s(&pack::base64(&data))),
         ]));
         let _ = std::fs::write(&body_file, body.as_bytes());
-        let mt = if size > 0 { (60 + size / 500_000).min(600) } else { 60 };
-        let resp = own_post(client, UPLOAD_BINARY, body.as_bytes(), Duration::from_secs(mt));
+        let mt = if size > 0 {
+            (60 + size / 500_000).min(600)
+        } else {
+            60
+        };
+        let resp = own_post(
+            client,
+            UPLOAD_BINARY,
+            body.as_bytes(),
+            Duration::from_secs(mt),
+        );
         let _ = std::fs::remove_file(&body_file);
         if let Some(e) = fail_auth(&resp) {
             return Err(e);
@@ -1167,7 +1219,10 @@ fn upload(client: &mut Client, local: &Path, dir: &str, filename: &str) -> Resul
             };
             out::stderr_line(&format!(
                 "Error: upload-binary failed for {}: {shown}",
-                local.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+                local
+                    .file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
             ));
             Exit::Error
         });
@@ -1199,7 +1254,12 @@ fn upload(client: &mut Client, local: &Path, dir: &str, filename: &str) -> Resul
         }
         let body = dumps_compact(&obj(pairs));
         let _ = std::fs::write(&body_file, body.as_bytes());
-        let resp = own_post(client, UPLOAD_CHUNK, body.as_bytes(), Duration::from_secs(120));
+        let resp = own_post(
+            client,
+            UPLOAD_CHUNK,
+            body.as_bytes(),
+            Duration::from_secs(120),
+        );
         if let Some(e) = fail_auth(&resp) {
             let _ = std::fs::remove_file(&body_file);
             return Err(e);
@@ -1283,9 +1343,13 @@ mod tests {
     #[test]
     fn the_lines_are_the_shells() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/msg-inbox-staging.sh");
-        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let src =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         for line in shell(teach_fs_auth()).lines() {
-            assert!(src.contains(&format!("\n{line}\n")), "not in the shell: {line}");
+            assert!(
+                src.contains(&format!("\n{line}\n")),
+                "not in the shell: {line}"
+            );
         }
         for line in shell(&wire_form("${target}")).lines() {
             let echoed = line.replace('"', "\\\"");
@@ -1303,20 +1367,27 @@ mod tests {
         assert_eq!(abspath("~", Some("/h"), cwd), "/h");
         assert_eq!(abspath("//srv//x/..", None, cwd), "//srv");
         assert_eq!(abspath("/../..", None, cwd), "/");
-        assert_eq!(merge_brief("B", &["a".into()], &["a".into(), "x".into(), "y".into()]), "B x y");
+        assert_eq!(
+            merge_brief("B", &["a".into()], &["a".into(), "x".into(), "y".into()]),
+            "B x y"
+        );
         assert_eq!(merge_brief("", &["a".into()], &["a".into()]), "");
     }
 
     #[test]
     fn the_readers_do_what_the_pythons_do() {
-        assert!(not_readable(br#"{"error":{"hint":"Source path is NOT here"}}"#));
+        assert!(not_readable(
+            br#"{"error":{"hint":"Source path is NOT here"}}"#
+        ));
         assert!(not_readable(b"not a readable file, sorry"));
         assert!(!not_readable(br#"[1]"#));
         assert!(fs_auth_error(br#"{"error":{"code":"gated"}}"#));
         assert!(fs_auth_error(br#"{"status":403}"#));
         assert!(fs_auth_error(b"HTTP 403"));
         assert!(!fs_auth_error(b""));
-        assert!(!fs_auth_error(br#"{"error":{"code":"bad_request","hint":"no"}}"#));
+        assert!(!fs_auth_error(
+            br#"{"error":{"code":"bad_request","hint":"no"}}"#
+        ));
         assert_eq!(
             mapped(br#"{"ok":true,"id":"c1","title":"a\tb"}"#),
             Mapped::Ok("c1".into(), "a\tb".into())
@@ -1325,9 +1396,14 @@ mod tests {
             mapped(br#"{"error":{"code":"gated"}}"#),
             Mapped::Err("gated".into(), "gated".into())
         );
-        assert_eq!(mapped(br#"{"ok":false}"#), Mapped::Err("error".into(), "compose failed".into()));
+        assert_eq!(
+            mapped(br#"{"ok":false}"#),
+            Mapped::Err("error".into(), "compose failed".into())
+        );
         assert_eq!(mapped(b"nope"), Mapped::ParseFail);
-        assert!(matches!(mapped(br#"{"id":5}"#), Mapped::Raise(t) if t.ends_with("(not \"int\") to str\n")));
+        assert!(
+            matches!(mapped(br#"{"id":5}"#), Mapped::Raise(t) if t.ends_with("(not \"int\") to str\n"))
+        );
         let (line, note) = merge(br#"{"wake":0,"id":"c"}"#, b"oops").unwrap();
         assert_eq!(
             line,
@@ -1340,9 +1416,15 @@ mod tests {
         assert!(merge(br#"{"id":"c"}"#, b"[1]").is_err());
         let (err, shown) = reader(br#"{"error":"boom"}"#, false);
         assert!(err);
-        assert_eq!(shown.stderr, "{\"error\":{\"code\":\"error\",\"hint\":\"boom\"}}\n");
+        assert_eq!(
+            shown.stderr,
+            "{\"error\":{\"code\":\"error\",\"hint\":\"boom\"}}\n"
+        );
         let (err, shown) = reader(br#"{"ok":true,"wake":{"success":false}}"#, true);
         assert!(!err);
-        assert_eq!(shown.stderr, "note: package landed; wake notify failed (wake_failed)\n");
+        assert_eq!(
+            shown.stderr,
+            "note: package landed; wake notify failed (wake_failed)\n"
+        );
     }
 }

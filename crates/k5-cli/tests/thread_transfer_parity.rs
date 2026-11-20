@@ -58,10 +58,28 @@ fn thread_transfer_as_the_shell_does_it() {
     let big = leak(format!(r#"{{"imports":[{rows}]}}"#));
     let v = vec![
         // covers: thread
-        plain("export", &["export", "ws", "--since-days", "007"], vec![ok(EXPORTED)], 0, 1),
-        plain("export --json", &["export", "ws", "--json"], vec![ok(EXPORTED)], 0, 1),
+        plain(
+            "export",
+            &["export", "ws", "--since-days", "007"],
+            vec![ok(EXPORTED)],
+            0,
+            1,
+        ),
+        plain(
+            "export --json",
+            &["export", "ws", "--json"],
+            vec![ok(EXPORTED)],
+            0,
+            1,
+        ),
         plain("export, no workspace", &["export"], vec![], 2, 0),
-        plain("export, --since-days last", &["export", "ws", "--since-days"], vec![], 1, 0),
+        plain(
+            "export, --since-days last",
+            &["export", "ws", "--since-days"],
+            vec![],
+            1,
+            0,
+        ),
         plain("an unknown flag", &["export", "ws", "--zap"], vec![], 2, 0),
         plain(
             "export refused",
@@ -98,23 +116,45 @@ fn thread_transfer_as_the_shell_does_it() {
             0,
             1,
         ),
-        plain("import, no --to", &["import", "ws-threads.tar"], vec![], 2, 0),
+        plain(
+            "import, no --to",
+            &["import", "ws-threads.tar"],
+            vec![],
+            2,
+            0,
+        ),
         plain(
             "imports",
             &["imports", "ws"],
-            vec![ok(r#"{"imports":[{"localConversationId":"c1","role":"reader","docCount":3,"sourceHandle":"ada","sourceHost":"box.example"},{"localConversationId":"c2","role":"reader","docCount":12345,"sourceHandle":"bob","sourceHost":"h","name":"notes"}]}"#)],
+            vec![ok(
+                r#"{"imports":[{"localConversationId":"c1","role":"reader","docCount":3,"sourceHandle":"ada","sourceHost":"box.example"},{"localConversationId":"c2","role":"reader","docCount":12345,"sourceHandle":"bob","sourceHost":"h","name":"notes"}]}"#,
+            )],
             0,
             1,
         ),
-        plain("no imports", &["imports", "ws"], vec![ok(r#"{"imports":[]}"#)], 0, 1),
+        plain(
+            "no imports",
+            &["imports", "ws"],
+            vec![ok(r#"{"imports":[]}"#)],
+            0,
+            1,
+        ),
         traced(plain(
             "imports, a row without a field",
             &["imports", "ws"],
-            vec![ok(r#"{"imports":[{"localConversationId":"c1","role":"r","docCount":1,"sourceHandle":"a","sourceHost":"h"},{"role":"r"}]}"#)],
+            vec![ok(
+                r#"{"imports":[{"localConversationId":"c1","role":"r","docCount":1,"sourceHandle":"a","sourceHost":"h"},{"role":"r"}]}"#,
+            )],
             1,
             1,
         )),
-        plain("imports, a large table", &["imports", "ws"], vec![ok(big)], 0, 1),
+        plain(
+            "imports, a large table",
+            &["imports", "ws"],
+            vec![ok(big)],
+            0,
+            1,
+        ),
         plain("imports, no workspace", &["imports"], vec![], 2, 0),
     ];
     for c in &v {
@@ -127,7 +167,10 @@ fn thread_transfer_is_for_people() {
     let rig = Rig::new(VERB, "guard");
     for (name, args) in [
         ("export in a session", &["export", "ws"][..]),
-        ("import in a session", &["import", "ws-threads.tar", "--to", "ws2"]),
+        (
+            "import in a session",
+            &["import", "ws-threads.tar", "--to", "ws2"],
+        ),
     ] {
         rig.check(&Case {
             env: with_passport(&[("K2_HOOK_SOCK", "{sock}")]),

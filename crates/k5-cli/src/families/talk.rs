@@ -134,7 +134,11 @@ pub fn no_text() -> String {
 /// `-*)`.
 pub fn unknown_flag(word: &str) -> String {
     format!(
-        concat!("Error: unknown flag '{}' (try '", cli_name!(), " talk --help')"),
+        concat!(
+            "Error: unknown flag '{}' (try '",
+            cli_name!(),
+            " talk --help')"
+        ),
         word
     )
 }
@@ -142,7 +146,11 @@ pub fn unknown_flag(word: &str) -> String {
 /// A value flag as the last word (K2's D6, `edge-usage-exit-2`).
 pub fn needs_value(flag: &str) -> String {
     format!(
-        concat!("Error: {} needs a value (try '", cli_name!(), " talk --help')"),
+        concat!(
+            "Error: {} needs a value (try '",
+            cli_name!(),
+            " talk --help')"
+        ),
         flag
     )
 }
@@ -150,7 +158,8 @@ pub fn needs_value(flag: &str) -> String {
 pub const BOTH_TOKENS: &str = concat!(cli_name!(), " talk: --token-stdin or --token, not both");
 pub const NO_STDIN_TOKEN: &str = concat!(cli_name!(), " talk: --token-stdin: no token on stdin");
 pub const ONE_OF: &str = "Error: pass only one of --answer / --respond";
-pub const NO_ANSWERS: &str = "Error: --answers needs a comma-list of answers (e.g. --answers 1,2,1)";
+pub const NO_ANSWERS: &str =
+    "Error: --answers needs a comma-list of answers (e.g. --answers 1,2,1)";
 
 /// What the words ask for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -176,7 +185,7 @@ pub struct Ask {
 /// What the words come to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parsed {
-    Ask(Ask),
+    Ask(Box<Ask>),
     /// One line on stderr and the exit, nothing sent.
     Stop(String, Exit),
 }
@@ -227,7 +236,7 @@ pub fn parse(words: &[&str]) -> Parsed {
         }
         i += 1;
     }
-    Parsed::Ask(a)
+    Parsed::Ask(Box::new(a))
 }
 
 /// An `--agent` the shell's Python reads as written: no backslash, no
@@ -323,7 +332,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             out::stderr_line(&line);
             return Some(exit);
         }
-        Parsed::Ask(a) => a,
+        Parsed::Ask(a) => *a,
     };
     // `read`'s rule: no passport and a live cell socket is the shell's
     // (it tries the socket with an empty Bearer). Not for another host:
@@ -607,16 +616,33 @@ fn write(client: &mut Client, closing: &mut Closing, q: &str) -> Result<(), Exit
 
 /// `resolve_write_session_id <target> <agent>`, in `$(…)`: the session's
 /// id, or its line on stderr and `None`.
-fn session(client: &mut Client, closing: &mut Closing, target: &str, agent: &str) -> Option<String> {
+fn session(
+    client: &mut Client,
+    closing: &mut Closing,
+    target: &str,
+    agent: &str,
+) -> Option<String> {
     if screen::is_uuid(target) {
         return Some(target.to_string());
     }
-    let r = tcp_get(client, closing, RESOLVE, &format!("q={}", quote(target)), false);
+    let r = tcp_get(
+        client,
+        closing,
+        RESOLVE,
+        &format!("q={}", quote(target)),
+        false,
+    );
     let mut path = screen::resolved_path(&r.body);
     if path.is_empty() {
         path = target.to_string();
     }
-    let r = tcp_get(client, closing, SESSIONS, &format!("path={}", quote(&path)), false);
+    let r = tcp_get(
+        client,
+        closing,
+        SESSIONS,
+        &format!("path={}", quote(&path)),
+        false,
+    );
     let sid = screen::session_id(&r.body, agent);
     if sid.is_empty() {
         let agent_part = if agent.is_empty() {
@@ -792,7 +818,9 @@ fn scout(
             names.join(", ")
         ));
     } else {
-        err.push_str("   form: ? question(s) (tab bar unparsed); left focused on Q1, unmodified.\n");
+        err.push_str(
+            "   form: ? question(s) (tab bar unparsed); left focused on Q1, unmodified.\n",
+        );
     }
     for (n, cap) in captures.iter().enumerate() {
         let qname = names

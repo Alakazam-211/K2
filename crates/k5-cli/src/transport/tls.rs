@@ -48,13 +48,12 @@ pub type Stream = StreamOwned<ClientConnection, TcpStream>;
 /// The config for these roots: ring, TLS 1.2 and 1.3, ALPN `http/1.1`,
 /// no client certificate.
 pub fn config(roots: RootCertStore) -> Result<Arc<ClientConfig>, String> {
-    let mut cfg = ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|e| format!("TLS setup: {e}"))?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
+    let mut cfg =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("TLS setup: {e}"))?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(Arc::new(cfg))
 }
@@ -193,8 +192,7 @@ mod tests {
         let ca_key = KeyPair::generate().unwrap();
         let ca = ca_params.self_signed(&ca_key).unwrap();
         let leaf_params =
-            CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
-                .unwrap();
+            CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
         let leaf_key = KeyPair::generate().unwrap();
         let leaf = leaf_params.signed_by(&leaf_key, &ca, &ca_key).unwrap();
         Pki {
@@ -317,12 +315,8 @@ mod tests {
         let pki = pki();
         let (port, h) = server(&pki, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        let Err(f) = connect_with(
-            config(roots(&pki.ca)).unwrap(),
-            tcp,
-            "box.example",
-            limit(),
-        ) else {
+        let Err(f) = connect_with(config(roots(&pki.ca)).unwrap(), tcp, "box.example", limit())
+        else {
             panic!("a name the certificate doesn't hold was taken");
         };
         assert_eq!(f.curl_code(), PEER_FAILED_VERIFICATION, "{f:?}");

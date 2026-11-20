@@ -342,10 +342,14 @@ _desktop_body() {
 }
 
 cmd_desktop() {
+    # -h/--help anywhere prints the usage and sends nothing, even right
+    # after a flag that takes a value (0.46.17: `k2 desktop open --display
+    # --help` opened the desktop, with --help as the display).
+    if _wants_help "$@"; then _desktop_usage; return 0; fi
     local sub="${1:-status}"
     [ $# -gt 0 ] && shift
     case "$sub" in
-        help|--help|-h) _desktop_usage; return 0 ;;
+        help) _desktop_usage; return 0 ;;
         --json) sub=status; set -- --json "$@" ;;
     esac
     local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs desk="" size="" wait_for="" no_wait=0 ws="" release=0 pane="" check=0
@@ -385,7 +389,6 @@ cmd_desktop() {
             --consent|--consent=*|--active-window|--active-window=*)
                 echo "usage: there is no consent policy in this version (no Allow click at the screen); k2 desktop policy takes --hide-app" >&2
                 exit 2 ;;
-            -h|--help) _desktop_usage; return 0 ;;
             -*) echo "usage: unknown flag '$1' (k2 desktop --help)" >&2; exit 2 ;;
             *) args+=("$1"); shift ;;
         esac

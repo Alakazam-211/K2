@@ -57,25 +57,11 @@ use std::path::Path;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["connections"];
-/// The shell's but for [`VERBS`].
-pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// `list` (and `--json` and `--users`, which the shell reads as
-/// `list`), `add` and `remove`; every other action, and `connections`
-/// alone, is the shell's. One verb row each, so each can turn back alone.
-pub const VERBS: &[crate::route::Verb] = &[
-    crate::route::Verb {
-        words: &["list", "--json", "--users"],
-        owner: crate::route::Owner::Native,
-    },
-    crate::route::Verb {
-        words: &["add"],
-        owner: crate::route::Owner::Native,
-    },
-    crate::route::Verb {
-        words: &["remove"],
-        owner: crate::route::Owner::Native,
-    },
-];
+/// The binary's, the whole row: every action of `cmd_connections`, and
+/// `connections` alone.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// None: the row is native whole.
+pub const VERBS: &[crate::route::Verb] = &[];
 
 /// The route.
 pub const ENDPOINT: &str = "/cli/connections";

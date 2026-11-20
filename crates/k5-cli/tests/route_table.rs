@@ -329,7 +329,6 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
             continue;
         }
         match noun.words {
-            ["connections"] => connections_verbs_are_its_list(noun),
             ["connect"] => connect_verbs_are_its_arms(noun),
             ["feedback", "tickets"] => feedback_verbs_are_its_arms(noun),
             ["workspace"] => workspace_verbs_are_its_arms(noun),
@@ -426,44 +425,6 @@ fn connect_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         assert!(
             body.contains(&arm),
             "cmd_connect has no {word} arm calling cmd_connect_{word}"
-        );
-    }
-}
-
-/// `connections`' verb rows: the first is `list`, and `--json` and
-/// `--users`, which `cmd_connections` (`cli/src/usage.sh`) reads as `list`
-/// and them; each other is one word, an arm of its `case`.
-fn connections_verbs_are_its_list(noun: &k5_cli::route::Noun) {
-    let words: Vec<&[&str]> = noun.verbs.iter().map(|v| v.words).collect();
-    assert_eq!(words[0], &["list", "--json", "--users"][..]);
-    let sources = common::shell_sources();
-    let text = &sources
-        .iter()
-        .find(|(name, _)| name == "usage.sh")
-        .expect("cli/src/usage.sh")
-        .1;
-    let body = &text[text
-        .find("\ncmd_connections() {\n")
-        .expect("cmd_connections")..];
-    let body = &body[..body.find("\n}\n").expect("its end")];
-    for line in [
-        r#"    if [[ "${1:-}" == "--json" || "${1:-}" == "--users" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then"#,
-        r#"        set -- list "$@""#,
-        r#"    local action="${1:-list}""#,
-        "        list)",
-    ] {
-        assert!(
-            body.lines().any(|l| l == line),
-            "cmd_connections no longer has {line:?}"
-        );
-    }
-    for verb in &words[1..] {
-        assert_eq!(verb.len(), 1, "{verb:?}: one word per verb row");
-        let arm = format!("        {})", verb[0]);
-        assert!(
-            body.lines().any(|l| l == arm),
-            "cmd_connections has no {:?} arm",
-            verb[0]
         );
     }
 }

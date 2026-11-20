@@ -298,6 +298,16 @@ enum Kind {
     /// `_k2_curl`'s tries (a refused connect, a moved port); no status read,
     /// no 503 tries, no heal, no line. The answer gets `_permission_note`.
     QueryPost,
+    /// `_k2_curl` with a config the caller writes itself
+    /// (`cli/src/federation.sh`): see [`OwnCurl`]. Over TCP, the path as
+    /// it is (no `project=`), the caller's credential or none; for a POST
+    /// a JSON body. Only `_k2_curl`'s tries (a refused connect, a moved
+    /// port); no 503 tries, no heal, no line, and `_permission_note` only
+    /// when `note`.
+    Own {
+        post: bool,
+        note: bool,
+    },
 }
 
 impl Kind {
@@ -340,6 +350,7 @@ impl Kind {
                 | Kind::SetupGet
                 | Kind::SetupPost
                 | Kind::QueryPost
+                | Kind::Own { .. }
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -365,6 +376,7 @@ impl Kind {
                 | Kind::SetupGet
                 | Kind::SetupPost
                 | Kind::QueryPost
+                | Kind::Own { .. }
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -388,6 +400,7 @@ impl Kind {
                 | Kind::UpdateVersion
                 | Kind::SetupGet
                 | Kind::SetupPost
+                | Kind::Own { note: false, .. }
         )
     }
     /// `--connect-timeout`.
@@ -685,6 +698,25 @@ pub struct Client {
     /// The vault socket and the `X-K2-Tty` value of the call under way
     /// ([`Client::vault_sock`]).
     vault_sock: Option<(PathBuf, bool)>,
+    /// The credential and `--max-time` of the [`Kind::Own`] call being
+    /// made ([`Client::own_curl`]).
+    own: Option<(Option<String>, Duration)>,
+}
+
+/// How [`Client::own_curl`] sends: `_k2_curl` with the caller's config
+/// (`url`, `_k2_cfg_auth <credential>`, a `data-raw` body), `-s`, connect
+/// 5 s.
+#[derive(Debug, Clone, Copy)]
+pub struct OwnCurl<'a> {
+    /// `-X POST` with the body and `Content-Type: application/json`; else
+    /// a GET with no body.
+    pub post: bool,
+    /// The `Authorization: Bearer` line; `None` or an empty one: no line.
+    pub credential: Option<&'a str>,
+    /// `--max-time`.
+    pub max_time: Duration,
+    /// `_permission_note` runs on the answer.
+    pub note: bool,
 }
 
 impl Client {
@@ -715,6 +747,7 @@ impl Client {
             healed: false,
             refused: std::cell::Cell::new(0),
             vault_sock: None,
+            own: None,
         }
     }
 
@@ -969,6 +1002,25 @@ impl Client {
             Instant::now(),
         )
         .map_err(|f| f.error)
+    }
+
+    /// A `_k2_curl` of the caller's own ([`OwnCurl`], [`Kind::Own`]):
+    /// `endpoint` as it is, over TCP, its credential or none. The body
+    /// comes back whatever the status.
+    pub fn own_curl(
+        &mut self,
+        endpoint: &str,
+        how: OwnCurl<'_>,
+        body: &[u8],
+    ) -> Result<Response, Error> {
+        self.own = Some((how.credential.map(str::to_string), how.max_time));
+        let kind = Kind::Own {
+            post: how.post,
+            note: how.note,
+        };
+        let r = self.run(kind, Channel::Tcp, endpoint, &[], body, Instant::now());
+        self.own = None;
+        r.map_err(|f| f.error)
     }
 
     /// `cli_post <endpoint> <pairs>` ([`Kind::QueryPost`]): a POST with an
@@ -1360,6 +1412,7 @@ impl Client {
             Kind::Cards => CARDS_TIME,
             Kind::FeedbackOptin => FEEDBACK_MAX_TIME,
             Kind::UpdateVersion => UPDATE_MAX_TIME,
+            Kind::Own { .. } => self.own.as_ref().map_or(MAX_TIME, |o| o.1),
         }
     }
 
@@ -1496,6 +1549,10 @@ impl Client {
                         None
                     }
                     Kind::Probe | Kind::BearerForm => Some(self.passport().map(Passport::as_str)),
+                    Kind::Own { .. } => match self.own.as_ref().and_then(|o| o.0.as_deref()) {
+                        Some(t) if !t.is_empty() => Some(Some(t)),
+                        _ => None,
+                    },
                     // `$TOKEN` empty on purpose: no header.
                     _ if self.no_token && self.auth == Auth::None => None,
                     _ => Some(self.tcp_token()),
@@ -1647,10 +1704,16 @@ impl Client {
                 };
                 (Method::Get, path, None)
             }
-            Kind::SendJsonPost | Kind::ComputePost | Kind::SidecarPost | Kind::VaultSockPost => {
+            Kind::SendJsonPost
+            | Kind::ComputePost
+            | Kind::SidecarPost
+            | Kind::VaultSockPost
+            | Kind::Own { post: true, .. } => {
                 (Method::Post, endpoint.to_string(), json(&mut headers))
             }
-            Kind::VaultSockGet => (Method::Get, endpoint.to_string(), None),
+            Kind::VaultSockGet | Kind::Own { post: false, .. } => {
+                (Method::Get, endpoint.to_string(), None)
+            }
             Kind::Public | Kind::Probe | Kind::UpdateVersion => {
                 (Method::Get, endpoint.to_string(), None)
             }
@@ -2033,6 +2096,32 @@ mod tests {
                 false,
                 false,
                 true,
+            ),
+            (
+                Own {
+                    post: true,
+                    note: true,
+                },
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+            ),
+            (
+                Own {
+                    post: false,
+                    note: false,
+                },
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
             ),
             (
                 PassportProject,
@@ -2653,6 +2742,42 @@ mod tests {
             none.build(Request, Channel::Tcp, "/cli/x", &[], &[]),
             Err(Error::NoCredential { .. })
         ));
+    }
+
+    /// `_k2_curl` with the caller's config: its credential (none for an
+    /// empty one), the path as it is, a JSON body for a POST, its time.
+    #[test]
+    fn an_own_curl_sends_its_caller_s_credential() {
+        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
+        c.own = Some((Some("f.t".into()), Duration::from_secs(60)));
+        let post = Kind::Own {
+            post: true,
+            note: true,
+        };
+        let (_, r) = c
+            .build(post, Channel::Tcp, "/cli/federation/send", &[], b"{}")
+            .unwrap();
+        assert_eq!(
+            (r.method, r.target.as_str()),
+            (Method::Post, "/cli/federation/send")
+        );
+        assert_eq!(r.headers[0], ("Authorization".into(), "Bearer f.t".into()));
+        assert_eq!(
+            r.headers.last(),
+            Some(&("Content-Type".into(), "application/json".into()))
+        );
+        assert_eq!(c.max_time(post), Duration::from_secs(60));
+        for none in [None, Some(String::new())] {
+            c.own = Some((none, Duration::from_secs(30)));
+            let get = Kind::Own {
+                post: false,
+                note: false,
+            };
+            let (_, r) = c.build(get, Channel::Tcp, "/cli/x", &[], &[]).unwrap();
+            assert_eq!((r.method, r.target.as_str()), (Method::Get, "/cli/x"));
+            assert!(r.headers.iter().all(|(n, _)| n != "Authorization"));
+            assert!(r.body.is_none());
+        }
     }
 
     /// `X-K5-Owner-Source: disk` after the Via, only on an owner's call

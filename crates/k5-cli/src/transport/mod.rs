@@ -185,5 +185,5 @@ pub mod urllib;
 pub mod wire;
 
 pub use client::{
-    Auth, Call, Channel, Client, Error, Healer, NoAnswer, Passport, Response, SecretsDir,
+    Auth, Call, Channel, Client, Error, Healer, NoAnswer, OwnCurl, Passport, Response, SecretsDir,
 };

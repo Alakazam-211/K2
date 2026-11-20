@@ -19,6 +19,10 @@
 #      passphrase, pass, pw as a part of the name, any case); or such a
 #      variable in the arguments of a program (anything that is not a
 #      shell builtin or a function defined in cli/src).
+#   3. a value the person types is an argument of python3: a variable
+#      filled by a read of k2's own stdin (not a read from a here-string,
+#      a file, a pipe or a while loop) or by $(cat), or a variable or array
+#      built from one (the recovery words typed back are the model).
 # Comments, heredoc bodies and single-quoted code are not commands and are
 # not read for rule 2.
 #
@@ -44,6 +48,7 @@ EXCEPTIONS=(
     "clone.sh|fixed_password|0, 1 or empty: the --fixed-password flags, no password"
     "mail.sh|M_PASS_REF|where the password is kept (env:<VAR> or a file path), not the password; the password rides stdin"
     "permission.sh|K2_PW|the --why text or a workspace name, not a password"
+    "vault.sh|login|the owner login's username typed at the prompt, not a secret; the password typed with it rides stdin"
 )
 
 lint() { # lint <dir> [file|name|why ...]: one line per problem; exit 1 when any
@@ -224,6 +229,46 @@ def strip_quotes(word):
 def refs(word):
     return [m.group(1) for m in REF.finditer(word)]
 
+
+def typed_values(text, cmds, lines):
+    """Variables a person types: filled by a read of k2's own stdin (no
+    redirection on that line, not a while loop's read, not after a pipe),
+    or by $(cat); then any variable or array built from one."""
+    typed = set()
+    for line, words in cmds:
+        assigns, cmd, args = split_words(words)
+        src = lines[line - 1] if line - 1 < len(lines) else ""
+        if cmd == "read" and not re.search(r"<|\bwhile\b|\|\s*(\{\s*)?(IFS=\S*\s+)?read\b", src):
+            i = 0
+            while i < len(args):
+                a = args[i]
+                if a.startswith("-") and len(a) > 1:
+                    if a[-1] == "a" and i + 1 < len(args):
+                        typed.add(args[i + 1])
+                    i += 2 if a[-1] in "pdtnNua" else 1
+                    continue
+                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", a):
+                    typed.add(a)
+                i += 1
+        for a in assigns + (args if cmd in ("local", "declare", "typeset", "readonly") else []):
+            m = ASSIGN.match(a)
+            if m and re.match(r'^"?\$\(\s*cat\s*\)?"?$', m.group(3)):
+                typed.add(m.group(1))
+    grow = True
+    while grow:
+        grow = False
+        for line, words in cmds:
+            assigns, cmd, args = split_words(words)
+            for a in assigns + (args if cmd in ("local", "declare", "typeset", "readonly") else []):
+                m = ASSIGN.match(a)
+                if m and m.group(1) not in typed and "$(" not in m.group(3) and any(r in typed for r in refs(m.group(3))):
+                    typed.add(m.group(1)); grow = True
+        # Arrays: NAME=( ... ) and NAME+=( ... ) holding a typed value.
+        for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\+?=\(([^)]*)\)", text):
+            if m.group(1) not in typed and any(r in typed for r in refs(m.group(2))):
+                typed.add(m.group(1)); grow = True
+    return typed
+
 problems = []
 def flag(f, line, key, msg):
     if (f, key) in allowed:
@@ -241,6 +286,9 @@ for path in files:
     text = open(path, encoding="utf-8", errors="replace").read()
     FUNCS.update(re.findall(r"(?m)^[ \t]*(?:function[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)", text))
     parts.append((os.path.basename(path), text))
+# A function named after a program (prelude.sh's python3 shim on Windows)
+# still runs that program with the same argv.
+FUNCS -= {"python3", "python", "curl", "env", "sudo"}
 
 for f, text in parts:
     cls, dep = classify(text)
@@ -297,6 +345,23 @@ for f, text in parts:
             for r in refs(a):
                 if PW.search(r):
                     flag(f, line, r, "$%s, a password-like value, is in the argv of %s (send it on stdin)" % (r, bare))
+    # Rule 3: a value the person typed, as an argument of python3.
+    lines = text.split("\n")
+    cmds = commands(text, cls, dep)
+    starts = [text.count("\n", 0, m.start()) + 1 for m in re.finditer(r"(?m)^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{", text)]
+    bounds = list(zip([1] + starts, starts + [10 ** 9]))
+    for a, b in bounds:
+        fc = [(l, w) for l, w in cmds if a <= l < b]
+        body = "\n".join(lines[a - 1:min(b - 1, len(lines))])
+        typed = typed_values(body, fc, lines)
+        for line, words in fc:
+            assigns, cmd, args = split_words(words)
+            if cmd is None or strip_quotes(cmd) != "python3":
+                continue
+            for arg in args:
+                for r in refs(arg):
+                    if r in typed:
+                        flag(f, line, r, "$%s, a value typed on stdin, is in the argv of python3 (send it on stdin)" % r)
 for (f, name), n in sorted(allowed.items()):
     if n == 0:
         problems.append("%s: the exception for %s matches nothing any more (update EXCEPTIONS)" % (f, name))
@@ -367,6 +432,33 @@ EOF
 mk pw_export a.sh <<'EOF'
 f() { export DB_PASSWORD; }
 EOF
+mk typed_words a.sh <<'EOF'
+f() {
+    local words=() wd n
+    for n in 3 11 20; do
+        IFS= read -r wd || wd=""
+        words+=("$wd")
+    done
+    body="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[2:5]))' "$id" "${words[@]}")"
+}
+EOF
+mk typed_cat a.sh <<'EOF'
+f() {
+    local code
+    code="$(cat)"
+    python3 -c 'import sys; print(sys.argv[1])' "$code"
+}
+EOF
+mk good c.sh <<'EOF'
+h() {
+    local kind field1 line
+    { IFS= read -r kind; IFS= read -r field1; } <<<"$mapped"
+    python3 -c 'import sys; print(sys.argv[1])' "$field1"
+    while IFS= read -r line; do python3 -c 'import sys' "$line"; done <"$file"
+    IFS= read -r typed
+    printf '%s' "$typed" | python3 -c 'import sys; print(sys.stdin.read())'
+}
+EOF
 mk pw_nested a.sh <<'EOF'
 f() { out="$(curl -s -u "admin:${userPass}" https://example.test)"; }
 EOF
@@ -388,6 +480,8 @@ caught pw_value "a.sh:1: \$password, a password-like value, rides a child's envi
 caught pw_argv "a.sh:2: \$new_password, a password-like value, is in the argv of python3"
 caught pw_env_argv "a.sh:1: \$pw, a password-like value, rides env's argv as SECRET"
 caught pw_export "a.sh:1: DB_PASSWORD, a password-like name, rides the environment (export)"
+caught typed_words "a.sh:7: \$words, a value typed on stdin, is in the argv of python3"
+caught typed_cat "a.sh:4: \$code, a value typed on stdin, is in the argv of python3"
 caught pw_nested "a.sh:1: \$userPass, a password-like value, is in the argv of curl"
 # The good parts with no exception for b.sh's K2_PW: caught. An exception
 # that matches nothing: caught.
@@ -399,7 +493,7 @@ echo "self test: every broken fixture caught, the good one passes"
 # ── the real scan ─────────────────────────────────────────────────────
 DIR="${1:-$PROJECT_ROOT/cli/src}"
 if out="$(lint "$DIR" "${EXCEPTIONS[@]}")"; then
-    echo "secret_argv_env_lint: no K2_CJ_ field and no password in a child's argv or environment in cli/src (${#EXCEPTIONS[@]} reviewed exceptions)"
+    echo "secret_argv_env_lint: no K2_CJ_ field, password or typed value in a child's argv or environment in cli/src (${#EXCEPTIONS[@]} reviewed exceptions)"
 else
     echo "$out" >&2
     echo "secret_argv_env_lint: FAILED" >&2

@@ -334,7 +334,13 @@ if [ -f "$W/req-backup_recipient" ] && grep -Fq "$TOKEN_SENTINEL" "$W/req-backup
 else
     bad "backup key: the daemon never received the confirm token"
 fi
-assert_children_seen "backup key" curl
+# The k5 binary answers vault backup key itself: it starts no child, so
+# the guard is that the daemon got the token (above) and no child ran.
+if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    if [ -s "$ARGLOG" ]; then bad "backup key: the binary started a child"; head -3 "$ARGLOG" >&2; else ok "backup key: the binary started no child"; fi
+else
+    assert_children_seen "backup key" curl
+fi
 assert_off_children "backup key" "confirm token" "$TOKEN_SENTINEL"
 
 # 2. k2 sources secret <name> <secret>: the token and the secret's name

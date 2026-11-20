@@ -11,7 +11,8 @@
 //!   GET  /v1/agent-teams/links     ?instance=<id> | ?workspace=<ws>
 //! /cli (owner token, Connect logins, agent passports where noted):
 //!   POST /cli/agents/hire          `k2 agent hire <dir>` (converge one path; passports too:
-//!                                  the main session, with "Let this agent hire agents" on)
+//!                                  the main session, with "Let this agent hire agents" on,
+//!                                  and a passport only ever creates a new workspace)
 //!   GET  /cli/agents/hire-root     the owner-set hire root; POST sets it (Owner)
 //!   POST /cli/agent-instances/hire  the recipe (Admin)
 //!   GET  /cli/agent-instances       every hire (Admin)
@@ -950,7 +951,7 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
     if extra.get("dryRun").and_then(|v| v.as_bool()) == Some(true) {
         return ok(serde_json::json!({ "ok": true, "dryRun": true, "hire": "allowed" }));
     }
-    match converge::converge(&req, &caller, &ConvergeAuthority::unrestricted()) {
+    match converge::converge(&req, &caller, &passport_authority(who)) {
         Ok(out) => {
             if out.changed || out.created {
                 crate::v1_hire::emit_hire_watches();
@@ -974,6 +975,18 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
             ok(v)
         }
         Err(e) => hire_error_response(&e),
+    }
+}
+
+/// What a caller may do on the hire core. A passport (an agent's, or a
+/// shell tab's) only ever creates: it never renames, re-tools or adds
+/// context to a workspace that is already there (403 `owner_only`).
+/// The owner token and logins converge any path, as before.
+fn passport_authority(who: &Who) -> ConvergeAuthority {
+    if who.passport().is_some() {
+        ConvergeAuthority::create_only()
+    } else {
+        ConvergeAuthority::unrestricted()
     }
 }
 
@@ -1153,7 +1166,7 @@ fn cli_template_hire(
     if has(&req.persona) || has(&req.persona_raw) {
         return err(400, "usage", "template and persona are mutually exclusive — pass one or the other");
     }
-    match k2_core::hire::template::apply(&areq, caller) {
+    match k2_core::hire::template::apply_with(&areq, caller, &passport_authority(who)) {
         Ok(out) => {
             if !out.dry_run && (out.changed || out.created) {
                 crate::v1_hire::emit_hire_watches();

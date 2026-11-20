@@ -260,6 +260,7 @@ pub(crate) fn handle_v1_hire(principal: &V1Principal, body: &[u8]) -> CliRespons
                     "hire of a new workspace needs a key with the hire scope (or a pre-0.45.6 * grant) or the owner token"
                         .into(),
                 ),
+                create_only: false,
             };
             (caller, auth, door.limits.map(|l| (p.id.clone(), l)))
         }

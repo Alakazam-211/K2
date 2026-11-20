@@ -117,7 +117,7 @@ pub fn is_under(path: &Path, base: &Path) -> bool {
 }
 
 /// Canonicalize the deepest existing ancestor and re-append the rest.
-fn resolve_existing_prefix(path: &Path) -> PathBuf {
+pub(crate) fn resolve_existing_prefix(path: &Path) -> PathBuf {
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = path.to_path_buf();
     loop {

@@ -4,7 +4,7 @@
 //! heals missing pieces, it never takes a workspace down.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -77,11 +77,21 @@ pub struct ConvergeAuthority {
     pub max_db: Option<&'static str>,
     /// Refusal text when `may_create` is false.
     pub create_refusal: Option<String>,
+    /// The hire only ever creates (an agent passport): the folder must not
+    /// exist yet, in any spelling, and must not be a registered workspace.
+    /// See [`create_only_path`] and [`claim_new_folder`].
+    pub create_only: bool,
 }
 
 impl ConvergeAuthority {
     pub fn unrestricted() -> Self {
-        Self { new_workspace_root: None, may_create: true, max_db: None, create_refusal: None }
+        Self { new_workspace_root: None, may_create: true, max_db: None, create_refusal: None, create_only: false }
+    }
+
+    /// An agent passport's hire: creates a new workspace, never converges
+    /// one that is already there.
+    pub fn create_only() -> Self {
+        Self { create_only: true, ..Self::unrestricted() }
     }
 }
 
@@ -117,8 +127,8 @@ pub struct ConvergeOutcome {
     pub template: Option<super::template::WorkspaceOutcome>,
 }
 
-/// Expand `~`, require absolute, canonicalize an existing directory.
-pub fn expand_hire_path(raw: &str) -> Result<String, HireError> {
+/// Trim, expand `~`, require absolute.
+fn expand_tilde(raw: &str) -> Result<PathBuf, HireError> {
     let t = raw.trim();
     if t.is_empty() {
         return Err(HireError::usage("missing path"));
@@ -133,6 +143,12 @@ pub fn expand_hire_path(raw: &str) -> Result<String, HireError> {
     if !expanded.is_absolute() {
         return Err(HireError::usage("path must be absolute or ~"));
     }
+    Ok(expanded)
+}
+
+/// Expand `~`, require absolute, canonicalize an existing directory.
+pub fn expand_hire_path(raw: &str) -> Result<String, HireError> {
+    let expanded = expand_tilde(raw)?;
     if expanded.exists() {
         if !expanded.is_dir() {
             return Err(HireError::usage(format!("{} exists and is not a directory", expanded.display())));
@@ -192,6 +208,112 @@ pub fn lookup_project_row(path: &str) -> Option<(String, ProjectRow)> {
         .find_map(|c| lookup_exact(&c).map(|row| (c, row)))
 }
 
+/// The refusal when an agent's hire names a path that is already there
+/// (403 `owner_only`: a person changes an existing workspace).
+fn exists_refusal(path: &Path, what: &str) -> HireError {
+    HireError::new(
+        403,
+        "owner_only",
+        format!(
+            "{} {what}. An agent's hire only makes a new workspace: pick a folder that doesn't exist yet (or another --name). A person changes an existing workspace: Settings → Workspaces / Agents → (workspace), or `{cli} agent hire <dir>` from a terminal outside a {product} agent session.",
+            path.display(),
+            cli = crate::brand::CLI_NAME,
+            product = crate::brand::PRODUCT_NAME,
+        ),
+    )
+}
+
+/// The folders the owner set up, not the agent: the home folder and the
+/// hire root. They and their ancestors may be symlinks (`/home` on some
+/// systems); a folder below them may not.
+fn owner_bases() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(h) = crate::paths::home_dir() {
+        out.push(h);
+    }
+    if let Ok(r) = super::root::hire_root() {
+        out.push(r);
+    }
+    out
+}
+
+/// Refuse a symlink anywhere in `path`, looked at without following it,
+/// except the owner's folders and their ancestors ([`owner_bases`]). Stops at
+/// the first part that doesn't exist yet.
+fn refuse_symlinks(path: &Path) -> Result<(), HireError> {
+    let bases = owner_bases();
+    let mut cur = PathBuf::new();
+    for part in path.components() {
+        cur.push(part);
+        if bases.iter().any(|b| b.starts_with(&cur)) {
+            continue;
+        }
+        match fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(HireError::new(
+                    403,
+                    "owner_only",
+                    format!(
+                        "{} is a symlink. An agent's hire names a real folder path with no symlinks in it, and only makes a new workspace.",
+                        cur.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(HireError::usage(format!("{}: {e}", cur.display()))),
+        }
+    }
+    Ok(())
+}
+
+/// An agent's hire only ever creates. Check the path before anything is
+/// written: `~` expanded, absolute, no `..`, normalized (`.` parts, doubled
+/// and trailing slashes dropped), no symlink in it, nothing there yet (a
+/// folder, a file or a link), and not a registered workspace in this
+/// spelling or its real one. [`claim_new_folder`] makes the folder in the
+/// same step as the last check.
+pub fn create_only_path(raw: &str) -> Result<String, HireError> {
+    let expanded = expand_tilde(raw)?;
+    if expanded.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(HireError::usage("an agent's hire path may not contain '..'"));
+    }
+    let path: PathBuf = expanded.components().collect();
+    if path.parent().is_none() {
+        return Err(HireError::usage("an agent's hire path can't be /"));
+    }
+    refuse_symlinks(&path)?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => return Err(exists_refusal(&path, "already exists")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(HireError::usage(format!("{}: {e}", path.display()))),
+    }
+    let spelled = path.to_string_lossy().into_owned();
+    let real = super::root::resolve_existing_prefix(&path).to_string_lossy().into_owned();
+    if lookup_project_row(&spelled).is_some() || lookup_project_row(&real).is_some() {
+        return Err(exists_refusal(&path, "is already a registered workspace"));
+    }
+    Ok(spelled)
+}
+
+/// Make the new folder for an agent's hire. Its parents may be made; the
+/// folder itself is made with `create_dir`, so a folder or link that
+/// appeared after [`create_only_path`] is refused (`AlreadyExists`), never
+/// adopted.
+pub fn claim_new_folder(path: &str) -> Result<(), HireError> {
+    let p = Path::new(path);
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent).map_err(|e| HireError::usage(format!("create parent: {e}")))?;
+    }
+    // Again, now the parents exist: none of them is a symlink.
+    refuse_symlinks(p)?;
+    match fs::create_dir(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(exists_refusal(p, "already exists")),
+        Err(e) => Err(HireError::usage(format!("create {}: {e}", p.display()))),
+    }
+}
+
 /// The authority checks that need only the request (before any write).
 pub fn check_db_access(
     caller: &HireCaller,
@@ -246,10 +368,14 @@ pub fn converge(
     caller: &HireCaller,
     auth: &ConvergeAuthority,
 ) -> Result<ConvergeOutcome, HireError> {
-    let expanded = expand_hire_path(&req.path)?;
-    let (path, existing) = match lookup_project_row(&expanded) {
-        Some((registered, row)) => (registered, Some(row)),
-        None => (expanded, None),
+    let (path, existing) = if auth.create_only {
+        (create_only_path(&req.path)?, None)
+    } else {
+        let expanded = expand_hire_path(&req.path)?;
+        match lookup_project_row(&expanded) {
+            Some((registered, row)) => (registered, Some(row)),
+            None => (expanded, None),
+        }
     };
     let template = req.template.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let persona = req.persona.as_deref().map(str::trim).filter(|s| !s.is_empty());
@@ -306,7 +432,26 @@ pub fn converge(
     let mut created = false;
     let mut steps_out: Vec<StepReport> = Vec::new();
 
-    if existing.is_none() {
+    if existing.is_none() && auth.create_only {
+        claim_new_folder(&path)?;
+        steps_out.push(done("create-dir"));
+        match crate::workspace::lifecycle::open_workspace_ex(&path, !no_wiki, seed_agents_md, fanout) {
+            Ok(_) => {
+                changed = true;
+                created = true;
+                steps_out.push(done("register-workspace"));
+            }
+            Err(e) => {
+                // Registered by someone else since the check: never adopted.
+                // The folder this call made goes again only if still empty.
+                let _ = fs::remove_dir(&path);
+                if crate::workspace::lifecycle::is_already_registered(&e) {
+                    return Err(exists_refusal(Path::new(&path), "is already a registered workspace"));
+                }
+                return Err(HireError::usage(e));
+            }
+        }
+    } else if existing.is_none() {
         let dir_exists = Path::new(&path).exists();
         let result = if dir_exists {
             steps_out.push(skipped("create-dir", "exists"));

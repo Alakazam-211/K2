@@ -995,3 +995,236 @@ fn template_hire_delivers_the_hello_from_the_daemon_once() {
     assert_eq!(again["helloDelivered"], false, "{again}");
     assert_eq!(sent(&handle).len(), 1, "the hello goes out once");
 }
+
+// ── a passport's hire only ever creates ─────────────────────────────
+
+/// Everything a hire could change on a workspace: every file under its
+/// folder (bytes), its `projects` row (every column) and its context layers.
+fn workspace_state(path: &str) -> (Vec<(String, Vec<u8>)>, String, String) {
+    let dir = Path::new(path);
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap_or_else(|e| panic!("read {}: {e}", d.display())) {
+            let p = e.expect("dir entry").path();
+            let m = std::fs::symlink_metadata(&p).expect("metadata");
+            let rel = p.strip_prefix(dir).expect("under the folder").to_string_lossy().into_owned();
+            if m.file_type().is_symlink() {
+                files.push((format!("{rel} ->"), std::fs::read_link(&p).expect("link").to_string_lossy().into_owned().into_bytes()));
+            } else if m.is_dir() {
+                files.push((format!("{rel}/"), Vec::new()));
+                stack.push(p);
+            } else {
+                files.push((rel, std::fs::read(&p).expect("read file")));
+            }
+        }
+    }
+    files.sort();
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut st = conn.prepare("SELECT * FROM projects WHERE path = ?1").expect("prepare");
+        let n = st.column_count();
+        st.query_row(rusqlite::params![path], |r| {
+            let mut cols = Vec::new();
+            for i in 0..n {
+                cols.push(format!("{:?}", r.get_ref(i)?));
+            }
+            Ok(cols.join("|"))
+        })
+        .expect("a registered workspace")
+    };
+    let layers = format!("{:?}", k2_core::workspace::context_layers::list_layers(path).expect("layers"));
+    (files, row, layers)
+}
+
+fn registered(path: &str) -> bool {
+    count("SELECT COUNT(*) FROM projects WHERE path = ?1", path) > 0
+}
+
+/// What a hijack would send: a new name, another tool, context and a layer.
+fn takeover(path: &str) -> Value {
+    json!({
+        "path": path,
+        "name": "Taken Over",
+        "preset": "codex",
+        "defaultModel": "other-model",
+        "context": ["wiki:hygiene"],
+        "layers": [{ "label": "takeover", "markdown": "# Takeover\n" }],
+    })
+}
+
+fn hire_as(who: &Who, body: &Value) -> (u16, Value) {
+    let r = handle_cli(CLI_HIRE, who.clone(), true, body.to_string().as_bytes(), &HashMap::new(), None);
+    (status_code(r.status), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json {e}: {}", r.body)))
+}
+
+fn assert_refused(who: &Who, body: Value, status: u16, code: &str) {
+    let (st, v) = hire_as(who, &body);
+    assert_eq!((st, v["error"]["code"].as_str()), (status, Some(code)), "{body}: {v}");
+}
+
+/// The owner's workspace at a fresh path under the hire root, with a name,
+/// a tool and no context: what an agent must not change.
+fn owners_workspace(tag: &str) -> String {
+    let path = ensure_test_root().join(uniq(tag)).to_string_lossy().into_owned();
+    let (st, v) = hire_as(&Who::Owner, &json!({ "path": path, "name": "Owned", "preset": "claude" }));
+    assert_eq!(st, 200, "{v}");
+    path
+}
+
+/// Steward ruling: a hire made with a passport only ever creates. An
+/// existing workspace, by its path or any other spelling of it, is refused
+/// with 403 and nothing about it changes (name, tool, model, context,
+/// files). The template door too, dry run included.
+#[test]
+fn passport_hire_refuses_an_existing_workspace_in_every_spelling() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (_, agent) = hiring_agent("oc");
+    let theirs = owners_workspace("theirs");
+    let before = workspace_state(&theirs);
+    let base = Path::new(&theirs).file_name().unwrap().to_string_lossy().into_owned();
+    let root_s = root.to_string_lossy().into_owned();
+    let mut spellings = vec![
+        theirs.clone(),
+        format!("{theirs}/"),
+        format!("{theirs}/."),
+        format!("{root_s}/./{base}"),
+        format!("{root_s}//{base}"),
+    ];
+    #[cfg(unix)]
+    {
+        let link = root.join(uniq("link-to-theirs"));
+        std::os::unix::fs::symlink(&theirs, &link).expect("symlink");
+        spellings.push(link.to_string_lossy().into_owned());
+    }
+    #[cfg(target_os = "macos")]
+    spellings.push(format!("{root_s}/{}", base.to_uppercase()));
+    for p in &spellings {
+        assert_refused(&agent, takeover(p), 403, "owner_only");
+        assert_refused(&agent, json!({ "template": "writer", "path": p, "name": "Taken Over", "launch": false }), 403, "owner_only");
+        assert_refused(&agent, json!({ "template": "writer", "path": p, "name": "Taken Over", "dryRun": true }), 403, "owner_only");
+        assert_eq!(workspace_state(&theirs), before, "{p}: nothing about the workspace changed");
+    }
+    // One registration (LIKE matches ASCII case variants too), none for the link.
+    assert_eq!(count("SELECT COUNT(*) FROM projects WHERE path LIKE '%' || ?1", &base), 1);
+    assert!(!spellings.iter().any(|p| p.contains("link-to-theirs") && registered(p)), "the link is not registered");
+    let (_, v) = hire_as(&agent, &takeover(&theirs));
+    let hint = v["error"]["hint"].as_str().expect("hint");
+    assert!(hint.contains("only makes a new workspace") && hint.contains("A person changes an existing workspace"), "{hint}");
+    // A shell tab's passport is a passport too.
+    let shell = match &agent {
+        Who::Agent { project_id, .. } => Who::Shell { project_id: project_id.clone(), session_id: "shell-oc".into() },
+        _ => unreachable!(),
+    };
+    assert_refused(&shell, takeover(&theirs), 403, "owner_only");
+    assert_eq!(workspace_state(&theirs), before);
+    // The owner converges an existing workspace, as before.
+    let (st, v) = hire_as(&Who::Owner, &json!({ "path": theirs, "name": "Renamed By Owner" }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(k2_core::workspace::display::agent_display_name(&theirs), "Renamed By Owner");
+}
+
+/// A folder that is already there is never adopted: with files in it,
+/// empty, a file in its place, or a registered workspace whose folder is
+/// gone. No `..`, and no symlink on the way to the new folder.
+#[test]
+fn passport_hire_refuses_any_path_that_is_already_there() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (_, agent) = hiring_agent("ot");
+    let full = root.join(uniq("full"));
+    std::fs::create_dir_all(&full).unwrap();
+    std::fs::write(full.join("notes.txt"), b"mine").unwrap();
+    let empty = root.join(uniq("empty"));
+    std::fs::create_dir_all(&empty).unwrap();
+    let file = root.join(uniq("file"));
+    std::fs::write(&file, b"a file").unwrap();
+    for p in [&full, &empty, &file] {
+        let s = p.to_string_lossy().into_owned();
+        assert_refused(&agent, takeover(&s), 403, "owner_only");
+        assert_refused(&agent, json!({ "template": "writer", "path": s, "name": "Taken Over", "dryRun": true }), 403, "owner_only");
+        assert!(!registered(&s), "{s}: not registered");
+    }
+    assert_eq!(std::fs::read_dir(&full).unwrap().count(), 1, "the full folder is as it was");
+    assert_eq!(std::fs::read(full.join("notes.txt")).unwrap(), b"mine");
+    assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0, "the empty folder is as it was");
+    assert_eq!(std::fs::read(&file).unwrap(), b"a file");
+    // A registered workspace whose folder was removed: the agent can't
+    // make the folder again and take the registration.
+    let gone = owners_workspace("gone");
+    std::fs::remove_dir_all(&gone).unwrap();
+    assert_refused(&agent, takeover(&gone), 403, "owner_only");
+    assert_refused(&agent, json!({ "template": "writer", "path": gone, "name": "Taken Over", "dryRun": true }), 403, "owner_only");
+    assert!(!Path::new(&gone).exists(), "nothing made at {gone}");
+    // `..` is refused by its shape.
+    let dotdot = format!("{}/x/../{}", root.display(), uniq("dd"));
+    assert_refused(&agent, takeover(&dotdot), 400, "usage");
+    // A symlink on the way: the new folder would land inside another
+    // workspace.
+    #[cfg(unix)]
+    {
+        let theirs = owners_workspace("inside");
+        let link = root.join(uniq("via"));
+        std::os::unix::fs::symlink(&theirs, &link).expect("symlink");
+        let sub = link.join("new-agent");
+        assert_refused(&agent, takeover(&sub.to_string_lossy()), 403, "owner_only");
+        assert!(!Path::new(&theirs).join("new-agent").exists(), "nothing made inside the other workspace");
+    }
+}
+
+/// A fresh path works as today, and the new workspace gets the name, tool
+/// and context; running the same hire again is refused (it exists now).
+#[test]
+fn passport_hire_on_a_fresh_path_creates_it() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (_, agent) = hiring_agent("of");
+    let path = root.join(uniq("fresh")).join("deeper").to_string_lossy().into_owned();
+    let (st, v) = hire_as(&agent, &json!({ "path": format!("{path}/"), "name": "Fresh Hire", "preset": "codex", "context": ["wiki:hygiene"] }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!((v["created"].as_bool(), v["path"].as_str()), (Some(true), Some(path.as_str())), "{v}");
+    let steps = v["steps"].as_array().expect("steps");
+    for step in ["create-dir", "register-workspace", "set-name", "set-default-agent"] {
+        assert!(steps.iter().any(|s| s["step"] == step && s["status"] == "done"), "{step}: {v}");
+    }
+    assert_eq!(k2_core::workspace::display::agent_display_name(&path), "Fresh Hire");
+    assert_eq!(count("SELECT COUNT(*) FROM projects WHERE path = ?1 AND default_agent = 'codex'", &path), 1);
+    let layers = k2_core::workspace::context_layers::list_layers(&path).expect("layers");
+    assert!(!layers.is_empty(), "context added: {layers:?}");
+    let after = workspace_state(&path);
+    assert_refused(&agent, takeover(&path), 403, "owner_only");
+    assert_eq!(workspace_state(&path), after, "a re-run changes nothing");
+    // A template hire at a fresh path, too.
+    let tpl = root.join(uniq("fresh-tpl")).to_string_lossy().into_owned();
+    let (st, v) = hire_as(&agent, &json!({ "template": "writer", "path": tpl, "name": "Tpl Hire", "launch": false }));
+    assert_eq!((st, v["created"].as_bool()), (200, Some(true)), "{v}");
+}
+
+/// The check and the create are one step: a folder or link that appears
+/// after the check is refused by the create, never adopted.
+#[test]
+fn passport_hire_claims_the_folder_in_one_step() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let late = root.join(uniq("late")).to_string_lossy().into_owned();
+    let checked = k2_core::hire::converge::create_only_path(&late).expect("free at check time");
+    std::fs::create_dir(&checked).unwrap();
+    std::fs::write(Path::new(&checked).join("theirs.txt"), b"x").unwrap();
+    let e = k2_core::hire::converge::claim_new_folder(&checked).unwrap_err();
+    assert_eq!((e.status, e.code), (403, "owner_only"), "{e:?}");
+    assert_eq!(std::fs::read_dir(&checked).unwrap().count(), 1, "the folder that appeared is untouched");
+    #[cfg(unix)]
+    {
+        let other = owners_workspace("racer");
+        let link = root.join(uniq("late-link")).to_string_lossy().into_owned();
+        let checked = k2_core::hire::converge::create_only_path(&link).expect("free at check time");
+        std::os::unix::fs::symlink(&other, &checked).expect("symlink");
+        let e = k2_core::hire::converge::claim_new_folder(&checked).unwrap_err();
+        assert_eq!((e.status, e.code), (403, "owner_only"), "{e:?}");
+    }
+    let fresh = root.join(uniq("claim")).to_string_lossy().into_owned();
+    k2_core::hire::converge::claim_new_folder(&k2_core::hire::converge::create_only_path(&fresh).expect("free")).expect("claimed");
+    assert!(Path::new(&fresh).is_dir());
+}

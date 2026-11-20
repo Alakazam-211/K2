@@ -713,6 +713,9 @@ fn default_path(req: &ApplyRequest, tpl: &Template, auth: &ConvergeAuthority) ->
         None => super::super::root::hire_root()?,
     };
     let path = root.join(&slug).to_string_lossy().into_owned();
+    if auth.create_only {
+        return converge::create_only_path(&path);
+    }
     folder_free(&path, tpl)?;
     Ok(path)
 }
@@ -731,7 +734,10 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
     super::check_caller(&tpl, caller)?;
     let vars = super::bind_params(&tpl, &req.params, caller)?;
     let answers = super::bind_answers(&tpl, &req.answers)?;
+    // An agent's hire only ever creates: the path is checked (and a dry
+    // run refused) the same way the real hire checks it.
     let path = match req.path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(p) if auth.create_only => converge::create_only_path(p)?,
         Some(p) => converge::expand_hire_path(p)?,
         None => default_path(req, &tpl, auth)?,
     };

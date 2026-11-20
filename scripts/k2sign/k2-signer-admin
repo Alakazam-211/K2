@@ -6,7 +6,7 @@
 # rule covers it.
 #
 #   sudo …/k2-signer-admin adopt-k2sign                       (once: k2sign's controller pin + approver)
-#   sudo …/k2-signer-admin pair-begin [<label>]               then on the K2 server: k2 ci signer add <code>
+#   sudo …/k2-signer-admin pair-begin [<label>]               then on the K2 server: k2 ci signer add --code-stdin --hello pair.json (the code on stdin)
 #   sudo …/k2-signer-admin pair-accept <6 digits> < offer.json
 #   sudo …/k2-signer-admin trust-owner <fp read on the owner's screen> <ed25519:key> [<label>]
 #   sudo …/k2-signer-admin roster-accept <owner fp> [<digest>] < evidence.json

@@ -56,6 +56,11 @@ pub const UPDATE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 pub const UPDATE_MAX_TIME: Duration = Duration::from_secs(4);
 /// `k2 api status`'s `/boot-status` read: at most 10 s.
 pub const BOOT_STATUS_MAX_TIME: Duration = Duration::from_secs(10);
+/// Where `_k2_send_once_supported` asks whether the daemon drops a
+/// repeated send (`cli/src/cell-socket.sh`).
+pub const SEND_ONCE_ENDPOINT: &str = "/boot-status";
+/// The word in that answer's `features` that says it does.
+pub const SEND_ONCE_FEATURE: &str = r#""send-once""#;
 /// `_K2_CURL_TRIES`: each retry loop's tries, the first included.
 pub const TRIES: u32 = 4;
 /// The `sleep 1` between tries.
@@ -316,6 +321,12 @@ enum Kind {
     /// Only `_k2_curl`'s tries (a refused connect, a moved port); no heal,
     /// no line, no note.
     BootStatus,
+    /// `_k2_send_once_supported` (`cli/src/cell-socket.sh`):
+    /// `_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -s -G --connect-timeout 3
+    /// --max-time 5 "${BASE_URL}/boot-status"`, the token as Bearer when
+    /// there is one. Over TCP, one try, no query; no heal, no line, no
+    /// note.
+    SendOnce,
 }
 
 impl Kind {
@@ -360,6 +371,7 @@ impl Kind {
                 | Kind::QueryPost
                 | Kind::Own { .. }
                 | Kind::BootStatus
+                | Kind::SendOnce
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -387,6 +399,7 @@ impl Kind {
                 | Kind::QueryPost
                 | Kind::Own { .. }
                 | Kind::BootStatus
+                | Kind::SendOnce
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -412,6 +425,7 @@ impl Kind {
                 | Kind::SetupPost
                 | Kind::Own { note: false, .. }
                 | Kind::BootStatus
+                | Kind::SendOnce
         )
     }
     /// `--connect-timeout`.
@@ -421,6 +435,7 @@ impl Kind {
             Kind::Cards => CARDS_TIME,
             Kind::FeedbackOptin => FEEDBACK_CONNECT_TIMEOUT,
             Kind::UpdateVersion => UPDATE_CONNECT_TIMEOUT,
+            Kind::SendOnce => PROBE_CONNECT_TIMEOUT,
             _ => CONNECT_TIMEOUT,
         }
     }
@@ -430,7 +445,7 @@ impl Kind {
     fn once(self) -> bool {
         matches!(
             self,
-            Kind::PostJsonStdin | Kind::UpdateVersion | Kind::VaultSockPost
+            Kind::PostJsonStdin | Kind::UpdateVersion | Kind::VaultSockPost | Kind::SendOnce
         )
     }
 }
@@ -944,6 +959,24 @@ impl Client {
             .map_err(|f| f.error)
     }
 
+    /// `_k2_send_once_supported`: one GET of [`SEND_ONCE_ENDPOINT`]
+    /// ([`Kind::SendOnce`]). True when the answer names
+    /// [`SEND_ONCE_FEATURE`]: the daemon answers a repeat of a send's
+    /// idempotency key with its first answer. A failed call is false.
+    pub fn send_once_supported(&mut self) -> bool {
+        match self.run(
+            Kind::SendOnce,
+            Channel::Tcp,
+            SEND_ONCE_ENDPOINT,
+            &[],
+            &[],
+            Instant::now(),
+        ) {
+            Ok(r) => contains(&r.body, SEND_ONCE_FEATURE),
+            Err(_) => false,
+        }
+    }
+
     /// `k2 update --cli`'s GET of `path` ([`Kind::UpdateVersion`]): over
     /// TCP to this client's host and port, no credential, no query, one
     /// try, connect 2 s, at most 4 s; no heal, no line, no note.
@@ -1429,7 +1462,7 @@ impl Client {
             | Kind::SetupGet
             | Kind::SetupPost
             | Kind::QueryPost => MAX_TIME,
-            Kind::Probe => PROBE_MAX_TIME,
+            Kind::Probe | Kind::SendOnce => PROBE_MAX_TIME,
             Kind::SidecarGet | Kind::SidecarPost => SIDECAR_MAX_TIME,
             Kind::ComputeGet => COMPUTE_GET_MAX_TIME,
             Kind::ComputePost => self.compute_post_max_time.unwrap_or(COMPUTE_POST_MAX_TIME),
@@ -1567,6 +1600,8 @@ impl Client {
                 // read before the command line's `-H`s. Never the query.
                 let credential = match kind {
                     Kind::Public | Kind::UpdateVersion => None,
+                    // `_k2_cfg_auth "${TOKEN:-}"`: no header for no token.
+                    Kind::SendOnce if self.tcp_token().is_none() => None,
                     // `_setup_token` (0.46.17): in a session (`HOOK_SOCK`
                     // set) the passport, and with none no credential at
                     // all, never the owner token.
@@ -1741,9 +1776,11 @@ impl Client {
             Kind::VaultSockGet | Kind::Own { post: false, .. } => {
                 (Method::Get, endpoint.to_string(), None)
             }
-            Kind::Public | Kind::Probe | Kind::UpdateVersion | Kind::BootStatus => {
-                (Method::Get, endpoint.to_string(), None)
-            }
+            Kind::Public
+            | Kind::Probe
+            | Kind::UpdateVersion
+            | Kind::BootStatus
+            | Kind::SendOnce => (Method::Get, endpoint.to_string(), None),
             Kind::SetupGet | Kind::SetupPost => {
                 // `${path}${q}`: `?format=text` or nothing.
                 let path = if joined.is_empty() {
@@ -2183,6 +2220,7 @@ mod tests {
             ),
             (SetupGet, false, false, false, false, false, false, false),
             (SetupPost, false, false, false, false, false, false, false),
+            (SendOnce, false, false, false, false, false, false, true),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
@@ -2243,6 +2281,7 @@ mod tests {
             (Kind::SetupPost, 30),
             (Kind::QueryPost, 30),
             (Kind::BootStatus, 10),
+            (Kind::SendOnce, 5),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }
@@ -2488,6 +2527,46 @@ mod tests {
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
         assert!(!r.target.contains("token"));
+    }
+
+    /// `_k2_send_once_supported`'s GET: the token as Bearer (none with no
+    /// token), the binary's headers, no query; connect 3 s.
+    #[test]
+    fn the_send_once_get() {
+        assert_eq!(Kind::SendOnce.connect_timeout(), Duration::from_secs(3));
+        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
+        c.owner_from_disk = true;
+        let (_, r) = c
+            .build(Kind::SendOnce, Channel::Tcp, SEND_ONCE_ENDPOINT, &[], &[])
+            .unwrap();
+        assert_eq!((r.method, r.target.as_str()), (Method::Get, "/boot-status"));
+        assert!(r.body.is_none());
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Authorization",
+                VERSION_HEADER,
+                VIA_HEADER,
+                OWNER_SOURCE_HEADER
+            ]
+        );
+        assert_eq!(r.headers[0].1, "Bearer o");
+        let none = Client::new("127.0.0.1", 9, "/p", Auth::None);
+        let (_, r) = none
+            .build(Kind::SendOnce, Channel::Tcp, SEND_ONCE_ENDPOINT, &[], &[])
+            .unwrap();
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
+        let policy = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cell-socket.sh"),
+        )
+        .unwrap();
+        assert!(
+            policy.contains(r#"body="$(_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -s -G --connect-timeout 3 --max-time 5 "${BASE_URL}/boot-status" 2>/dev/null)" || body="""#),
+            "_k2_send_once_supported's request moved"
+        );
+        assert!(policy.contains(r#"*'"send-once"'*) _K2_SEND_ONCE=1 ;;"#));
     }
 
     /// `_setup_send`'s two: the token as the Bearer header, then

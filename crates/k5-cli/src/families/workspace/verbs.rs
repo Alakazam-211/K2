@@ -41,10 +41,13 @@
 //! that is not UTF-8; a port that is set but is no port curl takes; a
 //! `python3` the binary can't tell ([`crate::families`]); a session with
 //! no passport, for a verb that tries the cell socket (`cli_send`: the
-//! shell tries it with an empty Bearer, or refuses the owner token);
-//! `set-agent-identity`, the old name of `agent identity`, which moves
-//! with the agent family; `remove --apps`, whose confirm step moves with
-//! the app family; and the forms each module names.
+//! shell tries it with an empty Bearer, or refuses the owner token); and
+//! the forms each module names.
+//!
+//! `set-agent-identity` is the old name of `agent identity`
+//! (`cmd_workspace_set_agent_identity`): the agent family answers it
+//! ([`crate::families::agent::identity_alias`]), with the shell's note
+//! ([`SET_AGENT_IDENTITY_NOTE`]) on stderr after the gates.
 //!
 //! Where this differs from the shell: as [`super`] says (an answer with a
 //! NUL, one that is not UTF-8, half of a surrogate pair), and Python's
@@ -78,6 +81,15 @@ pub const USAGE: &str = concat!(
     "Usage: ",
     cli_name!(),
     " workspace <list|launch|profile|update|create|open|remove|resources|trust|triage|set-agent-name|set-agent-identity|set-handle|resume-chat-args|swap-canonical|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|design-tab|mobile-tab|...> [args]"
+);
+
+/// `cmd_workspace_set_agent_identity`'s first line.
+pub const SET_AGENT_IDENTITY_NOTE: &str = concat!(
+    "note: '",
+    cli_name!(),
+    " workspace set-agent-identity' is now '",
+    cli_name!(),
+    " agent identity' (same flags)."
 );
 
 pub const RESOLVE: &str = "/cli/workspace/resolve";
@@ -147,7 +159,7 @@ pub fn parse(words: &[&str], here: &Here) -> Option<Ask> {
         | "swap-canonical" | "cleanup" => named::parse(verb, rest, here),
         "trust" => trust::parse(rest, here),
         "triage" | "remove" | "resources" | "preview" => other::parse(verb, rest, here),
-        // `agent identity`'s old name: with the agent family.
+        // `agent identity`'s old name: [`run`] hands it to the agent family.
         "set-agent-identity" => return None,
         _ => stop(&[USAGE], Exit::Error),
     };
@@ -157,6 +169,9 @@ pub fn parse(words: &[&str], here: &Here) -> Option<Ask> {
 /// `k5 workspace <verb> ...` for the verbs here: `args` is the whole
 /// command line after `argv[0]`. `None`: the shell CLI answers it.
 pub fn run(args: &[OsString], words: &[&str]) -> Option<Exit> {
+    if let Some((&"set-agent-identity", rest)) = words.split_first() {
+        return crate::families::agent::identity_alias(args, rest, SET_AGENT_IDENTITY_NOTE);
+    }
     let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
     let here = Here {
         pwd: pwd.to_str()?.to_string(),

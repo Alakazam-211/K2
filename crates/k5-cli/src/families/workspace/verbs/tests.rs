@@ -26,10 +26,9 @@ fn workspace_alone_and_an_unknown_verb_are_the_usage_line() {
 fn the_shell_keeps_identity_help_and_apps() {
     for words in [
         &["set-agent-identity", "a"][..],
-        &["api-guest-policy"],
+        &["api-guest-policy", "help"],
         &["mobile-tab", "help"],
         &["trust", "--help"],
-        &["remove", "x", "--apps", "park"],
     ] {
         assert_eq!(parse(words, &here()), None, "{words:?}");
     }
@@ -164,4 +163,52 @@ fn the_lookup_reads_path_or_nothing() {
     assert_eq!(resolved_of(br#"["path"]"#), "");
     assert_eq!(resolved_of(b"<html>"), "");
     assert_eq!(resolved_of(br#"{"path":5}"#), "5");
+}
+
+#[test]
+fn a_switch_alone_is_its_help_page_on_stderr() {
+    for (verb, page, exit) in [
+        ("api-guest-policy", "api-guest-policy", Exit::Ok),
+        ("api-skip-permissions", "api-skip-permissions", Exit::Ok),
+        ("default-model", "default-model", Exit::Ok),
+        ("force-model-on-resume", "force-model-on-resume", Exit::Ok),
+        ("host-session-cell-cap", "host-session-cell-cap", Exit::Ok),
+        ("api-host-session-cap", "host-session-cell-cap", Exit::Ok),
+        ("design-tab", "design-tab", Exit::Usage),
+        ("design-mode", "design-tab", Exit::Usage),
+        ("mobile-tab", "mobile-tab", Exit::Usage),
+    ] {
+        let key = format!("workspace/{page}");
+        let text = crate::text::help(&key).expect("an embedded page");
+        let want = (vec![text.strip_suffix('\n').unwrap().to_string()], exit);
+        assert_eq!(stop_of(&[verb]), want, "{verb}");
+        assert_eq!(stop_of(&[verb, ""]), want, "{verb} ''");
+    }
+}
+
+#[test]
+fn remove_with_apps_is_answered_here() {
+    let remove = |words: &[&str]| match parse(words, &here()) {
+        Some(Ask::Other(other::Ask::Remove(r))) => r,
+        x => panic!("{words:?}: not a remove: {x:?}"),
+    };
+    let r = remove(&["remove", "x", "--apps", "handover:ws2"]);
+    assert_eq!(r.apps, "handover:ws2");
+    assert!(!r.drop_access && !r.drop_misused);
+    let r = remove(&["remove", "x", "--apps=uninstall", "--drop-access"]);
+    assert_eq!(r.apps, "uninstall");
+    assert!(r.drop_access && !r.drop_misused);
+    // Its release tries the cell socket.
+    assert!(Ask::Other(other::Ask::Remove(r)).sends_on_socket());
+}
+
+#[test]
+fn set_agent_identity_s_note_names_the_brand() {
+    assert_eq!(
+        SET_AGENT_IDENTITY_NOTE,
+        format!(
+            "note: '{0} workspace set-agent-identity' is now '{0} agent identity' (same flags).",
+            cli_name!()
+        )
+    );
 }

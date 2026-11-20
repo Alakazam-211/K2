@@ -121,6 +121,21 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
+    run_words(args, &words, None)
+}
+
+/// `workspace set-agent-identity <words>`: `agent identity`'s old name
+/// (`cmd_workspace_set_agent_identity`), as `agent identity <words>` with
+/// `note` on stderr first, once the gates and the session's checks have
+/// passed (the shell prints it in the verb's function). `args` is the
+/// whole command line, for the passport. `None`: the shell's.
+pub fn identity_alias(args: &[OsString], words: &[&str], note: &str) -> Option<Exit> {
+    let mut all = vec!["identity"];
+    all.extend_from_slice(words);
+    run_words(args, &all, Some(note))
+}
+
+fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Exit> {
     let (verb, rest) = words.split_first()?;
     if rest.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
@@ -199,6 +214,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, tool) {
             return Some(stop);
         }
+    }
+    if let Some(note) = note {
+        out::stderr_line(note);
     }
     Some(run_form(args, form, settings))
 }

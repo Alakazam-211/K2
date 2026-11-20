@@ -8,7 +8,8 @@
 //! - `remove <path|name> [--mode m]` (`cli/src/wiki.sh`): a folder as
 //!   `cd` names it, then the lookup with its errors shown (no answer is
 //!   the line and exit 1; any other failure, or no path, is "not found",
-//!   exit 4), then `cli_request_post /cli/workspace/remove` and
+//!   exit 4), then with `--apps <way>` the Apps' release ([`release`]),
+//!   then `cli_request_post /cli/workspace/remove` and
 //!   `cli_print_or_fail` ([`super::trust::print_plain`]).
 //! - `resources list|add|remove [--workspace <ws>] [--json] [file]`
 //!   (`cli/src/agent-context.sh`): `cli_send cli_request` (list) or
@@ -18,18 +19,19 @@
 //! - `preview [<path>]` (`cli/src/wiki.sh`): what adding the folder would
 //!   do to the files in it, from the folder alone; nothing is sent.
 //!
-//! The shell answers `remove --apps …` (its confirm step moves with the
-//! app family), `remove … --mode` as the last word, and a path the binary
-//! can't resolve as bash's `cd` would.
+//! The shell answers `remove … --mode` as the last word, `remove --apps
+//! <way>` in a session with no passport (its release tries the cell
+//! socket), and a path the binary can't resolve as bash's `cd` would.
 
 use super::{stop, Ask as Top, Here, Sent};
 use crate::exit::Exit;
+use crate::families::app::call::{self, Cj};
 use crate::families::workspace::register::{self, Verb as RegisterVerb};
 use crate::families::{inbox, pipefail, Shown};
 use crate::out::json::{self, Value};
 use crate::out::{self, py};
 use crate::transport::encode::quote;
-use crate::transport::Call;
+use crate::transport::{permission, Call, Channel, Error, Response};
 use k2_client::brand::PRODUCT_NAME;
 use k2_client::cli_name;
 use std::path::Path;
@@ -49,7 +51,11 @@ pub enum Ask {
 
 impl Ask {
     pub fn sends_on_socket(&self) -> bool {
-        matches!(self, Ask::Resources(_))
+        match self {
+            Ask::Resources(_) => true,
+            Ask::Remove(r) => !r.apps.is_empty(),
+            _ => false,
+        }
     }
 }
 
@@ -60,6 +66,11 @@ pub struct Remove {
     /// As `cd` names it.
     pub path: String,
     pub mode: String,
+    /// `--apps`'s way (`handover:<ws>`, `uninstall`, `park`); empty: no
+    /// release.
+    pub apps: String,
+    /// `--drop-access`.
+    pub drop_access: bool,
     /// `--drop-access` without `--apps uninstall`: its line, after the
     /// lookup.
     pub drop_misused: bool,
@@ -162,9 +173,6 @@ fn remove(words: &[&str], here: &Here) -> Top {
     if target.is_empty() {
         return stop(&REMOVE_USAGE, Exit::Error);
     }
-    if !apps.is_empty() && !(drop_access && apps != "uninstall") {
-        return Top::Shell;
-    }
     let Some(path) = register::path(RegisterVerb::Open, &target, &here.pwd, cdpath()) else {
         return Top::Shell;
     };
@@ -173,6 +181,8 @@ fn remove(words: &[&str], here: &Here) -> Top {
         path,
         mode,
         drop_misused: drop_access && apps != "uninstall",
+        apps,
+        drop_access,
     }))
 }
 
@@ -385,6 +395,11 @@ fn remove_send(w: &mut Sent, rm: &Remove) -> Exit {
         out::stderr_line("usage: --drop-access goes with --apps uninstall");
         return Exit::Usage;
     }
+    if !rm.apps.is_empty() {
+        if let Err(exit) = release(w, &resolved, rm) {
+            return exit;
+        }
+    }
     let mode = rm.mode.as_str();
     let p = format!("path={}", quote(&resolved));
     let m = format!("mode={}", quote(mode));
@@ -398,6 +413,128 @@ fn remove_send(w: &mut Sent, rm: &Remove) -> Exit {
         Ok(resp) => super::trust::print_plain(&resp),
         Err(exit) => exit,
     }
+}
+
+/// `/cli/app/release`, the route `remove --apps` posts first.
+pub const RELEASE: &str = "/cli/app/release";
+
+/// `_app_post_confirming /cli/app/release "Give this workspace's Apps to
+/// ${apps_way#handover:}" K2_CJ_workspace=<path> K2_CJ_apps=<way>
+/// K2_CJ_dropAccess_b=<0|1> K2_CJ_forRemoval_b=1`, then `[ "$_CP_STATUS"
+/// = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"`: the POST
+/// (`_compute_send`), and once more with a confirm token when the daemon
+/// answers 403 `vault_confirm_required` with an action and a secret id.
+/// Any status but 200 is `_compute_fail`'s line with no refusal registry
+/// (this is no App command), exit 2 for a 400 or 413, else 3. A 202 too:
+/// the shell takes only 200 here.
+fn release(w: &mut Sent, path: &str, rm: &Remove) -> Result<(), Exit> {
+    let drop = if rm.drop_access { "1" } else { "0" };
+    let body = |tok: &str| {
+        Cj::new()
+            .s("confirmToken", tok)
+            .s("workspace", path)
+            .s("apps", &rm.apps)
+            .b("dropAccess", drop)
+            .b("forRemoval", "1")
+            .body()
+    };
+    let mut s = compute_post(w, &body(""))?;
+    if s.status == "403" {
+        if let Some((action, sid)) = confirm_asked(&s.body) {
+            let label = format!(
+                "Give this workspace's Apps to {}",
+                rm.apps.strip_prefix("handover:").unwrap_or(&rm.apps)
+            );
+            let passport = w.client.passport().is_some();
+            let sock = crate::confirm::sock_path(&w.settings.home);
+            let mut c = crate::confirm::Confirm {
+                client: &mut *w.client,
+                sock: &sock,
+                closing: &mut *w.closing,
+                passport,
+            };
+            let Some(tok) = crate::confirm::confirm_token(&mut c, &action, &sid, &label) else {
+                return Err(Exit::Refused);
+            };
+            s = compute_post(w, &body(&tok))?;
+        }
+    }
+    if s.ok() {
+        return Ok(());
+    }
+    // A body that is not UTF-8 makes `_compute_fail`'s Python fail (its
+    // stderr thrown away): the no-answer line.
+    let readable: &[u8] = if std::str::from_utf8(&s.body).is_ok() {
+        &s.body
+    } else {
+        b""
+    };
+    out::stderr_line(&crate::spec::run::fail_line(&s.status, readable));
+    Err(call::fail_exit(&s.status))
+}
+
+/// `raw="$(_compute_send POST <RELEASE> <body>)"; _compute_split "$raw"`,
+/// as [`call::Ctx::send`] does it for the app family, on this verb's
+/// client. `Err`: the command ended (a POST that may have been applied
+/// on the cell socket, a session's owner token, no answer: the line, exit
+/// 1).
+fn compute_post(w: &mut Sent, body: &str) -> Result<call::Split, Exit> {
+    let result = w.client.compute_send(true, RELEASE, body, false);
+    let refused = w.client.refused_before_answer();
+    let raw = match &result {
+        Err(e @ (Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. })) => {
+            out::stderr_line(&e.to_string());
+            return Err(Exit::Error);
+        }
+        Err(Error::NoAnswer(n)) => {
+            out::stderr_line(&n.to_string());
+            return Err(Exit::Error);
+        }
+        other => call::held(other, refused),
+    };
+    let split = call::split(&raw);
+    let noted = Response {
+        status: 0,
+        body: split.body.clone(),
+        channel: result.as_ref().map_or(Channel::Tcp, |r| r.channel),
+        permission: permission::note(&split.body),
+        server_version: None,
+    };
+    w.note(&noted);
+    Ok(split)
+}
+
+/// `_app_post_confirming`'s Python on a 403: the error's `action` and
+/// `secretId` when its `code` is `vault_confirm_required` and both are
+/// true, as `sed -n 1p` and `sed -n 2p` read the two lines it prints.
+fn confirm_asked(body: &[u8]) -> Option<(String, String)> {
+    let Ok(Value::Object(pairs)) = json::parse(std::str::from_utf8(body).ok()?) else {
+        return None;
+    };
+    let Some(Value::Object(e)) = crate::families::get(&pairs, "error") else {
+        return None;
+    };
+    let field = |k: &str| crate::families::get(e, k);
+    if field("code") != Some(&crate::families::s("vault_confirm_required")) {
+        return None;
+    }
+    let (action, sid) = (field("action")?, field("secretId")?);
+    if !py::truthy(action) || !py::truthy(sid) {
+        return None;
+    }
+    for v in [action, sid] {
+        if let Value::Str(t) = v {
+            // `print` can't write half a surrogate pair: it raises there.
+            t.as_str()?;
+        }
+    }
+    let printed = format!("{}\n{}", py::str_of(action), py::str_of(sid));
+    // `$(…)` drops NULs.
+    let printed = printed.replace('\0', "");
+    let mut lines = printed.split('\n');
+    let first = lines.next().unwrap_or("").to_string();
+    let second = lines.next().unwrap_or("").to_string();
+    Some((first, second))
 }
 
 fn resources_send(w: &mut Sent, r: &Resources) -> Exit {

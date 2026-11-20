@@ -23,8 +23,12 @@
 //! - Help never acts: `-h` and `--help` on every verb that changes
 //!   something print help and send nothing, on both sides (the router
 //!   takes them before any verb runs).
-//! - What the binary hands to the shell: the help forms,
-//!   `set-agent-identity`, `remove --apps`.
+//! - A switch alone (or an empty word): its help page on stderr, exit 0
+//!   (2 for `design-tab` and `mobile-tab`), after the gate.
+//! - `set-agent-identity`: the note, then `agent identity`'s answer.
+//! - `remove --apps <way>`: the Apps' release before the removal, its
+//!   refusals, a confirm with no vault socket, a session's passport.
+//! - What the binary hands to the shell: the help forms.
 
 #![cfg(unix)]
 
@@ -1216,29 +1220,338 @@ fn help_never_acts_and_the_shell_keeps_its_forms() {
             "mobile-tab set --help",
             &["mobile-tab", "set", "ws1", "auto", "--help"],
         ),
-        help("api-guest-policy alone", &["api-guest-policy"]),
+        help("api-guest-policy help", &["api-guest-policy", "help"]),
         help("trust alone", &["trust"]),
         help("design-tab help", &["design-tab", "help"]),
-        shell(case(
-            "set-agent-identity",
-            &["set-agent-identity"],
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn a_switch_alone_prints_its_help() {
+    let rig = Rig::new(VERB, "alone");
+    let mut v: Vec<Case> = [
+        ("api-guest-policy", 0),
+        ("api-skip-permissions", 0),
+        ("default-model", 0),
+        ("force-model-on-resume", 0),
+        ("host-session-cell-cap", 0),
+        ("api-host-session-cap", 0),
+        ("design-tab", 2),
+        ("design-mode", 2),
+        ("mobile-tab", 2),
+    ]
+    .into_iter()
+    .map(|(verb, code)| stop(verb, leak(&[verb]), code))
+    .collect();
+    v.push(stop("an empty word", &["default-model", ""], 0));
+    v.push(stop("mobile-tab ''", &["mobile-tab", ""], 2));
+    v.push(case(
+        "no daemon: the gate first",
+        &["design-tab"],
+        &[],
+        vec![],
+        nothing,
+        1,
+        0,
+    ));
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+const IDENTITY: &str = r##"{"ok":true,"handle":"qa","displayName":"QA Bot","color":"#33aa77","image":"data:image/png;base64,AA==","canEditIdentity":true,"canEditHandle":true}"##;
+
+#[test]
+fn set_agent_identity_is_agent_identity_with_a_note() {
+    let rig = Rig::new(VERB, "identity");
+    let mut v = vec![
+        case(
+            "read by name",
+            &["set-agent-identity", "qa"],
             &[],
-            vec![ok(r#"{"handle":"ada","displayName":"Ada"}"#)],
+            vec![ok(IDENTITY)],
             owner_and_port,
             0,
             1,
-        )),
-        shell(case(
-            "remove --apps",
+        ),
+        case(
+            "read this workspace --json",
+            &["set-agent-identity", "--json"],
+            &[],
+            vec![ok(
+                r#"{"handle":"me","displayName":"","canEditIdentity":true}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "change the color",
+            &["set-agent-identity", "qa", "--color", "#abcdef"],
+            &[],
+            vec![ok(
+                r##"{"ok":true,"handle":"qa","changed":["color"],"color":"#abcdef"}"##,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "not found",
+            &["set-agent-identity", "nobody"],
+            &[],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":"not_found","message":"no agent nobody"}"#.into(),
+            )],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "no answer",
+            &["set-agent-identity", "qa"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "no daemon: the gate, no note",
+            &["set-agent-identity", "qa"],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
+        case(
+            "a session with no passport: refused, no note",
+            &["set-agent-identity", "qa"],
+            &[("K2_HOOK_SOCK", "{nosock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        Case {
+            env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+            ..case(
+                "a session with a passport: its own workspace (the probe first)",
+                &["set-agent-identity", "--color", "#123456"],
+                &[],
+                vec![
+                    ok(r#"{"ok":true}"#),
+                    ok(r#"{"ok":true,"handle":"me","changed":["color"]}"#),
+                ],
+                owner_and_port,
+                0,
+                2,
+            )
+        },
+    ];
+    for args in [
+        &["set-agent-identity", "--name"][..],
+        &["set-agent-identity", "qa", "--zz"],
+        &["set-agent-identity", "a", "b"],
+    ] {
+        v.push(case(
+            "a usage line, after the note",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ));
+    }
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+fn leak(args: &[&'static str]) -> &'static [&'static str] {
+    Box::leak(args.to_vec().into_boxed_slice())
+}
+
+const RELEASED: &str =
+    r#"{"ok":true,"workspace":"/srv/ws1","way":"park","results":[{"app":"acme"}]}"#;
+const REMOVED: &str = r#"{"ok":true,"removed":"/srv/ws1"}"#;
+const POC: &str =
+    r#"{"error":{"code":"poc_of_projects","hint":"ws1 is the Point of Contact for: A."}}"#;
+const CONFIRM: &str =
+    r#"{"error":{"code":"vault_confirm_required","action":"app-release","secretId":"s1"}}"#;
+
+/// The lookup's answer, then `reply` to the release: two requests.
+fn release(name: &'static str, args: &'static [&'static str], reply: Reply, code: i32) -> Case {
+    case(
+        name,
+        args,
+        &[],
+        vec![ok(RESOLVED), reply],
+        owner_and_port,
+        code,
+        2,
+    )
+}
+
+fn answer(status: u16, body: &str) -> Reply {
+    Reply::Answer(status, body.into())
+}
+
+#[test]
+fn remove_with_apps_releases_them_first() {
+    let rig = Rig::new(VERB, "apps");
+    let uninstall: &'static [&'static str] = &["remove", "ws1", "--apps", "uninstall"];
+    let park: &'static [&'static str] = &["remove", "ws1", "--apps", "park"];
+    let handover: &'static [&'static str] = &["remove", "ws1", "--apps", "handover:ws2"];
+    let v = vec![
+        o("--apps park", park, &[RELEASED, REMOVED], 0),
+        o(
+            "--apps=uninstall --drop-access, then --mode",
+            &[
+                "remove",
+                "ws1",
+                "--apps=uninstall",
+                "--drop-access",
+                "--mode",
+                "keep-current",
+            ],
+            &[RELEASED, REMOVED],
+            0,
+        ),
+        o(
+            "--apps handover, the remove refused",
+            handover,
+            &[RELEASED, POC],
+            1,
+        ),
+        o(
+            "--apps with an empty value: no release",
+            &["remove", "ws1", "--apps", ""],
+            &[REMOVED],
+            0,
+        ),
+        release(
+            "the release refused: all or nothing",
+            uninstall,
+            answer(
+                403,
+                r#"{"error":{"code":"apps_would_lose_access","hint":"acme"}}"#,
+            ),
+            3,
+        ),
+        release(
+            "the release: a bad request",
+            &["remove", "ws1", "--apps", "bogus"],
+            answer(400, r#"{"error":"bad_apps","message":"use park"}"#),
+            2,
+        ),
+        release(
+            "the release: not found is 3",
+            park,
+            answer(404, r#"{"error":{"code":"not_found"}}"#),
+            3,
+        ),
+        release(
+            "the release held (202): the shell takes only 200",
+            handover,
+            answer(202, r#"{"status":"held","results":[{"request":"r1"}]}"#),
+            3,
+        ),
+        release("the release: not JSON", park, answer(500, "oops"), 3),
+        release("the release: an empty answer", park, answer(500, ""), 3),
+        release(
+            "a confirm, no vault socket",
+            uninstall,
+            answer(403, CONFIRM),
+            3,
+        ),
+        release(
+            "a confirm with no secret id",
+            uninstall,
+            answer(
+                403,
+                r#"{"error":{"code":"vault_confirm_required","action":"app-release"}}"#,
+            ),
+            3,
+        ),
+        // Over TCP: `_compute_fail` on status 000 and a body of `\n000`.
+        release("the release: no answer", park, Reply::Close, 3),
+        case(
+            "--apps, not found: no release",
             &["remove", "ws9", "--apps", "park"],
             &[],
             vec![ok("{}")],
             owner_and_port,
             4,
             1,
-        )),
+        ),
+        case(
+            "--apps park --drop-access: the usage line after the lookup",
+            &["remove", "ws1", "--apps", "park", "--drop-access"],
+            &[],
+            vec![ok(RESOLVED)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        Case {
+            env: with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+            ..case(
+                "a session's passport: the release on the cell socket",
+                park,
+                &[],
+                vec![ok(RESOLVED), ok(RELEASED), ok(REMOVED)],
+                port_only,
+                0,
+                3,
+            )
+        },
     ];
     for c in v {
         rig.check(&c);
+    }
+}
+
+/// The lines name the command by the brand's name (in a build with
+/// `K2_BRAND_DIR=brand/xy` they say `xy`), never a typed `k2` or `k5`.
+#[test]
+fn workspace_verb_lines_say_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let rig = Rig::new(VERB, "brand");
+    let identity = format!(
+        "Usage: {cli} agent identity [<agent>] [--color <hex|rgb>] [--image <file.png|jpg|webp> | --clear-image] [--name <name>] [--json]"
+    );
+    for (args, want, code) in [
+        (
+            &["set-agent-identity", "a", "b"][..],
+            format!(
+                "note: '{cli} workspace set-agent-identity' is now '{cli} agent identity' (same flags).\n{identity}\n"
+            ),
+            2,
+        ),
+        (
+            &["api-guest-policy", "frobnicate"],
+            format!(
+                "Unknown api-guest-policy subcommand: frobnicate\nUsage: {cli} workspace api-guest-policy get|set <workspace> \u{2026}\n"
+            ),
+            2,
+        ),
+        (
+            &["design-tab", "frobnicate"],
+            format!("Usage: {cli} workspace design-tab get|set <workspace> [on|off]\n"),
+            2,
+        ),
+    ] {
+        let c = case("brand", args, &[], vec![], owner_and_port, code, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(code), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
     }
 }

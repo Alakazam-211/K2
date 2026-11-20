@@ -17,7 +17,9 @@
 //! from an agent's session (`HOOK_SOCK` and a passport) is
 //! `_cli_refuse_agent_self_grant`'s refusal, exit 3, nothing sent.
 //!
-//! The shell answers the help forms (no verb, `help`) and these:
+//! The verb alone (or an empty word) prints the verb's help page on
+//! stderr after the gates ([`page`]): exit 0, but 2 for `design-tab` and
+//! `mobile-tab`. The shell answers `help` and these:
 //! `api-guest-policy set --file` with a file that is not UTF-8 or holds a
 //! NUL (bash warns about the NUL), and a `host-session-cell-cap` value
 //! with a line break in it or too long for bash's `[ -gt ]`.
@@ -125,6 +127,28 @@ fn usage_of(kind: Kind, tail: &str) -> String {
     )
 }
 
+/// The verb's help page (`cli/text/help/workspace/<verb>.txt`) on
+/// stderr, as the shell's `cat <<'EOF' >&2` prints it, and `exit`. The
+/// shell's when the page isn't embedded.
+fn page(kind: Kind, exit: Exit) -> Top {
+    let key = match kind {
+        Kind::Design => "workspace/design-tab",
+        Kind::Mobile => "workspace/mobile-tab",
+        Kind::GuestPolicy => "workspace/api-guest-policy",
+        Kind::SkipPermissions => "workspace/api-skip-permissions",
+        Kind::DefaultModel => "workspace/default-model",
+        Kind::ForceModel => "workspace/force-model-on-resume",
+        Kind::CellCap => "workspace/host-session-cell-cap",
+    };
+    let Some(text) = crate::text::help(key) else {
+        return Top::Shell;
+    };
+    Top::Stop(super::Stop {
+        lines: vec![text.strip_suffix('\n').unwrap_or(text).to_string()],
+        exit,
+    })
+}
+
 /// The words after the verb.
 pub fn parse(verb: &str, words: &[&str]) -> Top {
     let kind = match verb {
@@ -166,7 +190,10 @@ pub fn parse(verb: &str, words: &[&str]) -> Top {
             )),
             "get" => ask(true, Text::Given(String::new())),
             "set" => ask(false, Text::Given(arg(1).to_string())),
-            "" | "help" | "-h" | "--help" => Top::Shell,
+            // `_workspace_pinned_tab_help >&2`, then `exit 2`; `help` is the
+            // shell's (`return 0`).
+            "" => page(kind, Exit::Usage),
+            "help" | "-h" | "--help" => Top::Shell,
             _ => usage(format!(
                 concat!(
                     "Usage: ",
@@ -181,7 +208,9 @@ pub fn parse(verb: &str, words: &[&str]) -> Top {
         "get" if target.is_empty() => usage(usage_of(kind, "get <workspace>")),
         "get" => ask(true, Text::Given(String::new())),
         "set" => set(kind, rest, &ask),
-        "" | "help" | "-h" | "--help" => Top::Shell,
+        // The help heredoc `>&2`, then `exit 0`; `help` is the shell's.
+        "" => page(kind, Exit::Ok),
+        "help" | "-h" | "--help" => Top::Shell,
         _ => unknown(kind, sub),
     }
 }

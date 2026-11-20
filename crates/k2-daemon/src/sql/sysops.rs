@@ -1469,7 +1469,7 @@ impl SystemOps for FakeSystemOps {
         if self.query_answers.contains_key("helper pgarchive") {
             Ok(())
         } else {
-            Err("helper_needed: turning WAL archiving on or off on a named Postgres cluster needs k2-root-helper protocol 18 (this box: protocol 17). Run `k2 root-helper update`.".into())
+            Err(concat!("helper_needed: turning WAL archiving on or off on a named Postgres cluster needs k2-root-helper protocol 18 (this box: protocol 17). Run `", k2_core::cli_name!(), " root-helper update`.").into())
         }
     }
     fn run_helper(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {

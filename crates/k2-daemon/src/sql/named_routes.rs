@@ -253,7 +253,7 @@ pub fn handle_archive(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8])
         Ok(b) => b,
         Err(e) => return err("400 Bad Request", "usage", format!("invalid JSON body: {e}")),
     };
-    const USAGE: &str = "k2 db cluster archive <name> on|off";
+    const USAGE: &str = concat!(k2_core::cli_name!(), " db cluster archive <name> on|off");
     let Some(spec) = b.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
         return err("400 Bad Request", "usage", USAGE);
     };

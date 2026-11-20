@@ -2,7 +2,8 @@
 # A ceiling only ever goes down (scripts/garden/ratchet.sh --tighten).
 # Never raise one by hand: put new code in a new file or the area file.
 # dispatcher.rs +2, K2's ruling: the k5 usage note and its route arm; the dispatcher split after 0.46.17 brings it down.
-16889 crates/k2-daemon/src/routes/dispatcher.rs
+# dispatcher.rs +19, K2's ruling: db cluster archive's route arm (POST /cli/db/clusters/archive); the dispatcher split after 0.46.17 brings it down.
+16908 crates/k2-daemon/src/routes/dispatcher.rs
 8569 src/renderer/stores/tabs.ts
 7642 crates/k2-core/src/skin.rs
 6158 crates/k2-daemon/src/mail/jmap.rs

@@ -28,6 +28,16 @@ use k2_daemon::test_harness;
 const OWNER: &str = "ws-passport-routes-owner-token";
 const REFUSED: &str = "Invalid or missing auth token";
 
+/// Ends the live session and takes it out of the session map on drop.
+struct Live(std::sync::Arc<k2_core::terminal::DaemonPtySession>);
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        k2_daemon::v2_session_map::unregister("tab-ws-passport");
+        self.0.kill();
+    }
+}
+
 struct Resp {
     status: u16,
     raw: String,
@@ -113,9 +123,33 @@ async fn workspace_routes_refuse_an_agent_passport_for_every_workspace() {
         let r = http(port, "POST", &format!("/cli/workspace/create?path={}&no_wiki=1&no_agents_md=1", enc(&ws.to_string_lossy())), Some(OWNER));
         assert_eq!(r.status, 200, "owner create {}: {}", ws.display(), r.raw);
     }
+    // A passport of a live session (a `cat` in a PTY), as a session K2
+    // started carries: the D1 arm the profile takes admits only those.
+    let sid = SessionId::new();
+    let session = k2_core::terminal::DaemonPtySession::spawn(k2_core::terminal::DaemonPtyConfig {
+        session_id: sid,
+        cols: 80,
+        rows: 24,
+        cwd: Some(own.clone()),
+        program: Some("/bin/cat".to_string()),
+        args: vec![],
+        durable_args: None,
+        env: Default::default(),
+        drain_on_exit: true,
+        label: String::new(),
+        label_source: k2_core::terminal::LabelSource::Pty,
+        sandbox: k2_core::terminal::SandboxSpec::Passthrough,
+        cell_uid: None,
+        overlay: None,
+        survive: false,
+        ptyd_meta: None,
+    })
+    .expect("spawn a live session");
+    let _live = Live(session.clone());
+    k2_daemon::v2_session_map::register("tab-ws-passport".to_string(), session);
     let passport = session_token::mint_session_token(
-        &SessionId::new(),
-        "pane-ws-passport",
+        &sid,
+        &sid.to_string(),
         HookPrincipal { workspace_uuid: project_id_for(&own), agent_address: "ws-passport-agent".into() },
         session_token::CredMode::ApiKey,
         session_token::Provider::Anthropic,

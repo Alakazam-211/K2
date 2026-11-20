@@ -306,6 +306,124 @@ fn the_words_as_cmd_setup_reads_them() {
     assert!(usage_text().starts_with("k2 setup [--json]"));
 }
 
+/// `agent-reports` goes to the shell where the loop reaches it with no
+/// verb before it, whatever comes after; after a verb it is the usage.
+#[test]
+fn the_shell_s_verbs() {
+    assert_eq!(SHELL_VERBS, ["agent-reports"]);
+    for words in [
+        &["agent-reports"][..],
+        &[
+            "agent-reports",
+            "--agents",
+            "all",
+            "--attach",
+            "computer,log-tail",
+        ],
+        &["--json", "agent-reports"],
+        &["agent-reports", "--json"],
+        &["agent-reports", "--bogus"],
+        &["agent-reports", "hide"],
+        &["--json", "--json", "agent-reports", "x"],
+    ] {
+        assert_eq!(parse(words), Err(Stop::Shell), "{words:?}");
+    }
+    for words in [
+        &["hide", "agent-reports"][..],
+        &["kessel", "agent-reports"],
+        &["skip", "x", "agent-reports"],
+    ] {
+        assert_eq!(parse(words), Err(Stop::Usage(usage_text())), "{words:?}");
+    }
+    // A mistake before it is the binary's; a value is no verb.
+    assert_eq!(
+        parse(&["--bogus", "agent-reports"]),
+        Err(Stop::Usage(format!(
+            "k2 setup: unknown argument: --bogus\n{}",
+            usage_text()
+        )))
+    );
+    assert_eq!(
+        parse(&["skip", "agent-reports"]).map(|l| l.body),
+        Ok(r#"{"row": "agent-reports"}"#.to_string())
+    );
+    assert_eq!(
+        parse(&["kessel", "--name", "agent-reports"]).map(|l| l.body),
+        Ok(r#"{"name": "agent-reports"}"#.to_string())
+    );
+    assert_eq!(parse(&["agent-reports", "-h"]), Err(Stop::Shell));
+    assert_eq!(parse(&["-h", "agent-reports"]), Err(Stop::Help));
+    let text = source();
+    assert!(text.contains(
+        "            agent-reports)\n                # The agent opt-in (0.46.17): send-feedback's settings read\n                # and write, in bash and curl like the rest of k2 setup.\n                [ -z \"$sub\" ] || { _setup_usage >&2; exit 2; }\n                shift\n                if [ \"$as_json\" = 1 ]; then set -- --json \"$@\"; fi\n                _sf_settings_run setup \"$@\"\n                return ;;\n"
+    ));
+}
+
+/// The words of `cmd_setup`'s loop (`cli/src/setup.sh`), as its arms
+/// name them: a new one fails here until the binary parses it or hands
+/// it to the shell ([`SHELL_VERBS`]).
+#[test]
+fn each_word_of_cmd_setup_is_parsed_or_handed_on() {
+    let text = source();
+    let body = text.split_once("\ncmd_setup() {\n").expect("cmd_setup").1;
+    let body = body
+        .split_once("    while [ $# -gt 0 ]; do\n        case \"$1\" in\n")
+        .expect("cmd_setup's loop")
+        .1;
+    let arms = &body[..body
+        .find("\n        esac\n    done\n")
+        .expect("the loop's end")];
+    let mut words = Vec::new();
+    for line in arms.lines() {
+        // An arm of the loop's own case: twelve spaces, then the pattern.
+        let Some(rest) = line.strip_prefix("            ") else {
+            continue;
+        };
+        if rest.starts_with(' ') {
+            continue;
+        }
+        let pattern = rest.split_once(')').expect("an arm's pattern").0;
+        words.extend(pattern.split('|').map(str::to_string));
+    }
+    let want = [
+        "-h",
+        "--help",
+        "help",
+        "--json",
+        "hide",
+        "show",
+        "kessel",
+        "chief-of-staff",
+        "dismiss-offer",
+        "agent-reports",
+        "--tool",
+        "--name",
+        "--handle",
+        "--about",
+        "--focus-group",
+        "skip",
+        "*",
+    ];
+    assert_eq!(words, want, "cmd_setup's words moved: read them again");
+    for w in words.iter().filter(|w| *w != "*") {
+        let unknown = Err(Stop::Usage(format!(
+            "{}\n{}",
+            unknown_argument(w),
+            usage_text()
+        )));
+        let got = parse(&[w.as_str()]);
+        assert_ne!(got, unknown, "{w}: neither parsed nor handed on");
+        assert_eq!(
+            got == Err(Stop::Shell),
+            SHELL_VERBS.contains(&w.as_str()),
+            "{w}: {got:?}"
+        );
+    }
+    for w in SHELL_VERBS {
+        assert!(words.iter().any(|a| a == w), "{w} is no word of cmd_setup");
+    }
+}
+
 #[test]
 fn values_as_setup_jstr_writes_them() {
     for (value, want) in [

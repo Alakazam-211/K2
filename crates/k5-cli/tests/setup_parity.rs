@@ -22,7 +22,7 @@
 //!   `chief-of-staff`'s locked tool in a K2 terminal with no passport.
 //! - Every usage mistake, sending nothing.
 //! - What the binary hands to the shell: `help` as a word, a host that is
-//!   not plain.
+//!   not plain, and `agent-reports` (send-feedback's settings).
 
 #![cfg(unix)]
 
@@ -965,6 +965,151 @@ fn setup_hands_these_to_the_shell() {
             1,
             0,
         )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// send-feedback's settings as a 0.46.17 daemon answers them.
+const FEEDBACK_SETTINGS: &str = r#"{"enabled":true,"agents":true,"agentPlatform":false,"agentAttach":["computer"],"agentDiagnostics":false,"agentScopes":["cli"],"agentsAsked":true,"agentsAskedAt":1763538000000,"agentsAskedBy":"owner","attachParts":[{"id":"computer","label":"Computer size and free space"},{"id":"log-tail","label":"The last lines of the log"}],"rememberDiagnostics":false,"canEdit":true,"canSend":true,"endpoint":"https://feedback.example.test","contactAddress":"","pending":0,"service":{},"senderKind":"person","ok":true}"#;
+/// The same after `--agents all --attach computer,log-tail`.
+const FEEDBACK_ALL: &str = r#"{"enabled":true,"agents":true,"agentPlatform":true,"agentAttach":["computer","log-tail"],"agentDiagnostics":false,"agentScopes":["cli","platform"],"agentsAsked":true,"agentsAskedAt":1763538000000,"agentsAskedBy":"owner","attachParts":[{"id":"computer","label":"Computer size and free space"},{"id":"log-tail","label":"The last lines of the log"}],"canSend":true,"endpoint":"https://feedback.example.test","pending":2,"senderKind":"person","ok":true}"#;
+
+/// `setup agent-reports` (send-feedback's settings, 0.46.17) is on the
+/// binary's hand-off list ([`k5_cli::families::setup::SHELL_VERBS`]):
+/// both sides are the shell's, byte for byte, for each of its forms. With
+/// no python3 the binary hands nothing over: the missing-Python line,
+/// exit 69, nothing sent (the rig's third run). After another verb it is
+/// the binary's usage.
+#[test]
+fn setup_agent_reports_goes_to_the_shell() {
+    let rig = Rig::new(VERB, "agent-reports");
+    let shell = |c: Case| Case {
+        compare: Compare::Shell,
+        ..c
+    };
+    let people_only = || {
+        refusal(
+            403,
+            r#"{"ok":false,"error":"settings_people_only","message":"Only a person signed in to this server changes these settings."}"#,
+        )
+    };
+    let v = vec![
+        shell(case(
+            "agent-reports: the read",
+            &["agent-reports"],
+            &[],
+            vec![text(FEEDBACK_SETTINGS)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        shell(case(
+            "agent-reports --agents all --attach: the version read, then the write",
+            &[
+                "agent-reports",
+                "--agents",
+                "all",
+                "--attach",
+                "computer,log-tail",
+            ],
+            &[],
+            vec![text(FEEDBACK_SETTINGS), text(FEEDBACK_ALL)],
+            owner_and_port,
+            0,
+            2,
+        )),
+        shell(case(
+            "agent-reports --json",
+            &["agent-reports", "--json"],
+            &[],
+            vec![text(FEEDBACK_SETTINGS)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        shell(case(
+            "--json before agent-reports",
+            &["--json", "agent-reports", "--agents", "off"],
+            &[],
+            vec![text(FEEDBACK_SETTINGS)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        shell(case(
+            "agent-reports: a usage error, nothing sent",
+            &["agent-reports", "--enabled", "off"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        )),
+        shell(case(
+            "agent-reports --agents maybe: a usage error",
+            &["agent-reports", "--agents", "maybe"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        )),
+        shell(case(
+            "agent-reports refused (403): exit 3",
+            &["agent-reports", "--agents", "off"],
+            &[],
+            vec![people_only()],
+            owner_and_port,
+            3,
+            1,
+        )),
+        shell(case(
+            "agent-reports, a bad part (400): exit 2",
+            &["agent-reports", "--attach", "nope"],
+            &[],
+            vec![
+                text(FEEDBACK_SETTINGS),
+                refusal(
+                    400,
+                    r#"{"ok":false,"error":"bad_attach_part","message":"nope isn't a part agents may attach."}"#,
+                ),
+            ],
+            owner_and_port,
+            2,
+            2,
+        )),
+        shell(agent(
+            &[],
+            case(
+                "an agent's agent-reports: refused, exit 3",
+                &["agent-reports", "--agents", "cli"],
+                &[],
+                vec![text(FEEDBACK_SETTINGS), people_only()],
+                port_only,
+                3,
+                2,
+            ),
+        )),
+        case(
+            "agent-reports after a verb: the usage",
+            &["hide", "agent-reports"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "a mistake before agent-reports is the binary's",
+            &["--bogus", "agent-reports"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

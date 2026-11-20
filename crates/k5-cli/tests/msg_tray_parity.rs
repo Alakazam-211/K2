@@ -545,15 +545,17 @@ fn tray_value_flag_last_is_the_d6_line() {
         let c = plain("a value flag last", args, vec![], 1, 0);
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
-        assert_eq!(b.code, Some(1), "{flag}: bash: {b:?}");
-        assert!(
-            b.stderr.ends_with(": $2: unbound variable\n"),
-            "{flag}: bash: {b:?}"
-        );
-        assert!(
-            rig.read(Side::Bash, false, flag).is_empty(),
-            "{flag}: bash sent"
-        );
+        if edge_usage_exit_2_proven() {
+            assert_eq!(b.code, Some(1), "{flag}: bash: {b:?}");
+            assert!(
+                b.stderr.ends_with(": $2: unbound variable\n"),
+                "{flag}: bash: {b:?}"
+            );
+            assert!(
+                rig.read(Side::Bash, false, flag).is_empty(),
+                "{flag}: bash sent"
+            );
+        }
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{flag}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{flag}: {r:?}");

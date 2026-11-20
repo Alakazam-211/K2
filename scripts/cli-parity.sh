@@ -209,9 +209,13 @@ check_version_offline() {
 # check_edge_usage_exit_2: a value flag as the last word, with a port and
 # an owner token on disk but nothing listening (neither side may ask).
 # Bash stops on its own unbound-variable line and exits 1; the binary
-# prints its one line and exits 2.
+# prints its one line and exits 2. That holds from bash 4 on (Linux).
+# macOS's /bin/bash 3.2 reads on and exits 0: there only the binary's
+# side is checked, bash's answers are listed, and the check says the
+# difference itself was not proven here (returns 3).
 check_edge_usage_exit_2() {
-    local d="$WORK/d6" flag rc out err problems=()
+    local d="$WORK/d6" flag rc out err problems=() seen=() major
+    major="$(bash -c 'echo "${BASH_VERSINFO[0]}"')"
     mkdir -p "$d/home/.k2" "$d/ws"
     printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
     printf '1\n' >"$d/home/.k2/heartbeat.port"
@@ -222,19 +226,28 @@ check_edge_usage_exit_2() {
         talk:--answer talk:--respond talk:--answers talk:--wake-timeout; do
         verb="${verb_flag%%:*}" flag="${verb_flag#*:}"
         rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" bash "$ROOT/cli/k2" "$verb" ws hi "$flag") >"$out" 2>"$err" </dev/null || rc=$?
-        [ "$rc" = 1 ] || problems+=("bash $verb ws hi $flag exited $rc, want 1")
-        [ ! -s "$out" ] || problems+=("bash $verb ws hi $flag printed on stdout: $(head -c 200 "$out")")
-        [ "$(wc -l <"$err" | tr -d ' ')" = 1 ] && grep -q '^.*: line [0-9]*: \$2: unbound variable$' "$err" \
-            || problems+=("bash $verb ws hi $flag wrote: $(head -c 300 "$err")")
+        if [ "$major" -ge 4 ]; then
+            [ "$rc" = 1 ] || problems+=("bash $verb ws hi $flag exited $rc, want 1")
+            [ ! -s "$out" ] || problems+=("bash $verb ws hi $flag printed on stdout: $(head -c 200 "$out")")
+            [ "$(wc -l <"$err" | tr -d ' ')" = 1 ] && grep -q '^.*: line [0-9]*: \$2: unbound variable$' "$err" \
+                || problems+=("bash $verb ws hi $flag wrote: $(head -c 300 "$err")")
+        else
+            seen+=("bash $verb ws hi $flag: exit $rc, stderr $(head -c 120 "$err" | tr '\n' ' ')")
+        fi
         rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" "$WORK/bin/k2" "$verb" ws hi "$flag") >"$out" 2>"$err" </dev/null || rc=$?
         [ "$rc" = 2 ] || problems+=("the binary's $verb ws hi $flag exited $rc, want 2")
         [ ! -s "$out" ] || problems+=("the binary's $verb ws hi $flag printed on stdout: $(head -c 200 "$out")")
         [ "$(cat "$err")" = "Error: $flag needs a value (try 'k2 $verb --help')" ] \
             || problems+=("the binary's $verb ws hi $flag wrote: $(head -c 300 "$err")")
     done
-    [ ${#problems[@]} -eq 0 ] && return 0
-    printf '%s\n' "${problems[@]}"
-    return 1
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    [ "$major" -ge 4 ] && return 0
+    echo "bash here is $major.x, which reads a value flag as the last word on (the difference holds from bash 4, on Linux, where it is proven); the binary's side held on all ${#seen[@]}; bash answered:"
+    printf '%s\n' "${seen[@]}"
+    return 3
 }
 
 # path_without_python3 <dir>: prints this PATH with no python3 on it, each

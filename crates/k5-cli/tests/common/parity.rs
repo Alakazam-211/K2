@@ -1176,6 +1176,21 @@ fn without_unbound_line(name: &str, stderr: &str, arrays: &[&str]) -> String {
     rest.concat()
 }
 
+/// Whether `scripts/cli-parity.sh`'s named difference `edge-usage-exit-2`
+/// can be proven with the `bash` the rig runs: from bash 4 on (Linux) a
+/// value flag as the last word stops bash on its `$2: unbound variable`
+/// line. macOS's /bin/bash 3.2 reads on and exits 0, so there the bash
+/// side is not proven (it says so on stderr) and only the binary's side is
+/// checked, as the gate does.
+pub fn edge_usage_exit_2_proven() -> bool {
+    let v = bash_version();
+    if v < (4, 0) {
+        let (major, minor) = v;
+        eprintln!("edge-usage-exit-2: bash {major}.{minor}: its side not proven here");
+    }
+    v >= (4, 0)
+}
+
 /// The `bash` the rig runs: its major and minor version.
 fn bash_version() -> (u32, u32) {
     static V: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();

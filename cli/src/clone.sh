@@ -47,7 +47,10 @@ Flags:
   --live-only                  only the newest chat transcript (default: all)
   --env-files                  also send .env files as files (asks you to confirm;
                                better: k2 vault import .env first)
-  --token T                    remote token (else connect-tokens.json / $K2_REMOTE_TOKEN)
+  --token-stdin                remote token on stdin (else connect-tokens.json /
+                               $K2_REMOTE_TOKEN); --token T still works, but every
+                               account on this computer can see it while the
+                               command runs
   --yes                        don't ask; take defaults and flags as given
   --json                       names, choices and counts as JSON
 
@@ -663,6 +666,7 @@ _clone_parse() {
     _CLONE_TOKEN=""
     local copy="" blank="" skip="" since="" dest="" why="" to="" ws="" reason=""
     local no_threads=0 own=0 live_only=0 env_files=0 yes=0 json=0 mine=0 all=0
+    local token_stdin=0 token_flag=""
     _CLONE_HOST=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -676,7 +680,8 @@ _clone_parse() {
             --env-files) env_files=1; shift ;;
             --dest) dest="${2:-}"; shift 2 ;;
             --host) _CLONE_HOST="${2:-}"; shift 2 ;;
-            --token) _CLONE_TOKEN="${2:-}"; shift 2 ;;
+            --token-stdin) token_stdin=1; shift ;;
+            --token) _CLONE_TOKEN="${2:-}"; token_flag="$1"; shift 2 ;;
             --to) to="${2:-}"; shift 2 ;;
             --why) why="${2:-}"; shift 2 ;;
             --reason) reason="${2:-}"; shift 2 ;;
@@ -692,6 +697,17 @@ _clone_parse() {
     done
     if [ -n "$since" ]; then
         case "$since" in ''|*[!0-9]*) _clone_die usage "--threads-since takes a number of days" 2 ;; esac
+    fi
+    # The remote token off argv: --token-stdin reads one line from stdin.
+    # --token T still works for now, with a note: a command line is visible
+    # to every account on this computer while the command runs.
+    if [ "$token_stdin" = 1 ]; then
+        [ -z "$token_flag" ] || _clone_die usage "--token-stdin or --token, not both" 2
+        _cli_read_secret_stdin "Token: "
+        _CLONE_TOKEN="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
+        [ -n "$_CLONE_TOKEN" ] || _clone_die usage "--token-stdin: no token on stdin" 2
+    elif [ -n "$token_flag" ]; then
+        echo "note: --token is visible to every account on this computer while the command runs; use --token-stdin" >&2
     fi
     K2C_OPTS="$(K2C_copy="$copy" K2C_blank="$blank" K2C_skip="$skip" K2C_since="$since" K2C_dest="$dest" \
         K2C_why="$why" K2C_to="$to" K2C_ws="$ws" K2C_reason="$reason" \
@@ -720,7 +736,7 @@ _clone_opt() {
 _clone_remote() {
     local host="$1" tok
     tok="$(_remote_token_for_host "$host" "$_CLONE_TOKEN")"
-    [ -n "$tok" ] || _clone_die no_remote_token "no token for '$host': sign in to it in K2 with Remember on, pass --token, set \$K2_REMOTE_TOKEN, or add it to ${K2_HOME}/connect-tokens.json"
+    [ -n "$tok" ] || _clone_die no_remote_token "no token for '$host': sign in to it in K2 with Remember on, pass --token-stdin, set \$K2_REMOTE_TOKEN, or add it to ${K2_HOME}/connect-tokens.json"
     case "$host" in
         http://*|https://*) K2C_REMOTE_URL="${host%/}" ;;
         *) K2C_REMOTE_URL="https://${host}" ;;

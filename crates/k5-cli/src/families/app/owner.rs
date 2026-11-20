@@ -110,9 +110,9 @@ pub struct Handover {
     pub sub: String,
     pub app: String,
     pub to: String,
-    /// `--brief FILE` given (its text in `brief`).
+    /// `--brief FILE` given (its bytes in `brief`).
     pub brief_file: bool,
-    pub brief: String,
+    pub brief: Vec<u8>,
     pub db: String,
     pub coll: String,
     pub reset_shared: bool,
@@ -135,7 +135,7 @@ pub const VERBS: &[&str] = &[
 ];
 
 /// The words after the verb. `None`: a help form, or a brief file that
-/// is not UTF-8 or holds a NUL (the shell's).
+/// can't be read (the shell's: `cat` fails under `set -e`).
 pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
     if verb == "handover" && words.is_empty() {
         return Some(Ok(Ask::HandoverUsage));
@@ -243,16 +243,17 @@ fn handover(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
                 "{{\"error\":\"bad_request\",\"hint\":\"no brief file {brief_file}\"}}"
             ))));
         }
-        let bytes = std::fs::read(brief_file).ok()?;
-        if bytes.contains(&0) {
-            return None;
-        }
-        let mut text = String::from_utf8(bytes).ok()?;
-        while text.ends_with('\n') {
-            text.pop();
+        // `brief="$(cat "$brief_file")"`: the bytes as they are, each NUL
+        // dropped (bash 4.4 and later also warn on stderr; this doesn't),
+        // then the newlines at the end. Bytes that aren't UTF-8 go to
+        // `_compute_json` as they are ([`Given::put_bytes`]).
+        let mut bytes = std::fs::read(brief_file).ok()?;
+        bytes.retain(|b| *b != 0);
+        while bytes.last() == Some(&b'\n') {
+            bytes.pop();
         }
         h.brief_file = true;
-        h.brief = text;
+        h.brief = bytes;
     }
     Some(Ok(Ask::Handover(h)))
 }
@@ -731,7 +732,7 @@ fn handover_run(ctx: &mut Ctx, h: &Handover) -> Answer {
     let g = Given::new()
         .put("app", &h.app)
         .put("to", &h.to)
-        .put("brief", &h.brief)
+        .put_bytes("brief", &h.brief)
         .put("db", &h.db)
         .put("collisions", &h.coll)
         .put("resetShared_b", one(h.reset_shared))

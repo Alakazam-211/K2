@@ -43,6 +43,14 @@ fn files(rig: &Rig) {
     .unwrap();
 }
 
+/// `NOTES.md`, and two briefs the binary once handed to the shell:
+/// `BAD.md`, bytes that aren't UTF-8, and `NUL.md`, with NULs in it.
+fn odd_briefs(rig: &Rig) {
+    files(rig);
+    std::fs::write(rig.proj.join("BAD.md"), b"caf\xc3\xa9 \xff\xfe \xe2\x82 end\n\n").unwrap();
+    std::fs::write(rig.proj.join("NUL.md"), b"a\x00b\n\x00\n").unwrap();
+}
+
 fn answer(status: u16, body: &str) -> Reply {
     Reply::Answer(status, body.to_string())
 }
@@ -371,6 +379,29 @@ fn handover_answers_as_the_shell_does() {
                 answer(202, OFFER),
                 2,
             ),
+            // covers: app handover
+            case(
+                "a brief file that isn't UTF-8",
+                &["handover", "acme", "--to", "bob", "--brief", "BAD.md"],
+                &[],
+                vec![answer(202, OFFER)],
+                odd_briefs,
+                2,
+                1,
+            ),
+            // covers: app handover
+            Case {
+                compare: Compare::NulInAnswer,
+                ..case(
+                    "a brief file with NULs",
+                    &["handover", "acme", "--to", "bob", "--brief", "NUL.md"],
+                    &[],
+                    vec![answer(202, OFFER)],
+                    odd_briefs,
+                    2,
+                    1,
+                )
+            },
             // covers: app handover
             one(
                 "legacy: done at once",

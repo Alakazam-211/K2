@@ -479,7 +479,7 @@ impl Cj {
 /// out; each value's kind is its name's suffix, as [`Cj`] writes it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Given {
-    pairs: Vec<(String, String)>,
+    pairs: Vec<(String, Vec<u8>)>,
 }
 
 impl Given {
@@ -488,10 +488,18 @@ impl Given {
     }
 
     /// `K2_CJ_<name>=<v>`.
-    pub fn put(mut self, name: &str, v: &str) -> Given {
+    pub fn put(self, name: &str, v: &str) -> Given {
+        self.put_bytes(name, v.as_bytes())
+    }
+
+    /// `K2_CJ_<name>=<v>` for a value that may not be UTF-8 (a file's
+    /// text read with `$(cat …)`): the Python reads each byte that isn't
+    /// as `surrogateescape` does, and `json.dumps` writes it `\udcXX`.
+    /// Only a string's value (`_s`, or no suffix) comes here that way.
+    pub fn put_bytes(mut self, name: &str, v: &[u8]) -> Given {
         match self.pairs.iter_mut().find(|(k, _)| k == name) {
-            Some(slot) => slot.1 = v.to_string(),
-            None => self.pairs.push((name.to_string(), v.to_string())),
+            Some(slot) => slot.1 = v.to_vec(),
+            None => self.pairs.push((name.to_string(), v.to_vec())),
         }
         self
     }
@@ -503,7 +511,7 @@ impl Given {
     /// The pairs of `other` after these.
     pub fn then(mut self, other: &Given) -> Given {
         for (k, v) in &other.pairs {
-            self = self.put(k, v);
+            self = self.put_bytes(k, v);
         }
         self
     }
@@ -516,6 +524,11 @@ impl Given {
                 if (k.ends_with("_s") || k.ends_with("Token")) != secret || v.is_empty() {
                     continue;
                 }
+                let Ok(v) = std::str::from_utf8(v) else {
+                    let key = k.strip_suffix("_s").unwrap_or(k);
+                    cj = cj.put(key, crate::families::approve::cp::env_text(v));
+                    continue;
+                };
                 cj = if let Some(key) = k.strip_suffix("_s") {
                     cj.s(key, v)
                 } else if let Some(key) = k.strip_suffix("_n") {
@@ -555,5 +568,13 @@ mod tests {
             .put("io", "none")
             .put("io_j", r#"{"rbps": "1"}"#);
         assert_eq!(g.body(), r#"{"io": {"rbps": "1"}}"#);
+    }
+
+    #[test]
+    fn a_value_that_is_not_utf8_as_surrogateescape_reads_it() {
+        let g = Given::new()
+            .put("app", "a")
+            .put_bytes("brief", b"caf\xc3\xa9 \xff\xfe!");
+        assert_eq!(g.body(), r#"{"app": "a", "brief": "caf\u00e9 \udcff\udcfe!"}"#);
     }
 }

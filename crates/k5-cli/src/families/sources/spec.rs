@@ -219,9 +219,7 @@ fn cond(op: &str, value: &str) -> Result<Value, Fail> {
             if !dist.is_empty() {
                 let (lvl, n) = dist.split_once('=').unwrap_or((dist, ""));
                 if !matches!(lvl, "major" | "minor" | "patch") || !isdigit(n)? {
-                    return die(format!(
-                        "{op} distance is ~major=N, ~minor=N or ~patch=N"
-                    ));
+                    return die(format!("{op} distance is ~major=N, ~minor=N or ~patch=N"));
                 }
                 set(&mut v, lvl, int_value(n)?);
             }
@@ -248,10 +246,7 @@ fn cond(op: &str, value: &str) -> Result<Value, Fail> {
             };
         }
         "exists" => {
-            let off = matches!(
-                strip(value).to_lowercase().as_str(),
-                "false" | "0" | "no"
-            );
+            let off = matches!(strip(value).to_lowercase().as_str(), "false" | "0" | "no");
             return Ok(one(Value::Bool(!off)));
         }
         _ => {}
@@ -401,9 +396,7 @@ pub fn spec_json(mode: Mode, args: &[String]) -> Result<String, Fail> {
                 let r = nxt!();
                 let (head, rest) = r.split_once(':').unwrap_or((r, ""));
                 if rest.is_empty() {
-                    return die(
-                        "--rule takes 'field:crit:op:value[,warn:op:value][,ok:op:value]'",
-                    );
+                    return die("--rule takes 'field:crit:op:value[,warn:op:value][,ok:op:value]'");
                 }
                 let mut rule: Dict = vec![(Text::from("field"), s(head))];
                 for part in rest.split(',') {
@@ -530,7 +523,11 @@ pub fn spec_json(mode: Mode, args: &[String]) -> Result<String, Fail> {
         out = base;
     }
     if !targets.is_empty() {
-        set(&mut out, "fetch", obj(vec![("targets", Value::Array(targets))]));
+        set(
+            &mut out,
+            "fetch",
+            obj(vec![("targets", Value::Array(targets))]),
+        );
     }
     if !headers.is_empty() {
         set(&mut out, "headers", Value::Array(headers));

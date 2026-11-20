@@ -8,9 +8,7 @@
 //! terminal (a `HOOK_TOKEN` set) no confirm is asked for.
 
 use super::spec::{self, Fail, Mode};
-use super::{
-    at, call, concat, idx, load, print_json, push_line, Ask, Stop, CLI,
-};
+use super::{at, call, concat, idx, load, print_json, push_line, Ask, Stop, CLI};
 use crate::confirm::{self, Confirm};
 use crate::exit::Exit;
 use crate::families::{py_get, py_iter, py_left, raised, s, Raise, Shown};
@@ -487,7 +485,10 @@ fn created(d: &Value, o: &mut String) -> Result<(), Raise> {
         _ => String::new(),
     };
     let (name, status) = name_status(d, 7)?;
-    push_line(o, &format!("{}: {}", py::str_of(&name), py::str_of(&status)));
+    push_line(
+        o,
+        &format!("{}: {}", py::str_of(&name), py::str_of(&status)),
+    );
     let status = idx(d, "status", 8)?;
     if ops::py_eq(&status, &s("proposed")) && !how.is_empty() {
         push_line(o, &format!("Waiting for approval: {how}"));
@@ -498,7 +499,10 @@ fn created(d: &Value, o: &mut String) -> Result<(), Raise> {
 /// `cmd_sources_edit`'s reader.
 fn edited(d: &Value, o: &mut String) -> Result<(), Raise> {
     let (name, status) = name_status(d, 3)?;
-    push_line(o, &format!("{}: {}", py::str_of(&name), py::str_of(&status)));
+    push_line(
+        o,
+        &format!("{}: {}", py::str_of(&name), py::str_of(&status)),
+    );
     if py::truthy(&at(d, "unbound", 4)?) {
         push_line(
             o,
@@ -542,7 +546,11 @@ fn tried(body: &[u8], depth: &str) -> Shown {
             "ok".to_string()
         } else {
             let reason = at(&v, "reason", 5)?;
-            let reason = if py::truthy(&reason) { reason } else { s("error") };
+            let reason = if py::truthy(&reason) {
+                reason
+            } else {
+                s("error")
+            };
             format!("failed: {}", py::str_of(&reason))
         };
         let status = at(&v, "status", 6)?;
@@ -597,7 +605,11 @@ fn tried(body: &[u8], depth: &str) -> Shown {
             push_line(&mut o, &format!("warning: {}", py::str_of(&hint)));
         }
         let tree = at(&v, "tree", 13)?;
-        let tree = if py::truthy(&tree) { tree } else { Value::Array(Vec::new()) };
+        let tree = if py::truthy(&tree) {
+            tree
+        } else {
+            Value::Array(Vec::new())
+        };
         if py::truthy(&tree) {
             push_line(&mut o, "shape (pointer \u{b7} type \u{b7} sample):");
         }
@@ -714,7 +726,11 @@ fn plan(picked: &str, body: &[u8], joined: &str) -> Result<String, Raise> {
     let v = load(body, 4)?;
     let want: Vec<&str> = joined.split(',').collect();
     let sources = at(&v, "sources", 6)?;
-    let sources = if py::truthy(&sources) { sources } else { Value::Array(Vec::new()) };
+    let sources = if py::truthy(&sources) {
+        sources
+    } else {
+        Value::Array(Vec::new())
+    };
     let mut rows: Vec<(String, Value)> = Vec::new();
     for row in py_iter(&sources, 6)? {
         let key = idx(&row, "name", 6)?;
@@ -734,7 +750,11 @@ fn plan(picked: &str, body: &[u8], joined: &str) -> Result<String, Raise> {
         }
     }
     let find = |n: &str| rows.iter().find(|(k, _)| k == n).map(|(_, r)| r.clone());
-    let missing: Vec<&str> = want.iter().copied().filter(|n| find(*n).is_none()).collect();
+    let missing: Vec<&str> = want
+        .iter()
+        .copied()
+        .filter(|n| find(*n).is_none())
+        .collect();
     if !missing.is_empty() {
         return Ok(format!("missing\t{}", missing.join(",")));
     }
@@ -743,7 +763,11 @@ fn plan(picked: &str, body: &[u8], joined: &str) -> Result<String, Raise> {
         let row = find(*n).unwrap_or(Value::Null);
         let mut sec = at(&row, "urlSecret", 13)?;
         if !py::truthy(&sec) {
-            sec = if picked.is_empty() { at(&row, "secret", 13)? } else { s(picked) };
+            sec = if picked.is_empty() {
+                at(&row, "secret", 13)?
+            } else {
+                s(picked)
+            };
         }
         let hash = idx(&row, "specHash", 14)?;
         let mut it = vec![(Text::from("name"), s(n)), (Text::from("specHash"), hash)];
@@ -758,7 +782,9 @@ fn plan(picked: &str, body: &[u8], joined: &str) -> Result<String, Raise> {
     let h = if pairs.is_empty() {
         String::new()
     } else {
-        hex(&crate::families::fed::pubkey::sha256(pairs.join("\n").as_bytes()))
+        hex(&crate::families::fed::pubkey::sha256(
+            pairs.join("\n").as_bytes(),
+        ))
     };
     let first = find(want[0]).unwrap_or(Value::Null);
     let id = idx(&first, "id", 22)?;
@@ -935,14 +961,24 @@ fn bind_go(c: &mut Client, b: Bind, mut v: Vault<'_>) -> Result<Exit, Exit> {
     let body = if multi {
         let names = Value::Array(name_lines(&b.names).iter().map(|n| s(n)).collect());
         if b.none || in_k2() {
-            let secret = if b.secret.is_empty() { Value::Null } else { s(&b.secret) };
+            let secret = if b.secret.is_empty() {
+                Value::Null
+            } else {
+                s(&b.secret)
+            };
             let mut d = vec![(Text::from("names"), names), (Text::from("secret"), secret)];
             anyway(&mut d);
             d
         } else {
             let mut ids = String::new();
             for n in &b.names {
-                let sent = call(c, false, "/cli/sources/show", &query(&[("name", n.as_str())]), b.json)?;
+                let sent = call(
+                    c,
+                    false,
+                    "/cli/sources/show",
+                    &query(&[("name", n.as_str())]),
+                    b.json,
+                )?;
                 let sid = source_id(&sent.resp).map_err(tb)?;
                 if sid.is_empty() {
                     crate::out::stderr_line(&format!(
@@ -959,7 +995,9 @@ fn bind_go(c: &mut Client, b: Bind, mut v: Vault<'_>) -> Result<Exit, Exit> {
                 .map(|i| format!("{i}:{}", b.secret))
                 .collect();
             lines.sort();
-            let hash = hex(&crate::families::fed::pubkey::sha256(lines.join("\n").as_bytes()));
+            let hash = hex(&crate::families::fed::pubkey::sha256(
+                lines.join("\n").as_bytes(),
+            ));
             let label = format!("{} sources", b.names.len());
             let tok = confirm_tok(c, &mut v, "source-batch", &hash, &label)?;
             let mut d = vec![
@@ -973,18 +1011,30 @@ fn bind_go(c: &mut Client, b: Bind, mut v: Vault<'_>) -> Result<Exit, Exit> {
     } else {
         let name = &b.names[0];
         if b.none {
-            vec![(Text::from("name"), s(name)), (Text::from("secret"), Value::Null)]
+            vec![
+                (Text::from("name"), s(name)),
+                (Text::from("secret"), Value::Null),
+            ]
         } else if in_k2() {
-            let mut d = vec![(Text::from("name"), s(name)), (Text::from("secret"), s(&b.secret))];
+            let mut d = vec![
+                (Text::from("name"), s(name)),
+                (Text::from("secret"), s(&b.secret)),
+            ];
             anyway(&mut d);
             d
         } else {
-            let sent = call(c, false, "/cli/sources/show", &query(&[("name", name.as_str())]), b.json)?;
+            let sent = call(
+                c,
+                false,
+                "/cli/sources/show",
+                &query(&[("name", name.as_str())]),
+                b.json,
+            )?;
             let sid = source_id(&sent.resp).map_err(tb)?;
             if sid.is_empty() {
-                crate::out::stderr_line(
-                    &format!("Error: the daemon didn't name the source id (run this outside {PRODUCT_NAME})"),
-                );
+                crate::out::stderr_line(&format!(
+                    "Error: the daemon didn't name the source id (run this outside {PRODUCT_NAME})"
+                ));
                 return Err(Exit::Refused);
             }
             let tok = confirm_tok(c, &mut v, "source-secret", &sid, name)?;
@@ -997,7 +1047,13 @@ fn bind_go(c: &mut Client, b: Bind, mut v: Vault<'_>) -> Result<Exit, Exit> {
             d
         }
     };
-    let sent = call(c, true, "/cli/sources/secret", &dumps(&Value::Object(body)), b.json)?;
+    let sent = call(
+        c,
+        true,
+        "/cli/sources/secret",
+        &dumps(&Value::Object(body)),
+        b.json,
+    )?;
     if b.json {
         return Ok(Shown::out(print_json(&sent.resp)).print());
     }
@@ -1033,7 +1089,10 @@ fn gm(t: &Value, full: bool, l: u32) -> Result<String, Raise> {
     let secs: i64 = match t {
         Value::Bool(b) => i64::from(*b),
         Value::Int(d) => d.parse().map_err(|_| {
-            Raise::at(l, "OverflowError: timestamp out of range for platform time_t")
+            Raise::at(
+                l,
+                "OverflowError: timestamp out of range for platform time_t",
+            )
         })?,
         Value::Float(f) if f.is_nan() => {
             return Err(Raise::at(l, "ValueError: Invalid value NaN (not a number)"))
@@ -1212,12 +1271,19 @@ fn trigger_done(v: &Value, o: &mut String) -> Result<(), Raise> {
             &format!("test wake: {}{woke}", py::str_of(&idx(v, "outcome", 5)?)),
         );
     } else if py::truthy(&at(v, "removed", 6)?) {
-        push_line(o, &format!("trigger {} removed", py::str_of(&idx(v, "id", 7)?)));
+        push_line(
+            o,
+            &format!("trigger {} removed", py::str_of(&idx(v, "id", 7)?)),
+        );
     } else {
         let st = at(v, "status", 9)?;
         push_line(
             o,
-            &format!("trigger {}: {}", py::str_of(&idx(v, "id", 9)?), py::str_of(&st)),
+            &format!(
+                "trigger {}: {}",
+                py::str_of(&idx(v, "id", 9)?),
+                py::str_of(&st)
+            ),
         );
     }
     Ok(())
@@ -1242,7 +1308,11 @@ fn trigger_made(v: &Value, o: &mut String) -> Result<(), Raise> {
 fn full_id(body: &[u8], prefix: &str) -> Result<String, Raise> {
     let v = load(body, 3)?;
     let list = at(&v, "triggers", 3)?;
-    let list = if py::truthy(&list) { list } else { Value::Array(Vec::new()) };
+    let list = if py::truthy(&list) {
+        list
+    } else {
+        Value::Array(Vec::new())
+    };
     let mut m = Vec::new();
     for t in py_iter(&list, 3)? {
         let id = idx(&t, "id", 3)?;
@@ -1325,7 +1395,8 @@ fn trigger_go(c: &mut Client, mut t: Trigger) -> Result<Exit, Exit> {
                 ("dailyCap_n", t.cap.as_str()),
             ])
             .unwrap_or_else(|r| {
-                let _ = crate::out::write_flushed(&mut std::io::stderr().lock(), r.text().as_bytes());
+                let _ =
+                    crate::out::write_flushed(&mut std::io::stderr().lock(), r.text().as_bytes());
                 String::new()
             });
             let route = format!("/cli/sources/triggers/{}", t.sub);
@@ -1352,7 +1423,11 @@ fn trigger_go(c: &mut Client, mut t: Trigger) -> Result<Exit, Exit> {
             Ok(shown(&sent, &[trigger_lines as Lines]))
         }
         "approve" | "pause" | "resume" | "remove" | "rm" | "test" => {
-            let verb = if t.sub == "rm" { "remove" } else { t.sub.as_str() };
+            let verb = if t.sub == "rm" {
+                "remove"
+            } else {
+                t.sub.as_str()
+            };
             let body = compute_json(&[("id", t.id.as_str())]).unwrap_or_default();
             let route = format!("/cli/sources/triggers/{verb}");
             let sent = call(c, true, &route, &body, t.json)?;
@@ -1373,7 +1448,10 @@ mod tests {
 
     #[test]
     fn read_splits_on_runs_of_tabs() {
-        assert_eq!(read_tabs("ok\t[1]\th\tid\t1", 5), ["ok", "[1]", "h", "id", "1"]);
+        assert_eq!(
+            read_tabs("ok\t[1]\th\tid\t1", 5),
+            ["ok", "[1]", "h", "id", "1"]
+        );
         // No secret: the empty hash and flag fold away.
         assert_eq!(read_tabs("ok\t[1]\t\tid\t", 5), ["ok", "[1]", "id", "", ""]);
         assert_eq!(read_tabs("missing\ta,b", 5), ["missing", "a,b", "", "", ""]);
@@ -1385,13 +1463,22 @@ mod tests {
         assert_eq!(t("0"), "1970-01-01 00:00 UTC");
         assert_eq!(t("1763600000"), "2025-11-20 00:53 UTC");
         assert_eq!(gm(&Value::Float(59.9), false, 1).unwrap(), "01-01 00:00");
-        assert_eq!(gm(&Value::Int("-1".into()), false, 1).unwrap(), "12-31 23:59");
+        assert_eq!(
+            gm(&Value::Int("-1".into()), false, 1).unwrap(),
+            "12-31 23:59"
+        );
     }
 
     #[test]
     fn compute_json_as_python_prints_it() {
         assert_eq!(
-            compute_json(&[("source", "w"), ("on_j", r#"{"kind":"went_crit"}"#), ("agent", ""), ("cooldownSecs_n", "007")]).unwrap(),
+            compute_json(&[
+                ("source", "w"),
+                ("on_j", r#"{"kind":"went_crit"}"#),
+                ("agent", ""),
+                ("cooldownSecs_n", "007")
+            ])
+            .unwrap(),
             r#"{"source": "w", "on": {"kind": "went_crit"}, "cooldownSecs": 7}"#
         );
         assert!(compute_json(&[("dailyCap_n", "x")]).is_err());

@@ -65,10 +65,10 @@ pub const VERBS: &[crate::route::Verb] = &[];
 pub const TOOL: &str = "sources";
 
 /// The verbs this answers; the rest go to the shell CLI.
-const NATIVE: [&str; 28] = [
+const NATIVE: [&str; 27] = [
     "list", "ls", "show", "read", "history", "status", "export", "pause", "resume", "mute",
-    "unmute", "remove", "rm", "pending", "access", "simulate", "refresh", "propose", "add",
-    "edit", "try", "approve", "secret", "pin", "unpin", "trigger", "triggers",
+    "unmute", "remove", "rm", "pending", "access", "simulate", "refresh", "propose", "add", "edit",
+    "try", "approve", "secret", "pin", "unpin", "trigger", "triggers",
 ];
 
 mod spec;

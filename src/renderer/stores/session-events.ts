@@ -419,6 +419,14 @@ export interface FirstRunChangedEvent {
   kind: 'first_run_changed'
 }
 
+/** APP-LEVEL, LOGIN-SCOPED (the phone app) — what this Connect login may do
+ *  changed. Sent only to that login's own sockets, never the owner token's.
+ *  The same frame `me.events` sends an App pass. No payload: read the
+ *  access again (`GET /cli/auth/whoami`). */
+export interface AccessChangedEvent {
+  kind: 'access_changed'
+}
+
 /** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
  *  no client surface shows it yet. Fields are snake_case on the wire. */
 export interface RemoteSessionAccessDeniedEvent {
@@ -1126,6 +1134,7 @@ export type SessionEventMessage =
   | StashChangedEvent
   | PairCodeChangedEvent
   | FirstRunChangedEvent
+  | AccessChangedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
   | VoiceRoomsChangedEvent

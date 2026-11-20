@@ -1234,6 +1234,35 @@ pub fn set_names(username: &str, first: Option<&str>, last: Option<&str>) -> Res
     Ok(())
 }
 
+/// What the login store says one login may do. The daemon compares it to
+/// tell that login's open sockets their access changed
+/// (`login_access_live`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginRights {
+    /// The stable id (K7): its `connect` chat grant is keyed by it. Empty for
+    /// a row not yet backfilled.
+    pub id: String,
+    pub role: Role,
+    pub can_clone: bool,
+    pub shares: Shares,
+    pub must_change_password: bool,
+}
+
+/// [`LoginRights`] of `username`, from one read of the store. `Ok(None)` for
+/// an account that is gone or disabled (it can't sign in, so it holds no
+/// access to compare).
+pub fn login_rights(username: &str) -> Result<Option<LoginRights>, String> {
+    let username = normalize_username(username)?;
+    let store = load_store()?;
+    Ok(store.users.iter().find(|u| u.username == username && !u.disabled).map(|u| LoginRights {
+        id: u.id.clone(),
+        role: u.role,
+        can_clone: u.can_clone,
+        shares: u.shares.clone(),
+        must_change_password: u.must_change_password,
+    }))
+}
+
 /// Whether `username` may use the clone doors on this server: Owner-role
 /// accounts always; Admin/Member when their "Can clone" is on. Unknown
 /// users, disabled accounts and an unreadable store → `false` (fail

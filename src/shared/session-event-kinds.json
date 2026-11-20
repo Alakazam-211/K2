@@ -72,6 +72,7 @@
   "pair_code_changed": "app",
   "first_run_changed": "app",
   "voice_rooms_changed": "app",
+  "access_changed": "app",
   "inbox_subscribed": "inbox",
   "inbox_error": "inbox",
   "thread_message": "inbox",

@@ -252,6 +252,13 @@ export const SESSION_EVENT_ROUTES = {
   // re-reads `first-run/status` (`onFirstRunChanged`). Not carried: the
   // checklist talks to the window's own server.
   first_run_changed: { class: 'app', app: true },
+  // A Connect login's own access changed: sent only to that login's
+  // sockets. The phone app reads its access again; the desktop reads
+  // whoami when a window opens.
+  access_changed: {
+    class: 'app',
+    ignored: 'The phone app re-reads its access on it; the desktop reads whoami on open.',
+  },
   // inbox-stream-v1 (0.46.7): the phone inbox stream. Sent only to a
   // socket that subscribed with {"t":"inbox",…}; this client never does.
   inbox_subscribed: { class: 'inbox', ignored: INBOX_ONLY },

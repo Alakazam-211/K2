@@ -120,6 +120,8 @@ pub async fn serve_session_events_connection(
     // thread-read-v1 + homes-sync-v1: whose person-scoped frames this
     // socket may carry.
     let person = socket_person(identity.as_ref());
+    // Whose `access_changed` this socket carries: a Connect login's own only.
+    let login = socket_login(identity.as_ref());
     // inbox-stream-v1: the login a `thread_message` doc is projected for
     // (permission cards, `cards=` on the URL), as on its overlay socket.
     let viewer_login: Option<String> = match identity.as_ref() {
@@ -157,6 +159,19 @@ pub async fn serve_session_events_connection(
         subscriber_id,
         workspace_path,
     );
+
+    // The login's access is read before the hello, so a change after the
+    // client's first read (it reads on hello) is one this socket hears.
+    let _access_hold = match login.clone() {
+        Some(l) => match tokio::task::spawn_blocking(move || crate::login_access_live::hold(&l)).await {
+            Ok(held) => held,
+            Err(e) => {
+                log_debug!("[daemon/session_events_ws] subscriber {subscriber_id} access hold failed: {e}");
+                None
+            }
+        },
+        None => None,
+    };
 
     // Send the hello immediately so the renderer can mark itself
     // subscribed before any session events arrive.
@@ -452,7 +467,7 @@ pub async fn serve_session_events_connection(
                         if !event_matches_workspace(&event, &workspace_path) {
                             continue;
                         }
-                        if !person_may_see(&event, person.as_deref()) {
+                        if !person_may_see(&event, person.as_deref()) || !login_may_see(&event, login.as_deref()) {
                             continue;
                         }
                         if send_json(&mut write, &event).await.is_err() {
@@ -656,6 +671,26 @@ pub(crate) fn person_may_see(event: &SessionEvent, socket_person: Option<&str>) 
     match event.person() {
         None => true,
         Some(p) => socket_person == Some(p),
+    }
+}
+
+/// May a socket held by `socket_login` see this event? A login-scoped
+/// event (`access_changed`) goes only to sockets of that very login; the
+/// owner token (`None`) and every other login get none. Every other event
+/// is unaffected.
+pub(crate) fn login_may_see(event: &SessionEvent, socket_login: Option<&str>) -> bool {
+    match event.login() {
+        None => true,
+        Some(l) => socket_login == Some(l),
+    }
+}
+
+/// The Connect login that holds a socket: `None` for the owner token and
+/// an unresolved credential.
+pub(crate) fn socket_login(identity: Option<&crate::presence::PresenceIdentity>) -> Option<String> {
+    match identity? {
+        crate::presence::PresenceIdentity::Owner => None,
+        crate::presence::PresenceIdentity::ConnectUser { username, .. } => Some(username.clone()),
     }
 }
 
@@ -880,6 +915,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // The setup checklist: path-wise app-level; person-scoped when it
         // names a person (the socket loop checks `SessionEvent::person`).
         SessionEvent::FirstRunChanged { .. } => None,
+        // A login's own access: path-wise app-level; the socket loop sends
+        // it only to that login's sockets (`SessionEvent::login`).
+        SessionEvent::AccessChanged { .. } => None,
 
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter routes them to the
@@ -1336,6 +1374,7 @@ mod tests {
             pair_code_paired("owner"),
             SessionEvent::VoiceRoomsChanged { rev: 1 },
             SessionEvent::FirstRunChanged { person: Some("owner".into()) },
+            SessionEvent::AccessChanged { login: "gina".into() },
         ]
     }
 
@@ -1389,6 +1428,38 @@ mod tests {
             total: 3,
             waiting_total: 1,
         }
+    }
+
+    /// `access_changed` (K2 Companion): the very frame `me.events` sends an
+    /// App pass, and only the login it names hears it. The owner token, a
+    /// second login and an unresolved socket hear nothing. It is scoped by
+    /// login, not person: the owner token doesn't hear its linked login's.
+    #[test]
+    fn access_changed_reaches_only_its_own_login_with_the_me_events_shape() {
+        let ev = SessionEvent::AccessChanged { login: "gina".into() };
+        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&ev).expect("ser")).expect("json");
+        assert_eq!(json, serde_json::json!({ "kind": "access_changed" }), "the login never rides the wire");
+        assert_eq!(ev.kind_name(), "access_changed");
+        assert!(login_may_see(&ev, Some("gina")));
+        assert!(!login_may_see(&ev, Some("bob")), "another login's socket");
+        assert!(!login_may_see(&ev, None), "the owner token and an unresolved socket");
+        assert_eq!(ev.person(), None, "scoped by login, not by person");
+        let app = SessionEvent::ProjectsChanged {};
+        assert!(login_may_see(&app, None) && login_may_see(&app, Some("gina")), "other kinds are untouched");
+        let homes = SessionEvent::HomesChanged { person: "gina".into(), cursor: 1 };
+        assert!(login_may_see(&homes, Some("bob")), "person frames keep their own rule");
+    }
+
+    /// `socket_login`: a Connect login is its username; the owner token and
+    /// an unresolved credential are no login.
+    #[test]
+    fn socket_login_is_a_connect_login_only() {
+        use crate::presence::PresenceIdentity;
+        use k2_core::connect_users::Role;
+        let gina = PresenceIdentity::ConnectUser { username: "gina".into(), role: Role::Member };
+        assert_eq!(socket_login(Some(&gina)).as_deref(), Some("gina"));
+        assert_eq!(socket_login(Some(&PresenceIdentity::Owner)), None);
+        assert_eq!(socket_login(None), None);
     }
 
     /// thread-read-v1: a read frame's wire shape (the phone contract) and

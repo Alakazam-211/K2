@@ -824,6 +824,16 @@ pub fn connect_chat_grant(conn: &Connection, user_id: &str) -> Result<Option<Ski
     .map_err(|e| format!("connect chat grant lookup: {e}"))
 }
 
+/// A Connect login's `connect` chat grant as it stands, read only: `None`
+/// when it has none or this box has no skin store. Unlike
+/// [`connect_chat_gate`], it never writes a grant.
+pub fn connect_chat_grant_now(user_id: &str) -> Result<Option<SkinGrant>, String> {
+    if user_id.is_empty() || !skin_store_exists() {
+        return Ok(None);
+    }
+    crate::skin::with_skin_conn(|conn| connect_chat_grant(conn, user_id))
+}
+
 /// A Connect login was removed: its chat grant goes, which enqueues the
 /// `deprovision` of its `k2:connect:<id>` member (as a removed App user's
 /// does). `Ok(false)` when it had none (or Sew was never set up).

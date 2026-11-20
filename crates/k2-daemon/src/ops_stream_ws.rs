@@ -83,9 +83,10 @@ pub async fn serve_ops_stream_connection(
     // Homes, and any later person-scoped kind) reach only their own person
     // here too, as on `/cli/sessions/events`. This route admits any Member
     // login, which used to get every other person's frames.
-    let person = crate::session_events_ws::socket_person(
-        crate::presence::resolve_identity(&token, &owner_token).as_ref(),
-    );
+    let identity = crate::presence::resolve_identity(&token, &owner_token);
+    let person = crate::session_events_ws::socket_person(identity.as_ref());
+    // `access_changed` reaches only the login it names.
+    let login = crate::session_events_ws::socket_login(identity.as_ref());
 
     // Fan-in: subscribe to BOTH existing in-memory planes. No new buses.
     let mut session_rx = session_events::subscribe();
@@ -129,7 +130,9 @@ pub async fn serve_ops_stream_connection(
             recv = session_rx.recv() => {
                 match recv {
                     Ok(event) => {
-                        if !crate::session_events_ws::person_may_see(&event, person.as_deref()) {
+                        if !crate::session_events_ws::person_may_see(&event, person.as_deref())
+                            || !crate::session_events_ws::login_may_see(&event, login.as_deref())
+                        {
                             continue;
                         }
                         if send_session_event(&mut write, &event).await.is_err() {

@@ -1227,6 +1227,22 @@ pub enum SessionEvent {
         #[serde(skip)]
         person: Option<String>,
     },
+
+    /// What one Connect login may do changed: its role, "Can clone", its
+    /// Voice & Chat only shares, a forced password change, the owner link,
+    /// or its chat grant (`login_access_live`). LOGIN-SCOPED, narrower than
+    /// a person: `/cli/sessions/events` forwards it only to sockets held by
+    /// that login's own session ([`Self::login`]), never to the owner
+    /// token's or another login's, even the same person's.
+    ///
+    /// Wire: `{ "kind": "access_changed" }`, the same frame
+    /// `/cli/skin/me/events?scope=me` sends an App pass. No details: the
+    /// client reads its access again (`GET /cli/auth/whoami`, and in a
+    /// call its recording controls).
+    AccessChanged {
+        #[serde(skip)]
+        login: String,
+    },
 }
 
 /// The body of a `thread_read` / `project_read` frame (thread-read-v1).
@@ -1286,6 +1302,15 @@ impl SessionEvent {
             | SessionEvent::StashChanged { person, .. }
             | SessionEvent::PairCodeChanged { person, .. } => Some(person.as_str()),
             SessionEvent::FirstRunChanged { person } => person.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The one login a login-scoped event belongs to (`access_changed`);
+    /// `None` for every other event.
+    pub fn login(&self) -> Option<&str> {
+        match self {
+            SessionEvent::AccessChanged { login } => Some(login.as_str()),
             _ => None,
         }
     }
@@ -1374,6 +1399,7 @@ impl SessionEvent {
             SessionEvent::PairCodeChanged { .. } => "pair_code_changed",
             SessionEvent::VoiceRoomsChanged { .. } => "voice_rooms_changed",
             SessionEvent::FirstRunChanged { .. } => "first_run_changed",
+            SessionEvent::AccessChanged { .. } => "access_changed",
         }
     }
 }

@@ -206,6 +206,8 @@ pub mod pinned_chat_choice;
 // roster broadcast. Registered from the `/cli/sessions/events` WS handler.
 pub mod presence;
 pub mod access_live;
+// A Connect login hears its own `access_changed` on `/cli/sessions/events`.
+pub mod login_access_live;
 pub mod socket_access;
 // Send feedback to K2 (prd-k2-product-feedback-v1, 0.46.11): the outbox
 // drain and `/cli/product-feedback/*`. Not the tickets.

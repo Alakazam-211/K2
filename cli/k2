@@ -77967,7 +77967,20 @@ _fed_owner_only() {
     echo "Ask the owner to run it from their own terminal." >&2
     exit 3
 }
+_fed_usage() {
+    echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-start|pair-join|pair-finish|pair-verify|pair-request|confirm> ..."
+    echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)"
+    echo "  peers: list pinned servers (use their host with k2 msg agent::host)"
+    echo "  pair-start [--subdomain S] [--url http://host:port] [--label L]: start a pairing (prints a token for the other owner)"
+    echo "  pair-join / pair-finish / pair-verify --token-stdin | <token>: the next steps; both owners then compare codes and confirm (a token on the command line is visible to other users on this machine)"
+    echo "  pair-request: the pre-0.45.2 pairing; refused for a server not paired yet"
+    echo "  send/outbox/pair-*/confirm need federation ON; pubkey works anytime"
+    echo "  outbox: queued + dead-lettered cross-server messages per peer"
+}
 cmd_fed() {
+    # -h/--help anywhere prints the usage and sends nothing (0.46.17:
+    # `k2 fed enable --help` turned federation on).
+    if _wants_help "$@"; then _fed_usage; return 0; fi
     local sub="${1:-}"; shift || true
     local passport="${SCOPED_TOKEN:-}"
     if [ -n "$passport" ]; then
@@ -78332,14 +78345,7 @@ for p in peers:
 print(f\"total queued: {d.get('total_queued',0)}\")"
             ;;
         *)
-            echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-start|pair-join|pair-finish|pair-verify|pair-request|confirm> ..." >&2
-            echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
-            echo "  peers: list pinned servers (use their host with k2 msg agent::host)" >&2
-            echo "  pair-start [--subdomain S] [--url http://host:port] [--label L]: start a pairing (prints a token for the other owner)" >&2
-            echo "  pair-join / pair-finish / pair-verify --token-stdin | <token>: the next steps; both owners then compare codes and confirm (a token on the command line is visible to other users on this machine)" >&2
-            echo "  pair-request: the pre-0.45.2 pairing; refused for a server not paired yet" >&2
-            echo "  send/outbox/pair-*/confirm need federation ON; pubkey works anytime" >&2
-            echo "  outbox: queued + dead-lettered cross-server messages per peer" >&2
+            _fed_usage >&2
             exit 2
             ;;
     esac

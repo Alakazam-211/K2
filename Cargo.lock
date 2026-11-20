@@ -5309,6 +5309,9 @@ dependencies = [
  "flate2",
  "k2-client",
  "libc",
+ "rcgen 0.13.2",
+ "rustls",
+ "rustls-native-certs",
 ]
 
 [[package]]
@@ -7962,6 +7965,7 @@ checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
 dependencies = [
  "aws-lc-rs",
  "pem 3.0.6",
+ "ring",
  "rustls-pki-types",
  "time",
  "yasna 0.5.2",

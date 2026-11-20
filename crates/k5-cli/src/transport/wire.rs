@@ -183,6 +183,12 @@ pub enum Target {
         host: String,
         port: u16,
     },
+    /// `https://<host>[:<port>]`: TCP, then TLS for `host`
+    /// ([`super::tls`]).
+    Tls {
+        host: String,
+        port: u16,
+    },
     #[cfg(unix)]
     Unix(PathBuf),
 }
@@ -190,6 +196,7 @@ pub enum Target {
 /// An open connection.
 pub enum Conn {
     Tcp(std::net::TcpStream),
+    Tls(Box<super::tls::Stream>),
     #[cfg(unix)]
     Unix(std::os::unix::net::UnixStream),
 }
@@ -201,6 +208,7 @@ impl Conn {
                 s.set_read_timeout(Some(d))?;
                 s.set_write_timeout(Some(d))
             }
+            Conn::Tls(s) => super::tls::stream_timeouts(s, d),
             #[cfg(unix)]
             Conn::Unix(s) => {
                 s.set_read_timeout(Some(d))?;
@@ -214,6 +222,7 @@ impl Read for Conn {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             Conn::Tcp(s) => s.read(buf),
+            Conn::Tls(s) => super::tls::read(s, buf),
             #[cfg(unix)]
             Conn::Unix(s) => s.read(buf),
         }
@@ -224,6 +233,7 @@ impl Write for Conn {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
             Conn::Tcp(s) => s.write(buf),
+            Conn::Tls(s) => s.write(buf),
             #[cfg(unix)]
             Conn::Unix(s) => s.write(buf),
         }
@@ -231,6 +241,7 @@ impl Write for Conn {
     fn flush(&mut self) -> io::Result<()> {
         match self {
             Conn::Tcp(s) => s.flush(),
+            Conn::Tls(s) => s.flush(),
             #[cfg(unix)]
             Conn::Unix(s) => s.flush(),
         }
@@ -289,19 +300,15 @@ pub mod curl {
 impl Failure {
     /// True when some of the request may have reached the server: every
     /// failure but a connect that failed or timed out, a name that didn't
-    /// resolve and a request that went out with no byte at all. Such a
-    /// request may have been run.
+    /// resolve, a TLS handshake that failed ([`super::tls::before_request`])
+    /// and a request that went out with no byte at all. Such a request may
+    /// have been run.
     pub fn sent(&self) -> bool {
-        !matches!(
-            self,
-            Failure::Connect(_)
-                | Failure::ConnectTimedOut
-                | Failure::NotSent(_)
-                | Failure::Broken {
-                    curl: curl::COULDNT_RESOLVE_HOST,
-                    ..
-                }
-        )
+        match self {
+            Failure::Connect(_) | Failure::ConnectTimedOut | Failure::NotSent(_) => false,
+            Failure::Broken { curl, .. } => !super::tls::before_request(*curl),
+            _ => true,
+        }
     }
 
     /// curl's exit code for the same failure.
@@ -359,26 +366,10 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
     let start = Instant::now();
     let limit = (start + connect).min(deadline);
     match target {
-        Target::Tcp { host, port } => {
-            use std::net::ToSocketAddrs;
-            // A name that doesn't resolve is curl's exit 6, never retried.
-            let addrs: Vec<_> = (host.as_str(), *port)
-                .to_socket_addrs()
-                .map_err(|e| broken(curl::COULDNT_RESOLVE_HOST, format!("resolve {host}: {e}")))?
-                .collect();
-            let mut last =
-                io::Error::new(io::ErrorKind::NotFound, format!("{host} has no address"));
-            for addr in addrs {
-                let Some(budget) = remaining(limit) else {
-                    return Err(Failure::ConnectTimedOut);
-                };
-                match std::net::TcpStream::connect_timeout(&addr, budget) {
-                    Ok(s) => return Ok(Conn::Tcp(s)),
-                    Err(e) if is_timeout(&e) => return Err(Failure::ConnectTimedOut),
-                    Err(e) => last = e,
-                }
-            }
-            Err(Failure::Connect(last))
+        Target::Tcp { host, port } => tcp(host, *port, limit).map(Conn::Tcp),
+        Target::Tls { host, port } => {
+            let s = tcp(host, *port, limit)?;
+            super::tls::connect(s, host, limit).map(|t| Conn::Tls(Box::new(t)))
         }
         #[cfg(unix)]
         Target::Unix(path) => {
@@ -401,6 +392,28 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
             }
         }
     }
+}
+
+/// The TCP connect of [`connect`], before `limit`.
+fn tcp(host: &str, port: u16, limit: Instant) -> Result<std::net::TcpStream, Failure> {
+    use std::net::ToSocketAddrs;
+    // A name that doesn't resolve is curl's exit 6, never retried.
+    let addrs: Vec<_> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| broken(curl::COULDNT_RESOLVE_HOST, format!("resolve {host}: {e}")))?
+        .collect();
+    let mut last = io::Error::new(io::ErrorKind::NotFound, format!("{host} has no address"));
+    for addr in addrs {
+        let Some(budget) = remaining(limit) else {
+            return Err(Failure::ConnectTimedOut);
+        };
+        match std::net::TcpStream::connect_timeout(&addr, budget) {
+            Ok(s) => return Ok(s),
+            Err(e) if is_timeout(&e) => return Err(Failure::ConnectTimedOut),
+            Err(e) => last = e,
+        }
+    }
+    Err(Failure::Connect(last))
 }
 
 /// Writes `request` on `conn` and reads the answer, before `deadline`.

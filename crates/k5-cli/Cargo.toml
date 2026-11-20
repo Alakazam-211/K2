@@ -30,6 +30,15 @@ path = "src/main.rs"
 blake3 = "1"
 flate2 = "1.1.9"
 k2-client = { path = "../k2-client" }
+# TLS for a server on another machine (`talk ws@host`, `read ws@host`,
+# a Connect host's tray upload): K2's ruling D5. rustls with the ring
+# provider (no aws-lc-rs, so no C toolchain and no OpenSSL terms), over
+# our own HTTP/1.1 client (src/transport/tls.rs), and the OS's root
+# certificates as curl trusts them (rustls-native-certs; it reads
+# SSL_CERT_FILE too). The daemon uses both at these versions, so
+# Cargo.lock gains no package.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 
 # libc (Unix): a broken pipe on stdout ends the process by SIGPIPE, as the
 # shell CLI's does (src/out/mod.rs); the notice test opens a pseudo
@@ -43,3 +52,8 @@ libc = "0.2"
 [build-dependencies]
 blake3 = "1"
 flate2 = "1.1.9"
+
+# The TLS tests mint a throwaway CA and server certificate at run time, so
+# no key is committed. ring, as the client; the version k2-core uses.
+[dev-dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }

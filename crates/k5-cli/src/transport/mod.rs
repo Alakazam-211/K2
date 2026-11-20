@@ -180,7 +180,9 @@
 pub mod client;
 pub mod encode;
 pub mod permission;
+pub mod remote;
 pub mod skew;
+pub mod tls;
 pub mod urllib;
 pub mod wire;
 

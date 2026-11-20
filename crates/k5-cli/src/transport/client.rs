@@ -705,6 +705,13 @@ pub struct Client {
     pub version: String,
     /// `_cli_skip_uds`: a remote host was applied; never the cell socket.
     pub force_tcp: bool,
+    /// `BASE_URL` is `https://…`: TLS over the TCP connection
+    /// ([`super::tls`]).
+    pub tls: bool,
+    /// The `Host` header curl writes for the `BASE_URL`, when it is not
+    /// `<HOST>:<PORT>` (a remote URL with the scheme's own port leaves the
+    /// port out).
+    pub host_header: Option<String>,
     /// `_K2_POST_MAX_TIME`: `cli_post_json` and `cli_post_form` only.
     pub post_max_time: Option<Duration>,
     /// `_K2_SEND_MAX_TIME`: `cli_send_json` only.
@@ -764,6 +771,8 @@ impl Client {
             no_token: false,
             version: crate::embedded::version().to_string(),
             force_tcp: false,
+            tls: false,
+            host_header: None,
             post_max_time: None,
             send_max_time: None,
             compute_post_max_time: None,
@@ -1632,13 +1641,17 @@ impl Client {
                         headers.push(line);
                     }
                 }
-                (
-                    Target::Tcp {
-                        host: self.host.clone(),
-                        port: self.port,
-                    },
-                    format!("{}:{}", self.host, self.port),
-                )
+                let (host, port) = (self.host.clone(), self.port);
+                let header = self
+                    .host_header
+                    .clone()
+                    .unwrap_or_else(|| format!("{host}:{port}"));
+                let target = if self.tls {
+                    Target::Tls { host, port }
+                } else {
+                    Target::Tcp { host, port }
+                };
+                (target, header)
             }
             Channel::Uds => {
                 let no = || Error::NoCellSocket {

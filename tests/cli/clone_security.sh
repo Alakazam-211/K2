@@ -33,7 +33,8 @@
 #   password still never goes over plain http; this server's own side
 #   (K2_HOST over plain http) warns once per command, except for a
 #   loopback or Tailscale address or a *.ts.net name as written, or with
-#   K2_PLAIN_HTTP_OK=1.
+#   K2_PLAIN_HTTP_OK=1; the help says the confirms ask whoever is at the
+#   terminal and are no boundary against programs run as the same user.
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -720,6 +721,15 @@ fresh
 K2_HOST=192.0.2.10 k2 clone to -h
 expect_eq "help: exit 0" "$RC" "0"
 expect_not "help: no warning" "$OUT$ERR" "warning:"
+
+echo "== the help says what the confirms are, and aren't =="
+fresh
+k2 clone --help
+expect_eq "clone --help: exit 0" "$RC" "0"
+expect_has "the help: the confirms ask whoever is at the terminal" "$OUT" "The confirms ask whoever is at that terminal."
+expect_has "the help: not a security boundary" "$OUT" "They are not a security"
+expect_has "the help: against programs run as the same user" "$OUT" "boundary against programs run as the same user"
+expect_not "the help: no claim that agents can't clone" "$OUT" "Agents can't clone"
 
 echo
 echo "clone_security: $pass passed, $fail failed"

@@ -36,6 +36,9 @@ Flags:
   --yes                        don't ask; take defaults and flags as given
   --json                       names, choices and counts as JSON
 
-Agents can't clone: `k2 clone propose` holds the plan for a person, who runs
-`k2 clone approve <id>` from a terminal outside K2 (or approves in K2).
+Agents propose and a person approves: `k2 clone propose` holds the plan, and
+the person runs `k2 clone approve <id>` from their own terminal (or approves in
+K2). The confirms ask whoever is at that terminal. They are not a security
+boundary against programs run as the same user: a program such as script or
+expect can answer them.
 Exit: 0 ok · 2 bad usage · 3 refused or unreachable · 130 stopped (Ctrl-C).

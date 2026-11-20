@@ -558,3 +558,23 @@ fn a_reconnect_ends_the_pull_and_a_second_fetch_joins_a_running_one() {
     test_detach("n-drop");
     drop(rx);
 }
+
+/// 0.46.17: an auto Priority or CI job waits on this server until a node
+/// can start it (never into a shared node's queue); Standard and Batch
+/// only for the hold (V71); a pinned job, or one that starts now, never.
+#[test]
+fn priority_and_ci_hold_on_the_server_until_a_node_can_start_them() {
+    for tier in [Tier::Priority, Tier::Ci] {
+        let r = any_hold(tier, true, 86_400, 60, false).expect("held however long it waited");
+        assert_eq!(r.code, "any_hold", "the mover counts it as only busy");
+        assert!(r.message.contains("waits on this server until a node can start it now"), "{}", r.message);
+        assert!(any_hold(tier, true, 86_400, 60, true).is_none(), "a node starts it now: it goes");
+        assert!(any_hold(tier, false, 86_400, 60, false).is_none(), "pinned: into its node's queue");
+    }
+    assert!(any_hold(Tier::Ci, true, 0, 0, false).unwrap().message.starts_with("CI: "));
+    for tier in [Tier::Normal, Tier::Batch] {
+        assert_eq!(any_hold(tier, true, 30, 60, false).map(|r| r.message), Some("waiting up to 60s on this server for a node that can start it now".to_string()));
+        assert!(any_hold(tier, true, 60, 60, false).is_none(), "after the hold: into the queue");
+        assert!(any_hold(tier, true, 0, 0, false).is_none(), "no hold");
+    }
+}

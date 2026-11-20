@@ -31257,7 +31257,8 @@ Agents:
                                  the critical path (one result blocks others now). Priority and
                                  Standard take turns, so Standard never starves. --why is required
                                  and shows in the queue; at most 2 Priority jobs queued or running
-                                 per workspace (more run Standard, with a note)
+                                 per workspace (more run Standard, with a note). With no node
+                                 named (as CI), it waits on this server until a node can start it
                       --tier batch
                                  idle time (soaks, overnight sweeps): starts only when the node is
                                  idle (any hour, not a clock window), one at a time; while it waits
@@ -57360,7 +57361,7 @@ cmd_schema() {
         {"name": "--queue-timeout", "arg": "2h|off", "description": "How long it may wait to start (default 2h attached or --wait, 24h --detach, 48h --tier batch)."},
         {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m; 2h for Priority and CI); off for a job that goes quiet."},
         {"name": "--shards", "arg": "N", "description": "N jobs, {shard}/{shards} in the command, each on its own node when it can (no node named)."},
-        {"name": "--priority", "arg": null, "description": "The critical path; needs --why. At most 2 Priority jobs queued or running per workspace."},
+        {"name": "--priority", "arg": null, "description": "The critical path; needs --why. At most 2 Priority jobs queued or running per workspace. With no node named it waits on this server until a node can start it, then goes to the first that can."},
         {"name": "--tier", "arg": "standard|priority|batch|ci", "description": "Which line: standard (default), priority, batch (idle time, always detached) or ci (needs a grant with --ci)."},
         {"name": "--gate", "arg": null, "description": "The same as --tier ci (kept for scripts)."},
         {"name": "--critical", "arg": null, "description": "The same as --priority."},
@@ -70066,6 +70067,12 @@ TIERS (queue lines, like an airport; 0.46.6)
   Tiers never stop a running job. They only order the queue: nothing is
   reserved, nothing is killed or paused. A node starts a job only when its
   slots AND memory both fit, whatever the line or turn.
+  An auto Priority or CI job (no node named) never waits in a shared
+  node's own queue (0.46.17): it waits on this server until some node can
+  start it now, then goes to the first that can (its wait line: "waits on
+  this server until a node can start it now"). Its --queue-timeout still
+  bounds the wait. A Standard job waits here a minute, then joins the
+  queue of the node with the shortest wait.
   On a node another server owns, your Priority counts only where its owner
   allows it (else it runs as Standard: priority_downgraded), and your CI
   only where your share has gate. On a node only this server uses, this

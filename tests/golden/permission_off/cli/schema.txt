@@ -4306,7 +4306,7 @@ exit: 0
         {"name": "--queue-timeout", "arg": "2h|off", "description": "How long it may wait to start (default 2h attached or --wait, 24h --detach, 48h --tier batch)."},
         {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m; 2h for Priority and CI); off for a job that goes quiet."},
         {"name": "--shards", "arg": "N", "description": "N jobs, {shard}/{shards} in the command, each on its own node when it can (no node named)."},
-        {"name": "--priority", "arg": null, "description": "The critical path; needs --why. At most 2 Priority jobs queued or running per workspace."},
+        {"name": "--priority", "arg": null, "description": "The critical path; needs --why. At most 2 Priority jobs queued or running per workspace. With no node named it waits on this server until a node can start it, then goes to the first that can."},
         {"name": "--tier", "arg": "standard|priority|batch|ci", "description": "Which line: standard (default), priority, batch (idle time, always detached) or ci (needs a grant with --ci)."},
         {"name": "--gate", "arg": null, "description": "The same as --tier ci (kept for scripts)."},
         {"name": "--critical", "arg": null, "description": "The same as --priority."},

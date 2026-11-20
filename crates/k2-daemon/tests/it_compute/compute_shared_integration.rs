@@ -1316,6 +1316,35 @@ async fn an_auto_job_holds_on_this_server_while_the_shared_node_is_full() {
     compute_ws::test_detach("ah-a");
 }
 
+/// 0.46.17: an auto Priority job never goes into a busy shared node's
+/// queue to wait behind its limit: it holds on this server (with no hold
+/// at all, where a Standard job goes in at once), the mover may still take
+/// it elsewhere, and it is sent once a slot frees.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_auto_priority_job_holds_on_this_server_until_a_node_can_start_it() {
+    let env = setup(); // any_hold_secs = 0
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "prihold");
+    active_node("ph-a", "ph-a", "linux", &ws);
+    let mut a = compute_ws::test_attach("ph-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 2, Some(view(Role::Tenant, 0, 0))));
+    let r = run(d.port, OWNER, json!({"any": true, "workspace": ws.id, "tier": "priority", "why": "the release gate"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pri = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert!(assigns(&a.frames()).is_empty(), "2 of 2 slots taken: not into the node's queue");
+    let rj = row(&pri);
+    assert_eq!((rj.state.as_str(), rj.reason.as_deref(), rj.tier.as_str()), ("queued", Some("any_hold"), "priority"), "{rj:?}");
+    // A Standard auto job with the same (zero) hold goes in at once.
+    let r = run(d.port, OWNER, json!({"any": true, "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let std_job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(assigns(&a.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![std_job], "Standard: into the queue");
+    assert_eq!(row(&pri).reason.as_deref(), Some("any_hold"), "Priority still holds here");
+    // A slot frees: the Priority job goes.
+    compute_ws::test_frame("ph-a", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 0, 1)))));
+    assert_eq!(assigns(&a.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![pri.clone()], "a slot is free: sent");
+    compute_ws::test_detach("ph-a");
+}
+
 /// 11-19: a job was placed "starts now" on a shared node its owner was
 /// draining for a k2-node update, and sat in its queue over 3 hours. A
 /// draining node takes no auto job (and never claims "starts now"),

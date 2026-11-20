@@ -225,7 +225,8 @@ Agents:
                                  the critical path (one result blocks others now). Priority and
                                  Standard take turns, so Standard never starves. --why is required
                                  and shows in the queue; at most 2 Priority jobs queued or running
-                                 per workspace (more run Standard, with a note)
+                                 per workspace (more run Standard, with a note). With no node
+                                 named (as CI), it waits on this server until a node can start it
                       --tier batch
                                  idle time (soaks, overnight sweeps): starts only when the node is
                                  idle (any hour, not a clock window), one at a time; while it waits

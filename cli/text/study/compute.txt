@@ -314,6 +314,12 @@ TIERS (queue lines, like an airport; 0.46.6)
   Tiers never stop a running job. They only order the queue: nothing is
   reserved, nothing is killed or paused. A node starts a job only when its
   slots AND memory both fit, whatever the line or turn.
+  An auto Priority or CI job (no node named) never waits in a shared
+  node's own queue (0.46.17): it waits on this server until some node can
+  start it now, then goes to the first that can (its wait line: "waits on
+  this server until a node can start it now"). Its --queue-timeout still
+  bounds the wait. A Standard job waits here a minute, then joins the
+  queue of the node with the shortest wait.
   On a node another server owns, your Priority counts only where its owner
   allows it (else it runs as Standard: priority_downgraded), and your CI
   only where your share has gate. On a node only this server uses, this

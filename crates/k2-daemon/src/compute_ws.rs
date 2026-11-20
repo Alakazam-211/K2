@@ -2921,13 +2921,12 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             continue;
         }
         // V71: `--any` waits on this server a while for a node that can
-        // start it now (with a slot free node-wide), before it joins a node's queue.
+        // start it now (with a slot free node-wide), before it joins a node's
+        // queue; Priority and CI until one can (0.46.17).
         let since = if j.ctl.queued_at > 0 { j.ctl.queued_at } else { j.created_at };
-        if j.ctl.any.is_some() && now - since < t.any_hold_secs && !(share::starts_now(view, plan.limits.cpu_millis, plan.limits.mem_bytes) && (offer.parallel_max == 0 || offer.running < offer.parallel_max)) {
-            wait(
-                frames::Refusal::new("any_hold", format!("waiting up to {}s on this server for a node that can start it now", t.any_hold_secs)),
-                &mut pass,
-            );
+        let starts = share::starts_now(view, plan.limits.cpu_millis, plan.limits.mem_bytes) && (offer.parallel_max == 0 || offer.running < offer.parallel_max);
+        if let Some(r) = any_hold(j.tier(), j.ctl.any.is_some(), now - since, t.any_hold_secs, starts) {
+            wait(r, &mut pass);
             continue;
         }
         // T28: Batch to a node without `tiers2` (k2-node 0.46.5 or older)
@@ -2956,6 +2955,27 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
         pass.send.push(j.id.clone());
     }
     pass
+}
+
+/// Whether an auto job waits on this server instead of going into a
+/// shared node's queue (`any_hold`, which the mover counts as only busy, so
+/// it still moves to a node that can start it now). Standard and Batch:
+/// for `hold_secs` (V71), then into the queue. Priority and CI (0.46.17):
+/// until a node can start them, bounded by their queue timeout, so they
+/// land on the first node that frees instead of queueing behind a node's
+/// limit where they can't overtake. A pinned job never holds here.
+pub fn any_hold(tier: Tier, auto: bool, waited_secs: i64, hold_secs: i64, starts_now: bool) -> Option<frames::Refusal> {
+    if !auto || starts_now {
+        return None;
+    }
+    if matches!(tier, Tier::Priority | Tier::Ci) {
+        let what = if tier == Tier::Ci { "CI" } else { "Priority" };
+        return Some(frames::Refusal::new(
+            "any_hold",
+            format!("{what}: waits on this server until a node can start it now, then goes to the first that can (never into a node's queue)"),
+        ));
+    }
+    (waited_secs < hold_secs).then(|| frames::Refusal::new("any_hold", format!("waiting up to {hold_secs}s on this server for a node that can start it now")))
 }
 
 /// The scheduler's current view of a node (for display): position and

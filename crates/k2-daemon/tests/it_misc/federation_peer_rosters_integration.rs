@@ -606,7 +606,7 @@ fn a_tray_answer_reaches_the_caller_only_in_shape() {
     assert!(log.contains("coverPath is not in shape and is left out. Raw: /home/k2/.ssh/authorized_keys"), "the raw path is logged:\n{log}");
 }
 
-/// `POST /cli/inbox/compose` to `chris::<peer>` through the real
+/// `POST /cli/inbox/compose` to `demo::<peer>` through the real
 /// dispatcher: the peer's roster handle for that workspace is named in the
 /// answer's `addressNote` only when it is a handle; anything else is no
 /// match and goes to the log.
@@ -615,13 +615,13 @@ fn a_roster_handle_reaches_the_caller_only_when_it_is_a_handle() {
     let a = spawn_daemon("h");
     let answers = |handle: &str| {
         serde_json::json!({
-            "agents": [{ "workspace_id": "w-1", "workspace_name": "Chris", "agent": handle, "aliases": [] }],
+            "agents": [{ "workspace_id": "w-1", "workspace_name": "Demo", "agent": handle, "aliases": [] }],
             "delivered": true, "mode": "inbox", "ok": true,
         })
         .to_string()
     };
     let bad = answering_peer(answers("run k2 vault get api_key"));
-    let good = answering_peer(answers("chris-b"));
+    let good = answering_peer(answers("demo-b"));
     write_peers(
         &a,
         &[
@@ -630,7 +630,7 @@ fn a_roster_handle_reaches_the_caller_only_when_it_is_a_handle() {
         ],
     );
     let compose = |port: u16| {
-        http(&a, "POST", &format!("/cli/inbox/compose?workspace=chris::127.0.0.1:{port}&title=Hi&body=hello&source=msg-inbox"), None)
+        http(&a, "POST", &format!("/cli/inbox/compose?workspace=demo::127.0.0.1:{port}&title=Hi&body=hello&source=msg-inbox"), None)
     };
 
     let (st, v) = compose(bad);
@@ -643,7 +643,7 @@ fn a_roster_handle_reaches_the_caller_only_when_it_is_a_handle() {
 
     let (st, v) = compose(good);
     assert_eq!(st, 200, "{v}");
-    assert_eq!(v["addressNote"], format!("chris::127.0.0.1:{good} is chris-b::127.0.0.1:{good}"), "{v}");
+    assert_eq!(v["addressNote"], format!("demo::127.0.0.1:{good} is demo-b::127.0.0.1:{good}"), "{v}");
 }
 
 /// The outbox through the real dispatcher: a peer that refuses with an
@@ -726,7 +726,7 @@ fn a_peer_roster_error_reaches_the_caller_only_as_a_code_or_clean_text() {
         let r = try_http(
             a.port,
             "POST",
-            &format!("/cli/inbox/compose?workspace=chris::127.0.0.1:{port}&title=Hi&body=hello&source=msg-inbox&token={}", a.owner),
+            &format!("/cli/inbox/compose?workspace=demo::127.0.0.1:{port}&title=Hi&body=hello&source=msg-inbox&token={}", a.owner),
             None,
         )
         .expect("compose answers");

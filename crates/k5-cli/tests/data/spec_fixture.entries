@@ -1,0 +1,16 @@
+    {
+      "name": "compute stats",
+      "usage": "k2 compute stats <job> [--json]",
+      "description": "A test entry: `k2 compute stats` as a spec verb. Only k5-spec-fixture answers it; k2 --schema never prints it.",
+      "args": [{"name": "job", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ],
+      "impl": "spec",
+      "parse": {"style": "for", "usage": "usage: k2 compute stats <job> [--json]  (a job id or its first 8 characters)",
+                "check": {"job": "^[A-Za-z0-9_-]{4,64}$"}},
+      "call": {"via": "compute", "method": "GET", "path": "/cli/compute/stats",
+               "query": [{"key": "job", "from": "<job>", "enc": "raw"}]},
+      "output": {"json": "body", "text": "lines"},
+      "auth": "session"
+    },

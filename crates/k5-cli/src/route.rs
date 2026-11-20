@@ -33,8 +33,9 @@ pub enum Owner {
     /// The binary, by its own code ([`crate::front`]). A form its code
     /// does not take still goes to the shell CLI.
     Native,
-    /// The binary, from the command's `--schema` entry. Nothing is `Spec`
-    /// yet: the front has no runner for it.
+    /// The binary, from the command's `--schema` entry ([`crate::spec`]).
+    /// Only a verb row may be `Spec`, and each such verb has its row of
+    /// [`crate::spec::table::SPEC`] ([`crate::front::spec_problems`]).
     Spec,
     /// The shell CLI, byte for byte ([`crate::fallthrough`]).
     Bash,

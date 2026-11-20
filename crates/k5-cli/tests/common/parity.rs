@@ -135,6 +135,9 @@ pub struct Rig {
     pub secrets: PathBuf,
     /// A socket file nothing listens on.
     pub dead_sock: PathBuf,
+    /// The binary the Rust sides run: [`BIN`], or a test binary
+    /// (`k5-spec-fixture`).
+    pub bin: &'static str,
     /// One stub per side, in [`Side::ALL`]'s order.
     stubs: Vec<Stub>,
     /// The side being prepared or run.
@@ -304,6 +307,7 @@ impl Rig {
             proj,
             secrets,
             dead_sock,
+            bin: BIN,
             stubs,
             side: Cell::new(Side::Bash),
             cross: Cell::new(None),
@@ -409,7 +413,7 @@ impl Rig {
             c.arg(cli_k2());
             c
         } else {
-            Command::new(BIN)
+            Command::new(self.bin)
         };
         cmd.env_clear();
         let search = path

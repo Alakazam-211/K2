@@ -508,6 +508,22 @@ pub fn dev_fd(fd: &std::os::fd::OwnedFd) -> OsString {
     OsString::from(format!("/dev/fd/{}", fd.as_raw_fd()))
 }
 
+/// The front's hand-off: the passport rule, count-only (the shell is told
+/// when the call would be refused, and a value the caller set never
+/// stands), then [`run`]; its error's line on stderr, and its exit. Nothing
+/// else has changed the process environment, so it is what the shell
+/// inherits.
+pub fn hand_off(who: CalledAs, args: &[OsString]) -> Exit {
+    match crate::passport::hand_off_env(crate::passport::current(args)) {
+        (name, Some(value)) => std::env::set_var(name, value),
+        (name, None) => std::env::remove_var(name),
+    }
+    trace::mark("passport rule");
+    let err = run(who, args);
+    crate::out::stderr_line(&err.line(who));
+    err.exit()
+}
+
 /// Hands `args` to the shell CLI. On Unix this process becomes bash, so
 /// this returns only when that fails; on Windows bash runs as a child and
 /// this process exits with its code. What comes back is the front's own

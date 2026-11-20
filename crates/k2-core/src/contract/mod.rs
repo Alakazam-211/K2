@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 pub mod app;
+pub mod cli_spec;
 pub mod gen;
 pub mod libs;
 pub mod lint;

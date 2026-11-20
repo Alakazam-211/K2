@@ -89,6 +89,7 @@ pub mod prelude;
 pub mod python;
 pub mod retired;
 pub mod route;
+pub mod spec;
 pub mod text;
 pub mod tools;
 pub mod trace;

@@ -4,7 +4,9 @@
 //! (prd-zen-user-widgets-v2 UWA11): the renderer's verb and cap tables, the
 //! frame's `k2.d.ts` and `k2-frame.js`, the freshness snapshot, the fenced
 //! `k2 zen guide api` and `k2 study app-api` blocks in `cli/k2`, the App
-//! route table `app_surface.rs` and the server SDK's `verbs.ts` (S23). `--check` writes nothing and
+//! route table `app_surface.rs` and the server SDK's `verbs.ts` (S23), and,
+//! from the `k2 --schema` entries, the Rust CLI's spec table
+//! (`k2_core::contract::cli_spec`). `--check` writes nothing and
 //! exits 1 when any output is stale. See `k2_core::contract::gen`.
 
 use std::path::PathBuf;

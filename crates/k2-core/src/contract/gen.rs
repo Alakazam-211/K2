@@ -18,6 +18,9 @@
 //!   App-facing route table `crates/k2-core/src/app_surface.rs`, the server
 //!   SDK's `sdk/server/src/generated/verbs.ts`, and the fenced
 //!   `k2 study app-api` block in `cli/k2`.
+//! - From the `k2 --schema` entries (`contract::cli_spec`), not the
+//!   catalog: the Rust CLI's spec table `crates/k5-cli/src/spec/table.rs`
+//!   and its test fixture's.
 //!
 //! The bin (`cargo run -p k2-core --bin contract-gen`) writes them; the
 //! freshness test below renders them again and fails on any difference. It
@@ -131,6 +134,11 @@ pub fn render(c: &Catalog, runtime: Option<&str>) -> Result<Vec<Output>, String>
     ];
     let snapshot = snapshot_json(c, runtime, &out);
     out.push(Output { path: SNAPSHOT_JSON, text: snapshot });
+    // The Rust CLI's spec table and its test fixture, from the `--schema`
+    // entries (not the catalog, so not in the snapshot the renderer's
+    // twin test reads).
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    out.extend(super::cli_spec::outputs(&root)?);
     Ok(out)
 }
 

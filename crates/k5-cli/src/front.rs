@@ -18,6 +18,11 @@
 //! value), with its connection gate in front of it, exactly as it always
 //! has. No copy of the text lives here: a page is the shell's own file.
 //!
+//! A `Spec` verb row's command line is its spec verb ([`Route::Spec`]),
+//! run from its `--schema` entry ([`crate::spec`]), unless it has `-h` or
+//! `--help` in it (a page or the shell's, as for a family) or no spec row
+//! starts it (the shell's).
+//!
 //! A study page ([`Route::Study`], when the `study` row is `Native`), a
 //! help form the shell only prints a file for ([`Route::Help`],
 //! [`help_route`]), the daily tier of the help (`k2`, `k2 help`,
@@ -30,6 +35,7 @@
 
 use crate::pages::{self, Composed, Study};
 use crate::route::{self, Noun, Owner};
+use crate::spec::{self, SpecVerb};
 use crate::text::{self, HelpForm};
 use std::ffi::OsString;
 
@@ -92,6 +98,10 @@ pub enum Route {
     /// ([`crate::families::setup`], which hands a form whose switch is off
     /// to the shell).
     Setup,
+    /// A spec verb: a `Spec` verb row, the row of [`spec::table::SPEC`]
+    /// for its words, and no `-h` or `--help` in it ([`spec::run`], which
+    /// may still hand it to the shell).
+    Spec(&'static SpecVerb),
     /// A `k2 study` page ([`pages::study`]).
     Study(Study),
     /// A help form whose page is a file ([`text::HELP_FORMS`]).
@@ -112,9 +122,9 @@ pub fn route(args: &[OsString]) -> Route {
     let found = route::find(route::TABLE, args);
     match (found.owner, found.noun) {
         (Owner::Native, Some(noun)) => native(noun, args),
-        // Nothing is `Spec` yet: there is no runner for it. The daily
-        // tier and a help form the shell only prints a file for are
-        // pages.
+        (Owner::Spec, Some(_)) => spec_route(spec::table::SPEC, args),
+        // The daily tier and a help form the shell only prints a file for
+        // are pages.
         _ if daily_route(args) => Route::Daily,
         (_, noun) => {
             let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
@@ -134,6 +144,54 @@ pub fn route(args: &[OsString]) -> Route {
             Route::Fallthrough
         }
     }
+}
+
+/// A `Spec` row's command line: its row of `table` (the longest whose
+/// words start the line), or the shell's when it has none. Its help is a
+/// page or the shell's, as a family's is.
+fn spec_route(table: &'static [SpecVerb], args: &[OsString]) -> Route {
+    let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
+    let Some(words) = words else {
+        return Route::Fallthrough;
+    };
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return help_route(args).map_or(Route::Fallthrough, Route::Help);
+    }
+    spec::find(table, &words).map_or(Route::Fallthrough, Route::Spec)
+}
+
+/// What is wrong between a route table and a spec table: a whole row that
+/// is `Spec` (only a verb row may be), a `Spec` verb word with no spec row
+/// for it, or a spec row the route table does not send to `Spec`. Empty
+/// when they agree.
+pub fn spec_problems(nouns: &'static [Noun], table: &[SpecVerb]) -> Vec<String> {
+    let mut out = Vec::new();
+    for noun in nouns {
+        if noun.owner == Owner::Spec {
+            out.push(format!("{:?} is Spec as a whole row", noun.words));
+        }
+        for verb in noun.verbs.iter().filter(|v| v.owner == Owner::Spec) {
+            for word in verb.words {
+                let line = [noun.words[0], *word];
+                if !table
+                    .iter()
+                    .any(|r| r.words.len() >= 2 && r.words[..2] == line)
+                {
+                    out.push(format!("{line:?} is a Spec verb row with no spec row"));
+                }
+            }
+        }
+    }
+    for row in table {
+        let args: Vec<OsString> = row.words.iter().map(OsString::from).collect();
+        if route::find(nouns, &args).owner != Owner::Spec {
+            out.push(format!(
+                "the spec row {:?} is not a Spec verb row",
+                row.entry
+            ));
+        }
+    }
+    out
 }
 
 /// Whether `args` prints the daily tier ([`pages::DAILY_FORMS`]).
@@ -654,12 +712,10 @@ mod tests {
     }
 
     /// A `Native` row is one the front has code for, under each of its
-    /// words; and no row is `Spec` while there is no runner for it.
+    /// words.
     #[test]
     fn every_native_row_is_answered_here() {
         for noun in route::TABLE {
-            let mut owners = std::iter::once(noun.owner).chain(noun.verbs.iter().map(|v| v.owner));
-            assert!(owners.all(|o| o != Owner::Spec), "{:?} is Spec", noun.words);
             if noun.owner == Owner::Native {
                 for word in noun.words {
                     assert_ne!(
@@ -680,6 +736,93 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every `Spec` verb row has its spec row and every spec row is a
+    /// `Spec` verb row; each routes to the runner, its help to a page or
+    /// the shell.
+    #[test]
+    fn every_spec_row_has_its_route() {
+        assert_eq!(
+            spec_problems(route::TABLE, spec::table::SPEC),
+            Vec::<String>::new()
+        );
+        for row in spec::table::SPEC {
+            let args: Vec<OsString> = row.words.iter().map(OsString::from).collect();
+            assert_eq!(route(&args), Route::Spec(row), "{}", row.entry);
+        }
+    }
+
+    /// The check bites: a `Spec` verb row with no spec row, a spec row the
+    /// table sends to the shell, and a whole `Spec` row.
+    #[test]
+    fn spec_problems_bite() {
+        use crate::route::Verb;
+        use crate::spec::{Call, Cred, Method, Output, Parse, Print, Style, Via};
+        static NOUNS: &[Noun] = &[
+            Noun {
+                words: &["compute"],
+                owner: Owner::Bash,
+                verbs: &[Verb {
+                    words: &["stats", "ls"],
+                    owner: Owner::Spec,
+                }],
+            },
+            Noun {
+                words: &["vault"],
+                owner: Owner::Spec,
+                verbs: &[],
+            },
+        ];
+        const fn row(words: &'static [&'static str]) -> SpecVerb {
+            SpecVerb {
+                entry: "x",
+                words,
+                parse: Parse {
+                    style: Style::None,
+                    usage: "u",
+                    args: &[],
+                    json_flag: false,
+                },
+                call: Call {
+                    via: Via::Compute,
+                    method: Method::Get,
+                    path: "/cli/x",
+                    tcp: false,
+                    query: &[],
+                },
+                output: Output {
+                    json: None,
+                    text: Print::Body,
+                },
+                exits: &[],
+                auth: Cred::Session,
+            }
+        }
+        static TABLE: &[SpecVerb] = &[row(&["compute", "stats"]), row(&["compute", "nodes"])];
+        assert_eq!(
+            spec_problems(NOUNS, TABLE),
+            [
+                "[\"compute\", \"ls\"] is a Spec verb row with no spec row",
+                "[\"vault\"] is Spec as a whole row",
+                "the spec row \"x\" is not a Spec verb row",
+            ]
+        );
+        static GOOD: &[SpecVerb] = &[row(&["compute", "stats"]), row(&["compute", "ls"])];
+        assert_eq!(spec_problems(&NOUNS[..1], GOOD), Vec::<String>::new());
+        let args = |l: &[&str]| -> Vec<OsString> { l.iter().map(OsString::from).collect() };
+        assert_eq!(
+            spec_route(GOOD, &args(&["compute", "stats", "j"])),
+            Route::Spec(&GOOD[0])
+        );
+        assert_eq!(
+            spec_route(GOOD, &args(&["compute", "nodes"])),
+            Route::Fallthrough
+        );
+        assert_eq!(
+            spec_route(GOOD, &args(&["compute", "stats", "--help", "x"])),
+            Route::Fallthrough
+        );
     }
 
     #[test]

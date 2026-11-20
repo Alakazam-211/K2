@@ -1,7 +1,7 @@
 //! `k5-cli`: the k5 command line's front. It answers `--version`,
 //! `--version --check`, `cli status`, the families in
-//! [`k5_cli::families`], and the study and help pages it can print as the
-//! shell does ([`k5_cli::pages`]) itself, and hands every other verb to
+//! [`k5_cli::families`], the spec verbs ([`k5_cli::spec`]), and the study
+//! and help pages it can print as the shell does ([`k5_cli::pages`]) itself, and hands every other verb to
 //! the shell CLI it carries ([`k5_cli::fallthrough`]). Before a verb
 //! falls through, the passport rule ([`k5_cli::passport`]) runs; for now
 //! it only counts. The binary's own requests carry its verdict too.
@@ -18,7 +18,7 @@ use k5_cli::front::{self, Route};
 use k5_cli::offline::{self, Env, Prelude};
 use k5_cli::pages::{self, Page};
 use k5_cli::{
-    check, cli_status, daemon, embedded, fallthrough, families, out, passport, port, trace,
+    check, cli_status, daemon, embedded, fallthrough, families, out, passport, port, spec, trace,
 };
 use std::ffi::OsString;
 
@@ -73,19 +73,9 @@ fn cli_status(args: &[OsString], json: bool) -> Exit {
     exit
 }
 
-/// The shell CLI runs the command line. The passport rule, count-only:
-/// the shell is told when the call would be refused, and a value the
-/// caller set never stands. Nothing else has changed the process
-/// environment, so it is what the shell inherits.
+/// The shell CLI runs the command line ([`fallthrough::hand_off`]).
 fn shell(who: CalledAs, args: &[OsString]) -> Exit {
-    match passport::hand_off_env(passport::current(args)) {
-        (name, Some(value)) => std::env::set_var(name, value),
-        (name, None) => std::env::remove_var(name),
-    }
-    trace::mark("passport rule");
-    let err = fallthrough::run(who, args);
-    out::stderr_line(&err.line(who));
-    err.exit()
+    fallthrough::hand_off(who, args)
 }
 
 /// A page: printed here when the shell's environment lets the binary
@@ -169,6 +159,7 @@ fn main() {
         Route::Workspace => families::workspace::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Update => families::update::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Setup => families::setup::run(&args).unwrap_or_else(|| shell(who, &args)),
+        Route::Spec(row) => spec::run(row, &args).unwrap_or_else(|| shell(who, &args)),
         Route::Study(s) => page(who, &args, |p, env| {
             pages::study_page(s, p, env, || passport::current(&args).would_refuse())
         }),

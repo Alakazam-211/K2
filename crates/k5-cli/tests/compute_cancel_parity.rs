@@ -425,18 +425,23 @@ fn compute_cancel_with_no_answer() {
                 ),
             )
         },
-        with(
-            cell(&[]),
-            case(
-                "the cell socket closed with nothing: not sent again",
-                &["cancel", "--all-mine"],
-                &[],
-                vec![Reply::Close],
-                port_only,
-                1,
-                1,
-            ),
-        ),
+        // The line counts whole seconds of bash's `$SECONDS`, which may
+        // tick on a loaded host: one apart is the same line.
+        Case {
+            compare: Compare::Waited,
+            ..with(
+                cell(&[]),
+                case(
+                    "the cell socket closed with nothing: not sent again",
+                    &["cancel", "--all-mine"],
+                    &[],
+                    vec![Reply::Close],
+                    port_only,
+                    1,
+                    1,
+                ),
+            )
+        },
     ];
     for c in v {
         rig.check(&c);

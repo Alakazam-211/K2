@@ -25,9 +25,8 @@
 //! environment is the one this process was given with the changes above;
 //! bash's helper also gets bash's own (`SHLVL` one higher, `_` set to the
 //! program, and `_K2_PY_PROXY_RULE`, the shell CLI's Python proxy rule).
-//! A helper `execve` can't run (neither a binary nor a `#!` script) is a
-//! script bash runs itself; here it is an `exec` error, exit 126. The
-//! daemon names its own binary, so neither is met in use.
+//! An exec that fails is worded each its way (exit 126 on both). The
+//! check `exec-child-env` in `scripts/cli-parity.sh` proves each part.
 
 use super::Ctx;
 use crate::exit::Exit;

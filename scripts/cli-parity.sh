@@ -170,6 +170,7 @@ EXPECTED_DIFFS=(
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
     "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words three of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError; from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
     "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via; \`thread bob --from\`, also --limit and --before-seq, and \`thread unread --kind\`; \`talk ws hi --lines\`, also --from, --command, --agent, --session, --token, --answer, --respond, --answers and --wake-timeout) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Neither sends anything"
+    "exec-child-env|K2 ruling 1b, vault run (db run's ruling 2a child the same)|the program a command runs in its place (vault run's helper, db run's command, named in families::vault::run and families::db::run): bash's child also gets bash's own environment changes, SHLVL and _K2_PY_PROXY_RULE (the shell CLI's Python proxy rule), and _ (the program's path) where bash's exec sets it, none of which the binary's child gets; and an exec that fails (a folder the daemon named) exits 126 on both, worded \"<path to cli/k2>: line <n>: <helper>: Is a directory\" by bash and \"exec: <helper>: Permission denied (os error 13)\" by the binary. The request each sends is the same"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
 
@@ -398,6 +399,9 @@ WIKIBIG = {
     "/cli/wiki/index": b"{\"nodes\":[" + b",".join(b"{\"id\":\"note-%05d.md\"}" % i for i in range(60000)) + b"]}",
 }
 TABLE = {"nul": NUL, "optin": OPTIN, "wikibig": WIKIBIG}.get(mode, {})
+HELPERS = {"vaultrun": "helper", "vaultrun-dir": "dir-helper"}
+if mode in HELPERS:
+    TABLE = {"/cli/vault/run-helper": json.dumps({"helper": os.path.join(d, HELPERS[mode]), "tokenFd": True}).encode()}
 class H(BaseHTTPRequestHandler):
     if mode == "heads":
         protocol_version = "HTTP/1.1"
@@ -626,6 +630,48 @@ check_nul_in_answer() {
     [ "$warns" = 1 ] && return 0
     echo "bash on PATH is $ver, which drops a NUL silently as the binary does (the warning came in bash 4.4): the two are exact here, so the difference itself was not proven on this host"
     return 3
+}
+
+# check_exec_child_env: the stub names a run helper; both CLIs run `vault
+# run --secret A -- true` with the owner token on disk (no passport, fd 3
+# empty). The helper (Python, which adds nothing) prints which of SHLVL, _
+# and _K2_PY_PROXY_RULE it was given: SHLVL and _K2_PY_PROXY_RULE (and _
+# where bash's exec sets it) for bash, none for the binary. Then a folder
+# (126 on both, worded each its way). A helper with no #! line is no
+# difference: execvp hands it to /bin/sh as bash does. Each pair sends
+# the same one request.
+check_exec_child_env() {
+    local d="$WORK/exec-child" mode rc rr problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2" "$d/dir-helper"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    printf '%s\n' '#!/usr/bin/env python3' 'import os' \
+        'for n in ("SHLVL", "_", "_K2_PY_PROXY_RULE"): print(n, "set" if n in os.environ else "unset")' >"$d/helper"
+    chmod +x "$d/helper" "$d/dir-helper"
+    for mode in vaultrun vaultrun-dir; do
+        start_stub "$d" "$mode" || { echo "the stub daemon didn't start ($mode)"; return 1; }
+        printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+        rc=0; run_side "$d" bash vault run --secret A -- true || rc=$?
+        cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
+        rr=0; run_side "$d" binary vault run --secret A -- true || rr=$?
+        stop_stub
+        [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 1 ] || problems+=("$mode: bash sent, want one request: $(head -c 300 "$d/log.bash")")
+        cmp -s "$d/log.bash" "$d/log" || problems+=("$mode: the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
+        case "$mode" in
+            vaultrun)
+                [ "$rc" = 0 ] && [ "$rr" = 0 ] || problems+=("$mode: exits bash $rc, binary $rr, want 0 and 0: $(head -c 300 "$d/err.bash") / $(head -c 300 "$d/err")")
+                grep -qx 'SHLVL set' "$d/out.bash" && grep -qx '_K2_PY_PROXY_RULE set' "$d/out.bash" || problems+=("$mode: bash's helper got: $(head -c 300 "$d/out.bash")")
+                [ "$(cat "$d/out")" = "$(printf 'SHLVL unset\n_ unset\n_K2_PY_PROXY_RULE unset')" ] || problems+=("$mode: the binary's helper got: $(head -c 300 "$d/out")")
+                ;;
+            vaultrun-dir)
+                [ "$rc" = 126 ] && [ "$rr" = 126 ] || problems+=("$mode: exits bash $rc, binary $rr, want 126 and 126")
+                grep -q ": $d/dir-helper: Is a directory\$" "$d/err.bash" || problems+=("$mode: bash's stderr: $(head -c 300 "$d/err.bash")")
+                grep -qx "exec: $d/dir-helper: Permission denied (os error 13)" "$d/err" || problems+=("$mode: the binary's stderr: $(head -c 300 "$d/err")")
+                ;;
+        esac
+    done
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
 }
 
 # check_wiki_status_large_answer: the stub answers the wiki index with

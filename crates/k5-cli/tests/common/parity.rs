@@ -962,10 +962,59 @@ impl Rig {
                 "{name}: stderr (mktemp's name masked)"
             );
         } else {
-            assert_eq!(r.stderr, b.stderr, "{name}: stderr");
+            assert_eq!(
+                as_older_python(&r.stderr),
+                b.stderr,
+                "{name}: stderr"
+            );
         }
         (r.clone(), rl, handed, rt)
     }
+}
+
+/// The binary's text as the shell's Python words it, where that Python is
+/// older than the wording the binary follows (it has no Python version
+/// to copy, so it follows the newer one, as with the timeout's name in
+/// urllib_python_parity.rs). Python 3.11 added the index's type to
+/// "string indices must be integers": before it, the line ends there.
+/// The version is the one of the `python3` the shell runs, read from it.
+fn as_older_python(text: &str) -> String {
+    const STEM: &str = "string indices must be integers";
+    if python3_version() >= (3, 11) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(STEM) {
+        let (head, tail) = rest.split_at(at + STEM.len());
+        out.push_str(head);
+        rest = tail
+            .strip_prefix(", not '")
+            .and_then(|t| t.find('\'').map(|end| &t[end + 1..]))
+            .unwrap_or(tail);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The `python3` on `PATH` (the one the shell runs): its major and minor
+/// version.
+pub fn python3_version() -> (u32, u32) {
+    static V: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        let o = Command::new("python3")
+            .args(["-I", "-c", "import sys; print('%d %d' % sys.version_info[:2])"])
+            .output()
+            .expect("run python3");
+        assert!(o.status.success(), "python3's version: {o:?}");
+        let text = String::from_utf8(o.stdout).expect("python3's version is UTF-8");
+        let v: Vec<u32> = text
+            .split_whitespace()
+            .map(|n| n.parse().expect("a number in python3's version"))
+            .collect();
+        assert_eq!(v.len(), 2, "python3's version: {text:?}");
+        (v[0], v[1])
+    })
 }
 
 /// How bash's warning about a NUL that `$(…)` dropped ends, after

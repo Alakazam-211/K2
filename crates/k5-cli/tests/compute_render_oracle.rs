@@ -114,6 +114,20 @@ fn python(script: &str, cases: &[Case]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A dict sliced (`{}[:8]`): Python 3.12 made slices hashable, so from
+/// there it raises KeyError, which the binary follows (it has no Python
+/// version to copy); before 3.12 it raises TypeError ("unhashable type:
+/// 'slice'"). Only on a `python3` older than 3.12, read from the one the
+/// harness runs, is that TypeError the binary's KeyError.
+fn older_slice_error(exc: &str, rust_err: &str) -> bool {
+    exc == "TypeError"
+        && rust_err
+            .lines()
+            .last()
+            .is_some_and(|l| l.starts_with("KeyError: slice("))
+        && common::parity::python3_version() < (3, 12)
+}
+
 /// The class of the exception a traceback ends with ("" when none).
 fn class_of(stderr: &str) -> String {
     if stderr.is_empty() {
@@ -245,10 +259,10 @@ fn check(
         // a few seconds after `now`: one of those seconds must match.
         let (out, err) = (0..6)
             .map(|d| rust(body.as_bytes(), now + d))
-            .find(|(o, e)| o == stdout && &class_of(e) == exc)
+            .find(|(o, e)| o == stdout && (&class_of(e) == exc || older_slice_error(exc, e)))
             .unwrap_or_else(|| rust(body.as_bytes(), now));
         let class = class_of(&err);
-        if &out != stdout || &class != exc {
+        if &out != stdout || (&class != exc && !older_slice_error(exc, &err)) {
             bad.push(format!(
                 "== {body}\n-- python ({exc}):\n{stdout}\n-- rust ({class}):\n{out}\n{err}"
             ));

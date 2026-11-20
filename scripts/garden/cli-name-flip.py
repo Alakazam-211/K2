@@ -51,8 +51,12 @@ WORD = re.compile(r"(?<![\w./$~-])k2(?![\w.:/-])")
 HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 # A heredoc or a quoted string that starts after one of these is a program
 # for that interpreter, not words for a reader.
-INTERPRETER = re.compile(r"(\bpython3?\b|\$_k2_py\b|\$\{?PY\b|\bnode\b|\bsqlite3\b|\bpsql\b|\bosascript\b|\bawk\b|\bjq\b|\bsed\b|\bruby\b|\bperl\b|\bssh\b|\bbash\b|\bsh\b|\beval\b)")
+# The word must be a command: not a variable ($node, ${node#-}), a flag
+# (--node), an assignment (node="") or a file's extension (.sh). Without
+# this, `[ -n "$node" ] || echo "usage: k2 ..."` read as a Node program.
+INTERPRETER = re.compile(r"(?<![$\w{.-])(\bpython3?\b|\$_k2_py\b|\$\{?PY\b|\bnode\b|\bsqlite3\b|\bpsql\b|\bosascript\b|\bawk\b|\bjq\b|\bsed\b|\bruby\b|\bperl\b|\bssh\b|\bbash\b|\bsh\b|\beval\b)(?![\w=-])")
 CLASSES = ("text", "comment", "kept", "unsure")
+NAME_WHY = "a name in interpreter code (k2 = ...)"
 # After `k2 `, these mark a use as the command even when the word is not a
 # verb: a flag, a placeholder, an ellipsis.
 COMMAND_TAIL = re.compile(r" (--?[a-z]|<|\[|…|\.\.\.)")
@@ -172,24 +176,48 @@ def contexts(line, stack):
     return ctx, stack, heredoc
 
 
-def in_code_string(line, pos, outer=None):
-    """Inside a string literal on this line of interpreter code, by counting
-    quotes before `pos`. `outer` is the shell quote the code sits in, which
-    is not a quote of the code itself."""
-    quote = None
+def code_place(line, pos, outer=None):
+    """Where `pos` sits in this line of interpreter code: 'string' (inside
+    one of the code's string literals), 'comment' (after a `#` that starts
+    a comment) or 'code'. Counts quotes from the line's start. `outer` is
+    the shell quote the code sits in, which is not a quote of the code
+    itself. Inside shell double quotes the shell reads its escapes first:
+    `\\"` reaches the code as `"`, so `print(f\\"... k2 msg\\")` is a string."""
+    chars = []
     i = 0
     while i < pos:
         c = line[i]
-        if c == "\\":
+        if outer == '"' and c == "\\" and i + 1 < pos and line[i + 1] in '"\\$`':
+            chars.append(line[i + 1])
             i += 2
             continue
-        if c in "'\"" and c != outer:
+        if c != outer:
+            chars.append(c)
+        i += 1
+    quote = None
+    prev = " "
+    j = 0
+    while j < len(chars):
+        c = chars[j]
+        if c == "\\":
+            j += 2
+            prev = "x"
+            continue
+        if quote is None and c == "#" and prev in " \t;":
+            return "comment"
+        if c in "'\"":
             if quote is None:
                 quote = c
             elif quote == c:
                 quote = None
-        i += 1
-    return quote is not None
+        prev = c
+        j += 1
+    return "string" if quote else "code"
+
+
+# A name on the left of `=` in interpreter code (`k2 = [...]`, not `==`):
+# a variable, never words for a reader.
+ASSIGNED = re.compile(r"\s*=(?!=)")
 
 
 def whole_string_is_name(line, m):
@@ -235,8 +263,14 @@ def classify(line, m, where, known):
         return "unsure", "$(k2 ...): runs the command"
     if whole_string_is_name(line, m):
         return "unsure", "a string that is exactly k2 (a value)"
-    if where.endswith("-code") and not in_code_string(line, m.start(), outer=where[0] == "s" and "'" or '"' if where != "heredoc-code" else None):
-        return "unsure", "interpreter code, not in a string"
+    if where.endswith("-code"):
+        place = code_place(line, m.start(), outer=None if where == "heredoc-code" else ("'" if where[0] == "s" else '"'))
+        if place == "comment":
+            return "comment", "comment in interpreter code"
+        if place == "code":
+            if ASSIGNED.match(after) and (not before or before[-1] in " \t;(,"):
+                return "kept", NAME_WHY
+            return "unsure", "interpreter code, not in a string"
     if not reads_as_command(line, m, known):
         return "unsure", "k2 followed by a word that is not a command"
     return "text", "printed text" if not where.endswith("-code") else "string in interpreter code"

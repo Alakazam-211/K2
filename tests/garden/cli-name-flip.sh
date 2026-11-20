@@ -44,6 +44,16 @@ print("try: k2 msg <addr>", k2)
 who = {"k2": "K2"}
 PY
     python3 -c 'import sys; k2 = 1; print("use k2 vault list")'
+    [ -n "$node" ] || { echo "usage: k2 vault get <name> [--node <node>]" >&2; exit 2; }
+    local node="" pol_usage='usage: k2 msg <addr>'
+    python3 -c "
+# k2 msg in a comment inside python -c
+x = 1  # k2 vault list, after code
+print(f\"it stays off until: k2 msg {x}\")
+k2 = [x]
+print(k2)
+"
+    node -e 'const a = 1; console.log(k2, "use k2 msg <addr>")'
 }
 PART
 printf '    {"name": "msg", "usage": "k2 msg <addr>", "note": "the k2 object"},\n' > "$S/cli/src/schema/talk.entries"
@@ -71,18 +81,36 @@ has text 'a.sh:13:'
 # Names that only contain k2 are not uses of the word at all.
 for c in text comment kept unsure; do hasnt "$c" 'a.sh:14:'; done
 # Interpreter code: an identifier is never text; a sentence in a string is.
-has unsure 'a.sh:18: [interpreter code, not in a string]'
+# A name on the left of `=` is kept; a bare use of it stays unsure.
+has kept 'a.sh:18: [a name in interpreter code (k2 = ...)]'
 has text 'a.sh:19: [string in interpreter code]'
 [ "$(show unsure | grep -c '^cli/src/a.sh:19:')" = 1 ] || die "line 19: the identifier k2 should be unsure: $(show unsure)"; ok
+has unsure 'a.sh:19: [interpreter code, not in a string]'
 has unsure 'a.sh:20: [a string that is exactly k2 (a value)]'
-has unsure 'a.sh:22: [interpreter code, not in a string]'
+has kept 'a.sh:22: [a name in interpreter code (k2 = ...)]'
 has text 'a.sh:22: [string in interpreter code]'
+# A shell variable, a flag or an assignment named node is not the Node
+# interpreter: the usage line after it is printed text.
+has text 'a.sh:23: [printed text] [ -n "$node" ] || { echo "usage: k2 vault get'
+has text 'a.sh:24: [printed text] local node=""'
+# Inside python -c "...": a # comment is a comment, a print whose quotes
+# the shell escapes (\") is a string, a name set with = is kept, and a bare
+# use is still code.
+has comment 'a.sh:26: [comment in interpreter code]'
+has comment 'a.sh:27: [comment in interpreter code] x = 1  # k2 vault list'
+has text 'a.sh:28: [string in interpreter code] print(f\"it stays off'
+has kept 'a.sh:29: [a name in interpreter code (k2 = ...)]'
+has unsure 'a.sh:30: [interpreter code, not in a string] print(k2)'
+# A real node -e program: the bare k2 is code, the sentence is text.
+has unsure 'a.sh:32: [interpreter code, not in a string] node -e'
+has text 'a.sh:32: [string in interpreter code] node -e'
+for c in text comment kept unsure; do hasnt "$c" 'a.sh:31:'; done
 has text 'schema/talk.entries:1:'
 has unsure 'schema/talk.entries:1: [k2 followed by a word that is not a command]'
 
 out="$(python3 "$FLIP" --root "$S")"
-case "$out" in *"will change: text 10, comment 2"*) ok ;; *) die "the dry run counts: $out" ;; esac
-case "$out" in *"will not:    kept 1, unsure 9"*) ok ;; *) die "the dry run counts: $out" ;; esac
+case "$out" in *"will change: text 14, comment 4"*) ok ;; *) die "the dry run counts: $out" ;; esac
+case "$out" in *"will not:    kept 4, unsure 9"*) ok ;; *) die "the dry run counts: $out" ;; esac
 
 # The dry run and --show change nothing.
 before="$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | cksum)"
@@ -90,7 +118,7 @@ python3 "$FLIP" --root "$S" >/dev/null; python3 "$FLIP" --root "$S" --unsure >/d
 [ "$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | cksum)" = "$before" ] || die "a dry run changed a file"; ok
 
 # --apply rewrites text and comments, and nothing else.
-python3 "$FLIP" --apply --root "$S" | grep -q "rewrote 12 uses of k2 to k5 in 2 files" || die "--apply said: $(python3 "$FLIP" --apply --root "$S")"; ok
+python3 "$FLIP" --apply --root "$S" | grep -q "rewrote 18 uses of k2 to k5 in 2 files" || die "--apply said: $(python3 "$FLIP" --apply --root "$S")"; ok
 line() { sed -n "${1}p" "$S/cli/src/a.sh"; }
 [ "$(line 1)" = '# k5 msg sends a message (a comment)' ] || die "line 1: $(line 1)"; ok
 [ "$(line 3)" = '    echo "Usage: k5 msg <addr> [text]" >&2' ] || die "line 3: $(line 3)"; ok
@@ -105,6 +133,14 @@ line() { sed -n "${1}p" "$S/cli/src/a.sh"; }
 [ "$(line 18)" = 'k2 = load()' ] || die "line 18: $(line 18)"; ok
 [ "$(line 19)" = 'print("try: k5 msg <addr>", k2)' ] || die "line 19: $(line 19)"; ok
 [ "$(line 22)" = "    python3 -c 'import sys; k2 = 1; print(\"use k5 vault list\")'" ] || die "line 22: $(line 22)"; ok
+[ "$(line 23)" = '    [ -n "$node" ] || { echo "usage: k5 vault get <name> [--node <node>]" >&2; exit 2; }' ] || die "line 23: $(line 23)"; ok
+[ "$(line 24)" = "    local node=\"\" pol_usage='usage: k5 msg <addr>'" ] || die "line 24: $(line 24)"; ok
+[ "$(line 26)" = '# k5 msg in a comment inside python -c' ] || die "line 26: $(line 26)"; ok
+[ "$(line 27)" = 'x = 1  # k5 vault list, after code' ] || die "line 27: $(line 27)"; ok
+[ "$(line 28)" = 'print(f\"it stays off until: k5 msg {x}\")' ] || die "line 28: $(line 28)"; ok
+[ "$(line 29)" = 'k2 = [x]' ] || die "line 29: $(line 29)"; ok
+[ "$(line 30)" = 'print(k2)' ] || die "line 30: $(line 30)"; ok
+[ "$(line 32)" = "    node -e 'const a = 1; console.log(k2, \"use k5 msg <addr>\")'" ] || die "line 32: $(line 32)"; ok
 bash -n "$S/cli/src/a.sh" || die "the rewritten part does not parse"; ok
 # A second run finds no text left to change.
 python3 "$FLIP" --root "$S" | grep -q "will change: text 0, comment 0" || die "a second run still finds text: $(python3 "$FLIP" --root "$S")"; ok

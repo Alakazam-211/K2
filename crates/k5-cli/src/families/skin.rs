@@ -1825,7 +1825,10 @@ pub fn with_password(body: &str, at: usize, pw: &Secret) -> Secret {
         unreachable!("the verb's own body is a JSON object")
     };
     let at = at.min(pairs.len());
-    pairs.insert(at, (Text::from("password"), confirm::text_of_bytes(pw.expose())));
+    pairs.insert(
+        at,
+        (Text::from("password"), confirm::text_of_bytes(pw.expose())),
+    );
     Secret::new(dumps(&Value::Object(pairs)).into_bytes())
 }
 

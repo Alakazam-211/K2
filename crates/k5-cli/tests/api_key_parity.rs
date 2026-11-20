@@ -966,7 +966,9 @@ fn api_key_hire_ceiling_answers_as_the_shell_does() {
             "a room that is a number: Python's TypeError",
             &["hire-ceiling", "k1", "--none"],
             &[],
-            vec![ok(r#"{"id":"k1","hireLimits":{"apps":[{"app":"a","rooms":[5]}]}}"#)],
+            vec![ok(
+                r#"{"id":"k1","hireLimits":{"apps":[{"app":"a","rooms":[5]}]}}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -1211,7 +1213,9 @@ fn api_key_hire_asks_for_the_owner_s_confirm() {
         confirming(
             "create --hire: this Mac's check, and no --workspaces",
             &["create", "--hire"],
-            vec![ok(r#"{"id":"ak2","key":"k2sk_h","capabilities":{"hire":true}}"#)],
+            vec![ok(
+                r#"{"id":"ak2","key":"k2sk_h","capabilities":{"hire":true}}"#,
+            )],
             vec![methods("local-auth"), token("tk-hire-3")],
             b"",
             0,
@@ -1253,7 +1257,14 @@ fn api_key_hire_asks_for_the_owner_s_confirm() {
         // covers: api-key create
         confirming(
             "create --hire: a limit Python can't read, the empty body refused",
-            &["create", "--hire", "--max-live", "lots", "--workspaces", "*"],
+            &[
+                "create",
+                "--hire",
+                "--max-live",
+                "lots",
+                "--workspaces",
+                "*",
+            ],
             vec![Reply::Answer(400, r#"{"error":"bad body"}"#.into())],
             vec![methods("vault-password"), token("tk-hire-4")],
             b"pw\n",
@@ -1262,7 +1273,14 @@ fn api_key_hire_asks_for_the_owner_s_confirm() {
         // covers: api-key create
         confirming(
             "create --hire: a limit Python can't read, the empty body answered",
-            &["create", "--hire", "--max-per-team", "1e3", "--workspaces", "*"],
+            &[
+                "create",
+                "--hire",
+                "--max-per-team",
+                "1e3",
+                "--workspaces",
+                "*",
+            ],
             vec![ok(CREATED)],
             vec![methods("vault-password"), token("tk-hire-5")],
             b"pw\n",

@@ -1085,8 +1085,14 @@ pub fn ceiling_reader(raw: &str) -> Shown {
             o.err(&format!("Error: {e}"));
             return Ok(Exit::Error);
         }
-        let limits = or(at(dict(&d, line::ceiling::APPS)?, "hireLimits"), obj(vec![]));
-        let apps = or(at(dict(&limits, line::ceiling::APPS)?, "apps"), Value::Array(vec![]));
+        let limits = or(
+            at(dict(&d, line::ceiling::APPS)?, "hireLimits"),
+            obj(vec![]),
+        );
+        let apps = or(
+            at(dict(&limits, line::ceiling::APPS)?, "apps"),
+            Value::Array(vec![]),
+        );
         let raised = at(&d, "change").is_some_and(|c| *c == s("raise"));
         o.out(&format!(
             "App access {} for key {}.",

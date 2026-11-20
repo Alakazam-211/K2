@@ -249,7 +249,10 @@ fn the_hire_ceiling_python() {
     let body = quoted_python("talk-and-workspace.sh", "cmd_api_key() {", 4);
     assert_eq!(body[1], "apps=[]");
     let code = quoted_python("talk-and-workspace.sh", "cmd_api_key() {", 5);
-    assert_eq!(code[3], r#"    print(e.get("code","") if isinstance(e,dict) else "")"#);
+    assert_eq!(
+        code[3],
+        r#"    print(e.get("code","") if isinstance(e,dict) else "")"#
+    );
     let py = quoted_python("talk-and-workspace.sh", "cmd_api_key() {", 6);
     let at = |n: u32| py[n as usize - 1].trim().to_string();
     assert_eq!(
@@ -258,7 +261,8 @@ fn the_hire_ceiling_python() {
     );
     assert_eq!(at(line::ceiling::FOR), "for a in apps:");
     assert_eq!(at(line::ceiling::ROLES), r#"roles=a.get("roles") or []"#);
-    assert!(at(line::ceiling::PRINT).starts_with(r#"print("  %s: rooms %s, %s" % (a.get("app"), ",".join("#));
+    assert!(at(line::ceiling::PRINT)
+        .starts_with(r#"print("  %s: rooms %s, %s" % (a.get("app"), ",".join("#));
 }
 
 #[test]

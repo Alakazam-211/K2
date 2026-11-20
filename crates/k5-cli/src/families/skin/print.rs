@@ -243,8 +243,7 @@ pub fn read(reader: &Reader, raw: &str) -> Shown {
             ));
             if truthy(&g(d, "passwordMustChange")) {
                 o.line(
-                    "At their next sign-in they choose a new password (no session until then)."
-                        .to_string(),
+                    "At their next sign-in they choose a new password (no session until then).",
                 );
             }
             Ok(Exit::Ok)

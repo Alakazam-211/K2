@@ -320,7 +320,11 @@ fn a_password_on_stdin_joins_the_body_when_sent() {
     };
     assert_eq!(
         p.req,
-        Req::PostPassword("/cli/skin/users/password", r#"{"username": "bob"}"#.into(), 1)
+        Req::PostPassword(
+            "/cli/skin/users/password",
+            r#"{"username": "bob"}"#.into(),
+            1
+        )
     );
     assert!(p.held && p.reader == Reader::UserPassword);
     let Ok(Ask::Plain(p)) = ask(&["user", "add", "bob", "--password-stdin", "--app", " a "]) else {

@@ -270,12 +270,20 @@ esac
 # without the flag, must be refused exactly as it is.
 GONE="$WORK/gone.sock"
 STALE=(K2_PORT="$PORT" K2_HOOK_SOCK="$GONE" K2_HOOK_TOKEN="$PASSPORT")
-# Names a shell like Codex's shared app-server and runs k2 as its child
-# (the trailing exit keeps bash from exec'ing k2 in its place).
-cat >"$WORK/codex-shared.sh" <<'SH'
-exec -a "codex app-server --listen unix://" /bin/bash -c '"$0" "$@"; exit $?' "$@"
+# Runs k2 with a stand-in `ps` first on PATH that puts a shared Codex
+# app-server above it. The id-tool check reads only ps, and some hosts (a
+# sandboxed macOS build node) don't let a job run the real one. k2 runs ps
+# as its own child, so the stand-in names k2 by $PPID.
+mkdir -p "$WORK/psbin"
+cat >"$WORK/psbin/ps" <<'SH'
+#!/bin/sh
+printf '%s\n' "    1     0 /sbin/init" \
+    "  300     1 codex app-server --listen unix://" \
+    "  400   300 /bin/zsh -lc k2" \
+    "$PPID   400 /bin/bash k2"
 SH
-CODEX_VIA=(/bin/bash "$WORK/codex-shared.sh")
+chmod +x "$WORK/psbin/ps"
+CODEX_VIA=(/usr/bin/env PATH="$WORK/psbin:/usr/bin:/bin")
 both_forms() { # <verb> <sub or -> sets plain and flagged
     if [ "$2" = "-" ]; then plain=("$1"); flagged=("$1" --json); else plain=("$1" "$2"); flagged=("$1" --json "$2"); fi
 }

@@ -26,8 +26,38 @@ use crate::exit::Exit;
 use crate::offline::{self, Env, Prelude};
 use crate::out;
 use crate::pages::Page;
+use std::ffi::OsString;
 
-crate::route::shell_family!(&["help", "--help", "-h"]);
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["help", "--help", "-h"];
+/// The shell CLI answers every form but [`VERBS`]'.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
+/// `help remote` is the binary's.
+pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
+    words: &["remote"],
+    owner: crate::route::Owner::Native,
+}];
+
+/// `k5 help remote`: `_remote_usage` on stdout, exit 0, as the front
+/// prints a help page: the connection gate needs a port and a token, and
+/// `help` is an open tool, so the session checks pass it. `None`: the
+/// shell answers (any other line, or a prelude the shell must read).
+pub fn run(args: &[OsString]) -> Option<Exit> {
+    let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    if words != ["help", "remote"] {
+        return None;
+    }
+    let (_, p) = shell_prelude()?;
+    if !(p.port && p.token) {
+        return None;
+    }
+    Some(show(&Page {
+        text: super::remote::usage().into(),
+        stderr: false,
+        exit: Exit::Ok,
+        lead: None,
+    }))
+}
 
 /// The shell's prelude for a page a family prints itself, as the front
 /// reads it for its own pages (`main.rs`'s `page`): `None` when a setting

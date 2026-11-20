@@ -32,6 +32,9 @@ pub const COMPUTE_GET_MAX_TIME: Duration = Duration::from_secs(60);
 pub const COMPUTE_POST_MAX_TIME: Duration = Duration::from_secs(120);
 /// `_vault_sock_call`'s `--max-time 180` (`cli/src/vault.sh`).
 pub const VAULT_SOCK_MAX_TIME: Duration = Duration::from_secs(180);
+/// `_migrate_send`'s `--max-time 600` on the vault socket
+/// (`cli/src/migrate.sh`).
+pub const MIGRATE_SOCK_MAX_TIME: Duration = Duration::from_secs(600);
 /// The per-verb header `_vault_sock_call` sends: `1` when stdin and
 /// stdout, or stdin and stderr, are terminals, else `0`.
 pub const TTY_HEADER: &str = "X-K2-Tty";
@@ -788,6 +791,10 @@ pub struct Client {
     /// The vault socket and the `X-K2-Tty` value of the call under way
     /// ([`Client::vault_sock`]).
     vault_sock: Option<(PathBuf, bool)>,
+    /// The vault socket call under way is `_migrate_send`'s
+    /// ([`Client::migrate_sock`]): its `--max-time` and, for a GET,
+    /// `_K2_CURL_TRIES=1`.
+    migrate_sock: bool,
     /// The credential and `--max-time` of the [`Kind::Own`] call being
     /// made ([`Client::own_curl`]).
     own: Option<(Option<String>, Duration)>,
@@ -845,6 +852,7 @@ impl Client {
             healed: false,
             refused: std::cell::Cell::new(0),
             vault_sock: None,
+            migrate_sock: false,
             own: None,
             own_once: false,
         }
@@ -1300,15 +1308,44 @@ impl Client {
         payload: &[u8],
         tty: bool,
     ) -> Result<Response, Error> {
+        self.sock_at(sock, post, &format!("/cli/vault/{route}"), payload, tty)
+    }
+
+    /// `_migrate_send METHOD <route> [json]`'s vault socket arm
+    /// (`cli/src/migrate.sh`): [`Client::vault_sock`]'s request for
+    /// `/cli/migrate/secrets/<route>`, at most 600 s, and a GET is tried
+    /// once (`_K2_CURL_TRIES=1`).
+    pub fn migrate_sock(
+        &mut self,
+        sock: &Path,
+        post: bool,
+        route: &str,
+        payload: &[u8],
+        tty: bool,
+    ) -> Result<Response, Error> {
+        self.migrate_sock = true;
+        let endpoint = format!("/cli/migrate/secrets/{route}");
+        let r = self.sock_at(sock, post, &endpoint, payload, tty);
+        self.migrate_sock = false;
+        r
+    }
+
+    fn sock_at(
+        &mut self,
+        sock: &Path,
+        post: bool,
+        endpoint: &str,
+        payload: &[u8],
+        tty: bool,
+    ) -> Result<Response, Error> {
         let kind = if post {
             Kind::VaultSockPost
         } else {
             Kind::VaultSockGet
         };
         self.vault_sock = Some((sock.to_path_buf(), tty));
-        let endpoint = format!("/cli/vault/{route}");
         let r = self
-            .run(kind, Channel::Uds, &endpoint, &[], payload, Instant::now())
+            .run(kind, Channel::Uds, endpoint, &[], payload, Instant::now())
             .map_err(|f| f.error);
         self.vault_sock = None;
         r
@@ -1606,6 +1643,9 @@ impl Client {
             Kind::SidecarGet | Kind::SidecarPost => SIDECAR_MAX_TIME,
             Kind::ComputeGet => COMPUTE_GET_MAX_TIME,
             Kind::ComputePost => self.compute_post_max_time.unwrap_or(COMPUTE_POST_MAX_TIME),
+            Kind::VaultSockGet | Kind::VaultSockPost if self.migrate_sock => {
+                MIGRATE_SOCK_MAX_TIME
+            }
             Kind::VaultSockGet | Kind::VaultSockPost => VAULT_SOCK_MAX_TIME,
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
             Kind::Cards => CARDS_TIME,
@@ -1676,7 +1716,7 @@ impl Client {
                 }
                 Err(Failure::Connect(e)) => {
                     let own_once = self.own_once && matches!(kind, Kind::Own { .. });
-                    if kind.once() || own_once || tries >= TRIES {
+                    if kind.once() || own_once || self.migrate_sock || tries >= TRIES {
                         return Err(Failure::Connect(e));
                     }
                     tries += 1;

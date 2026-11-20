@@ -115,6 +115,27 @@ pub fn sock_call(
     }
 }
 
+/// `_migrate_send METHOD <route> [json]`'s vault socket arm
+/// (`cli/src/migrate.sh`): [`sock_call`] for
+/// `/cli/migrate/secrets/<route>` ([`Client::migrate_sock`]). Any failure
+/// is status `000` with an empty body. Never ends the command.
+pub fn migrate_sock_call(
+    client: &mut Client,
+    sock: &Path,
+    post: bool,
+    route: &str,
+    payload: &[u8],
+) -> Split {
+    match client.migrate_sock(sock, post, route, payload, tty()) {
+        Ok(r) => answered(client, &r),
+        Err(_) => Split {
+            status: "000".into(),
+            body: Vec::new(),
+            channel: Channel::Uds,
+        },
+    }
+}
+
 /// `_sidecar_split "$(_sidecar_send METHOD <path> <payload>)"`. A POST the
 /// daemon may have run, or one the session may not send as the owner, is
 /// the transport's line and exit 1 (`_k2_end_command 1` from inside the

@@ -1196,14 +1196,7 @@ fn the_json_forms() {
         // covers: vault placement add --json
         daemon(
             "placement add --json",
-            &[
-                "placement",
-                "add",
-                "API",
-                "--where",
-                "h:/x",
-                "--json",
-            ],
+            &["placement", "add", "API", "--where", "h:/x", "--json"],
             ok(placement),
             0,
         ),

@@ -661,10 +661,16 @@ fn the_json_forms() {
     let rig = VRig::new();
     let entries = r#"{"workspace":"proj","entries":[{"sender":"bob::h","name":"API","to":"bob::h","addedBy":"me","addedAt":"t"}]}"#;
     let items = r#"{"items":[{"name":"API","status":"pending","peer":"bob::h","deliveryId":"d1","direction":"out","askId":"a1"}]}"#;
-    let decided = r#"{"delivery":{"status":"landed","name":"API","deliveryId":"d1"},"ref":"k2v:API"}"#;
+    let decided =
+        r#"{"delivery":{"status":"landed","name":"API","deliveryId":"d1"},"ref":"k2v:API"}"#;
     for c in [
         // covers: vault incoming --json
-        person("incoming --json", &["incoming", "--json"], vec![ok(items)], 0),
+        person(
+            "incoming --json",
+            &["incoming", "--json"],
+            vec![ok(items)],
+            0,
+        ),
         owner(
             "incoming --json --workspace, no vault socket",
             &["incoming", "--workspace", "proj", "--json"],
@@ -710,7 +716,14 @@ fn the_json_forms() {
         // covers: vault accept-from add --json
         person(
             "accept-from add --json",
-            &["accept-from", "add", "bob::h", "--workspace", "proj", "--json"],
+            &[
+                "accept-from",
+                "add",
+                "bob::h",
+                "--workspace",
+                "proj",
+                "--json",
+            ],
             vec![ok(entries)],
             0,
         ),
@@ -724,7 +737,14 @@ fn the_json_forms() {
         // covers: vault accept-from remove --json
         person(
             "accept-from remove --json",
-            &["accept-from", "remove", "bob::h", "--workspace", "proj", "--json"],
+            &[
+                "accept-from",
+                "remove",
+                "bob::h",
+                "--workspace",
+                "proj",
+                "--json",
+            ],
             vec![ok(r#"{"entries":[]}"#)],
             0,
         ),

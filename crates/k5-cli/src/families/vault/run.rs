@@ -57,7 +57,10 @@ pub enum Parsed {
     /// The lines on stderr, exit 2. Nothing is sent.
     Usage(Vec<String>),
     /// The helper's flags (names only) and the command after `--`.
-    Run { helper: Vec<String>, cmd: Vec<String> },
+    Run {
+        helper: Vec<String>,
+        cmd: Vec<String>,
+    },
 }
 
 fn usage(line: impl Into<String>) -> Parsed {
@@ -103,7 +106,9 @@ pub fn parse(rest: &[&str]) -> Parsed {
             }
             "--system" => return usage(format!("usage: only {CLI} vault list takes --system")),
             _ if w.starts_with("--") => {
-                return usage(format!("usage: unknown flag '{w}' ({CLI} vault run --help)"))
+                return usage(format!(
+                    "usage: unknown flag '{w}' ({CLI} vault run --help)"
+                ))
             }
             // NAME like `vault file NAME`; --secret NAME works too.
             _ => {
@@ -323,13 +328,32 @@ mod tests {
     fn the_words_are_read_as_bash_reads_them() {
         assert_eq!(
             parse(&[
-                "--secret", "A", "--secret", "B=OTHER", "--env-file", ".env.k2", "--scope",
-                "server", "--no-mask", "--", "grep", "--help", "--secret", "x"
+                "--secret",
+                "A",
+                "--secret",
+                "B=OTHER",
+                "--env-file",
+                ".env.k2",
+                "--scope",
+                "server",
+                "--no-mask",
+                "--",
+                "grep",
+                "--help",
+                "--secret",
+                "x"
             ]),
             run(
                 &[
-                    "--secret", "A", "--secret", "B=OTHER", "--env-file", ".env.k2", "--scope",
-                    "server", "--no-mask"
+                    "--secret",
+                    "A",
+                    "--secret",
+                    "B=OTHER",
+                    "--env-file",
+                    ".env.k2",
+                    "--scope",
+                    "server",
+                    "--no-mask"
                 ],
                 &["grep", "--help", "--secret", "x"]
             )
@@ -351,7 +375,9 @@ mod tests {
         assert_eq!(parse(&["--secret", "A", "-h"]), Parsed::Help);
         assert_eq!(
             parse(&["--bogus", "-h"]),
-            usage(format!("usage: unknown flag '--bogus' ({CLI} vault run --help)"))
+            usage(format!(
+                "usage: unknown flag '--bogus' ({CLI} vault run --help)"
+            ))
         );
     }
 
@@ -370,7 +396,10 @@ mod tests {
                 other => panic!("{words:?}: {other:?}"),
             }
         }
-        assert_eq!(parse(&["--secret", ""]), usage("usage: --secret NAME[=ENV_NAME]"));
+        assert_eq!(
+            parse(&["--secret", ""]),
+            usage("usage: --secret NAME[=ENV_NAME]")
+        );
         assert_eq!(parse(&["--env-file"]), usage("usage: --env-file <file>"));
         assert_eq!(
             parse(&["--value=hunter2", "--", "ls"]),

@@ -374,10 +374,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     // A run line whose -h is the command's: it runs with no gate in the
     // shell, the same as with one when the gate lets it through.
-    let runs = help
-        && sub == "run"
-        && cfg!(unix)
-        && matches!(run::parse(rest), run::Parsed::Run { .. });
+    let runs =
+        help && sub == "run" && cfg!(unix) && matches!(run::parse(rest), run::Parsed::Run { .. });
     let settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {

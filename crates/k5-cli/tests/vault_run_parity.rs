@@ -115,7 +115,9 @@ fn the_passport_goes_on_fd_3_and_nowhere_else() {
         0,
     ));
     three.env.push(("K5_HOOK_TOKEN", K5_PASSPORT.to_string()));
-    three.env.push(("K2SO_HOOK_TOKEN", K2SO_PASSPORT.to_string()));
+    three
+        .env
+        .push(("K2SO_HOOK_TOKEN", K2SO_PASSPORT.to_string()));
     let mut exit7 = session(asks(
         "the helper's exit is the command's",
         &["run", "A", "--", "false"],
@@ -254,18 +256,27 @@ fn what_runs_nothing() {
         ("no --", &["run", "--secret", "A"][..]),
         ("no command", &["run", "--secret", "A", "--"][..]),
         ("no secret", &["run", "--", "ls"][..]),
-        ("only --scope", &["run", "--scope", "server", "--", "ls"][..]),
+        (
+            "only --scope",
+            &["run", "--scope", "server", "--", "ls"][..],
+        ),
         ("names and no --", &["run", "node", "app.js"][..]),
         ("nothing", &["run"][..]),
         ("--secret with no name", &["run", "--secret"][..]),
         ("--secret ''", &["run", "--secret", "", "--", "ls"][..]),
         ("--env-file with no file", &["run", "--env-file"][..]),
         ("--scope with no scope", &["run", "--scope"][..]),
-        ("an unknown flag", &["run", "--bogus", "--secret", "A", "--", "ls"][..]),
+        (
+            "an unknown flag",
+            &["run", "--bogus", "--secret", "A", "--", "ls"][..],
+        ),
         ("--value", &["run", "--value", "hunter2", "--", "ls"][..]),
         ("--value=", &["run", "--value=hunter2", "--", "ls"][..]),
         ("--secret-value", &["run", "--secret-value", "hunter2"][..]),
-        ("--system", &["run", "--system", "--secret", "A", "--", "ls"][..]),
+        (
+            "--system",
+            &["run", "--system", "--secret", "A", "--", "ls"][..],
+        ),
     ] {
         cases.push(session(refused(name, args, &log)));
     }
@@ -288,8 +299,14 @@ fn help_runs_nothing() {
     let (_, log) = helper(rig.path());
     for (name, args) in [
         ("-h", &["run", "-h"][..]),
-        ("--help after a name", &["run", "--secret", "A", "--help", "--", "ls"][..]),
-        ("-h as the last word before --", &["run", "A", "-h", "--", "ls"][..]),
+        (
+            "--help after a name",
+            &["run", "--secret", "A", "--help", "--", "ls"][..],
+        ),
+        (
+            "-h as the last word before --",
+            &["run", "A", "-h", "--", "ls"][..],
+        ),
     ] {
         let mut c = refused(name, args, &log);
         c.code = 0;

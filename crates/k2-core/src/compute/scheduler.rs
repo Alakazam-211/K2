@@ -385,7 +385,7 @@ pub fn decide_with(now: i64, queue: &[QueuedJob], turns: &Turns, load: &Load, ca
             // is placed now (one at a time).
             None if line == Line::Batch && (load.total() > 0 || place.is_some()) => Err(Refusal::new(
                 super::proto::share::blocked::BATCH_WINDOW,
-                "Batch: it starts when the node is idle (nothing running, nothing else ready)",
+                super::share::BATCH_WAIT,
             )),
             None => Ok(()),
         };

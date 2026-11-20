@@ -270,12 +270,18 @@ CACHE GENERATIONS (nodes whose owner turned them on)
   command is whatever the caller typed. Only CI checks do.
 
 TIERS (queue lines, like an airport; 0.46.6)
-  Which line?
-    a normal build or test            no flag (Standard)
-    the critical path (one result     --priority --why "<one line: what waits on it>"
-      blocks other work right now)
-    overnight / idle-time / soak      --tier batch (detached; starts when the node is idle)
-    a release or CI gate              --tier ci (needs a grant with --ci)
+  TIER       WHAT IT IS FOR                       WHEN IT STARTS
+  standard   builds, tests, CI checks (default)   on a free slot (taking turns with priority)
+  priority   release-path work only (--why)       ahead of the queue; at most 2 per workspace
+  ci         release and CI gates (grant --ci)    the next free slot, ahead of everything queued
+  batch      long soaks you can wait hours for    only when the node is idle, one at a time
+  Agents: test and CI checks use standard; batch only for long soaks you're
+  happy to wait hours for; priority only for release-path work.
+  Batch is NOT "cheap, low priority": it means idle time. A Batch job on
+  a busy node can wait hours; its wait line says so ("batch: waits for
+  an idle node (1 other job running)"), and a --tier batch submit prints
+  one note: "batch waits for an idle node; use --tier standard for checks".
+  The flags:
   (no flag)        Standard: the default line.
   --priority --why "<reason>"
                    the critical path, like TSA Pre: its own line. When both

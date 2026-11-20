@@ -855,7 +855,8 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
         k2_core::compute::proto::refusal::LOCAL_RESOURCE_LIMIT,
         pshare::blocked::WAITING_FOR_ROOM,
     ];
-    let words = if why.code == scheduler::GRANT_PARALLEL_FULL || room.contains(&why.code.as_str()) { share::wait_words(&why.code, &facts) } else { why.message.clone() };
+    let numbered = why.code == scheduler::GRANT_PARALLEL_FULL || why.code == pshare::blocked::BATCH_WINDOW || room.contains(&why.code.as_str());
+    let words = if numbered { share::wait_words(&why.code, &facts) } else { why.message.clone() };
     // CE-7: a solo node's ETA, estimated from earlier runs' durations (the
     // time left of the running jobs and the queued ones ahead, over the
     // node's slots). Unknown when any of them has no earlier run.

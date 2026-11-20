@@ -1859,11 +1859,18 @@ async fn job_tiers_v2_on_a_solo_node() {
     assert_eq!(r.status, 200, "{}", r.body);
     let b = j(&r)["job"]["id"].as_str().expect("id").to_string();
     assert_eq!((row(&b).tier.as_str(), row(&b).detach, row(&b).ctl.queue_timeout_secs), ("batch", true, Some(48 * 3600)));
+    // 0.46.17: one note says what Batch is for (idle time, not "cheap").
+    let notes: Vec<String> = j(&r)["warnings"].as_array().expect("warnings").iter().filter_map(|w| w.as_str().map(str::to_string)).collect();
+    assert!(notes.iter().any(|w| w == "batch waits for an idle node; use --tier standard for checks"), "{notes:?}");
+    let r = post(port, "/cli/compute/run", &agent, body("client-v2-s-0000000001", json!({"memBytes": 1 << 30, "detach": true}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!r.body.contains("batch waits for an idle node"), "Standard: no batch note: {}", r.body);
+    let s = j(&r)["job"]["id"].as_str().expect("id").to_string();
 
     // Resume: everything runs; Batch only once the node is idle. A started
     // job can't change line.
     node_pause(port, "tiers2", "resume").await;
-    for id in [&m, &p1, &p3, &b] {
+    for id in [&m, &p1, &p3, &b, &s] {
         wait_state(port, &agent, id, "done").await;
     }
     let r = post(port, "/cli/compute/jobs/tier", &agent, json!({"job": b, "tier": "standard"})).await;

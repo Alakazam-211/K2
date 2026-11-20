@@ -338,10 +338,26 @@ pub fn blocked_words(code: &str) -> String {
         share::blocked::TIER_HOLD => "a CI or Priority job ahead takes the next free slot".into(),
         share::blocked::BACKFILL_HOLD => "a job ahead has waited 20+ min for room; nothing else starts until it fits".into(),
         share::blocked::TURN => "other submitters' jobs go first (turns)".into(),
-        share::blocked::BATCH_WINDOW => "Batch: it starts when the node is idle (or inside the node's batch window)".into(),
+        share::blocked::BATCH_WINDOW => BATCH_WAIT.into(),
         share::blocked::LINGERING => "a leftover process from an earlier job holds a slot".into(),
         crate::compute::proto::secret::codes::ISOLATION_WAIT => "a job with vault secrets can't share the node's job user with another workspace's job".into(),
         other => other.replace('_', " "),
+    }
+}
+
+/// Why a Batch job waits: it starts only on an idle node (agents read
+/// "batch" as "cheap"; it means idle time).
+pub const BATCH_WAIT: &str = "batch: waits for an idle node (it starts only when nothing else runs or waits there, one at a time)";
+
+/// The one note a `--tier batch` submit prints.
+pub const BATCH_SUBMIT_NOTE: &str = "batch waits for an idle node; use --tier standard for checks";
+
+/// [`BATCH_WAIT`] with the node's running jobs: "batch: waits for an idle
+/// node (1 other job running)".
+pub fn batch_wait_words(running: Option<u32>) -> String {
+    match running {
+        Some(n) if n > 0 => format!("batch: waits for an idle node ({n} other job{} running)", if n == 1 { "" } else { "s" }),
+        _ => BATCH_WAIT.to_string(),
     }
 }
 
@@ -406,6 +422,7 @@ pub fn wait_words(code: &str, f: &WaitFacts) -> String {
             None => blocked_words(code),
         },
         share::blocked::WAITING_FOR_ROOM | crate::compute::proto::refusal::LOCAL_RESOURCE_LIMIT | crate::compute::proto::refusal::PARALLEL_FULL => room_words(f),
+        share::blocked::BATCH_WINDOW => batch_wait_words(f.running),
         other => blocked_words(other),
     }
 }
@@ -604,6 +621,19 @@ pub fn split_add_code(code_fp: &str) -> Result<(String, String), String> {
 #[cfg(test)]
 mod tests {
     // ── the mover's damper ──
+
+    /// A Batch job's wait says it waits for an idle node, with how many
+    /// jobs run there now; never just a queue count.
+    #[test]
+    fn a_batch_wait_says_it_waits_for_an_idle_node() {
+        let f = |running| WaitFacts { running, ..Default::default() };
+        let code = super::share::blocked::BATCH_WINDOW;
+        assert_eq!(wait_words(code, &f(Some(1))), "batch: waits for an idle node (1 other job running)");
+        assert_eq!(wait_words(code, &f(Some(3))), "batch: waits for an idle node (3 other jobs running)");
+        assert_eq!(wait_words(code, &f(None)), BATCH_WAIT);
+        assert_eq!(wait_words(code, &f(Some(0))), BATCH_WAIT, "nothing running: another job is ready first");
+        assert_eq!(blocked_words(code), BATCH_WAIT);
+    }
 
     #[test]
     fn a_job_never_withdrawn_may_be_withdrawn_now() {

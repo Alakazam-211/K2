@@ -1689,6 +1689,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             "needs": needs,
             "noSource": true,
             "tier": "batch",
+            "prewarm": true,
             "detach": true,
             "memBytes": PREWARM_MEM,
             "tag": tag,
@@ -1993,6 +1994,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let want = want;
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = avoid_notes;
+    // `--tier batch` means idle time, not "cheap": one note (not prewarm's own jobs).
+    warnings.extend((tier_ask == Tier::Batch && b(v, "prewarm") != Some(true)).then(|| k2_core::compute::share::BATCH_SUBMIT_NOTE.to_string()));
     let (node, placement) = pick_node(who, v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
     // The node list again, whichever way the node was picked (auto never
     // offers a node off it; a pinned one was checked in pick_node).

@@ -31255,6 +31255,13 @@ Agents:
                  [--shards N]   N jobs, {shard}/{shards} in the command, each on its
                                 own node when it can (no node named)
                  Which line (queue order only; never stops a running job; k2 study compute: TIERS)?
+                      TIER       WHAT IT IS FOR                       WHEN IT STARTS
+                      standard   builds, tests, CI checks (default)   on a free slot (taking turns with priority)
+                      priority   release-path work only (--why)       ahead of the queue; at most 2 per workspace
+                      ci         release and CI gates (grant --ci)    the next free slot, ahead of everything queued
+                      batch      long soaks you can wait hours for    only when the node is idle, one at a time
+                      Agents: test and CI checks use standard; batch only for long soaks you're
+                      happy to wait hours for; priority only for release-path work.
                       (no flag)  Standard: a normal build or test
                       --priority --why "<one line>"
                                  the critical path (one result blocks others now). Priority and
@@ -57369,7 +57376,7 @@ cmd_schema() {
         {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m; 2h for Priority and CI); off for a job that goes quiet."},
         {"name": "--shards", "arg": "N", "description": "N jobs, {shard}/{shards} in the command, each on its own node when it can (no node named)."},
         {"name": "--priority", "arg": null, "description": "The critical path; needs --why. At most 2 Priority jobs queued or running per workspace. With no node named it waits on this server until a node can start it, then goes to the first that can."},
-        {"name": "--tier", "arg": "standard|priority|batch|ci", "description": "Which line: standard (default), priority, batch (idle time, always detached) or ci (needs a grant with --ci)."},
+        {"name": "--tier", "arg": "standard|priority|batch|ci", "description": "Which line. standard (the default): builds, tests and CI checks; starts on a free slot. priority (--why): release-path work only; ahead of the queue, at most 2 per workspace. ci (a grant with --ci): release and CI gates; the next free slot, ahead of everything queued. batch: long soaks you can wait hours for; starts only when the node is idle, one at a time (always detached; not 'cheap', idle time). Agents: test and CI checks use standard; batch only for long soaks you're happy to wait hours for; priority only for release-path work."},
         {"name": "--gate", "arg": null, "description": "The same as --tier ci (kept for scripts)."},
         {"name": "--critical", "arg": null, "description": "The same as --priority."},
         {"name": "--supersede", "arg": "KEY", "description": "Cancel your older queued jobs with the same KEY (never a running one)."},
@@ -70027,12 +70034,18 @@ CACHE GENERATIONS (nodes whose owner turned them on)
   command is whatever the caller typed. Only CI checks do.
 
 TIERS (queue lines, like an airport; 0.46.6)
-  Which line?
-    a normal build or test            no flag (Standard)
-    the critical path (one result     --priority --why "<one line: what waits on it>"
-      blocks other work right now)
-    overnight / idle-time / soak      --tier batch (detached; starts when the node is idle)
-    a release or CI gate              --tier ci (needs a grant with --ci)
+  TIER       WHAT IT IS FOR                       WHEN IT STARTS
+  standard   builds, tests, CI checks (default)   on a free slot (taking turns with priority)
+  priority   release-path work only (--why)       ahead of the queue; at most 2 per workspace
+  ci         release and CI gates (grant --ci)    the next free slot, ahead of everything queued
+  batch      long soaks you can wait hours for    only when the node is idle, one at a time
+  Agents: test and CI checks use standard; batch only for long soaks you're
+  happy to wait hours for; priority only for release-path work.
+  Batch is NOT "cheap, low priority": it means idle time. A Batch job on
+  a busy node can wait hours; its wait line says so ("batch: waits for
+  an idle node (1 other job running)"), and a --tier batch submit prints
+  one note: "batch waits for an idle node; use --tier standard for checks".
+  The flags:
   (no flag)        Standard: the default line.
   --priority --why "<reason>"
                    the critical path, like TSA Pre: its own line. When both

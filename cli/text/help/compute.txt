@@ -223,6 +223,13 @@ Agents:
                  [--shards N]   N jobs, {shard}/{shards} in the command, each on its
                                 own node when it can (no node named)
                  Which line (queue order only; never stops a running job; k2 study compute: TIERS)?
+                      TIER       WHAT IT IS FOR                       WHEN IT STARTS
+                      standard   builds, tests, CI checks (default)   on a free slot (taking turns with priority)
+                      priority   release-path work only (--why)       ahead of the queue; at most 2 per workspace
+                      ci         release and CI gates (grant --ci)    the next free slot, ahead of everything queued
+                      batch      long soaks you can wait hours for    only when the node is idle, one at a time
+                      Agents: test and CI checks use standard; batch only for long soaks you're
+                      happy to wait hours for; priority only for release-path work.
                       (no flag)  Standard: a normal build or test
                       --priority --why "<one line>"
                                  the critical path (one result blocks others now). Priority and

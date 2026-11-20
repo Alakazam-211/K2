@@ -1864,6 +1864,8 @@ pub fn placement_record(c: &Cand, tier: Tier, w: &Want, ex: &Explain<'_>, now: i
     // CE-1/CE-2: "tools ready" or what it installs first; then the node's
     // python3, curl and bash (0.46.17).
     let tools = tools_line(&c.needs(w), Some(&c.offer));
+    // A Batch job on a node that isn't idle: why it waits, first (0.46.17).
+    let batch = (w.tier == JobTier::Batch && !c.idle()).then(|| share::batch_wait_words(Some(c.running_now())));
     let with_tools = |s: String| match &tools {
         Some(t) => format!("{s} · {t}"),
         None => s,
@@ -1912,6 +1914,10 @@ pub fn placement_record(c: &Cand, tier: Tier, w: &Want, ex: &Explain<'_>, now: i
             (code, with_elsewhere(with_tools(why)), eta)
         }
         Tier::Offline => ("queued_offline_only", "no matching node is online; queued on the one seen most recently · it moves to the first that comes online".to_string(), None),
+    };
+    let why = match batch {
+        Some(b) => format!("{b} · {why}"),
+        None => why,
     };
     store::Placement {
         mode: "auto".into(),

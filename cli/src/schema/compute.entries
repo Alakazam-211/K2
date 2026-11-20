@@ -146,7 +146,7 @@
         {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m; 2h for Priority and CI); off for a job that goes quiet."},
         {"name": "--shards", "arg": "N", "description": "N jobs, {shard}/{shards} in the command, each on its own node when it can (no node named)."},
         {"name": "--priority", "arg": null, "description": "The critical path; needs --why. At most 2 Priority jobs queued or running per workspace. With no node named it waits on this server until a node can start it, then goes to the first that can."},
-        {"name": "--tier", "arg": "standard|priority|batch|ci", "description": "Which line: standard (default), priority, batch (idle time, always detached) or ci (needs a grant with --ci)."},
+        {"name": "--tier", "arg": "standard|priority|batch|ci", "description": "Which line. standard (the default): builds, tests and CI checks; starts on a free slot. priority (--why): release-path work only; ahead of the queue, at most 2 per workspace. ci (a grant with --ci): release and CI gates; the next free slot, ahead of everything queued. batch: long soaks you can wait hours for; starts only when the node is idle, one at a time (always detached; not 'cheap', idle time). Agents: test and CI checks use standard; batch only for long soaks you're happy to wait hours for; priority only for release-path work."},
         {"name": "--gate", "arg": null, "description": "The same as --tier ci (kept for scripts)."},
         {"name": "--critical", "arg": null, "description": "The same as --priority."},
         {"name": "--supersede", "arg": "KEY", "description": "Cancel your older queued jobs with the same KEY (never a running one)."},

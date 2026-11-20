@@ -1418,3 +1418,21 @@ fn the_tools_line_shows_the_nodes_python_curl_and_bash() {
     let rec = placement_record(&c, Tier::Now, &w, &Explain { policy: V2, cands: std::slice::from_ref(&c), skipped: &BTreeMap::new(), project_key: None, commit: None }, 1);
     assert!(rec.why.contains("python3 3.13.1 · curl 8.12.1 · bash 5.2.37"), "{}", rec.why);
 }
+
+/// 0.46.17: a Batch job's placement line says why it waits (an idle node,
+/// how many jobs run there now) before the rest; an idle node, or any
+/// other tier, says nothing of it.
+#[test]
+fn a_batch_placement_says_it_waits_for_an_idle_node() {
+    let busy = [cand("b1", 30, 32, 1, 4)];
+    let mut w = want(2);
+    w.tier = JobTier::Batch;
+    let ex = Explain { policy: V2, cands: &busy, skipped: &BTreeMap::new(), project_key: None, commit: None };
+    let rec = placement_record(&busy[0], Tier::Now, &w, &ex, 1);
+    assert!(rec.why.starts_with("batch: waits for an idle node (1 other job running) · "), "{}", rec.why);
+    let standard = placement_record(&busy[0], Tier::Now, &want(2), &ex, 1);
+    assert!(!standard.why.contains("batch"), "{}", standard.why);
+    let idle = [cand("b2", 30, 32, 0, 4)];
+    let ex = Explain { policy: V2, cands: &idle, skipped: &BTreeMap::new(), project_key: None, commit: None };
+    assert!(!placement_record(&idle[0], Tier::Now, &w, &ex, 1).why.contains("waits for an idle node"), "an idle node starts it");
+}

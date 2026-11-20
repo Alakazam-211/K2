@@ -11,7 +11,8 @@
 # a running job's time from its start and the wait before it apart. A
 # stalled job's wait end prints the server's hint (which rule fired, how
 # to set --stall-timeout). run --strict asks the server for strict
-# (and only then).
+# (and only then). The help, the study page and the schema carry the
+# tier table (what each tier is for, when it starts) and the agents' line.
 
 set -euo pipefail
 
@@ -212,6 +213,20 @@ expect_eq "--strict reaches the daemon with the script as given" "$(last_strict)
 expect_eq "no --strict: no key" "$(last_strict)" '/cli/compute/run null ["sh", "-c", "x"]'
 expect_has "the help names --strict" "$("$K2" compute --help 2>&1)" "[--strict]     run a sh -c / bash -c script as bash -euo pipefail"
 expect_has "the study page says a job's exit is its last command" "$("$K2" study compute 2>&1)" "A job's exit is its script's LAST command"
+
+echo "== the tier table =="
+help="$("$K2" compute --help 2>&1)"
+study="$("$K2" study compute 2>&1)"
+schema="$("$K2" --schema 2>&1)"
+for doc in help study; do
+    text="${!doc}"
+    expect_has "$doc: batch is for long soaks and starts only on an idle node" "$text" "batch      long soaks you can wait hours for    only when the node is idle, one at a time"
+    expect_has "$doc: standard is for checks" "$text" "standard   builds, tests, CI checks (default)   on a free slot"
+    expect_has "$doc: priority is release-path work, at most 2" "$text" "priority   release-path work only (--why)       ahead of the queue; at most 2 per workspace"
+    expect_has "$doc: the agents' line" "$text" "Agents: test and CI checks use standard; batch only for long soaks you're"
+done
+expect_has "schema: --tier says what each is for" "$schema" "batch: long soaks you can wait hours for; starts only when the node is idle, one at a time"
+expect_has "schema: the agents' line" "$schema" "Agents: test and CI checks use standard; batch only for long soaks you're happy to wait hours for; priority only for release-path work."
 
 echo
 echo "compute_agent_feedback_cli: $pass passed, $fail failed"

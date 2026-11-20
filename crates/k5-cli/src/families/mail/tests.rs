@@ -2174,6 +2174,90 @@ fn the_hostmail_dns_lines_are_the_shell_s() {
 }
 
 
+/// The lines of `_mail_py` bans raises at.
+#[test]
+fn the_hostmail_bans_lines_are_the_shell_s() {
+    use crate::families::hostmail::bans::line;
+    let s = mail_py_script();
+    let pins: &[(u32, &str)] = &[
+        (line::LIST_CALL, "d = call(\"GET\", \"/cli/mail/bans\")"),
+        (line::LIST_BITS, "bits = [\"%s=%s\" % (k, counts[k]) for k in so"),
+        (line::LIST_COUNT, "print(\"%s blocked  %s\" % (d.get(\"count\") if "),
+        (line::LIST_AUTH, "auth = [b for b in bans if (b.get(\"reason\") "),
+        (line::CLEAR_CALL, "d = call(\"POST\", \"/cli/mail/bans/clear\", bod"),
+        (line::CLEAR_JOIN, "\",\".join(d.get(\"destroyed\") or []) or \"(none"),
+        (line::CLEAR_WARN, "for w in (d.get(\"warnings\") or []):"),
+        (line::MIGRATE_INT, "body = {\"hours\": int(hours)} if hours else {"),
+        (line::MIGRATE_CALL, "d = call(\"POST\", \"/cli/mail/bans/migrate\", b"),
+        (line::RESTORE_CALL, "d = call(\"POST\", \"/cli/mail/bans/migrate/res"),
+        (line::STATUS_CALL, "d = call(\"GET\", \"/cli/mail/bans/migrate\")"),
+        (line::ALLOW_LIST_CALL, "d = call(\"GET\", \"/cli/mail/allowlist\")"),
+        (line::ALLOW_LIST_FOR, "for b in rows:"),
+        (line::ALLOW_LIST_ROW, "b.get(\"address\") or \"?\","),
+        (line::ALLOW_ADD_CALL, "d = call(\"POST\", \"/cli/mail/allowlist/add\", "),
+        (line::ALLOW_REMOVE_CALL, "d = call(\"POST\", \"/cli/mail/allowlist/remove"),
+        (line::ALLOW_REMOVE_JOIN, "\",\".join(d.get(\"destroyed\") or []) or \"(none"),
+    ];
+    for (n, text) in pins {
+        let got = s[*n as usize - 1].trim();
+        assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
+    }
+}
+
+
+/// The lines of `_mail_py` groups raises at.
+#[test]
+fn the_hostmail_groups_lines_are_the_shell_s() {
+    use crate::families::hostmail::groups::line;
+    let s = mail_py_script();
+    let pins: &[(u32, &str)] = &[
+        (line::DAV_GET, "d = call(\"GET\", \"/cli/mail/dav\")"),
+        (line::DAV_POST, "d = call(\"POST\", \"/cli/mail/dav\", body=body,"),
+        (line::DAV_POLICY, "if d.get(\"policy\") == \"default\":"),
+        (line::DAV_ACC, "acc = d.get(\"accounts\")"),
+        (line::DAV_ACC_GET, "acc.get(\"total\", \"?\"), acc.get(\"updated\", \"?"),
+        (line::DAV_SKIPPED, "len(acc.get(\"skipped\") or [])))"),
+        (line::PG_HEAD, "g.get(\"address\") or g.get(\"name\") or \"?\", le"),
+        (line::PG_MAIL, "\"\" if g.get(\"receivesMail\") else \" · inbound"),
+        (line::PG_FOR, "for m in g.get(\"members\") or []:"),
+        (line::CREATE_CALL, "d = call(\"POST\", \"/cli/mail/group\", body=bod"),
+        (line::MEMBERS_CALL, "d = call(\"POST\", \"/cli/mail/group/members\", "),
+        (line::MEMBERS_JOIN, "d.get(\"group\") or env(\"M_GROUP\"), \",\".join(d"),
+        (line::LIST_CALL, "d = call(\"GET\", \"/cli/mail/group\", timeout=6"),
+        (line::LIST_FOR, "for g in gs:"),
+        (line::LIST_PRINT, "print_group(g)"),
+        (line::SHOW_CALL, "d = call(\"GET\", \"/cli/mail/group\", params={\""),
+        (line::SHOW_PRINT, "print_group(d.get(\"group\") or {})"),
+        (line::DELETE_CALL, "d = call(\"POST\", \"/cli/mail/group/delete\", b"),
+        (line::DELETE_PRINT, "d.get(\"group\") or env(\"M_GROUP\"), d.get(\"sha"),
+        (line::MANAGE_CALL, "d = call(\"POST\", \"/cli/mail/calendar/manage\""),
+        (line::MANAGE_C, "c = d.get(\"calendar\") or {}"),
+        (line::MANAGE_CREATED, "print(\"created calendar '%s' (%s) on %s\" % ("),
+        (line::MANAGE_RENAMED, "c.get(\"previousName\"), c.get(\"name\"), c.get("),
+        (line::SHARE_CALL, "d = call(\"POST\", \"/cli/mail/calendar/\" + (\"s"),
+        (line::SHARE_C, "c = d.get(\"calendar\") or {}"),
+        (line::SHARE_PRINT, "c.get(\"name\"), d.get(\"owner\"), d.get(\"with\")"),
+        (line::SHARE_REMOVED, "print(\"stopped sharing '%s' of %s with %s\" %"),
+        (line::SHARE_NOTHING, "c.get(\"name\"), d.get(\"owner\"), d.get(\"with\")"),
+        (line::SHARES_CALL, "d = call(\"GET\", \"/cli/mail/calendar/shares\","),
+        (line::SHARES_FOR, "for c in cals:"),
+        (line::SHARES_SHARES, "shares = c.get(\"shares\") or []"),
+        (line::SHARES_ROW, "print(\"%s · %s%s · %s\" % (c.get(\"id\"), c.get"),
+        (line::SHARES_DEFAULT, "\" · default\" if c.get(\"isDefault\") else \"\","),
+        (line::SHARES_LEN, "\"not shared\" if not shares else \"%d share(s)"),
+        (line::SHARES_EACH, "for s in shares:"),
+        (line::SHARES_EACH_ROW, "print(\"  %s (%s): %s\" % (s.get(\"with\"), s.ge"),
+        (line::SHARING_POST, "d = call(\"POST\", \"/cli/mail/calendar/sharing"),
+        (line::SHARING_INT, "body={\"maxShares\": int(env(\"M_MAX_SHARES\"))}"),
+        (line::SHARING_GET, "d = call(\"GET\", \"/cli/mail/calendar/sharing\""),
+    ];
+    for (n, text) in pins {
+        let got = s[*n as usize - 1].trim();
+        assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
+    }
+}
+
+
 #[test]
 fn the_boot_script_runs_the_mail_script_at_its_line_13() {
     let path =
@@ -2442,6 +2526,20 @@ mod hostmail_words {
             ("ptr", &["show", "x"]),
             ("ptr", &["set"]),
             ("profile", &["a"]),
+            ("bans", &["x"]),
+            ("bans", &["list", "x"]),
+            ("bans", &["clear"]),
+            ("bans", &["migrate", "--json"]),
+            ("bans", &["migrate", "status", "-x"]),
+            ("allowlist", &["x"]),
+            ("allowlist", &["add"]),
+            ("group", &["x"]),
+            ("group", &["list", "-x"]),
+            ("group", &["create"]),
+            ("calendar", &["x"]),
+            ("calendar", &["status", "x"]),
+            ("calendar", &["create", "a", "--with"]),
+            ("calendar", &["sharing", "x"]),
         ] {
             let h = match parse(verb, words) {
                 Plan::Usage(h) => h,

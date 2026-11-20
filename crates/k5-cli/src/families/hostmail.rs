@@ -17,9 +17,11 @@ use super::mail::core::{self, Plan};
 use crate::exit::Exit;
 use std::ffi::OsString;
 
+pub mod bans;
 pub mod cert;
 pub mod dns;
 pub mod forward;
+pub mod groups;
 pub mod mailbox;
 pub mod notices;
 pub mod pyx;
@@ -55,6 +57,10 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["dmarc"]),
     native(&["ptr"]),
     native(&["profile"]),
+    native(&["bans"]),
+    native(&["allowlist"]),
+    native(&["group"]),
+    native(&["calendar"]),
 ];
 
 /// A verb row the binary answers.
@@ -86,6 +92,8 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
         v if server::VERBS.contains(&v) => server::parse(v, words),
         v if cert::VERBS.contains(&v) => cert::parse(v, words),
         v if dns::VERBS.contains(&v) => dns::parse(v, words),
+        v if bans::VERBS.contains(&v) => bans::parse(v, words),
+        v if groups::VERBS.contains(&v) => groups::parse(v, words),
         _ => Plan::Shell,
     }
 }
@@ -98,6 +106,8 @@ pub fn branch(py_: &mut core::Py, verb: &str) -> Option<core::R<()>> {
         .or_else(|| server::exec(py_, verb))
         .or_else(|| cert::exec(py_, verb))
         .or_else(|| dns::exec(py_, verb))
+        .or_else(|| bans::exec(py_, verb))
+        .or_else(|| groups::exec(py_, verb))
 }
 
 /// `v="$(cat)"` for a secret flag (`--pass-stdin`, `--relay-pass-stdin`):

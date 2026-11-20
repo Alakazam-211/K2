@@ -277,6 +277,20 @@ assert_children_seen() {
     fi
 }
 
+# assert_children_native LABEL: for a command the k5 binary answers
+# itself, the binary under test (K5_CLI_UNDER_TEST) starts no python3 at
+# all; the bash CLI's python3 children are logged as above.
+assert_children_native() {
+    local label="$1"
+    if [ -z "${K5_CLI_UNDER_TEST:-}" ]; then
+        assert_children_seen "$label"
+    elif grep -q '^python3 ' "$ARGLOG"; then
+        bad "$label: the binary started a python3 child"
+    else
+        ok "$label: the binary started no python3 child"
+    fi
+}
+
 # assert_off_children LABEL WHAT VALUE: VALUE is in no child's argv and no
 # child's environment.
 assert_off_children() {
@@ -442,7 +456,11 @@ assert_off_children "connect login tunnel" "tunnel token" "$TUNNEL_SENTINEL"
 
 # 19. k2 tunnel switch <sub> --token-stdin: the tunnel token reaches the
 #     switch and no child's argv or environment, nor k2's own argv.
-sec_case "tunnel switch --token-stdin" /cli/tunnel/switch "tunnel token" "$TUNNEL_SENTINEL" tunnel switch acme --token-stdin
+fresh
+printf '%s\n' "$TUNNEL_SENTINEL" | k2run tunnel switch acme --token-stdin >/dev/null 2>&1 || true
+assert_tcp_got "tunnel switch --token-stdin" /cli/tunnel/switch "tunnel token" "$TUNNEL_SENTINEL"
+assert_children_native "tunnel switch --token-stdin"
+assert_off_children "tunnel switch --token-stdin" "tunnel token" "$TUNNEL_SENTINEL"
 
 # 20. k2 llm tokens add: the sign-in code pasted on stdin reaches
 #     login/input and no child's argv or environment.

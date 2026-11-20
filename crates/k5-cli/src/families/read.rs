@@ -67,6 +67,13 @@ use crate::transport::encode::quote;
 use crate::transport::Auth;
 use std::ffi::OsString;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["read"];
+/// The binary answers it; [`run`] hands back a form only the shell answers.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
+
 /// The route.
 pub const ENDPOINT: &str = "/cli/terminal/read";
 /// No workspace and no session: two lines.

@@ -57,6 +57,13 @@ use crate::python;
 use crate::transport::encode::quote;
 use std::ffi::OsString;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["activity"];
+/// The binary answers it; [`run`] hands back a form only the shell answers.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
+
 /// The route.
 pub const ENDPOINT: &str = "/cli/feed";
 /// `--agent` with nothing after it: exit 2.

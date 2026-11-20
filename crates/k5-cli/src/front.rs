@@ -3,13 +3,13 @@
 //!
 //! The route table ([`crate::route`]) says who answers. Its `Native` rows
 //! are the version (alone, or exactly `--version --check`), `cli`
-//! (`cli status [--json]` and its help) and the families in
-//! [`crate::families`]. A form the front's code does not take falls
-//! through, as does everything else, byte for byte ([`crate::fallthrough`]).
+//! (`cli status [--json]` and its help), `study`, and the families in
+//! [`crate::families`], each run by its row's code ([`Route::Family`]). A
+//! form the front's code does not take falls through, as does everything
+//! else, byte for byte ([`crate::fallthrough`]).
 //!
-//! A family's help never reaches the family: a `whoami`, `done`,
-//! `respond`, `inbox`, `read`, `activity`, `sessions`, `connections`,
-//! `connect`, `feedback` (`tickets`), `update`, `setup` or `workspace` command line with `-h` or
+//! A family's help never reaches the family: a command line of a `Native`
+//! row or verb row with `-h` or
 //! `--help` anywhere in it (`setup`: or the word `help`) is a help page
 //! when it is exactly a form the shell only prints a file for
 //! ([`Route::Help`], [`help_route`]), and falls through
@@ -52,52 +52,10 @@ pub enum Route {
     /// `cli` alone, `cli --help`, `cli -h`, `cli help`, and `cli status`
     /// with `--help` or `-h`.
     CliHelp,
-    /// `whoami` with no `-h` or `--help` in it ([`crate::families::whoami`]).
-    Whoami,
-    /// `done` with no `-h` or `--help` in it ([`crate::families::done`],
-    /// which may still hand it to the shell).
-    Done,
-    /// `respond` with no `-h` or `--help` in it
-    /// ([`crate::families::respond`], which may still hand it to the
-    /// shell).
-    Respond,
-    /// `inbox` with no `-h` or `--help` in it ([`crate::families::inbox`],
-    /// which may still hand it to the shell).
-    Inbox,
-    /// `read` with no `-h` or `--help` in it ([`crate::families::read`],
-    /// which may still hand it to the shell).
-    Read,
-    /// `activity` with no `-h` or `--help` in it
-    /// ([`crate::families::activity`], which may still hand it to the
-    /// shell).
-    Activity,
-    /// `sessions` with no `-h` or `--help` in it
-    /// ([`crate::families::sessions`], which may still hand it to the
-    /// shell).
-    Sessions,
-    /// `connections` with a verb the route table sends here and no `-h`
-    /// or `--help` in it ([`crate::families::connections`], which may
-    /// still hand it to the shell).
-    Connections,
-    /// `connect` with a verb the route table sends here and no `-h` or
-    /// `--help` in it ([`crate::families::connect`], which may still hand
-    /// it to the shell).
-    Connect,
-    /// `feedback` or `tickets` with a verb the route table sends here and
-    /// no `-h` or `--help` in it ([`crate::families::feedback`], which may
-    /// still hand it to the shell).
-    Feedback,
-    /// `workspace` with a verb the route table sends here and no `-h` or
-    /// `--help` in it ([`crate::families::workspace`], which may still
-    /// hand it to the shell).
-    Workspace,
-    /// `update` with no `-h` or `--help` in it ([`crate::families::update`],
-    /// which hands a form whose switch is off to the shell).
-    Update,
-    /// `setup` with no `-h`, `--help` or `help` in it
-    /// ([`crate::families::setup`], which hands a form whose switch is off
-    /// to the shell).
-    Setup,
+    /// A family's command line: a `Native` row, or a `Native` verb row,
+    /// with no `-h` or `--help` in it (`setup`: nor the word `help`). The
+    /// row's [`Noun::run`] answers it, and may still hand it to the shell.
+    Family(&'static Noun),
     /// A spec verb: a `Spec` verb row, the row of [`spec::table::SPEC`]
     /// for its words, and no `-h` or `--help` in it ([`spec::run`], which
     /// may still hand it to the shell).
@@ -202,7 +160,7 @@ fn daily_route(args: &[OsString]) -> bool {
 
 /// The front's own code for a `Native` row. A form it does not take
 /// falls through.
-fn native(noun: &Noun, args: &[OsString]) -> Route {
+fn native(noun: &'static Noun, args: &[OsString]) -> Route {
     let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
     let Some(words) = words else {
         return Route::Fallthrough;
@@ -231,41 +189,10 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         return help_route(args).map_or(Route::Fallthrough, Route::Help);
     }
     // `cmd_setup`'s loop reads `help` as `--help`.
-    if noun.names("setup") {
-        if words.iter().skip(1).any(|w| *w == "help") {
-            return help_route(args).map_or(Route::Fallthrough, Route::Help);
-        }
-        return Route::Setup;
+    if noun.names("setup") && words.iter().skip(1).any(|w| *w == "help") {
+        return help_route(args).map_or(Route::Fallthrough, Route::Help);
     }
-    if noun.names("whoami") {
-        return Route::Whoami;
-    }
-    if noun.names("done") {
-        return Route::Done;
-    }
-    if noun.names("respond") {
-        return Route::Respond;
-    }
-    if noun.names("inbox") {
-        return Route::Inbox;
-    }
-    if noun.names("read") {
-        return Route::Read;
-    }
-    for (word, route) in [
-        ("activity", Route::Activity),
-        ("sessions", Route::Sessions),
-        ("connections", Route::Connections),
-        ("connect", Route::Connect),
-        ("feedback", Route::Feedback),
-        ("update", Route::Update),
-        ("workspace", Route::Workspace),
-    ] {
-        if noun.names(word) {
-            return route;
-        }
-    }
-    Route::Fallthrough
+    Route::Family(noun)
 }
 
 /// The help form `args` is, when the shell only prints a file for it
@@ -288,6 +215,16 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<OsString> {
         list.iter().map(OsString::from).collect()
+    }
+
+    /// A family's route: its row of the table.
+    fn family(name: &str) -> Route {
+        Route::Family(
+            route::TABLE
+                .iter()
+                .find(|n| n.family == name)
+                .unwrap_or_else(|| panic!("a {name} row")),
+        )
     }
 
     #[test]
@@ -414,7 +351,7 @@ mod tests {
             &["whoami", "help"],
             &["whoami", "-help"],
         ] {
-            assert_eq!(route(&args(line)), Route::Whoami, "{line:?}");
+            assert_eq!(route(&args(line)), family("whoami"), "{line:?}");
         }
         // Exactly a help form: the shell's own file, as a page.
         for line in [&["whoami", "--help"][..], &["whoami", "-h"]] {
@@ -449,7 +386,7 @@ mod tests {
             &["done", "--bogus"],
             &["done", "help"],
         ] {
-            assert_eq!(native(done, &args(line)), Route::Done, "{line:?}");
+            assert_eq!(native(done, &args(line)), family("done"), "{line:?}");
         }
         for line in [
             &["done", "--help"][..],
@@ -475,7 +412,7 @@ mod tests {
             &["respond", "--final", "x"],
             &["respond", "help"],
         ] {
-            assert_eq!(native(respond, &args(line)), Route::Respond, "{line:?}");
+            assert_eq!(native(respond, &args(line)), family("respond"), "{line:?}");
         }
         for line in [
             &["respond", "--help"][..],
@@ -503,7 +440,7 @@ mod tests {
             &["inbox", "compose", "--title", "t"],
             &["inbox", "help"],
         ] {
-            assert_eq!(native(inbox, &args(line)), Route::Inbox, "{line:?}");
+            assert_eq!(native(inbox, &args(line)), family("inbox"), "{line:?}");
         }
         for line in [&["inbox", "--help"][..], &["inbox", "-h"]] {
             assert!(
@@ -533,7 +470,7 @@ mod tests {
             &["read", "ws", "--lines", "5"],
             &["read", "help"],
         ] {
-            assert_eq!(native(read, &args(line)), Route::Read, "{line:?}");
+            assert_eq!(native(read, &args(line)), family("read"), "{line:?}");
         }
         for line in [
             &["read", "--help"][..],
@@ -557,12 +494,12 @@ mod tests {
         for (w, want, lines) in [
             (
                 "activity",
-                Route::Activity,
+                family("activity"),
                 &[&["activity"][..], &["activity", "5", "--json"]][..],
             ),
             (
                 "sessions",
-                Route::Sessions,
+                family("sessions"),
                 &[
                     &["sessions"][..],
                     &["sessions", "--past"],
@@ -571,7 +508,7 @@ mod tests {
             ),
             (
                 "connections",
-                Route::Connections,
+                family("connections"),
                 &[&["connections", "list"][..], &["connections", "--json"]],
             ),
         ] {
@@ -605,7 +542,7 @@ mod tests {
             &["update", "--app", "x"],
             &["update", "help"],
         ] {
-            assert_eq!(native(row, &args(line)), Route::Update, "{line:?}");
+            assert_eq!(native(row, &args(line)), family("update"), "{line:?}");
         }
         for line in [
             &["update", "--help"][..],
@@ -632,7 +569,7 @@ mod tests {
             &["setup", "kessel", "--name", "x"],
             &["setup", "--bogus"],
         ] {
-            assert_eq!(native(row, &args(line)), Route::Setup, "{line:?}");
+            assert_eq!(native(row, &args(line)), family("setup"), "{line:?}");
         }
         for page in [&["setup", "--help"][..], &["setup", "-h"]] {
             assert!(
@@ -664,7 +601,7 @@ mod tests {
             &["feedback", "show", "x"],
             &["tickets", "show", "x", "--html"],
         ] {
-            assert_eq!(native(row, &args(line)), Route::Feedback, "{line:?}");
+            assert_eq!(native(row, &args(line)), family("feedback"), "{line:?}");
         }
         for (line, page) in [
             (&["feedback", "list", "--help"][..], "feedback/list"),
@@ -761,17 +698,21 @@ mod tests {
         use crate::spec::{Call, Cred, Method, Output, Parse, Print, Style, Via};
         static NOUNS: &[Noun] = &[
             Noun {
+                family: "compute",
                 words: &["compute"],
                 owner: Owner::Bash,
                 verbs: &[Verb {
                     words: &["stats", "ls"],
                     owner: Owner::Spec,
                 }],
+                run: route::hand_back,
             },
             Noun {
+                family: "vault",
                 words: &["vault"],
                 owner: Owner::Spec,
                 verbs: &[],
+                run: route::hand_back,
             },
         ];
         const fn row(words: &'static [&'static str]) -> SpecVerb {

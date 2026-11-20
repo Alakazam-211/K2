@@ -61,6 +61,23 @@ use crate::transport::encode::quote;
 use crate::transport::{Call, Channel, Client, Error};
 use std::ffi::OsString;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["feedback", "tickets"];
+/// The shell's but for [`VERBS`].
+pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
+/// Only `list` and `show`; every other verb, and `feedback` alone, is
+/// the shell's. One verb row each, so either can turn back alone.
+pub const VERBS: &[crate::route::Verb] = &[
+    crate::route::Verb {
+        words: &["list"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["show"],
+        owner: crate::route::Owner::Native,
+    },
+];
+
 /// The routes.
 pub const LIST: &str = "/cli/feedback/list";
 pub const SHOW: &str = "/cli/feedback/show";

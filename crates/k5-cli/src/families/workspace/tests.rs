@@ -58,7 +58,7 @@ fn the_router_s_arms() {
                 .any(|l| l.starts_with(&arm) && l.ends_with(&ends)),
             "the workspace case has no {verb} arm calling {call}"
         );
-        assert!(VERBS.contains(&verb));
+        assert!(NATIVE_VERBS.contains(&verb));
     }
     // Help anywhere in the words goes to the help, never a verb.
     assert!(router.contains("    workspace)\n"));

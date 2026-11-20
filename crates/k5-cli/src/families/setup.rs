@@ -89,6 +89,14 @@ use k2_client::product_name;
 use std::ffi::OsString;
 use std::path::Path;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["setup"];
+/// The binary answers it: the reads and the writes each behind a switch, and [`run`] hands a
+/// form whose switch is off to the shell.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
+
 /// `k5 setup` and `k5 setup --json` (and every usage mistake, which sends
 /// nothing) are the binary's. Off, the shell answers them.
 pub const READ_NATIVE: bool = true;

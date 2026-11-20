@@ -58,6 +58,13 @@ use crate::transport::{Call, Error};
 use k2_client::env_names;
 use std::ffi::OsString;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["whoami"];
+/// The binary answers it ([`run`] never hands one back).
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
+
 /// The route.
 pub const ENDPOINT: &str = "/cli/whoami";
 
@@ -121,14 +128,15 @@ fn os_bytes(v: &OsString) -> Vec<u8> {
 }
 
 /// `k5 whoami ...`: `args` is the whole command line after `argv[0]`.
-pub fn run(args: &[OsString]) -> Exit {
-    match daemon::current() {
+/// Never `None`: the binary answers every form the route sends here.
+pub fn run(args: &[OsString]) -> Option<Exit> {
+    Some(match daemon::current() {
         Ok(settings) => run_with(args, settings),
         Err(e) => {
             out::stderr_line(&format!("Error: {e}"));
             Exit::Error
         }
-    }
+    })
 }
 
 fn run_with(args: &[OsString], mut settings: Settings) -> Exit {

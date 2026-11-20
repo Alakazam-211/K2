@@ -65,12 +65,46 @@ use crate::transport::{permission, Auth, Call, Client, Error};
 use k2_client::brand::PRODUCT_NAME;
 use std::ffi::OsString;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["workspace"];
+/// The shell's but for [`VERBS`].
+pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
+/// `list`, `profile`, `launch`, `update`, `create` and `open`, the
+/// verbs a first run uses; every other verb, and `workspace` alone, is
+/// the shell's. One verb row each, so each can turn back alone.
+pub const VERBS: &[crate::route::Verb] = &[
+    crate::route::Verb {
+        words: &["list"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["profile"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["create"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["open"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["launch"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["update"],
+        owner: crate::route::Owner::Native,
+    },
+];
+
 pub mod agent;
 pub mod list;
 pub mod register;
 
 /// The verbs the binary answers, as the router's `case` names them.
-pub const VERBS: [&str; 6] = ["list", "launch", "profile", "update", "create", "open"];
+pub const NATIVE_VERBS: [&str; 6] = ["list", "launch", "profile", "update", "create", "open"];
 
 /// Lines that stop a verb before it sends anything, and the exit.
 #[derive(Debug, Clone, PartialEq, Eq)]

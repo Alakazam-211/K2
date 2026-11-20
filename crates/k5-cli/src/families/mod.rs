@@ -27,6 +27,12 @@
 //! and the others return `None`) when it is a form only the shell
 //! answers. It decides before it prints or sends anything.
 //!
+//! Every arm of the shell router has its module here, named after its
+//! first word: its row of [`crate::route::TABLE`] is the module's
+//! `WORDS`, `OWNER`, `VERBS` and `run`. Every family not listed above is
+//! a stub the shell answers whole (`shell_family!`, `crate::route`), until
+//! its lane makes it native in its own module.
+//!
 //! # Without Python
 //!
 //! The shell's readers are `python3`; a family reads the answer itself.
@@ -66,18 +72,106 @@ use crate::transport::{Call, Channel, Client, Error, Response};
 use std::path::Path;
 
 pub mod activity;
+pub mod agent;
+pub mod api;
+pub mod api_key;
+pub mod app;
+pub mod app_update;
+pub mod approve;
+pub mod board;
+pub mod browser;
+pub mod calendar;
+pub mod capabilities;
+pub mod cert;
+pub mod changes;
+pub mod chat;
+pub mod checkin;
+pub mod ci;
+pub mod clone;
+pub mod commit;
+pub mod compute;
 pub mod connect;
 pub mod connections;
+pub mod context;
+pub mod daemon;
+pub mod db;
+pub mod desktop;
+pub mod dns;
+pub mod doc;
+pub mod domain;
 pub mod done;
+pub mod explain;
+pub mod fed;
 pub mod feedback;
+pub mod firewall;
+pub mod focus_group;
+pub mod front;
+pub mod git_tools;
+pub mod glossary;
+pub mod heartbeat;
+pub mod help;
+pub mod help_advanced;
+pub mod help_deprecated;
+pub mod help_internal;
+pub mod hooks;
+pub mod hostchat;
+pub mod hostmail;
 pub mod inbox;
+pub mod job;
+pub mod llm;
+pub mod mail;
+pub mod migrate;
+pub mod msg;
+pub mod notifications;
+pub mod notify;
+pub mod onboarding;
+pub mod organization;
+pub mod permission;
+pub mod postal;
+pub mod preset;
+pub mod project;
+pub mod publish;
+pub mod push;
 pub mod read;
+pub mod release;
+pub mod remind;
+pub mod reminders;
+pub mod remote;
+pub mod remote_session;
+pub mod reserve;
 pub mod respond;
+pub mod review;
+pub mod reviews;
+pub mod root_helper;
+pub mod schema;
+pub mod send_feedback;
 pub mod sessions;
+pub mod settings;
 pub mod setup;
+pub mod sidecar;
+pub mod sim;
+pub mod skills;
+pub mod skin;
+pub mod skin_token;
+pub mod sources;
+pub mod state;
+pub mod status;
+pub mod store;
+pub mod talk;
+pub mod terminal;
+pub mod thread;
+pub mod trust_folders;
+pub mod tunnel;
 pub mod update;
+pub mod usage;
+pub mod users;
+pub mod vault;
+pub mod voice;
+pub mod whats_new;
 pub mod whoami;
+pub mod wiki;
 pub mod workspace;
+pub mod zen;
 
 /// The port as curl takes it from the shell's URL: digits only, and a
 /// port number.

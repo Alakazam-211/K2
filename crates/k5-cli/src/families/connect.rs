@@ -59,6 +59,17 @@ use crate::transport::{Auth, Call, Error};
 use std::ffi::OsString;
 use std::path::Path;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["connect"];
+/// The shell's but for [`VERBS`].
+pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
+/// Only `status`; `login`, `logout`, the old publish words and
+/// `connect` alone are the shell's.
+pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
+    words: &["status"],
+    owner: crate::route::Owner::Native,
+}];
+
 /// Where the daemon says whether it holds the tunnel token.
 pub const CONFIG: &str = "/cli/tunnel/config";
 /// Where the daemon says how the tunnel is.

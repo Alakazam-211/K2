@@ -54,6 +54,13 @@ use k2_client::env_names;
 use std::ffi::OsString;
 use std::path::Path;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["respond"];
+/// The binary answers it; [`run`] hands back a form only the shell answers.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
+
 /// The route.
 pub const ENDPOINT: &str = "/cli/respond";
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).

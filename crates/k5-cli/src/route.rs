@@ -24,7 +24,20 @@
 //! word of the router's case has a row and every row is an arm of it,
 //! and a `Native` or `Spec` row has a `--schema` entry or a named
 //! reason not to.
+//!
+//! # One module per family
+//!
+//! A row is its family's: [`TABLE`] lists the families in the router's
+//! order, and each row's words, owner, verb rows and code ([`Run`]) are
+//! consts and a `run` function in that family's module under
+//! [`crate::families`], named after its first word (`trust-folders` is
+//! `trust_folders`, `--schema` is `schema`). A family the shell answers
+//! whole is a stub (`shell_family!`). Making a family native, or turning
+//! it back, edits only its own module and tests, never this list, so
+//! lanes working on different families never touch the same lines. The
+//! version, `cli` and `study` rows are the front's own code ([`FRONT`]).
 
+use crate::exit::Exit;
 use std::ffi::OsString;
 
 /// Who answers.
@@ -41,16 +54,36 @@ pub enum Owner {
     Bash,
 }
 
-/// One arm of the router's top-level `case`.
+/// A family's code for a command line the route sends to it (the whole
+/// command line after `argv[0]`): its exit, or `None` to hand it to the
+/// shell CLI, decided before anything is printed or sent.
+pub type Run = fn(&[OsString]) -> Option<Exit>;
+
+/// One arm of the router's top-level `case`: one family's row.
 #[derive(Debug)]
 pub struct Noun {
+    /// The family's module under [`crate::families`], or [`FRONT`].
+    pub family: &'static str,
     /// The arm's words, in the arm's order.
     pub words: &'static [&'static str],
     /// Who answers the noun's own forms and every verb not in `verbs`.
     pub owner: Owner,
     /// Verbs answered by someone other than `owner`.
     pub verbs: &'static [Verb],
+    /// The family's code, for a form the route sends to the binary
+    /// ([`crate::front::Route::Family`]).
+    pub run: Run,
 }
+
+/// A row is itself: two rows are equal only when they are the same row
+/// of the same table.
+impl PartialEq for Noun {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
+impl Eq for Noun {}
 
 /// A verb of a [`Noun`]: its second word.
 #[derive(Debug)]
@@ -98,210 +131,170 @@ pub fn find(table: &'static [Noun], args: &[OsString]) -> Found {
     }
 }
 
-const fn bash(words: &'static [&'static str]) -> Noun {
-    Noun {
-        words,
-        owner: Owner::Bash,
-        verbs: &[],
-    }
-}
+/// The [`Noun::family`] of a row the front answers by its own code.
+pub const FRONT: &str = "crate::front";
 
-const fn native(words: &'static [&'static str]) -> Noun {
+/// A row the front answers by its own code ([`crate::front`]): the
+/// version, `cli` and `study`. Its `run` is never reached.
+const fn front(words: &'static [&'static str]) -> Noun {
     Noun {
+        family: FRONT,
         words,
         owner: Owner::Native,
         verbs: &[],
+        run: hand_back,
     }
 }
 
+/// A [`Run`] that hands every command line to the shell CLI.
+pub fn hand_back(_args: &[OsString]) -> Option<Exit> {
+    None
+}
+
+/// The items of a family the shell CLI answers whole, for its module
+/// under [`crate::families`]: the router arm's `WORDS`, `OWNER`
+/// ([`Owner::Bash`]), no `VERBS`, and a `run` that hands every command
+/// line to the shell. A lane that makes the family native writes the four
+/// items out in its module in place of this: the words stay as they are,
+/// and [`TABLE`] needs no edit.
+macro_rules! shell_family {
+    ($words:expr) => {
+        /// The router arm's words: this family's row of
+        /// [`crate::route::TABLE`].
+        pub const WORDS: &[&str] = $words;
+        /// The shell CLI answers every form.
+        pub const OWNER: $crate::route::Owner = $crate::route::Owner::Bash;
+        /// No verb rows.
+        pub const VERBS: &[$crate::route::Verb] = &[];
+        /// Hands every command line to the shell CLI.
+        pub fn run(_args: &[::std::ffi::OsString]) -> Option<$crate::exit::Exit> {
+            None
+        }
+    };
+}
+pub(crate) use shell_family;
+
+/// A family's row, from its module under [`crate::families`].
+macro_rules! family {
+    ($m:ident) => {
+        Noun {
+            family: stringify!($m),
+            words: crate::families::$m::WORDS,
+            owner: crate::families::$m::OWNER,
+            verbs: crate::families::$m::VERBS,
+            run: crate::families::$m::run,
+        }
+    };
+}
+
 /// The route table: one row per arm of `cli/src/router.sh`'s top-level
-/// `case`, in its order. The `*)` arm has no row: a word with no row is
-/// the shell's.
+/// `case`, in its order, each its family's ([`crate::families`]). The
+/// `*)` arm has no row: a word with no row is the shell's.
 pub static TABLE: &[Noun] = &[
-    bash(&["fed"]),
-    bash(&["agent"]),
-    bash(&["context"]),
-    bash(&["preset"]),
-    // Only `list` and `show`; every other verb, and `feedback` alone, is
-    // the shell's. One verb row each, so either can turn back alone.
-    Noun {
-        words: &["feedback", "tickets"],
-        owner: Owner::Bash,
-        verbs: &[
-            Verb {
-                words: &["list"],
-                owner: Owner::Native,
-            },
-            Verb {
-                words: &["show"],
-                owner: Owner::Native,
-            },
-        ],
-    },
-    bash(&["organization"]),
-    bash(&["project"]),
-    bash(&["mail"]),
-    bash(&["calendar", "cal"]),
-    bash(&["hostmail"]),
-    bash(&["db"]),
-    bash(&["store"]),
-    bash(&["board"]),
-    bash(&["dns"]),
-    bash(&["domain"]),
-    bash(&["cert"]),
-    bash(&["terminal"]),
-    bash(&["state"]),
-    bash(&["commit"]),
-    bash(&["reviews"]),
-    bash(&["review"]),
-    bash(&["trust-folders"]),
-    // `list`, `profile`, `launch`, `update`, `create` and `open`, the
-    // verbs a first run uses; every other verb, and `workspace` alone, is
-    // the shell's. One verb row each, so each can turn back alone.
-    Noun {
-        words: &["workspace"],
-        owner: Owner::Bash,
-        verbs: &[
-            Verb {
-                words: &["list"],
-                owner: Owner::Native,
-            },
-            Verb {
-                words: &["profile"],
-                owner: Owner::Native,
-            },
-            Verb {
-                words: &["create"],
-                owner: Owner::Native,
-            },
-            Verb {
-                words: &["open"],
-                owner: Owner::Native,
-            },
-            Verb {
-                words: &["launch"],
-                owner: Owner::Native,
-            },
-            Verb {
-                words: &["update"],
-                owner: Owner::Native,
-            },
-        ],
-    },
-    bash(&["onboarding"]),
-    bash(&["remind"]),
-    bash(&["reminders"]),
-    bash(&["heartbeat"]),
-    bash(&["hooks"]),
-    bash(&["daemon"]),
-    bash(&["tunnel"]),
-    bash(&["settings"]),
-    bash(&["checkin"]),
-    bash(&["status"]),
-    native(&["done"]),
-    native(&["whoami"]),
-    bash(&["postal"]),
-    // The reads and the writes each behind a switch (`families::setup`): a
-    // form whose switch is off is the shell's.
-    native(&["setup"]),
-    bash(&["msg"]),
-    bash(&["thread"]),
-    bash(&["browser"]),
-    native(&["read"]),
-    bash(&["talk"]),
-    native(&["respond"]),
-    bash(&["whats-new"]),
-    native(&["activity"]),
-    native(&["inbox"]),
-    bash(&["glossary"]),
-    bash(&["focus-group", "focus-groups"]),
-    bash(&["help-deprecated"]),
-    bash(&["help-internal"]),
-    native(&["sessions"]),
-    bash(&["sidecar"]),
-    bash(&["root-helper"]),
-    bash(&["front"]),
-    bash(&["firewall"]),
-    bash(&["desktop"]),
-    bash(&["git-tools"]),
-    bash(&["push"]),
-    bash(&["notifications"]),
-    bash(&["notify"]),
-    bash(&["compute"]),
-    bash(&["changes"]),
-    bash(&["sim"]),
-    bash(&["doc", "docs"]),
-    bash(&["hostchat"]),
-    bash(&["voice"]),
-    bash(&["chat"]),
-    bash(&["sources", "source"]),
-    bash(&["llm"]),
-    bash(&["usage"]),
-    bash(&["vault"]),
-    bash(&["migrate"]),
-    bash(&["job", "jobs"]),
-    bash(&["ci"]),
-    bash(&["reserve"]),
-    bash(&["release"]),
-    // `list` (and `--json` and `--users`, which the shell reads as
-    // `list`), `add` and `remove`; every other action, and `connections` alone, is
-    // the shell's. One verb row each, so each can turn back alone.
-    Noun {
-        words: &["connections"],
-        owner: Owner::Bash,
-        verbs: &[
-            Verb {
-                words: &["list", "--json", "--users"],
-                owner: Owner::Native,
-            },
-            Verb {
-                words: &["add"],
-                owner: Owner::Native,
-            },
-            Verb {
-                words: &["remove"],
-                owner: Owner::Native,
-            },
-        ],
-    },
-    bash(&["api"]),
-    bash(&["api-key"]),
-    bash(&["app"]),
-    bash(&["skin"]),
-    bash(&["skin-token"]),
-    bash(&["publish"]),
-    bash(&["clone"]),
-    bash(&["users"]),
-    bash(&["remote"]),
-    bash(&["remote-session"]),
-    bash(&["zen"]),
-    bash(&["wiki"]),
-    // Only `status`; `login`, `logout`, the old publish words and
-    // `connect` alone are the shell's.
-    Noun {
-        words: &["connect"],
-        owner: Owner::Bash,
-        verbs: &[Verb {
-            words: &["status"],
-            owner: Owner::Native,
-        }],
-    },
-    bash(&["skills"]),
-    bash(&["app-update"]),
-    // Each form behind its own switch (`families::update`): a form whose
-    // switch is off is the shell's.
-    native(&["update"]),
-    native(&["version", "--version", "-v"]),
-    native(&["cli"]),
-    bash(&["--schema", "schema"]),
-    native(&["study"]),
-    bash(&["explain"]),
-    bash(&["capabilities"]),
-    bash(&["send-feedback"]),
-    bash(&["approve"]),
-    bash(&["permission"]),
-    bash(&["help", "--help", "-h"]),
-    bash(&["help-advanced"]),
+    family!(fed),
+    family!(agent),
+    family!(context),
+    family!(preset),
+    family!(feedback),
+    family!(organization),
+    family!(project),
+    family!(mail),
+    family!(calendar),
+    family!(hostmail),
+    family!(db),
+    family!(store),
+    family!(board),
+    family!(dns),
+    family!(domain),
+    family!(cert),
+    family!(terminal),
+    family!(state),
+    family!(commit),
+    family!(reviews),
+    family!(review),
+    family!(trust_folders),
+    family!(workspace),
+    family!(onboarding),
+    family!(remind),
+    family!(reminders),
+    family!(heartbeat),
+    family!(hooks),
+    family!(daemon),
+    family!(tunnel),
+    family!(settings),
+    family!(checkin),
+    family!(status),
+    family!(done),
+    family!(whoami),
+    family!(postal),
+    family!(setup),
+    family!(msg),
+    family!(thread),
+    family!(browser),
+    family!(read),
+    family!(talk),
+    family!(respond),
+    family!(whats_new),
+    family!(activity),
+    family!(inbox),
+    family!(glossary),
+    family!(focus_group),
+    family!(help_deprecated),
+    family!(help_internal),
+    family!(sessions),
+    family!(sidecar),
+    family!(root_helper),
+    family!(front),
+    family!(firewall),
+    family!(desktop),
+    family!(git_tools),
+    family!(push),
+    family!(notifications),
+    family!(notify),
+    family!(compute),
+    family!(changes),
+    family!(sim),
+    family!(doc),
+    family!(hostchat),
+    family!(voice),
+    family!(chat),
+    family!(sources),
+    family!(llm),
+    family!(usage),
+    family!(vault),
+    family!(migrate),
+    family!(job),
+    family!(ci),
+    family!(reserve),
+    family!(release),
+    family!(connections),
+    family!(api),
+    family!(api_key),
+    family!(app),
+    family!(skin),
+    family!(skin_token),
+    family!(publish),
+    family!(clone),
+    family!(users),
+    family!(remote),
+    family!(remote_session),
+    family!(zen),
+    family!(wiki),
+    family!(connect),
+    family!(skills),
+    family!(app_update),
+    family!(update),
+    front(&["version", "--version", "-v"]),
+    front(&["cli"]),
+    family!(schema),
+    front(&["study"]),
+    family!(explain),
+    family!(capabilities),
+    family!(send_feedback),
+    family!(approve),
+    family!(permission),
+    family!(help),
+    family!(help_advanced),
 ];
 
 #[cfg(test)]
@@ -315,6 +308,190 @@ mod tests {
 
     fn owner(table: &'static [Noun], list: &[&str]) -> Owner {
         find(table, &args(list)).owner
+    }
+
+    const fn row(family: &'static str, words: &'static [&'static str], owner: Owner) -> Noun {
+        Noun {
+            family,
+            words,
+            owner,
+            verbs: &[],
+            run: hand_back,
+        }
+    }
+
+    /// What is wrong with the families of `table`: a family in two rows,
+    /// a word two rows claim, or a family's module not named after its
+    /// first word (`trust-folders` is `trust_folders`, `--schema` is
+    /// `schema`). The front's own rows have no module. Empty when none.
+    fn claims(table: &[Noun]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut families = BTreeSet::new();
+        let mut words = std::collections::BTreeMap::new();
+        for noun in table {
+            if noun.family != FRONT {
+                if !families.insert(noun.family) {
+                    out.push(format!("families::{} has two rows", noun.family));
+                }
+                let module = noun.words[0].trim_start_matches('-').replace('-', "_");
+                if noun.family != module {
+                    out.push(format!(
+                        "{:?} is families::{}, not families::{module}",
+                        noun.words, noun.family
+                    ));
+                }
+            }
+            for word in noun.words {
+                if let Some(other) = words.insert(*word, noun.family) {
+                    out.push(format!("{word} is claimed by {other} and {}", noun.family));
+                }
+            }
+        }
+        out
+    }
+
+    /// Each family claims its own words: no word is two families', no
+    /// family has two rows, and each module is named after its first
+    /// word. With the bite.
+    #[test]
+    fn no_two_families_claim_the_same_words() {
+        assert_eq!(claims(TABLE), Vec::<String>::new());
+        static TWO: &[Noun] = &[
+            row("mail", &["mail", "email"], Owner::Bash),
+            row("hostmail", &["hostmail", "email"], Owner::Bash),
+            row("mail", &["mail2"], Owner::Bash),
+            row("dns", &["domain"], Owner::Bash),
+        ];
+        assert_eq!(
+            claims(TWO),
+            [
+                "email is claimed by mail and hostmail",
+                "families::mail has two rows",
+                "[\"mail2\"] is families::mail, not families::mail2",
+                "[\"domain\"] is families::dns, not families::domain",
+            ]
+        );
+    }
+
+    /// The rows, in today's order. The scaffold that moved each row into
+    /// its family's module kept every row and its place; a new arm of the
+    /// router is a new line here as well as in [`TABLE`].
+    #[test]
+    fn the_order_is_today_s() {
+        const TODAY: &[&[&str]] = &[
+            &["fed"],
+            &["agent"],
+            &["context"],
+            &["preset"],
+            &["feedback", "tickets"],
+            &["organization"],
+            &["project"],
+            &["mail"],
+            &["calendar", "cal"],
+            &["hostmail"],
+            &["db"],
+            &["store"],
+            &["board"],
+            &["dns"],
+            &["domain"],
+            &["cert"],
+            &["terminal"],
+            &["state"],
+            &["commit"],
+            &["reviews"],
+            &["review"],
+            &["trust-folders"],
+            &["workspace"],
+            &["onboarding"],
+            &["remind"],
+            &["reminders"],
+            &["heartbeat"],
+            &["hooks"],
+            &["daemon"],
+            &["tunnel"],
+            &["settings"],
+            &["checkin"],
+            &["status"],
+            &["done"],
+            &["whoami"],
+            &["postal"],
+            &["setup"],
+            &["msg"],
+            &["thread"],
+            &["browser"],
+            &["read"],
+            &["talk"],
+            &["respond"],
+            &["whats-new"],
+            &["activity"],
+            &["inbox"],
+            &["glossary"],
+            &["focus-group", "focus-groups"],
+            &["help-deprecated"],
+            &["help-internal"],
+            &["sessions"],
+            &["sidecar"],
+            &["root-helper"],
+            &["front"],
+            &["firewall"],
+            &["desktop"],
+            &["git-tools"],
+            &["push"],
+            &["notifications"],
+            &["notify"],
+            &["compute"],
+            &["changes"],
+            &["sim"],
+            &["doc", "docs"],
+            &["hostchat"],
+            &["voice"],
+            &["chat"],
+            &["sources", "source"],
+            &["llm"],
+            &["usage"],
+            &["vault"],
+            &["migrate"],
+            &["job", "jobs"],
+            &["ci"],
+            &["reserve"],
+            &["release"],
+            &["connections"],
+            &["api"],
+            &["api-key"],
+            &["app"],
+            &["skin"],
+            &["skin-token"],
+            &["publish"],
+            &["clone"],
+            &["users"],
+            &["remote"],
+            &["remote-session"],
+            &["zen"],
+            &["wiki"],
+            &["connect"],
+            &["skills"],
+            &["app-update"],
+            &["update"],
+            &["version", "--version", "-v"],
+            &["cli"],
+            &["--schema", "schema"],
+            &["study"],
+            &["explain"],
+            &["capabilities"],
+            &["send-feedback"],
+            &["approve"],
+            &["permission"],
+            &["help", "--help", "-h"],
+            &["help-advanced"],
+        ];
+        let rows: Vec<&[&str]> = TABLE.iter().map(|n| n.words).collect();
+        assert_eq!(rows, TODAY);
+        let front: Vec<&str> = TABLE
+            .iter()
+            .filter(|n| n.family == FRONT)
+            .map(|n| n.words[0])
+            .collect();
+        assert_eq!(front, ["version", "cli", "study"]);
     }
 
     #[test]
@@ -416,6 +593,7 @@ mod tests {
     fn a_verb_row_narrows_its_row() {
         static PART: &[Noun] = &[
             Noun {
+                family: "mail",
                 words: &["mail", "email"],
                 owner: Owner::Bash,
                 verbs: &[
@@ -428,8 +606,9 @@ mod tests {
                         owner: Owner::Spec,
                     },
                 ],
+                run: hand_back,
             },
-            native(&["whoami"]),
+            row("whoami", &["whoami"], Owner::Native),
         ];
         assert_eq!(owner(PART, &["mail", "read"]), Owner::Native);
         assert_eq!(owner(PART, &["email", "show", "--json"]), Owner::Native);

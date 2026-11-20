@@ -326,27 +326,33 @@ General, Server, Advanced. Not on Windows yet.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route::{Verb, TABLE};
+    use crate::route::{hand_back, Verb, TABLE};
     use crate::transport::Channel;
 
     static T: &[Noun] = &[
         Noun {
+            family: "doc",
             words: &["doc", "docs"],
             owner: Owner::Bash,
             verbs: &[],
+            run: hand_back,
         },
         Noun {
+            family: "mail",
             words: &["mail"],
             owner: Owner::Bash,
             verbs: &[Verb {
                 words: &["read"],
                 owner: Owner::Native,
             }],
+            run: hand_back,
         },
         Noun {
+            family: crate::route::FRONT,
             words: &["cli"],
             owner: Owner::Native,
             verbs: &[],
+            run: hand_back,
         },
     ];
 

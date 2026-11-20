@@ -390,7 +390,7 @@ fn workspace_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         );
         let word = verb.words[0];
         assert!(
-            k5_cli::families::workspace::VERBS.contains(&word),
+            k5_cli::families::workspace::NATIVE_VERBS.contains(&word),
             "the workspace family does not answer {word}"
         );
         let arm = format!("            {word})");

@@ -87,6 +87,14 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["update"];
+/// The binary answers it: each form behind its own switch, and [`run`] hands a form whose
+/// switch is off to the shell.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
+
 /// `k5 update --cli [--check]` is the binary's. Off, the shell answers
 /// it. Each form has its own switch, so one form can go back to the
 /// shell alone.

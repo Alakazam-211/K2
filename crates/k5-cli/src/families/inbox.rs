@@ -70,6 +70,13 @@ use crate::transport::encode::quote;
 use std::ffi::OsString;
 use std::path::Path;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["inbox"];
+/// The binary answers it; [`run`] hands back a form only the shell answers.
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
+
 /// The routes.
 pub const LIST: &str = "/cli/inbox/list";
 pub const READ: &str = "/cli/inbox/read";

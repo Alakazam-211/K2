@@ -17,9 +17,7 @@ use k5_cli::exit::Exit;
 use k5_cli::front::{self, Route};
 use k5_cli::offline::{self, Env, Prelude};
 use k5_cli::pages::{self, Page};
-use k5_cli::{
-    check, cli_status, daemon, embedded, fallthrough, families, out, passport, port, spec, trace,
-};
+use k5_cli::{check, cli_status, daemon, embedded, fallthrough, out, passport, port, spec, trace};
 use std::ffi::OsString;
 
 /// Writes `text` to stdout; the exit after it.
@@ -142,23 +140,9 @@ fn main() {
         Route::VersionCheck => version_check(&args),
         Route::CliStatus { json } => cli_status(&args, json),
         Route::CliHelp => print(cli_status::HELP, Exit::Ok),
-        Route::Whoami => families::whoami::run(&args),
-        // A form the family hands back goes to the shell before anything
-        // is printed or sent.
-        Route::Done => families::done::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Respond => families::respond::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Inbox => families::inbox::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Read => families::read::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Activity => families::activity::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Sessions => families::sessions::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Connections => {
-            families::connections::run(&args).unwrap_or_else(|| shell(who, &args))
-        }
-        Route::Connect => families::connect::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Feedback => families::feedback::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Workspace => families::workspace::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Update => families::update::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Setup => families::setup::run(&args).unwrap_or_else(|| shell(who, &args)),
+        // A family's code (its row's `run`, in its module): a form it
+        // hands back goes to the shell before anything is printed or sent.
+        Route::Family(noun) => (noun.run)(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Spec(row) => spec::run(row, &args).unwrap_or_else(|| shell(who, &args)),
         Route::Study(s) => page(who, &args, |p, env| {
             pages::study_page(s, p, env, || passport::current(&args).would_refuse())

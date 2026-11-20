@@ -54,6 +54,28 @@ use crate::transport::{Call, Error};
 use std::ffi::OsString;
 use std::path::Path;
 
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["connections"];
+/// The shell's but for [`VERBS`].
+pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
+/// `list` (and `--json` and `--users`, which the shell reads as
+/// `list`), `add` and `remove`; every other action, and `connections`
+/// alone, is the shell's. One verb row each, so each can turn back alone.
+pub const VERBS: &[crate::route::Verb] = &[
+    crate::route::Verb {
+        words: &["list", "--json", "--users"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["add"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["remove"],
+        owner: crate::route::Owner::Native,
+    },
+];
+
 /// The route.
 pub const ENDPOINT: &str = "/cli/connections";
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).

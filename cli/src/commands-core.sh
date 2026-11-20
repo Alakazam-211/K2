@@ -45,6 +45,9 @@ cmd_agent_update() {
 # fail_deprecated; the daemon routes return HTTP 410.
 
 cmd_terminal_spawn() {
+    local usage="Usage: k2 terminal spawn --command \"...\" [--title \"...\"] [--agent <name>] [--wait] [--sandbox|--no-sandbox]"
+    # -h/--help anywhere prints the usage and spawns nothing (0.46.17).
+    if _wants_help "$@"; then echo "$usage"; return 0; fi
     local agent="" command="" title="" wait="" cwd="" sandbox=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -63,7 +66,7 @@ cmd_terminal_spawn() {
         esac
     done
     if [ -z "$command" ]; then
-        echo "Usage: k2 terminal spawn --command \"...\" [--title \"...\"] [--agent <name>] [--wait] [--sandbox|--no-sandbox]" >&2
+        echo "$usage" >&2
         exit 1
     fi
     local params="command=$(urlencode "$command")"

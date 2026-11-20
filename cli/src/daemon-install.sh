@@ -714,6 +714,8 @@ cmd_terminal_write() {
 }
 
 cmd_terminal_read() {
+    # -h/--help anywhere prints the usage and reads nothing (0.46.17).
+    if _wants_help "$@"; then echo "Usage: k2 terminal read <terminal-id> [--lines N]"; return 0; fi
     local terminal_id="${1:-}"
     local lines=50
     shift || true

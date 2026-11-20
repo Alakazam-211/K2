@@ -11,6 +11,10 @@ _K5_CLI_NOUN="${1:-help}"
 # (`k2 setup --json chief-of-staff`) is the same locked tool.
 # A passport from a shared Codex app-server or a dead session is refused
 # with a clear error first (never an owner fallback), for the same tool.
+# A Codex call K2 can't confirm as a tab K2 started with its own Codex
+# server sends nothing (exit 3) and never the owner token, for every
+# command, before anything else runs (_cli_codex_tab_gate).
+_cli_codex_tab_gate "${1:-help}" "${@:2}"
 _cli_check_session_passport "${1:-help}" "${@:2}"
 _cli_apply_auth_for_verb "${1:-help}" "${@:2}"
 

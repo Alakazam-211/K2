@@ -900,6 +900,9 @@ _k5_headers() {
 _k5_py_headers() {
     _k5_headers
     if [ "${#_K5_HDRS[@]}" -gt 0 ]; then printf '%s\n' "${_K5_HDRS[@]}"; fi
+    # A Codex call's conversation headers (_k2_codex_headers).
+    _k2_codex_headers
+    if [ "${#_K2_CODEX_HDRS[@]}" -gt 0 ]; then printf '%s\n' "${_K2_CODEX_HDRS[@]}"; fi
 }
 # The embedded Python's side. A python3 block that calls urlopen gets this
 # text and the headers on its own command line, never exported, runs the
@@ -1047,11 +1050,32 @@ _k2_stdin_secrets() {
 _K2_CURL_TRIES=4
 _k2_curl() {
     local cfg="$1"; shift
-    local try=1 rc once=0 a i
+    local try=1 rc once=0 a i hdr_file="" hdr_arg
     for a in "$@"; do
         case "$a" in @-|-T) once=1 ;; esac
     done
     if [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
+        # A Codex call's conversation headers ride the config, never argv.
+        # A request whose body is stdin with no config gets them from a
+        # config file of its own (stdin is the body).
+        _k2_codex_cfg
+        if [ -n "$_K2_CODEX_CFG" ]; then
+            if [ -n "$cfg" ]; then
+                case "$cfg" in *$'\n') ;; *) cfg="${cfg}"$'\n' ;; esac
+                cfg="${cfg}${_K2_CODEX_CFG}"
+            elif [ "$once" -eq 0 ]; then
+                cfg="$_K2_CODEX_CFG"
+            else
+                hdr_file="$(mktemp "${TMPDIR:-/tmp}/k2-hdr.XXXXXX")" || {
+                    echo "Error: k2 could not write its request headers to a temp file; nothing was sent." >&2
+                    return 1
+                }
+                printf '%s' "$_K2_CODEX_CFG" >"$hdr_file"
+                hdr_arg="$hdr_file"
+                if [ -n "$_K2_CYGPATH" ]; then hdr_arg="$(cygpath -w "$hdr_file")"; fi
+                set -- -K "$hdr_arg" "$@"
+            fi
+        fi
         local url="" l
         for a in "$@"; do
             case "$a" in http://*|https://*|HTTP://*|HTTPS://*) url="$a"; break ;; esac
@@ -1077,6 +1101,7 @@ _k2_curl() {
             printf '%s' "$cfg" | curl -K - "$@" || rc=$?
         fi
         if [ "$rc" -ne 7 ] || [ "$once" -eq 1 ] || [ "$try" -ge "$_K2_CURL_TRIES" ]; then
+            if [ -n "$hdr_file" ]; then rm -f "$hdr_file"; fi
             return "$rc"
         fi
         try=$((try + 1))
@@ -1279,6 +1304,103 @@ _cli_check_session_passport() {
     return 0
 }
 # END_CLI_STALE_PASSPORT
+
+# BEGIN_CLI_CODEX_TAB_BIND
+# A Codex tool call (Codex sets CODEX_THREAD_ID on every one) keeps this
+# tab's credentials only when K2 can tell it runs in a tab K2 started with
+# its own Codex server. K2 sets K2_CODEX_TAB_ISOLATED to the session id of
+# the tab's passport when it starts Codex with --no-daemon, or in a microVM
+# cell. Any other Codex call may run under a Codex server another tab
+# started, with that tab's credentials, so it counts as shared: no marker
+# (a tab opened before this update, codex typed in a shell, a Codex K2
+# could not check), a marker for another passport, or a shared Codex
+# app-server above this process. A shared call sends nothing: a command
+# that would make a request ends with exit 3. Only help, schema, version
+# and explain run, and `<command> -h|--help` prints `k2 help <command>`
+# without running the command (some commands' own help path asks the
+# daemon). The owner token from disk is never used for it.
+# K2_CODEX_PASSPORT_BIND=0 turns this off, and the conversation headers
+# below with it.
+
+# True for a Codex call while the switch is on (the default).
+_cli_codex_bind_on() {
+    [ -n "${CODEX_THREAD_ID:-}" ] || return 1
+    case "${K2_CODEX_PASSPORT_BIND:-}" in 0|off|false|no) return 1 ;; esac
+    return 0
+}
+
+# True when this Codex call runs in a tab K2 confirmed: the marker names the
+# session of the passport this call carries, and no shared Codex app-server
+# is above this process.
+_cli_codex_tab_confirmed() {
+    local m="${K2_CODEX_TAB_ISOLATED:-}" t="${SCOPED_TOKEN:-}"
+    [ -n "$m" ] && [[ "$t" == *.* ]] && [ "${t%%.*}" = "$m" ] || return 1
+    ! _cli_under_shared_codex_server
+}
+
+_cli_codex_tab_refuse() {
+    echo "Error: this Codex tab was started before this update or outside K2: reopen it from K2." >&2
+    echo "K2 can't tell this call from one under a Codex server another tab started, so nothing was sent." >&2
+    if _cli_under_shared_codex_server; then
+        echo "It runs under a shared Codex app-server; stop that server once: codex app-server daemon stop" >&2
+    fi
+    echo "If a tab K2 opened still says this, set K2_CODEX_NO_DAEMON=1 for the K2 daemon, then reopen the tab." >&2
+    echo "Help still works here: k2 help ${1:-}" >&2
+    exit 3
+}
+
+# Before any command: a Codex call K2 can't confirm runs only the local
+# words, never the owner token from disk.
+_cli_codex_tab_gate() {
+    _cli_codex_bind_on || return 0
+    _cli_codex_tab_confirmed && return 0
+    DISK_OWNER_TOKEN=""
+    TOKEN="${SCOPED_TOKEN:-}"
+    local verb="${1:-help}" a
+    case "$verb" in
+        help|--help|-h|schema|--schema|version|--version|-v) return 0 ;;
+        explain)
+            # A Markdown kit id is answered by k2 doc, which asks the daemon.
+            for a in "${@:2}"; do
+                case "$a" in [Mm][Pp][Cc]-*|[Mm][Pp][Cc][Ee]-*) _cli_codex_tab_refuse "$verb" ;; esac
+            done
+            return 0
+            ;;
+    esac
+    for a in "${@:2}"; do
+        case "$a" in
+            -h|--help) cmd_help "$verb"; exit 0 ;;
+        esac
+    done
+    _cli_codex_tab_refuse "$verb"
+}
+
+# The conversation headers of a Codex call while the switch is on, for
+# every daemon request (_k2_curl adds them to curl's config, never argv; the
+# embedded Python gets them with _k5_py_headers): X-K2-Conversation is the
+# conversation's root thread (CODEX_SESSION_ID: a subagent's call names its
+# parent conversation), X-K2-Thread the thread that made the call
+# (CODEX_THREAD_ID). An id that isn't letters, digits, '-' and '_' (at most
+# 128) is not sent. Sets the array _K2_CODEX_HDRS, one `Name: value` each.
+_K2_CODEX_ID_RE='^[A-Za-z0-9_-]{1,128}$'
+_k2_codex_headers() {
+    _K2_CODEX_HDRS=()
+    _cli_codex_bind_on || return 0
+    local root="${CODEX_SESSION_ID:-}" thread="${CODEX_THREAD_ID:-}"
+    if [[ "$root" =~ $_K2_CODEX_ID_RE ]]; then _K2_CODEX_HDRS+=("X-K2-Conversation: $root"); fi
+    if [[ "$thread" =~ $_K2_CODEX_ID_RE ]]; then _K2_CODEX_HDRS+=("X-K2-Thread: $thread"); fi
+    return 0
+}
+# The same headers as curl config lines in _K2_CODEX_CFG ("" for none).
+_k2_codex_cfg() {
+    local _K2_CFG="" h
+    _k2_codex_headers
+    if [ "${#_K2_CODEX_HDRS[@]}" -gt 0 ]; then
+        for h in "${_K2_CODEX_HDRS[@]}"; do _k2_cfg_add header "$h"; done
+    fi
+    _K2_CODEX_CFG="$_K2_CFG"
+}
+# END_CLI_CODEX_TAB_BIND
 
 # DAEMON_INSTALL_EARLY_BYPASS — `k2 daemon install` provisions the
 # standalone daemon on a FRESH headless box where no daemon is running
@@ -113570,6 +113692,10 @@ _K5_CLI_NOUN="${1:-help}"
 # (`k2 setup --json chief-of-staff`) is the same locked tool.
 # A passport from a shared Codex app-server or a dead session is refused
 # with a clear error first (never an owner fallback), for the same tool.
+# A Codex call K2 can't confirm as a tab K2 started with its own Codex
+# server sends nothing (exit 3) and never the owner token, for every
+# command, before anything else runs (_cli_codex_tab_gate).
+_cli_codex_tab_gate "${1:-help}" "${@:2}"
 _cli_check_session_passport "${1:-help}" "${@:2}"
 _cli_apply_auth_for_verb "${1:-help}" "${@:2}"
 

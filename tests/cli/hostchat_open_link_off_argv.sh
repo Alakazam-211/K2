@@ -21,6 +21,7 @@
 #   3. A page left by an earlier run (older than a minute) is removed at the
 #      start of the next run; one from a run still inside its wait is kept.
 #   4. Neither the link nor its code is in any child's argv or environment.
+#      The k5 binary answers --print itself: on it, no child runs at all.
 #
 # The wait is 30 s in use. K2_TEST_HOSTCHAT_OPEN_WAIT shortens it here so the
 # test takes seconds; the CLI accepts only 0 to 30, so it can never keep the
@@ -247,7 +248,20 @@ if [ "$(mints)" = 1 ]; then ok "--print minted one code"; else bad "--print mint
 if [ -s "$OPENLOG" ]; then bad "--print ran an opener: $(cat "$OPENLOG")"; else ok "--print opens nothing"; fi
 if grep -Eq '^(open|xdg-open) ' "$ARGLOG"; then bad "--print: an opener is in the argv log"; else ok "--print: no opener in the argv log"; fi
 if [ -z "$(pages)" ]; then ok "--print writes no page"; else bad "--print wrote a page: $(pages)"; fi
-if grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG"; then ok "--print: children were logged"; else bad "--print: no python3 or curl child was logged"; fi
+if [ "$K2_CLI" != "$CLI_BASH_SOURCE" ]; then
+    # The k5 binary answers open --print itself: it starts no child at all,
+    # so nothing could carry the link.
+    if [ -s "$ARGLOG" ]; then
+        bad "--print: the binary started a child"
+        head -3 "$ARGLOG" >&2
+    else
+        ok "--print: the binary started no child"
+    fi
+elif grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG"; then
+    ok "--print: children were logged"
+else
+    bad "--print: no python3 or curl child was logged"
+fi
 assert_off_children "--print: the code" "$CODE1"
 
 echo "== open: the link reaches the opener only through a private page =="

@@ -6678,9 +6678,22 @@ EOF
 }
 
 cmd_reviews() {
+    # An answer the reader can't use is an error line and exit 1; the
+    # caller's own stdin is never read.
     cli_request "/cli/reviews" | python3 -c "
 import json, sys
-data = json.loads(sys.stdin.read())
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+except ValueError:
+    print('Error: k2 reviews: K2 answered /cli/reviews with something that is not JSON' if raw.strip() else 'Error: k2 reviews: no answer from K2 on /cli/reviews', file=sys.stderr)
+    sys.exit(1)
+if isinstance(data, dict):
+    err = data.get('error')
+    if isinstance(err, dict):
+        err = err.get('hint') or err.get('code')
+    print('Error: k2 reviews: %s' % (err or 'K2 answered /cli/reviews with something that is not a list'), file=sys.stderr)
+    sys.exit(1)
 if not data:
     print('No pending reviews.')
     sys.exit(0)
@@ -6690,7 +6703,7 @@ for r in data:
     items = len(r.get('workItems', []))
     files = len(r.get('diffSummary', []))
     print(f'  {agent:<20} {branch:<30} {items} items, {files} files changed')
-" 2>/dev/null || cat
+"
 }
 
 # Signed approvals (prd-signed-approvals-v1): `k2 approve verify|show|key-id`

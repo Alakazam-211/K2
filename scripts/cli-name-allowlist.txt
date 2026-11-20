@@ -30,7 +30,7 @@
 316 cli crates/k2-core/src/skills/content.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
 165 cli crates/k2-core/src/workspace/skill_regen.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
 124 cli crates/k2-core/src/zen/skill.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-82 cli src/renderer/components/Help/k2Nouns.ts debt: the command name typed out; use CLI_NAME or cli_name!()
+83 cli src/renderer/components/Help/k2Nouns.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 61 cli crates/k2-daemon/src/sew/supervisor.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 51 cli crates/k2-daemon/src/compute_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 45 cli crates/k2-core/src/workspace/context_layers.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -38,6 +38,7 @@
 38 cli crates/k2-daemon/src/vault_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 29 cli crates/k2-daemon/src/mail/routes_send.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 28 cli crates/k2-core/src/app_templates/mod.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+28 cli crates/k5-cli/src/retired.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 27 cli crates/k2-daemon/src/inbox_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 26 cli crates/k2-daemon/src/apps/routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 26 cli crates/k2-daemon/src/vault_use_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -66,6 +67,8 @@
 16 cli crates/k2-daemon/src/apps/grace.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 16 cli crates/k2-daemon/src/ci_release.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 16 cli crates/k2-daemon/src/mail/routes_link_oauth.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+16 cli crates/k5-cli/src/families/sessions.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+16 cli crates/k5-cli/src/families/setup.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 15 cli crates/k2-daemon/src/apps/status.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 15 cli crates/k2-daemon/src/mail/routes_messages.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 15 cli crates/k2-daemon/src/sql/pgmove/dual.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -205,6 +208,8 @@
 5 cli crates/k2-daemon/src/vault/server_refs.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 5 cli crates/k2-daemon/src/voice/transcripts.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 5 cli crates/k2-vault/src/vault.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+5 cli crates/k5-cli/src/families/workspace/agent.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+5 cli src/renderer/components/Settings/sections/K5CliBetaRow.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-core/src/board/schema.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-core/src/ci.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-core/src/ci_monitors.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -244,6 +249,11 @@
 4 cli crates/k2-daemon/src/vault_run_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/voice/bff.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-vault/src/boxmove.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+4 cli crates/k5-cli/src/families/activity.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+4 cli crates/k5-cli/src/families/connect.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+4 cli crates/k5-cli/src/families/connections.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+4 cli crates/k5-cli/src/families/feedback.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+4 cli crates/k5-cli/src/families/inbox.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 4 cli src/renderer/components/Thread/systemNotice.fixtures.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli src/renderer/lib/zen/zen-lib-loader.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-core/src/app_templates/store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -293,11 +303,15 @@
 3 cli crates/k2-daemon/src/vault/transcripts.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-root-helper/src/sew.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-signer/src/check.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+3 cli crates/k5-cli/src/families/done.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+3 cli crates/k5-cli/src/pages.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 3 cli src-tauri/src/commands/settings.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/components/Settings/sections/AppsServerSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/components/Settings/sections/CiPreviewRow.tsx debt: the command name typed out; use CLI_NAME from @/lib/brand; B9
+3 cli src/renderer/components/Settings/sections/GeneralSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/lib/context-stack.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/lib/published-subdomains.ts debt: the command name typed out; use CLI_NAME or cli_name!()
+2 cli crates/k2-client/src/cli_install.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-core/src/agents_leaf.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
 2 cli crates/k2-core/src/app_grace/mod.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-core/src/board/ops.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -382,6 +396,12 @@
 2 cli crates/k2-node/src/node/disk.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-signer/src/provenance.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-vault/src/vault/agent_store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+2 cli crates/k5-cli/src/cli_status.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+2 cli crates/k5-cli/src/families/respond.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+2 cli crates/k5-cli/src/families/update.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+2 cli crates/k5-cli/src/families/whoami.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+2 cli crates/k5-cli/src/families/workspace.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+2 cli crates/k5-cli/src/transport/client.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 2 cli src/renderer/components/AgentPane/inbox-browser.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli src/renderer/components/CloneToDialog/CloneProposalsBanner.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli src/renderer/components/Help/cli-explorer.ts debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -389,7 +409,6 @@
 2 cli src/renderer/components/Settings/sections/AgentContextDiagram.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli src/renderer/components/Settings/sections/ComputeAdminParts.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli src/renderer/components/Settings/sections/ComputeServersParts.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
-2 cli src/renderer/components/Settings/sections/GeneralSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli src/renderer/components/Settings/sections/PermissionCardsSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli src/renderer/components/Settings/sections/VaultDialogs.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli src/renderer/components/Settings/sections/mail-forward-api.ts debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -460,6 +479,7 @@
 1 cli crates/k2-daemon/src/apps/tls_door.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/apps/trends.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/board_file/routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+1 cli crates/k2-daemon/src/cli_beta_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/comms.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/compute_job_network.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/compute_logsearch.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -547,6 +567,10 @@
 1 cli crates/k2-root-proto/src/pg_dual.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-vault/src/policy.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-vault/src/vault/handoff_store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+1 cli crates/k5-cli/src/families/connections/write.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+1 cli crates/k5-cli/src/families/read.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+1 cli crates/k5-cli/src/families/workspace/register.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
+1 cli crates/k5-cli/src/prelude.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 1 cli src/renderer/components/AppsReadyOffer/AppsReadyOffer.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/components/CloneToDialog/CloneOptionsBlocks.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/components/Desktop/DesktopPane.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -576,10 +600,11 @@
 1 cli src/renderer/lib/zen/zen-source-ask.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/stores/active-agents.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 17 value src/renderer/components/Wiki/WikiPage.tsx keeper: wire+inert; the wiki index's scope (daemon); the page's own view mode
+11 value crates/k2-signer/src/verbs.rs keeper: outside; k2sign's project id for this repo's releases
 10 value crates/k2-daemon/src/sql/cluster.rs keeper: stored; the Postgres cluster record's role
-10 value crates/k2-signer/src/verbs.rs keeper: outside; k2sign's project id for this repo's releases
 7 value crates/k2-daemon/src/docs/host.rs keeper: stored; the docs audit's actor
 7 value src-tauri/src/commands/settings.rs debt: command (6 lines); B9; keeps: outside; the package's lib folder
+6 value crates/k5-cli/src/called_as.rs debt: command (6 lines); B4
 6 value src/renderer/lib/zen/garden-access-api.ts keeper: wire; the Garden access actor and signer kind from the daemon
 5 value cli/src/agent.sh keeper: stored; the agent mode (--mode, settings.rs:26) and an old pack id in a context stack (context_layers.rs:1780), as the daemon reads them
 5 value crates/k2-core/src/overlay/doc.rs keeper: stored+wire; the Thread sender, login and via; a collected line's origin
@@ -597,7 +622,6 @@
 4 value crates/k2-signer/src/registry.rs keeper: outside; k2sign's project id for this repo's releases
 4 value crates/k2-signer/src/session.rs keeper: outside; k2sign's project id for this repo's releases
 4 value src/renderer/components/Wiki/wiki-graph-data.ts keeper: inert; the wiki page's own view mode
-3 value cli/src/app-doctor.sh keeper: wire; createdWith.k2 in the App routes' JSON (deploy/build.rs:28), and an App manifest's requires.k2 in the help
 3 value crates/k2-core/src/jscheck/inventory.rs keeper: wire; the k2 global that App scripts use
 3 value crates/k2-core/src/jscheck/lint.rs keeper: wire; the k2 global that App scripts use
 3 value crates/k2-core/src/sim/manager.rs keeper: stored; sim_audit.actor
@@ -630,11 +654,13 @@
 2 value crates/k2-daemon/src/sql/pgmove/real_move.rs keeper: outside; Postgres, the schema's name
 2 value crates/k2-daemon/src/wiki_routes.rs keeper: wire; the wiki index's scope query
 2 value src/renderer/components/AgentPane/inbox-browser.ts keeper: wire; the chat-about stamp's kind, [k2 inboxID:...]
+2 value src/renderer/components/Settings/sections/GeneralSection.tsx debt: command (2 lines); B9
 2 value src/renderer/components/Settings/sections/SewSection.tsx keeper: wire; the Sew identity the daemon reads
 2 value src/renderer/components/Settings/sections/ZenWidgetData.tsx keeper: wire; madeBy, from the Garden data JSON
 2 value src/renderer/components/Settings/sections/sew-api.ts keeper: wire; the Sew identity the daemon reads
 2 value src/renderer/lib/zen/zen-rail-views.ts keeper: inert; a built-in view's source label that nothing compares
 1 value cli/src/app-catalog.sh keeper: wire; the suite catalog's variant (--variant, suite/mod.rs:45)
+1 value cli/src/app-doctor.sh keeper: wire; createdWith.k2 in the App routes' JSON (deploy/build.rs:28)
 1 value cli/src/compute-run.sh keeper: outside; cargo-nextest's profile, named by the [profile.k2] config the job writes one line above
 1 value cli/src/doc.sh keeper: wire; notReached[].k2 in the purge reply (docs/annotations.rs)
 1 value cli/src/explain.sh keeper: wire; the refusal row's who (refusals/mod.rs:54)
@@ -642,11 +668,15 @@
 1 value cli/src/hostchat-voice.sh keeper: wire; the Sew enable request's identity (--identity, sew/routes.rs:463)
 1 value cli/src/schema-head.sh debt: command (1 line); B8
 1 value cli/src/study-app-api.sh keeper: wire; the refusal registry's who, written here by contract-gen from k2-core (refusals/mod.rs:54)
-1 value cli/src/study-db-mail.sh keeper: wire; an App manifest's requires.k2 (suite/testkit.rs:28)
-1 value cli/src/study-tauri.sh keeper: wire; the App auth door's ping reply (apps/auth_door.rs:938)
 1 value cli/src/thread.sh keeper: wire; the Thread item's sender when no workspace handle is found (OverlayDoc.from)
 1 value cli/src/wiki.sh keeper: stored; the agent mode (--mode, settings.rs:26)
+1 value cli/text/study/app-chat.txt keeper: wire; an App manifest's requires.k2 (suite/testkit.rs:28)
+1 value cli/text/study/app-deploys.txt keeper: wire; an App manifest's requires.k2 (suite/testkit.rs:28)
+1 value cli/text/study/auth-pages.txt keeper: wire; the App auth door's ping reply (apps/auth_door.rs:938)
+1 value cli/text/study/db-upgrade.txt keeper: wire; an App manifest's requires.k2 (suite/testkit.rs:28)
 1 value crates/k2-client/src/account_session.rs debt: command (1 line); B9
+1 value crates/k2-client/src/cli_install.rs debt: command (1 line); B10
+1 value crates/k2-client/src/win_cli.rs keeper: inert; the stand-in script a Windows-only test writes (win_cli.rs tests), read by nothing else
 1 value crates/k2-core/src/cli_folder_trust.rs keeper: outside; Cursor's marker file holds trustMethod; our revoke matches it
 1 value crates/k2-core/src/cli_folder_trust/gate.rs keeper: wire; a trust finding's tool, in the card's and the CLI's JSON
 1 value crates/k2-core/src/compute/trim.rs keeper: stored; compute_admin_settings.updated_by
@@ -729,7 +759,6 @@
 1 value src/renderer/components/Desktop/DesktopPane.tsx keeper: inert; the key router's own route name
 1 value src/renderer/components/Settings/sections/AgentSkillsSection.tsx keeper: inert; a search keyword, the product's name for its agent skill
 1 value src/renderer/components/Settings/sections/DomainsSection.tsx keeper: wire; the firewall's managedBy from the daemon
-1 value src/renderer/components/Settings/sections/GeneralSection.tsx debt: command (1 line); B9
 1 value src/renderer/components/Settings/sections/access-audit-words.ts keeper: stored; the audit log's actor, shown as the product name
 1 value src/renderer/components/Wiki/WikiGraph.tsx keeper: inert; the wiki page's own view mode
 1 value src/renderer/components/Wiki/WikiGraph3D.tsx keeper: inert; the wiki page's own view mode

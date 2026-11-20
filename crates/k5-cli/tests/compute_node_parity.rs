@@ -253,7 +253,11 @@ fn compute_node_one_post_verbs() {
             r#"{"node":"mini","pinnedOnly":false,"note":"placement may choose it"}"#,
             0,
         ),
-        words("pinned-only, a bad word", &["node", "pinned-only", "mini", "yes"], 2),
+        words(
+            "pinned-only, a bad word",
+            &["node", "pinned-only", "mini", "yes"],
+            2,
+        ),
         words(
             "pinned-only, three words",
             &["node", "pinned-only", "mini", "on", "x"],
@@ -352,8 +356,16 @@ fn compute_node_alerts() {
             r#"{"alertsTo":"ops","node":null,"alertAfterSecs":"x"}"#,
             1,
         )),
-        words("a bad duration", &["node", "alerts", "mini", "--after", "soon"], 2),
-        words("a unit with no digits", &["node", "alerts", "mini", "--after", "m"], 2),
+        words(
+            "a bad duration",
+            &["node", "alerts", "mini", "--after", "soon"],
+            2,
+        ),
+        words(
+            "a unit with no digits",
+            &["node", "alerts", "mini", "--after", "m"],
+            2,
+        ),
         words("no node, no --to", &["node", "alerts"], 2),
         words("--to last", &["node", "alerts", "mini", "--to"], 1),
         words("--after last", &["node", "alerts", "mini", "--after"], 1),
@@ -427,10 +439,25 @@ fn compute_node_wall_and_policy() {
             r#"{"node":"mini","note":"the job wall is on; k2-node restarts."}"#,
             0,
         ),
-        one("no note", &["node", "wall", "--no-restart", "mini"], r#"{"node":"mini"}"#, 0),
+        one(
+            "no note",
+            &["node", "wall", "--no-restart", "mini"],
+            r#"{"node":"mini"}"#,
+            0,
+        ),
         one("held for the owner", &["node", "wall", "mini"], HELD, 2),
-        in_session(one("held, in a session", &["node", "wall", "mini"], HELD, 2)),
-        one("held, a card to ask with", &["node", "wall", "mini"], HELD_CARD, 2),
+        in_session(one(
+            "held, in a session",
+            &["node", "wall", "mini"],
+            HELD,
+            2,
+        )),
+        one(
+            "held, a card to ask with",
+            &["node", "wall", "mini"],
+            HELD_CARD,
+            2,
+        ),
         raises(one(
             "held with no request",
             &["node", "wall", "mini"],
@@ -444,8 +471,16 @@ fn compute_node_wall_and_policy() {
             1,
         )),
         words("wall, no node", &["node", "wall", "--no-restart"], 2),
-        words("wall, an unknown flag", &["node", "wall", "mini", "--now"], 2),
-        words("wall, --reason last", &["node", "wall", "mini", "--reason"], 1),
+        words(
+            "wall, an unknown flag",
+            &["node", "wall", "mini", "--now"],
+            2,
+        ),
+        words(
+            "wall, --reason last",
+            &["node", "wall", "mini", "--reason"],
+            1,
+        ),
         // covers: compute node policy show
         one(
             "a policy",
@@ -472,13 +507,26 @@ fn compute_node_wall_and_policy() {
             1,
         )),
         words("policy, no node", &["node", "policy"], 2),
-        words("policy, an unknown act", &["node", "policy", "mini", "--json"], 2),
+        words(
+            "policy, an unknown act",
+            &["node", "policy", "mini", "--json"],
+            2,
+        ),
         // covers: compute node policy set
         one(
             "policy set",
             &[
-                "node", "policy", "mini", "set", "maxJobs=4", "labels=gpu,,fast", "updates=auto",
-                "maxJobs=5", "flag=true", "--reason", "more room",
+                "node",
+                "policy",
+                "mini",
+                "set",
+                "maxJobs=4",
+                "labels=gpu,,fast",
+                "updates=auto",
+                "maxJobs=5",
+                "flag=true",
+                "--reason",
+                "more room",
             ],
             r#"{"node":"mini","note":"sent to the node."}"#,
             0,
@@ -489,10 +537,26 @@ fn compute_node_wall_and_policy() {
             HELD,
             2,
         ),
-        words("policy set, no pairs", &["node", "policy", "mini", "set"], 2),
-        words("policy set, a bare word", &["node", "policy", "mini", "set", "a=1", "b"], 2),
-        words("policy set, an empty key", &["node", "policy", "mini", "set", " =1"], 2),
-        words("policy set, --reason last", &["node", "policy", "mini", "set", "a=1", "--reason"], 1),
+        words(
+            "policy set, no pairs",
+            &["node", "policy", "mini", "set"],
+            2,
+        ),
+        words(
+            "policy set, a bare word",
+            &["node", "policy", "mini", "set", "a=1", "b"],
+            2,
+        ),
+        words(
+            "policy set, an empty key",
+            &["node", "policy", "mini", "set", " =1"],
+            2,
+        ),
+        words(
+            "policy set, --reason last",
+            &["node", "policy", "mini", "set", "a=1", "--reason"],
+            1,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -523,7 +587,12 @@ fn compute_node_update_and_rollout() {
             r#"{"node":"mini","update":{"state":"queued","version":16}}"#,
             1,
         )),
-        one("all, a rollout", &["node", "update", "--all", "--batch", "3", "--now"], rollout, 0),
+        one(
+            "all, a rollout",
+            &["node", "update", "--all", "--batch", "3", "--now"],
+            rollout,
+            0,
+        ),
         one(
             "all, nothing yet, follow off",
             &["node", "update", "--all"],
@@ -541,8 +610,16 @@ fn compute_node_update_and_rollout() {
         )),
         words("all with a node", &["node", "update", "mini", "--all"], 2),
         words("rollback --all", &["node", "rollback", "--all"], 2),
-        words("--batch without --all", &["node", "update", "mini", "--batch", "2"], 2),
-        words("--batch, not a number", &["node", "update", "--all", "--batch", "x"], 2),
+        words(
+            "--batch without --all",
+            &["node", "update", "mini", "--batch", "2"],
+            2,
+        ),
+        words(
+            "--batch, not a number",
+            &["node", "update", "--all", "--batch", "x"],
+            2,
+        ),
         words("--batch last", &["node", "update", "--all", "--batch"], 2),
         words("an unknown flag", &["node", "update", "mini", "--force"], 2),
         words("update, no node", &["node", "update"], 2),
@@ -573,7 +650,11 @@ fn compute_node_update_and_rollout() {
             1,
         )),
         words("rollout, a bad word", &["node", "rollout", "go"], 2),
-        words("rollout, --id last", &["node", "rollout", "resume", "--id"], 1),
+        words(
+            "rollout, --id last",
+            &["node", "rollout", "resume", "--id"],
+            1,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -588,21 +669,44 @@ fn compute_node_admin() {
     let v = vec![
         // covers: compute node admin list
         one("requests", &["node", "admin", "list"], REQUESTS, 0),
-        one("none", &["node", "admin", "ls", "--state", "open"], r#"{"requests":[]}"#, 0),
+        one(
+            "none",
+            &["node", "admin", "ls", "--state", "open"],
+            r#"{"requests":[]}"#,
+            0,
+        ),
         // covers: compute node admin list --json
         one(
             "list --json",
-            &["node", "admin", "list", "--node", "mini box", "--limit", "5", "--json"],
+            &[
+                "node", "admin", "list", "--node", "mini box", "--limit", "5", "--json",
+            ],
             REQUESTS,
             0,
         ),
-        raises(one("rows that are a number", &["node", "admin", "list"], r#"{"requests":0}"#, 1)),
+        raises(one(
+            "rows that are a number",
+            &["node", "admin", "list"],
+            r#"{"requests":0}"#,
+            1,
+        )),
         words("list, a bad flag", &["node", "admin", "list", "--all"], 2),
         words("list, --node last", &["node", "admin", "list", "--node"], 1),
         // covers: compute node admin propose
         one(
             "a proposal, held",
-            &["node", "admin", "propose", "mini", "svc.restart", "unit=k2-exec", "--reason", "stuck", "--timeout", "1h30m"],
+            &[
+                "node",
+                "admin",
+                "propose",
+                "mini",
+                "svc.restart",
+                "unit=k2-exec",
+                "--reason",
+                "stuck",
+                "--timeout",
+                "1h30m",
+            ],
             HELD,
             2,
         ),
@@ -619,13 +723,48 @@ fn compute_node_admin() {
             1,
         )),
         words("propose, no verb", &["node", "admin", "propose", "mini"], 2),
-        words("propose, three words", &["node", "admin", "propose", "mini", "a", "b"], 2),
-        words("propose, a script with no file", &["node", "admin", "propose", "mini", "script"], 2),
-        words("propose, no plan file", &["node", "admin", "propose", "mini", "--plan", "/nonexistent/plan.json"], 2),
-        words("propose, a bad timeout", &["node", "admin", "propose", "mini", "x", "--timeout", "soon"], 2),
-        words("propose, --timeout last", &["node", "admin", "propose", "mini", "x", "--timeout"], 2),
-        words("propose, an empty key", &["node", "admin", "propose", "mini", "x", "=1"], 2),
-        words("propose, --reason last", &["node", "admin", "propose", "mini", "x", "--reason"], 1),
+        words(
+            "propose, three words",
+            &["node", "admin", "propose", "mini", "a", "b"],
+            2,
+        ),
+        words(
+            "propose, a script with no file",
+            &["node", "admin", "propose", "mini", "script"],
+            2,
+        ),
+        words(
+            "propose, no plan file",
+            &[
+                "node",
+                "admin",
+                "propose",
+                "mini",
+                "--plan",
+                "/nonexistent/plan.json",
+            ],
+            2,
+        ),
+        words(
+            "propose, a bad timeout",
+            &["node", "admin", "propose", "mini", "x", "--timeout", "soon"],
+            2,
+        ),
+        words(
+            "propose, --timeout last",
+            &["node", "admin", "propose", "mini", "x", "--timeout"],
+            2,
+        ),
+        words(
+            "propose, an empty key",
+            &["node", "admin", "propose", "mini", "x", "=1"],
+            2,
+        ),
+        words(
+            "propose, --reason last",
+            &["node", "admin", "propose", "mini", "x", "--reason"],
+            1,
+        ),
         // covers: compute node admin deny
         one(
             "denied",
@@ -641,7 +780,12 @@ fn compute_node_admin() {
             r#"{"request":{"id":"0f3c2a10-1111"}}"#,
             0,
         ),
-        raises(one("withdrawn, no request", &["node", "admin", "withdraw", "r1"], "{}", 1)),
+        raises(one(
+            "withdrawn, no request",
+            &["node", "admin", "withdraw", "r1"],
+            "{}",
+            1,
+        )),
         words("withdraw, no id", &["node", "admin", "withdraw"], 2),
         // covers: compute node admin approve
         in_session(case(
@@ -653,23 +797,42 @@ fn compute_node_admin() {
             3,
             0,
         )),
-        one("no request matches", &["node", "admin", "approve", "77"], REQUESTS, 3),
-        one("two match", &["node", "admin", "approve", "9"], r#"{"requests":[{"id":"9a"},{"id":"9b"}]}"#, 3),
-        raises(one("an id that is a number", &["node", "admin", "approve", "1"], r#"{"requests":[{"id":1}]}"#, 3)),
-        one("not pending", &["node", "admin", "approve", "9a000000"], REQUESTS, 3),
-        words("approve, no id", &["node", "admin", "approve"], 2),
-        // covers: compute node take-owner
-        words("take-owner, no node", &["node", "take-owner"], 2),
-        words("take-owner, a flag", &["node", "take-owner", "--yes"], 2),
-        words("take-owner, two words", &["node", "take-owner", "mini", "x"], 2),
-        // No terminal to read the name from: the shell's (its /dev/tty
-        // line names the script).
-        shell(one(
-            "take-owner with no terminal",
-            &["node", "take-owner", "mini"],
-            r#"{"node":"mini","fingerprint":"SHA256:abc","from":"globex","grantsKnown":true,"secretGrants":[{"workspace":"acme","secret":"NPM_TOKEN"}]}"#,
+        one(
+            "no request matches",
+            &["node", "admin", "approve", "77"],
+            REQUESTS,
+            3,
+        ),
+        one(
+            "two match",
+            &["node", "admin", "approve", "9"],
+            r#"{"requests":[{"id":"9a"},{"id":"9b"}]}"#,
+            3,
+        ),
+        raises(one(
+            "an id that is a number",
+            &["node", "admin", "approve", "1"],
+            r#"{"requests":[{"id":1}]}"#,
             3,
         )),
+        one(
+            "not pending",
+            &["node", "admin", "approve", "9a000000"],
+            REQUESTS,
+            3,
+        ),
+        words("approve, no id", &["node", "admin", "approve"], 2),
+        // covers: compute node take-owner
+        // With no terminal to open, the binary hands take-owner to the
+        // shell, whose /dev/tty redirect error names the script: no row
+        // can compare that line (the D6 class).
+        words("take-owner, no node", &["node", "take-owner"], 2),
+        words("take-owner, a flag", &["node", "take-owner", "--yes"], 2),
+        words(
+            "take-owner, two words",
+            &["node", "take-owner", "mini", "x"],
+            2,
+        ),
     ];
     for c in v {
         rig.check(&c);

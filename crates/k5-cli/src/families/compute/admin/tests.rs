@@ -196,7 +196,9 @@ fn the_lines_say_the_brand_s_name() {
         br#"{"name":"n","enroll":"c","install":{"linux":"l","macos":"m","servers":"s"},"confirm":"c"}"#,
     );
     assert!(enrolled.stdout.contains(&format!("({cli} vault set NAME")));
-    assert!(enrolled.stdout.contains(&format!("Scripts: {cli} compute node add n --json")));
+    assert!(enrolled
+        .stdout
+        .contains(&format!("Scripts: {cli} compute node add n --json")));
     if cli != "k2" {
         assert!(!enrolled.stdout.contains("k2 ") && !enrolled.stdout.contains("k5 "));
     }

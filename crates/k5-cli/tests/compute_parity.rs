@@ -511,15 +511,7 @@ fn compute_hands_these_to_the_shell() {
             0,
             0,
         )),
-        shell(case(
-            "preview on",
-            &["preview", "on"],
-            &[],
-            vec![ok(r#"{"computePreview":true}"#)],
-            owner_and_port,
-            0,
-            1,
-        )),
+        // `preview on` itself is the admin verbs' (compute_admin_parity).
         // Help never acts: the write forms of these arms print help and
         // send nothing.
         shell(case(

@@ -26,11 +26,11 @@ use super::super::lines::{py_line, LIB};
 use super::super::pyrt::{self as p, s};
 use super::super::render::{self, Cx};
 use super::super::writes::{body_of, dumps, object, print_body, str_value, Cp, Words};
-use std::path::Path;
 use crate::exit::Exit;
 use crate::families::{raised, Raise, Shown};
 use crate::out::json::Value;
 use k2_client::{brand::CLI_NAME, cli_name, product_name};
+use std::path::Path;
 
 /// `cli/src/compute-node.sh`.
 const SRC: &str = include_str!("../../../../../../cli/src/compute-node.sh");
@@ -66,11 +66,7 @@ pub const CONFIRM_USAGE: &str = concat!(
 );
 pub const REMOVE_USAGE: &str = concat!("usage: ", cli_name!(), " compute node remove <name>");
 pub const RETIRE_USAGE: &str = concat!("usage: ", cli_name!(), " compute node retire <name>");
-pub const RENAME_USAGE: &str = concat!(
-    "usage: ",
-    cli_name!(),
-    " compute node rename <old> <new>"
-);
+pub const RENAME_USAGE: &str = concat!("usage: ", cli_name!(), " compute node rename <old> <new>");
 pub const PINNED_USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
@@ -81,11 +77,8 @@ pub const ROUTE_USAGE: &str = concat!(
     cli_name!(),
     " compute node route add|rm <name> <url>"
 );
-pub const TAKE_OWNER_USAGE: &str = concat!(
-    "usage: ",
-    cli_name!(),
-    " compute node take-owner <node>"
-);
+pub const TAKE_OWNER_USAGE: &str =
+    concat!("usage: ", cli_name!(), " compute node take-owner <node>");
 pub const ALERTS_USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
@@ -462,7 +455,12 @@ fn enroll(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     let v = render::load(cx, body, render_line!("v = json.load(sys.stdin)"))?;
     let l = render_line!("print(\"Enroll code for %s (expires in 10 minutes):\"");
     let name = cx.at(l, p::idx(&v, "name"))?;
-    print(cx, l, "Enroll code for %s (expires in 10 minutes):", &[name])?;
+    print(
+        cx,
+        l,
+        "Enroll code for %s (expires in 10 minutes):",
+        &[name],
+    )?;
     let l = render_line!("print(\"  %s\" % v[\"enroll\"])");
     let code = cx.at(l, p::idx(&v, "enroll"))?;
     print(cx, l, "  %s", &[code])?;
@@ -489,7 +487,11 @@ fn enroll(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     if p::truthy(&cx.at(l, p::get(&x, "servers"))?) {
         let l = render_line!("print(\"  Already a node for another ");
         let x = install(cx, l, "servers")?;
-        let fmt = concat!("  Already a node for another ", product_name!(), " server: %s");
+        let fmt = concat!(
+            "  Already a node for another ",
+            product_name!(),
+            " server: %s"
+        );
         print(cx, l, fmt, &[x])?;
     }
     cx.print("The node prints a 6-digit code. Check it, then here:");
@@ -566,7 +568,12 @@ fn pinned_only(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         " (it already was)"
     };
     let note = cx.at(1, p::idx(&v, "note"))?;
-    print(cx, 1, "%s: pinned-only %s%s. %s.", &[node, s(on), s(was), note])
+    print(
+        cx,
+        1,
+        "%s: pinned-only %s%s. %s.",
+        &[node, s(on), s(was), note],
+    )
 }
 
 fn routes(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {

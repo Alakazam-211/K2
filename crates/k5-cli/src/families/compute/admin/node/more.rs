@@ -74,13 +74,17 @@ pub const DENY_USAGE: &str = concat!(
     cli_name!(),
     " compute node admin deny <id> [--why …]"
 );
-pub const WITHDRAW_USAGE: &str = concat!(
-    "usage: ",
-    cli_name!(),
-    " compute node admin withdraw <id>"
-);
+pub const WITHDRAW_USAGE: &str =
+    concat!("usage: ", cli_name!(), " compute node admin withdraw <id>");
 
-fn call(post: bool, path: &str, body: String, held: Held, json: bool, reader: Reader) -> Words<Ask> {
+fn call(
+    post: bool,
+    path: &str,
+    body: String,
+    held: Held,
+    json: bool,
+    reader: Reader,
+) -> Words<Ask> {
     Words::Ask(Ask::Call(Call {
         post,
         path: path.to_string(),
@@ -133,7 +137,14 @@ pub fn wall(rest: &[&str]) -> Option<Words<Ask>> {
         pairs.push(("reason", str_value(reason)));
     }
     let body = dumps(&object(pairs));
-    Some(call(true, "/cli/compute/nodes/wall", body, Held::IfHeld, false, Reader::NodeNote))
+    Some(call(
+        true,
+        "/cli/compute/nodes/wall",
+        body,
+        Held::IfHeld,
+        false,
+        Reader::NodeNote,
+    ))
 }
 
 /// `update|rollback <node> [--canary] [--now]`, `update --all [--batch N]
@@ -195,7 +206,9 @@ pub fn update(sub: &str, rest: &[&str]) -> Option<Words<Ask>> {
         return usage("usage: --batch goes with --all");
     }
     if node.is_empty() {
-        return usage(format!("usage: {CLI_NAME} compute node {sub} <node> [--now]"));
+        return usage(format!(
+            "usage: {CLI_NAME} compute node {sub} <node> [--now]"
+        ));
     }
     let mut pairs = vec![("node", str_value(node)), ("canary", Value::Bool(canary))];
     if now {
@@ -236,7 +249,14 @@ pub fn rollout(rest: &[&str]) -> Option<Words<Ask>> {
         )
     } else {
         let path = format!("/cli/compute/nodes/rollout/{verb}");
-        call(true, &path, body_of(&[("id", id)]), Held::No, json, Reader::Rollout)
+        call(
+            true,
+            &path,
+            body_of(&[("id", id)]),
+            Held::No,
+            json,
+            Reader::Rollout,
+        )
     })
 }
 
@@ -335,7 +355,9 @@ pub fn kv_json(pairs: &[&str]) -> Result<Value, Words<Ask>> {
             None => out.push((k.to_string(), val)),
         }
     }
-    Ok(object(out.iter().map(|(k, v)| (k.as_str(), v.clone())).collect()))
+    Ok(object(
+        out.iter().map(|(k, v)| (k.as_str(), v.clone())).collect(),
+    ))
 }
 
 /// `admin [propose|list|ls|approve|deny|withdraw] ...`.
@@ -439,8 +461,7 @@ fn is_file(path: &str) -> bool {
 }
 
 fn propose(rest: &[&str]) -> Option<Words<Ask>> {
-    let (mut node, mut verb, mut reason, mut file, mut interp, mut plan) =
-        ("", "", "", "", "", "");
+    let (mut node, mut verb, mut reason, mut file, mut interp, mut plan) = ("", "", "", "", "", "");
     let mut timeout: Option<i64> = None;
     let mut pairs = vec![];
     let mut i = 0;
@@ -626,7 +647,10 @@ pub fn rollout_reader(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         "a few per OS/arch at a time".to_string()
     };
     let l = line!(AFTER, "print(\"rollout %s:");
-    let id = cx.at(l, p::idx(&r, "id").and_then(|x| p::slice(&x, None, Some(8))))?;
+    let id = cx.at(
+        l,
+        p::idx(&r, "id").and_then(|x| p::slice(&x, None, Some(8))),
+    )?;
     let mut args = vec![id];
     for k in ["toVersion", "state", "trigger"] {
         args.push(cx.at(l, p::idx(&r, k))?);

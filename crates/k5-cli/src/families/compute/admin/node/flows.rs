@@ -125,11 +125,11 @@ pub fn held_or_approve(cp: &mut Cp<'_>, sock: &Path, body: &[u8]) -> Exit {
     if let Err(e) = to_stderr(cx, r) {
         return e;
     }
-    let no_approve = k2_client::env_names::first_nonempty_os_in(
-        k2_client::env_names::NO_APPROVE,
-        |n| std::env::var_os(n),
-    )
-    .is_some_and(|(_, v)| v == "1");
+    let no_approve =
+        k2_client::env_names::first_nonempty_os_in(k2_client::env_names::NO_APPROVE, |n| {
+            std::env::var_os(n)
+        })
+        .is_some_and(|(_, v)| v == "1");
     if !in_session(&cp.client.auth) && prompt::stdin_is_tty() && !no_approve {
         return approve(cp, sock, &id);
     }
@@ -158,7 +158,12 @@ pub fn approve(cp: &mut Cp<'_>, sock: &Path, want: &str) -> Exit {
         ));
         return Exit::Refused;
     }
-    let list = match cp.call(false, "/cli/compute/admin/requests", "state=all&limit=500", true) {
+    let list = match cp.call(
+        false,
+        "/cli/compute/admin/requests",
+        "state=all&limit=500",
+        true,
+    ) {
         Ok(b) => b,
         Err(e) => return e,
     };
@@ -327,12 +332,21 @@ pub fn take_owner(cp: &mut Cp<'_>, sock: &Path, node: &str) -> Exit {
         return Exit::Refused;
     }
     stderr_text(&format!("Type the node name ({tname}) to take it over: "));
-    let typed = prompt::read_dev_tty_line().map(|t| t.expose().to_vec()).unwrap_or_default();
+    let typed = prompt::read_dev_tty_line()
+        .map(|t| t.expose().to_vec())
+        .unwrap_or_default();
     if typed != tname.as_bytes() {
-        out::stderr_line("{\"error\":\"not_confirmed\",\"hint\":\"the name did not match; nothing changed\"}");
+        out::stderr_line(
+            "{\"error\":\"not_confirmed\",\"hint\":\"the name did not match; nothing changed\"}",
+        );
         return Exit::Refused;
     }
-    let info = match cp.call(false, "/cli/compute/nodes/info", &format!("node={}", quote(&tname)), false) {
+    let info = match cp.call(
+        false,
+        "/cli/compute/nodes/info",
+        &format!("node={}", quote(&tname)),
+        false,
+    ) {
         Ok(b) => b,
         Err(e) => return e,
     };

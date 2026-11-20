@@ -922,15 +922,23 @@ fn tunnel_with_no_answer() {
             56,
             2,
         ),
-        waited(case(
-            "boot-status ghost: an empty reply",
-            &["boot-status", "ghost"],
-            &[],
-            vec![Reply::Close],
-            owner_and_port,
-            141,
-            1,
-        )),
+        // A no answer on the left of the pipe: macOS's bash 3.2 runs the
+        // reader on an empty input (`bash32-pipe-reader`).
+        Case {
+            compare: Compare::Bash32PipeReader {
+                stdout: "",
+                stderr: "Error: daemon returned an unparseable response: ''\n",
+            },
+            ..case(
+                "boot-status ghost: an empty reply",
+                &["boot-status", "ghost"],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                141,
+                1,
+            )
+        },
         case(
             "boot-status: a reset",
             &["boot-status"],

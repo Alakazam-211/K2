@@ -241,7 +241,12 @@ fn check(
     let want = python(script, &cases);
     let mut bad = Vec::new();
     for (body, (stdout, exc)) in bodies.iter().zip(&want) {
-        let (out, err) = rust(body.as_bytes(), now);
+        // `time.localtime(None)` and `time.time()` are when Python ran,
+        // a few seconds after `now`: one of those seconds must match.
+        let (out, err) = (0..6)
+            .map(|d| rust(body.as_bytes(), now + d))
+            .find(|(o, e)| o == stdout && &class_of(e) == exc)
+            .unwrap_or_else(|| rust(body.as_bytes(), now));
         let class = class_of(&err);
         if &out != stdout || &class != exc {
             bad.push(format!(

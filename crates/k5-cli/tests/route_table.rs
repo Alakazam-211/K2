@@ -774,19 +774,16 @@ fn every_router_form_is_a_k5_row_or_listed_in_the_native_bar_ceiling() {
 /// `cli/src/router.sh`): each verb row's
 /// words are words of that case's arms (up to its `esac`), or of `extra`
 /// (verbs the function takes before the case).
-fn case_verbs_are_its_arms(
-    noun: &k5_cli::route::Noun,
-    file: &str,
-    start: &str,
-    extra: &[&str],
-) {
+fn case_verbs_are_its_arms(noun: &k5_cli::route::Noun, file: &str, start: &str, extra: &[&str]) {
     let sources = common::shell_sources();
     let text = &sources
         .iter()
         .find(|(name, _)| name == file)
         .unwrap_or_else(|| panic!("cli/src/{file}"))
         .1;
-    let body = &text[text.find(start).unwrap_or_else(|| panic!("{start:?} in {file}"))..];
+    let body = &text[text
+        .find(start)
+        .unwrap_or_else(|| panic!("{start:?} in {file}"))..];
     let case_line = start.trim_end_matches('\n');
     let case_line = &case_line[case_line.rfind('\n').map_or(0, |i| i + 1)..];
     let indent: String = case_line.chars().take_while(|c| *c == ' ').collect();
@@ -814,7 +811,10 @@ fn case_verbs_are_its_arms(
     arms.extend(extra.iter().map(|w| w.to_string()));
     for verb in noun.verb_rows() {
         for w in verb.words {
-            assert!(arms.contains(*w), "{w} is no arm of {file}'s case: {arms:?}");
+            assert!(
+                arms.contains(*w),
+                "{w} is no arm of {file}'s case: {arms:?}"
+            );
         }
     }
 }

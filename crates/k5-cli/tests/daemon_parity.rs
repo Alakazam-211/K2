@@ -127,7 +127,15 @@ fn daemon_status_answers_as_the_shell_does() {
         ),
         with(
             env(&rig, "user-unit"),
-            case("status: a user unit", &["status"], &[], vec![ptyd()], files, 0, 1),
+            case(
+                "status: a user unit",
+                &["status"],
+                &[],
+                vec![ptyd()],
+                files,
+                0,
+                1,
+            ),
         ),
         with(
             env(&rig, "user-unit"),

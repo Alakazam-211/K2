@@ -7,6 +7,12 @@
 //! - [`wallet`]: `app wallet settings|people|remove|personal-agent|personal-agents`.
 //! - [`reads`]: `app list` (`--workspace`, `--box`), `app inspect` (not
 //!   `--resources`) and `app deployment`.
+//! - [`access`]: `app people`, `app discovery`, `app stay-signed-in`,
+//!   `app profile settings` and `app set`.
+//! - [`door`]: `app suspend`, `app self`, `app usage`, `app members`,
+//!   `app remote-pass` and `app account-deletion` (list, complete, cancel).
+//! - [`updates`]: `app updates ls|list|stats|fleet`, its page and its
+//!   usage line; its other verbs are the shell's.
 //!
 //! What runs, in the shell's order:
 //!
@@ -39,9 +45,12 @@ use crate::python;
 use std::ffi::OsString;
 use std::path::Path;
 
+pub mod access;
 pub mod call;
+pub mod door;
 pub mod py;
 pub mod reads;
+pub mod updates;
 pub mod wallet;
 
 use call::Ctx;
@@ -56,6 +65,9 @@ pub enum Ask {
     List(reads::List),
     Deployment(reads::Deployment),
     Inspect(reads::Inspect),
+    Access(access::Ask),
+    Door(door::Ask),
+    Updates(updates::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -91,6 +103,19 @@ pub const TAKES: &[&str] = &[
     "list",
     "inspect",
     "deployment",
+    "people",
+    "discovery",
+    "stay-signed-in",
+    "profile",
+    "set",
+    "suspend",
+    "self",
+    "usage",
+    "members",
+    "remote-pass",
+    "account-deletion",
+    "account-deletions",
+    "updates",
 ];
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -116,6 +141,54 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["deployment"],
         owner: crate::route::Owner::Native,
     },
+    crate::route::Verb {
+        words: &["people"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["discovery"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["stay-signed-in"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["profile"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["set"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["suspend"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["self"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["usage"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["members"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["remote-pass"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["account-deletion", "account-deletions"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["updates"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// The words after `app`, read by the group the verb names. `None`: the
@@ -128,6 +201,9 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "list" => Some(reads::parse_list(rest)?.map(Ask::List)),
         "deployment" => Some(reads::parse_deployment(rest)?.map(Ask::Deployment)),
         "inspect" => Some(reads::parse_inspect(rest)?.map(Ask::Inspect)),
+        "updates" => Some(updates::parse(rest)?.map(Ask::Updates)),
+        v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
+        v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
         _ => None,
     }
 }
@@ -194,6 +270,9 @@ fn run_with(
         Ask::List(l) => reads::list(&mut ctx, l),
         Ask::Deployment(d) => reads::deployment(&mut ctx, d),
         Ask::Inspect(i) => reads::inspect(&mut ctx, i),
+        Ask::Access(a) => access::run(&mut ctx, a),
+        Ask::Door(d) => door::run(&mut ctx, d),
+        Ask::Updates(u) => updates::run(&mut ctx, u),
     };
     let exit = match shown {
         Ok(s) => s.print(),

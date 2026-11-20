@@ -381,3 +381,204 @@ fn app_is_the_skin_id_tool() {
     assert_eq!(crate::tools::tool_id("app", "wallet"), TOOL);
     assert!(crate::tools::is_id(TOOL));
 }
+
+/// Each usage line of the access, door and updates groups is the shell's,
+/// with the shell's own name for the command.
+#[test]
+fn group_one_usage_lines_are_the_shell_s() {
+    use super::{access, door, updates};
+    let cases: [(&str, &[&str]); 3] = [
+        (
+            "app-people.sh",
+            &[
+                access::usage::PEOPLE,
+                access::usage::DISCOVERY,
+                access::usage::STAY,
+                access::usage::PROFILE_APP,
+                access::usage::PROFILE_ON_OFF,
+                access::usage::SET_ONE_APP,
+                access::usage::SET_MODE,
+                access::usage::SET_DAYS,
+            ],
+        ),
+        (
+            "app-recording.sh",
+            &[
+                door::usage::SELF,
+                door::usage::USAGE,
+                door::usage::HOURS,
+                door::usage::MEMBERS,
+                door::usage::REMOTE_PASS,
+                door::usage::AD_FLAG_TAIL,
+                door::usage::AD_TOO_MANY,
+                door::usage::AD_LIST_WHO,
+                door::usage::AD_ACT,
+            ],
+        ),
+        (
+            "app-updates.sh",
+            &[
+                updates::usage::VERBS,
+                updates::usage::FLAG_TAIL,
+                updates::usage::LS,
+                updates::usage::STATS,
+                updates::usage::FLEET,
+            ],
+        ),
+    ];
+    for (file, lines) in cases {
+        let src = shell_source(file);
+        for line in lines {
+            let shell = line.replace(k2_client::brand::CLI_NAME, SHELL_NAME);
+            assert!(src.contains(&shell), "{file} no longer has {shell}");
+        }
+    }
+    let door_src = shell_source("app-door.sh");
+    let shell = door::usage::SUSPEND.replace(k2_client::brand::CLI_NAME, SHELL_NAME);
+    assert!(
+        door_src.contains(&shell),
+        "app-door.sh no longer has {shell}"
+    );
+    let wallet_src = shell_source("app-wallet.sh");
+    let shell = access::usage::PROFILE.replace(k2_client::brand::CLI_NAME, SHELL_NAME);
+    assert!(
+        wallet_src.contains(&shell),
+        "app-wallet.sh no longer has {shell}"
+    );
+    for page in [access::SET_PAGE, door::ACCOUNT_DELETION_PAGE, updates::PAGE] {
+        assert!(crate::text::help(page).is_some(), "{page}");
+    }
+}
+
+#[test]
+fn compute_json_numbers_and_raw_json() {
+    assert_eq!(
+        Cj::new()
+            .s("app", "a")
+            .n("days", "007")
+            .n("none", "")
+            .n("zero", "000")
+            .j("listed", "true")
+            .body(),
+        r#"{"app": "a", "days": 7, "zero": 0, "listed": true}"#
+    );
+}
+
+#[test]
+fn group_one_words() {
+    use super::{access, door, updates};
+    let a = |verb: &str, w: &[&str]| access::parse(verb, w).unwrap();
+    assert_eq!(
+        a("discovery", &["acme", "on"]).unwrap(),
+        access::Ask::Discovery {
+            app: "acme".into(),
+            listed: "true"
+        }
+    );
+    assert_eq!(
+        a("discovery", &["", "off"]).unwrap_err(),
+        Stop::usage(access::usage::DISCOVERY)
+    );
+    assert_eq!(
+        a("stay-signed-in", &["acme", "1x"]).unwrap_err(),
+        Stop::usage(access::usage::STAY)
+    );
+    assert_eq!(
+        a("profile", &["settings", "acme", "--names"]).unwrap_err(),
+        Stop::silent(Exit::Error)
+    );
+    assert_eq!(
+        a(
+            "set",
+            &["acme", "--deletion-grace=30d", "--client-logs-days", "d"]
+        )
+        .unwrap(),
+        access::Ask::Set {
+            app: "acme".into(),
+            mode: String::new(),
+            grace: "30".into(),
+            logs: String::new(),
+            json: false
+        }
+    );
+    assert!(access::parse("people", &["acme", "-h"]).is_none());
+    let d = |verb: &str, w: &[&str]| door::parse(verb, w).unwrap();
+    assert_eq!(
+        d("remote-pass", &["acme", "--revoke", "p1", "--json"]).unwrap(),
+        door::Ask::RemotePass {
+            app: "acme".into(),
+            revoke: true,
+            id: "p1".into(),
+            json: true
+        }
+    );
+    assert_eq!(
+        d("account-deletion", &["complete", "acme"]).unwrap_err(),
+        Stop::usage(format!(
+            "{}complete <app> <adr_\u{2026}|username>",
+            door::usage::AD_ACT
+        ))
+    );
+    assert_eq!(
+        d("usage", &["acme", "--hours", "x"]).unwrap_err(),
+        Stop::usage(door::usage::HOURS)
+    );
+    assert!(updates::parse(&["push", "a"]).is_none());
+    assert_eq!(updates::parse(&[]).unwrap().unwrap(), updates::Ask::Page);
+    assert_eq!(
+        updates::parse(&["zap"]).unwrap().unwrap(),
+        updates::Ask::Unknown
+    );
+    assert_eq!(
+        updates::parse(&["fleet", "x"]).unwrap().unwrap_err(),
+        Stop::usage(updates::usage::FLEET)
+    );
+}
+
+#[test]
+fn group_one_printers() {
+    use super::{access, door, updates};
+    let s = printed(
+        access::people_lines,
+        r#"{"app":"acme","settings":{"maxDevices":5,"staySignedInDays":30,"listed":true},"people":[{"username":"ann","enabled":true,"cells":[{"handle":"ws-a","caps":["read","write"],"folders":{"read":["docs"],"write":["out"]}}]},{"username":"bo","fullName":"Bo B","enabled":false}],"devices":[{"id":"d1","username":"ann","name":"phone","via":"pairing"}]}"#,
+    );
+    assert_eq!(
+        s.stdout,
+        concat!(
+            "App acme: at most 5 devices a person; stay signed in 30 days; listed for sign-in on\n",
+            "  ann (ann) \u{b7} rooms only (Thread)\n",
+            "    ws-a                 read, write  [read docs, write out]\n",
+            "  Bo B (bo) \u{b7} off\n",
+            "  device d1: ann \u{b7} phone \u{b7} paired by QR\n"
+        )
+    );
+    let s = printed(
+        door::usage_lines,
+        r#"{"app":"a","hours":24,"totals":{"calls":3,"denied":1,"bytesIn":10,"bytesOut":20},"quotas":{"rps":5,"burst":10,"sockets":2,"subscriptions":4},"live":{"connections":1,"subscriptions":0},"verbs":[{"calls":3,"verb":null,"route":"/x","denied":1}]}"#,
+    );
+    assert!(
+        s.stdout
+            .ends_with("       3  -                        /x  (1 refused)\n"),
+        "{}",
+        s.stdout
+    );
+    let s = printed(
+        updates::stats_lines,
+        r#"{"app":"a","from":"f","to":"t","downloads":{"available":true,"total":2.5,"byVersion":[{"version":"1","downloads":2}]},"activeUsers":{"today":1,"last7Days":2,"counting":"checks","checks":3,"byVersion":{"b":1,"a":2}}}"#,
+    );
+    assert_eq!(
+        s.stdout,
+        concat!(
+            "a, f to t\n",
+            "Downloads: 2\n",
+            "  1                   2\n",
+            "Active users: 1 today, 2 at most on one day this week (counting checks); 3 checks\n",
+            "  a                   2\n",
+            "  b                   1\n"
+        )
+    );
+    assert_eq!(super::py::f(1.25, 6, 1), "   1.2");
+    assert_eq!(super::py::f(f64::INFINITY, 6, 1), "   inf");
+    let r = super::py::local_minutes(&super::py::text("x"), 8).unwrap_err();
+    assert!(r.exception.starts_with("TypeError"), "{r:?}");
+}

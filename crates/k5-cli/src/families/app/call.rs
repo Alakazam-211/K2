@@ -388,6 +388,34 @@ impl Cj {
         self.put(key, Value::Bool(value == "1"))
     }
 
+    /// `K2_CJ_<key>_n=<value>`: `int(value)`, or `float(value)` when it
+    /// has a `.`. Callers hand it only digits (their loops check), so a
+    /// value Python's `int` would refuse never comes here.
+    pub fn n(self, key: &str, value: &str) -> Cj {
+        if value.is_empty() {
+            return self;
+        }
+        let v = if value.contains('.') {
+            value.parse().map_or(Value::Null, Value::Float)
+        } else {
+            let digits = value.trim_start_matches('0');
+            Value::Int(if digits.is_empty() { "0" } else { digits }.to_string())
+        };
+        self.put(key, v)
+    }
+
+    /// `K2_CJ_<key>_j=<value>`: `json.loads(value)`. Callers hand it only
+    /// JSON they made.
+    pub fn j(self, key: &str, value: &str) -> Cj {
+        if value.is_empty() {
+            return self;
+        }
+        match json::parse(value) {
+            Ok(v) => self.put(key, v),
+            Err(_) => self,
+        }
+    }
+
     /// The body, as `print(json.dumps(out))` held in `$(…)`.
     pub fn body(&self) -> String {
         json::to_string(&Value::Object(self.pairs.clone()), &Options::default())

@@ -263,3 +263,164 @@ pub fn lt_2_60(v: &Value, line: u32) -> Result<bool, Raise> {
         )),
     }
 }
+
+/// `'%-<width>s' % v`.
+pub fn left(v: &Value, width: usize) -> String {
+    super::super::ljust(&s(v), width)
+}
+
+/// `'%<width>s' % v`: `str(v)` padded on the left to `width` code points.
+pub fn right(v: &Value, width: usize) -> String {
+    rjust(&s(v), width)
+}
+
+/// `text.rjust(width)`.
+pub fn rjust(text: &str, width: usize) -> String {
+    let n = text.chars().count();
+    if n < width {
+        format!("{}{text}", " ".repeat(width - n))
+    } else {
+        text.to_string()
+    }
+}
+
+/// `'%<width>d' % v`, or the exception at `line`.
+pub fn d(v: &Value, width: usize, line: u32) -> Result<String, Raise> {
+    Ok(rjust(&super::super::py_d(v, line)?, width))
+}
+
+/// `v / by` for a float `by`: the float Python gets, or the exception at
+/// `line`.
+pub fn div(v: &Value, by: f64, line: u32) -> Result<f64, Raise> {
+    let x = match v {
+        Value::Float(f) => *f,
+        Value::Bool(b) => f64::from(u8::from(*b)),
+        Value::Int(digits) => {
+            let f: f64 = digits.parse().unwrap_or(f64::INFINITY);
+            if f.is_infinite() {
+                return Err(Raise::at(
+                    line,
+                    "OverflowError: int too large to convert to float",
+                ));
+            }
+            f
+        }
+        other => {
+            return Err(Raise::at(
+                line,
+                format!(
+                    "TypeError: unsupported operand type(s) for /: '{}' and 'float'",
+                    py::type_name(other)
+                ),
+            ))
+        }
+    };
+    Ok(x / by)
+}
+
+/// `'%<width>.<prec>f' % x`.
+pub fn f(x: f64, width: usize, prec: usize) -> String {
+    let text = if x.is_nan() {
+        "nan".to_string()
+    } else if x.is_infinite() {
+        (if x > 0.0 { "inf" } else { "-inf" }).to_string()
+    } else {
+        format!("{x:.prec$}")
+    };
+    rjust(&text, width)
+}
+
+/// `v <= now` for a float `now`, or the `TypeError` at `line`.
+pub fn le(v: &Value, now: f64, line: u32) -> Result<bool, Raise> {
+    match v {
+        Value::Float(x) => Ok(*x <= now),
+        Value::Bool(b) => Ok(f64::from(u8::from(*b)) <= now),
+        Value::Int(digits) => Ok(digits.parse::<f64>().unwrap_or(f64::INFINITY) <= now),
+        other => Err(Raise::at(
+            line,
+            format!(
+                "TypeError: '<=' not supported between instances of '{}' and 'float'",
+                py::type_name(other)
+            ),
+        )),
+    }
+}
+
+/// `time.time()`.
+pub fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// `time.strftime("%Y-%m-%d %H:%M", time.localtime(v))`, or the exception
+/// at `line` (`None` is now, as Python takes it).
+pub fn local_minutes(v: &Value, line: u32) -> Result<String, Raise> {
+    const RANGE: &str = "OverflowError: timestamp out of range for platform time_t";
+    let secs: i64 = match v {
+        Value::Null => now().floor() as i64,
+        Value::Bool(b) => i64::from(*b),
+        Value::Int(digits) => digits.parse().map_err(|_| Raise::at(line, RANGE))?,
+        Value::Float(x) if x.is_nan() => {
+            return Err(Raise::at(
+                line,
+                "ValueError: Invalid value NaN (not a number)",
+            ))
+        }
+        Value::Float(x) => {
+            let w = x.floor();
+            // i64::MAX as f64 rounds up to 2^63, which is out of range.
+            if !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&w) {
+                return Err(Raise::at(line, RANGE));
+            }
+            w as i64
+        }
+        other => {
+            return Err(Raise::at(
+                line,
+                format!(
+                    "TypeError: '{}' object cannot be interpreted as an integer",
+                    py::type_name(other)
+                ),
+            ))
+        }
+    };
+    local_text(secs, b"%Y-%m-%d %H:%M\0").map_err(|e| Raise::at(line, e))
+}
+
+/// `secs` as local time in `fmt` (NUL-ended), by `localtime_r` and
+/// `strftime`; `OSError` where `localtime_r` fails. (The activity
+/// family has the same steps for its own format; to share once the
+/// families' helpers are gathered.)
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)]
+fn local_text(secs: i64, fmt: &[u8]) -> Result<String, String> {
+    // `time_t` is 64 bits on every platform the binary ships for.
+    let t = secs as libc::time_t;
+    // SAFETY: tzset reads TZ; localtime_r and strftime write only into the
+    // buffers given, each sized as passed; `fmt` ends in a NUL.
+    unsafe {
+        extern "C" {
+            fn tzset();
+        }
+        tzset();
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            let e = std::io::Error::last_os_error();
+            let n = e.raw_os_error().unwrap_or(0);
+            let text = e.to_string();
+            let msg = text
+                .strip_suffix(&format!(" (os error {n})"))
+                .unwrap_or(&text);
+            return Err(format!("OSError: [Errno {n}] {msg}"));
+        }
+        let mut buf = [0u8; 64];
+        let n = libc::strftime(buf.as_mut_ptr().cast(), buf.len(), fmt.as_ptr().cast(), &tm);
+        Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
+    }
+}
+
+#[cfg(not(unix))]
+fn local_text(_secs: i64, _fmt: &[u8]) -> Result<String, String> {
+    Err("OSError: no local time here".into())
+}

@@ -13,6 +13,9 @@
 //! - [`forward`]: `forward`, a person's own mailbox forwards (the
 //!   Python branch is `hostmail forward`'s too).
 //! - [`py`]: the Python value rules the printers share.
+//! - [`reader`]: `mail reader`, the mail reader for people.
+//! - The retired owner verbs ([`RETIRED`]): each is the router's
+//!   moved-verb usage line, exit 2, after the gates.
 //!
 //! The route table sends a verb here only once it has a row of its own
 //! ([`crate::route`]); [`run`] returns `None` for anything else, and the
@@ -25,6 +28,7 @@ pub mod core;
 pub mod forward;
 pub mod owner;
 pub mod py;
+pub mod reader;
 pub mod reads;
 pub mod watch;
 pub mod writes;
@@ -33,8 +37,9 @@ pub mod writes;
 pub const WORDS: &[&str] = &["mail"];
 /// The shell's but for [`VERBS`].
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// `watch`, the reads, the writes, the owner's verbs and `forward`; every other
-/// verb, and `mail` alone, is the shell's. One verb row each, so each can turn back alone.
+/// `watch`, the reads, the writes, the owner's verbs, `forward`, `reader`
+/// and the retired verbs; every other verb, and `mail` alone, is the
+/// shell's. One verb row each, so each can turn back alone.
 pub const VERBS: &[crate::route::Verb] = &[
     native(&["watch"]),
     native(&["inboxes"]),
@@ -63,7 +68,66 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["oauth-config"]),
     native(&["sending"]),
     native(&["forward"]),
+    native(&["reader"]),
+    native(&["create"]),
+    native(&["status"]),
+    native(&["domain"]),
+    native(&["doctor"]),
+    native(&["config"]),
+    native(&["approvals"]),
+    native(&["catchall"]),
+    native(&["alias"]),
+    native(&["ooo"]),
+    native(&["footer"]),
+    native(&["spam"]),
+    native(&["queue"]),
+    native(&["acl"]),
+    native(&["autoconfig"]),
+    native(&["app-password"]),
+    native(&["person"]),
+    native(&["dkim"]),
+    native(&["dmarc"]),
+    native(&["ptr"]),
+    native(&["bans"]),
+    native(&["allowlist"]),
+    native(&["audit-sieve"]),
 ];
+
+/// The owner verbs that moved to `hostmail`, in the router arm's order:
+/// `_mail_err "usage" "'k2 mail <verb>' moved to 'k2 hostmail <verb>'
+/// (server admin)"`, exit 2, whatever follows the verb.
+pub const RETIRED: &[&str] = &[
+    "create",
+    "status",
+    "domain",
+    "doctor",
+    "config",
+    "approvals",
+    "catchall",
+    "alias",
+    "ooo",
+    "footer",
+    "spam",
+    "queue",
+    "acl",
+    "autoconfig",
+    "app-password",
+    "person",
+    "dkim",
+    "dmarc",
+    "ptr",
+    "bans",
+    "allowlist",
+    "audit-sieve",
+];
+
+/// A retired verb's line: the moved-verb hint.
+pub fn retired(verb: &str, _words: &[&str]) -> core::Plan {
+    let cli = k2_client::brand::CLI_NAME;
+    core::usage(format!(
+        "'{cli} mail {verb}' moved to '{cli} hostmail {verb}' (server admin)"
+    ))
+}
 
 /// A verb row the binary answers.
 const fn native(words: &'static [&'static str]) -> crate::route::Verb {
@@ -85,6 +149,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some(v) if writes::VERBS.contains(&v) => core::run(args, writes::parse, exec),
         Some(v) if owner::VERBS.contains(&v) => core::run(args, owner::parse, exec),
         Some(v) if forward::VERBS.contains(&v) => core::run(args, forward::parse, exec),
+        Some("reader") => core::run(args, reader::parse, exec),
+        Some(v) if RETIRED.contains(&v) => core::run(args, retired, exec),
         _ => None,
     }
 }
@@ -97,6 +163,7 @@ pub fn exec(py_: &mut core::Py) -> core::R<()> {
         .or_else(|| writes::exec(py_, &verb))
         .or_else(|| owner::exec(py_, &verb))
         .or_else(|| forward::exec(py_, &verb))
+        .or_else(|| reader::exec(py_, &verb))
         .or_else(|| super::hostmail::branch(py_, &verb))
         .unwrap_or_else(|| unreachable!("no _mail_py branch for {verb}"))
 }

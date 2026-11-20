@@ -422,7 +422,10 @@ fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
 /// `mail`'s verb rows: each is one arm of the `mail)` case in
 /// `cli/src/router.sh`, which hands it to its own function (`addresses`
 /// and `list` to `cmd_mail_inboxes`; a `-` in a word is a `_` in its
-/// function's name), and one the binary's family answers.
+/// function's name), and one the binary's family answers; or one word of
+/// the retired verbs' arm, whose line is the moved-verb usage line, each
+/// of them a word of [`k5_cli::families::mail::RETIRED`] and every one of
+/// those a row.
 fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
     let sources = common::shell_sources();
     let text = &sources
@@ -440,6 +443,25 @@ fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
             verb.words
         );
         let word = verb.words[0];
+        if k5_cli::families::mail::RETIRED.contains(&word) {
+            let arm = body
+                .lines()
+                .find(|l| l.starts_with("            create|"))
+                .expect("the retired verbs' arm");
+            let words: Vec<&str> = arm.trim().trim_end_matches(')').split('|').collect();
+            assert_eq!(
+                words,
+                k5_cli::families::mail::RETIRED,
+                "the retired verbs' arm and RETIRED differ"
+            );
+            assert!(
+                body.contains(
+                    "_mail_err \"usage\" \"'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)\"\n                exit 2 ;;"
+                ),
+                "the retired verbs' arm no longer prints the moved line"
+            );
+            continue;
+        }
         let func = match word {
             "addresses" | "list" => "inboxes".to_string(),
             w => w.replace('-', "_"),
@@ -453,11 +475,18 @@ fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         );
         assert!(
             word == "watch"
+                || word == "reader"
                 || k5_cli::families::mail::reads::VERBS.contains(&word)
                 || k5_cli::families::mail::writes::VERBS.contains(&word)
                 || k5_cli::families::mail::owner::VERBS.contains(&word)
                 || k5_cli::families::mail::forward::VERBS.contains(&word),
             "{word}: a mail verb row no family module answers"
+        );
+    }
+    for word in k5_cli::families::mail::RETIRED {
+        assert!(
+            noun.verb_rows().any(|v| v.words == [*word]),
+            "{word}: a retired mail verb with no row"
         );
     }
 }

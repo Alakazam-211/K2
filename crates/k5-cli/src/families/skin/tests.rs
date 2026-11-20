@@ -273,3 +273,42 @@ fn user_list_reads_one_line_of_each() {
     assert_eq!(exit, Exit::Error);
     assert!(err.contains("line 3, in <module>"), "{err}");
 }
+
+/// The lines name the command by the brand's name (a build with
+/// `K2_BRAND_DIR=brand/xy` says `xy`), never a typed `k2` or `k5`.
+#[test]
+fn the_lines_say_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let mut lines: Vec<String> = Vec::new();
+    for w in [
+        &["user", "show", "bob"][..],
+        &["user", "x", "--role", "r"],
+        &["user", "nope"],
+        &["user", "agent", "bob"],
+        &["role", "x", "--user"],
+        &["role", "create", "r", "--caps", "c"],
+        &["role", "add", "x"],
+        &["grant", "nope"],
+        &["grant", "rm"],
+        &["front-door", "connect", "direct"],
+        &["hydra", "x"],
+    ] {
+        let stop = ask(w).expect_err("a stop");
+        assert!(!stop.stderr.is_empty(), "{w:?}");
+        lines.extend(stop.stderr);
+    }
+    lines.push(super::TEACH.to_string());
+    let (out, _, _) = shown(print::read(
+        &Reader::GrantAdd,
+        r#"{"id":"g","kind":"chat"}"#,
+    ));
+    lines.push(out);
+    let (out, _, _) = shown(print::read(&Reader::RoleAdd, r#"{"role":{"name":"r"}}"#));
+    lines.push(out);
+    for l in &lines {
+        assert!(l.contains(&format!("{cli} ")), "{l}");
+        if cli != "k2" {
+            assert!(!l.contains("k2 ") && !l.contains("k5 "), "{l}");
+        }
+    }
+}

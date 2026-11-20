@@ -63,6 +63,7 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 fn connect_status_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "all");
     let v = vec![
+        // covers: connect status
         case(
             "nothing paired: the daemon's token, then the tunnel",
             &["status"],

@@ -122,6 +122,7 @@ fn inbox_lists_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: inbox
         case(
             "list",
             &["list"],

@@ -45,7 +45,9 @@ const FORMS: [(&str, &[&str], &str, bool); 11] = [
     ("--help", &[""], "flag-empty", true),
     ("-h", &["app"], "h-app", true),
     ("help", &["--json"], "json", true),
+    // covers: study
     ("study", &["send-feedback"], "study", false),
+    // covers: study --json
     ("study", &["send-feedback", "--json"], "study-json", false),
 ];
 

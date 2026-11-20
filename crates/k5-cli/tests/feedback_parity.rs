@@ -120,6 +120,7 @@ fn list_answers_as_the_shell_does() {
     let many = many(300);
     let v = vec![
         case("list", &["list"], &[], vec![ok(LIST)], owner_and_port, 0, 1),
+        // covers: feedback list --json
         case(
             "--json",
             &["list", "--json"],
@@ -171,6 +172,7 @@ fn list_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: feedback list
         case(
             "no rows",
             &["list"],
@@ -934,6 +936,7 @@ fn show_answers_as_the_shell_does() {
     let many = brief_text(45);
     let long_body = format!(r#"{{"id":"x","body":"{}"}}"#, "word ".repeat(2000));
     let v = vec![
+        // covers: feedback show
         case(
             "show",
             &["show", "fb_1"],
@@ -943,6 +946,7 @@ fn show_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: feedback show --json
         case(
             "--json: no brief",
             &["show", "fb_1", "--json"],

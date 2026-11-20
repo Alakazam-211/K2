@@ -98,6 +98,7 @@ fn connections_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: connections list --json
         case(
             "--json",
             &["list", "--json"],
@@ -116,6 +117,7 @@ fn connections_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: connections --json
         case(
             "--json, local rows' odd values",
             &["--json"],
@@ -127,6 +129,7 @@ fn connections_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: connections list
         case(
             "none",
             &["list"],

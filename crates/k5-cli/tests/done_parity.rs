@@ -160,6 +160,7 @@ fn done_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: done
         case(
             "the agent under each prefix",
             &[],

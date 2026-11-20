@@ -112,6 +112,7 @@ fn traceback(c: Case) -> Case {
 fn sessions_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "all");
     let v = vec![
+        // covers: sessions
         case(
             "the roster",
             &[],
@@ -148,6 +149,7 @@ fn sessions_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: sessions --json
         case(
             "--json: the body as it came",
             &["--json"],
@@ -184,6 +186,7 @@ fn sessions_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: sessions --past
         case(
             "past conversations",
             &["--past"],
@@ -193,6 +196,7 @@ fn sessions_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: sessions --past --json
         case(
             "past, every flag",
             &[
@@ -234,6 +238,7 @@ fn sessions_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: sessions show
         case(
             "show",
             &["show", "ab12", "--tail", "2"],
@@ -243,6 +248,7 @@ fn sessions_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: sessions show --json
         case(
             "show --json",
             &["show", "--json", "a/b é"],
@@ -263,6 +269,7 @@ fn sessions_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: sessions main
         case(
             "main, none",
             &["main"],
@@ -303,6 +310,7 @@ fn sessions_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: sessions main --json
         case(
             "main, a path",
             &["main", "--json"],

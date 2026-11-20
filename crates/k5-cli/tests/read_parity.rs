@@ -91,6 +91,7 @@ fn read_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "all");
     let h = host;
     let v = vec![
+        // covers: read
         case(
             "a workspace",
             &["acme"],

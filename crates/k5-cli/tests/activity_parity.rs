@@ -123,6 +123,7 @@ fn activity_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: activity --json
         case(
             "--json",
             &["--json"],
@@ -143,6 +144,7 @@ fn activity_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: activity
         case(
             "no events",
             &[],

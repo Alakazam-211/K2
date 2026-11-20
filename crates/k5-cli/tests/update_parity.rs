@@ -193,6 +193,7 @@ fn update_cli_answers_as_the_shell_does() {
     let rig = rig("cli");
     let port = PORT.to_string();
     let v = vec![
+        // covers: update
         case(
             "--cli, the daemon on our version",
             &["--cli"],

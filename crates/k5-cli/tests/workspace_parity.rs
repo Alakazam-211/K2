@@ -64,6 +64,7 @@ fn waited(c: Case) -> Case {
 fn workspace_list_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "list");
     let v = vec![
+        // covers: workspace
         case(
             "the table",
             &["list"],

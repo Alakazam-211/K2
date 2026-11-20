@@ -163,6 +163,7 @@ fn the_answers() {
     let rig = Rig::new(VERB, "answers");
     let r = |s: u16, b: &str| refusal(s, b);
     let v = vec![
+        // covers: setup
         case(
             "lines as they came",
             &[],
@@ -190,6 +191,7 @@ fn the_answers() {
             0,
             1,
         ),
+        // covers: setup --json
         case(
             "--json: the JSON and a newline",
             &["--json"],
@@ -1006,6 +1008,7 @@ fn setup_agent_reports_goes_to_the_shell() {
         )
     };
     let v = vec![
+        // covers: setup agent-reports
         shell(case(
             "agent-reports: the read",
             &["agent-reports"],
@@ -1030,6 +1033,7 @@ fn setup_agent_reports_goes_to_the_shell() {
             0,
             2,
         )),
+        // covers: setup agent-reports --json
         shell(case(
             "agent-reports --json",
             &["agent-reports", "--json"],
@@ -1135,6 +1139,7 @@ fn the_writes() {
     let rig = Rig::new(VERB, "writes");
     let r = |s: u16, b: &str| refusal(s, b);
     let v = vec![
+        // covers: setup hide
         case(
             "hide",
             &["hide"],
@@ -1144,6 +1149,7 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup show
         case(
             "show",
             &["show"],
@@ -1153,6 +1159,7 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup dismiss-offer
         case(
             "dismiss-offer",
             &["dismiss-offer"],
@@ -1162,6 +1169,7 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup hide --json
         case(
             "hide --json",
             &["hide", "--json"],
@@ -1171,6 +1179,7 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup skip --json
         case(
             "--json skip",
             &["--json", "skip", "dev_tools"],
@@ -1180,6 +1189,7 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup skip
         case(
             "skip",
             &["skip", "dev_tools"],
@@ -1216,6 +1226,7 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup kessel
         case(
             "kessel: no flags",
             &["kessel"],
@@ -1296,6 +1307,7 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup chief-of-staff
         case(
             "chief-of-staff: about escaped",
             &[
@@ -1349,6 +1361,7 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup chief-of-staff --json
         case(
             "chief-of-staff --json",
             &[

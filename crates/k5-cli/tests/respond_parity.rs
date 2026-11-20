@@ -61,6 +61,7 @@ fn respond_answers_as_the_shell_does() {
         // The cell socket.
         with(
             c(&[]),
+            // covers: respond
             case(
                 "a line over the cell socket",
                 &["hello", "world"],

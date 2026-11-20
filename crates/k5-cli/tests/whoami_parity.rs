@@ -32,6 +32,7 @@ fn cases(rig: &Rig) -> Vec<Case> {
     let permission_ask = r#"{"error":{"code":"owner_only","hint":"Only the owner can do that."},"permission":{"command":"k2 permission request --scope whoami.read --why \"...\"","requestable":true}}"#;
     let permission_none = r#"{"error":"nope","hint":"ask a person","permission":{"requestable":false,"hint":"Only a person can change this."}}"#;
     let mut v = vec![
+        // covers: whoami
         case(
             "owner from disk, the plain form",
             &[],
@@ -41,6 +42,7 @@ fn cases(rig: &Rig) -> Vec<Case> {
             0,
             1,
         ),
+        // covers: whoami --json
         case(
             "owner from disk, --json",
             &["--json"],

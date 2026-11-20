@@ -763,3 +763,35 @@ async fn ticket_show_never_lists_other_workspaces_ids() {
     let r = http(e.port, "GET", "/cli/feedback/show?id=abcd", Some(OWNER));
     assert_eq!(code(&r, "show"), "ambiguous_id", "the owner is told: {}", r.raw);
 }
+
+/// The wiki over TCP: its own workspace's index and note; the map of every
+/// workspace (scope=k2, host, fleet) and note ids of another workspace or
+/// of that map (`<id>::<note>`, the focus-group and project nodes) are
+/// refused. The owner still reads the map.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wiki_reads_stay_in_its_own_workspace() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let own = enc(&e.own);
+    for ws in [&e.own, &e.other] {
+        let r = http(e.port, "POST", &format!("/cli/wiki/seed?project={}", enc(ws)), Some(OWNER));
+        assert_eq!(r.status, 200, "owner seeds {ws}: {}", r.raw);
+    }
+    let owners = http(e.port, "GET", &format!("/cli/wiki/index?project={own}"), Some(OWNER));
+    assert_eq!(owners.status, 200, "{}", owners.raw);
+    let r = http(e.port, "GET", &format!("/cli/wiki/index?project={own}"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "its own index: {}", r.raw);
+    assert_eq!(r.json("index"), owners.json("index"), "the owner's answer for its own workspace");
+    for scope in ["k2", "host", "fleet", "K2", " fleet "] {
+        let r = http(e.port, "GET", &format!("/cli/wiki/index?project={own}&scope={}", enc(scope)), Some(e.passport.as_str()));
+        assert_eq!(r.status, 403, "scope={scope:?}: {}", r.raw);
+        assert_eq!(code(&r, "index"), "own_workspace_only", "scope={scope:?}");
+    }
+    for id in [format!("{}::Home.md", e.other_id), format!("{}::Home.md", e.own_id), "__focusgroup__::g1".to_string(), "__project__::p1".to_string(), format!("{}::__workspace__", e.other_id)] {
+        let r = http(e.port, "GET", &format!("/cli/wiki/note?project={own}&id={}", enc(&id)), Some(e.passport.as_str()));
+        assert_eq!(r.status, 403, "note {id}: {}", r.raw);
+        assert_eq!(code(&r, "note"), "own_workspace_only", "note {id}");
+    }
+    let r = http(e.port, "GET", &format!("/cli/wiki/index?scope=k2&project={own}"), Some(OWNER));
+    assert_eq!(r.status, 200, "the owner reads the map: {}", r.raw);
+}

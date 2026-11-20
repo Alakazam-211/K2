@@ -146,6 +146,22 @@ fn exec_answers_as_the_shell_does() {
             )
         },
         // covers: app exec
+        Case {
+            no_tmpdir: true,
+            ..with_stdin(
+                case(
+                    "a pipe on stdin, no TMPDIR: mktemp ends it, nothing sent",
+                    &["exec", "acme", "--", "cat"],
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    1,
+                    0,
+                ),
+                b"x",
+            )
+        },
+        // covers: app exec
         case(
             "no command",
             &["exec", "acme"],

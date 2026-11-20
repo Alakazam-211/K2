@@ -1,6 +1,6 @@
 #!/bin/sh
 # k2-open — K2 browser-open shim (staged by the K2 daemon; do not edit).
-# K2_OPEN_SHIM_VERSION: 4
+# K2_OPEN_SHIM_VERSION: 5
 #
 # 0.40.34 (Rosson): when a process inside a K2 terminal session runs
 # `xdg-open <url>` / honors $BROWSER, the URL must surface in the
@@ -21,7 +21,10 @@
 #      allowlisted for /cli/browser/open-url in the daemon's
 #      require_hook capability gate).
 #   2. Owner fallback: ~/.k2/heartbeat.{port,token} → loopback TCP with
-#      the owner token as a Bearer header.
+#      the owner token as a Bearer header. In a session (K2_HOOK_SOCK or
+#      K2_HOOK_TOKEN set), K2 doesn't act as the owner: this arm sends the
+#      session's passport in the owner token's place, and with no
+#      passport it sends nothing (one line, exit 1).
 # Neither arm goes through a proxy (`--noproxy '*'`), and no credential
 # rides the query string.
 #
@@ -87,6 +90,13 @@ if [ "$is_http" = 1 ] && command -v curl >/dev/null 2>&1; then
         _port=$(cat "${_k2_home}/heartbeat.port" 2>/dev/null)
         _tok=$(cat "${_k2_home}/heartbeat.token" 2>/dev/null)
         if [ -n "$_port" ] && [ -n "$_tok" ]; then
+            if [ -n "$_sock" ] || [ -n "$_hook_tok" ]; then
+                if [ -z "$_hook_tok" ]; then
+                    echo "Error: in a session, K2 doesn't act as the owner; this session has no passport, so nothing was sent." >&2
+                    exit 1
+                fi
+                _tok="$_hook_tok"
+            fi
             _rc=0
             printf 'url = "http://127.0.0.1:%s/cli/browser/open-url"\nheader = "Authorization: Bearer %s"\n' "$_port" "$_tok" \
                 | curl -fsS --noproxy '*' -K - --max-time 5 \

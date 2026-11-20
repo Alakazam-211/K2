@@ -25,12 +25,31 @@ pub mod watch;
 pub const WORDS: &[&str] = &["mail"];
 /// The shell's but for [`VERBS`].
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// Only `watch`; every other verb, and `mail` alone, is the shell's. One
-/// verb row each, so each can turn back alone.
-pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
-    words: &["watch"],
-    owner: crate::route::Owner::Native,
-}];
+/// `watch` and the reads; every other verb, and `mail` alone, is the
+/// shell's. One verb row each, so each can turn back alone.
+pub const VERBS: &[crate::route::Verb] = &[
+    native(&["watch"]),
+    native(&["inboxes"]),
+    native(&["addresses"]),
+    native(&["list"]),
+    native(&["domains"]),
+    native(&["messages"]),
+    native(&["read"]),
+    native(&["attachments"]),
+    native(&["wait"]),
+    native(&["drafts"]),
+    native(&["outbox"]),
+    native(&["capabilities"]),
+    native(&["folder"]),
+];
+
+/// A verb row the binary answers.
+const fn native(words: &'static [&'static str]) -> crate::route::Verb {
+    crate::route::Verb {
+        words,
+        owner: crate::route::Owner::Native,
+    }
+}
 
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`): an
 /// `id` tool, locked.

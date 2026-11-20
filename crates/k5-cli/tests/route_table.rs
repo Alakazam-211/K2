@@ -373,7 +373,9 @@ fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
 }
 
 /// `mail`'s verb rows: each is one arm of the `mail)` case in
-/// `cli/src/router.sh`, which hands it to its own function.
+/// `cli/src/router.sh`, which hands it to its own function (`addresses`
+/// and `list` to `cmd_mail_inboxes`; a `-` in a word is a `_` in its
+/// function's name), and one the binary's family answers.
 fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
     let sources = common::shell_sources();
     let text = &sources
@@ -391,12 +393,20 @@ fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
             verb.words
         );
         let word = verb.words[0];
+        let func = match word {
+            "addresses" | "list" => "inboxes".to_string(),
+            w => w.replace('-', "_"),
+        };
         let arm = format!("            {word})");
-        let call = format!(" shift 2; cmd_mail_{word} \"$@\" ;;");
+        let call = format!(" shift 2; cmd_mail_{func} \"$@\" ;;");
         assert!(
             body.lines()
                 .any(|l| l.starts_with(&arm) && l.ends_with(&call)),
-            "the mail case has no {word} arm calling cmd_mail_{word}"
+            "the mail case has no {word} arm calling cmd_mail_{func}"
+        );
+        assert!(
+            word == "watch" || k5_cli::families::mail::reads::VERBS.contains(&word),
+            "{word}: a mail verb row no family module answers"
         );
     }
 }

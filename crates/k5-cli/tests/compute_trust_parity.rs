@@ -395,7 +395,7 @@ fn compute_seats() {
             3,
             0,
         )),
-        words("resume, no seat", &["seats", "resume", "--json"], 2),
+        words("resume, no seat", &["seats", "resume"], 2),
     ];
     for c in v {
         rig.check(&c);

@@ -72,12 +72,37 @@ const OWNER_ONLY: &str = concat!(
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ask {
     Page,
-    Show { node: String, json: bool },
-    Request { nodes: Value, names: Value, why: String, job: String, json: bool },
-    Requests { query: String, json: bool },
-    Decide { approve: bool, id: String, add: bool, note: String, json: bool },
-    PolicyShow { node: String, server: String, json: bool },
-    PolicySet { body: String, json: bool },
+    Show {
+        node: String,
+        json: bool,
+    },
+    Request {
+        nodes: Value,
+        names: Value,
+        why: String,
+        job: String,
+        json: bool,
+    },
+    Requests {
+        query: String,
+        json: bool,
+    },
+    Decide {
+        approve: bool,
+        id: String,
+        add: bool,
+        note: String,
+        json: bool,
+    },
+    PolicyShow {
+        node: String,
+        server: String,
+        json: bool,
+    },
+    PolicySet {
+        body: String,
+        json: bool,
+    },
 }
 
 fn usage(line: impl Into<String>) -> Option<Words<Ask>> {
@@ -183,7 +208,9 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                     }
                     "--add" => add = true,
                     "--json" => {}
-                    w if w.starts_with('-') => return usage(format!("{line} (unknown flag '{w}')")),
+                    w if w.starts_with('-') => {
+                        return usage(format!("{line} (unknown flag '{w}')"))
+                    }
                     w => {
                         if !id.is_empty() {
                             return usage(format!("{line} (one request)"));
@@ -235,7 +262,9 @@ fn policy(rest: &[&str], json: bool) -> Option<Words<Ask>> {
                 continue;
             }
             "--json" => {}
-            w if w.starts_with('-') => return usage(format!("{POLICY_USAGE} (unknown flag '{w}')")),
+            w if w.starts_with('-') => {
+                return usage(format!("{POLICY_USAGE} (unknown flag '{w}')"))
+            }
             w if w.contains('=') => pairs.push(w),
             w if node.is_empty() => node = w,
             w if server.is_empty() => server = w,
@@ -255,7 +284,10 @@ fn policy(rest: &[&str], json: bool) -> Option<Words<Ask>> {
     }
     let mut out = vec![
         ("node", str_value(node)),
-        ("server", str_value(if server.is_empty() { "own" } else { server })),
+        (
+            "server",
+            str_value(if server.is_empty() { "own" } else { server }),
+        ),
     ];
     if !reason.is_empty() {
         out.push(("reason", str_value(reason)));
@@ -283,9 +315,16 @@ fn policy(rest: &[&str], json: bool) -> Option<Words<Ask>> {
                     return usage("usage: max_install_mb=N (megabytes per request, 1 to 65536)");
                 }
                 let n = v.trim_start_matches('0');
-                put("maxInstallMb", Value::Int(if n.is_empty() { "0" } else { n }.into()));
+                put(
+                    "maxInstallMb",
+                    Value::Int(if n.is_empty() { "0" } else { n }.into()),
+                );
             }
-            k => return usage(format!("usage: {k}: the keys are level, profiles and max_install_mb")),
+            k => {
+                return usage(format!(
+                    "usage: {k}: the keys are level, profiles and max_install_mb"
+                ))
+            }
         }
     }
     Some(Words::Ask(Ask::PolicySet {
@@ -354,10 +393,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask, sock: &Path) -> Exit {
             json,
         } => {
             let ws = cp.ws("");
-            let mut fields = vec![
-                ("nodes", nodes.clone()),
-                ("names", names.clone()),
-            ];
+            let mut fields = vec![("nodes", nodes.clone()), ("names", names.clone())];
             for (k, v) in [("why", why.as_str()), ("job", job), ("workspace", &ws)] {
                 if !v.is_empty() {
                     fields.push((k, str_value(v)));
@@ -573,7 +609,10 @@ fn batch(cx: &mut Cx, err: &mut String, body: &[u8], want: &str) -> Result<Optio
         let b = cx.at(l, p::idx(r, "batchId"))?;
         let hit = p::eq_s(&b, want)
             || p::eq_s(&cx.at(l, p::idx(r, "id"))?, want)
-            || cx.at(l, p::idx(r, "batchId").and_then(|x| p::startswith(&x, want)))?;
+            || cx.at(
+                l,
+                p::idx(r, "batchId").and_then(|x| p::startswith(&x, want)),
+            )?;
         if hit && !ids.iter().any(|x| p::eq(x, &b)) {
             if matches!(b, Value::Array(_) | Value::Object(_)) {
                 return Err(cx.raise(l, format!("TypeError: unhashable type: '{}'", p::tname(&b))));
@@ -611,7 +650,13 @@ fn batch(cx: &mut Cx, err: &mut String, body: &[u8], want: &str) -> Result<Optio
         } else {
             s("")
         };
-        err.push_str(&cx.at(l, p::pct("  %s on %s (%s), for %s%s\n", &[names, node, host, asked, via]))?);
+        err.push_str(&cx.at(
+            l,
+            p::pct(
+                "  %s on %s (%s), for %s%s\n",
+                &[names, node, host, asked, via],
+            ),
+        )?);
         let l = line!(A, "if r.get(\"why\"):");
         if p::truthy(&cx.at(l, p::get(r, "why"))?) {
             let w = cx.at(l, p::idx(r, "why"))?;
@@ -623,7 +668,10 @@ fn batch(cx: &mut Cx, err: &mut String, body: &[u8], want: &str) -> Result<Optio
             let n = p::int(cx.at(l, p::len(&ins))? as i128);
             let mb = size_mb(cx, l, &d)?;
             let list = s(&cx.at(l, p::join(" ", &ins))?);
-            err.push_str(&cx.at(l, p::pct("    installs %d package(s)%s: %s\n", &[n, mb, list]))?);
+            err.push_str(&cx.at(
+                l,
+                p::pct("    installs %d package(s)%s: %s\n", &[n, mb, list]),
+            )?);
         }
     }
     Ok(Some(p::str_of(&b).trim_end_matches('\n').to_string()))
@@ -697,7 +745,10 @@ fn requests(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     const A: &str = "packages/requests \"${q#&}\" tcp\n";
     let v = render::load(cx, body, line!(A, "v = json.load(sys.stdin)"))?;
     let rows = p::or(
-        cx.at(line!(A, "rows = v.get(\"requests\") or []"), p::get(&v, "requests"))?,
+        cx.at(
+            line!(A, "rows = v.get(\"requests\") or []"),
+            p::get(&v, "requests"),
+        )?,
         Value::Array(vec![]),
     );
     if !p::truthy(&rows) {
@@ -708,7 +759,7 @@ fn requests(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     for r in &rows {
         let l = line!(A, "origin = {\"own\"");
         let server = cx.at(l, p::get(r, "server"))?;
-        let asked = s(&cx.at(l, p::pct("asked %s", &[server.clone()]))?);
+        let asked = s(&cx.at(l, p::pct("asked %s", std::slice::from_ref(&server)))?);
         let from = s(&cx.at(l, p::pct("from %s", &[server]))?);
         let o = cx.at(l, p::get(r, "origin"))?;
         let default = p::or(cx.at(l, p::get(r, "origin"))?, s(""));
@@ -726,18 +777,37 @@ fn requests(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         let state = cx.at(l, p::get(r, "state"))?;
         let node = cx.at(l, p::get(r, "node"))?;
         let created = cx.at(l, p::get(r, "createdAt"))?;
-        let when = cx.call(l, "ago", |cx| ago(cx, line!(A, "d = max(int(time.time())"), &created))?;
+        let when = cx.call(l, "ago", |cx| {
+            ago(cx, line!(A, "d = max(int(time.time())"), &created)
+        })?;
         let names = joined(cx, l, r, "names")?;
         let tail = if p::truthy(&origin) {
-            cx.at(l, p::add(&s("  ("), &origin).and_then(|t| p::add(&t, &s(")"))))?
+            cx.at(
+                l,
+                p::add(&s("  ("), &origin).and_then(|t| p::add(&t, &s(")"))),
+            )?
         } else {
             s("")
         };
-        print(cx, l, "%-21s %-9s %-14s %-8s %s%s", &[batch, state, node, when, names, tail])?;
-        let who = p::or(cx.at(line!(A, "who = r.get(\"askedBy\") or \"?\""), p::get(r, "askedBy"))?, s("?"));
+        print(
+            cx,
+            l,
+            "%-21s %-9s %-14s %-8s %s%s",
+            &[batch, state, node, when, names, tail],
+        )?;
+        let who = p::or(
+            cx.at(
+                line!(A, "who = r.get(\"askedBy\") or \"?\""),
+                p::get(r, "askedBy"),
+            )?,
+            s("?"),
+        );
         let l = line!(A, "print(\"%21s asked by %s%s%s\"");
         let job = if p::truthy(&cx.at(l, p::get(r, "jobId"))?) {
-            let j = cx.at(l, p::idx(r, "jobId").and_then(|x| p::slice(&x, None, Some(8))))?;
+            let j = cx.at(
+                l,
+                p::idx(r, "jobId").and_then(|x| p::slice(&x, None, Some(8))),
+            )?;
             cx.at(l, p::add(&s(" for job "), &j))?
         } else {
             s("")
@@ -749,7 +819,10 @@ fn requests(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
             s("")
         };
         print(cx, l, "%21s asked by %s%s%s", &[s(""), who, job, why])?;
-        let d = p::or(cx.at(line!(A, "d = r.get(\"dry\") or {}"), p::get(r, "dry"))?, Value::Object(vec![]));
+        let d = p::or(
+            cx.at(line!(A, "d = r.get(\"dry\") or {}"), p::get(r, "dry"))?,
+            Value::Object(vec![]),
+        );
         let l = line!(A, "if d.get(\"installs\"):");
         if p::truthy(&cx.at(l, p::get(&d, "installs"))?) {
             let l = line!(A, "print(\"%21s installs %d package(s)%s\"");
@@ -764,7 +837,8 @@ fn requests(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
             print(cx, l, "%21s would be refused: %s", &[s(""), x])?;
         }
         let l = line!(A, "if r.get(\"note\") or r.get(\"decidedBy\"):");
-        if p::truthy(&cx.at(l, p::get(r, "note"))?) || p::truthy(&cx.at(l, p::get(r, "decidedBy"))?) {
+        if p::truthy(&cx.at(l, p::get(r, "note"))?) || p::truthy(&cx.at(l, p::get(r, "decidedBy"))?)
+        {
             let l = line!(A, "print(\"%21s %s%s\"");
             let by = if p::truthy(&cx.at(l, p::get(r, "decidedBy"))?) {
                 let b = cx.at(l, p::idx(r, "decidedBy"))?;
@@ -834,7 +908,10 @@ fn show(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     let pk = cx.at(line!(A, "p = v.get(\"packages\")"), p::get(&v, "packages"))?;
     if !p::is_dict(&pk) {
         let l = line!(A, "print(\"  \" + (v.get(\"note\")");
-        let note = p::or(cx.at(l, p::get(&v, "note"))?, s("no package status from this node"));
+        let note = p::or(
+            cx.at(l, p::get(&v, "note"))?,
+            s("no package status from this node"),
+        );
         let t = cx.at(l, p::add(&s("  "), &note))?;
         cx.print(&p::str_of(&t));
     } else {
@@ -844,9 +921,19 @@ fn show(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         let l = line!(A, "print(\"  policy     %s");
         let pol = cx.at(l, p::get(&pk, "policy"))?;
         let owner = p::or(cx.at(l, p::get(&v, "owner"))?, s("its owner"));
-        print(cx, l, "  policy     %s (for this server; set by %s)", &[pol, owner])?;
+        print(
+            cx,
+            l,
+            "  policy     %s (for this server; set by %s)",
+            &[pol, owner],
+        )?;
         for (key, fmt, none, marker) in [
-            ("approved", "  approved   %s", "(none)", line!(A, "print(\"  approved   %s\"")),
+            (
+                "approved",
+                "  approved   %s",
+                "(none)",
+                line!(A, "print(\"  approved   %s\""),
+            ),
             (
                 "installed",
                 "  installed  %s",
@@ -862,7 +949,10 @@ fn show(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
             };
             print(cx, marker, fmt, &[shown])?;
         }
-        let age = cx.at(line!(A, "age = p.get(\"indexAgeSecs\")"), p::get(&pk, "indexAgeSecs"))?;
+        let age = cx.at(
+            line!(A, "age = p.get(\"indexAgeSecs\")"),
+            p::get(&pk, "indexAgeSecs"),
+        )?;
         let l = line!(A, "if isinstance(age, (int, float)) and age > 86400:");
         if matches!(age, Value::Int(_) | Value::Float(_) | Value::Bool(_))
             && cx.at(l, p::cmp(">", &age, &p::int(86400)))?

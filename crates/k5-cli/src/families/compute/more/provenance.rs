@@ -341,7 +341,10 @@ fn checks(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     let l = line_q!(AFTER, "what = \"job %s");
     let short = cx.at(l, p::idx(&v, "short"))?;
     let node = p::or(cx.at(l, p::get(&v, "node"))?, s("?"));
-    let what = cx.at(l, p::pct("job %s's build statement (node %s)", &[short, node]))?;
+    let what = cx.at(
+        l,
+        p::pct("job %s's build statement (node %s)", &[short, node]),
+    )?;
     let l = line_q!(AFTER, "print((\"verified: \" + what)");
     let t = if p::truthy(&cx.at(l, p::idx(&v, "verified"))?) {
         format!("verified: {what}")

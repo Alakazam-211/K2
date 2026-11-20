@@ -53,17 +53,43 @@ fn compute_node_packages() {
         words("the page", &["node", "packages"], 0),
         words("help", &["node", "pkg", "help"], 0),
         one("a node", &["node", "packages", "mini"], SHOW, 0),
-        one("a node with no packages", &["node", "pkg", "mini"], r#"{"node":"mini","note":"offline","takesRequests":true}"#, 0),
-        one("a young index", &["node", "packages", "mini"], r#"{"node":"mini","packages":{"indexAgeSecs":true},"takesRequests":true}"#, 0),
+        one(
+            "a node with no packages",
+            &["node", "pkg", "mini"],
+            r#"{"node":"mini","note":"offline","takesRequests":true}"#,
+            0,
+        ),
+        one(
+            "a young index",
+            &["node", "packages", "mini"],
+            r#"{"node":"mini","packages":{"indexAgeSecs":true},"takesRequests":true}"#,
+            0,
+        ),
         // covers: compute node packages --json
         one("--json", &["node", "packages", "mini", "--json"], SHOW, 0),
-        raises(one("approved a number", &["node", "packages", "mini"], r#"{"node":"m","packages":{"approved":5}}"#, 1)),
+        raises(one(
+            "approved a number",
+            &["node", "packages", "mini"],
+            r#"{"node":"m","packages":{"approved":5}}"#,
+            1,
+        )),
         words("a node and a word", &["node", "packages", "mini", "x"], 2),
         words("a flag first", &["node", "packages", "--frob"], 2),
         // covers: compute node packages request
         one(
             "request, sent on",
-            &["node", "packages", "request", "mini, big,", "jq,git", " curl ", "--why", "builds", "--job", "abcd"],
+            &[
+                "node",
+                "packages",
+                "request",
+                "mini, big,",
+                "jq,git",
+                " curl ",
+                "--why",
+                "builds",
+                "--job",
+                "abcd",
+            ],
             r#"{"request":{"id":"pkb_9","summary":"jq git on mini","rows":[{"node":"mini","state":"pending","names":["jq","git"],"dry":{"installs":["jq"],"size_mb":2}},{"node":"big","state":"sent","dry":{"refusal":"not listed"}}]},"cant":["huge on mini"],"hint":"the owner decides"}"#,
             0,
         ),
@@ -79,35 +105,118 @@ fn compute_node_packages() {
         // covers: compute node packages request --json
         case(
             "request --json, held",
-            &["node", "packages", "request", "mini", "jq", "--why", "w", "--json"],
+            &[
+                "node", "packages", "request", "mini", "jq", "--why", "w", "--json",
+            ],
             &[],
             vec![ok(r#"{"pkgHeld": true,"request":null}"#)],
             owner_and_port,
             2,
             1,
         ),
-        one("request --json, not held", &["node", "packages", "request", "mini", "jq", "--why", "w", "--json"], r#"{"request":{"id":"r"}}"#, 0),
-        in_session(case("request in a session", &["node", "packages", "request", "mini", "jq", "--why", "w"], &[], vec![ok(r#"{"request":{}}"#)], port_only, 0, 1)),
-        words("request, no names", &["node", "packages", "request", "mini", "--why", "w"], 2),
-        words("request, no why", &["node", "packages", "request", "mini", "jq"], 2),
-        words("request, an unknown flag", &["node", "packages", "request", "mini", "jq", "--frob"], 2),
-        words("request, --why last", &["node", "packages", "request", "mini", "jq", "--why"], 1),
+        one(
+            "request --json, not held",
+            &[
+                "node", "packages", "request", "mini", "jq", "--why", "w", "--json",
+            ],
+            r#"{"request":{"id":"r"}}"#,
+            0,
+        ),
+        in_session(case(
+            "request in a session",
+            &["node", "packages", "request", "mini", "jq", "--why", "w"],
+            &[],
+            vec![ok(r#"{"request":{}}"#)],
+            port_only,
+            0,
+            1,
+        )),
+        words(
+            "request, no names",
+            &["node", "packages", "request", "mini", "--why", "w"],
+            2,
+        ),
+        words(
+            "request, no why",
+            &["node", "packages", "request", "mini", "jq"],
+            2,
+        ),
+        words(
+            "request, an unknown flag",
+            &["node", "packages", "request", "mini", "jq", "--frob"],
+            2,
+        ),
+        words(
+            "request, --why last",
+            &["node", "packages", "request", "mini", "jq", "--why"],
+            1,
+        ),
         // covers: compute node packages requests
-        one("requests", &["node", "packages", "requests", "--node", "mini", "--state", "all", "--limit", "5"], REQUESTS, 0),
-        one("ls, none", &["node", "packages", "ls"], r#"{"requests":[]}"#, 0),
+        one(
+            "requests",
+            &[
+                "node", "packages", "requests", "--node", "mini", "--state", "all", "--limit", "5",
+            ],
+            REQUESTS,
+            0,
+        ),
+        one(
+            "ls, none",
+            &["node", "packages", "ls"],
+            r#"{"requests":[]}"#,
+            0,
+        ),
         // covers: compute node packages requests --json
-        one("requests --json", &["node", "packages", "list", "--json"], REQUESTS, 0),
-        in_session(case("requests in a session", &["node", "packages", "requests"], &[], vec![ok(REQUESTS)], port_only, 0, 1)),
-        raises(one("requests, a bad createdAt", &["node", "packages", "requests"], r#"{"requests":[{"createdAt":"soon"}]}"#, 1)),
-        raises(one("requests, an origin that is a list", &["node", "packages", "requests"], r#"{"requests":[{"origin":[1]}]}"#, 1)),
-        words("requests, an unknown word", &["node", "packages", "requests", "x"], 2),
-        words("requests, --node last", &["node", "packages", "requests", "--node"], 1),
+        one(
+            "requests --json",
+            &["node", "packages", "list", "--json"],
+            REQUESTS,
+            0,
+        ),
+        in_session(case(
+            "requests in a session",
+            &["node", "packages", "requests"],
+            &[],
+            vec![ok(REQUESTS)],
+            port_only,
+            0,
+            1,
+        )),
+        raises(one(
+            "requests, a bad createdAt",
+            &["node", "packages", "requests"],
+            r#"{"requests":[{"createdAt":"soon"}]}"#,
+            1,
+        )),
+        raises(one(
+            "requests, an origin that is a list",
+            &["node", "packages", "requests"],
+            r#"{"requests":[{"origin":[1]}]}"#,
+            1,
+        )),
+        words(
+            "requests, an unknown word",
+            &["node", "packages", "requests", "x"],
+            2,
+        ),
+        words(
+            "requests, --node last",
+            &["node", "packages", "requests", "--node"],
+            1,
+        ),
         // covers: compute node packages approve
         case(
             "approve",
-            &["node", "packages", "approve", "pkb_0001", "--add", "--note", "fine"],
+            &[
+                "node", "packages", "approve", "pkb_0001", "--add", "--note", "fine",
+            ],
             &[],
-            vec![ok(REQUESTS), ok(r#"{"rows":[{"state":"approved","request":"pkr_1","node":"mini","note":"installing"},{"state":"approved"}]}"#)],
+            vec![
+                ok(REQUESTS),
+                ok(
+                    r#"{"rows":[{"state":"approved","request":"pkr_1","node":"mini","note":"installing"},{"state":"approved"}]}"#,
+                ),
+            ],
             owner_and_port,
             0,
             2,
@@ -130,28 +239,72 @@ fn compute_node_packages() {
             0,
             2,
         )),
-        in_session(case("approve in a session", &["node", "packages", "approve", "pkb_1"], &[], vec![], port_only, 3, 0)),
+        in_session(case(
+            "approve in a session",
+            &["node", "packages", "approve", "pkb_1"],
+            &[],
+            vec![],
+            port_only,
+            3,
+            0,
+        )),
         words("approve, no request", &["node", "packages", "approve"], 2),
-        words("approve, two requests", &["node", "packages", "approve", "a", "b"], 2),
-        words("approve, an unknown flag", &["node", "packages", "approve", "a", "--frob"], 2),
+        words(
+            "approve, two requests",
+            &["node", "packages", "approve", "a", "b"],
+            2,
+        ),
+        words(
+            "approve, an unknown flag",
+            &["node", "packages", "approve", "a", "--frob"],
+            2,
+        ),
         // covers: compute node packages deny
         case(
             "deny",
             &["node", "packages", "deny", "pkb_0001", "--why", "no"],
             &[],
-            vec![ok(REQUESTS), ok(r#"{"rows":[{"state":"denied","request":"pkr_1","node":"mini"}]}"#)],
+            vec![
+                ok(REQUESTS),
+                ok(r#"{"rows":[{"state":"denied","request":"pkr_1","node":"mini"}]}"#),
+            ],
             owner_and_port,
             0,
             2,
         ),
         words("deny --add", &["node", "packages", "deny", "a", "--add"], 2),
-        words("deny, --note last", &["node", "packages", "deny", "a", "--note"], 1),
+        words(
+            "deny, --note last",
+            &["node", "packages", "deny", "a", "--note"],
+            1,
+        ),
         // covers: compute node packages policy
-        one("policy, show", &["node", "packages", "policy", "mini", "globex"], SHOW, 0),
-        one("policy, show own", &["node", "packages", "policy", "mini", "own"], r#"{"node":"mini","note":"offline"}"#, 0),
+        one(
+            "policy, show",
+            &["node", "packages", "policy", "mini", "globex"],
+            SHOW,
+            0,
+        ),
+        one(
+            "policy, show own",
+            &["node", "packages", "policy", "mini", "own"],
+            r#"{"node":"mini","note":"offline"}"#,
+            0,
+        ),
         one(
             "policy, set",
-            &["node", "packages", "policy", "mini", "level=profiles", "profiles= a ,,b", "max_install_mb=0512", "level=official", "--reason", "tidy"],
+            &[
+                "node",
+                "packages",
+                "policy",
+                "mini",
+                "level=profiles",
+                "profiles= a ,,b",
+                "max_install_mb=0512",
+                "level=official",
+                "--reason",
+                "tidy",
+            ],
             r#"{"node":"mini","note":"set"}"#,
             0,
         ),
@@ -159,20 +312,52 @@ fn compute_node_packages() {
             "policy, set, held",
             &["node", "packages", "policy", "mini", "globex", "level=list"],
             &[],
-            vec![ok(r#"{"held":true,"request":{"id":"r1","summary":"pkg.policy"}}"#)],
+            vec![ok(
+                r#"{"held":true,"request":{"id":"r1","summary":"pkg.policy"}}"#,
+            )],
             owner_and_port,
             2,
             1,
         ),
-        words("policy, a bad level", &["node", "packages", "policy", "mini", "level=all"], 2),
-        words("policy, a bad size", &["node", "packages", "policy", "mini", "max_install_mb=1e3"], 2),
-        words("policy, an unknown key", &["node", "packages", "policy", "mini", "color=red"], 2),
+        words(
+            "policy, a bad level",
+            &["node", "packages", "policy", "mini", "level=all"],
+            2,
+        ),
+        words(
+            "policy, a bad size",
+            &["node", "packages", "policy", "mini", "max_install_mb=1e3"],
+            2,
+        ),
+        words(
+            "policy, an unknown key",
+            &["node", "packages", "policy", "mini", "color=red"],
+            2,
+        ),
         words("policy, no node", &["node", "packages", "policy"], 2),
-        words("policy, three words", &["node", "packages", "policy", "a", "b", "c"], 2),
-        words("policy, --reason last", &["node", "packages", "policy", "mini", "--reason"], 1),
+        words(
+            "policy, three words",
+            &["node", "packages", "policy", "a", "b", "c"],
+            2,
+        ),
+        words(
+            "policy, --reason last",
+            &["node", "packages", "policy", "mini", "--reason"],
+            1,
+        ),
         // covers: compute node packages policy --json
-        one("policy --json", &["node", "packages", "policy", "mini", "--json"], SHOW, 0),
-        one("policy set --json", &["node", "packages", "policy", "mini", "level=list", "--json"], r#"{"node":"mini"}"#, 0),
+        one(
+            "policy --json",
+            &["node", "packages", "policy", "mini", "--json"],
+            SHOW,
+            0,
+        ),
+        one(
+            "policy set --json",
+            &["node", "packages", "policy", "mini", "level=list", "--json"],
+            r#"{"node":"mini"}"#,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -193,7 +378,12 @@ fn compute_node_packages_large_list() {
     let body = format!(r#"{{"canDecide":true,"requests":[{}]}}"#, rows.join(","));
     assert!(body.len() > 256 * 1024, "{} bytes", body.len());
     let body: &'static str = Box::leak(body.into_boxed_str());
-    rig.check(&one("3000 requests", &["node", "packages", "requests"], body, 0));
+    rig.check(&one(
+        "3000 requests",
+        &["node", "packages", "requests"],
+        body,
+        0,
+    ));
 }
 
 /// The lines name the command by the brand's name.
@@ -208,7 +398,9 @@ fn the_node_packages_lines_say_the_brand_s_name() {
         ),
         (
             &["node", "packages", "approve"],
-            format!("usage: {cli} compute node packages approve <request> [--add] [--note \"…\"]\n"),
+            format!(
+                "usage: {cli} compute node packages approve <request> [--add] [--note \"…\"]\n"
+            ),
         ),
     ] {
         let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
@@ -224,7 +416,9 @@ fn the_node_packages_lines_say_the_brand_s_name() {
 fn compute_node_packages_help_never_acts() {
     let rig = Rig::new(VERB, "nodepkghelp");
     let lines: &[&[&str]] = &[
-        &["node", "packages", "request", "mini", "jq", "--why", "w", "-h"],
+        &[
+            "node", "packages", "request", "mini", "jq", "--why", "w", "-h",
+        ],
         &["node", "packages", "approve", "pkb_1", "--help"],
         &["node", "packages", "deny", "-h", "pkb_1"],
         &["node", "pkg", "policy", "mini", "level=list", "--help"],

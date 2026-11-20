@@ -43,21 +43,64 @@ fn compute_provenance() {
     let v = vec![
         // covers: compute provenance
         one("the line", &["provenance", "abcd1234"], PROV, 0),
-        one("a line with no newline", &["provenance", "abcd"], r#"{"line":"x é"}"#, 0),
-        raises(one("no line", &["provenance", "abcd"], r#"{"short":"a"}"#, 1)),
-        raises(one("a line that is a number", &["provenance", "abcd"], r#"{"line":5}"#, 1)),
+        one(
+            "a line with no newline",
+            &["provenance", "abcd"],
+            r#"{"line":"x é"}"#,
+            0,
+        ),
+        raises(one(
+            "no line",
+            &["provenance", "abcd"],
+            r#"{"short":"a"}"#,
+            1,
+        )),
+        raises(one(
+            "a line that is a number",
+            &["provenance", "abcd"],
+            r#"{"line":5}"#,
+            1,
+        )),
         // covers: compute provenance --json
         one("--json", &["provenance", "--json", "abcd1234"], PROV, 0),
-        one("--out", &["provenance", "abcd1234", "--out", "s.intoto.jsonl"], PROV, 0),
-        one("--out, no node, no subjects", &["provenance", "abcd1234", "--out", "s.jsonl"], r#"{"line":"L","short":"ab"}"#, 0),
-        raises(one("--out, no short", &["provenance", "abcd1234", "--out", "s.jsonl"], r#"{"line":"L"}"#, 1)),
-        raises(one("--out, subjects that are a number", &["provenance", "a", "--out", "s.jsonl"], r#"{"line":"L","short":"ab","subjects":3}"#, 1)),
-        raises(one("--out into no folder", &["provenance", "a", "--out", "no/such/s.jsonl"], PROV, 1)),
+        one(
+            "--out",
+            &["provenance", "abcd1234", "--out", "s.intoto.jsonl"],
+            PROV,
+            0,
+        ),
+        one(
+            "--out, no node, no subjects",
+            &["provenance", "abcd1234", "--out", "s.jsonl"],
+            r#"{"line":"L","short":"ab"}"#,
+            0,
+        ),
+        raises(one(
+            "--out, no short",
+            &["provenance", "abcd1234", "--out", "s.jsonl"],
+            r#"{"line":"L"}"#,
+            1,
+        )),
+        raises(one(
+            "--out, subjects that are a number",
+            &["provenance", "a", "--out", "s.jsonl"],
+            r#"{"line":"L","short":"ab","subjects":3}"#,
+            1,
+        )),
+        raises(one(
+            "--out into no folder",
+            &["provenance", "a", "--out", "no/such/s.jsonl"],
+            PROV,
+            1,
+        )),
         case(
             "the daemon's error",
             &["provenance", "abcd"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"no_statement","hint":"none kept"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"no_statement","hint":"none kept"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -81,13 +124,20 @@ fn compute_provenance_out_file() {
     let rig = Rig::new(VERB, "provout");
     let path = rig.proj.join("s.intoto.jsonl");
     for (args, body) in [
-        (&["provenance", "abcd1234", "--out", "s.intoto.jsonl"][..], PROV),
-        (&["provenance", "abcd1234", "--out", "s.intoto.jsonl"][..], r#"{"short":"ab"}"#),
+        (
+            &["provenance", "abcd1234", "--out", "s.intoto.jsonl"][..],
+            PROV,
+        ),
+        (
+            &["provenance", "abcd1234", "--out", "s.intoto.jsonl"][..],
+            r#"{"short":"ab"}"#,
+        ),
     ] {
         let c = case("out", args, &[], vec![ok(body)], owner_and_port, 0, 1);
         let mut files = vec![];
-        for bash in [true, false] {
+        for (bash, side) in [(true, Side::Bash), (false, Side::Rust)] {
             let _ = std::fs::remove_file(&path);
+            rig.prepare(side, &c);
             rig.run(bash, &c);
             files.push(std::fs::read(&path).ok());
         }
@@ -97,11 +147,16 @@ fn compute_provenance_out_file() {
 }
 
 const VERIFIED: &str = r#"{"short":"abcd1234","node":"mini","verified":true,"checks":[{"ok":true,"check":"signature","detail":"node key fp1"},{"ok":false,"check":"subject","detail":"no file given"}],"notChecked":"the roster"}"#;
-const NOT_VERIFIED: &str = r#"{"short":"abcd1234","verified":false,"failed":"signature","checks":[],"notChecked":"x"}"#;
+const NOT_VERIFIED: &str =
+    r#"{"short":"abcd1234","verified":false,"failed":"signature","checks":[],"notChecked":"x"}"#;
 
 fn files(r: &Rig) {
     owner_and_port(r);
-    std::fs::write(r.proj.join("one.jsonl"), "\n{\"payload\":\"e30=\",\"n\":1.5,\"u\":\"é\"}\r\n  \n").unwrap();
+    std::fs::write(
+        r.proj.join("one.jsonl"),
+        "\n{\"payload\":\"e30=\",\"n\":1.5,\"u\":\"é\"}\r\n  \n",
+    )
+    .unwrap();
     std::fs::write(r.proj.join("two.jsonl"), "{}\n{}\n").unwrap();
     std::fs::write(r.proj.join("bad.jsonl"), "{nope\n").unwrap();
     std::fs::write(r.proj.join("latin.jsonl"), b"\xff{}\n").unwrap();
@@ -119,35 +174,105 @@ fn compute_verify() {
     let v = vec![
         // covers: compute verify
         one("a job, verified", &["verify", "abcd1234"], VERIFIED, 0),
-        one("a job, not verified", &["verify", "abcd1234"], NOT_VERIFIED, 1),
-        with_files(one("a statement file and --file", &["verify", "one.jsonl", "--file", "k5.bin", "--owner-key", "fp9"], VERIFIED, 0)),
-        with_files(one("--file in a folder", &["verify", "abcd", "--file", "./k5.bin"], VERIFIED, 0)),
+        one(
+            "a job, not verified",
+            &["verify", "abcd1234"],
+            NOT_VERIFIED,
+            1,
+        ),
+        with_files(one(
+            "a statement file and --file",
+            &[
+                "verify",
+                "one.jsonl",
+                "--file",
+                "k5.bin",
+                "--owner-key",
+                "fp9",
+            ],
+            VERIFIED,
+            0,
+        )),
+        with_files(one(
+            "--file in a folder",
+            &["verify", "abcd", "--file", "./k5.bin"],
+            VERIFIED,
+            0,
+        )),
         // covers: compute verify --json
         one("--json", &["verify", "abcd1234", "--json"], VERIFIED, 0),
-        one("--json, not verified", &["verify", "--json", "abcd1234"], NOT_VERIFIED, 1),
-        raises(one("--json, no verified", &["verify", "--json", "abcd1234"], r#"{"short":"a"}"#, 1)),
-        raises(one("no checks", &["verify", "abcd1234"], r#"{"short":"a","verified":true}"#, 1)),
-        raises(one("notChecked a number", &["verify", "abcd1234"], r#"{"short":"a","verified":true,"checks":[],"notChecked":1}"#, 1)),
+        one(
+            "--json, not verified",
+            &["verify", "--json", "abcd1234"],
+            NOT_VERIFIED,
+            1,
+        ),
+        raises(one(
+            "--json, no verified",
+            &["verify", "--json", "abcd1234"],
+            r#"{"short":"a"}"#,
+            1,
+        )),
+        raises(one(
+            "no checks",
+            &["verify", "abcd1234"],
+            r#"{"short":"a","verified":true}"#,
+            1,
+        )),
+        raises(one(
+            "notChecked a number",
+            &["verify", "abcd1234"],
+            r#"{"short":"a","verified":true,"checks":[],"notChecked":1}"#,
+            1,
+        )),
         with_files(words("two lines", &["verify", "two.jsonl"], 2)),
         with_files(words("not JSON", &["verify", "bad.jsonl"], 2)),
         with_files(raises(words("not UTF-8", &["verify", "latin.jsonl"], 2))),
-        with_files(words("--file not there", &["verify", "abcd", "--file", "none.bin"], 2)),
-        with_files(words("--file a folder", &["verify", "abcd", "--file", "dir"], 2)),
-        with_files(one("a folder as the target is a job", &["verify", "dir"], VERIFIED, 0)),
+        with_files(words(
+            "--file not there",
+            &["verify", "abcd", "--file", "none.bin"],
+            2,
+        )),
+        with_files(words(
+            "--file a folder",
+            &["verify", "abcd", "--file", "dir"],
+            2,
+        )),
+        with_files(one(
+            "a folder as the target is a job",
+            &["verify", "dir"],
+            VERIFIED,
+            0,
+        )),
         case(
             "the daemon's error",
             &["verify", "abcd"],
             &[],
-            vec![Reply::Answer(400, r#"{"error":{"code":"bad_envelope","hint":"no"}}"#.into())],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"bad_envelope","hint":"no"}}"#.into(),
+            )],
             owner_and_port,
             2,
             1,
         ),
-        case("an empty reply", &["verify", "abcd"], &[], vec![Reply::Close], owner_and_port, 3, 1),
+        case(
+            "an empty reply",
+            &["verify", "abcd"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            3,
+            1,
+        ),
         words("no target", &["verify"], 2),
         words("--out", &["verify", "a", "--out", "x"], 2),
         words("--file with nothing", &["verify", "a", "--file"], 2),
-        words("--owner-key with nothing", &["verify", "a", "--owner-key"], 2),
+        words(
+            "--owner-key with nothing",
+            &["verify", "a", "--owner-key"],
+            2,
+        ),
     ];
     for c in v {
         rig.check(&c);

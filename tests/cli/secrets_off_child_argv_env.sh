@@ -528,12 +528,12 @@ SEC_CASE_CHILDREN=assert_children_native sec_case "remote-session write --token-
 
 # 27. k2 compute node servers <node> add --code -: the pairing code reaches
 #     the add route and no child's argv or environment, nor k2's own argv.
-sec_case "compute node servers add --code -" /cli/compute/nodes/servers/add "pairing code" "$PASS_SENTINEL" compute node servers node-1 add --url https://globex.example --code -
+SEC_CASE_CHILDREN=assert_children_native sec_case "compute node servers add --code -" /cli/compute/nodes/servers/add "pairing code" "$PASS_SENTINEL" compute node servers node-1 add --url https://globex.example --code -
 
 # 28. k2 compute node servers <node> add --code-stdin: the pairing code
 #     reaches the add route and no child's argv or environment, nor k2's
 #     own argv.
-sec_case "compute node servers add --code-stdin" /cli/compute/nodes/servers/add "pairing code" "$PASS_SENTINEL" compute node servers node-1 add --url https://globex.example --code-stdin
+SEC_CASE_CHILDREN=assert_children_native sec_case "compute node servers add --code-stdin" /cli/compute/nodes/servers/add "pairing code" "$PASS_SENTINEL" compute node servers node-1 add --url https://globex.example --code-stdin
 
 echo "secrets_off_child_argv_env: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

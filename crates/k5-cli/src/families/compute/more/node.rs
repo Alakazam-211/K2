@@ -173,7 +173,11 @@ fn servers(words: &[&str]) -> Option<Words<Ask>> {
         return usage(SERVERS_USAGE);
     }
     let mut rest = &words[1..];
-    let mut act = rest.first().copied().filter(|a| !a.is_empty()).unwrap_or("list");
+    let mut act = rest
+        .first()
+        .copied()
+        .filter(|a| !a.is_empty())
+        .unwrap_or("list");
     if act == "--json" {
         act = "list";
     }
@@ -248,7 +252,12 @@ fn servers(words: &[&str]) -> Option<Words<Ask>> {
                 ("now", Value::Bool(now)),
                 ("wipe", Value::Bool(wipe)),
             ]);
-            post("/cli/compute/nodes/servers/revoke", body, After::Revoke, json)
+            post(
+                "/cli/compute/nodes/servers/revoke",
+                body,
+                After::Revoke,
+                json,
+            )
         }
         "owner" => owner(node, rest),
         _ => usage(SERVERS_ACT_USAGE),
@@ -458,14 +467,25 @@ fn owner(node: &str, rest: &[&str]) -> Option<Words<Ask>> {
         ("now", Value::Bool(now)),
         ("reason", str_value(reason)),
     ]);
-    post("/cli/compute/nodes/servers/owner", body, After::Owner, false)
+    post(
+        "/cli/compute/nodes/servers/owner",
+        body,
+        After::Owner,
+        false,
+    )
 }
 
 /// The words of `add` after the node, read once nothing else stops the
 /// command: the body, or what stops it. `None`: the shell's.
 fn add_body(node: &str, rest: &[String]) -> Option<Result<String, Words<Ask>>> {
-    let (mut url, mut code, mut code_stdin, mut trust, mut forv, mut reason) =
-        (String::new(), String::new(), false, "own".to_string(), String::new(), String::new());
+    let (mut url, mut code, mut code_stdin, mut trust, mut forv, mut reason) = (
+        String::new(),
+        String::new(),
+        false,
+        "own".to_string(),
+        String::new(),
+        String::new(),
+    );
     let mut pairs: Vec<String> = vec![];
     let mut i = 0;
     while i < rest.len() {
@@ -507,7 +527,11 @@ fn add_body(node: &str, rest: &[String]) -> Option<Result<String, Words<Ask>>> {
                 i += 2;
                 continue;
             }
-            w => return Some(Err(Words::Usage(format!("{ADD_FLAG_USAGE} (unknown '{w}')")))),
+            w => {
+                return Some(Err(Words::Usage(format!(
+                    "{ADD_FLAG_USAGE} (unknown '{w}')"
+                ))))
+            }
         }
         i += 1;
     }
@@ -789,7 +813,10 @@ fn health(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     let v = render::load(cx, body, line!(A, "v = json.load(sys.stdin)"))?;
     let l = line!(A, "f = v.get(\"facts\") or {}");
     let f = p::or(cx.at(l, p::get(&v, "facts"))?, Value::Object(vec![]));
-    let seen = cx.at(line!(A, "seen = v.get(\"lastSeen\")"), p::get(&v, "lastSeen"))?;
+    let seen = cx.at(
+        line!(A, "seen = v.get(\"lastSeen\")"),
+        p::get(&v, "lastSeen"),
+    )?;
     let l = line!(A, "print(\"%s  %s%s\" % (v[\"node\"]");
     let node = cx.at(l, p::idx(&v, "node"))?;
     let online = p::truthy(&cx.at(l, p::idx(&v, "online"))?);
@@ -797,7 +824,10 @@ fn health(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     let since = if p::truthy(&cx.at(l, p::idx(&v, "online"))?) || !p::truthy(&seen) {
         String::new()
     } else {
-        format!(" since {}", cx.at(l, p::strftime("%H:%M", &seen, cx.now()))?)
+        format!(
+            " since {}",
+            cx.at(l, p::strftime("%H:%M", &seen, cx.now()))?
+        )
     };
     print(cx, l, "%s  %s%s", &[node, s(state), s(&since)])?;
     let l = line!(A, "print(\"  k2-node %s, remote admin");
@@ -806,11 +836,21 @@ fn health(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         p::or(cx.at(l, p::get(&v, "remoteAdmin"))?, s("unknown")),
         cx.at(l, p::get_or(&v, "pendingApprovals", p::int(0)))?,
     ];
-    print(cx, l, "  k2-node %s, remote admin %s, pending approvals %s", &args)?;
+    print(
+        cx,
+        l,
+        "  k2-node %s, remote admin %s, pending approvals %s",
+        &args,
+    )?;
     if p::truthy(&cx.at(line!(A, "if v.get(\"needsPin\"):"), p::get(&v, "needsPin"))?) {
-        cx.print("  NEEDS ONE-TIME PIN: admin commands are refused until someone runs, at that machine:");
+        cx.print(
+            "  NEEDS ONE-TIME PIN: admin commands are refused until someone runs, at that machine:",
+        );
         let l = line!(A, "print(\"      %s\" % (v.get(\"pinCommand\")");
-        let pin = p::or(cx.at(l, p::get(&v, "pinCommand"))?, s("sudo k2-node admin pin"));
+        let pin = p::or(
+            cx.at(l, p::get(&v, "pinCommand"))?,
+            s("sudo k2-node admin pin"),
+        );
         print(cx, l, "      %s", &[pin])?;
     }
     if !p::truthy(&f) {
@@ -832,7 +872,10 @@ fn health(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
         };
         print(cx, l, "  update        %s %s%s", &[state, version, reason])?;
     }
-    let a = cx.at(line!(A, "a = v.get(\"alertAfterSecs\")"), p::get(&v, "alertAfterSecs"))?;
+    let a = cx.at(
+        line!(A, "a = v.get(\"alertAfterSecs\")"),
+        p::get(&v, "alertAfterSecs"),
+    )?;
     let l = line!(A, "print(\"  alerts        %s, to %s\"");
     let when = if p::truthy(&a) {
         let m = cx.at(l, p::floordiv(&a, &p::int(60)))?;
@@ -905,7 +948,12 @@ fn facts(cx: &mut Cx, v: &Value, f: &Value) -> Result<(), Raise> {
     let ar = cx.at(l, p::get(&sleep, "autorestart"))?;
     if !p::is_none(&ar) {
         let on = if p::eq(&ar, &p::int(1)) { "on" } else { "off" };
-        print(cx, line!(A, "if ar is not None:"), "  autorestart   %s", &[s(on)])?;
+        print(
+            cx,
+            line!(A, "if ar is not None:"),
+            "  autorestart   %s",
+            &[s(on)],
+        )?;
     }
     let l = line!(A, "up = f.get(\"updates\") or {}");
     let up = p::or(cx.at(l, p::get(f, "updates"))?, Value::Object(vec![]));
@@ -913,7 +961,12 @@ fn facts(cx: &mut Cx, v: &Value, f: &Value) -> Result<(), Raise> {
     if !p::is_none(&cx.at(l, p::get(&up, "pending"))?) {
         let pending = cx.at(l, p::idx(&up, "pending"))?;
         let sec = p::or(cx.at(l, p::get(&up, "security"))?, p::int(0));
-        print(cx, l, "  updates       %s pending (%s security)", &[pending, sec])?;
+        print(
+            cx,
+            l,
+            "  updates       %s pending (%s security)",
+            &[pending, sec],
+        )?;
     }
     let l = line!(A, "if up.get(\"reboot_required\"):");
     if p::truthy(&cx.at(l, p::get(&up, "reboot_required"))?) {
@@ -947,7 +1000,10 @@ fn facts(cx: &mut Cx, v: &Value, f: &Value) -> Result<(), Raise> {
         )?;
         print(cx, l, "  stuck job     %s (quiet %dm)", &[id, quiet])?;
     }
-    let lo = cx.at(line!(A, "lo = f.get(\"leftovers\")"), p::get(f, "leftovers"))?;
+    let lo = cx.at(
+        line!(A, "lo = f.get(\"leftovers\")"),
+        p::get(f, "leftovers"),
+    )?;
     if p::is_dict(&lo) {
         let l = line!(A, "print(\"  leftovers     %s\"");
         let what = if !p::truthy(&cx.at(l, p::get(&lo, "count"))?) {

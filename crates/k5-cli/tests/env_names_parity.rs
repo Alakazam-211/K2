@@ -275,6 +275,11 @@ fn shell_reads() -> (Vec<Read>, Vec<String>) {
             let at = format!("cli/src/{file}:{}", n + 1);
             envn_calls(line, &at, &mut reads, &mut errors);
             let seen = inline_reads(line, &at, &mut reads, &mut errors);
+            // An `unset` line clears names; it reads none (k2 vault run
+            // clears every name of the hook token before the helper runs).
+            if line.trim_start().starts_with("unset ") {
+                continue;
+            }
             // Any other K5_ name on a code line: an assignment, or a read
             // this test does not know.
             let bytes = line.as_bytes();

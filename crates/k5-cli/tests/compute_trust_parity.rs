@@ -429,3 +429,36 @@ fn compute_trust_help_never_acts() {
         });
     }
 }
+
+/// The lines name the command by the brand's name (in a build with
+/// `K2_BRAND_DIR=brand/xy` they say `xy`).
+#[test]
+fn the_trust_lines_say_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let rig = Rig::new(VERB, "trustbrand");
+    for (args, want) in [
+        (&["retry"][..], format!("usage: {cli} compute retry <job>\n")),
+        (
+            &["roster", "frob"],
+            format!("usage: {cli} compute roster [show|key|set|retire|revoke|publish] ({cli} compute --help)\n"),
+        ),
+        (
+            &["seats", "end"],
+            format!("usage: {cli} compute seats end <seat> [--why TEXT]\n"),
+        ),
+        (
+            &["trust", "approve"],
+            format!("usage: {cli} compute trust approve <ctr_…>\n"),
+        ),
+        (
+            &["owners", "consent", "x", "y"],
+            format!("usage: {cli} compute owners consent <owner> on|off\n"),
+        ),
+    ] {
+        let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(2), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
+    }
+}

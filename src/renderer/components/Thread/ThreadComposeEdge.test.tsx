@@ -3,8 +3,10 @@
 // the page, so its edge must read at 3:1 against the page in every look
 // (WCAG 1.4.11). The page under it is --color-bg (the scope's --zen-canvas).
 // The edge is one token, --zen-compose-edge: the desktop box maps it to the
-// Style's control edge, Glass's tile rule draws the same token, and a Garden,
-// which sets no such token, keeps its own --zen-border.
+// Style's control edge, and a Garden, which sets no such token, keeps its own
+// --zen-border. Dark Glass is the exception: there the box is a tile like
+// every other, so it sets the token to the soft tile edge. Light Glass keeps
+// the control edge, as the tile edge is too faint there to find the box by.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -73,13 +75,29 @@ describe('the message box edge', () => {
     expect(box.style.getPropertyValue('--ch-edge')).toBe('var(--zen-compose-edge, var(--zen-border))')
   })
 
-  it("Glass's tile rule for the box draws the same token, not the tile edge", () => {
-    const css = readFileSync(join(repo, 'src/renderer/globals.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ')
-    const sel = 'html[data-style="glass"] [data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]:not([data-zen-root] *) {'
+  const glassCss = (): string =>
+    readFileSync(join(repo, 'src/renderer/globals.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ')
+  const BOX = '[data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]:not([data-zen-root] *) {'
+  const ruleBody = (css: string, sel: string): string => {
     const at = css.indexOf(sel)
-    expect(at).toBeGreaterThanOrEqual(0)
-    const body = css.slice(at, css.indexOf('}', at))
+    expect(at, sel).toBeGreaterThanOrEqual(0)
+    return css.slice(at, css.indexOf('}', at))
+  }
+
+  // The box's inline border and its cut layers both read --zen-compose-edge,
+  // so the Glass rules steer the edge through that token.
+  it('dark Glass draws the soft tile edge, as every other Glass tile', () => {
+    const body = ruleBody(glassCss(), `html[data-style="glass"]:not([data-scheme="light"]) ${BOX}`)
+    expect(body).toContain('--zen-compose-edge: var(--tile-edge)')
+  })
+
+  it('light Glass (data-scheme="light") draws --zen-compose-edge, the control edge', () => {
+    const css = glassCss()
+    const body = ruleBody(css, `html[data-style="glass"] ${BOX}`)
     expect(body).toContain('border: 1px solid var(--zen-compose-edge)')
-    expect(body).not.toContain('--tile-edge)')
+    expect(body).not.toContain('--tile-edge')
+    // No rule points the light scheme's box at the tile edge.
+    const light = /html\[data-style="glass"\]\[data-scheme="light"\][^{]*\[data-zen-compose-box\][^{]*\{[^}]*\}/g
+    for (const rule of css.match(light) ?? []) expect(rule).not.toContain('--tile-edge')
   })
 })

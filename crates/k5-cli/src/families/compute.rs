@@ -15,6 +15,7 @@
 //!   `compute` alone). [`follow`] is `_compute_follow`.
 //! - [`more`]: `retry`, `provenance`, `verify`, and `roster`, `seats`,
 //!   `trust` and `owners`.
+//! - [`submit`]: `run`, `test` and `prewarm`.
 //!
 //! Every other verb is the shell's. The modules below
 //! are shared: [`pyrt`] (the Python operations the shell's readers use),
@@ -31,6 +32,7 @@ pub mod pyrt;
 pub mod reads;
 pub mod render;
 pub mod status;
+pub mod submit;
 pub mod writes;
 
 use crate::exit::Exit;
@@ -187,6 +189,18 @@ pub const VERBS: &[Verb] = &[
     },
     // `compute` alone: the help page, after the gates ([`admin::setup`]).
     Verb::bare(Owner::Native),
+    Verb {
+        words: &["run"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["test"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["prewarm"],
+        owner: Owner::Native,
+    },
 ];
 
 /// Whether this family's code answers `verb` (a second word).
@@ -196,6 +210,7 @@ pub fn answers(verb: &str) -> bool {
         writes::ANSWERS,
         admin::ANSWERS,
         more::ANSWERS,
+        submit::ANSWERS,
     ]
     .iter()
     .any(|a| a.contains(&verb))
@@ -211,4 +226,5 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .or_else(|| writes::run(args))
         .or_else(|| admin::run(args))
         .or_else(|| more::run(args))
+        .or_else(|| submit::run(args))
 }

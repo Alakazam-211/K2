@@ -374,7 +374,7 @@ rec_case "recording policy set" /cli/sew/recording/policy hostchat recording pol
 fresh
 printf '\n' | "$K2_CLI" api-key create --label hire-test --workspaces ws1 --hire >/dev/null 2>&1 || true
 assert_tcp_got "api-key create --hire" /cli/api-keys/create "confirm token" "$TOKEN_SENTINEL"
-assert_children_seen "api-key create --hire" curl
+assert_children_native "api-key create --hire" curl
 assert_off_children "api-key create --hire" "confirm token" "$TOKEN_SENTINEL"
 
 # 7-10. The mail family's passwords and OAuth secret: typed on stdin, they

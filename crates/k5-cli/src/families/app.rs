@@ -35,6 +35,9 @@
 //!   …` and `app grant copy-host`, with [`grace`] for a held answer;
 //!   [`sign_in`]: `app auth` and `app login settings`; [`chat`]: `app
 //!   chat`; [`init`]: `app init` and `app doctor --store`.
+//! - [`deploy`]: `app build`, `app install` (not `--catalog`), `app
+//!   deploy`, `app rollback`, `app stop|start|restart`, `app link`, `app
+//!   seal` and `app config`.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
 //! - The verbs `cmd_app` hands to `cmd_skin` (`user`, `role`, `grant`'s
@@ -79,6 +82,7 @@ pub mod call;
 pub mod catalog;
 pub mod chat;
 pub mod db_set;
+pub mod deploy;
 pub mod door;
 pub mod grace;
 pub mod guests;
@@ -129,6 +133,7 @@ pub enum Ask {
     SignIn(sign_in::Ask),
     Chat(chat::Ask),
     Folder(init::Ask),
+    Change(deploy::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -207,6 +212,16 @@ pub const TAKES: &[&str] = &[
     "chat",
     "init",
     "doctor",
+    "build",
+    "install",
+    "deploy",
+    "rollback",
+    "stop",
+    "start",
+    "restart",
+    "link",
+    "seal",
+    "config",
 ];
 
 /// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
@@ -429,6 +444,38 @@ pub const VERBS: &[crate::route::Verb] = &[
         owner: crate::route::Owner::Native,
     },
     crate::route::Verb {
+        words: &["build"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["install"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["deploy"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["rollback"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["stop", "start", "restart"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["link"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["seal"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["config"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
         words: &["user", "users"],
         owner: crate::route::Owner::Native,
     },
@@ -491,6 +538,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "chat" => Some(chat::parse(rest)?.map(Ask::Chat)),
         "init" => Some(init::parse_init(rest)?.map(Ask::Folder)),
         "doctor" => Some(init::parse_doctor(rest)?.map(Ask::Folder)),
+        v if deploy::VERBS.contains(&v) => Some(deploy::parse(v, rest)?.map(Ask::Change)),
         "grant" | "grants" => Some(guests::parse_grant(rest)?.map(Ask::Guests)),
         v if approve::VERBS.contains(&v) => Some(approve::parse(v, rest)?.map(Ask::Approve)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
@@ -608,6 +656,7 @@ fn run_with(
         Ask::SignIn(s) => sign_in::run(&mut ctx, s),
         Ask::Chat(c) => chat::run(&mut ctx, c),
         Ask::Folder(f) => init::run(&mut ctx, f),
+        Ask::Change(c) => deploy::run(&mut ctx, c),
     };
     let exit = match shown {
         Ok(s) => s.print(),

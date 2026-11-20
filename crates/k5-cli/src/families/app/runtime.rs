@@ -174,7 +174,7 @@ fn physical(p: &str) -> String {
 }
 
 /// `_app_rt_abs`: a folder's physical path, anything else as it is.
-fn rt_abs(p: &str) -> String {
+pub(super) fn rt_abs(p: &str) -> String {
     if is_dir(p) {
         physical(p)
     } else {
@@ -183,7 +183,7 @@ fn rt_abs(p: &str) -> String {
 }
 
 /// `_app_rt_abs_file`: the file's folder resolved, when it is one.
-fn rt_abs_file(p: &str) -> String {
+pub(super) fn rt_abs_file(p: &str) -> String {
     let d = dirname(p);
     if is_dir(&d) {
         format!("{}/{}", physical(&d), basename(p))

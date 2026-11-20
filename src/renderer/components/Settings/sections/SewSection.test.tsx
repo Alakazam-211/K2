@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   daemonCliGet: vi.fn(),
   daemonCliPost: vi.fn(),
   openUrl: vi.fn(),
+  openOwnerLink: vi.fn(),
   sewHandlers: [] as Array<(reason: string) => void>,
 }))
 
@@ -28,6 +29,16 @@ vi.mock('@/lib/daemon-cli', async () => {
   }
 })
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: (...a: unknown[]) => h.openUrl(...a) }))
+// The owner link goes to the app's open_owner_link (lib/owner-link.ts);
+// every other command keeps the real invoke.
+vi.mock('@tauri-apps/api/core', async (orig) => {
+  const real = await orig<typeof import('@tauri-apps/api/core')>()
+  return {
+    ...real,
+    invoke: (cmd: string, args?: Record<string, unknown>) =>
+      cmd === 'open_owner_link' ? h.openOwnerLink(args) : real.invoke(cmd, args),
+  }
+})
 vi.mock('@/stores/session-events', async (orig) => ({
   ...(await orig<typeof import('@/stores/session-events')>()),
   onSewChanged: (_scope: unknown, fn: (reason: string) => void) => {
@@ -110,6 +121,7 @@ beforeEach(() => {
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
   h.openUrl.mockReset()
+  h.openOwnerLink.mockReset()
   h.sewHandlers = []
   useToastStore.setState({ toasts: [] } as never)
 })
@@ -605,12 +617,13 @@ describe('open chat as owner', () => {
       'vault/confirm/finish': { token: 'k2vc_ho' },
       'sew/owner-handoff': { ok: true, code: 'k2sho_SECRETCODE', expiresInMs: 60000 },
     })
-    h.openUrl.mockResolvedValue(undefined)
+    h.openOwnerLink.mockResolvedValue(undefined)
     await renderReady('Running')
     fireEvent.click(screen.getByRole('button', { name: 'Open as owner' }))
-    await waitFor(() => expect(h.openUrl).toHaveBeenCalledTimes(1))
-    expect(h.openUrl).toHaveBeenCalledWith('https://hearth.box.k2.dev/k2/owner-handoff#code=k2sho_SECRETCODE')
-    expect(String(h.openUrl.mock.calls[0][0])).not.toContain('?code')
+    await waitFor(() => expect(h.openOwnerLink).toHaveBeenCalledTimes(1))
+    // The app's open_owner_link gets it (a redirect page, never a command line).
+    expect(h.openOwnerLink.mock.calls).toEqual([[{ link: 'https://hearth.box.k2.dev/k2/owner-handoff#code=k2sho_SECRETCODE' }]])
+    expect(h.openUrl).not.toHaveBeenCalled()
     expect(postBodies('vault/confirm/start')).toEqual([{ action: 'chat-owner-handoff' }])
     expect(postBodies('sew/owner-handoff')).toEqual([{ confirmToken: 'k2vc_ho' }])
     expect(document.body.innerHTML).not.toContain('k2sho_SECRETCODE')
@@ -624,7 +637,7 @@ describe('open chat as owner', () => {
       'vault/confirm/finish': { token: 't' },
       'sew/owner-handoff': { ok: true, code: 'k2sho_X', expiresInMs: 60000 },
     })
-    h.openUrl.mockRejectedValue(new Error('no browser'))
+    h.openOwnerLink.mockRejectedValue('no browser')
     await renderReady('Running')
     fireEvent.click(screen.getByRole('button', { name: 'Open as owner' }))
     expect((await screen.findByTestId('dialog-error')).textContent).toContain('Your browser didn’t open')

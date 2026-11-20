@@ -12,6 +12,19 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: () => Promise.reject(new Error('permissionCardWire.test: no GET here')),
 }))
 
+// The owner link an answer hands back goes to the app's open_owner_link
+// (lib/owner-link.ts), never to the opener plugin's openUrl.
+const opened = vi.hoisted(() => ({ invoke: vi.fn(async (..._a: unknown[]) => undefined), openUrl: vi.fn() }))
+vi.mock('@tauri-apps/api/core', async (orig) => {
+  const real = await orig<typeof import('@tauri-apps/api/core')>()
+  return {
+    ...real,
+    invoke: (cmd: string, args?: Record<string, unknown>) =>
+      cmd === 'open_owner_link' ? opened.invoke(cmd, args) : real.invoke(cmd, args),
+  }
+})
+vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: (...a: unknown[]) => opened.openUrl(...a) }))
+
 import type { ServerScope } from '@/kessel/server-scope'
 import {
   PERMISSION_CARDS_FEATURE,
@@ -29,6 +42,8 @@ import { ThreadAttachmentSourceProvider } from '@/components/Thread/ThreadImageO
 afterEach(() => {
   cleanup()
   daemonCliPost.mockClear()
+  opened.invoke.mockClear()
+  opened.openUrl.mockClear()
 })
 
 const scopeWith = (features: string[]): ServerScope =>
@@ -87,6 +102,22 @@ describe('answer bodies (§17.3)', () => {
       [scope, 'thread/permission-undo', { addr: 'billing', id: 'tc_7f3a2c90' }],
     ])
     expect(a.confirmScope).toBe(scope)
+  })
+
+  it('an owner link in the answer opens through open_owner_link, never openUrl', async () => {
+    const link = 'https://chat.example.test/k2/owner-handoff#code=k2sho_TESTSECRET0001'
+    daemonCliPost.mockResolvedValueOnce({ ok: true, forYou: { openUrl: link } } as unknown as { ok: boolean })
+    const a = permissionCardActions(scopeWith([]), 'billing', 'tc_owner')
+    await a.answer({ answer: 'Allow' })
+    expect(opened.invoke.mock.calls).toEqual([['open_owner_link', { link }]])
+    expect(opened.openUrl).not.toHaveBeenCalled()
+  })
+
+  it('an answer without an https owner link opens nothing', async () => {
+    daemonCliPost.mockResolvedValueOnce({ ok: true, forYou: { openUrl: 'http://chat.example.test/x' } } as unknown as { ok: boolean })
+    await permissionCardActions(scopeWith([]), 'billing', 'tc_plain').answer({ answer: 'Allow' })
+    expect(opened.invoke).not.toHaveBeenCalled()
+    expect(opened.openUrl).not.toHaveBeenCalled()
   })
 })
 

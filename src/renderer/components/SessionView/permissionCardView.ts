@@ -14,7 +14,7 @@
 // person they can keep working with the agent and can leave a note for an
 // owner or admin; there are no info cards.
 
-import { openUrl } from '@tauri-apps/plugin-opener'
+import { openOwnerLink } from '@/lib/owner-link'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf } from '@/lib/daemon-error'
 import { isWebClient } from '@/lib/is-web'
@@ -539,7 +539,7 @@ export function permissionCardActions(
       const r = await daemonCliPost(scope, 'thread/answer', permissionAnswerBody(addr, id, a))
       // Opened here, for this person only; the card and the agent never see it.
       const url = forYouOpenUrl(r)
-      if (url) await openUrl(url)
+      if (url) await openOwnerLink(url)
       return r
     },
     note: (text, item) => daemonCliPost(scope, 'thread/permission-note', { addr, id, text, ...(item ? { item } : {}) }),

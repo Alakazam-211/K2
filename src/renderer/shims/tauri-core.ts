@@ -198,6 +198,15 @@ export async function invoke<T = unknown>(
     return undefined as T
   }
 
+  // The owner link (lib/owner-link.ts). A browser tab starts no program, so
+  // there is no command line to keep it off: open it as the opener shim does.
+  if (cmd === 'open_owner_link') {
+    const link = String(args?.link ?? '')
+    if (!/^https:\/\//i.test(link)) throw new Error('The link isn’t an https address.')
+    window.open(link, '_blank', 'noopener,noreferrer')
+    return undefined as T
+  }
+
   if (KNOWN_NOOPS.has(cmd) || cmd.startsWith('plugin:')) {
     return defaultFor(cmd) as T
   }

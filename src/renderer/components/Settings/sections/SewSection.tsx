@@ -27,7 +27,7 @@
 // approve/deny, `GET /cli/sew/admin/deliveries` + set/reset).
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { openUrl } from '@tauri-apps/plugin-opener'
+import { openOwnerLink } from '@/lib/owner-link'
 import { Button, Callout, Checkbox, Input, Radio, Toggle } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { isWebClient } from '@/lib/is-web'
@@ -805,7 +805,7 @@ function WebAppGroup({ status, sample, canMutate, reload }: PanelProps): React.J
       return
     }
     try {
-      await openUrl(ownerHandoffUrl(appUrl, code))
+      await openOwnerLink(ownerHandoffUrl(appUrl, code))
     } catch {
       setError({ line: 'Your browser didn’t open.', next: 'Open chat in your browser yourself and sign in there.', detail: '', code: null })
     } finally {

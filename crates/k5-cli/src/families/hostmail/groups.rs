@@ -207,9 +207,7 @@ fn calendar_action(action: &str, words: &[&str]) -> Result<Plan, Plan> {
                 match *v {
                     "on" | "off" => files = v.to_string(),
                     other => {
-                        return Err(usage(format!(
-                            "--files must be on or off (got '{other}')"
-                        )))
+                        return Err(usage(format!("--files must be on or off (got '{other}')")))
                     }
                 }
                 i += 1;
@@ -465,14 +463,10 @@ fn dav_py(py_: &mut Py) -> R<()> {
     }
     if let Some(acc @ Value::Object(_)) = g(&d, "accounts", line::DAV_ACC)? {
         let la = line::DAV_ACC_GET;
-        let get = |k: &str| -> R<String> {
-            Ok(py::str_of(&p::get_or(&acc, k, sv("?")).at(la, MODULE)?))
-        };
+        let get =
+            |k: &str| -> R<String> { Ok(py::str_of(&p::get_or(&acc, k, sv("?")).at(la, MODULE)?)) };
         let (total, updated, unchanged) = (get("total")?, get("updated")?, get("unchanged")?);
-        let skipped = p::or(
-            g(&acc, "skipped", line::DAV_SKIPPED)?,
-            Value::Array(vec![]),
-        );
+        let skipped = p::or(g(&acc, "skipped", line::DAV_SKIPPED)?, Value::Array(vec![]));
         let n = pyx::len(&skipped, line::DAV_SKIPPED)?;
         py_.print(&format!(
             "accounts  : {total} total, {updated} updated, {unchanged} unchanged, {n} skipped"
@@ -584,7 +578,15 @@ fn group_members_py(py_: &mut Py) -> R<()> {
 }
 
 fn group_list_py(py_: &mut Py) -> R<()> {
-    let d = call(py_, Method::Get, "/cli/mail/group", &[], None, 60, line::LIST_CALL)?;
+    let d = call(
+        py_,
+        Method::Get,
+        "/cli/mail/group",
+        &[],
+        None,
+        60,
+        line::LIST_CALL,
+    )?;
     if py_.json {
         py_.print_json(&d);
         return Ok(());
@@ -604,7 +606,15 @@ fn group_list_py(py_: &mut Py) -> R<()> {
 
 fn group_show_py(py_: &mut Py) -> R<()> {
     let params = vec![("group".to_string(), py_.env("M_GROUP").to_string())];
-    let d = call(py_, Method::Get, "/cli/mail/group", &params, None, 60, line::SHOW_CALL)?;
+    let d = call(
+        py_,
+        Method::Get,
+        "/cli/mail/group",
+        &params,
+        None,
+        60,
+        line::SHOW_CALL,
+    )?;
     if py_.json {
         py_.print_json(&d);
         return Ok(());
@@ -782,10 +792,7 @@ fn cal_shares_py(py_: &mut Py) -> R<()> {
         Vec::new()
     };
     for c in cals {
-        let shares = p::or(
-            g(&c, "shares", line::SHARES_SHARES)?,
-            Value::Array(vec![]),
-        );
+        let shares = p::or(g(&c, "shares", line::SHARES_SHARES)?, Value::Array(vec![]));
         let l = line::SHARES_ROW;
         let id = s_of(g(&c, "id", l)?);
         let name = or_s(g(&c, "name", l)?, "(unnamed)");
@@ -858,4 +865,3 @@ fn cal_sharing_py(py_: &mut Py) -> R<()> {
     }
     Ok(())
 }
-

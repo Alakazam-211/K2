@@ -55,15 +55,33 @@ fn hostmail_dns_verbs_take_the_words_as_the_shell_does() {
         usage_case("dkim, an unknown sub-command", &["dkim", "list"]),
         usage_case("dkim show, no domain", &["dkim", "show"]),
         usage_case("dkim show, two", &["dkim", "show", "a", "b"]),
-        usage_case("dkim rotate, an unknown flag", &["dkim", "rotate", "a", "--now"]),
-        usage_case("dkim rotate, --domain with no value", &["dkim", "rotate", "--domain"]),
-        usage_case("dkim retire, no selector", &["dkim", "retire", "acme.example"]),
+        usage_case(
+            "dkim rotate, an unknown flag",
+            &["dkim", "rotate", "a", "--now"],
+        ),
+        usage_case(
+            "dkim rotate, --domain with no value",
+            &["dkim", "rotate", "--domain"],
+        ),
+        usage_case(
+            "dkim retire, no selector",
+            &["dkim", "retire", "acme.example"],
+        ),
         usage_case("dkim retire, three", &["dkim", "retire", "a", "s", "t"]),
         usage_case("dmarc, an unknown sub-command", &["dmarc", "set"]),
         usage_case("dmarc show, no domain", &["dmarc", "show", "--json"]),
-        usage_case("dmarc report-to, no address", &["dmarc", "report-to", "acme.example"]),
-        usage_case("dmarc report-to, no domain", &["dmarc", "report-to", "--address", "a@x"]),
-        usage_case("dmarc report-to, two domains", &["dmarc", "report-to", "a", "b"]),
+        usage_case(
+            "dmarc report-to, no address",
+            &["dmarc", "report-to", "acme.example"],
+        ),
+        usage_case(
+            "dmarc report-to, no domain",
+            &["dmarc", "report-to", "--address", "a@x"],
+        ),
+        usage_case(
+            "dmarc report-to, two domains",
+            &["dmarc", "report-to", "a", "b"],
+        ),
         usage_case("ptr, an unknown sub-command", &["ptr", "get"]),
         usage_case("ptr show, a stray word", &["ptr", "show", "x"]),
         usage_case("ptr show, a flag", &["ptr", "show", "--all"]),
@@ -71,19 +89,40 @@ fn hostmail_dns_verbs_take_the_words_as_the_shell_does() {
         usage_case("ptr set, two", &["ptr", "set", "a", "b"]),
         usage_case("profile, nothing", &["profile"]),
         usage_case("profile, no --apple", &["profile", "a@x"]),
-        usage_case("profile, two addresses", &["profile", "a@x", "b@x", "--apple"]),
+        usage_case(
+            "profile, two addresses",
+            &["profile", "a@x", "b@x", "--apple"],
+        ),
         usage_case("profile, an unknown flag", &["profile", "a@x", "--android"]),
-        usage_case("profile, --out with no value", &["profile", "a@x", "--apple", "--out"]),
-        usage_case("profile, --out empty", &["profile", "a@x", "--apple", "--out", ""]),
-        usage_case("profile, --force with no --out", &["profile", "a@x", "--apple", "--force"]),
-        usage_case("profile, --out a folder", &["profile", "a@x", "--apple", "--out", "/"]),
+        usage_case(
+            "profile, --out with no value",
+            &["profile", "a@x", "--apple", "--out"],
+        ),
+        usage_case(
+            "profile, --out empty",
+            &["profile", "a@x", "--apple", "--out", ""],
+        ),
+        usage_case(
+            "profile, --force with no --out",
+            &["profile", "a@x", "--apple", "--force"],
+        ),
+        usage_case(
+            "profile, --out a folder",
+            &["profile", "a@x", "--apple", "--out", "/"],
+        ),
         usage_case(
             "profile, --out a file that is there",
             &["profile", "a@x", "--apple", "--out", "/etc/passwd"],
         ),
         usage_case(
             "profile, --out in no folder",
-            &["profile", "a@x", "--apple", "--out", "/no-such-folder-k5/x.mobileconfig"],
+            &[
+                "profile",
+                "a@x",
+                "--apple",
+                "--out",
+                "/no-such-folder-k5/x.mobileconfig",
+            ],
         ),
     ];
     for c in &v {
@@ -102,7 +141,11 @@ fn hostmail_dns_verbs_answer_as_the_shell_does() {
         // covers: hostmail dkim show
         ok_case("dkim show", &["dkim", "show", "acme.example"], DKIM),
         // covers: hostmail dkim show --json
-        ok_case("dkim show --json", &["dkim", "show", "--domain", "acme.example", "--json"], DKIM),
+        ok_case(
+            "dkim show --json",
+            &["dkim", "show", "--domain", "acme.example", "--json"],
+            DKIM,
+        ),
         // covers: hostmail dkim rotate
         ok_case(
             "dkim rotate",
@@ -110,13 +153,29 @@ fn hostmail_dns_verbs_answer_as_the_shell_does() {
             r#"{"ok":true,"planted":false,"records":[{"name":"k2-2027._domainkey","expectedDisplay":"v=DKIM1"},{"value":"v=DKIM1; p=x"}]}"#,
         ),
         // covers: hostmail dkim rotate --json
-        ok_case("dkim rotate --json", &["dkim", "rotate", "acme.example", "--json"], r#"{"ok":true,"planted":true}"#),
+        ok_case(
+            "dkim rotate --json",
+            &["dkim", "rotate", "acme.example", "--json"],
+            r#"{"ok":true,"planted":true}"#,
+        ),
         // covers: hostmail dkim retire
-        ok_case("dkim retire", &["dkim", "retire", "acme.example", "old"], r#"{"ok":true}"#),
+        ok_case(
+            "dkim retire",
+            &["dkim", "retire", "acme.example", "old"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail dkim retire --json
         ok_case(
             "dkim retire --json",
-            &["dkim", "retire", "--selector", "old", "--domain", "acme.example", "--json"],
+            &[
+                "dkim",
+                "retire",
+                "--selector",
+                "old",
+                "--domain",
+                "acme.example",
+                "--json",
+            ],
             r#"{"ok":true,"selector":"old"}"#,
         ),
         // covers: hostmail dmarc show
@@ -125,19 +184,40 @@ fn hostmail_dns_verbs_answer_as_the_shell_does() {
             &["dmarc", "show", "acme.example"],
             r#"{"ok":true,"dmarc":{"expected":"v=DMARC1; p=none","match":"ok"},"reportAddressUri":"mailto:dmarc@acme.example","reportAddressMinted":true,"suggestedRua":"rua=mailto:dmarc@acme.example","note":"once a day"}"#,
         ),
-        ok_case("dmarc show, little known", &["dmarc", "show", "acme.example"], r#"{"ok":true}"#),
+        ok_case(
+            "dmarc show, little known",
+            &["dmarc", "show", "acme.example"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail dmarc show --json
-        ok_case("dmarc show --json", &["dmarc", "show", "acme.example", "--json"], r#"{"ok":true}"#),
+        ok_case(
+            "dmarc show --json",
+            &["dmarc", "show", "acme.example", "--json"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail dmarc report-to
         ok_case(
             "dmarc report-to",
-            &["dmarc", "report-to", "acme.example", "--address", "dmarc@acme.example"],
+            &[
+                "dmarc",
+                "report-to",
+                "acme.example",
+                "--address",
+                "dmarc@acme.example",
+            ],
             r#"{"ok":true,"suggestedRua":"rua=mailto:dmarc@acme.example"}"#,
         ),
         // covers: hostmail dmarc report-to --json
         ok_case(
             "dmarc report-to --json",
-            &["dmarc", "report-to", "acme.example", "--address", "d@acme.example", "--json"],
+            &[
+                "dmarc",
+                "report-to",
+                "acme.example",
+                "--address",
+                "d@acme.example",
+                "--json",
+            ],
             r#"{"ok":true}"#,
         ),
         // covers: hostmail ptr show
@@ -148,7 +228,11 @@ fn hostmail_dns_verbs_answer_as_the_shell_does() {
         ),
         ok_case("ptr show, little known", &["ptr", "show"], r#"{"ok":true}"#),
         // covers: hostmail ptr show --json
-        ok_case("ptr show --json", &["ptr", "show", "--json"], r#"{"ok":true}"#),
+        ok_case(
+            "ptr show --json",
+            &["ptr", "show", "--json"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail ptr set
         ok_case(
             "ptr set, authoritative",
@@ -161,16 +245,35 @@ fn hostmail_dns_verbs_answer_as_the_shell_does() {
             r#"{"ok":true,"ptr":"x","defaultCertificate":{"warning":"old cert"}}"#,
         ),
         // covers: hostmail ptr set --json
-        ok_case("ptr set --json", &["ptr", "set", "h", "--json"], r#"{"ok":true}"#),
+        ok_case(
+            "ptr set --json",
+            &["ptr", "set", "h", "--json"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail profile
-        ok_case("profile to stdout", &["profile", "sales@acme.example", "--apple"], PROFILE),
+        ok_case(
+            "profile to stdout",
+            &["profile", "sales@acme.example", "--apple"],
+            PROFILE,
+        ),
         // covers: hostmail profile --json
-        ok_case("profile --json", &["profile", "--json", "sales@acme.example", "--apple"], PROFILE),
+        ok_case(
+            "profile --json",
+            &["profile", "--json", "sales@acme.example", "--apple"],
+            PROFILE,
+        ),
         Case {
             cwd: Some(rig.dir.clone()),
             ..ok_case(
                 "profile to a file",
-                &["profile", "sales@acme.example", "--apple", "--out", "sales.mobileconfig", "--force"],
+                &[
+                    "profile",
+                    "sales@acme.example",
+                    "--apple",
+                    "--out",
+                    "sales.mobileconfig",
+                    "--force",
+                ],
                 PROFILE,
             )
         },
@@ -178,7 +281,15 @@ fn hostmail_dns_verbs_answer_as_the_shell_does() {
             cwd: Some(rig.dir.clone()),
             ..ok_case(
                 "profile to a file --json",
-                &["profile", "sales@acme.example", "--apple", "--json", "--out", "sales.mobileconfig", "--force"],
+                &[
+                    "profile",
+                    "sales@acme.example",
+                    "--apple",
+                    "--json",
+                    "--out",
+                    "sales.mobileconfig",
+                    "--force",
+                ],
                 PROFILE,
             )
         },
@@ -200,9 +311,21 @@ fn hostmail_dns_verbs_answer_as_the_shell_does() {
             3,
             1,
         ),
-        traceback("dkim show, a signature not a dict", &["dkim", "show", "a"], r#"{"ok":true,"signatures":["x"]}"#),
-        traceback("ptr show, A records not strings", &["ptr", "show"], r#"{"ok":true,"aRecords":[1]}"#),
-        traceback("ptr set, settings not a dict", &["ptr", "set", "h"], r#"{"ok":true,"settings":"x"}"#),
+        traceback(
+            "dkim show, a signature not a dict",
+            &["dkim", "show", "a"],
+            r#"{"ok":true,"signatures":["x"]}"#,
+        ),
+        traceback(
+            "ptr show, A records not strings",
+            &["ptr", "show"],
+            r#"{"ok":true,"aRecords":[1]}"#,
+        ),
+        traceback(
+            "ptr set, settings not a dict",
+            &["ptr", "set", "h"],
+            r#"{"ok":true,"settings":"x"}"#,
+        ),
         traceback(
             "profile, the profile not text",
             &["profile", "a@x", "--apple"],

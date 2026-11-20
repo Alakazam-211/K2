@@ -1952,72 +1952,191 @@ fn the_hostmail_server_lines_are_the_shell_s() {
     use crate::families::hostmail::server::line;
     let s = mail_py_script();
     let pins: &[(u32, &str)] = &[
-        (line::ENABLE_CALL, "d = call(\"POST\", \"/cli/mail/server/enable\", "),
+        (
+            line::ENABLE_CALL,
+            "d = call(\"POST\", \"/cli/mail/server/enable\", ",
+        ),
         (line::ENABLE_ALREADY, "elif d.get(\"alreadyEnabled\"):"),
         (line::ENABLE_HELPER, "if d.get(\"helper\"):"),
-        (line::ENABLE_HINT, "print(d.get(\"hint\") or \"mail server: enable "),
-        (line::IMPORT_PORT, "imapsync[\"port\"] = int(env(\"M_IMAPSYNC_PORT\""),
-        (line::IMPORT_CALL, "d = call(\"POST\", \"/cli/mail/import\", body=bo"),
-        (line::IMPORT_PRINT, "print(d.get(\"hint\") or \"imported %s message("),
-        (line::DISABLE_CALL, "d = call(\"POST\", \"/cli/mail/server/disable\","),
-        (line::DISABLE_PRINT, "print(dumps(d) if as_json else (d.get(\"hint\""),
-        (line::UNINSTALL_CALL, "d = call(\"POST\", \"/cli/mail/server/uninstall"),
-        (line::UNINSTALL_PRINT, "print(dumps(d) if as_json else (d.get(\"hint\""),
+        (
+            line::ENABLE_HINT,
+            "print(d.get(\"hint\") or \"mail server: enable ",
+        ),
+        (
+            line::IMPORT_PORT,
+            "imapsync[\"port\"] = int(env(\"M_IMAPSYNC_PORT\"",
+        ),
+        (
+            line::IMPORT_CALL,
+            "d = call(\"POST\", \"/cli/mail/import\", body=bo",
+        ),
+        (
+            line::IMPORT_PRINT,
+            "print(d.get(\"hint\") or \"imported %s message(",
+        ),
+        (
+            line::DISABLE_CALL,
+            "d = call(\"POST\", \"/cli/mail/server/disable\",",
+        ),
+        (
+            line::DISABLE_PRINT,
+            "print(dumps(d) if as_json else (d.get(\"hint\"",
+        ),
+        (
+            line::UNINSTALL_CALL,
+            "d = call(\"POST\", \"/cli/mail/server/uninstall",
+        ),
+        (
+            line::UNINSTALL_PRINT,
+            "print(dumps(d) if as_json else (d.get(\"hint\"",
+        ),
         (line::HB_FLOAT, "n = float(n)"),
-        (line::HB_FORMAT, "return (\"%d %s\" % (n, unit)) if unit == \"B\" "),
-        (line::ACK_CALL, "d = call(\"POST\", \"/cli/mail/server/upgrade\","),
-        (line::ACK_PRINT, "print(dumps(d) if as_json else (d.get(\"hint\""),
-        (line::DRY_CALL, "d = call(\"POST\", \"/cli/mail/server/upgrade\","),
+        (
+            line::HB_FORMAT,
+            "return (\"%d %s\" % (n, unit)) if unit == \"B\" ",
+        ),
+        (
+            line::ACK_CALL,
+            "d = call(\"POST\", \"/cli/mail/server/upgrade\",",
+        ),
+        (
+            line::ACK_PRINT,
+            "print(dumps(d) if as_json else (d.get(\"hint\"",
+        ),
+        (
+            line::DRY_CALL,
+            "d = call(\"POST\", \"/cli/mail/server/upgrade\",",
+        ),
         (line::DRY_BLOCKERS, "for b in d.get(\"blockers\") or []:"),
-        (line::DRY_BLOCKER, "print(\"blocked  : [%s] %s\" % (b.get(\"code\"),"),
-        (line::DRY_HB, "_hb(d.get(\"dataBytes\")), _hb(d.get(\"configBy"),
-        (line::DRY_HB_FREE, "d.get(\"snapshotDir\") or \"?\", _hb(d.get(\"free"),
-        (line::DRY_OUTAGE, "out.get(\"typicalSecs\"), out.get(\"worstCaseSe"),
-        (line::DRY_ASSUMPTION, "print(\"           (%s)\" % out.get(\"assumptio"),
-        (line::DRY_PLAN, "for i, s in enumerate(d.get(\"plan\") or [], 1"),
+        (
+            line::DRY_BLOCKER,
+            "print(\"blocked  : [%s] %s\" % (b.get(\"code\"),",
+        ),
+        (
+            line::DRY_HB,
+            "_hb(d.get(\"dataBytes\")), _hb(d.get(\"configBy",
+        ),
+        (
+            line::DRY_HB_FREE,
+            "d.get(\"snapshotDir\") or \"?\", _hb(d.get(\"free",
+        ),
+        (
+            line::DRY_OUTAGE,
+            "out.get(\"typicalSecs\"), out.get(\"worstCaseSe",
+        ),
+        (
+            line::DRY_ASSUMPTION,
+            "print(\"           (%s)\" % out.get(\"assumptio",
+        ),
+        (
+            line::DRY_PLAN,
+            "for i, s in enumerate(d.get(\"plan\") or [], 1",
+        ),
         (line::DRY_ROLLBACK, "for s in d.get(\"rollback\") or []:"),
         (line::DRY_NOTES, "for n in d.get(\"notes\") or []:"),
-        (line::UP_CALL, "d = call(\"POST\", \"/cli/mail/server/upgrade\","),
+        (
+            line::UP_CALL,
+            "d = call(\"POST\", \"/cli/mail/server/upgrade\",",
+        ),
         (line::UP_OUTAGE, "out.get(\"typicalSecs\", \"?\")))"),
         (line::UP_SLEEP, "time.sleep(interval)"),
         (line::UP_LOST, "die({\"code\": \"daemon_lost\","),
         (line::UP_UPGRADE, "up = s.get(\"upgrade\") or {}"),
         (line::UP_STEPS, "steps = up.get(\"steps\") or []"),
         (line::UP_STEP_FOR, "for st in steps[seen:]:"),
-        (line::UP_STEP, "print(\"  %-18s %-6s %s\" % (st.get(\"step\"), \""),
+        (
+            line::UP_STEP,
+            "print(\"  %-18s %-6s %s\" % (st.get(\"step\"), \"",
+        ),
         (line::UP_SEEN, "seen = len(steps)"),
-        (line::UP_MANUAL, "for s in final.get(\"manualSteps\") or []:"),
-        (line::PERSON_LINK_CALL, "d = call(\"POST\", \"/cli/mail/address/person-l"),
-        (line::ROTATE_ADMIN_CALL, "d = call(\"POST\", \"/cli/mail/server/rotate-ad"),
-        (line::PW_CALL, "d = call(\"POST\", \"/cli/mail/address/password"),
+        (
+            line::UP_MANUAL,
+            "for s in final.get(\"manualSteps\") or []:",
+        ),
+        (
+            line::PERSON_LINK_CALL,
+            "d = call(\"POST\", \"/cli/mail/address/person-l",
+        ),
+        (
+            line::ROTATE_ADMIN_CALL,
+            "d = call(\"POST\", \"/cli/mail/server/rotate-ad",
+        ),
+        (
+            line::PW_CALL,
+            "d = call(\"POST\", \"/cli/mail/address/password",
+        ),
         (line::PW_EP_CALL, "_ep(\"imap    \", \"imap\", 443)"),
         (line::PW_EP_SUBMIT, "_ep(\"submit  \", \"submission\", 465)"),
         (line::PW_EP_JMAP, "_ep(\"jmap    \", \"jmap\", 443)"),
         (line::PW_EP_HOST, "host = ep.get(\"host\") or \"?\""),
-        (line::APW_LIST_CALL, "d = call(\"GET\", \"/cli/mail/app-password\", pa"),
-        (line::APW_LIST_LEN, "print(\"%s app password(s) for %s:\" % (len(ro"),
+        (
+            line::APW_LIST_CALL,
+            "d = call(\"GET\", \"/cli/mail/app-password\", pa",
+        ),
+        (
+            line::APW_LIST_LEN,
+            "print(\"%s app password(s) for %s:\" % (len(ro",
+        ),
         (line::APW_LIST_FOR, "for r in rows:"),
-        (line::APW_LIST_ROW, "print(\"  %s  %s  %s\" % (r.get(\"id\") or \"?\", "),
-        (line::APW_ADD_CALL, "d = call(\"POST\", \"/cli/mail/app-password\", b"),
-        (line::APW_REVOKE_CALL, "d = call(\"POST\", \"/cli/mail/app-password/rev"),
-        (line::KEEP_CALL, "d = call(\"POST\", \"/cli/mail/credentials/keep"),
-        (line::PERSON_ALL_CALL, "d = call(\"POST\", \"/cli/mail/address/person\","),
-        (line::PERSON_ALL_LEN, "print(\"marked %d mailbox(es) in %s as %s mai"),
+        (
+            line::APW_LIST_ROW,
+            "print(\"  %s  %s  %s\" % (r.get(\"id\") or \"?\", ",
+        ),
+        (
+            line::APW_ADD_CALL,
+            "d = call(\"POST\", \"/cli/mail/app-password\", b",
+        ),
+        (
+            line::APW_REVOKE_CALL,
+            "d = call(\"POST\", \"/cli/mail/app-password/rev",
+        ),
+        (
+            line::KEEP_CALL,
+            "d = call(\"POST\", \"/cli/mail/credentials/keep",
+        ),
+        (
+            line::PERSON_ALL_CALL,
+            "d = call(\"POST\", \"/cli/mail/address/person\",",
+        ),
+        (
+            line::PERSON_ALL_LEN,
+            "print(\"marked %d mailbox(es) in %s as %s mai",
+        ),
         (line::PERSON_ALL_FOR, "for a in changed:"),
-        (line::PERSON_ALL_JOIN, "print(\"left as the agent's own (its send ide"),
-        (line::PERSON_CALL, "d = call(\"POST\", \"/cli/mail/address/person\","),
-        (line::KEEP_ALL_CALL, "d = call(\"POST\", \"/cli/mail/credentials/keep"),
-        (line::KEEP_ALL_KEPT, "n = kept.get(\"mailboxPasswords\") if kind == "),
-        (line::KEEP_ALL_NEWER, "newer = int(left.get(\"createdAfterCutoff\") o"),
-        (line::KEEP_ALL_UNDATED, "undated = int(left.get(\"noCreationTime\") or "),
-        (line::KEEP_ALL_ERRORS, "for e in d.get(\"listErrors\") or []:"),
+        (
+            line::PERSON_ALL_JOIN,
+            "print(\"left as the agent's own (its send ide",
+        ),
+        (
+            line::PERSON_CALL,
+            "d = call(\"POST\", \"/cli/mail/address/person\",",
+        ),
+        (
+            line::KEEP_ALL_CALL,
+            "d = call(\"POST\", \"/cli/mail/credentials/keep",
+        ),
+        (
+            line::KEEP_ALL_KEPT,
+            "n = kept.get(\"mailboxPasswords\") if kind == ",
+        ),
+        (
+            line::KEEP_ALL_NEWER,
+            "newer = int(left.get(\"createdAfterCutoff\") o",
+        ),
+        (
+            line::KEEP_ALL_UNDATED,
+            "undated = int(left.get(\"noCreationTime\") or ",
+        ),
+        (
+            line::KEEP_ALL_ERRORS,
+            "for e in d.get(\"listErrors\") or []:",
+        ),
     ];
     for (n, text) in pins {
         let got = s[*n as usize - 1].trim();
         assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
     }
 }
-
 
 /// The lines of `_mail_py` cert raises at.
 #[test]
@@ -2025,22 +2144,49 @@ fn the_hostmail_cert_lines_are_the_shell_s() {
     use crate::families::hostmail::cert::line;
     let s = mail_py_script();
     let pins: &[(u32, &str)] = &[
-        (line::RENEW_CALL, "d = call(\"POST\", \"/cli/mail/cert/renew\", bod"),
-        (line::RENEW_PRINT, "print(d.get(\"hint\") or \"ACME renewal queued "),
-        (line::OWNER_ACME_CALL, "d = call(\"POST\", \"/cli/mail/cert/owner\", bod"),
-        (line::OWNER_ACME_PRINT, "print(d.get(\"hint\") or \"Stalwart ACME orders"),
-        (line::OWNER_CALL, "d = call(\"GET\", \"/cli/mail/cert/owner\")"),
+        (
+            line::RENEW_CALL,
+            "d = call(\"POST\", \"/cli/mail/cert/renew\", bod",
+        ),
+        (
+            line::RENEW_PRINT,
+            "print(d.get(\"hint\") or \"ACME renewal queued ",
+        ),
+        (
+            line::OWNER_ACME_CALL,
+            "d = call(\"POST\", \"/cli/mail/cert/owner\", bod",
+        ),
+        (
+            line::OWNER_ACME_PRINT,
+            "print(d.get(\"hint\") or \"Stalwart ACME orders",
+        ),
+        (
+            line::OWNER_CALL,
+            "d = call(\"GET\", \"/cli/mail/cert/owner\")",
+        ),
         (line::OWNER_ERROR, "if acme.get(\"error\"):"),
-        (line::OWNER_AUTO, "elif acme.get(\"type\") == \"Automatic\":"),
-        (line::OWNER_NAMES, "print(\"stalwart : ACME Automatic, names: %s\""),
+        (
+            line::OWNER_AUTO,
+            "elif acme.get(\"type\") == \"Automatic\":",
+        ),
+        (
+            line::OWNER_NAMES,
+            "print(\"stalwart : ACME Automatic, names: %s\"",
+        ),
         (line::OWNER_TYPE, "elif acme.get(\"type\"):"),
         (line::OWNER_MANUAL, "elif acme.get(\"type\") == \"Manual\":"),
-        (line::OWNER_RESTORE, "print(\"           Stalwart ACME is off and K"),
+        (
+            line::OWNER_RESTORE,
+            "print(\"           Stalwart ACME is off and K",
+        ),
         (line::GIB_FLOAT, "n = float(n)"),
         (line::GIB_D, "return \"%d B\" % n"),
         (line::DUR_INT, "s = int(secs)"),
         (line::DUR_HOURS, "return \"%.1f h\" % (s / 3600.0)"),
-        (line::PB_MODE, "print(\"mode     : %s\" % (b.get(\"mode\") or \"?"),
+        (
+            line::PB_MODE,
+            "print(\"mode     : %s\" % (b.get(\"mode\") or \"?",
+        ),
         (line::PB_BY, "if b.get(\"configuredBy\"):"),
         (line::PB_REASON, "if b.get(\"reason\"):"),
         (line::PB_WINDOW, "if b.get(\"window\"):"),
@@ -2048,89 +2194,232 @@ fn the_hostmail_cert_lines_are_the_shell_s() {
         (line::PB_LOCAL, "loc = r.get(\"local\") or {}"),
         (line::PB_OFFSITE, "off = r.get(\"offsite\") or {}"),
         (line::PB_CAP, "cap = loc.get(\"maxLocalGb\")"),
-        (line::PB_KEEP, "loc.get(\"keepDaily\"), loc.get(\"keepWeekly\"),"),
-        (line::PB_OFF_KEEP, "off.get(\"keepDaily\"), off.get(\"keepWeekly\"),"),
+        (
+            line::PB_KEEP,
+            "loc.get(\"keepDaily\"), loc.get(\"keepWeekly\"),",
+        ),
+        (
+            line::PB_OFF_KEEP,
+            "off.get(\"keepDaily\"), off.get(\"keepWeekly\"),",
+        ),
         (line::PB_OBSERVER, "o = b.get(\"observer\") or {}"),
-        (line::PB_STATUS, "line = \"observer : %s\" % (o.get(\"status\") or"),
+        (
+            line::PB_STATUS,
+            "line = \"observer : %s\" % (o.get(\"status\") or",
+        ),
         (line::PB_LAST, "if o.get(\"lastSuccess\"):"),
-        (line::PB_DAYS, "line += \", %s day(s) of churn\" % (o.get(\"day"),
+        (
+            line::PB_DAYS,
+            "line += \", %s day(s) of churn\" % (o.get(\"day",
+        ),
         (line::PB_CHURN, "cp = o.get(\"churnPerDay\") or {}"),
-        (line::PB_CHURN_DEL, "_gib(cp.get(\"deletedBytes\")), _gib(cp.get(\"m"),
-        (line::PB_CHURN_NEW, "_gib(cp.get(\"createdBytes\")), \"\" if cp.get(\""),
+        (
+            line::PB_CHURN_DEL,
+            "_gib(cp.get(\"deletedBytes\")), _gib(cp.get(\"m",
+        ),
+        (
+            line::PB_CHURN_NEW,
+            "_gib(cp.get(\"createdBytes\")), \"\" if cp.get(\"",
+        ),
         (line::PB_STORE_IF, "if o.get(\"storeBytes\") is not None:"),
-        (line::PB_STORE, "_gib(o.get(\"storeBytes\")), _gib(o.get(\"mutab"),
-        (line::PB_STORE_FS, "_gib(o.get(\"fsTotal\")), {True: \"yes\", False:"),
+        (
+            line::PB_STORE,
+            "_gib(o.get(\"storeBytes\")), _gib(o.get(\"mutab",
+        ),
+        (
+            line::PB_STORE_FS,
+            "_gib(o.get(\"fsTotal\")), {True: \"yes\", False:",
+        ),
         (line::PB_ERR, "if o.get(\"lastError\"):"),
         (line::PB_CONFIG, "if b.get(\"configError\"):"),
-        (line::PB_NOTE, "print(\"note     : %s\" % (b.get(\"note\") or \"\""),
+        (
+            line::PB_NOTE,
+            "print(\"note     : %s\" % (b.get(\"note\") or \"\"",
+        ),
         (line::STATUS_CALL, "d = call(\"GET\", \"/cli/mail/backup\")"),
         (line::STATUS_PRINT, "_print_backup(d.get(\"backup\") or {})"),
-        (line::PLAN_CALL, "d = call(\"GET\", \"/cli/mail/backup/plan\", par"),
-        (line::PLAN_STORE, "_gib(st.get(\"bytes\")), st.get(\"path\"), st.ge"),
-        (line::PLAN_STORE_2, "_gib(st.get(\"mutableBytes\")), _gib(st.get(\"c"),
-        (line::PLAN_DISK, "_gib(st.get(\"fsFree\")), _gib(st.get(\"fsTotal"),
-        (line::PLAN_DISK_2, "st.get(\"viewRoot\"), {True: \"yes\", False: \"NO"),
-        (line::PLAN_CHURN, "ch.get(\"label\"), _gib(ch.get(\"deletedPerDay\""),
+        (
+            line::PLAN_CALL,
+            "d = call(\"GET\", \"/cli/mail/backup/plan\", par",
+        ),
+        (
+            line::PLAN_STORE,
+            "_gib(st.get(\"bytes\")), st.get(\"path\"), st.ge",
+        ),
+        (
+            line::PLAN_STORE_2,
+            "_gib(st.get(\"mutableBytes\")), _gib(st.get(\"c",
+        ),
+        (
+            line::PLAN_DISK,
+            "_gib(st.get(\"fsFree\")), _gib(st.get(\"fsTotal",
+        ),
+        (
+            line::PLAN_DISK_2,
+            "st.get(\"viewRoot\"), {True: \"yes\", False: \"NO",
+        ),
+        (
+            line::PLAN_CHURN,
+            "ch.get(\"label\"), _gib(ch.get(\"deletedPerDay\"",
+        ),
         (line::PLAN_CHURN_2, "_gib(ch.get(\"createdPerDay\"))))"),
         (line::PLAN_LOCAL, "loc = r.get(\"local\") or {}"),
         (line::PLAN_OFFSITE, "off = r.get(\"offsite\") or {}"),
-        (line::PLAN_KEEP, "loc.get(\"keepDaily\"), loc.get(\"keepWeekly\"),"),
-        (line::PLAN_CAP, "(\", max %s GiB\" % loc[\"maxLocalGb\"]) if loc."),
-        (line::PLAN_OFF_KEEP, "off.get(\"keepDaily\"), off.get(\"keepWeekly\"),"),
-        (line::PLAN_MODES, "m = (d.get(\"modes\") or {}).get(name) or {}"),
-        (line::PLAN_VERDICT, "head = \"%-12s verdict %s\" % (name, (m.get(\"v"),
+        (
+            line::PLAN_KEEP,
+            "loc.get(\"keepDaily\"), loc.get(\"keepWeekly\"),",
+        ),
+        (
+            line::PLAN_CAP,
+            "(\", max %s GiB\" % loc[\"maxLocalGb\"]) if loc.",
+        ),
+        (
+            line::PLAN_OFF_KEEP,
+            "off.get(\"keepDaily\"), off.get(\"keepWeekly\"),",
+        ),
+        (
+            line::PLAN_MODES,
+            "m = (d.get(\"modes\") or {}).get(name) or {}",
+        ),
+        (
+            line::PLAN_VERDICT,
+            "head = \"%-12s verdict %s\" % (name, (m.get(\"v",
+        ),
         (line::PLAN_AVAILABLE, "if m.get(\"available\") is False:"),
-        (line::PLAN_UNAVAILABLE, "head += \"  (not available yet: %s)\" % (m.get"),
-        (line::PLAN_LOCAL_DISK, "_gib(m.get(\"firstNightLocalBytes\")), _gib(m."),
-        (line::PLAN_LOCAL_DISK_2, "_gib(m.get(\"peakBytes\")), _gib(m.get(\"freeAf"),
+        (
+            line::PLAN_UNAVAILABLE,
+            "head += \"  (not available yet: %s)\" % (m.get",
+        ),
+        (
+            line::PLAN_LOCAL_DISK,
+            "_gib(m.get(\"firstNightLocalBytes\")), _gib(m.",
+        ),
+        (
+            line::PLAN_LOCAL_DISK_2,
+            "_gib(m.get(\"peakBytes\")), _gib(m.get(\"freeAf",
+        ),
         (line::PLAN_OFF, "o = m.get(\"offsite\")"),
         (line::PLAN_FU, "fu = o.get(\"firstUploadBytes\") or {}"),
-        (line::PLAN_UPLOAD, "_gib(fu.get(\"low\")), _gib(fu.get(\"high\")), _"),
-        (line::PLAN_UPLOAD_2, "_gib(o.get(\"nightlyUploadBytes\")), _dur(o.ge"),
-        (line::PLAN_TEMP, "_gib(o.get(\"firstTempBytes\")), _gib(o.get(\"n"),
-        (line::PLAN_DOWN, "print(\"  downtime   : ~%s nightly (%s)\" % (_"),
-        (line::PLAN_PROTECTS, "print(\"  protects   : %s\" % (m.get(\"protects"),
+        (
+            line::PLAN_UPLOAD,
+            "_gib(fu.get(\"low\")), _gib(fu.get(\"high\")), _",
+        ),
+        (
+            line::PLAN_UPLOAD_2,
+            "_gib(o.get(\"nightlyUploadBytes\")), _dur(o.ge",
+        ),
+        (
+            line::PLAN_TEMP,
+            "_gib(o.get(\"firstTempBytes\")), _gib(o.get(\"n",
+        ),
+        (
+            line::PLAN_DOWN,
+            "print(\"  downtime   : ~%s nightly (%s)\" % (_",
+        ),
+        (
+            line::PLAN_PROTECTS,
+            "print(\"  protects   : %s\" % (m.get(\"protects",
+        ),
         (line::PLAN_NOTES, "for n in d.get(\"notes\") or []:"),
-        (line::PLAN_HASH, "print(\"planHash : %s\" % d.get(\"planHash\"))"),
+        (
+            line::PLAN_HASH,
+            "print(\"planHash : %s\" % d.get(\"planHash\"))",
+        ),
         (line::SET_INT, "body[k] = int(env(e))"),
-        (line::SET_CALL, "d = call(\"POST\", \"/cli/mail/backup/set\", bod"),
-        (line::SET_MODE, "print(\"backup mode: %s → %s\" % (d.get(\"from\""),
+        (
+            line::SET_CALL,
+            "d = call(\"POST\", \"/cli/mail/backup/set\", bod",
+        ),
+        (
+            line::SET_MODE,
+            "print(\"backup mode: %s → %s\" % (d.get(\"from\"",
+        ),
         (line::SET_PRINT, "_print_backup(d.get(\"backup\") or {})"),
-        (line::DANE_CALL, "d = call(\"POST\", \"/cli/mail/outbound\", body="),
-        (line::DANE_PRINT, "print(d.get(\"hint\") or \"DANE is optional aga"),
+        (
+            line::DANE_CALL,
+            "d = call(\"POST\", \"/cli/mail/outbound\", body=",
+        ),
+        (
+            line::DANE_PRINT,
+            "print(d.get(\"hint\") or \"DANE is optional aga",
+        ),
         (line::OUT_CALL, "d = call(\"GET\", \"/cli/mail/outbound\")"),
-        (line::OUT_WHO, "who.get(d.get(\"ipStrategySetBy\"), d.get(\"ipS"),
+        (
+            line::OUT_WHO,
+            "who.get(d.get(\"ipStrategySetBy\"), d.get(\"ipS",
+        ),
         (line::OUT_DANE, "for t in d.get(\"dane\") or []:"),
-        (line::OUT_DANE_ROW, "print(\"DANE     : %-12s %s (%s)\" % (t.get(\"n"),
-        (line::OUT_DANE_WHO, "who.get(t.get(\"setBy\"), t.get(\"setBy\") or \"?"),
-        (line::OUT_DNSSEC, "print(\"DNSSEC   : %s\" % (d.get(\"dnssec\") or "),
+        (
+            line::OUT_DANE_ROW,
+            "print(\"DANE     : %-12s %s (%s)\" % (t.get(\"n",
+        ),
+        (
+            line::OUT_DANE_WHO,
+            "who.get(t.get(\"setBy\"), t.get(\"setBy\") or \"?",
+        ),
+        (
+            line::OUT_DNSSEC,
+            "print(\"DNSSEC   : %s\" % (d.get(\"dnssec\") or ",
+        ),
         (line::OUT_PENDING, "if d.get(\"pendingReload\"):"),
-        (line::OUT_PENDING_ROW, "print(\"WARNING  : settings saved but not liv"),
-        (line::NAMES_LIST_CALL, "d = call(\"GET\", \"/cli/mail/cert/names\", time"),
-        (line::NAMES_CALL, "d = call(\"POST\", \"/cli/mail/cert/names\", bod"),
+        (
+            line::OUT_PENDING_ROW,
+            "print(\"WARNING  : settings saved but not liv",
+        ),
+        (
+            line::NAMES_LIST_CALL,
+            "d = call(\"GET\", \"/cli/mail/cert/names\", time",
+        ),
+        (
+            line::NAMES_CALL,
+            "d = call(\"POST\", \"/cli/mail/cert/names\", bod",
+        ),
         (line::NAMES_ROWS, "rows = d.get(\"names\") or []"),
         (line::NAMES_FOR, "for r in rows:"),
         (line::NAMES_CERT, "cert = r.get(\"cert\") or {}"),
-        (line::NAMES_EXP, "exp = (\" expires %s\" % cert[\"expiresAt\"]) if"),
-        (line::NAMES_ROW, "r.get(\"name\") or \"?\", _yn(r.get(\"pointsHere\""),
-        (line::NAMES_ROW_2, "cert.get(\"state\") or \"?\", exp, r.get(\"issuer"),
-        (line::NAMES_DNS, "if r.get(\"dns\") and r.get(\"pointsHere\") is n"),
+        (
+            line::NAMES_EXP,
+            "exp = (\" expires %s\" % cert[\"expiresAt\"]) if",
+        ),
+        (
+            line::NAMES_ROW,
+            "r.get(\"name\") or \"?\", _yn(r.get(\"pointsHere\"",
+        ),
+        (
+            line::NAMES_ROW_2,
+            "cert.get(\"state\") or \"?\", exp, r.get(\"issuer",
+        ),
+        (
+            line::NAMES_DNS,
+            "if r.get(\"dns\") and r.get(\"pointsHere\") is n",
+        ),
         (line::NAMES_REASON, "if r.get(\"reason\"):"),
         (line::NAMES_LAST, "if cert.get(\"lastError\"):"),
-        (line::NAMES_R_EXP, "exp = (\" expires %s\" % r[\"expiresAt\"]) if r."),
-        (line::NAMES_R_ROW, "print(\"%-34s %s%s\" % (r.get(\"name\") or \"?\", "),
+        (
+            line::NAMES_R_EXP,
+            "exp = (\" expires %s\" % r[\"expiresAt\"]) if r.",
+        ),
+        (
+            line::NAMES_R_ROW,
+            "print(\"%-34s %s%s\" % (r.get(\"name\") or \"?\", ",
+        ),
         (line::NAMES_DETAIL, "if r.get(\"detail\"):"),
         (line::NAMES_RELOAD, "rel = d.get(\"reload\") or {}"),
-        (line::NAMES_METHOD, "line = \"reload   : %s\" % (rel.get(\"method\") "),
+        (
+            line::NAMES_METHOD,
+            "line = \"reload   : %s\" % (rel.get(\"method\") ",
+        ),
         (line::NAMES_RELOAD_ERR, "if rel.get(\"error\"):"),
-        (line::NAMES_FAILED, "if action != \"list\" and d.get(\"failed\"):"),
+        (
+            line::NAMES_FAILED,
+            "if action != \"list\" and d.get(\"failed\"):",
+        ),
     ];
     for (n, text) in pins {
         let got = s[*n as usize - 1].trim();
         assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
     }
 }
-
 
 /// The lines of `_mail_py` dns raises at.
 #[test]
@@ -2138,41 +2427,94 @@ fn the_hostmail_dns_lines_are_the_shell_s() {
     use crate::families::hostmail::dns::line;
     let s = mail_py_script();
     let pins: &[(u32, &str)] = &[
-        (line::DKIM_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/dkim\", params={\"d"),
+        (
+            line::DKIM_SHOW_CALL,
+            "d = call(\"GET\", \"/cli/mail/dkim\", params={\"d",
+        ),
         (line::DKIM_SHOW_FOR, "for s in d.get(\"signatures\") or []:"),
         (line::DKIM_SHOW_ROW, "s.get(\"selector\") or \"?\","),
         (line::DKIM_SHOW_EXPECTED, "if s.get(\"expected\"):"),
-        (line::DKIM_SHOW_NAME, "print(\"    TXT %s\" % (s.get(\"name\") or \"\"))"),
-        (line::DKIM_ROTATE_CALL, "d = call(\"POST\", \"/cli/mail/dkim\", body={\"do"),
-        (line::DKIM_ROTATE_FOR, "for rec in d.get(\"records\") or []:"),
-        (line::DKIM_ROTATE_ROW, "print(\"%s  TXT  %s\" % (rec.get(\"name\") or \"?"),
-        (line::DKIM_RETIRE_CALL, "d = call(\"POST\", \"/cli/mail/dkim/retire\","),
-        (line::DMARC_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/dmarc\", params={\""),
-        (line::DMARC_SHOW_REC, "print(\"  txt     : %s\" % (rec.get(\"expected\""),
-        (line::DMARC_SHOW_MATCH, "print(\"  live    : %s\" % (rec.get(\"match\") o"),
-        (line::DMARC_REPORT_CALL, "d = call(\"POST\", \"/cli/mail/dmarc\","),
+        (
+            line::DKIM_SHOW_NAME,
+            "print(\"    TXT %s\" % (s.get(\"name\") or \"\"))",
+        ),
+        (
+            line::DKIM_ROTATE_CALL,
+            "d = call(\"POST\", \"/cli/mail/dkim\", body={\"do",
+        ),
+        (
+            line::DKIM_ROTATE_FOR,
+            "for rec in d.get(\"records\") or []:",
+        ),
+        (
+            line::DKIM_ROTATE_ROW,
+            "print(\"%s  TXT  %s\" % (rec.get(\"name\") or \"?",
+        ),
+        (
+            line::DKIM_RETIRE_CALL,
+            "d = call(\"POST\", \"/cli/mail/dkim/retire\",",
+        ),
+        (
+            line::DMARC_SHOW_CALL,
+            "d = call(\"GET\", \"/cli/mail/dmarc\", params={\"",
+        ),
+        (
+            line::DMARC_SHOW_REC,
+            "print(\"  txt     : %s\" % (rec.get(\"expected\"",
+        ),
+        (
+            line::DMARC_SHOW_MATCH,
+            "print(\"  live    : %s\" % (rec.get(\"match\") o",
+        ),
+        (
+            line::DMARC_REPORT_CALL,
+            "d = call(\"POST\", \"/cli/mail/dmarc\",",
+        ),
         (line::PTR_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/ptr\")"),
-        (line::PTR_SHOW_A, "print(\"A      : %s\" % (\", \".join(a) if a els"),
-        (line::PTR_SHOW_RELAY, "unresolved = (d.get(\"relayCheck\") or {}).get"),
-        (line::PTR_SHOW_UNRESOLVED, "print(\"relays : could not resolve %s (ptr se"),
-        (line::PTR_SET_CALL, "d = call(\"POST\", \"/cli/mail/ptr/set\", body={"),
-        (line::PTR_SET_SOURCE, "if d.get(\"ptrSource\") == \"authoritative\":"),
+        (
+            line::PTR_SHOW_A,
+            "print(\"A      : %s\" % (\", \".join(a) if a els",
+        ),
+        (
+            line::PTR_SHOW_RELAY,
+            "unresolved = (d.get(\"relayCheck\") or {}).get",
+        ),
+        (
+            line::PTR_SHOW_UNRESOLVED,
+            "print(\"relays : could not resolve %s (ptr se",
+        ),
+        (
+            line::PTR_SET_CALL,
+            "d = call(\"POST\", \"/cli/mail/ptr/set\", body={",
+        ),
+        (
+            line::PTR_SET_SOURCE,
+            "if d.get(\"ptrSource\") == \"authoritative\":",
+        ),
         (line::PTR_SET_WARNING, "if settings.get(\"warning\"):"),
         (line::PTR_SET_DC, "if dc.get(\"state\") == \"moved\":"),
         (line::PTR_SET_DC_WARNING, "elif dc.get(\"warning\"):"),
-        (line::PROFILE_CALL, "d = call(\"POST\", \"/cli/mail/profile\", body={"),
+        (
+            line::PROFILE_CALL,
+            "d = call(\"POST\", \"/cli/mail/profile\", body={",
+        ),
         (line::PROFILE_WRITE, "os.write(fd, xml.encode(\"utf-8\"))"),
-        (line::PROFILE_INCLUDES, "print(\"includes : %s\" % \", \".join(d.get(\"inc"),
+        (
+            line::PROFILE_INCLUDES,
+            "print(\"includes : %s\" % \", \".join(d.get(\"inc",
+        ),
         (line::PROFILE_NOTES, "for n in d.get(\"notes\") or []:"),
         (line::PROFILE_STDOUT, "sys.stdout.write(xml)"),
-        (line::PROFILE_STDERR_NOTES, "for n in d.get(\"notes\") or []:"),
+        (
+            line::PROFILE_STDERR_NOTES,
+            "for n in d.get(\"notes\") or []:",
+        ),
     ];
     for (n, text) in pins {
         let got = s[*n as usize - 1].trim();
         assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
     }
 }
-
 
 /// The lines of `_mail_py` bans raises at.
 #[test]
@@ -2181,29 +2523,67 @@ fn the_hostmail_bans_lines_are_the_shell_s() {
     let s = mail_py_script();
     let pins: &[(u32, &str)] = &[
         (line::LIST_CALL, "d = call(\"GET\", \"/cli/mail/bans\")"),
-        (line::LIST_BITS, "bits = [\"%s=%s\" % (k, counts[k]) for k in so"),
-        (line::LIST_COUNT, "print(\"%s blocked  %s\" % (d.get(\"count\") if "),
-        (line::LIST_AUTH, "auth = [b for b in bans if (b.get(\"reason\") "),
-        (line::CLEAR_CALL, "d = call(\"POST\", \"/cli/mail/bans/clear\", bod"),
-        (line::CLEAR_JOIN, "\",\".join(d.get(\"destroyed\") or []) or \"(none"),
+        (
+            line::LIST_BITS,
+            "bits = [\"%s=%s\" % (k, counts[k]) for k in so",
+        ),
+        (
+            line::LIST_COUNT,
+            "print(\"%s blocked  %s\" % (d.get(\"count\") if ",
+        ),
+        (
+            line::LIST_AUTH,
+            "auth = [b for b in bans if (b.get(\"reason\") ",
+        ),
+        (
+            line::CLEAR_CALL,
+            "d = call(\"POST\", \"/cli/mail/bans/clear\", bod",
+        ),
+        (
+            line::CLEAR_JOIN,
+            "\",\".join(d.get(\"destroyed\") or []) or \"(none",
+        ),
         (line::CLEAR_WARN, "for w in (d.get(\"warnings\") or []):"),
-        (line::MIGRATE_INT, "body = {\"hours\": int(hours)} if hours else {"),
-        (line::MIGRATE_CALL, "d = call(\"POST\", \"/cli/mail/bans/migrate\", b"),
-        (line::RESTORE_CALL, "d = call(\"POST\", \"/cli/mail/bans/migrate/res"),
-        (line::STATUS_CALL, "d = call(\"GET\", \"/cli/mail/bans/migrate\")"),
-        (line::ALLOW_LIST_CALL, "d = call(\"GET\", \"/cli/mail/allowlist\")"),
+        (
+            line::MIGRATE_INT,
+            "body = {\"hours\": int(hours)} if hours else {",
+        ),
+        (
+            line::MIGRATE_CALL,
+            "d = call(\"POST\", \"/cli/mail/bans/migrate\", b",
+        ),
+        (
+            line::RESTORE_CALL,
+            "d = call(\"POST\", \"/cli/mail/bans/migrate/res",
+        ),
+        (
+            line::STATUS_CALL,
+            "d = call(\"GET\", \"/cli/mail/bans/migrate\")",
+        ),
+        (
+            line::ALLOW_LIST_CALL,
+            "d = call(\"GET\", \"/cli/mail/allowlist\")",
+        ),
         (line::ALLOW_LIST_FOR, "for b in rows:"),
         (line::ALLOW_LIST_ROW, "b.get(\"address\") or \"?\","),
-        (line::ALLOW_ADD_CALL, "d = call(\"POST\", \"/cli/mail/allowlist/add\", "),
-        (line::ALLOW_REMOVE_CALL, "d = call(\"POST\", \"/cli/mail/allowlist/remove"),
-        (line::ALLOW_REMOVE_JOIN, "\",\".join(d.get(\"destroyed\") or []) or \"(none"),
+        (
+            line::ALLOW_ADD_CALL,
+            "d = call(\"POST\", \"/cli/mail/allowlist/add\", ",
+        ),
+        (
+            line::ALLOW_REMOVE_CALL,
+            "d = call(\"POST\", \"/cli/mail/allowlist/remove",
+        ),
+        (
+            line::ALLOW_REMOVE_JOIN,
+            "\",\".join(d.get(\"destroyed\") or []) or \"(none",
+        ),
     ];
     for (n, text) in pins {
         let got = s[*n as usize - 1].trim();
         assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
     }
 }
-
 
 /// The lines of `_mail_py` groups raises at.
 #[test]
@@ -2212,44 +2592,122 @@ fn the_hostmail_groups_lines_are_the_shell_s() {
     let s = mail_py_script();
     let pins: &[(u32, &str)] = &[
         (line::DAV_GET, "d = call(\"GET\", \"/cli/mail/dav\")"),
-        (line::DAV_POST, "d = call(\"POST\", \"/cli/mail/dav\", body=body,"),
+        (
+            line::DAV_POST,
+            "d = call(\"POST\", \"/cli/mail/dav\", body=body,",
+        ),
         (line::DAV_POLICY, "if d.get(\"policy\") == \"default\":"),
         (line::DAV_ACC, "acc = d.get(\"accounts\")"),
-        (line::DAV_ACC_GET, "acc.get(\"total\", \"?\"), acc.get(\"updated\", \"?"),
+        (
+            line::DAV_ACC_GET,
+            "acc.get(\"total\", \"?\"), acc.get(\"updated\", \"?",
+        ),
         (line::DAV_SKIPPED, "len(acc.get(\"skipped\") or [])))"),
-        (line::PG_HEAD, "g.get(\"address\") or g.get(\"name\") or \"?\", le"),
-        (line::PG_MAIL, "\"\" if g.get(\"receivesMail\") else \" · inbound"),
+        (
+            line::PG_HEAD,
+            "g.get(\"address\") or g.get(\"name\") or \"?\", le",
+        ),
+        (
+            line::PG_MAIL,
+            "\"\" if g.get(\"receivesMail\") else \" · inbound",
+        ),
         (line::PG_FOR, "for m in g.get(\"members\") or []:"),
-        (line::CREATE_CALL, "d = call(\"POST\", \"/cli/mail/group\", body=bod"),
-        (line::MEMBERS_CALL, "d = call(\"POST\", \"/cli/mail/group/members\", "),
-        (line::MEMBERS_JOIN, "d.get(\"group\") or env(\"M_GROUP\"), \",\".join(d"),
-        (line::LIST_CALL, "d = call(\"GET\", \"/cli/mail/group\", timeout=6"),
+        (
+            line::CREATE_CALL,
+            "d = call(\"POST\", \"/cli/mail/group\", body=bod",
+        ),
+        (
+            line::MEMBERS_CALL,
+            "d = call(\"POST\", \"/cli/mail/group/members\", ",
+        ),
+        (
+            line::MEMBERS_JOIN,
+            "d.get(\"group\") or env(\"M_GROUP\"), \",\".join(d",
+        ),
+        (
+            line::LIST_CALL,
+            "d = call(\"GET\", \"/cli/mail/group\", timeout=6",
+        ),
         (line::LIST_FOR, "for g in gs:"),
         (line::LIST_PRINT, "print_group(g)"),
-        (line::SHOW_CALL, "d = call(\"GET\", \"/cli/mail/group\", params={\""),
+        (
+            line::SHOW_CALL,
+            "d = call(\"GET\", \"/cli/mail/group\", params={\"",
+        ),
         (line::SHOW_PRINT, "print_group(d.get(\"group\") or {})"),
-        (line::DELETE_CALL, "d = call(\"POST\", \"/cli/mail/group/delete\", b"),
-        (line::DELETE_PRINT, "d.get(\"group\") or env(\"M_GROUP\"), d.get(\"sha"),
-        (line::MANAGE_CALL, "d = call(\"POST\", \"/cli/mail/calendar/manage\""),
+        (
+            line::DELETE_CALL,
+            "d = call(\"POST\", \"/cli/mail/group/delete\", b",
+        ),
+        (
+            line::DELETE_PRINT,
+            "d.get(\"group\") or env(\"M_GROUP\"), d.get(\"sha",
+        ),
+        (
+            line::MANAGE_CALL,
+            "d = call(\"POST\", \"/cli/mail/calendar/manage\"",
+        ),
         (line::MANAGE_C, "c = d.get(\"calendar\") or {}"),
-        (line::MANAGE_CREATED, "print(\"created calendar '%s' (%s) on %s\" % ("),
-        (line::MANAGE_RENAMED, "c.get(\"previousName\"), c.get(\"name\"), c.get("),
-        (line::SHARE_CALL, "d = call(\"POST\", \"/cli/mail/calendar/\" + (\"s"),
+        (
+            line::MANAGE_CREATED,
+            "print(\"created calendar '%s' (%s) on %s\" % (",
+        ),
+        (
+            line::MANAGE_RENAMED,
+            "c.get(\"previousName\"), c.get(\"name\"), c.get(",
+        ),
+        (
+            line::SHARE_CALL,
+            "d = call(\"POST\", \"/cli/mail/calendar/\" + (\"s",
+        ),
         (line::SHARE_C, "c = d.get(\"calendar\") or {}"),
-        (line::SHARE_PRINT, "c.get(\"name\"), d.get(\"owner\"), d.get(\"with\")"),
-        (line::SHARE_REMOVED, "print(\"stopped sharing '%s' of %s with %s\" %"),
-        (line::SHARE_NOTHING, "c.get(\"name\"), d.get(\"owner\"), d.get(\"with\")"),
-        (line::SHARES_CALL, "d = call(\"GET\", \"/cli/mail/calendar/shares\","),
+        (
+            line::SHARE_PRINT,
+            "c.get(\"name\"), d.get(\"owner\"), d.get(\"with\")",
+        ),
+        (
+            line::SHARE_REMOVED,
+            "print(\"stopped sharing '%s' of %s with %s\" %",
+        ),
+        (
+            line::SHARE_NOTHING,
+            "c.get(\"name\"), d.get(\"owner\"), d.get(\"with\")",
+        ),
+        (
+            line::SHARES_CALL,
+            "d = call(\"GET\", \"/cli/mail/calendar/shares\",",
+        ),
         (line::SHARES_FOR, "for c in cals:"),
         (line::SHARES_SHARES, "shares = c.get(\"shares\") or []"),
-        (line::SHARES_ROW, "print(\"%s · %s%s · %s\" % (c.get(\"id\"), c.get"),
-        (line::SHARES_DEFAULT, "\" · default\" if c.get(\"isDefault\") else \"\","),
-        (line::SHARES_LEN, "\"not shared\" if not shares else \"%d share(s)"),
+        (
+            line::SHARES_ROW,
+            "print(\"%s · %s%s · %s\" % (c.get(\"id\"), c.get",
+        ),
+        (
+            line::SHARES_DEFAULT,
+            "\" · default\" if c.get(\"isDefault\") else \"\",",
+        ),
+        (
+            line::SHARES_LEN,
+            "\"not shared\" if not shares else \"%d share(s)",
+        ),
         (line::SHARES_EACH, "for s in shares:"),
-        (line::SHARES_EACH_ROW, "print(\"  %s (%s): %s\" % (s.get(\"with\"), s.ge"),
-        (line::SHARING_POST, "d = call(\"POST\", \"/cli/mail/calendar/sharing"),
-        (line::SHARING_INT, "body={\"maxShares\": int(env(\"M_MAX_SHARES\"))}"),
-        (line::SHARING_GET, "d = call(\"GET\", \"/cli/mail/calendar/sharing\""),
+        (
+            line::SHARES_EACH_ROW,
+            "print(\"  %s (%s): %s\" % (s.get(\"with\"), s.ge",
+        ),
+        (
+            line::SHARING_POST,
+            "d = call(\"POST\", \"/cli/mail/calendar/sharing",
+        ),
+        (
+            line::SHARING_INT,
+            "body={\"maxShares\": int(env(\"M_MAX_SHARES\"))}",
+        ),
+        (
+            line::SHARING_GET,
+            "d = call(\"GET\", \"/cli/mail/calendar/sharing\"",
+        ),
     ];
     for (n, text) in pins {
         let got = s[*n as usize - 1].trim();
@@ -2369,7 +2827,6 @@ fn the_hostmail_admin_lines_are_the_shell_s() {
         assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
     }
 }
-
 
 #[test]
 fn the_boot_script_runs_the_mail_script_at_its_line_13() {

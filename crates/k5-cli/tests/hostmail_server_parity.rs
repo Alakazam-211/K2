@@ -86,11 +86,17 @@ fn hostmail_server_verbs_take_the_words_as_the_shell_does() {
         help_case("app-password -h", &["app-password", "-h"]),
         help_case("person link -h", &["person", "link", "-h"]),
         usage_case("enable, no hostname", &["enable"]),
-        usage_case("enable, --hostname with no value", &["enable", "--hostname"]),
+        usage_case(
+            "enable, --hostname with no value",
+            &["enable", "--hostname"],
+        ),
         usage_case("enable, a stray word", &["enable", "mail.acme.example"]),
         usage_case("enable, an unknown flag", &["enable", "--name", "x"]),
         usage_case("disable, a stray word", &["disable", "now"]),
-        usage_case("uninstall, no --purge", &["uninstall", "--confirm-hostname", "h"]),
+        usage_case(
+            "uninstall, no --purge",
+            &["uninstall", "--confirm-hostname", "h"],
+        ),
         usage_case("uninstall, no hostname", &["uninstall", "--purge"]),
         usage_case(
             "uninstall, --confirm-hostname with no value",
@@ -105,22 +111,37 @@ fn hostmail_server_verbs_take_the_words_as_the_shell_does() {
         usage_case("rotate-admin, a stray word", &["rotate-admin", "x"]),
         usage_case("password, an unknown sub-command", &["password", "set"]),
         usage_case("password rotate, no address", &["password", "rotate"]),
-        usage_case("password rotate, two", &["password", "rotate", "a@x", "b@x"]),
-        usage_case("password rotate, a flag", &["password", "rotate", "a@x", "--all"]),
+        usage_case(
+            "password rotate, two",
+            &["password", "rotate", "a@x", "b@x"],
+        ),
+        usage_case(
+            "password rotate, a flag",
+            &["password", "rotate", "a@x", "--all"],
+        ),
         usage_case("password keep, nothing", &["password", "keep", "--json"]),
         usage_case(
             "password keep, all and an address",
             &["password", "keep", "a@x", "--all-existing"],
         ),
-        usage_case("app-password, an unknown sub-command", &["app-password", "rm"]),
+        usage_case(
+            "app-password, an unknown sub-command",
+            &["app-password", "rm"],
+        ),
         usage_case("app-password add, no address", &["app-password", "add"]),
         usage_case(
             "app-password add, --label with no value",
             &["app-password", "add", "a@x", "--label"],
         ),
-        usage_case("app-password add, two", &["app-password", "add", "a@x", "b@x"]),
+        usage_case(
+            "app-password add, two",
+            &["app-password", "add", "a@x", "b@x"],
+        ),
         usage_case("app-password list, a flag", &["app-password", "list", "-x"]),
-        usage_case("app-password revoke, no id", &["app-password", "revoke", "a@x"]),
+        usage_case(
+            "app-password revoke, no id",
+            &["app-password", "revoke", "a@x"],
+        ),
         usage_case(
             "app-password revoke, three",
             &["app-password", "revoke", "a@x", "1", "2"],
@@ -131,8 +152,14 @@ fn hostmail_server_verbs_take_the_words_as_the_shell_does() {
             &["app-password", "keep", "--all-existing", "a@x"],
         ),
         usage_case("person, no state", &["person", "a@x"]),
-        usage_case("person, a state it doesn't know", &["person", "a@x", "maybe"]),
-        usage_case("person, --all with no workspace", &["person", "--all", "on"]),
+        usage_case(
+            "person, a state it doesn't know",
+            &["person", "a@x", "maybe"],
+        ),
+        usage_case(
+            "person, --all with no workspace",
+            &["person", "--all", "on"],
+        ),
         usage_case(
             "person, an address with --workspace",
             &["person", "a@x", "on", "--workspace", "w"],
@@ -155,9 +182,18 @@ fn hostmail_server_verbs_take_the_words_as_the_shell_does() {
         ),
         usage_case("import, no address", &["import", "--maildir", "/m"]),
         usage_case("import, no source", &["import", "--address", "a@x"]),
-        usage_case("import, --maildir with no value", &["import", "a@x", "--maildir"]),
-        usage_case("import, --imapsync with no value", &["import", "a@x", "--imapsync"]),
-        usage_case("import, an unknown flag", &["import", "a@x", "--maildir", "/m", "--x"]),
+        usage_case(
+            "import, --maildir with no value",
+            &["import", "a@x", "--maildir"],
+        ),
+        usage_case(
+            "import, --imapsync with no value",
+            &["import", "a@x", "--imapsync"],
+        ),
+        usage_case(
+            "import, an unknown flag",
+            &["import", "a@x", "--maildir", "/m", "--x"],
+        ),
         usage_case("import, two addresses", &["import", "a@x", "b@x"]),
         piped(
             b"\n\n",
@@ -203,11 +239,20 @@ fn hostmail_server_verbs_answer_as_the_shell_does() {
             r#"{"ok":true,"alreadyEnabled":true}"#,
         ),
         ok_case("disable", &["disable"], r#"{"ok":true}"#),
-        ok_case("disable --json", &["disable", "--json"], r#"{"ok":true,"hint":"off"}"#),
+        ok_case(
+            "disable --json",
+            &["disable", "--json"],
+            r#"{"ok":true,"hint":"off"}"#,
+        ),
         // covers: hostmail uninstall
         ok_case(
             "uninstall",
-            &["uninstall", "--purge", "--confirm-hostname", "mail.acme.example"],
+            &[
+                "uninstall",
+                "--purge",
+                "--confirm-hostname",
+                "mail.acme.example",
+            ],
             r#"{"ok":true}"#,
         ),
         // covers: hostmail uninstall --json
@@ -239,13 +284,25 @@ fn hostmail_server_verbs_answer_as_the_shell_does() {
             &["upgrade", "--dry-run"],
             r#"{"ok":true,"ready":true,"dataBytes":0,"freeBytes":null,"outage":"soon","plan":[]}"#,
         ),
-        ok_case("upgrade, the no-op", &["upgrade"], r#"{"ok":true,"outcome":"noop"}"#),
+        ok_case(
+            "upgrade, the no-op",
+            &["upgrade"],
+            r#"{"ok":true,"outcome":"noop"}"#,
+        ),
         // covers: hostmail rotate-admin
         ok_case("rotate-admin", &["rotate-admin"], r#"{"ok":true}"#),
         // covers: hostmail rotate-admin --json
-        ok_case("rotate-admin --json", &["rotate-admin", "--json"], r#"{"ok":true}"#),
+        ok_case(
+            "rotate-admin --json",
+            &["rotate-admin", "--json"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail password rotate
-        ok_case("password rotate", &["password", "rotate", "sales@acme.example"], ROTATED),
+        ok_case(
+            "password rotate",
+            &["password", "rotate", "sales@acme.example"],
+            ROTATED,
+        ),
         ok_case(
             "password rotate, little known",
             &["password", "rotate", "sales@acme.example"],
@@ -277,7 +334,13 @@ fn hostmail_server_verbs_answer_as_the_shell_does() {
         // covers: hostmail app-password add
         ok_case(
             "app-password add",
-            &["app-password", "add", "sales@acme.example", "--label", "phone"],
+            &[
+                "app-password",
+                "add",
+                "sales@acme.example",
+                "--label",
+                "phone",
+            ],
             r#"{"ok":true,"id":"ap_1","label":"phone","secret":"s3cr3t"}"#,
         ),
         // covers: hostmail app-password add --json
@@ -317,7 +380,13 @@ fn hostmail_server_verbs_answer_as_the_shell_does() {
         // covers: hostmail app-password revoke --json
         ok_case(
             "app-password revoke --json",
-            &["app-password", "revoke", "sales@acme.example", "ap_1", "--json"],
+            &[
+                "app-password",
+                "revoke",
+                "sales@acme.example",
+                "ap_1",
+                "--json",
+            ],
             r#"{"ok":true,"id":"ap_1"}"#,
         ),
         // covers: hostmail app-password keep
@@ -334,11 +403,21 @@ fn hostmail_server_verbs_answer_as_the_shell_does() {
         // covers: hostmail app-password keep --json
         ok_case(
             "app-password keep --json",
-            &["app-password", "keep", "sales@acme.example", "ap_1", "--json"],
+            &[
+                "app-password",
+                "keep",
+                "sales@acme.example",
+                "ap_1",
+                "--json",
+            ],
             r#"{"ok":true}"#,
         ),
         // covers: hostmail person
-        ok_case("person on", &["person", "sales@acme.example", "on"], r#"{"ok":true}"#),
+        ok_case(
+            "person on",
+            &["person", "sales@acme.example", "on"],
+            r#"{"ok":true}"#,
+        ),
         ok_case(
             "person off",
             &["person", "sales@acme.example", "off"],
@@ -372,7 +451,14 @@ fn hostmail_server_verbs_answer_as_the_shell_does() {
         ),
         ok_case(
             "import a maildir",
-            &["import", "--address", "sales@acme.example", "--maildir", "/m", "--skip-inbox"],
+            &[
+                "import",
+                "--address",
+                "sales@acme.example",
+                "--maildir",
+                "/m",
+                "--skip-inbox",
+            ],
             r#"{"ok":true,"imported":12}"#,
         ),
         ok_case(
@@ -382,7 +468,16 @@ fn hostmail_server_verbs_answer_as_the_shell_does() {
         ),
         ok_case(
             "import, a hint",
-            &["import", "sales@acme.example", "--imapsync", "from=imap.globex.example", "--user", "u", "--port", "993"],
+            &[
+                "import",
+                "sales@acme.example",
+                "--imapsync",
+                "from=imap.globex.example",
+                "--user",
+                "u",
+                "--port",
+                "993",
+            ],
             r#"{"ok":true,"hint":"queued","address":null}"#,
         ),
         // The upgrade's watch: a step at a time to the end.

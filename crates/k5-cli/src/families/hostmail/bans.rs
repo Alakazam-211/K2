@@ -97,7 +97,9 @@ fn bans(words: &[&str]) -> Result<Plan, Plan> {
                 },
             )?;
             if g.get("ip").is_empty() {
-                return Err(usage(format!("{CLI_NAME} hostmail bans clear <ip> [--all]")));
+                return Err(usage(format!(
+                    "{CLI_NAME} hostmail bans clear <ip> [--all]"
+                )));
             }
             Ok(Plan::Run(
                 run_env("bans_clear", g.json)
@@ -399,9 +401,7 @@ fn clear_py(py_: &mut Py) -> R<()> {
     let ip = or_env_bare(py_, &d, "ip", "M_IP", line::CLEAR_JOIN - 1)?;
     let destroyed = joined_or_none(g(&d, "destroyed", line::CLEAR_JOIN)?, line::CLEAR_JOIN)?;
     let all = s_of(g(&d, "all", line::CLEAR_JOIN + 1)?);
-    py_.print(&format!(
-        "cleared ip={ip} destroyed={destroyed} all={all}"
-    ));
+    py_.print(&format!("cleared ip={ip} destroyed={destroyed} all={all}"));
     for w in items(g(&d, "warnings", line::CLEAR_WARN)?, line::CLEAR_WARN)? {
         py_.print(&format!("warn: {}", py::str_of(&w)));
     }
@@ -443,7 +443,11 @@ fn migrate_py(py_: &mut Py) -> R<()> {
 }
 
 fn restore_py(py_: &mut Py) -> R<()> {
-    let d = py_.post("/cli/mail/bans/migrate/restore", &obj(vec![]), line::RESTORE_CALL)?;
+    let d = py_.post(
+        "/cli/mail/bans/migrate/restore",
+        &obj(vec![]),
+        line::RESTORE_CALL,
+    )?;
     if py_.json {
         py_.print_json(&d);
         return Ok(());

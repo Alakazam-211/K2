@@ -56,24 +56,58 @@ fn hostmail_cert_verbs_take_the_words_as_the_shell_does() {
         usage_case("cert, an unknown sub-command", &["cert", "show"]),
         usage_case("cert renew, a stray word", &["cert", "renew", "now"]),
         usage_case("cert owner, an unknown flag", &["cert", "owner", "--k2"]),
-        usage_case("cert names, --name with list", &["cert", "names", "--name", "x"]),
-        usage_case("cert names issue, --name with no value", &["cert", "names", "issue", "--name"]),
+        usage_case(
+            "cert names, --name with list",
+            &["cert", "names", "--name", "x"],
+        ),
+        usage_case(
+            "cert names issue, --name with no value",
+            &["cert", "names", "issue", "--name"],
+        ),
         usage_case("cert names, a stray word", &["cert", "names", "renew", "x"]),
         usage_case("outbound, dane with no on", &["outbound", "dane"]),
         usage_case("outbound, dane off", &["outbound", "dane", "off"]),
         usage_case("outbound, a stray word", &["outbound", "list"]),
         usage_case("backup, an unknown sub-command", &["backup", "run"]),
         usage_case("backup status, a stray word", &["backup", "status", "x"]),
-        usage_case("backup plan, a count not a number", &["backup", "plan", "--keep-daily", "7d"]),
-        usage_case("backup plan, a value missing", &["backup", "plan", "--max-local-gb"]),
-        usage_case("backup plan, an unknown flag", &["backup", "plan", "--mode", "local"]),
-        usage_case("backup set, no mode", &["backup", "set", "--confirm-plan", "h"]),
-        usage_case("backup set, a mode it doesn't know", &["backup", "set", "--mode", "cloud"]),
-        usage_case("backup set, none with no reason", &["backup", "set", "--mode", "none", "--confirm-plan", "h"]),
-        usage_case("backup set, no plan hash", &["backup", "set", "--mode", "local"]),
+        usage_case(
+            "backup plan, a count not a number",
+            &["backup", "plan", "--keep-daily", "7d"],
+        ),
+        usage_case(
+            "backup plan, a value missing",
+            &["backup", "plan", "--max-local-gb"],
+        ),
+        usage_case(
+            "backup plan, an unknown flag",
+            &["backup", "plan", "--mode", "local"],
+        ),
+        usage_case(
+            "backup set, no mode",
+            &["backup", "set", "--confirm-plan", "h"],
+        ),
+        usage_case(
+            "backup set, a mode it doesn't know",
+            &["backup", "set", "--mode", "cloud"],
+        ),
+        usage_case(
+            "backup set, none with no reason",
+            &["backup", "set", "--mode", "none", "--confirm-plan", "h"],
+        ),
+        usage_case(
+            "backup set, no plan hash",
+            &["backup", "set", "--mode", "local"],
+        ),
         usage_case(
             "backup set, an offsite count not a number",
-            &["backup", "set", "--mode", "both", "--offsite-keep-monthly", "-1"],
+            &[
+                "backup",
+                "set",
+                "--mode",
+                "both",
+                "--offsite-keep-monthly",
+                "-1",
+            ],
         ),
         usage_case("backup set, a value missing", &["backup", "set", "--mode"]),
     ];
@@ -82,7 +116,8 @@ fn hostmail_cert_verbs_take_the_words_as_the_shell_does() {
     }
 }
 
-const OWNER_K2: &str = r#"{"ok":true,"hostname":"mail.acme.example","owner":"k2","stalwartAcme":{"type":"Manual"}}"#;
+const OWNER_K2: &str =
+    r#"{"ok":true,"hostname":"mail.acme.example","owner":"k2","stalwartAcme":{"type":"Manual"}}"#;
 
 const NAMES: &str = r#"{"ok":true,"names":[{"name":"autoconfig.acme.example","pointsHere":true,"issuer":"le","cert":{"state":"valid","expiresAt":"2027-01-01","lastError":"once"}},{"name":"mta-sts.acme.example","pointsHere":false,"dns":"add an A record","reason":"not here"}]}"#;
 
@@ -95,10 +130,22 @@ fn hostmail_cert_verbs_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "canswer");
     let v = vec![
         // covers: hostmail cert renew
-        ok_case("cert renew", &["cert", "renew"], r#"{"ok":true,"hostname":"mail.acme.example"}"#),
+        ok_case(
+            "cert renew",
+            &["cert", "renew"],
+            r#"{"ok":true,"hostname":"mail.acme.example"}"#,
+        ),
         // covers: hostmail cert renew --json
-        ok_case("cert renew --json", &["cert", "renew", "--json"], r#"{"ok":true}"#),
-        ok_case("cert renew, a hint", &["cert", "renew"], r#"{"ok":true,"hint":"queued"}"#),
+        ok_case(
+            "cert renew --json",
+            &["cert", "renew", "--json"],
+            r#"{"ok":true}"#,
+        ),
+        ok_case(
+            "cert renew, a hint",
+            &["cert", "renew"],
+            r#"{"ok":true,"hint":"queued"}"#,
+        ),
         // covers: hostmail cert owner
         ok_case("cert owner, the daemon's", &["cert", "owner"], OWNER_K2),
         ok_case(
@@ -130,15 +177,27 @@ fn hostmail_cert_verbs_answer_as_the_shell_does() {
         ),
         // covers: hostmail cert names
         ok_case("cert names", &["cert", "names"], NAMES),
-        ok_case("cert names list, none", &["cert", "names", "list"], r#"{"ok":true,"names":[]}"#),
+        ok_case(
+            "cert names list, none",
+            &["cert", "names", "list"],
+            r#"{"ok":true,"names":[]}"#,
+        ),
         // covers: hostmail cert names --json
         ok_case("cert names --json", &["cert", "names", "--json"], NAMES),
         // covers: hostmail cert names issue
         case(
             "cert names issue, one failed",
-            &["cert", "names", "issue", "--name", "autoconfig.acme.example"],
+            &[
+                "cert",
+                "names",
+                "issue",
+                "--name",
+                "autoconfig.acme.example",
+            ],
             &[],
-            vec![ok(r#"{"ok":true,"failed":1,"names":[{"name":"autoconfig.acme.example","result":"failed","detail":"no NS"},{"name":"b","result":"issued","expiresAt":"2027"}],"reload":{"method":"api","error":"late"}}"#)],
+            vec![ok(
+                r#"{"ok":true,"failed":1,"names":[{"name":"autoconfig.acme.example","result":"failed","detail":"no NS"},{"name":"b","result":"issued","expiresAt":"2027"}],"reload":{"method":"api","error":"late"}}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -154,51 +213,123 @@ fn hostmail_cert_verbs_answer_as_the_shell_does() {
             1,
         ),
         // covers: hostmail cert names renew
-        ok_case("cert names renew", &["cert", "names", "renew"], r#"{"ok":true,"names":[]}"#),
+        ok_case(
+            "cert names renew",
+            &["cert", "names", "renew"],
+            r#"{"ok":true,"names":[]}"#,
+        ),
         // covers: hostmail cert names renew --json
-        ok_case("cert names renew --json", &["cert", "names", "renew", "--json"], r#"{"ok":true}"#),
+        ok_case(
+            "cert names renew --json",
+            &["cert", "names", "renew", "--json"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail outbound
         ok_case(
             "outbound",
             &["outbound"],
             r#"{"ok":true,"ipStrategy":"ipv4_then_ipv6","ipStrategySetBy":"k2","dane":[{"name":"default","dane":"optional","setBy":"default"},{"name":"invalid-tls","dane":"disable","setBy":"hand"},{"setBy":"other"}],"pendingReload":{"at":"10:00"}}"#,
         ),
-        ok_case("outbound show, little known", &["outbound", "show"], r#"{"ok":true,"dnssec":"ok"}"#),
+        ok_case(
+            "outbound show, little known",
+            &["outbound", "show"],
+            r#"{"ok":true,"dnssec":"ok"}"#,
+        ),
         // covers: hostmail outbound --json
         ok_case("outbound --json", &["outbound", "--json"], r#"{"ok":true}"#),
-        ok_case("outbound dane on", &["outbound", "dane", "on"], r#"{"ok":true}"#),
+        ok_case(
+            "outbound dane on",
+            &["outbound", "dane", "on"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail backup status
         ok_case("backup status", &["backup", "status"], BACKUP),
-        ok_case("backup status, nothing set", &["backup", "status"], r#"{"ok":true}"#),
+        ok_case(
+            "backup status, nothing set",
+            &["backup", "status"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail backup status --json
-        ok_case("backup status --json", &["backup", "status", "--json"], BACKUP),
+        ok_case(
+            "backup status --json",
+            &["backup", "status", "--json"],
+            BACKUP,
+        ),
         // covers: hostmail backup plan
         ok_case(
             "backup plan",
-            &["backup", "plan", "--bandwidth-mbps", "50", "--keep-daily", "7", "--max-local-gb", "20"],
+            &[
+                "backup",
+                "plan",
+                "--bandwidth-mbps",
+                "50",
+                "--keep-daily",
+                "7",
+                "--max-local-gb",
+                "20",
+            ],
             PLAN,
         ),
-        ok_case("backup plan, little known", &["backup", "plan"], r#"{"ok":true}"#),
+        ok_case(
+            "backup plan, little known",
+            &["backup", "plan"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostmail backup plan --json
-        ok_case("backup plan --json", &["backup", "plan", "--json", "--keep-weekly", "4"], PLAN),
+        ok_case(
+            "backup plan --json",
+            &["backup", "plan", "--json", "--keep-weekly", "4"],
+            PLAN,
+        ),
         // covers: hostmail backup set
         ok_case(
             "backup set",
             &[
-                "backup", "set", "--mode", "local", "--keep-daily", "7", "--keep-weekly", "04",
-                "--window", "02:00-04:00", "--max-local-gb", "20.5", "--confirm-plan", "ph_1",
+                "backup",
+                "set",
+                "--mode",
+                "local",
+                "--keep-daily",
+                "7",
+                "--keep-weekly",
+                "04",
+                "--window",
+                "02:00-04:00",
+                "--max-local-gb",
+                "20.5",
+                "--confirm-plan",
+                "ph_1",
             ],
             r#"{"ok":true,"from":"none","backup":{"mode":"local"}}"#,
         ),
         // covers: hostmail backup set --json
         ok_case(
             "backup set none --json",
-            &["backup", "set", "--mode", "none", "--reason", "provider snapshots", "--confirm-plan", "ph_1", "--json"],
+            &[
+                "backup",
+                "set",
+                "--mode",
+                "none",
+                "--reason",
+                "provider snapshots",
+                "--confirm-plan",
+                "ph_1",
+                "--json",
+            ],
             r#"{"ok":true}"#,
         ),
         case(
             "backup set, a size Python can't read",
-            &["backup", "set", "--mode", "local", "--max-local-gb", "lots", "--confirm-plan", "h"],
+            &[
+                "backup",
+                "set",
+                "--mode",
+                "local",
+                "--max-local-gb",
+                "lots",
+                "--confirm-plan",
+                "h",
+            ],
             &[],
             vec![],
             owner_and_port,
@@ -274,7 +405,15 @@ fn help_never_acts() {
         &["cert", "names", "issue", "--name", "x", "-h"],
         &["cert", "names", "renew", "--help"],
         &["outbound", "dane", "on", "-h"],
-        &["backup", "set", "--mode", "local", "--confirm-plan", "h", "--help"],
+        &[
+            "backup",
+            "set",
+            "--mode",
+            "local",
+            "--confirm-plan",
+            "h",
+            "--help",
+        ],
     ];
     for line in LINES {
         rig.check(&compare(

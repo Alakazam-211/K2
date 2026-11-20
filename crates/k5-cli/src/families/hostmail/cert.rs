@@ -6,11 +6,11 @@
 
 use super::pyx::{self, g, items, or_dict, or_s, s_of, sv};
 use super::words::{wants_help, Got};
+use crate::exit::Exit;
 use crate::families::mail::core::{
     obj, py_float, run_env, unix_ago, usage, At, End, Plan, Py, Secs, Within, MODULE, R,
 };
 use crate::families::mail::py::{self as p, attr_get};
-use crate::exit::Exit;
 use crate::out::json::Value;
 use crate::out::py;
 use crate::transport::urllib::Method;
@@ -181,7 +181,11 @@ fn cert(words: &[&str]) -> Result<Plan, Plan> {
                 &[("--stalwart-acme", "acme")],
                 &format!("unexpected argument '{{w}}' — usage: {CLI_NAME} hostmail cert owner [--stalwart-acme] [--json]"),
             )?;
-            let action = if g.on("acme") { "stalwart-acme" } else { "show" };
+            let action = if g.on("acme") {
+                "stalwart-acme"
+            } else {
+                "show"
+            };
             Ok(Plan::Run(
                 run_env("cert_owner", g.json).with("M_CERT_ACTION", action),
             ))
@@ -536,9 +540,7 @@ fn gib(n: Option<Value>, from: &[(u32, &'static str)]) -> R<String> {
         let d = py::percent_d(&Value::Float(f)).at(line::GIB_D, "_gib")?;
         Ok(format!("{d} B"))
     })();
-    from.iter()
-        .rev()
-        .fold(r, |r, (l, name)| r.within(*l, name))
+    from.iter().rev().fold(r, |r, (l, name)| r.within(*l, name))
 }
 
 /// `_dur(secs)`, called from line `from` of the module.
@@ -668,10 +670,7 @@ fn print_backup_in(py_: &mut Py, b: &Value) -> R<()> {
         l.push_str(&format!(", last {}", unix_ago(Some(&last))));
     }
     let days = gin(&o, "days", line::PB_DAYS, F)?;
-    l.push_str(&format!(
-        ", {} day(s) of churn",
-        or_s(days.clone(), "0")
-    ));
+    l.push_str(&format!(", {} day(s) of churn", or_s(days.clone(), "0")));
     py_.print(&l);
     let cp = or_dict(gin(&o, "churnPerDay", line::PB_CHURN, F)?);
     if p::truthy(gin(&o, "days", line::PB_CHURN + 1, F)?.as_ref()) {
@@ -814,7 +813,11 @@ fn plan_py(py_: &mut Py) -> R<()> {
         py_.print("");
         let lv = line::PLAN_VERDICT;
         let verdict = p::or(g(&m, "verdict", lv)?, sv("?"));
-        let verdict = if py::truthy(&verdict) { verdict } else { sv("?") };
+        let verdict = if py::truthy(&verdict) {
+            verdict
+        } else {
+            sv("?")
+        };
         let up = match &verdict {
             Value::Str(t) => p::text(t).to_uppercase(),
             other => {

@@ -264,7 +264,8 @@ fn profile(words: &[&str]) -> Result<Plan, Plan> {
     if wants_help(words) {
         return Ok(Plan::Help("hostmail/profile"));
     }
-    let use_ = format!("{CLI_NAME} hostmail profile <addr> --apple [--out <file> [--force]] [--json]");
+    let use_ =
+        format!("{CLI_NAME} hostmail profile <addr> --apple [--out <file> [--force]] [--json]");
     let (mut address, mut apple, mut out, mut force, mut json) =
         (String::new(), false, String::new(), false, false);
     let mut i = 0;
@@ -278,11 +279,7 @@ fn profile(words: &[&str]) -> Result<Plan, Plan> {
                     out = v.to_string();
                     i += 1;
                 }
-                _ => {
-                    return Err(usage(format!(
-                        "--out requires a file path — usage: {use_}"
-                    )))
-                }
+                _ => return Err(usage(format!("--out requires a file path — usage: {use_}"))),
             },
             f if f.starts_with('-') => {
                 return Err(usage(format!("unknown flag '{f}' — usage: {use_}")));
@@ -362,7 +359,10 @@ fn dkim_show_py(py_: &mut Py) -> R<()> {
     }
     let dom = or_env(py_, &d, "domain", "M_DOMAIN", line::DKIM_SHOW_FOR - 1)?;
     py_.print(&format!("dkim  {dom}"));
-    for s in items(g(&d, "signatures", line::DKIM_SHOW_FOR)?, line::DKIM_SHOW_FOR)? {
+    for s in items(
+        g(&d, "signatures", line::DKIM_SHOW_FOR)?,
+        line::DKIM_SHOW_FOR,
+    )? {
         let l = line::DKIM_SHOW_ROW;
         let sel = or_s(g(&s, "selector", l)?, "?");
         let stage = or_s(g(&s, "stage", l + 1)?, "?");
@@ -398,7 +398,10 @@ fn dkim_rotate_py(py_: &mut Py) -> R<()> {
         "rotated dkim on {dom}  planted={}",
         s_of(planted.clone())
     ));
-    for rec in items(g(&d, "records", line::DKIM_ROTATE_FOR)?, line::DKIM_ROTATE_FOR)? {
+    for rec in items(
+        g(&d, "records", line::DKIM_ROTATE_FOR)?,
+        line::DKIM_ROTATE_FOR,
+    )? {
         let l = line::DKIM_ROTATE_ROW;
         let name = or_s(g(&rec, "name", l)?, "?");
         let value = match g(&rec, "value", l)?.filter(py::truthy) {
@@ -431,7 +434,11 @@ fn dkim_retire_py(py_: &mut Py) -> R<()> {
 }
 
 fn dmarc_show_py(py_: &mut Py) -> R<()> {
-    let d = py_.get("/cli/mail/dmarc", &domain_params(py_), line::DMARC_SHOW_CALL)?;
+    let d = py_.get(
+        "/cli/mail/dmarc",
+        &domain_params(py_),
+        line::DMARC_SHOW_CALL,
+    )?;
     if py_.json {
         py_.print_json(&d);
         return Ok(());
@@ -495,11 +502,11 @@ fn ptr_show_py(py_: &mut Py) -> R<()> {
         return Ok(());
     }
     let l = line::PTR_SHOW_CALL + 4;
+    py_.print(&format!("origin : {}", or_s(g(&d, "originIpv4", l)?, "?")));
     py_.print(&format!(
-        "origin : {}",
-        or_s(g(&d, "originIpv4", l)?, "?")
+        "ptr    : {}",
+        or_s(g(&d, "ptr", l + 1)?, "(none)")
     ));
-    py_.print(&format!("ptr    : {}", or_s(g(&d, "ptr", l + 1)?, "(none)")));
     let helo = match g(&d, "helo", l + 2)?.filter(py::truthy) {
         Some(h) => py::str_of(&h),
         None => or_s(g(&d, "hostname", l + 2)?, "(none)"),
@@ -719,7 +726,8 @@ fn profile_py(py_: &mut Py) -> R<()> {
         let l = line::PROFILE_STDOUT + 2;
         let id = or_s(g(&d, "appPasswordId", l)?, "?");
         let desc = or_s(g(&d, "description", l)?, "?");
-        let mut err = format!("app password {id} ({desc}) is inside this profile; revoke: {revoke}\n");
+        let mut err =
+            format!("app password {id} ({desc}) is inside this profile; revoke: {revoke}\n");
         // The summary goes out as it is written; stdout waits for the end.
         let notes = items(
             g(&d, "notes", line::PROFILE_STDERR_NOTES)?,

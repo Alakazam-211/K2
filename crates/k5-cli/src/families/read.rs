@@ -144,7 +144,9 @@ pub fn token(words: &[&str]) -> (String, bool) {
         match *w {
             "--lines" | "--agent" | "--session" => i += 2,
             "--token" => {
-                token = words.get(i + 1).map_or_else(String::new, |v| (*v).to_string());
+                token = words
+                    .get(i + 1)
+                    .map_or_else(String::new, |v| (*v).to_string());
                 i += 2;
             }
             "--token-stdin" => {

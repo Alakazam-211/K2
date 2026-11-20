@@ -94,7 +94,12 @@ pub fn parse(words: &[&str]) -> Option<More> {
 
 /// Runs `more` after the settings: the gates, the tool's checks, then the
 /// verb.
-pub fn run(args: &[OsString], more: More, hook_sock: Option<&Path>, mut settings: Settings) -> Exit {
+pub fn run(
+    args: &[OsString],
+    more: More,
+    hook_sock: Option<&Path>,
+    mut settings: Settings,
+) -> Exit {
     match (&more, prelude::gate(&settings)) {
         (More::Spawn, Some(Gate::VirtualDesktop)) => return Gate::VirtualDesktop.stop(),
         (More::Spawn, _) => {}
@@ -240,7 +245,10 @@ mod tests {
         assert_eq!(parse(&["spawn", "x"]), Some(More::Spawn));
         assert_eq!(parse(&["set-label"]), Some(More::LabelUsage));
         assert_eq!(parse(&["set-label", ""]), Some(More::LabelUsage));
-        assert_eq!(parse(&["set-label", "s1", "--no-lock"]), Some(More::LabelUsage));
+        assert_eq!(
+            parse(&["set-label", "s1", "--no-lock"]),
+            Some(More::LabelUsage)
+        );
         assert_eq!(
             parse(&["set-label", "s 1", "a", "--no-lock", "b&c"]),
             Some(More::Label("id=s%201&label=a%20b%26c&lock=false".into()))

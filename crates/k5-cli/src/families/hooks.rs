@@ -198,11 +198,7 @@ fn send(args: &[OsString], ask: Ask, settings: Settings) -> Exit {
     let (endpoint, call, json, status) = match &ask {
         Ask::Status { json, .. } => (STATUS, Call::Request(&pairs), *json, true),
         Ask::Install { remove, json } => {
-            let body: &[u8] = if *remove {
-                b"{\"remove\":true}"
-            } else {
-                b"{}"
-            };
+            let body: &[u8] = if *remove { b"{\"remove\":true}" } else { b"{}" };
             (INSTALL, Call::PostJson(body), *json, false)
         }
         Ask::Usage => unreachable!("answered before"),
@@ -237,8 +233,7 @@ fn send(args: &[OsString], ask: Ask, settings: Settings) -> Exit {
 /// `echo "$raw"`: bash's echo reads a word of only `-` and `n`, `e` or
 /// `E` as its options (no newline after `-n`).
 pub fn echo(raw: &[u8]) -> Vec<u8> {
-    if raw.len() > 1 && raw[0] == b'-' && raw[1..].iter().all(|b| matches!(b, b'n' | b'e' | b'E'))
-    {
+    if raw.len() > 1 && raw[0] == b'-' && raw[1..].iter().all(|b| matches!(b, b'n' | b'e' | b'E')) {
         return if raw.contains(&b'n') {
             Vec::new()
         } else {
@@ -726,11 +721,26 @@ mod tests {
     #[test]
     fn ago_as_the_shell_counts() {
         assert_eq!(ago(None, 1000.0), Ok("never".into()));
-        assert_eq!(ago(Some(&Value::Int("0".into())), 1000.0), Ok("never".into()));
-        assert_eq!(ago(Some(&Value::Int("999000".into())), 1000.0), Ok("1s ago".into()));
-        assert_eq!(ago(Some(&Value::Int("1000".into())), 7000.0), Ok("99m ago".into()));
-        assert_eq!(ago(Some(&Value::Int("1000".into())), 9000.0), Ok("2h ago".into()));
-        assert_eq!(ago(Some(&Value::Int("9999999".into())), 1000.0), Ok("0s ago".into()));
+        assert_eq!(
+            ago(Some(&Value::Int("0".into())), 1000.0),
+            Ok("never".into())
+        );
+        assert_eq!(
+            ago(Some(&Value::Int("999000".into())), 1000.0),
+            Ok("1s ago".into())
+        );
+        assert_eq!(
+            ago(Some(&Value::Int("1000".into())), 7000.0),
+            Ok("99m ago".into())
+        );
+        assert_eq!(
+            ago(Some(&Value::Int("1000".into())), 9000.0),
+            Ok("2h ago".into())
+        );
+        assert_eq!(
+            ago(Some(&Value::Int("9999999".into())), 1000.0),
+            Ok("0s ago".into())
+        );
         assert_eq!(ago(Some(&s("x")), 1000.0), Err(Stopped));
     }
 }

@@ -125,7 +125,10 @@ pub fn parse(verb: Verb, words: &[&str], agent: &str) -> Option<Ask> {
                 }
                 _ => {
                     return Some(Ask::Stop(
-                        format!(concat!(cli_name!(), " {}: '--agent' needs a name."), verb.word()),
+                        format!(
+                            concat!(cli_name!(), " {}: '--agent' needs a name."),
+                            verb.word()
+                        ),
                         Exit::Usage,
                     ))
                 }
@@ -278,8 +281,7 @@ mod tests {
     use super::*;
 
     fn source() -> String {
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/usage.sh");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/usage.sh");
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
     }
 

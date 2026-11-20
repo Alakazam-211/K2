@@ -43,7 +43,9 @@ pub fn lines() -> [&'static str; 6] {
 /// `k5 app-update ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it.
 pub fn run(args: &[OsString]) -> Option<Exit> {
-    args.iter().map(|a| a.to_str()).collect::<Option<Vec<_>>>()?;
+    args.iter()
+        .map(|a| a.to_str())
+        .collect::<Option<Vec<_>>>()?;
     if !python::family_native(python::here()) {
         return None;
     }
@@ -65,8 +67,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn the_shell_s_arm_and_lines() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src");

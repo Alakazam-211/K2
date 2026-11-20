@@ -671,12 +671,10 @@ fn compute_move() {
             "two jobs, the first refused: the second is not sent",
             &["move", "j1", "j2", "--auto"],
             &[],
-            vec![
-                Reply::Answer(
-                    409,
-                    r#"{"error":{"code":"job_started","hint":"it runs"}}"#.into(),
-                ),
-            ],
+            vec![Reply::Answer(
+                409,
+                r#"{"error":{"code":"job_started","hint":"it runs"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,

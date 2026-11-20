@@ -92,7 +92,8 @@ async fn fake_sew(reply: &'static str, upgrade: bool) -> (String, mpsc::Unbounde
     (addr, rx)
 }
 
-/// A fake App that answers every request `app` and counts its dials.
+/// A fake App that answers each connection's first request `app`
+/// (Connection: close) and counts its dials.
 async fn fake_app() -> (u16, Arc<AtomicUsize>) {
     let l = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = l.local_addr().expect("addr").port();
@@ -110,12 +111,11 @@ async fn fake_app() -> (u16, Arc<AtomicUsize>) {
                         Ok(0) | Err(_) => return,
                         Ok(k) => got.extend_from_slice(&b[..k]),
                     }
-                    while let Some(i) = got.windows(4).position(|w| w == b"\r\n\r\n") {
-                        got.drain(..i + 4);
-                        if s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\napp").await.is_err() {
-                            return;
+                    // One request per connection: answer it, close, done.
+                    if got.windows(4).any(|w| w == b"\r\n\r\n") {
+                        if s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\napp").await.is_ok() {
+                            let _ = s.shutdown().await;
                         }
-                        let _ = s.shutdown().await;
                         return;
                     }
                 }

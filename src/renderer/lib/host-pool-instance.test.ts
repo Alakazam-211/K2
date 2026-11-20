@@ -5,6 +5,8 @@
 //     remembered password: no keychain delete, no CLI token delete, no
 //     full-screen overlay; the pool says signin-required.
 //   - With a remembered password: ONE login, then ONE replay of the call.
+//   - Sign out sends the session token in the Authorization header, never
+//     in the URL, and then forgets it in the keychain and the CLI mirror.
 //   - MS25: at most 4 requests in flight per server (the pool's own status
 //     checks share the cap); one quick retry on a connection-level failure.
 
@@ -49,7 +51,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import { daemonCliGet, remoteCliInflightForTests } from './daemon-cli'
-import { hostPool, __resetHostPoolForTests } from './host-pool-instance'
+import { hostPool, postLogout, signOutOfHost, __resetHostPoolForTests } from './host-pool-instance'
 import { scopeForHost, __resetServerScopesForTests } from '@/kessel/server-scope'
 import {
   K2_CONNECT_KEYCHAIN_SERVICE,
@@ -223,5 +225,51 @@ describe('request cap and retry (MS25, MS23)', () => {
     await Promise.all(calls)
     const e = await check
     expect(e.reach).toBe('live')
+  })
+})
+
+describe('sign out of a saved server', () => {
+  function capture(status: number) {
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init: init ?? {} })
+        return json(status, { success: true })
+      }),
+    )
+    return calls
+  }
+
+  it('sends the token in the Authorization header only, then forgets it', async () => {
+    const calls = capture(200)
+    await signOutOfHost(B)
+    expect(calls).toHaveLength(1)
+    const { url, init } = calls[0]!
+    const u = new URL(url)
+    expect(u.pathname).toBe('/cli/auth/logout')
+    expect(u.search).toBe('')
+    expect(url).not.toContain('tok-old')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe('{}')
+    const headers = new Headers(init.headers)
+    expect(headers.get('Authorization')).toBe('Bearer tok-old')
+    expect(headers.get('Content-Type')).toBe('application/json')
+    expect(h.keychain.has(`${K2_CONNECT_KEYCHAIN_SERVICE}:id-b`)).toBe(false)
+    expect(h.invokes.map((i) => i.cmd)).toContain('connect_cli_token_delete')
+  })
+
+  it('postLogout keeps the caller’s options and sends no Authorization without a token', async () => {
+    const calls = capture(200)
+    const signal = new AbortController().signal
+    await postLogout('https://b.k2.dev', '', { signal, credentials: 'include', headers: { 'X-K2-Client': 'web' } })
+    expect(calls).toHaveLength(1)
+    const { url, init } = calls[0]!
+    expect(url).toBe('https://b.k2.dev/cli/auth/logout')
+    expect(init.signal).toBe(signal)
+    expect(init.credentials).toBe('include')
+    const headers = new Headers(init.headers)
+    expect(headers.get('X-K2-Client')).toBe('web')
+    expect(headers.has('Authorization')).toBe(false)
   })
 })

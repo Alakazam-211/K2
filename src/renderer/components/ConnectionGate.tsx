@@ -56,7 +56,7 @@ import {
 } from '@/lib/boot-status-view'
 import { noteReportedBrand } from '@/lib/brand'
 import { useConnectHostStore, activeHostKey, hostBaseUrl, type ConnectHost } from '@/stores/connect-host'
-import { hostPool, installHostSessionSync } from '@/lib/host-pool-instance'
+import { hostPool, installHostSessionSync, postLogout } from '@/lib/host-pool-instance'
 import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
 import { VoiceChatOnlyGate } from './VoiceChatOnlyGate'
 import { useVoiceOpenRequest } from '@/stores/voice-open-request'
@@ -1649,10 +1649,7 @@ export function ConnectionGate(): React.ReactElement {
           onSwitchToThisComputer={() => useConnectHostStore.getState().pickHost('local')}
           onSignOut={async () => {
             try {
-              await fetch(
-                withCliTokenQuery(`${hostBaseUrl(host)}/cli/auth/logout`, host.token),
-                withDaemonFetch({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
-              )
+              await postLogout(hostBaseUrl(host), host.token, withDaemonFetch())
             } catch (err) {
               console.warn('[connection-gate] logout failed:', err)
             }

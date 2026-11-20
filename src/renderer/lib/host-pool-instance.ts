@@ -182,6 +182,19 @@ setPoolRoleRefusalSink((hostKey) => {
 setPoolSocketCloseSink((hostKey, code) => hostPool.noteSocketClose(hostKey, code))
 
 /**
+ * `POST /cli/auth/logout` on `base` with `token` in the Authorization
+ * header, never in the URL (a URL lands in proxy and server logs). `init`
+ * adds the caller's own fetch options (a timeout, the web client's cookie
+ * flags); the method, body and the two headers are this function's.
+ */
+export function postLogout(base: string, token: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers as HeadersInit | undefined)
+  headers.set('Content-Type', 'application/json')
+  if (token.length > 0) headers.set('Authorization', `Bearer ${token}`)
+  return fetch(`${base}/cli/auth/logout`, { ...init, method: 'POST', headers, body: '{}' })
+}
+
+/**
  * The user signs out of a saved server from Settings (an explicit gesture,
  * so the keychain token may go — MS36). Logs this session out on the server
  * (best effort), forgets the token in memory and in the keychain, keeps the
@@ -197,12 +210,7 @@ export async function signOutOfHost(host: ConnectHost): Promise<void> {
   sessionSync.signedOut(host)
   if (token.length > 0) {
     try {
-      await fetch(`${hostBaseUrl(host)}/cli/auth/logout?token=${encodeURIComponent(token)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      })
+      await postLogout(hostBaseUrl(host), token, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
     } catch (err) {
       // The server is unreachable; the token is still forgotten here.
       console.warn('[host-session] logout request failed:', err)

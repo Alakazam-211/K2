@@ -40,8 +40,22 @@ fn usage_case(name: &'static str, args: &'static [&'static str]) -> Case {
     case(name, args, &[], vec![], owner_and_port, 2, 0)
 }
 
-fn refused(name: &'static str, args: &'static [&'static str], status: u16, body: &str, code: i32) -> Case {
-    case(name, args, &[], vec![answer(status, body)], owner_and_port, code, 1)
+fn refused(
+    name: &'static str,
+    args: &'static [&'static str],
+    status: u16,
+    body: &str,
+    code: i32,
+) -> Case {
+    case(
+        name,
+        args,
+        &[],
+        vec![answer(status, body)],
+        owner_and_port,
+        code,
+        1,
+    )
 }
 
 fn traceback(name: &'static str, args: &'static [&'static str], body: &str) -> Case {
@@ -100,7 +114,10 @@ fn mail_forward_takes_the_words_as_the_shell_does() {
             "rm, --restart-stopped",
             &["forward", "rm", "--restart-stopped", "--to", "a@x"],
         ),
-        usage_case("set, --address with no value", &["forward", "set", "--address"]),
+        usage_case(
+            "set, --address with no value",
+            &["forward", "set", "--address"],
+        ),
         usage_case("set, a word", &["forward", "set", "me@acme.example"]),
         usage_case("add, an unknown flag", &["forward", "add", "--all"]),
         usage_case("rm, a dash alone", &["forward", "rm", "-"]),
@@ -109,7 +126,10 @@ fn mail_forward_takes_the_words_as_the_shell_does() {
         usage_case("pause, --to with no value", &["forward", "pause", "--to"]),
         usage_case("show, a word", &["forward", "show", "me@acme.example"]),
         usage_case("resume, an unknown flag", &["forward", "resume", "--all"]),
-        usage_case("unset, --address with no value", &["forward", "unset", "--address"]),
+        usage_case(
+            "unset, --address with no value",
+            &["forward", "unset", "--address"],
+        ),
     ];
     for c in &v {
         rig.check(c);
@@ -159,7 +179,14 @@ fn mail_forward_answers_as_the_shell_does() {
         ),
         ok_case(
             "add, one destination, no copy",
-            &["forward", "add", "--to", "a@acme.example", "--no-keep", "--json"],
+            &[
+                "forward",
+                "add",
+                "--to",
+                "a@acme.example",
+                "--no-keep",
+                "--json",
+            ],
             r#"{"ok":true,"to":"a@acme.example","keep":false}"#,
         ),
         ok_case(
@@ -169,7 +196,14 @@ fn mail_forward_answers_as_the_shell_does() {
         ),
         ok_case(
             "rm",
-            &["forward", "rm", "--to", "a@globex.example", "--to", "b@globex.example"],
+            &[
+                "forward",
+                "rm",
+                "--to",
+                "a@globex.example",
+                "--to",
+                "b@globex.example",
+            ],
             r#"{"ok":true,"address":"me@acme.example","removed":["a@globex.example"],"remaining":["c@acme.example","d@acme.example"],"note":"one left"}"#,
         ),
         ok_case(
@@ -198,7 +232,11 @@ fn mail_forward_answers_as_the_shell_does() {
             &["forward", "resume", "--address", "me@acme.example"],
             r#"{"ok":true,"state":"active"}"#,
         ),
-        ok_case("resume --json", &["forward", "resume", "--json"], r#"{"ok":true}"#),
+        ok_case(
+            "resume --json",
+            &["forward", "resume", "--json"],
+            r#"{"ok":true}"#,
+        ),
         refused(
             "an agent: person only",
             &["forward", "show"],

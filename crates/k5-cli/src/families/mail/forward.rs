@@ -289,12 +289,9 @@ pub fn exec(py_: &mut Py, verb: &str) -> Option<R<()>> {
     if verb == "forward_message" {
         return None;
     }
-    let (is_self, op) = if let Some(op) = verb.strip_prefix("self_forward_") {
-        (true, op)
-    } else if let Some(op) = verb.strip_prefix("forward_") {
-        (false, op)
-    } else {
-        return None;
+    let (is_self, op) = match verb.strip_prefix("self_forward_") {
+        Some(op) => (true, op),
+        None => (false, verb.strip_prefix("forward_")?),
     };
     let f = Fwd {
         op: op.to_string(),
@@ -456,12 +453,17 @@ impl Fwd {
         }
         inside(
             py_.die(err, None, permission),
-            &[(from, MODULE), (line::CALL_DIE, FWD_CALL), (line::DIE_ANY, FWD_DIE)],
+            &[
+                (from, MODULE),
+                (line::CALL_DIE, FWD_CALL),
+                (line::DIE_ANY, FWD_DIE),
+            ],
         )
     }
 
     /// `fwd_call(method, route, params, body, timeout)` from module line
     /// `from`.
+    #[allow(clippy::too_many_arguments)]
     fn call(
         &self,
         py_: &Py,
@@ -898,7 +900,12 @@ fn fwd_detail(f: &Value) -> R<Vec<String>> {
     const F: &str = FWD_DETAIL;
     let mut out: Vec<String> = Vec::new();
     let paused = is(&g(f, "state", line::DETAIL_STATE, F)?, "paused");
-    if paused && is(&g(f, "pauseReason", line::DETAIL_STATE, F)?, "upgrade_required") {
+    if paused
+        && is(
+            &g(f, "pauseReason", line::DETAIL_STATE, F)?,
+            "upgrade_required",
+        )
+    {
         out.push(format!(
             "  not forwarding: the mail server needs upgrading: {CLI_NAME} hostmail upgrade"
         ));

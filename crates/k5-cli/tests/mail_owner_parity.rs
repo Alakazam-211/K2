@@ -759,7 +759,11 @@ fn piped_cases() -> Vec<Case> {
         ),
         piped(
             b"CHILDTEST_PASSWORD_7Kq\n",
-            ok_case("oauth-config set, the secret piped", OAUTH_SET, OAUTH_CONFIG),
+            ok_case(
+                "oauth-config set, the secret piped",
+                OAUTH_SET,
+                OAUTH_CONFIG,
+            ),
         ),
         piped(
             b"CHILDTEST_PASSWORD_7Kq",
@@ -843,11 +847,7 @@ fn a_piped_secret_is_on_no_child_s_argv_or_environment() {
         let (out, sent) = rig.binary(c, false);
         let children = rig.take_tool_log();
         assert_eq!(out.code, Some(0), "{}: the binary: {out:?}", c.name);
-        assert_eq!(
-            children, "",
-            "{}: the binary started a program",
-            c.name
-        );
+        assert_eq!(children, "", "{}: the binary started a program", c.name);
         assert_eq!(sent.len(), 1, "{}: the binary's requests", c.name);
         assert!(
             sent[0].contains(SECRET),

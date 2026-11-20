@@ -107,6 +107,9 @@ pub struct Ask {
     pub mem_auto_fb: String,
     pub cpus_burst: Num,
     pub network: String,
+    /// `--strict`: the server runs a `sh -c` or `bash -c` script under
+    /// `bash -euo pipefail` (it refuses any other command).
+    pub strict: bool,
     /// `--label` (always an object once read).
     pub labels: Option<Value>,
     /// `--env` (always an object once read).
@@ -274,6 +277,10 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             }
             "--cache-required" => {
                 a.cache_required = true;
+                i += 1;
+            }
+            "--strict" => {
+                a.strict = true;
                 i += 1;
             }
             "--gate" => {
@@ -820,6 +827,7 @@ pub fn body(a: &Ask, cwd: &str, repo_dir: &str, ws: &str, client: &str) -> Strin
         ("gpuMemBytes", num(&a.gpu_mem)),
         ("network", st(&a.network)),
         ("netnsDummies", a.netns.clone()),
+        ("strict", flag(a.strict)),
     ];
     dumps(&object(
         fields

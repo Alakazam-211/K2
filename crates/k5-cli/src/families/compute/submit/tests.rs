@@ -102,6 +102,13 @@ fn run_body() {
         body,
         r#"{"any": true, "labels": {}, "env": {}, "argv": ["true"], "plan": false, "detach": false, "dirty": false, "noSource": false, "exclusive": false, "retryInterrupted": true, "clientJobId": "c"}"#
     );
+    let a = ask(run::parse(&["--strict", "--detach", "--", "sh", "-c", "x | y"]));
+    assert!(a.strict);
+    let body = run::body(&a, "", "", "", "c");
+    assert_eq!(
+        body,
+        r#"{"any": true, "labels": {}, "env": {}, "argv": ["sh", "-c", "x | y"], "plan": false, "detach": true, "dirty": false, "noSource": false, "exclusive": false, "clientJobId": "c", "strict": true}"#
+    );
     assert_eq!(run::client_job_id().len(), 32);
 }
 

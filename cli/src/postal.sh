@@ -109,9 +109,31 @@ print(json.dumps(out))
 ' "$@"
 }
 
+# Where a person takes the steps a session may not take as the owner.
+_POSTAL_PERSON_LINE="A person does this in the workspace's Postal tab or in Settings → General → Postal, or with k2 postal from a terminal outside K2."
+
+# _postal_session_token: in a session (the HOOK_SOCK marker), Postal acts
+# as the session: every request carries the session's passport, never the
+# owner token k2 read from disk. A session with no passport: one line, exit
+# 3, nothing sent. Outside a session (and on a remote host) $TOKEN stays.
+_postal_session_token() {
+    [ -n "$(_hook_sock)" ] || return 0
+    _cli_skip_uds && return 0
+    if [ -z "${SCOPED_TOKEN:-}" ]; then
+        echo "Error: in a session, k2 postal doesn't act as this server's owner, and this session has no passport, so nothing was sent." >&2
+        echo "$_POSTAL_PERSON_LINE" >&2
+        exit 3
+    fi
+    TOKEN="$SCOPED_TOKEN"
+}
+
 # _postal_print <view> <json?>: the daemon's answer, for people and agents.
+# In a session, a step that is a person's ends with where a person takes it
+# (unless the daemon's own line already says).
 _postal_print() {
-    PV="$1" PJ="${2:-false}" python3 -c '
+    local in_session=""
+    [ -n "$(_hook_sock)" ] && in_session=1
+    PV="$1" PJ="${2:-false}" PS="$in_session" PL="$_POSTAL_PERSON_LINE" python3 -c '
 import json, os, sys, time
 raw = sys.stdin.read()
 try:
@@ -123,6 +145,8 @@ if err:
     code = err.get("code", "") if isinstance(err, dict) else ""
     hint = err.get("hint", "") if isinstance(err, dict) else str(err)
     print("Error: %s%s" % ((code + ": ") if code else "", hint), file=sys.stderr)
+    if os.environ.get("PS") and code in ("owner_only", "postal_people_only") and "Postal tab" not in hint and "Settings" not in hint:
+        print(os.environ["PL"], file=sys.stderr)
     perm = ("owner_only", "forbidden", "postal_off", "postal_people_only", "postal_people_decide", "postal_owner_decides", "postal_own_workspace_only", "role_required", "postal_not_friends", "postal_secret_in_text", "postal_route_louder", "postal_owner_link_missing", "postal_rekey_pending")
     sys.exit(3 if code in perm else {"not_found": 4, "postal_no_address": 4, "postal_no_code": 4, "usage": 2, "bad_postal_address": 2, "postal_code_needed": 2, "too_large": 2}.get(code, 1))
 if os.environ.get("PJ") == "true":
@@ -244,6 +268,11 @@ cmd_postal() {
     _postal_need() {
         [ -n "$one" ] || { echo "Usage: k2 postal $sub $1  (k2 postal --help)" >&2; exit 2; }
     }
+    # Every verb that reaches the daemon acts as the session in a session.
+    case "$sub" in
+        status|friends|claim|invite|accept|reject|code|route|owner-link|send|remove|block|enable|disable|admins-may-accept|settings|link-p5)
+            _postal_session_token ;;
+    esac
     case "$sub" in
         status|friends)
             cli_request "/cli/postal/$sub" "workspace=$(urlencode "$ws")" | _postal_print "$sub" "$as_json" ;;

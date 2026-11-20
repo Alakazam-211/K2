@@ -834,8 +834,11 @@ fi
 if [ "${1:-}" = "send-feedback" ]; then
     case "${2:-}" in ""|help|-h|--help) _skip_conn_gate=1 ;; esac
 fi
-# `k2 postal`, its help, and send|route|adopt (which only say "not
-# available yet") talk to nothing (0.46.16, Postal Beta): no daemon.
+# `k2 postal`, its help and `adopt` (which only says "not available yet")
+# talk to nothing (0.46.16, Postal Beta): no daemon. `send` and `route`
+# once said "not available yet" too and still skip this gate, but they now
+# send requests: with no port or token, the request itself fails. In a
+# session every Postal request carries the passport (_postal_session_token).
 if [ "${1:-}" = "postal" ]; then
     case "${2:-}" in ""|help|-h|--help|send|route|adopt) _skip_conn_gate=1 ;; esac
     for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done

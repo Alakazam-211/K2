@@ -98,6 +98,8 @@ _postal_send_teach() {
         echo "Usage: k2 msg $to \"text\" [--no-wake] [--json]" >&2
         exit 2
     fi
+    # In a session: the passport, never the owner token (k2 postal send).
+    _postal_session_token
     local body
     body="$(_postal_body "workspace=${PROJECT:-$PWD}" "to=$to" "text=$text" "wake=$wake")"
     cli_post_json "/cli/postal/send" "$body" | _postal_print send "$as_json"

@@ -100962,9 +100962,12 @@ with open(os.environ["GD_T"], "ab") as f:
     f.write(base64.b64decode(v["base64"]))
 print("%s %s" % ("1" if v["eof"] else "0", v["len"]))
 ')" || { rm -f "$tmp"; echo "Error: the daemon's answer wasn't readable" >&2; exit 1; }
-        offset=$((offset + ${eof#* }))
+        # The chunk's length comes from the daemon: digits only reach $(( )).
+        local got="${eof#* }"
+        [[ "$got" =~ ^[0-9]+$ ]] || { rm -f "$tmp"; echo "Error: the daemon's answer wasn't readable (its len is not a number)" >&2; exit 1; }
+        offset=$((offset + 10#$got))
         [ "${eof%% *}" = "1" ] && break
-        [ "${eof#* }" -gt 0 ] || { rm -f "$tmp"; echo "Error: the daemon stopped before the end" >&2; exit 1; }
+        [ "$got" -gt 0 ] || { rm -f "$tmp"; echo "Error: the daemon stopped before the end" >&2; exit 1; }
     done
     mv -f "$tmp" "$out" || { rm -f "$tmp"; echo "Error: can't write '$out'" >&2; exit 1; }
     trap - EXIT

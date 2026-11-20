@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Bash arithmetic never evaluates a daemon's answer that isn't digits. An
+# answer can come from another server (a compute node someone else owns)
+# or be changed on the way, and bash evaluates an array subscript inside
+# $(( )) (it may hold a command substitution); a letter-only value names a
+# shell variable, and bash evaluates that variable's value too.
+#
+# Answers covered:
+#   store blob get       each chunk's len (a bad one is a plain error)
+#
+# A stub daemon on loopback answers with crafted values: a subscript with
+# a command in it, and a name (ARITH_PROBE) of a variable this test puts in
+# the CLI's environment holding one. The command must never run (a marker
+# file), and valid answers still print and exit as before.
+# No real daemon, no ~/.k2, no keychain: HOME is a throwaway dir.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
+
+for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
+
+pass=0
+fail=0
+ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
+bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
+expect_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got $(printf %q "$2") want $(printf %q "$3"))"; fi; }
+expect_has() { if grep -qF -- "$3" <<<"$2"; then ok "$1"; else bad "$1 (no '$3' in: $2)"; fi; }
+expect_lacks() { if grep -qF -- "$3" <<<"$2"; then bad "$1 ('$3' in: $2)"; else ok "$1"; fi; }
+
+SANDBOX="$(mktemp -d /tmp/k2arith-ans-XXXXXX)"
+STUB_PID=""
+cleanup() {
+    if [ -n "$STUB_PID" ]; then
+        kill "$STUB_PID" 2>/dev/null || true
+        wait "$STUB_PID" 2>/dev/null || true
+    fi
+    rm -rf "$SANDBOX"
+}
+trap cleanup EXIT
+
+# The stub answers each route from a JSON file the test writes:
+#   blob.json   the /cli/zen/data/blob/get answer
+#   logs.json   a list of /cli/compute/jobs/logs answers, one per call (the
+#               last one repeats)
+#   get.json    the /cli/compute/jobs/get answer
+#   run.json    the /cli/compute/run answer
+cat > "$SANDBOX/stub.py" <<'PY'
+import json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
+
+WORK = sys.argv[1]
+FILES = {"/cli/zen/data/blob/get": "blob.json", "/cli/compute/jobs/logs": "logs.json",
+         "/cli/compute/jobs/get": "get.json", "/cli/compute/run": "run.json"}
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def reply(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+    def answer(self):
+        path = urlparse(self.path).path
+        with open(os.path.join(WORK, "requests.log"), "a") as f:
+            f.write("%s %s\n" % (self.command, path))
+        name = FILES.get(path)
+        p = os.path.join(WORK, name) if name else ""
+        if not p or not os.path.exists(p):
+            return self.reply(404, {"error": {"code": "not_found", "hint": "stub: " + path}})
+        v = json.load(open(p))
+        if path == "/cli/compute/jobs/logs":
+            one = v[0]
+            if len(v) > 1:
+                json.dump(v[1:], open(p, "w"))
+            v = one
+        return self.reply(200, v)
+    def do_GET(self):
+        self.answer()
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(n)
+        self.answer()
+
+srv = HTTPServer(("127.0.0.1", 0), H)
+with open(os.path.join(WORK, "port.tmp"), "w") as f:
+    f.write(str(srv.server_address[1]))
+os.rename(os.path.join(WORK, "port.tmp"), os.path.join(WORK, "port"))
+srv.serve_forever()
+PY
+
+python3 "$SANDBOX/stub.py" "$SANDBOX" &
+STUB_PID=$!
+for _ in $(seq 1 100); do [ -s "$SANDBOX/port" ] && break; sleep 0.05; done
+[ -s "$SANDBOX/port" ] || { echo "FAIL: the stub daemon did not start" >&2; exit 1; }
+
+export HOME="$SANDBOX/home"
+mkdir -p "$HOME/.k2"
+cat "$SANDBOX/port" > "$HOME/.k2/heartbeat.port"
+printf '%s' "owner-test-token" > "$HOME/.k2/heartbeat.token"
+cd "$SANDBOX"
+
+MARK="$SANDBOX/mark"
+# BASH_VERSINFO is always set, so set -u never stops the evaluation before
+# the subscript (and its command) is expanded.
+P="BASH_VERSINFO[\$(touch $MARK)]"
+# What a letter-only answer names: a variable holding the same subscript.
+export ARITH_PROBE="$P"
+
+# run_k2 <label> <args…>: run k2 (stdout in OUT, stderr in ERR, exit in RC)
+# and check the marker never appeared.
+OUT="" ERR="" RC=0
+run_k2() {
+    local label="$1"
+    shift
+    rm -f "$MARK"
+    RC=0
+    "$K2" "$@" >"$SANDBOX/out" 2>"$SANDBOX/err" </dev/null || RC=$?
+    OUT="$(cat "$SANDBOX/out")"
+    ERR="$(cat "$SANDBOX/err")"
+    if [ -e "$MARK" ]; then bad "$label: the command in the answer ran"; else ok "$label: the command in the answer never ran"; fi
+}
+J() { python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])))' "$1"; }
+pyjson() { python3 -c "$1" "${@:2}"; }
+
+echo "== store blob get: each chunk's len =="
+blob() { # <len as JSON> <eof true|false>
+    pyjson 'import base64, json, sys
+print(json.dumps({"base64": base64.b64encode(b"hello").decode(), "eof": sys.argv[2] == "true",
+                  "len": json.loads(sys.argv[1]), "offset": 0, "size": 5, "mime": "text/plain", "ref": "r1"}))' "$1" "$2" > "$SANDBOX/blob.json"
+}
+blob "$(J "\"$P\"")" false
+rm -f "$SANDBOX/got"
+run_k2 "blob len <subscript>" store blob get r1 --widget board --out "$SANDBOX/got"
+expect_eq "blob len <subscript>: exit" "$RC" "1"
+expect_has "blob len <subscript>: a plain error" "$ERR" "the daemon's answer wasn't readable"
+[ ! -e "$SANDBOX/got" ] && ok "blob len <subscript>: no file written" || bad "blob len <subscript>: a file was written"
+blob '"ARITH_PROBE"' false
+run_k2 "blob len ARITH_PROBE (names a variable)" store blob get r1 --widget board --out "$SANDBOX/got"
+expect_eq "blob len ARITH_PROBE: exit" "$RC" "1"
+expect_has "blob len ARITH_PROBE: a plain error" "$ERR" "the daemon's answer wasn't readable"
+blob '5' true
+run_k2 "blob len 5" store blob get r1 --widget board --out "$SANDBOX/got"
+expect_eq "blob len 5: exit" "$RC" "0"
+expect_eq "blob len 5: the file" "$(cat "$SANDBOX/got" 2>/dev/null || echo missing)" "hello"
+expect_eq "blob len 5: says what it got" "$OUT" "5 bytes, text/plain"
+
+echo
+echo "arith_daemon_answers: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

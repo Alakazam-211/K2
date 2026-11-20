@@ -51,6 +51,39 @@ impl Drop for Scratch {
     }
 }
 
+/// What [`dead_port`] holds; keep it for the whole test.
+pub(crate) type DeadPortGuard = Option<tokio::net::TcpSocket>;
+
+/// A loopback port nothing listens on: a dial to it is refused at once.
+/// Keep the guard until the test ends (`let (_held, port) = dead_port();`;
+/// `_` would drop it at once).
+///
+/// Linux: the guard is a socket bound to the port that never listens. The
+/// kernel answers a SYN to it with a reset (refused), and no other test can
+/// bind the port while it is held. A port bound and let go could come back
+/// from the next bind to port 0 (Linux starts that search at random), and
+/// the "dead" peer answered: in a shuffled soak, a federation dial's retry
+/// reached another test's server and both tests failed.
+///
+/// Elsewhere the guard is empty and the port is only bound and let go. macOS
+/// drops a SYN to a bound port that is not listening (the dial times out,
+/// it is not refused), and it hands out bind-to-0 ports in sequence, so a
+/// freed port comes back only after the whole range wraps.
+pub(crate) fn dead_port() -> (DeadPortGuard, u16) {
+    #[cfg(target_os = "linux")]
+    {
+        let s = tokio::net::TcpSocket::new_v4().expect("socket");
+        s.bind(([127, 0, 0, 1], 0).into()).expect("bind a loopback port");
+        let port = s.local_addr().expect("local addr").port();
+        (Some(s), port)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind a loopback port");
+        (None, l.local_addr().expect("local addr").port())
+    }
+}
+
 /// Hold the shared env lock WITHOUT changing anything — for tests that
 /// set their own (deliberately SHORT) `$HOME` through
 /// `k2_core::test_env::EnvVar`, or only need `$HOME` to stay put.

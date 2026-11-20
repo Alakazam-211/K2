@@ -15,7 +15,7 @@ use k2_core::awareness::{AgentAddress, AgentSignal, SignalKind, WorkspaceId};
 use k2_core::federation::{self, FederationPeer, PeerStore, PeerTrust};
 
 use super::*;
-use crate::test_support::with_temp_home;
+use crate::test_support::{dead_port, with_temp_home};
 
 /// A workspace this server lists to peers: persona `bob`, "agents may
 /// create connections" on, no agent mode (delivery never spawns a CLI).
@@ -127,19 +127,13 @@ fn an_unknown_sidecar_is_404_and_the_switch_still_gates_sidecars() {
     });
 }
 
-/// A port nothing listens on.
-fn dead_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
-    drop(l);
-    port
-}
-
 #[test]
 fn a_failed_dial_says_why() {
     // reqwest's own text stops at "error sending request for url (…)"; the
-    // owner needs the cause under it.
-    let err = post_inbound(&format!("http://127.0.0.1:{}", dead_port()), b"{}").expect_err("dead port");
+    // owner needs the cause under it. The port stays held for the whole
+    // dial, retries included.
+    let (_held, dead) = dead_port();
+    let err = post_inbound(&format!("http://127.0.0.1:{dead}"), b"{}").expect_err("dead port");
     assert!(
         err.to_ascii_lowercase().contains("refused"),
         "the error must carry its cause (connection refused): {err}"
@@ -148,7 +142,8 @@ fn a_failed_dial_says_why() {
 
 /// A server that drops the first `drop_first` connections without an
 /// answer, then answers `200 {"agents":[]}`. Returns the port and the
-/// count of connections it accepted.
+/// count of connections it accepted. The listener is bound to port 0 and
+/// held by its thread for the whole run, so no other test gets the port.
 fn flaky_server(drop_first: usize) -> (u16, Arc<AtomicUsize>) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();

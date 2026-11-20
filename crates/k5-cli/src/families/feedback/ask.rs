@@ -30,9 +30,9 @@
 //! Python's own modules' frames.
 
 use super::write::{attachments, PyOut};
-use crate::families::thread::cards::{option_lines, options_one_note};
 use super::{at, at_or, dumps, err_line, join, obj, s, short_text, str_of, PyStr};
 use crate::exit::Exit;
+use crate::families::thread::cards::{option_lines, options_one_note};
 use crate::families::{get, py_iter, py_space, Raise, Shown};
 use crate::out::json::{self, Text, Value};
 use crate::out::py;

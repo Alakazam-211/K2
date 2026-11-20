@@ -230,7 +230,11 @@ fn ask_options_split_on_semicolons() {
     const YES: &str = "Yes, rewrite the history too";
     let rig = Rig::new(VERB, "optsemi");
     let ask = |name: &'static str, opts: &[&str]| {
-        let words: Vec<String> = ["ask", "t"].iter().chain(opts).map(|w| w.to_string()).collect();
+        let words: Vec<String> = ["ask", "t"]
+            .iter()
+            .chain(opts)
+            .map(|w| w.to_string())
+            .collect();
         let words: Vec<&'static str> = words.into_iter().map(|w| &*w.leak()).collect();
         case(name, words.leak(), &[], vec![ok(CREATED)], files, 0, 1)
     };
@@ -239,13 +243,25 @@ fn ask_options_split_on_semicolons() {
     check(
         &rig,
         vec![
-            ask("commas, no ';': one option, the note", &["--options", &commas]),
+            ask(
+                "commas, no ';': one option, the note",
+                &["--options", &commas],
+            ),
             ask("'a; b': two, no note", &["--options", "a; b"]),
-            ask("';' with commas: two, commas kept", &["--options", &semi, "--json"]),
+            ask(
+                "';' with commas: two, commas kept",
+                &["--options", &semi, "--json"],
+            ),
             ask("no comma: one, no note", &["--options", "Done"]),
             ask("an empty --options: none, no note", &["--options", ""]),
-            ask("JSON-looking: one option, the note", &["--options", r#"["a, b"]"#]),
-            ask("repeated --option: no note", &["--option", NO, "--option", " ", "--option", YES]),
+            ask(
+                "JSON-looking: one option, the note",
+                &["--options", r#"["a, b"]"#],
+            ),
+            ask(
+                "repeated --option: no note",
+                &["--option", NO, "--option", " ", "--option", YES],
+            ),
             ask("the note with --json", &["--options", "Yes, now", "--json"]),
         ],
     );

@@ -327,12 +327,28 @@ fn thread_ask_options_split_on_semicolons() {
     let commas = format!("{NO}, {YES}");
     let semi = format!("{NO}; {YES}");
     for c in [
-        ask("commas, no ';': the note once", &["--options", &commas], NOTE_HINT),
+        ask(
+            "commas, no ';': the note once",
+            &["--options", &commas],
+            NOTE_HINT,
+        ),
         ask("'a; b': no note", &["--options", &semi], CARD),
         ask("no comma: no note", &["--options", "Done"], CARD),
-        ask("a JSON list: no note", &["--options", r#" ["Yes, now","No"]"#], CARD),
-        ask("--json: the note on stderr", &["--options", "Yes, now", "--json"], NOTE_HINT),
-        ask("repeated --option: no note", &["--option", NO, "--option", YES], CARD),
+        ask(
+            "a JSON list: no note",
+            &["--options", r#" ["Yes, now","No"]"#],
+            CARD,
+        ),
+        ask(
+            "--json: the note on stderr",
+            &["--options", "Yes, now", "--json"],
+            NOTE_HINT,
+        ),
+        ask(
+            "repeated --option: no note",
+            &["--option", NO, "--option", YES],
+            CARD,
+        ),
     ] {
         rig.check(&c);
     }

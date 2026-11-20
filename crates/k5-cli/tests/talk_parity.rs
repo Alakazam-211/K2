@@ -514,3 +514,42 @@ fn talk_value_flag_last_is_the_d6_line() {
         );
     }
 }
+
+/// Forms the binary hands to the shell because of a bash bug, until the
+/// fix reaches this line. Each row flips to [`Compare::Exact`] (and the
+/// hand-back in `families/talk.rs` goes) when it does:
+/// - an `--agent` the session pick pastes into its Python's source
+///   (fixed in bash on q17, a0afbaea7);
+/// - a `*_TALK_SCOUT_MAX` that `[[ -ge ]]` evaluates as arithmetic (the
+///   fix is asked for).
+#[test]
+fn talk_bash_bug_forms_go_to_the_shell() {
+    let rig = Rig::new(VERB, "bugs");
+    let empty = || ok(r#"{"lines":[]}"#);
+    for c in [
+        // FLIP when the agent fix lands.
+        plain(
+            "an --agent with a backslash",
+            &["ws", "--answer", "1", "--agent", "a\\b"],
+            vec![ok("{}"), ok("[]")],
+            1,
+            2,
+        ),
+        // FLIP when the SCOUT_MAX fix lands.
+        env(
+            plain(
+                "a scout cap that is arithmetic",
+                &["ws", "--scout", "--session", SID],
+                vec![empty(), empty(), ok("{}"), empty(), ok("{}")],
+                0,
+                5,
+            ),
+            &[("K2_TALK_SCOUT_MAX", "1+1")],
+        ),
+    ] {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..c
+        });
+    }
+}

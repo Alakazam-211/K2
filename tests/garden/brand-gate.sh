@@ -386,6 +386,33 @@ crun 1 "want '<count> <reason>'"
 rm "$C/cli/src/a.sh"
 printf '# unsure ceilings\n' > "$C/u.txt"
 
+# The three closed reasons have no ceiling, ever. A use in embedded code
+# that is not in a string fails with nothing listed; an exact value and a
+# shell word fail with no value row; a ceiling row for any of them is
+# refused.
+cat > "$C/cli/src/a.sh" <<'SH'
+cmd_a() {
+    python3 -c 'print(k2)'
+}
+SH
+crun 1 "1 unsure uses of the command name in the CLI's parts (interpreter code, not in a string), the ceiling is 0: write it as text, a comment, or a name set with ="
+cat > "$C/cli/src/a.sh" <<'SH'
+cmd_a() {
+    python3 -c "k2 = 1  # see k2 msg"
+}
+SH
+crun 0 "brand-gate: ok (unsure in the CLI's parts: none)."
+printf 'cmd_a() { MODE="k2"; }\n' > "$C/cli/src/a.sh"
+crun 1 "cli/src/a.sh:1 spells out value and has no value row"
+printf 'cmd_a() { case "$m" in k2) ;; esac; }\n' > "$C/cli/src/a.sh"
+crun 1 "cli/src/a.sh:1 spells out value and has no value row"
+rm "$C/cli/src/a.sh"
+for r in "a string that is exactly k2 (a value)" "k2 as a word in shell code" "interpreter code, not in a string"; do
+    printf '# unsure ceilings\n\n1 %s\n' "$r" > "$C/u.txt"
+    crun 1 "'$r' is closed and has no ceiling"
+done
+printf '# unsure ceilings\n' > "$C/u.txt"
+
 # All kinds: --tighten lowers rows to today's counts, drops rows at zero and
 # keeps reasons; --list KIND prints every counted line.
 cat > "$C/crates/b/src/lib.rs" <<'RS'

@@ -80,8 +80,12 @@ And one count that is not per file, in scripts/garden/cli-name-unsure-ceilings.t
 the flip's `unsure` uses in the bash CLI's parts (cli/src, and cli/text where
 the flip reads it), one ceiling per reason (`<count> <reason>`). A reason may
 not go over its ceiling, a reason with no row may have none, and --tighten
-lowers them. The Rust area has no ceiling here: its code lines are `cli` and
-`value`, and its tests may name the command freely.
+lowers them. Three reasons are closed and may not have a row at all: a
+string that is exactly the name and the name as a word in shell code (the
+flip keeps them; the `value` rows hold them), and interpreter code not in a
+string (write it as text, a comment or a name set with `=`). The Rust area
+has no ceiling here: its code lines are `cli` and `value`, and its tests may
+name the command freely.
 
 `k2.dev` is the zone gate's (scripts/garden/zone-gate.py); scripts/brand-gate.sh
 runs both.
@@ -506,6 +510,15 @@ def write_allowlist(path, head, rows, kinds):
         f.write("\n".join(head + [f"{n} {k} {p} {why}" for (k, p), (n, why) in order]) + "\n")
 
 
+# Unsure reasons with no ceiling, ever: the first two are `value` lines (the
+# flip calls them kept), the third is written as text, a comment or a name.
+CLOSED = {
+    flip.VALUE_WHY: "the flip keeps it and its file's value row holds it",
+    flip.SHELL_WHY: "the flip keeps it and its file's value row holds it",
+    flip.CODE_WHY: "write it as text, a comment, or a name set with =",
+}
+
+
 def read_ceilings(path):
     head, rows = [], {}
     with open(path, encoding="utf-8") as f:
@@ -520,6 +533,8 @@ def read_ceilings(path):
                 sys.exit(f"brand-gate: {path} line {n}: want '<count> <reason>', got '{raw}'")
             if parts[1] in rows:
                 sys.exit(f"brand-gate: {path} line {n}: '{parts[1]}' is listed twice")
+            if parts[1] in CLOSED:
+                sys.exit(f"brand-gate: {path} line {n}: '{parts[1]}' is closed and has no ceiling: {CLOSED[parts[1]]}")
             rows[parts[1]] = int(parts[0])
     return head, rows
 
@@ -650,8 +665,9 @@ def main(argv):
                 print(f"brand-gate: FAIL {rel} has {have} {kind} lines, its row allows {rows[(kind, rel)][0]}: {HINT[kind]} for the new one.")
     for r in unsure_over:
         bad = True
+        fix = CLOSED.get(r, "write the line so it is plainly text, or plainly code")
         print(f"brand-gate: FAIL {unsure[r]} unsure uses of the command name in the CLI's parts ({r}), the ceiling is {c_rows.get(r, 0)}: "
-              "write the line so it is plainly text, or plainly code (scripts/garden/cli-name-flip.py --unsure lists them).")
+              f"{fix} (scripts/garden/cli-name-flip.py --unsure lists them).")
     if bad:
         return 1
     for path, kinds, head, rows, mine, over, kept in results:

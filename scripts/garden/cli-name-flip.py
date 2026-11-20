@@ -67,6 +67,7 @@ NAME_WHY = "a name in interpreter code (k2 = ...)"
 # these names, so they are the one spelling of each reason).
 VALUE_WHY = "a string that is exactly k2 (a value)"
 SHELL_WHY = "k2 as a word in shell code"
+CODE_WHY = "interpreter code, not in a string"
 # After `k2 `, these mark a use as the command even when the word is not a
 # verb: a flag, a placeholder, an ellipsis.
 COMMAND_TAIL = re.compile(r" (--?[a-z]|<|\[|…|\.\.\.)")
@@ -280,9 +281,11 @@ def classify(line, m, where, known):
         if place == "comment":
             return "comment", "comment in interpreter code"
         if place == "code":
-            if ASSIGNED.match(after) and (not before or before[-1] in " \t;(,"):
+            # (A quote just before it can only be the shell's, where the
+            # code starts: inside a code string it would not be code.)
+            if ASSIGNED.match(after) and (not before or before[-1] in " \t;(,'\""):
                 return "kept", NAME_WHY
-            return "unsure", "interpreter code, not in a string"
+            return "unsure", CODE_WHY
     if not reads_as_command(line, m, known):
         return "unsure", "k2 followed by a word that is not a command"
     return "text", "printed text" if not where.endswith("-code") else "string in interpreter code"

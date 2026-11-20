@@ -503,13 +503,18 @@ fn remind_with_a_passport() {
 fn remind_with_no_answer() {
     let rig = Rig::new("remind", "none");
     let port = dead_port();
-    let waited = |c: Case| Case {
-        compare: Compare::Waited,
+    // The reader after these requests (`_remind_show_result`) says this
+    // on an empty input; macOS's bash 3.2 runs it there (`in_pipe`).
+    let in_pipe = |c: Case| Case {
+        compare: Compare::Bash32PipeReader {
+            stdout: "",
+            stderr: "Error: empty response from daemon (is it running?)\n",
+        },
         ..c
     };
     let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
     let v = vec![
-        waited(case(
+        in_pipe(case(
             "an empty reply",
             &["list"],
             &[],
@@ -518,7 +523,7 @@ fn remind_with_no_answer() {
             141,
             1,
         )),
-        waited(case(
+        in_pipe(case(
             "an empty reply to a POST",
             &["cancel", "r1"],
             &[],
@@ -554,7 +559,7 @@ fn remind_with_no_answer() {
             1,
             0,
         ),
-        waited(with(
+        in_pipe(with(
             cell(),
             case(
                 "a POST the cell socket may have run",

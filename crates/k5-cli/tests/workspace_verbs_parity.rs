@@ -50,6 +50,18 @@ fn waited(c: Case) -> Case {
     }
 }
 
+/// A request on the left of a pipe into the shell's reader, with no
+/// answer: the binary's line, then SIGPIPE. macOS's `/bin/bash` 3.2 runs
+/// the reader on the empty input, which prints `stdout` and `stderr`, and
+/// exits 1 (`scripts/cli-parity.sh`'s named difference
+/// `bash32-pipe-reader`, through [`Compare::Bash32PipeReader`]).
+fn in_pipe(c: Case, stdout: &'static str, stderr: &'static str) -> Case {
+    Case {
+        compare: Compare::Bash32PipeReader { stdout, stderr },
+        ..c
+    }
+}
+
 fn shell(c: Case) -> Case {
     Case {
         compare: Compare::Shell,
@@ -1013,24 +1025,32 @@ fn workspace_verbs_with_no_answer() {
     let rig = Rig::new(VERB, "none");
     let port = dead_port();
     let v = vec![
-        case(
-            "the lookup: no answer (nothing on stderr, then SIGPIPE)",
-            &["agent-name", "ws1"],
-            &[],
-            vec![Reply::Close],
-            owner_and_port,
-            141,
-            1,
+        in_pipe(
+            case(
+                "the lookup: no answer (nothing on stderr, then SIGPIPE)",
+                &["agent-name", "ws1"],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                141,
+                1,
+            ),
+            "",
+            "",
         ),
-        waited(case(
-            "agent-name: no answer on the left of the pipe",
-            &["agent-name", "ws1"],
-            &[],
-            vec![ok(RESOLVED), Reply::Close],
-            owner_and_port,
-            141,
-            2,
-        )),
+        in_pipe(
+            case(
+                "agent-name: no answer on the left of the pipe",
+                &["agent-name", "ws1"],
+                &[],
+                vec![ok(RESOLVED), Reply::Close],
+                owner_and_port,
+                141,
+                2,
+            ),
+            "",
+            "Error: Expecting value: line 1 column 1 (char 0)\n",
+        ),
         waited(case(
             "resume-chat-args: no answer at the top",
             &["resume-chat-args", "ws1"],
@@ -1040,15 +1060,19 @@ fn workspace_verbs_with_no_answer() {
             1,
             2,
         )),
-        waited(case(
-            "remove: the lookup's no-answer line, then SIGPIPE",
-            &["remove", "ws1"],
-            &[],
-            vec![Reply::Close],
-            owner_and_port,
-            141,
-            1,
-        )),
+        in_pipe(
+            case(
+                "remove: the lookup's no-answer line, then SIGPIPE",
+                &["remove", "ws1"],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                141,
+                1,
+            ),
+            "",
+            "",
+        ),
         case(
             "set-handle: a reset",
             &[

@@ -24,6 +24,11 @@ use common::stub::Reply;
 const VERB: &str = "terminal";
 const UUID: &str = "0123abcd-0000-4000-8000-abcdef012345";
 
+/// What `terminal write`'s lookup reader says on an empty input (macOS's
+/// bash 3.2 runs it after a lookup with no answer: [`in_pipe`]).
+const NO_LIVE_SESSION: &str =
+    "Error: no live session for workspace 'acme' — it may be asleep (check 'k2 sessions live acme')\n";
+
 fn check(rig: &Rig, cases: Vec<Case>) {
     for c in cases {
         rig.check(&c);
@@ -33,6 +38,18 @@ fn check(rig: &Rig, cases: Vec<Case>) {
 fn waited(c: Case) -> Case {
     Case {
         compare: Compare::Waited,
+        ..c
+    }
+}
+
+/// A request on the left of a pipe into the shell's reader, with no
+/// answer: the binary's line, then SIGPIPE. macOS's `/bin/bash` 3.2 runs
+/// the reader on the empty input, which prints `stdout` and `stderr`, and
+/// exits 1 (`scripts/cli-parity.sh`'s named difference
+/// `bash32-pipe-reader`, through [`Compare::Bash32PipeReader`]).
+fn in_pipe(c: Case, stdout: &'static str, stderr: &'static str) -> Case {
+    Case {
+        compare: Compare::Bash32PipeReader { stdout, stderr },
         ..c
     }
 }
@@ -329,14 +346,18 @@ fn write() {
                 0,
                 1,
             ),
-            case(
-                "no answer to the lookup: nothing shown",
-                &["write", "acme", "hi"],
-                &[],
-                vec![Reply::Close],
-                owner_and_port,
-                141,
-                1,
+            in_pipe(
+                case(
+                    "no answer to the lookup: nothing shown",
+                    &["write", "acme", "hi"],
+                    &[],
+                    vec![Reply::Close],
+                    owner_and_port,
+                    141,
+                    1,
+                ),
+                "",
+                NO_LIVE_SESSION,
             ),
             waited(case(
                 "no answer to the write",

@@ -33,6 +33,18 @@ fn waited(c: Case) -> Case {
     }
 }
 
+/// A request on the left of a pipe into the shell's reader, with no
+/// answer: the binary's line, then SIGPIPE. macOS's `/bin/bash` 3.2 runs
+/// the reader on the empty input, which prints `stdout` and `stderr`, and
+/// exits 1 (`scripts/cli-parity.sh`'s named difference
+/// `bash32-pipe-reader`, through [`Compare::Bash32PipeReader`]).
+fn in_pipe(c: Case, stdout: &'static str, stderr: &'static str) -> Case {
+    Case {
+        compare: Compare::Bash32PipeReader { stdout, stderr },
+        ..c
+    }
+}
+
 fn one(name: &'static str, args: &'static [&'static str], body: &str, code: i32) -> Case {
     case(name, args, &[], vec![ok(body)], owner_and_port, code, 1)
 }
@@ -153,15 +165,19 @@ fn reviews() {
             0,
         ),
         one("not JSON: || cat", &[], "<html>", 0),
-        waited(case(
-            "no answer",
-            &[],
-            &[],
-            vec![Reply::Close],
-            owner_and_port,
-            141,
-            1,
-        )),
+        in_pipe(
+            case(
+                "no answer",
+                &[],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                141,
+                1,
+            ),
+            "",
+            "",
+        ),
     ] {
         rig.check(&c);
     }

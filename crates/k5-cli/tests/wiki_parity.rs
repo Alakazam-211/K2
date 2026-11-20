@@ -43,6 +43,18 @@ fn waited(c: Case) -> Case {
     }
 }
 
+/// A request on the left of a pipe into the shell's reader, with no
+/// answer: the binary's line, then SIGPIPE. macOS's `/bin/bash` 3.2 runs
+/// the reader on the empty input, which prints `stdout` and `stderr`, and
+/// exits 1 (`scripts/cli-parity.sh`'s named difference
+/// `bash32-pipe-reader`, through [`Compare::Bash32PipeReader`]).
+fn in_pipe(c: Case, stdout: &'static str, stderr: &'static str) -> Case {
+    Case {
+        compare: Compare::Bash32PipeReader { stdout, stderr },
+        ..c
+    }
+}
+
 fn traceback(c: Case) -> Case {
     Case {
         compare: Compare::Traceback,
@@ -655,14 +667,18 @@ fn wiki_finds_the_workspace() {
             0,
             2,
         ),
-        case(
-            "the resolve gives no answer: SIGPIPE",
-            &["index", "globex"],
-            &[],
-            vec![Reply::Close],
-            owner_and_port,
-            141,
-            1,
+        in_pipe(
+            case(
+                "the resolve gives no answer: SIGPIPE",
+                &["index", "globex"],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                141,
+                1,
+            ),
+            "",
+            "",
         ),
     ];
     for c in v {

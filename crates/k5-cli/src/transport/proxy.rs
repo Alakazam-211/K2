@@ -135,19 +135,18 @@ pub fn loopback(host: &str) -> bool {
     h == "localhost" || h.ends_with(".localhost") || h.starts_with("127.")
 }
 
-/// The shell's `_remote_url_is_loopback URL`, which is `_k2_direct_url
-/// "https://${URL#*://}"`: the host part read by the text as the shell
-/// cuts it (to the first `/`, then the first `?`, after the last `@`;
-/// `[::1]` as it is, else to the first `:`), then [`loopback`].
-pub fn url_is_loopback(url: &str) -> bool {
+/// A URL's host, cut as the shell cuts it in `_k2_direct_url`: after the
+/// scheme, to the first `/`, then the first `?`, after the last `@`; a
+/// bracketed IPv6 address to its `]`, else to the first `:`.
+pub fn url_host(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
     let h = rest.split('/').next().unwrap_or("");
     let h = h.split('?').next().unwrap_or("");
     let h = h.rsplit_once('@').map_or(h, |(_, h)| h);
-    if h == "[::1]" || h.starts_with("[::1]:") {
-        return true;
+    if h.starts_with('[') {
+        return h.find(']').map_or(h, |i| &h[..=i]);
     }
-    loopback(h.split(':').next().unwrap_or(""))
+    h.split(':').next().unwrap_or("")
 }
 
 /// The route for a request to `host` (a plain name or an IPv4 address,

@@ -424,8 +424,9 @@ fn connect_base() -> String {
 
 /// K2's rulings on `K2_CONNECT_BASE` (the shell checks the same, first):
 /// a base with no scheme is refused (curl would guess `http://` and send
-/// the token there), and so is plain `http://` to a host that is not
-/// this computer (a token goes to another machine over https only).
+/// the token there), and so is plain `http://` to a host that is not a
+/// loopback literal (a token goes to another machine over https only;
+/// judged by the URL as written, never a lookup).
 fn base_refusal(url: &str) -> Option<String> {
     let plain = url.starts_with("http://");
     if !plain && !url.starts_with("https://") {
@@ -433,7 +434,8 @@ fn base_refusal(url: &str) -> Option<String> {
             "Error: K2_CONNECT_BASE must start with https:// (got: {url})"
         ));
     }
-    (plain && !crate::transport::proxy::url_is_loopback(url))
+    let host = crate::transport::proxy::url_host(url);
+    (plain && !crate::transport::remote::literal_loopback(host))
         .then(|| crate::transport::remote::plain_http_line(url))
 }
 

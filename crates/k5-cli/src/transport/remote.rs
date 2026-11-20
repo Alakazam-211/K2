@@ -22,6 +22,7 @@ use crate::out::json::{self, Value};
 use crate::out::py;
 use k2_client::env_names;
 use k2_client::hosts::ZONE_SUFFIX;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -101,10 +102,23 @@ pub fn routed_with(host: &str, env: impl Fn(&str) -> Lookup) -> Option<Base> {
 /// K2's shared transport rule: a request with a token to a host that is
 /// not this computer goes over https only, proxied or not (the rule `k2
 /// remote logout` has). The line, exit 2, for a plain `http://` `url`
-/// whose host is not loopback ([`proxy::loopback`], the shell's
-/// `_k2_direct_url`); checked before any request.
+/// whose host is not a loopback literal ([`literal_loopback`]); checked
+/// before any request.
 pub fn plain_http_refusal(b: &Base, url: &str) -> Option<String> {
-    (!b.tls && !proxy::loopback(&b.host)).then(|| plain_http_line(url))
+    (!b.tls && !literal_loopback(&b.host)).then(|| plain_http_line(url))
+}
+
+/// K2's ruling (with the Steward's): this computer is judged by the URL
+/// AS WRITTEN, never by resolving a name (DNS rebinding): an IPv4 literal
+/// in 127.0.0.0/8, the IPv6 literal `::1` (bracketed or not), or exactly
+/// the name `localhost`. `x.localhost`, `LOCALHOST`, `localhost.` and
+/// every other name are not.
+pub fn literal_loopback(host: &str) -> bool {
+    let h = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    h == "localhost" || h.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The plain-http refusal's line ([`plain_http_refusal`]).
@@ -380,6 +394,41 @@ mod tests {
             "https://",
         ] {
             assert_eq!(base(shell), None, "{shell}");
+        }
+    }
+
+    /// The plain-http rule judges the URL as written, never a lookup.
+    #[test]
+    fn plain_http_is_for_a_loopback_literal_alone() {
+        for (host, want) in [
+            ("localhost", true),
+            ("127.0.0.1", true),
+            ("127.2.3.4", true),
+            ("::1", true),
+            ("[::1]", true),
+            ("0:0:0:0:0:0:0:1", true),
+            ("x.localhost", false),
+            ("LOCALHOST", false),
+            ("localhost.", false),
+            ("127.example.invalid", false),
+            ("127.1", false),
+            ("10.0.0.5", false),
+            ("box.example", false),
+            ("::ffff:127.0.0.1", false),
+            ("[fe80::1]", false),
+            ("", false),
+        ] {
+            assert_eq!(literal_loopback(host), want, "{host}");
+        }
+        let mut b = base("http://x.localhost:9").unwrap();
+        assert_eq!(
+            plain_http_refusal(&b, "http://x.localhost:9").as_deref(),
+            Some("Error: plain http:// only to this computer; use https:// (got: http://x.localhost:9)")
+        );
+        b.tls = true;
+        assert_eq!(plain_http_refusal(&b, "x"), None);
+        for ok in ["http://127.0.0.1:9", "http://localhost:9"] {
+            assert_eq!(plain_http_refusal(&base(ok).unwrap(), ok), None, "{ok}");
         }
     }
 

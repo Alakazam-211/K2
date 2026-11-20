@@ -651,40 +651,56 @@ fn talk_at_a_remote_host_through_the_proxy() {
 }
 
 /// K2's shared transport rule: a token goes to another machine over
-/// https only. `ws@http://<not this computer>` is one line, exit 2, with
-/// nothing sent. The bash side flips by itself once cli/k2 carries the
-/// fix (pending-bash-fix until then).
+/// https only, and "this computer" is judged by the URL as written (a
+/// 127.0.0.0/8 or ::1 literal, or exactly `localhost`), never a lookup.
+/// `ws@http://<anything else>` is one line, exit 2, with nothing sent;
+/// `x.localhost` and a name that only starts with `127.` are refused
+/// too. `localhost` goes. The refusal rows' bash side flips by itself
+/// once cli/k2 carries the fix (pending-bash-fix until then).
 #[test]
 fn talk_refuses_plain_http_to_another_machine() {
     let rig = Rig::new(VERB, "plain");
-    let line =
-        "Error: plain http:// only to this computer; use https:// (got: http://cp.example.invalid:9)";
-    let c = env(
+    // Allowed: the name `localhost` as written, to this side's stub.
+    rig.check(&stdin(
         plain(
-            "ws@http://another machine",
-            &["ws@http://cp.example.invalid:9", "hi"],
-            vec![],
-            2,
+            "ws@http://localhost, token from stdin",
+            &["ws@http://localhost:{port}", "--read-only", "--token-stdin"],
+            vec![ok(SCREEN)],
             0,
+            1,
         ),
-        &[("K2_REMOTE_TOKEN", "remote-tok-9")],
-    );
-    if common::tunnel::bash_has("Error: plain http:// only to this computer; use https://") {
-        rig.check(&c);
-        return;
+        b"remote-tok-1\n",
+    ));
+    let fixed =
+        common::tunnel::bash_has("Error: plain http:// only to this computer; use https://");
+    for (name, addr) in [
+        ("ws@http://another machine", "ws@http://cp.example.invalid:9"),
+        ("ws@http://x.localhost", "ws@http://x.localhost:9"),
+        ("ws@http://127.<a name>", "ws@http://127.example.invalid:9"),
+    ] {
+        let url = addr.strip_prefix("ws@").unwrap();
+        let line =
+            format!("Error: plain http:// only to this computer; use https:// (got: {url})");
+        let c = env(
+            plain(name, words(vec![addr, "hi"]), vec![], 2, 0),
+            &[("K2_REMOTE_TOKEN", "remote-tok-9")],
+        );
+        if fixed {
+            rig.check(&c);
+            continue;
+        }
+        println!("PENDING bash fix: {name}: the binary's side alone");
+        rig.prepare(Side::Rust, &c);
+        let out = rig.run(false, &c);
+        assert_eq!(
+            (out.code, out.stdout.as_str(), out.stderr.as_str()),
+            (Some(2), "", format!("{line}\n").as_str()),
+            "{name}"
+        );
+        assert_eq!(rig.read(Side::Rust, true, name).len(), 0, "{name}: sent");
+        rig.prepare(Side::Bash, &c);
+        let out = rig.run(true, &c);
+        assert!(!out.stderr.contains(&line), "{name}: bash half-fixed: {out:?}");
+        rig.read(Side::Bash, false, name);
     }
-    println!("PENDING bash fix: {}: the binary's side alone", c.name);
-    rig.prepare(Side::Rust, &c);
-    let out = rig.run(false, &c);
-    assert_eq!(
-        (out.code, out.stdout.as_str(), out.stderr.as_str()),
-        (Some(2), "", format!("{line}\n").as_str()),
-        "{}",
-        c.name
-    );
-    assert_eq!(rig.read(Side::Rust, true, c.name).len(), 0, "sent");
-    rig.prepare(Side::Bash, &c);
-    let out = rig.run(true, &c);
-    assert!(!out.stderr.contains(line), "bash half-fixed: {out:?}");
-    rig.read(Side::Bash, false, c.name);
 }

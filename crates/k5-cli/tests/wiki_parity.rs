@@ -1448,6 +1448,12 @@ fn wiki_publish_refuses_a_base_that_would_leak_the_token() {
             "http://cp.example.invalid:9",
             "Error: plain http:// only to this computer; use https:// (got: http://cp.example.invalid:9)",
         ),
+        // Loopback is the URL as written: a name under localhost is not.
+        (
+            "plain http to x.localhost",
+            "http://x.localhost:9",
+            "Error: plain http:// only to this computer; use https:// (got: http://x.localhost:9)",
+        ),
     ] {
         let c = Case {
             env: vec![("K2_CONNECT_BASE", base.to_string())],

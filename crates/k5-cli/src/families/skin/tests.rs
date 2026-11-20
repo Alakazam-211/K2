@@ -3,6 +3,7 @@
 
 use super::print::{self, py_eq};
 use super::*;
+use crate::families::Shown;
 use crate::out::json::parse as j;
 
 fn ask(words: &[&str]) -> Result<Ask, Stop> {

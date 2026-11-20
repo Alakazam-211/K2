@@ -44,8 +44,8 @@
 
 pub mod print;
 
-use super::skin_token::{self, py};
 use super::curl_port;
+use super::skin_token::{self, py};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out;

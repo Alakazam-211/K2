@@ -79,19 +79,22 @@ pub const RELEASE_REPO: &str = release_repo!();
 /// that builds a URL uses [`RELEASE_REPO`], which is one of them.
 pub const RELEASE_REPO_NAMES: &[&str] = &["Alakazam-211/K2", "AlakazamLabs/K5"];
 
-/// `text` names the release repo by one of [`RELEASE_REPO_NAMES`], as a
-/// whole `owner/name` (in a URL, a git source, `git+https://…/K2.git?rev=…`):
-/// not `Alakazam-211/K2SO`, not `xAlakazam-211/K2`. Case is compared
-/// exactly.
-pub fn mentions_release_repo(text: &str) -> bool {
-    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
-    RELEASE_REPO_NAMES.iter().any(|name| {
-        text.match_indices(name).any(|(i, _)| {
-            let before = text[..i].chars().next_back();
-            let after = text[i + name.len()..].chars().next();
-            !before.is_some_and(|c| word(c) || c == '.') && !after.is_some_and(word)
-        })
-    })
+/// `url` is the release repo's git URL as Cargo writes it, under one of
+/// [`RELEASE_REPO_NAMES`]: `https://github.com/<owner>/<name>`, optionally
+/// with `git+` before it, `.git` after the name, and a `?query` or
+/// `#fragment` (`git+https://github.com/Alakazam-211/K2?rev=abc#abc`).
+/// The `owner/name` must be the whole path, compared exactly, case and all,
+/// as the release trust checks compare it (k2sign's attestation identity,
+/// the renderer's `isReleaseUrl`): not `evil/Alakazam-211/K2`, not
+/// `Alakazam-211/K2/tree/x`, not `alakazam-211/k2`, not another host.
+pub fn is_release_repo_url(url: &str) -> bool {
+    let url = url.strip_prefix("git+").unwrap_or(url);
+    let Some(rest) = url.strip_prefix("https://github.com/") else {
+        return false;
+    };
+    let path = rest.find(['?', '#']).map_or(rest, |i| &rest[..i]);
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    RELEASE_REPO_NAMES.contains(&path)
 }
 
 /// The repo's page.
@@ -140,31 +143,54 @@ mod tests {
         assert!(RELEASE_REPO_NAMES.contains(&RELEASE_REPO), "the repo releases come from is one of its names");
     }
 
-    /// Both of the repo's names count as the repo; a third name, a longer
-    /// name and a name inside another word do not.
+    /// Both of the repo's names count as the repo, as Cargo writes its git
+    /// URL; a third name, a longer name, another owner with the same repo
+    /// name, a path before or after the name, another case and another
+    /// host do not.
     #[test]
-    fn brand_release_repo_is_known_by_both_names_and_no_other() {
+    fn brand_release_repo_url_is_exactly_one_of_its_names() {
         for yes in [
             "https://github.com/Alakazam-211/K2",
             "https://github.com/AlakazamLabs/K5",
+            "https://github.com/Alakazam-211/K2.git",
             "git+https://github.com/Alakazam-211/K2?rev=abc#abc",
             "git+https://github.com/AlakazamLabs/K5.git?rev=abc#abc",
-            "Alakazam-211/K2",
-            "AlakazamLabs/K5",
+            "git+https://github.com/AlakazamLabs/K5#abc",
         ] {
-            assert!(mentions_release_repo(yes), "{yes}");
+            assert!(is_release_repo_url(yes), "{yes}");
         }
         for no in [
+            // A path before or after the name.
+            "https://github.com/evil/AlakazamLabs/K5",
+            "git+https://github.com/evil/Alakazam-211/K2?rev=abc#abc",
+            "https://github.com/AlakazamLabs/K5/tree/main",
+            "https://github.com/AlakazamLabs/K5/",
+            "https://github.com/AlakazamLabs/K5.git/x",
+            // Another name, or a longer one.
             "https://github.com/Alakazam-211/K2SO",
             "https://github.com/AlakazamLabs/K2",
             "https://github.com/Alakazam-211/K5",
+            "https://github.com/AlakazamLabs/K5-fork",
+            "https://github.com/AlakazamLabs/K5.git.git",
+            // Another owner with the same repo name, or a name inside a word.
             "https://github.com/someone/K2",
             "https://github.com/xAlakazam-211/K2",
-            "https://github.com/AlakazamLabs/K5-fork",
+            // Case is compared exactly.
             "https://github.com/alakazamlabs/k5",
+            "https://github.com/ALAKAZAM-211/K2",
+            "https://GitHub.com/AlakazamLabs/K5",
+            // Another host or scheme, or no URL.
+            "https://evil.example/AlakazamLabs/K5",
+            "https://github.com.evil.example/AlakazamLabs/K5",
+            "https://github.com@evil.example/AlakazamLabs/K5",
+            "https://evil.example/https://github.com/AlakazamLabs/K5",
+            "http://github.com/AlakazamLabs/K5",
+            "ssh://git@github.com/AlakazamLabs/K5",
+            "git+git+https://github.com/AlakazamLabs/K5",
+            "AlakazamLabs/K5",
             "",
         ] {
-            assert!(!mentions_release_repo(no), "{no}");
+            assert!(!is_release_repo_url(no), "{no}");
         }
     }
 

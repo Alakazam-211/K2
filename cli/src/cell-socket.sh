@@ -113,6 +113,10 @@ _uds_eligible() {
         /cli/thread|/cli/thread/*) return 0 ;;
         # Design mode notes (agent passport, own workspace only).
         /cli/browser/notes|/cli/browser/notes/redeliver) return 0 ;;
+        # Postal (0.46.16): the agent's own address, friends, cards and
+        # mail. Never code, settings or owner-link (people only: TCP).
+        /cli/postal/status|/cli/postal/friends|/cli/postal/invite|/cli/postal/remove|/cli/postal/block) return 0 ;;
+        /cli/postal/link-p5|/cli/postal/claim|/cli/postal/decide|/cli/postal/enable|/cli/postal/send|/cli/postal/route) return 0 ;;
         *) return 1 ;;
     esac
 }

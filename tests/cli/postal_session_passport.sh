@@ -15,8 +15,11 @@
 # sent, as before.
 #
 # Each session case runs twice: once with no cell socket at the marker's
-# path, once with a live one (the stub serves both and logs which carried
-# each request).
+# path (every request goes over TCP), once with a live one (the stub serves
+# both and logs which carried each request). With a live socket the routes
+# the daemon's cell socket serves (status, friends, claim, invite, decide,
+# enable, link-p5, remove, block, route, send) go over it; code, settings
+# and owner-link, which it doesn't serve, go over TCP with the passport.
 #
 # Nothing is installed: the daemon is a stub that logs each request's
 # method, path, query, Bearer header and transport. The CLI runs with a
@@ -260,6 +263,14 @@ VERBS=(
     "owner-link|owner|postal owner-link"
 )
 
+# The transport a verb takes in a session with a live cell socket.
+via_for() {
+    case "$1" in
+        settings|disable|admins-may-accept|code|owner-link) echo tcp ;;
+        *) echo uds ;;
+    esac
+}
+
 want_rc() {
     case "$1" in read|done) echo 0 ;; card) echo 2 ;; owner) echo 3 ;; esac
 }
@@ -276,6 +287,8 @@ for SESSION in nosock cellsock; do
         label="$SESSION: $name"
         if [ "$(requests)" -ge 1 ]; then ok "$label: reached the daemon"; else bad "$label: no request (rc=$rc err=$err)"; fi
         assert_eq "$label: every request's Bearer header" "$(field auth | sort -u)" "Bearer $PASSPORT"
+        if [ "$SESSION" = cellsock ]; then want_via="$(via_for "$name")"; else want_via=tcp; fi
+        assert_eq "$label: every request over $want_via" "$(field via | sort -u)" "$want_via"
         no_query_credential "$label"
         owner_never_sent "$label"
         assert_eq "$label: exit code ($class)" "$rc" "$(want_rc "$class")"

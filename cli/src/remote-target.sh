@@ -102,7 +102,7 @@ _postal_send_teach() {
     _postal_session_token
     local body
     body="$(_postal_body "workspace=${PROJECT:-$PWD}" "to=$to" "text=$text" "wake=$wake")"
-    cli_post_json "/cli/postal/send" "$body" | _postal_print send "$as_json"
+    _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/send" "$body" | _postal_print send "$as_json"
     exit "${PIPESTATUS[1]}"
 }
 

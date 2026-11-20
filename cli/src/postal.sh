@@ -136,6 +136,8 @@ _postal_print() {
     PV="$1" PJ="${2:-false}" PS="$in_session" PL="$_POSTAL_PERSON_LINE" python3 -c '
 import json, os, sys, time
 raw = sys.stdin.read()
+if raw == "\x1ek2:not-answered\x1e":
+    sys.exit(1)  # the send said why and is ending the command
 try:
     d = json.loads(raw)
 except Exception:
@@ -275,16 +277,16 @@ cmd_postal() {
     esac
     case "$sub" in
         status|friends)
-            cli_request "/cli/postal/$sub" "workspace=$(urlencode "$ws")" | _postal_print "$sub" "$as_json" ;;
+            _K2_PIPE_MARK=1 cli_send cli_request "/cli/postal/$sub" "workspace=$(urlencode "$ws")" | _postal_print "$sub" "$as_json" ;;
         claim)
             _postal_need "<handle::label.postal.bot> [--why \"…\"]"
-            cli_post_json "/cli/postal/claim" "$(_postal_body "workspace=$ws" "address=$one" "why=$why")" | _postal_print claim "$as_json" ;;
+            _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/claim" "$(_postal_body "workspace=$ws" "address=$one" "why=$why")" | _postal_print claim "$as_json" ;;
         invite)
             _postal_need "<handle::label.postal.bot> --why \"what you want to do together\""
-            cli_post_json "/cli/postal/invite" "$(_postal_body "workspace=$ws" "to=$one" "why=$why")" | _postal_print invite "$as_json" ;;
+            _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/invite" "$(_postal_body "workspace=$ws" "to=$one" "why=$why")" | _postal_print invite "$as_json" ;;
         accept|reject)
             _postal_need "<request id>  (k2 postal friends shows the ids)"
-            cli_post_json "/cli/postal/decide" "$(_postal_body "workspace=$ws" "id=$one" "decision=$sub" "code=$code")" | _postal_print decide "$as_json" ;;
+            _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/decide" "$(_postal_body "workspace=$ws" "id=$one" "decision=$sub" "code=$code")" | _postal_print decide "$as_json" ;;
         code)
             _postal_need "<request id>  (k2 postal friends shows the ids)"
             cli_request "/cli/postal/code" "workspace=$(urlencode "$ws")&id=$(urlencode "$one")" | _postal_print code "$as_json" ;;
@@ -292,10 +294,10 @@ cmd_postal() {
             local targets="${args[*]:-}" wakev="__true"
             $nowake && wakev="__false"
             if $clear; then
-                cli_post_json "/cli/postal/route" "$(_postal_body "workspace=$ws" "friend=$friend" "clear=__true")" | _postal_print route "$as_json"
+                _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/route" "$(_postal_body "workspace=$ws" "friend=$friend" "clear=__true")" | _postal_print route "$as_json"
             else
                 [ -n "$targets" ] || { echo "Usage: k2 postal route [--friend <address>] terminal|inbox|inbox+pointer|thread:<person>… [--no-wake] | --clear" >&2; exit 2; }
-                cli_post_json "/cli/postal/route" "$(_postal_body "workspace=$ws" "friend=$friend" "targets=$targets" "wake=$wakev")" | _postal_print route "$as_json"
+                _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/route" "$(_postal_body "workspace=$ws" "friend=$friend" "targets=$targets" "wake=$wakev")" | _postal_print route "$as_json"
             fi ;;
         owner-link)
             if $token_stdin; then
@@ -315,9 +317,9 @@ cmd_postal() {
             _postal_send_teach "${args[@]}" ${extra[@]+"${extra[@]}"} ;;
         remove|block)
             _postal_need "<handle::label.postal.bot>"
-            cli_post_json "/cli/postal/$sub" "$(_postal_body "workspace=$ws" "peer=$one")" | _postal_print "$sub" "$as_json" ;;
+            _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/$sub" "$(_postal_body "workspace=$ws" "peer=$one")" | _postal_print "$sub" "$as_json" ;;
         enable)
-            cli_post_json "/cli/postal/enable" "$(_postal_body "why=$why")" | _postal_print settings "$as_json" ;;
+            _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/enable" "$(_postal_body "why=$why")" | _postal_print settings "$as_json" ;;
         disable)
             cli_post_json "/cli/postal/settings" "$(_postal_body "enabled=__false")" | _postal_print settings "$as_json" ;;
         admins-may-accept)
@@ -329,7 +331,7 @@ cmd_postal() {
         settings)
             cli_request "/cli/postal/settings" | _postal_print settings "$as_json" ;;
         link-p5)
-            cli_post_json "/cli/postal/link-p5" "$(_postal_body "workspace=$ws")" | _postal_print link "$as_json" ;;
+            _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/link-p5" "$(_postal_body "workspace=$ws")" | _postal_print link "$as_json" ;;
         adopt)
             # S7 waits on Postal Bot (p5 standing down). Never pretend.
             echo "k2 postal adopt: not available yet: p5 keeps its own handles; k2 postal link-p5 lets it deliver to this workspace." >&2

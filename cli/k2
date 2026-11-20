@@ -87979,6 +87979,52 @@ _hostchat_person() {
     fi
 }
 
+# _hostchat_open_link OPENER LINK: open the one-use owner link in the
+# browser without putting it on any command line. Every account on this
+# computer can read a command line, so OPENER gets only the path of a small
+# redirect page in a private folder (0700, from mktemp -d) that holds the
+# link (0600). The page is removed after a short wait in the background (the
+# browser may not have read it when OPENER returns), and any page left by an
+# earlier run is removed at the start of the next one.
+_HOSTCHAT_OPEN_PREFIX="k2-hostchat-open."
+_hostchat_open_link() {
+    local opener="$1" link="$2" base="${TMPDIR:-/tmp}" dir page wait
+    base="${base%/}"
+    # Pages older than a minute are leftovers: the link has expired, and a
+    # second run still inside its wait keeps its own page.
+    find "$base" -mindepth 1 -maxdepth 1 -type d -name "${_HOSTCHAT_OPEN_PREFIX}*" \
+        -user "$(id -u)" -mmin +1 -exec rm -rf {} + 2>/dev/null || true
+    dir="$(mktemp -d "$base/${_HOSTCHAT_OPEN_PREFIX}XXXXXX")" || return 1
+    chmod 700 "$dir" || { rm -rf "$dir"; return 1; }
+    page="$dir/open.html"
+    # The link goes to python on stdin; printf is a shell builtin, so it is
+    # never an argument of any program.
+    ( umask 077; printf '%s' "$link" | python3 -c '
+import html, json, sys
+link = sys.stdin.read()
+js = json.dumps(link).replace("<", "\\u003c").replace(">", "\\u003e")
+print("<!doctype html><html><head><meta charset=\"utf-8\">"
+      "<meta name=\"referrer\" content=\"no-referrer\">"
+      "<meta http-equiv=\"refresh\" content=\"0;url=" + html.escape(link, quote=True) + "\">"
+      "<title>Opening chat</title></head><body>"
+      "<script>location.replace(" + js + ");</script>"
+      "</body></html>")
+' >"$page" ) || { rm -rf "$dir"; return 1; }
+    chmod 600 "$page" || { rm -rf "$dir"; return 1; }
+    # How long the page stays: 30 s, longer than the link takes to load and
+    # shorter than its 60 s life. A test may shorten it (never lengthen).
+    wait="$(_envn TEST_HOSTCHAT_OPEN_WAIT)"
+    case "$wait" in ''|*[!0-9]*) wait=30 ;; esac
+    [ "$wait" -le 30 ] || wait=30
+    if [ "$opener" = "open" ]; then
+        open "$page" || { rm -rf "$dir"; return 1; }
+    else
+        "$opener" "$page" >/dev/null 2>&1 || { rm -rf "$dir"; return 1; }
+    fi
+    ( sleep "$wait"; rm -rf "$dir" ) </dev/null >/dev/null 2>&1 &
+    return 0
+}
+
 cmd_hostchat() {
     if [ $# -eq 0 ]; then _hostchat_usage; return 0; fi
     local sub="$1"; shift
@@ -88253,15 +88299,19 @@ print(os.environ["K2_HC_APP"].rstrip("/") + "/k2/owner-handoff#code=" + code)
 ')" || { echo '{"error":"no_code","hint":"K2 did not return a handoff code"}' >&2; exit 3; }
             if [ "$print_only" = "1" ]; then
                 printf '%s\n' "$link"
-            elif [ "$(uname -s)" = "Darwin" ] && command -v open >/dev/null 2>&1; then
-                open "$link" || exit 3
-                echo "Opened chat as its owner (the link works once, for 60 s)." >&2
-            elif command -v xdg-open >/dev/null 2>&1; then
-                xdg-open "$link" >/dev/null 2>&1 || exit 3
-                echo "Opened chat as its owner (the link works once, for 60 s)." >&2
             else
-                echo '{"error":"no_opener","hint":"no browser opener here: k2 hostchat open --print, then open the link within 60 s"}' >&2
-                exit 3
+                local opener=""
+                if [ "$(uname -s)" = "Darwin" ] && command -v open >/dev/null 2>&1; then
+                    opener=open
+                elif command -v xdg-open >/dev/null 2>&1; then
+                    opener=xdg-open
+                else
+                    link=""
+                    echo '{"error":"no_opener","hint":"no browser opener here: k2 hostchat open --print, then open the link within 60 s"}' >&2
+                    exit 3
+                fi
+                _hostchat_open_link "$opener" "$link" || { link=""; exit 3; }
+                echo "Opened chat as its owner (the link works once, for 60 s)." >&2
             fi
             link="" ;;
         purge)

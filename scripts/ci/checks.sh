@@ -98,6 +98,7 @@ part_web() {
     step "no K2_CJ_ field or password in a child's argv or environment (lint)"; bash tests/cli/secret_argv_env_lint.sh
     step "a test guest's password stays off every child's argv and environment (stub daemon)"; bash tests/cli/app_test_guest_password_off_argv.sh
     step "the typed-back recovery words stay off every child's argv and environment (stub vault)"; bash tests/cli/vault_recovery_words_off_argv.sh
+    step "k2 hostchat open keeps the owner link off every child's argv and environment (stub daemon and vault)"; bash tests/cli/hostchat_open_link_off_argv.sh
     step "k2 ci signer add takes the pairing code on stdin (stub daemon and vault)"; bash tests/cli/ci_signer_code_stdin.sh
     step "k2 compute local enable takes the enroll code and ticket on stdin (stub daemon)"; bash tests/cli/compute_local_enable_stdin.sh
     step "remote tokens have a stdin form and stay off every child's argv and environment (stub server)"; bash tests/cli/remote_token_stdin.sh

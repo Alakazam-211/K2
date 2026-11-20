@@ -43,12 +43,13 @@ use serde_json::{json, Value};
 use super::box_backup::{self, Evidence};
 use super::store::Row;
 use super::supervisor::Env;
+use k2_core::product_name;
 
 /// `status.backup.ship.kind` for a ship carried by the box backup while
 /// the setting is `none`.
 pub const EXTERNAL: &str = "external";
 /// How people see it.
-pub const LABEL: &str = "K2 backups (restic)";
+pub const LABEL: &str = concat!(product_name!(), " backups (restic)");
 /// The newest snapshot may be this old before `k2_backup_offbox_stale`.
 pub const STALE_HOURS: i64 = 36;
 pub const ALARM_NONE: &str = "k2_backup_offbox_none";
@@ -58,7 +59,12 @@ pub const RUN_RECORD: &str = "box-backup-run";
 /// The box backup client's service (the timer starts it).
 pub const SERVICE_UNIT: &str = "k2-backup.service";
 /// `ship none`'s note when the box backup still carries the bundles.
-pub const NONE_BUT_CARRIED: &str = "K2 copies nothing, but this box's own backup (K2 backups (restic)) still carries Sew's bundles off the box: status shows the ship as external";
+pub const NONE_BUT_CARRIED: &str = concat!(
+    product_name!(),
+    " copies nothing, but this box's own backup (",
+    product_name!(),
+    " backups (restic)) still carries Sew's bundles off the box: status shows the ship as external"
+);
 /// How long one `systemctl show` answer is reused.
 pub const CACHE_SECS: u64 = 30;
 
@@ -116,8 +122,9 @@ impl External {
                 hours(age)
             ),
             _ => format!(
-                "{LABEL} are set to carry Sew's bundles, but K2 hasn't seen a good run of {SERVICE_UNIT} yet \
-                 (it reads systemd after each run; {ALARM_STALE} until then)"
+                "{LABEL} are set to carry Sew's bundles, but {} hasn't seen a good run of {SERVICE_UNIT} yet \
+                 (it reads systemd after each run; {ALARM_STALE} until then)",
+                product_name!()
             ),
         }
     }

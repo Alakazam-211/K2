@@ -27,6 +27,8 @@ use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
+use k2_core::{cli_name, product_name};
+
 use k2_root_proto::sew::{
     self as pin, pinned, pinned_artifact, version_cmp, MAX_TARBALL, SEW_CLIENT_PORT, SEW_CONFIG_DIR, SEW_DATA_DIR,
     SEW_MEDIA_LOOPBACK_PORT, SEW_MEDIA_TCP_PORT, SEW_MEDIA_UDP_PORT, SEW_TURN_TLS_PORT, SEW_UPGRADE_STATE, UNIT_DB,
@@ -1593,7 +1595,13 @@ pub fn move_off_k2(row: &Row, launch_key: bool, box_backup: bool) -> Value {
         words.push(if row.ship_kind == "dir" {
             "the keyring mirror (K2 sets it in the backup folder on its own; k2 hostchat status shows why it waits)"
         } else if external {
-            "the keyring mirror (K2 backups (restic) leave the keys out until key escrow lands: k2 hostchat mirror dir <folder on another disk>)"
+            concat!(
+                "the keyring mirror (",
+                product_name!(),
+                " backups (restic) leave the keys out until key escrow lands: ",
+                cli_name!(),
+                " hostchat mirror dir <folder on another disk>)"
+            )
         } else if boxed {
             "the keyring mirror (the box backup doesn't set it: k2 hostchat mirror dir <folder on another disk>)"
         } else {

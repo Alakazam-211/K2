@@ -10,6 +10,7 @@
 // functions as return values only. Nothing here logs, stores or toasts them.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { PRODUCT_NAME } from '@/lib/brand'
 import { primaryScope } from '@/kessel/server-scope'
 import { readConfirmIdentity, type ConfirmIdentity } from './confirm-password-ui'
 
@@ -360,7 +361,7 @@ export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
   k2_owner_blocked: { severity: 'warn', title: 'Setting you up as owner failed', fix: 'Try again from User Access, where it syncs people to chat.' },
   k2_backup_offbox_none: { severity: 'warn', title: 'Backups stay on this server', fix: 'Choose where copies of the backups go, so a disk loss doesn’t take them too.', action: 'offbox' },
   k2_backup_not_shipped: { severity: 'warn', title: 'The last backup wasn’t copied to another machine', fix: 'Check where copies of the backups go, under Backups and keys.', action: 'offbox' },
-  k2_backup_offbox_stale: { severity: 'warn', title: 'The copy on another machine is behind', fix: 'K2 backups haven’t taken a new copy of chat’s backups in 36 hours. Check that the server’s scheduled backup runs.' },
+  k2_backup_offbox_stale: { severity: 'warn', title: 'The copy on another machine is behind', fix: `${PRODUCT_NAME} backups haven’t taken a new copy of chat’s backups in 36 hours. Check that the server’s scheduled backup runs.` },
   k2_upgrade_rollback_failed: { severity: 'error', title: 'An update failed and couldn’t go back', fix: 'Someone has to fix this on the server itself.', ask: 'Ask an admin to read the update’s record on the server.', command: 'cat /usr/local/lib/sew/upgrade-state.json' },
   k2_turn_cert_missing: { severity: 'error', title: 'Voice calls have no certificate', fix: 'Calls can’t connect securely.', ...RENEW },
   k2_turn_cert_expired: { severity: 'error', title: 'The voice certificate expired', fix: 'Calls can’t connect securely.', ...RENEW },

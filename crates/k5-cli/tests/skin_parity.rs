@@ -1,0 +1,780 @@
+//! `k5-cli skin` (and `app user|role|grant|front-door|hydra|token`, the
+//! same `cmd_skin` and `cmd_skin_token`) against the shell CLI, on the
+//! parity rig ([`common::parity`]): the same requests, stdout, stderr and
+//! exit code.
+//!
+//! - Every native verb with an answer, the daemon's errors through
+//!   `_skin_die_if_err`, a held answer, `--json`, Python raising part
+//!   way, and one list above 256 KiB (`user list`, `role list`).
+//! - The words: usage lines, a value flag as the last word, the `--role`
+//!   and `--user` checks.
+//! - A passport (`grant list` asks for the agent's own logins).
+//! - No answer: the line and exit 1; nothing listening: curl's code.
+//! - What the binary hands to the shell, and help that never acts.
+
+#![cfg(unix)]
+
+mod common;
+
+use common::parity::*;
+use common::stub::Reply;
+
+const VERB: &str = "skin";
+const USERS: &str = r#"{"users":[{"username":"bob","roleName":"staff","email":"b@x","fullName":"Bob B","nameSetBySelf":true},{"username":"cat","defaultRoomHandles":["ops"],"agentHandle":"sales","tiedTo":"sales","pendingReset":true},{"username":"dan","appGrants":[{"role":"member","app":"acme/site","rooms":["a","b"]},{"rooms":["b","c"]},{"app":"x"}],"test":{"app":"acme/site","expired":true}}]}"#;
+const ROLES: &str = r#"{"roles":[{"name":"staff","roomHandles":["sales","ops"],"roomAccess":[{"handle":"sales","caps":["thread:read","files:read"],"folders":{"read":["docs/"],"write":["in/"],"uploadDir":"in/drop","hide":[".env"]}},{"handle":"ops"}]},{"name":"empty"}]}"#;
+
+fn traceback(c: Case) -> Case {
+    Case {
+        compare: Compare::Traceback,
+        ..c
+    }
+}
+
+fn waited(c: Case) -> Case {
+    Case {
+        compare: Compare::Waited,
+        ..c
+    }
+}
+
+fn shell(c: Case) -> Case {
+    Case {
+        compare: Compare::Shell,
+        ..c
+    }
+}
+
+fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
+    Case { env, ..c }
+}
+
+/// One answer, the owner on disk.
+fn one(
+    name: &'static str,
+    args: &'static [&'static str],
+    body: &str,
+    code: i32,
+) -> Case {
+    case(name, args, &[], vec![ok(body)], owner_and_port, code, 1)
+}
+
+/// Words that stop before anything is sent.
+fn words(name: &'static str, args: &'static [&'static str], code: i32) -> Case {
+    case(name, args, &[], vec![], owner_and_port, code, 0)
+}
+
+fn check(rig: &Rig, v: Vec<Case>) {
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn skin_user_reads() {
+    let rig = Rig::new(VERB, "ureads");
+    let big: String = {
+        let rows: Vec<String> = (0..3000)
+            .map(|i| {
+                format!(
+                    r#"{{"username":"user{i:05}","fullName":"Name {i} é","email":"u{i}@example.com","defaultRoomHandles":["room-{i}","sales"]}}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"users":[{}]}}"#, rows.join(","))
+    };
+    assert!(big.len() > 256 * 1024, "the large list is {} bytes", big.len());
+    check(
+        &rig,
+        vec![
+            case(
+                "user list",
+                &["user", "list"],
+                &[],
+                vec![ok(USERS), ok(ROLES)],
+                owner_and_port,
+                0,
+                2,
+            ),
+            case(
+                "user alone is the list",
+                &["users"],
+                &[],
+                vec![ok(r#"{"users":[]}"#), ok(ROLES)],
+                owner_and_port,
+                0,
+                2,
+            ),
+            case(
+                "a large user list, above 256 KiB",
+                &["user", "list"],
+                &[],
+                vec![ok(&big), ok(ROLES)],
+                owner_and_port,
+                0,
+                2,
+            ),
+            case(
+                "user list: the roles answer refused",
+                &["user", "list"],
+                &[],
+                vec![
+                    ok(USERS),
+                    Reply::Answer(403, r#"{"error":{"code":"owner_only"}}"#.into()),
+                ],
+                owner_and_port,
+                3,
+                2,
+            ),
+            traceback(case(
+                "user list: an answer over two lines",
+                &["user", "list"],
+                &[],
+                vec![ok("{\n\"users\": []\n}"), ok(ROLES)],
+                owner_and_port,
+                1,
+                2,
+            )),
+            traceback(case(
+                "user list: a role name that is a list",
+                &["user", "list"],
+                &[],
+                vec![ok(USERS), ok(r#"{"roles":[{"name":["x"]}]}"#)],
+                owner_and_port,
+                1,
+                2,
+            )),
+            one(
+                "user show",
+                &["user", "show", "bob", "--app", "acme/site"],
+                r#"{"username":"bob","app":"acme/site","fullName":"Bob","nameSetBySelf":true,"email":"b@x","imageHash":"0123456789abcdef","role":"staff","settings":{"editNames":true},"sessions":[{"id":"s1","kind":"web","client":"Firefox on a very long platform name","push":true,"pushPlatform":"apns"}]}"#,
+                0,
+            ),
+            one(
+                "user show --json",
+                &["user", "show", "bob", "--app", "a b", "--json"],
+                r#"{"username":"bob"}"#,
+                0,
+            ),
+            traceback(one(
+                "user show: a picture hash that is a number",
+                &["user", "show", "bob", "--app", "a"],
+                r#"{"username":"bob","imageHash":7}"#,
+                1,
+            )),
+            traceback(one(
+                "user show: a time that is text",
+                &["user", "show", "bob", "--app", "a"],
+                r#"{"username":"bob","createdAt":"soon"}"#,
+                1,
+            )),
+            one(
+                "user sessions",
+                &["user", "sessions", "bob", "--app", "a"],
+                r#"{"username":"bob","app":"a","sessions":[{"id":"s1","kind":"app","client":null}]}"#,
+                0,
+            ),
+            one(
+                "user sessions: none",
+                &["user", "sessions", "bob", "--app", "a"],
+                r#"{"username":"bob","app":"a","sessions":[]}"#,
+                0,
+            ),
+            one(
+                "user sessions --json",
+                &["user", "sessions", "bob", "--app", "a", "--json"],
+                r#"{"sessions":null,"x":1}"#,
+                0,
+            ),
+            words("user show with no --app", &["user", "show", "bob"], 1),
+            words(
+                "user password with no --password-stdin",
+                &["user", "password", "bob"],
+                1,
+            ),
+            words("user sessions with no user", &["user", "sessions", "--app", "a"], 1),
+            words("an unknown user verb", &["user", "nope"], 1),
+            words(
+                "--role with no --app",
+                &["user", "add", "bob", "--role", "r"],
+                2,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn skin_user_writes() {
+    let rig = Rig::new(VERB, "uwrites");
+    let waiting = r#""waitingForReset":{"rooms":["sales","ops"],"ask":"ask them"}"#;
+    let added = format!(r#"{{"username":"bob","generatedPassword":"pw-1",{waiting}}}"#);
+    let added: &'static str = Box::leak(added.into_boxed_str());
+    check(
+        &rig,
+        vec![
+            one("user add", &["user", "add", "bob", "--temp-password"], added, 0),
+            one(
+                "user add on an App",
+                &["user", "add", "bob", "--app", " acme ", "--role=r", "--email", "b@x"],
+                r#"{"username":"bob"}"#,
+                0,
+            ),
+            one(
+                "user add held",
+                &["user", "add", "bob"],
+                r#"{"status":"held","request":{"id":"r1","summary":"add bob"},"hint":"wait","afterApproval":"then go"}"#,
+                2,
+            ),
+            traceback(one(
+                "user add: waiting rooms that are a number",
+                &["user", "add", "bob"],
+                r#"{"username":"bob","waitingForReset":{"rooms":5}}"#,
+                1,
+            )),
+            words("user add with no name", &["user", "add"], 1),
+            words(
+                "user add with both password forms",
+                &["user", "add", "b", "--password-stdin", "--temp-password"],
+                2,
+            ),
+            one(
+                "user image",
+                &["user", "image", "bob", "--clear"],
+                r#"{"cleared":false,"username":"bob"}"#,
+                0,
+            ),
+            words("user image with no --clear", &["user", "image", "bob"], 1),
+            one(
+                "user sessions --revoke",
+                &["user", "sessions", "bob", "--app", "a", "--revoke", "s1"],
+                r#"{"ended":1,"username":"bob","app":"a"}"#,
+                0,
+            ),
+            traceback(one(
+                "user sessions --revoke-all: ended is text",
+                &["user", "sessions", "bob", "--app", "a", "--revoke-all"],
+                r#"{"ended":"x"}"#,
+                1,
+            )),
+            one(
+                "user invite sent",
+                &["user", "invite", "bob", "--app", "a", "--from", "me@x"],
+                r#"{"delivered":"sent","sentTo":"b@x","from":"me@x","ttlSecs":259200}"#,
+                0,
+            ),
+            one(
+                "user invite with no mail path",
+                &["user", "invite", "bob", "--app=a", "--json"],
+                r#"{"delivered":"link","link":"https://x/y"}"#,
+                0,
+            ),
+            one(
+                "user invite: no mail path, waiting",
+                &["user", "invite", "bob", "--app", "a"],
+                added,
+                0,
+            ),
+            one(
+                "user reset --revoke",
+                &["user", "reset", "bob", "--app", "a", "--revoke", "--code"],
+                r#"{"revoked":2,"username":"bob"}"#,
+                0,
+            ),
+            one(
+                "user reset held",
+                &["user", "reset", "bob", "--to", "b@x"],
+                r#"{"status":"held","request":{}}"#,
+                2,
+            ),
+            one(
+                "user unlock",
+                &["user", "unlock", "bob"],
+                r#"{"cleared":true,"username":"bob"}"#,
+                0,
+            ),
+            one(
+                "user unlock --json",
+                &["user", "unlock", "bob", "--json"],
+                r#"{"cleared":1}"#,
+                0,
+            ),
+            one(
+                "user email",
+                &["user", "email", "bob", "--email=b@x"],
+                r#"{"email":"b@x","username":"bob"}"#,
+                0,
+            ),
+            one(
+                "user full-name cleared",
+                &["user", "full-name", "bob"],
+                r#"{"username":"bob"}"#,
+                0,
+            ),
+            one(
+                "user agent",
+                &["user", "agent", "bob", "sales"],
+                r#"{"username":"bob","agentWorkspace":"sales"}"#,
+                0,
+            ),
+            one(
+                "user agent --clear",
+                &["user", "agent", "bob", "--clear"],
+                r#"{"username":"bob"}"#,
+                0,
+            ),
+            words("user agent with both", &["user", "agent", "bob", "w", "--clear"], 1),
+            one(
+                "user remove",
+                &["user", "rm", "bob"],
+                r#"{"success":true}"#,
+                0,
+            ),
+            one(
+                "user rooms on an App",
+                &["user", "rooms", "bob", "--agent", "sales", "--agent", " ops ", "--app", "a"],
+                &format!(r#"{{"app":"a","roomHandles":["sales"],"username":"bob",{waiting}}}"#),
+                0,
+            ),
+            one(
+                "user rooms, default rooms",
+                &["user", "rooms", "bob"],
+                r#"{"username":"bob","default_room_handles":[]}"#,
+                0,
+            ),
+            words(
+                "user rooms --agent as the last word",
+                &["user", "rooms", "bob", "--agent"],
+                1,
+            ),
+            words(
+                "user rooms --apply-tokens",
+                &["user", "rooms", "bob", "--apply-tokens"],
+                2,
+            ),
+            one(
+                "user role",
+                &["user", "role", "bob", "staff"],
+                r#"{"username":"bob","role_name":"staff"}"#,
+                0,
+            ),
+            one(
+                "user unassign",
+                &["user", "unassign", "bob"],
+                r#"{"username":"bob"}"#,
+                0,
+            ),
+            one(
+                "a refusal",
+                &["user", "unassign", "bob"],
+                r#"{"error":{"code":"forbidden","hint":"Not yours"}}"#,
+                3,
+            ),
+            traceback(one(
+                "an answer that is a list",
+                &["user", "remove", "bob"],
+                "[1]",
+                1,
+            )),
+        ],
+    );
+}
+
+#[test]
+fn skin_roles() {
+    let rig = Rig::new(VERB, "roles");
+    let big: String = {
+        let rows: Vec<String> = (0..2500)
+            .map(|i| {
+                format!(
+                    r#"{{"name":"role-{i}","roomAccess":[{{"handle":"room-{i}","caps":["thread:read","thread:post"],"folders":{{"read":["a/","b/"],"hide":[".env"]}}}}]}}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"roles":[{}]}}"#, rows.join(","))
+    };
+    assert!(big.len() > 256 * 1024, "the large list is {} bytes", big.len());
+    let access = r#"{"name":"staff","roomAccess":[{"handle":"sales","caps":["thread:read"],"folders":{"read":["docs/"],"write":["in/"],"upload":["drop/"],"download":["a.pdf"],"uploadDir":"in/x","hide":[".env"]}},{"handle":"ops","folders":{}}]}"#;
+    check(
+        &rig,
+        vec![
+            one("role list", &["role", "list"], ROLES, 0),
+            one("roles alone is the list", &["roles"], r#"{"roles":[]}"#, 0),
+            one("a large role list, above 256 KiB", &["role", "list"], &big, 0),
+            one(
+                "role create",
+                &["role", "create", "staff", "--agent", "sales", "--app", "a"],
+                access,
+                0,
+            ),
+            one(
+                "role create, no rooms",
+                &["role", "create", "staff"],
+                r#"{"name":"staff"}"#,
+                0,
+            ),
+            words(
+                "role create --caps",
+                &["role", "create", "staff", "--caps", "x"],
+                2,
+            ),
+            words(
+                "role --user",
+                &["role", "create", "x", "--user", "bob"],
+                2,
+            ),
+            one(
+                "role room",
+                &["role", "room", "staff", "sales", "--caps", "thread:read, files:read"],
+                access,
+                0,
+            ),
+            one(
+                "role room held",
+                &["role", "room", "staff", "sales", "--clear"],
+                r#"{"status":"held","request":{"id":"r9","summary":"room"},"hint":"ask"}"#,
+                2,
+            ),
+            traceback(one(
+                "role room: folders read is text",
+                &["role", "room", "staff", "sales"],
+                r#"{"name":"staff","roomAccess":[{"handle":"sales","folders":{"read":"docs","write":["w"]}}]}"#,
+                1,
+            )),
+            one(
+                "role paths",
+                &["role", "paths", "staff", "sales", "--read", "docs/,b/", "--hide", ".env", "--unhide", "x"],
+                access,
+                0,
+            ),
+            one(
+                "role paths, the whole room",
+                &["role", "paths", "staff", "ops", "--clear"],
+                access,
+                0,
+            ),
+            words("role paths with nothing", &["role", "paths", "staff", "sales"], 2),
+            words(
+                "role paths --clear with folders",
+                &["role", "paths", "staff", "sales", "--clear", "--read", "a"],
+                2,
+            ),
+            words(
+                "role paths: a third word",
+                &["role", "paths", "staff", "sales", "x"],
+                1,
+            ),
+            one(
+                "role update --clear",
+                &["role", "update", "staff", "--clear"],
+                r#"{"name":"staff","roomAccess":[]}"#,
+                0,
+            ),
+            one(
+                "role update rooms",
+                &["role", "update", "staff", "--agent", "sales"],
+                access,
+                0,
+            ),
+            one("role remove", &["role", "rm", "staff"], r#"{}"#, 0),
+            one(
+                "role add from a template",
+                &["role", "add", "--from", "viewer", "--app", "a", "--agent", "sales"],
+                r#"{"template":"viewer","role":{"name":"viewers","roomAccess":[{"handle":"sales","caps":["thread:read"]}]}}"#,
+                0,
+            ),
+            words("role add with no --from", &["role", "add", "--app", "a"], 2),
+            words("role add: an unknown word", &["role", "add", "x"], 2),
+            words("an unknown role verb", &["role", "nope"], 1),
+        ],
+    );
+}
+
+#[test]
+fn skin_grants_doors_and_hydra() {
+    let rig = Rig::new(VERB, "grants");
+    check(
+        &rig,
+        vec![
+            one(
+                "grant list",
+                &["grant", "list"],
+                r#"{"grants":[{"id":"g1","subjectKind":"principal","subjectId":"bob","kind":"app","targetId":"site","roleId":"staff","hookState":"failed","hookError":"no sew"},{"id":"g2","subject_kind":"workspace","scope":"member"}]}"#,
+                0,
+            ),
+            one("grants alone, none", &["grants"], r#"{"grants":[]}"#, 0),
+            traceback(one(
+                "grant list: a role that is a number",
+                &["grant"],
+                r#"{"grants":[{"roleId":5}]}"#,
+                1,
+            )),
+            one(
+                "grant add",
+                &["grant", "add", "--subject-kind", "principal", "--subject", "bob", "--kind", "chat", "--scope", "guest"],
+                r#"{"id":"g3","subjectKind":"principal","subjectId":"bob","kind":"chat","targetId":"sew","scope":"guest"}"#,
+                0,
+            ),
+            words("grant add, missing words", &["grant", "add", "--kind", "app"], 1),
+            words("grant add: a word", &["grant", "add", "x"], 1),
+            one(
+                "grant rm with cascades",
+                &["grant", "rm", "--id=g1"],
+                r#"{"success":true,"cascaded":[{"kind":"chat","id":"g9","subjectKind":"principal","subjectId":"bob","scope":"guest"}]}"#,
+                0,
+            ),
+            one(
+                "grant set",
+                &["grant", "set", "--id", "g1", "--scope", "member"],
+                r#"{"id":"g1","scope":"member"}"#,
+                0,
+            ),
+            one(
+                "grant role",
+                &["grant", "role", "g1", "--role", "staff"],
+                r#"{"id":"g1","changed":true,"subjectId":"bob","targetId":"site"}"#,
+                0,
+            ),
+            words("an unknown grant verb", &["grant", "nope"], 1),
+            one(
+                "front-door",
+                &["front-door"],
+                r#"{"mode":"connect","url":"https://x","applied":true,"caddy":{"running":true,"pid":9},"nested":{"label":"n"},"hint":"ok"}"#,
+                0,
+            ),
+            one(
+                "front-door --json",
+                &["frontdoor", "--json"],
+                r#"{"mode":"direct"}"#,
+                0,
+            ),
+            one(
+                "front-door direct",
+                &["front-door", "direct", "--url", "https://x", "--ui-port", "8080"],
+                r#"{"mode":"direct","url":"https://x","listen":":443","applied":true}"#,
+                0,
+            ),
+            one(
+                "front-door direct: caddy missing",
+                &["front-door", "direct"],
+                r#"{"mode":"direct","error":"caddy_missing","applied":false}"#,
+                1,
+            ),
+            one(
+                "front-door connect: an owner refusal",
+                &["front-door", "connect"],
+                r#"{"error":{"code":"owner_only","hint":"No"}}"#,
+                3,
+            ),
+            one(
+                "front-door connect --json: a string refusal",
+                &["front-door", "connect", "--json"],
+                r#"{"error":"Owner token needed"}"#,
+                3,
+            ),
+            one(
+                "front-door connect: not JSON",
+                &["front-door", "connect"],
+                "<html>",
+                1,
+            ),
+            words("front-door: two modes", &["front-door", "connect", "direct"], 1),
+            words("front-door: --url last", &["front-door", "direct", "--url"], 1),
+            one(
+                "hydra",
+                &["hydra"],
+                r#"{"supported":true,"enabled":false,"running":false,"hint":"try"}"#,
+                0,
+            ),
+            one(
+                "hydra on --json",
+                &["hydra", "on", "--json"],
+                r#"{"enabled":true}"#,
+                0,
+            ),
+            words("hydra: a word", &["hydra", "x"], 2),
+        ],
+    );
+}
+
+#[test]
+fn skin_with_a_passport() {
+    let rig = Rig::new(VERB, "pass");
+    let h = with_passport;
+    check(
+        &rig,
+        vec![
+            with(
+                h(&[]),
+                case(
+                    "grant list: the agent's own logins",
+                    &["grant", "list"],
+                    &[],
+                    vec![ok(
+                        r#"{"scope":"own","grants":[{"id":"g1","username":"bob","app":"site","rooms":["a","b"]},{"id":"g2","subjectId":"cat","role":"staff","enabled":false}]}"#,
+                    )],
+                    port_only,
+                    0,
+                    1,
+                ),
+            ),
+            with(
+                h(&[]),
+                shell(case(
+                    "grant add with a passport: the shell's",
+                    &["grant", "add", "--subject-kind", "p", "--subject", "s", "--kind", "app", "--target", "t"],
+                    &[],
+                    vec![ok(r#"{"id":"g1"}"#)],
+                    port_only,
+                    0,
+                    1,
+                )),
+            ),
+            case(
+                "HOOK_SOCK set and no passport: the require-passport lines",
+                &["role", "list"],
+                &[("K2_HOOK_SOCK", "{sock}")],
+                vec![],
+                owner_and_port,
+                3,
+                0,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn skin_with_no_answer() {
+    let rig = Rig::new(VERB, "dead");
+    let port = dead_port();
+    check(
+        &rig,
+        vec![
+            case(
+                "nothing listens (7)",
+                &["role", "list"],
+                &[("K2_PORT", port.as_str())],
+                vec![],
+                owner_only,
+                7,
+                0,
+            ),
+            case(
+                "nothing listens (7), a POST",
+                &["user", "remove", "bob"],
+                &[("K2_PORT", port.as_str())],
+                vec![],
+                owner_only,
+                7,
+                0,
+            ),
+            case(
+                "no port: the gate",
+                &["hydra"],
+                &[],
+                vec![],
+                owner_only,
+                1,
+                0,
+            ),
+        ],
+    );
+    let rig = Rig::new(VERB, "noanswer");
+    rig.check(&waited(case(
+        "a 5xx with no body to a GET: the line, exit 1",
+        &["hydra"],
+        &[],
+        vec![Reply::Answer(502, String::new())],
+        owner_and_port,
+        1,
+        1,
+    )));
+}
+
+/// What the binary hands to the shell, before it prints or sends
+/// anything: both sides are the shell's. Help never acts (K2's rule):
+/// the router's `skin)` arm prints the family's page for -h or --help
+/// anywhere, and sends nothing.
+#[test]
+fn skin_hands_these_to_the_shell() {
+    let rig = Rig::new(VERB, "shell");
+    check(
+        &rig,
+        vec![
+            shell(words("skin alone", &[], 1)),
+            shell(words("an unknown verb", &["nope"], 1)),
+            shell(words("--help", &["--help"], 0)),
+            shell(words("user add -h", &["user", "add", "bob", "-h"], 0)),
+            shell(words("user remove --help", &["user", "remove", "bob", "--help"], 0)),
+            shell(words("role create -h", &["role", "create", "r", "-h"], 0)),
+            shell(words("grant rm --help", &["grant", "rm", "--id", "g", "--help"], 0)),
+            shell(words("front-door direct -h", &["front-door", "direct", "-h"], 0)),
+            shell(words("hydra on --help", &["hydra", "on", "--help"], 0)),
+            shell(case(
+                "role suggest",
+                &["role", "suggest"],
+                &[],
+                vec![ok(r#"{"templates":[]}"#)],
+                owner_and_port,
+                0,
+                1,
+            )),
+            shell(case(
+                "a port that is no port",
+                &["role", "list"],
+                &[("K2_PORT", "41o0")],
+                vec![],
+                owner_only,
+                3,
+                0,
+            )),
+        ],
+    );
+}
+
+/// `app user|role|grant|front-door|hydra` are `cmd_skin`, with no
+/// teaching line; `app token` is `cmd_skin_token`.
+#[test]
+fn app_reaches_the_same_code() {
+    let rig = Rig::new("app", "skin");
+    check(
+        &rig,
+        vec![
+            case(
+                "app user list",
+                &["user", "list"],
+                &[],
+                vec![ok(USERS), ok(ROLES)],
+                owner_and_port,
+                0,
+                2,
+            ),
+            one("app role list", &["roles"], ROLES, 0),
+            one(
+                "app grant list",
+                &["grant"],
+                r#"{"grants":[]}"#,
+                0,
+            ),
+            one(
+                "app hydra off",
+                &["hydra", "off"],
+                r#"{"enabled":false}"#,
+                0,
+            ),
+            one(
+                "app front-door",
+                &["front-door"],
+                r#"{"mode":"connect"}"#,
+                0,
+            ),
+            one(
+                "app token list",
+                &["token", "list"],
+                r#"{"tokens":[]}"#,
+                0,
+            ),
+            words("app tokens with no verb", &["tokens"], 1),
+            words("app user: an unknown verb", &["user", "nope"], 1),
+            shell(words("app user add -h", &["user", "add", "bob", "-h"], 0)),
+        ],
+    );
+}

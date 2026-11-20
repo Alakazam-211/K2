@@ -315,13 +315,27 @@ pub fn revoke_body(id: &str) -> String {
 /// `k5 skin-token ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
+    run_as(args, 1, true)
+}
+
+/// `k5 app token|tokens ...`: `cmd_app` hands the words after `token` to
+/// `cmd_skin_token`, with no teaching line; `rotate` is its own verb.
+/// `None`: the shell CLI answers it.
+pub fn run_app(args: &[OsString]) -> Option<Exit> {
+    if args.get(2).and_then(|a| a.to_str()) == Some("rotate") {
+        return None;
+    }
+    run_as(args, 2, false)
+}
+
+fn run_as(args: &[OsString], skip: usize, teach: bool) -> Option<Exit> {
     let hook_sock = super::hook_sock();
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
         return None;
     }
     let words: Vec<&str> = args
         .iter()
-        .skip(1)
+        .skip(skip)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     let ask = parse(&words);
@@ -340,7 +354,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     {
         return None;
     }
-    Some(run_with(args, ask, hook_sock.as_deref(), settings))
+    Some(run_with(args, ask, hook_sock.as_deref(), settings, teach))
 }
 
 fn run_with(
@@ -348,6 +362,7 @@ fn run_with(
     ask: Result<Ask, Stop>,
     hook_sock: Option<&Path>,
     mut settings: Settings,
+    teach: bool,
 ) -> Exit {
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
@@ -356,7 +371,9 @@ fn run_with(
     if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
         return stop;
     }
-    out::stderr_line(TEACH);
+    if teach {
+        out::stderr_line(TEACH);
+    }
     let ask = match ask {
         Ok(a) => a,
         Err(stop) => return stop.print(),

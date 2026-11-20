@@ -31144,47 +31144,46 @@ _compute_call_nf() {
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY" "$not_found"
 }
 
-# JSON from KEY=VALUE env pairs: _compute_json K2_CJ_a=… (values are strings
+# JSON from KEY=VALUE pairs: _compute_json K2_CJ_a=… (values are strings
 # unless the key ends in _n (number), _b (bool) or _j (raw JSON)). A key
-# ending in _s is a secret string: K2_CJ_code_s=… becomes "code".
+# ending in _s is a secret string: K2_CJ_code_s=… becomes "code". An empty
+# value leaves its key out; when a key repeats, its last value counts.
 _compute_json() {
-    # A token (K2_CJ_<name>Token=…) or a secret (K2_CJ_<name>_s=…) never
-    # rides argv or the environment (ps shows both to every process of this
-    # user): it reaches python on stdin.
-    local _a _k _toks="" _rest=()
+    # Every value reaches python on stdin (_k2_stdin_secrets), never argv
+    # or the environment (ps shows both to every process of this user).
+    # Secrets (K2_CJ_<name>_s, K2_CJ_<name>Token) come first in the body,
+    # then the other keys, each in the order given.
+    local _a _pairs=()
     for _a in "$@"; do
-        _k="${_a%%=*}"
-        case "$_k" in
-            K2_CJ_*_s) _k="${_k#K2_CJ_}"; _toks="${_toks}${_k%_s}=${_a#*=}"$'\n' ;;
-            *)
-                case "$_a" in
-                    K2_CJ_*Token=*) _toks="${_toks}${_a#K2_CJ_}"$'\n' ;;
-                    *) _rest+=("$_a") ;;
-                esac
-                ;;
+        case "$_a" in
+            K2_CJ_?*=*) _pairs+=("${_a%%=*}" "${_a#*=}") ;;
         esac
     done
-    printf '%s' "$_toks" | env ${_rest[@]+"${_rest[@]}"} python3 -c '
-import json, os, sys
+    _k2_stdin_secrets ${_pairs[@]+"${_pairs[@]}"} | python3 -c '
+import json, sys
+b = sys.stdin.buffer.read()
+given = {}
+while True:
+    k, sep, b = b.partition(b"\0")
+    if not sep or not k:
+        break
+    v, _, b = b.partition(b"\0")
+    given[k.decode()[6:]] = v.decode("utf-8", "surrogateescape")
 out = {}
-for line in sys.stdin.read().split("\n"):
-    k, _, v = line.partition("=")
-    if k and v:
-        out[k] = v
-for k, v in os.environ.items():
-    if not k.startswith("K2_CJ_"):
-        continue
-    key = k[6:]
-    if v == "":
-        continue
-    if key.endswith("_n"):
-        out[key[:-2]] = float(v) if "." in v else int(v)
-    elif key.endswith("_b"):
-        out[key[:-2]] = v == "1"
-    elif key.endswith("_j"):
-        out[key[:-2]] = json.loads(v)
-    else:
-        out[key] = v
+for secret in (True, False):
+    for key, v in given.items():
+        if (key.endswith("_s") or key.endswith("Token")) != secret or v == "":
+            continue
+        if key.endswith("_s"):
+            out[key[:-2]] = v
+        elif key.endswith("_n"):
+            out[key[:-2]] = float(v) if "." in v else int(v)
+        elif key.endswith("_b"):
+            out[key[:-2]] = v == "1"
+        elif key.endswith("_j"):
+            out[key[:-2]] = json.loads(v)
+        else:
+            out[key] = v
 print(json.dumps(out))
 '
 }

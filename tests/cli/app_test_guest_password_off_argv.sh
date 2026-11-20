@@ -31,7 +31,10 @@ TCPLOG="$W/tcp-requests.log"
 : >"$ARGLOG"; : >"$ENVLOG"; : >"$TCPLOG"
 
 cleanup() {
-    [ -n "${TCP_PID:-}" ] && kill "$TCP_PID" 2>/dev/null || true
+    if [ -n "${TCP_PID:-}" ]; then
+        kill "$TCP_PID" 2>/dev/null || true
+        wait "$TCP_PID" 2>/dev/null || true
+    fi
     rm -rf "$W"
 }
 trap cleanup EXIT
@@ -194,7 +197,6 @@ expect_eq "add --password-stdin: exit 0" "$RC" "0"
 expect_eq "add --password-stdin: output" "$OUT" "$ADD_LINES"
 assert_body "add --password-stdin" /cli/app/test-guest/add \
     "{\"app\": \"acme\", \"username\": \"qa-tg\", \"rooms\": [\"r1\"], \"password\": \"$PASS_SENTINEL\"}"
-if grep -q '^env ' "$ARGLOG"; then ok "add --password-stdin: env children were logged"; else bad "add --password-stdin: no env child was logged"; fi
 assert_children_seen "add --password-stdin"
 assert_off_children "add --password-stdin"
 

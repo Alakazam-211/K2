@@ -1114,6 +1114,8 @@
         {"name": "--controller", "arg": "URL", "description": "The controller to enroll with."},
         {"name": "--code-stdin", "arg": null, "description": "Read the enroll code from stdin (one line)."},
         {"name": "--enroll", "arg": "CODE.FP", "description": "The enroll code on the command line, where every user on this computer can see it while the command runs: use --code-stdin."},
+        {"name": "--ticket-stdin", "arg": null, "description": "Read a one-click ticket from stdin (one line), in place of an enroll code."},
+        {"name": "--ticket", "arg": "T", "description": "The ticket on the command line, where every user on this computer can see it while the command runs: use --ticket-stdin."},
         {"name": "--name", "arg": "NAME", "description": "The node's name."},
         {"name": "--private-home", "arg": null, "description": "Keep the home folder private from jobs."},
         {"name": "--no-private-home", "arg": null, "description": "Don't."},

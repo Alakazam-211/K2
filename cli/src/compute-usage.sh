@@ -685,7 +685,9 @@ This computer (its owner):
                           [--private-home | --no-private-home]
                           (--code-stdin: the enroll code on stdin;
                           --enroll CODE.FP still works, but every user on
-                          this computer can see it while the command runs)
+                          this computer can see it while the command runs.
+                          --ticket-stdin: a one-click ticket on stdin in
+                          place of a code; --ticket T likewise)
                           [--remote-admin off|policy|full]   (default policy:
                           K2 keeps this node updated and healthy; full also
                           lets it run root actions, each approved by you)

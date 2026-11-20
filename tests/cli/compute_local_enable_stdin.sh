@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# k2 compute local enable takes the enroll code on stdin (--code-stdin),
-# and the code never lands in a child process's argv or environment (ps
+# k2 compute local enable takes the enroll code on stdin (--code-stdin) and
+# a one-click ticket on stdin (--ticket-stdin); neither ever lands in a child process's argv or environment (ps
 # shows a command line to every user on this computer, and the environment
-# to this user's processes). --enroll/--code CODE.FP still works for now and
-# prints one note on stderr.
+# to this user's processes). --enroll/--code CODE.FP and --ticket T still
+# work for now and print one note on stderr.
 #
 # The real CLI runs against a stub daemon on TCP that answers
 # /cli/compute/local/enable and records each request. Every python3, curl
@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 SECRET_PART="ENROLLCODE-CHILDTEST"
 CODE="$SECRET_PART.0123456789abcdef"
+TICKET="k2tk1_TICKET-CHILDTEST"
 
 W="$(mktemp -d "${TMPDIR:-/tmp}/k2cle-XXXXXX")"
 ARGLOG="$W/child-argv.log"
@@ -186,7 +187,34 @@ expect_eq "empty stdin: exit 2" "$RC" "2"
 expect_eq "empty stdin: the error" "$ERR" "k2 compute local enable: --code-stdin: no code on stdin"
 if [ -s "$REQLOG" ]; then bad "usage errors: a request was sent"; else ok "usage errors: nothing sent"; fi
 
-# 4. The help shows --code-stdin first.
+# 4. --ticket-stdin: the ticket on stdin only; --ticket still works with a
+#    note; the two together, or with --code-stdin, are usage errors.
+WANT_TICKET="{\"controller\": \"$CTRL\", \"ticket\": \"$TICKET\", \"name\": \"mini-1\", \"privateHome\": true}"
+fresh
+run_k2 "$TICKET"$'\n' compute local enable --controller "$CTRL" --ticket-stdin --name mini-1 --private-home
+expect_eq "--ticket-stdin: exit 0" "$RC" "0"
+expect_eq "--ticket-stdin: output" "$OUT" "$ENABLED"
+expect_eq "--ticket-stdin: no note on stderr" "$ERR" ""
+assert_body "--ticket-stdin" "$WANT_TICKET"
+assert_off_children "--ticket-stdin" "the ticket" "$TICKET"
+fresh
+run_k2 "" compute local enable --controller "$CTRL" --ticket "$TICKET" --name mini-1 --private-home
+expect_eq "--ticket: exit 0" "$RC" "0"
+expect_eq "--ticket: the note" "$ERR" "note: --ticket is visible to every user on this computer while the command runs; use --ticket-stdin"
+assert_body "--ticket" "$WANT_TICKET"
+fresh
+run_k2 "$TICKET"$'\n' compute local enable --controller "$CTRL" --ticket-stdin --ticket "$TICKET" --name mini-1
+expect_eq "--ticket-stdin with --ticket: exit 2" "$RC" "2"
+expect_eq "--ticket-stdin with --ticket: the error" "$ERR" "k2 compute local enable: --ticket-stdin or --ticket, not both"
+run_k2 "$TICKET"$'\n' compute local enable --controller "$CTRL" --ticket-stdin --code-stdin --name mini-1
+expect_eq "--ticket-stdin with --code-stdin: exit 2" "$RC" "2"
+expect_eq "--ticket-stdin with --code-stdin: the error" "$ERR" "k2 compute local enable: --code-stdin or --ticket-stdin, not both (stdin holds one)"
+run_k2 "" compute local enable --controller "$CTRL" --ticket-stdin --name mini-1
+expect_eq "--ticket-stdin, empty stdin: exit 2" "$RC" "2"
+expect_eq "--ticket-stdin, empty stdin: the error" "$ERR" "k2 compute local enable: --ticket-stdin: no ticket on stdin"
+if [ -s "$REQLOG" ]; then bad "ticket usage errors: a request was sent"; else ok "ticket usage errors: nothing sent"; fi
+
+# 5. The help shows --code-stdin first.
 fresh
 run_k2 "" compute --help
 line="$(printf '%s\n' "$OUT" | grep -m1 'k2 compute local enable' || true)"

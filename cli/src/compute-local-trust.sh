@@ -65,13 +65,14 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["policy"], indent=2))'
             ;;
         enable)
-            local controller="" enroll="" enroll_flag="" code_stdin=0 ticket="" name="" private="" remote_admin=""
+            local controller="" enroll="" enroll_flag="" code_stdin=0 ticket="" ticket_flag="" ticket_stdin=0 name="" private="" remote_admin=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --controller) controller="${2:-}"; shift 2 ;;
                     --code-stdin) code_stdin=1; shift ;;
                     --enroll|--code) enroll="${2:-}"; enroll_flag="$1"; shift 2 ;;
-                    --ticket) ticket="${2:-}"; shift 2 ;;
+                    --ticket-stdin) ticket_stdin=1; shift ;;
+                    --ticket) ticket="${2:-}"; ticket_flag="$1"; shift 2 ;;
                     --name) name="${2:-}"; shift 2 ;;
                     --private-home) private=1; shift ;;
                     --no-private-home) private=0; shift ;;
@@ -82,10 +83,20 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
                     *) echo "usage: k2 compute local enable [--controller URL --code-stdin --name NAME] [--private-home|--no-private-home] [--remote-admin off|policy|full]" >&2; exit 2 ;;
                 esac
             done
-            # The enroll code off argv: --code-stdin reads one line from
-            # stdin. --enroll/--code CODE.FP still works for now, with a
-            # note: a command line is visible to every user on this computer
-            # while the command runs.
+            # The enroll code and the ticket off argv: --code-stdin and
+            # --ticket-stdin read one line from stdin. --enroll/--code
+            # CODE.FP and --ticket T still work for now, with a note: a
+            # command line is visible to every user on this computer while
+            # the command runs.
+            [ "$code_stdin" = 0 ] || [ "$ticket_stdin" = 0 ] || { echo "k2 compute local enable: --code-stdin or --ticket-stdin, not both (stdin holds one)" >&2; exit 2; }
+            if [ "$ticket_stdin" = 1 ]; then
+                [ -z "$ticket" ] || { echo "k2 compute local enable: --ticket-stdin or --ticket, not both" >&2; exit 2; }
+                _cli_read_secret_stdin "Ticket: "
+                ticket="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
+                [ -n "$ticket" ] || { echo "k2 compute local enable: --ticket-stdin: no ticket on stdin" >&2; exit 2; }
+            elif [ -n "$ticket_flag" ]; then
+                echo "note: --ticket is visible to every user on this computer while the command runs; use --ticket-stdin" >&2
+            fi
             if [ "$code_stdin" = 1 ]; then
                 [ -z "$enroll" ] || { echo "k2 compute local enable: --code-stdin or $enroll_flag, not both" >&2; exit 2; }
                 _cli_read_secret_stdin "Enroll code: "
@@ -94,7 +105,7 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
             elif [ -n "$enroll_flag" ]; then
                 echo "note: $enroll_flag is visible to every user on this computer while the command runs; use --code-stdin" >&2
             fi
-            body="$(_compute_json K2_CJ_controller="$controller" K2_CJ_enroll_s="$enroll" K2_CJ_ticket="$ticket" K2_CJ_name="$name" K2_CJ_privateHome_b="$private" K2_CJ_remoteAdmin="$remote_admin")"
+            body="$(_compute_json K2_CJ_controller="$controller" K2_CJ_enroll_s="$enroll" K2_CJ_ticket_s="$ticket" K2_CJ_name="$name" K2_CJ_privateHome_b="$private" K2_CJ_remoteAdmin="$remote_admin")"
             _compute_call POST /cli/compute/local/enable "$body" tcp
             printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys

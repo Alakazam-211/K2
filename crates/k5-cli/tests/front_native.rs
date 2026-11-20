@@ -393,7 +393,10 @@ fn cli_status_as_the_owner_shows_the_counts() {
         get("doc|docs"),
         ("doc|docs".into(), "bash".into(), Some("5".into()))
     );
-    assert_eq!(get("msg"), ("msg".into(), "bash".into(), Some("4".into())));
+    assert_eq!(
+        get("msg"),
+        ("msg".into(), "native".into(), Some("4".into()))
+    );
     assert_eq!(
         get("cli"),
         ("cli".into(), "native".into(), Some("0".into()))

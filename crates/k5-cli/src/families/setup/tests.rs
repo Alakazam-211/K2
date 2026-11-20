@@ -95,8 +95,9 @@ fn the_shell_s_lines() {
     ] {
         assert!(text.contains(shell), "cmd_setup no longer has {shell:?}");
     }
+    // The shell's words in the default brand.
     assert_eq!(
-        UNREACHABLE,
+        UNREACHABLE.replace(k2_client::brand::PRODUCT_NAME, "K2"),
         "Error: could not reach the K2 daemon (k2 setup)"
     );
     assert_eq!(
@@ -175,7 +176,8 @@ fn the_python_s_lines() {
     }
     assert!(all.contains(r#"MARK = {"done": "[x]", "todo": "[ ]", "skipped": "[-]"}"#));
     for text in [APPLE_TOOLS, FINISHED, HIDDEN, NOT_ENABLED, MEET_KESSEL] {
-        assert!(all.contains(text), "{text:?}");
+        let text = text.replace(k2_client::brand::PRODUCT_NAME, "K2");
+        assert!(all.contains(&text), "{text:?}");
     }
     for line in [
         r#"    print("Error: the daemon sent something k2 setup does not understand: " + raw[:200], file=sys.stderr)"#,

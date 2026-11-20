@@ -90,8 +90,9 @@ fn the_shell_s_lines() {
             "k2 sessions no longer has {shell:?}"
         );
     }
+    // The shell's words in the default brand.
     assert_eq!(
-        TOO_OLD,
+        TOO_OLD.replace(k2_client::brand::PRODUCT_NAME, "K2"),
         "daemon_too_old: this K2 daemon has no k2 sessions routes yet (update K2: k2 update --app)"
     );
     let sidecar = source("sidecar.sh");
@@ -451,7 +452,7 @@ fn the_fail_line() {
     let f = |b: &str| fail_line("403", b.as_bytes());
     assert_eq!(f(""), unreachable("403"));
     assert_eq!(
-        unreachable("000"),
+        unreachable("000").replace(k2_client::brand::PRODUCT_NAME, "K2"),
         "daemon_unreachable: no answer from the K2 daemon (status 000)"
     );
     assert_eq!(f("x"), "daemon_error: x");
@@ -746,7 +747,7 @@ fn the_main() {
     assert_eq!(r.exit, Exit::Error);
     assert_eq!(r.stdout, "");
     assert_eq!(
-        r.stderr,
+        r.stderr.replace(k2_client::brand::PRODUCT_NAME, "K2"),
         "acme main chat c1 (codex) CANNOT BE FOUND: no conversation on disk in any of its folders.\nK2 kept it pinned and did not start or switch to another chat.\nChoose one: k2 sessions --past, then k2 sessions main set <id>\n"
     );
     let r = rendered(

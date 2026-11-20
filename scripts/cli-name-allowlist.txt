@@ -677,7 +677,6 @@
 1 value cli/src/thread.sh keeper: wire; the Thread item's sender when no workspace handle is found (OverlayDoc.from)
 1 value cli/src/wiki.sh keeper: stored; the agent mode (--mode, settings.rs:26)
 1 value crates/k2-client/src/account_session.rs debt: command (1 line); B9
-1 value crates/k2-client/src/cli_install.rs debt: command (1 line); B3
 1 value crates/k2-core/src/cli_folder_trust.rs keeper: outside; Cursor's marker file holds trustMethod; our revoke matches it
 1 value crates/k2-core/src/cli_folder_trust/gate.rs keeper: wire; a trust finding's tool, in the card's and the CLI's JSON
 1 value crates/k2-core/src/compute/trim.rs keeper: stored; compute_admin_settings.updated_by

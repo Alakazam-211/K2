@@ -62,7 +62,6 @@
 12 K2 crates/k2-daemon/src/sew/voice.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 12 K2 src/renderer/lib/editor/live/live-notices.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 12 K2 src/renderer/lib/voice/voice-wire.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-11 K2 crates/k2-client/src/cli_install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-core/src/llm_accounts/identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-daemon/src/app_user_invites.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-daemon/src/mail/forward_sync.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -89,6 +88,7 @@
 10 K2 src/renderer/components/Settings/sections/HomesSyncSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 10 K2 src/renderer/components/Settings/sections/SewSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 10 K2 src/renderer/lib/zen/zen-custom-bridge.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
+9 K2 crates/k2-client/src/cli_install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-core/src/db/home_switch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-core/src/deploy/validate.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-core/src/hire/template/upgrade.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)

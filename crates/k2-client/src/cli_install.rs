@@ -32,21 +32,42 @@
 //!
 //! Everything takes an explicit home (`*_at`) so tests drive it under a
 //! temp `$HOME`; the wrappers read `$HOME` through [`crate::paths::home_dir`].
+//!
+//! Every name comes from the brand file (`k2-brand`) through [`Names`]: the
+//! command, its aliases, the PATH block's markers and the fish file. A build
+//! owns its own name and the names it is retiring (aliases in mode `notice`
+//! or `tombstone`, [`Names::retired`]), and nothing else: a link, a block or
+//! a fish file of another brand is left as it is. The public functions use
+//! [`Names::compiled`]; the methods on [`Names`] take the table as a value,
+//! so tests run the real code with another brand's table.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use k2_brand::RetiredName;
 use serde::Serialize;
 
-/// First line of the PATH block K2 writes into a shell startup file.
-pub const BLOCK_BEGIN: &str = "# >>> K2 CLI >>>";
+/// First line of the PATH block this build writes into a shell startup
+/// file (`# >>> K2 CLI >>>` with the default brand).
+pub const BLOCK_BEGIN: &str = k2_brand::PATH_BLOCK_BEGIN;
 /// Last line of the PATH block.
-pub const BLOCK_END: &str = "# <<< K2 CLI <<<";
+pub const BLOCK_END: &str = k2_brand::PATH_BLOCK_END;
 
-/// The command's name, and its pre-0.40 alias (a shim that runs `k2`).
-pub const CLI_NAME: &str = "k2";
-pub const LEGACY_NAME: &str = "k2so";
+/// The command's name, from the brand file.
+pub use crate::brand::CLI_NAME;
+
+/// The brand's first alias (`k2so` with the default brand), or the
+/// command's own name when it has none. The install code walks every alias
+/// ([`Names::aliases`]); this one name is for callers that still read one.
+pub const LEGACY_NAME: &str = match crate::brand::CLI_ALIASES {
+    [first, ..] => first,
+    [] => CLI_NAME,
+};
+
+/// The command's system-wide path, `/usr/local/bin/<name>` (the Linux copy
+/// in `k2_core::cli_stage`, and the system link here).
+pub use k2_brand::SYSTEM_CLI_PATH;
 
 /// The system-wide bin folder linked when it is already writable (macOS).
 pub const SYSTEM_BIN: &str = "/usr/local/bin";
@@ -55,10 +76,10 @@ pub const SYSTEM_BIN: &str = "/usr/local/bin";
 /// boot heal leaves their startup file alone from then on.
 pub const OPT_OUT_FILE: &str = "cli-path-line-removed";
 
-/// The fish startup file K2 owns (the whole file is K2's block).
-const FISH_CONF: &str = "k2-cli.fish";
+/// The fish startup file this build owns (the whole file is its block).
+const FISH_CONF: &str = k2_brand::FISH_CONF;
 
-/// The `k2so` alias check, shared with the Windows install (every OS).
+/// The alias check, shared with the Windows install (every OS).
 pub use crate::cli_alias::legacy_alias_present;
 
 /// `~/.local/bin`, where K2 puts `k2` without admin.
@@ -66,16 +87,72 @@ pub fn user_bin_dir(home: &Path) -> PathBuf {
     home.join(".local").join("bin")
 }
 
+// ── The names this build owns ───────────────────────────────────────────
+
+/// The names one build installs and owns. [`Names::compiled`] is this
+/// build's, from the brand file; a test makes its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Names {
+    /// The command.
+    pub name: &'static str,
+    /// Its other names, in the brand's order. Each gets a link where an
+    /// earlier install left one.
+    pub aliases: &'static [&'static str],
+    /// The aliases it is retiring (mode `notice` or `tombstone`), with the
+    /// PATH block and fish file their installs left: this build takes those
+    /// over. A `silent` alias never had an install of its own, so it is not
+    /// here.
+    pub retired: &'static [RetiredName],
+    /// This build's PATH block markers.
+    pub block_begin: &'static str,
+    pub block_end: &'static str,
+    /// This build's fish startup file in `conf.d`.
+    pub fish_conf: &'static str,
+}
+
+impl Names {
+    /// This build's names, from the brand file.
+    pub const fn compiled() -> Names {
+        Names {
+            name: crate::brand::CLI_NAME,
+            aliases: crate::brand::CLI_ALIASES,
+            retired: k2_brand::RETIRED,
+            block_begin: BLOCK_BEGIN,
+            block_end: BLOCK_END,
+            fish_conf: FISH_CONF,
+        }
+    }
+
+    /// `file` is the command's name or one of its aliases.
+    fn owns_file_name(&self, file: &str) -> bool {
+        file == self.name || self.aliases.contains(&file)
+    }
+
+    /// The marker pairs this build may remove or replace: its own first,
+    /// then each retired name's.
+    fn marker_pairs(&self) -> Vec<(&'static str, &'static str)> {
+        let mut out = vec![(self.block_begin, self.block_end)];
+        out.extend(self.retired.iter().map(|r| (r.block_begin, r.block_end)));
+        out
+    }
+
+    /// True when a link target is this build's CLI script by its place: a
+    /// file named as the command or one of its aliases in a folder named
+    /// `cli` (a bundle's `…/_up_/cli/k2`, or a checkout's `cli/k2`). Shape
+    /// only, so a link to a deleted old bundle still counts and gets
+    /// re-pointed. Another brand's command is never this build's.
+    pub fn is_cli_target(&self, target: &Path) -> bool {
+        let name = target.file_name().and_then(|n| n.to_str());
+        let dir = target.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str());
+        name.is_some_and(|n| self.owns_file_name(n)) && dir == Some("cli")
+    }
+}
+
 // ── Which files are K2's ────────────────────────────────────────────────
 
-/// True when a link target is a K2 CLI script by its place: a file named
-/// `k2` / `k2so` in a folder named `cli` (a bundle's `…/_up_/cli/k2`, or a
-/// checkout's `cli/k2`). Shape only, so a link to a deleted old bundle
-/// still counts as K2's and gets re-pointed.
+/// [`Names::is_cli_target`] with this build's names.
 pub fn is_k2_cli_target(target: &Path) -> bool {
-    let name = target.file_name().and_then(|n| n.to_str());
-    let dir = target.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str());
-    matches!(name, Some(CLI_NAME) | Some(LEGACY_NAME)) && dir == Some("cli")
+    Names::compiled().is_cli_target(target)
 }
 
 /// True when the file at `path` (links followed) is the K2 CLI script: a
@@ -138,8 +215,52 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// What is at `link`, against the CLI `cli` it should point at.
+/// What is at `link`, against the CLI `cli` it should point at
+/// ([`Names::link_state`] with this build's names).
 pub fn link_state(link: &Path, cli: &Path) -> LinkState {
+    Names::compiled().link_state(link, cli)
+}
+
+impl Names {
+    /// What is at `link`, against the CLI `cli` it should point at. A link
+    /// to another CLI is [`LinkState::Stale`] only when that CLI is one of
+    /// these names ([`Names::is_cli_target`]).
+    pub fn link_state(&self, link: &Path, cli: &Path) -> LinkState {
+        link_state_by(link, cli, |t| self.is_cli_target(t))
+    }
+
+    /// Point `link` at `cli` unless something that isn't this build's is
+    /// there. See [`ensure_link`].
+    #[cfg(unix)]
+    pub fn ensure_link(&self, link: &Path, cli: &Path, make_dir: bool) -> LinkOutcome {
+        let from = match self.link_state(link, cli) {
+            LinkState::Current => return LinkOutcome::Current,
+            LinkState::Foreign { what } => return LinkOutcome::Foreign { what },
+            LinkState::Missing => None,
+            LinkState::Stale { target } => Some(target),
+        };
+        let Some(dir) = link.parent() else {
+            return LinkOutcome::NotWritable { reason: format!("{} has no folder", link.display()) };
+        };
+        if !dir.is_dir() {
+            if !make_dir {
+                return LinkOutcome::NotWritable { reason: format!("{} doesn't exist", dir.display()) };
+            }
+            if let Err(e) = fs::create_dir_all(dir) {
+                return LinkOutcome::NotWritable { reason: format!("create {}: {e}", dir.display()) };
+            }
+        }
+        match replace_symlink(cli, link) {
+            Ok(()) => match from {
+                Some(from) => LinkOutcome::Repointed { from },
+                None => LinkOutcome::Created,
+            },
+            Err(e) => LinkOutcome::NotWritable { reason: format!("link {}: {e}", link.display()) },
+        }
+    }
+}
+
+fn link_state_by(link: &Path, cli: &Path, is_ours: impl Fn(&Path) -> bool) -> LinkState {
     let meta = match fs::symlink_metadata(link) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return LinkState::Missing,
@@ -160,7 +281,7 @@ pub fn link_state(link: &Path, cli: &Path) -> LinkState {
     };
     if same_file(&target, cli) {
         LinkState::Current
-    } else if is_k2_cli_target(&target) {
+    } else if is_ours(&target) {
         LinkState::Stale { target }
     } else {
         LinkState::Foreign { what: format!("a link to {}", target.display()) }
@@ -190,33 +311,10 @@ impl LinkOutcome {
 /// Point `link` at `cli` unless something that isn't K2's is there.
 /// `make_dir`: create the parent folder when missing (`~/.local/bin`);
 /// otherwise a missing folder is [`LinkOutcome::NotWritable`] (never
-/// `mkdir /usr/local/bin`, which needs admin).
+/// `mkdir /usr/local/bin`, which needs admin). With this build's names.
 #[cfg(unix)]
 pub fn ensure_link(link: &Path, cli: &Path, make_dir: bool) -> LinkOutcome {
-    let from = match link_state(link, cli) {
-        LinkState::Current => return LinkOutcome::Current,
-        LinkState::Foreign { what } => return LinkOutcome::Foreign { what },
-        LinkState::Missing => None,
-        LinkState::Stale { target } => Some(target),
-    };
-    let Some(dir) = link.parent() else {
-        return LinkOutcome::NotWritable { reason: format!("{} has no folder", link.display()) };
-    };
-    if !dir.is_dir() {
-        if !make_dir {
-            return LinkOutcome::NotWritable { reason: format!("{} doesn't exist", dir.display()) };
-        }
-        if let Err(e) = fs::create_dir_all(dir) {
-            return LinkOutcome::NotWritable { reason: format!("create {}: {e}", dir.display()) };
-        }
-    }
-    match replace_symlink(cli, link) {
-        Ok(()) => match from {
-            Some(from) => LinkOutcome::Repointed { from },
-            None => LinkOutcome::Created,
-        },
-        Err(e) => LinkOutcome::NotWritable { reason: format!("link {}: {e}", link.display()) },
-    }
+    Names::compiled().ensure_link(link, cli, make_dir)
 }
 
 /// Make `link` a symlink to `target` in one step: a fresh link beside it,
@@ -287,90 +385,158 @@ pub fn zdotdir() -> Option<PathBuf> {
 ///   shell, which is what a new macOS Terminal window is);
 /// - bash: the first of `~/.bash_profile`, `~/.bash_login`, `~/.profile`
 ///   that exists (bash reads only the first), else `~/.bash_profile`;
-/// - fish: `~/.config/fish/conf.d/k2-cli.fish`.
+/// - fish: `~/.config/fish/conf.d/k2-cli.fish` (this build's fish file).
 pub fn startup_file(kind: ShellKind, home: &Path, zdotdir: Option<&Path>) -> PathBuf {
-    match kind {
-        ShellKind::Zsh => zdotdir.unwrap_or(home).join(".zprofile"),
-        ShellKind::Bash => [".bash_profile", ".bash_login", ".profile"]
-            .iter()
-            .map(|n| home.join(n))
-            .find(|p| p.exists())
-            .unwrap_or_else(|| home.join(".bash_profile")),
-        ShellKind::Fish => home.join(".config").join("fish").join("conf.d").join(FISH_CONF),
-    }
+    Names::compiled().startup_file(kind, home, zdotdir)
 }
 
 /// Every file a K2 PATH block may be in, for the undo (the person may have
 /// changed shells since it was written).
 pub fn block_candidates(home: &Path, zdotdir: Option<&Path>) -> Vec<PathBuf> {
-    let mut out = vec![home.join(".zprofile")];
-    if let Some(z) = zdotdir {
-        let p = z.join(".zprofile");
-        if !out.contains(&p) {
-            out.insert(0, p);
-        }
-    }
-    for n in [".bash_profile", ".bash_login", ".profile"] {
-        out.push(home.join(n));
-    }
-    out.push(startup_file(ShellKind::Fish, home, None));
-    out
+    Names::compiled().block_candidates(home, zdotdir)
 }
 
 /// The marked PATH block for `kind`, newline-terminated.
 pub fn path_block(kind: ShellKind) -> String {
-    let body = match kind {
-        ShellKind::Zsh | ShellKind::Bash => "export PATH=\"$HOME/.local/bin:$PATH\"".to_string(),
-        ShellKind::Fish => {
-            "if not contains -- $HOME/.local/bin $PATH\n    set -gx PATH $HOME/.local/bin $PATH\nend"
-                .to_string()
-        }
-    };
-    format!("{BLOCK_BEGIN}\n{body}\n{BLOCK_END}\n")
+    Names::compiled().path_block(kind)
 }
 
-/// The file has a K2 block (its begin line).
+/// The file has this build's block (its begin line).
 pub fn has_block(content: &str) -> bool {
-    content.lines().any(|l| l.trim_end() == BLOCK_BEGIN)
+    Names::compiled().has_block(content)
 }
 
-/// `content` with `block` appended, or `None` when a K2 block is already
-/// there. Only ever appends: a newline first if the file didn't end with
-/// one, nothing else changes.
+/// `content` with `block` appended, or `None` when this build's block is
+/// already there. Only ever appends: a newline first if the file didn't end
+/// with one, nothing else changes.
 pub fn add_block(content: &str, block: &str) -> Option<String> {
     if has_block(content) {
         return None;
     }
+    Some(append_block(content, block))
+}
+
+fn append_block(content: &str, block: &str) -> String {
     let mut out = String::with_capacity(content.len() + block.len() + 1);
     out.push_str(content);
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
     out.push_str(block);
-    Some(out)
+    out
 }
 
-/// `content` without any complete K2 block (begin line through end line,
-/// inclusive), or `None` when there is none. Lines outside the markers stay
-/// byte for byte. A begin with no end is left alone (never guess where a
-/// hand-edited block stops).
+/// `content` without any complete block of this build or of a name it is
+/// retiring ([`Names::remove_block`]), or `None` when there is none.
 pub fn remove_block(content: &str) -> Option<String> {
+    Names::compiled().remove_block(content)
+}
+
+/// fish's `conf.d`, where each command's fish file lives.
+fn fish_conf_dir(home: &Path) -> PathBuf {
+    home.join(".config").join("fish").join("conf.d")
+}
+
+/// The first complete marked block in `lines` whose begin line is one of
+/// `pairs`: its first and last line indexes. A begin with no end of its
+/// own pair after it is not a block.
+fn find_block(lines: &[&str], from: usize, pairs: &[(&str, &str)]) -> Option<(usize, usize)> {
+    (from..lines.len()).find_map(|i| {
+        let (_, end) = pairs.iter().find(|(begin, _)| lines[i].trim_end() == *begin)?;
+        let j = (i + 1..lines.len()).find(|&j| lines[j].trim_end() == *end)?;
+        Some((i, j))
+    })
+}
+
+/// `content` without any complete block of `pairs` (begin line through
+/// its end line, inclusive), or `None` when there is none. Lines outside
+/// the markers stay byte for byte. A begin with no end is left alone
+/// (never guess where a hand-edited block stops).
+fn remove_marked(content: &str, pairs: &[(&str, &str)]) -> Option<String> {
     let lines: Vec<&str> = content.split_inclusive('\n').collect();
     let mut out = String::with_capacity(content.len());
     let mut removed = false;
     let mut i = 0;
-    while i < lines.len() {
-        if lines[i].trim_end() == BLOCK_BEGIN {
-            if let Some(end) = (i + 1..lines.len()).find(|&j| lines[j].trim_end() == BLOCK_END) {
-                removed = true;
-                i = end + 1;
-                continue;
+    while let Some((begin, end)) = find_block(&lines, i, pairs) {
+        out.extend(lines[i..begin].iter().copied());
+        removed = true;
+        i = end + 1;
+    }
+    out.extend(lines[i..].iter().copied());
+    removed.then_some(out)
+}
+
+impl Names {
+    /// The startup file the PATH block goes in for `kind` ([`startup_file`]).
+    pub fn startup_file(&self, kind: ShellKind, home: &Path, zdotdir: Option<&Path>) -> PathBuf {
+        match kind {
+            ShellKind::Zsh => zdotdir.unwrap_or(home).join(".zprofile"),
+            ShellKind::Bash => [".bash_profile", ".bash_login", ".profile"]
+                .iter()
+                .map(|n| home.join(n))
+                .find(|p| p.exists())
+                .unwrap_or_else(|| home.join(".bash_profile")),
+            ShellKind::Fish => fish_conf_dir(home).join(self.fish_conf),
+        }
+    }
+
+    /// Every file this build's block, or a retired name's, may be in, for
+    /// the undo: the zsh and bash startup files, this build's fish file,
+    /// then each retired name's fish file.
+    pub fn block_candidates(&self, home: &Path, zdotdir: Option<&Path>) -> Vec<PathBuf> {
+        let mut out = vec![home.join(".zprofile")];
+        if let Some(z) = zdotdir {
+            let p = z.join(".zprofile");
+            if !out.contains(&p) {
+                out.insert(0, p);
             }
         }
-        out.push_str(lines[i]);
-        i += 1;
+        for n in [".bash_profile", ".bash_login", ".profile"] {
+            out.push(home.join(n));
+        }
+        out.push(self.startup_file(ShellKind::Fish, home, None));
+        out.extend(self.retired.iter().map(|r| fish_conf_dir(home).join(r.fish_conf)));
+        out
     }
-    removed.then_some(out)
+
+    /// The marked PATH block for `kind`, newline-terminated.
+    pub fn path_block(&self, kind: ShellKind) -> String {
+        let body = match kind {
+            ShellKind::Zsh | ShellKind::Bash => "export PATH=\"$HOME/.local/bin:$PATH\"",
+            ShellKind::Fish => {
+                "if not contains -- $HOME/.local/bin $PATH\n    set -gx PATH $HOME/.local/bin $PATH\nend"
+            }
+        };
+        format!("{}\n{body}\n{}\n", self.block_begin, self.block_end)
+    }
+
+    /// The file has this build's block (its begin line). A retired name's
+    /// block does not count: it is this build's to replace.
+    pub fn has_block(&self, content: &str) -> bool {
+        content.lines().any(|l| l.trim_end() == self.block_begin)
+    }
+
+    /// `content` without any complete block of this build or of a name it
+    /// is retiring (begin line through end line, inclusive), or `None` when
+    /// there is none. Lines outside the markers stay byte for byte; a
+    /// block with any other marker stays. A begin with no end is left alone
+    /// (never guess where a hand-edited block stops).
+    pub fn remove_block(&self, content: &str) -> Option<String> {
+        remove_marked(content, &self.marker_pairs())
+    }
+
+    /// `content` with the first complete block of a retired name replaced
+    /// by `block`, in the same place, or `None` when there is none.
+    fn replace_retired_block(&self, content: &str, block: &str) -> Option<String> {
+        let pairs: Vec<(&str, &str)> = self.retired.iter().map(|r| (r.block_begin, r.block_end)).collect();
+        let lines: Vec<&str> = content.split_inclusive('\n').collect();
+        let (begin, end) = find_block(&lines, 0, &pairs)?;
+        let mut out = String::with_capacity(content.len() + block.len());
+        out.extend(lines[..begin].iter().copied());
+        out.push_str(block);
+        out.extend(lines[end + 1..].iter().copied());
+        Some(out)
+    }
 }
 
 /// Write `content` to `path` through a temp file + rename, keeping the
@@ -429,6 +595,10 @@ pub enum PathOutcome {
     BlockAdded { file: PathBuf },
     /// The block was already in this file.
     BlockPresent { file: PathBuf },
+    /// A block of a name this build is retiring was replaced by this
+    /// build's, in the same place (fish: this build's file took the old
+    /// one's place).
+    BlockReplaced { file: PathBuf },
     /// The person removed the PATH line; left alone.
     OptedOut,
     /// Nothing written, and why (unknown shell, the login shell didn't
@@ -454,6 +624,7 @@ pub fn path_opted_out(home: &Path) -> bool {
 ///
 /// Serialized across processes (the app and the daemon both run it at
 /// first launch) by a lock under `~/.k2`, so the block is never doubled.
+/// With this build's names ([`Names::ensure_path_block`]).
 pub fn ensure_path_block(
     home: &Path,
     shell: &Path,
@@ -461,73 +632,128 @@ pub fn ensure_path_block(
     login_path: Option<&str>,
     force: bool,
 ) -> Result<PathOutcome, String> {
-    let Some(kind) = shell_kind(shell) else {
-        return Ok(PathOutcome::Skipped {
-            reason: format!("K2 doesn't know how to set PATH for {}", shell.display()),
-        });
-    };
-    let _lock = HomeLock::take(home)?;
-    if force {
-        let _ = fs::remove_file(opt_out_path(home));
-    } else if path_opted_out(home) {
-        return Ok(PathOutcome::OptedOut);
-    }
-    let file = startup_file(kind, home, zdotdir);
-    let content = match fs::read_to_string(&file) {
-        Ok(c) => c,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("read {}: {e}", file.display())),
-    };
-    if has_block(&content) {
-        return Ok(PathOutcome::BlockPresent { file });
-    }
-    let bin = user_bin_dir(home);
-    match login_path {
-        Some(p) if path_list_has_dir(p, &bin) => return Ok(PathOutcome::OnPath),
-        Some(p) => {
-            if let Some(found) = first_on_path(p, CLI_NAME).filter(|f| is_k2_cli_script(f)) {
-                return Ok(PathOutcome::FoundElsewhere { path: found });
-            }
-        }
-        None if !force => {
-            return Ok(PathOutcome::Skipped {
-                reason: "the login shell didn't report its PATH".to_string(),
-            })
-        }
-        None => {}
-    }
-    let Some(next) = add_block(&content, &path_block(kind)) else {
-        return Ok(PathOutcome::BlockPresent { file });
-    };
-    write_startup_file(&file, &next)?;
-    Ok(PathOutcome::BlockAdded { file })
+    Names::compiled().ensure_path_block(home, shell, zdotdir, login_path, force)
 }
 
-/// Remove the K2 PATH block from every startup file that has one (only the
-/// lines between and including the markers) and record the opt-out so the
-/// boot heal doesn't add it back. Returns the files changed; a fish file
-/// left empty is deleted (the whole file was K2's).
+/// Remove this build's PATH block, and a retired name's, from every startup
+/// file that has one (only the lines between and including the markers)
+/// and record the opt-out so the boot heal doesn't add it back. Returns the
+/// files changed; a fish file left empty is deleted (the whole file was
+/// the block). With this build's names ([`Names::remove_path_block_at`]).
 pub fn remove_path_block_at(home: &Path, zdotdir: Option<&Path>) -> Result<Vec<PathBuf>, String> {
-    let _lock = HomeLock::take(home)?;
-    let mut changed = Vec::new();
-    for file in block_candidates(home, zdotdir) {
-        let Ok(content) = fs::read_to_string(&file) else { continue };
-        let Some(next) = remove_block(&content) else { continue };
-        let is_fish_conf = file.file_name().and_then(|n| n.to_str()) == Some(FISH_CONF);
-        if is_fish_conf && next.trim().is_empty() {
-            fs::remove_file(&file).map_err(|e| format!("remove {}: {e}", file.display()))?;
-        } else {
-            write_startup_file(&file, &next)?;
+    Names::compiled().remove_path_block_at(home, zdotdir)
+}
+
+fn read_or_empty(file: &Path) -> Result<String, String> {
+    match fs::read_to_string(file) {
+        Ok(c) => Ok(c),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("read {}: {e}", file.display())),
+    }
+}
+
+impl Names {
+    /// [`ensure_path_block`] with these names. This build's block already
+    /// there: nothing to do. A retired name's block there: it is replaced
+    /// by this build's in the same place, with no login PATH needed (the
+    /// line was already on PATH). A block with any other marker is never
+    /// read or touched.
+    pub fn ensure_path_block(
+        &self,
+        home: &Path,
+        shell: &Path,
+        zdotdir: Option<&Path>,
+        login_path: Option<&str>,
+        force: bool,
+    ) -> Result<PathOutcome, String> {
+        let Some(kind) = shell_kind(shell) else {
+            return Ok(PathOutcome::Skipped {
+                reason: format!("K2 doesn't know how to set PATH for {}", shell.display()),
+            });
+        };
+        let _lock = HomeLock::take(home)?;
+        if force {
+            let _ = fs::remove_file(opt_out_path(home));
+        } else if path_opted_out(home) {
+            return Ok(PathOutcome::OptedOut);
         }
-        changed.push(file);
+        let file = self.startup_file(kind, home, zdotdir);
+        let content = read_or_empty(&file)?;
+        if self.has_block(&content) {
+            return Ok(PathOutcome::BlockPresent { file });
+        }
+        let block = self.path_block(kind);
+        if let Some(next) = self.replace_retired_block(&content, &block) {
+            write_startup_file(&file, &next)?;
+            return Ok(PathOutcome::BlockReplaced { file });
+        }
+        if kind == ShellKind::Fish && self.take_retired_fish_file(home, &file, &content, &block)? {
+            return Ok(PathOutcome::BlockReplaced { file });
+        }
+        let bin = user_bin_dir(home);
+        match login_path {
+            Some(p) if path_list_has_dir(p, &bin) => return Ok(PathOutcome::OnPath),
+            Some(p) => {
+                if let Some(found) = first_on_path(p, self.name).filter(|f| is_k2_cli_script(f)) {
+                    return Ok(PathOutcome::FoundElsewhere { path: found });
+                }
+            }
+            None if !force => {
+                return Ok(PathOutcome::Skipped {
+                    reason: "the login shell didn't report its PATH".to_string(),
+                })
+            }
+            None => {}
+        }
+        write_startup_file(&file, &append_block(&content, &block))?;
+        Ok(PathOutcome::BlockAdded { file })
     }
-    let marker = opt_out_path(home);
-    if let Some(dir) = marker.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+
+    /// fish: a retired name's fish file with its block becomes this
+    /// build's `file`. This build's block is written first, then the old
+    /// file loses its block (and goes when nothing else is left in it), so
+    /// PATH never misses the line. True when one was taken over.
+    fn take_retired_fish_file(&self, home: &Path, file: &Path, content: &str, block: &str) -> Result<bool, String> {
+        for r in self.retired {
+            let old = fish_conf_dir(home).join(r.fish_conf);
+            let old_content = read_or_empty(&old)?;
+            let Some(rest) = remove_marked(&old_content, &[(r.block_begin, r.block_end)]) else { continue };
+            write_startup_file(file, &append_block(content, block))?;
+            if rest.trim().is_empty() {
+                fs::remove_file(&old).map_err(|e| format!("remove {}: {e}", old.display()))?;
+            } else {
+                write_startup_file(&old, &rest)?;
+            }
+            return Ok(true);
+        }
+        Ok(false)
     }
-    fs::write(&marker, "The person removed K2's PATH line from Settings; K2 won't add it back by itself.\n")
-        .map_err(|e| format!("write {}: {e}", marker.display()))?;
-    Ok(changed)
+
+    /// [`remove_path_block_at`] with these names: this build's block and a
+    /// retired name's go, from every candidate file ([`Names::block_candidates`]).
+    pub fn remove_path_block_at(&self, home: &Path, zdotdir: Option<&Path>) -> Result<Vec<PathBuf>, String> {
+        let _lock = HomeLock::take(home)?;
+        let mut changed = Vec::new();
+        for file in self.block_candidates(home, zdotdir) {
+            let Ok(content) = fs::read_to_string(&file) else { continue };
+            let Some(next) = self.remove_block(&content) else { continue };
+            let name = file.file_name().and_then(|n| n.to_str());
+            let is_fish_conf = name == Some(self.fish_conf) || self.retired.iter().any(|r| name == Some(r.fish_conf));
+            if is_fish_conf && next.trim().is_empty() {
+                fs::remove_file(&file).map_err(|e| format!("remove {}: {e}", file.display()))?;
+            } else {
+                write_startup_file(&file, &next)?;
+            }
+            changed.push(file);
+        }
+        let marker = opt_out_path(home);
+        if let Some(dir) = marker.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+        }
+        fs::write(&marker, "The person removed K2's PATH line from Settings; K2 won't add it back by itself.\n")
+            .map_err(|e| format!("write {}: {e}", marker.display()))?;
+        Ok(changed)
+    }
 }
 
 /// An exclusive `flock` on `~/.k2/.cli-install.lock` for the life of the
@@ -563,7 +789,8 @@ impl HomeLock {
 pub struct HealInput<'a> {
     /// The bundled `k2` script the links point at.
     pub cli: &'a Path,
-    /// The bundled `k2so` shim, when the bundle has one.
+    /// The bundled shim the alias links run (`k2so` with the default
+    /// brand), when the bundle has one.
     pub legacy_shim: Option<&'a Path>,
     /// `/usr/local/bin` (linked only when it exists and is writable), or
     /// `None` to leave it.
@@ -583,10 +810,26 @@ pub struct HealInput<'a> {
 pub struct HealReport {
     pub user_link_path: PathBuf,
     pub user_link: LinkOutcome,
+    /// The first alias's link in `~/.local/bin` (`k2so` with the default
+    /// brand), when an earlier install left one. Every alias's link is in
+    /// [`HealReport::user_aliases`].
     pub user_legacy: Option<LinkOutcome>,
     pub system_link: Option<LinkOutcome>,
+    /// The same in the system bin folder.
     pub system_legacy: Option<LinkOutcome>,
+    /// Every alias link refreshed in `~/.local/bin`, in the brand's order.
+    pub user_aliases: Vec<AliasLink>,
+    /// Every alias link refreshed in the system bin folder.
+    pub system_aliases: Vec<AliasLink>,
     pub path: PathOutcome,
+}
+
+/// One alias link a heal refreshed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasLink {
+    pub path: PathBuf,
+    pub outcome: LinkOutcome,
 }
 
 impl HealReport {
@@ -606,16 +849,19 @@ impl HealReport {
             LinkOutcome::Current => {}
         }
         if let Some(LinkOutcome::Foreign { what }) = &self.system_link {
-            out.push(format!("left {SYSTEM_BIN}/k2 alone: it is {what}, not K2's"));
+            out.push(format!("left {SYSTEM_CLI_PATH} alone: it is {what}, not K2's"));
         }
         if let Some(LinkOutcome::Created | LinkOutcome::Repointed { .. }) = &self.system_link {
-            out.push(format!("k2 linked at {SYSTEM_BIN}/k2"));
+            out.push(format!("k2 linked at {SYSTEM_CLI_PATH}"));
         }
         match &self.path {
             PathOutcome::BlockAdded { file } => out.push(format!(
                 "added the K2 PATH line to {} (new Terminal windows find k2)",
                 file.display()
             )),
+            PathOutcome::BlockReplaced { file } => {
+                out.push(format!("replaced the old command's PATH line in {}", file.display()))
+            }
             PathOutcome::Skipped { reason } => out.push(format!("PATH line not added: {reason}")),
             _ => {}
         }
@@ -625,43 +871,77 @@ impl HealReport {
 
 /// Link `~/.local/bin/k2`, link `/usr/local/bin/k2` when that folder is
 /// writable, and add the PATH block when new Terminal windows wouldn't find
-/// `k2` otherwise. A `k2so` alias is only refreshed where an earlier
+/// `k2` otherwise. An alias (`k2so`) is only refreshed where an earlier
 /// install left one ([`legacy_alias_present`]); a new install gets `k2`
-/// alone. Idempotent: a second run changes nothing.
+/// alone. Idempotent: a second run changes nothing. With this build's
+/// names ([`Names::heal_at`]).
 #[cfg(unix)]
 pub fn heal_at(home: &Path, input: &HealInput) -> Result<HealReport, String> {
-    let bin = user_bin_dir(home);
-    let user_link_path = bin.join(CLI_NAME);
-    let user_link = ensure_link(&user_link_path, input.cli, true);
-    let user_alias = bin.join(LEGACY_NAME);
-    let user_legacy = input
-        .legacy_shim
-        .filter(|_| legacy_alias_present(&user_alias))
-        .map(|shim| ensure_link(&user_alias, shim, true));
+    Names::compiled().heal_at(home, input)
+}
 
-    let (system_link, system_legacy) = match input.system_bin {
-        Some(sys) if sys.is_dir() => {
-            let link = ensure_link(&sys.join(CLI_NAME), input.cli, false);
-            let sys_alias = sys.join(LEGACY_NAME);
-            let legacy = match (&link, input.legacy_shim) {
-                (l, Some(shim)) if l.is_ours() && legacy_alias_present(&sys_alias) => {
-                    Some(ensure_link(&sys_alias, shim, false))
-                }
-                _ => None,
-            };
-            (Some(link), legacy)
-        }
-        _ => (None, None),
-    };
+impl Names {
+    /// [`heal_at`] with these names: the command's link, then each alias
+    /// an earlier install left, in `~/.local/bin` and then in the system
+    /// bin folder (its aliases only over this build's own link there).
+    #[cfg(unix)]
+    pub fn heal_at(&self, home: &Path, input: &HealInput) -> Result<HealReport, String> {
+        let bin = user_bin_dir(home);
+        let user_link_path = bin.join(self.name);
+        let user_link = self.ensure_link(&user_link_path, input.cli, true);
+        let user_aliases = self.refresh_aliases(&bin, input.legacy_shim, true);
 
-    let path = if user_link.is_ours() {
-        ensure_path_block(home, input.shell, input.zdotdir, input.login_path, input.force_path)?
-    } else {
-        PathOutcome::Skipped {
-            reason: format!("{} isn't K2's link", user_link_path.display()),
-        }
-    };
-    Ok(HealReport { user_link_path, user_link, user_legacy, system_link, system_legacy, path })
+        let (system_link, system_aliases) = match input.system_bin {
+            Some(sys) if sys.is_dir() => {
+                let link = self.ensure_link(&sys.join(self.name), input.cli, false);
+                let aliases =
+                    if link.is_ours() { self.refresh_aliases(sys, input.legacy_shim, false) } else { Vec::new() };
+                (Some(link), aliases)
+            }
+            _ => (None, Vec::new()),
+        };
+
+        let path = if user_link.is_ours() {
+            self.ensure_path_block(home, input.shell, input.zdotdir, input.login_path, input.force_path)?
+        } else {
+            PathOutcome::Skipped {
+                reason: format!("{} isn't K2's link", user_link_path.display()),
+            }
+        };
+        Ok(HealReport {
+            user_legacy: self.first_alias_in(&user_aliases),
+            system_legacy: self.first_alias_in(&system_aliases),
+            user_link_path,
+            user_link,
+            system_link,
+            user_aliases,
+            system_aliases,
+            path,
+        })
+    }
+
+    /// Each alias in `dir` that an earlier install left, pointed at `shim`,
+    /// in the brand's order. Nothing without a shim.
+    #[cfg(unix)]
+    fn refresh_aliases(&self, dir: &Path, shim: Option<&Path>, make_dir: bool) -> Vec<AliasLink> {
+        let Some(shim) = shim else { return Vec::new() };
+        self.aliases
+            .iter()
+            .map(|alias| dir.join(alias))
+            .filter(|path| legacy_alias_present(path))
+            .map(|path| AliasLink { outcome: self.ensure_link(&path, shim, make_dir), path })
+            .collect()
+    }
+
+    /// The first alias's outcome among `links`.
+    #[cfg(unix)]
+    fn first_alias_in(&self, links: &[AliasLink]) -> Option<LinkOutcome> {
+        let first = self.aliases.first()?;
+        links
+            .iter()
+            .find(|l| l.path.file_name().and_then(|n| n.to_str()) == Some(*first))
+            .map(|l| l.outcome.clone())
+    }
 }
 
 /// [`heal_at`] under `$HOME`.
@@ -680,11 +960,13 @@ pub fn boot_heal(exe: &Path) -> Option<Result<HealReport, String>> {
     if !cfg!(target_os = "macos") {
         return None;
     }
-    let cli = packaged_cli_for_exe(exe, CLI_NAME)?;
+    let names = Names::compiled();
+    let cli = packaged_cli_for_exe(exe, names.name)?;
     if crate::daemon_lifecycle::is_transient_exe_location(&cli) {
         return None;
     }
-    let shim = packaged_cli_for_exe(exe, LEGACY_NAME);
+    // The bundle's alias shim: the first alias the bundle has a file for.
+    let shim = names.aliases.iter().find_map(|alias| packaged_cli_for_exe(exe, alias));
     ensure_executable(&cli);
     if let Some(s) = &shim {
         ensure_executable(s);
@@ -754,41 +1036,55 @@ pub struct PathStatus {
     pub opted_out: bool,
 }
 
-/// [`PathStatus`] for `home` with this shell and login PATH.
+/// [`PathStatus`] for `home` with this shell and login PATH, with this
+/// build's names ([`Names::path_status_at`]).
 pub fn path_status_at(
     home: &Path,
     shell: &Path,
     zdotdir: Option<&Path>,
     login_path: Option<&str>,
 ) -> PathStatus {
-    let user_bin = user_bin_dir(home);
-    let startup = shell_kind(shell).map(|k| startup_file(k, home, zdotdir));
-    let block_present = startup
-        .as_ref()
-        .and_then(|f| fs::read_to_string(f).ok())
-        .is_some_and(|c| has_block(&c));
-    let on_login_path = login_path.map(|p| path_list_has_dir(p, &user_bin));
-    // What a new window's PATH will be: the block runs in the login shell's
-    // startup, so it puts ~/.local/bin in front.
-    let effective = match (login_path, block_present) {
-        (Some(p), true) => Some(format!("{}:{p}", user_bin.display())),
-        (Some(p), false) => Some(p.to_string()),
-        (None, true) => Some(user_bin.display().to_string()),
-        (None, false) => None,
-    };
-    let new_terminals_run = effective
-        .as_deref()
-        .and_then(|p| first_on_path(p, CLI_NAME))
-        .filter(|f| is_k2_cli_script(f));
-    PathStatus {
-        user_bin,
-        shell: shell.to_path_buf(),
-        startup_file: startup,
-        block_present,
-        on_login_path,
-        new_terminals_find_it: new_terminals_run.is_some(),
-        new_terminals_run,
-        opted_out: path_opted_out(home),
+    Names::compiled().path_status_at(home, shell, zdotdir, login_path)
+}
+
+impl Names {
+    /// [`path_status_at`] with these names.
+    pub fn path_status_at(
+        &self,
+        home: &Path,
+        shell: &Path,
+        zdotdir: Option<&Path>,
+        login_path: Option<&str>,
+    ) -> PathStatus {
+        let user_bin = user_bin_dir(home);
+        let startup = shell_kind(shell).map(|k| self.startup_file(k, home, zdotdir));
+        let block_present = startup
+            .as_ref()
+            .and_then(|f| fs::read_to_string(f).ok())
+            .is_some_and(|c| self.has_block(&c));
+        let on_login_path = login_path.map(|p| path_list_has_dir(p, &user_bin));
+        // What a new window's PATH will be: the block runs in the login
+        // shell's startup, so it puts ~/.local/bin in front.
+        let effective = match (login_path, block_present) {
+            (Some(p), true) => Some(format!("{}:{p}", user_bin.display())),
+            (Some(p), false) => Some(p.to_string()),
+            (None, true) => Some(user_bin.display().to_string()),
+            (None, false) => None,
+        };
+        let new_terminals_run = effective
+            .as_deref()
+            .and_then(|p| first_on_path(p, self.name))
+            .filter(|f| is_k2_cli_script(f));
+        PathStatus {
+            user_bin,
+            shell: shell.to_path_buf(),
+            startup_file: startup,
+            block_present,
+            on_login_path,
+            new_terminals_find_it: new_terminals_run.is_some(),
+            new_terminals_run,
+            opted_out: path_opted_out(home),
+        }
     }
 }
 

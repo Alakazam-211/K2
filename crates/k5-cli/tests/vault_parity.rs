@@ -125,11 +125,64 @@ fn help_never_acts() {
         &["systemd-cred", "API", "--unit", "u", "-h"],
         &["fetch", "-h"],
         &["run", "--help"],
+        &["send", "API", "--to", "bob", "--stdin", "-h"],
+        &[
+            "send-allow",
+            "add",
+            "A",
+            "--to",
+            "b",
+            "--workspace",
+            "w",
+            "--help",
+        ],
+        &["recovery", "show-once", "--help"],
+        &["backup", "key", "age1x", "-h"],
+        &["carry", "import", "f.age", "--apply", "--help"],
+        &["systemd-cred", "API", "--replace", "--help"],
     ] {
         let mut c = VCase::new("help", args);
         c.handed = true;
         rig.check(&c);
     }
+}
+
+/// A bash bug, copied until bash's fix lands (help never acts, K2's
+/// ruling): `cli/src/vault.sh`, `_vault_fetch`'s `--json` arm reads the
+/// `--help` after it as the request body, so the fetch is SENT and no help
+/// is printed. The binary hands every `-h`/`--help` line to the shell, so
+/// it sends it too until then (the rig can't compare a handed line's
+/// requests, so this pins bash's side). FLIP when the bash fix lands: help
+/// on stdout, exit 0, and NO request.
+#[test]
+fn fetch_json_then_help_sends_the_fetch_bash_bug() {
+    let rig = VRig::new();
+    let mut c = VCase::new(
+        "fetch --json --help (bash bug: sends)",
+        &[
+            "fetch",
+            "https://api.example.com/x",
+            "--secret",
+            "API",
+            "--json",
+            "--help",
+        ],
+    );
+    c.daemon = vec![common::stub::Reply::Answer(
+        200,
+        r#"{"status":200,"body":"{\"ok\":true}\n"}"#.to_string(),
+    )];
+    let bash = rig.run(true, false, &c);
+    assert_eq!(bash.out.code, Some(0), "{bash:#?}");
+    assert_eq!(
+        bash.daemon.len(),
+        1,
+        "FLIP: bash no longer sends it: {bash:#?}"
+    );
+    assert!(
+        bash.daemon[0].contains("\"bodyB64\": \"LS1oZWxw\""),
+        "{bash:#?}"
+    );
 }
 
 /// The lines name the command by the brand's name (in a build with

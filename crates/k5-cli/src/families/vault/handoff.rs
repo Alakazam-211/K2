@@ -3,10 +3,10 @@
 //! a call carries the passport; outside, it goes to the vault socket when
 //! there is one, else with the owner token (`_vault_handoff_call`).
 //!
-//! The shell's still ([`native`]): `send --stdin` (a value a person types
-//! in), and `send-allow add` from a person's terminal (its confirm is
-//! bound to a secret looked up first). Inside a K2 terminal both are
-//! refused here, as the shell refuses them.
+//! `send --stdin` (a value a person types in) and `send-allow add` from a
+//! person's terminal go to the vault socket only, after the person guard;
+//! the value goes only in the request body. Inside a K2 terminal both
+//! are refused, as the shell refuses them.
 
 use super::py::{self, get, idx, items, left, or_list, or_obj, render, s, t, Lines, R};
 use super::Ctx;
@@ -14,33 +14,14 @@ use crate::confirm::{self, dumps, Split};
 use crate::exit::Exit;
 use crate::out;
 use crate::out::json::{Text, Value};
+use crate::prompt;
 use crate::transport::encode::quote;
 use k2_client::brand::CLI_NAME as CLI;
 
-/// Whether the binary answers `vault <sub> <rest>` (no I/O but the
-/// environment).
-pub fn native(sub: &str, rest: &[&str]) -> bool {
-    // The first word that is no flag and no flag's value (the parser's
-    // `pos[0]`).
-    let mut first = None;
-    let mut i = 0;
-    while i < rest.len() {
-        let w = rest[i];
-        if VALUE_FLAGS.contains(&w) {
-            i += 2;
-            continue;
-        }
-        if !w.starts_with("--") {
-            first = Some(w);
-            break;
-        }
-        i += 1;
-    }
-    match sub {
-        "send" => !rest.contains(&"--stdin"),
-        "send-allow" => first != Some("add") || confirm::in_k2_terminal(),
-        _ => true,
-    }
+/// Whether the binary answers `vault <sub> <rest>`: every form of these
+/// verbs now.
+pub fn native(_sub: &str, _rest: &[&str]) -> bool {
+    true
 }
 
 /// The flags that take the next word.
@@ -577,14 +558,37 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                         return Err(Exit::Refused);
                     }
                     ctx.person_guard()?;
-                    // `add` from a person's terminal is the shell's (native).
-                    let b = vec![
+                    let mut b = vec![
                         kv("workspace", &h.workspace),
                         kv("name", &sname),
                         kv("to", &h.to),
                         kv("action", &verb),
                     ];
-                    let r = ctx.sock(true, "send-allow", dumps(&Value::Object(b)).as_bytes());
+                    let mut sbody = dumps(&Value::Object(b.clone()));
+                    if verb == "add" {
+                        // The same vault confirm as sending it
+                        // (handoff-send, bound to the secret).
+                        let r = ctx.sock(false, &format!("send-allow?{q}"), b"");
+                        let r = ok_or_fail(ctx, r)?;
+                        let ssid = secret_id(&r.body, &sname)?;
+                        if ssid.is_empty() {
+                            out::stderr_line(&format!("not_found: {} has no secret a person gave named {sname} ({CLI} vault list --scope ws:{})", h.workspace, h.workspace));
+                            return Err(Exit::NotFound);
+                        }
+                        let label = format!("let {} send {sname} to {}", h.workspace, h.to);
+                        let Some(tok) = confirm::confirm_token(
+                            &mut ctx.confirm(),
+                            "handoff-send",
+                            &ssid,
+                            &label,
+                        ) else {
+                            return Err(Exit::Refused);
+                        };
+                        b.push(kv("secretId", &ssid));
+                        sbody = confirm::with_confirm_token(&dumps(&Value::Object(b)), &tok, None)
+                            .unwrap_or_default();
+                    }
+                    let r = ctx.sock(true, "send-allow", sbody.as_bytes());
                     ok_or_fail(ctx, r)?
                 }
                 _ => {
@@ -621,7 +625,28 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
     }
 }
 
-/// `send NAME --to …` (not `--stdin`).
+/// `ssid="$(… next((s["id"] for s in json.load(sys.stdin).get("secrets") or
+/// [] if s.get("name") == n), ""))"`: a raise prints its traceback, and
+/// `set -e` ends the command with exit 1.
+fn secret_id(body: &[u8], n: &str) -> Result<String, Exit> {
+    let found = confirm::load(body).and_then(|v| {
+        for x in items(&or_list(get(&v, "secrets")?))? {
+            if py::is(&get(&x, "name")?, n) {
+                return Ok(s(&idx(&x, "id")?));
+            }
+        }
+        Ok(String::new())
+    });
+    match found {
+        Ok(id) => Ok(id.trim_end_matches('\n').to_string()),
+        Err(e) => {
+            out::stderr_line(e.text().trim_end_matches('\n'));
+            Err(Exit::Error)
+        }
+    }
+}
+
+/// `send NAME --to …`, and `--stdin`: a value a person types in.
 fn send(ctx: &mut Ctx, h: &H) -> Result<Exit, Exit> {
     let name = h.pos.first().cloned().unwrap_or_default();
     if name.is_empty() || h.to.is_empty() {
@@ -705,8 +730,23 @@ fn send(ctx: &mut Ctx, h: &H) -> Result<Exit, Exit> {
     if !h.delivery.is_empty() {
         o.push(kv("delivery", &h.delivery));
     }
-    let body = dumps(&Value::Object(o));
-    let mut r = call(ctx, true, "send", &body)?;
+    let (body, mut r) = if h.stdin {
+        // A value a person types in: the person channel only (H15).
+        ctx.person_guard()?;
+        let b = super::verbs::body_with_value(o)?;
+        let r = ctx.sock(true, "send", b.expose());
+        (b, r)
+    } else {
+        let b = prompt::Secret::new(dumps(&Value::Object(o)).into_bytes());
+        let r = call(
+            ctx,
+            true,
+            "send",
+            std::str::from_utf8(b.expose()).unwrap_or(""),
+        )?;
+        (b, r)
+    };
+    let body = std::str::from_utf8(body.expose()).unwrap_or("").to_string();
     if r.status == "403"
         && code(&r.body) == "confirm_required"
         && !confirm::in_k2_terminal()
@@ -733,6 +773,8 @@ fn send(ctx: &mut Ctx, h: &H) -> Result<Exit, Exit> {
     if !r.ok() {
         return Err(fail(ctx, &r));
     }
+    // Under `set -e` a printer that fails ends the command, and so does a
+    // `st="$(…)"` whose Python raises.
     let e = if h.json {
         print_body(&r)
     } else {
@@ -746,7 +788,7 @@ fn send(ctx: &mut Ctx, h: &H) -> Result<Exit, Exit> {
         Ok(_) => String::new(),
         Err(e) => {
             out::stderr_line(e.text().trim_end_matches('\n'));
-            String::new()
+            return Ok(Exit::Error);
         }
     };
     Ok(if st == "landed" {

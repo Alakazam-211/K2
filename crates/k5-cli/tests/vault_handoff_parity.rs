@@ -11,7 +11,7 @@ mod common;
 
 use common::parity::{PASSPORT, PERMISSION_ASK};
 use common::stub::Reply;
-use common::vault::{VCase, VRig};
+use common::vault::{VCase, VCompare, VRig};
 
 fn ok(body: &str) -> Reply {
     Reply::Answer(200, body.to_string())
@@ -40,6 +40,11 @@ fn owner(name: &'static str, args: &[&'static str], reply: Reply, code: i32) -> 
 fn agent(name: &'static str, args: &[&'static str], reply: Reply, code: i32) -> VCase {
     let mut c = owner(name, args, reply, code);
     c.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
+    c
+}
+
+fn traceback(mut c: VCase) -> VCase {
+    c.compare = VCompare::Traceback;
     c
 }
 
@@ -395,4 +400,256 @@ fn the_lists_and_the_small_verbs() {
     );
     c.vault = None;
     rig.check(&c);
+}
+
+#[test]
+fn send_a_typed_value_and_send_allow_add() {
+    let rig = VRig::new();
+    let with = |mut c: VCase, stdin: &[u8], secrets: &[&'static str]| {
+        c.stdin = stdin.to_vec();
+        c.secrets = secrets.to_vec();
+        c
+    };
+    let mut stdin_in_k2 = refused(
+        "send --stdin in a K2 terminal",
+        &["send", "API", "--to", "bob::h", "--stdin"],
+        3,
+    );
+    stdin_in_k2.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
+    stdin_in_k2.stdin = b"typed-in-k2\n".to_vec();
+    let mut no_sock = refused(
+        "send --stdin with no vault socket",
+        &["send", "API", "--to", "bob::h", "--stdin"],
+        1,
+    );
+    no_sock.vault = None;
+    let allowed =
+        ok(r#"{"secrets":[{"name":"OTHER","id":"s0"},{"name":"API","id":"sec-55"}],"entries":[]}"#);
+    let added = ok(
+        r#"{"workspace":"proj","entries":[{"name":"API","to":"bob::h","addedBy":"amy","addedAt":"t1"}]}"#,
+    );
+    for c in [
+        with(
+            person(
+                "send --stdin",
+                &[
+                    "send",
+                    "API",
+                    "--to",
+                    "bob::h",
+                    "--stdin",
+                    "--for",
+                    "a.com, b.com",
+                    "--kind",
+                    "token",
+                    "--ttl",
+                    "2h",
+                ],
+                vec![ok(LANDED)],
+                0,
+            ),
+            b"typed-value-123\n",
+            &["typed-value-123", "dHlwZWQtdmFsdWUtMTIz"],
+        ),
+        with(
+            // covers: vault send --json
+            person(
+                "send --stdin, held for the other side",
+                &["send", "API", "--to", "bob::h", "--stdin", "--json"],
+                vec![ok(
+                    r#"{"status":"held","name":"API","to":"bob::h","deliveryId":"d2"}"#,
+                )],
+                3,
+            ),
+            b"typed-value-456",
+            &["typed-value-456"],
+        ),
+        with(
+            person(
+                "send --stdin, a person's confirm",
+                &["send", "API", "--to", "bob::h", "--stdin"],
+                vec![
+                    Reply::Answer(
+                        403,
+                        r#"{"error":{"code":"confirm_required","hint":"confirm"},"secretId":"s-9"}"#
+                            .into(),
+                    ),
+                    ok(r#"{"methods":["vault-password"]}"#),
+                    ok(r#"{"token":"tk-st-1"}"#),
+                    ok(LANDED),
+                ],
+                0,
+            ),
+            b"typed-value-789\npw-st-1\n",
+            &["typed-value-789", "tk-st-1"],
+        ),
+        with(
+            person(
+                "send --stdin, refused",
+                &["send", "API", "--to", "bob::h", "--stdin"],
+                vec![Reply::Answer(
+                    400,
+                    r#"{"error":{"code":"value_too_large","hint":"64 KiB at most"}}"#.into(),
+                )],
+                2,
+            ),
+            b"v\n",
+            &[],
+        ),
+        person(
+            "send --stdin, nothing typed",
+            &["send", "API", "--to", "bob::h", "--stdin"],
+            vec![],
+            2,
+        ),
+        refused(
+            "send --stdin --scope",
+            &[
+                "send", "API", "--to", "bob::h", "--stdin", "--scope", "server",
+            ],
+            2,
+        ),
+        refused(
+            "send --stdin --workspace",
+            &[
+                "send",
+                "API",
+                "--to",
+                "bob::h",
+                "--stdin",
+                "--workspace",
+                "w",
+            ],
+            2,
+        ),
+        stdin_in_k2,
+        no_sock,
+        // covers: vault send-allow add
+        person(
+            "send-allow add",
+            &[
+                "send-allow",
+                "add",
+                "API",
+                "--to",
+                "bob::h",
+                "--workspace",
+                "proj",
+            ],
+            vec![
+                allowed.clone(),
+                ok(r#"{"methods":["local-auth"],"confirmText":"let proj send API"}"#),
+                ok(r#"{"token":"t"}"#),
+                added.clone(),
+            ],
+            0,
+        ),
+        with(
+            person(
+                "send-allow add --json, the vault password",
+                // covers: vault send-allow add --json
+                &[
+                    "send-allow",
+                    "add",
+                    "API",
+                    "--to",
+                    "bob::h",
+                    "--workspace",
+                    "proj",
+                    "--json",
+                ],
+                vec![
+                    allowed.clone(),
+                    ok(r#"{"methods":["vault-password"]}"#),
+                    ok(r#"{"token":"tk-sa-1"}"#),
+                    added.clone(),
+                ],
+                0,
+            ),
+            b"pw-sa-1\n",
+            &["pw-sa-1", "tk-sa-1"],
+        ),
+        person(
+            "send-allow add, no such secret",
+            &[
+                "send-allow",
+                "add",
+                "NOPE",
+                "--to",
+                "bob::h",
+                "--workspace",
+                "proj",
+            ],
+            vec![allowed.clone()],
+            4,
+        ),
+        traceback(person(
+            "send-allow add, a list Python can't read",
+            &[
+                "send-allow",
+                "add",
+                "API",
+                "--to",
+                "bob::h",
+                "--workspace",
+                "proj",
+            ],
+            vec![ok(r#"{"secrets":[{"name":"API"}]}"#)],
+            1,
+        )),
+        person(
+            "send-allow add, the list refused",
+            &[
+                "send-allow",
+                "add",
+                "API",
+                "--to",
+                "bob::h",
+                "--workspace",
+                "proj",
+            ],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"owner_only","hint":"an Owner or Admin"}}"#.into(),
+            )],
+            3,
+        ),
+        person(
+            "send-allow add, confirm cancelled",
+            &[
+                "send-allow",
+                "add",
+                "API",
+                "--to",
+                "bob::h",
+                "--workspace",
+                "proj",
+            ],
+            vec![allowed.clone(), ok(r#"{"methods":[]}"#)],
+            3,
+        ),
+        // covers: vault send-allow remove
+        person(
+            "send-allow remove, from a person's terminal",
+            &[
+                "send-allow",
+                "remove",
+                "API",
+                "--to",
+                "bob::h",
+                "--workspace",
+                "proj",
+            ],
+            vec![ok(r#"{"workspace":"proj","entries":[]}"#)],
+            0,
+        ),
+        traceback(person(
+            "send, an answer Python can't read",
+            &["send", "API", "--to", "bob::h"],
+            vec![ok("not json")],
+            1,
+        )),
+    ] {
+        rig.check(&c);
+    }
 }

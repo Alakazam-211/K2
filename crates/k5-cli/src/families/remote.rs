@@ -5,11 +5,15 @@
 //! connection gate; the virtual desktop's guard and the locked
 //! `connect-account` tool's checks still stand.
 //!
-//! `logout` stays the shell's ([`run`] returns `None`): it posts to the
-//! other server over HTTPS, which waits for the TLS transport on the
-//! line. So does any `-h` or `--help` (the front's), a word that is not
-//! UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, and a
-//! `python3` the binary can't tell.
+//! `logout` is native too ([`logout`]): one POST to the other server
+//! over the shared TLS, then the saved copies of that token go.
+//!
+//! Handed to the shell ([`run`] returns `None`): any `-h` or `--help`
+//! (the front's), a word that is not UTF-8, `HOOK_SOCK` set with a
+//! `CODEX_` variable exported, a `python3` the binary can't tell, and
+//! the `logout` cases [`logout::run`] names.
+
+pub mod logout;
 
 use crate::daemon;
 use crate::exit::Exit;
@@ -22,7 +26,7 @@ use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["remote"];
-/// The binary answers every form but `logout`.
+/// The binary answers every form.
 pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
 /// No verb rows: every form is [`OWNER`]'s.
 pub const VERBS: &[crate::route::Verb] = &[];
@@ -74,7 +78,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     let sub = words.first().copied().unwrap_or("");
-    if sub == "logout" {
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
     if !python::family_native(python::here()) {
@@ -93,6 +97,13 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let would_refuse = passport::current(args).would_refuse();
     if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL) {
         return Some(stop);
+    }
+    if sub == "logout" {
+        let home = match crate::home::k2_home() {
+            Ok(h) => h,
+            Err(_) => return None,
+        };
+        return logout::run(&words[1..], &home);
     }
     let (stdout, stderr, exit) = lines(sub);
     if !stdout.is_empty() {

@@ -49,12 +49,7 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 }
 
 /// One answer, the owner on disk.
-fn one(
-    name: &'static str,
-    args: &'static [&'static str],
-    body: &str,
-    code: i32,
-) -> Case {
+fn one(name: &'static str, args: &'static [&'static str], body: &str, code: i32) -> Case {
     case(name, args, &[], vec![ok(body)], owner_and_port, code, 1)
 }
 
@@ -82,7 +77,11 @@ fn skin_user_reads() {
             .collect();
         format!(r#"{{"users":[{}]}}"#, rows.join(","))
     };
-    assert!(big.len() > 256 * 1024, "the large list is {} bytes", big.len());
+    assert!(
+        big.len() > 256 * 1024,
+        "the large list is {} bytes",
+        big.len()
+    );
     check(
         &rig,
         vec![
@@ -191,7 +190,11 @@ fn skin_user_reads() {
                 &["user", "password", "bob"],
                 1,
             ),
-            words("user sessions with no user", &["user", "sessions", "--app", "a"], 1),
+            words(
+                "user sessions with no user",
+                &["user", "sessions", "--app", "a"],
+                1,
+            ),
             words("an unknown user verb", &["user", "nope"], 1),
             words(
                 "--role with no --app",
@@ -211,10 +214,17 @@ fn skin_user_writes() {
     check(
         &rig,
         vec![
-            one("user add", &["user", "add", "bob", "--temp-password"], added, 0),
+            one(
+                "user add",
+                &["user", "add", "bob", "--temp-password"],
+                added,
+                0,
+            ),
             one(
                 "user add on an App",
-                &["user", "add", "bob", "--app", " acme ", "--role=r", "--email", "b@x"],
+                &[
+                    "user", "add", "bob", "--app", " acme ", "--role=r", "--email", "b@x",
+                ],
                 r#"{"username":"bob"}"#,
                 0,
             ),
@@ -321,7 +331,11 @@ fn skin_user_writes() {
                 r#"{"username":"bob"}"#,
                 0,
             ),
-            words("user agent with both", &["user", "agent", "bob", "w", "--clear"], 1),
+            words(
+                "user agent with both",
+                &["user", "agent", "bob", "w", "--clear"],
+                1,
+            ),
             one(
                 "user remove",
                 &["user", "rm", "bob"],
@@ -330,7 +344,9 @@ fn skin_user_writes() {
             ),
             one(
                 "user rooms on an App",
-                &["user", "rooms", "bob", "--agent", "sales", "--agent", " ops ", "--app", "a"],
+                &[
+                    "user", "rooms", "bob", "--agent", "sales", "--agent", " ops ", "--app", "a",
+                ],
                 &format!(r#"{{"app":"a","roomHandles":["sales"],"username":"bob",{waiting}}}"#),
                 0,
             ),
@@ -391,14 +407,23 @@ fn skin_roles() {
             .collect();
         format!(r#"{{"roles":[{}]}}"#, rows.join(","))
     };
-    assert!(big.len() > 256 * 1024, "the large list is {} bytes", big.len());
+    assert!(
+        big.len() > 256 * 1024,
+        "the large list is {} bytes",
+        big.len()
+    );
     let access = r#"{"name":"staff","roomAccess":[{"handle":"sales","caps":["thread:read"],"folders":{"read":["docs/"],"write":["in/"],"upload":["drop/"],"download":["a.pdf"],"uploadDir":"in/x","hide":[".env"]}},{"handle":"ops","folders":{}}]}"#;
     check(
         &rig,
         vec![
             one("role list", &["role", "list"], ROLES, 0),
             one("roles alone is the list", &["roles"], r#"{"roles":[]}"#, 0),
-            one("a large role list, above 256 KiB", &["role", "list"], &big, 0),
+            one(
+                "a large role list, above 256 KiB",
+                &["role", "list"],
+                &big,
+                0,
+            ),
             one(
                 "role create",
                 &["role", "create", "staff", "--agent", "sales", "--app", "a"],
@@ -416,14 +441,17 @@ fn skin_roles() {
                 &["role", "create", "staff", "--caps", "x"],
                 2,
             ),
-            words(
-                "role --user",
-                &["role", "create", "x", "--user", "bob"],
-                2,
-            ),
+            words("role --user", &["role", "create", "x", "--user", "bob"], 2),
             one(
                 "role room",
-                &["role", "room", "staff", "sales", "--caps", "thread:read, files:read"],
+                &[
+                    "role",
+                    "room",
+                    "staff",
+                    "sales",
+                    "--caps",
+                    "thread:read, files:read",
+                ],
                 access,
                 0,
             ),
@@ -441,7 +469,10 @@ fn skin_roles() {
             )),
             one(
                 "role paths",
-                &["role", "paths", "staff", "sales", "--read", "docs/,b/", "--hide", ".env", "--unhide", "x"],
+                &[
+                    "role", "paths", "staff", "sales", "--read", "docs/,b/", "--hide", ".env",
+                    "--unhide", "x",
+                ],
                 access,
                 0,
             ),
@@ -451,7 +482,11 @@ fn skin_roles() {
                 access,
                 0,
             ),
-            words("role paths with nothing", &["role", "paths", "staff", "sales"], 2),
+            words(
+                "role paths with nothing",
+                &["role", "paths", "staff", "sales"],
+                2,
+            ),
             words(
                 "role paths --clear with folders",
                 &["role", "paths", "staff", "sales", "--clear", "--read", "a"],
@@ -477,7 +512,9 @@ fn skin_roles() {
             one("role remove", &["role", "rm", "staff"], r#"{}"#, 0),
             one(
                 "role add from a template",
-                &["role", "add", "--from", "viewer", "--app", "a", "--agent", "sales"],
+                &[
+                    "role", "add", "--from", "viewer", "--app", "a", "--agent", "sales",
+                ],
                 r#"{"template":"viewer","role":{"name":"viewers","roomAccess":[{"handle":"sales","caps":["thread:read"]}]}}"#,
                 0,
             ),
@@ -509,11 +546,26 @@ fn skin_grants_doors_and_hydra() {
             )),
             one(
                 "grant add",
-                &["grant", "add", "--subject-kind", "principal", "--subject", "bob", "--kind", "chat", "--scope", "guest"],
+                &[
+                    "grant",
+                    "add",
+                    "--subject-kind",
+                    "principal",
+                    "--subject",
+                    "bob",
+                    "--kind",
+                    "chat",
+                    "--scope",
+                    "guest",
+                ],
                 r#"{"id":"g3","subjectKind":"principal","subjectId":"bob","kind":"chat","targetId":"sew","scope":"guest"}"#,
                 0,
             ),
-            words("grant add, missing words", &["grant", "add", "--kind", "app"], 1),
+            words(
+                "grant add, missing words",
+                &["grant", "add", "--kind", "app"],
+                1,
+            ),
             words("grant add: a word", &["grant", "add", "x"], 1),
             one(
                 "grant rm with cascades",
@@ -548,7 +600,14 @@ fn skin_grants_doors_and_hydra() {
             ),
             one(
                 "front-door direct",
-                &["front-door", "direct", "--url", "https://x", "--ui-port", "8080"],
+                &[
+                    "front-door",
+                    "direct",
+                    "--url",
+                    "https://x",
+                    "--ui-port",
+                    "8080",
+                ],
                 r#"{"mode":"direct","url":"https://x","listen":":443","applied":true}"#,
                 0,
             ),
@@ -576,8 +635,16 @@ fn skin_grants_doors_and_hydra() {
                 "<html>",
                 1,
             ),
-            words("front-door: two modes", &["front-door", "connect", "direct"], 1),
-            words("front-door: --url last", &["front-door", "direct", "--url"], 1),
+            words(
+                "front-door: two modes",
+                &["front-door", "connect", "direct"],
+                1,
+            ),
+            words(
+                "front-door: --url last",
+                &["front-door", "direct", "--url"],
+                1,
+            ),
             one(
                 "hydra",
                 &["hydra"],
@@ -620,7 +687,18 @@ fn skin_with_a_passport() {
                 h(&[]),
                 shell(case(
                     "grant add with a passport: the shell's",
-                    &["grant", "add", "--subject-kind", "p", "--subject", "s", "--kind", "app", "--target", "t"],
+                    &[
+                        "grant",
+                        "add",
+                        "--subject-kind",
+                        "p",
+                        "--subject",
+                        "s",
+                        "--kind",
+                        "app",
+                        "--target",
+                        "t",
+                    ],
                     &[],
                     vec![ok(r#"{"id":"g1"}"#)],
                     port_only,
@@ -703,10 +781,22 @@ fn skin_hands_these_to_the_shell() {
             shell(words("an unknown verb", &["nope"], 1)),
             shell(words("--help", &["--help"], 0)),
             shell(words("user add -h", &["user", "add", "bob", "-h"], 0)),
-            shell(words("user remove --help", &["user", "remove", "bob", "--help"], 0)),
+            shell(words(
+                "user remove --help",
+                &["user", "remove", "bob", "--help"],
+                0,
+            )),
             shell(words("role create -h", &["role", "create", "r", "-h"], 0)),
-            shell(words("grant rm --help", &["grant", "rm", "--id", "g", "--help"], 0)),
-            shell(words("front-door direct -h", &["front-door", "direct", "-h"], 0)),
+            shell(words(
+                "grant rm --help",
+                &["grant", "rm", "--id", "g", "--help"],
+                0,
+            )),
+            shell(words(
+                "front-door direct -h",
+                &["front-door", "direct", "-h"],
+                0,
+            )),
             shell(words("hydra on --help", &["hydra", "on", "--help"], 0)),
             shell(case(
                 "role suggest",
@@ -748,12 +838,7 @@ fn app_reaches_the_same_code() {
                 2,
             ),
             one("app role list", &["roles"], ROLES, 0),
-            one(
-                "app grant list",
-                &["grant"],
-                r#"{"grants":[]}"#,
-                0,
-            ),
+            one("app grant list", &["grant"], r#"{"grants":[]}"#, 0),
             one(
                 "app hydra off",
                 &["hydra", "off"],
@@ -766,12 +851,7 @@ fn app_reaches_the_same_code() {
                 r#"{"mode":"connect"}"#,
                 0,
             ),
-            one(
-                "app token list",
-                &["token", "list"],
-                r#"{"tokens":[]}"#,
-                0,
-            ),
+            one("app token list", &["token", "list"], r#"{"tokens":[]}"#, 0),
             words("app tokens with no verb", &["tokens"], 1),
             words("app user: an unknown verb", &["user", "nope"], 1),
             shell(words("app user add -h", &["user", "add", "bob", "-h"], 0)),

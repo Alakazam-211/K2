@@ -445,7 +445,11 @@ fn one(raw: &str, line: impl FnOnce(&Value) -> Result<String, Raise>) -> Shown {
 
 fn user_add(raw: &str, app: &str) -> Shown {
     printed(raw, |d, o| {
-        let name = st(&at_or(need(d, if app.is_empty() { 8 } else { 6 })?, "username", s("")));
+        let name = st(&at_or(
+            need(d, if app.is_empty() { 8 } else { 6 })?,
+            "username",
+            s(""),
+        ));
         if app.is_empty() {
             o.line(format!("Skin user added: {name}"));
         } else {
@@ -484,11 +488,7 @@ fn user_show(raw: &str) -> Shown {
         let d = need(d, 5)?;
         let mut full = orv(g(d, "fullName"), s("\u{2014}"));
         if truthy(&g(d, "nameSetBySelf")) && truthy(&g(d, "fullName")) {
-            full = s(&format!(
-                "{} (set by {})",
-                st(&full),
-                st(&g(d, "username"))
-            ));
+            full = s(&format!("{} (set by {})", st(&full), st(&g(d, "username"))));
         }
         o.line(format!(
             "{} in App {}",
@@ -501,14 +501,20 @@ fn user_show(raw: &str) -> Shown {
             "  display name  {}",
             st(&orv(g(d, "displayName"), dash()))
         ));
-        o.line(format!("  email         {}", st(&orv(g(d, "email"), dash()))));
+        o.line(format!(
+            "  email         {}",
+            st(&orv(g(d, "email"), dash()))
+        ));
         let picture = if truthy(&g(d, "imageHash")) {
             format!("yes ({}\u{2026})", st(&head(&g(d, "imageHash"), 12, 12)?))
         } else {
             "\u{2014}".into()
         };
         o.line(format!("  picture       {picture}"));
-        o.line(format!("  role here     {}", st(&orv(g(d, "role"), dash()))));
+        o.line(format!(
+            "  role here     {}",
+            st(&orv(g(d, "role"), dash()))
+        ));
         let made = t(&g(d, "createdAt"), 14)?;
         let last = t(&g(d, "lastSignInAt"), 14)?;
         o.line(format!("  made          {made}    last sign-in {last}"));
@@ -960,7 +966,10 @@ fn role_paths(raw: &str, want: &str) -> Shown {
             ];
             for (key, label, tail, line) in lines {
                 if truthy(&g(f, key)) {
-                    o.line(format!("      {label}{}{tail}", join(", ", &g(f, key), line)?));
+                    o.line(format!(
+                        "      {label}{}{tail}",
+                        join(", ", &g(f, key), line)?
+                    ));
                 }
             }
             if truthy(&g(f, "uploadDir")) {
@@ -1146,7 +1155,10 @@ fn front_door(raw: &str) -> Shown {
 /// A string error that names a token, "forbidden" or the owner: 3, else 1.
 fn str_err_exit(err: &str) -> Exit {
     let low = err.to_lowercase();
-    if ["token", "forbidden", "owner"].iter().any(|w| low.contains(w)) {
+    if ["token", "forbidden", "owner"]
+        .iter()
+        .any(|w| low.contains(w))
+    {
         Exit::Refused
     } else {
         Exit::Error
@@ -1219,7 +1231,11 @@ fn list_body(mut rest: &str, o: &mut Out) -> Result<(), Raise> {
     let doc = load(&first, 3)?;
     let users = at_or(need(&doc, 3)?, "users", Value::Array(vec![]));
     let second = readline(&mut rest);
-    let second = if second.is_empty() { "{}".into() } else { second };
+    let second = if second.is_empty() {
+        "{}".into()
+    } else {
+        second
+    };
     let doc = load(&second, 4)?;
     let mut roles: Vec<(Value, Value)> = Vec::new();
     for r in py_iter(&at_or(need(&doc, 4)?, "roles", Value::Array(vec![])), 4)? {

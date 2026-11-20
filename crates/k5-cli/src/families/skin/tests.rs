@@ -50,10 +50,16 @@ fn usage_stops() {
     // `--agent` as the last word: the failed `shift 2`, nothing said.
     let s = stop(&["user", "rooms", "bob", "--agent"]);
     assert_eq!((s.exit, s.stderr.len()), (Exit::Error, 0));
-    assert_eq!(stop(&["user", "rooms", "bob", "--apply-tokens"]).exit, Exit::Usage);
+    assert_eq!(
+        stop(&["user", "rooms", "bob", "--apply-tokens"]).exit,
+        Exit::Usage
+    );
     assert_eq!(stop(&["role", "x", "--user"]).exit, Exit::Usage);
     assert_eq!(stop(&["role", "paths", "r", "h"]).exit, Exit::Usage);
-    assert_eq!(stop(&["role", "paths", "r", "h", "x"]).stderr, ["Unexpected argument: x"]);
+    assert_eq!(
+        stop(&["role", "paths", "r", "h", "x"]).stderr,
+        ["Unexpected argument: x"]
+    );
     assert_eq!(stop(&["role", "add", "--nope"]).exit, Exit::Usage);
     assert_eq!(stop(&["grant", "set", "x"]).stderr, ["Unknown argument: x"]);
     assert_eq!(stop(&["hydra", "on", "off"]).exit, Exit::Usage);
@@ -63,7 +69,15 @@ fn usage_stops() {
 #[test]
 fn the_bodies_are_what_python_prints() {
     assert_eq!(
-        body(&["user", "add", "bob", "--temp-password", "--app", " acme ", "--role=r"]),
+        body(&[
+            "user",
+            "add",
+            "bob",
+            "--temp-password",
+            "--app",
+            " acme ",
+            "--role=r"
+        ]),
         (
             "/cli/skin/users".into(),
             r#"{"username": "bob", "generate": true, "app": "acme", "role": "r"}"#.into()
@@ -82,7 +96,18 @@ fn the_bodies_are_what_python_prints() {
         "app=a%2Fb&user=b%26o"
     );
     assert_eq!(
-        body(&["role", "paths", "r", "h", "--hide", "a", "--hide", "b", "--no-download"]).1,
+        body(&[
+            "role",
+            "paths",
+            "r",
+            "h",
+            "--hide",
+            "a",
+            "--hide",
+            "b",
+            "--no-download"
+        ])
+        .1,
         r#"{"name": "r", "handle": "h", "hideAdd": ["a", "b"], "download": []}"#
     );
     assert_eq!(
@@ -90,13 +115,20 @@ fn the_bodies_are_what_python_prints() {
         r#"{"name": "r", "handle": "h", "caps": ["a", "b"]}"#
     );
     assert_eq!(
-        body(&["grant", "add", "--kind", "CHAT", "--subject-kind", "p", "--subject", "s"]).1,
+        body(&[
+            "grant",
+            "add",
+            "--kind",
+            "CHAT",
+            "--subject-kind",
+            "p",
+            "--subject",
+            "s"
+        ])
+        .1,
         r#"{"subjectKind": "p", "subjectId": "s", "kind": "CHAT", "targetId": "sew"}"#
     );
-    assert_eq!(
-        body(&["grant", "rm", "--id", " g1 "]).1,
-        r#"{"id": "g1"}"#
-    );
+    assert_eq!(body(&["grant", "rm", "--id", " g1 "]).1, r#"{"id": "g1"}"#);
     match ask(&["front-door", "direct", "--ui-port", "+0_7"]) {
         Ok(Ask::FrontDoorSet { body, .. }) => {
             assert_eq!(body, r#"{"mode": "direct", "apply": true, "uiPort": 7}"#)
@@ -133,7 +165,16 @@ fn the_routes_are_the_shells() {
         &["role", "update", "r"],
         &["role", "remove", "r"],
         &["role", "add", "--from", "t"],
-        &["grant", "add", "--kind", "chat", "--subject-kind", "p", "--subject", "s"],
+        &[
+            "grant",
+            "add",
+            "--kind",
+            "chat",
+            "--subject-kind",
+            "p",
+            "--subject",
+            "s",
+        ],
         &["grant", "rm", "--id", "g"],
         &["grant", "set", "--id", "g", "--scope", "s"],
         &["grant", "role", "g", "--role", "r"],
@@ -148,7 +189,10 @@ fn python_equality() {
     assert!(py_eq(&j("1").unwrap(), &j("true").unwrap()));
     assert!(py_eq(&j("2").unwrap(), &j("2.0").unwrap()));
     assert!(!py_eq(&j("\"1\"").unwrap(), &j("1").unwrap()));
-    assert!(py_eq(&j(r#"{"a":1,"b":2}"#).unwrap(), &j(r#"{"b":2,"a":1.0}"#).unwrap()));
+    assert!(py_eq(
+        &j(r#"{"a":1,"b":2}"#).unwrap(),
+        &j(r#"{"b":2,"a":1.0}"#).unwrap()
+    ));
 }
 
 fn shown(s: Shown) -> (String, String, Exit) {
@@ -161,13 +205,18 @@ fn invite_hours_floor_as_python() {
         let raw = format!(r#"{{"delivered":"sent","sentTo":"a","from":"b","ttlSecs":{ttl}}}"#);
         shown(print::read(&Reader::UserInvite, &raw)).0
     };
-    let tail = |h: &str| format!("Invite sent to a from b (the link works once; it expires in {h} hours)\n");
+    let tail = |h: &str| {
+        format!("Invite sent to a from b (the link works once; it expires in {h} hours)\n")
+    };
     assert_eq!(one("7200"), tail("2"));
     assert_eq!(one("3599"), tail("<1"));
     assert_eq!(one("-1"), tail("-1"));
     assert_eq!(one("7200.5"), tail("2.0"));
     assert_eq!(one("true"), tail("<1"));
-    assert_eq!(one("123456789012345678901234567890"), tail("34293552503429355250342935"));
+    assert_eq!(
+        one("123456789012345678901234567890"),
+        tail("34293552503429355250342935")
+    );
     let (_, err, exit) = shown(print::read(
         &Reader::UserInvite,
         r#"{"delivered":"sent","ttlSecs":null}"#,
@@ -184,7 +233,10 @@ fn slices_and_held() {
         &Reader::UserShow,
         r#"{"username":"b","app":"a","imageHash":"0123456789abcdef"}"#,
     ));
-    assert!(out.contains("  picture       yes (0123456789ab\u{2026})\n"), "{out}");
+    assert!(
+        out.contains("  picture       yes (0123456789ab\u{2026})\n"),
+        "{out}"
+    );
     let (_, err, exit) = shown(print::read(
         &Reader::UserShow,
         r#"{"username":"b","app":"a","imageHash":{"x":1}}"#,
@@ -192,7 +244,9 @@ fn slices_and_held() {
     assert_eq!(exit, Exit::Error);
     assert!(err.ends_with("KeyError: slice(None, 12, None)\n"), "{err}");
     assert_eq!(
-        shown(print::held(r#"{"status":"held","request":{"id":"r1"},"hint":"h"}"#)),
+        shown(print::held(
+            r#"{"status":"held","request":{"id":"r1"},"hint":"h"}"#
+        )),
         (
             "Held for the owner (request r1): \n  h\n".to_string(),
             String::new(),

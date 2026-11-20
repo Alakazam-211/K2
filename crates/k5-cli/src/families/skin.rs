@@ -45,11 +45,11 @@
 pub mod print;
 
 use super::skin_token::{self, py};
-use super::{curl_port, Shown};
+use super::curl_port;
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
-use crate::out::json::Value;
 use crate::out;
+use crate::out::json::Value;
 use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
@@ -598,7 +598,10 @@ fn user_invite(rest: &[&str]) -> Result<Ask, Stop> {
     ]);
     Ok(Ask::Plain(Plain {
         json,
-        ..plain(Req::Post("/cli/skin/users/invite", body), Reader::UserInvite)
+        ..plain(
+            Req::Post("/cli/skin/users/invite", body),
+            Reader::UserInvite,
+        )
     }))
 }
 
@@ -775,9 +778,7 @@ fn user_agent(rest: &[&str]) -> Result<Ask, Stop> {
         match a {
             "--clear" | "--no-agent" => clear = true,
             "--workspace" => workspace = w.soft(),
-            _ if a.starts_with("--workspace=") => {
-                workspace = a["--workspace=".len()..].to_string()
-            }
+            _ if a.starts_with("--workspace=") => workspace = a["--workspace=".len()..].to_string(),
             "--help" | "-h" => return Err(Stop::err(&[HELP], Exit::Ok)),
             f if f.starts_with('-') => return Err(Stop::unknown_flag(f, Exit::Error)),
             _ => {
@@ -789,8 +790,7 @@ fn user_agent(rest: &[&str]) -> Result<Ask, Stop> {
             }
         }
     }
-    if username.is_empty() || (clear && !workspace.is_empty()) || (!clear && workspace.is_empty())
-    {
+    if username.is_empty() || (clear && !workspace.is_empty()) || (!clear && workspace.is_empty()) {
         return Err(Stop::err(&[HELP], Exit::Error));
     }
     let mut b = vec![("username", s(&username))];
@@ -810,7 +810,11 @@ fn user_remove(rest: &[&str]) -> Result<Ask, Stop> {
     let username = rest.first().copied().unwrap_or("");
     if username.is_empty() {
         return Err(Stop::err(
-            &[concat!("Usage: ", cli_name!(), " app user remove <username>")],
+            &[concat!(
+                "Usage: ",
+                cli_name!(),
+                " app user remove <username>"
+            )],
             Exit::Error,
         ));
     }
@@ -1096,10 +1100,7 @@ fn role_paths(rest: &[&str]) -> Result<Ask, Stop> {
                 } else if handle.is_empty() {
                     handle = a.to_string();
                 } else {
-                    return Err(Stop::line(
-                        format!("Unexpected argument: {a}"),
-                        Exit::Error,
-                    ));
+                    return Err(Stop::line(format!("Unexpected argument: {a}"), Exit::Error));
                 }
             }
         }
@@ -1293,7 +1294,7 @@ fn grant(words: &[&str]) -> Result<Ask, Stop> {
 
 /// `"$(printf %s "$kind" | tr "[:upper:]" "[:lower:]")" == "chat"`.
 fn is_chat(kind: &str) -> bool {
-    kind.to_ascii_lowercase() == "chat"
+    kind.eq_ignore_ascii_case("chat")
 }
 
 fn grant_add(rest: &[&str]) -> Result<Ask, Stop> {
@@ -1336,15 +1337,8 @@ fn grant_add(rest: &[&str]) -> Result<Ask, Stop> {
                 if inline.is_none() {
                     match a {
                         "--help" | "-h" => return Err(Stop::err(&HELP, Exit::Ok)),
-                        f if f.starts_with('-') => {
-                            return Err(Stop::unknown_flag(f, Exit::Error))
-                        }
-                        _ => {
-                            return Err(Stop::line(
-                                format!("Unknown argument: {a}"),
-                                Exit::Error,
-                            ))
-                        }
+                        f if f.starts_with('-') => return Err(Stop::unknown_flag(f, Exit::Error)),
+                        _ => return Err(Stop::line(format!("Unknown argument: {a}"), Exit::Error)),
                     }
                 }
                 return Err(Stop::unknown_flag(a, Exit::Error));
@@ -1628,10 +1622,7 @@ fn hydra(rest: &[&str]) -> Result<Ask, Stop> {
     }
     let req = match action {
         "" => Req::Get("/cli/skin/hydra", vec![]),
-        "on" => Req::Post(
-            "/cli/skin/hydra",
-            r#"{"enabled":true,"apply":true}"#.into(),
-        ),
+        "on" => Req::Post("/cli/skin/hydra", r#"{"enabled":true,"apply":true}"#.into()),
         _ => Req::Post(
             "/cli/skin/hydra",
             r#"{"enabled":false,"apply":true}"#.into(),
@@ -1652,8 +1643,23 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// The `grant` words `cmd_app` hands to `cmd_skin` (`grant|grants)` in
 /// `cmd_app`); any other third word is an App's own owner grant.
 const APP_GRANT_WORDS: [&str; 17] = [
-    "", "list", "add", "create", "rm", "remove", "delete", "revoke", "set", "update", "role",
-    "hooks", "hook", "copy-host", "copyhost", "-h", "--help",
+    "",
+    "list",
+    "add",
+    "create",
+    "rm",
+    "remove",
+    "delete",
+    "revoke",
+    "set",
+    "update",
+    "role",
+    "hooks",
+    "hook",
+    "copy-host",
+    "copyhost",
+    "-h",
+    "--help",
 ];
 
 /// `k5 app user|role|grant|front-door|hydra ...`: `cmd_app` hands these
@@ -1706,9 +1712,7 @@ fn run_as(args: &[OsString], teach: bool) -> Option<Exit> {
         let would_refuse = passport::current(args).would_refuse();
         let mut s = settings.clone();
         s.port = s.port_text.as_deref().and_then(curl_port);
-        if s.client(would_refuse)
-            .is_ok_and(|c| c.passport().is_some())
-        {
+        if s.client(would_refuse).is_ok_and(|c| c.passport().is_some()) {
             return None;
         }
     }
@@ -1758,7 +1762,11 @@ fn run_with(
         }
         Ask::UserList => user_list(&mut client, &mut closing),
         Ask::FrontDoorSet { body, json } => {
-            match send(&mut client, &mut closing, &Req::Post("/cli/skin/front-door", body)) {
+            match send(
+                &mut client,
+                &mut closing,
+                &Req::Post("/cli/skin/front-door", body),
+            ) {
                 Err(exit) => exit,
                 Ok(raw) if json => {
                     if let Err(exit) = raw_line(&raw) {
@@ -1774,7 +1782,7 @@ fn run_with(
     finish(&mut client, closing, exit)
 }
 
-fn finish(client: &mut Client, mut closing: Closing, exit: Exit) -> Exit {
+fn finish(client: &mut Client, closing: Closing, exit: Exit) -> Exit {
     closing.flush(client, exit);
     exit
 }

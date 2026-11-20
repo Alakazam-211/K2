@@ -61,18 +61,16 @@ pub const DEAD_PASSPORT: &str =
 
 /// `_cli_require_session_passport <tool>`: an `id` tool in a session
 /// with `HOOK_SOCK` set and no passport. Exit 3.
-pub fn require_passport_lines(tool: &str) -> [String; 4] {
+pub fn require_passport_lines(tool: &str) -> [String; 3] {
     [
         format!("Error: tool '{tool}' requires session ID (passport)."),
         concat!(
-            "Run from a ",
+            "Run it from a ",
             k2_client::product_name!(),
-            " agent session that carries session identity, or ask the owner"
+            " agent session that carries its passport."
         )
         .to_string(),
-        "to set this tool to Open in Settings \u{2192} CLI Tools (if the platform allows)."
-            .to_string(),
-        "Locked production tools cannot be set Open.".to_string(),
+        "No setting turns this off; locked production tools always need one.".to_string(),
     ]
 }
 
@@ -490,6 +488,7 @@ mod tests {
             project: "/p".into(),
             auth,
             owner_from_disk: false,
+            session: false,
             secrets_dir: None,
             home: "/h".into(),
         }

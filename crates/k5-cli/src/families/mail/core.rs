@@ -230,6 +230,9 @@ pub enum Plan {
     Run(Env),
     /// A help page (`cli/text/help/<page>.txt`), exit 0; nothing sent.
     Help(&'static str),
+    /// A help page, then exit 2 (`hostmail list` with no words); nothing
+    /// sent.
+    HelpUsage(&'static str),
     /// `_mail_err "usage" <hint>`, exit 2; nothing sent.
     Usage(String),
     /// The shell's.
@@ -1751,10 +1754,11 @@ fn run_with(
     if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, super::TOOL) {
         return stop;
     }
-    let env = match plan {
-        Plan::Help(page) => {
+    let env = match &plan {
+        Plan::Help(page) | Plan::HelpUsage(page) => {
             let text = crate::text::help(page).unwrap_or_default();
             return match out::stdout(text) {
+                Ok(()) if matches!(plan, Plan::HelpUsage(_)) => Exit::Usage,
                 Ok(()) => Exit::Ok,
                 Err(e) => out::after_stdout_error(&e),
             };
@@ -1764,7 +1768,7 @@ fn run_with(
             return Exit::Usage;
         }
         Plan::Shell => unreachable!("handed to the shell in run"),
-        Plan::Run(env) => env,
+        Plan::Run(env) => env.clone(),
     };
     let port_text = settings.port_text.clone().unwrap_or_default();
     let client = match settings.client(would_refuse) {

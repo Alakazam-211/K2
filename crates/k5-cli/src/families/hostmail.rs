@@ -22,6 +22,7 @@ pub mod cert;
 pub mod dns;
 pub mod forward;
 pub mod groups;
+pub mod lists;
 pub mod mailbox;
 pub mod notices;
 pub mod pyx;
@@ -61,6 +62,12 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["allowlist"]),
     native(&["group"]),
     native(&["calendar"]),
+    native(&["list"]),
+    native(&["spam"]),
+    native(&["queue"]),
+    native(&["acl"]),
+    native(&["autoconfig"]),
+    native(&["audit-sieve"]),
 ];
 
 /// A verb row the binary answers.
@@ -94,6 +101,7 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
         v if dns::VERBS.contains(&v) => dns::parse(v, words),
         v if bans::VERBS.contains(&v) => bans::parse(v, words),
         v if groups::VERBS.contains(&v) => groups::parse(v, words),
+        v if lists::VERBS.contains(&v) => lists::parse(v, words),
         _ => Plan::Shell,
     }
 }
@@ -108,6 +116,7 @@ pub fn branch(py_: &mut core::Py, verb: &str) -> Option<core::R<()>> {
         .or_else(|| dns::exec(py_, verb))
         .or_else(|| bans::exec(py_, verb))
         .or_else(|| groups::exec(py_, verb))
+        .or_else(|| lists::exec(py_, verb))
 }
 
 /// `v="$(cat)"` for a secret flag (`--pass-stdin`, `--relay-pass-stdin`):

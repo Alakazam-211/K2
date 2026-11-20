@@ -2258,6 +2258,60 @@ fn the_hostmail_groups_lines_are_the_shell_s() {
 }
 
 
+/// The lines of `_mail_py` lists raises at.
+#[test]
+fn the_hostmail_lists_lines_are_the_shell_s() {
+    use crate::families::hostmail::lists::line;
+    let s = mail_py_script();
+    let pins: &[(u32, &str)] = &[
+        (line::LIST_CREATE_CALL, "d = call(\"POST\", \"/cli/mail/list\", body=body"),
+        (line::LIST_CREATE_JOIN, "\",\".join(d.get(\"members\") or [])))"),
+        (line::LIST_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/list\", params={\"a"),
+        (line::LIST_SHOW_JOIN, "d.get(\"address\") or env(\"M_ADDRESS\"), \",\".jo"),
+        (line::LIST_MEMBERS_CALL, "d = call(\"POST\", \"/cli/mail/list/members\", b"),
+        (line::LIST_MEMBERS_JOIN, "d.get(\"address\") or env(\"M_ADDRESS\"), \",\".jo"),
+        (line::LIST_DELETE_CALL, "d = call(\"POST\", \"/cli/mail/list/delete\", bo"),
+        (line::TRAIN_CALL, "d = call(\"POST\", \"/cli/mail/spam/train\", bod"),
+        (line::SENDER_CALL, "d = call(\"POST\", route, body={\"sender\": env("),
+        (line::QUAR_LIST_CALL, "d = call(\"GET\", \"/cli/mail/spam/quarantine\","),
+        (line::QUAR_LIST_FOR, "for m in rows:"),
+        (line::QUAR_LIST_ROW, "print(\"%s  %s\" % (m.get(\"id\") or \"?\", m.get("),
+        (line::QUAR_ID_CALL, "d = call(\"POST\", route, body={\"address\": env"),
+        (line::QUEUE_LIST_CALL, "d = call(\"GET\", \"/cli/mail/queue\")"),
+        (line::QUEUE_LIST_FOR, "for m in rows:"),
+        (line::QUEUE_LIST_ROW, "print(\"%s  retry=%s  from=%s\" % (m.get(\"id\")"),
+        (line::QUEUE_RETRY_CALL, "d = call(\"POST\", \"/cli/mail/queue/retry\", bo"),
+        (line::QUEUE_DROP_CALL, "d = call(\"POST\", \"/cli/mail/queue/drop\", bod"),
+        (line::ACL_GRANT_CALL, "d = call(\"POST\", \"/cli/mail/acl\", body=body)"),
+        (line::ACL_REVOKE_CALL, "d = call(\"POST\", \"/cli/mail/acl/revoke\", bod"),
+        (line::ACL_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/acl\", params={\"ma"),
+        (line::AUTO_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/autoconfig\", para"),
+        (line::AUTO_SHOW_FOR, "for rec in d.get(\"records\") or []:"),
+        (line::AUTO_SHOW_ROW, "print(\"%s  %s  %s\" % (rec.get(\"type\") or \"?\""),
+        (line::AUTO_APPLY_CALL, "d = call(\"POST\", \"/cli/mail/autoconfig\", bod"),
+        (line::AUTO_APPLY_FOR, "for rec in d.get(\"records\") or []:"),
+        (line::AUTO_APPLY_ROW, "print(\"%s  %s  %s\" % (rec.get(\"type\") or \"?\""),
+        (line::AUDIT_CALL, "d = call(\"GET\", \"/cli/mail/sieve-audit\", tim"),
+        (line::AUDIT_ENOTIFY, "enotify = \"off\" if en.get(\"disabled\") is Tru"),
+        (line::AUDIT_SCANNED, "print(\"accounts scanned : %s (%s skipped: ad"),
+        (line::AUDIT_ACCOUNTS, "for a in d.get(\"accounts\") or []:"),
+        (line::AUDIT_WHO, "who = a.get(\"address\") or (\"%s (not a K2 mai"),
+        (line::AUDIT_FLAGS, "if a.get(\"k2Minted\") and not a.get(\"sieveLoc"),
+        (line::AUDIT_REDIRECTS, "for r in a.get(\"k2RedirectsNoRow\") or []:"),
+        (line::AUDIT_REDIRECT, "print(\"  %-24s %-8s redirect → %s%s, no acti"),
+        (line::AUDIT_SCRIPTS, "for sc in a.get(\"scripts\") or []:"),
+        (line::AUDIT_TARGETS, "tg = \", \".join(\"%s → %s%s\" % (t.get(\"action\""),
+        (line::AUDIT_TARGETS_OF, "for t in sc.get(\"targets\") or []) or \"no for"),
+        (line::AUDIT_SCRIPT, "print(\"  %-24s %-8s %-24s %s\" % ('\"%s\"' % sc"),
+        (line::AUDIT_NONE, "if not d.get(\"accounts\"):"),
+    ];
+    for (n, text) in pins {
+        let got = s[*n as usize - 1].trim();
+        assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
+    }
+}
+
+
 #[test]
 fn the_boot_script_runs_the_mail_script_at_its_line_13() {
     let path =
@@ -2540,6 +2594,16 @@ mod hostmail_words {
             ("calendar", &["status", "x"]),
             ("calendar", &["create", "a", "--with"]),
             ("calendar", &["sharing", "x"]),
+            ("list", &["x"]),
+            ("list", &["create"]),
+            ("list", &["members", "add", "l"]),
+            ("spam", &["x"]),
+            ("spam", &["ham"]),
+            ("spam", &["quarantine", "list"]),
+            ("queue", &["list", "x"]),
+            ("acl", &["grant"]),
+            ("autoconfig", &["show"]),
+            ("audit-sieve", &["x"]),
         ] {
             let h = match parse(verb, words) {
                 Plan::Usage(h) => h,

@@ -111,9 +111,10 @@ fn status(words: &[&str]) -> Result<Plan, Plan> {
             extra: &bad,
         },
     )?;
-    Ok(Plan::Run(
-        run_env("status", g.json).with("M_HEALTH", if g.on("health") { "true" } else { "false" }),
-    ))
+    Ok(Plan::Run(run_env("status", g.json).with(
+        "M_HEALTH",
+        if g.on("health") { "true" } else { "false" },
+    )))
 }
 
 /// `cmd_mail_domain`.
@@ -276,10 +277,34 @@ const CONFIG_VALUES: &[(&str, &str, &str, bool, Option<&str>)] = &[
         true,
         None,
     ),
-    ("--domain", "M_DOMAIN", "--domain requires a value", true, None),
-    ("--relay-host", "M_RELAY_HOST", "--relay-host requires a value", true, None),
-    ("--relay-port", "M_RELAY_PORT", "--relay-port requires a port number", true, None),
-    ("--relay-user", "M_RELAY_USER", "--relay-user requires a value", true, None),
+    (
+        "--domain",
+        "M_DOMAIN",
+        "--domain requires a value",
+        true,
+        None,
+    ),
+    (
+        "--relay-host",
+        "M_RELAY_HOST",
+        "--relay-host requires a value",
+        true,
+        None,
+    ),
+    (
+        "--relay-port",
+        "M_RELAY_PORT",
+        "--relay-port requires a port number",
+        true,
+        None,
+    ),
+    (
+        "--relay-user",
+        "M_RELAY_USER",
+        "--relay-user requires a value",
+        true,
+        None,
+    ),
     (
         "--agent-send",
         "M_AGENT_SEND",
@@ -413,10 +438,12 @@ fn config(words: &[&str]) -> Result<Plan, Plan> {
         )));
     }
     let port = get(&vals, "M_RELAY_PORT");
-    if !port.is_empty() && (!is_uint(&port) || {
-        let n = crate::families::mail::core::bash_num(&port);
-        !(1..=65535).contains(&n)
-    }) {
+    if !port.is_empty()
+        && (!is_uint(&port) || {
+            let n = crate::families::mail::core::bash_num(&port);
+            !(1..=65535).contains(&n)
+        })
+    {
         return Err(usage("--relay-port must be a port number (1-65535)"));
     }
     let cap = get(&vals, "M_ADDRESS_CAP");
@@ -433,7 +460,11 @@ fn config(words: &[&str]) -> Result<Plan, Plan> {
     if !qb.is_empty() && !qg.is_empty() {
         return Err(usage("give either --quota-bytes or --quota-gb, not both"));
     }
-    for (v, flag) in [(&qb, "--quota-bytes"), (&qg, "--quota-gb"), (&qm, "--quota-messages")] {
+    for (v, flag) in [
+        (&qb, "--quota-bytes"),
+        (&qg, "--quota-gb"),
+        (&qm, "--quota-messages"),
+    ] {
         if !v.is_empty() && !is_uint(v) {
             return Err(usage(format!(
                 "{flag} must be a non-negative number (0 = unlimited)"
@@ -557,7 +588,11 @@ fn endpoint(py_: &mut Py, d: &Value, label: &str, key: &str, port: u32, from: u3
         &port.to_string(),
     );
     let alpn = p::attr_get(&ep, "alpn").map_err(|e| fr(e, h + 2))?;
-    let extra = if p::truthy(alpn.as_ref()) { "  alpn" } else { "" };
+    let extra = if p::truthy(alpn.as_ref()) {
+        "  alpn"
+    } else {
+        ""
+    };
     py_.print(&format!("{label} : {host}:{port}{extra}"));
     Ok(())
 }
@@ -600,7 +635,9 @@ fn create_py(py_: &mut Py) -> R<()> {
             py::str_of(&pw)
         ));
     } else if p::truthy(g(&d, "passwordWithheld", l + 8)?.as_ref()) {
-        let fallback = format!("agents send with `{CLI_NAME} mail send`; only the owner can set an IMAP/SMTP password");
+        let fallback = format!(
+            "agents send with `{CLI_NAME} mail send`; only the owner can set an IMAP/SMTP password"
+        );
         py_.print(&format!(
             "password : withheld — {}",
             or_s(g(&d, "passwordHint", l + 9)?, &fallback)
@@ -612,7 +649,14 @@ fn create_py(py_: &mut Py) -> R<()> {
     };
     py_.print(&format!("username : {user}"));
     endpoint(py_, &d, "imap    ", "imap", 443, line::CREATE_EP_IMAP)?;
-    endpoint(py_, &d, "submit  ", "submission", 465, line::CREATE_EP_SUBMIT)?;
+    endpoint(
+        py_,
+        &d,
+        "submit  ",
+        "submission",
+        465,
+        line::CREATE_EP_SUBMIT,
+    )?;
     endpoint(py_, &d, "jmap    ", "jmap", 443, line::CREATE_EP_JMAP)
 }
 
@@ -671,11 +715,14 @@ fn put(d: &mut Value, key: &str, v: Value) {
 /// `v[0]`, raised at `l`.
 fn first(v: &Value, l: u32) -> R<Value> {
     match v {
-        Value::Array(a) => a
-            .first()
-            .cloned()
-            .ok_or_else(|| crate::families::mail::core::raise_at(l, "IndexError: list index out of range")),
-        Value::Str(_) => Ok(p::iter(v).at(l, MODULE)?.into_iter().next().unwrap_or(Value::Null)),
+        Value::Array(a) => a.first().cloned().ok_or_else(|| {
+            crate::families::mail::core::raise_at(l, "IndexError: list index out of range")
+        }),
+        Value::Str(_) => Ok(p::iter(v)
+            .at(l, MODULE)?
+            .into_iter()
+            .next()
+            .unwrap_or(Value::Null)),
         Value::Object(_) => Err(crate::families::mail::core::raise_at(l, "KeyError: 0")),
         other => Err(crate::families::mail::core::raise_at(
             l,
@@ -701,7 +748,13 @@ fn status_py(py_: &mut Py) -> R<()> {
         params.push(("health".to_string(), "1".to_string()));
     }
     let d = py_
-        .request(Method::Get, "/cli/mail/status", &params, None, Secs::Int(30))
+        .request(
+            Method::Get,
+            "/cli/mail/status",
+            &params,
+            None,
+            Secs::Int(30),
+        )
         .within(line::STATUS_REQUEST, MODULE)?;
     let mut d = requested(py_, d, line::STATUS_ERROR)?;
     if !p::truthy(g(&d, "ok", line::STATUS_ERROR + 2)?.as_ref()) && !has(&d, "state") {
@@ -717,7 +770,11 @@ fn status_py(py_: &mut Py) -> R<()> {
     let state = g(&d, "state", 879)?;
     if py_.json {
         py_.print_json(&d);
-    } else if !supported || state.as_ref().is_some_and(|v| p::eq_str(v, "not-installed")) {
+    } else if !supported
+        || state
+            .as_ref()
+            .is_some_and(|v| p::eq_str(v, "not-installed"))
+    {
         if !supported {
             py_.print(&format!("server   : not available here — hosted mail runs on Linux {PRODUCT_NAME} servers. For linked inboxes use `{CLI_NAME} mail inboxes`."));
         } else {
@@ -841,7 +898,10 @@ fn status_lines(py_: &mut Py, d: &Value) -> R<()> {
         if !extra.is_empty() {
             let mut here = Vec::new();
             for e in &extra {
-                if matches!(g(e, "pointsHere", line::STATUS_HERE)?, Some(Value::Bool(true))) {
+                if matches!(
+                    g(e, "pointsHere", line::STATUS_HERE)?,
+                    Some(Value::Bool(true))
+                ) {
                     here.push(e.clone());
                 }
             }
@@ -1196,7 +1256,11 @@ fn forward_copies_py(py_: &mut Py, daily: bool) -> R<()> {
     } else {
         "/cli/mail/config/forward-copies-per-hour"
     };
-    let d = py_.post(route, &obj(vec![(field, Value::Int(n))]), line::FWD_COPIES_CALL)?;
+    let d = py_.post(
+        route,
+        &obj(vec![(field, Value::Int(n))]),
+        line::FWD_COPIES_CALL,
+    )?;
     if py_.json {
         py_.print_json(&d);
         return Ok(());
@@ -1232,8 +1296,10 @@ fn config_set_py(py_: &mut Py) -> R<()> {
     ] {
         let v = py_.env(envk).to_string();
         if !v.is_empty() {
-            let val = if matches!(key, "relayPort" | "addressCap" | "quotaBytes" | "quotaMessages")
-            {
+            let val = if matches!(
+                key,
+                "relayPort" | "addressCap" | "quotaBytes" | "quotaMessages"
+            ) {
                 Value::Int(pyx::int(&sv(&v), line::CONFIG_SET_INT)?)
             } else {
                 sv(&v)
@@ -1241,11 +1307,12 @@ fn config_set_py(py_: &mut Py) -> R<()> {
             body.push((key, val));
         }
     }
-    let set = |body: &mut Vec<(&str, Value)>, key: &'static str, v: Value| {
-        match body.iter_mut().find(|(k, _)| *k == key) {
-            Some(slot) => slot.1 = v,
-            None => body.push((key, v)),
-        }
+    let set = |body: &mut Vec<(&str, Value)>, key: &'static str, v: Value| match body
+        .iter_mut()
+        .find(|(k, _)| *k == key)
+    {
+        Some(slot) => slot.1 = v,
+        None => body.push((key, v)),
     };
     if !py_.env("M_QUOTA_GB").is_empty() {
         let n = pyx::int(&pyx::env_v(py_, "M_QUOTA_GB"), line::CONFIG_SET_GB)?;

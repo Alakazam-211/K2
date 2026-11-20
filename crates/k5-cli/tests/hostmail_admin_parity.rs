@@ -72,7 +72,10 @@ fn hostmail_admin_verbs_take_the_words_as_the_shell_does() {
         usage_case("domain show, two", &["domain", "show", "a", "b"]),
         usage_case("domain list, a domain", &["domain", "list", "acme.example"]),
         usage_case("domain check, --yes", &["domain", "check", "a", "--yes"]),
-        usage_case("domain remove, an unknown flag", &["domain", "remove", "a", "--force"]),
+        usage_case(
+            "domain remove, an unknown flag",
+            &["domain", "remove", "a", "--force"],
+        ),
         usage_case("create, nothing", &["create", "--person"]),
         usage_case("create, two", &["create", "a", "b"]),
         usage_case("create, --id with no value", &["create", "a", "--id"]),
@@ -82,26 +85,65 @@ fn hostmail_admin_verbs_take_the_words_as_the_shell_does() {
         usage_case("doctor, two", &["doctor", "a", "b"]),
         usage_case("doctor, a flag", &["doctor", "--fix"]),
         usage_case("config, an unknown argument", &["config", "show"]),
-        usage_case("config, a send mode it doesn't know", &["config", "--send-mode", "smtp"]),
-        usage_case("config, an agent-send it doesn't know", &["config", "--agent-send", "maybe"]),
-        usage_case("config, a relay port out of range", &["config", "--relay-port", "70000"]),
-        usage_case("config, a relay port zero", &["config", "--relay-port", "0"]),
-        usage_case("config, a relay port not a number", &["config", "--relay-port", "smtp"]),
-        usage_case("config, an address cap not a number", &["config", "--address-cap", "-1"]),
-        usage_case("config, bytes and gb", &["config", "--quota-bytes", "1", "--quota-gb", "1"]),
+        usage_case(
+            "config, a send mode it doesn't know",
+            &["config", "--send-mode", "smtp"],
+        ),
+        usage_case(
+            "config, an agent-send it doesn't know",
+            &["config", "--agent-send", "maybe"],
+        ),
+        usage_case(
+            "config, a relay port out of range",
+            &["config", "--relay-port", "70000"],
+        ),
+        usage_case(
+            "config, a relay port zero",
+            &["config", "--relay-port", "0"],
+        ),
+        usage_case(
+            "config, a relay port not a number",
+            &["config", "--relay-port", "smtp"],
+        ),
+        usage_case(
+            "config, an address cap not a number",
+            &["config", "--address-cap", "-1"],
+        ),
+        usage_case(
+            "config, bytes and gb",
+            &["config", "--quota-bytes", "1", "--quota-gb", "1"],
+        ),
         usage_case("config, gb not a number", &["config", "--quota-gb", "1.5"]),
-        usage_case("config, always-bcc with no workspace", &["config", "--always-bcc", "a@x"]),
-        usage_case("config, copies a day not a number", &["config", "--forward-copies-per-day", "x"]),
+        usage_case(
+            "config, always-bcc with no workspace",
+            &["config", "--always-bcc", "a@x"],
+        ),
+        usage_case(
+            "config, copies a day not a number",
+            &["config", "--forward-copies-per-day", "x"],
+        ),
         usage_case(
             "config, copies a day and an hour",
-            &["config", "--forward-copies-per-day", "5", "--forward-copies-per-hour", "1"],
+            &[
+                "config",
+                "--forward-copies-per-day",
+                "5",
+                "--forward-copies-per-hour",
+                "1",
+            ],
         ),
         usage_case(
             "config, new per day with a setting",
             &["config", "--forward-new-per-day", "5", "--domain", "a"],
         ),
         usage_case("config, a value missing", &["config", "--relay-host"]),
-        piped(b"", usage_case("config, no relay password piped", &["config", "--relay-pass-stdin"])),
+        piped(
+            b"",
+            usage_case(
+                "config, no relay password piped",
+                &["config", "--relay-pass-stdin"],
+            ),
+        ),
     ];
     for c in &v {
         rig.check(c);

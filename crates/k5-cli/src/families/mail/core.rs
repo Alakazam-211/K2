@@ -1764,7 +1764,7 @@ fn run_with(
             };
         }
         Plan::Usage(hint) => {
-            out::stderr_line(&err_line("usage", &hint));
+            out::stderr_line(&err_line("usage", hint));
             return Exit::Usage;
         }
         Plan::Shell => unreachable!("handed to the shell in run"),

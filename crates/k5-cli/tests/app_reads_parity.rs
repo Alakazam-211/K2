@@ -403,3 +403,78 @@ fn inspect_answers_as_the_shell_does() {
         rig.check(&c);
     }
 }
+
+/// `app` alone and `app --json`: the App page on stderr through the
+/// permission cards' filter, exit 1. No passport: off, nothing asked. A
+/// passport: the shell's probe, over TCP or on the cell socket, on or
+/// off. In a session with no passport: the id tool's refusal first.
+#[test]
+fn the_app_page_through_the_card_filter() {
+    let rig = Rig::new(VERB, "page");
+    let tcp = || with_passport(&[]);
+    let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
+    let v = vec![
+        // covers: app
+        case("no passport: off, nothing asked", &[], &[], vec![], owner_and_port, 1, 0),
+        // covers: app --json
+        case("--json: the same page", &["--json"], &[], vec![], owner_and_port, 1, 0),
+        // covers: app
+        Case {
+            env: tcp(),
+            ..case(
+                "a passport, cards on (TCP)",
+                &[],
+                &[],
+                vec![ok(common::cards::ON)],
+                nothing,
+                1,
+                1,
+            )
+        },
+        // covers: app
+        Case {
+            env: tcp(),
+            ..case(
+                "a passport, cards off (TCP)",
+                &[],
+                &[],
+                vec![ok(common::cards::OFF)],
+                nothing,
+                1,
+                1,
+            )
+        },
+        // covers: app --json
+        Case {
+            env: cell(),
+            ..case(
+                "a passport, cards on (the cell socket)",
+                &["--json"],
+                &[],
+                vec![ok(common::cards::ON)],
+                nothing,
+                1,
+                1,
+            )
+        },
+        // covers: app
+        Case {
+            env: vec![
+                ("K2_PORT", PORT.to_string()),
+                ("K2_HOOK_SOCK", "{sock}".to_string()),
+            ],
+            ..case(
+                "a session with no passport: refused",
+                &[],
+                &[],
+                vec![],
+                owner_only,
+                3,
+                0,
+            )
+        },
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

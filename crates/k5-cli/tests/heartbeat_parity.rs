@@ -1801,13 +1801,18 @@ fn heartbeat_wake_answers_as_the_shell_does() {
             2,
         ),
         case(
-            "a session's cwd that is null",
+            "a session's cwd that is a list holding the manager's folder",
             &["wake"],
             &[],
-            vec![ok(WORK), ok("[]"), ok(r#"[{"cwd":null,"terminalId":"t"}]"#)],
+            vec![
+                ok(WORK),
+                ok("[]"),
+                ok(r#"[{"cwd":[".k2/agents/manager"],"terminalId":"t-1"}]"#),
+                ok("{}"),
+            ],
             owner_and_port,
-            1,
-            3,
+            0,
+            4,
         ),
         case(
             "a terminal id that is a number",

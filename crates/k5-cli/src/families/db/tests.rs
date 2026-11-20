@@ -251,15 +251,11 @@ fn the_words_come_to_the_shell_s_forms() {
     );
     assert_eq!(hint(&["status", "--x"]), "unexpected '--x'");
     assert_eq!(form(&["create", "--id"]), Form::Shift);
-    assert_eq!(form(&["create", "--cluster", "c"]), Form::Shell);
-    assert_eq!(form(&["create", "--cluster=c", "--json"]), Form::Shell);
     assert_eq!(
         hint(&["create", "--cluster", "c", "--bad"]),
         "unexpected '--bad'"
     );
-    for v in ["run", "upgrade", "cluster", "versions-access"] {
-        assert_eq!(form(&[v, "x"]), Form::Shell, "{v}");
-    }
+    assert_eq!(form(&["run", "x"]), Form::Shell);
     assert_eq!(
         hint(&["create", "--major", "9"]),
         "--major takes a Postgres major, e.g. 16 or 17"
@@ -407,4 +403,75 @@ fn a_python_eq_is_python_s() {
     assert!(!py::eq(&v("\"1\""), &v("1")));
     assert!(py::eq(&v(r#"{"a":1,"b":2}"#), &v(r#"{"b":2,"a":1}"#)));
     assert!(!py::eq(&v("null"), &v("0")));
+}
+
+fn cp_ask(words: &[&str]) -> cp::Ask {
+    match form(words) {
+        Form::Cp(a) => *a,
+        other => panic!("{words:?}: not a compute call: {other:?}"),
+    }
+}
+
+#[test]
+fn the_compute_verbs_words_are_the_shell_s() {
+    use cp::{Ask as C, What};
+    match cp_ask(&["create", "--cluster=c", "--json", "--name", "n", "--major", "17"]) {
+        C::Named(k) => {
+            assert_eq!((k.what, k.json), (What::CreateDb, true));
+            assert_eq!((k.cluster.as_str(), k.name.as_str(), k.major.as_str()), ("c", "n", "17"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        hint(&["create", "--cluster", "c", "--test"]),
+        concat!(
+            cli_name!(),
+            " db create --cluster takes --name, --id and --major only (no --test, no --db-access)"
+        )
+    );
+    assert_eq!(
+        hint(&["create", "--cluster", "c", "--major", "9"]),
+        "--major takes a Postgres major, e.g. 16 or 17"
+    );
+    assert_eq!(
+        cp_ask(&["versions-access", "on", "--json"]),
+        C::VersionsAccess { on: true, json: true }
+    );
+    // The action is the first word, whatever it is.
+    assert_eq!(
+        hint(&["versions-access", "--json", "on"]),
+        concat!(cli_name!(), " db versions-access on|off [--workspace WS] [--json]")
+    );
+    assert_eq!(
+        hint(&["cluster", "create", "17", "--name", "n", "--port", "5450"]),
+        "--port takes a port in 5433-5449"
+    );
+    assert_eq!(form(&["cluster", "create", "17", "--name"]), Form::Shift);
+    assert_eq!(
+        hint(&["cluster", "create", "17", "--x"]),
+        concat!(
+            "unexpected '--x' — ",
+            cli_name!(),
+            " db cluster create <major> --name <name> [--port <port>] [--wal-archive]"
+        )
+    );
+    assert_eq!(
+        hint(&["cluster", "restart"]),
+        concat!(cli_name!(), " db cluster restart <name>")
+    );
+    match cp_ask(&["cluster", "restart", "--json"]) {
+        C::Named(k) => assert_eq!((k.name.as_str(), k.json), ("--json", false)),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(hint(&["upgrade", "a", "b"]), "one database");
+    assert_eq!(hint(&["upgrade", "--to", "9"]), "--to takes a Postgres major, e.g. 17");
+    assert_eq!(
+        hint(&["upgrade", "--status"]),
+        concat!(cli_name!(), " db upgrade <db> --status")
+    );
+    assert_eq!(form(&["upgrade", "d", "--app"]), Form::Shift);
+    match cp_ask(&["upgrade", "d", "--to=17", "--live", "--no-wait"]) {
+        C::Upgrade(u) => assert!(u.live && u.no_wait && u.to == "17" && u.db == "d"),
+        other => panic!("{other:?}"),
+    }
 }

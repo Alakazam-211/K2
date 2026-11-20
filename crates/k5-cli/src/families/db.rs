@@ -20,13 +20,14 @@
 //!    line (`--id` with nothing after it) fails bash's `shift 2` under
 //!    `set -e`: exit 1, nothing printed.
 //! 5. The call: `_db_py` ([`py`]) for most verbs; `cap` and `home` through
-//!    the shell's curl calls and their Python readers ([`home`]).
+//!    the shell's curl calls and their Python readers ([`home`]);
+//!    `versions-access`, `cluster`, `upgrade` and `create --cluster`
+//!    through the shell's compute library, `_compute_send` ([`cp`]).
 //!
 //! The binary hands these to the shell before it prints or sends
 //! anything: `run` (it puts the DSN in a child's environment: K2 rules
-//! first), `versions-access`, `cluster`, `upgrade` and `create --cluster`
-//! (the compute calls, `_compute_send`, not on this line yet), a word
-//! that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a
+//! first), a compute verb with the compute library's own settings in the
+//! environment ([`cp::shells`]), a word that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a
 //! port that is set but is no number, a `python3` the binary can't tell,
 //! and a `--workspace` folder bash's `cd` would treat apart (`CDPATH`
 //! set, or a folder it can't enter).
@@ -44,6 +45,7 @@ use k2_client::cli_name;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+pub mod cp;
 pub mod home;
 pub mod py;
 #[cfg(test)]
@@ -72,6 +74,8 @@ pub enum Form {
     Cap { val: String, json: bool },
     /// A `_db_py` verb.
     Py(Box<Ask>),
+    /// A verb through `_compute_send`.
+    Cp(Box<cp::Ask>),
     /// `_db_err "usage" <hint>`, exit 2.
     Usage(String),
     /// A failed `shift 2` under `set -e`: exit 1, nothing printed.
@@ -272,7 +276,10 @@ fn verb(words: &[&str]) -> Result<Form, Form> {
             }
             Form::Py(Box::new(k))
         }
-        "versions-access" | "upgrade" | "cluster" | "run" => Form::Shell,
+        "run" => Form::Shell,
+        "versions-access" => cp::versions_access(&mut a)?,
+        "cluster" => cp::cluster(&mut a)?,
+        "upgrade" => cp::upgrade(&mut a)?,
         "create" => {
             let mut k = Ask::new(Verb::Create);
             let mut cluster = "";
@@ -303,7 +310,9 @@ fn verb(words: &[&str]) -> Result<Form, Form> {
                 }
             }
             if !cluster.is_empty() {
-                return Ok(Form::Shell);
+                return cp::create_db(
+                    k.json, cluster, &k.name, &k.id, &k.major, k.test, &k.access,
+                );
             }
             if !k.major.is_empty() && !is_major(&k.major) {
                 return Err(usage("--major takes a Postgres major, e.g. 16 or 17"));
@@ -741,7 +750,12 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     let line = parse(&words);
-    let settings = match settings_for(&line.sels, line.form == Form::Shell)? {
+    let shell = match &line.form {
+        Form::Shell => true,
+        Form::Cp(ask) => cp::shells(ask, std::env::vars_os()),
+        _ => false,
+    };
+    let settings = match settings_for(&line.sels, shell)? {
         Ok(s) => s,
         Err(e) => return Some(e),
     };
@@ -832,6 +846,14 @@ fn run_with(args: &[OsString], line: Line, settings: Settings) -> Exit {
         Form::Shell => unreachable!("handed to the shell in run"),
         Form::Home { keep, json } => home::home(&mut client, &mut closing, &keep, json),
         Form::Cap { val, json } => home::cap(&mut client, &mut closing, &project, &val, json),
+        Form::Cp(ask) => cp::run(
+            &mut cp::Cp {
+                client: &mut client,
+                closing: &mut closing,
+            },
+            &project,
+            &ask,
+        ),
         Form::Py(ask) => {
             return run_py(
                 &mut client,

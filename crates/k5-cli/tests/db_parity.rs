@@ -19,8 +19,12 @@
 //! - No answer: nothing listening, closed with nothing, a reset.
 //! - A passport over TCP, the `db` id tool's refusal, the gates.
 //! - One answer above 256 KiB: thousands of databases.
-//! - The shell's: `run`, `upgrade`, `cluster`, `versions-access`,
-//!   `create --cluster`, and `-h` on a verb that changes something.
+//! - The shell's: `run`, and `-h` on a verb that changes something.
+//! - The compute verbs (`_compute_send`): `versions-access`, `cluster
+//!   create` and `restart`, `create --cluster`, `upgrade` (its status,
+//!   check, live, no-wait and watch forms), their refusals, answers the
+//!   readers raise on, no answer, the cell socket, and the environment
+//!   settings that hand them to the shell.
 
 #![cfg(unix)]
 
@@ -944,42 +948,42 @@ fn db_answers_as_the_shell_does() {
             2,
             0,
         )),
-        shell(case(
-            "upgrade goes to the shell",
+        case(
+            "upgrade, a bad --to",
             &["upgrade", "d", "--to", "9"],
             &[],
             vec![],
             owner_and_port,
             2,
             0,
-        )),
-        shell(case(
-            "cluster goes to the shell",
+        ),
+        case(
+            "cluster, no op",
             &["cluster"],
             &[],
             vec![],
             owner_and_port,
             2,
             0,
-        )),
-        shell(case(
-            "versions-access goes to the shell",
+        ),
+        case(
+            "versions-access, a bad action",
             &["versions-access", "maybe"],
             &[],
             vec![],
             owner_and_port,
             2,
             0,
-        )),
-        shell(case(
-            "create --cluster goes to the shell",
+        ),
+        case(
+            "create --cluster --test",
             &["create", "--cluster", "c", "--test"],
             &[],
             vec![],
             owner_and_port,
             2,
             0,
-        )),
+        ),
         // Help never acts.
         shell(case(
             "create -h",
@@ -1047,6 +1051,557 @@ fn db_answers_as_the_shell_does() {
         shell(case(
             "--help first",
             &["--help", "drop", "--yes"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+    ];
+    for c in &cases {
+        rig.check(c);
+    }
+}
+
+const VA_ON: &str = r#"{"ok":true,"agentsCanUpgradePostgres":true,"workspace":"/w/é"}"#;
+
+const NAMED: &str = r#"{"ok":true,"cluster":{"label":"17/fb","port":5434,"unit":"pg@17-fb","state":"online","walSpool":"/var/wal é","name":"fb"}}"#;
+
+const UP_STATUS: &str = r#"{"live":[{"db":"app","from":16,"to":17,"state":"streaming","tables":{"ready":3,"total":4},"lagBytes":5242880,"walStatus":"ok","lastError":"slow é"},
+ {"db":"b","from":15,"to":16,"state":"syncing"}],
+ "moves":[{"kind":"move","from":16,"to":17,"state":"succeeded","step":"done"},{"method":"live","from":15,"to":16,"state":"failed","step":"copy","lastError":"boom"},{},{"x":1}]}"#;
+
+const UP_CHECK: &str = r#"{"check":[{"db":"app","from":16,"to":17,"pauseSecs":[2,5],"lines":[
+ {"level":"ok","id":"ext","text":"extensions fine"},{"level":"refuse","id":"size","text":"too big","hint":"free space é"},{"level":"note","id":"averyverylongid","text":"y"}]},
+ {"db":"b","error":"not found"}]}"#;
+
+fn cell(c: Case) -> Case {
+    Case {
+        env: with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+        ..c
+    }
+}
+
+fn waited(c: Case) -> Case {
+    Case {
+        compare: Compare::Waited,
+        ..c
+    }
+}
+
+#[test]
+fn db_compute_verbs_answer_as_the_shell_does() {
+    let rig = Rig::new(VERB, "cp");
+    let running = || ok(r#"{"moves":[{"step":"copy","state":"running"}]}"#);
+    let cases = vec![
+        // versions-access: over TCP, `_compute_fail` on a refusal.
+        case("versions-access on", &["versions-access", "on"], &[], vec![ok(VA_ON)], owner_and_port, 0, 1),
+        case(
+            "versions-access off --json",
+            &["versions-access", "off", "--json"],
+            &[],
+            vec![ok(r#"{"agentsCanUpgradePostgres":false,"workspace":"w"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "versions-access, the permission note",
+            &["versions-access", "on"],
+            &[],
+            vec![answer(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "versions-access, not found",
+            &["versions-access", "off", "--workspace", "sub"],
+            &[],
+            vec![answer(404, r#"{"error":"not_found","message":"no such"}"#)],
+            with_sub,
+            3,
+            1,
+        ),
+        traceback(case(
+            "versions-access, an answer with no switch",
+            &["versions-access", "on"],
+            &[],
+            vec![ok(r#"{"workspace":"w"}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case(
+            "versions-access, the action is the first word",
+            &["versions-access", "--json", "on"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        Case {
+            env: with_passport(&[]),
+            ..case(
+                "versions-access with a passport",
+                &["versions-access", "on"],
+                &[],
+                vec![ok(VA_ON)],
+                nothing,
+                0,
+                1,
+            )
+        },
+        shell(case(
+            "versions-access with K2_CP_MAX_TIME set",
+            &["versions-access", "on"],
+            &[("K2_CP_MAX_TIME", "30")],
+            vec![ok(VA_ON)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        // Named clusters: `_db_named_post`.
+        // covers: db cluster create
+        case(
+            "cluster create",
+            &["cluster", "create", "17", "--name", "fb", "--port", "5434", "--wal-archive"],
+            &[],
+            vec![ok(NAMED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: db cluster create --json
+        case(
+            "cluster create --json",
+            &["cluster", "create", "17", "--name=fb", "--json"],
+            &[],
+            vec![ok(NAMED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: db cluster restart
+        case(
+            "cluster restart",
+            &["cluster", "restart", "fb"],
+            &[],
+            vec![ok(r#"{"ok":true,"cluster":"17/fb"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: db cluster restart --json
+        case(
+            "cluster restart --json",
+            &["cluster", "restart", "fb", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true,"cluster":"17/fb"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "cluster create, a bad port",
+            &["cluster", "create", "17", "--name", "fb", "--port", "5450"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "cluster create --name at the end",
+            &["cluster", "create", "17", "--name"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "cluster create, refused as usage",
+            &["cluster", "create", "17", "--name", "fb"],
+            &[],
+            vec![answer(400, r#"{"error":{"code":"usage","hint":"bad é"}}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "cluster restart, not found",
+            &["cluster", "restart", "fb"],
+            &[],
+            vec![answer(404, r#"{"error":"no_cluster","hint":"none"}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "cluster restart, the permission note",
+            &["cluster", "restart", "fb"],
+            &[],
+            vec![answer(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "cluster restart, a refusal that is not JSON",
+            &["cluster", "restart", "fb"],
+            &[],
+            vec![answer(500, "oops")],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "cluster restart, an empty refusal",
+            &["cluster", "restart", "fb"],
+            &[],
+            vec![answer(503, "")],
+            owner_and_port,
+            3,
+            1,
+        ),
+        traceback(case(
+            "cluster restart, a refusal that is a list",
+            &["cluster", "restart", "fb"],
+            &[],
+            vec![answer(500, "[1]")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "cluster create, a cluster that is a word",
+            &["cluster", "create", "17", "--name", "fb"],
+            &[],
+            vec![ok(r#"{"cluster":"x"}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case(
+            "cluster restart, closed with nothing",
+            &["cluster", "restart", "fb"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            3,
+            1,
+        ),
+        cell(case(
+            "cluster create on the cell socket",
+            &["cluster", "create", "17", "--name", "fb"],
+            &[],
+            vec![ok(NAMED)],
+            nothing,
+            0,
+            1,
+        )),
+        waited(cell(case(
+            "cluster restart on the cell socket, closed with nothing",
+            &["cluster", "restart", "fb"],
+            &[],
+            vec![Reply::Close],
+            nothing,
+            1,
+            1,
+        ))),
+        case(
+            "create --cluster",
+            &["create", "--cluster", "17/fb", "--name", "app", "--id", "i1"],
+            &[],
+            vec![ok(
+                r#"{"ok":true,"name":"app","cluster":"17/fb","existing":true,"dsn":"postgres://x","dsnHint":"run dsn --reveal"}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "create --cluster --json",
+            &["create", "--cluster=17/fb", "--major", "17", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true,"name":"x"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // upgrade.
+        case(
+            "upgrade --status",
+            &["upgrade", "app é", "--status"],
+            &[],
+            vec![ok(UP_STATUS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade --status --json",
+            &["upgrade", "app", "--status", "--json"],
+            &[],
+            vec![ok(UP_STATUS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade --status, nothing yet",
+            &["upgrade", "app", "--status"],
+            &[],
+            vec![ok("{}")],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade --status, the permission note",
+            &["upgrade", "app", "--status"],
+            &[],
+            vec![answer(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        traceback(case(
+            "upgrade --status, a lag that is a float",
+            &["upgrade", "app", "--status"],
+            &[],
+            vec![ok(r#"{"live":[{"db":"a","from":1,"to":2,"state":"x","lagBytes":1.5}]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case(
+            "upgrade --status, nothing listening",
+            &["upgrade", "app", "--status"],
+            &[("K2_PORT", &dead_port())],
+            vec![],
+            owner_only,
+            3,
+            0,
+        ),
+        // covers: db upgrade
+        case(
+            "upgrade --check, refused lines",
+            &["upgrade", "app", "--to", "17", "--check"],
+            &[],
+            vec![ok(UP_CHECK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        // covers: db upgrade --json
+        case(
+            "upgrade --check --json",
+            &["upgrade", "app", "--to=17", "--check", "--json"],
+            &[],
+            vec![ok(UP_CHECK)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        traceback(case(
+            "upgrade --check, no pause",
+            &["upgrade", "app", "--check"],
+            &[],
+            vec![ok(r#"{"check":[{"db":"a","from":1,"to":2,"lines":[]}]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case(
+            "upgrade --rollback, no check in the answer",
+            &["upgrade", "app", "--rollback", "--yes"],
+            &[],
+            vec![ok(r#"{"ok":true,"rolledBack":"app","n":[1,"é",{"a":null}]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade --live",
+            &["upgrade", "app", "--live", "--to", "17", "--app", "web"],
+            &[],
+            vec![ok(r#"{"live":{"db":"app","from":16,"to":17,"state":"syncing"}}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade --abort",
+            &["upgrade", "app", "--abort"],
+            &[],
+            vec![ok(r#"{"live":{"db":"app","from":16,"to":17,"state":"aborted","lastError":"stopped"}}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade --prepare-live",
+            &["upgrade", "--prepare-live", "16", "--all", "--now"],
+            &[],
+            vec![ok(r#"{"major":16,"walLevel":"logical","restarted":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade --no-wait",
+            &["upgrade", "app", "--no-wait", "--force-now", "--allow-adopted"],
+            &[],
+            vec![ok(r#"{"started":["app"]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade, watched until it succeeds",
+            &["upgrade", "app", "--to", "17"],
+            &[],
+            vec![
+                ok(r#"{"started":["app"]}"#),
+                running(),
+                answer(500, "{}"),
+                ok(r#"{"moves":[{"step":"done","state":"succeeded","warnings":["w1"],"diff":["d1"]}]}"#),
+            ],
+            owner_and_port,
+            0,
+            4,
+        ),
+        case(
+            "upgrade --switch --json, the name from the answer, rolled back",
+            &["upgrade", "--switch", "--json"],
+            &[],
+            vec![
+                ok(r#"{"switching":"app é"}"#),
+                ok(r#"{"moves":[{"step":"switch","state":"rolled_back","lastError":"x"}]}"#),
+            ],
+            owner_and_port,
+            3,
+            2,
+        ),
+        case(
+            "upgrade, watched until it fails",
+            &["upgrade", "app"],
+            &[],
+            vec![
+                ok(r#"{"started":["app"]}"#),
+                ok(r#"{"moves":[{"step":"copy","state":"failed","lastError":"disk full","warnings":["w"]}]}"#),
+            ],
+            owner_and_port,
+            1,
+            2,
+        ),
+        traceback(case(
+            "upgrade, no name in the answer",
+            &["upgrade", "--to", "17"],
+            &[],
+            vec![ok(r#"{"started":[]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case(
+            "upgrade, refused as usage",
+            &["upgrade", "app"],
+            &[],
+            vec![answer(400, r#"{"error":"bad_major","hint":"no é"}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "upgrade, a refusal that is not JSON",
+            &["upgrade", "app"],
+            &[],
+            vec![answer(502, "bad gateway")],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "upgrade, one database",
+            &["upgrade", "a", "b"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "upgrade --status, no database",
+            &["upgrade", "--status"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // The shell's settings in the environment.
+        shell(case(
+            "a K2_CJ_ variable",
+            &["cluster", "restart", "fb"],
+            &[("K2_CJ_extra", "1")],
+            vec![ok(r#"{"ok":true,"cluster":"17/fb"}"#)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        // Help never acts.
+        shell(case(
+            "versions-access on -h",
+            &["versions-access", "on", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "cluster create --help",
+            &["cluster", "create", "17", "--name", "n", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "cluster restart -h",
+            &["cluster", "restart", "fb", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "create --cluster -h",
+            &["create", "--cluster", "c", "--name", "n", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "upgrade --help",
+            &["upgrade", "app", "--to", "17", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "upgrade --rollback -h",
+            &["upgrade", "app", "--rollback", "--yes", "-h"],
             &[],
             vec![],
             owner_and_port,

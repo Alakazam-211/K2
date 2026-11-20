@@ -12,7 +12,8 @@
 //!   refusals (404 is exit 4); Python's raise; the cell socket.
 //! - The words: none, an unknown flag, `--max-wait` last.
 //! - What the binary hands to the shell: `--follow`, `--failures`, no
-//!   temp folder, help. A duration that is none goes to the shell too;
+//!   temp folder (Linux; macOS's mktemp falls back, so it is native
+//!   there), help. A duration that is none goes to the shell too;
 //!   bash's own arithmetic error names the script's path there, so it has
 //!   no row until D6's named difference.
 
@@ -359,20 +360,47 @@ fn compute_wait_hands_these_to_the_shell() {
             0,
             0,
         )),
-        shell(Case {
-            no_tmpdir: true,
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// TMPDIR names a folder that isn't there. Linux's `mktemp -d -t` fails
+/// there, so the binary hands the line to the shell, which says so and
+/// ends with 1 before it sends anything. macOS's falls back to the user's
+/// own temp folder and the wait goes on, so the binary answers it too.
+/// The row has its job's answer either way: with none, the stub's
+/// default answer has no state and the wait would never end.
+#[test]
+fn compute_wait_with_no_temp_folder() {
+    let rig = Rig::new(VERB, "waitnotmp");
+    let c = if cfg!(target_os = "macos") {
+        case(
+            "no temp folder: macOS's mktemp falls back",
+            &["wait", "aaaa1111"],
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        )
+    } else {
+        Case {
+            compare: Compare::Shell,
             ..case(
                 "no temp folder",
-                &["wait", "a"],
+                &["wait", "aaaa1111"],
                 &[],
                 vec![],
                 owner_and_port,
                 1,
                 0,
             )
-        }),
-    ];
-    for c in v {
-        rig.check(&c);
-    }
+        }
+    };
+    rig.check(&Case {
+        no_tmpdir: true,
+        ..c
+    });
 }

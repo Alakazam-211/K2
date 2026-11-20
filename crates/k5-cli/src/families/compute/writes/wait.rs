@@ -177,15 +177,28 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// Where `mktemp -d -t` makes its folder can take one: `TMPDIR` when set
-/// and not empty, else `/tmp`, a folder this user may write in.
+/// Whether `mktemp -d -t` can make its folder. On Linux it makes it in
+/// `TMPDIR` (when set and not empty) or `/tmp`, and fails when that
+/// folder can't take one. macOS's mktemp falls back to the user's own
+/// temp folder (`getconf DARWIN_USER_TEMP_DIR`) when `TMPDIR` can't be
+/// used (some versions use that folder always), so it fails only when
+/// that one can't take one either.
 pub fn temp_usable() -> bool {
-    let dir = std::env::var_os("TMPDIR")
-        .filter(|d| !d.is_empty())
-        .map_or_else(
-            || std::path::PathBuf::from("/tmp"),
-            std::path::PathBuf::from,
-        );
+    let tmpdir = std::env::var_os("TMPDIR").filter(|d| !d.is_empty());
+    if cfg!(target_os = "macos") {
+        return tmpdir.is_some_and(|d| can_make_in(std::path::Path::new(&d)))
+            || darwin_user_temp_dir().is_some_and(|d| can_make_in(&d))
+            || can_make_in(std::path::Path::new("/tmp"));
+    }
+    let dir = tmpdir.map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    can_make_in(&dir)
+}
+
+/// Whether a folder can be made in `dir` (made and taken away again).
+fn can_make_in(dir: &std::path::Path) -> bool {
     if !dir.is_dir() {
         return false;
     }
@@ -194,6 +207,32 @@ pub fn temp_usable() -> bool {
         Ok(()) => std::fs::remove_dir(&probe).is_ok(),
         Err(_) => false,
     }
+}
+
+/// `confstr(_CS_DARWIN_USER_TEMP_DIR)`: the user's own temp folder.
+#[cfg(target_os = "macos")]
+pub fn darwin_user_temp_dir() -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; 1024];
+    // SAFETY: the buffer is as long as the length given.
+    let n = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+        )
+    };
+    if n == 0 || n > buf.len() {
+        return None;
+    }
+    buf.truncate(n - 1);
+    Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&buf)))
+}
+
+/// Only macOS has one.
+#[cfg(not(target_os = "macos"))]
+pub fn darwin_user_temp_dir() -> Option<std::path::PathBuf> {
+    None
 }
 
 /// The poll of one job.

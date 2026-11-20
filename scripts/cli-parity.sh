@@ -41,7 +41,10 @@
 # connections_write_parity.rs and connect_parity.rs, through the rig's
 # Compare::Bash32PipeReader on macOS. They meet nul-in-answer in
 # feedback_parity.rs's "a NUL in a string" rows of list and show, through
-# Compare::NulInAnswer.)
+# Compare::NulInAnswer. They meet feedback-optin-without-python3 in
+# help_feedback_optin_parity.rs: every row's run with no python3 prints
+# what the binary prints with one, and its no-python3 test checks the
+# rows that answer otherwise there.)
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -147,6 +150,7 @@ EXPECTED_DIFFS=(
     "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and msg prints one line naming Python 3 and exits 69 without starting bash"
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\` and \`connections remove beta\` (POSTs). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
+    "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
 
@@ -177,18 +181,12 @@ check_version_offline() {
     return 1
 }
 
-# check_native_without_python3: a PATH with no python3 (each folder that
-# has one replaced by a folder of links to its other files). With it,
-# `study errors --json` (whose JSON the shell's Python writes) prints the
-# binary's JSON exactly as with python3, and bash's prints none; `msg`
-# (not built in) prints the one line naming Python 3 on stderr and
-# exits 69, and bash never starts (the shell CLI is not written out).
-check_native_without_python3() {
-    local d="$WORK/no-python3" i=0 dir f nopath="" rc want got problems=()
+# path_without_python3 <dir>: prints this PATH with no python3 on it, each
+# folder that has one replaced by a folder of links to its other files
+# (made under <dir>); returns 1, saying so, when python3 is still found.
+path_without_python3() {
+    local d="$1" i=0 dir f nopath=""
     local -a dirs
-    mkdir -p "$d/home/.k2" "$d/ws/.k2"
-    printf '1\n' >"$d/home/.k2/heartbeat.port"
-    printf 'tok-parity\n' >"$d/home/.k2/heartbeat.token"
     IFS=: read -r -a dirs <<<"$PATH"
     for dir in "${dirs[@]}"; do
         i=$((i + 1))
@@ -205,6 +203,21 @@ check_native_without_python3() {
         echo "python3 is still on the PATH made without it: $nopath"
         return 1
     fi
+    printf '%s\n' "$nopath"
+}
+
+# check_native_without_python3: a PATH with no python3 (each folder that
+# has one replaced by a folder of links to its other files). With it,
+# `study errors --json` (whose JSON the shell's Python writes) prints the
+# binary's JSON exactly as with python3, and bash's prints none; `msg`
+# (not built in) prints the one line naming Python 3 on stderr and
+# exits 69, and bash never starts (the shell CLI is not written out).
+check_native_without_python3() {
+    local d="$WORK/no-python3" nopath rc want got problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf '1\n' >"$d/home/.k2/heartbeat.port"
+    printf 'tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    nopath="$(path_without_python3 "$d")" || { echo "$nopath"; return 1; }
     run_in() { (cd "$d/ws" && env -i PATH="$1" HOME="$d/home" "${@:2}") </dev/null; }
     want="$(run_in "$PATH" "$WORK/bin/k5" study errors --json 2>&1)" || problems+=("the binary with python3 failed: $want")
     case "$want" in '{"id":"errors"'*) ;; *) problems+=("the binary with python3 printed no JSON page: $(printf '%s' "$want" | head -c 200)") ;; esac
@@ -304,8 +317,11 @@ s.serve_forever()
 # ruling, as the parity rig's normaliser says). Mode close: no
 # reply at all, the connection just closes (an empty reply, curl's 52).
 # Mode nul: /cli/feedback/list and /cli/feedback/show answer a ticket
-# whose title holds a NUL byte, anything else {"role":"canonical"}. Sets
-# STUB_PID and STUB_PORT; returns 1 when it doesn't start.
+# whose title holds a NUL byte, anything else {"role":"canonical"}. Mode
+# optin: /cli/product-feedback/settings says agents may not report (to an
+# agent), /cli/permission/enabled says cards are off, anything else
+# {"role":"canonical"}. Sets STUB_PID and STUB_PORT; returns 1 when it
+# doesn't start.
 start_stub() {
     local d="$1" mode="$2"
     rm -f "$d/port" "$d/port.tmp"
@@ -317,6 +333,11 @@ NUL = {
     "/cli/feedback/list": b"{\"items\":[{\"id\":\"fb_nul1\",\"status\":\"waiting\",\"priority\":2,\"kind\":\"question\",\"title\":\"acme\x00globex\"}]}",
     "/cli/feedback/show": b"{\"id\":\"fb_nul1\",\"status\":\"waiting\",\"priority\":2,\"kind\":\"question\",\"title\":\"acme\x00globex\",\"createdAt\":0}",
 }
+OPTIN = {
+    "/cli/product-feedback/settings": b"{\"enabled\":true,\"agents\":false,\"canSend\":false,\"why\":\"agents_off\",\"senderKind\":\"agent\",\"ok\":true}",
+    "/cli/permission/enabled": b"{\"enabled\":false}",
+}
+TABLE = {"nul": NUL, "optin": OPTIN}.get(mode, {})
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         with open(os.path.join(d, "log"), "a") as f:
@@ -328,7 +349,7 @@ class H(BaseHTTPRequestHandler):
         self.close_connection = True
         if mode == "close":
             return
-        body = NUL.get(self.path.split("?", 1)[0], b"{\"role\":\"canonical\"}")
+        body = TABLE.get(self.path.split("?", 1)[0], b"{\"role\":\"canonical\"}")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -492,6 +513,64 @@ check_nul_in_answer() {
     [ "$warns" = 1 ] && return 0
     echo "bash on PATH is $ver, which drops a NUL silently as the binary does (the warning came in bash 4.4): the two are exact here, so the difference itself was not proven on this host"
     return 3
+}
+
+# check_feedback_optin_without_python3: the stub says agents may not
+# report (mode optin) and both CLIs run `help` and `study send-feedback`
+# as an agent (a passport, the stub's port, no socket), once with this
+# PATH and once with no python3 on it. With python3 both leave the block
+# out of help (no "  send-feedback " line) and print the one line for the
+# study page, the same bytes. With no python3 bash prints the block and the
+# full page, the binary exactly what it printed with python3. Each run
+# sends what bash sends: the help the settings read then the cards, the
+# study page the settings read.
+check_feedback_optin_without_python3() {
+    local d="$WORK/feedback-optin" nopath words side path rc tag n problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    nopath="$(path_without_python3 "$d")" || { echo "$nopath"; return 1; }
+    start_stub "$d" optin || { echo "the stub daemon didn't start"; return 1; }
+    for words in "help" "study send-feedback"; do
+        tag="${words// /-}"
+        for path in "$PATH" "$nopath"; do
+            for side in bash binary; do
+                : >"$d/log"
+                rc=0
+                if [ "$side" = bash ]; then set -- bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
+                # shellcheck disable=SC2086
+                (cd "$d/ws" && env -i PATH="$path" HOME="$d/home" TMPDIR="$d" K2_PORT="$STUB_PORT" \
+                    K2_HOOK_TOKEN=sessP.optin1 "$@" $words) >"$d/out.$side" 2>"$d/err.$side" </dev/null || rc=$?
+                cp "$d/log" "$d/log.$side"
+                [ "$rc" = 0 ] || problems+=("$side $words (python3 $([ "$path" = "$PATH" ] && echo on || echo off) PATH) exited $rc: $(head -c 300 "$d/err.$side")")
+                [ ! -s "$d/err.$side" ] || problems+=("$side $words wrote on stderr: $(head -c 300 "$d/err.$side")")
+            done
+            if [ "$words" = help ]; then n=2; grep -q "^GET /cli/permission/enabled" "$d/log.bash" || problems+=("bash help asked no cards: $(head -c 300 "$d/log.bash")"); else n=1; fi
+            [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = "$n" ] && head -1 "$d/log.bash" | grep -q "^GET /cli/product-feedback/settings$" \
+                || problems+=("bash $words sent, want the settings read first and $n requests: $(head -c 300 "$d/log.bash")")
+            cmp -s "$d/log.bash" "$d/log.binary" || problems+=("$words: the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log.binary")'")
+            if [ "$path" = "$PATH" ]; then
+                cmp -s "$d/out.bash" "$d/out.binary" || problems+=("$words with python3: stdout differs: bash '$(head -c 300 "$d/out.bash")', the binary '$(head -c 300 "$d/out.binary")'")
+                cp "$d/out.binary" "$d/want.$tag"
+                if [ "$words" = help ]; then
+                    ! grep -q '^  send-feedback ' "$d/out.bash" || problems+=("bash help with python3 lists send-feedback: the hide is gone")
+                    grep -q '^  feedback list ' "$d/out.bash" || problems+=("bash help with python3 printed no daily tier: $(head -c 300 "$d/out.bash")")
+                else
+                    [ "$(wc -l <"$d/out.bash" | tr -d ' ')" = 1 ] && grep -q "^Agents don't report " "$d/out.bash" \
+                        || problems+=("bash study send-feedback with python3 is not the one line: $(head -c 300 "$d/out.bash")")
+                fi
+            else
+                cmp -s "$d/want.$tag" "$d/out.binary" || problems+=("the binary's $words with no python3 printed otherwise than with python3: $(head -c 300 "$d/out.binary")")
+                if [ "$words" = help ]; then
+                    grep -q '^  send-feedback ' "$d/out.bash" || problems+=("bash help with no python3 leaves send-feedback out: the difference is gone")
+                else
+                    [ "$(wc -l <"$d/out.bash" | tr -d ' ')" -gt 20 ] || problems+=("bash study send-feedback with no python3 is not the full page: the difference is gone: $(head -c 300 "$d/out.bash")")
+                fi
+            fi
+        done
+    done
+    stop_stub
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
 }
 
 for entry in "${EXPECTED_DIFFS[@]}"; do

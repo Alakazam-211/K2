@@ -626,3 +626,136 @@ fn carry_export_and_import() {
         rig.check(&c);
     }
 }
+
+#[test]
+fn systemd_cred() {
+    let rig = VRig::new();
+    let place = ["systemd-cred", "API", "--unit", "web.service", "--cred-name", "api", "--restart"];
+    let ready = ok(r#"{"confirmText":"seal API v3 into web.service","version":3,"helperReady":true,"authorIsPerson":true,"plan":{"credPath":"/etc/credstore/api.cred","dropin":"/etc/systemd/system/web.service.d/k2.conf","dropinLine":"LoadCredentialEncrypted=api:/etc/credstore/api.cred","readAs":"$CREDENTIALS_DIRECTORY/api"}}"#);
+    let sealed = ok(r#"{"ok":true,"version":3,"plan":{"secret":"API","credPath":"/etc/credstore/api.cred","unit":"web.service","readAs":"$CREDENTIALS_DIRECTORY/api"},"restarted":true,"next":"systemctl status web.service"}"#);
+    let agent = ok(r#"{"confirmText":"seal API v4","version":4,"helperReady":true,"authorIsPerson":false,"behind":2}"#);
+    let mut in_k2 = refused("systemd-cred in a K2 terminal", &place);
+    in_k2.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
+    in_k2.code = 3;
+    for c in [
+        secrets(
+            person(
+                "systemd-cred",
+                // covers: vault systemd-cred
+                &place,
+                vec![
+                    ready.clone(),
+                    methods("vault-password"),
+                    ok(r#"{"token":"tk-sd-1"}"#),
+                    sealed.clone(),
+                ],
+                b"pw-sd-1\n",
+                0,
+            ),
+            &["pw-sd-1", "tk-sd-1"],
+        ),
+        person(
+            "systemd-cred --json",
+            // covers: vault systemd-cred --json
+            &["systemd-cred", "API", "--unit", "web.service", "--json"],
+            vec![ready.clone(), methods("vault-password"), ok(r#"{"token":"t"}"#), sealed.clone()],
+            b"pw\n",
+            0,
+        ),
+        person(
+            "systemd-cred --dry-run",
+            &["systemd-cred", "API", "--unit", "web.service", "--dry-run", "--scope", "server"],
+            vec![ok(r#"{"confirmText":"seal it","allowed":false,"helperReady":false,"plan":{"credPath":"/c","dropin":"/d","dropinLine":"L","readAs":"R"}}"#)],
+            b"",
+            0,
+        ),
+        person(
+            "systemd-cred --dry-run --json",
+            &["systemd-cred", "API", "--unit", "web.service", "--dry-run", "--json"],
+            vec![ready.clone()],
+            b"",
+            0,
+        ),
+        person(
+            "systemd-cred: a value an agent wrote",
+            &["systemd-cred", "API", "--unit", "web.service"],
+            vec![agent.clone()],
+            b"",
+            3,
+        ),
+        person(
+            "systemd-cred: an agent's value, accepted",
+            &["systemd-cred", "API", "--unit", "web.service", "--accept-agent-value"],
+            vec![agent.clone(), methods("vault-password"), ok(r#"{"token":"t"}"#), sealed.clone()],
+            b"pw\n",
+            0,
+        ),
+        person(
+            "systemd-cred --replace, nothing behind",
+            &["systemd-cred", "API", "--replace"],
+            vec![ok(r#"{"confirmText":"nothing to re-place","behind":0,"version":2}"#)],
+            b"",
+            0,
+        ),
+        person(
+            "systemd-cred --replace",
+            &["systemd-cred", "API", "--replace"],
+            vec![
+                ok(r#"{"confirmText":"re-place v4","behind":1,"rows":[{"id":"p1","version":3}],"version":4,"helperReady":true}"#),
+                methods("vault-password"),
+                ok(r#"{"token":"t"}"#),
+                ok(r#"{"ok":false,"replaced":[{"ok":true,"version":4,"unit":"a.service","restarted":true},{"ok":true,"version":4,"unit":"b.service","restartError":"busy"},{"ok":false,"unit":"c.service","error":{"code":"gone","hint":"unit removed"}}]}"#),
+            ],
+            b"pw\n",
+            1,
+        ),
+        person(
+            "systemd-cred --remove",
+            &["systemd-cred", "API", "--unit", "web.service", "--remove"],
+            vec![
+                ok(r#"{"confirmText":"take api off web.service"}"#),
+                methods("vault-password"),
+                ok(r#"{"token":"t"}"#),
+                ok(r#"{"credRemoved":false,"credName":"api","unit":"web.service"}"#),
+            ],
+            b"pw\n",
+            0,
+        ),
+        person(
+            "systemd-cred: the root helper is too old",
+            &["systemd-cred", "API", "--unit", "web.service"],
+            vec![
+                ok(r#"{"confirmText":"c","version":1,"helperReady":false}"#),
+                Reply::Answer(
+                    409,
+                    r#"{"error":{"code":"helper_too_old","hint":"update the root helper"}}"#.into(),
+                ),
+            ],
+            b"",
+            1,
+        ),
+        person(
+            "systemd-cred: the dry run refused",
+            &["systemd-cred", "API", "--unit", "web.service"],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"unit_not_allowed","hint":"add it to the allow list"}}"#.into(),
+            )],
+            b"",
+            3,
+        ),
+        refused("systemd-cred, a scope it can't read", &["systemd-cred", "API", "--unit", "u", "--scope", "nope"]),
+        refused("systemd-cred with no name", &["systemd-cred", "--unit", "u"]),
+        refused("systemd-cred with no unit", &["systemd-cred", "API"]),
+        refused("systemd-cred, two names", &["systemd-cred", "A", "B", "--unit", "u"]),
+        refused("systemd-cred --replace --unit", &["systemd-cred", "A", "--replace", "--unit", "u"]),
+        refused("systemd-cred --remove --restart", &["systemd-cred", "A", "--unit", "u", "--remove", "--restart"]),
+        refused("systemd-cred --unit with no value", &["systemd-cred", "A", "--unit"]),
+        refused("systemd-cred --value", &["systemd-cred", "A", "--value=x"]),
+        refused("systemd-cred --system", &["systemd-cred", "A", "--system"]),
+        refused("systemd-cred, an unknown flag", &["systemd-cred", "A", "--nope"]),
+        in_k2,
+    ] {
+        rig.check(&c);
+    }
+}

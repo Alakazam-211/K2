@@ -64,6 +64,7 @@ pub mod carry;
 pub mod handoff;
 pub mod person;
 pub mod py;
+pub mod systemd;
 pub mod tools;
 pub mod verbs;
 

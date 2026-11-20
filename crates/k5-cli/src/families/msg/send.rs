@@ -40,7 +40,9 @@
 //! 12. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
 //! An address `handle::label.postal.bot` first is Postal mail
-//! ([`super::postal`]). The shell answers these forms itself ([`parse`]
+//! ([`super::postal`]), and so is one msg's own loop reads after a value
+//! flag ([`super::postal::after_loop`]): there a flag Postal mail can't
+//! honour is refused with the address-first form's line, never dropped. The shell answers these forms itself ([`parse`]
 //! says [`Parsed::Shell`]): a tray form's `~name` path
 //! ([`super::tray`]), and a `--secret` the vault's handoff leaves to the
 //! shell ([`vault::handoff::native`]), or with a `python3` the binary
@@ -278,6 +280,20 @@ pub enum Parsed {
     Signal(super::signal::Signal),
 }
 
+/// The flags `cmd_msg` keeps as typed (`flags_seen`), for Postal mail.
+pub const FLAGS: &[&str] = &[
+    "--idempotency-key",
+    "--session",
+    "--summary",
+    "--secret",
+    "--from",
+    "--command",
+    "--wake",
+    "--no-wake",
+    "--wake-timeout",
+    "--via",
+];
+
 /// `_is_postal_address`.
 pub fn is_postal(address: &str) -> bool {
     let a = address.to_ascii_lowercase();
@@ -375,10 +391,15 @@ pub fn parse(words: &[&str]) -> Parsed {
         ..Msg::default()
     };
     let mut secret = String::new();
+    // The flags as typed, in order, without their values (`flags_seen`).
+    let mut flags: Vec<&str> = Vec::new();
     let mut i = 0;
     let stop = |line: &str| Parsed::Stop(format!("{line}\n"), Exit::Usage);
     while i < words.len() {
         let next = words.get(i + 1).copied();
+        if FLAGS.contains(&words[i]) {
+            flags.push(words[i]);
+        }
         match words[i] {
             "--idempotency-key" => match next {
                 Some(k) if !k.is_empty() => {
@@ -449,6 +470,12 @@ pub fn parse(words: &[&str]) -> Parsed {
         }
         // Filled in at run: `${PROJECT:-$PWD}`, never empty.
         m.target.clear();
+    } else if is_postal(&m.target) {
+        // msg's own loop read a Postal address (a value flag came first).
+        return match super::postal::after_loop(&m.target, &flags, &m.text) {
+            Ok(mail) => Parsed::Postal(mail),
+            Err(line) => stop(&line),
+        };
     } else if m.target.is_empty() {
         return Parsed::Stop(no_target(), Exit::Error);
     }
@@ -583,11 +610,6 @@ fn send_with(client: &mut Client, closing: &mut Closing, m: &mut Msg) -> Exit {
         );
         return Exit::Usage;
     } else if let Some(target) = super::remote::split(&m.target) {
-        // `_postal_send_teach "$target" -- "$text"`: Postal mail, the text
-        // alone, as typed.
-        if is_postal(&m.target) {
-            return super::postal::send(client, &postal_as_typed(m));
-        }
         let project = client.project.clone();
         return super::remote::send(client, closing, &target, &m.text, &project, &key);
     }
@@ -598,19 +620,6 @@ fn send_with(client: &mut Client, closing: &mut Closing, m: &mut Msg) -> Exit {
         };
     }
     deliver(client, closing, m, &key)
-}
-
-/// The Postal mail of a message whose address msg's own loop read:
-/// `_postal_send_teach "$target" -- "$text"` (the shell from 0.46.17), so
-/// the text is never read as a flag (a dash first, or `--help`, is text),
-/// and the mail wakes.
-pub fn postal_as_typed(m: &Msg) -> super::postal::Mail {
-    super::postal::Mail {
-        to: m.target.clone(),
-        text: m.text.clone(),
-        wake: true,
-        json: false,
-    }
 }
 
 /// `$PWD` as the shell has it.

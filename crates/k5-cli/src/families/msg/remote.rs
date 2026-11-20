@@ -3,22 +3,21 @@
 //! `_send_remote_msg` (`cli/src/remote-msg.sh`) sends it.
 //!
 //! After the send key and the wire-form check ([`super::send`]), in the
-//! shell's order:
+//! shell's order (a Postal address never gets here: [`super::send::parse`]
+//! makes it Postal mail first):
 //!
-//! 1. `_postal_send_teach`: a Postal address is Postal mail with the text
-//!    alone ([`super::postal`]).
-//! 2. An empty agent (`@host`): one line, exit 2.
-//! 3. `<agent>/<chat>`: the chat's name slugged as the shell's Python does
+//! 1. An empty agent (`@host`): one line, exit 2.
+//! 2. `<agent>/<chat>`: the chat's name slugged as the shell's Python does
 //!    it; a bad one is one line, exit 2.
-//! 4. The `@` form's hint.
-//! 5. `/cli/federation/peers` (`cli_send`), and its reader ([`peers`]):
+//! 3. The `@` form's hint.
+//! 4. `/cli/federation/peers` (`cli_send`), and its reader ([`peers`]):
 //!    the peer's fingerprint and trust, or the line and exit 2 or 3.
-//! 6. `/cli/federation/peer-roster?peer=<fp>`, and its reader ([`roster`]):
+//! 5. `/cli/federation/peer-roster?peer=<fp>`, and its reader ([`roster`]):
 //!    the agent's workspace id, or the line and exit 2 or 3.
-//! 7. `/cli/federation/send`, sent once by its key
+//! 6. `/cli/federation/send`, sent once by its key
 //!    ([`super::send_once::send`]), after the refusal notes so far are
 //!    dropped (`_permission_note_reset`).
-//! 8. The replay note, then the answer's reader ([`sent`]): delivered
+//! 7. The replay note, then the answer's reader ([`sent`]): delivered
 //!    (exit 0), queued (exit 0, two lines), the gate's JSON line (exit 3),
 //!    declined or an error (exit 2), anything else (exit 1).
 //!

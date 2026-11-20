@@ -1092,22 +1092,50 @@ fn msg_to_another_server() {
             4,
         ),
         plain("an empty agent", to("@box"), vec![ok(ON)], 2, 1),
-        // A value flag first: msg's own loop reads the Postal address, then
-        // it is Postal mail with the text alone, as typed; the flags of a
-        // message to an agent here are not sent.
+        // A value flag first: msg's own loop reads the Postal address. A
+        // flag Postal mail can't honour is refused with the address-first
+        // form's line, nothing sent.
         plain(
-            "Postal mail after a value flag",
-            &[
-                "--from",
-                "me",
-                "a::abc.postal.bot",
-                "hi there",
-                "--idempotency-key",
-                KEY,
-            ],
-            vec![ok(ON), ok(POSTAL_SENT)],
-            0,
+            "Postal mail, --from first",
+            &["--from", "me", "a::abc.postal.bot", "hi"],
+            vec![],
             2,
+            0,
+        ),
+        plain(
+            "Postal mail, --summary first",
+            &["--summary", "s", "a::abc.postal.bot", "hi"],
+            vec![],
+            2,
+            0,
+        ),
+        plain(
+            "Postal mail, --no-wake then --from first",
+            &["--no-wake", "--from", "me", "a::abc.postal.bot", "hi"],
+            vec![],
+            2,
+            0,
+        ),
+        plain(
+            "Postal mail, a key first",
+            &["--idempotency-key", KEY, "a::abc.postal.bot", "hi"],
+            vec![],
+            2,
+            0,
+        ),
+        plain(
+            "Postal mail, --secret first",
+            &["--secret", "K", "a::abc.postal.bot", "hi"],
+            vec![],
+            2,
+            0,
+        ),
+        plain(
+            "Postal mail, --from first, no text",
+            &["--from", "me", "a::abc.postal.bot"],
+            vec![],
+            2,
+            0,
         ),
         plain("a bad chat", to("ada/a/b::box.x"), vec![ok(ON)], 2, 1),
         plain(

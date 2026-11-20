@@ -402,26 +402,57 @@ fn postal_mail() {
         parse(&["--from", to, "ws", "t"]),
         Parsed::Stop(format!("{}\n", postal::k2_only("--from", to)), Exit::Usage)
     );
-    // msg's own loop read the address: the text is sent as typed, never
-    // read as a flag.
-    for text in ["-x", "--help", "--no-wake", "a b"] {
-        let m = Msg {
-            target: to.into(),
-            text: text.into(),
-            wake: false,
-            ..Msg::default()
-        };
-        assert_eq!(
-            send::postal_as_typed(&m),
-            Mail {
-                to: to.into(),
-                text: text.into(),
-                wake: true,
-                json: false,
-            },
-            "{text}"
+    // A value flag first: msg's own loop reads the address. A flag Postal
+    // mail can't honour is refused with the address-first form's line,
+    // never dropped.
+    let same = |flag_first: &[&str], address_first: &[&str]| {
+        let got = parse(flag_first);
+        assert!(
+            matches!(got, Parsed::Stop(_, Exit::Usage)),
+            "{flag_first:?}: {got:?}"
         );
-    }
+        assert_eq!(got, parse(address_first), "{flag_first:?}");
+    };
+    same(&["--from", "me", to, "hi"], &[to, "hi", "--from", "me"]);
+    same(&["--summary", "s", to, "hi"], &[to, "hi", "--summary", "s"]);
+    same(
+        &["--no-wake", "--from", "me", to, "hi"],
+        &[to, "hi", "--no-wake", "--from", "me"],
+    );
+    same(
+        &["--idempotency-key", "abcdefgh", to, "hi"],
+        &[to, "hi", "--idempotency-key", "abcdefgh"],
+    );
+    same(&["--secret", "K", to, "hi"], &[to, "hi", "--secret", "K"]);
+    same(&["--from", "me", to], &[to, "--from", "me"]);
+    assert_eq!(
+        parse(&["--summary", "s", to, "hi"]),
+        Parsed::Stop(
+            format!("{}\n", postal::k2_only("--summary", to)),
+            Exit::Usage
+        )
+    );
+    assert_eq!(
+        parse(&["--secret", "K", to, "hi"]),
+        Parsed::Stop(
+            format!("{}\n", postal::unknown_flag("--secret")),
+            Exit::Usage
+        )
+    );
+    // The flags it can honour, then the text as it is.
+    assert_eq!(
+        postal::after_loop(to, &["--wake", "--no-wake"], "-x"),
+        Ok(Mail {
+            to: to.into(),
+            text: "-x".into(),
+            wake: false,
+            json: false,
+        })
+    );
+    assert_eq!(
+        postal::after_loop(to, &["--wake"], ""),
+        Err(postal::usage(to))
+    );
     let src = source("remote-target.sh");
     for line in [
         r#"echo "k2 msg: $1 is for messages to agents on this server; Postal mail to $to takes only the text, --no-wake and --json." >&2"#,

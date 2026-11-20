@@ -119,6 +119,32 @@ pub fn parse(words: &[&str], at: usize) -> Result<Mail, String> {
     Ok(m)
 }
 
+/// A Postal address msg's own loop read, after a value flag:
+/// `_postal_send_teach "$target" "${flags_seen[@]}" "$text"` in `cmd_msg`.
+/// The flags in order: `--no-wake`, `--wake`; the first other one is
+/// refused as [`parse`] refuses it ([`k2_only`] or [`unknown_flag`]), so
+/// none is dropped. Then the text as it is; none is [`usage`].
+pub fn after_loop(to: &str, flags: &[&str], text: &str) -> Result<Mail, String> {
+    let mut m = Mail {
+        to: to.to_string(),
+        text: text.to_string(),
+        wake: true,
+        json: false,
+    };
+    for f in flags {
+        match *f {
+            "--no-wake" => m.wake = false,
+            "--wake" => {}
+            f if K2_ONLY.contains(&f) => return Err(k2_only(f, to)),
+            f => return Err(unknown_flag(f)),
+        }
+    }
+    if m.text.is_empty() {
+        return Err(usage(to));
+    }
+    Ok(m)
+}
+
 /// `_postal_body "workspace=…" "to=…" "text=…" "wake=__true|__false"`.
 pub fn body(workspace: &str, m: &Mail) -> String {
     let mut pairs = Vec::new();

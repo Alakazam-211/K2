@@ -320,7 +320,6 @@ async fn writes_run_in_its_own_workspace_only() {
 
     for (label, path) in [
         ("done, other", format!("/cli/done?project={other}&agent=d1-agent")),
-        ("done, a path for the agent", format!("/cli/done?project={own}&agent=..%2F..%2Fx")),
         ("review approve, other", format!("/cli/review/approve?project={other}&branch=agent%2Fx%2Fy&agent=x")),
         ("agent complete, a path for the file", format!("/cli/agent/complete?project={own}&agent=x&file=..%2F..%2Fsecret.md")),
     ] {
@@ -481,4 +480,65 @@ async fn its_own_merge_is_a_card_for_a_person() {
     assert_eq!(r.status, 200, "another agent's branch: {}", r.raw);
     assert_eq!(head_of(ws), tips[2], "merged (fast-forward)");
     assert_eq!(branch_tip(ws, "agent/backend/task"), None, "the merged branch is removed");
+}
+
+fn feed(e: &Env) -> Vec<J> {
+    let r = http(e.port, "GET", &format!("/cli/feed?project={}&limit=200", enc(&e.own)), Some(OWNER));
+    assert_eq!(r.status, 200, "feed: {}", r.raw);
+    r.json("feed")["feed"].as_array().unwrap_or_else(|| panic!("no feed: {}", r.raw)).clone()
+}
+
+fn entries(e: &Env, kind: &str) -> Vec<(String, String)> {
+    feed(e)
+        .iter()
+        .filter(|f| f["type"] == kind)
+        .map(|f| (f["actor"].as_str().unwrap_or("").to_string(), f["to"].as_str().unwrap_or("").to_string()))
+        .collect()
+}
+
+/// `k2 done` records the passport's own name: absent takes it, the same
+/// name passes, another name (or a path) is refused and records nothing.
+/// A review the passport makes records it as the reviewer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_actor_is_the_passport() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let own = enc(&e.own);
+    for (label, q) in [("no agent=", String::new()), ("agent= its own name", "&agent=d1-agent".to_string())] {
+        let before = entries(&e, "task.done").len();
+        let r = http(e.port, "POST", &format!("/cli/done?project={own}{q}"), Some(e.passport.as_str()));
+        assert_eq!(r.status, 200, "{label}: {}", r.raw);
+        let after = entries(&e, "task.done");
+        assert_eq!(after.len(), before + 1, "{label}: one record");
+        assert!(after.iter().all(|(actor, _)| actor == "d1-agent"), "{label}: the passport's name: {after:?}");
+    }
+    let before = feed(&e).len();
+    for (label, q) in [("another name", "agent=backend"), ("a path", "agent=..%2F..%2Fx")] {
+        let r = http(e.port, "POST", &format!("/cli/done?project={own}&{q}"), Some(e.passport.as_str()));
+        assert_eq!(r.status, 403, "{label}: {}", r.raw);
+        let v = r.json(label);
+        assert_eq!((v["error"]["code"].as_str(), v["error"]["agent"].as_str()), (Some("not_this_agent"), Some("d1-agent")), "{label}: {v}");
+    }
+    assert_eq!(feed(&e).len(), before, "a refused done records nothing");
+    // The owner still names the agent.
+    let r = http(e.port, "POST", &format!("/cli/done?project={own}&agent=backend"), Some(OWNER));
+    assert_eq!(r.status, 200, "owner: {}", r.raw);
+    assert!(entries(&e, "task.done").iter().any(|(actor, _)| actor == "backend"), "the owner's done keeps its agent");
+
+    // Reviews of another agent: the passport is the reviewer.
+    let skill = k2_core::workspace::agent_identity::skills_dir(&e.own).join("backend");
+    std::fs::create_dir_all(&skill).expect("skill dir");
+    std::fs::write(skill.join("SKILL.md"), "---\nname: backend\nrole: dev\n---\nBackend.\n").expect("skill");
+    let ws = Path::new(&e.own);
+    let (_, tips) = repo_with_branches(ws, &["agent/backend/task"]);
+    let r = http(e.port, "POST", &format!("/cli/review/approve?project={own}&agent=backend&branch={}", enc("agent/backend/task")), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "approve another agent's branch: {}", r.raw);
+    assert_eq!(head_of(ws), tips[0], "merged");
+    let r = http(e.port, "POST", &format!("/cli/review/feedback?project={own}&agent=backend&feedback=tighten"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "feedback: {}", r.raw);
+    let r = http(e.port, "POST", &format!("/cli/review/reject?project={own}&agent=backend&reason=no"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "reject: {}", r.raw);
+    for kind in ["review.approved", "review.changes-requested", "review.rejected"] {
+        assert_eq!(entries(&e, kind), vec![("d1-agent".to_string(), "backend".to_string())], "{kind}: the passport reviewed backend's work");
+    }
 }

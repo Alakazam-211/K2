@@ -210,13 +210,17 @@ pub(crate) async fn serve_tcp(
     crate::caller_workspace::strip_request_stamps(&mut params);
     crate::caller_workspace::keep_client_project(&mut params);
     crate::caller_workspace::stamp_principal(&mut params, &principal);
-    if let Some(r) = merge_needs_person(path, &params, &principal) {
+    if let Some(r) = merge_needs_person(path, &params, &principal).or_else(|| actor_is_the_passport(path, &mut params, &principal)) {
         http::send_response(stream, r.status, r.content_type, &r.body).await;
         return;
     }
     let path = path.to_string();
     let r = crate::rt::blocking(|| {
-        crate::caller_workspace::with_request_principal(Some(principal), || crate::cli::dispatch(&path, &params))
+        let r = crate::caller_workspace::with_request_principal(Some(principal.clone()), || crate::cli::dispatch(&path, &params));
+        if r.status.starts_with("200") {
+            record_reviewer(&path, &params, &principal);
+        }
+        r
     });
     http::send_response(stream, r.status, r.content_type, &r.body).await;
 }
@@ -274,6 +278,54 @@ fn own_branch(params: &HashMap<String, String>, principal: &HookPrincipal) -> bo
     };
     let skill = k2_core::workspace::agent::list(project.clone()).is_ok_and(|l| l.iter().any(|a| a.name == author));
     !skill
+}
+
+/// `k2 done` records the passport's own name as its actor, never a name
+/// the request gives: `agent=` absent takes the passport's, the same name
+/// passes, any other is refused (`not_this_agent`), never replaced.
+fn actor_is_the_passport(path: &str, params: &mut HashMap<String, String>, principal: &HookPrincipal) -> Option<CliResponse> {
+    if path != "/cli/done" {
+        return None;
+    }
+    let me = principal.agent_address.trim();
+    match params.get("agent").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(named) if named != me => Some(CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({ "error": {
+                "code": "not_this_agent",
+                "hint": format!("this session is '{me}'; done records the session's own agent: send that name or none"),
+                "agent": me,
+            } })
+            .to_string(),
+        }),
+        _ => {
+            params.insert("agent".to_string(), me.to_string());
+            None
+        }
+    }
+}
+
+/// A review the passport made (approve of another agent's branch, reject,
+/// feedback) goes on its workspace's activity feed with the passport as
+/// the reviewer; `agent=` there names whose work it reviewed.
+fn record_reviewer(path: &str, params: &HashMap<String, String>, principal: &HookPrincipal) {
+    let (event, verb) = match path {
+        "/cli/review/approve" => ("review.approved", "approved"),
+        "/cli/review/reject" => ("review.rejected", "rejected"),
+        "/cli/review/feedback" => ("review.changes-requested", "asked for changes on"),
+        _ => return,
+    };
+    let me = principal.agent_address.trim();
+    let whose = params.get("agent").map(|s| s.trim()).unwrap_or("");
+    let branch = params.get("branch").map(|s| s.trim()).filter(|s| !s.is_empty());
+    let summary = match branch {
+        Some(b) => format!("{me} {verb} {whose}'s branch {b}"),
+        None => format!("{me} {verb} {whose}'s work"),
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::log_activity(&conn, &principal.workspace_uuid, Some(me), event, Some(me), Some(whose), None, Some(&summary));
 }
 
 /// The passport's workspace (`projects.id`) when `params` were stamped from

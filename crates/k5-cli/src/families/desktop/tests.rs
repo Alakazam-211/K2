@@ -2,23 +2,34 @@ use super::*;
 
 fn call(words: &[&str]) -> Ask {
     match parse(words) {
-        Parsed::Call(a) => a,
+        Parsed::Call(a) => *a,
         other => panic!("{words:?}: {other:?}"),
     }
 }
 
 #[test]
 fn the_words_as_the_shell_reads_them() {
-    assert_eq!(parse(&[]), Parsed::Call(Ask { sub: "status".into(), ..Ask::default() }));
+    assert_eq!(
+        parse(&[]),
+        Parsed::Call(Box::new(Ask { sub: "status".into(), ..Ask::default() }))
+    );
     assert_eq!(parse(&["help"]), Parsed::Help);
-    assert_eq!(parse(&["grant", "--bogus", "-h"]), Parsed::Early(format!("usage: unknown flag '--bogus' ({CLI} desktop --help)")));
+    assert_eq!(
+        parse(&["grant", "--bogus", "-h"]),
+        Parsed::Early(format!(
+            "usage: unknown flag '--bogus' ({CLI} desktop --help)"
+        ))
+    );
     assert_eq!(parse(&["grant", "-h", "--bogus"]), Parsed::Help);
     let a = call(&["--json"]);
     assert!(a.json && a.sub == "status");
     let a = call(&["policy", "--hide-app", "a", "--hide-app=b", "--desktop=v"]);
     assert_eq!(a.hides, vec!["a".to_string(), "b".to_string()]);
     assert_eq!(a.desk, "v");
-    assert_eq!(parse(&["status", "--desktop"]), Parsed::Early(value_usage("--desktop")));
+    assert_eq!(
+        parse(&["status", "--desktop"]),
+        Parsed::Early(value_usage("--desktop"))
+    );
 }
 
 #[test]
@@ -35,7 +46,11 @@ fn a_timeout_the_shell_reads_as_plain_decimal() {
 
 #[test]
 fn the_bodies_python_writes() {
-    let r = request(&call(&["start", "--size", "0160X0900", "--desktop", "v"]), "/p").unwrap();
+    let r = request(
+        &call(&["start", "--size", "0160X0900", "--desktop", "v"]),
+        "/p",
+    )
+    .unwrap();
     assert_eq!(
         r,
         Request::One {
@@ -47,13 +62,13 @@ fn the_bodies_python_writes() {
     );
     let r = request(&call(&["env", "--release"]), "/p").unwrap();
     assert_eq!(r, Request::Env(r#"{"release": true}"#.into()));
-    let r = request(&call(&["allow", "on"]), "/p é").unwrap();
+    let r = request(&call(&["allow", "on"]), "/p \u{e9}").unwrap();
     assert_eq!(
         r,
         Request::One {
             get: false,
             path: "/cli/agent-access/set".into(),
-            payload: r#"{"workspace": "/p é", "toggle": "desktop", "value": true}"#.into(),
+            payload: r#"{"workspace": "/p \u00e9", "toggle": "desktop", "value": true}"#.into(),
             verb: "allow",
         }
     );
@@ -82,5 +97,5 @@ fn the_python_lines_are_where_the_shell_has_them() {
     assert_eq!(line::O_LOAD, 3);
     assert_eq!(line::V_LOAD, 3);
     assert_eq!(line::S_LOAD, 3);
-    assert!(line::O_LIMITS_1 == line::O_LIMITS + 1 && line::O_LIMITS_2 == line::O_LIMITS + 2);
+    const { assert!(line::O_LIMITS_1 == line::O_LIMITS + 1 && line::O_LIMITS_2 == line::O_LIMITS + 2) };
 }

@@ -201,7 +201,8 @@ pub fn send(cp: &mut Cp<'_>, ask: &Ask, sock: &Path) -> Exit {
                 Ok(b) => b,
                 Err(e) => return e,
             };
-            let _ = reader(&b, |v, o| {
+            // `set -e` with pipefail: a reader that raises ends it with 1.
+            reader(&b, |v, o| {
                 let fp = crate::families::py_get(v, "controllerFp", 3)?
                     .cloned()
                     .unwrap_or(Value::Null);
@@ -222,8 +223,7 @@ pub fn send(cp: &mut Cp<'_>, ask: &Ask, sock: &Path) -> Exit {
                 }
                 Ok(())
             })
-            .print();
-            Exit::Ok
+            .print()
         }
         Ask::Add {
             code,

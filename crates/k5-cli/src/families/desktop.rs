@@ -155,7 +155,7 @@ pub enum Parsed {
     /// The `usage:` line (no newline), exit 2.
     Early(String),
     /// The verb's checks to make.
-    Call(Ask),
+    Call(Box<Ask>),
 }
 
 /// `cmd_desktop`'s words (after `desktop`).
@@ -227,7 +227,7 @@ pub fn parse(words: &[&str]) -> Parsed {
         }
         i += 1;
     }
-    Parsed::Call(a)
+    Parsed::Call(Box::new(a))
 }
 
 fn set_value(a: &mut Ask, flag: &str, v: &str) {
@@ -336,7 +336,9 @@ pub fn request(a: &Ask, project: &str) -> Result<Request, String> {
         return Err(format!("usage: --workspace goes with {CLI} desktop allow"));
     }
     if (!a.pane.is_empty() || a.check) && sub != "ask" {
-        return Err(format!("usage: --open and --check go with {CLI} desktop ask"));
+        return Err(format!(
+            "usage: --open and --check go with {CLI} desktop ask"
+        ));
     }
     let empty = || Vec::<(&str, Value)>::new();
     Ok(match sub {
@@ -598,7 +600,12 @@ fn run_with(
 
 /// `_sidecar_send` and `_sidecar_split`: the status (`000` for none) and
 /// the body. `Err`: a line the send printed, exit 1.
-fn send(client: &mut Client, get: bool, path: &str, payload: &str) -> Result<(String, Vec<u8>), Exit> {
+fn send(
+    client: &mut Client,
+    get: bool,
+    path: &str,
+    payload: &str,
+) -> Result<(String, Vec<u8>), Exit> {
     let answer = if get {
         client.sidecar_get(path, payload)
     } else {
@@ -631,10 +638,12 @@ pub fn render(as_json: bool, verb: &str, status: &str, body: &[u8]) -> Rendered 
         b
     };
     if status != "200" {
+        // `set -e`: a refusal its Python can't read ends the command there.
+        let (stderr, ok) = refusal_lines(status, body);
         return Rendered {
-            stdout: if as_json { with_newline() } else { Vec::new() },
-            stderr: refusal_lines(status, body),
-            exit: exit_for(status),
+            stdout: if as_json && ok { with_newline() } else { Vec::new() },
+            stderr,
+            exit: if ok { exit_for(status) } else { Exit::Error },
         };
     }
     if as_json {
@@ -731,17 +740,19 @@ fn not_json(raw: &str, line: u32) -> Raise {
 
 /// `_desktop_render`'s Python for a status that is not 200: the error
 /// line, the desktops that could be closed, and the permission line.
-pub fn refusal_lines(status: &str, body: &[u8]) -> String {
+/// `false`: its Python raised (the lines end with the traceback).
+pub fn refusal_lines(status: &str, body: &[u8]) -> (String, bool) {
     let raw = String::from_utf8_lossy(body);
     let Ok(d) = loads(&raw) else {
         let head: String = raw.trim_matches(py_space).chars().take(300).collect();
-        return format!("{ERROR}HTTP {status}: {head}\n");
+        return (format!("{ERROR}HTTP {status}: {head}\n"), true);
     };
     let mut e = String::new();
     if let Err(r) = refusal_python(status, &d, &mut e) {
         e.push_str(&r.text());
+        return (e, false);
     }
-    e
+    (e, true)
 }
 
 fn refusal_python(status: &str, d: &Value, e: &mut String) -> Result<(), Raise> {
@@ -778,8 +789,7 @@ fn refusal_python(status: &str, d: &Value, e: &mut String) -> Result<(), Raise> 
         _ => None,
     };
     let command = p.and_then(|o| dict_get(o, "command").filter(|v| py::truthy(v)));
-    let unrequestable =
-        p.is_some_and(|o| dict_get(o, "requestable") == Some(&Value::Bool(false)));
+    let unrequestable = p.is_some_and(|o| dict_get(o, "requestable") == Some(&Value::Bool(false)));
     if let Some(command) = command {
         push(e, &format!("Ask with: {}", plus_str(command, E_ASK)?));
     } else if c == s("desktop_people_only") || unrequestable {
@@ -844,7 +854,9 @@ fn floordiv_mb(v: &Value, line: u32) -> Result<Value, Raise> {
         Value::Bool(_) => Ok(Value::Int("0".into())),
         Value::Int(digits) => match digits.parse::<i128>() {
             Ok(n) => Ok(Value::Int(n.div_euclid(MB).to_string())),
-            Err(_) => Ok(Value::Float((digits.parse::<f64>().unwrap_or(0.0) / MB as f64).floor())),
+            Err(_) => Ok(Value::Float(
+                (digits.parse::<f64>().unwrap_or(0.0) / MB as f64).floor(),
+            )),
         },
         Value::Float(f) => Ok(Value::Float((f / MB as f64).floor())),
         other => Err(Raise::at(
@@ -1088,7 +1100,11 @@ fn view_python(verb: &str, d: &Value, p: &mut Py) -> Result<(), Raise> {
             );
             p.print(&format!(
                 "remote desktop : {} on {}",
-                if truthy(dict_get(d, "enabled")) { "on" } else { "off" },
+                if truthy(dict_get(d, "enabled")) {
+                    "on"
+                } else {
+                    "off"
+                },
                 s_or(dict_get(d, "machine"), "this computer")
             ));
             p.print(&format!(
@@ -1199,7 +1215,11 @@ fn view_python(verb: &str, d: &Value, p: &mut Py) -> Result<(), Raise> {
                 }
                 Value::Str(t) => match t.as_str() {
                     Some("prompt") => {
-                        concat!("Asked ", product_name!(), " Screen to show macOS's prompt at the Mac.")
+                        concat!(
+                            "Asked ",
+                            product_name!(),
+                            " Screen to show macOS's prompt at the Mac."
+                        )
                     }
                     Some("open_screen") => "Opened System Settings at Screen Recording on the Mac.",
                     Some("open_accessibility") => {
@@ -1409,9 +1429,7 @@ fn view_python(verb: &str, d: &Value, p: &mut Py) -> Result<(), Raise> {
                 Value::Array(Vec::new()),
             );
             if !py::truthy(&ds) {
-                p.print(&format!(
-                    "no displays yet ({CLI} desktop status says why)"
-                ));
+                p.print(&format!("no displays yet ({CLI} desktop status says why)"));
             }
             for x in py_iter(&ds, O_DISPLAYS_FOR)? {
                 let r = O_DISPLAYS_ROW;
@@ -1437,7 +1455,10 @@ fn view_python(verb: &str, d: &Value, p: &mut Py) -> Result<(), Raise> {
                 (on, who)
             } else {
                 let on = at(d, "agentsAllowed", O_ALLOW_ON + 2)?;
-                let who = or(dict_get(d, "name"), dict_get(d, "workspaceId").cloned().unwrap_or(Value::Null));
+                let who = or(
+                    dict_get(d, "name"),
+                    dict_get(d, "workspaceId").cloned().unwrap_or(Value::Null),
+                );
                 (on, who)
             };
             let on = py::truthy(&on);
@@ -1477,15 +1498,8 @@ fn sleep_2() {
 /// `_desktop_setup_wait`: the install runs on the server; while the
 /// answer says `setting_up`, ask the status every 2 s up to `--timeout`.
 fn setup_wait(client: &mut Client, a: &Ask, status: &str, body: &[u8]) -> Exit {
-    // The shell's `return 0` after each render: its Python's exit is lost.
-    let render_0 = |status: &str, body: &[u8]| {
-        let e = render(a.json, "setup", status, body).print();
-        if status == "200" {
-            Exit::Ok
-        } else {
-            e
-        }
-    };
+    // `set -e`: a render whose Python raises ends the command with 1.
+    let render_0 = |status: &str, body: &[u8]| render(a.json, "setup", status, body).print();
     if status != "200" {
         return render_0(status, body);
     }
@@ -1520,11 +1534,12 @@ fn setup_wait(client: &mut Client, a: &Ask, status: &str, body: &[u8]) -> Exit {
         if code != "200" {
             return render(a.json, "status", &code, &body).print();
         }
+        // `set -e`: `state="$(… python3 …)"` that raises ends the command.
         let state = match read_field(&body, "state") {
             Ok(t) => t,
             Err(tb) => {
                 let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
-                String::new()
+                return Exit::Error;
             }
         };
         if state != "setting_up" {
@@ -1536,7 +1551,7 @@ fn setup_wait(client: &mut Client, a: &Ask, status: &str, body: &[u8]) -> Exit {
             ));
             return Exit::Error;
         }
-        if !a.json && waited % 10 == 0 {
+        if !a.json && waited.is_multiple_of(10) {
             out::stderr_line(&format!("  still installing\u{2026} ({waited} s)"));
         }
     };
@@ -1569,10 +1584,7 @@ pub fn setup_done(body: &[u8]) -> Shown {
     };
     if state == Some(s("not_set_up")) {
         let m = or(dict_get(&d, "message"), s("the packages did not install"));
-        return Shown::err(
-            format!("{ERROR}setup_failed: {}\n", st(&m)),
-            Exit::Error,
-        );
+        return Shown::err(format!("{ERROR}setup_failed: {}\n", st(&m)), Exit::Error);
     }
     Shown::out(format!("{INSTALLED}\n"))
 }
@@ -1601,7 +1613,7 @@ fn env_loop(client: &mut Client, a: &Ask, body: &str) -> Exit {
             Ok(t) => t,
             Err(tb) => {
                 let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
-                String::new()
+                return Exit::Error;
             }
         };
         if !matches!(state.as_str(), "waiting" | "starting" | "waking") {

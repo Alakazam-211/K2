@@ -107,7 +107,10 @@ fn desktop_help_and_words() {
         ("help", &["help"][..]),
         ("--help", &["--help"]),
         ("-h after a verb", &["status", "-h"]),
-        ("--help after the words", &["grant", "ann", "--view", "--help"]),
+        (
+            "--help after the words",
+            &["grant", "ann", "--view", "--help"],
+        ),
         ("an unknown verb's --help", &["nosuch", "--help"]),
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 0, 0));
@@ -165,10 +168,16 @@ fn desktop_help_and_words() {
         ("--check on list", &["list", "--check"]),
         ("start --size bad", &["start", "--size", "16x"]),
         ("ask with a word", &["ask", "x"]),
-        ("ask --open and --check", &["ask", "--open", "screen", "--check"]),
+        (
+            "ask --open and --check",
+            &["ask", "--open", "screen", "--check"],
+        ),
         ("ask --open elsewhere", &["ask", "--open", "dock"]),
         ("policy with nothing", &["policy"]),
-        ("policy, both", &["policy", "--no-hide-apps", "--hide-app", "a"]),
+        (
+            "policy, both",
+            &["policy", "--no-hide-apps", "--hide-app", "a"],
+        ),
         ("grant with no login", &["grant"]),
         ("grant with two", &["grant", "a", "b"]),
         ("revoke with no login", &["revoke"]),
@@ -252,7 +261,9 @@ fn desktop_verbs_answer_as_the_shell_does() {
             "status: may drive",
             &["status"],
             &[],
-            vec![ok(r#"{"you":{"mayControl":true,"role":"admin"},"virtual":null}"#)],
+            vec![ok(
+                r#"{"you":{"mayControl":true,"role":"admin"},"virtual":null}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -736,12 +747,12 @@ fn desktop_refusals_and_odd_answers() {
             1,
         )),
         traceback(case(
-            "setup's view raises: still exit 0",
+            "setup's view raises: set -e ends it",
             &["setup"],
             &[],
             vec![ok(r#"{"state":"closed","missing":5}"#)],
             owner_and_port,
-            0,
+            1,
             1,
         )),
     ];
@@ -874,7 +885,9 @@ fn desktop_setup_and_env_wait_as_the_shell_does() {
             &[],
             vec![
                 ok(r#"{"state":"starting","message":"booting"}"#),
-                ok(r#"{"desktop":"virtual:ws1","state":"running","message":"up","env":{"DISPLAY":":7"}}"#),
+                ok(
+                    r#"{"desktop":"virtual:ws1","state":"running","message":"up","env":{"DISPLAY":":7"}}"#,
+                ),
             ],
             owner_and_port,
             0,
@@ -1074,7 +1087,7 @@ fn desktop_help_never_acts() {
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 0, 0));
     }
-    v.push(case(
+    v.push(shell(case(
         "bash acts: grant ann --desktop -h",
         &["grant", "ann", "--desktop", "-h"],
         &[],
@@ -1082,8 +1095,8 @@ fn desktop_help_never_acts() {
         owner_and_port,
         0,
         1,
-    ));
-    v.push(case(
+    )));
+    v.push(shell(case(
         "bash acts: policy --hide-app --help",
         &["policy", "--hide-app", "--help"],
         &[],
@@ -1091,7 +1104,7 @@ fn desktop_help_never_acts() {
         owner_and_port,
         0,
         1,
-    ));
+    )));
     for c in v {
         rig.check(&c);
     }
@@ -1105,7 +1118,8 @@ fn desktop_lines_say_the_brand_s_name() {
     let c = case("brand", &["nosuch"], &[], vec![], owner_and_port, 2, 0);
     let (out, log) = rig.binary(&c, false);
     assert!(
-        out.stderr.starts_with("usage: unknown desktop verb 'nosuch'"),
+        out.stderr
+            .starts_with("usage: unknown desktop verb 'nosuch'"),
         "{}",
         out.stderr
     );

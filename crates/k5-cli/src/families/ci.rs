@@ -174,7 +174,7 @@ pub enum Parsed {
     /// A signer verb.
     Signer(signer::Ask),
     /// A verb with its flags.
-    Call(Ask),
+    Call(Box<Ask>),
 }
 
 /// `_compute_secs`: plain seconds, or `<n>h`/`<n>m`/`<n>s` parts. `Err`
@@ -421,7 +421,7 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
     if !matches!(a.tier.as_str(), "" | "ci" | "standard" | "normal") {
         return usage("usage: --tier ci|standard".into());
     }
-    Some(Parsed::Call(a))
+    Some(Parsed::Call(Box::new(a)))
 }
 
 /// `k5 ci ...`: `args` is the whole command line after `argv[0]`.
@@ -811,8 +811,7 @@ fn release(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
         Err(e) => return e,
     };
     if a.plan {
-        let _ = show(a, "release-plan", &b);
-        return Exit::Ok;
+        return show(a, "release-plan", &b);
     }
     if a.wait {
         return wait_run(cp, a, ws, b, 180, true);
@@ -820,23 +819,23 @@ fn release(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     show(a, "run", &b)
 }
 
-/// `json.load(sys.stdin)["run"][key]` printed in `$(…)`: the text, or
-/// nothing after its traceback on stderr.
-fn run_field(body: &[u8], key: &str) -> String {
-    match render::run_field(body, key) {
-        Ok(t) => t,
-        Err(tb) => {
-            let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
-            String::new()
-        }
-    }
+/// `x="$(… json.load(sys.stdin)["run"][key] …)"`: the text; under
+/// `set -e` a raise is its traceback and the end of the command (exit 1).
+fn run_field(body: &[u8], key: &str) -> Result<String, Exit> {
+    render::run_field(body, key).map_err(|tb| {
+        let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
+        Exit::Error
+    })
 }
 
 /// `run --wait` and `release --wait`: ask the run's status every
 /// `CI_WAIT_SECS` until it ends, up to `--wait-min` minutes.
 fn wait_run(cp: &mut Cp<'_>, a: &Ask, ws: &str, first: Vec<u8>, default_min: u64, release: bool) -> Exit {
     let mut body = first;
-    let id = run_field(&body, "id");
+    let id = match run_field(&body, "id") {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
     let mins: u64 = if a.wait_min.is_empty() {
         default_min
     } else {
@@ -845,7 +844,10 @@ fn wait_run(cp: &mut Cp<'_>, a: &Ask, ws: &str, first: Vec<u8>, default_min: u64
     let deadline = py::now().saturating_add(i64::try_from(mins.saturating_mul(60)).unwrap_or(i64::MAX));
     let secs = wait_secs().unwrap_or(10.0);
     let state = loop {
-        let state = run_field(&body, "state");
+        let state = match run_field(&body, "state") {
+            Ok(t) => t,
+            Err(e) => return e,
+        };
         if state != "running" {
             break state;
         }

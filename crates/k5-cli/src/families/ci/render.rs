@@ -830,6 +830,7 @@ pub fn setup(body: &[u8], out_path: &str, json_out: bool) -> Exit {
     let stderr = |text: &str| {
         let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
     };
+    // `set -e`: `missing="$(…)"` that raises ends the command.
     let missing = match load(body, 1)
         .and_then(|v| ix(&v, "missing", 1))
         .and_then(|m| crate::families::py_len(&m, 1))
@@ -837,7 +838,7 @@ pub fn setup(body: &[u8], out_path: &str, json_out: bool) -> Exit {
         Ok(n) => Some(n),
         Err(e) => {
             stderr(&e.text());
-            None
+            return Exit::Error;
         }
     };
     if missing == Some(0) {
@@ -883,8 +884,11 @@ pub fn setup(body: &[u8], out_path: &str, json_out: bool) -> Exit {
     } else {
         run_shown(body, |v, o| setup_lines(v, o, out_path))
     };
-    // Its Python's exit is lost: `[ "$missing" = 0 ] || exit 3` ends it.
-    let _ = shown.print();
+    // `set -e`: a reader that raises ends the command with 1.
+    let e = shown.print();
+    if e != Exit::Ok {
+        return e;
+    }
     if missing == Some(0) {
         Exit::Ok
     } else {

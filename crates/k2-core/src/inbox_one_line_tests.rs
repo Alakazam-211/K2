@@ -1,4 +1,5 @@
-//! An inbox cover's title is one line ([`one_line`], [`cover_text`]).
+//! An inbox cover's title is one line, and so is a wake pointer's title
+//! ([`one_line`], [`cover_text`], [`clean_wake_pointer`]).
 
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -136,4 +137,40 @@ fn a_summary_cannot_end_the_frontmatter() {
     let listed = read_item(&path, "").expect("lists");
     assert_eq!(listed.from, "tester");
     assert_eq!(listed.summary, stored);
+}
+
+#[test]
+fn a_wake_pointer_title_is_one_line() {
+    for raw in BAD {
+        let t = wake_pointer_text("plan", raw);
+        let lines: Vec<&str> = t.split('\n').collect();
+        assert_eq!(lines, [format!("[inbox:plan] {}", one_line(raw)).as_str(), "Open: k2 inbox read plan"], "{raw:?}");
+        assert!(!t.chars().any(|c| c != '\n' && hidden_or_break(c)), "{raw:?}: {t:?}");
+        let n = wake_pointer_text_n("plan", raw, Some(3));
+        assert_eq!(n.split('\n').count(), 3, "{raw:?}: {n:?}");
+        assert!(n.ends_with("\nOpen: k2 inbox read plan\n(3 files)"), "{n:?}");
+    }
+}
+
+#[test]
+fn clean_wake_pointer_cleans_a_pointer_title_and_leaves_other_text() {
+    for raw in BAD {
+        let sent = format!("[inbox:plan] {raw}\nOpen: k2 inbox read plan");
+        assert_eq!(clean_wake_pointer(&sent), wake_pointer_text("plan", raw), "{raw:?}");
+        let sent = format!("[inbox:plan] {raw}\nOpen: k2 inbox read plan\n(2 files)");
+        assert_eq!(clean_wake_pointer(&sent), wake_pointer_text_n("plan", raw, Some(2)), "{raw:?}");
+    }
+    // A clean pointer is unchanged, its own line break kept.
+    let ok = "[inbox:plan] Café plan\nOpen: k2 inbox read plan";
+    assert_eq!(clean_wake_pointer(ok), ok);
+    // Not a pointer: kept as sent (live messages may have many lines).
+    for text in [
+        "hello\nthere",
+        "[inbox:plan] a\nb",
+        "[inbox:plan] a\nOpen: k2 inbox read other",
+        "[inbox:a/b] t\nOpen: k2 inbox read a/b",
+        "see [inbox:plan] t\nOpen: k2 inbox read plan",
+    ] {
+        assert_eq!(clean_wake_pointer(text), text);
+    }
 }

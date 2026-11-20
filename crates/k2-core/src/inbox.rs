@@ -476,12 +476,45 @@ pub fn wake_pointer_text(id: &str, title: &str) -> String {
 }
 
 /// Wake pointer with optional multi-file note (`N files` when `file_count > 1`).
+/// The title is made [`one_line`], so the pointer is always its own lines.
 pub fn wake_pointer_text_n(id: &str, title: &str, file_count: Option<usize>) -> String {
+    let title = one_line(title);
     match file_count {
         Some(n) if n > 1 => {
             format!("[inbox:{id}] {title}\nOpen: k2 inbox read {id}\n({n} files)")
         }
         _ => format!("[inbox:{id}] {title}\nOpen: k2 inbox read {id}"),
+    }
+}
+
+/// A wake pointer's text with its title made [`one_line`]; any other text
+/// as it is. A pointer is text in [`wake_pointer_text_n`]'s shape: it
+/// starts `[inbox:<id>] `, ends with the `Open:` line for the same id (then
+/// `\n(<n> files)` when there are several), and its title is what lies
+/// between, line breaks included. `/cli/workspace/msg` passes every text
+/// through here, so a pointer sent to it directly is cleaned too.
+pub fn clean_wake_pointer(text: &str) -> String {
+    let Some(rest) = text.strip_prefix("[inbox:") else {
+        return text.to_string();
+    };
+    let Some((id, rest)) = rest.split_once("] ") else {
+        return text.to_string();
+    };
+    if check_item_id(id).is_err() || one_line(id) != id {
+        return text.to_string();
+    }
+    let (rest, files) = match rest.rsplit_once("\n(") {
+        Some((head, tail)) => match tail.strip_suffix(" files)").and_then(|n| n.parse::<usize>().ok()) {
+            Some(n) if n > 1 => (head, Some(n)),
+            _ => (rest, None),
+        },
+        None => (rest, None),
+    };
+    let bare = wake_pointer_text_n(id, "", None);
+    let open_line = &bare[bare.find('\n').unwrap_or(bare.len())..];
+    match rest.strip_suffix(open_line) {
+        Some(title) => wake_pointer_text_n(id, title, files),
+        None => text.to_string(),
     }
 }
 

@@ -734,13 +734,13 @@ fn plan(picked: &str, body: &[u8], joined: &str) -> Result<String, Raise> {
         }
     }
     let find = |n: &str| rows.iter().find(|(k, _)| k == n).map(|(_, r)| r.clone());
-    let missing: Vec<&str> = want.iter().copied().filter(|n| find(n).is_none()).collect();
+    let missing: Vec<&str> = want.iter().copied().filter(|n| find(*n).is_none()).collect();
     if !missing.is_empty() {
         return Ok(format!("missing\t{}", missing.join(",")));
     }
     let (mut items, mut pairs) = (Vec::new(), Vec::new());
     for n in &want {
-        let row = find(n).unwrap_or(Value::Null);
+        let row = find(*n).unwrap_or(Value::Null);
         let mut sec = at(&row, "urlSecret", 13)?;
         if !py::truthy(&sec) {
             sec = if picked.is_empty() { at(&row, "secret", 13)? } else { s(picked) };

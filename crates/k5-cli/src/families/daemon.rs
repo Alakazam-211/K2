@@ -14,7 +14,8 @@
 //! is-active` and `show -p MainPID`; on macOS from `launchctl print`. Then
 //! `daemon.port` and `daemon.token` in the K2 home, and one GET of
 //! `/boot-status` on that port (no credential, one try, connect 2 s, at
-//! most 4 s) for the k2-ptyd lines.
+//! most 4 s; the hand-over headers, the owner's source among them) for
+//! the k2-ptyd lines.
 //!
 //! The shell answers these itself ([`run`] returns `None`): `-h` or
 //! `--help` anywhere, a word that is not UTF-8, `HOOK_SOCK` set with a
@@ -30,7 +31,6 @@ use crate::passport;
 use crate::prelude;
 use crate::python;
 use crate::route::{Owner, Verb};
-use crate::transport::{Auth, Client};
 use k2_client::brand::{CLI_NAME as CLI, PRODUCT_NAME as PRODUCT};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -95,7 +95,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         // (a bash bug, copied): exit 1, nothing printed.
         return Some(Exit::Error);
     }
-    Some(status(&settings, json).print())
+    Some(status(&settings, json, would_refuse).print())
 }
 
 /// What a program printed on stdout, its trailing newlines gone, and
@@ -220,13 +220,19 @@ fn token_present(home: &Path) -> bool {
     std::fs::metadata(home.join("daemon.token")).is_ok_and(|m| m.is_file() && m.len() > 0)
 }
 
-/// `_daemon_status_ptyd <port>`: `(ptyd, adopted)`, or `None`.
-fn ptyd(port: &str, project: &str) -> Option<(String, String)> {
+/// `_daemon_status_ptyd <port>`: `(ptyd, adopted)`, or `None`. Its
+/// `_k2_curl` sends no credential but the hand-over headers, the owner's
+/// source among them.
+fn ptyd(s: &Settings, port: &str, would_refuse: bool) -> Option<(String, String)> {
     if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let port: u16 = port.parse().ok().filter(|p| *p != 0)?;
-    let mut c = Client::new("127.0.0.1", port, project, Auth::None);
+    let local = Settings {
+        host: "127.0.0.1".to_string(),
+        ..s.clone()
+    };
+    let mut c = local.client_on(port, would_refuse);
     let r = c.get_update_version("/boot-status").ok()?;
     let raw = String::from_utf8_lossy(&r.body);
     let raw = if raw.is_empty() { "null".into() } else { raw };
@@ -254,7 +260,7 @@ fn ptyd_lines(o: &mut String, p: &Option<(String, String)>) {
 }
 
 /// `cmd_daemon_status [--json]`.
-pub fn status(s: &Settings, json: bool) -> Shown {
+pub fn status(s: &Settings, json: bool, would_refuse: bool) -> Shown {
     let home = &s.home;
     let log = home.join("daemon.stdout.log");
     let log = log.to_string_lossy();
@@ -276,7 +282,7 @@ pub fn status(s: &Settings, json: bool) -> Shown {
         }
         let port = file_text(&home.join("daemon.port"));
         let token = if token_present(home) { "yes" } else { "no" };
-        let p = ptyd(&port, &s.project);
+        let p = ptyd(s, &port, would_refuse);
         if json {
             let (pl, pa) = p.clone().unwrap_or_default();
             return Shown::out(format!(
@@ -339,7 +345,7 @@ pub fn status(s: &Settings, json: bool) -> Shown {
     };
     let port = file_text(&home.join("daemon.port"));
     let token = token_present(home);
-    let p = ptyd(&port, &s.project);
+    let p = ptyd(s, &port, would_refuse);
     let plist = plist.to_string_lossy();
     if json {
         let (pl, pa) = p.clone().unwrap_or_default();

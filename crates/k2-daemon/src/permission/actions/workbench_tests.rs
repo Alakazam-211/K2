@@ -228,3 +228,33 @@ fn retire_refuses_unlanded_work_until_discard() {
     let (s, v) = ask(&ws, RETIRE_ACTION, json!({ "sidecar": "spike", "discard": "yes" }));
     assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
 }
+
+/// D1: an agent's plain `k2 commit` is the `git.commit` card, at the Admin
+/// floor with its `commit_needs_person` wall. A Member can't answer; an
+/// Admin's Allow runs the commit route as the owner's commit runs today.
+#[test]
+fn a_plain_commit_card_runs_the_commit_route_on_allow() {
+    let _db = k2_core::db::scoped_for_test();
+    let home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let r = super::super::find(COMMIT_ACTION).expect("registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (Floor::Admin, Proof::Click, Grant::OneTime));
+    assert!(matches!(r.spec.undo, Undo::None));
+    assert_eq!(r.spec.params.iter().map(|p| p.key).collect::<Vec<_>>(), ["message"]);
+    let walls: Vec<(&str, WallMatch)> = r.spec.walls.iter().map(|w| (w.route_prefix, w.matches)).collect();
+    assert_eq!(walls, [(COMMIT_ROUTE, WallMatch::Code { status: 403, code: crate::passport_routes::COMMIT_NEEDS_PERSON })]);
+
+    let ws: Ws = seed("wbcommit");
+    repo_for(&home, &ws);
+    let v = ask_ok(&ws, COMMIT_ACTION, json!({ "message": "wip" }));
+    let card = card_of(&v);
+    let member = login("wbcm", Role::Member);
+    below_floor(answer_as(&member, &ws, &card, json!({ "answer": "Allow" })), "admin");
+    let admin = login("wbca", Role::Admin);
+    let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["action"]["result"]["outcome"], "approved", "{a}");
+    let turn = last_turn(&ws);
+    assert!(turn.contains("The AI commit terminal opens to commit."), "{turn}");
+}

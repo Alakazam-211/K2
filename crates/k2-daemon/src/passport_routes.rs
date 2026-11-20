@@ -100,8 +100,9 @@ pub(crate) const ROUTES: &[Route] = &[
     named("/cli/agents/delete", Scope::Own, &["name"]),
     route("/cli/agents/list", Scope::Own),
     named("/cli/agents/profile", Scope::Own, &["agent"]),
-    // `k2 commit [--merge]` (manager skill); a merge is a person's
-    // ([`merge_needs_person`]).
+    // `k2 commit [--merge]` (manager skill); both are a person's
+    // ([`needs_person`]): the commit starts the person's default agent
+    // preset with the agent's message as its prompt.
     route("/cli/commit", Scope::Own),
     route("/cli/commit-merge", Scope::Own),
     // `k2 agent context list|show|catalog`.
@@ -123,7 +124,7 @@ pub(crate) const ROUTES: &[Route] = &[
     route("/cli/onboarding/scan", Scope::Own),
     route("/cli/presets/list", Scope::Shared),
     // `k2 review approve|reject|feedback` and `k2 reviews` (manager skill);
-    // approving its own branch is a person's ([`merge_needs_person`]).
+    // approving its own branch is a person's ([`needs_person`]).
     named("/cli/review/approve", Scope::Own, &["agent"]),
     named("/cli/review/feedback", Scope::Own, &["agent"]),
     named("/cli/review/reject", Scope::Own, &["agent"]),
@@ -235,7 +236,7 @@ pub(crate) async fn serve_tcp(
     // The workspace scope first (`cli::dispatch` applies it again), then the
     // steps a person makes, then the actor.
     let refused = refusal(path, &params)
-        .or_else(|| merge_needs_person(path, &params, &principal))
+        .or_else(|| needs_person(path, &params, &principal))
         .or_else(|| actor_is_the_passport(path, &mut params, &principal));
     if let Some(r) = refused {
         http::send_response(stream, r.status, r.content_type, &r.body).await;
@@ -256,14 +257,28 @@ pub(crate) async fn serve_tcp(
 /// `git.review-approve` and `git.commit-merge` cards teach it.
 pub(crate) const MERGE_NEEDS_PERSON: &str = "merge_needs_person";
 
-/// A merge of the agent's own work is a person's (K2's ruling on D1):
-/// `k2 commit --merge` always (who wrote what it merges can't be told), and
-/// `k2 review approve` of a branch whose author is the passport itself, or
-/// can't be told ([`own_branch`]). Approving another agent of the same
-/// workspace stays the agent's. `Some(403 merge_needs_person)`, naming the
-/// branch, which the permission card asks a person to approve.
-fn merge_needs_person(path: &str, params: &HashMap<String, String>, principal: &HookPrincipal) -> Option<CliResponse> {
+/// The refusal code of a plain `k2 commit` a person makes for the agent;
+/// the `git.commit` card teaches it.
+pub(crate) const COMMIT_NEEDS_PERSON: &str = "commit_needs_person";
+
+/// The steps a person makes for the agent (K2's ruling on D1, and the
+/// Steward's review of it):
+/// - a plain `k2 commit`: the desktop starts the person's default agent
+///   preset with the message the agent chose as its prompt, a path around
+///   the hire switch and the passport's scope (`403 commit_needs_person`);
+/// - `k2 commit --merge` always (who wrote what it merges can't be told);
+/// - `k2 review approve` of a branch whose author is the passport itself,
+///   or can't be told ([`own_branch`]). Approving another agent of the
+///   same workspace stays the agent's.
+///
+/// A merge is `Some(403 merge_needs_person)`, naming the branch. Each
+/// refusal is taught by its permission card, which a person allows.
+fn needs_person(path: &str, params: &HashMap<String, String>, principal: &HookPrincipal) -> Option<CliResponse> {
     let error = match path {
+        "/cli/commit" => serde_json::json!({
+            "code": COMMIT_NEEDS_PERSON,
+            "hint": "k2 commit starts a person's agent preset to make the commit; a person allows it",
+        }),
         "/cli/commit-merge" => serde_json::json!({
             "code": MERGE_NEEDS_PERSON,
             "hint": "an agent commits; merging its work is a person's step",

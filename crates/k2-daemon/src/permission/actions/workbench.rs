@@ -16,7 +16,8 @@
 //! One-time, click proof, no undo.
 //!
 //! D1 (0.46.17): `git.review-approve agent= branch=` and `git.commit-merge
-//! [message=]`, an agent's own merge that a person makes for it.
+//! [message=]`, an agent's own merge that a person makes for it, and
+//! `git.commit [message=]`, its plain commit.
 
 use k2_core::permission::catalog::{
     ActionSpec, Area, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamFrom, ParamKind, ParamSpec, Proof, SettingsRef,
@@ -32,8 +33,10 @@ use k2_core::cli_name;
 pub(crate) const LAND_ACTION: &str = "git.land";
 pub(crate) const REVIEW_APPROVE_ACTION: &str = "git.review-approve";
 pub(crate) const COMMIT_MERGE_ACTION: &str = "git.commit-merge";
+pub(crate) const COMMIT_ACTION: &str = "git.commit";
 const REVIEW_APPROVE_ROUTE: &str = "/cli/review/approve";
 const COMMIT_MERGE_ROUTE: &str = "/cli/commit-merge";
+const COMMIT_ROUTE: &str = "/cli/commit";
 pub(crate) const RETIRE_ACTION: &str = "sidecar.retire";
 
 const SETTINGS: SettingsRef = SettingsRef { page: "workspaces/{ws}", path: concat!(cli_name!(), " sidecar review {ws}/{sidecar}") };
@@ -174,6 +177,41 @@ pub(crate) static COMMIT_MERGE: ActionSpec = ActionSpec {
     machine_hints: &[],
 };
 
+/// D1 (0.46.17): a plain `k2 commit` from an agent's passport is a
+/// person's step too: the desktop starts the person's default agent
+/// preset with the message the agent chose as its prompt
+/// (`passport_routes::needs_person`). The person's click runs the same
+/// route as the owner.
+pub(crate) static COMMIT: ActionSpec = ActionSpec {
+    id: COMMIT_ACTION,
+    area: Area::Misc,
+    params: &[ParamSpec { key: "message", kind: ParamKind::Text, required: false, list: false, choices: &[] }],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Commit in {ws}",
+        what_changes: "Commit {ws}'s changes with the AI commit",
+        consequences: "The desktop app opens the AI commit terminal in {ws} with your default agent preset, which gets the agent's message as its prompt and commits the changes. Nothing is merged.",
+        scope: "{ws}",
+        duration: "once",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "workspaces/{ws}", path: "the Changes tab of {ws}" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: crate::passport_routes::COMMIT_NEEDS_PERSON },
+        route_prefix: COMMIT_ROUTE,
+        method: WallMethod::Post,
+        params: &[("message", ParamFrom::Query("message"))],
+    }],
+    coverage: WallCoverage::Code,
+    form: None,
+    machine_hints: &[],
+};
+
 /// The asking workspace's folder, by its id.
 fn workspace_path(ctx: &Ctx) -> Result<String, String> {
     crate::workspace_msg::resolve_workspace(&ctx.workspace_id).ok_or_else(|| "the workspace is gone".to_string())
@@ -194,6 +232,7 @@ fn check_review_approve(ctx: &Ctx) -> Check {
     }
 }
 
+/// `git.commit-merge` and `git.commit`: needed while the workspace is there.
 fn check_commit_merge(ctx: &Ctx) -> Check {
     match workspace_path(ctx) {
         Ok(_) => Check::Needed,
@@ -225,6 +264,13 @@ fn apply_review_approve(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Ap
 fn apply_commit_merge(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     match run_route(COMMIT_MERGE_ROUTE, ctx, who, &["message"]) {
         Ok(r) => applied(&r, |_| "The AI commit terminal opens to commit and merge.".to_string()),
+        Err(refused) => refused,
+    }
+}
+
+fn apply_commit(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    match run_route(COMMIT_ROUTE, ctx, who, &["message"]) {
+        Ok(r) => applied(&r, |_| "The AI commit terminal opens to commit.".to_string()),
         Err(refused) => refused,
     }
 }
@@ -348,6 +394,7 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &RETIRE, check: check_retire, apply: apply_retire },
         Registered { spec: &REVIEW_APPROVE, check: check_review_approve, apply: apply_review_approve },
         Registered { spec: &COMMIT_MERGE, check: check_commit_merge, apply: apply_commit_merge },
+        Registered { spec: &COMMIT, check: check_commit_merge, apply: apply_commit },
     ]
 }
 

@@ -177,7 +177,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 79] = [
+pub(crate) const V1_ACTIONS: [&str; 80] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -321,9 +321,10 @@ pub(crate) const V1_ACTIONS: [&str; 79] = [
     // owner's). Its `ci.preview-off` twin is asked only.
     "ci.preview",
     // D1 (0.46.17): a person approves an agent's own review branch, and
-    // makes its commit --merge.
+    // makes its commit --merge and its plain commit.
     "git.review-approve",
     "git.commit-merge",
+    "git.commit",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -608,6 +609,11 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         params: &[("message", &[ParamFrom::Query("message")])],
         ..row(ask("git.commit-merge", Floor::Admin), code(403, "merge_needs_person"), "/cli/commit-merge", POST)
+    },
+    // D1 (0.46.17): an agent's plain commit starts a person's agent preset.
+    Row {
+        params: &[("message", &[ParamFrom::Query("message")])],
+        ..row(ask("git.commit", Floor::Admin), code(403, "commit_needs_person"), "/cli/commit", POST)
     },
     // `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-X4): the same
     // switch as sidecar new. Its main-only refusal (`main_only`) can't be
@@ -1607,6 +1613,7 @@ mod tests {
             // D1 (0.46.17): an agent approving its own review branch, and its commit --merge.
             (403, "POST", "/cli/review/approve", vec![("agent", "scout"), ("branch", "agent/scout/fix")], None, json!({"error":{"code":"merge_needs_person","hint":"x","agent":"scout","branch":"agent/scout/fix"}}), "git.review-approve"),
             (403, "POST", "/cli/commit-merge", vec![("message", "wip")], None, json!({"error":{"code":"merge_needs_person","hint":"x"}}), "git.commit-merge"),
+            (403, "POST", "/cli/commit", vec![("message", "wip")], None, json!({"error":{"code":"commit_needs_person","hint":"x"}}), "git.commit"),
             // 0.46.6: an agent's own reset (the owner's route) and a password
             // it may not set (a box login).
             (403, "POST", "/cli/skin/users/reset-link", vec![], Some(json!({"username":"adam","app":"agents.acme","code":true})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "apps.user-password-reset"),
@@ -2201,7 +2208,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 79);
+        assert_eq!(V1_ACTIONS.len(), 80);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

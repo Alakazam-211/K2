@@ -489,7 +489,9 @@ fn branch_tip(ws: &Path, b: &str) -> Option<git2::Oid> {
 /// A merge of the agent's own work is a person's: approving its own branch,
 /// or one whose author can't be told, and `commit --merge` answer
 /// `merge_needs_person` with the permission card, and nothing is merged.
-/// Another agent's branch in its workspace is admitted and merged.
+/// A plain commit is a person's too (`commit_needs_person`, the
+/// `git.commit` card); the owner's runs as before. Another agent's branch
+/// in its workspace is admitted and merged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn its_own_merge_is_a_card_for_a_person() {
     let t = k2_core::test_env::TempHome::new();
@@ -529,8 +531,17 @@ async fn its_own_merge_is_a_card_for_a_person() {
     assert_eq!(r.status, 403, "commit --merge: {}", r.raw);
     let v = r.json("commit-merge");
     assert_eq!((v["error"]["code"].as_str(), v["permission"]["action"].as_str()), (Some("merge_needs_person"), Some("git.commit-merge")), "{v}");
+    // A plain commit starts a person's agent preset: its own card.
     let r = http(e.port, "POST", &format!("/cli/commit?project={own}&message=wip"), Some(e.passport.as_str()));
-    assert_eq!(r.status, 200, "a plain commit stays the agent's: {}", r.raw);
+    assert_eq!(r.status, 403, "a plain commit: {}", r.raw);
+    let v = r.json("commit");
+    assert_eq!((v["error"]["code"].as_str(), v["permission"]["action"].as_str()), (Some("commit_needs_person"), Some("git.commit")), "{v}");
+    let command = v["permission"]["command"].as_str().unwrap_or_else(|| panic!("commit: no command: {v}"));
+    assert!(command.starts_with("k2 permission request git.commit ") && command.contains("message=wip"), "{command}");
+    // The owner's commit runs as before.
+    let r = http(e.port, "POST", &format!("/cli/commit?project={own}&message=wip"), Some(OWNER));
+    assert_eq!(r.status, 200, "the owner's commit: {}", r.raw);
+    assert_eq!(r.json("owner commit")["action"], "commit", "{}", r.raw);
 
     // Another agent of its workspace: admitted, merged.
     let path = format!("/cli/review/approve?project={own}&agent=backend&branch={}", enc("agent/backend/task"));

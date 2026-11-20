@@ -729,17 +729,36 @@ fn compute_logs() {
             3,
             1,
         ),
-        Case {
-            no_tmpdir: true,
-            ..case(
-                "logs: TMPDIR unusable",
-                &["logs", "abcd1234"],
-                &[],
-                vec![ok(JOB)],
-                owner_and_port,
-                1,
-                1,
-            )
+        // TMPDIR names a folder that isn't there. Linux's `mktemp -t`
+        // fails there, after the job's answer; macOS's falls back to the
+        // user's own temp folder (then /tmp), so the log is read as ever.
+        // Both sides run the mktemp on PATH.
+        if cfg!(target_os = "macos") {
+            Case {
+                no_tmpdir: true,
+                ..case(
+                    "logs: TMPDIR unusable, macOS's mktemp falls back",
+                    &["logs", "abcd1234"],
+                    &[],
+                    vec![ok(JOB), ok(&p1), ok(&p2)],
+                    owner_and_port,
+                    0,
+                    3,
+                )
+            }
+        } else {
+            Case {
+                no_tmpdir: true,
+                ..case(
+                    "logs: TMPDIR unusable",
+                    &["logs", "abcd1234"],
+                    &[],
+                    vec![ok(JOB)],
+                    owner_and_port,
+                    1,
+                    1,
+                )
+            }
         },
         Case {
             compare: Compare::Traceback,

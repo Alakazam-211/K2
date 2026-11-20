@@ -18,6 +18,10 @@
 #    remote-session, doc) and daemon restart --host (clone has its own
 #    gate: the same rule, its own line and exit 3). Plain
 #    http to loopback still works.
+# 3. Local traffic never goes through a proxy: a control-plane call the CLI
+#    makes itself (no daemon) to loopback gets --noproxy '*' like a daemon
+#    call, with every proxy variable set. https to a remote control plane
+#    keeps the person's proxy (the stub proxy gets its CONNECT).
 #
 # A stub daemon (loopback TCP), a stub control plane and a stub proxy each
 # log what reaches them. A second port is bound and closed: "no daemon"
@@ -274,6 +278,17 @@ run daemon proxy - daemon restart --host "http://localhost:$DPORT"
 reached "daemon restart --host http://localhost: sent" "^daemon POST /cli/daemon/restart Bearer $OWNER\$"
 run daemon proxy - daemon restart --host "http://[::1]:$CLOSED"
 if [ "$ERR" != "${ERR#Error: plain http}" ]; then bad "daemon restart --host http://[::1]: refused: $(printf %q "$ERR")"; else ok "daemon restart --host http://[::1]: not refused (exit $RC)"; fi
+
+echo "== 3. local traffic never goes through a proxy =="
+run nodaemon proxy "$CP" publish subdomain list --json
+[ "$RC" = 0 ] && ok "control plane on 127.0.0.1, proxy set: exit 0" || bad "control plane on 127.0.0.1, proxy set: exit $RC (stderr: $(printf %q "$ERR"))"
+reached "control plane on 127.0.0.1, proxy set: the call went straight there" "^cp GET /subdomains Bearer $TUNNEL\$"
+no_proxy_hit "control plane on 127.0.0.1"
+run nodaemon proxy "http://localhost:$CPPORT" publish subdomain list --json
+reached "control plane on localhost, proxy set: the call went straight there" "^cp GET /subdomains Bearer $TUNNEL\$"
+no_proxy_hit "control plane on localhost"
+run nodaemon proxy "https://k2-remote.example.test" publish subdomain list --json
+reached "control plane on remote https: the person's proxy got the CONNECT" "^proxy CONNECT k2-remote.example.test:443 "
 
 echo
 echo "connect_base_and_proxy: $pass passed, $fail failed"

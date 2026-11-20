@@ -489,7 +489,8 @@ def k5_request(req):
 #
 # Every daemon request also carries the hand-over headers (_k5_headers),
 # first on the argv, in their order. A caller that talks to something
-# other than the daemon sets _K2_CURL_NOT_DAEMON=1 for that call: none.
+# other than the daemon sets _K2_CURL_NOT_DAEMON=1 for that call: no
+# hand-over headers (the proxy rule below still applies).
 #
 # Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
 # HTTPS to a remote K2 may use the person's proxy (a CONNECT tunnel hides
@@ -499,8 +500,9 @@ def k5_request(req):
 # ALL_PROXY and their other spellings are not used for it); an https://
 # call to a remote K2 server keeps the person's proxy settings
 # (_k2_direct_url decides, from the URL argument or the config's url line).
-# It is not a secret, so it rides argv. A _K2_CURL_NOT_DAEMON call keeps
-# the proxy settings of the person's environment.
+# It is not a secret, so it rides argv. The rule holds for every call,
+# _K2_CURL_NOT_DAEMON ones too (the K2 Connect control plane on loopback
+# or plain http never goes through a proxy either).
 #
 # _k2_direct_url URL: true when a request to URL must skip every proxy
 # setting. Only https:// to a host that is not loopback may use one; a
@@ -630,6 +632,18 @@ _k2_curl() {
     for a in "$@"; do
         case "$a" in @-|-T) once=1 ;; esac
     done
+    local url="" l
+    for a in "$@"; do
+        case "$a" in http://*|https://*|HTTP://*|HTTPS://*) url="$a"; break ;; esac
+    done
+    if [ -z "$url" ] && [ -n "$cfg" ]; then
+        while IFS= read -r l; do
+            case "$l" in 'url = "'*) url="${l#url = \"}"; break ;; esac
+        done <<< "$cfg"
+    fi
+    if _k2_direct_url "$url"; then
+        set -- --noproxy '*' "$@"
+    fi
     if [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
         # A Codex call's conversation headers ride the config, never argv.
         # A request whose body is stdin with no config gets them from a
@@ -651,18 +665,6 @@ _k2_curl() {
                 if [ -n "$_K2_CYGPATH" ]; then hdr_arg="$(cygpath -w "$hdr_file")"; fi
                 set -- -K "$hdr_arg" "$@"
             fi
-        fi
-        local url="" l
-        for a in "$@"; do
-            case "$a" in http://*|https://*|HTTP://*|HTTPS://*) url="$a"; break ;; esac
-        done
-        if [ -z "$url" ] && [ -n "$cfg" ]; then
-            while IFS= read -r l; do
-                case "$l" in 'url = "'*) url="${l#url = \"}"; break ;; esac
-            done <<< "$cfg"
-        fi
-        if _k2_direct_url "$url"; then
-            set -- --noproxy '*' "$@"
         fi
         _k5_headers
         for ((i = ${#_K5_HDRS[@]} - 1; i >= 0; i--)); do

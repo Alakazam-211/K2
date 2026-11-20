@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# k2 compute local enable takes the enroll code on stdin (--code-stdin) and
-# a one-click ticket on stdin (--ticket-stdin); neither ever lands in a child process's argv or environment (ps
-# shows a command line to every user on this computer, and the environment
-# to this user's processes). --enroll/--code CODE.FP and --ticket T still
-# work for now and print one note on stderr.
+# k2 compute local enable takes the enroll code on stdin (--code-stdin) and a
+# one-click ticket on stdin (--ticket-stdin); neither ever lands in a child
+# process's argv or environment (ps shows a command line to every account on
+# this computer, and the environment to this user's processes).
+# --enroll/--code CODE.FP and --ticket T still work for now and print one note
+# on stderr.
 #
 # The real CLI runs against a stub daemon on TCP that answers
 # /cli/compute/local/enable and records each request. Every python3, curl

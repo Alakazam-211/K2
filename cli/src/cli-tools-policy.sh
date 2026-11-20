@@ -459,8 +459,8 @@ _k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule()))
 export _K2_PY_PROXY_RULE
 # A secret for an embedded Python script that is itself read from stdin (a
 # heredoc) rides stdin ahead of the script, never argv or the environment (ps
-# shows a command line to every user on this computer, and the environment to
-# this user's processes):
+# shows a command line to every account on this computer, and the environment
+# to this user's processes):
 #   { _k2_stdin_secrets NAME "$value" ...; cat; } <<'PY' | VAR=… python3 -c "$_K2_PY_STDIN_BOOT" args…
 # stdin is NAME NUL value NUL for each pair, one more NUL, then the script.
 # The script reads the values from the dict K2_STDIN_SECRETS. Bash values

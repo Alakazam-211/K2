@@ -173,8 +173,8 @@ _compute_call_nf() {
 # value leaves its key out; when a key repeats, its last value counts.
 _compute_json() {
     # Every value reaches python on stdin (_k2_stdin_secrets), never argv or
-    # the environment (ps shows a command line to every user on this computer,
-    # and the environment to this user's processes).
+    # the environment (ps shows a command line to every account on this
+    # computer, and the environment to this user's processes).
     # Secrets (K2_CJ_<name>_s, K2_CJ_<name>Token) come first in the body,
     # then the other keys, each in the order given.
     local _a _pairs=()

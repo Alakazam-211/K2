@@ -124,7 +124,7 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
                         pair-verify) route="pair/v2/verify" ;;
                     esac
                     # The token reaches python on stdin, never argv or the
-                    # environment (ps shows a command line to every user on
+                    # environment (ps shows a command line to every account on
                     # this computer, and the environment to this user's
                     # processes).
                     body=$(printf '%s' "$token_in" | python3 -c 'import base64,json,sys

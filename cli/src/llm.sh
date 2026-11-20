@@ -76,9 +76,10 @@ EOF
 _LLMA_BASE="/cli/llm/accounts"
 
 # _llma_json k1 v1 k2 v2 … → a JSON object. Values "__true__"/"__false__"
-# become booleans; empty values are dropped. The pairs reach python on
-# stdin, NUL-separated, never argv: a value can be a secret (the sign-in
-# code of login/input), and ps shows argv to every process of this user.
+# become booleans; empty values are dropped. The pairs reach python on stdin,
+# NUL-separated, never argv: a value can be a secret (the sign-in code of
+# login/input), and ps shows a command line to every account on this computer,
+# and the environment to this user's processes.
 _llma_json() {
     if [ $# -eq 0 ]; then echo '{}'; return 0; fi
     printf '%s\0' "$@" | python3 -c '

@@ -921,8 +921,8 @@ _k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule()))
 export _K2_PY_PROXY_RULE
 # A secret for an embedded Python script that is itself read from stdin (a
 # heredoc) rides stdin ahead of the script, never argv or the environment (ps
-# shows a command line to every user on this computer, and the environment to
-# this user's processes):
+# shows a command line to every account on this computer, and the environment
+# to this user's processes):
 #   { _k2_stdin_secrets NAME "$value" ...; cat; } <<'PY' | VAR=… python3 -c "$_K2_PY_STDIN_BOOT" args…
 # stdin is NAME NUL value NUL for each pair, one more NUL, then the script.
 # The script reads the values from the dict K2_STDIN_SECRETS. Bash values
@@ -17411,7 +17411,7 @@ EOF
             rooms_j="$(K2_GR_ROOMS="$rooms_csv" python3 -c 'import json,os; print(json.dumps([r.strip() for r in os.environ["K2_GR_ROOMS"].split(",") if r.strip()]))')"
         fi
         # The password is a secret key (_s): it reaches python on stdin, never
-        # argv or the environment (ps shows a command line to every user on
+        # argv or the environment (ps shows a command line to every account on
         # this computer, and the environment to this user's processes).
         _app_rt_post /cli/app/test-guest/add "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_role="$role" K2_CJ_expires="$expires" K2_CJ_password_s="$pw" K2_CJ_rooms_j="$rooms_j")"
         _app_grace_done "$json_out"
@@ -22304,7 +22304,7 @@ cmd_skin() {
                     fi
                     local body raw
                     # The password reaches python on stdin, never argv or the
-                    # environment (ps shows a command line to every user on
+                    # environment (ps shows a command line to every account on
                     # this computer, and the environment to this user's
                     # processes).
                     body=$(printf '%s' "$pw" | K2_SKIN_USER="$username" K2_SKIN_PW_SET="$password_stdin" K2_SKIN_EMAIL="$email" K2_SKIN_APP="$app" K2_SKIN_ROLE="$role" K2_SKIN_TEMP="$temp_password" python3 -c '
@@ -31147,8 +31147,8 @@ _compute_call_nf() {
 # value leaves its key out; when a key repeats, its last value counts.
 _compute_json() {
     # Every value reaches python on stdin (_k2_stdin_secrets), never argv or
-    # the environment (ps shows a command line to every user on this computer,
-    # and the environment to this user's processes).
+    # the environment (ps shows a command line to every account on this
+    # computer, and the environment to this user's processes).
     # Secrets (K2_CJ_<name>_s, K2_CJ_<name>Token) come first in the body,
     # then the other keys, each in the order given.
     local _a _pairs=()
@@ -36213,9 +36213,10 @@ EOF
 _LLMA_BASE="/cli/llm/accounts"
 
 # _llma_json k1 v1 k2 v2 … → a JSON object. Values "__true__"/"__false__"
-# become booleans; empty values are dropped. The pairs reach python on
-# stdin, NUL-separated, never argv: a value can be a secret (the sign-in
-# code of login/input), and ps shows argv to every process of this user.
+# become booleans; empty values are dropped. The pairs reach python on stdin,
+# NUL-separated, never argv: a value can be a secret (the sign-in code of
+# login/input), and ps shows a command line to every account on this computer,
+# and the environment to this user's processes.
 _llma_json() {
     if [ $# -eq 0 ]; then echo '{}'; return 0; fi
     printf '%s\0' "$@" | python3 -c '
@@ -39038,7 +39039,7 @@ if v.get("recoveryHint"):
 
 # Add a confirm token to a JSON body ($1) as field $3 (confirmToken). The
 # token reaches python on stdin, never argv or the environment (ps shows a
-# command line to every user on this computer, and the environment to this
+# command line to every account on this computer, and the environment to this
 # user's processes). An empty token sets null.
 _with_confirm_token() {
     local body="${1:-}" tok="${2:-}" field="${3:-confirmToken}"
@@ -43034,8 +43035,8 @@ print()' >&2
                     printf '\033[2J\033[H' >&2
                     # The typed-back words reach python on stdin, one per
                     # line, never argv or the environment (ps shows a command
-                    # line to every user on this computer, and the environment
-                    # to this user's processes).
+                    # line to every account on this computer, and the
+                    # environment to this user's processes).
                     _vault_sock_call POST recovery/confirm "$(printf '%s\n' "${words[@]}" | python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1], "words": sys.stdin.read().split("\n")[:3]}))' "$rid")"
                     words=()
                     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
@@ -44120,8 +44121,8 @@ elif d.get("autoStart") is False:
                 [ -n "$token" ] || { echo "k2 tunnel switch: --token-stdin: no token on stdin" >&2; exit 2; }
             fi
             # The token reaches python on stdin, never argv or the environment
-            # (ps shows a command line to every user on this computer, and the
-            # environment to this user's processes).
+            # (ps shows a command line to every account on this computer, and
+            # the environment to this user's processes).
             local body
             body=$(printf '%s' "$token" | SUB="$subdomain" START="$start" python3 -c '
 import json, os, sys
@@ -48351,7 +48352,7 @@ for line in d.get("doctor") or []:
             local body_role=""
             case "$role" in member|voice_chat) body_role="$role" ;; esac
             # The password reaches python on stdin, never argv or the
-            # environment (ps shows a command line to every user on this
+            # environment (ps shows a command line to every account on this
             # computer, and the environment to this user's processes).
             body=$(printf '%s' "$password" | USERNAME="$username" KEEP="$keep_password" ROLE="$body_role" \
                 SHARE_AGENTS="$share_agents" SHARE_GARDENS="$share_gardens" SHARE_SOURCES="$share_sources" \
@@ -49291,8 +49292,8 @@ _connect_device_label() {
 # Supabase password grant → access_token / refresh_token / email.
 # Prints the three fields one-per-line on success; errors on stderr.
 # The password reaches python on stdin, never argv or the environment (ps
-# shows a command line to every user on this computer, and the environment to
-# this user's processes).
+# shows a command line to every account on this computer, and the environment
+# to this user's processes).
 _connect_supabase_sign_in() {
     local email="$1" password="$2"
     printf '%s' "$password" | EMAIL="$email" \
@@ -49521,8 +49522,9 @@ sys.stdout.write(pw)
 
     # Pick subdomain (interactive numbered list, or --subdomain).
     # The picker sees the rows without their tunnel tokens: SUBS_JSON is in
-    # its environment, and a token never is (ps shows it to every process
-    # of this user). The chosen row's token is read on stdin below.
+    # its environment, and a token never is (ps shows a command line to every
+    # account on this computer, and the environment to this user's processes).
+    # The chosen row's token is read on stdin below.
     local pick_json subs_public
     subs_public="$(printf '%s' "$subs_json" | python3 -c '
 import json, sys
@@ -77952,7 +77954,7 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
                         pair-verify) route="pair/v2/verify" ;;
                     esac
                     # The token reaches python on stdin, never argv or the
-                    # environment (ps shows a command line to every user on
+                    # environment (ps shows a command line to every account on
                     # this computer, and the environment to this user's
                     # processes).
                     body=$(printf '%s' "$token_in" | python3 -c 'import base64,json,sys

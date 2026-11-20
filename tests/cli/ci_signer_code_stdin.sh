@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # k2 ci signer add takes the pairing code on stdin (--code-stdin), and the
 # code never lands in a child process's argv or environment (ps shows a
-# command line to every user on this computer, and the environment to this
+# command line to every account on this computer, and the environment to this
 # user's processes). The <CODE.FP> word still works for now and prints one
 # note on stderr that other users can see it.
 #

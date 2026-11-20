@@ -389,7 +389,7 @@ if v.get("recoveryHint"):
 
 # Add a confirm token to a JSON body ($1) as field $3 (confirmToken). The
 # token reaches python on stdin, never argv or the environment (ps shows a
-# command line to every user on this computer, and the environment to this
+# command line to every account on this computer, and the environment to this
 # user's processes). An empty token sets null.
 _with_confirm_token() {
     local body="${1:-}" tok="${2:-}" field="${3:-confirmToken}"

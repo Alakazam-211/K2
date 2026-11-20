@@ -224,8 +224,8 @@ _connect_device_label() {
 # Supabase password grant → access_token / refresh_token / email.
 # Prints the three fields one-per-line on success; errors on stderr.
 # The password reaches python on stdin, never argv or the environment (ps
-# shows a command line to every user on this computer, and the environment to
-# this user's processes).
+# shows a command line to every account on this computer, and the environment
+# to this user's processes).
 _connect_supabase_sign_in() {
     local email="$1" password="$2"
     printf '%s' "$password" | EMAIL="$email" \
@@ -454,8 +454,9 @@ sys.stdout.write(pw)
 
     # Pick subdomain (interactive numbered list, or --subdomain).
     # The picker sees the rows without their tunnel tokens: SUBS_JSON is in
-    # its environment, and a token never is (ps shows it to every process
-    # of this user). The chosen row's token is read on stdin below.
+    # its environment, and a token never is (ps shows a command line to every
+    # account on this computer, and the environment to this user's processes).
+    # The chosen row's token is read on stdin below.
     local pick_json subs_public
     subs_public="$(printf '%s' "$subs_json" | python3 -c '
 import json, sys

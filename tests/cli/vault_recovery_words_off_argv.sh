@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Privacy check: the recovery words typed back to k2 vault recovery show-once
 # and k2 vault recovery rotate never land in a child process's argv or
-# environment (ps shows a command line to every user on this computer, and the
-# environment to this user's processes).
+# environment (ps shows a command line to every account on this computer, and
+# the environment to this user's processes).
 # They reach the confirm request on a pipe only.
 #
 # The real CLI runs against a stub on the vault socket that shows a

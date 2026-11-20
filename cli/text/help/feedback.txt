@@ -44,7 +44,8 @@ OUTPUT CONTRACT
 
 EXIT CODES
   0 ok · 1 error · 2 bad usage · 3 refused: a K2 session with no passport
-  (nothing is sent) · 4 not found (ambiguous id prefix = 4 too, with the
+  (nothing is sent), or not the agent's to do (person_only,
+  own_workspace_only) · 4 not found (ambiguous id prefix = 4 too, with the
   matching candidates listed in the hint) · 5 ask --wait: the person wrote
   free text instead of picking an option (needs_discussion)
 

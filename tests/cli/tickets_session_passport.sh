@@ -16,6 +16,9 @@
 #   3. Help and `template` in that session make no request and exit 0.
 #   4. Outside a session the owner token on disk is sent, as before (so the
 #      stub really sees it when it is sent).
+#   5. A refusal that isn't the agent's to get past (own_workspace_only,
+#      person_only) exits 3 on every verb that can meet one, with the
+#      daemon's error on stderr and nothing on stdout.
 #
 # Bash 3.2 safe. No daemon build. Never touches ~/.k2.
 
@@ -66,9 +69,19 @@ class H(BaseHTTPRequestHandler):
             f.write(json.dumps({"method": method, "path": u.path, "auth": auth,
                                 "query_token": parse_qs(u.query).get("token", []),
                                 "body": body.decode("utf-8", "replace")}) + "\n")
-        return u.path
+        return u.path, parse_qs(u.query), body
 
-    def answer(self, path):
+    def answer(self, path, query, body):
+        # Refusal rows: a marker in the request picks the daemon's refusal.
+        try:
+            req = json.loads(body) if body else {}
+        except ValueError:
+            req = {}
+        marked = (query.get("id") == ["refused1"] or req.get("id") == "refused1"
+                  or req.get("title") == "refused" or query.get("status") == ["planned"])
+        if marked:
+            code = "person_only" if path == "/cli/feedback/resolve" else "own_workspace_only"
+            return self.reply({"ok": False, "error": {"code": code, "hint": "stub refusal"}}, 403)
         if path == "/cli/feedback/list":
             return self.reply({"ok": True, "items": [ITEM]})
         if path in ("/cli/feedback/show", "/cli/feedback/create", "/cli/feedback/resolve"):
@@ -86,11 +99,11 @@ class H(BaseHTTPRequestHandler):
         return self.reply({"error": {"code": "not_found", "hint": "stub: " + path}}, 404)
 
     def do_GET(self):
-        self.answer(self.record("GET", b""))
+        self.answer(*self.record("GET", b""))
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        self.answer(self.record("POST", body))
+        self.answer(*self.record("POST", body))
 
     def log_message(self, *a):
         pass
@@ -224,6 +237,25 @@ for args in "tickets ask --help" "tickets comment fb0d1b00 -h" "tickets settings
         bad "no passport: '$args' rc=$RC requests=$(( $(count) - before )) err=$(cat "$WORK/err")"
     fi
 done
+
+# 5. Refused (own_workspace_only, or person_only on resolve): exit 3, the
+#    daemon's error on stderr, nothing on stdout.
+refused_row() {
+    local label="$1" code="$2"; shift 2
+    run session "$@"
+    if [ "$RC" -eq 3 ] && [ ! -s "$WORK/out" ] && grep -q "\"code\": \"$code\"" "$WORK/err"; then
+        ok "refused: $label exits 3 ($code)"
+    else
+        bad "refused: $label rc=$RC err=$(cat "$WORK/err") out=$(cat "$WORK/out")"
+    fi
+}
+refused_row "ask" own_workspace_only tickets ask refused --kind fyi
+refused_row "list" own_workspace_only tickets list --status planned
+refused_row "show" own_workspace_only tickets show refused1
+refused_row "comment" own_workspace_only tickets comment refused1 "hi"
+refused_row "resolve" person_only tickets resolve refused1
+refused_row "resolve --answered" person_only tickets resolve refused1 --answered "done"
+refused_row "assign" own_workspace_only tickets assign refused1 owner
 
 # 4. Outside a session the owner token on disk is what goes, as before.
 before="$(count)"

@@ -223,7 +223,10 @@ def die(err, exit_code=None):
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     if exit_code is None:
         code = str(err.get("code") or "")
-        if code in ("not_found", "ambiguous_id"):
+        if code in ("person_only", "own_workspace_only"):
+            # Refused: not this agent's to do (K2's refused exit).
+            exit_code = 3
+        elif code in ("not_found", "ambiguous_id"):
             exit_code = 4
         elif code == "usage" or code.startswith("brief_") or code.startswith("assignee_"):
             # brief_required / brief_empty / brief_too_large / brief_invalid
@@ -485,7 +488,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
     sys.exit(0)
@@ -545,7 +548,7 @@ def die(err):
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 
 raw = sys.stdin.buffer.read().decode("utf-8", "replace")
 try:
@@ -748,7 +751,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 ticket_files_check(os.environ.get("SENT_FILES", "0") != "0", d)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
@@ -834,7 +837,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 ticket_files_check(os.environ.get("SENT_FILES", "0") != "0", d)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
@@ -905,7 +908,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 # Warnings (assignee_unknown: a name that is not a user on this server)
 # print as JSON on stderr and never change the exit code.
 for w in d.get("warnings") or []:
@@ -983,7 +986,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    if code in ("owner_only", "role_required", "forbidden"):
+    if code in ("owner_only", "role_required", "forbidden", "person_only", "own_workspace_only"):
         sys.exit(3)
     sys.exit(2 if code in ("usage", "bad_value", "bad_request", "unknown_user") else 1)
 if os.environ.get("AS_JSON") == "true":

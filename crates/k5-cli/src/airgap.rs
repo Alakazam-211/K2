@@ -501,9 +501,16 @@ mod tests {
             r#"    if [ "$on" = 1 ]; then"#,
             r#"    elif [ "$bad" = 1 ]; then"#,
             r#"K2_HOME="${HOME}/.k2""#,
-            r#"[ -d "$K2_HOME" ] || K2_HOME="${HOME}/.k2so""#,
         ] {
             assert!(s.contains(line), "no `{line}` in prelude.sh");
         }
+        // The old home's fallback, built from the old name so no
+        // home-anchored literal of it sits in this file
+        // (scripts/k2-home-gate.sh).
+        let old = k2_client::paths::WORKSPACE_DOT_DIR_NAMES
+            .last()
+            .expect("the old name");
+        let fallback = format!("[ -d \"$K2_HOME\" ] || K2_HOME=\"${{HOME}}/{old}\"");
+        assert!(s.contains(&fallback), "no `{fallback}` in prelude.sh");
     }
 }

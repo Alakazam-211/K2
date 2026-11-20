@@ -64,6 +64,7 @@
 //! - [`retired`]: the shell's table of retired verbs, for the line a
 //!   retired verb gets and the deprecated tier of the help.
 
+pub mod airgap;
 pub mod called_as;
 pub mod cards;
 pub mod check;

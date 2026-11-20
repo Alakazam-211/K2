@@ -22,8 +22,18 @@
 //!   the line, then death by SIGPIPE (141), one request on TCP; a reset,
 //!   not HTTP, TMPDIR unusable (76) and no daemon (7): the reader on an
 //!   empty input, and the call's code.
-//! - What the binary hands to the shell: the write verbs, `--help`, a
-//!   `CODEX_` variable with `HOOK_SOCK` set, a port that is no port.
+//! - The writes (`compose`, `respond`, `move`, `archive`, `delete`): the
+//!   form each sends, its usage line, the answer and a newline; over TCP,
+//!   over a live cell socket (sent once there: a close is the "may have
+//!   been applied" line, never a second send; "not served" goes on to
+//!   TCP), a socket file nothing listens on, no daemon, no answer, a
+//!   refusal with its card, a value flag as the last word (the shell's),
+//!   and help never acts.
+//!   The writes have no census entry: each row's tag is `// native:
+//!   <form>`, for the native-bar gate (a `// covers:` tag would fail the
+//!   coverage gate).
+//! - What the binary hands to the shell: `--help`, a `CODEX_` variable
+//!   with `HOOK_SOCK` set, a port that is no port.
 
 #![cfg(unix)]
 
@@ -1264,80 +1274,6 @@ fn inbox_hands_these_to_the_shell() {
     let c = cell;
     let v = vec![
         shell(case(
-            "compose",
-            &[
-                "compose",
-                "--title",
-                "Brief",
-                "--body",
-                "é & x",
-                "--summary",
-                "s",
-            ],
-            &[],
-            vec![ok(r#"{"ok":true,"id":"n1"}"#)],
-            owner_and_port,
-            0,
-            1,
-        )),
-        shell(case(
-            "compose with no title",
-            &["compose"],
-            &[],
-            vec![],
-            owner_and_port,
-            1,
-            0,
-        )),
-        shell(case(
-            "respond",
-            &["respond", "a1", "thanks"],
-            &[],
-            vec![ok(r#"{"ok":true}"#)],
-            owner_and_port,
-            0,
-            1,
-        )),
-        shell(case(
-            "move",
-            &["move", "a1", "projects"],
-            &[],
-            vec![ok(r#"{"ok":true}"#)],
-            owner_and_port,
-            0,
-            1,
-        )),
-        shell(case(
-            "archive",
-            &["archive", "a1"],
-            &[],
-            vec![ok(r#"{"ok":true}"#)],
-            owner_and_port,
-            0,
-            1,
-        )),
-        shell(case(
-            "delete",
-            &["delete", "a1"],
-            &[],
-            vec![ok(r#"{"ok":true}"#)],
-            owner_and_port,
-            0,
-            1,
-        )),
-        shell(with(
-            c(&[]),
-            case(
-                "archive over the cell socket",
-                &["archive", "a1"],
-                &[],
-                vec![ok(r#"{"ok":true}"#)],
-                port_only,
-                0,
-                1,
-            ),
-        )),
-        shell(case(
             "--help",
             &["--help"],
             &[],
@@ -1392,5 +1328,291 @@ fn inbox_hands_these_to_the_shell() {
     ];
     for c in v {
         rig.check(&c);
+    }
+}
+
+const DONE: &str = r#"{"ok":true,"id":"n1"}"#;
+
+/// The writes: their forms, usage lines and answers.
+#[test]
+fn inbox_writes_as_the_shell_does() {
+    let rig = Rig::new(VERB, "write");
+    let not_served = || Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into());
+    let v = vec![
+        // native: inbox compose
+        case(
+            "compose",
+            &[
+                "compose",
+                "--title",
+                "Brief",
+                "--body",
+                "é & x = y\nline two",
+                "--summary",
+                "s",
+                "--priority",
+                "H",
+                "--source",
+                "acme",
+                "--from",
+                "ops",
+                "stray",
+                "-x",
+            ],
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "compose, the last of each flag",
+            &["compose", "--title", "a", "--title", "b c", "--body", ""],
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "compose with no title",
+            &["compose", "--body", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "compose with an empty title",
+            &["compose", "--title", ""],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "compose, a long body",
+            words(vec!["compose", "--title", "long", "--body", leak("b é".repeat(30000))]),
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // native: inbox respond
+        case(
+            "respond",
+            &["respond", "a1", "thanks & more"],
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "respond with no text",
+            &["respond", "a1"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "respond with an empty id",
+            &["respond", "", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        // native: inbox move
+        case(
+            "move",
+            &["move", "a1", "projects/q4", "extra"],
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case("move with no folder", &["move", "a1"], &[], vec![], owner_and_port, 1, 0),
+        // native: inbox archive
+        case(
+            "archive",
+            &["archive", "a1"],
+            &[],
+            vec![ok("{\"ok\":true}\n\n")],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case("archive with no id", &["archive"], &[], vec![], owner_and_port, 1, 0),
+        // native: inbox delete
+        case(
+            "delete",
+            &["delete", "a1"],
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case("delete with no id", &["delete"], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "delete, not found",
+            &["delete", "zzz"],
+            &[],
+            vec![Reply::Answer(404, NOT_FOUND.into())],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "archive, refused with a card",
+            &["archive", "a1"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "archive, an empty answer",
+            &["archive", "a1"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            0,
+            1,
+        ),
+        with(
+            host(&[]),
+            case(
+                "compose, a passport over TCP",
+                &["compose", "--title", "x"],
+                &[],
+                vec![ok(DONE)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            cell(&[]),
+            case(
+                "archive over the cell socket",
+                &["archive", "a1"],
+                &[],
+                vec![ok("{\"ok\":true}\n\n")],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            cell(&[]),
+            case(
+                "move: the cell socket doesn't serve it, then TCP",
+                &["move", "a1", "f"],
+                &[],
+                vec![not_served(), ok(DONE)],
+                port_only,
+                0,
+                2,
+            ),
+        ),
+        Case {
+            compare: Compare::Waited,
+            ..with(
+                cell(&[]),
+                case(
+                    "respond: the cell socket closes, never sent again",
+                    &["respond", "a1", "x"],
+                    &[],
+                    vec![Reply::Close],
+                    port_only,
+                    1,
+                    1,
+                ),
+            )
+        },
+        with(
+            with_passport(&[("K2_HOOK_SOCK", "{deadsock}")]),
+            case(
+                "delete: a socket nothing listens on, then TCP",
+                &["delete", "a1"],
+                &[],
+                vec![ok(DONE)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        Case {
+            compare: Compare::Waited,
+            ..case(
+                "compose: TCP closes with nothing",
+                &["compose", "--title", "x"],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                1,
+                1,
+            )
+        },
+        case(
+            "archive: no daemon",
+            &["archive", "a1"],
+            &[("K2_PORT", leak(dead_port()))],
+            vec![],
+            owner_only,
+            7,
+            0,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
+/// A value flag of `compose` as the last word: the shell's (`$2: unbound
+/// variable`).
+#[test]
+fn inbox_compose_value_flag_last_is_the_shell_s() {
+    let rig = Rig::new(VERB, "wlast");
+    rig.check(&Case {
+        compare: Compare::Shell,
+        ..case(
+            "compose --body last",
+            &["compose", "--title", "x", "--body"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        )
+    });
+}
+
+/// The writes with `-h` or `--help` anywhere: the help, and nothing sent.
+#[test]
+fn inbox_help_never_acts() {
+    let rig = Rig::new(VERB, "whelp");
+    const LINES: &[&[&str]] = &[
+        &["compose", "--title", "x", "-h"],
+        &["respond", "a1", "x", "--help"],
+        &["move", "--help", "a1", "f"],
+        &["archive", "a1", "-h"],
+        &["delete", "-h", "a1"],
+    ];
+    for line in LINES {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..case("help, nothing sent", line, &[], vec![], owner_and_port, 0, 0)
+        });
     }
 }

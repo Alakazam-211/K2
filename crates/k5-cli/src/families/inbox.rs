@@ -1,6 +1,7 @@
-//! `k5 inbox` and its read forms, as the shell CLI's `cmd_inbox` answers
-//! them (`cli/src/inbox.sh`): `list` (also no verb, and a first word that
-//! is no verb), `read <id>`, `search "query"` and `folders`.
+//! `k5 inbox` and its verbs, as the shell CLI's `cmd_inbox` answers them
+//! (`cli/src/inbox.sh`): the reads `list` (also no verb, and a first word
+//! that is no verb), `read <id>`, `search "query"` and `folders`, and the
+//! writes `compose`, `respond`, `move`, `archive` and `delete`.
 //!
 //! What runs, in the shell's order:
 //!
@@ -25,6 +26,12 @@
 //!      found) or 1 ([`read_item`]).
 //!    - `folders`: one line per folder, or the two "No folders yet" lines
 //!      ([`folders`]); a folder that is not a string ends it with 1.
+//!
+//!    A write is one `cli_send cli_post_form <route> <form>` then `echo`
+//!    ([`write`]): sent once, as the shell's no-resend rule says (a POST
+//!    goes on to TCP only when the cell socket refused the connect or
+//!    doesn't serve the route), the answer as it came, and a newline. A
+//!    missing word is the verb's usage line, exit 1.
 //! 5. The EXIT trap's lines ([`crate::prelude::Closing`]), with the
 //!    pipeline's code (`set -o pipefail`, [`super::pipefail`]).
 //!
@@ -34,16 +41,10 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
-//! - the write verbs `compose`, `respond`, `move`, `archive` and `delete`.
-//!   Under this line the shell's `cli_send` sends such a POST again over
-//!   TCP after a cell-socket try that may have run, and the binary's
-//!   transport never does; ported, the two would differ. They move when
-//!   the shell's no-resend rule (0.46.15) is under the line, with a parity
-//!   row for each no-answer exit;
 //! - a command line with `-h` or `--help` (the front sends those on,
-//!   [`crate::front`]), a word that is not UTF-8, and `--folder` as the
-//!   last word (the shell stops on `$2: unbound variable`, a line with
-//!   its script's path in it);
+//!   [`crate::front`]), a word that is not UTF-8, and `--folder` (or a
+//!   `compose` value flag) as the last word (the shell stops on `$2:
+//!   unbound variable`, a line with its script's path in it);
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported (the shell looks
 //!   for a shared Codex server first, [`crate::prelude::codex_env`]);
 //! - a port that is set but is no port curl takes (the shell's curl fails
@@ -67,6 +68,7 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
+use crate::transport::{Call, Client, Error};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -82,12 +84,31 @@ pub const LIST: &str = "/cli/inbox/list";
 pub const READ: &str = "/cli/inbox/read";
 pub const SEARCH: &str = "/cli/inbox/search";
 pub const FOLDERS: &str = "/cli/inbox/folders";
+pub const COMPOSE: &str = "/cli/inbox/compose";
+pub const RESPOND: &str = "/cli/inbox/respond";
+pub const MOVE: &str = "/cli/inbox/move";
+pub const ARCHIVE: &str = "/cli/inbox/archive";
+pub const DELETE: &str = "/cli/inbox/delete";
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "inbox";
 /// `read` with no id: exit 2.
 pub const READ_USAGE: &str = "Usage: k2 inbox read <id>";
 /// `search` with no query: exit 1.
 pub const SEARCH_USAGE: &str = "Usage: k2 inbox search \"query\"";
+/// The writes' usage lines, each exit 1.
+pub const COMPOSE_USAGE: &str = concat!(
+    "Usage: ",
+    k2_client::cli_name!(),
+    " inbox compose --title \"...\" [--body \"...\"] [--priority H|N|L]"
+);
+pub const RESPOND_USAGE: &str = concat!(
+    "Usage: ",
+    k2_client::cli_name!(),
+    " inbox respond <id> \"text\""
+);
+pub const MOVE_USAGE: &str = concat!("Usage: ", k2_client::cli_name!(), " inbox move <id> <folder>");
+pub const ARCHIVE_USAGE: &str = concat!("Usage: ", k2_client::cli_name!(), " inbox archive <id>");
+pub const DELETE_USAGE: &str = concat!("Usage: ", k2_client::cli_name!(), " inbox delete <id>");
 /// `format_inbox` on an empty inbox.
 pub const NO_ITEMS: &str = "No items.";
 /// `folders` with none.
@@ -128,11 +149,23 @@ pub enum Ask {
         q: String,
     },
     Folders,
+    /// `compose`: the form (`title=…` and the other fields set), or `None`
+    /// with no title.
+    Compose {
+        form: Option<String>,
+    },
+    /// `respond`, `move`, `archive`, `delete`: the route, the form's pairs
+    /// (`None`: a word is missing) and the usage line.
+    Write {
+        route: &'static str,
+        pairs: Option<Vec<String>>,
+        usage: &'static str,
+    },
 }
 
 /// The words after `inbox`, as `cmd_inbox` and its verbs read them.
-/// `None`: the shell's (a write verb, `-h` or `--help` as the verb, or
-/// `--folder` with nothing after it).
+/// `None`: the shell's (`-h` or `--help` as the verb, or a value flag
+/// with nothing after it).
 pub fn parse(words: &[&str]) -> Option<Ask> {
     let first = |rest: &[&str]| rest.first().map_or_else(String::new, |w| (*w).to_string());
     match words.first() {
@@ -147,9 +180,64 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             q: first(&words[1..]),
         }),
         Some(&"folders") => Some(Ask::Folders),
-        Some(&("compose" | "respond" | "move" | "archive" | "delete" | "--help" | "-h")) => None,
+        Some(&"compose") => compose(&words[1..]),
+        Some(&"respond") => Some(two(RESPOND, "id", "text", &words[1..], RESPOND_USAGE)),
+        Some(&"move") => Some(two(MOVE, "id", "folder", &words[1..], MOVE_USAGE)),
+        Some(&"archive") => Some(one(ARCHIVE, &words[1..], ARCHIVE_USAGE)),
+        Some(&"delete") => Some(one(DELETE, &words[1..], DELETE_USAGE)),
+        Some(&("--help" | "-h")) => None,
         // `-*|*`: the whole line is `inbox list`'s.
         Some(_) => list(words),
+    }
+}
+
+/// `cmd_inbox_compose`'s loop: each value flag takes the next word (none:
+/// the shell's), any other word is skipped.
+fn compose(words: &[&str]) -> Option<Ask> {
+    const FIELDS: [&str; 6] = ["title", "body", "priority", "source", "from", "summary"];
+    let mut vals: [&str; 6] = [""; 6];
+    let mut i = 0;
+    while let Some(w) = words.get(i) {
+        match w.strip_prefix("--").and_then(|f| FIELDS.iter().position(|x| *x == f)) {
+            Some(k) => {
+                vals[k] = *words.get(i + 1)?;
+                i += 2;
+            }
+            None => i += 1,
+        }
+    }
+    if vals[0].is_empty() {
+        return Some(Ask::Compose { form: None });
+    }
+    let mut form = format!("title={}", quote(vals[0]));
+    for (k, v) in FIELDS.iter().zip(vals).skip(1) {
+        if !v.is_empty() {
+            form.push_str(&format!("&{k}={}", quote(v)));
+        }
+    }
+    Some(Ask::Compose { form: Some(form) })
+}
+
+/// `id="${1:-}" <b>="${2:-}"`: both must be there.
+fn two(route: &'static str, a: &str, b: &str, words: &[&str], usage: &'static str) -> Ask {
+    let x = words.first().copied().unwrap_or("");
+    let y = words.get(1).copied().unwrap_or("");
+    let pairs = (!x.is_empty() && !y.is_empty())
+        .then(|| vec![format!("{a}={}", quote(x)), format!("{b}={}", quote(y))]);
+    Ask::Write {
+        route,
+        pairs,
+        usage,
+    }
+}
+
+/// `id="${1:-}"`: it must be there.
+fn one(route: &'static str, words: &[&str], usage: &'static str) -> Ask {
+    let x = words.first().copied().unwrap_or("");
+    Ask::Write {
+        route,
+        pairs: (!x.is_empty()).then(|| vec![format!("id={}", quote(x))]),
+        usage,
     }
 }
 
@@ -230,6 +318,16 @@ fn run_with(
             out::stderr_line(SEARCH_USAGE);
             return Exit::Error;
         }
+        Ask::Compose { form: None } => {
+            out::stderr_line(COMPOSE_USAGE);
+            return Exit::Error;
+        }
+        Ask::Write {
+            pairs: None, usage, ..
+        } => {
+            out::stderr_line(usage);
+            return Exit::Error;
+        }
         _ => {}
     }
     // `run` hands a port curl won't take to the shell.
@@ -243,6 +341,20 @@ fn run_with(
     };
     let mut closing = Closing::default();
     let (endpoint, arg) = match ask {
+        Ask::Compose { form: Some(form) } => {
+            return write(&mut client, closing, COMPOSE, &[form.as_str()]);
+        }
+        Ask::Write {
+            route,
+            pairs: Some(pairs),
+            ..
+        } => {
+            let pairs: Vec<&str> = pairs.iter().map(String::as_str).collect();
+            return write(&mut client, closing, route, &pairs);
+        }
+        Ask::Compose { form: None } | Ask::Write { pairs: None, .. } => {
+            unreachable!("a usage line above")
+        }
         Ask::List { folder } => (
             LIST,
             (!folder.is_empty()).then(|| format!("folder={}", quote(folder))),
@@ -260,6 +372,35 @@ fn run_with(
     };
     let exit = pipefail(piped.exit, shown.print());
     closing.flush(&mut client, exit);
+    exit
+}
+
+/// `cli_send cli_post_form <route> <pairs>; echo`: the answer as it came
+/// (its trailing newlines dropped when it came over the cell socket, held
+/// in `$(…)`), then a newline. No answer, or a send that may have run and
+/// is not sent again, is the transport's line and exit 1; any other
+/// failure is curl's code, with nothing printed. The EXIT trap's lines
+/// close it either way.
+fn write(client: &mut Client, mut closing: Closing, route: &str, pairs: &[&str]) -> Exit {
+    let exit = match client.send(route, Call::PostForm(pairs)) {
+        Ok(r) => {
+            closing.answer(&r, client.passport().is_some());
+            let mut body = super::piped_body(&r);
+            body.push(b'\n');
+            match out::write_flushed(&mut std::io::stdout().lock(), &body) {
+                Ok(()) => Exit::Ok,
+                Err(e) => out::after_stdout_error(&e),
+            }
+        }
+        Err(
+            e @ (Error::NoAnswer(_) | Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. }),
+        ) => {
+            out::stderr_line(&e.to_string());
+            Exit::Error
+        }
+        Err(e) => Exit::from_curl(e.curl_code()),
+    };
+    closing.flush(client, exit);
     exit
 }
 
@@ -647,11 +788,41 @@ mod tests {
             Some(Ask::Search { q: "q &x".into() })
         );
         assert_eq!(parse(&["folders", "extra"]), Some(Ask::Folders));
-        for write in [
-            "compose", "respond", "move", "archive", "delete", "--help", "-h",
-        ] {
-            assert_eq!(parse(&[write, "x"]), None, "{write}");
+        for help in ["--help", "-h"] {
+            assert_eq!(parse(&[help, "x"]), None, "{help}");
         }
+        assert_eq!(
+            parse(&["compose", "--title", "a b", "x", "--body", "é&", "--from", "o"]),
+            Some(Ask::Compose {
+                form: Some("title=a%20b&body=%C3%A9%26&from=o".into())
+            })
+        );
+        assert_eq!(parse(&["compose", "--body", "x"]), Some(Ask::Compose { form: None }));
+        assert_eq!(parse(&["compose", "--title"]), None);
+        assert_eq!(
+            parse(&["move", "a", "f/g"]),
+            Some(Ask::Write {
+                route: MOVE,
+                pairs: Some(vec!["id=a".into(), "folder=f%2Fg".into()]),
+                usage: MOVE_USAGE,
+            })
+        );
+        assert_eq!(
+            parse(&["respond", "a"]),
+            Some(Ask::Write {
+                route: RESPOND,
+                pairs: None,
+                usage: RESPOND_USAGE,
+            })
+        );
+        assert_eq!(
+            parse(&["delete"]),
+            Some(Ask::Write {
+                route: DELETE,
+                pairs: None,
+                usage: DELETE_USAGE,
+            })
+        );
         assert_eq!(parse(&["Read", "x"]), list("Read"));
     }
 

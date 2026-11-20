@@ -372,7 +372,7 @@ fn a_verb_that_falls_through_without_python3_says_so_and_runs_nothing() {
     let rig = Rig::new("no-python3");
     let path = common::path_without_python3(&rig.dir);
     for (name, case) in [
-        ("k5", args(&["msg", "acme", "hello"])),
+        ("k5", args(&["ci", "status"])),
         ("k2", args(&["compute", "list"])),
         ("k5", unknown()),
     ] {

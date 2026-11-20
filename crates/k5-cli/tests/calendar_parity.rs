@@ -2,12 +2,16 @@
 //! on the parity rig ([`common::parity`]): the same requests (urllib's,
 //! from `_cal_py`), stdout, stderr and exit code.
 //!
-//! - Every verb but `link`, plain and `--json`: list, events (short and
+//! - Every verb, plain and `--json`: list, events (short and
 //!   `--full`, all its query words), show (`event` too), calendars (read,
 //!   and `--add`/`--remove`), freebusy, wait (a change, and its timed-out
 //!   answer, exit 2), create, update, delete.
-//! - `cmd_calendar`'s usage errors, help (no verb, `help`), and `link`,
-//!   which the binary hands to the shell.
+//! - `cmd_calendar`'s usage errors and help (no verb, `help`).
+//! - `link`: `--request`, Google in a browser, Microsoft's device code,
+//!   paste-back from a file and the prompt that reads nothing (the
+//!   redirect port is random, so those rows mask it), `--calendars` and
+//!   `--omit-description`, a denied link, the owner's refusal, answers
+//!   that are not what it expects, no answer.
 //! - The daemon's errors: an object (exit 3 for a code that needs a
 //!   person, with `cap`/`reason`/`fix`; the owner-only hint; 2 for usage),
 //!   a string, `ok` missing, an HTTP error that is not JSON, a 2xx that is
@@ -690,19 +694,6 @@ fn calendar_answers_as_the_shell_does() {
                 0,
             )
         },
-        // The shell's: `link`.
-        Case {
-            compare: Compare::Shell,
-            ..case(
-                "link --request goes to the shell",
-                &["link", "a@x.example", "--provider", "google", "--request"],
-                &[],
-                vec![ok(r#"{"ok":true,"hint":"card posted"}"#)],
-                owner_and_port,
-                0,
-                1,
-            )
-        },
     ];
     for c in &cases {
         rig.check(c);
@@ -725,5 +716,364 @@ fn cal_is_calendar() {
         case("cal help", &["help"], &[], vec![], owner_and_port, 0, 0),
     ] {
         rig.check(&c);
+    }
+}
+
+/// Each `127.0.0.1:<5 digits>/cb` (the paste-back's random port, 20000 to
+/// 59999) as `127.0.0.1:PORT/cb`, after checking the digits are in range;
+/// and the `Host` line's port as `{port}`.
+fn mask_link(request: &str) -> String {
+    let mut out = String::new();
+    let mut rest = request;
+    while let Some(at) = rest.find("127.0.0.1:") {
+        let (head, tail) = rest.split_at(at + "127.0.0.1:".len());
+        out.push_str(head);
+        let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+        if tail[digits.len()..].starts_with("/cb") {
+            let port: u32 = digits.parse().unwrap();
+            assert!((20000..60000).contains(&port), "the redirect port {port}");
+            out.push_str("PORT");
+            rest = &tail[digits.len()..];
+        } else {
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out.lines()
+        .map(|l| {
+            if l.starts_with("Host: ") {
+                "Host: {port}".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Both sides of `c`, compared with the redirect port masked: the same
+/// requests, stdout, stderr and exit.
+fn check_masked(rig: &Rig, c: &Case) {
+    let mut runs = Vec::new();
+    for bash in [true, false] {
+        let side = if bash { Side::Bash } else { Side::Rust };
+        rig.prepare(side, c);
+        let out = rig.run(bash, c);
+        assert_eq!(rig.stub().left(), 0, "{}: answers left: {out:?}", c.name);
+        let log: Vec<String> = rig
+            .read(side, !bash, c.name)
+            .iter()
+            .map(|r| mask_link(&normalise(r, !bash, rig.noun(), c.name)))
+            .collect();
+        runs.push((out, log));
+    }
+    let (b, r) = (&runs[0], &runs[1]);
+    println!("-- {}: bash {:?}", c.name, b.0);
+    assert_eq!(b.1.len(), c.requests, "{}: bash's requests", c.name);
+    assert_eq!(b.0.code, Some(c.code), "{}: bash's exit", c.name);
+    assert_eq!(r.1, b.1, "{}: the requests", c.name);
+    assert_eq!(r.0.code, b.0.code, "{}: the exit", c.name);
+    assert_eq!(r.0.stdout, b.0.stdout, "{}: stdout", c.name);
+    assert_eq!(r.0.stderr, b.0.stderr, "{}: stderr", c.name);
+}
+
+const LINK_START: &str = r#"{"ok":true,"linkId":"L1","authorizationUrl":"https://accounts.example/o?x=1&y=é"}"#;
+
+fn pasted(rig: &Rig) {
+    owner_and_port(rig);
+    std::fs::write(
+        rig.proj.join("pasted.txt"),
+        "  http://127.0.0.1:40000/cb?state=s1&code=4%2F0Ab+c&scope=x\r\n",
+    )
+    .unwrap();
+}
+
+fn pasted_error(rig: &Rig) {
+    owner_and_port(rig);
+    std::fs::write(rig.proj.join("pasted.txt"), "x?error=access_denied").unwrap();
+}
+
+#[test]
+fn link_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "link");
+    let cases = vec![
+        // covers: calendar link
+        case(
+            "link in a browser, pending then connected",
+            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"linkId":"L1"}"#),
+                ok(r#"{"ok":true,"state":"pending"}"#),
+                ok(r#"{"ok":true,"state":"connected","hint":"linked é"}"#),
+            ],
+            owner_and_port,
+            0,
+            3,
+        ),
+        // covers: calendar link --json
+        case(
+            "link microsoft --calendars --omit-description --json",
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "microsoft",
+                "--workspace",
+                "w",
+                "--calendars",
+                "Work, primary ,,b",
+                "--omit-description",
+                "--json",
+            ],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"linkId":"L2","verificationUrl":"https://v.example","userCode":"ABC"}"#),
+                ok(r#"{"state":"connected","hint":"h","calendars":"old"}"#),
+                ok(r#"{"ok":true,"added":["Work","b"]}"#),
+                ok(r#"{"ok":true,"omit":true}"#),
+            ],
+            owner_and_port,
+            0,
+            4,
+        ),
+        case(
+            "link microsoft --write --calendars, none added",
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "microsoft",
+                "--workspace",
+                "w",
+                "--write",
+                "--calendars",
+                "Work",
+                "--omit-description",
+            ],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"linkId":7}"#),
+                ok(r#"{"state":"connected"}"#),
+                ok(r#"{"ok":true}"#),
+                ok(r#"{"ok":true}"#),
+            ],
+            owner_and_port,
+            0,
+            4,
+        ),
+        case(
+            "link --request",
+            &["link", "a@x.example", "--provider", "google", "--request"],
+            &[],
+            vec![ok(r#"{"ok":true,"hint":"card posted to your Thread"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "link --request --json",
+            &["link", "a@x.example", "--provider", "microsoft", "--request", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "link denied, with admin consent",
+            &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"linkId":"L"}"#),
+                ok(r#"{"state":"denied","adminConsentUrl":"https://c.example"}"#),
+            ],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "link error with a code",
+            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"linkId":"L"}"#),
+                ok(r#"{"state":"error","code":"consent_required","hint":"see https://c.example","adminConsentUrl":"https://c.example"}"#),
+            ],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "link, the owner's refusal at the start",
+            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[],
+            vec![answer(403, r#"{"error":{"code":"forbidden","hint":"no"}}"#)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "link, the owner's refusal on the status",
+            &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"linkId":"L"}"#),
+                answer(403, r#"{"error":{"code":"owner_only"}}"#),
+            ],
+            owner_and_port,
+            3,
+            2,
+        ),
+        case(
+            "link, a start that isn't ok",
+            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[],
+            vec![ok(r#"{"linkId":"x","note":"é"}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "link, an HTTP error that is not JSON",
+            &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+            &[],
+            vec![answer(500, "oops")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "link, a 200 that is not JSON",
+            &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+            &[],
+            vec![ok("oops")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "link, closed with nothing",
+            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        Case {
+            compare: Compare::Traceback,
+            ..case(
+                "link, a start that is a list",
+                &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+                &[],
+                vec![ok("[1]")],
+                owner_and_port,
+                1,
+                1,
+            )
+        },
+        Case {
+            compare: Compare::Traceback,
+            ..case(
+                "link, a status that is a list",
+                &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+                &[],
+                vec![ok(r#"{"ok":true,"linkId":"L"}"#), ok("[2]")],
+                owner_and_port,
+                1,
+                2,
+            )
+        },
+    ];
+    for c in &cases {
+        rig.check(c);
+    }
+    // Paste-back: the redirect port is random on both sides.
+    let paste = vec![
+        case(
+            "link --paste-file",
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "gmail",
+                "--workspace",
+                "w",
+                "--paste-file",
+                "pasted.txt",
+            ],
+            &[],
+            vec![
+                ok(LINK_START),
+                ok(r#"{"ok":true}"#),
+                ok(r#"{"state":"connected","hint":"ok"}"#),
+            ],
+            pasted,
+            0,
+            3,
+        ),
+        case(
+            "link --paste-file, an error pasted, expired",
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+                "--paste-file",
+                "pasted.txt",
+                "--json",
+            ],
+            &[],
+            vec![ok(LINK_START), answer(410, r#"{"error":"gone"}"#)],
+            pasted_error,
+            1,
+            2,
+        ),
+        case(
+            "link --paste-file that isn't there",
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+                "--paste-file",
+                "nothing.txt",
+            ],
+            &[],
+            vec![ok(LINK_START)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        // Bash's prompt reads the script's own heredoc: nothing.
+        case(
+            "link --paste reads nothing",
+            &["link", "a@x.example", "--provider", "google", "--workspace", "w", "--paste"],
+            &[],
+            vec![ok(LINK_START)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "link, no browser here: paste-back",
+            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[],
+            vec![
+                answer(400, r#"{"error":{"code":"remote_unsupported","hint":"x"}}"#),
+                ok(LINK_START),
+            ],
+            owner_and_port,
+            2,
+            2,
+        ),
+    ];
+    for c in &paste {
+        check_masked(&rig, c);
     }
 }

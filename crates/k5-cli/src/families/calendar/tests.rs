@@ -244,7 +244,7 @@ fn the_flag_checks_are_the_shell_s() {
 }
 
 #[test]
-fn link_checks_its_words_then_goes_to_the_shell() {
+fn link_checks_its_words() {
     assert_eq!(
         hint(run(&["link"])),
         "link requires the account's <address> (never a password or the pasted page address)"
@@ -284,10 +284,14 @@ fn link_checks_its_words_then_goes_to_the_shell() {
         ])),
         "--paste is for Google; Microsoft links with a device code"
     );
-    assert_eq!(
+    assert!(matches!(
         run(&["link", "a@x", "--provider", "google", "--request"]),
-        Form::Shell
-    );
+        Form::Run(Verb::Link, a) if a.link.request && a.link.provider == "google"
+    ));
+    assert!(matches!(
+        run(&["link", "a@x", "--provider", "gmail", "--workspace", "w", "--paste-file", "f", "--calendars", "a,b", "--write"]),
+        Form::Run(Verb::Link, a) if a.link.paste_file == "f" && a.link.cals == "a,b" && a.link.write && a.address == "a@x"
+    ));
 }
 
 #[test]

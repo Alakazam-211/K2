@@ -23,8 +23,10 @@
 //! no answer in time is `timeout`, exit 1. The Python's calls never write
 //! the permission note, so the EXIT trap prints nothing after them.
 //!
-//! The binary hands these to the shell: `link` (its OAuth flow, still the
-//! shell's), a command line with `-h` or `--help` ([`crate::front`]), a
+//! `link` ([`link`]) runs the shell's OAuth flow: the start, the browser,
+//! paste-back or device-code step, the status every 3 s, then its extras.
+//!
+//! The binary hands these to the shell: a command line with `-h` or `--help` ([`crate::front`]), a
 //! word that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable
 //! exported, a port that is set but is no number, a `--timeout` past
 //! bash's 64-bit integers (bash's `[` fails there, with its script's path
@@ -48,6 +50,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::time::Duration;
 
+pub mod link;
 #[cfg(test)]
 mod tests;
 
@@ -225,6 +228,8 @@ pub struct Ask {
     /// `--add` and `--remove`, each value as given.
     pub add: Vec<String>,
     pub remove: Vec<String>,
+    /// `link`'s own settings.
+    pub link: link::Link,
 }
 
 /// What the words come to.
@@ -453,7 +458,16 @@ pub fn parse(words: &[&str]) -> Form {
         return usage("update needs at least one of --title --start --end --tz --location --notes");
     }
     if verb == Verb::Link {
-        return Form::Shell;
+        a.link = link::Link {
+            provider,
+            workspace,
+            cals,
+            paste_file,
+            omit,
+            write,
+            paste,
+            request,
+        };
     }
     Form::Run(verb, Box::new(a))
 }
@@ -897,7 +911,7 @@ impl Py {
             Verb::Wait => self.wait(),
             Verb::Create | Verb::Update => self.write(verb),
             Verb::Delete => self.delete(),
-            Verb::Link => unreachable!("link is the shell's"),
+            Verb::Link => self.link(),
         }
     }
 

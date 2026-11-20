@@ -142,7 +142,7 @@
         {"name": "--artifacts", "arg": "GLOB", "description": "The same as --artifact."},
         {"name": "--json", "arg": null, "description": "One result object on stdout (logs go to stderr)."},
         {"name": "--queue-timeout", "arg": "2h|off", "description": "How long it may wait to start (default 2h attached or --wait, 24h --detach, 48h --tier batch)."},
-        {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m); off for a job that goes quiet."},
+        {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m; 2h for Priority and CI); off for a job that goes quiet."},
         {"name": "--shards", "arg": "N", "description": "N jobs, {shard}/{shards} in the command, each on its own node when it can (no node named)."},
         {"name": "--priority", "arg": null, "description": "The critical path; needs --why. At most 2 Priority jobs queued or running per workspace."},
         {"name": "--tier", "arg": "standard|priority|batch|ci", "description": "Which line: standard (default), priority, batch (idle time, always detached) or ci (needs a grant with --ci)."},

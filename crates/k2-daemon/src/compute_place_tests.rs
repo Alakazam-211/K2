@@ -916,7 +916,7 @@ fn cpu_hints_follow_the_jobs_cpus() {
     let ctl = JobCtl { cpu_hints: CPU_HINT_VARS.iter().map(|s| s.to_string()).collect(), ..Default::default() };
     let mut big = cand("big", 64, 64, 0, 2).offer;
     big.caps.cpu_millis = 16_000;
-    let moved = plan_for_node(&plan, &ctl, &node_row("big"), None, &big);
+    let moved = plan_for_node(&plan, &ctl, JobTier::Normal, &node_row("big"), None, &big);
     assert_eq!((moved.env["CARGO_BUILD_JOBS"].as_str(), moved.env["OMP_NUM_THREADS"].as_str(), moved.env["MINE"].as_str()), ("8", "8", "x"));
 }
 
@@ -1360,4 +1360,39 @@ fn a_held_node_says_why_and_who() {
     assert_eq!(held_code(frames::Control::Stopped), Some("node_stopped"));
     o.control_by = None;
     assert_eq!(control_wait(&o).expect("a wait").message, "the machine's owner is draining this node");
+}
+
+/// The stall guard's default by tier: Priority and CI with no
+/// `--stall-timeout` get the longer 2 h (not none), Standard and Batch keep
+/// 30 min. An ask wins, `off` is off, a stall not shorter than the job's
+/// `--timeout` is none (the wall clock ends it first), and a node without
+/// `stall` gets none. A move re-plans with the row's tier.
+#[test]
+fn priority_and_ci_get_a_longer_default_stall() {
+    let f = vec![FEATURE_STALL.to_string()];
+    let none = JobCtl::default();
+    let day = 86_400;
+    assert_eq!(stall_for(&none, JobTier::Priority, &f, day), Some(7200));
+    assert_eq!(stall_for(&none, JobTier::Ci, &f, day), Some(7200));
+    assert_eq!(stall_for(&none, JobTier::Normal, &f, day), Some(1800));
+    assert_eq!(stall_for(&none, JobTier::Batch, &f, day), Some(1800));
+    let asked = JobCtl { stall_secs: Some(600), ..Default::default() };
+    assert_eq!(stall_for(&asked, JobTier::Priority, &f, day), Some(600), "an ask wins");
+    let off = JobCtl { stall_secs: Some(0), ..Default::default() };
+    assert_eq!(stall_for(&off, JobTier::Ci, &f, day), None, "off is off");
+    assert_eq!(stall_for(&none, JobTier::Priority, &f, 7200), None, "not shorter than its --timeout");
+    assert_eq!(stall_for(&none, JobTier::Priority, &[], day), None, "a node without `stall`");
+    let plan: Plan = serde_json::from_value(serde_json::json!({
+        "job_id": "j1", "node_id": "n1", "workspace_id": "w1", "workspace_label": "k2", "requested_by": "owner",
+        "argv": ["true"], "env": {}, "cwd": null,
+        "limits": {"max_secs": 60, "cpu_millis": null, "mem_bytes": null, "disk_bytes": 1, "log_cap_bytes": 1},
+        "src": null, "exclusive": false, "created_at": 1
+    }))
+    .expect("a plan");
+    let ctl = JobCtl { timeout_secs: Some(4 * 3600), ..Default::default() };
+    let mut o = cand("big", 64, 64, 0, 2).offer;
+    o.features.push(FEATURE_STALL.to_string());
+    let g = grant_row("big", 6 * 3600, 2);
+    assert_eq!(plan_for_node(&plan, &ctl, JobTier::Priority, &node_row("big"), Some(&g), &o).stall_secs, Some(7200));
+    assert_eq!(plan_for_node(&plan, &ctl, JobTier::Normal, &node_row("big"), Some(&g), &o).stall_secs, Some(1800));
 }

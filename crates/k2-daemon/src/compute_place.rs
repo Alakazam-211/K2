@@ -1016,13 +1016,24 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
 /// The stall timeout a plan for a node with `features` carries: the asked
 /// one, else the default — only on nodes that enforce it, and only when
 /// shorter than the wall-clock limit.
-pub fn stall_for(ctl: &JobCtl, features: &[String], max_secs: u64) -> Option<u64> {
+pub fn stall_for(ctl: &JobCtl, tier: JobTier, features: &[String], max_secs: u64) -> Option<u64> {
     let s = match ctl.stall_secs {
         Some(0) => return None,
         Some(n) => n,
-        None => retry::tuning().stall_secs,
+        None => default_stall_secs(tier),
     };
     (s > 0 && (s as u64) < max_secs && features.iter().any(|f| f == FEATURE_STALL)).then_some(s as u64)
+}
+
+/// The stall timeout a job gets with no `--stall-timeout` (and no preset
+/// `stall_timeout`): 2 h for Priority and CI, 30 min for the rest.
+pub fn default_stall_secs(tier: JobTier) -> i64 {
+    let t = retry::tuning();
+    if matches!(tier, JobTier::Priority | JobTier::Ci) {
+        t.stall_priority_secs
+    } else {
+        t.stall_secs
+    }
 }
 
 /// Why a granted node was left out (PRD §2; the "skipped" counts).
@@ -1947,7 +1958,7 @@ pub fn set_cpu_hints(env: &mut BTreeMap<String, String>, prev: &[String], skip: 
 /// The plan for `node`: the base plan's argv/env/source/needs/artifacts,
 /// with this node's id, this node's grant limits, (when it enforces one)
 /// the stall timeout, and the CPU hints for this node (CE-15, CE-A14).
-pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&GrantRow>, offer: &Offer) -> Plan {
+pub fn plan_for_node(base: &Plan, ctl: &JobCtl, tier: JobTier, node: &NodeRow, grant: Option<&GrantRow>, offer: &Offer) -> Plan {
     let features = &offer.features;
     let max_secs = grant.map(|g| g.max_job_secs).unwrap_or(compute::DEFAULT_MAX_JOB_SECS);
     let disk_gb = grant.map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
@@ -1959,7 +1970,7 @@ pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&G
     }
     p.limits.max_secs = ctl.timeout_secs.unwrap_or(max_secs).clamp(1, max_secs.max(1)) as u64;
     p.limits.disk_bytes = (disk_gb.max(1) as u64) << 30;
-    p.stall_secs = stall_for(ctl, features, p.limits.max_secs);
+    p.stall_secs = stall_for(ctl, tier, features, p.limits.max_secs);
     p.provenance = crate::compute_provenance::ask(features);
     if features.iter().any(|f| f == pshare::FEATURE_QUEUE) {
         p.ws_max_running = Some(grant.map(|g| g.max_parallel.max(1) as u32).unwrap_or(1));
@@ -2272,7 +2283,7 @@ pub fn try_move(j: &JobRow, avoid: &[String], hard: bool, why: &str) -> Option<S
     if !ok {
         return None;
     }
-    let mut new_plan = plan_for_node(&plan, &j.ctl, &c.node, c.grant.as_ref(), &c.offer);
+    let mut new_plan = plan_for_node(&plan, &j.ctl, j.tier(), &c.node, c.grant.as_ref(), &c.offer);
     if share::queue_on(&c.offer) {
         set_queue_fields(&mut new_plan, j);
     }

@@ -673,6 +673,23 @@ async fn a_stalled_job_ends_as_a_result_and_is_never_retried() {
     };
     let p: Value = serde_json::from_str(&plan_json).unwrap();
     assert_eq!(p["stall_secs"], 1800, "{p}");
+    // Priority gets the longer Priority/CI default, not none (here 1 h,
+    // so it is shorter than the 2 h --timeout the grant allows).
+    k2_core::compute::retry::set_tuning_for_tests(k2_core::compute::retry::Tuning { stall_priority_secs: 3600, ..tuning_for_tests() });
+    let id = submit(port, &ws, &mut n, json!({"node": "s1", "argv": ["true"], "noSource": true, "timeoutSecs": 7200, "tier": "priority", "why": "the release gate"})).await;
+    let p: Value = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        serde_json::from_str(&conn.query_row("SELECT plan_json FROM compute_jobs WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap()).unwrap()
+    };
+    assert_eq!(p["stall_secs"], 3600, "Priority: its own default: {p}");
+    let id = submit(port, &ws, &mut n, json!({"node": "s1", "argv": ["true"], "noSource": true, "timeoutSecs": 7200, "tier": "priority", "why": "the release gate", "stallSecs": 300})).await;
+    let p: Value = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        serde_json::from_str(&conn.query_row("SELECT plan_json FROM compute_jobs WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap()).unwrap()
+    };
+    assert_eq!(p["stall_secs"], 300, "an ask wins: {p}");
     let id = submit(port, &ws, &mut n, json!({"node": "s1", "argv": ["true"], "noSource": true, "stallSecs": 0})).await;
     let p: Value = {
         let db = k2_core::db::shared();

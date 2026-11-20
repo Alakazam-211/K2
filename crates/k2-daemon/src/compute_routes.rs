@@ -2432,7 +2432,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             argv: &argv,
             timeout,
             disk_gb,
-            stall: crate::compute_place::stall_for(&probe_ctl, &node_features(&node), timeout as u64),
+            stall: crate::compute_place::stall_for(&probe_ctl, tier, &node_features(&node), timeout as u64),
             queue_timeout,
             retries,
             needs: &needs,
@@ -2502,7 +2502,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cpus_burst,
         ..Default::default()
     };
-    let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
+    let stall_secs = crate::compute_place::stall_for(&ctl, tier, &node_features(&node), timeout as u64);
     // Who sent it (display and the Priority note; not a security boundary).
     let submitter = submitter_for(who, ws, source.as_ref(), submitter_name.as_deref());
     // The Priority courtesy (R4, §3.5): one line when another submitter on

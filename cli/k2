@@ -31244,8 +31244,9 @@ Agents:
                  [--queue-timeout 2h|off] [--retries N] [--stall-timeout 30m|off]
                                 queue timeout: 2h attached or --wait, 24h --detach,
                                 48h --tier batch. Stall: a job that prints nothing
-                                that long ends; use --stall-timeout off for a job
-                                that goes quiet (a soak)
+                                that long ends (default 30m; 2h for Priority and
+                                CI); use --stall-timeout off for a job that goes
+                                quiet (a soak)
                  [--shards N]   N jobs, {shard}/{shards} in the command, each on its
                                 own node when it can (no node named)
                  Which line (queue order only; never stops a running job; k2 study compute: TIERS)?
@@ -31730,8 +31731,8 @@ that sleeps or is paused; infrastructure failures (node lost, sync, spawn)
 retry --retries times (default 1) with backoff, on another node when K2
 placed the job (--retries 0 or --no-retry: never). k2 compute get <job>
 says why each attempt ended; logs/fetch --attempt N read an earlier one.
-A job that prints nothing for --stall-timeout (default 30m) ends as
-timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
+A job that prints nothing for --stall-timeout (default 30m; 2h for Priority
+and CI) ends as timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
 result and never retried.
 Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
 3 = infra, with a JSON code on stderr (node_offline, not_granted,
@@ -57349,7 +57350,7 @@ cmd_schema() {
         {"name": "--artifacts", "arg": "GLOB", "description": "The same as --artifact."},
         {"name": "--json", "arg": null, "description": "One result object on stdout (logs go to stderr)."},
         {"name": "--queue-timeout", "arg": "2h|off", "description": "How long it may wait to start (default 2h attached or --wait, 24h --detach, 48h --tier batch)."},
-        {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m); off for a job that goes quiet."},
+        {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m; 2h for Priority and CI); off for a job that goes quiet."},
         {"name": "--shards", "arg": "N", "description": "N jobs, {shard}/{shards} in the command, each on its own node when it can (no node named)."},
         {"name": "--priority", "arg": null, "description": "The critical path; needs --why. At most 2 Priority jobs queued or running per workspace."},
         {"name": "--tier", "arg": "standard|priority|batch|ci", "description": "Which line: standard (default), priority, batch (idle time, always detached) or ci (needs a grant with --ci)."},
@@ -70707,6 +70708,11 @@ NEVER STUCK
   never retried: a non-zero exit, a timeout, a stall, a cancel, mem_cap.
   An attached run follows the new attempt ("retrying as attempt 2 on …").
   --stall-timeout 30m|off   no output for that long → timeout/stalled.
+                            Default 30m; Priority and CI jobs (--priority,
+                            --tier ci) get 2h, since the critical path is often
+                            quiet while it waits on a lock or another service.
+                            A stall not shorter than --timeout is none: the
+                            wall clock ends the job first.
                             5 minutes before the limit (for a limit under 10
                             minutes: once half of it has passed with no output,
                             4m for an 8m limit) you get one [compute]

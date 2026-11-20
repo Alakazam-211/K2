@@ -625,7 +625,7 @@ fn move_to(who: &Who, j: &store::JobRow, ws: &Ws, to: &str, on_node: bool) -> R<
         let ok = if same {
             store::set_waiting_job_ctl(&conn, &j.id, j.generation, &ctl).map_err(|e| no("internal", 500, e))?
         } else {
-            let mut new_plan = place::plan_for_node(&plan, &j.ctl, &c.node, c.grant.as_ref(), &c.offer);
+            let mut new_plan = place::plan_for_node(&plan, &j.ctl, j.tier(), &c.node, c.grant.as_ref(), &c.offer);
             if share::queue_on(&c.offer) {
                 place::set_queue_fields(&mut new_plan, j);
             }

@@ -967,6 +967,11 @@ NEVER STUCK
   never retried: a non-zero exit, a timeout, a stall, a cancel, mem_cap.
   An attached run follows the new attempt ("retrying as attempt 2 on …").
   --stall-timeout 30m|off   no output for that long → timeout/stalled.
+                            Default 30m; Priority and CI jobs (--priority,
+                            --tier ci) get 2h, since the critical path is often
+                            quiet while it waits on a lock or another service.
+                            A stall not shorter than --timeout is none: the
+                            wall clock ends the job first.
                             5 minutes before the limit (for a limit under 10
                             minutes: once half of it has passed with no output,
                             4m for an 8m limit) you get one [compute]

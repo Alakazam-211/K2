@@ -212,8 +212,9 @@ Agents:
                  [--queue-timeout 2h|off] [--retries N] [--stall-timeout 30m|off]
                                 queue timeout: 2h attached or --wait, 24h --detach,
                                 48h --tier batch. Stall: a job that prints nothing
-                                that long ends; use --stall-timeout off for a job
-                                that goes quiet (a soak)
+                                that long ends (default 30m; 2h for Priority and
+                                CI); use --stall-timeout off for a job that goes
+                                quiet (a soak)
                  [--shards N]   N jobs, {shard}/{shards} in the command, each on its
                                 own node when it can (no node named)
                  Which line (queue order only; never stops a running job; k2 study compute: TIERS)?
@@ -698,8 +699,8 @@ that sleeps or is paused; infrastructure failures (node lost, sync, spawn)
 retry --retries times (default 1) with backoff, on another node when K2
 placed the job (--retries 0 or --no-retry: never). k2 compute get <job>
 says why each attempt ended; logs/fetch --attempt N read an earlier one.
-A job that prints nothing for --stall-timeout (default 30m) ends as
-timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
+A job that prints nothing for --stall-timeout (default 30m; 2h for Priority
+and CI) ends as timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
 result and never retried.
 Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
 3 = infra, with a JSON code on stderr (node_offline, not_granted,

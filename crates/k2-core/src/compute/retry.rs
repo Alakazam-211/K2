@@ -31,6 +31,10 @@ pub struct Tuning {
     pub queue_timeout_detached_secs: i64,
     /// Default stall timeout (no output for this long ends the job).
     pub stall_secs: i64,
+    /// The default for Priority and CI jobs: longer, not none. The
+    /// critical path is often quiet while it waits on a lock, the network
+    /// or a remote service, and a stall there costs the most.
+    pub stall_priority_secs: i64,
     /// The controller's compute ticker period.
     pub tick_millis: u64,
     /// `--any` (0.46.3, V71): when no node can start the job now, it waits
@@ -52,6 +56,7 @@ impl Default for Tuning {
             queue_timeout_attached_secs: 7200,
             queue_timeout_detached_secs: 86_400,
             stall_secs: 1800,
+            stall_priority_secs: 7200,
             tick_millis: 5000,
             any_hold_secs: 60,
             servers_refresh_secs: 300,

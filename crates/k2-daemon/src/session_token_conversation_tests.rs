@@ -22,6 +22,10 @@ struct Fake {
     rechecks: Mutex<Vec<(String, String)>>,
     confirmed: Mutex<Vec<(String, String)>>,
     version_asks: Mutex<usize>,
+    /// (session, conversation) pairs whose log K2 parsed.
+    logs: Vec<(String, String)>,
+    warned: WarnOnce,
+    warn_lines: Mutex<Vec<String>>,
 }
 
 impl Fake {
@@ -67,6 +71,14 @@ impl Records for Fake {
     }
     fn confirm(&self, session_id: &str, conversation: &str) {
         self.confirmed.lock().expect("confirmed").push((session_id.to_string(), conversation.to_string()));
+    }
+    fn log_confirms(&self, session_id: &str, conversation: &str) -> bool {
+        self.logs.contains(&(session_id.to_string(), conversation.to_string()))
+    }
+    fn warn_newer_once(&self, version: &str) {
+        if self.warned.first(version) {
+            self.warn_lines.lock().expect("warn lines").push(newer_line(version));
+        }
     }
 }
 
@@ -144,7 +156,7 @@ fn another_tabs_conversation_is_refused_without_a_recheck() {
     let f = two_tabs();
     let r = decide(&f, A, &hdr(Some("conv-B"), Some("conv-B")), Via::Tcp).expect_err("refused");
     assert_eq!(r.code, "passport_not_this_conversation");
-    assert!(r.message.ends_with(&format!("reopen the tab from {}", k2_core::brand::PRODUCT_NAME)), "{}", r.message);
+    assert!(r.message.contains(&format!("close this tab and reopen it from {}", k2_core::brand::PRODUCT_NAME)), "{}", r.message);
     assert_eq!(r.codex_version.as_deref(), Some(CHECKED), "the log line sees the version");
     let body: serde_json::Value = serde_json::from_str(&r.body()).expect("json body");
     assert_eq!(body["error"], "passport_not_this_conversation");
@@ -194,6 +206,7 @@ fn on_the_socket_the_caller_must_descend_from_the_tab() {
 #[test]
 fn an_unchecked_codex_version_fails_closed() {
     for (answer, shown) in [
+        // Newer, with no log that confirms the conversation.
         (Ok("codex-cli 0.172.0".to_string()), "0.172.0"),
         (Ok("codex-cli 0.154.0".to_string()), "0.154.0"),
         (Ok("codex-cli 0.163.0-alpha.2".to_string()), "codex-cli 0.163.0-alpha.2"),
@@ -205,6 +218,47 @@ fn an_unchecked_codex_version_fails_closed() {
         assert_eq!(r.code, "codex_version_unverified", "{answer:?}");
         assert!(r.message.contains(&format!("({shown})")), "{}", r.message);
         assert!(r.message.contains("K2_CODEX_PASSPORT_BIND=0 (owner only)"), "{}", r.message);
+    }
+}
+
+#[test]
+fn a_newer_codex_passes_only_when_its_log_confirms_and_warns_once() {
+    let mut f = two_tabs();
+    f.versions.insert(A.to_string(), Ok("codex-cli 0.180.2".to_string()));
+    // No parsed log for the conversation: it can't be verified.
+    let r = decide(&f, A, &hdr(Some("conv-A"), None), sock(150)).expect_err("unverified newer Codex");
+    assert_eq!(r.code, "codex_version_unverified");
+    assert!(r.message.contains("(0.180.2)"), "{}", r.message);
+    assert!(f.warn_lines.lock().expect("warn lines").is_empty(), "no warning for a refused call");
+    // Its log confirms the conversation: allowed, with one warning line.
+    f.logs.push((A.to_string(), "conv-A".to_string()));
+    assert_eq!(code(decide(&f, A, &hdr(Some("conv-A"), None), sock(150))), "ok");
+    assert_eq!(code(decide(&f, A, &hdr(Some("conv-A"), None), Via::Tcp)), "ok");
+    assert_eq!(*f.warn_lines.lock().expect("warn lines"), vec![newer_line("0.180.2")], "one warning per version");
+    assert!(newer_line("0.180.2").starts_with("Codex 0.180.2 is newer than "));
+    assert!(newer_line("0.180.2").ends_with(" has tested; conversation check passed"));
+    // The conversation check still runs first: another tab's is refused.
+    assert_eq!(code(decide(&f, A, &hdr(Some("conv-B"), None), sock(150))), "passport_not_this_conversation");
+}
+
+#[test]
+fn every_refusal_says_what_to_do() {
+    let all = [
+        missing_msg(),
+        outside_msg(),
+        other_tab_msg(),
+        unknown_msg(),
+        unsettled_msg(),
+        older_msg("0.150.0"),
+        unreadable_msg("unknown"),
+        newer_unconfirmed_msg("0.180.0"),
+    ];
+    for m in all {
+        let (_, fix) = m.split_once(": ").unwrap_or_else(|| panic!("no fix after the reason: {m}"));
+        assert!(
+            ["close ", "run ", "send ", "update ", "check "].iter().any(|v| fix.starts_with(v)),
+            "the fix starts with what to do: {m}"
+        );
     }
 }
 

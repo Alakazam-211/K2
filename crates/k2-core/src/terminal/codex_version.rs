@@ -91,6 +91,29 @@ pub fn facts_for(version: (u32, u32, u32)) -> Option<&'static CodexIdFacts> {
     SUPPORTED.iter().find(|f| f.first <= version && version <= f.last)
 }
 
+/// Where a release stands against [`SUPPORTED`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    /// Inside a checked range.
+    Checked,
+    /// Newer than every checked release. The daemon's check still runs,
+    /// and passes only when the conversation is confirmed from its log.
+    Newer,
+    /// Older than the first checked release, or between two ranges.
+    Unchecked,
+}
+
+/// Where `version` stands against [`SUPPORTED`].
+pub fn standing(version: (u32, u32, u32)) -> Standing {
+    if facts_for(version).is_some() {
+        return Standing::Checked;
+    }
+    match SUPPORTED.iter().map(|f| f.last).max() {
+        Some(newest) if version > newest => Standing::Newer,
+        _ => Standing::Unchecked,
+    }
+}
+
 /// How long a version answer is trusted before asking the binary again.
 const VERSION_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -197,6 +220,15 @@ mod tests {
         for v in [(0, 154, 9), (0, 171, 1), (0, 172, 0), (1, 0, 0)] {
             assert!(facts_for(v).is_none(), "{v:?} was never checked");
         }
+    }
+
+    #[test]
+    fn a_release_is_checked_newer_or_unchecked() {
+        assert_eq!(standing((0, 163, 0)), Standing::Checked);
+        assert_eq!(standing((0, 171, 1)), Standing::Newer);
+        assert_eq!(standing((1, 0, 0)), Standing::Newer);
+        assert_eq!(standing((0, 154, 9)), Standing::Unchecked);
+        assert_eq!(standing((0, 0, 1)), Standing::Unchecked);
     }
 
     #[cfg(unix)]

@@ -17,7 +17,9 @@
 //!   process (the OS peer pid, walked up the process table). A process
 //!   under a shared app-server descends from no tab.
 //! - The tab's Codex version must be one K2 checked
-//!   (`k2_core::terminal::codex_version::SUPPORTED`).
+//!   (`k2_core::terminal::codex_version::SUPPORTED`), or newer than all of
+//!   them with the conversation confirmed from its own log (one warning
+//!   line per version). An older or unreadable version is refused.
 //! - A different conversation gets ONE re-check from K2's own record of
 //!   the tab (`/new`, `/clear` and fork start a new log K2 hasn't seen):
 //!   [`crate::activity_transcript::recheck_for`]. Then: another tab's
@@ -119,9 +121,83 @@ impl Refusal {
     }
 }
 
-/// The fix for a call that isn't this tab's: reopen it.
-fn reopen() -> String {
-    format!("this Codex call isn't from this tab's conversation: reopen the tab from {}", k2_core::brand::PRODUCT_NAME)
+const P: &str = k2_core::brand::PRODUCT_NAME;
+
+// Every refusal ends with what to do. One function per code.
+
+fn missing_msg() -> String {
+    format!("this Codex call didn't name its conversation, so {P} can't tell it's this tab's: close this tab and reopen it from {P}")
+}
+
+fn outside_msg() -> String {
+    format!(
+        "this call came from a process outside this tab, such as a Codex server another tab started: run `codex app-server daemon stop`, then close this tab and reopen it from {P}"
+    )
+}
+
+fn other_tab_msg() -> String {
+    format!("this call is from another tab's Codex conversation: close this tab and reopen it from {P}, so each tab runs its own Codex")
+}
+
+fn unknown_msg() -> String {
+    format!(
+        "{P} hasn't seen this Codex conversation in this tab: send Codex one message (after /new or /clear) and run the command again, or close this tab and reopen it from {P}"
+    )
+}
+
+fn unsettled_msg() -> String {
+    format!(
+        "another new Codex tab in this folder started at the same time, so {P} can't tell the two apart yet: close the other new Codex tab in this folder, then close this tab and reopen it from {P}"
+    )
+}
+
+fn older_msg(shown: &str) -> String {
+    format!(
+        "this Codex version ({shown}) is older than {P} supports: update Codex, then close this tab and reopen it from {P}, or set {BIND_ENV}=0 (owner only)"
+    )
+}
+
+fn unreadable_msg(shown: &str) -> String {
+    format!(
+        "{P} couldn't read this tab's Codex version ({shown}): check that `codex --version` works, then close this tab and reopen it from {P}, or set {BIND_ENV}=0 (owner only)"
+    )
+}
+
+fn newer_unconfirmed_msg(shown: &str) -> String {
+    format!(
+        "this Codex version ({shown}) is newer than {P} has tested, and {P} couldn't confirm this conversation from its log: send Codex one message and run the command again, or set {BIND_ENV}=0 (owner only)"
+    )
+}
+
+/// The one warning line for a Codex newer than every checked release.
+pub(crate) fn newer_line(version: &str) -> String {
+    format!("Codex {version} is newer than {P} has tested; conversation check passed")
+}
+
+/// Remembers which versions were already warned about.
+#[derive(Default)]
+pub(crate) struct WarnOnce(Mutex<std::collections::HashSet<String>>);
+
+impl WarnOnce {
+    /// True the first time `version` is seen.
+    pub(crate) fn first(&self, version: &str) -> bool {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(version.to_string())
+    }
+    #[cfg(test)]
+    pub(crate) fn seen(&self, version: &str) -> bool {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).contains(version)
+    }
+}
+
+fn newer_warned() -> &'static WarnOnce {
+    static W: OnceLock<WarnOnce> = OnceLock::new();
+    W.get_or_init(WarnOnce::default)
+}
+
+/// The daemon has warned about Codex `version` (tests).
+#[cfg(test)]
+pub(crate) fn newer_version_warned(version: &str) -> bool {
+    newer_warned().seen(version)
 }
 
 fn refuse(code: &'static str, message: String, version: &Option<String>) -> Refusal {
@@ -156,6 +232,11 @@ pub(crate) trait Records {
     fn recheck(&self, session_id: &str, wanted: &str) -> bool;
     /// A proven socket call settles the tab's adopted conversation.
     fn confirm(&self, session_id: &str, conversation: &str);
+    /// The tab's folder holds a Codex log whose header K2 parsed and whose
+    /// id is `conversation` (how a newer Codex is confirmed).
+    fn log_confirms(&self, session_id: &str, conversation: &str) -> bool;
+    /// Log the newer-Codex line, once per version.
+    fn warn_newer_once(&self, version: &str);
 }
 
 /// An id the CLI would send: letters, digits, `-` and `_`, at most 128.
@@ -183,7 +264,7 @@ pub(crate) fn decide(rec: &dyn Records, session_id: &str, h: &CodexHeaders, via:
         Err(e) => format!("unknown ({e})"),
     });
     let Some(conv) = h.conversation.as_deref().filter(|c| id_shape_ok(c)) else {
-        return Err(refuse("conversation_missing", reopen(), &seen));
+        return Err(refuse("conversation_missing", missing_msg(), &seen));
     };
     let mut tab = tab.unwrap_or_default();
     let proven = match via {
@@ -191,40 +272,34 @@ pub(crate) fn decide(rec: &dyn Records, session_id: &str, h: &CodexHeaders, via:
         Via::Socket { peer_pid, .. } => {
             let ok = matches!((peer_pid, tab.child_pid), (Some(p), Some(c)) if rec.descends(p, c));
             if !ok {
-                return Err(refuse("not_this_tabs_process", reopen(), &seen));
+                return Err(refuse("not_this_tabs_process", outside_msg(), &seen));
             }
             true
         }
         Via::Tcp => false,
     };
+    // A Codex newer than every checked release: checked again below.
+    let mut newer: Option<String> = None;
     if let Some(v) = &version {
-        let checked = v
-            .as_ref()
-            .ok()
-            .and_then(|s| codex_version::parse_version(s))
-            .and_then(codex_version::facts_for)
-            .is_some();
-        if !checked {
-            let shown = match v {
-                Ok(s) => codex_version::parse_version(s)
-                    .map(|(a, b, c)| format!("{a}.{b}.{c}"))
-                    .unwrap_or_else(|| s.chars().take(64).collect()),
-                Err(_) => "unknown".to_string(),
-            };
-            return Err(refuse(
-                "codex_version_unverified",
-                format!(
-                    "this Codex version ({shown}) isn't one {p} has checked yet: update {p}, or set {BIND_ENV}=0 (owner only)",
-                    p = k2_core::brand::PRODUCT_NAME
-                ),
-                &seen,
-            ));
+        let parsed = v.as_ref().ok().and_then(|s| codex_version::parse_version(s));
+        let shown = match (v, parsed) {
+            (_, Some((a, b, c))) => format!("{a}.{b}.{c}"),
+            (Ok(s), None) => s.chars().take(64).collect(),
+            (Err(_), None) => "unknown".to_string(),
+        };
+        match parsed.map(codex_version::standing) {
+            Some(codex_version::Standing::Checked) => {}
+            Some(codex_version::Standing::Newer) => newer = Some(shown),
+            Some(codex_version::Standing::Unchecked) => {
+                return Err(refuse("codex_version_unverified", older_msg(&shown), &seen));
+            }
+            None => return Err(refuse("codex_version_unverified", unreadable_msg(&shown), &seen)),
         }
     }
     if tab.conversation.as_deref() != Some(conv) {
         let others = rec.others(session_id);
         if others.iter().any(|o| o.conversation.as_deref() == Some(conv)) {
-            return Err(refuse("passport_not_this_conversation", reopen(), &seen));
+            return Err(refuse("passport_not_this_conversation", other_tab_msg(), &seen));
         }
         let shares_folder = others.iter().any(|o| o.codex && same_folder(o, &tab));
         let may_move = matches!(via, Via::Socket { .. }) || !shares_folder;
@@ -232,7 +307,7 @@ pub(crate) fn decide(rec: &dyn Records, session_id: &str, h: &CodexHeaders, via:
             tab = rec.tab(session_id).unwrap_or_default();
         }
         if tab.conversation.as_deref() != Some(conv) {
-            return Err(refuse("unknown_conversation", reopen(), &seen));
+            return Err(refuse("unknown_conversation", unknown_msg(), &seen));
         }
     }
     if via == Via::Tcp && !tab.settled {
@@ -240,13 +315,16 @@ pub(crate) fn decide(rec: &dyn Records, session_id: &str, h: &CodexHeaders, via:
         if others.iter().any(|o| o.codex && !o.settled && same_folder(o, &tab)) {
             return Err(refuse(
                 "conversation_unsettled",
-                format!(
-                    "another new Codex tab in this folder hasn't settled its conversation yet: try again in a moment, or reopen the tab from {}",
-                    k2_core::brand::PRODUCT_NAME
-                ),
+                unsettled_msg(),
                 &seen,
             ));
         }
+    }
+    if let Some(v) = &newer {
+        if !rec.log_confirms(session_id, conv) {
+            return Err(refuse("codex_version_unverified", newer_unconfirmed_msg(v), &seen));
+        }
+        rec.warn_newer_once(v);
     }
     if proven && !tab.settled {
         rec.confirm(session_id, conv);
@@ -281,7 +359,7 @@ pub fn check_conversation(v: &ValidatedHook, h: &CodexHeaders, via: Via) -> Resu
 fn check_failed() -> String {
     serde_json::json!({
         "error": "conversation_check_failed",
-        "message": format!("{} couldn't check this call's conversation: try again", k2_core::brand::PRODUCT_NAME),
+        "message": format!("{P} couldn't check this call's conversation: run the command again"),
     })
     .to_string()
 }
@@ -402,6 +480,17 @@ impl Records for LiveRecords {
 
     fn recheck(&self, session_id: &str, wanted: &str) -> bool {
         crate::activity_transcript::recheck_for(session_id, wanted)
+    }
+
+    fn log_confirms(&self, session_id: &str, conversation: &str) -> bool {
+        let cwd = self.tab(session_id).and_then(|t| t.cwd).unwrap_or_default();
+        !cwd.is_empty() && k2_core::chat_continue::locate_continue_transcript("codex", conversation, &cwd).is_some()
+    }
+
+    fn warn_newer_once(&self, version: &str) {
+        if newer_warned().first(version) {
+            log_debug!("[codex-passport] {}", newer_line(version));
+        }
     }
 
     fn confirm(&self, session_id: &str, conversation: &str) {

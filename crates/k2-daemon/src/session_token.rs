@@ -2245,7 +2245,7 @@ fn restrict_mode(_file: &std::path::Path) {}
 // ─────────────────────────────────────────────────────────────────────
 
 #[path = "session_token_conversation.rs"]
-mod conversation;
+pub(crate) mod conversation;
 #[cfg(unix)]
 pub use conversation::socket_peer_pid;
 pub use conversation::{

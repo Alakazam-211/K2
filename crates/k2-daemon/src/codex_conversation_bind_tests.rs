@@ -427,15 +427,41 @@ async fn two_unsettled_tabs_in_one_folder_are_refused_over_tcp_until_settled() {
     assert_ok(tcp_call(t.port, &d.token, Some(convs[1].as_str()), None).await, "D over TCP, the only unsettled tab left");
 }
 
+/// A Codex newer than every checked release passes when its own log
+/// confirms the conversation (and the daemon warns once); with a log K2
+/// can't parse it is refused. An older Codex is always refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_unchecked_codex_version_is_refused() {
+async fn a_newer_codex_passes_only_with_a_log_it_can_parse() {
     let t = bed().await;
-    let tab = spawn_tab(&workspace("ver"), "0.999.0", &["--yolo", "resume", "conv-V"]);
-    let got = tcp_call(t.port, &tab.token, Some("conv-V"), None).await;
-    assert_refused(got.clone(), "codex_version_unverified", "unknown version, TCP");
+    let cwd = workspace("newer");
+    write_rollout(&t.home.home, "conv-V", &cwd, now_ms() - 60_000);
+    let tab = spawn_tab(&cwd, "0.999.0", &["--yolo", "resume", "conv-V"]);
+    assert!(!crate::session_token::conversation::newer_version_warned("0.999.0"), "no warning before the first call");
+    assert_ok(tcp_call(t.port, &tab.token, Some("conv-V"), None).await, "newer Codex, parsed log, TCP");
+    assert_ok(tool_call(&tab, Some("conv-V"), None), "newer Codex, parsed log, socket");
+    assert!(crate::session_token::conversation::newer_version_warned("0.999.0"), "the daemon warned about 0.999.0");
+
+    let garbled = workspace("garbled");
+    write_garbled_rollout(&t.home.home, "conv-W");
+    let tab = spawn_tab(&garbled, "0.999.0", &["--yolo", "resume", "conv-W"]);
+    let got = tcp_call(t.port, &tab.token, Some("conv-W"), None).await;
+    assert_refused(got.clone(), "codex_version_unverified", "newer Codex, unparseable log, TCP");
     let msg = got.1["message"].as_str().expect("message");
     assert!(msg.contains("(0.999.0)") && msg.contains("K2_CODEX_PASSPORT_BIND=0"), "{msg}");
-    assert_refused(tool_call(&tab, Some("conv-V"), None), "codex_version_unverified", "unknown version, socket");
+    assert_refused(tool_call(&tab, Some("conv-W"), None), "codex_version_unverified", "newer Codex, unparseable log, socket");
+
+    let tab = spawn_tab(&workspace("older"), "0.154.0", &["--yolo", "resume", "conv-O"]);
+    let got = tcp_call(t.port, &tab.token, Some("conv-O"), None).await;
+    assert_refused(got.clone(), "codex_version_unverified", "older Codex, TCP");
+    assert!(got.1["message"].as_str().expect("message").contains("(0.154.0)"), "{}", got.1);
+}
+
+/// A log named for `id` whose first line isn't JSON.
+fn write_garbled_rollout(home: &Path, id: &str) {
+    let day = chrono::Local::now().format("%Y/%m/%d").to_string();
+    let dir = home.join(".codex").join("sessions").join(day);
+    std::fs::create_dir_all(&dir).expect("codex day dir");
+    std::fs::write(dir.join(format!("rollout-test-{id}.jsonl")), "not a session header\n").expect("rollout");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

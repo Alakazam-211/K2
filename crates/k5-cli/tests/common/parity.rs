@@ -762,9 +762,7 @@ impl Rig {
         let mut logs = Vec::new();
         let mut tools = Vec::new();
         let mut handed = false;
-        let empty_array = c
-            .bash32_empty_array
-            .filter(|_| bash_version() < (4, 4));
+        let empty_array = c.bash32_empty_array.filter(|_| bash_version() < (4, 4));
         for bash in [true, false] {
             let side = Side::of(bash, None);
             self.prepare(side, c);
@@ -962,11 +960,7 @@ impl Rig {
                 "{name}: stderr (mktemp's name masked)"
             );
         } else {
-            assert_eq!(
-                as_older_python(&r.stderr),
-                b.stderr,
-                "{name}: stderr"
-            );
+            assert_eq!(as_older_python(&r.stderr), b.stderr, "{name}: stderr");
         }
         (r.clone(), rl, handed, rt)
     }
@@ -1003,7 +997,11 @@ pub fn python3_version() -> (u32, u32) {
     static V: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
         let o = Command::new("python3")
-            .args(["-I", "-c", "import sys; print('%d %d' % sys.version_info[:2])"])
+            .args([
+                "-I",
+                "-c",
+                "import sys; print('%d %d' % sys.version_info[:2])",
+            ])
             .output()
             .expect("run python3");
         assert!(o.status.success(), "python3's version: {o:?}");

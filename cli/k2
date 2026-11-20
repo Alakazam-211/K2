@@ -1523,13 +1523,52 @@ _cli_check_session_passport() {
 }
 # END_CLI_STALE_PASSPORT
 
-# A bare `--` ends k2's own words and starts a command's. `k2 update` runs
-# no command, so a `--` on its line is a usage error: exit 2, nothing sent,
-# before any gate. `k2 update -- -h` can never start an update.
-if [ "${1:-}" = "update" ]; then
-    for _a in "${@:2}"; do
+# A bare `--` ends k2's own words and starts a command's (or plain words
+# that may start with a dash). Only the verbs in _k2_takes_dashdash take
+# one. On any other verb's line a `--` is a usage error: exit 2, nothing
+# sent, before every other gate and the router. So `k2 update -- -h` can
+# never start an update, and no help scan has to guess what a `--` means.
+# A new verb whose parser handles `--` goes in this list, in the same
+# change, next to the file that parses it.
+_k2_takes_dashdash() {
+    case "${1:-}" in
+        # Whole families: their shared parsers take `--` on most verbs.
+        ci) return 0 ;;                       # ci.sh cmd_ci
+        job|jobs) return 0 ;;                 # job.sh cmd_job
+        doc|docs) return 0 ;;                 # doc.sh _doc_parse, _doc_blob_tool, _doc_cad
+        wiki) return 0 ;;                     # wiki.sh _wiki_parse_args
+        organization) return 0 ;;             # permission.sh cmd_organization
+        send-feedback) return 0 ;;            # send-feedback.sh _sf_send
+        respond) return 0 ;;                  # respond.sh cmd_respond
+        done) return 0 ;;                     # session-complete.sh cmd_session_complete
+    esac
+    case "${1:-} ${2:-}" in
+        "compute run") return 0 ;;            # compute-run.sh cmd_compute_run
+        "compute test") return 0 ;;           # compute-run.sh cmd_compute_test
+        "compute rightsize") return 0 ;;      # compute-jobs.sh cmd_compute_rightsize
+        "vault run") return 0 ;;              # migrate.sh _vault_run
+        "db run") return 0 ;;                 # db-store.sh cmd_db run
+        "app exec"|"app shell") return 0 ;;   # app-doctor.sh cmd_app_exec, cmd_app_shell
+        "changes diff"|"changes stage"|"changes add"|"changes unstage"|"changes discard") return 0 ;;  # changes.sh
+        "sim type") return 0 ;;               # sim.sh _sim_type
+        "zen garden"|"zen gardens") return 0 ;;  # garden-access.sh cmd_zen_garden
+        "sidecar new") return 0 ;;            # sidecar.sh cmd_sidecar_new
+        "sessions archives") return 0 ;;      # awareness.sh cmd_sessions_list
+        "workspace resources") return 0 ;;    # agent-context.sh cmd_workspace_resources
+        "workspace api-key") return 0 ;;      # talk-and-workspace.sh cmd_workspace_set_api_key
+        # k2-approve gets these words as they are (daemon-install.sh cmd_approve_local).
+        "approve verify"|"approve show"|"approve key-id") return 0 ;;
+    esac
+    return 1
+}
+if ! _k2_takes_dashdash "$@"; then
+    for _a in "$@"; do
         if [ "$_a" = "--" ]; then
-            echo "usage: k2 update takes no '--' (k2 update --help)" >&2
+            if [ "${1:-}" = "--" ]; then
+                echo "usage: name a command before '--' (k2 help)" >&2
+            else
+                echo "usage: k2 ${1:-} takes no '--' (k2 ${1:-} --help)" >&2
+            fi
             exit 2
         fi
     done

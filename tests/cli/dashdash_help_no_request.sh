@@ -21,6 +21,12 @@
 #   * with no passport (K2_NO_OWNER_FALLBACK=1, no token): a run whose only
 #     -h/--help is after `--` is refused with exit 3 and sends nothing,
 #     while `vault run -h ...` still prints its help.
+#   * a verb that takes no `--` (msg, thread, heartbeat, whoami, vault
+#     list, compute status, a bare `k2 --`) refuses one: exit 2, says why,
+#     sends nothing;
+#   * every verb in the allowlist (_k2_takes_dashdash) gets past that
+#     refusal with a `--` on its line (one row each);
+#   * -h/--help before `--` on job and ci is still their help.
 # HOME is a temp dir, no real daemon, no network. Loud: every failure is
 # named and the script exits 1.
 # Run with: bash tests/cli/dashdash_help_no_request.sh
@@ -246,6 +252,99 @@ run_no_owner vault run -h --secret A -- grep
 [ "$RC" -eq 0 ] && [ "$OUT" = "$VAULT_REF" ] && ok "no passport, k2 vault run -h ...: the help, exit 0" \
     || { bad "no passport, k2 vault run -h ...: exit $RC"; printf '%s\n' "$OUT" "$ERR" | sed 's/^/      | /' >&2; }
 sent_nothing "no passport, k2 vault run -h ..."
+
+echo "== a verb that takes no -- refuses one =="
+for args in "msg acme -- -h" "msg acme -- hello" "thread acme -- hi" "heartbeat list -- -h" \
+    "whoami --" "vault list --" "compute status -- x" "-- ls"; do
+    reset
+    # shellcheck disable=SC2086 # word-splitting the case is the point
+    run $args
+    label="k2 $args"
+    [ "$RC" -eq 2 ] && ok "$label: exit 2" || bad "$label: exit $RC (want 2)"
+    [ -z "$OUT" ] && ok "$label: nothing on stdout" \
+        || { bad "$label: stdout"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2; }
+    case "$ERR" in
+        *"takes no '--'"*|*"name a command before '--'"*) ok "$label: says why" ;;
+        *) bad "$label: stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2 ;;
+    esac
+    sent_nothing "$label"
+done
+
+echo "== every allowlisted verb takes a -- =="
+# run_bounded <args...>: like run, but the CLI is stopped after 20 s. A
+# verb that waits for something past the gate has passed the gate.
+run_bounded() {
+    set +e
+    ERR="$(env K2_PORT="$STUB_PORT" K2_HOOK_TOKEN=passport-for-test \
+        K2_PROJECT_PATH="$WORK/proj" FAKE_HELPER_LOG="$HELPER_LOG" \
+        python3 -c '
+import subprocess, sys
+try:
+    p = subprocess.run(sys.argv[1:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, timeout=20)
+    sys.stderr.buffer.write(p.stderr)
+    sys.exit(p.returncode)
+except subprocess.TimeoutExpired as e:
+    sys.stderr.buffer.write(e.stderr or b"")
+    sys.exit(124)
+' "$K2" "$@" 2>&1 >/dev/null)"
+    RC=$?
+    set -e
+}
+while IFS= read -r args; do
+    [ -n "$args" ] || continue
+    reset
+    # shellcheck disable=SC2086 # word-splitting the case is the point
+    run_bounded $args
+    case "$ERR" in
+        *"takes no '--'"*) bad "k2 $args: refused its --"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2 ;;
+        *) ok "k2 $args: takes its -- (exit $RC)" ;;
+    esac
+done <<'ROWS'
+compute run --any --detach -- true
+compute test --any --detach -- --workspace
+compute rightsize -- true
+vault run --secret A -- true
+db run -- true
+app exec acme -- ls
+app shell acme -- ls
+changes diff -- a.txt
+changes stage -- a.txt
+changes add -- a.txt
+changes unstage -- a.txt
+changes discard -- a.txt
+sim type -- -text
+zen garden -- acme
+zen gardens -- acme
+sidecar new -- acme
+sessions archives -- acme
+workspace resources -- acme
+workspace api-key -- acme
+approve verify -- x
+approve show -- x
+approve key-id -- x
+ci run -- true
+job add -- true
+jobs add -- true
+doc show -- x
+docs show -- x
+wiki search -- -x
+organization show -- x
+send-feedback -- -text
+respond -- -text
+done -- x
+ROWS
+
+echo "== -h/--help before -- on job and ci is still help =="
+for args in "job add -h -- true" "ci run --help -- true"; do
+    reset
+    # shellcheck disable=SC2086 # word-splitting the case is the point
+    run $args
+    label="k2 $args"
+    [ "$RC" -eq 0 ] && ok "$label: exit 0" || bad "$label: exit $RC (want 0)"
+    [ -n "$OUT" ] && ok "$label: prints help" || bad "$label: printed nothing"
+    sent_nothing "$label"
+done
 
 echo ""
 echo "dashdash_help_no_request: $pass passed, $fail failed"

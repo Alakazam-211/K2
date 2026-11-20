@@ -22,6 +22,8 @@
 //!   word of the command is `--json`; exit 2 for a 400 or 413, else 3.
 //! - [`Cj`] is `_compute_json`: the body's keys in the order given, an
 //!   empty value left out, printed as Python's `json.dumps` prints.
+//!   [`Given`] is its whole rule on top of [`Cj`]: the pairs as the
+//!   caller names them (`K2_CJ_<name>`), the secrets first.
 //!
 //! A 404 is 3: `_compute_fail` takes its exit for a 404 from the caller
 //! and never reads the environment. Where this differs from the shell: a
@@ -470,8 +472,88 @@ impl Cj {
     }
 }
 
+/// `_compute_json`'s pairs as the caller gives them: `K2_CJ_<name>=<v>`,
+/// a name given again keeping its first place with the last value (the
+/// Python's `given` dict). The body takes the secrets (`_s`, `…Token`)
+/// first, then the rest, each in the order given, an empty value left
+/// out; each value's kind is its name's suffix, as [`Cj`] writes it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Given {
+    pairs: Vec<(String, String)>,
+}
+
+impl Given {
+    pub fn new() -> Given {
+        Given::default()
+    }
+
+    /// `K2_CJ_<name>=<v>`.
+    pub fn put(mut self, name: &str, v: &str) -> Given {
+        match self.pairs.iter_mut().find(|(k, _)| k == name) {
+            Some(slot) => slot.1 = v.to_string(),
+            None => self.pairs.push((name.to_string(), v.to_string())),
+        }
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+
+    /// The pairs of `other` after these.
+    pub fn then(mut self, other: &Given) -> Given {
+        for (k, v) in &other.pairs {
+            self = self.put(k, v);
+        }
+        self
+    }
+
+    /// `print(json.dumps(out))`.
+    pub fn body(&self) -> String {
+        let mut cj = Cj::new();
+        for secret in [true, false] {
+            for (k, v) in &self.pairs {
+                if (k.ends_with("_s") || k.ends_with("Token")) != secret || v.is_empty() {
+                    continue;
+                }
+                cj = if let Some(key) = k.strip_suffix("_s") {
+                    cj.s(key, v)
+                } else if let Some(key) = k.strip_suffix("_n") {
+                    cj.n(key, v)
+                } else if let Some(key) = k.strip_suffix("_b") {
+                    cj.b(key, v)
+                } else if let Some(key) = k.strip_suffix("_j") {
+                    cj.j(key, v)
+                } else {
+                    cj.s(k, v)
+                };
+            }
+        }
+        cj.body()
+    }
+}
+
 /// Whether `--json` is one of the words after the program's name
 /// (`_K2_ARGS_JSON`).
 pub fn args_json(words: &[&str]) -> bool {
     words.contains(&"--json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pairs_as_compute_json_makes_them() {
+        let g = Given::new()
+            .put("app", "a")
+            .put("memory", "8G")
+            .put("confirmToken", "t")
+            .put("memory", "");
+        assert_eq!(g.body(), r#"{"confirmToken": "t", "app": "a"}"#);
+        let g = Given::new()
+            .put("io", "none")
+            .put("io_j", r#"{"rbps": "1"}"#);
+        assert_eq!(g.body(), r#"{"io": {"rbps": "1"}}"#);
+    }
 }

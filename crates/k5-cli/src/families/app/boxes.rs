@@ -13,8 +13,8 @@
 //!   terminal, on the daemon's 409 `podman_install_needed`.
 //! - `app engine` and `app rehost` alone print the runtime page.
 
-use super::call::{Ctx, Split};
-use super::deploy::{value, Given};
+use super::call::{Ctx, Given, Split};
+use super::deploy::value;
 use super::py::{self, Out};
 use super::runtime::rt_abs;
 use super::wallet::raw;

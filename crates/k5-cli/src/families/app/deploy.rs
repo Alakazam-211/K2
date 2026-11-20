@@ -19,7 +19,7 @@
 //! - `seal rotate` without `--yes` asks for the App id at a terminal
 //!   (stdin and stderr), else says how and exits 2.
 
-use super::call::{Cj, Ctx, Split};
+use super::call::{Cj, Ctx, Given, Split};
 use super::py::{self, Out};
 use super::runtime::{rt_abs, rt_abs_file};
 use super::wallet::raw;
@@ -132,66 +132,6 @@ pub enum Ask {
 pub const VERBS: &[&str] = &[
     "build", "install", "deploy", "rollback", "stop", "start", "restart", "link", "seal", "config",
 ];
-
-/// `_compute_json`'s pairs as the caller gives them: `K2_CJ_<name>=<v>`,
-/// a name given again keeping its first place with the last value. The
-/// body takes the secrets (`_s`, `…Token`) first, then the rest, each in
-/// the order given, an empty value left out.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Given {
-    pairs: Vec<(String, String)>,
-}
-
-impl Given {
-    pub fn new() -> Given {
-        Given::default()
-    }
-
-    /// `K2_CJ_<name>=<v>`.
-    pub fn put(mut self, name: &str, v: &str) -> Given {
-        match self.pairs.iter_mut().find(|(k, _)| k == name) {
-            Some(slot) => slot.1 = v.to_string(),
-            None => self.pairs.push((name.to_string(), v.to_string())),
-        }
-        self
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.pairs.is_empty()
-    }
-
-    /// The pairs of `other` after these.
-    pub fn then(mut self, other: &Given) -> Given {
-        for (k, v) in &other.pairs {
-            self = self.put(k, v);
-        }
-        self
-    }
-
-    /// `print(json.dumps(out))`.
-    pub fn body(&self) -> String {
-        let mut cj = Cj::new();
-        for secret in [true, false] {
-            for (k, v) in &self.pairs {
-                if (k.ends_with("_s") || k.ends_with("Token")) != secret || v.is_empty() {
-                    continue;
-                }
-                cj = if let Some(key) = k.strip_suffix("_s") {
-                    cj.s(key, v)
-                } else if let Some(key) = k.strip_suffix("_n") {
-                    cj.n(key, v)
-                } else if let Some(key) = k.strip_suffix("_b") {
-                    cj.b(key, v)
-                } else if let Some(key) = k.strip_suffix("_j") {
-                    cj.j(key, v)
-                } else {
-                    cj.s(k, v)
-                };
-            }
-        }
-        cj.body()
-    }
-}
 
 /// `x="${2:-}"; shift 2` at `i`: the value and the next index, or `set
 /// -e` ending the command (no value: `shift 2` fails).
@@ -1399,20 +1339,6 @@ mod tests {
             Stop::silent(Exit::Error)
         );
         assert_eq!(stop("config", &["a", "--io", "x"]).line, usage::IO);
-    }
-
-    #[test]
-    fn the_pairs_as_compute_json_makes_them() {
-        let g = Given::new()
-            .put("app", "a")
-            .put("memory", "8G")
-            .put("confirmToken", "t")
-            .put("memory", "");
-        assert_eq!(g.body(), r#"{"confirmToken": "t", "app": "a"}"#);
-        let g = Given::new()
-            .put("io", "none")
-            .put("io_j", r#"{"rbps": "1"}"#);
-        assert_eq!(g.body(), r#"{"io": {"rbps": "1"}}"#);
     }
 
     #[test]

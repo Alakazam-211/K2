@@ -16,8 +16,8 @@
 //!   unless `NO_APPROVE` is `1`.
 //! - `handover`'s usage is its page on stderr, exit 2.
 
-use super::call::Ctx;
-use super::deploy::{post_200, value, Given};
+use super::call::{Ctx, Given};
+use super::deploy::{post_200, value};
 use super::py::{self, Out};
 use super::wallet::raw;
 use super::{Answer, Stop};

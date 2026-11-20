@@ -10,11 +10,12 @@
 //! `reset`, `doctor` and `path`, printed by `_zen_print` ([`print`]);
 //! `garden` (with Garden access, History and `put`) and `proposals`
 //! ([`garden`]); `theme`, `sync`, `news`, `links`, `agents-order` and
-//! `inspect` ([`more`]); `widget` and the widget dev loop ([`widget`]).
+//! `inspect` ([`more`]); `widget` and the widget dev loop ([`widget`]);
+//! `guide`, its static pages ([`guide`]).
 //!
 //! Still the shell's ([`run`] returns `None` before anything is printed
 //! or sent): a line with `-h` or `--help` (the router's help arms), the
-//! verbs not yet listed above, and the edge hand-backs every family keeps
+//! two widget forms ([`widget::shells`]), and the edge hand-backs every family keeps
 //! (a word that is not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a
 //! port curl won't take, a `python3` the binary can't tell); `validate
 //! --dir` when the temp folder can't be used (`mktemp`'s own line).
@@ -77,7 +78,6 @@ fn native(words: &[&str]) -> bool {
                 || w.first() == Some(&"apply");
             !widget::shells(w) && !(dir && crate::transport::client::tmpdir_unusable())
         }
-        "guide" => false,
         _ => true,
     }
 }
@@ -114,11 +114,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let sub = words.first().copied().unwrap_or("");
     // The prelude skips the connection gate for `zen` alone and `zen
     // help`, not the virtual desktop's guard.
-    if matches!(sub, "" | "help") {
+    if matches!(sub, "" | "help" | "guide") {
         if settings.no_owner_fallback && settings.auth == Auth::None {
             return Some(Gate::VirtualDesktop.stop());
         }
         changes_hint(&words);
+        if sub == "guide" {
+            return Some(guide::guide(&words[1..]).print());
+        }
         return Some(verbs::help(false, Exit::Ok));
     }
     let widget_no_gate = matches!(sub, "widget" | "widgets") && widget::no_gate(&words[1..]);

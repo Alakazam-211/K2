@@ -1965,3 +1965,51 @@ fn zen_widgets_answer_as_the_shell_does() {
         rig.check(c);
     }
 }
+
+#[test]
+fn zen_guide_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "guide");
+    let page = |name: &'static str, args: &'static [&'static str]| {
+        case(name, args, &[], vec![], nothing, 0, 0)
+    };
+    let usage = |name: &'static str, args: &'static [&'static str]| {
+        case(name, args, &[], vec![], nothing, 2, 0)
+    };
+    let cases = vec![
+        // covers: zen guide
+        page("guide: the index", &["guide"]),
+        page("guide gardens", &["guide", "gardens"]),
+        page("guide safe-mode", &["guide", "safe-mode"]),
+        page("guide api (generated)", &["guide", "api"]),
+        page("guide libs (generated)", &["guide", "libs"]),
+        page("guide services", &["guide", "services"]),
+        page("guide example", &["guide", "example"]),
+        page("guide example --list", &["guide", "examples", "--list"]),
+        page("guide example rail-top", &["guide", "example", "rail-top"]),
+        page("guide example --toml", &["guide", "example", "column-corner", "--toml"]),
+        page("guide example board-lite", &["guide", "example", "board-lite"]),
+        page("guide example board-lite --toml", &["guide", "example", "board-lite", "--toml"]),
+        page("guide example board-lite --script", &["guide", "example", "board-lite", "--script"]),
+        // covers: zen guide --json
+        page("guide --json: the index", &["guide", "--json"]),
+        page("guide themes --json", &["guide", "themes", "--json"]),
+        page("guide example --list --json", &["guide", "example", "--list", "--json"]),
+        page("guide example --json", &["guide", "example", "menu-both", "--json"]),
+        page("guide examples --json", &["guide", "examples", "--json"]),
+        page("guide board-lite --json", &["guide", "example", "board-lite", "--json"]),
+        usage("guide, no topic", &["guide", "nope"]),
+        usage("guide, no example", &["guide", "example", "nope"]),
+        usage("guide --toml, no example name", &["guide", "example", "--toml"]),
+        usage("guide --list with a name", &["guide", "example", "x", "--list"]),
+        usage("guide --toml and --script", &["guide", "example", "board-lite", "--toml", "--script"]),
+        usage("guide --script not board-lite", &["guide", "example", "rail-top", "--script"]),
+        usage("guide --toml on a topic", &["guide", "gardens", "--toml"]),
+        usage("guide, an extra word", &["guide", "gardens", "x"]),
+        usage("guide, a third word", &["guide", "example", "rail-top", "x"]),
+        usage("guide, an unknown flag", &["guide", "--nope"]),
+        ok_owner("guide with a daemon", &["guide", "undo"], vec![]),
+    ];
+    for c in &cases {
+        rig.check(c);
+    }
+}

@@ -465,6 +465,15 @@ fn repo_with_branches(ws: &Path, branches: &[&str]) -> (git2::Oid, Vec<git2::Oid
     (base, tips)
 }
 
+/// Check `branch` out in a worktree at `at` (an agent's worktree).
+fn add_worktree(ws: &Path, branch: &str, at: &Path) {
+    let repo = git2::Repository::open(ws).expect("open");
+    let reference = repo.find_reference(&format!("refs/heads/{branch}")).expect("branch ref");
+    let mut opts = git2::WorktreeAddOptions::new();
+    opts.reference(Some(&reference));
+    repo.worktree(&branch.replace('/', "-"), at, Some(&opts)).expect("add worktree");
+}
+
 fn head_of(ws: &Path) -> git2::Oid {
     git2::Repository::open(ws).expect("open").head().expect("head").target().expect("head target")
 }
@@ -490,12 +499,15 @@ async fn its_own_merge_is_a_card_for_a_person() {
     let skill = k2_core::workspace::agent_identity::skills_dir(&e.own).join("backend");
     std::fs::create_dir_all(&skill).expect("skill dir");
     std::fs::write(skill.join("SKILL.md"), "---\nname: backend\nrole: dev\n---\nBackend.\n").expect("skill");
-    let (base, tips) = repo_with_branches(ws, &["agent/d1-agent/own-task", "feature/no-author", "agent/backend/task"]);
+    let (base, tips) = repo_with_branches(ws, &["agent/d1-agent/own-task", "feature/no-author", "agent/backend/task", "agent/backend/no-worktree"]);
+    let home = ws.parent().expect("home");
+    add_worktree(ws, "agent/backend/task", &home.join("wt-backend-task"));
 
     for (label, agent, branch) in [
         ("its own branch", "d1-agent", "agent/d1-agent/own-task"),
         ("an author that can't be told", "backend", "feature/no-author"),
         ("agent= and the branch disagree", "d1-agent", "agent/backend/task"),
+        ("another agent's branch that isn't its worktree branch", "backend", "agent/backend/no-worktree"),
     ] {
         let path = format!("/cli/review/approve?project={own}&agent={}&branch={}", enc(agent), enc(branch));
         let r = http(e.port, "POST", &path, Some(e.passport.as_str()));
@@ -575,6 +587,7 @@ async fn the_actor_is_the_passport() {
     std::fs::write(skill.join("SKILL.md"), "---\nname: backend\nrole: dev\n---\nBackend.\n").expect("skill");
     let ws = Path::new(&e.own);
     let (_, tips) = repo_with_branches(ws, &["agent/backend/task"]);
+    add_worktree(ws, "agent/backend/task", &ws.parent().expect("home").join("wt-actor-backend"));
     let r = http(e.port, "POST", &format!("/cli/review/approve?project={own}&agent=backend&branch={}", enc("agent/backend/task")), Some(e.passport.as_str()));
     assert_eq!(r.status, 200, "approve another agent's branch: {}", r.raw);
     assert_eq!(head_of(ws), tips[0], "merged");
@@ -693,4 +706,31 @@ async fn skills_never_reach_the_workspaces_own_agent_folder() {
         }
     }
     assert!(persona_dir.join("AGENT.md").exists(), "the workspace's own agent folder stays");
+}
+
+/// A workspace folder inside a repo above it: approving even another
+/// agent's worktree branch is the card, and the repo above is untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approve_in_a_folder_inside_another_repo_is_the_card() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let home = Path::new(&e.own).parent().expect("home").to_path_buf();
+    let outer = home.join("outer-repo");
+    std::fs::create_dir_all(&outer).expect("outer");
+    let (base, _) = repo_with_branches(&outer, &["agent/backend/task"]);
+    add_worktree(&outer, "agent/backend/task", &home.join("wt-outer-backend"));
+    let inner = outer.join("inner");
+    let r = http(e.port, "POST", &format!("/cli/workspace/create?path={}&no_wiki=1&no_agents_md=1", enc(&inner.to_string_lossy())), Some(OWNER));
+    assert_eq!(r.status, 200, "owner creates the inner workspace: {}", r.raw);
+    let inner_id = project_id_for(&inner);
+    let skill = k2_core::workspace::agent_identity::skills_dir(&inner.to_string_lossy()).join("backend");
+    std::fs::create_dir_all(&skill).expect("skill dir");
+    std::fs::write(skill.join("SKILL.md"), "---\nname: backend\nrole: dev\n---\nBackend.\n").expect("skill");
+    let (passport, _live) = live_passport(&inner, &inner_id, "tab-d1-inner", "d1-inner");
+    let path = format!("/cli/review/approve?project={}&agent=backend&branch={}", enc(&inner.to_string_lossy()), enc("agent/backend/task"));
+    let r = http(e.port, "POST", &path, Some(passport.as_str()));
+    assert_eq!(r.status, 403, "{}", r.raw);
+    assert_eq!(code(&r, "approve"), "merge_needs_person", "{}", r.raw);
+    assert_eq!(head_of(&outer), base, "the repo above is untouched");
+    assert!(branch_tip(&outer, "agent/backend/task").is_some(), "its branch is still there");
 }

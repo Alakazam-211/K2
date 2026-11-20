@@ -276,8 +276,10 @@ fn merge_needs_person(path: &str, params: &HashMap<String, String>, principal: &
 /// Whether `branch=` is the passport's own work, or its author can't be
 /// told. An agent's review branch is `agent/<author>/<task>`; it is another
 /// agent's only when that author is a skill of this workspace, isn't one of
-/// the passport's own names (its address, its workspace's handle), and
-/// matches `agent=` when the request names one.
+/// the passport's own names (its address, its workspace's handle), matches
+/// `agent=` when the request names one, the workspace folder is its repo's
+/// root (not a folder inside a repo above it), and the branch is checked
+/// out in one of the repo's worktrees (that agent's worktree branch).
 fn own_branch(params: &HashMap<String, String>, principal: &HookPrincipal) -> bool {
     let branch = params.get("branch").map(|s| s.trim()).unwrap_or("");
     let Some(author) = branch.strip_prefix("agent/").and_then(|rest| rest.split_once('/')).map(|(a, _)| a).filter(|a| !a.is_empty()) else {
@@ -294,7 +296,16 @@ fn own_branch(params: &HashMap<String, String>, principal: &HookPrincipal) -> bo
         return true;
     };
     let skill = k2_core::workspace::agent::list(project.clone()).is_ok_and(|l| l.iter().any(|a| a.name == author));
-    !skill
+    if !skill {
+        return true;
+    }
+    // The workspace's own repo, never one above it (the merge opens the repo
+    // by walking up from the workspace folder).
+    if !std::path::Path::new(project).join(".git").exists() {
+        return true;
+    }
+    // That agent's own worktree branch, not any branch of the repo.
+    !k2_core::git::list_worktrees(project).iter().any(|w| !w.is_main && w.branch == branch)
 }
 
 /// `k2 done` records the passport's own name as its actor, never a name

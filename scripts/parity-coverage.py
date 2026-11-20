@@ -41,6 +41,12 @@ form leaves the count only by that list: a ceiling form that left the
 census fails --check, and --write refuses it unless --accept-gone (a
 form the shell really dropped). A covered form that leaves the census
 fails by its tags.
+
+A tag says a parity case drives the form, not that k5 answers it: a
+case can run where both sides are bash. The gate prints the tagged
+forms the native bar's ceiling (crates/k5-cli/tests/data/
+native_bar_ceiling.tsv) still lists; the native bar, not this gate,
+fails on them.
 """
 
 import os
@@ -50,6 +56,7 @@ import sys
 CENSUS = "crates/k5-cli/tests/data/spec_census.tsv"
 CEILING = "crates/k5-cli/tests/data/parity_uncovered.tsv"
 K5_ONLY = "crates/k5-cli/tests/data/k5_only_forms.tsv"
+NATIVE_BAR = "crates/k5-cli/tests/data/native_bar_ceiling.tsv"
 RUST_TAG = re.compile(r"^\s*// covers: (.+?)\s*$")
 SHELL_TAG = re.compile(r"^\s*# covers: (.+?)\s*$")
 
@@ -165,6 +172,17 @@ def tags(root, known, only):
     return covered, bad
 
 
+def still_bash(root):
+    """The forms the native bar's ceiling lists in a counted class: k5
+    still hands them to bash (crates/k5-cli/tests/native_bar.rs)."""
+    path = os.path.join(root, NATIVE_BAR)
+    if not os.path.isfile(path):
+        return set()
+    with open(path, encoding="utf-8") as f:
+        rows = [l.rstrip("\n").split("\t") for l in f if l.strip() and not l.startswith("#")]
+    return {r[2] for r in rows[1:] if r[0] != "P"}
+
+
 def family_of(form, words):
     return words.get(form.split(" ")[0], "(no row)")
 
@@ -220,6 +238,13 @@ def main(argv):
              ", ".join(only) or "none"))
     for fam in sorted(by, key=lambda k: (-len(by[k]), k)):
         print("  %-16s %4d  %s" % (fam, len(by[fam]), ", ".join(by[fam])))
+    # A tag counts for parity, not nativeness: a tagged form the native
+    # bar still lists falls through, so both sides ran bash. Reported, not
+    # counted against the parity ceiling: the native bar is the gate for it.
+    bash = sorted(f for f in covered if f in still_bash(root))
+    if bash:
+        print("parity-coverage: %d tagged forms still fall through (%s lists them): %s"
+              % (len(bash), NATIVE_BAR, ", ".join(bash)))
     for b in bad:
         print("parity-coverage: " + b, file=sys.stderr)
     ceiling = read_ceiling(root)

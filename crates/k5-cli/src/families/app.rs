@@ -27,6 +27,9 @@
 //!   box-service request|revoke`, with [`approve`] when the owner is at
 //!   the terminal; [`db_set`]: `app db connect|check|disconnect`.
 //! - [`door`] also answers `app resume`; [`traffic`]: `app audit`.
+//! - [`runtime`]: `app validate`, `app status` and `app sdk
+//!   add|status|kit`; [`recording`]: `app recording [set]` and `app
+//!   room-names`.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
 //! - The verbs `cmd_app` hands to `cmd_skin` (`user`, `role`, `grant`'s
@@ -76,6 +79,8 @@ pub mod phone;
 pub mod phone_set;
 pub mod py;
 pub mod reads;
+pub mod recording;
+pub mod runtime;
 pub mod traffic;
 pub mod updates;
 pub mod updates_set;
@@ -108,6 +113,8 @@ pub enum Ask {
     Db(db_set::Ask),
     Approve(approve::Ask),
     Traffic(traffic::Ask),
+    Runtime(runtime::Ask),
+    Recording(recording::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -174,6 +181,12 @@ pub const TAKES: &[&str] = &[
     "deny",
     "resume",
     "audit",
+    "validate",
+    "status",
+    "sdk",
+    "recording",
+    "recordings",
+    "room-names",
 ];
 
 /// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
@@ -328,6 +341,26 @@ pub const VERBS: &[crate::route::Verb] = &[
         owner: crate::route::Owner::Native,
     },
     crate::route::Verb {
+        words: &["validate"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["status"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["sdk"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["recording", "recordings"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["room-names"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
         words: &["user", "users"],
         owner: crate::route::Owner::Native,
     },
@@ -380,6 +413,12 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
             Some(walls::parse(v, rest)?.map(Ask::Walls))
         }
         "audit" => Some(traffic::parse(rest)?.map(Ask::Traffic)),
+        v if runtime::VERBS.contains(&v) => {
+            Some(runtime::parse(v, rest)?.map(Ask::Runtime))
+        }
+        v if recording::VERBS.contains(&v) => {
+            Some(recording::parse(v, rest)?.map(Ask::Recording))
+        }
         v if approve::VERBS.contains(&v) => Some(approve::parse(v, rest)?.map(Ask::Approve)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
@@ -474,6 +513,8 @@ fn run_with(
         Ask::Db(d) => db_set::run(&mut ctx, d),
         Ask::Approve(a) => approve::run(&mut ctx, a),
         Ask::Traffic(t) => traffic::run(&mut ctx, t),
+        Ask::Runtime(r) => runtime::run(&mut ctx, r),
+        Ask::Recording(r) => recording::run(&mut ctx, r),
     };
     let exit = match shown {
         Ok(s) => s.print(),

@@ -1121,7 +1121,7 @@ fn wants_confirm(ctx: &Ctx, s: &Split) -> bool {
 /// `print(… (json.load(sys.stdin).get("error") or {}).get(k) or …)`, as
 /// `$(…)` holds it: the first of `keys` that is there and true. A raise is
 /// its traceback, and set -e ends the command (exit 1).
-fn error_field(body: &[u8], keys: &[&str]) -> Result<String, Exit> {
+pub(super) fn error_field(body: &[u8], keys: &[&str]) -> Result<String, Exit> {
     let r = (|| {
         let v = py::load(body, 1)?;
         let e = py::or(py::dget(&v, "error", 1)?, Value::Object(Vec::new()));

@@ -378,8 +378,16 @@ fn the_words() {
     assert_eq!(parse(&["nope"]), bad("unknown command nope"));
     assert_eq!(
         bad_line("say \"x\""),
-        b("{\"error\":\"usage\",\"hint\":\"say \"x\" (k2 voice --help)\"}")
+        b("{\"error\":\"usage\",\"hint\":\"say \\\"x\\\" (k2 voice --help)\"}")
     );
+    assert_eq!(
+        bad_line("a\\b \u{e9}\u{7f}\n\u{1f600}"),
+        b("{\"error\":\"usage\",\"hint\":\"a\\\\b \\u00e9\\u007f\\n\\ud83d\\ude00 (k2 voice --help)\"}")
+    );
+    // Help anywhere, even as a value flag's value, is the usage.
+    assert_eq!(parse(&["leave", "--call", "--help"]), Plan::Help);
+    assert_eq!(parse(&["join", "lounge", "--call", "-h"]), Plan::Help);
+    assert_eq!(parse(&["help", "x"]), Plan::Help);
 }
 
 #[test]
@@ -388,8 +396,12 @@ fn the_shell_s_lines() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/hostchat-voice.sh");
     let text = std::fs::read_to_string(&path).unwrap();
     for shell in [
-        r#"    _voice_bad() { echo "{\"error\":\"usage\",\"hint\":\"$1 (k2 voice --help)\"}" >&2; exit 2; }"#,
-        r#"            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 voice --help)\"}" >&2; exit 2 ;;"#,
+        "_voice_bad() {",
+        "    python3 -c 'import json, sys",
+        r#"print(json.dumps({"error": "usage", "hint": sys.argv[1] + " (k2 voice --help)"}, separators=(",", ":")))' "$1" >&2"#,
+        r#"            -*) _voice_bad "unknown flag $1" ;;"#,
+        r#"    if [ $# -eq 0 ] || _wants_help "$@"; then _voice_usage; return 0; fi"#,
+        r#"    case "$sub" in help) _voice_usage; return 0 ;; esac"#,
         r#"            --room) vt_room="${2:?--room <room>}"; shift 2 ;;"#,
         r#"    raw="$(_compute_send "$@")""#,
         r#"    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY""#,

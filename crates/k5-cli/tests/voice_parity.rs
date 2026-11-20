@@ -375,7 +375,12 @@ fn voice_words_as_the_shell_reads_them() {
             0,
         ),
         bad("an unknown verb", &["nope"]),
-        bad("an unknown flag, as it is", &["rooms", "--x\"y"]),
+        // `_voice_bad` builds its line with json.dumps: quotes,
+        // backslashes and characters outside ASCII are escaped.
+        bad("an unknown flag with a quote: escaped", &["rooms", "--x\"y"]),
+        bad("an unknown flag with a backslash", &["rooms", "--x\\y"]),
+        bad("an unknown verb outside ASCII", &["n\u{e9}pe \u{1f600}"]),
+        bad("a room with a quote", &["kick", "l\"x"]),
         bad("rooms: a word", &["rooms", "x"]),
         bad("--now on rooms", &["rooms", "--now"]),
         bad("--notice on join", &["join", "l", "--notice", "1"]),
@@ -583,10 +588,9 @@ fn voice_with_no_daemon() {
 }
 
 /// Help never acts (K2's rule): `-h` or `--help` anywhere on a line that
-/// would change something prints help and sends nothing. The binary hands
-/// such a line to the shell. Where bash acts anyway (`--call` takes
-/// `-h`/`--help` as its value, so the loop never sees it: a bash bug,
-/// cli/src/hostchat-voice.sh:215), the rows copy bash and say so.
+/// would change something prints help and sends nothing, even where a
+/// value flag (`--call`, `--room`) would take the word (`_wants_help`
+/// first). The binary hands such a line to the shell.
 #[test]
 fn voice_help_never_acts() {
     let rig = Rig::new(VERB, "helpnot");
@@ -633,18 +637,24 @@ fn voice_help_never_acts() {
             0,
         ),
         shell("repair --help", &["repair", "--help"], vec![], 0),
-        // The bash bug, copied: --call eats the help word and the verb runs.
+        // `_wants_help` comes first: a value flag no longer eats the word.
         shell(
-            "BASH BUG: leave --call --help leaves the call",
+            "leave --call --help: the help, nothing sent",
             &["leave", "--call", "--help"],
-            vec![ok(r#"{"ok":true}"#)],
-            1,
+            vec![],
+            0,
         ),
         shell(
-            "BASH BUG: join with --call -h joins",
+            "join with --call -h: the help, nothing sent",
             &["join", "lounge", "--call", "-h"],
-            vec![ok(r#"{"room":{"name":"Lounge"},"callId":"c"}"#)],
-            1,
+            vec![],
+            0,
+        ),
+        shell(
+            "recordings --room --help: the help, nothing sent",
+            &["recordings", "--room", "--help"],
+            vec![],
+            0,
         ),
     ] {
         rig.check(&c);

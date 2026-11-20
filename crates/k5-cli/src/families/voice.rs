@@ -10,8 +10,9 @@
 //!    desktop's guard does not).
 //! 2. `voice` rides the locked `hostchat` tool, an `id` tool: with
 //!    `HOOK_SOCK` set, the stale-passport or require-passport lines, exit 3.
-//! 3. The words ([`parse`]): `_voice_bad`'s line (`{"error":"usage",…}`,
-//!    written as the shell writes it, with no JSON escaping), exit 2.
+//! 3. The words ([`parse`]): `-h` or `--help` anywhere is the usage, exit
+//!    0, nothing sent (`_wants_help`); `_voice_bad`'s line
+//!    (`{"error":"usage",…}`, through Python's `json.dumps`), exit 2.
 //! 4. The call, then the lines, or the answer as it came with `--json`.
 //!
 //! Handed to the shell, before anything is printed or sent: a value flag
@@ -30,7 +31,7 @@ use self::sew::Field;
 use super::{curl_port, py_iter, py_len, Raise, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
-use crate::out::json::{self, Value};
+use crate::out::json::{self, Text, Value};
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing, Gate};
@@ -97,10 +98,15 @@ fn digits(t: &str) -> bool {
 
 /// The words after `voice`.
 pub fn parse(words: &[&str]) -> Plan {
+    // `_wants_help`: -h or --help anywhere, even where a value flag would
+    // take it, is the usage, and nothing is sent.
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return Plan::Help;
+    }
     let Some((&sub, rest)) = words.split_first() else {
         return Plan::Help;
     };
-    if matches!(sub, "-h" | "--help" | "help") {
+    if sub == "help" {
         return Plan::Help;
     }
     let (mut json, mut now) = (false, false);
@@ -127,7 +133,6 @@ pub fn parse(words: &[&str]) -> Plan {
             "--notice" => Some(&mut notice),
             "--require-recording" => Some(&mut rec_req),
             "--start-level" => Some(&mut rec_level),
-            "-h" | "--help" => return Plan::Help,
             w if w.starts_with('-') => return bad(format!("unknown flag {w}")),
             w => {
                 pos.push(w);
@@ -442,9 +447,22 @@ pub fn parse(words: &[&str]) -> Plan {
     }
 }
 
-/// `_voice_bad`'s line: the text as it is, no JSON escaping.
+/// `_voice_bad`'s line: `json.dumps({"error": "usage", "hint": …},
+/// separators=(",", ":"))`, so a quote, a backslash or a character outside
+/// ASCII in the words is escaped as Python escapes it.
 pub fn bad_line(text: &str) -> String {
-    format!("{{\"error\":\"usage\",\"hint\":\"{text} ({CLI_NAME} voice --help)\"}}")
+    let line = Value::Object(vec![
+        (Text::from("error"), super::s("usage")),
+        (
+            Text::from("hint"),
+            super::s(&format!("{text} ({CLI_NAME} voice --help)")),
+        ),
+    ]);
+    let options = json::Options {
+        compact: true,
+        ..json::Options::default()
+    };
+    json::to_string(&line, &options).expect("ASCII JSON of two strings")
 }
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].

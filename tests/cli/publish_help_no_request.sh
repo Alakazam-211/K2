@@ -13,9 +13,10 @@
 # keep their own pages. Then the plain forms still send their request, so
 # the stub is known to see one when it is sent.
 #
-# A subdomain label never begins with '-': `claim -x`, `unclaim -x` and
-# `create -x --target x` are a usage error (exit 2, "Error: unknown flag
-# '-x'" on stderr) and send nothing.
+# A subdomain label never begins with '-': `claim -x`, `unclaim -x`,
+# `create -x --target x`, `point -x --target x`, `target -x x` and `rm -x`
+# are a usage error (exit 2, "Error: unknown flag '-x'" on stderr) and
+# send nothing. point and target refuse a dash word in either place.
 #
 # `--`: the router has no end-of-options rule for publish; -h after `--`
 # is still help, like anywhere else on the line. claim refuses `--` itself
@@ -195,12 +196,27 @@ dash -x publish subdomain create -x --target x
 dash -x publish subdomain create --target x -x
 dash -x publish subdomain create -- -x --target x
 dash -- publish subdomain claim -- acme
+dash -x publish subdomain point -x --target x
+dash -x publish subdomain point --target x -x
+dash -x publish subdomain target -x x
+dash -x publish subdomain target acme -x
+dash -x publish subdomain rm -x
+dash -x publish subdomain remove -x
+dash -x publish subdomain delete -x
 
 echo "== pages that stay their own =="
 page publish/subdomain/list.txt publish subdomain list -h
 page publish/status.txt publish status acme -h
 page publish/secret.txt publish secret add svc NAME -h
 page vault/service.txt publish env svc -h
+
+echo "== the plain point and rm still check their label =="
+: >"$REQ_LOG"; run publish subdomain point acme --target localhost:3000
+grep -q '^POST /cli/publish/subdomain/claim ' "$REQ_LOG" && ok "k2 publish subdomain point acme still checks its label" \
+    || { bad "point sent no label check"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+: >"$REQ_LOG"; run publish subdomain rm acme
+grep -q '^POST /cli/publish/subdomain/claim ' "$REQ_LOG" && ok "k2 publish subdomain rm acme still checks its label" \
+    || { bad "rm sent no label check"; sed 's/^/      | /' "$REQ_LOG" >&2; }
 
 echo "== the stub sees the plain forms' requests =="
 : >"$REQ_LOG"; run publish subdomain claim acme

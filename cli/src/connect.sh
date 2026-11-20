@@ -2232,6 +2232,8 @@ else:
                     --target) target="${2:-}"; shift 2 ;;
                     --transfer) transfer=1; shift ;;
                     --*) shift ;;
+                    # A label never begins with '-' (so -h can't be one).
+                    -*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
                     *)
                         if [ -z "$label" ]; then label="$1"
                         elif [ -z "$target" ]; then target="$1"
@@ -2266,6 +2268,8 @@ print("  effective: %s" % d.get("effective","?"))
         rm|remove|delete)
             local label="${1:-}"
             shift 2>/dev/null || true
+            # A label never begins with '-' (so -h can't be one).
+            case "$label" in -*) echo "Error: unknown flag '$label'" >&2; exit 2 ;; esac
             if [ -z "$label" ]; then
                 echo "Usage: k2 publish subdomain rm <label>" >&2
                 exit 1

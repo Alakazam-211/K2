@@ -20,6 +20,8 @@ use std::ffi::OsString;
 pub mod forward;
 pub mod mailbox;
 pub mod notices;
+pub mod pyx;
+pub mod server;
 pub mod words;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -35,6 +37,15 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["alias"]),
     native(&["ooo"]),
     native(&["footer"]),
+    native(&["enable"]),
+    native(&["disable"]),
+    native(&["uninstall"]),
+    native(&["upgrade"]),
+    native(&["rotate-admin"]),
+    native(&["password"]),
+    native(&["app-password"]),
+    native(&["person"]),
+    native(&["import"]),
 ];
 
 /// A verb row the binary answers.
@@ -63,6 +74,7 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
         "forward" => forward::parse(words),
         v if mailbox::VERBS.contains(&v) => mailbox::parse(v, words),
         v if notices::VERBS.contains(&v) => notices::parse(v, words),
+        v if server::VERBS.contains(&v) => server::parse(v, words),
         _ => Plan::Shell,
     }
 }
@@ -70,5 +82,15 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
 /// The `_mail_py` branches only `hostmail` runs, for `M_VERB` `verb`.
 /// `None`: not one of them.
 pub fn branch(py_: &mut core::Py, verb: &str) -> Option<core::R<()>> {
-    mailbox::exec(py_, verb).or_else(|| notices::exec(py_, verb))
+    mailbox::exec(py_, verb)
+        .or_else(|| notices::exec(py_, verb))
+        .or_else(|| server::exec(py_, verb))
+}
+
+/// `v="$(cat)"` for a secret flag (`--pass-stdin`, `--relay-pass-stdin`):
+/// all of stdin, read where the loop meets the flag. Bytes that are not
+/// UTF-8 read as U+FFFD, as `mail link add`'s do.
+pub fn stdin_all() -> String {
+    let s = crate::prompt::read_all_stdin();
+    String::from_utf8(s.expose().to_vec()).unwrap_or_else(|_| "\u{fffd}".into())
 }

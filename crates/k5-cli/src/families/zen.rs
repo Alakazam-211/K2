@@ -10,12 +10,14 @@
 //! `reset`, `doctor` and `path`, printed by `_zen_print` ([`print`]);
 //! `garden` (with Garden access, History and `put`) and `proposals`
 //! ([`garden`]); `theme`, `sync`, `news`, `links`, `agents-order` and
-//! `inspect` ([`more`]); `widget` and the widget dev loop ([`widget`]);
-//! `guide`, its static pages ([`guide`]).
+//! `inspect` ([`more`]); `widget` and the widget dev loop ([`widget`]),
+//! with `preview --shot` and its Node runner ([`shot`]); `guide`, its
+//! static pages ([`guide`]).
 //!
 //! Still the shell's ([`run`] returns `None` before anything is printed
 //! or sent): a line with `-h` or `--help` (the router's help arms), the
-//! two widget forms ([`widget::shells`]), and the edge hand-backs every family keeps
+//! shot lines [`shot::shells`] names (no runner beside the program, and
+//! the like), and the edge hand-backs every family keeps
 //! (a word that is not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a
 //! port curl won't take, a `python3` the binary can't tell); `validate
 //! --dir` when the temp folder can't be used (`mktemp`'s own line).
@@ -38,6 +40,7 @@ pub mod garden;
 pub mod guide;
 pub mod more;
 pub mod print;
+pub mod shot;
 pub mod sign;
 pub mod verbs;
 pub mod widget;

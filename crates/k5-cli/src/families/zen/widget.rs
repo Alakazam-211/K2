@@ -8,8 +8,9 @@
 //! two seconds, then the errors after its `last`, until an answer that is
 //! no answer ends it with 1 (or Ctrl+C).
 //!
-//! Still the shell's ([`shells`]): `preview --shot` (it runs the Node shot
-//! runner).
+//! `preview --shot` ([`super::shot`]) runs the Node shot runner beside
+//! the program; the shot lines [`super::shot::shells`] names are still
+//! the shell's ([`shells`]).
 
 use super::call::Zen;
 use super::garden::{access_on, agent_print, history};
@@ -38,25 +39,16 @@ fn dumps(pairs: Vec<(&str, Value)>) -> Vec<u8> {
         .into_bytes()
 }
 
-/// The widget lines the binary leaves to the shell: `preview` with
-/// `--shot` or a flag that goes with it.
+/// The widget lines the binary leaves to the shell: a `preview --shot`
+/// line [`super::shot::shells`] names.
 pub fn shells(words: &[&str]) -> bool {
     let verb = words.first().copied().unwrap_or("");
     let rest = words.get(1..).unwrap_or_default();
     match verb {
-        "preview" => rest.iter().any(|w| {
-            matches!(
-                *w,
-                "--shot"
-                    | "--theme"
-                    | "--zen-theme"
-                    | "--width"
-                    | "--height"
-                    | "--data"
-                    | "--libs"
-                    | "--wait-ms"
-            )
-        }),
+        "preview" => match preview_args(rest) {
+            Ok(a) => a.shot.any() && super::shot::shells(&a.as_shot()),
+            Err(_) => false,
+        },
         _ => false,
     }
 }
@@ -434,37 +426,99 @@ fn delete(z: &mut Zen, words: &[&str]) -> Step {
     Ok(agent_print("delete", as_json, &raw).print())
 }
 
-/// `cmd_zen_widget_preview` (no `--shot`).
-fn preview(z: &mut Zen, words: &[&str]) -> Step {
-    let (mut as_json, mut clear) = (false, false);
-    let mut dir = String::new();
-    let mut pos: Vec<&str> = Vec::new();
-    let mut cfg: Vec<String> = Vec::new();
+/// `cmd_zen_widget_preview`'s words.
+#[derive(Debug, Default)]
+pub struct PreviewArgs<'a> {
+    pub as_json: bool,
+    pub clear: bool,
+    pub dir: String,
+    pub pos: Vec<&'a str>,
+    pub cfg: Vec<String>,
+    pub shot: super::shot::Flags,
+}
+
+impl PreviewArgs<'_> {
+    /// The line as a shot line ([`super::shot`]).
+    pub fn as_shot(&self) -> super::shot::Shot<'_> {
+        super::shot::Shot {
+            as_json: self.as_json,
+            clear: self.clear,
+            dir: &self.dir,
+            pos: &self.pos,
+            flags: &self.shot,
+            cfg: &self.cfg,
+        }
+    }
+}
+
+/// `cmd_zen_widget_preview`'s loop over its words, or the line it stops
+/// on.
+pub fn preview_args<'a>(words: &[&'a str]) -> Result<PreviewArgs<'a>, Shown> {
+    let mut a = PreviewArgs::default();
     let mut i = 0;
     while i < words.len() {
         let w = words[i];
         let next = words.get(i + 1).copied().unwrap_or("");
+        // `--flag value` (`[ -n "${2:-}" ]`): the value, or the line.
+        let need = |msg: &str| -> Result<String, Shown> {
+            if next.is_empty() {
+                Err(usage(msg))
+            } else {
+                Ok(next.to_string())
+            }
+        };
+        let sh = &mut a.shot;
         match w {
-            "--json" => as_json = true,
+            "--json" => a.as_json = true,
             "--dir" => {
-                if next.is_empty() {
-                    return stop(usage("Error: --dir needs a widget folder"));
-                }
-                dir = next.into();
+                a.dir = need("Error: --dir needs a widget folder")?;
                 i += 1;
             }
-            _ if w.starts_with("--dir=") => dir = w["--dir=".len()..].into(),
+            _ if w.starts_with("--dir=") => a.dir = w["--dir=".len()..].into(),
             "--config" => {
-                if next.is_empty() {
-                    return stop(usage("Error: --config needs key=value"));
-                }
-                cfg.push(next.into());
+                a.cfg.push(need("Error: --config needs key=value")?);
                 i += 1;
             }
-            _ if w.starts_with("--config=") => cfg.push(w["--config=".len()..].into()),
-            "--clear" => clear = true,
+            _ if w.starts_with("--config=") => a.cfg.push(w["--config=".len()..].into()),
+            "--clear" => a.clear = true,
+            "--shot" => {
+                sh.png = need("Error: --shot needs a .png path")?;
+                i += 1;
+            }
+            "--theme" => {
+                sh.theme = need("Error: --theme needs dark or light")?;
+                i += 1;
+            }
+            "--zen-theme" => {
+                sh.zen_theme = need("Error: --zen-theme needs a built-in theme name")?;
+                i += 1;
+            }
+            "--width" => {
+                sh.width = need("Error: --width needs pixels")?;
+                i += 1;
+            }
+            "--height" => {
+                sh.height = need("Error: --height needs pixels")?;
+                i += 1;
+            }
+            "--data" => {
+                sh.data = need("Error: --data needs a JSON file")?;
+                i += 1;
+            }
+            "--libs" => {
+                sh.libs = need(concat!(
+                    "Error: --libs needs ",
+                    product_name!(),
+                    "'s zen-lib folder"
+                ))?;
+                i += 1;
+            }
+            "--wait-ms" => {
+                sh.wait_ms = need("Error: --wait-ms needs milliseconds")?;
+                i += 1;
+            }
             _ if w.starts_with('-') => {
-                return stop(usage(format!(
+                return Err(usage(format!(
                     concat!(
                         "Error: unexpected '{}' (",
                         cli_name!(),
@@ -473,9 +527,23 @@ fn preview(z: &mut Zen, words: &[&str]) -> Step {
                     w
                 )))
             }
-            _ => pos.push(w),
+            _ => a.pos.push(w),
         }
         i += 1;
+    }
+    Ok(a)
+}
+
+/// `cmd_zen_widget_preview`.
+fn preview(z: &mut Zen, words: &[&str]) -> Step {
+    let a = match preview_args(words) {
+        Ok(a) => a,
+        Err(s) => return stop(s),
+    };
+    let (as_json, clear, dir) = (a.as_json, a.clear, a.dir.as_str());
+    let (pos, cfg, shot) = (&a.pos, &a.cfg, &a.shot);
+    if shot.any() {
+        return super::shot::shot(z, &a.as_shot());
     }
     if clear {
         if !dir.is_empty() || !pos.is_empty() || !cfg.is_empty() {
@@ -496,7 +564,7 @@ fn preview(z: &mut Zen, words: &[&str]) -> Step {
         )));
     }
     let mut config: Vec<(Text, Value)> = Vec::new();
-    for kv in &cfg {
+    for kv in cfg {
         let Some((k, v)) = kv.split_once('=') else {
             return stop(usage(format!(
                 "Error: --config takes key=value, not {}",
@@ -513,7 +581,7 @@ fn preview(z: &mut Zen, words: &[&str]) -> Step {
     if let Some(w) = pos.first().filter(|w| !w.is_empty()) {
         extra.push((Text::from("widget"), print::jstr(w)));
     }
-    let body = match dir_body(&dir, extra, NameKey::Fallback) {
+    let body = match dir_body(dir, extra, NameKey::Fallback) {
         Ok(b) => b,
         Err(s) => return stop(s),
     };

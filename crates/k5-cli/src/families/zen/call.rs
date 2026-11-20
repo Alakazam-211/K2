@@ -157,6 +157,19 @@ impl Zen {
 
     /// `_zen_session_post_file <endpoint> <file> || true` in `$(…)`.
     pub fn post_file(&mut self, endpoint: &str, body: &[u8]) -> Result<Vec<u8>, Exit> {
+        Ok(self.send_file(endpoint, body)?.map_or_else(Vec::new, |r| held(&r)))
+    }
+
+    /// `_zen_session_post_file <endpoint> <file> > "$answer" || true`:
+    /// the answer as the file holds it (NULs and trailing newlines kept);
+    /// any failure is an empty file.
+    pub fn post_file_bytes(&mut self, endpoint: &str, body: &[u8]) -> Result<Vec<u8>, Exit> {
+        Ok(self.send_file(endpoint, body)?.map_or_else(Vec::new, |r| r.body))
+    }
+
+    /// `_zen_session_post_file`'s request: the answer, or `None` for any
+    /// failure (curl's line goes to `/dev/null`).
+    fn send_file(&mut self, endpoint: &str, body: &[u8]) -> Result<Option<Response>, Exit> {
         let mut c = self.client(true)?;
         let credential = match &c.auth {
             Auth::Passport { passport, .. } => Some(passport.as_str().to_string()),
@@ -169,9 +182,6 @@ impl Zen {
             max_time: Duration::from_secs(120),
             note: false,
         };
-        Ok(match c.own_curl(endpoint, how, body) {
-            Ok(r) => held(&r),
-            Err(_) => Vec::new(),
-        })
+        Ok(c.own_curl(endpoint, how, body).ok())
     }
 }

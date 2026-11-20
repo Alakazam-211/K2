@@ -13,6 +13,8 @@
 //! - [`skew`]: the one line when the daemon's version is not the binary's.
 //! - [`permission`]: the refusal's closing line.
 //! - [`encode`]: the query escaping (Python's `quote`).
+//! - [`urllib`]: the shell's embedded Python clients' `urlopen`, for the
+//!   families whose shell side is a `python3` block (K2's ruling D4).
 //!
 //! # The requests
 //!
@@ -179,6 +181,7 @@ pub mod client;
 pub mod encode;
 pub mod permission;
 pub mod skew;
+pub mod urllib;
 pub mod wire;
 
 pub use client::{

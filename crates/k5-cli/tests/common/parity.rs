@@ -19,7 +19,9 @@
 //! headers. The normaliser treats only these as expected differences,
 //! each counted (exactly one per request):
 //!
-//! - `User-Agent`: `curl/<version>` from bash, `k5/<version>` here;
+//! - `User-Agent`: `curl/<version>` from bash (`Python-urllib/<version>`
+//!   from a family whose shell side is a `python3` block), `k5/<version>`
+//!   here;
 //! - `X-K5-Cli-Version: <version>`: sent by the binary only, dropped;
 //! - `X-K5-Cli-Via`: `fallthrough` from bash, `native` from the binary;
 //! - `X-K5-Cli-Noun: <verb>`: sent by bash only, dropped;
@@ -987,8 +989,14 @@ pub fn mask_waited(text: &str) -> (String, Vec<u64>) {
     }
 }
 
+/// The shell's `User-Agent`s: curl's, and urllib's for the families whose
+/// shell side is a `python3` block (`k5_cli::transport::urllib`).
+const SHELL_CURL: &str = "User-Agent: curl/";
+const SHELL_PYTHON: &str = "User-Agent: Python-urllib/";
+
 /// Who sent `r`: the binary (`true`: `User-Agent: k5/...` and
-/// `X-K5-Cli-Via: native`), the shell (`false`: `curl/...` and
+/// `X-K5-Cli-Via: native`), the shell (`false`: `curl/...` or
+/// `Python-urllib/...`, and
 /// `fallthrough`), or neither.
 fn sent_by(r: &Logged) -> Option<bool> {
     let text = String::from_utf8_lossy(&r.bytes);
@@ -996,7 +1004,7 @@ fn sent_by(r: &Logged) -> Option<bool> {
     let has = |prefix: &str| head.split("\r\n").any(|l| l.starts_with(prefix));
     if has("User-Agent: k5/") && has("X-K5-Cli-Via: native") {
         Some(true)
-    } else if has("User-Agent: curl/") && has("X-K5-Cli-Via: fallthrough") {
+    } else if (has(SHELL_CURL) || has(SHELL_PYTHON)) && has("X-K5-Cli-Via: fallthrough") {
         Some(false)
     } else {
         None
@@ -1055,7 +1063,7 @@ pub fn normalise(r: &Logged, native: bool, verb: &str, case: &str) -> String {
             } else {
                 None
             }
-        } else if line.starts_with("User-Agent: curl/") {
+        } else if line.starts_with(SHELL_CURL) || line.starts_with(SHELL_PYTHON) {
             ua += 1;
             Some("User-Agent: <ua>")
         } else if line == "X-K5-Cli-Via: fallthrough" {

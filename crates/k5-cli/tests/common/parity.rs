@@ -958,14 +958,16 @@ impl Drop for Rig {
     }
 }
 
-/// `text` with the number in each `within <n> s` and `after <n> s`
+/// `text` with the number in each `within <n> s`, `after <n> s` and `(<n> s`
 /// masked, and the numbers.
 pub fn mask_waited(text: &str) -> (String, Vec<u64>) {
     let mut out = String::new();
     let mut nums = Vec::new();
     let mut rest = text;
     loop {
-        let next = ["within ", "after "]
+        // `within N s`, `after N s`, and the may-have-been-applied line's
+        // `(N s)`.
+        let next = ["within ", "after ", "("]
             .iter()
             .filter_map(|w| rest.find(w).map(|at| (at, w.len())))
             .min();

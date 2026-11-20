@@ -1,7 +1,7 @@
     {
       "name": "fed",
       "usage": "k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-start|pair-join|pair-finish|pair-verify|pair-request|confirm> ...",
-      "description": "Federation: messages between agents on paired K2 servers. The /cli/federation/* routes answer only while federation is on (k2 fed enable); pubkey works anytime. Inside an agent session pair-start, pair-join, pair-finish, pair-verify, confirm and outbox are the server owner's (refused, exit 3) and send goes with the session's passport. No --help: a bare or unknown verb prints the usage and exits 2.",
+      "description": "Federation: messages between agents on paired K2 servers. The /cli/federation/* routes answer only while federation is on (k2 fed enable); pubkey works anytime. Inside an agent session pair-start, pair-join, pair-finish, pair-verify, confirm and outbox are the server owner's (refused, exit 3) and send goes with the session's passport. -h or --help anywhere prints the usage and sends nothing; a bare or unknown verb prints it on stderr and exits 2.",
       "args": [{"name": "verb", "required": true, "description": "enable | disable | status | peers | pubkey | send | outbox | pair-start | pair-join | pair-finish | pair-verify | pair-request | confirm"}],
       "flags": []
     },

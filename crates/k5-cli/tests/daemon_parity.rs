@@ -78,6 +78,8 @@ fn files(r: &Rig) {
 
 fn no_port_file(r: &Rig) {
     owner_and_port(r);
+    // The rows before leave theirs.
+    let _ = std::fs::remove_file(r.k2home.join("daemon.port"));
     std::fs::write(r.k2home.join("daemon.token"), "").unwrap();
 }
 
@@ -109,8 +111,7 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 /// in what each side prints and sends. Bash, the binary, and the binary
 /// with no `python3` on `PATH`.
 fn check_on_own_port(rig: &Rig, c: &Case) {
-    let mask =
-        |side: Side, t: &str| t.replace(&rig.stub_of(side).port.to_string(), "{port}");
+    let mask = |side: Side, t: &str| t.replace(&rig.stub_of(side).port.to_string(), "{port}");
     rig.prepare(Side::Bash, c);
     let out = rig.run(true, c);
     let log: Vec<String> = rig
@@ -129,7 +130,12 @@ fn check_on_own_port(rig: &Rig, c: &Case) {
     for (side, without) in [(Side::Rust, false), (Side::NoPython3, true)] {
         let (out, log) = rig.binary(c, without);
         let log: Vec<String> = log.iter().map(|l| mask(side, l)).collect();
-        let got = (out.code, mask(side, &out.stdout), mask(side, &out.stderr), log);
+        let got = (
+            out.code,
+            mask(side, &out.stdout),
+            mask(side, &out.stderr),
+            log,
+        );
         assert_eq!(got, bash, "{}: {side:?} against bash", c.name);
     }
 }

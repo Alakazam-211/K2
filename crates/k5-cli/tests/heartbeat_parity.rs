@@ -1426,3 +1426,34 @@ fn heartbeat_help_never_acts() {
         rig.check(&c);
     }
 }
+
+/// The lines name the command by the brand's name (in a build with
+/// `K2_BRAND_DIR=brand/xy` they say `xy`).
+#[test]
+fn heartbeat_lines_say_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let rig = Rig::new(VERB, "brand");
+    for (args, want, code) in [
+        (
+            &["restart"][..],
+            format!("Usage: {cli} heartbeat restart <name> [--workspace <ws>] [--json]\n"),
+            2,
+        ),
+        (
+            &["frobnicate"],
+            format!("Unknown 'heartbeat' subcommand: frobnicate\nRun '{cli} help heartbeat' for the schedule/signal/inspection surface.\n"),
+            2,
+        ),
+        (
+            &["schedule", "off"],
+            format!("Error: 'heartbeat schedule off' is no longer supported.\n\nUse instead:\n  {cli} heartbeat schedule disable <name>   (per-heartbeat pause)\n\nRun '{cli} help-deprecated' for the full map of retired verbs.\n"),
+            1,
+        ),
+    ] {
+        let c = case("brand", args, &[], vec![], owner_and_port, code, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(code), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
+    }
+}

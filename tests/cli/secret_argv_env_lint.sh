@@ -21,7 +21,9 @@
 #      shell builtin or a function defined in cli/src).
 #   3. a value the person types is an argument of python3: a variable
 #      filled by a read of k2's own stdin (not a read from a here-string,
-#      a file, a pipe or a while loop) or by $(cat), or a variable or array
+#      a file, a pipe or a while loop) or by $(cat), or a global another
+#      function fills that way without declaring it local (as
+#      _cli_read_secret_stdin fills _K2_SECRET), or a variable or array
 #      built from one (the recovery words typed back are the model).
 # Comments, heredoc bodies and single-quoted code are not commands and are
 # not read for rule 2.
@@ -230,11 +232,12 @@ def refs(word):
     return [m.group(1) for m in REF.finditer(word)]
 
 
-def typed_values(text, cmds, lines):
+def typed_values(text, cmds, lines, seed=()):
     """Variables a person types: filled by a read of k2's own stdin (no
     redirection on that line, not a while loop's read, not after a pipe),
-    or by $(cat); then any variable or array built from one."""
-    typed = set()
+    or by $(cat), or a global another function fills that way (seed); then
+    any variable or array built from one."""
+    typed = set(seed)
     for line, words in cmds:
         assigns, cmd, args = split_words(words)
         src = lines[line - 1] if line - 1 < len(lines) else ""
@@ -289,6 +292,31 @@ for path in files:
 # A function named after a program (prelude.sh's python3 shim on Windows)
 # still runs that program with the same argv.
 FUNCS -= {"python3", "python", "curl", "env", "sudo"}
+
+def functions(text, cmds, lines):
+    """(first line, last line, its commands, its text) per function, and
+    the top level before the first one."""
+    starts = [text.count("\n", 0, m.start()) + 1 for m in re.finditer(r"(?m)^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{", text)]
+    for a, b in zip([1] + starts, starts + [10 ** 9]):
+        yield a, b, [(l, w) for l, w in cmds if a <= l < b], "\n".join(lines[a - 1:min(b - 1, len(lines))])
+
+def declared(fc):
+    """The names a function declares local."""
+    out = set()
+    for line, words in fc:
+        assigns, cmd, args = split_words(words)
+        if cmd in ("local", "declare", "typeset", "readonly"):
+            out.update(re.split(r"[=+\[]", x, maxsplit=1)[0] for x in args if not x.startswith("-"))
+    return out
+
+# Globals a person types: a function reads them from stdin without
+# declaring them local (_cli_read_secret_stdin fills _K2_SECRET).
+GLOBAL_TYPED = set()
+for f, text in parts:
+    cls, dep = classify(text)
+    lines = text.split("\n")
+    for a, b, fc, body in functions(text, commands(text, cls, dep), lines):
+        GLOBAL_TYPED |= typed_values(body, fc, lines) - declared(fc)
 
 for f, text in parts:
     cls, dep = classify(text)
@@ -348,12 +376,8 @@ for f, text in parts:
     # Rule 3: a value the person typed, as an argument of python3.
     lines = text.split("\n")
     cmds = commands(text, cls, dep)
-    starts = [text.count("\n", 0, m.start()) + 1 for m in re.finditer(r"(?m)^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{", text)]
-    bounds = list(zip([1] + starts, starts + [10 ** 9]))
-    for a, b in bounds:
-        fc = [(l, w) for l, w in cmds if a <= l < b]
-        body = "\n".join(lines[a - 1:min(b - 1, len(lines))])
-        typed = typed_values(body, fc, lines)
+    for a, b, fc, body in functions(text, cmds, lines):
+        typed = typed_values(body, fc, lines, GLOBAL_TYPED - declared(fc))
         for line, words in fc:
             assigns, cmd, args = split_words(words)
             if cmd is None or strip_quotes(cmd) != "python3":
@@ -459,6 +483,19 @@ h() {
     printf '%s' "$typed" | python3 -c 'import sys; print(sys.stdin.read())'
 }
 EOF
+mk typed_global a.sh <<'EOF'
+_rd_secret() { IFS= read -r _MY_SECRET || true; }
+f() {
+    local code
+    _rd_secret
+    code="${_MY_SECRET%$'\r'}"; _MY_SECRET=""
+    python3 -c 'import sys; print(sys.argv[1])' "$code"
+}
+g() {
+    local _MY_SECRET="from an answer"
+    python3 -c 'import sys; print(sys.argv[1])' "$_MY_SECRET"
+}
+EOF
 mk pw_nested a.sh <<'EOF'
 f() { out="$(curl -s -u "admin:${userPass}" https://example.test)"; }
 EOF
@@ -482,6 +519,7 @@ caught pw_env_argv "a.sh:1: \$pw, a password-like value, rides env's argv as SEC
 caught pw_export "a.sh:1: DB_PASSWORD, a password-like name, rides the environment (export)"
 caught typed_words "a.sh:7: \$words, a value typed on stdin, is in the argv of python3"
 caught typed_cat "a.sh:4: \$code, a value typed on stdin, is in the argv of python3"
+caught typed_global "a.sh:6: \$code, a value typed on stdin, is in the argv of python3"
 caught pw_nested "a.sh:1: \$userPass, a password-like value, is in the argv of curl"
 # The good parts with no exception for b.sh's K2_PW: caught. An exception
 # that matches nothing: caught.

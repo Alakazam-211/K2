@@ -42993,7 +42993,11 @@ print()' >&2
                         words+=("$wd")
                     done
                     printf '\033[2J\033[H' >&2
-                    _vault_sock_call POST recovery/confirm "$(python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1], "words": sys.argv[2:5]}))' "$rid" "${words[@]}")"
+                    # The typed-back words reach python on stdin, one per
+                    # line, never argv or the environment (ps shows both to
+                    # every process of this user).
+                    _vault_sock_call POST recovery/confirm "$(printf '%s\n' "${words[@]}" | python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1], "words": sys.stdin.read().split("\n")[:3]}))' "$rid")"
+                    words=()
                     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
                     echo "recovery key confirmed. If it ever leaks: k2 vault recovery rotate, then k2 vault rekey."
                     ;;

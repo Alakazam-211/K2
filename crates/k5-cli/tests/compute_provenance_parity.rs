@@ -118,31 +118,35 @@ fn compute_provenance() {
     }
 }
 
-/// `--out`: each side writes the same file.
+/// `--out`: the file holds the statement's line as it is (the shell's
+/// Python writes `v["line"]`), and with no line it is made empty before
+/// the raise. Each side runs into a fresh file; the last one (the binary
+/// with no `python3`) leaves it to check.
 #[test]
 fn compute_provenance_out_file() {
     let rig = Rig::new(VERB, "provout");
     let path = rig.proj.join("s.intoto.jsonl");
-    for (args, body) in [
-        (
-            &["provenance", "abcd1234", "--out", "s.intoto.jsonl"][..],
-            PROV,
-        ),
-        (
-            &["provenance", "abcd1234", "--out", "s.intoto.jsonl"][..],
-            r#"{"short":"ab"}"#,
-        ),
+    let line = "{\"payloadType\":\"application/vnd.in-toto+json\",\"payload\":\"e30=\"}\n";
+    for (body, code, want, compare) in [
+        (PROV, 0, line, Compare::Exact),
+        (r#"{"short":"ab"}"#, 1, "", Compare::Traceback),
     ] {
-        let c = case("out", args, &[], vec![ok(body)], owner_and_port, 0, 1);
-        let mut files = vec![];
-        for (bash, side) in [(true, Side::Bash), (false, Side::Rust)] {
-            let _ = std::fs::remove_file(&path);
-            rig.prepare(side, &c);
-            rig.run(bash, &c);
-            files.push(std::fs::read(&path).ok());
-        }
-        assert_eq!(files[0], files[1], "{args:?}: the file");
-        assert!(files[0].is_some(), "{args:?}: bash made the file");
+        let _ = std::fs::remove_file(&path);
+        let c = Case {
+            compare,
+            ..case(
+                "out",
+                &["provenance", "abcd1234", "--out", "s.intoto.jsonl"],
+                &[],
+                vec![ok(body)],
+                owner_and_port,
+                code,
+                1,
+            )
+        };
+        rig.check(&c);
+        let got = std::fs::read_to_string(&path).expect("the side made the file");
+        assert_eq!(got, want, "{body}: the file");
     }
 }
 

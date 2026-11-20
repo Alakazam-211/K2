@@ -42,8 +42,8 @@ use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["api"];
-/// The shell answers it until the flip.
-pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
+/// The binary answers it ([`run`] may still hand a form to the shell).
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
 /// No verb rows: every form is [`OWNER`]'s.
 pub const VERBS: &[crate::route::Verb] = &[];
 

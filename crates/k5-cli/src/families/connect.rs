@@ -13,10 +13,11 @@
 //!    ([`crate::prelude::id_tool`]).
 //! 3. A word after `status`: `Usage: k2 connect status`, exit 2.
 //! 4. The account session: `connect-account.json` in the K2 home, when
-//!    it is a file; its email is the third line the shell's Python prints
-//!    of it ([`account_email`]).
+//!    it is a file; its email is the third NUL-ended field the shell's
+//!    Python writes of it ([`account_email`]).
 //! 5. The pairing: `tunnel.json`'s `subdomain` and whether its `token` is
-//!    set ([`tunnel`]).
+//!    set, read as data from the two NUL-ended fields its Python writes
+//!    ([`tunnel`]).
 //! 6. The daemon, when there is a port and a token (`_connect_require_daemon`:
 //!    the port setting, `heartbeat.port`, then `daemon.port`): when
 //!    `tunnel.json` holds no token, `cli_send cli_request
@@ -31,9 +32,9 @@
 //!    line that says so.
 //! 8. The EXIT trap's lines ([`crate::prelude::Closing`]); exit 0.
 //!
-//! Both calls run inside `$(…)`, so a passport the first one heals is not
-//! the one the second starts from (the shell's main `TOKEN` never
-//! changes): each call has its own client.
+//! Both calls run inside `$(…)`, so each call has its own client; a
+//! passport the first one healed is taken up before the second
+//! (`_cli_use_healed_passport`), which starts from it.
 //!
 //! The binary hands these to the shell before it prints or sends
 //! anything ([`run`] returns `None`): a command line with `-h` or `--help`
@@ -41,10 +42,7 @@
 //! with a `CODEX_` variable exported; a port that is set but is no port
 //! curl takes; a `python3` the binary can't tell; and files whose reading
 //! by the shell this does not copy: one that is not UTF-8 or nests deeper
-//! than [`crate::out::json::MAX_DEPTH`], an account value with a NUL or
-//! half of a surrogate pair in it (`$(…)` warns, or Python's `print`
-//! fails), and a subdomain that is not printable ASCII or holds a `'` or
-//! a `\` (the shell `eval`s Python's `repr` of it).
+//! than [`crate::out::json::MAX_DEPTH`].
 //!
 //! An answer from the daemon that is not UTF-8, and half of a surrogate
 //! pair in one, are as [`super::inbox`] says.
@@ -145,13 +143,13 @@ impl Facts {
         let account_path = home.join(ACCOUNT_FILE);
         let account = account_path.is_file();
         let email = if account {
-            account_email(&load(&account_path)?)?
+            account_email(&load(&account_path)?)
         } else {
             String::new()
         };
         let tunnel_path = home.join(TUNNEL_FILE);
         let (sub, token_on_disk) = if tunnel_path.is_file() {
-            tunnel(&load(&tunnel_path)?)?
+            tunnel(&load(&tunnel_path)?)
         } else {
             (String::new(), false)
         };
@@ -232,55 +230,48 @@ fn field(d: &Value, key: &str) -> Option<Vec<u32>> {
     stripped(&v)
 }
 
-/// The account line's email: `_connect_account_load` prints the access
-/// token, the refresh token and the email, each stripped, one per line,
-/// until a value that is not a string stops it (an object that is not a
-/// dict prints nothing, as does a file Python can't read); `sed -n 3p`
-/// takes the third line of what `$(…)` kept. `None`: a value with a NUL
-/// or half of a surrogate pair in it.
-pub fn account_email(loaded: &Option<Value>) -> Option<String> {
-    let Some(d) = loaded else {
-        return Some(String::new());
-    };
-    let mut printed = String::new();
-    for key in ["access_token", "refresh_token", "email"] {
-        let Some(cps) = field(d, key) else {
-            break;
-        };
-        let mut line = String::new();
-        for cp in cps {
-            let c = char::from_u32(cp)?;
-            if c == '\0' {
-                return None;
-            }
-            line.push(c);
-        }
-        printed.push_str(&line);
-        printed.push('\n');
-    }
-    let kept = printed.trim_end_matches('\n');
-    Some(kept.split('\n').nth(2).unwrap_or("").to_string())
+/// A field as the shell's Python writes it and `read -r -d ''` takes it:
+/// its NULs dropped (`.replace("\0", "")`) and the rest as UTF-8 with
+/// `errors="replace"`, so half of a surrogate pair is a `?`.
+fn as_text(cps: &[u32]) -> String {
+    cps.iter()
+        .filter(|cp| **cp != 0)
+        .map(|cp| char::from_u32(*cp).unwrap_or('?'))
+        .collect()
 }
 
-/// `tunnel.json`'s subdomain and whether its token is set, as the shell's
-/// `eval` of its Python leaves `sub` and `token_set`: `("", false)` when
-/// Python raises before it prints. `None`: a subdomain the `eval` would
-/// read otherwise than as written (not printable ASCII, or a `'` or a `\`
-/// in it).
-pub fn tunnel(loaded: &Option<Value>) -> Option<(String, bool)> {
+/// The account line's email: `_connect_account_read` writes the access
+/// token, the refresh token and the email, each `(d.get(k) or "")`
+/// stripped and ended by a NUL, and the shell reads the three in turn.
+/// A value that is not a string stops Python there, so the email is set
+/// only when all three were written; an object that is not a dict, and
+/// a file Python can't read, write nothing.
+pub fn account_email(loaded: &Option<Value>) -> String {
+    let Some(d) = loaded else {
+        return String::new();
+    };
+    let mut fields = Vec::new();
+    for key in ["access_token", "refresh_token", "email"] {
+        let Some(cps) = field(d, key) else {
+            return String::new();
+        };
+        fields.push(cps);
+    }
+    as_text(&fields[2])
+}
+
+/// `tunnel.json`'s subdomain and whether its token is set, as the shell
+/// reads the two NUL-ended fields its Python writes (0.46.17: as data,
+/// never run). Python writes both or nothing (a value that is not a
+/// string, or an object that is not a dict, raises before it writes), and
+/// nothing leaves `sub` empty and `token_set` `no`.
+pub fn tunnel(loaded: &Option<Value>) -> (String, bool) {
     let empty = Value::Object(Vec::new());
     let d = loaded.as_ref().unwrap_or(&empty);
-    let (Some(sub), Some(tok)) = (field(d, "subdomain"), field(d, "token")) else {
-        return Some((String::new(), false));
-    };
-    let mut text = String::new();
-    for cp in sub {
-        match char::from_u32(cp) {
-            Some(c) if (' '..='~').contains(&c) && c != '\'' && c != '\\' => text.push(c),
-            _ => return None,
-        }
+    match (field(d, "subdomain"), field(d, "token")) {
+        (Some(sub), Some(tok)) => (as_text(&sub), !tok.is_empty()),
+        _ => (String::new(), false),
     }
-    Some((text, !tok.is_empty()))
 }
 
 /// The answer to `/cli/tunnel/config` as the shell's Python reads it:
@@ -356,7 +347,7 @@ pub fn account_lines(f: &Facts, token_set: &str) -> String {
     }
     out.push('\n');
     if f.sub.is_empty() {
-        out.push_str("  Paired subdomain: '(none)'\n");
+        out.push_str("  Paired subdomain: (none)\n");
     } else {
         out.push_str(&format!(
             "  Paired subdomain: {sub} \u{2192} https://{sub}.{zone}\n",
@@ -387,17 +378,13 @@ fn run_with(
         return Exit::Usage;
     };
     let mut closing = Closing::default();
-    // Each call is the shell's `$(…)`: a passport healed inside one is not
-    // the main shell's, so the next call starts from the passport the
-    // prelude took. One client per call, both made now.
-    let mut clients = facts.daemon.map(|port| {
-        (
-            settings.client_on(port, would_refuse),
-            settings.client_on(port, would_refuse),
-        )
-    });
+    // Each call is the shell's `$(…)`, so each has its own client. A
+    // passport the first one healed is taken up after it (0.46.17,
+    // `_cli_use_healed_passport`): the second client is made only then,
+    // and starts from the passport as it is now.
     let mut token_set = if facts.token_on_disk { "yes" } else { "no" };
-    if let (false, Some((c, _))) = (facts.token_on_disk, clients.as_mut()) {
+    if let (false, Some(port)) = (facts.token_on_disk, facts.daemon) {
+        let mut c = settings.client_on(port, would_refuse);
         let passport = c.passport().is_some();
         token_set = match c.send(CONFIG, Call::Request(&[])) {
             Ok(r) => {
@@ -414,12 +401,13 @@ fn run_with(
     if let Err(e) = out::stdout(&account_lines(&facts, token_set)) {
         return out::after_stdout_error(&e);
     }
-    let Some((_, mut client)) = clients else {
+    let Some(port) = facts.daemon else {
         if let Err(e) = out::stdout_line(NO_DAEMON) {
             return out::after_stdout_error(&e);
         }
         return Exit::Ok;
     };
+    let mut client = settings.client_on(port, would_refuse);
     let passport = client.passport().is_some();
     let raw = match client.send(STATUS, Call::Request(&[])) {
         Ok(r) => {

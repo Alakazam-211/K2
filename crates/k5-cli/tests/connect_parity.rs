@@ -18,9 +18,10 @@
 //!   after `status`.
 //! - No answer: to the token question, the line and death by SIGPIPE; to
 //!   the status, the line and exit 1 after the four lines.
-//! - What the binary hands to the shell: help, a subdomain the shell's
-//!   `eval` reads otherwise, a file that is not UTF-8, a port that is no
-//!   port.
+//! - The files read as data (0.46.17): a subdomain with quotes, a
+//!   backslash or a word that is not ASCII, an email with a NUL.
+//! - What the binary hands to the shell: help, a file that is not UTF-8,
+//!   a port that is no port.
 
 #![cfg(unix)]
 
@@ -259,8 +260,49 @@ fn connect_status_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // Read as data since 0.46.17: no eval, no line moves.
         case(
-            "a token with a newline moves the email down",
+            "a subdomain with a quote, a backslash and a $",
+            &["status"],
+            &[],
+            vec![ok(STOPPED)],
+            |r| {
+                files(r, None, Some(r#"{"subdomain":"it's a\\b $x","token":"t"}"#));
+                owner_and_port(r)
+            },
+            0,
+            1,
+        ),
+        case(
+            "a subdomain that is not ASCII",
+            &["status"],
+            &[],
+            vec![ok(STOPPED)],
+            |r| {
+                files(r, None, Some(r#"{"subdomain":"été","token":"t"}"#));
+                owner_and_port(r)
+            },
+            0,
+            1,
+        ),
+        case(
+            "an email with a NUL and half a surrogate pair",
+            &["status"],
+            &[],
+            vec![ok(STOPPED)],
+            |r| {
+                files(
+                    r,
+                    Some(r#"{"access_token":"a","refresh_token":"r","email":"m\u0000e\ud800"}"#),
+                    Some(PAIRED),
+                );
+                owner_and_port(r)
+            },
+            0,
+            1,
+        ),
+        case(
+            "a token with a newline keeps the email",
             &["status"],
             &[],
             vec![ok(STOPPED)],
@@ -600,30 +642,6 @@ fn connect_status_hands_these_to_the_shell() {
             },
             0,
             0,
-        )),
-        shell(case(
-            "a subdomain with a quote: the shell's eval",
-            &["status"],
-            &[],
-            vec![ok(STOPPED)],
-            |r| {
-                files(r, None, Some(r#"{"subdomain":"it's","token":"t"}"#));
-                owner_and_port(r)
-            },
-            0,
-            1,
-        )),
-        shell(case(
-            "a subdomain that is not ASCII",
-            &["status"],
-            &[],
-            vec![ok(STOPPED)],
-            |r| {
-                files(r, None, Some(r#"{"subdomain":"été","token":"t"}"#));
-                owner_and_port(r)
-            },
-            0,
-            1,
         )),
         shell(case(
             "an account file that is not UTF-8",

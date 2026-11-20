@@ -832,9 +832,9 @@ fn wiki_hands_these_to_the_shell() {
 }
 
 /// `wiki-status-large-answer`: the index above what an environment
-/// variable may hold. Bash stops at its Python (exit 126, "Argument list
-/// too long"); the binary prints the status. Both send the same two
-/// requests.
+/// variable may hold. Bash stops at its Python ("Argument list too long";
+/// exit 126, or 1 on macOS with its /bin/bash 3.2); the binary prints the
+/// status. Both send the same two requests.
 #[test]
 fn wiki_status_with_a_large_answer() {
     let rig = Rig::new(VERB, "large");
@@ -881,7 +881,8 @@ fn wiki_status_with_a_large_answer() {
             .collect::<Vec<_>>(),
         "the requests"
     );
-    assert_eq!(b.code, Some(126), "bash: {b:?}");
+    let want = if cfg!(target_os = "macos") { 1 } else { 126 };
+    assert_eq!(b.code, Some(want), "bash: {b:?}");
     assert_eq!(b.stdout, "");
     assert!(
         b.stderr.contains("Argument list too long"),

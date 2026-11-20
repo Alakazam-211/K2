@@ -161,7 +161,7 @@ EXPECTED_DIFFS=(
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show, api) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token. Also workspace_swap_canonical.sh's swap lookup: bash looks the workspace up with the owner token; the binary's passport is refused there, so it sends the typed name and the swap gets 400 not registered (K2 ruling; until the daemon's handle_swap_canonical resolves names itself, after r3)"
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\`, \`connections remove beta\`, \`api on\` and \`api-key revoke k1\` (POSTs), and \`api-key list\` (a GET). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), api on the same line on stdout, api-key list and revoke \"Error: Expecting value: line 1 column 1 (char 0)\" on stderr, connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
-    "wiki-status-large-answer|K5 lane r8c, for K2 to rule on|\`wiki status\` hands both of the daemon's answers (the serve status and the index) to its Python in environment variables; an index above what one variable may hold (128 KiB on Linux, about 1 MiB in all on macOS) stops bash there: \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 126. The binary reads the answers itself and prints the status, exit 0. Both send the same two requests"
+    "wiki-status-large-answer|K5 lane r8c, for K2 to rule on|\`wiki status\` hands both of the daemon's answers (the serve status and the index) to its Python in environment variables; an index above what one variable may hold (128 KiB on Linux, about 1 MiB in all on macOS) stops bash there: \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 126 (exit 1 on macOS, with its /bin/bash 3.2). The binary reads the answers itself and prints the status, exit 0. Both send the same two requests"
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
@@ -552,12 +552,13 @@ check_nul_in_answer() {
 
 # check_wiki_status_large_answer: the stub answers the wiki index with
 # about 1.4 MiB of notes (mode wikibig), the owner token and port on disk,
-# and both CLIs run `wiki status`. Bash exits 126 with "Argument list too
-# long" on stderr and nothing on stdout; the binary exits 0, prints the
+# and both CLIs run `wiki status`. Bash exits 126 (1 on macOS, with its
+# /bin/bash 3.2) with "Argument list too long" on stderr and nothing on
+# stdout; the binary exits 0, prints the
 # status with "  Notes:      60000" and nothing on stderr; both send the
 # same requests, the serve status then the index.
 check_wiki_status_large_answer() {
-    local d="$WORK/wiki-large" rc rr problems=()
+    local d="$WORK/wiki-large" rc rr want=126 problems=()
     mkdir -p "$d/home/.k2" "$d/ws/.k2"
     printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
     start_stub "$d" wikibig || { echo "the stub daemon didn't start"; return 1; }
@@ -566,7 +567,8 @@ check_wiki_status_large_answer() {
     cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
     rr=0; run_side "$d" binary wiki status || rr=$?
     stop_stub
-    [ "$rc" = 126 ] || problems+=("bash exited $rc, want 126: $(head -c 300 "$d/err.bash")")
+    [ "$(uname -s)" != Darwin ] || want=1
+    [ "$rc" = "$want" ] || problems+=("bash exited $rc, want $want: $(head -c 300 "$d/err.bash")")
     grep -q 'Argument list too long' "$d/err.bash" || problems+=("bash's stderr has no 'Argument list too long': $(head -c 300 "$d/err.bash")")
     [ ! -s "$d/out.bash" ] || problems+=("bash printed on stdout: $(head -c 300 "$d/out.bash")")
     [ "$rr" = 0 ] || problems+=("the binary exited $rr, want 0: $(head -c 300 "$d/err")")

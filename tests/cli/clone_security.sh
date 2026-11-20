@@ -24,7 +24,8 @@
 #   and --token T still works with a note that every account sees it;
 #   clone approve sends nothing to an agent-proposed host before the
 #   person reads the host in full and says yes at the terminal, and then
-#   only the token saved for that host (never $K2_REMOTE_TOKEN or --token).
+#   only the token saved for that host (never $K2_REMOTE_TOKEN or --token);
+#   no request follows a redirect (the place it names gets nothing).
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -63,7 +64,8 @@ expect_not() { if <<<"$2" grep -Fq -- "$3"; then bad "$1 (found $(printf %q "$3"
 # ── The stubs ────────────────────────────────────────────────────────
 # stub.py NAME tcp PORTFILE | NAME unix SOCKPATH. Answers from a table of
 # defaults; $W/scn-NAME.json (read on every request) overrides a route
-# ({"routes": {path: {"status": n, "body": {...}}}}) and sets the knobs:
+# ({"routes": {path: {"status": n, "body": {...}, "location": url}}}) and
+# sets the knobs:
 #   methods          what confirm/start offers (vault socket and TCP)
 #   confirm_methods  what the clone preview offers for a carry confirm
 #   rows             the preview's secret rows
@@ -149,9 +151,13 @@ class H(http.server.BaseHTTPRequestHandler):
             body = json.loads(raw) if raw.strip() else {}
         except ValueError:
             body = {}
-        status, out = answer(path, q, body, scn())
+        s = scn()
+        status, out = answer(path, q, body, s)
         data = json.dumps(out).encode()
         self.send_response(status)
+        loc = s.get("routes", {}).get(path, {}).get("location")
+        if loc:
+            self.send_header("Location", loc)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Connection", "close")
@@ -178,13 +184,14 @@ PYEOF
 
 "$PY" "$W/stub.py" local tcp "$W/port-local" & PIDS+=("$!")
 "$PY" "$W/stub.py" remote tcp "$W/port-remote" & PIDS+=("$!")
+"$PY" "$W/stub.py" other tcp "$W/port-other" & PIDS+=("$!")
 "$PY" "$W/stub.py" vault unix "$KH/vault.sock" & PIDS+=("$!")
 for _ in $(seq 1 100); do
-    [ -s "$W/port-local" ] && [ -s "$W/port-remote" ] && [ -f "$W/vault-ready" ] && break
+    [ -s "$W/port-local" ] && [ -s "$W/port-remote" ] && [ -s "$W/port-other" ] && [ -f "$W/vault-ready" ] && break
     sleep 0.1
 done
-[ -s "$W/port-local" ] && [ -s "$W/port-remote" ] && [ -f "$W/vault-ready" ] || { echo "FAIL: a stub never came up" >&2; exit 1; }
-PL="$(cat "$W/port-local")"; PR="$(cat "$W/port-remote")"
+[ -s "$W/port-local" ] && [ -s "$W/port-remote" ] && [ -s "$W/port-other" ] && [ -f "$W/vault-ready" ] || { echo "FAIL: a stub never came up" >&2; exit 1; }
+PL="$(cat "$W/port-local")"; PR="$(cat "$W/port-remote")"; PO="$(cat "$W/port-other")"
 REMOTE="http://127.0.0.1:$PR"
 
 # The CLI finds this server's daemon through these files.
@@ -610,6 +617,19 @@ for f in "--token $REMOTE_TOKEN" "--token-stdin"; do
     IN="$W/token-in" k2 clone approve prop-1abc $f --json
     expect_eq "approve $f: usage, exit 2" "$RC" "2"
     expect_eq "approve $f: the remote got nothing" "$(paths remote)" ""
+done
+
+echo "== no request follows a redirect =="
+for to in "http://127.0.0.1:$PO/elsewhere" "https://127.0.0.1:$PO/other-host"; do
+    fresh
+    scn remote "{\"routes\": {\"/cli/clone/preview\": {\"status\": 302, \"location\": \"$to\"}}}"
+    IN="$W/token-in" k2 clone preview ws1 --host "$REMOTE" --token-stdin --json
+    expect_eq "302 to $to: exit 3" "$RC" "3"
+    expect_has "302 to $to: redirect_refused" "$ERR" '"error": "redirect_refused"'
+    expect_has "302 to $to: names where it pointed" "$ERR" "sending k2 to 127.0.0.1:$PO"
+    expect_eq "302 to $to: the remote got the one request" "$(paths remote)" "POST /cli/clone/preview"
+    expect_eq "302 to $to: the place it named got nothing" "$(paths other)" ""
+    expect_not "302 to $to: no connect to it" "$(cat "$W/audit.log")" ", $PO)"
 done
 
 echo

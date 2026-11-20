@@ -137,6 +137,21 @@ class Fail(Exception):
         self.code, self.hint, self.rc, self.plain = code, hint, rc, plain
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Every request here carries a token, and some a password, so none
+    follows a redirect: the new location would get them too. A 3xx is a
+    refusal, and nothing goes to the place it names."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        to = urllib.parse.urlsplit(newurl)
+        raise Fail("redirect_refused", "%s answered %s, sending k2 to %s; k2 doesn't follow a redirect with your token or password, so nothing was sent there" % (
+            urllib.parse.urlsplit(req.full_url).netloc.rpartition("@")[2], code, shown(to.netloc.rpartition("@")[2] or newurl)), 3)
+
+
+# The proxy rule's opener (_K2_PY_PROXY_RULE), without redirects.
+urllib.request.install_opener(urllib.request.build_opener(_K2ProxyRule(), NoRedirect()))
+
+
 def https_gate(side, password=False):
     """Refuse before anything goes to `side` that a token (or a password)
     may not go to (_CLONE_URL_RULE)."""

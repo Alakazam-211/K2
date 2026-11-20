@@ -840,6 +840,7 @@ cmd_hostchat() {
         people|person) _hostchat_people "$@"; return ;;
         approvals|approval) _hostchat_approvals "$@"; return ;;
         on-behalf|behalf) _hostchat_on_behalf "$@"; return ;;
+        owner-sessions|owner-session) _hostchat_owner_sessions "$@"; return ;;
         act-as) echo '{"error":"usage","hint":"act-as is gone: assistants post on a person'"'"'s behalf at once and the person reviews it later: k2 hostchat on-behalf"}' >&2; exit 2 ;;
         log) _hostchat_log "$@"; return ;;
         deliveries|delivery) _hostchat_deliveries "$@"; return ;;

@@ -164,6 +164,96 @@ for r in rows:
     esac
 }
 
+# The owner chat sessions K2 opened with an owner handoff code (open
+# chat as its owner). Listing: the owner or an admin. Ending: a person,
+# with a vault confirm bound to the sid or "all"; never an agent.
+_hostchat_owner_sessions() {
+    local sub="${1:-list}"; [ $# -gt 0 ] && shift
+    case "$sub" in -*) set -- "$sub" "$@"; sub="list" ;; esac
+    local as_json=0 all=0 pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --all) all=1; shift ;;
+            -h|--help) _hostchat_owner_sessions_usage; return 0 ;;
+            -*) _chat_usage_err "unknown flag $1 (k2 hostchat owner-sessions --help)" ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    case "$sub" in
+        list)
+            [ "$all" = "0" ] && [ ${#pos[@]} -eq 0 ] || _chat_usage_err "k2 hostchat owner-sessions [list] [--json]"
+            _chat_call GET /cli/sew/owner-sessions ""
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+rows = v.get("sessions") or []
+def when(t):
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(int(t)))
+    except Exception:
+        return str(t)
+if not rows:
+    print("(no owner chat sessions recorded in the last 30 days; end --all still ends any owner session)")
+for r in rows:
+    end = r.get("end")
+    if not end:
+        state = "live until Sew ends it"
+    elif r.get("delivered"):
+        state = "ended (Sew took the end %s)" % when(end.get("queuedAt"))
+    else:
+        state = "end queued %s by %s%s, outbox %s" % (when(end.get("queuedAt")), end.get("by"),
+                                                   " (all)" if end.get("via") == "all" else "", end.get("outbox") or "-")
+    print("%s  minted %s by %s  opened %s  %s" % (r.get("sid"), when(r.get("mintedAt")), r.get("mintedBy"), when(r.get("redeemedAt")), state))
+' ;;
+        end|revoke)
+            local payload label
+            if [ "$all" = "1" ]; then
+                [ ${#pos[@]} -eq 0 ] || _chat_usage_err "k2 hostchat owner-sessions end <own_…> | end --all"
+                payload="$(_compute_json K2_CJ_all_b=1)"
+                label="End every owner chat session"
+            else
+                [ ${#pos[@]} -eq 1 ] || _chat_usage_err "k2 hostchat owner-sessions end <own_…> | end --all"
+                case "${pos[0]}" in own_*) ;; *) _chat_usage_err "an owner session's id starts with own_ (k2 hostchat owner-sessions)" ;; esac
+                payload="$(_compute_json K2_CJ_sid="${pos[0]}")"
+                label="End owner chat session ${pos[0]}"
+            fi
+            _compute_in_session && { echo '{"error":"person_only","hint":"a person ends the owner'"'"'s chat sessions, from a terminal outside K2 (Touch ID or the vault password)"}' >&2; exit 3; }
+            _hostchat_confirmed_post /cli/sew/owner-sessions/revoke "$payload" "$label"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("end queued: %s" % v.get("queued"))
+ended = v.get("ended") or []
+if ended:
+    print("marked: " + ", ".join(ended))
+print(v.get("takesEffect") or "")
+' ;;
+        *) _chat_usage_err "k2 hostchat owner-sessions [list] | end <own_…> | end --all" ;;
+    esac
+}
+
+_hostchat_owner_sessions_usage() {
+    cat <<'EOF'
+k2 hostchat owner-sessions — the owner chat sessions K2 opened ("open chat as its owner")
+
+  k2 hostchat owner-sessions [list] [--json]   each session: its own_ id, who opened it and when,
+                                               and whether an end was queued or reached Sew
+  k2 hostchat owner-sessions end <own_…>       end one session
+  k2 hostchat owner-sessions end --all         end every owner session, listed or not; this also
+                                               ends the owner's linked Connect sessions in chat
+
+Ending is a person's step: it asks for your confirm (Touch ID or the vault password) from a
+terminal outside K2, never an agent's. The owner or an admin may list and end them.
+
+Ending takes effect as soon as Sew receives it, normally within seconds. If Sew is down, the end
+stays queued and is retried (after 2 s, doubling up to every 5 minutes) until Sew takes it.
+K2 keeps this list for 30 days. If a session isn't listed, `end --all` still ends it.
+EOF
+}
+
 _hostchat_log() {
     local as_json=0 limit=""
     while [ $# -gt 0 ]; do

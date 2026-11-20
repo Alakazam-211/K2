@@ -346,6 +346,12 @@ On someone's behalf (an assistant's post is its own and goes out at once; the pe
   k2 hostchat on-behalf approve <act_…|msg_…> [--note "…"]   (that person, with a confirm)
   k2 hostchat on-behalf decline <act_…|msg_…> [--note "…"]
 
+Owner sessions (chat opened as its owner from K2; a person ends them, with a confirm):
+  k2 hostchat owner-sessions [list] | owner-sessions end <own_…> | owner-sessions end --all
+  (Ending takes effect as soon as Sew receives it, normally within seconds; queued and retried
+   if Sew is down. --all also ends the owner's linked Connect sessions. If a session isn't
+   listed, end --all still ends it.)
+
   k2 hostchat log [--limit N]               who changed chat access and community settings
 
 Deliveries (each chat agent's hub: what reaches its terminal):

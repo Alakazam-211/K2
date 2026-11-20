@@ -1280,7 +1280,7 @@
    },
    {
     "name": "hostchat",
-    "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|recording|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...",
+    "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|recording|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|owner-sessions|log> ...",
     "description": "The chat and voice server on this box (Settings → Cores → Chat / Voice; powered by Sew), over /cli/sew/*. Owner/admin, or an agent whose workspace has \"Manage chat and voice\" (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge and recovery-key, Sew's launch key, are the owner's; --drop-prev the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra."
    },
    {
@@ -1382,6 +1382,11 @@
     "name": "hostchat on-behalf",
     "usage": "k2 hostchat on-behalf [list] [--state pending|approved|declined|all] [--limit N] | approve <act_…|msg_…> [--note \"…\"] | decline <act_…|msg_…> [--note \"…\"] [--json]",
     "description": "Posts an assistant made on your behalf. They are the assistant's own posts and never wait for you; each carries whether you have reviewed it (pending, approved or declined, who and when). approve needs your confirm (Touch ID or the vault password, from a terminal outside K2); decline needs none. GET /cli/sew/on-behalf, POST /cli/sew/on-behalf/review."
+   },
+   {
+    "name": "hostchat owner-sessions",
+    "usage": "k2 hostchat owner-sessions [list] [--json] | end <own_…> | end --all",
+    "description": "The owner chat sessions K2 opened (open chat as its owner): each own_ id, who opened it and when, and whether an end was queued or reached Sew. The owner or an admin; never an agent. end needs your confirm (Touch ID or the vault password, from a terminal outside K2). Ending takes effect as soon as Sew receives it, normally within seconds; if Sew is down it stays queued and is retried (2 s, doubling up to every 5 minutes). --all also ends the owner's linked Connect sessions in chat; if a session isn't listed, end --all still ends it. K2 keeps the list 30 days. GET /cli/sew/owner-sessions, POST /cli/sew/owner-sessions/revoke."
    },
    {
     "name": "hostchat deliveries",

@@ -296,6 +296,7 @@ fn set_and_rotate_take_the_value_on_stdin() {
             b"multi\nline\n",
             &["multi\nline"],
         ),
+        // covers: vault set --json
         with_stdin(
             daemon(
                 "set, signed",
@@ -749,6 +750,7 @@ fn fetch() {
             ok(r#"{"status":200,"body":"{\"ok\":true}\n"}"#),
             0,
         ),
+        // covers: vault fetch --json
         daemon(
             "fetch, everything",
             &[
@@ -1027,6 +1029,205 @@ fn confirm_password_set() {
             2,
         ),
         refused("confirm-password, no set", &["confirm-password"]),
+    ] {
+        rig.check(&c);
+    }
+}
+
+/// Each verb with `--json`: the answer as it came, exit 0 (doctor's too,
+/// whatever its `ok`), with nothing of the plain printer; and a refusal
+/// with `--json`, which is the plain refusal.
+#[test]
+fn the_json_forms() {
+    let rig = VRig::new();
+    let sec = r#"{"secret":{"name":"API","hosts":["a"]},"agentPolicy":{"burst":2}}"#;
+    let gone = r#"{"recall":"1 file was deleted","stillRunning":[]}"#;
+    let placement = r#"{"placement":{"name":"API","where":"h:/x","version":2,"id":"p3"}}"#;
+    for c in [
+        // covers: vault list --json
+        daemon(
+            "list --json",
+            &["list", "--json", "--scope", "server"],
+            ok(r#"{"secrets":[{"name":"A","scope":{"kind":"server"}}]}"#),
+            0,
+        ),
+        daemon(
+            "list --json, refused",
+            &["list", "--json"],
+            Reply::Answer(403, PERMISSION_ASK.into()),
+            3,
+        ),
+        // covers: vault rotate --json
+        with_stdin(
+            daemon(
+                "rotate --json",
+                &["rotate", "API", "--json"],
+                ok(r#"{"secret":{"name":"API"},"version":4,"replaced":[]}"#),
+                0,
+            ),
+            b"rotated-value-31\n",
+            &["rotated-value-31"],
+        ),
+        // covers: vault hosts --json
+        daemon(
+            "hosts --json",
+            &["hosts", "API", "--add", "b.com", "--json"],
+            ok(sec),
+            0,
+        ),
+        // covers: vault delivery --json
+        daemon(
+            "delivery --json",
+            &["delivery", "API", "file", "--ceiling", "env", "--json"],
+            ok(sec),
+            0,
+        ),
+        // covers: vault sign --json
+        daemon("sign --json", &["sign", "API", "ovh", "--json"], ok(sec), 0),
+        // covers: vault public-key --json
+        daemon(
+            "public-key --json",
+            &["public-key", "K", "--json"],
+            ok(r#"{"publicKey":"ssh-ed25519 AAAA","fingerprint":"SHA256:x"}"#),
+            0,
+        ),
+        // covers: vault agent-limit --json
+        daemon(
+            "agent-limit --json",
+            &["agent-limit", "API", "--per-minute", "10", "--json"],
+            ok(sec),
+            0,
+        ),
+        // covers: vault disable --json
+        daemon("disable --json", &["disable", "API", "--json"], ok(gone), 0),
+        // covers: vault enable --json
+        daemon("enable --json", &["enable", "API", "--json"], ok("{}"), 0),
+        // covers: vault destroy --json
+        daemon(
+            "destroy --json",
+            &["destroy", "API", "--yes", "--json"],
+            ok(gone),
+            0,
+        ),
+        daemon(
+            "destroy --json, refused",
+            &["destroy", "API", "--json"],
+            Reply::Answer(
+                400,
+                r#"{"error":{"code":"confirm","hint":"add --yes"}}"#.into(),
+            ),
+            2,
+        ),
+        // covers: vault audit --json
+        daemon(
+            "audit --json",
+            &["audit", "API", "--since", "1d", "--json"],
+            ok(r#"{"audit":[{"ts":"t","action":"fetch"}]}"#),
+            0,
+        ),
+        // covers: vault requests --json
+        daemon(
+            "requests --json",
+            &["requests", "--json"],
+            ok(r#"{"requests":[]}"#),
+            0,
+        ),
+        // covers: vault presets --json
+        daemon(
+            "presets --json",
+            &["presets", "--json"],
+            ok(r#"{"presets":[{"id":"gh"}]}"#),
+            0,
+        ),
+        // covers: vault doctor --json
+        daemon(
+            "doctor --json, findings",
+            &["doctor", "--transcripts", "--json"],
+            ok(r#"{"findings":[{"level":"warn","message":"m"}],"ok":false}"#),
+            0,
+        ),
+        // covers: vault env-file --json
+        daemon(
+            "env-file --json",
+            &["env-file", "A", "B", "--json"],
+            ok(r#"{"path":"/s/.env"}"#),
+            0,
+        ),
+        // covers: vault file --json
+        daemon(
+            "file --json",
+            &["file", "API", "--ttl", "90s", "--json"],
+            ok(r#"{"path":"/s/API"}"#),
+            0,
+        ),
+        daemon(
+            "file --done --json",
+            &["file", "--done", "/s/API", "--json"],
+            ok(r#"{"removed":true}"#),
+            0,
+        ),
+        // covers: vault proxy-url --json
+        daemon(
+            "proxy-url --json",
+            &["proxy-url", "API", "--json"],
+            ok(r#"{"envName":"A","placeholder":"p","baseUrlEnv":"B","baseUrl":"u"}"#),
+            0,
+        ),
+        // covers: vault service --json
+        daemon(
+            "service --json",
+            &["service", "web", "--json"],
+            ok(r#"{"service":"web","mode":"clean"}"#),
+            0,
+        ),
+        daemon(
+            "service clean --json",
+            &["service", "web", "clean", "--json"],
+            ok(r#"{"service":"web","mode":"clean"}"#),
+            0,
+        ),
+        // covers: vault recipient --json
+        daemon(
+            "recipient --json",
+            &["recipient", "--json"],
+            ok(r#"{"recipient":"age1xyz","vaultId":"v1"}"#),
+            0,
+        ),
+        // covers: vault placement add --json
+        daemon(
+            "placement add --json",
+            &[
+                "placement",
+                "add",
+                "API",
+                "--where",
+                "h:/x",
+                "--json",
+            ],
+            ok(placement),
+            0,
+        ),
+        // covers: vault placement done --json
+        daemon(
+            "placement done --json",
+            &["placement", "done", "p3", "--json"],
+            ok(placement),
+            0,
+        ),
+        // covers: vault placement rm --json
+        daemon(
+            "placement rm --json",
+            &["placement", "rm", "p3", "--json"],
+            ok("{}"),
+            0,
+        ),
+        // covers: vault placements --json
+        daemon(
+            "placements --json",
+            &["placements", "API", "--scope", "server", "--json"],
+            ok(r#"{"placements":[],"needNewerK2":1}"#),
+            0,
+        ),
     ] {
         rig.check(&c);
     }

@@ -653,3 +653,134 @@ fn send_a_typed_value_and_send_allow_add() {
         rig.check(&c);
     }
 }
+
+/// Each verb with `--json`: the answer as it came, then its exit; and a
+/// refusal with `--json`, which is the plain refusal.
+#[test]
+fn the_json_forms() {
+    let rig = VRig::new();
+    let entries = r#"{"workspace":"proj","entries":[{"sender":"bob::h","name":"API","to":"bob::h","addedBy":"me","addedAt":"t"}]}"#;
+    let items = r#"{"items":[{"name":"API","status":"pending","peer":"bob::h","deliveryId":"d1","direction":"out","askId":"a1"}]}"#;
+    let decided = r#"{"delivery":{"status":"landed","name":"API","deliveryId":"d1"},"ref":"k2v:API"}"#;
+    for c in [
+        // covers: vault incoming --json
+        person("incoming --json", &["incoming", "--json"], vec![ok(items)], 0),
+        owner(
+            "incoming --json --workspace, no vault socket",
+            &["incoming", "--workspace", "proj", "--json"],
+            ok(r#"{"items":[]}"#),
+            0,
+        ),
+        // covers: vault incoming accept --json
+        person(
+            "incoming accept --json",
+            &["incoming", "accept", "d1", "--as", "API2", "--json"],
+            vec![ok(decided)],
+            0,
+        ),
+        // covers: vault incoming decline --json
+        person(
+            "incoming decline --json",
+            &["incoming", "decline", "d1", "--json"],
+            vec![ok(decided)],
+            0,
+        ),
+        person(
+            "incoming decline --json, refused",
+            &["incoming", "decline", "d1", "--json"],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"not_pending","hint":"it was decided"}}"#.into(),
+            )],
+            2,
+        ),
+        // covers: vault accept-from --json
+        person(
+            "accept-from --json",
+            &["accept-from", "--json"],
+            vec![ok(entries)],
+            0,
+        ),
+        agent(
+            "accept-from list --json in a K2 terminal",
+            &["accept-from", "list", "--json"],
+            ok(entries),
+            0,
+        ),
+        // covers: vault accept-from add --json
+        person(
+            "accept-from add --json",
+            &["accept-from", "add", "bob::h", "--workspace", "proj", "--json"],
+            vec![ok(entries)],
+            0,
+        ),
+        // covers: vault accept-from remove
+        person(
+            "accept-from remove",
+            &["accept-from", "remove", "bob::h", "--workspace", "proj"],
+            vec![ok(r#"{"entries":[]}"#)],
+            0,
+        ),
+        // covers: vault accept-from remove --json
+        person(
+            "accept-from remove --json",
+            &["accept-from", "remove", "bob::h", "--workspace", "proj", "--json"],
+            vec![ok(r#"{"entries":[]}"#)],
+            0,
+        ),
+        refused(
+            "accept-from remove, no workspace",
+            &["accept-from", "remove", "bob::h", "--json"],
+            2,
+        ),
+        // covers: vault send-allow --json
+        person(
+            "send-allow --json",
+            &["send-allow", "--workspace", "proj", "--json"],
+            vec![ok(entries)],
+            0,
+        ),
+        // covers: vault send-allow remove --json
+        person(
+            "send-allow remove --json",
+            &[
+                "send-allow",
+                "remove",
+                "API",
+                "--to",
+                "bob::h",
+                "--workspace",
+                "proj",
+                "--json",
+            ],
+            vec![ok(r#"{"workspace":"proj","entries":[]}"#)],
+            0,
+        ),
+        // covers: vault ask --json
+        person(
+            "ask --json",
+            &["ask", "bob::h", "API", "--note", "please", "--json"],
+            vec![ok(
+                r#"{"to":"bob::h","name":"API","askId":"a1","delivered":true}"#,
+            )],
+            0,
+        ),
+        // covers: vault asks --json
+        owner("asks --json", &["asks", "--json"], ok(items), 0),
+        agent(
+            "asks --json, refused",
+            &["asks", "--json"],
+            Reply::Answer(403, PERMISSION_ASK.into()),
+            3,
+        ),
+        // covers: vault unsend --json
+        person(
+            "unsend --json",
+            &["unsend", "d1", "--json"],
+            vec![ok(r#"{"deliveryId":"d1","disabled":true}"#)],
+            0,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}

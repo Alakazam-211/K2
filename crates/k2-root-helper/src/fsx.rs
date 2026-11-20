@@ -273,6 +273,46 @@ impl Dir {
         Ok(())
     }
 
+    /// What the link `name` points at, read without following it. A name
+    /// that is not a link is an error (EINVAL).
+    pub fn read_link(&self, name: &OsStr) -> io::Result<OsString> {
+        let c = cstr(name)?;
+        let mut buf = vec![0u8; libc::PATH_MAX as usize];
+        // SAFETY: valid dirfd and name; the buffer is `buf.len()` bytes.
+        let n = unsafe { libc::readlinkat(self.raw(), c.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let n = n as usize;
+        if n >= buf.len() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "link target too long"));
+        }
+        buf.truncate(n);
+        Ok(OsString::from_vec(buf))
+    }
+
+    /// Make `name` a symlink to `target` in one step: a new link at a dot
+    /// name in this directory, renamed over `name` (rename replaces the
+    /// entry, never writes through it).
+    pub fn replace_symlink(&self, target: &OsStr, name: &OsStr) -> io::Result<()> {
+        let t = CString::new(target.as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "nul in link target"))?;
+        let mut tmp = OsString::from(".");
+        tmp.push(name);
+        tmp.push(format!(".k2link.{}", std::process::id()));
+        if self.kind(&tmp)? != Kind::Missing {
+            self.unlink(&tmp)?;
+        }
+        let c = cstr(&tmp)?;
+        // SAFETY: NUL-terminated target, valid dirfd and name.
+        check(unsafe { libc::symlinkat(t.as_ptr(), self.raw(), c.as_ptr()) })?;
+        let res = self.rename(&tmp, name).and_then(|()| self.fsync());
+        if res.is_err() {
+            let _ = self.unlink(&tmp);
+        }
+        res
+    }
+
     pub fn unlink(&self, name: &OsStr) -> io::Result<()> {
         let c = cstr(name)?;
         // SAFETY: valid dirfd and name.

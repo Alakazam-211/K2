@@ -2465,3 +2465,7 @@ mod creds_tests;
 // The `desktop` namespace (protocol 16, the virtual desktop's packages), same fakes.
 #[path = "desktop_tests.rs"]
 mod desktop_tests;
+
+// `helper cli-refresh` and the brand's retired aliases, same fakes.
+#[path = "cli_alias_tests.rs"]
+mod cli_alias_tests;

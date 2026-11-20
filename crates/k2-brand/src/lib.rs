@@ -20,8 +20,9 @@
 //! `include!`: a `#[macro_export]` macro that comes from `include!` can't
 //! be named by an absolute path in its own crate.
 
-/// What an alias does when the command is called by it. Nothing acts on a
-/// mode yet.
+/// What an alias does when the command is called by it. The root helper's
+/// `cli-refresh` acts on it for the links in `/usr/local/bin`
+/// (`k2_root_helper::core::tend_aliases`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AliasMode {
     /// Runs as the command and says nothing.

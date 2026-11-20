@@ -309,9 +309,10 @@ fn audit(
             }
         }
     }
-    // The CLI refresh: what it did, from → to.
+    // The CLI refresh: what it did, from → to, and each retired alias it
+    // tended.
     if let (Some(Verb::HelperCliRefresh), Some(x)) = (verb, extra) {
-        for k in ["result", "from", "to", "reason"] {
+        for k in ["result", "from", "to", "reason", "aliases"] {
             if let Some(v) = x.get(k) {
                 line[if k == "result" { "cli" } else { k }] = v.clone();
             }

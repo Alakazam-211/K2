@@ -362,6 +362,27 @@ fn cli_owner_gate(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<Option<&'st
     Ok(None)
 }
 
+/// The names `helper cli-refresh` tends in [`CLI_DIR`]: the command's own
+/// file and the brand's aliases with their modes. [`CliNames::compiled`]
+/// is this build's; tests pass another brand's table as a value.
+#[derive(Clone, Copy, Debug)]
+pub struct CliNames<'a> {
+    pub name: &'a str,
+    pub aliases: &'a [(&'a str, AliasMode)],
+}
+
+impl CliNames<'static> {
+    /// This build's names, from the brand file.
+    pub const fn compiled() -> Self {
+        CliNames { name: CLI_FILE, aliases: CLI_ALIAS_MODES }
+    }
+}
+
+/// `helper cli-refresh` with this build's names ([`cli_refresh_with`]).
+pub fn cli_refresh(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<serde_json::Value> {
+    cli_refresh_with(ctx, who, &CliNames::compiled())
+}
+
 /// `helper cli-refresh`: a root-owned K2 CLI at `/usr/local/bin/k2` older
 /// than this helper's copy is replaced (stage + fsync + rename, root:root
 /// 0755). Idempotent: the same or a newer version is left alone (never a
@@ -374,7 +395,16 @@ fn cli_owner_gate(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<Option<&'st
 /// - the file missing, a symlink, not a regular file (a FIFO or device is
 ///   never opened blocking), not root-owned, group/other-writable, over
 ///   16 MB, or not the K2 CLI.
-pub fn cli_refresh(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<serde_json::Value> {
+///
+/// When the file is ours (the answer is `unchanged` or `updated`), the
+/// brand's retired aliases in the same folder are tended too
+/// (`tend_aliases`), and the answer lists them under `aliases` when
+/// there is anything at one of those names.
+pub fn cli_refresh_with(
+    ctx: &Ctx,
+    who: &crate::caller::Caller,
+    names: &CliNames,
+) -> HResult<serde_json::Value> {
     let to = cli_version_of(CLI_CONTENT.as_bytes())
         .and_then(|v| Semver::parse(&v))
         .ok_or_else(|| Fail::state("this helper carries no versioned K2 CLI"))?;
@@ -395,7 +425,7 @@ pub fn cli_refresh(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<serde_json
     if let Some(why) = cli_owner_gate(ctx, who)? {
         return Ok(cli_skipped(why, &to));
     }
-    let name = OsStr::new(CLI_FILE);
+    let name = OsStr::new(names.name);
     let Some(st) = base.lstat(name).map_err(|e| Fail::io_err("stat", e))? else {
         return Ok(cli_skipped("absent", &to));
     };
@@ -435,14 +465,91 @@ pub fn cli_refresh(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<serde_json
     let Some(from) = cli_version_of(&head).and_then(|v| Semver::parse(&v)) else {
         return Ok(cli_skipped("not the K2 CLI", &to));
     };
-    if from >= to {
-        return Ok(serde_json::json!({"result": "unchanged", "version": from.to_string(), "to": to.to_string()}));
+    let mut answer = if from >= to {
+        serde_json::json!({"result": "unchanged", "version": from.to_string(), "to": to.to_string()})
+    } else {
+        // A new inode renamed over the name: a hard link elsewhere to the
+        // old file keeps the old bytes (never written through).
+        base.write_atomic(name, CLI_CONTENT.as_bytes(), 0o755, ctx.root_owner())
+            .map_err(|e| Fail::io_err("write /usr/local/bin/k2", e))?;
+        serde_json::json!({"result": "updated", "from": from.to_string(), "to": to.to_string()})
+    };
+    let aliases = tend_aliases(&base, names);
+    if !aliases.is_empty() {
+        answer["aliases"] = serde_json::Value::Array(aliases);
     }
-    // A new inode renamed over the name: a hard link elsewhere to the old
-    // file keeps the old bytes (never written through).
-    base.write_atomic(name, CLI_CONTENT.as_bytes(), 0o755, ctx.root_owner())
-        .map_err(|e| Fail::io_err("write /usr/local/bin/k2", e))?;
-    Ok(serde_json::json!({"result": "updated", "from": from.to_string(), "to": to.to_string()}))
+    Ok(answer)
+}
+
+/// The brand's retired aliases beside the command in [`CLI_DIR`]: a link
+/// named as an alias in mode `notice` runs the command, so it is
+/// re-pointed at the command's own path; one in mode `tombstone` runs
+/// nothing, so it is removed (the CLI this helper carries does not read
+/// the name it was called by, so a link would run it in full). Only a link
+/// whose target is a file named as this brand's command is touched. A
+/// `silent` alias, a regular file or a folder at an alias's name, a link
+/// to any other file, and every name that is not this brand's alias are
+/// left as they are. One entry per alias name that has something at it;
+/// none for the default brand, whose one alias is `silent`.
+///
+/// `base` is [`CLI_DIR`], already checked root-owned and not writable by
+/// group or others, so nobody but root can change an entry between the
+/// look and the change.
+fn tend_aliases(base: &Dir, names: &CliNames) -> Vec<serde_json::Value> {
+    let own_path = format!("{CLI_DIR}/{}", names.name);
+    names
+        .aliases
+        .iter()
+        .filter(|(_, mode)| matches!(mode, AliasMode::Notice | AliasMode::Tombstone))
+        .filter_map(|(alias, mode)| {
+            let mut v = tend_alias(base, alias, *mode, names.name, &own_path)?;
+            v["name"] = serde_json::Value::from(*alias);
+            Some(v)
+        })
+        .collect()
+}
+
+/// One retired alias ([`tend_aliases`]); `None` when nothing is there.
+fn tend_alias(
+    base: &Dir,
+    alias: &str,
+    mode: AliasMode,
+    own: &str,
+    own_path: &str,
+) -> Option<serde_json::Value> {
+    use serde_json::json;
+    let failed = |what: &str, e: std::io::Error| json!({"result": "failed", "reason": format!("{what}: {e}")});
+    let skipped = |why: &str| json!({"result": "skipped", "reason": why});
+    let name = OsStr::new(alias);
+    let st = match base.lstat(name) {
+        Ok(None) => return None,
+        Ok(Some(st)) => st,
+        Err(e) => return Some(failed("stat", e)),
+    };
+    if crate::fsx::kind_of(crate::fsx::mode(&st)) != Kind::Symlink {
+        return Some(skipped("not a link"));
+    }
+    let target = match base.read_link(name) {
+        Ok(t) => t,
+        Err(e) => return Some(failed("read link", e)),
+    };
+    let from = target.to_string_lossy().into_owned();
+    if std::path::Path::new(&target).file_name() != Some(OsStr::new(own)) {
+        return Some(skipped("a link to another file"));
+    }
+    let current = target.as_os_str() == OsStr::new(own_path) || target.as_os_str() == OsStr::new(own);
+    match mode {
+        AliasMode::Notice if current => Some(json!({"result": "current"})),
+        AliasMode::Notice => Some(match base.replace_symlink(OsStr::new(own_path), name) {
+            Ok(()) => json!({"result": "repointed", "from": from}),
+            Err(e) => failed("re-point", e),
+        }),
+        AliasMode::Tombstone => Some(match base.unlink(name) {
+            Ok(()) => json!({"result": "removed", "from": from}),
+            Err(e) => failed("remove", e),
+        }),
+        AliasMode::Silent => None,
+    }
 }
 
 /// Last 100 of our own journal lines, as JSON (the daemon user may not be

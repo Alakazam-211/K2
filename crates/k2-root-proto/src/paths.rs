@@ -53,11 +53,18 @@ pub const SUDO_EXES: &[&str] = &[
 /// `/usr/local/bin/<name>` with the name from the brand file (`k2-brand`).
 /// `helper cli-refresh` replaces it when it is a root-owned K2 CLI older
 /// than the helper's own copy; the daemon refreshes a copy it owns itself.
-/// Only this one name: the helper never refreshes an alias, or a file of
-/// another brand's name.
+/// The helper writes CLI bytes only to this one name. Beside it, it tends
+/// the links named as the brand's retired aliases ([`CLI_ALIAS_MODES`]),
+/// and never a file of another brand's name.
 pub const CLI_PATH: &str = k2_brand::SYSTEM_CLI_PATH;
 pub const CLI_DIR: &str = "/usr/local/bin";
 pub const CLI_FILE: &str = k2_brand::CLI_NAME;
+/// The brand's other names with their modes, from the brand file. `helper
+/// cli-refresh` tends a link in [`CLI_DIR`] named as an alias in mode
+/// `notice` (re-pointed at [`CLI_PATH`]) or `tombstone` (removed); a
+/// `silent` alias is left as it is.
+pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = k2_brand::CLI_ALIAS_MODES;
+pub use k2_brand::AliasMode;
 
 // ── Programs the helper spawns (absolute, env cleared) ──────────────────
 

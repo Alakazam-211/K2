@@ -44,8 +44,13 @@
 # whoami_parity.rs, pages_without_python3.rs and the study cards tests;
 # tests/cli runs with python3 on PATH. They meet bash32-pipe-reader in the
 # no-answer cases of inbox_parity.rs, read_parity.rs, activity_parity.rs,
-# connections_write_parity.rs and connect_parity.rs, through the rig's
-# Compare::Bash32PipeReader on macOS. They meet nul-in-answer in
+# connections_write_parity.rs, connect_parity.rs, arms_parity.rs (reviews),
+# remind_parity.rs, review_skills_whats_new_parity.rs (skills list),
+# workspace_verbs_parity.rs and wiki_parity.rs, through the rig's
+# Compare::Bash32PipeReader on macOS. They meet python-version-error-text
+# wherever the shell's Python words an error otherwise than 3.12: the rig
+# takes it for every row (common/parity.rs, as_this_python), and
+# compute_render_oracle.rs for a dict sliced. They meet nul-in-answer in
 # feedback_parity.rs's "a NUL in a string" rows of list and show, through
 # Compare::NulInAnswer. They meet feedback-optin-without-python3 in
 # help_feedback_optin_parity.rs: every row's run with no python3 prints
@@ -163,6 +168,7 @@ EXPECTED_DIFFS=(
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
     "wiki-status-large-answer|K5 lane r8c, for K2 to rule on|\`wiki status\` hands both of the daemon's answers (the serve status and the index) to its Python in environment variables; an index above what one variable may hold (128 KiB on Linux, about 1 MiB in all on macOS) stops bash there: \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 126 (exit 1 on macOS, with its /bin/bash 3.2). The binary reads the answers itself and prints the status, exit 0. Both send the same two requests"
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
+    "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words three of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError; from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
 
@@ -506,6 +512,46 @@ check_bash32_pipe_reader() {
 # substitution: ignored null byte in input", from 4.4 on, none before;
 # stderr is otherwise the same. On a bash before 4.4 the check says so
 # and returns 3: the two are exact there.
+# check_python_version_error_text: the python3 on PATH words the three
+# errors as its version says it does (above). On a 3.12, which words all
+# three as the binary does, the check says the difference itself was not
+# proven here and returns 3.
+check_python_version_error_text() {
+    local got ver want problems=()
+    got="$(python3 -I -c '
+import json, sys
+print("%d.%d" % sys.version_info[:2])
+try:
+    "a"[str("b")]
+except TypeError as e:
+    print(e)
+try:
+    {}[:3]
+except Exception as e:
+    print(type(e).__name__)
+try:
+    json.loads("[1,]")
+except ValueError as e:
+    print(e)
+')" || { echo "python3 failed: $got"; return 1; }
+    ver="$(printf '%s\n' "$got" | sed -n 1p)"
+    local major="${ver%%.*}" minor="${ver#*.}"
+    [ "$major" = 3 ] || { echo "python3 is $ver, not 3.x"; return 1; }
+    if [ "$minor" -lt 11 ]; then want="string indices must be integers"; else want="string indices must be integers, not 'str'"; fi
+    [ "$(printf '%s\n' "$got" | sed -n 2p)" = "$want" ] || problems+=("python3 $ver says '$(printf '%s\n' "$got" | sed -n 2p)', want '$want'")
+    if [ "$minor" -lt 12 ]; then want=TypeError; else want=KeyError; fi
+    [ "$(printf '%s\n' "$got" | sed -n 3p)" = "$want" ] || problems+=("python3 $ver raises $(printf '%s\n' "$got" | sed -n 3p) for a dict sliced, want $want")
+    if [ "$minor" -ge 13 ]; then want="Illegal trailing comma before end of array: line 1 column 3 (char 2)"; else want="Expecting value: line 1 column 4 (char 3)"; fi
+    [ "$(printf '%s\n' "$got" | sed -n 4p)" = "$want" ] || problems+=("python3 $ver says '$(printf '%s\n' "$got" | sed -n 4p)' at a trailing comma, want '$want'")
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    [ "$minor" = 12 ] || return 0
+    echo "python3 here is 3.12, which words all three as the binary does, so the difference itself was not proven on this host (the macOS job's 3.9 proves the first two; a python3 of 3.13 or later, the third)"
+    return 3
+}
+
 check_nul_in_answer() {
     local d="$WORK/nul" ver major minor warns=0 rc rr n line words route problems=()
     mkdir -p "$d/home/.k2" "$d/ws/.k2"

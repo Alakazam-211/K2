@@ -960,19 +960,78 @@ impl Rig {
                 "{name}: stderr (mktemp's name masked)"
             );
         } else {
-            assert_eq!(as_older_python(&r.stderr), b.stderr, "{name}: stderr");
+            assert_eq!(as_this_python(&r.stderr, &b.stderr), b.stderr, "{name}: stderr");
         }
         (r.clone(), rl, handed, rt)
     }
 }
 
-/// The binary's text as the shell's Python words it, where that Python is
-/// older than the wording the binary follows (it has no Python version
-/// to copy, so it follows the newer one, as with the timeout's name in
-/// urllib_python_parity.rs). Python 3.11 added the index's type to
-/// "string indices must be integers": before it, the line ends there.
-/// The version is the one of the `python3` the shell runs, read from it.
-fn as_older_python(text: &str) -> String {
+/// The binary's text as the shell's Python words it, where that Python
+/// words it otherwise than 3.12, which the binary follows (it has no Python
+/// version to copy, as with the timeout's name in
+/// urllib_python_parity.rs): `scripts/cli-parity.sh`'s named difference
+/// `python-version-error-text`. The version is the one of the `python3` the
+/// shell runs, read from it, never guessed.
+/// - Before 3.11, "string indices must be integers" ends there (3.11
+///   added ", not 'str'").
+/// - From 3.13, a JSON trailing comma is "Illegal trailing comma before
+///   end of object" (or array), placed at the comma, where 3.12 says
+///   "Expecting property name enclosed in double quotes" (or "Expecting
+///   value") after it. A line of the binary with 3.12's words takes the
+///   shell's line when that one is 3.13's trailing comma and the rest of
+///   the two lines is the same; the place can't be worked out from the
+///   binary's line alone.
+fn as_this_python(rust: &str, bash: &str) -> String {
+    let older = as_before_311(rust);
+    if python3_version() < (3, 13) || older == bash {
+        return older;
+    }
+    let r: Vec<&str> = older.split_inclusive('\n').collect();
+    let b: Vec<&str> = bash.split_inclusive('\n').collect();
+    if r.len() != b.len() {
+        return older;
+    }
+    r.iter()
+        .zip(&b)
+        .map(|(rl, bl)| match (json_error(rl, PY312_TRAILING), json_error(bl, PY313_TRAILING)) {
+            // The same head and tail: only Python's words and place differ.
+            (Some(x), Some(y)) if x == y => (*bl).to_string(),
+            _ => (*rl).to_string(),
+        })
+        .collect()
+}
+
+/// What 3.12 says at a JSON trailing comma (after it).
+const PY312_TRAILING: &[&str] = &[
+    "Expecting property name enclosed in double quotes",
+    "Expecting value",
+];
+
+/// What 3.13 and later say there (at the comma).
+const PY313_TRAILING: &[&str] = &[
+    "Illegal trailing comma before end of object",
+    "Illegal trailing comma before end of array",
+];
+
+/// `line` as `<head><one of msgs>: line <n> column <n> (char <n>)<tail>`:
+/// its head and tail.
+fn json_error<'a>(line: &'a str, msgs: &[&str]) -> Option<(&'a str, &'a str)> {
+    msgs.iter().find_map(|m| {
+        let at = line.find(m)?;
+        let rest = line[at + m.len()..].strip_prefix(": line ")?;
+        let num = |s: &'a str| -> Option<&'a str> {
+            let n = s.bytes().take_while(u8::is_ascii_digit).count();
+            (n > 0).then(|| &s[n..])
+        };
+        let rest = num(rest)?.strip_prefix(" column ")?;
+        let rest = num(rest)?.strip_prefix(" (char ")?;
+        let tail = num(rest)?.strip_prefix(')')?;
+        Some((&line[..at], tail))
+    })
+}
+
+/// Before 3.11, "string indices must be integers" with no ", not '...'".
+fn as_before_311(text: &str) -> String {
     const STEM: &str = "string indices must be integers";
     if python3_version() >= (3, 11) {
         return text.to_string();

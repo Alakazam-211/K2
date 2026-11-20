@@ -15,6 +15,7 @@
 #   compute node servers add --for          (7d, 12h, none)
 #   compute node servers limits for= / --for
 #   compute node servers add --max-time, limits max_job_secs=<n>h|m|s
+#   compute wait, compute run --wait and compute events --max-wait
 #   sources simulate --for, sources trigger add --cooldown and
 #     --on stale_for:<duration>
 #   sources mute --for, sources history --from
@@ -154,6 +155,22 @@ sent() {
     fi
     tail -1 "$LOG"
 }
+# sent_first <args…>: like sent, for a verb that may send more than one
+# request (the stub refuses each): the first one it sent.
+sent_first() {
+    local before after
+    rm -f "$MARK"
+    before="$(wc -l < "$LOG")"
+    "$K2" "$@" >/dev/null 2>&1 </dev/null || true
+    after="$(wc -l < "$LOG")"
+    [ ! -e "$MARK" ] || bad "k2 $*: the marker file appeared"
+    if [ "$after" -le "$before" ]; then
+        bad "k2 $* sent no request"
+        echo "{}"
+        return 0
+    fi
+    sed -n "$((before + 1))p" "$LOG"
+}
 field() { python3 -c 'import json,sys; v=json.loads(sys.argv[1]); print(json.dumps(eval(sys.argv[2])))' "$1" "$2"; }
 
 echo "== compute node servers add --for =="
@@ -187,6 +204,20 @@ r="$(sent "${ADD[@]}" --max-time 2h)"
 expect_eq "add --max-time 2h" "$(field "$r" 'v["body"]["set"].get("max_job_secs")')" '7200'
 r="$(sent "${LIM[@]}" max_job_secs=1h30m)"
 expect_eq "limits max_job_secs=1h30m" "$(field "$r" 'v["body"]["set"].get("max_job_secs")')" '5400'
+
+echo "== compute wait / run / events --max-wait =="
+refused "wait --max-wait <subscript>m" "usage: bad duration" -- compute wait job00001 --max-wait "${P}m"
+refused "wait --max-wait 5x" "usage: bad duration" -- compute wait job00001 --max-wait 5x
+refused "run --wait --max-wait <subscript>m" "usage: bad duration" -- compute run --no-source --mem 2G --wait --max-wait "${P}m" -- true
+refused "run --wait --max-wait 5x" "usage: bad duration" -- compute run --no-source --mem 2G --wait --max-wait 5x -- true
+refused "events --max-wait <subscript>m" "usage: bad duration" -- compute events --max-wait "${P}m"
+refused "events --max-wait 5x" "usage: bad duration" -- compute events --max-wait 5x
+r="$(sent_first compute wait job00001 --max-wait 5m)"
+expect_eq "wait --max-wait 5m: asks for the job" "$(field "$r" 'v["path"], v["query"].get("job")')" '["/cli/compute/jobs/get", "job00001"]'
+r="$(sent_first compute run --no-source --mem 2G --wait --max-wait 5m -- true)"
+expect_eq "run --wait --max-wait 5m: submits" "$(field "$r" 'v["path"]')" '"/cli/compute/run"'
+r="$(sent_first compute events --max-wait 5m)"
+expect_eq "events --max-wait 5m: asks for events" "$(field "$r" 'v["path"]')" '"/cli/compute/events"'
 
 echo "== sources simulate --for, trigger add --cooldown / --on stale_for: =="
 refused "simulate --for <subscript>d" "usage: bad duration" -- sources simulate fleet crit --for "${P}d"

@@ -346,7 +346,8 @@ cmd_compute_wait() {
     [ "${#jobs[@]}" -gt 0 ] || { echo "usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2; }
     local deadline=""
     if [ -n "$max_wait" ]; then
-        deadline=$(( $(date +%s) + $(_compute_secs "$max_wait") ))
+        local mw; mw="$(_compute_secs "$max_wait")" || exit 2
+        deadline=$(( $(date +%s) + mw ))
     fi
     # --follow (0.46.6, L8): stream one job's output from where it is now,
     # like run --wait (resuming after a shell timeout).

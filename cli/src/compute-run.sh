@@ -201,6 +201,8 @@ sys.exit(0 if ok else 1)'; then
         echo "usage: --failures, --max-wait and --quiet go with --wait (k2 compute run <node> --wait --failures -- …)" >&2
         exit 2
     fi
+    # A bad --max-wait is the usage error before the job is sent.
+    [ -z "$max_wait" ] || _compute_secs "$max_wait" >/dev/null
     # --wait: attached on the daemon (detach:false), so an agent in a K2 tab
     # gets no second [compute] line while `wait` follows it; one automatic
     # retry after an interruption, like --detach.
@@ -502,7 +504,7 @@ print(j["id"] + "\t" + ("set" if v.get("shards") else "one") + "\t" + clean(line
         # shards each have one).
         if [ "$as_json" = "1" ]; then echo "${job_id:0:8}" >&2; else echo "${job_id:0:8}"; fi
         if [ "$wait_quiet" = "0" ] && [ "$as_json" = "0" ] && [ "$kind" != "set" ]; then
-            [ -n "$max_wait" ] && _CP_DEADLINE=$(( $(date +%s) + $(_compute_secs "$max_wait") ))
+            if [ -n "$max_wait" ]; then local mw; mw="$(_compute_secs "$max_wait")" || exit 2; _CP_DEADLINE=$(( $(date +%s) + mw )); fi
             _CP_FAILURES="$wait_failures"
             _compute_follow "$job_id" "$raw" 0 0
         fi

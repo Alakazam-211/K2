@@ -388,7 +388,7 @@ print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["w
             [ -n "$etag" ] && eq="$eq&tag=$(urlencode "$etag")"
             ews="$(_compute_ws "")"
             [ -n "$ews" ] && eq="$eq&workspace=$(urlencode "$ews")"
-            [ -n "$emax" ] && edeadline=$(( $(date +%s) + $(_compute_secs "$emax") ))
+            if [ -n "$emax" ]; then local emw; emw="$(_compute_secs "$emax")" || exit 2; edeadline=$(( $(date +%s) + emw )); fi
             local cursor="$esince" first=1 eout
             while :; do
                 local q="$eq" w=0

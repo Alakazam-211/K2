@@ -485,7 +485,7 @@ fn hire_the_look_ups() {
     check(&rig, v);
 }
 
-const CONF_THERE: &str = r#"{"ok":true,"id":"w7","name":"qa","path":"/srv/qa","mode":"custom","enabled":true,"personaPath":"persona.md","color":"#AABBCC","focusGroupId":null,"connections":[{"peer":"ops"},{"peer":"far@box"}],"projects":[{"id":"g1"}],"live":{"active":true}}"#;
+const CONF_THERE: &str = r##"{"ok":true,"id":"w7","name":"qa","path":"/srv/qa","mode":"custom","enabled":true,"personaPath":"persona.md","color":"#AABBCC","focusGroupId":null,"connections":[{"peer":"ops"},{"peer":"far@box"}],"projects":[{"id":"g1"}],"live":{"active":true}}"##;
 
 #[test]
 fn hire_an_agent_already_there() {

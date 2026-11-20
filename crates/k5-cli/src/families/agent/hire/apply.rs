@@ -543,7 +543,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             let str_err = matches!(&e, Some(v @ Value::Str(_)) if py::truthy(v));
             if str_err || !act::get(&resp, "success").is_some_and(py::truthy) {
                 let why = e
-                    .filter(|v| py::truthy(v))
+                    .filter(py::truthy)
                     .or_else(|| act::get(&resp, "message").filter(|v| py::truthy(v)).cloned())
                     .unwrap_or_else(|| s(&dumps_head(&resp, 300)));
                 step_failed_on(

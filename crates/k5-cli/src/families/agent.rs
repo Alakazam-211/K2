@@ -110,7 +110,7 @@ enum Form {
     Lines(Vec<String>),
     Harness(harness::Args),
     Set(set::SetArgs),
-    Hire(hire::HireArgs),
+    Hire(Box<hire::HireArgs>),
     /// One line on stderr and its exit.
     Stop(String, Exit),
 }
@@ -157,7 +157,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "retire" => retire::parse_retire(rest).map(Form::Retire),
         "restart" => retire::parse_restart(rest).map(Form::Restart),
         "set" => set::parse(rest).map(Form::Set),
-        "hire" => hire::parse(rest)?.map(Form::Hire),
+        "hire" => hire::parse(rest)?.map(|a| Form::Hire(Box::new(a))),
         "context" => Ok(Form::Context(context::parse(rest))),
         "template" | "templates" => match template::parse(rest)? {
             Ok((v, json)) => Ok(Form::Template(v, json)),

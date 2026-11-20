@@ -13,7 +13,7 @@ use super::print::{
     self, g, human, indented, int, is, items, or, s, t, text_of, zen_print, Env, Out,
 };
 use super::sign;
-use super::verbs::{dir_body, help, read_text, usage, NameKey};
+use super::verbs::{dir_body, help, usage, NameKey};
 use crate::exit::Exit;
 use crate::families::Shown;
 use crate::out::json::{self, Options, Text, Value};

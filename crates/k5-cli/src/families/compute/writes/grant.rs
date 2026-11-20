@@ -54,13 +54,8 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
     while i < words.len() {
         let w = words[i];
         let v = words.get(i + 1).copied().unwrap_or("").to_string();
-        let shifted_two = |a: Ask| -> Result<Ask, Words<Ask>> {
-            if i + 2 > words.len() {
-                Err(Words::ShiftFailed)
-            } else {
-                Ok(a)
-            }
-        };
+        // `shift 2` with one word left: `set -e` ends the command.
+        let short = i + 2 > words.len();
         match w {
             "--workspace" | "--max-disk" | "--max-parallel" | "--max-queued" => {
                 match w {
@@ -71,19 +66,17 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
                     "--max-parallel" => a.max_parallel = v,
                     _ => a.max_queued = v,
                 }
-                a = match shifted_two(a) {
-                    Ok(a) => a,
-                    Err(e) => return e,
-                };
+                if short {
+                    return Words::ShiftFailed;
+                }
                 i += 2;
                 continue;
             }
             "--submitter-max-running" => {
                 a.max_sub = v;
-                a = match shifted_two(a) {
-                    Ok(a) => a,
-                    Err(e) => return e,
-                };
+                if short {
+                    return Words::ShiftFailed;
+                }
                 if a.max_sub.is_empty() || !a.max_sub.bytes().all(|b| b.is_ascii_digit()) {
                     return Words::Usage("usage: --submitter-max-running N (0 = off)".into());
                 }
@@ -98,10 +91,9 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
                     ));
                 };
                 a.max_time = s;
-                a = match shifted_two(a) {
-                    Ok(a) => a,
-                    Err(e) => return e,
-                };
+                if short {
+                    return Words::ShiftFailed;
+                }
                 i += 2;
                 continue;
             }

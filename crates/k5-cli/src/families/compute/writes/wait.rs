@@ -551,12 +551,16 @@ pub fn exit_of(digits: &str) -> Exit {
     Exit::from_curl(m as i32)
 }
 
+/// What the end's reader worked out: the code, the failed jobs' ids and
+/// every answer.
+type EndRead = (Option<String>, Vec<String>, Vec<Value>);
+
 /// The end's reader on every job's last answer: the lines on stderr,
 /// `--json`'s list on stdout, and the exit. The stderr lines are
 /// written as the reader goes, so a raise comes after the ones before it.
 pub fn end_of(bodies: &[Vec<u8>], json: bool) -> Shown {
     use line::end as l;
-    let r = (|| -> Result<(Option<String>, Vec<String>, Vec<Value>), Raise> {
+    let r = (|| -> Result<EndRead, Raise> {
         let mut values = Vec::new();
         for b in bodies {
             values.push(load(b, 5)?);

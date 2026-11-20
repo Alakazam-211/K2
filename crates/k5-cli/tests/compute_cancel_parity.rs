@@ -272,17 +272,17 @@ fn compute_cancel_many() {
         rig.check(&c);
     }
     // One answer above 256 KiB: thousands of jobs.
-    let rows: Vec<String> = (0..6000)
+    let rows: Vec<String> = (0..9000)
         .map(|i| format!(r#"{{"job":"job-{i:08}-abcdef0123456789"}}"#))
         .collect();
     let big = format!(
-        r#"{{"cancelled":[{}],"matched":6000,"skipped":[]}}"#,
+        r#"{{"cancelled":[{}],"matched":9000,"skipped":[]}}"#,
         rows.join(",")
     );
     assert!(big.len() > 256 * 1024);
     let big: &'static str = Box::leak(big.into_boxed_str());
     rig.check(&case(
-        "6000 jobs",
+        "9000 jobs",
         &["cancel", "--all-mine"],
         &[],
         vec![ok(big)],
@@ -521,7 +521,7 @@ fn compute_cancel_hands_these_to_the_shell() {
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            1,
+            3,
             0,
         )),
     ];

@@ -42,7 +42,7 @@ use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
-use crate::transport::client::{Auth, Client};
+use crate::transport::client::{Auth, Client, TRIES};
 use crate::transport::{permission, Error, Response};
 use std::ffi::OsString;
 use std::path::Path;
@@ -290,7 +290,9 @@ impl<'a> Cp<'a> {
     /// that may have been applied (a POST the cell socket took and never
     /// answered), or one a session would send as the owner, is its line
     /// and exit 1 (`Err`). Any other failure is curl's write-out, then
-    /// `printf '\n000'`: status `000` and the body `\n000`.
+    /// `printf '\n000'`: status `000`, and the body `\n000` once for each
+    /// time curl ran (`_k2_curl` runs it again on a refused connect, up to
+    /// [`TRIES`] times).
     pub fn send(
         &mut self,
         post: bool,
@@ -304,10 +306,17 @@ impl<'a> Cp<'a> {
                 out::stderr_line(&e.to_string());
                 Err(Exit::Error)
             }
-            Err(_) => Ok(Split {
-                status: NO_STATUS.to_string(),
-                body: b"\n000".to_vec(),
-            }),
+            Err(e) => {
+                let runs = if matches!(e, Error::Unreachable { .. }) {
+                    TRIES
+                } else {
+                    1
+                };
+                Ok(Split {
+                    status: NO_STATUS.to_string(),
+                    body: b"\n000".repeat(runs as usize),
+                })
+            }
         }
     }
 

@@ -11,8 +11,10 @@
 //! - No answer once, then the answer (the lost line, 10 s); the daemon's
 //!   refusals (404 is exit 4); Python's raise; the cell socket.
 //! - The words: none, an unknown flag, `--max-wait` last.
-//! - What the binary hands to the shell: `--follow`, `--failures`, a
-//!   duration that is none, no temp folder, help.
+//! - What the binary hands to the shell: `--follow`, `--failures`, no
+//!   temp folder, help. A duration that is none goes to the shell too;
+//!   bash's own arithmetic error names the script's path there, so it has
+//!   no row until D6's named difference.
 
 #![cfg(unix)]
 
@@ -326,15 +328,6 @@ fn compute_wait_hands_these_to_the_shell() {
             owner_and_port,
             0,
             1,
-        )),
-        shell(case(
-            "a duration that is none",
-            &["wait", "a", "--max-wait", "5x"],
-            &[],
-            vec![],
-            owner_and_port,
-            1,
-            0,
         )),
         shell(case(
             "wait --help",

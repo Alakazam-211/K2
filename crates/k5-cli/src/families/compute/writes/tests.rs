@@ -277,7 +277,7 @@ fn the_bodies_are_the_shell_s() {
     );
     assert_eq!(
         body_of(&[("job", "é\"x"), ("ifState", "")]),
-        r#"{"job": "é\"x"}"#
+        concat!(r#"{"job": ""#, "\\", "u00e9", r#"\"x"}"#)
     );
     let mut a = Ask::default();
     assert_eq!(

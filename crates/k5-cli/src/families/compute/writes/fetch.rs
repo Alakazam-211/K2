@@ -170,7 +170,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
             continue;
         }
         let (mut offset, mut first) = ("0".to_string(), true);
-        let mut last: Option<Step> = None;
+        let last: Step;
         loop {
             let q = format!(
                 "job={jq}&name={}&offset={offset}&max={CHUNK}&wait=20&over_relay={}{aq}",
@@ -192,14 +192,12 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
             };
             offset = step.offset.clone();
             first = false;
-            let eof = step.eof == "1";
-            last = Some(step);
-            if eof {
+            if step.eof == "1" {
+                last = step;
                 break;
             }
         }
-        let Some(s) = last else { continue };
-        match check(&name, &s) {
+        match check(&name, &last) {
             Ok(g) => got.push(g),
             Err(Stop::Line(l)) => {
                 out::stderr_line(&l);

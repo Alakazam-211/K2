@@ -174,6 +174,21 @@ _daemon_status_ptyd_lines() {
     echo "  Came back at the last restart: ${1##*$'\t'}"
 }
 
+# _daemon_status_json KEY VALUE ...: one line of JSON, every value a string.
+# Each value goes through _setup_jstr (pure bash, no python3), so a quote,
+# backslash or newline in a path, a unit or the daemon's answer stays
+# valid JSON. Plain values print byte for byte as before.
+_daemon_status_json() {
+    local out="" sep=""
+    while [ $# -ge 2 ]; do
+        _setup_jstr "$2"
+        out="${out}${sep}\"$1\":${_SETUP_J}"
+        sep=","
+        shift 2
+    done
+    printf '{%s}\n' "$out"
+}
+
 cmd_daemon_status() {
     local as_json=0
     [ "${1:-}" = "--json" ] && as_json=1
@@ -206,9 +221,9 @@ cmd_daemon_status() {
     ptyd=$(_daemon_status_ptyd "$port")
 
     if [ "$as_json" = "1" ]; then
-        printf '{"installed":"%s","running":"%s","pid":"%s","port":"%s","token":"%s","last_exit_code":"%s","plist":"%s","log":"%s","ptyd":"%s","adopted":"%s"}\n' \
-            "$installed" "$running" "${pid:-}" "${port:-}" "$token_present" "${last_exit_code:-}" "$_daemon_plist" "$_daemon_stdout_log" \
-            "$([ -n "$ptyd" ] && printf '%s' "${ptyd%%$'\t'*}")" "$([ -n "$ptyd" ] && printf '%s' "${ptyd##*$'\t'}")"
+        _daemon_status_json installed "$installed" running "$running" pid "${pid:-}" port "${port:-}" \
+            token "$token_present" last_exit_code "${last_exit_code:-}" plist "$_daemon_plist" log "$_daemon_stdout_log" \
+            ptyd "$([ -n "$ptyd" ] && printf '%s' "${ptyd%%$'\t'*}")" adopted "$([ -n "$ptyd" ] && printf '%s' "${ptyd##*$'\t'}")"
         return 0
     fi
 
@@ -246,10 +261,10 @@ _daemon_status_linux() {
     local ptyd
     ptyd=$(_daemon_status_ptyd "$port")
     if [ "$as_json" = "1" ]; then
-        printf '{"installed":"%s","running":"%s","pid":"%s","port":"%s","token":"%s","unit":"%s","scope":"%s","log":"%s","ptyd":"%s","adopted":"%s"}\n' \
-            "$([ -n "$unit" ] && echo yes || echo no)" "$([ "$active" = "active" ] && echo yes || echo no)" \
-            "${pid:-}" "${port:-}" "$token_present" "${unit:-}" "${scope:-}" "$_daemon_stdout_log" \
-            "$([ -n "$ptyd" ] && printf '%s' "${ptyd%%$'\t'*}")" "$([ -n "$ptyd" ] && printf '%s' "${ptyd##*$'\t'}")"
+        _daemon_status_json installed "$([ -n "$unit" ] && echo yes || echo no)" \
+            running "$([ "$active" = "active" ] && echo yes || echo no)" \
+            pid "${pid:-}" port "${port:-}" token "$token_present" unit "${unit:-}" scope "${scope:-}" log "$_daemon_stdout_log" \
+            ptyd "$([ -n "$ptyd" ] && printf '%s' "${ptyd%%$'\t'*}")" adopted "$([ -n "$ptyd" ] && printf '%s' "${ptyd##*$'\t'}")"
         return 0
     fi
     echo "K2 Daemon"

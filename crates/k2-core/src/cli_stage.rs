@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 /// The CLI script, embedded verbatim from `cli/k2` at the repo root so
 /// the daemon binary is self-contained (same reasoning as the SQL
 /// migrations' and the k2-open shim's `include_str!`).
+// The repo's script file, not the command's name: a brand build of the bash CLI is a later step (C7).
 pub const CLI_CONTENT: &str = include_str!("../../../cli/k2");
 
 /// Current version marker inside `cli/k2` (bumped by `release.sh`).
@@ -34,8 +35,9 @@ const VERSION_PREFIX: &str = "K2_CLI_VERSION=";
 /// it gets refreshed forward.
 const LEGACY_VERSION_PREFIX: &str = "K2SO_CLI_VERSION=";
 
-/// Canonical install location (on PATH; matches `provision-k2-server.sh`).
-const INSTALL_PATH: &str = "/usr/local/bin/k2";
+/// Canonical install location (on PATH; matches `provision-k2-server.sh`):
+/// `/usr/local/bin/<the command>`, from the brand file.
+const INSTALL_PATH: &str = crate::cli_install::SYSTEM_CLI_PATH;
 
 /// Extract the CLI version value, quote-trimmed. `None` when neither
 /// marker is present (treated as outdated so a marker-less / hand-edited
@@ -172,7 +174,7 @@ pub fn stage_cli() -> Result<Option<PathBuf>, String> {
     }
     let fallback = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
-        .map(|h| PathBuf::from(h).join(".local/bin/k2"));
+        .map(|h| crate::cli_install::user_bin_dir(Path::new(&h)).join(crate::cli_install::CLI_NAME));
     stage_cli_with_fallback(Path::new(INSTALL_PATH), fallback.as_deref())
 }
 

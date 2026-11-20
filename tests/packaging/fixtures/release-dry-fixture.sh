@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# The fixture of the release.sh dry-run tests (tests/packaging/
-# release-dry-run.sh): stubs on PATH for every external command and a
-# fixture repository holding the real release.sh, release-lock.sh,
-# daemon-manifest.sh, release-dry.sh and notary.sh, with stand-ins that log
-# for the rest (signers, gates, compute, Windows, R2).
+# The fixture the release.sh dry-run tests share (tests/packaging/
+# release-dry-run.sh and release-timings.sh): stubs on PATH for every
+# external command and a fixture repository holding the real release.sh,
+# release-lock.sh, daemon-manifest.sh, release-dry.sh, notary.sh,
+# release-timer.sh and release-timings.sh, with stand-ins that log for the
+# rest (signers, gates, compute, Windows, R2).
 #
 #   k2_release_dry_fixture
 # needs: ROOT (this repo), V (the version), src (the fixture repo dir, made
@@ -82,8 +83,8 @@ chmod +x "$stub"/*
 # release-dry.sh, daemon-manifest.sh and notary.sh; stand-ins for the rest ──
 cd "$src"
 mkdir -p scripts/lib scripts/ci cli/src src-tauri crates/k2-core crates/k2-daemon crates/k2-menubar
-cp "$ROOT/scripts/release.sh" "$ROOT/scripts/release-lock.sh" "$ROOT/scripts/daemon-manifest.sh" scripts/
-cp "$ROOT/scripts/lib/release-dry.sh" "$ROOT/scripts/lib/notary.sh" scripts/lib/
+cp "$ROOT/scripts/release.sh" "$ROOT/scripts/release-lock.sh" "$ROOT/scripts/daemon-manifest.sh" "$ROOT/scripts/release-timings.sh" scripts/
+cp "$ROOT/scripts/lib/release-dry.sh" "$ROOT/scripts/lib/notary.sh" "$ROOT/scripts/lib/release-timer.sh" scripts/lib/
 printf '{\n  "name": "k2",\n  "version": "0.0.1"\n}\n' > package.json
 printf '{\n  "version": "0.0.1"\n}\n' > src-tauri/tauri.conf.json
 for c in src-tauri crates/k2-core crates/k2-daemon crates/k2-menubar; do

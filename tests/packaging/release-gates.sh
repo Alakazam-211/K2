@@ -29,7 +29,7 @@ trap 'rm -rf "$tmp"' EXIT
 co="$tmp/co"
 mkdir -p "$co/scripts/lib"
 cp "$ROOT/scripts/release.sh" "$co/scripts/"
-for f in release-gates.sh rust-pin.sh compute-tier.sh linux-gate-spec.sh; do
+for f in release-gates.sh rust-pin.sh compute-tier.sh linux-gate-spec.sh release-timer.sh; do
     [ -f "$ROOT/scripts/lib/$f" ] && cp "$ROOT/scripts/lib/$f" "$co/scripts/lib/"
 done
 printf '[toolchain]\nchannel = "1.98.7"\n' > "$co/rust-toolchain.toml"
@@ -239,6 +239,7 @@ step_run() { # <name> [env…]; echoes rc
     local rc=0
     (cd "$co" && env PATH="$tmp/bin:$PATH" "$@" bash -c 'set -euo pipefail
         source scripts/lib/rust-pin.sh; source scripts/lib/compute-tier.sh; source scripts/lib/linux-gate-spec.sh; source scripts/lib/release-gates.sh
+        source scripts/lib/release-timer.sh
         k2rg_local() { echo "LOCAL $1" >> "$STUB_CALLS"; }
         source "$1"
         echo "LINUX_OK=$K2RG_LINUX_OK"' _ "$tmp/step05.sh") > "$tmp/out-$name" 2>&1 || rc=$?

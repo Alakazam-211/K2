@@ -47,6 +47,9 @@ for n in names:
         sys.exit("release.sh has no function " + n)
     print(m.group(0))
 PY
+# The step timer those functions call (scripts/lib/release-timer.sh; it
+# does nothing here: no _rt_init).
+cat "$ROOT/scripts/lib/release-timer.sh" >> "$tmp/fns.sh"
 
 # Stubs: gh variable get/set (the value lives in $STUB_VAR_FILE, seeded from
 # $STUB_VAR), gh api repos/... (admin from $STUB_ADMIN, default true), and

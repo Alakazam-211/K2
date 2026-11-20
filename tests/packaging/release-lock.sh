@@ -133,7 +133,7 @@ echo "== release.sh wiring =="
 RS="$ROOT/scripts/release.sh"
 grep -q 'source "$(cd "$(dirname "$0")" && pwd)/release-lock.sh"' "$RS" \
     && grep -q 'k2_release_lock_acquire "$VERSION"' "$RS" \
-    && grep -q "trap 'k2_release_lock_release' EXIT" "$RS" \
+    && grep -qE "^    trap '(.*; )?k2_release_lock_release' EXIT$" "$RS" \
     && grep -q '^    k2_release_wait_node_idle$' "$RS" \
     && pass "release.sh takes the lock and waits for the node" || fail "release.sh wiring" "missing lines"
 # release.sh's later EXIT trap replaces the early one, so it must release too.

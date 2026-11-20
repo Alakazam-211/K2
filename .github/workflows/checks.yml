@@ -62,6 +62,11 @@ jobs:
       - name: Release lock (temp paths, stub k2-node)
         run: bash tests/packaging/release-lock.sh
 
+      # release.sh's per-step timings (scripts/lib/release-timer.sh) and
+      # their reader, scripts/release-timings.sh (temp dirs only).
+      - name: Release step timings (temp dirs)
+        run: bash tests/packaging/release-timer.sh
+
       # release.sh's k2-ptyd checks on the update bundle (prd-k2-ptyd-v1 P2/P59).
       - name: Release k2-ptyd checks (dry)
         run: bash tests/packaging/release-ptyd-checks.sh

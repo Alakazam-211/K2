@@ -49,6 +49,7 @@ part_web() {
     step "Linux SHA256SUMS (stubbed)";             bash tests/packaging/linux-sums.sh
     step "Step 10.6, failed Arch build (stubbed)"; bash tests/packaging/linux-sums-step.sh
     step "Release lock (stub k2-node)";            bash tests/packaging/release-lock.sh
+    step "Release step timings (temp dirs)";       bash tests/packaging/release-timer.sh
     step "Release k2-ptyd checks (dry)";           bash tests/packaging/release-ptyd-checks.sh
     step "Linux builds on K2 Compute (stubbed)";   bash tests/packaging/compute-release.sh
     step "Update signing on the signing host (stubbed)";     bash tests/packaging/updater-signing.sh

@@ -46,6 +46,9 @@ for n in names:
         sys.exit("release.sh has no function " + n)
     print(m.group(0))
 PY
+# The step timer those functions call (scripts/lib/release-timer.sh; it
+# does nothing here: no _rt_init).
+cat "$ROOT/scripts/lib/release-timer.sh" >> "$tmp/fns.sh"
 
 mkdir -p "$tmp/bin" "$tmp/scripts/ci"
 cp "$ROOT/scripts/ci/cross-pins.sh" "$tmp/scripts/ci/cross-pins.sh"

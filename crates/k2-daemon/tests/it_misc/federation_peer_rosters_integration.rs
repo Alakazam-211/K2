@@ -206,10 +206,24 @@ fn new_pem() -> String {
     rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key").public_key_pem()
 }
 
-/// A port with nothing listening (bound, then closed): connect is refused.
-fn dead_port() -> u16 {
-    let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-    l.local_addr().expect("addr").port()
+/// A port with nothing listening: connect is refused. Keep the guard for
+/// the whole test. On Linux it is a bound socket that never listens, so no
+/// other test's listener can be handed the port; macOS drops a SYN to such
+/// a socket instead of refusing it, so there the port is let go (the
+/// daemon's unit-test helper `test_support::dead_port` explains).
+fn dead_port() -> (Option<tokio::net::TcpSocket>, u16) {
+    #[cfg(target_os = "linux")]
+    {
+        let s = tokio::net::TcpSocket::new_v4().expect("socket");
+        s.bind(([127, 0, 0, 1], 0).into()).expect("bind");
+        let port = s.local_addr().expect("addr").port();
+        (Some(s), port)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        (None, l.local_addr().expect("addr").port())
+    }
 }
 
 /// A server that accepts every connection and never answers.
@@ -267,7 +281,7 @@ fn peer_rosters_lists_this_server_then_paired_servers_a_to_z_with_offline_ones_c
     let b = spawn_daemon("b");
     let (a_pem, _a_fp) = pubkey(&a);
     let (b_pem, b_fp) = pubkey(&b);
-    let dead = dead_port();
+    let (_held_dead, dead) = dead_port();
     let (hang1, hang2) = (hanging_port(), hanging_port());
     let (k_dead, k_h1, k_h2) = (new_pem(), new_pem(), new_pem());
     // Paired in this (not alphabetical) order; one with the older code.

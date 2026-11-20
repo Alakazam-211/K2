@@ -299,6 +299,7 @@ pub fn handle_peer_rosters(peer_selector: Option<&str>) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::dead_port;
     use std::io::{Read, Write};
 
     fn pin(label: &str, sub: &str, base: &str) -> FederationPeer {
@@ -320,12 +321,6 @@ mod tests {
         }
         store.save().unwrap();
         fps
-    }
-
-    /// A port with nothing listening (bound, then closed).
-    fn dead_port() -> u16 {
-        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        l.local_addr().unwrap().port()
     }
 
     /// A server that accepts and never answers (a peer that hangs).
@@ -423,13 +418,16 @@ mod tests {
             "200 OK",
             roster(&[("cortana", "cortana"), ("Argus", "argus"), ("billing", "billing-b"), ("Billing", "billing-a")]),
         );
+        let (_held_pending, pending) = dead_port();
+        let (_held_mike, mike) = dead_port();
+        let (_held_alpha, alpha) = dead_port();
         // Paired out of order, mixed case; one pending pin that must not show.
         let mut store = PeerStore::default();
         for (p, trust) in [
-            (pin("aaa-pending", "pending", &format!("http://127.0.0.1:{}", dead_port())), PeerTrust::Pending),
+            (pin("aaa-pending", "pending", &format!("http://127.0.0.1:{pending}")), PeerTrust::Pending),
             (pin("rpm", "rpm", &format!("http://127.0.0.1:{rpm}")), PeerTrust::Trusted),
-            (pin("Mike", "mike", &format!("http://127.0.0.1:{}", dead_port())), PeerTrust::Trusted),
-            (pin("alpha", "alpha", &format!("http://127.0.0.1:{}", dead_port())), PeerTrust::Trusted),
+            (pin("Mike", "mike", &format!("http://127.0.0.1:{mike}")), PeerTrust::Trusted),
+            (pin("alpha", "alpha", &format!("http://127.0.0.1:{alpha}")), PeerTrust::Trusted),
         ] {
             let fp = store.upsert(p);
             store.set_trust(&fp, trust);
@@ -476,7 +474,8 @@ mod tests {
         let refuses = answering_port("403 Forbidden", r#"{"error":"roster denied"}"#.into());
         let off = answering_port("404 Not Found", r#"{"error":"not found"}"#.into());
         let junk = answering_port("200 OK", "not json".into());
-        let mut old = pin("old", "old", &format!("http://127.0.0.1:{}", dead_port()));
+        let (_held_old, old_port) = dead_port();
+        let mut old = pin("old", "old", &format!("http://127.0.0.1:{old_port}"));
         old.pairing_version = 1;
         save_trusted(vec![
             pin("refuses", "refuses", &format!("http://127.0.0.1:{refuses}")),
@@ -582,9 +581,10 @@ mod tests {
         k2_core::db::init_for_tests();
         let _base = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
         let ok = answering_port("200 OK", roster(&[("ops", "ops")]));
+        let (_held_two, two) = dead_port();
         let fps = save_trusted(vec![
             pin("one", "one", &format!("http://127.0.0.1:{ok}")),
-            pin("two", "two", &format!("http://127.0.0.1:{}", dead_port())),
+            pin("two", "two", &format!("http://127.0.0.1:{two}")),
         ]);
         let v = ok_body(peer_rosters_body(Some(&fps[0]), Duration::from_secs(5)));
         assert_eq!(labels(&v), vec!["one"], "{v}");

@@ -50,7 +50,9 @@ pub const TIMEOUT: Duration = Duration::from_secs(10);
 /// The Python's `normalize`: the URL less trailing `/`s, or why not.
 pub fn normalize(raw: &str) -> Result<String, &'static str> {
     let t = raw.trim_matches(super::super::py_space);
-    if t.chars().any(|c| super::super::py_space(c) || (c as u32) < 32) {
+    if t.chars()
+        .any(|c| super::super::py_space(c) || (c as u32) < 32)
+    {
         return Err("must not contain spaces");
     }
     let rest = if let Some(r) = t.strip_prefix("https://") {
@@ -271,8 +273,14 @@ mod tests {
 
     #[test]
     fn the_account_server_url() {
-        assert_eq!(normalize(" https://a.example/ "), Ok("https://a.example".into()));
-        assert_eq!(normalize("http://127.0.0.1:9/"), Ok("http://127.0.0.1:9".into()));
+        assert_eq!(
+            normalize(" https://a.example/ "),
+            Ok("https://a.example".into())
+        );
+        assert_eq!(
+            normalize("http://127.0.0.1:9/"),
+            Ok("http://127.0.0.1:9".into())
+        );
         assert_eq!(normalize("http://[::1]:9"), Ok("http://[::1]:9".into()));
         assert!(normalize("http://a.example").is_err());
         assert_eq!(normalize("ftp://a"), Err("must be an https:// URL"));
@@ -292,7 +300,10 @@ mod tests {
     fn where_the_logout_goes() {
         let (t, host, path) = target("http://127.0.0.1:9/base").unwrap();
         assert!(matches!(t, Target::Tcp { ref host, port: 9 } if host == "127.0.0.1"));
-        assert_eq!((host.as_str(), path.as_str()), ("127.0.0.1:9", "/base/auth/v1/logout"));
+        assert_eq!(
+            (host.as_str(), path.as_str()),
+            ("127.0.0.1:9", "/base/auth/v1/logout")
+        );
         let (t, host, path) = target(DEFAULT_URL).unwrap();
         assert!(matches!(t, Target::Tls { port: 443, .. }));
         assert_eq!(host, "ttgcalfrzzgkxnfepkiu.supabase.co");

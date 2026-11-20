@@ -151,10 +151,7 @@ pub fn token_homes(home: &Path, user_home: Option<&Path>) -> Vec<(PathBuf, Strin
         let alt = remote::old_home(u);
         let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         if alt.is_dir() && real(&alt) != real(home) {
-            homes.push((
-                alt,
-                format!("the old .{LEGACY_NAME} connect-tokens.json"),
-            ));
+            homes.push((alt, format!("the old .{LEGACY_NAME} connect-tokens.json")));
         }
     }
     homes
@@ -294,7 +291,8 @@ pub fn without_token(
     keys: &[String],
     token: &str,
 ) -> Option<Vec<(json::Text, Value)>> {
-    let holds = |k: &str| matches!(last(pairs, k), Some(Value::Str(t)) if t.as_str() == Some(token));
+    let holds =
+        |k: &str| matches!(last(pairs, k), Some(Value::Str(t)) if t.as_str() == Some(token));
     let gone: Vec<&String> = keys.iter().filter(|k| holds(k)).collect();
     if gone.is_empty() {
         return None;
@@ -662,7 +660,10 @@ mod tests {
         );
         assert_eq!(
             forget_keys("http://127.0.0.1:9"),
-            vec!["http://127.0.0.1:9".to_string(), format!("http://127.0.0.1:9{z}")]
+            vec![
+                "http://127.0.0.1:9".to_string(),
+                format!("http://127.0.0.1:9{z}")
+            ]
         );
     }
 

@@ -87,10 +87,16 @@ impl Setup {
         if token.is_empty() && !no_owner_fallback {
             token = read_stripped(&home.join("heartbeat.token"))?.unwrap_or_default();
         }
-        if !port.is_empty() && !(port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u32>().is_ok_and(|p| p <= 65535)) {
+        if !port.is_empty()
+            && !(port.bytes().all(|b| b.is_ascii_digit())
+                && port.parse::<u32>().is_ok_and(|p| p <= 65535))
+        {
             return None;
         }
-        if !token.bytes().all(|b| b == b'\t' || (0x20..0x7f).contains(&b)) {
+        if !token
+            .bytes()
+            .all(|b| b == b'\t' || (0x20..0x7f).contains(&b))
+        {
             return None;
         }
         Some(Setup { port, token })
@@ -266,7 +272,12 @@ fn say(fields: Vec<(&str, Value)>) -> String {
         ensure_ascii: false,
         ..Options::default()
     };
-    let v = Value::Object(fields.into_iter().map(|(k, v)| (json::Text::from(k), v)).collect());
+    let v = Value::Object(
+        fields
+            .into_iter()
+            .map(|(k, v)| (json::Text::from(k), v))
+            .collect(),
+    );
     format!("{}\n", json::to_string(&v, &opts).unwrap_or_default())
 }
 
@@ -285,10 +296,7 @@ impl Wake {
     /// The block for `setup` with `client`'s hand-over headers and
     /// workspace. `client` comes back as it was.
     pub fn new(client: &mut Client, setup: &Setup) -> Wake {
-        let saved = std::mem::replace(
-            &mut client.auth,
-            Auth::Owner(setup.token.clone()),
-        );
+        let saved = std::mem::replace(&mut client.auth, Auth::Owner(setup.token.clone()));
         let opener = Opener::from_client(client);
         client.auth = saved;
         let mut opener = opener;
@@ -339,7 +347,10 @@ impl Wake {
                 return Ok(format!("{p}'s server didn't answer {route} within 5 s"));
             }
             match r.class {
-                Class::UrlError => Ok(format!("can't reach {p}'s server at {}: {}", self.base, r.reason)),
+                Class::UrlError => Ok(format!(
+                    "can't reach {p}'s server at {}: {}",
+                    self.base, r.reason
+                )),
                 Class::TimeoutError => Ok(format!("{p}'s server didn't answer {route} within 5 s")),
                 Class::RemoteDisconnected
                 | Class::ConnectionResetError
@@ -421,16 +432,23 @@ impl Wake {
     ) -> Result<Option<Value>, Miss> {
         let p = product_name!();
         let (code, raw) = self.request(route, post, soft, params)?;
-        let data = std::str::from_utf8(&raw).ok().and_then(|t| json::parse(t).ok());
+        let data = std::str::from_utf8(&raw)
+            .ok()
+            .and_then(|t| json::parse(t).ok());
         if data.is_none() && code == 200 {
             return Err(Miss::End(fail(&format!(
                 "{p}'s server answered {route} with something that is not JSON"
             ))));
         }
         if let (true, 503, Some(d @ Value::Object(_))) = (soft, code, &data) {
-            if matches!(get_or(d, "state", Value::Null), Value::Str(t) if t.as_str() == Some("migrating")) {
+            if matches!(get_or(d, "state", Value::Null), Value::Str(t) if t.as_str() == Some("migrating"))
+            {
                 let e = get_or(d, "error", Value::Null);
-                let e = if py::truthy(&e) { py::str_of(&e) } else { "migrating".into() };
+                let e = if py::truthy(&e) {
+                    py::str_of(&e)
+                } else {
+                    "migrating".into()
+                };
                 return Err(Miss::Busy(format!(
                     "{p}'s server answered {route} with HTTP 503: {e}"
                 )));
@@ -444,9 +462,17 @@ impl Wake {
         Ok(data)
     }
 
-    fn list_of_dicts(&mut self, route: &str, soft: bool, params: &[(&str, &Value)], what: &str) -> Result<Vec<Value>, Miss> {
+    fn list_of_dicts(
+        &mut self,
+        route: &str,
+        soft: bool,
+        params: &[(&str, &Value)],
+        what: &str,
+    ) -> Result<Vec<Value>, Miss> {
         let p = product_name!();
-        let data = self.checked(route, false, soft, params)?.unwrap_or(Value::Null);
+        let data = self
+            .checked(route, false, soft, params)?
+            .unwrap_or(Value::Null);
         match data {
             Value::Array(items) if items.iter().all(|i| matches!(i, Value::Object(_))) => Ok(items),
             other => Err(Miss::End(fail(&format!(
@@ -498,7 +524,12 @@ impl Wake {
         let manager = running_manager(&found).map_err(|e| attr_or_type(&e))?;
         let triage = super::super::s(&triage());
         if py::truthy(&manager) {
-            self.checked(WRITE, true, false, &[("id", &manager), ("message", &triage)])?;
+            self.checked(
+                WRITE,
+                true,
+                false,
+                &[("id", &manager), ("message", &triage)],
+            )?;
             return Ok(say(vec![
                 ("status", super::super::s("notified")),
                 ("terminalId", manager),
@@ -536,7 +567,10 @@ impl Wake {
         Ok(say(vec![
             ("status", super::super::s("launched")),
             ("agent", super::super::s("manager")),
-            ("note", super::super::s("triage message not sent - terminal not ready")),
+            (
+                "note",
+                super::super::s("triage message not sent - terminal not ready"),
+            ),
         ]))
     }
 }
@@ -556,10 +590,16 @@ pub fn refused(route: &str, code: u16, data: Option<&Value>, raw: &[u8]) -> End 
     let p = product_name!();
     let c = cli_name!();
     let dict = data.filter(|d| matches!(d, Value::Object(_)));
-    let mut err = dict.map(|d| get_or(d, "error", Value::Null)).unwrap_or(Value::Null);
+    let mut err = dict
+        .map(|d| get_or(d, "error", Value::Null))
+        .unwrap_or(Value::Null);
     if let Value::Object(_) = err {
         let hint = get_or(&err, "hint", Value::Null);
-        err = if py::truthy(&hint) { hint } else { get_or(&err, "code", Value::Null) };
+        err = if py::truthy(&hint) {
+            hint
+        } else {
+            get_or(&err, "code", Value::Null)
+        };
     }
     let why = if py::truthy(&err) {
         py::str_of(&err)
@@ -570,19 +610,31 @@ pub fn refused(route: &str, code: u16, data: Option<&Value>, raw: &[u8]) -> End 
             .chars()
             .take(300)
             .collect();
-        if t.is_empty() { "no body".into() } else { t }
+        if t.is_empty() {
+            "no body".into()
+        } else {
+            t
+        }
     };
-    let verb = if code == 401 || code == 403 { "refused" } else { "answered" };
-    let mut stderr = format!(
-        "Error: {c} heartbeat wake: {p}'s server {verb} {route} with HTTP {code}: {why}\n"
-    );
+    let verb = if code == 401 || code == 403 {
+        "refused"
+    } else {
+        "answered"
+    };
+    let mut stderr =
+        format!("Error: {c} heartbeat wake: {p}'s server {verb} {route} with HTTP {code}: {why}\n");
     if let Some(Value::Object(_)) = dict.map(|d| get_or(d, "permission", Value::Null)).as_ref() {
-        let p = dict.map(|d| get_or(d, "permission", Value::Null)).unwrap_or(Value::Null);
+        let p = dict
+            .map(|d| get_or(d, "permission", Value::Null))
+            .unwrap_or(Value::Null);
         if let Value::Str(cmd) = get_or(&p, "command", Value::Null) {
             let cmd = py::str_of(&Value::Str(cmd));
             if !cmd.is_empty() {
                 stderr.push_str(&format!("Ask with: {cmd}\n"));
-                return End { stderr, exit: Exit::Refused };
+                return End {
+                    stderr,
+                    exit: Exit::Refused,
+                };
             }
         }
         if get_or(&p, "requestable", Value::Null) == Value::Bool(false) {
@@ -593,10 +645,16 @@ pub fn refused(route: &str, code: u16, data: Option<&Value>, raw: &[u8]) -> End 
                 }
             }
             stderr.push_str("It can't be requested.\n");
-            return End { stderr, exit: Exit::Refused };
+            return End {
+                stderr,
+                exit: Exit::Refused,
+            };
         }
     }
-    End { stderr, exit: Exit::Error }
+    End {
+        stderr,
+        exit: Exit::Error,
+    }
 }
 
 /// Prints what the block printed; its exit.
@@ -621,9 +679,15 @@ mod tests {
 
     #[test]
     fn the_python_s_walks() {
-        assert_eq!(agent_from_tid("agent-chat:p1:manager:hb:x"), Some("manager".into()));
+        assert_eq!(
+            agent_from_tid("agent-chat:p1:manager:hb:x"),
+            Some("manager".into())
+        );
         assert_eq!(agent_from_tid("agent-chat:wt:w1"), None);
-        assert_eq!(agent_from_tid("agent-chat-coordinator"), Some("coordinator".into()));
+        assert_eq!(
+            agent_from_tid("agent-chat-coordinator"),
+            Some("coordinator".into())
+        );
         assert_eq!(agent_from_tid("agent-chat-wt-1"), None);
         assert_eq!(above_zero(&Value::Int("3".into())), Ok(true));
         assert_eq!(above_zero(&Value::Int("-3".into())), Ok(false));
@@ -645,9 +709,13 @@ mod tests {
         let d = json::parse(std::str::from_utf8(raw).unwrap()).unwrap();
         let e = refused(AGENTS, 403, Some(&d), raw);
         assert_eq!(e.exit, Exit::Refused);
-        assert!(e.stderr.ends_with("with HTTP 403: Only the owner.\nAsk with: x permission request\n"));
+        assert!(e
+            .stderr
+            .ends_with("with HTTP 403: Only the owner.\nAsk with: x permission request\n"));
         let e = refused(AGENTS, 500, None, b"  \n");
-        assert!(e.stderr.ends_with("answered /cli/agents/list with HTTP 500: no body\n"));
+        assert!(e
+            .stderr
+            .ends_with("answered /cli/agents/list with HTTP 500: no body\n"));
         assert_eq!(e.exit, Exit::Error);
     }
 }

@@ -11,6 +11,7 @@
 mod common;
 
 use common::parity::*;
+use common::stub::Reply;
 
 const VERB: &str = "remote";
 
@@ -81,8 +82,10 @@ fn on_stdin(mut c: Case, input: &'static [u8]) -> Case {
 #[test]
 fn remote_logout_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "logout");
-    let dead: &'static str = Box::leak(format!("http://127.0.0.1:{}", dead_port()).into_boxed_str());
-    let dead_args: &'static [&'static str] = Box::leak(vec!["logout", "--host", dead, "--token-stdin"].into_boxed_slice());
+    let dead: &'static str =
+        Box::leak(format!("http://127.0.0.1:{}", dead_port()).into_boxed_str());
+    let dead_args: &'static [&'static str] =
+        Box::leak(vec!["logout", "--host", dead, "--token-stdin"].into_boxed_slice());
     let env_tok = [("K2_REMOTE_TOKEN", "k2rt_env_token_1")];
     let v = vec![
         // covers: remote logout
@@ -252,7 +255,10 @@ fn remote_logout_answers_as_the_shell_does() {
         case(
             "HOOK_SOCK set and no passport",
             &["logout", "--host", HOST],
-            &[("K2_HOOK_SOCK", "{sock}"), ("K2_REMOTE_TOKEN", "k2rt_env_token_1")],
+            &[
+                ("K2_HOOK_SOCK", "{sock}"),
+                ("K2_REMOTE_TOKEN", "k2rt_env_token_1"),
+            ],
             vec![],
             owner_and_port,
             3,
@@ -306,7 +312,8 @@ fn remote_lines_say_the_brand_s_name() {
     );
     let (out, _) = rig.binary(&c, false);
     assert!(
-        out.stderr.starts_with(&format!("{cli} remote logout: no --token")),
+        out.stderr
+            .starts_with(&format!("{cli} remote logout: no --token")),
         "{}",
         out.stderr
     );

@@ -754,7 +754,11 @@ fn db_setting(r: &Rig) {
 
 fn bad_db_setting(r: &Rig) {
     no_account(r);
-    put(r, "settings.json", Some(br#"{"connectDbUrl":"http://db.example"}"#));
+    put(
+        r,
+        "settings.json",
+        Some(br#"{"connectDbUrl":"http://db.example"}"#),
+    );
 }
 
 /// `connect logout`: the account server's line, the usage stop, the saved
@@ -768,7 +772,15 @@ fn connect_logout_answers_as_the_shell_does() {
     let dead = format!("http://127.0.0.1:{}/", dead_port());
     let v = vec![
         // covers: connect logout
-        case("no saved session", &["logout"], &[], vec![], no_account, 0, 0),
+        case(
+            "no saved session",
+            &["logout"],
+            &[],
+            vec![],
+            no_account,
+            0,
+            0,
+        ),
         case(
             "a saved session, the account server not there",
             &["logout"],
@@ -882,8 +894,9 @@ fn connect_lines_say_the_brand_s_name() {
     assert_eq!(out.code, Some(0));
     assert!(log.is_empty());
     assert!(
-        out.stderr
-            .starts_with(&format!("{cli} connect: account server {dead} (from K2_CONNECT_DB_URL)\n")),
+        out.stderr.starts_with(&format!(
+            "{cli} connect: account server {dead} (from K2_CONNECT_DB_URL)\n"
+        )),
         "{}",
         out.stderr
     );
@@ -895,7 +908,15 @@ fn connect_lines_say_the_brand_s_name() {
         out.stdout
     );
     assert!(!rig.k2home.join("connect-account.json").exists());
-    let c = case("brand: logout's usage", &["logout", "x"], &[], vec![], no_account, 2, 0);
+    let c = case(
+        "brand: logout's usage",
+        &["logout", "x"],
+        &[],
+        vec![],
+        no_account,
+        2,
+        0,
+    );
     let (out, _) = rig.binary(&c, false);
     assert_eq!(out.stderr, format!("Usage: {cli} connect logout\n"));
 }

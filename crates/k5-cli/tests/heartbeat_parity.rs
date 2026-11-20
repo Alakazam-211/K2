@@ -1731,7 +1731,12 @@ fn heartbeat_wake_answers_as_the_shell_does() {
             "an unfiled inbox item, the manager running: notified",
             &["wake"],
             &[],
-            vec![ok(NO_WORK), ok(r#"[{"id":"i1"}]"#), ok(MANAGER_UP), ok(r#"{"ok":true}"#)],
+            vec![
+                ok(NO_WORK),
+                ok(r#"[{"id":"i1"}]"#),
+                ok(MANAGER_UP),
+                ok(r#"{"ok":true}"#),
+            ],
             owner_and_port,
             0,
             4,
@@ -1743,7 +1748,9 @@ fn heartbeat_wake_answers_as_the_shell_does() {
             vec![
                 ok(WORK),
                 ok("[]"),
-                ok(r#"[{"cwd":"/x","terminalId":"agent-chat:p1:coordinator"},{"cwd":"/y","terminalId":"agent-chat:p1:manager:hb:d"}]"#),
+                ok(
+                    r#"[{"cwd":"/x","terminalId":"agent-chat:p1:coordinator"},{"cwd":"/y","terminalId":"agent-chat:p1:manager:hb:d"}]"#,
+                ),
                 ok("{}"),
             ],
             owner_and_port,
@@ -1842,7 +1849,12 @@ fn heartbeat_wake_answers_as_the_shell_does() {
             "the write answered with an error",
             &["wake"],
             &[],
-            vec![ok(WORK), ok("[]"), ok(MANAGER_UP), ok(r#"{"error":{"code":"gone","hint":"terminal gone"}}"#)],
+            vec![
+                ok(WORK),
+                ok("[]"),
+                ok(MANAGER_UP),
+                ok(r#"{"error":{"code":"gone","hint":"terminal gone"}}"#),
+            ],
             owner_and_port,
             1,
             4,

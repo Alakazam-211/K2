@@ -29,7 +29,12 @@ pub fn argv_of(v: &Value) -> Result<Vec<String>, String> {
 /// [-l] -c S [args…]`.
 pub fn strict(argv: &[String]) -> Result<Vec<String>, String> {
     let refuse = || {
-        "--strict runs a shell script under bash -euo pipefail: give the command as sh -c '<script>' or bash -c '<script>' (k2 compute run --strict -- bash -c 'cargo test 2>&1 | tee log')".to_string()
+        concat!(
+            "--strict runs a shell script under bash -euo pipefail: give the command as sh -c '<script>' or bash -c '<script>' (",
+            k2_core::cli_name!(),
+            " compute run --strict -- bash -c 'cargo test 2>&1 | tee log')"
+        )
+        .to_string()
     };
     let shell = argv.first().map(|a| a.rsplit('/').next().unwrap_or(a));
     if !matches!(shell, Some("sh" | "bash" | "dash")) {

@@ -12,6 +12,7 @@
 
 use k2_core::compute::{self as compute, store};
 use k2_core::log_debug;
+use k2_core::{cli_name, product_name};
 
 use crate::compute_place::{self as place, Tier, Want};
 
@@ -46,8 +47,17 @@ pub fn words(job_id: &str, node: &str, waited_secs: i64, could_start: Option<&st
         None => String::new(),
     };
     format!(
-        "pinned to {node}: waited {}{other}; k2 compute move {id} --auto lets K2 move it (or leave the node off next time)",
-        compute::message::duration(waited_secs)
+        concat!(
+            "pinned to {node}: waited {}{other}; ",
+            cli_name!(),
+            " compute move {id} --auto lets ",
+            product_name!(),
+            " move it (or leave the node off next time)"
+        ),
+        compute::message::duration(waited_secs),
+        node = node,
+        other = other,
+        id = id
     )
 }
 
@@ -59,8 +69,21 @@ pub fn note_text(job_id: &str, node: &str, waited_secs: i64, could_start: Option
         None => "no other node could start it now either".to_string(),
     };
     format!(
-        "[compute] job {id} is pinned to {node} and has waited {} there; {other}. k2 compute move {id} --auto lets K2 place it on the first node that can start it; next time, leave the node off and K2 picks one. k2 compute get {id}",
-        compute::message::duration(waited_secs)
+        concat!(
+            "[compute] job {id} is pinned to {node} and has waited {} there; {other}. ",
+            cli_name!(),
+            " compute move {id} --auto lets ",
+            product_name!(),
+            " place it on the first node that can start it; next time, leave the node off and ",
+            product_name!(),
+            " picks one. ",
+            cli_name!(),
+            " compute get {id}"
+        ),
+        compute::message::duration(waited_secs),
+        node = node,
+        other = other,
+        id = id
     )
 }
 

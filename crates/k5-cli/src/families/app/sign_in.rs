@@ -261,7 +261,7 @@ fn login(words: &[&str]) -> Option<Result<Ask, Stop>> {
         return Some(Err(Stop::usage(usage::SETTINGS)));
     }
     if !(max.is_empty() || (max.len() <= 2 && max.bytes().all(|b| b.is_ascii_digit()))) {
-        return Some(Err(Stop::usage(format!("{}{max})", usage::MAX_DEVICES))));
+        return Some(Err(Stop::usage(format!("{}{max}')", usage::MAX_DEVICES))));
     }
     let mut b: Vec<(Text, Value)> = vec![(Text::from("app"), Value::Str(Text::from(app.as_str())))];
     for (i, (_, key)) in KEYS.iter().enumerate() {
@@ -545,7 +545,7 @@ mod tests {
         );
         assert_eq!(
             login(&["acme", "--max-devices", "100"]),
-            Some(Err(Stop::usage(format!("{}100)", usage::MAX_DEVICES))))
+            Some(Err(Stop::usage(format!("{}100')", usage::MAX_DEVICES))))
         );
         assert_eq!(
             login(&["acme", "--invite-body-file"]),

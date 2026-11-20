@@ -32,10 +32,12 @@ const VERB: &str = "app";
 const ROOMS: &str = r#"{"username":"ann","app":"acme","roomHandles":["a","b"],"role":"staff","changed":true,"before":["x"],"beforeHandles":["x"]}"#;
 const CEILING: &str = r#"{"app":"acme","appInfo":{"handle":"acme-h","name":"acme"},"ownRoom":{"handle":"acme-room"},"granted":true,"grantRooms":[{"handle":"r1"},{"handle":"r2"}]}"#;
 const LIST: &str = r#"{"app":"acme","guests":[{"username":"ann","roomHandles":["a"],"role":"staff"},{"username":"bo é","enabled":false,"agent":true}],"nextCursor":"bo"}"#;
-const GRANTED: &str = r#"{"app":{"handle":"acme-h","serviceId":"s1"},"grant":{"handsOut":["acme-room","r1"]}}"#;
+const GRANTED: &str =
+    r#"{"app":{"handle":"acme-h","serviceId":"s1"},"grant":{"handsOut":["acme-room","r1"]}}"#;
 const HELD: &str = r#"{"status":"held","request":{"id":"r9","summary":"guests-rooms on acme"},"hint":"The owner decides.","reasons":["another workspace's room"],"card":{"where":"your Thread"}}"#;
 const CHAT_KEY: &str = r#"{"app":{"handle":"acme-h"},"key":{"caps":["post","read"],"maxLevel":"member","maxMembers":500,"uploads":true}}"#;
-const CONFIRM: &str = r#"{"error":{"code":"vault_confirm_required","hint":"confirm","serviceId":"svc-1"}}"#;
+const CONFIRM: &str =
+    r#"{"error":{"code":"vault_confirm_required","hint":"confirm","serviceId":"svc-1"}}"#;
 const COPIED: &str = r#"{"dryRun":true,"added":["ann","bo"],"appInfo":{"handle":"acme-h"},"keptExistingCount":1,"note":"done","keptExisting":[{"username":"cy","enabled":true}],"skippedOtherAppRole":["dee"],"skippedOtherWorkspaceAgent":["eve"]}"#;
 const HOOKS: &str = r#"{"targets":[{"kind":"chat","enabled":true,"healthy":false,"lastError":"down","socket":"/run/sew.sock","lastReconcile":{"provisioned":2,"updated":0},"lastReconcileAt":1700000000,"lastChange":{"deprovisioned":1},"lastChangeAt":1700000100.5,"reconcileHistory":[{"at":1699999000,"provisioned":1},{"at":1700000000}]}],"outbox":{"pending":3,"blocked":1,"held":0,"oldestPendingAgeSecs":42},"blocked":[{"id":"o1","op":"add","subjectKey":"p:ann","lastError":"no"}],"held":[{"id":"o2","op":"rm","subjectKey":"p:bo"}]}"#;
 const HOOK_LOG: &str = r#"{"rows":[{"id":"o1","state":"done","op":"provision","subjectKey":"p:ann","actor":"owner","cause":"grant","attempts":1},{"id":"o2","state":"blocked","op":"rm","subjectKey":"p:bo","actor":"agent","cause":"revoke","attempts":3,"lastError":"sew said no"}]}"#;
@@ -65,7 +67,10 @@ fn words(name: &'static str, args: &'static [&'static str], code: i32) -> Case {
 }
 
 fn refused() -> Reply {
-    Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"the owner's"}}"#.into())
+    Reply::Answer(
+        403,
+        r#"{"error":{"code":"owner_only","hint":"the owner's"}}"#.into(),
+    )
 }
 
 fn check(rig: &Rig, v: Vec<Case>) {
@@ -81,7 +86,12 @@ fn guest_reads_and_sets() {
         &rig,
         vec![
             // covers: app guest rooms
-            one("guest rooms", &["guest", "rooms", "acme", "ann"], ok(ROOMS), 0),
+            one(
+                "guest rooms",
+                &["guest", "rooms", "acme", "ann"],
+                ok(ROOMS),
+                0,
+            ),
             // covers: app guest rooms --json
             one(
                 "guest rooms --json",
@@ -93,7 +103,9 @@ fn guest_reads_and_sets() {
             one(
                 "guest rooms set",
                 &["guest", "rooms", "acme", "ann", "set", " a, ,b "],
-                ok(r#"{"username":"ann","app":"acme","roomHandles":["a","b"],"changed":false,"before":[]}"#),
+                ok(
+                    r#"{"username":"ann","app":"acme","roomHandles":["a","b"],"changed":false,"before":[]}"#,
+                ),
                 0,
             ),
             // covers: app guest rooms
@@ -143,7 +155,12 @@ fn guest_reads_and_sets() {
                 3,
             ),
             // covers: app guest ceiling
-            one("guest ceiling", &["guest", "ceiling", "acme"], ok(CEILING), 0),
+            one(
+                "guest ceiling",
+                &["guest", "ceiling", "acme"],
+                ok(CEILING),
+                0,
+            ),
             // covers: app guest ceiling
             one(
                 "guest ceiling: no grant",
@@ -236,7 +253,17 @@ fn grant_kinds() {
             // covers: app grant guests-rooms
             one(
                 "guests-rooms",
-                &["grant", "acme", "--kind", "guests-rooms", "--room", "r1", "--room=r2", "--agent", " "],
+                &[
+                    "grant",
+                    "acme",
+                    "--kind",
+                    "guests-rooms",
+                    "--room",
+                    "r1",
+                    "--room=r2",
+                    "--agent",
+                    " ",
+                ],
                 ok(GRANTED),
                 0,
             ),
@@ -300,7 +327,9 @@ fn grant_kinds() {
             one(
                 "guests-chat",
                 &["grant", "acme", "--kind", "guests-chat", "--max", "050"],
-                ok(r#"{"app":{"serviceId":"s1","name":"acme"},"grant":{"maxMembers":50},"warning":"sew is old"}"#),
+                ok(
+                    r#"{"app":{"serviceId":"s1","name":"acme"},"grant":{"maxMembers":50},"warning":"sew is old"}"#,
+                ),
                 0,
             ),
             // covers: app grant guests-rooms
@@ -312,14 +341,35 @@ fn grant_kinds() {
             // covers: app grant chat-key
             one(
                 "chat-key",
-                &["grant", "acme", "--kind", "chat-key", "--caps", "post, read", "--max-level", "member", "--uploads", "yes", "--max", "500"],
+                &[
+                    "grant",
+                    "acme",
+                    "--kind",
+                    "chat-key",
+                    "--caps",
+                    "post, read",
+                    "--max-level",
+                    "member",
+                    "--uploads",
+                    "yes",
+                    "--max",
+                    "500",
+                ],
                 ok(CHAT_KEY),
                 0,
             ),
             // covers: app grant chat-key
             one(
                 "chat-key --json, uploads off",
-                &["grant", "acme", "--kind", "chat-key", "--uploads", "off", "--json"],
+                &[
+                    "grant",
+                    "acme",
+                    "--kind",
+                    "chat-key",
+                    "--uploads",
+                    "off",
+                    "--json",
+                ],
                 ok(CHAT_KEY),
                 0,
             ),
@@ -485,12 +535,7 @@ fn grant_hooks() {
                 1,
             )),
             // covers: app grant hooks
-            one(
-                "hooks: a refusal",
-                &["grant", "hooks"],
-                refused(),
-                3,
-            ),
+            one("hooks: a refusal", &["grant", "hooks"], refused(), 3),
             // covers: app grant hooks
             one(
                 "hooks log",
@@ -547,7 +592,16 @@ fn grant_hooks() {
             // covers: app grant hooks
             one(
                 "hooks target",
-                &["grant", "hooks", "target", "chat", "--off", "--socket", "/run/s.sock", "--token-file=/t"],
+                &[
+                    "grant",
+                    "hooks",
+                    "target",
+                    "chat",
+                    "--off",
+                    "--socket",
+                    "/run/s.sock",
+                    "--token-file=/t",
+                ],
                 ok(r#"{"kind":"chat","enabled":false,"socket":"/run/s.sock"}"#),
                 0,
             ),
@@ -574,18 +628,39 @@ fn grant_words_hydra_and_front_door_through_app() {
             one(
                 "grant alone is the list",
                 &["grant"],
-                ok(r#"{"grants":[{"id":"g1","subjectKind":"principal","subjectId":"bob","kind":"app","targetId":"site","roleId":"staff"}]}"#),
+                ok(
+                    r#"{"grants":[{"id":"g1","subjectKind":"principal","subjectId":"bob","kind":"app","targetId":"site","roleId":"staff"}]}"#,
+                ),
                 0,
             ),
             // covers: app grant add
             one(
                 "grant add",
-                &["grant", "add", "--subject-kind", "principal", "--subject", "bob", "--kind", "app", "--target", "site", "--role", "staff"],
-                ok(r#"{"id":"g3","subjectKind":"principal","subjectId":"bob","kind":"app","targetId":"site"}"#),
+                &[
+                    "grant",
+                    "add",
+                    "--subject-kind",
+                    "principal",
+                    "--subject",
+                    "bob",
+                    "--kind",
+                    "app",
+                    "--target",
+                    "site",
+                    "--role",
+                    "staff",
+                ],
+                ok(
+                    r#"{"id":"g3","subjectKind":"principal","subjectId":"bob","kind":"app","targetId":"site"}"#,
+                ),
                 0,
             ),
             // covers: app grant add
-            words("grant add: missing words", &["grant", "add", "--kind", "app"], 1),
+            words(
+                "grant add: missing words",
+                &["grant", "add", "--kind", "app"],
+                1,
+            ),
             // covers: app grant rm
             one(
                 "grant rm",

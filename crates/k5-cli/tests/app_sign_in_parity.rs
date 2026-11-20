@@ -52,7 +52,10 @@ fn words(name: &'static str, args: &'static [&'static str], code: i32) -> Case {
 }
 
 fn refused() -> Reply {
-    Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"the owner's"}}"#.into())
+    Reply::Answer(
+        403,
+        r#"{"error":{"code":"owner_only","hint":"the owner's"}}"#.into(),
+    )
 }
 
 /// The owner and port, a folder `site` and two body files.
@@ -115,11 +118,26 @@ fn auth_answers_as_the_shell_does() {
             // covers: app auth
             words("auth door: no on|off", &["auth", "door", "acme"], 2),
             // covers: app auth
-            one("auth origins: the read", &["auth", "origins", "acme"], ok(AUTH), 0),
+            one(
+                "auth origins: the read",
+                &["auth", "origins", "acme"],
+                ok(AUTH),
+                0,
+            ),
             // covers: app auth
             one(
                 "auth origins: set",
-                &["auth", "origins", "acme", "--origin", " https://a.example ", "--origin", "", "--origin", "https://b é"],
+                &[
+                    "auth",
+                    "origins",
+                    "acme",
+                    "--origin",
+                    " https://a.example ",
+                    "--origin",
+                    "",
+                    "--origin",
+                    "https://b é",
+                ],
                 ok(AUTH),
                 0,
             ),
@@ -139,11 +157,23 @@ fn auth_answers_as_the_shell_does() {
             // covers: app auth
             words("auth origins: no App", &["auth", "origins"], 2),
             // covers: app auth
-            words("auth: --origin with no origins", &["auth", "acme", "--origin", "x"], 2),
+            words(
+                "auth: --origin with no origins",
+                &["auth", "acme", "--origin", "x"],
+                2,
+            ),
             // covers: app auth
-            words("auth: --clear with door", &["auth", "door", "on", "--clear"], 2),
+            words(
+                "auth: --clear with door",
+                &["auth", "door", "on", "--clear"],
+                2,
+            ),
             // covers: app auth
-            words("auth: --origin last", &["auth", "origins", "acme", "--origin"], 1),
+            words(
+                "auth: --origin last",
+                &["auth", "origins", "acme", "--origin"],
+                1,
+            ),
             // covers: app auth
             words("auth: a flag first", &["auth", "--zap"], 2),
             // covers: app auth
@@ -170,17 +200,41 @@ fn login_settings_answer_as_the_shell_does() {
         &rig,
         vec![
             // covers: app login settings
-            with_files("login settings", &["login", "settings", "acme"], ok(LOGIN), 0),
+            with_files(
+                "login settings",
+                &["login", "settings", "acme"],
+                ok(LOGIN),
+                0,
+            ),
             // covers: app login settings
             with_files(
                 "login settings: every flag",
                 &[
-                    "login", "settings", "acme", "--invite-ttl", "72h", "--reset-ttl", "24h",
-                    "--set-password-url", "https://acme.example/set", "--invite-subject", "Hi {name}",
-                    "--invite-body-file", "invite.txt", "--reset-subject", "R", "--reset-body-file",
-                    "reset.txt", "--max-devices", "07", "--default", "resetSubject inviteTtl",
+                    "login",
+                    "settings",
+                    "acme",
+                    "--invite-ttl",
+                    "72h",
+                    "--reset-ttl",
+                    "24h",
+                    "--set-password-url",
+                    "https://acme.example/set",
+                    "--invite-subject",
+                    "Hi {name}",
+                    "--invite-body-file",
+                    "invite.txt",
+                    "--reset-subject",
+                    "R",
+                    "--reset-body-file",
+                    "reset.txt",
+                    "--max-devices",
+                    "07",
+                    "--default",
+                    "resetSubject inviteTtl",
                 ],
-                ok(r#"{"app":"acme","settings":{"inviteTtlSecs":"7200","resetTtlSecs":90},"maxDevices":7}"#),
+                ok(
+                    r#"{"app":"acme","settings":{"inviteTtlSecs":"7200","resetTtlSecs":90},"maxDevices":7}"#,
+                ),
                 0,
             ),
             // covers: app login settings --json
@@ -203,7 +257,13 @@ fn login_settings_answer_as_the_shell_does() {
             // covers: app login settings
             words_with_files(
                 "login settings: no such body file",
-                &["login", "settings", "acme", "--invite-body-file", "nope.txt"],
+                &[
+                    "login",
+                    "settings",
+                    "acme",
+                    "--invite-body-file",
+                    "nope.txt",
+                ],
                 2,
             ),
             // covers: app login settings
@@ -287,7 +347,16 @@ fn init_and_store_doctor_answer_as_the_shell_does() {
             // covers: app init
             with_files(
                 "init tauri, a dry run",
-                &["init", "--template", "tauri", "site", "--app", "acme", "--voice", "--dry-run"],
+                &[
+                    "init",
+                    "--template",
+                    "tauri",
+                    "site",
+                    "--app",
+                    "acme",
+                    "--voice",
+                    "--dry-run",
+                ],
                 ok(INIT),
                 0,
             ),
@@ -295,7 +364,9 @@ fn init_and_store_doctor_answer_as_the_shell_does() {
             with_files(
                 "init static here",
                 &["init", "--template=static", "--name=Acme"],
-                ok(r#"{"files":[{"action":"write","path":"index.html","note":"n","content":"x"}]}"#),
+                ok(
+                    r#"{"files":[{"action":"write","path":"index.html","note":"n","content":"x"}]}"#,
+                ),
                 0,
             ),
             // covers: app init --json
@@ -356,7 +427,9 @@ fn init_and_store_doctor_answer_as_the_shell_does() {
             with_files(
                 "doctor --store: ready, here",
                 &["doctor", "--no-voice", "--store"],
-                ok(r#"{"folder":"/x","voiceWhy":"no mic","findings":[{"level":"warn","platform":"ios","path":"p","problem":"q","fix":"r"}],"passed":["a","b"],"ok":true}"#),
+                ok(
+                    r#"{"folder":"/x","voiceWhy":"no mic","findings":[{"level":"warn","platform":"ios","path":"p","problem":"q","fix":"r"}],"passed":["a","b"],"ok":true}"#,
+                ),
                 0,
             ),
             // covers: app doctor store --json

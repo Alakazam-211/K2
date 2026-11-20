@@ -385,6 +385,7 @@ case "${1:-help}" in
         # arm below can consume it as a name or schedule spec.
         # (`remind` prints its own help: its text may be any words.)
         for hb_arg in "${@:2}"; do
+            [ "$hb_arg" = "--" ] && break
             case "$hb_arg" in
                 --help|-h)
                     case "${2:-}" in

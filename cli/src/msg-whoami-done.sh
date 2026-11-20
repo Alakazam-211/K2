@@ -125,6 +125,7 @@ cmd_msg() {
     # below — closes the chronic UX bug where `k2 msg --help`
     # errored with "message text required" instead of showing help.
     for arg in "$@"; do
+        [ "$arg" = "--" ] && break
         case "$arg" in
             --help|-h)
                 cmd_help_msg

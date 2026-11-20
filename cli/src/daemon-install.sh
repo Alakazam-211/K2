@@ -172,6 +172,7 @@ cmd_daemon_install() {
     # refused after flag parse.
     local _saw_help=0
     for _a in "$@"; do
+        [ "$_a" = "--" ] && break
         case "$_a" in -h|--help) _saw_help=1 ;; esac
     done
     if [ "$_saw_help" != "1" ]; then

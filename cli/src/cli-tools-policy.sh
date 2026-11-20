@@ -1107,12 +1107,13 @@ _cli_codex_tab_gate() {
 _skip_conn_gate=0
 [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ] && _skip_conn_gate=1
 # Which `k2 update` form the words ask for (cmd_update_v2 dispatches on the
-# same answer): help when -h/--help is anywhere; else list for a --list
-# anywhere; else the last of --app and --cli (app when neither). Other
-# words are ignored, as they always were.
+# same answer): help when -h/--help is anywhere before a bare `--`; else
+# list for a --list anywhere; else the last of --app and --cli (app when
+# neither). Other words are ignored, as they always were.
 _k2_update_form() {
     local a form=app
     for a in "$@"; do
+        [ "$a" = "--" ] && break
         case "$a" in -h|--help) echo help; return 0 ;; esac
     done
     for a in "$@"; do
@@ -1165,9 +1166,11 @@ fi
 # daemon needed.
 [ "${1:-}" = "remote" ] && _skip_conn_gate=1
 # Air-gap: refuse hosted-network verbs before any curl/GitHub, even
-# without a running daemon (fresh image). --help still prints.
+# without a running daemon (fresh image). --help still prints. Every help
+# scan below stops at the first bare `--`, as _wants_help does.
 _k2_cli_wants_help=0
 for _a in "$@"; do
+    [ "$_a" = "--" ] && break
     case "$_a" in -h|--help) _k2_cli_wants_help=1 ;; esac
 done
 if [ "$_k2_cli_wants_help" != "1" ]; then
@@ -1204,13 +1207,13 @@ unset _k2_cli_wants_help
 # file; `k2 capabilities --help` only prints help. No daemon for either.
 [ "${1:-}" = "explain" ] && _skip_conn_gate=1
 if [ "${1:-}" = "capabilities" ]; then
-    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
 # `k2 approve` with no args or --help only prints help; verify, show and
 # key-id run k2-approve locally (no daemon).
 if [ "${1:-}" = "approve" ]; then
     case "${2:-}" in ""|help|-h|--help|verify|show|key-id) _skip_conn_gate=1 ;; esac
-    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
 # `k2 send-feedback` with no args, help or --help only prints help.
 if [ "${1:-}" = "send-feedback" ]; then
@@ -1223,22 +1226,22 @@ fi
 # session every Postal request carries the passport (_postal_session_token).
 if [ "${1:-}" = "postal" ]; then
     case "${2:-}" in ""|help|-h|--help|send|route|adopt) _skip_conn_gate=1 ;; esac
-    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
 # `k2 organization`, `k2 organization --help` and any verb's --help only
 # print help (the Org Chart): no daemon.
 if [ "${1:-}" = "organization" ]; then
     case "${2:-}" in ""|help|--help|-h) _skip_conn_gate=1 ;; esac
-    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
 # `k2 agent hire --help`, `k2 agent template` and any `k2 agent template
 # … --help` only print help (agent templates T9): no daemon.
 if [ "${1:-}" = "agent" ]; then
     case "${2:-}" in
-        hire) for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        hire) for _a in "${@:3}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
         template|templates)
             case "${3:-}" in ""|help|--help|-h) _skip_conn_gate=1 ;; esac
-            for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+            for _a in "${@:3}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 zen guide` is static pages, and `k2 zen` / `k2 zen help` / any
@@ -1252,11 +1255,13 @@ if [ "${1:-}" = "zen" ]; then
         widget|widgets)
             case "${3:-}" in grant|allow|revoke|""|help) _skip_conn_gate=1 ;; esac
             for _a in "${@:2}"; do
+                [ "$_a" = "--" ] && break
                 case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
             done
             ;;
         *)
             for _a in "${@:2}"; do
+                [ "$_a" = "--" ] && break
                 case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
             done
             ;;
@@ -1277,6 +1282,7 @@ fi
 # `k2 setup --help` (and `k2 setup help`) only print help.
 if [ "${1:-}" = "setup" ]; then
     for _a in "${@:2}"; do
+        [ "$_a" = "--" ] && break
         case "$_a" in -h|--help|help) _skip_conn_gate=1 ;; esac
     done
 fi
@@ -1287,6 +1293,7 @@ if [ "${1:-}" = "sidecar" ]; then
         ""|help|--help|-h) _skip_conn_gate=1 ;;
         *)
             for _a in "${@:2}"; do
+                [ "$_a" = "--" ] && break
                 case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
             done
             ;;
@@ -1297,56 +1304,56 @@ fi
 if [ "${1:-}" = "compute" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 sim`, `k2 sim help` and any `k2 sim … --help` only print help.
 if [ "${1:-}" = "sim" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 doc` / `k2 doc --help` / `k2 doc help` only print help.
 if [ "${1:-}" = "doc" ] || [ "${1:-}" = "docs" ]; then
     case "${2:-}" in ""|help) _skip_conn_gate=1 ;; esac
-    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
 # `k2 changes --help` (any sub) and `k2 changes help` only print help.
 if [ "${1:-}" = "changes" ]; then
     [ "${2:-}" = "help" ] && _skip_conn_gate=1
-    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
 # `k2 chat` / `k2 chat --help` only print help.
 if [ "${1:-}" = "chat" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 voice` / `k2 voice --help` only print help.
 if [ "${1:-}" = "voice" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 hostchat` / `k2 hostchat --help` only print help.
 if [ "${1:-}" = "hostchat" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 app recording … --help` (0.46.11) only prints help.
 if [ "${1:-}" = "app" ] && { [ "${2:-}" = "recording" ] || [ "${2:-}" = "recordings" ]; }; then
-    for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+    for _a in "${@:3}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
 # `k2 sources` / `k2 sources --help` only print help.
 if [ "${1:-}" = "sources" ] || [ "${1:-}" = "source" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 llm` / `k2 llm tokens` (alias `accounts`) / any `--help` only print help.
@@ -1356,6 +1363,7 @@ if [ "${1:-}" = "llm" ]; then
         tokens|token|accounts|account)
             case "${3:-}" in ""|help|--help|-h) _skip_conn_gate=1 ;; esac
             for _a in "${@:3}"; do
+                [ "$_a" = "--" ] && break
                 case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
             done
             ;;
@@ -1365,7 +1373,7 @@ fi
 if [ "${1:-}" = "vault" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 publish secret [<verb>] --help` (and bare `k2 publish secret`) only
@@ -1373,14 +1381,14 @@ fi
 if [ "${1:-}" = "publish" ] && { [ "${2:-}" = "secret" ] || [ "${2:-}" = "secrets" ]; }; then
     case "${3:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:3}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 migrate` / `k2 migrate <verb> --help` only print help (no daemon needed).
 if [ "${1:-}" = "migrate" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 job` / `k2 job <verb> --help` only print help (no daemon needed).
@@ -1394,7 +1402,7 @@ fi
 if [ "${1:-}" = "usage" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
-        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 hooks emit` (GL45) checks its own session passport and transport
@@ -1429,7 +1437,7 @@ _k2_refuse_owner_fallback() {
 # the owner token itself) is refused, saying why.
 _k2_offline_verb=""
 case "${1:-}" in ""|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac
-for _a in "$@"; do case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done
+for _a in "$@"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done
 if [ -n "$_k2_no_owner_fallback" ] && [ -z "$TOKEN" ] && [ -z "$_k2_offline_verb" ]; then
     _k2_refuse_owner_fallback
 fi
@@ -1878,9 +1886,12 @@ cli_abs_path() {
 # help requests on every workspace/connections/agent subcommand BEFORE
 # the args reach a handler — `k2 workspace create --help` used to
 # literally mkdir + register a workspace named `--help`.
+# The scan stops at the first bare `--`: the words after it belong to the
+# command being run (`k2 compute run -- ls -h`), never to k2.
 _wants_help() {
     local a
     for a in "$@"; do
+        [ "$a" = "--" ] && break
         case "$a" in
             --help|-h) return 0 ;;
         esac

@@ -378,6 +378,7 @@ def ticket_file_lines(atts, root, indent="  "):
 
 cmd_thread() {
     for arg in "$@"; do
+        [ "$arg" = "--" ] && break
         case "$arg" in
             --help|-h)
                 if [[ "${1:-}" == "secret" ]]; then cmd_help_thread_secret; else cmd_help_thread; fi

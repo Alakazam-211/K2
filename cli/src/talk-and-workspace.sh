@@ -321,6 +321,7 @@ talk_answers() {
 
 cmd_talk() {
     for arg in "$@"; do
+        [ "$arg" = "--" ] && break
         case "$arg" in
             --help|-h) cmd_help_talk; return 0 ;;
         esac

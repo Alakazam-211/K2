@@ -134,11 +134,12 @@ cmd_push() {
         ""|help|--help|-h) _push_usage; return 0 ;;
     esac
     shift
-    local as_json=0 args=() a raw
+    local as_json=0 args=() a raw dashes=0
     for a in "$@"; do
         case "$a" in
             --json) as_json=1 ;;
-            -h|--help) _push_usage; return 0 ;;
+            -h|--help) [ "$dashes" = 1 ] || { _push_usage; return 0; }; args+=("$a") ;;
+            --) dashes=1; args+=("$a") ;;
             *) args+=("$a") ;;
         esac
     done

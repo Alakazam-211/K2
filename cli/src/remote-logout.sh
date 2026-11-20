@@ -189,6 +189,7 @@ cmd_remote_logout() {
     local usage="usage: k2 remote logout --host HOST [--token-stdin]"
     local host="" from_stdin=0 a
     for a in "$@"; do
+        [ "$a" = "--" ] && break
         case "$a" in -h|--help) _remote_usage; return 0 ;; esac
     done
     while [ $# -gt 0 ]; do

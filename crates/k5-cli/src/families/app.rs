@@ -29,6 +29,10 @@
 //! - [`door`] also answers `app resume`; [`traffic`]: `app audit`.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
+//! - The verbs `cmd_app` hands to `cmd_skin` (`user`, `role`, `grant`'s
+//!   list words, `front-door`, `hydra`: the [`super::skin`] family) and
+//!   to `cmd_skin_token` (`token`: the [`super::skin_token`] family).
+//!   [`run`] hands them over first; those families run their own prelude.
 //!
 //! What runs, in the shell's order:
 //!
@@ -172,6 +176,22 @@ pub const TAKES: &[&str] = &[
     "audit",
 ];
 
+/// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
+/// verb rows below); [`run`] passes them to those families.
+pub const SKIN_VERBS: &[&str] = &[
+    "user",
+    "users",
+    "role",
+    "roles",
+    "grant",
+    "grants",
+    "front-door",
+    "frontdoor",
+    "hydra",
+    "token",
+    "tokens",
+];
+
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["app"];
 /// The shell's but for [`VERBS`]: `app` alone and every other verb are
@@ -307,6 +327,30 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["audit"],
         owner: crate::route::Owner::Native,
     },
+    crate::route::Verb {
+        words: &["user", "users"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["role", "roles"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["grant", "grants"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["front-door", "frontdoor"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["hydra"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["token", "tokens"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// The words after `app`, read by the group the verb names. `None`: the
@@ -350,6 +394,11 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
 
 /// `k5 app …`. `None`: the shell's (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
+    match args.get(1).and_then(|a| a.to_str()) {
+        Some("token" | "tokens") => return super::skin_token::run_app(args),
+        Some(v) if SKIN_VERBS.contains(&v) => return super::skin::run_app(args),
+        _ => {}
+    }
     let hook_sock = super::hook_sock();
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
         return None;

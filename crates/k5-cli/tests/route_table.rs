@@ -582,6 +582,10 @@ fn app_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
     let body = &text[text.find("\ncmd_app() {\n").expect("cmd_app")..];
     let body = &body[..body.find("\n}\n").expect("its end")];
     for verb in noun.verbs {
+        if k5_cli::families::app::SKIN_VERBS.contains(&verb.words[0]) {
+            app_skin_verb_reaches_cmd_skin(body, verb);
+            continue;
+        }
         for word in verb.words {
             assert!(
                 k5_cli::families::app::TAKES.contains(word),
@@ -656,4 +660,34 @@ fn a_native_or_spec_row_has_a_schema_entry_or_a_named_reason() {
         bad.is_empty(),
         "Native or Spec rows with no `k2 --schema` entry and no reason in the exemptions: {bad:?}"
     );
+}
+
+/// `app`'s skin verb rows: `cmd_app` has no arm of its own for `user`,
+/// `role`, `front-door` or `hydra` (its `*)` arm is `cmd_skin`), its
+/// `grant|grants)` arm hands the list words to `cmd_skin`, and its
+/// `token|tokens)` arm is `cmd_skin_token`.
+fn app_skin_verb_reaches_cmd_skin(body: &str, verb: &k5_cli::route::Verb) {
+    assert!(body.contains("\n        *)\n            cmd_skin \"$@\"\n"), "cmd_app's *) arm");
+    for word in verb.words {
+        match *word {
+            "user" | "users" | "role" | "roles" | "front-door" | "frontdoor" | "hydra" => {
+                assert!(
+                    !body.contains(&format!("\n        {word})"))
+                        && !body.contains(&format!("|{word})"))
+                        && !body.contains(&format!("\n        {word}|")),
+                    "cmd_app has its own arm for {word}"
+                );
+            }
+            "grant" | "grants" => assert!(
+                body.contains("        grant|grants)\n")
+                    && body.contains("|copy-host|copyhost|-h|--help) cmd_skin \"$@\" ;;"),
+                "cmd_app's grant arm"
+            ),
+            "token" | "tokens" => assert!(
+                body.contains("        token|tokens)\n") && body.contains("cmd_skin_token \"$@\""),
+                "cmd_app's token arm"
+            ),
+            other => panic!("app verb row {other}: not a skin verb"),
+        }
+    }
 }

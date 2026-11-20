@@ -2133,6 +2133,7 @@ async fn handle_one_request(
     }
 
     match path.as_str() {
+        p if crate::passport_routes::tcp_passport(p, &query, bearer_token.as_deref()).is_some() => crate::passport_routes::serve_tcp(&mut *stream, &mut buf, is_post, p, &query, bearer_token.as_deref()).await,
         // phone-web-off: the pairing link's landing page and the iOS
         // universal-link file. Static, no credential, not under /cli/ (so
         // never behind the web-access wall). See `crate::pair_page`.
@@ -16199,7 +16200,6 @@ async fn handle_one_request(
                 });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
-        p if p == crate::workspace_profile_route::PATH => crate::workspace_profile_route::serve_tcp(&mut *stream, &mut buf, is_post, &path, &query, bearer_token.as_deref(), state.token.as_str()).await,
         p if p.starts_with("/cli/") => {
             // 0.44.4: formerly GET-shaped verbs arrive here as POST; read
             // the whole body (keep-alive framing) and fold a form/JSON body

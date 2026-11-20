@@ -1,0 +1,318 @@
+//! The routes an agent's session passport may use outside the cell socket,
+//! scoped to its own workspace.
+//!
+//! An agent in a session carries its passport (`<sid>.<secret>`). These are
+//! the `/cli/*` routes agents are meant to use (their help, skills and
+//! templates tell them to) that only the owner token or a person's login
+//! reached over TCP before. Every other route keeps refusing a passport.
+//!
+//! How a passport is admitted over TCP, as `k2 workspace profile` was
+//! (`workspace_profile_route`) and as the cell socket stamps one:
+//! - the dispatcher's first arm takes a live passport on one of [`ROUTES`]
+//!   ([`tcp_passport`]: `session_token::validate_hook`, a session on this
+//!   computer only), so no route's owner-token arm sees it; every other
+//!   credential misses that arm and meets the route's arm as before;
+//! - [`serve_tcp`] strips any identity keys the request sent, keeps its own
+//!   `project=` claim (`caller_workspace::keep_client_project`) and stamps
+//!   the passport (`caller_workspace::stamp_principal`): `project`,
+//!   `project_path`, `project_id` and `from` are the passport's;
+//! - before the handler runs, [`refusal`] applies the route's [`Scope`] to
+//!   the stamped params (in `cli::dispatch`); after it, [`narrow`] trims a
+//!   list to what the passport may see.
+//!
+//! The cell socket is unchanged: these routes are not agent verbs
+//! (`session_token::is_agent_verb`), except the profile, which already was.
+//!
+//! Naming another workspace never retargets a request: it is refused
+//! (`own_workspace_only`), or, where the route names a workspace to look up,
+//! it goes through the connection gate (`comms::gate_cross_workspace`).
+
+use std::collections::HashMap;
+
+use tokio::net::TcpStream;
+
+use crate::caller_workspace::{CLIENT_PROJECT_KEY, PRINCIPAL_BOUND_KEY};
+use crate::cli_response::CliResponse;
+use crate::routes::http;
+use crate::session_token::HookPrincipal;
+use crate::workspace_msg::{resolve_workspace_detailed, WorkspaceResolve};
+
+/// How a route is kept to the passport's workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    /// The handler reads `project=` / `project_path=`. The stamp sets both
+    /// to the passport's workspace; a claim naming any other is refused.
+    Own,
+    /// The handler looks up the workspace named by `q=`: the passport's own
+    /// or a connected one (`comms::gate_cross_workspace`). A name K2 doesn't
+    /// know gets the handler's own not-found answer.
+    Named,
+    /// `/cli/agent/list`: every workspace's row, narrowed to the passport's
+    /// own and its connected workspaces ([`narrow`]).
+    AgentList,
+}
+
+/// One admitted route. `names` are params that name something inside the
+/// workspace's own folders (an agent, a work item, a skill): a passport
+/// must send a plain name there, never a path.
+pub(crate) struct Route {
+    pub path: &'static str,
+    pub scope: Scope,
+    pub names: &'static [&'static str],
+}
+
+const fn route(path: &'static str, scope: Scope) -> Route {
+    Route { path, scope, names: &[] }
+}
+
+const fn named(path: &'static str, scope: Scope, names: &'static [&'static str]) -> Route {
+    Route { path, scope, names }
+}
+
+/// Every route this module admits a passport on, sorted by path.
+pub(crate) const ROUTES: &[Route] = &[
+    // `k2 agent complete` (sub-agent template).
+    named("/cli/agent/complete", Scope::Own, &["agent", "file"]),
+    // `k2 agent conf|get|set|retire|restart` and `k2 agent hire` read it first.
+    route("/cli/agent/conf", Scope::Named),
+    route("/cli/agent/list", Scope::AgentList),
+    // `k2 workspace profile` (0.46.16; its handler also refuses another
+    // workspace: `workspace_profile_route::other_workspace_refusal`).
+    route("/cli/workspace/agent-display-name", Scope::Own),
+    // Name resolution for `k2 msg`, `k2 workspace …` and friends.
+    route("/cli/workspace/resolve", Scope::Named),
+];
+
+/// The admitted route for `path`, if any.
+pub(crate) fn lookup(path: &str) -> Option<&'static Route> {
+    ROUTES.iter().find(|r| r.path == path)
+}
+
+/// Whether a passport may use `path` under this module's rules.
+pub fn is_route(path: &str) -> bool {
+    lookup(path).is_some()
+}
+
+/// The passport presented for `path` over TCP, when `path` is one of
+/// [`ROUTES`] and the credential is a live passport of a session on this
+/// computer ([`local_session`]). `None` for the owner token, a login, an App
+/// pass, an API cell's or a sandboxed agent's passport or anything else:
+/// those keep the route's existing arm, unchanged.
+pub(crate) fn tcp_passport(path: &str, query: &str, bearer: Option<&str>) -> Option<crate::session_token::ValidatedHook> {
+    if !is_route(path) {
+        return None;
+    }
+    let presented = bearer
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| http::extract_token(query))
+        .unwrap_or("");
+    if presented.is_empty() {
+        return None;
+    }
+    crate::session_token::validate_hook(presented).filter(|v| local_session(&v.session_id, &v.principal))
+}
+
+/// A passport of a session on this computer, as Zen admits one
+/// (`zen_routes::is_local_passport`): a harness session that isn't
+/// sandboxed, or a K2 terminal. An API cell and a microVM agent are not.
+fn local_session(session_id: &str, principal: &HookPrincipal) -> bool {
+    crate::zen_routes::is_local_passport(&crate::sidecar_routes::caller_from_session(session_id, principal))
+}
+
+/// The TCP dispatcher's first arm, for a request [`tcp_passport`] admits
+/// (no route's owner-token arm sees it): stamp the passport and run the
+/// same dispatch the cell socket runs. A passport revoked since the arm was
+/// chosen gets the plain 403.
+pub(crate) async fn serve_tcp(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    is_post: bool,
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+) {
+    let mut params = http::read_request_params(stream, buf, is_post, path, query).await;
+    let Some(principal) = tcp_passport(path, query, bearer).map(|v| v.principal) else {
+        let r = CliResponse::forbidden();
+        http::send_response(stream, r.status, r.content_type, &r.body).await;
+        return;
+    };
+    // Identity keys are the server's, never the request's.
+    crate::caller_workspace::strip_request_stamps(&mut params);
+    crate::caller_workspace::keep_client_project(&mut params);
+    crate::caller_workspace::stamp_principal(&mut params, &principal);
+    let path = path.to_string();
+    let r = crate::rt::blocking(|| {
+        crate::caller_workspace::with_request_principal(Some(principal), || crate::cli::dispatch(&path, &params))
+    });
+    http::send_response(stream, r.status, r.content_type, &r.body).await;
+}
+
+/// The passport's workspace (`projects.id`) when `params` were stamped from
+/// a passport, else `None` (the owner, a login: nothing to refuse).
+fn stamped_workspace(params: &HashMap<String, String>) -> Option<&str> {
+    if params.get(PRINCIPAL_BOUND_KEY).map(String::as_str) != Some("1") {
+        return None;
+    }
+    Some(params.get("project_id").map(|s| s.trim()).unwrap_or(""))
+}
+
+/// Before the handler: `Some(answer)` when a stamped passport request on
+/// one of [`ROUTES`] reaches outside its workspace. `None` lets it run (and
+/// always for the owner and logins).
+pub(crate) fn refusal(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
+    let route = lookup(path)?;
+    let ws = stamped_workspace(params)?;
+    if ws.is_empty() {
+        return Some(own_only("this session's workspace is not known"));
+    }
+    for key in route.names {
+        if let Some(v) = params.get(*key) {
+            if !is_plain_name(v) {
+                return Some(own_only(&format!("'{key}' is a name inside this workspace, not a path")));
+            }
+        }
+    }
+    match route.scope {
+        Scope::AgentList => None,
+        Scope::Own => other_workspace(params),
+        Scope::Named => {
+            let q = params.get("q").map(|s| s.trim()).unwrap_or("");
+            if q.is_empty() {
+                return None;
+            }
+            let principal = HookPrincipal {
+                workspace_uuid: ws.to_string(),
+                agent_address: params.get("from").cloned().unwrap_or_default(),
+            };
+            match crate::comms::gate_cross_workspace(Some(&principal), q) {
+                Ok(()) | Err(None) => None,
+                Err(Some(r)) => Some(r),
+            }
+        }
+    }
+}
+
+/// After the handler: trim an answer to what the passport may see. Only
+/// [`Scope::AgentList`] has anything to trim; everything else passes as is.
+pub(crate) fn narrow(path: &str, params: &HashMap<String, String>, resp: CliResponse) -> CliResponse {
+    let Some(route) = lookup(path) else { return resp };
+    if route.scope != Scope::AgentList {
+        return resp;
+    }
+    let Some(ws) = stamped_workspace(params) else { return resp };
+    if !resp.status.starts_with("200") {
+        return resp;
+    }
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&resp.body) else {
+        return CliResponse::internal_error("the agent list was not JSON");
+    };
+    let Some(agents) = v.get_mut("agents").and_then(|a| a.as_array_mut()) else {
+        return CliResponse::internal_error("the agent list had no agents");
+    };
+    agents.retain(|a| {
+        a.get("id")
+            .and_then(|id| id.as_str())
+            .is_some_and(|id| !ws.is_empty() && (id == ws || k2_core::connections::are_local_peers(ws, id)))
+    });
+    CliResponse::ok_json(v.to_string())
+}
+
+/// A stamped passport whose own `project=` claim (kept under
+/// [`CLIENT_PROJECT_KEY`]) names a workspace other than its own: refused.
+/// No claim, or a claim naming its own workspace: `None`.
+/// The same rule as `workspace_profile_route::other_workspace_refusal`.
+fn other_workspace(params: &HashMap<String, String>) -> Option<CliResponse> {
+    let hint = "an agent works in its own workspace only; a person can do this for another";
+    let found = |token: &str| match resolve_workspace_detailed(token) {
+        WorkspaceResolve::Found(path) => Some(path),
+        _ => None,
+    };
+    let Some(own) = params.get("project").map(|s| s.trim()).filter(|s| !s.is_empty()).and_then(found) else {
+        return Some(own_only(hint));
+    };
+    match params.get(CLIENT_PROJECT_KEY).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(claim) if found(claim).as_deref() == Some(own.as_str()) => None,
+        Some(_) => Some(own_only(hint)),
+    }
+}
+
+/// A name, not a path: no separator, no `..`, no NUL.
+fn is_plain_name(v: &str) -> bool {
+    !(v.contains('/') || v.contains('\\') || v.contains("..") || v.contains('\0'))
+}
+
+fn own_only(hint: &str) -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": { "code": "own_workspace_only", "hint": hint }
+        })
+        .to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routes_are_sorted_unique_and_classified() {
+        for w in ROUTES.windows(2) {
+            assert!(w[0].path < w[1].path, "ROUTES must be sorted and unique: {} then {}", w[0].path, w[1].path);
+        }
+        for r in ROUTES {
+            let row = crate::routes::route_policy::lookup(r.path)
+                .unwrap_or_else(|| panic!("{} has no route policy row", r.path));
+            // A write takes its params from the query or a form body, which
+            // the TCP arm folds in (`read_request_params`): a formerly-GET
+            // write, never a JSON-body route.
+            if row.get.is_none() {
+                assert!(
+                    crate::routes::route_policy::FORMERLY_GET_WRITES.contains(&r.path),
+                    "{} is POST-only and not a formerly-GET write",
+                    r.path
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_cell_socket_is_unchanged_and_owner_routes_stay_out() {
+        // Not agent verbs: the cell socket answers these as before. The
+        // profile was one before D1.
+        for r in ROUTES {
+            let before = r.path == "/cli/workspace/agent-display-name";
+            assert_eq!(crate::session_token::is_agent_verb(r.path), before, "{}", r.path);
+        }
+        // The owner-only surface stays closed whatever this table says.
+        for p in ["/cli/tunnel/status", "/cli/workspace/set", "/cli/feedback/create", "/cli/context/add", "/cli/projects/list"] {
+            assert!(!is_route(p), "{p} must not be admitted here");
+        }
+    }
+
+    #[test]
+    fn plain_names_refuse_paths() {
+        for ok in ["backend", "agent-1", "task_2.md", "a.b"] {
+            assert!(is_plain_name(ok), "{ok}");
+        }
+        for bad in ["../x", "a/b", "a\\b", "..", "x\0"] {
+            assert!(!is_plain_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn nothing_is_refused_without_a_stamped_passport() {
+        let mut p = HashMap::new();
+        p.insert("project".to_string(), "/somewhere/else".to_string());
+        p.insert("agent".to_string(), "../../x".to_string());
+        assert!(refusal("/cli/agent/conf", &p).is_none(), "the owner's request runs as before");
+        p.insert(PRINCIPAL_BOUND_KEY.to_string(), "1".to_string());
+        p.insert("project_id".to_string(), String::new());
+        let r = refusal("/cli/agent/conf", &p).expect("a passport with no workspace is refused");
+        assert!(r.status.starts_with("403"), "{}", r.status);
+    }
+}

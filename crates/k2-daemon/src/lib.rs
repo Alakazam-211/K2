@@ -192,6 +192,8 @@ pub mod usage_store;
 pub mod ops_routes;
 pub mod ops_stream_ws;
 pub mod pending_live;
+// D1: the routes an agent's passport may use over TCP, kept to its own workspace.
+pub mod passport_routes;
 // Permission cards (prd-agent-settings-cards-v1, 0.46.3 Beta): P0 stubs per
 // lane; nothing is wired, so with the switches off K2 is unchanged.
 mod permission;

@@ -4,61 +4,17 @@
 //!
 //! The path is an agent verb (`session_token` ALLOW_EXACT), so the cell
 //! socket serves it with the passport stamped (`project=` is its own
-//! workspace, the request's claim kept under `CLIENT_PROJECT_KEY`). The
-//! TCP arm here stamps the same way. The handler then refuses a passport
-//! whose claim names any other workspace: [`other_workspace_refusal`].
+//! workspace, the request's claim kept under `CLIENT_PROJECT_KEY`). Over
+//! TCP a passport takes the dispatcher's passport arm, which stamps the
+//! same way (`passport_routes`, D1); the owner and logins take the `/cli/`
+//! catch-all. The handler then refuses a passport whose claim names any
+//! other workspace: [`other_workspace_refusal`].
 
 use std::collections::HashMap;
 
-use tokio::net::TcpStream;
-
 use crate::caller_workspace::{CLIENT_PROJECT_KEY, PRINCIPAL_BOUND_KEY};
 use crate::cli_response::CliResponse;
-use crate::routes::http;
 use crate::workspace_msg::{resolve_workspace_detailed, WorkspaceResolve};
-
-pub(crate) const PATH: &str = "/cli/workspace/agent-display-name";
-
-/// The TCP dispatcher's arm for [`PATH`]. A credential that is neither the
-/// owner's, a live login, nor a live passport gets the catch-all's plain
-/// 403, as before.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn serve_tcp(
-    stream: &mut TcpStream,
-    buf: &mut [u8],
-    is_post: bool,
-    path: &str,
-    query: &str,
-    bearer: Option<&str>,
-    owner_token: &str,
-) {
-    let mut params = http::read_request_params(stream, buf, is_post, path, query).await;
-    // Identity keys are the server's, never the request's.
-    crate::caller_workspace::strip_request_stamps(&mut params);
-    let principal = if http::token_ok(query, owner_token) {
-        None
-    } else {
-        let presented = bearer.filter(|s| !s.is_empty()).or_else(|| http::extract_token(query)).unwrap_or("");
-        match crate::session_token::require_hook(presented, PATH) {
-            Some(v) => Some(v.principal),
-            None => {
-                let r = CliResponse::forbidden();
-                http::send_response(stream, r.status, r.content_type, &r.body).await;
-                return;
-            }
-        }
-    };
-    if let Some(ref p) = principal {
-        crate::caller_workspace::keep_client_project(&mut params);
-        crate::caller_workspace::stamp_principal(&mut params, p);
-    }
-    let r = tokio::task::spawn_blocking(move || {
-        crate::caller_workspace::with_request_principal(principal, || crate::cli::dispatch(PATH, &params))
-    })
-    .await
-    .unwrap_or_else(|e| CliResponse::internal_error(format!("worker join: {e}")));
-    http::send_response(stream, r.status, r.content_type, &r.body).await;
-}
 
 /// A passport (stamped params) reads its own workspace's profile only:
 /// `Some(403 own_workspace_only)` when its `project=` claim names any other

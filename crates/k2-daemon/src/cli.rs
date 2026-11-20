@@ -121,6 +121,17 @@ pub fn fanout_wanted(params: &HashMap<String, String>) -> bool {
 /// Route a single `/cli/*` path to its handler. Assumes the caller
 /// has already validated the bearer token.
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
+    // An agent's passport on one of the routes it may use outside the cell
+    // socket: kept to its own workspace before and after the handler
+    // (`passport_routes`). The owner and logins pass through untouched.
+    if let Some(refused) = crate::passport_routes::refusal(path, params) {
+        return refused;
+    }
+    let resp = dispatch_route(path, params);
+    crate::passport_routes::narrow(path, params, resp)
+}
+
+fn dispatch_route(path: &str, params: &HashMap<String, String>) -> CliResponse {
     // Token ledger. GET only — not in `post_allowed`. Auth is
     // `owner_role_identity` inside the arm, not the catchall `token_ok`.
     if let Some(resp) = crate::usage_routes::dispatch(path, params) {

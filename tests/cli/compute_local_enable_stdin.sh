@@ -164,7 +164,12 @@ expect_eq "--code-stdin: exit 0" "$RC" "0"
 expect_eq "--code-stdin: output" "$OUT" "$ENABLED"
 expect_eq "--code-stdin: no note on stderr" "$ERR" ""
 assert_body "--code-stdin" "$WANT_CODE"
-if grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG"; then ok "--code-stdin: python3 and curl children were logged"; else bad "--code-stdin: the wrappers saw no python3 or curl child"; fi
+# The wrappers really ran (else the argv and environment checks below pass
+# vacuously). The k5 binary sends the request itself and starts neither:
+# there the check is that it starts none.
+if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    if grep -q -e '^python3 ' -e '^curl ' "$ARGLOG"; then bad "--code-stdin: the binary started a python3 or curl child"; else ok "--code-stdin: the binary started no python3 or curl child"; fi
+elif grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG"; then ok "--code-stdin: python3 and curl children were logged"; else bad "--code-stdin: the wrappers saw no python3 or curl child"; fi
 assert_off_children "--code-stdin" "the enroll code" "$SECRET_PART"
 
 # 2. --enroll and --code on the command line: still work, one note each.

@@ -350,11 +350,11 @@ impl Ctx<'_> {
         match verb {
             Verb::List => {
                 let raw = self.http(Method::Get, LAYERS, &[], "")?;
-                self.reply(&raw, as_json, true, |d| list_printer(d))
+                self.reply(&raw, as_json, true, list_printer)
             }
             Verb::Catalog => {
                 let raw = self.http(Method::Get, CATALOG, &[], "")?;
-                self.reply(&raw, as_json, false, |d| catalog_printer(d))
+                self.reply(&raw, as_json, false, catalog_printer)
             }
             Verb::Show { outline } => {
                 let qs: &[(&str, &str)] = if *outline { &[("outline", "1")] } else { &[] };

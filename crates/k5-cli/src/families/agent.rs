@@ -388,7 +388,7 @@ mod tests {
     fn the_error_line_is_ascii_json() {
         assert_eq!(
             err_json("bad_usage", "a \u{2014} b"),
-            r#"{"error": {"code": "bad_usage", "hint": "a — b"}}"#
+            "{\"error\": {\"code\": \"bad_usage\", \"hint\": \"a \\u2014 b\"}}"
         );
     }
 

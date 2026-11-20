@@ -2136,13 +2136,13 @@ fn identity() {
         Case {
             env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
             ..case(
-                "a session with a passport: its own workspace",
+                "a session with a passport: its own workspace (the probe first)",
                 &["identity", "--color", "#123456"],
                 &[],
-                vec![ok(r#"{"ok":true,"handle":"me","changed":["color"]}"#)],
+                vec![ok(r#"{"ok":true}"#), ok(r#"{"ok":true,"handle":"me","changed":["color"]}"#)],
                 owner_and_port,
                 0,
-                1,
+                2,
             )
         },
     ];
@@ -2388,13 +2388,13 @@ fn harness() {
         Case {
             env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
             ..case(
-                "a session with a passport: the passport",
+                "a session with a passport: the passport (the probe first)",
                 &["harness", "qa", "codex"],
                 &[],
-                vec![Reply::Answer(403, r#"{"error":{"code":"harness_needs_person","hint":"ask"}}"#.into())],
+                vec![ok(r#"{"ok":true}"#), Reply::Answer(403, r#"{"error":{"code":"harness_needs_person","hint":"ask"}}"#.into())],
                 owner_and_port,
                 3,
-                1,
+                2,
             )
         },
     ];
@@ -2497,13 +2497,13 @@ fn refresh() {
         Case {
             env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
             ..case(
-                "a session with a passport: its own chat",
+                "a session with a passport: its own chat (the probe first)",
                 &["refresh", "--note", "x"],
                 &[],
-                vec![ok(REFRESHED)],
+                vec![ok(r#"{"ok":true}"#), ok(REFRESHED)],
                 owner_and_port,
                 0,
-                1,
+                2,
             )
         },
     ];

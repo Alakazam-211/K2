@@ -166,7 +166,16 @@ pub fn fetch(client: &mut Client, closing: &mut Closing, token: &str) -> Result<
         token.to_string()
     };
     let arg = format!("q={}", quote(&q));
-    let held = request(client, closing, super::CONF, &[&arg])?;
+    // `conf=$(_agent_conf_fetch …)` holds `resp=$(cli_request …)`: with no
+    // answer, its line, then the fetch goes on with an empty answer before
+    // the main shell's trap ends the command.
+    let held = match request(client, closing, super::CONF, &[&arg]) {
+        Ok(h) => h,
+        Err(_) => Held {
+            raw: Vec::new(),
+            denied: false,
+        },
+    };
     if held.raw.is_empty() {
         out::stderr_line(&unreachable_line());
         return Err(Exit::Error);

@@ -1103,7 +1103,7 @@ mod tests {
         let shown = read_print(raw, Mode::List, false, false);
         assert_eq!(
             shown.stdout,
-            format!("Agent types (hire one: {} agent hire --template <id> --name <name>):\n  chief-of-staff Chief        Runs things  (old id: cos; system)\n\nYours (saved on this server):\n  qa-bot         QA           (by ana, v2)\n", cli())
+            format!("Agent types (hire one: {} agent hire --template <id> --name <name>):\n  chief-of-staff Chief        Runs things  (old id: cos; system)\n\nYours (saved on this server):\n  qa-bot         QA             (by ana, v2)\n", cli())
         );
         assert_eq!(shown.stderr, "warning: /x: bad toml\n");
     }

@@ -397,22 +397,26 @@ pub fn json_line(label: &str, target: &str, url: &str, port: &str, made: bool) -
 }
 
 /// `_connect_bearer_token`: `tunnel.json`'s token, stripped, as its Python
-/// reads it (anything it can't read is none). Only whether there is one
-/// is used here; the token itself is never printed or sent by this module.
-pub fn has_tunnel_token(path: &std::path::Path) -> bool {
-    let Ok(bytes) = std::fs::read(path) else {
-        return false;
-    };
-    let Ok(t) = String::from_utf8(bytes) else {
-        return false;
-    };
+/// reads it (anything it can't read is none). It is never printed, logged
+/// or put in a URL: the control plane's call sends it as its
+/// `Authorization` header only.
+pub fn tunnel_token(path: &std::path::Path) -> Option<String> {
+    let t = String::from_utf8(std::fs::read(path).ok()?).ok()?;
     let Ok(Value::Object(pairs)) = loads(&t) else {
-        return false;
+        return None;
     };
     match get(&pairs, "token") {
-        Some(Value::Str(tok)) => tok
-            .as_str()
-            .is_some_and(|x| !x.trim_matches(py_space).is_empty()),
-        _ => false,
+        Some(Value::Str(tok)) => {
+            let x = tok.as_str()?.trim_matches(py_space);
+            (!x.is_empty()).then(|| x.to_string())
+        }
+        _ => None,
     }
+}
+
+/// `_connect_curl`'s `printf '%s\n%s' "$code" "$resp"` of the control
+/// plane's answer, as `$(…)` holds it.
+pub fn control_plane_raw(status: u16, body: &[u8]) -> String {
+    let body = text(&super::super::without_nuls(body));
+    held(format!("{status:03}\n{body}"))
 }

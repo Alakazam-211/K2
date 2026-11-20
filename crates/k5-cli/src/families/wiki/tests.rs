@@ -579,9 +579,11 @@ fn publish_reads_the_tunnel_token() {
         ("nope", false),
     ] {
         std::fs::write(&f, body).unwrap();
-        assert_eq!(super::publish::has_tunnel_token(&f), want, "{body}");
+        assert_eq!(super::publish::tunnel_token(&f).is_some(), want, "{body}");
     }
+    std::fs::write(&f, r#"{"token":" k \n"}"#).unwrap();
+    assert_eq!(super::publish::tunnel_token(&f).as_deref(), Some("k"));
     std::fs::remove_file(&f).unwrap();
-    assert!(!super::publish::has_tunnel_token(&f));
+    assert!(super::publish::tunnel_token(&f).is_none());
     std::fs::remove_dir_all(&d).unwrap();
 }

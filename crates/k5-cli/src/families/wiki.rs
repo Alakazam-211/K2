@@ -41,10 +41,14 @@
 //! nudge. Their failures are quiet, as the shell hides them; a Connect
 //! request that may have reached the daemon ends the command with 1.
 //!
+//! With no daemon to make a Connect call, the control plane itself with
+//! `tunnel.json`'s token as its `Authorization` header (TLS for an
+//! `https://` base, [`crate::transport::tls`]).
+//!
 //! Still the shell's ([`run`] returns `None`): `wiki publish` with a token
-//! in `tunnel.json` and air-gap off (with no daemon to make the call, the
-//! shell calls the control plane itself over HTTPS; that waits for the
-//! TLS client), a word that is not UTF-8, a command line with `-h` or `--help` ([`crate::front`]),
+//! in `tunnel.json`, air-gap off, and a proxy setting curl would use or a
+//! control-plane base the binary doesn't send to itself, a word that is
+//! not UTF-8, a command line with `-h` or `--help` ([`crate::front`]),
 //! a `--workspace` folder that `cd` reads as an option or that `CDPATH`
 //! would move (bash's own edges, D6), a port that is set but is no port
 //! curl takes, and a `python3` the binary can't tell. An answer that is
@@ -353,25 +357,63 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         if settings.no_owner_fallback && settings.auth == Auth::None {
             return Some(Gate::VirtualDesktop.stop());
         }
-        return Some(run_with(args, form, settings, false));
+        return Some(run_with(args, form, settings, Connect::default()));
     }
     if let Some(gate) = prelude::gate(&settings) {
         return Some(gate.stop());
     }
     // A port curl won't take is the shell's.
     settings.port_text.as_deref().and_then(curl_port)?;
-    let mut airgap_off = false;
+    let mut connect = Connect::default();
     if matches!(form, Form::Ask(Verb::Publish, _)) {
         let (state, _) = crate::airgap::state(&crate::offline::Env::current())?;
-        airgap_off = state == crate::airgap::State::Off;
-        // With a token in `tunnel.json` and no daemon to make the call,
-        // the shell calls the Connect control plane itself over HTTPS.
-        // That leg waits for the TLS client: the shell keeps the line.
-        if airgap_off && publish::has_tunnel_token(&settings.home.join("tunnel.json")) {
-            return None;
+        connect.airgap_off = state == crate::airgap::State::Off;
+        // With no daemon to make the call, the shell calls the control
+        // plane itself with `tunnel.json`'s token. A base the binary
+        // doesn't send to itself, or a proxy curl would use, is the
+        // shell's.
+        if connect.airgap_off {
+            if let Some(token) = publish::tunnel_token(&settings.home.join("tunnel.json")) {
+                let url = connect_base();
+                if url.ends_with('/') || proxy_set() {
+                    return None;
+                }
+                connect.control = Some((crate::transport::remote::base(&url)?, token));
+            }
         }
     }
-    Some(run_with(args, form, settings, airgap_off))
+    Some(run_with(args, form, settings, connect))
+}
+
+/// What `wiki publish`'s Connect steps may use.
+#[derive(Default)]
+struct Connect {
+    /// `_k2_airgap_state` is off: `_connect_curl` may phone Connect.
+    airgap_off: bool,
+    /// The control plane's base and `tunnel.json`'s token, for when no
+    /// daemon makes the call. The token is only ever sent as the
+    /// `Authorization` header.
+    control: Option<(crate::transport::remote::Base, String)>,
+}
+
+/// `K2_CONNECT_BASE` (its K5_, K2_ and K2SO_ names, empty counts as
+/// unset), else the hosted control plane.
+fn connect_base() -> String {
+    k2_client::env_names::CONNECT_BASE
+        .iter()
+        .filter_map(std::env::var_os)
+        .find(|v| !v.is_empty())
+        .map_or_else(
+            || k2_client::hosts::CONNECT_BASE.to_string(),
+            |v| v.to_string_lossy().into_owned(),
+        )
+}
+
+/// A proxy setting curl would use for the control plane's URL.
+fn proxy_set() -> bool {
+    ["http_proxy", "https_proxy", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"]
+        .iter()
+        .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
 }
 
 /// A `--workspace` folder bash's `cd` reads otherwise: an option (a
@@ -402,7 +444,7 @@ fn page(key: &str, exit: Exit) -> Exit {
     }
 }
 
-fn run_with(args: &[OsString], form: Form, mut settings: Settings, airgap_off: bool) -> Exit {
+fn run_with(args: &[OsString], form: Form, mut settings: Settings, connect: Connect) -> Exit {
     let (verb, o) = match form {
         Form::Help => return page("wiki", Exit::Ok),
         Form::Page(key, exit) => return page(key, exit),
@@ -433,7 +475,7 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings, airgap_off: b
     let mut run = Run {
         client,
         closing: Closing::default(),
-        airgap_off,
+        connect,
     };
     run.apply_project(&o.workspace);
     let exit = run.verb(&verb, &o);
@@ -458,8 +500,7 @@ fn held(r: &Response) -> Vec<u8> {
 struct Run {
     client: Client,
     closing: Closing,
-    /// `_k2_airgap_state` is off: `_connect_curl` may phone Connect.
-    airgap_off: bool,
+    connect: Connect,
 }
 
 impl Run {
@@ -714,24 +755,34 @@ impl Run {
     }
 
     /// `cp_raw=$(_connect_curl <method> <endpoint> <body> 2>/dev/null)`:
-    /// the relayed answer, or `None` when it failed (its lines unseen). The
-    /// air-gap refuses before any request. With no daemon to make the call
-    /// `tunnel.json` has no token here ([`run`] hands the other case to
-    /// the shell), so that fails too. A request that may have reached the
-    /// daemon ends the command with 1.
+    /// the answer as `<status>\n<body>`, or `None` when it failed (its
+    /// lines unseen). The air-gap refuses before any request. The daemon
+    /// makes the call; with none to make it, the control plane itself
+    /// with `tunnel.json`'s token (none: that fails too). A request that
+    /// may have reached the daemon ends the command with 1.
     fn connect(&mut self, method: &str, endpoint: &str, body: &str) -> Result<Option<String>, Exit> {
-        if !self.airgap_off {
+        if !self.connect.airgap_off {
             return Ok(None);
         }
         let req = publish::proxy_request(method, endpoint, body);
         match self.client.connect_proxy(method == "GET", req.as_bytes()) {
-            Ok(r) => Ok(match publish::proxied(r.status, &r.body) {
-                publish::Proxied::Relayed(raw) => Some(raw),
-                publish::Proxied::NoDaemon | publish::Proxied::Failed => None,
-            }),
-            Err(Error::MaybeApplied { .. }) => Err(Exit::Error),
-            Err(_) => Ok(None),
+            Ok(r) => match publish::proxied(r.status, &r.body) {
+                publish::Proxied::Relayed(raw) => return Ok(Some(raw)),
+                publish::Proxied::Failed => return Ok(None),
+                publish::Proxied::NoDaemon => {}
+            },
+            Err(Error::MaybeApplied { .. }) => return Err(Exit::Error),
+            Err(_) => {}
         }
+        let Some((base, token)) = &self.connect.control else {
+            return Ok(None);
+        };
+        let mut cp = Client::new(&base.host, base.port, "", Auth::Owner(token.clone()));
+        crate::transport::remote::apply(&mut cp, base, token.clone());
+        Ok(match cp.control_plane(method == "PUT", endpoint, body.as_bytes()) {
+            Ok(r) => Some(publish::control_plane_raw(r.status, &r.body)),
+            Err(_) => None,
+        })
     }
 
     fn unpublish(&mut self, o: &Opts) -> Result<Exit, Exit> {

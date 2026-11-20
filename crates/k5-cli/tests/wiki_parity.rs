@@ -799,12 +799,11 @@ fn wiki_hands_these_to_the_shell() {
             0,
         )));
     }
-    // The control plane over HTTPS waits for the TLS client: with a token
-    // in tunnel.json (and air-gap off) publish is the shell's.
+    // A proxy curl would use for the control plane: the shell's.
     v.push(shell(case(
-        "publish: a tunnel token on disk",
+        "publish: a tunnel token on disk and a proxy set",
         &["publish", "--label", "acme"],
-        &[],
+        &[("https_proxy", "http://127.0.0.1:9")],
         made_replies(),
         tunnel_token,
         0,
@@ -1044,6 +1043,95 @@ fn wiki_publish_answers_as_the_shell_does() {
     ];
     for c in v {
         rig.check(&c);
+    }
+}
+
+/// A control plane on loopback: answers each request 201 with `body`,
+/// and keeps each request's bytes.
+fn control_plane(body: &'static str) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = std::sync::Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for conn in l.incoming() {
+            let mut c = conn.unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = c.read(&mut chunk).unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                let t = String::from_utf8_lossy(&buf).into_owned();
+                if let Some((head, rest)) = t.split_once("\r\n\r\n") {
+                    let len = head
+                        .lines()
+                        .find_map(|h| h.strip_prefix("Content-Length: "))
+                        .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                    if rest.len() >= len {
+                        break;
+                    }
+                }
+            }
+            keep.lock().unwrap().push(String::from_utf8_lossy(&buf).into_owned());
+            let reply = format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            c.write_all(reply.as_bytes()).unwrap();
+        }
+    });
+    (port, seen)
+}
+
+/// No daemon route (404 from /cli/connect/proxy): `_connect_curl` calls the
+/// control plane itself with `tunnel.json`'s token. Both CLIs send it the
+/// same request (the User-Agent aside), the token only as the
+/// Authorization header, and print the same.
+#[test]
+fn wiki_publish_calls_the_control_plane_itself() {
+    let rig = Rig::new(VERB, "cplane");
+    let (port, seen) = control_plane(r#"{"label":"acme","target":"127.0.0.1:4711","status":"active"}"#);
+    let base = leak(format!("http://127.0.0.1:{port}"));
+    rig.check(&case(
+        "publish: no proxy route, the control plane with the tunnel token",
+        &["publish", "--label", "acme", "--json"],
+        &[("K2_CONNECT_BASE", base)],
+        vec![
+            ok(SERVED),
+            ok(STATUS),
+            ok(CHECKED),
+            Reply::Answer(404, "not found".into()),
+            ok(CHECKED),
+            ok("{}"),
+        ],
+        tunnel_token,
+        0,
+        6,
+    ));
+    let got = seen.lock().unwrap().clone();
+    // The shell's, the binary's, and the binary's with no python3.
+    assert!(got.len() >= 2, "one request from each run: {got:?}");
+    let masked: Vec<String> = got
+        .iter()
+        .map(|r| {
+            r.split("\r\n")
+                .map(|l| if l.starts_with("User-Agent: ") { "User-Agent: <ua>" } else { l })
+                .collect::<Vec<_>>()
+                .join("\r\n")
+        })
+        .collect();
+    for m in &masked[1..] {
+        assert_eq!(&masked[0], m, "the shell's, then the binary's");
+    }
+    for r in &got {
+        assert!(r.starts_with("POST /subdomains HTTP/1.1\r\n"), "{r}");
+        let with_token: Vec<&str> = r.split("\r\n").filter(|l| l.contains("tun-tok")).collect();
+        assert_eq!(with_token, ["Authorization: Bearer tun-tok"], "{r}");
+        assert!(!r.contains("X-K5-"), "{r}");
     }
 }
 

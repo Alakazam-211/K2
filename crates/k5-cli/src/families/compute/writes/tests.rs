@@ -582,3 +582,256 @@ fn k2_cp_max_time_as_curl_takes_it() {
         assert_eq!(t(shell), None, "{shell:?}");
     }
 }
+
+mod wait_verb {
+    use super::super::wait::{self, Ask};
+    use super::super::Words;
+    use super::{at, python_after, source};
+    use crate::exit::Exit;
+
+    #[test]
+    fn the_shell_s_lines() {
+        let jobs = source("compute-jobs.sh");
+        for shell in [
+            r#"            --failures) failures=1; shift ;;"#,
+            r#"            --quiet|-q) quiet=1; shift ;;"#,
+            r#"            --json) as_json=1; shift ;;"#,
+            r#"            --follow|-f) follow=1; shift ;;"#,
+            r#"            --max-wait) max_wait="${2:-}"; shift 2 ;;"#,
+            r#"            --any) any=1; shift ;;"#,
+            r#"            w=20"#,
+            r#"            resp="$(_compute_send GET /cli/compute/jobs/get "job=$(urlencode "$j")&wait=$w")""#,
+            r#"                [ "$fails" -eq 1 ] && echo "[k2 compute] lost the K2 server; retrying (the job keeps running on the node)" >&2"#,
+            r#"                if [ "$fails" -gt 60 ]; then"#,
+            r#"                sleep 10"#,
+            r#"                _CP_404_EXIT=4 _compute_fail "$_CP_STATUS" "$_CP_BODY""#,
+            r#"                echo "[k2 compute] $line" >&2"#,
+            r#"            resp="$(_compute_send GET /cli/compute/jobs/get "job=$(urlencode "$j")&wait=1")""#,
+            r#"            [ "${#others[@]}" -gt 0 ] && [ "$quiet" = "0" ] && echo "[k2 compute] still running: ${others[*]} (k2 compute wait ${others[*]} --any)" >&2"#,
+            r#"            echo "{\"error\":\"still_running\",\"jobs\":\"$*\",\"hint\":\"none ended yet: k2 compute wait $* --any\"}" >&2"#,
+            r#"        [ "$quiet" = "0" ] && [ -z "$last" ] && { echo "[k2 compute] waiting for the first of $# job(s) to end" >&2; last=1; }"#,
+            r#"    exit "${rc:-3}""#,
+        ] {
+            assert!(
+                jobs.lines().any(|l| l == shell),
+                "the shell no longer has {shell:?}"
+            );
+        }
+        if k2_client::brand::CLI_NAME == "k2" {
+            let line = format!(r#"            -*) echo "{}" >&2; exit 2 ;;"#, wait::USAGE);
+            assert!(jobs.lines().any(|l| l == line), "the usage moved");
+        }
+    }
+
+    #[test]
+    fn the_readers_lines() {
+        let info = python_after("compute-jobs.sh", "info=\"$(python3 -c '");
+        use wait::line::info as i;
+        assert_eq!(at(&info, i::LOAD), "j = json.load(open(sys.argv[1]))");
+        assert_eq!(at(&info, i::Q), r#"q = j.get("queue") or {}"#);
+        assert!(at(&info, i::KEY).starts_with("key = "));
+        assert!(at(&info, i::ELSEWHERE).starts_with("elsewhere = "));
+        let end = python_after(
+            "compute-jobs.sh",
+            "out=\"$(K2_CP_JSON=\"$as_json\" K2_CP_N=",
+        );
+        use wait::line::end as e;
+        assert_eq!(at(&end, e::FOR), "for j in bodies:");
+        assert!(at(&end, e::TOOK).starts_with("took = "));
+        assert_eq!(at(&end, e::RL), r#"if rl.get("secs"):"#);
+        assert!(at(&end, e::LATE).starts_with("took += "));
+        assert!(at(&end, e::EXIT).starts_with(r#"code, what = int(j["exitCode"])"#));
+        assert!(at(&end, e::SIGNAL).starts_with("code, what = 128 + int("));
+        assert!(at(&end, e::ST).starts_with("code, what = 3, st + "));
+        assert!(at(&end, e::STILL).contains("still_running"));
+        assert!(at(&end, e::RC).starts_with(r#"print("RC %d %s""#));
+        let any = python_after(
+            "compute-jobs.sh",
+            "out=\"$(printf '%s' \"$_CP_BODY\" | K2_CP_JSON=\"$as_json\" python3 -c '",
+        );
+        use wait::line::any as a;
+        assert_eq!(at(&any, a::LOAD), "j = json.load(sys.stdin)");
+        assert_eq!(at(&any, a::ST), r#"st = j.get("state")"#);
+        assert!(at(&any, a::TOOK).starts_with("took = "));
+        assert!(at(&any, a::EXIT).starts_with(r#"code, what = int(j["exitCode"])"#));
+        assert!(at(&any, a::SIGNAL).starts_with("code, what = 128 + int("));
+        assert!(at(&any, a::ST_PLUS).starts_with("code, what = 3, st + "));
+    }
+
+    fn ask(f: impl FnOnce(&mut Ask)) -> Option<Words<Ask>> {
+        let mut a = Ask::default();
+        f(&mut a);
+        Some(Words::Ask(a))
+    }
+
+    #[test]
+    fn the_words() {
+        let usage = || Some(Words::Usage(wait::USAGE.to_string()));
+        let rows: Vec<(&[&str], Option<Words<Ask>>)> = vec![
+            (&["a"], ask(|a| a.jobs = vec!["a".into()])),
+            (
+                &["a", "b", "-q", "--json"],
+                ask(|a| {
+                    a.jobs = vec!["a".into(), "b".into()];
+                    a.quiet = true;
+                    a.json = true;
+                }),
+            ),
+            (
+                &["a", "--any", "--max-wait", "1h30m"],
+                ask(|a| {
+                    a.jobs = vec!["a".into()];
+                    a.any = true;
+                    a.max_wait = Some(5400);
+                }),
+            ),
+            (&["a", "--max-wait", ""], ask(|a| a.jobs = vec!["a".into()])),
+            (&[], usage()),
+            (&["--json"], usage()),
+            (&["a", "--x"], usage()),
+            (&["a", "--max-wait"], Some(Words::ShiftFailed)),
+            (&["a", "--follow"], None),
+            (&["a", "-f", "--x"], usage()),
+            (&["a", "--failures"], None),
+            (&["a", "--max-wait", "5x"], None),
+            (&["--max-wait", "5x"], usage()),
+        ];
+        for (words, want) in rows {
+            assert_eq!(wait::parse(words), want, "{words:?}");
+        }
+    }
+
+    #[test]
+    fn durations() {
+        for (v, want) in [
+            ("300", Some(300)),
+            ("007", Some(7)),
+            ("2h", Some(7200)),
+            ("90m", Some(5400)),
+            ("1h30m", Some(5400)),
+            ("1s1s", Some(2)),
+            ("", None),
+            ("h", None),
+            ("1h5", None),
+            ("1d", None),
+            ("-1", None),
+        ] {
+            assert_eq!(wait::secs(v), want, "{v:?}");
+        }
+    }
+
+    #[test]
+    fn progress_lines() {
+        let rows = [
+            (
+                r#"{"state":"running","short":"ab12","node":"mini"}"#,
+                "0\trunning|None|None\tab12 running on mini\n",
+            ),
+            (
+                r#"{"state":"done","short":"ab12","node":"mini"}"#,
+                "1\tdone|None|None\tab12 done on mini\n",
+            ),
+            (r#"{"short":"ab12"}"#, "0\t?|None|None\tab12 ? on None\n"),
+            (
+                r#"{"state":"queued","short":"s","queue":{"line":"queued 2nd","position":2,"waitReason":"busy"},"wait":{"elsewhere":"x can start it"}}"#,
+                "0\tqueued|2|busy\ts queued 2nd · x can start it\n",
+            ),
+            (
+                r#"{"state":"queued","short":"s","wait":{"words":"waits for a slot"}}"#,
+                "0\tqueued|None|None\ts queued: waits for a slot\n",
+            ),
+            (
+                r#"{"state":"queued","short":"s","node":"n","queue":{"position":1,"of":3,"reason":"cpu"}}"#,
+                "0\tqueued|1|cpu\ts queued on n: position 1 of 3 (cpu)\n",
+            ),
+        ];
+        for (body, want) in rows {
+            assert_eq!(
+                wait::info(body.as_bytes()).map_err(|r| r.text()),
+                Ok(want.to_string()),
+                "{body}"
+            );
+        }
+        assert_eq!(
+            wait::split_info("0\ta|b\tline\twith tab\n\n"),
+            ("0".into(), "a|b".into(), "line\twith tab".into())
+        );
+        let r = wait::info(br#"{"queue":[1]}"#).unwrap_err();
+        assert_eq!(
+            r.exception,
+            "AttributeError: 'list' object has no attribute 'get'"
+        );
+        let r = wait::info(br#"{"wait":{"elsewhere":1}}"#).unwrap_err();
+        assert_eq!(
+            r.exception,
+            "TypeError: can only concatenate str (not \"int\") to str"
+        );
+    }
+
+    #[test]
+    fn the_end() {
+        let s = wait::end_of(
+            &[br#"{"state":"done","exitCode":0,"short":"a","node":"n","startedAt":100,"endedAt":225}"#.to_vec()],
+            false,
+        );
+        assert_eq!((s.stdout.as_str(), s.exit), ("", Exit::Ok));
+        let s = wait::end_of(
+            &[
+                br#"{"state":"done","exitCode":2,"short":"a","id":"aaaa"}"#.to_vec(),
+                br#"{"state":"running","short":"b"}"#.to_vec(),
+            ],
+            true,
+        );
+        assert_eq!(s.exit, Exit::Refused, "still running wins");
+        assert_eq!(
+            s.stdout,
+            "[{\"state\": \"done\", \"exitCode\": 2, \"short\": \"a\", \"id\": \"aaaa\"}, {\"state\": \"running\", \"short\": \"b\"}]\n"
+        );
+        let s = wait::end_of(&[br#"{"state":"done","signal":9}"#.to_vec()], false);
+        assert_eq!(s.exit.code(), 137);
+        let s = wait::end_of(&[br#"{"state":"done","exitCode":300}"#.to_vec()], false);
+        assert_eq!(s.exit.code(), 44);
+        let s = wait::end_of(&[br#"{"state":"failed","reason":"oom"}"#.to_vec()], false);
+        assert_eq!(s.exit, Exit::Refused);
+        let s = wait::end_of(&[br#"{"state":"done","exitCode":"x"}"#.to_vec()], false);
+        assert_eq!(s.exit, Exit::Error);
+        assert!(s
+            .stderr
+            .ends_with("ValueError: invalid literal for int() with base 10: 'x'\n"));
+    }
+
+    #[test]
+    fn exit_codes_wrap_as_the_shell_s() {
+        for (d, want) in [
+            ("0", 0),
+            ("3", 3),
+            ("256", 0),
+            ("300", 44),
+            ("-1", 255),
+            ("137", 137),
+        ] {
+            assert_eq!(wait::exit_of(d).code(), want, "{d}");
+        }
+    }
+
+    #[test]
+    fn the_first_to_end() {
+        assert_eq!(
+            wait::any_reader(br#"{"state":"running"}"#, false).map_err(|r| r.text()),
+            Ok(None)
+        );
+        let e = wait::any_reader(br#"{"state":"done","exitCode":1,"id":"x"}"#, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(e.rc, "1");
+        assert_eq!(
+            e.json.as_deref(),
+            Some(r#"{"state": "done", "exitCode": 1, "id": "x"}"#)
+        );
+        let r = wait::any_reader(b"[]", false).unwrap_err();
+        assert_eq!(
+            r.exception,
+            "AttributeError: 'list' object has no attribute 'get'"
+        );
+    }
+}

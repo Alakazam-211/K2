@@ -4,6 +4,8 @@
 //!
 //! - [`cancel`]: `k5 compute cancel <job> [--force|--if-queued]` and
 //!   `k5 compute cancel --all-mine|--workspace-all [...]`.
+//! - [`wait`]: `k5 compute wait <job>... [--any] [--max-wait D] [--quiet]
+//!   [--json]`.
 //!
 //! What runs, in the shell's order:
 //!
@@ -44,6 +46,7 @@ use std::path::Path;
 use std::time::Duration;
 
 pub mod cancel;
+pub mod wait;
 
 #[cfg(test)]
 mod tests;
@@ -53,6 +56,26 @@ pub const TOOL: &str = "compute";
 
 /// The status `_compute_split` reads when no answer came (`printf '\n000'`).
 pub const NO_STATUS: &str = "000";
+
+/// A verb's words, read, with nothing to stop it.
+enum Ready {
+    Cancel(cancel::Ask),
+    Wait(wait::Ask),
+}
+
+impl<T> Words<T> {
+    /// The ask, or what stopping prints and the exit.
+    fn ready(self) -> Result<T, Exit> {
+        match self {
+            Words::Ask(a) => Ok(a),
+            Words::Usage(line) => {
+                out::stderr_line(&line);
+                Err(Exit::Usage)
+            }
+            Words::ShiftFailed => Err(Exit::Error),
+        }
+    }
+}
 
 /// What a verb's words ask for: the request, or what stops it first.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +91,7 @@ pub enum Words<T> {
 /// A verb this module answers, with its words read.
 enum Form {
     Cancel(Words<cancel::Ask>),
+    Wait(Words<wait::Ask>),
 }
 
 /// `k5 compute <verb> ...`: `args` is the whole command line after
@@ -87,6 +111,15 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let form = match words.first() {
         Some(&"cancel") => Form::Cancel(cancel::parse(&words[1..])),
+        Some(&"wait") => {
+            let w = wait::parse(&words[1..])?;
+            // `mktemp -d` before the first poll: where it can't make its
+            // folder, the shell says so in its own words.
+            if matches!(&w, Words::Ask(a) if !a.any) && !wait::temp_usable() {
+                return None;
+            }
+            Form::Wait(w)
+        }
         _ => return None,
     };
     let max_time = post_max_time(std::env::var_os("K2_CP_MAX_TIME"))?;
@@ -134,14 +167,13 @@ fn run_with(
     if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
         return stop;
     }
-    let Form::Cancel(words) = form;
-    let ask = match words {
-        Words::Ask(a) => a,
-        Words::Usage(line) => {
-            out::stderr_line(&line);
-            return Exit::Usage;
-        }
-        Words::ShiftFailed => return Exit::Error,
+    let verb = match form {
+        Form::Cancel(w) => w.ready().map(Ready::Cancel),
+        Form::Wait(w) => w.ready().map(Ready::Wait),
+    };
+    let ask = match verb {
+        Ok(a) => a,
+        Err(exit) => return exit,
     };
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);
@@ -159,7 +191,10 @@ fn run_with(
         project: settings.project.clone(),
         as_json,
     };
-    let exit = cancel::send(&mut cp, &ask);
+    let exit = match &ask {
+        Ready::Cancel(a) => cancel::send(&mut cp, a),
+        Ready::Wait(a) => wait::send(&mut cp, a),
+    };
     let closing = std::mem::take(&mut cp.closing);
     closing.flush(&mut client, exit);
     exit

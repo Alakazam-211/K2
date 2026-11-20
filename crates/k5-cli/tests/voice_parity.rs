@@ -521,6 +521,22 @@ fn voice_hands_these_to_the_shell() {
     });
 }
 
+/// A `K2_CJ_` variable in the environment: `_compute_json` reads only its
+/// arguments, so it never joins a body, and the binary answers.
+#[test]
+fn voice_a_k2_cj_variable_is_not_in_the_body() {
+    let rig = Rig::new(VERB, "cjvar");
+    rig.check(&case(
+        "join with K2_CJ_extra set",
+        &["join", "lounge"],
+        &[("K2_CJ_extra", "1")],
+        vec![ok(r#"{"room":{"name":"Lounge"},"callId":"c"}"#)],
+        owner_and_port,
+        0,
+        1,
+    ));
+}
+
 /// `_CP_404_EXIT` exported: nothing in the shell reads it any more
 /// (`_compute_fail` takes its exit for a 404 from the caller), so the
 /// binary answers.

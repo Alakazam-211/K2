@@ -14,11 +14,12 @@
 //!   `_compute_fail`'s line ([`fail_line`]): exit 2 for 400 and 413, else 3.
 //! - [`json`]: `_compute_json K2_CJ_<key>=<value>…`, the request bodies.
 //!
-//! The shell's `_compute_fail` and `_compute_json` read two things from
-//! the environment that no caller here sets: `_K2_REFUSAL_AREA` and any
-//! `K2_CJ_` variable. A family hands a command line to the shell when one
-//! of them is set ([`env_shell`]). `_compute_fail` takes its exit for a
-//! 404 from its caller (3 here) and never reads `_CP_404_EXIT`.
+//! The shell's `_compute_fail` reads one thing from the environment that
+//! no caller here sets: `_K2_REFUSAL_AREA`. A family hands a command line
+//! to the shell when it is set ([`env_shell`]). `_compute_fail` takes its
+//! exit for a 404 from its caller (3 here) and never reads `_CP_404_EXIT`,
+//! and `_compute_json` reads only its arguments (on stdin): a `K2_CJ_`
+//! variable in the caller's environment never joins a body.
 
 use crate::exit::Exit;
 use crate::families::without_nuls;
@@ -285,8 +286,7 @@ pub fn env_text(bytes: &[u8]) -> Value {
 /// here sets (see the module's notes): the command is the shell's.
 pub fn env_shell(names: impl IntoIterator<Item = OsString>) -> bool {
     names.into_iter().any(|n| {
-        n.to_str()
-            .is_some_and(|n| n == "_K2_REFUSAL_AREA" || n.starts_with("K2_CJ_"))
+        n.to_str().is_some_and(|n| n == "_K2_REFUSAL_AREA")
     })
 }
 

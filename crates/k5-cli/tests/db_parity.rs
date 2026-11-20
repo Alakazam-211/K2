@@ -1588,16 +1588,17 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             2,
             0,
         ),
-        // The shell's settings in the environment.
-        shell(case(
-            "a K2_CJ_ variable",
+        // `_compute_json` reads only its arguments: a `K2_CJ_` variable in
+        // the environment never joins the body, and the binary answers.
+        case(
+            "a K2_CJ_ variable: not in the body",
             &["cluster", "restart", "fb"],
             &[("K2_CJ_extra", "1")],
             vec![ok(r#"{"ok":true,"cluster":"17/fb"}"#)],
             owner_and_port,
             0,
             1,
-        )),
+        ),
         // Help never acts.
         shell(case(
             "versions-access on -h",

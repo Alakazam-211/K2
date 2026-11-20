@@ -25,9 +25,8 @@
 //!   succeeded, 3 when it was aborted or rolled back, else 1). An answer
 //!   that is not 200 is asked again, as the shell's `continue` does.
 //!
-//! The binary leaves these to the shell ([`shells`]): a `K2_CJ_` variable
-//! in the environment (`_compute_json` puts it in the body),
-//! `_K2_REFUSAL_AREA` or `_K2_NOANSWER_SOFT` set (the shell's internals),
+//! The binary leaves these to the shell ([`shells`]): `_K2_REFUSAL_AREA`
+//! or `_K2_NOANSWER_SOFT` set (the shell's internals),
 //! and `K2_CP_MAX_TIME` set for `versions-access` (the one call here that
 //! reads it). `_CP_404_EXIT` is not one: nothing in the shell reads it.
 
@@ -359,10 +358,9 @@ pub fn shells(
 ) -> bool {
     vars.into_iter().any(|(name, value)| {
         let name = name.to_string_lossy();
-        name.starts_with("K2_CJ_")
-            || (!value.is_empty()
-                && (matches!(name.as_ref(), "_K2_REFUSAL_AREA" | "_K2_NOANSWER_SOFT")
-                    || (name == "K2_CP_MAX_TIME" && matches!(ask, Ask::VersionsAccess { .. }))))
+        !value.is_empty()
+            && (matches!(name.as_ref(), "_K2_REFUSAL_AREA" | "_K2_NOANSWER_SOFT")
+                || (name == "K2_CP_MAX_TIME" && matches!(ask, Ask::VersionsAccess { .. })))
     })
 }
 

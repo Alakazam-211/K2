@@ -714,18 +714,17 @@ fn chat_hands_these_to_the_shell() {
                 1,
             )
         },
-        Case {
-            compare: Compare::Shell,
-            ..case(
-                "a K2_CJ_ variable set: the shell's",
-                &["send", "s/c", "x"],
-                &[("K2_CJ_extra", "1")],
-                vec![ok(POSTED)],
-                owner_and_port,
-                0,
-                1,
-            )
-        },
+        // `_compute_json` reads only its arguments: a `K2_CJ_` variable in
+        // the environment never joins the body, and the binary answers.
+        case(
+            "a K2_CJ_ variable set: not in the body",
+            &["send", "s/c", "x"],
+            &[("K2_CJ_extra", "1")],
+            vec![ok(POSTED)],
+            owner_and_port,
+            0,
+            1,
+        ),
     ] {
         rig.check(&c);
     }

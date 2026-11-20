@@ -667,7 +667,10 @@ fn a_native_or_spec_row_has_a_schema_entry_or_a_named_reason() {
 /// `grant|grants)` arm hands the list words to `cmd_skin`, and its
 /// `token|tokens)` arm is `cmd_skin_token`.
 fn app_skin_verb_reaches_cmd_skin(body: &str, verb: &k5_cli::route::Verb) {
-    assert!(body.contains("\n        *)\n            cmd_skin \"$@\"\n"), "cmd_app's *) arm");
+    assert!(
+        body.contains("\n        *)\n            cmd_skin \"$@\"\n"),
+        "cmd_app's *) arm"
+    );
     for word in verb.words {
         match *word {
             "user" | "users" | "role" | "roles" | "front-door" | "frontdoor" | "hydra" => {

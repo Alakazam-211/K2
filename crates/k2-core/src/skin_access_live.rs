@@ -177,6 +177,7 @@ mod tests {
     use super::*;
     use crate::skin;
     use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex as StdMutex};
 
     fn tables_in_skin_db() -> BTreeSet<String> {
@@ -374,33 +375,383 @@ mod tests {
 
     /// The update hook can't see either of these, so the sweep would be the only
     /// thing that notices. Keep them out of the code. Reads the sources, because
-    /// they're the claim.
+    /// they're the claim: the whole of every `src/skin*.rs` file and of every file
+    /// under `src/skin/`, skipping only test modules (see [`sources_to_scan`]).
     #[test]
     fn nothing_writes_an_access_table_where_the_hook_cant_see() {
-        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
-        let mut files = vec![];
-        for e in std::fs::read_dir(root).expect("src") {
-            let p = e.expect("entry").path();
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-            if name.starts_with("skin") && name.ends_with(".rs") && !name.ends_with("_tests.rs") && name != "skin_access_live.rs" {
-                files.push(p);
+        let read = sources_to_scan(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")));
+        assert!(read.len() > 10, "the source scan found too little: {:?}", read.iter().map(|(f, _)| f).collect::<Vec<_>>());
+        let mut found = vec![];
+        for (f, text) in &read {
+            for (line, why) in hook_blind_writes(text) {
+                found.push(format!("{}:{line}: {why}", f.display()));
             }
         }
-        assert!(files.len() > 10, "the source scan found too little: {files:?}");
-        for f in files {
-            let text = std::fs::read_to_string(&f).expect("read");
-            let cut = text.find("#[cfg(test)]").unwrap_or(text.len());
-            let text = &text[..cut];
-            assert!(!text.contains("WITHOUT ROWID"), "{}: the update hook doesn't fire on a WITHOUT ROWID table", f.display());
-            for t in ACCESS_TABLES {
-                assert!(!text.contains(&format!("OR REPLACE INTO {t}")), "{}: INSERT OR REPLACE into {t} reports only the insert to the hook", f.display());
-                let needle = format!("DELETE FROM {t}");
-                for (at, _) in text.match_indices(&needle) {
-                    let rest = text[at + needle.len()..].trim_start();
-                    assert!(rest.starts_with("WHERE"), "{}: `{needle}` with no WHERE doesn't fire the hook (truncate optimisation): {}", f.display(), &rest[..rest.len().min(40)]);
+        assert!(found.is_empty(), "writes the update hook can't see:\n{}", found.join("\n"));
+    }
+
+    /// The `(line, why)` of each write in `text` that the update hook can't see.
+    fn hook_blind_writes(text: &str) -> Vec<(usize, String)> {
+        let line = |at: usize| text[..at].matches('\n').count() + 1;
+        let mut found = vec![];
+        for (at, _) in text.match_indices("WITHOUT ROWID") {
+            found.push((line(at), "the update hook doesn't fire on a WITHOUT ROWID table".to_string()));
+        }
+        for t in ACCESS_TABLES {
+            for (at, _) in text.match_indices(&format!("OR REPLACE INTO {t}")) {
+                found.push((line(at), format!("INSERT OR REPLACE into {t} reports only the insert to the hook")));
+            }
+            let needle = format!("DELETE FROM {t}");
+            for (at, _) in text.match_indices(&needle) {
+                let rest = text[at + needle.len()..].trim_start();
+                if !rest.starts_with("WHERE") {
+                    let next: String = rest.chars().take(40).collect();
+                    found.push((line(at), format!("`{needle}` with no WHERE doesn't fire the hook (truncate optimisation): {next}")));
                 }
             }
         }
+        found.sort();
+        found
+    }
+
+    /// The files the access-table scan reads, each as [`without_test_modules`]
+    /// leaves it: every `skin*.rs` in `src` (but this file, whose rules name what
+    /// they forbid) and every `.rs` file under `src/skin/`, at any depth. A file
+    /// named `tests.rs` or `*_tests.rs` is skipped only when a `#[cfg(test)] mod`
+    /// in a scanned file declares it; otherwise this fails, because it may be
+    /// built into the daemon.
+    fn sources_to_scan(src: &Path) -> Vec<(PathBuf, String)> {
+        let mut files = vec![];
+        for e in std::fs::read_dir(src).unwrap_or_else(|e| panic!("{}: {e}", src.display())) {
+            let p = e.expect("entry").path();
+            let name = file_name(&p);
+            if name.starts_with("skin") && name.ends_with(".rs") && name != "skin_access_live.rs" {
+                files.push(p);
+            }
+        }
+        let dir = src.join("skin");
+        if dir.is_dir() {
+            rs_files_under(&dir, &mut files);
+        }
+        let (tests, code): (Vec<_>, Vec<_>) = files.into_iter().partition(|p| {
+            let name = file_name(p);
+            name == "tests.rs" || name.ends_with("_tests.rs")
+        });
+        let mut declared = BTreeSet::new();
+        let mut read = vec![];
+        for f in code {
+            let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+            let (kept, test_files) = std::panic::catch_unwind(|| without_test_modules(&text))
+                .unwrap_or_else(|_| panic!("{}: the test-module parser couldn't read it", f.display()));
+            declared.extend(test_files);
+            read.push((f, kept));
+        }
+        for t in &tests {
+            assert!(
+                declared.contains(&file_name(t)),
+                "{}: named like a test file, but no `#[cfg(test)] mod` declares it, so it may be built into the daemon: declare it as a test module or rename it",
+                t.display()
+            );
+        }
+        read.sort();
+        read
+    }
+
+    fn rs_files_under(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let p = e.expect("entry").path();
+            if p.is_dir() {
+                rs_files_under(&p, out);
+            } else if file_name(&p).ends_with(".rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    fn file_name(p: &Path) -> String {
+        p.file_name().and_then(|n| n.to_str()).unwrap_or_else(|| panic!("{}: not a UTF-8 file name", p.display())).to_string()
+    }
+
+    /// `src` with every test module blanked out, and the file names of the
+    /// out-of-line test modules it declares. A test module is `#[cfg(test)]` on a
+    /// `mod`, inline (`mod x { .. }`) or not (`mod x;`, with or without
+    /// `#[path]`). `#[cfg(test)]` on anything else is kept. Blanking keeps every
+    /// newline, so line numbers still match the file. Braces inside strings, chars
+    /// and comments don't count.
+    fn without_test_modules(src: &str) -> (String, Vec<String>) {
+        const CFG_TEST: &[u8] = b"#[cfg(test)]";
+        let b = src.as_bytes();
+        let mut cuts = vec![];
+        let mut declared = vec![];
+        let mut i = 0;
+        while i < b.len() {
+            if let Some(end) = past_literal(src, i) {
+                i = end;
+            } else if b[i..].starts_with(CFG_TEST) {
+                match test_mod_end(src, i + CFG_TEST.len()) {
+                    Some((end, file)) => {
+                        cuts.push(i..end);
+                        declared.extend(file);
+                        i = end;
+                    }
+                    None => i += CFG_TEST.len(),
+                }
+            } else {
+                i += 1;
+            }
+        }
+        let kept = src.char_indices().map(|(at, c)| if c != '\n' && cuts.iter().any(|r| r.contains(&at)) { ' ' } else { c }).collect();
+        (kept, declared)
+    }
+
+    /// After a `#[cfg(test)]` that ends at `j`: if what it covers is a `mod`, where
+    /// that module ends and, for `mod x;`, the file name it declares.
+    fn test_mod_end(src: &str, mut j: usize) -> Option<(usize, Option<String>)> {
+        let b = src.as_bytes();
+        let mut path = None;
+        loop {
+            j = past_space(src, j);
+            if !b[j..].starts_with(b"#[") {
+                break;
+            }
+            let end = closing(src, j + 1);
+            if let Some(v) = src[j + 2..end - 1].trim().strip_prefix("path") {
+                path = v.split('"').nth(1).map(|p| p.rsplit('/').next().unwrap_or(p).to_string());
+            }
+            j = end;
+        }
+        if let Some(after) = word(src, j, "pub") {
+            j = past_space(src, after);
+            if b.get(j) == Some(&b'(') {
+                j = closing(src, j);
+            }
+        }
+        j = past_space(src, word(src, past_space(src, j), "mod")?);
+        let name_end = src[j..].find(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(src.len(), |n| j + n);
+        let name = &src[j..name_end];
+        j = past_space(src, name_end);
+        match b.get(j) {
+            Some(b';') => Some((j + 1, Some(path.unwrap_or_else(|| format!("{name}.rs"))))),
+            Some(b'{') => Some((closing(src, j), None)),
+            _ => None,
+        }
+    }
+
+    /// `w` as a whole word at `j`: where it ends.
+    fn word(src: &str, j: usize, w: &str) -> Option<usize> {
+        let end = j + w.len();
+        (src.as_bytes()[j..].starts_with(w.as_bytes()) && !src.as_bytes().get(end).is_some_and(|c| ident_byte(*c))).then_some(end)
+    }
+
+    fn ident_byte(c: u8) -> bool {
+        c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80
+    }
+
+    /// Past whitespace and comments from `j`.
+    fn past_space(src: &str, mut j: usize) -> usize {
+        let b = src.as_bytes();
+        loop {
+            while b.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            if b[j..].starts_with(b"//") || b[j..].starts_with(b"/*") {
+                j = past_literal(src, j).expect("a comment");
+            } else {
+                return j;
+            }
+        }
+    }
+
+    /// Just past the bracket that closes the one at `open`.
+    fn closing(src: &str, open: usize) -> usize {
+        let b = src.as_bytes();
+        let (o, c) = match b[open] {
+            b'{' => (b'{', b'}'),
+            b'[' => (b'[', b']'),
+            b'(' => (b'(', b')'),
+            x => panic!("byte {open} is `{}`, not a bracket", x as char),
+        };
+        let mut depth = 0usize;
+        let mut j = open;
+        while j < b.len() {
+            if let Some(end) = past_literal(src, j) {
+                j = end;
+                continue;
+            }
+            if b[j] == o {
+                depth += 1;
+            } else if b[j] == c {
+                depth -= 1;
+                if depth == 0 {
+                    return j + 1;
+                }
+            }
+            j += 1;
+        }
+        panic!("no closing `{}` for the `{}` at byte {open}", c as char, o as char);
+    }
+
+    /// If a comment, string or char literal starts at `i`, where it ends.
+    fn past_literal(src: &str, i: usize) -> Option<usize> {
+        let b = src.as_bytes();
+        let find = |from: usize, what: &[u8]| -> usize {
+            (from..b.len()).find(|&k| b[k..].starts_with(what)).unwrap_or_else(|| panic!("a literal at byte {i} never ends"))
+        };
+        let rest = &b[i..];
+        if rest.starts_with(b"//") {
+            return Some((i..b.len()).find(|&k| b[k] == b'\n').unwrap_or(b.len()));
+        }
+        if rest.starts_with(b"/*") {
+            let (mut depth, mut j) = (0usize, i);
+            while j < b.len() {
+                if b[j..].starts_with(b"/*") {
+                    depth += 1;
+                    j += 2;
+                } else if b[j..].starts_with(b"*/") {
+                    depth -= 1;
+                    j += 2;
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                } else {
+                    j += 1;
+                }
+            }
+            panic!("a block comment at byte {i} never ends");
+        }
+        if rest[0] == b'"' {
+            let mut j = i + 1;
+            while j < b.len() {
+                match b[j] {
+                    b'\\' => j += 2,
+                    b'"' => return Some(j + 1),
+                    _ => j += 1,
+                }
+            }
+            panic!("a string at byte {i} never ends");
+        }
+        if rest[0] == b'\'' {
+            if rest.get(1) == Some(&b'\\') {
+                return Some(find(i + 3, b"'") + 1);
+            }
+            let k = i + 1 + src[i + 1..].chars().next()?.len_utf8();
+            // Otherwise it's a lifetime.
+            return (b.get(k) == Some(&b'\'')).then_some(k + 1);
+        }
+        // Raw strings: r"..", r#".."#, br"..", cr"..".
+        if i > 0 && ident_byte(b[i - 1]) {
+            return None;
+        }
+        let r = match rest {
+            [b'b' | b'c', b'r', ..] => i + 1,
+            [b'r', ..] => i,
+            _ => return None,
+        };
+        let hashes = b[r + 1..].iter().take_while(|&&c| c == b'#').count();
+        if b.get(r + 1 + hashes) != Some(&b'"') {
+            return None;
+        }
+        let mut close = vec![b'"'];
+        close.resize(1 + hashes, b'#');
+        Some(find(r + 2 + hashes, &close) + close.len())
+    }
+
+    fn fixture(lines: &[&str]) -> String {
+        lines.join("\n")
+    }
+
+    #[test]
+    fn the_source_scan_skips_test_modules_and_nothing_else() {
+        let src = fixture(&[
+            r##"fn a() { let _ = "DELETE FROM grants;"; }"##,
+            r##"#[cfg(test)]"##,
+            r##"fn helper() -> &'static str { "DELETE FROM roles" }"##,
+            r##"#[cfg(test)]"##,
+            r##"#[path = "skin_x_tests.rs"]"##,
+            r##"mod tests;"##,
+            r##"#[cfg(test)] // a comment between"##,
+            r##"#[allow(dead_code)]"##,
+            r##"mod inline {"##,
+            r##"    // a brace in a comment: {"##,
+            r##"    const S: &str = "}{ \" DELETE FROM tokens;";"##,
+            r##"    const R: &str = r#"}"#;"##,
+            r##"    const C: char = '}';"##,
+            r##"    const Q: char = '\'';"##,
+            r##"    fn f<'a>(x: &'a str) -> &'a str { x }"##,
+            r##"    /* nested /* } */ still a comment { */"##,
+            r##"    #[cfg(test)]"##,
+            r##"    mod deeper { const D: &str = "DELETE FROM grants;"; }"##,
+            r##"}"##,
+            r##"#[cfg(test)]"##,
+            r##"pub(crate) mod another { const E: &str = "CREATE TABLE t (id TEXT) WITHOUT ROWID"; }"##,
+            r##"#[cfg(test)]"##,
+            r##"mod plain_tests;"##,
+            r##"fn z() { let _ = "INSERT OR REPLACE INTO grants (id) VALUES (1)"; }"##,
+            r##"fn w() { let _ = "DELETE FROM tokens WHERE id = 1"; }"##,
+        ]);
+        let (kept, declared) = without_test_modules(&src);
+        assert_eq!(kept.lines().count(), src.lines().count(), "blanking keeps the lines");
+        assert_eq!(declared, ["skin_x_tests.rs", "plain_tests.rs"]);
+        let lines: Vec<usize> = hook_blind_writes(&kept).into_iter().map(|(line, _)| line).collect();
+        assert_eq!(lines, [1, 3, 24], "{kept}");
+        assert!(kept.contains("fn helper()") && kept.contains("fn z()"), "{kept}");
+        assert!(!kept.contains("mod inline") && !kept.contains("mod another"), "{kept}");
+    }
+
+    #[test]
+    #[should_panic(expected = "never ends")]
+    fn a_source_the_parser_cant_follow_fails_the_scan() {
+        without_test_modules("#[cfg(test)]\nmod t {\n    const S: &str = \"}\n");
+    }
+
+    /// A throwaway source tree, removed on drop.
+    struct Tree(PathBuf);
+
+    impl Tree {
+        fn new(files: &[(&str, &str)]) -> Tree {
+            let root = std::env::temp_dir().join(format!("skin-scan-{}", uuid::Uuid::new_v4()));
+            for (path, text) in files {
+                let p = root.join(path);
+                std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+                std::fs::write(&p, text).expect("write");
+            }
+            Tree(root)
+        }
+
+        fn read(&self) -> Vec<(String, Vec<usize>)> {
+            sources_to_scan(&self.0)
+                .into_iter()
+                .map(|(f, text)| {
+                    let rel = f.strip_prefix(&self.0).expect("under the tree").to_string_lossy().replace('\\', "/");
+                    (rel, hook_blind_writes(&text).into_iter().map(|(line, _)| line).collect())
+                })
+                .collect()
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_source_scan_reads_src_skin_at_any_depth_and_skips_declared_test_files() {
+        let tree = Tree::new(&[
+            ("skin.rs", "#[cfg(test)]\n#[path = \"skin_tests.rs\"]\nmod tests;\n"),
+            ("skin_tests.rs", "const X: &str = \"DELETE FROM grants;\";\n"),
+            ("skin_access_live.rs", "// WITHOUT ROWID\n"),
+            ("skin/deep/rooms.rs", "\nconst X: &str = \"DELETE FROM roles;\";\n"),
+            ("other.rs", "const X: &str = \"DELETE FROM grants;\";\n"),
+        ]);
+        assert_eq!(tree.read(), [("skin/deep/rooms.rs".to_string(), vec![2]), ("skin.rs".to_string(), vec![])]);
+    }
+
+    #[test]
+    #[should_panic(expected = "no `#[cfg(test)] mod` declares it")]
+    fn a_test_named_file_nothing_declares_is_not_skipped() {
+        let tree = Tree::new(&[("skin.rs", "fn a() {}\n"), ("skin/stray_tests.rs", "const X: &str = \"DELETE FROM grants;\";\n")]);
+        tree.read();
     }
 
     #[test]

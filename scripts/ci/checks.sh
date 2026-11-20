@@ -94,6 +94,7 @@ part_web() {
     step "no daemon call through a proxy or with a query token (lint)"; bash tests/cli/no_proxy_lint.sh
     step "a POST that tried the cell socket is sent once (lint)"; bash tests/cli/post_no_resend_lint.sh
     step "no daemon answer reaches python3 in argv (lint)"; bash tests/cli/python_argv_answer_lint.sh
+    step "no shell value is pasted into a python3 or node program (lint)"; bash tests/cli/python_code_values_lint.sh
     step "k2 compute fetch gets every file of a job with many (stub daemon)"; bash tests/cli/compute_fetch_many_artifacts.sh
     step "k2 never sends a daemon request through a proxy (stub daemon)"; bash tests/cli/no_proxy_to_daemon.sh
     step "one proxy rule in Rust, the CLI's curl and its Python (parity table)"; bash tests/cli/proxy_rule_parity.sh

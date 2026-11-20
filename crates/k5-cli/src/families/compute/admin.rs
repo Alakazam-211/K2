@@ -162,7 +162,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     {
         return Some(stop);
     }
-    let rest = &words[1..];
+    // `compute` alone has no words after the verb.
+    let rest = words.get(1..).unwrap_or_default();
     let ask = match which {
         Which::Switch => ready(switch::parse(words[0], rest)).map(Ask::Switch),
         Which::Retier => ready(retier::parse(rest)).map(Ask::Retier),

@@ -9,7 +9,9 @@
 //!   (`_chat_usage_err`, exit 2). `chat` alone stays the front's composed
 //!   page (`help_tiers_parity.rs` and `chat_parity.rs` have it).
 //! - The version (`version`, `--version`, `-v`), which the front answers
-//!   by its own code with no row of the table in the way.
+//!   by its own code with no row of the table in the way. With no daemon
+//!   the two differ by the named difference `version-offline`
+//!   (scripts/cli-parity.sh), so the rows here have one.
 //!
 //! Each row is the binary's own answer, not a hand-over that prints the
 //! same: after the rig's check the binary runs the line once more and must
@@ -138,13 +140,9 @@ fn chat_json() {
 fn the_version() {
     for (word, tag) in [("version", "word"), ("--version", "flag"), ("-v", "v")] {
         let rig = Rig::new(word, tag);
-        for c in [
-            // covers: version
-            case("the version", &[], &[], vec![], owner_and_port, 0, 0),
-            case("the version, no daemon", &[], &[], vec![], nothing, 0, 0),
-        ] {
-            answered_here(&rig, &c);
-        }
+        // covers: version
+        let c = case("the version", &[], &[], vec![], owner_and_port, 0, 0);
+        answered_here(&rig, &c);
     }
 }
 

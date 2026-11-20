@@ -480,11 +480,7 @@ fn cli_status_json_parses_and_matches_the_table() {
                     } else {
                         words.join("|")
                     };
-                    (
-                        noun.clone(),
-                        verb,
-                        string(field(&v, "owner")).unwrap(),
-                    )
+                    (noun.clone(), verb, string(field(&v, "owner")).unwrap())
                 })
                 .collect::<Vec<_>>()
         })

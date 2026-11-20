@@ -527,9 +527,11 @@ fn compute_hands_these_to_the_shell() {
         ..c
     };
     let v = vec![
+        // `compute` alone is the binary's (bare_parity.rs); `help` is no
+        // verb row.
         shell(case(
-            "compute alone",
-            &[],
+            "compute help",
+            &["help"],
             &[],
             vec![],
             owner_and_port,

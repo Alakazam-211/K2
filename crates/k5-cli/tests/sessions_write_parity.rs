@@ -55,7 +55,13 @@ fn sessions_open_as_the_shell_does() {
     let rig = Rig::new(VERB, "open");
     let v = vec![
         // covers: sessions open
-        row("open: resumed its tab", &["open", "ab12"], vec![ok(OPENED)], 0, 1),
+        row(
+            "open: resumed its tab",
+            &["open", "ab12"],
+            vec![ok(OPENED)],
+            0,
+            1,
+        ),
         row(
             "open: reopened, every flag",
             &[
@@ -87,7 +93,9 @@ fn sessions_open_as_the_shell_does() {
         row(
             "open: asleep with wakeWith",
             &["open", "ab12"],
-            vec![ok(r#"{"address":"acme","wakeWith":"k2 msg acme \"wake\""}"#)],
+            vec![ok(
+                r#"{"address":"acme","wakeWith":"k2 msg acme \"wake\""}"#,
+            )],
             0,
             1,
         ),
@@ -142,7 +150,10 @@ fn sessions_open_as_the_shell_does() {
         row(
             "open: a 404 that is an answer",
             &["open", "ab12"],
-            vec![Reply::Answer(404, r#"{"error":{"code":"no_such_chat","hint":"none"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"no_such_chat","hint":"none"}}"#.into(),
+            )],
             4,
             1,
         ),
@@ -175,8 +186,20 @@ fn sessions_open_as_the_shell_does() {
         // The words.
         row("open: no id", &["open"], vec![], 2, 0),
         row("open: two ids", &["open", "a", "b"], vec![], 2, 0),
-        row("open: an unknown flag", &["open", "a", "--bogus"], vec![], 2, 0),
-        row("open: a value flag last", &["open", "a", "--name"], vec![], 1, 0),
+        row(
+            "open: an unknown flag",
+            &["open", "a", "--bogus"],
+            vec![],
+            2,
+            0,
+        ),
+        row(
+            "open: a value flag last",
+            &["open", "a", "--name"],
+            vec![],
+            1,
+            0,
+        ),
         row(
             "open: --brief and --brief-text",
             &["open", "a", "--brief", "x", "--brief-text", "y"],
@@ -213,10 +236,24 @@ fn sessions_main_set_as_the_shell_does() {
     let rig = Rig::new(VERB, "mainset");
     let v = vec![
         // covers: sessions main set
-        row("main set: keep the main Thread", &["main", "set", "cd34"], vec![ok(SET)], 0, 1),
+        row(
+            "main set: keep the main Thread",
+            &["main", "set", "cd34"],
+            vec![ok(SET)],
+            0,
+            1,
+        ),
         row(
             "main set: adopt the sidecar's Thread, --workspace",
-            &["main", "--thread", "adopt-sidecar", "set", "cd34", "--workspace", "/w/acme"],
+            &[
+                "main",
+                "--thread",
+                "adopt-sidecar",
+                "set",
+                "cd34",
+                "--workspace",
+                "/w/acme",
+            ],
             vec![ok(
                 r#"{"workspace":"acme","main":{"conversationId":"cd34","cli":"codex"},"previous":"cd34","thread":{"choice":"adopt_sidecar","other":{}},"restartWith":null}"#,
             )],
@@ -253,9 +290,27 @@ fn sessions_main_set_as_the_shell_does() {
             1,
         )),
         row("main set: no id", &["main", "set"], vec![], 2, 0),
-        row("main set: a bad --thread", &["main", "set", "x", "--thread", "other"], vec![], 2, 0),
-        row("main set: a word too many", &["main", "set", "x", "y"], vec![], 2, 0),
-        row("main set: --workspace last", &["main", "set", "x", "--workspace"], vec![], 1, 0),
+        row(
+            "main set: a bad --thread",
+            &["main", "set", "x", "--thread", "other"],
+            vec![],
+            2,
+            0,
+        ),
+        row(
+            "main set: a word too many",
+            &["main", "set", "x", "y"],
+            vec![],
+            2,
+            0,
+        ),
+        row(
+            "main set: --workspace last",
+            &["main", "set", "x", "--workspace"],
+            vec![],
+            1,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -268,10 +323,27 @@ fn sessions_new_and_stop_as_the_shell_does() {
     let made = r#"{"address":"acme/helper","harness":"claude","brief":{"path":".k2/brief.md","bytes":12}}"#;
     let v = vec![
         // covers: sessions new
-        row("new: the default harness", &["new", "helper"], vec![ok(made)], 0, 1),
+        row(
+            "new: the default harness",
+            &["new", "helper"],
+            vec![ok(made)],
+            0,
+            1,
+        ),
         row(
             "new: --cli cursor, --model, --brief-text, --workspace",
-            &["new", "helper", "--cli", "cursor", "--model", "m", "--brief-text", "b", "--workspace", "/w"],
+            &[
+                "new",
+                "helper",
+                "--cli",
+                "cursor",
+                "--model",
+                "m",
+                "--brief-text",
+                "b",
+                "--workspace",
+                "/w",
+            ],
             vec![ok(made)],
             0,
             1,
@@ -293,9 +365,27 @@ fn sessions_new_and_stop_as_the_shell_does() {
         row("new: no name", &["new"], vec![], 2, 0),
         row("new: two names", &["new", "a", "b"], vec![], 2, 0),
         row("new: --worktree", &["new", "a", "--worktree"], vec![], 2, 0),
-        row("new: --cli and --harness", &["new", "a", "--cli", "pi", "--harness", "pi"], vec![], 2, 0),
-        row("new: an unknown --cli", &["new", "a", "--cli", "vim"], vec![], 2, 0),
-        row("new: a value flag last", &["new", "a", "--model"], vec![], 1, 0),
+        row(
+            "new: --cli and --harness",
+            &["new", "a", "--cli", "pi", "--harness", "pi"],
+            vec![],
+            2,
+            0,
+        ),
+        row(
+            "new: an unknown --cli",
+            &["new", "a", "--cli", "vim"],
+            vec![],
+            2,
+            0,
+        ),
+        row(
+            "new: a value flag last",
+            &["new", "a", "--model"],
+            vec![],
+            1,
+            0,
+        ),
         // covers: sessions stop
         row(
             "stop",
@@ -312,8 +402,20 @@ fn sessions_new_and_stop_as_the_shell_does() {
             1,
         ),
         row("stop: no name", &["stop"], vec![], 2, 0),
-        row("stop: an unknown flag", &["stop", "a", "--all"], vec![], 2, 0),
-        row("stop: --workspace last", &["stop", "a", "--workspace"], vec![], 1, 0),
+        row(
+            "stop: an unknown flag",
+            &["stop", "a", "--all"],
+            vec![],
+            2,
+            0,
+        ),
+        row(
+            "stop: --workspace last",
+            &["stop", "a", "--workspace"],
+            vec![],
+            1,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

@@ -111,7 +111,13 @@ fn held(r: &Response) -> Vec<u8> {
 
 /// Steps 2 to 4 of the module's notes, on a connected client; `path`
 /// is not empty, and a folder was taken as `cd` names it.
-pub fn run(client: &mut Client, closing: &mut Closing, path: &str, dir: Option<&str>, mode: Mode) -> Exit {
+pub fn run(
+    client: &mut Client,
+    closing: &mut Closing,
+    path: &str,
+    dir: Option<&str>,
+    mode: Mode,
+) -> Exit {
     let passport = client.passport().is_some();
     let path = match dir {
         Some(d) => d.to_string(),
@@ -199,7 +205,13 @@ fn first(raw: &str, n: usize) -> String {
     raw.chars().take(n).collect()
 }
 
-fn shown(raw: &str, mode: Mode, path: &str, fallback: bool, o: &mut String) -> Result<Shown, Raise> {
+fn shown(
+    raw: &str,
+    mode: Mode,
+    path: &str,
+    fallback: bool,
+    o: &mut String,
+) -> Result<Shown, Raise> {
     let data = match json::parse(raw) {
         Ok(d) => d,
         Err(_) => {
@@ -225,9 +237,18 @@ fn shown(raw: &str, mode: Mode, path: &str, fallback: bool, o: &mut String) -> R
                 continue;
             }
             out.push(vec![
-                ("sessionId".into(), at(d, "terminalId").cloned().unwrap_or(Value::Null)),
-                ("agentName".into(), at(d, "agentName").cloned().unwrap_or(Value::Null)),
-                ("command".into(), at(d, "command").cloned().unwrap_or(Value::Null)),
+                (
+                    "sessionId".into(),
+                    at(d, "terminalId").cloned().unwrap_or(Value::Null),
+                ),
+                (
+                    "agentName".into(),
+                    at(d, "agentName").cloned().unwrap_or(Value::Null),
+                ),
+                (
+                    "command".into(),
+                    at(d, "command").cloned().unwrap_or(Value::Null),
+                ),
                 ("args".into(), Value::Array(Vec::new())),
                 ("cwd".into(), cwd),
                 ("isV2".into(), Value::Bool(true)),
@@ -328,7 +349,10 @@ fn refusal(data: &Value, raw: &str) -> Shown {
         Value::Object(d) => Some(d),
         _ => None,
     };
-    let err = d.and_then(|d| get(d, "error")).cloned().unwrap_or(Value::Null);
+    let err = d
+        .and_then(|d| get(d, "error"))
+        .cloned()
+        .unwrap_or(Value::Null);
     let (code, msg) = match &err {
         Value::Object(e) => {
             let code = py::str_of(&or(get(e, "code"), s("")));
@@ -370,9 +394,16 @@ fn refusal(data: &Value, raw: &str) -> Shown {
                 return raised(String::new(), stderr, &r);
             };
             let all = format!("{code} {}", py::str_of(&msg)).to_lowercase();
-            ["owner", "forbidden", "credential", "token", "person", "not allowed"]
-                .iter()
-                .any(|w| all.contains(w))
+            [
+                "owner",
+                "forbidden",
+                "credential",
+                "token",
+                "person",
+                "not allowed",
+            ]
+            .iter()
+            .any(|w| all.contains(w))
         }
     };
     if refused {

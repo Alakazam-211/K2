@@ -82,7 +82,10 @@ pub enum Write {
         json: bool,
     },
     /// `live` ([`super::live`]): a read, but the owner's raw view.
-    Live { path: String, mode: super::live::Mode },
+    Live {
+        path: String,
+        mode: super::live::Mode,
+    },
 }
 
 /// What the words come to.
@@ -143,10 +146,9 @@ pub fn parse(words: &[&str]) -> Option<Plan> {
         }
         "main" if rest.contains(&"set") => main_set(rest),
         "live" => Some(match super::live::parse(rest) {
-            (path, _) if path.is_empty() => Plan::Stop(
-                super::live::usage().trim_end().to_string(),
-                Exit::Error,
-            ),
+            (path, _) if path.is_empty() => {
+                Plan::Stop(super::live::usage().trim_end().to_string(), Exit::Error)
+            }
             (path, mode) => Plan::Do(Write::Live { path, mode }),
         }),
         _ => None,
@@ -156,7 +158,9 @@ pub fn parse(words: &[&str]) -> Option<Plan> {
 /// `--brief` and `--brief-text` both, or a file that is not there.
 fn brief_check(b: &Brief) -> Option<Plan> {
     if !b.file.is_empty() && b.have_text {
-        return Some(usage("usage: pass --brief or --brief-text, not both".into()));
+        return Some(usage(
+            "usage: pass --brief or --brief-text, not both".into(),
+        ));
     }
     if !b.file.is_empty() && b.file != "-" && !Path::new(&b.file).is_file() {
         return Some(usage(format!("usage: brief file not found: {}", b.file)));
@@ -165,7 +169,13 @@ fn brief_check(b: &Brief) -> Option<Plan> {
 }
 
 fn open(words: &[&str]) -> Plan {
-    let (mut id, mut name, mut workspace, mut harness, mut model) = Default::default();
+    let (mut id, mut name, mut workspace, mut harness, mut model) = (
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
     let (mut force, mut json) = (false, false);
     let mut brief = Brief::default();
     let mut i = 0;
@@ -219,8 +229,13 @@ fn open(words: &[&str]) -> Plan {
 }
 
 fn new(words: &[&str]) -> Plan {
-    let (mut name, mut cli, mut harness, mut workspace, mut model) =
-        (String::new(), String::new(), String::new(), String::new(), String::new());
+    let (mut name, mut cli, mut harness, mut workspace, mut model) = (
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
     let mut json = false;
     let mut brief = Brief::default();
     let mut i = 0;
@@ -387,9 +402,7 @@ fn brief_text(b: &Brief) -> Result<Option<String>, String> {
     } else if !b.file.is_empty() {
         match std::fs::read(&b.file) {
             Ok(raw) => raw,
-            Err(e) => {
-                return Err(Raise::at(10, pyjson::os_error(&e, &b.file).last_line()).text())
-            }
+            Err(e) => return Err(Raise::at(10, pyjson::os_error(&e, &b.file).last_line()).text()),
         }
     } else if b.have_text {
         return Ok(Some(b.text.clone()));
@@ -675,7 +688,9 @@ pub fn main_set_lines(v: &Value, o: &mut Lines) -> Result<Exit, Raise> {
         title
     ));
     let prev = get(v, "previous", S_WAS_IF)?;
-    if py::truthy(&prev) && !super::super::feedback::ask::py_eq(&prev, &get(&m, "conversationId", S_WAS_IF)?) {
+    if py::truthy(&prev)
+        && !super::super::feedback::ask::py_eq(&prev, &get(&m, "conversationId", S_WAS_IF)?)
+    {
         let p = index(v, "previous", S_WAS)?;
         let short = sidecar::py_slice(&p, 8, S_WAS)?;
         o.stdout.push_str(&format!(
@@ -709,9 +724,8 @@ pub fn main_set_lines(v: &Value, o: &mut Lines) -> Result<Exit, Raise> {
         o.stdout.push('\n');
         if py::truthy(&get(&other, "address", addr_line)?) {
             let a = str_of(&index(&other, "address", line)?);
-            o.stdout.push_str(&format!(
-                "{kept} {a} (read it: {CLI} thread {a})\n"
-            ));
+            o.stdout
+                .push_str(&format!("{kept} {a} (read it: {CLI} thread {a})\n"));
         }
     }
     let restart = get(v, "restartWith", S_RESTART)?;

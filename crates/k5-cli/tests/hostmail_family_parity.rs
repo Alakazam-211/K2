@@ -19,7 +19,15 @@ fn hostmail_with_no_verb_as_the_shell_does() {
     let rig = Rig::new(VERB, "bare");
     for c in [
         // covers: hostmail
-        case("hostmail alone: the help", &[], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "hostmail alone: the help",
+            &[],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         // covers: hostmail --json
         case(
             "hostmail --json: no verb",

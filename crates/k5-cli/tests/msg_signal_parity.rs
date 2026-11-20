@@ -237,7 +237,15 @@ fn msg_signal_sends_as_the_shell_does() {
         env(
             plain(
                 "status from *_AGENT_NAME, the payload no JSON, other words skipped",
-                &["ws", "extra", "--signal", "status", "--payload", "{not", "--x"],
+                &[
+                    "ws",
+                    "extra",
+                    "--signal",
+                    "status",
+                    "--payload",
+                    "{not",
+                    "--x",
+                ],
                 vec![ok("answer with no newline")],
                 0,
                 1,
@@ -253,14 +261,27 @@ fn msg_signal_sends_as_the_shell_does() {
         ),
         plain(
             "presence's own state",
-            &["ws", "--signal", "presence", "--payload", r#"{"state":"away"}"#],
+            &[
+                "ws",
+                "--signal",
+                "presence",
+                "--payload",
+                r#"{"state":"away"}"#,
+            ],
             vec![ok(OK)],
             0,
             1,
         ),
         plain(
             "a custom kind with a list payload, bare --inbox",
-            &["ws", "--signal", "ping", "--payload", "[1, NaN, 2e400]", "--inbox"],
+            &[
+                "ws",
+                "--signal",
+                "ping",
+                "--payload",
+                "[1, NaN, 2e400]",
+                "--inbox",
+            ],
             vec![ok(OK)],
             0,
             1,
@@ -395,7 +416,11 @@ fn msg_signal_value_flag_last_is_the_d6_line() {
     let cli = k2_client::brand::CLI_NAME;
     for (name, args, flag) in [
         ("--signal last", &["ws", "--signal"][..], "--signal"),
-        ("--payload last", &["ws", "--signal", "k", "--payload"], "--payload"),
+        (
+            "--payload last",
+            &["ws", "--signal", "k", "--payload"],
+            "--payload",
+        ),
         ("--from last", &["ws", "--signal", "k", "--from"], "--from"),
     ] {
         let c = plain(name, args, vec![], 1, 0);

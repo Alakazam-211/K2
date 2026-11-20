@@ -15,21 +15,18 @@ mod common;
 
 use common::parity::*;
 
-const USAGE: &str = r#"{"rows":[{"kind":"fallthrough","key":"docs","count":2,"first_at":1,"last_at":2}]}"#;
+const USAGE: &str =
+    r#"{"rows":[{"kind":"fallthrough","key":"docs","count":2,"first_at":1,"last_at":2}]}"#;
 
 #[test]
 fn the_version_as_the_shell_prints_it() {
-    for (verb, tag) in [("version", "v-word"), ("--version", "v-flag"), ("-v", "v-short")] {
+    for (verb, tag) in [
+        ("version", "v-word"),
+        ("--version", "v-flag"),
+        ("-v", "v-short"),
+    ] {
         let rig = Rig::new(verb, tag);
-        rig.check(&case(
-            "the version",
-            &[],
-            &[],
-            vec![],
-            owner_and_port,
-            0,
-            0,
-        ));
+        rig.check(&case("the version", &[], &[], vec![], owner_and_port, 0, 0));
     }
 }
 
@@ -39,7 +36,15 @@ fn the_version_as_the_shell_prints_it() {
 fn cli_status_is_the_binary_own_verb() {
     let rig = Rig::new("cli", "status");
     let cases = [
-        case("cli status", &["status"], &[], vec![ok(USAGE)], owner_and_port, 2, 0),
+        case(
+            "cli status",
+            &["status"],
+            &[],
+            vec![ok(USAGE)],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "cli status --json",
             &["status", "--json"],
@@ -57,8 +62,7 @@ fn cli_status_is_the_binary_own_verb() {
         assert_eq!(b.code, Some(2), "{name}: bash's exit: {b:?}");
         assert_eq!(b.stdout, "", "{name}: bash's stdout");
         assert_eq!(
-            b.stderr,
-            "k5 cli status is answered by the k5 binary: run k5 cli status\n",
+            b.stderr, "k5 cli status is answered by the k5 binary: run k5 cli status\n",
             "{name}: bash's line"
         );
         assert!(
@@ -69,11 +73,7 @@ fn cli_status_is_the_binary_own_verb() {
         assert_eq!((r.code, r.signal), (Some(0), None), "{name}: {r:?}");
         assert_eq!(r.stderr, "", "{name}: the binary's stderr");
         assert_eq!(sent.len(), 1, "{name}: the binary's requests: {sent:?}");
-        assert!(
-            sent[0].contains("/cli/cli-usage?"),
-            "{name}: {}",
-            sent[0]
-        );
+        assert!(sent[0].contains("/cli/cli-usage?"), "{name}: {}", sent[0]);
         if name.ends_with("--json") {
             let doc = k5_cli::out::json::parse(&r.stdout)
                 .unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}\n{}", r.stdout));

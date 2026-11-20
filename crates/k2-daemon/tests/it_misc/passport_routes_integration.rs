@@ -680,7 +680,8 @@ async fn skills_never_reach_the_workspaces_own_agent_folder() {
         std::fs::remove_dir_all(&persona_dir).expect("clear the persona");
     }
     std::fs::create_dir_all(&skill).expect("skill dir");
-    std::fs::write(skill.join("SKILL.md"), "---\nname: backend\nrole: dev\n---\nBackend.\n").expect("skill");
+    // A skill caught mid-migration keeps an AGENT.md (what profile reads).
+    std::fs::write(skill.join("AGENT.md"), "---\nname: backend\nrole: dev\n---\nBackend.\n").expect("skill");
     let r = http(e.port, "GET", &format!("/cli/agents/profile?project={own}&agent=backend"), Some(e.passport.as_str()));
     assert_eq!(r.status, 200, "profile of another skill: {}", r.raw);
     assert!(r.raw.contains("Backend."), "{}", r.raw);
@@ -746,10 +747,25 @@ async fn ticket_show_never_lists_other_workspaces_ids() {
     let theirs = ticket(&e.other_id, "Other question");
     let (mine_id, theirs_id) = ("abcd1111-0000-4000-8000-000000000001", "abcd2222-0000-4000-8000-000000000002");
     {
+        // Give both tickets ids that share a prefix, in every table that
+        // points at a ticket.
         let db = k2_core::db::shared();
         let conn = db.lock();
-        conn.execute("UPDATE feedback SET id = ?1 WHERE id = ?2", [mine_id, mine.as_str()]).expect("own id");
-        conn.execute("UPDATE feedback SET id = ?1 WHERE id = ?2", [theirs_id, theirs.as_str()]).expect("other id");
+        let children: Vec<(String, String)> = {
+            let mut st = conn
+                .prepare("SELECT m.name, f.\"from\" FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type = 'table' AND f.\"table\" = 'feedback'")
+                .expect("foreign keys");
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("query");
+            rows.collect::<Result<_, _>>().expect("rows")
+        };
+        conn.execute_batch("PRAGMA foreign_keys = OFF").expect("fk off");
+        for (new, old) in [(mine_id, mine.as_str()), (theirs_id, theirs.as_str())] {
+            conn.execute("UPDATE feedback SET id = ?1 WHERE id = ?2", [new, old]).expect("ticket id");
+            for (table, col) in &children {
+                conn.execute(&format!("UPDATE \"{table}\" SET \"{col}\" = ?1 WHERE \"{col}\" = ?2"), [new, old]).expect("child id");
+            }
+        }
+        conn.execute_batch("PRAGMA foreign_keys = ON").expect("fk on");
     }
     let r = http(e.port, "GET", "/cli/feedback/show?id=abcd1", Some(e.passport.as_str()));
     assert_eq!(r.status, 200, "its own ticket by a unique prefix: {}", r.raw);

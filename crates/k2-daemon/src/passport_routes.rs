@@ -230,7 +230,12 @@ pub(crate) async fn serve_tcp(
     if path == "/cli/feedback/show" {
         pin_own_ticket(&mut params, &principal.workspace_uuid);
     }
-    if let Some(r) = merge_needs_person(path, &params, &principal).or_else(|| actor_is_the_passport(path, &mut params, &principal)) {
+    // The workspace scope first (`cli::dispatch` applies it again), then the
+    // steps a person makes, then the actor.
+    let refused = refusal(path, &params)
+        .or_else(|| merge_needs_person(path, &params, &principal))
+        .or_else(|| actor_is_the_passport(path, &mut params, &principal));
+    if let Some(r) = refused {
         http::send_response(stream, r.status, r.content_type, &r.body).await;
         return;
     }
@@ -413,7 +418,7 @@ pub(crate) fn refusal(path: &str, params: &HashMap<String, String>) -> Option<Cl
             if one_reachable_workspace(ws, q) {
                 None
             } else {
-                Some(not_found(q))
+                Some(not_found())
             }
         }
     }
@@ -438,14 +443,14 @@ fn one_reachable_workspace(ws: &str, q: &str) -> bool {
 }
 
 /// The not-found a passport gets for a name it can't reach: no candidates,
-/// no "did you mean".
-fn not_found(q: &str) -> CliResponse {
+/// no "did you mean", not even the name it sent.
+fn not_found() -> CliResponse {
     CliResponse {
         status: "404 Not Found",
         content_type: "application/json",
         body: serde_json::json!({
             "ok": false,
-            "error": { "code": "not_found", "hint": format!("no workspace named '{q}' that this session can reach") },
+            "error": { "code": "not_found", "hint": "no workspace by that name that this session can reach" },
         })
         .to_string(),
     }

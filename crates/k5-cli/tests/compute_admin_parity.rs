@@ -676,7 +676,6 @@ fn compute_move() {
                     409,
                     r#"{"error":{"code":"job_started","hint":"it runs"}}"#.into(),
                 ),
-                ok(pinned),
             ],
             owner_and_port,
             3,

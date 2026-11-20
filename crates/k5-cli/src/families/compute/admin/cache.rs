@@ -141,9 +141,8 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
                 pairs.push((k, str_value(v)));
             }
         }
-        if a.all {
-            pairs.push(("all", Value::Bool(true)));
-        }
+        // `K2_CJ_all_b="$all"`: 0 is a value too, so `all` is always there.
+        pairs.push(("all", Value::Bool(a.all)));
         cp.call(true, CLEAR, &dumps(&object(pairs)), true)
     } else {
         let q = query(&[

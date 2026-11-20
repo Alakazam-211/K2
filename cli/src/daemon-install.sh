@@ -577,6 +577,12 @@ cmd_approve_local() {
     exec "$bin" "$@"
 }
 
+_review_usage() {
+    echo "Usage: k2 review approve <agent> <branch>"
+    echo "       k2 review reject <agent> [--reason \"...\"]"
+    echo "       k2 review feedback <agent> --message \"...\""
+}
+
 cmd_review_approve() {
     local agent="${1:-}" branch="${2:-}"
     if [ -z "$agent" ] || [ -z "$branch" ]; then

@@ -281,6 +281,8 @@ case "${1:-help}" in
         shift; cmd_reviews "$@"
         ;;
     review)
+        # 0.46.17: -h/--help anywhere prints the usage and sends nothing.
+        if _wants_help "${@:2}"; then _review_usage; exit 0; fi
         case "${2:-}" in
             approve)  shift 2; cmd_review_approve "$@" ;;
             reject)   shift 2; cmd_review_reject "$@" ;;

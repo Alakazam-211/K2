@@ -6727,6 +6727,12 @@ cmd_approve_local() {
     exec "$bin" "$@"
 }
 
+_review_usage() {
+    echo "Usage: k2 review approve <agent> <branch>"
+    echo "       k2 review reject <agent> [--reason \"...\"]"
+    echo "       k2 review feedback <agent> --message \"...\""
+}
+
 cmd_review_approve() {
     local agent="${1:-}" branch="${2:-}"
     if [ -z "$agent" ] || [ -z "$branch" ]; then
@@ -113091,6 +113097,8 @@ case "${1:-help}" in
         shift; cmd_reviews "$@"
         ;;
     review)
+        # 0.46.17: -h/--help anywhere prints the usage and sends nothing.
+        if _wants_help "${@:2}"; then _review_usage; exit 0; fi
         case "${2:-}" in
             approve)  shift 2; cmd_review_approve "$@" ;;
             reject)   shift 2; cmd_review_reject "$@" ;;

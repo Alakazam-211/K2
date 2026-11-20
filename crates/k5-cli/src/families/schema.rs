@@ -17,7 +17,7 @@
 //! desktop's guard is not skipped for `schema` (it is not one of the
 //! guard's offline words, `--schema` is), unless a word is `-h` or
 //! `--help`: with `NO_OWNER_FALLBACK=1` and no token, `schema` is the
-//! guard's three lines and exit 3, as the shell's is. The session checks
+//! guard's two lines and exit 3, as the shell's is. The session checks
 //! pass: the tool is `schema`, an open one, whatever follows.
 //!
 //! A line with `-h` or `--help` in it never gets here: the front sends it
@@ -136,7 +136,9 @@ mod tests {
         assert!(!guarded(&args(&["schema", "-h"]), &prelude(false), &on));
         let page = page(&args(&["schema"]), &prelude(false), &on, "1.0.0");
         assert_eq!((page.stderr, page.exit), (true, Exit::Refused));
-        assert_eq!(page.text.lines().count(), 3);
+        // `_k2_refuse_owner_fallback`'s two lines.
+        let want: String = VIRTUAL_DESKTOP.iter().map(|l| format!("{l}\n")).collect();
+        assert_eq!(&*page.text, want.as_str());
     }
 
     /// The session checks never stop it: its tool is an open one with any

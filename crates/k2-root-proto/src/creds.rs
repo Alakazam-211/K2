@@ -156,6 +156,11 @@ pub const K2_OWN_UNITS: &[&str] = &[
     "k2-front-restart.service",
     // Hosted mail (crates/k2-root-proto/src/paths.rs).
     "stalwart.service",
+    // The hosted servers' restic backup (K2 Backups, installed by K2 Web's
+    // provisioning; read by crates/k2-daemon/src/sew/offbox.rs). It runs as
+    // root over the whole box and keeps its own restic password in
+    // /etc/k2-backup, so it never needs a K2 credential.
+    "k2-backup.service",
     // Sew (crates/k2-root-proto/src/sew.rs, k2-root-helper/src/sew_teardown.rs).
     "sew.service",
     "sew-db.service",

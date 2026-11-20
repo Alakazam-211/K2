@@ -627,7 +627,6 @@
 4 value crates/k2-signer/src/session.rs keeper: outside; k2sign's project id for this repo's releases
 4 value src/renderer/components/Wiki/wiki-graph-data.ts keeper: inert; the wiki page's own view mode
 3 value cli/src/app-doctor.sh keeper: wire; createdWith.k2 in the App routes' JSON (deploy/build.rs:28), and an App manifest's requires.k2 in the help
-3 value cli/src/prelude.sh debt: command (3 lines); B4
 3 value crates/k2-core/src/jscheck/inventory.rs keeper: wire; the k2 global that App scripts use
 3 value crates/k2-core/src/jscheck/lint.rs keeper: wire; the k2 global that App scripts use
 3 value crates/k2-core/src/sim/manager.rs keeper: stored; sim_audit.actor

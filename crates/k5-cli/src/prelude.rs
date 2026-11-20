@@ -258,7 +258,11 @@ fn now() -> u64 {
 fn note_dir(tmpdir: Option<std::ffi::OsString>) -> std::path::PathBuf {
     let usable = |d: &std::path::Path| d.is_dir() && writable_folder(d);
     let tmpdir = tmpdir.filter(|d| !d.is_empty());
-    for d in tmpdir.iter().map(std::path::PathBuf::from).chain(["/tmp".into(), "/var/tmp".into()]) {
+    for d in tmpdir
+        .iter()
+        .map(std::path::PathBuf::from)
+        .chain(["/tmp".into(), "/var/tmp".into()])
+    {
         if usable(&d) {
             let text = d.to_string_lossy();
             let trimmed = text.strip_suffix('/').unwrap_or(&text);
@@ -482,7 +486,10 @@ mod tests {
         assert_eq!(note_dir(Some(slash)), dir, "one trailing / goes");
         // A TMPDIR that is missing, empty or unset: the next usable one.
         let fallback = note_dir(None);
-        assert!(fallback == std::path::Path::new("/tmp") || fallback == std::path::Path::new("/var/tmp"));
+        assert!(
+            fallback == std::path::Path::new("/tmp")
+                || fallback == std::path::Path::new("/var/tmp")
+        );
         assert_eq!(note_dir(Some(dir.join("gone").into())), fallback);
         assert_eq!(note_dir(Some("".into())), fallback);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -494,7 +501,10 @@ mod tests {
             r#"            [ -n "$_K2_NOTE_DIR" ] || _K2_NOTE_DIR="/""#,
             r#"    _K2_NOTE_DIR="/tmp""#,
         ] {
-            assert!(cell.lines().any(|l| l == line), "_k2_note_dir moved: no line {line:?}");
+            assert!(
+                cell.lines().any(|l| l == line),
+                "_k2_note_dir moved: no line {line:?}"
+            );
         }
     }
 

@@ -455,9 +455,12 @@ fn run_with(
     // stale-passport probe, then the require-passport refusal (0.46.17,
     // `_cli_check_session_passport` reads the same tool).
     if names_locked_tool(words) {
-        if let Some(stop) =
-            prelude::id_tool(&settings, hook_sock, passport::current(args).would_refuse(), TOOL)
-        {
+        if let Some(stop) = prelude::id_tool(
+            &settings,
+            hook_sock,
+            passport::current(args).would_refuse(),
+            TOOL,
+        ) {
             return stop;
         }
     }

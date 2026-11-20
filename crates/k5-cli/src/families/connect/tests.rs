@@ -118,25 +118,36 @@ fn the_account_s_email() {
         "me@x.example"
     );
     // No refresh token: an empty field, and the email is still the third.
-    assert_eq!(account_email(&obj(r#"{"access_token":"a","email":"me"}"#)), "me");
+    assert_eq!(
+        account_email(&obj(r#"{"access_token":"a","email":"me"}"#)),
+        "me"
+    );
     // Not a dict, or a value that is not a string: Python stops there and
     // the shell's three reads stop with it.
     assert_eq!(account_email(&obj("[1]")), "");
     assert_eq!(
-        account_email(&obj(r#"{"access_token":"a","refresh_token":5,"email":"me"}"#)),
+        account_email(&obj(
+            r#"{"access_token":"a","refresh_token":5,"email":"me"}"#
+        )),
         ""
     );
     assert_eq!(
-        account_email(&obj(r#"{"access_token":"a","refresh_token":"r","email":7}"#)),
+        account_email(&obj(
+            r#"{"access_token":"a","refresh_token":"r","email":7}"#
+        )),
         ""
     );
     assert_eq!(
-        account_email(&obj(r#"{"access_token":0,"refresh_token":[],"email":"me"}"#)),
+        account_email(&obj(
+            r#"{"access_token":0,"refresh_token":[],"email":"me"}"#
+        )),
         "me"
     );
     // A token with a newline is one field (0.46.17): the email stays.
     assert_eq!(
-        account_email(&obj(r#"{"access_token":"a\nb","refresh_token":"r","email":"me"}"#)),
+        account_email(&obj(
+            r#"{"access_token":"a\nb","refresh_token":"r","email":"me"}"#
+        )),
         "me"
     );
     // A NUL is dropped; half a surrogate pair is a `?`.

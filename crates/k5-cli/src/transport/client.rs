@@ -1306,7 +1306,9 @@ impl Client {
                     // `_setup_token` (0.46.17): in a session (`HOOK_SOCK`
                     // set) the passport, and with none no credential at
                     // all, never the owner token.
-                    Kind::SetupGet | Kind::SetupPost if self.session && self.passport().is_none() => {
+                    Kind::SetupGet | Kind::SetupPost
+                        if self.session && self.passport().is_none() =>
+                    {
                         None
                     }
                     Kind::Probe | Kind::BearerForm => Some(self.passport().map(Passport::as_str)),
@@ -2062,17 +2064,26 @@ mod tests {
         let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
         c.owner_from_disk = true;
         let names = |c: &Client, kind| {
-            let (_, r) = c.build(kind, Channel::Tcp, "/cli/first-run/status", &[], &[]).unwrap();
+            let (_, r) = c
+                .build(kind, Channel::Tcp, "/cli/first-run/status", &[], &[])
+                .unwrap();
             r.headers.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
         };
         for kind in [Kind::SetupGet, Kind::SetupPost] {
-            assert_eq!(names(&c, kind)[0], "Authorization", "{kind:?} outside a session");
+            assert_eq!(
+                names(&c, kind)[0],
+                "Authorization",
+                "{kind:?} outside a session"
+            );
         }
         c.session = true;
         for kind in [Kind::SetupGet, Kind::SetupPost] {
             let n = names(&c, kind);
             assert!(!n.iter().any(|h| h == "Authorization"), "{kind:?}: {n:?}");
-            assert!(n.iter().any(|h| h == OWNER_SOURCE_HEADER), "{kind:?}: {n:?}");
+            assert!(
+                n.iter().any(|h| h == OWNER_SOURCE_HEADER),
+                "{kind:?}: {n:?}"
+            );
         }
         // Every other kind keeps the token (the socket-first ones refuse
         // instead, before they build).

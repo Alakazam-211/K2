@@ -60,7 +60,8 @@ const CONF_IDLE: &str = r#"{"ok":true,"name":"","path":"/srv/idle-one","mode":"c
 
 const CONF_PERSONA: &str = r#"{"ok":true,"name":"qa","path":"/srv/qa","personaPath":"persona.md","live":{"active":true,"sessionId":"s1","uptimeSec":59.9}}"#;
 
-const CONF_NO_FILE: &str = r#"{"ok":true,"name":"qa","path":"/srv/qa","personaPath":"no-such-persona.md"}"#;
+const CONF_NO_FILE: &str =
+    r#"{"ok":true,"name":"qa","path":"/srv/qa","personaPath":"no-such-persona.md"}"#;
 
 fn persona(r: &Rig) {
     owner_and_port(r);

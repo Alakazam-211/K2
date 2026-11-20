@@ -2,6 +2,9 @@
 # Tests for scripts/ci/mac-tests.sh with stand-ins for cargo and uname: no
 # cargo runs here. Run: bash tests/garden/mac-tests.sh
 set -euo pipefail
+# The script reads CARGO_BUILD_JOBS from its caller; a host that sets it
+# (some compute nodes do) would change what these tests expect. Start clean.
+unset CARGO_BUILD_JOBS
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"; rm -f "$HERE"/mac-tests-core.log "$HERE"/mac-tests-daemon.log "$HERE"/mac-tests-daemon.part.log' EXIT

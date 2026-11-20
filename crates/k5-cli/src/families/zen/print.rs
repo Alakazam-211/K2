@@ -470,9 +470,21 @@ fn sync_rows(raw: Option<&str>) -> Vec<(Value, Value)> {
     let Ok(v) = pyjson::loads(text) else {
         return Vec::new();
     };
+    // The shell's Python fills its table in one `try`: anything it can't
+    // read (no dict, a row that is not one, an id that can't be a key)
+    // leaves the table empty.
+    if !matches!(v, Value::Object(_)) {
+        return Vec::new();
+    }
     let mut rows: Vec<(Value, Value)> = Vec::new();
     for row in items(g(&v, "gardens")) {
+        if !matches!(row, Value::Object(_)) {
+            return Vec::new();
+        }
         let id = g(&row, "id").cloned().unwrap_or(Value::Null);
+        if matches!(id, Value::Array(_) | Value::Object(_)) {
+            return Vec::new();
+        }
         match rows.iter_mut().find(|(k, _)| py_eq(k, &id)) {
             Some(slot) => slot.1 = row,
             None => rows.push((id, row)),

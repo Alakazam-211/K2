@@ -104,6 +104,25 @@ impl Zen {
         self.took(&c, sent, false)
     }
 
+    /// `raw=$(cli_request <endpoint> <pairs>) || raw=""`: a failed call
+    /// is an empty answer. `quiet` (`2>/dev/null`): one with no answer
+    /// still ends the command, its line unseen.
+    pub fn get_soft(
+        &mut self,
+        endpoint: &str,
+        pairs: &[&str],
+        quiet: bool,
+    ) -> Result<Vec<u8>, Exit> {
+        let mut c = self.client(false)?;
+        let sent = c.call(Channel::Tcp, endpoint, Call::Request(pairs));
+        if quiet {
+            if let Err(Error::NoAnswer(_)) = sent {
+                return Err(Exit::Error);
+            }
+        }
+        self.took(&c, sent, true)
+    }
+
     /// `raw=$(cli_post_json <endpoint> <body>)`.
     pub fn post(&mut self, endpoint: &str, body: &[u8]) -> Result<Vec<u8>, Exit> {
         let mut c = self.client(false)?;

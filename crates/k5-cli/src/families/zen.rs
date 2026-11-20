@@ -7,7 +7,10 @@
 //! --widget` ([`super::store::widget`]); `zen` alone and `zen help`; the
 //! arms that only print (`pages`, `grant`, an unknown verb); and
 //! `cmd_zen`'s own verbs ([`verbs`]): `validate`, `history`, `reload`,
-//! `reset`, `doctor` and `path`, printed by `_zen_print` ([`print`]).
+//! `reset`, `doctor` and `path`, printed by `_zen_print` ([`print`]);
+//! `garden` (with Garden access, History and `put`) and `proposals`
+//! ([`garden`]); `theme`, `sync`, `news`, `links`, `agents-order` and
+//! `inspect` ([`more`]).
 //!
 //! Still the shell's ([`run`] returns `None` before anything is printed
 //! or sent): a line with `-h` or `--help` (the router's help arms), the
@@ -64,8 +67,10 @@ fn native(words: &[&str]) -> bool {
                 && words.iter().any(|w| *w == "--dir" || w.starts_with("--dir="))
                 && crate::transport::client::tmpdir_unusable())
         }
-        "inspect" | "garden" | "gardens" | "theme" | "themes" | "widget" | "widgets" | "sync"
-        | "news" | "links" | "agents-order" | "proposals" | "proposal" | "guide" => false,
+        "garden" | "gardens" => {
+            !(words.get(1) == Some(&"new") && crate::transport::client::tmpdir_unusable())
+        }
+        "widget" | "widgets" | "guide" => false,
         _ => true,
     }
 }
@@ -128,12 +133,21 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if let Some(exit) = verbs::only_prints(sub) {
         return Some(exit);
     }
-    if !verbs::is_core(sub) {
-        return Some(verbs::unknown(sub));
-    }
-    let plan = verbs::plan(sub, &words[1..]);
+    let rest = &words[1..];
     let mut z = call::Zen::new(settings, would_refuse);
-    let exit = match verbs::run(&mut z, plan) {
+    let step = match sub {
+        "garden" | "gardens" => garden::garden(&mut z, rest),
+        "proposals" | "proposal" => garden::proposals(&mut z, rest),
+        "theme" | "themes" => more::theme(&mut z, rest),
+        "sync" => more::sync(&mut z, rest),
+        "news" => more::news(&mut z, rest),
+        "links" => more::links(&mut z, rest),
+        "agents-order" => more::agents_order(&mut z, rest),
+        "inspect" => more::inspect(&mut z, rest),
+        s if verbs::is_core(s) => verbs::run(&mut z, verbs::plan(s, rest)),
+        _ => Ok(verbs::unknown(sub)),
+    };
+    let exit = match step {
         Ok(e) | Err(e) => e,
     };
     Some(z.finish(exit))

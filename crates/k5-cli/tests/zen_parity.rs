@@ -967,3 +967,615 @@ fn zen_lines_say_the_brand_s_name() {
         assert!(log.is_empty(), "{args:?}");
     }
 }
+
+/// The daemon wrote its Garden access mark in the K2 home.
+fn access_marked(r: &Rig) {
+    owner_and_port(r);
+    std::fs::write(r.k2home.join("garden-access-on"), "").unwrap();
+}
+
+fn access_unmarked(r: &Rig) {
+    owner_and_port(r);
+    let _ = std::fs::remove_file(r.k2home.join("garden-access-on"));
+}
+
+const GARDENS: &str = r#"{"gardens":[{"index":1,"id":"g1","name":"Home é","template":"texting","theme":"nord"},{"index":2,"id":"g2","name":"Work","template":"blank","locked":true}]}"#;
+const SYNC: &str = r#"{"gardens":[{"index":1,"id":"g1","name":"Home é","page":{"mode":"synced"},"theme":{"mode":"own","defaults":"v3","k2Version":"0.46.2","newerDefault":true},"ownChanges":["theme"],"undo":{"parts":["page"]},"keepPrevious":{"page":true}},{"index":2,"id":"g2","name":"Work","page":{"mode":"synced"},"theme":{"mode":"synced"},"ownChanges":null}],"liveDefaults":"v4","k2Version":"0.46.17","previousDefaults":"v3"}"#;
+const ACCESS: &str = r#"{"name":"Home","locked":true,"made":{"handle":"ag"},"editors":[{"handle":"ag","addedBy":"owner","addedAt":1700000000},{"handle":"bo","addedBy":"card","addedAt":"x"},{"handle":"cy","addedBy":"other"}]}"#;
+const ACCESS_HISTORY: &str = r#"{"items":[{"at":1700000000,"kind":"renamed","actor":{"name":"ag","kind":"agent"},"detail":{"to":"New"}},{"at":null,"kind":"access","actor":{"kind":"owner"},"widget":"board","detail":{"workspace":"acme"}}],"unsigned":[{"widget":"board","hash":"h1"}],"next":"c2"}"#;
+
+/// Many Gardens, for the large list.
+fn many_gardens(n: usize) -> String {
+    let rows: Vec<String> = (0..n)
+        .map(|i| {
+            format!(
+                r#"{{"index":{i},"id":"g{i}","name":"Garden {i} é","template":"texting","locked":{}}}"#,
+                i % 5 == 0
+            )
+        })
+        .collect();
+    format!(r#"{{"gardens":[{}]}}"#, rows.join(","))
+}
+
+#[test]
+fn zen_gardens_and_settings_answer_as_the_shell_does() {
+    let rig = Rig::new(VERB, "gardens");
+    let proj = rig.proj.to_string_lossy().into_owned();
+    let page = leak(format!("{proj}/page.toml"));
+    let folder = leak(format!("{proj}/staged-w"));
+    let new_args: &'static [&'static str] = Box::leak(
+        vec![
+            "garden", "new", "My", "Garden", "--texting", "--at", "2", "--from", page, "--widgets",
+            folder,
+        ]
+        .into_boxed_slice(),
+    );
+    let put_args: &'static [&'static str] = Box::leak(
+        vec!["garden", "put", "g1", "--from", page, "--note", "tidy"].into_boxed_slice(),
+    );
+    let inspect_args: &'static [&'static str] =
+        Box::leak(vec!["inspect", folder].into_boxed_slice());
+    let mid: &'static str = leak(many_gardens(400));
+    let cases = vec![
+        // covers: zen garden
+        ok_owner("garden alone: the help", &["garden"], vec![]),
+        ok_owner("garden list", &["garden", "list"], vec![ok(GARDENS), ok(SYNC)]),
+        ok_owner(
+            "garden list, no sync route",
+            &["gardens", "list"],
+            vec![ok(GARDENS), Reply::Answer(404, r#"{"error":"unknown zen route"}"#.into())],
+        ),
+        ok_owner("garden list, a long list", &["garden", "list"], vec![ok(mid), ok("{}")]),
+        // covers: zen garden --json
+        ok_owner(
+            "garden list --json",
+            &["garden", "list", "--json"],
+            vec![ok(GARDENS), ok(SYNC)],
+        ),
+        case(
+            "garden list, Zen not set up",
+            &["garden", "list"],
+            &[],
+            vec![ok(r#"{"setUp":false,"gardens":[]}"#), ok("{}")],
+            owner_and_port,
+            3,
+            2,
+        ),
+        case(
+            "garden list takes only --json",
+            &["garden", "list", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        Case {
+            setup: access_unmarked,
+            ..ok_owner(
+                "garden new, an older daemon",
+                &["garden", "new", "My", "Garden", "--texting", "--at", "02"],
+                vec![ok(
+                    r#"{"garden":{"id":"g3"},"path":"/z/gardens/g3.toml","made":true,"message":"Made it."}"#,
+                )],
+            )
+        },
+        Case {
+            setup: staged_marked,
+            ..ok_owner(
+                "garden new with a page and widgets",
+                new_args,
+                vec![
+                    ok(r#"{"gardens":[]}"#),
+                    ok(r#"{"garden":{"id":"g4"},"path":"/z/gardens/g4.toml"}"#),
+                ],
+            )
+        },
+        Case {
+            setup: staged,
+            ..case(
+                "garden new --from on an older daemon",
+                new_args,
+                &[],
+                vec![],
+                staged,
+                2,
+                0,
+            )
+        },
+        case(
+            "garden new --at must be a number",
+            &["garden", "new", "x", "--at", "two"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "garden rename --texting is new's",
+            &["garden", "rename", "g1", "x", "--texting"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        ok_owner(
+            "garden rename",
+            &["garden", "rename", "g1", "New", "name"],
+            vec![ok(r#"{"garden":{"id":"g1","name":"New name"},"changed":true}"#)],
+        ),
+        ok_owner(
+            "garden reorder",
+            &["garden", "reorder", "g2", "1"],
+            vec![ok(GARDENS)],
+        ),
+        case(
+            "garden reorder, not a number",
+            &["garden", "reorder", "g2", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        ok_owner(
+            "garden template --force",
+            &["garden", "template", "g1", "blank", "--force"],
+            vec![ok(
+                r#"{"garden":{"id":"g1","name":"Home"},"changed":true,"template":"blank","snapshot":"s4"}"#,
+            )],
+        ),
+        case(
+            "garden template, has changes",
+            &["garden", "template", "g1", "texting"],
+            &[],
+            vec![Reply::Answer(
+                409,
+                r#"{"error":"garden_has_changes","garden":"g1","keys":["a","b"]}"#.into(),
+            )],
+            owner_and_port,
+            1,
+            1,
+        ),
+        ok_owner(
+            "garden delete",
+            &["garden", "delete", "Work"],
+            vec![ok(r#"{"deleted":"g2","name":"Work","snapshot":"s5"}"#)],
+        ),
+        case(
+            "garden delete, the person must",
+            &["garden", "delete", "Work"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":"garden_delete_person","name":"Work","card":{"card":"c1"},"message":"Asked."}"#.into(),
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        ok_owner(
+            "garden lock",
+            &["garden", "lock", "g1"],
+            vec![ok(r#"{"garden":{"id":"g1","name":"Home"},"locked":true,"changed":true}"#)],
+        ),
+        case(
+            "garden unlock, an agent",
+            &["garden", "unlock", "g1"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":"owner_only"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        Case {
+            setup: access_marked,
+            ..ok_owner(
+                "garden access",
+                &["garden", "access", "Home"],
+                vec![ok(r#"{"ok":true}"#), ok(ACCESS)],
+            )
+        },
+        Case {
+            setup: access_marked,
+            ..ok_owner(
+                "garden access, not listed",
+                &["garden", "access", "Home", "--json"],
+                vec![ok(r#"{"ok":true}"#), ok(r#"{"name":"Home","listed":false}"#)],
+            )
+        },
+        Case {
+            setup: access_marked,
+            ..ok_owner(
+                "garden access add",
+                &["garden", "access", "Home", "add", "ag"],
+                vec![
+                    ok(r#"{"ok":true}"#),
+                    ok(r#"{"agent":{"handle":"ag"},"garden":{"name":"Home"},"listed":true,"changed":false}"#),
+                ],
+            )
+        },
+        Case {
+            setup: access_marked,
+            ..ok_owner(
+                "garden access ask --reason",
+                &["garden", "access", "Home", "ask", "--reason", "to tidy"],
+                vec![ok(r#"{"ok":true}"#), ok(r#"{"message":"Asked the person."}"#)],
+            )
+        },
+        Case {
+            setup: access_marked,
+            ..case(
+                "garden access, no such Garden",
+                &["garden", "access", "Nope"],
+                &[],
+                vec![
+                    ok(r#"{"ok":true}"#),
+                    Reply::Answer(404, r#"{"error":"unknown_garden","message":"No Garden Nope."}"#.into()),
+                ],
+                access_marked,
+                4,
+                2,
+            )
+        },
+        Case {
+            setup: access_marked,
+            ..ok_owner(
+                "garden history",
+                &["garden", "history", "Home", "--kind", "changes", "--limit", "5", "--before", "c1"],
+                vec![ok(r#"{"ok":true}"#), ok(ACCESS_HISTORY)],
+            )
+        },
+        Case {
+            setup: access_marked,
+            ..case(
+                "garden history, an older daemon",
+                &["garden", "history", "Home"],
+                &[],
+                vec![Reply::Answer(404, r#"{"error":"unknown zen route"}"#.into())],
+                access_marked,
+                2,
+                1,
+            )
+        },
+        case(
+            "garden access, unmarked: an unknown verb",
+            &["garden", "access", "Home"],
+            &[],
+            vec![],
+            access_unmarked,
+            2,
+            0,
+        ),
+        Case {
+            setup: access_marked,
+            ..case(
+                "garden nope: the long list",
+                &["garden", "nope"],
+                &[],
+                vec![ok(r#"{"ok":true}"#)],
+                access_marked,
+                2,
+                1,
+            )
+        },
+        Case {
+            setup: staged,
+            ..ok_owner(
+                "garden put",
+                put_args,
+                vec![ok(
+                    r#"{"file":"gardens/g1.toml","changed":false,"snapshot":"s6","keepAsMine":true,"keepCard":{"card":"c1"},"validate":{"errors":[],"warnings":[{"file":"gardens/g1.toml","line":1,"col":1,"message":"w"}]}}"#,
+                )],
+            )
+        },
+        case(
+            "garden put --note last",
+            &["garden", "put", "g1", "--from", "-", "--note"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        // covers: zen theme
+        ok_owner(
+            "theme list",
+            &["theme", "list", "--garden", "g1"],
+            vec![ok(
+                r#"{"themes":[{"name":"nord","label":"Nord","builtin":true,"user":true,"active":true,"summary":"cool"},{"name":"mine","user":true}],"garden":"g1","gardenTheme":true,"missing":"old","active":"nord"}"#,
+            )],
+        ),
+        // covers: zen theme --json
+        ok_owner(
+            "theme next --json",
+            &["theme", "next", "--json"],
+            vec![ok(r#"{"theme":"nord"}"#)],
+        ),
+        ok_owner(
+            "theme set for a Garden",
+            &["themes", "set", "nord", "--garden=g1"],
+            vec![ok(r#"{"theme":"nord","garden":"g1","scope":"garden"}"#)],
+        ),
+        ok_owner(
+            "theme set --clear",
+            &["theme", "set", "--clear", "--garden", "g1"],
+            vec![ok(r#"{"theme":"nord","garden":"g1","scope":"computer"}"#)],
+        ),
+        ok_owner(
+            "theme new",
+            &["theme", "new", "mine", "--from", "nord"],
+            vec![ok(
+                r#"{"path":"/z/themes/mine/theme.toml","from":"nord","copiedImage":"bg.png","name":"mine"}"#,
+            )],
+        ),
+        case("theme --json is no verb", &["theme", "--json"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "theme set, two names",
+            &["theme", "set", "a", "b"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: zen sync
+        ok_owner("sync", &["sync"], vec![ok(SYNC)]),
+        // covers: zen sync --json
+        ok_owner(
+            "sync on --page --json",
+            &["sync", "g1", "on", "--page", "--json"],
+            vec![ok(r#"{"changed":true,"garden":{"id":"g1"}}"#)],
+        ),
+        ok_owner(
+            "sync off",
+            &["sync", "g1", "off"],
+            vec![ok(
+                r#"{"changed":true,"garden":{"id":"g1","name":"Home","page":{"mode":"own","defaults":"v4"},"theme":{"mode":"synced"},"undo":{"parts":["page"]}}}"#,
+            )],
+        ),
+        ok_owner(
+            "sync keep-previous --theme",
+            &["sync", "g1", "keep-previous", "--theme"],
+            vec![ok(r#"{"changed":false,"garden":{"id":"g1","name":"Home"}}"#)],
+        ),
+        ok_owner(
+            "sync preview",
+            &["sync", "g1", "preview"],
+            vec![ok(
+                r#"{"garden":{"id":"g1","name":"Home"},"page":{"template":"texting","layout":{"split":"2"},"widgets":[1,2]},"theme":{"name":"nord","tokens":{"colors":{"light":{"accent":"#111"},"dark":{"accent":"#eee"}}}},"sync":{"preview":"both","page":{"mode":"synced"},"theme":{"mode":"own"}}}"#,
+            )],
+        ),
+        case(
+            "sync undo --page",
+            &["sync", "g1", "undo", "--page"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "sync, an agent",
+            &["sync", "g1", "undo"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":"zen_local_only"}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: zen news
+        ok_owner(
+            "news",
+            &["news"],
+            vec![ok(
+                r#"{"items":[{"id":"n1","kind":"notice","title":"Hi","body":"There","detail":["a","b"]},{"id":"n2","kind":"catalog","label":"Board","description":"Notes"},{"id":"n3","kind":"update","gardenName":"Home","part":"theme","keepPrevious":true}],"copiesWithNewerDefault":2}"#,
+            )],
+        ),
+        ok_owner("news, none", &["news"], vec![ok(r#"{"items":[],"copiesWithNewerDefault":1}"#)]),
+        // covers: zen news --json
+        ok_owner(
+            "news seen --json",
+            &["news", "seen", "n1", "n2", "--json"],
+            vec![ok(r#"{"seen":["n1","n2"]}"#)],
+        ),
+        ok_owner("news seen --all", &["news", "seen", "--all"], vec![ok(r#"{"seen":[]}"#)]),
+        case(
+            "news seen, ids and --all",
+            &["news", "seen", "n1", "--all"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: zen agents-order
+        ok_owner(
+            "agents-order",
+            &["agents-order"],
+            vec![ok(
+                r#"{"gardens":[{"name":"Home","id":"g1","order":["a","b"],"pins":null,"updatedAt":"2026-11-20"},{"name":"Work","id":"g2","order":[],"pins":[]}]}"#,
+            )],
+        ),
+        // covers: zen agents-order --json
+        ok_owner(
+            "agents-order --json",
+            &["agents-order", "Home", "--json"],
+            vec![ok(r#"{"gardens":[]}"#)],
+        ),
+        case(
+            "agents-order, an older K2",
+            &["agents-order"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":"unknown zen route"}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        traceback(case(
+            "agents-order, a list for an answer",
+            &["agents-order"],
+            &[],
+            vec![ok("[]")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        // covers: zen links
+        ok_owner(
+            "links",
+            &["links"],
+            vec![ok(r#"{"gardens":{"g2":["b.example","a.example"],"g1":["c.example"]}}"#)],
+        ),
+        ok_owner(
+            "links for a Garden",
+            &["links", "g1"],
+            vec![ok(r#"{"sites":["a.example","b.example"]}"#)],
+        ),
+        ok_owner(
+            "links forget",
+            &["links", "forget", "g1", "a.example"],
+            vec![ok(r#"{"removed":true,"site":"a.example","garden":"g1"}"#)],
+        ),
+        // covers: zen links --json
+        case(
+            "links forget --json, an agent",
+            &["links", "forget", "g1", "a.example", "--json"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"The person forgets sites."}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "links, an empty answer",
+            &["links"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: zen inspect
+        Case {
+            setup: staged,
+            ..ok_owner(
+                "inspect",
+                inspect_args,
+                vec![ok(
+                    r#"{"notice":"Untrusted.","source":{"kind":"folder","path":"/x/é"},"summary":{"files":3,"widgets":1,"errors":1,"warnings":0,"verbs":2,"verbsNotOpenToWidgets":1,"network":1,"obfuscation":0,"refused":0},"widgets":[{"folder":"w","id":"w","name":"W","caps":["a","b"],"libs":[],"ok":false}],"verbs":[{"verb":"msg","known":true,"cap":"msg","calls":2,"at":["a.js:1"],"widget":true},{"verb":"x","known":false,"calls":1,"at":[]}],"k2Members":["store","open"],"network":[{"kind":"fetch","detail":"https://a","at":"a.js:3"}],"urls":[{"detail":"https://a","at":"a.js:3"}],"findings":{"errors":[{"file":"a.js","line":1,"col":2,"message":"bad"}],"warnings":[]},"truncated":{"urls":true,"verbs":false}}"#,
+                )],
+            )
+        },
+        // covers: zen inspect --json
+        ok_owner(
+            "inspect --json",
+            &["inspect", "x.k2garden", "--json"],
+            vec![ok(r#"{"notice":"n"}"#)],
+        ),
+        case(
+            "inspect, the daemon refuses",
+            &["inspect", "x.k2garden"],
+            &[],
+            vec![Reply::Answer(400, r#"{"error":"bad_path","message":"No such file."}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "inspect, no path",
+            &["inspect"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "inspect, nothing listening",
+            &["inspect", "x.k2garden"],
+            &[("K2_PORT", &dead_port())],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
+        Case {
+            setup: access_marked,
+            ..ok_owner(
+                "proposals",
+                &["proposals"],
+                vec![
+                    ok(
+                        r#"{"proposals":[{"id":"p1","status":"pending","kind":"folder","target":"w","files":["a","b"],"madeBy":"ag","bytes":10,"note":"n"},{"id":"p2","status":"pending","target":"g1","madeBy":"ag","bytes":5}]}"#,
+                    ),
+                    ok(r#"{"ok":true}"#),
+                ],
+            )
+        },
+        case(
+            "proposals approve, retired --json",
+            &["proposals", "approve", "p1", "--json"],
+            &[],
+            vec![Reply::Answer(410, r#"{"error":"retired"}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        shell(case(
+            "garden delete -h: help, nothing sent",
+            &["garden", "delete", "g1", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "sync on --help: help, nothing sent",
+            &["sync", "g1", "on", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "links forget -h: help, nothing sent",
+            &["links", "forget", "g1", "a", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "theme set -h: help, nothing sent",
+            &["theme", "set", "nord", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "news seen --help: help, nothing sent",
+            &["news", "seen", "--all", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+    ];
+    for c in &cases {
+        rig.check(c);
+    }
+}
+
+fn staged_marked(r: &Rig) {
+    staged(r);
+    std::fs::write(r.k2home.join("garden-access-on"), "").unwrap();
+}

@@ -863,8 +863,8 @@ fn remote_addresses_and_readers() {
         remote::chat("ada/Field Notes"),
         Ok(("ada".into(), Some("field-notes".into())))
     );
-    assert_eq!(remote::chat("ada/a/b"), Err(remote::BAD_CHAT.to_string()));
-    assert_eq!(remote::chat("/x"), Err(remote::BAD_CHAT.to_string()));
+    assert_eq!(remote::chat("ada/a/b"), Err(remote::bad_chat()));
+    assert_eq!(remote::chat("/x"), Err(remote::bad_chat()));
 
     let peers = |raw: &str, host: &str| remote::peers(raw.as_bytes(), host);
     assert_eq!(peers("", "h.k2.dev").unwrap(), "ERR\tparse");
@@ -975,7 +975,7 @@ fn remote_addresses_and_readers() {
     };
     let mut parts = vec![
         esc(&remote::empty_agent()),
-        esc(remote::BAD_CHAT),
+        esc(&remote::bad_chat()),
         esc(&remote::at_hint("${agent}", "${host}")),
         esc(&remote::no_fed("$host")),
     ];

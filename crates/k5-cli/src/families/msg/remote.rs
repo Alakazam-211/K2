@@ -36,6 +36,7 @@ use crate::out::{self};
 use crate::prelude::Closing;
 use crate::transport::encode::quote;
 use crate::transport::{Call, Client, Error};
+use k2_client::hosts::ZONE_SUFFIX;
 use k2_client::{cli_name, product_name};
 
 /// The peers.
@@ -88,10 +89,15 @@ pub fn empty_agent() -> String {
 }
 
 /// A bad `<agent>/<chat>`.
-pub const BAD_CHAT: &str = concat!(
-    cli_name!(),
-    " msg: a chat on another server is <agent>/<chat>::<host> (one slash), e.g. ada/notes::box.example.k2.dev."
-);
+pub fn bad_chat() -> String {
+    format!(
+        concat!(
+            cli_name!(),
+            " msg: a chat on another server is <agent>/<chat>::<host> (one slash), e.g. ada/notes::box.example{}."
+        ),
+        ZONE_SUFFIX
+    )
+}
 
 /// The `@` form's hint.
 pub fn at_hint(agent: &str, host: &str) -> String {
@@ -124,7 +130,7 @@ pub fn chat(agent: &str) -> Result<(String, Option<String>), String> {
     };
     let (a, c) = (a.to_string(), slug(c));
     if a.is_empty() || c.is_empty() || c.contains('/') || c.contains(':') {
-        return Err(BAD_CHAT.to_string());
+        return Err(bad_chat());
     }
     Ok((a, Some(c)))
 }
@@ -184,11 +190,12 @@ fn bare(h: &Value, from: u32) -> Result<String, Raise> {
 
 fn bare_str(h: &str) -> String {
     let mut h = strip(h).to_lowercase();
-    while h.ends_with(".k2.dev.k2.dev") {
-        h.truncate(h.len() - ".k2.dev".len());
+    let doubled = format!("{ZONE_SUFFIX}{ZONE_SUFFIX}");
+    while h.ends_with(&doubled) {
+        h.truncate(h.len() - ZONE_SUFFIX.len());
     }
-    if h.ends_with(".k2.dev") {
-        h.truncate(h.len() - ".k2.dev".len());
+    if h.ends_with(ZONE_SUFFIX) {
+        h.truncate(h.len() - ZONE_SUFFIX.len());
     }
     h
 }
@@ -274,7 +281,10 @@ pub fn peers(raw: &[u8], host: &str) -> Read {
             |line| -> Result<String, Raise> { Ok(text_of(&sub, line, "lower")?.to_lowercase()) };
         if !host.is_empty() && truthy(&sub) {
             let l = sub_lower(43)?;
-            if l == host || l == format!("{host}.k2.dev") || l == format!("{want}.k2.dev") {
+            if l == host
+                || l == format!("{host}{ZONE_SUFFIX}")
+                || l == format!("{want}{ZONE_SUFFIX}")
+            {
                 return ok_line(p);
             }
         }
@@ -297,10 +307,10 @@ pub fn peers(raw: &[u8], host: &str) -> Read {
             let hp = host_port(&s(&base), 59)?;
             known.push(if hp.is_empty() { base } else { hp });
         } else if !sub.is_empty() {
-            if sub.contains(':') || sub.ends_with(".ts.net") || sub.ends_with(".k2.dev") {
+            if sub.contains(':') || sub.ends_with(".ts.net") || sub.ends_with(ZONE_SUFFIX) {
                 known.push(sub);
             } else {
-                known.push(format!("{sub}.k2.dev"));
+                known.push(format!("{sub}{ZONE_SUFFIX}"));
             }
         } else {
             let label = get(p, "label", 65)?;

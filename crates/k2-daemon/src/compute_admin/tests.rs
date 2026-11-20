@@ -143,17 +143,20 @@ fn result(cmd_id: &str, state: &str, code: Option<&str>, exit: Option<i32>, out:
     }
 }
 
-/// A fake node that answers `policy.show` / `policy.set` from another
-/// thread (the route blocks waiting for it). Returns the verbs it saw.
+/// A fake node that answers ONE `policy.show` / `policy.set` from another
+/// thread (the route blocks waiting for it). It polls the sent frames for
+/// up to 2 s and returns the verb it answered, or nothing if none came.
+/// The route sends one command and waits for its answer, so a batch of
+/// more than one is a failure, not a command to drop unseen.
 fn answer_policy(node: String, policy: Value, refuse_set: bool) -> std::thread::JoinHandle<Vec<String>> {
     std::thread::spawn(move || {
-        let mut seen = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            for c in admin_cmds(test_seams::take_sent(&node)) {
+            let cmds = admin_cmds(test_seams::take_sent(&node));
+            if let Some(c) = cmds.first() {
+                assert_eq!(cmds.len(), 1, "one command at a time, then wait for its answer");
                 let body = crypto::unb64(&c.body_b64).unwrap();
                 let cmd: wire::Command = serde_json::from_slice(&body).unwrap();
-                seen.push(cmd.verb.clone());
                 let r = match (cmd.verb.as_str(), refuse_set) {
                     ("policy.set", true) => result(&cmd.cmd_id, "refused", Some(wire::code::APPROVAL_REQUIRED), None, Value::Null),
                     ("policy.set", false) => result(&cmd.cmd_id, "done", None, Some(0), json!({"policy": cmd.args, "widened": []})),
@@ -161,11 +164,11 @@ fn answer_policy(node: String, policy: Value, refuse_set: bool) -> std::thread::
                 };
                 // Waiters are matched by cmd_id before any DB access.
                 assert!(super::wait_deliver(&r), "a route waits for {}", cmd.verb);
-                return seen;
+                return vec![cmd.verb];
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        seen
+        Vec::new()
     })
 }
 

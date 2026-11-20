@@ -4,7 +4,7 @@
 
 use super::print::{eq, print_undo, py_f1, v2};
 use super::py::{self, d, gt, gt_or, ix, left, local_ms, num, rows, sg, st, tr, Pr, R};
-use super::{w, Ctx, Step};
+use super::{m, w, Ctx, Step};
 use crate::exit::Exit;
 use crate::families::{py_len, Raise};
 use crate::out::json::{Text, Value};
@@ -624,7 +624,7 @@ pub fn history(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
             if ver.is_empty() {
                 return Err(ctx.usage(format!("{CLI_NAME} doc restore --version V <file>")));
             }
-            let body = ctx.body_arg(&path, &[("version", w(format!("@int:{ver}")))]);
+            let body = ctx.body_arg(&path, &[("version", m(format!("@int:{ver}")))]);
             let b = ctx.call(true, "/cli/docs/restore", &body)?;
             Ok(ctx.json_or(&b, |pr, v| {
                 let r = gt_or(v, "result", 4)?
@@ -669,7 +669,7 @@ pub fn history(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
             }
             let mut kv = vec![("name", w(name))];
             if !ver.is_empty() {
-                kv.push(("version", w(format!("@int:{ver}"))));
+                kv.push(("version", m(format!("@int:{ver}"))));
             }
             let body = ctx.body_arg(&path, &kv);
             let b = ctx.call(true, "/cli/docs/name", &body)?;
@@ -686,8 +686,8 @@ pub fn history(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
             let body = ctx.body_arg(
                 &path,
                 &[
-                    ("change", w(format!("@int:{change}"))),
-                    ("partial", w(partial)),
+                    ("change", m(format!("@int:{change}"))),
+                    ("partial", m(partial)),
                 ],
             );
             let b = ctx.call(true, "/cli/docs/revert", &body)?;

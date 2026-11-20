@@ -3,7 +3,7 @@
 
 use super::print::{eq, ttl_ms, v2};
 use super::py::{self, gt, gt_or, ix, st, tr, Pr, R};
-use super::{w, Ctx, Step, B};
+use super::{m, w, Ctx, Step, B};
 use crate::exit::Exit;
 use crate::families::{sim::is_tty, Raise};
 use crate::out::json::{Text, Value};
@@ -264,14 +264,15 @@ pub fn blob(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
     argv.extend(toks);
     let mut kv: Vec<(&str, B)> = vec![("argv", B::Argv(argv))];
     if !budget.is_empty() {
-        kv.push(("readBudget", w(format!("@int:{budget}"))));
+        kv.push(("readBudget", m(format!("@int:{budget}"))));
     }
     ctx.tmp()?;
-    // The body goes from a file `print` wrote: a newline after it.
+    // The body goes from a file `print` wrote: a newline after it. With
+    // none, the empty file goes (the shell checks nothing there).
     let body = match ctx.body(&path, &kv) {
         Ok(b) => b + "\n",
-        Err(r) => {
-            let _ = crate::out::write_flushed(&mut std::io::stderr().lock(), r.text().as_bytes());
+        Err(e) => {
+            e.print();
             String::new()
         }
     };
@@ -352,10 +353,10 @@ pub fn write(ctx: &mut Ctx, words: &[String]) -> Step {
         ));
     }
     ctx.tmp()?;
-    let body = match ctx.body(&path, &[("base", w(base)), ("bytesB64", w("@b64"))]) {
+    let body = match ctx.body(&path, &[("base", w(base)), ("bytesB64", m("@b64"))]) {
         Ok(b) => b + "\n",
-        Err(r) => {
-            let _ = crate::out::write_flushed(&mut std::io::stderr().lock(), r.text().as_bytes());
+        Err(e) => {
+            e.print();
             return Err(ctx.usage("couldn't read the new content"));
         }
     };

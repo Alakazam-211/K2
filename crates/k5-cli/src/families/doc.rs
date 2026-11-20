@@ -295,15 +295,43 @@ pub fn urlencode(pairs: &[(String, String)]) -> String {
 /// A value of `_doc_body`'s pairs.
 #[derive(Debug, Clone)]
 pub enum B {
-    /// A word, read by `_DOC_BODY_PY`'s rules (`@text`, `@b64`, `@true`,
-    /// `@false`, `@int:N`).
+    /// A word sent as the plain text it is (a value the user typed is
+    /// never read as a marker).
     W(String),
+    /// A marker the CLI built itself, under a key the shell writes with a
+    /// leading `@`: `@text`, `@b64`, `@true`, `@false` or `@int:N` (N is
+    /// digits); anything else there is refused.
+    M(String),
     /// `argv`: a JSON list.
     Argv(Vec<String>),
 }
 
 pub fn w(t: impl Into<String>) -> B {
     B::W(t.into())
+}
+
+/// A marker the CLI built ([`B::M`]).
+pub fn m(t: impl Into<String>) -> B {
+    B::M(t.into())
+}
+
+/// Why `_doc_body` made no body.
+#[derive(Debug)]
+pub enum NoBody {
+    /// Its Python raised: the traceback, not printed yet.
+    Raise(Raise),
+    /// It refused a marker or text with its usage lines, already printed
+    /// (exit 2).
+    Refused,
+}
+
+impl NoBody {
+    /// The traceback, if it is one (the refusal's lines are out already).
+    pub fn print(&self) {
+        if let NoBody::Raise(r) = self {
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), r.text().as_bytes());
+        }
+    }
 }
 
 impl Ctx {
@@ -351,7 +379,12 @@ impl Ctx {
     }
 
     /// `_doc_call`: the body of a 200, else the refusal's lines and exit.
+    /// A POST's payload is `_doc_body`'s, never empty: an empty one means
+    /// the builder made none (it said why), so nothing is sent (exit 2).
     pub fn call(&mut self, post: bool, route: &str, payload: &str) -> Result<Vec<u8>, Exit> {
+        if post && payload.is_empty() {
+            return Err(Exit::Usage);
+        }
         let (status, body) = self.send(post, route, payload)?;
         if status != "200" {
             return Err(fail(&status, &body, self.json));
@@ -586,10 +619,10 @@ impl Ctx {
         Ok(b)
     }
 
-    /// `_doc_body PATH [key value]...`: the JSON body, or what its Python
-    /// raised (then the shell sends an empty body: the `$(...)` failed
-    /// inside a word).
-    pub fn body(&self, path: &str, kv: &[(&str, B)]) -> R<String> {
+    /// `_doc_body PATH [key value]...`: the JSON body, or why there is
+    /// none (the shell's `$(...)` is empty then, and `_doc_call` sends
+    /// nothing).
+    pub fn body(&self, path: &str, kv: &[(&str, B)]) -> Result<String, NoBody> {
         let mut d: Vec<(Text, Value)> = Vec::new();
         let mut set = |k: &str, v: Value| {
             if let Some(slot) = d.iter_mut().find(|(t, _)| t.as_str() == Some(k)) {
@@ -610,28 +643,34 @@ impl Ctx {
         for (k, v) in kv {
             let v = match v {
                 B::Argv(list) => Value::Array(list.iter().map(|x| s(x)).collect()),
-                B::W(v) if v == "@text" => {
-                    let b = self.body_bytes()?;
+                B::W(v) => s(v),
+                B::M(v) if v == "@text" => {
+                    let b = self.body_bytes().map_err(NoBody::Raise)?;
                     match String::from_utf8(b) {
                         Ok(t) => s(&t),
-                        Err(e) => return Err(utf8_raise(19, e.as_bytes(), e.utf8_error())),
+                        Err(_) => {
+                            let _ = self.usage("the text is not valid UTF-8");
+                            return Err(NoBody::Refused);
+                        }
                     }
                 }
-                B::W(v) if v == "@b64" => s(&super::store::widget::b64encode(&self.body_bytes()?)),
-                B::W(v) if v == "@true" || v == "@false" => Value::Bool(v == "@true"),
-                B::W(v) if v.starts_with("@int:") => match py::int_text(&v[5..]) {
-                    Some(n) => Value::Int(n),
+                B::M(v) if v == "@b64" => s(&super::store::widget::b64encode(
+                    &self.body_bytes().map_err(NoBody::Raise)?,
+                )),
+                B::M(v) if v == "@true" || v == "@false" => Value::Bool(v == "@true"),
+                B::M(v) => match v.strip_prefix("@int:") {
+                    Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
+                        Value::Int(py::int_text(n).expect("digits read as an int"))
+                    }
+                    Some(n) => {
+                        let _ = self.usage(format!("{k} takes a whole number, not {}", opy::repr(&s(n))));
+                        return Err(NoBody::Refused);
+                    }
                     None => {
-                        return Err(Raise::at(
-                            31,
-                            format!(
-                                "ValueError: invalid literal for int() with base 10: {}",
-                                opy::repr(&s(&v[5..]))
-                            ),
-                        ))
+                        let _ = self.usage(format!("{k}: {} is not a value marker", opy::repr(&s(v))));
+                        return Err(NoBody::Refused);
                     }
                 },
-                B::W(v) => s(v),
             };
             set(k, v);
         }
@@ -639,15 +678,13 @@ impl Ctx {
     }
 
     /// `_doc_body`, as a call's argument `"$(_doc_body ...)"`: a raise is
-    /// its traceback on stderr, and the call goes with an empty body.
+    /// its traceback on stderr; with no body the argument is empty, and
+    /// [`Ctx::call`] sends nothing.
     pub fn body_arg(&self, path: &str, kv: &[(&str, B)]) -> String {
-        match self.body(path, kv) {
-            Ok(b) => b,
-            Err(r) => {
-                let _ = out::write_flushed(&mut std::io::stderr().lock(), r.text().as_bytes());
-                String::new()
-            }
-        }
+        self.body(path, kv).unwrap_or_else(|e| {
+            e.print();
+            String::new()
+        })
     }
 
     /// `_doc_query PATH [key value]...`.

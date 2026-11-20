@@ -3,7 +3,7 @@
 //! (`cli/src/doc.sh`) have them.
 
 use super::py::{self, at, d, gt, gt_or, ix, left, local_ms, num, rows, sg, so, st, tr, Pr, R};
-use super::{w, Ctx, Step, B};
+use super::{m, w, Ctx, Step, B};
 use crate::exit::Exit;
 use crate::families::Raise;
 use crate::out::json::Value;
@@ -174,7 +174,7 @@ pub fn lease(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
     let path = ctx.one_path(verb, &args)?;
     let mut kv = vec![("action", w(action))];
     if let Some(s) = secs {
-        kv.push(("ttlSecs", w(format!("@int:{s}"))));
+        kv.push(("ttlSecs", m(format!("@int:{s}"))));
     }
     let body = ctx.body_arg(&path, &kv);
     let b = ctx.call(true, "/cli/docs/lease", &body)?;
@@ -303,14 +303,14 @@ pub fn claim(ctx: &mut Ctx, words: &[String]) -> Step {
     if !lines.is_empty() {
         kv.push(("lines", w(lines)));
     }
-    if let Some(m) = ms {
-        kv.push(("ttlMs", w(format!("@int:{m}"))));
+    if let Some(n) = ms {
+        kv.push(("ttlMs", m(format!("@int:{n}"))));
     }
     if !note.is_empty() {
         kv.push(("note", w(note)));
     }
     if !hold.is_empty() {
-        kv.push(("hold", w(hold)));
+        kv.push(("hold", m(hold)));
     }
     if !id.is_empty() {
         kv.push(("id", w(id)));
@@ -562,7 +562,7 @@ pub fn say(ctx: &mut Ctx, words: &[String]) -> Step {
     let body = ctx.body_arg(
         &path,
         &[
-            ("text", w("@text")),
+            ("text", m("@text")),
             ("to", w(to)),
             ("at", w(at_)),
             ("time", w(time)),
@@ -734,7 +734,7 @@ pub fn undo_redo(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
     let body = ctx.body_arg(
         &path,
         &[
-            ("steps", w(format!("@int:{steps}"))),
+            ("steps", m(format!("@int:{steps}"))),
             ("mode", w(mode)),
             ("forPerson", w(for_p)),
         ],
@@ -1144,7 +1144,7 @@ pub fn approve(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
     };
     let body = ctx.body_arg(
         &path,
-        &[("change", w(format!("@int:{change}"))), ("state", w(state))],
+        &[("change", m(format!("@int:{change}"))), ("state", w(state))],
     );
     let b = ctx.call(true, "/cli/docs/approve", &body)?;
     Ok(ctx.json_or(&b, |pr, v| {
@@ -1206,9 +1206,9 @@ pub fn share(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
             &rel,
             &[
                 ("with", w(with)),
-                ("write", w(wr)),
-                ("history", w(hi)),
-                ("comment", w(co)),
+                ("write", m(wr)),
+                ("history", m(hi)),
+                ("comment", m(co)),
             ],
         );
         ctx.call(true, "/cli/docs/share", &body)?
@@ -1404,13 +1404,13 @@ pub fn owner_purge(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
             kv.push(("thread", w(thread)));
         }
         if !n.is_empty() {
-            kv.push(("n", w(format!("@int:{n}"))));
+            kv.push(("n", m(format!("@int:{n}"))));
         }
         if !text.is_empty() {
             kv.push(("text", w(text)));
         }
         if all {
-            kv.push(("all", w("@true")));
+            kv.push(("all", m("@true")));
         }
         if kv.is_empty() {
             return Err(ctx.usage(format!(

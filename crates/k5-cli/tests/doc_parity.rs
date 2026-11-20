@@ -1302,3 +1302,63 @@ fn the_host_s_token_is_on_no_child() {
         );
     }
 }
+
+/// A value the user types is sent as the plain text it is, even when it
+/// looks like one of the body's markers; the values the CLI builds keep
+/// their types (`_doc_body`: a marker only under a key the CLI marks).
+#[test]
+fn a_typed_value_is_plain_text() {
+    let rig = Rig::new(VERB, "markers");
+    let v = vec![
+        // covers: doc version
+        r(
+            "version --name @int:x",
+            &["version", "--name", "@int:x", "-w", "ws1", "--json", "notes.md"],
+            vec![ok(r#"{"version":3,"name":"@int:x"}"#)],
+            0,
+        ),
+        r(
+            "version --name @true --version 3",
+            &["version", "--name", "@true", "--version", "3", "-w", "ws1", "notes.md"],
+            vec![ok(r#"{"version":3,"name":"@true"}"#)],
+            0,
+        ),
+        // covers: doc say
+        r(
+            "say --to @text --at @int:x --time @false",
+            &["say", "--to", "@text", "--at", "@int:x", "--time", "@false", "-w", "ws1", "notes.md", "hi"],
+            vec![ok(r#"{"say":{"id":"s1","to":"@text"}}"#)],
+            0,
+        ),
+        // covers: doc share
+        r(
+            "share --with @int:1",
+            &["share", "--with", "@int:1", "-w", "ws1", "--json", "notes.md"],
+            vec![ok("{}")],
+            0,
+        ),
+        // covers: doc claim
+        r(
+            "claim --note @true --id @int:9, and --hold built",
+            &["claim", "--lines", "1,2", "--note", "@true", "--id", "@int:9", "--hold", "-w", "ws1", "--json", "notes.md"],
+            vec![ok("{}")],
+            0,
+        ),
+        // covers: doc undo
+        r(
+            "undo --for @text",
+            &["undo", "--for", "@text", "-w", "ws1", "--json", "notes.md"],
+            vec![ok("{}")],
+            0,
+        ),
+        r(
+            "the CLI's own numbers and flags",
+            &["revert", "12", "--partial", "-w", "ws1", "--json", "notes.md"],
+            vec![ok("{}")],
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

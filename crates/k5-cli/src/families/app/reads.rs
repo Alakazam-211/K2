@@ -2,7 +2,7 @@
 //! CLI's `cmd_app_list`, `cmd_app_inspect` and `cmd_app_deployment`
 //! (`cli/src/app-doctor.sh`): one `_compute_call` GET each, `--json` as it
 //! came, else the shell's Python line for line. `inspect --resources`
-//! (the box usage view's printer) is still the shell's.
+//! is the box usage view's printer ([`super::resources`]).
 
 use super::call::Ctx;
 use super::py::{self, Out};
@@ -29,25 +29,26 @@ pub mod usage {
     );
 }
 
-/// `app inspect <app> [--json]`.
+/// `app inspect <app> [--resources] [--json]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Inspect {
     pub app: String,
     pub json: bool,
+    /// `--resources`: the App's row of the box usage view.
+    pub resources: bool,
 }
 
-/// `cmd_app_inspect`'s loop. `None`: a help form or `--resources` (the
-/// shell's).
+/// `cmd_app_inspect`'s loop. `None`: a help form (the shell's).
 pub fn parse_inspect(words: &[&str]) -> Option<Result<Inspect, Stop>> {
     let mut i = Inspect {
         app: String::new(),
         json: false,
+        resources: false,
     };
-    let mut resources = false;
     for w in words {
         match *w {
             "--json" => i.json = true,
-            "--resources" => resources = true,
+            "--resources" => i.resources = true,
             "-h" | "--help" => return None,
             _ if w.starts_with('-') => return Some(Err(Stop::usage(format!("Unknown flag: {w}")))),
             _ => i.app = w.to_string(),
@@ -56,13 +57,13 @@ pub fn parse_inspect(words: &[&str]) -> Option<Result<Inspect, Stop>> {
     if i.app.is_empty() {
         return Some(Err(Stop::usage(usage::INSPECT.to_string())));
     }
-    if resources {
-        return None;
-    }
     Some(Ok(i))
 }
 
 pub fn inspect(ctx: &mut Ctx, i: &Inspect) -> Answer {
+    if i.resources {
+        return super::resources::run(ctx, &i.app, i.json);
+    }
     let body = ctx.call(false, "/cli/app/inspect", &format!("app={}", quote(&i.app)))?;
     if i.json {
         return Ok(raw(&body));

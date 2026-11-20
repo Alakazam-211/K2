@@ -351,7 +351,9 @@ fn inspect_words_and_printer() {
         .unwrap()
         .unwrap();
     assert_eq!((i.app.as_str(), i.json), ("b", true));
-    assert!(reads::parse_inspect(&["a", "--resources"]).is_none());
+    let r = reads::parse_inspect(&["a", "--resources"]).unwrap().unwrap();
+    assert!(r.resources && !r.json);
+    assert!(reads::parse_inspect(&["a", "--resources", "-h"]).is_none());
     assert_eq!(
         reads::parse_inspect(&["--resources"]).unwrap().unwrap_err(),
         Stop::usage(reads::usage::INSPECT)

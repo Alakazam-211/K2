@@ -277,7 +277,7 @@ pub fn check_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
 }
 
 /// `v + suffix` for a string suffix.
-fn plus(v: &Value, suffix: &str, line: u32) -> Result<String, Raise> {
+pub(super) fn plus(v: &Value, suffix: &str, line: u32) -> Result<String, Raise> {
     match v {
         Value::Str(_) => Ok(format!("{}{suffix}", py::s(v))),
         Value::Array(_) => Err(Raise::at(

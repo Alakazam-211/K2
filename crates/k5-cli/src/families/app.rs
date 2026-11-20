@@ -6,8 +6,8 @@
 //!
 //! Native so far:
 //! - [`wallet`]: `app wallet settings|people|remove|personal-agent|personal-agents`.
-//! - [`reads`]: `app list` (`--workspace`, `--box`), `app inspect` (not
-//!   `--resources`) and `app deployment`.
+//! - [`reads`]: `app list` (`--workspace`, `--box`), `app inspect` (with
+//!   [`resources`] for `--resources`) and `app deployment`.
 //! - [`access`]: `app people`, `app discovery`, `app stay-signed-in`,
 //!   `app profile settings` and `app set`.
 //! - [`door`]: `app suspend`, `app self`, `app usage`, `app members`,
@@ -102,6 +102,7 @@ pub mod phone_set;
 pub mod py;
 pub mod reads;
 pub mod recording;
+pub mod resources;
 pub mod runtime;
 pub mod sign_in;
 pub mod traffic;

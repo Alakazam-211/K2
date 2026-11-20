@@ -4,7 +4,8 @@
 //! conversations (`past`, or any of `--past`, `--search`, `--days`,
 //! `--cli`, `--limit`, `--archived`), `show <id>`, and `main` without
 //! `set`; and the verbs that change something, `open`, `new`, `stop` and
-//! `main set` ([`write`]), and `live`, the owner's raw view ([`live`]).
+//! `main set` ([`write`]), `live`, the owner's raw view ([`live`]), and
+//! `spawn` (retired) and `set-label` ([`more`]).
 //!
 //! What runs, in the shell's order:
 //!
@@ -37,9 +38,7 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
-//! - `compact` and `set-label`, `archives` (the owner's on-disk view),
-//!   `spawn` (which skips the connection gate),
-//!   `help`, and a command line with `-h` or `--help` ([`crate::front`]);
+//! - `compact` and `archives` (the owner's on-disk view), `help`, and a command line with `-h` or `--help` ([`crate::front`]);
 //! - a value flag as the last word (the shell's `shift 2` fails there and
 //!   `set -e` ends the command), and a word that is not UTF-8;
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported, a port that is set
@@ -395,6 +394,28 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
+    if let Some(m) = more::parse(&words) {
+        if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+            return None;
+        }
+        if !python::family_native(python::here()) {
+            return None;
+        }
+        let settings = match daemon::current() {
+            Ok(s) => s,
+            Err(e) => {
+                out::stderr_line(&format!("Error: {e}"));
+                return Some(Exit::Error);
+            }
+        };
+        if matches!(m, more::More::Label(_))
+            && prelude::gate(&settings).is_none()
+            && settings.port_text.as_deref().and_then(curl_port).is_none()
+        {
+            return None;
+        }
+        return Some(more::run(args, m, hook_sock.as_deref(), settings));
+    }
     let plan = write::parse(&words);
     if let Some(write::Plan::Do(w)) = &plan {
         if write::needs_shell(w) {
@@ -1130,6 +1151,7 @@ fn main_lines(v: &Value, o: &mut Out) -> Result<Exit, Raise> {
 }
 
 pub mod live;
+pub mod more;
 pub mod write;
 
 #[cfg(test)]

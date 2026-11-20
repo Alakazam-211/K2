@@ -7028,6 +7028,9 @@ _envn_into K2_TALK_NAV_SETTLE TALK_NAV_SETTLE 0.35       # settle (s) between an
 _envn_into K2_TALK_ANSWER_SETTLE TALK_ANSWER_SETTLE 0.35 # settle (s) between batch answer digits
 _envn_into K2_TALK_SUBMIT_KEY TALK_SUBMIT_KEY 1          # key selecting "1. Submit answers" on the review screen
 _envn_into K2_TALK_SCOUT_MAX TALK_SCOUT_MAX 20           # safety cap on questions walked when N is unknown
+# The cap reaches `[[ -ge ]]`, which evaluates its operands as arithmetic:
+# anything but plain digits falls back to the default.
+case "$K2_TALK_SCOUT_MAX" in ''|*[!0-9]*) K2_TALK_SCOUT_MAX=20 ;; esac
 K2_TALK_ARROW_RIGHT=$'\033[C'   # → move to the NEXT question (Esc [ C)
 K2_TALK_ARROW_LEFT=$'\033[D'     # ← move to the PREVIOUS question (Esc [ D)
 

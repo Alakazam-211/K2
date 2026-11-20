@@ -41,6 +41,43 @@ fn the_shell_s_lines() {
     assert!(cell.contains("        /cli/connections) return 0 ;;"));
 }
 
+/// `cmd_connections`'s case has exactly the arms `run` knows (`list`,
+/// `add`, `remove`, `*`), and its `*` arm prints [`UNKNOWN`] and exits 1.
+#[test]
+fn the_shell_s_arms() {
+    let text = source("usage.sh");
+    let body = &text[text
+        .find("\ncmd_connections() {\n")
+        .expect("cmd_connections")..];
+    let body = &body[..body.find("\n}\n").expect("its end")];
+    let arms: Vec<&str> = body
+        .lines()
+        .filter_map(|l| l.strip_prefix("        "))
+        .filter(|l| {
+            l.strip_suffix(')').is_some_and(|w| {
+                !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c == '*')
+            })
+        })
+        .collect();
+    assert_eq!(arms, ["list)", "add)", "remove)", "*)"]);
+    let star = &body[body.find("\n        *)\n").expect("the * arm")..];
+    let echoes: Vec<&str> = star
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("echo \""))
+        .map(|l| l.strip_suffix("\" >&2").expect("an echo to stderr"))
+        .collect();
+    // The shell's name, whatever the brand.
+    let ours: Vec<String> = UNKNOWN
+        .iter()
+        .map(|l| {
+            l.replace(k2_client::brand::CLI_NAME, "k2")
+                .replace('"', "\\\"")
+        })
+        .collect();
+    assert_eq!(echoes, ours);
+    assert!(star.contains("\n            exit 1\n            ;;\n    esac"));
+}
+
 /// The Python, its lines as `python3 -c` numbers them.
 #[test]
 fn the_python() {
@@ -142,8 +179,14 @@ fn the_words() {
         parse(&["--json", "list"]),
         stop("Error: unexpected argument: list".into())
     );
+    assert_eq!(parse(&[]), ask(false, false));
+    assert_eq!(parse(&["", "--json"]), ask(true, false));
+    assert_eq!(
+        parse(&["", "x"]),
+        stop("Error: unexpected argument: x".into())
+    );
     for shell in [
-        &[][..],
+        &["help"][..],
         &["add", "x"],
         &["list", "--help"],
         &["--json", "-h"],

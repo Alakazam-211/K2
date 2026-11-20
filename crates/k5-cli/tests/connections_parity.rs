@@ -20,8 +20,13 @@
 //! - No answer (an empty reply, a 5xx with no body, none in time): the
 //!   line and exit 1; a reset (56), not HTTP (1), TMPDIR unusable (76) and
 //!   no daemon (7): curl's code, nothing printed.
-//! - What the binary hands to the shell: `connections` alone, help, a
-//!   port that is no port (`add` and `remove`: connections_write_parity.rs).
+//! - The rest of `cmd_connections` (the whole row): `connections` alone
+//!   and an empty action (`list`), an action it has no arm for (`help`, a
+//!   word, a flag after one: the usage lines, exit 1), with the gates and
+//!   the id tool's checks in front of them; one answer above 256 KiB.
+//! - What the binary hands to the shell: help with `-h` or `--help` in a
+//!   place that is not a help page, a port that is no port (`add` and
+//!   `remove`: connections_write_parity.rs).
 
 #![cfg(unix)]
 
@@ -191,6 +196,24 @@ fn connections_answers_as_the_shell_does() {
             &["list"],
             &[],
             vec![reply(many(400))],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a large list: an answer above 256 KiB",
+            &["list", "--json"],
+            &[],
+            vec![reply(many(4000))],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a large list as text",
+            &[],
+            &[],
+            vec![reply(many(4000))],
             owner_and_port,
             0,
             1,
@@ -705,6 +728,123 @@ fn connections_with_a_daemon_that_never_answers() {
     });
 }
 
+/// The rest of the row: `connections` alone, an empty action, and the
+/// actions `cmd_connections` has no arm for.
+#[test]
+fn connections_the_rest_of_the_row() {
+    let rig = Rig::new(VERB, "row");
+    let v = vec![
+        case(
+            "connections alone",
+            &[],
+            &[],
+            vec![ok(LIST)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "an empty action is list",
+            &["", "--users"],
+            &[],
+            vec![ok(LIST)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "an empty action, then a word",
+            &["", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "help is no action: the usage lines",
+            &["help"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "an unknown action and words after it",
+            &["show", "acme", "--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "a flag first that is not list's",
+            &["--all"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "an unknown action with no port",
+            &["show"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
+        case(
+            "an unknown action with no token",
+            &["show"],
+            &[],
+            vec![],
+            port_only,
+            1,
+            0,
+        ),
+        case(
+            "an unknown action, HOOK_SOCK set and no passport",
+            &["show"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        with(
+            with_passport(&[]),
+            case(
+                "connections alone with a passport",
+                &[],
+                &[],
+                vec![ok(LIST)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        Case {
+            compare: Compare::Waited,
+            ..case(
+                "connections alone, an empty reply: the line",
+                &[],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                1,
+                1,
+            )
+        },
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
 /// What the binary hands to the shell, before it prints or sends
 /// anything: both sides are the shell's.
 #[test]
@@ -715,15 +855,6 @@ fn connections_hands_these_to_the_shell() {
         ..c
     };
     let v = vec![
-        shell(case(
-            "connections alone",
-            &[],
-            &[],
-            vec![ok(LIST)],
-            owner_and_port,
-            0,
-            1,
-        )),
         shell(case(
             "--help",
             &["--help"],

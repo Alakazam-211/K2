@@ -25,12 +25,12 @@
 //!    host with `--users`.
 //! 6. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
-//! The route table sends `connections list`, `connections --json` and
-//! `connections --users` here (a verb row, [`crate::route`]), and `add`
-//! and `remove` (a verb row each, answered by [`write`]): every other action of
-//! `cmd_connections`, `connections` alone and its help (`connections help`
-//! among it) stay the shell's. So does a command
-//! line with `-h` or `--help` ([`crate::front`]), a word that is not
+//! The route table sends the whole `connections` row here: `list` (also
+//! `connections` alone, an empty action, `--json` and `--users`), `add`
+//! and `remove` ([`write`]), and an action `cmd_connections` has no arm
+//! for (`help` among it), which prints [`UNKNOWN`] on stderr and exits 1
+//! after the gates and the id tool's checks. Still the shell's: a command line with `-h` or
+//! `--help` that is not a help page ([`crate::front`]), a word that is not
 //! UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a port that
 //! is set but is no port curl takes, and a `python3` the binary can't
 //! tell, as for [`super::inbox`].
@@ -51,6 +51,7 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::{Call, Error};
+use k2_client::cli_name;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -113,7 +114,9 @@ pub struct Ask {
 /// shell's.
 pub fn parse(words: &[&str]) -> Option<Result<Ask, [String; 2]>> {
     let rest = match words.first() {
-        Some(&"list") => &words[1..],
+        // `${1:-list}`: no word, or an empty one, is `list`.
+        None => words,
+        Some(&("list" | "")) => &words[1..],
         Some(&("--json" | "--users")) => words,
         _ => return None,
     };
@@ -142,7 +145,21 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, [String; 2]>> {
 enum Form<'a> {
     List(Result<Ask, [String; 2]>),
     Write(write::Verb, Vec<&'a str>),
+    /// An action `cmd_connections` has no arm for: [`UNKNOWN`], exit 1.
+    Unknown,
 }
+
+/// What `cmd_connections`'s `*)` arm prints on stderr, then exit 1.
+pub const UNKNOWN: [&str; 4] = [
+    concat!(
+        "Usage: ",
+        cli_name!(),
+        " connections [list|add|remove] [workspace-name] [--json] [--users]"
+    ),
+    "  list [--json] [--users]  List connections for this workspace (exit 0)",
+    "  add <name>        Connect (agents need \"Agents can add connections\" in Settings \u{2192} Network \u{2192} Tunnel \u{2192} Policies; exit 3 when gated)",
+    "  remove <name>     Disconnect (same agent create/remove gate as add; exit 3 when gated)",
+];
 
 /// `k5 connections list ...`, `add <name>` and `remove <name>`: `args` is
 /// the whole command line after `argv[0]`. `None`: the shell CLI answers
@@ -159,7 +176,12 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .collect::<Option<_>>()?;
     let form = match words.first().and_then(|w| write::Verb::of(w)) {
         Some(verb) => Form::Write(verb, words[1..].to_vec()),
-        None => Form::List(parse(&words)?),
+        None => match parse(&words) {
+            Some(list) => Form::List(list),
+            // `-h` or `--help`: the front sends help elsewhere.
+            None if words.iter().any(|w| matches!(*w, "-h" | "--help")) => return None,
+            None => Form::Unknown,
+        },
     };
     if !python::family_native(python::here()) {
         return None;
@@ -204,6 +226,12 @@ fn run_with(
             Ok(t) => (Ask::default(), Some((verb, t))),
             Err(_) => return write::usage(verb),
         },
+        Form::Unknown => {
+            for l in UNKNOWN {
+                out::stderr_line(l);
+            }
+            return Exit::Error;
+        }
     };
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);

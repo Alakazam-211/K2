@@ -217,7 +217,11 @@ expect_eq "--code-stdin: output" "$OUT" "$OFFER_LINES"
 case "$ERR" in *"$NOTE"*) bad "--code-stdin: the command-line note was printed" ;; *) ok "--code-stdin: no command-line note" ;; esac
 assert_add_body "--code-stdin"
 expect_eq "--code-stdin: the offer file" "$(cat "$W/offer.json" 2>/dev/null)" '{"v": 1, "pairing": "csp_1"}'
-if grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG"; then ok "--code-stdin: python3 and curl children were logged"; else bad "--code-stdin: the wrappers saw no python3 or curl child"; fi
+# The k5 binary answers ci signer add itself: it starts no child, so the
+# guard is that the daemon got the code (above) and no child ran.
+if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    if grep -Eq '^(python3|curl|env) ' "$ARGLOG"; then bad "--code-stdin: the binary started a child"; grep -E '^(python3|curl|env) ' "$ARGLOG" | cut -c1-200 | head -3 >&2; else ok "--code-stdin: the binary started no child"; fi
+elif grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG"; then ok "--code-stdin: python3 and curl children were logged"; else bad "--code-stdin: the wrappers saw no python3 or curl child"; fi
 assert_off_children "--code-stdin" "the pairing code" "$SECRET_PART"
 assert_off_children "--code-stdin" "the vault password" "$VAULT_PW"
 assert_off_children "--code-stdin" "the confirm token" "$TOKEN"

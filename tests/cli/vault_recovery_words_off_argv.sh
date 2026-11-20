@@ -11,7 +11,8 @@
 # so its argv and its environment are logged, and k2's own argv is logged
 # too. The typed words (and the shown phrase, which holds them) must reach
 # the confirm body and appear in no logged argv and no logged environment.
-# The output and exit codes are checked as well.
+# The output and exit codes are checked as well. The k5 binary answers
+# both verbs itself, so through it no child may start at all.
 #
 # No daemon build; a throwaway HOME; never touches the real ~/.k2.
 # Runs with the bash 3.2 of macOS as well.
@@ -205,6 +206,26 @@ if got != want:
     fi
 }
 
+# assert_children LABEL: the bash CLI starts python3 and curl here, so the
+# wrappers must have seen them (they would miss nothing). The k5 binary
+# answers show-once and rotate itself: it must start no child at all (no
+# line in either log but k2's own), the stronger property.
+assert_children() {
+    local label="$1"
+    if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+        if grep -v '^k2 ' "$ARGLOG" | grep -q . || [ -s "$ENVLOG" ]; then
+            bad "$label: the binary started a child"
+            grep -v '^k2 ' "$ARGLOG" | cut -c1-200 | head -3 >&2
+        else
+            ok "$label: the binary started no child"
+        fi
+    elif grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG"; then
+        ok "$label: python3 and curl children were logged"
+    else
+        bad "$label: the wrappers saw no python3 or curl child"
+    fi
+}
+
 CONFIRMED="recovery key confirmed. If it ever leaks: k2 vault recovery rotate, then k2 vault rekey."
 
 # 1. show-once: the three typed words go to the confirm request.
@@ -214,7 +235,7 @@ expect_eq "show-once: exit 0" "$RC" "0"
 expect_eq "show-once: output" "$OUT" "$CONFIRMED"
 assert_routes "show-once" status recovery/show-once recovery/confirm
 assert_confirm_body "show-once"
-if grep -q '^python3 ' "$ARGLOG" && grep -q '^curl ' "$ARGLOG"; then ok "show-once: python3 and curl children were logged"; else bad "show-once: the wrappers saw no python3 or curl child"; fi
+assert_children "show-once"
 for w in "$W3" "$W11" "$W20"; do assert_off_children "show-once" "the word $w" "$w"; done
 
 # 2. rotate: the vault password confirm first, then the words.
@@ -224,6 +245,7 @@ expect_eq "rotate: exit 0" "$RC" "0"
 expect_eq "rotate: output" "$OUT" "$CONFIRMED"
 assert_routes "rotate" status confirm/start confirm/finish recovery/rotate recovery/confirm
 assert_confirm_body "rotate"
+assert_children "rotate"
 for w in "$W3" "$W11" "$W20"; do assert_off_children "rotate" "the word $w" "$w"; done
 assert_off_children "rotate" "the vault password" "$VAULT_PW"
 assert_off_children "rotate" "the confirm token" "$TOKEN"

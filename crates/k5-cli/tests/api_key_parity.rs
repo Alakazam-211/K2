@@ -9,9 +9,13 @@
 //!   no-grant note, `--status`, the usage errors, a value flag last.
 //!   (The key on stdin is `tests/cli/api_key_stdin_off_argv.sh`'s: the rig
 //!   runs with stdin from /dev/null, so here `--key-stdin` reads nothing.)
+//! - `create --hire` and `hire-ceiling` (`app-access`): the owner's
+//!   confirm over the vault socket on the vault rig ([`common::vault`]),
+//!   the limits' body, a limit Python can't read, a refused confirm, no
+//!   vault socket; `hire-ceiling`'s usage lines, readers and tracebacks.
 //! - The owner from disk, a passport, a heal, the id tool's checks, the
-//!   gates; what the binary hands to the shell (`create --hire`,
-//!   `hire-ceiling`, help, a port that is no port).
+//!   gates; what the binary hands to the shell (help, a port that is no
+//!   port).
 
 #![cfg(unix)]
 
@@ -19,6 +23,7 @@ mod common;
 
 use common::parity::*;
 use common::stub::Reply;
+use common::vault::{VCase, VRig};
 
 const VERB: &str = "api-key";
 const KEYS: &str = r#"{"keys":[{"id":"k1","label":"wiki","anthropicKeySet":true,"scope":"*","capabilities":{"hostSessions":true}},{"id":"k2","provider":"openai","anthropicKeySet":true,"baseUrl":"https://llm.example","disabledAt":1,"capabilities":{"hire":true,"db":true},"hireLimits":{"apps":[{"app":"acme/site","rooms":["self"],"roles":["member"]},{"app":"x"}]},"legacyNewWorkspace":true},{"id":"k3","revokedAt":"t","capabilities":{"hire":true},"hireLimits":{}}]}"#;
@@ -723,42 +728,6 @@ fn api_key_hands_these_to_the_shell() {
             1,
         )),
         shell(case(
-            "create --hire --status",
-            &["create", "--hire", "--status"],
-            &[],
-            vec![],
-            owner_and_port,
-            2,
-            0,
-        )),
-        shell(case(
-            "create --hire after an unknown flag",
-            &["create", "--hire", "--nope"],
-            &[],
-            vec![],
-            owner_and_port,
-            1,
-            0,
-        )),
-        shell(case(
-            "hire-ceiling",
-            &["hire-ceiling", "k1", "--none"],
-            &[],
-            vec![ok(r#"{"id":"k1","hireLimits":{"apps":[]}}"#)],
-            owner_and_port,
-            0,
-            1,
-        )),
-        shell(case(
-            "app-access with no id",
-            &["app-access"],
-            &[],
-            vec![],
-            owner_and_port,
-            2,
-            0,
-        )),
-        shell(case(
             "a port that is no port",
             &["list"],
             &[("K2_PORT", "41o0")],
@@ -862,6 +831,519 @@ fn api_key_help_never_acts() {
             2,
             0,
         )),
+        shell(case(
+            "BASH BUG, help acts: hire-ceiling k1 --app-login -h sends an App named -h",
+            &["hire-ceiling", "k1", "--app-login", "-h"],
+            &[],
+            vec![ok(r#"{"id":"k1","hireLimits":{"apps":[{"app":"-h"}]}}"#)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        shell(case(
+            "create --hire -h: an unknown flag, nothing sent",
+            &["create", "--hire", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+const WIDENED: &str = r#"{"id":"k1","change":"raise","hireLimits":{"apps":[{"app":"acme/site","rooms":["self","lobby"],"roles":["member"]},{"app":"globex","rooms":[]}]}}"#;
+
+#[test]
+fn api_key_hire_ceiling_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "ceiling");
+    let v = vec![
+        // covers: api-key hire-ceiling
+        case(
+            "--none",
+            &["hire-ceiling", "k1", "--none"],
+            &[],
+            vec![ok(r#"{"id":"k1","hireLimits":{"apps":[]}}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "two App logins, lowered: no confirm",
+            &[
+                "hire-ceiling",
+                "k1",
+                "--app-login",
+                " acme/site :self, ,lobby:member",
+                "--app-login",
+                "globex:",
+            ],
+            &[],
+            vec![ok(WIDENED.replace("raise", "lower").as_str())],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "app-access, the alias",
+            &["app-access", "k1", "--app-login", "globex"],
+            &[],
+            vec![ok(r#"{"id":"k1","change":"raise"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "the daemon's error, a string",
+            &["hire-ceiling", "k9", "--none"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":"no such key"}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "the daemon's error, a dict",
+            &["hire-ceiling", "k1", "--none"],
+            &[],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"not_hire_key","hint":"mint one with --hire"}}"#.into(),
+            )],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "a refusal with a permission card",
+            &["hire-ceiling", "k1", "--none"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "not JSON",
+            &["hire-ceiling", "k1", "--none"],
+            &[],
+            vec![ok("<html>")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "an empty answer",
+            &["hire-ceiling", "k1", "--none"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        traceback(case(
+            "a list: Python's AttributeError",
+            &["hire-ceiling", "k1", "--none"],
+            &[],
+            vec![ok("[1]")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        // covers: api-key hire-ceiling
+        traceback(case(
+            "a room that is a number: Python's TypeError",
+            &["hire-ceiling", "k1", "--none"],
+            &[],
+            vec![ok(r#"{"id":"k1","hireLimits":{"apps":[{"app":"a","rooms":[5]}]}}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        // covers: api-key hire-ceiling
+        case(
+            "the bulletin",
+            &["hire-ceiling", "k1", "--none"],
+            &[],
+            vec![ok(BULLETIN)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "no id",
+            &["hire-ceiling"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "an id that starts with -",
+            &["app-access", "--none"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "neither --none nor --app-login",
+            &["hire-ceiling", "k1"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "both --none and --app-login",
+            &["hire-ceiling", "k1", "--app-login", "a", "--none"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "an unknown flag",
+            &["hire-ceiling", "k1", "--all"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "--app-login last",
+            &["hire-ceiling", "k1", "--app-login"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        // covers: api-key hire-ceiling
+        case(
+            "HOOK_SOCK set and no passport: the require-passport lines",
+            &["hire-ceiling", "k1", "--none"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        // covers: api-key create
+        case(
+            "create --hire --status",
+            &["create", "--hire", "--status"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // covers: api-key create
+        case(
+            "create --hire after an unknown flag",
+            &["create", "--hire", "--nope"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        // covers: api-key create
+        case(
+            "create --hire, a value flag last",
+            &["create", "--hire", "--max-live"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn api_key_hire_ceiling_with_no_daemon() {
+    let rig = Rig::new(VERB, "ceilingdead");
+    let port = dead_port();
+    let v = vec![
+        // covers: api-key hire-ceiling
+        case(
+            "nothing listens: curl's code",
+            &["hire-ceiling", "k1", "--none"],
+            &[("K2_PORT", port.as_str())],
+            vec![],
+            owner_only,
+            7,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// A case on the vault rig: the daemon's and the vault socket's answers,
+/// stdin, the exit.
+fn confirming(
+    name: &'static str,
+    args: &[&'static str],
+    daemon: Vec<Reply>,
+    vault: Vec<Reply>,
+    stdin: &[u8],
+    code: i32,
+) -> VCase {
+    let mut c = VCase::new(name, args);
+    c.noun = VERB;
+    c.daemon_requests = daemon.len();
+    c.daemon = daemon;
+    c.vault_requests = vault.len();
+    c.vault = Some(vault);
+    c.stdin = stdin.to_vec();
+    c.code = code;
+    c
+}
+
+fn secrets(mut c: VCase, s: &[&'static str]) -> VCase {
+    c.secrets = s.to_vec();
+    c
+}
+
+fn methods(m: &str) -> Reply {
+    ok(&format!(
+        r#"{{"methods":["{m}"],"confirmText":"an API key that can hire"}}"#
+    ))
+}
+
+fn token(t: &str) -> Reply {
+    ok(&format!(r#"{{"token":"{t}"}}"#))
+}
+
+/// The confirm the daemon asks for before it widens a key's App access.
+fn confirm_required() -> Reply {
+    Reply::Answer(
+        403,
+        r#"{"error":{"code":"vault_confirm_required","hint":"widening needs the owner"}}"#.into(),
+    )
+}
+
+#[test]
+fn api_key_hire_asks_for_the_owner_s_confirm() {
+    let rig = VRig::new();
+    let v = vec![
+        secrets(
+            // covers: api-key create
+            confirming(
+                "create --hire: the vault password, every limit and two App logins",
+                &[
+                    "create",
+                    "--hire",
+                    "--label",
+                    "hirer",
+                    "--workspaces",
+                    "*",
+                    "--max-per-day",
+                    "5",
+                    "--max-live",
+                    " 0_9 ",
+                    "--max-per-team",
+                    "+3",
+                    "--hire-db",
+                    "read",
+                    "--link",
+                    "--link-targets",
+                    "a, ,b",
+                    "--retire",
+                    "--reach",
+                    "message",
+                    "--folder",
+                    "sub",
+                    "--app-login",
+                    "acme/site:self,lobby:member",
+                    "--app-login",
+                    "globex",
+                ],
+                vec![ok(CREATED)],
+                vec![methods("vault-password"), token("tk-hire-1")],
+                b"pw-hire-1\n",
+                0,
+            ),
+            &["pw-hire-1", "tk-hire-1"],
+        ),
+        secrets(
+            // covers: api-key create
+            confirming(
+                "create --hire --key-stdin: the key, then the password",
+                &["create", "--hire", "--key-stdin", "--workspaces", "*"],
+                vec![ok(CREATED)],
+                vec![methods("vault-password"), token("tk-hire-2")],
+                b"sk-llm-hire-2\npw-hire-2\n",
+                0,
+            ),
+            &["sk-llm-hire-2", "pw-hire-2", "tk-hire-2"],
+        ),
+        // covers: api-key create
+        confirming(
+            "create --hire: this Mac's check, and no --workspaces",
+            &["create", "--hire"],
+            vec![ok(r#"{"id":"ak2","key":"k2sk_h","capabilities":{"hire":true}}"#)],
+            vec![methods("local-auth"), token("tk-hire-3")],
+            b"",
+            0,
+        ),
+        // covers: api-key create
+        confirming(
+            "create --hire: the confirm is refused",
+            &["create", "--hire", "--workspaces", "*"],
+            vec![],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"vault_denied","hint":"not now"}}"#.into(),
+            )],
+            b"",
+            3,
+        ),
+        // covers: api-key create
+        confirming(
+            "create --hire: no confirm method",
+            &["create", "--hire", "--workspaces", "*"],
+            vec![],
+            vec![ok(r#"{"methods":[]}"#)],
+            b"",
+            3,
+        ),
+        {
+            // covers: api-key create
+            let mut c = confirming(
+                "create --hire: no vault socket",
+                &["create", "--hire", "--workspaces", "*"],
+                vec![],
+                vec![],
+                b"",
+                3,
+            );
+            c.vault = None;
+            c
+        },
+        // covers: api-key create
+        confirming(
+            "create --hire: a limit Python can't read, the empty body refused",
+            &["create", "--hire", "--max-live", "lots", "--workspaces", "*"],
+            vec![Reply::Answer(400, r#"{"error":"bad body"}"#.into())],
+            vec![methods("vault-password"), token("tk-hire-4")],
+            b"pw\n",
+            1,
+        ),
+        // covers: api-key create
+        confirming(
+            "create --hire: a limit Python can't read, the empty body answered",
+            &["create", "--hire", "--max-per-team", "1e3", "--workspaces", "*"],
+            vec![ok(CREATED)],
+            vec![methods("vault-password"), token("tk-hire-5")],
+            b"pw\n",
+            2,
+        ),
+        // covers: api-key create
+        confirming(
+            "create --hire: the daemon's error",
+            &["create", "--hire", "--workspaces", "*"],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"hire_off","hint":"turn hiring on first"}}"#.into(),
+            )],
+            vec![methods("vault-password"), token("tk-hire-6")],
+            b"pw\n",
+            1,
+        ),
+        secrets(
+            // covers: api-key hire-ceiling
+            confirming(
+                "hire-ceiling: widening asks for the confirm, then sends again",
+                &[
+                    "hire-ceiling",
+                    "k1",
+                    "--app-login",
+                    "acme/site:self,lobby:member",
+                    "--app-login",
+                    "globex",
+                ],
+                vec![confirm_required(), ok(WIDENED)],
+                vec![methods("vault-password"), token("tk-widen-1")],
+                b"pw-widen-1\n",
+                0,
+            ),
+            &["pw-widen-1", "tk-widen-1"],
+        ),
+        // covers: api-key hire-ceiling
+        confirming(
+            "app-access: the confirm is refused",
+            &["app-access", "k1", "--app-login", "globex"],
+            vec![confirm_required()],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"vault_denied","hint":"not now"}}"#.into(),
+            )],
+            b"",
+            3,
+        ),
+        // covers: api-key hire-ceiling
+        confirming(
+            "hire-ceiling: confirmed, then the daemon's error",
+            &["hire-ceiling", "k1", "--app-login", "globex"],
+            vec![
+                confirm_required(),
+                Reply::Answer(
+                    409,
+                    r#"{"error":{"code":"stale","hint":"list the keys again"}}"#.into(),
+                ),
+            ],
+            vec![methods("local-auth"), token("tk-widen-2")],
+            b"",
+            1,
+        ),
+        // covers: api-key hire-ceiling
+        confirming(
+            "hire-ceiling: confirmed, then no answer",
+            &["hire-ceiling", "k1", "--app-login", "globex"],
+            vec![confirm_required(), Reply::Close],
+            vec![methods("local-auth"), token("tk-widen-3")],
+            b"",
+            52,
+        ),
+        // covers: api-key hire-ceiling
+        confirming(
+            "hire-ceiling: asked again after the token",
+            &["hire-ceiling", "k1", "--none"],
+            vec![confirm_required(), confirm_required()],
+            vec![methods("local-auth"), token("tk-widen-4")],
+            b"",
+            1,
+        ),
     ];
     for c in v {
         rig.check(&c);

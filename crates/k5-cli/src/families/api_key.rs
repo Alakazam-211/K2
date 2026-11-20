@@ -1,6 +1,7 @@
 //! `k5 api-key`, the public /v1 API's keys, as the shell CLI's
 //! `cmd_api_key` answers it (`cli/src/talk-and-workspace.sh`): `create`
-//! (and `create --status`), `list`, `revoke`, `disable` and `enable`.
+//! (and `create --status` and `create --hire`), `list`, `hire-ceiling`
+//! (and its alias `app-access`), `revoke`, `disable` and `enable`.
 //!
 //! What runs, in the shell's order:
 //!
@@ -20,32 +21,45 @@
 //!    sent once with `cli_post_json_stdin` (the body on stdin, never
 //!    argv), then the printer. `--status`: a read-only status key, its body
 //!    `{"label": …, "scope": "status"}` and a newline, any failure exit 1.
-//! 5. Every reader but `--status`'s catches Python's exceptions and prints
-//!    `Error: <message>` (exit 1); the message is Python 3.12's.
-//! 6. The EXIT trap's lines ([`crate::prelude::Closing`]).
+//!    `--hire`: first the owner's confirm over the vault socket
+//!    ([`confirm::confirm_token`], `hire-key-mint`; none is exit 3), then
+//!    the body with its `hire` limits and the token
+//!    ([`confirm::with_confirm_token`]). A limit Python's `int()` refuses
+//!    is its line and an empty body, sent all the same, as the shell's
+//!    pipe does ([`create_body`]).
+//! 5. `hire-ceiling <id>`: the body `{"id": …, "apps": […]}` sent with
+//!    `cli_post_json_stdin` inside `$(…)` (no answer ends the command with
+//!    curl's code); a `vault_confirm_required` answer asks for the owner's
+//!    confirm and sends it again with the token; then the printer
+//!    ([`ceiling_reader`]).
+//! 6. Every reader but `--status`'s and `hire-ceiling`'s catches Python's
+//!    exceptions and prints `Error: <message>` (exit 1); the message is
+//!    Python 3.12's. Those two print Python's traceback.
+//! 7. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
-//! The shell answers itself (`run` returns `None`): `create --hire` and
-//! `hire-ceiling` (and its alias `app-access`), which ask for the owner's
-//! confirm over the vault socket (`_vault_confirm_token`, not yet in the
-//! binary); a line with `-h` or `--help`; a word that is not UTF-8;
-//! `HOOK_SOCK` with a `CODEX_` variable exported; a port curl won't take;
-//! and a `python3` the binary can't tell.
+//! The shell answers itself (`run` returns `None`): a hire limit
+//! (`--max-per-day`, `--max-live`, `--max-per-team`) that is not ASCII,
+//! where Python's `int()` reads other digits; a line with `-h` or
+//! `--help`; a word that is not UTF-8; `HOOK_SOCK` with a `CODEX_`
+//! variable exported; a port curl won't take; and a `python3` the binary
+//! can't tell.
 
 use super::skin_token::py::{self, at, at_or, dict, join, obj, or, s};
 use super::{
     curl_port, end_in_pipe, piped_body, pipefail, raised, request_piped_tcp, Piped, Raise, Shown,
 };
+use crate::confirm::{self, Confirm};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::Value;
 use crate::out::{self, py as pyout};
 use crate::passport;
 use crate::prelude::{self, Closing};
+use crate::prompt;
 use crate::python;
 use crate::transport::{permission, Call, Channel, Client, Error};
 use k2_client::cli_name;
 use std::ffi::OsString;
-use std::io::Read;
 use std::path::Path;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -63,6 +77,15 @@ pub const LIST: &str = "/cli/api-keys/list";
 pub const REVOKE: &str = "/cli/api-keys/revoke";
 pub const DISABLE: &str = "/cli/api-keys/disable";
 pub const ENABLE: &str = "/cli/api-keys/enable";
+pub const HIRE_CEILING: &str = "/cli/api-keys/hire-ceiling";
+/// The confirm a hire key asks for (`_vault_confirm_token`'s action).
+pub const HIRE_ACTION: &str = "hire-key-mint";
+/// `create --hire`'s confirm label.
+pub const HIRE_LABEL: &str = "API key that can hire agents";
+/// `hire-ceiling`'s confirm label, when the daemon asks for one.
+pub const WIDEN_LABEL: &str = "Widen an API key's App access";
+/// The code that asks for the owner's confirm.
+pub const CONFIRM_REQUIRED: &str = "vault_confirm_required";
 
 /// A bare or unknown verb: on stderr, exit 1.
 pub const USAGE: [&str; 33] = [
@@ -111,6 +134,29 @@ pub const NO_KEY: &str = "Error: --key-stdin given but no key on stdin.";
 pub const PROMPT: &str = "Paste the LLM API key: ";
 /// `_cli_warn_key_on_argv`.
 pub const ARGV_WARNING: &str = "warning: passing a key on the command line is deprecated and will be refused in the next release; use --key-stdin";
+/// `hire-ceiling` with no id, or one that starts with `-`: exit 2.
+pub const CEILING_USAGE: &str = concat!(
+    "Usage: ",
+    cli_name!(),
+    " api-key hire-ceiling <id> (--app-login APP[:ROOMS[:ROLE]]... | --none)"
+);
+/// `--none` with `--app-login`: exit 2.
+pub const CEILING_BOTH: &str = "Error: --none and --app-login don't mix.";
+/// Neither: exit 2.
+pub const CEILING_NEITHER: &str =
+    "Error: name the App access (--app-login APP[:ROOMS[:ROLE]]) or --none for no App access.";
+/// A hire limit given without `--hire`: exit 2.
+pub const LIMITS_NEED_HIRE: &str = concat!(
+    "Error: hire limits (--max-*, --hire-db, --link, --retire, --reach, --folder, ",
+    "--app-login) need --hire."
+);
+/// The hire limits that are numbers, with their body keys, in Python's
+/// order.
+pub const NUMBERS: [(&str, &str); 3] = [
+    ("--max-per-day", "maxMembersPerDay"),
+    ("--max-live", "maxLiveMembers"),
+    ("--max-per-team", "maxMembersPerTeam"),
+];
 /// What `create` prints after the key.
 pub const STORE_NOW: &str =
     "STORE THIS KEY NOW \u{2014} it is shown only once and cannot be retrieved again.";
@@ -199,20 +245,46 @@ pub struct Create {
     pub hire_limits: bool,
     /// The hire value flags' last values (`--max-per-day` and the others).
     pub limit_values: Vec<(String, String)>,
+    /// `--hire`.
+    pub hire: bool,
+    /// `--link`, `--retire`.
+    pub link: bool,
+    pub retire: bool,
+    /// `h_apps`: each `--app-login` value and a newline.
+    pub apps: String,
+}
+
+impl Create {
+    /// A hire value flag's last value (`""` when not given).
+    fn limit(&self, flag: &str) -> &str {
+        self.limit_values
+            .iter()
+            .find(|(f, _)| f == flag)
+            .map_or("", |(_, v)| v.as_str())
+    }
+}
+
+/// `hire-ceiling <id>`'s words.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ceiling {
+    pub id: String,
+    /// `c_apps`: each `--app-login` value and a newline.
+    pub apps: String,
 }
 
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
     Create(Create),
+    Ceiling(Ceiling),
     List,
     Id(IdVerb, String),
     /// Lines on stderr and the exit.
     Stop(Vec<String>, Exit),
 }
 
-/// The words after `api-key`. `None`: the shell's (`create --hire`,
-/// `hire-ceiling`).
+/// The words after `api-key`. `None`: the shell's (a hire number that is
+/// not ASCII).
 pub fn parse(words: &[&str]) -> Option<Ask> {
     let sub = words.first().copied().unwrap_or("");
     let rest = words.get(1..).unwrap_or_default();
@@ -225,7 +297,7 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
     match sub {
         "create" => parse_create(rest),
         "list" => Some(Ask::List),
-        "hire-ceiling" | "app-access" => None,
+        "hire-ceiling" | "app-access" => Some(parse_ceiling(rest)),
         _ => Some(Ask::Stop(
             USAGE.iter().map(|l| l.to_string()).collect(),
             Exit::Error,
@@ -244,7 +316,10 @@ fn parse_create(rest: &[&str]) -> Option<Ask> {
         let value = rest.get(i + 1).map(|v| v.to_string());
         let mut takes = true;
         match flag {
-            "--hire" => return None,
+            "--hire" => {
+                c.hire = true;
+                takes = false;
+            }
             "--status" => {
                 c.status = true;
                 takes = false;
@@ -255,6 +330,11 @@ fn parse_create(rest: &[&str]) -> Option<Ask> {
             }
             "--link" | "--retire" => {
                 c.hire_limits = true;
+                if flag == "--link" {
+                    c.link = true;
+                } else {
+                    c.retire = true;
+                }
                 takes = false;
             }
             "--label" | "--max-per-day" | "--max-live" | "--max-per-team" | "--hire-db"
@@ -273,7 +353,11 @@ fn parse_create(rest: &[&str]) -> Option<Ask> {
                     "--allow" => c.allow = v,
                     "--deny" => c.deny = v,
                     // `h_apps` gains `v` and a newline: never empty.
-                    "--app-login" => c.hire_limits = true,
+                    "--app-login" => {
+                        c.hire_limits = true;
+                        c.apps.push_str(&v);
+                        c.apps.push('\n');
+                    }
                     _ => {
                         c.limit_values.retain(|(f, _)| f != flag);
                         c.limit_values.push((flag.to_string(), v));
@@ -290,12 +374,101 @@ fn parse_create(rest: &[&str]) -> Option<Ask> {
         i += if takes { 2 } else { 1 };
     }
     c.hire_limits |= c.limit_values.iter().any(|(_, v)| !v.is_empty());
+    // Python's `int()` reads digits other than ASCII ones: the shell's.
+    if c.hire && NUMBERS.iter().any(|(f, _)| !c.limit(f).is_ascii()) {
+        return None;
+    }
     Some(Ask::Create(c))
 }
 
-/// `create`'s body, as its Python prints it (the hire part never: a hire
-/// key is the shell's). `key`: the LLM key as Python reads it.
-pub fn create_body(c: &Create, key: &str) -> String {
+/// `hire-ceiling|app-access`'s words: the id, then its flags.
+fn parse_ceiling(rest: &[&str]) -> Ask {
+    let usage = |line: &str| Ask::Stop(vec![line.to_string()], Exit::Usage);
+    let id = rest.first().copied().unwrap_or("");
+    if id.is_empty() || id.starts_with('-') {
+        return usage(CEILING_USAGE);
+    }
+    let mut c = Ceiling {
+        id: id.to_string(),
+        apps: String::new(),
+    };
+    let mut none = false;
+    let mut i = 1;
+    while i < rest.len() {
+        match rest[i] {
+            "--app-login" => {
+                // `${2:-}; shift 2`: no value, and `shift 2` fails.
+                let Some(v) = rest.get(i + 1) else {
+                    return Ask::Stop(Vec::new(), Exit::Error);
+                };
+                c.apps.push_str(v);
+                c.apps.push('\n');
+                i += 2;
+            }
+            "--none" => {
+                none = true;
+                i += 1;
+            }
+            other => return usage(&format!("Unknown flag: {other}")),
+        }
+    }
+    match (none, c.apps.is_empty()) {
+        (true, false) => usage(CEILING_BOTH),
+        (false, true) => usage(CEILING_NEITHER),
+        _ => Ask::Ceiling(c),
+    }
+}
+
+/// The `--app-login` lines as Python reads them: `APP[:ROOMS[:ROLES]]`,
+/// rooms and roles comma lists.
+pub fn app_logins(apps: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    for line in py::splitlines(apps) {
+        let line = py::strip(line);
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split(':').collect();
+        let mut a = vec![("app", s(parts[0]))];
+        for (n, key) in [(1, "rooms"), (2, "roles")] {
+            if let Some(p) = parts.get(n).filter(|p| !py::strip(p).is_empty()) {
+                a.push((key, Value::Array(py::comma_list(p))));
+            }
+        }
+        out.push(obj(a));
+    }
+    out
+}
+
+/// Python's `int(v)` of an ASCII word: optional sign, digits with single
+/// `_` between them. `None`: Python's `ValueError`.
+pub fn py_int(v: &str) -> Option<String> {
+    let (neg, digits) = match v.as_bytes().first() {
+        Some(b'-') => (true, &v[1..]),
+        Some(b'+') => (false, &v[1..]),
+        _ => (false, v),
+    };
+    let ok = !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit() || b == b'_')
+        && !digits.starts_with('_')
+        && !digits.ends_with('_')
+        && !digits.contains("__");
+    if !ok {
+        return None;
+    }
+    let clean: String = digits.chars().filter(|c| *c != '_').collect();
+    let n = clean.trim_start_matches('0');
+    Some(match (neg, n.is_empty()) {
+        (_, true) => "0".to_string(),
+        (true, false) => format!("-{n}"),
+        (false, false) => n.to_string(),
+    })
+}
+
+/// `create`'s body, as its Python prints it. `key`: the LLM key as Python
+/// reads it. `Err`: the line Python prints for a hire number it can't
+/// read (it exits 2 and prints no body).
+pub fn create_body(c: &Create, key: &str) -> Result<String, String> {
     let mut b = vec![("label", s(&c.label))];
     let k = py::strip(key);
     if !k.is_empty() {
@@ -322,7 +495,57 @@ pub fn create_body(c: &Create, key: &str) -> String {
             b.push((key, Value::Array(py::comma_list(t))));
         }
     }
-    py::dumps(&obj(b))
+    if c.hire {
+        b.push(("hire", hire_limits(c)?));
+    }
+    Ok(py::dumps(&obj(b)))
+}
+
+/// The body's `hire` dict, in Python's order.
+fn hire_limits(c: &Create) -> Result<Value, String> {
+    let mut h = Vec::new();
+    for (flag, key) in NUMBERS {
+        let v = py::strip(c.limit(flag));
+        if !v.is_empty() {
+            match py_int(v) {
+                Some(n) => h.push((key, Value::Int(n))),
+                None => return Err(format!("Error: {key} must be a number")),
+            }
+        }
+    }
+    let db = py::strip(c.limit("--hire-db"));
+    if !db.is_empty() {
+        h.push(("db", s(db)));
+    }
+    if c.link {
+        h.push(("link", Value::Bool(true)));
+    }
+    let t = py::strip(c.limit("--link-targets"));
+    if !t.is_empty() {
+        h.push(("linkTargets", Value::Array(py::comma_list(t))));
+    }
+    if c.retire {
+        h.push(("retire", Value::Bool(true)));
+    }
+    for (flag, key) in [("--reach", "reach"), ("--folder", "folder")] {
+        let v = py::strip(c.limit(flag));
+        if !v.is_empty() {
+            h.push((key, s(v)));
+        }
+    }
+    let apps = app_logins(&c.apps);
+    if !apps.is_empty() {
+        h.push(("apps", Value::Array(apps)));
+    }
+    Ok(obj(h))
+}
+
+/// `hire-ceiling`'s body (`$(…)` drops Python's newline).
+pub fn ceiling_body(c: &Ceiling) -> String {
+    py::dumps(&obj(vec![
+        ("id", s(&c.id)),
+        ("apps", Value::Array(app_logins(&c.apps))),
+    ]))
 }
 
 /// `k5 api-key ...`: `args` is the whole command line after `argv[0]`.
@@ -371,6 +594,7 @@ fn run_with(args: &[OsString], ask: Ask, hook_sock: Option<&Path>, mut settings:
         return *exit;
     }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
+    let sock = confirm::sock_path(&settings.home);
     let mut client = match settings.client(would_refuse) {
         Ok(c) => c,
         Err(e) => {
@@ -391,7 +615,8 @@ fn run_with(args: &[OsString], ask: Ask, hook_sock: Option<&Path>, mut settings:
             let shown = id_reader(&String::from_utf8_lossy(&left.body), verb);
             pipefail(left.exit, shown.print())
         }
-        Ask::Create(c) => create(&mut client, &mut closing, &c),
+        Ask::Create(c) => create(&mut client, &mut closing, &c, &sock),
+        Ask::Ceiling(c) => ceiling(&mut client, &mut closing, &c, &sock),
         Ask::Stop(_, exit) => exit,
     };
     closing.flush(&mut client, exit);
@@ -445,8 +670,26 @@ fn post_stdin_piped(
     }
 }
 
+/// `tok="$(_vault_confirm_token hire-key-mint "" <label>)" || exit 3`.
+/// `None`: exit 3.
+fn confirm_hire(
+    client: &mut Client,
+    closing: &mut Closing,
+    sock: &Path,
+    label: &str,
+) -> Option<String> {
+    let passport = client.passport().is_some();
+    let mut c = Confirm {
+        client,
+        sock,
+        closing,
+        passport,
+    };
+    confirm::confirm_token(&mut c, HIRE_ACTION, "", label)
+}
+
 /// `create`, after the gates.
-fn create(client: &mut Client, closing: &mut Closing, c: &Create) -> Exit {
+fn create(client: &mut Client, closing: &mut Closing, c: &Create, sock: &Path) -> Exit {
     if c.status {
         if c.other_flags {
             out::stderr_line(STATUS_ONLY);
@@ -466,12 +709,12 @@ fn create(client: &mut Client, closing: &mut Closing, c: &Create) -> Exit {
             out::stderr_line(BOTH_KEYS);
             return Exit::Usage;
         }
-        let key = read_secret(PROMPT);
+        let key = prompt::read_secret_stdin(PROMPT);
         if key.is_empty() {
             out::stderr_line(NO_KEY);
             return Exit::Usage;
         }
-        key
+        String::from_utf8_lossy(key.expose()).into_owned()
     } else {
         let key = c.argv_key.clone().unwrap_or_default();
         if !key.is_empty() {
@@ -479,92 +722,86 @@ fn create(client: &mut Client, closing: &mut Closing, c: &Create) -> Exit {
         }
         key
     };
-    if c.hire_limits {
-        out::stderr_line(concat!(
-            "Error: hire limits (--max-*, --hire-db, --link, --retire, --reach, --folder, ",
-            "--app-login) need --hire."
-        ));
+    if !c.hire && c.hire_limits {
+        out::stderr_line(LIMITS_NEED_HIRE);
         return Exit::Usage;
     }
-    let body = create_body(c, &key);
+    let tok = if c.hire {
+        match confirm_hire(client, closing, sock, HIRE_LABEL) {
+            Some(t) => t,
+            None => return Exit::Refused,
+        }
+    } else {
+        String::new()
+    };
+    // The body's Python, then the group that adds the token: a body
+    // Python refused is its line and nothing on the pipe, and curl sends
+    // that empty body all the same.
+    let (body, made) = match create_body(c, &key) {
+        Ok(b) if !tok.is_empty() => match confirm::with_confirm_token(&b, &tok, None) {
+            Some(with) => (with + "\n", Exit::Ok),
+            None => (b, Exit::Ok),
+        },
+        Ok(b) => (b, Exit::Ok),
+        Err(line) => {
+            out::stderr_line(&line);
+            (String::new(), Exit::Usage)
+        }
+    };
     let left = post_stdin_piped(client, closing, CREATE, body.as_bytes());
     let shown = create_reader(&String::from_utf8_lossy(&left.body), &c.workspaces);
-    pipefail(left.exit, shown.print())
+    pipefail(pipefail(made, left.exit), shown.print())
 }
 
-/// `_cli_read_secret_stdin <prompt>`: on a terminal, the prompt on stderr
-/// and one line read with echo off, then a newline on stderr; else one
-/// line from stdin (the part before an end with no newline too).
-pub fn read_secret(prompt: &str) -> String {
-    let tty = is_tty();
-    let echo = if tty {
-        let _ = out::write_flushed(&mut std::io::stderr().lock(), prompt.as_bytes());
-        echo_off()
-    } else {
-        None
+/// `c_resp="$(printf '%s' "$c_body" | cli_post_json_stdin …)"`: the
+/// answer as `$(…)` holds it, or the exit `set -e` ends the command with.
+fn ceiling_post(client: &mut Client, closing: &mut Closing, body: &str) -> Result<String, Exit> {
+    let left = post_stdin_piped(client, closing, HIRE_CEILING, body.as_bytes());
+    if left.exit != Exit::Ok {
+        return Err(left.exit);
+    }
+    // `piped_body` has dropped the NULs.
+    let mut body = left.body;
+    while body.last() == Some(&b'\n') {
+        body.pop();
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// `hire-ceiling`, after the gates.
+fn ceiling(client: &mut Client, closing: &mut Closing, c: &Ceiling, sock: &Path) -> Exit {
+    let body = ceiling_body(c);
+    let mut resp = match ceiling_post(client, closing, &body) {
+        Ok(r) => r,
+        Err(exit) => return exit,
     };
-    let mut line = Vec::new();
-    let mut byte = [0u8; 1];
-    let mut stdin = std::io::stdin().lock();
-    while let Ok(1) = stdin.read(&mut byte) {
-        if byte[0] == b'\n' {
-            break;
-        }
-        // bash's `read` drops a NUL.
-        if byte[0] != 0 {
-            line.push(byte[0]);
-        }
+    if error_code(&resp) == CONFIRM_REQUIRED {
+        let Some(tok) = confirm_hire(client, closing, sock, WIDEN_LABEL) else {
+            return Exit::Refused;
+        };
+        let body = confirm::with_confirm_token(&body, &tok, None).unwrap_or(body);
+        resp = match ceiling_post(client, closing, &body) {
+            Ok(r) => r,
+            Err(exit) => return exit,
+        };
     }
-    if tty {
-        restore_echo(echo);
-        out::stderr_line("");
-    }
-    String::from_utf8_lossy(&line).into_owned()
+    ceiling_reader(&resp).print()
 }
 
-#[cfg(unix)]
-fn is_tty() -> bool {
-    // SAFETY: isatty only reads the descriptor's state.
-    unsafe { libc::isatty(0) == 1 }
-}
-
-#[cfg(not(unix))]
-fn is_tty() -> bool {
-    false
-}
-
-#[cfg(unix)]
-fn echo_off() -> Option<libc::termios> {
-    // SAFETY: tcgetattr and tcsetattr on fd 0 with a termios we own.
-    unsafe {
-        let mut t: libc::termios = std::mem::zeroed();
-        if libc::tcgetattr(0, &mut t) != 0 {
-            return None;
-        }
-        let saved = t;
-        t.c_lflag &= !libc::ECHO;
-        libc::tcsetattr(0, libc::TCSANOW, &t);
-        Some(saved)
+/// `c_code`: the answer's `error.code` when the error is a dict, else
+/// `""`, as `$(…)` holds Python's line.
+pub fn error_code(resp: &str) -> String {
+    let Ok(d) = crate::out::json::parse(resp) else {
+        return String::new();
+    };
+    // `at` is `None` for anything but a dict: Python's AttributeError.
+    match at(&d, "error") {
+        Some(e @ Value::Object(_)) => pyout::str_of(&at_or(e, "code", s("")))
+            .trim_end_matches('\n')
+            .to_string(),
+        _ => String::new(),
     }
 }
-
-#[cfg(unix)]
-fn restore_echo(saved: Option<libc::termios>) {
-    if let Some(t) = saved {
-        // SAFETY: puts back the state read before.
-        unsafe {
-            libc::tcsetattr(0, libc::TCSANOW, &t);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn echo_off() -> Option<()> {
-    None
-}
-
-#[cfg(not(unix))]
-fn restore_echo(_saved: Option<()>) {}
 
 /// A reader inside `try: … except Exception as e: print("Error: %s" % e,
 /// file=sys.stderr); sys.exit(1)`.
@@ -824,6 +1061,69 @@ pub fn create_reader(raw: &str, workspaces: &str) -> Shown {
     })
 }
 
+/// `hire-ceiling`'s reader (Python's raise past the load is a
+/// traceback).
+pub fn ceiling_reader(raw: &str) -> Shown {
+    let Ok(d) = crate::out::json::parse(raw) else {
+        return Shown::err("Error: no answer from the daemon\n", Exit::Error);
+    };
+    let mut o = Out::default();
+    let r = (|| -> Result<Exit, Raise> {
+        let e = match &d {
+            Value::Object(_) => at(&d, "error").filter(|e| pyout::truthy(e)),
+            _ => None,
+        };
+        if let Some(e) = e {
+            let e = match e {
+                Value::Object(_) => format!(
+                    "{}: {}",
+                    pyout::str_of(&at_or(e, "code", s(""))),
+                    pyout::str_of(&at_or(e, "hint", s("")))
+                ),
+                other => pyout::str_of(other),
+            };
+            o.err(&format!("Error: {e}"));
+            return Ok(Exit::Error);
+        }
+        let limits = or(at(dict(&d, line::ceiling::APPS)?, "hireLimits"), obj(vec![]));
+        let apps = or(at(dict(&limits, line::ceiling::APPS)?, "apps"), Value::Array(vec![]));
+        let raised = at(&d, "change").is_some_and(|c| *c == s("raise"));
+        o.out(&format!(
+            "App access {} for key {}.",
+            if raised { "widened" } else { "updated" },
+            pyout::str_of(&at_or(&d, "id", s("")))
+        ));
+        if !pyout::truthy(&apps) {
+            o.out("No App access: agents hired with this key get no App login.");
+        }
+        for a in super::py_iter(&apps, line::ceiling::FOR)? {
+            let a = dict(&a, line::ceiling::ROLES)?;
+            let roles = or(at(a, "roles"), Value::Array(vec![]));
+            let app = pyout::str_of(&at_or(a, "app", Value::Null));
+            let rooms = join(
+                ",",
+                &or(at(a, "rooms"), Value::Array(vec![])),
+                line::ceiling::PRINT,
+            )?;
+            let role = if pyout::truthy(&roles) {
+                format!("up to role {}", join(",", &roles, line::ceiling::PRINT)?)
+            } else {
+                "no role (Thread only in those rooms)".to_string()
+            };
+            o.out(&format!("  {app}: rooms {rooms}, {role}"));
+        }
+        Ok(Exit::Ok)
+    })();
+    match r {
+        Ok(exit) => Shown {
+            stdout: o.stdout,
+            stderr: o.stderr,
+            exit,
+        },
+        Err(r) => raised(o.stdout, o.stderr, &r),
+    }
+}
+
 /// `create --status`'s reader (no catch-all: Python's raise is a
 /// traceback).
 pub fn status_reader(raw: &str) -> Shown {
@@ -883,6 +1183,13 @@ pub fn status_reader(raw: &str) -> Shown {
 
 /// The lines of the shell's Python that raise (`tests` pins them).
 pub mod line {
+    /// `hire-ceiling`'s reader.
+    pub mod ceiling {
+        pub const APPS: u32 = 10;
+        pub const FOR: u32 = 14;
+        pub const ROLES: u32 = 15;
+        pub const PRINT: u32 = 16;
+    }
     /// `create --status`'s reader.
     pub mod status {
         pub const IN: u32 = 6;

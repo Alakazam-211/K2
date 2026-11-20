@@ -48,13 +48,32 @@ fn the_shell_s_lines() {
         r#"            cli_post_json "/cli/api-keys/enable" "$body" \"#,
         r#"                hire_confirm="$(_vault_confirm_token hire-key-mint "" "API key that can hire agents")" || exit 3"#,
         r#"        hire-ceiling|app-access)"#,
+        r#"                    --hire)         hire=1; shift ;;"#,
+        r#"                    --app-login)    h_apps="${h_apps}${2:-}"$'\n'; shift 2 ;;"#,
+        r#"                    --app-login) c_apps="${c_apps}${2:-}"$'\n'; shift 2 ;;"#,
+        r#"                    --none)      c_none=1; shift ;;"#,
+        r#"                    *)           echo "Unknown flag: $1" >&2; exit 2 ;;"#,
+        r#"            if [ -z "$id" ] || [ "${id#-}" != "$id" ]; then"#,
+        r#"            c_resp="$(printf '%s' "$c_body" | cli_post_json_stdin "/cli/api-keys/hire-ceiling")""#,
+        r#"            if [ "$c_code" = "vault_confirm_required" ]; then"#,
+        r#"                c_tok="$(_vault_confirm_token hire-key-mint "" "Widen an API key's App access")" || exit 3"#,
+        r#"                c_body="$(_with_confirm_token "$c_body" "$c_tok")""#,
+        r#"                    if [ -n "$ak_body" ] && [ -n "$hire_confirm" ]; then _with_confirm_token "$ak_body" "$hire_confirm"; else printf '%s' "$ak_body"; fi; } \"#,
     ] {
         assert!(
             f.lines().any(|l| l == shell),
             "cmd_api_key no longer has {shell:?}"
         );
     }
-    for l in [STATUS_ONLY, BOTH_KEYS, NO_KEY, STORE_NOW] {
+    for l in [
+        STATUS_ONLY,
+        BOTH_KEYS,
+        NO_KEY,
+        STORE_NOW,
+        CEILING_BOTH,
+        CEILING_NEITHER,
+        LIMITS_NEED_HIRE,
+    ] {
         assert!(f.contains(l), "{l:?}");
     }
     for v in [IdVerb::Revoke, IdVerb::Disable, IdVerb::Enable] {
@@ -63,6 +82,10 @@ fn the_shell_s_lines() {
         assert!(f.contains(&k2(yes)) && f.contains(no), "{v:?}");
     }
     assert!(f.contains(&NO_GRANT[2].replace('\'', "\\x27")));
+    assert!(f.contains(&format!("echo \"{}\" >&2", k2(CEILING_USAGE))));
+    for (_, key) in NUMBERS {
+        assert!(f.contains(&format!("\"{key}\"")), "{key}");
+    }
     let policy = source("cli-tools-policy.sh");
     assert!(policy.contains(r#"        api-key) echo "api-key" ;;"#));
     assert!(policy.contains(&format!("    echo \"{ARGV_WARNING}\" >&2\n")));
@@ -85,11 +108,39 @@ fn the_status_python() {
 #[test]
 fn the_words() {
     assert_eq!(parse(&["list"]), Some(Ask::List));
-    assert_eq!(parse(&["hire-ceiling", "x"]), None);
-    assert_eq!(parse(&["create", "--hire"]), None);
     assert_eq!(
         parse(&["create", "--x", "--hire"]),
         Some(Ask::Stop(vec!["Unknown flag: --x".into()], Exit::Error))
+    );
+    let Some(Ask::Create(c)) = parse(&["create", "--hire", "--link", "--app-login", "a:b"]) else {
+        panic!()
+    };
+    assert!(c.hire && c.link && !c.retire && c.apps == "a:b\n");
+    // Python's int() reads other digits than ASCII: the shell's.
+    assert_eq!(parse(&["create", "--hire", "--max-live", "\u{663}"]), None);
+    assert!(parse(&["create", "--max-live", "\u{663}"]).is_some());
+    let usage = |l: &str| Some(Ask::Stop(vec![l.to_string()], Exit::Usage));
+    assert_eq!(parse(&["hire-ceiling"]), usage(CEILING_USAGE));
+    assert_eq!(parse(&["app-access", "-k1"]), usage(CEILING_USAGE));
+    assert_eq!(parse(&["hire-ceiling", "k1"]), usage(CEILING_NEITHER));
+    assert_eq!(
+        parse(&["hire-ceiling", "k1", "--none", "--app-login", ""]),
+        usage(CEILING_BOTH)
+    );
+    assert_eq!(
+        parse(&["hire-ceiling", "k1", "--x"]),
+        usage("Unknown flag: --x")
+    );
+    assert_eq!(
+        parse(&["hire-ceiling", "k1", "--app-login"]),
+        Some(Ask::Stop(vec![], Exit::Error))
+    );
+    assert_eq!(
+        parse(&["app-access", "k1", "--none"]),
+        Some(Ask::Ceiling(Ceiling {
+            id: "k1".into(),
+            apps: String::new()
+        }))
     );
     assert_eq!(
         parse(&["create", "--label"]),
@@ -129,14 +180,125 @@ fn the_create_body() {
         ..Create::default()
     };
     assert_eq!(
-        create_body(&c, "  sk-x\t"),
+        create_body(&c, "  sk-x\t").unwrap(),
         r#"{"label": "wiki", "anthropicKey": "sk-x", "baseUrl": "u ", "workspaces": ["a", "b"], "allow": []}"#
     );
     let c = Create {
         workspaces: " * ".into(),
         ..Create::default()
     };
-    assert_eq!(create_body(&c, ""), r#"{"label": "", "workspaces": "*"}"#);
+    assert_eq!(
+        create_body(&c, "").unwrap(),
+        r#"{"label": "", "workspaces": "*"}"#
+    );
+    let limits = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(f, v)| (f.to_string(), v.to_string()))
+            .collect()
+    };
+    let c = Create {
+        hire: true,
+        retire: true,
+        limit_values: limits(&[
+            ("--max-live", " +0_07 "),
+            ("--max-per-day", "-0"),
+            ("--hire-db", " read "),
+            ("--link-targets", "a, ,b"),
+            ("--folder", " "),
+        ]),
+        apps: " x :self, ,r: \n\n y\r::m\n".into(),
+        ..Create::default()
+    };
+    assert_eq!(
+        create_body(&c, "").unwrap(),
+        concat!(
+            r#"{"label": "", "hire": {"maxMembersPerDay": 0, "maxLiveMembers": 7, "db": "read", "#,
+            r#""linkTargets": ["a", "b"], "retire": true, "apps": [{"app": "x ", "rooms": ["self", "r"]}, "#,
+            r#"{"app": "y"}, {"app": "", "roles": ["m"]}]}}"#
+        )
+    );
+    let c = Create {
+        hire: true,
+        ..Create::default()
+    };
+    assert_eq!(create_body(&c, "").unwrap(), r#"{"label": "", "hire": {}}"#);
+    for bad in ["1e3", "0x1", "1__0", "_1", "1_", "+", "- 1"] {
+        let c = Create {
+            hire: true,
+            limit_values: limits(&[("--max-per-team", "1"), ("--max-live", bad)]),
+            ..Create::default()
+        };
+        assert_eq!(
+            create_body(&c, ""),
+            Err("Error: maxLiveMembers must be a number".to_string()),
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        ceiling_body(&Ceiling {
+            id: "k\u{e9}".into(),
+            apps: "a:,:\n".into()
+        }),
+        r#"{"id": "k\u00e9", "apps": [{"app": "a", "rooms": []}]}"#
+    );
+}
+
+#[test]
+fn the_hire_ceiling_python() {
+    let body = quoted_python("talk-and-workspace.sh", "cmd_api_key() {", 4);
+    assert_eq!(body[1], "apps=[]");
+    let code = quoted_python("talk-and-workspace.sh", "cmd_api_key() {", 5);
+    assert_eq!(code[3], r#"    print(e.get("code","") if isinstance(e,dict) else "")"#);
+    let py = quoted_python("talk-and-workspace.sh", "cmd_api_key() {", 6);
+    let at = |n: u32| py[n as usize - 1].trim().to_string();
+    assert_eq!(
+        at(line::ceiling::APPS),
+        r#"apps=(d.get("hireLimits") or {}).get("apps") or []"#
+    );
+    assert_eq!(at(line::ceiling::FOR), "for a in apps:");
+    assert_eq!(at(line::ceiling::ROLES), r#"roles=a.get("roles") or []"#);
+    assert!(at(line::ceiling::PRINT).starts_with(r#"print("  %s: rooms %s, %s" % (a.get("app"), ",".join("#));
+}
+
+#[test]
+fn the_hire_ceiling_reader() {
+    assert_eq!(
+        ceiling_reader("").stderr,
+        "Error: no answer from the daemon\n"
+    );
+    let r = ceiling_reader(r#"{"error":{"code":"c","hint":"h"}}"#);
+    assert_eq!((r.stderr.as_str(), r.exit), ("Error: c: h\n", Exit::Error));
+    let r = ceiling_reader(r#"{"error":"","id":"k","change":"raise"}"#);
+    assert_eq!(
+        r.stdout,
+        "App access widened for key k.\nNo App access: agents hired with this key get no App login.\n"
+    );
+    let r = ceiling_reader(
+        r#"{"id":"k","hireLimits":{"apps":[{"app":"a","rooms":["r","s"],"roles":["x"]},{"rooms":[]}]}}"#,
+    );
+    assert_eq!(
+        r.stdout,
+        "App access updated for key k.\n  a: rooms r,s, up to role x\n  None: rooms , no role (Thread only in those rooms)\n"
+    );
+    let r = ceiling_reader("[]");
+    assert_eq!(r.exit, Exit::Error);
+    assert!(r
+        .stderr
+        .ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
+    let r = ceiling_reader(r#"{"hireLimits":{"apps":[{"rooms":[1]}]}}"#);
+    assert_eq!(r.stdout, "App access updated for key .\n");
+    assert!(r
+        .stderr
+        .ends_with("TypeError: sequence item 0: expected str instance, int found\n"));
+    assert_eq!(
+        error_code(r#"{"error":{"code":"vault_confirm_required"}}"#),
+        CONFIRM_REQUIRED
+    );
+    assert_eq!(error_code(r#"{"error":{"code":null}}"#), "None");
+    assert_eq!(error_code(r#"{"error":"vault_confirm_required"}"#), "");
+    assert_eq!(error_code("[]"), "");
+    assert_eq!(error_code("x"), "");
 }
 
 #[test]

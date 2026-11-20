@@ -48,7 +48,10 @@ pub enum VCompare {
 
 pub struct VCase {
     pub name: &'static str,
-    /// The words after `vault`.
+    /// The command's first word: `vault`, unless a family that asks for
+    /// the owner's confirm (`api-key`) runs on this rig too.
+    pub noun: &'static str,
+    /// The words after [`VCase::noun`].
     pub args: Vec<&'static str>,
     /// `{port}` is the side's daemon stub's port, `{sock}` its socket (a
     /// session's cell socket), `{vsock}` the vault socket's path.
@@ -82,6 +85,7 @@ impl VCase {
     pub fn new(name: &'static str, args: &[&'static str]) -> VCase {
         VCase {
             name,
+            noun: "vault",
             args: args.to_vec(),
             env: Vec::new(),
             stdin: Vec::new(),
@@ -230,7 +234,7 @@ impl VRig {
                     .find(|(k, _)| k == name)
                     .map(|(_, v)| OsString::from(v))
             };
-            let args: Vec<OsString> = std::iter::once("vault")
+            let args: Vec<OsString> = std::iter::once(c.noun)
                 .chain(c.args.iter().copied())
                 .map(OsString::from)
                 .collect();
@@ -260,7 +264,7 @@ impl VRig {
             .env("TMPDIR", self.dir.join("t"))
             .current_dir(&self.proj)
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            .arg("vault")
+            .arg(c.noun)
             .args(&c.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -283,7 +287,7 @@ impl VRig {
         let norm = |log: Vec<super::stub::Logged>, port: u16| -> Vec<String> {
             log.iter()
                 .map(|r| {
-                    normalise(r, native, "vault", c.name)
+                    normalise(r, native, c.noun, c.name)
                         .replace(&format!("127.0.0.1:{port}"), "127.0.0.1:<port>")
                 })
                 .collect()

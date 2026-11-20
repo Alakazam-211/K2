@@ -1148,7 +1148,7 @@ pub(super) fn error_field(body: &[u8], keys: &[&str]) -> Result<String, Exit> {
 /// `_app_push_keys_post`, `_app_push_on_post` and the pairing set's own
 /// copy: one confirm when the daemon asks for one, then 200 or
 /// `_compute_fail`.
-fn confirming(
+pub fn confirming(
     ctx: &mut Ctx,
     path: &str,
     body: String,

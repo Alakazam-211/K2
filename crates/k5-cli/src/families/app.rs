@@ -74,6 +74,7 @@ pub mod call;
 pub mod catalog;
 pub mod db_set;
 pub mod door;
+pub mod grace;
 pub mod history;
 pub mod phone;
 pub mod phone_set;

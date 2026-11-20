@@ -361,10 +361,12 @@ impl Node {
         self.fairq.started(t.slot, &a, self.now(), &caps, Default::default(), self.gpu_mem_counted(&a.plan));
         self.set_ci_run(t, &job, gen, f.ci_run.clone());
         let lease = f.lease.as_ref().map(|l| {
+            let l = l.lease();
             if let Some(n) = l.slot {
                 self.slots.lock().unwrap().mark_busy(&l.project_key, n);
+                self.rehold_slot(l.dir.clone(), t.slot, &job, gen);
             }
-            l.lease()
+            l
         });
         if let Some(h) = &f.job_cache {
             self.job_cache_readopt(t.slot, &job, gen, h);

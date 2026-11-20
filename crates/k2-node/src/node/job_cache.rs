@@ -218,7 +218,7 @@ impl Node {
             notes.push(format!("cache {name}: new (empty)"));
         } else if notes.is_empty() {
             let m = read_meta(&ws_dir, name).unwrap_or_default();
-            notes.push(format!("cache {name}: kept from an earlier run ({} MB)", m.bytes >> 20));
+            notes.push(format!("cache {name}: kept from an earlier run ({} MiB)", m.bytes >> 20));
         }
         if unit_mode {
             // The job (its group) writes it, like a warm slot.
@@ -350,7 +350,7 @@ impl Node {
                 continue;
             }
             if self.evict_job_cache(f) {
-                crate::nlog!("job cache {} evicted: {} MB (cap {} GB)", f.dir.display(), f.meta.bytes >> 20, cap >> 30);
+                crate::nlog!("job cache {} evicted: {} MiB (cap {})", f.dir.display(), f.meta.bytes >> 20, super::disk::gib(cap));
                 total = total.saturating_sub(f.meta.bytes);
                 out.push((f.dir.clone(), f.meta.bytes));
             }

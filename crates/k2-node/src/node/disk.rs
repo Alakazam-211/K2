@@ -10,8 +10,33 @@
 //!   job's dir go at once (`target`, `src`, `cache`, `tmp`, `dirty`);
 //!   `home` and the owner's `log` stay for the janitor (24 h).
 //! - **Warm slots** are capped ([`warm_cap`]: half the policy's
-//!   `disk_budget_bytes`, all slots together): a slot over the cap is
-//!   evicted when its job ends, then idle slots least recently used first.
+//!   `disk_budget_bytes`, all slots together). A compute node once kept
+//!   one slot at 260 GiB under a 100 GiB cap, because the cap was only
+//!   checked when a job ended. The cap holds at three points now:
+//!   - **Job start** ([`Node::fit_leased_slot`]): a slot over the cap is
+//!     never handed to a job. The slot the job leased goes first when it
+//!     alone is over (the job builds cold), then idle slots until all
+//!     together fit; if they still don't (the rest is held by running
+//!     jobs), the leased slot goes too.
+//!   - **While a job runs** ([`Node::busy_slot_pass`], every `disk_poll`
+//!     with the guard pass): a held slot is measured too. Past the whole
+//!     disk budget (a hard ceiling: one slot never takes everything the
+//!     owner granted) its job stops, `failed / disk_budget`
+//!     ([`DISK_BUDGET`]; the detail names the budget and the size), and
+//!     the slot is evicted when the job ends. Between the cap and the
+//!     budget the job runs on and the slot is evicted when it ends.
+//!   - **Job end** ([`Node::after_slot_use`]): a slot over the cap is
+//!     evicted (no second walk when the run already measured it over),
+//!     then idle slots least recently used first.
+//!
+//!   Measuring a big slot is a walk of its tree (the V74 walk, at most
+//!   2 million entries). A held slot is walked again after 20 times its
+//!   last walk took (at least 60 s, at most 10 min: at most 5% of one
+//!   thread), and sooner when free disk has dropped since by more than
+//!   the slot's room left under the budget. Each slot has a node-only
+//!   `.target-<n>.k2meta` beside it ([`SlotMeta`]): the server's slot,
+//!   the workspace and job that last used it, when, and its size.
+//!   Sizes in the node's log are GiB, like the budget.
 //! - **The guard pass** ([`Node::disk_guard_pass`], every `disk_poll`):
 //!   under the floor plus [`RECLAIM_MARGIN`] it reclaims (leftover
 //!   evictions, ended job dirs, idle warm slots oldest first, then idle
@@ -30,12 +55,15 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use k2_node_proto::frames::JobState;
 use k2_node_proto::refusal;
+use k2_node_proto::share::Slot;
+use serde::{Deserialize, Serialize};
 
 use super::{Node, StopReason, Tenant};
+use crate::slots::Lease;
 use crate::sync::Git;
 use crate::wall::Wall;
 
@@ -62,6 +90,110 @@ pub fn warm_cap(policy: &crate::config::Policy) -> u64 {
     policy.disk_budget_bytes / 2
 }
 
+/// `failed / disk_budget`: the job's warm slot grew past the node's whole
+/// disk budget while it ran.
+pub const DISK_BUDGET: &str = "disk_budget";
+
+/// The `disk_budget` stop's detail, for the job's row and log.
+pub fn disk_budget_detail(bytes: u64, budget: u64) -> String {
+    format!(
+        "this job's warm target slot reached {}, more than the node's whole disk budget of {}; the node stopped the job and evicts the slot (its next job builds cold). Build less in one job (split it with --shards, or fewer test binaries), or ask the node's owner for a bigger disk budget",
+        gib(bytes),
+        gib(budget)
+    )
+}
+
+/// A held slot is walked again after this many times its last walk took…
+const MEASURE_GAP_FACTOR: u32 = 20;
+/// …at least this long after it…
+const MEASURE_GAP_MIN: Duration = Duration::from_secs(60);
+/// …and at most this long.
+const MEASURE_GAP_MAX: Duration = Duration::from_secs(600);
+
+/// How long after a walk that took `took` a held slot is walked again.
+pub fn measure_gap(took: Duration) -> Duration {
+    took.saturating_mul(MEASURE_GAP_FACTOR).clamp(MEASURE_GAP_MIN, MEASURE_GAP_MAX)
+}
+
+/// One walk of a held slot.
+#[derive(Debug, Clone, Copy)]
+pub struct Measured {
+    pub at: Instant,
+    pub took: Duration,
+    pub bytes: u64,
+    /// The node's free disk when it was walked.
+    pub free: u64,
+}
+
+/// Is a held slot due a walk? Never walked yet, its gap is up, or free
+/// disk dropped since by more than its room left under `budget` (then at
+/// most every 5 walks' time, so a disk filled by other jobs can't make
+/// it walk without pause).
+pub fn measure_due(last: Option<&Measured>, now: Instant, free: u64, budget: u64) -> bool {
+    let Some(m) = last else { return true };
+    let since = now.saturating_duration_since(m.at);
+    if since >= measure_gap(m.took) {
+        return true;
+    }
+    let dropped = m.free.saturating_sub(free);
+    dropped > budget.saturating_sub(m.bytes) && since >= m.took.saturating_mul(5)
+}
+
+/// A warm slot a running job holds, as [`Node::busy_slot_pass`] sees it.
+#[derive(Debug, Clone)]
+pub struct Held {
+    pub slot: Slot,
+    pub job: String,
+    pub generation: u32,
+    pub measured: Option<Measured>,
+    /// Walked over the warm cap (said once in the node's log; the slot is
+    /// evicted when the job ends).
+    pub over_cap: bool,
+    /// Stopped for [`DISK_BUDGET`]: the detail for its row.
+    pub stopped: Option<String>,
+}
+
+/// What the node keeps beside a warm slot (`.target-<n>.k2meta`,
+/// node-only): who used it last and its size, so an operator can tell
+/// whose slot it is. The server is also the root it's under.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlotMeta {
+    /// The server's slot on this node (0 = the owner).
+    pub server_slot: Slot,
+    pub workspace: String,
+    pub job: String,
+    pub generation: u32,
+    /// Node clock of the last job's start, then its end.
+    pub used_at: i64,
+    /// Last measured size (0 until one is).
+    pub bytes: u64,
+}
+
+fn slot_meta_path(project: &Path, n: u32) -> PathBuf {
+    project.join(format!(".target-{n}.k2meta"))
+}
+
+pub fn read_slot_meta(project: &Path, n: u32) -> Option<SlotMeta> {
+    std::fs::read(slot_meta_path(project, n)).ok().and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+pub(crate) fn write_slot_meta(project: &Path, n: u32, m: &SlotMeta) {
+    let written = serde_json::to_vec(m).map_err(|e| e.to_string()).and_then(|body| crate::util::atomic_write(&slot_meta_path(project, n), &body, 0o600));
+    if let Err(e) = written {
+        crate::nlog!("slot meta {}: {e}", slot_meta_path(project, n).display());
+    }
+}
+
+pub(crate) fn remove_slot_meta(project: &Path, n: u32) {
+    let _ = std::fs::remove_file(slot_meta_path(project, n));
+}
+
+/// `(project cache, n)` of a slot dir `…/<key>/target-<n>`.
+fn slot_of_dir(dir: &Path) -> Option<(PathBuf, u32)> {
+    let n = dir.file_name()?.to_str()?.strip_prefix("target-")?.parse().ok()?;
+    Some((dir.parent()?.to_path_buf(), n))
+}
+
 /// What the share pass removed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Evicted {
@@ -86,7 +218,7 @@ impl Evicted {
         if parts.is_empty() {
             return None;
         }
-        Some(format!("{}, {}", parts.join(" and "), gb(self.bytes)))
+        Some(format!("{}, {}", parts.join(" and "), gib(self.bytes)))
     }
 
     /// The one line for the job's log and `k2 compute get`.
@@ -95,13 +227,13 @@ impl Evicted {
     }
 }
 
-/// `40 GB`, `0.3 GB`.
-fn gb(b: u64) -> String {
+/// `40 GiB`, `0.3 GiB`: the unit of the disk budget and of shares.
+pub(crate) fn gib(b: u64) -> String {
     let g = b as f64 / GIB_F;
     if g >= 10.0 {
-        format!("{g:.0} GB")
+        format!("{g:.0} GiB")
     } else {
-        format!("{g:.1} GB")
+        format!("{g:.1} GiB")
     }
 }
 const GIB_F: f64 = (1u64 << 30) as f64;
@@ -110,7 +242,7 @@ const GIB_F: f64 = (1u64 << 30) as f64;
 /// share, what was in use, this job's part, what was evicted, and, when
 /// the job alone is bigger than the share, that no cleanup could fit it.
 pub fn tenant_disk_full_detail(share: u64, used: u64, job: u64, evicted: &Evicted) -> String {
-    let head = format!("this server's disk share on the node is {}; it held {} when the node stopped this job, {} of it this job's own files and build output", gb(share), gb(used), gb(job));
+    let head = format!("this server's disk share on the node is {}; it held {} when the node stopped this job, {} of it this job's own files and build output", gib(share), gib(used), gib(job));
     let gone = match evicted.what() {
         Some(w) => format!("the node evicted {w} first"),
         None => "nothing was evicted (nothing idle could have brought it under the share)".to_string(),
@@ -258,6 +390,12 @@ fn bytes_of(p: &Path) -> u64 {
     super::run::disk_usage(p)
 }
 
+/// A dir's change time in node-clock seconds (0 when unknown): the last
+/// use of a slot made before this run.
+fn mtime_secs(p: &Path) -> i64 {
+    std::fs::metadata(p).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|t| t.as_secs() as i64).unwrap_or(0)
+}
+
 impl Node {
     /// Free bytes on the node's disk (`disk_free` fakes it in tests).
     pub fn disk_free_bytes(&self) -> u64 {
@@ -323,12 +461,177 @@ impl Node {
     }
 
     /// A warm slot's job ended: measure it, then keep the warm slots
-    /// under [`warm_cap`] (this one first when it alone is over).
-    pub(crate) async fn after_slot_use(self: &Arc<Self>, dir: &Path) {
-        let d = dir.to_path_buf();
-        let bytes = tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0);
-        self.slot_use.lock().unwrap().insert(dir.to_path_buf(), SlotUse { bytes, used_at: self.now() });
+    /// under [`warm_cap`] (this one first when it alone is over). `held`
+    /// is what [`Self::busy_slot_pass`] saw while the job ran: a slot it
+    /// already walked over the cap isn't walked again (it goes anyway).
+    pub(crate) async fn after_slot_use(self: &Arc<Self>, dir: &Path, held: Option<Held>) {
+        let known_over = held.filter(|h| h.over_cap).and_then(|h| h.measured).map(|m| m.bytes);
+        let bytes = match known_over {
+            Some(b) => b,
+            None => {
+                let d = dir.to_path_buf();
+                tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0)
+            }
+        };
+        let now = self.now();
+        self.slot_use.lock().unwrap().insert(dir.to_path_buf(), SlotUse { bytes, used_at: now });
+        if let Some((project, n)) = slot_of_dir(dir) {
+            if let Some(mut m) = read_slot_meta(&project, n) {
+                (m.bytes, m.used_at) = (bytes, now);
+                write_slot_meta(&project, n, &m);
+            }
+        }
         self.trim_warm_slots().await;
+    }
+
+    /// Rule 1 (module doc): before a job builds in the warm slot it
+    /// leased. A slot over [`warm_cap`] is evicted (the job gets it
+    /// empty, `cold`); idle slots go until all fit; if they still don't,
+    /// the leased one goes too. Then the slot's meta names this job.
+    /// Returns the lines for the job's log.
+    pub(crate) async fn fit_leased_slot(self: &Arc<Self>, t: &Tenant, l: &mut Lease, job: &str, generation: u32, workspace: &str) -> Vec<String> {
+        let Some(n) = l.slot else { return vec![] };
+        let Some((project, _)) = slot_of_dir(&l.dir) else { return vec![] };
+        let cap = warm_cap(&self.local.lock().unwrap().policy);
+        let known = self.slot_use.lock().unwrap().get(&l.dir).copied();
+        let bytes = match known {
+            Some(u) => u.bytes,
+            None if std::fs::symlink_metadata(&l.dir).is_ok_and(|m| m.is_dir()) => {
+                let d = l.dir.clone();
+                let b = tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0);
+                self.slot_use.lock().unwrap().insert(l.dir.clone(), SlotUse { bytes: b, used_at: mtime_secs(&l.dir) });
+                b
+            }
+            None => 0,
+        };
+        let mut lines = Vec::new();
+        let mut gone = false;
+        if bytes > cap {
+            gone = self.evict_leased_slot(t.slot, &project, n, &l.dir).await;
+            if gone {
+                crate::nlog!("warm slot {} evicted before job {job} (slot {}): {}, over the warm cap of {}", l.dir.display(), t.slot, gib(bytes), gib(cap));
+                lines.push(format!("warm slot {n} held {}, over the node's warm cap of {} (half its disk budget): evicted before this job, which builds cold", gib(bytes), gib(cap)));
+            }
+        } else {
+            self.trim_warm_slots().await;
+            let total: u64 = self.slot_use.lock().unwrap().iter().filter(|(d, _)| d.exists()).map(|(_, u)| u.bytes).sum();
+            if total > cap && bytes > 0 {
+                gone = self.evict_leased_slot(t.slot, &project, n, &l.dir).await;
+                if gone {
+                    crate::nlog!("warm slot {} evicted before job {job} (slot {}): all warm slots hold {}, over the warm cap of {}, and the rest are in use", l.dir.display(), t.slot, gib(total), gib(cap));
+                    lines.push(format!("warm slot {n} evicted before this job, which builds cold: the node's warm slots together hold {}, over its warm cap of {}", gib(total), gib(cap)));
+                }
+            }
+        }
+        if gone {
+            l.warmth = "cold";
+        }
+        let kept = if gone { 0 } else { bytes };
+        write_slot_meta(&project, n, &SlotMeta { server_slot: t.slot, workspace: workspace.to_string(), job: job.to_string(), generation, used_at: self.now(), bytes: kept });
+        self.slot_holds.lock().unwrap().insert(l.dir.clone(), Held { slot: t.slot, job: job.to_string(), generation, measured: None, over_cap: false, stopped: None });
+        lines
+    }
+
+    /// Take the slot a starting job leased out of the way: renamed under
+    /// the slot lock (the job gets an empty dir in its place), deleted in
+    /// the background (a big slot takes a while; a delete cut short goes
+    /// with the next guard pass). False when there was nothing to move.
+    async fn evict_leased_slot(self: &Arc<Self>, server: Slot, project: &Path, n: u32, dir: &Path) -> bool {
+        let to = {
+            let slots = self.slots.lock().unwrap();
+            if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+                return false;
+            }
+            let to = project.join(format!("{EVICTED_PREFIX}target-{n}-{}", k2_node_proto::crypto::random_id().unwrap_or_else(|_| self.now().to_string())));
+            if let Err(e) = std::fs::rename(dir, &to) {
+                crate::nlog!("evict {}: {e}", dir.display());
+                return false;
+            }
+            slots.forget(project, n);
+            to
+        };
+        self.slot_use.lock().unwrap().remove(dir);
+        remove_slot_meta(project, n);
+        let me = self.clone();
+        tokio::spawn(async move { me.delete_evicted(server, to).await });
+        true
+    }
+
+    /// A held slot is given back (its job ended, before the job-end
+    /// trim): what the busy-slot pass saw of it.
+    pub(crate) fn unhold_slot(&self, dir: &Path) -> Option<Held> {
+        self.slot_holds.lock().unwrap().remove(dir)
+    }
+
+    /// An adopted job holds its slot again (update continuity).
+    pub(crate) fn rehold_slot(&self, dir: PathBuf, server: Slot, job: &str, generation: u32) {
+        self.slot_holds.lock().unwrap().insert(dir, Held { slot: server, job: job.to_string(), generation, measured: None, over_cap: false, stopped: None });
+    }
+
+    /// The `disk_budget` detail of a job the busy-slot pass stopped.
+    pub(crate) fn disk_budget_text(&self, server: Slot, job: &str, generation: u32) -> Option<String> {
+        self.slot_holds.lock().unwrap().values().find(|h| h.slot == server && h.job == job && h.generation == generation).and_then(|h| h.stopped.clone())
+    }
+
+    /// Rule 2 (module doc): walk the slots running jobs hold, when due.
+    /// Past the whole disk budget the job stops (`failed / disk_budget`);
+    /// over the warm cap it runs on and its slot goes when it ends.
+    /// Nothing is deleted here, and nothing of a slot under the budget is
+    /// touched. Returns the jobs it stopped, `(slot, job_id)`.
+    pub async fn busy_slot_pass(self: &Arc<Self>) -> Vec<(Slot, String)> {
+        let (budget, cap) = {
+            let l = self.local.lock().unwrap();
+            (l.policy.disk_budget_bytes, warm_cap(&l.policy))
+        };
+        if budget == 0 {
+            return vec![];
+        }
+        let free = self.disk_free_bytes();
+        let now = Instant::now();
+        let due: Vec<PathBuf> = self.slot_holds.lock().unwrap().iter().filter(|(_, h)| h.stopped.is_none() && measure_due(h.measured.as_ref(), now, free, budget)).map(|(d, _)| d.clone()).collect();
+        let mut out = Vec::new();
+        for dir in due {
+            let d = dir.clone();
+            let Ok((bytes, took)) = tokio::task::spawn_blocking(move || {
+                let t0 = Instant::now();
+                (bytes_of(&d), t0.elapsed())
+            })
+            .await
+            else {
+                continue;
+            };
+            let (server, job, generation, newly_over) = {
+                let mut holds = self.slot_holds.lock().unwrap();
+                // The job ended while its slot was walked.
+                let Some(h) = holds.get_mut(&dir) else { continue };
+                h.measured = Some(Measured { at: Instant::now(), took, bytes, free });
+                let newly = bytes > cap && !h.over_cap;
+                h.over_cap |= bytes > cap;
+                (h.slot, h.job.clone(), h.generation, newly)
+            };
+            if bytes > budget {
+                let stopped = {
+                    let jobs = self.jobs.lock().unwrap();
+                    match jobs.get(&(server, job.clone())) {
+                        Some(j) if j.generation == generation && j.stop.borrow().is_none() => {
+                            j.stop.send_replace(Some(StopReason { state: JobState::Failed, reason: DISK_BUDGET.into() }));
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if stopped {
+                    if let Some(h) = self.slot_holds.lock().unwrap().get_mut(&dir) {
+                        h.stopped = Some(disk_budget_detail(bytes, budget));
+                    }
+                    crate::nlog!("warm slot {}: {}, over the node's whole disk budget of {}: stopping job {job} (slot {server}); the slot is evicted when it ends", dir.display(), gib(bytes), gib(budget));
+                    out.push((server, job));
+                }
+            } else if newly_over {
+                crate::nlog!("warm slot {}: {}, over the warm cap of {} (budget {}): job {job} (slot {server}) runs on; the slot is evicted when it ends", dir.display(), gib(bytes), gib(cap), gib(budget));
+            }
+        }
+        out
     }
 
     /// Evict idle warm slots until all slots together fit [`warm_cap`]:
@@ -353,7 +656,7 @@ impl Node {
                 continue;
             }
             if self.evict_slot(s).await {
-                crate::nlog!("warm slot {} evicted: {} GB (warm cap {} GB)", s.dir.display(), u.bytes >> 30, cap >> 30);
+                crate::nlog!("warm slot {} evicted: {} (warm cap {})", s.dir.display(), gib(u.bytes), gib(cap));
                 total = total.saturating_sub(u.bytes);
                 out.push((s.dir.clone(), u.bytes));
             }
@@ -369,8 +672,7 @@ impl Node {
             }
             let d = s.dir.clone();
             let bytes = tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0);
-            let used_at = std::fs::metadata(&s.dir).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|t| t.as_secs() as i64).unwrap_or(0);
-            self.slot_use.lock().unwrap().insert(s.dir.clone(), SlotUse { bytes, used_at });
+            self.slot_use.lock().unwrap().insert(s.dir.clone(), SlotUse { bytes, used_at: mtime_secs(&s.dir) });
         }
     }
 
@@ -416,6 +718,7 @@ impl Node {
             to
         };
         self.slot_use.lock().unwrap().remove(&s.dir);
+        remove_slot_meta(&s.project, s.n);
         self.delete_evicted(s.slot, gone).await;
         true
     }
@@ -524,7 +827,7 @@ impl Node {
             }
         }
         if let Some(line) = gone.line() {
-            crate::nlog!("slot {}: {line} ({} of {} used now)", t.slot, gb(used), gb(share));
+            crate::nlog!("slot {}: {line} ({} of {} used now)", t.slot, gib(used), gib(share));
         }
         let now = self.now();
         let mut all = self.tenant_disk.lock().unwrap();
@@ -624,7 +927,7 @@ impl Node {
             // A walk that hit its caps (data hidden past 256 levels or 2
             // million entries) counts as furthest over (review B F1).
             if capped {
-                crate::nlog!("warning: server slot {}'s folder hit the disk walk's cap ({} GB counted so far); ranked furthest over its share", t.slot, used >> 30);
+                crate::nlog!("warning: server slot {}'s folder hit the disk walk's cap ({} counted so far); ranked furthest over its share", t.slot, gib(used));
             }
             let over = if capped { u64::MAX } else { used.saturating_sub(share) };
             if over > 0 && worst.is_none_or(|(_, w)| over > w) {
@@ -648,7 +951,7 @@ impl Node {
         if free < floor.saturating_add(RECLAIM_MARGIN) {
             let n = self.strip_ended_job_dirs().await;
             if n > 0 {
-                crate::nlog!("disk low ({} GB free, floor {} GB): stripped {n} ended job dir(s)", free >> 30, floor >> 30);
+                crate::nlog!("disk low ({} free, floor {}): stripped {n} ended job dir(s)", gib(free), gib(floor));
             }
             free = self.disk_free_bytes();
         }
@@ -678,7 +981,7 @@ impl Node {
             .await
             .unwrap_or(0);
             if gone > 0 {
-                crate::nlog!("disk low ({} GB free, floor {} GB): evicted {gone} idle job cache(s)", free >> 30, floor >> 30);
+                crate::nlog!("disk low ({} free, floor {}): evicted {gone} idle job cache(s)", gib(free), gib(floor));
             }
             free = self.disk_free_bytes();
         }
@@ -700,8 +1003,8 @@ impl Node {
         let Some(((slot, job), j)) = jobs.iter().find(|((s, id), j)| *s == picked.slot && j.seq == picked.seq && j.stop.borrow().is_none() && !id.starts_with(super::LINGER_PREFIX)) else {
             return vec![];
         };
-        let why = over.map(|(s, b)| format!(", server slot {s} is {} MB over its disk share", b >> 20)).unwrap_or_default();
-        crate::nlog!("disk low ({} GB free, floor {} GB{why}): stopping job {job} (slot {slot})", free >> 30, floor >> 30);
+        let why = over.map(|(s, b)| format!(", server slot {s} is {} MiB over its disk share", b >> 20)).unwrap_or_default();
+        crate::nlog!("disk low ({} free, floor {}{why}): stopping job {job} (slot {slot})", gib(free), gib(floor));
         j.stop.send_replace(Some(StopReason { state: JobState::Failed, reason: refusal::DISK_LOW.into() }));
         vec![(*slot, job.clone())]
     }
@@ -714,6 +1017,7 @@ impl Node {
                 tokio::time::sleep(every).await;
                 let Some(n) = node.upgrade() else { return };
                 n.reap_orphans();
+                n.busy_slot_pass().await;
                 n.disk_guard_pass().await;
                 n.gens_sweep().await;
             }
@@ -754,7 +1058,7 @@ pub fn disk_victim(cands: &[Candidate], over: Option<k2_node_proto::share::Slot>
 
 /// The `disk_low` stop's detail for the job's row and log.
 pub fn disk_low_detail(free: u64, floor: u64) -> String {
-    format!("free disk fell under the node's floor ({} GB free, floor {} GB); the job was stopped so the disk doesn't fill", free >> 30, floor >> 30)
+    format!("free disk fell under the node's floor ({} free, floor {}); the job was stopped so the disk doesn't fill", gib(free), gib(floor))
 }
 
 #[cfg(test)]
@@ -1115,7 +1419,7 @@ mod tests {
         // The report line, and what `get` reads back for this job's window.
         let ev = n.evicted_since(1, 0);
         assert_eq!(ev, Evicted { warm: 1, caches: 1, job_dirs: 0, bytes: 6 << 20 });
-        assert_eq!(ev.line().unwrap(), "evicted 1 warm slot and 1 job cache, 0.0 GB, to fit this server's disk share on the node");
+        assert_eq!(ev.line().unwrap(), "evicted 1 warm slot and 1 job cache, 0.0 GiB, to fit this server's disk share on the node");
         assert_eq!(n.evicted_since(1, n.now() + 10), Evicted::default(), "only since the job started");
         assert!(n.tenant_disk_used(1).unwrap() <= 4 << 20, "the measure the offer carries");
         assert_eq!(n.tenant_disk_used(2), None, "slot 2 hasn't been measured");
@@ -1142,9 +1446,9 @@ mod tests {
     #[test]
     fn the_tenant_disk_full_detail_says_what_happened() {
         let d = tenant_disk_full_detail(40 << 30, 312 << 30, 300 << 30, &Evicted { warm: 2, caches: 1, job_dirs: 0, bytes: 12 << 30 });
-        assert!(d.contains("share on the node is 40 GB"), "{d}");
-        assert!(d.contains("held 312 GB") && d.contains("300 GB of it this job's"), "{d}");
-        assert!(d.contains("evicted 2 warm slots and 1 job cache, 12 GB first"), "{d}");
+        assert!(d.contains("share on the node is 40 GiB"), "{d}");
+        assert!(d.contains("held 312 GiB") && d.contains("300 GiB of it this job's"), "{d}");
+        assert!(d.contains("evicted 2 warm slots and 1 job cache, 12 GiB first"), "{d}");
         assert!(d.contains("the job itself is over the share"), "{d}");
         let d = tenant_disk_full_detail(40 << 30, 41 << 30, 5 << 30, &Evicted::default());
         assert!(d.contains("nothing was evicted") && d.contains("other running jobs"), "{d}");
@@ -1424,6 +1728,236 @@ mod tests {
         let r = ended(&n, "lost").await;
         assert_eq!((r.state, r.reason.as_deref()), (JobState::Failed, Some(super::super::assign::NODE_LOST_JOB)));
         assert!(!owner.ledger.lock().unwrap().get("live", 1).unwrap().unwrap().state.is_terminal(), "the live job runs on");
+        n.stop_all(JobState::Cancelled, "test_over");
+    }
+
+    const MIB: usize = 1 << 20;
+
+    async fn wait_until(what: &str, f: impl Fn() -> bool) {
+        let t0 = std::time::Instant::now();
+        while !f() {
+            assert!(t0.elapsed() < Duration::from_secs(20), "never happened: {what}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    fn no_evicted_left(pc: &Path) -> bool {
+        std::fs::read_dir(pc).map(|rd| rd.flatten().all(|e| !e.file_name().to_string_lossy().starts_with(EVICTED_PREFIX))).unwrap_or(true)
+    }
+
+    /// Shrink the node's disk budget (tests write MiB, not GiB): 8 MiB, so
+    /// the warm cap is 4 MiB.
+    fn small_budget(n: &Arc<Node>) {
+        n.local.lock().unwrap().policy.disk_budget_bytes = 8 << 20;
+    }
+
+    /// The pace of walks over a held slot: 20 times the last walk (60 s to
+    /// 10 min), sooner when free disk drops by more than the slot's room
+    /// left under the budget, but never sooner than 5 walks' time.
+    #[test]
+    fn a_held_slot_is_walked_at_a_bounded_pace() {
+        assert_eq!(measure_gap(Duration::from_millis(100)), Duration::from_secs(60));
+        assert_eq!(measure_gap(Duration::from_secs(6)), Duration::from_secs(120));
+        assert_eq!(measure_gap(Duration::from_secs(60)), Duration::from_secs(600));
+        let now = Instant::now();
+        let later = |s: u64| now + Duration::from_secs(s);
+        assert!(measure_due(None, now, 0, 200 * GIB), "never walked: now");
+        let m = Measured { at: now, took: Duration::from_secs(2), bytes: 150 * GIB, free: 300 * GIB };
+        assert!(!measure_due(Some(&m), later(30), 300 * GIB, 200 * GIB), "inside its gap");
+        assert!(measure_due(Some(&m), later(60), 300 * GIB, 200 * GIB), "its gap is up");
+        // 60 GiB gone from the disk, 50 GiB of room left under the budget.
+        assert!(measure_due(Some(&m), later(10), 240 * GIB, 200 * GIB), "the disk dropped by more than its room");
+        assert!(!measure_due(Some(&m), later(5), 240 * GIB, 200 * GIB), "but not within 5 walks' time");
+        assert!(!measure_due(Some(&m), later(10), 260 * GIB, 200 * GIB), "40 GiB gone is inside its room");
+    }
+
+    /// Rule 1: a slot over the warm cap is never handed to a job. Alone
+    /// over, the leased slot goes; together over, idle slots go first,
+    /// and the leased one only when the rest is in use.
+    #[tokio::test]
+    async fn a_slot_over_the_cap_is_evicted_before_a_new_job_uses_it() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-start", "disk_floor_gb = 0\n", free).await;
+        small_budget(&n);
+        let owner = n.owner();
+        let private = layout.job_dir("x", 1).join("target");
+        // (a) Alone over the cap (6 MiB > 4): evicted, the job gets it empty.
+        let pc = layout.project_cache("pk1");
+        let l = n.slots.lock().unwrap().lease(&pc, "pk1", 1, "c", private.clone());
+        n.slots.lock().unwrap().release(&pc, &l, Some("c"));
+        put(&pc.join("target-1/old"), 6 * MIB);
+        let mut l = n.slots.lock().unwrap().lease(&pc, "pk1", 1, "c", private.clone());
+        assert_eq!((l.slot, l.warmth), (Some(1), "warm"));
+        let lines = n.fit_leased_slot(&owner, &mut l, "j1", 1, "w1").await;
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("over the node's warm cap") && lines[0].contains("builds cold"), "{lines:?}");
+        assert_eq!(l.warmth, "cold");
+        assert!(!pc.join("target-1").exists(), "never handed to the job");
+        assert!(!std::fs::read_to_string(pc.join("slots.json")).unwrap().contains("\"1\""), "its last sha is forgotten");
+        let m = read_slot_meta(&pc, 1).expect("the slot's meta names its job");
+        assert_eq!((m.server_slot, m.workspace.as_str(), m.job.as_str(), m.generation, m.bytes), (0, "w1", "j1", 1, 0));
+        assert!(n.slot_holds.lock().unwrap().contains_key(&pc.join("target-1")), "held while the job runs");
+        wait_until("the evicted tree is deleted", || no_evicted_left(&pc)).await;
+        n.slots.lock().unwrap().release(&pc, &l, None);
+        assert!(n.unhold_slot(&l.dir).is_some());
+        // (b) Under the cap alone (3 MiB), but together over with an idle
+        // slot (3 + 3 > 4): the idle one goes, the leased one stays warm.
+        let pc2 = layout.project_cache("pk2");
+        let pc3 = layout.project_cache("pk3");
+        let l = n.slots.lock().unwrap().lease(&pc2, "pk2", 1, "c", private.clone());
+        n.slots.lock().unwrap().release(&pc2, &l, Some("c"));
+        put(&pc2.join("target-1/x"), 3 * MIB);
+        put(&pc3.join("target-1/x"), 3 * MIB);
+        let mut l = n.slots.lock().unwrap().lease(&pc2, "pk2", 1, "c", private.clone());
+        assert!(n.fit_leased_slot(&owner, &mut l, "j2", 1, "w1").await.is_empty());
+        assert_eq!(l.warmth, "warm");
+        assert!(pc2.join("target-1/x").exists() && !pc3.join("target-1").exists(), "the idle slot went, not the leased one");
+        n.slots.lock().unwrap().release(&pc2, &l, Some("c"));
+        n.unhold_slot(&l.dir);
+        // (c) Together over and the rest is in use: the leased slot goes.
+        let pc4 = layout.project_cache("pk4");
+        put(&pc4.join("target-1/x"), 3 * MIB);
+        n.slot_use.lock().unwrap().insert(pc4.join("target-1"), SlotUse { bytes: 3 << 20, used_at: 0 });
+        n.slots.lock().unwrap().mark_busy("pk4", 1);
+        let mut l = n.slots.lock().unwrap().lease(&pc2, "pk2", 1, "c", private.clone());
+        let lines = n.fit_leased_slot(&owner, &mut l, "j3", 1, "w1").await;
+        assert!(lines.len() == 1 && lines[0].contains("together hold"), "{lines:?}");
+        assert_eq!(l.warmth, "cold");
+        assert!(!pc2.join("target-1").exists(), "the leased slot went");
+        assert!(pc4.join("target-1/x").exists(), "a slot in use is never touched");
+        wait_until("the evicted tree is deleted", || no_evicted_left(&pc2)).await;
+    }
+
+    /// Rule 2 end to end (a job with source, on a real warm slot): past the
+    /// whole disk budget the job stops (`failed / disk_budget`) and its
+    /// slot goes when it ends; between the warm cap and the budget it runs
+    /// on and the slot goes at its end; and the next job on that slot,
+    /// planted over the cap again, starts on an empty one (rule 1).
+    #[tokio::test]
+    async fn a_running_jobs_slot_past_the_budget_stops_it_and_past_the_cap_goes_at_its_end() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-busy", "disk_floor_gb = 0\n", free).await;
+        small_budget(&n);
+        let (repo, _first, second) = crate::sync::tests::repo_with_commits("disk-busy-repo");
+        let run = |id: &str, script: &str| {
+            let mut a = crate::ledger::tests::assign(id, 1);
+            a.plan.src = Some(k2_node_proto::frames::Src { project_key: "pk1".into(), remote_url: Some(repo.display().to_string()), commit: second.clone(), dirty: None, slots: 1 });
+            a.plan.argv = vec!["/bin/sh".into(), "-c".into(), script.into()];
+            a.fence.plan_digest = a.plan.digest().unwrap();
+            assert_eq!(n.on_assign(&n.owner(), a), Some((id.to_string(), 1)));
+        };
+        let pc = layout.project_cache("pk1");
+        let slot = pc.join("target-1");
+        let blob_is = |b: usize| {
+            let p = slot.join("blob");
+            move || std::fs::metadata(&p).is_ok_and(|m| m.len() == b as u64)
+        };
+        // Past the budget (10 MiB > 8): stopped, then evicted.
+        run("big", "head -c 10485760 /dev/zero > \"$CARGO_TARGET_DIR/blob\" && sleep 30");
+        wait_until("big wrote its blob", blob_is(10 * MIB)).await;
+        assert!(read_slot_meta(&pc, 1).is_some_and(|m| m.job == "big" && m.workspace == "w"), "the slot names its job");
+        assert_eq!(n.busy_slot_pass().await, vec![(0u8, "big".to_string())]);
+        let r = ended(&n, "big").await;
+        assert_eq!((r.state, r.reason.as_deref()), (JobState::Failed, Some(DISK_BUDGET)), "{:?}", r.detail);
+        assert!(r.detail.as_deref().is_some_and(|d| d.contains("more than the node's whole disk budget of")), "{:?}", r.detail);
+        wait_until("big's slot is evicted", || !slot.exists() && read_slot_meta(&pc, 1).is_none() && no_evicted_left(&pc)).await;
+        assert!(n.slot_holds.lock().unwrap().is_empty(), "no hold left");
+        // Between the cap and the budget (6 MiB): runs on, evicted at its end.
+        run("mid", "head -c 6291456 /dev/zero > \"$CARGO_TARGET_DIR/blob\" && sleep 2");
+        wait_until("mid wrote its blob", blob_is(6 * MIB)).await;
+        assert!(n.busy_slot_pass().await.is_empty(), "under the budget: never stopped");
+        assert!(n.slot_holds.lock().unwrap().get(&slot).is_some_and(|h| h.over_cap && h.stopped.is_none()));
+        let r = ended(&n, "mid").await;
+        assert_eq!((r.state, r.reason.as_deref()), (JobState::Done, None), "{:?}", r.detail);
+        wait_until("mid's slot is evicted at its end", || !slot.exists() && no_evicted_left(&pc)).await;
+        // Rule 1 end to end: a slot over the cap is emptied before a job.
+        put(&slot.join("old"), 6 * MIB);
+        run("next", "test ! -e \"$CARGO_TARGET_DIR/old\"");
+        let r = ended(&n, "next").await;
+        assert_eq!(r.state, JobState::Done, "the job found its slot empty: {:?}", r.exit);
+        assert_eq!(r.src.as_ref().and_then(|s| s.warmth.as_deref()), Some("cold"));
+        let log = std::fs::read(layout.job_dir("next", 1).join("log")).unwrap();
+        let said = b"evicted before this job";
+        assert!(log.windows(said.len()).any(|w| w == said), "the job's log says why it builds cold");
+        assert!(slot.exists() && !slot.join("old").exists(), "under the cap after it: it stays warm");
+    }
+
+    /// Rule 2 touches only the job whose own slot is past the budget:
+    /// another server's job and slot, a held slot between the cap and the
+    /// budget, and idle slots are never touched; the pass deletes nothing.
+    #[tokio::test]
+    async fn the_busy_slot_pass_stops_only_the_job_whose_slot_is_past_the_budget() {
+        use k2_node_proto::share::{Network, ServersFile, ShareLimits, Trust};
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-busy-share", "disk_floor_gb = 0\n", free).await;
+        small_budget(&n);
+        let mut f = ServersFile::new(&"a".repeat(64), "o", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, 1, "local:t");
+        for slot in [1u8, 2] {
+            let mut e = f.servers[0].clone();
+            e.slot = slot;
+            e.label = format!("s{slot}");
+            e.fp_prefix = format!("{:016x}", slot);
+            e.trust = Trust::Own;
+            e.set_limits(&ShareLimits::new_server(Trust::Own, false));
+            e.disk_gb = 100;
+            f.servers.push(e);
+        }
+        std::fs::write(layout.config.join(k2_node_proto::share::SERVERS_FILE), toml::to_string(&f).unwrap()).unwrap();
+        let mut tens = Vec::new();
+        for slot in [1u8, 2] {
+            layout.tenant(slot).ensure_state().unwrap();
+            crate::identity::write_pin(&layout.tenant(slot).pin(), &crate::identity::Pin::for_test("n")).unwrap();
+            tens.push(n.add_tenant(slot).await.unwrap());
+        }
+        let mut sessions = Vec::new();
+        for s in [0u8, 1, 2] {
+            let limits = ShareLimits { max_running: 2, ..ShareLimits::new_server(Trust::Own, false) };
+            n.fairq.set_share(s, Some(crate::fairq::ShareInfo { label: format!("s{s}"), limits, status: k2_node_proto::share::ServerStatus::Active }));
+            n.fairq.set_protocol(s, Some(3));
+        }
+        for t in &tens {
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            t.hub.attach(tx);
+            sessions.push(rx);
+        }
+        let start = |t: &Arc<Tenant>, id: &str| {
+            let mut a = crate::ledger::tests::assign(id, 1);
+            a.plan.argv = vec!["/bin/sleep".into(), "30".into()];
+            a.fence.plan_digest = a.plan.digest().unwrap();
+            assert_eq!(n.on_assign(t, a), Some((id.to_string(), 1)));
+            n.fairq.tick(&n);
+        };
+        start(&tens[0], "one");
+        start(&tens[1], "two");
+        start(&n.owner(), "own");
+        wait_until("all three run", || n.running_by_tenant().values().map(|v| v.len()).sum::<usize>() == 3).await;
+        // Server 1's job holds 10 MiB (past the 8 MiB budget); server 2's
+        // 3 MiB (under the cap); the owner's 6 MiB (between); an idle
+        // slot of 10 MiB nobody holds.
+        let s1 = layout.tenant(1).cache().join("pk/target-1");
+        let s2 = layout.tenant(2).cache().join("pk/target-1");
+        let own = layout.project_cache("pk").join("target-1");
+        let idle = layout.project_cache("pk9").join("target-1");
+        for (d, mib) in [(&s1, 10), (&s2, 3), (&own, 6), (&idle, 10)] {
+            put(&d.join("blob"), mib * MIB);
+        }
+        n.rehold_slot(s1.clone(), 1, "one", 1);
+        n.rehold_slot(s2.clone(), 2, "two", 1);
+        n.rehold_slot(own.clone(), 0, "own", 1);
+        assert_eq!(n.busy_slot_pass().await, vec![(1u8, "one".to_string())]);
+        wait_until("one ends", || tens[0].ledger.lock().unwrap().get("one", 1).unwrap().unwrap().state.is_terminal()).await;
+        let r = tens[0].ledger.lock().unwrap().get("one", 1).unwrap().unwrap();
+        assert_eq!((r.state, r.reason.as_deref()), (JobState::Failed, Some(DISK_BUDGET)));
+        assert!(r.detail.as_deref().is_some_and(|d| d.contains("warm target slot reached")), "{:?}", r.detail);
+        let running = n.running_ids();
+        assert!(running.contains(&"two".to_string()) && running.contains(&"own".to_string()), "{running:?}");
+        for d in [&s1, &s2, &own, &idle] {
+            assert!(d.join("blob").exists(), "the pass deletes nothing: {}", d.display());
+        }
+        assert!(n.slot_holds.lock().unwrap().get(&own).is_some_and(|h| h.over_cap && h.stopped.is_none()), "between: marked for its end, not stopped");
+        assert!(n.slot_holds.lock().unwrap().get(&s2).is_some_and(|h| !h.over_cap && h.stopped.is_none()));
+        // Walked just now: nothing is due again, nothing more stops.
+        assert!(n.busy_slot_pass().await.is_empty());
         n.stop_all(JobState::Cancelled, "test_over");
     }
 }

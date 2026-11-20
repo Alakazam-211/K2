@@ -275,8 +275,8 @@ impl Ledger {
         let plan_json = serde_json::to_string(&a.plan).map_err(|e| format!("encode plan: {e}"))?;
         self.conn
             .execute(
-                "INSERT INTO jobs (job_id, generation, attempt, plan_digest, plan_json, state, created_at, boot_id, tier)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'preparing', ?6, ?7, ?8)",
+                "INSERT INTO jobs (job_id, generation, attempt, plan_digest, plan_json, state, created_at, boot_id, tier, ws_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'preparing', ?6, ?7, ?8, ?9)",
                 params![
                     a.fence.job_id,
                     a.fence.generation,
@@ -285,7 +285,10 @@ impl Ledger {
                     plan_json,
                     clock.now(),
                     clock.boot_id(),
-                    a.plan.tier_or_class().as_str()
+                    a.plan.tier_or_class().as_str(),
+                    // Whose job it is, for an operator reading the ledger
+                    // (a queued row had it; one that started at once didn't).
+                    a.plan.workspace_id
                 ],
             )
             .map_err(sqlerr)?;
@@ -801,6 +804,11 @@ pub mod tests {
         assert!(l.insert_queued(&q, &clock).is_err(), "a replayed fence is refused");
         l.insert(&assign("r", 1), &clock).unwrap();
         l.set_running("r", 1, 7, None, 11).unwrap();
+        // Both rows name their workspace, queued or started at once.
+        for id in ["q", "r"] {
+            let ws: Option<String> = l.conn.query_row("SELECT ws_id FROM jobs WHERE job_id = ?1", [id], |r| r.get(0)).unwrap();
+            assert_eq!(ws.as_deref(), Some("w"), "{id}");
+        }
         let row = l.get("q", 1).unwrap().unwrap();
         assert_eq!((row.state, row.reason.as_deref(), row.enqueued_at), (JobState::Queued, Some("node_queued"), Some(10)));
         assert_eq!(row.plan.class, Some(k2_node_proto::share::JobClass::Batch));

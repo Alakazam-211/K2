@@ -593,7 +593,7 @@ impl Node {
                 // A walk that hit its caps counts as over (review B F1).
                 let (bytes, capped) = disk_usage_walk(&t.paths.root());
                 if capped {
-                    crate::nlog!("warning: server slot {}'s folder hit the disk walk's cap ({WALK_MAX_DEPTH} levels or {WALK_MAX_ENTRIES} entries, {} GB counted so far); it counts as over its share", t.slot, bytes >> 30);
+                    crate::nlog!("warning: server slot {}'s folder hit the disk walk's cap ({WALK_MAX_DEPTH} levels or {WALK_MAX_ENTRIES} entries, {} counted so far); it counts as over its share", t.slot, super::disk::gib(bytes));
                 }
                 capped || bytes > budget(e.disk_gb)
             }
@@ -862,7 +862,11 @@ impl Node {
                     cwd = main_dir;
                     let pc = t.paths.project_cache(&src.project_key);
                     let _ = std::fs::create_dir_all(&pc);
-                    let l = self.slots.lock().unwrap().lease(&pc, &src.project_key, src.slots, &src.commit, dirs.private_target.clone());
+                    let mut l = self.slots.lock().unwrap().lease(&pc, &src.project_key, src.slots, &src.commit, dirs.private_target.clone());
+                    // Never a slot over the warm cap (module `disk`, rule 1).
+                    for line in self.fit_leased_slot(&t, &mut l, &job, gen, &a.plan.workspace_id).await {
+                        sys(&mut journal, &line);
+                    }
                     sys(&mut journal, &format!("target dir: {} ({})", l.slot.map(|n| format!("slot {n}")).unwrap_or_else(|| "job-private".into()), l.warmth));
                     src_ran = Some(SrcRan { slot: l.slot, warmth: Some(l.warmth.to_string()), ..ran });
                     lease = Some(l);
@@ -1877,6 +1881,13 @@ impl Node {
                 }
                 Some(d)
             }
+            Some(super::disk::DISK_BUDGET) => {
+                let d = self.disk_budget_text(t.slot, &job, gen);
+                if let (Some(j), Some(d)) = (journal.as_mut(), d.as_ref()) {
+                    let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {d}\n").as_bytes());
+                }
+                d
+            }
             Some(codes::TENANT_DISK_FULL) => {
                 let d = self.tenant_disk_full_text(&t, dirs.root.clone(), target.clone(), evicted).await;
                 if let Some(j) = journal.as_mut() {
@@ -2486,7 +2497,7 @@ impl Node {
         let (tc, needs, now) = (self.toolchains(), self.needs_in_use(), self.now());
         let gone = tokio::task::spawn_blocking(move || tc.gc_to_budget(budget, &needs, now)).await.unwrap_or_default();
         for v in &gone {
-            crate::nlog!("toolchain cap ({} GB): removed {} ({} MB, last used at {})", budget >> 30, v.key, v.bytes >> 20, v.last_used);
+            crate::nlog!("toolchain cap ({}): removed {} ({} MiB, last used at {})", super::disk::gib(budget), v.key, v.bytes >> 20, v.last_used);
         }
     }
 
@@ -2724,8 +2735,10 @@ impl Node {
             },
             None => (crypto::sha256_hex(b""), 0, false, 0),
         };
+        let mut held = None;
         if let (Some(l), Some(s)) = (&lease, &a.plan.src) {
             let pc = t.paths.project_cache(&s.project_key);
+            held = l.slot.and_then(|_| self.unhold_slot(&l.dir));
             self.slots.lock().unwrap().release(&pc, l, Some(&s.commit));
         }
         let now = self.now();
@@ -2883,7 +2896,7 @@ impl Node {
             gone();
         }
         if let Some(l) = lease.as_ref().filter(|l| l.slot.is_some()) {
-            self.after_slot_use(&l.dir).await;
+            self.after_slot_use(&l.dir, held).await;
         }
         // The job cache goes back last: its unit is gone, so nothing writes
         // it while it's measured, and it's never evicted under the job.
@@ -3618,7 +3631,7 @@ pub(super) mod tests {
         assert_eq!((row.state, row.reason.as_deref()), (JobState::Failed, Some(codes::TENANT_DISK_FULL)));
         // The failure says how big the share is, and what happened.
         let detail = row.detail.as_deref().expect("a detail");
-        assert!(detail.contains("disk share on the node is 1.0 GB") && detail.contains("nothing was evicted"), "{detail}");
+        assert!(detail.contains("disk share on the node is 1.0 GiB") && detail.contains("nothing was evicted"), "{detail}");
         for t in &tens[1..] {
             assert!(!t.ledger.lock().unwrap().get("j", 1).unwrap().unwrap().state.is_terminal(), "slot {} untouched", t.slot);
         }

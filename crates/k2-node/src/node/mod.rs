@@ -497,6 +497,8 @@ pub struct Node {
     job_seq: std::sync::atomic::AtomicU64,
     /// Warm target slots' last measured size and use (module `disk`).
     slot_use: Mutex<HashMap<PathBuf, disk::SlotUse>>,
+    /// Warm slots running jobs hold, as the busy-slot pass last saw them.
+    slot_holds: Mutex<HashMap<PathBuf, disk::Held>>,
     /// Each tenant's last measured disk use and recent evictions.
     tenant_disk: Mutex<HashMap<Slot, disk::TenantDisk>>,
     /// The executor relays a secret-env stdin pipe (`Ready.stdin`; asked at
@@ -715,6 +717,7 @@ impl Node {
             owner_name: Mutex::new(None),
             job_seq: Default::default(),
             slot_use: Mutex::new(HashMap::new()),
+            slot_holds: Mutex::new(HashMap::new()),
             tenant_disk: Mutex::new(HashMap::new()),
             exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
             exec_job_uid: std::sync::atomic::AtomicBool::new(exec_job_uid),
@@ -1307,6 +1310,7 @@ impl Node {
                     self.reclaim_blocking(t.slot, &e.path());
                     if std::fs::remove_dir_all(e.path()).is_ok() {
                         slots.forget(&project.path(), n);
+                        disk::remove_slot_meta(&project.path(), n);
                         out.push((e.path(), bytes));
                     }
                 }

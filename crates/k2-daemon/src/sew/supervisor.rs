@@ -41,7 +41,6 @@ use super::ops::{MgmtError, RealOps, SewOps, UnitInfo};
 use super::secrets::{kek_id, SewSecrets, VaultSecrets};
 use super::sew_wire as wire;
 use super::store::{self, Row};
-use k2_core::cli_name;
 
 // ── environment ──────────────────────────────────────────────────────────
 

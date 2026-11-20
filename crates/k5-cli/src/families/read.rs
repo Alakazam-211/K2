@@ -32,12 +32,14 @@
 //! dies of SIGPIPE with nothing else printed, as the shell's
 //! `_k2_end_command` ends a pipe ([`super::end_in_pipe`]).
 //!
+//! `--token-stdin` for a workspace here reads a token as the shell does
+//! (`_cli_read_secret_stdin "Token: "`: no echo at a terminal), refuses it
+//! beside `--token` and an empty one (exit 2), and leaves it unused.
+//!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
 //! - a workspace on another server (`ws@host`, `ws::host.example`): the
 //!   shell points the call at that host with its own token;
-//! - `--token-stdin` where a flag goes: the shell reads a token from
-//!   stdin (and refuses it beside `--token`);
 //! - a value flag as the last word (the shell stops on `$2: unbound
 //!   variable`, a line with its script's path in it), a word that is not
 //!   UTF-8, and a command line with `-h` or `--help` ([`crate::front`]);
@@ -65,6 +67,7 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::Auth;
+use k2_client::cli_name;
 use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -113,9 +116,11 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             // `--token` only matters for a remote host, which the shell
             // answers.
             "--token" => None,
-            // The shell reads a token from stdin for it, and refuses it
-            // beside `--token`: its own form.
-            "--token-stdin" => return None,
+            // A flag with no value ([`token`] reads it).
+            "--token-stdin" => {
+                i += 1;
+                continue;
+            }
             _ => {
                 i += 1;
                 continue;
@@ -129,6 +134,33 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
     }
     Some(ask)
 }
+
+/// `--token <t>` (its last value) and whether `--token-stdin` is there,
+/// as `cmd_read`'s loop reads them. Call it on words [`parse`] took.
+pub fn token(words: &[&str]) -> (String, bool) {
+    let (mut token, mut stdin) = (String::new(), false);
+    let mut i = 1;
+    while let Some(w) = words.get(i) {
+        match *w {
+            "--lines" | "--agent" | "--session" => i += 2,
+            "--token" => {
+                token = words.get(i + 1).map_or_else(String::new, |v| (*v).to_string());
+                i += 2;
+            }
+            "--token-stdin" => {
+                stdin = true;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    (token, stdin)
+}
+
+/// The line when `--token-stdin` comes with `--token`.
+pub const TOKEN_BOTH: &str = concat!(cli_name!(), " read: --token-stdin or --token, not both");
+/// The line when `--token-stdin` reads nothing.
+pub const TOKEN_NONE: &str = concat!(cli_name!(), " read: --token-stdin: no token on stdin");
 
 /// `_split_remote_target`: the bare target and the host (empty for this
 /// server). Two `::` or more is the wire form, kept whole; `a::b` is
@@ -202,10 +234,17 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return None;
         }
     }
-    Some(run_with(args, &ask, &bare, settings))
+    let token = token(&words);
+    Some(run_with(args, &ask, &bare, token, settings))
 }
 
-fn run_with(args: &[OsString], ask: &Ask, workspace: &str, mut settings: Settings) -> Exit {
+fn run_with(
+    args: &[OsString],
+    ask: &Ask,
+    workspace: &str,
+    (token, token_stdin): (String, bool),
+    mut settings: Settings,
+) -> Exit {
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }
@@ -214,6 +253,19 @@ fn run_with(args: &[OsString], ask: &Ask, workspace: &str, mut settings: Setting
             out::stderr_line(line);
         }
         return Exit::Error;
+    }
+    // `_cli_read_secret_stdin "Token: "`: a token is read and checked,
+    // then left unused here (`_apply_remote_host` with no host is a
+    // no-op; a remote host is the shell's).
+    if token_stdin {
+        if !token.is_empty() {
+            out::stderr_line(TOKEN_BOTH);
+            return Exit::Usage;
+        }
+        if crate::prompt::read_secret_stdin("Token: ").is_empty() {
+            out::stderr_line(TOKEN_NONE);
+            return Exit::Usage;
+        }
     }
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);
@@ -468,10 +520,18 @@ mod tests {
             assert_eq!(parse(&["ws", last]), None, "{last}");
             assert_eq!(parse(&["ws", "x", last]), None, "{last}");
         }
-        // `--token-stdin` is the shell's where a flag goes; as a value it
-        // is a value, as in the shell's loop.
-        assert_eq!(parse(&["ws", "--token-stdin"]), None);
-        assert_eq!(parse(&["ws", "--lines", "5", "--token-stdin"]), None);
+        // `--token-stdin` is a flag with no value where a flag goes; as a
+        // value it is a value, as in the shell's loop.
+        assert_eq!(parse(&["ws", "--token-stdin"]), ask("ws", "50", "", ""));
+        assert_eq!(
+            parse(&["ws", "--lines", "5", "--token-stdin"]),
+            ask("ws", "5", "", "")
+        );
+        assert_eq!(token(&["ws", "--token-stdin"]), (String::new(), true));
+        assert_eq!(
+            token(&["ws", "--token", "t", "--agent", "--token-stdin"]),
+            ("t".to_string(), false)
+        );
         assert_eq!(
             parse(&["ws", "--agent", "--token-stdin"]),
             ask("ws", "50", "--token-stdin", "")

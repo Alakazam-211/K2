@@ -426,7 +426,7 @@ sec_case() {
     fresh
     printf '%s\n' "$value" | k2run "$@" >/dev/null 2>&1 || true
     assert_tcp_got "$label" "$path" "$what" "$value"
-    assert_children_seen "$label"
+    "${SEC_CASE_CHILDREN:-assert_children_seen}" "$label"
     assert_off_children "$label" "$what" "$value"
 }
 
@@ -458,8 +458,8 @@ assert_off_children "clone preview (this server)" "local token" "$LOCAL_SENTINEL
 sec_case "clone preview --token-stdin" /cli/clone/preview "remote token" "$REMOTE_SENTINEL" clone preview ws1 --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin --json
 
 # 16-17. An App user's password (k2 app user add / password --password-stdin).
-sec_case "app user add" /cli/skin/users "password" "$PASS_SENTINEL" app user add bob --password-stdin
-sec_case "app user password" /cli/skin/users/password "password" "$PASS_SENTINEL" app user password bob --password-stdin
+SEC_CASE_CHILDREN=assert_children_native sec_case "app user add" /cli/skin/users "password" "$PASS_SENTINEL" app user add bob --password-stdin
+SEC_CASE_CHILDREN=assert_children_native sec_case "app user password" /cli/skin/users/password "password" "$PASS_SENTINEL" app user password bob --password-stdin
 
 # 18. k2 connect login: the subdomain's tunnel token, read from the account
 #     server, reaches the daemon's tunnel config and no child's argv or

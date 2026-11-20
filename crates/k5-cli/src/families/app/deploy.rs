@@ -1362,7 +1362,7 @@ mod tests {
         assert_eq!(stop("install", &["a", "--pg-major=09"]).line, usage::PG_MAJOR);
         assert_eq!(stop("deploy", &["a"]).line, usage::DEPLOY);
         assert_eq!(stop("deploy", &["a", "s", "--engine=x"]).line, usage::ENGINE);
-        assert_eq!(stop("restart", &[]).line.split(' ').nth(2), Some("restart"));
+        assert_eq!(stop("restart", &[]).line.split(' ').nth(3), Some("restart"));
         assert_eq!(stop("config", &["a"]).line, usage::CONFIG);
         assert_eq!(stop("config", &["a", "--egress", "x"]).line, usage::EGRESS);
         assert_eq!(stop("config", &["a", "--port", "add"]), Stop::silent(Exit::Error));

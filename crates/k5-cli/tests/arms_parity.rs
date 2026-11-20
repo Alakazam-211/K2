@@ -6,11 +6,11 @@
 //! - The pointer arms: their lines and exit, the gate with no port.
 //! - `trust-folders` and `commit` (`-m`, `--merge`): sent once, the
 //!   answer as it came; a refusal's body with exit 0 (a known T5 row).
-//! - `reviews`: rows, none, and a reader that can't read the answer
-//!   (`|| cat` on an empty stdin: exit 0).
+//! - `reviews`: rows, none, and an answer the reader can't use (not
+//!   JSON, empty, an error object: one error line, exit 1; a row it
+//!   can't read: the traceback); the caller's stdin is never read.
 //! - No answer: the line, exit 1 (`reviews`: then SIGPIPE).
-//! - Help never acts: `commit -h` is the shell's, which sends the commit
-//!   (a bash bug K2 fixes: the row turns when the fix lands).
+//! - Help never acts: `commit -h` is the shell's usage, nothing sent.
 
 #![cfg(unix)]
 
@@ -135,11 +135,11 @@ fn trust_folders_and_commit() {
             56,
             1,
         ),
-        // Help never acts: bash sends the commit (a bug K2 fixes; flip the row then).
-        shell(one(
-            "commit -h: bash sends it",
-            &["-h"],
-            r#"{"ok":true}"#,
+        // Help never acts: the usage, and no commit.
+        shell(stop("commit -h: the usage, nothing sent", &["-h"], 0)),
+        shell(stop(
+            "commit -m x --help: the usage, nothing sent",
+            &["-m", "x", "--help"],
             0,
         )),
     ] {
@@ -158,13 +158,41 @@ fn reviews() {
             0,
         ),
         one("none", &[], "[]", 0),
+        Case {
+            compare: Compare::Traceback,
+            ..one(
+                "a row it can't read: the traceback",
+                &[],
+                r#"[{"agentName":"a"},{"agentName":null}]"#,
+                1,
+            )
+        },
+        Case {
+            compare: Compare::Traceback,
+            ..one("a list of strings: the traceback", &[], r#"["x"]"#, 1)
+        },
+        one("not JSON: the error line", &[], "<html>", 1),
+        one("an empty answer: the error line", &[], "", 1),
+        one("an error: its line", &[], r#"{"error":"nope é"}"#, 1),
         one(
-            "a row it can't read: || cat",
+            "an error object: its hint",
             &[],
-            r#"[{"agentName":"a"},{"agentName":null}]"#,
-            0,
+            r#"{"error":{"hint":"h","code":"c"}}"#,
+            1,
         ),
-        one("not JSON: || cat", &[], "<html>", 0),
+        one(
+            "an error object: its code",
+            &[],
+            r#"{"error":{"hint":"","code":"c"}}"#,
+            1,
+        ),
+        one("an object with no error", &[], r#"{"ok":true}"#, 1),
+        one("null: none", &[], "null", 0),
+        // The caller's own stdin is never read.
+        Case {
+            stdin: Some(b"MARKER-FROM-STDIN\n"),
+            ..one("not JSON, with a stdin: never read", &[], "<html>", 1)
+        },
         in_pipe(
             case(
                 "no answer",
@@ -176,7 +204,7 @@ fn reviews() {
                 1,
             ),
             "",
-            "",
+            "Error: k2 reviews: no answer from K2 on /cli/reviews\n",
         ),
     ] {
         rig.check(&c);

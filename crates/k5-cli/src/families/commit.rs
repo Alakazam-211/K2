@@ -13,31 +13,34 @@
 //!   Merge...`), then `cli_request_post /cli/commit` (or
 //!   `/cli/commit-merge`) and the answer as it came. A refusal's body is
 //!   printed with exit 0, as the shell does (a known T5 row).
-//! - `reviews`: `cli_request /cli/reviews | python3 … 2>/dev/null || cat`
-//!   ([`reviews`]): when the reader or the call fails, `cat` copies this
-//!   command's own stdin to stdout, as the shell's does.
+//! - `reviews`: `cli_request /cli/reviews | python3 …` ([`reviews`]): the
+//!   rows, or one error line and exit 1 for an answer that is not JSON, an
+//!   empty one or an object (the daemon's error); a Python 3.12 traceback
+//!   where the reader raises. This command's own stdin is never read. An
+//!   answer whose bytes are not UTF-8 is read with each bad byte as U+FFFD
+//!   (the shell's Python depends on the locale there).
 //!
 //! Each runs after the settings and the two gates ([`crate::prelude`]);
 //! each is an open tool. A request with no answer is the transport's
 //! line, exit 1 (`reviews`: the line, then SIGPIPE). The shell answers:
-//! `-h` or `--help` (the front sends those on; the shell's `commit` then
-//! sends its request, a bash bug K2 fixes), `commit`'s `-m` as the last
+//! `-h` or `--help` (the front sends those on; the shell prints the usage
+//! and sends nothing), `commit`'s `-m` as the last
 //! word (`$2: unbound variable`) and `commit --merge` alone (bash before
 //! 4.4 stops on its empty array), a word that is not UTF-8, a port curl
 //! won't take, and a `python3` the binary can't tell.
 
-use super::{curl_port, ljust, pipefail, py_iter, without_nuls, Shown};
+use super::{curl_port, ljust, pipefail, py_iter, raised, without_nuls, Raise, Shown};
 use crate::daemon;
 use crate::exit::Exit;
-use crate::families::remind::shared::py_get;
-use crate::out::json::{self, Value};
+use crate::out::json::Value;
+use crate::out::pylib::json::loads;
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::{Call, Channel, Error};
-use k2_client::cli_name;
+use k2_client::{cli_name, product_name};
 use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -252,17 +255,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
                 },
             };
             let shown = reviews(&String::from_utf8_lossy(&piped.body));
-            let exit = pipefail(piped.exit, shown.print());
-            if exit == Exit::Ok {
-                exit
-            } else {
-                // `|| cat`: this command's own stdin, as it is.
-                let mut stdout = std::io::stdout().lock();
-                match std::io::copy(&mut std::io::stdin().lock(), &mut stdout) {
-                    Ok(_) => Exit::Ok,
-                    Err(e) => out::after_stdout_error(&e),
-                }
-            }
+            pipefail(piped.exit, shown.print())
         }
         other => {
             let (endpoint, param) = match other {
@@ -301,51 +294,122 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 }
 
 /// `format(x, '<n')` as Python does it for the values JSON gives: a
-/// string or a number padded to `n`; `None` for a type that refuses it.
-fn padded(v: &Value, n: usize) -> Option<String> {
+/// string or a number padded to `n`; the `TypeError` at `line` for a type
+/// that refuses it.
+fn padded(v: &Value, n: usize, line: u32) -> Result<String, Raise> {
     match v {
-        Value::Str(_) | Value::Int(_) | Value::Float(_) => Some(ljust(&py::str_of(v), n)),
+        Value::Str(_) | Value::Int(_) | Value::Float(_) => Ok(super::py_left(v, n)),
         // `bool` formats as the int it is.
-        Value::Bool(b) => Some(ljust(if *b { "1" } else { "0" }, n)),
-        _ => None,
+        Value::Bool(b) => Ok(ljust(if *b { "1" } else { "0" }, n)),
+        other => Err(Raise::at(
+            line,
+            format!(
+                "TypeError: unsupported format string passed to {}.__format__",
+                py::type_name(other)
+            ),
+        )),
     }
 }
 
-/// `reviews`'s Python, its stderr thrown away: stdout, and exit 1 where
-/// it raises.
+/// The lines of `reviews`' Python that raise (`python3 -c "` starts with a
+/// newline, so its first line is empty).
+pub mod line {
+    pub const LOADS: u32 = 5;
+    pub const FOR: u32 = 18;
+    pub const AGENT: u32 = 19;
+    pub const BRANCH: u32 = 20;
+    pub const ITEMS: u32 = 21;
+    pub const FILES: u32 = 22;
+    pub const ROW: u32 = 23;
+}
+
+/// The error line's head.
+const ERROR: &str = concat!("Error: ", cli_name!(), " reviews: ");
+/// An empty answer (only whitespace).
+const NO_ANSWER: &str = concat!("no answer from ", product_name!(), " on /cli/reviews");
+/// An answer that is not JSON.
+const NOT_JSON: &str = concat!(
+    product_name!(),
+    " answered /cli/reviews with something that is not JSON"
+);
+/// An object with no error in it.
+const NOT_A_LIST: &str = concat!(
+    product_name!(),
+    " answered /cli/reviews with something that is not a list"
+);
+
+/// `reviews`' Python: stdout, its error line or traceback on stderr, and
+/// its exit. An answer that is not JSON, an empty one or an object (the
+/// daemon's error) is one error line and exit 1; a list prints its rows.
 pub fn reviews(raw: &str) -> Shown {
-    let mut out = String::new();
-    let r = (|| -> Option<()> {
-        let data = json::parse(raw).ok()?;
-        if !py::truthy(&data) {
-            out.push_str("No pending reviews.\n");
-            return Some(());
+    let data = match loads(raw) {
+        Ok(d) => d,
+        // `except ValueError:` does not catch a RecursionError.
+        Err(f) if f.class == "RecursionError" => {
+            return raised(String::new(), String::new(), &Raise::at(line::LOADS, f.last_line()));
         }
-        for r in py_iter(&data, 0).ok()? {
-            let g = |k: &str, d: Value| -> Option<Value> {
-                Some(py_get(&r, k).ok()?.cloned().unwrap_or(d))
+        Err(_) => {
+            let why = if raw.chars().all(super::py_space) {
+                NO_ANSWER
+            } else {
+                NOT_JSON
             };
-            let agent = g("agentName", super::s("?"))?;
-            let branch = g("branch", super::s(""))?;
-            let items = py_len(&g("workItems", Value::Array(vec![]))?)?;
-            let files = py_len(&g("diffSummary", Value::Array(vec![]))?)?;
-            out.push_str(&format!(
-                "  {} {} {items} items, {files} files changed\n",
-                padded(&agent, 20)?,
-                padded(&branch, 30)?
-            ));
+            return error(why.to_string());
         }
-        Some(())
-    })();
-    Shown {
-        stdout: out,
-        stderr: String::new(),
-        exit: if r.is_some() { Exit::Ok } else { Exit::Error },
+    };
+    if let Value::Object(pairs) = &data {
+        let mut err = super::get(pairs, "error").cloned();
+        if let Some(Value::Object(e)) = &err {
+            let hint = super::get(e, "hint");
+            err = match hint.filter(|h| py::truthy(h)) {
+                Some(h) => Some(h.clone()),
+                None => super::get(e, "code").cloned(),
+            };
+        }
+        return error(match err.filter(py::truthy) {
+            Some(e) => py::str_of(&e),
+            None => NOT_A_LIST.to_string(),
+        });
+    }
+    if !py::truthy(&data) {
+        return Shown::out("No pending reviews.\n");
+    }
+    let mut out = String::new();
+    match rows(&data, &mut out) {
+        Ok(()) => Shown::out(out),
+        Err(r) => raised(out, String::new(), &r),
     }
 }
 
-fn py_len(v: &Value) -> Option<usize> {
-    super::py_len(v, 0).ok()
+/// The error line on stderr, exit 1.
+fn error(why: String) -> Shown {
+    Shown {
+        stdout: String::new(),
+        stderr: format!("{ERROR}{why}\n"),
+        exit: Exit::Error,
+    }
+}
+
+/// `for r in data:` and its rows, onto `out`.
+fn rows(data: &Value, out: &mut String) -> Result<(), Raise> {
+    for r in py_iter(data, line::FOR)? {
+        let g = |k: &str, d: Value, at: u32| -> Result<Value, Raise> {
+            Ok(super::py_get(&r, k, at)?.cloned().unwrap_or(d))
+        };
+        let agent = g("agentName", super::s("?"), line::AGENT)?;
+        let branch = g("branch", super::s(""), line::BRANCH)?;
+        let items = super::py_len(&g("workItems", Value::Array(vec![]), line::ITEMS)?, line::ITEMS)?;
+        let files = super::py_len(
+            &g("diffSummary", Value::Array(vec![]), line::FILES)?,
+            line::FILES,
+        )?;
+        let agent = padded(&agent, 20, line::ROW)?;
+        let branch = padded(&branch, 30, line::ROW)?;
+        out.push_str(&format!(
+            "  {agent} {branch} {items} items, {files} files changed\n"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -395,7 +459,79 @@ mod tests {
             )
         );
         assert_eq!(reviews("[]").stdout, "No pending reviews.\n");
-        assert_eq!(reviews(r#"[{"agentName":null}]"#).exit, Exit::Error);
-        assert_eq!(reviews("<html>").exit, Exit::Error);
+        let none = reviews(r#"[{"agentName":"a"},{"agentName":null}]"#);
+        assert_eq!(none.exit, Exit::Error);
+        assert_eq!(none.stdout.lines().count(), 1);
+        assert!(none.stderr.ends_with(
+            "line 23, in <module>\nTypeError: unsupported format string passed to NoneType.__format__\n"
+        ));
+    }
+
+    #[test]
+    fn reviews_error_lines() {
+        let head = format!("Error: {} reviews: ", cli_name!());
+        for (raw, why) in [
+            ("<html>", NOT_JSON),
+            ("", NO_ANSWER),
+            (" \n", NO_ANSWER),
+            (r#"{"error":"nope"}"#, "nope"),
+            (r#"{"error":{"hint":"","code":"c"}}"#, "c"),
+            (r#"{"error":{"hint":"h","code":"c"}}"#, "h"),
+            (r#"{"error":[1]}"#, "[1]"),
+            ("{}", NOT_A_LIST),
+        ] {
+            let s = reviews(raw);
+            assert_eq!(
+                (s.stdout.as_str(), s.stderr, s.exit),
+                ("", format!("{head}{why}\n"), Exit::Error),
+                "{raw:?}"
+            );
+        }
+        assert!(reviews("5").stderr.ends_with("TypeError: 'int' object is not iterable\n"));
+        assert!(reviews(r#"["x"]"#)
+            .stderr
+            .ends_with("line 19, in <module>\nAttributeError: 'str' object has no attribute 'get'\n"));
+    }
+
+    /// The reader's lines, as the shell has them.
+    #[test]
+    fn reviews_shell_lines() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src/daemon-install.sh");
+        let text = std::fs::read_to_string(&path).expect("daemon-install.sh");
+        let f = text
+            .split_once("cmd_reviews() {\n")
+            .expect("cmd_reviews")
+            .1
+            .split_once("\n}\n")
+            .expect("its end")
+            .0;
+        let py: Vec<&str> = f
+            .split_once("python3 -c \"")
+            .expect("the reader")
+            .1
+            .lines()
+            .collect();
+        let at = |n: u32| py[n as usize - 1].trim();
+        assert_eq!(at(line::LOADS), "data = json.loads(raw)");
+        assert_eq!(at(line::FOR), "for r in data:");
+        assert_eq!(at(line::AGENT), "agent = r.get('agentName', '?')");
+        assert_eq!(at(line::BRANCH), "branch = r.get('branch', '')");
+        assert_eq!(at(line::ITEMS), "items = len(r.get('workItems', []))");
+        assert_eq!(at(line::FILES), "files = len(r.get('diffSummary', []))");
+        assert_eq!(
+            at(line::ROW),
+            "print(f'  {agent:<20} {branch:<30} {items} items, {files} files changed')"
+        );
+        assert!(!f.contains("|| cat"));
+        if k2_client::brand::CLI_NAME == "k2" {
+            for want in [
+                "    print('Error: k2 reviews: K2 answered /cli/reviews with something that is not JSON' if raw.strip() else 'Error: k2 reviews: no answer from K2 on /cli/reviews', file=sys.stderr)",
+                "        err = err.get('hint') or err.get('code')",
+                "    print('Error: k2 reviews: %s' % (err or 'K2 answered /cli/reviews with something that is not a list'), file=sys.stderr)",
+            ] {
+                assert!(f.lines().any(|l| l == want), "{want:?}");
+            }
+        }
     }
 }

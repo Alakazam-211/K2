@@ -371,7 +371,9 @@ fn remote_session_grants_and_times() {
         // covers: remote-session grant
         case(
             "grant",
-            &["grant", "--ttl", "1H", "--label", "  pair ", "--scope", "shell"],
+            &[
+                "grant", "--ttl", "1H", "--label", "  pair ", "--scope", "shell",
+            ],
             &[],
             vec![reply(
                 r#"{"ok":true,"token":"k2rs_abc","grant":{"id":"g1","expiresAt":1763600000,"label":"pair"}}"#,
@@ -519,7 +521,15 @@ fn remote_session_tokens_gates_and_no_answer() {
             2,
             0,
         ),
-        case("no port or token: the gate", &["status"], &[], vec![], nothing, 1, 0),
+        case(
+            "no port or token: the gate",
+            &["status"],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
         case(
             "a session with no passport: the locked tool",
             &["status"],

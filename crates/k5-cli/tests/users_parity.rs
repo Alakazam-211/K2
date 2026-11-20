@@ -91,8 +91,24 @@ fn users_list() {
     let rig = Rig::new(VERB, "list");
     let v = vec![
         // covers: users
-        case("bare: the table", &[], &[], vec![reply(USERS)], owner_and_port, 0, 1),
-        case("list", &["list"], &[], vec![reply(USERS)], owner_and_port, 0, 1),
+        case(
+            "bare: the table",
+            &[],
+            &[],
+            vec![reply(USERS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list",
+            &["list"],
+            &[],
+            vec![reply(USERS)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "list --json",
             &["list", "--json"],
@@ -195,7 +211,15 @@ fn users_list() {
             2,
             0,
         ),
-        case("help: the page", &["help"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "help: the page",
+            &["help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         case(
             "an unknown verb: the line and the page",
             &["nope"],
@@ -213,7 +237,15 @@ fn users_list() {
     let big: &'static str = Box::leak(big.into_boxed_str());
     assert!(big.len() > 256 * 1024);
     for c in [
-        case("large: the table", &["list"], &[], vec![reply(big)], owner_and_port, 0, 1),
+        case(
+            "large: the table",
+            &["list"],
+            &[],
+            vec![reply(big)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "large: --json",
             &["list", "--json"],
@@ -348,7 +380,7 @@ fn users_add() {
                 0,
             ),
         ),
-        traceback(stdin(
+        stdin(
             b"p\xffw\n",
             case(
                 "a password that is not UTF-8",
@@ -359,7 +391,7 @@ fn users_add() {
                 0,
                 1,
             ),
-        )),
+        ),
         case(
             "a password on the command line",
             &["add", "ann", "--password", "x"],
@@ -641,7 +673,15 @@ fn users_audit_clone_and_unlock() {
     let events = r#"{"events":[{"ts":"2026-11-20T01:02:03Z","event":"login","outcome":"ok","user":"ann","ingress":"lan","ip":"10.0.0.2","client":"web"},{"event":"logout"},5]}"#;
     let v = vec![
         // covers: users audit
-        case("audit", &["audit"], &[], vec![reply(events)], owner_and_port, 0, 1),
+        case(
+            "audit",
+            &["audit"],
+            &[],
+            vec![reply(events)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: users audit --json
         case(
             "audit --json: as it came",
@@ -683,7 +723,10 @@ fn users_audit_clone_and_unlock() {
             "audit: the daemon's error",
             &["audit"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"hint":"owner only"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"hint":"owner only"}}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -711,7 +754,10 @@ fn users_audit_clone_and_unlock() {
             "set-can-clone refused",
             &["set-can-clone", "ann", "0"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"hint":"owner only"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"hint":"owner only"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -772,7 +818,15 @@ fn users_audit_clone_and_unlock() {
             1,
             1,
         ),
-        case("unlock: no login", &["unlock"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "unlock: no login",
+            &["unlock"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -784,7 +838,15 @@ fn users_phones() {
     let rig = Rig::new(VERB, "phones");
     let v = vec![
         // covers: users phones
-        case("phones", &["phones"], &[], vec![reply(PHONES)], owner_and_port, 0, 1),
+        case(
+            "phones",
+            &["phones"],
+            &[],
+            vec![reply(PHONES)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: users phones --json
         case(
             "phones --json",
@@ -921,7 +983,10 @@ fn users_phones() {
             "unpair-phone: no such phone",
             &["unpair-phone", "d9"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"no_such_device"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"no_such_device"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -945,7 +1010,15 @@ fn users_phones() {
 fn users_gates_sessions_and_no_answer() {
     let rig = Rig::new(VERB, "gates");
     let v = vec![
-        case("no port or token: the gate", &["list"], &[], vec![], nothing, 1, 0),
+        case(
+            "no port or token: the gate",
+            &["list"],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
         case(
             "a session with no passport: the locked tool",
             &["list"],

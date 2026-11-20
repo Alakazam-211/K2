@@ -69,8 +69,9 @@ fn the_lines_are_the_shell_s() {
         "gated",
     ] {
         let t = teach(code).unwrap();
+        let quoted = t.replace('"', "\\\"");
         assert!(
-            text.contains(&format!("\"{code}\": \"{t}\"")),
+            text.contains(&format!("\"{code}\": \"{quoted}\"")),
             "{code}: {t}"
         );
     }
@@ -177,7 +178,7 @@ fn the_error_printer() {
         )),
         (
             String::new(),
-            "Error: Remote Sessions are OFF. Enable with: k2 remote-session enable\n".into(),
+            "Error: Remote Sessions are OFF. Enable with: k2 remote-session enable\n  \u{2192} k2 remote-session enable\n".into(),
             Exit::Refused
         )
     );

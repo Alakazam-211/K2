@@ -127,8 +127,24 @@ fn git_tools_answers_as_the_shell_does() {
             2,
             0,
         ),
-        case("an unknown verb", &["nope"], &[], vec![], owner_and_port, 2, 0),
-        case("no port or token: the gate", &[], &[], vec![], nothing, 1, 0),
+        case(
+            "an unknown verb",
+            &["nope"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "no port or token: the gate",
+            &[],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
         case(
             "an empty reply",
             &["status"],
@@ -165,7 +181,15 @@ fn git_tools_help_never_acts() {
         let args: &'static [&'static str] = Box::leak(args.to_vec().into_boxed_slice());
         rig.check(&Case {
             compare: Compare::Shell,
-            ..case("help acts on nothing", args, &[], vec![], owner_and_port, 0, 0)
+            ..case(
+                "help acts on nothing",
+                args,
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            )
         });
     }
 }

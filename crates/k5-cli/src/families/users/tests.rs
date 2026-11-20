@@ -82,13 +82,19 @@ fn the_words_as_the_shell_reads_them() {
         stop(parse(&["add", "ann", "--role"])).0,
         vec!["Error: --role needs a value"]
     );
-    assert_eq!(stop(parse(&["add", "ann", "--role", "viewer"])).0, vec![VIEWER_REMOVED]);
+    assert_eq!(
+        stop(parse(&["add", "ann", "--role", "viewer"])).0,
+        vec![VIEWER_REMOVED]
+    );
     assert_eq!(
         stop(parse(&["add", "ann", "--share-agent", "x"])).0,
         vec!["Error: --share-agent, --share-garden and --share-source are only for --role voice_chat"]
     );
     let (l, page, _) = stop(parse(&["add", "ann", "--zap"]));
-    assert_eq!((l, page), (vec!["Error: unknown flag '--zap'".to_string()], true));
+    assert_eq!(
+        (l, page),
+        (vec!["Error: unknown flag '--zap'".to_string()], true)
+    );
     assert_eq!(stop(parse(&["add", "--password", "x"])).0.len(), 2);
 
     assert_eq!(
@@ -119,7 +125,10 @@ fn the_words_as_the_shell_reads_them() {
         stop(parse(&["audit", "--tail", "x"])).0,
         vec!["Error: --tail must be an integer 1..1000 (got 'x')"]
     );
-    assert_eq!(stop(parse(&["audit", "x"])).0, vec!["Error: unexpected argument 'x'", AUDIT_USAGE]);
+    assert_eq!(
+        stop(parse(&["audit", "x"])).0,
+        vec!["Error: unexpected argument 'x'", AUDIT_USAGE]
+    );
     assert_eq!(
         parse(&["set-can-clone", "ann", "yes", "extra"]),
         Form::CanClone {
@@ -127,7 +136,10 @@ fn the_words_as_the_shell_reads_them() {
             on: true
         }
     );
-    assert_eq!(stop(parse(&["set-can-clone", "", "on"])).0, vec![CAN_CLONE_USAGE]);
+    assert_eq!(
+        stop(parse(&["set-can-clone", "", "on"])).0,
+        vec![CAN_CLONE_USAGE]
+    );
     assert_eq!(stop(parse(&["unlock"])).0, vec![UNLOCK_USAGE]);
     assert_eq!(
         parse(&["pair-phone", "--user=bo", "--invert"]),
@@ -137,9 +149,15 @@ fn the_words_as_the_shell_reads_them() {
             invert: true
         })
     );
-    assert_eq!(stop(parse(&["pair-phone", "--user"])).0, vec!["Error: --user needs a login"]);
+    assert_eq!(
+        stop(parse(&["pair-phone", "--user"])).0,
+        vec!["Error: --user needs a login"]
+    );
     assert_eq!(stop(parse(&["phones", "x"])).0.len(), 2);
-    assert_eq!(stop(parse(&["unpair-phone", "-x"])).0, vec!["Error: unknown flag '-x'"]);
+    assert_eq!(
+        stop(parse(&["unpair-phone", "-x"])).0,
+        vec!["Error: unknown flag '-x'"]
+    );
 }
 
 fn pw(t: &str) -> crate::prompt::Secret {
@@ -154,7 +172,7 @@ fn add_s_body_is_its_python_s() {
     };
     assert_eq!(
         add_body(&a, &pw("p é")),
-        r#"{"username": "ann", "password": "p é", "mustChangePassword": true}"#
+        r#"{"username": "ann", "password": "p \u00e9", "mustChangePassword": true}"#
     );
     a.role = "owner".into();
     a.fixed = "1";
@@ -177,7 +195,12 @@ fn add_s_body_is_its_python_s() {
 fn the_presence_check_s_secret() {
     let ask = br#"{"error":{"code":"vault_presence_required"},"confirm":{"action":"owner-login","secretId":"s1"}}"#;
     assert_eq!(presence_secret(ask), "s1");
-    assert_eq!(presence_secret(br#"{"error":{"code":"x"},"confirm":{"action":"owner-login","secretId":"s1"}}"#), "");
+    assert_eq!(
+        presence_secret(
+            br#"{"error":{"code":"x"},"confirm":{"action":"owner-login","secretId":"s1"}}"#
+        ),
+        ""
+    );
     assert_eq!(presence_secret(b""), "");
     assert_eq!(presence_secret(b"[1]"), "");
 }
@@ -198,18 +221,32 @@ fn list_reads_as_its_python() {
          vc (Voice & Chat only) shares: agents a@w, x (gone); gardens none\n"
     );
     assert_eq!((e.as_str(), x), ("doctor: d1\n", Exit::Ok));
-    let (o, _, _) = shown(read::list(br#"{"users":[{"username":"\u00e9","canClone":false}]}"#, true, false));
+    let (o, _, _) = shown(read::list(
+        br#"{"users":[{"username":"\u00e9","canClone":false}]}"#,
+        true,
+        false,
+    ));
     assert_eq!(
         o,
         "{\"ok\":true,\"users\":[{\"username\":\"\u{e9}\",\"role\":\"member\",\"disabled\":false,\"wasViewer\":false,\"canClone\":false,\"createdAt\":null,\"firstName\":null,\"lastName\":null,\"displayName\":\"\u{e9}\",\"mustChangePassword\":false,\"shares\":{\"agents\":[],\"gardens\":[]}}]}\n"
     );
-    let (_, e, x) = shown(read::list(br#"{"error":{"code":"role_required","hint":"Owner only"}}"#, false, true));
+    let (_, e, x) = shown(read::list(
+        br#"{"error":{"code":"role_required","hint":"Owner only"}}"#,
+        false,
+        true,
+    ));
     assert!(e.starts_with("Error: owner_only: Owner/admin only; agents use `k2 connections"));
     assert_eq!(x, Exit::Refused);
     let (_, e, x) = shown(read::list(br#"{"error":{"code":5}}"#, false, false));
-    assert!(e.ends_with("TypeError: unsupported operand type(s) for +: 'int' and 'str'\n"), "{e}");
+    assert!(
+        e.ends_with("TypeError: unsupported operand type(s) for +: 'int' and 'str'\n"),
+        "{e}"
+    );
     assert_eq!(x, Exit::Error);
-    assert_eq!(shown(read::list(b"<x", false, false)).1, "Error: daemon returned an unparseable response: '<x'\n");
+    assert_eq!(
+        shown(read::list(b"<x", false, false)).1,
+        "Error: daemon returned an unparseable response: '<x'\n"
+    );
     assert_eq!(shown(read::list(b"", false, false)).0.lines().count(), 2);
 }
 
@@ -228,18 +265,33 @@ fn the_other_readers() {
         "Error: users/add failed: empty response\n"
     );
     assert_eq!(
-        shown(read::set_role(br#"{"success":true,"from":"member","live":false}"#, "ann", "admin")).0,
+        shown(read::set_role(
+            br#"{"success":true,"from":"member","live":false}"#,
+            "ann",
+            "admin"
+        ))
+        .0,
         "ann: member -> admin (they sign in again)\n"
     );
     assert_eq!(
-        shown(read::set_role(br#"{"error":"role_required"}"#, "ann", "admin")),
-        (String::new(), "Error: role_required\n".into(), Exit::Refused)
+        shown(read::set_role(
+            br#"{"error":"role_required"}"#,
+            "ann",
+            "admin"
+        )),
+        (
+            String::new(),
+            "Error: role_required\n".into(),
+            Exit::Refused
+        )
     );
     assert_eq!(
         shown(read::share(br#"{"users":[{"username":"ann","role":"voice_chat","shares":{"sources":[{"name":"s","missing":1}]}}]}"#, " ANN ", false)).0,
         "ann (Voice & Chat only)\n  agents:  none\n  gardens: none\n  sources: s (gone)\n"
     );
-    assert!(shown(read::share(b"[1]", "a", false)).1.ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
+    assert!(shown(read::share(b"[1]", "a", false))
+        .1
+        .ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
     assert_eq!(
         shown(read::audit(br#"{"events":[{"ts":"t","event":"login","ip":"1.2.3.4"}]}"#)).0,
         "TS  EVENT  OUTCOME  USER  INGRESS  IP       CLIENT\nt   login  -        -     -        1.2.3.4  -\n"
@@ -249,7 +301,11 @@ fn the_other_readers() {
         (String::new(), "Error: oops\n".into(), Exit::Refused)
     );
     assert_eq!(
-        shown(read::unlock(br#"{"ok":true,"username":"ann","cleared":true}"#, false)).0,
+        shown(read::unlock(
+            br#"{"ok":true,"username":"ann","cleared":true}"#,
+            false
+        ))
+        .0,
         "Lock cleared for ann\n"
     );
     assert_eq!(shown(read::unlock(b" ", false)).2, Exit::Error);
@@ -260,7 +316,11 @@ fn the_phone_readers() {
     let r = phones::read(br#"{"error":{"code":"no_such_device"}}"#, |_, _| Ok(()));
     assert_eq!(
         shown(r),
-        (String::new(), "Error: no_such_device (no_such_device)\n".into(), Exit::Refused)
+        (
+            String::new(),
+            "Error: no_such_device (no_such_device)\n".into(),
+            Exit::Refused
+        )
     );
     let r = phones::read(br#"{"error":{"hint":3}}"#, |_, _| Ok(()));
     assert!(r.stderr.starts_with("Error: 3\nTraceback"), "{}", r.stderr);

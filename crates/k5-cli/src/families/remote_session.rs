@@ -79,7 +79,10 @@ pub const BOTH: &str = concat!(
     cli_name!(),
     " remote-session: --token-stdin or --token, not both"
 );
-pub const NO_TOKEN: &str = concat!(cli_name!(), " remote-session: --token-stdin: no token on stdin");
+pub const NO_TOKEN: &str = concat!(
+    cli_name!(),
+    " remote-session: --token-stdin: no token on stdin"
+);
 pub const REVOKE_USAGE: &str = concat!("Usage: ", cli_name!(), " remote-session revoke <grant-id>");
 pub const WRITE_USAGE: &str = concat!(
     "Usage: ",
@@ -113,17 +116,41 @@ pub struct Target {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Form {
     Help,
-    Status { json: bool },
-    Switch { on: bool },
+    Status {
+        json: bool,
+    },
+    Switch {
+        on: bool,
+    },
     /// `ttl` in seconds, as bash's arithmetic gives it.
-    Grant { scope: String, ttl: i64, label: String },
-    Grants { json: bool },
-    Revoke { id: String },
-    Shell { cwd: String },
-    Write { sid: String, text: String },
-    Read { sid: String, lines: String },
+    Grant {
+        scope: String,
+        ttl: i64,
+        label: String,
+    },
+    Grants {
+        json: bool,
+    },
+    Revoke {
+        id: String,
+    },
+    Shell {
+        cwd: String,
+    },
+    Write {
+        sid: String,
+        text: String,
+    },
+    Read {
+        sid: String,
+        lines: String,
+    },
     /// Lines on stderr (the help page after them when `page`), the exit.
-    Stop { lines: Vec<String>, page: bool, exit: Exit },
+    Stop {
+        lines: Vec<String>,
+        page: bool,
+        exit: Exit,
+    },
 }
 
 fn stop(line: impl Into<String>) -> Form {
@@ -222,7 +249,9 @@ pub fn parse(words: &[&str]) -> (Form, Target) {
     let first = pos.first().cloned().unwrap_or_default();
     let form = match sub {
         "status" => Form::Status { json },
-        "enable" | "disable" => Form::Switch { on: sub == "enable" },
+        "enable" | "disable" => Form::Switch {
+            on: sub == "enable",
+        },
         "grant" => match parse_ttl(&ttl) {
             Some(secs) => Form::Grant {
                 scope,
@@ -257,7 +286,10 @@ pub fn parse_ttl(raw: &str) -> Option<i64> {
     if raw.is_empty() {
         return Some(1800);
     }
-    if !raw.bytes().all(|b| b.is_ascii_digit() || b"smhSMH".contains(&b)) {
+    if !raw
+        .bytes()
+        .all(|b| b.is_ascii_digit() || b"smhSMH".contains(&b))
+    {
         return None;
     }
     let lower = raw.to_ascii_lowercase();
@@ -270,9 +302,9 @@ pub fn parse_ttl(raw: &str) -> Option<i64> {
     if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let v = n
-        .bytes()
-        .fold(0i64, |acc, b| acc.wrapping_mul(10).wrapping_add(i64::from(b - b'0')));
+    let v = n.bytes().fold(0i64, |acc, b| {
+        acc.wrapping_mul(10).wrapping_add(i64::from(b - b'0'))
+    });
     Some(v.wrapping_mul(mult))
 }
 
@@ -318,7 +350,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return Some(gate.stop());
     }
     let port = settings.port_text.as_deref().and_then(super::curl_port)?;
-    Some(run_with(args, form, target, settings, port, hook_sock.as_deref()))
+    Some(run_with(
+        args,
+        form,
+        target,
+        settings,
+        port,
+        hook_sock.as_deref(),
+    ))
 }
 
 fn run_with(
@@ -434,7 +473,10 @@ fn answer(client: &mut Client, closing: &mut Closing, form: Form) -> Result<Exit
             (raw, status_lines)
         }
         Form::Switch { on } => {
-            let route = format!("/cli/remote-session/{}", if *on { "enable" } else { "disable" });
+            let route = format!(
+                "/cli/remote-session/{}",
+                if *on { "enable" } else { "disable" }
+            );
             (
                 held_call(client, closing, &route, Call::PostJson(b"{}"))?,
                 switch_lines,
@@ -560,7 +602,10 @@ pub fn print_err(raw: &[u8]) -> Shown {
             let e = py::str_of(&err);
             o.err(&format!("Error: {e}"));
             let low = e.to_lowercase();
-            if ["token", "forbidden", "owner"].iter().any(|w| low.contains(w)) {
+            if ["token", "forbidden", "owner"]
+                .iter()
+                .any(|w| low.contains(w))
+            {
                 o.err("  \u{2192} requires owner/admin token (or a live k2rs_ grant for shell/write/read)");
                 Ok(Exit::Refused)
             } else {
@@ -614,7 +659,11 @@ fn dict_err(o: &mut Out, ep: &[(Text, Value)], err: &Value) -> Result<Exit, Rais
         return Ok(Exit::Error);
     }
     if let Some(t) = teach(&code) {
-        let base = if hint.is_empty() { t.clone() } else { hint.clone() };
+        let base = if hint.is_empty() {
+            t.clone()
+        } else {
+            hint.clone()
+        };
         o.err(&format!("Error: {base}"));
         if !hint.is_empty() && !hint.contains(&t) {
             o.err(&format!("  \u{2192} {t}"));
@@ -746,7 +795,10 @@ fn first(v: &Value, n: usize, line: u32) -> Result<Value, Raise> {
 /// `status`'s lines.
 pub fn status_lines(d: &Value, o: &mut Out) -> Result<(), Raise> {
     let on = at(d, "enabled", 4)?.is_some_and(py::truthy);
-    o.out(&format!("Remote Sessions: {}", if on { "ON" } else { "OFF" }));
+    o.out(&format!(
+        "Remote Sessions: {}",
+        if on { "ON" } else { "OFF" }
+    ));
     let grants = at(d, "activeGrants", 5)?
         .cloned()
         .unwrap_or(Value::Int("0".into()));
@@ -790,7 +842,10 @@ pub fn status_lines(d: &Value, o: &mut Out) -> Result<(), Raise> {
 /// `enable` and `disable`'s lines.
 pub fn switch_lines(d: &Value, o: &mut Out) -> Result<(), Raise> {
     let on = at(d, "enabled", 4)?.is_some_and(py::truthy);
-    o.out(&format!("Remote Sessions: {}", if on { "ON" } else { "OFF" }));
+    o.out(&format!(
+        "Remote Sessions: {}",
+        if on { "ON" } else { "OFF" }
+    ));
     if let Some(k) = at(d, "killedSessions", 5)?.filter(|k| **k != Value::Null) {
         o.out(&format!("Killed sessions: {}", py::str_of(k)));
     }
@@ -802,7 +857,10 @@ pub fn grant_lines(d: &Value, o: &mut Out) -> Result<(), Raise> {
     let g = or(at(d, "grant", 4)?, Value::Object(Vec::new()));
     let tok = or(at(d, "token", 5)?, s(""));
     let gid = or(at(&g, "id", 6)?, s("?"));
-    let exp = or(at(&g, "expiresAt", 7)?, at(&g, "expires_at", 7)?.cloned().unwrap_or(Value::Null));
+    let exp = or(
+        at(&g, "expiresAt", 7)?,
+        at(&g, "expires_at", 7)?.cloned().unwrap_or(Value::Null),
+    );
     let mut warned = false;
     let exp_s = if py::truthy(&exp) {
         utc(o, Some(&exp), GRANT_UTC_LINE, &mut warned)
@@ -810,7 +868,10 @@ pub fn grant_lines(d: &Value, o: &mut Out) -> Result<(), Raise> {
         "?".to_string()
     };
     o.out(&format!("Grant id: {}", py::str_of(&gid)));
-    o.out(&format!("Token (save now, shown once): {}", py::str_of(&tok)));
+    o.out(&format!(
+        "Token (save now, shown once): {}",
+        py::str_of(&tok)
+    ));
     o.out(&format!("Expires: {exp_s}"));
     if let Some(l) = at(&g, "label", 15)?.filter(|l| py::truthy(l)) {
         o.out(&format!("Label: {}", py::str_of(l)));
@@ -875,7 +936,10 @@ pub fn shell_lines(d: &Value, o: &mut Out) -> Result<(), Raise> {
         py::str_of(&or(at(d, "grantId", 6)?, s("?")))
     ));
     let ready = at(d, "ready", 7)?.is_some_and(py::truthy);
-    o.out(&format!("ready:     {}", if ready { "true" } else { "false" }));
+    o.out(&format!(
+        "ready:     {}",
+        if ready { "true" } else { "false" }
+    ));
     o.out("");
     o.out("Next:");
     let cli = cli_name!();

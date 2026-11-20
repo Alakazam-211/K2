@@ -372,9 +372,11 @@ fn parse_add(rest: &[&str]) -> Form {
             "owner" | "admin" | "member" => {}
             "voice_chat" | "voice-chat" => a.role = "voice_chat".into(),
             "viewer" | "Viewer" | "VIEWER" => return Form::Stop(Stop::usage(VIEWER_REMOVED)),
-            other => return need(&format!(
-                "invalid role '{other}' (expected owner|admin|member|voice_chat)"
-            )),
+            other => {
+                return need(&format!(
+                    "invalid role '{other}' (expected owner|admin|member|voice_chat)"
+                ))
+            }
         }
     }
     if (!a.agents.is_empty() || !a.gardens.is_empty() || !a.sources.is_empty())
@@ -614,7 +616,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return Some(gate.stop());
     }
     let port = settings.port_text.as_deref().and_then(super::curl_port)?;
-    Some(run_with(args, form, settings, port, hook_sock.as_deref(), decode))
+    Some(run_with(
+        args,
+        form,
+        settings,
+        port,
+        hook_sock.as_deref(),
+        decode,
+    ))
 }
 
 fn run_with(

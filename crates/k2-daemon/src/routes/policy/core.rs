@@ -291,6 +291,10 @@ pub(super) const ROWS: &[Route] = &[
     // Named Postgres clusters (0.46.11): reading is any login; the handler's
     // versions_access gate decides every POST (owner or the agent switch).
     both("/cli/db/clusters", Member),
+    // `k2 db cluster archive <n> on|off` (0.46.17): the handler admits the
+    // owner (token or Owner login) or an agent passport with the Postgres
+    // versions switch, as `cluster restart` does; an Admin login is refused.
+    post("/cli/db/clusters/archive", Owner),
     post("/cli/db/create", Member),
     both("/cli/db/doctor", Admin),
     post("/cli/db/drop", Member),

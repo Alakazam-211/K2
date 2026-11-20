@@ -16,6 +16,8 @@ NAMED CLUSTERS (0.46.11)
   refuses its databases: named_cluster_fixed) and is never removed by K2.
   A cluster made outside K2 (another name on the same major) is listed as
   foreign and never touched, offered to an App or taken over.
+  `k2 db cluster archive feedback on|off` (0.46.17) turns its WAL archive
+  on or off later, with one restart; off keeps the spool and its WAL.
 
 THE MOVE (one database at a time, by copy)
   k2 db upgrade <db> --check      read-only: majors, the target cluster

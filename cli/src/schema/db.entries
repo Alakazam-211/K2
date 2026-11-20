@@ -24,10 +24,10 @@
     {
       "name": "db clusters",
       "usage": "k2 db clusters [--health] [--json]",
-      "description": "The Postgres clusters on this box: each major's main cluster (the first on 5432, the rest 5433-5449), the named clusters K2 made (17/feedback), and any cluster made outside K2 (recorded foreign: K2 never touches it). How many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check). --health adds, for each K2 cluster (never a foreign one), its connections, each database's size and the WAL archive's counters: what a monitor reads.",
+      "description": "The Postgres clusters on this box: each major's main cluster (the first on 5432, the rest 5433-5449), the named clusters K2 made (17/feedback), and any cluster made outside K2 (recorded foreign: K2 never touches it). How many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check). --health adds, for each K2 cluster (never a foreign one), its connections, each database's size, the WAL archive's counters and its current WAL position (archiver.currentLsn; null when the cluster isn't running): what a monitor reads.",
       "args": [],
       "flags": [
-        {"name": "--health", "arg": null, "description": "Connections, database sizes and the WAL archiver for each K2 cluster."},
+        {"name": "--health", "arg": null, "description": "Connections, database sizes and the WAL archiver for each K2 cluster: archivedCount, lastArchivedAt, failedCount, lastFailedAt and currentLsn (pg_current_wal_lsn() as text, e.g. 0/1A2B3C4D). A cluster that isn't running answers online false and those five null."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -41,6 +41,15 @@
         {"name": "--port", "arg": "port", "description": "A free port in 5433-5449 (default: the first free one)."},
         {"name": "--wal-archive", "arg": null, "description": "Archive WAL into the cluster's spool (archive_mode on, archive_timeout 300 s)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster archive",
+      "usage": "k2 db cluster archive <name> on|off [--json]",
+      "description": "Turn WAL archiving on or off on an existing named cluster K2 made, through the root helper (protocol 18): on writes the same archive settings as create --wal-archive (archive_mode on, archive_timeout 300 s, every finished WAL segment copied to /var/lib/postgresql/k2-wal/<major>-<name>); off removes those settings only and never deletes the spool or the WAL already in it, which stay for the backup to ship and prune. A running cluster restarts so archive_mode takes effect (its connections drop and come back); a stopped one takes it at its next start. Already in that state: nothing changes and nothing restarts. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster (exit 3 otherwise).",
+      "args": [{"name": "name", "required": true}, {"name": "on|off", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output: cluster, walArchive, changed, restarted, walSpool (and walSpoolKept for off)."}
       ]
     },
     {

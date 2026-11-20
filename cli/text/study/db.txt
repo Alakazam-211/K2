@@ -56,6 +56,14 @@ OWNER VERBS (agents exit 3)
   cap <n> (set this workspace's database cap)
   Ask your human. Do not retry-loop.
 
+NAMED CLUSTERS (the owner, or the Postgres-versions switch)
+  k2 db cluster create 17 --name <n> [--wal-archive]   its own cluster
+  k2 db cluster archive <n> on|off   WAL archive later (one restart);
+                                     off keeps the spool and its WAL
+  k2 db clusters --health --json     archiver: archivedCount,
+    lastArchivedAt, failedCount, lastFailedAt, currentLsn (text LSN,
+    0/1A2B3C4D); all null when the cluster isn't running.
+
 DSN
   `k2 db dsn` prints it without its password (0.46.11). A command that
   needs it: k2 db run [--db <name>] -- <cmd>. The connection string,

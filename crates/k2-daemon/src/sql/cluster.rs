@@ -859,8 +859,64 @@ pub fn restart_named(ops: &dyn SystemOps, c: &Cluster) -> Result<serde_json::Val
     Ok(serde_json::from_str(raw.trim()).unwrap_or_else(|_| serde_json::json!({"unit": c.unit})))
 }
 
+/// `k2 db cluster archive <name> on|off` (0.46.17): the helper turns WAL
+/// archiving on or off on that named cluster (`pg wal-archive <M>-<name>
+/// on|off`, protocol 18: the same canned conf and spool as `create
+/// --wal-archive`; off removes the conf and keeps the spool), restarts it
+/// when it runs, and K2's record follows. Already so: the helper answers
+/// `changed: false` and nothing restarts. The caller has resolved and
+/// gated the cluster ([`named_target`]).
+pub fn archive_named(ops: &dyn SystemOps, c: &Cluster, on: bool) -> Result<serde_json::Value, EnsureError> {
+    ops.helper_pgarchive().map_err(EnsureError::Helper)?;
+    let wire = c.wire();
+    let raw = ops.run_helper(&["wal-archive", &wire, if on { "on" } else { "off" }], None).map_err(|e| {
+        if e.contains("not_k2_cluster") {
+            EnsureError::Refused(e)
+        } else {
+            EnsureError::Helper(e)
+        }
+    })?;
+    let v: serde_json::Value =
+        serde_json::from_str(raw.trim()).map_err(|e| EnsureError::Helper(format!("wal-archive: not JSON ({e})")))?;
+    let vouched = v.get("k2Named").and_then(serde_json::Value::as_bool) == Some(true);
+    let same = v.get("major").and_then(serde_json::Value::as_u64) == Some(u64::from(c.major))
+        && v.get("name").and_then(serde_json::Value::as_str) == Some(c.name.as_str());
+    let now_on = v.get("walArchive").and_then(serde_json::Value::as_bool);
+    if !vouched || !same || now_on != Some(on) {
+        return Err(EnsureError::Helper(format!(
+            "wal-archive {wire} answered {}/{} (k2Named {vouched}, walArchive {now_on:?}) — not the change asked for",
+            v.get("major").unwrap_or(&serde_json::Value::Null),
+            v.get("name").unwrap_or(&serde_json::Value::Null)
+        )));
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE sql_clusters SET wal_archive = ?3, updated_at = ?4 WHERE major = ?1 AND name = ?2",
+            rusqlite::params![c.major as i64, c.name, on as i64, now_secs()],
+        )
+        .map_err(|e| EnsureError::Helper(format!("record the archive setting: {e}")))?;
+    }
+    let flag = |k: &str| v.get(k).and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let mut out = serde_json::json!({
+        "cluster": c.label(),
+        "walArchive": on,
+        "changed": flag("changed"),
+        "restarted": flag("restarted"),
+        "walSpool": k2_root_proto::pg_named::wal_spool(c.major, &c.name),
+    });
+    if !on {
+        out["walSpoolKept"] = serde_json::json!(flag("walSpoolKept"));
+    }
+    Ok(out)
+}
+
 /// What k2-watch reads (prd-named-pg-clusters-v1 §8): connections, each
 /// database's size and the WAL archiver, by one fixed query as postgres.
+/// `archiver.currentLsn` (0.46.17) is `pg_current_wal_lsn()` as text
+/// (`0/1A2B3C4D`), read as the live dual-run reads it; null on a server in
+/// recovery, where it has no current write position.
 pub const HEALTH_SQL: &str = "SELECT json_build_object(\
 'connections', (SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE backend_type = 'client backend'), \
 'maxConnections', current_setting('max_connections')::int, \
@@ -868,12 +924,24 @@ pub const HEALTH_SQL: &str = "SELECT json_build_object(\
 'databases', (SELECT coalesce(json_agg(json_build_object('name', datname, 'bytes', pg_catalog.pg_database_size(datname)) ORDER BY datname), '[]'::json) \
 FROM pg_catalog.pg_database WHERE NOT datistemplate), \
 'archiver', (SELECT json_build_object('archivedCount', archived_count, 'lastArchivedAt', last_archived_time, \
-'failedCount', failed_count, 'lastFailedAt', last_failed_time) FROM pg_catalog.pg_stat_archiver));\n";
+'failedCount', failed_count, 'lastFailedAt', last_failed_time, \
+'currentLsn', CASE WHEN pg_catalog.pg_is_in_recovery() THEN NULL ELSE pg_catalog.pg_current_wal_lsn()::text END) \
+FROM pg_catalog.pg_stat_archiver));\n";
+
+/// The health block of a cluster that isn't running: `online: false`, and
+/// the archiver's fields (`currentLsn` among them) null, so a reader finds
+/// `archiver.currentLsn` on every K2 cluster.
+pub fn health_down() -> serde_json::Value {
+    serde_json::json!({
+        "online": false,
+        "archiver": {"archivedCount": null, "lastArchivedAt": null, "failedCount": null, "lastFailedAt": null, "currentLsn": null},
+    })
+}
 
 /// One K2 cluster's health block (never a foreign one: the caller filters).
 pub fn health_of(ops: &dyn SystemOps, c: &Cluster) -> serde_json::Value {
     if c.state != "online" {
-        return serde_json::json!({"online": false});
+        return health_down();
     }
     match c.helper_psql(ops, "postgres", &["-v", "ON_ERROR_STOP=1", "-tA"], Some(HEALTH_SQL.as_bytes())) {
         Ok(out) => match serde_json::from_str::<serde_json::Value>(out.trim()) {

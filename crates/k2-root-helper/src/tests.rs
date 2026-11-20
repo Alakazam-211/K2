@@ -965,7 +965,8 @@ fn store_state_reports_config_json_and_the_store() {
     // The daemon gates both verbs on this.
     let v = json_of(&t.call(&["helper", "version"]));
     assert_eq!(v["namespaces"]["mailmodes"], true, "{v}");
-    assert_eq!(v["protocol"], k2_root_proto::version::MAIL_MODES_MIN_PROTOCOL);
+    assert_eq!(v["protocol"], k2_root_proto::version::PROTOCOL);
+    assert!(v["protocol"].as_u64().expect("number") >= u64::from(k2_root_proto::version::MAIL_MODES_MIN_PROTOCOL));
 }
 
 #[test]

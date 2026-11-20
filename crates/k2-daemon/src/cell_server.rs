@@ -1139,6 +1139,16 @@ mod unix_impl {
                 let who = crate::sql::pgmove::k2::classify(&who, true);
                 from_cli(crate::sql::named_routes::handle(crate::sql::routes::current_ops(), who, is_post, body, params))
             }
+            // `k2 db cluster archive <name> on|off` (0.46.17): POST only, the
+            // same local-agent rule as `cluster restart`.
+            p if p == "/cli/db/clusters/archive" => {
+                if !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                let who = crate::sql::pgmove::k2::classify(&who, true);
+                from_cli(crate::sql::named_routes::handle_archive(crate::sql::routes::current_ops(), who, is_post, body))
+            }
             p if crate::compute_routes::is_route(p) && !crate::compute_routes::is_socket(p) => {
                 if crate::compute_routes::is_post_route(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());

@@ -121,6 +121,9 @@ impl SystemOps for NamedOps {
     fn helper_pgnamed(&self) -> Result<(), String> {
         Ok(())
     }
+    fn helper_pgarchive(&self) -> Result<(), String> {
+        Ok(())
+    }
     fn run_helper(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
         self.calls.lock().unwrap().push(args.join(" "));
         let named = |t: &str| -> Result<(String, u16), String> {
@@ -197,6 +200,39 @@ impl SystemOps for NamedOps {
                 self.stop(&n)?;
                 self.start(&n, port)?;
                 Ok(serde_json::json!({"unit": k2_root_proto::pg_named::unit(17, &n), "op": "restart", "online": true}).to_string())
+            }
+            // `pg wal-archive <M>-<name> on|off` (protocol 18): the canned
+            // conf written or removed (the spool kept), then a restart.
+            ["wal-archive", r, v] => {
+                let (n, port) = named(r)?;
+                let on = match *v {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("refused arguments".into()),
+                };
+                let spool = self.root.join("k2-wal").join(format!("17-{n}"));
+                let conf_path = self.data(&n).join("conf.d").join(k2_root_proto::pg_named::WAL_ARCHIVE_CONF_FILE);
+                let conf = k2_root_proto::pg_named::wal_archive_conf(17, &n)
+                    .replace(k2_root_proto::pg_named::WAL_SPOOL_ROOT, &self.root.join("k2-wal").to_string_lossy());
+                let now = std::fs::read_to_string(&conf_path).ok();
+                let changed = if on { now.as_deref() != Some(conf.as_str()) } else { now.is_some() };
+                if changed {
+                    if on {
+                        std::fs::create_dir_all(&spool).map_err(|e| e.to_string())?;
+                        std::fs::write(&conf_path, &conf).map_err(|e| e.to_string())?;
+                    } else {
+                        std::fs::remove_file(&conf_path).map_err(|e| e.to_string())?;
+                    }
+                    self.stop(&n)?;
+                    self.start(&n, port)?;
+                }
+                let mut j = self.json_of(&n, port, true, on);
+                j["changed"] = serde_json::json!(changed);
+                j["restarted"] = serde_json::json!(changed);
+                if !on {
+                    j["walSpoolKept"] = serde_json::json!(spool.is_dir());
+                }
+                Ok(j.to_string())
             }
             _ => Err(format!("helper {} is not part of the drill", args.join(" "))),
         }
@@ -386,6 +422,42 @@ fn real_pg_named_cluster_beside_a_hand_made_one() {
     c.check(
         "WAL archive: a segment lands in the spool, the archiver counts it",
         want(archived > 0 && h2["archiver"]["archivedCount"].as_u64().unwrap_or(0) >= 1 && h2["archiver"]["failedCount"] == 0, format!("{archived} files; {h2}")),
+    );
+    // 0.46.17: `archiver.currentLsn` is the server's own WAL position.
+    let lsn_of = |h: &serde_json::Value| -> Option<String> {
+        let s = h["archiver"]["currentLsn"].as_str()?;
+        let (a, b) = s.split_once('/')?;
+        let hex = |p: &str| !p.is_empty() && p.bytes().all(|c| c.is_ascii_hexdigit());
+        (hex(a) && hex(b)).then(|| s.to_string())
+    };
+    c.check("health: archiver.currentLsn is an LSN (hex/hex)", want(lsn_of(&h2).is_some(), h2.to_string()));
+    // 0.46.17: `k2 db cluster archive feedback off`, then on again.
+    c.check(
+        "archive off: archive_mode off after the restart, the spool and its WAL kept",
+        cluster::archive_named(ops, &cl, false).map_err(|e| format!("{e:?}")).and_then(|v| {
+            let h = cluster::health_of(ops, &cl);
+            let kept = std::fs::read_dir(&spool).map(|d| d.count()).unwrap_or(0);
+            want(
+                v["changed"] == true && v["walSpoolKept"] == true && h["archiveMode"] == "off" && kept >= archived && !cluster::for_name("feedback").is_some_and(|r| r.wal_archive),
+                format!("{v}; {h}; {kept} files"),
+            )
+        }),
+    );
+    c.check(
+        "archive on: archive_mode on after the restart, recorded",
+        cluster::archive_named(ops, &cl, true).map_err(|e| format!("{e:?}")).and_then(|v| {
+            let h = cluster::health_of(ops, &cl);
+            want(
+                v["changed"] == true && h["archiveMode"] == "on" && cluster::for_name("feedback").is_some_and(|r| r.wal_archive),
+                format!("{v}; {h}"),
+            )
+        }),
+    );
+    c.check(
+        "archive on again: nothing changes, no restart",
+        cluster::archive_named(ops, &cl, true)
+            .map_err(|e| format!("{e:?}"))
+            .and_then(|v| want(v["changed"] == false && v["restarted"] == false, v.to_string())),
     );
     c.check(
         "restart only that cluster, then it answers again",

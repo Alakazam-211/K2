@@ -10467,6 +10467,25 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // `k2 db cluster archive <name> on|off` (0.46.17): POST only; the
+        // same caller classification and gate as `cluster restart`.
+        p if p == "/cli/db/clusters/archive" => {
+            if !is_post {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::cli_response::CliResponse::method_not_allowed();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let who = crate::sql::pgmove::k2::classify(&who, false);
+            let r = tokio::task::spawn_blocking(move || {
+                crate::sql::named_routes::handle_archive(crate::sql::routes::current_ops(), who, is_post, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p == "/cli/db/query" => {
             if !is_post {
                 let _ = stream.read(&mut buf).await;

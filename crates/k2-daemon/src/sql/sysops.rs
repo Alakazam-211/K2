@@ -126,6 +126,11 @@ pub trait SystemOps: Send + Sync {
     fn helper_pgnamed(&self) -> Result<(), String> {
         pgnamed_gate()
     }
+    /// Does the root helper turn archiving on or off on a named cluster
+    /// (protocol 18, `namespaces.pgarchive`)? `Err` = `helper_needed: …`.
+    fn helper_pgarchive(&self) -> Result<(), String> {
+        pgarchive_gate()
+    }
 }
 
 /// Production implementation.
@@ -218,6 +223,11 @@ impl SystemOps for RealSystemOps {
         // a 14 helper sees it (it would refuse the argv anyway).
         if needs_pgnamed(args) {
             pgnamed_gate()?;
+        }
+        // `wal-archive <M>-<name> on|off` (protocol 18): refused here before
+        // a 17 helper sees it.
+        if needs_pgarchive(args) {
+            pgarchive_gate()?;
         }
         if crate::root_helper::state().usable(crate::root_helper::PG_MIN_PROTOCOL) {
             let argv = crate::root_helper::pg_argv(args)?;
@@ -321,6 +331,34 @@ pub fn needs_pgnamed(args: &[&str]) -> bool {
         Some("systemctl") => named(args.last()),
         _ => false,
     }
+}
+
+/// Helper argv that turns a named cluster's WAL archiving on or off
+/// (`wal-archive <M>-<name> on|off`, protocol 18).
+pub fn needs_pgarchive(args: &[&str]) -> bool {
+    args.first().copied() == Some("wal-archive")
+}
+
+/// `Ok` when the root helper speaks `pg wal-archive` (protocol ≥ 18 and
+/// `namespaces.pgarchive`), else the `helper_needed: …` message.
+pub fn pgarchive_gate() -> Result<(), String> {
+    use k2_root_proto::version::PGARCHIVE_MIN_PROTOCOL;
+    let st = crate::root_helper::state();
+    if pgarchive_ok(&st) {
+        Ok(())
+    } else {
+        Err(crate::root_helper::helper_needed(
+            "turning WAL archiving on or off on a named Postgres cluster",
+            PGARCHIVE_MIN_PROTOCOL,
+            &st,
+        ))
+    }
+}
+
+/// Pure: protocol ≥ 18 and `namespaces.pgarchive == true`.
+pub fn pgarchive_ok(st: &crate::root_helper::RootHelperState) -> bool {
+    let ns = st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/pgarchive")).and_then(serde_json::Value::as_bool) == Some(true);
+    st.usable(k2_root_proto::version::PGARCHIVE_MIN_PROTOCOL) && ns
 }
 
 /// `Ok` when the root helper speaks named clusters (protocol ≥ 15 and
@@ -1427,6 +1465,13 @@ impl SystemOps for FakeSystemOps {
             Err("helper_needed: a named Postgres cluster needs k2-root-helper protocol 15 (this box: protocol 14). Run `k2 root-helper update`.".into())
         }
     }
+    fn helper_pgarchive(&self) -> Result<(), String> {
+        if self.query_answers.contains_key("helper pgarchive") {
+            Ok(())
+        } else {
+            Err("helper_needed: turning WAL archiving on or off on a named Postgres cluster needs k2-root-helper protocol 18 (this box: protocol 17). Run `k2 root-helper update`.".into())
+        }
+    }
     fn run_helper(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
         let joined = args.join(" ");
         if joined.contains("apt") {
@@ -1437,13 +1482,16 @@ impl SystemOps for FakeSystemOps {
         if needs_pgnamed(args) {
             self.helper_pgnamed()?;
         }
+        if needs_pgarchive(args) {
+            self.helper_pgarchive()?;
+        }
         if args.first().copied() == Some("psql") && !helper_psql_argv_ok(&args[1..]) {
             return Err(format!("k2-pg-helper would refuse psql argv: {joined}"));
         }
         // The `pgmajor` verbs answer only what a test set up
         // (`query_answers["helper <argv>"]`); otherwise the box's helper is
         // too old, like a protocol-8 helper on the fleet.
-        if matches!(args.first().copied(), Some("clusters" | "ensure-cluster" | "add-major")) {
+        if matches!(args.first().copied(), Some("clusters" | "ensure-cluster" | "add-major" | "wal-archive")) {
             return match self.query_answers.get(&format!("helper {joined}")) {
                 Some(a) => {
                     self.record(format!("helper {joined} stdin=0"));
@@ -1482,6 +1530,13 @@ impl SystemOps for FakeSystemOps {
         let sql = stdin
             .map(|b| String::from_utf8_lossy(b).to_string())
             .unwrap_or_default();
+        // A cluster's health query (`k2 db clusters --health`): the answer a
+        // test set up, as a running Postgres would give it.
+        if sql == crate::sql::cluster::HEALTH_SQL {
+            if let Some(a) = self.query_answers.get("helper health") {
+                return Ok(a.clone());
+            }
+        }
         let mut pg = self.pg.lock().unwrap_or_else(|p| p.into_inner());
         if !sql.is_empty() {
             pg.helper_sql.push(sql.clone());

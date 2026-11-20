@@ -150,6 +150,17 @@
 //!   refuses both verbs, so the daemon leaves the tree as it is until the
 //!   helper updates. Another 0.46.14 lane that needs a helper change joins
 //!   17 here with its own namespace flag; never 18 before 17 ships.
+//! - 18 = every root-helper change 0.46.17 makes, in one bump, shared by
+//!   every lane (the ONE place to add to it; 17 shipped in 0.46.14 and
+//!   0.46.15 and 0.46.16 shipped it unchanged): `pg wal-archive
+//!   <M>-<name> on|off`, WAL archiving turned on or off on an existing
+//!   named cluster the helper made (the same canned conf and spool as
+//!   `ensure-cluster --wal-archive`; off removes the conf and keeps the
+//!   spool; the record follows; a running cluster restarts). Under
+//!   `namespaces.pgarchive`, [`PGARCHIVE_MIN_PROTOCOL`]; a 17 helper
+//!   refuses the argv, so the daemon asks for the update before it sends
+//!   it. Another 0.46.17 lane that needs a helper change joins 18 here with
+//!   its own namespace flag; never 19 before 18 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -158,7 +169,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 17;
+pub const PROTOCOL: u32 = 18;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -210,6 +221,10 @@ pub const DESKTOP_MIN_PROTOCOL: u32 = 16;
 /// `mail store-state`, `0750` from `mail mkdir` and `UMask=0027` in the
 /// drop-in. Gated on this AND `namespaces.mailmodes == true`.
 pub const MAIL_MODES_MIN_PROTOCOL: u32 = 17;
+/// `pg wal-archive <M>-<name> on|off` (0.46.17): archiving on an existing
+/// named cluster. Gated on this AND `namespaces.pgarchive == true`: a 17
+/// helper refuses the argv.
+pub const PGARCHIVE_MIN_PROTOCOL: u32 = 18;
 /// Sew's recorder install (`engine sew recording …`, 0.46.11 K-a). Gated on
 /// this AND `namespaces.sewrecording == true`: a 14 helper refuses the argv.
 pub const SEW_RECORDING_MIN_PROTOCOL: u32 = 15;
@@ -399,7 +414,12 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 17, "protocol 17 = 0.46.14's one bump (Stalwart's tree for Stalwart alone); 16 = 0.46.12's (the virtual desktop's packages)");
+        assert_eq!(PROTOCOL, 18, "protocol 18 = 0.46.17's one bump (archiving on an existing named cluster); 17 = 0.46.14's (Stalwart's tree for Stalwart alone)");
+        assert_eq!(PGARCHIVE_MIN_PROTOCOL, 18, "pg wal-archive joins 0.46.17's one bump");
+        assert!(
+            crate::verbs::catalog().iter().any(|v| v.argv() == ["pg", "wal-archive", "17-feedback", "off"]),
+            "protocol 18 carries pg wal-archive"
+        );
         assert_eq!(MAIL_MODES_MIN_PROTOCOL, 17, "mail tighten / store-state join 0.46.14's one bump");
         for argv in [&["mail", "tighten", "data"][..], &["mail", "store-state"][..]] {
             assert!(

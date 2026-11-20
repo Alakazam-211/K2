@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 0.46.11 (prd-named-pg-clusters-v1): `k2 db cluster create|restart`,
-# `k2 db create --cluster` and `k2 db clusters --health`. A local fake
+# `k2 db create --cluster` and `k2 db clusters --health`; 0.46.17:
+# `k2 db cluster archive <name> on|off` (POST /cli/db/clusters/archive) and
+# the health block's `archiver.currentLsn`. A local fake
 # daemon stands in: it logs each request (method, path, body) and answers
 # POST /cli/db/clusters like the real route (create, restart, create-db;
 # a refusal for 17/k2db, a cluster made outside K2). No real daemon.
@@ -51,8 +53,23 @@ class H(http.server.BaseHTTPRequestHandler):
             if q.get("health") == "1":
                 rows[0]["health"] = {"online": True, "connections": 2, "maxConnections": 50, "databases": [{"name": "ws_a", "bytes": 8388608}], "archiveMode": "off"}
                 rows[2]["health"] = {"online": True, "connections": 3, "maxConnections": 50, "databases": [{"name": "feedback", "bytes": 9437184}],
-                                     "archiveMode": "on", "archiver": {"archivedCount": 7, "lastArchivedAt": "2026-11-10T01:00:00Z", "failedCount": 0, "lastFailedAt": None}}
+                                     "archiveMode": "on", "archiver": {"archivedCount": 7, "lastArchivedAt": "2026-11-10T01:00:00Z", "failedCount": 0, "lastFailedAt": None, "currentLsn": "0/1A2B3C4D"}}
             out = {"ok": True, "clusters": rows}
+        elif u.path == "/cli/db/clusters/archive":
+            b = json.loads(body or "{}")
+            spool = "/var/lib/postgresql/k2-wal/17-feedback"
+            if self.command != "POST":
+                status, out = 405, {"error": "POST required"}
+            elif b.get("name") == "k2db":
+                status, out = 409, {"ok": False, "error": {"code": "cluster_refused", "hint": "17/k2db on this box is a cluster K2 didn't make"}}
+            elif b.get("name") == "oldhelper":
+                status, out = 409, {"ok": False, "error": {"code": "helper_needed", "hint": "needs k2-root-helper protocol 18"}}
+            elif b.get("archive") == "off":
+                out = {"ok": True, "cluster": "17/feedback", "walArchive": False, "changed": True, "restarted": True, "walSpool": spool, "walSpoolKept": True}
+            elif b.get("archive") == "on":
+                out = {"ok": True, "cluster": "17/feedback", "walArchive": True, "changed": False, "restarted": False, "walSpool": spool}
+            else:
+                status, out = 400, {"ok": False, "error": {"code": "usage", "hint": "k2 db cluster archive <name> on|off"}}
         elif u.path == "/cli/db/clusters":
             b = json.loads(body or "{}")
             if b.get("name") == "k2db" or b.get("cluster") == "k2db":
@@ -100,12 +117,29 @@ help="$("$CLI" db --help)"
 echo "$help" | grep -q 'cluster create <M> --name <n>' || fail "k2 db --help must list cluster create"
 echo "$help" | grep -q 'cluster restart <name>' || fail "k2 db --help must list cluster restart"
 echo "$help" | grep -q 'create --cluster <name>' || fail "k2 db --help must list create --cluster"
+echo "$help" | grep -q 'cluster archive <name> on|off' || fail "k2 db --help must list cluster archive"
+echo "$help" | grep -q 'the spool and the WAL already in it' || fail "k2 db --help must say off keeps the spool"
 "$CLI" study db-upgrade | grep -q 'NAMED CLUSTERS' || fail "k2 study db-upgrade must explain named clusters"
+"$CLI" study db-upgrade | grep -q 'k2 db cluster archive feedback on|off' || fail "k2 study db-upgrade must name cluster archive"
+study_db="$("$CLI" study db)"
+echo "$study_db" | grep -q 'k2 db cluster archive <n> on|off' || fail "k2 study db must name cluster archive"
+echo "$study_db" | grep -q 'currentLsn' || fail "k2 study db must document archiver.currentLsn"
+echo "$study_db" | grep -q 'off keeps the spool' || fail "k2 study db must say off keeps the spool"
+python3 - "$ROOT/cli/src/schema/db.entries" <<'PYS' || fail "schema entry for db cluster archive"
+import json, re, sys
+text = open(sys.argv[1]).read()
+assert '"name": "db cluster archive"' in text, "no db cluster archive entry"
+assert 'k2 db cluster archive <name> on|off [--json]' in text, "usage"
+assert 'never deletes the spool' in text, "off keeps the spool"
+assert 'currentLsn' in text, "the health flag documents currentLsn"
+PYS
 
 # Usage errors exit 2 before any request.
 : >"$FAKE_DIR/requests.log"
 for args in "db cluster" "db cluster create" "db cluster create 17" "db cluster create seventeen --name feedback" \
     "db cluster create 17 --name feedback --port 80" "db cluster restart" "db cluster drop feedback" \
+    "db cluster archive" "db cluster archive feedback" "db cluster archive feedback yes" "db cluster archive feedback ON" \
+    "db cluster archive feedback on extra" "db cluster archive --json on" \
     "db create --cluster feedback --test" "db create --cluster feedback --db-access write"; do
     # shellcheck disable=SC2086
     run $args --workspace "$WS"
@@ -157,5 +191,41 @@ echo "$OUT" | grep -q 'WAL archive: 7 archived' || fail "archive line: $OUT"
 grep -q '^GET /cli/db/clusters {"health": "1"}' "$FAKE_DIR/requests.log" || fail "--health must ask health=1: $(cat "$FAKE_DIR/requests.log")"
 run db clusters --health --json --workspace "$WS"
 echo "$OUT" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert any(c.get("health") for c in v["clusters"]), v' || fail "clusters --json: $OUT"
+
+# archive: one POST to the archive route with the name and on|off.
+: >"$FAKE_DIR/requests.log"
+run db cluster archive feedback off --workspace "$WS"
+[ "$RC" -eq 0 ] || fail "cluster archive off must exit 0, got $RC: $OUT"
+echo "$OUT" | grep -q 'WAL archiving on 17/feedback is now off (restarted)' || fail "archive off output: $OUT"
+echo "$OUT" | grep -q 'spool kept: /var/lib/postgresql/k2-wal/17-feedback (nothing in it was removed)' || fail "archive off must say the spool stays: $OUT"
+[ "$(wc -l <"$FAKE_DIR/requests.log" | tr -d ' ')" = 1 ] || fail "archive off: one request: $(cat "$FAKE_DIR/requests.log")"
+grep -q '^POST /cli/db/clusters/archive ' "$FAKE_DIR/requests.log" || fail "archive route: $(cat "$FAKE_DIR/requests.log")"
+python3 - "$FAKE_DIR/requests.log" <<'PYA' || fail "archive body: $(cat "$FAKE_DIR/requests.log")"
+import json, sys
+line = open(sys.argv[1]).read().strip()
+body = json.loads(line.split(" ", 3)[3])
+assert body["name"] == "feedback" and body["archive"] == "off", body
+assert set(body) <= {"name", "archive", "project"}, body
+PYA
+run db cluster archive feedback on --workspace "$WS"
+[ "$RC" -eq 0 ] || fail "cluster archive on must exit 0, got $RC: $OUT"
+echo "$OUT" | grep -q 'WAL archiving on 17/feedback is already on (nothing changed)' || fail "archive on output: $OUT"
+echo "$OUT" | grep -q 'spool: /var/lib/postgresql/k2-wal/17-feedback' || fail "archive on must print the spool: $OUT"
+run db cluster archive feedback off --json --workspace "$WS"
+echo "$OUT" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["walArchive"] is False and v["walSpoolKept"] is True, v' || fail "archive --json: $OUT"
+# Refusals: a cluster made outside K2, an older root helper (exit 3).
+run db cluster archive k2db on --workspace "$WS"
+[ "$RC" -eq 3 ] || fail "archive k2db must exit 3, got $RC: $OUT"
+echo "$OUT" | grep -q '"code": *"cluster_refused"' || fail "archive k2db refusal: $OUT"
+run db cluster archive oldhelper on --workspace "$WS"
+[ "$RC" -eq 3 ] || fail "archive on an old helper must exit 3, got $RC: $OUT"
+echo "$OUT" | grep -q '"code": *"helper_needed"' || fail "archive old helper: $OUT"
+
+# --health: the archiver's current WAL position.
+run db clusters --health --workspace "$WS"
+echo "$OUT" | grep -q 'current WAL position: 0/1A2B3C4D' || fail "health must print the current LSN: $OUT"
+run db clusters --health --json --workspace "$WS"
+echo "$OUT" | python3 -c 'import json,sys; v=json.load(sys.stdin); fb=[c for c in v["clusters"] if c["name"]=="feedback"][0]; assert fb["health"]["archiver"]["currentLsn"]=="0/1A2B3C4D", fb' \
+    || fail "clusters --health --json must carry archiver.currentLsn: $OUT"
 
 echo "PASS: k2 db named clusters"

@@ -1229,7 +1229,7 @@ fn psql_cluster_runs_that_majors_psql_on_its_port() {
 fn version_announces_pgmajor_on_protocol_9() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 17, "pgmajor came in 9; 17 is 0.46.14's one bump (additive)");
+    assert_eq!(v["protocol"], 18, "pgmajor came in 9; 17 is 0.46.14's one bump (additive); 18 is 0.46.17's one bump");
     assert_eq!(v["namespaces"]["pgmajor"], true);
     assert_eq!(v["namespaces"]["pg"], true, "protocols are additive");
     const { assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL) };
@@ -1560,7 +1560,7 @@ fn schema_only_dump_force_kept_off_force_back_and_quiesce_repl() {
 fn version_announces_pgdual_on_protocol_10() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 17, "pgdual came in 10 (additive)");
+    assert_eq!(v["protocol"], 18, "pgdual came in 10 (additive); 18 is 0.46.17's one bump");
     assert_eq!(v["namespaces"]["pgdual"], true);
     assert_eq!(v["namespaces"]["creds"], true);
     assert_eq!(k2_root_proto::version::PGDUAL_MIN_PROTOCOL, 10);
@@ -1803,7 +1803,214 @@ fn named_verbs_are_the_daemons() {
 fn version_announces_pgnamed_on_protocol_15() {
     let t = box_root();
     let v: serde_json::Value = serde_json::from_slice(&t.call(&["helper", "version"]).stdout).unwrap();
-    assert_eq!(v["protocol"], 17, "pgnamed came in 15 (additive)");
+    assert_eq!(v["protocol"], 18, "pgnamed came in 15 (additive); 18 is 0.46.17's one bump");
     assert_eq!(v["namespaces"]["pgnamed"], true);
     assert_eq!(v["namespaces"]["pgmajor"], true, "protocols are additive");
+}
+
+// ── `pg wal-archive` (protocol 18, `namespaces.pgarchive`) ──────────────
+
+const FB_CONF: &str = "/etc/postgresql/17/feedback/conf.d/97-k2-wal-archive.conf";
+const FB_SPOOL: &str = "/var/lib/postgresql/k2-wal/17-feedback";
+
+fn named_rec(t: &T, m: u32, n: &str) -> k2_root_proto::pg_named::NamedRec {
+    let st: k2_root_proto::pg_named::NamedState =
+        serde_json::from_slice(&std::fs::read(t.p(k2_root_proto::pg_named::NAMED_STATE)).unwrap()).unwrap();
+    st.get(m, n).cloned().unwrap_or_else(|| panic!("no record for {m}/{n}: {st:?}"))
+}
+
+fn restarts_of(t: &T, unit: &str) -> usize {
+    t.non_query_calls().iter().filter(|c| **c == format!("{SYSTEMCTL} restart {unit}")).count()
+}
+
+#[test]
+fn version_announces_pgarchive_on_protocol_18() {
+    let t = box_root();
+    let v: serde_json::Value = serde_json::from_slice(&t.call(&["helper", "version"]).stdout).unwrap();
+    assert_eq!(v["protocol"], k2_root_proto::version::PGARCHIVE_MIN_PROTOCOL);
+    assert_eq!(v["namespaces"]["pgarchive"], true, "{v}");
+    assert_eq!(v["namespaces"]["pgnamed"], true, "protocols are additive");
+}
+
+/// Archiving on a named cluster made without it, then off: the same canned
+/// conf and spool as `ensure-cluster --wal-archive`, the record follows, a
+/// running cluster restarts, and off never removes the spool or its WAL.
+#[test]
+fn wal_archive_turns_on_and_off_on_an_existing_named_cluster() {
+    let (t, w) = akzm_box();
+    let before = k2db_trees(&t);
+    let v = json(&t.call(&["pg", "ensure-cluster", "17-feedback", "5434"]));
+    assert_eq!((v["created"].clone(), v["walArchive"].clone()), (json!(true), json!(false)), "{v}");
+    assert!(!t.p(FB_CONF).exists());
+    let unit = "postgresql@17-feedback.service";
+    assert_eq!(restarts_of(&t, unit), 0);
+
+    // On.
+    let v = json(&t.call(&["pg", "wal-archive", "17-feedback", "on"]));
+    for (k, want) in [
+        ("name", json!("feedback")),
+        ("port", json!(5434)),
+        ("k2Named", json!(true)),
+        ("walArchive", json!(true)),
+        ("walSpool", json!(FB_SPOOL)),
+        ("changed", json!(true)),
+        ("restarted", json!(true)),
+    ] {
+        assert_eq!(v[k], want, "{k}: {v}");
+    }
+    assert_eq!(std::fs::read_to_string(t.p(FB_CONF)).unwrap(), k2_root_proto::pg_named::wal_archive_conf(17, "feedback"));
+    assert!(
+        w.borrow().postgres_calls.iter().any(|c| c == &format!("/usr/bin/mkdir -p -m 0700 -- {FB_SPOOL}")),
+        "the spool is made by postgres, 0700: {:?}",
+        w.borrow().postgres_calls
+    );
+    assert!(named_rec(&t, 17, "feedback").wal_archive);
+    assert_eq!(restarts_of(&t, unit), 1, "archive_mode needs a restart");
+    // The create path now agrees (no archive_mismatch either way round).
+    assert_eq!(json(&t.call(&["pg", "ensure-cluster", "17-feedback", "--wal-archive"]))["created"], false);
+    assert!(t.call(&["pg", "ensure-cluster", "17-feedback"]).stderr.starts_with("archive_mismatch"));
+    let rows = json(&t.call(&["pg", "clusters"]));
+    let fb = rows["clusters"].as_array().unwrap().iter().find(|c| c["name"] == "feedback").unwrap().clone();
+    assert_eq!(fb["walArchive"], true, "{fb}");
+
+    // On again: idempotent, no write, no restart.
+    let n = t.non_query_calls().len();
+    let v = json(&t.call(&["pg", "wal-archive", "17-feedback", "on"]));
+    assert_eq!((v["changed"].clone(), v["restarted"].clone(), v["walArchive"].clone()), (json!(false), json!(false), json!(true)), "{v}");
+    assert!(t.non_query_calls()[n..].iter().all(|c| !c.contains(" restart ") && !c.contains(" start ")), "{:?}", &t.non_query_calls()[n..]);
+    assert_eq!(restarts_of(&t, unit), 1);
+
+    // WAL already in the spool (the fake runs no real postgres mkdir).
+    mkdirs(&t.root, &[FB_SPOOL]);
+    std::fs::write(t.p(&format!("{FB_SPOOL}/000000010000000000000001")), b"wal-bytes").unwrap();
+
+    // Off: the conf goes, the spool and its WAL stay.
+    let v = json(&t.call(&["pg", "wal-archive", "17-feedback", "off"]));
+    for (k, want) in [("walArchive", json!(false)), ("changed", json!(true)), ("restarted", json!(true)), ("walSpoolKept", json!(true))] {
+        assert_eq!(v[k], want, "{k}: {v}");
+    }
+    assert!(!t.p(FB_CONF).exists(), "the archive conf is removed");
+    assert_eq!(std::fs::read(t.p(&format!("{FB_SPOOL}/000000010000000000000001"))).unwrap(), b"wal-bytes", "the spool is kept");
+    assert!(!named_rec(&t, 17, "feedback").wal_archive);
+    assert_eq!(restarts_of(&t, unit), 2);
+    assert_eq!(json(&t.call(&["pg", "ensure-cluster", "17-feedback"]))["created"], false);
+    // Off again: idempotent.
+    let v = json(&t.call(&["pg", "wal-archive", "17-feedback", "off"]));
+    assert_eq!((v["changed"].clone(), v["restarted"].clone()), (json!(false), json!(false)), "{v}");
+    assert_eq!(restarts_of(&t, unit), 2);
+    // Nothing on the spool ever ran as root or postgres to remove it.
+    for c in t.non_query_calls().iter().chain(w.borrow().postgres_calls.iter()) {
+        assert!(!(c.contains("k2-wal") && (c.contains(" rm ") || c.starts_with("/usr/bin/rm") || c.contains("rmdir"))), "{c}");
+    }
+    k2db_untouched(&t, &w, &before);
+    never_destructive(&t);
+}
+
+/// Bites on the validation: only a cluster the helper made, on|off only.
+#[test]
+fn wal_archive_refuses_any_other_cluster_and_any_other_value() {
+    let (t, w) = akzm_box();
+    let before = k2db_trees(&t);
+    ok(&t.call(&["pg", "ensure-cluster", "17-feedback"]));
+    // Unknown: never recorded.
+    for args in [&["pg", "wal-archive", "17-nosuch", "on"][..], &["pg", "wal-archive", "16-feedback", "on"], &["pg", "wal-archive", "17-k2db", "on"], &["pg", "wal-archive", "17-k2db", "off"]] {
+        let o = t.call(args);
+        assert_eq!(o.code, exit::STATE, "{args:?}");
+        assert!(o.stderr.starts_with("not_k2_cluster"), "{args:?}: {}", o.stderr);
+    }
+    assert!(!t.p("/etc/postgresql/17/k2db/conf.d/97-k2-wal-archive.conf").exists());
+    assert!(!t.p("/etc/postgresql/17/nosuch").exists());
+    // A forged record for the hand-made one is still refused (system id).
+    let mut st: k2_root_proto::pg_named::NamedState =
+        serde_json::from_slice(&std::fs::read(t.p(k2_root_proto::pg_named::NAMED_STATE)).unwrap()).unwrap();
+    st.clusters.push(k2_root_proto::pg_named::NamedRec {
+        major: 17,
+        name: "k2db".into(),
+        port: 5433,
+        data_dir: "/var/lib/postgresql/17/k2db".into(),
+        system_id: "7300000000000000001".into(),
+        wal_archive: false,
+        created_at: 1,
+    });
+    std::fs::write(t.p(k2_root_proto::pg_named::NAMED_STATE), serde_json::to_vec(&st).unwrap()).unwrap();
+    assert!(t.call(&["pg", "wal-archive", "17-k2db", "on"]).stderr.starts_with("not_k2_cluster"));
+    // Bad values never reach the helper's code: argv refusals.
+    for args in [
+        &["pg", "wal-archive", "17-feedback", "yes"][..],
+        &["pg", "wal-archive", "17-feedback", "ON"],
+        &["pg", "wal-archive", "17-feedback"],
+        &["pg", "wal-archive", "17-feedback", "on", "--force"],
+        &["pg", "wal-archive", "17", "on"],
+        &["pg", "wal-archive", "17-main", "on"],
+    ] {
+        let o = t.call(args);
+        assert_eq!(o.code, exit::ARGV, "{args:?}: {}", o.stderr);
+    }
+    assert!(!t.p(FB_CONF).exists());
+    assert!(!named_rec(&t, 17, "feedback").wal_archive);
+    // `pg_named.json` kept the forged entry as written; no conf, no restart for k2db.
+    w.borrow_mut().sql.retain(|(_, s)| !s.contains("pg_control_system()"));
+    assert_eq!(&k2db_trees(&t), &before);
+    assert!(!t.non_query_calls().iter().any(|c| c.contains("17-k2db")));
+    // An agent never reaches it.
+    t.as_agent();
+    assert_eq!(t.call(&["pg", "wal-archive", "17-feedback", "on"]).code, exit::NOT_DAEMON);
+    t.as_daemon();
+    assert!(!t.p(FB_CONF).exists());
+    // A link where the conf goes: refused, never followed.
+    std::fs::write(t.p("/etc/k2-link-target"), b"untouched").unwrap();
+    std::os::unix::fs::symlink(t.p("/etc/k2-link-target"), t.p(FB_CONF)).unwrap();
+    assert_ne!(t.call(&["pg", "wal-archive", "17-feedback", "on"]).code, exit::OK);
+    assert_eq!(std::fs::read(t.p("/etc/k2-link-target")).unwrap(), b"untouched");
+    assert!(!named_rec(&t, 17, "feedback").wal_archive);
+}
+
+/// A stopped named cluster: the conf and record change, no restart (it
+/// takes the setting at its next start).
+#[test]
+fn wal_archive_on_a_stopped_cluster_writes_without_starting_it() {
+    let (t, w) = akzm_box();
+    ok(&t.call(&["pg", "ensure-cluster", "17-feedback"]));
+    ok(&t.call(&["pg", "systemctl", "stop", "17-feedback"]));
+    let n = t.non_query_calls().len();
+    let v = json(&t.call(&["pg", "wal-archive", "17-feedback", "on"]));
+    assert_eq!((v["changed"].clone(), v["restarted"].clone(), v["walArchive"].clone()), (json!(true), json!(false), json!(true)), "{v}");
+    assert!(t.non_query_calls()[n..].iter().all(|c| !c.contains(" restart ") && !c.contains(" start ")), "{:?}", &t.non_query_calls()[n..]);
+    assert!(t.p(FB_CONF).exists());
+    assert!(w.borrow().named.iter().any(|c| c.1 == "feedback" && !c.3), "still stopped");
+}
+
+/// Root-only, Linux: the archive conf and the record are written root:root
+/// with real owner checks, `off` keeps a spool that holds WAL, and a link
+/// where the conf goes is refused. Run on a
+/// build box as root:
+/// `cargo test -p k2-root-helper -- --ignored wal_archive_as_root`.
+#[test]
+#[ignore = "needs root (build box e2e)"]
+fn wal_archive_as_root() {
+    // SAFETY: no preconditions.
+    assert_eq!(unsafe { libc::geteuid() }, 0, "this test runs as root only");
+    use std::os::unix::fs::MetadataExt;
+    let (mut t, _w) = akzm_box();
+    t.ctx.real_owners = true;
+    ok(&t.call(&["pg", "ensure-cluster", "17-feedback"]));
+    let v = json(&t.call(&["pg", "wal-archive", "17-feedback", "on"]));
+    assert_eq!(v["changed"], true, "{v}");
+    let m = std::fs::metadata(t.p(FB_CONF)).unwrap();
+    assert_eq!((m.uid(), m.gid(), m.mode() & 0o7777), (0, 0, 0o644));
+    assert_eq!(std::fs::metadata(t.p(k2_root_proto::pg_named::NAMED_STATE)).unwrap().uid(), 0);
+    mkdirs(&t.root, &[FB_SPOOL]);
+    std::fs::write(t.p(&format!("{FB_SPOOL}/000000010000000000000001")), b"wal-bytes").unwrap();
+    let v = json(&t.call(&["pg", "wal-archive", "17-feedback", "off"]));
+    assert_eq!((v["changed"].clone(), v["walSpoolKept"].clone()), (json!(true), json!(true)), "{v}");
+    assert!(!t.p(FB_CONF).exists());
+    assert_eq!(std::fs::read(t.p(&format!("{FB_SPOOL}/000000010000000000000001"))).unwrap(), b"wal-bytes");
+    // A link planted where the conf goes is replaced by a file, never followed.
+    // A link planted where the conf goes is refused, never followed (its
+    // target stays inside the test root).
+    std::fs::write(t.p("/etc/k2-link-target"), b"untouched").unwrap();
+    std::os::unix::fs::symlink(t.p("/etc/k2-link-target"), t.p(FB_CONF)).unwrap();
+    let o = t.call(&["pg", "wal-archive", "17-feedback", "on"]);
+    assert_ne!(o.code, exit::OK, "a link where the conf goes is refused");
+    assert_eq!(std::fs::read(t.p("/etc/k2-link-target")).unwrap(), b"untouched");
 }

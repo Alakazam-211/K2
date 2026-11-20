@@ -921,3 +921,222 @@ fn named_cluster_route_gate() {
     assert_eq!(crate::sql::named_routes::handle(&ops, Who::Other, false, b"", &p).status, "403 Forbidden");
 }
 
+// ── `k2 db cluster archive` + `archiver.currentLsn` (0.46.17) ──────────
+
+/// The helper's answer to `pg wal-archive 17-feedback on|off`.
+fn archive_answer(on: bool, changed: bool) -> String {
+    let mut v = serde_json::json!({
+        "major": 17, "name": "feedback", "port": 5434, "dataDir": "/var/lib/postgresql/17/feedback",
+        "running": true, "startConf": "auto", "k2Named": true, "walArchive": on,
+        "systemId": "7354340000000000000", "changed": changed, "restarted": changed,
+    });
+    if on {
+        v["walSpool"] = serde_json::json!("/var/lib/postgresql/k2-wal/17-feedback");
+    } else {
+        v["walSpoolKept"] = serde_json::json!(true);
+    }
+    v.to_string()
+}
+
+/// akzm with 17/feedback made (archiving on) by `pid`, and a helper on 18.
+fn archive_ops(pid: &str) -> FakeSystemOps {
+    let mut ops = akzm_ops();
+    ensure_named_cluster(&ops, 17, "feedback", None, true, pid).unwrap();
+    ops.query_answers.insert("helper pgarchive".into(), String::new());
+    ops.query_answers.insert("helper wal-archive 17-feedback off".into(), archive_answer(false, true));
+    ops.query_answers.insert("helper wal-archive 17-feedback on".into(), archive_answer(true, false));
+    ops
+}
+
+fn recorded_archive(name: &str) -> bool {
+    for_name(name).expect("record").wal_archive
+}
+
+/// `POST /cli/db/clusters/archive`: POST only; the owner, or a local agent
+/// with the switch for its own cluster; never a Member or an Admin login.
+#[test]
+fn cluster_archive_route_gate() {
+    use crate::sql::versions_access::Who;
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    let (pid, path) = insert_project("fb-archive");
+    let (other, other_path) = insert_project("fb-archive-other");
+    let ops = archive_ops(&pid);
+    let project = serde_json::to_string(&path).expect("path as JSON");
+    let body = |extra: &str| format!(r#"{{"project":{project}{extra}}}"#).into_bytes();
+    let off = body(r#","name":"feedback","archive":"off""#);
+    let h = |who: Who, is_post: bool, b: &[u8]| crate::sql::named_routes::handle_archive(&ops, who, is_post, b);
+    let sent = || lines_with(&ops, "helper wal-archive");
+
+    // GET: 405, nothing read or sent.
+    let r = h(Who::Owner, false, &off);
+    assert_eq!(r.status, "405 Method Not Allowed", "{}", r.body);
+    // A Member, an Admin login, a caller with no credential: refused.
+    let r = h(Who::Member { username: "m".into() }, true, &off);
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(r.body.contains("owner_only"), "{}", r.body);
+    let r = h(Who::Admin { username: "a".into() }, true, &off);
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(r.body.contains("owner_only"), "{}", r.body);
+    assert_eq!(h(Who::Other, true, &off).status, "403 Forbidden");
+    // An agent: the switch off, then sandboxed, then another workspace's.
+    let agent = Who::Agent { project_id: pid.clone(), session_id: "s".into(), local: true, sandboxed: false };
+    let r = h(agent.clone(), true, &off);
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(r.body.contains("db_upgrade_off"), "{}", r.body);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE projects SET agents_can_upgrade_postgres = 1 WHERE id IN (?1, ?2)", [&pid, &other]).unwrap();
+    }
+    let sandboxed = Who::Agent { project_id: pid.clone(), session_id: "s".into(), local: true, sandboxed: true };
+    assert_eq!(h(sandboxed, true, &off).status, "403 Forbidden");
+    let stranger = Who::Agent { project_id: other.clone(), session_id: "s2".into(), local: true, sandboxed: false };
+    let other_json = serde_json::to_string(&other_path).expect("path as JSON");
+    let r = h(stranger, true, format!(r#"{{"project":{other_json},"name":"feedback","archive":"off"}}"#).as_bytes());
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(r.body.contains("cluster_not_yours"), "{}", r.body);
+    assert!(sent().is_empty(), "nothing reached the helper before the owner: {:?}", ops.recorded());
+    assert!(recorded_archive("feedback"));
+
+    // Usage: a value other than on|off, no name, no value, an unknown field.
+    for b in [
+        body(r#","name":"feedback","archive":"yes""#),
+        body(r#","name":"feedback","archive":"ON""#),
+        body(r#","name":"feedback""#),
+        body(r#","archive":"off""#),
+        body(r#","name":"feedback","archive":"off","force":true"#),
+    ] {
+        let r = h(Who::Owner, true, &b);
+        assert_eq!(r.status, "400 Bad Request", "{}: {}", String::from_utf8_lossy(&b), r.body);
+    }
+    // An unknown cluster; a cluster made outside K2.
+    let r = h(Who::Owner, true, &body(r#","name":"nosuch","archive":"off""#));
+    assert_eq!(r.status, "404 Not Found", "{}", r.body);
+    fold(&helper_view(Some(true)));
+    let r = h(Who::Owner, true, &body(r#","name":"k2db","archive":"on""#));
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    assert!(r.body.contains("cluster_refused"), "{}", r.body);
+    assert!(sent().is_empty(), "{:?}", ops.recorded());
+
+    // The owner: off. The helper's verb is sent once; the record follows.
+    let r = h(Who::Owner, true, &off);
+    assert!(r.status.starts_with("200"), "{}", r.body);
+    let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON");
+    for (k, want) in [
+        ("ok", serde_json::json!(true)),
+        ("cluster", serde_json::json!("17/feedback")),
+        ("walArchive", serde_json::json!(false)),
+        ("changed", serde_json::json!(true)),
+        ("restarted", serde_json::json!(true)),
+        ("walSpoolKept", serde_json::json!(true)),
+        ("walSpool", serde_json::json!("/var/lib/postgresql/k2-wal/17-feedback")),
+    ] {
+        assert_eq!(v[k], want, "{k}: {v}");
+    }
+    assert_eq!(sent(), vec!["helper wal-archive 17-feedback off stdin=0".to_string()]);
+    assert!(!recorded_archive("feedback"));
+    // The agent with the switch, on its own cluster: on (the helper answers
+    // it was already so: no change, no restart).
+    let r = h(agent, true, &body(r#","name":"feedback","archive":"on""#));
+    assert!(r.status.starts_with("200"), "{}", r.body);
+    assert!(r.body.contains(r#""changed":false"#), "{}", r.body);
+    assert!(recorded_archive("feedback"));
+    assert_eq!(sent().len(), 2);
+}
+
+/// The daemon side of the helper call: a helper below 18 gets nothing; an
+/// answer that isn't the change asked for leaves the record alone.
+#[test]
+fn cluster_archive_needs_helper_18_and_checks_the_answer() {
+    use crate::root_helper::{Kind, RootHelperState};
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    let (pid, _) = insert_project("fb-archive-old");
+    let mut ops = akzm_ops();
+    let c = ensure_named_cluster(&ops, 17, "feedback", None, true, &pid).unwrap();
+    // Helper 17: helper_needed, nothing sent.
+    let e = archive_named(&ops, &c, false).unwrap_err();
+    assert_eq!((e.code(), e.status()), ("helper_needed", "409 Conflict"), "{e:?}");
+    assert!(e.hint().contains("protocol 18"), "{}", e.hint());
+    assert!(lines_with(&ops, "wal-archive").is_empty(), "{:?}", ops.recorded());
+    assert!(crate::sql::sysops::needs_pgarchive(&["wal-archive", "17-feedback", "on"]));
+    assert!(!crate::sql::sysops::needs_pgarchive(&["ensure-cluster", "17-feedback", "--wal-archive"]));
+    // A helper that answers the other state, or a cluster it doesn't vouch for.
+    ops.query_answers.insert("helper pgarchive".into(), String::new());
+    ops.query_answers.insert("helper wal-archive 17-feedback off".into(), archive_answer(true, false));
+    assert_eq!(archive_named(&ops, &c, false).unwrap_err().code(), "cluster_unavailable");
+    assert!(recorded_archive("feedback"), "a wrong answer changes no record");
+    ops.query_answers.insert(
+        "helper wal-archive 17-feedback off".into(),
+        archive_answer(false, true).replace(r#""k2Named":true"#, r#""k2Named":false"#),
+    );
+    assert_eq!(archive_named(&ops, &c, false).unwrap_err().code(), "cluster_unavailable");
+    assert!(recorded_archive("feedback"));
+    // Already on: answered again, no walSpoolKept on an "on".
+    ops.query_answers.insert("helper wal-archive 17-feedback on".into(), archive_answer(true, false));
+    let v = archive_named(&ops, &c, true).unwrap();
+    assert_eq!((v["changed"].clone(), v["walArchive"].clone()), (serde_json::json!(false), serde_json::json!(true)), "{v}");
+    assert!(v.get("walSpoolKept").is_none(), "{v}");
+    // The pure gate: protocol 18 AND `namespaces.pgarchive`.
+    let helper_at = |protocol: u32, flag: Option<bool>| {
+        let mut ns = serde_json::json!({ "pgnamed": true });
+        if let Some(f) = flag {
+            ns["pgarchive"] = serde_json::json!(f);
+        }
+        RootHelperState {
+            kind: Kind::Root,
+            protocol,
+            version_json: Some(serde_json::json!({ "protocol": protocol, "namespaces": ns })),
+            ..RootHelperState::missing()
+        }
+    };
+    assert!(crate::sql::sysops::pgarchive_ok(&helper_at(18, Some(true))));
+    assert!(!crate::sql::sysops::pgarchive_ok(&helper_at(17, Some(true))));
+    assert!(!crate::sql::sysops::pgarchive_ok(&helper_at(18, None)));
+    assert!(!crate::sql::sysops::pgarchive_ok(&helper_at(18, Some(false))));
+    assert!(!crate::sql::sysops::pgarchive_ok(&RootHelperState::missing()));
+}
+
+/// `k2 db clusters --health`: `archiver.currentLsn` beside the four
+/// counters, read as the live dual-run reads it; null when not running.
+#[test]
+fn health_carries_the_current_lsn() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    let (pid, _) = insert_project("fb-health");
+    let mut ops = akzm_ops();
+    let mut c = ensure_named_cluster(&ops, 17, "feedback", None, true, &pid).unwrap();
+    assert!(
+        HEALTH_SQL.contains(
+            "'failedCount', failed_count, 'lastFailedAt', last_failed_time, \
+'currentLsn', CASE WHEN pg_catalog.pg_is_in_recovery() THEN NULL ELSE pg_catalog.pg_current_wal_lsn()::text END) \
+FROM pg_catalog.pg_stat_archiver"
+        ),
+        "{HEALTH_SQL}"
+    );
+    ops.query_answers.insert(
+        "helper health".into(),
+        r#"{"connections":2,"maxConnections":50,"archiveMode":"on","databases":[],"archiver":{"archivedCount":3,"lastArchivedAt":null,"failedCount":0,"lastFailedAt":null,"currentLsn":"0/1A2B3C4D"}}"#.into(),
+    );
+    c.state = "online".into();
+    let h = health_of(&ops, &c);
+    assert_eq!(h["online"], true, "{h}");
+    assert_eq!(h["archiver"]["currentLsn"], "0/1A2B3C4D", "{h}");
+    assert_eq!(h["archiver"]["archivedCount"], 3, "{h}");
+    assert!(!lines_with(&ops, "helper psql --cluster 17-feedback -d postgres").is_empty(), "{:?}", ops.recorded());
+    // Not running: the field is there and null, and no SQL is sent.
+    let n = ops.recorded().len();
+    c.state = "down".into();
+    let h = health_of(&ops, &c);
+    assert_eq!(h["online"], false, "{h}");
+    let a = h["archiver"].as_object().unwrap_or_else(|| panic!("an archiver block on a cluster that isn't running: {h}"));
+    for k in ["archivedCount", "lastArchivedAt", "failedCount", "lastFailedAt", "currentLsn"] {
+        assert!(a.get(k).is_some_and(serde_json::Value::is_null), "{k}: {h}");
+    }
+    assert_eq!(ops.recorded().len(), n, "no SQL on a cluster that isn't running");
+}
+

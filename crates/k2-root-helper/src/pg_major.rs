@@ -1513,3 +1513,70 @@ pub fn systemctl_named(ctx: &Ctx, op: k2_root_proto::verbs::PgOp, m: PgMajor, na
     let row = if op == PgOp::Stop { None } else { Some(named_wait_online(ctx, m, name.as_str())?) };
     Ok(json!({"unit": unit, "op": verb, "online": row.as_ref().map(ClusterRow::online).unwrap_or(false)}))
 }
+
+/// `pg wal-archive <M>/<name> on|off` (protocol 18, `namespaces.pgarchive`):
+/// WAL archiving on a named cluster this helper made, after its creation.
+///
+/// - Only a recorded cluster that matches what runs ([`named_of`]); any
+///   other name is `not_k2_cluster` and nothing changes.
+/// - `on`: the spool (postgres 0700, as at create) and the canned
+///   `97-k2-wal-archive.conf`, byte for byte what `ensure-cluster
+///   --wal-archive` writes.
+/// - `off`: that conf goes; the spool and every WAL file in it stay (a
+///   backup still ships and prunes them).
+/// - The record follows the conf, so `ensure-cluster` and `clusters`
+///   answer the new setting.
+/// - `archive_mode` takes effect at a server start: a running cluster is
+///   restarted and waited for; a stopped one picks it up when it starts.
+/// - Already so (record and conf both): answers it again, no write and no
+///   restart.
+pub fn archive_named(ctx: &Ctx, m: PgMajor, name: &ClusterName, on: bool) -> HResult<J> {
+    let n = name.as_str();
+    let (row, mut rec) = named_of(ctx, m, name)?;
+    let confd_abs = format!("{}/conf.d", named::etc_dir(m.get(), n));
+    let want = named::wal_archive_conf(m.get(), n);
+    let file_now = read_small(ctx, &format!("{confd_abs}/{}", named::WAL_ARCHIVE_CONF_FILE), 64 * 1024)?;
+    let file_ok = if on { file_now.as_deref() == Some(want.as_bytes()) } else { file_now.is_none() };
+    if rec.wal_archive == on && file_ok {
+        let mut v = named_json(ctx, &row, &rec);
+        v["changed"] = json!(false);
+        v["restarted"] = json!(false);
+        if !on {
+            v["walSpoolKept"] = json!(present(ctx, &named::wal_spool(m.get(), n)));
+        }
+        return Ok(v);
+    }
+    no_links_above_named(ctx, m)?;
+    if !real_dir(ctx, &confd_abs) {
+        return Err(Fail::state(format!("cluster_layout_refused: {confd_abs} is not a real directory; nothing changed")));
+    }
+    if on {
+        wal_spool(ctx, m, n)?;
+        let d = ctx.dir(&confd_abs).map_err(|e| Fail::io_err("open the cluster's conf.d", e))?;
+        put(ctx, &d, named::WAL_ARCHIVE_CONF_FILE, want.as_bytes())?;
+    } else {
+        // The conf only. The spool is never removed here.
+        crate::apps::unput(ctx, &confd_abs, None, named::WAL_ARCHIVE_CONF_FILE)?;
+    }
+    let mut st = named_state(ctx)?;
+    let Some(r) = st.clusters.iter_mut().find(|r| r.major == m.get() && r.name == n && r.valid()) else {
+        return Err(Fail::state("not_k2_cluster: the record went away while the conf was written"));
+    };
+    r.wal_archive = on;
+    rec.wal_archive = on;
+    save_named_state(ctx, &st)?;
+    let restarted = row.online();
+    let row = if restarted {
+        ctx.run_ok(SYSTEMCTL, &["restart", &named::unit(m.get(), n)], None)?;
+        named_wait_online(ctx, m, n)?
+    } else {
+        row
+    };
+    let mut v = named_json(ctx, &row, &rec);
+    v["changed"] = json!(true);
+    v["restarted"] = json!(restarted);
+    if !on {
+        v["walSpoolKept"] = json!(present(ctx, &named::wal_spool(m.get(), n)));
+    }
+    Ok(v)
+}

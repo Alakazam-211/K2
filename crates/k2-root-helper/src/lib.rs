@@ -53,14 +53,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=17 arch=x86_64;"
+    " proto=18 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=17 arch=aarch64;"
+    " proto=18 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -202,6 +202,7 @@ fn dispatch(
         Verb::PgEnsureCluster { major, port } => Some(pg_major::ensure_cluster(ctx, *major, *port)?),
         Verb::PgEnsureNamed { major, name, port, wal_archive } => Some(pg_major::ensure_named(ctx, *major, name, *port, *wal_archive)?),
         Verb::PgNamedSystemctl { op, major, name } => Some(pg_major::systemctl_named(ctx, *op, *major, name)?),
+        Verb::PgNamedArchive { major, name, on } => Some(pg_major::archive_named(ctx, *major, name, *on)?),
         Verb::PgStartConf { major, auto } => Some(pg_major::start_conf(ctx, *major, *auto)?),
         Verb::PgInstallSlice => Some(pg_major::install_slice(ctx)?),
         Verb::PgCopyRoles { from, to, dry_run } => Some(pg_major::copy_roles(ctx, *from, *to, *dry_run, stdin)?),

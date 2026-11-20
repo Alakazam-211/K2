@@ -9,6 +9,9 @@
 //! - `POST {op: "restart", name, project}`: `k2 db cluster restart <n>`.
 //! - `POST {op: "create-db", cluster, name?, id?, major?, project}`:
 //!   `k2 db create --cluster <n>`.
+//! - `POST /cli/db/clusters/archive {name, archive: "on"|"off", project}`
+//!   (0.46.17, POST only): `k2 db cluster archive <n> on|off`, WAL
+//!   archiving on an existing named cluster ([`handle_archive`]).
 //!
 //! Who: the owner (token or Owner login) for any workspace, or a local,
 //! non-sandboxed agent with "Allow this agent to manage Postgres versions"
@@ -215,6 +218,71 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
             }
         }
         other => err("400 Bad Request", "usage", format!("unknown op {other:?} (create, restart, create-db)")),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ArchiveBody {
+    project: String,
+    name: Option<String>,
+    archive: Option<String>,
+}
+
+/// `POST /cli/db/clusters/archive {name, archive: "on"|"off", project}`:
+/// `k2 db cluster archive <name> on|off`. The same gate as `cluster
+/// restart` (the owner for any workspace's, or a local agent with the
+/// Postgres versions switch for its own workspace's; never a Member or an
+/// Admin login). Only a named cluster K2 made; the root helper re-checks it
+/// and does the work (protocol 18). Off keeps the WAL spool.
+pub fn handle_archive(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8]) -> CliResponse {
+    if !is_post {
+        return CliResponse::method_not_allowed();
+    }
+    if !crate::sql::sql_supported() && !cfg!(test) {
+        return err("409 Conflict", "unsupported", "Postgres runs on Linux deployments only");
+    }
+    if matches!(who, Who::Member { .. } | Who::Other) {
+        return err(
+            "403 Forbidden",
+            versions_access::OWNER_ONLY,
+            "named Postgres clusters are the owner's, or an agent's with \"Let this agent manage Postgres versions\" for its own workspace",
+        );
+    }
+    let b: ArchiveBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return err("400 Bad Request", "usage", format!("invalid JSON body: {e}")),
+    };
+    const USAGE: &str = "k2 db cluster archive <name> on|off";
+    let Some(spec) = b.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return err("400 Bad Request", "usage", USAGE);
+    };
+    let on = match b.archive.as_deref() {
+        Some("on") => true,
+        Some("off") => false,
+        _ => return err("400 Bad Request", "usage", format!("{USAGE} (archive takes on or off)")),
+    };
+    let (_, project) = match workspace_for(&who, &b.project) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let owner = matches!(who, Who::Owner);
+    let c = match cluster::named_target(spec, (!owner).then_some(project.as_str())) {
+        Ok(c) => c,
+        Err(e) => return ensure_err(e),
+    };
+    if let Err(r) = gate(&who, VersionsAct::NamedClusterArchive, c.owner_project.as_deref().unwrap_or(&project)) {
+        return r;
+    }
+    match cluster::archive_named(ops, &c, on) {
+        Ok(mut v) => {
+            if v["changed"] == true {
+                audit(&who, if on { "cluster-archive-on" } else { "cluster-archive-off" }, &c);
+            }
+            v["ok"] = json!(true);
+            CliResponse::ok_json(v.to_string())
+        }
+        Err(e) => ensure_err(e),
     }
 }
 

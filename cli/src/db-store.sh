@@ -336,6 +336,8 @@ elif verb == "clusters":
                 print("      %s/%s connections · %s" % (h.get("connections"), h.get("maxConnections"), sizes or "no databases"))
                 if h.get("archiveMode") == "on":
                     print("      WAL archive: %s archived (last %s), %s failed (last %s)" % (a.get("archivedCount"), a.get("lastArchivedAt") or "-", a.get("failedCount"), a.get("lastFailedAt") or "-"))
+                if a.get("currentLsn"):
+                    print("      current WAL position: %s" % a["currentLsn"])
     for u in d.get("upgradeAvailable") or []:
         print("  upgrade available: %s (%s → %s)" % (u.get("name"), u.get("from"), "/".join(str(x) for x in u.get("to") or [])))
 elif verb == "default_major":
@@ -617,8 +619,8 @@ print("database cap: %s%s" % ("unlimited (0)" if cap == 0 else out["cap"], " (th
 # refusal ({"error":{code,hint}} on stderr; exit 2 usage, 3 refused) or the
 # answer (`--json` raw).
 _db_named_post() {
-    local body="$1" as_json="$2" what="$3"
-    _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST /cli/db/clusters "$body")"
+    local body="$1" as_json="$2" what="$3" path="${4:-/cli/db/clusters}"
+    _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST "$path" "$body")"
     if [ "$_CP_STATUS" != "200" ]; then
         printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 raw=sys.stdin.read()
@@ -641,6 +643,16 @@ if w == "cluster":
     print("next: k2 db create --cluster %s --name <db>" % (c.get("name")))
 elif w == "restart":
     print("restarted %s" % v.get("cluster"))
+elif w == "archive":
+    state = "on" if v.get("walArchive") else "off"
+    if not v.get("changed"):
+        print("WAL archiving on %s is already %s (nothing changed)" % (v.get("cluster"), state))
+    else:
+        print("WAL archiving on %s is now %s%s" % (v.get("cluster"), state, " (restarted)" if v.get("restarted") else " (applies when it next starts)"))
+    if v.get("walArchive"):
+        print("spool: %s (a backup ships and prunes it)" % v.get("walSpool"))
+    elif v.get("walSpoolKept"):
+        print("spool kept: %s (nothing in it was removed)" % v.get("walSpool"))
 else:
     print("created %s in %s" % (v.get("name"), v.get("cluster") or "?"))
     if v.get("existing"):
@@ -930,7 +942,15 @@ else:
                     while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
                     [ -n "$c_name" ] || { _db_err "usage" "k2 db cluster restart <name>"; exit 2; }
                     _db_named_post "$(_compute_json K2_CJ_op=restart K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name")" "$as_json" restart ;;
-                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name>"; exit 2 ;;
+                archive)
+                    # 0.46.17: POST /cli/db/clusters/archive (POST only).
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    local c_state="${1:-}"; shift 2>/dev/null || true
+                    while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1' — k2 db cluster archive <name> on|off"; exit 2 ;; esac; done
+                    case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster archive <name> on|off"; exit 2 ;; esac
+                    case "$c_state" in on|off) ;; *) _db_err "usage" "k2 db cluster archive <name> on|off (got '${c_state}')"; exit 2 ;; esac
+                    _db_named_post "$(_compute_json K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_archive="$c_state")" "$as_json" archive /cli/db/clusters/archive ;;
+                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off"; exit 2 ;;
             esac ;;
         default-major)
             local major="${1:-}"; shift || true

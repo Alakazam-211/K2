@@ -721,6 +721,15 @@ pub enum Verb {
     /// `pg systemctl start|restart|stop|is-active <M>-<name>`: a named
     /// cluster the helper made (recorded and matching), never any other.
     PgNamedSystemctl { op: PgOp, major: PgMajor, name: ClusterName },
+    // pg, protocol 18 (`namespaces.pgarchive`, 0.46.17)
+    /// `pg wal-archive <M>-<name> on|off`: WAL archiving on an existing
+    /// named cluster the helper made (recorded and matching). `on` makes
+    /// the spool and writes the canned archive conf; `off` removes that
+    /// conf and never touches the spool (what is there stays for a backup
+    /// to ship). The record follows; a running cluster restarts
+    /// (`archive_mode` needs one). Already in that state: answers it again,
+    /// no write and no restart.
+    PgNamedArchive { major: PgMajor, name: ClusterName, on: bool },
     /// `pg start-conf <M> auto|manual` (`clusters tidy` sets an empty
     /// cluster `manual`; never a drop).
     PgStartConf { major: PgMajor, auto: bool },
@@ -1255,6 +1264,10 @@ impl Verb {
                 }
                 Verb::PgEnsureNamed { major, name, port, wal_archive }
             }
+            ["pg", "wal-archive", r, v] => {
+                let (major, name) = crate::pg_named::parse_ref(r).ok_or(REFUSED)?;
+                Verb::PgNamedArchive { major, name, on: on_off(v).ok_or(REFUSED)? }
+            }
             ["pg", "ensure-cluster", m] => Verb::PgEnsureCluster { major: major(m)?, port: None },
             ["pg", "ensure-cluster", m, p] => Verb::PgEnsureCluster {
                 major: major(m)?,
@@ -1596,6 +1609,9 @@ impl Verb {
             Verb::PgNamedSystemctl { op, major, name } => {
                 s(&["pg", "systemctl", pg_op_name(*op), &crate::pg_named::ref_token(*major, name)])
             }
+            Verb::PgNamedArchive { major, name, on } => {
+                s(&["pg", "wal-archive", &crate::pg_named::ref_token(*major, name), on_off_name(*on)])
+            }
             Verb::PgStartConf { major, auto } => {
                 s(&["pg", "start-conf", &major.token(), if *auto { "auto" } else { "manual" }])
             }
@@ -1768,6 +1784,9 @@ impl Verb {
             // or the Postgres-versions switch's, prd-named-pg-clusters-v1 §6).
             | Verb::PgEnsureNamed { .. }
             | Verb::PgNamedSystemctl { .. }
+            // A named cluster's archive setting (protocol 18): the daemon's
+            // call (the owner's or the Postgres-versions switch's).
+            | Verb::PgNamedArchive { .. }
             | Verb::PgStartConf { auto: false, .. }
             | Verb::PgCopyRoles { .. }
             | Verb::PgMoveDump { .. }
@@ -2077,6 +2096,8 @@ pub fn catalog() -> Vec<Verb> {
         Verb::PgEnsureNamed { major: m17, name: ClusterName::parse("feedback").expect("name"), port: Some(5434), wal_archive: false },
         Verb::PgNamedSystemctl { op: PgOp::Restart, major: m17, name: ClusterName::parse("feedback").expect("name") },
         Verb::PgNamedSystemctl { op: PgOp::IsActive, major: m17, name: ClusterName::parse("feedback").expect("name") },
+        Verb::PgNamedArchive { major: m17, name: ClusterName::parse("feedback").expect("name"), on: true },
+        Verb::PgNamedArchive { major: m17, name: ClusterName::parse("feedback").expect("name"), on: false },
         Verb::PgStartConf { major: m16, auto: true },
         Verb::PgStartConf { major: m16, auto: false },
         Verb::PgInstallSlice,
@@ -3353,6 +3374,43 @@ mod tests {
             &["pg", "psql", "--cluster", "17/feedback", "-d", "x"],
             &["pg", "psql", "--cluster", "17-Feedback", "-d", "x"],
             &["pg", "psql", "-d", "x", "--cluster", "17-feedback"],
+        ] {
+            assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
+        }
+    }
+
+    /// `pg wal-archive` (protocol 18): a named cluster and on|off only, the
+    /// daemon's; `<M>` alone (`<M>/main`) and anything else are refused.
+    #[test]
+    fn named_archive_verb() {
+        for a in [&["pg", "wal-archive", "17-feedback", "on"][..], &["pg", "wal-archive", "16-audit", "off"]] {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), Class::Daemon, "{a:?}");
+            assert!(v.takes_lock(), "{a:?}");
+            assert_eq!(v.stdin_cap(), None, "{a:?}");
+            assert_eq!(v.argv(), a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "round trip");
+            assert_eq!(v.audit_name(), a.join(" "));
+        }
+        assert!(matches!(
+            Verb::parse(&["pg", "wal-archive", "17-feedback", "off"]),
+            Ok(Verb::PgNamedArchive { on: false, .. })
+        ));
+        for r in [
+            &["pg", "wal-archive", "17-feedback"][..],
+            &["pg", "wal-archive", "17-feedback", "yes"],
+            &["pg", "wal-archive", "17-feedback", "ON"],
+            &["pg", "wal-archive", "17-feedback", "1"],
+            &["pg", "wal-archive", "17-feedback", ""],
+            &["pg", "wal-archive", "17-feedback", "on", "off"],
+            &["pg", "wal-archive", "17-feedback", "on", "--now"],
+            &["pg", "wal-archive", "17", "on"],
+            &["pg", "wal-archive", "17-main", "on"],
+            &["pg", "wal-archive", "17/feedback", "on"],
+            &["pg", "wal-archive", "17-Feedback", "on"],
+            &["pg", "wal-archive", "15-feedback", "on"],
+            &["pg", "wal-archive", "17-../main", "on"],
+            &["pg", "wal-archive", "on", "17-feedback"],
+            &["pg", "wal-archive"],
         ] {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
         }

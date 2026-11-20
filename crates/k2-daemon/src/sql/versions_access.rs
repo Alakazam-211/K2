@@ -140,6 +140,9 @@ pub enum VersionsAct {
     /// `k2 db create --cluster <n>`: a database in the caller's own named
     /// cluster.
     CreateOnNamedCluster,
+    /// `k2 db cluster archive <n> on|off` (0.46.17): WAL archiving on the
+    /// caller's own named cluster (the same rule as its restart).
+    NamedClusterArchive,
 }
 
 impl VersionsAct {
@@ -165,6 +168,7 @@ impl VersionsAct {
             Self::NamedClusterCreate => "cluster-create",
             Self::NamedClusterRestart => "cluster-restart",
             Self::CreateOnNamedCluster => "create-in-cluster",
+            Self::NamedClusterArchive => "cluster-archive",
         }
     }
 
@@ -173,7 +177,10 @@ impl VersionsAct {
         matches!(self, Self::Check | Self::Move | Self::Rollback | Self::CreateOnMajor | Self::ClustersTidy)
             // 0.46.11: the caller's own named clusters (the scope is the
             // cluster's workspace, checked like a database's).
-            || matches!(self, Self::NamedClusterCreate | Self::NamedClusterRestart | Self::CreateOnNamedCluster)
+            || matches!(
+                self,
+                Self::NamedClusterCreate | Self::NamedClusterRestart | Self::CreateOnNamedCluster | Self::NamedClusterArchive
+            )
             // §13: live moves are the owner's until the first owner-run
             // moves are clean; then the constant flips (no migration).
             || (crate::sql::pgmove::dual::DUAL_LIVE_AGENTS && matches!(self, Self::LiveMove | Self::LiveSwitch | Self::LiveAbort))

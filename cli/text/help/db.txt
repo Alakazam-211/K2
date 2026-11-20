@@ -15,6 +15,10 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
                                  never takes over or removes a cluster. Owner, or an agent
                                  with "Let this agent manage Postgres versions"
   cluster restart <name>         restart that one named cluster (same rule)
+  cluster archive <name> on|off  WAL archiving on an existing named cluster (root helper
+                                 protocol 18), then a restart if it runs. off removes the
+                                 archive setting only: the spool and the WAL already in it
+                                 stay for the backup to ship and prune. Same rule
   default-major <M> [--json]     owner: the major new databases go on (new boxes: 17;
                                  existing boxes keep their current major until set)
   enable [--json]                catalog + start unit if baked (--bake --with-db)

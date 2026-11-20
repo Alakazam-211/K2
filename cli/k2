@@ -54120,10 +54120,10 @@ cmd_schema() {
     {
       "name": "db clusters",
       "usage": "k2 db clusters [--health] [--json]",
-      "description": "The Postgres clusters on this box: each major's main cluster (the first on 5432, the rest 5433-5449), the named clusters K2 made (17/feedback), and any cluster made outside K2 (recorded foreign: K2 never touches it). How many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check). --health adds, for each K2 cluster (never a foreign one), its connections, each database's size and the WAL archive's counters: what a monitor reads.",
+      "description": "The Postgres clusters on this box: each major's main cluster (the first on 5432, the rest 5433-5449), the named clusters K2 made (17/feedback), and any cluster made outside K2 (recorded foreign: K2 never touches it). How many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check). --health adds, for each K2 cluster (never a foreign one), its connections, each database's size, the WAL archive's counters and its current WAL position (archiver.currentLsn; null when the cluster isn't running): what a monitor reads.",
       "args": [],
       "flags": [
-        {"name": "--health", "arg": null, "description": "Connections, database sizes and the WAL archiver for each K2 cluster."},
+        {"name": "--health", "arg": null, "description": "Connections, database sizes and the WAL archiver for each K2 cluster: archivedCount, lastArchivedAt, failedCount, lastFailedAt and currentLsn (pg_current_wal_lsn() as text, e.g. 0/1A2B3C4D). A cluster that isn't running answers online false and those five null."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -54137,6 +54137,15 @@ cmd_schema() {
         {"name": "--port", "arg": "port", "description": "A free port in 5433-5449 (default: the first free one)."},
         {"name": "--wal-archive", "arg": null, "description": "Archive WAL into the cluster's spool (archive_mode on, archive_timeout 300 s)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster archive",
+      "usage": "k2 db cluster archive <name> on|off [--json]",
+      "description": "Turn WAL archiving on or off on an existing named cluster K2 made, through the root helper (protocol 18): on writes the same archive settings as create --wal-archive (archive_mode on, archive_timeout 300 s, every finished WAL segment copied to /var/lib/postgresql/k2-wal/<major>-<name>); off removes those settings only and never deletes the spool or the WAL already in it, which stay for the backup to ship and prune. A running cluster restarts so archive_mode takes effect (its connections drop and come back); a stopped one takes it at its next start. Already in that state: nothing changes and nothing restarts. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster (exit 3 otherwise).",
+      "args": [{"name": "name", "required": true}, {"name": "on|off", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output: cluster, walArchive, changed, restarted, walSpool (and walSpoolKept for off)."}
       ]
     },
     {
@@ -66247,6 +66256,8 @@ NAMED CLUSTERS (0.46.11)
   refuses its databases: named_cluster_fixed) and is never removed by K2.
   A cluster made outside K2 (another name on the same major) is listed as
   foreign and never touched, offered to an App or taken over.
+  `k2 db cluster archive feedback on|off` (0.46.17) turns its WAL archive
+  on or off later, with one restart; off keeps the spool and its WAL.
 
 THE MOVE (one database at a time, by copy)
   k2 db upgrade <db> --check      read-only: majors, the target cluster
@@ -66488,6 +66499,14 @@ OWNER VERBS (agents exit 3)
   enable / disable / uninstall / doctor / bind / status-as-engine
   cap <n> (set this workspace's database cap)
   Ask your human. Do not retry-loop.
+
+NAMED CLUSTERS (the owner, or the Postgres-versions switch)
+  k2 db cluster create 17 --name <n> [--wal-archive]   its own cluster
+  k2 db cluster archive <n> on|off   WAL archive later (one restart);
+                                     off keeps the spool and its WAL
+  k2 db clusters --health --json     archiver: archivedCount,
+    lastArchivedAt, failedCount, lastFailedAt, currentLsn (text LSN,
+    0/1A2B3C4D); all null when the cluster isn't running.
 
 DSN
   `k2 db dsn` prints it without its password (0.46.11). A command that
@@ -99709,6 +99728,8 @@ elif verb == "clusters":
                 print("      %s/%s connections · %s" % (h.get("connections"), h.get("maxConnections"), sizes or "no databases"))
                 if h.get("archiveMode") == "on":
                     print("      WAL archive: %s archived (last %s), %s failed (last %s)" % (a.get("archivedCount"), a.get("lastArchivedAt") or "-", a.get("failedCount"), a.get("lastFailedAt") or "-"))
+                if a.get("currentLsn"):
+                    print("      current WAL position: %s" % a["currentLsn"])
     for u in d.get("upgradeAvailable") or []:
         print("  upgrade available: %s (%s → %s)" % (u.get("name"), u.get("from"), "/".join(str(x) for x in u.get("to") or [])))
 elif verb == "default_major":
@@ -99834,6 +99855,10 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
                                  never takes over or removes a cluster. Owner, or an agent
                                  with "Let this agent manage Postgres versions"
   cluster restart <name>         restart that one named cluster (same rule)
+  cluster archive <name> on|off  WAL archiving on an existing named cluster (root helper
+                                 protocol 18), then a restart if it runs. off removes the
+                                 archive setting only: the spool and the WAL already in it
+                                 stay for the backup to ship and prune. Same rule
   default-major <M> [--json]     owner: the major new databases go on (new boxes: 17;
                                  existing boxes keep their current major until set)
   enable [--json]                catalog + start unit if baked (--bake --with-db)
@@ -100177,8 +100202,8 @@ print("database cap: %s%s" % ("unlimited (0)" if cap == 0 else out["cap"], " (th
 # refusal ({"error":{code,hint}} on stderr; exit 2 usage, 3 refused) or the
 # answer (`--json` raw).
 _db_named_post() {
-    local body="$1" as_json="$2" what="$3"
-    _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST /cli/db/clusters "$body")"
+    local body="$1" as_json="$2" what="$3" path="${4:-/cli/db/clusters}"
+    _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST "$path" "$body")"
     if [ "$_CP_STATUS" != "200" ]; then
         printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 raw=sys.stdin.read()
@@ -100201,6 +100226,16 @@ if w == "cluster":
     print("next: k2 db create --cluster %s --name <db>" % (c.get("name")))
 elif w == "restart":
     print("restarted %s" % v.get("cluster"))
+elif w == "archive":
+    state = "on" if v.get("walArchive") else "off"
+    if not v.get("changed"):
+        print("WAL archiving on %s is already %s (nothing changed)" % (v.get("cluster"), state))
+    else:
+        print("WAL archiving on %s is now %s%s" % (v.get("cluster"), state, " (restarted)" if v.get("restarted") else " (applies when it next starts)"))
+    if v.get("walArchive"):
+        print("spool: %s (a backup ships and prunes it)" % v.get("walSpool"))
+    elif v.get("walSpoolKept"):
+        print("spool kept: %s (nothing in it was removed)" % v.get("walSpool"))
 else:
     print("created %s in %s" % (v.get("name"), v.get("cluster") or "?"))
     if v.get("existing"):
@@ -100490,7 +100525,15 @@ else:
                     while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
                     [ -n "$c_name" ] || { _db_err "usage" "k2 db cluster restart <name>"; exit 2; }
                     _db_named_post "$(_compute_json K2_CJ_op=restart K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name")" "$as_json" restart ;;
-                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name>"; exit 2 ;;
+                archive)
+                    # 0.46.17: POST /cli/db/clusters/archive (POST only).
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    local c_state="${1:-}"; shift 2>/dev/null || true
+                    while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1' — k2 db cluster archive <name> on|off"; exit 2 ;; esac; done
+                    case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster archive <name> on|off"; exit 2 ;; esac
+                    case "$c_state" in on|off) ;; *) _db_err "usage" "k2 db cluster archive <name> on|off (got '${c_state}')"; exit 2 ;; esac
+                    _db_named_post "$(_compute_json K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_archive="$c_state")" "$as_json" archive /cli/db/clusters/archive ;;
+                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off"; exit 2 ;;
             esac ;;
         default-major)
             local major="${1:-}"; shift || true

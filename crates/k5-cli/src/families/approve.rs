@@ -35,7 +35,7 @@ use crate::out::json::{self, Options, Text, Value};
 use crate::out::pylib::json::os_error;
 use crate::out::{self, py};
 use crate::transport::encode::quote;
-use cp::Opened;
+use cp::{body_line, raised, read_one, show, stdout_line, Opened};
 use k2_client::{cli_name, product_name};
 use std::ffi::OsString;
 
@@ -381,43 +381,6 @@ fn exec(bin: &std::path::Path, words: &[String]) -> Exit {
     }
 }
 
-/// What a `$(python3 -c 'print(...)')` printed of `v`: `str(v)`, its
-/// trailing newlines dropped.
-fn held(v: &Value) -> String {
-    let mut s = py::str_of(v);
-    while s.ends_with('\n') {
-        s.pop();
-    }
-    s
-}
-
-/// A step's Python output: printed now, and the exit when it raised.
-fn show(s: &Shown) -> Result<(), Exit> {
-    let exit = s.print();
-    if exit == Exit::Ok {
-        Ok(())
-    } else {
-        Err(exit)
-    }
-}
-
-/// `$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys;
-/// print(json.load(sys.stdin)<what>)')`: one line of Python.
-fn read_one(body: &[u8], key: &str, get: bool) -> Result<String, Raise> {
-    let v = p::load(body, 1)?;
-    let x = if get {
-        p::dget_or(&v, key, p::text(""), 1)?
-    } else {
-        p::idx(&v, key, 1)?
-    };
-    Ok(held(&x))
-}
-
-/// A one-line Python step that raised: its traceback, exit 1.
-fn raised(r: &Raise) -> Exit {
-    Shown::err(r.text(), Exit::Error).print()
-}
-
 fn request(ctx: &mut Ctx, payload: &str, to: &str, wait: bool, out: &str, json: bool) -> Exit {
     if !std::path::Path::new(payload).is_file() {
         out::stderr_line(&format!("Error: no payload file at {payload}"));
@@ -477,23 +440,6 @@ fn request(ctx: &mut Ctx, payload: &str, to: &str, wait: bool, out: &str, json: 
         ),
         id
     ))
-}
-
-/// `printf '%s\n' "$_CP_BODY"`.
-fn body_line(body: &[u8]) -> Exit {
-    let mut b = super::without_nuls(body);
-    b.push(b'\n');
-    match out::write_flushed(&mut std::io::stdout().lock(), &b) {
-        Ok(()) => Exit::Ok,
-        Err(e) => out::after_stdout_error(&e),
-    }
-}
-
-fn stdout_line(line: &str) -> Exit {
-    match out::stdout_line(line) {
-        Ok(()) => Exit::Ok,
-        Err(e) => out::after_stdout_error(&e),
-    }
 }
 
 /// `_approve_wait`: exit 0 approved, 1 otherwise.

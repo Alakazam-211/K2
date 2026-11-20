@@ -300,3 +300,25 @@ fn status_cancel_and_agents_answer_as_the_shell_does() {
         rig.check(&c);
     }
 }
+
+/// The lines name the command by the brand's name (in a build with
+/// `K2_BRAND_DIR=brand/xy` they say `xy`), never a typed `k2` or `k5`.
+#[test]
+fn the_lines_say_the_brand_s_name() {
+    let rig = Rig::new("approve", "brand");
+    let cli = k2_client::brand::CLI_NAME;
+    for (args, want) in [
+        (&["cancel"][..], format!("Usage: {cli} approve cancel <id>\n")),
+        (&["agents", "w"], format!("Usage: {cli} approve agents [<workspace> on|off]\n")),
+        (
+            &["request", "--x"],
+            format!("Error: unexpected argument '--x' ({cli} approve --help)\n"),
+        ),
+    ] {
+        let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(2), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
+    }
+}

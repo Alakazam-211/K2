@@ -13,7 +13,8 @@
 //!   `_compute_fail` with no refusal registry ([`fail`]).
 //! - [`utc_time`]: `time.strftime(fmt, time.gmtime(v))`.
 
-use super::super::{curl_port, Raise};
+use super::super::{curl_port, without_nuls, Raise, Shown};
+use crate::families::app::py as p;
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::families::app::call::{fail_exit, Ctx, Split};
@@ -111,6 +112,61 @@ pub fn fail(s: &Split) -> Exit {
     };
     out::stderr_line(&crate::spec::run::fail_line(&s.status, body));
     fail_exit(&s.status)
+}
+
+/// What a `$(python3 -c 'print(...)')` printed of `v`: `str(v)`, its
+/// trailing newlines dropped.
+pub fn held(v: &Value) -> String {
+    let mut s = py::str_of(v);
+    while s.ends_with('\n') {
+        s.pop();
+    }
+    s
+}
+
+/// A step's Python output: printed now, and the exit when it raised.
+pub fn show(s: &Shown) -> Result<(), Exit> {
+    let exit = s.print();
+    if exit == Exit::Ok {
+        Ok(())
+    } else {
+        Err(exit)
+    }
+}
+
+/// `$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys;
+/// print(json.load(sys.stdin)<what>)')`: one line of Python.
+pub fn read_one(body: &[u8], key: &str, get: bool) -> Result<String, Raise> {
+    let v = p::load(body, 1)?;
+    let x = if get {
+        p::dget_or(&v, key, p::text(""), 1)?
+    } else {
+        p::idx(&v, key, 1)?
+    };
+    Ok(held(&x))
+}
+
+/// A one-line Python step that raised: its traceback, exit 1.
+pub fn raised(r: &Raise) -> Exit {
+    Shown::err(r.text(), Exit::Error).print()
+}
+
+/// `printf '%s\n' "$_CP_BODY"`.
+pub fn body_line(body: &[u8]) -> Exit {
+    let mut b = without_nuls(body);
+    b.push(b'\n');
+    match out::write_flushed(&mut std::io::stdout().lock(), &b) {
+        Ok(()) => Exit::Ok,
+        Err(e) => out::after_stdout_error(&e),
+    }
+}
+
+/// `echo "<line>"`.
+pub fn stdout_line(line: &str) -> Exit {
+    match out::stdout_line(line) {
+        Ok(()) => Exit::Ok,
+        Err(e) => out::after_stdout_error(&e),
+    }
 }
 
 /// `time.strftime(fmt, time.gmtime(v))` for the `%Y`, `%m`, `%d`, `%H`,

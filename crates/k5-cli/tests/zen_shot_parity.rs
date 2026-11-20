@@ -1,7 +1,7 @@
 //! `k5-cli zen widget preview --shot` against the shell CLI's, on the
 //! parity rig ([`common::parity`]): the same request (the folder with
 //! `--data`'s fixture and its `blobs/` folder, each file's type from the
-//! system's `mime.types` as Python's `mimetypes` reads it), the same
+//! system's `mime.types` as Python 3.12's `mimetypes` reads it), the same
 //! run of the shot runner, and the same stdout, stderr and exit code.
 //!
 //! The binary is copied into a folder with a stand-in runner beside it
@@ -110,12 +110,20 @@ fn fixture(r: &Rig) {
     )
     .unwrap();
     let png: &[u8] = &[0, 1, 2, 250, 255];
+    // Python 3.13 and later name more types in the built-in map (.webp
+    // from 3.13, .woff2 from 3.14): the binary reads 3.12's, the named
+    // difference `python-version-mime-map`. Those names go in only where
+    // the shell's python3 is 3.12; every other name here types alike in
+    // 3.9 to 3.14, and `.apk` is in no built-in map, only `mime.types`.
+    if python3_version() == (3, 12) {
+        std::fs::write(b.join("anim.webp"), b"webp").unwrap();
+        std::fs::write(b.join("font.woff2"), b"woff2").unwrap();
+    }
     for (name, bytes) in [
         ("logo.png", png),
         ("same.bin", png),
         ("photo.JPG", b"jpg"),
-        ("anim.webp", b"webp"),
-        ("font.woff2", b"woff2"),
+        ("store.apk", b"apk"),
         ("arch.tar.gz", b"tgz"),
         ("icon.svgz", b"svgz"),
         ("clip.webm", b"webm"),

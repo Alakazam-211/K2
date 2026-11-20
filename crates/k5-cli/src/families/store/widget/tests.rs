@@ -12,7 +12,10 @@ fn parsed(words: &[&str]) -> Result<Args, String> {
 #[test]
 fn the_flags_read_as_the_shell_reads_them() {
     let a = parsed(&["k", "--value", "{}", "--if-rev", "007", "--json"]).unwrap();
-    assert_eq!((a.pos.as_str(), a.value.as_str(), a.has_value), ("k", "{}", true));
+    assert_eq!(
+        (a.pos.as_str(), a.value.as_str(), a.has_value),
+        ("k", "{}", true)
+    );
     assert_eq!(a.ifrev, "007");
     assert_eq!(parsed(&["--value"]), Err("--value takes JSON".into()));
     assert_eq!(parsed(&["--nope"]), Err("unknown flag --nope".into()));
@@ -33,10 +36,17 @@ fn the_flags_read_as_the_shell_reads_them() {
 
 #[test]
 fn a_body_is_python_s_json_dumps() {
-    let a = parsed(&["k é", "--value", "{\"b\": [1, 2.50, \"ü\"]}", "--if-rev", "007"]).unwrap();
+    let a = parsed(&[
+        "k é",
+        "--value",
+        "{\"b\": [1, 2.50, \"ü\"]}",
+        "--if-rev",
+        "007",
+    ])
+    .unwrap();
     assert_eq!(
         body("put", "w", &a, false).unwrap(),
-        r#"{"widget": "w", "key": "k é", "ifRev": 7, "value": {"b": [1, 2.5, "ü"]}}"#
+        r#"{"widget": "w", "key": "k \u00e9", "ifRev": 7, "value": {"b": [1, 2.5, "\u00fc"]}}"#
     );
     let a = parsed(&[]).unwrap();
     assert_eq!(
@@ -94,9 +104,14 @@ fn a_body_is_python_s_json_dumps() {
 
 #[test]
 fn a_batch_is_planned_in_parts() {
-    assert!(batch_plan(" \n").unwrap_err().contains("reads ops on stdin"));
+    assert!(batch_plan(" \n")
+        .unwrap_err()
+        .contains("reads ops on stdin"));
     assert_eq!(
-        batch_plan("{\"op\":\"put\",\"key\":\"a\",\"value\":1}\n\n{\"op\":\"delete\",\"key\":\"b\"}").unwrap(),
+        batch_plan(
+            "{\"op\":\"put\",\"key\":\"a\",\"value\":1}\n\n{\"op\":\"delete\",\"key\":\"b\"}"
+        )
+        .unwrap(),
         vec![r#"[{"op":"put","key":"a","value":1},{"op":"delete","key":"b"}]"#.to_string()]
     );
     assert_eq!(batch_plan("[]").unwrap_err(), "Error: no ops\n");
@@ -109,8 +124,10 @@ fn a_batch_is_planned_in_parts() {
     assert_eq!(plan.len(), 3, "64, 64 and 2 ops");
     // Over 60 KiB of values closes a part early.
     let big = "x".repeat(40 * 1024);
-    let plan =
-        batch_plan(&format!("[{{\"value\":\"{big}\"}},{{\"value\":\"{big}\"}}]")).unwrap();
+    let plan = batch_plan(&format!(
+        "[{{\"value\":\"{big}\"}},{{\"value\":\"{big}\"}}]"
+    ))
+    .unwrap();
     assert_eq!(plan.len(), 2);
     let too_many: Vec<String> = (0..1001).map(|_| "{}".to_string()).collect();
     assert_eq!(
@@ -156,7 +173,11 @@ fn a_restore_body_keeps_python_s_key_order() {
     );
     assert_eq!(
         restore_body("snapshot", "w", &w(&["--rev", "1"])).unwrap_err(),
-        concat!("Error: unexpected --rev (see ", cli_name!(), " store --help)\n")
+        concat!(
+            "Error: unexpected --rev (see ",
+            cli_name!(),
+            " store --help)\n"
+        )
     );
     assert_eq!(
         restore_body("snapshot", "w", &w(&["--label"])).unwrap_err(),
@@ -170,7 +191,10 @@ fn a_failure_reads_as_gd_fail_reads_it() {
     assert_eq!(fail_code(b), "conflict");
     assert_eq!(fail_line(b), "Error: conflict: rev moved");
     assert_eq!(fail_code(br#"{"error":"not_granted"}"#), "not_granted");
-    assert_eq!(fail_line(br#"{"error":"not_granted"}"#), "Error: not_granted");
+    assert_eq!(
+        fail_line(br#"{"error":"not_granted"}"#),
+        "Error: not_granted"
+    );
     assert_eq!(fail_line(br#"{"ok":false}"#), "Error: None");
     assert_eq!(fail_line(br#"{"error":{}}"#), "Error: error: ");
     assert_eq!(fail_line(b"[1]"), "Error: daemon returned: [1]");
@@ -191,19 +215,20 @@ fn readers_print_as_the_shell_s_python() {
         r.stdout,
         "Would write 2 and delete 0 key(s) in a/, b/:\n  a/1\n  b/2\n"
     );
-    let r = restore_out(
-        br#"{"families":[],"id":"r1","rev":9,"written":1,"deleted":1,"keys":[]}"#,
-    )
-    .unwrap();
+    let r = restore_out(br#"{"families":[],"id":"r1","rev":9,"written":1,"deleted":1,"keys":[]}"#)
+        .unwrap();
     assert_eq!(
         r.stdout,
         "Restored: wrote 1, deleted 1 (nothing) as rev 9, restore r1.\n"
     );
     assert_eq!(r.stderr, "Undo it with --rev 8.\n");
-    let r = restore_out(br#"{"families":[],"id":null,"rev":null,"written":0,"deleted":0}"#).unwrap();
+    let r =
+        restore_out(br#"{"families":[],"id":null,"rev":null,"written":0,"deleted":0}"#).unwrap();
     assert_eq!(r.stdout, "Nothing to change.\n");
-    let r = granted(br#"{"grant":{"level":"read","prefix":"","subjectKind":"agent","subjectId":"a1"}}"#)
-        .unwrap();
+    let r = granted(
+        br#"{"grant":{"level":"read","prefix":"","subjectKind":"agent","subjectId":"a1"}}"#,
+    )
+    .unwrap();
     assert_eq!(r.stdout, "Granted read on everything to agent a1\n");
     let (_, _, x) = granted(b"{}").unwrap_err();
     assert_eq!(x.exception, "KeyError: 'grant'");

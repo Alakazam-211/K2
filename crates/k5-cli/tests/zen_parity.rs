@@ -82,7 +82,11 @@ const REF: &str = "k2blob:sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 fn zen_data_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "data");
     let big: &'static str = Box::leak(many_spaces(3000).into_boxed_str());
-    assert!(big.len() > 256 * 1024, "the large answer is {} bytes", big.len());
+    assert!(
+        big.len() > 256 * 1024,
+        "the large answer is {} bytes",
+        big.len()
+    );
     let export_page: &'static str = Box::leak(
         format!(
             r#"{{"header":{{"space":"data:w"}},"items":[{{"key":"a","rev":1,"value":{{"pic":"{REF}"}},"updatedAt":5,"by":"owner"}}],"next":null}}"#
@@ -93,7 +97,15 @@ fn zen_data_answers_as_the_shell_does() {
         // covers: zen data
         ok_owner("no verb: the help page", &["data"], vec![]),
         ok_owner("help", &["data", "help"], vec![]),
-        case("an unknown verb", &["data", "nope"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "an unknown verb",
+            &["data", "nope"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         ok_owner(
             "list",
             &["data", "list"],
@@ -120,25 +132,57 @@ fn zen_data_answers_as_the_shell_does() {
                 r#"{"space":{"widget":"board","keys":3,"bytes":2048,"rev":7},"madeBy":{"kind":"agent","handle":"h1"},"grants":[{"subjectKind":"agent","subjectName":"ag","level":"write","prefix":"","admin":true,"grantedBy":"owner"},{"subjectKind":"project","subjectName":"acme","level":"read","prefix":"a/","admin":false,"grantedBy":"ag"}]}"#,
             )],
         ),
-        case("show, no widget", &["data", "show"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "show, no widget",
+            &["data", "show"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         ok_owner(
             "grant",
-            &["data", "grant", "board", "--agent", "ag", "--level", "write"],
-            vec![ok(r#"{"grant":{"level":"write","prefix":"","subjectKind":"agent","subjectId":"ag"}}"#)],
+            &[
+                "data", "grant", "board", "--agent", "ag", "--level", "write",
+            ],
+            vec![ok(
+                r#"{"grant":{"level":"write","prefix":"","subjectKind":"agent","subjectId":"ag"}}"#,
+            )],
         ),
         ok_owner(
             "revoke",
-            &["data", "revoke", "board", "--project", "acme", "--prefix", "a/"],
+            &[
+                "data",
+                "revoke",
+                "board",
+                "--project",
+                "acme",
+                "--prefix",
+                "a/",
+            ],
             vec![ok(r#"{"ok":true}"#)],
         ),
         ok_owner(
             "admin",
-            &["data", "admin", "board", "--agent", "ag", "--level", "read", "--prefix", "p/"],
-            vec![ok(r#"{"grant":{"level":"read","prefix":"p/","subjectKind":"agent","subjectId":"ag"}}"#)],
+            &[
+                "data", "admin", "board", "--agent", "ag", "--level", "read", "--prefix", "p/",
+            ],
+            vec![ok(
+                r#"{"grant":{"level":"read","prefix":"p/","subjectKind":"agent","subjectId":"ag"}}"#,
+            )],
         ),
         case(
             "admin to a project",
-            &["data", "admin", "board", "--project", "acme", "--level", "read"],
+            &[
+                "data",
+                "admin",
+                "board",
+                "--project",
+                "acme",
+                "--level",
+                "read",
+            ],
             &[],
             vec![],
             owner_and_port,
@@ -175,7 +219,9 @@ fn zen_data_answers_as_the_shell_does() {
             ok_owner(
                 "delete, the name on stdin",
                 &["data", "delete", "board"],
-                vec![ok(r#"{"deleted":"board","grantsRemoved":2,"snapshot":"snap-9"}"#)],
+                vec![ok(
+                    r#"{"deleted":"board","grantsRemoved":2,"snapshot":"snap-9"}"#,
+                )],
             ),
         ),
         case(
@@ -192,7 +238,15 @@ fn zen_data_answers_as_the_shell_does() {
             &["data", "mv", "old", "new"],
             vec![ok(r#"{"grantsMoved":3}"#)],
         ),
-        case("move, one name", &["data", "move", "old"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "move, one name",
+            &["data", "move", "old"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         ok_owner(
             "export",
             &["data", "export", "board", "--at", "2026-10-13"],
@@ -205,7 +259,9 @@ fn zen_data_answers_as_the_shell_does() {
                 &["data", "export", "board", "--blobs", "out-blobs"],
                 vec![
                     ok(export_page),
-                    ok(r#"{"base64":"aGVsbG8=","offset":0,"len":5,"eof":true,"size":5,"mime":"text/plain"}"#),
+                    ok(
+                        r#"{"base64":"aGVsbG8=","offset":0,"len":5,"eof":true,"size":5,"mime":"text/plain"}"#,
+                    ),
                 ],
             )
         },
@@ -254,8 +310,18 @@ fn zen_data_answers_as_the_shell_does() {
         ),
         ok_owner(
             "restore",
-            &["data", "restore", "board", "--snapshot", "snap-9", "--prefix", "a/"],
-            vec![ok(r#"{"id":"r3","rev":20,"written":3,"deleted":1,"families":["a/"],"keys":[]}"#)],
+            &[
+                "data",
+                "restore",
+                "board",
+                "--snapshot",
+                "snap-9",
+                "--prefix",
+                "a/",
+            ],
+            vec![ok(
+                r#"{"id":"r3","rev":20,"written":3,"deleted":1,"families":["a/"],"keys":[]}"#,
+            )],
         ),
         case(
             "restore, no widget",
@@ -270,7 +336,10 @@ fn zen_data_answers_as_the_shell_does() {
             "person_only in a session",
             &["data", "list"],
             &[],
-            vec![answer(403, r#"{"error":{"code":"person_only","hint":"a person only"}}"#)],
+            vec![answer(
+                403,
+                r#"{"error":{"code":"person_only","hint":"a person only"}}"#,
+            )],
             owner_and_port,
             3,
             1,
@@ -279,7 +348,10 @@ fn zen_data_answers_as_the_shell_does() {
             "space not found, --json",
             &["data", "show", "gone", "--json"],
             &[],
-            vec![answer(404, r#"{"error":{"code":"space_not_found","hint":"no data"}}"#)],
+            vec![answer(
+                404,
+                r#"{"error":{"code":"space_not_found","hint":"no data"}}"#,
+            )],
             owner_and_port,
             4,
             1,
@@ -313,7 +385,9 @@ fn zen_data_answers_as_the_shell_does() {
         )),
         shell(case(
             "grant --help: help, nothing sent",
-            &["data", "grant", "board", "--agent", "a", "--level", "read", "--help"],
+            &[
+                "data", "grant", "board", "--agent", "a", "--level", "read", "--help",
+            ],
             &[],
             vec![],
             owner_and_port,

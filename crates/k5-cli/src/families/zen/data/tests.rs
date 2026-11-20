@@ -24,13 +24,18 @@ fn an_import_body_is_python_s() {
         r#"{"widget":"w","mode":"replace","items":[{"key":"a","value":1}]}"#
     );
     let (said, exit) = import_body("w", "merge", "{\"key\":1}\n\nnope").unwrap_err();
-    assert_eq!((said.as_str(), exit), ("Error: line 3 is not JSON\n", Exit::Usage));
+    assert_eq!(
+        (said.as_str(), exit),
+        ("Error: line 3 is not JSON\n", Exit::Usage)
+    );
     let (said, _) = import_body("w", "merge", "[1]").unwrap_err();
     assert_eq!(said, "Error: row 1 is not a JSON object\n");
     let (said, _) = import_body("w", "merge", "{\"key\":\"a\"}").unwrap_err();
     assert_eq!(said, "Error: row 1 needs \"key\" and \"value\"\n");
     let (said, exit) = import_body("w", "merge", "[1,").unwrap_err();
-    assert!(said.ends_with("json.decoder.JSONDecodeError: Expecting value: line 1 column 4 (char 3)\n"));
+    assert!(
+        said.ends_with("json.decoder.JSONDecodeError: Expecting value: line 1 column 4 (char 3)\n")
+    );
     assert_eq!(exit, Exit::Error);
 }
 

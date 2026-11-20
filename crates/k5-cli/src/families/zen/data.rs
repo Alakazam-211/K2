@@ -9,9 +9,8 @@
 
 use crate::exit::Exit;
 use crate::families::store::widget::{
-    self as gd, args, at, blob_get_file, blob_put_file, body_or_exit, export_jsonl, granted,
-    lines, load, project_note, restore_body, restore_out, revoked, say, take_at, tell, usage,
-    Gd, R,
+    self as gd, args, at, blob_get_file, blob_put_file, body_or_exit, export_jsonl, granted, lines,
+    load, project_note, restore_body, restore_out, revoked, say, take_at, tell, usage, Gd, R,
 };
 use crate::families::{py_get, py_iter, Raise};
 use crate::out::json::Value;
@@ -134,7 +133,10 @@ fn size(v: &Value, line: u32) -> Result<String, Raise> {
         }
     };
     Ok(if n < 1024.0 {
-        format!("{} B", gd::d(v, 9).map_err(|r| Raise::inside(line, 9, "size", r.exception))?)
+        format!(
+            "{} B",
+            gd::d(v, 9).map_err(|r| Raise::inside(line, 9, "size", r.exception))?
+        )
     } else if n < 1_048_576.0 {
         format!("{:.1} KB", n / 1024.0)
     } else {
@@ -233,10 +235,7 @@ fn show(gd: &mut Gd, words: &[String]) -> R<()> {
                 gd::d(at(s, "rev", 5)?, 5)?,
                 orphan
             ));
-            o.push_str(&format!(
-                "made by: {}\n",
-                made_by(py_get(v, "madeBy", 6)?)
-            ));
+            o.push_str(&format!("made by: {}\n", made_by(py_get(v, "madeBy", 6)?)));
             for g in py_iter(at(v, "grants", 8)?, 8)? {
                 let gb = at(&g, "grantedBy", 9)?;
                 let by = if crate::out::pylib::ops::py_eq(gb, &gd::s("owner")) {
@@ -333,7 +332,9 @@ fn unadmin(gd: &mut Gd, words: &[String]) -> R<()> {
         }
     };
     if !a.yes {
-        tell(&format!("{n} grant(s) it made go with it. Go ahead? [y/N] "));
+        tell(&format!(
+            "{n} grant(s) it made go with it. Go ahead? [y/N] "
+        ));
         if !matches!(answer().as_str(), "y" | "Y" | "yes") {
             tell("Nothing changed.\n");
             return Err(Exit::Error);
@@ -402,7 +403,11 @@ fn mv(gd: &mut Gd, words: &[String]) -> R<()> {
     let mut b = gd::Dict::default();
     b.set("from", gd::s(&a.pos));
     b.set("to", gd::s(&a.pos2));
-    let ans = gd.call(true, "/cli/zen/data/space/move", &gd::dumps_default(&b.value()))?;
+    let ans = gd.call(
+        true,
+        "/cli/zen/data/space/move",
+        &gd::dumps_default(&b.value()),
+    )?;
     gd.out(&ans, |b| {
         lines(b, 1, |v, o, _| {
             o.push_str(&format!(
@@ -545,7 +550,10 @@ pub fn import_body(widget: &str, mode: &str, text: &str) -> Result<String, (Stri
                 return Err((
                     Raise::at(
                         8,
-                        format!("TypeError: '{}' object is not iterable", py::type_name(&other)),
+                        format!(
+                            "TypeError: '{}' object is not iterable",
+                            py::type_name(&other)
+                        ),
                     )
                     .text(),
                     Exit::Error,
@@ -581,8 +589,18 @@ pub fn import_body(widget: &str, mode: &str, text: &str) -> Result<String, (Stri
             return Err(stop(format!("row {n} needs \"key\" and \"value\"")));
         }
         let mut it = gd::Dict::default();
-        it.set("key", crate::families::get(pairs, "key").cloned().unwrap_or(Value::Null));
-        it.set("value", crate::families::get(pairs, "value").cloned().unwrap_or(Value::Null));
+        it.set(
+            "key",
+            crate::families::get(pairs, "key")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        it.set(
+            "value",
+            crate::families::get(pairs, "value")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
         items.push(it.value());
     }
     let mut b = gd::Dict::default();
@@ -611,7 +629,9 @@ fn import(gd: &mut Gd, words: &[String]) -> R<()> {
             "--blobs" => {
                 blobs = words.get(i + 1).cloned().unwrap_or_default();
                 if !std::path::Path::new(&blobs).is_dir() {
-                    return Err(usage("--blobs takes a folder of files named by their sha256"));
+                    return Err(usage(
+                        "--blobs takes a folder of files named by their sha256",
+                    ));
                 }
                 i += 1;
             }
@@ -631,7 +651,11 @@ fn import(gd: &mut Gd, words: &[String]) -> R<()> {
     }
     if crate::prompt::stdin_is_tty() {
         return Err(usage(&format!(
-            concat!("pipe the data in: ", cli_name!(), " zen data import {} < data.jsonl"),
+            concat!(
+                "pipe the data in: ",
+                cli_name!(),
+                " zen data import {} < data.jsonl"
+            ),
             w
         )));
     }

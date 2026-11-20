@@ -312,11 +312,7 @@ impl Gd<'_> {
 
     /// `_gd_out READER`: the body as it came with `--json`, else what the
     /// reader makes of it.
-    pub fn out(
-        &self,
-        body: &[u8],
-        read: impl FnOnce(&[u8]) -> Read,
-    ) -> R<()> {
+    pub fn out(&self, body: &[u8], read: impl FnOnce(&[u8]) -> Read) -> R<()> {
         if self.json {
             let mut b = body.to_vec();
             b.push(b'\n');
@@ -991,7 +987,11 @@ fn batch(gd: &mut Gd, words: &[String]) -> R<()> {
         )?;
         return gd.out(&ans, rev_ops);
     }
-    let begun = gd.call(true, "/cli/zen/data/tx/begin", &format!("{{\"widget\":{wjson}}}"))?;
+    let begun = gd.call(
+        true,
+        "/cli/zen/data/tx/begin",
+        &format!("{{\"widget\":{wjson}}}"),
+    )?;
     let tx = match load(&begun, 1).and_then(|v| at(&v, "txId", 1).map(captured)) {
         Ok(t) => t,
         Err(r) => return Err(raise_out(&r)),
@@ -1135,9 +1135,13 @@ pub fn take_at(usage_line: &str, words: &[String]) -> R<String> {
     }
     let b = at_.as_bytes();
     let dated = b.len() == 10
-        && b.iter()
-            .enumerate()
-            .all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() });
+        && b.iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                *c == b'-'
+            } else {
+                c.is_ascii_digit()
+            }
+        });
     if !at_.is_empty() && !dated {
         return Err(usage(
             "--at takes a date like 2026-10-13 (YYYY-MM-DD, this computer's time zone)",
@@ -1200,7 +1204,7 @@ pub fn make_temp(stem: &std::path::Path) -> Option<(std::path::PathBuf, std::fs:
 /// `_gd_export_jsonl WIDGET AT`: every page, as JSONL on stdout, the
 /// header first.
 pub fn export_jsonl(gd: &mut Gd, widget: &str, at_: &str) -> R<()> {
-    export_jsonl_to(gd, widget, at_, &mut |b| say(b))
+    export_jsonl_to(gd, widget, at_, &mut say)
 }
 
 /// [`export_jsonl`], each page's lines handed to `sink`.
@@ -1321,7 +1325,11 @@ fn readable(p: &str) -> bool {
 fn basename(p: &str) -> String {
     let t = p.trim_end_matches('/');
     if t.is_empty() {
-        return if p.is_empty() { String::new() } else { "/".into() };
+        return if p.is_empty() {
+            String::new()
+        } else {
+            "/".into()
+        };
     }
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
@@ -1479,7 +1487,11 @@ fn blob(gd: &mut Gd, words: &[String]) -> R<()> {
         String::new(),
         String::new(),
     );
-    let w = if words.is_empty() { &[][..] } else { &words[1..] };
+    let w = if words.is_empty() {
+        &[][..]
+    } else {
+        &words[1..]
+    };
     let mut i = 0;
     while i < w.len() {
         let a = w[i].as_str();
@@ -1835,7 +1847,10 @@ fn history(gd: &mut Gd, words: &[String]) -> R<()> {
         }
         i += 1;
     }
-    if !format!("{limit}{before}").bytes().all(|b| b.is_ascii_digit()) {
+    if !format!("{limit}{before}")
+        .bytes()
+        .all(|b| b.is_ascii_digit())
+    {
         return Err(usage("--limit and --before take whole numbers"));
     }
     let mut after = String::new();

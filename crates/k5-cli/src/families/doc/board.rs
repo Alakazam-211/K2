@@ -1,12 +1,13 @@
 //! A board verb on a `.k5board` file through `doc` (`_doc_board_call` and
 //! `_doc_board`, `cli/src/doc.sh`): doc's flags that mean the same for a
-//! board (`-w` and `--workspace` as `--workspace`), then `cmd_board`'s
+//! board (`-w` and `--workspace` as `--workspace`; `--host`, `--token`
+//! and `--token-stdin` as doc's, [`super::Ctx::remote`]), then `cmd_board`'s
 //! answer from the board family's planner and readers
 //! ([`crate::families::board`]), on doc's client: the line has passed
 //! doc's gate (the `docs` tool), as the shell runs `cmd_board` there.
 //! `cmd_doc` has already taken a line with `-h` or `--help` to doc's help.
 
-use super::{Ctx, Step};
+use super::{Ctx, Remote, Step};
 use crate::daemon;
 use crate::exit::Exit;
 use crate::families::board::{self as b, file, garden, Target};
@@ -81,8 +82,14 @@ pub fn call<S: AsRef<str>>(words: &[S]) -> bool {
 /// `_doc_board VERB ARGS...`, then `cmd_board VERB REST...`.
 pub fn run(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
     let mut rest = vec![verb.to_string()];
+    let mut remote = Remote::default();
     let mut i = 0;
     while i < words.len() {
+        let taken = remote.take(ctx, words, i)?;
+        if taken > 0 {
+            i += taken;
+            continue;
+        }
         let a = words[i].as_str();
         match a {
             "-w" | "--workspace" => {
@@ -101,6 +108,7 @@ pub fn run(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
         }
         i += 1;
     }
+    ctx.remote(remote)?;
     cmd_board(ctx, &rest)
 }
 

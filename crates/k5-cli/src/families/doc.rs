@@ -27,9 +27,17 @@
 //! Handed to the shell before anything is printed or sent: a word that is
 //! not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a port curl won't
 //! take, a `python3` the binary can't tell (nor how it decodes its stdin:
-//! [`py::decode_here`]), `--host`, `--token` or
-//! `--token-stdin` anywhere (another server: the remote transport isn't
-//! the binary's yet).
+//! [`py::decode_here`]), and a `--host` the binary doesn't send to itself
+//! ([`handed_back`]: a path after the host, a user part, an IPv6 address).
+//!
+//! Another server (`--host`, with `--token-stdin` or `--token`): each
+//! parser takes the flags as the shell's does, then the token and the
+//! host as `_doc_token_stdin` and `_apply_remote_host` do
+//! ([`Ctx::remote`]), and every request after that goes to that server
+//! over TCP (TLS for `https://`, [`crate::transport::tls`]). The token is
+//! read from stdin or the K2 home's files, or taken from `--token` (with
+//! the shell's note); it goes only into the requests' `Authorization`
+//! header, never on a child's argv or in its environment, a URL or a log.
 //!
 //! A board verb on a `.k5board` file is the board family's answer, under
 //! doc's gate, as the shell runs `cmd_board` there ([`board`]).
@@ -54,10 +62,10 @@ use crate::out::{self, py as opy};
 use crate::passport;
 use crate::prelude::{self, Closing, Gate};
 use crate::python;
-use crate::transport::{Auth, Client, Error};
+use crate::transport::{remote, Auth, Client, Error};
 use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -74,12 +82,22 @@ pub const TOOL: &str = "docs";
 const XFER_MAX_TIME: Duration = Duration::from_secs(300);
 
 /// Whether the binary hands the line to the shell (see the module's
-/// notes).
+/// notes): a `--host` the binary doesn't send to itself
+/// ([`remote::base`]). Every word after a `--host` and every `--host=`
+/// is looked at, so no host the shell would apply goes by unchecked.
 pub fn handed_back(words: &[&str]) -> bool {
-    words
-        .iter()
-        .any(|w| matches!(*w, "--host" | "--token" | "--token-stdin") || w.starts_with("--host="))
+    words.iter().enumerate().any(|(i, w)| {
+        let host = if *w == "--host" {
+            words.get(i + 1).copied()
+        } else {
+            w.strip_prefix("--host=")
+        };
+        host.is_some_and(|h| !h.is_empty() && remote::base(h).is_none())
+    })
 }
+
+/// The line `--token <t>` prints (`_doc_token_stdin`).
+pub const TOKEN_NOTE: &str = "note: --token is visible to every account on this computer while the command runs; use --token-stdin";
 
 fn wants_help(words: &[&str]) -> bool {
     words.iter().any(|w| matches!(*w, "-h" | "--help"))
@@ -155,6 +173,7 @@ fn run_with(
         in_cell,
         passport,
         tmp_made: false,
+        home: settings.home.clone(),
     };
     let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
     let exit = match ctx.dispatch(&words) {
@@ -192,6 +211,49 @@ pub struct Ctx {
     pub passport: bool,
     /// `_doc_tmp` ran.
     pub tmp_made: bool,
+    /// The K2 home, where another server's token may be kept.
+    pub home: PathBuf,
+}
+
+/// The other server's flags (`--host`, `--token`, `--token-stdin`), as
+/// a parser gathers them.
+#[derive(Debug, Default)]
+pub struct Remote {
+    pub host: String,
+    pub token: String,
+    pub token_stdin: bool,
+    /// `--token` was given.
+    pub token_flag: bool,
+}
+
+impl Remote {
+    /// Takes `words[i]` when it is one of the flags (with its value, the
+    /// next word, which `ctx.need` asks for): the count of words taken.
+    pub fn take(&mut self, ctx: &Ctx, words: &[String], i: usize) -> Result<usize, Exit> {
+        let a = words[i].as_str();
+        match a {
+            "--host" => {
+                self.host = ctx.need(words, i, "--host needs a server")?;
+                Ok(2)
+            }
+            "--token-stdin" => {
+                self.token_stdin = true;
+                Ok(1)
+            }
+            "--token" => {
+                self.token = ctx.need(words, i, "--token needs a value")?;
+                self.token_flag = true;
+                Ok(2)
+            }
+            _ => match a.strip_prefix("--host=") {
+                Some(h) => {
+                    self.host = h.to_string();
+                    Ok(1)
+                }
+                None => Ok(0),
+            },
+        }
+    }
 }
 
 /// `printf '%s'` of a body the shell holds in a variable: no NULs.
@@ -404,11 +466,18 @@ impl Ctx {
         }
     }
 
-    /// `_doc_parse`: the common flags into `self`, the rest returned.
+    /// `_doc_parse`: the common flags into `self`, the rest returned;
+    /// then the other server's token and host ([`Ctx::remote`]).
     pub fn parse(&mut self, words: &[String]) -> Result<Vec<String>, Exit> {
         let mut rest = Vec::new();
+        let mut remote = Remote::default();
         let mut i = 0;
         while i < words.len() {
+            let taken = remote.take(self, words, i)?;
+            if taken > 0 {
+                i += taken;
+                continue;
+            }
             let a = words[i].as_str();
             match a {
                 "--json" => self.json = true,
@@ -444,7 +513,48 @@ impl Ctx {
             }
             i += 1;
         }
+        self.remote(remote)?;
         Ok(rest)
+    }
+
+    /// `_doc_token_stdin` and `_apply_remote_host`: the token from stdin
+    /// (`--token-stdin`: one line, a hidden `Token: ` prompt on a
+    /// terminal, one trailing CR off), the note for `--token`, then with
+    /// a host, its token ([`remote::token_for_host`]) and every request
+    /// after this to it over TCP ([`remote::apply`]; TLS for `https://`).
+    /// The token goes only into the request's `Authorization` header:
+    /// never on argv, in a child's environment, a URL or a log.
+    pub fn remote(&mut self, r: Remote) -> Result<(), Exit> {
+        let mut token = r.token;
+        if r.token_stdin {
+            if r.token_flag {
+                return Err(self.usage("--token-stdin or --token, not both"));
+            }
+            let secret = crate::prompt::read_secret_stdin("Token: ");
+            let mut t = String::from_utf8_lossy(secret.expose()).into_owned();
+            if t.ends_with('\r') {
+                t.pop();
+            }
+            if t.is_empty() {
+                return Err(self.usage("--token-stdin: no token on stdin"));
+            }
+            token = t;
+        } else if r.token_flag {
+            out::stderr_line(TOKEN_NOTE);
+        }
+        if r.host.is_empty() {
+            return Ok(());
+        }
+        let base = remote::base(&r.host).expect("run hands a host it can't send to the shell");
+        let Some(found) = remote::token_for_host(&r.host, &token, &self.home) else {
+            for line in remote::no_token_lines(&r.host, &self.home) {
+                out::stderr_line(&line);
+            }
+            return Err(Exit::Error);
+        };
+        remote::apply(self.client(), &base, found);
+        self.in_cell = false;
+        Ok(())
     }
 
     /// `_doc_one_path VERB`.

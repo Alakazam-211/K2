@@ -35,10 +35,15 @@ fn claim_ttls_are_milliseconds() {
 }
 
 #[test]
-fn another_server_goes_to_the_shell() {
-    assert!(handed_back(&["cat", "--host", "h", "a.md"]));
-    assert!(handed_back(&["cat", "--host=h", "a.md"]));
-    assert!(handed_back(&["cat", "--token-stdin", "a.md"]));
+fn only_a_host_the_binary_can_t_send_to_goes_to_the_shell() {
+    assert!(handed_back(&["cat", "--host", "https://box.example/prefix", "a.md"]));
+    assert!(handed_back(&["cat", "--host=[::1]:4100", "a.md"]));
+    assert!(handed_back(&["cores", "--host", "a b"]));
+    assert!(!handed_back(&["cat", "--host", "box.example", "a.md"]));
+    assert!(!handed_back(&["cat", "--host=http://127.0.0.1:4100", "--token-stdin", "a.md"]));
+    assert!(!handed_back(&["cat", "--host=", "a.md"]));
+    assert!(!handed_back(&["cat", "a.md", "--host"]));
+    assert!(!handed_back(&["cat", "--token", "t", "a.md"]));
     assert!(!handed_back(&["add", "--title", "x", "plan.K5BOARD"]));
 }
 

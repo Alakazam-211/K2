@@ -162,8 +162,12 @@ assert_off_children() {
     else
         ok "$label: the token is in no child's environment"
     fi
-    # The wrappers really ran (doc cores --json needs only curl).
-    if grep -q -e '^python3 ' -e '^curl ' "$ARGLOG"; then ok "$label: python3 or curl children were logged"; else bad "$label: no python3 or curl child was logged"; fi
+    # The wrappers really ran (doc cores --json needs only curl). A command
+    # the k5 binary answers itself (NATIVE_IN_K5=1) starts no python3 and
+    # no curl there at all.
+    if [ "${NATIVE_IN_K5:-0}" = 1 ] && [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+        if grep -q -e '^python3 ' -e '^curl ' "$ARGLOG"; then bad "$label: the binary started a python3 or curl child"; else ok "$label: the binary started no python3 or curl child"; fi
+    elif grep -q -e '^python3 ' -e '^curl ' "$ARGLOG"; then ok "$label: python3 or curl children were logged"; else bad "$label: no python3 or curl child was logged"; fi
 }
 
 NOTE="note: --token is visible to every account on this computer while the command runs; use --token-stdin"
@@ -199,7 +203,7 @@ case "$OUT" in *"--token-stdin                remote token on stdin"*) ok "clone
 
 # 2. k2 doc cores --host H (_doc_parse; the board and the any-file verbs
 #    share its token reader).
-token_case "doc cores" /cli/docs/cores doc cores --host "$REMOTE" --json
+NATIVE_IN_K5=1 token_case "doc cores" /cli/docs/cores doc cores --host "$REMOTE" --json
 run_k2 "" doc cores --help
 case "$OUT" in *"[--host <server> [--token-stdin]]"*) ok "doc cores help: --token-stdin is shown" ;; *) bad "doc cores help: no --token-stdin" ;; esac
 

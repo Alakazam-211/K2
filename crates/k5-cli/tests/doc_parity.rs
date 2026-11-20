@@ -1040,3 +1040,250 @@ fn a_board_file_through_doc() {
         rig.check(&c);
     }
 }
+
+/// Another server's token, as a person pastes it.
+const RTOKEN: &str = "k2rt_REMOTE_DOCTEST";
+/// It on stdin, one line.
+const RTOKEN_IN: &[u8] = b"k2rt_REMOTE_DOCTEST\n";
+/// An export the daemon placed itself.
+const PLACED: &str = r#"{"job":"j1","state":"done","doc":{"path":"/w/a.md"},"target":"pdf","docVersion":3,"size":10,"placed":{"path":"/w/a.pdf","abs":"/abs/w/a.pdf"}}"#;
+
+/// `--host` (another K2 server, here this side's stub over plain HTTP)
+/// with `--token-stdin` or `--token`: each parser's flags, the token's
+/// lines, and every request after them to that server with its token.
+#[test]
+fn another_server_by_host() {
+    let rig = Rig::new(VERB, "host");
+    let v = vec![
+        fed(
+            RTOKEN_IN,
+            r(
+                "cores on another server, the token on stdin",
+                &["cores", "--host", "http://127.0.0.1:{port}", "--token-stdin", "--json"],
+                vec![ok(r#"{"cores":[]}"#)],
+                0,
+            ),
+        ),
+        fed(
+            b"k2rt_REMOTE_DOCTEST\r\n",
+            set(
+                files,
+                r(
+                    "cat on another server: one CR off, the path as given",
+                    &["cat", "--host", "http://127.0.0.1:{port}", "--token-stdin", "new.md"],
+                    vec![ok(TOOL)],
+                    0,
+                ),
+            ),
+        ),
+        r(
+            "--token on the command line: the note",
+            &["cat", "--host=http://127.0.0.1:{port}", "--token", "k2rt_ARGV", "a.md"],
+            vec![ok(TOOL)],
+            0,
+        ),
+        fed(
+            RTOKEN_IN,
+            stop(
+                "both forms",
+                &["cat", "--host", "http://127.0.0.1:{port}", "--token-stdin", "--token", "x", "a.md"],
+                2,
+            ),
+        ),
+        stop(
+            "--token-stdin, nothing on stdin",
+            &["cat", "--host", "http://127.0.0.1:{port}", "--token-stdin", "a.md"],
+            2,
+        ),
+        stop("no token for the host", &["cat", "--host", "box.example", "a.md"], 1),
+        stop("--host last", &["cat", "a.md", "--host"], 2),
+        stop("--token last", &["cat", "a.md", "--token"], 2),
+        fed(
+            RTOKEN_IN,
+            r(
+                "--token-stdin and no host: read, then this server",
+                &["cat", "--token-stdin", "a.md"],
+                vec![ok(TOOL)],
+                0,
+            ),
+        ),
+        r(
+            "cores --token last: an empty token and the note",
+            &["cores", "--token"],
+            vec![ok(r#"{"cores":[]}"#)],
+            0,
+        ),
+        fed(
+            RTOKEN_IN,
+            r(
+                "an any-file verb on another server",
+                &["comment", "--host", "http://127.0.0.1:{port}", "--token-stdin", "--body", "x", "a.psd"],
+                vec![ok(BLOB)],
+                0,
+            ),
+        ),
+        fed(
+            RTOKEN_IN,
+            r(
+                "cad on another server",
+                &["cad", "--host", "http://127.0.0.1:{port}", "--token-stdin", "drawing", "info", "x.dxf"],
+                vec![ok(r#"{"stdout":"units mm"}"#)],
+                0,
+            ),
+        ),
+        fed(
+            RTOKEN_IN,
+            r(
+                "a board file on another server",
+                &["list", "plan.k5board", "--host", "http://127.0.0.1:{port}", "--token-stdin", "--json"],
+                vec![ok(BOARD_LIST)],
+                0,
+            ),
+        ),
+        fed(
+            RTOKEN_IN,
+            r(
+                "export on another server: where the daemon placed it",
+                &["export", "--to", "pdf", "--host", "http://127.0.0.1:{port}", "--token-stdin", "a.md"],
+                vec![ok(PLACED)],
+                0,
+            ),
+        ),
+        fed(
+            RTOKEN_IN,
+            set(
+                files,
+                r(
+                    "export --out on another server: fetched to this machine",
+                    &["export", "--to", "pdf", "--out", "out.pdf", "--host", "http://127.0.0.1:{port}", "--token-stdin", "a.md"],
+                    vec![ok(PLACED)],
+                    0,
+                ),
+            ),
+        ),
+        fed(
+            RTOKEN_IN,
+            case(
+                "in a session: the host's token over TCP, no fence",
+                &["cat", "--host", "http://127.0.0.1:{port}", "--token-stdin", "a.md"],
+                &[],
+                vec![ok(TOOL)],
+                port_only,
+                0,
+                1,
+            )
+            .with_env(with_passport(&[("K2_HOOK_SOCK", "{sock}")])),
+        ),
+        Case {
+            compare: Compare::Shell,
+            ..stop(
+                "a host the binary doesn't send to: the shell's",
+                &["cat", "--host", "https://box.example/x", "a.md"],
+                1,
+            )
+        },
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// `python3` and `curl` on `PATH` that log their argv and environment
+/// before they run the real ones.
+fn logging_programs(rig: &Rig, log: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = rig.dir.join("logging-bin");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = std::env::var_os("PATH").expect("a PATH to run the tests with");
+    for prog in ["python3", "curl"] {
+        let real = std::env::split_paths(&path)
+            .map(|d| d.join(prog))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("no {prog} on PATH"));
+        let script = format!(
+            "#!/bin/sh\n{{ printf '== {prog}'; for a in \"$@\"; do printf ' [%s]' \"$a\"; done; printf '\\n'; env; }} >> '{log}'\nexec '{real}' \"$@\"\n",
+            log = log.display(),
+            real = real.display(),
+        );
+        let file = dir.join(prog);
+        std::fs::write(&file, script).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    dir
+}
+
+/// The other server's token from stdin reaches its requests and no
+/// child's argv or environment: the shell starts its Python and curl
+/// (logged, so the logging is seen to work) without it; the binary starts
+/// nothing at all.
+#[test]
+fn the_host_s_token_is_on_no_child() {
+    let mut rig = Rig::new(VERB, "hostkids");
+    let log = rig.dir.join("children.log");
+    rig.path_first = Some(logging_programs(&rig, &log));
+    rig.tool_log = Some(log);
+    let cases = [
+        fed(
+            RTOKEN_IN,
+            r(
+                "cores",
+                &["cores", "--host", "http://127.0.0.1:{port}", "--token-stdin", "--json"],
+                vec![ok(r#"{"cores":[]}"#)],
+                0,
+            ),
+        ),
+        fed(
+            RTOKEN_IN,
+            r(
+                "cat",
+                &["cat", "--host", "http://127.0.0.1:{port}", "--token-stdin", "a.md"],
+                vec![ok(TOOL)],
+                0,
+            ),
+        ),
+        fed(
+            RTOKEN_IN,
+            r(
+                "a board file",
+                &["list", "plan.k5board", "--host", "http://127.0.0.1:{port}", "--token-stdin", "--json"],
+                vec![ok(BOARD_LIST)],
+                0,
+            ),
+        ),
+    ];
+    let bearer = format!("Authorization: Bearer {RTOKEN}");
+    for c in &cases {
+        rig.prepare(Side::Bash, c);
+        let out = rig.run(true, c);
+        assert_eq!(out.code, Some(0), "{}: the shell: {out:?}", c.name);
+        let sent = rig.read(Side::Bash, false, c.name);
+        let children = rig.take_tool_log();
+        assert!(
+            children.contains("== python3 ") || children.contains("== curl "),
+            "{}: the shell's children were not logged:\n{children}",
+            c.name
+        );
+        assert!(
+            !children.contains(RTOKEN),
+            "{}: the token is on a child of the shell:\n{children}",
+            c.name
+        );
+        assert_eq!(sent.len(), 1, "{}: the shell's requests", c.name);
+        assert!(
+            String::from_utf8_lossy(&sent[0].bytes).contains(&bearer),
+            "{}: the shell did not send the token",
+            c.name
+        );
+
+        let (out, sent) = rig.binary(c, false);
+        let children = rig.take_tool_log();
+        assert_eq!(out.code, Some(0), "{}: the binary: {out:?}", c.name);
+        assert_eq!(children, "", "{}: the binary started a program", c.name);
+        assert_eq!(sent.len(), 1, "{}: the binary's requests", c.name);
+        assert!(
+            sent[0].contains(&bearer),
+            "{}: the binary did not send the token",
+            c.name
+        );
+    }
+}

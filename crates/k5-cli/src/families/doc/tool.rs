@@ -195,7 +195,7 @@ pub fn blob(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
     while i < words.len() {
         let a = words[i].as_str();
         match a {
-            "-w" | "--workspace" | "--on-behalf-of" => {
+            "-w" | "--workspace" | "--on-behalf-of" | "--host" | "--token" => {
                 let Some(v) = words.get(i + 1) else {
                     return Err(ctx.usage(format!("{a} needs a value")));
                 };
@@ -220,7 +220,11 @@ pub fn blob(ctx: &mut Ctx, verb: &str, words: &[String]) -> Step {
                 }
                 break;
             }
-            _ if a.starts_with("--workspace=") || a.starts_with("--on-behalf-of=") => {
+            "--token-stdin" => k2args.push(a.to_string()),
+            _ if a.starts_with("--workspace=")
+                || a.starts_with("--on-behalf-of=")
+                || a.starts_with("--host=") =>
+            {
                 k2args.push(a.to_string())
             }
             _ if a.starts_with("--read-budget=") => {

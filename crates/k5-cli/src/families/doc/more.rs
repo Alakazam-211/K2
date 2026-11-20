@@ -27,10 +27,20 @@ fn int0() -> Value {
 
 pub fn cores(ctx: &mut Ctx, words: &[String]) -> Step {
     let mut rest = Vec::new();
-    for a in words {
+    let mut i = 0;
+    while i < words.len() {
+        let a = &words[i];
+        i += 1;
         match a.as_str() {
             "-h" | "--help" => return Ok(ctx.page("doc/cores")),
-            "--json" => rest.push(a.clone()),
+            // `rest+=("$1" "${2:-}")`: the value, or an empty one.
+            "--host" | "--token" => {
+                rest.push(a.clone());
+                rest.push(words.get(i).cloned().unwrap_or_default());
+                i += 1;
+            }
+            "--json" | "--token-stdin" => rest.push(a.clone()),
+            x if x.starts_with("--host=") => rest.push(a.clone()),
             x if x.starts_with('-') => {
                 return Err(ctx.usage(format!(
                     "{CLI_NAME} doc cores doesn't take {x} ({CLI_NAME} doc cores --help)"
@@ -314,7 +324,7 @@ pub fn cad(ctx: &mut Ctx, words: &[String]) -> Step {
     while i < words.len() {
         let a = words[i].as_str();
         match a {
-            "-w" | "--workspace" | "--on-behalf-of" => {
+            "-w" | "--workspace" | "--on-behalf-of" | "--host" | "--token" => {
                 let Some(v) = words.get(i + 1) else {
                     return Err(ctx.usage(format!("{a} needs a value")));
                 };
@@ -331,7 +341,11 @@ pub fn cad(ctx: &mut Ctx, words: &[String]) -> Step {
                 }
                 break;
             }
-            _ if a.starts_with("--workspace=") || a.starts_with("--on-behalf-of=") => {
+            "--token-stdin" => k2args.push(a.to_string()),
+            _ if a.starts_with("--workspace=")
+                || a.starts_with("--on-behalf-of=")
+                || a.starts_with("--host=") =>
+            {
                 k2args.push(a.to_string())
             }
             _ if a.starts_with('-') => toks.push(a.to_string()),
@@ -979,9 +993,15 @@ pub fn export(ctx: &mut Ctx, words: &[String]) -> Step {
     if to.is_empty() {
         return Err(ctx.usage(format!("{CLI_NAME} doc export --to <target> [--version V] [--option NAME=VALUE]... [--out FILE] <file>  ({CLI_NAME} doc export --list <file> shows the targets)")));
     }
+    // --out: from where you stand (absolute), unless -w names the
+    // workspace it is relative to. On --host it is a path on this
+    // machine: the binary writes it (fetch).
+    let remote = ctx.client.as_ref().is_some_and(|c| c.force_tcp);
     let (mut local_out, mut send_out) = (String::new(), String::new());
     if !outf.is_empty() {
-        if !ctx.ws.is_empty() && !outf.starts_with('/') {
+        if remote {
+            local_out = pypath::abspath(&outf);
+        } else if !ctx.ws.is_empty() && !outf.starts_with('/') {
             send_out = outf.clone();
         } else {
             local_out = pypath::abspath(&outf);
@@ -1020,6 +1040,9 @@ pub fn export(ctx: &mut Ctx, words: &[String]) -> Step {
     }
     if !send_out.is_empty() {
         dd.push(("out", py::s(&send_out)));
+    }
+    if remote && !outf.is_empty() {
+        dd.push(("fetch", Value::Bool(true)));
     }
     if !node.is_empty() {
         dd.push(("node", py::s(&node)));
@@ -1099,7 +1122,7 @@ pub fn export(ctx: &mut Ctx, words: &[String]) -> Step {
         return Ok(pr.finish(r));
     }
     let mut pr = Pr::default();
-    let r = py::load(&cur, 3).and_then(|v| export_lines(&mut pr, &v, &local_out));
+    let r = py::load(&cur, 3).and_then(|v| export_lines(&mut pr, &v, &local_out, remote));
     Ok(pr.finish(r))
 }
 
@@ -1199,7 +1222,7 @@ fn append_chunk(chunk: &[u8], part: &str) -> R<(String, bool)> {
     Ok((next, tr(&v, "eof", 7)?))
 }
 
-fn export_lines(pr: &mut Pr, v: &Value, local: &str) -> R<Exit> {
+fn export_lines(pr: &mut Pr, v: &Value, local: &str, remote: bool) -> R<Exit> {
     let placed = gt_or(v, "placed", 5)?
         .cloned()
         .unwrap_or_else(|| Value::Object(Vec::new()));
@@ -1209,10 +1232,16 @@ fn export_lines(pr: &mut Pr, v: &Value, local: &str) -> R<Exit> {
     } else {
         sg(&placed, "path", 6)?
     };
+    // `(placed.get("abs") if not remote else None) or where`.
+    let abs = if remote {
+        None
+    } else {
+        gt_or(&placed, "abs", 7)?
+    };
     let full = if fetch {
         local.to_string()
     } else {
-        match gt_or(&placed, "abs", 7)? {
+        match abs {
             Some(a) => st(a),
             None => where_.clone(),
         }

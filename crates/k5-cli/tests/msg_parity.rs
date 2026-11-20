@@ -602,14 +602,16 @@ fn msg_sends_as_the_shell_does() {
         )),
         Case {
             env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+            // The socket file is gone: the id tool's one probe of the
+            // passport (`_cli_scoped_token_rejected`), then the send.
             ..session(case(
                 "Postal mail: no socket, TCP with the passport",
                 &["a::abc.postal.bot", "hi"],
                 &[],
-                vec![ok(POSTAL_SENT)],
+                vec![ok(r#"{"ok":true}"#), ok(POSTAL_SENT)],
                 nothing,
                 0,
-                1,
+                2,
             ))
         },
         session(case(

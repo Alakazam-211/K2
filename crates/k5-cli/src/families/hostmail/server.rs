@@ -11,11 +11,11 @@
 
 use super::pyx::{self, addr, g, hint_or, items, or_dict, or_s, s_of, sv};
 use super::words::{scan, wants_help, Spec};
+use crate::exit::Exit;
 use crate::families::mail::core::{
     obj, py_float, raise_at, run_env, usage, At, End, Plan, Py, Secs, Tb, Within, MODULE, R,
 };
 use crate::families::mail::py as p;
-use crate::exit::Exit;
 use crate::out::json::Value;
 use crate::out::{self, py};
 use crate::transport::urllib::Method;
@@ -105,7 +105,12 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
     let r = match verb {
         "enable" => enable(words),
         "disable" => only_json(words, "hostmail/disable", "server_disable", "disable"),
-        "rotate-admin" => only_json(words, "hostmail/rotate-admin", "rotate_admin", "rotate-admin"),
+        "rotate-admin" => only_json(
+            words,
+            "hostmail/rotate-admin",
+            "rotate_admin",
+            "rotate-admin",
+        ),
         "uninstall" => uninstall(words),
         "upgrade" => upgrade(words),
         "password" => password(words),
@@ -673,7 +678,10 @@ fn enable_py(py_: &mut Py) -> R<()> {
     if py_.json {
         py_.print_json(&d);
     } else if p::truthy(g(&d, "alreadyEnabled", line::ENABLE_ALREADY)?.as_ref()) {
-        let h = or_s(g(&d, "hint", line::ENABLE_ALREADY + 1)?, "already enabled (no-op)");
+        let h = or_s(
+            g(&d, "hint", line::ENABLE_ALREADY + 1)?,
+            "already enabled (no-op)",
+        );
         py_.print(&h);
     } else {
         if let Some(h) = g(&d, "helper", line::ENABLE_HELPER)?.filter(py::truthy) {
@@ -911,7 +919,8 @@ fn upgrade_py(py_: &mut Py) -> R<()> {
         };
         if bad {
             if last_ok.elapsed().as_secs_f64() >= lost_after {
-                let secs = py::percent_d(&Value::Float(lost_after)).at(line::UP_LOST + 7, MODULE)?;
+                let secs =
+                    py::percent_d(&Value::Float(lost_after)).at(line::UP_LOST + 7, MODULE)?;
                 return Err(py_.die_with(
                     "daemon_lost",
                     &format!(
@@ -987,7 +996,8 @@ fn upgrade_py(py_: &mut Py) -> R<()> {
             .as_ref()
             .is_some_and(|v| p::eq_str(v, "rollback_failed"))
         {
-            let mut err = String::from("ROLLBACK FAILED — mail may be down. Manual steps (as root):\n");
+            let mut err =
+                String::from("ROLLBACK FAILED — mail may be down. Manual steps (as root):\n");
             let steps = items(g(&fin, "manualSteps", line::UP_MANUAL)?, line::UP_MANUAL);
             // What was written before a raise stays written.
             let (steps, raised) = match steps {
@@ -1057,7 +1067,10 @@ fn dry_run_print(py_: &mut Py, d: &Value) -> R<()> {
     }
     let l = line::DRY_CALL + 3;
     if g(d, "outcome", l)?.is_some_and(|v| p::eq_str(&v, "noop")) {
-        let h = or_s(g(d, "hint", l + 1)?, "already on the pinned version (no-op)");
+        let h = or_s(
+            g(d, "hint", l + 1)?,
+            "already on the pinned version (no-op)",
+        );
         py_.print(&h);
         return Ok(());
     }
@@ -1083,7 +1096,10 @@ fn dry_run_print(py_: &mut Py, d: &Value) -> R<()> {
         let hint = s_of(g(&b, "hint", line::DRY_BLOCKER)?);
         py_.print(&format!("blocked  : [{code}] {hint}"));
     }
-    if !matches!(g(d, "dataBytes", line::DRY_HB - 2)?, None | Some(Value::Null)) {
+    if !matches!(
+        g(d, "dataBytes", line::DRY_HB - 2)?,
+        None | Some(Value::Null)
+    ) {
         let a = hb(g(d, "dataBytes", line::DRY_HB)?, line::DRY_HB)?;
         let b = hb(g(d, "configBytes", line::DRY_HB)?, line::DRY_HB)?;
         let snap = or_s(g(d, "snapshotDir", line::DRY_HB_FREE)?, "?");
@@ -1158,7 +1174,11 @@ fn password_rotate_py(py_: &mut Py) -> R<()> {
         let port_v = p::attr_get(&ep, "port").map_err(|e| ep_line(e, h + 1))?;
         let port = or_s(port_v, &port.to_string());
         let alpn = p::attr_get(&ep, "alpn").map_err(|e| ep_line(e, h + 2))?;
-        let extra = if p::truthy(alpn.as_ref()) { "  alpn" } else { "" };
+        let extra = if p::truthy(alpn.as_ref()) {
+            "  alpn"
+        } else {
+            ""
+        };
         py_.print(&format!("{label} : {host}:{port}{extra}"));
     }
     if let Some(n) = g(&d, "apiKeysRevoked", line::PW_EP_JMAP + 1)? {
@@ -1167,7 +1187,9 @@ fn password_rotate_py(py_: &mut Py) -> R<()> {
     if let Some(w) = g(&d, "apiKeysWarning", line::PW_EP_JMAP + 3)?.filter(py::truthy) {
         py_.print(&format!("WARNING  : {}", py::str_of(&w)));
     }
-    py_.print("note: this invalidates the mint-time secret — Mail.app sessions must use the new password");
+    py_.print(
+        "note: this invalidates the mint-time secret — Mail.app sessions must use the new password",
+    );
     py_.print(&format!(
         "note: the mailbox's API keys and app passwords stop working too ({CLI_NAME} hostmail app-password to add new ones)"
     ));
@@ -1216,7 +1238,10 @@ fn apw_add_py(py_: &mut Py) -> R<()> {
     let l = line::APW_ADD_CALL + 4;
     py_.print(&format!("created app password for {}", addr(py_, &d, l)?));
     py_.print(&format!("id     : {}", or_s(g(&d, "id", l + 1)?, "?")));
-    py_.print(&format!("label  : {}", or_s(g(&d, "label", l + 2)?, CLI_NAME)));
+    py_.print(&format!(
+        "label  : {}",
+        or_s(g(&d, "label", l + 2)?, CLI_NAME)
+    ));
     if let Some(s) = g(&d, "secret", l + 3)?.filter(py::truthy) {
         py_.print(&format!(
             "secret : {}  (shown once — save it for Mail.app / IMAP)",
@@ -1231,7 +1256,11 @@ fn apw_revoke_py(py_: &mut Py) -> R<()> {
         ("address", pyx::env_v(py_, "M_ADDRESS")),
         ("id", pyx::env_v(py_, "M_ID")),
     ]);
-    let d = py_.post("/cli/mail/app-password/revoke", &body, line::APW_REVOKE_CALL)?;
+    let d = py_.post(
+        "/cli/mail/app-password/revoke",
+        &body,
+        line::APW_REVOKE_CALL,
+    )?;
     if py_.json {
         py_.print_json(&d);
         return Ok(());
@@ -1382,7 +1411,10 @@ fn keep_all_py(py_: &mut Py, mailbox: bool) -> R<()> {
             "still flagged: {newer} created after the update, {undated} with no creation time — review those one by one ({CLI_NAME} hostmail doctor)"
         ));
     }
-    for e in items(g(&d, "listErrors", line::KEEP_ALL_ERRORS)?, line::KEEP_ALL_ERRORS)? {
+    for e in items(
+        g(&d, "listErrors", line::KEEP_ALL_ERRORS)?,
+        line::KEEP_ALL_ERRORS,
+    )? {
         py_.print(&format!("could not list app passwords: {}", py::str_of(&e)));
     }
     Ok(())
@@ -1390,7 +1422,11 @@ fn keep_all_py(py_: &mut Py, mailbox: bool) -> R<()> {
 
 fn person_link_py(py_: &mut Py) -> R<()> {
     let who = py_.env("M_PERSON").to_string();
-    let person = if who.is_empty() { Value::Null } else { sv(&who) };
+    let person = if who.is_empty() {
+        Value::Null
+    } else {
+        sv(&who)
+    };
     let body = obj(vec![
         ("address", pyx::env_v(py_, "M_ADDRESS")),
         ("person", person),

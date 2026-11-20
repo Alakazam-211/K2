@@ -77,6 +77,11 @@ export const LLM_SWITCH_ACTION_ID = 'llm_switch'
 export const LLM_SWITCH_ROUTE = 'llm/accounts/switch'
 /** Out of usage (0.46.17): add a login for the tool. */
 export const LLM_ADD_LOGIN_ACTION_ID = 'llm_add_login'
+/** 0.46.18: turn back on a heartbeat the daemon turned off after repeated
+ *  failures (Owner and Admin; the route refuses a Member). */
+export const HEARTBEAT_ENABLE_ACTION_ID = 'heartbeat_enable'
+/** The one route `heartbeat_enable` posts to. */
+export const HEARTBEAT_ENABLE_ROUTE = 'heartbeat/enable'
 
 /** The most buttons one notice draws. */
 const MAX_ACTIONS = 4
@@ -139,6 +144,15 @@ function parseAction(raw: unknown): SystemNoticeAction | null {
     const accountId = str(isRecord(raw.body) ? raw.body.id : '')
     if (systemNoticeRoute(raw.route) !== LLM_SWITCH_ROUTE || !accountId) return null
     return { id, label, call: { kind: 'post', route: LLM_SWITCH_ROUTE, body: { id: accountId } }, done }
+  }
+  // Turn a heartbeat back on: only to the heartbeat enable route, with
+  // only its workspace and name, and only ever on.
+  if (id === HEARTBEAT_ENABLE_ACTION_ID) {
+    const body = isRecord(raw.body) ? raw.body : {}
+    const project = str(body.project)
+    const name = str(body.name)
+    if (systemNoticeRoute(raw.route) !== HEARTBEAT_ENABLE_ROUTE || !project || !name) return null
+    return { id, label, call: { kind: 'post', route: HEARTBEAT_ENABLE_ROUTE, body: { project, name, enabled: true } }, done }
   }
   // Send again posts its body to its route. Any other id is one this
   // client doesn't know: no button.

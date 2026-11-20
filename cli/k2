@@ -4360,7 +4360,8 @@ try:
         sched = ' '.join(sched_parts) or '-'
         last = (r.get('lastFired') or 'never')[:19].replace('T', ' ')
         # A schedule K2 turned off reads auto-off, not a person's no.
-        en = 'yes' if r.get('enabled') else ('auto-off' if r.get('disabledReason') else 'no')
+        # 0.46.18: paused by the LLM usage limit (still on; resumes by itself).
+        en = ('paused' if r.get('pausedUntil') else 'yes') if r.get('enabled') else ('auto-off' if r.get('disabledReason') else 'no')
         print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {hb_zone(r):<{zw}} {last:<22} {en:<8} {hb_next(r):<17} {hb_waiting(r)}')
         # 0.46.15: a schedule read in its own zone says so, with the next
         # fire there and here (Next above is this computer's clock).
@@ -4374,6 +4375,13 @@ try:
             print(f\"    invalid schedule: {r.get('waitDetail') or r.get('scheduleError') or '?'}\")
         elif wr == 'wakeup_waiting':
             print(f\"    {r.get('waitDetail') or 'waiting for WAKEUP.md'}\")
+        pu = r.get('pausedUntil')
+        if r.get('enabled') and pu:
+            try:
+                pu = datetime.fromisoformat(pu.replace('Z', '+00:00')).astimezone().strftime('%Y-%m-%d %H:%M')
+            except ValueError:
+                pass
+            print(f\"    paused until {pu} (LLM usage limit): it resumes by itself\")
         # Turned off by K2, not a person: why, since when, how to turn it on.
         dr = r.get('disabledReason')
         if not r.get('enabled') and dr:

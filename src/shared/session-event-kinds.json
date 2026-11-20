@@ -25,6 +25,7 @@
   "subscription_usage_changed": "app",
   "llm_accounts_changed": "app",
   "llm_out_of_usage": "app",
+  "heartbeat_turned_off": "app",
   "presence_changed": "app",
   "open_url": "app",
   "project_groups_changed": "app",

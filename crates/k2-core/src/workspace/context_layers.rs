@@ -1171,8 +1171,10 @@ pub fn render_heartbeats_roster_body(project_path: &str) -> String {
                 out.push_str(&format!("  - schedule error: {err}\n"));
             }
         }
+        // An enabled row's reason is a usage-limit pause, which ends by
+        // itself: AGENTS.md (regenerated rarely) would keep a stale line.
         if let Some(ref reason) = hb.disabled_reason {
-            if !reason.is_empty() {
+            if !reason.is_empty() && !hb.enabled {
                 out.push_str(&format!("  - disabled reason: {reason}\n"));
             }
         }

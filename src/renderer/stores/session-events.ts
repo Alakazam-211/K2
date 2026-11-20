@@ -674,6 +674,22 @@ export interface LlmOutOfUsageEvent {
   noticeId: string
 }
 
+/** APP-LEVEL — the daemon turned a heartbeat off after repeated failures
+ *  (`disabled`) or paused it on the LLM usage limit (`paused`), and posted
+ *  its notice on the agent's Thread (`noticeId`; null when that failed). */
+export interface HeartbeatTurnedOffEvent {
+  kind: 'heartbeat_turned_off'
+  workspaceId: string
+  address: string
+  name: string
+  state: 'disabled' | 'paused'
+  reason: string
+  failures: number
+  /** Unix seconds the pause ends (an unknown reset: the next hourly check); null for a disable. */
+  pausedUntil: number | null
+  noticeId: string | null
+}
+
 /** APP-LEVEL — files under a workspace changed (multi-writer Files-drawer
  *  live refresh). Agent shell writes on the daemon machine, other clients'
  *  `/cli/fs/*` mutations, and compress/upload completions all land here so
@@ -1072,6 +1088,7 @@ export type SessionEventMessage =
   | SubscriptionUsageChangedEvent
   | LlmAccountsChangedEvent
   | LlmOutOfUsageEvent
+  | HeartbeatTurnedOffEvent
   | FsChangedEvent
   | BoardFileChangedEvent
   | DocStructureChangedEvent

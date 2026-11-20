@@ -1514,7 +1514,47 @@ fn record_fire_failure(
     hb: &AgentHeartbeat,
     reason: &str,
 ) -> serde_json::Value {
+    record_fire_failure_in(
+        &crate::heartbeat_turned_off::LiveEffects,
+        project_id,
+        agent_name,
+        hb,
+        reason,
+        chrono::Utc::now().timestamp(),
+    )
+}
+
+/// [`record_fire_failure`] with the Thread, bus and clock passed in
+/// (tests).
+///
+/// 0.46.18: a failure on the LLM usage limit pauses the row until the
+/// reset instead of counting toward the auto-disable, and an
+/// auto-disable posts one notice on the agent's Thread
+/// (`heartbeat_turned_off`).
+pub(crate) fn record_fire_failure_in(
+    fx: &dyn crate::heartbeat_turned_off::Effects,
+    project_id: &str,
+    agent_name: &str,
+    hb: &AgentHeartbeat,
+    reason: &str,
+    now: i64,
+) -> serde_json::Value {
     release_lease(project_id, &hb.name);
+
+    if !hb.is_reminder() {
+        if let Some(cause) = crate::heartbeat_turned_off::usage_cause(project_id, reason, now) {
+            if let Some(p) = crate::heartbeat_turned_off::pause(fx, project_id, hb, cause, reason, now) {
+                write_audit(project_id, agent_name, hb, "error", &format!("{reason} ({})", p.audit_note()));
+                k2_core::log_debug!(
+                    "[heartbeat] paused hb={} project={} on the usage limit until {}",
+                    hb.name,
+                    project_id,
+                    k2_core::heartbeats::usage_pause::fmt(p.until)
+                );
+                return error_value("error", reason, &hb.name);
+            }
+        }
+    }
 
     // The row was loaded at smart_launch entry and the in-flight lease
     // makes fire-attempts single-flight, so `hb.consecutive_failures`
@@ -1523,13 +1563,15 @@ fn record_fire_failure(
     let backoff_secs = FAILURE_BACKOFF_BASE_SECS
         .saturating_mul(1i64 << (new_count - 1).clamp(0, 30))
         .min(FAILURE_BACKOFF_CAP_SECS);
-    let next_retry = (chrono::Utc::now() + chrono::Duration::seconds(backoff_secs)).to_rfc3339();
+    let next_retry = k2_core::heartbeats::usage_pause::fmt(now + backoff_secs);
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = AgentHeartbeat::note_fire_failure(
             &conn, project_id, &hb.name, Some(&next_retry),
         );
+        // A failure that isn't the limit ends a usage-limit pause.
+        let _ = k2_core::heartbeats::usage_pause::clear(&conn, project_id, &hb.name);
     }
     write_audit(project_id, agent_name, hb, "error",
         &format!("{reason} (failure {new_count}/{MAX_CONSECUTIVE_FAILURES})"));
@@ -1579,6 +1621,9 @@ fn record_fire_failure(
             project_id,
             new_count
         );
+        // 0.46.18: one notice on the agent's Thread (Turn it back on) and
+        // the `heartbeat_turned_off` event.
+        crate::heartbeat_turned_off::notify_disabled(fx, project_id, hb, new_count, reason);
     }
 
     error_value("error", reason, &hb.name)
@@ -1691,9 +1736,11 @@ fn release_lease(project_id: &str, hb_name: &str) {
 /// W9: a stamp that failed leaves `last_fired` unchanged, so the lease
 /// re-check would let the fire happen again. That is worth a log line,
 /// loudly, not a dropped Result.
-fn stamp_fired_and_release(project_id: &str, hb_name: &str) {
+pub(crate) fn stamp_fired_and_release(project_id: &str, hb_name: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
+    // 0.46.18: a fire that went through ends a usage-limit pause.
+    let _ = k2_core::heartbeats::usage_pause::clear(&conn, project_id, hb_name);
     if let Err(e) = AgentHeartbeat::stamp_fired_and_release(&conn, project_id, hb_name) {
         k2_core::log_debug!(
             "[heartbeat] ERROR: could not stamp hb={hb_name} project={project_id} as fired: {e}; it may fire again"

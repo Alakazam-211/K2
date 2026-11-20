@@ -115,6 +115,8 @@ pub fn handle(world: &dyn World, episodes: &Mutex<ou::Episodes>, sig: &Signal, n
         return None;
     }
     let resets_at = sig.hit.resets_at.or(login.reading_reset).filter(|r| *r > now);
+    // 0.46.18: a heartbeat fire that fails now is the limit, not a failure.
+    crate::heartbeat_turned_off::note_out(&place.workspace_id, sig.hit.kind, resets_at, now);
     let key = format!("{}|{}|{}", place.addr, login.tool.as_str(), login.id.as_deref().unwrap_or(&login.label));
     if !episodes.lock().admit(&key, resets_at, now) {
         return None;

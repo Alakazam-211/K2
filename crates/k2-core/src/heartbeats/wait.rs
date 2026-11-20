@@ -339,6 +339,17 @@ pub fn derive(hb: &AgentHeartbeat, inputs: &WaitInputs, now: DateTime<Local>) ->
             Some("no scheduleable agent in this workspace".to_string()),
         );
     }
+    // 0.46.18: paused by the LLM usage limit. It fires at the pause's end
+    // (a slot missed meanwhile catches up) or its next slot after that.
+    if hb.disabled_reason.as_deref() == Some(super::usage_pause::PAUSE_REASON) {
+        if let Some(until) = hb.next_retry_at.as_deref().and_then(parse_utc) {
+            let until_local = until.with_timezone(&Local);
+            if until_local > now {
+                let next = slot.filter(|s| *s > until_local).unwrap_or(until_local);
+                return WaitState::new(Some(next), WAIT_BACKOFF, Some(super::usage_pause::WAIT_DETAIL.to_string()));
+            }
+        }
+    }
     if let Some(retry_at) = hb.next_retry_at.as_deref().and_then(parse_utc) {
         let retry_local = retry_at.with_timezone(&Local);
         if retry_local > now && slot.map_or(true, |s| retry_local >= s) {

@@ -563,6 +563,30 @@ pub enum SessionEvent {
         notice_id: String,
     },
 
+    /// 0.46.18: the daemon turned a heartbeat off after repeated failures
+    /// (`state: disabled`), or paused it on the LLM usage limit (`state:
+    /// paused`, `pausedUntil` when it fires again), and posted its notice
+    /// on the agent's Thread (`noticeId`, null when the post failed).
+    /// APP-LEVEL: Home, the agent's manager and connected workspaces' views
+    /// see every agent. One per disable or pause.
+    /// Wire: `{ "kind": "heartbeat_turned_off", "workspaceId": "…",
+    /// "address": "sales", "name": "morning", "state": "disabled",
+    /// "reason": "resume spawn failed: …", "failures": 5,
+    /// "pausedUntil": 1795…|null, "noticeId": "<doc id>"|null }`.
+    HeartbeatTurnedOff {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        address: String,
+        name: String,
+        state: String,
+        reason: String,
+        failures: i64,
+        #[serde(rename = "pausedUntil")]
+        paused_until: Option<i64>,
+        #[serde(rename = "noticeId")]
+        notice_id: Option<String>,
+    },
+
     /// Usage v2 (P9, B20) — subscription limits were written: the shared
     /// cache (a probe) or one login's reading (a probe of an idle login, or
     /// a live feed from a running session). APP-LEVEL refetch signal; never
@@ -1304,6 +1328,7 @@ impl SessionEvent {
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
             SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",
             SessionEvent::LlmOutOfUsage { .. } => "llm_out_of_usage",
+            SessionEvent::HeartbeatTurnedOff { .. } => "heartbeat_turned_off",
             SessionEvent::SubscriptionUsageChanged { .. } => "subscription_usage_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
             SessionEvent::ZenAgentsOrderChanged {} => "zen_agents_order_changed",
@@ -1468,6 +1493,21 @@ pub fn emit_llm_out_of_usage(p: &crate::llm_out_notice::Posted) {
         resets_at: p.resets_at,
         switched_to: p.switched_to.clone(),
         notice_id: p.doc_id.clone(),
+    });
+}
+
+/// 0.46.18: a heartbeat was turned off or paused (see
+/// [`SessionEvent::HeartbeatTurnedOff`]).
+pub fn emit_heartbeat_turned_off(t: &crate::heartbeat_turned_off::TurnedOff) {
+    let _ = emit(SessionEvent::HeartbeatTurnedOff {
+        workspace_id: t.workspace_id.clone(),
+        address: t.address.clone(),
+        name: t.name.clone(),
+        state: t.state.to_string(),
+        reason: t.reason.clone(),
+        failures: t.failures,
+        paused_until: t.paused_until,
+        notice_id: t.notice_id.clone(),
     });
 }
 

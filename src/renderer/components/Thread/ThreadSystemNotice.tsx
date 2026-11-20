@@ -38,7 +38,7 @@ import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { CHAMFER_CUT, CHAMFER_SCOPE, chamferCutFor, chamferPolygon, chamferVars } from './chamfer'
 import { useThreadAttachmentSource } from './ThreadImageObjects'
-import { LLM_SWITCH_ACTION_ID, type SystemNotice, type SystemNoticeAction, type SystemNoticeCall, type SystemNoticeDone, type SystemNoticeKind } from './systemNotice'
+import { HEARTBEAT_ENABLE_ACTION_ID, LLM_SWITCH_ACTION_ID, type SystemNotice, type SystemNoticeAction, type SystemNoticeCall, type SystemNoticeDone, type SystemNoticeKind } from './systemNotice'
 
 // Loaded on press: Settings' stores stay out of the Thread.
 const LlmLoginSheet = lazy(() =>
@@ -110,6 +110,8 @@ const fold = (s: string): string => s.trim().toLowerCase()
 export const RESEND_WORDS = { busy: 'Sending…', done: 'Sent again' } as const
 /** Switch to <login>'s words (out of usage). */
 export const SWITCH_WORDS = { busy: 'Switching…', done: 'Switched' } as const
+/** Turn it back on's words (a heartbeat turned off after failures). */
+export const HEARTBEAT_ENABLE_WORDS = { busy: 'Turning on…', done: 'Turned back on' } as const
 
 /** What a refused Send again says (the daemon's 409 codes), in plain muted
  *  words in place of the button: pressing again would change nothing. */
@@ -148,7 +150,8 @@ function NoticePostButton({
   const [refused, setRefused] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const switching = action.id === LLM_SWITCH_ACTION_ID
-  const copy = switching ? SWITCH_WORDS : RESEND_WORDS
+  const enabling = action.id === HEARTBEAT_ENABLE_ACTION_ID
+  const copy = switching ? SWITCH_WORDS : enabling ? HEARTBEAT_ENABLE_WORDS : RESEND_WORDS
   const run = useCallback(async () => {
     if (!scope || busy) return
     setBusy(true)
@@ -157,7 +160,7 @@ function NoticePostButton({
       await daemonCliPost(scope, call.route, call.body)
       setPressed(true)
     } catch (err) {
-      const words = !switching && httpStatusOf(err) === 409 ? RESEND_REFUSAL_WORDS[httpCodeOf(err) ?? ''] : undefined
+      const words = !switching && !enabling && httpStatusOf(err) === 409 ? RESEND_REFUSAL_WORDS[httpCodeOf(err) ?? ''] : undefined
       if (words) setRefused(words)
       else {
         console.warn('[thread] notice action failed:', err)
@@ -166,12 +169,12 @@ function NoticePostButton({
     } finally {
       setBusy(false)
     }
-  }, [call, scope, busy, switching])
+  }, [call, scope, busy, switching, enabling])
   if (!scope || !scopeMayWrite(scope, call.route)) return null
   if (action.done || pressed) {
     return (
       <span data-notice-done="" role="status">
-        {switching ? SWITCH_WORDS.done : resendDoneText(action.done ?? 'you', viewer)}
+        {switching ? SWITCH_WORDS.done : enabling ? HEARTBEAT_ENABLE_WORDS.done : resendDoneText(action.done ?? 'you', viewer)}
         <CheckIcon data-notice-tick="" aria-hidden="true" strokeWidth={2.5} />
       </span>
     )

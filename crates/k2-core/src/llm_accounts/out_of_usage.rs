@@ -298,7 +298,7 @@ pub struct Facts {
 }
 
 /// Markdown's marks in a name, escaped (the Thread renders markdown).
-fn plain(s: &str) -> String {
+pub fn plain(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.trim().chars() {
         if matches!(c, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '#' | '~' | '|') {

@@ -293,6 +293,10 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
         }
     }
 
+    // 0.46.18: re-check usage-limit pauses whose time came (still out:
+    // later; otherwise they fire on their schedule again).
+    crate::heartbeat_turned_off::sweep_project(project_path);
+
     let launchable = match scheduler::k2_agents_scheduler_tick(project_path.to_string()) {
         Ok(v) => v,
         Err(e) => {

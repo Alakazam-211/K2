@@ -42,6 +42,9 @@ pub mod wakeup_wait;
 pub mod reminders;
 /// 0278: the one parser for a reminder's `--in`, `--at`, `--on`, `--tz`.
 pub mod when;
+/// 0.46.18: a heartbeat failing on the LLM usage limit pauses until the
+/// reset instead of turning off; an auto-disable says so on the Thread.
+pub mod usage_pause;
 
 pub use wait::{boot_reconcile, WAIT_SCHEDULE_ERROR, WAIT_WAKEUP_EMPTY};
 
@@ -408,13 +411,22 @@ pub fn k2_heartbeat_list(project_path: String) -> Result<Vec<AgentHeartbeat>, St
 /// times are never converted: they are wall-clock times in that zone.
 pub fn rows_with_zone_label(rows: &[AgentHeartbeat]) -> Result<Vec<serde_json::Value>, String> {
     let server = when::server_zone_name();
+    let now = chrono::Utc::now().timestamp();
     rows.iter()
         .map(|r| {
             let mut v = serde_json::to_value(r).map_err(|e| e.to_string())?;
             v["zoneLabel"] = serde_json::Value::String(when::zone_label_on(r.tz.as_deref(), &server));
+            // 0.46.18: paused by the LLM usage limit until (RFC 3339), or null.
+            v["pausedUntil"] = json_paused_until(r, now);
             Ok(v)
         })
         .collect()
+}
+
+/// `pausedUntil` for a row: the time a usage-limit pause ends, while ahead.
+fn json_paused_until(hb: &AgentHeartbeat, now: i64) -> serde_json::Value {
+    usage_pause::paused_until(hb.enabled, hb.disabled_reason.as_deref(), hb.next_retry_at.as_deref(), now)
+        .map_or(serde_json::Value::Null, serde_json::Value::String)
 }
 
 /// List archived heartbeat rows for a workspace, newest archive first.
@@ -1638,6 +1650,7 @@ pub fn k2_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
                 "useWorkspaceSession": hb.use_workspace_session,
                 "consecutiveFailures": hb.consecutive_failures,
                 "disabledReason": hb.disabled_reason,
+                "pausedUntil": json_paused_until(&hb, now.timestamp()),
                 "scheduleError": hb.schedule_error,
                 "waitReason": hb.wait_reason,
                 "waitDetail": hb.wait_detail,

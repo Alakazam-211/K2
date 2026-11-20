@@ -98,6 +98,10 @@ export const SESSION_EVENT_ROUTES = {
     class: 'app',
     ignored: 'The notice row on the agent’s Thread shows it; Home and the Threads list read this later.',
   },
+  heartbeat_turned_off: {
+    class: 'app',
+    ignored: 'The notice row on the agent’s Thread shows it; heartbeat lists refetch on heartbeat_roster_changed.',
+  },
   presence_changed: { class: 'app', app: true, carried: true },
   // Not carried: a room never opens tabs on another server's say-so.
   open_url: { class: 'app', app: true },

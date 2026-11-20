@@ -326,14 +326,14 @@ fn parse_words(rest: &[&str]) -> Result<Option<HireArgs>, String> {
         a.brief = Some(escaped(&bytes));
     }
     for p in &params {
-        let (k, v) = p.split_once('=').unwrap_or((p, ""));
+        let (k, v) = p.split_once('=').unwrap_or((p.as_str(), ""));
         match a.params.iter_mut().find(|(key, _)| key == k) {
             Some(slot) => slot.1 = v.to_string(),
             None => a.params.push((k.to_string(), v.to_string())),
         }
     }
     for p in &answers {
-        let (k, v) = p.split_once('=').unwrap_or((p, ""));
+        let (k, v) = p.split_once('=').unwrap_or((p.as_str(), ""));
         let k = super::py_strip(k);
         if a.answers.iter().any(|(key, _)| key == k) {
             return Err(format!("--answer {k} given twice"));

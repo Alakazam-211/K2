@@ -355,10 +355,10 @@ fn template_rows(h: &mut Hire, a: &Value, fr: &dyn Fn(u32) -> Vec<Frame>) -> R<(
         }
         if !left.is_empty() {
             let mut ids = Vec::new();
-            let mut gen = fr(721);
-            gen.push((721, "<genexpr>"));
+            let mut inner = fr(721);
+            inner.push((721, "<genexpr>"));
             for q in &left {
-                ids.push(index_id(q, &gen)?);
+                ids.push(index_id(q, &inner)?);
             }
             let j = join(&ids, &fr(721))?;
             h.stdout.push_str(&format!(

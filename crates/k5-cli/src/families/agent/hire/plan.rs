@@ -256,11 +256,13 @@ pub fn plan(h: &mut Hire) -> R<()> {
             ));
         }
         let mut ids = Set::default();
-        for p in &hits {
-            ids.add(
-                act::get(p, "id").cloned().unwrap_or(Value::Null),
-                &[(198, "<module>")],
-            )?;
+        if hits.len() > 1 {
+            for p in &hits {
+                ids.add(
+                    act::get(p, "id").cloned().unwrap_or(Value::Null),
+                    &[(198, "<module>")],
+                )?;
+            }
         }
         if hits.len() > 1 && ids.0.len() > 1 {
             let names = hits
@@ -990,7 +992,7 @@ pub fn dry_run(h: &mut Hire) -> R<()> {
             act::set(a, "error", obj(vec![("code", code), ("hint", hint)]));
             act::set(a, "exitCode", Value::Int(exit.to_string()));
         } else {
-            take_template_rows(h, i, &resp, false, 796)?;
+            take_template_rows(h, i, &resp, false, 794)?;
         }
     } else if h.op.token().is_some() {
         let core: Vec<usize> = (0..h.actions.len())

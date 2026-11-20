@@ -960,7 +960,11 @@ impl Rig {
                 "{name}: stderr (mktemp's name masked)"
             );
         } else {
-            assert_eq!(as_this_python(&r.stderr, &b.stderr), b.stderr, "{name}: stderr");
+            assert_eq!(
+                as_this_python(&r.stderr, &b.stderr),
+                b.stderr,
+                "{name}: stderr"
+            );
         }
         (r.clone(), rl, handed, rt)
     }
@@ -993,10 +997,15 @@ fn as_this_python(rust: &str, bash: &str) -> String {
     }
     r.iter()
         .zip(&b)
-        .map(|(rl, bl)| match (json_error(rl, PY312_TRAILING), json_error(bl, PY313_TRAILING)) {
-            // The same head and tail: only Python's words and place differ.
-            (Some(x), Some(y)) if x == y => (*bl).to_string(),
-            _ => (*rl).to_string(),
+        .map(|(rl, bl)| {
+            match (
+                json_error(rl, PY312_TRAILING),
+                json_error(bl, PY313_TRAILING),
+            ) {
+                // The same head and tail: only Python's words and place differ.
+                (Some(x), Some(y)) if x == y => (*bl).to_string(),
+                _ => (*rl).to_string(),
+            }
         })
         .collect()
 }

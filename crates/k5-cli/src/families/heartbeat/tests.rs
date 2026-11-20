@@ -106,3 +106,20 @@ fn the_stops() {
         vec!["Error: instructions cannot be blank".to_string()]
     );
 }
+
+#[test]
+fn remind_alone_is_the_remind_help() {
+    for rest in [&["remind"][..], &["remind", ""], &["remind", "", "x"]] {
+        assert!(remind_alone(rest), "{rest:?}");
+    }
+    for rest in [
+        &["reminders"][..],
+        &["remind", "list"],
+        &["remind", "help"],
+        &["remind", "", "--in", "5m"],
+        &["remind", "", "--help"],
+        &[],
+    ] {
+        assert!(!remind_alone(rest), "{rest:?}");
+    }
+}

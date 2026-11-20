@@ -1950,3 +1950,109 @@ fn heartbeat_lines_say_the_brand_s_name() {
         assert!(log.is_empty(), "{args:?}");
     }
 }
+
+/// `heartbeat remind` with no first word (or an empty one) and no time:
+/// `cmd_help_remind` on stdout, exit 0, after the gate and the `heartbeat`
+/// tool's session check.
+#[test]
+fn heartbeat_remind_alone_prints_the_remind_help() {
+    let rig = Rig::new(VERB, "remindalone");
+    let v = vec![
+        // covers: heartbeat remind
+        case(
+            "remind alone",
+            &["remind"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "remind, an empty word",
+            &["remind", ""],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "remind, an empty word and text, no time",
+            &["remind", "", "call back"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "remind alone, no port",
+            &["remind"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
+        case(
+            "remind alone, HOOK_SOCK set and no passport",
+            &["remind"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        with(
+            cell(),
+            case(
+                "remind alone, a session's passport",
+                &["remind"],
+                &[],
+                vec![],
+                port_only,
+                0,
+                0,
+            ),
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// Rows that follow 99123b051 on the 0.46.17 queue ("message text after
+/// -- is sent as typed"), not yet in this line's cli/src: today both
+/// sides take a bare `--` for an unknown flag. When the replay brings
+/// that commit, these rows fail on the shell's side; port `_remind_add`'s
+/// `--` (the rest is the text) and the time scan stopping at `--`, then
+/// turn each row to the new answer.
+#[test]
+fn follows_99123b051_remind_text_after_dashdash() {
+    let rig = Rig::new(VERB, "dashdash");
+    for c in [
+        // follows 99123b051: the text "call back", sent.
+        case(
+            "remind --in 5m -- call back",
+            &["remind", "--in", "5m", "--", "call", "back"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // follows 99123b051: no time before `--`, so "say when", exit 2.
+        case(
+            "remind call -- --in 5m",
+            &["remind", "call", "--", "--in", "5m"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}

@@ -10,7 +10,8 @@
 //!    tool: in a session a stale passport and no passport at all are
 //!    refused with exit 3 ([`crate::prelude::id_tool`]).
 //! 2. The words ([`parse`]): `remind` and `reminders` are
-//!    [`super::remind`]'s; `help` prints the help; the retired verbs are
+//!    [`super::remind`]'s, but `remind` alone prints the remind help here
+//!    ([`remind_alone`]); `help` prints the help; the retired verbs are
 //!    `fail_deprecated`'s lines; an unknown verb is its two lines, exit 2.
 //! 3. Each verb's requests through `cli_send` (the cell socket first in a
 //!    session, `/cli/heartbeat/` being a route it serves), and its Python
@@ -85,6 +86,9 @@ pub const SCHEDULER: &str = "/cli/heartbeat/scheduler-status";
 pub enum Form {
     /// `heartbeat help`: the help on stdout.
     Help,
+    /// `heartbeat remind` alone ([`remind_alone`]): `cmd_help_remind` on
+    /// stdout, exit 0.
+    RemindHelp,
     /// `wake` and `signal wake`: [`wake`]'s block, with what it read
     /// before its first request ([`run`] fills it in).
     Wake(Option<wake::Setup>),
@@ -921,6 +925,18 @@ fn log(args: &[&str]) -> Option<Form> {
     Some(Form::Log { limit })
 }
 
+/// `heartbeat remind` with no first word (or an empty one) and no
+/// `--in`, `--at` or `--on`: `cmd_heartbeat_remind` prints
+/// `cmd_help_remind` and returns 0. A `-h` or `--help` is the front's;
+/// `help` is the shell's.
+pub fn remind_alone(rest: &[&str]) -> bool {
+    let Some((&"remind", words)) = rest.split_first() else {
+        return false;
+    };
+    let stops = |w: &&str| matches!(*w, "--in" | "--at" | "--on" | "-h" | "--help");
+    words.first().is_none_or(|w| w.is_empty()) && !words.iter().any(stops)
+}
+
 /// `k5 heartbeat ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it.
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -930,10 +946,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let all: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     let rest = all.get(1..).unwrap_or_default();
+    let help_alone = remind_alone(rest);
     if let Some(w) = rest
         .first()
         .copied()
-        .filter(|w| matches!(*w, "remind" | "reminders"))
+        .filter(|w| matches!(*w, "remind" | "reminders") && !help_alone)
     {
         let mut again = vec![OsString::from(w)];
         again.extend(args.iter().skip(2).cloned());
@@ -943,7 +960,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let pwd = pwd.to_str()?.to_string();
     let cdpath = std::env::var_os("CDPATH").is_some();
     let resolve = |w: &str| register::path(RegisterVerb::Open, w, &pwd, cdpath);
-    let form = parse(rest, &resolve)?;
+    let form = if help_alone {
+        Form::RemindHelp
+    } else {
+        parse(rest, &resolve)?
+    };
     if !python::family_native(python::here()) {
         return None;
     }
@@ -990,8 +1011,13 @@ fn run_with(
             }
             return exit;
         }
-        Form::Help => {
-            let text = crate::text::help("heartbeat").unwrap_or_default();
+        Form::Help | Form::RemindHelp => {
+            let key = if matches!(form, Form::Help) {
+                "heartbeat"
+            } else {
+                "remind"
+            };
+            let text = crate::text::help(key).unwrap_or_default();
             return match out::stdout(text) {
                 Ok(()) => Exit::Ok,
                 Err(e) => out::after_stdout_error(&e),
@@ -1130,7 +1156,7 @@ impl Hb {
 
     fn answer(&mut self, form: Form, pwd: &str) -> Exit {
         match form {
-            Form::Help | Form::Stop(..) | Form::Wake(None) => Exit::Ok,
+            Form::Help | Form::RemindHelp | Form::Stop(..) | Form::Wake(None) => Exit::Ok,
             Form::Wake(Some(setup)) => {
                 let mut w = wake::Wake::new(&mut self.client, &setup);
                 let (stdout, end) = w.run(&setup);

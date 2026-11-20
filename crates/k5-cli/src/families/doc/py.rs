@@ -21,11 +21,11 @@
 use crate::cards::Decode;
 use crate::exit::Exit;
 use crate::families::{py_d, py_get, py_iter, py_left, Raise};
-use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, Ordering};
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::pylib::{json as pyjson, ops, time as pytime};
 use crate::out::{self, py};
+use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type R<T> = Result<T, Raise>;
 
@@ -134,7 +134,9 @@ fn surrogate_escapes(s: &str) -> Cow<'_, str> {
         let lead = [DUMPS, REPR].into_iter().find(|p| rest.starts_with(p));
         let byte = lead.and_then(|p| {
             let xx = rest.get(p.len()..p.len() + 2)?;
-            let lower = xx.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+            let lower = xx
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
             let v = u8::from_str_radix(xx, 16).ok()?;
             (lower && v >= 0x80).then_some((p.len() + 2, v))
         });

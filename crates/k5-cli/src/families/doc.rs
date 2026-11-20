@@ -115,9 +115,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if handed_back(&words)
-        || !python::family_native(python::here())
-        || py::decode_here().is_none()
+    if handed_back(&words) || !python::family_native(python::here()) || py::decode_here().is_none()
     {
         return None;
     }

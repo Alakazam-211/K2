@@ -10,10 +10,16 @@ pub const WORDS: &[&str] = &["compute"];
 /// The shell CLI answers `compute` alone and every verb not in [`VERBS`].
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
 /// The verbs the binary answers, one row each, so each can turn back alone.
-pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
-    words: &["cancel"],
-    owner: crate::route::Owner::Native,
-}];
+pub const VERBS: &[crate::route::Verb] = &[
+    crate::route::Verb {
+        words: &["cancel"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["wait"],
+        owner: crate::route::Owner::Native,
+    },
+];
 
 /// A command line the route sends here: [`writes::run`].
 pub fn run(args: &[std::ffi::OsString]) -> Option<crate::exit::Exit> {

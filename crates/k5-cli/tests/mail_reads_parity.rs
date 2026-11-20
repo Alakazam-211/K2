@@ -158,11 +158,14 @@ fn mail_reads_print_as_the_shell_does() {
     let rig = Rig::new(VERB, "print");
     let many = MESSAGES;
     let v = vec![
+        // covers: mail inboxes
         ok_case("inboxes, the agent view", &["inboxes"], AGENT_INBOXES),
         ok_case("list, sending off", &["list"], AGENT_OFF),
         ok_case("addresses, the owner's catalog", &["addresses"], OWNER_INBOXES),
         ok_case("inboxes, none", &["inboxes"], r#"{"ok":true,"inboxes":[]}"#),
+        // covers: mail inboxes --json
         ok_case("inboxes --json", &["inboxes", "--json"], AGENT_INBOXES),
+        // covers: mail domains
         ok_case("domains", &["domains"], DOMAINS),
         ok_case(
             "domains, only pending",
@@ -170,7 +173,9 @@ fn mail_reads_print_as_the_shell_does() {
             r#"{"ok":true,"domains":[],"pending":["a.example",{"domain":"b.example"},{"x":1}]}"#,
         ),
         ok_case("domains, none", &["domains"], r#"{"ok":true}"#),
+        // covers: mail domains --json
         ok_case("domains --json", &["domains", "--json"], DOMAINS),
+        // covers: mail messages
         ok_case("messages", &["messages"], many),
         ok_case(
             "messages, every filter",
@@ -181,6 +186,7 @@ fn mail_reads_print_as_the_shell_does() {
             ],
             many,
         ),
+        // covers: mail messages --json
         ok_case("messages, junk", &["messages", "--junk", "--json"], many),
         ok_case(
             "messages, none with a filter",
@@ -188,8 +194,10 @@ fn mail_reads_print_as_the_shell_does() {
             r#"{"ok":true,"messages":[],"searchWindow":{"hint":"only 30 days"}}"#,
         ),
         ok_case("messages, none", &["messages"], r#"{"ok":true,"messages":[]}"#),
+        // covers: mail read
         ok_case("read", &["read", "m1"], MESSAGE),
         ok_case("read --html", &["read", "m1", "--html"], MESSAGE),
+        // covers: mail read --json
         ok_case("read --json", &["read", "m1", "--json"], MESSAGE),
         ok_case(
             "read --raw",
@@ -209,10 +217,24 @@ fn mail_reads_print_as_the_shell_does() {
             ),
         ),
         ok_case("read, no message", &["read", "m1"], r#"{"ok":true}"#),
+        // covers: mail attachments
         ok_case(
             "attachments",
             &["attachments", "m1"],
             r#"{"ok":true,"id":"m1","attachments":[{"index":1,"filename":"a.pdf","mime":"application/pdf","size":10},{}]}"#,
+        ),
+        // covers: mail attachments --json
+        ok_case(
+            "attachments --json",
+            &["attachments", "m1", "--json"],
+            r#"{"ok":true,"id":"m1","attachments":[]}"#,
+        ),
+        // covers: mail wait
+        // covers: mail wait --json
+        ok_case(
+            "wait --json",
+            &["wait", "--json"],
+            MESSAGE,
         ),
         ok_case(
             "attachments, none",
@@ -241,8 +263,10 @@ fn mail_reads_print_as_the_shell_does() {
         ok_case("drafts", &["drafts", "--limit", "3"], DRAFTS),
         ok_case("drafts, none", &["drafts"], r#"{"ok":true,"drafts":[]}"#),
         ok_case("drafts --json", &["drafts", "--json"], DRAFTS),
+        // covers: mail outbox
         ok_case("outbox", &["outbox", "--limit", "20"], OUTBOX),
         ok_case("outbox, one", &["outbox", "out_1"], OUTBOUND),
+        // covers: mail outbox --json
         ok_case("outbox --id", &["outbox", "--id", "out_1", "--json"], OUTBOUND),
         ok_case("outbox, empty", &["outbox"], r#"{"ok":true,"outbox":[]}"#),
         ok_case(
@@ -255,6 +279,7 @@ fn mail_reads_print_as_the_shell_does() {
             &["outbox", "cancel", "out_1", "--json"],
             r#"{"ok":true,"hint":"cancelled it"}"#,
         ),
+        // covers: mail capabilities
         ok_case("capabilities", &["capabilities"], CAPS),
         ok_case(
             "capabilities of one",
@@ -277,6 +302,7 @@ fn mail_reads_print_as_the_shell_does() {
             0,
             2,
         ),
+        // covers: mail capabilities --json
         case(
             "capabilities, an error",
             &["capabilities", "--json"],
@@ -286,6 +312,7 @@ fn mail_reads_print_as_the_shell_does() {
             3,
             1,
         ),
+        // covers: mail folder
         ok_case(
             "folder list",
             &["folder", "list", "a@x.example"],
@@ -301,6 +328,7 @@ fn mail_reads_print_as_the_shell_does() {
             &["folder", "create", "a@x.example", "Work"],
             r#"{"ok":true,"address":"a@x.example"}"#,
         ),
+        // covers: mail folder --json
         ok_case(
             "folder rename",
             &["folder", "rename", "a@x.example", "Work", "Jobs", "--json"],

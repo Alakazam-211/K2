@@ -149,6 +149,7 @@ fn mail_writes_send_and_print_as_the_shell_does() {
     let rig = Rig::new(VERB, "send");
     let with = |c: Case| Case { setup: files, ..c };
     let v = vec![
+        // covers: mail send
         ok_case(
             "send, queued",
             &["send", "a@x.example", "--subject", "Hi", "--body", "Hello é"],
@@ -169,6 +170,7 @@ fn mail_writes_send_and_print_as_the_shell_does() {
             ],
             r#"{"ok":true,"id":"out_2","status":"submitted"}"#,
         ),
+        // covers: mail send --json
         ok_case(
             "send, submitted with the hint, --json",
             &["send", "a@x.example", "--subject", "S", "--body", "B", "--at", "2030-01-01T00:00:00Z", "--json"],
@@ -215,6 +217,7 @@ fn mail_writes_send_and_print_as_the_shell_does() {
             "send, a folder as the body file",
             &["send", "a@x.example", "--subject", "S", "--body-file", "adir"],
         )),
+        // covers: mail reply
         ok_case(
             "reply",
             &["reply", "m_1", "--body", "thanks", "--reply-all", "--cc", "c@x.example", "--bcc", "d@x.example", "--from-name", "Ann", "--attach", "f.txt"],
@@ -234,11 +237,14 @@ fn mail_writes_send_and_print_as_the_shell_does() {
             ],
             r#"{"ok":true,"id":"out_8","timedOut":false,"status":"approved"}"#,
         ),
+        // covers: mail forward-message
+        // covers: mail forward-message --json
         ok_case(
             "forward-message, a reply-to",
             &["forward-message", "m_1", "--to", "a@x.example", "--reply-to", "r@x.example", "--json"],
             r#"{"ok":true,"id":"out_8","status":"submitted"}"#,
         ),
+        // covers: mail draft
         ok_case(
             "draft, a reply",
             &["draft", "m_1", "--body", "draft text", "--reply-all", "--cc", "c@x.example", "--attach", "f.txt"],
@@ -249,37 +255,56 @@ fn mail_writes_send_and_print_as_the_shell_does() {
             &["draft", "--reply-to", "m_1", "m_1", "--body", "x"],
             r#"{"ok":true,"hint":"saved"}"#,
         ),
+        // covers: mail draft --json
         with(ok_case(
             "draft, a compose",
             &["draft", "--to", "a@x.example", "--subject", "S", "--body-file", "body.txt", "--from", "me@globex.example", "--bcc", "b@x.example", "--json"],
             r#"{"ok":true,"folder":"Drafts"}"#,
         )),
+        // covers: mail move
         ok_case(
             "move",
             &["move", "m_1", "Projects/2026"],
             r#"{"ok":true,"id":"m_1"}"#,
         ),
+        // covers: mail move --json
         ok_case(
             "move, the folder it went to",
             &["move", "m_1", "x", "--json"],
             r#"{"ok":true,"id":"m_1","folder":"X"}"#,
         ),
+        // covers: mail flag
         ok_case(
             "flag",
             &["flag", "m_1", "--read", "--star", "--unread"],
             r#"{"ok":true,"id":"m_1"}"#,
+        ),
+        // covers: mail flag --json
+        ok_case(
+            "flag --json",
+            &["flag", "m_1", "--star", "--json"],
+            r#"{"ok":true,"id":"m_1","flagged":true}"#,
+        ),
+        // covers: mail reply --json
+        ok_case(
+            "reply --json",
+            &["reply", "m_1", "--body", "ok", "--json"],
+            r#"{"ok":true,"queued":true,"id":"out_6"}"#,
         ),
         ok_case(
             "flag, unflag",
             &["flag", "m_1", "--unflag"],
             r#"{"ok":true,"id":"m_1"}"#,
         ),
+        // covers: mail archive
         ok_case("archive", &["archive", "m_1"], r#"{"ok":true,"id":"m_1"}"#),
+        // covers: mail archive --json
         ok_case(
             "archive --json",
             &["archive", "m_1", "--json"],
             r#"{"ok":true,"id":"m_1","folder":"All Mail"}"#,
         ),
+        // covers: mail delete
         ok_case(
             "delete a message",
             &["delete", "m_1"],
@@ -290,6 +315,7 @@ fn mail_writes_send_and_print_as_the_shell_does() {
             &["delete", "old@acme.example"],
             r#"{"ok":true,"address":"old@acme.example"}"#,
         ),
+        // covers: mail delete --json
         ok_case(
             "delete an address --json",
             &["delete", "--json", "old@acme.example"],

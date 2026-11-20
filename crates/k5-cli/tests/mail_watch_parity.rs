@@ -58,6 +58,7 @@ fn statused(status: u16, body: &str) -> Reply {
 fn mail_watch_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "watch");
     let v = vec![
+        // covers: mail watch
         case(
             "status",
             &["watch"],
@@ -67,6 +68,7 @@ fn mail_watch_answers_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: mail watch --json
         case(
             "status by name, --json before it",
             &["watch", "--json", "status"],

@@ -34253,8 +34253,11 @@ for n in rows:
         if "cpuMillis" not in j or j["cpuMillis"] is not None or not capc or parm < 2:
             return ""
         return "  [no --cpus: reserves %s of %s CPUs]" % (cores(capc // parm), cores(capc))
+    # The running time is from the real start of the job; the wait before it
+    # is its own note (a long wait never reads as running time).
+    waited = lambda j: ("  (queued %s first)" % mmss(j["queuedSecs"])) if (j.get("queuedSecs") or 0) >= 60 else ""
     for j in st.get("running") or []:
-        print("    running %s%-9s %-8s %-12s %s%s%s" % (tag(j), j.get("short") or "-", mmss(j.get("elapsedSecs")), j.get("workspace") or "(other)", j.get("argv") or "", held(j), pwhy(j)))
+        print("    running %s%-9s %-8s %-12s %s%s%s%s" % (tag(j), j.get("short") or "-", mmss(j.get("elapsedSecs")), j.get("workspace") or "(other)", j.get("argv") or "", waited(j), held(j), pwhy(j)))
     # 0.46.8: pinned (a node was named: it never moves; k2 compute move
     # <id> --auto releases it) or auto (K2 moves it if another node frees).
     pin = lambda j: ("pinned" if j["pinned"] else "auto") if "pinned" in j else ""

@@ -724,6 +724,17 @@ pub(crate) fn with_queue(who: &Who, j: &store::JobRow, v: &mut serde_json::Value
     v["wait"] = wait_json(j, v.get("queue"), node.as_deref());
 }
 
+/// How long a job has run (from its real start; `None` before it started)
+/// and how long it waited first (to its start, or to now while it waits).
+/// Never counted from submit or from entering a node's queue: a job that
+/// waited 10 min there would look as if it ran beside the job before it.
+pub(crate) fn run_and_queue_secs(r: &store::JobRow, now: i64) -> (Option<i64>, i64) {
+    let started = r.started_at.filter(|_| !r.node_queued && r.state != "queued");
+    let running = started.map(|t| (now - t).max(0));
+    let queued = (started.unwrap_or(now) - r.created_at).max(0);
+    (running, queued)
+}
+
 /// One job as another job's queue view (or `status`) shows it. `viewer` =
 /// the caller's passport: it sees ids and commands only for its own
 /// workspace; other workspaces' jobs carry state and age only.
@@ -743,9 +754,11 @@ fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &schedul
         e["workspace"] = serde_json::Value::Null;
         e["mine"] = false.into();
     }
-    if let Some(t) = r.assigned_at.or(r.started_at) {
-        e["elapsedSecs"] = (now - t).max(0).into();
+    let (running, queued) = run_and_queue_secs(r, now);
+    if let Some(s) = running {
+        e["elapsedSecs"] = s.into();
     }
+    e["queuedSecs"] = queued.into();
     // 0.46.8: its CPU ask (size only, like the node's queue shows): none
     // = it reserves the node's CPUs ÷ its slots (`status` says so).
     if let Some(p) = r.plan() {
@@ -1776,5 +1789,31 @@ mod reserved_and_leftover_tests {
         assert!(leftovers_json(Some(&(1000, h)), 1000 + 901).is_null(), "a stale report says nothing");
         assert!(leftovers_json(Some(&(1000, Health::default())), 1000).is_null(), "an older node runs no check");
         assert!(leftovers_json(None, 1000).is_null());
+    }
+}
+
+#[cfg(test)]
+mod run_time_tests {
+    use super::run_and_queue_secs;
+    use k2_core::compute::store::JobRow;
+
+    fn row(state: &str, assigned: Option<i64>, started: Option<i64>, node_queued: bool) -> JobRow {
+        JobRow { id: "j".into(), state: state.into(), created_at: 1000, assigned_at: assigned, started_at: started, node_queued, ..Default::default() }
+    }
+
+    /// `k2 compute status`: a running job's time is from its real start,
+    /// never from submit or from entering a node's queue (a job queued 10
+    /// min on a one-job node looked as if it ran beside the job before it);
+    /// the wait before it is its own number.
+    #[test]
+    fn running_time_counts_from_the_start_and_the_wait_is_separate() {
+        // Submitted at 1000, sent at 1010, started at 1600; now 1700.
+        assert_eq!(run_and_queue_secs(&row("running", Some(1010), Some(1600), false), 1700), (Some(100), 600));
+        // Still waiting in a shared node's queue (assigned, node_queued).
+        assert_eq!(run_and_queue_secs(&row("assigned", Some(1010), None, true), 1700), (None, 700));
+        // Sent to a solo node, not started yet (preparing its source).
+        assert_eq!(run_and_queue_secs(&row("preparing", Some(1010), None, false), 1700), (None, 700));
+        // Queued on this server.
+        assert_eq!(run_and_queue_secs(&row("queued", None, None, false), 1300), (None, 300));
     }
 }

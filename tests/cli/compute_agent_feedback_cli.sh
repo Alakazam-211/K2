@@ -7,7 +7,8 @@
 # alone (no cancel reaches the daemon), for one job, several, --any and
 # --follow; --max-wait keeps exit 3; a failed job still exits 3; the two
 # limits together are a usage error. `k2 compute list` is `jobs` (the same
-# request, --json printed on stdout); `ls` stays `nodes`.
+# request, --json printed on stdout); `ls` stays `nodes`. `status` prints
+# a running job's time from its start and the wait before it apart.
 
 set -euo pipefail
 
@@ -75,6 +76,11 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, job(which))
         if u.path == "/cli/compute/jobs":
             return self.reply(200, {"jobs": [dict(job("done0003"), workspace="ws", submitter="agent")]})
+        if u.path == "/cli/compute/nodes" and q.get("detail") == ["1"]:
+            return self.reply(200, {"nodes": [{"name": "mini-1", "os": "macos", "arch": "arm64", "status": {
+                "state": "active", "parallelMax": 1,
+                "running": [{"short": "run00001", "state": "running", "elapsedSecs": 120, "queuedSecs": 600, "workspace": "ws", "argv": "cargo test", "cpuMillis": 4000}],
+                "queued": [{"short": "que00001", "state": "queued", "ageSecs": 300, "queuedSecs": 300, "position": 1, "workspace": "ws", "argv": "true", "pinned": False}]}}]})
         if u.path == "/cli/compute/nodes":
             return self.reply(200, {"nodes": []})
         if u.path == "/cli/compute/jobs/logs":
@@ -179,6 +185,11 @@ expect_eq "list --json is jobs --json" "$lout" "$jout"
 "$K2" compute ls --json >/dev/null 2>&1
 expect_eq "ls is still nodes" "$(last_get | cut -d' ' -f1-2)" "GET /cli/compute/nodes"
 expect_has "the help says list is jobs" "$("$K2" compute --help 2>&1)" "k2 compute list is the same; k2 compute ls is nodes"
+
+echo "== status: running time from the start, the wait apart =="
+sout="$("$K2" compute status 2>&1)"
+expect_has "the running job shows its running time and the wait before it" "$sout" "running run00001  2m00s    ws           cargo test  (queued 10m00s first)"
+expect_not "the wait is never shown as running time" "$sout" "running run00001  12m00s"
 
 echo
 echo "compute_agent_feedback_cli: $pass passed, $fail failed"

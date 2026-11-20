@@ -27,7 +27,10 @@
 #   only the token saved for that host (never $K2_REMOTE_TOKEN or --token);
 #   no request follows a redirect (the place it names gets nothing); an
 #   address with a name before an @ (user info) is refused whatever its
-#   scheme, before any lookup, and the refusal never shows that name.
+#   scheme, before any lookup, and the refusal never shows that name; a
+#   token may also go over plain http to a Tailscale address as written
+#   (100.64.0.0/10, fd7a:115c:a1e0::/48), never to a *.ts.net name, and a
+#   password still never goes over plain http.
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -663,6 +666,34 @@ fresh
 IN="$W/token-in" k2 clone preview ws1 --host "http://127.0.0.1:$PR/a@b" --token-stdin --json
 expect_eq "an @ in the path, after the host: allowed" "$RC" "0"
 expect_has "an @ in the path, after the host: the remote got the request" "$(paths remote)" "POST /a@b/cli/clone/preview"
+
+echo "== a Tailscale address as written may take the token over plain http =="
+# The engine's own rule, read from the CLI under test.
+eval "$(awk "/^_CLONE_URL_RULE='/,/^'\$/" "$K2")"
+[ -n "${_CLONE_URL_RULE:-}" ] || { bad "no _CLONE_URL_RULE in $K2"; }
+rule() { "$PY" -c "$_CLONE_URL_RULE
+import sys
+print(clone_url_refusal(sys.argv[1], sys.argv[2] == \"password\") or \"ok\")" "$1" "$2"; }
+for h in 100.64.0.1 "[fd7a:115c:a1e0::1]"; do
+    fresh
+    save_token "http://$h:9" "$REMOTE_TOKEN"
+    bg clone preview ws1 --host "http://$h:9" --json
+    for _ in $(seq 1 150); do grep -Fq "${h//[\[\]]/}" "$W/audit.log" && break; kill -0 "$BG" 2>/dev/null || break; sleep 0.1; done
+    pkill -P "$BG" 2>/dev/null || true
+    kill "$BG" 2>/dev/null || true
+    bg_wait
+    expect_has "http://$h: allowed, so the engine connects there" "$(cat "$W/audit.log")" "${h//[\[\]]/}"
+    expect_not "http://$h: not refused" "$ERR" "refused:"
+    expect_not "http://$h: no warning" "$ERR" "warning:"
+    expect_eq "http://$h: a password still refused" "$(rule "http://$h:9" password)" "$(refused_line "$h:9")"
+done
+for h in box.ts.net 100.128.0.1 100.63.255.255 "[fd7a:115c:a1e1::1]"; do
+    fresh
+    IN="$W/token-in" k2 clone preview ws1 --host "http://$h:9" --token-stdin --json
+    expect_eq "http://$h: exit 3" "$RC" "3"
+    expect_eq "http://$h: the refusal line" "$ERR" "$(refused_line "$h:9")"
+    no_contact "http://$h"
+done
 
 echo
 echo "clone_security: $pass passed, $fail failed"

@@ -37,9 +37,10 @@ _clone_person_guard() {
 }
 
 # Where a token or a password may go. A token goes to an https:// server,
-# or over plain http only to a loopback address as written in the URL:
-# 127.0.0.0/8, ::1 or the name localhost. A name is never looked up to
-# decide. A password goes over https only (this computer's own confirm
+# or over plain http only to a loopback or Tailscale address as written in
+# the URL: 127.0.0.0/8, ::1 or the name localhost, or 100.64.0.0/10 or
+# fd7a:115c:a1e0::/48 (WireGuard encrypts a tailnet; a *.ts.net name is
+# still refused). A name is never looked up to decide. A password goes over https only (this computer's own confirm
 # takes the vault socket). An address with anything before an @ in its
 # host part (user info) is refused whatever its scheme, and the refusal
 # never shows what came before the @. clone_plain_http_ok is the one place the
@@ -48,7 +49,7 @@ _clone_person_guard() {
 _CLONE_URL_RULE='
 import ipaddress as _k2c_ip, urllib.parse as _k2c_up
 
-def clone_plain_http_ok(host):
+def clone_loopback_literal(host):
     """True when host, as written in the URL, is a loopback address."""
     if host == "localhost":
         return True
@@ -59,6 +60,21 @@ def clone_plain_http_ok(host):
     if a.version == 4:
         return a in _k2c_ip.ip_network("127.0.0.0/8")
     return a == _k2c_ip.ip_address("::1")
+
+def clone_tailnet_literal(host):
+    """True when host, as written in the URL, is a Tailscale address
+    (never a name: a name could resolve anywhere)."""
+    try:
+        a = _k2c_ip.ip_address(host)
+    except ValueError:
+        return False
+    if a.version == 4:
+        return a in _k2c_ip.ip_network("100.64.0.0/10")
+    return a in _k2c_ip.ip_network("fd7a:115c:a1e0::/48")
+
+def clone_plain_http_ok(host):
+    """True when a token may go to host, as written, over plain http."""
+    return clone_loopback_literal(host) or clone_tailnet_literal(host)
 
 def clone_url_refusal(url, password=False):
     """None when a token (with password=True, a password) may go to url,

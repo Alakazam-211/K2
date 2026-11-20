@@ -826,3 +826,49 @@ fn compute_alone() {
     rig.check(&case("compute help", &["help"], &[], vec![], owner_and_port, 0, 0));
     rig.check(&case("compute \"\"", &[""], &[], vec![], owner_and_port, 0, 0));
 }
+
+/// The lines name the command and the product by the brand's names (in a
+/// build with `K2_BRAND_DIR=brand/xy` they say `xy` and `XY`), never a
+/// typed `k2`, `k5` or `K2`.
+#[test]
+fn the_submit_lines_say_the_brand_s_name() {
+    let rig = Rig::new(VERB, "brand");
+    let cli = k2_client::brand::CLI_NAME;
+    let product = k2_client::brand::PRODUCT_NAME;
+    for (args, want) in [
+        (
+            &["run", "mini"][..],
+            format!("usage: {cli} compute run [<node>] [flags] -- <command\u{2026}>  (no node: {product} picks one)\n"),
+        ),
+        (
+            &["run", "--bogus", "--", "x"],
+            format!("usage: unknown flag '--bogus' ({cli} compute --help)\n"),
+        ),
+        (
+            &["run", "--priority", "--", "x"],
+            format!("usage: --priority needs a one-line reason: --priority --why \"release gate for 0.46.6\" (it shows in the queue and {cli} compute status; Priority is for the critical path only)\n"),
+        ),
+        (
+            &["run", "--avoid", "", "--", "x"],
+            format!("usage: --avoid <node> (a node {product} must not pick; repeatable)\n"),
+        ),
+        (
+            &["test", "mini", "--shards", "2"],
+            format!("usage: --shards picks a node for each shard itself (no node: {product} picks); drop the node name\n"),
+        ),
+        (
+            &["test", "--wait"],
+            format!("usage: unknown flag '--wait' ({cli} compute test --help)\n"),
+        ),
+        (
+            &["prewarm", "--bogus"],
+            format!("usage: {cli} compute prewarm [--preset NAME | --needs rust@stable,cmake@3] [--os linux|macos] [--distro ubuntu@24.04] [--arch A] [--label k=v] [--node N]... [--tag T] [--plan] [--wait] [--workspace WS] [--json] (unknown '--bogus')\n"),
+        ),
+    ] {
+        let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(2), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
+    }
+}

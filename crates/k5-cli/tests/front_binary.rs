@@ -322,14 +322,14 @@ fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
         .map(|l| l.trim_start_matches('+'))
         .collect();
     let traced = |line: &str| lines.iter().any(|l| *l == format!(" {line}"));
-    // `$0` is /dev/fd/N, so the name from it is N, a number of 3 or more.
+    // `$0` is /dev/fd/N, and the shell closes N, a number of 3 or more.
     let n = lines
         .iter()
-        .find_map(|l| l.strip_prefix(" _k2_name="))
-        .unwrap_or_else(|| panic!("no _k2_name in the trace:\n{}", out.stderr));
+        .find_map(|l| l.strip_prefix(" eval 'exec ")?.strip_suffix("<&-'"))
+        .unwrap_or_else(|| panic!("no exec N<&- in the trace:\n{}", out.stderr));
     assert!(
         n.parse::<u32>().is_ok_and(|n| n >= 3),
-        "$0 is not /dev/fd/N: _k2_name={n}"
+        "$0 is not /dev/fd/N: closed {n}"
     );
     // The folder of the binary as run, links resolved: the rig's links
     // point at the build.
@@ -339,7 +339,6 @@ fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
         .unwrap()
         .to_path_buf();
     for line in [
-        "_K2_CALLED_AS=k5".to_string(),
         "_K5_NOTICE_DONE=1".to_string(),
         "_K5_CLI_VIA=rust".to_string(),
         format!("_K5_SCRIPT_DIR={}", dir.display()),
@@ -357,13 +356,14 @@ fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
             .any(|l| l.trim_start_matches('+') == format!(" {line}"))
     };
     assert!(
-        traced("_k2_name=k2")
-            && traced("_K2_CALLED_AS=k2")
-            && traced("_K5_SCRIPT_DIR=")
-            && !traced("_K5_CLI_VIA=rust"),
+        traced("_K5_SCRIPT_DIR=") && !traced("_K5_CLI_VIA=rust"),
         "{}",
         plain.stderr
     );
+    // The shell reads no name it was called by, through the front or not.
+    for trace in [&out.stderr, &plain.stderr] {
+        assert!(!trace.contains("_K2_CALLED_AS"), "{trace}");
+    }
     assert!(!plain.stderr.contains("exec 3<&-"), "{}", plain.stderr);
 }
 

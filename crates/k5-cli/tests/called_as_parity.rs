@@ -1,22 +1,14 @@
-//! `called_as` answers as the shell CLI does: the block of
-//! `cli/src/prelude.sh` that reads the name runs under bash for every row,
-//! and its answer must be the Rust one.
+//! What the front hands the shell CLI, and what the shell does with it.
+//! The shell no longer reads the name it was called by (every line it
+//! prints carries the command's own name), so `called_as` is the front's
+//! alone (its own tests are in `src/called_as.rs`); the shell takes
+//! `K5_CLI_CALLED_AS` out of the environment with the front's other
+//! variables, and reads the notice and via flags.
 
 mod common;
 
 #[cfg(unix)]
-use k5_cli::called_as::{called_as, CalledAs, Os};
-#[cfg(unix)]
-use std::ffi::OsStr;
-
-/// The prelude's lines that set `_K2_CALLED_AS`.
-fn called_as_block() -> String {
-    common::block(
-        &common::prelude(),
-        r#"_k2_name="${0##*/}""#,
-        "unset _k2_name",
-    )
-}
+use k5_cli::called_as::CalledAs;
 
 /// The prelude's lines that read the other two variables the front sets.
 fn handoff_block() -> String {
@@ -24,94 +16,45 @@ fn handoff_block() -> String {
     common::block(&common::prelude(), r#"_K5_NOTICE_DONE="""#, last)
 }
 
+/// The prelude's line that takes the front's variables out of the
+/// environment.
+const UNSET_LINE: &str = "unset K5_CLI_CALLED_AS K5_CLI_NOTICE_DONE K5_CLI_VIA K5_CLI_WOULD_REFUSE";
+
 #[test]
-fn the_prelude_still_holds_both_blocks() {
-    assert!(called_as_block().contains("K5_CLI_CALLED_AS"));
+fn the_prelude_reads_no_name_and_still_holds_the_handoff() {
+    let prelude = common::prelude();
     assert!(handoff_block().contains("K5_CLI_NOTICE_DONE"));
-}
-
-#[cfg(unix)]
-#[test]
-fn every_argv0_and_value_reads_as_the_shell_reads_it() {
-    let script = format!("{}\nprintf '%s\\n' \"$_K2_CALLED_AS\"", called_as_block());
-    let argv0s = [
-        "k2",
-        "k5",
-        "/usr/local/bin/k5",
-        "./k5",
-        "/tmp/x/k2",
-        "k2so",
-        "some-copy",
-        "",
-        "/",
-        "/opt/k5/",
-        "K5",
-        "k5.exe",
-        "k5 ",
-        "C:\\bin\\k5",
-    ];
-    let values = [
-        None,
-        Some(""),
-        Some("k2"),
-        Some("k5"),
-        Some("K5"),
-        Some("k2 "),
-        Some("/usr/local/bin/k5"),
-        Some("k5-cli"),
-        Some("k2so"),
-    ];
-    let mut wrong = Vec::new();
-    for argv0 in argv0s {
-        for value in values {
-            let env: Vec<(&str, &str)> =
-                value.map(|v| ("K5_CLI_CALLED_AS", v)).into_iter().collect();
-            let shell = common::bash(&script, argv0, &env);
-            let lookup = |name: &str| {
-                value
-                    .filter(|_| name == "K5_CLI_CALLED_AS")
-                    .map(str::to_string)
-            };
-            let rust = called_as(OsStr::new(argv0), lookup, Os::Unix);
-            if shell.trim_end_matches('\n') != rust.name() {
-                wrong.push(format!(
-                    "argv0 {argv0:?}, K5_CLI_CALLED_AS={value:?}: shell {shell:?}, rust {:?}",
-                    rust.name()
-                ));
-            }
-        }
-    }
     assert!(
-        wrong.is_empty(),
-        "{} rows differ:\n{}",
-        wrong.len(),
-        wrong.join("\n")
+        !prelude.contains("_K2_CALLED_AS"),
+        "the shell reads a name again"
     );
+    assert!(
+        !prelude.contains("${0##*/}"),
+        "the shell reads $0's name again"
+    );
+    let unsets = prelude.lines().filter(|l| *l == UNSET_LINE).count();
+    assert_eq!(unsets, 1, "{UNSET_LINE}");
 }
 
-/// What the front hands on is what the shell acts on: the name, the
-/// notice marked done, and the via flag.
+/// What the front hands on is what the shell acts on: the notice marked
+/// done and the via flag. The name goes out of the environment unread, so
+/// nothing the shell starts sees it.
 #[cfg(unix)]
 #[test]
 fn the_fallthrough_env_is_what_the_shell_reads() {
     let script = format!(
-        "{}\n{}\nprintf '%s|%s|%s\\n' \"$_K2_CALLED_AS\" \"$_K5_NOTICE_DONE\" \"$_K5_CLI_VIA\"",
-        called_as_block(),
+        "{}\n{UNSET_LINE}\nprintf '%s|%s|%s\\n' \"$_K5_NOTICE_DONE\" \"$_K5_CLI_VIA\" \"${{K5_CLI_CALLED_AS-unset}}\"",
         handoff_block()
     );
     for who in [CalledAs::K2Name, CalledAs::K5Name] {
         for argv0 in ["k2", "k5", "/opt/k5-front/libexec/k2-cli"] {
             let env = who.fallthrough_env();
             let shell = common::bash(&script, argv0, &env);
-            assert_eq!(
-                shell,
-                format!("{}|1|rust\n", who.name()),
-                "{who:?} called from {argv0:?}"
-            );
+            assert_eq!(shell, "1|rust|unset\n", "{who:?} called from {argv0:?}");
         }
     }
-    // Without the front, none of the three is set.
-    assert_eq!(common::bash(&script, "k5", &[]), "k5||\n");
+    // Without the front, none is set.
+    assert_eq!(common::bash(&script, "k5", &[]), "||unset\n");
 }
 
 /// The prelude's lines that read the folder the front passes and close the

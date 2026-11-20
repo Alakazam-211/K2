@@ -74,7 +74,29 @@ fn octal(field: &mut [u8], v: u64) {
     field[width] = 0;
 }
 
-fn header(name: &[u8], mode: u32, uid: u64, gid: u64, size: u64, mtime: u64, kind: u8, link: &[u8]) -> [u8; 512] {
+/// One ustar header's fields.
+struct Head<'a> {
+    name: &'a [u8],
+    mode: u32,
+    uid: u64,
+    gid: u64,
+    size: u64,
+    mtime: u64,
+    kind: u8,
+    link: &'a [u8],
+}
+
+fn header(f: &Head<'_>) -> [u8; 512] {
+    let Head {
+        name,
+        mode,
+        uid,
+        gid,
+        size,
+        mtime,
+        kind,
+        link,
+    } = *f;
     let mut h = [0u8; 512];
     let n = name.len().min(100);
     h[..n].copy_from_slice(&name[..n]);
@@ -135,21 +157,30 @@ fn entry(w: &mut impl Write, path: &Path, name: &str) -> std::io::Result<()> {
     }
     let mtime = u64::try_from(meta.mtime()).unwrap_or(0);
     if !pax.is_empty() {
-        let h = header(b"././@PaxHeader", 0o644, 0, 0, pax.len() as u64, mtime, b'x', b"");
+        let h = header(&Head {
+            name: b"././@PaxHeader",
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+            size: pax.len() as u64,
+            mtime,
+            kind: b'x',
+            link: b"",
+        });
         w.write_all(&h)?;
         w.write_all(&pax)?;
         pad(w, pax.len() as u64)?;
     }
-    let h = header(
-        name_b,
-        meta.mode() & 0o7777,
-        u64::from(meta.uid()),
-        u64::from(meta.gid()),
+    let h = header(&Head {
+        name: name_b,
+        mode: meta.mode() & 0o7777,
+        uid: u64::from(meta.uid()),
+        gid: u64::from(meta.gid()),
         size,
         mtime,
         kind,
-        &link,
-    );
+        link: &link,
+    });
     w.write_all(&h)?;
     if kind == b'0' {
         let mut f = std::fs::File::open(path)?;

@@ -196,7 +196,7 @@ fn usage(line: &str) -> Exit {
 
 fn verb(cp: &mut Cp<'_>, a: &Ask) -> Exit {
     let guard = |cp: &Cp<'_>| {
-        agent(cp.client).then(|| {
+        agent(&*cp.client).then(|| {
             crate::out::stderr_line(&person_refusal());
             Exit::Refused
         })

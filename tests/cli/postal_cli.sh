@@ -12,7 +12,9 @@
 # out once connected; the friends list marks a request with a pairing code;
 # accept --code carries the code; `k2 msg <postal address>` and postal send
 # post to /cli/postal/send (exit 0 held, 3 not a friend or a secret in the
-# text, 2 for a K2-only flag); route sends its targets; owner-link reads a
+# text, 2 for a K2-only flag); `k2 msg -- <postal address> "-x"` (and with
+# --help as the text, flags before `--`, or the address before `--`) sends
+# the text as typed; route sends its targets; owner-link reads a
 # token from stdin; adopt says "not available yet". Hermetic: HOME is a
 # throwaway dir, every K2_*/K2SO_* var is unset, the daemon is a python stub.
 
@@ -235,6 +237,27 @@ run msg ops::beta.postal.bot "hi" --summary "x"
 assert_eq "a K2-only flag: usage, exit 2" "$rc" "2"
 assert_contains "a K2-only flag: says why" "$out" "takes only the text"
 assert_eq "a refused flag sends nothing" "$(nreq)" "$before"
+
+echo "== sending: the address after -- =="
+# After `--` the text is sent as typed: a dash first, or --help, is text.
+run msg -- ops::beta.postal.bot "-x"
+assert_eq "msg -- <address> -x: exit 0" "$rc" "0"
+assert_eq "msg -- <address> -x: the text as typed" "$(last /cli/postal/send)" 'POST {"text": "-x", "to": "ops::beta.postal.bot", "wake": true}'
+run msg -- ops::beta.postal.bot "--help"
+assert_eq "msg -- <address> --help: exit 0" "$rc" "0"
+assert_eq "msg -- <address> --help: sent as text" "$(last /cli/postal/send)" 'POST {"text": "--help", "to": "ops::beta.postal.bot", "wake": true}'
+assert_not_contains "msg -- <address> --help: no help page" "$out" "Usage:"
+# The flags before `--` are read as without it.
+run msg --no-wake --json -- ops::beta.postal.bot "-x"
+assert_eq "msg --no-wake --json -- <address> -x: exit 0" "$rc" "0"
+assert_eq "msg --no-wake --json -- <address> -x: no wake" "$(last /cli/postal/send)" 'POST {"text": "-x", "to": "ops::beta.postal.bot", "wake": false}'
+assert_contains "msg --json -- <address>: the JSON answer" "$out" '"badge": "p_3f9a0c41d27be6058a1c"'
+# A value flag first: the address is read by msg's own loop, then mailed.
+run msg --from me ops::beta.postal.bot -- "-x"
+assert_eq "msg --from me <address> -- -x: exit 0" "$rc" "0"
+assert_eq "msg --from me <address> -- -x: the text as typed" "$(last /cli/postal/send)" 'POST {"text": "-x", "to": "ops::beta.postal.bot", "wake": true}'
+run msg --from me ops::beta.postal.bot -- "--help"
+assert_eq "msg --from me <address> -- --help: sent as text" "$(last /cli/postal/send)" 'POST {"text": "--help", "to": "ops::beta.postal.bot", "wake": true}'
 
 echo "== routing =="
 run postal route inbox+pointer thread:rosson --no-wake

@@ -25619,7 +25619,8 @@ cmd_msg() {
         return 2
     fi
     if [ -n "$_REMOTE_HOST" ]; then
-        _postal_send_teach "$target" "$text"
+        # `--`: the text is sent as typed, even when it starts with a dash.
+        _postal_send_teach "$target" -- "$text"
         _send_remote_msg "$_BARE_TARGET" "$_REMOTE_HOST" "$text" "$PROJECT"
         return $?
     fi
@@ -79354,7 +79355,12 @@ cmd_msg_v2() {
     local first i=0
     for first in "$@"; do
         i=$((i + 1))
-        [ "$first" = "--" ] && break
+        if [ "$first" = "--" ]; then
+            # `k2 msg [flags] -- <postal address> "text"`: the flags before
+            # `--`, then `--` and the text, so the text is sent as typed.
+            [ $# -gt "$i" ] && _postal_send_teach "${@:$((i + 1)):1}" "${@:1:$((i - 1))}" -- "${@:$((i + 2))}"
+            break
+        fi
         case "$first" in
             -*) ;;
             *) _postal_send_teach "$first" "${@:1:$((i - 1))}" "${@:$((i + 1))}"; break ;;

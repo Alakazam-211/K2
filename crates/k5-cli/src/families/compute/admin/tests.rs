@@ -24,7 +24,10 @@ fn revoke_words() {
         }
     );
     // `--json` is a node name to the shell.
-    let a = ask(switch::parse("revoke", &["mini", "--workspace", "acme", "--json"]));
+    let a = ask(switch::parse(
+        "revoke",
+        &["mini", "--workspace", "acme", "--json"],
+    ));
     assert_eq!(
         a,
         switch::Ask::Revoke {
@@ -103,7 +106,9 @@ fn retier_words() {
 
 #[test]
 fn readers() {
-    let s = switch::revoke_reader(br#"{"removed":true,"node":"mini","workspace":"acme","note":"done."}"#);
+    let s = switch::revoke_reader(
+        br#"{"removed":true,"node":"mini","workspace":"acme","note":"done."}"#,
+    );
     assert_eq!(s.stdout, "revoked mini for acme. done.\n");
     let s = switch::revoke_reader(br#"{"removed":0,"note":"x"}"#);
     assert_eq!(s.stdout, "no grant to revoke. x\n");
@@ -125,8 +130,13 @@ fn readers() {
         br#"{"agentsCanUseCompute":true,"workspace":"acme","granted":["a"],"kept":["b"]}"#,
     );
     assert_eq!(s.stdout, "Allow compute nodes: on for acme: a, b\n");
-    let s = switch::access_reader(br#"{"agentsCanUseCompute":false,"workspace":"acme","grantsRemoved":2}"#);
-    assert_eq!(s.stdout, "Allow compute nodes: off for acme (2 grants removed)\n");
+    let s = switch::access_reader(
+        br#"{"agentsCanUseCompute":false,"workspace":"acme","grantsRemoved":2}"#,
+    );
+    assert_eq!(
+        s.stdout,
+        "Allow compute nodes: off for acme (2 grants removed)\n"
+    );
     let s = switch::access_reader(br#"{"agentsCanUseCompute":true,"workspace":"acme"}"#);
     assert_eq!(
         s.stdout,

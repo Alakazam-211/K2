@@ -127,7 +127,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return Some(gate.stop());
     }
     let would_refuse = passport::current(args).would_refuse();
-    if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, writes::TOOL)
+    if let Some(stop) =
+        prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, writes::TOOL)
     {
         return Some(stop);
     }

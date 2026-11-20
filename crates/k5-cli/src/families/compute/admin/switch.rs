@@ -9,7 +9,7 @@
 //!   `compute_operate` or `compute_manage` toggle (this checkout's
 //!   workspace outside a session, the passport's in one).
 
-use super::super::writes::{body_of, dumps, load, object, str_value, stopped, Cp, Words};
+use super::super::writes::{body_of, dumps, load, object, stopped, str_value, Cp, Words};
 use super::{str_plus, table_get};
 use crate::exit::Exit;
 use crate::families::{py_d, Raise, Shown};
@@ -84,9 +84,16 @@ impl Toggle {
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
-    Revoke { node: String, workspace: String },
-    Preview { on: bool },
-    Placement { version: String },
+    Revoke {
+        node: String,
+        workspace: String,
+    },
+    Preview {
+        on: bool,
+    },
+    Placement {
+        version: String,
+    },
     Toggle {
         toggle: Toggle,
         on: bool,
@@ -166,15 +173,11 @@ fn toggle(toggle: Toggle, words: &[&str]) -> Words<Ask> {
 /// The request and what it prints.
 pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
     let (path, body) = match a {
-        Ask::Revoke { node, workspace } => (
-            REVOKE,
-            body_of(&[("node", node), ("workspace", workspace)]),
-        ),
+        Ask::Revoke { node, workspace } => {
+            (REVOKE, body_of(&[("node", node), ("workspace", workspace)]))
+        }
         Ask::Preview { on } => (SETTINGS, format!("{{\"computePreview\":{on}}}")),
-        Ask::Placement { version } => (
-            SETTINGS,
-            format!("{{\"computePlacement\":\"{version}\"}}"),
-        ),
+        Ask::Placement { version } => (SETTINGS, format!("{{\"computePlacement\":\"{version}\"}}")),
         Ask::Toggle {
             toggle,
             on,
@@ -266,12 +269,12 @@ pub fn placement_reader(body: &[u8]) -> Shown {
 fn plus(a: &Value, b: &Value, line: u32) -> Result<Value, Raise> {
     let ty = py::type_name;
     match (a, b) {
-        (Value::Array(x), Value::Array(y)) => Ok(Value::Array(x.iter().chain(y).cloned().collect())),
-        (Value::Str(_), Value::Str(_)) => Ok(str_value(&format!(
-            "{}{}",
-            py::str_of(a),
-            py::str_of(b)
-        ))),
+        (Value::Array(x), Value::Array(y)) => {
+            Ok(Value::Array(x.iter().chain(y).cloned().collect()))
+        }
+        (Value::Str(_), Value::Str(_)) => {
+            Ok(str_value(&format!("{}{}", py::str_of(a), py::str_of(b))))
+        }
         (Value::Array(_), _) => Err(Raise::at(
             line,
             format!(
@@ -286,9 +289,10 @@ fn plus(a: &Value, b: &Value, line: u32) -> Result<Value, Raise> {
                 ty(b)
             ),
         )),
-        (Value::Int(_) | Value::Bool(_) | Value::Float(_), Value::Int(_) | Value::Bool(_) | Value::Float(_)) => {
-            Ok(number_sum(a, b))
-        }
+        (
+            Value::Int(_) | Value::Bool(_) | Value::Float(_),
+            Value::Int(_) | Value::Bool(_) | Value::Float(_),
+        ) => Ok(number_sum(a, b)),
         _ => Err(Raise::at(
             line,
             format!(

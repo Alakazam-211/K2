@@ -42,7 +42,8 @@ fn in_session(c: Case) -> Case {
 #[test]
 fn compute_revoke() {
     let rig = Rig::new(VERB, "revoke");
-    let removed = r#"{"node":"mini","workspace":"acme","removed":true,"note":"its queued jobs stay."}"#;
+    let removed =
+        r#"{"node":"mini","workspace":"acme","removed":true,"note":"its queued jobs stay."}"#;
     let v = vec![
         // covers: compute revoke
         case(
@@ -450,7 +451,8 @@ fn compute_access_operate_manage() {
 #[test]
 fn compute_retier() {
     let rig = Rig::new(VERB, "retier");
-    let moved = r#"{"job":"j1","from":"normal","tier":"priority","node":"mini","note":"it runs next."}"#;
+    let moved =
+        r#"{"job":"j1","from":"normal","tier":"priority","node":"mini","note":"it runs next."}"#;
     let v = vec![
         // covers: compute retier
         case(
@@ -530,7 +532,9 @@ fn compute_retier() {
             "no note",
             &["retier", "j1", "--batch"],
             &[],
-            vec![ok(r#"{"job":"j1","from":"normal","tier":"batch","node":"mini"}"#)],
+            vec![ok(
+                r#"{"job":"j1","from":"normal","tier":"batch","node":"mini"}"#,
+            )],
             owner_and_port,
             1,
             1,

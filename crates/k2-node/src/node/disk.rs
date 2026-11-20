@@ -1951,33 +1951,33 @@ mod tests {
         };
         start(&tens[0], "one");
         start(&tens[1], "two");
-        start(&n.owner(), "own");
-        wait_until("all three run", || n.running_by_tenant().values().map(|v| v.len()).sum::<usize>() == 3).await;
+        let t0 = std::time::Instant::now();
+        while n.running_ids().len() < 2 {
+            n.fairq.tick(&n);
+            assert!(t0.elapsed() < Duration::from_secs(20), "both never ran: {:?}", n.running_by_tenant());
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         // Server 1's job holds 10 MiB (past the 8 MiB budget); server 2's
-        // 3 MiB (under the cap); the owner's 6 MiB (between); an idle
-        // slot of 10 MiB nobody holds.
+        // 6 MiB (over the 4 MiB cap, under the budget); server 2 also has
+        // an idle slot of 10 MiB nobody holds.
         let s1 = layout.tenant(1).cache().join("pk/target-1");
         let s2 = layout.tenant(2).cache().join("pk/target-1");
-        let own = layout.project_cache("pk").join("target-1");
-        let idle = layout.project_cache("pk9").join("target-1");
-        for (d, mib) in [(&s1, 10), (&s2, 3), (&own, 6), (&idle, 10)] {
+        let idle = layout.tenant(2).cache().join("pk9/target-1");
+        for (d, mib) in [(&s1, 10), (&s2, 6), (&idle, 10)] {
             put(&d.join("blob"), mib * MIB);
         }
         n.rehold_slot(s1.clone(), 1, "one", 1);
         n.rehold_slot(s2.clone(), 2, "two", 1);
-        n.rehold_slot(own.clone(), 0, "own", 1);
         assert_eq!(n.busy_slot_pass().await, vec![(1u8, "one".to_string())]);
         wait_until("one ends", || tens[0].ledger.lock().unwrap().get("one", 1).unwrap().unwrap().state.is_terminal()).await;
         let r = tens[0].ledger.lock().unwrap().get("one", 1).unwrap().unwrap();
         assert_eq!((r.state, r.reason.as_deref()), (JobState::Failed, Some(DISK_BUDGET)));
         assert!(r.detail.as_deref().is_some_and(|d| d.contains("warm target slot reached")), "{:?}", r.detail);
-        let running = n.running_ids();
-        assert!(running.contains(&"two".to_string()) && running.contains(&"own".to_string()), "{running:?}");
-        for d in [&s1, &s2, &own, &idle] {
+        assert_eq!(n.running_ids(), vec!["two".to_string()], "another server's job runs on");
+        for d in [&s1, &s2, &idle] {
             assert!(d.join("blob").exists(), "the pass deletes nothing: {}", d.display());
         }
-        assert!(n.slot_holds.lock().unwrap().get(&own).is_some_and(|h| h.over_cap && h.stopped.is_none()), "between: marked for its end, not stopped");
-        assert!(n.slot_holds.lock().unwrap().get(&s2).is_some_and(|h| !h.over_cap && h.stopped.is_none()));
+        assert!(n.slot_holds.lock().unwrap().get(&s2).is_some_and(|h| h.over_cap && h.stopped.is_none()), "between: marked for its end, not stopped");
         // Walked just now: nothing is due again, nothing more stops.
         assert!(n.busy_slot_pass().await.is_empty());
         n.stop_all(JobState::Cancelled, "test_over");

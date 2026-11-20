@@ -2289,7 +2289,9 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
                 "a session with no passport, the owner on disk: unlock sends no credential",
                 &["garden", "unlock", "g1", "--json"],
                 &[],
-                vec![ok(r#"{"garden":{"id":"g1","name":"Home"},"locked":false,"changed":true}"#)],
+                vec![ok(
+                    r#"{"garden":{"id":"g1","name":"Home"},"locked":false,"changed":true}"#,
+                )],
                 owner_and_port,
                 0,
                 1,
@@ -2366,7 +2368,10 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
             &[],
             vec![
                 ok(r#"{"ok":true}"#),
-                answer(403, r#"{"error":"owner_only","message":"Only the person lists agents."}"#),
+                answer(
+                    403,
+                    r#"{"error":"owner_only","message":"Only the person lists agents."}"#,
+                ),
             ],
             port_marked,
             3,
@@ -2379,7 +2384,9 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
                 &["garden", "access", "Home", "remove", "ag", "--json"],
                 vec![
                     ok(r#"{"ok":true}"#),
-                    ok(r#"{"agent":{"handle":"ag"},"garden":{"name":"Home"},"listed":false,"changed":true}"#),
+                    ok(
+                        r#"{"agent":{"handle":"ag"},"garden":{"name":"Home"},"listed":false,"changed":true}"#,
+                    ),
                 ],
             )
         },
@@ -2424,7 +2431,10 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
             "a session: access ask with the passport",
             &["garden", "access", "Home", "ask"],
             &[],
-            vec![ok(r#"{"ok":true}"#), ok(r#"{"message":"Asked the person."}"#)],
+            vec![
+                ok(r#"{"ok":true}"#),
+                ok(r#"{"message":"Asked the person."}"#),
+            ],
             port_marked,
             0,
             2,
@@ -2464,7 +2474,10 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
             "a session: links forget, the person only",
             &["links", "forget", "g1", "a.example"],
             &[],
-            vec![answer(403, r#"{"error":{"code":"owner_only","hint":"The person forgets sites."}}"#)],
+            vec![answer(
+                403,
+                r#"{"error":{"code":"owner_only","hint":"The person forgets sites."}}"#,
+            )],
             port_only,
             3,
             1,
@@ -2485,7 +2498,15 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
             1,
         )),
         // native: zen widget allow
-        case("widget allow: no permissions", &["widget", "allow"], &[], vec![], nothing, 0, 0),
+        case(
+            "widget allow: no permissions",
+            &["widget", "allow"],
+            &[],
+            vec![],
+            nothing,
+            0,
+            0,
+        ),
         // native: zen proposal
         // native: zen proposals list
         Case {
@@ -2527,9 +2548,25 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
             1,
         )),
         // native: zen grant
-        case("grant is gone", &["grant"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "grant is gone",
+            &["grant"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         // native: zen allow
-        case("allow is gone", &["allow", "w"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "allow is gone",
+            &["allow", "w"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         shell(case(
             "garden lock -h: help, nothing sent",
             &["garden", "lock", "g1", "-h"],
@@ -2559,9 +2596,8 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
         let proj = rig.proj.to_string_lossy().into_owned();
         let folder = leak(format!("{proj}/staged-w"));
         let page = leak(format!("{proj}/page.toml"));
-        let args = |v: Vec<&'static str>| -> &'static [&'static str] {
-            Box::leak(v.into_boxed_slice())
-        };
+        let args =
+            |v: Vec<&'static str>| -> &'static [&'static str] { Box::leak(v.into_boxed_slice()) };
         let no_temp = |c: Case| Case {
             no_tmpdir: true,
             ..c

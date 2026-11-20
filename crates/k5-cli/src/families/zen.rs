@@ -192,12 +192,12 @@ fn temp_shell() -> bool {
         && super::update::shell_program(&crate::offline::Env::current(), "mktemp").is_none()
 }
 
-/// `x="$(mktemp [-d] "${TMPDIR:-/tmp}/<name>XXXXXX")" || { echo "<line>"
-/// >&2; exit 1; }` where `${TMPDIR:-/tmp}` can't be used: the system's
-/// `mktemp` (the one on `PATH`, as the shell runs it) says why on stderr
-/// in its own words, then the shell's line, exit 1. `None` when the folder
-/// can be used (the binary needs no file there), or when `mktemp` made one
-/// after all (it goes again).
+/// `x="$(mktemp [-d] "${TMPDIR:-/tmp}/<name>XXXXXX")"` failing where
+/// `${TMPDIR:-/tmp}` can't be used: the system's `mktemp` (the one on
+/// `PATH`, as the shell runs it) says why on stderr in its own words, then
+/// the shell's `line`, exit 1. `None` when the folder can be used (the
+/// binary needs no file there), or when `mktemp` made one after all (it
+/// goes again).
 pub fn temp_fails(folder: bool, name: &str, line: &str) -> Option<crate::families::Shown> {
     if !crate::transport::client::tmpdir_unusable() {
         return None;
@@ -229,7 +229,10 @@ pub fn temp_fails(folder: bool, name: &str, line: &str) -> Option<crate::familie
         };
         return None;
     }
-    Some(crate::families::Shown::err(format!("{line}\n"), Exit::Error))
+    Some(crate::families::Shown::err(
+        format!("{line}\n"),
+        Exit::Error,
+    ))
 }
 
 /// `_zen_dir_call`'s and the shot's line when `mktemp` fails.

@@ -27,7 +27,10 @@ mod tests;
 /// bug, reported). The binary says what is missing and exits 2 (K2's D6,
 /// `edge-usage-exit-2`); nothing is sent.
 pub fn needs_value(flag: &str) -> String {
-    format!(concat!("{} needs a value (try '", cli_name!(), " zen data --help')"), flag)
+    format!(
+        concat!("{} needs a value (try '", cli_name!(), " zen data --help')"),
+        flag
+    )
 }
 
 /// `cmd_zen_data`: `words` are the words after `zen data`.

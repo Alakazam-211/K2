@@ -801,6 +801,12 @@ pub struct Client {
     /// The [`Kind::Own`] call under way is sent once
     /// ([`Client::own_curl_once`]).
     own_once: bool,
+    /// The [`Kind::Own`] POST under way carries no data at all
+    /// ([`Client::own_curl_bare`]).
+    own_bare: bool,
+    /// The `--connect-timeout` of the [`Kind::Own`] call under way, when
+    /// it is not the default ([`Client::own_curl_bare`]).
+    own_connect: Option<Duration>,
 }
 
 /// How [`Client::own_curl`] sends: `_k2_curl` with the caller's config
@@ -855,6 +861,8 @@ impl Client {
             migrate_sock: false,
             own: None,
             own_once: false,
+            own_bare: false,
+            own_connect: None,
         }
     }
 
@@ -1175,6 +1183,31 @@ impl Client {
         let r = self.own_curl(endpoint, how, body);
         self.own_once = false;
         r
+    }
+
+    /// [`Client::own_curl`] as `_daemon_local_post` and `_daemon_wait_ready`
+    /// send it (`cli/src/daemon.sh`): `--connect-timeout` is `connect`, and
+    /// a POST carries no data at all (`-X POST` alone: no `Content-Type`,
+    /// no `Content-Length`, no body).
+    pub fn own_curl_bare(
+        &mut self,
+        endpoint: &str,
+        how: OwnCurl<'_>,
+        connect: Duration,
+    ) -> Result<Response, Error> {
+        self.own_bare = how.post;
+        self.own_connect = Some(connect);
+        let r = self.own_curl(endpoint, how, &[]);
+        self.own_bare = false;
+        self.own_connect = None;
+        r
+    }
+
+    /// The credential this client's TCP requests carry (the shell's
+    /// `$TOKEN`), if any: for a caller that sends it in a call of its own
+    /// ([`Client::own_curl`]).
+    pub fn tcp_credential(&self) -> Option<String> {
+        self.tcp_token().map(str::to_string)
     }
 
     /// `cli_post <endpoint> <pairs>` ([`Kind::QueryPost`]): a POST with an
@@ -1700,9 +1733,13 @@ impl Client {
                 super::remote::plain_http_daemon_note(host);
             }
         }
+        let connect = match (kind, self.own_connect) {
+            (Kind::Own { .. }, Some(c)) => c,
+            _ => kind.connect_timeout(),
+        };
         loop {
             let deadline = Instant::now() + max;
-            match wire::connect(&target, kind.connect_timeout(), deadline) {
+            match wire::connect(&target, connect, deadline) {
                 Ok(mut conn) => {
                     let r = wire::exchange(&mut conn, &request, deadline);
                     // Every answer, a retried one too: the compare is on
@@ -1982,6 +2019,9 @@ impl Client {
                     wire::append_get_query(endpoint, &payload)
                 };
                 (Method::Get, path, None)
+            }
+            Kind::Own { post: true, .. } if self.own_bare => {
+                (Method::Post, endpoint.to_string(), None)
             }
             Kind::SendJsonPost
             | Kind::ComputePost
@@ -3119,6 +3159,36 @@ mod tests {
             assert!(r.headers.iter().all(|(n, _)| n != "Authorization"));
             assert!(r.body.is_none());
         }
+    }
+
+    /// `_daemon_local_post`'s `-X POST` with no data: no body, so no
+    /// `Content-Type` and no `Content-Length`; a GET is as before.
+    #[test]
+    fn a_bare_own_post_carries_no_data() {
+        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
+        c.own = Some((Some("d.t".into()), Duration::from_secs(30)));
+        c.own_bare = true;
+        let post = Kind::Own {
+            post: true,
+            note: false,
+        };
+        let (_, r) = c
+            .build(post, Channel::Tcp, "/cli/daemon/stop", &[], &[])
+            .unwrap();
+        assert_eq!(
+            (r.method, r.target.as_str()),
+            (Method::Post, "/cli/daemon/stop")
+        );
+        assert_eq!(r.headers[0], ("Authorization".into(), "Bearer d.t".into()));
+        assert!(r.headers.iter().all(|(n, _)| n != "Content-Type"));
+        assert!(r.body.is_none());
+        let text = String::from_utf8(r.encode()).unwrap();
+        assert!(!text.contains("Content-Length"), "{text}");
+        c.own_bare = false;
+        let (_, r) = c
+            .build(post, Channel::Tcp, "/cli/daemon/stop", &[], &[])
+            .unwrap();
+        assert!(r.body.is_some());
     }
 
     /// `_K2_CURL_TRIES=1`: [`Client::own_curl_once`] connects once where

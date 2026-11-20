@@ -1,6 +1,6 @@
 ## agent asks (tcp passport)
 > POST /cli/thread/ask
-> body: {"addr":"pog-thread","prompt":"Ship it?","options":"Ship,Wait"}
+> body: {"addr":"pog-thread","prompt":"Ship it?","options":"Ship;Wait"}
 HTTP/1.1 200 OK
 content-type: application/json
 {

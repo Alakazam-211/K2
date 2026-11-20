@@ -1188,7 +1188,7 @@ async fn permission_cards_off_is_today_byte_for_byte() {
     let mut t = String::new();
     // The agent asks (a choice card).
     let mark = gateway_mark();
-    let ask = r#"{"addr":"pog-thread","prompt":"Ship it?","options":"Ship,Wait"}"#;
+    let ask = r#"{"addr":"pog-thread","prompt":"Ship it?","options":"Ship;Wait"}"#;
     let r = tcp(port, "POST", "/cli/thread/ask", Some(&tpass), Some(ask)).await;
     t.push_str(&render_json("agent asks (tcp passport)", "POST", "/cli/thread/ask", Some(ask), &r));
     let card: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("ask JSON ({e}): {}", r.body));

@@ -229,7 +229,10 @@ mod tests {
     fn the_words() {
         assert_eq!(parse(&[]), Form::Call(STATUS, false, false));
         assert_eq!(parse(&["--json"]), Form::Call(STATUS, false, true));
-        assert_eq!(parse(&["install", "--json"]), Form::Call(INSTALL, true, true));
+        assert_eq!(
+            parse(&["install", "--json"]),
+            Form::Call(INSTALL, true, true)
+        );
         assert_eq!(parse(&["help"]), Form::Help);
         assert_eq!(
             parse(&["nope", "x"]),
@@ -247,11 +250,24 @@ mod tests {
             let x = render(j, Some((s, b.as_bytes().to_vec())));
             (x.stdout, x.stderr, x.exit)
         };
-        assert_eq!(render(false, None).stderr, "k2 git-tools: daemon unreachable\n");
-        assert_eq!(r(false, 200, "git: ok\n"), ("git: ok\n".into(), String::new(), Exit::Ok));
-        assert_eq!(r(true, 500, "{}"), ("{}\n".into(), String::new(), Exit::Error));
         assert_eq!(
-            r(false, 403, r#"{"error" : "owner_only", "hint":"Ask the owner"}"#),
+            render(false, None).stderr,
+            "k2 git-tools: daemon unreachable\n"
+        );
+        assert_eq!(
+            r(false, 200, "git: ok\n"),
+            ("git: ok\n".into(), String::new(), Exit::Ok)
+        );
+        assert_eq!(
+            r(true, 500, "{}"),
+            ("{}\n".into(), String::new(), Exit::Error)
+        );
+        assert_eq!(
+            r(
+                false,
+                403,
+                r#"{"error" : "owner_only", "hint":"Ask the owner"}"#
+            ),
             (
                 String::new(),
                 "k2 git-tools: error: owner_only\n  Ask the owner\n".into(),
@@ -259,8 +275,14 @@ mod tests {
             )
         );
         assert_eq!(r(false, 500, "x").1, "k2 git-tools: error: HTTP 500\n");
-        assert_eq!(r(false, 409, "k2 git-tools: busy\n").1, "k2 git-tools: busy\n");
-        assert_eq!(quoted_after(r#""error":1, "error": "b""#, "error"), Some("b".into()));
+        assert_eq!(
+            r(false, 409, "k2 git-tools: busy\n").1,
+            "k2 git-tools: busy\n"
+        );
+        assert_eq!(
+            quoted_after(r#""error":1, "error": "b""#, "error"),
+            Some("b".into())
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ use super::phones::{self, safe};
 use super::read::{self, add_body, kept, presence_secret};
 use super::*;
 use crate::families::tunnel::Out;
+use crate::families::Shown;
 use crate::out::json;
 
 fn shell(file: &str) -> String {
@@ -197,7 +198,7 @@ fn list_reads_as_its_python() {
          vc (Voice & Chat only) shares: agents a@w, x (gone); gardens none\n"
     );
     assert_eq!((e.as_str(), x), ("doctor: d1\n", Exit::Ok));
-    let (o, _, _) = shown(read::list(br#"{"users":[{"username":"é","canClone":false}]}"#, true, false));
+    let (o, _, _) = shown(read::list(br#"{"users":[{"username":"\u00e9","canClone":false}]}"#, true, false));
     assert_eq!(
         o,
         "{\"ok\":true,\"users\":[{\"username\":\"\u{e9}\",\"role\":\"member\",\"disabled\":false,\"wasViewer\":false,\"canClone\":false,\"createdAt\":null,\"firstName\":null,\"lastName\":null,\"displayName\":\"\u{e9}\",\"mustChangePassword\":false,\"shares\":{\"agents\":[],\"gardens\":[]}}]}\n"

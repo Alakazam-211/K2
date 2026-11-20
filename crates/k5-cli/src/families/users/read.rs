@@ -33,10 +33,7 @@ pub fn loads(t: &str) -> Option<Value> {
 
 /// `sys.stderr.write("<prefix>%r\n" % (raw[:200],)); sys.exit(1)`.
 pub fn unparseable(prefix: &str, t: &str) -> Shown {
-    Shown::err(
-        format!("{prefix}{}\n", py::repr(&s(&head(t)))),
-        Exit::Error,
-    )
+    Shown::err(format!("{prefix}{}\n", py::repr(&s(&head(t)))), Exit::Error)
 }
 
 const UNPARSEABLE: &str = "Error: daemon returned an unparseable response: ";
@@ -186,13 +183,12 @@ pub fn presence_secret(resp: &[u8]) -> String {
     let Value::Object(pairs) = &d else {
         return String::new();
     };
-    let (Some(Value::Object(e)), Some(Value::Object(c))) = (get(pairs, "error"), get(pairs, "confirm"))
+    let (Some(Value::Object(e)), Some(Value::Object(c))) =
+        (get(pairs, "error"), get(pairs, "confirm"))
     else {
         return String::new();
     };
-    let is = |p: &[(json::Text, Value)], k: &str, want: &str| {
-        matches!(get(p, k), Some(Value::Str(t)) if t.as_str() == Some(want))
-    };
+    let is = |p: &[(json::Text, Value)], k: &str, want: &str| matches!(get(p, k), Some(Value::Str(t)) if t.as_str() == Some(want));
     if !is(e, "code", "vault_presence_required") || !is(c, "action", super::OWNER_LOGIN) {
         return String::new();
     }
@@ -291,7 +287,10 @@ fn list_body(
         }
         let mut doc = vec![("ok", Value::Bool(true)), ("users", Value::Array(out))];
         if truthy(get(pairs, "doctor")) {
-            doc.push(("doctor", get(pairs, "doctor").cloned().unwrap_or(Value::Null)));
+            doc.push((
+                "doctor",
+                get(pairs, "doctor").cloned().unwrap_or(Value::Null),
+            ));
         }
         let opts = Options {
             compact: true,
@@ -334,17 +333,16 @@ fn list_body(
             } else {
                 "-".into()
             },
-            py::str_of(&or(
-                at("createdAt"),
-                or(at("created_at"), s("-")),
-            )),
+            py::str_of(&or(at("createdAt"), or(at("created_at"), s("-")))),
         ]);
     }
     if rows.is_empty() {
         o.out("No connect users yet.");
         return Ok(Exit::Ok);
     }
-    let head = ["USERNAME", "NAME", "ROLE", "DISABLED", "PASSWORD", "CREATED"];
+    let head = [
+        "USERNAME", "NAME", "ROLE", "DISABLED", "PASSWORD", "CREATED",
+    ];
     let width = |i: usize| {
         rows.iter()
             .map(|r| r[i].chars().count())
@@ -686,7 +684,9 @@ pub fn set_password(raw: &[u8], username: &str) -> Shown {
         };
         o.err(&format!("Error: {hint}"));
         let low = hint.to_lowercase();
-        let refused = ["token", "forbidden", "may not"].iter().any(|w| low.contains(w));
+        let refused = ["token", "forbidden", "may not"]
+            .iter()
+            .any(|w| low.contains(w));
         return done(o, Ok(if refused { Exit::Refused } else { Exit::Error }));
     }
     let ok = matches!(&d, Value::Object(p) if truthy(get(p, "success")));
@@ -697,7 +697,8 @@ pub fn set_password(raw: &[u8], username: &str) -> Shown {
     o.out(&format!(
         "Password set for {username}. They are signed out everywhere."
     ));
-    let temp = matches!(&d, Value::Object(p) if get(p, "mustChangePassword") == Some(&Value::Bool(true)));
+    let temp =
+        matches!(&d, Value::Object(p) if get(p, "mustChangePassword") == Some(&Value::Bool(true)));
     if temp {
         o.out(&format!(
             "It is temporary: the next time {username} signs in, {} asks them to choose their own.",

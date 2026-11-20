@@ -88,7 +88,12 @@ pub fn parse(verb: &str, rest: &[&str]) -> Result<Form, Stop> {
                     "--invert" => invert = true,
                     "--help" | "-h" => return Err(help()),
                     _ if w.starts_with("--user=") => user = w["--user=".len()..].to_string(),
-                    _ => return Err(unexpected(w, "pair-phone [--user <login>] [--json] [--invert]")),
+                    _ => {
+                        return Err(unexpected(
+                            w,
+                            "pair-phone [--user <login>] [--json] [--invert]",
+                        ))
+                    }
                 }
                 i += 1;
             }
@@ -360,7 +365,11 @@ pub fn pair_lines(d: &Value, o: &mut Out, as_json: bool, invert: bool) -> Result
             let mut line = String::new();
             for x in -pad..n + pad {
                 let top = ink(x, y)?;
-                let bot = if y + 1 < n + pad { ink(x, y + 1)? } else { !invert };
+                let bot = if y + 1 < n + pad {
+                    ink(x, y + 1)?
+                } else {
+                    !invert
+                };
                 line.push(match (top, bot) {
                     (true, true) => '\u{2588}',
                     (true, false) => '\u{2580}',
@@ -491,7 +500,10 @@ pub fn list_lines(d: &Value, o: &mut Out, as_json: bool) -> Result<(), Raise> {
             safe(py_get(&pa, "user", 8)?)
         ));
     } else if let Some(e @ Value::Object(_)) = py_get(&pa, "error", 9)? {
-        let hint = or(py_get(e, "hint", 10)?, py_get(e, "code", 10)?.cloned().unwrap_or(Value::Null));
+        let hint = or(
+            py_get(e, "hint", 10)?,
+            py_get(e, "code", 10)?.cloned().unwrap_or(Value::Null),
+        );
         o.out(&format!("A new pairing code: {}", safe(Some(&hint))));
     }
     let devices = or(py_get(d, "devices", 11)?, Value::Array(Vec::new()));
@@ -500,7 +512,12 @@ pub fn list_lines(d: &Value, o: &mut Out, as_json: bool) -> Result<(), Raise> {
         return Ok(());
     }
     let mut rows: Vec<[String; 6]> = vec![[
-        "ID", "LOGIN", "PHONE", "PAIRED", "ENDS IF UNUSED", "PAIRED BY",
+        "ID",
+        "LOGIN",
+        "PHONE",
+        "PAIRED",
+        "ENDS IF UNUSED",
+        "PAIRED BY",
     ]
     .map(String::from)];
     for x in py_iter(&devices, 16)? {

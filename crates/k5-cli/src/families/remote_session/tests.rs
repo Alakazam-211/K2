@@ -1,7 +1,8 @@
 use super::*;
 
 fn script() -> String {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/remote-session.sh");
+    let p =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/remote-session.sh");
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
 }
 
@@ -26,7 +27,9 @@ fn utc_line(starts: &str) -> u32 {
 fn the_warning_s_lines_are_the_readers() {
     assert_eq!(
         STATUS_UTC_LINE,
-        utc_line("import json,sys,datetime\nd=json.loads(sys.stdin.read())\nprint(\"Remote Sessions")
+        utc_line(
+            "import json,sys,datetime\nd=json.loads(sys.stdin.read())\nprint(\"Remote Sessions"
+        )
     );
     assert_eq!(
         GRANT_UTC_LINE,
@@ -45,7 +48,10 @@ fn the_grants_width_line_is_the_readers() {
         .split("python3 -c '")
         .find(|b| b.contains("w_st = max"))
         .expect("the grants reader");
-    let at = block.split('\n').position(|l| l.starts_with("w_st = max")).unwrap();
+    let at = block
+        .split('\n')
+        .position(|l| l.starts_with("w_st = max"))
+        .unwrap();
     assert_eq!(GRANTS_WIDTH_LINE, at as u32 + 1);
 }
 
@@ -55,9 +61,18 @@ fn the_lines_are_the_shell_s() {
     for l in [BOTH, NO_TOKEN, REVOKE_USAGE, WRITE_USAGE, READ_USAGE] {
         assert!(text.contains(l), "{l:?}");
     }
-    for code in ["REMOTE_SESSIONS_DISABLED", "NO_GRANT", "GRANT_EXPIRED", "GRANT_REVOKED", "gated"] {
+    for code in [
+        "REMOTE_SESSIONS_DISABLED",
+        "NO_GRANT",
+        "GRANT_EXPIRED",
+        "GRANT_REVOKED",
+        "gated",
+    ] {
         let t = teach(code).unwrap();
-        assert!(text.contains(&format!("\"{code}\": \"{t}\"")), "{code}: {t}");
+        assert!(
+            text.contains(&format!("\"{code}\": \"{t}\"")),
+            "{code}: {t}"
+        );
     }
 }
 
@@ -80,7 +95,10 @@ fn the_words() {
     assert_eq!(p(&[]), Form::Help);
     assert_eq!(p(&["status", "--json"]), Form::Status { json: true });
     assert!(matches!(p(&["status", "x"]), Form::Stop { page: true, .. }));
-    assert!(matches!(p(&["enable", "x"]), Form::Stop { page: false, .. }));
+    assert!(matches!(
+        p(&["enable", "x"]),
+        Form::Stop { page: false, .. }
+    ));
     assert_eq!(
         p(&["status", "--host"]),
         Form::Stop {
@@ -130,8 +148,14 @@ fn times_as_python_prints_them() {
     let mut warned = false;
     assert_eq!(utc(&mut o, Some(&s("x")), 9, &mut warned), "x");
     assert!(o.stderr.is_empty());
-    assert_eq!(utc(&mut o, Some(&Value::Float(1.9)), 9, &mut warned), "1970-01-01 00:00:01Z");
-    assert_eq!(utc(&mut o, Some(&s(" 2 ")), 9, &mut warned), "1970-01-01 00:00:02Z");
+    assert_eq!(
+        utc(&mut o, Some(&Value::Float(1.9)), 9, &mut warned),
+        "1970-01-01 00:00:01Z"
+    );
+    assert_eq!(
+        utc(&mut o, Some(&s(" 2 ")), 9, &mut warned),
+        "1970-01-01 00:00:02Z"
+    );
     assert_eq!(o.stderr, format!("<string>:9: {UTC_WARNING}\n"));
 }
 
@@ -143,9 +167,14 @@ fn shown(r: Shown) -> (String, String, Exit) {
 fn the_error_printer() {
     assert_eq!(shown(print_err(b" ")).2, Exit::Error);
     assert_eq!(shown(print_err(b"<x>")).1, "Error: <x>\n");
-    assert_eq!(shown(print_err(b"[1]")).1, "Error: unexpected response: '[1]'\n");
     assert_eq!(
-        shown(print_err(br#"{"error":{"code":"REMOTE_SESSIONS_DISABLED"}}"#)),
+        shown(print_err(b"[1]")).1,
+        "Error: unexpected response: '[1]'\n"
+    );
+    assert_eq!(
+        shown(print_err(
+            br#"{"error":{"code":"REMOTE_SESSIONS_DISABLED"}}"#
+        )),
         (
             String::new(),
             "Error: Remote Sessions are OFF. Enable with: k2 remote-session enable\n".into(),
@@ -161,8 +190,13 @@ fn the_error_printer() {
         (String::new(), "Error: bad\n".into(), Exit::Usage)
     );
     assert_eq!(shown(print_err(br#"{"error":{}}"#)).1, "Error: {}\n");
-    assert_eq!(shown(print_err(br#"{"error":"Invalid token"}"#)).2, Exit::Refused);
-    assert!(shown(print_err(br#"{"error":{"code":5}}"#)).1.ends_with("AttributeError: 'int' object has no attribute 'strip'\n"));
+    assert_eq!(
+        shown(print_err(br#"{"error":"Invalid token"}"#)).2,
+        Exit::Refused
+    );
+    assert!(shown(print_err(br#"{"error":{"code":5}}"#))
+        .1
+        .ends_with("AttributeError: 'int' object has no attribute 'strip'\n"));
 }
 
 #[test]
@@ -179,15 +213,24 @@ fn the_readers() {
     let mut o = Out::default();
     let r = grants_lines(&d, &mut o).unwrap_err();
     assert_eq!(r.exception, "IndexError: tuple index out of range");
-    assert_eq!((o.stdout.as_str(), o.stderr), ("", format!("<string>:9: {UTC_WARNING}\n")));
+    assert_eq!(
+        (o.stdout.as_str(), o.stderr),
+        ("", format!("<string>:9: {UTC_WARNING}\n"))
+    );
     let mut o = Out::default();
     grants_lines(&json::parse(r#"{"grants":[1]}"#).unwrap(), &mut o).unwrap();
     assert_eq!(o.stdout, "No grants.\n");
     assert_eq!(shown(write_reader(b"", "s")).0, "wrote to s\n");
     assert_eq!(shown(write_reader(b"plain", "s")).0, "plain\n");
     assert_eq!(shown(write_reader(br#"{"lines":[]}"#, "s")).0, "");
-    assert_eq!(shown(write_reader(br#"{"success":false}"#, "s")).0, "wrote to s\n");
-    assert_eq!(shown(write_reader(br#"{"error":"nope"}"#, "s")).1, "Error: nope\n");
+    assert_eq!(
+        shown(write_reader(br#"{"success":false}"#, "s")).0,
+        "wrote to s\n"
+    );
+    assert_eq!(
+        shown(write_reader(br#"{"error":"nope"}"#, "s")).1,
+        "Error: nope\n"
+    );
     assert_eq!(shown(read_reader(br#"{"lines":["a",1]}"#)).0, "a\n1\n");
     assert_eq!(shown(read_reader(b"")).0, "");
     assert_eq!(shown(read_reader(br#"{"error":"x"}"#)).1, "Error: x\n");

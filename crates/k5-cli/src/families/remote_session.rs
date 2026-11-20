@@ -421,8 +421,11 @@ fn s(t: &str) -> Value {
     Value::Str(Text::from(t))
 }
 
+/// A verb's reader of an answer that was `ok`.
+type Reader = fn(&Value, &mut Out) -> Result<(), Raise>;
+
 fn answer(client: &mut Client, closing: &mut Closing, form: Form) -> Result<Exit, Exit> {
-    let (raw, reader): (Vec<u8>, fn(&Value, &mut Out) -> Result<(), Raise>) = match &form {
+    let (raw, reader): (Vec<u8>, Reader) = match &form {
         Form::Status { json } => {
             let raw = held_call(client, closing, STATUS, Call::Request(&[]))?;
             if *json && ok(&raw) {

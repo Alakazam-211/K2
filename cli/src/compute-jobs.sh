@@ -388,7 +388,7 @@ cmd_compute_wait() {
             fi
             if [ "$_CP_STATUS" != "200" ]; then
                 rm -rf "$dir"
-                _CP_404_EXIT=4 _compute_fail "$_CP_STATUS" "$_CP_BODY"
+                _compute_fail "$_CP_STATUS" "$_CP_BODY" 4
             fi
             fails=0
             printf '%s' "$_CP_BODY" > "$dir/$n.json"
@@ -498,7 +498,7 @@ _compute_wait_any() {
                 sleep 10
                 continue 2
             fi
-            [ "$_CP_STATUS" = "200" ] || _CP_404_EXIT=4 _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY" 4
             fails=0
             local out
             out="$(printf '%s' "$_CP_BODY" | K2_CP_JSON="$as_json" python3 -c '

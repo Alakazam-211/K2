@@ -90,13 +90,17 @@ _compute_split() {
 
 # Print the refusal and exit: 2 for a bad request, 3 for everything else
 # (infra and permission problems; a test failure is never exit 3).
+# _compute_fail <status> <body> [not-found exit]: the third argument is the
+# exit for a 404 (default 3). `k2 compute get`, `status <job>` and `wait`
+# pass 4 (not found). It comes only from the caller, never from the
+# environment, so an exported variable can't change a verb's exit code.
 # 0.46.7 (prd-tauri-core-0467-v1 TC-19): an App refusal (`_K2_REFUSAL_AREA`
 # app) whose id is in the registry also carries `next` (the fix) and
 # `explain` ("k2 explain <id>"), and, unless the command asked for --json,
 # a `fix: <next>` line follows (before K2's own Ask with: line). Exit codes
 # are unchanged.
 _compute_fail() {
-    local status="$1" body="$2" line="" rows=""
+    local status="$1" body="$2" not_found="${3:-3}" line="" rows=""
     [ "${_K2_REFUSAL_AREA:-}" = app ] && rows="$(_k2_refusals_json 2>/dev/null)"
     if [ -n "$body" ]; then
         line="$(printf '%s' "$body" | K2_RF_ROWS="$rows" K2_RF_JSON="${_K2_ARGS_JSON:-0}" python3 -c '
@@ -134,9 +138,9 @@ if row and os.environ.get("K2_RF_JSON") != "1":
     echo "$line" >&2
     case "$status" in
         400|413) exit 2 ;;
-        # 0.46.1: `k2 compute get <missing>` sets _CP_404_EXIT=4 (not
-        # found); other verbs keep their documented exit 3.
-        404) exit "${_CP_404_EXIT:-3}" ;;
+        # 0.46.1: `k2 compute get <missing>` exits 4 (not found); other
+        # verbs keep their documented exit 3.
+        404) exit "$not_found" ;;
         *) exit 3 ;;
     esac
 }
@@ -150,10 +154,17 @@ _compute_text() {
 }
 
 _compute_call() {
-    local raw
+    _compute_call_nf 3 "$@"
+}
+
+# _compute_call_nf <not-found exit> METHOD PATH [payload] [tcp]: _compute_call
+# with its own exit for a 404 (`k2 compute get` passes 4).
+_compute_call_nf() {
+    local not_found="$1" raw
+    shift
     raw="$(_compute_send "$@")"
     _compute_split "$raw"
-    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY" "$not_found"
 }
 
 # JSON from KEY=VALUE env pairs: _compute_json K2_CJ_a=… (values are strings

@@ -86,7 +86,7 @@ cmd_compute() {
             [ -n "${1:-}" ] || { echo "usage: k2 compute get <job> [--full] [--json]" >&2; exit 2; }
             local gfull=0 ga
             for ga in "$@"; do [ "$ga" = "--full" ] && gfull=1; done
-            _CP_404_EXIT=4 _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$1")"
+            _compute_call_nf 4 GET /cli/compute/jobs/get "job=$(urlencode "$1")"
             # --json: the one result object (compute B), as run --json prints.
             [ "$as_json" = "1" ] && { printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("result"), indent=2))'; exit 0; }
             K2_CP_FULL="$gfull" _compute_render get

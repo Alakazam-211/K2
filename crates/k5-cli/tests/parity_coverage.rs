@@ -4,6 +4,10 @@
 //! fall. It fails when a form loses its last case, when a new census form
 //! comes with none, when a tag names no form, and when the list is stale
 //! because a form gained a case. The ship bar is an empty list.
+//!
+//! K5-only forms (`tests/data/k5_only_forms.tsv`, K2's ruling) are out of
+//! the count; each names the unit tests that cover it, and those must be
+//! `#[test]` fns in their files. A form leaves the count only by that list.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -13,12 +17,17 @@ fn root() -> PathBuf {
 }
 
 fn gate(root: &Path) -> Output {
+    run(root, &["--check"])
+}
+
+fn run(root: &Path, args: &[&str]) -> Output {
     Command::new("python3")
         .arg(self::root().join("scripts/parity-coverage.py"))
-        .args(["--check", "--root"])
+        .args(args)
+        .arg("--root")
         .arg(root)
         .output()
-        .expect("run python3 scripts/parity-coverage.py --check")
+        .expect("run python3 scripts/parity-coverage.py")
 }
 
 fn text(o: &Output) -> String {
@@ -53,7 +62,9 @@ fn scratch(tag: &str) -> PathBuf {
         }
     };
     copy_dir("crates/k5-cli/tests/data", &|n| n.ends_with(".tsv"));
-    copy_dir("crates/k5-cli/tests", &|n| n.ends_with("_parity.rs"));
+    // Every test file: the parity files carry the tags, and the K5-only
+    // list names unit tests in the others.
+    copy_dir("crates/k5-cli/tests", &|n| n.ends_with(".rs"));
     copy_dir("crates/k5-cli/src/families", &|n| n.ends_with(".rs"));
     copy_dir("crates/k5-cli/src", &|n| n == "route.rs");
     copy_dir("tests/cli", &|n| n.ends_with(".sh"));
@@ -117,6 +128,108 @@ fn the_gate_bites() {
     let o = gate(&dir);
     assert!(!o.status.success(), "a stale list passed: {}", text(&o));
     assert!(text(&o).contains("the ceiling is stale"), "{}", text(&o));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The K5-only list's bites: the scratch tree as it is passes; a form
+/// taken off the list comes back into the count, uncovered; a named test
+/// that is no `#[test]` fn fails; a listed form that is no census form
+/// fails; a parity tag on a K5-only form fails; and a ceiling form that
+/// left the census without the list fails `--check` and `--write`, unless
+/// `--write --accept-gone`.
+#[test]
+fn the_k5_only_list_bites() {
+    let dir = scratch("k5-only");
+    assert!(gate(&dir).status.success(), "{}", text(&gate(&dir)));
+    let list = dir.join("crates/k5-cli/tests/data/k5_only_forms.tsv");
+    let src = std::fs::read_to_string(&list).unwrap();
+    assert!(src.lines().any(|l| l.starts_with("cli status\t")), "{src}");
+    assert!(
+        src.lines().any(|l| l.starts_with("cli status --json\t")),
+        "{src}"
+    );
+
+    // Off the list: `cli status` is counted again, with no case.
+    let off: String = src
+        .lines()
+        .filter(|l| !l.starts_with("cli status\t"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&list, off).unwrap();
+    let o = gate(&dir);
+    assert!(
+        !o.status.success(),
+        "a form off the list passed: {}",
+        text(&o)
+    );
+    assert!(text(&o).contains("(front)\tcli status\n"), "{}", text(&o));
+    std::fs::write(&list, &src).unwrap();
+
+    // A named test that is no #[test] fn.
+    std::fs::write(
+        &list,
+        src.replacen(
+            "::cli_status_json_parses_and_matches_the_table",
+            "::no_such_test",
+            1,
+        ),
+    )
+    .unwrap();
+    let o = gate(&dir);
+    assert!(!o.status.success(), "a missing test passed: {}", text(&o));
+    assert!(
+        text(&o).contains("no #[test] fn no_such_test"),
+        "{}",
+        text(&o)
+    );
+    std::fs::write(&list, &src).unwrap();
+
+    // A listed form that is no census form.
+    let stray = "cli statuz\tcrates/k5-cli/tests/front_native.rs::only_the_exact_pair_checks\n";
+    std::fs::write(&list, format!("{src}{stray}")).unwrap();
+    let o = gate(&dir);
+    assert!(!o.status.success(), "a stray form passed: {}", text(&o));
+    assert!(
+        text(&o).contains("'cli statuz' is no census form"),
+        "{}",
+        text(&o)
+    );
+    std::fs::write(&list, &src).unwrap();
+
+    // A parity tag on a K5-only form.
+    let tagged = dir.join("crates/k5-cli/tests/whoami_parity.rs");
+    let whoami = std::fs::read_to_string(&tagged).unwrap();
+    std::fs::write(&tagged, format!("{whoami}\n// covers: cli status\n")).unwrap();
+    let o = gate(&dir);
+    assert!(
+        !o.status.success(),
+        "a tag on a K5-only form passed: {}",
+        text(&o)
+    );
+    assert!(text(&o).contains("'cli status' is K5-only"), "{}", text(&o));
+    std::fs::write(&tagged, &whoami).unwrap();
+
+    // A ceiling form that left the census, not on the list.
+    let ceiling = dir.join("crates/k5-cli/tests/data/parity_uncovered.tsv");
+    let ceil = std::fs::read_to_string(&ceiling).unwrap();
+    std::fs::write(&ceiling, format!("{ceil}(front)\tgone form\n")).unwrap();
+    for args in [&["--check"][..], &["--write"][..]] {
+        let o = run(&dir, args);
+        assert!(
+            !o.status.success(),
+            "{args:?}: a gone form passed: {}",
+            text(&o)
+        );
+        assert!(
+            text(&o).contains("left the census and are not on the K5-only list"),
+            "{}",
+            text(&o)
+        );
+    }
+    let o = run(&dir, &["--write", "--accept-gone"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(gate(&dir).status.success(), "{}", text(&gate(&dir)));
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -1,0 +1,9 @@
+# K5-only forms: the binary answers them and the shell has none of its own to compare (the
+# shell's `cli status` only points at the binary). K2's ruling: they are out of the parity
+# coverage count (scripts/parity-coverage.py), and each names the unit tests that cover it,
+# as <file>::<test fn>, comma separated. Each must be a census form, and each test must exist.
+# A form leaves the coverage count only by this list: the gate fails when one leaves the census
+# without it.
+form	tests
+cli status	crates/k5-cli/tests/front_native.rs::cli_status_as_the_owner_shows_the_counts,crates/k5-cli/tests/front_native.rs::cli_status_with_a_passport_is_the_table_and_one_line,crates/k5-cli/tests/front_native.rs::cli_status_with_no_credential_asks_nothing,crates/k5-cli/tests/front_native.rs::cli_status_with_the_daemon_down_is_the_table_and_one_line
+cli status --json	crates/k5-cli/tests/front_native.rs::cli_status_json_parses_and_matches_the_table

@@ -41,7 +41,7 @@
 //!
 //! An address `handle::label.postal.bot` first is Postal mail
 //! ([`super::postal`]). The shell answers these forms itself ([`parse`]
-//! says [`Parsed::Shell`]): `--signal`, a tray form's `~name` path
+//! says [`Parsed::Shell`]): a tray form's `~name` path
 //! ([`super::tray`]), and a `--secret` the vault's handoff leaves to the
 //! shell ([`vault::handoff::native`]), or with a `python3` the binary
 //! can't tell. An address on another server
@@ -274,6 +274,8 @@ pub enum Parsed {
     /// `--inbox-silent` or `--inbox-wake`: a tray package
     /// ([`super::tray`]).
     Tray(super::tray::Form),
+    /// `--signal`: an awareness signal ([`super::signal`]).
+    Signal(super::signal::Signal),
 }
 
 /// `_is_postal_address`.
@@ -348,7 +350,11 @@ pub fn parse(words: &[&str]) -> Parsed {
     }
     let has = |f: &str| words.contains(&f);
     if has("--signal") {
-        return Parsed::Shell;
+        return match super::signal::parse(words) {
+            super::signal::Parsed::Shell => Parsed::Shell,
+            super::signal::Parsed::Stop(text, exit) => Parsed::Stop(text, exit),
+            super::signal::Parsed::Send(s) => Parsed::Signal(s),
+        };
     }
     let (silent, wake) = (has("--inbox-silent"), has("--inbox-wake"));
     if has("--inbox") && !silent && !wake {
@@ -501,6 +507,7 @@ pub fn run(args: &[OsString], words: &[&str], hook_sock: Option<&Path>) -> Optio
         Parsed::Postal(m) => super::postal::send(&mut client, &m),
         Parsed::Secret(m, name) => secret(client, &home, args, &m, &name),
         Parsed::Tray(f) => super::tray::run(&mut client, f),
+        Parsed::Signal(s) => super::signal::send(&mut client, &home, &s),
     })
 }
 

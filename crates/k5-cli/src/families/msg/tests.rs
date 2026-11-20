@@ -298,7 +298,6 @@ fn the_words() {
     for shell in [
         &["--help"][..],
         &["ws", "t", "-h"],
-        &["ws", "--signal", "x"],
     ] {
         assert_eq!(parse(shell), Parsed::Shell, "{shell:?}");
     }
@@ -1121,4 +1120,122 @@ fn remote_addresses_and_readers() {
     for part in parts {
         assert!(src.contains(&part), "{part}");
     }
+}
+
+#[test]
+fn signal_words_as_the_signal_form_reads_them() {
+    use super::signal::{parse_with, Parsed as P, Signal, USAGE};
+    let sig = |target: &str, kind: &str, payload: &str, from: &str, inbox: bool| {
+        P::Send(Signal {
+            target: target.into(),
+            kind: kind.into(),
+            payload: payload.into(),
+            from: from.into(),
+            inbox,
+        })
+    };
+    assert_eq!(
+        parse_with(&["ws", "--signal", "status"], Ok(None)),
+        sig("ws", "status", "{}", "cli", false)
+    );
+    assert_eq!(
+        parse_with(
+            &["ws", "x", "--payload", "", "--signal", "", "--inbox-wake"],
+            Ok(Some("ada".into()))
+        ),
+        sig("ws", "msg", "{}", "ada", true)
+    );
+    // --from wins, even empty; the first word is the target, whatever it is.
+    assert_eq!(
+        parse_with(&["--signal", "k", "ws", "--from", ""], Ok(Some("ada".into()))),
+        sig("--signal", "msg", "{}", "", false)
+    );
+    assert_eq!(
+        parse_with(&["", "--signal", "k"], Ok(None)),
+        P::Stop(USAGE.into(), Exit::Error)
+    );
+    for flag in ["--signal", "--payload", "--from"] {
+        assert_eq!(
+            parse_with(&["ws", "--signal", "k", flag], Ok(None)),
+            P::Stop(send::needs_value(flag), Exit::Usage),
+            "{flag}"
+        );
+    }
+    assert_eq!(parse_with(&["ws", "--signal", "k"], Err(())), P::Shell);
+    assert_eq!(
+        parse_with(&["ws", "--signal", "k", "--from", "f"], Err(())),
+        sig("ws", "k", "{}", "f", false)
+    );
+    assert!(USAGE.starts_with(&format!("Usage: {CLI_NAME} signal <target>")));
+}
+
+#[test]
+fn signal_body_as_the_shell_python_builds_it() {
+    use super::signal::{body, iso_utc, Signal};
+    let s = |kind: &str, payload: &str| Signal {
+        target: "t\"o".into(),
+        kind: kind.into(),
+        payload: payload.into(),
+        from: "f\u{e9}".into(),
+        inbox: false,
+    };
+    let head = r#"{"id": "I", "from": {"scope": "agent", "workspace": "W", "name": "fé"}, "to": {"scope": "agent", "workspace": "W", "name": "t\"o"}, "kind": "#;
+    let tail = r#", "priority": "normal", "delivery": "live", "at": "A"}"#;
+    for (kind, payload, want) in [
+        ("msg", r#"{"text": 1.50}"#, r#"{"kind": "msg", "data": {"text": 1.5}}"#),
+        ("msg", "not json", r#"{"kind": "msg", "data": {"text": "not json"}}"#),
+        ("status", " \n", r#"{"kind": "status", "data": {"text": ""}}"#),
+        ("presence", "{}", r#"{"kind": "presence", "data": {"state": "active"}}"#),
+        (
+            "ping",
+            "[1, NaN]",
+            r#"{"kind": "custom", "data": {"kind": "ping", "payload": [1, NaN]}}"#,
+        ),
+        (
+            "ping",
+            "oops",
+            r#"{"kind": "custom", "data": {"kind": "ping", "payload": {"text": "oops"}}}"#,
+        ),
+    ] {
+        assert_eq!(
+            body(&s(kind, payload), "I", "W", "A").unwrap(),
+            format!("{head}{want}{tail}"),
+            "{kind} {payload}"
+        );
+    }
+    let r = body(&s("status", "[1]"), "I", "W", "A").unwrap_err();
+    assert_eq!(
+        r.text(),
+        "Traceback (most recent call last):\n  File \"<string>\", line 15, in <module>\n  File \"<string>\", line 7, in <lambda>\nAttributeError: 'list' object has no attribute 'get'\n"
+    );
+    let long = "9".repeat(5000);
+    let r = body(&s("ping", &long), "I", "W", "A").unwrap_err();
+    assert!(r.exception.starts_with("ValueError: Exceeds the limit"), "{}", r.exception);
+    assert_eq!(iso_utc(0, 7), "1970-01-01T00:00:00.000007+00:00");
+    assert_eq!(iso_utc(1_700_000_000, 123_456), "2023-11-14T22:13:20.123456+00:00");
+}
+
+#[test]
+fn signal_database_as_the_shell_finds_it() {
+    use super::signal::{db_uri, home_db, workspace_id};
+    use std::path::Path;
+    assert_eq!(
+        db_uri(Path::new("/h/a%b?c#d/k2.db")),
+        "file:/h/a%25b%3fc%23d/k2.db?mode=rw"
+    );
+    let dir = std::env::temp_dir().join(format!("k5-signal-db-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Neither: k2.db. Only the old one: it.
+    assert_eq!(home_db(&dir, None), dir.join("k2.db"));
+    std::fs::write(dir.join("k2so.db"), b"x").unwrap();
+    assert_eq!(home_db(&dir, None), dir.join("k2so.db"));
+    // Both, no sqlite3, sizes alike: the old one.
+    std::fs::write(dir.join("k2.db"), b"y").unwrap();
+    assert_eq!(home_db(&dir, None), dir.join("k2so.db"));
+    // No database: the project is its own id, whatever is on PATH.
+    let empty = dir.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    assert_eq!(workspace_id(&empty, "/w/p"), "/w/p");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

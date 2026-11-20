@@ -8,7 +8,8 @@
 //!   (`cmd_msg_verify`, `cli/src/msg-verify.sh`).
 //! - [`send`]: everything else, `cmd_msg_v2` (`cli/src/msg-inbox-staging.sh`)
 //!   and its live form `cmd_msg` (`cli/src/msg-whoami-done.sh`), sent once
-//!   by its idempotency key ([`send_once`]), and Postal mail ([`postal`]).
+//!   by its idempotency key ([`send_once`]), Postal mail ([`postal`]) and
+//!   the awareness signal (`--signal`, [`signal`]).
 //!
 //! What runs before any of them, in the shell's order:
 //!
@@ -27,8 +28,9 @@
 //!   looks for a shared Codex server in the process's ancestry first
 //!   ([`crate::prelude::codex_env`]);
 //! - a word that is not UTF-8;
-//! - the forms [`send`] names (`--signal`, a tray form's `~name` path,
-//!   and a `--secret` the vault's handoff leaves to the shell).
+//! - the forms [`send`] names (a tray form's `~name` path, a `--secret`
+//!   the vault's handoff leaves to the shell, and a `--signal` whose
+//!   sender in `*_AGENT_NAME` is not UTF-8).
 
 use super::curl_port;
 use crate::daemon;
@@ -46,6 +48,7 @@ pub mod py;
 pub mod remote;
 pub mod send;
 pub mod send_once;
+pub mod signal;
 pub mod tray;
 pub mod verify;
 pub mod who;

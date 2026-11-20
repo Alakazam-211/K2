@@ -7,7 +7,11 @@
 //! refuses a passport with the plain 403. No grant or switch admits one.
 //! The owner token reaches each handler. A refused create makes no folder.
 //!
-//! `k2 workspace profile`'s `GET /cli/workspace/agent-display-name` is the
+//! `k2 agent list` and name resolution (`/cli/agent/list`,
+//! `/cli/workspace/resolve`) admit a passport over TCP since D1 (0.46.17),
+//! kept to its own and connected workspaces: `passport_routes_integration`.
+//!
+//! `k2 workspace profile`'s `GET /cli/workspace/agent-display-name` is
 //! one an agent may use: its own workspace's profile (the owner's answer
 //! for it), by the Bearer header or `?token=`; any other workspace, named
 //! by `project=` or `project_path=`, is refused `own_workspace_only`.
@@ -87,10 +91,8 @@ fn routes_for(ws: &Path, fresh: &Path) -> Vec<(&'static str, String)> {
     let p = enc(&ws.to_string_lossy());
     vec![
         ("GET", format!("/cli/projects/list?project={p}")),
-        ("GET", format!("/cli/agent/list?project={p}")),
         ("POST", format!("/cli/workspace/create?project={p}&path={}", enc(&fresh.to_string_lossy()))),
         ("POST", format!("/cli/workspace/open?project={p}&path={p}")),
-        ("GET", format!("/cli/workspace/resolve?project={p}&q={p}")),
         ("POST", format!("/cli/workspace/ensure-canonical-session?project={p}")),
         ("POST", format!("/cli/agent/update?project={p}&agent=acme&field=role&value=Lead")),
     ]

@@ -52,7 +52,7 @@ fn the_verbs_are_arms_of_cmd_compute() {
         "        nodes|ls)\n",
         "        info)\n",
         "        queue)\n",
-        "        jobs)\n",
+        "        jobs|list)\n",
         "        get|status)\n",
         "        grants)\n",
         "        receipt|provenance|verify) cmd_compute_provenance \"$sub\" \"$@\" ;;\n",

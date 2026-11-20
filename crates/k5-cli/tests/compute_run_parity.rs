@@ -561,19 +561,13 @@ fn compute_run_followed() {
             1,
         ),
         case(
-            "_CP_DEADLINE_RC set: the shell's follow reads it, so the shell answers",
-            &["run", "--wait", "--max-wait", "0", "--", "make"],
-            &[("_CP_DEADLINE_RC", "124")],
-            vec![ok(PLAIN)],
-            owner_and_port,
-            124,
-            1,
-        ),
-        case(
             "--wait --json --max-wait 0: the wait's still_running, exit 3",
             &["run", "--wait", "--json", "--max-wait", "0", "--", "make"],
             &[],
-            vec![ok(PLAIN), ok(r#"{"short":"abcd1234","state":"running","node":"mini"}"#)],
+            vec![
+                ok(PLAIN),
+                ok(r#"{"short":"abcd1234","state":"running","node":"mini"}"#),
+            ],
             owner_and_port,
             3,
             2,
@@ -1046,6 +1040,20 @@ fn compute_submit_help_never_acts() {
 #[test]
 fn compute_run_failures_is_the_shells() {
     let rig = Rig::new(VERB, "runfail");
+    // The shell's follow exits with _CP_DEADLINE_RC when it is set, so
+    // the binary hands the whole line over (a usage stop shows it).
+    rig.check(&Case {
+        compare: Compare::Shell,
+        ..case(
+            "_CP_DEADLINE_RC set: the line is the shell's",
+            &["run", "--wait", "--max-wait", "0", "--bogus", "--", "make"],
+            &[("_CP_DEADLINE_RC", "124")],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        )
+    });
     rig.check(&Case {
         compare: Compare::Shell,
         ..case(

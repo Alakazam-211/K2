@@ -102,7 +102,9 @@ fn run_body() {
         body,
         r#"{"any": true, "labels": {}, "env": {}, "argv": ["true"], "plan": false, "detach": false, "dirty": false, "noSource": false, "exclusive": false, "retryInterrupted": true, "clientJobId": "c"}"#
     );
-    let a = ask(run::parse(&["--strict", "--detach", "--", "sh", "-c", "x | y"]));
+    let a = ask(run::parse(&[
+        "--strict", "--detach", "--", "sh", "-c", "x | y",
+    ]));
     assert!(a.strict);
     let body = run::body(&a, "", "", "", "c");
     assert_eq!(

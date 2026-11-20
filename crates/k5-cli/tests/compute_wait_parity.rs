@@ -417,7 +417,15 @@ fn compute_wait_words() {
         ),
         case(
             "--timeout twice, with --follow: the words stop it first",
-            &["wait", "a", "--follow", "--timeout", "1s", "--timeout", "2s"],
+            &[
+                "wait",
+                "a",
+                "--follow",
+                "--timeout",
+                "1s",
+                "--timeout",
+                "2s",
+            ],
             &[],
             vec![],
             owner_and_port,

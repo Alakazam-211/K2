@@ -688,8 +688,13 @@ mod wait_verb {
     fn the_words() {
         let usage = || Some(Words::Usage(wait::USAGE.to_string()));
         let once = || Some(Words::Usage(format!("{}{}", wait::USAGE, wait::ONCE)));
-        let takes =
-            |f: &str| Some(Words::Usage(format!("{}{}", wait::USAGE, wait::TAKES.replace("%s", f))));
+        let takes = |f: &str| {
+            Some(Words::Usage(format!(
+                "{}{}",
+                wait::USAGE,
+                wait::TAKES.replace("%s", f)
+            )))
+        };
         let rows: Vec<(&[&str], Option<Words<Ask>>)> = vec![
             (&["a"], ask(|a| a.jobs = vec!["a".into()])),
             (
@@ -722,7 +727,10 @@ mod wait_verb {
             (&["a", "--timeout", "1s", "--max-wait", "1s"], once()),
             (&["a", "--max-wait", "1s", "--max-wait", "2s"], once()),
             (&["a", "--timeout", "1s", "--timeout"], once()),
-            (&["a", "--timeout", "1s", "--follow", "--timeout", "2s"], once()),
+            (
+                &["a", "--timeout", "1s", "--follow", "--timeout", "2s"],
+                once(),
+            ),
             (&["a", "--x", "--timeout"], usage()),
             (&[], usage()),
             (&["--json"], usage()),
@@ -827,13 +835,29 @@ mod wait_verb {
             s.stdout,
             "[{\"state\": \"done\", \"exitCode\": 2, \"short\": \"a\", \"id\": \"aaaa\"}, {\"state\": \"running\", \"short\": \"b\"}]\n"
         );
-        let s = wait::end_of(&[br#"{"state":"done","signal":9}"#.to_vec()], false, Exit::Refused);
+        let s = wait::end_of(
+            &[br#"{"state":"done","signal":9}"#.to_vec()],
+            false,
+            Exit::Refused,
+        );
         assert_eq!(s.exit.code(), 137);
-        let s = wait::end_of(&[br#"{"state":"done","exitCode":300}"#.to_vec()], false, Exit::Refused);
+        let s = wait::end_of(
+            &[br#"{"state":"done","exitCode":300}"#.to_vec()],
+            false,
+            Exit::Refused,
+        );
         assert_eq!(s.exit.code(), 44);
-        let s = wait::end_of(&[br#"{"state":"failed","reason":"oom"}"#.to_vec()], false, Exit::Refused);
+        let s = wait::end_of(
+            &[br#"{"state":"failed","reason":"oom"}"#.to_vec()],
+            false,
+            Exit::Refused,
+        );
         assert_eq!(s.exit, Exit::Refused);
-        let s = wait::end_of(&[br#"{"state":"done","exitCode":"x"}"#.to_vec()], false, Exit::Refused);
+        let s = wait::end_of(
+            &[br#"{"state":"done","exitCode":"x"}"#.to_vec()],
+            false,
+            Exit::Refused,
+        );
         assert_eq!(s.exit, Exit::Error);
         assert!(s
             .stderr

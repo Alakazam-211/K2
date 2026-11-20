@@ -302,14 +302,31 @@ fn write() {
                 1,
                 2,
             ),
+            // The name reaches the shell's Python in argv: data, matched
+            // exactly as it is.
             case(
-                "an agent name the shell's Python can't read",
+                "an agent name with a quote: no match, the first v2",
                 &["write", "acme", "--agent", "qa'", "hi"],
                 &[],
-                vec![resolved.clone(), sessions.clone()],
+                vec![resolved.clone(), sessions.clone(), ok(r#"{"ok":true}"#)],
                 owner_and_port,
-                1,
-                2,
+                0,
+                3,
+            ),
+            case(
+                "an agent named with quotes and a backslash: its session",
+                &["write", "acme", "--agent", "it's \"q\"\\'''", "hi"],
+                &[],
+                vec![
+                    resolved.clone(),
+                    ok(&format!(
+                        r#"[{{"sessionId":"{UUID}","isV2":true,"agentName":"lead"}},{{"sessionId":"s9","isV2":true,"agentName":"it's \"q\"\\'''"}}]"#
+                    )),
+                    ok(r#"{"ok":true}"#),
+                ],
+                owner_and_port,
+                0,
+                3,
             ),
             case(
                 "an agent name with an escape",
@@ -425,9 +442,10 @@ fn read() {
     check(&rig, v);
 }
 
-/// The shell takes `--help` as a word and acts on it (a known bash bug,
-/// to be fixed in bash); the front hands such a line to the shell, so
-/// both sides send what the shell sends.
+/// Help on a line: the front hands it to the shell. `spawn` and `read`
+/// print their usage, exit 0, and send nothing (`_wants_help`). `write`
+/// still takes `--help` as the message and sends it (a bash bug,
+/// reported); that row flips when its fix lands.
 #[test]
 fn help_on_a_line_is_the_shell_s() {
     let rig = Rig::new(VERB, "help");
@@ -435,7 +453,7 @@ fn help_on_a_line_is_the_shell_s() {
         &rig,
         vec![
             shell(case(
-                "write <id> --help sends a message",
+                "BASH BUG, help acts: write <id> --help sends a message",
                 &["write", UUID, "--help"],
                 &[],
                 vec![ok("{}")],
@@ -444,22 +462,22 @@ fn help_on_a_line_is_the_shell_s() {
                 1,
             )),
             shell(case(
-                "spawn --command x -h spawns",
+                "spawn --command x -h: the usage, nothing sent",
                 &["spawn", "--command", "x", "-h"],
                 &[],
-                vec![ok(r#"{"ok":true}"#)],
+                vec![],
                 owner_and_port,
                 0,
-                1,
+                0,
             )),
             shell(case(
-                "read <id> --help reads",
+                "read <id> --help: the usage, nothing sent",
                 &["read", "t1", "--help"],
                 &[],
-                vec![ok(r#"{"lines":[]}"#)],
+                vec![],
                 owner_and_port,
                 0,
-                1,
+                0,
             )),
             shell(case(
                 "--help",

@@ -34,19 +34,16 @@
 //! shown and the command dies of SIGPIPE ([`super::end_in_pipe`]).
 //!
 //! Handed to the shell, before anything is printed or sent: a word that is
-//! not UTF-8, `-h` or `--help` anywhere (the front's: the shell takes them
-//! as words and acts, a known bash bug), a value-taking word with nothing
+//! not UTF-8, `-h` or `--help` anywhere (the front's: `spawn` and `read`
+//! print their usage and send nothing; `write` still takes them as the
+//! message and sends it, a bash bug), a value-taking word with nothing
 //! after it (`spawn --title`, `read <id> --lines`: the shell stops on
 //! `$2: unbound variable`), `HOOK_SOCK` set with a `CODEX_` variable
 //! exported, a port curl won't take, a `python3` the binary can't tell.
 //!
-//! # Where this differs from the shell (a bash bug, for K2's ruling)
-//!
-//! `resolve_write_session_id` pastes `--agent`'s value into its Python's
-//! source (`agent = '''$agent'''`, `cli/src/daemon-install.sh`). A value
-//! that ends that string runs as Python in the shell. Here the value is
-//! read as Python reads the string literal; one that would end it early is
-//! a Python syntax error (no session found), and nothing runs.
+//! `resolve_write_session_id` hands `--agent`'s value to its Python in
+//! argv (`agent = sys.argv[1]`): the name is data, matched exactly as it
+//! is, whatever quotes or backslashes it holds.
 
 use super::workspace::print_or_fail;
 use super::{curl_port, end_in_pipe, request_piped_tcp, without_nuls, Shown};
@@ -371,74 +368,6 @@ fn captured(text: String) -> String {
     text.trim_end_matches('\n').to_string()
 }
 
-/// The Python string literal `'''<raw>'''`: its value, or `None` when
-/// the source would not be just that literal (a syntax error, or more
-/// code: never run here).
-pub fn py_triple_literal(raw: &str) -> Option<String> {
-    let src: Vec<char> = raw.chars().chain("'''".chars()).collect();
-    let mut out = String::new();
-    let mut i = 0;
-    while i < src.len() {
-        let c = src[i];
-        if c == '\'' && src.get(i + 1) == Some(&'\'') && src.get(i + 2) == Some(&'\'') {
-            // The closing quotes: only the last three may close it.
-            return (i + 3 == src.len()).then_some(out);
-        }
-        if c != '\\' {
-            out.push(c);
-            i += 1;
-            continue;
-        }
-        let n = *src.get(i + 1)?;
-        i += 2;
-        match n {
-            '\n' => {}
-            '\\' => out.push('\\'),
-            '\'' => out.push('\''),
-            '"' => out.push('"'),
-            'a' => out.push('\u{7}'),
-            'b' => out.push('\u{8}'),
-            'f' => out.push('\u{c}'),
-            'n' => out.push('\n'),
-            'r' => out.push('\r'),
-            't' => out.push('\t'),
-            'v' => out.push('\u{b}'),
-            '0'..='7' => {
-                let mut v = n.to_digit(8)?;
-                for _ in 0..2 {
-                    match src.get(i).and_then(|d| d.to_digit(8)) {
-                        Some(d) => {
-                            v = v * 8 + d;
-                            i += 1;
-                        }
-                        None => break,
-                    }
-                }
-                out.push(char::from_u32(v)?);
-            }
-            'x' | 'u' | 'U' => {
-                let len = match n {
-                    'x' => 2,
-                    'u' => 4,
-                    _ => 8,
-                };
-                let hex: String = src.get(i..i + len)?.iter().collect();
-                if !hex.chars().all(|h| h.is_ascii_hexdigit()) {
-                    return None;
-                }
-                out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
-                i += len;
-            }
-            'N' => return None,
-            other => {
-                out.push('\\');
-                out.push(other);
-            }
-        }
-    }
-    None
-}
-
 /// The first Python's `print(json.load(sys.stdin).get("path",""))`, or
 /// nothing when it raised.
 fn resolved_path(body: &[u8]) -> String {
@@ -455,7 +384,7 @@ fn resolved_path(body: &[u8]) -> String {
 /// The second Python: the session id of the first session in the pool
 /// (a v2 one first, the agent's when one matches), or nothing when it
 /// raised or found none.
-fn session_id(body: &[u8], agent: Option<&str>) -> String {
+fn session_id(body: &[u8], agent: &str) -> String {
     let text = String::from_utf8_lossy(body);
     let rows = match json::parse(&text) {
         Ok(Value::Array(rows)) => rows,
@@ -478,9 +407,6 @@ fn session_id(body: &[u8], agent: Option<&str>) -> String {
         }
     }
     let mut pool = if v2.is_empty() { rows } else { v2 };
-    let Some(agent) = agent else {
-        return String::new();
-    };
     if !agent.is_empty() {
         let want = super::s(agent);
         let mut matched = Vec::new();
@@ -524,7 +450,7 @@ fn write(
             path = target.to_string();
         }
         let body = quiet_get(client, closing, SESSIONS, &format!("path={}", quote(&path)));
-        let sid = session_id(&body, py_triple_literal(agent).as_deref());
+        let sid = session_id(&body, agent);
         if sid.is_empty() {
             let named = if agent.is_empty() {
                 String::new()
@@ -629,16 +555,5 @@ mod tests {
         assert!(is_uuid("x\n0123abcd-0000-4000-8000-abcdef012345"));
         assert!(!is_uuid("0123abcd-0000-4000-8000-abcdef01234"));
         assert!(!is_uuid("qa"));
-    }
-
-    #[test]
-    fn python_s_string_literal() {
-        assert_eq!(py_triple_literal("qa"), Some("qa".into()));
-        assert_eq!(py_triple_literal("a\\tb\\x41\\q"), Some("a\tbA\\q".into()));
-        assert_eq!(py_triple_literal("a'b"), Some("a'b".into()));
-        assert_eq!(py_triple_literal("a'"), None);
-        assert_eq!(py_triple_literal("a'''+x+'''"), None);
-        assert_eq!(py_triple_literal("a\\"), None);
-        assert_eq!(py_triple_literal(""), Some(String::new()));
     }
 }

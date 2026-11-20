@@ -97,7 +97,19 @@ const NO_STATUS: &[u8] = b"\n000";
 /// (a POST on the cell socket with no answer, or no passport in a
 /// session).
 pub fn send(client: &mut Client, post: bool, path: &str, payload: &str) -> Result<Sent, Exit> {
-    let result = client.compute_send(post, path, payload, false);
+    send_on(client, post, path, payload, false)
+}
+
+/// [`send`], or `_compute_send <method> <path> <payload> tcp` when `tcp`
+/// is set: TCP whatever the session has.
+pub fn send_on(
+    client: &mut Client,
+    post: bool,
+    path: &str,
+    payload: &str,
+    tcp: bool,
+) -> Result<Sent, Exit> {
+    let result = client.compute_send(post, path, payload, tcp);
     // Each refused try curl made before the last wrote its own status.
     let mut raw = NO_STATUS.repeat(client.refused_before_answer() as usize);
     match result {

@@ -203,7 +203,7 @@ fn new_s_body() {
     .unwrap();
     assert_eq!(
         n.body("acme", None).unwrap(),
-        r#"{"workspace": "acme", "name": "a é", "harness": "h", "model": "m", "worktree": true, "base": "main"}"#
+        r#"{"workspace": "acme", "name": "a \u00e9", "harness": "h", "model": "m", "worktree": true, "base": "main"}"#
     );
     let n = parse_new(&w(&["a", "--harness", "h", "--brief-text", ""])).unwrap();
     assert_eq!(

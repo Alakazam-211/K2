@@ -34,7 +34,7 @@
 //! as [`super::sessions`] says; its frames may differ, its exception's
 //! name is Python's.
 
-use super::board::{send, Sent};
+use super::board::{send, send_on, Sent};
 use super::{curl_port, get, py_d, py_get, py_iter, py_left, py_len, raised, s, Raise, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
@@ -47,7 +47,7 @@ use crate::prelude::{self, Gate};
 use crate::prompt;
 use crate::python;
 use crate::transport::encode::quote;
-use crate::transport::{Client, Error};
+use crate::transport::Client;
 use k2_client::brand::CLI_NAME as CLI;
 use k2_client::brand::PRODUCT_NAME;
 use std::ffi::OsString;
@@ -742,7 +742,7 @@ fn go(c: &mut Client, ask: Ask, json_any: bool) -> Result<Exit, Exit> {
                 (Text::from("toggle"), s("gardens_manage")),
                 (Text::from("value"), Value::Bool(on)),
             ]));
-            let sent = send_tcp(c, "/cli/agent-access/set", &body)?;
+            let sent = send_on(c, true, "/cli/agent-access/set", &body, true)?;
             if sent.status != "200" {
                 if sent.status == "403" {
                     out::stderr_line(&format!("Error: forbidden: only the owner or an admin turns this on or off (outside {PRODUCT_NAME}, or Settings \u{2192} Workspaces / Agents \u{2192} <ws> \u{2192} Permissions). An agent never can."));
@@ -756,29 +756,6 @@ fn go(c: &mut Client, ask: Ask, json_any: bool) -> Result<Exit, Exit> {
             Ok(lay_out(&sent.resp, access_lines).print())
         }
     }
-}
-
-/// `_compute_send POST <path> <json> tcp`: as [`super::board::send`],
-/// on TCP.
-fn send_tcp(client: &mut Client, path: &str, payload: &str) -> Result<Sent, Exit> {
-    const NO_STATUS: &[u8] = b"\n000";
-    let result = client.compute_send(true, path, payload, true);
-    let mut raw = NO_STATUS.repeat(client.refused_before_answer() as usize);
-    match result {
-        Ok(r) => {
-            raw.extend_from_slice(&r.body);
-            raw.extend_from_slice(format!("\n{:03}", r.status).as_bytes());
-        }
-        Err(e @ (Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. })) => {
-            out::stderr_line(&e.to_string());
-            return Err(Exit::Error);
-        }
-        Err(_) => {
-            raw.extend_from_slice(NO_STATUS);
-            raw.extend_from_slice(NO_STATUS);
-        }
-    }
-    Ok(Sent::split(&raw))
 }
 
 /// `_sources_print_json`: the body as `json.dumps(indent=2,

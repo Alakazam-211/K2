@@ -377,6 +377,44 @@ fn the_connect_proxy_requests() {
     assert_eq!(err.curl_code(), 7, "{err:?}");
 }
 
+/// `_connect_curl`'s own call to the control plane: the tunnel token is
+/// the `Authorization` header and appears nowhere else (not the request
+/// line, no other header, not the body); no hand-over headers (it is not
+/// the daemon); a JSON body with its type; PUT for the repoint.
+#[test]
+fn the_control_plane_call_sends_the_token_only_as_a_header() {
+    let s = stub("cplane");
+    s.reset(&[
+        Reply::Answer(201, r#"{"label":"acme"}"#.into()),
+        Reply::Answer(200, "{}".into()),
+    ]);
+    let base = k5_cli::transport::remote::base(&format!("http://127.0.0.1:{}", s.port)).unwrap();
+    let token = "tun-tok-secret".to_string();
+    let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner(token.clone()));
+    k5_cli::transport::remote::apply(&mut c, &base, token.clone());
+    let body = br#"{"label": "acme", "target": "127.0.0.1:7"}"#;
+    let r = c.control_plane(false, "/subdomains", body).unwrap();
+    assert_eq!((r.status, r.channel), (201, Channel::Tcp));
+    let r = c.control_plane(true, "/subdomains/acme", br#"{"target": "x"}"#).unwrap();
+    assert_eq!(r.status, 200);
+    let log = s.log();
+    assert_eq!(log.len(), 2);
+    for (l, line) in log.iter().zip([
+        "POST /subdomains HTTP/1.1",
+        "PUT /subdomains/acme HTTP/1.1",
+    ]) {
+        let t = text(&l.bytes);
+        let (head, rest) = t.split_once("\r\n\r\n").unwrap();
+        let mut lines = head.split("\r\n");
+        assert_eq!(lines.next(), Some(line), "{t}");
+        let with_token: Vec<&str> = head.lines().filter(|h| h.contains(&token)).collect();
+        assert_eq!(with_token, [format!("Authorization: Bearer {token}").as_str()], "{t}");
+        assert!(!rest.contains(&token), "{t}");
+        assert!(!head.contains("X-K5-"), "{t}");
+        assert!(head.contains("\r\nContent-Type: application/json"), "{t}");
+    }
+}
+
 #[test]
 fn a_cell_socket_that_is_gone_goes_to_tcp() {
     let s = stub("gone");

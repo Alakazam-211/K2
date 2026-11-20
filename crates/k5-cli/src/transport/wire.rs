@@ -49,6 +49,8 @@ pub const FORM_TYPE: &str = "application/x-www-form-urlencoded";
 pub enum Method {
     Get,
     Post,
+    /// The Connect control plane's repoint (`_connect_curl PUT`).
+    Put,
 }
 
 impl Method {
@@ -57,6 +59,7 @@ impl Method {
         match self {
             Method::Get => "GET",
             Method::Post => "POST",
+            Method::Put => "PUT",
         }
     }
 }

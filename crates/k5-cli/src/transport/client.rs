@@ -357,6 +357,14 @@ enum Kind {
     /// TCP. Only `_k2_curl`'s tries (a refused connect, a moved port); no
     /// status read, no heal, no line, no note.
     ConnectProxy,
+    /// `_connect_curl`'s own call to the Connect control plane, when no
+    /// daemon made it: `_K2_CURL_NOT_DAEMON=1 _k2_curl` with the tunnel
+    /// token as the config's `Authorization: Bearer` line, `-sS -X
+    /// <method> <base><path>`, a JSON body with its `Content-Type` when
+    /// there is one, connect 5 s, at most 30 s. No hand-over headers (it
+    /// is not the daemon), no `project=`; only `_k2_curl`'s tries; no
+    /// heal, no line, no note. The token is only ever that header.
+    ControlPlane { put: bool },
 }
 
 impl Kind {
@@ -403,6 +411,7 @@ impl Kind {
                 | Kind::BootStatus
                 | Kind::SendOnce
                 | Kind::ConnectProxy
+                | Kind::ControlPlane { .. }
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -432,6 +441,7 @@ impl Kind {
                 | Kind::BootStatus
                 | Kind::SendOnce
                 | Kind::ConnectProxy
+                | Kind::ControlPlane { .. }
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -459,6 +469,7 @@ impl Kind {
                 | Kind::BootStatus
                 | Kind::SendOnce
                 | Kind::ConnectProxy
+                | Kind::ControlPlane { .. }
         )
     }
     /// `--connect-timeout`.
@@ -1216,6 +1227,18 @@ impl Client {
         }
     }
 
+    /// `_connect_curl`'s own call to the Connect control plane
+    /// ([`Kind::ControlPlane`]): `path` as it is over TCP, or TLS when the
+    /// client was pointed at an `https://` base ([`super::remote::apply`]),
+    /// with this client's token (the tunnel token) as the `Authorization`
+    /// header and nowhere else. `put`: the repoint, else a POST. The body
+    /// comes back whatever the status.
+    pub fn control_plane(&mut self, put: bool, path: &str, body: &[u8]) -> Result<Response, Error> {
+        let kind = Kind::ControlPlane { put };
+        self.run(kind, Channel::Tcp, path, &[], body, Instant::now())
+            .map_err(|f| f.error)
+    }
+
     /// `cli_send_json METHOD PATH [payload]`: GET with `payload` as a
     /// pre-encoded query, or POST with it as a JSON body. The cell socket
     /// when there is a passport with a live socket (any route), then TCP
@@ -1582,6 +1605,7 @@ impl Client {
             Kind::Own { .. } => self.own.as_ref().map_or(MAX_TIME, |o| o.1),
             Kind::BootStatus => BOOT_STATUS_MAX_TIME,
             Kind::ConnectProxy => CONNECT_PROXY_MAX_TIME,
+            Kind::ControlPlane { .. } => MAX_TIME,
         }
     }
 
@@ -1769,12 +1793,19 @@ impl Client {
                 (uds_target(sock, endpoint)?, "localhost".to_string())
             }
         };
-        if self.would_refuse {
+        let daemon = !matches!(kind, Kind::ControlPlane { .. });
+        if self.would_refuse && daemon {
             headers.push((WOULD_REFUSE_HEADER.into(), "1".into()));
         }
-        headers.push((VERSION_HEADER.into(), self.version.clone()));
-        headers.push((VIA_HEADER.into(), VIA_NATIVE.into()));
-        if self.owner_from_disk && matches!(self.auth, Auth::Owner(_)) && kind != Kind::Public {
+        if daemon {
+            headers.push((VERSION_HEADER.into(), self.version.clone()));
+            headers.push((VIA_HEADER.into(), VIA_NATIVE.into()));
+        }
+        if daemon
+            && self.owner_from_disk
+            && matches!(self.auth, Auth::Owner(_))
+            && kind != Kind::Public
+        {
             headers.push((OWNER_SOURCE_HEADER.into(), OWNER_SOURCE_DISK.into()));
         }
         headers.extend(late_credential);
@@ -1895,6 +1926,15 @@ impl Client {
             | Kind::ConnectProxy
             | Kind::Own { post: true, .. } => {
                 (Method::Post, endpoint.to_string(), json(&mut headers))
+            }
+            Kind::ControlPlane { put } => {
+                let method = if put { Method::Put } else { Method::Post };
+                let body = if body.is_empty() {
+                    None
+                } else {
+                    json(&mut headers)
+                };
+                (method, endpoint.to_string(), body)
             }
             Kind::VaultSockGet | Kind::Own { post: false, .. } => {
                 (Method::Get, endpoint.to_string(), None)
@@ -2406,6 +2446,7 @@ mod tests {
             (Kind::BootStatus, 10),
             (Kind::SendOnce, 5),
             (Kind::ConnectProxy, 45),
+            (Kind::ControlPlane { put: true }, 30),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }

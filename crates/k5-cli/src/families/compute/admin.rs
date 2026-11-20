@@ -12,6 +12,8 @@
 //! - [`cache`]: `cache [list] [...]`, `cache --lineage L` and `cache
 //!   clear`.
 //! - [`node`]: the `node` subverbs made native so far.
+//! - [`setup`]: `compute` alone (the help page), `allow-nodes`,
+//!   `git-access`, `lanes` and `local`.
 //!
 //! What runs is what [`super::writes`] runs, in the shell's order: the
 //! settings, a re-minted passport, the two gates, the `id` tool's lines,
@@ -41,6 +43,7 @@ pub mod cache;
 pub mod moves;
 pub mod node;
 pub mod retier;
+pub mod setup;
 pub mod switch;
 
 #[cfg(test)]
@@ -60,6 +63,10 @@ pub const ANSWERS: &[&str] = &[
     "move",
     "cache",
     "node",
+    "allow-nodes",
+    "git-access",
+    "lanes",
+    "local",
 ];
 
 /// A verb this module answers, with its words read.
@@ -69,6 +76,7 @@ enum Ask {
     Move(moves::Ask),
     Cache(cache::Ask),
     Node(node::Ask),
+    Setup(setup::Ask),
 }
 
 /// Which verb: `None` for a form the binary leaves to another module or
@@ -80,9 +88,13 @@ enum Which {
     Move,
     Cache,
     Node,
+    Setup,
 }
 
 fn which(words: &[&str]) -> Option<Which> {
+    if setup::answers(words) {
+        return Some(Which::Setup);
+    }
     let first = words.get(1).copied().unwrap_or("");
     match *words.first()? {
         "revoke" | "access" | "operate" | "manage" => Some(Which::Switch),
@@ -115,6 +127,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     // The node subverbs not made native are the shell's.
     let node_words = match which {
         Which::Node => Some(node::parse(&words[1..])?),
+        _ => None,
+    };
+    let setup_words = match which {
+        Which::Setup => Some(setup::parse(&words)?),
         _ => None,
     };
     let max_time = writes::post_max_time(std::env::var_os("K2_CP_MAX_TIME"))?;
@@ -154,6 +170,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             ready(cache::parse(rest, writes::in_session(&settings.auth))).map(Ask::Cache)
         }
         Which::Node => ready(node_words.expect("parsed above")).map(Ask::Node),
+        Which::Setup => ready(setup_words.expect("parsed above")).map(Ask::Setup),
     };
     let ask = match ask {
         Ok(a) => a,
@@ -183,6 +200,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Ask::Move(a) => moves::send(&mut cp, a),
         Ask::Cache(a) => cache::send(&mut cp, a),
         Ask::Node(a) => node::send(&mut cp, a, &vault_sock),
+        Ask::Setup(a) => setup::send(&mut cp, a),
     };
     let closing = std::mem::take(&mut cp.closing);
     closing.flush(&mut client, exit);

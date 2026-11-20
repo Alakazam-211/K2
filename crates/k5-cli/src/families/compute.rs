@@ -10,9 +10,10 @@
 //!   `wait`, `fetch` and `grant`).
 //! - [`admin`]: the admin verbs (`revoke`, `preview on|off`, `placement
 //!   v1|v2`, `access`, `operate`, `manage`, `retier`, `tier`, `move`,
-//!   `cache` and the `node` subverbs made native so far).
+//!   `cache`, the `node` subverbs made native so far, and the setup verbs
+//!   `allow-nodes`, `git-access`, `lanes` and `local`, and `compute` alone).
 //!
-//! Every other verb, and `compute` alone, is the shell's. The modules below
+//! Every other verb is the shell's. The modules below
 //! are shared: [`pyrt`] (the Python operations the shell's readers use),
 //! [`render`] (`_compute_render`), [`lines`] (where the shell's Python
 //! lines are) and `reads::call` (`_compute_call`).
@@ -144,6 +145,22 @@ pub const VERBS: &[Verb] = &[
     },
     Verb {
         words: &["node"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["allow-nodes"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["git-access"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["lanes"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["local"],
         owner: Owner::Native,
     },
 ];

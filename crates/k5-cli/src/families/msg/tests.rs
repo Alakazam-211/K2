@@ -402,6 +402,26 @@ fn postal_mail() {
         parse(&["--from", to, "ws", "t"]),
         Parsed::Stop(format!("{}\n", postal::k2_only("--from", to)), Exit::Usage)
     );
+    // msg's own loop read the address: the text is sent as typed, never
+    // read as a flag.
+    for text in ["-x", "--help", "--no-wake", "a b"] {
+        let m = Msg {
+            target: to.into(),
+            text: text.into(),
+            wake: false,
+            ..Msg::default()
+        };
+        assert_eq!(
+            send::postal_as_typed(&m),
+            Mail {
+                to: to.into(),
+                text: text.into(),
+                wake: true,
+                json: false,
+            },
+            "{text}"
+        );
+    }
     let src = source("remote-target.sh");
     for line in [
         r#"echo "k2 msg: $1 is for messages to agents on this server; Postal mail to $to takes only the text, --no-wake and --json." >&2"#,

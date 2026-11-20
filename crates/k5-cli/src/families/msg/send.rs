@@ -583,16 +583,10 @@ fn send_with(client: &mut Client, closing: &mut Closing, m: &mut Msg) -> Exit {
         );
         return Exit::Usage;
     } else if let Some(target) = super::remote::split(&m.target) {
-        // `_postal_send_teach "$target" "$text"`: Postal mail, the text
-        // alone.
+        // `_postal_send_teach "$target" -- "$text"`: Postal mail, the text
+        // alone, as typed.
         if is_postal(&m.target) {
-            return match super::postal::parse(&[m.target.as_str(), m.text.as_str()], 0) {
-                Ok(mail) => super::postal::send(client, &mail),
-                Err(line) => {
-                    out::stderr_line(&line);
-                    Exit::Usage
-                }
-            };
+            return super::postal::send(client, &postal_as_typed(m));
         }
         let project = client.project.clone();
         return super::remote::send(client, closing, &target, &m.text, &project, &key);
@@ -604,6 +598,19 @@ fn send_with(client: &mut Client, closing: &mut Closing, m: &mut Msg) -> Exit {
         };
     }
     deliver(client, closing, m, &key)
+}
+
+/// The Postal mail of a message whose address msg's own loop read:
+/// `_postal_send_teach "$target" -- "$text"` (the shell from 0.46.17), so
+/// the text is never read as a flag (a dash first, or `--help`, is text),
+/// and the mail wakes.
+pub fn postal_as_typed(m: &Msg) -> super::postal::Mail {
+    super::postal::Mail {
+        to: m.target.clone(),
+        text: m.text.clone(),
+        wake: true,
+        json: false,
+    }
 }
 
 /// `$PWD` as the shell has it.

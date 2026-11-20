@@ -1092,6 +1092,23 @@ fn msg_to_another_server() {
             4,
         ),
         plain("an empty agent", to("@box"), vec![ok(ON)], 2, 1),
+        // A value flag first: msg's own loop reads the Postal address, then
+        // it is Postal mail with the text alone, as typed; the flags of a
+        // message to an agent here are not sent.
+        plain(
+            "Postal mail after a value flag",
+            &[
+                "--from",
+                "me",
+                "a::abc.postal.bot",
+                "hi there",
+                "--idempotency-key",
+                KEY,
+            ],
+            vec![ok(ON), ok(POSTAL_SENT)],
+            0,
+            2,
+        ),
         plain("a bad chat", to("ada/a/b::box.x"), vec![ok(ON)], 2, 1),
         plain(
             "federation off",

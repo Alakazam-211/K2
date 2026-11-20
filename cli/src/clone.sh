@@ -223,6 +223,23 @@ def vault_sock(route, body):
 NEEDS_A_PERSON = "this needs your confirm: run it from a terminal (not --yes, not a pipe)"
 
 
+def read_line(fd, prompt, needs=NEEDS_A_PERSON):
+    """prompt on the terminal fd, then one typed line. A terminal that
+    can't be written or read (hung up, or this process isn't in its
+    foreground) is no person here."""
+    typed = b""
+    try:
+        os.write(fd, prompt.encode())
+        while not typed.endswith(b"\n"):
+            more = os.read(fd, 1024)
+            if not more:
+                raise KeyboardInterrupt  # Ctrl-D: stopped
+            typed += more
+    except OSError:
+        raise Fail("confirm_needs_a_person", needs, 3)
+    return typed
+
+
 def password(prompt):
     """A password typed at this person's terminal with echo off. Only the
     terminal: never stdin, never with echo on."""
@@ -238,13 +255,7 @@ def password(prompt):
         quiet[3] &= ~termios.ECHO
         termios.tcsetattr(fd, termios.TCSAFLUSH, quiet)
         try:
-            os.write(fd, prompt.encode())
-            typed = b""
-            while not typed.endswith(b"\n"):
-                more = os.read(fd, 1024)
-                if not more:
-                    raise KeyboardInterrupt  # Ctrl-D: stopped
-                typed += more
+            typed = read_line(fd, prompt)
         finally:
             termios.tcsetattr(fd, termios.TCSAFLUSH, old)
             os.write(fd, b"\n")
@@ -727,18 +738,13 @@ def shown(text):
 def confirm_host(target):
     """Before anything goes to a host an agent proposed: the person reads
     the host in full and says yes at the terminal. --yes doesn't skip it."""
+    needs = "this proposal sends your token to %s: approve it from a terminal, where k2 asks first" % shown(target)
     fd = open_tty()
     if fd is None:
-        raise Fail("confirm_needs_a_person", "this proposal sends your token to %s: approve it from a terminal, where k2 asks first" % shown(target), 3)
+        raise Fail("confirm_needs_a_person", needs, 3)
     try:
         url = "" if REMOTE[1] == target else " (%s)" % shown(REMOTE[1])
-        os.write(fd, ("Send your token to %s?%s The agent proposed this host. [y/N] " % (shown(target), url)).encode())
-        typed = b""
-        while not typed.endswith(b"\n"):
-            more = os.read(fd, 1024)
-            if not more:
-                raise KeyboardInterrupt  # Ctrl-D: stopped
-            typed += more
+        typed = read_line(fd, "Send your token to %s?%s The agent proposed this host. [y/N] " % (shown(target), url), needs)
     finally:
         os.close(fd)
     if typed.strip().lower() not in (b"y", b"yes"):

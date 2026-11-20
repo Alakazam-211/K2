@@ -293,7 +293,7 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
         }
     }
 
-    // 0.46.18: re-check usage-limit pauses whose time came (still out:
+    // 0.46.17: re-check usage-limit pauses whose time came (still out:
     // later; otherwise they fire on their schedule again).
     crate::heartbeat_turned_off::sweep_project(project_path);
 

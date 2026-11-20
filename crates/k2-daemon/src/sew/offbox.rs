@@ -1,5 +1,5 @@
 //! Off-box copies of Sew's bundles carried by K2's backup platform
-//! (0.46.18): the "external" ship.
+//! (0.46.17): the "external" ship.
 //!
 //! Hosted servers are on K2's backup platform: the box's backup client
 //! (`k2-backup`, restic, nightly via `k2-backup.timer`) takes

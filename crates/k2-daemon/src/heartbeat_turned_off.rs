@@ -1,5 +1,5 @@
 //! A heartbeat that is turned off, or paused on the LLM usage limit, says
-//! so (0.46.18, field report: two daily heartbeats were auto-disabled
+//! so (0.46.17, field report: two daily heartbeats were auto-disabled
 //! after 5 fires that failed on a weekly limit; nothing told the agent,
 //! its manager or the owner, and the agent went quiet for 12 days).
 //!

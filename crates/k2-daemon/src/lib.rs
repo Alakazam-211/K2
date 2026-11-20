@@ -137,7 +137,7 @@ pub mod org_chart;
 pub mod wake_governor;
 // 0.46.6: pause / resume another workspace's heartbeat (people; agents ask).
 pub mod heartbeat_other;
-// 0.46.18: a heartbeat turned off, or paused on the LLM usage limit, says so.
+// 0.46.17: a heartbeat turned off, or paused on the LLM usage limit, says so.
 pub mod heartbeat_turned_off;
 pub mod heartbeat_routes;
 // `k2 job`: daemon-run scheduled jobs (prd-vault-gaps-v1 item 5).

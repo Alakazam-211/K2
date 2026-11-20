@@ -9,7 +9,7 @@
 //! 1. `ip netns add k2job-<key>` (a bind mount under [`NETNS_DIR`]);
 //! 2. `lo` up; each dummy `ip link add <name> type dummy`, its address
 //!    (`nodad` for IPv6, so it is usable at once), up;
-//! 3. an IPv4 default route through the first dummy (0.46.18,
+//! 3. an IPv4 default route through the first dummy (0.46.17,
 //!    `ip -4 route add default dev <first>`; no IPv6 default): a browser's
 //!    local-address lookup (a UDP connect to a public IP) then finds the
 //!    dummy's address, so it gathers an ICE host candidate. A dummy
@@ -110,7 +110,7 @@ pub fn make_argvs(name: &str, dummies: &[Dummy]) -> Vec<Vec<String>> {
             s("up"),
         ]);
     }
-    // 0.46.18: the IPv4 default route through the first dummy (it is up by
+    // 0.46.17: the IPv4 default route through the first dummy (it is up by
     // now), so a local-address lookup finds an address (a browser's ICE
     // host candidate); the dummy drops what reaches it. No IPv6 default.
     if let Some(first) = dummies.first() {
@@ -319,7 +319,7 @@ mod tests {
                 "-n k2job-j1-g1 link add v6 type dummy",
                 "-n k2job-j1-g1 addr add fd00::1/128 dev v6 nodad",
                 "-n k2job-j1-g1 link set v6 up",
-                // 0.46.18: IPv4 default via the first dummy only, last.
+                // 0.46.17: IPv4 default via the first dummy only, last.
                 "-n k2job-j1-g1 -4 route add default dev sewlane0",
             ]
         );

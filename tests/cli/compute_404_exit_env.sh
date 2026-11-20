@@ -6,7 +6,7 @@
 #
 # `k2 compute get <job>`, `status <job>`, `wait <job>...` and
 # `wait --any <job>...` exit 4 when the job is not found; every other verb
-# exits 3 on a 404. Before 0.46.18 the CLI read the not-found exit from
+# exits 3 on a 404. Before 0.46.17 the CLI read the not-found exit from
 # _CP_404_EXIT, so an exported _CP_404_EXIT=0 made a missing job exit 0
 # (and any 404 of any compute verb). Each case runs three times: with
 # _CP_404_EXIT unset, exported as 0 and exported as 7; the exit must be the

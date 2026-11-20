@@ -1,4 +1,4 @@
-//! The external ship (0.46.18): the box backup (K2 backups, restic)
+//! The external ship (0.46.17): the box backup (K2 backups, restic)
 //! carrying Sew's bundles clears `k2_backup_offbox_none` while its newest
 //! snapshot is fresh, raises `k2_backup_offbox_stale` when it isn't, and a
 //! box without it keeps today's alarm. The key-copy warning never moves.

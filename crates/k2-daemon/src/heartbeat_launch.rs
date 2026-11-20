@@ -1527,7 +1527,7 @@ fn record_fire_failure(
 /// [`record_fire_failure`] with the Thread, bus and clock passed in
 /// (tests).
 ///
-/// 0.46.18: a failure on the LLM usage limit pauses the row until the
+/// 0.46.17: a failure on the LLM usage limit pauses the row until the
 /// reset instead of counting toward the auto-disable, and an
 /// auto-disable posts one notice on the agent's Thread
 /// (`heartbeat_turned_off`).
@@ -1621,7 +1621,7 @@ pub(crate) fn record_fire_failure_in(
             project_id,
             new_count
         );
-        // 0.46.18: one notice on the agent's Thread (Turn it back on) and
+        // 0.46.17: one notice on the agent's Thread (Turn it back on) and
         // the `heartbeat_turned_off` event.
         crate::heartbeat_turned_off::notify_disabled(fx, project_id, hb, new_count, reason);
     }
@@ -1739,7 +1739,7 @@ fn release_lease(project_id: &str, hb_name: &str) {
 pub(crate) fn stamp_fired_and_release(project_id: &str, hb_name: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    // 0.46.18: a fire that went through ends a usage-limit pause.
+    // 0.46.17: a fire that went through ends a usage-limit pause.
     let _ = k2_core::heartbeats::usage_pause::clear(&conn, project_id, hb_name);
     if let Err(e) = AgentHeartbeat::stamp_fired_and_release(&conn, project_id, hb_name) {
         k2_core::log_debug!(

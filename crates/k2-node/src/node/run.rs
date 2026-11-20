@@ -323,7 +323,7 @@ pub fn asked_network_line(n: &k2_node_proto::jobnet::JobNet, mac: bool) -> Strin
     }
     let mut s = format!("network: none (this job asked, --network none): a network namespace of its own, loopback only; {FAILS}");
     if !n.dummies.is_empty() {
-        // 0.46.18: root adds the IPv4 default route through the first
+        // 0.46.17: root adds the IPv4 default route through the first
         // dummy (`admin::netns::make_argvs`); a dummy drops what it gets.
         s.push_str(&format!(
             ". Dummy interfaces, up: {} (IPv4 default route via {}, which leads nowhere: nothing leaves the namespace)",

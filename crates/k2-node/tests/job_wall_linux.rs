@@ -300,7 +300,7 @@ fn root_makes_and_removes_a_job_namespace_with_dummies() {
             .all(|l| l.contains("UP")),
         "{links}"
     );
-    // 0.46.18: the IPv4 default route through the first dummy, and no
+    // 0.46.17: the IPv4 default route through the first dummy, and no
     // IPv6 default.
     let ip_out = |args: &[&str]| {
         let o = std::process::Command::new("ip").args(args).output().unwrap();
@@ -450,7 +450,7 @@ async fn a_job_asking_network_none_gets_loopback_only_and_its_dummies() {
         "{log}"
     );
 
-    // 0.46.18: inside the job, `ip route` shows the IPv4 default through
+    // 0.46.17: inside the job, `ip route` shows the IPv4 default through
     // the first dummy (no IPv6 default), and a local-address lookup (what
     // Chrome's ICE host-candidate gathering does) finds the dummy's
     // address; nothing has to leave for that.

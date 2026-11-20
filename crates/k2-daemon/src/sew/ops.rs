@@ -267,7 +267,7 @@ pub trait SewOps: Send + Sync {
         use super::box_backup as bb;
         bb::cached(|| bb::read_with(&self.helper_state(), bb::direct_read, bb::timer_word, |argv| self.helper(argv, None)))
     }
-    /// What systemd says of the box backup's last run (0.46.18,
+    /// What systemd says of the box backup's last run (0.46.17,
     /// [`super::offbox`]): `systemctl show k2-backup.service`, no root,
     /// cached for [`super::offbox::CACHE_SECS`].
     fn box_backup_run(&self) -> super::offbox::RunFacts {

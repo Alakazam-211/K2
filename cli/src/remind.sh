@@ -572,7 +572,7 @@ try:
         sched = ' '.join(sched_parts) or '-'
         last = (r.get('lastFired') or 'never')[:19].replace('T', ' ')
         # A schedule K2 turned off reads auto-off, not a person's no.
-        # 0.46.18: paused by the LLM usage limit (still on; resumes by itself).
+        # 0.46.17: paused by the LLM usage limit (still on; resumes by itself).
         en = ('paused' if r.get('pausedUntil') else 'yes') if r.get('enabled') else ('auto-off' if r.get('disabledReason') else 'no')
         print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {hb_zone(r):<{zw}} {last:<22} {en:<8} {hb_next(r):<17} {hb_waiting(r)}')
         # 0.46.15: a schedule read in its own zone says so, with the next

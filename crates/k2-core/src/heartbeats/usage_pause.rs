@@ -1,6 +1,6 @@
 //! A heartbeat that fails on the LLM usage limit is paused, not turned
 //! off; one turned off after repeated failures says so on the agent's
-//! Thread (0.46.18, field report: two daily heartbeats were auto-disabled
+//! Thread (0.46.17, field report: two daily heartbeats were auto-disabled
 //! after 5 fires that failed on a weekly limit, and nothing told the agent
 //! or its owner for 12 days).
 //!

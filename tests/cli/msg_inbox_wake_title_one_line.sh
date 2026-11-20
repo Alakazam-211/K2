@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 0.46.18: an inbox cover's title is one line. A local
+# 0.46.17: an inbox cover's title is one line. A local
 # `k2 msg <ws> --inbox-wake --title "<title>"` whose title holds a line
 # break, a carriage return, ESC, Ctrl-C or a `---` line lands one cover:
 # its frontmatter has one title line and the real sender, `k2 inbox list`

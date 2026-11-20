@@ -295,7 +295,7 @@ fn ship_box_backup_clears_the_offbox_alarm_only_on_evidence() {
     let _fs = memfs();
     t.enable();
     // Kind none with no box backup client: the alarm, no evidence shown
-    // (0.46.18: none reads the box backup too, see offbox_tests).
+    // (0.46.17: none reads the box backup too, see offbox_tests).
     let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
     assert!(has_alarm(&s, "k2_backup_offbox_none"), "{s}");
     assert!(*t.ops.box_backup_reads.lock().unwrap() > 0, "kind none reads the box backup");
@@ -370,7 +370,7 @@ fn ship_box_backup_clears_the_offbox_alarm_only_on_evidence() {
     assert!(s["backup"]["ship"]["boxBackup"]["reason"].as_str().unwrap().contains("can't read /etc/k2-backup/paths"), "{s}");
 
     // Switching back to none while the box backup carries the bundles:
-    // the ship is external (0.46.18), no alarm; dir clears it the usual way.
+    // the ship is external (0.46.17), no alarm; dir clears it the usual way.
     *t.ops.box_backup.lock().unwrap() = box_backup_facts("/", None, "enabled");
     let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "none"}));
     assert_eq!(st, "200 OK", "{v}");
@@ -641,7 +641,7 @@ fn move_off_k2_names_each_missing_piece() {
     // With evidence it counts as the off-box bundle copy.
     let v = crate::sew::supervisor::move_off_k2(&row, true, true);
     assert_eq!(v["missing"], json!(["keyring_mirror"]));
-    // Setting none carried by the box backup counts too (0.46.18, the
+    // Setting none carried by the box backup counts too (0.46.17, the
     // external ship) and the line names it; evidence for dir counts for
     // nothing.
     row.ship_kind = "none".into();

@@ -563,7 +563,7 @@ pub enum SessionEvent {
         notice_id: String,
     },
 
-    /// 0.46.18: the daemon turned a heartbeat off after repeated failures
+    /// 0.46.17: the daemon turned a heartbeat off after repeated failures
     /// (`state: disabled`), or paused it on the LLM usage limit (`state:
     /// paused`, `pausedUntil` when it fires again), and posted its notice
     /// on the agent's Thread (`noticeId`, null when the post failed).
@@ -1496,7 +1496,7 @@ pub fn emit_llm_out_of_usage(p: &crate::llm_out_notice::Posted) {
     });
 }
 
-/// 0.46.18: a heartbeat was turned off or paused (see
+/// 0.46.17: a heartbeat was turned off or paused (see
 /// [`SessionEvent::HeartbeatTurnedOff`]).
 pub fn emit_heartbeat_turned_off(t: &crate::heartbeat_turned_off::TurnedOff) {
     let _ = emit(SessionEvent::HeartbeatTurnedOff {

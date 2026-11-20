@@ -1489,7 +1489,7 @@ pub fn k2_alarms(env: &Env, row: &Row, sew_status: Option<&Value>, now: i64) -> 
         a.push(ALARM_JWKS_DRIFT.into());
     }
     // `k2_backup_offbox_none` / `_stale`: the box backup carrying Sew's
-    // bundles clears it while its newest snapshot is fresh (0.46.18).
+    // bundles clears it while its newest snapshot is fresh (0.46.17).
     a.extend(super::offbox::alarms(env, row));
     if row.upgrade_progress.as_ref().and_then(|p| p.get("result")).and_then(Value::as_str) == Some("rollback_failed") {
         a.push("k2_upgrade_rollback_failed".into());

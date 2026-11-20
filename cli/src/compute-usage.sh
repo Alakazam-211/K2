@@ -196,7 +196,7 @@ Agents:
                  [--netns-dummy NAME=ADDR/PREFIX]  (repeatable, at most 4;
                                 Linux nodes) a dummy interface in the job's own
                                 namespace, up before it starts; from k2-node
-                                0.46.18 the first one is the IPv4 default
+                                0.46.17 the first one is the IPv4 default
                                 route (dummy0=10.254.254.1/32: a browser
                                 gets an ICE host candidate that isn't
                                 loopback; nothing leaves). Private,

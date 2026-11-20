@@ -77,7 +77,7 @@ describe('tables match the daemon', () => {
     for (const f of ['supervisor.rs', 'voice.rs']) {
       for (const m of rust(f).matchAll(/\b(?:a|alarms)\.push\(\s*"([a-z0-9_]+)"/g)) pushed.add(m[1])
     }
-    // The off-box alarms (0.46.18) are constants in offbox.rs.
+    // The off-box alarms (0.46.17) are constants in offbox.rs.
     for (const m of rust('offbox.rs').matchAll(/pub const ALARM_[A-Z_]+: &str = "([a-z0-9_]+)"/g)) pushed.add(m[1])
     expect(pushed.has('k2_backup_offbox_stale')).toBe(true)
     const backup = /BACKUP_ALARMS: &\[&str\] = &\[([^\]]+)\]/.exec(rust('sew_wire.rs'))

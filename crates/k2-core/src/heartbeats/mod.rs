@@ -42,7 +42,7 @@ pub mod wakeup_wait;
 pub mod reminders;
 /// 0278: the one parser for a reminder's `--in`, `--at`, `--on`, `--tz`.
 pub mod when;
-/// 0.46.18: a heartbeat failing on the LLM usage limit pauses until the
+/// 0.46.17: a heartbeat failing on the LLM usage limit pauses until the
 /// reset instead of turning off; an auto-disable says so on the Thread.
 pub mod usage_pause;
 
@@ -416,7 +416,7 @@ pub fn rows_with_zone_label(rows: &[AgentHeartbeat]) -> Result<Vec<serde_json::V
         .map(|r| {
             let mut v = serde_json::to_value(r).map_err(|e| e.to_string())?;
             v["zoneLabel"] = serde_json::Value::String(when::zone_label_on(r.tz.as_deref(), &server));
-            // 0.46.18: paused by the LLM usage limit until (RFC 3339), or null.
+            // 0.46.17: paused by the LLM usage limit until (RFC 3339), or null.
             v["pausedUntil"] = json_paused_until(r, now);
             Ok(v)
         })

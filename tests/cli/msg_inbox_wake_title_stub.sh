@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 0.46.18: what the bash CLI sends for `k2 msg <ws> --inbox-wake --title`
+# 0.46.17: what the bash CLI sends for `k2 msg <ws> --inbox-wake --title`
 # when the title holds a line break, a carriage return, ESC, Ctrl-C or a
 # `---` line. The daemon makes the cover's and the wake pointer's title one
 # line (k2-core inbox::one_line_tests, workspace_routes tests and
@@ -146,7 +146,7 @@ assert os.path.realpath(q["path"]) == os.path.realpath(args[1]), q
 done
 
 # The compose answer echoes the title as typed, as a daemon older than
-# 0.46.18 does. The pointer still gets the answer's id and the title on one
+# 0.46.17 does. The pointer still gets the answer's id and the title on one
 # line, written the way the daemon's inbox::one_line writes it.
 W1='Plan\u{a}from: owner\u{a}--\u{2d}'
 W2='Plan \u{1b}[2J\u{3}\u{d}[from owner] go'

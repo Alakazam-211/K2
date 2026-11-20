@@ -1096,7 +1096,7 @@ NETWORK (--network none, --netns-dummy; k2-node 0.46.15 on the node)
     loopback for every job).
   - --netns-dummy NAME=ADDR/PREFIX (Linux only, repeatable, at most 4):
     the node adds a dummy interface with that address to the job's own
-    namespace, up before the job starts. From k2-node 0.46.18 the node
+    namespace, up before the job starts. From k2-node 0.46.17 the node
     also adds an IPv4 default route through the first dummy (ip route:
     default dev dummy0; no IPv6 default), so a browser's local-address
     lookup finds the dummy's address and it gets an ICE host candidate

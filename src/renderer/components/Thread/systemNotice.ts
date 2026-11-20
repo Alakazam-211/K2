@@ -77,7 +77,7 @@ export const LLM_SWITCH_ACTION_ID = 'llm_switch'
 export const LLM_SWITCH_ROUTE = 'llm/accounts/switch'
 /** Out of usage (0.46.17): add a login for the tool. */
 export const LLM_ADD_LOGIN_ACTION_ID = 'llm_add_login'
-/** 0.46.18: turn back on a heartbeat the daemon turned off after repeated
+/** 0.46.17: turn back on a heartbeat the daemon turned off after repeated
  *  failures (Owner and Admin; the route refuses a Member). */
 export const HEARTBEAT_ENABLE_ACTION_ID = 'heartbeat_enable'
 /** The one route `heartbeat_enable` posts to. */

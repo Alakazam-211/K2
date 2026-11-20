@@ -91,7 +91,7 @@ export interface SewBoxBackup {
   line?: string
 }
 
-/** The box backup (K2 backups, restic) carrying chat's backups (0.46.18). */
+/** The box backup (K2 backups, restic) carrying chat's backups (0.46.17). */
 export interface SewExternalShip {
   label: string
   /** The newest snapshot with them (unix seconds), when K2 has seen one. */
@@ -105,7 +105,7 @@ export interface SewExternalShip {
 export interface SewShip {
   /** `dir`, `box-backup`, `none`, or `external` (setting none, carried by the box backup). */
   kind: string
-  /** The stored choice (0.46.18): `dir`, `box-backup` or `none`. */
+  /** The stored choice (0.46.17): `dir`, `box-backup` or `none`. */
   setting?: string
   path?: string | null
   /** Kind `box-backup`, or whenever the box backup carries them. */

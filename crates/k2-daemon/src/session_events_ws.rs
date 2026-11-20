@@ -757,7 +757,7 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::LlmAccountsChanged { .. } => None,
         // 0.46.17 — an agent ran out of usage: app-level (Home lists every agent).
         SessionEvent::LlmOutOfUsage { .. } => None,
-        // 0.46.18 — a heartbeat turned off or paused: app-level, like out of usage.
+        // 0.46.17 — a heartbeat turned off or paused: app-level, like out of usage.
         SessionEvent::HeartbeatTurnedOff { .. } => None,
         // Usage v2 — limits written: app-level refetch signal.
         SessionEvent::SubscriptionUsageChanged { .. } => None,

@@ -10,7 +10,7 @@
 //!   replaced (killed, new spawn) and the fire record says
 //!   "restarted: weekly limit";
 //! - a replacement that dies at once is a failed fire, not "fired" (on the
-//!   weekly limit it pauses the heartbeat instead of counting, 0.46.18);
+//!   weekly limit it pauses the heartbeat instead of counting, 0.46.17);
 //! - a fire that reuses the live session says "delivered into live
 //!   session" and never saves a made-up conversation id;
 //! - `restart_session` stops the live session and clears the saved id.
@@ -248,7 +248,7 @@ async fn a_replacement_that_dies_at_once_is_a_failed_fire() {
     assert_eq!(f.decision, "error", "{f:?}");
     let reason = f.reason.unwrap_or_default();
     assert!(reason.starts_with("restarted: weekly limit"), "the record says it restarted: {reason}");
-    // 0.46.18: a failure on the usage limit pauses the heartbeat until the
+    // 0.46.17: a failure on the usage limit pauses the heartbeat until the
     // reset; it never counts toward the auto-disable.
     assert!(reason.contains("usage limit: paused"), "the record says it paused: {reason}");
     let hb = row(ws, "default");

@@ -1,4 +1,4 @@
-//! A heartbeat auto-disabled after repeated failures (0.46.18): the real
+//! A heartbeat auto-disabled after repeated failures (0.46.17): the real
 //! failure policy with the live Thread and bus posts exactly one system
 //! row on the agent's Thread, with its button, and one
 //! `heartbeat_turned_off` event.

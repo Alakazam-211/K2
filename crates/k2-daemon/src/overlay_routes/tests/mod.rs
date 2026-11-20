@@ -4312,7 +4312,7 @@ mod system_notice;
 #[path = "out_of_usage_notice_tests.rs"]
 mod out_of_usage_notice;
 
-// 0.46.18: a heartbeat turned off after repeated failures gets one K2
+// 0.46.17: a heartbeat turned off after repeated failures gets one K2
 // system row on its agent's Thread, with Turn it back on.
 #[path = "heartbeat_turned_off_notice_tests.rs"]
 mod heartbeat_turned_off_notice;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// A heartbeat turned off (0.46.18): after repeated failures the daemon
+// A heartbeat turned off (0.46.17): after repeated failures the daemon
 // posts its notice on the agent's Thread with one button:
 //
 //   1. "Turn it back on" posts `{project, name, enabled: true}` to the

@@ -77,7 +77,7 @@ fn run_body() {
     let body = run::body(&a, "sub", "/repo", "acme", "c0ffee");
     assert_eq!(
         body,
-        r#"{"node": "mini", "labels": {"a": "3", "b": "2"}, "env": {}, "argv": ["echo", "hé"], "needs": ["rust@stable", "cmake@3"], "retries": 7, "plan": false, "detach": true, "dirty": false, "noSource": false, "cpus": 2.5, "exclusive": false, "cwd": "sub", "repoDir": "/repo", "workspace": "acme", "clientJobId": "c0ffee"}"#
+        r#"{"node": "mini", "labels": {"a": "3", "b": "2"}, "env": {}, "argv": ["echo", "h\u00e9"], "needs": ["rust@stable", "cmake@3"], "retries": 7, "plan": false, "detach": true, "dirty": false, "noSource": false, "cpus": 2.5, "exclusive": false, "cwd": "sub", "repoDir": "/repo", "workspace": "acme", "clientJobId": "c0ffee"}"#
     );
     let a = ask(run::parse(&["--wait", "--", "true"]));
     let body = run::body(&a, "", "", "", "c");

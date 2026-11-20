@@ -55,7 +55,7 @@ pub const SRC: &str = include_str!("../../../../../cli/src/compute-run.sh");
 
 /// A verb this module answers, with its words read.
 enum Ask {
-    Run(run::Ask),
+    Run(Box<run::Ask>),
     Prewarm(prewarm::Ask),
 }
 
@@ -87,8 +87,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let rest = &words[1..];
     let parsed = match verb {
-        "run" => map(run::parse(rest)?, Ask::Run),
-        "test" => map(test::parse(rest)?, Ask::Run),
+        "run" => map(run::parse(rest)?, |a| Ask::Run(Box::new(a))),
+        "test" => map(test::parse(rest)?, |a| Ask::Run(Box::new(a))),
         _ => map(prewarm::parse(rest)?, Ask::Prewarm),
     };
     let max_time = writes::post_max_time(std::env::var_os("K2_CP_MAX_TIME"))?;

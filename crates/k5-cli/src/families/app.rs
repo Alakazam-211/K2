@@ -38,6 +38,11 @@
 //! - [`deploy`]: `app build`, `app install` (not `--catalog`), `app
 //!   deploy`, `app rollback`, `app stop|start|restart`, `app link`, `app
 //!   seal` and `app config`.
+//! - [`owner`]: `app uninstall`, `app expose`, `app handover` (every
+//!   sub-act), `app unpark`, `app park`, `app release` and `app
+//!   exception`.
+//! - [`boxes`]: `app doctor` (the box and reach doctors), `app box`
+//!   (every sub-verb), `app engine`, `app rehost` and `app sessions`.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
 //! - The verbs `cmd_app` hands to `cmd_skin` (`user`, `role`, `grant`'s
@@ -78,6 +83,7 @@ use std::path::Path;
 
 pub mod access;
 pub mod approve;
+pub mod boxes;
 pub mod call;
 pub mod catalog;
 pub mod chat;
@@ -88,6 +94,7 @@ pub mod grace;
 pub mod guests;
 pub mod history;
 pub mod init;
+pub mod owner;
 pub mod phone;
 pub mod phone_set;
 pub mod py;
@@ -134,6 +141,8 @@ pub enum Ask {
     Chat(chat::Ask),
     Folder(init::Ask),
     Change(deploy::Ask),
+    Owner(owner::Ask),
+    Boxes(boxes::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -222,6 +231,17 @@ pub const TAKES: &[&str] = &[
     "link",
     "seal",
     "config",
+    "uninstall",
+    "expose",
+    "handover",
+    "unpark",
+    "park",
+    "release",
+    "exception",
+    "box",
+    "engine",
+    "rehost",
+    "sessions",
 ];
 
 /// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
@@ -476,6 +496,46 @@ pub const VERBS: &[crate::route::Verb] = &[
         owner: crate::route::Owner::Native,
     },
     crate::route::Verb {
+        words: &["uninstall"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["expose"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["handover", "unpark"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["park"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["release"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["exception"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["box"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["engine"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["rehost"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["sessions"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
         words: &["user", "users"],
         owner: crate::route::Owner::Native,
     },
@@ -537,8 +597,19 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "login" => Some(sign_in::parse_login(rest)?.map(Ask::SignIn)),
         "chat" => Some(chat::parse(rest)?.map(Ask::Chat)),
         "init" => Some(init::parse_init(rest)?.map(Ask::Folder)),
-        "doctor" => Some(init::parse_doctor(rest)?.map(Ask::Folder)),
+        "doctor" => doctor(rest),
+        "box" => {
+            if rest.iter().any(|w| matches!(*w, "-h" | "--help")) {
+                return None;
+            }
+            match rest.first().copied() {
+                None | Some("" | "doctor" | "status") => doctor(rest.get(1..).unwrap_or_default()),
+                _ => Some(boxes::parse("box", rest)?.map(Ask::Boxes)),
+            }
+        }
+        v if boxes::VERBS.contains(&v) => Some(boxes::parse(v, rest)?.map(Ask::Boxes)),
         v if deploy::VERBS.contains(&v) => Some(deploy::parse(v, rest)?.map(Ask::Change)),
+        v if owner::VERBS.contains(&v) => Some(owner::parse(v, rest)?.map(Ask::Owner)),
         "grant" | "grants" => Some(guests::parse_grant(rest)?.map(Ask::Guests)),
         v if approve::VERBS.contains(&v) => Some(approve::parse(v, rest)?.map(Ask::Approve)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
@@ -549,6 +620,15 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
             None => Some(phone::parse(v, rest)?.map(Ask::Phone)),
         },
         _ => None,
+    }
+}
+
+/// `cmd_app_doctor`: `--store` is [`init`]'s, the box and reach doctors
+/// [`boxes`]'.
+fn doctor(rest: &[&str]) -> Option<Result<Ask, Stop>> {
+    match init::parse_doctor(rest) {
+        Some(r) => Some(r.map(Ask::Folder)),
+        None => Some(boxes::parse_doctor(rest)?.map(Ask::Boxes)),
     }
 }
 
@@ -657,6 +737,8 @@ fn run_with(
         Ask::Chat(c) => chat::run(&mut ctx, c),
         Ask::Folder(f) => init::run(&mut ctx, f),
         Ask::Change(c) => deploy::run(&mut ctx, c),
+        Ask::Owner(o) => owner::run(&mut ctx, o),
+        Ask::Boxes(b) => boxes::run(&mut ctx, b),
     };
     let exit = match shown {
         Ok(s) => s.print(),

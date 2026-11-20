@@ -2,7 +2,7 @@
 //! `agent)` arm and its `cmd_agent_*` functions answer it
 //! (`cli/src/router.sh`, `cli/src/agent.sh`).
 //!
-//! Native here: `conf`, `get`, `list`, `retire`, `restart`, `context`
+//! Native here: `conf`, `get`, `set`, `list`, `retire`, `restart`, `context`
 //! (`cli/src/agent-context.sh`), `template` (`cli/src/agent-template.sh`;
 //! its help forms stay the shell's), `identity` (an `id` tool: the
 //! session rules of [`crate::prelude::id_tool`]), `access`, and `harness`
@@ -56,6 +56,7 @@ mod harness;
 mod identity;
 mod list;
 mod retire;
+mod set;
 mod template;
 
 use super::curl_port;
@@ -104,6 +105,7 @@ enum Form {
     /// Plain lines on stderr, exit 2.
     Lines(Vec<String>),
     Harness(harness::Args),
+    Set(set::SetArgs),
     /// One line on stderr and its exit.
     Stop(String, Exit),
 }
@@ -149,6 +151,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "list" => list::parse(rest).map(|json| Form::List { json }),
         "retire" => retire::parse_retire(rest).map(Form::Retire),
         "restart" => retire::parse_restart(rest).map(Form::Restart),
+        "set" => set::parse(rest).map(Form::Set),
         "context" => Ok(Form::Context(context::parse(rest))),
         "template" | "templates" => match template::parse(rest)? {
             Ok((v, json)) => Ok(Form::Template(v, json)),
@@ -243,6 +246,7 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
                 exit
             }
         },
+        Form::Set(a) => set::set(&mut client, &mut closing, &a),
         Form::Stop(line, exit) => {
             out::stderr_line(&line);
             exit
@@ -394,7 +398,6 @@ mod tests {
             &["agent"][..],
             &["agent", ""],
             &["agent", "hire", "x"],
-            &["agent", "set", "x"],
             &["agent", "template"],
             &["agent", "templates", "help"],
             &["agent", "conf", "--help"],

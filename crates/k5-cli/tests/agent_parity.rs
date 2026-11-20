@@ -2518,3 +2518,230 @@ fn refresh() {
     }
     check(&rig, v);
 }
+
+const CONF_IDS: &str = r#"{"ok":true,"name":"qa","path":"/srv/qa","mode":"custom","enabled":false,"projects":[{"id":"pg1","name":"Acme","isPoc":true},{"id":"pg3","name":"Initech"}]}"#;
+
+#[test]
+fn set() {
+    let rig = Rig::new(VERB, "set");
+    let acme = r#"{"ok":true,"id":"pg1","name":"Acme","members":[]}"#;
+    let globex = r#"{"ok":true,"id":"pg2","name":"Globex","members":[{"workspaceId":"w"}]}"#;
+    let mut v = vec![
+        // covers: agent set
+        case(
+            "the plan",
+            &["set", "qa", "--mode", "k2", "--enabled", "false", "--name", "QA Two", "--dry-run"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent set --json
+        case(
+            "the plan --json",
+            &["set", "qa", "--mode", "k2so", "--enabled", "true", "--dry-run", "--json"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "the mode",
+            &["set", "qa", "--mode", "manager"],
+            &[],
+            vec![ok(CONF), ok(r#"{"ok":true,"actions":[{"field":"agent_mode","status":"done"}]}"#)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "the mode and enabled, --json",
+            &["set", "qa", "--mode", "off", "--enabled", "false", "--json"],
+            &[],
+            vec![ok(CONF), ok(r#"{"ok":true}"#)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "every value already so",
+            &["set", "qa", "--enabled", "true", "--name", "qa", "--mode", "agent"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "already so",
+            &["set", "qa", "--enabled", "true", "--name", "qa"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a new name",
+            &["set", "qa", "--name", "QA Two"],
+            &[],
+            vec![ok(CONF), ok(r#"{"success":true}"#)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "a new name, refused",
+            &["set", "qa", "--name", "QA Two"],
+            &[],
+            vec![ok(CONF), Reply::Answer(403, r#"{"error":"owner only"}"#.into())],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "a persona",
+            &["set", "qa", "--persona", "persona.md"],
+            &[],
+            vec![ok(CONF), ok(r#"{"ok":true}"#), ok(r#"{"success":true}"#)],
+            persona,
+            0,
+            3,
+        ),
+        case(
+            "the same persona",
+            &["set", "qa", "--persona", "persona.md"],
+            &[],
+            vec![ok(CONF_PERSONA)],
+            persona,
+            0,
+            1,
+        ),
+        case(
+            "join a project, leave one it isn't in",
+            &["set", "qa", "--add-project", "Acme", "--add-project", "acme", "--remove-project", "Globex"],
+            &[],
+            vec![ok(CONF), ok(acme), ok(acme), ok(globex), ok(r#"{"ok":true,"becamePoc":true}"#)],
+            owner_and_port,
+            0,
+            5,
+        ),
+        case(
+            "the Point of Contact can't leave: the plan",
+            &["set", "qa", "--remove-project", "Acme", "--add-project", "Initech", "--dry-run"],
+            &[],
+            vec![ok(CONF_IDS), ok(acme), ok(r#"{"ok":true,"id":"pg3","name":"Initech"}"#)],
+            owner_and_port,
+            0,
+            3,
+        ),
+        case(
+            "the Point of Contact can't leave",
+            &["set", "qa", "--remove-project", "Acme"],
+            &[],
+            vec![
+                ok(CONF_IDS),
+                ok(acme),
+                Reply::Answer(409, r#"{"error":{"code":"poc_successor_required","hint":"qa is the Point of Contact"}}"#.into()),
+            ],
+            owner_and_port,
+            1,
+            3,
+        ),
+        case(
+            "an already-member answer",
+            &["set", "qa", "--add-project", "Globex", "--json"],
+            &[],
+            vec![ok(CONF), ok(globex), ok(r#"{"ok":true,"alreadyMember":true}"#)],
+            owner_and_port,
+            0,
+            3,
+        ),
+        case(
+            "a project that isn't there: exit 4",
+            &["set", "qa", "--add-project", "Nope"],
+            &[],
+            vec![ok(CONF), Reply::Answer(404, r#"{"error":{"code":"not_found"}}"#.into())],
+            owner_and_port,
+            4,
+            2,
+        ),
+        case(
+            "a project the daemon can't resolve",
+            &["set", "qa", "--add-project", "X"],
+            &[],
+            vec![ok(CONF), Reply::Answer(500, "down".into())],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "in both lists",
+            &["set", "qa", "--add-project", "Acme", "--remove-project", "acme"],
+            &[],
+            vec![ok(CONF), ok(acme), ok(acme)],
+            owner_and_port,
+            2,
+            3,
+        ),
+        case(
+            "the settings write fails",
+            &["set", "qa", "--mode", "k2"],
+            &[],
+            vec![ok(CONF), Reply::Answer(500, r#"{"error":{"hint":"db locked"}}"#.into())],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "no answer to the settings write",
+            &["set", "qa", "--enabled", "false"],
+            &[],
+            vec![ok(CONF), Reply::Close],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "the conf not found",
+            &["set", "nobody", "--mode", "k2"],
+            &[],
+            vec![ok(r#"{"error":{"code":"not_found","hint":"no agent"}}"#)],
+            owner_and_port,
+            4,
+            1,
+        ),
+        Case {
+            compare: Compare::OwnerTokenWithPassport,
+            ..Case {
+                env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+                ..case(
+                    "a session with a passport, the owner on disk (PRD 13.9 #4)",
+                    &["set", "qa", "--mode", "k2"],
+                    &[],
+                    vec![ok(CONF), ok(r#"{"ok":true}"#)],
+                    owner_and_port,
+                    0,
+                    2,
+                )
+            }
+        },
+    ];
+    for args in [
+        &["set"][..],
+        &["set", "qa"],
+        &["set", "qa", "--mode"],
+        &["set", "qa", "--mode", "x"],
+        &["set", "qa", "--enabled", "maybe"],
+        &["set", "qa", "--zz"],
+        &["set", "qa", "b", "--mode", "k2"],
+        &["set", "qa", "--persona", "nofile.md"],
+        &["set", "--add-project"],
+        &["set", "qa", "--mode", ""],
+    ] {
+        v.push(case("a usage line", leak(args), &[], vec![], owner_and_port, 2, 0));
+    }
+    check(&rig, v);
+}

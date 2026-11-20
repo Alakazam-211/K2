@@ -55,7 +55,7 @@
 #![cfg(unix)]
 
 use super::stub::{Logged, Reply, Stub};
-use std::cell::{Cell, OnceCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -154,6 +154,9 @@ pub struct Rig {
     pub path_first: Option<PathBuf>,
     /// The file the stub programs in [`Rig::path_first`] log to.
     pub tool_log: Option<PathBuf>,
+    /// Each side's last run's stdout and stderr as bytes, in
+    /// [`Side::ALL`]'s order ([`Rig::raw`]).
+    raw: RefCell<[Option<(Vec<u8>, Vec<u8>)>; 3]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,7 +362,18 @@ impl Rig {
             no_python3: OnceCell::new(),
             path_first: None,
             tool_log: None,
+            raw: RefCell::new([None, None, None]),
         }
+    }
+
+    /// `side`'s last run's stdout and stderr as the bytes it wrote
+    /// ([`Out`] holds them read as UTF-8, a bad byte as U+FFFD, so two
+    /// runs that wrote different bytes there can compare equal). Panics
+    /// when that side has not run.
+    pub fn raw(&self, side: Side) -> (Vec<u8>, Vec<u8>) {
+        self.raw.borrow()[side.index()]
+            .clone()
+            .unwrap_or_else(|| panic!("the {} side has not run", side.name()))
     }
 
     /// `side`'s own stub: its log is that side's requests.
@@ -521,6 +535,7 @@ impl Rig {
             &format!("{}: the {side:?} side", case.name),
         );
         let signal = o.status.signal();
+        self.raw.borrow_mut()[side.index()] = Some((o.stdout.clone(), o.stderr.clone()));
         Out {
             code: o.status.code().or_else(|| signal.map(|s| 128 + s)),
             signal,

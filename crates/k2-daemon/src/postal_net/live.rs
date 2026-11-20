@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(receive(&old_friend, now()).0, receive(&old_stranger, now()).0);
         assert_eq!(receive(&old_friend, now()).0 .1["error"]["code"], "stale");
         // Not ours, junk, too big.
-        let (elsewhere, _) = signed(&alice, "alice::bravo.postal.bot", "nobody::acme.postal.bot", now(), "x");
+        let (elsewhere, _) = signed(&alice, "alice::bravo.postal.bot", "nobody::initech.postal.bot", now(), "x");
         assert_eq!(receive(&elsewhere, now()).0, a, "an unknown recipient reads the same too");
         assert_eq!(receive(b"{not json", now()).0 .1["error"]["code"], "bad_wire");
         assert_eq!(receive(&vec![b' '; wire::MAX_WIRE_JSON + 1], now()).0 .0, 413);

@@ -101,10 +101,10 @@ mod tests {
     #[test]
     fn only_a_friend_a_person_accepted_is_trusted_and_pinned() {
         let c = conn();
-        let h = claim(&c, "ws-1", &parse_address("scout::acme.postal.bot").unwrap(), "owner").unwrap();
+        let h = claim(&c, "ws-1", &parse_address("scout::initech.postal.bot").unwrap(), "owner").unwrap();
         let peer = parse_address("ops::beta.postal.bot").unwrap();
         let sdk = |trusted: bool, rekey: Option<&str>| Friend {
-            local_handle: "scout::acme.postal.bot".into(),
+            local_handle: "scout::initech.postal.bot".into(),
             peer: "ops::beta.postal.bot".into(),
             pinned_fingerprint: "ab".repeat(32),
             pinned_public_key_pem: "-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----\n".into(),
@@ -112,31 +112,31 @@ mod tests {
             trusted,
         };
         // A stranger, then a waiting request: no friend, and the SDK can't make one.
-        assert_eq!(get_on(&c, "scout::acme.postal.bot", "ops::beta.postal.bot"), None);
+        assert_eq!(get_on(&c, "scout::initech.postal.bot", "ops::beta.postal.bot"), None);
         assert!(put_on(&c, &sdk(true, None)).unwrap_err().0.starts_with("no_friend"));
         let f = match record_incoming(&c, &h, &peer, None, None, Some("pr_1"), None).unwrap() {
             Incoming::New(f) => f,
             other => panic!("{other:?}"),
         };
-        assert_eq!(get_on(&c, "scout::acme.postal.bot", "ops::beta.postal.bot"), None, "a request isn't a friend");
+        assert_eq!(get_on(&c, "scout::initech.postal.bot", "ops::beta.postal.bot"), None, "a request isn't a friend");
         assert!(put_on(&c, &sdk(true, None)).is_err());
         assert_eq!(store::friend(&c, &f.id).unwrap().status, "pending_in", "the SDK never accepts");
         // A person accepts: the SDK pins the key, and gets it back trusted.
         decide(&c, &f.id, true, "owner").unwrap();
         put_on(&c, &sdk(true, None)).unwrap();
-        let got = get_on(&c, "scout::acme.postal.bot", "ops::beta.postal.bot").unwrap();
+        let got = get_on(&c, "scout::initech.postal.bot", "ops::beta.postal.bot").unwrap();
         assert!(got.trusted && got.pinned_fingerprint == "ab".repeat(32) && got.pinned_public_key_pem.contains("PUBLIC KEY"), "{got:?}");
         // Another handle on this box: not its friend.
-        claim(&c, "ws-2", &parse_address("other::acme.postal.bot").unwrap(), "owner").unwrap();
-        assert_eq!(get_on(&c, "other::acme.postal.bot", "ops::beta.postal.bot"), None);
+        claim(&c, "ws-2", &parse_address("other::initech.postal.bot").unwrap(), "owner").unwrap();
+        assert_eq!(get_on(&c, "other::initech.postal.bot", "ops::beta.postal.bot"), None);
         // A changed key: untrusted until a person accepts it.
         put_on(&c, &sdk(false, Some(&"cd".repeat(32)))).unwrap();
-        let got = get_on(&c, "scout::acme.postal.bot", "ops::beta.postal.bot").unwrap();
+        let got = get_on(&c, "scout::initech.postal.bot", "ops::beta.postal.bot").unwrap();
         assert!(!got.trusted && got.pinned_fingerprint == "ab".repeat(32), "the old pin stays: {got:?}");
         // Removed: gone for the SDK, kept as history.
-        remove_on(&c, "scout::acme.postal.bot", "ops::beta.postal.bot").unwrap();
-        assert_eq!(get_on(&c, "scout::acme.postal.bot", "ops::beta.postal.bot"), None);
+        remove_on(&c, "scout::initech.postal.bot", "ops::beta.postal.bot").unwrap();
+        assert_eq!(get_on(&c, "scout::initech.postal.bot", "ops::beta.postal.bot"), None);
         assert_eq!(store::friend(&c, &f.id).unwrap().status, "revoked");
-        remove_on(&c, "nobody::acme.postal.bot", "ops::beta.postal.bot").unwrap();
+        remove_on(&c, "nobody::initech.postal.bot", "ops::beta.postal.bot").unwrap();
     }
 }

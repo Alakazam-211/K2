@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn the_seen_list_is_the_delivery_row_in_the_storing_transaction() {
         let mut c = conn();
-        let e = SeenEntry::new("alice::acme.postal.bot", "01ARZ3NDEKTSV4RRFFQ69G5FAV", 1_800_000_000);
+        let e = SeenEntry::new("alice::initech.postal.bot", "01ARZ3NDEKTSV4RRFFQ69G5FAV", 1_800_000_000);
         // A store that fails rolls the seen insert back: still deliverable.
         {
             let tx = c.transaction().unwrap();

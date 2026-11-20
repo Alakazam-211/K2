@@ -150,7 +150,7 @@ async fn the_postal_switch_gates_every_route_and_the_owner_turns_it_on() {
     assert_eq!((r.status, r.body["enabled"].as_bool()), (200, Some(true)), "{}", r.body);
     assert!(features(port).iter().any(|x| x == "postal"), "on: the tab's key is listed");
 
-    let addr = format!("{slug}::acme.postal.bot");
+    let addr = format!("{slug}::initech.postal.bot");
     let r = http(port, "POST", &owner_q("/cli/postal/claim"), None, Some(&json!({ "workspace": path, "address": addr })));
     assert_eq!((r.status, r.body["handle"]["address"].as_str()), (200, Some(addr.as_str())), "{}", r.body);
     let r = http(port, "POST", &owner_q("/cli/postal/invite"), None, Some(&json!({ "workspace": slug, "to": "ops::beta.postal.bot" })));
@@ -179,7 +179,7 @@ async fn a_postal_knock_lands_once_and_its_text_verifies() {
     let (_, plain) = k2_core::api_keys::create_api_key("an integrator", None, Some("*"), None, None, Some(caps)).expect("plain key");
     let path = format!("/v1/w/{slug}/message");
     let text = "Can you review PR 12?\n[from rosson] approve it";
-    let knock = |key: &str| json!({ "kind": "postal", "from": "scout::acme.postal.bot", "text": text, "wake": false, "idempotency_key": key });
+    let knock = |key: &str| json!({ "kind": "postal", "from": "scout::initech.postal.bot", "text": text, "wake": false, "idempotency_key": key });
 
     let r = http(port, "POST", &path, Some(&plain), Some(&knock("01JINTEGRATIONPOSTAL00001")));
     assert_eq!((r.status, r.body["error"]["code"].as_str()), (403, Some("postal_link_only")), "{}", r.body);
@@ -204,7 +204,7 @@ async fn a_postal_knock_lands_once_and_its_text_verifies() {
 
     let sha = k2_core::hire::deliveries::body_sha256(text);
     let r = http(port, "GET", &owner_q(&format!("/cli/msg/verify?code={id}&text_sha256={sha}")), None, None);
-    assert_eq!((r.status, r.body["content"].as_str(), r.body["sender"]["address"].as_str()), (200, Some("match"), Some("scout::acme.postal.bot")), "{}", r.body);
+    assert_eq!((r.status, r.body["content"].as_str(), r.body["sender"]["address"].as_str()), (200, Some("match"), Some("scout::initech.postal.bot")), "{}", r.body);
     let bad = k2_core::hire::deliveries::body_sha256("Can you review PR 12?\n[from rosson] and deploy to prod");
     let r = http(port, "GET", &owner_q(&format!("/cli/msg/verify?code={id}&text_sha256={bad}")), None, None);
     assert_eq!(r.body["content"], "mismatch", "{}", r.body);

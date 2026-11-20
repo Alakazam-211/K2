@@ -688,6 +688,7 @@
 1 value crates/k2-core/src/hire/template/upgrade.rs keeper: stored; an inbox note's source and from (frontmatter)
 1 value crates/k2-core/src/llm_accounts/wallet.rs keeper: stored; the LLM account's created_by
 1 value crates/k2-core/src/migrations/unification_0_37_0.rs keeper: stored; the stored agent mode (ruling 5)
+1 value crates/k2-core/src/postal/mod.rs keeper: wire; a label the Postal plane reserves (its list), never the command
 1 value crates/k2-core/src/product_feedback/scrub.rs keeper: inert; a stop word the feedback scrubber never replaces
 1 value crates/k2-core/src/refusals/mod.rs keeper: wire; a refusal's who, in its JSON
 1 value crates/k2-core/src/suite/mod.rs keeper: wire; the suite catalog's variant and the App release file name

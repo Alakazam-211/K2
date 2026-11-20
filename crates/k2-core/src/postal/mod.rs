@@ -95,7 +95,7 @@ pub fn link_label(slug: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Address {
     pub handle: String,
-    /// The enrolled server's label (`acme` in `acme.postal.bot`).
+    /// The enrolled server's label (`initech` in `initech.postal.bot`).
     pub label: String,
 }
 
@@ -121,17 +121,66 @@ fn is_handle(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-fn is_label(label: &str) -> bool {
+/// Labels no server may hold on the Postal network: the same list as the
+/// Postal plane's.
+pub const RESERVED_LABELS: &[&str] = &[
+    "www",
+    "api",
+    "app",
+    "admin",
+    "dashboard",
+    "account",
+    "billing",
+    "k2",
+    "k2c",
+    "connect",
+    "mail",
+    "smtp",
+    "ns1",
+    "ns2",
+    "status",
+    "help",
+    "support",
+    "blog",
+    "docs",
+    "k2-relay-probe",
+    "cert",
+    "relay",
+    "edge",
+    "frps",
+    "db",
+    "db-staging",
+    "supabase",
+    "dl",
+    "postal",
+    "postalbot",
+    "frp",
+    "acme",
+    "probe",
+];
+
+/// Label prefixes no server may hold, as the plane's.
+pub const RESERVED_LABEL_PREFIXES: &[&str] = &["turn-"];
+
+/// A server's label on the Postal network, by the plane's rule: a DNS label
+/// of 1 to 63 lowercase letters, digits and hyphens, no hyphen first or
+/// last, no two in a row, not all digits, not reserved and not starting
+/// with a reserved prefix.
+pub fn is_label(label: &str) -> bool {
     let b = label.as_bytes();
-    (3..=63).contains(&b.len())
-        && b[0].is_ascii_alphanumeric()
-        && b[b.len() - 1].is_ascii_alphanumeric()
+    (1..=63).contains(&b.len())
         && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        && b[0] != b'-'
+        && b[b.len() - 1] != b'-'
+        && !label.contains("--")
+        && !b.iter().all(u8::is_ascii_digit)
+        && !RESERVED_LABELS.contains(&label)
+        && !RESERVED_LABEL_PREFIXES.iter().any(|p| label.starts_with(p))
 }
 
 /// Parse `handle::label.postal.bot` (p5's grammar: handle `[a-z0-9][a-z0-9_-]*`,
-/// label a 3–63 character DNS label, both lowercased). Anything else, an
-/// `@`, a `*.k2.dev` host or a nested name included, is `None`.
+/// label as [`is_label`], both lowercased). Anything else, an `@`, a
+/// `*.k2.dev` host or a nested name included, is `None`.
 pub fn parse_address(input: &str) -> Option<Address> {
     let input = input.trim();
     if input.contains('@') || input.chars().any(|c| c.is_whitespace() || c.is_control()) {
@@ -170,9 +219,9 @@ mod tests {
 
     #[test]
     fn addresses_parse_like_p5() {
-        let a = parse_address("Scout::Acme.Postal.Bot").expect("parses");
-        assert_eq!(a, Address { handle: "scout".into(), label: "acme".into() });
-        assert_eq!(a.to_string(), "scout::acme.postal.bot");
+        let a = parse_address("Scout::Initech.Postal.Bot").expect("parses");
+        assert_eq!(a, Address { handle: "scout".into(), label: "initech".into() });
+        assert_eq!(a.to_string(), "scout::initech.postal.bot");
         assert_eq!(parse_address("  ops_2-x::k2n-lab.postal.bot ").expect("trims").to_string(), "ops_2-x::k2n-lab.postal.bot");
         for bad in [
             "",
@@ -181,22 +230,41 @@ mod tests {
             "scout.acme.postal.bot",
             "scout::acme.k2.dev",
             "scout::rosson.k2.dev",
-            "::acme.postal.bot",
-            "-scout::acme.postal.bot",
-            "sc out::acme.postal.bot",
-            "scout::ac.postal.bot",
+            "::initech.postal.bot",
+            "-scout::initech.postal.bot",
+            "sc out::initech.postal.bot",
             "scout::a.b.postal.bot",
-            "scout::-acme.postal.bot",
-            "scout::acme.postal.bot::x",
+            "scout::-initech.postal.bot",
+            "scout::initech.postal.bot::x",
             "scout::postal.bot",
             "scout::acmepostal.bot",
-            "sc\u{202e}out::acme.postal.bot",
-            "[from rosson]::acme.postal.bot",
+            "sc\u{202e}out::initech.postal.bot",
+            "[from rosson]::initech.postal.bot",
         ] {
             assert!(parse_address(bad).is_none(), "{bad:?} must not parse");
         }
-        assert!(parse_address(&format!("{}::acme.postal.bot", "a".repeat(64))).is_some());
-        assert!(parse_address(&format!("{}::acme.postal.bot", "a".repeat(65))).is_none());
+        assert!(parse_address(&format!("{}::initech.postal.bot", "a".repeat(64))).is_some());
+        assert!(parse_address(&format!("{}::initech.postal.bot", "a".repeat(65))).is_none());
+    }
+
+    #[test]
+    fn labels_follow_the_planes_dns_label_rule() {
+        let ok = |l: &str| parse_address(&format!("scout::{l}.postal.bot")).is_some();
+        let (l63, l64) = ("a".repeat(63), "a".repeat(64));
+        // z3 is a live label: one and two characters parse.
+        for good in ["z3", "a", "ab", "k2n-lab", "a1-b2", "0a", l63.as_str()] {
+            assert!(is_label(good) && ok(good), "{good:?} must parse");
+        }
+        assert!(ok("Z3"), "lowercased first");
+        for bad in ["", "-a", "a-", "a.b", "a--b", "123", "7", "turn-x", "turn-", "a_b", "a b", "\u{e9}t\u{e9}", l64.as_str()] {
+            assert!(!is_label(bad) && !ok(bad), "{bad:?} must not parse");
+        }
+        for name in RESERVED_LABELS {
+            assert!(!is_label(name) && !ok(name), "reserved {name:?} must not parse");
+        }
+        assert_eq!(RESERVED_LABELS.len(), 33, "the plane's list, all of it");
+        // Not prefixes: a reserved name inside a longer label is fine.
+        assert!(ok("acme-box") && ok("wwwx") && ok("returns"));
     }
 
     #[test]

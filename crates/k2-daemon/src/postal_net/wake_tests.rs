@@ -33,7 +33,7 @@ impl Transport for Arc<Mendable> {
             return Err(format!("postal plane {path}: answered 404 without Postal-Api: 1 (not a Postal plane v1)"));
         }
         let out = if path.ends_with("/session") {
-            json!({ "token": "pst_0123456789abcdef0123456789abcdef", "label": "acme", "expires_at": "x" })
+            json!({ "token": "pst_0123456789abcdef0123456789abcdef", "label": "initech", "expires_at": "x" })
         } else if path.ends_with("/me") {
             json!({})
         } else if path.ends_with("/pairs") {
@@ -95,7 +95,7 @@ fn a_fixed_plane_connects_on_the_next_claim_without_waiting_out_the_backoff() {
     k2_core::postal::keys::install(Arc::new(k2_core::postal::keys::MemorySecrets::default()));
     let _on = crate::postal_routes::switch_for_test(true);
     let plane = Arc::new(Mendable::default());
-    install(Arc::new(Plane::new(Box::new(plane.clone()), Box::new(|| Ok(("k2c_test".to_string(), "acme".to_string()))))));
+    install(Arc::new(Plane::new(Box::new(plane.clone()), Box::new(|| Ok(("k2c_test".to_string(), "initech".to_string()))))));
     let (ws, ws_path) = seed_ws();
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -128,7 +128,7 @@ fn a_fixed_plane_connects_on_the_next_claim_without_waiting_out_the_backoff() {
     // The plane is fixed. A person claims an address: the answer says when
     // the last try ran and that it is retrying now.
     plane.fixed.store(true, Ordering::SeqCst);
-    let (s, v) = call(crate::postal_routes::CLAIM, Who::Owner, json!({ "workspace": ws_path, "address": "scout::acme.postal.bot" }), &[]);
+    let (s, v) = call(crate::postal_routes::CLAIM, Who::Owner, json!({ "workspace": ws_path, "address": "scout::initech.postal.bot" }), &[]);
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["plane"]["retrying"], json!(true), "{v}");
     assert_eq!(v["plane"]["lastTriedAt"], json!(p.at), "{v}");

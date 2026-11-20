@@ -17,11 +17,11 @@ fn a(s: &str) -> crate::postal::Address {
 #[test]
 fn one_address_per_workspace_and_per_server() {
     let c = conn();
-    let h = claim(&c, "ws-1", &a("Scout::Acme.postal.bot"), "owner").expect("claim");
-    assert_eq!((h.address.as_str(), h.status.as_str(), h.claimed_by.as_deref()), ("scout::acme.postal.bot", "local", Some("owner")));
-    assert_eq!(claim(&c, "ws-1", &a("scout::acme.postal.bot"), "owner").expect("same again").id, h.id);
-    assert_eq!(claim(&c, "ws-1", &a("other::acme.postal.bot"), "owner"), Err(StoreError::HasAddress("scout::acme.postal.bot".into())));
-    assert_eq!(claim(&c, "ws-2", &a("scout::acme.postal.bot"), "owner"), Err(StoreError::AddressTaken));
+    let h = claim(&c, "ws-1", &a("Scout::Initech.postal.bot"), "owner").expect("claim");
+    assert_eq!((h.address.as_str(), h.status.as_str(), h.claimed_by.as_deref()), ("scout::initech.postal.bot", "local", Some("owner")));
+    assert_eq!(claim(&c, "ws-1", &a("scout::initech.postal.bot"), "owner").expect("same again").id, h.id);
+    assert_eq!(claim(&c, "ws-1", &a("other::initech.postal.bot"), "owner"), Err(StoreError::HasAddress("scout::initech.postal.bot".into())));
+    assert_eq!(claim(&c, "ws-2", &a("scout::initech.postal.bot"), "owner"), Err(StoreError::AddressTaken));
     assert_eq!(handles(&c).len(), 1);
     assert!(handle_for_workspace(&c, "ws-2").is_none());
 }
@@ -29,13 +29,13 @@ fn one_address_per_workspace_and_per_server() {
 #[test]
 fn requests_wait_for_a_person_both_ways() {
     let c = conn();
-    let h = claim(&c, "ws-1", &a("scout::acme.postal.bot"), "owner").unwrap();
+    let h = claim(&c, "ws-1", &a("scout::initech.postal.bot"), "owner").unwrap();
     // Outgoing: pending_out, unsent until the network half sends it.
     let out = record_outgoing(&c, &h, &a("ops::beta.postal.bot"), Some("to review PRs"), "agent:scout").unwrap();
     assert_eq!((out.status.as_str(), out.pair_id.as_deref(), out.note.as_deref()), ("pending_out", None, Some("to review PRs")));
     assert_eq!(record_outgoing(&c, &h, &a("ops::beta.postal.bot"), None, "owner").unwrap().id, out.id, "asking again is the same request");
     assert_eq!(unsent_outgoing(&c).iter().map(|f| f.id.clone()).collect::<Vec<_>>(), vec![out.id.clone()]);
-    assert_eq!(record_outgoing(&c, &h, &a("scout::acme.postal.bot"), None, "owner"), Err(StoreError::SelfFriend));
+    assert_eq!(record_outgoing(&c, &h, &a("scout::initech.postal.bot"), None, "owner"), Err(StoreError::SelfFriend));
 
     // Incoming: pending_in; the same request again is known.
     let Incoming::New(inc) = record_incoming(&c, &h, &a("lab::gamma.postal.bot"), Some("Dana"), Some("SHA256:k1"), Some("pr_1"), None).unwrap() else {
@@ -65,7 +65,7 @@ fn requests_wait_for_a_person_both_ways() {
 #[test]
 fn a_blocked_peer_is_refused_and_the_queue_has_a_cap() {
     let c = conn();
-    let h = claim(&c, "ws-1", &a("scout::acme.postal.bot"), "owner").unwrap();
+    let h = claim(&c, "ws-1", &a("scout::initech.postal.bot"), "owner").unwrap();
     let b = block(&c, &h, &a("spam::evil.postal.bot"), "owner").unwrap();
     assert_eq!(b.status, "blocked");
     assert_eq!(record_incoming(&c, &h, &a("spam::evil.postal.bot"), None, None, None, None), Err(StoreError::Blocked));
@@ -78,7 +78,7 @@ fn a_blocked_peer_is_refused_and_the_queue_has_a_cap() {
     }
     assert_eq!(record_incoming(&c, &h, &a("one-more::evil.postal.bot"), None, None, None, None), Err(StoreError::TooManyPending));
     // Friends are per handle: another workspace's handle has its own.
-    let h2 = claim(&c, "ws-2", &a("ops::acme.postal.bot"), "owner").unwrap();
+    let h2 = claim(&c, "ws-2", &a("ops::initech.postal.bot"), "owner").unwrap();
     assert!(matches!(record_incoming(&c, &h2, &a("spam::evil.postal.bot"), None, None, None, None).unwrap(), Incoming::New(_)));
     assert!(friend_by_peer(&c, &h2.id, "p1::evil.postal.bot").is_none());
 }
@@ -86,7 +86,7 @@ fn a_blocked_peer_is_refused_and_the_queue_has_a_cap() {
 #[test]
 fn a_changed_key_waits_for_a_person_only_on_a_friend() {
     let c = conn();
-    let h = claim(&c, "ws-1", &a("scout::acme.postal.bot"), "owner").unwrap();
+    let h = claim(&c, "ws-1", &a("scout::initech.postal.bot"), "owner").unwrap();
     assert_eq!(mark_rekey(&c, &h.id, "ops::beta.postal.bot"), Err(StoreError::NotFound));
     let f = match record_incoming(&c, &h, &a("ops::beta.postal.bot"), None, Some("SHA256:old"), Some("pr_r"), None).unwrap() {
         Incoming::New(f) => f,

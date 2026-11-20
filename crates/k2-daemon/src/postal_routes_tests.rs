@@ -114,7 +114,7 @@ fn on_a_person_claims_and_an_agent_sees_only_its_own() {
     assert_eq!(v["plane"]["connected"], false);
     // An agent asks for its address on a card (no Thread here: not
     // presented, nothing claimed), and can't look at another workspace.
-    let addr = format!("{}::acme.postal.bot", ws.handle);
+    let addr = format!("{}::initech.postal.bot", ws.handle);
     let (s, v) = call(CLAIM, agent(&ws), true, json!({ "address": addr }), &[]);
     assert_eq!((s, v["error"]["code"].as_str()), (409, Some("card_not_presented")), "{v}");
     let (s, v) = call(CLAIM, agent(&ws), true, json!({ "address": "nope" }), &[]);
@@ -138,7 +138,7 @@ fn on_a_person_claims_and_an_agent_sees_only_its_own() {
     // Its own address again: no card, it has it. Another: refused before a card.
     let (s, v) = call(CLAIM, agent(&ws), true, json!({ "address": addr }), &[]);
     assert_eq!((s, v["already"].as_bool()), (200, Some(true)), "{v}");
-    let (s, v) = call(CLAIM, agent(&ws), true, json!({ "address": "x::acme.postal.bot" }), &[]);
+    let (s, v) = call(CLAIM, agent(&ws), true, json!({ "address": "x::initech.postal.bot" }), &[]);
     assert_eq!((s, v["error"]["code"].as_str()), (409, Some("postal_has_address")), "{v}");
     let (s, v) = call(CLAIM, agent(&other), true, json!({ "address": addr }), &[]);
     assert_eq!((s, v["error"]["code"].as_str()), (409, Some("postal_address_taken")), "{v}");
@@ -149,7 +149,7 @@ fn incoming_requests_wait_for_the_owner_and_an_agent_only_tightens() {
     let _home = crate::test_support::TempHome::new();
     let _on = switch_for_test(true);
     let ws = seed_ws("pin");
-    let addr = format!("{}::acme.postal.bot", ws.handle);
+    let addr = format!("{}::initech.postal.bot", ws.handle);
     call(CLAIM, Who::Owner, true, json!({ "workspace": ws.path, "address": addr }), &[]);
     let peer = k2_core::postal::parse_address("lab::gamma.postal.bot").unwrap();
     // The seam the network half calls (no Thread here, so no card goes up).
@@ -199,7 +199,7 @@ fn an_agent_turns_a_request_down_itself_and_a_coded_request_waits() {
     let _home = crate::test_support::TempHome::new();
     let _on = switch_for_test(true);
     let ws = seed_ws("pcode");
-    call(CLAIM, Who::Owner, true, json!({ "workspace": ws.path, "address": format!("{}::acme.postal.bot", ws.handle) }), &[]);
+    call(CLAIM, Who::Owner, true, json!({ "workspace": ws.path, "address": format!("{}::initech.postal.bot", ws.handle) }), &[]);
     // Rejecting is tightening: the agent's own, queued for the SDK.
     let p1 = k2_core::postal::parse_address("spam::gamma.postal.bot").unwrap();
     let id1 = receive_request(&ws.id, &p1, None, None, Some("pr_s"), None, None).unwrap()["friend"]["id"].as_str().unwrap().to_string();
@@ -253,7 +253,7 @@ fn the_sdk_gate_records_and_never_decides() {
     let _home = crate::test_support::TempHome::new();
     let _on = switch_for_test(true);
     let ws = seed_ws("pgate");
-    let me = format!("{}::acme.postal.bot", ws.handle);
+    let me = format!("{}::initech.postal.bot", ws.handle);
     call(CLAIM, Who::Owner, true, json!({ "workspace": ws.path, "address": me }), &[]);
     let req = FriendRequest {
         pair_id: "pr_g".into(),
@@ -276,7 +276,7 @@ fn the_sdk_gate_records_and_never_decides() {
     let (s, v) = call(DECIDE, Who::Owner, true, json!({ "workspace": ws.path, "id": f.id, "decision": "accept" }), &[]);
     assert_eq!((s, v["error"]["code"].as_str()), (400, Some("postal_code_needed")), "{v}");
     // A request for an address nobody here holds is dropped, not recorded.
-    K2Gate.friend_request(&FriendRequest { local_handle: "nobody::acme.postal.bot".into(), peer: "x9::gamma.postal.bot".into(), ..req.clone() });
+    K2Gate.friend_request(&FriendRequest { local_handle: "nobody::initech.postal.bot".into(), peer: "x9::gamma.postal.bot".into(), ..req.clone() });
     assert!(k2_core::db::read(|c| {
         let h = store::handle_for_workspace(c, &ws.id).unwrap();
         store::friend_by_peer(c, &h.id, "x9::gamma.postal.bot")

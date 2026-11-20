@@ -35,7 +35,7 @@ impl Transport for Arc<Scripted> {
         let body: Value = req.body.as_deref().map(|b| serde_json::from_str(b).unwrap()).unwrap_or(Value::Null);
         let ids = || body["ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>();
         let out = if path.ends_with("/session") {
-            json!({ "token": "pst_0123456789abcdef0123456789abcdef", "label": "acme", "expires_at": "x" })
+            json!({ "token": "pst_0123456789abcdef0123456789abcdef", "label": "initech", "expires_at": "x" })
         } else if path.starts_with("/api/postal/v1/hold?") {
             let mut p = self.pages.lock().unwrap();
             if p.len() > 1 {
@@ -73,7 +73,7 @@ pub(crate) fn now() -> i64 {
     super::super::pairing::now()
 }
 
-/// A workspace with the claimed handle `scout::acme.postal.bot`, its key
+/// A workspace with the claimed handle `scout::initech.postal.bot`, its key
 /// registered, and routing to the inbox (no agent to type into here).
 pub(crate) fn setup() -> Box1 {
     let home = crate::test_support::TempHome::new();
@@ -83,7 +83,7 @@ pub(crate) fn setup() -> Box1 {
     let ws_path = std::env::temp_dir().join(format!("k2-postal-rx-{tag}"));
     std::fs::create_dir_all(&ws_path).unwrap();
     let id = uuid::Uuid::new_v4().to_string();
-    let scout_addr = format!("s{tag}::acme.postal.bot");
+    let scout_addr = format!("s{tag}::initech.postal.bot");
     let shared = k2_core::db::shared();
     let conn = shared.lock();
     conn.execute(
@@ -132,7 +132,7 @@ fn item(from: &Identity, from_addr: &str, to: &str, seal_to: &Identity, text: &s
 
 fn plane_with(pages: Vec<Value>) -> (Plane, Arc<Scripted>) {
     let s = Arc::new(Scripted { pages: Mutex::new(pages), ..Default::default() });
-    let p = Plane::new(Box::new(s.clone()), Box::new(|| Ok(("connect-cred".to_string(), "acme".to_string()))));
+    let p = Plane::new(Box::new(s.clone()), Box::new(|| Ok(("connect-cred".to_string(), "initech".to_string()))));
     (p, s)
 }
 
@@ -269,7 +269,7 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 
 #[test]
 fn a_friend_past_its_hourly_cap_is_counted_out() {
-    let h = format!("h{}::acme.postal.bot", uuid::Uuid::new_v4().simple());
+    let h = format!("h{}::initech.postal.bot", uuid::Uuid::new_v4().simple());
     for n in 0..PER_FRIEND_HOUR {
         assert!(under_rate(&h, "p::bcd.postal.bot", 1_000 + n as i64));
     }

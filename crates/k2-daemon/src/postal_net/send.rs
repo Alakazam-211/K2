@@ -347,7 +347,7 @@ mod tests {
             item: Item::new("01ARZ3NDEKTSV4RRFFQ69G5FAV", Address::parse("scout::bravo.postal.bot").unwrap(), 1_800_000_000),
             handle_id: "h".into(),
             workspace_id: "w".into(),
-            from: "alice::acme.postal.bot".into(),
+            from: "alice::initech.postal.bot".into(),
             body: "hi".into(),
             content_type: CONTENT_TYPE.into(),
             wake: true,

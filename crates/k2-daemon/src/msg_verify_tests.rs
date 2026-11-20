@@ -91,15 +91,15 @@ fn a_postal_badge_names_its_delivery() {
     let badge = format!("p_{}", &uuid::Uuid::new_v4().simple().to_string()[..20]);
     let d = Delivery {
         id: new_id(),
-        sender_label: Some("scout::acme.postal.bot".into()),
+        sender_label: Some("scout::initech.postal.bot".into()),
         via: "postal".into(),
-        actor: Some("postal:scout::acme.postal.bot".into()),
+        actor: Some("postal:scout::initech.postal.bot".into()),
         target_workspace_id: Some(to.clone()),
         target: "ops".into(),
         delivered: true,
         body_sha256: Some(body_sha256("hi")),
         badge: Some(badge.clone()),
-        sender_address: Some("scout::acme.postal.bot".into()),
+        sender_address: Some("scout::initech.postal.bot".into()),
         sender_fingerprint: Some("SHA256:abc".into()),
         landed: Some(r#"["terminal"]"#.into()),
         ..Default::default()
@@ -108,7 +108,7 @@ fn a_postal_badge_names_its_delivery() {
     let (s, v) = call(&agent(&to), &[("code", &badge), ("text_sha256", &body_sha256("hi"))]);
     assert_eq!(s, "200 OK", "{v}");
     assert_eq!((v["kind"].as_str(), v["id"].as_str(), v["content"].as_str()), (Some("postal"), Some(d.id.as_str()), Some("match")));
-    assert_eq!(v["sender"]["address"], "scout::acme.postal.bot");
+    assert_eq!(v["sender"]["address"], "scout::initech.postal.bot");
     assert_eq!(v["sender"]["fingerprint"], "SHA256:abc");
     assert_eq!(v["landed"], serde_json::json!(["terminal"]));
     // The badge's own m_ id answers the same record.

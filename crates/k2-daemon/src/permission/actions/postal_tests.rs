@@ -20,7 +20,7 @@ fn pws(ws: &Ws) -> crate::postal_routes::Ws {
 }
 
 fn claim(ws: &Ws) -> String {
-    let addr = format!("{}::acme.postal.bot", ws.handle);
+    let addr = format!("{}::initech.postal.bot", ws.handle);
     let db = k2_core::db::shared();
     let conn = db.lock();
     k2_core::postal::store::claim(&conn, &ws.id, &k2_core::postal::parse_address(&addr).unwrap(), "owner").expect("claim");
@@ -233,7 +233,7 @@ async fn an_agent_asks_for_its_address_and_an_admin_gives_it() {
     k2_core::db::init_for_tests();
     let _on = crate::postal_routes::switch_for_test(true);
     let ws = seed("pclm");
-    let addr = format!("{}::acme.postal.bot", ws.handle);
+    let addr = format!("{}::initech.postal.bot", ws.handle);
     let (s, v) = post(crate::postal_routes::CLAIM, agent_who(&ws), json!({ "address": addr.to_uppercase() }));
     assert_eq!((s.as_str(), v["asked"].as_bool(), v["action"].as_str()), ("200 OK", Some(true), Some(CLAIM)), "{v}");
     let card = card_of(&v);

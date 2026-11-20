@@ -1713,7 +1713,7 @@ mod tests {
             (403, "GET", "/cli/postal/status", vec![], None, json!({"ok":false,"state":"off","error":{"code":"postal_off","hint":"x"}}), "postal.enable"),
             (403, "POST", "/cli/postal/invite", vec![], Some(json!({"to":"ops::beta.postal.bot","why":"x"})), json!({"ok":false,"state":"off","error":{"code":"postal_off","hint":"x"}}), "postal.enable"),
             (200, "POST", "/cli/postal/enable", vec![], Some(json!({})), json!({"ok":true,"asked":true,"action":"postal.enable","card":"c1"}), "postal.enable"),
-            (200, "POST", "/cli/postal/claim", vec![], Some(json!({"address":"scout::acme.postal.bot"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.claim"),
+            (200, "POST", "/cli/postal/claim", vec![], Some(json!({"address":"scout::initech.postal.bot"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.claim"),
             (200, "POST", "/cli/postal/invite", vec![], Some(json!({"to":"ops::beta.postal.bot","why":"to review PRs"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.invite"),
             (200, "POST", "/cli/postal/decide", vec![], Some(json!({"id":"f-1","decision":"accept"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.pair.accept"),
             (200, "POST", "/cli/postal/link-p5", vec![], Some(json!({})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.link-p5"),
@@ -1775,8 +1775,8 @@ mod tests {
             Some("k2 permission request postal.invite note='to review PRs' to=ops::beta.postal.bot --why \"<what you need it for>\"")
         );
         assert_eq!(
-            cmd(200, "/cli/postal/claim", json!({"address":"scout::acme.postal.bot"}), asked.clone()).as_deref(),
-            Some("k2 permission request postal.claim address=scout::acme.postal.bot --why \"<what you need it for>\"")
+            cmd(200, "/cli/postal/claim", json!({"address":"scout::initech.postal.bot"}), asked.clone()).as_deref(),
+            Some("k2 permission request postal.claim address=scout::initech.postal.bot --why \"<what you need it for>\"")
         );
         assert_eq!(
             cmd(200, "/cli/postal/decide", json!({"id":"f-1","decision":"accept"}), asked.clone()).as_deref(),
@@ -1787,7 +1787,7 @@ mod tests {
             Some("k2 permission request postal.enable --why \"<what you need it for>\"")
         );
         let off = json!({"ok":false,"state":"off","error":{"code":"postal_off","hint":"x"}});
-        let p = teach_of(403, "POST", "/cli/postal/claim", &[], Some(json!({"address":"scout::acme.postal.bot"})), off).unwrap();
+        let p = teach_of(403, "POST", "/cli/postal/claim", &[], Some(json!({"address":"scout::initech.postal.bot"})), off).unwrap();
         assert_eq!((action_of(&p), p["approvers"].as_str()), ("postal.enable", Some("owner")), "{p}");
         // Done without a card (a person's own claim, an agent's block): nothing to ask.
         assert!(teach_of(200, "POST", "/cli/postal/claim", &[], None, json!({"ok":true,"handle":{}})).is_none());

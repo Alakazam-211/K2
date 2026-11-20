@@ -209,7 +209,10 @@ fn one(r: &Value, from: u32) -> Result<String, Raise> {
             py::str_of(or(arch_.as_ref(), &any))
         ));
     }
-    if get_in(&f, "avoid", 9).map_err(inside(9))?.is_some_and(py::truthy) {
+    if get_in(&f, "avoid", 9)
+        .map_err(inside(9))?
+        .is_some_and(py::truthy)
+    {
         let avoid = index(&f, "avoid", 10).map_err(inside(10))?;
         extra.push(format!(
             "avoids {}",
@@ -228,7 +231,10 @@ fn one(r: &Value, from: u32) -> Result<String, Raise> {
             &empty,
         )))
     };
-    if get_in(r, "moved", 12).map_err(inside(12))?.is_some_and(py::truthy) {
+    if get_in(r, "moved", 12)
+        .map_err(inside(12))?
+        .is_some_and(py::truthy)
+    {
         let s = |k: &str| index(r, k, 13).map(py::str_of).map_err(inside(13));
         let (job, from_, node, mode) = (s("job")?, s("from")?, s("node")?, s("mode")?);
         return Ok(format!(
@@ -247,7 +253,10 @@ fn one(r: &Value, from: u32) -> Result<String, Raise> {
         Some(x) if py::truthy(x) => py::str_of(x),
         _ => {
             let node = get_in(r, "node", 16).map_err(inside(16))?;
-            format!("pinned to {}", node.map_or_else(|| "None".into(), py::str_of))
+            format!(
+                "pinned to {}",
+                node.map_or_else(|| "None".into(), py::str_of)
+            )
         }
     };
     Ok(format!("job {job}: {text}"))

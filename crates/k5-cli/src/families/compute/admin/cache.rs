@@ -264,7 +264,10 @@ fn head_of(x: &Value, n: usize, line: u32) -> Result<String, Raise> {
 fn ws_of(e: &Value, what: &str, line: u32) -> Result<String, Raise> {
     match get_in(e, "workspace", line)? {
         Some(w) if py::truthy(w) => Ok(py::str_of(w)),
-        _ => Ok(format!("({what} {})", head_of(index(e, "wsKey", line)?, 8, line)?)),
+        _ => Ok(format!(
+            "({what} {})",
+            head_of(index(e, "wsKey", line)?, 8, line)?
+        )),
     }
 }
 

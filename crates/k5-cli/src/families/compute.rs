@@ -133,6 +133,14 @@ pub const VERBS: &[Verb] = &[
         words: &["tier"],
         owner: Owner::Native,
     },
+    crate::route::Verb {
+        words: &["move"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["cache"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// Whether this family's code answers `verb` (a second word).

@@ -137,7 +137,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Which::Switch => ready(switch::parse(words[0], rest)).map(Ask::Switch),
         Which::Retier => ready(retier::parse(rest)).map(Ask::Retier),
         Which::Move => ready(moves::parse(rest)).map(Ask::Move),
-        Which::Cache => ready(cache::parse(rest, writes::in_session(&settings.auth))).map(Ask::Cache),
+        Which::Cache => {
+            ready(cache::parse(rest, writes::in_session(&settings.auth))).map(Ask::Cache)
+        }
     };
     let ask = match ask {
         Ok(a) => a,

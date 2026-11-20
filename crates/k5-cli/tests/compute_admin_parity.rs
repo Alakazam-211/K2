@@ -626,7 +626,9 @@ fn compute_move() {
         // covers: compute move
         case(
             "one job, auto, with a filter",
-            &["move", "j1", "--auto", "--avoid", "mini", "--avoid", "mac-2", "--os", "linux"],
+            &[
+                "move", "j1", "--auto", "--avoid", "mini", "--avoid", "mac-2", "--os", "linux",
+            ],
             &[],
             vec![ok(moved)],
             owner_and_port,
@@ -635,7 +637,10 @@ fn compute_move() {
         ),
         case(
             "to a node, pinned, labels",
-            &["move", "j2", "--to", "linux-2", "--label", "gpu=a=b", "--label", "zone=x", "--label", "gpu=c"],
+            &[
+                "move", "j2", "--to", "linux-2", "--label", "gpu=a=b", "--label", "zone=x",
+                "--label", "gpu=c",
+            ],
             &[],
             vec![ok(pinned)],
             owner_and_port,
@@ -700,7 +705,14 @@ fn compute_move() {
         ),
         in_session(case(
             "--workspace-all in a session",
-            &["move", "--workspace-all", "--to", "linux-1", "--node", "mini"],
+            &[
+                "move",
+                "--workspace-all",
+                "--to",
+                "linux-1",
+                "--node",
+                "mini",
+            ],
             &[],
             vec![ok(r#"{"matched":0}"#)],
             port_only,
@@ -725,7 +737,15 @@ fn compute_move() {
             1,
             1,
         )),
-        case("no where", &["move", "j1"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "no where",
+            &["move", "j1"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "both --auto and --to",
             &["move", "j1", "--auto", "--to", "x"],
@@ -744,7 +764,15 @@ fn compute_move() {
             2,
             0,
         ),
-        case("no job", &["move", "--auto"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "no job",
+            &["move", "--auto"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "--tag with no scope",
             &["move", "j1", "--auto", "--tag", "ci"],
@@ -813,7 +841,16 @@ fn compute_cache() {
         ),
         case(
             "list, every filter",
-            &["cache", "ls", "--node", "mini", "--workspace", "a b", "--name", "cargo&x"],
+            &[
+                "cache",
+                "ls",
+                "--node",
+                "mini",
+                "--workspace",
+                "a b",
+                "--name",
+                "cargo&x",
+            ],
             &[],
             vec![ok(r#"{"nodes":[]}"#)],
             owner_and_port,
@@ -905,7 +942,9 @@ fn compute_cache() {
             "a size that is no number",
             &["cache"],
             &[],
-            vec![ok(r#"{"nodes":[{"node":"mini","caches":[{"workspace":"a","name":"n","bytes":"big"}]}]}"#)],
+            vec![ok(
+                r#"{"nodes":[{"node":"mini","caches":[{"workspace":"a","name":"n","bytes":"big"}]}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -956,7 +995,7 @@ fn compute_cache() {
 #[test]
 fn compute_cache_large_list() {
     let rig = Rig::new(VERB, "cachebig");
-    let rows: Vec<String> = (0..3000)
+    let rows: Vec<String> = (0..3000u64)
         .map(|i| {
             format!(
                 r#"{{"workspace":"workspace-{i}","name":"cache-number-{i}","bytes":{},"usedAt":null}}"#,

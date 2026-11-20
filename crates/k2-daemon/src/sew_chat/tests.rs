@@ -190,13 +190,21 @@ fn every_route_is_classified_post_guarded_and_an_agent_verb() {
         } else if p.starts_with("/cli/sew/on-behalf") {
             assert_eq!(floor, Floor::Member, "{p}: the person themselves (the handler decides who)");
             assert!(!crate::session_token::is_agent_verb(p), "{p}: a person's own review is never an agent verb");
+        } else if p.starts_with("/cli/sew/owner-sessions") {
+            assert_eq!(floor, Floor::Admin, "{p}: the owner or an admin, in person");
+            assert!(!crate::session_token::is_agent_verb(p), "{p}: the owner's chat sessions are never an agent verb");
         } else {
             assert_eq!(floor, Floor::Admin, "{p}: approvals and admin are owner/admin (or a Manage-Sew passport)");
             assert!(crate::session_token::is_agent_verb(p), "{p} must be served for a Manage-Sew passport");
         }
     }
-    assert_eq!(n, 20 + 13 + 11 + 9, "every chat route is counted once");
-    for p in routes::POST_ROUTES.iter().chain(super::routes_manage::POST_ROUTES).chain(super::routes_admin::POST_ROUTES) {
+    assert_eq!(n, 20 + 13 + 11 + 9 + 2, "every chat route is counted once");
+    for p in routes::POST_ROUTES
+        .iter()
+        .chain(super::routes_manage::POST_ROUTES)
+        .chain(super::routes_admin::POST_ROUTES)
+        .chain(super::routes_owner_sessions::POST_ROUTES)
+    {
         assert!(routes::is_route(p), "{p}");
     }
     // The Sew server surfaces S29 owns stay exact paths, and the pass,

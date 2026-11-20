@@ -33,6 +33,7 @@ pub mod keyring;
 pub mod link;
 pub mod maint;
 pub mod mint;
+pub mod owner_sessions;
 pub mod ratelimit;
 pub mod routes;
 

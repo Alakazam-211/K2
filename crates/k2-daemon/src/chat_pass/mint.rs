@@ -384,7 +384,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
         Err(r) => return r.into(),
     };
 
-    let mut handoff_minter: Option<String> = None;
+    let mut handoff_minter: Option<handoff::Redeemed> = None;
     let (ident, event) = match body.handoff {
         Some(code) => {
             if bearer.is_some() {
@@ -400,8 +400,8 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                 return rate_limited(ms);
             }
             match d.codes.redeem(&code, d.now) {
-                Ok(minted_by) => {
-                    handoff_minter = Some(minted_by);
+                Ok(redeemed) => {
+                    handoff_minter = Some(redeemed);
                     (
                         PassIdentity {
                             sub: identity::OWNER_SUB.into(),
@@ -562,10 +562,22 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
         }
     };
     let outcome = match &handoff_minter {
-        Some(by) => format!("redeemed:{} minted-by:{by}", claims.jti),
+        Some(r) => format!("redeemed:{} minted-by:{}", claims.jti, r.minted_by),
         None => format!("ok:{}", claims.jti),
     };
     audit(event, &ident.actor, &outcome, req.ingress, req.ip);
+    if let Some(r) = &handoff_minter {
+        // K2's own list of the owner sessions it opened (no secret: the
+        // sid is a hash). It only powers the list; a failed write never
+        // fails the pass, and `end --all` ends an unlisted session too.
+        if let Err(e) = super::owner_sessions::record_redeemed(&claims.sid, &r.minted_by, r.minted_at, d.now) {
+            k2_core::log_debug!(
+                "[chat-pass] WARN owner session {} not recorded in {}: {e}",
+                claims.sid,
+                super::owner_sessions::path().display()
+            );
+        }
+    }
 
     let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(claims.exp, 0)
         .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))

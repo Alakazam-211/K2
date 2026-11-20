@@ -129,6 +129,10 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/sew/on-behalf", Member),
     post("/cli/sew/on-behalf/review", Member),
     post("/cli/sew/owner-handoff", Owner),
+    // The owner chat sessions a handoff opened: the owner or an Admin, in
+    // person (the handler refuses passports; ending takes a vault confirm).
+    get("/cli/sew/owner-sessions", Admin),
+    post("/cli/sew/owner-sessions/revoke", Admin),
     post("/cli/sew/pass", Member),
     get("/cli/sew/preflight", Member),
     // 0.46.11 K-a: Sew's recorder. Reads: any login. Enable: an Owner or

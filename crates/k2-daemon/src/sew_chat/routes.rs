@@ -80,13 +80,15 @@ pub const POST_ROUTES: &[&str] = &[
 
 /// Every Sew chat route: agent verbs and approvals (here), community
 /// management (`routes_manage`), the admin plane and on-behalf opt-ins
-/// (`routes_admin`).
+/// (`routes_admin`), the delivery hub (`routes_hub`) and the owner's chat
+/// sessions (`routes_owner_sessions`, a person's only).
 pub fn all_routes() -> impl Iterator<Item = &'static str> {
     ROUTES
         .iter()
         .chain(super::routes_manage::ROUTES)
         .chain(super::routes_admin::ROUTES)
         .chain(super::routes_hub::ROUTES)
+        .chain(super::routes_owner_sessions::ROUTES)
         .copied()
 }
 
@@ -95,6 +97,7 @@ pub fn is_route(p: &str) -> bool {
         || super::routes_manage::ROUTES.contains(&p)
         || super::routes_admin::ROUTES.contains(&p)
         || super::routes_hub::ROUTES.contains(&p)
+        || super::routes_owner_sessions::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -102,6 +105,7 @@ pub fn is_post_route(p: &str) -> bool {
         || super::routes_manage::POST_ROUTES.contains(&p)
         || super::routes_admin::POST_ROUTES.contains(&p)
         || super::routes_hub::POST_ROUTES.contains(&p)
+        || super::routes_owner_sessions::POST_ROUTES.contains(&p)
 }
 
 /// Classify a TCP caller (the dispatcher's effective auth query).
@@ -380,6 +384,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
     }
     let r = if path.starts_with("/cli/sew/approvals") {
         super::routes_approvals::handle(path, &who, body, params)
+    } else if super::routes_owner_sessions::ROUTES.contains(&path) {
+        super::routes_owner_sessions::handle(path, &who, body)
     } else if super::routes_hub::ROUTES.contains(&path) {
         super::routes_hub::handle(path, &who, body, params)
     } else if path.starts_with("/cli/sew/admin/") || path.starts_with("/cli/sew/on-behalf") {

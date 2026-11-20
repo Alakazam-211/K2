@@ -626,9 +626,23 @@ fn handoff_redeem_single_use_expiry_cap_and_bearer_exclusive() {
     assert_eq!(v["personProof"], false);
     let jwks = r.ring.public_jwks(T0).expect("jwks");
     verify_with_jwks(v["pass"].as_str().unwrap(), &jwks, AUD, T0).expect("verifies");
+    // K2 records the owner session it opened (sid, minter, times; no code).
+    let recorded = super::owner_sessions::list(T0).expect("owner sessions");
+    assert_eq!(
+        recorded,
+        vec![super::owner_sessions::Entry {
+            sid: handoff::sid_for(&c),
+            minted_by: "owner-token".into(),
+            minted_at: T0,
+            redeemed_at: T0,
+            end: None,
+        }]
+    );
+    assert!(!std::fs::read_to_string(super::owner_sessions::path()).expect("record").contains(&c), "never the code");
     // Single use.
     let x = mint::handle_pass_with(&req(None, b.as_bytes()), &d);
     assert_eq!((x.response.status, code(&x).as_str()), ("401 Unauthorized", "handoff_invalid"));
+    assert_eq!(super::owner_sessions::list(T0).expect("owner sessions").len(), 1, "a refused redeem records nothing");
     // Browser headers still refused for a handoff.
     let c2 = codes.mint(T0, "owner-token").expect("mint");
     let b2 = serde_json::json!({ "handoff": c2 }).to_string();

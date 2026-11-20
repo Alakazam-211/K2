@@ -21,6 +21,9 @@
 //! - [`routes_hub`]: the hub's agent verbs (`unread`, `mark-read`,
 //!   `follow`, `prefs`, `wait` without an address) and the admin
 //!   `/cli/sew/admin/deliveries*` (K24).
+//! - [`routes_owner_sessions`]: `/cli/sew/owner-sessions*`, the owner chat
+//!   sessions K2 opened with a handoff code: a person lists and ends them
+//!   (ending takes a vault confirm).
 //!
 //! The data model (levels, approval modes, limits, the store) is
 //! `k2_core::sew_chat` (migration 0234).
@@ -35,9 +38,12 @@ pub mod routes_admin;
 pub mod routes_approvals;
 pub mod routes_hub;
 pub mod routes_manage;
+pub mod routes_owner_sessions;
 pub mod sew;
 
 #[cfg(test)]
 pub(crate) mod fake;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_owner_sessions;

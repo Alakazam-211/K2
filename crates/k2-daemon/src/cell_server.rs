@@ -2509,8 +2509,9 @@ mod unix_impl {
             let p = principal();
             let params: HashMap<String, String> = HashMap::new();
             for path in crate::sew_chat::routes::all_routes() {
-                if path.starts_with("/cli/sew/on-behalf") {
-                    // A person's own opt-in: never served for a passport.
+                if path.starts_with("/cli/sew/on-behalf") || path.starts_with("/cli/sew/owner-sessions") {
+                    // A person's own opt-in, or the owner's chat sessions:
+                    // never served for a passport.
                     assert!(!crate::session_token::is_agent_verb(path), "{path}");
                     let (status, _, body) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-sew");
                     assert_ne!(status, "200 OK", "{path}: {body}");

@@ -498,10 +498,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/first-run/",
         "/cli/sessions/v2/", // PTY spawn/close = RCE-adjacent
         // Sew (S28 §17 item 8, S32 §11.1): agents never get chat passes,
-        // the key routes or the install owner. Exact paths, so S30's agent
+        // the key routes or the install owner, nor see or end the owner's
+        // chat sessions. Exact paths, so S30's agent
         // verbs under `/cli/sew/chat/` stay possible.
         "/cli/sew/pass",
         "/cli/sew/owner-handoff",
+        "/cli/sew/owner-sessions",
         "/cli/sew/keys",
         // `/cli/terminal/*` mutations (write/spawn/kill/…) stay denied;
         // C2 admits exact `/cli/terminal/read` via ALLOW_EXACT below so

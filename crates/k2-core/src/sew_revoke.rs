@@ -120,14 +120,62 @@ pub fn writer_available() -> bool {
 /// Queue one op. `conn` must be inside the revoke's transaction. Without a
 /// chat target (Sew never set up here) the op is logged and dropped.
 pub fn enqueue(conn: &Connection, op: &SewSessionRevoke) -> Result<(), String> {
-    let sink = sink_slot().read().unwrap_or_else(|p| p.into_inner()).clone();
-    if let Some(f) = sink {
-        return f(conn, op);
-    }
-    if !crate::tool_hook::enqueue_session_revoke(conn, op)? {
+    if !enqueue_reporting(conn, op)? {
         crate::log_debug!("[sew_revoke] {OP_KIND} {} not queued: Sew is not set up on this box", op.label());
     }
     Ok(())
+}
+
+/// [`enqueue`], saying whether the op was queued: `Ok(false)` when Sew was
+/// never set up here (no chat target row), so nothing was written.
+pub fn enqueue_reporting(conn: &Connection, op: &SewSessionRevoke) -> Result<bool, String> {
+    let sink = sink_slot().read().unwrap_or_else(|p| p.into_inner()).clone();
+    if let Some(f) = sink {
+        f(conn, op)?;
+        return Ok(true);
+    }
+    crate::tool_hook::enqueue_session_revoke(conn, op)
+}
+
+/// Queue one op on its own, outside any other write (an owner ending owner
+/// chat sessions: `k2 hostchat owner-sessions end`), in its own Immediate
+/// `skin.db` transaction. `Ok(false)` when Sew was never set up on this
+/// box: there is no Sew session to end and nothing was queued.
+pub fn enqueue_alone(op: &SewSessionRevoke) -> Result<bool, String> {
+    if !writer_available() {
+        return Ok(false);
+    }
+    crate::skin::with_conn(|conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| format!("skin begin immediate: {e}"))?;
+        let queued = enqueue_reporting(&tx, op)?;
+        tx.commit().map_err(|e| format!("skin sew revoke commit: {e}"))?;
+        Ok(queued)
+    })
+}
+
+/// Where a queued op stands: the state (`done`, `pending`, `blocked`, ...)
+/// of S27's outbox rows for `op`'s subject queued at or after `since`
+/// (Unix seconds). A `done` row wins (Sew took an end that covers it);
+/// else the newest row's state. `None`: no such row, or no `skin.db` here
+/// (this read never creates one).
+pub fn outbox_state(op: &SewSessionRevoke, since: i64) -> Result<Option<String>, String> {
+    use rusqlite::OptionalExtension;
+    if !crate::tool_hook::skin_store_exists() {
+        return Ok(None);
+    }
+    let subject = crate::tool_hook::revoke_subject_key(op);
+    crate::skin::with_skin_conn(|conn| {
+        conn.query_row(
+            "SELECT state FROM tool_outbox
+             WHERE tool = ?1 AND op = ?2 AND subject_key = ?3 AND created_at >= ?4
+             ORDER BY (state = 'done') DESC, seq DESC LIMIT 1",
+            rusqlite::params![crate::tool_hook::CHAT_KIND, OP_KIND, subject, since],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| format!("tool_outbox revoke state: {e}"))
+    })
 }
 
 #[cfg(test)]

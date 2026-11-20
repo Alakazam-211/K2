@@ -63,6 +63,13 @@ impl RedeemError {
     }
 }
 
+/// A redeemed code: who confirmed it (actor stamp) and when it was minted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redeemed {
+    pub minted_by: String,
+    pub minted_at: i64,
+}
+
 struct Entry {
     expires_at: i64,
     used: bool,
@@ -102,8 +109,8 @@ impl Store {
     }
 
     /// Redeem `code` at `now`: marks it used before returning. Returns who
-    /// minted it.
-    pub fn redeem(&self, code: &str, now: i64) -> Result<String, RedeemError> {
+    /// minted it, and when.
+    pub fn redeem(&self, code: &str, now: i64) -> Result<Redeemed, RedeemError> {
         if !is_code_shape(code) {
             return Err(RedeemError::Unknown);
         }
@@ -116,7 +123,7 @@ impl Store {
             return Err(RedeemError::Expired);
         }
         e.used = true;
-        Ok(e.minted_by.clone())
+        Ok(Redeemed { minted_by: e.minted_by.clone(), minted_at: e.minted_at })
     }
 
     pub fn outstanding(&self, now: i64) -> usize {

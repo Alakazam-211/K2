@@ -54,6 +54,7 @@ use std::path::PathBuf;
 crate::route::shell_family!(&["vault"]);
 
 pub mod handoff;
+pub mod py;
 pub mod tools;
 pub mod verbs;
 
@@ -339,7 +340,9 @@ mod tests {
         let cli = k2_client::brand::CLI_NAME;
         assert_eq!(
             unknown_verb("nope"),
-            [format!("usage: unknown vault verb 'nope' ({cli} vault --help)")]
+            [format!(
+                "usage: unknown vault verb 'nope' ({cli} vault --help)"
+            )]
         );
         assert_eq!(unknown_verb("exec").len(), 2);
         assert_eq!(

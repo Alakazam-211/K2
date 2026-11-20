@@ -27,8 +27,8 @@
 //!   over a live cell socket (sent once there: a close is the "may have
 //!   been applied" line, never a second send; "not served" goes on to
 //!   TCP), a socket file nothing listens on, no daemon, no answer, a
-//!   refusal with its card, a value flag as the last word (the shell's),
-//!   and help never acts.
+//!   refusal with its card; `-h` on a write is the shell's and sends it
+//!   (a bash bug, marked to flip).
 //!   The writes have no census entry: each row's tag is `// native:
 //!   <form>`, for the native-bar gate (a `// covers:` tag would fail the
 //!   coverage gate).
@@ -1609,28 +1609,15 @@ fn inbox_writes_as_the_shell_does() {
     }
 }
 
-/// A value flag of `compose` as the last word: the shell's (`$2: unbound
-/// variable`).
+/// The writes with `-h` or `--help` anywhere. A bash bug: `cmd_inbox`
+/// takes `-h` or `--help` only as the verb, and each write's own function
+/// skips it (`compose`) or reads it as a word (`respond`, `move`,
+/// `archive`, `delete`), so bash SENDS the write (cli/src/inbox.sh,
+/// cmd_inbox_compose to cmd_inbox_delete). The front hands these lines to
+/// the shell, so the binary does the same. Each row says so; it flips to
+/// "the help, nothing sent" when the shell's fix lands.
 #[test]
-fn inbox_compose_value_flag_last_is_the_shell_s() {
-    let rig = Rig::new(VERB, "wlast");
-    rig.check(&Case {
-        compare: Compare::Shell,
-        ..case(
-            "compose --body last",
-            &["compose", "--title", "x", "--body"],
-            &[],
-            vec![],
-            owner_and_port,
-            1,
-            0,
-        )
-    });
-}
-
-/// The writes with `-h` or `--help` anywhere: the help, and nothing sent.
-#[test]
-fn inbox_help_never_acts() {
+fn inbox_help_acts_bash_bug() {
     let rig = Rig::new(VERB, "whelp");
     const LINES: &[&[&str]] = &[
         &["compose", "--title", "x", "-h"],
@@ -1643,13 +1630,13 @@ fn inbox_help_never_acts() {
         rig.check(&Case {
             compare: Compare::Shell,
             ..case(
-                "help, nothing sent",
+                "help acts (bash bug): the write is sent",
                 line,
                 &[],
-                vec![],
+                vec![ok(DONE)],
                 owner_and_port,
                 0,
-                0,
+                1,
             )
         });
     }

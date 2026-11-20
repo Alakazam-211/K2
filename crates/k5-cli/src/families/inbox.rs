@@ -728,7 +728,9 @@ mod tests {
             line(5),
             format!(
                 "sys.stderr.write('{}\\n')",
-                READ_NO_ANSWER.replace('\'', "\\'")
+                READ_NO_ANSWER
+                    .replace(k2_client::brand::PRODUCT_NAME, "K2")
+                    .replace('\'', "\\'")
             )
         );
         assert_eq!(

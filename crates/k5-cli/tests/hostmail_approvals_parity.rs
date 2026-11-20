@@ -240,18 +240,26 @@ fn hostmail_approvals_answer_as_the_shell_does() {
         ),
         compare(
             Compare::Traceback,
-            ok_case(
+            case(
                 "a file size that is no number",
                 &["approvals", "show", "out_1"],
-                r#"{"ok":true,"message":{"files":[{"size":"big"}]}}"#,
+                &[],
+                vec![ok(r#"{"ok":true,"message":{"files":[{"size":"big"}]}}"#)],
+                owner_and_port,
+                1,
+                1,
             ),
         ),
         compare(
             Compare::Traceback,
-            ok_case(
+            case(
                 "to that is a number",
                 &["approvals"],
-                r#"{"ok":true,"pending":[{"to":5}]}"#,
+                &[],
+                vec![ok(r#"{"ok":true,"pending":[{"to":5}]}"#)],
+                owner_and_port,
+                1,
+                1,
             ),
         ),
         case(

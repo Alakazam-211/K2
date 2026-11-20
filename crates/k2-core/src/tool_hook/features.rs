@@ -17,9 +17,13 @@
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //! | [`APP_RECORDING`], [`VOICE_RECORD_CAP`], [`RECORDING_REQUIRED`], [`MGMT_RECORDING_READS`] | Sew 0.9.0 (recording in Apps): read together as [`RecordingFeatures`] (`tool_hook::sew_recording_features()`). Sew 0.8.x reports none, so every recording change is inert there |
 //! | [`CHANNEL_MEMBER_ADD_REMOVE`], [`CHANNEL_MEMBERS_CAN_LEAVE`], [`HTTP_TYPING`], [`READ_STATE_UNREAD_COUNT`], [`MEMBER_CHANNELS_LEVEL_ONLY`], [`AGENTS_DM_WITH_BOX_PEOPLE`], [`CALL_CANCEL`] | Sew 0.10.0 (people and channels on Home, HOME1; DM call cancel): read together as [`HomeChatFeatures`] (`tool_hook::sew_home_chat_features()`). Before 0.10.0 each Home path takes its fallback |
-//! | [`FEED_HEAD`], [`PERSON_CHANNEL_NOTIFY`], [`FEED_ALL_MESSAGES`], [`FEED_READ_MARKER`], [`FEED_FROM_EXTERNAL_ID`] | Home chat pushes: read together as [`HomePushFeatures`] (`tool_hook::sew_home_push_features()`). Sew 0.10.6 has the first two; the other three wait for 0.11.0 |
+//! | [`FEED_HEAD`], [`PERSON_CHANNEL_NOTIFY`], [`FEED_ALL_MESSAGES`] | Home chat pushes: read together as [`HomePushFeatures`] (`tool_hook::sew_home_push_features()`). Sew 0.10.6 has the first two; 0.11.0 adds the third |
 //!
-//! The pin, Sew 0.10.6, reports forty-eight flags ([`SEW_0_10_6_REPORTED`]):
+//! The pin, Sew 0.11.1, reports fifty-one flags ([`SEW_0_11_1_REPORTED`]):
+//! 0.10.6's forty-eight plus 0.11.0's [`FEED_ALL_MESSAGES`],
+//! `voice_started_feed` and `voice_invites` (K2 doesn't gate on the two
+//! voice flags); 0.11.1 adds none.
+//! Sew 0.10.6 reports forty-eight flags ([`SEW_0_10_6_REPORTED`]):
 //! 0.10.0's forty-five plus `dm_read_receipts` (K2 doesn't gate on it),
 //! [`FEED_HEAD`] and [`PERSON_CHANNEL_NOTIFY`].
 //! The pin, Sew 0.10.0, reports forty-five flags: 0.9.2's (and 0.9.3's)
@@ -203,6 +207,23 @@ pub const SEW_0_10_6_REPORTED: [&str; 48] = [
     "principal_relink", "private_spaces", "read_state_unread_count", "recording_controls", "recording_required",
     "server_governed_space", "space_unbind", "turn_relay_only", "voice_channel_closing", "voice_media_path",
     "voice_record_cap", "voice_video_cap",
+];
+
+/// Sew 0.11.1's flags exactly as its published x86_64 build reports them
+/// (`sew version --json`, binary sha256 e55ae62d…6738, run on a compute node
+/// 2026-11-20; fifty-one), sorted. The pin's: tests here read it.
+#[cfg(any(test, feature = "test-util"))]
+pub const SEW_0_11_1_REPORTED: [&str; 51] = [
+    "agents_dm_with_box_people", "app_channel_create", "app_controls", "app_governed_spaces", "app_member_channels",
+    "app_mode_gate", "app_origin", "app_origins", "app_participant_links", "app_quotas", "app_recording",
+    "app_scoped_sessions", "app_session_member_role", "app_voice_channel_create", "call_cancel", "call_credential",
+    "call_stats_native", "channel_member_add_remove", "channel_members_can_leave", "dm_order_activity",
+    "dm_read_receipts", "feed_all_messages", "feed_head", "group_dm_names", "home_client", "home_client_owner_approval",
+    "http_typing", "import_identity_map", "k2_managed_avatar", "k2_managed_guard", "member_channels_level_only",
+    "member_external_id", "mgmt_recording_reads", "mgmt_voice_states", "person_channel_notify", "person_notifications",
+    "principal_erase", "principal_relink", "private_spaces", "read_state_unread_count", "recording_controls",
+    "recording_required", "server_governed_space", "space_unbind", "turn_relay_only", "voice_channel_closing",
+    "voice_invites", "voice_media_path", "voice_record_cap", "voice_started_feed", "voice_video_cap",
 ];
 
 /// The Home chat push flags, read together from ONE feature list.
@@ -740,6 +761,39 @@ mod tests {
         let push = HomePushFeatures::read(&conn, "chat").unwrap();
         assert!(push.feed_head && push.person_channel_notify, "{push:?}");
         assert!(!push.feed_all_messages, "0.11.0's wait: {push:?}");
+        assert!(RecordingFeatures::read(&conn, "chat").unwrap().any());
+        assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
+        let home = HomeChatFeatures::read(&conn, "chat").unwrap();
+        assert!(home.call_cancel && home.http_typing && home.member_channels_level_only, "{home:?}");
+    }
+
+    /// The pin, Sew 0.11.1, as its published build reports its flags
+    /// ([`SEW_0_11_1_REPORTED`]): 0.10.6's forty-eight plus 0.11.0's
+    /// `feed_all_messages`, `voice_started_feed` and `voice_invites` (0.11.1
+    /// adds none). Every Home chat push gate opens, and every older gate
+    /// stays open.
+    #[test]
+    fn sew_0_11_1_opens_every_home_push_gate() {
+        let got: Vec<String> = SEW_0_11_1_REPORTED.iter().map(|s| s.to_string()).collect();
+        let mut sorted = got.clone();
+        sorted.sort();
+        assert_eq!(got, sorted, "Sew lists its flags sorted");
+        let before: Vec<String> = SEW_0_10_6_REPORTED.iter().map(|s| s.to_string()).collect();
+        let mut want = before.clone();
+        want.extend([FEED_ALL_MESSAGES, "voice_started_feed", "voice_invites"].map(String::from));
+        want.sort();
+        assert_eq!(got, want, "K2's view of Sew's flags is what 0.11.1 reports");
+        assert_eq!(FEED_ALL_MESSAGES, "feed_all_messages", "the name Sew announced");
+        let all = HomePushFeatures { feed_head: true, person_channel_notify: true, feed_all_messages: true };
+        assert_eq!(HomePushFeatures::from_flags(&SEW_0_11_1_REPORTED), all);
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        // A box on 0.10.6, then the sweep sees 0.11.1.
+        assert!(note(&conn, "chat", &before, 1).unwrap());
+        assert!(!HomePushFeatures::read(&conn, "chat").unwrap().feed_all_messages);
+        assert!(note(&conn, "chat", &got, 2).unwrap());
+        assert_eq!(list(&conn, "chat").unwrap().len(), 51);
+        assert_eq!(HomePushFeatures::read(&conn, "chat").unwrap(), all);
         assert!(RecordingFeatures::read(&conn, "chat").unwrap().any());
         assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
         let home = HomeChatFeatures::read(&conn, "chat").unwrap();

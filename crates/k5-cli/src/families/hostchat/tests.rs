@@ -85,10 +85,21 @@ fn the_lines_say_the_brand_s_name() {
         &["upgrade", "--accept-data-loss"],
         &["act-as"],
         &["config", "--setup-url"],
+        &["enable", "--tarball"],
+        &["purge", "--confirm-hostname", ""],
     ];
     for &words in lines {
         let Plan::Bad(line) = parse(words) else {
             panic!("not a usage line: {words:?}")
+        };
+        named(&line);
+    }
+    for plan in [
+        media::parse(&["install", "--url"]),
+        users::parse(&["invite", "ann", "--role", ""]),
+    ] {
+        let Plan::Bad(line) = plan else {
+            panic!("not a usage line: {plan:?}")
         };
         named(&line);
     }
@@ -143,4 +154,25 @@ fn recording_policy_lines_say_the_brand_s_name() {
         line,
         r#"{"error": "usage", "hint": "recording.dm_enabled is on or off"}"#
     );
+}
+
+/// A value flag with no value, or an empty one: one plain line, exit 2
+/// (K2's D6), where the shell stops on its own `${2:?…}` line.
+#[test]
+fn a_value_flag_with_no_value_is_the_d6_line() {
+    let want = |flag: &str| {
+        Plan::Bad(format!(
+            "Error: {flag} needs a value (try '{CLI_NAME} hostchat --help')"
+        ))
+    };
+    assert_eq!(parse(&["enable", "--voice-url"]), want("--voice-url"));
+    assert_eq!(parse(&["upgrade", "--tarball", ""]), want("--tarball"));
+    // The first flag that has none, in the shell's order.
+    assert_eq!(
+        parse(&["status", "--public-url", "", "--bogus"]),
+        want("--public-url")
+    );
+    assert_eq!(media::parse(&["probe", "--udp"]), want("--udp"));
+    assert_eq!(media::parse(&["install", "--voice-url", ""]), want("--voice-url"));
+    assert_eq!(users::parse(&["invite", "ann", "--email"]), want("--email"));
 }

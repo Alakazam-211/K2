@@ -81,7 +81,7 @@ pub fn parse(words: &[&str]) -> Plan {
             None => i += 1,
             Some(slot) => {
                 let Some(v) = rest.get(i + 1).filter(|v| !v.is_empty()) else {
-                    return Plan::Shell;
+                    return super::needs_value(w);
                 };
                 *slot = v.to_string();
                 i += 2;

@@ -26,13 +26,15 @@
 //! (app-space, home, pass-keys, meet). `deliveries` and `agents` ride
 //! [`super::chat`], as the shell's do.
 //!
+//! A value flag with no value or an empty one is one plain line, exit 2
+//! ([`needs_value`], K2's D6: the shell stops on `${2:?…}` with a line
+//! naming its own path).
+//!
 //! Handed to the shell, before anything is printed or sent: a word that
-//! is not UTF-8, `-h` or `--help` anywhere (help never acts), a value flag
-//! with no value or an empty one (the shell stops on `${2:?…}` with a line
-//! naming its own path: the D6 class), `open` without `--print` where
-//! there are no unix modes for its private page, and a variable
-//! `_compute_send`, `_compute_fail` or `_compute_json` reads from the
-//! environment.
+//! is not UTF-8, `-h` or `--help` anywhere (help never acts), `open`
+//! without `--print` where there are no unix modes for its private page,
+//! and a variable `_compute_send`, `_compute_fail` or `_compute_json`
+//! reads from the environment.
 
 mod admin;
 mod apps;
@@ -123,6 +125,17 @@ pub fn usage(hint: &str) -> String {
 
 fn bad(hint: impl AsRef<str>) -> Plan {
     Plan::Bad(usage(hint.as_ref()))
+}
+
+/// A value flag as the last word or with an empty value, in `cmd_hostchat`,
+/// `_hostchat_media` or `_hostchat_users`. The shell stops there on its own
+/// `"${2:?<flag> <what>}"` line (the script's path and line in it, exit 1);
+/// the binary says what is missing and exits 2, K2's D6 ruling for the
+/// class (`scripts/cli-parity.sh`'s named difference `edge-usage-exit-2`).
+pub fn needs_value(flag: &str) -> Plan {
+    Plan::Bad(format!(
+        "Error: {flag} needs a value (try '{CLI_NAME} hostchat --help')"
+    ))
 }
 
 /// `cmd_hostchat`'s own verbs, after its flags.
@@ -252,9 +265,8 @@ pub fn parse(words: &[&str]) -> Plan {
         match slot {
             None => i += 1,
             Some(slot) => {
-                // `"${2:?…}"`: the shell stops with a line of its own.
                 let Some(v) = rest.get(i + 1).filter(|v| !v.is_empty()) else {
-                    return Plan::Shell;
+                    return needs_value(w);
                 };
                 *slot = v.to_string();
                 i += 2;

@@ -45,6 +45,10 @@ fn waited(c: Case) -> Case {
     }
 }
 
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
 fn one(name: &'static str, args: &'static [&'static str], body: &str) -> Case {
     case(name, args, &[], vec![ok(body)], owner_and_port, 0, 1)
 }
@@ -777,6 +781,94 @@ fn hostchat_hands_these_to_the_shell() {
         )),
     ] {
         rig.check(&c);
+    }
+}
+
+/// A value flag as the last word, or with an empty value: bash stops on
+/// its own `${2:?…}` line (`<path to cli/k2>: line <n>: 2: <flag> <what>`)
+/// and exits 1; the binary prints one plain line and exits 2 (K2's D6,
+/// `scripts/cli-parity.sh`'s named difference `edge-usage-exit-2`).
+/// Neither sends anything.
+#[test]
+fn hostchat_value_flag_with_no_value_is_the_d6_line() {
+    let rig = Rig::new(VERB, "d6");
+    let cli = k2_client::brand::CLI_NAME;
+    let rows: &[(&'static [&'static str], &str, &str)] = &[
+        (&["enable", "--tarball"], "--tarball", "--tarball FILE"),
+        (
+            &["enable", "--recovery-key-file"],
+            "--recovery-key-file",
+            "--recovery-key-file FILE",
+        ),
+        (&["enable", "--identity"], "--identity", "--identity k2|standalone"),
+        (&["enable", "--voice-url"], "--voice-url", "--voice-url wss://HOST"),
+        (
+            &["enable", "--media-tarball"],
+            "--media-tarball",
+            "--media-tarball FILE",
+        ),
+        (&["enable", "--node-ip"], "--node-ip", "--node-ip IP"),
+        (
+            &["upgrade", "--accept-binary", ""],
+            "--accept-binary",
+            "--accept-binary SHA256",
+        ),
+        (
+            &["purge", "--confirm-hostname", ""],
+            "--confirm-hostname",
+            "--confirm-hostname HOST",
+        ),
+        (&["config", "--public-url"], "--public-url", "--public-url https://HOST"),
+        (&["media", "install", "--url"], "--url", "--url wss://HOST"),
+        (&["media", "url", "--voice-url"], "--voice-url", "--url wss://HOST"),
+        (&["media", "url", "--public-url", ""], "--public-url", "--url wss://HOST"),
+        (&["media", "install", "--node-ip"], "--node-ip", "--node-ip IP"),
+        (&["media", "install", "--tarball"], "--tarball", "--tarball FILE"),
+        (&["media", "install", "--media-tarball"], "--media-tarball", "--tarball FILE"),
+        (&["media", "probe", "--udp", "", "--tcp", "ok"], "--udp", "--udp ok|fail"),
+        (&["media", "probe", "--tcp"], "--tcp", "--tcp ok|fail"),
+        (&["media", "probe", "--turn-tls"], "--turn-tls", "--turn-tls ok|fail"),
+        (
+            &["users", "invite", "ann", "--display-name"],
+            "--display-name",
+            "--display-name NAME",
+        ),
+        (&["users", "role", "ann", "--role", ""], "--role", "--role member|admin|guest"),
+        (&["user", "invite", "ann", "--email"], "--email", "--email EMAIL"),
+    ];
+    for &(args, flag, hint) in rows {
+        let c = case(
+            leak(format!("{} with no value", args.join(" "))),
+            args,
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        );
+        let name = c.name;
+        rig.prepare(Side::Bash, &c);
+        let b = rig.run(true, &c);
+        assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
+        assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
+        assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
+        assert!(
+            b.stderr.ends_with(&format!(": 2: {hint}\n")),
+            "{name}: bash's stderr: {b:?}"
+        );
+        assert!(
+            rig.read(Side::Bash, false, name).is_empty(),
+            "{name}: bash sent"
+        );
+        let (r, sent) = rig.binary(&c, false);
+        assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
+        assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");
+        assert!(r.stdout.is_empty(), "{name}: {r:?}");
+        assert_eq!(
+            r.stderr,
+            format!("Error: {flag} needs a value (try '{cli} hostchat --help')\n"),
+            "{name}"
+        );
     }
 }
 

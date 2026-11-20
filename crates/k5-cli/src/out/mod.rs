@@ -11,6 +11,7 @@
 
 pub mod json;
 pub mod py;
+pub mod pylib;
 
 use crate::exit::Exit;
 use std::io::{self, Write};

@@ -92,6 +92,7 @@ part_web() {
     step "urlencode never sends a value raw"; bash tests/cli/urlencode_bytes.sh
     step "no daemon call through a proxy or with a query token (lint)"; bash tests/cli/no_proxy_lint.sh
     step "a POST that tried the cell socket is sent once (lint)"; bash tests/cli/post_no_resend_lint.sh
+    step "k2 compute fetch gets every file of a job with many (stub daemon)"; bash tests/cli/compute_fetch_many_artifacts.sh
     step "k2 never sends a daemon request through a proxy (stub daemon)"; bash tests/cli/no_proxy_to_daemon.sh
     step "one proxy rule in Rust, the CLI's curl and its Python (parity table)"; bash tests/cli/proxy_rule_parity.sh
     step "k2 names a body file the Windows way in Git Bash"; bash tests/cli/windows_curl_body_path.sh

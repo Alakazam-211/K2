@@ -743,6 +743,9 @@ pub const SWAP_CANONICAL_MAX_BODY: usize = 256 * 1024;
 /// Handler for `POST /cli/workspace/swap-canonical` (the older door of
 /// `k2 agent harness`, which is [`crate::agent_harness`]).
 ///
+/// `project` is the workspace's path, handle, name or id
+/// (`resolve_swap_project`); the rules below hold for each alike.
+///
 /// Starts a never-chatted pinned session of `provider` and sends the
 /// handoff into that PTY. Does not resume the saved session. A handoff
 /// file is written even when the spawn fails, so the text is not lost.
@@ -811,25 +814,29 @@ pub fn handle_swap_canonical(
     if req.project.trim().is_empty() {
         return crate::cli_response::CliResponse::bad_request("project required");
     }
+    let project = match resolve_swap_project(req.project.trim()) {
+        Ok(project) => project,
+        Err(ambiguous) => return ambiguous,
+    };
     // An agent never swaps. Checked before the handoff is written, so
     // nothing lands in any workspace.
     if let Caller::Agent(agent) = caller {
-        match lookup_project_id(req.project.trim()) {
-            Some(id) if id == agent.project_id => {
-                let path = req.project.trim();
+        match &project {
+            Some((id, path)) if *id == agent.project_id => {
+                let (id, path) = (id.as_str(), path.as_str());
                 let same_harness = k2_core::workspace::canonical_swap::normalize_harness(req.provider.trim())
-                    .is_ok_and(|h| crate::agent_harness::current_harness(&id, path) == h);
+                    .is_ok_and(|h| crate::agent_harness::current_harness(id, path) == h);
                 if !same_harness {
                     swap_audit(caller, "refused:needs_person", ingress);
-                    return crate::agent_harness::needs_person(&id, req.provider.trim());
+                    return crate::agent_harness::needs_person(id, req.provider.trim());
                 }
                 // Its own chat on the same harness: a refresh. Same rule as
                 // `k2 agent refresh`.
-                if let Err(refused) = crate::chat_refresh::agent_gate(agent, &id, path, &req.notes, req.mode.trim()) {
+                if let Err(refused) = crate::chat_refresh::agent_gate(agent, id, path, &req.notes, req.mode.trim()) {
                     swap_audit(caller, "refused:refresh_needs_person", ingress);
                     return refused;
                 }
-                from = crate::chat_refresh::agent_name(&id);
+                from = crate::chat_refresh::agent_name(id);
             }
             Some(_) => {
                 swap_audit(caller, "refused:other_workspace", ingress);
@@ -849,13 +856,38 @@ pub fn handle_swap_canonical(
     }
     let mode = if req.mode.trim().is_empty() { "recent" } else { req.mode.trim() };
     let model = Some(req.model.trim()).filter(|m| !m.is_empty());
-    match run_swap(req.project.trim(), req.provider.trim(), mode, &req.notes, &from, model) {
+    // A workspace that resolved swaps at its registered path. One that
+    // didn't goes through as sent, and `run_swap` answers it as before.
+    let path = project.as_ref().map_or(req.project.trim(), |(_, path)| path.as_str());
+    match run_swap(path, req.provider.trim(), mode, &req.notes, &from, model) {
         Ok(mut done) => {
             swap_audit(caller, &format!("swapped:{}", done["provider"].as_str().unwrap_or("")), ingress);
             done["swapped"] = serde_json::Value::Bool(true);
             crate::cli_response::CliResponse::ok_json(done.to_string())
         }
         Err(refused) => refused,
+    }
+}
+
+/// The workspace a swap names, as `(projects.id, path)`. Bash sends the
+/// path; the k5 binary sends what was typed (a handle, name or id). Both go
+/// through the resolver `k2 agent harness` uses, so the caller rules below
+/// hold whichever is sent.
+///
+/// `Ok(None)` when it names no registered workspace (an unknown path or
+/// name, or a retired handle): the caller answers the same 400 an unknown
+/// path always got. `Err` is the resolver's refusal for a token more than
+/// one workspace answers to.
+fn resolve_swap_project(token: &str) -> Result<Option<(String, String)>, crate::cli_response::CliResponse> {
+    use crate::workspace_msg::WorkspaceResolve;
+    match crate::workspace_msg::resolve_workspace_detailed(token) {
+        WorkspaceResolve::Found(path) => Ok(lookup_project_id(&path).map(|id| (id, path))),
+        WorkspaceResolve::Ambiguous { handles } => Err(swap_refused(
+            "400 Bad Request",
+            crate::agent_harness::AMBIGUOUS,
+            &crate::agent_harness::ambiguous_hint(token, &handles),
+        )),
+        WorkspaceResolve::Retired { .. } | WorkspaceResolve::Miss => Ok(None),
     }
 }
 
@@ -1302,6 +1334,134 @@ mod tests {
         );
         assert_eq!(result.status, "400 Bad Request", "got: {}", result.body);
         assert!(result.body.contains("project not registered"), "got: {}", result.body);
+    }
+
+    // ── the workspace by path or by name ─────────────────────────────
+    //
+    // Bash sends the path; the k5 binary sends what was typed. The rules
+    // above hold for either, with the same answer and the same audit line.
+
+    /// A registered workspace on disk under the temp HOME, with its own
+    /// handle and display name: (id, path, handle, name).
+    fn named_workspace(home: &crate::test_support::TempHome, tag: &str) -> (String, String, String, String) {
+        let handle = format!("{tag}{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let name = format!("{handle} Team");
+        let dir = home.path().join(&handle);
+        std::fs::create_dir_all(&dir).expect("workspace dir");
+        let path = dir.to_string_lossy().to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle, default_agent) VALUES (?1, ?2, ?3, ?4, NULL)",
+            rusqlite::params![id, name, path, handle],
+        )
+        .expect("insert project");
+        (id, path, handle, name)
+    }
+
+    /// The swap's `(status, body)` for `project`.
+    fn swap_as(caller: &Caller, project: &str, provider: &str) -> (String, String) {
+        let body = serde_json::json!({ "project": project, "provider": provider }).to_string();
+        let r = handle_swap_canonical(body.as_bytes(), caller, "test");
+        (r.status.to_string(), r.body)
+    }
+
+    /// How many `canonical-swap` audit lines carry `outcome`.
+    fn swap_audits(home: &crate::test_support::TempHome, outcome: &str) -> usize {
+        let file = k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl");
+        let audit = std::fs::read_to_string(&file).expect("the audit file exists");
+        audit
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("audit line is JSON"))
+            .filter(|v| v["event"] == "canonical-swap" && v["outcome"] == outcome)
+            .count()
+    }
+
+    #[test]
+    fn swap_canonical_agent_naming_another_workspace_gets_the_by_path_refusal_and_audit() {
+        let home = crate::test_support::TempHome::new();
+        let (other_id, other_path, other_handle, other_name) = named_workspace(&home, "swo");
+        let (me, ..) = named_workspace(&home, "swm");
+        let caller = agent_of(&me);
+
+        let by_path = swap_as(&caller, &other_path, "claude");
+        assert_eq!(by_path.0, "403 Forbidden", "got: {}", by_path.1);
+        let v: serde_json::Value = serde_json::from_str(&by_path.1).expect("json");
+        assert_eq!(v["error"]["code"], "other_workspace", "got: {v}");
+        assert_eq!(v["swapped"], false, "got: {v}");
+        for token in [&other_handle, &other_name, &other_id] {
+            assert_eq!(swap_as(&caller, token, "claude"), by_path, "by {token}");
+        }
+        assert_eq!(swap_audits(&home, "refused:other_workspace"), 4, "one audit line per refusal");
+        assert!(
+            !std::path::Path::new(&other_path).join(".k2").exists(),
+            "nothing may be written into another workspace"
+        );
+    }
+
+    #[test]
+    fn swap_canonical_agent_naming_its_own_workspace_needs_a_person_as_by_path() {
+        let home = crate::test_support::TempHome::new();
+        let (own_id, own_path, own_handle, own_name) = named_workspace(&home, "swn");
+        let caller = agent_of(&own_id);
+
+        let by_path = swap_as(&caller, &own_path, "grok");
+        assert_eq!(by_path.0, "403 Forbidden", "got: {}", by_path.1);
+        let v: serde_json::Value = serde_json::from_str(&by_path.1).expect("json");
+        assert_eq!(v["error"]["code"], "harness_needs_person", "got: {v}");
+        assert_eq!(v["error"]["harness"], "grok", "got: {v}");
+        for token in [&own_handle, &own_name, &own_id] {
+            assert_eq!(swap_as(&caller, token, "grok"), by_path, "by {token}");
+        }
+        assert_eq!(swap_audits(&home, "refused:needs_person"), 4, "one audit line per refusal");
+        assert!(
+            !std::path::Path::new(&own_path).join(".k2").join("handoffs").exists(),
+            "no handoff is written for a refused swap"
+        );
+    }
+
+    #[test]
+    fn swap_canonical_unknown_name_is_the_400_an_unknown_path_gets() {
+        let home = crate::test_support::TempHome::new();
+        let (me, ..) = named_workspace(&home, "swu");
+        for caller in [agent_of(&me), Caller::Owner] {
+            for token in ["no-such-ws-swap", "/nonexistent/k2-swap-unknown-name"] {
+                let (status, body) = swap_as(&caller, token, "claude");
+                assert_eq!(status, "400 Bad Request", "{caller:?} {token}: {body}");
+                assert!(body.contains(&format!("project not registered: {token}")), "{caller:?} {token}: {body}");
+                assert!(!body.contains("\"swapped\":true"), "{caller:?} {token}: {body}");
+            }
+        }
+        let file = k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl");
+        assert!(!file.exists(), "nothing was refused for who asked, so nothing is audited");
+    }
+
+    #[test]
+    fn swap_canonical_name_two_workspaces_share_is_refused_by_the_resolver_rule() {
+        let home = crate::test_support::TempHome::new();
+        let (a_id, a_path, ..) = named_workspace(&home, "swa");
+        let (_, b_path, ..) = named_workspace(&home, "swb");
+        let shared = format!("Shared {}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for path in [&a_path, &b_path] {
+                conn.execute("UPDATE projects SET name = ?1 WHERE path = ?2", rusqlite::params![shared, path])
+                    .expect("rename");
+            }
+        }
+        for caller in [agent_of(&a_id), Caller::Owner] {
+            let (status, body) = swap_as(&caller, &shared, "claude");
+            assert_eq!(status, "400 Bad Request", "{caller:?}: {body}");
+            let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+            assert_eq!(v["error"]["code"], crate::agent_harness::AMBIGUOUS, "{caller:?}: {v}");
+            assert_eq!(v["swapped"], false, "{caller:?}: {v}");
+        }
+        assert!(
+            !std::path::Path::new(&a_path).join(".k2").join("handoffs").exists(),
+            "nothing is written for a name that picks no workspace"
+        );
     }
 }
 

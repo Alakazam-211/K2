@@ -116,17 +116,21 @@ fn audit(caller: &Caller, outcome: &str, ingress: &str) {
     ));
 }
 
+/// A workspace token more than one workspace answers to.
+pub(crate) const AMBIGUOUS: &str = "ambiguous_workspace";
+
+/// The hint for [`AMBIGUOUS`]: which workspaces matched, and how to pick one.
+pub(crate) fn ambiguous_hint(token: &str, handles: &[String]) -> String {
+    format!("'{token}' matches more than one workspace ({}); name it by handle or path", handles.join(", "))
+}
+
 /// Resolve a workspace token (handle, name, path or id).
 pub(crate) fn resolve(token: &str) -> Result<Target, CliResponse> {
     use crate::workspace_msg::WorkspaceResolve;
     let path = match crate::workspace_msg::resolve_workspace_detailed(token.trim()) {
         WorkspaceResolve::Found(p) => p,
         WorkspaceResolve::Ambiguous { handles } => {
-            return Err(refused(
-                "400 Bad Request",
-                "ambiguous_workspace",
-                format!("'{token}' matches more than one workspace ({}); name it by handle or path", handles.join(", ")),
-            ))
+            return Err(refused("400 Bad Request", AMBIGUOUS, ambiguous_hint(token, &handles)))
         }
         WorkspaceResolve::Retired { handle } => {
             return Err(refused(

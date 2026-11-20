@@ -265,3 +265,37 @@ async fn swap_canonical_on_the_same_harness_is_a_refresh_for_both_kinds_of_calle
 
     end_chat(&id);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn swap_canonical_on_its_own_workspace_by_name_is_allowed_as_by_path() {
+    // Bash sends the path, the k5 binary the name it was given. Its own
+    // main session with the switch on refreshes either way.
+    let home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let _shim = shims(&home, &["grok"]);
+    let (id, path, handle) = workspace(&home, "rfn");
+    pin(&id, "grok", &uuid::Uuid::new_v4().to_string());
+    k2_core::workspace::settings::set_agents_can_refresh_chat(&id, true).expect("on");
+    let swap = |caller: &Caller, project: &str| {
+        let r = crate::pinned_chat::handle_swap_canonical(json!({ "project": project, "provider": "grok" }).to_string().as_bytes(), caller, "test");
+        (r.status.to_string(), serde_json::from_str::<Value>(&r.body).expect("json"))
+    };
+
+    let (s, by_path) = swap(&main_session(&id), &path);
+    assert_eq!(s, "200 OK", "{by_path}");
+    let first = pinned(&id).0.expect("premint");
+    let (s, by_name) = swap(&main_session(&id), &handle);
+    assert_eq!(s, "200 OK", "{by_name}");
+    let second = pinned(&id).0.expect("premint");
+    assert_ne!(second, first, "the name moved the pin as the path did");
+    for v in [&by_path, &by_name] {
+        assert_eq!((&v["swapped"], &v["refreshed"], &v["provider"]), (&json!(true), &json!(true), &json!("grok")), "{v}");
+        assert!(v["handoffPath"].as_str().expect("handoff").starts_with(&path), "{v}");
+    }
+
+    let audit = std::fs::read_to_string(k2_core::paths::k2_home_in(home.path()).join("auth-audit.jsonl")).expect("audit");
+    let swaps = audit.lines().filter(|l| l.contains("\"event\":\"canonical-swap\"") && l.contains("\"outcome\":\"swapped:grok\"")).count();
+    assert_eq!(swaps, 2, "both are audited: {audit}");
+
+    end_chat(&id);
+}

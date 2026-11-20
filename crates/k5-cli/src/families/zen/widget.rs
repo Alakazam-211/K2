@@ -4,8 +4,12 @@
 //! `apply`, `delete`, `preview` (`--dir`, `--clear`), `history` and the
 //! arms that only print.
 //!
-//! Still the shell's ([`shells`]): `errors --follow` (it polls until
-//! stopped) and `preview --shot` (it runs the Node shot runner).
+//! `errors --follow` polls as the shell does: each answer printed, then
+//! two seconds, then the errors after its `last`, until an answer that is
+//! no answer ends it with 1 (or Ctrl+C).
+//!
+//! Still the shell's ([`shells`]): `preview --shot` (it runs the Node shot
+//! runner).
 
 use super::call::Zen;
 use super::garden::{access_on, agent_print, history};
@@ -34,14 +38,12 @@ fn dumps(pairs: Vec<(&str, Value)>) -> Vec<u8> {
         .into_bytes()
 }
 
-/// The widget lines the binary leaves to the shell: `errors` with
-/// `--follow` or `-f`, and `preview` with `--shot` or a flag that goes
-/// with it.
+/// The widget lines the binary leaves to the shell: `preview` with
+/// `--shot` or a flag that goes with it.
 pub fn shells(words: &[&str]) -> bool {
     let verb = words.first().copied().unwrap_or("");
     let rest = words.get(1..).unwrap_or_default();
     match verb {
-        "errors" => rest.iter().any(|w| matches!(*w, "--follow" | "-f")),
         "preview" => rest.iter().any(|w| {
             matches!(
                 *w,
@@ -539,9 +541,12 @@ const NO_USABLE: &str = concat!(
     " daemon on this computer"
 );
 
-/// `cmd_zen_widget_errors` (no `--follow`).
+/// `--follow`'s pause between two reads (`sleep 2`).
+pub const FOLLOW_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `cmd_zen_widget_errors`.
 fn errors(z: &mut Zen, words: &[&str]) -> Step {
-    let (mut as_json, mut clear, mut all) = (false, false, false);
+    let (mut as_json, mut clear, mut all, mut follow) = (false, false, false, false);
     let mut since = String::new();
     let mut name = "";
     let mut i = 0;
@@ -554,6 +559,7 @@ fn errors(z: &mut Zen, words: &[&str]) -> Step {
             }
             _ if w.starts_with("--since=") => since = w["--since=".len()..].into(),
             "--clear" => clear = true,
+            "--follow" | "-f" => follow = true,
             "--all" => all = true,
             "--json" => as_json = true,
             _ if w.starts_with('-') => {
@@ -590,7 +596,7 @@ fn errors(z: &mut Zen, words: &[&str]) -> Step {
         return stop(usage("Error: --all goes with --clear"));
     }
     if clear {
-        if !since.is_empty() {
+        if !since.is_empty() || follow {
             return stop(usage("Error: --clear takes no --since or --follow"));
         }
         let body = dumps(vec![
@@ -600,19 +606,41 @@ fn errors(z: &mut Zen, words: &[&str]) -> Step {
         let raw = z.session_post_soft("/cli/zen/widget/errors/clear", &body)?;
         return Ok(cleared_print(as_json, &raw).print());
     }
-    let mut q = vec![format!("widget={}", quote(name))];
-    if !since.is_empty() {
-        q.push(format!("since={since}"));
+    loop {
+        let mut q = vec![format!("widget={}", quote(name))];
+        if !since.is_empty() {
+            q.push(format!("since={since}"));
+        }
+        let q: Vec<&str> = q.iter().map(String::as_str).collect();
+        let raw = z.get_soft("/cli/zen/widget/errors", &q, false)?;
+        let exit = errors_print(as_json, &since, &raw, follow).print();
+        if exit == Exit::Refused {
+            return Ok(Exit::Error);
+        }
+        if !follow {
+            return Ok(exit);
+        }
+        if let Some(last) = follow_since(&raw) {
+            since = last;
+        }
+        std::thread::sleep(FOLLOW_PAUSE);
     }
-    let q: Vec<&str> = q.iter().map(String::as_str).collect();
-    let raw = z.get_soft("/cli/zen/widget/errors", &q, false)?;
-    let shown = errors_print(as_json, &since, &raw);
-    let exit = shown.print();
-    Ok(if exit == Exit::Refused {
-        Exit::Error
-    } else {
-        exit
-    })
+}
+
+/// `--follow`'s next `--since`: `print(json.loads(raw).get("last", 0))`
+/// as `$(…)` holds it; `None` where that Python fails (the old one stays).
+pub fn follow_since(raw: &[u8]) -> Option<String> {
+    let raw = text_of(raw);
+    let d = crate::out::pylib::json::loads(&raw).ok()?;
+    let Value::Object(pairs) = &d else {
+        return None;
+    };
+    let mut last = crate::families::get(pairs, "last")
+        .map_or_else(|| "0".to_string(), py::str_of);
+    while last.ends_with('\n') {
+        last.pop();
+    }
+    Some(last)
 }
 
 fn cleared_print(as_json: bool, raw: &[u8]) -> Shown {
@@ -690,7 +718,7 @@ fn error_text(e: &Value) -> String {
 
 /// `cmd_zen_widget_errors`'s Python: exit 3 (the shell's 1) when there
 /// is no answer to read.
-fn errors_print(as_json: bool, since: &str, raw: &[u8]) -> Shown {
+fn errors_print(as_json: bool, since: &str, raw: &[u8], follow: bool) -> Shown {
     let raw = text_of(raw);
     let mut o = Out::default();
     let Ok(d) = crate::out::pylib::json::loads(&raw) else {
@@ -702,7 +730,9 @@ fn errors_print(as_json: bool, since: &str, raw: &[u8]) -> Shown {
         return o.done(Exit::Refused);
     }
     let errs = items(g(&d, "errors"));
-    if as_json {
+    if as_json && follow {
+        o.o(json::to_string(&d, &Options::default()).unwrap_or_default());
+    } else if as_json {
         o.o(indented(&d));
     } else {
         for e in &errs {
@@ -732,7 +762,7 @@ fn errors_print(as_json: bool, since: &str, raw: &[u8]) -> Shown {
                 o.o(format!("  suggestion: {}", s(g(e, "suggestion"))));
             }
         }
-        if errs.is_empty() {
+        if errs.is_empty() && !follow {
             o.o(if since.is_empty() {
                 "no runtime errors logged".to_string()
             } else {

@@ -1997,15 +1997,52 @@ fn zen_widgets_answer_as_the_shell_does() {
             2,
             0,
         ),
-        shell(case(
-            "widget errors --follow stays the shell's",
+        case(
+            "widget errors --follow, a bad --since",
             &["widget", "errors", "board", "--follow", "--since", "x"],
             &[],
             vec![],
             owner_and_port,
             2,
             0,
-        )),
+        ),
+        case(
+            "widget errors --clear --follow",
+            &["widget", "errors", "board", "--clear", "-f"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // Two reads two seconds apart, the second after the first's
+        // `last`, then an answer that is no answer ends it with 1.
+        case(
+            "widget errors --follow",
+            &["widget", "errors", "board", "--follow"],
+            &[],
+            vec![
+                ok(r#"{"widget":"board","last":5,"errors":[{"seq":5,"at":"t5","current":true,"message":"boom","stack":"s1"}]}"#),
+                ok(r#"{"widget":"board","last":null,"errors":[]}"#),
+                ok(r#"{"widget":"board","errors":[{"seq":6,"at":"t6","current":false,"message":"old"}]}"#),
+                ok("not json"),
+            ],
+            owner_and_port,
+            1,
+            4,
+        ),
+        case(
+            "widget errors --follow --json",
+            &["widget", "errors", "board", "-f", "--json", "--since", "2"],
+            &[],
+            vec![
+                ok(r#"{"widget":"board","last":3,"errors":[{"seq":3,"at":"t3","current":true,"message":"é"}]}"#),
+                ok(r#"{"error":"gone","message":"the widget is gone"}"#),
+            ],
+            owner_and_port,
+            1,
+            2,
+        ),
         shell(case(
             "widget delete -h: help, nothing sent",
             &["widget", "delete", "board", "-h"],

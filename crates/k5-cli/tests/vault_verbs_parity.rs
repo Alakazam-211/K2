@@ -721,3 +721,53 @@ fn fetch() {
         rig.check(&c);
     }
 }
+
+/// A person's verb: the vault socket answers, the password on stdin.
+fn person(name: &'static str, args: &[&'static str], replies: Vec<Reply>, stdin: &[u8], code: i32) -> VCase {
+    let mut c = VCase::new(name, args);
+    c.vault_requests = replies.len();
+    c.vault = Some(replies);
+    c.stdin = stdin.to_vec();
+    c.code = code;
+    c
+}
+
+#[test]
+fn the_person_verbs() {
+    let rig = VRig::new();
+    let pw = |m: &str| ok(&format!(r#"{{"methods":["{m}"],"confirmText":"rotate the key"}}"#));
+    let mut reveal = person(
+        "reveal",
+        &["reveal", "API", "--scope", "server"],
+        vec![ok(r#"{"secret":{"id":"sec-9"}}"#), pw("vault-password"), ok(r#"{"token":"tk-4242"}"#), ok(r#"{"valueB64":"cmV2ZWFsZWQtdmFsdWU="}"#)],
+        b"pw-reveal-1\n",
+        0,
+    );
+    reveal.secrets = vec!["pw-reveal-1", "tk-4242", "revealed-value"];
+    let mut in_k2 = refused("reveal in a K2 terminal", &["reveal", "API"]);
+    in_k2.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
+    in_k2.code = 3;
+    let mut no_sock = refused("rekey with no vault socket", &["rekey"]);
+    no_sock.vault = None;
+    no_sock.code = 1;
+    for c in [
+        reveal,
+        person("reveal: the secret isn't there", &["reveal", "API"], vec![Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no API"}}"#.into())], b"", 4),
+        person("reveal: a wrong password", &["reveal", "API"], vec![ok(r#"{"secret":{"id":"s"}}"#), pw("vault-password"), Reply::Answer(403, r#"{"error":{"code":"bad_password","hint":"try again"}}"#.into())], b"wrong\n", 3),
+        person("reveal: Touch ID", &["reveal", "API"], vec![ok(r#"{"secret":{"id":"s"}}"#), pw("local-auth"), ok(r#"{"token":"t"}"#), ok(r#"{"valueB64":"eA=="}"#)], b"", 0),
+        person("reveal: an owner login", &["reveal", "API"], vec![ok(r#"{"secret":{"id":"s"}}"#), pw("owner-login-password"), ok(r#"{"token":"t"}"#), ok(r#"{"valueB64":"eA=="}"#)], b"amy\npw-login-77\n", 0),
+        person("kek rotate", &["kek", "rotate"], vec![pw("vault-password"), ok(r#"{"token":"t"}"#), ok("{}")], b"pw\n", 0),
+        person("rekey: this terminal", &["rekey"], vec![pw("terminal"), ok(r#"{"token":"t"}"#), ok("{}")], b"", 0),
+        person("rekey: no method", &["rekey"], vec![ok(r#"{"methods":[]}"#)], b"", 3),
+        person("rekey: confirm/start refused", &["rekey"], vec![Reply::Answer(400, r#"{"error":{"code":"bad","hint":"h"}}"#.into())], b"", 3),
+        refused("kek, no rotate", &["kek"]),
+        refused("rekey takes no flags", &["rekey", "--json"]),
+        in_k2,
+        no_sock,
+        daemon("recovery", &["recovery"], ok(r#"{"recovery":"confirmed","recoveryConfirmedAt":"t","recoveryHint":"h"}"#), 0),
+        daemon("recovery status", &["recovery", "status"], ok(r#"{"recovery":"none"}"#), 0),
+        refused("recovery, an unknown word", &["recovery", "nope"]),
+    ] {
+        rig.check(&c);
+    }
+}

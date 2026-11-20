@@ -49,8 +49,13 @@ pub const NATIVE: &[&str] = &[
 ];
 
 /// Whether the binary answers `vault <sub> <rest>` (no I/O).
-pub fn native(sub: &str, _rest: &[&str]) -> bool {
-    NATIVE.contains(&sub)
+pub fn native(sub: &str, rest: &[&str]) -> bool {
+    match sub {
+        "kek" | "rekey" | "reveal" => true,
+        // Not the recovery key's words, typed back here.
+        "recovery" => !rest.iter().any(|w| matches!(*w, "show-once" | "rotate")),
+        _ => NATIVE.contains(&sub),
+    }
 }
 
 /// `cmd_vault`'s locals after its loop.
@@ -979,6 +984,71 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             })
         }
         "grant" => grant(ctx, &o, &name, &sj, &nj)?,
+        "kek" | "rekey" => {
+            let (action, route) = if sub == "kek" {
+                need(
+                    o.pos.first().map(String::as_str) == Some("rotate"),
+                    format!("usage: {CLI} vault kek rotate"),
+                )?;
+                ("kek-rotate", "kek/rotate")
+            } else {
+                ("rekey", "rekey")
+            };
+            ctx.person_guard()?;
+            let Some(tok) = confirm::confirm_token(&mut ctx.confirm(), action, "", "") else {
+                return Err(Exit::Refused);
+            };
+            let b = confirm::with_confirm_token("{}", &tok, None).unwrap_or_default();
+            let r = ctx.sock(true, route, b.as_bytes());
+            if !r.ok() {
+                return Err(ctx.fail(&r));
+            }
+            echo("done")
+        }
+        "reveal" => {
+            need(!name.is_empty(), format!("usage: {CLI} vault reveal NAME [--scope <s>]"))?;
+            ctx.person_guard()?;
+            let base = merge(&[&sj, &nj]);
+            let sh = ctx.sock(false, &format!("show?{}", py::urlencode(&base)), b"");
+            if !sh.ok() {
+                return Err(ctx.fail(&sh));
+            }
+            let sid = match confirm::load(&sh.body).and_then(|v| idx(&idx(&v, "secret")?, "id")) {
+                Ok(id) => s(&id),
+                Err(e) => {
+                    out::stderr_line(e.text().trim_end_matches('\n'));
+                    return Err(Exit::Error);
+                }
+            };
+            let Some(tok) = confirm::confirm_token(&mut ctx.confirm(), "reveal", &sid, &name) else {
+                return Err(Exit::Refused);
+            };
+            let b = confirm::with_confirm_token(&obj(base), &tok, None).unwrap_or_default();
+            let r = ctx.sock(true, "reveal", b.as_bytes());
+            if !r.ok() {
+                return Err(ctx.fail(&r));
+            }
+            value_out(&r.body, true)
+        }
+        "recovery" => {
+            let act = o.pos.first().cloned().unwrap_or_else(|| "status".into());
+            need(
+                act == "status",
+                format!("usage: {CLI} vault recovery status|show-once|rotate"),
+            )?;
+            let r = ctx.call(false, "status", "")?;
+            render(&r.body, |v, l| {
+                let at = if t(&get(v, "recoveryConfirmedAt")?) {
+                    format!("{})", cat(" (", &idx(v, "recoveryConfirmedAt")?)?)
+                } else {
+                    String::new()
+                };
+                l.p(format!("recovery key: {}{at}", s(&get(v, "recovery")?)));
+                l.p(s(&get_or(v, "recoveryHint", py::text(""))?));
+                Ok(0)
+            })
+            .print()
+        }
         "service" => {
             need(
                 !name.is_empty(),

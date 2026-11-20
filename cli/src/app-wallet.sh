@@ -335,7 +335,9 @@ cmd_skin() {
                     fi
                     local body raw
                     # The password reaches python on stdin, never argv or the
-                    # environment (ps shows both to every process of this user).
+                    # environment (ps shows a command line to every user on
+                    # this computer, and the environment to this user's
+                    # processes).
                     body=$(printf '%s' "$pw" | K2_SKIN_USER="$username" K2_SKIN_PW_SET="$password_stdin" K2_SKIN_EMAIL="$email" K2_SKIN_APP="$app" K2_SKIN_ROLE="$role" K2_SKIN_TEMP="$temp_password" python3 -c '
 import json,os,sys
 b={"username": os.environ["K2_SKIN_USER"]}

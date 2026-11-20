@@ -223,8 +223,9 @@ _connect_device_label() {
 
 # Supabase password grant → access_token / refresh_token / email.
 # Prints the three fields one-per-line on success; errors on stderr.
-# The password reaches python on stdin, never argv or the environment
-# (ps shows both to every process of this user).
+# The password reaches python on stdin, never argv or the environment (ps
+# shows a command line to every user on this computer, and the environment to
+# this user's processes).
 _connect_supabase_sign_in() {
     local email="$1" password="$2"
     printf '%s' "$password" | EMAIL="$email" \

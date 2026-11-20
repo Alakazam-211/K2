@@ -847,7 +847,8 @@ elif d.get("autoStart") is False:
                 [ -n "$token" ] || { echo "k2 tunnel switch: --token-stdin: no token on stdin" >&2; exit 2; }
             fi
             # The token reaches python on stdin, never argv or the environment
-            # (ps shows both to every process of this user).
+            # (ps shows a command line to every user on this computer, and the
+            # environment to this user's processes).
             local body
             body=$(printf '%s' "$token" | SUB="$subdomain" START="$start" python3 -c '
 import json, os, sys

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Lint: the CLI never puts a password, or a value for _compute_json, in a
-# child process's argv or environment. ps shows both to every process of
-# the same user (and /proc/<pid>/cmdline to every user on Linux), so
-# neither is private. Secrets go on stdin (_k2_stdin_secrets, a pipe, or
-# curl's config on stdin).
+# child process's argv or environment. ps shows a command line to every user
+# on this computer, and the environment to this user's processes, so neither
+# is private. Secrets go on stdin (_k2_stdin_secrets, a pipe, or curl's
+# config on stdin).
 #
 # Reads cli/src (the parts cli/k2 is built from) and fails, naming file
 # and line, when:

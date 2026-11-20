@@ -1254,7 +1254,8 @@ for line in d.get("doctor") or []:
             local body_role=""
             case "$role" in member|voice_chat) body_role="$role" ;; esac
             # The password reaches python on stdin, never argv or the
-            # environment (ps shows both to every process of this user).
+            # environment (ps shows a command line to every user on this
+            # computer, and the environment to this user's processes).
             body=$(printf '%s' "$password" | USERNAME="$username" KEEP="$keep_password" ROLE="$body_role" \
                 SHARE_AGENTS="$share_agents" SHARE_GARDENS="$share_gardens" SHARE_SOURCES="$share_sources" \
                 FIXED="$fixed_password" FORCE="$force" python3 -c '

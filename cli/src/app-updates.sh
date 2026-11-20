@@ -848,7 +848,8 @@ EOF
             rooms_j="$(K2_GR_ROOMS="$rooms_csv" python3 -c 'import json,os; print(json.dumps([r.strip() for r in os.environ["K2_GR_ROOMS"].split(",") if r.strip()]))')"
         fi
         # The password is a secret key (_s): it reaches python on stdin, never
-        # argv or the environment (ps shows both to every process of this user).
+        # argv or the environment (ps shows a command line to every user on
+        # this computer, and the environment to this user's processes).
         _app_rt_post /cli/app/test-guest/add "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_role="$role" K2_CJ_expires="$expires" K2_CJ_password_s="$pw" K2_CJ_rooms_j="$rooms_j")"
         _app_grace_done "$json_out"
     elif [ "$action" = password ]; then

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Privacy check: a test guest's password, typed on stdin, never lands in a
-# child process's argv or environment (ps shows both to every process of
-# the same user). It reaches the request on a pipe only.
+# child process's argv or environment (ps shows a command line to every user
+# on this computer, and the environment to this user's processes). It reaches
+# the request on a pipe only.
 #
 #   k2 app user add <app> <name> --test [--room R] --password-stdin
 #   k2 app user password <name> --test --password-stdin

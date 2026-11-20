@@ -1059,8 +1059,9 @@ print()' >&2
                     done
                     printf '\033[2J\033[H' >&2
                     # The typed-back words reach python on stdin, one per
-                    # line, never argv or the environment (ps shows both to
-                    # every process of this user).
+                    # line, never argv or the environment (ps shows a command
+                    # line to every user on this computer, and the environment
+                    # to this user's processes).
                     _vault_sock_call POST recovery/confirm "$(printf '%s\n' "${words[@]}" | python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1], "words": sys.stdin.read().split("\n")[:3]}))' "$rid")"
                     words=()
                     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"

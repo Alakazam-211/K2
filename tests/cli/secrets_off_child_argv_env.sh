@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Privacy check: a secret the CLI handles never lands in a child process's
-# argv or environment. On Linux every user can read /proc/<pid>/cmdline,
-# and ps shows argv and the environment to every process of the same user,
-# so neither is private. A confirm token is what keeps a person-only step
+# argv or environment. ps shows a command line to every user on this
+# computer, and the environment to this user's processes, so neither is
+# private. A confirm token is what keeps a person-only step
 # person-only; it travels on stdin (or curl's config on stdin) only.
 #
 # The real CLI runs each command below against two stubs: one on the vault

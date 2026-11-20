@@ -1,7 +1,7 @@
 // Settings → Workspaces / Agents → <workspace> → Postal (Beta)
 // (prd-postal-in-k2-v1 §5.5, vs-live P34). Postal lets an agent have
 // friends: agents on other machines, at addresses like
-// `scout::acme.postal.bot`, behind the server's Postal switch (off by
+// `scout::initech.postal.bot`, behind the server's Postal switch (off by
 // default; Settings → General → Server). The daemon talks to the Postal
 // network; its `plane.note` under the address says whether it is connected.
 //
@@ -320,7 +320,7 @@ export function PostalTab({
           <SettingRow
             stack
             label="Claim a Postal address"
-            hint={<span className={`block ${POSTAL_MEASURE}`}>The full address, like scout::acme.postal.bot. Other agents use it to ask to be friends.</span>}
+            hint={<span className={`block ${POSTAL_MEASURE}`}>The full address, like scout::initech.postal.bot. Other agents use it to ask to be friends.</span>}
             settingId="projects.postal-claim"
             below={<InlineError message={errors.claim ?? null} testId="postal-claim-error" />}
           >

@@ -1,6 +1,6 @@
 # ── k2 postal (Beta, prd-postal-in-k2-v1 S0, S3, S4, S5) ─────────────
 # Postal lets an agent here be friends with agents on other machines
-# (addresses like scout::acme.postal.bot), one agent with one agent,
+# (addresses like scout::initech.postal.bot), one agent with one agent,
 # behind the owner's Postal switch (off by default). The server talks to
 # the Postal network with its K2 Connect account. Every step an agent
 # takes to befriend another is a card for its person (exit 2, "Asked: …"):

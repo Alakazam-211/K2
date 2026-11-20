@@ -153,23 +153,23 @@ describe('PostalTab', () => {
   it('claims the typed address', async () => {
     render(<PostalTab project={project} scope={scope} />)
     const field = await screen.findByLabelText('Postal address to claim')
-    fireEvent.change(field, { target: { value: 'ada::acme.postal.bot' } })
+    fireEvent.change(field, { target: { value: 'ada::initech.postal.bot' } })
     await act(async () => {
       fireEvent.submit(screen.getByTestId('postal-claim-form'))
     })
-    expect(cli.posts).toContainEqual({ route: 'postal/claim', body: { workspace: '/ws/ada', address: 'ada::acme.postal.bot' } })
+    expect(cli.posts).toContainEqual({ route: 'postal/claim', body: { workspace: '/ws/ada', address: 'ada::initech.postal.bot' } })
   })
 
   it('shows the address and no claim form once one is claimed', async () => {
-    cli.status = statusBody({ id: 'h1', address: 'ada::acme.postal.bot', status: 'active', createdAt: '2026-11-17T00:00:00Z' })
+    cli.status = statusBody({ id: 'h1', address: 'ada::initech.postal.bot', status: 'active', createdAt: '2026-11-17T00:00:00Z' })
     render(<PostalTab project={project} scope={scope} />)
-    expect((await screen.findByTestId('postal-address')).textContent).toBe('ada::acme.postal.bot')
+    expect((await screen.findByTestId('postal-address')).textContent).toBe('ada::initech.postal.bot')
     expect(screen.queryByTestId('postal-claim-form')).toBeNull()
   })
 
   it('Accept posts postal/decide with the request id', async () => {
     cli.friends = [
-      { id: 'f1', peer: 'scout::acme.postal.bot', status: 'pending_in', ownerName: 'Acme' },
+      { id: 'f1', peer: 'scout::initech.postal.bot', status: 'pending_in', ownerName: 'Acme' },
       { id: 'f2', peer: 'bee::hive.postal.bot', status: 'accepted' },
       { id: 'f3', peer: 'old::x.postal.bot', status: 'rejected' },
     ]
@@ -367,7 +367,7 @@ describe('PostalTab', () => {
   })
 
   async function invite(to: string): Promise<void> {
-    cli.status = statusBody({ id: 'h1', address: 'ada::acme.postal.bot', status: 'claimed', createdAt: '2026-11-17T00:00:00Z' })
+    cli.status = statusBody({ id: 'h1', address: 'ada::initech.postal.bot', status: 'claimed', createdAt: '2026-11-17T00:00:00Z' })
     render(<PostalTab project={project} scope={scope} />)
     const field = await screen.findByLabelText('Address to invite')
     fireEvent.change(field, { target: { value: to } })
@@ -405,7 +405,7 @@ describe('PostalTab', () => {
 describe('PostalTab dates, route words and the code form', () => {
   it("reads the daemon's unix-seconds dates as real dates (not 1970)", async () => {
     // The daemon sends created/updated/decided times as unix seconds.
-    cli.status = statusBody({ id: 'h1', address: 'ada::acme.postal.bot', status: 'claimed', createdAt: 1763500000 })
+    cli.status = statusBody({ id: 'h1', address: 'ada::initech.postal.bot', status: 'claimed', createdAt: 1763500000 })
     cli.friends = [
       { id: 'f2', peer: 'bee::hive.postal.bot', status: 'accepted', createdAt: 1763500000, updatedAt: 1763500000, decidedAt: 1763500000 },
     ]

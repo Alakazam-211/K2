@@ -68,7 +68,7 @@ LOG_FILE = os.environ["LOG_FILE"]
 OWNER = os.environ["OWNER"]
 PASSPORT = os.environ["PASSPORT"]
 REFUSED = '{"error":"Invalid or missing auth token"}'
-ADDR = "scout::acme.postal.bot"
+ADDR = "scout::initech.postal.bot"
 PEER = "pal::globex.postal.bot"
 # The routes the daemon's cell socket serves (session_token.rs ALLOW_EXACT).
 CELL = {"/cli/postal/" + p for p in ("status", "friends", "invite", "remove", "block", "link-p5", "claim", "decide", "enable", "send", "route")}
@@ -246,7 +246,7 @@ VERBS=(
     "status|read|postal status"
     "friends|read|postal friends"
     "settings|read|postal settings"
-    "claim|card|postal claim scout::acme.postal.bot --why reach-globex"
+    "claim|card|postal claim scout::initech.postal.bot --why reach-globex"
     "invite|card|postal invite pal::globex.postal.bot --why plan-a-launch"
     "enable|card|postal enable --why reach-globex"
     "link-p5|card|postal link-p5"
@@ -298,7 +298,7 @@ for SESSION in nosock cellsock; do
         esac
     done
     run K2_HOOK_SOCK="$marker" K2_HOOK_TOKEN="$PASSPORT" -- postal status
-    assert_contains "$SESSION: status: the same answer as the owner's" "$out" "Address:  scout::acme.postal.bot (on the Postal network)"
+    assert_contains "$SESSION: status: the same answer as the owner's" "$out" "Address:  scout::initech.postal.bot (on the Postal network)"
     run K2_HOOK_SOCK="$marker" K2_HOOK_TOKEN="$PASSPORT" -- postal disable
     assert_contains "$SESSION: disable: the daemon's own refusal" "$err" "owner_only: the server's owner turns Postal on or off"
     run K2_HOOK_SOCK="$marker" K2_HOOK_TOKEN="$PASSPORT" -- postal code pr_7
@@ -325,7 +325,7 @@ assert_eq "no passport: postal --help: nothing sent" "$(requests)" "0"
 
 # 4. Outside a session (the owner's own terminal): the owner token, as before.
 echo "== outside a session"
-for v in "status|0|postal status" "claim|0|postal claim scout::acme.postal.bot --why reach-globex" \
+for v in "status|0|postal status" "claim|0|postal claim scout::initech.postal.bot --why reach-globex" \
          "disable|0|postal disable" "code|0|postal code pr_7" "postal send|0|postal send pal::globex.postal.bot hello"; do
     name="${v%%|*}"; rest="${v#*|}"; want="${rest%%|*}"; args="${rest#*|}"
     # shellcheck disable=SC2086

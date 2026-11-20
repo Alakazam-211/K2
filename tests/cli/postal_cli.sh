@@ -113,7 +113,7 @@ class H(BaseHTTPRequestHandler):
         elif p in ("/cli/postal/remove", "/cli/postal/block"):
             out = {"ok": True, "friend": {"id": "f-2", "peer": "ops::beta.postal.bot", "status": "revoked" if p.endswith("remove") else "blocked"}}
         elif p == "/cli/postal/friends":
-            out = {"ok": True, "state": "on", "workspace": {"id": "w", "handle": "scout"}, "handle": {"address": "scout::acme.postal.bot", "status": "local"},
+            out = {"ok": True, "state": "on", "workspace": {"id": "w", "handle": "scout"}, "handle": {"address": "scout::initech.postal.bot", "status": "local"},
                    "friends": [{"id": "f-9", "peer": "lab::gamma.postal.bot", "status": "pending_in", "ownerName": "Dana", "codeWaiting": True, "updatedAt": 0},
                                {"id": "f-o", "peer": "ops::beta.postal.bot", "status": "pending_out", "updatedAt": 0}]}
         else:
@@ -173,9 +173,9 @@ assert_eq "enable: asked exits 2" "$rc" "2"
 assert_contains "enable: says a card is up" "$out" "Asked: a card is on your person's Thread (pr_7)."
 assert_contains "enable: says how the answer comes" "$out" "the answer comes back to you as a [permission:] turn."
 assert_eq "enable: the why goes" "$(last /cli/postal/enable)" 'POST {"why": "to pair with the build agent"}'
-run postal claim scout::acme.postal.bot --why "so ops can reach me"
+run postal claim scout::initech.postal.bot --why "so ops can reach me"
 assert_eq "claim: asked exits 2" "$rc" "2"
-assert_eq "claim: address and why" "$(last /cli/postal/claim)" 'POST {"address": "scout::acme.postal.bot", "why": "so ops can reach me"}'
+assert_eq "claim: address and why" "$(last /cli/postal/claim)" 'POST {"address": "scout::initech.postal.bot", "why": "so ops can reach me"}'
 run postal invite ops::beta.postal.bot --why "to review each other's PRs"
 assert_eq "invite: asked exits 2" "$rc" "2"
 assert_eq "invite: to and why" "$(last /cli/postal/invite)" "POST {\"to\": \"ops::beta.postal.bot\", \"why\": \"to review each other's PRs\"}"

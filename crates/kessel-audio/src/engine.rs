@@ -6,7 +6,9 @@
 //! - **the processing thread** (`kessel-audio-dsp`) owns [`Core`]: it
 //!   resamples, runs echo cancellation, encodes, runs the jitter buffers,
 //!   decodes and mixes. It never takes a lock it could wait on (snapshots
-//!   are published with `try_lock`) and never blocks;
+//!   are published with `try_lock`) and never blocks. On macOS and iOS it
+//!   runs real-time (see `sched`) and the capture callback wakes it; it
+//!   also wakes every `processing_poll`, and elsewhere only then;
 //! - **the control thread** (`kessel-audio-ctl`) opens and closes devices,
 //!   watches for hot-plug, turns snapshots into events, and frees memory the
 //!   processing thread hands back.
@@ -43,6 +45,17 @@ pub(crate) enum Ctrl {
     },
     /// Open (or extend) the capture stage's grace window.
     StageGrace(TransientEvent),
+    /// The audio I/O thread's OS workgroup changed (the phone backend's
+    /// unit opened, `Some`, or is closing, `None`): the processing thread
+    /// joins it or leaves (see `sched`).
+    #[cfg_attr(
+        not(any(
+            test,
+            all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        )),
+        allow(dead_code)
+    )]
+    Workgroup(Option<Box<crate::sched::Workgroup>>),
     /// Swap sonora's chain (a phone mode change); built off the processing
     /// thread.
     #[cfg_attr(
@@ -105,6 +118,8 @@ pub(crate) enum Garbage {
     Capture(#[allow(dead_code)] Box<CaptureIo>),
     Play(#[allow(dead_code)] Box<PlayIo>),
     Chain(#[allow(dead_code)] Box<Chain>),
+    /// Released on the control thread.
+    Workgroup(#[allow(dead_code)] Box<crate::sched::Workgroup>),
 }
 
 pub(crate) struct DevRequest {
@@ -326,8 +341,14 @@ impl AudioEngine {
             .name("kessel-audio-dsp".into())
             .spawn(move || match Core::with_stage(core_cfg, stage) {
                 Ok(core) => {
+                    // Real-time before the first block, and before the
+                    // device callbacks can wake it.
+                    let sched = crate::sched::promote_current();
+                    if crate::sched::WAKE_FROM_IO {
+                        s.io.set_dsp_waker(std::thread::current());
+                    }
                     let _ = ready_tx.send(Ok(()));
-                    dsp_main(s, core, poll);
+                    dsp_main(s, core, poll, sched);
                 }
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));
@@ -662,6 +683,14 @@ impl AudioEngine {
         }
     }
 
+    /// The processing thread, for the tests that read its scheduling back.
+    #[cfg(all(test, any(target_os = "macos", target_os = "ios")))]
+    pub(crate) fn dsp_pthread(&self) -> libc::pthread_t {
+        use std::os::unix::thread::JoinHandleExt;
+        // The processing thread is the first one started.
+        lock(&self.threads)[0].as_pthread_t()
+    }
+
     /// Stop the threads and close the devices. Also done on drop.
     pub fn shutdown(&self) {
         self.shared.stop.store(true, Ordering::Release);
@@ -678,7 +707,12 @@ impl Drop for AudioEngine {
     }
 }
 
-fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
+fn dsp_main(
+    shared: Arc<Shared>,
+    mut core: Core,
+    poll: Duration,
+    mut sched: crate::sched::DspSched<crate::sched::PlatformOs>,
+) {
     let mut cap: Option<Box<CaptureIo>> = None;
     let mut play: Option<Box<PlayIo>> = None;
     let mut block = [0.0f32; BLOCK_SAMPLES];
@@ -688,6 +722,9 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
     // When the last capture block went through processing (a gap of more
     // than CAPTURE_GAP resets the capture stage).
     let mut last_capture: Option<Instant> = None;
+    // The scheduling as last published (every snapshot carries it; a change
+    // is published at once).
+    let mut published_sched = sched.mode();
     const BLOCK: Duration = Duration::from_millis(10);
     const MAX_CAPTURE_BLOCKS_PER_PASS: usize = 8;
     const CAPTURE_GAP: Duration = Duration::from_secs(1);
@@ -743,6 +780,9 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
                     let _ = shared.garbage.push(Garbage::Chain(old));
                 }
                 Ctrl::StageGrace(event) => core.open_stage_grace(event),
+                Ctrl::Workgroup(wg) => sched.set_workgroup(wg, |old| {
+                    let _ = shared.garbage.push(Garbage::Workgroup(old));
+                }),
             }
         }
         while let Some(item) = shared.recv.pop() {
@@ -816,20 +856,34 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
         }
 
         // A stage bypass or retry is published at once, not with the next
-        // levels.
-        if core.take_levels_due() | core.take_stage_changed() {
+        // levels; so is a scheduling change.
+        let mode = sched.mode();
+        if core.take_levels_due() | core.take_stage_changed() | (published_sched != mode) {
             publish = true;
         }
         if publish {
             if let Ok(mut s) = shared.snapshot.try_lock() {
                 core.fill_levels(&mut s.levels);
                 core.fill_stats(&mut s.stats);
+                s.stats.dsp_scheduling = mode;
+                if let Some(stage) = s.stats.capture_stage.as_mut() {
+                    stage.dsp_scheduling = mode;
+                }
                 s.version += 1;
                 publish = false;
+                published_sched = mode;
             }
         }
-        std::thread::sleep(poll);
+        if crate::sched::WAKE_FROM_IO {
+            // Until the capture callback has more audio, or `poll` at most
+            // (playback, and the paths with no capture).
+            std::thread::park_timeout(poll);
+        } else {
+            std::thread::sleep(poll);
+        }
     }
+    // Leave any workgroup here, on this thread, before it exits.
+    drop(sched);
 }
 
 pub(crate) enum CtlBackend {

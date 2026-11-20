@@ -75,6 +75,8 @@ fn device_callbacks_do_not_allocate() {
     let (mut tx, mut rx) = rtrb::RingBuffer::<f32>::new(48_000);
     let (mut ptx, mut prx) = rtrb::RingBuffer::<f32>::new(48_000);
     let counters = IoCounters::default();
+    // Waking the processing thread is part of the capture callback.
+    counters.set_dsp_waker(std::thread::current());
     let capture: Vec<i16> = (0..1024).map(|i| (i * 7) as i16).collect();
     let mut playback = vec![0.0f32; 1024];
     for _ in 0..10_000 {

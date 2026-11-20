@@ -305,6 +305,16 @@ DSP and codec work and never waits on a lock. A control thread handles
 devices and turns snapshots into events. A full queue drops and counts; the
 audio side never blocks on the caller.
 
+On macOS and iOS the processing thread runs real-time: the QoS class
+`QOS_CLASS_USER_INTERACTIVE`, then Mach's time-constraint policy (a 10 ms
+period, 6 ms of computation, a 9 ms constraint), and on iOS with
+`Backend::OsVoiceProcessing` it joins the audio unit's OS workgroup while the
+unit runs (iOS 14 or later). The capture callback wakes it for each block.
+What the OS granted is in `Stats::dsp_scheduling` (and
+`CaptureStageStats::dsp_scheduling`): `Workgroup`, `TimeConstraint`, `Qos`
+or `None`. On Linux, Android and Windows the thread keeps the OS's default
+scheduling and polls.
+
 The Opus and echo-cancellation crates allocate small buffers per frame on the
 processing thread. The device callbacks are insulated from that by the rings
 (30 ms of playout by default).

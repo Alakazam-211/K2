@@ -349,6 +349,9 @@ pub(crate) struct Opened {
     /// Problems that didn't stop the device (no microphone access, a
     /// setting the OS refused). Raised as [`Event::Error`].
     pub(crate) warnings: Vec<AudioError>,
+    /// The OS workgroup of the device's I/O thread (iOS 14 or later), for
+    /// the processing thread to join; `None` where the OS has none.
+    pub(crate) workgroup: Option<Box<crate::sched::Workgroup>>,
 }
 
 /// The OS's side of the phone backend.
@@ -380,6 +383,8 @@ struct Live {
     generation: u64,
     capture_rate: Option<u32>,
     playback_rate: u32,
+    /// The processing thread was sent the unit's workgroup to join.
+    workgroup: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -558,6 +563,11 @@ impl Phone {
             why: Pause::Device,
             on: true,
         });
+        // The processing thread leaves the unit's workgroup (it holds its own
+        // reference, so the leave is safe after the unit is gone).
+        if live.workgroup {
+            shared.send_ctrl(Ctrl::Workgroup(None));
+        }
         // Stop the OS stream before its rings go.
         drop(live);
         shared.send_ctrl(Ctrl::CaptureIo(None));
@@ -602,12 +612,17 @@ impl Phone {
             Ok((o, capture, playback))
         });
         match r {
-            Ok((o, capture, playback)) => {
+            Ok((mut o, capture, playback)) => {
                 let has_input = capture.is_some();
                 if let Some(c) = capture {
                     shared.send_ctrl(Ctrl::CaptureIo(Some(Box::new(c))));
                 }
                 shared.send_ctrl(Ctrl::PlayIo(Some(Box::new(playback))));
+                let workgroup = o.workgroup.take();
+                let has_workgroup = workgroup.is_some();
+                if workgroup.is_some() {
+                    shared.send_ctrl(Ctrl::Workgroup(workgroup));
+                }
                 // Without a microphone the capture path stays paused: no
                 // frames, and the gap shows when one opens.
                 if has_input {
@@ -629,6 +644,7 @@ impl Phone {
                     generation: self.generation,
                     capture_rate: cr,
                     playback_rate: pr,
+                    workgroup: has_workgroup,
                 });
                 self.failed = None;
             }

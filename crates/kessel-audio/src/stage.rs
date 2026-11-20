@@ -383,6 +383,10 @@ pub struct CaptureStageStats {
     /// time, all of them (in a grace window too). Always 0 with
     /// [`StageClock::Wall`].
     pub starved: u64,
+    /// How the OS schedules the processing thread the stage runs on
+    /// (real-time on macOS and iOS), so a slow stage can be read against
+    /// it. The same as [`crate::Stats::dsp_scheduling`].
+    pub dsp_scheduling: crate::DspScheduling,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

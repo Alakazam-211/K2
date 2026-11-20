@@ -175,6 +175,8 @@ EXPECTED_DIFFS=(
     "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via; \`thread bob --from\`, also --limit and --before-seq, and \`thread unread --kind\`; \`talk ws hi --lines\`, also --from, --command, --agent, --session, --token, --answer, --respond, --answers and --wake-timeout) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Neither sends anything"
     "exec-child-env|K2 ruling 1b, vault run (db run's ruling 2a child the same)|the program a command runs in its place (vault run's helper, db run's command, named in families::vault::run and families::db::run): bash's child also gets bash's own environment changes, SHLVL and _K2_PY_PROXY_RULE (the shell CLI's Python proxy rule), and _ (the program's path) where bash's exec sets it, none of which the binary's child gets; and an exec that fails (a folder the daemon named) exits 126 on both, worded \"<path to cli/k2>: line <n>: <helper>: Is a directory\" by bash and \"exec: <helper>: Permission denied (os error 13)\" by the binary. The request each sends is the same"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
+    "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
+    "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -903,6 +905,153 @@ PY
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1
+}
+
+# check_passport_heal_once: a stub daemon whose /cli/docs/tool answers
+# by plan. gate: the first call is the auth gate's refusal (403 and its
+# exact body) after it writes the session's new passport to the secrets
+# folder, as the daemon mints one; any later call gets a tool answer.
+# words: every call is a 200 tool answer whose text holds the refusal's
+# words, after the same new passport. Both CLIs run `doc cat a.md` with the
+# old passport over TCP (no owner token). gate: bash sends the tool call
+# once and exits 3; the binary sends it twice, the old passport then the
+# new, and prints the answer (exit 0). words: one call each, the same
+# stdout, exit 0.
+check_passport_heal_once() {
+    local d="$WORK/heal" plan side rc tmp cli n first second problems=()
+    mkdir -p "$d/home/.k2" "$d/ws" "$d/secrets"
+    rm -f "$d/port" "$d/port.tmp"
+    python3 -I -c '
+import json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+d = sys.argv[1]
+GATE = b"{\"error\":\"Invalid or missing auth token\"}"
+def tool(text):
+    return json.dumps({"stdout": text, "exit": 0, "doc": {"path": "/w/a.md"}}).encode()
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n:
+            self.rfile.read(n)
+        path = self.path.split("?", 1)[0]
+        with open(os.path.join(d, "log"), "a") as f:
+            f.write("%s %s %s\n" % (self.command, path, self.headers.get("Authorization") or ""))
+        status, body = 200, b"{}"
+        if path == "/cli/docs/tool":
+            plan = open(os.path.join(d, "plan")).read().strip()
+            calls = os.path.join(d, "calls")
+            k = len(open(calls).read()) if os.path.exists(calls) else 0
+            open(calls, "a").write("x")
+            if plan == "gate" and k == 0:
+                open(os.path.join(d, "secrets", ".k2-passport"), "w").write("sessH.new2\n")
+                status, body = 403, GATE
+            elif plan == "gate":
+                body = tool("healed\n")
+            else:
+                open(os.path.join(d, "secrets", ".k2-passport"), "w").write("sessH.new2\n")
+                body = tool("Invalid or missing auth token\n")
+        self.close_connection = True
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    do_POST = do_GET
+    def log_message(self, *a):
+        pass
+s = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.server_port))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+s.serve_forever()
+' "$d" &
+    STUB_PID=$!
+    for _ in $(seq 1 100); do [ -s "$d/port" ] && break; sleep 0.05; done
+    STUB_PORT="$(cat "$d/port" 2>/dev/null || true)"
+    [ -n "$STUB_PORT" ] || { kill "$STUB_PID" 2>/dev/null || true; echo "the stub daemon didn't start"; return 1; }
+    for plan in gate words; do
+        printf '%s\n' "$plan" >"$d/plan"
+        for side in bash binary; do
+            rm -f "$d/calls" "$d/secrets/.k2-passport"
+            : >"$d/log"
+            tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+            if [ "$side" = bash ]; then cli=(bash "$ROOT/cli/k2"); else cli=("$WORK/bin/k5"); fi
+            rc=0
+            (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" K2_PORT="$STUB_PORT" \
+                K2_HOOK_TOKEN=sessH.old1 K2_SECRETS_DIR="$d/secrets" "${cli[@]}" doc cat a.md) \
+                >"$d/out.$side" 2>"$d/err.$side" </dev/null || rc=$?
+            n="$(grep -c '^POST /cli/docs/tool ' "$d/log" || true)"
+            first="$(grep '^POST /cli/docs/tool ' "$d/log" | sed -n 1p)"
+            second="$(grep '^POST /cli/docs/tool ' "$d/log" | sed -n 2p)"
+            [ "$first" = "POST /cli/docs/tool Bearer sessH.old1" ] || problems+=("$plan: $side's first tool call was '$first', want the old passport")
+            case "$plan:$side" in
+                gate:bash)
+                    [ "$rc" = 3 ] || problems+=("gate: bash exited $rc, want 3: $(head -c 300 "$d/err.bash")")
+                    [ "$n" = 1 ] || problems+=("gate: bash sent the tool call $n times, want once: the difference is gone")
+                    ;;
+                gate:binary)
+                    [ "$rc" = 0 ] || problems+=("gate: the binary exited $rc, want 0: $(head -c 300 "$d/err.binary")")
+                    [ "$n" = 2 ] || problems+=("gate: the binary sent the tool call $n times, want twice")
+                    [ "$second" = "POST /cli/docs/tool Bearer sessH.new2" ] || problems+=("gate: the binary's second tool call was '$second', want the new passport")
+                    [ "$(cat "$d/out.binary")" = healed ] || problems+=("gate: the binary printed '$(head -c 200 "$d/out.binary")', want the answer")
+                    ;;
+                words:*)
+                    [ "$rc" = 0 ] || problems+=("words: $side exited $rc, want 0: $(head -c 300 "$d/err.$side")")
+                    [ "$n" = 1 ] || problems+=("words: $side sent the tool call $n times, want once")
+                    ;;
+            esac
+        done
+        if [ "$plan" = words ]; then
+            cmp -s "$d/out.bash" "$d/out.binary" || problems+=("words: stdout differs: bash '$(head -c 200 "$d/out.bash")', the binary '$(head -c 200 "$d/out.binary")'")
+        fi
+    done
+    stop_stub
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_doc_mktemp_wording: both CLIs run `doc cat a.md` with TMPDIR
+# naming a folder that isn't there, the owner token and a stub's port on
+# disk. Both exit 2, print nothing on stdout, send nothing, and end with
+# the same two lines; the first line is mktemp's: the binary's in GNU's
+# words, bash's in its mktemp's. Where that mktemp is GNU's the two are
+# exact, so the check says the difference itself was not proven here and
+# returns 3 (the macOS job proves it).
+check_doc_mktemp_wording() {
+    local d="$WORK/doc-mktemp" side rc cli gnu bsd problems=()
+    mkdir -p "$d/home/.k2" "$d/ws"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    start_stub "$d" plain || { echo "the stub daemon didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    gnu="mktemp: failed to create directory via template '$d/no-tmp/k2doc.XXXXXX': No such file or directory"
+    bsd="mktemp: mkdtemp failed on $d/no-tmp/k2doc.XXXXXX: No such file or directory"
+    for side in bash binary; do
+        : >"$d/log"
+        if [ "$side" = bash ]; then cli=(bash "$ROOT/cli/k2"); else cli=("$WORK/bin/k5"); fi
+        rc=0
+        (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$d/no-tmp" "${cli[@]}" doc cat a.md) \
+            >"$d/out.$side" 2>"$d/err.$side" </dev/null || rc=$?
+        [ "$rc" = 2 ] || problems+=("$side exited $rc, want 2: $(head -c 300 "$d/err.$side")")
+        [ ! -s "$d/out.$side" ] || problems+=("$side printed on stdout: $(head -c 200 "$d/out.$side")")
+        [ ! -s "$d/log" ] || problems+=("$side sent: $(head -c 300 "$d/log")")
+        [ "$(wc -l <"$d/err.$side" | tr -d ' ')" = 3 ] || problems+=("$side wrote, want three lines: $(head -c 400 "$d/err.$side")")
+    done
+    stop_stub
+    cmp -s <(sed 1d "$d/err.bash") <(sed 1d "$d/err.binary") \
+        || problems+=("the lines after mktemp's differ: bash '$(sed 1d "$d/err.bash" | head -c 300)', the binary '$(sed 1d "$d/err.binary" | head -c 300)'")
+    [ "$(sed -n 1p "$d/err.binary")" = "$gnu" ] || problems+=("the binary's mktemp line: '$(sed -n 1p "$d/err.binary")', want '$gnu'")
+    case "$(sed -n 1p "$d/err.bash")" in
+        "$gnu") ;;
+        "$bsd") ;;
+        *) problems+=("bash's mktemp line is neither GNU's nor macOS's: '$(sed -n 1p "$d/err.bash")'") ;;
+    esac
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    [ "$(sed -n 1p "$d/err.bash")" = "$bsd" ] && return 0
+    echo "mktemp here is GNU's, which words its line as the binary does: the two are exact here, so the difference itself was not proven on this host (the macOS job proves it)"
+    return 3
 }
 
 for entry in "${EXPECTED_DIFFS[@]}"; do

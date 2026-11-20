@@ -739,3 +739,120 @@ fn the_lines_say_the_brand_s_name() {
         format!("in /w/a.md · v3 (stay present until {cli} doc leave)\n")
     );
 }
+
+/// A tool answer whose text holds the passport refusal's words.
+const TOOL_WORDS: &str = r#"{"stdout":"Invalid or missing auth token\n","exit":0,"doc":{"path":"/w/a.md"}}"#;
+
+/// `_doc_xfer` (a tool call, a whole file): the shell never tries a
+/// healed passport there. The binary tries one once, and only on the
+/// daemon's auth gate refusal (403 and exactly its body), which comes
+/// before any handler runs: the refused call did nothing (the stub's
+/// refusal writes only the session's re-minted passport, as the daemon
+/// does), so the same call goes again. That is `scripts/cli-parity.sh`'s
+/// named difference `passport-heal-once`. An answer the handler gave that
+/// holds the refusal's words (a 200 after the edit, a 409 conflict) is
+/// never sent again, on either side.
+#[test]
+fn xfer_heals_once_on_the_gate_s_refusal() {
+    let rig = Rig::new(VERB, "heal");
+    let reminted = |status: u16, body: &str| Reply::WriteThen {
+        file: rig.secrets.join(".k2-passport"),
+        content: format!("{HEALED}\n"),
+        status,
+        body: body.to_string(),
+    };
+    let append: &'static [&'static str] = &["append", "--text", "x", "a.md"];
+    // Parity: the words in a handler's answer are no refusal of the
+    // passport (the 409's note sends the shell's passport probe after).
+    for c in [
+        case(
+            "a 200 holding the refusal's words: sent once",
+            append,
+            &[],
+            vec![reminted(200, TOOL_WORDS)],
+            port_only,
+            0,
+            1,
+        ),
+        case(
+            "a 409 holding the refusal's words: sent once",
+            append,
+            &[],
+            vec![reminted(
+                409,
+                r#"{"error":{"code":"conflict","hint":"Invalid or missing auth token"}}"#,
+            )],
+            port_only,
+            1,
+            2,
+        ),
+    ] {
+        rig.check(&c.with_env(with_passport(&[])));
+    }
+    let auth = |log: &[String], i: usize| -> String {
+        log[i]
+            .lines()
+            .find(|l| l.starts_with("Authorization: "))
+            .unwrap_or_else(|| panic!("request {i} has no Authorization line: {}", log[i]))
+            .to_string()
+    };
+    let body = |log: &[String], i: usize| -> String {
+        log[i]
+            .split_once("\n\n")
+            .unwrap_or_else(|| panic!("request {i} has no body: {}", log[i]))
+            .1
+            .to_string()
+    };
+    // The named difference: the gate's refusal, then the call again with
+    // the healed passport, once.
+    let healed = case(
+        "the gate's refusal: the binary heals once",
+        append,
+        &[],
+        vec![heal(&rig), ok(TOOL)],
+        port_only,
+        3,
+        1,
+    )
+    .with_env(with_passport(&[]));
+    let (out, log) = rig.binary(&healed, false);
+    assert_eq!(out.code, Some(0), "the binary after its heal: {out:?}");
+    assert_eq!(out.stdout, "line one\nline two é\n", "{out:?}");
+    assert_eq!(log.len(), 2, "the refused call and its one retry:\n{log:#?}");
+    assert!(log.iter().all(|r| r.contains("POST /cli/docs/tool ")), "{log:#?}");
+    assert_eq!(auth(&log, 0), format!("Authorization: Bearer {PASSPORT}"));
+    assert_eq!(auth(&log, 1), format!("Authorization: Bearer {HEALED}"));
+    assert_eq!(body(&log, 0), body(&log, 1), "the same call, sent again");
+    assert_eq!(rig.stub().left(), 0);
+    // The shell: the refusal, never sent again (its EXIT trap's probe
+    // asks with the healed passport, which the stub's 200 takes).
+    rig.prepare(Side::Bash, &healed);
+    let out = rig.run(true, &healed);
+    let sent = rig.read(Side::Bash, false, healed.name);
+    assert_eq!(out.code, Some(3), "the shell: {out:?}");
+    let tools = sent
+        .iter()
+        .filter(|r| String::from_utf8_lossy(&r.bytes).starts_with("POST /cli/docs/tool "))
+        .count();
+    assert_eq!(tools, 1, "the shell sends the tool call once");
+    // Exactly once: a second refusal of the healed passport ends it
+    // (exit 3); the tool call is not sent a third time (the closing
+    // probe after it is a GET of its own).
+    let twice = case(
+        "the gate's refusal twice: one heal, then the refusal",
+        append,
+        &[],
+        vec![heal(&rig), Reply::Answer(403, REFUSED.into())],
+        port_only,
+        3,
+        1,
+    )
+    .with_env(with_passport(&[]));
+    let (out, log) = rig.binary(&twice, false);
+    assert_eq!(out.code, Some(3), "{out:?}");
+    let tools: Vec<&String> = log
+        .iter()
+        .filter(|r| r.contains("POST /cli/docs/tool "))
+        .collect();
+    assert_eq!(tools.len(), 2, "one call and one retry, no more:\n{log:#?}");
+}

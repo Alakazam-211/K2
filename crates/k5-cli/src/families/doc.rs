@@ -15,7 +15,8 @@
 //! 4. The verb's words, the common flags (`_doc_parse`), the request
 //!    (`cli_send_json`, or `_doc_xfer` for whole files and tool calls:
 //!    the cell socket with the passport, else loopback with the token; a
-//!    POST again over TCP only after a failed connect or "not served"),
+//!    POST again over TCP only after a failed connect or "not served"; a
+//!    healed passport once on the auth gate's refusal, [`Ctx::xfer_raw`]),
 //!    any status but 200 the refusal reader ([`fail`]), then the reader's
 //!    lines ([`print`], [`tool`], [`more`]).
 //!
@@ -351,6 +352,16 @@ impl Ctx {
 
     /// `_doc_xfer`: the same channels at most 300 s each, the answer's
     /// bytes as they came; the permission note only on a refusal.
+    ///
+    /// The shell's `_doc_xfer` never tries a healed passport. The binary
+    /// tries one once, and only on the daemon's auth gate refusal
+    /// ([`crate::transport::client::gate_refusal`]): every doc route
+    /// (`tool`, `write`, `export`, `show`, `export/fetch`) is refused
+    /// there before its handler runs, so nothing was done and the call
+    /// goes again. An answer the handler gave that holds the refusal's
+    /// words (a document's text, a conflict) is never sent again, as the
+    /// shell's. That is `scripts/cli-parity.sh`'s named difference
+    /// `passport-heal-once`.
     pub fn xfer_raw(
         &mut self,
         post: bool,
@@ -360,7 +371,9 @@ impl Ctx {
         let passport = self.client().passport().is_some();
         let before = self.client().send_max_time;
         self.client().send_max_time = Some(XFER_MAX_TIME);
+        self.client().heal_on_gate_only = true;
         let r = self.client().send_json(post, route, payload);
+        self.client().heal_on_gate_only = false;
         self.client().send_max_time = before;
         match r {
             Ok(r) => {
@@ -407,7 +420,10 @@ impl Ctx {
     /// `_doc_tmp`: `mktemp -d "${TMPDIR:-/tmp}/k2doc.XXXXXX"` once (the
     /// shell keeps whole-file bodies and answers there); where it can't be
     /// made, mktemp's line and `_doc_die tmp`, nothing sent. The binary
-    /// keeps them in memory, so the folder goes again at once.
+    /// keeps them in memory, so the folder goes again at once. Its line
+    /// is in GNU mktemp's words wherever it runs; macOS's mktemp words it
+    /// its own way (`scripts/cli-parity.sh`'s named difference
+    /// `doc-mktemp-wording`).
     pub fn tmp(&mut self) -> Result<(), Exit> {
         if self.tmp_made {
             return Ok(());

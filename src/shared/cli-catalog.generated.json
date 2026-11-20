@@ -1761,11 +1761,11 @@
    {
     "name": "connect",
     "usage": "k2 connect <login|status|logout> ...",
-    "description": "Pair a purchased k2.dev subdomain to this device: account login (Supabase email/password or --token JWT), pick subdomain, write tunnel config, start tunnel. Nested Pro subdomains stay under k2 publish."
+    "description": "Pair a purchased k2.dev subdomain to this device: account login (Supabase email/password, or an access JWT with --token-stdin), pick subdomain, write tunnel config, start tunnel. Nested Pro subdomains stay under k2 publish."
    },
    {
     "name": "connect login",
-    "usage": "k2 connect login [--email <e>] [--token <jwt>] [--subdomain <label>]",
+    "usage": "k2 connect login [--email <e>] [--token-stdin] [--subdomain <label>]",
     "description": "Sign in to k2.dev, list purchased subdomains, bind tunnel token via POST /cli/tunnel/config, start tunnel. Password is never stored (only ~/.k2/connect-account.json access/refresh tokens, 0600)."
    },
    {

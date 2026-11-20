@@ -79,12 +79,12 @@ _connect_usage() {
 k2 connect — pair a purchased k2.dev subdomain to this device
 
 USAGE
-  k2 connect login [--email <e>] [--token <jwt>] [--subdomain <label>]
+  k2 connect login [--email <e>] [--token-stdin] [--subdomain <label>]
   k2 connect status
   k2 connect logout
 
 COMMANDS
-  login     Sign in to k2.dev (email+password or --token JWT), pick a
+  login     Sign in to k2.dev (email+password or a JWT on stdin), pick a
             purchased subdomain, write tunnel config, start the tunnel.
   status    Show paired subdomain + tunnel/account state.
   logout    Clear the saved account session (~/.k2/connect-account.json).
@@ -92,7 +92,10 @@ COMMANDS
 
 FLAGS (login)
   --email <e>         Account email (prompted if omitted with password flow)
-  --token <jwt>       Use an access JWT instead of email/password (scripted)
+  --token-stdin       Read an access JWT from stdin instead of email/password
+                      (scripted)
+  --token <jwt>       The same on the command line, where every account on
+                      this computer can see it while the command runs
   --subdomain <label> Skip the interactive picker
   --help, -h          This help
 
@@ -153,12 +156,15 @@ _connect_account_save() {
     local access="$1" refresh="$2" email="$3"
     local path
     path="$(_connect_account_file)"
-    ACCESS="$access" REFRESH="$refresh" EMAIL="$email" PATH_OUT="$path" python3 -c '
-import json, os, stat
+    # The two tokens reach python on stdin, one per line, never argv or the
+    # environment.
+    printf '%s\n%s' "$access" "$refresh" | EMAIL="$email" PATH_OUT="$path" python3 -c '
+import json, os, stat, sys
 path = os.environ["PATH_OUT"]
+access, _, refresh = sys.stdin.read().partition("\n")
 data = {
-    "access_token": os.environ.get("ACCESS") or "",
-    "refresh_token": os.environ.get("REFRESH") or "",
+    "access_token": access,
+    "refresh_token": refresh,
     "email": os.environ.get("EMAIL") or "",
 }
 tmp = path + ".tmp"
@@ -271,8 +277,10 @@ print(email)
 # List purchased subdomains for the access token. Prints JSON array.
 _connect_list_subdomains() {
     local access="$1"
-    ACCESS="$access" SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
+    # The access token reaches python on stdin, never argv or the environment.
+    printf '%s' "$access" | SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
 import json, os, sys, urllib.request, urllib.error
+access = sys.stdin.read()
 url = (
     os.environ["SUPA_URL"].rstrip("/")
     + "/rest/v1/subdomains?select=label,status,tunnel_token,claimed_by,claimed_at,claimed_label"
@@ -280,7 +288,7 @@ url = (
 req = urllib.request.Request(url, method="GET", headers={
     "apikey": os.environ["SUPA_KEY"],
     "User-Agent": os.environ.get("K2_UA") or "k2-cli",
-    "Authorization": "Bearer " + os.environ["ACCESS"],
+    "Authorization": "Bearer " + access,
 })
 try:
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -314,9 +322,11 @@ print(json.dumps(rows))
 # hard "held by another device"; soft failures warn and continue.
 _connect_claim_subdomain() {
     local access="$1" label="$2" device_id="$3" device_label="$4"
-    ACCESS="$access" LABEL="$label" DID="$device_id" DLBL="$device_label" \
+    # The access token reaches python on stdin, never argv or the environment.
+    printf '%s' "$access" | LABEL="$label" DID="$device_id" DLBL="$device_label" \
     SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
 import json, os, sys, urllib.request, urllib.error
+access = sys.stdin.read()
 url = os.environ["SUPA_URL"].rstrip("/") + "/rest/v1/rpc/claim_subdomain"
 body = json.dumps({
     "p_label": os.environ["LABEL"],
@@ -326,7 +336,7 @@ body = json.dumps({
 req = urllib.request.Request(url, data=body, method="POST", headers={
     "apikey": os.environ["SUPA_KEY"],
     "User-Agent": os.environ.get("K2_UA") or "k2-cli",
-    "Authorization": "Bearer " + os.environ["ACCESS"],
+    "Authorization": "Bearer " + access,
     "Content-Type": "application/json",
 })
 try:
@@ -363,24 +373,26 @@ if holder and holder != os.environ["DID"]:
 }
 
 cmd_connect_login() {
-    local email="" token="" subdomain="" password=""
+    local email="" token="" subdomain="" password="" token_stdin=0 token_flag=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --email)
                 email="${2:-}"; shift 2 || { echo "Error: --email needs a value" >&2; return 2; } ;;
             --email=*)
                 email="${1#--email=}"; shift ;;
+            --token-stdin)
+                token_stdin=1; shift ;;
             --token)
-                token="${2:-}"; shift 2 || { echo "Error: --token needs a value" >&2; return 2; } ;;
+                token="${2:-}"; token_flag="--token"; shift 2 || { echo "Error: --token needs a value" >&2; return 2; } ;;
             --token=*)
-                token="${1#--token=}"; shift ;;
+                token="${1#--token=}"; token_flag="--token"; shift ;;
             --subdomain)
                 subdomain="${2:-}"; shift 2 || { echo "Error: --subdomain needs a value" >&2; return 2; } ;;
             --subdomain=*)
                 subdomain="${1#--subdomain=}"; shift ;;
             --password|--pass)
                 echo "Error: passwords must not be passed on the command line." >&2
-                echo "Use the interactive prompt, or --token <access_jwt> for scripting." >&2
+                echo "Use the interactive prompt, or --token-stdin for scripting." >&2
                 return 2
                 ;;
             --help|-h)
@@ -400,6 +412,18 @@ cmd_connect_login() {
 
     _k2_refuse_if_airgap
 
+    # The access JWT off argv: --token-stdin reads one line from stdin.
+    # --token <jwt> still works for now, with a note: a command line is
+    # visible to every account on this computer while the command runs.
+    if [ "$token_stdin" = 1 ]; then
+        [ -z "$token_flag" ] || { echo "Error: --token-stdin or --token, not both" >&2; return 2; }
+        _cli_read_secret_stdin "Access JWT: "
+        token="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
+        [ -n "$token" ] || { echo "Error: --token-stdin: no token on stdin" >&2; return 2; }
+    elif [ -n "$token_flag" ]; then
+        echo "note: --token is visible to every account on this computer while the command runs; use --token-stdin" >&2
+    fi
+
     local access_token="" refresh_token="" account_email=""
     if [ -n "$token" ]; then
         access_token="$token"
@@ -417,7 +441,7 @@ cmd_connect_login() {
             IFS= read -r email || true
         fi
         if [ -z "$email" ]; then
-            echo "Error: email is required (or pass --token <access_jwt>)." >&2
+            echo "Error: email is required (or pass --token-stdin with an access JWT)." >&2
             return 2
         fi
         password="$(python3 -c '
@@ -711,13 +735,16 @@ cmd_connect_logout() {
     _connect_account_read
     access="$_CONNECT_ACC_ACCESS"
     if [ -n "$access" ]; then
-        ACCESS="$access" SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
-import os, urllib.request
+        # The access token reaches python on stdin, never argv or the
+        # environment.
+        printf '%s' "$access" | SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
+import os, sys, urllib.request
+access = sys.stdin.read()
 url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/logout"
 req = urllib.request.Request(url, data=b"", method="POST", headers={
     "apikey": os.environ["SUPA_KEY"],
     "User-Agent": os.environ.get("K2_UA") or "k2-cli",
-    "Authorization": "Bearer " + os.environ["ACCESS"],
+    "Authorization": "Bearer " + access,
 })
 try:
     urllib.request.urlopen(req, timeout=10)

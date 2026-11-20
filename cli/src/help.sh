@@ -255,7 +255,7 @@ PUBLISH (host a process on this machine, optionally a nested URL)
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
 CONNECT (pair purchased k2.dev subdomain — headless account login)
-  connect login [--email e] [--token jwt] [--subdomain label]
+  connect login [--email e] [--token-stdin] [--subdomain label]
                                                 Sign in → pick subdomain → start tunnel
   connect status                                Paired subdomain + tunnel/account state
   connect logout                                Clear ~/.k2/connect-account.json (not tunnel)

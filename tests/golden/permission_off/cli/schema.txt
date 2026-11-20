@@ -2781,18 +2781,19 @@ exit: 0
     {
       "name": "connect",
       "usage": "k2 connect <login|status|logout> ...",
-      "description": "Pair a purchased k2.dev subdomain to this device: account login (Supabase email/password or --token JWT), pick subdomain, write tunnel config, start tunnel. Nested Pro subdomains stay under k2 publish.",
+      "description": "Pair a purchased k2.dev subdomain to this device: account login (Supabase email/password, or an access JWT with --token-stdin), pick subdomain, write tunnel config, start tunnel. Nested Pro subdomains stay under k2 publish.",
       "args": [],
       "flags": []
     },
     {
       "name": "connect login",
-      "usage": "k2 connect login [--email <e>] [--token <jwt>] [--subdomain <label>]",
+      "usage": "k2 connect login [--email <e>] [--token-stdin] [--subdomain <label>]",
       "description": "Sign in to k2.dev, list purchased subdomains, bind tunnel token via POST /cli/tunnel/config, start tunnel. Password is never stored (only ~/.k2/connect-account.json access/refresh tokens, 0600).",
       "args": [],
       "flags": [
         {"name": "--email", "arg": "e", "description": "Account email (prompted if omitted)."},
-        {"name": "--token", "arg": "jwt", "description": "Access JWT instead of email/password (scripted)."},
+        {"name": "--token-stdin", "arg": null, "description": "Read an access JWT from stdin instead of email/password (scripted)."},
+        {"name": "--token", "arg": "jwt", "description": "The access JWT on the command line, where every account on this computer can see it while the command runs: use --token-stdin."},
         {"name": "--subdomain", "arg": "label", "description": "Skip the interactive picker."}
       ]
     },

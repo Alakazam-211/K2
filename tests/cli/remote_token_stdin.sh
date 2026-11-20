@@ -7,7 +7,7 @@
 # stderr.
 #
 # Covered: k2 clone preview --host H --token-stdin, k2 doc cores --host H
-# --token-stdin.
+# --token-stdin, k2 connect login --token-stdin (the k2.dev access JWT).
 #
 # The real CLI runs against a stub server on TCP that records each request
 # (method, path, Authorization header, body). Every python3, curl and env
@@ -88,6 +88,14 @@ class H(http.server.BaseHTTPRequestHandler):
                                 "auth": self.headers.get("Authorization", ""), "body": raw}) + "\n")
         if path == "/cli/clone/preview":
             return self._answer(200, {"workspace": "ws1", "secrets": {"rows": []}, "callerCanCopySecrets": True})
+        if path == "/rest/v1/subdomains":
+            return self._answer(200, [{"label": "acme", "status": "active", "tunnel_token": "k2tt_TUNNEL_CHILDTEST"}])
+        if path == "/rest/v1/rpc/claim_subdomain":
+            return self._answer(200, [{"claimed": True}])
+        if path == "/cli/tunnel/config":
+            return self._answer(200, {"tokenSet": True, "subdomain": "acme"})
+        if path == "/cli/tunnel/start":
+            return self._answer(200, {"public_url": "https://acme.k2.dev"})
         if path == "/cli/docs/cores":
             return self._answer(200, {"cores": [{"core": "markdown", "on": True}]})
         return self._answer(200, {"ok": True})
@@ -194,6 +202,23 @@ case "$OUT" in *"--token-stdin                remote token on stdin"*) ok "clone
 token_case "doc cores" /cli/docs/cores doc cores --host "$REMOTE" --json
 run_k2 "" doc cores --help
 case "$OUT" in *"[--host <server> [--token-stdin]]"*) ok "doc cores help: --token-stdin is shown" ;; *) bad "doc cores help: no --token-stdin" ;; esac
+
+# 3. k2 connect login --subdomain acme: the k2.dev access JWT (the account
+#    server is the stub too).
+export K2_CONNECT_DB_URL="$REMOTE/"
+token_case "connect login" /rest/v1/subdomains connect login --subdomain acme
+run_k2 "$TOKEN"$'\n' connect login --subdomain acme --token-stdin
+expect_eq "connect login --token-stdin: the result line" "$OUT" "✓ live at https://acme.k2.dev"
+assert_sent "connect login --token-stdin (the claim)" /rest/v1/rpc/claim_subdomain
+if grep -Fq "$TOKEN" "$HOME/.k2/connect-account.json"; then ok "connect login --token-stdin: the account file keeps the token"; else bad "connect login --token-stdin: the account file has no token"; fi
+fresh
+run_k2 "" connect logout
+expect_eq "connect logout: exit 0" "$RC" "0"
+assert_sent "connect logout" /auth/v1/logout
+assert_off_children "connect logout (the saved token)"
+run_k2 "" connect --help
+case "$ERR$OUT" in *"k2 connect login [--email <e>] [--token-stdin] [--subdomain <label>]"*) ok "connect help: --token-stdin is shown" ;; *) bad "connect help: no --token-stdin" ;; esac
+unset K2_CONNECT_DB_URL
 
 echo "remote_token_stdin: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -72,7 +72,6 @@ EXCEPTIONS=(
     "msg-whoami-done.sh|--secret|the NAME of a vault secret"
     "sources.sh|--secret|the NAME of a vault secret"
     "postal.sh|--code|the 6-digit comparison code both sides show, not a secret"
-    "connect-account.sh|--token|FOLLOW-UP for K2: the account token rides k2's own argv (k2 connect login --token); needs --token-stdin"
 )
 
 lint() { # lint <dir> [file|name|why ...]: one line per problem; exit 1 when any

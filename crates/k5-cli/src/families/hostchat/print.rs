@@ -407,21 +407,25 @@ fn status(p: &mut Py, v: &Value) -> R<()> {
         p.line("owner in Sew", &g(v, "owner", 55)?);
     }
     let sh = sub(&sub(v, "backup", 56)?, "ship", 56)?;
-    let kind = g(&sh, "kind", 57)?;
-    if is(&kind, "box-backup") {
+    // The box backup (K2 backups, restic) carrying the folder: an
+    // external ship, its own line.
+    let ex = sub(&sh, "external", 57)?;
+    if t(&g(&ex, "line", 58)?) {
+        p.line("off-box copy", &g(&ex, "line", 59)?);
+    } else if is(&g(&sh, "kind", 60)?, "box-backup") {
         let line = or(
-            g(&sub(&sh, "boxBackup", 58)?, "line", 58)?,
+            g(&sub(&sh, "boxBackup", 61)?, "line", 61)?,
             st("the box backup (k2-backup)"),
         );
         p.line("off-box copy", &line);
-    } else if t(&kind) {
-        if is(&g(&sh, "kind", 60)?, "dir") {
-            p.line("off-box copy", &g(&sh, "path", 60)?);
+    } else if t(&g(&sh, "kind", 62)?) {
+        if is(&g(&sh, "kind", 63)?, "dir") {
+            p.line("off-box copy", &g(&sh, "path", 63)?);
         } else {
             p.line_s("off-box copy", "none (backups stay on this box)");
         }
-        p.line("last copied", &g(&sh, "lastShippedId", 61)?);
-        p.line("copy error", &g(&sh, "lastError", 62)?);
+        p.line("last copied", &g(&sh, "lastShippedId", 64)?);
+        p.line("copy error", &g(&sh, "lastError", 65)?);
     }
     let mi = sub(v, "mirror", 63)?;
     if t(&g(&mi, "kind", 64)?) {

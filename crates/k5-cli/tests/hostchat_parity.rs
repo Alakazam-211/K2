@@ -95,6 +95,23 @@ fn hostchat_reads_answer_as_the_shell_does() {
             &["status"],
             r#"{"state":"running","backup":{"ship":{"kind":"box-backup"}},"mirror":{"kind":"dir","path":"/m"}}"#,
         ),
+        // The box backup carrying the folder: an external ship, its line
+        // first, nothing else of the ship.
+        one(
+            "status: an external ship",
+            &["status"],
+            r#"{"state":"running","backup":{"ship":{"kind":"external","setting":"none","external":{"line":"K2 backups (restic), last 3 h ago","fresh":true},"lastShippedId":"x"}}}"#,
+        ),
+        one(
+            "status: an external ship with no line",
+            &["status"],
+            r#"{"state":"running","backup":{"ship":{"kind":"none","external":{"fresh":false},"lastError":"e"}}}"#,
+        ),
+        tb(
+            "status: an external ship that is no object",
+            &["status"],
+            r#"{"state":"running","backup":{"ship":{"external":"restic"}}}"#,
+        ),
         one(
             "preflight, a relative tarball",
             &["preflight", "--tarball", "sew 1.tgz"],

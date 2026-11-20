@@ -28,6 +28,8 @@ mod rows;
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 /// Who can fix it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,7 +155,7 @@ impl Refusal {
 
     /// `k2 explain <id>`.
     pub fn explain_cmd(&self) -> String {
-        format!("k2 explain {}", self.id)
+        format!("{CLI_NAME} explain {}", self.id)
     }
 
     /// The row as JSON (`k2 explain <id> --json`, the CLI block).
@@ -196,14 +198,14 @@ pub fn by_area() -> BTreeMap<&'static str, Vec<&'static Refusal>> {
 /// The areas, in the order `k2 explain` lists them.
 pub const AREAS: &[(&str, &str)] = &[
     ("deploy", "validate, build, deploy, rollback"),
-    ("catalog", "suite Apps from K2's catalog: k2 app catalog, install --catalog"),
+    ("catalog", concat!("suite Apps from K2's catalog: ", cli_name!(), " app catalog, install --catalog")),
     ("runtime", "the App engine, the box, health"),
     ("access", "who may do what: switches, owners, workspaces"),
     ("approvals", "held requests the owner answers"),
     ("door", "passes, App keys, quotas, suspend"),
-    ("data", "k2 app data and exec"),
+    ("data", concat!(cli_name!(), " app data and exec")),
     ("egress", "where an App may connect out"),
-    ("database", "an App's own database: k2 app db connect, check, disconnect"),
+    ("database", concat!("an App's own database: ", cli_name!(), " app db connect, check, disconnect")),
     ("box", "box prep, box services, Podman"),
     ("domains", "labels and custom domains"),
     ("handover", "moving Apps between workspaces and boxes"),
@@ -213,7 +215,7 @@ pub const AREAS: &[(&str, &str)] = &[
     ("links", "iOS and Android link files"),
     ("updates", "a desktop app's update feed"),
     ("static", "static Apps (a built folder, no process)"),
-    ("docs", "multiplayer docs: k2 doc (the CAD core's drawings)"),
+    ("docs", concat!("multiplayer docs: ", cli_name!(), " doc (the CAD core's drawings)")),
     ("homes", "a person's Home groups, synced between their devices"),
     ("general", "any App route"),
 ];
@@ -221,7 +223,7 @@ pub const AREAS: &[(&str, &str)] = &[
 /// `k2 explain` with no id: ids by area.
 pub fn list_text() -> String {
     let by = by_area();
-    let mut s = String::from("Refusal ids by area. k2 explain <id> prints what happened and the fix.\n");
+    let mut s = String::from(concat!("Refusal ids by area. ", cli_name!(), " explain <id> prints what happened and the fix.\n"));
     for (area, about) in AREAS {
         let Some(rows) = by.get(area) else { continue };
         s.push_str(&format!("\n{area} ({about}):\n"));
@@ -248,7 +250,7 @@ pub fn row_text(r: &Refusal) -> String {
     };
     s.push_str(&format!("who fixes it: {who}\n"));
     if r.askable {
-        s.push_str("can be asked for: yes (the error ends with Ask with: k2 permission request …; run it as printed)\n");
+        s.push_str(concat!("can be asked for: yes (the error ends with Ask with: ", cli_name!(), " permission request …; run it as printed)\n"));
     }
     if !r.aliases.is_empty() {
         s.push_str(&format!("also sent as: {}\n", r.aliases.join(", ")));
@@ -281,18 +283,18 @@ fn wrap(text: &str, width: usize, indent: &str) -> String {
 pub fn study_page() -> String {
     let mut s = String::new();
     for line in [
-        "k2 study app-errors — every App refusal: what happened, the fix, who fixes it",
+        concat!(cli_name!(), " study app-errors — every App refusal: what happened, the fix, who fixes it"),
         "",
         "Every App route refuses with a stable id (error.code). The id never",
         "changes, so a script or an agent can match on it. Look one up:",
-        "  k2 explain <id>          what happened, the fix, who fixes it",
-        "  k2 explain <id> --json   the same as JSON",
-        "  k2 explain               every id, by area",
+        concat!("  ", cli_name!(), " explain <id>          what happened, the fix, who fixes it"),
+        concat!("  ", cli_name!(), " explain <id> --json   the same as JSON"),
+        concat!("  ", cli_name!(), " explain               every id, by area"),
         "An App command that is refused prints fix: <the fix> before K2's own",
         "Ask with: line, and its --json error object carries next (the fix) and",
-        "explain (\"k2 explain <id>\"). The exit code each id gives is beside it:",
+        concat!("explain (\"", cli_name!(), " explain <id>\"). The exit code each id gives is beside it:"),
         "3 refused; 2 a bad request (fix the call); 1 a build or deploy that",
-        "failed (read its report or the deployment's error). k2 explain itself",
+        concat!("failed (read its report or the deployment's error). ", cli_name!(), " explain itself"),
         "exits 4 for an id it doesn't know.",
         "When the fix is the owner's or an Admin's: if the refusal ended with an",
         "Ask with: line, run it as printed (a permission card); otherwise tell",

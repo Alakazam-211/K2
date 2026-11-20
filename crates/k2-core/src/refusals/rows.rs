@@ -432,7 +432,7 @@ pub(super) const ROWS: &[Refusal] = &[
     r("cad_writer_disabled", "docs", 409, Who::K2, concat!("Nobody saves a drawing whole in ", product_name!(), ": a .dxf changes through the edit verbs, and a .dwg is read only. A whole-file write, restore or undo of one, or an edit of a .dwg, is refused while the CAD core is on. Nothing was changed."),
         concat!("Change a .dxf with its edit verbs (", cli_name!(), " doc entity move|set|add|delete|rotate|scale, attrib set, block insert, text set; ", cli_name!(), " doc cad --help); change a .dwg in your CAD app, and its save is taken in.")),
     r("cad_undo_not_latest", "docs", 409, Who::Agent, "Undo goes back only from the drawing's latest change: someone changed it after the change you asked to undo, so nothing was undone.",
-        "Read the drawing again and change it with the edit verbs instead (k2 doc cad --help)."),
+        concat!("Read the drawing again and change it with the edit verbs instead (", cli_name!(), " doc cad --help).")),
     r("cad_expect_stale", "docs", 409, Who::Agent, "The drawing isn't the version you saw: its digest differs from the one you sent, so nothing was undone.",
         "Read the drawing again (its new version and digest), then undo or edit from there."),
     // ── homes (Home sync, /cli/me/homes/push: a `rejected[].reason`) ──

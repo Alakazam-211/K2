@@ -665,7 +665,18 @@ fn group_two_helpers() {
     );
     assert!(py::word_for(&[], &obj("[1]"), Value::Null, 1).is_err());
     use super::history;
-    assert!(history::parse("logs", &["acme", "--client", "--since", "1d"]).is_none());
+    assert!(matches!(
+        history::parse("logs", &["acme", "--client", "--since", "1d"]),
+        Some(Ok(history::Ask::ClientLogs { since: Some(86400), .. }))
+    ));
+    assert!(matches!(
+        history::parse("logs", &["acme", "--client", "--since", "1h30m"]),
+        Some(Ok(history::Ask::ClientLogs { since: Some(5400), .. }))
+    ));
+    assert!(matches!(
+        history::parse("logs", &["acme", "--client", "--since", "1x"]),
+        Some(Err(s)) if s.exit == Exit::Usage && s.line.contains("bad duration '1x'")
+    ));
     assert!(history::parse("logs", &["acme", "--follow"]).is_none());
     assert!(history::parse("logs", &["acme", "--client", "--follow"]).is_some());
     let s = printed(

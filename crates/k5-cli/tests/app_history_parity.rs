@@ -11,8 +11,12 @@
 //!   kind, `--follow`, usage.
 //! - `logs`: one read, `--deployment`, `--tail`; `--client` (bundles,
 //!   none, `--user`, `--kind`, `--limit`, `--json`) and its usage lines;
-//!   the `--client`-only flags without it. (`--follow` and `--client
-//!   --since` are the shell's: the family's unit tests check the hand-off.)
+//!   the `--client`-only flags without it. (`--follow` is the shell's:
+//!   the family's unit tests check the hand-off.)
+//! - `logs --client --since`: days, a duration, plain seconds and a bad
+//!   one (exit 2). The time sent is now less the window: the shell reads
+//!   now from a stub `date` first on PATH, the binary from the fixed time
+//!   its debug build takes for tests (`APP_LOGS_TEST_NOW`).
 //! - Python's raise part way.
 
 #![cfg(unix)]
@@ -362,6 +366,57 @@ fn logs_answers_as_the_shell_does() {
             1,
             1,
         )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// `date +%s` and the binary's clock, both fixed at [`NOW`].
+const NOW: &str = "1800000000";
+
+#[test]
+fn logs_client_since_answers_as_the_shell_does() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut rig = Rig::new(VERB, "since");
+    let shim = rig.dir.join("shim");
+    std::fs::create_dir_all(&shim).unwrap();
+    let date = shim.join("date");
+    std::fs::write(
+        &date,
+        format!(
+            "#!/bin/sh\nif [ \"$*\" = +%s ]; then echo {NOW}; exit 0; fi\nPATH=/usr/bin:/bin exec date \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&date, std::fs::Permissions::from_mode(0o755)).unwrap();
+    rig.path_first = Some(shim);
+    let client = r#"{"app":"acme","count":1,"keepDays":14,"framed":"--- untrusted ---\nbundle\n--- end ---"}"#;
+    let since = |name: &'static str, args: &'static [&'static str], code: i32, requests: usize| {
+        case(
+            name,
+            args,
+            &[("APP_LOGS_TEST_NOW", NOW)],
+            if requests == 0 { vec![] } else { vec![ok(client)] },
+            owner_and_port,
+            code,
+            requests,
+        )
+    };
+    let v = vec![
+        since("--since days", &["logs", "acme", "--client", "--since", "2d"], 0, 1),
+        since(
+            "--since a duration, every filter",
+            &[
+                "logs", "acme", "--client", "--since", "1h30m", "--user", "ann", "--kind", "crash",
+                "--limit", "9",
+            ],
+            0,
+            1,
+        ),
+        since("--since seconds, --json", &["logs", "acme", "--client", "--since", "0300", "--json"], 0, 1),
+        since("--since a bad duration", &["logs", "acme", "--client", "--since", "2w"], 2, 0),
+        since("--since days in a bad form", &["logs", "acme", "--client", "--since", "d"], 2, 0),
     ];
     for c in v {
         rig.check(&c);

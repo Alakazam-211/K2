@@ -4,9 +4,9 @@
 //! one `_compute_call`, `--json` as it came where the verb takes it, else
 //! the shell's Python line for line.
 //!
-//! Still the shell's: `app logs --follow` (a poll loop), and `app logs
-//! --client --since`, whose request names a time the shell reads from the
-//! clock (`date +%s`).
+//! `app logs --client --since` names a time the shell reads from the
+//! clock (`date +%s`): here [`epoch_now`]. Still the shell's: `app logs
+//! --follow` (a poll loop).
 
 use super::access::answer;
 use super::call::Ctx;
@@ -84,6 +84,8 @@ pub enum Ask {
     },
     ClientLogs {
         app: String,
+        /// `--since` in seconds back from now.
+        since: Option<i64>,
         user: String,
         kind: String,
         limit: String,
@@ -191,8 +193,7 @@ fn errors(words: &[&str]) -> Result<Ask, Stop> {
     })
 }
 
-/// `cmd_app_logs`'s loop. `None`: `--follow`, or `--client` with
-/// `--since` (the shell's).
+/// `cmd_app_logs`'s loop. `None`: `--follow` (the shell's).
 fn logs(words: &[&str]) -> Option<Result<Ask, Stop>> {
     let mut app = String::new();
     let mut deployment = String::new();
@@ -238,11 +239,17 @@ fn logs(words: &[&str]) -> Option<Result<Ask, Stop>> {
         if !limit.is_empty() && !limit.bytes().all(|b| b.is_ascii_digit()) {
             return Some(Err(Stop::usage(usage::CLIENT_LIMIT)));
         }
-        if !since.is_empty() {
-            return None;
-        }
+        let since = if since.is_empty() {
+            None
+        } else {
+            match since_secs(&since) {
+                Ok(secs) => Some(secs),
+                Err(stop) => return Some(Err(stop)),
+            }
+        };
         return Some(Ok(Ask::ClientLogs {
             app,
+            since,
             user,
             kind,
             limit,
@@ -316,12 +323,17 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
         }
         Ask::ClientLogs {
             app,
+            since,
             user,
             kind,
             limit,
             json,
         } => {
             let mut q = format!("app={}", quote(app));
+            if let Some(secs) = since {
+                // `from=$(( $(date +%s) - secs ))`.
+                q.push_str(&format!("&since={}", epoch_now().wrapping_sub(*secs)));
+            }
             if !user.is_empty() {
                 q.push_str(&format!("&user={}", quote(user)));
             }
@@ -335,6 +347,36 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
             Ok(answer(&body, *json, client_lines))
         }
     }
+}
+
+/// `--since`'s seconds: `<n>d` as days (`$(( 10#n * 86400 ))`), else
+/// `_compute_secs`, whose usage line and exit 2 end the command.
+fn since_secs(since: &str) -> Result<i64, Stop> {
+    if let Some(days) = since.strip_suffix('d') {
+        if !days.is_empty() && days.bytes().all(|b| b.is_ascii_digit()) {
+            let n = days.bytes().fold(0i64, |n, b| {
+                n.wrapping_mul(10).wrapping_add(i64::from(b - b'0'))
+            });
+            return Ok(n.wrapping_mul(86400));
+        }
+    }
+    super::db_set::compute_secs(since)
+}
+
+/// `date +%s`: the clock's seconds now. A debug build (the tests') takes a
+/// fixed time from `APP_LOGS_TEST_NOW`, as the tests' stub `date` prints
+/// one for the shell; a release build has no such hook.
+pub fn epoch_now() -> i64 {
+    #[cfg(debug_assertions)]
+    if let Some(t) = std::env::var("APP_LOGS_TEST_NOW")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        return t;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// `t(x)` in the history Python: `%Y-%m-%d %H:%M:%S`, or `-`; called from

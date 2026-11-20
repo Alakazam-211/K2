@@ -48153,7 +48153,7 @@ _clone_py() {
     K2C_LOCAL_URL="$BASE_URL" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" _CLONE_URL_RULE="$_CLONE_URL_RULE" \
     K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && [ -r /dev/tty ] && echo 1 || echo 0)" \
     _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 -c "$_K2_PY_STDIN_BOOT" "$@"
-import base64, getpass, http.client, json, os, socket, sys, time, uuid
+import base64, getpass, http.client, json, os, socket, stat, sys, time, uuid
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
@@ -48265,9 +48265,23 @@ def password(prompt):
     return getpass.getpass(prompt)
 
 
+def need_vault_sock():
+    """This computer's confirm goes through the vault socket only, so a
+    typed password never goes over TCP. No socket: refused, before any
+    prompt."""
+    try:
+        if VSOCK and stat.S_ISSOCK(os.stat(VSOCK).st_mode):
+            return
+    except OSError:
+        pass
+    raise Fail("vault_unreachable", "the vault socket %s isn't there (is the K2 daemon running on this computer?); a confirm here goes only through it" % VSOCK, 3)
+
+
 def confirm(side, action, secret_id, label):
     """A fresh vault confirm token on `side`'s daemon (Touch ID or a password)."""
-    local = side[0] == "local" and VSOCK and os.path.exists(VSOCK)
+    local = side[0] == "local"
+    if local:
+        need_vault_sock()
     start = {"action": action}
     if local:
         methods = vault_sock("confirm/start", start).get("methods") or []
@@ -48319,11 +48333,13 @@ def carry_ask(path, target, choices, env_files):
 
 def carry_confirm_call(side, ask, pv, proposal=None):
     """One person confirm for exactly this plan (copies and/or .env files):
-    vault.sock on this computer, else the source's /cli/clone/vault/confirm
-    with the person's password. With `proposal` (0.46.1) the same single
-    confirm also approves that clone proposal: the answer carries
-    `approveToken` next to `token`."""
-    local = side[0] == "local" and VSOCK and os.path.exists(VSOCK)
+    vault.sock on this computer (never TCP), or the remote source's
+    /cli/clone/vault/confirm with the person's password (https only).
+    With `proposal` (0.46.1) the same single confirm also approves that
+    clone proposal: the answer carries `approveToken` next to `token`."""
+    local = side[0] == "local"
+    if local:
+        need_vault_sock()
     reason = ((pv.get("secrets") or {}).get("confirm") or {}).get("reason") or "copy secrets in a clone"
     if proposal:
         reason = "approve the clone proposal and " + reason

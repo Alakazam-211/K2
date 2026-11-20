@@ -13,7 +13,9 @@
 #   the X-K5-* hand-over headers go to this computer's daemon only;
 #   a token goes to an https server, or over plain http only to a loopback
 #   address as written (127.0.0.0/8, ::1, localhost); a refused host gets
-#   no request and no name lookup; a password never goes over plain http.
+#   no request and no name lookup; a password never goes over plain http;
+#   this computer's confirm goes through the vault socket only (none: no
+#   prompt, no TCP).
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -364,6 +366,24 @@ expect_eq "pull with a password confirm over http: the refusal line" "$ERR" "$(r
 expect_not "no password prompt on the terminal" "$TTY" "password"
 expect_not "the remote got no password confirm" "$(paths remote)" "/cli/clone/vault/confirm"
 expect_not "the remote packed nothing" "$(paths remote)" "/cli/clone/pack"
+
+echo "== this computer's confirm goes through the vault socket only =="
+fresh
+mv "$KH/vault.sock" "$KH/vault.sock.off"
+IN="$W/token-in" k2 clone to "$REMOTE" ws1 --copy API_KEY --token-stdin --json
+expect_eq "push with a copy and no vault socket: exit 3" "$RC" "3"
+expect_has "push with no vault socket: vault_unreachable" "$ERR" '"error": "vault_unreachable"'
+expect_not "push: no confirm over TCP" "$(paths local)" "confirm"
+expect_not "push: nothing bundled" "$(paths local)" "/cli/clone/bundle"
+expect_not "push: nothing uploaded" "$(paths remote)" "/cli/fs/upload-chunk"
+fresh
+mv "$KH/vault.sock" "$KH/vault.sock.off"
+scn local '{"target": "here"}'
+k2 clone approve prop-1abc --json
+expect_eq "approve with no vault socket: exit 3" "$RC" "3"
+expect_has "approve with no vault socket: vault_unreachable" "$ERR" '"error": "vault_unreachable"'
+expect_not "approve: no confirm over TCP" "$(paths local)" "confirm"
+expect_not "approve: nothing approved" "$(paths local)" "/cli/clone-proposal/approve"
 
 echo
 echo "clone_security: $pass passed, $fail failed"

@@ -1133,7 +1133,7 @@ pub const NEEDRESTART_DIR: &str = "/etc/needrestart";
 /// Under [`NEEDRESTART_DIR`]; read by needrestart.conf's conf.d include.
 pub const NEEDRESTART_DROPIN: &str = "conf.d/k2-node.conf";
 pub const NEEDRESTART_CONF: &str = "# Written by k2-node's admin executor, which rewrites it when it starts.\n\
-# K2 compute job units (k2job-*.service) each run one job once: a restart\n\
+# Compute job units (k2job-*.service) each run one job once: a restart\n\
 # kills the job and starts an empty copy. needrestart never restarts them.\n\
 push @{$nrconf{blacklist_rc}}, qr(^k2job-);\n";
 

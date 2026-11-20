@@ -149,6 +149,10 @@ pub fn fetch(client: &mut Client) -> Counts {
     counts(client.send(PATH, Call::Request(&[])))
 }
 
+/// How the table names a family's bare line's row (the first word alone
+/// or with `--json`; [`crate::route::Verb::bare`]). Its JSON has no words.
+pub const BARE_LABEL: &str = "(bare)";
+
 fn words(list: &[&str]) -> Vec<String> {
     list.iter().map(|w| w.to_string()).collect()
 }
@@ -217,8 +221,13 @@ impl Status {
             let count = f.fallthroughs.map_or_else(String::new, |n| n.to_string());
             rows.push([f.name(), f.owner.map_or("-", owner_name).into(), count]);
             for (verb, owner) in &f.verbs {
+                let verb = if verb.is_empty() {
+                    BARE_LABEL.to_string()
+                } else {
+                    verb.join("|")
+                };
                 rows.push([
-                    format!("{} {}", f.words[0], verb.join("|")),
+                    format!("{} {verb}", f.words[0]),
                     owner_name(*owner).into(),
                     String::new(),
                 ]);
@@ -455,6 +464,37 @@ mod tests {
                 .as_deref(),
             Some("down")
         );
+    }
+
+    /// A bare line's row is named `(bare)` in the table, and has no words
+    /// in the JSON.
+    #[test]
+    fn a_bare_row() {
+        static B: &[Noun] = &[Noun {
+            family: "compute",
+            words: &["compute"],
+            owner: Owner::Bash,
+            verbs: &[
+                Verb {
+                    words: &["nodes", "ls"],
+                    owner: Owner::Native,
+                },
+                Verb::bare(Owner::Native),
+            ],
+            run: hand_back,
+        }];
+        let s = status(B, "0.46.16", Counts::OwnerOnly);
+        assert_eq!(
+            s.table(),
+            "k5 0.46.16: 0 native, 0 spec, 1 bash\n\
+             family            by\n\
+             compute           bash\n\
+             compute nodes|ls  native\n\
+             compute (bare)    native\n"
+        );
+        let json = s.json();
+        let row = "{\n          \"words\": [],\n          \"owner\": \"native\"\n        }";
+        assert!(json.contains(row), "{json}");
     }
 
     #[test]

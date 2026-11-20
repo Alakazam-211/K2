@@ -16,9 +16,15 @@
 //!
 //! A row can be narrowed by its second word ([`Verb`]): a family can move
 //! one verb at a time. Only a `Bash` row has verb rows, and none of them
-//! is `Bash`. So the family's own forms (no verb, `--help`, `-h`) stay
-//! with the shell until every verb has moved and the whole row turns: one
-//! family never has two help texts.
+//! is `Bash`. So the family's own forms (`--help`, `-h`, an unknown verb)
+//! stay with the shell until every verb has moved and the whole row
+//! turns: one family never has two help texts.
+//!
+//! The one form a `Bash` row may move before that is its bare line: the
+//! first word alone, or it and `--json` and nothing else ([`is_bare`]). A
+//! family moves it with a verb row of no words ([`Verb::bare`]), which
+//! may only be `Native`. A help word is never a bare line, so the help
+//! stays where it was.
 //!
 //! The hard rule (PRD 13.8 (b) and 6.2), in `tests/route_table.rs`: every
 //! word of the router's case has a row and every row is an arm of it,
@@ -85,17 +91,59 @@ impl PartialEq for Noun {
 
 impl Eq for Noun {}
 
-/// A verb of a [`Noun`]: its second word.
+/// A verb of a [`Noun`]: its second word. A row with no words is the
+/// noun's bare line ([`Verb::bare`]).
 #[derive(Debug)]
 pub struct Verb {
     pub words: &'static [&'static str],
     pub owner: Owner,
 }
 
+impl Verb {
+    /// The row of a family's bare line ([`is_bare`]): who answers the
+    /// first word alone, or it and `--json`, when that is not the row's
+    /// owner. It has no words, and only a `Bash` row may have it, as
+    /// `Native`.
+    pub const fn bare(owner: Owner) -> Verb {
+        Verb { words: &[], owner }
+    }
+
+    /// Whether this is the bare line's row.
+    pub fn is_bare(&self) -> bool {
+        self.words.is_empty()
+    }
+}
+
 impl Noun {
     /// Whether `word` is one of the row's words.
     pub fn names(&self, word: &str) -> bool {
         self.words.contains(&word)
+    }
+
+    /// The verb rows that name a second word: every row of [`Noun::verbs`]
+    /// but the bare line's.
+    pub fn verb_rows(&self) -> impl Iterator<Item = &'static Verb> {
+        self.verbs.iter().filter(|v| !v.is_bare())
+    }
+
+    /// The bare line's row, when the family has one.
+    pub fn bare_row(&self) -> Option<&'static Verb> {
+        self.verbs.iter().find(|v| v.is_bare())
+    }
+
+    /// Who answers the bare line: its row's owner, or the row's.
+    pub fn bare(&self) -> Owner {
+        self.bare_row().map_or(self.owner, |v| v.owner)
+    }
+}
+
+/// Whether `args` (the arguments after `argv[0]`) is a bare line: the
+/// first word alone, or it and `--json` and nothing else.
+pub fn is_bare(args: &[OsString]) -> bool {
+    match args {
+        [_] => true,
+        [_, json] => json == "--json",
+        _ => false,
     }
 }
 
@@ -106,6 +154,8 @@ pub struct Found {
     pub noun: Option<&'static Noun>,
     /// Who answers this command line.
     pub owner: Owner,
+    /// Whether the row's bare line row ([`Verb::bare`]) said so.
+    pub by_bare: bool,
 }
 
 /// Who answers `args` (the arguments after `argv[0]`) by `table`.
@@ -119,15 +169,24 @@ pub fn find(table: &'static [Noun], args: &[OsString]) -> Found {
         return Found {
             noun: None,
             owner: Owner::Bash,
+            by_bare: false,
         };
     };
+    if let Some(row) = noun.bare_row().filter(|_| is_bare(args)) {
+        return Found {
+            noun: Some(noun),
+            owner: row.owner,
+            by_bare: true,
+        };
+    }
     let verb = args.get(1).and_then(|w| w.to_str());
     let owner = verb
-        .and_then(|w| noun.verbs.iter().find(|v| v.words.contains(&w)))
+        .and_then(|w| noun.verb_rows().find(|v| v.words.contains(&w)))
         .map_or(noun.owner, |v| v.owner);
     Found {
         noun: Some(noun),
         owner,
+        by_bare: false,
     }
 }
 
@@ -524,7 +583,8 @@ mod tests {
 
     /// One family never has two help texts: a row with verb rows is the
     /// shell's, its verb rows are not, and `--help`, `-h` and `help` are
-    /// never verbs.
+    /// never verbs. Nor is `--json`, which a bare line may end with. A
+    /// bare line's row is at most one, and `Native`.
     #[test]
     fn only_a_shell_row_has_verb_rows() {
         for noun in TABLE {
@@ -532,6 +592,16 @@ mod tests {
                 continue;
             }
             assert_eq!(noun.owner, Owner::Bash, "{:?} has verb rows", noun.words);
+            let bare: Vec<&Verb> = noun.verbs.iter().filter(|v| v.is_bare()).collect();
+            assert!(bare.len() <= 1, "{:?} has two bare rows", noun.words);
+            for row in bare {
+                assert_eq!(
+                    row.owner,
+                    Owner::Native,
+                    "{:?}'s bare row is not Native",
+                    noun.words
+                );
+            }
             for verb in noun.verbs {
                 assert_ne!(
                     verb.owner,
@@ -542,8 +612,8 @@ mod tests {
                 );
                 for word in verb.words {
                     assert!(
-                        !["--help", "-h", "help"].contains(word),
-                        "{:?} {word} is a help form",
+                        !["--help", "-h", "help", "--json"].contains(word),
+                        "{:?} {word} is a help form or --json",
                         noun.words
                     );
                 }
@@ -628,5 +698,114 @@ mod tests {
         for list in [&["whoami"][..], &["whoami", "--help"], &["whoami", "-h"]] {
             assert_eq!(owner(PART, list), Owner::Native, "{list:?}");
         }
+    }
+
+    /// A bare line's row: the first word alone, or it and `--json`, goes
+    /// where the row says; every other form of the family, its help and
+    /// its verb rows, stay where they were. With no bare row the bare
+    /// line is the row's owner's.
+    #[test]
+    fn a_bare_row_moves_only_the_bare_line() {
+        static BARE: &[Noun] = &[
+            Noun {
+                family: "compute",
+                words: &["compute"],
+                owner: Owner::Bash,
+                verbs: &[
+                    Verb {
+                        words: &["nodes", "ls"],
+                        owner: Owner::Native,
+                    },
+                    Verb {
+                        words: &["stats"],
+                        owner: Owner::Spec,
+                    },
+                    Verb::bare(Owner::Native),
+                ],
+                run: hand_back,
+            },
+            Noun {
+                family: "mail",
+                words: &["mail", "email"],
+                owner: Owner::Bash,
+                verbs: &[Verb {
+                    words: &["read"],
+                    owner: Owner::Native,
+                }],
+                run: hand_back,
+            },
+        ];
+        let bare = |list: &[&str]| find(BARE, &args(list));
+        // The bare line: the row of no words.
+        for list in [&["compute"][..], &["compute", "--json"]] {
+            let found = bare(list);
+            assert_eq!(found.owner, Owner::Native, "{list:?}");
+            assert!(found.by_bare, "{list:?}");
+        }
+        // The verb rows are unchanged, and not by the bare row.
+        for (list, want) in [
+            (&["compute", "nodes"][..], Owner::Native),
+            (&["compute", "ls", "--json"], Owner::Native),
+            (&["compute", "stats"], Owner::Spec),
+        ] {
+            let found = bare(list);
+            assert_eq!(found.owner, want, "{list:?}");
+            assert!(!found.by_bare, "{list:?}");
+        }
+        // Everything else stays the shell's: the help, an unknown or empty
+        // verb, `--json` with more after it or before a verb.
+        for list in [
+            &["compute", "--help"][..],
+            &["compute", "-h"],
+            &["compute", "help"],
+            &["compute", "x"],
+            &["compute", ""],
+            &["compute", "--json", "x"],
+            &["compute", "--json", "--json"],
+            &["compute", "-json"],
+        ] {
+            let found = bare(list);
+            assert_eq!(found.owner, Owner::Bash, "{list:?}");
+            assert!(!found.by_bare, "{list:?}");
+        }
+        // No bare row: the bare line is the row's owner's.
+        for list in [&["mail"][..], &["email", "--json"]] {
+            let found = bare(list);
+            assert_eq!(found.owner, Owner::Bash, "{list:?}");
+            assert!(!found.by_bare, "{list:?}");
+        }
+        assert_eq!(bare(&["mail", "read"]).owner, Owner::Native);
+        let rows = |n: &Noun| n.verb_rows().map(|v| v.words).collect::<Vec<_>>();
+        assert_eq!(rows(&BARE[0]), [&["nodes", "ls"][..], &["stats"]]);
+        assert_eq!(BARE[0].bare(), Owner::Native);
+        assert_eq!(BARE[1].bare(), Owner::Bash);
+        assert!(BARE[1].bare_row().is_none());
+    }
+
+    #[test]
+    fn a_bare_line_is_the_first_word_alone_or_with_json() {
+        assert!(is_bare(&args(&["x"])));
+        assert!(is_bare(&args(&["x", "--json"])));
+        for list in [
+            &[][..],
+            &["x", "--json", "y"],
+            &["x", "y"],
+            &["x", ""],
+            &["x", "--JSON"],
+            &["x", "--json="],
+        ] {
+            assert!(!is_bare(&args(list)), "{list:?}");
+        }
+    }
+
+    /// The table today: the rows with a bare row of their own.
+    #[test]
+    fn the_bare_rows_are_today_s() {
+        let rows: Vec<&str> = TABLE
+            .iter()
+            .filter(|n| n.bare_row().is_some())
+            .map(|n| n.words[0])
+            .collect();
+        assert_eq!(rows, Vec::<&str>::new());
     }
 }

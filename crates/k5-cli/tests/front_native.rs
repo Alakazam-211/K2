@@ -315,7 +315,11 @@ fn route_verbs() -> Vec<(String, String, String)> {
             n.verbs.iter().map(|v| {
                 (
                     n.words[0].to_string(),
-                    v.words.join("|"),
+                    if v.is_bare() {
+                        k5_cli::cli_status::BARE_LABEL.to_string()
+                    } else {
+                        v.words.join("|")
+                    },
                     k5_cli::cli_status::owner_name(v.owner).to_string(),
                 )
             })
@@ -470,9 +474,15 @@ fn cli_status_json_parses_and_matches_the_table() {
                     };
                     let words: Vec<String> =
                         words.into_iter().map(|w| string(w).unwrap()).collect();
+                    // A bare line's row has no words in the JSON.
+                    let verb = if words.is_empty() {
+                        k5_cli::cli_status::BARE_LABEL.to_string()
+                    } else {
+                        words.join("|")
+                    };
                     (
                         noun.clone(),
-                        words.join("|"),
+                        verb,
                         string(field(&v, "owner")).unwrap(),
                     )
                 })

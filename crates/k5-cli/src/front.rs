@@ -19,6 +19,11 @@
 //! value), with its connection gate in front of it, exactly as it always
 //! has. No copy of the text lives here: a page is the shell's own file.
 //!
+//! A family's bare line (the first word alone, or it and `--json`) that
+//! its bare row sends to the binary ([`route::Verb::bare`]) is the
+//! family's too, unless it is a page the front puts together
+//! ([`Route::Composed`]: `chat` alone): that page stays the front's.
+//!
 //! A `Spec` verb row's command line is its spec verb ([`Route::Spec`]),
 //! run from its `--schema` entry ([`crate::spec`]), unless it has `-h` or
 //! `--help` in it (a page or the shell's, as for a family) or no spec row
@@ -79,8 +84,11 @@ pub enum Route {
 /// The route for the arguments after `argv[0]`.
 pub fn route(args: &[OsString]) -> Route {
     let found = route::find(route::TABLE, args);
+    // A page the front puts together stays the front's (below), even when
+    // a bare row sends its line to the family.
+    let page = found.by_bare && composed_line(args);
     match (found.owner, found.noun) {
-        (Owner::Native, Some(noun)) => native(noun, args),
+        (Owner::Native, Some(noun)) if !page => native(noun, args),
         (Owner::Spec, Some(_)) => spec_route(spec::table::SPEC, args),
         // The daily tier and a help form the shell only prints a file for
         // are pages.
@@ -103,6 +111,12 @@ pub fn route(args: &[OsString]) -> Route {
             Route::Fallthrough
         }
     }
+}
+
+/// Whether `args` is a page the front puts together ([`pages::composed`]).
+fn composed_line(args: &[OsString]) -> bool {
+    let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
+    words.is_some_and(|w| pages::composed(&w).is_some())
 }
 
 /// A `Spec` row's command line: its row of `table` (the longest whose
@@ -714,6 +728,11 @@ mod tests {
                         Route::Fallthrough,
                         "{word} is Native but falls through"
                     );
+                }
+            }
+            if noun.bare_row().is_some_and(|v| v.owner == Owner::Native) {
+                for line in [&[noun.words[0]][..], &[noun.words[0], "--json"]] {
+                    assert_ne!(route(&args(line)), Route::Fallthrough, "{line:?}");
                 }
             }
             for verb in noun.verbs.iter().filter(|v| v.owner == Owner::Native) {

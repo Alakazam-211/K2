@@ -367,7 +367,7 @@ fn compute_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
             .then(|| pat.split('|').collect())
         })
         .collect();
-    for verb in noun.verbs {
+    for verb in noun.verb_rows() {
         let arm = arms
             .iter()
             .find(|a| a.contains(&verb.words[0]))
@@ -395,7 +395,7 @@ fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         .find("\n    feedback|tickets)\n")
         .expect("the feedback|tickets arm")..];
     let body = &body[..body.find("\n        ;;\n").expect("its end")];
-    for verb in noun.verbs {
+    for verb in noun.verb_rows() {
         assert_eq!(
             verb.words.len(),
             1,
@@ -426,7 +426,7 @@ fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         .1;
     let body = &text[text.find("\n    mail)\n").expect("the mail arm")..];
     let body = &body[..body.find("\n        ;;\n").expect("its end")];
-    for verb in noun.verbs {
+    for verb in noun.verb_rows() {
         assert_eq!(
             verb.words.len(),
             1,
@@ -468,7 +468,7 @@ fn hostmail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         .1;
     let body = &text[text.find("\ncmd_hostmail() {\n").expect("cmd_hostmail")..];
     let body = &body[..body.find("\n}\n").expect("its end")];
-    for verb in noun.verbs {
+    for verb in noun.verb_rows() {
         assert_eq!(
             verb.words.len(),
             1,
@@ -546,7 +546,7 @@ fn workspace_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         .1;
     let body = &text[text.find("\n    workspace)\n").expect("the workspace arm")..];
     let body = &body[..body.find("\n        ;;\n").expect("its end")];
-    for verb in noun.verbs {
+    for verb in noun.verb_rows() {
         assert_eq!(
             verb.words.len(),
             1,
@@ -581,7 +581,7 @@ fn app_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         .1;
     let body = &text[text.find("\ncmd_app() {\n").expect("cmd_app")..];
     let body = &body[..body.find("\n}\n").expect("its end")];
-    for verb in noun.verbs {
+    for verb in noun.verb_rows() {
         if k5_cli::families::app::SKIN_VERBS.contains(&verb.words[0]) {
             app_skin_verb_reaches_cmd_skin(body, verb);
             continue;
@@ -617,7 +617,7 @@ fn connect_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
         .1;
     let body = &text[text.find("\ncmd_connect() {\n").expect("cmd_connect")..];
     let body = &body[..body.find("\n}\n").expect("its end")];
-    for verb in noun.verbs {
+    for verb in noun.verb_rows() {
         assert_eq!(
             verb.words.len(),
             1,

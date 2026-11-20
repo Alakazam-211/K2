@@ -381,7 +381,7 @@ fn usage_error(hint: impl std::fmt::Display) -> CliResponse {
 
 /// Stable addressing-miss shapes for id-prefix resolution (both → CLI
 /// exit 4; the ambiguous hint lists the matching candidates).
-fn prefix_error_response(given: &str, err: PrefixError) -> CliResponse {
+pub(crate) fn prefix_error_response(given: &str, err: PrefixError) -> CliResponse {
     let (code, hint) = match err {
         PrefixError::NotFound => ("not_found", format!("no feedback item matches '{given}'")),
         PrefixError::Ambiguous(candidates) => (

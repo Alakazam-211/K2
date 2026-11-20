@@ -54,6 +54,9 @@ pub(crate) enum Scope {
     /// `/cli/agent/list`: every workspace's row, narrowed to the passport's
     /// own and its connected workspaces ([`narrow`]).
     AgentList,
+    /// A ticket by id: only one filed in the passport's own workspace.
+    /// Any other answers as an unknown id does.
+    Ticket,
 }
 
 /// One admitted route. `names` are params that name something inside the
@@ -86,6 +89,9 @@ pub(crate) const ROUTES: &[Route] = &[
     route("/cli/context/show", Scope::Own),
     // `k2 activity`.
     route("/cli/feed", Scope::Own),
+    // `k2 tickets list|show`.
+    route("/cli/feedback/list", Scope::Own),
+    route("/cli/feedback/show", Scope::Ticket),
     route("/cli/focus-groups/list", Scope::Shared),
     route("/cli/glossary", Scope::Shared),
     route("/cli/glossary/get", Scope::Shared),
@@ -260,6 +266,20 @@ fn other_workspace(params: &HashMap<String, String>) -> Option<CliResponse> {
         Some(claim) if found(claim).as_deref() == Some(own.as_str()) => None,
         Some(_) => Some(own_only(hint)),
     }
+}
+
+/// `GET /cli/feedback/show`: `Some(not found)` unless `id` names one ticket
+/// filed in `workspace_id`. Another workspace's ticket, or a prefix that
+/// isn't one of its own, answers exactly as an unknown id does. A missing id
+/// is the handler's.
+fn ticket_outside(params: &HashMap<String, String>, workspace_id: &str) -> Option<CliResponse> {
+    use k2_core::feedback::{get_item, resolve_id_prefix, PrefixError};
+    let id = params.get("id").map(String::as_str).unwrap_or("");
+    if id.is_empty() {
+        return None;
+    }
+    let own = resolve_id_prefix(id).ok().and_then(|full| get_item(&full)).is_some_and(|i| i.project_id == workspace_id);
+    (!own).then(|| crate::feedback_routes::prefix_error_response(id, PrefixError::NotFound))
 }
 
 /// A name, not a path: no separator, no `..`, no NUL.

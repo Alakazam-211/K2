@@ -4,6 +4,8 @@
 //! - `retry <job>` ([`retry`]);
 //! - [`provenance`]: `provenance <job> [--out FILE]` and `verify <job |
 //!   FILE> [--file PATH] [--owner-key FP]`;
+//! - [`node`]: `node health` and `node servers` (the other `node`
+//!   subverbs are [`super::admin`]'s);
 //! - [`trust`]: `roster`, `seats`, `trust` and `owners` (the node owners'
 //!   trust verbs of `cmd_compute_trust`; `lanes` is not here).
 //!
@@ -28,6 +30,7 @@ use crate::python;
 use std::ffi::OsString;
 use std::path::Path;
 
+pub mod node;
 pub mod provenance;
 pub mod trust;
 
@@ -49,6 +52,7 @@ pub const ANSWERS: &[&str] = &[
 enum Ask {
     Retry(String),
     Provenance(provenance::Ask),
+    Node(node::Ask),
     Trust(trust::Ask),
 }
 
@@ -67,9 +71,12 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
-    if !ANSWERS.contains(words.first()?) {
-        return None;
-    }
+    // `node health|servers`: [`super::admin`] hands them on.
+    let node_words = match *words.first()? {
+        "node" => Some(node::parse(&words[1..])?),
+        w if ANSWERS.contains(&w) => None,
+        _ => return None,
+    };
     let max_time = writes::post_max_time(std::env::var_os("K2_CP_MAX_TIME"))?;
     if writes::shell_settings(std::env::vars_os()) {
         return None;
@@ -100,6 +107,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let rest = &words[1..];
     let ask = match words[0] {
+        "node" => match ready(node_words.expect("parsed above")) {
+            Ok(a) => Ask::Node(a),
+            Err(exit) => return Some(exit),
+        },
         "retry" => match rest.first() {
             Some(job) if !job.is_empty() => Ask::Retry(job.to_string()),
             _ => {
@@ -144,6 +155,7 @@ fn send(cp: &mut Cp<'_>, ask: &Ask, sock: &Path) -> Exit {
     match ask {
         Ask::Retry(job) => retry(cp, job),
         Ask::Provenance(a) => provenance::send(cp, a),
+        Ask::Node(a) => node::send(cp, a, sock),
         Ask::Trust(a) => trust::send(cp, a, sock),
     }
 }

@@ -12,10 +12,13 @@
 //!   (`cmd_compute_trust lanes`).
 //! - [`local`]: `local [status|pause|drain|resume|policy|enable|
 //!   remote-admin|disable] …` (`cmd_compute_local`).
+//! - [`attach`]: `attach <job> [--since SEQ] [--raw]`, which follows the
+//!   job to its end ([`super::super::follow`]).
 //!
 //! [`super::run`] drives them as it drives the other admin verbs.
 
 pub mod allow;
+pub mod attach;
 pub mod git;
 pub mod lanes;
 pub mod local;
@@ -25,7 +28,7 @@ use crate::exit::Exit;
 use crate::families::Shown;
 
 /// The second words this module answers (and none: `compute` alone).
-pub const ANSWERS: &[&str] = &["allow-nodes", "git-access", "lanes", "local"];
+pub const ANSWERS: &[&str] = &["allow-nodes", "git-access", "lanes", "local", "attach"];
 
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +39,7 @@ pub enum Ask {
     Git(git::Ask),
     Lanes(lanes::Ask),
     Local(local::Ask),
+    Attach(attach::Ask),
 }
 
 /// Whether `words` (from the verb on) is one of this module's forms.
@@ -52,9 +56,10 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
     Some(match words.first().copied().unwrap_or("") {
         "" | "help" => Words::Ask(Ask::Usage),
         "allow-nodes" => map(allow::parse(rest), Ask::Allow),
-        "git-access" => map(git::parse(rest)?, Ask::Git),
+        "git-access" => map(git::parse(rest), Ask::Git),
         "lanes" => map(lanes::parse(rest), Ask::Lanes),
         "local" => map(local::parse(rest), Ask::Local),
+        "attach" => map(attach::parse(rest)?, Ask::Attach),
         _ => return None,
     })
 }
@@ -78,6 +83,7 @@ pub fn send(cp: &mut Cp<'_>, ask: &Ask) -> Exit {
         Ask::Git(a) => git::send(cp, a),
         Ask::Lanes(a) => lanes::send(cp, a),
         Ask::Local(a) => local::send(cp, a),
+        Ask::Attach(a) => attach::send(cp, a),
     }
 }
 

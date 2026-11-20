@@ -13,7 +13,7 @@
 //!   clear`.
 //! - [`node`]: the `node` subverbs made native so far.
 //! - [`setup`]: `compute` alone (the help page), `allow-nodes`,
-//!   `git-access`, `lanes` and `local`.
+//!   `git-access`, `lanes`, `local` and `attach`.
 //!
 //! What runs is what [`super::writes`] runs, in the shell's order: the
 //! settings, a re-minted passport, the two gates, the `id` tool's lines,
@@ -67,6 +67,7 @@ pub const ANSWERS: &[&str] = &[
     "git-access",
     "lanes",
     "local",
+    "attach",
 ];
 
 /// A verb this module answers, with its words read.

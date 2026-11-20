@@ -11,7 +11,8 @@
 //! - [`admin`]: the admin verbs (`revoke`, `preview on|off`, `placement
 //!   v1|v2`, `access`, `operate`, `manage`, `retier`, `tier`, `move`,
 //!   `cache`, the `node` subverbs made native so far, and the setup verbs
-//!   `allow-nodes`, `git-access`, `lanes` and `local`, and `compute` alone).
+//!   `allow-nodes`, `git-access`, `lanes`, `local` and `attach`, and
+//!   `compute` alone). [`follow`] is `_compute_follow`.
 //!
 //! Every other verb is the shell's. The modules below
 //! are shared: [`pyrt`] (the Python operations the shell's readers use),
@@ -20,6 +21,7 @@
 
 pub mod admin;
 pub mod events;
+pub mod follow;
 pub mod lines;
 pub mod logs;
 pub mod pyrt;
@@ -161,6 +163,10 @@ pub const VERBS: &[Verb] = &[
     },
     Verb {
         words: &["local"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["attach"],
         owner: Owner::Native,
     },
 ];

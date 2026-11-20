@@ -136,7 +136,10 @@ fn the_help_and_the_verb() {
 #[test]
 fn new_s_words() {
     let n = parse_new(&w(&["a", "--harness", "claude", "--model", "m", "--json"])).unwrap();
-    assert_eq!((n.name.as_str(), n.harness.as_str(), n.model.as_str()), ("a", "claude", "m"));
+    assert_eq!(
+        (n.name.as_str(), n.harness.as_str(), n.model.as_str()),
+        ("a", "claude", "m")
+    );
     assert!(n.json);
     // `--worktree <name>` names it; a word with a dash is not taken.
     let n = parse_new(&w(&["--worktree", "b", "--harness", "h"])).unwrap();
@@ -158,7 +161,10 @@ fn new_s_words() {
     assert_eq!(parse_new(&w(&["a", "--harness"])), Err(Stop::Shift));
     assert_eq!(parse_new(&w(&["a", "--brief-text"])), Err(Stop::Shift));
     assert_eq!(parse_new(&w(&["a"])), Err(Stop::Usage(new_usage())));
-    assert_eq!(parse_new(&w(&["--harness", "h"])), Err(Stop::Usage(new_usage())));
+    assert_eq!(
+        parse_new(&w(&["--harness", "h"])),
+        Err(Stop::Usage(new_usage()))
+    );
     assert_eq!(
         parse_new(&w(&["a", "--harness", "h", "--base", "main"])),
         Err(Stop::Usage(format!(
@@ -166,7 +172,15 @@ fn new_s_words() {
         )))
     );
     assert_eq!(
-        parse_new(&w(&["a", "--harness", "h", "--brief", "f", "--brief-text", ""])),
+        parse_new(&w(&[
+            "a",
+            "--harness",
+            "h",
+            "--brief",
+            "f",
+            "--brief-text",
+            ""
+        ])),
         Err(Stop::Usage(
             "usage: pass --brief or --brief-text, not both".into()
         ))
@@ -177,7 +191,14 @@ fn new_s_words() {
 #[test]
 fn new_s_body() {
     let n = parse_new(&w(&[
-        "a é", "--harness", "h", "--worktree", "--base", "main", "--model", "m",
+        "a é",
+        "--harness",
+        "h",
+        "--worktree",
+        "--base",
+        "main",
+        "--model",
+        "m",
     ]))
     .unwrap();
     assert_eq!(
@@ -272,21 +293,39 @@ fn the_readers() {
     );
     let o = shown(Reader::Stop, r#"{"address":"a"}"#);
     assert_eq!(o.stdout, "a was already asleep\n");
-    let o = shown(Reader::Archive, r#"{"count":2,"archived":["x","y"],"skipped":[{"address":"z","hint":"live"}]}"#);
-    assert_eq!(o.stdout, "archived 2 stopped sidecars: x, y\nnot archived z: live\n");
+    let o = shown(
+        Reader::Archive,
+        r#"{"count":2,"archived":["x","y"],"skipped":[{"address":"z","hint":"live"}]}"#,
+    );
+    assert_eq!(
+        o.stdout,
+        "archived 2 stopped sidecars: x, y\nnot archived z: live\n"
+    );
     let o = shown(Reader::Archive, r#"{"address":"ws/n"}"#);
     assert_eq!(
         o.stdout,
         format!("archived ws/n. Its conversation stays: {CLI} sidecar new n --harness <the same harness> resumes it.\n")
     );
-    let o = shown(Reader::List, r#"{"workspace":"w","live":1,"cap":4,"sidecars":[]}"#);
-    assert_eq!(o.stdout, "w: 1 live of 0 (cap 4); its agent may open sidecars: off\n(no sidecars)\n");
-    let o = shown(Reader::Retire, r#"{"address":"a","how":"h","discardedCommits":[{"sha":"0123456789abcdef"}]}"#);
+    let o = shown(
+        Reader::List,
+        r#"{"workspace":"w","live":1,"cap":4,"sidecars":[]}"#,
+    );
+    assert_eq!(
+        o.stdout,
+        "w: 1 live of 0 (cap 4); its agent may open sidecars: off\n(no sidecars)\n"
+    );
+    let o = shown(
+        Reader::Retire,
+        r#"{"address":"a","how":"h","discardedCommits":[{"sha":"0123456789abcdef"}]}"#,
+    );
     assert_eq!(
         o.stdout,
         "retired a (h): worktree in the Trash, branch kept\ndiscarded 1 commit(s); until git cleans up, git branch <name> 0123456789 brings them back\n"
     );
-    let o = shown(Reader::Review, r#"{"address":"a","blocked":"wrong_branch","mainBranch":"dev","onto":"main"}"#);
+    let o = shown(
+        Reader::Review,
+        r#"{"address":"a","blocked":"wrong_branch","mainBranch":"dev","onto":"main"}"#,
+    );
     assert_eq!(
         o.stdout,
         "a  None in None  (None)\n0 commits to land on main (at -):\nland: not now (wrong_branch): the main checkout is on dev, not main\n"
@@ -297,19 +336,56 @@ fn the_readers() {
 fn where_the_readers_raise() {
     let o = shown(Reader::Stop, "nope");
     assert_eq!(o.exit, Exit::Error);
-    assert!(o.stderr.ends_with("json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n"), "{}", o.stderr);
+    assert!(
+        o.stderr
+            .ends_with("json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n"),
+        "{}",
+        o.stderr
+    );
     let o = shown(Reader::New, r#"{"harness":"h"}"#);
-    assert!(o.stderr.contains("line 4, in <module>\nKeyError: 'address'\n"), "{}", o.stderr);
+    assert!(
+        o.stderr
+            .contains("line 4, in <module>\nKeyError: 'address'\n"),
+        "{}",
+        o.stderr
+    );
     let o = shown(Reader::List, r#"{"sidecars":null}"#);
-    assert!(o.stderr.ends_with("line 5, in <module>\nTypeError: object of type 'NoneType' has no len()\n"), "{}", o.stderr);
+    assert!(
+        o.stderr
+            .ends_with("line 5, in <module>\nTypeError: object of type 'NoneType' has no len()\n"),
+        "{}",
+        o.stderr
+    );
     let o = shown(Reader::List, r#"{"sidecars":[{"name":5}]}"#);
-    assert!(o.stderr.ends_with("line 21, in <module>\nTypeError: 'int' object is not subscriptable\n"), "{}", o.stderr);
+    assert!(
+        o.stderr
+            .ends_with("line 21, in <module>\nTypeError: 'int' object is not subscriptable\n"),
+        "{}",
+        o.stderr
+    );
     let o = shown(Reader::Archive, r#"{"address":7}"#);
-    assert!(o.stderr.ends_with("AttributeError: 'int' object has no attribute 'split'\n"), "{}", o.stderr);
+    assert!(
+        o.stderr
+            .ends_with("AttributeError: 'int' object has no attribute 'split'\n"),
+        "{}",
+        o.stderr
+    );
     let o = shown(Reader::Review, r#"{"address":"a","blocked":["x"]}"#);
-    assert!(o.stderr.ends_with("line 28, in <module>\nTypeError: unhashable type: 'list'\n"), "{}", o.stderr);
-    let o = shown(Reader::Retire, r#"{"address":"a","discardedCommits":{"x":1}}"#);
-    assert!(o.stderr.ends_with("line 7, in <module>\nKeyError: -1\n"), "{}", o.stderr);
+    assert!(
+        o.stderr
+            .ends_with("line 28, in <module>\nTypeError: unhashable type: 'list'\n"),
+        "{}",
+        o.stderr
+    );
+    let o = shown(
+        Reader::Retire,
+        r#"{"address":"a","discardedCommits":{"x":1}}"#,
+    );
+    assert!(
+        o.stderr.ends_with("line 7, in <module>\nKeyError: -1\n"),
+        "{}",
+        o.stderr
+    );
 }
 
 #[test]
@@ -325,6 +401,9 @@ fn python_s_slice() {
     );
     assert_eq!(
         py_slice(&Value::Null, 2, 9),
-        Err(Raise::at(9, "TypeError: 'NoneType' object is not subscriptable"))
+        Err(Raise::at(
+            9,
+            "TypeError: 'NoneType' object is not subscriptable"
+        ))
     );
 }

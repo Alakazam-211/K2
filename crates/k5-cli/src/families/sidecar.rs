@@ -490,7 +490,9 @@ fn run_with(
         return stop;
     }
     let (sub, rest) = match parsed {
-        Parsed::Help => return Shown::out(crate::text::help("sidecar").unwrap_or_default()).print(),
+        Parsed::Help => {
+            return Shown::out(crate::text::help("sidecar").unwrap_or_default()).print()
+        }
         Parsed::Verb(sub, rest) => (sub.as_str(), rest.as_slice()),
     };
     if !matches!(
@@ -521,7 +523,15 @@ fn run_with(
     };
     let mut client = None;
     let mut closing = Closing::default();
-    let exit = match verb(sub, rest, &ws, &settings, would_refuse, &mut client, &mut closing) {
+    let exit = match verb(
+        sub,
+        rest,
+        &ws,
+        &settings,
+        would_refuse,
+        &mut client,
+        &mut closing,
+    ) {
         Ok(e) | Err(e) => e,
     };
     if let Some(c) = client.as_mut() {
@@ -624,7 +634,12 @@ fn verb(
             connect(&mut *client)?;
             let c = client.as_mut().expect("connected");
             let split = if action == "status" {
-                call(c, false, "/cli/sidecar/list", &format!("workspace={}", quote(&w)))?
+                call(
+                    c,
+                    false,
+                    "/cli/sidecar/list",
+                    &format!("workspace={}", quote(&w)),
+                )?
             } else {
                 let body = confirm::dumps(&confirm::object(vec![
                     ("workspace", s(&w)),
@@ -946,7 +961,10 @@ fn stop_lines(v: &Value, o: &mut String) -> Result<(), Raise> {
     let line = if truthy_at(v, "stopped", 4)? {
         format!("stopped {}", py::str_of(ops::index(v, "address", 4)?))
     } else {
-        format!("{} was already asleep", py::str_of(ops::index(v, "address", 4)?))
+        format!(
+            "{} was already asleep",
+            py::str_of(ops::index(v, "address", 4)?)
+        )
     };
     push_line(o, &line);
     Ok(())
@@ -1192,7 +1210,10 @@ fn review_lines(v: &Value, o: &mut String) -> Result<(), Raise> {
     };
     let b = py_get(v, "blocked", 27)?.cloned().unwrap_or(Value::Null);
     let line = if !py::truthy(&b) {
-        format!("land: ready (tip {})", cut(py_get(v, "tip", 28)?, "", 10, 28)?)
+        format!(
+            "land: ready (tip {})",
+            cut(py_get(v, "tip", 28)?, "", 10, 28)?
+        )
     } else {
         let reason = match &b {
             Value::Str(_) => why(&py::str_of(&b)).unwrap_or_else(|| py::str_of(&b)),
@@ -1242,7 +1263,10 @@ fn land_lines(v: &Value, o: &mut String) -> Result<(), Raise> {
         let hint = str_at(e, "hint", 11)?;
         push_line(o, &format!("not retired: {code}: {hint}"));
         let address = py::str_of(ops::index(v, "address", 12)?);
-        push_line(o, &format!("retire it later: {CLI} sidecar retire {address}"));
+        push_line(
+            o,
+            &format!("retire it later: {CLI} sidecar retire {address}"),
+        );
     }
     Ok(())
 }

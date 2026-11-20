@@ -114,7 +114,10 @@ fn sidecar_help_and_words() {
         ("--help", &["--help"]),
         ("-h after a verb", &["list", "-h"]),
         ("--help after an unknown verb", &["nosuch", "--help"]),
-        ("--help as a flag's value", &["new", "a", "--harness", "--help"]),
+        (
+            "--help as a flag's value",
+            &["new", "a", "--harness", "--help"],
+        ),
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 0, 0));
     }
@@ -159,24 +162,54 @@ fn sidecar_help_and_words() {
         ("new with no name", &["new", "--harness", "h"]),
         ("new with no harness", &["new", "a"]),
         ("new with two names", &["new", "a", "b", "--harness", "h"]),
-        ("new, --worktree takes the name", &["new", "a", "--worktree", "b", "--harness", "h"]),
-        ("new, an unknown flag", &["new", "a", "--harness", "h", "--bogus"]),
+        (
+            "new, --worktree takes the name",
+            &["new", "a", "--worktree", "b", "--harness", "h"],
+        ),
+        (
+            "new, an unknown flag",
+            &["new", "a", "--harness", "h", "--bogus"],
+        ),
         ("new, - alone is a flag", &["new", "-", "--harness", "h"]),
-        ("new, --base without --worktree", &["new", "a", "--harness", "h", "--base", "main"]),
+        (
+            "new, --base without --worktree",
+            &["new", "a", "--harness", "h", "--base", "main"],
+        ),
         (
             "new, --brief and --brief-text",
-            &["new", "a", "--harness", "h", "--brief", "brief.md", "--brief-text", "x"],
+            &[
+                "new",
+                "a",
+                "--harness",
+                "h",
+                "--brief",
+                "brief.md",
+                "--brief-text",
+                "x",
+            ],
         ),
-        ("new, no brief file", &["new", "a", "--harness", "h", "--brief", "nope.md"]),
-        ("new, a folder for a brief", &["new", "a", "--harness", "h", "--brief", "."]),
-        ("new, a brief that is not UTF-8", &["new", "a", "--harness", "h", "--brief", "bad.md"]),
+        (
+            "new, no brief file",
+            &["new", "a", "--harness", "h", "--brief", "nope.md"],
+        ),
+        (
+            "new, a folder for a brief",
+            &["new", "a", "--harness", "h", "--brief", "."],
+        ),
+        (
+            "new, a brief that is not UTF-8",
+            &["new", "a", "--harness", "h", "--brief", "bad.md"],
+        ),
         ("list, a word it doesn't take", &["list", "x"]),
         ("ls --all", &["ls", "--all"]),
         ("stop with no name", &["stop", "--json"]),
         ("stop with two names", &["stop", "a", "b"]),
         ("stop, an unknown flag", &["stop", "a", "--all"]),
         ("archive with nothing", &["archive"]),
-        ("archive with a name and --all-stopped", &["archive", "a", "--all-stopped"]),
+        (
+            "archive with a name and --all-stopped",
+            &["archive", "a", "--all-stopped"],
+        ),
         ("archive, an unknown flag", &["archive", "-x"]),
         ("access with nothing", &["access"]),
         ("access, a verb it doesn't have", &["access", "maybe"]),
@@ -191,14 +224,32 @@ fn sidecar_help_and_words() {
     // bash D6: a value flag as the last word; flips to a usage line,
     // exit 2.
     for (name, args) in [
-        ("bash D6: new --harness last", &["new", "a", "--harness"][..]),
-        ("bash D6: new --brief-text last", &["new", "a", "--harness", "h", "--brief-text"]),
+        (
+            "bash D6: new --harness last",
+            &["new", "a", "--harness"][..],
+        ),
+        (
+            "bash D6: new --brief-text last",
+            &["new", "a", "--harness", "h", "--brief-text"],
+        ),
         ("bash D6: new --workspace last", &["new", "--workspace"]),
         ("bash D6: list --workspace last", &["list", "--workspace"]),
-        ("bash D6: stop --workspace last", &["stop", "a", "--workspace"]),
-        ("bash D6: archive --workspace last", &["archive", "--workspace"]),
-        ("bash D6: access on --workspace last", &["access", "on", "--workspace"]),
-        ("bash D6: land --workspace last", &["land", "a", "--workspace"]),
+        (
+            "bash D6: stop --workspace last",
+            &["stop", "a", "--workspace"],
+        ),
+        (
+            "bash D6: archive --workspace last",
+            &["archive", "--workspace"],
+        ),
+        (
+            "bash D6: access on --workspace last",
+            &["access", "on", "--workspace"],
+        ),
+        (
+            "bash D6: land --workspace last",
+            &["land", "a", "--workspace"],
+        ),
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 1, 0));
     }
@@ -243,8 +294,19 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         case(
             "new, every flag",
             &[
-                "new", "scout é", "--harness", "claude", "--model", "opus", "--workspace",
-                "acme w", "--worktree", "--base", "main", "--brief-text", "do \"this\" ☃",
+                "new",
+                "scout é",
+                "--harness",
+                "claude",
+                "--model",
+                "opus",
+                "--workspace",
+                "acme w",
+                "--worktree",
+                "--base",
+                "main",
+                "--brief-text",
+                "do \"this\" ☃",
             ],
             &[],
             vec![ok(opened)],
@@ -256,7 +318,9 @@ fn sidecar_verbs_answer_as_the_shell_does() {
             "new --worktree <name>, resumed",
             &["new", "--worktree", "scout", "--harness", "claude"],
             &[],
-            vec![ok(r#"{"address":"acme/scout","harness":"claude","resumed":true}"#)],
+            vec![ok(
+                r#"{"address":"acme/scout","harness":"claude","resumed":true}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -265,7 +329,9 @@ fn sidecar_verbs_answer_as_the_shell_does() {
             "new, a brief from a file",
             &["new", "a", "--harness", "h", "--brief", "brief.md"],
             &[],
-            vec![ok(r#"{"address":"acme/a","harness":"h","brief":{"path":"/b","bytes":20}}"#)],
+            vec![ok(
+                r#"{"address":"acme/a","harness":"h","brief":{"path":"/b","bytes":20}}"#,
+            )],
             brief_file,
             0,
             1,
@@ -314,7 +380,15 @@ fn sidecar_verbs_answer_as_the_shell_does() {
             1,
         ),
         // covers: sidecar list
-        case("list", &["list"], &[], vec![ok(&list())], owner_and_port, 0, 1),
+        case(
+            "list",
+            &["list"],
+            &[],
+            vec![ok(&list())],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "ls --workspace",
             &["ls", "--workspace", "w é&x+y"],
@@ -453,7 +527,9 @@ fn sidecar_verbs_answer_as_the_shell_does() {
             "interrupt",
             &["interrupt", "scout"],
             &[],
-            vec![ok(r#"{"address":"acme/scout","interrupted":true,"key":"Escape"}"#)],
+            vec![ok(
+                r#"{"address":"acme/scout","interrupted":true,"key":"Escape"}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -688,7 +764,10 @@ fn sidecar_refusals() {
             "404",
             &["access", "status"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"not_found"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"not_found"}}"#.into(),
+            )],
             owner_and_port,
             4,
             1,
@@ -734,8 +813,7 @@ fn sidecar_with_a_passport() {
         e.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
         e
     };
-    let not_served =
-        || Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into());
+    let not_served = || Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into());
     let v = vec![
         with(
             with_passport(&[]),
@@ -791,7 +869,10 @@ fn sidecar_with_a_passport() {
                 "not served there: a POST goes on to TCP",
                 &["access", "on"],
                 &[],
-                vec![not_served(), ok(r#"{"workspace":"w","agentsCanManage":true}"#)],
+                vec![
+                    not_served(),
+                    ok(r#"{"workspace":"w","agentsCanManage":true}"#),
+                ],
                 port_only,
                 0,
                 2,

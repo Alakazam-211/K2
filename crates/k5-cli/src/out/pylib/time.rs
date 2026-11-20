@@ -16,9 +16,7 @@ pub fn seconds(v: &Value, now: i64) -> Result<i64, String> {
         Value::Null => Ok(now),
         Value::Bool(b) => Ok(i64::from(*b)),
         Value::Int(digits) => digits.parse().map_err(|_| RANGE.to_string()),
-        Value::Float(f) if f.is_nan() => {
-            Err("ValueError: Invalid value NaN (not a number)".into())
-        }
+        Value::Float(f) if f.is_nan() => Err("ValueError: Invalid value NaN (not a number)".into()),
         Value::Float(f) => {
             let w = f.floor();
             // i64::MAX as f64 rounds up to 2^63, which is out of range.

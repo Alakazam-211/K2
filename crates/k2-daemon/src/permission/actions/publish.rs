@@ -20,6 +20,7 @@ use super::held::text_param;
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::cli_response::CliResponse;
 use crate::publish_cards::{PIN, PUBLIC, PUBLIC_NEEDS_PERSON};
+use k2_core::cli_name;
 
 const ROUTE: &str = "/cli/publish/visibility";
 
@@ -158,7 +159,7 @@ fn apply_pin(_ctx: &Ctx, _who: &Answerer, _token: Option<&str>) -> Applied {
 }
 
 fn pin_form_words() -> String {
-    "Set the PIN first, in K2's own form on this card, or from a terminal outside K2: k2 publish visibility <name> pin".to_string()
+    concat!("Set the PIN first, in K2's own form on this card, or from a terminal outside K2: ", cli_name!(), " publish visibility <name> pin").to_string()
 }
 
 /// Allow on `publish.pin` before the site has a PIN (a client without the form:

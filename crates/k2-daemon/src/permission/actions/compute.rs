@@ -29,6 +29,8 @@ use serde_json::json;
 
 use super::held::{text_param, who_of};
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) static ADMIN_APPROVE: ActionSpec = ActionSpec {
     id: "compute.admin-approve",
@@ -192,11 +194,11 @@ fn check(ctx: &Ctx) -> Check {
         return Check::Unavailable { code: "compute_admin_off", why: NO_NODE_SWITCH.into() };
     }
     let Some(id) = text_param(ctx, "request") else {
-        return Check::Moved("name the node admin request: request=<its car_… id> (k2 compute node admin requests)".into());
+        return Check::Moved(concat!("name the node admin request: request=<its car_… id> (", cli_name!(), " compute node admin requests)").into());
     };
     // A package request (`cpr_…`) has its own card; this one never decides it.
     if is_package_request(id) {
-        return Check::Moved(format!("{id} is a package request: ask with k2 permission request {} request={id}", PACKAGES.id));
+        return Check::Moved(format!("{id} is a package request: ask with {CLI_NAME} permission request {} request={id}", PACKAGES.id));
     }
     let row = {
         let h = k2_core::db::shared();
@@ -204,7 +206,7 @@ fn check(ctx: &Ctx) -> Check {
         cadmin::request_by_id(&conn, id)
     };
     let Some(r) = row.filter(|r| r.proposer_workspace.as_deref() == Some(ctx.workspace_id.as_str())) else {
-        return Check::Moved(format!("no node admin request {id} of {}'s (k2 compute node admin requests)", ctx.workspace_handle));
+        return Check::Moved(format!("no node admin request {id} of {}'s ({CLI_NAME} compute node admin requests)", ctx.workspace_handle));
     };
     match r.state.as_str() {
         "pending" if r.expires_at > k2_core::compute::now() => Check::Needed,
@@ -314,12 +316,12 @@ pub(crate) static CI_OFF: ActionSpec = ActionSpec {
 
 /// The asking workspace's grant on `node=`: `Ok((node name, its grant))`.
 fn ci_grant(ctx: &Ctx) -> Result<(String, k2_core::compute::store::GrantRow), String> {
-    let name = text_param(ctx, "node").ok_or("name the node: node=<name> (k2 compute nodes)")?;
+    let name = text_param(ctx, "node").ok_or(concat!("name the node: node=<name> (", cli_name!(), " compute nodes)"))?;
     let h = k2_core::db::shared();
     let conn = h.lock();
     let n = k2_core::compute::store::find_node(&conn, name)
         .filter(|n| n.state == "active")
-        .ok_or_else(|| format!("no active compute node '{name}' (k2 compute nodes)"))?;
+        .ok_or_else(|| format!("no active compute node '{name}' ({CLI_NAME} compute nodes)"))?;
     let g = k2_core::compute::store::grant(&conn, &n.id, &ctx.workspace_id)
         .ok_or_else(|| format!("{} has no grant on '{}': it needs one first (compute.use)", ctx.workspace_handle, n.name))?;
     Ok((n.name, g))
@@ -387,7 +389,7 @@ fn apply_ci_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
 
 // ── compute.gpu (GPU jobs, 0.46.11, prd-compute-gpu-jobs-v1 S1) ──────
 
-const GPU_SETTING: &str = "Allow GPU jobs (k2 compute grant <node> --workspace <ws> --gpu)";
+const GPU_SETTING: &str = concat!("Allow GPU jobs (", cli_name!(), " compute grant <node> --workspace <ws> --gpu)");
 
 /// `compute.gpu node=`: let the asking workspace send `--gpu` jobs to one
 /// node (its grant's `allow_gpu`). Admin floor, like `compute.ci`: only the
@@ -667,7 +669,7 @@ fn grant_limit(ctx: &Ctx, key: &str) -> Result<Option<i64>, String> {
 /// asked: no limit named, a bad value, no such active node, or a node
 /// the workspace may not use.
 pub(crate) fn grant_ask(ctx: &Ctx) -> Result<GrantAsk, String> {
-    let name = text_param(ctx, "node").ok_or("name the node: node=<name> (k2 compute grants shows yours)")?;
+    let name = text_param(ctx, "node").ok_or(concat!("name the node: node=<name> (", cli_name!(), " compute grants shows yours)"))?;
     let [t, p, q, d] = GRANT_LIMIT_KEYS;
     let asked = [grant_limit(ctx, t)?, grant_limit(ctx, p)?, grant_limit(ctx, q)?, grant_limit(ctx, d)?];
     if asked.iter().all(Option::is_none) {
@@ -677,7 +679,7 @@ pub(crate) fn grant_ask(ctx: &Ctx) -> Result<GrantAsk, String> {
     let conn = h.lock();
     let n = k2_core::compute::store::find_node(&conn, name)
         .filter(|n| n.state == "active")
-        .ok_or_else(|| format!("no active compute node '{name}' (k2 compute nodes)"))?;
+        .ok_or_else(|| format!("no active compute node '{name}' ({CLI_NAME} compute nodes)"))?;
     let (now, has_grant) = match k2_core::compute::store::grant(&conn, &n.id, &ctx.workspace_id) {
         Some(g) => (Limits::of(&g), true),
         None if k2_core::compute::store::agents_can_use_compute(&conn, &ctx.workspace_id) => {
@@ -687,7 +689,7 @@ pub(crate) fn grant_ask(ctx: &Ctx) -> Result<GrantAsk, String> {
         }
         None => {
             return Err(format!(
-                "{} has no grant on '{}' and can't use compute nodes: ask for that first (k2 permission request compute.use --why \"…\")",
+                "{} has no grant on '{}' and can't use compute nodes: ask for that first ({CLI_NAME} permission request compute.use --why \"…\")",
                 ctx.workspace_handle, n.name
             ))
         }
@@ -859,7 +861,7 @@ fn apply_grant(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
 // ── compute.allow-nodes (0.46.8, `crate::compute_allow`) ────────────
 
 const ALLOW_SETTING: &str = "Compute node list";
-const ALLOW_SETTINGS: SettingsRef = SettingsRef { page: "compute", path: "k2 compute allow-nodes (a terminal outside K2)" };
+const ALLOW_SETTINGS: SettingsRef = SettingsRef { page: "compute", path: concat!(cli_name!(), " compute allow-nodes (a terminal outside K2)") };
 const ALLOW_PARAMS: &[ParamSpec] = &[ParamSpec { key: "nodes", kind: ParamKind::Node, required: true, list: true, choices: &[] }];
 
 /// `compute.allow-nodes nodes=`: add nodes to the asking workspace's
@@ -953,7 +955,7 @@ fn node_names(ctx: &Ctx) -> Vec<String> {
 fn allow_ids(ctx: &Ctx) -> Result<Vec<String>, String> {
     let names = node_names(ctx);
     if names.is_empty() {
-        return Err("name the nodes: nodes=<node>[,<node>…] (k2 compute nodes)".into());
+        return Err(concat!("name the nodes: nodes=<node>[,<node>…] (", cli_name!(), " compute nodes)").into());
     }
     let h = k2_core::db::shared();
     let conn = h.lock();
@@ -961,7 +963,7 @@ fn allow_ids(ctx: &Ctx) -> Result<Vec<String>, String> {
     for name in &names {
         let n = k2_core::compute::store::find_node(&conn, name)
             .filter(|n| n.state != "revoked")
-            .ok_or_else(|| format!("no compute node '{name}' (k2 compute nodes)"))?;
+            .ok_or_else(|| format!("no compute node '{name}' ({CLI_NAME} compute nodes)"))?;
         if k2_core::compute::store::grant(&conn, &n.id, &ctx.workspace_id).is_none() {
             return Err(format!("{} has no grant on '{}': it needs one first (compute.use)", ctx.workspace_handle, n.name));
         }
@@ -1129,7 +1131,7 @@ pub(crate) static CI_CACHE_TRUST: ActionSpec = ActionSpec {
         retry: "run your command again",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "compute", path: "k2 ci cache trust (a terminal outside K2)" },
+    settings: SettingsRef { page: "compute", path: concat!(cli_name!(), " ci cache trust (a terminal outside K2)") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: k2_core::ci::CACHE_TRUST_NEEDS_PERSON },
         route_prefix: crate::ci_routes::CACHE_TRUST_SET,
@@ -1307,14 +1309,14 @@ fn check_packages(ctx: &Ctx) -> Check {
         return Check::Moved("compute nodes are off on this server".into());
     }
     let Some(id) = text_param(ctx, "request") else {
-        return Check::Moved("name the package request: request=<its cpr_… id> (k2 compute node packages requests)".into());
+        return Check::Moved(concat!("name the package request: request=<its cpr_… id> (", cli_name!(), " compute node packages requests)").into());
     };
     if !is_package_request(id) {
-        return Check::Moved(format!("{id} is not a package request (cpr_…): see k2 compute node packages requests"));
+        return Check::Moved(format!("{id} is not a package request (cpr_…): see {CLI_NAME} compute node packages requests"));
     }
     let rows = package_rows(ctx, id);
     if rows.is_empty() {
-        return Check::Moved(format!("no package request {id} of {}'s (k2 compute node packages requests)", ctx.workspace_handle));
+        return Check::Moved(format!("no package request {id} of {}'s ({CLI_NAME} compute node packages requests)", ctx.workspace_handle));
     }
     let now = k2_core::compute::now();
     let live = |r: &&k2_core::compute::pkgreq::PkgRow| r.state == state::PENDING && r.expires_at > now;
@@ -1435,14 +1437,14 @@ pub(crate) static PACKAGES_POLICY: ActionSpec = ActionSpec {
 
 /// The named node: active, this server's own. `Ok((node, its offer))`.
 fn policy_node(ctx: &Ctx) -> Result<(k2_core::compute::store::NodeRow, Option<k2_core::compute::proto::frames::Offer>), String> {
-    let name = text_param(ctx, "node").ok_or("name the node: node=<name> (k2 compute nodes)")?;
+    let name = text_param(ctx, "node").ok_or(concat!("name the node: node=<name> (", cli_name!(), " compute nodes)"))?;
     let n = {
         let h = k2_core::db::shared();
         let conn = h.lock();
         k2_core::compute::store::find_node(&conn, name)
     }
     .filter(|n| n.state == "active")
-    .ok_or_else(|| format!("no active compute node '{name}' (k2 compute nodes)"))?;
+    .ok_or_else(|| format!("no active compute node '{name}' ({CLI_NAME} compute nodes)"))?;
     if n.is_tenant() {
         return Err(format!("{} belongs to another server ({}): its owner sets its package policy", n.name, n.owner_label.as_deref().unwrap_or("its owner")));
     }
@@ -1460,7 +1462,7 @@ fn check_packages_policy(ctx: &Ctx) -> Check {
         Err(m) => return Check::Moved(m),
     };
     if !offer.as_ref().is_some_and(|o| o.features.iter().any(|f| f == pp::FEATURE_PKG_STATUS)) {
-        return Check::Moved(format!("{}'s k2-node has no package policy yet (older than 0.46.9): update it (k2 compute node update {})", n.name, n.name));
+        return Check::Moved(format!("{}'s k2-node has no package policy yet (older than 0.46.9): update it ({CLI_NAME} compute node update {})", n.name, n.name));
     }
     let Some(level) = text_param(ctx, "level").and_then(pp::Level::parse) else {
         return Check::Moved(format!("level= is one of {}", POLICY_LEVELS.join(", ")));
@@ -1525,11 +1527,11 @@ pub(crate) static GIT_ACCESS: ActionSpec = ActionSpec {
         what_changes: "Let {ws}'s compute jobs read {repos} on GitHub",
         consequences: "Jobs from {ws} on this server's own nodes can then fetch and clone {repos} with short-lived, read-only tokens (and keep their caches). A job can read a token it's handed while it runs.",
         scope: "{ws}'s jobs on this server's own nodes",
-        duration: "until someone revokes it (k2 compute git-access revoke)",
+        duration: concat!("until someone revokes it (", cli_name!(), " compute git-access revoke)"),
         retry: "run your command again",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "compute", path: "k2 compute git-access (a terminal outside K2)" },
+    settings: SettingsRef { page: "compute", path: concat!(cli_name!(), " compute git-access (a terminal outside K2)") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: crate::compute_git::NEEDS_PERSON },
         route_prefix: crate::compute_git::GRANT,
@@ -1609,7 +1611,7 @@ fn apply_git_access(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applie
 /// The grant's words while there's no credential: what to ask first.
 pub(crate) fn needs_setup_why() -> String {
     format!(
-        "{}. Ask for the setup first: k2 permission request {} --why \"<what you need it for>\"",
+        "{}. Ask for the setup first: {CLI_NAME} permission request {} --why \"<what you need it for>\"",
         crate::compute_git::NEEDS_SETUP_HINT,
         GIT_SETUP.id
     )
@@ -1644,11 +1646,11 @@ pub(crate) static GIT_SETUP: ActionSpec = ActionSpec {
         what_changes: "Set this server's GitHub credential in K2's own form: a GitHub App (its App ID and private key) or a fine-grained token",
         consequences: "It goes straight into this server's vault; {ws} never sees it. Give it Repository permissions: Contents read-only, on just the repos you'll grant (install the App on them, or pick them for the token). It reads nothing by itself: each workspace's repos are a separate grant.",
         scope: "this server",
-        duration: "until someone replaces or clears it (k2 compute git-access setup)",
+        duration: concat!("until someone replaces or clears it (", cli_name!(), " compute git-access setup)"),
         retry: "run your command again: the grant is a second card",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "compute", path: "k2 compute git-access setup (a terminal outside K2)" },
+    settings: SettingsRef { page: "compute", path: concat!(cli_name!(), " compute git-access setup (a terminal outside K2)") },
     walls: &[
         // The agent's grant while there's no credential.
         Wall {
@@ -1690,8 +1692,8 @@ fn apply_git_setup(_ctx: &Ctx, _who: &Answerer, _token: Option<&str>) -> Applied
 }
 
 pub(crate) fn git_setup_form_words() -> String {
-    "Set it up first, in K2's own form on this card (K2 on your computer or the web), or from a terminal outside K2: \
-     k2 compute git-access setup --github-app <app id> --key-file <app.pem> (or --github-token-file <file>)"
+    concat!("Set it up first, in K2's own form on this card (K2 on your computer or the web), or from a terminal outside K2: \
+     ", cli_name!(), " compute git-access setup --github-app <app id> --key-file <app.pem> (or --github-token-file <file>)")
         .to_string()
 }
 

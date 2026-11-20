@@ -19,6 +19,7 @@ use k2_core::permission::catalog::{
 
 use super::switches::{applied, check_state};
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::cli_name;
 
 pub(crate) const ACTION: &str = "approve.request";
 pub(crate) const ACTION_OFF: &str = "approve.request-off";
@@ -26,7 +27,7 @@ pub(crate) const ACTION_OFF: &str = "approve.request-off";
 /// No Settings row yet: the place is the command (the card's "Open in
 /// Settings" still lands on the agent's page).
 const SETTINGS: SettingsRef =
-    SettingsRef { page: "workspaces/{ws}/permissions", path: "k2 approve agents {ws} on|off (an Owner or Admin)" };
+    SettingsRef { page: "workspaces/{ws}/permissions", path: concat!(cli_name!(), " approve agents {ws} on|off (an Owner or Admin)") };
 const SETTING: &str = "Let this agent ask people for signed approvals";
 
 pub(crate) static APPROVE_REQUEST: ActionSpec = ActionSpec {

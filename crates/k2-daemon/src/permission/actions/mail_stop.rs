@@ -30,6 +30,7 @@ use k2_core::permission::catalog::{
 use super::held::text_param;
 use super::switches::applied;
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::cli_name;
 
 pub(crate) const ACTION: &str = "mail.stop-sending";
 /// `k2 mail sending <ws> off` (and Settings → Email sending).
@@ -47,7 +48,7 @@ pub(crate) static STOP_SENDING: ActionSpec = ActionSpec {
     words: Words {
         setting: "{target}'s email sending",
         what_changes: "Stop {target} sending email",
-        consequences: "{target}'s agents can't send email from any inbox (hosted or linked) until someone turns sending on again (k2 mail sending {target} approval|on, or Settings). Mail they already sent stays sent. {ws} gets no other access to {target}.",
+        consequences: concat!("{target}'s agents can't send email from any inbox (hosted or linked) until someone turns sending on again (", cli_name!(), " mail sending {target} approval|on, or Settings). Mail they already sent stays sent. {ws} gets no other access to {target}."),
         scope: "{target}",
         duration: "until someone turns it on again",
         retry: "",

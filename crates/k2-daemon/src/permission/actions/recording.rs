@@ -35,6 +35,8 @@ use super::held::{error_of, route_floor, text_param};
 use super::vault::OwnService;
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) const ACTION: &str = "apps.recording";
 pub(crate) const ROUTE: &str = crate::apps::recording_routes::SET;
@@ -64,7 +66,7 @@ pub(crate) static APPS_RECORDING: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: "k2 app recording <app> set --required off --server-read off (a terminal outside K2)" },
+    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " app recording <app> set --required off --server-read off (a terminal outside K2)") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "owner_only" },
         route_prefix: ROUTE,
@@ -137,7 +139,7 @@ fn words(ctx: &Ctx, out: &mut Ctx) {
                     "A call there is recorded once a second person joins; each person still consents for themselves, and someone who declines can't join a call that requires it when the server's policy says so.".to_string(),
                 );
             }
-            effects.push(format!("To turn it off: k2 app recording {n} set --required off --server-read off."));
+            effects.push(format!("To turn it off: {CLI_NAME} app recording {n} set --required off --server-read off."));
             (what.join(", and "), effects.join(" "))
         }
         Err(e) => (format!("Change the recording of one of {ws}'s Apps"), e),
@@ -158,7 +160,7 @@ fn check(ctx: &Ctx) -> Check {
     if v["flags"]["appRecording"] != json!(true) {
         return Check::Unavailable {
             code: "sew_feature_missing",
-            why: "this server's chat can't record in Apps yet (it needs Sew 0.9.0: app_recording): the owner upgrades it (k2 hostchat upgrade)".into(),
+            why: concat!("this server's chat can't record in Apps yet (it needs Sew 0.9.0: app_recording): the owner upgrades it (", cli_name!(), " hostchat upgrade)").into(),
         };
     }
     let on = |k: &str| v["recording"][k] == json!(true);

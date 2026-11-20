@@ -44,6 +44,8 @@ use serde_json::{json, Value};
 
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) const ACTION: &str = "chat.account";
 /// The grants route the owner uses (`k2 app grant add`).
@@ -76,7 +78,7 @@ pub(crate) static CHAT_ACCOUNT: ActionSpec = ActionSpec {
     undo: Undo::None,
     settings: SettingsRef {
         page: "people",
-        path: "k2 app grant add --kind chat --subject-kind workspace --subject {ws} --scope coworker (a terminal outside K2)",
+        path: concat!(cli_name!(), " app grant add --kind chat --subject-kind workspace --subject {ws} --scope coworker (a terminal outside K2)"),
     },
     walls: &[
         Wall {
@@ -134,13 +136,13 @@ pub(crate) fn scope_of(ctx: &Ctx) -> Result<Scope, String> {
             let found = k2_core::skin::list_principals()?
                 .into_iter()
                 .find(|x| x.username.eq_ignore_ascii_case(want) || x.id == want)
-                .ok_or_else(|| format!("there's no person named {want} on this server (k2 app user list)"))?;
+                .ok_or_else(|| format!("there's no person named {want} on this server ({CLI_NAME} app user list)"))?;
             if k2_core::skin::principal_agent_workspace(&found.id).map_err(|e| e.to_string())?.is_some() {
                 return Err(format!("{} is an agent's login: an agent assists a person, never another agent", found.username));
             }
             if !person_has_chat(&found.id)? {
                 return Err(format!(
-                    "{} has no chat of their own yet, and an assistant needs that person in chat first: a person gives it (k2 app user chat {} member --app <app>), then ask again",
+                    "{} has no chat of their own yet, and an assistant needs that person in chat first: a person gives it ({CLI_NAME} app user chat {} member --app <app>), then ask again",
                     found.username, found.username
                 ));
             }
@@ -190,7 +192,7 @@ fn check(ctx: &Ctx) -> Check {
         Ok(false) => {
             return Check::Unavailable {
                 code: "chat_unavailable",
-                why: "Chat and voice aren't on for this server, so there are no chat accounts yet: the owner turns it on first (k2 hostchat status)".into(),
+                why: concat!("Chat and voice aren't on for this server, so there are no chat accounts yet: the owner turns it on first (", cli_name!(), " hostchat status)").into(),
             }
         }
         Err(e) => return Check::Unavailable { code: "chat_unavailable", why: e },
@@ -206,7 +208,7 @@ fn check(ctx: &Ctx) -> Check {
             scope.label
         )),
         Ok(Some((false, _))) => Check::Moved(format!(
-            "{}'s chat account is turned off: turning it back on is the owner's (k2 app grant list shows it)",
+            "{}'s chat account is turned off: turning it back on is the owner's ({CLI_NAME} app grant list shows it)",
             ctx.workspace_handle
         )),
     }
@@ -224,13 +226,13 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             None => (
                 format!("Give {ws} its own chat account, as a coworker"),
                 format!(
-                    "{ws} signs in to chat as itself, an agent. It sees only the Spaces a person gives it (k2 chat access grant) and the Spaces it creates, and it can be the manager of a Space it creates. Sew's roles still decide what it may do in each Space. To take it back: k2 app grant list, then k2 app grant rm --id <the chat grant's id>."
+                    "{ws} signs in to chat as itself, an agent. It sees only the Spaces a person gives it ({CLI_NAME} chat access grant) and the Spaces it creates, and it can be the manager of a Space it creates. Sew's roles still decide what it may do in each Space. To take it back: {CLI_NAME} app grant list, then {CLI_NAME} app grant rm --id <the chat grant's id>."
                 ),
             ),
             Some(p) => (
                 format!("Give {ws} its own chat account, as {p}'s assistant"),
                 format!(
-                    "{ws} signs in to chat as an agent that speaks for {p}: what it posts for {p} is marked as theirs. An assistant is never a Space's manager. It sees only the Spaces a person gives it (k2 chat access grant). To take it back: k2 app grant list, then k2 app grant rm --id <the chat grant's id>."
+                    "{ws} signs in to chat as an agent that speaks for {p}: what it posts for {p} is marked as theirs. An assistant is never a Space's manager. It sees only the Spaces a person gives it ({CLI_NAME} chat access grant). To take it back: {CLI_NAME} app grant list, then {CLI_NAME} app grant rm --id <the chat grant's id>."
                 ),
             ),
         },

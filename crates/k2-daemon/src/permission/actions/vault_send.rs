@@ -44,6 +44,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::vault::{caller_of, SHARE_CONFIRM};
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::brand::CLI_NAME;
 
 /// The card's id.
 pub(crate) const ACTION: &str = "vault.send";
@@ -183,14 +184,14 @@ fn check(ctx: &Ctx) -> Check {
             return Check::Moved(format!("{name}: {}", e.hint));
         }
         if !m.human_given {
-            return Check::Moved(format!("{name} isn't one a person gave, so you send it yourself: k2 vault send {name} --to {to}"));
+            return Check::Moved(format!("{name} isn't one a person gave, so you send it yourself: {CLI_NAME} vault send {name} --to {to}"));
         }
         if vault.send_allowed(&ctx.workspace_id, &m.id, std::slice::from_ref(&to)).is_some() {
             allowed += 1;
         }
     }
     if allowed == names.len() {
-        return Check::Moved(format!("a person already lets you send {} to {to}: run k2 vault send again", and_list(&names)));
+        return Check::Moved(format!("a person already lets you send {} to {to}: run {CLI_NAME} vault send again", and_list(&names)));
     }
     Check::Needed
 }

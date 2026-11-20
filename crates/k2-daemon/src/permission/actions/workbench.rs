@@ -24,11 +24,12 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::sidecar_worktree::{LAND_NEEDS_PERSON, LAND_ROUTE, RETIRE_NEEDS_PERSON, RETIRE_ROUTE};
+use k2_core::cli_name;
 
 pub(crate) const LAND_ACTION: &str = "git.land";
 pub(crate) const RETIRE_ACTION: &str = "sidecar.retire";
 
-const SETTINGS: SettingsRef = SettingsRef { page: "workspaces/{ws}", path: "k2 sidecar review {ws}/{sidecar}" };
+const SETTINGS: SettingsRef = SettingsRef { page: "workspaces/{ws}", path: concat!(cli_name!(), " sidecar review {ws}/{sidecar}") };
 
 pub(crate) static LAND: ActionSpec = ActionSpec {
     id: LAND_ACTION,
@@ -45,7 +46,7 @@ pub(crate) static LAND: ActionSpec = ActionSpec {
     words: Words {
         setting: "Land {ws}/{sidecar}",
         what_changes: "Land {ws}/{sidecar}'s commits (up to {tip}) on {ws}'s main branch",
-        consequences: "K2 cherry-picks the worktree's commits that aren't on the main branch yet onto it, in {ws}'s main checkout, then retires the worktree (to the Trash). It refuses if the main checkout has uncommitted changes, and stops with nothing changed on a conflict. Read them first: k2 sidecar review {ws}/{sidecar}.",
+        consequences: concat!("K2 cherry-picks the worktree's commits that aren't on the main branch yet onto it, in {ws}'s main checkout, then retires the worktree (to the Trash). It refuses if the main checkout has uncommitted changes, and stops with nothing changed on a conflict. Read them first: ", cli_name!(), " sidecar review {ws}/{sidecar}."),
         scope: "{ws}/{sidecar} at {tip}",
         duration: "once",
         retry: "",
@@ -119,7 +120,7 @@ fn review_of(ctx: &Ctx) -> Result<Value, String> {
 
 fn check_land(ctx: &Ctx) -> Check {
     let Some(tip) = text_param(ctx, "tip") else {
-        return Check::Moved("give the branch tip you want landed: tip=<sha> (k2 sidecar review <name>)".into());
+        return Check::Moved(concat!("give the branch tip you want landed: tip=<sha> (", cli_name!(), " sidecar review <name>)").into());
     };
     let v = match review_of(ctx) {
         Ok(v) => v,

@@ -52,6 +52,8 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::vault::{own_service, OwnService};
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) const ACTION: &str = "app.login-grant";
 pub(crate) const ROUTE_ADD: &str = "/cli/skin/grants";
@@ -208,23 +210,23 @@ fn login_of(ctx: &Ctx) -> Result<Login, String> {
     let user = text_param(ctx, "user").ok_or("name the person: user=<their username>")?;
     let app = text_param(ctx, "app").ok_or("name your App: app=<its name>")?;
     let svc = own_service(&ctx.workspace_id, app).ok_or_else(|| format!("{} has no App named {app}", ctx.workspace_handle))?;
-    let person = principal(user).ok_or_else(|| format!("there's no App user named {user} on this server (k2 app user list)"))?;
+    let person = principal(user).ok_or_else(|| format!("there's no App user named {user} on this server ({CLI_NAME} app user list)"))?;
     if skin::principal_agent_workspace(&person.id).map_err(|e| e.to_string())?.is_some() {
         return Err(format!("{} is an agent's login: an agent never gives an agent access to an App this way", person.username));
     }
     let grants = skin::list_grants().map_err(|e| e.to_string())?;
     if crate::skin_routes::has_box_login(&person.id, &grants) {
         return Err(format!(
-            "{u} has a box login, so this card doesn't apply. For access to your App, ask the owner on this one instead: k2 permission request apps.user-grant-box user={u} app={app} role=<role> --why \"<what you need it for>\"",
+            "{u} has a box login, so this card doesn't apply. For access to your App, ask the owner on this one instead: {CLI_NAME} permission request apps.user-grant-box user={u} app={app} role=<role> --why \"<what you need it for>\"",
             u = person.username,
         ));
     }
     let role = match (op, text_param(ctx, "role")) {
-        (Op::Add | Op::Role, None) => return Err("name the role they get: role=<role> (k2 app role list)".into()),
+        (Op::Add | Op::Role, None) => return Err(concat!("name the role they get: role=<role> (", cli_name!(), " app role list)").into()),
         (Op::Remove, Some(_)) => return Err("role= goes with op=add or op=role".into()),
         (Op::Remove, None) => None,
         (Op::Add | Op::Role, Some(r)) => {
-            let role = role_named(r).ok_or_else(|| format!("there's no role named {r} on this server (k2 app role list)"))?;
+            let role = role_named(r).ok_or_else(|| format!("there's no role named {r} on this server ({CLI_NAME} app role list)"))?;
             if role.app_id.as_deref().is_some_and(|a| a != svc.id) {
                 return Err(format!("the role {} belongs to another App", role.name));
             }
@@ -256,7 +258,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
                         .and_then(|rid| skin::list_roles().ok()?.into_iter().find(|x| x.id == rid))
                         .map(|x| x.name);
                     let back = match (&now, &from) {
-                        (Some(g), Some(old)) => format!(" Put it back with k2 app grant role {} --role {old}.", g.id),
+                        (Some(g), Some(old)) => format!(" Put it back with {CLI_NAME} app grant role {} --role {old}.", g.id),
                         _ => String::new(),
                     };
                     (
@@ -274,7 +276,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
                 (Some(r), _) => (
                     format!("Let {ws} give {u} a login on its App {a}, with the role {}", r.name),
                     format!(
-                        "With the role {}, {u} can {}. They sign in to {a} with their own password, and {a}'s server can see it when they do. Remove it again with k2 app grant rm --subject-kind principal --subject {u} --kind app --target {a}.",
+                        "With the role {}, {u} can {}. They sign in to {a} with their own password, and {a}'s server can see it when they do. Remove it again with {CLI_NAME} app grant rm --subject-kind principal --subject {u} --kind app --target {a}.",
                         r.name,
                         role_allows(r)
                     ),
@@ -301,7 +303,7 @@ fn check(ctx: &Ctx) -> Check {
     match (l.op, login_on(&l.person, &l.svc)) {
         (Op::Add, Some(g)) if same_role(&g) && g.enabled => Check::AlreadyDone,
         (Op::Add, Some(_)) => Check::Moved(format!(
-            "{u} already has a login on {a}: to change its role and keep their sessions, ask with op=role: k2 permission request app.login-grant op=role user={u} app={a} role={r} --why \"<what you need it for>\"",
+            "{u} already has a login on {a}: to change its role and keep their sessions, ask with op=role: {CLI_NAME} permission request app.login-grant op=role user={u} app={a} role={r} --why \"<what you need it for>\"",
             u = l.person.username,
             a = l.svc.name,
             r = l.role.as_ref().map(|r| r.name.as_str()).unwrap_or("<role>"),
@@ -312,7 +314,7 @@ fn check(ctx: &Ctx) -> Check {
         (Op::Role, Some(g)) if same_role(&g) => Check::AlreadyDone,
         (Op::Role, Some(_)) => Check::Needed,
         (Op::Role, None) => Check::Moved(format!(
-            "{u} has no login on {a} to move: ask with op=add instead: k2 permission request app.login-grant op=add user={u} app={a} role={r} --why \"<what you need it for>\"",
+            "{u} has no login on {a} to move: ask with op=add instead: {CLI_NAME} permission request app.login-grant op=add user={u} app={a} role={r} --why \"<what you need it for>\"",
             u = l.person.username,
             a = l.svc.name,
             r = l.role.as_ref().map(|r| r.name.as_str()).unwrap_or("<role>"),

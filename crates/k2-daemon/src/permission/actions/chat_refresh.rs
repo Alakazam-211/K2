@@ -34,6 +34,8 @@ use super::switches::{applied, PERMISSIONS_TAB};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::chat_refresh::{CARD_ACTION as ACTION, NEEDS_PERSON, ROUTE};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 const SWAP_ROUTE: &str = "/cli/workspace/swap-canonical";
 const NOTE_PARAMS: &[(&str, ParamFrom)] = &[("notes", ParamFrom::Response("/error/notes")), ("mode", ParamFrom::Response("/error/mode"))];
@@ -137,7 +139,7 @@ pub(crate) fn gate_ask(action: &str, workspace_id: &str, session_id: &str, param
         return Err(refuse(
             "403 Forbidden",
             crate::chat_refresh::MAIN_ONLY,
-            "a sidecar can't refresh itself. A new sidecar knows nothing of this chat, so write a handover to a file first, then ask your main session (`k2 msg <workspace>`) to stop you and open a sidecar under a new name with `--brief <file>`. `k2 sidecar new` on the same name resumes this chat.".to_string(),
+            concat!("a sidecar can't refresh itself. A new sidecar knows nothing of this chat, so write a handover to a file first, then ask your main session (`", cli_name!(), " msg <workspace>`) to stop you and open a sidecar under a new name with `--brief <file>`. `", cli_name!(), " sidecar new` on the same name resumes this chat.").to_string(),
         ));
     }
     let open = crate::permission::store::open(Some(workspace_id)).map_err(|e| refuse("500 Internal Server Error", "db", e))?;
@@ -146,7 +148,7 @@ pub(crate) fn gate_ask(action: &str, workspace_id: &str, session_id: &str, param
             "409 Conflict",
             "chat_refresh_already_asked",
             format!(
-                "you already asked to refresh this chat ({}), with a different note. To change it: `k2 permission cancel {}`, run `k2 agent refresh --note …` again, and ask with its new line.",
+                "you already asked to refresh this chat ({}), with a different note. To change it: `{CLI_NAME} permission cancel {}`, run `{CLI_NAME} agent refresh --note …` again, and ask with its new line.",
                 other.display_id(),
                 other.display_id()
             ),
@@ -161,7 +163,7 @@ fn check(ctx: &Ctx) -> Check {
     };
     if k2_core::workspace::settings::agents_can_refresh_chat(&ctx.workspace_id) {
         return Check::Moved(format!(
-            "\"Let this agent refresh its pinned chat\" is on for {}: run `k2 agent refresh` yourself",
+            "\"Let this agent refresh its pinned chat\" is on for {}: run `{CLI_NAME} agent refresh` yourself",
             ctx.workspace_handle
         ));
     }

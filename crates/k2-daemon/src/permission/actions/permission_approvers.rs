@@ -26,6 +26,8 @@ use serde_json::{json, Value};
 
 use super::switches::applied;
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) const ACTION: &str = "permission.approvers";
 /// The word for "every owner or admin who may answer" (an empty list).
@@ -96,10 +98,10 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
         Ok(names) => (
             format!("Send agents' permission cards to {} when an agent names no one", words_of(&names)),
             if names.is_empty() {
-                "Every owner or admin who may answer a card sees it with Allow and Deny and gets a push, as before. An agent can still name who it asks (k2 permission request … --to).".to_string()
+                concat!("Every owner or admin who may answer a card sees it with Allow and Deny and gets a push, as before. An agent can still name who it asks (", cli_name!(), " permission request … --to).").to_string()
             } else {
                 format!(
-                    "Only {} see agents' cards with Allow and Deny, get the push and the Tickets item, and see them under Waiting on you; a card none of them may answer goes to the owner. Other owners and admins aren't asked, and can still answer from Settings. Now: {}. An agent can still name who it asks (k2 permission request … --to).",
+                    "Only {} see agents' cards with Allow and Deny, get the push and the Tickets item, and see them under Waiting on you; a card none of them may answer goes to the owner. Other owners and admins aren't asked, and can still answer from Settings. Now: {}. An agent can still name who it asks ({CLI_NAME} permission request … --to).",
                     words_of(&names),
                     words_of(&now_list())
                 )

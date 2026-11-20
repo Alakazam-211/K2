@@ -45,6 +45,7 @@ use serde_json::{json, Value};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::cli_name;
 
 // ── shared helpers for the E1 entries (also used by connections.rs) ──
 
@@ -735,7 +736,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             &[],
             "Allow a virtual desktop",
             "Let {ws} have a desktop of its own on this Linux server",
-            "It may start, wake and keep awake one desktop for its own workspace (k2 desktop env) and put windows on it. People can watch and use it in a Desktop tab. Separate, not private: other agents on the server could still reach it.",
+            concat!("It may start, wake and keep awake one desktop for its own workspace (", cli_name!(), " desktop env) and put windows on it. People can watch and use it in a Desktop tab. Separate, not private: other agents on the server could still reach it."),
             &[code_wall("desktop_switch_off", "/cli/desktop/env")],
             WallCoverage::Code,
         ),
@@ -745,7 +746,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             &[],
             "Allow a virtual desktop",
             "Stop {ws} using a virtual desktop",
-            "Its desktop stays as it is until an Owner or Admin closes it or it sleeps; new k2 desktop env calls are refused.",
+            concat!("Its desktop stays as it is until an Owner or Admin closes it or it sleeps; new ", cli_name!(), " desktop env calls are refused."),
         ),
         writer: Writer::Access("desktop"),
     },
@@ -989,7 +990,7 @@ pub(crate) static NOT_CARDABLE: [NotCardableSpec; 10] = [
         id: "workspace.skip-permissions",
         area: Area::Switches,
         why: NotCardable::Dropped,
-        r#where: "a terminal outside K2 (k2 workspace api-skip-permissions)",
+        r#where: concat!("a terminal outside K2 (", cli_name!(), " workspace api-skip-permissions)"),
     },
     NotCardableSpec { id: "compute.node.pause", area: Area::Compute, why: NotCardable::Dropped, r#where: "Settings → Cores → Compute → Machine settings" },
     NotCardableSpec { id: "domain.apex.add", area: Area::Domains, why: NotCardable::Covered { by: "dns.manage" }, r#where: IN_SETTINGS },

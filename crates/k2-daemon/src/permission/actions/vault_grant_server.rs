@@ -39,6 +39,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::vault::{caller_of, SHARE_CONFIRM};
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::brand::CLI_NAME;
 
 /// The card's id.
 pub(crate) const ACTION: &str = "vault.grant-server";
@@ -171,13 +172,13 @@ pub(crate) fn missing(action: &str, request_id: &str) -> Option<String> {
 /// How the agent uses it, for its turn.
 fn use_words(name: &str, how: Delivery) -> String {
     match how {
-        Delivery::Fetch => format!("k2 vault fetch --secret {name} --scope server <url> (K2 adds it; you never see it)."),
+        Delivery::Fetch => format!("{CLI_NAME} vault fetch --secret {name} --scope server <url> (K2 adds it; you never see it)."),
         Delivery::Agent => "ssh and git sign with it on $SSH_AUTH_SOCK in new sessions.".to_string(),
-        Delivery::File => format!("k2 vault file {name} --scope server for a short-lived 0600 file, or k2 vault sync to put it in $K2_SECRETS_DIR now."),
+        Delivery::File => format!("{CLI_NAME} vault file {name} --scope server for a short-lived 0600 file, or {CLI_NAME} vault sync to put it in $K2_SECRETS_DIR now."),
         _ => {
             let var = k2_vault::delivery::default_env_name(name);
             format!(
-                "new sessions get ${var}. An environment variable reaches new sessions only, so for ${var} in this chat run k2 agent refresh (a new chat that carries on from this one); until then k2 vault env-file --secret {name} --scope server works now."
+                "new sessions get ${var}. An environment variable reaches new sessions only, so for ${var} in this chat run {CLI_NAME} agent refresh (a new chat that carries on from this one); until then {CLI_NAME} vault env-file --secret {name} --scope server works now."
             )
         }
     }

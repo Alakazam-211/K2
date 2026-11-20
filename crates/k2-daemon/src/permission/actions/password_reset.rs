@@ -48,6 +48,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 /// The card's id (PR-A1: the catalog allows only `a-z 0-9 . -`).
 pub(crate) const ACTION: &str = "apps.user-password-reset";
@@ -166,10 +167,10 @@ fn target(ctx: &Ctx) -> Result<Target, String> {
         Some(u) => skin::list_principals()?.into_iter().find(|p| p.username == u),
         None => None,
     };
-    let Some(person) = person else { return Err(format!("no App user {user:?} (k2 app user list)")) };
+    let Some(person) = person else { return Err(format!("no App user {user:?} ({CLI_NAME} app user list)")) };
     if skin::test_guests::get(&person.id)?.is_some() {
         return Err(format!(
-            "'{}' is a test guest (a short-lived user for testing an App): set its password yourself (k2 app user password {} --password-stdin)",
+            "'{}' is a test guest (a short-lived user for testing an App): set its password yourself ({CLI_NAME} app user password {} --password-stdin)",
             person.username, person.username
         ));
     }

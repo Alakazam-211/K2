@@ -32,6 +32,8 @@ use serde_json::json;
 
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::vault::actor::{Channel, VaultCaller};
+use k2_core::cli_name;
+use k2_core::brand::CLI_NAME;
 
 /// The card's route wall: an agent's own call to the owner handoff.
 pub(crate) const HANDOFF_ROUTE: &str = crate::chat_pass::mint::OWNER_HANDOFF;
@@ -94,16 +96,16 @@ pub(crate) static ROLLBACK_DATA_LOSS: ActionSpec = ActionSpec {
     words: Words {
         setting: "Roll chat back",
         what_changes: "Roll this server's chat back from {from} to {to}",
-        consequences: "Chat written since {since} will be lost from the live chat; a backup of it is kept. Approving runs \
+        consequences: concat!("Chat written since {since} will be lost from the live chat; a backup of it is kept. Approving runs \
             it now: K2 backs up the chat on version {from}, then everyone's chat goes back to how it was at {since}. Chat is offline \
-            for a few minutes while it runs. To bring the newer chat back later: k2 hostchat upgrade, then k2 hostchat \
-            restore <the kept backup> --confirm.",
+            for a few minutes while it runs. To bring the newer chat back later: ", cli_name!(), " hostchat upgrade, then ", cli_name!(), " hostchat \
+            restore <the kept backup> --confirm."),
         scope: "this server's chat, for everyone",
         duration: "once",
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: "k2 hostchat rollback --accept-data-loss (a terminal outside K2)" },
+    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " hostchat rollback --accept-data-loss (a terminal outside K2)") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: crate::sew::routes::ROLLBACK_NEEDS_PERSON },
         route_prefix: ROLLBACK_ROUTE,
@@ -237,7 +239,7 @@ fn apply_rollback(_ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     start_rollback(bundle, &stamp);
     Applied::Done {
         message: format!(
-            "Sew is rolling back to {} (chat written since {} leaves the live chat; K2 backs it up first). k2 hostchat status \
+            "Sew is rolling back to {} (chat written since {} leaves the live chat; K2 backs it up first). {CLI_NAME} hostchat status \
              shows when it's done.",
             plan["to"].as_str().unwrap_or("the previous version"),
             plan["since"].as_str().unwrap_or("the last upgrade")
@@ -269,7 +271,7 @@ fn check(ctx: &Ctx) -> Check {
         };
     }
     if app_url().is_none() {
-        return Check::Moved("Sew has no web app URL to open yet (k2 hostchat app-url set https://HOST)".into());
+        return Check::Moved(concat!("Sew has no web app URL to open yet (", cli_name!(), " hostchat app-url set https://HOST)").into());
     }
     Check::Needed
 }
@@ -322,7 +324,7 @@ fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
         return Applied::Refused { code: super::super::answer::LOOPBACK_ONLY.into(), message: LOCAL_ONLY.into() };
     }
     let Some(url) = app_url() else {
-        return Applied::Refused { code: "no_app_url".into(), message: "Sew has no web app URL to open (k2 hostchat app-url set https://HOST)".into() };
+        return Applied::Refused { code: "no_app_url".into(), message: concat!("Sew has no web app URL to open (", cli_name!(), " hostchat app-url set https://HOST)").into() };
     };
     let Some(token) = token else {
         return Applied::Refused { code: "vault_confirm_required".into(), message: "confirm it's you first".into() };
@@ -392,16 +394,16 @@ pub(crate) static RECORDING_ENABLE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Install the chat recorder",
         what_changes: "Install the chat recorder and transcriber on this server and turn recording on ({ws} asked)",
-        consequences: "Calls can then be recorded and transcribed where an App or a room allows it, and only for people who \
+        consequences: concat!("Calls can then be recorded and transcribed where an App or a room allows it, and only for people who \
             consent; nobody is recorded without saying yes. It needs 8 GiB of RAM and some disk under /var/lib. Turning it \
-            off later (k2 hostchat recording disable) keeps the recorder and every recording; uninstalling it never deletes \
-            recordings.",
+            off later (", cli_name!(), " hostchat recording disable) keeps the recorder and every recording; uninstalling it never deletes \
+            recordings."),
         scope: "this server's chat, for everyone",
         duration: "until someone turns it off",
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: "k2 hostchat recording enable (a terminal outside K2)" },
+    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " hostchat recording enable (a terminal outside K2)") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "person_only" },
         route_prefix: RECORDING_ROUTE,
@@ -474,8 +476,8 @@ fn apply_recording(_ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
         return Applied::Refused { code, message };
     }
     Applied::Done {
-        message: "Sew's recorder is installing; recording turns on when it's done (k2 hostchat recording status). Each person \
-                  still consents for themselves."
+        message: concat!("Sew's recorder is installing; recording turns on when it's done (", cli_name!(), " hostchat recording status). Each person \
+                  still consents for themselves.")
             .into(),
     }
 }

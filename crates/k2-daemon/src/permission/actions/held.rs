@@ -50,6 +50,8 @@ use serde_json::{json, Value};
 
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 // ── shared with compute.rs ──────────────────────────────────────────
 
@@ -200,17 +202,17 @@ fn app_request(id: &str) -> Option<app_reqs::AppRequest> {
 
 fn check_app(ctx: &Ctx) -> Check {
     let Some(id) = text_param(ctx, "request") else {
-        return Check::Moved("name the held App request: request=<its w_… id> (k2 app approvals)".into());
+        return Check::Moved(concat!("name the held App request: request=<its w_… id> (", cli_name!(), " app approvals)").into());
     };
     let r = match app_request(id) {
         Some(r) if r.requester_workspace.as_deref() == Some(ctx.workspace_id.as_str()) => r,
-        _ => return Check::Moved(format!("no held App request {id} of {}'s (k2 app approvals shows the full w_… ids)", ctx.workspace_handle)),
+        _ => return Check::Moved(format!("no held App request {id} of {}'s ({CLI_NAME} app approvals shows the full w_… ids)", ctx.workspace_handle)),
     };
     match r.status.as_str() {
         app_reqs::STATUS_PENDING if r.expires_at > now() => Check::Needed,
         app_reqs::STATUS_PENDING | app_reqs::STATUS_EXPIRED => Check::Moved(format!("App request {id} expired unanswered (7 days)")),
         app_reqs::STATUS_APPROVED => Check::AlreadyDone,
-        app_reqs::STATUS_FAILED => Check::Moved(format!("App request {id} was approved already, but applying it failed (k2 app approvals)")),
+        app_reqs::STATUS_FAILED => Check::Moved(format!("App request {id} was approved already, but applying it failed ({CLI_NAME} app approvals)")),
         other => Check::Moved(format!("App request {id} was {other} meanwhile")),
     }
 }
@@ -249,7 +251,7 @@ pub(crate) static MAIL_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Email approvals",
         what_changes: "Send {ws}'s held email {message}",
-        consequences: "The message leaves exactly as it was queued: the same sender, recipients and text. This card only covers a message with no files, no Reply-To and no forward, and a reply whose original's sender cleared the DMARC check. Anything else is approved in Settings → Cores → Email Hosting → Approvals, or with k2 hostmail approvals. Read it first in Settings → Cores → Email Hosting → Approvals.",
+        consequences: concat!("The message leaves exactly as it was queued: the same sender, recipients and text. This card only covers a message with no files, no Reply-To and no forward, and a reply whose original's sender cleared the DMARC check. Anything else is approved in Settings → Cores → Email Hosting → Approvals, or with ", cli_name!(), " hostmail approvals. Read it first in Settings → Cores → Email Hosting → Approvals."),
         scope: "message {message}",
         duration: ONE_TIME,
         retry: "",
@@ -314,18 +316,18 @@ fn needs_a_closer_look(id: &str) -> Option<String> {
     };
     Some(format!(
         "email {id} is still waiting. It carries {what}, which a permission card can't show, so it has \
-         to be approved where they're shown: Settings → Cores → Email Hosting → Approvals, or k2 hostmail \
+         to be approved where they're shown: Settings → Cores → Email Hosting → Approvals, or {CLI_NAME} hostmail \
          approvals show {id}"
     ))
 }
 
 fn check_mail(ctx: &Ctx) -> Check {
     let Some(id) = text_param(ctx, "message") else {
-        return Check::Moved("name the held email: message=<its out_… id> (k2 mail outbox)".into());
+        return Check::Moved(concat!("name the held email: message=<its out_… id> (", cli_name!(), " mail outbox)").into());
     };
     let (status, created) = match outbound(id) {
         Some((owner, status, created)) if owner == ctx.workspace_id => (status, created),
-        _ => return Check::Moved(format!("no held email {id} of {}'s (k2 mail outbox)", ctx.workspace_handle)),
+        _ => return Check::Moved(format!("no held email {id} of {}'s ({CLI_NAME} mail outbox)", ctx.workspace_handle)),
     };
     match status.as_str() {
         "pending" if created + crate::mail::send::APPROVAL_EXPIRE_SECS > now() => match needs_a_closer_look(id) {
@@ -428,11 +430,11 @@ fn source_pairs(ctx: &Ctx) -> Result<Vec<(String, String)>, String> {
     let names = list_param(ctx, "source");
     let specs = list_param(ctx, "spec");
     if names.is_empty() {
-        return Err("name the source: source=<name> (k2 sources pending)".into());
+        return Err(concat!("name the source: source=<name> (", cli_name!(), " sources pending)").into());
     }
     if names.len() != specs.len() {
         return Err(format!(
-            "give one spec= per source=, in the same order: the specHash k2 sources pending shows ({} source(s), {} spec(s))",
+            "give one spec= per source=, in the same order: the specHash {CLI_NAME} sources pending shows ({} source(s), {} spec(s))",
             names.len(),
             specs.len()
         ));
@@ -455,7 +457,7 @@ fn check_sources(ctx: &Ctx) -> Check {
     for (name, spec) in &pairs {
         let row = db(|c| k2_core::sources::store::get_by_name(c, name)).ok().flatten();
         let Some(row) = row.filter(|r| r.made_by_project.as_deref() == Some(ctx.workspace_id.as_str())) else {
-            return Check::Moved(format!("no source {name} of {}'s (k2 sources pending)", ctx.workspace_handle));
+            return Check::Moved(format!("no source {name} of {}'s ({CLI_NAME} sources pending)", ctx.workspace_handle));
         };
         match row.status {
             SourceStatus::Active if row.approved_spec_hash.as_deref().is_some_and(|h| spec_matches(h, spec)) => {
@@ -556,11 +558,11 @@ fn check_proposal(ctx: &Ctx) -> Check {
         return r;
     }
     let Some(id) = text_param(ctx, "proposal") else {
-        return Check::Moved("name the Garden proposal: proposal=<its zp-… id> (k2 zen proposals)".into());
+        return Check::Moved(concat!("name the Garden proposal: proposal=<its zp-… id> (", cli_name!(), " zen proposals)").into());
     };
     let p = match db(|c| k2_core::zen::agent_edit::get(c, id)).ok().flatten() {
         Some(p) if p.made_by_project == ctx.workspace_id => p,
-        _ => return Check::Moved(format!("no Garden proposal {id} of {}'s (k2 zen proposals)", ctx.workspace_handle)),
+        _ => return Check::Moved(format!("no Garden proposal {id} of {}'s ({CLI_NAME} zen proposals)", ctx.workspace_handle)),
     };
     match p.status.as_str() {
         "pending" => Check::Needed,
@@ -598,13 +600,13 @@ pub(crate) static VAULT_MOVE_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Box moves",
         what_changes: "Run {ws}'s held box-move step {request} on this server's vault",
-        consequences: "A box move exports this server's whole vault (and freezes it) or replaces it with a moved one, depending on the step. k2 migrate status shows which; nothing is deleted, and k2 migrate --help says how to undo it.",
+        consequences: concat!("A box move exports this server's whole vault (and freezes it) or replaces it with a moved one, depending on the step. ", cli_name!(), " migrate status shows which; nothing is deleted, and ", cli_name!(), " migrate --help says how to undo it."),
         scope: "held step {request}",
         duration: ONE_TIME,
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "vault", path: "k2 migrate status (from your own terminal)" },
+    settings: SettingsRef { page: "vault", path: concat!(cli_name!(), " migrate status (from your own terminal)") },
     walls: &[Wall {
         matches: WallMatch::Held { status: 202, field: "status", value: "held" },
         route_prefix: "/cli/migrate/secrets/",
@@ -618,20 +620,20 @@ pub(crate) static VAULT_MOVE_APPROVE: ActionSpec = ActionSpec {
 
 fn check_vault_move(ctx: &Ctx) -> Check {
     let Some(id) = text_param(ctx, "request") else {
-        return Check::Moved("name the held step: request=<its mv_… id> (k2 migrate status)".into());
+        return Check::Moved(concat!("name the held step: request=<its mv_… id> (", cli_name!(), " migrate status)").into());
     };
     let Some(home) = crate::vault::boot_home() else {
         return Check::Unavailable { code: "vault_not_open", why: "the vault hasn't booted on this server".into() };
     };
     match crate::migrate_secrets_routes::held_get(&home, id) {
         Some(h) if h.workspace_id.as_deref() != Some(ctx.workspace_id.as_str()) => {
-            Check::Moved(format!("no held box-move step {id} of {}'s (k2 migrate status)", ctx.workspace_handle))
+            Check::Moved(format!("no held box-move step {id} of {}'s ({CLI_NAME} migrate status)", ctx.workspace_handle))
         }
         Some(h) if h.status == "done" => Check::AlreadyDone,
         Some(h) if h.status == "pending" && h.expires_at > k2_core::overlay::now_secs() => Check::Needed,
         Some(h) if h.status == "pending" => Check::Moved(format!("held step {id} expired unanswered; run the step again")),
         Some(h) => Check::Moved(format!("held step {id} is {}", h.status)),
-        None => Check::Moved(format!("no held box-move step {id} (k2 migrate status)")),
+        None => Check::Moved(format!("no held box-move step {id} ({CLI_NAME} migrate status)")),
     }
 }
 
@@ -669,7 +671,7 @@ fn apply_vault_move(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     );
     let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
     if r.status == "200 OK" {
-        return Applied::Done { message: "Done. k2 migrate status shows the result.".into() };
+        return Applied::Done { message: concat!("Done. ", cli_name!(), " migrate status shows the result.").into() };
     }
     let (code, message) = error_of(&v, "refused");
     Applied::Refused { code, message }

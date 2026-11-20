@@ -69,7 +69,7 @@ const ASKED: WallMatch = WallMatch::Held { status: 200, field: "asked", value: "
 
 /// Not sent yet: the words every outgoing step uses while the network half
 /// waits (postal-sdk wire v2, the plane's pair API).
-const NOT_SENT: &str = "Allow sends the request over the Postal network as soon as this server is connected to it (k2 postal status says whether it is); until then it waits here.";
+const NOT_SENT: &str = concat!("Allow sends the request over the Postal network as soon as this server is connected to it (", cli_name!(), " postal status says whether it is); until then it waits here.");
 
 pub(crate) static INVITE_SPEC: ActionSpec = ActionSpec {
     id: INVITE,

@@ -41,6 +41,8 @@ use super::app_login::{login_on, principal, role_allows, role_named};
 use super::held::{error_of, route_floor, text_param};
 use super::vault::{own_service, OwnService};
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) const ACTION: &str = "apps.user-grant-box";
 
@@ -93,20 +95,20 @@ struct Ask {
 fn ask_of(ctx: &Ctx) -> Result<Ask, String> {
     let user = text_param(ctx, "user").ok_or("name the person: user=<their username>")?;
     let app = text_param(ctx, "app").ok_or("name your App: app=<its name>")?;
-    let role = text_param(ctx, "role").ok_or("name the role they get: role=<role> (k2 app role list)")?;
+    let role = text_param(ctx, "role").ok_or(concat!("name the role they get: role=<role> (", cli_name!(), " app role list)"))?;
     let svc = own_service(&ctx.workspace_id, app).ok_or_else(|| format!("{} has no App named {app}", ctx.workspace_handle))?;
-    let person = principal(user).ok_or_else(|| format!("there's no login named {user} on this server (k2 app user list)"))?;
+    let person = principal(user).ok_or_else(|| format!("there's no login named {user} on this server ({CLI_NAME} app user list)"))?;
     if skin::principal_agent_workspace(&person.id).map_err(|e| e.to_string())?.is_some() {
         return Err(format!("{} is an agent's login: an agent never gives an agent access to an App this way", person.username));
     }
     let grants = skin::list_grants().map_err(|e| e.to_string())?;
     if !crate::skin_routes::has_box_login(&person.id, &grants) {
         return Err(format!(
-            "{u} has no box login, only App logins, so this card doesn't apply. Ask on this one instead: k2 permission request app.login-grant op=add user={u} app={app} role={role} --why \"<what you need it for>\"",
+            "{u} has no box login, only App logins, so this card doesn't apply. Ask on this one instead: {CLI_NAME} permission request app.login-grant op=add user={u} app={app} role={role} --why \"<what you need it for>\"",
             u = person.username,
         ));
     }
-    let role = role_named(role).ok_or_else(|| format!("there's no role named {role} on this server (k2 app role list)"))?;
+    let role = role_named(role).ok_or_else(|| format!("there's no role named {role} on this server ({CLI_NAME} app role list)"))?;
     if role.app_id.as_deref().is_some_and(|a| a != svc.id) {
         return Err(format!("the role {} belongs to another App", role.name));
     }
@@ -156,17 +158,17 @@ fn current_words(g: &SkinGrant) -> String {
 /// How to put back what they hold now.
 fn undo_words(u: &str, app: &str, g: Option<&SkinGrant>) -> String {
     match g {
-        None => format!("k2 app grant rm --subject-kind principal --subject {u} --kind app --target {app}"),
+        None => format!("{CLI_NAME} app grant rm --subject-kind principal --subject {u} --kind app --target {app}"),
         Some(g) => match g.role_id.as_deref() {
             Some(rid) => {
                 let name = skin::list_roles().ok().and_then(|rs| rs.into_iter().find(|r| r.id == rid)).map(|r| r.name).unwrap_or_else(|| rid.to_string());
-                format!("k2 app grant role {} --role {name}", g.id)
+                format!("{CLI_NAME} app grant role {} --role {name}", g.id)
             }
             None => {
                 let rooms = skin::handles_for_project_ids(&skin::parse_rooms_json(g.scope.as_deref()));
                 let flags: Vec<String> = rooms.iter().map(|r| format!("--room {r}")).collect();
                 format!(
-                    "k2 app grant rm --id {} then k2 app grant add --subject-kind principal --subject {u} --kind app --target {app} {}",
+                    "{CLI_NAME} app grant rm --id {} then {CLI_NAME} app grant add --subject-kind principal --subject {u} --kind app --target {app} {}",
                     g.id,
                     flags.join(" ")
                 )

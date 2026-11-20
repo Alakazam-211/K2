@@ -19,6 +19,7 @@ use serde_json::Value;
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::heartbeat_other::{OTHER_WORKSPACE, PAUSE_ACTION, RESUME_ACTION, ROUTE};
+use k2_core::brand::CLI_NAME;
 
 const PARAMS: &[ParamSpec] = &[
     ParamSpec { key: "target", kind: ParamKind::Workspace, required: true, list: false, choices: &[] },
@@ -104,7 +105,7 @@ fn target_of(ctx: &Ctx) -> Result<(crate::heartbeat_other::Target, String, bool)
     })?;
     if target.id == ctx.workspace_id {
         return Err(format!(
-            "{} is your own workspace: run k2 heartbeat disable|enable {name} yourself, no card needed",
+            "{} is your own workspace: run {CLI_NAME} heartbeat disable|enable {name} yourself, no card needed",
             target.handle
         ));
     }

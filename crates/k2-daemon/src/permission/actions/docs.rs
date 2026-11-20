@@ -17,6 +17,7 @@ use k2_core::permission::catalog::{
 
 use super::switches::{applied, param, PERMISSIONS_TAB};
 use super::{Answerer, Applied, Check, Ctx, Registered};
+use k2_core::cli_name;
 
 pub(crate) static SHARE: ActionSpec = ActionSpec {
     id: "docs.share",
@@ -37,7 +38,7 @@ pub(crate) static SHARE: ActionSpec = ActionSpec {
         what_changes: "Let {ws} open {path} in {from} as a live doc",
         consequences: "Read-only unless access=write; its history only with history=yes. The two workspaces must stay connected.",
         scope: "{from}: {path}",
-        duration: "until someone unshares it (k2 doc unshare)",
+        duration: concat!("until someone unshares it (", cli_name!(), " doc unshare)"),
         retry: "run your command again",
     },
     undo: Undo::None,

@@ -41,6 +41,8 @@ use super::switches::{applied, as_caller, param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::zen_garden_cards as cards;
 use k2_core::zen::garden_access::{AskKind, Via};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// Where Settings' "It's mine" lives.
 const LOCAL_DATA: SettingsRef = SettingsRef { page: "gardens/local-data", path: "Settings → Gardens → Local Data" };
@@ -107,7 +109,7 @@ fn check_keep(ctx: &Ctx) -> Check {
         return Check::Moved("name the widget and its version: widget=<name> version=<hash>".into());
     };
     if !version_ok(version) {
-        return Check::Moved(format!("version= is the first {MIN_VERSION}+ characters of {widget}'s version (k2 zen widgets shows it)"));
+        return Check::Moved(format!("version= is the first {MIN_VERSION}+ characters of {widget}'s version ({CLI_NAME} zen widgets shows it)"));
     }
     match crate::zen_routes::widget_live_version(widget) {
         Err(m) => Check::Moved(m),
@@ -232,7 +234,7 @@ fn garden_of(ctx: &Ctx) -> Result<String, Check> {
         return Err(Check::Unavailable { code: "not_available", why: cards::OFF_WORDS.to_string() });
     }
     let Some(g) = param(ctx, "garden") else {
-        return Err(Check::Moved("name the Garden: garden=<its id> (k2 zen gardens)".into()));
+        return Err(Check::Moved(concat!("name the Garden: garden=<its id> (", cli_name!(), " zen gardens)").into()));
     };
     Ok(g.to_string())
 }
@@ -405,7 +407,7 @@ fn signed_values(ctx: &Ctx) -> Result<(String, String, MadeBy), Check> {
         return Err(Check::Moved("name the widget and its version: widget=<name> version=<hash>".into()));
     };
     if !full_version(version) {
-        return Err(Check::Moved(format!("version= is {widget}'s whole version, 64 hex characters (runtime.hash in k2 zen widget show {widget} --json)")));
+        return Err(Check::Moved(format!("version= is {widget}'s whole version, 64 hex characters (runtime.hash in {CLI_NAME} zen widget show {widget} --json)")));
     }
     match crate::zen_routes::widget_live_version(widget) {
         Err(m) => Err(Check::Moved(m)),

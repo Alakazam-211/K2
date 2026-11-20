@@ -51,6 +51,8 @@ use super::held::{error_of, route_floor, text_param};
 use super::vault::{own_service, OwnService};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// An answer the card's rules leave to the owner: the request goes back to
 /// open (`permission::answer`), so the owner can still allow it.
@@ -88,7 +90,7 @@ pub(crate) static CHAT_KEY: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "apps", path: "k2 app grant <app> --kind chat-key (a terminal outside K2)" },
+    settings: SettingsRef { page: "apps", path: concat!(cli_name!(), " app grant <app> --kind chat-key (a terminal outside K2)") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "owner_only" },
         route_prefix: KEY_ROUTE,
@@ -213,7 +215,7 @@ fn key_words(ctx: &Ctx, out: &mut Ctx) {
             (
                 what,
                 format!(
-                    "{n}'s own users get chat with no setup per person, within that ceiling. K2 keeps the key and signs every pass; {n} never sees it, so it can't leak. The App decides who is in which channel only in a Space a person switches to App-governed.{owner} To take it back: k2 app grant {n} --kind chat-key --revoke (Sew then ends {n}'s chat sessions)."
+                    "{n}'s own users get chat with no setup per person, within that ceiling. K2 keeps the key and signs every pass; {n} never sees it, so it can't leak. The App decides who is in which channel only in a Space a person switches to App-governed.{owner} To take it back: {CLI_NAME} app grant {n} --kind chat-key --revoke (Sew then ends {n}'s chat sessions)."
                 ),
             )
         }
@@ -230,7 +232,7 @@ fn sew_flag() -> Result<bool, String> {
 fn flag_missing() -> Check {
     Check::Unavailable {
         code: "sew_feature_missing",
-        why: "this server's Sew can't do App-governed Spaces yet (it needs Sew 0.6.0: app_governed_spaces): the owner upgrades it (k2 hostchat upgrade)".into(),
+        why: concat!("this server's Sew can't do App-governed Spaces yet (it needs Sew 0.6.0: app_governed_spaces): the owner upgrades it (", cli_name!(), " hostchat upgrade)").into(),
     }
 }
 
@@ -365,7 +367,7 @@ pub(crate) static SPACE_GOVERNANCE: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: "k2 hostchat app-space governance <app> <space> app|sew (a terminal outside K2)" },
+    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " hostchat app-space governance <app> <space> app|sew (a terminal outside K2)") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "person_only" },
         route_prefix: GOV_ROUTE,
@@ -403,7 +405,7 @@ struct Switch {
 
 fn switch_of(ctx: &Ctx) -> Result<Switch, String> {
     let app = text_param(ctx, "app").ok_or("name your App: app=<its name>")?;
-    let space = text_param(ctx, "space").ok_or("name the Space: space=<its id> (k2 hostchat app-spaces)")?;
+    let space = text_param(ctx, "space").ok_or(concat!("name the Space: space=<its id> (", cli_name!(), " hostchat app-spaces)"))?;
     let to = match text_param(ctx, "to") {
         Some("app") => "app",
         Some("sew") => "sew",
@@ -413,7 +415,7 @@ fn switch_of(ctx: &Ctx) -> Result<Switch, String> {
     let svc = own_app(&ctx.workspace_id, app).ok_or_else(|| format!("{} has no App named {app}", ctx.workspace_handle))?;
     let bound = k2_core::tool_hook::app_spaces()?.into_iter().find(|v| v.binding.space_id == space && v.binding.app_id == svc.id);
     let Some(view) = bound else {
-        return Err(format!("{space} isn't a Space bound to {}'s App {} (k2 hostchat app-spaces)", ctx.workspace_handle, svc.name));
+        return Err(format!("{space} isn't a Space bound to {}'s App {} ({CLI_NAME} hostchat app-spaces)", ctx.workspace_handle, svc.name));
     };
     Ok(Switch { svc, space: space.to_string(), to, now: view.governance.unwrap_or_else(|| "sew".into()) })
 }
@@ -430,7 +432,7 @@ fn gov_words(ctx: &Ctx, out: &mut Ctx) {
                 (
                     format!("Let {ws}'s App {n} govern the chat Space {label}: the App decides who is in which private channel there, and each person's level"),
                     format!(
-                        "Sew makes {n}'s service owner the Space's owner. Box users in it (the owner, admins) leave the Space first; their messages stay. From then on K2 keeps every App user's private channels and level in step with their role in {n}, and people can't change the Space's channels or roles in chat. Switch it back with: k2 hostchat app-space governance {n} {} sew.",
+                        "Sew makes {n}'s service owner the Space's owner. Box users in it (the owner, admins) leave the Space first; their messages stay. From then on K2 keeps every App user's private channels and level in step with their role in {n}, and people can't change the Space's channels or roles in chat. Switch it back with: {CLI_NAME} hostchat app-space governance {n} {} sew.",
                         s.space
                     ),
                 )
@@ -467,7 +469,7 @@ fn check_gov(ctx: &Ctx) -> Check {
             Ok(Some(_)) => {}
             Ok(None) => {
                 return Check::Moved(format!(
-                    "{n} has no chat key, and an App governs its Spaces only with one: ask for that first: k2 permission request apps.chat-key app={n}",
+                    "{n} has no chat key, and an App governs its Spaces only with one: ask for that first: {CLI_NAME} permission request apps.chat-key app={n}",
                     n = s.svc.name
                 ))
             }
@@ -500,7 +502,7 @@ fn apply_gov(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     Applied::Done {
         message: if s.to == "app" {
             format!(
-                "Chat Space {label} is App-governed now: {} decides who is in which private channel. Box users in it leave first (k2 app chat {} shows them).",
+                "Chat Space {label} is App-governed now: {} decides who is in which private channel. Box users in it leave first ({CLI_NAME} app chat {} shows them).",
                 s.svc.name, s.svc.name
             )
         } else {

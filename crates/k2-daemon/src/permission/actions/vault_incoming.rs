@@ -59,6 +59,7 @@ use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::permission::{answer, limits, present, store};
 use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// The card's id.
 pub(crate) const ACTION: &str = "vault.incoming.accept";
@@ -115,7 +116,7 @@ pub(crate) fn ask_line(delivery_id: &str) -> String {
 }
 
 fn id_of(ctx: &Ctx) -> Result<&str, String> {
-    text_param(ctx, "id").ok_or_else(|| "name the delivery: id=hd_… (k2 vault incoming)".to_string())
+    text_param(ctx, "id").ok_or_else(|| concat!("name the delivery: id=hd_… (", cli_name!(), " vault incoming)").to_string())
 }
 
 fn replace_of(ctx: &Ctx) -> bool {
@@ -123,7 +124,7 @@ fn replace_of(ctx: &Ctx) -> bool {
 }
 
 fn not_yours(ctx: &Ctx, id: &str) -> String {
-    format!("{} has no pending delivery {id} (k2 vault incoming lists them)", ctx.workspace_handle)
+    format!("{} has no pending delivery {id} ({CLI_NAME} vault incoming lists them)", ctx.workspace_handle)
 }
 
 /// The delivery `id`, received by the asking workspace (any status).
@@ -517,8 +518,8 @@ pub(crate) fn close_for_delivery(workspace_id: &str, delivery_id: &str, how: Clo
         }
         Closed::Accepted | Closed::Declined => {
             let (state, lbl, msg) = match how {
-                Closed::Accepted => (RequestState::Approved, label::ALLOW, "Accepted somewhere else (another card, Settings or k2 vault incoming)."),
-                _ => (RequestState::Denied, label::DENY, "Declined somewhere else (another card, Settings or k2 vault incoming)."),
+                Closed::Accepted => (RequestState::Approved, label::ALLOW, concat!("Accepted somewhere else (another card, Settings or ", cli_name!(), " vault incoming).")),
+                _ => (RequestState::Denied, label::DENY, concat!("Declined somewhere else (another card, Settings or ", cli_name!(), " vault incoming).")),
             };
             let who = by.unwrap_or("owner");
             let via = if who == "owner" { "desktop" } else { "web" };

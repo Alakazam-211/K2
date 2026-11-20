@@ -89,6 +89,8 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::vault::actor::{Channel, VaultCaller};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// The card's id.
 pub(crate) const ACTION: &str = "vault.delivery";
@@ -112,7 +114,7 @@ pub(crate) static DELIVERY: ActionSpec = ActionSpec {
     words: Words {
         setting: "{secret} delivered as {delivery}",
         what_changes: "Let {ws} read {secret} as {delivery} (file: a 0600 file it reads; env: an environment variable)",
-        consequences: "{ws} can read {secret}'s value from then on (and so can anything it runs); it can still never print it with k2 vault get. Lower it again in Settings → Vault, or with k2 vault delivery {secret} fetch.",
+        consequences: concat!("{ws} can read {secret}'s value from then on (and so can anything it runs); it can still never print it with ", cli_name!(), " vault get. Lower it again in Settings → Vault, or with ", cli_name!(), " vault delivery {secret} fetch."),
         scope: "{secret} in {ws}",
         duration: "until someone changes it",
         retry: "run your command again",
@@ -213,8 +215,8 @@ fn apply(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
         return Applied::Refused { code, message };
     }
     let how = match want {
-        Delivery::File => format!("k2 vault file --secret {name} (a short-lived 0600 file)"),
-        _ => format!("k2 vault env-file --secret {name} or k2 vault file --secret {name}; ${name} in new sessions"),
+        Delivery::File => format!("{CLI_NAME} vault file --secret {name} (a short-lived 0600 file)"),
+        _ => format!("{CLI_NAME} vault env-file --secret {name} or {CLI_NAME} vault file --secret {name}; ${name} in new sessions"),
     };
     Applied::Done { message: format!("{name} is delivered to {} as {} now: {how}.", ctx.workspace_handle, want.as_str()) }
 }
@@ -247,7 +249,7 @@ pub(crate) static SHARE_SERVICE: ActionSpec = ActionSpec {
     words: Words {
         setting: "{secret} shared with {service}",
         what_changes: "Let {ws} give its service {service} the secret {secret} as {how}",
-        consequences: "{service} can read the value whenever it runs ({where}), and so can anything it runs. {ws} decides what {service} runs, so this lets {ws} use the value too. It takes effect the next time {service} starts; {ws} restarts it. To take it back: k2 publish secret remove {service} {secret} --scope ws:{ws}, then restart it.",
+        consequences: concat!("{service} can read the value whenever it runs ({where}), and so can anything it runs. {ws} decides what {service} runs, so this lets {ws} use the value too. It takes effect the next time {service} starts; {ws} restarts it. To take it back: ", cli_name!(), " publish secret remove {service} {secret} --scope ws:{ws}, then restart it."),
         scope: "{secret} in {ws}, for {service}",
         duration: "until someone removes it",
         retry: "restart the service so it picks it up",
@@ -313,7 +315,7 @@ impl Share<'_> {
 
 fn share_of(ctx: &Ctx) -> Result<Share<'_>, String> {
     let secret = secret_of(ctx)?;
-    let service = text_param(ctx, "service").ok_or("name the service: service=<its k2 publish name>")?;
+    let service = text_param(ctx, "service").ok_or(concat!("name the service: service=<its ", cli_name!(), " publish name>"))?;
     let word = text_param(ctx, "as").ok_or("say how it gets it: as=file or as=env")?;
     if !CHOICES.contains(&word) {
         return Err(format!("as={word}: a card shares as file or env only"));
@@ -423,7 +425,7 @@ fn check_share(ctx: &Ctx) -> Check {
     }
     if share.how.level() > m.delivery_ceiling.level() {
         return Check::Moved(format!(
-            "{name} can be delivered at most as {ceiling}. Ask for that first: k2 permission request vault.delivery secret={name} delivery={how}",
+            "{name} can be delivered at most as {ceiling}. Ask for that first: {CLI_NAME} permission request vault.delivery secret={name} delivery={how}",
             name = share.secret,
             ceiling = m.delivery_ceiling,
             how = share.how.as_str()
@@ -452,7 +454,7 @@ fn check_share(ctx: &Ctx) -> Check {
         // one would never arrive.
         if g.delivery == Delivery::Env && share.how == Delivery::File {
             return Check::Moved(format!(
-                "{} already gets {} as env, which wins over a file. Remove that first: k2 publish secret remove {} {}",
+                "{} already gets {} as env, which wins over a file. Remove that first: {CLI_NAME} publish secret remove {} {}",
                 svc.name, share.secret, svc.name, share.secret
             ));
         }
@@ -516,8 +518,8 @@ fn apply_share(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
         return Applied::Refused { code, message };
     }
     let restart = match &svc.app {
-        Some(_) => format!("k2 app restart {}", svc.name),
-        None => format!("k2 publish stop {name}, then k2 publish start {name}", name = svc.name),
+        Some(_) => format!("{CLI_NAME} app restart {}", svc.name),
+        None => format!("{CLI_NAME} publish stop {name}, then {CLI_NAME} publish start {name}", name = svc.name),
     };
     let how = if share.how == Delivery::Env { "an environment variable" } else { "a file" };
     Applied::Done { message: format!("{} gets {} as {how} ({}) from its next start: {restart}.", svc.name, share.secret, share.place()) }
@@ -624,7 +626,7 @@ fn check_use(ctx: &Ctx) -> Check {
     };
     if is_own_workspace(ctx, ask.from) {
         return Check::Moved(format!(
-            "{} is your own workspace: you already use its secrets. To read one that a person gave it: k2 permission request vault.delivery secret={} delivery=file",
+            "{} is your own workspace: you already use its secrets. To read one that a person gave it: {CLI_NAME} permission request vault.delivery secret={} delivery=file",
             ask.from, ask.secret
         ));
     }
@@ -798,10 +800,10 @@ fn apply_use(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     let name = ask.secret;
     let scope = ask.from;
     let how = match ask.how {
-        Delivery::Fetch => format!("k2 vault fetch --secret {name} --scope {scope} <url> (K2 adds it; you never see it)"),
+        Delivery::Fetch => format!("{CLI_NAME} vault fetch --secret {name} --scope {scope} <url> (K2 adds it; you never see it)"),
         Delivery::Agent => "ssh and git sign with it on $SSH_AUTH_SOCK in new sessions".to_string(),
-        Delivery::File => format!("k2 vault file {name} --scope {scope} (a short-lived 0600 file)"),
-        _ => format!("k2 vault env-file {name} --scope {scope}, or ${} in new sessions", k2_vault::delivery::default_env_name(name)),
+        Delivery::File => format!("{CLI_NAME} vault file {name} --scope {scope} (a short-lived 0600 file)"),
+        _ => format!("{CLI_NAME} vault env-file {name} --scope {scope}, or ${} in new sessions", k2_vault::delivery::default_env_name(name)),
     };
     let ending = if ask.span == "session" { format!("until this session ends (at the latest {until})") } else { format!("until {until}") };
     Applied::Done { message: format!("You can use {name} ({scope}) as {} {ending}: {how}.", ask.how.as_str()) }

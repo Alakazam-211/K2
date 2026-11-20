@@ -27,6 +27,7 @@ use serde_json::{json, Value};
 use super::switches::{applied, check_state};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::settings_routes::SettingsActor;
+use k2_core::cli_name;
 
 pub(crate) const ACTION: &str = "ci.preview";
 pub(crate) const ACTION_OFF: &str = "ci.preview-off";
@@ -61,7 +62,7 @@ pub(crate) static CI_PREVIEW: ActionSpec = ActionSpec {
     words: Words {
         setting: SETTING,
         what_changes: concat!("Turn on ", ci_name!(), ": ", product_name!(), " checks every pushed commit on your compute machines"),
-        consequences: "This is for the whole server, not only {ws}: agents that may use compute can have their repos' pushes checked (k2 ci). CI checks go ahead of other jobs in the compute queues, so other jobs may wait longer. It works only while compute nodes are on (Settings → Compute). Turn it off any time in Settings → Compute.",
+        consequences: concat!("This is for the whole server, not only {ws}: agents that may use compute can have their repos' pushes checked (", cli_name!(), " ci). CI checks go ahead of other jobs in the compute queues, so other jobs may wait longer. It works only while compute nodes are on (Settings → Compute). Turn it off any time in Settings → Compute."),
         scope: "this server",
         duration: "until someone turns it off",
         retry: "run your command again",
@@ -107,7 +108,7 @@ pub(crate) static CI_PREVIEW_OFF: ActionSpec = ActionSpec {
         what_changes: concat!("Turn off ", ci_name!(), " on this server"),
         consequences: concat!(
             product_name!(),
-            " stops checking pushed commits, and every k2 ci command answers ci_preview_off until someone turns it on again. Past runs are kept."
+            " stops checking pushed commits, and every ", cli_name!(), " ci command answers ci_preview_off until someone turns it on again. Past runs are kept."
         ),
         scope: "this server",
         duration: "until someone turns it on again",
@@ -162,7 +163,7 @@ fn write(who: &Answerer, on: bool) -> crate::cli_response::CliResponse {
 fn apply_on(_ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     let r = write(who, true);
     let message = if k2_core::compute::enabled() {
-        concat!(ci_name!(), " is on for this server: pushes of every repo an agent sets up with k2 ci are checked.")
+        concat!(ci_name!(), " is on for this server: pushes of every repo an agent sets up with ", cli_name!(), " ci are checked.")
     } else {
         concat!(
             ci_name!(),

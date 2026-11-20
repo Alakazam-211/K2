@@ -13,8 +13,8 @@
 //! - `db status <app>`: connections checked, failed, not checked; no
 //!   Postgres; pending cards; `--json`; its JSON usage lines (exit 1); a
 //!   bad `--timeout` (exit 2); a 400 (exit 1) and a 409 (exit 3).
-//! - The writes stay the shell's; a large list; Python's raise part way;
-//!   no daemon.
+//! - A large list; Python's raise part way; no daemon. The writes are
+//!   app_walls_set_parity.rs'.
 
 #![cfg(unix)]
 
@@ -44,13 +44,6 @@ fn fail(name: &'static str, args: &'static [&'static str], body: &str) -> Case {
 /// Nothing sent: the line and its exit.
 fn stop(name: &'static str, args: &'static [&'static str], code: i32) -> Case {
     case(name, args, &[], vec![], owner_and_port, code, 0)
-}
-
-fn shell(c: Case) -> Case {
-    Case {
-        compare: Compare::Shell,
-        ..c
-    }
 }
 
 const EGRESS: &str = r#"{"app":"acme","mode":"allowlist","enforced":false,"note":"new hosts wait for the owner","hosts":[{"status":"allowed","host":"api.example","port":443,"source":"manifest","hits":12,"refused":0},{"status":"held","host":"2001:db8::1","port":8443,"source":"agent é","hits":0,"refused":3,"requestId":"req-1"}],"pending":[{"id":"req-1","summary":"reach 2001:db8::1","requestedBy":"ann"}],"proxy":{"listening":true,"port":40001,"active":1,"connections":9,"refused":3}}"#;
@@ -122,15 +115,7 @@ fn egress_answers_as_the_shell_does() {
             3,
             1,
         ),
-        shell(case(
-            "egress add: the shell's",
-            &["egress", "add", "acme"],
-            &[],
-            vec![],
-            owner_and_port,
-            2,
-            0,
-        )),
+        stop("egress add: no host", &["egress", "add", "acme"], 2),
     ];
     for c in v {
         rig.check(&c);
@@ -174,15 +159,7 @@ fn box_service_answers_as_the_shell_does() {
             &["box-service", "acme"],
             r#"{"app":"a","wall":"w","note":5}"#,
         ),
-        shell(case(
-            "box-service revoke: the shell's",
-            &["box-service", "revoke", "acme"],
-            &[],
-            vec![],
-            owner_and_port,
-            2,
-            0,
-        )),
+        stop("box-service revoke: no name", &["box-service", "revoke", "acme"], 2),
     ];
     for c in v {
         rig.check(&c);
@@ -298,15 +275,7 @@ fn db_status_answers_as_the_shell_does() {
             3,
             0,
         ),
-        shell(case(
-            "db connect: the shell's",
-            &["db", "connect"],
-            &[],
-            vec![],
-            owner_and_port,
-            1,
-            0,
-        )),
+        stop("db connect: no App", &["db", "connect"], 1),
     ];
     for c in v {
         rig.check(&c);

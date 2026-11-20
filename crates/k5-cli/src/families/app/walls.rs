@@ -9,8 +9,9 @@
 //! `db` keeps its own rules (R7): a usage mistake is a JSON line and exit
 //! 1, and a 400 is `_app_db_fail`'s JSON line and exit 1.
 //!
-//! The writes stay the shell's: `egress add|rm|mode`, `box-service
-//! request|revoke` and `db connect|check|disconnect`.
+//! The writes are [`super::walls_set`]' (`egress add|rm|mode`,
+//! `box-service request|revoke`) and [`super::db_set`]' (`db
+//! connect|check|disconnect`).
 
 use super::call::{Ctx, Split};
 use super::py::{self, Out};
@@ -213,106 +214,14 @@ fn box_service(words: &[&str]) -> Result<Ask, Stop> {
     })
 }
 
-/// `cmd_app_db status`' loop and checks. A mistake is
-/// `{"error":"usage","hint":…}` and exit 1.
+/// `cmd_app_db status`' loop and checks ([`super::db_set::words`]).
 fn db_status(words: &[&str]) -> Result<Ask, Stop> {
-    let (mut app, mut major, mut json) = (String::new(), String::new(), false);
-    let mut bad = String::new();
-    let mut rest = words;
-    while let Some(w) = rest.first().copied() {
-        match w {
-            "--json" => json = true,
-            "--new" | "--no-migrate-url" | "--wait" | "--drop-roles" => {}
-            "--db" | "--major" | "--cluster" | "--name" | "--as" | "--timeout" | "--reason" => {
-                let v = rest.get(1).copied().unwrap_or("");
-                if v.is_empty() {
-                    bad = format!("{w} needs a value");
-                    break;
-                }
-                match w {
-                    "--major" => major = v.to_string(),
-                    "--timeout" => compute_secs(v)?,
-                    _ => {}
-                }
-                rest = &rest[2..];
-                continue;
-            }
-            _ if w.starts_with("--major=") => major = w["--major=".len()..].to_string(),
-            _ if ["--db=", "--cluster=", "--as="]
-                .iter()
-                .any(|p| w.starts_with(p)) => {}
-            _ if w.starts_with('-') => {
-                bad = format!("unknown flag {w}");
-                break;
-            }
-            _ if app.is_empty() => app = w.to_string(),
-            _ => {
-                bad = format!("one App at a time (got {w} too)");
-                break;
-            }
-        }
-        rest = &rest[1..];
-    }
-    if bad.is_empty() && app.is_empty() {
-        bad = format!("{}status <app-id>", usage::DB_NAME_APP);
-    }
-    if bad.is_empty() && !major.is_empty() && !two_digit_major(&major) {
-        bad = "--major takes a Postgres major, like 17".to_string();
-    }
-    if !bad.is_empty() {
-        let hint = json::to_string(
-            &Value::Str(Text::from(format!("{bad}{}", usage::DB_TAIL).as_str())),
-            &Options::default(),
-        )
-        .unwrap_or_default();
-        return Err(Stop {
-            line: format!("{{\"error\":\"usage\",\"hint\":{hint}}}"),
-            exit: Exit::Error,
-        });
-    }
+    let w = super::db_set::words("status", words)?;
     Ok(Ask::Get {
         read: Read::DbStatus,
-        query: format!("app={}", quote(&app)),
-        json,
+        query: format!("app={}", quote(&w.app)),
+        json: w.json,
     })
-}
-
-/// `case "$major" in [1-9][0-9])`.
-fn two_digit_major(m: &str) -> bool {
-    let b = m.as_bytes();
-    b.len() == 2 && (b'1'..=b'9').contains(&b[0]) && b[1].is_ascii_digit()
-}
-
-/// `timeout="$(_compute_secs "$2")"`: a value that is not a duration is
-/// `_compute_secs`' usage line, and its exit 2 fails the assignment, so
-/// set -e ends the command there.
-fn compute_secs(v: &str) -> Result<(), Stop> {
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if digits(v) {
-        return Ok(());
-    }
-    // `^([0-9]+[hms])+$`
-    let mut rest = v;
-    let mut parts = 0;
-    while !rest.is_empty() {
-        let n = rest.bytes().take_while(u8::is_ascii_digit).count();
-        match rest.as_bytes().get(n) {
-            Some(b'h' | b'm' | b's') if n > 0 => {
-                rest = &rest[n + 1..];
-                parts += 1;
-            }
-            _ => {
-                parts = 0;
-                break;
-            }
-        }
-    }
-    if parts > 0 {
-        return Ok(());
-    }
-    Err(Stop::usage(format!(
-        "usage: bad duration '{v}' (use 2h, 90m, 1h30m, 300s)"
-    )))
 }
 
 /// A read's printer: the shell's Python for its answer.
@@ -618,7 +527,7 @@ pub fn box_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
 }
 
 /// `v[0]`.
-fn first(v: &Value, line: u32) -> Result<Value, Raise> {
+pub fn first(v: &Value, line: u32) -> Result<Value, Raise> {
     match v {
         Value::Array(items) => items
             .first()

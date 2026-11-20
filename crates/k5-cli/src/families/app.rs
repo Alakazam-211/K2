@@ -20,10 +20,12 @@
 //!   `app email`, each family's page and its unknown verb's usage line.
 //! - [`phone_set`]: the writes of `app links`, `app pairing`, `app push`
 //!   and `app email`, with their confirm steps.
-//! - [`catalog`]: `app catalog [list]`, `app catalog show` and `app
-//!   catalog job|jobs`.
+//! - [`catalog`]: `app catalog [list]`, `show`, `check`, `job|jobs` and
+//!   `retry`.
 //! - [`walls`]: `app egress [show]|log`, `app box-service <app>` and `app
-//!   db status`.
+//!   db status`; [`walls_set`]: `app egress add|rm|mode` and `app
+//!   box-service request|revoke`, with [`approve`] when the owner is at
+//!   the terminal; [`db_set`]: `app db connect|check|disconnect`.
 //!
 //! What runs, in the shell's order:
 //!
@@ -57,8 +59,10 @@ use std::ffi::OsString;
 use std::path::Path;
 
 pub mod access;
+pub mod approve;
 pub mod call;
 pub mod catalog;
+pub mod db_set;
 pub mod door;
 pub mod history;
 pub mod phone;
@@ -69,6 +73,7 @@ pub mod updates;
 pub mod updates_set;
 pub mod wallet;
 pub mod walls;
+pub mod walls_set;
 
 use call::Ctx;
 
@@ -91,6 +96,8 @@ pub enum Ask {
     PhoneSet(phone_set::Ask),
     Catalog(catalog::Ask),
     Walls(walls::Ask),
+    WallsSet(walls_set::Ask),
+    Db(db_set::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -286,7 +293,17 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
             None => Some(updates::parse(rest)?.map(Ask::Updates)),
         },
         "catalog" => Some(catalog::parse(rest)?.map(Ask::Catalog)),
-        v if walls::VERBS.contains(&v) => Some(walls::parse(v, rest)?.map(Ask::Walls)),
+        v if walls::VERBS.contains(&v) => {
+            if let Some(r) = walls_set::parse(v, rest) {
+                return Some(r.map(Ask::WallsSet));
+            }
+            if matches!(v, "db" | "database") {
+                if let Some(r) = db_set::parse(rest) {
+                    return Some(r.map(Ask::Db));
+                }
+            }
+            Some(walls::parse(v, rest)?.map(Ask::Walls))
+        }
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
         v if history::VERBS.contains(&v) => Some(history::parse(v, rest)?.map(Ask::History)),
@@ -356,6 +373,7 @@ fn run_with(
     };
     let mut ctx = Ctx::new(client, call::args_json(words));
     ctx.vault_sock = crate::confirm::sock_path(&settings.home);
+    ctx.project = settings.project.clone();
     let shown = match &ask {
         Ask::Wallet(a) => wallet::run(&mut ctx, a),
         Ask::List(l) => reads::list(&mut ctx, l),
@@ -370,6 +388,8 @@ fn run_with(
         Ask::PhoneSet(p) => phone_set::run(&mut ctx, p),
         Ask::Catalog(c) => catalog::run(&mut ctx, c),
         Ask::Walls(w) => walls::run(&mut ctx, w),
+        Ask::WallsSet(w) => walls_set::run(&mut ctx, w),
+        Ask::Db(d) => db_set::run(&mut ctx, d),
     };
     let exit = match shown {
         Ok(s) => s.print(),

@@ -7,8 +7,9 @@
 //! `_app_catalog_end`: its end, and the exit its state gives (0 done, 1
 //! failed, 2 anything else).
 //!
-//! The shell's still: `catalog check` (it names the workspace through
-//! `_compute_ws`) and `catalog retry` (a write).
+//! `catalog check <entry> <address>` asks whether an address is free (the
+//! workspace as `_compute_ws` names it) and exits 2 when it isn't;
+//! `catalog retry <job>` is the one write, sent once.
 
 use super::call::Ctx;
 use super::py::{self, Out};
@@ -32,10 +33,18 @@ pub mod usage {
     pub const UNKNOWN_HEAD: &str = concat!("Unknown: ", cli_name!(), " app catalog ");
     pub const FLAG_TAIL: &str = concat!(" (", cli_name!(), " app catalog --help)");
     pub const SHOW: &str = concat!("usage: ", cli_name!(), " app catalog show <entry> [--json]");
+    pub const CHECK: &str = concat!(
+        "usage: ",
+        cli_name!(),
+        " app catalog check <entry> <address> [--id ID] [--json]"
+    );
+    pub const RETRY: &str = concat!("usage: ", cli_name!(), " app catalog retry <job-id>");
 }
 
 /// `"run: k2 app catalog retry %s"`.
 const RETRY: &str = concat!("run: ", cli_name!(), " app catalog retry ");
+/// `"Job %s goes on; follow it: k2 app catalog job %s"`.
+const FOLLOW: &str = concat!(" goes on; follow it: ", cli_name!(), " app catalog job ");
 /// `"…; check: k2 app catalog job %s"`.
 const CHECK_JOB: &str = concat!("check: ", cli_name!(), " app catalog job ");
 /// `"ready: k2 app install --catalog %s"`.
@@ -56,10 +65,18 @@ pub enum Ask {
     Show { query: String, json: bool },
     /// `catalog job|jobs`: its query (`id=…` is one job's view).
     Job { query: String, json: bool },
+    /// `catalog check <entry> <address> [--id ID]`.
+    Check {
+        entry: String,
+        address: String,
+        id: String,
+        json: bool,
+    },
+    /// `catalog retry <job>`.
+    Retry { job: String, json: bool },
 }
 
-/// The words after `catalog`. `None`: a help form, `check` or `retry`
-/// (the shell's).
+/// The words after `catalog`. `None`: a help form (the shell's).
 pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
@@ -69,8 +86,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "help" => return Some(Ok(Ask::Page)),
         "list" => words.get(1..).unwrap_or_default(),
         "--json" => words,
-        "show" | "job" | "jobs" => &words[1..],
-        "check" | "retry" => return None,
+        "show" | "job" | "jobs" | "check" | "retry" => &words[1..],
         other => {
             return Some(Err(Stop::usage(format!(
                 "{}{other}{}",
@@ -84,7 +100,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
 
 /// The shell's loop over the words, then the sub-verb's checks.
 fn loop_words(sub: &str, words: &[&str]) -> Result<Ask, Stop> {
-    let (mut json, mut app) = (false, String::new());
+    let (mut json, mut app, mut id) = (false, String::new(), String::new());
     let mut args: Vec<&str> = Vec::new();
     let mut rest = words;
     while let Some(w) = rest.first().copied() {
@@ -95,6 +111,8 @@ fn loop_words(sub: &str, words: &[&str]) -> Result<Ask, Stop> {
                 let v = rest.get(1).ok_or_else(|| Stop::silent(Exit::Error))?;
                 if w == "--app" {
                     app = v.to_string();
+                } else {
+                    id = v.to_string();
                 }
                 rest = &rest[2..];
                 continue;
@@ -129,6 +147,26 @@ fn loop_words(sub: &str, words: &[&str]) -> Result<Ask, Stop> {
             }
             Ok(Ask::Job { query, json })
         }
+        "check" => {
+            if args.len() != 2 {
+                return Err(Stop::usage(usage::CHECK));
+            }
+            Ok(Ask::Check {
+                entry: args[0].to_string(),
+                address: args[1].to_string(),
+                id,
+                json,
+            })
+        }
+        "retry" => {
+            if args.len() != 1 {
+                return Err(Stop::usage(usage::RETRY));
+            }
+            Ok(Ask::Retry {
+                job: args[0].to_string(),
+                json,
+            })
+        }
         _ => Ok(Ask::List { json }),
     }
 }
@@ -157,7 +195,85 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
             }
             Ok(super::access::answer(&body, false, jobs_lines))
         }
+        Ask::Check {
+            entry,
+            address,
+            id,
+            json,
+        } => {
+            let mut q = format!("entry={}&address={}", quote(entry), quote(address));
+            if !id.is_empty() {
+                q.push_str(&format!("&id={}", quote(id)));
+            }
+            let ws = ctx.ws("");
+            if !ws.is_empty() {
+                q.push_str(&format!("&workspace={}", quote(&ws)));
+            }
+            let body = ctx.call(false, "/cli/app/catalog/check-address", &q)?;
+            // `ok="$(… print("1" if json.load(sys.stdin).get("ok") else "0"))"`:
+            // a raise there ends the command (set -e), exit 1.
+            let ok = (|| -> Result<bool, Raise> {
+                Ok(py::truthy(&py::dget(&py::load(&body, 1)?, "ok", 1)?))
+            })();
+            let ok = match ok {
+                Ok(ok) => ok,
+                Err(e) => return Ok(Out::default().done(Err(e))),
+            };
+            let mut shown = super::access::answer(&body, *json, check_lines);
+            // `[ "$ok" = 1 ] || exit 2`, after a printer that didn't raise.
+            if shown.exit == Exit::Ok && !ok {
+                shown.exit = Exit::Usage;
+            }
+            Ok(shown)
+        }
+        Ask::Retry { job, json } => {
+            let body = super::call::Cj::new().s("job", job).body();
+            let s = ctx.send(true, "/cli/app/catalog/retry", &body, false)?;
+            if !s.ok() {
+                return Err(ctx.fail(&s));
+            }
+            if *json {
+                return Ok(super::wallet::raw(&s.body));
+            }
+            Ok(Shown::out(format!("Job {job}{FOLLOW}{job}\n")))
+        }
     }
+}
+
+/// `cmd_app_catalog check`'s Python.
+pub fn check_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
+    let v = py::load(body, 3)?;
+    let t = py::or(py::dget(&v, "tier", 4)?, empty_dict());
+    if py::truthy(&py::dget(&v, "error", 5)?) {
+        let e = py::idx(&v, "error", 6)?;
+        let code = py::dget(&e, "code", 7)?;
+        let hint = py::dget(&e, "hint", 7)?;
+        o.line(&format!("not free: {}: {}", py::s(&code), py::s(&hint)));
+        if py::truthy(&py::dget(&e, "suggestion", 8)?) {
+            o.line(&format!(
+                "suggestion: {}",
+                py::s(&py::idx(&e, "suggestion", 9)?)
+            ));
+        }
+    } else {
+        let a = py::idx(&v, "address", 11)?;
+        let mut at = py::dget(&a, "url", 12)?;
+        if !py::truthy(&at) {
+            at = py::idx(&a, "label", 12)?;
+        }
+        let kind = py::idx(&a, "kind", 12)?;
+        let app = py::dget(&v, "app", 12)?;
+        o.line(&format!(
+            "free: {} ({}) for App {}",
+            py::s(&at),
+            py::s(&kind),
+            py::s(&app)
+        ));
+    }
+    if py::truthy(&py::dget(&t, "hint", 13)?) {
+        o.line(&format!("pro: {}", py::s(&py::idx(&t, "hint", 14)?)));
+    }
+    Ok(Exit::Ok)
 }
 
 /// `v + suffix` for a string suffix.
@@ -542,8 +658,24 @@ mod tests {
             Some(Ok(Ask::List { json: true }))
         );
         assert_eq!(p(&["help"]), Some(Ok(Ask::Page)));
-        assert_eq!(p(&["check", "a", "b"]), None);
-        assert_eq!(p(&["retry", "j"]), None);
+        assert_eq!(
+            p(&["check", "a b", "c", "--id", "i"]),
+            Some(Ok(Ask::Check {
+                entry: "a b".into(),
+                address: "c".into(),
+                id: "i".into(),
+                json: false
+            }))
+        );
+        assert_eq!(p(&["check", "a"]), Some(Err(Stop::usage(usage::CHECK))));
+        assert_eq!(
+            p(&["retry", "j", "--json"]),
+            Some(Ok(Ask::Retry {
+                job: "j".into(),
+                json: true
+            }))
+        );
+        assert_eq!(p(&["retry"]), Some(Err(Stop::usage(usage::RETRY))));
         assert_eq!(p(&["list", "-h"]), None);
         assert_eq!(
             p(&["show", "a b"]),

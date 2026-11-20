@@ -10,9 +10,19 @@
 //!   failed with a command or a retry (exit 1), waiting (exit 2), still
 //!   running (exit 2); `--json` as it came.
 //! - `catalog jobs [--app A]`: the list.
+//! - `catalog check <entry> <address> [--id ID]`: free (exit 0), not free
+//!   with a suggestion (exit 2), the pro hint; the workspace as
+//!   `_compute_ws` names it (this checkout, none in a session); `--json`
+//!   (exit 2 when not free); usage; a raise in the ok reader and in the
+//!   printer.
+//! - `catalog retry <job>`: sent once; `--json`; usage; a refusal; no
+//!   daemon.
 //! - The page, an unknown verb, an unknown flag, a value flag given last;
-//!   `check` and `retry` stay the shell's; Python's raise part way (in
-//!   each of a job's three steps); a refusal; a large list.
+//!   Python's raise part way (in each of a job's three steps); a refusal;
+//!   a large list.
+//! - Help never acts: `-h` or `--help` anywhere prints the page and sends
+//!   nothing, but as a value flag's value (`--id -h`), where the shell
+//!   sends (a bash bug; the rows flip when the fix lands).
 
 #![cfg(unix)]
 
@@ -105,14 +115,6 @@ fn list_and_show_answer_as_the_shell_does() {
             3,
             1,
         ),
-        Case {
-            compare: Compare::Shell,
-            ..stop("catalog retry: the shell's", &["catalog", "retry"], 2)
-        },
-        Case {
-            compare: Compare::Shell,
-            ..stop("catalog check: the shell's", &["catalog", "check", "a"], 2)
-        },
     ];
     for c in v {
         rig.check(&c);
@@ -223,5 +225,153 @@ fn catalog_a_large_list() {
             0,
             1,
         ));
+    }
+}
+
+const FREE: &str = r#"{"ok":true,"app":"forgejo","address":{"label":"git","kind":"label"},"tier":{"hint":"a custom domain é with Pro"}}"#;
+
+const TAKEN: &str = r#"{"ok":false,"error":{"code":"address_taken","hint":"git is taken","suggestion":"git-2"}}"#;
+
+#[test]
+fn check_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "catcheck");
+    let v = vec![
+        read("check: free", &["catalog", "check", "forgejo", "git"], FREE),
+        read(
+            "check: free at a URL, --id",
+            &["catalog", "check", "forgejo", "https://git.acme.example", "--id", "g 1"],
+            r#"{"ok":1,"app":"g 1","address":{"url":"https://git.acme.example","label":"x","kind":"domain"}}"#,
+        ),
+        ends(
+            "check: not free, a suggestion",
+            &["catalog", "check", "forgejo", "git"],
+            TAKEN,
+            2,
+        ),
+        ends(
+            "check: not free, no suggestion, ok missing",
+            &["catalog", "check", "forgejo", "git"],
+            r#"{"error":{"code":"address_reserved"}}"#,
+            2,
+        ),
+        read("check --json: free", &["catalog", "check", "--json", "forgejo", "git"], FREE),
+        ends(
+            "check --json: not free",
+            &["catalog", "check", "forgejo", "git", "--json"],
+            TAKEN,
+            2,
+        ),
+        Case {
+            env: with_passport(&[]),
+            ..case(
+                "check: in a session, no workspace named",
+                &["catalog", "check", "forgejo", "git"],
+                &[],
+                vec![ok(FREE)],
+                port_only,
+                0,
+                1,
+            )
+        },
+        stop("check: one word", &["catalog", "check", "forgejo"], 2),
+        stop("check: three words", &["catalog", "check", "a", "b", "c"], 2),
+        stop("check: --id given last", &["catalog", "check", "a", "b", "--id"], 1),
+        traceback(ends(
+            "check: an answer that is a list",
+            &["catalog", "check", "a", "b"],
+            "[1]",
+            1,
+        )),
+        traceback(ends(
+            "check: free with no address",
+            &["catalog", "check", "a", "b"],
+            r#"{"ok":true}"#,
+            1,
+        )),
+        case(
+            "check: a refusal",
+            &["catalog", "check", "a", "b", "--json"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"owner_only","hint":"Only the owner."}}"#.into(),
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn retry_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "catretry");
+    let dead = dead_port();
+    let v = vec![
+        read("retry", &["catalog", "retry", "cj-3"], r#"{"ok":true}"#),
+        read(
+            "retry --json, --app dropped",
+            &["catalog", "retry", "--json", "cj é", "--app", "x"],
+            r#"{"job":{"id":"cj-3","state":"running"}}"#,
+        ),
+        read("retry: an empty id", &["catalog", "retry", ""], r#"{}"#),
+        stop("retry: no id", &["catalog", "retry"], 2),
+        stop("retry: two ids", &["catalog", "retry", "a", "b"], 2),
+        stop("retry: an unknown flag", &["catalog", "retry", "a", "--x"], 2),
+        case(
+            "retry: a 400",
+            &["catalog", "retry", "cj-9"],
+            &[],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"not_retryable","hint":"it ran"}}"#.into(),
+            )],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "retry: no daemon",
+            &["catalog", "retry", "cj-3"],
+            &[("K2_PORT", dead.as_str())],
+            vec![],
+            owner_only,
+            3,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn help_never_acts() {
+    let rig = Rig::new(VERB, "cathelp");
+    for args in [
+        &["catalog", "retry", "cj-3", "-h"][..],
+        &["catalog", "retry", "--help", "cj-3"],
+        &["catalog", "check", "a", "b", "-h"],
+        &["catalog", "check", "--help"],
+    ] {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..stop("help never acts", args, 0)
+        });
+    }
+    // `--id` and `--app` take the next word as it comes, so `-h` there is
+    // a value and the write is sent (a bash bug, app-catalog.sh:202-203;
+    // the rows flip when the fix lands).
+    for args in [
+        &["catalog", "retry", "cj-3", "--id", "-h"][..],
+        &["catalog", "retry", "cj-3", "--app", "--help"],
+    ] {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..read("help as a value acts (bash bug)", args, r#"{"ok":true}"#)
+        });
     }
 }

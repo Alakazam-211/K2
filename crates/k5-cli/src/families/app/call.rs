@@ -86,6 +86,8 @@ pub struct Ctx {
     /// `<K2 home>/vault.sock`, where a confirm is asked
     /// ([`crate::confirm::confirm_token`]).
     pub vault_sock: std::path::PathBuf,
+    /// `$PROJECT`: the checkout `_compute_ws` names outside a session.
+    pub project: String,
 }
 
 impl Ctx {
@@ -95,7 +97,31 @@ impl Ctx {
             closing: Closing::default(),
             args_json,
             vault_sock: std::path::PathBuf::new(),
+            project: String::new(),
         }
+    }
+
+    /// `_compute_ws <explicit>`: the explicit workspace, else this
+    /// checkout outside a session, else nothing (a passport names its
+    /// own).
+    pub fn ws(&self, explicit: &str) -> String {
+        if !explicit.is_empty() {
+            explicit.to_string()
+        } else if self.in_session() {
+            String::new()
+        } else {
+            self.project.clone()
+        }
+    }
+
+    /// `K2_CP_MAX_TIME=<secs> _app_rt_post <path> <body>`: the POST with
+    /// curl's `--max-time` at `secs`.
+    pub fn post_max(&mut self, path: &str, body: &str, secs: u64) -> Result<Split, Exit> {
+        let before = self.client.compute_post_max_time;
+        self.client.compute_post_max_time = Some(std::time::Duration::from_secs(secs));
+        let s = self.send(true, path, body, false);
+        self.client.compute_post_max_time = before;
+        s
     }
 
     /// `_compute_send <GET|POST> <path> <payload> [tcp]`, then

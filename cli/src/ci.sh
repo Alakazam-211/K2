@@ -470,16 +470,12 @@ print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan" "
             fi
             body="$(python3 -c 'import json,sys; o={"run": sys.argv[2]}; o.update({"workspace": sys.argv[1]} if sys.argv[1] else {}); print(json.dumps(o))' "$ws" "$run")"
             _ci_call POST evidence "$body"
+            # Every name the answer puts under --out is checked before
+            # anything is written (exit 3 on the first one refused).
+            printf '%s' "$_CI_BODY" | _compute_out_check evidence "$out_dir" || exit $?
             mkdir -p "$out_dir" || { echo "can't make $out_dir" >&2; exit 1; }
             local file
-            file="$(printf '%s' "$_CI_BODY" | python3 -c '
-import json, os, sys
-v = json.load(sys.stdin)
-path = os.path.join(sys.argv[1], v["file"])
-with open(path, "w") as f:
-    json.dump(v["bundle"], f, indent=1, sort_keys=True)
-    f.write("\n")
-print(path)' "$out_dir")" || exit 1
+            file="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_OUT_PY" bundle "$out_dir")" || exit 1
             # Bundle v3: each build statement as <dir>/provenance/<label>.intoto.jsonl,
             # and <dir>/trust/ to check them without K2.
             local n_st n_trust
@@ -550,6 +546,7 @@ print("  3. here: k2 app updates push <app> --channel beta --version %s --artifa
             { [ -n "$prun" ] && [ -n "$out_dir" ]; } || { echo "usage: k2 ci provenance <run> --out <dir> [--json]" >&2; exit 2; }
             body="$(python3 -c 'import json,sys; o={"run": sys.argv[2]}; o.update({"workspace": sys.argv[1]} if sys.argv[1] else {}); print(json.dumps(o))' "$ws" "$prun")"
             _ci_call POST provenance "$body"
+            printf '%s' "$_CI_BODY" | _compute_out_check provenance "$out_dir" || exit $?
             mkdir -p "$out_dir" || { echo "can't make $out_dir" >&2; exit 1; }
             local p_st p_trust
             p_st="$(printf '%s' "$_CI_BODY" | _compute_write_statements "$out_dir")" || exit 1

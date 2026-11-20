@@ -660,6 +660,7 @@
 2 value src/renderer/components/Settings/sections/ZenWidgetData.tsx keeper: wire; madeBy, from the Garden data JSON
 2 value src/renderer/components/Settings/sections/sew-api.ts keeper: wire; the Sew identity the daemon reads
 2 value src/renderer/lib/zen/zen-rail-views.ts keeper: inert; a built-in view's source label that nothing compares
+2 value crates/k5-cli/src/families/agent/set.rs keeper: wire; the agent mode the daemon stores (--mode k2, k2so's alias), as the shell's agent set sends it
 1 value cli/src/app-catalog.sh keeper: wire; the suite catalog's variant (--variant, suite/mod.rs:45)
 1 value cli/src/app-doctor.sh keeper: wire; createdWith.k2 in the App routes' JSON (deploy/build.rs:28)
 1 value cli/src/compute-run.sh keeper: outside; cargo-nextest's profile, named by the [profile.k2] config the job writes one line above

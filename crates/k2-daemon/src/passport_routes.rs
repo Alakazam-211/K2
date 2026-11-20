@@ -343,9 +343,19 @@ fn actor_is_the_passport(path: &str, params: &mut HashMap<String, String>, princ
     }
 }
 
+/// Who a review's feedback file names (`assigned_by:`, written by reject
+/// and feedback): while a passport's request runs, the passport's own name,
+/// the reviewer [`record_reviewer`] puts on the feed, so the file and the
+/// log agree; else (the owner, a login) `reviewer`, as before.
+pub(crate) fn review_assigned_by() -> String {
+    let me = crate::caller_workspace::request_principal().map(|p| p.agent_address.trim().to_string());
+    k2_core::workspace::reviews::assigned_by_line(me.as_deref().unwrap_or(""))
+}
+
 /// A review the passport made (approve of another agent's branch, reject,
 /// feedback) goes on its workspace's activity feed with the passport as
-/// the reviewer; `agent=` there names whose work it reviewed.
+/// the reviewer; `agent=` there names whose work it reviewed. Its feedback
+/// file names the same reviewer ([`review_assigned_by`]).
 fn record_reviewer(path: &str, params: &HashMap<String, String>, principal: &HookPrincipal) {
     let (event, verb) = match path {
         "/cli/review/approve" => ("review.approved", "approved"),

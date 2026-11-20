@@ -253,11 +253,13 @@ pub fn review_approve(
 /// Reject the branch. Tears down the worktree, moves done items back
 /// to `inbox/` (stripped of worktree frontmatter so a fresh worktree
 /// is created on retry), optionally writes a `review-feedback-*.md`
-/// with the rejection reason, unlocks the agent.
+/// with the rejection reason, unlocks the agent. `assigned_by` is who
+/// rejected it ([`assigned_by_line`]).
 pub fn review_reject(
     project_path: String,
     agent_name: String,
     reason: Option<String>,
+    assigned_by: &str,
 ) -> Result<(), String> {
     let done_dir = agent_work_dir(&project_path, &agent_name, "done");
     let inbox_dir = agent_work_dir(&project_path, &agent_name, "inbox");
@@ -314,8 +316,8 @@ pub fn review_reject(
     if let Some(reason) = reason {
         let now = simple_date();
         let content = format!(
-            "---\ntitle: Review Feedback — Work Rejected\npriority: high\nassigned_by: reviewer\ncreated: {}\ntype: feedback\n---\n\n## Rejection Reason\n\n{}\n\n## Action Required\n\nReview the feedback above and address the issues in your next attempt.\nA fresh worktree will be created when you are relaunched.\n",
-            now, reason
+            "---\ntitle: Review Feedback — Work Rejected\npriority: high\nassigned_by: {}\ncreated: {}\ntype: feedback\n---\n\n## Rejection Reason\n\n{}\n\n## Action Required\n\nReview the feedback above and address the issues in your next attempt.\nA fresh worktree will be created when you are relaunched.\n",
+            assigned_by_line(assigned_by), now, reason
         );
         let filename = format!("review-feedback-{}.md", now);
         let path = inbox_dir.join(&filename);
@@ -329,11 +331,13 @@ pub fn review_reject(
 
 /// Drop a feedback file in the agent's inbox without tearing down
 /// their worktree. The agent keeps their branch; they address the
-/// feedback and move the item to `done/` again.
+/// feedback and move the item to `done/` again. `assigned_by` is who
+/// asked for the changes ([`assigned_by_line`]).
 pub fn review_request_changes(
     project_path: String,
     agent_name: String,
     feedback: String,
+    assigned_by: &str,
 ) -> Result<(), String> {
     let inbox_dir = agent_work_dir(&project_path, &agent_name, "inbox");
     if !inbox_dir.exists() {
@@ -342,14 +346,29 @@ pub fn review_request_changes(
 
     let now = simple_date();
     let content = format!(
-        "---\ntitle: Review Feedback — Changes Requested\npriority: high\nassigned_by: reviewer\ncreated: {}\ntype: feedback\n---\n\n## Requested Changes\n\n{}\n\n## Action Required\n\nAddress the feedback above, then move this item to done/ when complete.\n",
-        now, feedback
+        "---\ntitle: Review Feedback — Changes Requested\npriority: high\nassigned_by: {}\ncreated: {}\ntype: feedback\n---\n\n## Requested Changes\n\n{}\n\n## Action Required\n\nAddress the feedback above, then move this item to done/ when complete.\n",
+        assigned_by_line(assigned_by), now, feedback
     );
     let filename = format!("review-feedback-{}.md", now);
     let path = inbox_dir.join(&filename);
     atomic_write(&path, &content)?;
 
     Ok(())
+}
+
+/// The reviewer a feedback file's `assigned_by:` names: `reviewer` for a
+/// person, the agent's own name when its passport made the review (the
+/// daemon passes the name its activity entry records). Kept to one
+/// frontmatter line: control characters are dropped, and nothing left is
+/// `reviewer`.
+pub fn assigned_by_line(name: &str) -> String {
+    let line: String = name.chars().filter(|c| !c.is_control()).collect();
+    let line = line.trim();
+    if line.is_empty() {
+        "reviewer".to_string()
+    } else {
+        line.to_string()
+    }
 }
 
 /// Sub-agent completion. Workspace States (capability tiers) retired —
@@ -389,6 +408,15 @@ pub fn agent_complete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assigned_by_is_one_frontmatter_line() {
+        assert_eq!(assigned_by_line("reviewer"), "reviewer");
+        assert_eq!(assigned_by_line(" d1-agent "), "d1-agent");
+        assert_eq!(assigned_by_line("acme\ntype: task\r"), "acmetype: task");
+        assert_eq!(assigned_by_line(""), "reviewer");
+        assert_eq!(assigned_by_line("\n\t"), "reviewer");
+    }
 
     #[test]
     fn review_item_serializes_camel_case() {

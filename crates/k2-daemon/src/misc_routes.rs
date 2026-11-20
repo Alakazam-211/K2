@@ -478,6 +478,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     p,
                     agent.clone(),
                     opt_param(params, "reason"),
+                    &crate::passport_routes::review_assigned_by(),
                 );
                 if result.is_ok() {
                     emit_review_changed(&project_for_emit, Some(&agent));
@@ -494,6 +495,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     p,
                     agent.clone(),
                     str_param(params, "feedback"),
+                    &crate::passport_routes::review_assigned_by(),
                 );
                 if result.is_ok() {
                     emit_review_changed(&project_for_emit, Some(&agent));

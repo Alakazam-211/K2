@@ -556,7 +556,8 @@ fn entries(e: &Env, kind: &str) -> Vec<(String, String)> {
 
 /// `k2 done` records the passport's own name: absent takes it, the same
 /// name passes, another name (or a path) is refused and records nothing.
-/// A review the passport makes records it as the reviewer.
+/// A review the passport makes records it as the reviewer, on the feed and
+/// in the feedback file reject and feedback write.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_actor_is_the_passport() {
     let t = k2_core::test_env::TempHome::new();
@@ -593,13 +594,38 @@ async fn the_actor_is_the_passport() {
     let r = http(e.port, "POST", &format!("/cli/review/approve?project={own}&agent=backend&branch={}", enc("agent/backend/task")), Some(e.passport.as_str()));
     assert_eq!(r.status, 200, "approve another agent's branch: {}", r.raw);
     assert_eq!(head_of(ws), tips[0], "merged");
+    // The feedback file names the reviewer the feed records. Reject and
+    // feedback write the same day's file, so each is read, then removed.
+    let inbox = k2_core::workspace::scheduler::agent_work_dir(&e.own, "backend", "inbox");
+    let review_file = |what: &str, body: &str| -> String {
+        let files: Vec<_> = std::fs::read_dir(&inbox)
+            .unwrap_or_else(|err| panic!("{what}: no inbox at {}: {err}", inbox.display()))
+            .map(|f| f.expect("inbox entry").path())
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("review-feedback-")))
+            .collect();
+        assert_eq!(files.len(), 1, "{what}: one feedback file: {files:?}");
+        let text = std::fs::read_to_string(&files[0]).expect("read the feedback file");
+        std::fs::remove_file(&files[0]).expect("remove the feedback file");
+        assert!(text.contains(body), "{what}: {text}");
+        let by: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("assigned_by: ")).collect();
+        assert_eq!(by.len(), 1, "{what}: one assigned_by line: {text}");
+        by[0].to_string()
+    };
     let r = http(e.port, "POST", &format!("/cli/review/feedback?project={own}&agent=backend&feedback=tighten"), Some(e.passport.as_str()));
     assert_eq!(r.status, 200, "feedback: {}", r.raw);
-    let r = http(e.port, "POST", &format!("/cli/review/reject?project={own}&agent=backend&reason=no"), Some(e.passport.as_str()));
+    assert_eq!(review_file("feedback", "tighten"), "d1-agent", "feedback: the file names the passport");
+    // Reject writes its file only when there is done work to send back.
+    std::fs::create_dir_all(k2_core::workspace::scheduler::agent_work_dir(&e.own, "backend", "done")).expect("done dir");
+    let r = http(e.port, "POST", &format!("/cli/review/reject?project={own}&agent=backend&reason=no-tests"), Some(e.passport.as_str()));
     assert_eq!(r.status, 200, "reject: {}", r.raw);
+    assert_eq!(review_file("reject", "no-tests"), "d1-agent", "reject: the file names the passport");
     for kind in ["review.approved", "review.changes-requested", "review.rejected"] {
         assert_eq!(entries(&e, kind), vec![("d1-agent".to_string(), "backend".to_string())], "{kind}: the passport reviewed backend's work");
     }
+    // The owner's file still names `reviewer`.
+    let r = http(e.port, "POST", &format!("/cli/review/feedback?project={own}&agent=backend&feedback=owner-note"), Some(OWNER));
+    assert_eq!(r.status, 200, "owner feedback: {}", r.raw);
+    assert_eq!(review_file("owner feedback", "owner-note"), "reviewer", "the owner's file");
 }
 
 /// Only a passport of a live, local session: an API cell's, a `k2 job`

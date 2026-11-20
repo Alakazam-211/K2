@@ -123,6 +123,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Threads
 - Thread: after you attach a file, the message box is ready to type in, and Return sends the file even with no text.
 
+### Agent messages
+- **An inbox cover's title is one line.** The title of an item sent with `k2 msg --inbox-wake` or `--inbox-silent`, or written with `k2 inbox compose`, is written on one line of the cover: a line break or another control character in it is written as `\u{..}`, and three dashes in a row as `--\u{2d}`. Accents and other letters stay as typed. The other lines at the top of a cover, a summary among them, follow the same rule.
+- **A wake pointer's title is one line, with no control characters.** The `[inbox:<id>] <title>` line an agent is woken with holds its title on that one line, written the same way, whoever sent the pointer.
+
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 
 ### Home chat

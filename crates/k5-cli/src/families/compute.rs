@@ -8,12 +8,15 @@
 //!   `rightsize`).
 //! - [`writes`]: the verbs that write, wait or move files (`cancel`,
 //!   `wait`, `fetch` and `grant`).
+//! - [`admin`]: the admin verbs (`revoke`, `preview on|off`, `placement
+//!   v1|v2`, `access`, `operate`, `manage`, `retier` and `tier`).
 //!
 //! Every other verb, and `compute` alone, is the shell's. The modules below
 //! are shared: [`pyrt`] (the Python operations the shell's readers use),
 //! [`render`] (`_compute_render`), [`lines`] (where the shell's Python
 //! lines are) and `reads::call` (`_compute_call`).
 
+pub mod admin;
 pub mod events;
 pub mod lines;
 pub mod logs;
@@ -106,19 +109,46 @@ pub const VERBS: &[Verb] = &[
         words: &["grant"],
         owner: Owner::Native,
     },
+    Verb {
+        words: &["revoke"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["access"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["operate"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["manage"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["retier"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["tier"],
+        owner: Owner::Native,
+    },
 ];
 
 /// Whether this family's code answers `verb` (a second word).
 pub fn answers(verb: &str) -> bool {
-    reads::ANSWERS.contains(&verb) || writes::ANSWERS.contains(&verb)
+    [reads::ANSWERS, writes::ANSWERS, admin::ANSWERS]
+        .iter()
+        .any(|a| a.contains(&verb))
 }
 
 /// Runs `args` (the whole command line after `argv[0]`). `None`: the
-/// shell CLI answers it.
+/// shell CLI answers it. Each side hands back, before it prints or sends
+/// anything, a line it doesn't answer: `preview` and `placement` with no
+/// word, `status` or a bad word are [`reads`]', `on|off` and `v1|v2` are
+/// [`admin`]'s.
 pub fn run(args: &[OsString]) -> Option<Exit> {
-    let verb = args.get(1).and_then(|w| w.to_str())?;
-    if reads::ANSWERS.contains(&verb) {
-        return reads::run(args);
-    }
-    writes::run(args)
+    reads::run(args)
+        .or_else(|| writes::run(args))
+        .or_else(|| admin::run(args))
 }

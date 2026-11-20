@@ -9,7 +9,8 @@
 # environment to a file. Checks:
 #   - the command has DATABASE_URL (and, with --as NAME, NAME) equal to
 #     the connection string, password included;
-#   - no curl or python3 argv holds the password;
+#   - no curl or python3 argv holds the password (the k5 binary starts no
+#     curl or python3 child at all);
 #   - nothing k2 prints (stdout and stderr) holds it, and no file under
 #     the temp HOME (where a log would go) holds it.
 # And `k2 db run --help` says the connection string, password included, is
@@ -111,8 +112,19 @@ run_db PG_URL --as PG_URL
 grep -qxF "PG_URL=$DSN" "$WORK/env.PG_URL" && ok "--as PG_URL names the variable" || bad "no PG_URL=<dsn> in the command's env"
 
 echo "== nowhere else =="
-grep -q '^curl ' "$ARGV_LOG" || grep -q '^python3 ' "$ARGV_LOG" \
-    || bad "the shims saw nothing: the test would prove nothing"
+if [ "$K2" != "$CLI_BASH_SOURCE" ]; then
+    # The k5 binary answers db run itself: it starts no curl or python3
+    # child at all (the command is found on PATH and exec'd, as bash's
+    # exec does), so no argv but the command's could hold the password.
+    if [ -s "$ARGV_LOG" ]; then
+        bad "the binary started a curl or python3 child:"; head -3 "$ARGV_LOG" | sed 's/^/      | /' >&2
+    else
+        ok "the binary started no curl or python3 child"
+    fi
+else
+    grep -q '^curl ' "$ARGV_LOG" || grep -q '^python3 ' "$ARGV_LOG" \
+        || bad "the shims saw nothing: the test would prove nothing"
+fi
 if grep -qF "$PW" "$ARGV_LOG"; then
     bad "the password is on an argv:"; grep -F "$PW" "$ARGV_LOG" | sed 's/^/      | /' >&2
 else

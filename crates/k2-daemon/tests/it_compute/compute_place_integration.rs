@@ -2542,3 +2542,82 @@ async fn a_node_with_a_line_loses_to_one_that_starts_now_and_waiting_jobs_move()
         compute_ws::test_detach(n);
     }
 }
+
+/// 0.46.17 (agent feedback): a pinned job that has waited 15 min gets one
+/// `[compute]` note naming its node, how long it waited, a node that could
+/// start it now and `k2 compute move <id> --auto`; its wait words carry
+/// the same advice; a second sweep sends nothing. The job stays pinned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pinned_job_that_waited_long_gets_one_note() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "pinwait");
+    for n in ["pw-a", "pw-b"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    // pw-a: every slot taken; pw-b: idle.
+    let _a = compute_ws::test_attach("pw-a", offer(1, 30, 32, 4));
+    let _b = compute_ws::test_attach("pw-b", offer(1, 30, 32, 0));
+    let sid = SessionId::new();
+    let agent = k2_daemon::session_token::mint_session_token(
+        &sid,
+        &sid.to_string(),
+        HookPrincipal { workspace_uuid: me.id.clone(), agent_address: "agent".into() },
+        CredMode::ApiKey,
+        Provider::Anthropic,
+    );
+    compute_ws::test_sink_register(&sid.to_string());
+    let r = run(d.port, &agent, &me, json!({"node": "pw-a"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let short = &job[..8];
+    let rj = row(&job);
+    assert_eq!((rj.state.as_str(), rj.node_id.as_str(), rj.ctl.any.is_none()), ("queued", "pw-a", true), "pinned and waiting: {rj:?}");
+
+    // Not yet 15 minutes: nothing.
+    let now = k2_core::compute::now();
+    k2_daemon::compute_pinned_wait::sweep_now(now);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(compute_ws::test_sink_take(&sid.to_string()).is_empty(), "too early for a note");
+
+    // It has waited 16 minutes.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut ctl = store::job_by_id(&conn, &job).unwrap().ctl;
+        ctl.queued_at = now - 16 * 60;
+        store::set_job_ctl(&conn, &job, &ctl).unwrap();
+    }
+    k2_daemon::compute_pinned_wait::sweep_now(now);
+    let mut msgs = Vec::new();
+    for _ in 0..50 {
+        msgs.extend(compute_ws::test_sink_take(&sid.to_string()));
+        if !msgs.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert_eq!(
+        msgs[0],
+        format!("[compute] job {short} is pinned to pw-a and has waited 16m00s there; pw-b could start it now. k2 compute move {short} --auto lets K2 place it on the first node that can start it; next time, leave the node off and K2 picks one. k2 compute get {short}")
+    );
+    let g = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
+    assert_eq!(g.status, 200, "{}", g.body);
+    let words = j(&g)["wait"]["words"].as_str().unwrap_or_default().to_string();
+    assert!(
+        words.contains(&format!("pinned to pw-a: waited 16m00s while pw-b could start it now; k2 compute move {short} --auto")),
+        "{words}"
+    );
+
+    // Once per job; and the job was never moved.
+    k2_daemon::compute_pinned_wait::sweep_now(now + 600);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(compute_ws::test_sink_take(&sid.to_string()).is_empty(), "never twice");
+    let rj = row(&job);
+    assert_eq!((rj.state.as_str(), rj.node_id.as_str(), rj.ctl.any.is_none()), ("queued", "pw-a", true), "still pinned: {rj:?}");
+    for n in ["pw-a", "pw-b"] {
+        compute_ws::test_detach(n);
+    }
+}

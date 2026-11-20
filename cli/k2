@@ -31094,6 +31094,8 @@ Agents:
                  leave the node off unless the job needs that machine. When
                  the named node can't start it now and another could, run
                  prints a hint (k2 compute move <id> --auto releases it).
+                 Still waiting after 15 minutes: one [compute] message names
+                 the node, the wait and a node that could start it now.
                  [--avoid <node>]...  K2 never picks that node for this job: not
                                 at submit, not when it moves, not for a retry.
                                 Repeatable; a name or a start of one. Not with a
@@ -57310,7 +57312,7 @@ cmd_schema() {
     {
       "name": "compute run",
       "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
-      "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there. Always pass --mem. Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
+      "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem. Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
       "args": [{"name": "node", "required": false, "description": "Pin the job to this node (full name or a start that fits only one). Leave it off unless the job needs that machine."}, {"name": "command", "required": true, "description": "After --: the command to run."}],
       "flags": [
         {"name": "--os", "arg": "linux|macos", "description": "Only nodes of that OS."},
@@ -69785,6 +69787,11 @@ PINNED OR AUTO (0.46.8)
   When the node you named can't start the job now and another could, run
   prints one hint line naming that node. It is advice: the job is still
   queued where you named it, and the exit code doesn't change.
+  A pinned job still waiting after 15 minutes gets one [compute] message
+  (0.46.17): the node it is pinned to, how long it waited, a node that
+  could start it now (when one could) and the move --auto line below; its
+  wait line (get, wait) carries the same advice. Once per job; K2 never
+  moves a pinned job by itself.
   Release a pinned job without cancelling it (same job id, same place in
   your history):
     k2 compute move ab12cd34 --auto

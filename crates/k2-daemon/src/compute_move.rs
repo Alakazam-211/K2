@@ -409,7 +409,7 @@ fn move_one(who: &Who, j: &store::JobRow, ask: &Ask) -> R<serde_json::Value> {
 
 /// The OS and arch of the node a pinned job waits on (its offer, else the
 /// labels it enrolled with).
-fn node_kind(node_id: &str) -> (Option<String>, Option<String>) {
+pub(crate) fn node_kind(node_id: &str) -> (Option<String>, Option<String>) {
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();

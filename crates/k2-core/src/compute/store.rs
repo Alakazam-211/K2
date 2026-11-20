@@ -707,6 +707,13 @@ pub struct JobCtl {
     /// so it is sent once per attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_warned_gen: Option<i64>,
+    /// A pinned job that waited long (0.46.17): when its one note went
+    /// out, and the advice its `wait.words` carry from then on
+    /// (controller-made words only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_wait_noted_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_wait_words: Option<String>,
     /// `--cpus N+M`'s M in thousandths of a core
     /// (prd-compute-blacksmith-class-v1 R2, §4.4.4). Placement and
     /// admission count only N (`limits.cpu_millis`); the plan carries M

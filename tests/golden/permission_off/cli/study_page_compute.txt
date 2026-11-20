@@ -38,6 +38,11 @@ PINNED OR AUTO (0.46.8)
   When the node you named can't start the job now and another could, run
   prints one hint line naming that node. It is advice: the job is still
   queued where you named it, and the exit code doesn't change.
+  A pinned job still waiting after 15 minutes gets one [compute] message
+  (0.46.17): the node it is pinned to, how long it waited, a node that
+  could start it now (when one could) and the move --auto line below; its
+  wait line (get, wait) carries the same advice. Once per job; K2 never
+  moves a pinned job by itself.
   Release a pinned job without cancelling it (same job id, same place in
   your history):
     k2 compute move ab12cd34 --auto

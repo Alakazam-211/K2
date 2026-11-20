@@ -427,6 +427,8 @@ pub mod compute_attempts;
 pub mod compute_repo_pick;
 // The job and node views (`nodes`, `status`, `queue`, `jobs`, `get`, `cancel`).
 pub mod compute_views;
+/// A pinned job that waited long gets one note (0.46.17).
+pub mod compute_pinned_wait;
 /// App runtime stage 1 (prd-k2-app-runtime-v1): `/cli/app/*` routes.
 pub mod apps;
 pub mod compute_shards;

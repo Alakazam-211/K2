@@ -1594,7 +1594,7 @@ fn deliver_completion(job_id: &str, session: Option<&str>, ws_path: Option<&str>
 }
 
 /// Live message to a job's session, else the workspace inbox (`title`).
-fn deliver(title: &str, job_id: &str, session: Option<&str>, ws_path: Option<&str>, text: &str) {
+pub(crate) fn deliver(title: &str, job_id: &str, session: Option<&str>, ws_path: Option<&str>, text: &str) {
     if let Some(sid) = session.filter(|s| !s.is_empty()) {
         if test_sink(sid, text) {
             return;
@@ -3430,6 +3430,8 @@ fn ensure_ticker() {
                     crate::compute_place::sweep_shares(now);
                     // CE-10: warn a quiet job's session before its stall limit.
                     sweep_stalls(now);
+                    // A pinned job that waited long: one note (0.46.17).
+                    crate::compute_pinned_wait::sweep(now);
                     // Snapshot ends whose log never came.
                     release_held_ends(Instant::now());
                 })

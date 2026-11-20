@@ -656,6 +656,11 @@ pub(crate) fn wait_json(j: &store::JobRow, queue: Option<&serde_json::Value>, no
             "etaSecs": eta, "etaBasis": basis, "holdsQueue": holds, "since": since})
     }
     let state = compute::result::shown_state(j);
+    // A pinned job that waited long: the advice rides its wait words.
+    let pinned = |s: String| match j.ctl.pinned_wait_words.as_deref() {
+        Some(p) => format!("{s} · {p}"),
+        None => s,
+    };
     if let Some(q) = queue.filter(|_| state == "queued") {
         let reason = q.get("waitReason").and_then(|r| r.as_str()).or_else(|| q.get("reason").and_then(|r| r.as_str())).unwrap_or("queued");
         let words = q.get("waitWords").and_then(|r| r.as_str()).map(str::to_string).unwrap_or_else(|| {
@@ -672,7 +677,7 @@ pub(crate) fn wait_json(j: &store::JobRow, queue: Option<&serde_json::Value>, no
             q.get("position").cloned().unwrap_or_default(),
             q.get("of").cloned().unwrap_or_default(),
             reason,
-            words,
+            pinned(words),
             eta,
             basis,
             q.get("holdsQueue").and_then(|h| h.as_bool()).unwrap_or(true),
@@ -690,7 +695,7 @@ pub(crate) fn wait_json(j: &store::JobRow, queue: Option<&serde_json::Value>, no
                     None => ("placing", "waiting for the next placement pass (seconds)".to_string()),
                 },
             };
-            w("server", serde_json::Value::Null, serde_json::Value::Null, reason, words, None, "unknown", true, Some(queued_since))
+            w("server", serde_json::Value::Null, serde_json::Value::Null, reason, pinned(words), None, "unknown", true, Some(queued_since))
         }
         "assigned" | "preparing" => w(
             "node",

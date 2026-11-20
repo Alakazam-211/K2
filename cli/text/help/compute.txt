@@ -62,6 +62,8 @@ Agents:
                  leave the node off unless the job needs that machine. When
                  the named node can't start it now and another could, run
                  prints a hint (k2 compute move <id> --auto releases it).
+                 Still waiting after 15 minutes: one [compute] message names
+                 the node, the wait and a node that could start it now.
                  [--avoid <node>]...  K2 never picks that node for this job: not
                                 at submit, not when it moves, not for a retry.
                                 Repeatable; a name or a start of one. Not with a

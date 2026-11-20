@@ -42,6 +42,9 @@
 //! - [`prelude`]: what the shell CLI does around such a verb: its first
 //!   line, its two gates, an `id` tool's passport checks and its EXIT
 //!   trap's lines.
+//! - [`confirm`]: the vault socket and the confirm token a person gives
+//!   for a step (`_vault_confirm_token` and its helpers), shared by the
+//!   families that ask for one.
 //! - [`prompt`]: questions to a person and secrets from stdin, no-echo
 //!   reads included, as the shell's `read -r`, `read -rs` and `$(cat)`.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
@@ -73,6 +76,7 @@ pub mod called_as;
 pub mod cards;
 pub mod check;
 pub mod cli_status;
+pub mod confirm;
 pub mod daemon;
 pub mod embedded;
 pub mod exit;

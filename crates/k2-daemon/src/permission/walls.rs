@@ -2619,4 +2619,118 @@ mod tests {
             "xy permission request connections.add to='a b'\\''c' --why \"<what you need it for>\""
         );
     }
+
+    /// A command name in `text` other than this build's: one of `names`
+    /// with no letter, digit, `_`, `.`, `/` or `-` before it, then a space
+    /// and a lower-case letter. The brand gate's "reads as a command"
+    /// (scripts/garden/cli-name-flip.py) is the model, written small.
+    fn other_command<'a>(text: &str, names: &[&'a str]) -> Option<&'a str> {
+        for name in names {
+            for (i, _) in text.match_indices(name) {
+                if text[..i].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-')) {
+                    continue;
+                }
+                let mut after = text[i + name.len()..].chars();
+                if after.next() == Some(' ') && after.next().is_some_and(|c| c.is_ascii_lowercase()) {
+                    return Some(name);
+                }
+            }
+        }
+        None
+    }
+
+    fn strings_of<'v>(v: &'v Value, out: &mut Vec<&'v str>) {
+        match v {
+            Value::String(s) => out.push(s),
+            Value::Array(a) => a.iter().for_each(|x| strings_of(x, out)),
+            Value::Object(m) => m.values().for_each(|x| strings_of(x, out)),
+            _ => {}
+        }
+    }
+
+    /// The reader the brand-free test below uses, on literals.
+    #[test]
+    fn brand_free_reader_sees_a_command_and_nothing_else() {
+        let names = ["k5", "xy"];
+        assert_eq!(other_command("ask with: k5 permission request a.b", &names), Some("k5"));
+        assert_eq!(other_command("(xy app list)", &names), Some("xy"));
+        assert_eq!(other_command("`k5 msg <workspace>`", &names), Some("k5"));
+        for text in ["the K5 Space", "sudo k5-node admin", "proxy server", "k5so app", "a.k5 x", "k5", "k5 <id>", "xy App", "k2 app list"] {
+            assert_eq!(other_command(text, &names), None, "{text}");
+        }
+    }
+
+    /// The second judge: a test that names no brand. Every refusal row
+    /// (what happened, the fix, its explain line, its text), the
+    /// registry's index and study page, every wall's constant text, the
+    /// Ask line of every action the walls map names, and every card's
+    /// constant text hold no command name but this build's own. Under the
+    /// default build it proves little; built with another brand
+    /// (K2_BRAND_DIR=brand/xy) it shows this text moved with the brand.
+    #[test]
+    fn brand_free_permission_and_refusal_text() {
+        use k2_core::brand::CLI_ALIASES;
+        use k2_core::refusals;
+
+        // Every command name a brand has, less this build's name and aliases.
+        let others: Vec<&str> = ["k2", "k5", "xy"].into_iter().filter(|n| *n != CLI_NAME && !CLI_ALIASES.contains(n)).collect();
+        assert_eq!(others.len(), 2, "this build's name is one of the known ones: {others:?}");
+
+        let mut texts: Vec<(String, String)> = Vec::new();
+        for r in refusals::all() {
+            texts.push((format!("refusal {}: what happened", r.id), r.what.to_string()));
+            texts.push((format!("refusal {}: the fix", r.id), r.fix.to_string()));
+            texts.push((format!("refusal {}: explain", r.id), r.explain_cmd()));
+            texts.push((format!("refusal {}: text", r.id), refusals::row_text(r)));
+        }
+        assert!(texts.len() > 400, "the registry's rows: {}", texts.len() / 4);
+        texts.push(("the refusal index".to_string(), refusals::list_text()));
+        texts.push(("the refusal study page".to_string(), refusals::study_page()));
+
+        let mut asks = 0;
+        for row in ROWS {
+            match row.target {
+                Target::Ask { action, .. } => {
+                    let mut params = Map::new();
+                    for (k, v) in row.fixed {
+                        params.insert((*k).to_string(), json!(v));
+                    }
+                    for (k, _) in row.params {
+                        params.entry((*k).to_string()).or_insert(Value::Null);
+                    }
+                    let cmd = ask_command(action, &params);
+                    assert!(
+                        cmd.contains(&format!(" permission request {action}")) && cmd.ends_with(" --why \"<what you need it for>\""),
+                        "{cmd}"
+                    );
+                    texts.push((format!("wall {} {:?}: the Ask line", row.prefix, row.method), cmd));
+                    asks += 1;
+                }
+                Target::Cannot { r#where } => texts.push((format!("wall {} {:?}: where", row.prefix, row.method), r#where.to_string())),
+            }
+        }
+        assert!(asks > 50, "the walls map's actions: {asks}");
+        texts.push(("the default where".to_string(), WHERE_DEFAULT.to_string()));
+        for (code, hint) in MACHINE_HINTS {
+            texts.push((format!("machine hint {code}"), (*hint).to_string()));
+        }
+
+        let cards = crate::permission::actions::all();
+        assert!(cards.len() > 50, "the card registry: {}", cards.len());
+        for r in cards {
+            let spec = serde_json::to_value(r.spec).expect("a card's spec is JSON");
+            let mut all = Vec::new();
+            strings_of(&spec, &mut all);
+            for s in all {
+                texts.push((format!("card {}", r.spec.id), s.to_string()));
+            }
+        }
+        for n in crate::permission::actions::not_cardable() {
+            texts.push((format!("not a card {}: where", n.id), n.r#where.to_string()));
+        }
+
+        let found: Vec<String> =
+            texts.iter().filter_map(|(at, text)| other_command(text, &others).map(|name| format!("{at} ({name}): {text}"))).collect();
+        assert!(found.is_empty(), "text that names another command than this build's:\n{}", found.join("\n"));
+    }
 }

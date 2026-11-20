@@ -261,7 +261,8 @@ in shadow is only a warning. `K2_COMPUTE_EXCLUSIVE=0` sends them without
 compute mode refuses it at the pre-flight. None of the compute checks run
 in github mode, and in shadow every one of them only warns.
 `K2_COMPUTE_VERIFY_NODE=none` drops V1, with a loud warning.
-`K2_COMPUTE_BINS_MEM` and `K2_COMPUTE_APP_MEM` change the memory. The jobs
+`K2_COMPUTE_BINS_MEM` (x86_64 binaries, 24G), `K2_COMPUTE_ARM_MEM` (aarch64
+binaries, 32G) and `K2_COMPUTE_APP_MEM` (the app, 24G) change the memory. The jobs
 name their nodes on purpose (the dual build needs two different ones), so
 they never land on k2-arch.
 

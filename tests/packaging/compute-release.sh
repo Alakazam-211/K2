@@ -262,7 +262,7 @@ rc="$(run_case ok)"
 grep -q 'L2/V2 aarch64: not on compute (K2_COMPUTE_ARM=github' "$tmp/ok.submit" && pass "K2_COMPUTE_ARM=github: no L2/V2, and it says GitHub builds aarch64" \
     || fail "aarch64 note" "$(cat "$tmp/ok.submit")"
 run_line="$(grep -m1 'k2 compute run k2n7-vin' "$tmp/calls-ok" || true)"
-for want in "--sha $COMMIT" "--tier ci" "--detach" "--artifact dist/*" "--env BUILD_COMMIT=$COMMIT" "--needs rust@1.98.7," "--mem 20G" "--queue-timeout 2h" \
+for want in "--sha $COMMIT" "--tier ci" "--detach" "--artifact dist/*" "--env BUILD_COMMIT=$COMMIT" "--needs rust@1.98.7," "--mem 24G" "--queue-timeout 2h" \
     "--secret K2_GMAIL_CLIENT_ID=BUILD_GMAIL_CLIENT_ID" "--secret K2_GMAIL_CLIENT_SECRET=BUILD_GMAIL_CLIENT_SECRET" \
     "--secret K2_MICROSOFT_CLIENT_ID=BUILD_MICROSOFT_CLIENT_ID" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
     [[ "$run_line" == *"$want"* ]] && pass "L1 submit has $want" || fail "L1 submit lacks $want" "$run_line"
@@ -426,7 +426,7 @@ out="$(run_arm arm)"
 for lab_node in k2n10-vin k2n11-vin; do
     line="$(grep -m1 "k2 compute run $lab_node " "$tmp/calls-arm" || true)"
     for want in "--needs cmake@3,sys:pkg-config,sys:zlib1g-dev " "--exclusive --why " \
-        "--secret K2_GMAIL_CLIENT_ID=BUILD_GMAIL_CLIENT_ID" "--env BUILD_COMMIT=$COMMIT_ARM" "--cpus 8 " "-- bash scripts/ci/build-linux-bins.sh aarch64"; do
+        "--secret K2_GMAIL_CLIENT_ID=BUILD_GMAIL_CLIENT_ID" "--env BUILD_COMMIT=$COMMIT_ARM" "--cpus 8 " "--mem 32G " "-- bash scripts/ci/build-linux-bins.sh aarch64"; do
         [[ "$line" == *"$want"* ]] && pass "$lab_node aarch64 submit has $want" || fail "$lab_node aarch64 submit lacks $want" "$line"
     done
     [[ "$line" != *"rust@"* ]] && pass "$lab_node: no rust@ need (the node installs rust-toolchain.toml's channel AND its aarch64 target)" \

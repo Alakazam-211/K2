@@ -80,7 +80,10 @@
 #                                        a by-hand run from a workspace without
 #                                        one.
 #   K2_COMPUTE_QUEUE_TIMEOUT 2h          --queue-timeout per job
-#   K2_COMPUTE_BINS_MEM      20G         --mem for L1, V1 and L2
+#   K2_COMPUTE_BINS_MEM      24G         --mem for L1 and V1 (x86_64 binaries;
+#                                        their build peaks near 17G)
+#   K2_COMPUTE_ARM_MEM       32G         --mem for L2 and V2 (the aarch64
+#                                        cross build peaks near 27G)
 #   K2_COMPUTE_APP_MEM       24G         --mem for L3: the app links the native
 #                                        voice stack (native-voice, on by default
 #                                        since 0.46.9); its release link needs
@@ -187,7 +190,8 @@ k2cr_submit() {
     local t
     while IFS= read -r t; do [ -n "$t" ] && tier_args+=("$t"); done < <(k2_compute_tier_args "${K2_COMPUTE_TIER:-ci}") \
         || { echo "  ✗ $label: no tier flags" >&2; return 1; }
-    local mem="${K2_COMPUTE_BINS_MEM:-20G}"
+    local mem="${K2_COMPUTE_BINS_MEM:-24G}"
+    [ "$kind" = "linux-bins" ] && [ "$arch" = aarch64 ] && mem="${K2_COMPUTE_ARM_MEM:-32G}"
     [ "$kind" = "linux-app" ] && mem="${K2_COMPUTE_APP_MEM:-24G}"
     local -a args=(compute run "$node" --sha "$K2CR_COMMIT" --detach ${tier_args[@]+"${tier_args[@]}"} --json
         --artifact 'dist/*' --needs "$needs" --mem "$mem" --queue-timeout "${K2_COMPUTE_QUEUE_TIMEOUT:-2h}" --retries 1

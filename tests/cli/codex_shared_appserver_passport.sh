@@ -232,7 +232,8 @@ requests() { cat "$WORK/requests.log"; }
 # ── 2. Under a shared Codex app-server ───────────────────────────────
 echo "== under a shared Codex app-server =="
 : >"$WORK/requests.log"
-# With the switch off (today's behaviour), the id-tool gate refuses.
+# With the switch off (today's behaviour), the id-tool gate refuses. This
+# one names the parent with `exec -a` and reads the real `ps`.
 # `exec -a` names the parent bash like the shared server; the second
 # command keeps bash from exec'ing k2 in its place.
 set +e
@@ -248,12 +249,23 @@ assert_eq "shared server: nothing reached the daemon" "$(requests)" ""
 assert_absent "shared server: no bare token error" "$(cat "$WORK/err")" "Invalid or missing auth token"
 
 # Switch on (the default): the Codex tab gate refuses first, even with a
-# matching marker, and names the shared server.
+# matching marker, and names the shared server. A stand-in `ps` puts the
+# shared server above the call (some hosts, such as a sandboxed macOS
+# build node, don't let a job run the real one).
+mkdir -p "$WORK/psbin"
+cat >"$WORK/psbin/ps" <<'EOF'
+#!/bin/sh
+# The caller (k2 runs ps from its own shell) under a shared Codex server.
+printf '%s\n' "    1     0 /sbin/init" \
+    "  300     1 codex app-server --listen unix://" \
+    "  400   300 /bin/zsh -lc k2" \
+    "$PPID   400 /bin/bash k2"
+EOF
+chmod +x "$WORK/psbin/ps"
 : >"$WORK/requests.log"
 set +e
-cell K2_HOOK_SOCK="$GONE_SOCK" CODEX_THREAD_ID="thread-1" K2_CODEX_TAB_ISOLATED="sess42" K2="$K2_CLI" \
-    bash -c 'exec -a "codex app-server --listen unix://" bash -c "\"\$K2\" thread k2/cortana hello; exit \$?"' \
-    >"$WORK/out" 2>"$WORK/err"
+cell K2_HOOK_SOCK="$GONE_SOCK" CODEX_THREAD_ID="thread-1" K2_CODEX_TAB_ISOLATED="sess42" PATH="$WORK/psbin:$PATH" \
+    "$K2_CLI" thread k2/cortana hello >"$WORK/out" 2>"$WORK/err"
 rc=$?
 set -e
 assert_eq "shared server, switch on: exit 3" "$rc" "3"
@@ -376,13 +388,13 @@ run_codex_outside() {
     rc=$?
     set -e
 }
-# k2 as a Codex tool call under a process named like the shared server.
+# k2 as a Codex tool call with a shared Codex server above it (the
+# stand-in ps of section 2), its marker matching its passport.
 run_codex_shared() {
     reset_logs
     set +e
-    cell "${CODEX_ENV[@]}" K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_TAB_ISOLATED="$MARK" K2="$K2_CLI" ARGS="$*" \
-        bash -c 'exec -a "codex app-server --listen unix://" bash -c "\"\$K2\" \$ARGS; exit \$?"' \
-        >"$WORK/out" 2>"$WORK/err"
+    cell "${CODEX_ENV[@]}" K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_TAB_ISOLATED="$MARK" PATH="$WORK/psbin:$WORK/bin:$PATH" \
+        "$K2_CLI" "$@" >"$WORK/out" 2>"$WORK/err"
     rc=$?
     set -e
 }

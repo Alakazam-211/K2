@@ -369,6 +369,41 @@ _k2_cfg_auth() {
     _k2_cfg_add header "Authorization: Bearer $1"
 }
 
+# A Codex call (Codex sets CODEX_THREAD_ID on every one) while the switch
+# K2_CODEX_PASSPORT_BIND is on (the default; 0 turns it off). See
+# BEGIN_CLI_CODEX_TAB_BIND for what the switch governs.
+_cli_codex_bind_on() {
+    [ -n "${CODEX_THREAD_ID:-}" ] || return 1
+    case "${K2_CODEX_PASSPORT_BIND:-}" in 0|off|false|no) return 1 ;; esac
+    return 0
+}
+
+# The conversation headers of a Codex call while the switch is on, for
+# every daemon request (_k2_curl adds them to curl's config, never argv; the
+# embedded Python gets them with _k5_py_headers): X-K2-Conversation is the
+# conversation's root thread (CODEX_SESSION_ID: a subagent's call names its
+# parent conversation), X-K2-Thread the thread that made the call
+# (CODEX_THREAD_ID). An id that isn't letters, digits, '-' and '_' (at most
+# 128) is not sent. Sets the array _K2_CODEX_HDRS, one `Name: value` each.
+_K2_CODEX_ID_RE='^[A-Za-z0-9_-]{1,128}$'
+_k2_codex_headers() {
+    _K2_CODEX_HDRS=()
+    _cli_codex_bind_on || return 0
+    local root="${CODEX_SESSION_ID:-}" thread="${CODEX_THREAD_ID:-}"
+    if [[ "$root" =~ $_K2_CODEX_ID_RE ]]; then _K2_CODEX_HDRS+=("X-K2-Conversation: $root"); fi
+    if [[ "$thread" =~ $_K2_CODEX_ID_RE ]]; then _K2_CODEX_HDRS+=("X-K2-Thread: $thread"); fi
+    return 0
+}
+# The same headers as curl config lines in _K2_CODEX_CFG ("" for none).
+_k2_codex_cfg() {
+    local _K2_CFG="" h
+    _k2_codex_headers
+    if [ "${#_K2_CODEX_HDRS[@]}" -gt 0 ]; then
+        for h in "${_K2_CODEX_HDRS[@]}"; do _k2_cfg_add header "$h"; done
+    fi
+    _K2_CODEX_CFG="$_K2_CFG"
+}
+
 # The hand-over headers. A call the Rust front handed to this script
 # (K5_CLI_VIA=rust, read into _K5_CLI_VIA by the prelude) says so on every
 # request to the daemon, over the cell socket and TCP alike, from curl
@@ -575,7 +610,7 @@ _k2_curl() {
                 cfg="$_K2_CODEX_CFG"
             else
                 hdr_file="$(mktemp "${TMPDIR:-/tmp}/k2-hdr.XXXXXX")" || {
-                    echo "Error: k2 could not write its request headers to a temp file; nothing was sent." >&2
+                    echo "Error: could not write the request headers to a temp file; nothing was sent." >&2
                     return 1
                 }
                 printf '%s' "$_K2_CODEX_CFG" >"$hdr_file"
@@ -828,14 +863,8 @@ _cli_check_session_passport() {
 # without running the command (some commands' own help path asks the
 # daemon). The owner token from disk is never used for it.
 # K2_CODEX_PASSPORT_BIND=0 turns this off, and the conversation headers
-# below with it.
-
-# True for a Codex call while the switch is on (the default).
-_cli_codex_bind_on() {
-    [ -n "${CODEX_THREAD_ID:-}" ] || return 1
-    case "${K2_CODEX_PASSPORT_BIND:-}" in 0|off|false|no) return 1 ;; esac
-    return 0
-}
+# with it (_cli_codex_bind_on and _k2_codex_headers, with the curl config
+# helpers in BEGIN_CLI_CURL_CFG).
 
 # True when this Codex call runs in a tab K2 confirmed: the marker names the
 # session of the passport this call carries, and no shared Codex app-server
@@ -864,6 +893,11 @@ _cli_codex_tab_gate() {
     _cli_codex_tab_confirmed && return 0
     DISK_OWNER_TOKEN=""
     TOKEN="${SCOPED_TOKEN:-}"
+    # Help and its pages ask the daemon two things (permission cards on?
+    # agents may report?); here they take the answer a failed ask gives,
+    # without asking.
+    _K2_PERMISSION_ON=0
+    _K2_SF_AGENTS_OFF=0
     local verb="${1:-help}" a
     case "$verb" in
         help|--help|-h|schema|--schema|version|--version|-v) return 0 ;;
@@ -883,31 +917,6 @@ _cli_codex_tab_gate() {
     _cli_codex_tab_refuse "$verb"
 }
 
-# The conversation headers of a Codex call while the switch is on, for
-# every daemon request (_k2_curl adds them to curl's config, never argv; the
-# embedded Python gets them with _k5_py_headers): X-K2-Conversation is the
-# conversation's root thread (CODEX_SESSION_ID: a subagent's call names its
-# parent conversation), X-K2-Thread the thread that made the call
-# (CODEX_THREAD_ID). An id that isn't letters, digits, '-' and '_' (at most
-# 128) is not sent. Sets the array _K2_CODEX_HDRS, one `Name: value` each.
-_K2_CODEX_ID_RE='^[A-Za-z0-9_-]{1,128}$'
-_k2_codex_headers() {
-    _K2_CODEX_HDRS=()
-    _cli_codex_bind_on || return 0
-    local root="${CODEX_SESSION_ID:-}" thread="${CODEX_THREAD_ID:-}"
-    if [[ "$root" =~ $_K2_CODEX_ID_RE ]]; then _K2_CODEX_HDRS+=("X-K2-Conversation: $root"); fi
-    if [[ "$thread" =~ $_K2_CODEX_ID_RE ]]; then _K2_CODEX_HDRS+=("X-K2-Thread: $thread"); fi
-    return 0
-}
-# The same headers as curl config lines in _K2_CODEX_CFG ("" for none).
-_k2_codex_cfg() {
-    local _K2_CFG="" h
-    _k2_codex_headers
-    if [ "${#_K2_CODEX_HDRS[@]}" -gt 0 ]; then
-        for h in "${_K2_CODEX_HDRS[@]}"; do _k2_cfg_add header "$h"; done
-    fi
-    _K2_CODEX_CFG="$_K2_CFG"
-}
 # END_CLI_CODEX_TAB_BIND
 
 # DAEMON_INSTALL_EARLY_BYPASS — `k2 daemon install` provisions the

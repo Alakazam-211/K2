@@ -41,8 +41,8 @@
 //!
 //! An address `handle::label.postal.bot` first is Postal mail
 //! ([`super::postal`]). The shell answers these forms itself ([`parse`]
-//! says [`Parsed::Shell`]): `--signal`, `--inbox-silent` and
-//! `--inbox-wake`, and a `--secret` the vault's handoff leaves to the
+//! says [`Parsed::Shell`]): `--signal`, a tray form's `~name` path
+//! ([`super::tray`]), and a `--secret` the vault's handoff leaves to the
 //! shell (its name `--stdin`: a value a person types in), or with a
 //! `python3` the binary can't tell. An address on another server
 //! (`agent::host`, `agent@host`) goes over federation ([`super::remote`]).
@@ -271,6 +271,9 @@ pub enum Parsed {
     /// `--secret NAME`: the vault handoff ([`secret`]), after the summary
     /// hint (if any).
     Secret(Msg, String),
+    /// `--inbox-silent` or `--inbox-wake`: a tray package
+    /// ([`super::tray`]).
+    Tray(super::tray::Form),
 }
 
 /// `_is_postal_address`.
@@ -355,7 +358,11 @@ pub fn parse(words: &[&str]) -> Parsed {
         return Parsed::Stop(format!("{BOTH_INBOX}\n"), Exit::Usage);
     }
     if silent || wake {
-        return Parsed::Shell;
+        return match super::tray::parse(words, wake) {
+            super::tray::Parsed::Form(f) => Parsed::Tray(f),
+            super::tray::Parsed::Stop(text, exit) => Parsed::Stop(text, exit),
+            super::tray::Parsed::Shell => Parsed::Shell,
+        };
     }
     let mut m = Msg {
         wake: true,
@@ -493,6 +500,7 @@ pub fn run(args: &[OsString], words: &[&str], hook_sock: Option<&Path>) -> Optio
         Parsed::Send(m) => send(&mut client, m),
         Parsed::Postal(m) => super::postal::send(&mut client, &m),
         Parsed::Secret(m, name) => secret(client, &home, args, &m, &name),
+        Parsed::Tray(f) => super::tray::run(&mut client, f),
     })
 }
 

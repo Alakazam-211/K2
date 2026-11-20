@@ -27,8 +27,8 @@
 //!   looks for a shared Codex server in the process's ancestry first
 //!   ([`crate::prelude::codex_env`]);
 //! - a word that is not UTF-8;
-//! - the forms [`send`] names (`--signal`, `--inbox-silent`
-//!   and `--inbox-wake`, and `--secret --stdin`).
+//! - the forms [`send`] names (`--signal`, a tray form's `~name` path,
+//!   and `--secret --stdin`).
 
 use super::curl_port;
 use crate::daemon;
@@ -46,6 +46,7 @@ pub mod py;
 pub mod remote;
 pub mod send;
 pub mod send_once;
+pub mod tray;
 pub mod verify;
 pub mod who;
 

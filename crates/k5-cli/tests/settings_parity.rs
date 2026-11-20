@@ -287,7 +287,10 @@ fn settings_help_never_acts() {
         shell("--mode -h", &["--mode", "k2", "-h"]),
         Case {
             code: 2,
-            ..shell("set --help: three words, its usage line", &["set", "ciPreview", "on", "--help"])
+            ..shell(
+                "set --help: three words, its usage line",
+                &["set", "ciPreview", "on", "--help"],
+            )
         },
         shell("set -h first", &["set", "-h"]),
     ] {

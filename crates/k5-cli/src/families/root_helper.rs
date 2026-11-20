@@ -49,10 +49,20 @@ pub enum Form {
     Help,
     /// A line on stderr, exit 2.
     Usage(String),
-    Status { json: bool, events: bool },
-    Update { json: bool, body: String },
-    Rollback { json: bool },
-    InstallCommand { json: bool },
+    Status {
+        json: bool,
+        events: bool,
+    },
+    Update {
+        json: bool,
+        body: String,
+    },
+    Rollback {
+        json: bool,
+    },
+    InstallCommand {
+        json: bool,
+    },
 }
 
 /// The words after `root-helper`. `resolve` is `cd "$from" && pwd`
@@ -185,28 +195,36 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
         }
     };
     let mut closing = Closing::default();
-    let mut send = |post: bool, path: &str, payload: &str| -> Result<Option<(String, Vec<u8>)>, Exit> {
-        let passport = client.passport().is_some();
-        let r = if post {
-            client.sidecar_post(path, payload)
-        } else {
-            client.sidecar_get(path, payload)
+    let mut send =
+        |post: bool, path: &str, payload: &str| -> Result<Option<(String, Vec<u8>)>, Exit> {
+            let passport = client.passport().is_some();
+            let r = if post {
+                client.sidecar_post(path, payload)
+            } else {
+                client.sidecar_get(path, payload)
+            };
+            match r {
+                Ok(r) => {
+                    closing.answer(&r, passport);
+                    Ok(Some((
+                        format!("{:03}", r.status),
+                        super::without_nuls(&r.body),
+                    )))
+                }
+                Err(e @ (Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. })) => {
+                    out::stderr_line(&e.to_string());
+                    Err(Exit::Error)
+                }
+                Err(_) => Ok(None),
+            }
         };
-        match r {
-            Ok(r) => {
-                closing.answer(&r, passport);
-                Ok(Some((format!("{:03}", r.status), super::without_nuls(&r.body))))
-            }
-            Err(e @ (Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. })) => {
-                out::stderr_line(&e.to_string());
-                Err(Exit::Error)
-            }
-            Err(_) => Ok(None),
-        }
-    };
     let exit = match form {
         Form::Status { json, events } => {
-            let q = if events { "refresh=1&events=1" } else { "refresh=1" };
+            let q = if events {
+                "refresh=1&events=1"
+            } else {
+                "refresh=1"
+            };
             match send(false, STATUS, q) {
                 Ok(a) => shown(json, a),
                 Err(e) => e,
@@ -267,7 +285,11 @@ fn install_command(answer: Option<(String, Vec<u8>)>) -> Exit {
     }
     let d = json::parse(&raw).unwrap_or(Value::Null);
     let v = dget_v(&d, "installCommand").unwrap_or(Value::Null);
-    let mut cmd = if py::truthy(&v) { py::str_of(&v) } else { String::new() };
+    let mut cmd = if py::truthy(&v) {
+        py::str_of(&v)
+    } else {
+        String::new()
+    };
     while cmd.ends_with('\n') {
         cmd.pop();
     }
@@ -304,9 +326,7 @@ pub fn error_line(raw: &str, code: &str) -> String {
         Some(v @ Value::Object(_)) => dget_v(v, "error").unwrap_or(Value::Null),
         _ => Value::Null,
     };
-    let strip = |t: &str| -> String {
-        t.trim_matches(super::py_space).chars().take(200).collect()
-    };
+    let strip = |t: &str| -> String { t.trim_matches(super::py_space).chars().take(200).collect() };
     match &e {
         Value::Object(_) => {
             let c = or(dget_v(&e, "code").unwrap_or(Value::Null), s("error"));
@@ -329,7 +349,11 @@ pub fn error_line(raw: &str, code: &str) -> String {
             let t = strip(raw);
             format!(
                 "unexpected answer from the daemon: {}",
-                if t.is_empty() { "(empty)".to_string() } else { t }
+                if t.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    t
+                }
             )
         }
         Value::Null => String::new(),
@@ -427,7 +451,10 @@ pub fn render(raw: &str) -> Shown {
             if py::truthy(&dr) && !is_any(&res, &["not_applicable", "opted_out"]) {
                 let word = pick(
                     &[
-                        ("installed", "written now (through the helper; systemd reloaded)"),
+                        (
+                            "installed",
+                            "written now (through the helper; systemd reloaded)",
+                        ),
                         ("current", "current"),
                         ("stale", "still the older helper drop-in"),
                         ("failed", "not written"),
@@ -465,7 +492,11 @@ pub fn render(raw: &str) -> Shown {
                 st(&dget_v(&d, "daemonVersion")?)
             ));
             let lg = or(dget_v(&d, "legacy")?, Value::Object(Vec::new()));
-            let pg = if py::truthy(&dget_v(&lg, "pg")?) { "present" } else { "absent" };
+            let pg = if py::truthy(&dget_v(&lg, "pg")?) {
+                "present"
+            } else {
+                "absent"
+            };
             p.out(format!(
                 "legacy     : mail {} \u{b7} pg {pg}",
                 st(&dget_v(&lg, "mail")?)
@@ -607,7 +638,10 @@ mod tests {
         assert_eq!(parse(&["help"], &same), Some(Form::Help));
         assert_eq!(parse(&["update", "--from"], &same), None);
         assert_eq!(
-            parse(&["update", "--version", "1.2.3", "--match-installed"], &same),
+            parse(
+                &["update", "--version", "1.2.3", "--match-installed"],
+                &same
+            ),
             Some(Form::Usage(
                 "usage: give --version or --match-installed, not both".into()
             ))
@@ -624,10 +658,19 @@ mod tests {
 
     #[test]
     fn the_error_line() {
-        assert_eq!(error_line(r#"{"error":"route not found"}"#, "404"), "route not found");
+        assert_eq!(
+            error_line(r#"{"error":"route not found"}"#, "404"),
+            "route not found"
+        );
         assert_eq!(error_line("  ", "502"), "HTTP 502");
-        assert_eq!(error_line("[]", "200"), "unexpected answer from the daemon: []");
+        assert_eq!(
+            error_line("[]", "200"),
+            "unexpected answer from the daemon: []"
+        );
         assert_eq!(error_line(r#"{"ok":true}"#, "200"), "");
-        assert_eq!(gm(&Value::Int("86460".into())).unwrap(), "1970-01-02 00:01 UTC");
+        assert_eq!(
+            gm(&Value::Int("86460".into())).unwrap(),
+            "1970-01-02 00:01 UTC"
+        );
     }
 }

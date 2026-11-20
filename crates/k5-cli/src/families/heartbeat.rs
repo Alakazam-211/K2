@@ -669,18 +669,18 @@ fn flags(args: &[&str], name_first: bool) -> Option<Result<Flags, Form>> {
                 f.file = v?.to_string();
                 f.have_instructions = true;
             }
-            "--tz" => {
-                match v {
-                    Some(z) => f.tz = Some(z.to_string()),
-                    None => return Some(Err(Form::Stop(
+            "--tz" => match v {
+                Some(z) => f.tz = Some(z.to_string()),
+                None => {
+                    return Some(Err(Form::Stop(
                         vec![
                             "Error: --tz needs a zone (for example America/New_York), or server"
                                 .into(),
                         ],
                         Exit::Usage,
-                    ))),
+                    )))
                 }
-            }
+            },
             _ => {
                 f.spec.push(a.to_string());
                 i += 1;

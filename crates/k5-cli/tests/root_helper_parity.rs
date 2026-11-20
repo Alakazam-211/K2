@@ -21,7 +21,15 @@ fn root_helper_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "all");
     let v = vec![
         // covers: root-helper
-        case("status (the default)", &[], &[], vec![ok(STATUS)], owner_and_port, 0, 1),
+        case(
+            "status (the default)",
+            &[],
+            &[],
+            vec![ok(STATUS)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: root-helper status
         case(
             "status --events",
@@ -45,7 +53,9 @@ fn root_helper_answers_as_the_shell_does() {
             "status: not installed yet",
             &["status"],
             &[],
-            vec![ok(r#"{"state":"absent","rootSetup":"copy-command","installCommand":"sudo k2-install","cli":{}}"#)],
+            vec![ok(
+                r#"{"state":"absent","rootSetup":"copy-command","installCommand":"sudo k2-install","cli":{}}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -54,7 +64,10 @@ fn root_helper_answers_as_the_shell_does() {
             "status: an error object",
             &["status"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"people only"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"owner_only","hint":"people only"}}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -156,7 +169,9 @@ fn root_helper_answers_as_the_shell_does() {
             "rollback",
             &["rollback"],
             &[],
-            vec![ok(r#"{"heal":{"result":"rolled_back"},"status":{"state":"installed","legacy":{"pg":true}}}"#)],
+            vec![ok(
+                r#"{"heal":{"result":"rolled_back"},"status":{"state":"installed","legacy":{"pg":true}}}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -190,8 +205,24 @@ fn root_helper_answers_as_the_shell_does() {
             1,
         ),
         case("help", &["help"], &[], vec![], owner_and_port, 0, 0),
-        case("an unknown verb", &["nope"], &[], vec![], owner_and_port, 2, 0),
-        case("an unknown flag", &["status", "--x"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "an unknown verb",
+            &["nope"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "an unknown flag",
+            &["status", "--x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "no answer",
             &["status"],
@@ -212,7 +243,15 @@ fn root_helper_answers_as_the_shell_does() {
 fn root_helper_lines_say_the_brand_s_name() {
     let cli = k2_client::brand::CLI_NAME;
     let rig = Rig::new(VERB, "brand");
-    let c = case("brand", &["status", "--x"], &[], vec![], owner_and_port, 2, 0);
+    let c = case(
+        "brand",
+        &["status", "--x"],
+        &[],
+        vec![],
+        owner_and_port,
+        2,
+        0,
+    );
     let (out, log) = rig.binary(&c, false);
     assert_eq!(
         out.stderr,
@@ -234,7 +273,11 @@ fn root_helper_help_never_acts() {
     for c in [
         shell("update -h", &["update", "--version", "1.4.0", "-h"]),
         shell("rollback --help", &["rollback", "--help"]),
-        shell("update --from -h", &["update", "--from", "-h"]),
+        // `--from` takes `-h` as its folder: no such folder, exit 2, nothing sent.
+        Case {
+            code: 2,
+            ..shell("update --from -h", &["update", "--from", "-h"])
+        },
     ] {
         rig.check(&c);
     }

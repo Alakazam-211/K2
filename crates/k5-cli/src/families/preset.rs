@@ -158,9 +158,7 @@ pub fn parse(words: &[&str]) -> Form {
 /// A value flag of `add` and `set`: `Err` with its usage hint when it is
 /// the last word.
 fn value<'a>(rest: &[&'a str], i: usize, hint: &str) -> Result<&'a str, String> {
-    rest.get(i + 1)
-        .copied()
-        .ok_or_else(|| hint.to_string())
+    rest.get(i + 1).copied().ok_or_else(|| hint.to_string())
 }
 
 /// The flags both verbs take; `Ok(false)`: not one of them.

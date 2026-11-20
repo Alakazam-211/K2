@@ -990,14 +990,16 @@ pub fn log(raw: &str) -> Shown {
             Value::Array(items) if items.iter().all(|r| matches!(r, Value::Object(_))) => {
                 items.clone()
             }
-            other => return fail(
-                &mut p,
-                format!(
+            other => {
+                return fail(
+                    &mut p,
+                    format!(
                     "{server} answered /cli/heartbeat-log with a {}, not a list of heartbeat rows",
                     py::type_name(other)
                 ),
-                Exit::Error,
-            ),
+                    Exit::Error,
+                )
+            }
         };
         if list.is_empty() {
             p.out("No heartbeat activity recorded yet.");

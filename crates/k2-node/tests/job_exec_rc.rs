@@ -113,6 +113,24 @@ fn a_command_that_cant_start_is_127_and_recorded() {
     assert_eq!(read_rc(&d.join(EXEC_RC)), Some(ExitInfo { code: Some(127), signal: None }));
 }
 
+/// A job unit started a second time from outside k2-node (needrestart's
+/// `systemctl restart` after an apt upgrade): the first run took the spec,
+/// so the second runs nothing, exits 66 (not 127, "command not found")
+/// and says why on stderr (the unit's journal), and leaves the first
+/// run's rc file as it was.
+#[test]
+fn a_second_start_of_the_same_unit_runs_nothing_and_says_why() {
+    let d = root("restart");
+    let p = spec(&d, "echo started; exit 3", true);
+    let first = run(&d, &p, |_| {});
+    assert_eq!(first.code(), Some(3));
+    let out = std::process::Command::new(bin()).arg("job-exec").arg(&p).output().unwrap();
+    assert_eq!(out.status.code(), Some(i32::from(k2_node::wall::SPEC_GONE_EXIT)), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("this job's folder is gone") && err.contains("restarted outside k2-node"), "{err}");
+    assert_eq!(read_rc(&d.join(EXEC_RC)), Some(ExitInfo { code: Some(3), signal: None }), "the first run's end stands");
+}
+
 /// Without `rc_file` (a 0.46.13 spec) the shim execs as before: same exit,
 /// no rc file.
 #[test]

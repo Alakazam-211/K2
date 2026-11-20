@@ -1122,6 +1122,39 @@ pub(crate) fn find_program_in_sbin(name: &str) -> Option<PathBuf> {
     find_program(name)
 }
 
+/// needrestart (Ubuntu's nightly apt runs it) restarts services that use
+/// an updated library, and a job unit is a service: `systemctl restart`
+/// stopped a running job (signal 15) and started an empty copy. A job
+/// unit can't refuse it itself: `RefuseManualStart=` also refuses the
+/// transient start that creates it (systemd checks it on that start job
+/// too), and `RefuseManualStop=` refuses the executor's own `systemctl
+/// stop`. So the executor tells needrestart to leave `k2job-*` alone.
+pub const NEEDRESTART_DIR: &str = "/etc/needrestart";
+/// Under [`NEEDRESTART_DIR`]; read by needrestart.conf's conf.d include.
+pub const NEEDRESTART_DROPIN: &str = "conf.d/k2-node.conf";
+pub const NEEDRESTART_CONF: &str = "# Written by k2-node's admin executor, which rewrites it when it starts.\n\
+# K2 compute job units (k2job-*.service) each run one job once: a restart\n\
+# kills the job and starts an empty copy. needrestart never restarts them.\n\
+push @{$nrconf{blacklist_rc}}, qr(^k2job-);\n";
+
+/// Write [`NEEDRESTART_CONF`] when needrestart is installed (`dir`
+/// exists) and the file isn't already exactly that. `Ok(true)` when it
+/// wrote. Root (the executor's start).
+pub fn keep_needrestart_off_job_units(dir: &Path) -> Result<bool, String> {
+    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return Ok(false);
+    }
+    let p = dir.join(NEEDRESTART_DROPIN);
+    if std::fs::read_to_string(&p).ok().as_deref() == Some(NEEDRESTART_CONF) {
+        return Ok(false);
+    }
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+    }
+    crate::util::atomic_write(&p, NEEDRESTART_CONF.as_bytes(), 0o644)?;
+    Ok(true)
+}
+
 pub(crate) fn systemctl(args: &[&str]) -> Result<String, String> {
     let prog = find_program("systemctl").ok_or("systemctl not found")?;
     let out = std::process::Command::new(&prog)
@@ -1903,6 +1936,35 @@ impl Executor {
             return Err(refuse(code::FAILED, format!("no home changed: {}", Value::Array(errors))));
         }
         Ok(json!({"made_private": done, "errors": errors}))
+    }
+}
+
+#[cfg(test)]
+mod needrestart_tests {
+    use super::*;
+
+    /// Only where needrestart is installed; written once, then left as is;
+    /// rewritten when someone changed it.
+    #[test]
+    fn needrestart_is_told_to_leave_job_units_alone() {
+        let d = crate::util::temp_dir("needrestart");
+        let nr = d.join("needrestart");
+        assert_eq!(keep_needrestart_off_job_units(&nr), Ok(false), "not installed: nothing written");
+        assert!(!nr.exists(), "no folder made for a tool that isn't there");
+        std::fs::create_dir_all(&nr).unwrap();
+        assert_eq!(keep_needrestart_off_job_units(&nr), Ok(true));
+        let p = nr.join(NEEDRESTART_DROPIN);
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.contains("push @{$nrconf{blacklist_rc}}, qr(^k2job-);"), "{body}");
+        assert!(body.lines().filter(|l| !l.starts_with('#')).count() == 1, "one Perl statement: {body}");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o644);
+        assert_eq!(keep_needrestart_off_job_units(&nr), Ok(false), "already there");
+        std::fs::write(&p, "# edited\n").unwrap();
+        assert_eq!(keep_needrestart_off_job_units(&nr), Ok(true), "put back");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), NEEDRESTART_CONF);
+        // The unit names it matches are the job units' own.
+        assert!(valid_unit("k2job-j1-g1.service"));
     }
 }
 

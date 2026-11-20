@@ -380,6 +380,11 @@ pub enum ShimEnd {
     /// Nothing ran (or the command couldn't start): the message for
     /// stderr; the shim exits 127.
     Failed(String),
+    /// The spec was already gone: this unit ran before (the shim deletes
+    /// the spec as it reads it) and something outside k2-node started it
+    /// again, e.g. needrestart's `systemctl restart` after an apt upgrade.
+    /// Nothing ran; the message for stderr; the shim exits [`SPEC_GONE_EXIT`].
+    Gone(String),
     /// The command ran as the shim's child and ended so (recorded in the
     /// rc file when it could be: `rc_error` says why not). The shim exits
     /// the same way.
@@ -460,6 +465,18 @@ pub fn exit_like(exit: &k2_node_proto::frames::ExitInfo) -> ! {
     std::process::exit(exit.code.unwrap_or(1))
 }
 
+/// How `job-exec` exits when its spec is gone ([`ShimEnd::Gone`]):
+/// sysexits' EX_NOINPUT, not 127 ("command not found" misleads).
+pub const SPEC_GONE_EXIT: u8 = 66;
+
+/// What a job unit started a second time says (journal and stderr).
+pub fn spec_gone_message(spec_path: &Path) -> String {
+    format!(
+        "k2-node job-exec: this job's folder is gone ({} no longer exists): a job unit runs once and this one already ran. Was it restarted outside k2-node (for example by needrestart after an apt upgrade)? Nothing was run.",
+        spec_path.display()
+    )
+}
+
 /// The shim: read + delete the spec, then run the job with exactly its env
 /// and cwd (`PATH` from that env finds the program). Without an rc file
 /// in the spec (or for a secret-env job, never adopted) it execs and
@@ -470,8 +487,10 @@ pub fn job_exec(spec_path: &Path) -> ShimEnd {
     use std::os::unix::process::CommandExt;
     let mut body = Vec::new();
     let read = std::fs::File::open(spec_path).and_then(|f| f.take(MAX_SPEC_BYTES).read_to_end(&mut body));
-    if let Err(e) = read {
-        return ShimEnd::Failed(format!("k2-node job-exec: read {}: {e}", spec_path.display()));
+    match read {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ShimEnd::Gone(spec_gone_message(spec_path)),
+        Err(e) => return ShimEnd::Failed(format!("k2-node job-exec: read {}: {e}", spec_path.display())),
+        Ok(_) => {}
     }
     let _ = std::fs::remove_file(spec_path);
     let spec: ExecSpec = match serde_json::from_slice(&body) {
@@ -1571,7 +1590,14 @@ mod tests {
         let ShimEnd::Failed(e) = job_exec(&p) else { panic!("a bad spec runs nothing") };
         assert!(e.starts_with("k2-node job-exec:"), "{e}");
         assert!(!p.exists(), "read once, then gone");
-        let ShimEnd::Failed(e) = job_exec(&d.join("missing.json")) else { panic!("a missing spec runs nothing") };
+        // Read once: the same unit started again (a restart from outside
+        // k2-node) finds no spec and says so, not "command not found".
+        let ShimEnd::Gone(e) = job_exec(&p) else { panic!("a second start runs nothing") };
+        assert!(e.contains("this job's folder is gone") && e.contains("restarted outside k2-node") && e.contains("Nothing was run"), "{e}");
+        let ShimEnd::Gone(e) = job_exec(&d.join("missing.json")) else { panic!("a missing spec runs nothing") };
+        assert!(e.contains("missing.json"), "{e}");
+        // Any other read error is still a plain failure.
+        let ShimEnd::Failed(e) = job_exec(&d) else { panic!("a folder isn't a spec") };
         assert!(e.contains("read"), "{e}");
     }
 

@@ -1417,6 +1417,10 @@ pub fn main() -> ExitCode {
                 eprintln!("{e}");
                 return ExitCode::from(127);
             }
+            k2_node::wall::ShimEnd::Gone(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(k2_node::wall::SPEC_GONE_EXIT);
+            }
             k2_node::wall::ShimEnd::Ended { exit, rc_error } => {
                 if let Some(e) = rc_error {
                     eprintln!("k2-node job-exec: couldn't record the exit: {e}");

@@ -56,6 +56,14 @@ pub fn serve(paths: ExecPaths, socket: &Path) -> Result<(), String> {
     // updates swap only the binary, so a changed one is applied here, at
     // a drained moment (macOS).
     super::service::refresh_on_start(&exec);
+    // needrestart never restarts a job unit (it killed a running job).
+    if cfg!(target_os = "linux") {
+        match super::jobs::keep_needrestart_off_job_units(Path::new(super::jobs::NEEDRESTART_DIR)) {
+            Ok(true) => crate::nlog!("admin executor: told needrestart to leave k2job-* units alone ({}/{})", super::jobs::NEEDRESTART_DIR, super::jobs::NEEDRESTART_DROPIN),
+            Ok(false) => {}
+            Err(e) => crate::nlog!("admin executor: needrestart drop-in: {e}"),
+        }
+    }
     // TODO(0.46.5): drop with the legacy mark read.
     super::update::remove_legacy_mark(&exec.paths.config_dir);
     crate::nlog!("admin executor {} serving (peers: root, {node_user})", crate::PRODUCT_VERSION);

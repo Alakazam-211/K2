@@ -301,12 +301,14 @@ pub enum TransientEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StageBypassReason {
-    /// Over the time budget, a strike: 2 consecutive calls of 9 ms or more,
-    /// or a 99th percentile over 6 ms across the last 100 calls. The stage
-    /// is retried after 10 s of capture (it is reset first, and its output
-    /// is used again once its latency has filled with live audio). 3
-    /// strikes within 60 s of capture make the bypass permanent; otherwise
-    /// the count decays (a strike older than 60 s no longer counts).
+    /// Over the time budget, a strike: 2 consecutive calls of 9 ms or more
+    /// (on the stage's [`StageClock`], or past the starvation cutoff on the
+    /// wall clock), or a 99th percentile over 6 ms across the last 100
+    /// calls. The stage is retried after 10 s of capture (it is reset
+    /// first, and its output is used again once its latency has filled with
+    /// live audio). 3 strikes within 60 s of capture make the bypass
+    /// permanent; otherwise the count decays (a strike older than 60 s no
+    /// longer counts).
     Budget,
     /// The stage panicked (in `process` or `reset`) or returned NaN or
     /// infinite samples. It is never called again. (A panic is only caught

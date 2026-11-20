@@ -408,11 +408,11 @@ fn the_resolve_reader_is_the_shell_s() {
 fn a_python_eq_is_python_s() {
     use crate::out::json::parse as p;
     let v = |t: &str| p(t).expect("json");
-    assert!(py::eq(&v("1"), &v("1.0")));
-    assert!(py::eq(&v("true"), &v("1")));
-    assert!(!py::eq(&v("\"1\""), &v("1")));
-    assert!(py::eq(&v(r#"{"a":1,"b":2}"#), &v(r#"{"b":2,"a":1}"#)));
-    assert!(!py::eq(&v("null"), &v("0")));
+    assert!(crate::out::pylib::ops::py_eq(&v("1"), &v("1.0")));
+    assert!(crate::out::pylib::ops::py_eq(&v("true"), &v("1")));
+    assert!(!crate::out::pylib::ops::py_eq(&v("\"1\""), &v("1")));
+    assert!(crate::out::pylib::ops::py_eq(&v(r#"{"a":1,"b":2}"#), &v(r#"{"b":2,"a":1}"#)));
+    assert!(!crate::out::pylib::ops::py_eq(&v("null"), &v("0")));
 }
 
 fn cp_ask(words: &[&str]) -> cp::Ask {

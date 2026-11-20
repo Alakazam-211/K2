@@ -5,10 +5,11 @@
 //! main shell's USR1 trap); any other failed call is curl's code.
 
 use super::py::{
-    at, contains, dumps_ascii, dumps_spaced, eq, err_line, g, is_false, obj, or, st, truthy,
+    at, dumps_ascii, dumps_spaced, err_line, g, is_false, obj, or, st, truthy,
 };
 use super::{usage, Form, Words};
 use crate::exit::Exit;
+use crate::out::pylib::ops::{contains, py_eq};
 use crate::families::{raised, s, Raise, Shown};
 use crate::out;
 use crate::out::json::{self, Value};
@@ -331,7 +332,7 @@ fn cap_show(rd: &mut Reader, raw: &str, json_out: bool) -> Result<Exit, Raise> {
         return Ok(if refused { Exit::Refused } else { Exit::Error });
     }
     let cap = at(&v, "cap").cloned().unwrap_or(Value::Null);
-    let zero = eq(&cap, &Value::Int("0".into()));
+    let zero = py_eq(&cap, &Value::Int("0".into()));
     if json_out {
         rd.print(dumps_ascii(&obj(vec![
             ("ok", Value::Bool(true)),

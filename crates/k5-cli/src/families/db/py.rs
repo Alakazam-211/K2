@@ -28,6 +28,7 @@
 //! what it printed so far, and exits 1.
 
 use super::super::{get, py_iter, py_left, py_len, s, Raise, Shown};
+use crate::out::pylib::ops::{contains, join, py_eq, round_int};
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::py;
@@ -373,58 +374,9 @@ fn is_true(v: Option<&Value>) -> bool {
     matches!(v, Some(Value::Bool(true)))
 }
 
-/// A number as Python compares it (`True` is 1).
-fn number(v: &Value) -> Option<f64> {
-    match v {
-        Value::Bool(b) => Some(f64::from(u8::from(*b))),
-        Value::Int(d) => d.parse::<f64>().ok(),
-        Value::Float(f) => Some(*f),
-        _ => None,
-    }
-}
-
-/// `a == b` for two JSON values, as Python compares them.
-pub fn eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Null, Value::Null) => true,
-        (Value::Int(x), Value::Int(y)) => x == y,
-        (Value::Str(x), Value::Str(y)) => x == y,
-        (Value::Array(x), Value::Array(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| eq(p, q))
-        }
-        (Value::Object(x), Value::Object(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .all(|(k, v)| y.iter().any(|(k2, v2)| k == k2 && eq(v, v2)))
-        }
-        _ => match (number(a), number(b)) {
-            (Some(x), Some(y)) => x == y,
-            _ => false,
-        },
-    }
-}
-
 /// `v == text`.
 pub fn is_str(v: Option<&Value>, text: &str) -> bool {
     matches!(v, Some(Value::Str(t)) if t.as_str() == Some(text))
-}
-
-/// `needle in v`, for a string needle: a substring of a string, an item
-/// of a list, a key of a dict; the `TypeError` at `line` for anything
-/// else.
-pub fn contains(v: &Value, needle: &str, line: u32) -> Result<bool, Raise> {
-    match v {
-        Value::Str(_) => Ok(py::str_of(v).contains(needle)),
-        Value::Array(items) => Ok(items.iter().any(|x| is_str(Some(x), needle))),
-        Value::Object(pairs) => Ok(pairs.iter().any(|(k, _)| k.as_str() == Some(needle))),
-        other => Err(Raise::at(
-            line,
-            format!(
-                "TypeError: argument of type '{}' is not iterable",
-                py::type_name(other)
-            ),
-        )),
-    }
 }
 
 /// `a + b` where `b` is a string: the `TypeError` for anything but a
@@ -466,30 +418,6 @@ fn join_str(v: Option<&Value>, sep: &str, line: u32) -> Result<String, Raise> {
     Ok(items.iter().map(py::str_of).collect::<Vec<_>>().join(sep))
 }
 
-/// `", ".join(v)`: every item must be a string.
-fn join_strict(v: &Value, sep: &str, line: u32) -> Result<String, Raise> {
-    if !matches!(v, Value::Array(_) | Value::Str(_) | Value::Object(_)) {
-        return Err(Raise::at(line, "TypeError: can only join an iterable"));
-    }
-    let items = py_iter(v, line)?;
-    let mut parts = Vec::new();
-    for (i, x) in items.iter().enumerate() {
-        match x {
-            Value::Str(_) => parts.push(py::str_of(x)),
-            other => {
-                return Err(Raise::at(
-                    line,
-                    format!(
-                        "TypeError: sequence item {i}: expected str instance, {} found",
-                        py::type_name(other)
-                    ),
-                ))
-            }
-        }
-    }
-    Ok(parts.join(sep))
-}
-
 /// `round(v / 1048576)` printed with `%s`.
 fn megabytes(v: &Value, line: u32) -> Result<String, Raise> {
     let n = match v {
@@ -504,25 +432,17 @@ fn megabytes(v: &Value, line: u32) -> Result<String, Raise> {
             ))
         }
     };
-    let q = n / 1_048_576.0;
-    if q.is_nan() {
-        return Err(Raise::at(
-            line,
-            "ValueError: cannot convert float NaN to integer",
-        ));
+    round_int(n / 1_048_576.0, line)
+}
+
+/// A number as Python compares it (`True` is 1).
+fn number(v: &Value) -> Option<f64> {
+    match v {
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
+        Value::Int(d) => d.parse::<f64>().ok(),
+        Value::Float(f) => Some(*f),
+        _ => None,
     }
-    if q.is_infinite() {
-        return Err(Raise::at(
-            line,
-            "OverflowError: cannot convert float infinity to integer",
-        ));
-    }
-    let r = q.round_ties_even();
-    Ok(if r == 0.0 {
-        "0".to_string()
-    } else {
-        format!("{r:.0}")
-    })
 }
 
 /// `a > 0`.
@@ -1129,7 +1049,7 @@ impl Py<'_> {
                 if py::truthy(&applied) {
                     let t = format!(
                         "applied: {}",
-                        join_strict(&applied, ", ", line::MIGRATE_APPLIED)?
+                        join(&applied, ", ", line::MIGRATE_APPLIED)?
                     );
                     self.print(t);
                 } else if truthy(at(d, "noop")) && above_zero(&discovered, line::MIGRATE_NOOP)? {
@@ -1137,7 +1057,7 @@ impl Py<'_> {
                 } else {
                     let t = format!(
                         "applied: {}",
-                        join_strict(&applied, ", ", line::MIGRATE_NONE)?
+                        join(&applied, ", ", line::MIGRATE_NONE)?
                     );
                     self.print(t);
                 }
@@ -1318,7 +1238,7 @@ impl Py<'_> {
             let mut n = 0;
             if named {
                 for x in py_iter(&dbs, line::CLUSTERS_NAMED_N)? {
-                    if eq(
+                    if py_eq(
                         g(&x, "cluster", line::CLUSTERS_NAMED_N)?.unwrap_or(&Value::Null),
                         &label,
                     ) {
@@ -1327,7 +1247,7 @@ impl Py<'_> {
                 }
             } else {
                 for x in py_iter(&dbs, line::CLUSTERS_MAIN_N)? {
-                    let same = eq(
+                    let same = py_eq(
                         g(&x, "major", line::CLUSTERS_MAIN_N)?.unwrap_or(&Value::Null),
                         at(&c, "major").unwrap_or(&Value::Null),
                     );

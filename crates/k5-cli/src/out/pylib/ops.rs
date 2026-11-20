@@ -1,7 +1,8 @@
 //! The few Python operations the shell's readers use on a value
 //! `json.loads` gave, with the exception Python raises where the value is
 //! not what the reader expects: `v[k]`, `k in v`, `", ".join(v)`, `x or
-//! default`, Python's `float()` of a word, `a == b` and `x in v`. The rest is in
+//! default`, Python's `float()` of a word, `a == b`, `x in v` and
+//! `round(x)`. The rest is in
 //! [`crate::families`] (`py_get`, `py_len`, `py_d`) and [`crate::out::py`].
 
 use crate::families::{get, Raise};
@@ -262,6 +263,29 @@ pub fn py_in(needle: &Value, hay: &Value, line: u32) -> Result<bool, Raise> {
     }
 }
 
+/// `round(x)` for a float, as `%s` prints the int it gives (halves to
+/// even), or what Python raises for NaN and the infinities.
+pub fn round_int(x: f64, line: u32) -> Result<String, Raise> {
+    if x.is_nan() {
+        return Err(Raise::at(
+            line,
+            "ValueError: cannot convert float NaN to integer",
+        ));
+    }
+    if x.is_infinite() {
+        return Err(Raise::at(
+            line,
+            "OverflowError: cannot convert float infinity to integer",
+        ));
+    }
+    let r = x.round_ties_even();
+    Ok(if r == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{r:.0}")
+    })
+}
+
 /// `s.splitlines()`: at `\n`, `\r`, `\r\n`, `\v`, `\f`, `\x1c` to
 /// `\x1e`, `\x85`, `\u2028` and `\u2029`, the ends dropped.
 pub fn splitlines(s: &str) -> Vec<String> {
@@ -312,6 +336,25 @@ mod tests {
         ] {
             assert_eq!(float(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn round_is_python_s() {
+        for (x, want) in [
+            (0.5, "0"),
+            (1.5, "2"),
+            (2.5, "2"),
+            (-0.4, "0"),
+            (3.0, "3"),
+            (1e20, "100000000000000000000"),
+        ] {
+            assert_eq!(round_int(x, 1).unwrap(), want, "{x}");
+        }
+        assert_eq!(
+            round_int(f64::NAN, 2).unwrap_err().exception,
+            "ValueError: cannot convert float NaN to integer"
+        );
+        assert!(round_int(f64::INFINITY, 2).is_err());
     }
 
     #[test]

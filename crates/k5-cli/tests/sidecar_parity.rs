@@ -829,6 +829,8 @@ fn sidecar_with_a_passport() {
         ),
         with(
             with_passport(&[]),
+            // The refusal names no live passport, so the EXIT trap asks
+            // whoami about it (`_permission_note_flush`).
             case(
                 "a refused passport",
                 &["stop", "a"],
@@ -836,7 +838,7 @@ fn sidecar_with_a_passport() {
                 vec![Reply::Answer(403, REFUSED.into())],
                 port_only,
                 3,
-                1,
+                2,
             ),
         ),
         with(

@@ -663,7 +663,10 @@ fn go(c: &mut Client, ask: Ask, json_any: bool) -> Result<Exit, Exit> {
             Ok(render(kind, &sent.resp).print())
         }
         Ask::Post { route, body, done } => {
-            call(c, true, &format!("/cli/sources/{route}"), &body, json_any)?;
+            let sent = call(c, true, &format!("/cli/sources/{route}"), &body, json_any)?;
+            if json_any {
+                return Ok(Shown::out(print_json(&sent.resp)).print());
+            }
             Ok(Shown::out(done + "\n").print())
         }
         Ask::Remove { name, .. } => {

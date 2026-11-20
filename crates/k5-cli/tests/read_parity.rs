@@ -12,7 +12,8 @@
 //!   card (the closing line), the bulletin.
 //! - The owner from disk over TCP, a passport over TCP, a live cell socket
 //!   ("not served", an empty answer and no answer go on to TCP), a socket
-//!   file nothing listens on; PRD 13.9 #4's owner token with a passport.
+//!   file nothing listens on; the owner token on disk with a passport,
+//!   which neither side sends since 0.46.17.
 //! - A re-minted, a healed and a dead passport, the gates, PROJECT_PATH
 //!   and a PWD through a link.
 //! - No answer (an empty reply, a 5xx with no body, no answer in time):
@@ -512,21 +513,20 @@ fn read_answers_as_the_shell_does() {
                 1,
             ),
         ),
-        Case {
-            compare: Compare::OwnerTokenWithPassport,
-            ..with(
-                h(&[("K2_HOOK_SOCK", "{nosock}")]),
-                case(
-                    "HOOK_SOCK gone, the owner on disk (PRD 13.9 #4)",
-                    &["acme"],
-                    &[],
-                    vec![ok(LINES)],
-                    owner_and_port,
-                    0,
-                    1,
-                ),
-            )
-        },
+        // 0.46.17: the shell's cli_send sends the passport too when the
+        // session's socket failed (`_k2_sock_fallback_token`).
+        with(
+            h(&[("K2_HOOK_SOCK", "{nosock}")]),
+            case(
+                "HOOK_SOCK gone, the owner on disk: the passport",
+                &["acme"],
+                &[],
+                vec![ok(LINES)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
         // The gates.
         case("no port", &["acme"], &[], vec![], owner_only, 1, 0),
         case("no token", &["acme"], &[], vec![], port_only, 1, 0),

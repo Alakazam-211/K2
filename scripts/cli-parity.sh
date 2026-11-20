@@ -30,10 +30,10 @@
 # No tests/cli test meets one through the binary today; one that does is
 # mapped to its difference here by name, never skipped broadly. (The
 # binary's own parity tests meet owner-token-with-passport:
-# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, read_parity.rs,
-# activity_parity.rs and feedback_parity.rs; since 0.46.17 the shell's
-# setup sends the passport there too, so setup_parity.rs no longer meets
-# it. They meet
+# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, activity_parity.rs
+# and feedback_parity.rs; since 0.46.17 the shell's read and setup send
+# the passport there too, so read_parity.rs and setup_parity.rs no longer
+# meet it. They meet
 # native-without-python3 in every case of the parity rig, in
 # whoami_parity.rs, pages_without_python3.rs and the study cards tests;
 # tests/cli runs with python3 on PATH. They meet bash32-pipe-reader in the
@@ -146,7 +146,7 @@ done
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
     "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and msg prints one line naming Python 3 and exits 69 without starting bash"
-    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, read, activity, feedback list and show) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
+    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\`, \`workspace list\`, \`workspace list --json\` and the workspace lookups of \`workspace launch acme\` and \`workspace update --field role --value v\` (GETs), \`connections add beta\` and \`connections remove beta\` (POSTs). Both print the no-answer line (\"Error: K2's server ...\"; the workspace lookups send theirs to /dev/null, so nothing); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), workspace list the same on stdout, workspace list --json {\"error\": {\"code\": \"bad_response\", ...}} on stderr, connect status and the workspace lookups nothing (and no request after the lookup). The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
@@ -272,7 +272,9 @@ s.serve_forever()
         echo "the stub daemon didn't start"
         return 1
     fi
-    for verb in "whoami --json" done "read acme" activity "feedback list" "feedback show x"; do
+    # (read left it in 0.46.17: its cli_send arm sends the passport on
+    # TCP when the session's socket failed, as the binary does.)
+    for verb in "whoami --json" done activity "feedback list" "feedback show x"; do
         for side in bash binary; do
             : >"$d/log"
             rc=0

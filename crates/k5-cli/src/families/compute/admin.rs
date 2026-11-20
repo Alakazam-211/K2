@@ -55,6 +55,8 @@ pub const ANSWERS: &[&str] = &[
     "manage",
     "retier",
     "tier",
+    "move",
+    "cache",
 ];
 
 /// A verb this module answers, with its words read.

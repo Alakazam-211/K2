@@ -9,7 +9,8 @@
 //! - [`writes`]: the verbs that write, wait or move files (`cancel`,
 //!   `wait`, `fetch` and `grant`).
 //! - [`admin`]: the admin verbs (`revoke`, `preview on|off`, `placement
-//!   v1|v2`, `access`, `operate`, `manage`, `retier` and `tier`).
+//!   v1|v2`, `access`, `operate`, `manage`, `retier`, `tier`, `move` and
+//!   `cache`).
 //!
 //! Every other verb, and `compute` alone, is the shell's. The modules below
 //! are shared: [`pyrt`] (the Python operations the shell's readers use),
@@ -133,13 +134,13 @@ pub const VERBS: &[Verb] = &[
         words: &["tier"],
         owner: Owner::Native,
     },
-    crate::route::Verb {
+    Verb {
         words: &["move"],
-        owner: crate::route::Owner::Native,
+        owner: Owner::Native,
     },
-    crate::route::Verb {
+    Verb {
         words: &["cache"],
-        owner: crate::route::Owner::Native,
+        owner: Owner::Native,
     },
 ];
 

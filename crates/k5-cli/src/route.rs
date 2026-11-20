@@ -199,6 +199,7 @@ pub static TABLE: &[Noun] = &[
     bash(&["status"]),
     native(&["done"]),
     native(&["whoami"]),
+    bash(&["postal"]),
     // The reads and the writes each behind a switch (`families::setup`): a
     // form whose switch is off is the shell's.
     native(&["setup"]),

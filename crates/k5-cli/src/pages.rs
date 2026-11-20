@@ -631,6 +631,7 @@ pub const HELP_WORDS: &[&str] = &[
     "publish",
     "connect",
     "users",
+    "remote",
     "remote-session",
     "study",
     "explain",

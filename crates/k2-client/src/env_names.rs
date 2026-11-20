@@ -109,6 +109,10 @@ pub const CI_WAIT_SECS: &[&str] = &["K5_CI_WAIT_SECS", "K2_CI_WAIT_SECS", "K2SO_
 pub const LLMA_POLL_SECS: &[&str] = &["K5_LLMA_POLL_SECS", "K2_LLMA_POLL_SECS", "K2SO_LLMA_POLL_SECS"];
 /// `1`: feedback's environment detection runs in test mode.
 pub const TEST_FEEDBACK_DETECT: &[&str] = &["K5_TEST_FEEDBACK_DETECT", "K2_TEST_FEEDBACK_DETECT", "K2SO_TEST_FEEDBACK_DETECT"];
+/// How long `hostchat open`'s redirect page stays, in seconds (a test
+/// shortens it; never above 30).
+pub const TEST_HOSTCHAT_OPEN_WAIT: &[&str] =
+    &["K5_TEST_HOSTCHAT_OPEN_WAIT", "K2_TEST_HOSTCHAT_OPEN_WAIT", "K2SO_TEST_HOSTCHAT_OPEN_WAIT"];
 /// `talk`'s settle times, in seconds, its submit key and its question cap.
 pub const TALK_NAV_SETTLE: &[&str] = &["K5_TALK_NAV_SETTLE", "K2_TALK_NAV_SETTLE", "K2SO_TALK_NAV_SETTLE"];
 pub const TALK_ANSWER_SETTLE: &[&str] = &["K5_TALK_ANSWER_SETTLE", "K2_TALK_ANSWER_SETTLE", "K2SO_TALK_ANSWER_SETTLE"];
@@ -146,6 +150,7 @@ pub const CLI: &[&[&str]] = &[
     CI_WAIT_SECS,
     LLMA_POLL_SECS,
     TEST_FEEDBACK_DETECT,
+    TEST_HOSTCHAT_OPEN_WAIT,
     TALK_NAV_SETTLE,
     TALK_ANSWER_SETTLE,
     TALK_SUBMIT_KEY,
@@ -196,6 +201,7 @@ pub const ALL: &[&[&str]] = &[
     CI_WAIT_SECS,
     LLMA_POLL_SECS,
     TEST_FEEDBACK_DETECT,
+    TEST_HOSTCHAT_OPEN_WAIT,
     TALK_NAV_SETTLE,
     TALK_ANSWER_SETTLE,
     TALK_SUBMIT_KEY,

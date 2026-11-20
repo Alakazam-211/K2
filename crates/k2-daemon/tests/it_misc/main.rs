@@ -45,6 +45,7 @@ mod ops_routes_integration;
 mod org_chart_integration;
 mod postal_integration;
 mod ops_stream_ws_integration;
+mod passport_routes_integration;
 mod power_helper_route_integration;
 mod preset_routes_integration;
 mod product_feedback_integration;

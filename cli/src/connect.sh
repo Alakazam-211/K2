@@ -15,7 +15,8 @@ _envn_into K2_CONNECT_BASE CONNECT_BASE https://connect.k2.dev
 # _connect_base_check: the one check on $K2_CONNECT_BASE, run before a
 # verb that may call the control plane sends anything. A base with no
 # http:// or https:// in front is refused (curl would guess http and send
-# the tunnel token in clear). Prints why and returns 2.
+# the tunnel token in clear), and so is plain http:// to a host that isn't
+# this computer (_k2_refuse_plain_http). Prints why and returns 2.
 _connect_base_check() {
     local scheme="${K2_CONNECT_BASE%%://*}"
     [ "$scheme" != "$K2_CONNECT_BASE" ] || scheme=""
@@ -27,6 +28,7 @@ _connect_base_check() {
             return 2
             ;;
     esac
+    _k2_refuse_plain_http "$K2_CONNECT_BASE" || return 2
 }
 
 # Read the tunnel bearer token from ~/.k2/tunnel.json. Returns empty when

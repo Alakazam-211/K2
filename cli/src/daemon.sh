@@ -436,6 +436,9 @@ cmd_daemon_restart() {
 
     # ── REMOTE restart ────────────────────────────────────────────────
     if [ -n "$host" ]; then
+        # The owner token goes over plain http only to this computer (a
+        # --host with no scheme is plain http too: curl guesses it).
+        _k2_refuse_plain_http "$host" || exit 2
         # Default the owner token from ~/.k2/daemon.token when --token
         # is omitted (works when targeting the local daemon's own base URL).
         if [ -z "$token" ]; then

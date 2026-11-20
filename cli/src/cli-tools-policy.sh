@@ -522,6 +522,39 @@ _k2_direct_url() {
     esac
     return 1
 }
+# _k2_url_is_literal_loopback URL: true when URL's host, AS WRITTEN, is
+# this computer: an IPv4 address in 127.0.0.0/8 written as four numbers,
+# [::1], or the name localhost. A name is never resolved (a name that
+# resolves to loopback today may not tomorrow: DNS rebinding), so
+# x.localhost, 127.0.0.1.example and any other name are not loopback.
+# The scheme may be anything or missing.
+_k2_url_is_literal_loopback() {
+    local h="${1#*://}" re='^127\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){2}$'
+    h="${h%%/*}"; h="${h%%\?*}"; h="${h%%#*}"; h="${h##*@}"
+    case "$h" in
+        "[::1]"|"[::1]:"*) return 0 ;;
+    esac
+    h="${h%%:*}"
+    h="$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')"
+    [ "$h" = localhost ] && return 0
+    [[ "$h" =~ $re ]]
+}
+# _k2_refuse_plain_http URL: a token goes over plain http only to this
+# computer. Run it before a request that carries a token to a URL that
+# isn't this computer's daemon, before the token is even looked up. https
+# passes; http, or no scheme (curl guesses http), passes only to a literal
+# loopback host (_k2_url_is_literal_loopback). Anything else prints
+#   Error: plain http:// only to this computer; use https:// (got: <url>)
+# and returns 2. Proxied or not: a proxy doesn't make plain http private.
+_k2_refuse_plain_http() {
+    local scheme="${1%%://*}"
+    [ "$scheme" != "$1" ] || scheme=""
+    scheme="$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')"
+    [ "$scheme" = https ] && return 0
+    _k2_url_is_literal_loopback "$1" && return 0
+    echo "Error: plain http:// only to this computer; use https:// (got: $1)" >&2
+    return 2
+}
 # _K2_PY_PROXY_RULE: the same rule for the CLI's embedded Python. Every
 # Python block that calls the daemon runs exec(os.environ["_K2_PY_PROXY_RULE"])
 # first: it installs one urllib opener that skips the proxy for a direct

@@ -7,6 +7,17 @@
 #      Error: K2_CONNECT_BASE must start with https:// (got: <value>)
 #    Verbs: publish status, publish subdomain list|create|point|rm, wiki
 #    publish.
+# 2. A token goes over plain http only to this computer, proxied or not.
+#    Plain http:// (or no scheme, which curl takes as http) to a host that
+#    isn't loopback AS WRITTEN (127.0.0.0/8 as four numbers, [::1], or the
+#    name localhost; a name is never resolved, so x.localhost is not) is
+#    refused before any request and before the token is looked up: exit 2
+#    and
+#      Error: plain http:// only to this computer; use https:// (got: <url>)
+#    Sites: K2_CONNECT_BASE (the tunnel token), <ws>@<host> (talk, read,
+#    remote-session, doc) and daemon restart --host (clone has its own
+#    gate: the same rule, its own line and exit 3). Plain
+#    http to loopback still works.
 #
 # A stub daemon (loopback TCP), a stub control plane and a stub proxy each
 # log what reaches them. A second port is bound and closed: "no daemon"
@@ -212,6 +223,57 @@ reached "default base: the daemon made the call" "^daemon POST /cli/connect/prox
 run daemon proxy "HTTPS://$NOS" publish subdomain list --json
 [ "$RC" = 0 ] && ok "HTTPS:// base: exit 0" || bad "HTTPS:// base: exit $RC (stderr: $(printf %q "$ERR"))"
 reached "HTTPS:// base: the daemon made the call" "^daemon POST /cli/connect/proxy "
+
+echo "== 2. a token goes over plain http only to this computer =="
+printf '%s\n' "$REMOTE" >"$WORK/remote.tok"
+RH="http://k2-remote.example.test"
+WANT2="Error: plain http:// only to this computer; use https:// (got: $RH)"
+run nodaemon proxy "$RH" publish subdomain list --json
+refused "control plane over plain http, no daemon, proxy set" "$WANT2"
+run nodaemon noproxy "$RH" publish subdomain list --json
+refused "control plane over plain http, no daemon, no proxy" "$WANT2"
+run daemon proxy "$RH" publish status --json
+refused "control plane over plain http, daemon up" "$WANT2"
+run daemon proxy "$RH" wiki publish --json
+refused "wiki publish, control plane over plain http" "$WANT2"
+RUN_STDIN="$WORK/remote.tok" run daemon proxy - talk "acme@$RH" --read-only --token-stdin
+refused "talk acme@<plain http host>" "$WANT2"
+RUN_STDIN="$WORK/remote.tok" run daemon proxy - read "acme@$RH" --token-stdin
+refused "read acme@<plain http host>" "$WANT2"
+# clone has its own gate and line (exit 3), from its own security pass.
+RUN_STDIN="$WORK/remote.tok" run daemon proxy - clone preview acme --host "$RH" --token-stdin
+[ "$RC" = 3 ] && ok "clone preview --host <plain http host>: exit 3" || bad "clone preview --host <plain http host>: exit $RC, want 3 (stderr: $(printf %q "$ERR"))"
+case "$ERR" in *"isn't https, so K2 won't send your token or password there"*) ok "clone preview --host <plain http host>: its own line" ;; *) bad "clone preview --host <plain http host>: stderr $(printf %q "$ERR")" ;; esac
+if [ -s "$LOG" ]; then bad "clone preview --host <plain http host>: a request was sent: $(tr '\n' ';' <"$LOG")"; else ok "clone preview --host <plain http host>: nothing sent"; fi
+run daemon proxy - daemon restart --host "$RH"
+refused "daemon restart --host <plain http host>" "$WANT2"
+run daemon proxy - daemon restart --host "k2-remote.example.test"
+refused "daemon restart --host <host with no scheme>" "Error: plain http:// only to this computer; use https:// (got: k2-remote.example.test)"
+# Loopback is judged as written, never by resolving a name.
+for h in "http://x.localhost:$DPORT" "http://127.0.0.1.evil.example:$DPORT" "http://127.1:$DPORT"; do
+    run daemon proxy - daemon restart --host "$h"
+    refused "daemon restart --host $h" "Error: plain http:// only to this computer; use https:// (got: $h)"
+done
+run nodaemon noproxy "http://x.localhost:$CPPORT" publish subdomain list --json
+refused "control plane on http://x.localhost" "Error: plain http:// only to this computer; use https:// (got: http://x.localhost:$CPPORT)"
+RUN_STDIN="$WORK/remote.tok" run daemon proxy - talk "acme@http://x.localhost:$DPORT" --read-only --token-stdin
+refused "talk acme@http://x.localhost" "Error: plain http:// only to this computer; use https:// (got: http://x.localhost:$DPORT)"
+RUN_STDIN="$WORK/remote.tok" run daemon proxy - remote logout --host "http://x.localhost:$DPORT" --token-stdin
+refused "remote logout --host http://x.localhost (its own line)" "k2 remote logout: plain http:// only to this computer; use https://"
+# Plain http to this computer still carries the token.
+run nodaemon noproxy "$CP" publish subdomain list --json
+[ "$RC" = 0 ] && ok "control plane on loopback http: exit 0" || bad "control plane on loopback http: exit $RC (stderr: $(printf %q "$ERR"))"
+reached "control plane on loopback http: the call went with the tunnel token" "^cp GET /subdomains Bearer $TUNNEL\$"
+run nodaemon noproxy "http://localhost:$CPPORT" publish subdomain list --json
+reached "control plane on http://localhost: the call went" "^cp GET /subdomains Bearer $TUNNEL\$"
+RUN_STDIN="$WORK/remote.tok" run daemon proxy - talk "acme@http://127.0.0.1:$DPORT" --read-only --token-stdin
+reached "talk acme@<loopback http>: the remote token reached it" "^daemon [A-Z]+ /cli/[^ ]+ Bearer $REMOTE\$"
+run daemon proxy - daemon restart --host "http://127.0.0.1:$DPORT"
+reached "daemon restart --host <loopback http>: sent" "^daemon POST /cli/daemon/restart Bearer $OWNER\$"
+run daemon proxy - daemon restart --host "http://localhost:$DPORT"
+reached "daemon restart --host http://localhost: sent" "^daemon POST /cli/daemon/restart Bearer $OWNER\$"
+run daemon proxy - daemon restart --host "http://[::1]:$CLOSED"
+if [ "$ERR" != "${ERR#Error: plain http}" ]; then bad "daemon restart --host http://[::1]: refused: $(printf %q "$ERR")"; else ok "daemon restart --host http://[::1]: not refused (exit $RC)"; fi
 
 echo
 echo "connect_base_and_proxy: $pass passed, $fail failed"

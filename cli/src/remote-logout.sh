@@ -61,12 +61,6 @@ cmd_remote() {
     esac
 }
 
-# True when URL is http(s) to this computer (127.*, localhost, [::1]).
-_remote_url_is_loopback() {
-    # _k2_direct_url answers for https:// by the host alone.
-    _k2_direct_url "https://${1#*://}"
-}
-
 # The id connect-hosts.json gives HOST (the keychain item's account), or
 # nothing. Same matching as _remote_token_for_host: the hostname, its
 # bare form, or the label.
@@ -211,7 +205,7 @@ cmd_remote_logout() {
     case "$host" in
         https://*|HTTPS://*) base="$host" ;;
         http://*|HTTP://*)
-            _remote_url_is_loopback "$host" || {
+            _k2_url_is_literal_loopback "$host" || {
                 echo "k2 remote logout: plain http:// only to this computer; use https://" >&2
                 return 2
             }

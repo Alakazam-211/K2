@@ -609,10 +609,18 @@ EOF
 
 # Point the HTTP helpers at a remote host for the rest of this command
 # (overrides the globals BASE_URL + TOKEN). No-op for a local target.
-# Non-zero + stderr hint when no token is available.
+# Non-zero + stderr hint when no token is available. Plain http:// to a
+# host that isn't this computer exits 2 before the token is looked up
+# (_k2_refuse_plain_http): the token would cross the network in clear.
 _apply_remote_host() {
     local host="$1" explicit_token="${2:-}"
     [ -z "$host" ] && return 0
+    local base
+    case "$host" in
+        http://*|https://*|HTTP://*|HTTPS://*) base="${host%/}" ;;
+        *)                  base="https://${host}" ;;
+    esac
+    _k2_refuse_plain_http "$base" || exit 2
     local tok
     tok="$(_remote_token_for_host "$host" "$explicit_token")"
     if [ -z "$tok" ]; then
@@ -620,10 +628,7 @@ _apply_remote_host() {
         echo "Pass --token <tok>, set \$K2_REMOTE_TOKEN, or add it to ${K2_HOME}/connect-tokens.json ({\"$host\": \"<token>\"})." >&2
         return 1
     fi
-    case "$host" in
-        http://*|https://*) BASE_URL="${host%/}" ;;
-        *)                  BASE_URL="https://${host}" ;;
-    esac
+    BASE_URL="$base"
     TOKEN="$tok"
     # Inbox/fs/resolve must not UDS-shortcut to this box after a remote
     # BASE_URL swap (federated tray Bug A).

@@ -3,7 +3,8 @@
 //! roster (no verb, a first word that is a flag, `list`, `ls`), past
 //! conversations (`past`, or any of `--past`, `--search`, `--days`,
 //! `--cli`, `--limit`, `--archived`), `show <id>`, and `main` without
-//! `set`.
+//! `set`; and the verbs that change something, `open`, `new`, `stop` and
+//! `main set` ([`write`]), and `live`, the owner's raw view ([`live`]).
 //!
 //! What runs, in the shell's order:
 //!
@@ -36,9 +37,8 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
-//! - `open`, `new`, `stop`, `main set`, `compact` and `set-label` (they
-//!   change something), `archives` and `live` (the owner's on-disk and raw
-//!   views, for a later slice), `spawn` (which skips the connection gate),
+//! - `compact` and `set-label`, `archives` (the owner's on-disk view),
+//!   `spawn` (which skips the connection gate),
 //!   `help`, and a command line with `-h` or `--help` ([`crate::front`]);
 //! - a value flag as the last word (the shell's `shift 2` fails there and
 //!   `set -e` ends the command), and a word that is not UTF-8;
@@ -395,7 +395,16 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let ask = parse(&words)?;
+    let plan = write::parse(&words);
+    if let Some(write::Plan::Do(w)) = &plan {
+        if write::needs_shell(w) {
+            return None;
+        }
+    }
+    let ask = match plan {
+        Some(plan) => Err(plan),
+        None => Ok(parse(&words)?),
+    };
     if !python::family_native(python::here()) {
         return None;
     }
@@ -411,7 +420,47 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     {
         return None;
     }
-    Some(run_with(args, ask, hook_sock.as_deref(), settings))
+    Some(match ask {
+        Ok(ask) => run_with(args, ask, hook_sock.as_deref(), settings),
+        Err(plan) => run_write(args, plan, hook_sock.as_deref(), settings),
+    })
+}
+
+/// [`write`]'s verbs, after the same gates as the reads.
+fn run_write(
+    args: &[OsString],
+    plan: write::Plan,
+    hook_sock: Option<&Path>,
+    mut settings: Settings,
+) -> Exit {
+    if let Some(gate) = prelude::gate(&settings) {
+        return gate.stop();
+    }
+    let would_refuse = passport::current(args).would_refuse();
+    if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
+        return stop;
+    }
+    let w = match plan {
+        write::Plan::Do(w) => w,
+        write::Plan::Stop(line, exit) => {
+            if !line.is_empty() {
+                out::stderr_line(&line);
+            }
+            return exit;
+        }
+    };
+    settings.port = settings.port_text.as_deref().and_then(curl_port);
+    let mut client = match settings.client(would_refuse) {
+        Ok(c) => c,
+        Err(e) => {
+            out::stderr_line(&format!("Error: {e}"));
+            return Exit::Error;
+        }
+    };
+    let mut closing = Closing::default();
+    let exit = write::run(&w, &mut client, &mut closing, &settings.project);
+    closing.flush(&mut client, exit);
+    exit
 }
 
 fn run_with(
@@ -1079,6 +1128,9 @@ fn main_lines(v: &Value, o: &mut Out) -> Result<Exit, Raise> {
     }
     Ok(Exit::Ok)
 }
+
+pub mod live;
+pub mod write;
 
 #[cfg(test)]
 mod tests;

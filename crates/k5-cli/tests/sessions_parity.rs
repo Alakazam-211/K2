@@ -19,9 +19,9 @@
 //!   dead passport; the gates.
 //! - No answer (an empty reply, a 5xx with no body, a reset, not HTTP, none
 //!   in time) and no daemon (each `_k2_curl` try's `\n000`).
-//! - What the binary hands to the shell: help, the verbs that change
-//!   something, `archives`, `compact`, `spawn`, a value flag as the last
-//!   word, a port that is no port.
+//! - What the binary hands to the shell: help, `archives`, `compact`,
+//!   `spawn`, a value flag as the last word, a port that is no port. The
+//!   verbs that change something and `live` are sessions_write_parity's.
 
 #![cfg(unix)]
 
@@ -974,26 +974,6 @@ fn sessions_hands_these_to_the_shell() {
             owner_and_port,
             0,
             0,
-        )),
-        shell(case(
-            "main set: a POST",
-            &["main", "set", "ab12"],
-            &[],
-            vec![ok(
-                r#"{"workspace":"w","main":{"conversationId":"ab12","cli":"claude"},"title":"T","restartWith":"k2 msg w"}"#,
-            )],
-            owner_and_port,
-            0,
-            1,
-        )),
-        shell(case(
-            "open: a POST",
-            &["open", "ab12"],
-            &[],
-            vec![ok(r#"{"address":"acme/x","opened":true,"cli":"claude"}"#)],
-            owner_and_port,
-            0,
-            1,
         )),
         shell(case(
             "spawn",

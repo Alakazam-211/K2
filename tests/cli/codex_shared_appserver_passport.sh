@@ -44,6 +44,10 @@
 #      today's behaviour, even under a shared server. Windows: counts as
 #      every way refused (the marker alone, one note); another tab's marker
 #      or none is still refused.
+#  12. With K2_CODEX_PASSPORT_BIND=0 the id-tool check reads a Codex call's
+#      processes with the same walk: a shared server seen only by the
+#      walk, every way refused, or an unreadable walk is refused; a plain
+#      shell is allowed.
 #
 # No daemon build; HTTP is a tiny python stub. HOME is sandboxed.
 # bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
@@ -768,6 +772,47 @@ run_codex K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_TAB_ISOLATED="sess99" PATH="$WORK/w
 assert_refused "Windows, marker from another tab"
 run_codex K2_HOOK_SOCK="$LIVE_SOCK" PATH="$WORK/winbin:$WORK/bin:$PATH" -- activity
 assert_refused "Windows, no marker"
+
+# ── 12. The id-tool check with the switch off never fails open ───────
+# K2_CODEX_PASSPORT_BIND=0 turns off the Codex tab gate only. The id-tool
+# check reads the processes above a Codex call with the same walk, and
+# passes only a complete, clear one.
+echo "== id-tool check, switch off =="
+OFFCALL=(K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_PASSPORT_BIND=0)
+# ps refused, a shared server above seen only by the parent walk: refused.
+reset_logs
+set +e
+cell "${CODEX_ENV[@]}" "${OFFCALL[@]}" PATH="$WORK/psdeny:$WORK/bin:$PATH" K2="$K2_CLI" \
+    bash -c 'exec -a "codex app-server --listen unix://" bash -c "\"\$K2\" msg cortana hello; exit \$?"' \
+    >"$WORK/out" 2>"$WORK/err"
+rc=$?
+set -e
+assert_eq "switch off, ps refused, walk sees a shared server: exit 3" "$rc" "3"
+assert_contains "switch off, ps refused, walk sees a shared server: the shared-server error" "$(cat "$WORK/err")" "shared Codex app-server started by another session"
+assert_eq "switch off, ps refused, walk sees a shared server: nothing sent" "$(requests)" ""
+# Every way refused: fails closed.
+run_codex "${OFFCALL[@]}" PATH="$WORK/psdeny:$WORK/pybin:$WORK/bin:$PATH" K2T_ANCESTRY=denied -- msg cortana hello
+assert_eq "switch off, every way refused: exit 3" "$rc" "3"
+assert_contains "switch off, every way refused: says it can't rule it out" "$(cat "$WORK/err")" "couldn't read the processes above this Codex call"
+assert_eq "switch off, every way refused: nothing sent" "$(requests)" ""
+# ps garbage and the walk partial: fails closed.
+cat >"$WORK/psjunk/ps" <<'EOF'
+#!/bin/sh
+echo "ps: this is not a process table"
+EOF
+run_codex "${OFFCALL[@]}" PATH="$WORK/psjunk:$WORK/pybin:$WORK/bin:$PATH" K2T_ANCESTRY=broken -- msg cortana hello
+assert_eq "switch off, unreadable walk: exit 3" "$rc" "3"
+assert_eq "switch off, unreadable walk: nothing sent" "$(requests)" ""
+# A plain shell (ps refused, the walk clear): allowed.
+run_codex "${OFFCALL[@]}" PATH="$WORK/psdeny:$WORK/bin:$PATH" -- msg cortana hello
+assert_absent "switch off, plain shell: no shared-server refusal" "$(cat "$WORK/err")" "shared Codex app-server"
+assert_absent "switch off, plain shell: no unchecked refusal" "$(cat "$WORK/err")" "couldn't read the processes"
+assert_contains "switch off, plain shell: sent with its passport" "$(requests)" "Bearer $SCOPED"
+# A plain shell read by the real ps (or the walk where ps can't run): allowed.
+run_codex "${OFFCALL[@]}" -- msg cortana hello
+assert_absent "switch off, plain shell, real tree: no shared-server refusal" "$(cat "$WORK/err")" "shared Codex app-server"
+assert_absent "switch off, plain shell, real tree: no unchecked refusal" "$(cat "$WORK/err")" "couldn't read the processes"
+assert_contains "switch off, plain shell, real tree: sent" "$(requests)" "Bearer $SCOPED"
 
 echo
 echo "codex_shared_appserver_passport: $pass passed, $fail failed"

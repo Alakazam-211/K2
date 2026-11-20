@@ -1298,86 +1298,6 @@ _cli_scoped_token_rejected() {
     [[ "$out" == *"Invalid or missing auth token"* ]]
 }
 
-_cli_passport_stale_die() {
-    local why="$1" sock="$2"
-    case "$why" in
-        codex_shared)
-            echo "Error: this tool runs under a shared Codex app-server started by another session," >&2
-            echo "so the K2 session credentials it sees are not this tab's (or no longer exist)." >&2
-            echo "Restart Codex in this tab; K2 now starts Codex without the shared server (--no-daemon)." >&2
-            echo "If it keeps happening, stop the shared server once: codex app-server daemon stop" >&2
-            ;;
-        *)
-            echo "Error: this shell's K2 session credentials are stale: the session socket is gone" >&2
-            echo "(${sock}) and the daemon rejects the session token." >&2
-            echo "If this is a Codex tab, the tool runs under a shared Codex app-server started by" >&2
-            echo "another session; restart Codex in this tab. Otherwise restart this tab." >&2
-            ;;
-    esac
-    exit 3
-}
-
-# Before an ID/locked verb in a scoped cell: refuse a passport that is not
-# this session's (shared Codex app-server) or that is dead (socket gone AND
-# the daemon rejects the token). A missing socket alone is not enough — a
-# failed socket bind still serves the scoped token over TCP.
-# The tool is the one the whole command names (_cli_tool_id_for_args, the
-# same as the credential choice), so a tool keyed on a sub-verb (`k2 agent
-# team`, `k2 setup --json chief-of-staff`) gets the check too. Only ever
-# stricter: a verb whose first word alone names an id tool keeps it.
-_cli_check_session_passport() {
-    local verb="${1:-}"
-    local hook_sock="${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}"
-    [ -n "$hook_sock" ] || return 0
-    local tool_id mode
-    tool_id="$(_cli_tool_id_for_args "$@")"
-    mode="$(_cli_tool_default_mode "$tool_id")"
-    if [ "$mode" != "id" ]; then
-        tool_id="$(_cli_tool_id_for_verb "$verb")"
-        mode="$(_cli_tool_default_mode "$tool_id")"
-    fi
-    [ "$mode" = "id" ] || return 0
-    if _cli_under_shared_codex_server; then
-        _cli_passport_stale_die codex_shared "$hook_sock"
-    fi
-    if [ ! -S "$hook_sock" ] && _cli_scoped_token_rejected; then
-        _cli_passport_stale_die stale "$hook_sock"
-    fi
-    return 0
-}
-# END_CLI_STALE_PASSPORT
-
-# A bare `--` ends k2's own words and starts a command's. `k2 update` runs
-# no command, so a `--` on its line is a usage error: exit 2, nothing sent,
-# before any gate. `k2 update -- -h` can never start an update.
-if [ "${1:-}" = "update" ]; then
-    for _a in "${@:2}"; do
-        if [ "$_a" = "--" ]; then
-            echo "usage: k2 update takes no '--' (k2 update --help)" >&2
-            exit 2
-        fi
-    done
-fi
-
-# BEGIN_CLI_CODEX_TAB_BIND
-# A Codex tool call (Codex sets CODEX_THREAD_ID on every one) keeps this
-# tab's credentials only when K2 can tell it runs in a tab K2 started with
-# its own Codex server. K2 sets K2_CODEX_TAB_ISOLATED to the session id of
-# the tab's passport when it starts Codex with --no-daemon, or in a microVM
-# cell. Any other Codex call in a K2 session may run under a Codex server
-# another tab started, with that tab's credentials, so it counts as shared:
-# no marker (a tab opened before this update, codex typed in a tab's shell,
-# a Codex K2 could not check), a marker for another passport, or a shared
-# Codex app-server above this process. Outside a K2 session nothing changes
-# (_cli_codex_gate_applies). A shared call sends nothing: a command
-# that would make a request ends with exit 3. Only help, schema, version
-# and explain run, and `<command> -h|--help` prints `k2 help <command>`
-# without running the command (some commands' own help path asks the
-# daemon). The owner token from disk is never used for it.
-# K2_CODEX_PASSPORT_BIND=0 turns this off, and the conversation headers
-# with it (_cli_codex_bind_on and _k2_codex_headers, with the curl config
-# helpers in BEGIN_CLI_CURL_CFG).
-
 # The processes above this call, for the shared-server check. `ps` first;
 # where it can't run or gives an answer that can't be read, a walk of the
 # parent chain from python3 (/proc on Linux; libproc and sysctl on macOS,
@@ -1527,6 +1447,112 @@ _cli_codex_ancestry() {
         _K2_ANC_STATE=broken
     fi
 }
+
+_cli_passport_stale_die() {
+    local why="$1" sock="$2"
+    case "$why" in
+        codex_shared)
+            echo "Error: this tool runs under a shared Codex app-server started by another session," >&2
+            echo "so the K2 session credentials it sees are not this tab's (or no longer exist)." >&2
+            echo "Restart Codex in this tab; K2 now starts Codex without the shared server (--no-daemon)." >&2
+            echo "If it keeps happening, stop the shared server once: codex app-server daemon stop" >&2
+            ;;
+        codex_unchecked)
+            echo "Error: K2 couldn't read the processes above this Codex call, so it can't rule out a" >&2
+            echo "shared Codex app-server started by another session; nothing was sent." >&2
+            echo "Restart Codex in this tab; K2 starts Codex without the shared server (--no-daemon)." >&2
+            ;;
+        *)
+            echo "Error: this shell's K2 session credentials are stale: the session socket is gone" >&2
+            echo "(${sock}) and the daemon rejects the session token." >&2
+            echo "If this is a Codex tab, the tool runs under a shared Codex app-server started by" >&2
+            echo "another session; restart Codex in this tab. Otherwise restart this tab." >&2
+            ;;
+    esac
+    exit 3
+}
+
+# The shared-server part of the id-tool check. A Codex tool call
+# (CODEX_THREAD_ID) reads the processes above it with the same walk as the
+# Codex tab gate and passes only when the walk is complete and clear: a
+# shared server, a walk that can't be read, or one every way refused is
+# refused, so K2_CODEX_PASSPORT_BIND=0 (the gate off) never makes this
+# check weaker. When the gate already confirmed the tab it read them
+# (_K2_ANC_STATE set) and decided. A shell with only other CODEX_* names
+# keeps the ps-only look.
+_cli_id_check_codex() {
+    if [ -n "${CODEX_THREAD_ID:-}" ]; then
+        [ -z "$_K2_ANC_STATE" ] || return 0
+        _cli_codex_ancestry
+        case "$_K2_ANC_STATE" in
+            clear) return 0 ;;
+            shared) _cli_passport_stale_die codex_shared "$1" ;;
+            *) _cli_passport_stale_die codex_unchecked "$1" ;;
+        esac
+    fi
+    if _cli_under_shared_codex_server; then
+        _cli_passport_stale_die codex_shared "$1"
+    fi
+}
+
+# Before an ID/locked verb in a scoped cell: refuse a passport that is not
+# this session's (shared Codex app-server) or that is dead (socket gone AND
+# the daemon rejects the token). A missing socket alone is not enough — a
+# failed socket bind still serves the scoped token over TCP.
+# The tool is the one the whole command names (_cli_tool_id_for_args, the
+# same as the credential choice), so a tool keyed on a sub-verb (`k2 agent
+# team`, `k2 setup --json chief-of-staff`) gets the check too. Only ever
+# stricter: a verb whose first word alone names an id tool keeps it.
+_cli_check_session_passport() {
+    local verb="${1:-}"
+    local hook_sock="${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}"
+    [ -n "$hook_sock" ] || return 0
+    local tool_id mode
+    tool_id="$(_cli_tool_id_for_args "$@")"
+    mode="$(_cli_tool_default_mode "$tool_id")"
+    if [ "$mode" != "id" ]; then
+        tool_id="$(_cli_tool_id_for_verb "$verb")"
+        mode="$(_cli_tool_default_mode "$tool_id")"
+    fi
+    [ "$mode" = "id" ] || return 0
+    _cli_id_check_codex "$hook_sock"
+    if [ ! -S "$hook_sock" ] && _cli_scoped_token_rejected; then
+        _cli_passport_stale_die stale "$hook_sock"
+    fi
+    return 0
+}
+# END_CLI_STALE_PASSPORT
+
+# A bare `--` ends k2's own words and starts a command's. `k2 update` runs
+# no command, so a `--` on its line is a usage error: exit 2, nothing sent,
+# before any gate. `k2 update -- -h` can never start an update.
+if [ "${1:-}" = "update" ]; then
+    for _a in "${@:2}"; do
+        if [ "$_a" = "--" ]; then
+            echo "usage: k2 update takes no '--' (k2 update --help)" >&2
+            exit 2
+        fi
+    done
+fi
+
+# BEGIN_CLI_CODEX_TAB_BIND
+# A Codex tool call (Codex sets CODEX_THREAD_ID on every one) keeps this
+# tab's credentials only when K2 can tell it runs in a tab K2 started with
+# its own Codex server. K2 sets K2_CODEX_TAB_ISOLATED to the session id of
+# the tab's passport when it starts Codex with --no-daemon, or in a microVM
+# cell. Any other Codex call in a K2 session may run under a Codex server
+# another tab started, with that tab's credentials, so it counts as shared:
+# no marker (a tab opened before this update, codex typed in a tab's shell,
+# a Codex K2 could not check), a marker for another passport, or a shared
+# Codex app-server above this process. Outside a K2 session nothing changes
+# (_cli_codex_gate_applies). A shared call sends nothing: a command
+# that would make a request ends with exit 3. Only help, schema, version
+# and explain run, and `<command> -h|--help` prints `k2 help <command>`
+# without running the command (some commands' own help path asks the
+# daemon). The owner token from disk is never used for it.
+# K2_CODEX_PASSPORT_BIND=0 turns this off, and the conversation headers
+# with it (_cli_codex_bind_on and _k2_codex_headers, with the curl config
+# helpers in BEGIN_CLI_CURL_CFG).
 
 # True when this Codex call runs in a tab K2 confirmed: the marker names the
 # session of the passport this call carries, and the processes above it hold

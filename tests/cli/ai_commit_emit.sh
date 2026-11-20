@@ -65,7 +65,7 @@ echo "== k2 commit-merge stays retired =="
 rc=0
 out="$(k2 commit-merge -m "x" 2>&1)" || rc=$?
 [ "$rc" -ne 0 ] || fail "k2 commit-merge must fail: $out"
-case "$out" in *"no longer supported"*"k2 commit --merge"*) ;; *) fail "commit-merge pointer: $out" ;; esac
+case "$out" in *"is retired"*"k2 commit --merge"*) ;; *) fail "commit-merge pointer: $out" ;; esac
 ok "k2 commit-merge fails and points at k2 commit --merge"
 
 echo "ai_commit_emit: $pass passed"

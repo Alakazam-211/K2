@@ -29,9 +29,12 @@
 //! take, a `python3` the binary can't tell (nor how it decodes its stdin:
 //! [`py::decode_here`]), `--host`, `--token` or
 //! `--token-stdin` anywhere (another server: the remote transport isn't
-//! the binary's yet), and a board verb on a `.k5board` file (the shell
-//! runs `cmd_board` for it, under `docs`'s gate).
+//! the binary's yet).
+//!
+//! A board verb on a `.k5board` file is the board family's answer, under
+//! doc's gate, as the shell runs `cmd_board` there ([`board`]).
 
+pub mod board;
 pub mod more;
 pub mod print;
 pub mod py;
@@ -70,76 +73,12 @@ pub const TOOL: &str = "docs";
 /// `_doc_xfer`'s `--max-time`.
 const XFER_MAX_TIME: Duration = Duration::from_secs(300);
 
-/// The verbs `cmd_doc` hands to the board family on a `.k5board` file.
-const BOARD_VERBS: &[&str] = &[
-    "new",
-    "list",
-    "read",
-    "search",
-    "fields",
-    "templates",
-    "references",
-    "add",
-    "update",
-    "delete",
-    "put-back",
-    "connect",
-    "react",
-    "vote",
-    "comment",
-    "reply",
-    "resolve",
-    "meta",
-    "lock",
-    "check-add",
-    "check-set",
-    "check-remove",
-    "table-cell",
-    "table-add-row",
-    "table-remove-row",
-    "table-add-column",
-    "table-remove-column",
-    "move",
-    "order",
-    "frame-order",
-    "group",
-    "ungroup",
-    "align",
-    "distribute",
-    "tidy",
-    "copy-style",
-    "duplicate",
-    "paste",
-    "connected-copy",
-    "mind-child",
-    "template",
-    "clear-blob",
-    "apply",
-    "inverse",
-    "merge",
-    "explain",
-    "capabilities",
-];
-
-/// `_doc_board_call`: a board verb with a `.k5board` word after it.
-fn board_call(words: &[&str]) -> bool {
-    let Some((verb, rest)) = words.split_first() else {
-        return false;
-    };
-    BOARD_VERBS.contains(verb)
-        && rest.iter().any(|a| {
-            let l = a.to_ascii_lowercase();
-            !l.starts_with("--") && l.ends_with(".k5board")
-        })
-}
-
 /// Whether the binary hands the line to the shell (see the module's
 /// notes).
 pub fn handed_back(words: &[&str]) -> bool {
     words
         .iter()
         .any(|w| matches!(*w, "--host" | "--token" | "--token-stdin") || w.starts_with("--host="))
-        || board_call(words)
 }
 
 fn wants_help(words: &[&str]) -> bool {
@@ -654,6 +593,9 @@ impl Ctx {
         let strs: Vec<&str> = words.iter().map(String::as_str).collect();
         if verb.is_empty() || wants_help(&strs) {
             return Ok(self.page("doc"));
+        }
+        if board::call(words) {
+            return board::run(self, verb, rest);
         }
         match verb {
             "diff" => {

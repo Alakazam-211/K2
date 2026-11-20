@@ -35,13 +35,21 @@ fn claim_ttls_are_milliseconds() {
 }
 
 #[test]
-fn another_server_and_boards_go_to_the_shell() {
+fn another_server_goes_to_the_shell() {
     assert!(handed_back(&["cat", "--host", "h", "a.md"]));
     assert!(handed_back(&["cat", "--host=h", "a.md"]));
     assert!(handed_back(&["cat", "--token-stdin", "a.md"]));
-    assert!(handed_back(&["add", "--title", "x", "plan.K5BOARD"]));
-    assert!(!handed_back(&["cat", "plan.k5board"]));
-    assert!(!handed_back(&["add", "--x", "a.md"]));
+    assert!(!handed_back(&["add", "--title", "x", "plan.K5BOARD"]));
+}
+
+#[test]
+fn a_board_verb_on_a_board_file_is_the_board_s() {
+    assert!(board::call(&["add", "--title", "x", "plan.K5BOARD"]));
+    assert!(board::call(&["read", "s-1", "plan.k5board\n"]));
+    assert!(!board::call(&["cat", "plan.k5board"]));
+    assert!(!board::call(&["add", "--x", "a.md"]));
+    assert!(!board::call(&["add", "--file=plan.k5board"]));
+    assert!(!board::call(&["plan.k5board"]));
 }
 
 #[test]

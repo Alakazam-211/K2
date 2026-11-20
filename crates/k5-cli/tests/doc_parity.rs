@@ -962,3 +962,81 @@ fn answers_that_are_not_utf8_pass_their_bytes() {
         }
     }
 }
+
+const BOARD_LIST: &str = r#"{"hash":"h1","settings":{"bg":"é"},"settingsRev":"r0","objects":[{"rev":"r1","object":{"id":"s-1","type":"sticky","text":"Ship"}},{"rev":"r2","object":{"id":"c-2","type":"connector"}}]}"#;
+
+/// A board verb on a `.k5board` file through `doc`: `-w` and
+/// `--workspace` as the board's `--workspace`, then the board family's
+/// request and reader, under doc's gate (the shell runs `cmd_board`
+/// there). Rows with no fence (its nonce is random on each side).
+#[test]
+fn a_board_file_through_doc() {
+    let rig = Rig::new(VERB, "board");
+    let v = vec![
+        r(
+            "list --json",
+            &["list", "plan.k5board", "--json"],
+            vec![ok(BOARD_LIST)],
+            0,
+        ),
+        r(
+            "read --json, any case",
+            &["read", "s-1", "Plan.K5Board", "--json"],
+            vec![ok(BOARD_LIST)],
+            0,
+        ),
+        // covers: doc delete
+        r(
+            "delete, a dry run, --json",
+            &["delete", "s-1", "--dry-run", "plan.k5board", "--json"],
+            vec![ok(r#"{"on":{"version":"v2"},"dry_run":true,"value":{"verb":"delete","would_write":null}}"#)],
+            0,
+        ),
+        r(
+            "-w: the board's --workspace",
+            &["list", "-w", "ws one", "plan.k5board", "--json"],
+            vec![ok(BOARD_LIST)],
+            0,
+        ),
+        r(
+            "--workspace=",
+            &["list", "--workspace=w2", "plan.k5board", "--json"],
+            vec![ok(BOARD_LIST)],
+            0,
+        ),
+        stop("-w last: doc's usage line", &["list", "plan.k5board", "-w"], 2),
+        stop("two targets", &["list", "--board", "b", "plan.k5board"], 2),
+        stop("list takes no --dry-run", &["list", "--dry-run", "plan.k5board"], 2),
+        r(
+            "an error and its exit",
+            &["list", "plan.k5board"],
+            vec![Reply::Answer(403, r#"{"error":{"code":"core_off","hint":"off"}}"#.into())],
+            3,
+        ),
+        fed(b"not json", stop("apply: not JSON", &["apply", "-", "plan.k5board"], 2)),
+        stop("help never acts", &["add", "sticky", "--text", "hi", "plan.k5board", "-h"], 0),
+        case(
+            "in a session: doc's gate, the board's request",
+            &["list", "plan.k5board", "--json"],
+            &[],
+            vec![ok(BOARD_LIST)],
+            port_only,
+            0,
+            1,
+        )
+        .with_env(with_passport(&[])),
+        case(
+            "a session with no passport: doc's gate stops it",
+            &["list", "plan.k5board"],
+            &[],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        )
+        .with_env(vec![("K2_HOOK_SOCK", "{sock}".to_string())]),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

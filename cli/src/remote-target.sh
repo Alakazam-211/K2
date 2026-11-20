@@ -90,6 +90,13 @@ _postal_send_teach() {
             --summary|--wake-timeout|--session|--inbox|--inbox-wake|--inbox-silent|--signal|--command|--from|--via)
                 echo "k2 msg: $1 is for messages to agents on this server; Postal mail to $to takes only the text, --no-wake and --json." >&2
                 exit 2 ;;
+            --)
+                # The rest is the text, as typed.
+                shift
+                while [ $# -gt 0 ]; do
+                    if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi
+                    shift
+                done ;;
             -*) echo "k2 msg: unknown flag '$1' for Postal mail (k2 msg --help)" >&2; exit 2 ;;
             *) if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi; shift ;;
         esac

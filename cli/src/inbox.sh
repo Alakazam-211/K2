@@ -102,7 +102,15 @@ cmd_inbox_compose() {
 }
 
 cmd_inbox_respond() {
-    local id="${1:-}" text="${2:-}"
+    # -h/--help before a bare `--` prints the inbox help and sends nothing;
+    # after `--` the words are the id and the text, as typed.
+    if _wants_help "$@"; then cmd_help_inbox; return 0; fi
+    local words=() a dashes=0
+    for a in "$@"; do
+        if [ "$dashes" = 0 ] && [ "$a" = "--" ]; then dashes=1; continue; fi
+        words+=("$a")
+    done
+    local id="${words[0]:-}" text="${words[1]:-}"
     if [[ -z "$id" || -z "$text" ]]; then
         echo "Usage: k2 inbox respond <id> \"text\"" >&2
         exit 1

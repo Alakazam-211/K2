@@ -1042,6 +1042,17 @@ _k2_takes_dashdash() {
         send-feedback) return 0 ;;            # send-feedback.sh _sf_send
         respond) return 0 ;;                  # respond.sh cmd_respond
         done) return 0 ;;                     # session-complete.sh cmd_session_complete
+        # Free text: after `--` the words are the message, as typed, so a
+        # message may start with a dash or be --help (K2's ruling: message
+        # text is data). Before `--`, -h/--help is still help.
+        msg)                                  # msg-whoami-done.sh cmd_msg, msg-inbox-staging.sh cmd_msg_v2
+            case "${2:-}" in who|verify) return 1 ;; esac   # these take --text, no free text
+            return 0 ;;
+        talk) return 0 ;;                     # talk-and-workspace.sh cmd_talk
+        thread) return 0 ;;                   # browser.sh cmd_thread, cmd_thread_ask
+        postal) return 0 ;;                   # postal.sh cmd_postal
+        remind) return 0 ;;                   # remind.sh _remind_add
+        chat) return 0 ;;                     # chat.sh cmd_chat
     esac
     case "${1:-} ${2:-}" in
         "compute run") return 0 ;;            # compute-run.sh cmd_compute_run
@@ -1057,6 +1068,12 @@ _k2_takes_dashdash() {
         "sessions archives") return 0 ;;      # awareness.sh cmd_sessions_list
         "workspace resources") return 0 ;;    # agent-context.sh cmd_workspace_resources
         "workspace api-key") return 0 ;;      # talk-and-workspace.sh cmd_workspace_set_api_key
+        "heartbeat remind") return 0 ;;       # remind.sh _remind_add
+        "inbox respond") return 0 ;;          # inbox.sh cmd_inbox_respond
+        "tickets comment"|"feedback comment") return 0 ;;  # feedback.sh cmd_feedback_comment
+        "project msg") return 0 ;;            # project.sh cmd_project_msg
+        "browser note") return 0 ;;           # browser.sh cmd_browser_note
+        "terminal write") return 0 ;;         # daemon-install.sh cmd_terminal_write
         # k2-approve gets these words as they are (daemon-install.sh cmd_approve_local).
         "approve verify"|"approve show"|"approve key-id") return 0 ;;
     esac

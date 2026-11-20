@@ -261,6 +261,8 @@ cmd_postal() {
             --clear) clear=true; shift ;;
             --token-stdin) token_stdin=true; shift ;;
             -h|--help) _postal_usage; return 0 ;;
+            # The rest is plain words (an address, a message), as typed.
+            --) shift; args+=("$@"); shift $# ;;
             -*) echo "k2 postal: unknown flag '$1' (k2 postal --help)" >&2; exit 2 ;;
             *) args+=("$1"); shift ;;
         esac
@@ -314,7 +316,9 @@ cmd_postal() {
             $nowake && extra+=(--no-wake)
             $as_json && extra+=(--json)
             _is_postal_address "$one" || { echo "k2 postal send: '$one' isn't a Postal address (handle::label.postal.bot)" >&2; exit 2; }
-            _postal_send_teach "${args[@]}" ${extra[@]+"${extra[@]}"} ;;
+            # The flags first, then `--` and the text: text that is --help
+            # or starts with a dash stays text.
+            _postal_send_teach "$one" ${extra[@]+"${extra[@]}"} -- "${args[@]:1}" ;;
         remove|block)
             _postal_need "<handle::label.postal.bot>"
             _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/$sub" "$(_postal_body "workspace=$ws" "peer=$one")" | _postal_print "$sub" "$as_json" ;;

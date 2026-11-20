@@ -1021,6 +1021,7 @@ cmd_msg_v2() {
     local first i=0
     for first in "$@"; do
         i=$((i + 1))
+        [ "$first" = "--" ] && break
         case "$first" in
             -*) ;;
             *) _postal_send_teach "$first" "${@:1:$((i - 1))}" "${@:$((i + 1))}"; break ;;
@@ -1032,6 +1033,7 @@ cmd_msg_v2() {
     local has_inbox_wake="false"
     local has_signal="false"
     for arg in "$@"; do
+        [ "$arg" = "--" ] && break
         case "$arg" in
             --inbox) has_inbox_bare="true" ;;
             --inbox-silent) has_inbox_silent="true" ;;

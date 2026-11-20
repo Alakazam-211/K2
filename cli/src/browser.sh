@@ -65,6 +65,12 @@ cmd_browser_note() {
             --intent) intent="${2:-}"; shift 2 ;;
             --json) json="true"; shift ;;
             -h|--help) cmd_help_browser; return 0 ;;
+            --)
+                # The rest is the note text, as typed.
+                shift
+                [ $# -le 1 ] || { echo "Error: one note text only (quote it)" >&2; exit 2; }
+                [ -z "$comment" ] || { echo "Error: one note text only (quote it)" >&2; exit 2; }
+                [ $# -eq 0 ] || { comment="$1"; shift; } ;;
             --*) echo "Error: unknown flag '$1'" >&2; cmd_help_browser >&2; exit 2 ;;
             *)
                 if [ -n "$comment" ]; then
@@ -395,6 +401,7 @@ cmd_thread() {
                 skip_next=1
                 continue
                 ;;
+            --) break ;;
             --*) continue ;;
             *) first_pos="$arg"; break ;;
         esac
@@ -438,6 +445,13 @@ cmd_thread() {
             --file)
                 [[ -z "${2:-}" ]] && { echo "Error: --file needs a path (path[:line[-end]])" >&2; exit 1; }
                 files+=("$2"); shift 2 ;;
+            --)
+                # The rest is the address and the text, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [[ -z "$target" ]]; then target="$1"; else text="$1"; fi
+                    shift
+                done ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
                 exit 1 ;;
@@ -689,6 +703,18 @@ cmd_thread_ask() {
             --style)
                 echo "Error: no --style in v1" >&2
                 exit 1 ;;
+            --)
+                # The rest is the address and the prompt, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [[ -z "$target" ]]; then target="$1"
+                    elif [[ -z "$prompt" ]]; then prompt="$1"
+                    else
+                        echo "Error: unexpected extra argument '$1'" >&2
+                        exit 1
+                    fi
+                    shift
+                done ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
                 exit 1 ;;

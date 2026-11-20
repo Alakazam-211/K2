@@ -716,6 +716,12 @@ cmd_terminal_write() {
     # resolve_write_session_id (the write-side mirror of `k2 read`'s
     # name-addressing), then posted to /cli/terminal/write. UUID callers
     # are byte-identical.
+    # -h/--help before a bare `--` prints the usage and sends nothing. The
+    # message is data: after `--` it is sent as typed, --help included.
+    if _wants_help "$@"; then
+        echo "Usage: k2 terminal write <terminal-id|workspace> [--agent <name>] [--] \"message\""
+        return 0
+    fi
     local target="${1:-}"
     shift || true
     # Optional leading `--agent <name>` selects a specific agent's session
@@ -726,6 +732,7 @@ cmd_terminal_write() {
     if [ "${1:-}" = "--agent" ]; then
         agent="${2:-}"; shift 2 || true
     fi
+    [ "${1:-}" != "--" ] || shift
     local message="$*"
     if [ -z "$target" ] || [ -z "$message" ]; then
         echo "Usage: k2 terminal write <terminal-id|workspace> [--agent <name>] \"message\"" >&2

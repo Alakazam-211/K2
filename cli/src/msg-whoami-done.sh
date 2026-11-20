@@ -191,6 +191,13 @@ cmd_msg() {
                 # 0.39.0f Phase 2.1b: hard-deprecated. The agent-keyed
                 # routing path is gone; `msg` is workspace-implicit.
                 fail_deprecated "k2 msg --agent <name>" "k2 msg <workspace> \"text\"  (workspace-implicit; pass a workspace name/path)" ;;
+            --)
+                # The rest is the address and the text, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [[ -z "$target" ]]; then target="$1"; else text="$1"; fi
+                    shift
+                done ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 msg --help')" >&2
                 exit 1 ;;

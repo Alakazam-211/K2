@@ -26,6 +26,10 @@
 #     sends nothing;
 #   * every verb in the allowlist (_k2_takes_dashdash) gets past that
 #     refusal with a `--` on its line (one row each);
+#   * free text (msg, talk, thread, postal, remind, inbox respond, tickets
+#     comment, project msg, browser note, chat send, terminal write): after
+#     `--` a literal --help is sent as the message; --help before `--` (or
+#     with no `--`) is help and sends nothing;
 #   * -h/--help before `--` on job and ci is still their help; job add
 #     -- echo --help sends the add;
 #   * with no connection at all, vault run ... -- grep --help still meets
@@ -93,6 +97,10 @@ class H(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         with open(work + "/requests.log", "a") as f:
             f.write("%s %s\n" % (self.command, path))
+        # Every request in full (path, query and body), for the free-text rows.
+        with open(work + "/requests.full", "ab") as f:
+            f.write(("%s %s " % (self.command, urllib.parse.unquote_plus(self.path))).encode())
+            f.write(urllib.parse.unquote_plus(body.decode("utf-8", "replace")).encode() + b"\n")
         if path == "/cli/compute/run":
             with open(work + "/run.json", "wb") as f:
                 f.write(body)
@@ -101,7 +109,7 @@ class H(BaseHTTPRequestHandler):
         elif path == "/cli/vault/run-helper":
             self._reply(200, {"helper": helper, "tokenFd": True})
         else:
-            self._reply(404, {"error": {"code": "not_found", "hint": "no route"}})
+            self._reply(200, {"ok": True})
     def do_GET(self):
         self._handle()
     def do_POST(self):
@@ -144,7 +152,7 @@ run_no_owner() {
     ERR="$(cat "$WORK/err")"
 }
 
-reset() { : >"$REQ_LOG"; rm -f "$WORK/run.json" "$HELPER_LOG"; }
+reset() { : >"$REQ_LOG"; : >"$WORK/requests.full"; rm -f "$WORK/run.json" "$HELPER_LOG"; }
 
 sent_nothing() {
     local label="$1"
@@ -257,7 +265,7 @@ run_no_owner vault run -h --secret A -- grep
 sent_nothing "no passport, k2 vault run -h ..."
 
 echo "== a verb that takes no -- refuses one =="
-for args in "msg acme -- -h" "msg acme -- hello" "thread acme -- hi" "heartbeat list -- -h" \
+for args in "agent list -- -h" "workspace list -- x" "msg verify -- x" "heartbeat list -- -h" \
     "whoami --" "vault list --" "compute status -- x" "-- ls"; do
     reset
     # shellcheck disable=SC2086 # word-splitting the case is the point
@@ -336,6 +344,19 @@ organization show -- x
 send-feedback -- -text
 respond -- -text
 done -- x
+msg acme -- -text
+talk acme -- -text
+thread acme -- -text
+postal send ada::acme-box.postal.bot -- -text
+remind --in 10m -- -text
+heartbeat remind --in 10m -- -text
+inbox respond i1 -- -text
+tickets comment t1 -- -text
+feedback comment t1 -- -text
+project msg -- -text
+browser note --url http://acme.test -- -text
+chat send acme/general -- -text
+terminal write 11111111-2222-3333-4444-555555555555 -- -text
 ROWS
 
 echo "== job add: -h/--help after -- is the child's =="
@@ -369,11 +390,67 @@ set -e
 [ "$RC" -eq 0 ] && [ "$OUT" = "$VAULT_REF" ] && ok "no connection, k2 vault run -h ...: the help" \
     || bad "no connection, k2 vault run -h ...: exit $RC"
 
-echo "== terminal write takes no -- =="
-reset
-run terminal write acme -- --help
-[ "$RC" -eq 2 ] && ok "k2 terminal write acme -- --help: exit 2" || bad "k2 terminal write acme -- --help: exit $RC (want 2)"
-sent_nothing "k2 terminal write acme -- --help"
+echo "== free text: after -- a literal --help is sent as the message =="
+UUID=11111111-2222-3333-4444-555555555555
+while IFS= read -r args; do
+    [ -n "$args" ] || continue
+    reset
+    # shellcheck disable=SC2086 # word-splitting the case is the point
+    run_bounded $args
+    if grep -q -- '--help' "$WORK/requests.full"; then
+        ok "k2 $args: the text --help is sent"
+    else
+        bad "k2 $args: --help was not sent (exit $RC)"
+        printf '%s\n' "$ERR" | sed 's/^/      | /' >&2
+        sed 's/^/      > /' "$WORK/requests.full" >&2
+    fi
+    case "$ERR" in
+        *"takes no '--'"*) bad "k2 $args: refused its --" ;;
+    esac
+done <<ROWS
+msg acme -- --help
+talk acme -- --help
+thread acme -- --help
+thread ask --option yes --option no acme -- --help
+postal send ada::acme-box.postal.bot -- --help
+msg ada::acme-box.postal.bot -- --help
+remind --in 10m -- --help
+heartbeat remind --in 10m -- --help
+inbox respond i1 -- --help
+tickets comment t1 -- --help
+project msg acme -- --help
+browser note --url http://acme.test -- --help
+chat send acme/general -- --help
+terminal write $UUID -- --help
+ROWS
+
+echo "== free text: -h/--help before -- (or with no --) is help, nothing sent =="
+while IFS= read -r args; do
+    [ -n "$args" ] || continue
+    reset
+    # shellcheck disable=SC2086 # word-splitting the case is the point
+    run $args
+    label="k2 $args"
+    [ "$RC" -eq 0 ] && ok "$label: exit 0" || bad "$label: exit $RC (want 0)"
+    [ -n "$OUT" ] && ok "$label: prints help" || bad "$label: printed nothing"
+    sent_nothing "$label"
+done <<ROWS
+msg acme --help
+msg acme --help -- hello
+talk acme --help
+thread acme --help
+thread ask acme -h -- why
+postal send ada::acme-box.postal.bot --help
+remind --in 10m --help
+heartbeat remind --in 10m -h -- hi
+inbox respond i1 --help
+tickets comment t1 --help
+project msg --help
+browser note --help
+chat send acme/general --help
+terminal write $UUID --help
+terminal write $UUID -h -- hi
+ROWS
 
 echo "== -h/--help before -- on job and ci is still help =="
 for args in "job add -h -- true" "ci run --help -- true"; do

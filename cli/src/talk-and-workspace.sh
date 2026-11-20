@@ -353,6 +353,13 @@ cmd_talk() {
             --no-wake)   wake="false"; shift ;;
             --wake-timeout) wake_timeout="$2"; shift 2 ;;
             --read-only|--dry-run|--peek) read_only="true"; shift ;;
+            --)
+                # The rest is the address and the text, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [[ -z "$target" ]]; then target="$1"; else text="$1"; fi
+                    shift
+                done ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 talk --help')" >&2
                 exit 1 ;;
@@ -546,7 +553,9 @@ EOF
         cmd_terminal_read "$deliver_sid" --lines "$lines" || true
         return 0
     fi
-    local msg_args=("$target" "$text")
+    # The address and text go after `--`: text that starts with a dash (or
+    # is --help) is text, never a flag of msg's.
+    local msg_args=()
     [[ -n "$from" ]] && msg_args+=(--from "$from")
     [[ -n "$command" ]] && msg_args+=(--command "$command")
     msg_args+=(--via talk)
@@ -557,6 +566,7 @@ EOF
     else
         msg_args+=(--no-wake)
     fi
+    msg_args+=(-- "$target" "$text")
     local send_rc=0
     cmd_msg "${msg_args[@]}" || send_rc=$?
     return "$send_rc"

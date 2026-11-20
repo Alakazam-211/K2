@@ -681,6 +681,18 @@ cmd_feedback_comment() {
             --file)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--file requires a path (path[:line[-end]])"; exit 2; }
                 files+=("$2"); shift 2 ;;
+            --)
+                # The rest is the id and the text, as typed.
+                shift
+                while [ $# -gt 0 ]; do
+                    if [ -z "$id" ]; then id="$1"
+                    elif [ -z "$text" ]; then text="$1"
+                    else
+                        _feedback_err "usage" "unexpected extra argument '$1' — quote the comment text"
+                        exit 2
+                    fi
+                    shift
+                done ;;
             -*)
                 _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets comment <id> [<text>] [--file path[:line]]… [--json]"
                 exit 2 ;;

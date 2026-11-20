@@ -890,11 +890,14 @@ cmd_project_msg() {
     # <text>; two → the first is ALWAYS <project>; three or more →
     # exit 2 with the quote-your-message hint. "-" (the stdin sentinel)
     # is a positional, never a flag.
-    local as_json=false count=0 first="" second="" joined=""
+    # After a bare `--` every word is a positional, as typed.
+    local as_json=false count=0 first="" second="" joined="" dashes=false
     while [ $# -gt 0 ]; do
-        if [ "$1" = "--json" ]; then
+        if [ "$dashes" = false ] && [ "$1" = "--" ]; then
+            dashes=true
+        elif [ "$dashes" = false ] && [ "$1" = "--json" ]; then
             as_json=true
-        elif [ "$1" != "-" ] && [ "${1#-}" != "$1" ]; then
+        elif [ "$dashes" = false ] && [ "$1" != "-" ] && [ "${1#-}" != "$1" ]; then
             _project_err "usage" "unknown flag '$1' — usage: k2 project msg [<project>] <text> [--json]"
             exit 2
         else

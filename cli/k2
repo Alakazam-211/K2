@@ -1541,6 +1541,17 @@ _k2_takes_dashdash() {
         send-feedback) return 0 ;;            # send-feedback.sh _sf_send
         respond) return 0 ;;                  # respond.sh cmd_respond
         done) return 0 ;;                     # session-complete.sh cmd_session_complete
+        # Free text: after `--` the words are the message, as typed, so a
+        # message may start with a dash or be --help (K2's ruling: message
+        # text is data). Before `--`, -h/--help is still help.
+        msg)                                  # msg-whoami-done.sh cmd_msg, msg-inbox-staging.sh cmd_msg_v2
+            case "${2:-}" in who|verify) return 1 ;; esac   # these take --text, no free text
+            return 0 ;;
+        talk) return 0 ;;                     # talk-and-workspace.sh cmd_talk
+        thread) return 0 ;;                   # browser.sh cmd_thread, cmd_thread_ask
+        postal) return 0 ;;                   # postal.sh cmd_postal
+        remind) return 0 ;;                   # remind.sh _remind_add
+        chat) return 0 ;;                     # chat.sh cmd_chat
     esac
     case "${1:-} ${2:-}" in
         "compute run") return 0 ;;            # compute-run.sh cmd_compute_run
@@ -1556,6 +1567,12 @@ _k2_takes_dashdash() {
         "sessions archives") return 0 ;;      # awareness.sh cmd_sessions_list
         "workspace resources") return 0 ;;    # agent-context.sh cmd_workspace_resources
         "workspace api-key") return 0 ;;      # talk-and-workspace.sh cmd_workspace_set_api_key
+        "heartbeat remind") return 0 ;;       # remind.sh _remind_add
+        "inbox respond") return 0 ;;          # inbox.sh cmd_inbox_respond
+        "tickets comment"|"feedback comment") return 0 ;;  # feedback.sh cmd_feedback_comment
+        "project msg") return 0 ;;            # project.sh cmd_project_msg
+        "browser note") return 0 ;;           # browser.sh cmd_browser_note
+        "terminal write") return 0 ;;         # daemon-install.sh cmd_terminal_write
         # k2-approve gets these words as they are (daemon-install.sh cmd_approve_local).
         "approve verify"|"approve show"|"approve key-id") return 0 ;;
     esac
@@ -3343,6 +3360,13 @@ _postal_send_teach() {
             --summary|--wake-timeout|--session|--inbox|--inbox-wake|--inbox-silent|--signal|--command|--from|--via)
                 echo "k2 msg: $1 is for messages to agents on this server; Postal mail to $to takes only the text, --no-wake and --json." >&2
                 exit 2 ;;
+            --)
+                # The rest is the text, as typed.
+                shift
+                while [ $# -gt 0 ]; do
+                    if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi
+                    shift
+                done ;;
             -*) echo "k2 msg: unknown flag '$1' for Postal mail (k2 msg --help)" >&2; exit 2 ;;
             *) if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi; shift ;;
         esac
@@ -4696,6 +4720,7 @@ cmd_heartbeat_remind() {
         shift; _remind_snooze "$@"; return $?
     fi
     for a in "$@"; do
+        [ "$a" = "--" ] && break
         case "$a" in --in|--at|--on) has_when=1 ;; esac
     done
     # `list` as a reminder's text is `k2 remind list --in 1m`: with a time,
@@ -4733,6 +4758,13 @@ _remind_add() {
                 esac
                 shift 2 ;;
             --json) as_json=1; shift ;;
+            --)
+                # The rest is the reminder's text, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi
+                    shift
+                done ;;
             --*)
                 echo "Error: unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
             *)
@@ -7673,6 +7705,12 @@ cmd_terminal_write() {
     # resolve_write_session_id (the write-side mirror of `k2 read`'s
     # name-addressing), then posted to /cli/terminal/write. UUID callers
     # are byte-identical.
+    # -h/--help before a bare `--` prints the usage and sends nothing. The
+    # message is data: after `--` it is sent as typed, --help included.
+    if _wants_help "$@"; then
+        echo "Usage: k2 terminal write <terminal-id|workspace> [--agent <name>] [--] \"message\""
+        return 0
+    fi
     local target="${1:-}"
     shift || true
     # Optional leading `--agent <name>` selects a specific agent's session
@@ -7683,6 +7721,7 @@ cmd_terminal_write() {
     if [ "${1:-}" = "--agent" ]; then
         agent="${2:-}"; shift 2 || true
     fi
+    [ "${1:-}" != "--" ] || shift
     local message="$*"
     if [ -z "$target" ] || [ -z "$message" ]; then
         echo "Usage: k2 terminal write <terminal-id|workspace> [--agent <name>] \"message\"" >&2
@@ -8156,6 +8195,13 @@ cmd_talk() {
             --no-wake)   wake="false"; shift ;;
             --wake-timeout) wake_timeout="$2"; shift 2 ;;
             --read-only|--dry-run|--peek) read_only="true"; shift ;;
+            --)
+                # The rest is the address and the text, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [[ -z "$target" ]]; then target="$1"; else text="$1"; fi
+                    shift
+                done ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 talk --help')" >&2
                 exit 1 ;;
@@ -8349,7 +8395,9 @@ EOF
         cmd_terminal_read "$deliver_sid" --lines "$lines" || true
         return 0
     fi
-    local msg_args=("$target" "$text")
+    # The address and text go after `--`: text that starts with a dash (or
+    # is --help) is text, never a flag of msg's.
+    local msg_args=()
     [[ -n "$from" ]] && msg_args+=(--from "$from")
     [[ -n "$command" ]] && msg_args+=(--command "$command")
     msg_args+=(--via talk)
@@ -8360,6 +8408,7 @@ EOF
     else
         msg_args+=(--no-wake)
     fi
+    msg_args+=(-- "$target" "$text")
     local send_rc=0
     cmd_msg "${msg_args[@]}" || send_rc=$?
     return "$send_rc"
@@ -25495,6 +25544,13 @@ cmd_msg() {
                 # 0.39.0f Phase 2.1b: hard-deprecated. The agent-keyed
                 # routing path is gone; `msg` is workspace-implicit.
                 fail_deprecated "k2 msg --agent <name>" "k2 msg <workspace> \"text\"  (workspace-implicit; pass a workspace name/path)" ;;
+            --)
+                # The rest is the address and the text, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [[ -z "$target" ]]; then target="$1"; else text="$1"; fi
+                    shift
+                done ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 msg --help')" >&2
                 exit 1 ;;
@@ -26124,6 +26180,8 @@ cmd_postal() {
             --clear) clear=true; shift ;;
             --token-stdin) token_stdin=true; shift ;;
             -h|--help) _postal_usage; return 0 ;;
+            # The rest is plain words (an address, a message), as typed.
+            --) shift; args+=("$@"); shift $# ;;
             -*) echo "k2 postal: unknown flag '$1' (k2 postal --help)" >&2; exit 2 ;;
             *) args+=("$1"); shift ;;
         esac
@@ -26177,7 +26235,9 @@ cmd_postal() {
             $nowake && extra+=(--no-wake)
             $as_json && extra+=(--json)
             _is_postal_address "$one" || { echo "k2 postal send: '$one' isn't a Postal address (handle::label.postal.bot)" >&2; exit 2; }
-            _postal_send_teach "${args[@]}" ${extra[@]+"${extra[@]}"} ;;
+            # The flags first, then `--` and the text: text that is --help
+            # or starts with a dash stays text.
+            _postal_send_teach "$one" ${extra[@]+"${extra[@]}"} -- "${args[@]:1}" ;;
         remove|block)
             _postal_need "<handle::label.postal.bot>"
             _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/$sub" "$(_postal_body "workspace=$ws" "peer=$one")" | _postal_print "$sub" "$as_json" ;;
@@ -26398,6 +26458,12 @@ cmd_browser_note() {
             --intent) intent="${2:-}"; shift 2 ;;
             --json) json="true"; shift ;;
             -h|--help) cmd_help_browser; return 0 ;;
+            --)
+                # The rest is the note text, as typed.
+                shift
+                [ $# -le 1 ] || { echo "Error: one note text only (quote it)" >&2; exit 2; }
+                [ -z "$comment" ] || { echo "Error: one note text only (quote it)" >&2; exit 2; }
+                [ $# -eq 0 ] || { comment="$1"; shift; } ;;
             --*) echo "Error: unknown flag '$1'" >&2; cmd_help_browser >&2; exit 2 ;;
             *)
                 if [ -n "$comment" ]; then
@@ -26758,6 +26824,7 @@ cmd_thread() {
                 skip_next=1
                 continue
                 ;;
+            --) break ;;
             --*) continue ;;
             *) first_pos="$arg"; break ;;
         esac
@@ -26801,6 +26868,13 @@ cmd_thread() {
             --file)
                 [[ -z "${2:-}" ]] && { echo "Error: --file needs a path (path[:line[-end]])" >&2; exit 1; }
                 files+=("$2"); shift 2 ;;
+            --)
+                # The rest is the address and the text, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [[ -z "$target" ]]; then target="$1"; else text="$1"; fi
+                    shift
+                done ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
                 exit 1 ;;
@@ -27052,6 +27126,18 @@ cmd_thread_ask() {
             --style)
                 echo "Error: no --style in v1" >&2
                 exit 1 ;;
+            --)
+                # The rest is the address and the prompt, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [[ -z "$target" ]]; then target="$1"
+                    elif [[ -z "$prompt" ]]; then prompt="$1"
+                    else
+                        echo "Error: unexpected extra argument '$1'" >&2
+                        exit 1
+                    fi
+                    shift
+                done ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
                 exit 1 ;;
@@ -72599,7 +72685,15 @@ cmd_inbox_compose() {
 }
 
 cmd_inbox_respond() {
-    local id="${1:-}" text="${2:-}"
+    # -h/--help before a bare `--` prints the inbox help and sends nothing;
+    # after `--` the words are the id and the text, as typed.
+    if _wants_help "$@"; then cmd_help_inbox; return 0; fi
+    local words=() a dashes=0
+    for a in "$@"; do
+        if [ "$dashes" = 0 ] && [ "$a" = "--" ]; then dashes=1; continue; fi
+        words+=("$a")
+    done
+    local id="${words[0]:-}" text="${words[1]:-}"
     if [[ -z "$id" || -z "$text" ]]; then
         echo "Usage: k2 inbox respond <id> \"text\"" >&2
         exit 1
@@ -79260,6 +79354,7 @@ cmd_msg_v2() {
     local first i=0
     for first in "$@"; do
         i=$((i + 1))
+        [ "$first" = "--" ] && break
         case "$first" in
             -*) ;;
             *) _postal_send_teach "$first" "${@:1:$((i - 1))}" "${@:$((i + 1))}"; break ;;
@@ -79271,6 +79366,7 @@ cmd_msg_v2() {
     local has_inbox_wake="false"
     local has_signal="false"
     for arg in "$@"; do
+        [ "$arg" = "--" ] && break
         case "$arg" in
             --inbox) has_inbox_bare="true" ;;
             --inbox-silent) has_inbox_silent="true" ;;
@@ -80467,6 +80563,18 @@ cmd_feedback_comment() {
             --file)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--file requires a path (path[:line[-end]])"; exit 2; }
                 files+=("$2"); shift 2 ;;
+            --)
+                # The rest is the id and the text, as typed.
+                shift
+                while [ $# -gt 0 ]; do
+                    if [ -z "$id" ]; then id="$1"
+                    elif [ -z "$text" ]; then text="$1"
+                    else
+                        _feedback_err "usage" "unexpected extra argument '$1' — quote the comment text"
+                        exit 2
+                    fi
+                    shift
+                done ;;
             -*)
                 _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets comment <id> [<text>] [--file path[:line]]… [--json]"
                 exit 2 ;;
@@ -82018,11 +82126,14 @@ cmd_project_msg() {
     # <text>; two → the first is ALWAYS <project>; three or more →
     # exit 2 with the quote-your-message hint. "-" (the stdin sentinel)
     # is a positional, never a flag.
-    local as_json=false count=0 first="" second="" joined=""
+    # After a bare `--` every word is a positional, as typed.
+    local as_json=false count=0 first="" second="" joined="" dashes=false
     while [ $# -gt 0 ]; do
-        if [ "$1" = "--json" ]; then
+        if [ "$dashes" = false ] && [ "$1" = "--" ]; then
+            dashes=true
+        elif [ "$dashes" = false ] && [ "$1" = "--json" ]; then
             as_json=true
-        elif [ "$1" != "-" ] && [ "${1#-}" != "$1" ]; then
+        elif [ "$dashes" = false ] && [ "$1" != "-" ] && [ "${1#-}" != "$1" ]; then
             _project_err "usage" "unknown flag '$1' — usage: k2 project msg [<project>] <text> [--json]"
             exit 2
         else
@@ -90564,6 +90675,8 @@ cmd_chat() {
                 exit 1 ;;
             -h|--help) _chat_usage; return 0 ;;
             -) pos+=("-"); shift ;;
+            # The rest is plain words (a name, a message), as typed.
+            --) shift; pos+=("$@"); shift $# ;;
             -*) _chat_usage_err "unknown flag $1 (k2 chat --help)" ;;
             *) pos+=("$1"); shift ;;
         esac

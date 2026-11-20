@@ -41,6 +41,7 @@ cmd_heartbeat_remind() {
         shift; _remind_snooze "$@"; return $?
     fi
     for a in "$@"; do
+        [ "$a" = "--" ] && break
         case "$a" in --in|--at|--on) has_when=1 ;; esac
     done
     # `list` as a reminder's text is `k2 remind list --in 1m`: with a time,
@@ -78,6 +79,13 @@ _remind_add() {
                 esac
                 shift 2 ;;
             --json) as_json=1; shift ;;
+            --)
+                # The rest is the reminder's text, as typed.
+                shift
+                while [[ $# -gt 0 ]]; do
+                    if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi
+                    shift
+                done ;;
             --*)
                 echo "Error: unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
             *)

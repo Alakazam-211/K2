@@ -338,6 +338,8 @@ cmd_chat() {
                 exit 1 ;;
             -h|--help) _chat_usage; return 0 ;;
             -) pos+=("-"); shift ;;
+            # The rest is plain words (a name, a message), as typed.
+            --) shift; pos+=("$@"); shift $# ;;
             -*) _chat_usage_err "unknown flag $1 (k2 chat --help)" ;;
             *) pos+=("$1"); shift ;;
         esac

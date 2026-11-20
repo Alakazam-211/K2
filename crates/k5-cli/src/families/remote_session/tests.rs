@@ -59,7 +59,8 @@ fn the_grants_width_line_is_the_readers() {
 fn the_lines_are_the_shell_s() {
     let text = script();
     for l in [BOTH, NO_TOKEN, REVOKE_USAGE, WRITE_USAGE, READ_USAGE] {
-        assert!(text.contains(l), "{l:?}");
+        // In the shell's `echo "…"` a quote is `\"`.
+        assert!(text.contains(&l.replace('"', "\\\"")), "{l:?}");
     }
     for code in [
         "REMOTE_SESSIONS_DISABLED",

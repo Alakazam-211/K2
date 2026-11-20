@@ -292,6 +292,7 @@ Agents:
   k2 compute node packages requests [--node N] [--state S] [--json]
                  your requests and their state (the owner: every request)
   k2 compute jobs [--node N] [--mine] [--state S] [--tier ci|priority|standard|batch] [--tag T] [--limit N] [--workspace WS] [--json]
+                 (k2 compute list is the same; k2 compute ls is nodes)
                  TAG and WHO columns: the job's --tag, and who sent it
                  ("(owner token)" when a shell had no passport: it ran as the owner)
                  From a git worktree inside the workspace (.claude/worktrees/x) the

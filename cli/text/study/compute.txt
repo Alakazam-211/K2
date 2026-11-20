@@ -149,6 +149,7 @@ RUN
       k2 compute logs <id> --failures · k2 compute get <id> --json
   (it arrives as a message in your session). Coming back later, or in a
   new session: k2 compute jobs --mine (or --state done), then get/logs.
+  (k2 compute list is the same as jobs; k2 compute ls lists the nodes.)
   Failing test names come back from JUnit: run cargo nextest (or
   k2 compute test, which adds it); plain cargo test gives the log lines.
   Longer than your shell tool's timeout? Use --detach. (If an attached

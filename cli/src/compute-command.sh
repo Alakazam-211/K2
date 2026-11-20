@@ -51,7 +51,8 @@ cmd_compute() {
             [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
             _compute_render queue
             ;;
-        jobs)
+        # `list` is the same verb (agents reach for it); `ls` stays `nodes`.
+        jobs|list)
             local q="" n=""
             while [ $# -gt 0 ]; do
                 case "$1" in

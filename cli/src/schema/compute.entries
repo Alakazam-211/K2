@@ -191,7 +191,7 @@
     {
       "name": "compute jobs",
       "usage": "k2 compute jobs [--node N] [--mine] [--state S] [--tier ci|priority|standard|batch] [--tag T] [--limit N] [--workspace WS] [--json]",
-      "description": "List jobs, with TAG and WHO columns (the job's --tag, and who sent it).",
+      "description": "List jobs, with TAG and WHO columns (the job's --tag, and who sent it). k2 compute list is the same verb; k2 compute ls is nodes.",
       "args": [],
       "flags": [
         {"name": "--node", "arg": "N", "description": "Only this node's jobs."},

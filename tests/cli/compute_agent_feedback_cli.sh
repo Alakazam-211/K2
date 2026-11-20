@@ -6,7 +6,8 @@
 # Covers: wait --timeout exits 124 with still_running and leaves the job
 # alone (no cancel reaches the daemon), for one job, several, --any and
 # --follow; --max-wait keeps exit 3; a failed job still exits 3; the two
-# limits together are a usage error.
+# limits together are a usage error. `k2 compute list` is `jobs` (the same
+# request, --json printed on stdout); `ls` stays `nodes`.
 
 set -euo pipefail
 
@@ -72,6 +73,10 @@ class H(BaseHTTPRequestHandler):
             # A long poll that answers soon: the CLI's deadline decides.
             time.sleep(0.2)
             return self.reply(200, job(which))
+        if u.path == "/cli/compute/jobs":
+            return self.reply(200, {"jobs": [dict(job("done0003"), workspace="ws", submitter="agent")]})
+        if u.path == "/cli/compute/nodes":
+            return self.reply(200, {"nodes": []})
         if u.path == "/cli/compute/jobs/logs":
             time.sleep(0.2)
             j = job(which)
@@ -160,6 +165,20 @@ set -e
 expect_eq "--timeout with no duration is a usage error" "$rc" "2"
 expect_has "the help says to use --timeout, not timeout(1)" "$("$K2" compute --help 2>&1)" "macOS has no timeout"
 expect_has "the study page says the same" "$("$K2" study compute 2>&1)" "Use it, not timeout(1): macOS has no timeout command"
+
+echo "== k2 compute list = jobs =="
+last_get() { tail -1 "$LOG" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["method"], v["path"], v["query"])'; }
+set +e
+lout="$("$K2" compute list --mine --state done --json 2>"$SANDBOX/err")"; rc=$?
+set -e
+expect_eq "list exits 0" "$rc" "0"
+expect_eq "list asks for the jobs, with its filters" "$(last_get)" "GET /cli/compute/jobs mine=1&state=done"
+expect_has "list --json prints the jobs on stdout" "$lout" '"jobs"'
+jout="$("$K2" compute jobs --mine --state done --json 2>/dev/null)"
+expect_eq "list --json is jobs --json" "$lout" "$jout"
+"$K2" compute ls --json >/dev/null 2>&1
+expect_eq "ls is still nodes" "$(last_get | cut -d' ' -f1-2)" "GET /cli/compute/nodes"
+expect_has "the help says list is jobs" "$("$K2" compute --help 2>&1)" "k2 compute list is the same; k2 compute ls is nodes"
 
 echo
 echo "compute_agent_feedback_cli: $pass passed, $fail failed"

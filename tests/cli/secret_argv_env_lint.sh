@@ -27,7 +27,7 @@
 #      built from one (the recovery words typed back are the model).
 #   4. a flag whose name reads as a secret (code, ticket, token, password,
 #      pass, pw, secret, key, passphrase, pin, otp, cred) takes its value
-#      only as an argument: k2's own command line, which every user on this
+#      only as an argument: k2's own command line, which every account on this
 #      computer can see while the command runs. The same function must offer a stdin
 #      form sharing that word (--code with --code-stdin, --ticket with
 #      --ticket-stdin, --token with --token-stdin). Flags that name where a
@@ -435,7 +435,7 @@ for f, text in parts:
                 if any(any(w in sf for w in words) for sf in stdin_flags):
                     continue
                 line = text.count("\n", 0, a + m.start(1)) + 1
-                flag(f, line, fl, "%s reads as a secret and k2 takes it only as an argument, which every user on this computer can see while the command runs (add a %s-stdin form)" % (fl, fl))
+                flag(f, line, fl, "%s reads as a secret and k2 takes it only as an argument, which every account on this computer can see while the command runs (add a %s-stdin form)" % (fl, fl))
 for (f, name), n in sorted(allowed.items()):
     if n == 0:
         problems.append("%s: the exception for %s matches nothing any more (update EXCEPTIONS)" % (f, name))

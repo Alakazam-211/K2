@@ -1160,7 +1160,7 @@ ADDING A MACHINE (owner, or an agent with "Let this agent manage compute nodes")
     k2 compute local enable --controller https://you.k2.dev \
       --code-stdin --name mini-1 --private-home < code-file
   (the code comes from `k2 compute node add mini-1` on the controller;
-  --enroll CODE.FP still works, but every user on this computer can see a
+  --enroll CODE.FP still works, but every account on this computer can see a
   code on the command line while the command runs). A one-click ticket
   goes the same way: --ticket-stdin < ticket-file in place of --code-stdin.
   Root is needed once: the root helper or passwordless sudo does it

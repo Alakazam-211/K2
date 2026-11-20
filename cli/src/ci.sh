@@ -134,7 +134,7 @@ password each step). On the signing machine first: sudo k2-signer-admin
 pair-begin > pair.json
   k2 ci signer add --code-stdin --hello pair.json [--out offer.json] < code
                                 the pairing code on stdin (<CODE.FP> in its
-                                place still works; every user on this
+                                place still works; every account on this
                                 computer can see a code on the command line)
   k2 ci signer reveal <pairing> --reveal reveal.json   prints the 6-digit
                                 SAS here only; type it at the signer
@@ -369,9 +369,10 @@ if not v["signers"]:
         add)
             # The code off argv: --code-stdin reads one line from stdin. A
             # <CODE.FP> word still works for now, with a note: a command line
-            # is visible to every user on this computer while the command runs.
+            # is visible to every account on this computer while the command
+            # runs.
             local code="" code_stdin=0 hello="" out="k2-signer-offer.json"
-            local usage="usage: k2 ci signer add --code-stdin --hello <pair-begin output file> [--out offer.json] < code-file (or <CODE.FP> instead of --code-stdin, visible to every user on this computer)"
+            local usage="usage: k2 ci signer add --code-stdin --hello <pair-begin output file> [--out offer.json] < code-file (or <CODE.FP> instead of --code-stdin, visible to every account on this computer)"
             if [ -n "${1:-}" ] && [ "${1#-}" = "$1" ]; then code="$1"; shift; fi
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -389,7 +390,7 @@ if not v["signers"]:
                 code="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
                 [ -n "$code" ] || { echo "k2 ci signer add: --code-stdin: no code on stdin" >&2; exit 2; }
             else
-                echo "note: <CODE.FP> is visible to every user on this computer while the command runs; use --code-stdin" >&2
+                echo "note: <CODE.FP> is visible to every account on this computer while the command runs; use --code-stdin" >&2
             fi
             local prefix="${code##*.}" hj tok
             hj="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(json.dumps(v.get("hello", v)))' "$hello")" || { echo "usage: --hello is the JSON pair-begin printed" >&2; exit 2; }

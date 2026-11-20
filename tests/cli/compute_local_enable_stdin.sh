@@ -173,7 +173,7 @@ for flag in --enroll --code; do
     run_k2 "" compute local enable --controller "$CTRL" "$flag" "$CODE" --name mini-1 --private-home
     expect_eq "$flag: exit 0" "$RC" "0"
     expect_eq "$flag: output" "$OUT" "$ENABLED"
-    expect_eq "$flag: the note" "$ERR" "note: $flag is visible to every user on this computer while the command runs; use --code-stdin"
+    expect_eq "$flag: the note" "$ERR" "note: $flag is visible to every account on this computer while the command runs; use --code-stdin"
     assert_body "$flag" "$WANT_CODE"
 done
 
@@ -201,7 +201,7 @@ assert_off_children "--ticket-stdin" "the ticket" "$TICKET"
 fresh
 run_k2 "" compute local enable --controller "$CTRL" --ticket "$TICKET" --name mini-1 --private-home
 expect_eq "--ticket: exit 0" "$RC" "0"
-expect_eq "--ticket: the note" "$ERR" "note: --ticket is visible to every user on this computer while the command runs; use --ticket-stdin"
+expect_eq "--ticket: the note" "$ERR" "note: --ticket is visible to every account on this computer while the command runs; use --ticket-stdin"
 assert_body "--ticket" "$WANT_TICKET"
 fresh
 run_k2 "$TICKET"$'\n' compute local enable --controller "$CTRL" --ticket-stdin --ticket "$TICKET" --name mini-1

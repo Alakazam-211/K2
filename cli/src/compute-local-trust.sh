@@ -86,7 +86,7 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
             # The enroll code and the ticket off argv: --code-stdin and
             # --ticket-stdin read one line from stdin. --enroll/--code
             # CODE.FP and --ticket T still work for now, with a note: a
-            # command line is visible to every user on this computer while
+            # command line is visible to every account on this computer while
             # the command runs.
             [ "$code_stdin" = 0 ] || [ "$ticket_stdin" = 0 ] || { echo "k2 compute local enable: --code-stdin or --ticket-stdin, not both (stdin holds one)" >&2; exit 2; }
             if [ "$ticket_stdin" = 1 ]; then
@@ -95,7 +95,7 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
                 ticket="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
                 [ -n "$ticket" ] || { echo "k2 compute local enable: --ticket-stdin: no ticket on stdin" >&2; exit 2; }
             elif [ -n "$ticket_flag" ]; then
-                echo "note: --ticket is visible to every user on this computer while the command runs; use --ticket-stdin" >&2
+                echo "note: --ticket is visible to every account on this computer while the command runs; use --ticket-stdin" >&2
             fi
             if [ "$code_stdin" = 1 ]; then
                 [ -z "$enroll" ] || { echo "k2 compute local enable: --code-stdin or $enroll_flag, not both" >&2; exit 2; }
@@ -103,7 +103,7 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
                 enroll="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
                 [ -n "$enroll" ] || { echo "k2 compute local enable: --code-stdin: no code on stdin" >&2; exit 2; }
             elif [ -n "$enroll_flag" ]; then
-                echo "note: $enroll_flag is visible to every user on this computer while the command runs; use --code-stdin" >&2
+                echo "note: $enroll_flag is visible to every account on this computer while the command runs; use --code-stdin" >&2
             fi
             body="$(_compute_json K2_CJ_controller="$controller" K2_CJ_enroll_s="$enroll" K2_CJ_ticket_s="$ticket" K2_CJ_name="$name" K2_CJ_privateHome_b="$private" K2_CJ_remoteAdmin="$remote_admin")"
             _compute_call POST /cli/compute/local/enable "$body" tcp

@@ -684,7 +684,7 @@ This computer (its owner):
   k2 compute local enable [--controller URL --code-stdin --name NAME]
                           [--private-home | --no-private-home]
                           (--code-stdin: the enroll code on stdin;
-                          --enroll CODE.FP still works, but every user on
+                          --enroll CODE.FP still works, but every account on
                           this computer can see it while the command runs.
                           --ticket-stdin: a one-click ticket on stdin in
                           place of a code; --ticket T likewise)

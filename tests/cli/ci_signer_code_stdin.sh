@@ -23,7 +23,7 @@ SECRET_PART="SIGNCODE-CHILDTEST"
 CODE="$SECRET_PART.f00dfeed01"
 VAULT_PW="SIGNVAULTPW_CHILDTEST"
 TOKEN="k2vc_SIGNCHILDTEST_token"
-NOTE="note: <CODE.FP> is visible to every user on this computer while the command runs; use --code-stdin"
+NOTE="note: <CODE.FP> is visible to every account on this computer while the command runs; use --code-stdin"
 
 # /tmp, not $TMPDIR: a unix socket path must stay short on macOS.
 W="$(mktemp -d /tmp/k2sig-XXXXXX)"

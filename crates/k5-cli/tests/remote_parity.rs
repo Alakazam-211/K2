@@ -91,63 +91,6 @@ fn remote_logout_answers_as_the_shell_does() {
         // covers: remote logout
         on_stdin(
             case(
-                "--token-stdin: signed out, nothing saved here",
-                &["logout", "--host", HOST, "--token-stdin"],
-                &[],
-                vec![ok(r#"{"success":true}"#)],
-                owner_and_port,
-                0,
-                1,
-            ),
-            b"k2rt_stdin_token_1\r\n",
-        ),
-        case(
-            "$K2_REMOTE_TOKEN: signed out",
-            &["logout", "--host=http://127.0.0.1:{port}/"],
-            &env_tok,
-            vec![ok("{}")],
-            nothing,
-            0,
-            1,
-        ),
-        case(
-            "401: refused, nothing removed",
-            &["logout", "--host", HOST],
-            &env_tok,
-            vec![Reply::Answer(401, r#"{"error":"unauthorized"}"#.into())],
-            owner_and_port,
-            3,
-            1,
-        ),
-        case(
-            "403: refused",
-            &["logout", "--host", HOST],
-            &env_tok,
-            vec![Reply::Answer(403, "no\nway".into())],
-            owner_and_port,
-            3,
-            1,
-        ),
-        case(
-            "500 with a long body: its first 300 characters",
-            &["logout", "--host", HOST],
-            &env_tok,
-            vec![Reply::Answer(500, "\u{e9}".repeat(400))],
-            owner_and_port,
-            1,
-            1,
-        ),
-        case(
-            "an empty reply: no answer",
-            &["logout", "--host", HOST],
-            &env_tok,
-            vec![Reply::Close],
-            owner_and_port,
-            1,
-            1,
-        ),
-        on_stdin(
-            case(
                 "no server there: no answer, one connect",
                 dead_args,
                 &[],
@@ -172,7 +115,7 @@ fn remote_logout_answers_as_the_shell_does() {
         ),
         case(
             "no saved token",
-            &["logout", "--host", HOST],
+            &["logout", "--host", "http://127.0.0.1:1"],
             &[],
             vec![],
             owner_and_port,
@@ -267,6 +210,100 @@ fn remote_logout_answers_as_the_shell_does() {
     ];
     for c in v {
         rig.check(&c);
+    }
+}
+
+/// Each side's stdout, stderr and requests with its own stub's port
+/// written `{port}`: the lines name the host, and each side's stub (the
+/// other server here) has its own port.
+fn check_on_own_port(rig: &Rig, c: &Case) {
+    let mut seen = Vec::new();
+    for bash in [true, false] {
+        let side = if bash { Side::Bash } else { Side::Rust };
+        rig.prepare(side, c);
+        let out = rig.run(bash, c);
+        let port = rig.stub_of(side).port.to_string();
+        let mask = |t: &str| t.replace(&port, "{port}");
+        let log: Vec<String> = rig
+            .read(side, !bash, c.name)
+            .iter()
+            .map(|r| mask(&normalise(r, !bash, VERB, c.name)))
+            .collect();
+        seen.push((out.code, mask(&out.stdout), mask(&out.stderr), log));
+    }
+    assert_eq!(seen[0].0, Some(c.code), "{}: bash's exit", c.name);
+    assert_eq!(seen[0].3.len(), c.requests, "{}: bash's requests", c.name);
+    assert_eq!(seen[1], seen[0], "{}: the binary against bash", c.name);
+}
+
+/// The answers of the other server: signed out, refused, an error
+/// status (its body cut at 300 characters) and an empty reply.
+#[test]
+fn remote_logout_to_the_other_server() {
+    let rig = Rig::new(VERB, "other");
+    let env_tok = [("K2_REMOTE_TOKEN", "k2rt_env_token_1")];
+    let v = vec![
+        // covers: remote logout
+        on_stdin(
+            case(
+                "--token-stdin: signed out, nothing saved here",
+                &["logout", "--host", HOST, "--token-stdin"],
+                &[],
+                vec![ok(r#"{"success":true}"#)],
+                owner_and_port,
+                0,
+                1,
+            ),
+            b"k2rt_stdin_token_1\r\n",
+        ),
+        case(
+            "$K2_REMOTE_TOKEN: signed out",
+            &["logout", "--host=http://127.0.0.1:{port}/"],
+            &env_tok,
+            vec![ok("{}")],
+            nothing,
+            0,
+            1,
+        ),
+        case(
+            "401: refused, nothing removed",
+            &["logout", "--host", HOST],
+            &env_tok,
+            vec![Reply::Answer(401, r#"{"error":"unauthorized"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "403: refused",
+            &["logout", "--host", HOST],
+            &env_tok,
+            vec![Reply::Answer(403, "no\nway".into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "500 with a long body: its first 300 characters",
+            &["logout", "--host", HOST],
+            &env_tok,
+            vec![Reply::Answer(500, "\u{e9}".repeat(400))],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an empty reply: no answer",
+            &["logout", "--host", HOST],
+            &env_tok,
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+    ];
+    for c in v {
+        check_on_own_port(&rig, &c);
     }
 }
 

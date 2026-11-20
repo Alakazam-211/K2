@@ -1880,13 +1880,25 @@ fn heartbeat_wake_answers_as_the_shell_does() {
         with(
             with_passport(&[]),
             case(
-                "a refused passport heals once",
+                "a refused passport heals once, from the passport the refusal left",
                 &["wake"],
                 &[],
-                vec![Reply::Answer(403, REFUSED.into()), ok("[]"), ok("[]")],
-                healed_on_disk,
+                vec![heal(&rig), ok("[]"), ok("[]")],
+                port_only,
                 0,
                 3,
+            ),
+        ),
+        with(
+            with_passport(&[]),
+            case(
+                "a passport minted again before the run: refused, no second heal",
+                &["wake"],
+                &[],
+                vec![Reply::Answer(403, REFUSED.into())],
+                healed_on_disk,
+                1,
+                1,
             ),
         ),
     ];

@@ -11,7 +11,7 @@
 //!    (`k2 read --session s` reads the workspace `--session`), then
 //!    `--lines`, `--agent`, `--session` and `--token` each take the next
 //!    word, and other words are skipped. No workspace and no session is
-//!    the usage line, exit 1.
+//!    the two usage lines, exit 1.
 //! 3. The workspace as `_split_remote_target` leaves it locally
 //!    ([`split_remote`]): `ws@` reads `ws`.
 //! 4. One `cli_send cli_request /cli/terminal/read <query>` on the left of
@@ -36,6 +36,8 @@
 //!
 //! - a workspace on another server (`ws@host`, `ws::host.example`): the
 //!   shell points the call at that host with its own token;
+//! - `--token-stdin` where a flag goes: the shell reads a token from
+//!   stdin (and refuses it beside `--token`);
 //! - a value flag as the last word (the shell stops on `$2: unbound
 //!   variable`, a line with its script's path in it), a word that is not
 //!   UTF-8, and a command line with `-h` or `--help` ([`crate::front`]);
@@ -67,8 +69,11 @@ use std::ffi::OsString;
 
 /// The route.
 pub const ENDPOINT: &str = "/cli/terminal/read";
-/// No workspace and no session.
-pub const USAGE: &str = "Usage: k2 read <workspace>[@<host>] [--lines N] [--agent <name>] [--session <id>] [--token <tok>]";
+/// No workspace and no session: two lines.
+pub const USAGE: [&str; 2] = [
+    "Usage: k2 read <workspace>[@<host>] [--lines N] [--agent <name>] [--session <id>] [--token-stdin | --token <tok>]",
+    "  --token-stdin reads the remote token from stdin; a token on the command line (--token <tok>) is visible to other users on this machine",
+];
 /// The line of the shell's Python that loops over `lines`, for its
 /// tracebacks (`tests` pins it to the script).
 pub const PY_LINES: u32 = 19;
@@ -101,6 +106,9 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             // `--token` only matters for a remote host, which the shell
             // answers.
             "--token" => None,
+            // The shell reads a token from stdin for it, and refuses it
+            // beside `--token`: its own form.
+            "--token-stdin" => return None,
             _ => {
                 i += 1;
                 continue;
@@ -195,7 +203,9 @@ fn run_with(args: &[OsString], ask: &Ask, workspace: &str, mut settings: Setting
         return gate.stop();
     }
     if ask.workspace.is_empty() && ask.session.is_empty() {
-        out::stderr_line(USAGE);
+        for line in USAGE {
+            out::stderr_line(line);
+        }
         return Exit::Error;
     }
     // `run` hands a port curl won't take to the shell.
@@ -356,7 +366,10 @@ mod tests {
             );
         }
         assert!(
-            body.contains(&format!("        echo \"{USAGE}\" >&2\n        exit 1")),
+            body.contains(&format!(
+                "        echo \"{}\" >&2\n        echo \"{}\" >&2\n        exit 1",
+                USAGE[0], USAGE[1]
+            )),
             "the usage line moved"
         );
         let policy = source("cli-tools-policy.sh");
@@ -448,6 +461,14 @@ mod tests {
             assert_eq!(parse(&["ws", last]), None, "{last}");
             assert_eq!(parse(&["ws", "x", last]), None, "{last}");
         }
+        // `--token-stdin` is the shell's where a flag goes; as a value it
+        // is a value, as in the shell's loop.
+        assert_eq!(parse(&["ws", "--token-stdin"]), None);
+        assert_eq!(parse(&["ws", "--lines", "5", "--token-stdin"]), None);
+        assert_eq!(
+            parse(&["ws", "--agent", "--token-stdin"]),
+            ask("ws", "50", "--token-stdin", "")
+        );
         assert_eq!(
             parse(&["--lines"]),
             ask("--lines", "50", "", ""),

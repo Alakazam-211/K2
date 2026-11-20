@@ -42,6 +42,13 @@ census fails --check, and --write refuses it unless --accept-gone (a
 form the shell really dropped). A covered form that leaves the census
 fails by its tags.
 
+A router form that is no census form (scripts/router-forms.py) is
+tagged `// native: <form>` (`# native: <form>` in a tests/cli script):
+the form as router_forms.tsv names it, it with --json or --help, or a
+shape of native_bar_shapes.tsv. A native tag that names none of these
+fails the gate, as a covers typo does. Native tags are not in the
+parity count (the census is); the native bar is their gate.
+
 A tag says a parity case drives the form, not that k5 answers it: a
 case can run where both sides are bash. The gate prints the tagged
 forms the native bar's ceiling (crates/k5-cli/tests/data/
@@ -59,6 +66,10 @@ K5_ONLY = "crates/k5-cli/tests/data/k5_only_forms.tsv"
 NATIVE_BAR = "crates/k5-cli/tests/data/native_bar_ceiling.tsv"
 RUST_TAG = re.compile(r"^\s*// covers: (.+?)\s*$")
 SHELL_TAG = re.compile(r"^\s*# covers: (.+?)\s*$")
+RUST_NATIVE = re.compile(r"^\s*// native: (.+?)\s*$")
+SHELL_NATIVE = re.compile(r"^\s*# native: (.+?)\s*$")
+ROUTER_FORMS = "crates/k5-cli/tests/data/router_forms.tsv"
+SHAPES = "crates/k5-cli/tests/data/native_bar_shapes.tsv"
 
 
 def forms(root):
@@ -172,6 +183,43 @@ def tags(root, known, only):
     return covered, bad
 
 
+def router_forms(root):
+    """The names a `native:` tag may use: each router form
+    (scripts/router-forms.py), it with --json or --help after it, and the
+    native bar's shapes (crates/k5-cli/tests/data/native_bar_shapes.tsv)."""
+    names = set()
+    for rel, col in ((ROUTER_FORMS, 0), (SHAPES, 1)):
+        path = os.path.join(root, rel)
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            rows = [l.rstrip("\n").split("\t") for l in f if l.strip() and not l.startswith("#")]
+        for r in rows[1:]:
+            names.add(r[col])
+            if rel == ROUTER_FORMS:
+                names.update((r[0] + " --json", r[0] + " --help"))
+    return names
+
+
+def native_tags(root):
+    """form -> the places a `native:` tag names it; and the tags that name
+    no router form."""
+    names = router_forms(root)
+    tagged, bad = {}, []
+    for rel, pat in parity_files(root):
+        native = RUST_NATIVE if pat is RUST_TAG else SHELL_NATIVE
+        with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
+            for n, line in enumerate(f, 1):
+                m = native.match(line)
+                if not m:
+                    continue
+                if m.group(1) in names:
+                    tagged.setdefault(m.group(1), []).append("%s:%d" % (rel, n))
+                else:
+                    bad.append("%s:%d: %r is no router form (%s)" % (rel, n, m.group(1), ROUTER_FORMS))
+    return tagged, bad
+
+
 def still_bash(root):
     """The forms the native bar's ceiling lists in a counted class: k5
     still hands them to bash (crates/k5-cli/tests/native_bar.rs)."""
@@ -229,6 +277,8 @@ def main(argv):
     words = families(root)
     covered, tag_bad = tags(root, set(all_forms), only)
     bad += tag_bad
+    native, native_bad = native_tags(root)
+    bad += native_bad
     uncovered = [f for f in all_forms if f not in covered]
     by = {}
     for f in uncovered:
@@ -241,7 +291,8 @@ def main(argv):
     # A tag counts for parity, not nativeness: a tagged form the native
     # bar still lists falls through, so both sides ran bash. Reported, not
     # counted against the parity ceiling: the native bar is the gate for it.
-    bash = sorted(f for f in covered if f in still_bash(root))
+    print("parity-coverage: %d router forms carry a native: tag" % len(native))
+    bash = sorted(f for f in set(covered) | set(native) if f in still_bash(root))
     if bash:
         print("parity-coverage: %d tagged forms still fall through (%s lists them): %s"
               % (len(bash), NATIVE_BAR, ", ".join(bash)))

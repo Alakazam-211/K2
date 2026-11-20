@@ -114,6 +114,20 @@ fn the_gate_bites() {
     );
     std::fs::write(&file, &src).unwrap();
 
+    // A `native:` tag names a router form: one that does passes, one
+    // that names none fails.
+    std::fs::write(&file, format!("{src}\n// native: publish status\n")).unwrap();
+    assert!(gate(&dir).status.success(), "{}", text(&gate(&dir)));
+    std::fs::write(&file, format!("{src}\n// native: publish statuz\n")).unwrap();
+    let o = gate(&dir);
+    assert!(!o.status.success(), "a bad native tag passed: {}", text(&o));
+    assert!(
+        text(&o).contains("'publish statuz' is no router form"),
+        "{}",
+        text(&o)
+    );
+    std::fs::write(&file, &src).unwrap();
+
     // A form the list names gains a case: the list is stale.
     let first = std::fs::read_to_string(dir.join("crates/k5-cli/tests/data/parity_uncovered.tsv"))
         .unwrap()

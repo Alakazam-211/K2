@@ -322,7 +322,9 @@ text doc's verb: its result as data, one JSON line: verb, exit, versions,
 what changed, data with data_schema "text" or "typed" and data_spec, the
 error; the exit is the call's) · --fence /
 --no-fence (read output framed as shared, untrusted data; on in a K2
-terminal) · --host <server> [--token T].
+terminal) · --host <server> [--token-stdin] (the server's token on stdin;
+--token T still works, but every account on this computer can see it while
+the command runs).
 
 Exit: 0 ok · 1 the tool's "no" (grep found nothing, diff differs, a patch
 or write conflicted, the doc moved), a cancelled or failed export, or the
@@ -712,10 +714,26 @@ if reads:
 print(json.dumps(d))'
 
 
+# The --host server's token off argv: --token-stdin reads one line from
+# stdin into _DOC_TOKEN. --token T still works for now, with a note: a
+# command line is visible to every account on this computer while the
+# command runs. _doc_token_stdin <token_stdin 0|1> <--token flag if given>
+_doc_token_stdin() {
+    _DOC_TOKEN=""
+    if [ "$1" = 1 ]; then
+        [ -z "$2" ] || _doc_die usage "--token-stdin or --token, not both"
+        _cli_read_secret_stdin "Token: "
+        _DOC_TOKEN="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
+        [ -n "$_DOC_TOKEN" ] || _doc_die usage "--token-stdin: no token on stdin"
+    elif [ -n "$2" ]; then
+        echo "note: --token is visible to every account on this computer while the command runs; use --token-stdin" >&2
+    fi
+}
+
 # Parse the common flags out of "$@" into _DOC_* and _DOC_ARGS (the rest).
 _doc_parse() {
     _DOC_ARGS=()
-    local host="" token=""
+    local host="" token="" token_stdin=0 token_flag=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) _DOC_JSON=1; shift ;;
@@ -729,11 +747,15 @@ _doc_parse() {
             --text=*) _DOC_TEXT="${1#*=}"; _DOC_TEXT_SET=1; shift ;;
             --host) [ $# -ge 2 ] || _doc_die usage "--host needs a server"; host="$2"; shift 2 ;;
             --host=*) host="${1#*=}"; shift ;;
-            --token) [ $# -ge 2 ] || _doc_die usage "--token needs a value"; token="$2"; shift 2 ;;
+            --token-stdin) token_stdin=1; shift ;;
+            --token) [ $# -ge 2 ] || _doc_die usage "--token needs a value"; token="$2"; token_flag="$1"; shift 2 ;;
             --) shift; while [ $# -gt 0 ]; do _DOC_ARGS+=("$1"); shift; done ;;
             *) _DOC_ARGS+=("$1"); shift ;;
         esac
     done
+    _doc_token_stdin "$token_stdin" "$token_flag"
+    [ "$token_stdin" = 1 ] && token="$_DOC_TOKEN"
+    _DOC_TOKEN=""
     if [ -n "$host" ]; then
         _apply_remote_host "$host" "$token" || exit 1
     fi
@@ -773,6 +795,7 @@ _doc_blob_tool() {
             -w|--workspace|--on-behalf-of|--host|--token)
                 [ $# -ge 2 ] || _doc_die usage "$1 needs a value"
                 k2args+=("$1" "$2"); shift 2 ;;
+            --token-stdin) k2args+=("$1"); shift ;;
             --workspace=*|--on-behalf-of=*|--host=*|--fence|--no-fence) k2args+=("$1"); shift ;;
             --read-budget)
                 [ $# -ge 2 ] || _doc_die usage "--read-budget needs a number of bytes"
@@ -872,6 +895,7 @@ _doc_cad() {
             -w|--workspace|--on-behalf-of|--host|--token)
                 [ $# -ge 2 ] || _doc_die usage "$1 needs a value"
                 k2args+=("$1" "$2"); shift 2 ;;
+            --token-stdin) k2args+=("$1"); shift ;;
             --workspace=*|--on-behalf-of=*|--host=*|--json) k2args+=("$1"); shift ;;
             --) shift
                 while [ $# -gt 0 ]; do toks+=("$1"); last=$((${#toks[@]} - 1)); shift; done ;;
@@ -1536,7 +1560,7 @@ print(full)
 
 _doc_cores_usage() {
     cat <<'USAGE'
-Usage: k2 doc cores [on|off <core>] [--json] [--host <server> [--token T]]
+Usage: k2 doc cores [on|off <core>] [--json] [--host <server> [--token-stdin]]
 
 Live docs are switched per kind of file on each server. Each kind has a
 multiplayer core; while its core is off, every k2 doc verb on those files
@@ -1576,7 +1600,11 @@ One core opens as a Garden, not a file kind:
                               and closed (their history stays)
     <core>: markdown | text | any-file | board | slides | timeline | fab | blend | cad
   --json                      the daemon's JSON (on/off: the switches and the report)
-  --host <server> [--token T] another server (a Connect login with the Owner or Admin role)
+  --host <server> [--token-stdin]
+                              another server (a Connect login with the Owner or
+                              Admin role); its token on stdin (--token T still
+                              works, but every account on this computer can see
+                              it while the command runs)
 
 People turn cores on or off here (from a terminal outside K2) or in
 Settings → Cores → Multiplayer. Agents only list them: an agent that needs a
@@ -1600,7 +1628,7 @@ _doc_cores() {
         case "$1" in
             -h|--help) _doc_cores_usage; return 0 ;;
             --host|--token) rest+=("$1" "${2:-}"); shift; [ $# -gt 0 ] && shift ;;
-            --json|--host=*) rest+=("$1"); shift ;;
+            --json|--host=*|--token-stdin) rest+=("$1"); shift ;;
             -*) _doc_die usage "k2 doc cores doesn't take $1 (k2 doc cores --help)" ;;
             *) rest+=("$1"); shift ;;
         esac
@@ -1733,10 +1761,11 @@ _doc_board_call() {
     return 1
 }
 
-# k2 doc's flags that mean the same for a board: -w, --host, --token.
+# k2 doc's flags that mean the same for a board: -w, --host, --token-stdin
+# and --token.
 _doc_board() {
     local verb="$1"; shift
-    local host="" token=""
+    local host="" token="" token_stdin=0 token_flag=""
     local -a rest=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -1744,10 +1773,14 @@ _doc_board() {
             --workspace=*) rest+=(--workspace "${1#*=}"); shift ;;
             --host) [ $# -ge 2 ] || _doc_die usage "--host needs a server"; host="$2"; shift 2 ;;
             --host=*) host="${1#*=}"; shift ;;
-            --token) [ $# -ge 2 ] || _doc_die usage "--token needs a value"; token="$2"; shift 2 ;;
+            --token-stdin) token_stdin=1; shift ;;
+            --token) [ $# -ge 2 ] || _doc_die usage "--token needs a value"; token="$2"; token_flag="$1"; shift 2 ;;
             *) rest+=("$1"); shift ;;
         esac
     done
+    _doc_token_stdin "$token_stdin" "$token_flag"
+    [ "$token_stdin" = 1 ] && token="$_DOC_TOKEN"
+    _DOC_TOKEN=""
     if [ -n "$host" ]; then
         _apply_remote_host "$host" "$token" || exit 1
     fi

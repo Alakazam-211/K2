@@ -3935,7 +3935,7 @@
    },
    {
     "name": "doc cores",
-    "usage": "k2 doc cores [on|off <core>] [--json] [--host <server> [--token T]]",
+    "usage": "k2 doc cores [on|off <core>] [--json] [--host <server> [--token-stdin]]",
     "description": "List the multiplayer cores on this server and whether each is on, or turn one on or off (people only: the owner or an Admin, from a terminal outside K2). Cores: markdown, text, any-file, board, slides, timeline, fab, blend, cad. Agents only list them. Exit: 1 the flip worked but a file couldn't be written, or no answer from the daemon; 2 bad usage or an unknown core; 3 refused."
    },
    {

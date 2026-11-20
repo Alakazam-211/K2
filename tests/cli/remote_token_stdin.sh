@@ -6,7 +6,8 @@
 # processes). The --token form still works for now and prints one note on
 # stderr.
 #
-# Covered: k2 clone preview --host H --token-stdin.
+# Covered: k2 clone preview --host H --token-stdin, k2 doc cores --host H
+# --token-stdin.
 #
 # The real CLI runs against a stub server on TCP that records each request
 # (method, path, Authorization header, body). Every python3, curl and env
@@ -87,6 +88,8 @@ class H(http.server.BaseHTTPRequestHandler):
                                 "auth": self.headers.get("Authorization", ""), "body": raw}) + "\n")
         if path == "/cli/clone/preview":
             return self._answer(200, {"workspace": "ws1", "secrets": {"rows": []}, "callerCanCopySecrets": True})
+        if path == "/cli/docs/cores":
+            return self._answer(200, {"cores": [{"core": "markdown", "on": True}]})
         return self._answer(200, {"ok": True})
     do_GET = do_POST = _any
     def log_message(self, *a):
@@ -151,7 +154,8 @@ assert_off_children() {
     else
         ok "$label: the token is in no child's environment"
     fi
-    if grep -q '^python3 ' "$ARGLOG"; then ok "$label: python3 children were logged"; else bad "$label: no python3 child was logged"; fi
+    # The wrappers really ran (doc cores --json needs only curl).
+    if grep -q -e '^python3 ' -e '^curl ' "$ARGLOG"; then ok "$label: python3 or curl children were logged"; else bad "$label: no python3 or curl child was logged"; fi
 }
 
 NOTE="note: --token is visible to every account on this computer while the command runs; use --token-stdin"
@@ -184,6 +188,12 @@ token_case() {
 token_case "clone preview" /cli/clone/preview clone preview ws1 --host "$REMOTE" --json
 run_k2 "" clone --help
 case "$OUT" in *"--token-stdin                remote token on stdin"*) ok "clone help: --token-stdin is shown" ;; *) bad "clone help: no --token-stdin line" ;; esac
+
+# 2. k2 doc cores --host H (_doc_parse; the board and the any-file verbs
+#    share its token reader).
+token_case "doc cores" /cli/docs/cores doc cores --host "$REMOTE" --json
+run_k2 "" doc cores --help
+case "$OUT" in *"[--host <server> [--token-stdin]]"*) ok "doc cores help: --token-stdin is shown" ;; *) bad "doc cores help: no --token-stdin" ;; esac
 
 echo "remote_token_stdin: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

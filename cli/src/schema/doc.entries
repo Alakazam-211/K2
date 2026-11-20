@@ -10,18 +10,20 @@
         {"name": "--fence", "arg": null, "description": "Frame read output as shared, untrusted data (on in a K2 terminal)."},
         {"name": "--no-fence", "arg": null, "description": "Don't frame read output."},
         {"name": "--host", "arg": "server", "description": "Another server."},
-        {"name": "--token", "arg": "T", "description": "With --host: the token."}
+        {"name": "--token-stdin", "arg": null, "description": "With --host: read the server's token from stdin."},
+        {"name": "--token", "arg": "T", "description": "With --host: the token on the command line, where every account on this computer can see it while the command runs: use --token-stdin."}
       ]
     },
     {
       "name": "doc cores",
-      "usage": "k2 doc cores [on|off <core>] [--json] [--host <server> [--token T]]",
+      "usage": "k2 doc cores [on|off <core>] [--json] [--host <server> [--token-stdin]]",
       "description": "List the multiplayer cores on this server and whether each is on, or turn one on or off (people only: the owner or an Admin, from a terminal outside K2). Cores: markdown, text, any-file, board, slides, timeline, fab, blend, cad. Agents only list them. Exit: 1 the flip worked but a file couldn't be written, or no answer from the daemon; 2 bad usage or an unknown core; 3 refused.",
       "args": [{"name": "action", "required": false, "description": "on or off."}, {"name": "core", "required": false, "description": "markdown, text, any-file, board, slides, timeline, fab, blend or cad."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "The daemon's JSON."},
         {"name": "--host", "arg": "server", "description": "Another server (a Connect login with the Owner or Admin role)."},
-        {"name": "--token", "arg": "T", "description": "With --host: the token."}
+        {"name": "--token-stdin", "arg": null, "description": "With --host: read the server's token from stdin."},
+        {"name": "--token", "arg": "T", "description": "With --host: the token on the command line, where every account on this computer can see it while the command runs: use --token-stdin."}
       ]
     },
     {

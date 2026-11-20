@@ -72,7 +72,6 @@ EXCEPTIONS=(
     "msg-whoami-done.sh|--secret|the NAME of a vault secret"
     "sources.sh|--secret|the NAME of a vault secret"
     "postal.sh|--code|the 6-digit comparison code both sides show, not a secret"
-    "doc.sh|--token|FOLLOW-UP for K2: the remote server's token rides k2's own argv (k2 doc --host --token); needs --token-stdin"
     "connect-account.sh|--token|FOLLOW-UP for K2: the account token rides k2's own argv (k2 connect login --token); needs --token-stdin"
 )
 

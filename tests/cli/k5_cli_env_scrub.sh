@@ -133,10 +133,10 @@ PY
         bad "$label: the request's headers: $(tr '\n' ' ' <<<"$heads"), wanted fallthrough|1|$noun|disk"
     fi
 }
-# Two verbs the binary still hands to the shell (heartbeat, preset and ci
-# status are native now): ci provenance's curl and clone's engine, a
-# python3 urlopen client.
-run "ci provenance (curl)" /cli/ci/provenance ci curl ci provenance r1 --out "$WORK/prov" --json
+# Two lines the binary hands to the shell: ci provenance with a word that
+# is not UTF-8 (every family hands such a line over; ci is native now), for
+# the shell's curl, and clone's engine, a python3 urlopen client.
+run "ci provenance (curl)" /cli/ci/provenance ci curl ci provenance r1 --out "$WORK/prov-$(printf '\377')" --json
 run "clone preview (python3 urlopen)" /cli/clone/preview clone python3 clone preview w --json
 
 echo

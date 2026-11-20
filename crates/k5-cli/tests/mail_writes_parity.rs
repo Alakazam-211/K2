@@ -16,10 +16,10 @@
 //!   (no handler ran).
 //! - Help never acts: each verb with `-h` or `--help` anywhere prints its
 //!   help and sends nothing.
-//! - A body above 128 KiB: the shell hands `M_BODY` to its Python in the
-//!   environment, which Linux refuses for one string past 128 KiB (exit
-//!   126, nothing sent); the binary sends it ([`a_large_body`]): the named
-//!   difference `mail-body-large`.
+//! - A body above 128 KiB (from `--body-file`): the shell hands `M_BODY` to
+//!   its Python in the environment, which Linux refuses for one string
+//!   past 128 KiB (exit 126, nothing sent); the binary sends it
+//!   ([`a_large_body`]): the named difference `mail-body-large`.
 
 #![cfg(unix)]
 
@@ -489,29 +489,41 @@ fn help_never_acts() {
     }
 }
 
-/// A body of 200 KiB. The shell hands it to its Python in `M_BODY=`, an
-/// environment string, which Linux refuses past 128 KiB: `python3` never
-/// starts (exit 126, `Argument list too long`) and nothing is sent. The
-/// binary sends it once and prints the answer. Elsewhere (macOS: one
-/// limit for the whole environment) both send it. The named difference
-/// `mail-body-large`, for K2's sign-off.
+/// A body of 200 KiB, from `--body-file` (an argument that long can't
+/// start either side: Linux refuses one argv string past 128 KiB).
+fn big_body() -> String {
+    "é and some words of the body ".repeat(7000)
+}
+
+/// `big.txt` in the workspace, and the owner and port.
+fn big_file(r: &Rig) {
+    owner_and_port(r);
+    std::fs::write(r.proj.join("big.txt"), big_body()).unwrap();
+}
+
+/// The shell reads the file into `M_BODY`, an environment string, which
+/// Linux refuses past 128 KiB: `python3` never starts (exit 126,
+/// `Argument list too long`) and nothing is sent. The binary sends it
+/// once and prints the answer. Elsewhere (macOS: one limit for the whole
+/// environment) both send it. The named difference `mail-body-large`, for
+/// K2's sign-off.
 #[test]
 fn a_large_body() {
     let rig = Rig::new(VERB, "large");
-    let big: &'static str = Box::leak("é and some words of the body ".repeat(7000).into_boxed_str());
+    let big = big_body();
     assert!(big.len() > 200 * 1024, "{} bytes", big.len());
-    let args: &'static [&'static str] = Box::leak(Box::new([
-        "send", "a@x.example", "--subject", "S", "--body", big,
-    ]));
-    let c = case(
-        "a large body",
-        args,
-        &[],
-        vec![ok(r#"{"ok":true,"queued":true,"id":"out_9"}"#)],
-        owner_and_port,
-        0,
-        1,
-    );
+    let c = Case {
+        setup: big_file,
+        ..case(
+            "a large body",
+            &["send", "a@x.example", "--subject", "S", "--body-file", "big.txt"],
+            &[],
+            vec![ok(r#"{"ok":true,"queued":true,"id":"out_9"}"#)],
+            owner_and_port,
+            0,
+            1,
+        )
+    };
     let (out, log) = rig.binary(&c, false);
     assert_eq!(log.len(), 1, "one request");
     assert!(log[0].contains(&big[..1000]), "the body went out");

@@ -69,6 +69,9 @@ pub struct VCase {
     /// Values no child of the binary may see on argv or in its
     /// environment.
     pub secrets: Vec<&'static str>,
+    /// The binary hands this line to the shell, so with no `python3` it
+    /// prints the missing-Python line instead: that side isn't run.
+    pub handed: bool,
 }
 
 impl VCase {
@@ -87,6 +90,7 @@ impl VCase {
             vault_requests: 0,
             compare: VCompare::Exact,
             secrets: Vec::new(),
+            handed: false,
         }
     }
 }
@@ -298,7 +302,8 @@ impl VRig {
             "{}: bash's requests: {bash:#?}",
             c.name
         );
-        for no_python3 in [false, true] {
+        let sides: &[bool] = if c.handed { &[false] } else { &[false, true] };
+        for &no_python3 in sides {
             let rust = self.run(false, no_python3, c);
             let side = if no_python3 {
                 "rust with no python3"

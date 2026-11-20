@@ -63,3 +63,71 @@ fn a_traceback_compares_by_its_shape() {
     assert_eq!(traceback_shape(a), traceback_shape(b));
     assert_eq!(traceback_shape(a), "x\n<traceback>\nKeyError\ny\n");
 }
+
+/// Help never acts (K2's rule): `-h` or `--help` anywhere on the line of
+/// a verb that changes something prints help and sends nothing, on both
+/// sides (the binary hands these lines to the shell).
+///
+/// A bash bug this row set leaves out, reported: `k2 vault fetch URL
+/// --secret A --json --help` reads `--help` as `--json`'s body and sends
+/// the fetch (`cli/src/vault.sh`, `_vault_fetch`'s `--json` and `-d`
+/// arms); `-H`, `-o`, `-X` and `--dst` take it as their value too.
+#[test]
+fn help_never_acts() {
+    let rig = VRig::new();
+    for args in [
+        &["set", "API", "--help"][..],
+        &["set", "-h", "API", "--for", "a.com"],
+        &["rotate", "API", "-h"],
+        &["hosts", "API", "--add", "a", "--help"],
+        &["sign", "API", "ovh", "-h"],
+        &["delivery", "API", "env", "--help"],
+        &["agent-limit", "API", "--burst", "5", "-h"],
+        &["grant", "API", "--to", "ws:a", "--help"],
+        &["revoke", "--grant", "g1", "-h"],
+        &["open", "--help"],
+        &["disable", "API", "-h"],
+        &["enable", "API", "--help"],
+        &["destroy", "API", "--yes", "--help"],
+        &["get", "API", "-h"],
+        &["file", "API", "--help"],
+        &["env-file", "A", "-h"],
+        &["proxy-url", "API", "--help"],
+        &["sync", "-h"],
+        &["placement", "add", "API", "--where", "h:/x", "--help"],
+        &["placement", "rm", "p1", "-h"],
+        &["send", "API", "--to", "bob", "--help"],
+        &["incoming", "accept", "d1", "-h"],
+        &["unsend", "d1", "--help"],
+        &["ask", "bob", "API", "-h"],
+        &["accept-from", "add", "bob", "--workspace", "w", "--help"],
+        &[
+            "send-allow",
+            "remove",
+            "A",
+            "--to",
+            "b",
+            "--workspace",
+            "w",
+            "-h",
+        ],
+        &["reveal", "API", "--help"],
+        &["recovery", "rotate", "-h"],
+        &["confirm-password", "set", "--help"],
+        &["kek", "rotate", "-h"],
+        &["rekey", "--help"],
+        &["rollback", "API", "--to", "1", "-h"],
+        &["backup", "/tmp", "--help"],
+        &["restore", "--from", "/tmp", "-h"],
+        &["carry", "export", "--help"],
+        &["import", ".env", "-h"],
+        &["service", "web", "clean", "--help"],
+        &["systemd-cred", "API", "--unit", "u", "-h"],
+        &["fetch", "-h"],
+        &["run", "--help"],
+    ] {
+        let mut c = VCase::new("help", args);
+        c.handed = true;
+        rig.check(&c);
+    }
+}

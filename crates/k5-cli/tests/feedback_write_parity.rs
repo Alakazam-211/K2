@@ -1083,14 +1083,20 @@ fn assign() {
             0,
             1,
         ),
-        case(
-            "cleared",
-            &["assign", "fb_0123", "--clear", "ada"],
-            &[],
-            vec![ok(r#"{"ok":true,"id":"fb_0123456789","assignees":[]}"#)],
-            files,
-            0,
-            1,
+        // macOS's bash 3.2 writes users[@]'s unbound-variable line here
+        // until the shell's fix lands (`bash32-empty-array`).
+        bash32_empty_array(
+            case(
+                "cleared",
+                &["assign", "fb_0123", "--clear", "ada"],
+                &[],
+                vec![ok(r#"{"ok":true,"id":"fb_0123456789","assignees":[]}"#)],
+                files,
+                0,
+                1,
+            ),
+            &["users"],
+            None,
         ),
         case(
             "an empty name counts as one",

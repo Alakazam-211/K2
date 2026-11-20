@@ -213,6 +213,35 @@ pub enum Compare {
     MktempName,
 }
 
+/// `scripts/cli-parity.sh`'s named difference `bash32-empty-array`, for
+/// K2 to rule on: bash before 4.4 (macOS's `/bin/bash` 3.2) takes
+/// `"${arr[@]}"` of an empty array for an unbound variable under `set -u`.
+/// There bash writes one line, `<cli/k2>: line <n>: <array>[@]: unbound
+/// variable`, naming one of `arrays`. With `stops`, bash ends there with
+/// that exit after that many requests (the binary's first ones) and
+/// nothing on stdout, and the binary is held to the row's own exit and
+/// requests; without, that line is bash's only difference. With bash 4.4
+/// or newer the row compares as it says. The shell's fix (the file's own
+/// `${arr[@]+"${arr[@]}"}`) makes bash 3.2 answer as the binary does: the
+/// row then fails, saying the mark goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmptyArray {
+    pub arrays: &'static [&'static str],
+    pub stops: Option<(i32, usize)>,
+}
+
+/// `c` marked [`EmptyArray`].
+pub fn bash32_empty_array(
+    c: Case,
+    arrays: &'static [&'static str],
+    stops: Option<(i32, usize)>,
+) -> Case {
+    Case {
+        bash32_empty_array: Some(EmptyArray { arrays, stops }),
+        ..c
+    }
+}
+
 /// Each `k2-update.` followed by six letters or digits (the random part
 /// `mktemp k2-update.XXXXXX` fills in), with those six as `XXXXXX`.
 pub fn mask_temp_names(text: &str) -> String {
@@ -268,6 +297,8 @@ pub struct Case {
     /// How long each side may run before the row fails as hung
     /// ([`DEADLINE`] when `None`).
     pub deadline: Option<Duration>,
+    /// bash 3.2 fails on an empty array here ([`EmptyArray`]).
+    pub bash32_empty_array: Option<EmptyArray>,
 }
 
 /// How long one side of a row may run: a side still running then is
@@ -731,6 +762,9 @@ impl Rig {
         let mut logs = Vec::new();
         let mut tools = Vec::new();
         let mut handed = false;
+        let empty_array = c
+            .bash32_empty_array
+            .filter(|_| bash_version() < (4, 4));
         for bash in [true, false] {
             let side = Side::of(bash, None);
             self.prepare(side, c);
@@ -739,12 +773,15 @@ impl Rig {
             if !bash {
                 handed = self.handed_off();
             }
-            assert_eq!(
-                self.stub().left(),
-                0,
-                "{name}: {} left answers unused: {out:?}",
-                side.name()
-            );
+            // bash 3.2 stopping at an empty array leaves the rest unread.
+            if !(bash && empty_array.is_some_and(|m| m.stops.is_some())) {
+                assert_eq!(
+                    self.stub().left(),
+                    0,
+                    "{name}: {} left answers unused: {out:?}",
+                    side.name()
+                );
+            }
             let native = !bash && c.compare != Compare::Shell;
             logs.push(
                 self.read(side, native, name)
@@ -754,7 +791,7 @@ impl Rig {
             );
             outs.push(out);
         }
-        let (b, r) = (&outs[0], &outs[1]);
+        let (mut b, r) = (outs[0].clone(), &outs[1]);
         let (mut bl, rl) = (logs[0].clone(), logs[1].clone());
         assert_eq!(
             tools[1], tools[0],
@@ -765,6 +802,31 @@ impl Rig {
             "== {name}\n{}\n-- bash: {b:?}\n-- rust: {r:?}",
             bl.join("\n----\n").replace('\r', "")
         );
+        if let Some(m) = empty_array {
+            let rest = without_unbound_line(name, &b.stderr, m.arrays);
+            if let Some((code, n)) = m.stops {
+                assert_eq!(
+                    (b.code, b.signal, b.stdout.as_str(), rest.as_str()),
+                    (Some(code), None, "", ""),
+                    "{name}: bash {:?} at the empty array: {b:?}",
+                    bash_version()
+                );
+                assert!(
+                    bl.len() == n && rl.len() >= n && bl[..] == rl[..n],
+                    "{name}: bash's {} requests before the empty array, want the binary's first {n}\n== rust ==\n{}\n== bash ==\n{}",
+                    bl.len(),
+                    rl.join("\n----\n"),
+                    bl.join("\n----\n")
+                );
+                assert_eq!(
+                    (r.code, rl.len()),
+                    (Some(c.code), c.requests),
+                    "{name}: the binary's exit and requests: {r:?}"
+                );
+                return (r.clone(), rl, handed, rt);
+            }
+            b.stderr = rest;
+        }
         let bash_3_2_pipe = match c.compare {
             Compare::Bash32PipeReader { stdout, stderr }
                 if cfg!(target_os = "macos") && b.signal.is_none() =>
@@ -910,21 +972,57 @@ impl Rig {
 /// `<script>: line <n>`.
 const NUL_WARNING: &str = ": warning: command substitution: ignored null byte in input\n";
 
+/// `stderr` without its one line `<cli/k2>: line <n>: <array>[@]: unbound
+/// variable` naming one of `arrays` ([`EmptyArray`]).
+fn without_unbound_line(name: &str, stderr: &str, arrays: &[&str]) -> String {
+    let head = format!("{}: line ", cli_k2().display());
+    let unbound = |l: &str| {
+        l.strip_prefix(&head)
+            .and_then(|after| after.split_once(": "))
+            .is_some_and(|(n, what)| {
+                !n.is_empty()
+                    && n.bytes().all(|b| b.is_ascii_digit())
+                    && arrays
+                        .iter()
+                        .any(|a| what == format!("{a}[@]: unbound variable\n"))
+            })
+    };
+    let (lines, rest): (Vec<&str>, Vec<&str>) =
+        stderr.split_inclusive('\n').partition(|l| unbound(l));
+    assert_eq!(
+        lines.len(),
+        1,
+        "{name}: bash {:?} wrote {} lines naming {arrays:?} as an unbound variable, want 1 \
+         (none: the shell's fix has landed, so the bash32-empty-array mark goes): {stderr:?}",
+        bash_version(),
+        lines.len()
+    );
+    rest.concat()
+}
+
+/// The `bash` the rig runs: its major and minor version.
+fn bash_version() -> (u32, u32) {
+    static V: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        let o = Command::new("bash")
+            .args(["-c", "echo \"${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}\""])
+            .output()
+            .expect("run bash");
+        assert!(o.status.success(), "bash's version: {o:?}");
+        let text = String::from_utf8(o.stdout).expect("bash's version is UTF-8");
+        let v: Vec<u32> = text
+            .split_whitespace()
+            .map(|n| n.parse().expect("a number in bash's version"))
+            .collect();
+        assert_eq!(v.len(), 2, "bash's version: {text:?}");
+        (v[0], v[1])
+    })
+}
+
 /// Whether the `bash` the rig runs warns when `$(…)` drops a NUL byte:
 /// from 4.4 on.
 fn bash_warns_on_nul() -> bool {
-    let o = Command::new("bash")
-        .args(["-c", "echo \"${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}\""])
-        .output()
-        .expect("run bash");
-    assert!(o.status.success(), "bash's version: {o:?}");
-    let text = String::from_utf8(o.stdout).expect("bash's version is UTF-8");
-    let v: Vec<u32> = text
-        .split_whitespace()
-        .map(|n| n.parse().expect("a number in bash's version"))
-        .collect();
-    assert_eq!(v.len(), 2, "bash's version: {text:?}");
-    (v[0], v[1]) >= (4, 4)
+    bash_version() >= (4, 4)
 }
 
 /// `from`'s files and folders copied into `to` (made first).
@@ -1188,6 +1286,7 @@ pub fn case(
         no_python3: NoPython3::AsWith,
         stdin: None,
         deadline: None,
+        bash32_empty_array: None,
     }
 }
 

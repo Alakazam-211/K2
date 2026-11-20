@@ -59,6 +59,12 @@ fn traceback(c: Case) -> Case {
     }
 }
 
+/// A send with an empty list: macOS's bash 3.2 stops at it (exit 2,
+/// nothing sent) until the shell's fix lands (`bash32-empty-array`).
+fn empty_list(c: Case, arrays: &'static [&'static str]) -> Case {
+    bash32_empty_array(c, arrays, Some((2, 0)))
+}
+
 fn refused(name: &'static str, args: &'static [&'static str]) -> Case {
     case(
         name,
@@ -466,17 +472,23 @@ fn push_writes_answer_as_the_shell_does() {
             0,
             1,
         ),
-        one(
-            "push send to a room",
-            &["push", "send", "acme", "--room", "lobby"],
-            r#"{"queued":0}"#,
-            0,
+        empty_list(
+            one(
+                "push send to a room",
+                &["push", "send", "acme", "--room", "lobby"],
+                r#"{"queued":0}"#,
+                0,
+            ),
+            &["tos"],
         ),
-        one(
-            "push test",
-            &["push", "test", "acme", "--to", "ann", "--title", "dropped"],
-            sent,
-            0,
+        empty_list(
+            one(
+                "push test",
+                &["push", "test", "acme", "--to", "ann", "--title", "dropped"],
+                sent,
+                0,
+            ),
+            &["datas"],
         ),
         stop("push send: no one", &["push", "send", "acme"], 2),
         stop(
@@ -484,10 +496,13 @@ fn push_writes_answer_as_the_shell_does() {
             &["push", "send", "acme", "--to", "a", "--room", "r"],
             2,
         ),
-        stop(
-            "push send: a badge that isn't a number",
-            &["push", "send", "acme", "--to", "a", "--badge", "x"],
-            2,
+        empty_list(
+            stop(
+                "push send: a badge that isn't a number",
+                &["push", "send", "acme", "--to", "a", "--badge", "x"],
+                2,
+            ),
+            &["datas"],
         ),
         stop(
             "push send: data without =",
@@ -507,12 +522,15 @@ fn push_writes_answer_as_the_shell_does() {
             2,
         ),
         refused("push on: a refusal", &["push", "on", "acme"]),
-        traceback(one(
-            "push send: skips that are a list",
-            &["push", "send", "acme", "--to", "a"],
-            r#"{"skipped":[1]}"#,
-            1,
-        )),
+        empty_list(
+            traceback(one(
+                "push send: skips that are a list",
+                &["push", "send", "acme", "--to", "a"],
+                r#"{"skipped":[1]}"#,
+                1,
+            )),
+            &["datas"],
+        ),
     ];
     // `push devices rm acme -h`: the shell takes -h as the device id and
     // sends the remove (a bash bug; the row flips when the fix lands).
@@ -606,24 +624,27 @@ fn email_writes_answer_as_the_shell_does() {
             2,
             1,
         ),
-        case(
-            "email send, a text file",
-            &[
-                "email",
-                "send",
-                "acme",
-                "--to",
-                "a@acme.example",
-                "--subject",
-                "S",
-                "--text-file",
-                "body.txt",
-            ],
-            &[],
-            vec![ok(r#"{"id":"em_2","status":"queued","recipients":2}"#)],
-            text_file,
-            0,
-            1,
+        empty_list(
+            case(
+                "email send, a text file",
+                &[
+                    "email",
+                    "send",
+                    "acme",
+                    "--to",
+                    "a@acme.example",
+                    "--subject",
+                    "S",
+                    "--text-file",
+                    "body.txt",
+                ],
+                &[],
+                vec![ok(r#"{"id":"em_2","status":"queued","recipients":2}"#)],
+                text_file,
+                0,
+                1,
+            ),
+            &["ccs"],
         ),
         stop("email on: no sender", &["email", "on", "acme"], 2),
         stop(
@@ -642,22 +663,25 @@ fn email_writes_answer_as_the_shell_does() {
             &["email", "send", "acme", "--to", "a", "--subject", "s"],
             2,
         ),
-        stop(
-            "email send: a header without =",
-            &[
-                "email",
-                "send",
-                "acme",
-                "--to",
-                "a",
-                "--subject",
-                "s",
-                "--text",
-                "t",
-                "--header",
-                "X",
-            ],
-            2,
+        empty_list(
+            stop(
+                "email send: a header without =",
+                &[
+                    "email",
+                    "send",
+                    "acme",
+                    "--to",
+                    "a",
+                    "--subject",
+                    "s",
+                    "--text",
+                    "t",
+                    "--header",
+                    "X",
+                ],
+                2,
+            ),
+            &["ccs"],
         ),
         stop(
             "email send: a file that isn't there",

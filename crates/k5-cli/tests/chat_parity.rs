@@ -562,6 +562,16 @@ fn chat_words_as_the_shell_reads_them() {
             0,
         ),
         shell(bad("an unknown verb", &["nope"])),
+        bad("--json and no verb", &["--json"]),
+        case(
+            "--json and no verb, with no port: the gate",
+            &["--json"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
         bad("an unknown flag, as it is", &["spaces", "--x\"y\u{e9}"]),
         bad("--as", &["send", "s/c", "x", "--as", "ann"]),
         bad(

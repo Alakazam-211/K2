@@ -1179,6 +1179,36 @@ fn the_writes() {
             0,
             1,
         ),
+        // covers: setup show --json
+        case(
+            "show --json",
+            &["show", "--json"],
+            &[],
+            vec![text(STATUS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: setup dismiss-offer --json
+        case(
+            "--json dismiss-offer",
+            &["--json", "dismiss-offer"],
+            &[],
+            vec![text(STATUS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: setup kessel --json
+        case(
+            "kessel --json with a flag",
+            &["kessel", "--json", "--name", "Kes"],
+            &[],
+            vec![text(STATUS)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: setup skip --json
         case(
             "--json skip",

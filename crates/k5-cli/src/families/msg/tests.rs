@@ -761,3 +761,60 @@ fn the_local_clock_writes_a_zone() {
     assert!(t.len() > "1970-01-01 00:00:00 ".len(), "{t}");
     assert!(t[..4].bytes().all(|b| b.is_ascii_digit()), "{t}");
 }
+
+/// Every name a line prints is the brand's: a `K2_BRAND_DIR=brand/xy`
+/// build says `xy` and `XY`, and no line says k2, k5 or K2.
+#[test]
+fn the_lines_name_the_brand() {
+    use super::postal;
+    let cli = CLI_NAME;
+    let product = PRODUCT_NAME;
+    let stop = |w: &[&str]| match parse(w) {
+        Parsed::Stop(text, _) => text,
+        other => panic!("{other:?}"),
+    };
+    let lines: Vec<String> = vec![
+        send::BARE_INBOX.to_string(),
+        send::AGENT_RETIRED.to_string(),
+        send::SESSION_USAGE.to_string(),
+        send::SESSION_ONE_WORD.to_string(),
+        send::SESSION_SECRET.to_string(),
+        send::no_target(),
+        send::no_text(),
+        send::unknown_flag("-x"),
+        send::wire_form("a::b::c"),
+        send::summary_hint(&"x".repeat(601), "").unwrap(),
+        send_once::once_line("/e", 3),
+        send_once::tries_line("/e", 3, 2, "kkkkkkkk"),
+        send_once::replay_note(br#"{"replayed":true}"#).unwrap(),
+        postal::k2_only("--from", "a::b.postal.bot"),
+        postal::unknown_flag("-x"),
+        postal::usage("a::b.postal.bot"),
+        postal::reader(
+            br#"{"status":"delivered","to":"a::b.postal.bot","badge":"B","deliveryId":"m_1"}"#,
+            false,
+        )
+        .stdout,
+        who::no_id(),
+        verify::parse(&["--text"], &mut NoStdin).unwrap_err().0,
+        verify::parse(&["a", "b"], &mut NoStdin).unwrap_err().0,
+        stop(&["ws", "hi", "--agent", "x"]),
+        stop(&["ws"]),
+    ];
+    for line in &lines {
+        let named = line.contains(&format!("{cli} ")) || line.contains(product);
+        assert!(named, "names neither {cli} nor {product}: {line:?}");
+    }
+    assert!(send::BARE_INBOX.contains(&format!("  {cli} msg <workspace> --inbox-wake ")));
+    assert!(send::no_target().contains(&format!("Usage: {cli} msg <workspace> ")));
+    assert!(send::summary_hint(&"x".repeat(601), "")
+        .unwrap()
+        .contains(&format!("({product} uses its first line otherwise)")));
+    if cli != "k2" {
+        for line in &lines {
+            for name in ["k2 ", "k5 ", "'k2", "K2", "K5"] {
+                assert!(!line.contains(name), "{name:?} in {line:?}");
+            }
+        }
+    }
+}

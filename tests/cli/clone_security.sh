@@ -15,7 +15,8 @@
 #   address as written (127.0.0.0/8, ::1, localhost); a refused host gets
 #   no request and no name lookup; a password never goes over plain http;
 #   this computer's confirm goes through the vault socket only (none: no
-#   prompt, no TCP).
+#   prompt, no TCP); a password is read from a real terminal only, with
+#   echo off (no controlling terminal: confirm_needs_a_person, never stdin).
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -302,6 +303,12 @@ no_contact() {
     expect_eq "$1: the vault socket got nothing" "$(paths vault)" ""
     expect_eq "$1: no name lookup or connect" "$(cat "$W/audit.log")" ""
 }
+# body NAME PATH: the bodies the stub NAME got on PATH.
+body() { [ -f "$W/log-$1.jsonl" ] || return 0; "$PY" -c '
+import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l)
+    if r["path"] == sys.argv[2]: print(r["body"])' "$W/log-$1.jsonl" "$2"; }
 refused_line() { printf "refused: %s isn't https, so k2 won't send your token or password there; use https://%s" "$1" "$1"; }
 printf '%s\n' "$REMOTE_TOKEN" >"$W/token-in"
 save_token() {
@@ -384,6 +391,24 @@ expect_eq "approve with no vault socket: exit 3" "$RC" "3"
 expect_has "approve with no vault socket: vault_unreachable" "$ERR" '"error": "vault_unreachable"'
 expect_not "approve: no confirm over TCP" "$(paths local)" "confirm"
 expect_not "approve: nothing approved" "$(paths local)" "/cli/clone-proposal/approve"
+
+echo "== a password comes from a real terminal only, echo off =="
+fresh
+save_token "$REMOTE" "$REMOTE_TOKEN"
+k2pty noctty '[]' clone to "$REMOTE" ws1 --copy API_KEY --json
+expect_eq "no controlling terminal: exit 3" "$RC" "3"
+expect_has "no controlling terminal: confirm_needs_a_person" "$ERR" '"error": "confirm_needs_a_person"'
+expect_not "no controlling terminal: no fallback warning" "$ERR" "Warning"
+expect_not "no controlling terminal: no traceback" "$ERR" "Traceback"
+expect_not "no controlling terminal: no confirm finished" "$(paths vault)" "confirm/finish"
+expect_not "no controlling terminal: nothing bundled" "$(paths local)" "/cli/clone/bundle"
+fresh
+save_token "$REMOTE" "$REMOTE_TOKEN"
+k2pty ctty '[["Vault password", "pw-CLONESEC-typed\n"]]' clone to "$REMOTE" ws1 --copy API_KEY --json
+expect_eq "at a terminal: the push finishes" "$RC" "0"
+expect_has "at a terminal: the typed password reached the vault socket" "$(body vault /cli/vault/confirm/finish)" "pw-CLONESEC-typed"
+expect_not "at a terminal: the password was not echoed" "$TTY" "pw-CLONESEC-typed"
+expect_eq "at a terminal: echo is on again after" "$ECHO" "on"
 
 echo
 echo "clone_security: $pass passed, $fail failed"

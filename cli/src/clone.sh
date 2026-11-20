@@ -91,9 +91,9 @@ if line:
 _clone_py() {
     { _k2_stdin_secrets K2C_REMOTE_TOKEN "${K2C_REMOTE_TOKEN:-}" K2C_LOCAL_TOKEN "$TOKEN"; cat; } <<'PY' | \
     K2C_LOCAL_URL="$BASE_URL" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" _CLONE_URL_RULE="$_CLONE_URL_RULE" \
-    K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && [ -r /dev/tty ] && echo 1 || echo 0)" \
+    K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && echo 1 || echo 0)" \
     _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 -c "$_K2_PY_STDIN_BOOT" "$@"
-import base64, getpass, http.client, json, os, socket, stat, sys, time, uuid
+import base64, http.client, json, os, socket, stat, sys, termios, time, uuid
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
@@ -105,7 +105,27 @@ REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), K2_STDIN_SECRETS.get("
 OPTS = json.loads(os.environ.get("K2C_OPTS") or "{}")
 K2_HOME = os.environ["K2C_K2_HOME"]
 VSOCK = os.environ.get("K2C_VAULT_SOCK", "")
-TTY = os.environ.get("K2C_TTY") == "1" and not OPTS.get("yes")
+
+
+def open_tty():
+    """This person's terminal, opened for real, or None. A process with no
+    controlling terminal can't open /dev/tty even when the file is
+    readable, so a readable /dev/tty says nothing."""
+    try:
+        return os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return None
+
+
+def has_tty():
+    fd = open_tty()
+    if fd is None:
+        return False
+    os.close(fd)
+    return True
+
+
+TTY = os.environ.get("K2C_TTY") == "1" and not OPTS.get("yes") and has_tty()
 JSON_OUT = bool(OPTS.get("json"))
 CHUNK = 8 * 1024 * 1024
 
@@ -199,10 +219,37 @@ def vault_sock(route, body):
     return v
 
 
+NEEDS_A_PERSON = "this needs your confirm: run it from a terminal (not --yes, not a pipe)"
+
+
 def password(prompt):
-    if not TTY:
-        raise Fail("confirm_needs_a_person", "this needs your confirm: run it from a terminal (not --yes, not a pipe)", 3)
-    return getpass.getpass(prompt)
+    """A password typed at this person's terminal with echo off. Only the
+    terminal: never stdin, never with echo on."""
+    fd = open_tty() if TTY else None
+    if fd is None:
+        raise Fail("confirm_needs_a_person", NEEDS_A_PERSON, 3)
+    try:
+        try:
+            old = termios.tcgetattr(fd)
+        except termios.error:
+            raise Fail("confirm_needs_a_person", NEEDS_A_PERSON, 3)
+        quiet = list(old)
+        quiet[3] &= ~termios.ECHO
+        termios.tcsetattr(fd, termios.TCSAFLUSH, quiet)
+        try:
+            os.write(fd, prompt.encode())
+            typed = b""
+            while not typed.endswith(b"\n"):
+                more = os.read(fd, 1024)
+                if not more:
+                    raise KeyboardInterrupt  # Ctrl-D: stopped
+                typed += more
+        finally:
+            termios.tcsetattr(fd, termios.TCSAFLUSH, old)
+            os.write(fd, b"\n")
+    finally:
+        os.close(fd)
+    return typed[:-1].decode("utf-8", "replace")
 
 
 def need_vault_sock():

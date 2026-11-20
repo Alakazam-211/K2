@@ -583,3 +583,46 @@ fn install_catalog_answers_as_the_shell_does() {
         )
     });
 }
+
+/// `install --catalog`'s lines name the command by the brand's name (in a
+/// build with `K2_BRAND_DIR=brand/xy` they say `xy`), never a typed `k2`
+/// or `k5`; the variant's `k2` is a wire value and stays.
+#[test]
+fn install_catalog_lines_say_the_brand_s_name() {
+    let rig = Rig::new(VERB, "catbrand");
+    let cli = k2_client::brand::CLI_NAME;
+    for (args, want) in [
+        (
+            &["install", "--catalog="][..],
+            format!("usage: {cli} app install --catalog <entry> [--address LABEL|auto] [--dry-run] (entries: {cli} app catalog)\n"),
+        ),
+        (
+            &["install", "--catalog", "x", "a", "b"],
+            format!("usage: {cli} app install --catalog <entry> [--id ID] [--address LABEL|auto] ({cli} app catalog --help)\n"),
+        ),
+        (
+            &["install", "--catalog", "x", "--zap"],
+            format!("Unknown flag: --zap ({cli} app catalog --help)\n"),
+        ),
+        (
+            &["install", "--catalog", "x", "--variant", "y"],
+            "--variant is k2 or standalone\n".to_string(),
+        ),
+    ] {
+        let c = stop("brand", args, 2);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(2), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
+    }
+    let c = read(
+        "brand: started",
+        &["install", "--catalog", "x", "--no-wait"],
+        r#"{"job":{"id":"cj-1"}}"#,
+    );
+    let (out, _) = rig.binary(&c, false);
+    assert_eq!(
+        out.stdout,
+        format!("Started job cj-1 (it runs in the daemon). Follow it: {cli} app catalog job cj-1\n")
+    );
+}

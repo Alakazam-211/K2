@@ -96,6 +96,16 @@ pub fn client_home(
     args: &[OsString],
     hook_sock: Option<&Path>,
 ) -> Option<Result<(Client, PathBuf), Exit>> {
+    client_for(args, hook_sock, TOOL)
+}
+
+/// [`client_home`] for the policy's tool `tool` (`thread` shares the
+/// steps, and `talk`).
+pub fn client_for(
+    args: &[OsString],
+    hook_sock: Option<&Path>,
+    tool: &str,
+) -> Option<Result<(Client, PathBuf), Exit>> {
     let mut settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {
@@ -109,7 +119,7 @@ pub fn client_home(
     let port = settings.port_text.as_deref().and_then(curl_port)?;
     let post_max_time = post_max_time(std::env::var_os(POST_MAX_TIME).as_deref())?;
     let would_refuse = passport::current(args).would_refuse();
-    if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
+    if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, tool) {
         return Some(Err(stop));
     }
     settings.port = Some(port);

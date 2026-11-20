@@ -165,6 +165,7 @@ expect_has() {
 fresh() {
     : >"$ARGLOG"; : >"$ENVLOG"; : >"$REQLOG"; : >"$W/kc-deletes.log"
     rm -f "$W"/kc-security/* "$W"/kc-secret-tool/* "$HOME/.k2/connect-tokens.json" "$HOME/.k2/connect-hosts.json"
+    rm -rf "$HOME/.k2so"
     printf '200' >"$W/mode"
 }
 
@@ -189,6 +190,20 @@ save_kc() { printf '%s' "$3" >"$W/kc-$1/$2@@host-1"; }
 # json_value HOST: the connect-tokens.json value for HOST, or <none>.
 json_value() {
     "$REAL_PY" - "$HOME/.k2/connect-tokens.json" "$1" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get(sys.argv[2], "<none>"))
+PY
+}
+# save_old_json HOST TOKEN: the old .k2so home's connect-tokens.json.
+save_old_json() {
+    mkdir -p "$HOME/.k2so"
+    "$REAL_PY" - "$HOME/.k2so/connect-tokens.json" "$1" "$2" <<'PY'
+import json, sys
+json.dump({sys.argv[2]: sys.argv[3], "other.k2.dev": "k2rt_OTHER_OLD_TOKEN"}, open(sys.argv[1], "w"))
+PY
+}
+old_json_value() {
+    "$REAL_PY" - "$HOME/.k2so/connect-tokens.json" "$1" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1])).get(sys.argv[2], "<none>"))
 PY
@@ -308,6 +323,41 @@ expect_eq "env: exit 0" "$RC" "0"
 assert_sent "env" "$T"
 assert_private "env" "$T" argv-only
 expect_eq "env: the different saved token stays" "$(json_value "$REMOTE")" "$KEEP"
+
+echo "== the old .k2so home's connect-tokens.json =="
+fresh
+T=k2rt_LOGOUT_OLDHOME_token_H
+save_host "$REMOTE"; save_old_json "$REMOTE" "$T"
+run_k2 "" remote logout --host "$REMOTE"
+expect_eq "old home: exit 0" "$RC" "0"
+expect_has "old home: says what it removed" "$OUT" "removed the saved token: the old .k2so connect-tokens.json"
+assert_sent "old home" "$T"
+assert_private "old home" "$T"
+expect_eq "old home: the old entry is gone" "$(old_json_value "$REMOTE")" "<none>"
+expect_eq "old home: another host's old entry stays" "$(old_json_value other.k2.dev)" "k2rt_OTHER_OLD_TOKEN"
+expect_eq "old home: the old file stays 0600" "$("$REAL_PY" -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$HOME/.k2so/connect-tokens.json")" "0o600"
+
+echo "== both homes: only the copy that matches goes =="
+fresh
+T=k2rt_LOGOUT_BOTHHOMES_token_I
+KEEP=k2rt_LOGOUT_BOTHHOMES_KEPT_I2
+save_json "$REMOTE" "$T"; save_old_json "$REMOTE" "$KEEP"
+run_k2 "" remote logout --host "$REMOTE"
+expect_eq "both homes: exit 0" "$RC" "0"
+expect_has "both homes: removed this home's copy" "$OUT" "removed the saved token: connect-tokens.json"
+assert_sent "both homes" "$T"
+expect_eq "both homes: this home's entry is gone" "$(json_value "$REMOTE")" "<none>"
+expect_eq "both homes: the old home's different token stays" "$(old_json_value "$REMOTE")" "$KEEP"
+
+echo "== both homes, the same token: both copies go =="
+fresh
+T=k2rt_LOGOUT_BOTHSAME_token_J
+save_json "$REMOTE" "$T"; save_old_json "$REMOTE" "$T"
+run_k2 "" remote logout --host "$REMOTE"
+expect_eq "both same: exit 0" "$RC" "0"
+expect_has "both same: names both files" "$OUT" "removed the saved token: connect-tokens.json, the old .k2so connect-tokens.json"
+expect_eq "both same: this home's entry is gone" "$(json_value "$REMOTE")" "<none>"
+expect_eq "both same: the old home's entry is gone" "$(old_json_value "$REMOTE")" "<none>"
 
 echo "== a refusal keeps everything =="
 fresh

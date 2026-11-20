@@ -9,7 +9,8 @@
 #
 # After H answers 2xx, every saved copy of THAT token for H goes too, the
 # way the desktop's Sign out forgets it: the connect-tokens.json entry
-# (the key forms connect_cli_token_delete uses) and the keychain items
+# (the key forms connect_cli_token_delete uses; the old .k2so home's copy
+# too) and the keychain items
 # (dev.k2.connect.host-token and the older com.k2so.connect.host-token,
 # account = the host's id in connect-hosts.json). A saved token that
 # differs from the one just revoked stays. The server list and a
@@ -109,42 +110,54 @@ PY
 
 # Remove the saved copies of TOKEN for HOST: the connect-tokens.json keys
 # connect_cli_token_delete uses (HOST, its bare form, bare.k2.dev) whose
-# value IS the token, and the keychain items holding exactly it. Sets
-# _REMOTE_REMOVED to what went ("connect-tokens.json", "keychain").
+# value IS the token, in this home and in the old .k2so home, and the
+# keychain items holding exactly it. Sets _REMOTE_REMOVED to what went
+# ("connect-tokens.json", "the old .k2so connect-tokens.json", "keychain").
 # The token reaches python3 on stdin; `security` and `secret-tool` get
 # only the service and the account.
 _remote_forget_token() {
-    local host="$1" tok="$2" f="${K2_HOME}/connect-tokens.json" r id svc kc kc_gone=0
+    local host="$1" tok="$2" r id svc kc kc_gone=0
     _REMOTE_REMOVED=""
-    if [ -f "$f" ]; then
-        r="$(printf '%s' "$tok" | python3 -c '
+    # This home's connect-tokens.json, then the old .k2so home's copy (the
+    # one _remote_token_for_host also reads), when that is another folder.
+    r="$(printf '%s' "$tok" | K2_HOME="$K2_HOME" python3 -c '
 import json, os, sys
-path, host = sys.argv[1], sys.argv[2].strip()
+host = sys.argv[1].strip()
 tok = sys.stdin.read()
-with open(path) as fh:
-    data = json.load(fh)
-if not isinstance(data, dict):
-    sys.exit("connect-tokens.json is not a JSON object")
+home = os.environ["K2_HOME"]
+homes = [(home, "connect-tokens.json")]
+alt = os.path.join(os.path.expanduser("~"), ".k2so")
+if os.path.isdir(alt) and os.path.realpath(alt) != os.path.realpath(home):
+    homes.append((alt, "the old .k2so connect-tokens.json"))
 b = host
 while b.endswith(".k2.dev"):
     b = b[: -len(".k2.dev")]
 while b.endswith(".K2.DEV"):
     b = b[: -len(".K2.DEV")]
-keys = [k for k in dict.fromkeys([host, b, b + ".k2.dev"]) if k and data.get(k) == tok]
-if not keys:
-    sys.exit(0)
-for k in keys:
-    del data[k]
-tmp = path + ".tmp"
-fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as fh:
-    json.dump(data, fh, indent=2)
-os.chmod(tmp, 0o600)
-os.replace(tmp, path)
-print("connect-tokens.json")
-' "$f" "$host")" || { echo "k2 remote logout: could not update $f" >&2; return 1; }
-        _REMOTE_REMOVED="$r"
-    fi
+gone = []
+for base, label in homes:
+    path = os.path.join(base, "connect-tokens.json")
+    if not os.path.isfile(path):
+        continue
+    with open(path) as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        sys.exit("%s is not a JSON object" % path)
+    keys = [k for k in dict.fromkeys([host, b, b + ".k2.dev"]) if k and data.get(k) == tok]
+    if not keys:
+        continue
+    for k in keys:
+        del data[k]
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    gone.append(label)
+print(", ".join(gone))
+' "$host")" || { echo "k2 remote logout: could not update connect-tokens.json" >&2; return 1; }
+    _REMOTE_REMOVED="$r"
     id="$(_remote_host_id_for_host "$host")" || { echo "k2 remote logout: could not read ${K2_HOME}/connect-hosts.json" >&2; return 1; }
     [ -n "$id" ] || return 0
     for svc in dev.k2.connect.host-token com.k2so.connect.host-token; do

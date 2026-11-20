@@ -661,6 +661,7 @@
 2 value src/renderer/components/Settings/sections/sew-api.ts keeper: wire; the Sew identity the daemon reads
 2 value src/renderer/lib/zen/zen-rail-views.ts keeper: inert; a built-in view's source label that nothing compares
 2 value crates/k5-cli/src/families/agent/set.rs keeper: wire; the agent mode the daemon stores (--mode k2, k2so's alias), as the shell's agent set sends it
+2 value crates/k5-cli/src/families/agent/hire/plan.rs keeper: wire; the agent mode the daemon stores (--mode k2, k2so's alias) and the context catalog id `k2` the daemon resolves (daemon resolve_catalog_id)
 1 value cli/src/app-catalog.sh keeper: wire; the suite catalog's variant (--variant, suite/mod.rs:45)
 1 value cli/src/app-doctor.sh keeper: wire; createdWith.k2 in the App routes' JSON (deploy/build.rs:28)
 1 value cli/src/compute-run.sh keeper: outside; cargo-nextest's profile, named by the [profile.k2] config the job writes one line above
@@ -782,3 +783,4 @@
 1 value crates/k5-cli/src/families/hostmail/cert.rs keeper: wire; the cert owner and the outbound setBy the daemon's mail routes send (/cli/mail/cert/owner, /cli/mail/outbound)
 1 value crates/k5-cli/src/families/hostmail/admin.rs keeper: wire; the cert owner the daemon's /cli/mail/status answer sends
 1 value crates/k5-cli/src/families/doc/print.rs keeper: wire; the key of a not-reached entry's command in the daemon's comment purge and erase answers (n["k2"])
+1 value crates/k5-cli/src/families/agent/hire.rs keeper: wire; the agent mode the daemon stores (--mode k2), as the shell's agent hire takes it

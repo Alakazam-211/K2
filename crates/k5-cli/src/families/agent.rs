@@ -6,7 +6,8 @@
 //! (`cli/src/agent-context.sh`), `template` (`cli/src/agent-template.sh`;
 //! its help forms stay the shell's), `identity` (an `id` tool: the
 //! session rules of [`crate::prelude::id_tool`]), `access`, and `harness`
-//! and `refresh` (the `id` tool `agent-harness`). Every other
+//! and `refresh` (the `id` tool `agent-harness`), and `hire` ([`hire`];
+//! a session with a passport is the shell's still). Every other
 //! verb, and the family alone, is still the shell's: [`run`] hands it
 //! back before anything is printed or sent.
 //!
@@ -53,6 +54,7 @@
 mod conf;
 mod context;
 mod harness;
+mod hire;
 mod identity;
 mod list;
 mod retire;
@@ -108,6 +110,7 @@ enum Form {
     Lines(Vec<String>),
     Harness(harness::Args),
     Set(set::SetArgs),
+    Hire(hire::HireArgs),
     /// One line on stderr and its exit.
     Stop(String, Exit),
 }
@@ -154,6 +157,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "retire" => retire::parse_retire(rest).map(Form::Retire),
         "restart" => retire::parse_restart(rest).map(Form::Restart),
         "set" => set::parse(rest).map(Form::Set),
+        "hire" => hire::parse(rest)?.map(Form::Hire),
         "context" => Ok(Form::Context(context::parse(rest))),
         "template" | "templates" => match template::parse(rest)? {
             Ok((v, json)) => Ok(Form::Template(v, json)),
@@ -177,6 +181,15 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
+    // A hire in a session with a passport: the shell sends the owner
+    // token from disk to the new workspace's routes, which the binary
+    // never sends (PRD 13.9 #4) and the passport can't do yet (D1).
+    if *verb == "hire"
+        && settings.session
+        && matches!(settings.auth, crate::transport::Auth::Passport { .. })
+    {
+        return None;
+    }
     if let Some(gate) = prelude::gate(&settings) {
         return Some(gate.stop());
     }
@@ -249,6 +262,7 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
             }
         },
         Form::Set(a) => set::set(&mut client, &mut closing, &a),
+        Form::Hire(a) => hire::hire(&mut client, &mut closing, &a),
         Form::Stop(line, exit) => {
             out::stderr_line(&line);
             exit
@@ -399,7 +413,7 @@ mod tests {
         for words in [
             &["agent"][..],
             &["agent", ""],
-            &["agent", "hire", "x"],
+            &["agent", "team"],
             &["agent", "template"],
             &["agent", "templates", "help"],
             &["agent", "conf", "--help"],

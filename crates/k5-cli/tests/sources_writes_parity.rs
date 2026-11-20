@@ -22,7 +22,6 @@
 mod common;
 
 use common::parity::*;
-use common::stub::Reply;
 
 const VERB: &str = "sources";
 

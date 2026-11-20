@@ -88,6 +88,7 @@ pub(crate) static CI_PREVIEW: ActionSpec = ActionSpec {
         },
     ],
     coverage: WallCoverage::Code,
+    form: None,
     machine_hints: &[],
 };
 
@@ -116,6 +117,7 @@ pub(crate) static CI_PREVIEW_OFF: ActionSpec = ActionSpec {
     settings: SETTINGS,
     walls: &[],
     coverage: WallCoverage::None,
+    form: None,
     machine_hints: &[],
 };
 

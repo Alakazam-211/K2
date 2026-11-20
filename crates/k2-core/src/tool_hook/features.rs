@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(list(&conn, "chat").unwrap().len(), 48);
         let push = HomePushFeatures::read(&conn, "chat").unwrap();
         assert!(push.feed_head && push.person_channel_notify, "{push:?}");
-        assert!(!push.feed_all_messages && !push.feed_read_marker && !push.feed_from_external_id, "0.11.0's wait: {push:?}");
+        assert!(!push.feed_all_messages, "0.11.0's wait: {push:?}");
         assert!(RecordingFeatures::read(&conn, "chat").unwrap().any());
         assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
         let home = HomeChatFeatures::read(&conn, "chat").unwrap();

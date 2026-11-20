@@ -34,9 +34,9 @@
 //! shell's shared compute library; the read verbs need the same ones.
 //! They live in this family's module until there is a shared place.
 
-use crate::families::{curl_port, get, py_space, without_nuls, Raise, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
+use crate::families::{curl_port, get, py_space, without_nuls, Raise, Shown};
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::{self, py};
 use crate::passport;

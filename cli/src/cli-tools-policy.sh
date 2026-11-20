@@ -972,7 +972,9 @@ for r in rows:
 _K2_ANC_STATE=""
 _cli_codex_ancestry() {
     local out low rc=0 r_ps r_py rows=""
-    out="$(ps -axo pid=,ppid=,command= 2>&1)" || rc=$?
+    # exec: ps runs as this shell's own child on every bash (bash 3.2 forks
+    # once more for a plain $(ps ...)).
+    out="$(exec ps -axo pid=,ppid=,command= 2>&1)" || rc=$?
     # A refusal reads "Operation not permitted" (bash, exit 126) or
     # "operation not permitted" (zsh, exit 127), or "Permission denied".
     low="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"

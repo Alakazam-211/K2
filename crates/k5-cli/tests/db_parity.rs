@@ -581,10 +581,14 @@ fn db_answers_as_the_shell_does() {
         // home and cap.
         ok_owner("home", &["home"], vec![ok(HOME)]),
         ok_owner("home, bare", &["home"], vec![ok(r#"{"homeDb":{}}"#)]),
-        ok_owner(
+        case(
             "home --json",
             &["home", "--json"],
+            &[],
             vec![ok(r#"{"ok":false,"homeDb":{}}"#)],
+            owner_and_port,
+            3,
+            1,
         ),
         ok_owner(
             "home --keep",

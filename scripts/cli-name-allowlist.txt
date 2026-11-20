@@ -776,3 +776,4 @@
 1 value src/renderer/lib/garden-data/garden-data-types.ts keeper: wire; madeBy, from the Garden data JSON
 1 value crates/k5-cli/src/families/hostmail/cert.rs keeper: wire; the cert owner and the outbound setBy the daemon's mail routes send (/cli/mail/cert/owner, /cli/mail/outbound)
 1 value crates/k5-cli/src/families/hostmail/admin.rs keeper: wire; the cert owner the daemon's /cli/mail/status answer sends
+1 value crates/k5-cli/src/families/doc/print.rs keeper: wire; the key of a not-reached entry's command in the daemon's comment purge and erase answers (n["k2"])

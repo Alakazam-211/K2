@@ -13,7 +13,8 @@
 //!   `cache`, the `node` subverbs made native so far, and the setup verbs
 //!   `allow-nodes`, `git-access`, `lanes`, `local` and `attach`, and
 //!   `compute` alone). [`follow`] is `_compute_follow`.
-//! - [`more`]: `retry`, and `roster`, `seats`, `trust` and `owners`.
+//! - [`more`]: `retry`, `provenance`, `verify`, and `roster`, `seats`,
+//!   `trust` and `owners`.
 //!
 //! Every other verb is the shell's. The modules below
 //! are shared: [`pyrt`] (the Python operations the shell's readers use),
@@ -173,6 +174,10 @@ pub const VERBS: &[Verb] = &[
     },
     Verb {
         words: &["retry"],
+        owner: Owner::Native,
+    },
+    Verb {
+        words: &["provenance", "verify"],
         owner: Owner::Native,
     },
     Verb {

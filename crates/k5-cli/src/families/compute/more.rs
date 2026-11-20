@@ -2,6 +2,8 @@
 //! (`cli/src/compute-command.sh` and the files it calls):
 //!
 //! - `retry <job>` ([`retry`]);
+//! - [`provenance`]: `provenance <job> [--out FILE]` and `verify <job |
+//!   FILE> [--file PATH] [--owner-key FP]`;
 //! - [`trust`]: `roster`, `seats`, `trust` and `owners` (the node owners'
 //!   trust verbs of `cmd_compute_trust`; `lanes` is not here).
 //!
@@ -26,17 +28,27 @@ use crate::python;
 use std::ffi::OsString;
 use std::path::Path;
 
+pub mod provenance;
 pub mod trust;
 
 #[cfg(test)]
 mod tests;
 
 /// The second words this module answers.
-pub const ANSWERS: &[&str] = &["retry", "roster", "seats", "trust", "owners"];
+pub const ANSWERS: &[&str] = &[
+    "retry",
+    "provenance",
+    "verify",
+    "roster",
+    "seats",
+    "trust",
+    "owners",
+];
 
 /// A verb this module answers, with its words read.
 enum Ask {
     Retry(String),
+    Provenance(provenance::Ask),
     Trust(trust::Ask),
 }
 
@@ -95,6 +107,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
                 return Some(Exit::Usage);
             }
         },
+        verb @ ("provenance" | "verify") => match ready(provenance::parse(verb, rest)) {
+            Ok(a) => Ask::Provenance(a),
+            Err(exit) => return Some(exit),
+        },
         noun => match ready(trust::parse(noun, rest)) {
             Ok(a) => Ask::Trust(a),
             Err(exit) => return Some(exit),
@@ -127,6 +143,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 fn send(cp: &mut Cp<'_>, ask: &Ask, sock: &Path) -> Exit {
     match ask {
         Ask::Retry(job) => retry(cp, job),
+        Ask::Provenance(a) => provenance::send(cp, a),
         Ask::Trust(a) => trust::send(cp, a, sock),
     }
 }

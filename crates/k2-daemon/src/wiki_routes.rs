@@ -337,7 +337,7 @@ pub fn handle_note_gated(params: &HashMap<String, String>, skin: Option<SkinPass
 /// GET /cli/wiki/index?scope=k2 — fleet map (all workspace brains; host registry).
 pub fn handle_index(params: &HashMap<String, String>) -> CliResponse {
     let scope = str_param(params, "scope").to_ascii_lowercase();
-    if scope == "k2" || scope == "host" || scope == "fleet" {
+    if is_fleet_scope(&scope) {
         return match k2_core::wiki::build_fleet_index() {
             Ok(idx) => CliResponse::ok_json(
                 serde_json::to_string(&idx).unwrap_or_else(|_| "{}".to_string()),
@@ -426,6 +426,19 @@ fn skin_require_cap(pass: &SkinPass, project_id: &str, cap: &str) -> Result<(), 
     Ok(())
 }
 
+/// `scope=` asks for the map of every workspace's wiki (the fleet index),
+/// never one workspace's. Lowercase `scope` only.
+pub(crate) fn is_fleet_scope(scope: &str) -> bool {
+    matches!(scope, "k2" | "host" | "fleet")
+}
+
+/// A note id that reaches past one workspace's own wiki: another
+/// workspace's note (`<id>::<note>`) or a K2-wide map node. An App pass and
+/// an agent's passport (`passport_routes`) are refused these.
+pub(crate) fn wiki_id_outside_workspace(id: &str) -> bool {
+    skin_wiki_id_forbidden(id)
+}
+
 fn skin_wiki_id_forbidden(id: &str) -> bool {
     id.contains(k2_core::wiki::FLEET_ID_SEP)
         || id.contains("__focusgroup__")
@@ -443,7 +456,7 @@ fn need_skin_project(params: &HashMap<String, String>) -> Result<String, CliResp
 
 fn handle_skin_index(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
     let scope = str_param(params, "scope").to_ascii_lowercase();
-    if scope == "k2" || scope == "host" || scope == "fleet" {
+    if is_fleet_scope(&scope) {
         return crate::skin_routes::skin_room_response();
     }
     let project = match need_skin_project(params) {

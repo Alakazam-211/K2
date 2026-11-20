@@ -54,6 +54,12 @@ pub(crate) enum Scope {
     /// `/cli/agent/list`: every workspace's row, narrowed to the passport's
     /// own and its connected workspaces ([`narrow`]).
     AgentList,
+    /// [`Scope::Own`], and never the map of every workspace's wiki
+    /// (`wiki_routes::is_fleet_scope`).
+    WikiIndex,
+    /// [`Scope::Own`], and never a note of another workspace or a node of
+    /// the map of every workspace (the ids an App pass is refused too).
+    WikiNote,
     /// A ticket by id: only one filed in the passport's own workspace.
     /// Any other answers as an unknown id does.
     Ticket,
@@ -104,6 +110,10 @@ pub(crate) const ROUTES: &[Route] = &[
     // (credentials taken out); the full one stays the owner token's.
     route("/cli/settings/get", Scope::Shared),
     route("/cli/whats_new", Scope::Shared),
+    // `k2 wiki index|note|status`.
+    route("/cli/wiki/index", Scope::WikiIndex),
+    route("/cli/wiki/note", Scope::WikiNote),
+    route("/cli/wiki/status", Scope::Own),
     // `k2 workspace profile` (0.46.16; its handler also refuses another
     // workspace: `workspace_profile_route::other_workspace_refusal`).
     route("/cli/workspace/agent-display-name", Scope::Own),
@@ -206,6 +216,21 @@ pub(crate) fn refusal(path: &str, params: &HashMap<String, String>) -> Option<Cl
     match route.scope {
         Scope::Shared | Scope::AgentList => None,
         Scope::Own => other_workspace(params),
+        Scope::WikiIndex => {
+            let scope = params.get("scope").map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default();
+            if crate::wiki_routes::is_fleet_scope(&scope) {
+                return Some(own_only("an agent reads its own workspace's wiki; the map of every workspace is a person's"));
+            }
+            other_workspace(params)
+        }
+        Scope::WikiNote => {
+            let id = params.get("id").map(String::as_str).unwrap_or("");
+            if crate::wiki_routes::wiki_id_outside_workspace(id) {
+                return Some(own_only("an agent reads its own workspace's wiki notes"));
+            }
+            other_workspace(params)
+        }
+        Scope::Ticket => ticket_outside(params, ws),
         Scope::Named => {
             let q = params.get("q").map(|s| s.trim()).unwrap_or("");
             if q.is_empty() {

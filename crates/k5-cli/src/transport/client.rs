@@ -54,6 +54,8 @@ pub const FEEDBACK_MAX_TIME: Duration = Duration::from_secs(2);
 pub const UPDATE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// `k2 update --cli`'s `--max-time 4`.
 pub const UPDATE_MAX_TIME: Duration = Duration::from_secs(4);
+/// `k2 api status`'s `/boot-status` read: at most 10 s.
+pub const BOOT_STATUS_MAX_TIME: Duration = Duration::from_secs(10);
 /// `_K2_CURL_TRIES`: each retry loop's tries, the first included.
 pub const TRIES: u32 = 4;
 /// The `sleep 1` between tries.
@@ -308,6 +310,12 @@ enum Kind {
         post: bool,
         note: bool,
     },
+    /// `k2 api status`'s `_k2_curl` of `${BASE_URL}/boot-status`
+    /// (`cli/src/talk-and-workspace.sh`): a GET of the path as it is, over
+    /// TCP, `$TOKEN` as Bearer, `-s --connect-timeout 5 --max-time 10`.
+    /// Only `_k2_curl`'s tries (a refused connect, a moved port); no heal,
+    /// no line, no note.
+    BootStatus,
 }
 
 impl Kind {
@@ -351,6 +359,7 @@ impl Kind {
                 | Kind::SetupPost
                 | Kind::QueryPost
                 | Kind::Own { .. }
+                | Kind::BootStatus
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -377,6 +386,7 @@ impl Kind {
                 | Kind::SetupPost
                 | Kind::QueryPost
                 | Kind::Own { .. }
+                | Kind::BootStatus
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -401,6 +411,7 @@ impl Kind {
                 | Kind::SetupGet
                 | Kind::SetupPost
                 | Kind::Own { note: false, .. }
+                | Kind::BootStatus
         )
     }
     /// `--connect-timeout`.
@@ -948,6 +959,14 @@ impl Client {
         .map_err(|f| f.error)
     }
 
+    /// `k2 api status`'s GET of `path` ([`Kind::BootStatus`]): over TCP,
+    /// this client's credential as Bearer, no query; connect 5 s, at most
+    /// 10 s; a refused connect is tried again; no heal, no line, no note.
+    pub fn get_boot_status(&mut self, path: &str) -> Result<Response, Error> {
+        self.run(Kind::BootStatus, Channel::Tcp, path, &[], &[], Instant::now())
+            .map_err(|f| f.error)
+    }
+
     /// `_setup_send <GET|POST> <ep> <as_json> [<body>]` (`cli/src/setup.sh`):
     /// `ep`, then `?format=text` when `text`, the token as Bearer (in a
     /// session with no passport, none: [`Client::session`]), over TCP; a POST
@@ -1413,6 +1432,7 @@ impl Client {
             Kind::FeedbackOptin => FEEDBACK_MAX_TIME,
             Kind::UpdateVersion => UPDATE_MAX_TIME,
             Kind::Own { .. } => self.own.as_ref().map_or(MAX_TIME, |o| o.1),
+            Kind::BootStatus => BOOT_STATUS_MAX_TIME,
         }
     }
 
@@ -1714,7 +1734,7 @@ impl Client {
             Kind::VaultSockGet | Kind::Own { post: false, .. } => {
                 (Method::Get, endpoint.to_string(), None)
             }
-            Kind::Public | Kind::Probe | Kind::UpdateVersion => {
+            Kind::Public | Kind::Probe | Kind::UpdateVersion | Kind::BootStatus => {
                 (Method::Get, endpoint.to_string(), None)
             }
             Kind::SetupGet | Kind::SetupPost => {
@@ -2215,6 +2235,7 @@ mod tests {
             (Kind::SetupGet, 30),
             (Kind::SetupPost, 30),
             (Kind::QueryPost, 30),
+            (Kind::BootStatus, 10),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }

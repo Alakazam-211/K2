@@ -17,6 +17,11 @@
 //!   `tests/cli/ci_signer_code_stdin.sh`'s and `compute_trust_cli.sh`'s.
 //! - Help never acts: each verb that changes something with `-h` or
 //!   `--help` sends nothing.
+//! - `evidence` and `provenance` names from the answer: one that is
+//!   absolute, has a `..` part, holds a newline or a NUL, or reaches a
+//!   link inside `--out` is refused (exit 3, `ci_name_unsafe`) and each
+//!   side writes nothing; a second run into the same `--out` replaces the
+//!   files.
 
 #![cfg(unix)]
 
@@ -778,6 +783,26 @@ fn ci_lines_say_the_brand_s_name() {
         out.stderr,
         format!("usage: {cli} ci signer [list|add|reveal|finish|remove] ({cli} ci --help)\n")
     );
+    // The refusal of a name from the answer names no command: the same
+    // line in every brand.
+    let c = case(
+        "brand: a name refused",
+        &["evidence", "r9", "--out", "nb", "--no-files"],
+        &[],
+        vec![ok(r#"{"short":"r9","file":"../x.json","bundle":{}}"#)],
+        owner_and_port,
+        3,
+        1,
+    );
+    let (out, _) = rig.binary(&c, false);
+    assert_eq!(
+        (out.code, out.stderr.as_str()),
+        (
+            Some(3),
+            "{\"error\": \"ci_name_unsafe\", \"hint\": \"file name ../x.json has a .. part: refused, nothing written to nb\"}\n"
+        )
+    );
+    assert!(!rig.proj.join("nb").exists() && !rig.proj.join("x.json").exists());
 }
 
 /// Every file under `dir`, by its path there.
@@ -981,6 +1006,231 @@ fn ci_provenance_writes_as_the_shell_does() {
     for c in v {
         rig.check(&c);
     }
+}
+
+/// Every file under the project but its `.k2`, and whether `dir` is
+/// there: what a refused row must leave as it was.
+fn project_files(rig: &Rig, dir: &str) -> (std::collections::BTreeMap<String, Vec<u8>>, bool) {
+    let mut t = tree(&rig.proj);
+    t.retain(|k, _| !k.starts_with(".k2/"));
+    (t, rig.proj.join(dir).exists())
+}
+
+/// The case compared as the rig does (exit 3), then each side once more:
+/// nothing written anywhere in the project, `dir` (the `--out`) made or
+/// not as before.
+fn check_refused(rig: &Rig, c: &Case, dir: &str) {
+    assert_eq!(c.code, 3, "{}: a refused row exits 3", c.name);
+    rig.check(c);
+    for (side, bash) in [(Side::Bash, true), (Side::Rust, false)] {
+        rig.prepare(side, c);
+        let before = project_files(rig, dir);
+        let out = rig.run(bash, c);
+        rig.read(side, !bash, c.name);
+        assert_eq!(out.code, Some(3), "{} ({side:?}): {out:?}", c.name);
+        assert!(
+            out.stderr.starts_with("{\"error\": \"ci_name_unsafe\", \"hint\": "),
+            "{} ({side:?}): {out:?}",
+            c.name
+        );
+        assert_eq!(
+            project_files(rig, dir),
+            before,
+            "{} ({side:?}): nothing written",
+            c.name
+        );
+    }
+}
+
+/// `nl1/trust` a link to `../elsewhere`.
+fn linked_folder(r: &Rig) {
+    owner_and_port(r);
+    let d = r.proj.join("nl1");
+    let _ = std::fs::remove_dir_all(&d);
+    let _ = std::fs::remove_dir_all(r.proj.join("elsewhere"));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::create_dir_all(r.proj.join("elsewhere")).unwrap();
+    std::os::unix::fs::symlink("../elsewhere", d.join("trust")).unwrap();
+}
+
+/// `nl2/trust/owners.json` a link to `../../target.json`.
+fn linked_file(r: &Rig) {
+    owner_and_port(r);
+    let d = r.proj.join("nl2");
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join("trust")).unwrap();
+    std::fs::write(r.proj.join("target.json"), "keep\n").unwrap();
+    std::os::unix::fs::symlink("../../target.json", d.join("trust/owners.json")).unwrap();
+}
+
+/// `nr/trust/owners.json` an old plain file, replaced by the run.
+fn old_file(r: &Rig) {
+    owner_and_port(r);
+    let d = r.proj.join("nr");
+    std::fs::create_dir_all(d.join("trust")).unwrap();
+    std::fs::write(d.join("trust/owners.json"), "old\n").unwrap();
+}
+
+#[test]
+fn ci_names_from_the_answer_are_checked_before_any_write() {
+    let rig = Rig::new(VERB, "names");
+    let proj = rig.proj.display().to_string();
+    let line = r#"{"short":"j","files":1,"line":"{}\n"}"#;
+    let refused = vec![
+        (
+            case(
+                "evidence: an absolute file name",
+                &["evidence", "r9", "--out", "na1", "--no-files"],
+                &[],
+                vec![ok(&format!(
+                    r#"{{"short":"r9","file":"{proj}/abs.json","bundle":{{}}}}"#
+                ))],
+                owner_and_port,
+                3,
+                1,
+            ),
+            "na1",
+        ),
+        (
+            case(
+                "evidence: a file name with a .. part",
+                &["evidence", "r9", "--out", "na2", "--no-files"],
+                &[],
+                vec![ok(r#"{"short":"r9","file":"../x.json","bundle":{}}"#)],
+                owner_and_port,
+                3,
+                1,
+            ),
+            "na2",
+        ),
+        (
+            case(
+                "provenance: a statement label with a .. part",
+                &["provenance", "r1", "--out", "na3"],
+                &[],
+                vec![ok(&format!(r#"{{"short":"r1","statements":{{"../x":{line}}}}}"#))],
+                owner_and_port,
+                3,
+                1,
+            ),
+            "na3",
+        ),
+        (
+            case(
+                "evidence: a job label a/../../x, before any fetch",
+                &["evidence", "r9", "--out", "na4"],
+                &[],
+                vec![ok(
+                    r#"{"short":"r9","file":"e.json","bundle":{"v":3},"jobs":{"a/../../x":{"job":"j1","role":"build","build":"b","short":"j1","node":"n1","artifacts":[]}}}"#,
+                )],
+                owner_and_port,
+                3,
+                1,
+            ),
+            "na4",
+        ),
+        (
+            case(
+                "evidence: a receipt label ..",
+                &["evidence", "r9", "--out", "na5", "--no-files"],
+                &[],
+                vec![ok(r#"{"short":"r9","file":"e.json","bundle":{"receipts":{"..":{"job":"j1"}}}}"#)],
+                owner_and_port,
+                3,
+                1,
+            ),
+            "na5",
+        ),
+        (
+            case(
+                "provenance: a label with a newline",
+                &["provenance", "r1", "--out", "na6"],
+                &[],
+                vec![ok(&format!(r#"{{"short":"r1","statements":{{"a\nb":{line}}}}}"#))],
+                owner_and_port,
+                3,
+                1,
+            ),
+            "na6",
+        ),
+        (
+            case(
+                "provenance: a node key with a NUL",
+                &["provenance", "r1", "--out", "na7"],
+                &[],
+                vec![ok(r#"{"short":"r1","trust":{"nodeKeys":{"a\u0000b":{"pem":"P"}}}}"#)],
+                owner_and_port,
+                3,
+                1,
+            ),
+            "na7",
+        ),
+        (
+            case(
+                "provenance: one absolute roster key among good names",
+                &["provenance", "r1", "--out", "na8"],
+                &[],
+                vec![ok(&format!(
+                    r#"{{"short":"r1","statements":{{"u1":{line},"u2":{line}}},"trust":{{"nodeKeys":{{"fp1":{{"pem":"P"}}}},"owners":[{{"rosterKeyFp":"rk1"}},{{"rosterKeyFp":"{proj}/roster"}}],"rosters":[{{}},{{}}]}}}}"#
+                ))],
+                owner_and_port,
+                3,
+                1,
+            ),
+            "na8",
+        ),
+        (
+            case(
+                "provenance: a linked folder inside --out",
+                &["provenance", "r1", "--out", "nl1"],
+                &[],
+                vec![ok(r#"{"short":"r1","trust":{"nodeKeys":{"fp1":{"pem":"P"}}}}"#)],
+                linked_folder,
+                3,
+                1,
+            ),
+            "nl1",
+        ),
+        (
+            case(
+                "provenance: a linked file inside --out",
+                &["provenance", "r1", "--out", "nl2"],
+                &[],
+                vec![ok(r#"{"short":"r1"}"#)],
+                linked_file,
+                3,
+                1,
+            ),
+            "nl2",
+        ),
+    ];
+    for (c, dir) in &refused {
+        check_refused(&rig, c, dir);
+    }
+    assert_eq!(
+        std::fs::read_to_string(rig.proj.join("target.json")).unwrap(),
+        "keep\n",
+        "the linked file's target"
+    );
+    assert_eq!(
+        std::fs::read_dir(rig.proj.join("elsewhere")).unwrap().count(),
+        0,
+        "nothing in the linked folder's target"
+    );
+    check_files(
+        &rig,
+        &case(
+            "provenance into an --out that has the files: replaced",
+            &["provenance", "r1234567", "--out", "nr"],
+            &[],
+            vec![ok(&provenance_json())],
+            old_file,
+            0,
+            1,
+        ),
+        "nr",
+        &["provenance/mac.intoto.jsonl", "trust/owners.json"],
+    );
 }
 
 #[test]

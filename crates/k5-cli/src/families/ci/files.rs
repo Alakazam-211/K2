@@ -1,7 +1,8 @@
 //! `ci evidence`, `ci provenance` and `ci logs` (`log`), as `cmd_ci`
-//! answers them (`cli/src/ci.sh`), with the two writers the first two
-//! share (`_compute_write_statements` and `_compute_write_trust` in
-//! `cli/src/compute-provenance.sh`).
+//! answers them (`cli/src/ci.sh`), with the writers the first two share
+//! (`_CI_OUT_PY` in `cli/src/compute-provenance.sh`: its `bundle`,
+//! `statements` and `trust` modes; its `check` mode and its `put` are
+//! [`super::outdir`]).
 //!
 //! - `evidence <run> --out <dir> [--no-files] [--reported <file>]
 //!   [--json]`: the run's evidence bundle written to `<dir>`, each build
@@ -19,12 +20,14 @@
 //!
 //! Where the shell's Python raises, this prints a traceback with Python's
 //! exception and ends with 1, as the shell's `|| exit 1` (or `set -e`)
-//! does. The names in the daemon's answer are used as the shell uses
-//! them: a label or file name that is an absolute path or climbs out with
-//! `..` writes where Python's `os.path.join` points (a bash bug, copied
-//! and reported).
+//! does. Every name the daemon's answer puts under `--out` is checked
+//! before anything is written ([`super::outdir::check`]): one that is
+//! absolute, has a `..` part, holds a NUL or a newline, goes through a
+//! link or lands outside `--out` is refused with exit 3 and nothing is
+//! written. Each file is then made with no link followed
+//! ([`super::outdir::put`]).
 
-use super::{call, Ask};
+use super::{call, outdir, Ask};
 use crate::exit::Exit;
 use crate::families::compute::logs;
 use crate::families::compute::pyrt::{self as p, s};
@@ -92,53 +95,9 @@ pub fn join(a: &str, b: &str) -> String {
     }
 }
 
-/// `os.path.split(p)`.
-fn split(path: &str) -> (String, String) {
-    let i = path.rfind('/').map_or(0, |i| i + 1);
-    let (head, tail) = path.split_at(i);
-    let head = if !head.is_empty() && head.bytes().any(|b| b != b'/') {
-        head.trim_end_matches('/')
-    } else {
-        head
-    };
-    (head.to_string(), tail.to_string())
-}
-
-/// `os.path.dirname(p)`.
-fn dirname(path: &str) -> String {
-    split(path).0
-}
-
 /// `os.path.basename(p)`.
 fn basename(path: &str) -> &str {
     path.rfind('/').map_or(path, |i| &path[i + 1..])
-}
-
-/// `os.makedirs(name, exist_ok=True)`: the exception's line, if it
-/// raises.
-fn makedirs(name: &str) -> Result<(), String> {
-    if name.contains('\0') {
-        return Err("ValueError: embedded null byte".into());
-    }
-    let (mut head, mut tail) = split(name);
-    if tail.is_empty() {
-        (head, tail) = split(&head);
-    }
-    if !head.is_empty() && !tail.is_empty() && std::fs::metadata(&head).is_err() {
-        if let Err(e) = makedirs(&head) {
-            if !e.starts_with("FileExistsError") {
-                return Err(e);
-            }
-        }
-        if tail == "." {
-            return Ok(());
-        }
-    }
-    match std::fs::create_dir(name) {
-        Ok(()) => Ok(()),
-        Err(_) if std::path::Path::new(name).is_dir() => Ok(()),
-        Err(e) => Err(pyjson::os_error(&e, name).last_line()),
-    }
 }
 
 /// `open(path, "w")`.
@@ -150,7 +109,7 @@ fn open_w(path: &str) -> Result<std::fs::File, String> {
 }
 
 /// `f.write(text)`: a string only.
-fn write_str(f: &mut std::fs::File, text: &Value, path: &str) -> Result<(), String> {
+pub(super) fn write_str(f: &mut std::fs::File, text: &Value, path: &str) -> Result<(), String> {
     let Value::Str(_) = text else {
         return Err(format!(
             "TypeError: write() argument must be str, not {}",
@@ -171,82 +130,71 @@ fn dumps_with(v: &Value, indent: Option<usize>, sort_keys: bool) -> p::R<String>
     json::to_string(v, &o).map_err(|e| format!("ValueError: {e:?}"))
 }
 
-/// `_compute_write_statements DIR` on the answer: each statement as
-/// `DIR/provenance/<label>.intoto.jsonl`; how many.
+/// `_compute_write_statements DIR` (`_CI_OUT_PY statements`) on the
+/// answer: each statement as `DIR/provenance/<label>.intoto.jsonl`; how
+/// many.
 pub fn write_statements(body: &[u8], dir: &str) -> R<usize> {
-    let v = load(body, 3)?;
-    let st = p::or(at(4, p::get(&v, "statements"))?, empty());
+    let v = load(body, 4)?;
+    let st = p::or(at(121, p::get(&v, "statements"))?, empty());
     let mut lines: Vec<(Text, Value)> = Vec::new();
-    for (k, one) in items(&st, 4)? {
-        let line = at(4, p::idx(&one, "line"))?;
+    for (k, one) in items(&st, 121)? {
+        let line = at(121, p::idx(&one, "line"))?;
         put_key(&mut lines, k, line);
     }
-    let bundle = p::or(at(5, p::get(&v, "bundle"))?, empty());
-    let prov = p::or(at(5, p::get(&bundle, "provenance"))?, empty());
-    for (k, env) in items(&prov, 5)? {
-        let text = at(6, p::dumps(&env, true, None))?;
+    let bundle = p::or(at(122, p::get(&v, "bundle"))?, empty());
+    let prov = p::or(at(122, p::get(&bundle, "provenance"))?, empty());
+    for (k, env) in items(&prov, 122)? {
+        let text = at(123, p::dumps(&env, true, None))?;
         put_key(&mut lines, k, s(&format!("{text}\n")));
-    }
-    let root = join(dir, "provenance");
-    if !lines.is_empty() {
-        makedirs(&root).map_err(|e| Raise::at(9, e))?;
     }
     lines.sort_by(|a, b| a.0.cmp(&b.0));
     for (k, line) in &lines {
-        let path = join(&root, &format!("{}.intoto.jsonl", key(k)));
-        let mut f = open_w(&path).map_err(|e| Raise::at(11, e))?;
-        write_str(&mut f, line, &path).map_err(|e| Raise::at(12, e))?;
+        let rel = format!("provenance/{}.intoto.jsonl", key(k));
+        outdir::put(dir, &rel, line, 1).map_err(|f| f.raise(125))?;
     }
     Ok(lines.len())
 }
 
-/// `_compute_write_trust DIR` on the answer: the files under
-/// `DIR/trust/` that check a statement with no K2; how many.
+/// `_compute_write_trust DIR` (`_CI_OUT_PY trust`) on the answer: the
+/// files under `DIR/trust/` that check a statement with no K2, each
+/// worked out first, then written; how many.
 pub fn write_trust(body: &[u8], dir: &str) -> R<usize> {
-    let v = load(body, 3)?;
-    let t = p::or(at(3, p::get(&v, "trust"))?, empty());
-    let root = join(dir, "trust");
-    let mut n = 0usize;
-    let mut put = |from: u32, rel: &str, text: &Value| -> R<()> {
-        let path = join(&root, rel);
-        makedirs(&dirname(&path)).map_err(|e| Raise::inside(from, 9, "put", e))?;
-        let mut f = open_w(&path).map_err(|e| Raise::inside(from, 10, "put", e))?;
-        write_str(&mut f, text, &path).map_err(|e| Raise::inside(from, 11, "put", e))?;
-        n += 1;
-        Ok(())
-    };
-    let keys = p::or(at(13, p::get(&t, "nodeKeys"))?, empty());
-    for (fp, k) in sorted_items(&keys, 13)? {
-        let rel = join("nodes", &format!("{}.pem", key(&fp)));
-        let pem = at(14, p::idx(&k, "pem"))?;
-        put(14, &rel, &pem)?;
+    let v = load(body, 4)?;
+    let t = p::or(at(128, p::get(&v, "trust"))?, empty());
+    let mut files: Vec<(String, Value)> = Vec::new();
+    let keys = p::or(at(130, p::get(&t, "nodeKeys"))?, empty());
+    for (fp, k) in sorted_items(&keys, 130)? {
+        let pem = at(131, p::idx(&k, "pem"))?;
+        files.push((format!("nodes/{}.pem", key(&fp)), pem));
     }
-    let statements = p::or(at(15, p::get(&t, "statements"))?, Value::Array(vec![]));
-    for one in at(15, p::iter(&statements))? {
-        let b = at(16, p::idx(&one, "body"))?;
+    let statements = p::or(at(132, p::get(&t, "statements"))?, Value::Array(vec![]));
+    for one in at(132, p::iter(&statements))? {
+        let b = at(133, p::idx(&one, "body"))?;
         let Value::Str(_) = &b else {
-            return Err(Raise::no_attribute(16, &b, "encode"));
+            return Err(Raise::no_attribute(133, &b, "encode"));
         };
         let sum = crate::families::fed::pubkey::sha256(p::str_of(&b).as_bytes());
         let hex: String = sum.iter().map(|x| format!("{x:02x}")).collect();
-        let rel = join("statements", &format!("{hex}.json"));
-        let text = at(16, dumps_with(&one, None, true))?;
-        put(16, &rel, &s(&format!("{text}\n")))?;
+        let text = at(133, dumps_with(&one, None, true))?;
+        files.push((format!("statements/{hex}.json"), s(&format!("{text}\n"))));
     }
-    let owners = p::or(at(17, p::get(&t, "owners"))?, Value::Array(vec![]));
-    let text = at(18, dumps_with(&owners, Some(1), true))?;
-    put(18, "owners.json", &s(&format!("{text}\n")))?;
-    let rosters = p::or(at(19, p::get(&t, "rosters"))?, Value::Array(vec![]));
-    let os_ = at(19, p::iter(&owners))?;
-    let rs = at(19, p::iter(&rosters))?;
+    let owners = p::or(at(134, p::get(&t, "owners"))?, Value::Array(vec![]));
+    let text = at(135, dumps_with(&owners, Some(1), true))?;
+    files.push(("owners.json".to_string(), s(&format!("{text}\n"))));
+    let rosters = p::or(at(136, p::get(&t, "rosters"))?, Value::Array(vec![]));
+    let os_ = at(136, p::iter(&owners))?;
+    let rs = at(136, p::iter(&rosters))?;
     for (o, r) in os_.iter().zip(rs.iter()) {
-        let fp = at(20, p::idx(o, "rosterKeyFp"))?;
-        let name = at(20, p::add(&fp, &s(".json")))?;
-        let rel = join("rosters", &p::str_of(&name));
-        let text = at(20, dumps_with(r, None, true))?;
-        put(20, &rel, &s(&format!("{text}\n")))?;
+        let fp = at(137, p::idx(o, "rosterKeyFp"))?;
+        let name = at(137, p::add(&s("rosters/"), &fp))?;
+        let name = at(137, p::add(&name, &s(".json")))?;
+        let text = at(137, dumps_with(r, None, true))?;
+        files.push((p::str_of(&name), s(&format!("{text}\n"))));
     }
-    Ok(n)
+    for (rel, text) in &files {
+        outdir::put(dir, &format!("trust/{rel}"), text, -1).map_err(|f| f.raise(139))?;
+    }
+    Ok(files.len())
 }
 
 /// `{"run": run}` and the workspace when there is one.
@@ -263,7 +211,7 @@ fn usage(line: String) -> Exit {
     Exit::Usage
 }
 
-fn tb(r: &Raise) -> Exit {
+pub(super) fn tb(r: &Raise) -> Exit {
     raised(String::new(), String::new(), r).print()
 }
 
@@ -307,6 +255,9 @@ pub fn provenance(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
         Ok(b) => b,
         Err(e) => return e,
     };
+    if let Err(e) = outdir::check(&body, "provenance", &a.out_dir) {
+        return e;
+    }
     if !made(&a.out_dir) {
         return Exit::Error;
     }
@@ -376,25 +327,25 @@ fn provenance_lines(body: &[u8], d: &str, n_st: usize, n_trust: usize, o: &mut S
     Ok(())
 }
 
-/// The bundle's writer: `<dir>/<file>`, what it prints.
+/// The bundle's writer (`_CI_OUT_PY bundle`): `<dir>/<file>`, what it
+/// prints.
 fn bundle_file(body: &[u8], dir: &str) -> R<String> {
-    let v = load(body, 3)?;
-    let f = at(4, p::idx(&v, "file"))?;
+    let v = load(body, 4)?;
+    let f = at(117, p::idx(&v, "file"))?;
     let Value::Str(_) = &f else {
         return Err(Raise::at(
-            4,
+            117,
             format!(
                 "TypeError: join() argument must be str, bytes, or os.PathLike object, not '{}'",
                 p::tname(&f)
             ),
         ));
     };
-    let path = join(dir, &p::str_of(&f));
-    let mut fh = open_w(&path).map_err(|e| Raise::at(5, e))?;
-    let bundle = at(6, p::idx(&v, "bundle"))?;
-    let text = at(6, dumps_with(&bundle, Some(1), true))?;
-    fh.write_all(format!("{text}\n").as_bytes())
-        .map_err(|e| Raise::at(6, pyjson::os_error(&e, &path).last_line()))?;
+    let name = p::str_of(&f);
+    let path = join(dir, &name);
+    let bundle = at(118, p::idx(&v, "bundle"))?;
+    let text = at(118, dumps_with(&bundle, Some(1), true))?;
+    outdir::put(dir, &name, &s(&format!("{text}\n")), 0).map_err(|e| e.raise(118))?;
     Ok(path)
 }
 
@@ -612,6 +563,10 @@ pub fn evidence(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
         Ok(b) => b,
         Err(e) => return e,
     };
+    // Every name the answer puts under --out, before anything is written.
+    if let Err(e) = outdir::check(&body, "evidence", &a.out_dir) {
+        return e;
+    }
     if !made(&a.out_dir) {
         return Exit::Error;
     }

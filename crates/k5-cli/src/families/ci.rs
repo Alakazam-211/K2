@@ -26,9 +26,11 @@
 //! `freeze --until` time that is not one of the forms read here, an
 //! `evidence` or `provenance` `--out` folder `mkdir -p` would refuse
 //! (its line is the system's own), `logs` with no `mktemp` (as `compute
-//! logs`), and, off Unix, an `evidence` that fetches files.
+//! logs`), and, off Unix, `evidence` and `provenance` (their writers
+//! open each folder under `--out` from its parent's descriptor).
 
 pub mod files;
+pub mod outdir;
 pub mod py;
 pub mod render;
 pub mod signer;
@@ -503,7 +505,7 @@ fn shell_free(a: &Ask) -> bool {
             if !writes::fetch::creatable(&a.out_dir) {
                 return false;
             }
-            if a.sub == "evidence" && !a.no_files && !cfg!(unix) {
+            if !cfg!(unix) {
                 return false;
             }
         }

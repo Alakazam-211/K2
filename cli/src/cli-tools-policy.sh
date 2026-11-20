@@ -597,9 +597,13 @@ _k2_refuse_plain_http() {
 # URL (k2_direct, the same answers as _k2_direct_url and
 # k2_client::proxy_rule::direct; tests/cli/proxy_rule_parity.sh holds the
 # table) and uses the person's proxy settings for https to a remote host.
+# The same opener follows no redirect: every request it makes carries a
+# token (some a password too), so a 3xx is refused with a plain line and
+# exit 3, and nothing goes to the place it names (k2_redirect_refused; a
+# block may define its own after running the rule, as k2 clone does).
 # Exported so every python3 the CLI starts can read it. Not a secret.
 _K2_PY_PROXY_RULE='
-import ipaddress as _k2_ip, urllib.parse as _k2_up, urllib.request as _k2_ur
+import ipaddress as _k2_ip, sys as _k2_sys, urllib.parse as _k2_up, urllib.request as _k2_ur
 
 def k2_direct(url):
     # Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
@@ -627,7 +631,23 @@ class _K2ProxyRule(_k2_ur.ProxyHandler):
             return None
         return super().proxy_open(req, proxy, type)
 
-_k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule()))
+def k2_redirect_refused(line):
+    # The line on stderr and exit 3. SystemExit, not an Exception, so a
+    # block that turns errors into daemon_unreachable can'"'"'t hide it.
+    _k2_sys.stderr.write(line + "\n")
+    _k2_sys.stderr.flush()
+    raise SystemExit(3)
+
+class _K2NoRedirect(_k2_ur.HTTPRedirectHandler):
+    # No request follows a redirect: the new location would get its token.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        here = _k2_up.urlsplit(req.full_url).netloc.rpartition("@")[2]
+        there = _k2_up.urlsplit(newurl).netloc.rpartition("@")[2] or newurl
+        there = "".join(c if c.isprintable() else "?" for c in there)
+        k2_redirect_refused("refused: %s answered %s, sending K2 to %s; K2 does not follow a redirect with your token or password, so nothing was sent there" % (here, code, there))
+
+_k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule(), _K2NoRedirect()))
 '
 export _K2_PY_PROXY_RULE
 # A secret for an embedded Python script that is itself read from stdin (a

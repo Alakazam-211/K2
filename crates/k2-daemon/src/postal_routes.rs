@@ -257,7 +257,7 @@ pub fn handle(path: &str, who: Who, is_post: bool, body: &[u8], params: &HashMap
                 Err(r) => return r,
             };
             match path {
-                STATUS => status(&ws),
+                STATUS => status(&who, &ws),
                 FRIENDS => friends(&ws),
                 CLAIM => claim(&who, &ws, str_of(&v, params, "address"), str_of(&v, params, "why")),
                 INVITE => invite(&who, &ws, str_of(&v, params, "to"), str_of(&v, params, "why")),
@@ -317,8 +317,17 @@ pub(crate) async fn serve_tcp(
 /// What every answer says about the Postal network: connected or not,
 /// why not, and what still waits on others (live delivery, S6).
 fn plane() -> Value {
+    plane_with(false)
+}
+
+/// [`plane`], `retrying` when this answer's person just woke the loop
+/// ([`crate::postal_net::wake`]). Not connected, the note says when the
+/// last try ran and what comes next: `(last tried <time>; retrying now)`,
+/// or `; next try <time>` while the loop waits out its backoff.
+fn plane_with(retrying: bool) -> Value {
     let connected = k2_core::postal::gate::network_available();
-    let problem = crate::postal_net::last_problem();
+    let problem = if connected { None } else { crate::postal_net::last_problem() };
+    let next = if retrying { None } else { problem.as_ref().and(crate::postal_net::next_try()) };
     let note = if connected {
         format!(
             "Connected to the Postal network with this server's {} Connect account. Mail goes by the network's hold; live delivery to this server comes with a later Postal network update.",
@@ -326,20 +335,36 @@ fn plane() -> Value {
         )
     } else {
         match &problem {
-            Some((_, hint)) => format!("Not connected to the Postal network: {hint}"),
+            Some(p) => {
+                let then = if retrying {
+                    "; retrying now".to_string()
+                } else {
+                    next.map(|n| format!("; next try {}", crate::overlay_routes::card_time_words(n))).unwrap_or_default()
+                };
+                format!("Not connected to the Postal network: {} (last tried {}{then})", p.hint, crate::overlay_routes::card_time_words(p.at))
+            }
             None => "Not connected to the Postal network yet (it connects within a minute of Postal being on).".to_string(),
         }
     };
     json!({
         "connected": connected,
         "state": if connected { "connected" } else { k2_core::postal::gate::NOT_YET },
-        "problem": problem.map(|(c, _)| c),
+        "problem": problem.as_ref().map(|p| p.code.clone()),
+        "lastTriedAt": problem.as_ref().map(|p| p.at),
+        "nextTryAt": next,
+        "retrying": retrying,
         "live": "not_yet",
         "note": note,
     })
 }
 
-fn status(ws: &Ws) -> CliResponse {
+/// A person's ask wakes the Postal loop (an agent's passport never does).
+fn wake_for(who: &Who) -> bool {
+    who.passport().is_none() && crate::postal_net::wake()
+}
+
+fn status(who: &Who, ws: &Ws) -> CliResponse {
+    let retrying = wake_for(who);
     let (handle, counts) = k2_core::db::read(|conn| {
         let h = store::handle_for_workspace(conn, &ws.id);
         let c = h.as_ref().map(|h| store::counts(conn, &h.id)).unwrap_or((0, 0, 0));
@@ -352,7 +377,7 @@ fn status(ws: &Ws) -> CliResponse {
         "handle": handle,
         "counts": { "accepted": counts.0, "pendingIn": counts.1, "pendingOut": counts.2 },
         "ownerLinked": if k2_core::postal::gate::network_available() { crate::postal_net::owner_linked() } else { None },
-        "plane": plane(),
+        "plane": plane_with(retrying),
     }))
 }
 
@@ -425,7 +450,8 @@ fn record_claim(who: &Who, ws: &Ws, addr: &k2_core::postal::Address) -> CliRespo
                 }
             }
             let h = k2_core::db::read(|conn| store::handle_for_workspace(conn, &ws.id)).unwrap_or(h);
-            ok(json!({ "ok": true, "workspace": ws.json(), "handle": h, "plane": plane() }))
+            let retrying = wake_for(who);
+            ok(json!({ "ok": true, "workspace": ws.json(), "handle": h, "plane": plane_with(retrying) }))
         }
         Err(e) => store_err(e),
     }
@@ -760,7 +786,11 @@ fn enable(who: &Who, why: Option<&str>) -> CliResponse {
 /// The Owner turns Postal on (the enable route, and the `postal.enable`
 /// card's Allow).
 pub(crate) fn enable_as(who: &Who) -> CliResponse {
-    settings(who, true, &json!({ "enabled": true }))
+    let r = settings(who, true, &json!({ "enabled": true }));
+    if r.status.starts_with("200") {
+        wake_for(who);
+    }
+    r
 }
 
 fn settings(who: &Who, is_post: bool, v: &Value) -> CliResponse {

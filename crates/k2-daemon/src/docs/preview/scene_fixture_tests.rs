@@ -167,6 +167,9 @@ const ONE: [f64; 3] = [1.0, 1.0, 1.0];
 /// The living room's units, as its snapshot places them (in its order). The
 /// lights and the empties nothing is parented to are left out (nothing to
 /// draw), and so is the hidden left wall.
+// The angles are the snapshot's own numbers, digit for digit (3.1415927 is
+// its f32 pi printed); any other f64 could change the committed bytes.
+#[allow(clippy::approx_constant)]
 const ROOM: &[Unit] = &[
     unit("Floor", Some("Plane"), None, [0.0, 0.0, 0.0], NO_ROT, [3.0, 2.5, 1.0]),
     unit("Wall.Back", Some("Wall"), None, [0.0, 2.5, 0.6], Rot::Xyz([1.5707964, 0.0, 0.0]), [3.0, 0.6, 1.0]),

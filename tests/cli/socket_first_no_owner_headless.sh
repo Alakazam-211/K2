@@ -14,7 +14,7 @@
 #      socket still works. Loopback TCP points at a closed port for these
 #      runs, so an answer can only have come over the socket; the job's
 #      record says the agent submitted it, not the owner token.
-#   3. A TCP-only Open verb from the session (k2 workspace triage, which
+#   3. A TCP-only Open verb from the session (k2 feedback list, which
 #      sends cli_request over TCP) still answers as before. This row
 #      documents today's behaviour: it sends the owner token from disk,
 #      which a later change to the TCP-only senders will end.
@@ -230,9 +230,9 @@ else
 fi
 
 echo "== 3. a TCP-only Open verb from the session (today's behaviour; a later change to the TCP-only senders ends it) =="
-agent "$SOCK" "$DPORT" workspace triage
-if [ "$RC" = 0 ]; then ok "workspace triage: answers as before (exit 0)"; else bad "workspace triage: exit $RC"; show; fi
-case "$ERR" in "") ok "workspace triage: nothing on stderr" ;; *) bad "workspace triage: stderr $(printf %q "$ERR")" ;; esac
+agent "$SOCK" "$DPORT" feedback list
+if [ "$RC" = 0 ]; then ok "feedback list: answers as before (exit 0)"; else bad "feedback list: exit $RC"; show; fi
+case "$ERR" in "") ok "feedback list: nothing on stderr" ;; *) bad "feedback list: stderr $(printf %q "$ERR")" ;; esac
 
 echo
 echo "socket_first_no_owner_headless: $pass passed, $fail failed"

@@ -857,6 +857,48 @@ fn skin_hands_these_to_the_shell() {
     );
 }
 
+/// `app` alone and `app --json`: `cmd_app` hands them to `cmd_skin`,
+/// which prints the App family's page through the permission-card
+/// filter, with no teaching line (the family's bare row).
+#[test]
+fn app_alone_is_skin_s_page() {
+    let rig = Rig::new("app", "bare");
+    check(
+        &rig,
+        vec![
+            // covers: app
+            words("app alone: the page, exit 1", &[], 1),
+            words("app --json: the page", &["--json"], 1),
+            case("app alone, no daemon", &[], &[], vec![], nothing, 1, 0),
+            with(
+                with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+                case(
+                    "app alone, cards on",
+                    &[],
+                    &[],
+                    vec![ok(r#"{"enabled":true}"#)],
+                    port_only,
+                    1,
+                    1,
+                ),
+            ),
+            with(
+                with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+                case(
+                    "app --json, cards off",
+                    &["--json"],
+                    &[],
+                    vec![ok(r#"{"enabled":false}"#)],
+                    port_only,
+                    1,
+                    1,
+                ),
+            ),
+            shell(words("app --help: the shell's", &["--help"], 0)),
+        ],
+    );
+}
+
 const TEMPLATES: &str = r#"{"templates":[{"id":"viewer","label":"Viewer","description":"Reads é","caps":["read"],"folders":{"read":["docs"],"write":[],"uploadDir":"up"},"note":"safe"},{"id":"a-long-id","label":"Editor","description":"Writes","caps":[]}]}"#;
 
 /// `skin` alone and an unknown verb print the App family's page through

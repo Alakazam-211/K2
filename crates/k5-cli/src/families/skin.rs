@@ -1694,11 +1694,11 @@ const APP_GRANT_WORDS: [&str; 17] = [
     "--help",
 ];
 
-/// `k5 app user|role|grant|front-door|hydra ...`: `cmd_app` hands these
-/// words to `cmd_skin` as they are, with no teaching line. `None`: the
-/// shell CLI answers it.
+/// `k5 app user|role|grant|front-door|hydra ...`, and `app` alone:
+/// `cmd_app` hands these words to `cmd_skin` as they are, with no
+/// teaching line. `None`: the shell CLI answers it.
 pub fn run_app(args: &[OsString]) -> Option<Exit> {
-    let verb = args.get(1).and_then(|a| a.to_str())?;
+    let verb = args.get(1).map_or(Some(""), |a| a.to_str())?;
     if matches!(verb, "grant" | "grants") {
         let third = args.get(2).map_or(Some(""), |a| a.to_str())?;
         if !APP_GRANT_WORDS.contains(&third) {

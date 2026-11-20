@@ -1,7 +1,8 @@
 //! `k5 app <verb> …`, the App family, as the shell CLI's `cmd_app`
 //! (`cli/src/app-wallet.sh`) answers it, one verb group at a time. The
 //! route table sends a verb here when its group is native; every other
-//! verb, and `app` alone, stays the shell's.
+//! verb stays the shell's. `app` alone (and `app --json`) is skin's page,
+//! as `cmd_app` hands it to `cmd_skin` (its bare row).
 //!
 //! Native so far:
 //! - [`wallet`]: `app wallet settings|people|remove|personal-agent|personal-agents`.
@@ -250,8 +251,8 @@ pub const SKIN_GRANT: &[&str] = &[
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["app"];
-/// The shell's but for [`VERBS`]: `app` alone and every other verb are
-/// the shell's.
+/// The shell's but for [`VERBS`]: every other verb is the shell's (`app`
+/// alone is skin's page, by its bare row).
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
 /// One verb row per native group of `cmd_app`; each can turn back alone.
 pub const VERBS: &[crate::route::Verb] = &[
@@ -451,6 +452,8 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["token", "tokens"],
         owner: crate::route::Owner::Native,
     },
+    // `app` alone and `app --json`: skin's page ([`super::skin::run_app`]).
+    crate::route::Verb::bare(crate::route::Owner::Native),
 ];
 
 /// The words after `app`, read by the group the verb names. `None`: the
@@ -503,6 +506,11 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
 
 /// `k5 app …`. `None`: the shell's (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
+    // `app` alone (or with `--json`): `cmd_app` hands it to `cmd_skin`,
+    // which prints the family's page (the bare row below).
+    if crate::route::is_bare(args) {
+        return super::skin::run_app(args);
+    }
     match args.get(1).and_then(|a| a.to_str()) {
         Some("token" | "tokens") => return super::skin_token::run_app(args),
         Some(v @ ("grant" | "grants")) => {

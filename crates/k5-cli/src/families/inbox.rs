@@ -735,7 +735,10 @@ mod tests {
         );
         assert_eq!(
             line(10),
-            format!("sys.stderr.write('{}%r\\n' % raw[:200])", READ_UNUSABLE)
+            format!(
+                "sys.stderr.write('{}%r\\n' % raw[:200])",
+                READ_UNUSABLE.replace(k2_client::brand::PRODUCT_NAME, "K2")
+            )
         );
         assert_eq!(
             line(12),

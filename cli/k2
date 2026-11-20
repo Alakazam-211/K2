@@ -30167,6 +30167,20 @@ elif verb == "allow":
 '
 }
 
+# _desktop_secs <--timeout value> <usage line>: the seconds (10m, 90s,
+# 600), or the usage line and exit 2. Only digits reach $(( )): a letter
+# there names a shell variable, and bash evaluates that variable's value
+# as arithmetic too.
+_desktop_secs() {
+    [[ "$1" =~ ^[0-9]+[smh]?$ ]] || { echo "$2" >&2; exit 2; }
+    case "$1" in
+        *h) echo $(( 10#${1%h} * 3600 )) ;;
+        *m) echo $(( 10#${1%m} * 60 )) ;;
+        *s) echo $(( 10#${1%s} )) ;;
+        *) echo $(( 10#$1 )) ;;
+    esac
+}
+
 # _desktop_setup_wait <as_json> <no_wait> <timeout> <raw "body\ncode">: the
 # install runs on the server in the background (contract note 11-11):
 # setup answers setting_up at once; this polls status until the state is
@@ -30189,14 +30203,7 @@ _desktop_setup_wait() {
         return 0
     fi
     if [ -n "$wait_for" ]; then
-        case "$wait_for" in
-            *[!0-9smh]*|"") echo "usage: --timeout 10m|90s|600" >&2; exit 2 ;;
-            *h) secs=$(( ${wait_for%h} * 3600 )) ;;
-            *m) secs=$(( ${wait_for%m} * 60 )) ;;
-            *s) secs="${wait_for%s}" ;;
-            *) secs="$wait_for" ;;
-        esac
-        case "$secs" in ""|*[!0-9]*) echo "usage: --timeout 10m|90s|600" >&2; exit 2 ;; esac
+        secs="$(_desktop_secs "$wait_for" "usage: --timeout 10m|90s|600")" || exit 2
     fi
     [ "$as_json" = 1 ] || echo "Installing the desktop packages on the server (this can take a few minutes)…" >&2
     while :; do
@@ -30249,14 +30256,7 @@ _desktop_env() {
     fi
     body="$(_desktop_body "$body" "$desk")"
     if [ -n "$wait_for" ]; then
-        case "$wait_for" in
-            *[!0-9smh]*|"") echo "usage: --timeout 2m|90s|120" >&2; exit 2 ;;
-            *h) secs=$(( ${wait_for%h} * 3600 )) ;;
-            *m) secs=$(( ${wait_for%m} * 60 )) ;;
-            *s) secs="${wait_for%s}" ;;
-            *) secs="$wait_for" ;;
-        esac
-        case "$secs" in ""|*[!0-9]*) echo "usage: --timeout 2m|90s|120" >&2; exit 2 ;; esac
+        secs="$(_desktop_secs "$wait_for" "usage: --timeout 2m|90s|120")" || exit 2
     fi
     while :; do
         raw="$(_sidecar_send POST /cli/desktop/env "$body")"
@@ -30394,6 +30394,8 @@ cmd_desktop() {
             sub=stop
             raw="$(_sidecar_send POST /cli/desktop/stop "$(_desktop_body "{}" "$desk")")" ;;
         setup)
+            # A bad --timeout is the usage error before anything is sent.
+            [ -z "$wait_for" ] || _desktop_secs "$wait_for" "usage: --timeout 10m|90s|600" >/dev/null
             raw="$(_sidecar_send POST /cli/desktop/setup "{}")"
             _desktop_setup_wait "$as_json" "$no_wait" "$wait_for" "$raw"
             return 0 ;;
@@ -34608,8 +34610,11 @@ cmd_compute_node_servers() {
             case "$forv" in
                 "") for_n="" ;;
                 none|never|0) for_n=0 ;;
-                *d) for_n=$(( ${forv%d} * 86400 )) ;;
-                *) for_n="$(_compute_secs "$forv")" ;;
+                *d)
+                    # Digits only reach $(( )), as in _compute_secs.
+                    [[ "${forv%d}" =~ ^[0-9]+$ ]] || { echo "usage: k2 compute node servers <node> add --url URL --code-stdin [--for 7d|12h|none] (bad --for '$forv')" >&2; exit 2; }
+                    for_n=$(( 10#${forv%d} * 86400 )) ;;
+                *) for_n="$(_compute_secs "$forv")" || exit 2 ;;
             esac
             local set_json
             set_json="$(_compute_kv_json ${pairs[@]+"${pairs[@]}"})" || exit 2
@@ -34650,8 +34655,11 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
             case "$forv" in
                 "") for_n="" ;;
                 none|never|0) for_n=0 ;;
-                *d) for_n=$(( ${forv%d} * 86400 )) ;;
-                *) for_n="$(_compute_secs "$forv")" ;;
+                *d)
+                    # Digits only reach $(( )), as in _compute_secs.
+                    [[ "${forv%d}" =~ ^[0-9]+$ ]] || { echo "usage: k2 compute node servers <node> limits <server> [for=7d|12h|none] key=value… (bad for '$forv')" >&2; exit 2; }
+                    for_n=$(( 10#${forv%d} * 86400 )) ;;
+                *) for_n="$(_compute_secs "$forv")" || exit 2 ;;
             esac
             [ ${#pairs[@]} -gt 0 ] || [ -n "$for_n" ] || [ -n "$prio" ] || { echo "usage: k2 compute node servers <node> limits <server> key=value… (at least one)" >&2; exit 2; }
             local set_json
@@ -38016,15 +38024,17 @@ PY
 }
 
 # Seconds from a duration (30s, 5m, 2h, 1d); exits 2 on a bad one.
+# Only digits reach $(( )): a letter there names a shell variable, and
+# bash evaluates that variable's value as arithmetic too.
 _sources_secs() {
     local v="$1" flag="$2"
+    [[ "$v" =~ ^[0-9]+[smhd]?$ ]] || { echo "Error: $flag takes a duration like 30s, 5m, 2h, 1d" >&2; exit 2; }
     case "$v" in
-        *[!0-9smhd]*|"") echo "Error: $flag takes a duration like 30s, 5m, 2h, 1d" >&2; exit 2 ;;
-        *d) echo $(( ${v%d} * 86400 )) ;;
-        *h) echo $(( ${v%h} * 3600 )) ;;
-        *m) echo $(( ${v%m} * 60 )) ;;
-        *s) echo "${v%s}" ;;
-        *) echo "$v" ;;
+        *d) echo $(( 10#${v%d} * 86400 )) ;;
+        *h) echo $(( 10#${v%h} * 3600 )) ;;
+        *m) echo $(( 10#${v%m} * 60 )) ;;
+        *s) echo $(( 10#${v%s} )) ;;
+        *) echo $(( 10#$v )) ;;
     esac
 }
 
@@ -38216,7 +38226,7 @@ cmd_sources_history() {
         local v; if [ "$t" = from ]; then v="$from"; else v="$to"; fi
         [ -z "$v" ] && continue
         case "$v" in
-            *[smhd]) v=$(( now - $(_sources_secs "$v" "--$t") )) ;;
+            *[smhd]) local secs; secs="$(_sources_secs "$v" "--$t")" || exit 2; v=$(( now - secs )) ;;
             *[!0-9]*) echo "Error: --$t takes a duration (6h) or epoch seconds" >&2; exit 2 ;;
         esac
         q="$q&$t=$v"
@@ -38388,16 +38398,16 @@ cmd_sources_refresh() {
 # BEGIN_SOURCES_B2
 # Try, simulate, approvals, secrets, pins, pending and triggers (B2).
 
-# 30s / 5m / 2h / 1d / bare seconds → seconds.
+# 30s / 5m / 2h / 1d / bare seconds → seconds. Only digits reach $(( )).
 _sources_b2_secs() {
     local v="$1"
+    [[ "$v" =~ ^[0-9]+[smhd]?$ ]] || { echo "usage: bad duration '$v' (use 30s, 5m, 2h, 1d)" >&2; exit 2; }
     case "$v" in
-        *d) echo $(( ${v%d} * 86400 )) ;;
-        *h) echo $(( ${v%h} * 3600 )) ;;
-        *m) echo $(( ${v%m} * 60 )) ;;
-        *s) echo "${v%s}" ;;
-        ''|*[!0-9]*) echo "usage: bad duration '$v' (use 30s, 5m, 2h, 1d)" >&2; exit 2 ;;
-        *) echo "$v" ;;
+        *d) echo $(( 10#${v%d} * 86400 )) ;;
+        *h) echo $(( 10#${v%h} * 3600 )) ;;
+        *m) echo $(( 10#${v%m} * 60 )) ;;
+        *s) echo $(( 10#${v%s} )) ;;
+        *) echo $(( 10#$v )) ;;
     esac
 }
 

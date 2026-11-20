@@ -474,15 +474,17 @@ PY
 }
 
 # Seconds from a duration (30s, 5m, 2h, 1d); exits 2 on a bad one.
+# Only digits reach $(( )): a letter there names a shell variable, and
+# bash evaluates that variable's value as arithmetic too.
 _sources_secs() {
     local v="$1" flag="$2"
+    [[ "$v" =~ ^[0-9]+[smhd]?$ ]] || { echo "Error: $flag takes a duration like 30s, 5m, 2h, 1d" >&2; exit 2; }
     case "$v" in
-        *[!0-9smhd]*|"") echo "Error: $flag takes a duration like 30s, 5m, 2h, 1d" >&2; exit 2 ;;
-        *d) echo $(( ${v%d} * 86400 )) ;;
-        *h) echo $(( ${v%h} * 3600 )) ;;
-        *m) echo $(( ${v%m} * 60 )) ;;
-        *s) echo "${v%s}" ;;
-        *) echo "$v" ;;
+        *d) echo $(( 10#${v%d} * 86400 )) ;;
+        *h) echo $(( 10#${v%h} * 3600 )) ;;
+        *m) echo $(( 10#${v%m} * 60 )) ;;
+        *s) echo $(( 10#${v%s} )) ;;
+        *) echo $(( 10#$v )) ;;
     esac
 }
 
@@ -674,7 +676,7 @@ cmd_sources_history() {
         local v; if [ "$t" = from ]; then v="$from"; else v="$to"; fi
         [ -z "$v" ] && continue
         case "$v" in
-            *[smhd]) v=$(( now - $(_sources_secs "$v" "--$t") )) ;;
+            *[smhd]) local secs; secs="$(_sources_secs "$v" "--$t")" || exit 2; v=$(( now - secs )) ;;
             *[!0-9]*) echo "Error: --$t takes a duration (6h) or epoch seconds" >&2; exit 2 ;;
         esac
         q="$q&$t=$v"
@@ -846,16 +848,16 @@ cmd_sources_refresh() {
 # BEGIN_SOURCES_B2
 # Try, simulate, approvals, secrets, pins, pending and triggers (B2).
 
-# 30s / 5m / 2h / 1d / bare seconds → seconds.
+# 30s / 5m / 2h / 1d / bare seconds → seconds. Only digits reach $(( )).
 _sources_b2_secs() {
     local v="$1"
+    [[ "$v" =~ ^[0-9]+[smhd]?$ ]] || { echo "usage: bad duration '$v' (use 30s, 5m, 2h, 1d)" >&2; exit 2; }
     case "$v" in
-        *d) echo $(( ${v%d} * 86400 )) ;;
-        *h) echo $(( ${v%h} * 3600 )) ;;
-        *m) echo $(( ${v%m} * 60 )) ;;
-        *s) echo "${v%s}" ;;
-        ''|*[!0-9]*) echo "usage: bad duration '$v' (use 30s, 5m, 2h, 1d)" >&2; exit 2 ;;
-        *) echo "$v" ;;
+        *d) echo $(( 10#${v%d} * 86400 )) ;;
+        *h) echo $(( 10#${v%h} * 3600 )) ;;
+        *m) echo $(( 10#${v%m} * 60 )) ;;
+        *s) echo $(( 10#${v%s} )) ;;
+        *) echo $(( 10#$v )) ;;
     esac
 }
 

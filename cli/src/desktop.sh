@@ -200,6 +200,20 @@ elif verb == "allow":
 '
 }
 
+# _desktop_secs <--timeout value> <usage line>: the seconds (10m, 90s,
+# 600), or the usage line and exit 2. Only digits reach $(( )): a letter
+# there names a shell variable, and bash evaluates that variable's value
+# as arithmetic too.
+_desktop_secs() {
+    [[ "$1" =~ ^[0-9]+[smh]?$ ]] || { echo "$2" >&2; exit 2; }
+    case "$1" in
+        *h) echo $(( 10#${1%h} * 3600 )) ;;
+        *m) echo $(( 10#${1%m} * 60 )) ;;
+        *s) echo $(( 10#${1%s} )) ;;
+        *) echo $(( 10#$1 )) ;;
+    esac
+}
+
 # _desktop_setup_wait <as_json> <no_wait> <timeout> <raw "body\ncode">: the
 # install runs on the server in the background (contract note 11-11):
 # setup answers setting_up at once; this polls status until the state is
@@ -222,14 +236,7 @@ _desktop_setup_wait() {
         return 0
     fi
     if [ -n "$wait_for" ]; then
-        case "$wait_for" in
-            *[!0-9smh]*|"") echo "usage: --timeout 10m|90s|600" >&2; exit 2 ;;
-            *h) secs=$(( ${wait_for%h} * 3600 )) ;;
-            *m) secs=$(( ${wait_for%m} * 60 )) ;;
-            *s) secs="${wait_for%s}" ;;
-            *) secs="$wait_for" ;;
-        esac
-        case "$secs" in ""|*[!0-9]*) echo "usage: --timeout 10m|90s|600" >&2; exit 2 ;; esac
+        secs="$(_desktop_secs "$wait_for" "usage: --timeout 10m|90s|600")" || exit 2
     fi
     [ "$as_json" = 1 ] || echo "Installing the desktop packages on the server (this can take a few minutes)…" >&2
     while :; do
@@ -282,14 +289,7 @@ _desktop_env() {
     fi
     body="$(_desktop_body "$body" "$desk")"
     if [ -n "$wait_for" ]; then
-        case "$wait_for" in
-            *[!0-9smh]*|"") echo "usage: --timeout 2m|90s|120" >&2; exit 2 ;;
-            *h) secs=$(( ${wait_for%h} * 3600 )) ;;
-            *m) secs=$(( ${wait_for%m} * 60 )) ;;
-            *s) secs="${wait_for%s}" ;;
-            *) secs="$wait_for" ;;
-        esac
-        case "$secs" in ""|*[!0-9]*) echo "usage: --timeout 2m|90s|120" >&2; exit 2 ;; esac
+        secs="$(_desktop_secs "$wait_for" "usage: --timeout 2m|90s|120")" || exit 2
     fi
     while :; do
         raw="$(_sidecar_send POST /cli/desktop/env "$body")"
@@ -427,6 +427,8 @@ cmd_desktop() {
             sub=stop
             raw="$(_sidecar_send POST /cli/desktop/stop "$(_desktop_body "{}" "$desk")")" ;;
         setup)
+            # A bad --timeout is the usage error before anything is sent.
+            [ -z "$wait_for" ] || _desktop_secs "$wait_for" "usage: --timeout 10m|90s|600" >/dev/null
             raw="$(_sidecar_send POST /cli/desktop/setup "{}")"
             _desktop_setup_wait "$as_json" "$no_wait" "$wait_for" "$raw"
             return 0 ;;

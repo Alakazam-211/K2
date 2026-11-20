@@ -633,8 +633,11 @@ cmd_compute_node_servers() {
             case "$forv" in
                 "") for_n="" ;;
                 none|never|0) for_n=0 ;;
-                *d) for_n=$(( ${forv%d} * 86400 )) ;;
-                *) for_n="$(_compute_secs "$forv")" ;;
+                *d)
+                    # Digits only reach $(( )), as in _compute_secs.
+                    [[ "${forv%d}" =~ ^[0-9]+$ ]] || { echo "usage: k2 compute node servers <node> add --url URL --code-stdin [--for 7d|12h|none] (bad --for '$forv')" >&2; exit 2; }
+                    for_n=$(( 10#${forv%d} * 86400 )) ;;
+                *) for_n="$(_compute_secs "$forv")" || exit 2 ;;
             esac
             local set_json
             set_json="$(_compute_kv_json ${pairs[@]+"${pairs[@]}"})" || exit 2
@@ -675,8 +678,11 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
             case "$forv" in
                 "") for_n="" ;;
                 none|never|0) for_n=0 ;;
-                *d) for_n=$(( ${forv%d} * 86400 )) ;;
-                *) for_n="$(_compute_secs "$forv")" ;;
+                *d)
+                    # Digits only reach $(( )), as in _compute_secs.
+                    [[ "${forv%d}" =~ ^[0-9]+$ ]] || { echo "usage: k2 compute node servers <node> limits <server> [for=7d|12h|none] key=value… (bad for '$forv')" >&2; exit 2; }
+                    for_n=$(( 10#${forv%d} * 86400 )) ;;
+                *) for_n="$(_compute_secs "$forv")" || exit 2 ;;
             esac
             [ ${#pairs[@]} -gt 0 ] || [ -n "$for_n" ] || [ -n "$prio" ] || { echo "usage: k2 compute node servers <node> limits <server> key=value… (at least one)" >&2; exit 2; }
             local set_json

@@ -86,7 +86,9 @@ export function NavPaletteField({ className }: { className?: string }): React.JS
 
 /** + : Add to Home on the current group. `place` says which + opened it
  *  (focus goes back to it on close). The footer's quiet control: the
- *  control edge, cut corners in Terminal, round in Glass, 32 × 32. */
+ *  control edge and cut corners in Terminal, 32 × 32. In Glass the footer's
+ *  + is Frost, a round glass button like the nav's others (globals.css,
+ *  "The Home nav footer"); the empty Home's + stays the quiet Button. */
 export const HomeAddButton = forwardRef<
   HTMLButtonElement,
   { place: 'footer' | 'empty'; label?: string; title?: string; className?: string }
@@ -96,6 +98,7 @@ export const HomeAddButton = forwardRef<
       ref={ref}
       variant="quiet"
       size="md"
+      data-material={place === 'footer' ? 'frost' : undefined}
       data-frost-shape="round"
       data-nav-control=""
       data-home-add-open={place}

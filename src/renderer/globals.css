@@ -2349,6 +2349,29 @@ html[data-style="glass"] input[data-k2-search][data-material="frost"]:focus:not(
 html[data-style="glass"] [data-k2-menu] input[data-k2-search][data-material="frost"]:focus:not([data-zen-root] *) {
   border-color: var(--color-control-edge);
 }
+/* The Home nav footer: its ⌘K field and + are Frost, the same glass as the
+   top bar's capsules and the nav's round buttons (the frost fill, blur and
+   sheen, the frost edge, and Veil's light-glass recipe), not outlined
+   controls. The field drops the search field's control edge at rest; focus
+   keeps its accent edge. The + is a quiet Button, so its frost fill and edge
+   outrank the bordered-button fill and hover edge; focus keeps its ring. */
+html[data-style="glass"] [data-home-footer-row] :is(input[data-k2-search]:not(:focus), button[data-home-add-open][data-home-add-open])[data-material="frost"]:not([data-zen-root] *) {
+  border: 0.5px solid var(--material-edge);
+}
+html[data-style="glass"] [data-home-footer-row] button[data-home-add-open][data-home-add-open][data-material="frost"]:not([data-zen-root] *) {
+  background: var(--material-tint);
+}
+html[data-style="glass"] [data-home-footer-row] button[data-home-add-open][data-home-add-open][data-material="frost"]:hover:not(:disabled):not([data-zen-root] *) {
+  background: var(--k2-float-fill-hover);
+  border-color: var(--material-edge);
+}
+/* No blur (the frost fallback): the tile look every Frost object takes. */
+html[data-style="glass"][data-frost="tile"] [data-home-footer-row] :is(input[data-k2-search]:not(:focus), button[data-home-add-open][data-home-add-open])[data-material="frost"]:not([data-zen-root] *) {
+  border: 1px solid var(--tile-edge);
+}
+html[data-style="glass"][data-frost="tile"] [data-home-footer-row] button[data-home-add-open][data-home-add-open][data-material="frost"]:not([data-zen-root] *) {
+  background: var(--tile-raised);
+}
 @media (prefers-reduced-motion: reduce) {
   html[data-style="glass"] [data-material="frost"]:not([data-zen-root] *) { animation: none !important; }
   html[data-style="glass"] [data-nav-control]:active:not(:disabled):not([data-zen-root] *) { scale: 1; }

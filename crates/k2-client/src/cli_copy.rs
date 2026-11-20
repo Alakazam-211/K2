@@ -215,10 +215,15 @@ fn is_ours_to_remove(path: &Path, name: &str) -> bool {
     if !meta.file_type().is_file() {
         return false;
     }
-    match name {
-        CLI_NAME => ci::is_k2_cli_script(path),
-        ci::LEGACY_NAME => fs::read(path).is_ok_and(|b| String::from_utf8_lossy(&b[..b.len().min(4096)]).contains(SHIM_MARK)),
-        _ => false,
+    // `if`, not `match`: a brand with no alias has LEGACY_NAME equal to
+    // CLI_NAME, and a second match arm on the same value can't compile
+    // under -D warnings.
+    if name == CLI_NAME {
+        ci::is_k2_cli_script(path)
+    } else if name == ci::LEGACY_NAME {
+        fs::read(path).is_ok_and(|b| String::from_utf8_lossy(&b[..b.len().min(4096)]).contains(SHIM_MARK))
+    } else {
+        false
     }
 }
 

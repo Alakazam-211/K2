@@ -1200,6 +1200,16 @@ pub fn make_temp(stem: &std::path::Path) -> Option<(std::path::PathBuf, std::fs:
 /// `_gd_export_jsonl WIDGET AT`: every page, as JSONL on stdout, the
 /// header first.
 pub fn export_jsonl(gd: &mut Gd, widget: &str, at_: &str) -> R<()> {
+    export_jsonl_to(gd, widget, at_, &mut |b| say(b))
+}
+
+/// [`export_jsonl`], each page's lines handed to `sink`.
+pub fn export_jsonl_to(
+    gd: &mut Gd,
+    widget: &str,
+    at_: &str,
+    sink: &mut dyn FnMut(&[u8]) -> R<()>,
+) -> R<()> {
     temp_check()?;
     let mut after = String::new();
     let mut first = true;
@@ -1240,7 +1250,7 @@ pub fn export_jsonl(gd: &mut Gd, widget: &str, at_: &str) -> R<()> {
                 _ => Ok(String::new()),
             }
         })();
-        say(o.as_bytes())?;
+        sink(o.as_bytes())?;
         match read {
             Ok(n) => after = n.trim_end_matches('\n').to_string(),
             Err(r) => {

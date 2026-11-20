@@ -44471,13 +44471,13 @@ cmd_reserve() {
     [[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     [[ ${#_RS_PATHS[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }
     local joined=$(IFS=,; echo "${_RS_PATHS[*]}")
-    cli_request_post "/cli/reserve" "agent=$_RS_AGENT&paths=$(urlencode "$joined")"
+    cli_request_post "/cli/reserve" "agent=$(urlencode "$_RS_AGENT")&paths=$(urlencode "$joined")"
 }
 
 cmd_release() {
     _reserve_args release "$@"
     [[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
-    local params="agent=$_RS_AGENT"
+    local params="agent=$(urlencode "$_RS_AGENT")"
     if [[ ${#_RS_PATHS[@]} -gt 0 ]]; then
         local joined=$(IFS=,; echo "${_RS_PATHS[*]}")
         params="$params&paths=$(urlencode "$joined")"

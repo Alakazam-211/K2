@@ -146,6 +146,33 @@ sent "release some/path"             "POST /cli/release?agent=tester&paths=some%
 k2_as "" release --agent tester some/path
 sent "release --agent"               "POST /cli/release?agent=tester&paths=some%2Fpath"
 
+# ── The agent name is escaped: one agent value, as typed. Raw, a '#' cut
+# the query (and the paths), a '&' or '=' added a parameter and '%41'
+# reached the daemon as 'A'.
+# one_agent <case> <the agent value the daemon must parse>
+one_agent() {
+    python3 - "$T/requests.log" "$2" <<'PY' || die "$1: the daemon did not get one agent value"
+import sys, urllib.parse
+lines = [l for l in open(sys.argv[1]).read().split("\n") if l]
+assert len(lines) == 1, lines
+form = urllib.parse.parse_qs(lines[0].split("?", 1)[1], keep_blank_values=True)
+assert form["agent"] == [sys.argv[2]], form
+PY
+    ok
+}
+k2_as "" reserve --agent 'a&b=c d%41' some/path
+sent "reserve, a name with & = space %" "POST /cli/reserve?agent=a%26b%3Dc%20d%2541&paths=some%2Fpath"
+one_agent "reserve, a name with & = space %" 'a&b=c d%41'
+k2_as 'x#y' reserve some/path
+sent "reserve, K2_AGENT_NAME with #"  "POST /cli/reserve?agent=x%23y&paths=some%2Fpath"
+one_agent "reserve, K2_AGENT_NAME with #" 'x#y'
+k2_as "" release --agent 'x&paths=y' some/path
+sent "release, a name with & and ="   "POST /cli/release?agent=x%26paths%3Dy&paths=some%2Fpath"
+one_agent "release, a name with & and =" 'x&paths=y'
+k2_as 'a b+c%' release
+sent "release, K2_AGENT_NAME with space + %" "POST /cli/release?agent=a%20b%2Bc%25"
+one_agent "release, K2_AGENT_NAME with space + %" 'a b+c%'
+
 # The errors that were there stay as they were.
 k2_as "" reserve some/path
 [ "$RC" = 1 ] || die "reserve with no agent: exit $RC"

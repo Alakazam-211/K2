@@ -764,7 +764,7 @@ fn body(verb: &str, dv: &Value, env: Env<'_>, mut o: Out) -> Shown {
                 let snaps = items(g(&f, "snapshots"));
                 let note = if t(g(&f, "deleted")) {
                     ", Garden deleted"
-                } else if !g(&f, "exists").map_or(true, py::truthy) {
+                } else if !g(&f, "exists").is_none_or(py::truthy) {
                     ", file deleted"
                 } else {
                     ""

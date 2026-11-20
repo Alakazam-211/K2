@@ -393,7 +393,7 @@ pub fn agent_print(view: &str, as_json: bool, raw: &[u8]) -> Shown {
                 ));
                 o.o(or(g(&d, "message"), ""));
             } else {
-                let changed = g(&d, "changed").map_or(true, py::truthy);
+                let changed = g(&d, "changed").is_none_or(py::truthy);
                 o.o(format!(
                     "Wrote {}{}",
                     s(g(&d, "file")),

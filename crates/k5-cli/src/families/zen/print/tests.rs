@@ -28,7 +28,7 @@ fn the_raise_lines_are_the_shell_s() {
         assert!(at(*n).contains("d.get("), "{verb}: line {n} is {:?}", at(*n));
         let arm = (1..*n)
             .rev()
-            .map(|k| at(k))
+            .map(&at)
             .find(|l| l.contains("verb ==") || l.contains("verb in ("))
             .unwrap();
         assert!(arm.contains(&format!("\"{verb}\"")), "{verb}: {arm}");

@@ -153,7 +153,11 @@ fn link(words: &[&str]) -> Result<Plan, Plan> {
     let mut vals: Vec<(&'static str, String)> = Vec::new();
     let (mut address, mut pass_stdin, mut json) = ("", false, false);
     let flags: &[(&str, &'static str, &str)] = &[
-        ("--provider", "provider", "--provider requires gmail or microsoft"),
+        (
+            "--provider",
+            "provider",
+            "--provider requires gmail or microsoft",
+        ),
         (
             "--features",
             "features",
@@ -165,7 +169,11 @@ fn link(words: &[&str]) -> Result<Plan, Plan> {
             "workspace",
             "--workspace requires a value (the ONE workspace to bind)",
         ),
-        ("--host", "host", "--host requires a value (e.g. imap.gmail.com)"),
+        (
+            "--host",
+            "host",
+            "--host requires a value (e.g. imap.gmail.com)",
+        ),
         ("--port", "port", "--port requires a number"),
         ("--tls", "tls", "--tls requires implicit-tls or starttls"),
         (
@@ -240,8 +248,12 @@ fn link(words: &[&str]) -> Result<Plan, Plan> {
             .map(|(_, x)| x.clone())
             .unwrap_or_default()
     };
-    let (provider, features, workspace, host) =
-        (val("provider"), val("features"), val("workspace"), val("host"));
+    let (provider, features, workspace, host) = (
+        val("provider"),
+        val("features"),
+        val("workspace"),
+        val("host"),
+    );
     let pass_ref = val("pass_ref");
     match sub {
         "add" => {
@@ -387,11 +399,7 @@ fn access(words: &[&str]) -> Result<Plan, Plan> {
                 cal_omit = match rest.get(i + 1).copied() {
                     Some("on") => "true",
                     Some("off") => "false",
-                    _ => {
-                        return Err(usage(
-                            "--calendar-omit-description takes on or off",
-                        ))
-                    }
+                    _ => return Err(usage("--calendar-omit-description takes on or off")),
                 };
                 i += 2;
                 continue;
@@ -424,7 +432,9 @@ fn access(words: &[&str]) -> Result<Plan, Plan> {
         i += 1;
     }
     if address.is_empty() || workspace.is_empty() {
-        return Err(usage(format!("access {sub} requires <address> <workspace>")));
+        return Err(usage(format!(
+            "access {sub} requires <address> <workspace>"
+        )));
     }
     if !cal_omit.is_empty() && verb != "access_grant" && verb != "access_level" {
         return Err(usage(format!(
@@ -531,7 +541,9 @@ fn oauth_config(words: &[&str]) -> Result<Plan, Plan> {
     match sub {
         "set" => {
             if provider.is_empty() {
-                return Err(usage("oauth-config set requires --provider gmail|microsoft"));
+                return Err(usage(
+                    "oauth-config set requires --provider gmail|microsoft",
+                ));
             }
             if client_id.is_empty() && tenant.is_empty() {
                 return Err(usage(
@@ -550,12 +562,10 @@ fn oauth_config(words: &[&str]) -> Result<Plan, Plan> {
                 }
             }
         }
-        "clear" => {
-            if provider.is_empty() {
-                return Err(usage(
-                    "oauth-config clear requires --provider gmail|microsoft",
-                ));
-            }
+        "clear" if provider.is_empty() => {
+            return Err(usage(
+                "oauth-config clear requires --provider gmail|microsoft",
+            ));
         }
         _ => {}
     }
@@ -639,7 +649,9 @@ fn g(d: &Value, key: &str, l: u32) -> R<Option<Value>> {
 }
 
 fn gs(d: &Value, key: &str, default: &str, l: u32) -> R<String> {
-    Ok(py::str_of(&p::get_or(d, key, p::sv(default)).at(l, MODULE)?))
+    Ok(py::str_of(
+        &p::get_or(d, key, p::sv(default)).at(l, MODULE)?,
+    ))
 }
 
 fn sv(t: &str) -> Value {
@@ -832,7 +844,8 @@ fn oauth_py(py_: &mut Py, upgrade: bool) -> R<()> {
     };
     let _ = crate::out::write_flushed(
         &mut std::io::stderr().lock(),
-        format!("{lead}Waiting for approval (Ctrl-C to stop; the link stays pending)…\n").as_bytes(),
+        format!("{lead}Waiting for approval (Ctrl-C to stop; the link stays pending)…\n")
+            .as_bytes(),
     );
     // `params={"linkId": link_id}`: urlencode writes `str(link_id)`.
     let params = vec![("linkId".to_string(), py::str_of(&link_id))];
@@ -853,7 +866,10 @@ fn oauth_py(py_: &mut Py, upgrade: bool) -> R<()> {
         };
         let err = g(&s, "error", line::OAUTH_ERROR)?;
         if let Some(err) = err.filter(py::truthy) {
-            return Err(within_module(py_.die(&err, None, None), line::OAUTH_ERROR + 1));
+            return Err(within_module(
+                py_.die(&err, None, None),
+                line::OAUTH_ERROR + 1,
+            ));
         }
         let state = g(&s, "state", line::OAUTH_STATE)?;
         let done = state.as_ref().is_some_and(|st| {
@@ -969,7 +985,10 @@ fn external_remove_py(py_: &mut Py) -> R<()> {
 /// `link_list`: the linked rows of the owner's catalog.
 fn link_list_py(py_: &mut Py) -> R<()> {
     let d = py_.get("/cli/mail/inboxes", &[], line::LINKS_CALL)?;
-    let all = p::or(g(&d, "inboxes", line::LINKS_ROWS)?, Value::Array(Vec::new()));
+    let all = p::or(
+        g(&d, "inboxes", line::LINKS_ROWS)?,
+        Value::Array(Vec::new()),
+    );
     let mut rows = Vec::new();
     for r in iter(&all).at(line::LINKS_ROWS, MODULE)? {
         let src = attr_get(&r, "source")
@@ -998,7 +1017,11 @@ fn link_list_py(py_: &mut Py) -> R<()> {
         let a = p::get_or(r, "address", sv(""))
             .at(line::LINKS_W, "<genexpr>")
             .within(line::LINKS_W, MODULE)?;
-        w = w.max(p::len(&a).at(line::LINKS_W, "<genexpr>").within(line::LINKS_W, MODULE)?);
+        w = w.max(
+            p::len(&a)
+                .at(line::LINKS_W, "<genexpr>")
+                .within(line::LINKS_W, MODULE)?,
+        );
     }
     let w = w + 2;
     py_.print(&format!(
@@ -1030,12 +1053,15 @@ fn link_list_py(py_: &mut Py) -> R<()> {
             p::ljust(&st, 11),
             p::ljust(&py::str_of(&who), 22)
         ));
-        let grants = p::or(g(r, "grants", line::LINKS_GRANTS)?, Value::Array(Vec::new()));
+        let grants = p::or(
+            g(r, "grants", line::LINKS_GRANTS)?,
+            Value::Array(Vec::new()),
+        );
         for gr in iter(&grants).at(line::LINKS_GRANTS, MODULE)? {
             let st = g(&gr, "sendState", line::LINKS_ST)?;
-            let blocked = st.as_ref().is_some_and(|s| {
-                p::eq_str(s, "blocked_off") || p::eq_str(s, "blocked_approval")
-            });
+            let blocked = st
+                .as_ref()
+                .is_some_and(|s| p::eq_str(s, "blocked_off") || p::eq_str(s, "blocked_approval"));
             let note = if blocked {
                 let l = line::LINKS_NOTE;
                 let mode = p::or(g(&gr, "agentSend", l)?, sv("off"));
@@ -1090,7 +1116,10 @@ fn grant_or_level_py(py_: &mut Py, grant: bool) -> R<()> {
         py_.print_json(&d);
         return Ok(());
     }
-    let (level, ws) = (py_.env("M_LEVEL").to_string(), py_.env("M_WORKSPACE").to_string());
+    let (level, ws) = (
+        py_.env("M_LEVEL").to_string(),
+        py_.env("M_WORKSPACE").to_string(),
+    );
     if grant {
         let l = line::GRANT_PRINT;
         return hint_or(py_, &d, l, || {
@@ -1209,8 +1238,12 @@ fn oauth_config_py(py_: &mut Py, verb: &str) -> R<()> {
             let key = p::get_or(&d, "provider", sv(&prov)).at(l, MODULE)?;
             let key = match key {
                 Value::Str(t) => t,
-                Value::Array(_) => return Err(core::raise_at(l, "TypeError: unhashable type: 'list'")),
-                Value::Object(_) => return Err(core::raise_at(l, "TypeError: unhashable type: 'dict'")),
+                Value::Array(_) => {
+                    return Err(core::raise_at(l, "TypeError: unhashable type: 'list'"))
+                }
+                Value::Object(_) => {
+                    return Err(core::raise_at(l, "TypeError: unhashable type: 'dict'"))
+                }
                 // Another key never matches "gmail" or "microsoft".
                 _ => crate::out::json::Text::from(""),
             };
@@ -1245,10 +1278,20 @@ fn oauth_config_py(py_: &mut Py, verb: &str) -> R<()> {
             }
         );
         if name == "gmail" {
-            let set = p::truthy(attr_get(&pv, "secretSet").at(line::OAUTH_SECRET, MODULE)?.as_ref());
+            let set = p::truthy(
+                attr_get(&pv, "secretSet")
+                    .at(line::OAUTH_SECRET, MODULE)?
+                    .as_ref(),
+            );
             text.push_str(&format!("  secret {}", if set { "set" } else { "not set" }));
         }
-        if name == "microsoft" && p::truthy(attr_get(&pv, "tenant").at(line::OAUTH_TENANT, MODULE)?.as_ref()) {
+        if name == "microsoft"
+            && p::truthy(
+                attr_get(&pv, "tenant")
+                    .at(line::OAUTH_TENANT, MODULE)?
+                    .as_ref(),
+            )
+        {
             let t = p::py_index(&pv, "tenant").at(line::OAUTH_TENANT_LINE, MODULE)?;
             text.push_str(&format!("  tenant {}", py::str_of(&t)));
         }
@@ -1272,8 +1315,14 @@ fn sending_py(py_: &mut Py, set: bool) -> R<()> {
         &[("workspace".to_string(), ws.clone())],
         line::SENDING_GET,
     )?;
-    let w = p::or(g(&d, "workspace", line::SENDING_W)?, Value::Object(Vec::new()));
-    let a = p::or(g(&w, "agentSend", line::SENDING_A)?, Value::Object(Vec::new()));
+    let w = p::or(
+        g(&d, "workspace", line::SENDING_W)?,
+        Value::Object(Vec::new()),
+    );
+    let a = p::or(
+        g(&w, "agentSend", line::SENDING_A)?,
+        Value::Object(Vec::new()),
+    );
     if py_.json {
         let l = line::SENDING_JSON;
         let null = |v: Option<Value>| v.unwrap_or(Value::Null);

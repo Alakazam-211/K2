@@ -59,8 +59,8 @@
 //! - `int()` of a string reads ASCII digits only (Python's reads every
 //!   Unicode digit).
 
-use super::py::{attr_get, big, concat, concat_error, iter, join, py_index, py_int, text};
 use super::super::{curl_port, raised, s, Raise, Shown};
+use super::py::{attr_get, big, concat, concat_error, iter, join, py_index, py_int, text};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};

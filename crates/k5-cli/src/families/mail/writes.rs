@@ -271,12 +271,17 @@ fn json_switch() -> (&'static str, &'static str, &'static str) {
 
 /// `cmd_mail_send`.
 fn send(words: &[&str]) -> Result<Plan, Plan> {
-    let from_hint = format!("--from requires one of your addresses (see '{CLI_NAME} mail addresses')");
+    let from_hint =
+        format!("--from requires one of your addresses (see '{CLI_NAME} mail addresses')");
     let takes = [
         add("--to", "M_TO", "--to requires a recipient address"),
         set("--subject", "M_SUBJECT", "--subject requires a value"),
         set("--body", "M_BODY", "--body requires the message text"),
-        set("--body-file", "M_BODY_FILE", "--body-file requires a file path"),
+        set(
+            "--body-file",
+            "M_BODY_FILE",
+            "--body-file requires a file path",
+        ),
         add("--cc", "M_CC", "--cc requires an address"),
         add("--bcc", "M_BCC", "--bcc requires an address"),
         set("--from", "M_FROM", &from_hint),
@@ -288,7 +293,11 @@ fn send(words: &[&str]) -> Result<Plan, Plan> {
         add("--reply-to", "M_REPLY_TO", "--reply-to requires an address"),
         add("--attach", "M_ATTACH", "--attach requires a file path"),
         set("--at", "M_SEND_AT", "--at requires an RFC3339 timestamp"),
-        set("--in", "M_SEND_IN", "--in requires a duration (e.g. 30m, 2h, 1d)"),
+        set(
+            "--in",
+            "M_SEND_IN",
+            "--in requires a duration (e.g. 30m, 2h, 1d)",
+        ),
         set(
             "--timeout",
             "M_TIMEOUT",
@@ -299,18 +308,24 @@ fn send(words: &[&str]) -> Result<Plan, Plan> {
     let unknown = |f: &str| {
         format!("unknown flag '{f}' — usage: {CLI_NAME} mail send <to> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--from <owned-addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <s>]] [--json]")
     };
-    let mut r = walk(words, &takes, &switches, &unknown, &mut |r: &mut Read, w: &str| {
-        let to = r.get("M_TO").to_string();
-        r.env.set(
-            "M_TO",
-            if to.is_empty() {
-                w.to_string()
-            } else {
-                format!("{to}\n{w}")
-            },
-        );
-        Ok(())
-    })?;
+    let mut r = walk(
+        words,
+        &takes,
+        &switches,
+        &unknown,
+        &mut |r: &mut Read, w: &str| {
+            let to = r.get("M_TO").to_string();
+            r.env.set(
+                "M_TO",
+                if to.is_empty() {
+                    w.to_string()
+                } else {
+                    format!("{to}\n{w}")
+                },
+            );
+            Ok(())
+        },
+    )?;
     if r.get("M_TO").is_empty() {
         return Err(usage(
             "send requires a recipient — positional <to> or --to <addr>",
@@ -353,14 +368,19 @@ fn send(words: &[&str]) -> Result<Plan, Plan> {
 /// `cmd_mail_forward_message`.
 fn forward(words: &[&str]) -> Result<Plan, Plan> {
     let use_line = format!("usage: {CLI_NAME} mail forward-message <message-id> --to <addr> [--cc <addr>] [--bcc <addr>] [--note <text>] [--as-eml] [--from <owned-addr>] [--from-name <name>] [--reply-to <addr> | --reply-to-original] [--wait [--timeout <s>]] [--json]");
-    let from_hint = format!("--from requires one of your addresses (see '{CLI_NAME} mail addresses')");
+    let from_hint =
+        format!("--from requires one of your addresses (see '{CLI_NAME} mail addresses')");
     let takes = [
         add("--to", "M_TO", "--to requires a recipient address"),
         add("--cc", "M_CC", "--cc requires an address"),
         add("--bcc", "M_BCC", "--bcc requires an address"),
         set("--note", "M_NOTE", "--note requires your text"),
         set("--from", "M_FROM", &from_hint),
-        set("--from-name", "M_FROM_NAME", "--from-name requires a display name"),
+        set(
+            "--from-name",
+            "M_FROM_NAME",
+            "--from-name requires a display name",
+        ),
         add("--reply-to", "M_REPLY_TO", "--reply-to requires an address"),
         set(
             "--timeout",
@@ -375,16 +395,22 @@ fn forward(words: &[&str]) -> Result<Plan, Plan> {
         json_switch(),
     ];
     let unknown = |f: &str| format!("unknown flag '{f}' — {use_line}");
-    let r = walk(words, &takes, &switches, &unknown, &mut |r: &mut Read, w: &str| {
-        if r.get("M_ID").is_empty() {
-            r.env.set("M_ID", w);
-            Ok(())
-        } else {
-            Err(usage(format!(
-                "unexpected extra argument '{w}' — one <message-id>; recipients go in --to"
-            )))
-        }
-    })?;
+    let r = walk(
+        words,
+        &takes,
+        &switches,
+        &unknown,
+        &mut |r: &mut Read, w: &str| {
+            if r.get("M_ID").is_empty() {
+                r.env.set("M_ID", w);
+                Ok(())
+            } else {
+                Err(usage(format!(
+                    "unexpected extra argument '{w}' — one <message-id>; recipients go in --to"
+                )))
+            }
+        },
+    )?;
     if r.get("M_ID").is_empty() {
         return Err(usage(format!(
             "forward-message requires a <message-id> (from '{CLI_NAME} mail messages') — {use_line}"
@@ -425,7 +451,11 @@ fn reply(words: &[&str]) -> Result<Plan, Plan> {
         add("--cc", "M_CC", "--cc requires an address"),
         add("--bcc", "M_BCC", "--bcc requires an address"),
         set("--body", "M_BODY", "--body requires the reply text"),
-        set("--body-file", "M_BODY_FILE", "--body-file requires a file path"),
+        set(
+            "--body-file",
+            "M_BODY_FILE",
+            "--body-file requires a file path",
+        ),
         set(
             "--from-name",
             "M_FROM_NAME",
@@ -450,16 +480,22 @@ fn reply(words: &[&str]) -> Result<Plan, Plan> {
             format!("unknown flag '{f}' — usage: {CLI_NAME} mail reply <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <s>]] [--json]")
         }
     };
-    let mut r = walk(words, &takes, &switches, &unknown, &mut |r: &mut Read, w: &str| {
-        if r.get("M_ID").is_empty() {
-            r.env.set("M_ID", w);
-            Ok(())
-        } else {
-            Err(usage(format!(
-                "unexpected extra argument '{w}' — one <message-id> only"
-            )))
-        }
-    })?;
+    let mut r = walk(
+        words,
+        &takes,
+        &switches,
+        &unknown,
+        &mut |r: &mut Read, w: &str| {
+            if r.get("M_ID").is_empty() {
+                r.env.set("M_ID", w);
+                Ok(())
+            } else {
+                Err(usage(format!(
+                    "unexpected extra argument '{w}' — one <message-id> only"
+                )))
+            }
+        },
+    )?;
     if r.get("M_ID").is_empty() {
         return Err(usage(format!(
             "reply requires a <message-id> (from '{CLI_NAME} mail messages')"
@@ -492,7 +528,11 @@ fn draft(words: &[&str]) -> Result<Plan, Plan> {
     // so the loop is written out here.
     let takes = [
         set("--body", "M_BODY", "--body requires the draft text"),
-        set("--body-file", "M_BODY_FILE", "--body-file requires a file path"),
+        set(
+            "--body-file",
+            "M_BODY_FILE",
+            "--body-file requires a file path",
+        ),
         add("--to", "M_TO", "--to requires a recipient address"),
         set("--subject", "M_SUBJECT", "--subject requires a value"),
         add("--cc", "M_CC", "--cc requires an address"),
@@ -500,7 +540,9 @@ fn draft(words: &[&str]) -> Result<Plan, Plan> {
         set("--from", "M_FROM", &from_hint),
         add("--attach", "M_ATTACH", "--attach requires a file path"),
     ];
-    let unknown = |f: &str| format!("unknown flag '{f}' — usage: {CLI_NAME} mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  {CLI_NAME} mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]");
+    let unknown = |f: &str| {
+        format!("unknown flag '{f}' — usage: {CLI_NAME} mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  {CLI_NAME} mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]")
+    };
     let mut r = Read::default();
     let mut i = 0;
     while i < words.len() {
@@ -554,7 +596,9 @@ fn draft(words: &[&str]) -> Result<Plan, Plan> {
     }
     let id = r.get("M_ID").to_string();
     if !id.is_empty() && (!r.get("M_TO").is_empty() || !r.get("M_SUBJECT").is_empty()) {
-        return Err(usage("pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both"));
+        return Err(usage(
+            "pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both",
+        ));
     }
     if id.is_empty() && r.env.on("M_REPLY_ALL") {
         return Err(usage(format!(
@@ -615,16 +659,22 @@ fn manage<'a>(
     extra: &dyn Fn(&str) -> String,
 ) -> Result<(Read, Vec<&'a str>), Plan> {
     let mut pos: Vec<&'a str> = Vec::new();
-    let r = walk(words, &[], switches, unknown, &mut |_: &mut Read, w: &'a str| {
-        if let Some(slot) = pos.iter_mut().find(|s| s.is_empty()) {
-            *slot = w;
-        } else if pos.len() < slots {
-            pos.push(w);
-        } else {
-            return Err(usage(extra(w)));
-        }
-        Ok(())
-    })?;
+    let r = walk(
+        words,
+        &[],
+        switches,
+        unknown,
+        &mut |_: &mut Read, w: &'a str| {
+            if let Some(slot) = pos.iter_mut().find(|s| s.is_empty()) {
+                *slot = w;
+            } else if pos.len() < slots {
+                pos.push(w);
+            } else {
+                return Err(usage(extra(w)));
+            }
+            Ok(())
+        },
+    )?;
     Ok((r, pos))
 }
 
@@ -633,7 +683,11 @@ fn move_(words: &[&str]) -> Result<Plan, Plan> {
     let (r, pos) = manage(
         words,
         &[json_switch()],
-        &|f| format!("unknown flag '{f}' — usage: {CLI_NAME} mail move <message-id> <folder> [--json]"),
+        &|f| {
+            format!(
+                "unknown flag '{f}' — usage: {CLI_NAME} mail move <message-id> <folder> [--json]"
+            )
+        },
         2,
         &|w| format!("unexpected extra argument '{w}'"),
     )?;
@@ -666,7 +720,9 @@ fn flag(words: &[&str]) -> Result<Plan, Plan> {
             ("--unflag", "M_FLAGGED", "false"),
             json_switch(),
         ],
-        &|f| format!("unknown flag '{f}' — usage: {CLI_NAME} mail flag <message-id> [--read|--unread] [--star|--unstar] [--json]"),
+        &|f| {
+            format!("unknown flag '{f}' — usage: {CLI_NAME} mail flag <message-id> [--read|--unread] [--star|--unstar] [--json]")
+        },
         1,
         &|w| format!("unexpected extra argument '{w}' — one <message-id> only"),
     )?;
@@ -711,7 +767,11 @@ fn delete(words: &[&str]) -> Result<Plan, Plan> {
     let (r, pos) = manage(
         words,
         &[json_switch()],
-        &|f| format!("unknown flag '{f}' — usage: {CLI_NAME} mail delete <message-id|address> [--json]"),
+        &|f| {
+            format!(
+                "unknown flag '{f}' — usage: {CLI_NAME} mail delete <message-id|address> [--json]"
+            )
+        },
         1,
         &|w| format!("unexpected extra argument '{w}' — one <message-id|address> only"),
     )?;
@@ -754,7 +814,9 @@ fn g(d: &Value, key: &str, l: u32) -> R<Option<Value>> {
 }
 
 fn gs(d: &Value, key: &str, default: &str, l: u32) -> R<String> {
-    Ok(py::str_of(&p::get_or(d, key, p::sv(default)).at(l, MODULE)?))
+    Ok(py::str_of(
+        &p::get_or(d, key, p::sv(default)).at(l, MODULE)?,
+    ))
 }
 
 /// A body: `{"project": ws_path, …}` built in the Python's order.
@@ -823,7 +885,9 @@ fn send_outcome(py_: &mut Py, d: &Value, waiting: bool, t: u64, from: u32) -> R<
     }
     let id = |l: u32| -> R<String> {
         Ok(py::str_of(
-            &p::get_or(d, "id", p::sv("")).at(l, F).within(from, MODULE)?,
+            &p::get_or(d, "id", p::sv(""))
+                .at(l, F)
+                .within(from, MODULE)?,
         ))
     };
     if p::truthy(g("queued", line::OUTCOME_QUEUED)?.as_ref()) {
@@ -1125,7 +1189,11 @@ fn delete_py(py_: &mut Py) -> R<()> {
 fn address_delete_py(py_: &mut Py) -> R<()> {
     let mut b = Body::new(py_);
     b.s("address", py_.env("M_ADDRESS"));
-    let d = py_.post("/cli/mail/address/delete", &b.value(), line::ADDRESS_DELETE_CALL)?;
+    let d = py_.post(
+        "/cli/mail/address/delete",
+        &b.value(),
+        line::ADDRESS_DELETE_CALL,
+    )?;
     if py_.json {
         py_.print_json(&d);
         return Ok(());

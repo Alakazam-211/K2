@@ -204,7 +204,10 @@ fn messages(words: &[&str]) -> Plan {
                 &mut query,
                 "--query requires a value (matches subject AND body)",
             )),
-            "--from" => Some((&mut from, "--from requires a value (matches the From header)")),
+            "--from" => Some((
+                &mut from,
+                "--from requires a value (matches the From header)",
+            )),
             _ => None,
         };
         if let Some((slot, hint)) = slot {
@@ -302,9 +305,7 @@ fn read(words: &[&str]) -> Plan {
         ));
     }
     if has("--html") && has("--raw") {
-        return usage(
-            "--html and --raw are mutually exclusive (--raw is the full RFC 822 blob)",
-        );
+        return usage("--html and --raw are mutually exclusive (--raw is the full RFC 822 blob)");
     }
     let flag = |b: bool| if b { "true" } else { "false" };
     Plan::Run(
@@ -405,7 +406,10 @@ fn wait(words: &[&str]) -> Plan {
             "--to" => Some((&mut to, "--to requires an owned address")),
             "--from" => Some((&mut from, "--from requires a substring")),
             "--subject" => Some((&mut subject, "--subject requires a substring")),
-            "--timeout" => Some((&mut timeout, "--timeout requires a value in seconds (1-900)")),
+            "--timeout" => Some((
+                &mut timeout,
+                "--timeout requires a value in seconds (1-900)",
+            )),
             _ => None,
         };
         if let Some((slot, hint)) = slot {
@@ -666,7 +670,9 @@ fn g(d: &Value, key: &str, l: u32) -> R<Option<Value>> {
 
 /// `d.get(key, default)` at module line `l`, as `%s` prints it.
 fn gs(d: &Value, key: &str, default: &str, l: u32) -> R<String> {
-    Ok(py::str_of(&p::get_or(d, key, p::sv(default)).at(l, MODULE)?))
+    Ok(py::str_of(
+        &p::get_or(d, key, p::sv(default)).at(l, MODULE)?,
+    ))
 }
 
 fn empty_list() -> Value {
@@ -724,7 +730,10 @@ fn domains_py(py_: &mut Py) -> R<()> {
                     }
                 });
             }
-            py_.print(&format!("No mintable domains yet. Pending: {}", names.join(", ")));
+            py_.print(&format!(
+                "No mintable domains yet. Pending: {}",
+                names.join(", ")
+            ));
             py_.print(&format!("details: {cli} hostmail domain list"));
         } else {
             py_.print(&format!(
@@ -742,7 +751,9 @@ fn domains_py(py_: &mut Py) -> R<()> {
             "mint here: {cli} hostmail create <localpart>[@<domain>]"
         ));
         if py::truthy(&pending) {
-            py_.print(&format!("pending (not mintable): {cli} hostmail domain list"));
+            py_.print(&format!(
+                "pending (not mintable): {cli} hostmail domain list"
+            ));
         }
     }
     Ok(())
@@ -759,7 +770,12 @@ fn messages_py(py_: &mut Py) -> R<()> {
     if e.on("M_UNREAD") {
         add("unread", "1");
     }
-    for (k, key) in [("M_LIMIT", "limit"), ("M_OFFSET", "offset"), ("M_SINCE", "since"), ("M_BEFORE", "before")] {
+    for (k, key) in [
+        ("M_LIMIT", "limit"),
+        ("M_OFFSET", "offset"),
+        ("M_SINCE", "since"),
+        ("M_BEFORE", "before"),
+    ] {
         if !e.get(k).is_empty() {
             add(key, e.get(k));
         }
@@ -782,14 +798,25 @@ fn messages_py(py_: &mut Py) -> R<()> {
     if py_.json {
         py_.print_json(&d);
     } else if !py::truthy(&msgs) {
-        let filtered = ["M_QUERY", "M_FROM", "M_ADDRESS", "M_SINCE", "M_BEFORE", "M_FOLDER"]
-            .iter()
-            .any(|k| !e.get(k).is_empty())
+        let filtered = [
+            "M_QUERY",
+            "M_FROM",
+            "M_ADDRESS",
+            "M_SINCE",
+            "M_BEFORE",
+            "M_FOLDER",
+        ]
+        .iter()
+        .any(|k| !e.get(k).is_empty())
             || e.on("M_UNREAD")
             || e.on("M_JUNK");
         py_.print(&format!(
             "No messages{}.",
-            if filtered { " matching the filters" } else { "" }
+            if filtered {
+                " matching the filters"
+            } else {
+                ""
+            }
         ));
     } else {
         for m in iter(&msgs).at(line::MESSAGES_FOR, MODULE)? {
@@ -838,7 +865,10 @@ fn messages_py(py_: &mut Py) -> R<()> {
                 }
             }
             parts.push(format!("--offset {}", py::str_of(&next)));
-            py_.print(&format!("more:     {cli} mail messages {}", parts.join(" ")));
+            py_.print(&format!(
+                "more:     {cli} mail messages {}",
+                parts.join(" ")
+            ));
         }
     }
     if !py_.json {
@@ -1095,7 +1125,9 @@ fn drafts_py(py_: &mut Py) -> R<()> {
             let by = p::py_index(&r, "editedBy").at(line::DRAFTS_EDITED_BY, MODULE)?;
             text.push_str(&format!("  · edited by {}", py::str_of(&by)));
         }
-        let done = ["sent", "held", "discarded"].iter().any(|s| p::eq_str(&st, s));
+        let done = ["sent", "held", "discarded"]
+            .iter()
+            .any(|s| p::eq_str(&st, s));
         if done && p::truthy(g(&r, "stateBy", line::DRAFTS_STATE)?.as_ref()) {
             let by = p::py_index(&r, "stateBy").at(line::DRAFTS_STATE_BY, MODULE)?;
             text.push_str(&format!("  · {} by {}", py::str_of(&st), py::str_of(&by)));
@@ -1162,7 +1194,13 @@ fn cancel_py(py_: &mut Py) -> R<()> {
 /// `l`; no answer is `die`'s `daemon_unreachable`.
 fn caps_request(py_: &Py, params: &[(String, String)], l: u32) -> R<Value> {
     let d = py_
-        .request(Method::Get, "/cli/mail/capabilities", params, None, Secs::Int(30))
+        .request(
+            Method::Get,
+            "/cli/mail/capabilities",
+            params,
+            None,
+            Secs::Int(30),
+        )
         .within(l, MODULE)?;
     match d {
         Some(d) => Ok(d),
@@ -1225,7 +1263,9 @@ fn capabilities_py(py_: &mut Py) -> R<()> {
         let cal = p::or(g(&c, "calendar", line::CAPS_CAL)?, empty_dict());
         let on = |m: &Value| -> R<String> {
             let mut ks = Vec::new();
-            for k in ["read", "draft", "compose", "send", "write", "invite", "rsvp"] {
+            for k in [
+                "read", "draft", "compose", "send", "write", "invite", "rsvp",
+            ] {
                 let v = attr_get(m, k)
                     .at(line::CAPS_ON, "<genexpr>")
                     .within(line::CAPS_ON, "<lambda>")?;

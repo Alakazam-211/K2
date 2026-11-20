@@ -43,10 +43,10 @@ use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::{self, py};
-use crate::transport::urllib::{self, Kind, Method, Opener, Outcome, Request};
 use crate::passport;
 use crate::prelude;
 use crate::python;
+use crate::transport::urllib::{self, Kind, Method, Opener, Outcome, Request};
 use k2_client::{cli_name, product_name};
 use std::ffi::OsString;
 use std::path::Path;
@@ -753,24 +753,18 @@ impl Py {
         let err = attr_get(&d, "error").map_err(|e| inside(line::CALL_ERROR, e))?;
         if let Some(e) = err.filter(py::truthy) {
             let perm = attr_get(&d, "permission").ok().flatten();
-            return Err(within(
-                match self.die(&e, None, perm.as_ref()) {
-                    End::Raise(mut t) => {
-                        t.frames.insert(0, (line::CALL_DIE_ERROR, "call"));
-                        End::Raise(t)
-                    }
-                    other => other,
-                },
-            ));
+            return Err(within(match self.die(&e, None, perm.as_ref()) {
+                End::Raise(mut t) => {
+                    t.frames.insert(0, (line::CALL_DIE_ERROR, "call"));
+                    End::Raise(t)
+                }
+                other => other,
+            }));
         }
         let ok = attr_get(&d, "ok").map_err(|e| inside(line::CALL_OK, e))?;
         if !p::truthy(ok.as_ref()) {
             let t: String = dumps(&d).chars().take(200).collect();
-            return Err(self.die_with(
-                "error",
-                &format!("unexpected daemon response: {t}"),
-                None,
-            ));
+            return Err(self.die_with("error", &format!("unexpected daemon response: {t}"), None));
         }
         Ok(d)
     }
@@ -836,7 +830,11 @@ pub mod print {
     pub fn cap_str(cap: Option<&Value>) -> R<String> {
         let c = p::or(cap.cloned(), Value::Object(Vec::new()));
         let used = at(p::get_or(&c, "used", p::sv("?")), line::CAP_USED, "cap_str")?;
-        let limit = at(p::get_or(&c, "cap", Value::Int("0".into())), line::CAP_LIMIT, "cap_str")?;
+        let limit = at(
+            p::get_or(&c, "cap", Value::Int("0".into())),
+            line::CAP_LIMIT,
+            "cap_str",
+        )?;
         Ok(if !py::truthy(&limit) {
             format!("cap {} used (unlimited)", py::str_of(&used))
         } else {
@@ -855,7 +853,10 @@ pub mod print {
         let from = fmt_addr(g("from", line::FULL_FROM)?.as_ref()).within(line::FULL_FROM, F)?;
         py_.print(&format!("from     : {from}"));
         let to = fmt_addrs(g("to", line::FULL_TO)?.as_ref()).within(line::FULL_TO, F)?;
-        py_.print(&format!("to       : {}", if to.is_empty() { "?" } else { to.as_str() }));
+        py_.print(&format!(
+            "to       : {}",
+            if to.is_empty() { "?" } else { to.as_str() }
+        ));
         if p::truthy(g("cc", line::FULL_CC_IF)?.as_ref()) {
             let cc = fmt_addrs(g("cc", line::FULL_CC)?.as_ref()).within(line::FULL_CC, F)?;
             py_.print(&format!("cc       : {cc}"));
@@ -869,11 +870,18 @@ pub mod print {
             py::str_of(&shown),
             iso_ago(date.as_ref())
         ));
-        let ar = p::or(g("authResults", line::FULL_AUTH)?, Value::Object(Vec::new()));
+        let ar = p::or(
+            g("authResults", line::FULL_AUTH)?,
+            Value::Object(Vec::new()),
+        );
         let keys = ["spf", "dkim", "dmarc"];
         let mut any = false;
         for k in keys {
-            if p::truthy(at(attr_get(&ar, k), line::FULL_ANY, "<genexpr>").within(line::FULL_ANY, F)?.as_ref()) {
+            if p::truthy(
+                at(attr_get(&ar, k), line::FULL_ANY, "<genexpr>")
+                    .within(line::FULL_ANY, F)?
+                    .as_ref(),
+            ) {
                 any = true;
                 break;
             }
@@ -929,7 +937,10 @@ pub mod print {
     /// `forward_line(f)`.
     pub fn forward_line(f: &Value) -> R<String> {
         const F: &str = "forward_line";
-        let mailbox = p::or(at(attr_get(f, "mailbox"), line::FWD_MAILBOX, F)?, p::sv("?"));
+        let mailbox = p::or(
+            at(attr_get(f, "mailbox"), line::FWD_MAILBOX, F)?,
+            p::sv("?"),
+        );
         let sender = p::or(at(attr_get(f, "sender"), line::FWD_MAILBOX, F)?, p::sv("?"));
         let eml = at(attr_get(f, "asEml"), line::FWD_EML, F)?;
         Ok(format!(
@@ -954,7 +965,10 @@ pub mod print {
     fn att_count(att: &Value, line: u32, name: &'static str) -> R<String> {
         let count = at(p::py_index(att, "count"), line, name)?;
         let n = at(py::percent_d(&count), line, name)?;
-        let names = p::or(at(attr_get(att, "names"), line, name)?, Value::Array(Vec::new()));
+        let names = p::or(
+            at(attr_get(att, "names"), line, name)?,
+            Value::Array(Vec::new()),
+        );
         Ok(format!("{n} ({})", at(join(", ", &names), line, name)?))
     }
 
@@ -1012,7 +1026,11 @@ pub mod print {
         let id = at(p::get_or(r, "id", p::sv("")), line::DETAIL_ID, F)?;
         py_.print(&format!("outbound : {}", py::str_of(&id)));
         let status = at(p::get_or(r, "status", p::sv("?")), line::DETAIL_STATUS, F)?;
-        let note = at(p::get_or(r, "statusNote", p::sv("")), line::DETAIL_STATUS, F)?;
+        let note = at(
+            p::get_or(r, "statusNote", p::sv("")),
+            line::DETAIL_STATUS,
+            F,
+        )?;
         py_.print(&format!(
             "status   : {} — {}",
             py::str_of(&status),
@@ -1022,7 +1040,10 @@ pub mod print {
         py_.print(&format!("from     : {}", py::str_of(&from)));
         let to = p::or(g("to", line::DETAIL_TO)?, Value::Array(Vec::new()));
         let to = at(join(", ", &to), line::DETAIL_TO, F)?;
-        py_.print(&format!("to       : {}", if to.is_empty() { "?" } else { to.as_str() }));
+        py_.print(&format!(
+            "to       : {}",
+            if to.is_empty() { "?" } else { to.as_str() }
+        ));
         for (key, label, l_if, l) in [
             ("cc", "cc       : ", line::DETAIL_CC_IF, line::DETAIL_CC),
             ("bcc", "bcc      : ", line::DETAIL_BCC_IF, line::DETAIL_BCC),
@@ -1032,7 +1053,12 @@ pub mod print {
                 line::DETAIL_POLICY_IF,
                 line::DETAIL_POLICY,
             ),
-            ("replyTo", "reply-to : ", line::DETAIL_REPLY_IF, line::DETAIL_REPLY),
+            (
+                "replyTo",
+                "reply-to : ",
+                line::DETAIL_REPLY_IF,
+                line::DETAIL_REPLY,
+            ),
         ] {
             if p::truthy(g(key, l_if)?.as_ref()) {
                 let j = joined(r, key, l, F)?;
@@ -1046,7 +1072,10 @@ pub mod print {
         }
         let subject = p::or(g("subject", line::DETAIL_SUBJECT)?, p::sv("(no subject)"));
         py_.print(&format!("subject  : {}", py::str_of(&subject)));
-        let att = p::or(g("attachments", line::DETAIL_ATT)?, Value::Object(Vec::new()));
+        let att = p::or(
+            g("attachments", line::DETAIL_ATT)?,
+            Value::Object(Vec::new()),
+        );
         if p::truthy(at(attr_get(&att, "count"), line::DETAIL_ATT_IF, F)?.as_ref()) {
             let l = att_count(&att, line::DETAIL_ATT_LINE, F)?;
             py_.print(&format!("attach   : {l}"));
@@ -1096,10 +1125,16 @@ pub mod print {
             py::str_of(&name),
             py::str_of(&status)
         ));
-        let send = at(p::get_or(d, "sendMode", p::sv("?")), line::DOMAIN_FIRST + 1, F)?;
+        let send = at(
+            p::get_or(d, "sendMode", p::sv("?")),
+            line::DOMAIN_FIRST + 1,
+            F,
+        )?;
         py_.print(&format!("send    : {}", py::str_of(&send)));
         if p::truthy(at(attr_get(d, "dmarcNag"), line::DOMAIN_FIRST + 2, F)?.as_ref()) {
-            py_.print("dmarc   : strongly recommended, not yet valid (starts at p=none — observe first)");
+            py_.print(
+                "dmarc   : strongly recommended, not yet valid (starts at p=none — observe first)",
+            );
         }
         py_.print("");
         py_.print("DNS records (set these at your registrar):");
@@ -1123,7 +1158,11 @@ pub mod print {
                 py::str_of(&nm),
                 py::str_of(&purpose)
             ));
-            let exp = at(p::get_or(&r, "expected", p::sv("")), line::DOMAIN_FOR + 4, F)?;
+            let exp = at(
+                p::get_or(&r, "expected", p::sv("")),
+                line::DOMAIN_FOR + 4,
+                F,
+            )?;
             py_.print(&format!("      value: {}", py::str_of(&exp)));
             if p::truthy(at(attr_get(&r, "live"), line::DOMAIN_FOR + 5, F)?.as_ref()) {
                 let l = line::DOMAIN_FOR + 8;
@@ -1187,8 +1226,12 @@ pub mod print {
         let list = at(iter(rows), line::INBOXES_W, F)?;
         let mut w = 0usize;
         for r in &list {
-            let a = at(p::get_or(r, "address", p::sv("")), line::INBOXES_W, "<genexpr>")
-                .within(line::INBOXES_W, F)?;
+            let a = at(
+                p::get_or(r, "address", p::sv("")),
+                line::INBOXES_W,
+                "<genexpr>",
+            )
+            .within(line::INBOXES_W, F)?;
             w = w.max(at(p::len(&a), line::INBOXES_W, "<genexpr>").within(line::INBOXES_W, F)?);
         }
         let w = w.max("ADDRESS".len()) + 2;
@@ -1229,7 +1272,9 @@ pub mod print {
             py_.print(&format!("read: {cli} mail messages [<address>]   send needs level 'send' (hosted, or a linked inbox with SMTP)"));
             py_.print("MAX is the CEILING, not a promise — sending also needs a send transport configured.");
             if !blocked.is_empty() {
-                let approval = blocked.iter().any(|(st, _)| p::eq_str(st, "blocked_approval"));
+                let approval = blocked
+                    .iter()
+                    .any(|(st, _)| p::eq_str(st, "blocked_approval"));
                 py_.print("");
                 if !approval {
                     py_.print(&format!("SEND BLOCKED: this workspace's agent sending is off, so level 'send' can't send yet ({cli} mail send/reply answer 'gated')."));
@@ -1274,7 +1319,11 @@ pub mod print {
                         .filter(py::truthy)
                     {
                         Some(v) => v,
-                        None => at(p::get_or(e, "projectId", p::sv("?")), line::INBOXES_LVL + 3, L)?,
+                        None => at(
+                            p::get_or(e, "projectId", p::sv("?")),
+                            line::INBOXES_LVL + 3,
+                            L,
+                        )?,
                     };
                     blocked.push((st.unwrap_or(Value::Null), ws));
                     let level = at(p::get_or(e, "level", p::sv("?")), line::INBOXES_LVL + 4, L)?;
@@ -1291,8 +1340,9 @@ pub mod print {
                     .filter(py::truthy)
                 {
                     Some(v) => v,
-                    None => at(p::get_or(&g, "projectId", p::sv("?")), l, "<genexpr>")
-                        .within(l, F)?,
+                    None => {
+                        at(p::get_or(&g, "projectId", p::sv("?")), l, "<genexpr>").within(l, F)?
+                    }
                 };
                 let lv = lvl(&g, &mut blocked).within(l, "<genexpr>").within(l, F)?;
                 parts.push(format!("{}:{lv}", py::str_of(&gw)));

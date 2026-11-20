@@ -651,271 +651,928 @@ fn the_lines_that_raise_are_the_shell_s() {
     let s = mail_py_script();
     assert_eq!(s[0], "import base64, json, os, socket, sys, time");
     let pins: &[(u32, &str)] = &[
-        (super::core::line::DIE, "def die(err, exit_code=None, permission=None):"),
-        (super::core::line::DIE_CODE, "code = err.get(\"code\", \"error\")"),
-        (super::core::line::DIE_HINT, "hint = err.get(\"hint\", \"\")"),
-        (super::core::line::DIE_IN, "if code in (\"forbidden\", \"owner_only\") and \"ask "),
-        (super::core::line::DIE_CONCAT, "hint = (hint + \" — \" if hint else \"\") + \"require"),
+        (
+            super::core::line::DIE,
+            "def die(err, exit_code=None, permission=None):",
+        ),
+        (
+            super::core::line::DIE_CODE,
+            "code = err.get(\"code\", \"error\")",
+        ),
+        (
+            super::core::line::DIE_HINT,
+            "hint = err.get(\"hint\", \"\")",
+        ),
+        (
+            super::core::line::DIE_IN,
+            "if code in (\"forbidden\", \"owner_only\") and \"ask ",
+        ),
+        (
+            super::core::line::DIE_CONCAT,
+            "hint = (hint + \" — \" if hint else \"\") + \"require",
+        ),
         (super::core::line::DIE_CAP, "if err.get(k):"),
         (super::core::line::REQUEST_FLOAT, "timeout = float(env_t)"),
-        (super::core::line::REQUEST_READ, "raw = e.read().decode(\"utf-8\", \"replace\")"),
-        (super::core::line::CALL_REQUEST, "d = request(method, route, params, body, timeout"),
-        (super::core::line::CALL_TIMEOUT, "if timeout_hint and (d.get(\"error\") or {}).get(\""),
-        (super::core::line::CALL_DIE_TIMEOUT, "die({\"code\": \"timeout\", \"hint\": timeout_hint(d[\""),
+        (
+            super::core::line::REQUEST_READ,
+            "raw = e.read().decode(\"utf-8\", \"replace\")",
+        ),
+        (
+            super::core::line::CALL_REQUEST,
+            "d = request(method, route, params, body, timeout",
+        ),
+        (
+            super::core::line::CALL_TIMEOUT,
+            "if timeout_hint and (d.get(\"error\") or {}).get(\"",
+        ),
+        (
+            super::core::line::CALL_DIE_TIMEOUT,
+            "die({\"code\": \"timeout\", \"hint\": timeout_hint(d[\"",
+        ),
         (super::core::line::CALL_ERROR, "if d.get(\"error\"):"),
-        (super::core::line::CALL_DIE_ERROR, "die(d[\"error\"], permission=d.get(\"permission\"))"),
+        (
+            super::core::line::CALL_DIE_ERROR,
+            "die(d[\"error\"], permission=d.get(\"permission\"))",
+        ),
         (super::core::line::CALL_OK, "if not d.get(\"ok\"):"),
         (super::core::line::FMT_ADDR, "name = a.get(\"name\")"),
-        (super::core::line::FMT_ADDR_EMAIL, "email = a.get(\"address\") or \"?\""),
-        (super::core::line::FMT_ADDRS, "return \", \".join(fmt_addr(a) for a in (lst or []"),
-        (super::core::line::CAP_USED, "used = (cap or {}).get(\"used\", \"?\")"),
-        (super::core::line::CAP_LIMIT, "limit = (cap or {}).get(\"cap\", 0)"),
-        (super::core::line::FULL_ID, "print(\"message  : %s\" % m.get(\"id\", \"\"))"),
-        (super::core::line::FULL_ADDRESS, "print(\"mailbox  : %s\" % m.get(\"address\", \"?\"))"),
-        (super::core::line::FULL_FROM, "print(\"from     : %s\" % fmt_addr(m.get(\"from\")))"),
-        (super::core::line::FULL_TO, "print(\"to       : %s\" % (fmt_addrs(m.get(\"to\")) "),
+        (
+            super::core::line::FMT_ADDR_EMAIL,
+            "email = a.get(\"address\") or \"?\"",
+        ),
+        (
+            super::core::line::FMT_ADDRS,
+            "return \", \".join(fmt_addr(a) for a in (lst or []",
+        ),
+        (
+            super::core::line::CAP_USED,
+            "used = (cap or {}).get(\"used\", \"?\")",
+        ),
+        (
+            super::core::line::CAP_LIMIT,
+            "limit = (cap or {}).get(\"cap\", 0)",
+        ),
+        (
+            super::core::line::FULL_ID,
+            "print(\"message  : %s\" % m.get(\"id\", \"\"))",
+        ),
+        (
+            super::core::line::FULL_ADDRESS,
+            "print(\"mailbox  : %s\" % m.get(\"address\", \"?\"))",
+        ),
+        (
+            super::core::line::FULL_FROM,
+            "print(\"from     : %s\" % fmt_addr(m.get(\"from\")))",
+        ),
+        (
+            super::core::line::FULL_TO,
+            "print(\"to       : %s\" % (fmt_addrs(m.get(\"to\")) ",
+        ),
         (super::core::line::FULL_CC_IF, "if m.get(\"cc\"):"),
-        (super::core::line::FULL_CC, "print(\"cc       : %s\" % fmt_addrs(m.get(\"cc\")))"),
-        (super::core::line::FULL_SUBJECT, "print(\"subject  : %s\" % (m.get(\"subject\") or \"(n"),
-        (super::core::line::FULL_DATE, "print(\"date     : %s  (%s)\" % (m.get(\"date\") or "),
-        (super::core::line::FULL_AUTH, "ar = m.get(\"authResults\") or {}"),
-        (super::core::line::FULL_ANY, "if any(ar.get(k) for k in (\"spf\", \"dkim\", \"dmarc"),
-        (super::core::line::FULL_AUTH_LINE, "print(\"auth     : %s\" % \"  \".join("),
-        (super::core::line::FULL_ATTS, "atts = m.get(\"attachments\") or []"),
+        (
+            super::core::line::FULL_CC,
+            "print(\"cc       : %s\" % fmt_addrs(m.get(\"cc\")))",
+        ),
+        (
+            super::core::line::FULL_SUBJECT,
+            "print(\"subject  : %s\" % (m.get(\"subject\") or \"(n",
+        ),
+        (
+            super::core::line::FULL_DATE,
+            "print(\"date     : %s  (%s)\" % (m.get(\"date\") or ",
+        ),
+        (
+            super::core::line::FULL_AUTH,
+            "ar = m.get(\"authResults\") or {}",
+        ),
+        (
+            super::core::line::FULL_ANY,
+            "if any(ar.get(k) for k in (\"spf\", \"dkim\", \"dmarc",
+        ),
+        (
+            super::core::line::FULL_AUTH_LINE,
+            "print(\"auth     : %s\" % \"  \".join(",
+        ),
+        (
+            super::core::line::FULL_ATTS,
+            "atts = m.get(\"attachments\") or []",
+        ),
         (super::core::line::FULL_FOR, "for a in atts:"),
-        (super::core::line::FULL_ATT, "print(\"  %s. %s (%s, %s bytes)\" % (a.get(\"index\""),
-        (super::core::line::FULL_FETCH, "print(\"  fetch one: k2 mail attachments %s --get"),
-        (super::core::line::FULL_TEXT, "print(m.get(\"text\") or \"\")"),
+        (
+            super::core::line::FULL_ATT,
+            "print(\"  %s. %s (%s, %s bytes)\" % (a.get(\"index\"",
+        ),
+        (
+            super::core::line::FULL_FETCH,
+            "print(\"  fetch one: k2 mail attachments %s --get",
+        ),
+        (
+            super::core::line::FULL_TEXT,
+            "print(m.get(\"text\") or \"\")",
+        ),
         (super::core::line::FULL_HTML_IF, "if m.get(\"html\"):"),
         (super::core::line::FULL_HTML, "print(m.get(\"html\"))"),
-        (super::core::line::ROW_FIRST, "print(\"%s  %-17s %-11s to %s — %s\" % ("),
+        (
+            super::core::line::ROW_FIRST,
+            "print(\"%s  %-17s %-11s to %s — %s\" % (",
+        ),
         (super::core::line::ROW_BCC_IF, "if r.get(\"bcc\"):"),
-        (super::core::line::ROW_BCC, "print(\"    bcc: %s\" % \", \".join(r[\"bcc\"]))"),
+        (
+            super::core::line::ROW_BCC,
+            "print(\"    bcc: %s\" % \", \".join(r[\"bcc\"]))",
+        ),
         (super::core::line::ROW_POLICY_IF, "if r.get(\"policyBcc\"):"),
-        (super::core::line::ROW_POLICY, "print(\"    bcc (owner policy): %s\" % \", \".join(r"),
+        (
+            super::core::line::ROW_POLICY,
+            "print(\"    bcc (owner policy): %s\" % \", \".join(r",
+        ),
         (super::core::line::ROW_REPLY_IF, "if r.get(\"replyTo\"):"),
-        (super::core::line::ROW_REPLY, "print(\"    reply-to: %s\" % \", \".join(r[\"replyTo\""),
+        (
+            super::core::line::ROW_REPLY,
+            "print(\"    reply-to: %s\" % \", \".join(r[\"replyTo\"",
+        ),
         (super::core::line::ROW_FWD_IF, "if r.get(\"forwardOf\"):"),
-        (super::core::line::ROW_FWD, "print(\"    forwards: %s\" % forward_line(r[\"forwa"),
-        (super::core::line::ROW_ATT, "att = r.get(\"attachments\") or {}"),
+        (
+            super::core::line::ROW_FWD,
+            "print(\"    forwards: %s\" % forward_line(r[\"forwa",
+        ),
+        (
+            super::core::line::ROW_ATT,
+            "att = r.get(\"attachments\") or {}",
+        ),
         (super::core::line::ROW_ATT_IF, "if att.get(\"count\"):"),
-        (super::core::line::ROW_ATT_LINE, "print(\"    attachments: %d (%s)\" % (att[\"count\"]"),
+        (
+            super::core::line::ROW_ATT_LINE,
+            "print(\"    attachments: %d (%s)\" % (att[\"count\"]",
+        ),
         (super::core::line::ROW_NOTE_IF, "if r.get(\"note\"):"),
-        (super::core::line::ROW_NOTE, "print(\"    note from your human: %s\" % r[\"note\"]"),
-        (super::core::line::FWD_LINE, "return \"a message in %s from %s (unverified)%s\" "),
-        (super::core::line::FWD_MAILBOX, "term_line(f.get(\"mailbox\") or \"?\"), term_line(f."),
-        (super::core::line::FWD_EML, "\", whole, as an .eml file\" if f.get(\"asEml\") els"),
-        (super::core::line::DETAIL_ID, "print(\"outbound : %s\" % r.get(\"id\", \"\"))"),
-        (super::core::line::DETAIL_STATUS, "print(\"status   : %s — %s\" % (r.get(\"status\", \"?"),
-        (super::core::line::DETAIL_FROM, "print(\"from     : %s\" % (r.get(\"from\") or \"?\"))"),
-        (super::core::line::DETAIL_TO, "print(\"to       : %s\" % (\", \".join(r.get(\"to\") o"),
+        (
+            super::core::line::ROW_NOTE,
+            "print(\"    note from your human: %s\" % r[\"note\"]",
+        ),
+        (
+            super::core::line::FWD_LINE,
+            "return \"a message in %s from %s (unverified)%s\" ",
+        ),
+        (
+            super::core::line::FWD_MAILBOX,
+            "term_line(f.get(\"mailbox\") or \"?\"), term_line(f.",
+        ),
+        (
+            super::core::line::FWD_EML,
+            "\", whole, as an .eml file\" if f.get(\"asEml\") els",
+        ),
+        (
+            super::core::line::DETAIL_ID,
+            "print(\"outbound : %s\" % r.get(\"id\", \"\"))",
+        ),
+        (
+            super::core::line::DETAIL_STATUS,
+            "print(\"status   : %s — %s\" % (r.get(\"status\", \"?",
+        ),
+        (
+            super::core::line::DETAIL_FROM,
+            "print(\"from     : %s\" % (r.get(\"from\") or \"?\"))",
+        ),
+        (
+            super::core::line::DETAIL_TO,
+            "print(\"to       : %s\" % (\", \".join(r.get(\"to\") o",
+        ),
         (super::core::line::DETAIL_CC_IF, "if r.get(\"cc\"):"),
-        (super::core::line::DETAIL_CC, "print(\"cc       : %s\" % \", \".join(r[\"cc\"]))"),
+        (
+            super::core::line::DETAIL_CC,
+            "print(\"cc       : %s\" % \", \".join(r[\"cc\"]))",
+        ),
         (super::core::line::DETAIL_BCC_IF, "if r.get(\"bcc\"):"),
-        (super::core::line::DETAIL_BCC, "print(\"bcc      : %s\" % \", \".join(r[\"bcc\"]))"),
-        (super::core::line::DETAIL_POLICY_IF, "if r.get(\"policyBcc\"):"),
-        (super::core::line::DETAIL_POLICY, "print(\"bcc (owner policy): %s\" % \", \".join(r[\"po"),
+        (
+            super::core::line::DETAIL_BCC,
+            "print(\"bcc      : %s\" % \", \".join(r[\"bcc\"]))",
+        ),
+        (
+            super::core::line::DETAIL_POLICY_IF,
+            "if r.get(\"policyBcc\"):",
+        ),
+        (
+            super::core::line::DETAIL_POLICY,
+            "print(\"bcc (owner policy): %s\" % \", \".join(r[\"po",
+        ),
         (super::core::line::DETAIL_REPLY_IF, "if r.get(\"replyTo\"):"),
-        (super::core::line::DETAIL_REPLY, "print(\"reply-to : %s\" % \", \".join(r[\"replyTo\"]))"),
+        (
+            super::core::line::DETAIL_REPLY,
+            "print(\"reply-to : %s\" % \", \".join(r[\"replyTo\"]))",
+        ),
         (super::core::line::DETAIL_FWD_IF, "if r.get(\"forwardOf\"):"),
-        (super::core::line::DETAIL_FWD, "print(\"forwards : %s\" % forward_line(r[\"forwardO"),
-        (super::core::line::DETAIL_SUBJECT, "print(\"subject  : %s\" % (r.get(\"subject\") or \"(n"),
-        (super::core::line::DETAIL_ATT, "att = r.get(\"attachments\") or {}"),
+        (
+            super::core::line::DETAIL_FWD,
+            "print(\"forwards : %s\" % forward_line(r[\"forwardO",
+        ),
+        (
+            super::core::line::DETAIL_SUBJECT,
+            "print(\"subject  : %s\" % (r.get(\"subject\") or \"(n",
+        ),
+        (
+            super::core::line::DETAIL_ATT,
+            "att = r.get(\"attachments\") or {}",
+        ),
         (super::core::line::DETAIL_ATT_IF, "if att.get(\"count\"):"),
-        (super::core::line::DETAIL_ATT_LINE, "print(\"attach   : %d (%s)\" % (att[\"count\"], \", \""),
-        (super::core::line::DETAIL_QUEUED, "print(\"queued   : %s\" % unix_ago(r.get(\"createdA"),
-        (super::core::line::DETAIL_DECIDED_IF, "if r.get(\"decidedAt\"):"),
-        (super::core::line::DETAIL_BY, "by = \" by %s\" % r[\"decidedBy\"] if r.get(\"decided"),
-        (super::core::line::DETAIL_DECIDED, "print(\"decided  : %s%s\" % (unix_ago(r.get(\"decid"),
+        (
+            super::core::line::DETAIL_ATT_LINE,
+            "print(\"attach   : %d (%s)\" % (att[\"count\"], \", \"",
+        ),
+        (
+            super::core::line::DETAIL_QUEUED,
+            "print(\"queued   : %s\" % unix_ago(r.get(\"createdA",
+        ),
+        (
+            super::core::line::DETAIL_DECIDED_IF,
+            "if r.get(\"decidedAt\"):",
+        ),
+        (
+            super::core::line::DETAIL_BY,
+            "by = \" by %s\" % r[\"decidedBy\"] if r.get(\"decided",
+        ),
+        (
+            super::core::line::DETAIL_DECIDED,
+            "print(\"decided  : %s%s\" % (unix_ago(r.get(\"decid",
+        ),
         (super::core::line::DETAIL_SENT_IF, "if r.get(\"sentAt\"):"),
-        (super::core::line::DETAIL_SENT, "print(\"submitted: %s\" % unix_ago(r.get(\"sentAt\")"),
+        (
+            super::core::line::DETAIL_SENT,
+            "print(\"submitted: %s\" % unix_ago(r.get(\"sentAt\")",
+        ),
         (super::core::line::DETAIL_NOTE_IF, "if r.get(\"note\"):"),
-        (super::core::line::DETAIL_NOTE, "print(\"note     : %s\" % r[\"note\"])"),
-        (super::core::line::DOMAIN_FIRST, "print(\"domain  : %s  (%s)\" % (d.get(\"domain\", \"?"),
-        (super::core::line::DOMAIN_FOR, "for r in d.get(\"records\") or []:"),
+        (
+            super::core::line::DETAIL_NOTE,
+            "print(\"note     : %s\" % r[\"note\"])",
+        ),
+        (
+            super::core::line::DOMAIN_FIRST,
+            "print(\"domain  : %s  (%s)\" % (d.get(\"domain\", \"?",
+        ),
+        (
+            super::core::line::DOMAIN_FOR,
+            "for r in d.get(\"records\") or []:",
+        ),
         (super::core::line::DOMAIN_NOTE, "if d.get(\"note\"):"),
-        (super::core::line::INBOXES_W, "w = max(max(len(r.get(\"address\", \"\")) for r in r"),
-        (super::core::line::INBOXES_ST, "st = r.get(\"yourSendState\")"),
-        (super::core::line::INBOXES_ROW, "print((\"%-\" + str(w) + \"s%-9s%-7s%-10s%-7s%s\") %"),
-        (super::core::line::INBOXES_PRI, "pri = r.get(\"primary\") or {}"),
+        (
+            super::core::line::INBOXES_W,
+            "w = max(max(len(r.get(\"address\", \"\")) for r in r",
+        ),
+        (
+            super::core::line::INBOXES_ST,
+            "st = r.get(\"yourSendState\")",
+        ),
+        (
+            super::core::line::INBOXES_ROW,
+            "print((\"%-\" + str(w) + \"s%-9s%-7s%-10s%-7s%s\") %",
+        ),
+        (
+            super::core::line::INBOXES_PRI,
+            "pri = r.get(\"primary\") or {}",
+        ),
         (super::core::line::INBOXES_LVL, "st = e.get(\"sendState\")"),
-        (super::core::line::INBOXES_GSUM, "gsum = \", \".join(\"%s:%s\" % (g.get(\"workspace\") o"),
-        (super::core::line::INBOXES_OWNER_ROW, "print((\"%-\" + str(w) + \"s%-9s%-22s%s\") % ("),
-        (super::core::line::INBOXES_SORTED, "for ws in sorted(set(b[2] for b in blocked)):"),
-        (super::reads::line::DOMAINS_CALL, "d = call(\"GET\", \"/cli/mail/domain/list\", params="),
-        (super::reads::line::DOMAINS_ROWS, "rows = d.get(\"domains\") or []"),
-        (super::reads::line::DOMAINS_PENDING, "pending = d.get(\"pending\") or []"),
-        (super::reads::line::DOMAINS_NAMES, "names = \", \".join(p if isinstance(p, str) else s"),
+        (
+            super::core::line::INBOXES_GSUM,
+            "gsum = \", \".join(\"%s:%s\" % (g.get(\"workspace\") o",
+        ),
+        (
+            super::core::line::INBOXES_OWNER_ROW,
+            "print((\"%-\" + str(w) + \"s%-9s%-22s%s\") % (",
+        ),
+        (
+            super::core::line::INBOXES_SORTED,
+            "for ws in sorted(set(b[2] for b in blocked)):",
+        ),
+        (
+            super::reads::line::DOMAINS_CALL,
+            "d = call(\"GET\", \"/cli/mail/domain/list\", params=",
+        ),
+        (
+            super::reads::line::DOMAINS_ROWS,
+            "rows = d.get(\"domains\") or []",
+        ),
+        (
+            super::reads::line::DOMAINS_PENDING,
+            "pending = d.get(\"pending\") or []",
+        ),
+        (
+            super::reads::line::DOMAINS_NAMES,
+            "names = \", \".join(p if isinstance(p, str) else s",
+        ),
         (super::reads::line::DOMAINS_FOR, "for r in rows:"),
-        (super::reads::line::DOMAINS_ROW, "print(\"%s%s\" % (r.get(\"domain\", \"?\"), \"   (defau"),
-        (super::reads::line::MESSAGES_CALL, "d = call(\"GET\", \"/cli/mail/messages\", params=par"),
-        (super::reads::line::MESSAGES_MSGS, "msgs = d.get(\"messages\") or []"),
-        (super::reads::line::MESSAGES_NEXT, "next_offset = d.get(\"nextOffset\")"),
-        (super::reads::line::MESSAGES_ERRORS, "inbox_errors = d.get(\"inboxErrors\") or []"),
+        (
+            super::reads::line::DOMAINS_ROW,
+            "print(\"%s%s\" % (r.get(\"domain\", \"?\"), \"   (defau",
+        ),
+        (
+            super::reads::line::MESSAGES_CALL,
+            "d = call(\"GET\", \"/cli/mail/messages\", params=par",
+        ),
+        (
+            super::reads::line::MESSAGES_MSGS,
+            "msgs = d.get(\"messages\") or []",
+        ),
+        (
+            super::reads::line::MESSAGES_NEXT,
+            "next_offset = d.get(\"nextOffset\")",
+        ),
+        (
+            super::reads::line::MESSAGES_ERRORS,
+            "inbox_errors = d.get(\"inboxErrors\") or []",
+        ),
         (super::reads::line::MESSAGES_FOR, "for m in msgs:"),
-        (super::reads::line::MESSAGES_ATT, "if m.get(\"hasAttachment\"):"),
+        (
+            super::reads::line::MESSAGES_ATT,
+            "if m.get(\"hasAttachment\"):",
+        ),
         (super::reads::line::MESSAGES_UNREAD, "if m.get(\"unread\"):"),
-        (super::reads::line::MESSAGES_ROW, "print(\"%s · %s · %s · %s%s\" % (m.get(\"id\", \"\"), "),
-        (super::reads::line::MESSAGES_WINDOW, "hint = (d.get(\"searchWindow\") or {}).get(\"hint\")"),
-        (super::reads::line::MESSAGES_NOTE, "print(\"note:     %d inbox(es) had errors and wer"),
-        (super::reads::line::READ_CALL, "d = call(\"GET\", \"/cli/mail/read\", params=params)"),
-        (super::reads::line::READ_RAW, "sys.stdout.buffer.write(base64.b64decode(d.get(\""),
-        (super::reads::line::READ_FULL, "print_full(d.get(\"message\") or {})"),
-        (super::reads::line::ATT_POST, "d = call(\"POST\", \"/cli/mail/attachments\", params"),
-        (super::reads::line::ATT_GET, "d = call(\"GET\", \"/cli/mail/attachments\", params="),
-        (super::reads::line::ATT_WROTE, "print(\"wrote attachment #%s: %s (%s, %s bytes) -"),
-        (super::reads::line::ATT_ATTS, "atts = d.get(\"attachments\") or []"),
-        (super::reads::line::ATT_NONE, "print(\"No attachments on %s.\" % d.get(\"id\", \"\"))"),
+        (
+            super::reads::line::MESSAGES_ROW,
+            "print(\"%s · %s · %s · %s%s\" % (m.get(\"id\", \"\"), ",
+        ),
+        (
+            super::reads::line::MESSAGES_WINDOW,
+            "hint = (d.get(\"searchWindow\") or {}).get(\"hint\")",
+        ),
+        (
+            super::reads::line::MESSAGES_NOTE,
+            "print(\"note:     %d inbox(es) had errors and wer",
+        ),
+        (
+            super::reads::line::READ_CALL,
+            "d = call(\"GET\", \"/cli/mail/read\", params=params)",
+        ),
+        (
+            super::reads::line::READ_RAW,
+            "sys.stdout.buffer.write(base64.b64decode(d.get(\"",
+        ),
+        (
+            super::reads::line::READ_FULL,
+            "print_full(d.get(\"message\") or {})",
+        ),
+        (
+            super::reads::line::ATT_POST,
+            "d = call(\"POST\", \"/cli/mail/attachments\", params",
+        ),
+        (
+            super::reads::line::ATT_GET,
+            "d = call(\"GET\", \"/cli/mail/attachments\", params=",
+        ),
+        (
+            super::reads::line::ATT_WROTE,
+            "print(\"wrote attachment #%s: %s (%s, %s bytes) -",
+        ),
+        (
+            super::reads::line::ATT_ATTS,
+            "atts = d.get(\"attachments\") or []",
+        ),
+        (
+            super::reads::line::ATT_NONE,
+            "print(\"No attachments on %s.\" % d.get(\"id\", \"\"))",
+        ),
         (super::reads::line::ATT_FOR, "for a in atts:"),
-        (super::reads::line::ATT_ROW, "print(\"  %s. %s (%s, %s bytes)\" % (a.get(\"index\""),
-        (super::reads::line::ATT_FETCH, "print(\"fetch one: k2 mail attachments %s --get <"),
-        (super::reads::line::WAIT_CALL, "d = call(\"GET\", \"/cli/mail/wait\", params=params,"),
-        (super::reads::line::WAIT_TIMED_OUT, "if d.get(\"timedOut\"):"),
+        (
+            super::reads::line::ATT_ROW,
+            "print(\"  %s. %s (%s, %s bytes)\" % (a.get(\"index\"",
+        ),
+        (
+            super::reads::line::ATT_FETCH,
+            "print(\"fetch one: k2 mail attachments %s --get <",
+        ),
+        (
+            super::reads::line::WAIT_CALL,
+            "d = call(\"GET\", \"/cli/mail/wait\", params=params,",
+        ),
+        (
+            super::reads::line::WAIT_TIMED_OUT,
+            "if d.get(\"timedOut\"):",
+        ),
         (super::reads::line::WAIT_DIE, "die({\"code\": \"timeout\","),
-        (super::reads::line::WAIT_FULL, "print_full(d.get(\"message\") or {})"),
-        (super::reads::line::CANCEL_CALL, "d = call(\"POST\", \"/cli/mail/outbox/cancel\","),
-        (super::reads::line::CANCEL_PRINT, "print(d.get(\"hint\") or (\"cancelled %s\" % d.get(\""),
-        (super::reads::line::OUTBOX_CALL, "d = call(\"GET\", \"/cli/mail/outbox\", params=param"),
-        (super::reads::line::OUTBOX_DETAIL, "print_outbound_detail(d.get(\"outbound\") or {})"),
-        (super::reads::line::OUTBOX_ROWS, "rows = d.get(\"outbox\") or []"),
+        (
+            super::reads::line::WAIT_FULL,
+            "print_full(d.get(\"message\") or {})",
+        ),
+        (
+            super::reads::line::CANCEL_CALL,
+            "d = call(\"POST\", \"/cli/mail/outbox/cancel\",",
+        ),
+        (
+            super::reads::line::CANCEL_PRINT,
+            "print(d.get(\"hint\") or (\"cancelled %s\" % d.get(\"",
+        ),
+        (
+            super::reads::line::OUTBOX_CALL,
+            "d = call(\"GET\", \"/cli/mail/outbox\", params=param",
+        ),
+        (
+            super::reads::line::OUTBOX_DETAIL,
+            "print_outbound_detail(d.get(\"outbound\") or {})",
+        ),
+        (
+            super::reads::line::OUTBOX_ROWS,
+            "rows = d.get(\"outbox\") or []",
+        ),
         (super::reads::line::OUTBOX_FOR, "for r in rows:"),
         (super::reads::line::OUTBOX_ROW, "print_outbound_row(r)"),
-        (super::reads::line::DRAFTS_CALL, "d = call(\"GET\", \"/cli/mail/drafts\", params=param"),
-        (super::reads::line::DRAFTS_ROWS, "rows = d.get(\"drafts\") or []"),
+        (
+            super::reads::line::DRAFTS_CALL,
+            "d = call(\"GET\", \"/cli/mail/drafts\", params=param",
+        ),
+        (
+            super::reads::line::DRAFTS_ROWS,
+            "rows = d.get(\"drafts\") or []",
+        ),
         (super::reads::line::DRAFTS_FOR, "for r in rows:"),
-        (super::reads::line::DRAFTS_ST, "st = r.get(\"status\") or \"?\""),
-        (super::reads::line::DRAFTS_LINE, "line = \"%s  %-9s %-34s answers %s\" % (r.get(\"id\""),
+        (
+            super::reads::line::DRAFTS_ST,
+            "st = r.get(\"status\") or \"?\"",
+        ),
+        (
+            super::reads::line::DRAFTS_LINE,
+            "line = \"%s  %-9s %-34s answers %s\" % (r.get(\"id\"",
+        ),
         (super::reads::line::DRAFTS_EDITED, "if r.get(\"editedBy\"):"),
-        (super::reads::line::DRAFTS_EDITED_BY, "line += \"  · edited by %s\" % r[\"editedBy\"]"),
-        (super::reads::line::DRAFTS_STATE, "if st in (\"sent\", \"held\", \"discarded\") and r.get"),
-        (super::reads::line::DRAFTS_STATE_BY, "line += \"  · %s by %s\" % (st, r[\"stateBy\"])"),
-        (super::reads::line::DRAFTS_OUTBOUND, "if r.get(\"outboundId\"):"),
-        (super::reads::line::DRAFTS_OUTBOUND_ID, "line += \"  · outbox %s\" % r[\"outboundId\"]"),
-        (super::reads::line::CAPS_REQUEST, "d = request(\"GET\", \"/cli/mail/capabilities\", par"),
-        (super::reads::line::CAPS_ERR, "err = d.get(\"error\") if isinstance(d.get(\"error\""),
-        (super::reads::line::CAPS_HINT, "if err and \"project\" in params and str(err.get(\""),
-        (super::reads::line::CAPS_AGAIN, "d = request(\"GET\", \"/cli/mail/capabilities\", par"),
-        (super::reads::line::CAPS_IS_ERR, "if isinstance(d.get(\"error\"), dict):"),
+        (
+            super::reads::line::DRAFTS_EDITED_BY,
+            "line += \"  · edited by %s\" % r[\"editedBy\"]",
+        ),
+        (
+            super::reads::line::DRAFTS_STATE,
+            "if st in (\"sent\", \"held\", \"discarded\") and r.get",
+        ),
+        (
+            super::reads::line::DRAFTS_STATE_BY,
+            "line += \"  · %s by %s\" % (st, r[\"stateBy\"])",
+        ),
+        (
+            super::reads::line::DRAFTS_OUTBOUND,
+            "if r.get(\"outboundId\"):",
+        ),
+        (
+            super::reads::line::DRAFTS_OUTBOUND_ID,
+            "line += \"  · outbox %s\" % r[\"outboundId\"]",
+        ),
+        (
+            super::reads::line::CAPS_REQUEST,
+            "d = request(\"GET\", \"/cli/mail/capabilities\", par",
+        ),
+        (
+            super::reads::line::CAPS_ERR,
+            "err = d.get(\"error\") if isinstance(d.get(\"error\"",
+        ),
+        (
+            super::reads::line::CAPS_HINT,
+            "if err and \"project\" in params and str(err.get(\"",
+        ),
+        (
+            super::reads::line::CAPS_AGAIN,
+            "d = request(\"GET\", \"/cli/mail/capabilities\", par",
+        ),
+        (
+            super::reads::line::CAPS_IS_ERR,
+            "if isinstance(d.get(\"error\"), dict):",
+        ),
         (super::reads::line::CAPS_DIE_ERR, "die(d[\"error\"])"),
-        (super::reads::line::CAPS_ROWS, "rows = [d] if env(\"M_ADDRESS\") else (d.get(\"inbo"),
+        (
+            super::reads::line::CAPS_ROWS,
+            "rows = [d] if env(\"M_ADDRESS\") else (d.get(\"inbo",
+        ),
         (super::reads::line::CAPS_FOR, "for r in rows:"),
-        (super::reads::line::CAPS_C, "c = r.get(\"capabilities\") or {}"),
-        (super::reads::line::CAPS_MAIL, "mail = c.get(\"mail\") or {}"),
-        (super::reads::line::CAPS_CAL, "cal = c.get(\"calendar\") or {}"),
-        (super::reads::line::CAPS_ON, "on = lambda m: \",\".join(k for k in (\"read\", \"dra"),
+        (
+            super::reads::line::CAPS_C,
+            "c = r.get(\"capabilities\") or {}",
+        ),
+        (
+            super::reads::line::CAPS_MAIL,
+            "mail = c.get(\"mail\") or {}",
+        ),
+        (
+            super::reads::line::CAPS_CAL,
+            "cal = c.get(\"calendar\") or {}",
+        ),
+        (
+            super::reads::line::CAPS_ON,
+            "on = lambda m: \",\".join(k for k in (\"read\", \"dra",
+        ),
         (super::reads::line::CAPS_LVL, "lvl = r.get(\"yourLevel\")"),
-        (super::reads::line::CAPS_FIRST, "print(\"%s  [%s]%s\" % (r.get(\"address\", \"?\"), c.g"),
-        (super::reads::line::CAPS_SECOND, "print(\"  mail: %s   calendar: %s   free/busy: %s"),
+        (
+            super::reads::line::CAPS_FIRST,
+            "print(\"%s  [%s]%s\" % (r.get(\"address\", \"?\"), c.g",
+        ),
+        (
+            super::reads::line::CAPS_SECOND,
+            "print(\"  mail: %s   calendar: %s   free/busy: %s",
+        ),
         (super::reads::line::CAPS_ACCT, "acct = c.get(\"account\")"),
-        (super::reads::line::CAPS_ACCT_LINE, "print(\"  account: %s%s%s\""),
-        (super::reads::line::CAPS_MISSING, "for m in c.get(\"missing\") or []:"),
-        (super::reads::line::CAPS_MISSING_LINE, "print(\"  - %s off (%s): %s\" % (m.get(\"cap\"), m.g"),
-        (super::reads::line::INBOXES_CALL, "d = call(\"GET\", \"/cli/mail/inboxes\", params={\"pr"),
-        (super::reads::line::INBOXES_ROWS, "rows = d.get(\"inboxes\") or []"),
-        (super::reads::line::INBOXES_OWNER, "owner_catalog = bool(rows) and all(r.get(\"yourLe"),
-        (super::reads::line::INBOXES_PRINT, "print_inboxes(rows, agent_view=not owner_catalog"),
-        (super::reads::line::FOLDERS_CALL, "d = call(\"GET\", \"/cli/mail/folder/list\","),
-        (super::reads::line::FOLDERS_LIST, "folders = d.get(\"folders\") or []"),
+        (
+            super::reads::line::CAPS_ACCT_LINE,
+            "print(\"  account: %s%s%s\"",
+        ),
+        (
+            super::reads::line::CAPS_MISSING,
+            "for m in c.get(\"missing\") or []:",
+        ),
+        (
+            super::reads::line::CAPS_MISSING_LINE,
+            "print(\"  - %s off (%s): %s\" % (m.get(\"cap\"), m.g",
+        ),
+        (
+            super::reads::line::INBOXES_CALL,
+            "d = call(\"GET\", \"/cli/mail/inboxes\", params={\"pr",
+        ),
+        (
+            super::reads::line::INBOXES_ROWS,
+            "rows = d.get(\"inboxes\") or []",
+        ),
+        (
+            super::reads::line::INBOXES_OWNER,
+            "owner_catalog = bool(rows) and all(r.get(\"yourLe",
+        ),
+        (
+            super::reads::line::INBOXES_PRINT,
+            "print_inboxes(rows, agent_view=not owner_catalog",
+        ),
+        (
+            super::reads::line::FOLDERS_CALL,
+            "d = call(\"GET\", \"/cli/mail/folder/list\",",
+        ),
+        (
+            super::reads::line::FOLDERS_LIST,
+            "folders = d.get(\"folders\") or []",
+        ),
         (super::reads::line::FOLDERS_FOR, "for f in folders:"),
-        (super::reads::line::FOLDER_CREATE_CALL, "d = call(\"POST\", \"/cli/mail/folder/create\","),
-        (super::reads::line::FOLDER_CREATE_PRINT, "print(\"created folder '%s' in %s\" % (d.get(\"fold"),
-        (super::reads::line::FOLDER_RENAME_CALL, "d = call(\"POST\", \"/cli/mail/folder/rename\","),
-        (super::reads::line::FOLDER_RENAME_PRINT, "print(\"renamed '%s' -> '%s' in %s\""),
-        (super::writes::line::OUTCOME_TIMED_OUT, "if waiting and d.get(\"timedOut\"):"),
-        (super::writes::line::OUTCOME_DIE, "die({\"code\": \"timeout\", \"hint\": d.get(\"hint\") or"),
+        (
+            super::reads::line::FOLDER_CREATE_CALL,
+            "d = call(\"POST\", \"/cli/mail/folder/create\",",
+        ),
+        (
+            super::reads::line::FOLDER_CREATE_PRINT,
+            "print(\"created folder '%s' in %s\" % (d.get(\"fold",
+        ),
+        (
+            super::reads::line::FOLDER_RENAME_CALL,
+            "d = call(\"POST\", \"/cli/mail/folder/rename\",",
+        ),
+        (
+            super::reads::line::FOLDER_RENAME_PRINT,
+            "print(\"renamed '%s' -> '%s' in %s\"",
+        ),
+        (
+            super::writes::line::OUTCOME_TIMED_OUT,
+            "if waiting and d.get(\"timedOut\"):",
+        ),
+        (
+            super::writes::line::OUTCOME_DIE,
+            "die({\"code\": \"timeout\", \"hint\": d.get(\"hint\") or",
+        ),
         (super::writes::line::OUTCOME_QUEUED, "if d.get(\"queued\"):"),
-        (super::writes::line::OUTCOME_QUEUED_PRINT, "print(d.get(\"hint\") or \"queued for approval (%s)"),
+        (
+            super::writes::line::OUTCOME_QUEUED_PRINT,
+            "print(d.get(\"hint\") or \"queued for approval (%s)",
+        ),
         (super::writes::line::OUTCOME_HAS, "if \"timedOut\" in d:"),
-        (super::writes::line::OUTCOME_DECIDED, "print(\"%s %s\" % (d.get(\"id\", \"\"), d.get(\"statusN"),
+        (
+            super::writes::line::OUTCOME_DECIDED,
+            "print(\"%s %s\" % (d.get(\"id\", \"\"), d.get(\"statusN",
+        ),
         (super::writes::line::OUTCOME_NOTE, "if d.get(\"note\"):"),
-        (super::writes::line::OUTCOME_NOTE_PRINT, "print(\"note from your human: %s\" % d[\"note\"])"),
-        (super::writes::line::OUTCOME_TRACK, "print(\"track with: k2 mail outbox %s\" % d.get(\"i"),
-        (super::writes::line::OUTCOME_SUBMITTED, "print(\"%s %s\" % (d.get(\"id\", \"\"), d.get(\"hint\") "),
-        (super::writes::line::SEND_CALL, "d = call(\"POST\", \"/cli/mail/send\", body=body, ti"),
-        (super::writes::line::SEND_OUTCOME, "send_outcome(d, waiting, t)"),
-        (super::writes::line::REPLY_CALL, "d = call(\"POST\", \"/cli/mail/reply\", body=body, t"),
-        (super::writes::line::REPLY_OUTCOME, "send_outcome(d, waiting, t)"),
-        (super::writes::line::FORWARD_CALL, "d = call(\"POST\", \"/cli/mail/forward-message\", bo"),
-        (super::writes::line::FORWARD_OUTCOME, "send_outcome(d, waiting, t)"),
-        (super::writes::line::ADDRESS_DELETE_CALL, "d = call(\"POST\", \"/cli/mail/address/delete\","),
-        (super::writes::line::ADDRESS_DELETE_PRINT, "print(\"retired %s — its cap slot is free immedia"),
-        (super::writes::line::DRAFT_CALL, "d = call(\"POST\", \"/cli/mail/draft\", body=body)"),
-        (super::writes::line::DRAFT_PRINT, "print(d.get(\"hint\") or \"draft saved to '%s' in %"),
-        (super::writes::line::MOVE_CALL, "d = call(\"POST\", \"/cli/mail/move\","),
-        (super::writes::line::MOVE_PRINT, "print(\"moved %s -> %s\" % (d.get(\"id\", \"\"), d.get"),
-        (super::writes::line::FLAG_CALL, "d = call(\"POST\", \"/cli/mail/flag\", body=body)"),
-        (super::writes::line::FLAG_PRINT, "print(\"%s: %s\" % (d.get(\"id\", \"\"), \", \".join(par"),
-        (super::writes::line::ARCHIVE_CALL, "d = call(\"POST\", \"/cli/mail/archive\", body={\"pro"),
-        (super::writes::line::ARCHIVE_PRINT, "print(\"archived %s → %s\" % (d.get(\"id\", \"\"), d.g"),
-        (super::writes::line::DELETE_CALL, "d = call(\"POST\", \"/cli/mail/delete\", body={\"proj"),
-        (super::writes::line::DELETE_PRINT, "print(\"deleted %s -> %s (moved to Trash, not era"),
-        (super::owner::line::SENDING_SET, "call(\"POST\", \"/cli/mail/config/set\","),
-        (super::owner::line::SENDING_GET, "d = call(\"GET\", \"/cli/mail/config\", params={\"wor"),
-        (super::owner::line::SENDING_W, "w = d.get(\"workspace\") or {}"),
-        (super::owner::line::SENDING_A, "a = w.get(\"agentSend\") or {}"),
-        (super::owner::line::SENDING_JSON, "print(dumps({\"ok\": True, \"workspace\": ws, \"proje"),
-        (super::owner::line::SENDING_EFF, "eff = a.get(\"effective\") or \"?\""),
-        (super::owner::line::SENDING_SRC, "src = \"set for this workspace\" if a.get(\"overrid"),
-        (super::owner::line::EXT_ADD_CALL, "d = call(\"POST\", \"/cli/mail/external/add\", body="),
-        (super::owner::line::EXT_ADD_PRINT, "print(\"connected %s -> workspace %s\" % (d.get(\"a"),
-        (super::owner::line::EXT_ADD_DRAFTS, "if d.get(\"draftsFolder\"):"),
-        (super::owner::line::EXT_ADD_DRAFTS_PRINT, "print(\"drafts folder: %s\" % d[\"draftsFolder\"])"),
-        (super::owner::line::CAL_POST, "d = call(\"POST\", \"/cli/mail/link/calendars\", bod"),
-        (super::owner::line::CAL_GET, "d = call(\"GET\", \"/cli/mail/link/calendars\")"),
-        (super::owner::line::CAL_STATE, "state = d.get(\"linkedCalendars\") or (\"on\" if d.g"),
-        (super::owner::line::CAL_PRINT, "print(\"Calendars on linked inboxes: %s%s\" % ("),
-        (super::owner::line::OAUTH_START, "d = call(\"POST\", \"/cli/mail/link/oauth/start\", b"),
+        (
+            super::writes::line::OUTCOME_NOTE_PRINT,
+            "print(\"note from your human: %s\" % d[\"note\"])",
+        ),
+        (
+            super::writes::line::OUTCOME_TRACK,
+            "print(\"track with: k2 mail outbox %s\" % d.get(\"i",
+        ),
+        (
+            super::writes::line::OUTCOME_SUBMITTED,
+            "print(\"%s %s\" % (d.get(\"id\", \"\"), d.get(\"hint\") ",
+        ),
+        (
+            super::writes::line::SEND_CALL,
+            "d = call(\"POST\", \"/cli/mail/send\", body=body, ti",
+        ),
+        (
+            super::writes::line::SEND_OUTCOME,
+            "send_outcome(d, waiting, t)",
+        ),
+        (
+            super::writes::line::REPLY_CALL,
+            "d = call(\"POST\", \"/cli/mail/reply\", body=body, t",
+        ),
+        (
+            super::writes::line::REPLY_OUTCOME,
+            "send_outcome(d, waiting, t)",
+        ),
+        (
+            super::writes::line::FORWARD_CALL,
+            "d = call(\"POST\", \"/cli/mail/forward-message\", bo",
+        ),
+        (
+            super::writes::line::FORWARD_OUTCOME,
+            "send_outcome(d, waiting, t)",
+        ),
+        (
+            super::writes::line::ADDRESS_DELETE_CALL,
+            "d = call(\"POST\", \"/cli/mail/address/delete\",",
+        ),
+        (
+            super::writes::line::ADDRESS_DELETE_PRINT,
+            "print(\"retired %s — its cap slot is free immedia",
+        ),
+        (
+            super::writes::line::DRAFT_CALL,
+            "d = call(\"POST\", \"/cli/mail/draft\", body=body)",
+        ),
+        (
+            super::writes::line::DRAFT_PRINT,
+            "print(d.get(\"hint\") or \"draft saved to '%s' in %",
+        ),
+        (
+            super::writes::line::MOVE_CALL,
+            "d = call(\"POST\", \"/cli/mail/move\",",
+        ),
+        (
+            super::writes::line::MOVE_PRINT,
+            "print(\"moved %s -> %s\" % (d.get(\"id\", \"\"), d.get",
+        ),
+        (
+            super::writes::line::FLAG_CALL,
+            "d = call(\"POST\", \"/cli/mail/flag\", body=body)",
+        ),
+        (
+            super::writes::line::FLAG_PRINT,
+            "print(\"%s: %s\" % (d.get(\"id\", \"\"), \", \".join(par",
+        ),
+        (
+            super::writes::line::ARCHIVE_CALL,
+            "d = call(\"POST\", \"/cli/mail/archive\", body={\"pro",
+        ),
+        (
+            super::writes::line::ARCHIVE_PRINT,
+            "print(\"archived %s → %s\" % (d.get(\"id\", \"\"), d.g",
+        ),
+        (
+            super::writes::line::DELETE_CALL,
+            "d = call(\"POST\", \"/cli/mail/delete\", body={\"proj",
+        ),
+        (
+            super::writes::line::DELETE_PRINT,
+            "print(\"deleted %s -> %s (moved to Trash, not era",
+        ),
+        (
+            super::owner::line::SENDING_SET,
+            "call(\"POST\", \"/cli/mail/config/set\",",
+        ),
+        (
+            super::owner::line::SENDING_GET,
+            "d = call(\"GET\", \"/cli/mail/config\", params={\"wor",
+        ),
+        (
+            super::owner::line::SENDING_W,
+            "w = d.get(\"workspace\") or {}",
+        ),
+        (
+            super::owner::line::SENDING_A,
+            "a = w.get(\"agentSend\") or {}",
+        ),
+        (
+            super::owner::line::SENDING_JSON,
+            "print(dumps({\"ok\": True, \"workspace\": ws, \"proje",
+        ),
+        (
+            super::owner::line::SENDING_EFF,
+            "eff = a.get(\"effective\") or \"?\"",
+        ),
+        (
+            super::owner::line::SENDING_SRC,
+            "src = \"set for this workspace\" if a.get(\"overrid",
+        ),
+        (
+            super::owner::line::EXT_ADD_CALL,
+            "d = call(\"POST\", \"/cli/mail/external/add\", body=",
+        ),
+        (
+            super::owner::line::EXT_ADD_PRINT,
+            "print(\"connected %s -> workspace %s\" % (d.get(\"a",
+        ),
+        (
+            super::owner::line::EXT_ADD_DRAFTS,
+            "if d.get(\"draftsFolder\"):",
+        ),
+        (
+            super::owner::line::EXT_ADD_DRAFTS_PRINT,
+            "print(\"drafts folder: %s\" % d[\"draftsFolder\"])",
+        ),
+        (
+            super::owner::line::CAL_POST,
+            "d = call(\"POST\", \"/cli/mail/link/calendars\", bod",
+        ),
+        (
+            super::owner::line::CAL_GET,
+            "d = call(\"GET\", \"/cli/mail/link/calendars\")",
+        ),
+        (
+            super::owner::line::CAL_STATE,
+            "state = d.get(\"linkedCalendars\") or (\"on\" if d.g",
+        ),
+        (
+            super::owner::line::CAL_PRINT,
+            "print(\"Calendars on linked inboxes: %s%s\" % (",
+        ),
+        (
+            super::owner::line::OAUTH_START,
+            "d = call(\"POST\", \"/cli/mail/link/oauth/start\", b",
+        ),
         (super::owner::line::OAUTH_FLOW, "flow = d.get(\"flow\")"),
-        (super::owner::line::OAUTH_LINK_ID, "link_id = d.get(\"linkId\")"),
-        (super::owner::line::OAUTH_DEVICE, "sys.stderr.write(\"To %s %s (%s): open %s and ent"),
-        (super::owner::line::OAUTH_BROWSER, "sys.stderr.write(\"A browser window opened — appr"),
-        (super::owner::line::OAUTH_STATUS, "s = request(\"GET\", \"/cli/mail/link/oauth/status\""),
+        (
+            super::owner::line::OAUTH_LINK_ID,
+            "link_id = d.get(\"linkId\")",
+        ),
+        (
+            super::owner::line::OAUTH_DEVICE,
+            "sys.stderr.write(\"To %s %s (%s): open %s and ent",
+        ),
+        (
+            super::owner::line::OAUTH_BROWSER,
+            "sys.stderr.write(\"A browser window opened — appr",
+        ),
+        (
+            super::owner::line::OAUTH_STATUS,
+            "s = request(\"GET\", \"/cli/mail/link/oauth/status\"",
+        ),
         (super::owner::line::OAUTH_ERROR, "if s.get(\"error\"):"),
         (super::owner::line::OAUTH_STATE, "state = s.get(\"state\")"),
-        (super::owner::line::OAUTH_FINAL, "state = final.get(\"state\")"),
-        (super::owner::line::OAUTH_UPGRADED, "print(\"upgraded %s (%s)\" % (final.get(\"address\")"),
-        (super::owner::line::OAUTH_UPGRADED_HINT, "print(final.get(\"hint\") or \"its grants, levels a"),
-        (super::owner::line::OAUTH_CONNECTED, "print(\"connected %s -> workspace %s (%s)\""),
-        (super::owner::line::OAUTH_CONNECTED_HINT, "print(final.get(\"hint\")"),
-        (super::owner::line::OAUTH_HINT, "hint = final.get(\"hint\") or (\"the link %s\" % sta"),
-        (super::owner::line::OAUTH_CONSENT, "if final.get(\"adminConsentUrl\") and final[\"admin"),
-        (super::owner::line::OAUTH_CONSENT_ADD, "hint += \" Admin consent: %s\" % final[\"adminConse"),
-        (super::owner::line::OAUTH_DIE, "die({\"code\": final.get(\"code\") or (\"denied\" if s"),
-        (super::owner::line::EXT_REMOVE_CALL, "d = call(\"POST\", \"/cli/mail/external/remove\", bo"),
-        (super::owner::line::EXT_REMOVE_PRINT, "print(\"removed %s — its stored credential was de"),
-        (super::owner::line::EXT_REMOVE_HINT, "if d.get(\"revokeHint\"):"),
-        (super::owner::line::EXT_REMOVE_HINT_PRINT, "print(d[\"revokeHint\"])"),
-        (super::owner::line::OAUTH_SHOW, "d = call(\"GET\", \"/cli/mail/oauth-config\")"),
-        (super::owner::line::OAUTH_SET, "d = call(\"POST\", \"/cli/mail/oauth-config/set\", b"),
-        (super::owner::line::OAUTH_CLEAR, "d = call(\"POST\", \"/cli/mail/oauth-config/clear\","),
-        (super::owner::line::OAUTH_PROVS, "provs = d.get(\"providers\") or {d.get(\"provider\","),
+        (
+            super::owner::line::OAUTH_FINAL,
+            "state = final.get(\"state\")",
+        ),
+        (
+            super::owner::line::OAUTH_UPGRADED,
+            "print(\"upgraded %s (%s)\" % (final.get(\"address\")",
+        ),
+        (
+            super::owner::line::OAUTH_UPGRADED_HINT,
+            "print(final.get(\"hint\") or \"its grants, levels a",
+        ),
+        (
+            super::owner::line::OAUTH_CONNECTED,
+            "print(\"connected %s -> workspace %s (%s)\"",
+        ),
+        (
+            super::owner::line::OAUTH_CONNECTED_HINT,
+            "print(final.get(\"hint\")",
+        ),
+        (
+            super::owner::line::OAUTH_HINT,
+            "hint = final.get(\"hint\") or (\"the link %s\" % sta",
+        ),
+        (
+            super::owner::line::OAUTH_CONSENT,
+            "if final.get(\"adminConsentUrl\") and final[\"admin",
+        ),
+        (
+            super::owner::line::OAUTH_CONSENT_ADD,
+            "hint += \" Admin consent: %s\" % final[\"adminConse",
+        ),
+        (
+            super::owner::line::OAUTH_DIE,
+            "die({\"code\": final.get(\"code\") or (\"denied\" if s",
+        ),
+        (
+            super::owner::line::EXT_REMOVE_CALL,
+            "d = call(\"POST\", \"/cli/mail/external/remove\", bo",
+        ),
+        (
+            super::owner::line::EXT_REMOVE_PRINT,
+            "print(\"removed %s — its stored credential was de",
+        ),
+        (
+            super::owner::line::EXT_REMOVE_HINT,
+            "if d.get(\"revokeHint\"):",
+        ),
+        (
+            super::owner::line::EXT_REMOVE_HINT_PRINT,
+            "print(d[\"revokeHint\"])",
+        ),
+        (
+            super::owner::line::OAUTH_SHOW,
+            "d = call(\"GET\", \"/cli/mail/oauth-config\")",
+        ),
+        (
+            super::owner::line::OAUTH_SET,
+            "d = call(\"POST\", \"/cli/mail/oauth-config/set\", b",
+        ),
+        (
+            super::owner::line::OAUTH_CLEAR,
+            "d = call(\"POST\", \"/cli/mail/oauth-config/clear\",",
+        ),
+        (
+            super::owner::line::OAUTH_PROVS,
+            "provs = d.get(\"providers\") or {d.get(\"provider\",",
+        ),
         (super::owner::line::OAUTH_P, "p = provs.get(name)"),
-        (super::owner::line::OAUTH_LINE, "line = \"%s: %s app %s%s\" % ("),
-        (super::owner::line::OAUTH_SECRET, "line += \"  secret %s\" % (\"set\" if p.get(\"secretS"),
-        (super::owner::line::OAUTH_TENANT, "if name == \"microsoft\" and p.get(\"tenant\"):"),
-        (super::owner::line::OAUTH_TENANT_LINE, "line += \"  tenant %s\" % p[\"tenant\"]"),
-        (super::owner::line::LINKS_CALL, "d = call(\"GET\", \"/cli/mail/inboxes\")"),
-        (super::owner::line::LINKS_ROWS, "rows = [r for r in (d.get(\"inboxes\") or []) if r"),
-        (super::owner::line::LINKS_COUNT, "print(dumps({\"ok\": True, \"count\": len(rows), \"in"),
-        (super::owner::line::LINKS_W, "w = max(max(len(r.get(\"address\", \"\")) for r in r"),
-        (super::owner::line::LINKS_PRI, "pri = r.get(\"primary\") or {}"),
-        (super::owner::line::LINKS_ROW, "print((\"%-\" + str(w) + \"s%-11s%-22s%s\") % ("),
-        (super::owner::line::LINKS_GRANTS, "for g in (r.get(\"grants\") or []):"),
+        (
+            super::owner::line::OAUTH_LINE,
+            "line = \"%s: %s app %s%s\" % (",
+        ),
+        (
+            super::owner::line::OAUTH_SECRET,
+            "line += \"  secret %s\" % (\"set\" if p.get(\"secretS",
+        ),
+        (
+            super::owner::line::OAUTH_TENANT,
+            "if name == \"microsoft\" and p.get(\"tenant\"):",
+        ),
+        (
+            super::owner::line::OAUTH_TENANT_LINE,
+            "line += \"  tenant %s\" % p[\"tenant\"]",
+        ),
+        (
+            super::owner::line::LINKS_CALL,
+            "d = call(\"GET\", \"/cli/mail/inboxes\")",
+        ),
+        (
+            super::owner::line::LINKS_ROWS,
+            "rows = [r for r in (d.get(\"inboxes\") or []) if r",
+        ),
+        (
+            super::owner::line::LINKS_COUNT,
+            "print(dumps({\"ok\": True, \"count\": len(rows), \"in",
+        ),
+        (
+            super::owner::line::LINKS_W,
+            "w = max(max(len(r.get(\"address\", \"\")) for r in r",
+        ),
+        (
+            super::owner::line::LINKS_PRI,
+            "pri = r.get(\"primary\") or {}",
+        ),
+        (
+            super::owner::line::LINKS_ROW,
+            "print((\"%-\" + str(w) + \"s%-11s%-22s%s\") % (",
+        ),
+        (
+            super::owner::line::LINKS_GRANTS,
+            "for g in (r.get(\"grants\") or []):",
+        ),
         (super::owner::line::LINKS_ST, "st = g.get(\"sendState\")"),
-        (super::owner::line::LINKS_NOTE, "note = (\"   BLOCKED: agent sending is %s for thi"),
-        (super::owner::line::LINKS_GRANT, "print(\"    grant: %-20s %s%s\" % ("),
-        (super::owner::line::GRANT_CALL, "d = call(\"POST\", \"/cli/mail/access/grant\", body="),
-        (super::owner::line::GRANT_PRINT, "print(d.get(\"hint\") or \"granted %s on %s to %s\""),
-        (super::owner::line::REVOKE_CALL, "d = call(\"POST\", \"/cli/mail/access/revoke\","),
-        (super::owner::line::REVOKE_PRINT, "print(\"revoked %s's access to %s.\" % (env(\"M_WOR"),
-        (super::owner::line::PRIMARY_CALL, "d = call(\"POST\", \"/cli/mail/access/set-primary\","),
-        (super::owner::line::PRIMARY_PRINT, "print(d.get(\"hint\") or \"%s now manages %s\""),
-        (super::owner::line::LEVEL_CALL, "d = call(\"POST\", \"/cli/mail/access/set-level\", b"),
-        (super::owner::line::LEVEL_PRINT, "who = \"primary\" if d.get(\"isPrimary\") else env(\""),
-        (super::owner::line::MANAGE_CALL, "d = call(\"POST\", \"/cli/mail/access/set-manage\","),
-        (super::owner::line::MANAGE_WHO, "who = \"primary\" if d.get(\"isPrimary\") else env(\""),
-        (super::owner::line::MANAGE_CAPS, "caps = [\"manage\" if d.get(\"canManage\") else \"no-"),
-        (super::owner::line::MANAGE_PRINT, "print(\"set %s caps on %s: %s\" % (who, d.get(\"add"),
+        (
+            super::owner::line::LINKS_NOTE,
+            "note = (\"   BLOCKED: agent sending is %s for thi",
+        ),
+        (
+            super::owner::line::LINKS_GRANT,
+            "print(\"    grant: %-20s %s%s\" % (",
+        ),
+        (
+            super::owner::line::GRANT_CALL,
+            "d = call(\"POST\", \"/cli/mail/access/grant\", body=",
+        ),
+        (
+            super::owner::line::GRANT_PRINT,
+            "print(d.get(\"hint\") or \"granted %s on %s to %s\"",
+        ),
+        (
+            super::owner::line::REVOKE_CALL,
+            "d = call(\"POST\", \"/cli/mail/access/revoke\",",
+        ),
+        (
+            super::owner::line::REVOKE_PRINT,
+            "print(\"revoked %s's access to %s.\" % (env(\"M_WOR",
+        ),
+        (
+            super::owner::line::PRIMARY_CALL,
+            "d = call(\"POST\", \"/cli/mail/access/set-primary\",",
+        ),
+        (
+            super::owner::line::PRIMARY_PRINT,
+            "print(d.get(\"hint\") or \"%s now manages %s\"",
+        ),
+        (
+            super::owner::line::LEVEL_CALL,
+            "d = call(\"POST\", \"/cli/mail/access/set-level\", b",
+        ),
+        (
+            super::owner::line::LEVEL_PRINT,
+            "who = \"primary\" if d.get(\"isPrimary\") else env(\"",
+        ),
+        (
+            super::owner::line::MANAGE_CALL,
+            "d = call(\"POST\", \"/cli/mail/access/set-manage\",",
+        ),
+        (
+            super::owner::line::MANAGE_WHO,
+            "who = \"primary\" if d.get(\"isPrimary\") else env(\"",
+        ),
+        (
+            super::owner::line::MANAGE_CAPS,
+            "caps = [\"manage\" if d.get(\"canManage\") else \"no-",
+        ),
+        (
+            super::owner::line::MANAGE_PRINT,
+            "print(\"set %s caps on %s: %s\" % (who, d.get(\"add",
+        ),
     ];
     for (n, text) in pins {
         let got = s[*n as usize - 1].trim();
@@ -925,7 +1582,8 @@ fn the_lines_that_raise_are_the_shell_s() {
 
 #[test]
 fn the_boot_script_runs_the_mail_script_at_its_line_13() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let boot = text
         .split_once("_K2_PY_STDIN_BOOT='")
@@ -989,7 +1647,11 @@ mod reads_words {
     fn folder_fills_its_words_as_bash_does() {
         let e = env("folder", &["rename", "", "a@x", "", "Old", "New"]);
         assert_eq!(
-            (e.get("M_ADDRESS"), e.get("M_FOLDER_FROM"), e.get("M_FOLDER_TO")),
+            (
+                e.get("M_ADDRESS"),
+                e.get("M_FOLDER_FROM"),
+                e.get("M_FOLDER_TO")
+            ),
             ("a@x", "Old", "New")
         );
         assert_eq!(parse("folder", &[]), Plan::Help("mail/delete"));
@@ -998,15 +1660,33 @@ mod reads_words {
 
     #[test]
     fn numbers_bash_cannot_read_are_the_shell_s() {
-        assert_eq!(parse("messages", &["--limit", "99999999999999999999"]), Plan::Shell);
-        assert_eq!(parse("wait", &["--timeout", "99999999999999999999"]), Plan::Shell);
         assert_eq!(
-            parse("attachments", &["m", "--get", "99999999999999999999", "--out", "f"]),
+            parse("messages", &["--limit", "99999999999999999999"]),
             Plan::Shell
         );
-        assert_eq!(parse("outbox", &["--limit", "99999999999999999999"]), Plan::Shell);
-        assert!(matches!(parse("messages", &["--limit", "0200"]), Plan::Run(_)));
-        assert!(matches!(parse("wait", &["--timeout", "0900"]), Plan::Run(_)));
+        assert_eq!(
+            parse("wait", &["--timeout", "99999999999999999999"]),
+            Plan::Shell
+        );
+        assert_eq!(
+            parse(
+                "attachments",
+                &["m", "--get", "99999999999999999999", "--out", "f"]
+            ),
+            Plan::Shell
+        );
+        assert_eq!(
+            parse("outbox", &["--limit", "99999999999999999999"]),
+            Plan::Shell
+        );
+        assert!(matches!(
+            parse("messages", &["--limit", "0200"]),
+            Plan::Run(_)
+        ));
+        assert!(matches!(
+            parse("wait", &["--timeout", "0900"]),
+            Plan::Run(_)
+        ));
     }
 
     #[test]
@@ -1027,7 +1707,10 @@ mod reads_words {
         );
         assert_eq!(
             b64decode(&Value::Int("1".into())),
-            Err("TypeError: argument should be a bytes-like object or ASCII string, not 'int'".into())
+            Err(
+                "TypeError: argument should be a bytes-like object or ASCII string, not 'int'"
+                    .into()
+            )
         );
     }
 }

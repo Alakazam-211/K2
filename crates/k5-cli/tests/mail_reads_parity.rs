@@ -115,19 +115,43 @@ fn mail_reads_take_the_words_as_the_shell_does() {
         usage_case("messages, two addresses", &["messages", "a@x", "b@x"]),
         usage_case("messages, a limit of 0", &["messages", "--limit", "0"]),
         usage_case("messages, a limit of 201", &["messages", "--limit", "201"]),
-        usage_case("messages, a limit not a number", &["messages", "--limit", "5x"]),
-        usage_case("messages, a value flag at the end", &["messages", "--query"]),
-        usage_case("messages, an offset not a number", &["messages", "--offset", "-1"]),
-        usage_case("messages, junk and a folder", &["messages", "--junk", "--folder", "X"]),
+        usage_case(
+            "messages, a limit not a number",
+            &["messages", "--limit", "5x"],
+        ),
+        usage_case(
+            "messages, a value flag at the end",
+            &["messages", "--query"],
+        ),
+        usage_case(
+            "messages, an offset not a number",
+            &["messages", "--offset", "-1"],
+        ),
+        usage_case(
+            "messages, junk and a folder",
+            &["messages", "--junk", "--folder", "X"],
+        ),
         usage_case("read, no id", &["read"]),
         usage_case("read, html and raw", &["read", "m1", "--html", "--raw"]),
         usage_case("read, an unknown flag", &["read", "m1", "-x"]),
         usage_case("read, two ids", &["read", "m1", "m2"]),
         usage_case("attachments, no id", &["attachments", "--json"]),
-        usage_case("attachments, get with no out", &["attachments", "m1", "--get", "1"]),
-        usage_case("attachments, out with no get", &["attachments", "m1", "--out", "f"]),
-        usage_case("attachments, get 0", &["attachments", "m1", "--get", "0", "--out", "f"]),
-        usage_case("attachments, a value flag at the end", &["attachments", "m1", "--out"]),
+        usage_case(
+            "attachments, get with no out",
+            &["attachments", "m1", "--get", "1"],
+        ),
+        usage_case(
+            "attachments, out with no get",
+            &["attachments", "m1", "--out", "f"],
+        ),
+        usage_case(
+            "attachments, get 0",
+            &["attachments", "m1", "--get", "0", "--out", "f"],
+        ),
+        usage_case(
+            "attachments, a value flag at the end",
+            &["attachments", "m1", "--out"],
+        ),
         usage_case("wait, a timeout of 901", &["wait", "--timeout", "901"]),
         usage_case("wait, a word", &["wait", "now"]),
         usage_case("wait, a value flag at the end", &["wait", "--to"]),
@@ -144,9 +168,20 @@ fn mail_reads_take_the_words_as_the_shell_does() {
         usage_case("folder list, no address", &["folder", "list"]),
         usage_case("folder create, no name", &["folder", "create", "a@x"]),
         usage_case("folder rename, no to", &["folder", "rename", "a@x", "Old"]),
-        usage_case("folder rename, four words", &["folder", "rename", "a", "b", "c", "d"]),
+        usage_case(
+            "folder rename, four words",
+            &["folder", "rename", "a", "b", "c", "d"],
+        ),
         usage_case("folder, a flag", &["folder", "list", "a@x", "--all"]),
-        case("folder alone: the help", &["folder"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "folder alone: the help",
+            &["folder"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
     ];
     for c in &v {
         rig.check(c);
@@ -161,7 +196,11 @@ fn mail_reads_print_as_the_shell_does() {
         // covers: mail inboxes
         ok_case("inboxes, the agent view", &["inboxes"], AGENT_INBOXES),
         ok_case("list, sending off", &["list"], AGENT_OFF),
-        ok_case("addresses, the owner's catalog", &["addresses"], OWNER_INBOXES),
+        ok_case(
+            "addresses, the owner's catalog",
+            &["addresses"],
+            OWNER_INBOXES,
+        ),
         ok_case("inboxes, none", &["inboxes"], r#"{"ok":true,"inboxes":[]}"#),
         // covers: mail inboxes --json
         ok_case("inboxes --json", &["inboxes", "--json"], AGENT_INBOXES),
@@ -180,9 +219,23 @@ fn mail_reads_print_as_the_shell_does() {
         ok_case(
             "messages, every filter",
             &[
-                "messages", "a@x.example", "--unread", "--limit", "25", "--offset", "5", "--since",
-                "7d", "--before", "2026-01-01", "--folder", "Sent Items", "--query", "a b&c",
-                "--from", "ann",
+                "messages",
+                "a@x.example",
+                "--unread",
+                "--limit",
+                "25",
+                "--offset",
+                "5",
+                "--since",
+                "7d",
+                "--before",
+                "2026-01-01",
+                "--folder",
+                "Sent Items",
+                "--query",
+                "a b&c",
+                "--from",
+                "ann",
             ],
             many,
         ),
@@ -193,7 +246,11 @@ fn mail_reads_print_as_the_shell_does() {
             &["messages", "--from", "nobody"],
             r#"{"ok":true,"messages":[],"searchWindow":{"hint":"only 30 days"}}"#,
         ),
-        ok_case("messages, none", &["messages"], r#"{"ok":true,"messages":[]}"#),
+        ok_case(
+            "messages, none",
+            &["messages"],
+            r#"{"ok":true,"messages":[]}"#,
+        ),
         // covers: mail read
         ok_case("read", &["read", "m1"], MESSAGE),
         ok_case("read --html", &["read", "m1", "--html"], MESSAGE),
@@ -231,11 +288,7 @@ fn mail_reads_print_as_the_shell_does() {
         ),
         // covers: mail wait
         // covers: mail wait --json
-        ok_case(
-            "wait --json",
-            &["wait", "--json"],
-            MESSAGE,
-        ),
+        ok_case("wait --json", &["wait", "--json"], MESSAGE),
         ok_case(
             "attachments, none",
             &["attachments", "m1"],
@@ -248,7 +301,17 @@ fn mail_reads_print_as_the_shell_does() {
         ),
         ok_case(
             "wait",
-            &["wait", "--to", "bot@acme.example", "--from", "ann", "--subject", "Hi", "--timeout", "5"],
+            &[
+                "wait",
+                "--to",
+                "bot@acme.example",
+                "--from",
+                "ann",
+                "--subject",
+                "Hi",
+                "--timeout",
+                "5",
+            ],
             MESSAGE,
         ),
         case(
@@ -267,7 +330,11 @@ fn mail_reads_print_as_the_shell_does() {
         ok_case("outbox", &["outbox", "--limit", "20"], OUTBOX),
         ok_case("outbox, one", &["outbox", "out_1"], OUTBOUND),
         // covers: mail outbox --json
-        ok_case("outbox --id", &["outbox", "--id", "out_1", "--json"], OUTBOUND),
+        ok_case(
+            "outbox --id",
+            &["outbox", "--id", "out_1", "--json"],
+            OUTBOUND,
+        ),
         ok_case("outbox, empty", &["outbox"], r#"{"ok":true,"outbox":[]}"#),
         ok_case(
             "outbox cancel",
@@ -286,7 +353,11 @@ fn mail_reads_print_as_the_shell_does() {
             &["capabilities", "bot@acme.example"],
             r#"{"ok":true,"address":"bot@acme.example","yourLevel":"send","capabilities":{"source":"hosted","mail":{"read":true}}}"#,
         ),
-        ok_case("capabilities, none", &["capabilities"], r#"{"ok":true,"inboxes":[]}"#),
+        ok_case(
+            "capabilities, none",
+            &["capabilities"],
+            r#"{"ok":true,"inboxes":[]}"#,
+        ),
         case(
             "capabilities, the owner view asked again",
             &["capabilities"],
@@ -363,7 +434,10 @@ fn mail_reads_read_the_answers_as_the_shell_does() {
             "forbidden, the teaching hint",
             &["messages"],
             &[],
-            vec![answer(403, r#"{"error":{"code":"forbidden","hint":"not yours"}}"#)],
+            vec![answer(
+                403,
+                r#"{"error":{"code":"forbidden","hint":"not yours"}}"#,
+            )],
             owner_and_port,
             3,
             1,
@@ -384,7 +458,10 @@ fn mail_reads_read_the_answers_as_the_shell_does() {
             "the daemon's usage error",
             &["messages", "--since", "x"],
             &[],
-            vec![answer(400, r#"{"error":{"code":"usage","hint":"bad --since"}}"#)],
+            vec![answer(
+                400,
+                r#"{"error":{"code":"usage","hint":"bad --since"}}"#,
+            )],
             owner_and_port,
             2,
             1,
@@ -393,7 +470,10 @@ fn mail_reads_read_the_answers_as_the_shell_does() {
             "too large",
             &["attachments", "m1", "--get", "1", "--out", "f"],
             &[],
-            vec![answer(413, r#"{"error":{"code":"attachment_too_large","hint":"over 100 MB"}}"#)],
+            vec![answer(
+                413,
+                r#"{"error":{"code":"attachment_too_large","hint":"over 100 MB"}}"#,
+            )],
             owner_and_port,
             2,
             1,
@@ -434,9 +514,33 @@ fn mail_reads_read_the_answers_as_the_shell_does() {
             1,
             1,
         ),
-        case("an empty 2xx", &["wait"], &[], vec![ok("")], owner_and_port, 1, 1),
-        case("null", &["read", "m1"], &[], vec![ok("null")], owner_and_port, 1, 1),
-        traceback(case("a list", &["inboxes"], &[], vec![ok("[1]")], owner_and_port, 1, 1)),
+        case(
+            "an empty 2xx",
+            &["wait"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "null",
+            &["read", "m1"],
+            &[],
+            vec![ok("null")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        traceback(case(
+            "a list",
+            &["inboxes"],
+            &[],
+            vec![ok("[1]")],
+            owner_and_port,
+            1,
+            1,
+        )),
         traceback(case(
             "messages as a number",
             &["messages"],
@@ -450,7 +554,9 @@ fn mail_reads_read_the_answers_as_the_shell_does() {
             "an address that is a number",
             &["inboxes"],
             &[],
-            vec![ok(r#"{"ok":true,"inboxes":[{"address":7,"yourLevel":"read"}]}"#)],
+            vec![ok(
+                r#"{"ok":true,"inboxes":[{"address":7,"yourLevel":"read"}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -468,7 +574,10 @@ fn mail_reads_read_the_answers_as_the_shell_does() {
             "migrating, then the answer",
             &["inboxes"],
             &[],
-            vec![answer(503, r#"{"ok":false,"state":"migrating"}"#), ok(AGENT_INBOXES)],
+            vec![
+                answer(503, r#"{"ok":false,"state":"migrating"}"#),
+                ok(AGENT_INBOXES),
+            ],
             owner_and_port,
             0,
             2,
@@ -577,7 +686,15 @@ fn mail_reads_read_the_answers_as_the_shell_does() {
             3,
             0,
         ),
-        case("no port: the gate", &["inboxes"], &[], vec![], owner_only, 1, 0),
+        case(
+            "no port: the gate",
+            &["inboxes"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
     ];
     for c in &v {
         rig.check(c);
@@ -601,7 +718,15 @@ fn help_never_acts() {
     for line in LINES {
         rig.check(&compare(
             Compare::Shell,
-            case("help, nothing sent", line, &[], vec![], owner_and_port, 0, 0),
+            case(
+                "help, nothing sent",
+                line,
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
         ));
     }
 }
@@ -620,7 +745,10 @@ fn a_large_list() {
             )
         })
         .collect();
-    let body = format!(r#"{{"ok":true,"messages":[{}],"nextOffset":3000}}"#, rows.join(","));
+    let body = format!(
+        r#"{{"ok":true,"messages":[{}],"nextOffset":3000}}"#,
+        rows.join(",")
+    );
     assert!(body.len() > 256 * 1024, "{} bytes", body.len());
     let c = case(
         "a large list",

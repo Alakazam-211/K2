@@ -90,6 +90,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Servers
 - **New servers come up ready for Apps.** The server setup script now gives agent sessions their own memory budget, sized by the server's memory (about 1/16 of it: 2 GB on 32 GB or less, 4 GB on 64 GB, 8 GB on 128 GB and up), restarts K2 once during setup while nobody is signed in yet, turns on automatic setup after updates, and stops with the failing checks named if `k2 app doctor` isn't ready at the end. `--allow-not-ready` (or `K2_ALLOW_NOT_READY=1`) is for a server that deliberately won't run Apps.
+- **Messages and files from paired servers are checked more strictly.** A sender's name, a file's name and its title must be in plain form, or K2 refuses them.
 
 ### Permission cards
 - **Choose who an agent's card asks.** An agent can name who it asks: `k2 permission request … --to <login>[,<login>…]` (owners or admins who can answer it, or `owner`). Only those people get the card's Allow and Deny, the push, the Tickets item and the row in Waiting on you; a name K2 doesn't know, or someone who can't answer that card, is refused and nothing is sent. The owner can also choose who agents' cards go to when an agent names no one: Settings → Access → Permission Cards → Who agents ask, `k2 permission approvers`, or a card an agent puts up for it. Left as it is, every owner or admin who can answer is asked, as before.

@@ -1428,6 +1428,11 @@ pub fn b64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// `base64.b64encode(b).decode()`.
+pub fn b64(b: &[u8]) -> String {
+    b64_encode(b)
+}
+
 fn b64_encode(b: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
@@ -1660,7 +1665,7 @@ fn set_opts(o: &Opts, sign: Option<Value>) -> Result<Vec<(Text, Value)>, Exit> {
 
 /// Python's `int(s)` of a command-line word: optional spaces and sign,
 /// digits with single underscores between them.
-fn py_int(s: &str) -> Option<String> {
+pub fn py_int(s: &str) -> Option<String> {
     let t = s.trim_matches(crate::families::py_space);
     let (neg, digits) = match t.as_bytes().first() {
         Some(b'-') => (true, &t[1..]),

@@ -699,3 +699,25 @@ fn file_env_file_grant_and_service() {
         rig.check(&c);
     }
 }
+
+#[test]
+fn fetch() {
+    let rig = VRig::new();
+    for c in [
+        daemon("fetch", &["fetch", "--secret", "API", "https://api.example.com/x"], ok(r#"{"status":200,"body":"{\"ok\":true}\n"}"#), 0),
+        daemon("fetch, everything", &["fetch", "-s", "API", "--scope", "ws:proj", "-X", "POST", "-H", "Accept: a/b", "--json", "{\"a\":1}", "--max-bytes", "100", "--timeout", "9", "-i", "--dst", "header:X", "--fmt", "Bearer {}", "https://h/x"], ok(r#"{"status":404,"headers":[["A","b"]],"body":"nope"}"#), 0),
+        daemon("fetch, an error status", &["fetch", "-s", "API", "https://h/x", "-d", "a=1"], ok(r#"{"status":503,"bodyB64":"/wBoaQ==","truncated":true}"#), 0),
+        daemon("fetch -o", &["fetch", "-s", "API", "https://h/x", "-o", "out.bin"], ok(r#"{"status":200,"out":"/x/out.bin","bytes":12}"#), 0),
+        daemon("fetch --json-out", &["fetch", "-s", "API", "https://h/x", "--json-out"], ok(r#"{"status":200}"#), 0),
+        daemon("fetch, refused", &["fetch", "-s", "API", "https://h/x"], Reply::Answer(403, PERMISSION_ASK.into()), 3),
+        refused("fetch, no URL", &["fetch", "-s", "API"]),
+        refused("fetch, no secret", &["fetch", "https://h/x"]),
+        refused("fetch, two URLs", &["fetch", "-s", "A", "u1", "u2"]),
+        refused("fetch, a bad header", &["fetch", "-s", "A", "u", "-H", "nocolon"]),
+        refused("fetch, a bad scope", &["fetch", "-s", "A", "u", "--scope", "ws:"]),
+        refused("fetch, an unknown flag", &["fetch", "-s", "A", "u", "-q"]),
+        traceback(refused("fetch, --max-bytes not a number", &["fetch", "-s", "A", "u", "--max-bytes", "lots"])),
+    ] {
+        rig.check(&c);
+    }
+}

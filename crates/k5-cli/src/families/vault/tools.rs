@@ -1,7 +1,8 @@
 //! The vault verbs with parsers of their own: sync (`_vault_sync`,
 //! `cli/src/vault.sh`) and placement and placements (`_vault_placement`,
-//! `cli/src/job.sh`). fetch (`_vault_fetch`), run (`_vault_run`) and
-//! systemd-cred (`_vault_systemd_cred`) are the shell's still.
+//! `cli/src/job.sh`) and fetch (`_vault_fetch`). run (`_vault_run`) and
+//! systemd-cred (`_vault_systemd_cred`) are the shell's still; so is a
+//! fetch line the binary can't be sure of ([`fetch_native`]).
 
 use super::py::{self, get, idx, items, left, or_list, render, s, t, Lines, R};
 use super::verbs::{merge, scope_json};
@@ -17,6 +18,7 @@ use k2_client::brand::CLI_NAME as CLI;
 pub fn native(sub: &str, rest: &[&str]) -> bool {
     match sub {
         "sync" | "placements" => true,
+        "fetch" => fetch_native(rest),
         "placement" => matches!(
             rest.first().copied().unwrap_or("list"),
             "add" | "done" | "rm" | "remove" | "list"
@@ -34,6 +36,7 @@ fn usage(line: String) -> Exit {
 pub fn run(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Exit {
     let r = match sub {
         "sync" => sync(ctx, rest),
+        "fetch" => fetch(ctx, rest),
         _ => placement(ctx, sub, rest),
     };
     match r {
@@ -290,4 +293,341 @@ fn list(v: &Value, l: &mut Lines) -> R<i32> {
         ));
     }
     Ok(0)
+}
+
+/// `$PWD` as the shell has it.
+fn pwd() -> Option<String> {
+    crate::daemon::logical_cwd(std::env::var_os("PWD"))
+        .ok()?
+        .to_str()
+        .map(str::to_string)
+}
+
+/// The fetch flags that take the next word.
+const FETCH_VALUES: &[&str] = &[
+    "--secret",
+    "-s",
+    "--scope",
+    "-X",
+    "--method",
+    "-H",
+    "--header",
+    "-d",
+    "--data",
+    "--json",
+    "--max-bytes",
+    "--timeout",
+    "-o",
+    "--output",
+    "--dst",
+    "--fmt",
+];
+
+/// The fetch lines the binary answers: not one whose last word is a
+/// value flag (the shell's `shift 2` fails there), and not one with a
+/// file path `cli_abs_path` would make that the binary isn't sure of.
+fn fetch_native(rest: &[&str]) -> bool {
+    if rest.last().is_some_and(|w| FETCH_VALUES.contains(w)) {
+        return false;
+    }
+    let Some(pwd) = pwd() else {
+        return false;
+    };
+    let mut i = 0;
+    while i < rest.len() {
+        let w = rest[i];
+        if FETCH_VALUES.contains(&w) {
+            let v = rest[i + 1];
+            let path = match w {
+                "-o" | "--output" => Some(v),
+                "-d" | "--data" | "--json" => v.strip_prefix('@'),
+                _ => None,
+            };
+            if let Some(p) = path {
+                if crate::families::workspace::register::abs_path(p, &pwd).is_none() {
+                    return false;
+                }
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    true
+}
+
+/// `_vault_fetch`: K2 makes the HTTPS call and adds the secret where its
+/// creator said; the value never comes back.
+fn fetch(ctx: &mut Ctx, rest: &[&str]) -> Result<Exit, Exit> {
+    let (mut url, mut method, mut max_bytes, mut timeout) =
+        (String::new(), String::new(), String::new(), String::new());
+    let (mut include, mut out_file, mut body_inline, mut body_file, mut ctype, mut json_out) = (
+        false,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        false,
+    );
+    let (mut dst, mut fmt, mut use_scope, mut use_ws) =
+        (String::new(), String::new(), String::new(), String::new());
+    let mut secrets: Vec<String> = Vec::new();
+    let mut headers: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let w = rest[i];
+        let v = rest.get(i + 1).copied().unwrap_or("");
+        let need = |line: &str| -> Result<(), Exit> {
+            if v.is_empty() {
+                Err(usage(line.into()))
+            } else {
+                Ok(())
+            }
+        };
+        match w {
+            "--secret" | "-s" => {
+                need("usage: --secret NAME")?;
+                secrets.push(v.into());
+            }
+            "--scope" => {
+                if v == "session" || v == "server" {
+                    use_scope = v.into();
+                } else if let Some(ws) = v.strip_prefix("ws:").filter(|x| !x.is_empty()) {
+                    use_scope = "workspace".into();
+                    use_ws = ws.into();
+                } else {
+                    return Err(usage("usage: --scope session|server|ws:<name> (this session's own secret of that name, or one shared with you from there)".into()));
+                }
+            }
+            "-X" | "--method" => {
+                need("usage: -X METHOD")?;
+                method = v.into();
+            }
+            "-H" | "--header" => {
+                need("usage: -H 'Name: value'")?;
+                headers.push(v.into());
+            }
+            "-d" | "--data" | "--json" => {
+                if w == "--json" {
+                    need("usage: --json @file | --json 'text'")?;
+                } else {
+                    need("usage: -d 'text' | -d @file")?;
+                }
+                match v.strip_prefix('@') {
+                    Some(f) => body_file = f.into(),
+                    None => body_inline = v.into(),
+                }
+                if w == "--json" {
+                    ctype = "application/json".into();
+                }
+            }
+            "--max-bytes" => max_bytes = v.into(),
+            "--timeout" => timeout = v.into(),
+            "-o" | "--output" => {
+                need("usage: -o file")?;
+                out_file = v.into();
+            }
+            "--dst" => dst = v.into(),
+            "--fmt" => fmt = v.into(),
+            "--include-headers" | "-i" => {
+                include = true;
+                i += 1;
+                continue;
+            }
+            "--json-out" => {
+                json_out = true;
+                i += 1;
+                continue;
+            }
+            "--system" => {
+                return Err(usage(format!(
+                    "usage: only {CLI} vault list takes --system"
+                )))
+            }
+            _ if w.starts_with('-') => {
+                return Err(usage(format!(
+                    "usage: unknown fetch flag '{w}' ({CLI} vault fetch --help)"
+                )))
+            }
+            _ => {
+                if !url.is_empty() {
+                    return Err(usage("usage: one URL".into()));
+                }
+                url = w.into();
+                i += 1;
+                continue;
+            }
+        }
+        i += 2;
+    }
+    if url.is_empty() {
+        return Err(usage(format!("usage: {CLI} vault fetch --secret NAME URL")));
+    }
+    if secrets.is_empty() {
+        return Err(usage("usage: name the secret: --secret NAME".into()));
+    }
+    if !ctype.is_empty() {
+        headers.push(format!("Content-Type: {ctype}"));
+    }
+    let pwd = pwd().unwrap_or_default();
+    let abs = |p: &str| crate::families::workspace::register::abs_path(p, &pwd).unwrap_or_default();
+    if !body_file.is_empty() {
+        body_file = abs(&body_file);
+    }
+    if !out_file.is_empty() {
+        out_file = abs(&out_file);
+    }
+    let t_ = |x: &str| py::text(x);
+    let k = |x: &str| Text::from(x);
+    let mut o: Vec<(Text, Value)> = vec![(k("url"), t_(&url))];
+    let mut ss = Vec::new();
+    for name in &secrets {
+        let mut e = vec![(k("name"), t_(name))];
+        if !dst.is_empty() {
+            e.push((k("dst"), t_(&dst)));
+        }
+        if !fmt.is_empty() {
+            e.push((k("fmt"), t_(&fmt)));
+        }
+        if !use_scope.is_empty() {
+            e.push((k("scope"), t_(&use_scope)));
+        }
+        if !use_ws.is_empty() {
+            e.push((k("workspace"), t_(&use_ws)));
+        }
+        ss.push(Value::Object(e));
+    }
+    o.push((k("secrets"), Value::Array(ss)));
+    let mut hs = Vec::new();
+    for h in &headers {
+        let Some((name, value)) = h.split_once(':') else {
+            return Err(usage("usage: -H takes Name: value".into()));
+        };
+        let strip = |x: &str| x.trim_matches(crate::families::py_space).to_string();
+        hs.push(Value::Array(vec![t_(&strip(name)), t_(&strip(value))]));
+    }
+    o.push((k("headers"), Value::Array(hs)));
+    if !method.is_empty() {
+        o.push((k("method"), t_(&method)));
+    }
+    for (key, raw) in [("maxBytes", &max_bytes), ("timeoutSecs", &timeout)] {
+        if raw.is_empty() {
+            continue;
+        }
+        match super::verbs::py_int(raw) {
+            Some(n) => o.push((k(key), Value::Int(n))),
+            None => {
+                let r = crate::families::Raise::at(
+                    19,
+                    format!(
+                        "ValueError: invalid literal for int() with base 10: {}",
+                        crate::out::py::repr(&t_(raw))
+                    ),
+                );
+                out::stderr_line(r.text().trim_end_matches('\n'));
+                return Err(Exit::Usage);
+            }
+        }
+    }
+    if include {
+        o.push((k("includeHeaders"), Value::Bool(true)));
+    }
+    if !out_file.is_empty() {
+        o.push((k("out"), t_(&out_file)));
+    }
+    if !body_file.is_empty() {
+        o.push((k("bodyFile"), t_(&body_file)));
+    }
+    if !body_inline.is_empty() {
+        o.push((k("bodyB64"), t_(&super::verbs::b64(body_inline.as_bytes()))));
+    }
+    let r = ctx.call(true, "fetch", &dumps(&Value::Object(o)))?;
+    if json_out {
+        return Ok(print_body(&r.body));
+    }
+    // `sys.stdout.buffer.write(...)`: the body's bytes, as they are.
+    let mut raw: Option<Vec<u8>> = None;
+    let shown = render(&r.body, |v, l| {
+        if include {
+            l.p(format!("HTTP {}", s(&get(v, "status")?)));
+            for kv in items(&or_list(get(v, "headers")?))? {
+                let parts = items(&kv)?;
+                if parts.len() != 2 {
+                    return Err(crate::families::Raise::at(
+                        6,
+                        format!(
+                            "ValueError: {} values to unpack (expected 2)",
+                            if parts.len() > 2 {
+                                "too many"
+                            } else {
+                                "not enough"
+                            }
+                        ),
+                    ));
+                }
+                l.p(format!("{}: {}", s(&parts[0]), s(&parts[1])));
+            }
+            l.p("");
+        }
+        let body = get(v, "body")?;
+        if t(&get(v, "out")?) {
+            l.e(format!(
+                "wrote {} bytes to {} (status {})",
+                s(&get(v, "bytes")?),
+                s(&idx(v, "out")?),
+                s(&get(v, "status")?)
+            ));
+        } else if body != Value::Null {
+            match &body {
+                Value::Str(_) => l.out.push_str(&s(&body)),
+                other => {
+                    return Err(crate::families::Raise::at(
+                        13,
+                        format!(
+                            "TypeError: write() argument must be str, not {}",
+                            crate::out::py::type_name(other)
+                        ),
+                    ))
+                }
+            }
+        } else if t(&get(v, "bodyB64")?) {
+            let b = s(&idx(v, "bodyB64")?);
+            match super::verbs::b64_decode(&b) {
+                Some(bytes) => raw = Some(bytes),
+                None => {
+                    return Err(crate::families::Raise::at(
+                        15,
+                        "binascii.Error: Incorrect padding",
+                    ))
+                }
+            }
+        }
+        if t(&get(v, "truncated")?) {
+            l.e("\n(truncated at the size limit; --max-bytes or -o)");
+        }
+        let st = get(v, "status")?;
+        let n = if t(&st) {
+            match &st {
+                Value::Int(x) => x.parse::<i64>().unwrap_or(0),
+                Value::Str(x) => x.as_str().and_then(|x| x.trim().parse().ok()).unwrap_or(0),
+                _ => 0,
+            }
+        } else {
+            0
+        };
+        if n >= 400 && !include {
+            l.e(format!("(HTTP {n})"));
+        }
+        Ok(0)
+    });
+    let Some(bytes) = raw else {
+        return Ok(shown.print());
+    };
+    let mut all = shown.stdout.into_bytes();
+    all.extend(bytes);
+    if let Err(e) = out::write_flushed(&mut std::io::stdout().lock(), &all) {
+        return Ok(out::after_stdout_error(&e));
+    }
+    let _ = out::write_flushed(&mut std::io::stderr().lock(), shown.stderr.as_bytes());
+    Ok(shown.exit)
 }

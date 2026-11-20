@@ -13,9 +13,8 @@
 //! - No answer: on the left of a pipe (the line, then SIGPIPE), in
 //!   `$(…)` and at the top (the line, exit 1).
 //! - Help never acts, and the shell's forms: `-h` and `--help` on each
-//!   verb that changes something. `review` and `skills` send their
-//!   request there (bash bugs K2 fixes): those rows say so, and turn
-//!   when the fix lands.
+//!   verb that changes something print the usage, exit 0, and send
+//!   nothing.
 
 #![cfg(unix)]
 
@@ -112,23 +111,20 @@ fn review_answers_as_the_shell_does() {
             1,
         ),
         shell(stop("no verb (the whole help)", &[], 1)),
-        // Help never acts: bash sends these (a bug K2 fixes; flip the row then).
-        shell(one(
-            "approve -h: bash sends it",
+        // Help never acts: the usage, exit 0, nothing sent.
+        shell(stop(
+            "approve -h: the usage, nothing sent",
             &["approve", "ada", "b", "-h"],
-            "{}",
             0,
         )),
-        shell(one(
-            "reject --help: bash sends it",
+        shell(stop(
+            "reject --help: the usage, nothing sent",
             &["reject", "ada", "--help"],
-            "{}",
             0,
         )),
-        shell(one(
-            "feedback -h: bash sends it",
+        shell(stop(
+            "feedback -h: the usage, nothing sent",
             &["feedback", "ada", "-m", "x", "-h"],
-            "{}",
             0,
         )),
     ];
@@ -238,29 +234,21 @@ fn skills_answer_as_the_shell_does() {
             "",
             "",
         ),
-        shell(one(
-            "list -h: bash lists",
-            &["list", "-h"],
-            r#"{"agents":[]}"#,
-            0,
-        )),
-        // Help never acts: bash sends these (a bug K2 fixes; flip the row then).
-        shell(one(
-            "create -h: bash sends it",
+        // Help never acts: the usage, exit 0, nothing sent.
+        shell(stop("list -h: the usage, nothing sent", &["list", "-h"], 0)),
+        shell(stop(
+            "create -h: the usage, nothing sent",
             &["create", "a", "-h"],
-            r#"{"name":"a"}"#,
             0,
         )),
-        shell(one(
-            "remove --help: bash sends it",
+        shell(stop(
+            "remove --help: the usage, nothing sent",
             &["remove", "a", "--help"],
-            "{}",
             0,
         )),
-        shell(one(
-            "regenerate -h: bash sends it",
+        shell(stop(
+            "regenerate -h: the usage, nothing sent",
             &["regenerate", "-h"],
-            r#"{"updated":1}"#,
             0,
         )),
     ];

@@ -16,8 +16,8 @@
 //! The shell answers: no verb or one it doesn't know (its line, then the
 //! whole help), `--reason`, `--message` or `-m` as the last word (`$2:
 //! unbound variable`), `-h` or `--help` anywhere (the front sends those
-//! on; the shell then sends the request, a bash bug K2 fixes), a word
-//! that is not UTF-8, a port curl won't take, and a `python3` the binary
+//! on; the shell prints the usage and sends nothing), a word that is not
+//! UTF-8, a port curl won't take, and a `python3` the binary
 //! can't tell.
 
 use super::{curl_port, without_nuls};

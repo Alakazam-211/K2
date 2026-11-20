@@ -22,8 +22,9 @@
 //!
 //! A flag that takes a value and comes last ends the command with 1 and
 //! no line (`shift 2` fails under `set -e`), as the shell's does. `-h` and
-//! `--help` anywhere are the front's: the shell answers them, and on
-//! `cancel` and `agents` it sends the request (a bash bug K2 fixes).
+//! `--help` anywhere are the front's: the shell prints the usage and
+//! changes nothing (`verify`, `show` and `key-id` hand theirs to
+//! `k2-approve`).
 
 pub mod cp;
 

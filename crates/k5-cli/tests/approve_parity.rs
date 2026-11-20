@@ -11,9 +11,8 @@
 //!   `cancel`, `agents` (list and set), and an unknown verb.
 //! - A refusal with its "Ask with:" line, an answer the reader can't read,
 //!   no answer, and the cell socket of a session.
-//! - Help never acts: `-h` and `--help` are the shell's; on `cancel` and
-//!   `agents` it sends the request (a bash bug K2 fixes): those rows say
-//!   so, and turn when the fix lands.
+//! - Help never acts: `-h` and `--help` anywhere are the shell's usage,
+//!   exit 0, with nothing sent (`request`, `cancel`, `agents`, `status`).
 
 #![cfg(unix)]
 
@@ -385,19 +384,19 @@ fn status_cancel_and_agents_answer_as_the_shell_does() {
         one("agents on", &["agents", "w é", "on"], "{}", 0),
         one("agents off", &["agents", "w", "off"], "{}", 0),
         stop("agents: neither on nor off", &["agents", "w"], 2),
-        // Help never acts: bash sends these (a bug K2 fixes; flip the rows then).
-        shell(one(
-            "cancel -h: bash sends it",
+        // Help never acts: -h or --help anywhere prints the usage, exit 0,
+        // and changes nothing (`_approve_cmd`'s `_wants_help`).
+        shell(stop(
+            "cancel -h: the usage, nothing sent",
             &["cancel", "ap_1", "-h"],
-            "{}",
             0,
         )),
-        shell(one(
-            "agents --help: bash sends it",
+        shell(stop(
+            "agents --help: the usage, nothing sent",
             &["agents", "w", "on", "--help"],
-            "{}",
             0,
         )),
+        shell(stop("status -h: the usage, nothing sent", &["status", "-h"], 0)),
     ];
     for c in v {
         rig.check(&c);

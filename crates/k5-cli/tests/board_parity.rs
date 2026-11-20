@@ -243,20 +243,30 @@ fn a_garden_board_answers_as_the_shell_does() {
             0,
             1,
         ),
-        // The front hands a line with --help in it to the shell (S0), so
-        // both sides run the shell's bug: `add --help` adds a sticky.
-        // Reported as a bash bug; this row flips to no request when the
-        // shell's fix lands.
+        // Help never acts: the front hands a line with -h or --help in it
+        // to the shell, which prints the board help and sends nothing.
         Case {
             compare: Compare::Shell,
             ..case(
-                "--help after the verb is a word (the shell's bug)",
+                "--help after the verb: the help, nothing sent",
                 &["add", "--help"],
                 &[],
-                vec![ok(r#"{"board":"b1","object":{"id":"s-1","help":true}}"#)],
+                vec![],
                 owner_and_port,
                 0,
-                1,
+                0,
+            )
+        },
+        Case {
+            compare: Compare::Shell,
+            ..case(
+                "delete <id> -h: the help, nothing sent",
+                &["delete", "s-1", "-h"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
             )
         },
     ];

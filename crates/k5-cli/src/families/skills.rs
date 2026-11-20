@@ -18,9 +18,8 @@
 //!
 //! A request with no answer is the transport's line, then the command
 //! dies of SIGPIPE ([`super::end_in_pipe`]). The shell answers: `-h` or
-//! `--help` anywhere (the front sends those on; the shell's `create`,
-//! `remove` and `regenerate` then send their request, a bash bug K2
-//! fixes), `create`'s `--template`, `--from` or `--role` as the last word
+//! `--help` anywhere (the front sends those on; the shell prints the
+//! usage and sends nothing), `create`'s `--template`, `--from` or `--role` as the last word
 //! (`$2: unbound variable`), a word that is not UTF-8, a port curl won't
 //! take, and a `python3` the binary can't tell.
 

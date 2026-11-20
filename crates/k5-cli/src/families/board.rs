@@ -10,10 +10,9 @@
 //! 2. `board` is the `store` tool in the shell's policy, an `id` tool: with
 //!    `HOOK_SOCK` set, the stale-passport or require-passport lines, exit 3
 //!    ([`crate::prelude::id_tool`]).
-//! 3. `board` alone, an empty first word, `help`, `-h` or `--help` first:
-//!    the help page (`cli/text/help/board.txt`). Any other `-h` or `--help`
-//!    is read as the words say, as the shell reads it (`board add --help`
-//!    adds a sticky with a `help` field: a bash bug, reported, copied).
+//! 3. `board` alone, an empty first word, `help` first, or `-h` or
+//!    `--help` anywhere: the help page (`cli/text/help/board.txt`), and
+//!    nothing is sent (help never acts).
 //! 4. The path last ([`target`]): with no `--file` word, the last word
 //!    ending `.k5board` (or the last word when it names a file that exists)
 //!    moves to `--file <it>` at the end. `--file` and `--board` together are
@@ -284,7 +283,9 @@ fn run_with(
     if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
         return stop;
     }
-    if matches!(words.first(), None | Some(&("" | "-h" | "--help" | "help"))) {
+    // `board` alone, `help` first, or `-h`/`--help` anywhere (`_wants_help`):
+    // the help page, nothing sent.
+    if matches!(words.first(), None | Some(&("" | "help"))) || offline {
         let page = crate::text::help("board").expect("the board help page is embedded");
         return match out::stdout(page) {
             Ok(()) => Exit::Ok,

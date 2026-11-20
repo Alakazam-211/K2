@@ -364,13 +364,7 @@ impl Py {
             );
             if code.is_empty() && error.is_empty() {
                 return Err(self.die(
-                    &obj(vec![
-                        ("code", s("usage")),
-                        (
-                            "hint",
-                            s(NOT_GOOGLE),
-                        ),
-                    ]),
+                    &obj(vec![("code", s("usage")), ("hint", s(NOT_GOOGLE))]),
                     None,
                 ));
             }
@@ -390,13 +384,7 @@ impl Py {
             )?;
             if matches!(status, 404 | 410) {
                 return Err(self.die(
-                    &obj(vec![
-                        ("code", s("expired")),
-                        (
-                            "hint",
-                            s(EXPIRED),
-                        ),
-                    ]),
+                    &obj(vec![("code", s("expired")), ("hint", s(EXPIRED))]),
                     None,
                 ));
             }
@@ -452,13 +440,7 @@ impl Py {
         }
         let Some(mut fin) = fin else {
             return Err(self.die(
-                &obj(vec![
-                    ("code", s("timeout")),
-                    (
-                        "hint",
-                        s(TIMED_OUT),
-                    ),
-                ]),
+                &obj(vec![("code", s("timeout")), ("hint", s(TIMED_OUT))]),
                 Some(Exit::Usage),
             ));
         };
@@ -647,7 +629,9 @@ mod tests {
                 "{l:?}"
             );
         }
-        assert!(owner_ask("a@x", "").ends_with(&format!("'{CLI_NAME} cal link --request a@x --provider google'")));
+        assert!(owner_ask("a@x", "").ends_with(&format!(
+            "'{CLI_NAME} cal link --request a@x --provider google'"
+        )));
         if CLI_NAME != "k2" {
             for l in &lines {
                 for name in ["k2 ", "k5 ", "'k2", "K2", "K5"] {

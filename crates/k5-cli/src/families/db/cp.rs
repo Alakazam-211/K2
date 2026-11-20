@@ -1240,7 +1240,8 @@ mod tests {
         lines.push(cluster.lines().last().unwrap_or_default().to_string());
         let live = live_show(br#"{"live":{"db":"d","from":1,"to":2,"state":"syncing"}}"#).stdout;
         lines.push(live.lines().last().unwrap_or_default().to_string());
-        let status = status_show(br#"{"live":[{"db":"d","from":1,"to":2,"state":"streaming"}]}"#).stdout;
+        let status =
+            status_show(br#"{"live":[{"db":"d","from":1,"to":2,"state":"streaming"}]}"#).stdout;
         lines.push(status.lines().last().unwrap_or_default().to_string());
         for l in &lines {
             assert!(

@@ -1032,8 +1032,8 @@ fn the_lines_say_the_brand_s_name() {
             format!("usage: {cli} sidecar list [--workspace <ws>] [--json]\n"),
         ),
         (
-            &["list", "--x"],
-            format!("usage: unknown flag '--x' ({cli} sidecar --help)\n"),
+            &["stop", "a", "--bad"],
+            format!("usage: unknown flag '--bad' ({cli} sidecar --help)\n"),
         ),
         (
             &["stop"],

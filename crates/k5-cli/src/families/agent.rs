@@ -2,8 +2,9 @@
 //! `agent)` arm and its `cmd_agent_*` functions answer it
 //! (`cli/src/router.sh`, `cli/src/agent.sh`).
 //!
-//! Native here: `conf`, `get`, `list`, `retire`, `restart` and `context`
-//! (`cli/src/agent-context.sh`). Every other
+//! Native here: `conf`, `get`, `list`, `retire`, `restart`, `context`
+//! (`cli/src/agent-context.sh`) and `template` (`cli/src/agent-template.sh`;
+//! its help forms stay the shell's). Every other
 //! verb, and the family alone, is still the shell's: [`run`] hands it
 //! back before anything is printed or sent.
 //!
@@ -51,6 +52,7 @@ mod conf;
 mod context;
 mod list;
 mod retire;
+mod template;
 
 use super::curl_port;
 use super::feedback::write::traceback_stdin;
@@ -90,6 +92,9 @@ enum Form {
     Retire(retire::RetireArgs),
     Restart(retire::RestartArgs),
     Context(context::ContextArgs),
+    Template(template::Verb, bool),
+    /// A template verb's usage line: plain text, not JSON.
+    TemplateUsage(String),
 }
 
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -109,6 +114,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         "retire" => retire::parse_retire(rest).map(Form::Retire),
         "restart" => retire::parse_restart(rest).map(Form::Restart),
         "context" => Ok(Form::Context(context::parse(rest))),
+        "template" | "templates" => match template::parse(rest)? {
+            Ok((v, json)) => Ok(Form::Template(v, json)),
+            Err(line) => Ok(Form::TemplateUsage(line)),
+        },
         _ => return None,
     };
     if !python::family_native(python::here()) {
@@ -158,6 +167,11 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
         Form::Retire(a) => retire::retire(&mut client, &mut closing, &a),
         Form::Restart(a) => retire::restart(&mut client, &mut closing, &a),
         Form::Context(a) => context::run(&mut client, &mut closing, &a),
+        Form::Template(v, json) => template::run(&mut client, &mut closing, &v, json),
+        Form::TemplateUsage(line) => {
+            out::stderr_line(&line);
+            Exit::Usage
+        }
     };
     closing.flush(&mut client, exit);
     exit
@@ -306,7 +320,8 @@ mod tests {
             &["agent", ""],
             &["agent", "hire", "x"],
             &["agent", "set", "x"],
-            &["agent", "template", "list"],
+            &["agent", "template"],
+            &["agent", "templates", "help"],
             &["agent", "conf", "--help"],
             &["agent", "list", "-h"],
             &["agent", "nope"],

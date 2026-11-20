@@ -1536,3 +1536,452 @@ fn context_writes() {
     ];
     check(&rig, v);
 }
+
+/// No answer on the left of the pipe into the template readers: the line,
+/// then SIGPIPE. macOS's bash 3.2 runs the reader on the empty input
+/// (`bash32-pipe-reader`).
+fn in_pipe(c: Case) -> Case {
+    Case {
+        compare: Compare::Bash32PipeReader {
+            stdout: "",
+            stderr: "Error: daemon answered: \n",
+        },
+        ..c
+    }
+}
+
+const TEMPLATES: &str = r#"{"ok":true,"templates":[{"id":"chief-of-staff","name":"Chief of staff","summary":"Runs the office","kind":"system","aliases":["cos","chief"]},{"id":"researcher","name":"Researcher","summary":"Reads and reports"},{"id":"qa-bot","name":"QA","summary":"Tests things","origin":"library","author":"ana","version":3}],"problems":[{"dir":"/srv/t/bad","error":"template.toml: missing id"}]}"#;
+
+const TEMPLATE: &str = r#"{"ok":true,"template":{"id":"qa-bot","name":"QA","version":3,"author":"ana","summary":"Tests things","aliases":["qa"],"agent":{"role":"tester","tool":"claude","model":"opus"},"params":{"team":{"label":"Team name","max":40,"required":true},"tone":{"label":"Tone","max":20}},"questions":[{"id":"stack","ask":"What stack?","fills":"role"},{"id":"repo","ask":"Which repo?","fills":"wiki:Work#Repos"},{"id":"x","ask":"Other?"}],"wiki":["Work"],"catalog":["wiki:index"],"skills":["k2-cli"],"heartbeats":[{"name":"nightly","frequency":"daily"}],"permissions":{"cards":true,"expanded":["compute.run"]},"hello":"Hi.\nI test.","versions":[1,2,3],"hash":"abc123","files":{"template.toml":"id = \"qa-bot\"\n\n","ROLE.md":"# QA\n"}}}"#;
+
+#[test]
+fn template_words() {
+    let rig = Rig::new(VERB, "tplwords");
+    let mut v = Vec::new();
+    for args in [
+        &["template"][..],
+        &["template", "help"],
+        &["templates", "--help"],
+        &["template", "list", "-h"],
+        &["template", "save", ".", "--id", "x", "--help"],
+        &["template", "add", "d", "-h"],
+        &["template", "remove", "x", "--help"],
+        &["template", "upgrade", ".", "-h"],
+        &["template", "diff", "--help"],
+    ] {
+        v.push(case(
+            "help, nothing sent",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ));
+    }
+    for args in [
+        &["template", "nope"][..],
+        &["template", "list", "x"],
+        &["template", "show"],
+        &["template", "show", "a", "b"],
+        &["template", "show", "-x"],
+        &["template", "save"],
+        &["template", "save", "."],
+        &["template", "save", ".", "--id"],
+        &["template", "save", "--name"],
+        &["template", "save", "--summary"],
+        &["template", "save", "--wiki"],
+        &["template", "save", "a", "b", "--id", "x"],
+        &["template", "save", "--zz"],
+        &["template", "add"],
+        &["template", "add", "a", "b"],
+        &["template", "add", "-q"],
+        &["template", "remove"],
+        &["template", "remove", "--version"],
+        &["template", "remove", "x", "--version", "2a"],
+        &["template", "rm", "a", "b"],
+        &["template", "remove", "-x"],
+        &["template", "diff", "a", "b"],
+        &["template", "diff", "a", "--dry-run"],
+        &["template", "upgrade"],
+        &["template", "upgrade", "a", "b"],
+        &["template", "upgrade", "-x"],
+        &["template", "diff", "qa-bot", "x", "2"],
+    ] {
+        v.push(case(
+            "a usage line",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ));
+    }
+    v.push(case(
+        "add: not a folder",
+        &["template", "add", "/no/such/template-dir"],
+        &[],
+        vec![],
+        owner_and_port,
+        4,
+        0,
+    ));
+    check(&rig, v);
+}
+
+#[test]
+fn template_reads() {
+    let rig = Rig::new(VERB, "tplread");
+    let v = vec![
+        // covers: agent template list
+        case("list", &["template", "list"], &[], vec![ok(TEMPLATES)], owner_and_port, 0, 1),
+        case("list --all", &["templates", "list", "--all"], &[], vec![ok(TEMPLATES)], owner_and_port, 0, 1),
+        // covers: agent template list --json
+        case(
+            "list --json",
+            &["template", "list", "--json", "--all"],
+            &[],
+            vec![ok(TEMPLATES)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list, none",
+            &["template", "list"],
+            &[],
+            vec![ok(r#"{"ok":true,"templates":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list, refused",
+            &["template", "list"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"forbidden","hint":"owner only"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "list, a token problem",
+            &["template", "list"],
+            &[],
+            vec![Reply::Answer(401, r#"{"error":"Invalid TOKEN"}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "list, a refusal's permission card line",
+            &["template", "list"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case("list, not JSON", &["template", "list"], &[], vec![ok("<html>")], owner_and_port, 1, 1),
+        traceback(case(
+            "list, a row that is not a dict",
+            &["template", "list"],
+            &[],
+            vec![ok(r#"{"templates":["x"]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        in_pipe(case(
+            "list, no answer: the line, SIGPIPE",
+            &["template", "list"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            141,
+            1,
+        )),
+        // covers: agent template show
+        case("show", &["template", "show", "qa-bot"], &[], vec![ok(TEMPLATE)], owner_and_port, 0, 1),
+        case(
+            "show --files",
+            &["template", "show", "--files", "qa bot/x"],
+            &[],
+            vec![ok(TEMPLATE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "show, a bare template",
+            &["template", "show", "x"],
+            &[],
+            vec![ok(r#"{"ok":true,"template":{"id":"x"}}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent template show --json
+        case(
+            "show --json",
+            &["template", "show", "qa-bot", "--json"],
+            &[],
+            vec![ok(TEMPLATE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "show, unknown: exit 4",
+            &["template", "show", "nope"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":{"code":"unknown_template","hint":"no template nope"}}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "show, bad: exit 2",
+            &["template", "show", "x"],
+            &[],
+            vec![ok(r#"{"error":{"code":"bad_template","hint":"broken toml"}}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        Case {
+            compare: Compare::OwnerTokenWithPassport,
+            ..Case {
+                env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+                ..case(
+                    "a session with a passport, the owner on disk (PRD 13.9 #4)",
+                    &["template", "list"],
+                    &[],
+                    vec![ok(TEMPLATES)],
+                    owner_and_port,
+                    0,
+                    1,
+                )
+            }
+        },
+    ];
+    check(&rig, v);
+    let port = dead_port();
+    rig.check(&case(
+        "no daemon: the reader's line",
+        &["template", "list"],
+        &[("K2_PORT", port.as_str())],
+        vec![],
+        owner_only,
+        1,
+        0,
+    ));
+}
+
+const SAVED: &str = r#"{"ok":true,"id":"qa-bot","version":4,"author":"ana","path":"/srv/t/qa-bot/v4","files":[{"path":"template.toml","bytes":120},{"path":"ROLE.md","bytes":900}],"catalog":["wiki:index"],"heartbeats":["nightly"],"suggest":["compute.run"],"skipped":[{"what":"secret","name":".env","why":"secrets stay"}]}"#;
+
+#[test]
+fn template_writes() {
+    let rig = Rig::new(VERB, "tplwrite");
+    let plan = r#"{"ok":true,"name":"QA","id":"qa-bot","from":2,"to":3,"dryRun":true,"rows":[{"status":"unchanged","step":"x"},{"status":"update","step":"role","target":"ROLE.md","reason":"edited","proposed":"new line","diff":"-old\n+new"},{"status":"add","step":"wiki","target":"Work"}]}"#;
+    let v = vec![
+        // covers: agent template save
+        case(
+            "save this workspace",
+            &["template", "save", ".", "--id", "qa-bot", "--name", "QA", "--summary", "", "--wiki", "Work", "--wiki", "Notes"],
+            &[],
+            vec![ok(SAVED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "save a handle, a dry run",
+            &["template", "save", "acme", "--id", "x", "--dry-run"],
+            &[],
+            vec![ok(r#"{"ok":true,"dryRun":true,"id":"x","version":1,"author":"ana","path":"/srv/t/x/v1"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent template save --json
+        case(
+            "save --json, a folder",
+            &["template", "save", "/tmp", "--id", "x", "--json"],
+            &[],
+            vec![ok(SAVED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "save, a secret found",
+            &["template", "save", ".", "--id", "x"],
+            &[],
+            vec![Reply::Answer(400, r#"{"error":{"code":"secret_found","hint":"a GitHub token in ROLE.md"}}"#.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "save, not the author",
+            &["template", "save", ".", "--id", "x"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":{"code":"not_author","message":"ana saved it"}}"#.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        // covers: agent template add
+        case(
+            "add a folder",
+            &["template", "add", "/tmp", "--dry-run"],
+            &[],
+            vec![ok(SAVED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent template add --json
+        case(
+            "add --json, no charter",
+            &["template", "add", "/tmp", "--json"],
+            &[],
+            vec![ok(r#"{"error":{"code":"no_charter","hint":"no ROLE.md"}}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        // covers: agent template remove
+        case(
+            "remove one version",
+            &["template", "remove", "qa-bot", "--version", "v02"],
+            &[],
+            vec![ok(r#"{"ok":true,"id":"qa-bot","removed":[2],"remaining":[1,3]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "remove all",
+            &["template", "rm", "qa-bot"],
+            &[],
+            vec![ok(r#"{"ok":true,"id":"qa-bot","removed":[1,2,3]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent template remove --json
+        case(
+            "remove --json, unknown",
+            &["template", "remove", "nope", "--json"],
+            &[],
+            vec![Reply::Answer(404, r#"{"error":{"code":"no_template","hint":"none"}}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        // covers: agent template upgrade
+        case(
+            "upgrade, the plan",
+            &["template", "upgrade", "acme", "--dry-run"],
+            &[],
+            vec![ok(plan)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade, done",
+            &["template", "upgrade", "acme"],
+            &[],
+            vec![ok(r#"{"ok":true,"name":"QA","id":"qa-bot","from":3,"to":3,"changed":false,"rows":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "upgrade, changed",
+            &["template", "upgrade", "/tmp"],
+            &[],
+            vec![ok(r#"{"ok":true,"name":"QA","id":"qa-bot","from":2,"to":3,"changed":true,"rows":[{"status":"update","step":"role","target":"ROLE.md"}]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent template upgrade --json
+        case(
+            "upgrade --json",
+            &["template", "upgrade", "acme", "--json"],
+            &[],
+            vec![ok(plan)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent template diff
+        case(
+            "diff a workspace",
+            &["template", "diff", "acme"],
+            &[],
+            vec![ok(plan)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "diff two versions",
+            &["template", "diff", "qa-bot", "v1", "3"],
+            &[],
+            vec![ok(r#"{"ok":true,"id":"qa-bot","from":1,"to":3,"files":[{"status":"changed","path":"ROLE.md","diff":"-a\r\n+b"},{"status":"added","path":"x.md"}]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: agent template diff --json
+        case(
+            "diff --json",
+            &["template", "diff", "qa-bot", "1", "2", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true,"id":"qa-bot","from":1,"to":2,"files":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "an answer the printer doesn't know",
+            &["template", "upgrade", "acme"],
+            &[],
+            vec![ok(r#"{"ok":true,"odd":"é"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        in_pipe(case(
+            "no answer: the line, SIGPIPE",
+            &["template", "remove", "x"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            141,
+            1,
+        )),
+        case(
+            "a session with a passport: the passport",
+            &["template", "save", "acme", "--id", "x"],
+            &[],
+            vec![ok(SAVED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+    ];
+    let mut v = v;
+    let last = v.pop().unwrap();
+    v.push(Case {
+        env: with_passport(&[("K2_HOOK_SOCK", "{nosock}"), ("K2_PROJECT_PATH", "/srv/acme")]),
+        ..last
+    });
+    check(&rig, v);
+}

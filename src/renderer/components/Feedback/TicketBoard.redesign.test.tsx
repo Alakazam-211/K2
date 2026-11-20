@@ -401,11 +401,11 @@ describe('ticket detail', () => {
   })
 
   it('byline says “you” for the person looking', async () => {
-    const row = makeRow({ agentName: 'ada', projectName: 'Alpha', assignees: ['owner', 'julie'] })
+    const row = makeRow({ agentName: 'ada', projectName: 'Alpha', assignees: ['owner', 'alex'] })
     api.fetchFeedbackShow.mockResolvedValue(show(row))
     render(<FeedbackItemView id={row.id} listRow={row} nowSec={NOW} revision={0} onMutated={vi.fn()} me={['owner']} />)
     await screen.findByTestId('ticket-rail-thread')
-    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked you and julie · Alpha · /)
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked you and alex · Alpha · /)
   })
 
   it('a ticket with no brief has no comments/history section either; its comments are only in the rail Thread', async () => {

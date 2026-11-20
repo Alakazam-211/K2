@@ -63,9 +63,9 @@ LEFT = {"count": 2, "at": NOW - 60, "procs": [
     {"pid": 4243, "age_secs": 27 * 3600, "cmd": "sleep 3600"}]}
 
 JOBS = [
-    {"id": "beef0123456789ab", "short": "beef0123", "node": "k2n2-m1", "state": "running", "argv": ["cargo", "bench"],
+    {"id": "beef0123456789ab", "short": "beef0123", "node": "mini-2", "state": "running", "argv": ["cargo", "bench"],
      "createdAt": NOW - 31 * 60, "startedAt": NOW - 25 * 60},
-    {"id": "cafe0123456789ab", "short": "cafe0123", "node": "k2n3-m1", "state": "queued", "argv": ["true"],
+    {"id": "cafe0123456789ab", "short": "cafe0123", "node": "mini-3", "state": "queued", "argv": ["true"],
      "createdAt": NOW - 4 * 60, "startedAt": None},
 ]
 
@@ -82,17 +82,17 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path == "/cli/compute/nodes":
-            return self.reply(200, {"nodes": [node("k2n2-m1", 0, FULL, HELD, LEFT), node("k2n3-m1", 8000, IDLE, [], {"count": 0, "procs": [], "at": NOW})]})
+            return self.reply(200, {"nodes": [node("mini-2", 0, FULL, HELD, LEFT), node("mini-3", 8000, IDLE, [], {"count": 0, "procs": [], "at": NOW})]})
         if u.path == "/cli/compute/jobs":
             return self.reply(200, {"jobs": JOBS})
         if u.path == "/cli/compute/jobs/get":
             return self.reply(200, {
-                "id": "beef0123456789ab", "short": "beef0123", "node": "k2n2-m1", "state": "cancelled", "reason": "cancelled",
+                "id": "beef0123456789ab", "short": "beef0123", "node": "mini-2", "state": "cancelled", "reason": "cancelled",
                 "argv": ["cargo", "bench"], "createdAt": NOW - 31 * 60, "startedAt": NOW - 25 * 60, "endedAt": NOW - 60,
                 "result": {"notes": ["killed 2 leftover process(es) the job left running: pid 4242 (TERM): k2-daemon --headless; pid 4243 (KILL): sleep 3600"]},
             })
         if u.path == "/cli/compute/nodes/health":
-            return self.reply(200, {"node": "k2n2-m1", "online": True, "lastSeen": NOW, "nodeVersion": "0.46.16",
+            return self.reply(200, {"node": "mini-2", "online": True, "lastSeen": NOW, "nodeVersion": "0.46.16",
                                     "facts": {"leftovers": LEFT}})
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
 
@@ -118,8 +118,8 @@ expect_has "a fully reserved node names the job holding it" "$out" "reserved by 
 expect_has "leftovers: the count, said not killed" "$out" "2 leftover process(es) of the job user with no live job (not killed"
 expect_has "leftovers: pid, age and the job that left it" "$out" "pid 4242, 1d old, from job dead0000: /var/k2node/cache/p/slots/0/target/release/k2-daemon --headless"
 expect_has "a leftover without a job id" "$out" "pid 4243, 1d old: sleep 3600"
-idle="$(awk '/^k2n3-m1 /{f=1; print; next} /^[^ ]/{f=0} f' <<<"$out")"
-expect_has "the idle node is listed" "$idle" "k2n3-m1"
+idle="$(awk '/^mini-3 /{f=1; print; next} /^[^ ]/{f=0} f' <<<"$out")"
+expect_has "the idle node is listed" "$idle" "mini-3"
 expect_not "an idle node has no reserved line" "$idle" "reserved by"
 expect_not "an idle node has no leftovers line" "$idle" "leftover"
 
@@ -136,7 +136,7 @@ expect_has "get: the started time is the real start" "$out" "(25m ago) · ended 
 expect_has "get: the job record says what was killed" "$out" "killed 2 leftover process(es) the job left running: pid 4242 (TERM)"
 
 echo "== node health =="
-out="$("$K2" compute node health k2n2-m1 </dev/null)"
+out="$("$K2" compute node health mini-2 </dev/null)"
 expect_has "health: the leftover count" "$out" "leftovers     2 process(es) of the job user with no live job (not killed by the check)"
 expect_has "health: each leftover" "$out" "leftover      pid 4242"
 

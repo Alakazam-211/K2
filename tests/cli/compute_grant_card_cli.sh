@@ -35,8 +35,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ASK_TIME='k2 permission request compute.grant max-time=4h node=k2n15 --why "<what you need it for>"'
-ASK_MANY='k2 permission request compute.grant max-disk=120 max-parallel=2 max-queued=20 max-time=1h30m node=k2n15 --why "<what you need it for>"'
+ASK_TIME='k2 permission request compute.grant max-time=4h node=node-5 --why "<what you need it for>"'
+ASK_MANY='k2 permission request compute.grant max-disk=120 max-parallel=2 max-queued=20 max-time=1h30m node=node-5 --why "<what you need it for>"'
 
 # The stub answers as the daemon does for an agent's passport with cards on:
 # owner_only plus the permission object the walls map builds (its command
@@ -108,26 +108,26 @@ agent() {
 }
 
 echo "== an agent's own limits: exit 3, ends with the ask =="
-agent k2n15 --max-time 4h --workspace builder
+agent node-5 --max-time 4h --workspace builder
 expect_eq "exits 3" "$rc" "3"
 expect_has "refusal code" "$err" "owner_only"
 expect_eq "it ends with the ask" "$(printf '%s\n' "$err" | tail -1)" "Ask with: $ASK_TIME"
-expect_eq "the body carries what was typed" "$(last body)" '{"maxJobSecs": 14400, "node": "k2n15", "workspace": "builder"}'
+expect_eq "the body carries what was typed" "$(last body)" '{"maxJobSecs": 14400, "node": "node-5", "workspace": "builder"}'
 expect_eq "sent with the passport" "$(last token)" "passport-builder"
 
-agent k2n15 --max-time 1h30m --max-parallel 2 --max-queued 20 --max-disk 120G --workspace builder
+agent node-5 --max-time 1h30m --max-parallel 2 --max-queued 20 --max-disk 120G --workspace builder
 expect_eq "every limit: exits 3" "$rc" "3"
 expect_eq "every limit: ends with the ask" "$(printf '%s\n' "$err" | tail -1)" "Ask with: $ASK_MANY"
-expect_eq "every limit: body" "$(last body)" '{"maxDiskGb": 120, "maxJobSecs": 5400, "maxParallel": 2, "maxQueued": 20, "node": "k2n15", "workspace": "builder"}'
+expect_eq "every limit: body" "$(last body)" '{"maxDiskGb": 120, "maxJobSecs": 5400, "maxParallel": 2, "maxQueued": 20, "node": "node-5", "workspace": "builder"}'
 
 echo "== --workspace: an agent may leave it out, a person may not =="
-agent k2n15 --max-time 4h
+agent node-5 --max-time 4h
 expect_eq "no --workspace in a session: exits 3 (asked)" "$rc" "3"
 expect_eq "no --workspace in a session: the ask" "$(printf '%s\n' "$err" | tail -1)" "Ask with: $ASK_TIME"
-expect_eq "no --workspace in a session: the body names none" "$(last body)" '{"maxJobSecs": 14400, "node": "k2n15"}'
+expect_eq "no --workspace in a session: the body names none" "$(last body)" '{"maxJobSecs": 14400, "node": "node-5"}'
 n_before="$(wc -l < "$LOG")"
 set +e
-err="$("$K2" compute grant k2n15 --max-time 4h 2>&1 </dev/null >/dev/null)"; rc=$?
+err="$("$K2" compute grant node-5 --max-time 4h 2>&1 </dev/null >/dev/null)"; rc=$?
 set -e
 expect_eq "a person without --workspace: usage, exit 2" "$rc" "2"
 expect_has "a person without --workspace: the usage line" "$err" "usage: k2 compute grant <node> --workspace WS"

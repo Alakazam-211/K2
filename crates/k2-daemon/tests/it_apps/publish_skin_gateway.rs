@@ -5455,9 +5455,9 @@ async fn publish_run_skin_gateway_hidden_paths() {
     with_temp_home(|| {
         let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
-        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let sam = format!("sam{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let (_anna_id, _anna_conv, anna_path) = seed_files_workspace(&anna);
+        let (_sam_id, _sam_conv, sam_path) = seed_files_workspace(&sam);
         let (_docs_id, _docs_conv, docs_path) = seed_files_workspace(&docs);
         for (rel, body) in [(".k2/inbox/m.md", "private inbox note"), (".k2/sessions/old.json", "{}"), ("app/main.rs", "fn main() {}"), ("app/.env", "DB=secret")] {
             let p = std::path::Path::new(&docs_path).join(rel);
@@ -5472,13 +5472,13 @@ async fn publish_run_skin_gateway_hidden_paths() {
             r
         };
         owner_post("/cli/skin/roles", r#"{"name":"hider"}"#.to_string());
-        owner_post("/cli/skin/roles/room", format!(r#"{{"name":"hider","handle":"{anna}","caps":["thread:read"]}}"#));
+        owner_post("/cli/skin/roles/room", format!(r#"{{"name":"hider","handle":"{sam}","caps":["thread:read"]}}"#));
         owner_post("/cli/skin/roles/room", format!(r#"{{"name":"hider","handle":"{docs}","caps":["files:read"]}}"#));
         owner_post("/cli/skin/roles/assign", r#"{"username":"bob","role":"hider"}"#.to_string());
         owner_post("/cli/skin/roles/paths", format!(r#"{{"name":"hider","handle":"{docs}","hideAdd":[".k2",".env"]}}"#));
 
         let gport = free_port();
-        publish_skin(dport, &anna_path, gport, None);
+        publish_skin(dport, &sam_path, gport, None);
         let login = http(gport, "POST", "/login", Some(r#"{"username":"bob","password":"s3cret-horse"}"#));
         assert_eq!(login.status, 200, "gateway login; {}", login.body);
         let set_cookie = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
@@ -5548,8 +5548,8 @@ async fn publish_run_skin_gateway_hidden_paths() {
         let r = get("/cli/fs/read-file", "app/.env");
         assert_eq!(r.status, 400, ".env stays hidden: {}", r.body);
 
-        stop_skin(dport, &anna_path);
-        let _ = std::fs::remove_dir_all(&anna_path);
+        stop_skin(dport, &sam_path);
+        let _ = std::fs::remove_dir_all(&sam_path);
         let _ = std::fs::remove_dir_all(&docs_path);
     });
 }

@@ -42,7 +42,8 @@ fn compute_attach() {
     let out_err = format!(
         r#"{{"seq":1,"stream":"out","data":"{RED}"}},{{"seq":2,"stream":"err","data":"{WARN}"}}"#
     );
-    let queued = r#"{"state":"queued","short":"abcd1234","node":"mini","generation":1,"attempt":1}"#;
+    let queued =
+        r#"{"state":"queued","short":"abcd1234","node":"mini","generation":1,"attempt":1}"#;
     let v = vec![
         // covers: compute attach
         case(
@@ -69,10 +70,25 @@ fn compute_attach() {
             &[],
             vec![
                 ok(JOB),
-                logs("", false, queued, r#"{"position":2,"waitReason":"busy","line":"waits on mini: 2 of 3\n(busy)"}"#),
-                logs("", false, queued, r#"{"position":2,"waitReason":"busy","line":"same"}"#),
+                logs(
+                    "",
+                    false,
+                    queued,
+                    r#"{"position":2,"waitReason":"busy","line":"waits on mini: 2 of 3\n(busy)"}"#,
+                ),
+                logs(
+                    "",
+                    false,
+                    queued,
+                    r#"{"position":2,"waitReason":"busy","line":"same"}"#,
+                ),
                 logs("", false, queued, r#"{"position":1,"reason":"busy"}"#),
-                logs(&format!(r#"{{"seq":1,"stream":"out","data":"{BUILD}"}}"#), true, &done("0"), "{}"),
+                logs(
+                    &format!(r#"{{"seq":1,"stream":"out","data":"{BUILD}"}}"#),
+                    true,
+                    &done("0"),
+                    "{}",
+                ),
             ],
             owner_and_port,
             0,
@@ -84,8 +100,18 @@ fn compute_attach() {
             &[],
             vec![
                 ok(JOB),
-                logs("", true, r#"{"state":"queued","short":"abcd1234","node":"big","generation":2,"attempt":2,"ctl":{"failedAttempts":[{"state":"lost"},{"reason":"node_lost"}]}}"#, "{}"),
-                logs("", true, &done("0").replace("\"generation\":1", "\"generation\":2"), "{}"),
+                logs(
+                    "",
+                    true,
+                    r#"{"state":"queued","short":"abcd1234","node":"big","generation":2,"attempt":2,"ctl":{"failedAttempts":[{"state":"lost"},{"reason":"node_lost"}]}}"#,
+                    "{}",
+                ),
+                logs(
+                    "",
+                    true,
+                    &done("0").replace("\"generation\":1", "\"generation\":2"),
+                    "{}",
+                ),
             ],
             owner_and_port,
             0,
@@ -95,7 +121,15 @@ fn compute_attach() {
             "killed by a signal",
             &["attach", "abcd"],
             &[],
-            vec![ok(JOB), logs("", true, r#"{"state":"done","exitCode":null,"signal":9,"short":"abcd1234"}"#, "{}")],
+            vec![
+                ok(JOB),
+                logs(
+                    "",
+                    true,
+                    r#"{"state":"done","exitCode":null,"signal":9,"short":"abcd1234"}"#,
+                    "{}",
+                ),
+            ],
             owner_and_port,
             137,
             2,
@@ -104,7 +138,15 @@ fn compute_attach() {
             "failed",
             &["attach", "abcd"],
             &[],
-            vec![ok(JOB), logs("", true, r#"{"state":"failed","reason":"oom","detail":"out of memory","short":"abcd1234","startedAt":10,"endedAt":75}"#, "{}")],
+            vec![
+                ok(JOB),
+                logs(
+                    "",
+                    true,
+                    r#"{"state":"failed","reason":"oom","detail":"out of memory","short":"abcd1234","startedAt":10,"endedAt":75}"#,
+                    "{}",
+                ),
+            ],
             owner_and_port,
             3,
             2,
@@ -113,7 +155,11 @@ fn compute_attach() {
             "lost once",
             &["attach", "abcd"],
             &[],
-            vec![ok(JOB), Reply::Close, logs(&out_err, true, &done("0"), "{}")],
+            vec![
+                ok(JOB),
+                Reply::Close,
+                logs(&out_err, true, &done("0"), "{}"),
+            ],
             owner_and_port,
             0,
             3,
@@ -122,7 +168,10 @@ fn compute_attach() {
             "the job not found",
             &["attach", "nope"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"job_not_found","hint":"no such job"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"job_not_found","hint":"no such job"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -154,7 +203,15 @@ fn compute_attach() {
                 "a chunk with no data",
                 &["attach", "abcd"],
                 &[],
-                vec![ok(JOB), logs(r#"{"seq":1,"stream":"out","data":5}"#, true, &done("0"), "{}")],
+                vec![
+                    ok(JOB),
+                    logs(
+                        r#"{"seq":1,"stream":"out","data":5}"#,
+                        true,
+                        &done("0"),
+                        "{}",
+                    ),
+                ],
                 owner_and_port,
                 1,
                 2,
@@ -172,8 +229,24 @@ fn compute_attach() {
                 1,
             )
         },
-        case("no job", &["attach", "--raw"], &[], vec![], owner_and_port, 2, 0),
-        case("--since last", &["attach", "abcd", "--since"], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "no job",
+            &["attach", "--raw"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "--since last",
+            &["attach", "abcd", "--since"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

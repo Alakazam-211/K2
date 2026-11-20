@@ -116,8 +116,9 @@ fn now() -> i64 {
 fn arith(v: &str) -> i64 {
     let (neg, d) = v.strip_prefix('-').map_or((false, v), |r| (true, r));
     let n = if !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()) {
-        d.bytes()
-            .fold(0i64, |n, b| n.wrapping_mul(10).wrapping_add(i64::from(b - b'0')))
+        d.bytes().fold(0i64, |n, b| {
+            n.wrapping_mul(10).wrapping_add(i64::from(b - b'0'))
+        })
     } else {
         0
     };
@@ -378,11 +379,7 @@ pub fn poll_reader(body: &[u8], raw: bool, lost: bool, to_err: bool) -> Result<S
             let data = p::idx(&c, "data")
                 .and_then(|d| crate::families::mail::reads::b64decode(&d))
                 .map_err(at(l))?;
-            let data = if raw {
-                data
-            } else {
-                super::logs::strip(&data)
-            };
+            let data = if raw { data } else { super::logs::strip(&data) };
             let l = line!("if c[\"stream\"]");
             let stream = p::idx(&c, "stream").map_err(at(l))?;
             if p::eq_s(&stream, "out") && !to_err {
@@ -399,9 +396,13 @@ pub fn poll_reader(body: &[u8], raw: bool, lost: bool, to_err: bool) -> Result<S
         let l = line!("j = v.get(\"job\"");
         let j = p::get_or(&v, "job", Value::Object(vec![])).map_err(at(l))?;
         let l = line!("q = v.get(\"queue\")");
-        let q = p::get(&v, "queue").map(|x| p::or(x, Value::Object(vec![]))).map_err(at(l))?;
+        let q = p::get(&v, "queue")
+            .map(|x| p::or(x, Value::Object(vec![])))
+            .map_err(at(l))?;
         let l = line!("fa = (");
-        let ctl = p::get(&j, "ctl").map(|x| p::or(x, Value::Object(vec![]))).map_err(at(l))?;
+        let ctl = p::get(&j, "ctl")
+            .map(|x| p::or(x, Value::Object(vec![])))
+            .map_err(at(l))?;
         let fa = p::get(&ctl, "failedAttempts")
             .map(|x| p::or(x, Value::Array(vec![Value::Object(vec![])])))
             .and_then(|x| p::at(&x, -1))
@@ -448,11 +449,18 @@ pub fn poll_reader(body: &[u8], raw: bool, lost: bool, to_err: bool) -> Result<S
             ("detail", g(&j, "detail", l)?),
             (
                 "hint",
-                str_value(&p::pct(
-                    concat!(cli_name!(), " compute get %s --json; ", cli_name!(), " compute retry %s"),
-                    &[short_v.clone(), short_v],
-                )
-                .map_err(at(l + 1))?),
+                str_value(
+                    &p::pct(
+                        concat!(
+                            cli_name!(),
+                            " compute get %s --json; ",
+                            cli_name!(),
+                            " compute retry %s"
+                        ),
+                        &[short_v.clone(), short_v],
+                    )
+                    .map_err(at(l + 1))?,
+                ),
             ),
         ]);
         let err = super::writes::dumps(&err) + "\n";
@@ -511,7 +519,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (st.cursor.as_str(), st.end, st.code.as_str(), st.node.as_str()),
+            (
+                st.cursor.as_str(),
+                st.end,
+                st.code.as_str(),
+                st.node.as_str()
+            ),
             ("c:9", true, "7", "n1")
         );
         assert_eq!(st.qline, "a b");

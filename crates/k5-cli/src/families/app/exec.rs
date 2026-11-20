@@ -122,7 +122,10 @@ fn stdin_is_data() -> bool {
 fn stage() -> Result<(), Exit> {
     let dir = std::env::var_os("TMPDIR")
         .filter(|d| !d.is_empty())
-        .map_or_else(|| std::path::PathBuf::from("/tmp"), std::path::PathBuf::from);
+        .map_or_else(
+            || std::path::PathBuf::from("/tmp"),
+            std::path::PathBuf::from,
+        );
     let template = format!("{}/k2-exec-XXXXXX", dir.display());
     let mut err = None;
     for n in 0..16u32 {

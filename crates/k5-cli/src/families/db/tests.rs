@@ -411,7 +411,10 @@ fn a_python_eq_is_python_s() {
     assert!(crate::out::pylib::ops::py_eq(&v("1"), &v("1.0")));
     assert!(crate::out::pylib::ops::py_eq(&v("true"), &v("1")));
     assert!(!crate::out::pylib::ops::py_eq(&v("\"1\""), &v("1")));
-    assert!(crate::out::pylib::ops::py_eq(&v(r#"{"a":1,"b":2}"#), &v(r#"{"b":2,"a":1}"#)));
+    assert!(crate::out::pylib::ops::py_eq(
+        &v(r#"{"a":1,"b":2}"#),
+        &v(r#"{"b":2,"a":1}"#)
+    ));
     assert!(!crate::out::pylib::ops::py_eq(&v("null"), &v("0")));
 }
 

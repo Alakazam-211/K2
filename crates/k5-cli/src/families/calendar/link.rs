@@ -210,7 +210,9 @@ impl Py {
                 }),
             )),
             // `e.read()` raising inside the handler: out of the run.
-            Outcome::HttpError { body: Err(r), .. } => Err(Tb::at(from, MODULE, r.traceback_line())),
+            Outcome::HttpError { body: Err(r), .. } => {
+                Err(Tb::at(from, MODULE, r.traceback_line()))
+            }
             Outcome::Answer { body: Err(_), .. } | Outcome::Raised(_) => Err(self.unreachable()),
         }
     }
@@ -321,7 +323,9 @@ impl Py {
                 line::PASTE_START,
             )?;
             d = self.must(got, line::PASTE_START, provider, &address)?;
-            let url = at(&d, "authorizationUrl").cloned().unwrap_or_else(|| s("?"));
+            let url = at(&d, "authorizationUrl")
+                .cloned()
+                .unwrap_or_else(|| s("?"));
             eprint(&format!(
                 "1. Open this address in any browser and allow read-only access to {address}'s calendar:\n\n{}\n\n\
                  2. The browser then fails to load a 127.0.0.1 page. That's expected: copy the whole \
@@ -353,7 +357,11 @@ impl Py {
                 }
             };
             let pasted = strip(&pasted).to_string();
-            let (code, state, error) = (one(&pasted, "code"), one(&pasted, "state"), one(&pasted, "error"));
+            let (code, state, error) = (
+                one(&pasted, "code"),
+                one(&pasted, "state"),
+                one(&pasted, "error"),
+            );
             if code.is_empty() && error.is_empty() {
                 return Err(self.die(
                     &obj(vec![
@@ -461,7 +469,11 @@ impl Py {
                 .unwrap_or_else(|| s(&format!("the link {}", st(at(&fin, "state")))));
             if let Some(url) = at(&fin, "adminConsentUrl").filter(|u| py::truthy(u)) {
                 if !py_in(url, &hint, line::FINAL_CONSENT).map_err(raise)? {
-                    hint = add(&hint, &format!(" Admin consent: {}", py::str_of(url)), line::FINAL_ADD)?;
+                    hint = add(
+                        &hint,
+                        &format!(" Admin consent: {}", py::str_of(url)),
+                        line::FINAL_ADD,
+                    )?;
                 }
             }
             let code = [at(&fin, "code"), at(&fin, "state")]
@@ -470,7 +482,10 @@ impl Py {
                 .find(|v| py::truthy(v))
                 .cloned()
                 .unwrap_or_else(|| s("error"));
-            return Err(self.die(&obj(vec![("code", code), ("hint", hint)]), Some(Exit::Error)));
+            return Err(self.die(
+                &obj(vec![("code", code), ("hint", hint)]),
+                Some(Exit::Error),
+            ));
         }
         let cals: Vec<String> = l
             .cals
@@ -505,7 +520,10 @@ impl Py {
                 60,
                 line::PRIVACY,
             )?;
-            extra.push(("privacy", self.must(got, line::PRIVACY, provider, &address)?));
+            extra.push((
+                "privacy",
+                self.must(got, line::PRIVACY, provider, &address)?,
+            ));
         }
         if self.ask.json {
             if let Value::Object(pairs) = &mut fin {
@@ -520,7 +538,11 @@ impl Py {
         } else {
             self.print(&format!(
                 "linked {address} ({}) -> workspace {}",
-                if l.write { "read and write" } else { "read-only" },
+                if l.write {
+                    "read and write"
+                } else {
+                    "read-only"
+                },
                 l.workspace
             ));
             let h = at(&fin, "hint").filter(|h| py::truthy(h)).cloned();
@@ -532,7 +554,8 @@ impl Py {
                     .map(|(_, v)| v.clone())
                     .unwrap_or(Value::Null);
                 let added = at(&got, "added").filter(|a| py::truthy(a)).cloned();
-                let list = added.unwrap_or_else(|| Value::Array(cals.iter().map(|c| s(c)).collect()));
+                let list =
+                    added.unwrap_or_else(|| Value::Array(cals.iter().map(|c| s(c)).collect()));
                 let joined = join(&list, ", ", line::CALS_ON, MODULE)?;
                 self.print(&format!("calendars on: primary, {joined}"));
             }

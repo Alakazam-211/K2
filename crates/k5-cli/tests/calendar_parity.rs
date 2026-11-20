@@ -777,7 +777,8 @@ fn check_masked(rig: &Rig, c: &Case) {
     assert_eq!(r.0.stderr, b.0.stderr, "{}: stderr", c.name);
 }
 
-const LINK_START: &str = r#"{"ok":true,"linkId":"L1","authorizationUrl":"https://accounts.example/o?x=1&y=é"}"#;
+const LINK_START: &str =
+    r#"{"ok":true,"linkId":"L1","authorizationUrl":"https://accounts.example/o?x=1&y=é"}"#;
 
 fn pasted(rig: &Rig) {
     owner_and_port(rig);
@@ -800,7 +801,14 @@ fn link_answers_as_the_shell_does() {
         // covers: calendar link
         case(
             "link in a browser, pending then connected",
-            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![
                 ok(r#"{"ok":true,"linkId":"L1"}"#),
@@ -828,7 +836,9 @@ fn link_answers_as_the_shell_does() {
             ],
             &[],
             vec![
-                ok(r#"{"ok":true,"linkId":"L2","verificationUrl":"https://v.example","userCode":"ABC"}"#),
+                ok(
+                    r#"{"ok":true,"linkId":"L2","verificationUrl":"https://v.example","userCode":"ABC"}"#,
+                ),
                 ok(r#"{"state":"connected","hint":"h","calendars":"old"}"#),
                 ok(r#"{"ok":true,"added":["Work","b"]}"#),
                 ok(r#"{"ok":true,"omit":true}"#),
@@ -873,7 +883,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link --request --json",
-            &["link", "a@x.example", "--provider", "microsoft", "--request", "--json"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "microsoft",
+                "--request",
+                "--json",
+            ],
             &[],
             vec![ok(r#"{"ok":true}"#)],
             owner_and_port,
@@ -882,7 +899,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link denied, with admin consent",
-            &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "microsoft",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![
                 ok(r#"{"ok":true,"linkId":"L"}"#),
@@ -894,11 +918,20 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link error with a code",
-            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![
                 ok(r#"{"ok":true,"linkId":"L"}"#),
-                ok(r#"{"state":"error","code":"consent_required","hint":"see https://c.example","adminConsentUrl":"https://c.example"}"#),
+                ok(
+                    r#"{"state":"error","code":"consent_required","hint":"see https://c.example","adminConsentUrl":"https://c.example"}"#,
+                ),
             ],
             owner_and_port,
             1,
@@ -906,7 +939,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link, the owner's refusal at the start",
-            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![answer(403, r#"{"error":{"code":"forbidden","hint":"no"}}"#)],
             owner_and_port,
@@ -915,7 +955,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link, the owner's refusal on the status",
-            &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "microsoft",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![
                 ok(r#"{"ok":true,"linkId":"L"}"#),
@@ -927,7 +974,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link, a start that isn't ok",
-            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![ok(r#"{"linkId":"x","note":"é"}"#)],
             owner_and_port,
@@ -936,7 +990,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link, an HTTP error that is not JSON",
-            &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "microsoft",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![answer(500, "oops")],
             owner_and_port,
@@ -945,7 +1006,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link, a 200 that is not JSON",
-            &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "microsoft",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![ok("oops")],
             owner_and_port,
@@ -954,7 +1022,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link, closed with nothing",
-            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![Reply::Close],
             owner_and_port,
@@ -965,7 +1040,14 @@ fn link_answers_as_the_shell_does() {
             compare: Compare::Traceback,
             ..case(
                 "link, a start that is a list",
-                &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+                &[
+                    "link",
+                    "a@x.example",
+                    "--provider",
+                    "google",
+                    "--workspace",
+                    "w",
+                ],
                 &[],
                 vec![ok("[1]")],
                 owner_and_port,
@@ -977,7 +1059,14 @@ fn link_answers_as_the_shell_does() {
             compare: Compare::Traceback,
             ..case(
                 "link, a status that is a list",
-                &["link", "a@x.example", "--provider", "microsoft", "--workspace", "w"],
+                &[
+                    "link",
+                    "a@x.example",
+                    "--provider",
+                    "microsoft",
+                    "--workspace",
+                    "w",
+                ],
                 &[],
                 vec![ok(r#"{"ok":true,"linkId":"L"}"#), ok("[2]")],
                 owner_and_port,
@@ -1053,7 +1142,15 @@ fn link_answers_as_the_shell_does() {
         // Bash's prompt reads the script's own heredoc: nothing.
         case(
             "link --paste reads nothing",
-            &["link", "a@x.example", "--provider", "google", "--workspace", "w", "--paste"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+                "--paste",
+            ],
             &[],
             vec![ok(LINK_START)],
             owner_and_port,
@@ -1062,7 +1159,14 @@ fn link_answers_as_the_shell_does() {
         ),
         case(
             "link, no browser here: paste-back",
-            &["link", "a@x.example", "--provider", "google", "--workspace", "w"],
+            &[
+                "link",
+                "a@x.example",
+                "--provider",
+                "google",
+                "--workspace",
+                "w",
+            ],
             &[],
             vec![
                 answer(400, r#"{"error":{"code":"remote_unsupported","hint":"x"}}"#),

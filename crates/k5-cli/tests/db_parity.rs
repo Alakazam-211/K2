@@ -1683,6 +1683,16 @@ exit "${{KID_RC:-0}}"
     let kid = shim.join("dbkid");
     std::fs::write(&kid, script).unwrap();
     std::fs::set_permissions(&kid, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plain = shim.join("plainkid");
+    std::fs::write(
+        &plain,
+        format!(
+            "printf 'plain=%s %s\\n' \"${{DATABASE_URL-unset}}\" \"$1\" >> '{}'\necho plain kid\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o755)).unwrap();
     rig.path_first = Some(shim);
     rig.tool_log = Some(log);
     rig
@@ -1704,7 +1714,10 @@ fn db_run_answers_as_the_shell_does() {
         ),
         case(
             "run --as, --db, --test --actor migrator",
-            &["run", "--db", "app", "--test", "--actor", "migrator", "--as", "PG_URL", "--", "dbkid"],
+            &[
+                "run", "--db", "app", "--test", "--actor", "migrator", "--as", "PG_URL", "--",
+                "dbkid",
+            ],
             &[],
             vec![ok(DSN)],
             owner_and_port,
@@ -1765,7 +1778,15 @@ fn db_run_answers_as_the_shell_does() {
             1,
             1,
         ),
-        case("run, no --", &["run", "dbkid"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "run, no --",
+            &["run", "dbkid"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "run, a bad --as",
             &["run", "--as", "pg-url", "--", "dbkid"],
@@ -1793,14 +1814,15 @@ fn db_run_answers_as_the_shell_does() {
             1,
             0,
         ),
-        // A command the binary can't place: the shell's.
+        // A file execve won't run (no `#!`): bash runs it itself, so the
+        // binary hands the line to the shell.
         shell(case(
-            "run, a command not on PATH",
-            &["run", "--", "no-such-command-k5"],
+            "run, a script with no #! line",
+            &["run", "--", "plainkid", "z"],
             &[],
             vec![ok(DSN)],
             owner_and_port,
-            127,
+            0,
             1,
         )),
         // Help never acts, even after --.

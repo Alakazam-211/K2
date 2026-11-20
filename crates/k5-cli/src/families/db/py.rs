@@ -28,10 +28,10 @@
 //! what it printed so far, and exits 1.
 
 use super::super::{get, py_iter, py_left, py_len, s, Raise, Shown};
-use crate::out::pylib::ops::{contains, join, py_eq, round_int};
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::py;
+use crate::out::pylib::ops::{contains, join, py_eq, round_int};
 use crate::transport::urllib::{self, Method, Opener, Outcome, Raised, Request};
 use k2_client::{cli_name, product_name};
 use std::time::Duration;
@@ -1047,18 +1047,12 @@ impl Py<'_> {
                 let applied = or(g(d, "applied", line::MIGRATE)?, empty_list());
                 let discovered = or(g(d, "discovered", line::MIGRATE)?, Value::Int("0".into()));
                 if py::truthy(&applied) {
-                    let t = format!(
-                        "applied: {}",
-                        join(&applied, ", ", line::MIGRATE_APPLIED)?
-                    );
+                    let t = format!("applied: {}", join(&applied, ", ", line::MIGRATE_APPLIED)?);
                     self.print(t);
                 } else if truthy(at(d, "noop")) && above_zero(&discovered, line::MIGRATE_NOOP)? {
                     self.print("migrations: already applied");
                 } else {
-                    let t = format!(
-                        "applied: {}",
-                        join(&applied, ", ", line::MIGRATE_NONE)?
-                    );
+                    let t = format!("applied: {}", join(&applied, ", ", line::MIGRATE_NONE)?);
                     self.print(t);
                 }
                 Ok(())

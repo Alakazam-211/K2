@@ -137,20 +137,16 @@ fn runs_itself(p: &Path) -> bool {
         || head == b"\x7fELF"
         || matches!(
             head,
-            [0xfe, 0xed, 0xfa, 0xce | 0xcf] | [0xce | 0xcf, 0xfa, 0xed, 0xfe] | [0xca, 0xfe, 0xba, 0xbe]
+            [0xfe, 0xed, 0xfa, 0xce | 0xcf]
+                | [0xce | 0xcf, 0xfa, 0xed, 0xfe]
+                | [0xca, 0xfe, 0xba, 0xbe]
         )
 }
 
 /// `_db_py`'s `dsn --json --reveal` (its stdout held), the answer's `dsn`,
 /// then the command with it in its environment. Returns only when the
 /// command didn't start: the exit.
-pub fn run(
-    client: &mut Client,
-    closing: Closing,
-    project: &str,
-    r: &Run,
-    netloc: String,
-) -> Exit {
+pub fn run(client: &mut Client, closing: Closing, project: &str, r: &Run, netloc: String) -> Exit {
     let mut ask = Ask::new(Verb::Dsn);
     ask.json = true;
     ask.test = r.test;

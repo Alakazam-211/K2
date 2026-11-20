@@ -4,16 +4,14 @@
 //! `$out`. A call with no answer is the transport's line and exit 1 (the
 //! main shell's USR1 trap); any other failed call is curl's code.
 
-use super::py::{
-    at, dumps_ascii, dumps_spaced, err_line, g, is_false, obj, or, st, truthy,
-};
+use super::py::{at, dumps_ascii, dumps_spaced, err_line, g, is_false, obj, or, st, truthy};
 use super::{usage, Form, Words};
 use crate::exit::Exit;
-use crate::out::pylib::ops::{contains, py_eq};
 use crate::families::{raised, s, Raise, Shown};
 use crate::out;
 use crate::out::json::{self, Value};
 use crate::out::py;
+use crate::out::pylib::ops::{contains, py_eq};
 use crate::prelude::Closing;
 use crate::transport::encode::quote;
 use crate::transport::{Call, Channel, Client, Error, Response};

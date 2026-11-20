@@ -444,7 +444,8 @@ impl Cp<'_> {
             out::stderr_line(&e.to_string());
             return Err(Exit::Error);
         }
-        let (status, body) = spec_run::split(&spec_run::raw(&r, self.client.refused_before_answer()));
+        let (status, body) =
+            spec_run::split(&spec_run::raw(&r, self.client.refused_before_answer()));
         let noted = Response {
             status: 0,
             permission: permission::note(&body),
@@ -1284,7 +1285,7 @@ mod tests {
             .text();
         assert_eq!(
             b,
-            r#"{"op": "create", "major": 17, "name": "é", "value": false}"#
+            "{\"op\": \"create\", \"major\": 17, \"name\": \"\\u00e9\", \"value\": false}"
         );
     }
 

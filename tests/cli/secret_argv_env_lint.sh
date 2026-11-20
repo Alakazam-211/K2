@@ -25,6 +25,14 @@
 #      function fills that way without declaring it local (as
 #      _cli_read_secret_stdin fills _K2_SECRET), or a variable or array
 #      built from one (the recovery words typed back are the model).
+#   4. a flag whose name reads as a secret (code, ticket, token, password,
+#      pass, pw, secret, key, passphrase, pin, otp, cred) takes its value
+#      only as an argument: k2's own command line, which every user on this
+#      computer can see while the command runs. The same function must offer a stdin
+#      form sharing that word (--code with --code-stdin, --ticket with
+#      --ticket-stdin, --token with --token-stdin). Flags that name where a
+#      secret is (-file, -ref, -env, -name, -id, -path, ...) and
+#      --idempotency-* are not secrets.
 # Comments, heredoc bodies and single-quoted code are not commands and are
 # not read for rule 2.
 #
@@ -51,6 +59,22 @@ EXCEPTIONS=(
     "mail.sh|M_PASS_REF|where the password is kept (env:<VAR> or a file path), not the password; the password rides stdin"
     "permission.sh|K2_PW|the --why text or a workspace name, not a password"
     "vault.sh|login|the owner login's username typed at the prompt, not a secret; the password typed with it rides stdin"
+    "agent-hire.sh|--key|an idempotency key or an API key's id, not a secret"
+    "app-auth.sh|--apns-key|the path of the APNs key file (.p8), not the key"
+    "compute-provenance.sh|--owner-key|the owner's public key fingerprint"
+    "connect.sh|--pin-days|a number of days"
+    "garden-data.sh|--key|a store key's name"
+    "sim.sh|--secret|the vault secret's name; k2 sim types the value itself"
+    "chat.sh|--key|an idempotency key for the send, not a secret"
+    "ci.sh|--statuses-token|the NAME of the vault secret that holds the token"
+    "compute-run.sh|--secret|the NAME of a vault secret the job gets"
+    "migrate.sh|--secret|the NAME of a vault secret"
+    "msg-whoami-done.sh|--secret|the NAME of a vault secret"
+    "sources.sh|--secret|the NAME of a vault secret"
+    "postal.sh|--code|the 6-digit comparison code both sides show, not a secret"
+    "doc.sh|--token|FOLLOW-UP for K2: the remote server's token rides k2's own argv (k2 doc --host --token); needs --token-stdin"
+    "clone.sh|--token|FOLLOW-UP for K2: the other server's token rides k2's own argv (k2 clone --host --token); needs --token-stdin"
+    "connect-account.sh|--token|FOLLOW-UP for K2: the account token rides k2's own argv (k2 connect login --token); needs --token-stdin"
 )
 
 lint() { # lint <dir> [file|name|why ...]: one line per problem; exit 1 when any
@@ -73,6 +97,8 @@ let local logout mapfile popd printf pushd pwd read readarray readonly return se
 source suspend test then time times trap true type typeset ulimit umask unalias unset until wait
 while do done esac fi else elif in { } ! ]] ;;
 """.split())
+SECRET_FLAG = re.compile(r"(^|-)(code|ticket|token|password|passwd|pass|pw|secret|key|passphrase|pin|otp|cred|credential|credentials)(-|$)")
+NOT_SECRET_FLAG = re.compile(r"-(stdin|file|ref|env|name|names|id|ids|path|dir|url|label|kind|type|scope|header|prefix|format|encoding|template)$|^--idempotency-")
 PREFIX_WORDS = {"!", "{", "if", "then", "do", "else", "elif", "while", "until", "time", "command", "builtin", "exec", "nohup", "sudo", "timeout"}
 
 def classify(text):
@@ -386,6 +412,30 @@ for f, text in parts:
                 for r in refs(arg):
                     if r in typed:
                         flag(f, line, r, "$%s, a value typed on stdin, is in the argv of python3 (send it on stdin)" % r)
+    # Rule 4: a secret-named flag taken only as an argument.
+    funcs4 = [m.start() for m in re.finditer(r"(?m)^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{", text)]
+    for a, b in zip([0] + funcs4, funcs4 + [len(text)]):
+        body = text[a:b]
+        arms = [m for m in re.finditer(r"(?m)^[ \t]*((?:--[a-z0-9-]+(?:=\*)?)(?:\|--[a-z0-9-]+(?:=\*)?)*)\)", body)
+                if cls[a + m.start(1)] == "c"]
+        # The stdin forms this function really takes: case labels, not text.
+        stdin_flags = set(fl for m in arms for fl in m.group(1).split("|") if fl.endswith("-stdin"))
+        for m in arms:
+            if cls[a + m.start(1)] != "c":
+                continue
+            arm = body[m.end():body.find(";;", m.end()) if ";;" in body[m.end():] else len(body)]
+            if not re.search(r"\$\{?2\b|\$\{?2[:}-]|\$\{1#", arm):
+                continue
+            for fl in m.group(1).split("|"):
+                fl = fl[:-2] if fl.endswith("=*") else fl
+                name = fl[2:]
+                if not SECRET_FLAG.search(name) or NOT_SECRET_FLAG.search(fl):
+                    continue
+                words = [w for w in name.split("-") if SECRET_FLAG.search(w)]
+                if any(any(w in sf for w in words) for sf in stdin_flags):
+                    continue
+                line = text.count("\n", 0, a + m.start(1)) + 1
+                flag(f, line, fl, "%s reads as a secret and k2 takes it only as an argument, which every user on this computer can see while the command runs (add a %s-stdin form)" % (fl, fl))
 for (f, name), n in sorted(allowed.items()):
     if n == 0:
         problems.append("%s: the exception for %s matches nothing any more (update EXCEPTIONS)" % (f, name))
@@ -496,6 +546,28 @@ g() {
     python3 -c 'import sys; print(sys.argv[1])' "$_MY_SECRET"
 }
 EOF
+mk flag_argonly a.sh <<'EOF'
+f() {
+    echo "pipe it with --token-stdin" >&2
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --host) host="${2:-}"; shift 2 ;;
+            --api-token|--token) token="${2:-}"; shift 2 ;;
+            --token-file) tfile="${2:-}"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+}
+g() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ticket) ticket="${2:-}"; shift 2 ;;
+            --ticket-stdin) ticket_stdin=1; shift ;;
+            --pin=*) pin="${1#--pin=}"; shift ;;
+        esac
+    done
+}
+EOF
 mk pw_nested a.sh <<'EOF'
 f() { out="$(curl -s -u "admin:${userPass}" https://example.test)"; }
 EOF
@@ -520,6 +592,8 @@ caught pw_export "a.sh:1: DB_PASSWORD, a password-like name, rides the environme
 caught typed_words "a.sh:7: \$words, a value typed on stdin, is in the argv of python3"
 caught typed_cat "a.sh:4: \$code, a value typed on stdin, is in the argv of python3"
 caught typed_global "a.sh:6: \$code, a value typed on stdin, is in the argv of python3"
+caught flag_argonly "a.sh:6: --api-token reads as a secret and k2 takes it only as an argument"
+caught flag_argonly "a.sh:17: --pin reads as a secret and k2 takes it only as an argument"
 caught pw_nested "a.sh:1: \$userPass, a password-like value, is in the argv of curl"
 # The good parts with no exception for b.sh's K2_PW: caught. An exception
 # that matches nothing: caught.

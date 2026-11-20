@@ -5,7 +5,9 @@
 //! - A pipe or a file on stdin is the command's stdin, base64 in the body
 //!   (64 MiB at most: past it, the shell's line and exit 2); a terminal,
 //!   nothing, or `--no-stdin` sends none. The body never goes to argv or
-//!   the environment; the shell writes it to a temp file, this holds it.
+//!   the environment; the shell writes it to a temp file, this holds it
+//!   (a TMPDIR that can't be written still ends the command first, as
+//!   `mktemp -d` ends the shell's).
 //! - curl's `--max-time` is the timeout (60 by default) plus 120 with a
 //!   stdin, plus 60 without.
 //! - The exit is the command's own (0 to 255), 124 when it was stopped at
@@ -112,6 +114,59 @@ fn stdin_is_data() -> bool {
     std::fs::metadata("/dev/stdin").is_ok_and(|m| m.file_type().is_fifo() || m.is_file())
 }
 
+/// `tmpd="$(mktemp -d "${TMPDIR:-/tmp}/k2-exec-XXXXXX")"`: the shell
+/// stages the body in a temp folder first, so a TMPDIR it can't write
+/// ends the command there (mktemp's line, exit 1) before anything is
+/// sent. This holds the body in memory; it makes and removes the same
+/// folder so that end is the same.
+fn stage() -> Result<(), Exit> {
+    let dir = std::env::var_os("TMPDIR")
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| std::path::PathBuf::from("/tmp"), std::path::PathBuf::from);
+    let template = format!("{}/k2-exec-XXXXXX", dir.display());
+    let mut err = None;
+    for n in 0..16u32 {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let tag: String = format!("{:08x}", t ^ (std::process::id() << 8) ^ n)
+            .chars()
+            .take(6)
+            .collect();
+        let path = dir.join(format!("k2-exec-{tag}"));
+        let made = {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(&path)
+        };
+        match made {
+            Ok(()) => {
+                let _ = std::fs::remove_dir(&path);
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
+    }
+    let why = err.map_or_else(
+        || "File exists".to_string(),
+        |e| {
+            let t = e.to_string();
+            t.split(" (os error").next().unwrap_or(&t).to_string()
+        },
+    );
+    if cfg!(target_os = "macos") {
+        crate::out::stderr_line(&format!("mktemp: mkdtemp failed on {template}: {why}"));
+    } else {
+        crate::out::stderr_line(&format!(
+            "mktemp: failed to create directory via template '{template}': {why}"
+        ));
+    }
+    Err(Exit::Error)
+}
+
 /// Python's `base64.b64encode(data).decode("ascii")`.
 fn b64(data: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -148,6 +203,7 @@ pub fn run(ctx: &mut Ctx, a: &Ask) -> Answer {
     };
     let with_stdin = !a.no_stdin && stdin_is_data();
     if with_stdin {
+        stage()?;
         let mut data = Vec::new();
         {
             use std::io::Read;

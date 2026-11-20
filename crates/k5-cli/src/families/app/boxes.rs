@@ -1129,7 +1129,7 @@ fn rehost_status_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         Value::Object(p) => p,
         other => return Err(Raise::no_attribute(18, &other, "items")),
     };
-    pairs.sort_by(|a, b| py::s(&Value::Str(a.0.clone())).cmp(&py::s(&Value::Str(b.0.clone()))));
+    pairs.sort_by_key(|p| py::s(&Value::Str(p.0.clone())));
     for (a, s) in pairs {
         let detail = if py::truthy(&py::dget(&s, "detail", 19)?) {
             py::concat(": ", &py::idx(&s, "detail", 19)?, 19)?

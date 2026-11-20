@@ -153,7 +153,7 @@ print(open(files[-1]).read())' "$WORK"; }
 jq_py() { python3 -c "import json,sys; d=json.loads(sys.argv[1]); print($2)" "$1"; }
 
 echo "== 1. ask --file =="
-out="$(k2 tickets ask "Which logo?" --options "A,B" --assign owner --file out/a.png --file out/b.png 2>&1)"
+out="$(k2 tickets ask "Which logo?" --options "A; B" --assign owner --file out/a.png --file out/b.png 2>&1)"
 post="$(last_post)"
 contains "ask: create posted" "$post" '"/cli/feedback/create"'
 [ "$(jq_py "$post" 'type(d["body"]["attachments"]).__name__')" = "list" ] && pass "ask: attachments is a JSON array" || fail "ask: attachments not an array: $post"

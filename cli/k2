@@ -26778,7 +26778,7 @@ cmd_thread() {
         echo "Usage: k2 thread <addr> \"text\"     # write overlay text" >&2
         echo "       k2 thread <addr> [\"text\"] --file path[:line[-end]]   # attach files" >&2
         echo "       k2 thread <addr> [--json] [--limit N|--all] [--before-seq N]" >&2
-        echo "       k2 thread ask <addr> \"prompt\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2
+        echo "       k2 thread ask <addr> \"prompt\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")" >&2
         echo "       k2 thread secret <addr> --name NAME" >&2
         echo "       k2 thread withdraw <addr> <card-id> [--why \"…\"]" >&2
         echo "       k2 thread dismiss <addr> <card-id> [--why \"…\"]" >&2
@@ -26964,6 +26964,16 @@ for it in items:
 ' "$one_seq" "$json" "$target"
 }
 
+# A card's --options value splits on ';' only; a comma is part of a label.
+# A value with a comma and no ';' stays one option: print the one note that
+# says so (never a refusal, never a guess at where it should split).
+_k2_options_one_note() {
+    if [[ "$1" == *,* && "$1" != *\;* ]]; then
+        echo "--options splits on ';'; this became one option. Use ';' between options, or repeat --option" >&2
+    fi
+    return 0
+}
+
 cmd_thread_ask() {
     local target="" prompt="" json="false" explicit_from=""
     local options_csv="" allow_custom="false" expires="" no_expiry="false" idem_key=""
@@ -26979,7 +26989,7 @@ cmd_thread_ask() {
                 [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
                 explicit_from="$2"; shift 2 ;;
             --options)
-                [[ $# -ge 2 ]] || { echo "Error: --options requires a comma-separated list" >&2; exit 1; }
+                [[ $# -ge 2 ]] || { echo "Error: --options requires a list with ';' between options" >&2; exit 1; }
                 if [[ ${#option_list[@]} -gt 0 ]]; then
                     echo "Error: mix of --options and --option is not allowed" >&2
                     exit 1
@@ -27016,10 +27026,10 @@ cmd_thread_ask() {
                 shift ;;
         esac
     done
-    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2; exit 1; }
-    [[ -n "$prompt" ]] || { echo "Error: prompt required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2; exit 1; }
+    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")" >&2; exit 1; }
+    [[ -n "$prompt" ]] || { echo "Error: prompt required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")" >&2; exit 1; }
     if [[ -z "$options_csv" && ${#option_list[@]} -eq 0 ]]; then
-        echo "Error: ask requires --option \"…\" (repeatable) or --options \"a,b,c\"" >&2
+        echo "Error: ask requires --option \"…\" (repeatable) or --options \"a; b; c\"" >&2
         exit 1
     fi
     if [[ -n "$expires" && "$no_expiry" == "true" ]]; then
@@ -27028,6 +27038,10 @@ cmd_thread_ask() {
     fi
     local from option_json=""
     from="$(_thread_sender_from "$explicit_from")"
+    # The daemon splits --options on ';'. A value that starts with '[' is a
+    # JSON list the daemon reads whole, so it gets no note.
+    local options_lead="${options_csv#"${options_csv%%[![:space:]]*}"}"
+    [[ "$options_lead" == \[* ]] || _k2_options_one_note "$options_csv"
     if [[ ${#option_list[@]} -gt 0 ]]; then
         option_json=$(printf '%s\n' "${option_list[@]}" | python3 -c 'import json,sys; print(json.dumps([ln.rstrip("\n") for ln in sys.stdin]))')
     fi
@@ -27058,17 +27072,6 @@ print(json.dumps(obj))
     local rc=$?
     _k2_moved_from_note "$response"
     _k2_idem_replay_note "$response"
-    # 0.46.17: the daemon keeps commas inside (), [] and "…" in one option;
-    # a comma that reads like prose ("Yes, node-2…") still splits, and the
-    # answer's `hint` says so. One stderr line, never a refusal.
-    printf '%s' "$response" | python3 -c 'import json,sys
-try:
-    h=json.loads(sys.stdin.read()).get("hint")
-except Exception:
-    h=None
-if isinstance(h,str) and h:
-    sys.stderr.write("hint: %s\n" % h)
-' || true
     if [[ "$json" == "true" ]]; then
         echo "$response"
         return $rc
@@ -27481,8 +27484,8 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread <addr> --seq N                        # read message N (the [N] in a read), whole
   k2 thread ask <addr> "prompt" --option "…" --option "…"  # choice card; do not wait
       --option "…"       repeatable, one per button; commas inside are fine
-      --options "a,b,c"  short labels without commas (commas inside (), [] or "…" stay
-                         in one label; a prose-like comma, "Yes, node-2…", splits and warns)
+      --options "a; b; c"  one string, split on ';' only (a comma never splits;
+                         commas and no ';' stay one option, with a note)
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
       [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|proxy|file|env|agent]
@@ -27566,7 +27569,7 @@ this workspace (copy others into it first, e.g. out/); secrets (.env, keys,
 tokens, credentials in the text) are refused: secrets go through k2 vault.
 path:12 or path:12-40 opens at that line.
 
---json on any verb. Ask: --option is repeatable; --allow-custom; mixing --option and --options is 400.
+--json on any verb. Ask: --option is repeatable; --options splits on ';'; --allow-custom; mixing --option and --options is 400.
 
 A post or an ask that got no answer is asked again with the same key (K2 posts one
 key once). If K2 still doesn't answer, the error says it may have been delivered
@@ -53404,7 +53407,7 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --option \"…\" [--option \"…\"]... | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread withdraw <addr> <card-id> [--why \"…\"] | k2 thread dismiss <addr> <card-id> [--why \"…\"] | k2 thread delete <addr> <seq|id> [--json]",
+      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --option \"…\" [--option \"…\"]... | k2 thread ask <addr> \"prompt\" --options \"a; b\" | k2 thread secret <addr> --name NAME | k2 thread withdraw <addr> <card-id> [--why \"…\"] | k2 thread dismiss <addr> <card-id> [--why \"…\"] | k2 thread delete <addr> <seq|id> [--json]",
       "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); withdraw your own card only when it is obsolete (k2 thread withdraw <addr> <card-id>; void is the old name). A person may dismiss a card without answering: you get a [thread:<addr>] dismissed card <id> turn, which means not needed now (never a yes, no or denial). Closed cards stay on the Thread as Dismissed or Withdrawn. A person may delete a message they sent (k2 thread delete; people only): you get one [thread:<addr>] line saying so; never repeat, store or act on what it said. Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
@@ -53416,7 +53419,7 @@ cmd_schema() {
         {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--option", "arg": "label", "description": "Repeatable choice label, one per button; commas inside are fine. Mix with --options is 400."},
-        {"name": "--options", "arg": "a,b,c", "description": "Short choice labels without commas (comma list; commas inside (), [] or \"…\" stay in one label; \\, = literal comma). A prose-like comma (\"Yes, node-2…\") still splits and prints a hint. Mix with --option is 400."},
+        {"name": "--options", "arg": "a; b; c", "description": "The choice labels as one string, split on ';' only; a comma never splits. Commas and no ';' stay one option and print a note. Mix with --option is 400."},
         {"name": "--allow-custom", "arg": null, "description": "Allow a free-text answer on the choice card."},
         {"name": "--expires", "arg": "2h|3d|90m|secs", "description": "How long the choice card stays open (default 7 days). Talking never shortens it."},
         {"name": "--no-expiry", "arg": null, "description": "Keep the choice card open until answered, dismissed or withdrawn."},
@@ -54279,7 +54282,7 @@ cmd_schema() {
     },
     {
       "name": "feedback ask",
-      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--file <path[:line]>]... [--wait [--timeout <s>]] [--json]",
+      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--option <label>]... [--options \"a; b\"] [--priority <1-5>] [--assign <users>] [--file <path[:line]>]... [--wait [--timeout <s>]] [--json]",
       "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. Assign every ticket with --assign <user> (a user on this server); without one this server warns (assignee_required) or refuses, per the owner's setting (k2 tickets settings). --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
       "args": [{"name": "title", "required": true}],
       "flags": [
@@ -54287,7 +54290,8 @@ cmd_schema() {
         {"name": "--body", "arg": "text", "description": "Short plain summary text-only readers see first."},
         {"name": "--body-file", "arg": "file", "description": "Read the summary from a file."},
         {"name": "--kind", "arg": "kind", "description": "question | approval | fyi (default: question). fyi expects no answer."},
-        {"name": "--options", "arg": "a,b,c", "description": "Specific choices the human taps instead of typing."},
+        {"name": "--option", "arg": "label", "description": "Repeatable choice the human taps instead of typing, one per button; commas inside are fine. Mix with --options is a usage error."},
+        {"name": "--options", "arg": "a; b; c", "description": "The choices as one string, split on ';' only; a comma never splits. Commas and no ';' stay one option and print a note."},
         {"name": "--priority", "arg": "1-5", "description": "1 = urgent ... 5 = whenever (default: 3)."},
         {"name": "--assign", "arg": "users", "description": "Comma-separated users on this server to assign at create (owner and/or Connect users: k2 connections list --users). Alias: --to. Assign every ticket: without one this server warns (assignee_required) or refuses, per the owner's setting (k2 tickets settings); a name that is not a user here is assignee_unknown. fyi is exempt."},
         {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for $(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},
@@ -66315,7 +66319,7 @@ THREAD
   `k2 thread ask <addr> "…" --option "…" --option "…" [--expires 3d]`
                                 choice card; returns immediately. --option is
                                 repeatable (commas inside are fine);
-                                --options a,b,c for short labels without commas
+                                --options "a; b; c" splits on ';' only
   `k2 thread secret <addr> --name NAME`
                                 secret field; you never see the value
   `k2 thread withdraw <addr> <card-id> [--why "…"]`
@@ -66376,7 +66380,7 @@ DELETED MESSAGES
   can't, and withdraws its own cards instead.
 
 FEEDBACK
-  `k2 feedback ask "<title>" --html brief.html [--body] [--options a,b] [--wait]`
+  `k2 feedback ask "<title>" --html brief.html [--body] [--option "…"]… [--wait]`
   Files a card your human answers later (or in-session). Use this for
   decisions, approvals, and "please change this box". Attach an HTML
   brief (`k2 tickets template`). See `k2 study feedback-loop` and
@@ -69745,7 +69749,7 @@ THIS CHAT VS THE BOX
 
 ASK
   k2 tickets template > brief.html      fill in Problem / Tried / Need / Options
-  k2 feedback ask "<title>" --html brief.html --assign <user> [--body "…"] [--options a,b,c] [--wait]
+  k2 feedback ask "<title>" --html brief.html --assign <user> [--body "…"] [--option "…"]… [--wait]
   Returns an id immediately unless --wait. Options are choices for
   the human; --wait blocks until answered or resolved. The brief is
   how the human reads your problem — see `k2 study ticket-brief`.
@@ -77838,8 +77842,8 @@ TALK TO OTHERS
   whoami [--json]                       This cell: workspace / role / address / session
   thread <addr> "text"                  Overlay text (not PTY; that's msg). sales / sales/reviewer
   thread <addr> [--json]                Read / tail that conversation's Thread
-  thread ask <addr> "prompt" --option   Choice card (--option "…" repeatable; --options a,b for short
-                                        labels); returns immediately (do not wait)
+  thread ask <addr> "prompt" --option   Choice card (--option "…" repeatable, or --options "a; b"
+                                        split on ';'); returns immediately (do not wait)
   thread secret <addr> --name NAME      Secret field; you never see the value
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
   msg <workspace>/<handle> "text"       Sidecar (`sales/1`, `sales/reviewer`; slash not hyphen)
@@ -79806,8 +79810,8 @@ _feedback_detect_session() {
 cmd_feedback_ask() {
     if _wants_help "$@"; then cmd_help_feedback_ask; exit 0; fi
     local title="" body="" body_file="" html_file="" kind="" options="" priority="" assign=""
-    local wait=false timeout="" as_json=false
-    local -a files=()
+    local wait=false timeout="" as_json=false options_set=false
+    local -a files=() option_list=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --file)
@@ -79826,8 +79830,13 @@ cmd_feedback_ask() {
                 [ $# -ge 2 ] || { _feedback_err "usage" "--kind requires a value (question | approval | fyi)"; exit 2; }
                 kind="$2"; shift 2 ;;
             --options)
-                [ $# -ge 2 ] || { _feedback_err "usage" "--options requires a comma-separated list (e.g. \"Ship it,Hold\")"; exit 2; }
-                options="$2"; shift 2 ;;
+                [ $# -ge 2 ] || { _feedback_err "usage" "--options requires a list with ';' between options (e.g. \"Ship it; Hold\")"; exit 2; }
+                [ ${#option_list[@]} -eq 0 ] || { _feedback_err "usage" "mix of --options and --option is not allowed"; exit 2; }
+                options="$2"; options_set=true; shift 2 ;;
+            --option)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--option requires a label"; exit 2; }
+                $options_set && { _feedback_err "usage" "mix of --options and --option is not allowed"; exit 2; }
+                option_list+=("$2"); shift 2 ;;
             --priority)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--priority requires a value (1-5)"; exit 2; }
                 priority="$2"; shift 2 ;;
@@ -79840,7 +79849,7 @@ cmd_feedback_ask() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--assign user[,user…]] [--file path[:line]]… [--wait [--timeout s]] [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--option \"…\"]… [--options \"a; b\"] [--priority 1-5] [--assign user[,user…]] [--file path[:line]]… [--wait [--timeout s]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$title" ]; then title="$1"; else
@@ -79922,13 +79931,20 @@ cmd_feedback_ask() {
     if [ ${#files[@]} -gt 0 ]; then
         files_json="$(_thread_attachments_json "${files[@]}")" || { _feedback_err "usage" "--file: could not read the file list"; exit 2; }
     fi
+    # --options splits on ';' only; --option labels go as a list, kept whole.
+    local option_json=""
+    if $options_set; then
+        _k2_options_one_note "$options"
+    elif [ ${#option_list[@]} -gt 0 ]; then
+        option_json=$(printf '%s\n' "${option_list[@]}" | python3 -c 'import json,sys; print(json.dumps([ln.rstrip("\n") for ln in sys.stdin]))')
+    fi
     _feedback_detect_session
     if [ "$(_envn TEST_FEEDBACK_DETECT)" = "1" ]; then
         printf '%s\n' "${FB_SESSION_KIND:-}"
         exit 0
     fi
     FB_TITLE="$title" FB_BODY="$body" FB_BODY_PATH="$body_file" FB_HTML_PATH="$html_path" \
-    FB_KIND="$kind" FB_OPTIONS="$options" \
+    FB_KIND="$kind" FB_OPTIONS="$options" FB_OPTION_JSON="$option_json" \
     FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
     FB_PROJECT="$PROJECT" FB_AGENT="$(_envn AGENT_NAME)" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" FB_FILES="$files_json" \
@@ -80027,9 +80043,13 @@ if os.environ.get("FB_KIND"):
 if os.environ.get("FB_PRIORITY"):
     payload["priority"] = int(os.environ["FB_PRIORITY"])
 if os.environ.get("FB_OPTIONS"):
-    # Split on unescaped commas only; "\," inside an option is a literal comma.
-    raw = re.split(r"(?<!\\),", os.environ["FB_OPTIONS"])
-    opts = [o for o in (p.strip().replace("\\,", ",") for p in raw) if o]
+    # --options splits on ';' only; a comma is part of a label.
+    opts = [o for o in (p.strip() for p in os.environ["FB_OPTIONS"].split(";")) if o]
+    if opts:
+        payload["options"] = opts
+elif os.environ.get("FB_OPTION_JSON"):
+    # --option, repeated: each label whole.
+    opts = [o for o in (p.strip() for p in json.loads(os.environ["FB_OPTION_JSON"])) if o]
     if opts:
         payload["options"] = opts
 if os.environ.get("FB_ASSIGN"):
@@ -80845,9 +80865,12 @@ FLAGS
                          fyi = no answer expected: it sits on the human's page
                          until THEY dismiss/resolve it (or you resolve it
                          yourself). --wait on a fyi is pointless.
-  --options <a,b,c>      Offer specific choices the human taps instead of typing
-                         (e.g. --options "Ship it,Hold,Needs changes")
-                         Escape a literal comma inside an option with \,
+  --option <label>       One choice the human taps instead of typing; repeat it,
+                         one per button (commas inside are fine)
+  --options <"a; b; c">  The choices as one string, split on ';' only
+                         (e.g. --options "Ship it; Hold; Needs changes").
+                         A comma never splits: commas and no ';' stay one
+                         option, with a note. Not with --option.
   --priority <1-5>       1 = urgent … 5 = whenever   (default: 3)
   --assign <users>       Who handles it: comma-separated users on this
                          server (owner and/or Connect users, from
@@ -80900,11 +80923,11 @@ BRIEF ERRORS (exit 2, JSON on stderr)
 
 EXAMPLES
   k2 tickets template > brief.html
-  k2 tickets ask "Deploy to prod now?" --html brief.html --assign owner --kind approval --options "Yes,No,Wait for me" --priority 1
+  k2 tickets ask "Deploy to prod now?" --html brief.html --assign owner --kind approval --option Yes --option No --option "Wait for me" --priority 1
   k2 tickets ask "Which color for the CTA?" --html brief.html --body-file ./summary.md --assign owner
   k2 tickets ask "Review the sales pricing" --html brief.html --assign julie --priority 2
-  k2 tickets ask "Which logo?" --html brief.html --assign owner --options "A,B" --file out/a.png --file out/b.png
-  ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)
+  k2 tickets ask "Which logo?" --html brief.html --assign owner --option A --option B --file out/a.png --file out/b.png
+  ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go; Stop" --wait)
 EOF
 }
 

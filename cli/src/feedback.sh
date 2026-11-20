@@ -63,8 +63,8 @@ _feedback_detect_session() {
 cmd_feedback_ask() {
     if _wants_help "$@"; then cmd_help_feedback_ask; exit 0; fi
     local title="" body="" body_file="" html_file="" kind="" options="" priority="" assign=""
-    local wait=false timeout="" as_json=false
-    local -a files=()
+    local wait=false timeout="" as_json=false options_set=false
+    local -a files=() option_list=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --file)
@@ -83,8 +83,13 @@ cmd_feedback_ask() {
                 [ $# -ge 2 ] || { _feedback_err "usage" "--kind requires a value (question | approval | fyi)"; exit 2; }
                 kind="$2"; shift 2 ;;
             --options)
-                [ $# -ge 2 ] || { _feedback_err "usage" "--options requires a comma-separated list (e.g. \"Ship it,Hold\")"; exit 2; }
-                options="$2"; shift 2 ;;
+                [ $# -ge 2 ] || { _feedback_err "usage" "--options requires a list with ';' between options (e.g. \"Ship it; Hold\")"; exit 2; }
+                [ ${#option_list[@]} -eq 0 ] || { _feedback_err "usage" "mix of --options and --option is not allowed"; exit 2; }
+                options="$2"; options_set=true; shift 2 ;;
+            --option)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--option requires a label"; exit 2; }
+                $options_set && { _feedback_err "usage" "mix of --options and --option is not allowed"; exit 2; }
+                option_list+=("$2"); shift 2 ;;
             --priority)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--priority requires a value (1-5)"; exit 2; }
                 priority="$2"; shift 2 ;;
@@ -97,7 +102,7 @@ cmd_feedback_ask() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--assign user[,user…]] [--file path[:line]]… [--wait [--timeout s]] [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--option \"…\"]… [--options \"a; b\"] [--priority 1-5] [--assign user[,user…]] [--file path[:line]]… [--wait [--timeout s]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$title" ]; then title="$1"; else
@@ -179,13 +184,20 @@ cmd_feedback_ask() {
     if [ ${#files[@]} -gt 0 ]; then
         files_json="$(_thread_attachments_json "${files[@]}")" || { _feedback_err "usage" "--file: could not read the file list"; exit 2; }
     fi
+    # --options splits on ';' only; --option labels go as a list, kept whole.
+    local option_json=""
+    if $options_set; then
+        _k2_options_one_note "$options"
+    elif [ ${#option_list[@]} -gt 0 ]; then
+        option_json=$(printf '%s\n' "${option_list[@]}" | python3 -c 'import json,sys; print(json.dumps([ln.rstrip("\n") for ln in sys.stdin]))')
+    fi
     _feedback_detect_session
     if [ "$(_envn TEST_FEEDBACK_DETECT)" = "1" ]; then
         printf '%s\n' "${FB_SESSION_KIND:-}"
         exit 0
     fi
     FB_TITLE="$title" FB_BODY="$body" FB_BODY_PATH="$body_file" FB_HTML_PATH="$html_path" \
-    FB_KIND="$kind" FB_OPTIONS="$options" \
+    FB_KIND="$kind" FB_OPTIONS="$options" FB_OPTION_JSON="$option_json" \
     FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
     FB_PROJECT="$PROJECT" FB_AGENT="$(_envn AGENT_NAME)" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" FB_FILES="$files_json" \
@@ -284,9 +296,13 @@ if os.environ.get("FB_KIND"):
 if os.environ.get("FB_PRIORITY"):
     payload["priority"] = int(os.environ["FB_PRIORITY"])
 if os.environ.get("FB_OPTIONS"):
-    # Split on unescaped commas only; "\," inside an option is a literal comma.
-    raw = re.split(r"(?<!\\),", os.environ["FB_OPTIONS"])
-    opts = [o for o in (p.strip().replace("\\,", ",") for p in raw) if o]
+    # --options splits on ';' only; a comma is part of a label.
+    opts = [o for o in (p.strip() for p in os.environ["FB_OPTIONS"].split(";")) if o]
+    if opts:
+        payload["options"] = opts
+elif os.environ.get("FB_OPTION_JSON"):
+    # --option, repeated: each label whole.
+    opts = [o for o in (p.strip() for p in json.loads(os.environ["FB_OPTION_JSON"])) if o]
     if opts:
         payload["options"] = opts
 if os.environ.get("FB_ASSIGN"):

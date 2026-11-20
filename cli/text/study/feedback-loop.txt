@@ -11,7 +11,7 @@ THIS CHAT VS THE BOX
 
 ASK
   k2 tickets template > brief.html      fill in Problem / Tried / Need / Options
-  k2 feedback ask "<title>" --html brief.html --assign <user> [--body "…"] [--options a,b,c] [--wait]
+  k2 feedback ask "<title>" --html brief.html --assign <user> [--body "…"] [--option "…"]… [--wait]
   Returns an id immediately unless --wait. Options are choices for
   the human; --wait blocks until answered or resolved. The brief is
   how the human reads your problem — see `k2 study ticket-brief`.

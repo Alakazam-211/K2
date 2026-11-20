@@ -17,7 +17,7 @@ THREAD
   `k2 thread ask <addr> "…" --option "…" --option "…" [--expires 3d]`
                                 choice card; returns immediately. --option is
                                 repeatable (commas inside are fine);
-                                --options a,b,c for short labels without commas
+                                --options "a; b; c" splits on ';' only
   `k2 thread secret <addr> --name NAME`
                                 secret field; you never see the value
   `k2 thread withdraw <addr> <card-id> [--why "…"]`
@@ -78,7 +78,7 @@ DELETED MESSAGES
   can't, and withdraws its own cards instead.
 
 FEEDBACK
-  `k2 feedback ask "<title>" --html brief.html [--body] [--options a,b] [--wait]`
+  `k2 feedback ask "<title>" --html brief.html [--body] [--option "…"]… [--wait]`
   Files a card your human answers later (or in-session). Use this for
   decisions, approvals, and "please change this box". Attach an HTML
   brief (`k2 tickets template`). See `k2 study feedback-loop` and

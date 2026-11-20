@@ -454,7 +454,7 @@ cmd_thread() {
         echo "Usage: k2 thread <addr> \"text\"     # write overlay text" >&2
         echo "       k2 thread <addr> [\"text\"] --file path[:line[-end]]   # attach files" >&2
         echo "       k2 thread <addr> [--json] [--limit N|--all] [--before-seq N]" >&2
-        echo "       k2 thread ask <addr> \"prompt\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2
+        echo "       k2 thread ask <addr> \"prompt\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")" >&2
         echo "       k2 thread secret <addr> --name NAME" >&2
         echo "       k2 thread withdraw <addr> <card-id> [--why \"…\"]" >&2
         echo "       k2 thread dismiss <addr> <card-id> [--why \"…\"]" >&2
@@ -640,6 +640,16 @@ for it in items:
 ' "$one_seq" "$json" "$target"
 }
 
+# A card's --options value splits on ';' only; a comma is part of a label.
+# A value with a comma and no ';' stays one option: print the one note that
+# says so (never a refusal, never a guess at where it should split).
+_k2_options_one_note() {
+    if [[ "$1" == *,* && "$1" != *\;* ]]; then
+        echo "--options splits on ';'; this became one option. Use ';' between options, or repeat --option" >&2
+    fi
+    return 0
+}
+
 cmd_thread_ask() {
     local target="" prompt="" json="false" explicit_from=""
     local options_csv="" allow_custom="false" expires="" no_expiry="false" idem_key=""
@@ -655,7 +665,7 @@ cmd_thread_ask() {
                 [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
                 explicit_from="$2"; shift 2 ;;
             --options)
-                [[ $# -ge 2 ]] || { echo "Error: --options requires a comma-separated list" >&2; exit 1; }
+                [[ $# -ge 2 ]] || { echo "Error: --options requires a list with ';' between options" >&2; exit 1; }
                 if [[ ${#option_list[@]} -gt 0 ]]; then
                     echo "Error: mix of --options and --option is not allowed" >&2
                     exit 1
@@ -692,10 +702,10 @@ cmd_thread_ask() {
                 shift ;;
         esac
     done
-    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2; exit 1; }
-    [[ -n "$prompt" ]] || { echo "Error: prompt required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a,b,c\")" >&2; exit 1; }
+    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")" >&2; exit 1; }
+    [[ -n "$prompt" ]] || { echo "Error: prompt required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --option \"…\" --option \"…\"   (or --options \"a; b; c\")" >&2; exit 1; }
     if [[ -z "$options_csv" && ${#option_list[@]} -eq 0 ]]; then
-        echo "Error: ask requires --option \"…\" (repeatable) or --options \"a,b,c\"" >&2
+        echo "Error: ask requires --option \"…\" (repeatable) or --options \"a; b; c\"" >&2
         exit 1
     fi
     if [[ -n "$expires" && "$no_expiry" == "true" ]]; then
@@ -704,6 +714,10 @@ cmd_thread_ask() {
     fi
     local from option_json=""
     from="$(_thread_sender_from "$explicit_from")"
+    # The daemon splits --options on ';'. A value that starts with '[' is a
+    # JSON list the daemon reads whole, so it gets no note.
+    local options_lead="${options_csv#"${options_csv%%[![:space:]]*}"}"
+    [[ "$options_lead" == \[* ]] || _k2_options_one_note "$options_csv"
     if [[ ${#option_list[@]} -gt 0 ]]; then
         option_json=$(printf '%s\n' "${option_list[@]}" | python3 -c 'import json,sys; print(json.dumps([ln.rstrip("\n") for ln in sys.stdin]))')
     fi
@@ -734,17 +748,6 @@ print(json.dumps(obj))
     local rc=$?
     _k2_moved_from_note "$response"
     _k2_idem_replay_note "$response"
-    # 0.46.17: the daemon keeps commas inside (), [] and "…" in one option;
-    # a comma that reads like prose ("Yes, node-2…") still splits, and the
-    # answer's `hint` says so. One stderr line, never a refusal.
-    printf '%s' "$response" | python3 -c 'import json,sys
-try:
-    h=json.loads(sys.stdin.read()).get("hint")
-except Exception:
-    h=None
-if isinstance(h,str) and h:
-    sys.stderr.write("hint: %s\n" % h)
-' || true
     if [[ "$json" == "true" ]]; then
         echo "$response"
         return $rc

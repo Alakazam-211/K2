@@ -7,8 +7,8 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread <addr> --seq N                        # read message N (the [N] in a read), whole
   k2 thread ask <addr> "prompt" --option "…" --option "…"  # choice card; do not wait
       --option "…"       repeatable, one per button; commas inside are fine
-      --options "a,b,c"  short labels without commas (commas inside (), [] or "…" stay
-                         in one label; a prose-like comma, "Yes, node-2…", splits and warns)
+      --options "a; b; c"  one string, split on ';' only (a comma never splits;
+                         commas and no ';' stay one option, with a note)
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
       [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|proxy|file|env|agent]
@@ -92,7 +92,7 @@ this workspace (copy others into it first, e.g. out/); secrets (.env, keys,
 tokens, credentials in the text) are refused: secrets go through k2 vault.
 path:12 or path:12-40 opens at that line.
 
---json on any verb. Ask: --option is repeatable; --allow-custom; mixing --option and --options is 400.
+--json on any verb. Ask: --option is repeatable; --options splits on ';'; --allow-custom; mixing --option and --options is 400.
 
 A post or an ask that got no answer is asked again with the same key (K2 posts one
 key once). If K2 still doesn't answer, the error says it may have been delivered

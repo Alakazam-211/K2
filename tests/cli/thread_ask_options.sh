@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# `k2 thread ask` options (0.46.17). The daemon splits `--options` (k2-core
-# `split_ask_options`): commas inside (), [] and "…" stay in one label, and a
-# comma that reads like prose ("Yes, node-2…") still splits but the answer
-# carries a `hint`. The CLI sends `--options` exactly as typed, sends
-# `--option` labels as a list (commas kept), and prints the daemon's hint as
-# one stderr line, never a refusal. The help leads with `--option`.
+# `k2 thread ask` options (0.46.17). A card's `--options` value is one
+# string, split on ';' only (the daemon splits it, k2-core
+# `split_ask_options`); a comma never splits. A value with a comma and no
+# ';' stays one option, and the CLI prints one stderr note, exactly:
+#   --options splits on ';'; this became one option. Use ';' between options, or repeat --option
+# The CLI sends `--options` exactly as typed and `--option` labels as a list
+# (commas kept). The daemon's answer carries the same note as `hint`; the
+# CLI prints it once, never twice. The help leads with `--option`.
 #
 # Hermetic: HOME is a throwaway dir, K2_*/K2SO_* unset, the daemon is a tiny
-# python stub on loopback that records each body and answers with a hint
-# when the list holds a prose-like comma. No real daemon, no ~/.k2, no
-# keychain.
+# python stub on loopback that records each body and, like the daemon,
+# answers with the note as `hint` for a value with commas and no ';'. No
+# real daemon, no ~/.k2, no keychain.
 
 set -euo pipefail
 
@@ -36,8 +38,7 @@ import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 
-HINT = ('an option looks like it continues after a comma ("Yes" / "node-2 (…)"); '
-        'to keep commas inside an option, pass each one with --option "…"')
+NOTE = "--options splits on ';'; this became one option. Use ';' between options, or repeat --option"
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -52,8 +53,9 @@ class H(BaseHTTPRequestHandler):
                 json.dump(req, f)
             obj = {"ok": True, "id": "card-opt", "seq": 7, "kind": "choice", "status": "pending",
                    "prompt": req.get("prompt"), "options": [], "conversation_id": "c1", "addr": req.get("addr")}
-            if "Yes, node-2" in (req.get("options") or ""):
-                obj["hint"] = HINT
+            raw = req.get("options") or ""
+            if "," in raw and ";" not in raw and not raw.strip().startswith("["):
+                obj["hint"] = NOTE
             status = 200
         else:
             status, obj = 404, {"ok": False, "error": "unexpected route"}
@@ -95,68 +97,68 @@ assert_not_contains() {
     if grep -Fq -- "$3" <<<"$2"; then bad "$1 (unexpected $(printf %q "$3"))"; else ok "$1"; fi
 }
 sent() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v=d.get(sys.argv[2]); print(json.dumps(v, ensure_ascii=False))' "$SANDBOX/last.json" "$1"; }
-HINT_LINE='hint: an option looks like it continues after a comma ("Yes" / "node-2 (…)"); to keep commas inside an option, pass each one with --option "…"'
+NOTE="--options splits on ';'; this became one option. Use ';' between options, or repeat --option"
+ask() { # ask <args...>: run thread ask, stdout to $out, stderr to $SANDBOX/err, exit to $rc
+    set +e
+    out="$("$K2_CLI" thread ask ledger "Rewrite the history?" "$@" 2>"$SANDBOX/err")"; rc=$?
+    set -e
+    err="$(cat "$SANDBOX/err")"
+}
+note_count() { grep -cxF -- "$NOTE" "$SANDBOX/err" || true; }
 
-echo "== --options with commas inside parentheses: sent as typed, no hint =="
-set +e
-out="$("$K2_CLI" thread ask ledger "Which mini?" --options "node-2 (an M1, small),node-3,Wait" 2>"$SANDBOX/err")"; rc=$?
-set -e
-err="$(cat "$SANDBOX/err")"
-assert_eq "parens: exit 0" "$rc" "0"
-assert_eq "parens: card line" "$out" "card-opt  card #7"
-assert_eq "parens: the list goes to the daemon as typed" "$(sent options)" '"node-2 (an M1, small),node-3,Wait"'
-assert_eq "parens: no option list" "$(sent option)" "null"
-assert_not_contains "parens: no hint" "$err" "hint: an option"
+echo "== an option containing commas, no ';': one option, sent as typed, the note once =="
+ask --options "No, the forward clean-up is enough, Yes, rewrite the history too"
+assert_eq "commas: exit 0 (never refused)" "$rc" "0"
+assert_eq "commas: card line on stdout" "$out" "card-opt  card #7"
+assert_eq "commas: sent as typed (the daemon keeps it one option)" "$(sent options)" '"No, the forward clean-up is enough, Yes, rewrite the history too"'
+assert_eq "commas: the note, exactly once (the daemon's hint is not printed again)" "$(note_count)" "1"
+assert_eq "commas: nothing else on stderr" "$err" "$NOTE"
 
-echo "== a prose-like comma: the card is up, one hint line on stderr =="
-set +e
-out="$("$K2_CLI" thread ask ledger "Which mini?" --options "Yes, node-2 (an M1; Sew keeps the M4 and node-3),No" 2>"$SANDBOX/err")"; rc=$?
-set -e
-err="$(cat "$SANDBOX/err")"
-assert_eq "prose: exit 0 (never refused)" "$rc" "0"
-assert_eq "prose: card line on stdout" "$out" "card-opt  card #7"
-assert_contains "prose: the hint" "$err" "$HINT_LINE"
-assert_eq "prose: exactly one hint line" "$(grep -c '^hint: an option' "$SANDBOX/err")" "1"
-assert_eq "prose: sent as typed" "$(sent options)" '"Yes, node-2 (an M1; Sew keeps the M4 and node-3),No"'
+echo "== 'a; b' goes as typed, no note =="
+ask --options "No, the forward clean-up is enough; Yes, rewrite the history too"
+assert_eq "semi: exit 0" "$rc" "0"
+assert_eq "semi: sent as typed" "$(sent options)" '"No, the forward clean-up is enough; Yes, rewrite the history too"'
+assert_eq "semi: no note with a ';'" "$err" ""
+ask --options "a; b"
+assert_eq "a; b: sent as typed" "$(sent options)" '"a; b"'
+assert_eq "a; b: no note" "$err" ""
 
-echo "== --json keeps stdout JSON; the hint stays on stderr =="
-set +e
-out="$("$K2_CLI" thread ask ledger "Which mini?" --options "Yes, node-2 (an M1),No" --json 2>"$SANDBOX/err")"; rc=$?
-set -e
-err="$(cat "$SANDBOX/err")"
+echo "== no comma: no note =="
+ask --options "Done"
+assert_eq "plain: exit 0" "$rc" "0"
+assert_eq "plain: sent as typed" "$(sent options)" '"Done"'
+assert_eq "plain: no note" "$err" ""
+
+echo "== a JSON list (read whole by the daemon) gets no note =="
+ask --options '["Yes, now","No"]'
+assert_eq "jsonlist: exit 0" "$rc" "0"
+assert_eq "jsonlist: no note" "$err" ""
+
+echo "== --json keeps stdout JSON; the note stays on stderr =="
+ask --options "Yes, now" --json
 assert_eq "json: exit 0" "$rc" "0"
 assert_eq "json: stdout parses, id kept" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])' "$out")" "card-opt"
-assert_contains "json: hint on stderr" "$err" "$HINT_LINE"
+assert_eq "json: the note on stderr" "$err" "$NOTE"
 
-echo "== plain a,b,c is unchanged =="
-set +e
-"$K2_CLI" thread ask ledger "Pick" --options "a,b,c" >/dev/null 2>"$SANDBOX/err"; rc=$?
-set -e
-assert_eq "plain: exit 0" "$rc" "0"
-assert_eq "plain: sent as typed" "$(sent options)" '"a,b,c"'
-assert_not_contains "plain: no hint" "$(cat "$SANDBOX/err")" "hint: an option"
-
-echo "== --option keeps commas inside each label =="
-set +e
-"$K2_CLI" thread ask ledger "Which mini?" --option "Yes, node-2 (an M1; Sew keeps the M4 and node-3)" --option "No, wait" >/dev/null 2>"$SANDBOX/err"; rc=$?
-set -e
+echo "== repeated --option keeps commas inside each label, no note =="
+ask --option "No, the forward clean-up is enough" --option "Yes, rewrite the history too"
 assert_eq "option: exit 0" "$rc" "0"
-assert_eq "option: labels sent as a list, commas kept" "$(sent option)" '["Yes, node-2 (an M1; Sew keeps the M4 and node-3)", "No, wait"]'
+assert_eq "option: labels sent as a list, commas kept" "$(sent option)" '["No, the forward clean-up is enough", "Yes, rewrite the history too"]'
 assert_eq "option: no options string" "$(sent options)" "null"
-assert_not_contains "option: no hint" "$(cat "$SANDBOX/err")" "hint: an option"
+assert_eq "option: no note" "$err" ""
 
-echo "== mixing the two is still refused =="
-set +e
-"$K2_CLI" thread ask ledger "?" --option "Go" --options "a,b" >/dev/null 2>"$SANDBOX/err"; rc=$?
-set -e
+echo "== mixing the two is still refused, with no note =="
+ask --option "Go" --options "a,b"
 assert_eq "mix: exit 1" "$rc" "1"
-assert_contains "mix: message" "$(cat "$SANDBOX/err")" "mix of --options and --option is not allowed"
+assert_contains "mix: message" "$err" "mix of --options and --option is not allowed"
+assert_eq "mix: no note" "$(note_count)" "0"
 
-echo "== help leads with --option =="
+echo "== help leads with --option and shows ';' =="
 help_out="$("$K2_CLI" thread --help 2>&1)"
 assert_contains "help: --option first on the ask line" "$help_out" 'k2 thread ask <addr> "prompt" --option "…" --option "…"'
 assert_contains "help: commas inside are fine" "$help_out" 'repeatable, one per button; commas inside are fine'
-assert_contains "help: --options is for short labels" "$help_out" '--options "a,b,c"  short labels without commas'
+assert_contains "help: --options splits on ';'" "$help_out" '--options "a; b; c"  one string, split on '"';'"' only'
+assert_not_contains "help: no comma list" "$help_out" '--options "a,b'
 first_option="$(grep -n -- '--option "…"' <<<"$help_out" | head -1 | cut -d: -f1)"
 first_options="$(grep -n -- '--options' <<<"$help_out" | head -1 | cut -d: -f1)"
 if [ -n "$first_option" ] && [ -n "$first_options" ] && [ "$first_option" -lt "$first_options" ]; then

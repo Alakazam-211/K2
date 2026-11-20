@@ -83,14 +83,14 @@ assert_contains() {
 
 echo "== ask prints the id and the card number =="
 set +e
-out="$("$K2_CLI" thread ask ledger "Land all three?" --options "Go,Stop" 2>/dev/null)"; rc=$?
+out="$("$K2_CLI" thread ask ledger "Land all three?" --options "Go; Stop" 2>/dev/null)"; rc=$?
 set -e
 assert_eq "ask: exit 0" "$rc" "0"
 assert_eq "ask: id and number on one line" "$out" "card-abc  card #11290"
 
 echo "== --json keeps the daemon's answer =="
 set +e
-out="$("$K2_CLI" thread ask ledger "Land all three?" --options "Go,Stop" --json 2>/dev/null)"; rc=$?
+out="$("$K2_CLI" thread ask ledger "Land all three?" --options "Go; Stop" --json 2>/dev/null)"; rc=$?
 set -e
 assert_eq "json: exit 0" "$rc" "0"
 assert_eq "json: id and seq" "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["id"], d["seq"])' "$out")" "card-abc 11290"

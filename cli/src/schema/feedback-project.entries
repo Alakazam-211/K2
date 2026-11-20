@@ -1,6 +1,6 @@
     {
       "name": "feedback ask",
-      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--file <path[:line]>]... [--wait [--timeout <s>]] [--json]",
+      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--option <label>]... [--options \"a; b\"] [--priority <1-5>] [--assign <users>] [--file <path[:line]>]... [--wait [--timeout <s>]] [--json]",
       "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. Assign every ticket with --assign <user> (a user on this server); without one this server warns (assignee_required) or refuses, per the owner's setting (k2 tickets settings). --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
       "args": [{"name": "title", "required": true}],
       "flags": [
@@ -8,7 +8,8 @@
         {"name": "--body", "arg": "text", "description": "Short plain summary text-only readers see first."},
         {"name": "--body-file", "arg": "file", "description": "Read the summary from a file."},
         {"name": "--kind", "arg": "kind", "description": "question | approval | fyi (default: question). fyi expects no answer."},
-        {"name": "--options", "arg": "a,b,c", "description": "Specific choices the human taps instead of typing."},
+        {"name": "--option", "arg": "label", "description": "Repeatable choice the human taps instead of typing, one per button; commas inside are fine. Mix with --options is a usage error."},
+        {"name": "--options", "arg": "a; b; c", "description": "The choices as one string, split on ';' only; a comma never splits. Commas and no ';' stay one option and print a note."},
         {"name": "--priority", "arg": "1-5", "description": "1 = urgent ... 5 = whenever (default: 3)."},
         {"name": "--assign", "arg": "users", "description": "Comma-separated users on this server to assign at create (owner and/or Connect users: k2 connections list --users). Alias: --to. Assign every ticket: without one this server warns (assignee_required) or refuses, per the owner's setting (k2 tickets settings); a name that is not a user here is assignee_unknown. fyi is exempt."},
         {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for $(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},

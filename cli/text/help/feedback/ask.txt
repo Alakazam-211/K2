@@ -26,9 +26,12 @@ FLAGS
                          fyi = no answer expected: it sits on the human's page
                          until THEY dismiss/resolve it (or you resolve it
                          yourself). --wait on a fyi is pointless.
-  --options <a,b,c>      Offer specific choices the human taps instead of typing
-                         (e.g. --options "Ship it,Hold,Needs changes")
-                         Escape a literal comma inside an option with \,
+  --option <label>       One choice the human taps instead of typing; repeat it,
+                         one per button (commas inside are fine)
+  --options <"a; b; c">  The choices as one string, split on ';' only
+                         (e.g. --options "Ship it; Hold; Needs changes").
+                         A comma never splits: commas and no ';' stay one
+                         option, with a note. Not with --option.
   --priority <1-5>       1 = urgent … 5 = whenever   (default: 3)
   --assign <users>       Who handles it: comma-separated users on this
                          server (owner and/or Connect users, from
@@ -81,8 +84,8 @@ BRIEF ERRORS (exit 2, JSON on stderr)
 
 EXAMPLES
   k2 tickets template > brief.html
-  k2 tickets ask "Deploy to prod now?" --html brief.html --assign owner --kind approval --options "Yes,No,Wait for me" --priority 1
+  k2 tickets ask "Deploy to prod now?" --html brief.html --assign owner --kind approval --option Yes --option No --option "Wait for me" --priority 1
   k2 tickets ask "Which color for the CTA?" --html brief.html --body-file ./summary.md --assign owner
   k2 tickets ask "Review the sales pricing" --html brief.html --assign julie --priority 2
-  k2 tickets ask "Which logo?" --html brief.html --assign owner --options "A,B" --file out/a.png --file out/b.png
-  ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)
+  k2 tickets ask "Which logo?" --html brief.html --assign owner --option A --option B --file out/a.png --file out/b.png
+  ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go; Stop" --wait)

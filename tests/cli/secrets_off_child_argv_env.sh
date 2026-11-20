@@ -25,7 +25,8 @@
 # logins, k2 tunnel switch --token-stdin, and the sign-in code pasted
 # into k2 llm tokens add, and k2 fed pair-join --token-stdin: k2 users add and set-password
 # --password-stdin, k2 users pair-phone, k2 connect login; and the remote
-# server's token of k2 clone (--host, --token).
+# server's token of k2 clone (--host, --token), and this server's own
+# token in k2 clone's engine.
 # Also the remote token of k2 read <ws>@<host> --token-stdin.
 # Also the token of k2 daemon restart --host <url> --token-stdin.
 # Also the remote token of k2 talk <ws>@<host> --token-stdin.
@@ -405,6 +406,20 @@ fresh
 assert_tcp_got "clone preview --host" /cli/clone/preview "remote token" "$REMOTE_SENTINEL"
 assert_children_seen "clone preview --host"
 assert_off_children "clone preview --host" "remote token" "$REMOTE_SENTINEL"
+
+# 15b. k2 clone preview on this server: this server's own token reaches its
+#      request and no child's argv or environment (it rides the engine's
+#      stdin with the remote token, not its environment).
+LOCAL_SENTINEL="k2lt_CHILDTEST_local_token"
+fresh
+printf '%s\n' "$LOCAL_SENTINEL" >"$HOME/.k2/heartbeat.token"
+printf '%s\n' "$LOCAL_SENTINEL" >"$HOME/.k2/daemon.token"
+"$K2_CLI" clone preview ws1 --json </dev/null >/dev/null 2>&1 || true
+printf 'test-token\n' >"$HOME/.k2/heartbeat.token"
+printf 'test-token\n' >"$HOME/.k2/daemon.token"
+assert_tcp_got "clone preview (this server)" /cli/clone/preview "local token" "$LOCAL_SENTINEL"
+assert_children_seen "clone preview (this server)"
+assert_off_children "clone preview (this server)" "local token" "$LOCAL_SENTINEL"
 
 # 16-17. An App user's password (k2 app user add / password --password-stdin).
 sec_case "app user add" /cli/skin/users "password" "$PASS_SENTINEL" app user add bob --password-stdin

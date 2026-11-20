@@ -48096,13 +48096,12 @@ _clone_person_guard() {
 }
 
 # The engine: preview, push, pull, here, show, approve. Python so the
-# chunked transfer and the JSON stay in one place. Passwords ride /dev/tty
-# and the remote server's token rides stdin ahead of the script
-# (_k2_stdin_secrets), never argv; this server's own token rides the
-# environment.
+# chunked transfer and the JSON stay in one place. Passwords ride /dev/tty;
+# both tokens (this server's and the remote server's) ride stdin ahead of
+# the script (_k2_stdin_secrets), never argv or the environment.
 _clone_py() {
-    { _k2_stdin_secrets K2C_REMOTE_TOKEN "${K2C_REMOTE_TOKEN:-}"; cat; } <<'PY' | \
-    K2C_LOCAL_URL="$BASE_URL" K2C_LOCAL_TOKEN="$TOKEN" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" \
+    { _k2_stdin_secrets K2C_REMOTE_TOKEN "${K2C_REMOTE_TOKEN:-}" K2C_LOCAL_TOKEN "$TOKEN"; cat; } <<'PY' | \
+    K2C_LOCAL_URL="$BASE_URL" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" \
     K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && [ -r /dev/tty ] && echo 1 || echo 0)" \
     _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 -c "$_K2_PY_STDIN_BOOT" "$@"
 import base64, getpass, http.client, json, os, socket, sys, time, uuid
@@ -48111,7 +48110,7 @@ import urllib.error, urllib.parse, urllib.request
 exec(os.environ["_K2_PY_PROXY_RULE"])
 exec(os.environ.pop("_K5_PY_HTTP"))
 
-LOCAL = ("local", os.environ["K2C_LOCAL_URL"], os.environ["K2C_LOCAL_TOKEN"])
+LOCAL = ("local", os.environ["K2C_LOCAL_URL"], K2_STDIN_SECRETS.get("K2C_LOCAL_TOKEN", ""))
 REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), K2_STDIN_SECRETS.get("K2C_REMOTE_TOKEN", ""))
 OPTS = json.loads(os.environ.get("K2C_OPTS") or "{}")
 K2_HOME = os.environ["K2C_K2_HOME"]

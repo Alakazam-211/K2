@@ -42258,13 +42258,20 @@ cmd_ci() {
         ""|help|--help|-h) _ci_usage; return 0 ;;
     esac
     shift
+    local a
     # Signer pairing (0.46.10 C3a): its own verbs, people only.
     if [ "$sub" = "signer" ] || [ "$sub" = "signers" ]; then
-        case "${1:-}" in -h|--help) _ci_usage; return 0 ;; esac
+        # -h/--help anywhere before a bare -- prints the usage and sends
+        # nothing (0.46.17: only the next word was read, so `k2 ci signer
+        # remove <fp> -h` removed the signer). No signer verb takes a --:
+        # one is a usage error, so a -h after it is never sent as a word.
+        if _wants_help "$@"; then _ci_usage; return 0; fi
+        for a in "$@"; do
+            [ "$a" = "--" ] && { echo "usage: ci signer takes no '--' (k2 help ci)" >&2; exit 2; }
+        done
         cmd_ci_signer "$sub" "$@"
         return $?
     fi
-    local a
     for a in "$@"; do
         [ "$a" = "--" ] && break
         case "$a" in -h|--help) _ci_usage; return 0 ;; esac

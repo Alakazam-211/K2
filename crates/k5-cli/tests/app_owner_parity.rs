@@ -88,23 +88,23 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app uninstall
+            // native: app uninstall
             one("uninstall", &["uninstall", "acme"], ok(r#"{"ok":true}"#), 0),
-            // covers: app uninstall --json
+            // native: app uninstall --json
             one(
                 "uninstall --drop-access --json",
                 &["uninstall", "--drop-access", "acme", "--json"],
                 ok(r#"{"ok":true,"x":"é"}"#),
                 0,
             ),
-            // covers: app uninstall
+            // native: app uninstall
             one(
                 "uninstall refused",
                 &["uninstall", "acme"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app uninstall
+            // native: app uninstall
             case(
                 "uninstall --purge, no vault socket",
                 &["uninstall", "acme", "--purge"],
@@ -114,15 +114,15 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
                 3,
                 0,
             ),
-            // covers: app uninstall
+            // native: app uninstall
             words("uninstall, no App", &["uninstall"], 2),
-            // covers: app uninstall
+            // native: app uninstall
             words(
                 "uninstall, an unknown flag",
                 &["uninstall", "a", "--zap"],
                 2,
             ),
-            // covers: app expose
+            // native: app expose
             one(
                 "expose --tunnel: changed, a URL",
                 &["expose", "acme", "--tunnel", "--transfer"],
@@ -131,7 +131,7 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app expose
+            // native: app expose
             one(
                 "expose --local: changed, a hostname left",
                 &["expose", "--local", "acme"],
@@ -140,76 +140,76 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app expose
+            // native: app expose
             one(
                 "expose: no change",
                 &["expose", "acme", "--tunnel", "--tunnel"],
                 ok(r#"{"app":"acme","changed":false,"next":null}"#),
                 0,
             ),
-            // covers: app expose --json
+            // native: app expose --json
             one(
                 "expose --json",
                 &["expose", "acme", "--local", "--json"],
                 ok(r#"{"changed":true}"#),
                 0,
             ),
-            // covers: app expose
+            // native: app expose
             one(
                 "expose held",
                 &["expose", "acme", "--tunnel"],
                 answer(202, HELD),
                 2,
             ),
-            // covers: app expose
+            // native: app expose
             one(
                 "expose refused",
                 &["expose", "acme", "--tunnel"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app expose
+            // native: app expose
             traceback(one(
                 "expose: a URL that is a number",
                 &["expose", "acme", "--tunnel"],
                 ok(r#"{"changed":true,"expose":"tunnel","url":5}"#),
                 1,
             )),
-            // covers: app expose
+            // native: app expose
             words("expose, no mode", &["expose", "acme"], 2),
-            // covers: app expose
+            // native: app expose
             words(
                 "expose, both",
                 &["expose", "acme", "--local", "--tunnel"],
                 2,
             ),
-            // covers: app expose
+            // native: app expose
             words("expose, two Apps", &["expose", "a", "b", "--local"], 2),
-            // covers: app expose
+            // native: app expose
             words(
                 "expose --transfer --local",
                 &["expose", "a", "--local", "--transfer"],
                 2,
             ),
-            // covers: app park
+            // native: app park
             one("park", &["park", "acme", "--reason", "away é"], ok("{}"), 0),
-            // covers: app park --json
+            // native: app park --json
             one(
                 "park --json",
                 &["park", "acme", "--json", "--to", "x"],
                 ok(r#"{"parked":true}"#),
                 0,
             ),
-            // covers: app park
+            // native: app park
             one(
                 "park refused",
                 &["park", "acme"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app park
+            // native: app park
             words("park, no App", &["park"], 2),
-            // covers: app park
+            // native: app park
             words(
                 "park --reason last: set -e",
                 &["park", "acme", "--reason"],
@@ -226,57 +226,57 @@ fn handover_answers_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app handover
+            // native: app handover
             words("the page", &["handover"], 2),
-            // covers: app handover status
+            // native: app handover status
             one("status: none", &["handover", "status"], ok("{}"), 0),
-            // covers: app handover status
+            // native: app handover status
             one("status: rows", &["handover", "status", "acme"], ok(rows), 0),
-            // covers: app handover status
+            // native: app handover status
             one(
                 "status --detail",
                 &["handover", "status", "--detail"],
                 ok(rows),
                 0,
             ),
-            // covers: app handover status --json
+            // native: app handover status --json
             one(
                 "status --json",
                 &["handover", "status", "--json"],
                 ok(rows),
                 0,
             ),
-            // covers: app handover status
+            // native: app handover status
             traceback(one(
                 "status: a row with no id",
                 &["handover", "status"],
                 ok(r#"{"handovers":[{"state":"x"}]}"#),
                 1,
             )),
-            // covers: app handover brief
+            // native: app handover brief
             one(
                 "brief",
                 &["handover", "brief", "acme"],
                 ok(r#"{"brief":"do X é"}"#),
                 0,
             ),
-            // covers: app handover brief
+            // native: app handover brief
             one(
                 "brief: none",
                 &["handover", "brief", "acme"],
                 ok(r#"{"brief":""}"#),
                 0,
             ),
-            // covers: app handover brief
+            // native: app handover brief
             one(
                 "brief --json",
                 &["handover", "brief", "acme", "--json"],
                 ok(r#"{"brief":"b"}"#),
                 0,
             ),
-            // covers: app handover brief
+            // native: app handover brief
             words("brief, no App: the page", &["handover", "brief"], 2),
-            // covers: app handover accept
+            // native: app handover accept
             one(
                 "accept: done",
                 &["handover", "accept", "acme"],
@@ -285,51 +285,51 @@ fn handover_answers_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app handover decline
+            // native: app handover decline
             one(
                 "decline --reason: held",
                 &["handover", "decline", "acme", "--reason", "busy"],
                 answer(202, OFFER),
                 2,
             ),
-            // covers: app handover undo
+            // native: app handover undo
             one(
                 "undo: held, no terminal",
                 &["handover", "undo", "acme"],
                 answer(202, OFFER),
                 2,
             ),
-            // covers: app handover cancel
+            // native: app handover cancel
             one(
                 "cancel --json: held",
                 &["handover", "cancel", "acme", "--json"],
                 answer(202, OFFER),
                 2,
             ),
-            // covers: app handover finish
+            // native: app handover finish
             one(
                 "finish --json",
                 &["handover", "finish", "--json", "acme"],
                 ok("{}"),
                 0,
             ),
-            // covers: app handover rekey
+            // native: app handover rekey
             one(
                 "rekey refused",
                 &["handover", "rekey", "acme"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app handover accept
+            // native: app handover accept
             words("accept, no App: the page", &["handover", "accept"], 2),
-            // covers: app handover plan
+            // native: app handover plan
             one(
                 "plan: ready",
                 &["handover", "plan", "acme", "--to", "bob"],
                 ok(r#"{"lines":["one","two"],"ready":true}"#),
                 0,
             ),
-            // covers: app handover
+            // native: app handover
             one(
                 "--dry-run with every flag: blocked",
                 &[
@@ -350,14 +350,14 @@ fn handover_answers_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app handover --json
+            // native: app handover --json
             one(
                 "--dry-run --json",
                 &["handover", "acme", "--to", "bob", "--dry-run", "--json"],
                 ok(r#"{"ready":true}"#),
                 0,
             ),
-            // covers: app handover
+            // native: app handover
             one(
                 "the offer: every flag, a brief file",
                 &[
@@ -379,7 +379,7 @@ fn handover_answers_as_the_shell_does() {
                 answer(202, OFFER),
                 2,
             ),
-            // covers: app handover
+            // native: app handover
             case(
                 "a brief file that isn't UTF-8",
                 &["handover", "acme", "--to", "bob", "--brief", "BAD.md"],
@@ -389,7 +389,7 @@ fn handover_answers_as_the_shell_does() {
                 2,
                 1,
             ),
-            // covers: app handover
+            // native: app handover
             Case {
                 compare: Compare::NulInAnswer,
                 ..case(
@@ -402,21 +402,21 @@ fn handover_answers_as_the_shell_does() {
                     1,
                 )
             },
-            // covers: app handover
+            // native: app handover
             one(
                 "legacy: done at once",
                 &["handover", "acme", "--to", "bob"],
                 ok(r#"{"app":"acme","workspace":"bob"}"#),
                 0,
             ),
-            // covers: app handover --json
+            // native: app handover --json
             one(
                 "the offer --json",
                 &["handover", "acme", "--to", "bob", "--json"],
                 answer(202, OFFER),
                 2,
             ),
-            // covers: app handover
+            // native: app handover
             in_session(case(
                 "the offer in a session: the tip",
                 &["handover", "acme", "--to", "bob"],
@@ -426,45 +426,45 @@ fn handover_answers_as_the_shell_does() {
                 2,
                 1,
             )),
-            // covers: app handover
+            // native: app handover
             one(
                 "refused",
                 &["handover", "acme", "--to", "bob"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app handover
+            // native: app handover
             one(
                 "a confirm, no vault socket",
                 &["handover", "acme", "--to", "bob"],
                 answer(403, CONFIRM),
                 3,
             ),
-            // covers: app handover
+            // native: app handover
             traceback(one(
                 "a card with no id",
                 &["handover", "acme", "--to", "bob"],
                 answer(202, r#"{"request":{"x":1}}"#),
                 1,
             )),
-            // covers: app handover
+            // native: app handover
             words("no --to: the page", &["handover", "acme"], 2),
-            // covers: app handover
+            // native: app handover
             words(
                 "no brief file",
                 &["handover", "acme", "--to", "b", "--brief", "nope.md"],
                 2,
             ),
-            // covers: app handover
+            // native: app handover
             words("an unknown flag", &["handover", "acme", "--zap"], 2),
-            // covers: app unpark
+            // native: app unpark
             one(
                 "unpark",
                 &["unpark", "acme", "--to", "bob"],
                 answer(202, OFFER),
                 2,
             ),
-            // covers: app unpark
+            // native: app unpark
             words("unpark, no App: the page", &["unpark"], 2),
         ],
     );
@@ -476,7 +476,7 @@ fn release_and_exception_answer_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app release
+            // native: app release
             one(
                 "release: done",
                 &["release", "ws", "--apps", "uninstall", "--drop-access"],
@@ -485,14 +485,14 @@ fn release_and_exception_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app release
+            // native: app release
             one(
                 "release: one",
                 &["release", "ws", "--apps", "park"],
                 ok(r#"{"workspace":"ws","way":"park","results":[{"app":"a"}]}"#),
                 0,
             ),
-            // covers: app release
+            // native: app release
             one(
                 "release: held cards, no terminal",
                 &["release", "ws", "--apps", "handover:bob"],
@@ -502,36 +502,36 @@ fn release_and_exception_answer_as_the_shell_does() {
                 ),
                 2,
             ),
-            // covers: app release --json
+            // native: app release --json
             one(
                 "release --json: held",
                 &["release", "ws", "--apps", "handover:bob", "--json"],
                 answer(202, r#"{"results":[]}"#),
                 2,
             ),
-            // covers: app release
+            // native: app release
             one(
                 "release refused",
                 &["release", "ws", "--apps", "park"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app release
+            // native: app release
             traceback(one(
                 "release: a row with no app",
                 &["release", "ws", "--apps", "park"],
                 ok(r#"{"results":[{}]}"#),
                 1,
             )),
-            // covers: app release
+            // native: app release
             words("release, no --apps", &["release", "ws"], 2),
-            // covers: app release
+            // native: app release
             words(
                 "release --drop-access, not uninstall",
                 &["release", "ws", "--apps", "park", "--drop-access"],
                 2,
             ),
-            // covers: app exception
+            // native: app exception
             one(
                 "exception off",
                 &["exception", "acme", "off"],
@@ -540,28 +540,28 @@ fn release_and_exception_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app exception
+            // native: app exception
             one(
                 "exception off: no change, a reason",
                 &["exception", "off", "off", "--reason", "back é"],
                 ok(r#"{"app":"off","changed":false}"#),
                 0,
             ),
-            // covers: app exception
+            // native: app exception
             one(
                 "exception off --json",
                 &["exception", "acme", "off", "--json"],
                 ok(r#"{"app":"a"}"#),
                 0,
             ),
-            // covers: app exception
+            // native: app exception
             one(
                 "exception off refused",
                 &["exception", "acme", "off"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app exception
+            // native: app exception
             case(
                 "exception on, no vault socket",
                 &[
@@ -579,9 +579,9 @@ fn release_and_exception_answer_as_the_shell_does() {
                 3,
                 0,
             ),
-            // covers: app exception
+            // native: app exception
             words("exception, no mode", &["exception", "acme"], 2),
-            // covers: app exception
+            // native: app exception
             words(
                 "exception --device last: set -e",
                 &["exception", "acme", "on", "--device"],
@@ -620,14 +620,14 @@ fn confirming(name: &'static str, args: &[&'static str], daemon: Vec<Reply>, cod
 fn the_owner_confirms_in_person() {
     let rig = VRig::new();
     for c in [
-        // covers: app uninstall
+        // native: app uninstall
         confirming(
             "uninstall --purge",
             &["uninstall", "acme", "--purge", "--drop-access"],
             vec![ok("{}")],
             0,
         ),
-        // covers: app exception
+        // native: app exception
         confirming(
             "exception on, two devices",
             &[
@@ -646,14 +646,14 @@ fn the_owner_confirms_in_person() {
             )],
             0,
         ),
-        // covers: app handover
+        // native: app handover
         confirming(
             "handover: the confirm the daemon asks for",
             &["handover", "acme", "--to", "bob"],
             vec![answer(403, CONFIRM), answer(202, OFFER)],
             2,
         ),
-        // covers: app release
+        // native: app release
         confirming(
             "release: the confirm the daemon asks for",
             &["release", "ws", "--apps", "handover:bob"],

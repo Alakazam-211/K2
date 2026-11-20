@@ -416,7 +416,7 @@ fn the_app_page_through_the_card_filter() {
     let v = vec![
         // covers: app
         case("no passport: off, nothing asked", &[], &[], vec![], owner_and_port, 1, 0),
-        // covers: app --json
+        // native: app --json
         case("--json: the same page", &["--json"], &[], vec![], owner_and_port, 1, 0),
         // covers: app
         Case {
@@ -444,7 +444,7 @@ fn the_app_page_through_the_card_filter() {
                 1,
             )
         },
-        // covers: app --json
+        // native: app --json
         Case {
             env: cell(),
             ..case(

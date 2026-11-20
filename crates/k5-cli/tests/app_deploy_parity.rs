@@ -74,9 +74,9 @@ fn build_answers_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app build
+            // native: app build
             one("a Seed", &["build", "site"], ok(SEED), 0),
-            // covers: app build
+            // native: app build
             one(
                 "the least Seed, --types, --manifest, --disk-override=",
                 &[
@@ -90,34 +90,34 @@ fn build_answers_as_the_shell_does() {
                 ok(r#"{"seed":{"hash":"ab","seedId":"x","sizeBytes":1}}"#),
                 0,
             ),
-            // covers: app build --json
+            // native: app build --json
             one("--json", &["build", "site", "--json"], ok(SEED), 0),
-            // covers: app build
+            // native: app build
             one("a 422 report", &["build", "site"], answer(422, REPORT), 1),
-            // covers: app build --json
+            // native: app build --json
             one(
                 "a 422 report, --json",
                 &["build", "--json", "site"],
                 answer(422, REPORT),
                 1,
             ),
-            // covers: app build
+            // native: app build
             one(
                 "held",
                 &["build", "site", "--disk-override", "r"],
                 answer(202, HELD),
                 2,
             ),
-            // covers: app build --json
+            // native: app build --json
             one(
                 "held, --json",
                 &["build", "site", "--json"],
                 answer(202, HELD),
                 2,
             ),
-            // covers: app build
+            // native: app build
             one("refused", &["build", "site"], answer(403, REFUSED_403), 3),
-            // covers: app build
+            // native: app build
             one(
                 "a Seed in kilobytes, no ignore file, small",
                 &["build", "seedsrc"],
@@ -126,33 +126,33 @@ fn build_answers_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app build
+            // native: app build
             traceback(one(
                 "no seed: KeyError",
                 &["build", "site"],
                 ok(r#"{"entries":1}"#),
                 1,
             )),
-            // covers: app build
+            // native: app build
             traceback(one(
                 "a size that is a string",
                 &["build", "site"],
                 ok(r#"{"seed":{"hash":"ab","seedId":"x","sizeBytes":1},"seedSize":{"bytes":"x"}}"#),
                 1,
             )),
-            // covers: app build
+            // native: app build
             words("no folder", &["build"], 2),
-            // covers: app build
+            // native: app build
             words("not a folder", &["build", "nope é"], 2),
-            // covers: app build
+            // native: app build
             words(
                 "--manifest not a file",
                 &["build", "site", "--manifest", "x.json"],
                 2,
             ),
-            // covers: app build
+            // native: app build
             words("an unknown flag", &["build", "site", "--zap"], 2),
-            // covers: app build
+            // native: app build
             words(
                 "--manifest last: set -e",
                 &["build", "site", "--manifest"],
@@ -168,7 +168,7 @@ fn install_answers_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app install
+            // native: app install
             one(
                 "everything",
                 &[
@@ -193,14 +193,14 @@ fn install_answers_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app install
+            // native: app install
             one(
                 "the least: no limit, no deploy",
                 &["install", "acme", "--folder", "site", "--pg-major", "16"],
                 ok(r#"{"app":{"appId":"acme","memoryLimitBytes":null},"frontPort":1}"#),
                 0,
             ),
-            // covers: app install
+            // native: app install
             one(
                 "a database already there, a failed deploy",
                 &["install", "acme"],
@@ -209,49 +209,49 @@ fn install_answers_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app install --json
+            // native: app install --json
             one(
                 "--json",
                 &["install", "acme", "--json"],
                 ok(r#"{"app":{"appId":"acme"},"frontPort":1}"#),
                 0,
             ),
-            // covers: app install
+            // native: app install
             one(
                 "held",
                 &["install", "acme", "--engine", "process"],
                 answer(202, HELD),
                 2,
             ),
-            // covers: app install
+            // native: app install
             one(
                 "a 202 that names frontPort: a refusal",
                 &["install", "acme"],
                 answer(202, r#"{"frontPort":1,"error":"odd"}"#),
                 3,
             ),
-            // covers: app install
+            // native: app install
             one("refused", &["install", "acme"], answer(403, REFUSED_403), 3),
-            // covers: app install
+            // native: app install
             traceback(one(
                 "a memory limit that is a float",
                 &["install", "acme"],
                 ok(r#"{"app":{"appId":"acme","memoryLimitBytes":1.5},"frontPort":1}"#),
                 1,
             )),
-            // covers: app install
+            // native: app install
             words("no App", &["install"], 2),
-            // covers: app install
+            // native: app install
             words(
                 "--pg-major one digit",
                 &["install", "acme", "--pg-major", "9"],
                 2,
             ),
-            // covers: app install
+            // native: app install
             words("--pg-major=0x", &["install", "acme", "--pg-major=07"], 2),
-            // covers: app install
+            // native: app install
             words("an unknown flag", &["install", "acme", "--zap"], 2),
-            // covers: app install
+            // native: app install
             words("--seed last: set -e", &["install", "acme", "--seed"], 1),
         ],
     );
@@ -265,9 +265,9 @@ fn deploy_answers_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app deploy
+            // native: app deploy
             one("a folder, live", &["deploy", "acme", "site"], ok(LIVE), 0),
-            // covers: app deploy
+            // native: app deploy
             one(
                 "a folder, --manifest, --types, --engine=, --reason",
                 &[
@@ -284,7 +284,7 @@ fn deploy_answers_as_the_shell_does() {
                 ok(LIVE),
                 0,
             ),
-            // covers: app deploy
+            // native: app deploy
             one(
                 "a Seed, pending: exit 2",
                 &[
@@ -298,88 +298,88 @@ fn deploy_answers_as_the_shell_does() {
                 ok(pending),
                 2,
             ),
-            // covers: app deploy
+            // native: app deploy
             one(
                 "stalled: exit 3",
                 &["deploy", "acme", "s1"],
                 ok(r#"{"deployment":{"result":"stalled"}}"#),
                 3,
             ),
-            // covers: app deploy
+            // native: app deploy
             one(
                 "failed: exit 1",
                 &["deploy", "acme", "s1"],
                 ok(r#"{"deployment":{"result":"failed","error":"health"}}"#),
                 1,
             ),
-            // covers: app deploy
+            // native: app deploy
             one(
                 "no deployment: exit 1",
                 &["deploy", "acme", "s1"],
                 ok("{}"),
                 1,
             ),
-            // covers: app deploy --json
+            // native: app deploy --json
             one(
                 "--json, live",
                 &["deploy", "acme", "site", "--json"],
                 ok(LIVE),
                 0,
             ),
-            // covers: app deploy --json
+            // native: app deploy --json
             one(
                 "--json, pending",
                 &["deploy", "--json", "acme", "s"],
                 ok(pending),
                 2,
             ),
-            // covers: app deploy
+            // native: app deploy
             one(
                 "a 422 report",
                 &["deploy", "acme", "site"],
                 answer(422, REPORT),
                 1,
             ),
-            // covers: app deploy
+            // native: app deploy
             one("held", &["deploy", "acme", "site"], answer(202, HELD), 2),
-            // covers: app deploy
+            // native: app deploy
             one(
                 "refused",
                 &["deploy", "acme", "s"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app deploy
+            // native: app deploy
             traceback(one(
                 "a deployment that is a list",
                 &["deploy", "acme", "s"],
                 ok(r#"{"deployment":[1]}"#),
                 1,
             )),
-            // covers: app deploy
+            // native: app deploy
             traceback(one(
                 "an answer that is a list",
                 &["deploy", "acme", "s"],
                 ok("[1]"),
                 1,
             )),
-            // covers: app deploy
+            // native: app deploy
             words("one word", &["deploy", "acme"], 2),
-            // covers: app deploy
+            // native: app deploy
             words("a bad engine", &["deploy", "acme", "s", "--engine", "x"], 2),
-            // covers: app deploy
+            // native: app deploy
             words(
                 "--manifest with a Seed",
                 &["deploy", "acme", "s", "--manifest", "m.json"],
                 2,
             ),
-            // covers: app deploy
+            // native: app deploy
             words(
                 "--manifest not a file",
                 &["deploy", "acme", "site", "--manifest", "no"],
                 2,
             ),
-            // covers: app deploy
+            // native: app deploy
             words(
                 "--reason last: set -e",
                 &["deploy", "acme", "s", "--reason"],
@@ -395,77 +395,77 @@ fn rollback_and_lifecycle_answer_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app rollback
+            // native: app rollback
             one("rollback, live", &["rollback", "acme"], ok(LIVE), 0),
-            // covers: app rollback
+            // native: app rollback
             one(
                 "rollback --to --no-wait, starting",
                 &["rollback", "acme", "--to", "seed é", "--no-wait"],
                 ok(r#"{"deployment":{"kind":"rollback","id":"d","result":"starting"}}"#),
                 2,
             ),
-            // covers: app rollback --json
+            // native: app rollback --json
             one(
                 "rollback --json",
                 &["rollback", "acme", "--json"],
                 ok(LIVE),
                 0,
             ),
-            // covers: app rollback
+            // native: app rollback
             one(
                 "rollback refused",
                 &["rollback", "acme"],
                 answer(404, r#"{"error":{"code":"no_such_app","hint":"none"}}"#),
                 3,
             ),
-            // covers: app rollback
+            // native: app rollback
             words("rollback, no App", &["rollback"], 2),
-            // covers: app stop
+            // native: app stop
             one(
                 "stop",
                 &["stop", "acme"],
                 ok(r#"{"app":"acme","state":"stopped"}"#),
                 0,
             ),
-            // covers: app stop
+            // native: app stop
             one(
                 "stop, already",
                 &["stop", "acme"],
                 ok(r#"{"app":"acme","already":"stopped"}"#),
                 0,
             ),
-            // covers: app start
+            // native: app start
             one("start: ok", &["start", "acme"], ok(r#"{"app":["a"]}"#), 0),
-            // covers: app restart
+            // native: app restart
             one("restart: a deployment", &["restart", "acme"], ok(LIVE), 0),
-            // covers: app restart --json
+            // native: app restart --json
             one(
                 "restart --json: a deployment",
                 &["restart", "acme", "--json"],
                 ok(LIVE),
                 0,
             ),
-            // covers: app stop --json
+            // native: app stop --json
             one(
                 "stop --json",
                 &["stop", "--json", "acme"],
                 ok(r#"{"app":"acme"}"#),
                 0,
             ),
-            // covers: app start
+            // native: app start
             traceback(one("start: a number", &["start", "acme"], ok("5"), 1)),
-            // covers: app start
+            // native: app start
             one(
                 "start refused",
                 &["start", "acme"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app stop
+            // native: app stop
             words("stop, no App", &["stop"], 2),
-            // covers: app start
+            // native: app start
             words("start, an unknown flag", &["start", "a", "--zap"], 2),
-            // covers: app restart
+            // native: app restart
             words("restart, no App", &["restart", "--json"], 2),
         ],
     );
@@ -478,69 +478,69 @@ fn link_and_seal_answer_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app link
+            // native: app link
             one("link, open", &["link", "acme"], ok(open), 0),
-            // covers: app link
+            // native: app link
             one(
                 "link, not open: exit 1",
                 &["link", "acme"],
                 ok(r#"{"app":"acme","link":{"open":false}}"#),
                 1,
             ),
-            // covers: app link
+            // native: app link
             one(
                 "link, no caps",
                 &["link", "acme"],
                 ok(r#"{"app":"a","link":{"open":1,"caps":[]}}"#),
                 0,
             ),
-            // covers: app link
+            // native: app link
             one("link --rotate", &["link", "acme", "--rotate"], ok(open), 0),
-            // covers: app link --json
+            // native: app link --json
             one(
                 "link --json, open",
                 &["link", "acme", "--json"],
                 ok(open),
                 0,
             ),
-            // covers: app link --json
+            // native: app link --json
             one(
                 "link --json, none",
                 &["link", "--json", "acme"],
                 ok("{}"),
                 1,
             ),
-            // covers: app link
+            // native: app link
             one(
                 "link refused",
                 &["link", "acme", "--rotate"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app link
+            // native: app link
             traceback(one(
                 "link: caps not strings",
                 &["link", "acme"],
                 ok(r#"{"link":{"open":true,"caps":[1]}}"#),
                 1,
             )),
-            // covers: app link
+            // native: app link
             words("link, no App", &["link"], 2),
-            // covers: app seal
+            // native: app seal
             one(
                 "seal: vault closed",
                 &["seal", "acme"],
                 ok(r#"{"app":"acme","seal":{"vaultOpen":false,"error":"locked"}}"#),
                 1,
             ),
-            // covers: app seal
+            // native: app seal
             one(
                 "seal: no key yet",
                 &["seal", "acme"],
                 ok(r#"{"app":"acme","seal":{"vaultOpen":true}}"#),
                 1,
             ),
-            // covers: app seal
+            // native: app seal
             one(
                 "seal: granted",
                 &["seal", "acme"],
@@ -549,51 +549,51 @@ fn link_and_seal_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app seal
+            // native: app seal
             one(
                 "seal: disabled",
                 &["seal", "acme"],
                 ok(r#"{"app":"acme","seal":{"vaultOpen":true,"present":true,"disabled":true}}"#),
                 0,
             ),
-            // covers: app seal --json
+            // native: app seal --json
             one(
                 "seal --json",
                 &["seal", "acme", "--json"],
                 ok(r#"{"seal":{"present":true}}"#),
                 0,
             ),
-            // covers: app seal
+            // native: app seal
             one(
                 "seal rotate --yes",
                 &["seal", "rotate", "acme", "--yes"],
                 ok(r#"{"app":"acme","version":3,"warning":"everyone is out","next":"tell them"}"#),
                 0,
             ),
-            // covers: app seal
+            // native: app seal
             one(
                 "seal rotate -y, the least answer",
                 &["seal", "acme", "rotate", "-y"],
                 ok("{}"),
                 0,
             ),
-            // covers: app seal --json
+            // native: app seal --json
             one(
                 "seal rotate --yes --json",
                 &["seal", "rotate", "acme", "--yes", "--json"],
                 ok(r#"{"app":"acme"}"#),
                 0,
             ),
-            // covers: app seal
+            // native: app seal
             one(
                 "seal rotate refused",
                 &["seal", "rotate", "acme", "--yes"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app seal
+            // native: app seal
             words("seal rotate, no terminal", &["seal", "rotate", "acme"], 2),
-            // covers: app seal
+            // native: app seal
             words("seal, no App", &["seal", "rotate"], 2),
         ],
     );
@@ -606,7 +606,7 @@ fn config_answers_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app config
+            // native: app config
             one(
                 "every flag",
                 &[
@@ -659,7 +659,7 @@ fn config_answers_as_the_shell_does() {
                 ok(done),
                 0,
             ),
-            // covers: app config
+            // native: app config
             one(
                 "a name twice, the last empty; --io none",
                 &[
@@ -669,7 +669,7 @@ fn config_answers_as_the_shell_does() {
                 ok(r#"{"app":{"appId":"acme","memoryLimitBytes":null}}"#),
                 0,
             ),
-            // covers: app config
+            // native: app config
             one(
                 "--io default and a ceiling: the ceiling wins",
                 &[
@@ -687,55 +687,55 @@ fn config_answers_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app config --json
+            // native: app config --json
             one(
                 "--json",
                 &["config", "acme", "--risk", "normal", "--json"],
                 ok(done),
                 0,
             ),
-            // covers: app config
+            // native: app config
             one(
                 "held",
                 &["config", "acme", "--memory", "none"],
                 answer(202, HELD),
                 2,
             ),
-            // covers: app config
+            // native: app config
             one(
                 "refused",
                 &["config", "acme", "--memory", "none"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app config
+            // native: app config
             traceback(one(
                 "no app: KeyError",
                 &["config", "acme", "--memory", "1G"],
                 ok(r#"{"applied":[]}"#),
                 1,
             )),
-            // covers: app config
+            // native: app config
             words("no flags", &["config", "acme"], 2),
-            // covers: app config
+            // native: app config
             words("no App", &["config", "--memory", "1G"], 2),
-            // covers: app config
+            // native: app config
             words(
                 "--egress, not add or rm",
                 &["config", "acme", "--egress", "x", "y"],
                 2,
             ),
-            // covers: app config
+            // native: app config
             words(
                 "--port add, no port: set -e",
                 &["config", "acme", "--port", "add"],
                 1,
             ),
-            // covers: app config
+            // native: app config
             words("--io, a bad value", &["config", "acme", "--io", "max"], 2),
-            // covers: app config
+            // native: app config
             words("an unknown flag", &["config", "acme", "--zap"], 2),
-            // covers: app config
+            // native: app config
             words("--memory last: set -e", &["config", "acme", "--memory"], 1),
         ],
     );

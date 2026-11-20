@@ -33,7 +33,7 @@ fn logs_follow_answers_as_the_shell_does() {
         r#"{"error":{"code":"no_such_app","hint":"gone"}}"#.to_string(),
     );
     let v = vec![
-        // covers: app logs
+        // native: app logs
         case(
             "follow: new lines each poll, then refused",
             &["logs", "acme", "--follow", "--tail", "3"],
@@ -49,7 +49,7 @@ fn logs_follow_answers_as_the_shell_does() {
             3,
             5,
         ),
-        // covers: app logs
+        // native: app logs
         case(
             "-f: nothing before, then lines",
             &["logs", "-f", "acme", "--deployment", "d1"],
@@ -59,7 +59,7 @@ fn logs_follow_answers_as_the_shell_does() {
             3,
             3,
         ),
-        // covers: app logs
+        // native: app logs
         Case {
             compare: Compare::Traceback,
             ..case(

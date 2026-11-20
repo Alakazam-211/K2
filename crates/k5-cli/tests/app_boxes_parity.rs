@@ -61,9 +61,9 @@ fn doctors_answer_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app doctor
+            // native: app doctor
             one("doctor: ready", &["doctor"], ok(BOX), 0),
-            // covers: app doctor
+            // native: app doctor
             one(
                 "doctor: not ready, the box at the top",
                 &["doctor"],
@@ -72,65 +72,65 @@ fn doctors_answer_as_the_shell_does() {
                 ),
                 1,
             ),
-            // covers: app doctor
+            // native: app doctor
             one(
                 "doctor: not Linux",
                 &["doctor"],
                 ok(r#"{"box":{"linux":false,"ready":true},"autoPrepare":{"enabled":true}}"#),
                 1,
             ),
-            // covers: app doctor --json
+            // native: app doctor --json
             one("doctor --json", &["doctor", "--json"], ok(BOX), 0),
-            // covers: app doctor
+            // native: app doctor
             traceback(one(
                 "doctor: a fix that is a number",
                 &["doctor"],
                 ok(r#"{"checks":[{"status":"warn","fix":3}]}"#),
                 1,
             )),
-            // covers: app doctor
+            // native: app doctor
             one("doctor refused", &["doctor"], answer(403, REFUSED_403), 3),
-            // covers: app doctor
+            // native: app doctor
             one("doctor <app>: the reach", &["doctor", "acme"], ok(reach), 1),
-            // covers: app doctor
+            // native: app doctor
             one(
                 "doctor <app>: all applied, the whole band",
                 &["doctor", "acme"],
                 ok(r#"{"app":"acme","reach":{"rule":{"gwPort":1}}}"#),
                 0,
             ),
-            // covers: app doctor --json
+            // native: app doctor --json
             one(
                 "doctor <app> --json",
                 &["doctor", "acme", "--json"],
                 ok(reach),
                 1,
             ),
-            // covers: app doctor --json
+            // native: app doctor --json
             traceback(one(
                 "doctor <app> --json: a reach that is a list",
                 &["doctor", "--json", "acme"],
                 ok(r#"{"reach":[1]}"#),
                 1,
             )),
-            // covers: app doctor
+            // native: app doctor
             words("doctor --voice without --store", &["doctor", "--voice"], 2),
-            // covers: app doctor
+            // native: app doctor
             words("doctor, two Apps", &["doctor", "a", "b"], 2),
-            // covers: app doctor
+            // native: app doctor
             words("doctor, an unknown flag", &["doctor", "--zap"], 2),
-            // covers: app box
+            // native: app box
             one("box", &["box"], ok(BOX), 0),
-            // covers: app box doctor
+            // native: app box doctor
             one(
                 "box doctor --json",
                 &["box", "doctor", "--json"],
                 ok(BOX),
                 0,
             ),
-            // covers: app box doctor
+            // native: app box doctor
             one("box status", &["box", "status"], ok(r#"{"ready":1}"#), 0),
-            // covers: app box
+            // native: app box
             words("box, an unknown verb", &["box", "zap"], 2),
         ],
     );
@@ -147,71 +147,71 @@ fn box_verbs_answer_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app box podman uninstall
+            // native: app box podman uninstall
             one(
                 "podman uninstall",
                 &["box", "podman", "uninstall"],
                 ok(r#"{"result":{"removed":["podman","conmon"],"kept":["/etc/x"]}}"#),
                 0,
             ),
-            // covers: app box podman uninstall
+            // native: app box podman uninstall
             one(
                 "podman uninstall: nothing",
                 &["box", "podman", "uninstall"],
                 ok("{}"),
                 0,
             ),
-            // covers: app box podman uninstall
+            // native: app box podman uninstall
             one(
                 "podman uninstall --json",
                 &["box", "podman", "uninstall", "--json"],
                 ok("{}"),
                 0,
             ),
-            // covers: app box podman uninstall
+            // native: app box podman uninstall
             words("podman, not uninstall", &["box", "podman"], 2),
-            // covers: app box unprep
+            // native: app box unprep
             one(
                 "unprep --dry-run",
                 &["box", "unprep", "--dry-run"],
                 ok(plan),
                 0,
             ),
-            // covers: app box unprep
+            // native: app box unprep
             one(
                 "unprep --dry-run --json",
                 &["box", "unprep", "--json", "--dry-run"],
                 ok(plan),
                 0,
             ),
-            // covers: app box unprep
+            // native: app box unprep
             one("unprep, no terminal", &["box", "unprep"], ok(plan), 2),
-            // covers: app box unprep
+            // native: app box unprep
             one(
                 "unprep --json, no terminal: the plan text",
                 &["box", "unprep", "--json"],
                 ok(plan),
                 2,
             ),
-            // covers: app box unprep
+            // native: app box unprep
             one("unprep --yes", &["box", "unprep", "--yes"], ok(undone), 0),
-            // covers: app box unprep
+            // native: app box unprep
             one(
                 "unprep -y --json",
                 &["box", "unprep", "-y", "--json"],
                 ok(undone),
                 0,
             ),
-            // covers: app box unprep
+            // native: app box unprep
             one(
                 "unprep refused",
                 &["box", "unprep", "--yes"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app box unprep
+            // native: app box unprep
             words("unprep, an unknown word", &["box", "unprep", "now"], 2),
-            // covers: app box auto-prepare
+            // native: app box auto-prepare
             one(
                 "auto-prepare status",
                 &["box", "auto-prepare", "status"],
@@ -220,51 +220,51 @@ fn box_verbs_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app box auto-prepare
+            // native: app box auto-prepare
             one(
                 "auto-prepare status --json",
                 &["box", "auto-prepare", "status", "--json"],
                 ok(r#"{"autoPrepare":{"enabled":true,"x":"é"}}"#),
                 0,
             ),
-            // covers: app box auto-prepare
+            // native: app box auto-prepare
             one(
                 "auto-prepare status --json: none",
                 &["box", "auto-prepare", "status", "--json"],
                 ok("{}"),
                 0,
             ),
-            // covers: app box auto-prepare
+            // native: app box auto-prepare
             one(
                 "auto-prepare on",
                 &["box", "auto-prepare", "on"],
                 ok(r#"{"autoPrepare":{"enabled":true},"setting":true,"note":"now"}"#),
                 0,
             ),
-            // covers: app box auto-prepare
+            // native: app box auto-prepare
             one(
                 "auto-prepare off --json",
                 &["box", "auto-prepare", "off", "--json"],
                 ok("{}"),
                 0,
             ),
-            // covers: app box auto-prepare
+            // native: app box auto-prepare
             one(
                 "auto-prepare retry",
                 &["box", "auto-prepare", "retry"],
                 ok("{}"),
                 0,
             ),
-            // covers: app box auto-prepare
+            // native: app box auto-prepare
             one(
                 "auto-prepare retry refused",
                 &["box", "auto-prepare", "retry"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app box auto-prepare
+            // native: app box auto-prepare
             words("auto-prepare, no verb", &["box", "auto-prepare"], 2),
-            // covers: app box prepare
+            // native: app box prepare
             one(
                 "prepare: every flag, done",
                 &[
@@ -284,14 +284,14 @@ fn box_verbs_answer_as_the_shell_does() {
                 ok(done),
                 0,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             one(
                 "prepare --dry-run",
                 &["box", "prepare", "--dry-run", "--runtime", "crun"],
                 ok(dry),
                 0,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             one(
                 "prepare --dry-run: keep, no packages",
                 &["box", "prepare", "--dry-run"],
@@ -300,14 +300,14 @@ fn box_verbs_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             one(
                 "prepare --json",
                 &["box", "prepare", "--json", "-y"],
                 ok(done),
                 0,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             one(
                 "prepare: failed steps",
                 &["box", "prepare"],
@@ -317,7 +317,7 @@ fn box_verbs_answer_as_the_shell_does() {
                 ),
                 3,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             one(
                 "prepare --json: failed",
                 &["box", "prepare", "--json"],
@@ -327,7 +327,7 @@ fn box_verbs_answer_as_the_shell_does() {
                 ),
                 3,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             one(
                 "prepare: podman needed, no terminal",
                 &["box", "prepare"],
@@ -337,19 +337,19 @@ fn box_verbs_answer_as_the_shell_does() {
                 ),
                 3,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             words(
                 "prepare, a bad runtime",
                 &["box", "prepare", "--runtime", "runc"],
                 2,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             words(
                 "prepare, a size with a unit",
                 &["box", "prepare", "--apps-mem-max", "4G"],
                 2,
             ),
-            // covers: app box prepare
+            // native: app box prepare
             words(
                 "prepare --runtime last: set -e",
                 &["box", "prepare", "--runtime"],
@@ -367,30 +367,30 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
     check(
         &rig,
         vec![
-            // covers: app engine install
+            // native: app engine install
             one(
                 "engine install --from",
                 &["engine", "install", "--from", "engine-dir"],
                 ok(r#"{"engine":{"version":"1.2","protocol":3,"runtime":"crun","podman":"5.2"}}"#),
                 0,
             ),
-            // covers: app engine install
+            // native: app engine install
             one(
                 "engine install --json",
                 &["engine", "install", "--json"],
                 ok("{}"),
                 0,
             ),
-            // covers: app engine install
+            // native: app engine install
             one(
                 "engine install refused",
                 &["engine", "install"],
                 answer(403, REFUSED_403),
                 3,
             ),
-            // covers: app engine install
+            // native: app engine install
             words("engine install, a word", &["engine", "install", "now"], 2),
-            // covers: app engine status
+            // native: app engine status
             one(
                 "engine status",
                 &["engine", "status"],
@@ -399,92 +399,92 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app engine status
+            // native: app engine status
             one(
                 "engine status: absent",
                 &["engine", "status"],
                 ok(r#"{"state":"absent"}"#),
                 0,
             ),
-            // covers: app engine status
+            // native: app engine status
             one(
                 "engine status --json",
                 &["engine", "status", "--json"],
                 ok(r#"{"state":"x"}"#),
                 0,
             ),
-            // covers: app engine status
+            // native: app engine status
             traceback(one(
                 "engine status: a want that is a string",
                 &["engine", "status"],
                 ok(r#"{"state":"ok","want":"x"}"#),
                 1,
             )),
-            // covers: app engine
+            // native: app engine
             words("engine: the page", &["engine"], 0),
-            // covers: app engine
+            // native: app engine
             words("engine, an unknown verb", &["engine", "zap"], 2),
-            // covers: app rehost
+            // native: app rehost
             one(
                 "rehost <app>: done",
                 &["rehost", "acme", "--yes"],
                 ok(r#"{"app":"acme","rehost":"done","deployment":{"id":"d-9"},"mode":"pause"}"#),
                 0,
             ),
-            // covers: app rehost
+            // native: app rehost
             one(
                 "rehost <app>: current",
                 &["rehost", "--pause", "acme"],
                 ok(r#"{"rehost":"current"}"#),
                 0,
             ),
-            // covers: app rehost
+            // native: app rehost
             one(
                 "rehost <app>: failed",
                 &["rehost", "acme"],
                 ok(r#"{"rehost":"failed","why":"no room","mode":"overlap"}"#),
                 1,
             ),
-            // covers: app rehost
+            // native: app rehost
             one(
                 "rehost --json",
                 &["rehost", "acme", "--json"],
                 ok(r#"{"rehost":"failed"}"#),
                 0,
             ),
-            // covers: app rehost
+            // native: app rehost
             words("rehost: the page", &["rehost"], 0),
-            // covers: app rehost
+            // native: app rehost
             words("rehost, an unknown flag", &["rehost", "acme", "--zap"], 2),
-            // covers: app rehost status
+            // native: app rehost status
             one(
                 "rehost status: the wave",
                 &["rehost", "status"],
                 ok(wave),
                 0,
             ),
-            // covers: app rehost status
+            // native: app rehost status
             one(
                 "rehost status <app>",
                 &["rehost", "status", "acme é"],
                 ok(one_app),
                 0,
             ),
-            // covers: app rehost status
+            // native: app rehost status
             one(
                 "rehost status --json",
                 &["rehost", "status", "--json"],
                 ok(wave),
                 0,
             ),
-            // covers: app rehost status
+            // native: app rehost status
             traceback(one(
                 "rehost status: apps that is a list",
                 &["rehost", "status"],
                 ok(r#"{"apps":[1]}"#),
                 1,
             )),
-            // covers: app rehost policy
+            // native: app rehost policy
             one(
                 "rehost policy",
                 &[
@@ -503,27 +503,27 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app rehost policy
+            // native: app rehost policy
             one(
                 "rehost policy --json",
                 &["rehost", "policy", "acme", "--json"],
                 ok("{}"),
                 0,
             ),
-            // covers: app rehost policy
+            // native: app rehost policy
             traceback(one(
                 "rehost policy: no rehost",
                 &["rehost", "policy", "acme"],
                 ok("{}"),
                 1,
             )),
-            // covers: app rehost policy
+            // native: app rehost policy
             words(
                 "rehost policy, no App",
                 &["rehost", "policy", "--policy", "auto"],
                 2,
             ),
-            // covers: app sessions
+            // native: app sessions
             one(
                 "sessions --live",
                 &["sessions", "--live"],
@@ -532,30 +532,30 @@ fn engine_rehost_sessions_answer_as_the_shell_does() {
                 ),
                 0,
             ),
-            // covers: app sessions
+            // native: app sessions
             one(
                 "sessions --live: nobody",
                 &["sessions", "--live"],
                 ok("{}"),
                 0,
             ),
-            // covers: app sessions
+            // native: app sessions
             one(
                 "sessions --live --count",
                 &["sessions", "--count", "--live"],
                 ok(r#"{"connected":2}"#),
                 0,
             ),
-            // covers: app sessions
+            // native: app sessions
             one(
                 "sessions --live --json",
                 &["sessions", "--live", "--json"],
                 ok("{}"),
                 0,
             ),
-            // covers: app sessions
+            // native: app sessions
             words("sessions without --live", &["sessions"], 2),
-            // covers: app sessions
+            // native: app sessions
             words("sessions, an unknown word", &["sessions", "--live", "x"], 2),
         ],
     );

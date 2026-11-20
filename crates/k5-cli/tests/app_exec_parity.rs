@@ -30,7 +30,7 @@ fn exec_answers_as_the_shell_does() {
         format!(r#"{{"framed":"--- untrusted ---\nhello é\n--- end ---","exitCode":{code}}}"#)
     };
     let v = vec![
-        // covers: app exec
+        // native: app exec
         case(
             "no stdin, exit 0",
             &["exec", "acme", "--", "ls", "-l"],
@@ -40,7 +40,7 @@ fn exec_answers_as_the_shell_does() {
             0,
             1,
         ),
-        // covers: app exec
+        // native: app exec
         case(
             "the command's exit",
             &["exec", "acme", "sh", "-c", "exit 7"],
@@ -50,7 +50,7 @@ fn exec_answers_as_the_shell_does() {
             7,
             1,
         ),
-        // covers: app exec
+        // native: app exec
         case(
             "an exit out of range: 1",
             &["exec", "acme", "x"],
@@ -60,7 +60,7 @@ fn exec_answers_as_the_shell_does() {
             1,
             1,
         ),
-        // covers: app exec
+        // native: app exec
         case(
             "timed out: 124, the note",
             &["exec", "acme", "--timeout", "1m30s", "--", "sleep", "99"],
@@ -70,7 +70,7 @@ fn exec_answers_as_the_shell_does() {
             124,
             1,
         ),
-        // covers: app exec
+        // native: app exec
         with_stdin(
             case(
                 "a pipe on stdin",
@@ -83,7 +83,7 @@ fn exec_answers_as_the_shell_does() {
             ),
             b"line one\nline two \xff\xfe\n",
         ),
-        // covers: app exec
+        // native: app exec
         with_stdin(
             case(
                 "an empty pipe on stdin",
@@ -96,7 +96,7 @@ fn exec_answers_as_the_shell_does() {
             ),
             b"",
         ),
-        // covers: app exec
+        // native: app exec
         with_stdin(
             case(
                 "--no-stdin with a pipe",
@@ -109,7 +109,7 @@ fn exec_answers_as_the_shell_does() {
             ),
             b"not sent",
         ),
-        // covers: app exec
+        // native: app exec
         case(
             "--json",
             &["exec", "acme", "--json", "--", "ls"],
@@ -119,7 +119,7 @@ fn exec_answers_as_the_shell_does() {
             3,
             1,
         ),
-        // covers: app exec
+        // native: app exec
         case(
             "refused",
             &["exec", "acme", "--", "ls"],
@@ -132,7 +132,7 @@ fn exec_answers_as_the_shell_does() {
             3,
             1,
         ),
-        // covers: app exec
+        // native: app exec
         Case {
             compare: Compare::Traceback,
             ..case(
@@ -145,7 +145,7 @@ fn exec_answers_as_the_shell_does() {
                 1,
             )
         },
-        // covers: app exec
+        // native: app exec
         Case {
             no_tmpdir: true,
             ..with_stdin(
@@ -161,7 +161,7 @@ fn exec_answers_as_the_shell_does() {
                 b"x",
             )
         },
-        // covers: app exec
+        // native: app exec
         case(
             "no command",
             &["exec", "acme"],
@@ -171,7 +171,7 @@ fn exec_answers_as_the_shell_does() {
             2,
             0,
         ),
-        // covers: app exec
+        // native: app exec
         case(
             "an unknown flag",
             &["exec", "acme", "--zap", "--", "ls"],
@@ -181,7 +181,7 @@ fn exec_answers_as_the_shell_does() {
             2,
             0,
         ),
-        // covers: app exec
+        // native: app exec
         case(
             "a bad duration",
             &["exec", "acme", "--timeout", "soon", "ls"],
@@ -191,7 +191,7 @@ fn exec_answers_as_the_shell_does() {
             2,
             0,
         ),
-        // covers: app exec
+        // native: app exec
         case(
             "--timeout last",
             &["exec", "acme", "--timeout"],

@@ -7,6 +7,10 @@
 //!   on|off` (the owner's switches; `preview` and `placement` with no word
 //!   or `status` are the read verbs').
 //! - [`retier`]: `retier|tier <job> --tier T [--why …]`.
+//! - [`moves`]: `move <job>... --auto|--to <node> [...]` and `move
+//!   --all-mine|--workspace-all [...]`.
+//! - [`cache`]: `cache [list] [...]`, `cache --lineage L` and `cache
+//!   clear`.
 //!
 //! What runs is what [`super::writes`] runs, in the shell's order: the
 //! settings, a re-minted passport, the two gates, the `id` tool's lines,
@@ -32,6 +36,8 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use std::ffi::OsString;
 
+pub mod cache;
+pub mod moves;
 pub mod retier;
 pub mod switch;
 
@@ -55,6 +61,8 @@ pub const ANSWERS: &[&str] = &[
 enum Ask {
     Switch(switch::Ask),
     Retier(retier::Ask),
+    Move(moves::Ask),
+    Cache(cache::Ask),
 }
 
 /// Which verb: `None` for a form the binary leaves to another module or
@@ -63,6 +71,8 @@ enum Ask {
 enum Which {
     Switch,
     Retier,
+    Move,
+    Cache,
 }
 
 fn which(words: &[&str]) -> Option<Which> {
@@ -72,6 +82,8 @@ fn which(words: &[&str]) -> Option<Which> {
         "preview" if matches!(first, "on" | "off") => Some(Which::Switch),
         "placement" if matches!(first, "v1" | "v2") => Some(Which::Switch),
         "retier" | "tier" => Some(Which::Retier),
+        "move" => Some(Which::Move),
+        "cache" => Some(Which::Cache),
         _ => None,
     }
 }
@@ -123,6 +135,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let ask = match which {
         Which::Switch => ready(switch::parse(words[0], rest)).map(Ask::Switch),
         Which::Retier => ready(retier::parse(rest)).map(Ask::Retier),
+        Which::Move => ready(moves::parse(rest)).map(Ask::Move),
+        Which::Cache => ready(cache::parse(rest, writes::in_session(&settings.auth))).map(Ask::Cache),
     };
     let ask = match ask {
         Ok(a) => a,
@@ -148,6 +162,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let exit = match &ask {
         Ask::Switch(a) => switch::send(&mut cp, a),
         Ask::Retier(a) => retier::send(&mut cp, a),
+        Ask::Move(a) => moves::send(&mut cp, a),
+        Ask::Cache(a) => cache::send(&mut cp, a),
     };
     let closing = std::mem::take(&mut cp.closing);
     closing.flush(&mut client, exit);

@@ -3313,11 +3313,9 @@ mod hostmail_words {
             ("acl", &["grant"]),
             ("autoconfig", &["show"]),
             ("audit-sieve", &["x"]),
-            ("status", &["x"]),
             ("domain", &["x"]),
             ("domain", &["list", "a"]),
             ("create", &["a", "-x"]),
-            ("delete", &[]),
             ("doctor", &["-x"]),
             ("config", &["x"]),
         ] {
@@ -3326,6 +3324,17 @@ mod hostmail_words {
                 other => panic!("{verb} {words:?}: {other:?}"),
             };
             assert!(h.contains(&format!("{CLI_NAME} hostmail ")), "{verb}: {h}");
+            if CLI_NAME != "k2" {
+                assert!(!h.contains("k2 ") && !h.contains("k5 "), "{verb}: {h}");
+            }
+        }
+        // status and delete name `mail` verbs in their lines, as bash's do.
+        for (verb, words) in [("status", &["x"][..]), ("delete", &[])] {
+            let h = match parse(verb, words) {
+                Plan::Usage(h) => h,
+                other => panic!("{verb} {words:?}: {other:?}"),
+            };
+            assert!(h.contains(&format!("{CLI_NAME} mail ")), "{verb}: {h}");
             if CLI_NAME != "k2" {
                 assert!(!h.contains("k2 ") && !h.contains("k5 "), "{verb}: {h}");
             }

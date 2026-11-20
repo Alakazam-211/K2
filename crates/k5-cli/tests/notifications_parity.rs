@@ -553,7 +553,8 @@ fn notifications_answer_as_the_shell_does() {
             3,
         ),
         run("no answer", &["email"], vec![Reply::Close], 3),
-        shell(stop("-h: the help", &["email", "relay", "add", "-h"], 0)),
+        // `-h` there is an unknown flag to bash (no request).
+        shell(stop("-h: an unknown flag", &["email", "relay", "add", "-h"], 2)),
     ];
     for c in v {
         rig.check(&c);

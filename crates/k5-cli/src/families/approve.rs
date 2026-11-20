@@ -364,18 +364,30 @@ fn executable(p: &std::path::Path) -> bool {
     p.exists()
 }
 
+/// The program with its words, without the five variables the front
+/// hands the shell (the shell's prelude unsets them before it runs
+/// anything).
+fn command(bin: &std::path::Path, words: &[String]) -> std::process::Command {
+    let mut c = std::process::Command::new(bin);
+    c.args(words);
+    for v in crate::called_as::FRONT_VARS {
+        c.env_remove(v);
+    }
+    c
+}
+
 /// `exec "$bin" "$@"`.
 #[cfg(unix)]
 fn exec(bin: &std::path::Path, words: &[String]) -> Exit {
     use std::os::unix::process::CommandExt;
-    let e = std::process::Command::new(bin).args(words).exec();
+    let e = command(bin, words).exec();
     out::stderr_line(&format!("{}: {e}", bin.to_string_lossy()));
     Exit::from_curl(126)
 }
 
 #[cfg(not(unix))]
 fn exec(bin: &std::path::Path, words: &[String]) -> Exit {
-    match std::process::Command::new(bin).args(words).status() {
+    match command(bin, words).status() {
         Ok(s) => Exit::from_curl(s.code().unwrap_or(1)),
         Err(e) => {
             out::stderr_line(&format!("{}: {e}", bin.to_string_lossy()));

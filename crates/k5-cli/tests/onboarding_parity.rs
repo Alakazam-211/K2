@@ -2,7 +2,8 @@
 //! ([`common::parity`]): `scan`, `adopt`, `defer`, `start-fresh` and the
 //! old `later` and `fresh` (with their warning), the folder as `cd` and
 //! `pwd` name it, a refusal's body with exit 0, no answer, the usage
-//! lines, and a folder `cd` can't enter (the shell's).
+//! lines. A folder `cd` can't enter is the shell's: its line names the
+//! script, which differs by how bash was started, so it has no row here.
 
 #![cfg(unix)]
 
@@ -75,18 +76,6 @@ fn onboarding_answers_as_the_shell_does() {
             0,
         ),
         case("no port", &["scan"], &[], vec![], owner_only, 1, 0),
-        Case {
-            compare: Compare::Shell,
-            ..case(
-                "a folder cd can't enter",
-                &["scan", "no-such"],
-                &[],
-                vec![],
-                owner_and_port,
-                1,
-                0,
-            )
-        },
     ];
     for c in v {
         rig.check(&c);

@@ -135,7 +135,8 @@ fn notify_answers_as_the_shell_does() {
             vec![ok("<html>")],
             1,
         )),
-        shell(stop("-h: the help", &["email", "ada", "-h"], 0)),
+        // `-h` there is an unknown argument to bash (no request).
+        shell(stop("-h: an unknown argument", &["email", "ada", "-h"], 2)),
     ];
     for c in v {
         rig.check(&c);

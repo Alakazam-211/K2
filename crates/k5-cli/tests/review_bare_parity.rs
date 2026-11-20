@@ -37,7 +37,11 @@ fn review_with_no_verb_as_the_shell_does() {
         let row = |name, setup, code| case(name, args, &[], vec![], setup, code, 0);
         for c in [
             // covers: review
-            row("an owner's terminal: the line and the tier", owner_and_port, 1),
+            row(
+                "an owner's terminal: the line and the tier",
+                owner_and_port,
+                1,
+            ),
             Case {
                 env: vec![("K2_HOOK_SOCK", "{sock}".to_string())],
                 ..row("HOOK_SOCK set and no passport", owner_and_port, 1)

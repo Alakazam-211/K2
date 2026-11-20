@@ -69,11 +69,27 @@ fn hooks_with_no_verb() {
     for c in [
         // native: hooks
         case("alone", &[], &[], vec![], owner_and_port, 1, 0),
-        case("an unknown verb", &["nope", "x"], &[], vec![], owner_and_port, 1, 0),
+        case(
+            "an unknown verb",
+            &["nope", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         case("an empty verb", &[""], &[], vec![], owner_and_port, 1, 0),
         case("--json", &["--json"], &[], vec![], owner_and_port, 1, 0),
         case("the gate: no port", &[], &[], vec![], owner_only, 1, 0),
-        case("the gate: no token", &["status"], &[], vec![], port_only, 1, 0),
+        case(
+            "the gate: no token",
+            &["status"],
+            &[],
+            vec![],
+            port_only,
+            1,
+            0,
+        ),
     ] {
         answered_here(&rig, &c);
     }
@@ -88,11 +104,23 @@ fn hooks_status_as_the_shell_does() {
         one("a bare answer", &["status"], "{}"),
         one("a full answer", &["status"], FULL),
         one("--limit", &["status", "--limit", "5"], "{}"),
-        one("-n, the last wins", &["status", "-n", "5", "--limit", "7"], "{}"),
-        one("--json read as --limit's value", &["status", "--limit", "--json"], "{}"),
+        one(
+            "-n, the last wins",
+            &["status", "-n", "5", "--limit", "7"],
+            "{}",
+        ),
+        one(
+            "--json read as --limit's value",
+            &["status", "--limit", "--json"],
+            "{}",
+        ),
         one("other words are skipped", &["status", "x", "y"], "{}"),
         one("--json", &["status", "--json"], FULL),
-        one("--json: trailing newlines go", &["status", "--json"], "{\"a\":1}\n\n"),
+        one(
+            "--json: trailing newlines go",
+            &["status", "--json"],
+            "{\"a\":1}\n\n",
+        ),
         one("--json: echo reads -n", &["status", "--json"], "-n"),
         one("--json: echo reads -e", &["status", "--json"], "-e"),
         one("not JSON: the raw answer", &["status"], "<html>oops</html>"),
@@ -119,11 +147,7 @@ fn hooks_status_as_the_shell_does() {
             &["status"],
             r#"{"injections":{"cursor":5}}"#,
         ),
-        one(
-            "clis not a dict",
-            &["status"],
-            r#"{"clis":[1]}"#,
-        ),
+        one("clis not a dict", &["status"], r#"{"clis":[1]}"#),
         one(
             "events that are a number",
             &["status"],
@@ -149,11 +173,7 @@ fn hooks_status_as_the_shell_does() {
             &["status"],
             r#"{"sessions":{"s":{"owner":{"via":null,"proc":{"pid":0}},"evidence":7}}}"#,
         ),
-        one(
-            "totals not a dict",
-            &["status"],
-            r#"{"totals":[1]}"#,
-        ),
+        one("totals not a dict", &["status"], r#"{"totals":[1]}"#),
         one(
             "recent events a string: the headers, then raw",
             &["status"],
@@ -264,11 +284,7 @@ fn hooks_install_as_the_shell_does() {
                 args,
                 r#"{"error":"denied"}"#,
             ),
-            one(
-                "a string with error in it: raw",
-                args,
-                r#""an error here""#,
-            ),
+            one("a string with error in it: raw", args, r#""an error here""#),
             one("a list: raw", args, r#"["x"]"#),
             one("a number: raw", args, "5"),
             one("not JSON: raw", args, "nope"),
@@ -318,9 +334,33 @@ fn help_is_the_shell_s() {
     let rig = Rig::new("hooks", "help");
     for c in [
         case("-h alone", &["-h"], &[], vec![], owner_and_port, 1, 0),
-        case("--help after a verb", &["nope", "--help"], &[], vec![], owner_and_port, 1, 0),
-        case("install -h sends (bash bug)", &["install", "-h"], &[], vec![ok("{}")], owner_and_port, 0, 1),
-        case("status -h sends (bash bug)", &["status", "-h"], &[], vec![ok("{}")], owner_and_port, 0, 1),
+        case(
+            "--help after a verb",
+            &["nope", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "install -h sends (bash bug)",
+            &["install", "-h"],
+            &[],
+            vec![ok("{}")],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "status -h sends (bash bug)",
+            &["status", "-h"],
+            &[],
+            vec![ok("{}")],
+            owner_and_port,
+            0,
+            1,
+        ),
     ] {
         rig.check(&Case {
             compare: Compare::Shell,

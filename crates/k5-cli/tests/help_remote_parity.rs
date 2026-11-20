@@ -90,7 +90,9 @@ fn the_page_says_the_brand_s_name() {
         "{:?}",
         out.stdout
     );
-    assert!(out.stdout.contains(&format!("  {cli} remote logout --host HOST")));
+    assert!(out
+        .stdout
+        .contains(&format!("  {cli} remote logout --host HOST")));
     assert_eq!(out.code, Some(0));
     assert!(log.is_empty());
 }

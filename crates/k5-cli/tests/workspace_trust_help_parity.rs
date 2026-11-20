@@ -28,13 +28,45 @@ fn workspace_trust_page_as_the_shell_does() {
     for c in [
         // native: workspace trust
         case("alone", &["trust"], &[], vec![], owner_and_port, 0, 0),
-        case("an empty word", &["trust", ""], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "an empty word",
+            &["trust", ""],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         // native: workspace trust help
-        case("help", &["trust", "help", "x"], &[], vec![], owner_and_port, 0, 0),
-        case("the gate: no port", &["trust"], &[], vec![], owner_only, 1, 0),
+        case(
+            "help",
+            &["trust", "help", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "the gate: no port",
+            &["trust"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
         Case {
             env: with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
-            ..case("in a session", &["trust", "help"], &[], vec![], port_only, 0, 0)
+            ..case(
+                "in a session",
+                &["trust", "help"],
+                &[],
+                vec![],
+                port_only,
+                0,
+                0,
+            )
         },
     ] {
         answered_here(&rig, &c);

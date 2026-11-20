@@ -120,9 +120,20 @@ fn read_token_stdin_here_as_the_shell_does() {
 fn the_lines_say_the_brand_s_name() {
     let cli = k2_client::brand::CLI_NAME;
     let rig = Rig::new("read", "brand");
-    let c = case("brand", &["acme", "--token-stdin"], &[], vec![], owner_and_port, 2, 0);
+    let c = case(
+        "brand",
+        &["acme", "--token-stdin"],
+        &[],
+        vec![],
+        owner_and_port,
+        2,
+        0,
+    );
     let (out, log) = rig.binary(&c, false);
-    assert_eq!(out.stderr, format!("{cli} read: --token-stdin: no token on stdin\n"));
+    assert_eq!(
+        out.stderr,
+        format!("{cli} read: --token-stdin: no token on stdin\n")
+    );
     assert_eq!(out.code, Some(2));
     assert!(log.is_empty());
 }

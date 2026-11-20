@@ -15,13 +15,15 @@
 //!    shell's Python ([`super::super::request_post_piped_tcp`]). A POST
 //!    is sent once: only a connect that was refused or timed out is tried
 //!    again, and a 503 `migrating` (no handler ran). An answer with no
-//!    body is the answer (the reader's "unparseable" line, exit 1); no
+//!    body is the answer (the reader's "unparseable" line on stderr,
+//!    exit 1); no
 //!    answer (none in time, an empty reply, a 5xx with no body) is the
 //!    transport's line, then death by SIGPIPE as the shell's
 //!    `_k2_end_command` ends a pipe.
 //! 4. The Python ([`reader`]): the daemon's error, as JSON on stderr with
 //!    exit 3 when it is the "agents may not change connections" gate,
-//!    else `Error: <hint>` on stdout and exit 1; else `Connected to <x>`
+//!    else `Error: <hint>` on stderr and exit 1 (0.46.17: every error on
+//!    stderr, stdout only the result lines); else `Connected to <x>`
 //!    (or `Already connected to <x> (<message>)`), the workspace a remote
 //!    add reaches, and the daemon's warnings on stderr (`add`), or
 //!    `Disconnected.` (`remove`).
@@ -186,12 +188,12 @@ pub fn reader(raw: &[u8], verb: Verb) -> Shown {
     let Ok(d) = json::parse(&text) else {
         let head: String = text.chars().take(200).collect();
         return Shown {
-            stdout: format!(
+            stdout: String::new(),
+            stderr: format!(
                 "{}{}\n",
                 super::UNPARSEABLE,
                 py::repr(&Value::Str(Text::from(head)))
             ),
-            stderr: String::new(),
             exit: Exit::Error,
         };
     };
@@ -277,7 +279,7 @@ fn error_lines(err: &Value, stdout: &mut String, stderr: &mut String) -> Result<
         || py_in(GATED_HINTS[0], &hint, line::ALLOW)?
         || py_in(GATED_HINTS[1], &hint, line::NOT_ALLOWED)?;
     if !gated {
-        stdout.push_str(&format!("Error: {}\n", py::str_of(&hint)));
+        stderr.push_str(&format!("Error: {}\n", py::str_of(&hint)));
         return Ok(Exit::Error);
     }
     let hint = if py_in("Settings", &hint, line::SETTINGS)? {

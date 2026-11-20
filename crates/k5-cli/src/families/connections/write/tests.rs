@@ -51,7 +51,7 @@ fn the_python() {
         (5, "d = json.loads(raw)"),
         (
             7,
-            r"sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])",
+            r"sys.stderr.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])",
         ),
         (line::ERR, "err = d.get('error')"),
         (13, "code = err.get('code') or ''"),
@@ -90,7 +90,7 @@ fn the_python() {
             r"sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')",
         ),
         (32, "sys.exit(3)"),
-        (33, r"sys.stdout.write('Error: %s\n' % hint)"),
+        (33, r"sys.stderr.write('Error: %s\n' % hint)"),
     ] {
         assert_eq!(at(&add, n), text, "line {n}");
     }
@@ -175,16 +175,17 @@ fn what_a_remove_prints() {
 #[test]
 fn the_daemon_s_errors() {
     for verb in [Verb::Add, Verb::Remove] {
+        // On stderr since 0.46.17; stdout carries only results.
         let (o, e, c) = show(r#"{"error":{"code":"not_found","hint":"no such é"}}"#, verb);
-        assert_eq!((o.as_str(), e.as_str(), c), ("Error: no such é\n", "", 1));
-        let (o, _, c) = show(r#"{"error":{"code":"x"}}"#, verb);
-        assert_eq!((o.as_str(), c), ("Error: {\"code\": \"x\"}\n", 1));
-        let (o, _, c) = show(r#"{"error":"plain"}"#, verb);
-        assert_eq!((o.as_str(), c), ("Error: plain\n", 1));
-        let (o, _, c) = show(r#"{"error":false}"#, verb);
-        assert_eq!((o.as_str(), c), ("Error: False\n", 1));
-        let (o, _, c) = show(r#"{"error":{"hint":[1,"a"]}}"#, verb);
-        assert_eq!((o.as_str(), c), ("Error: [1, 'a']\n", 1));
+        assert_eq!((o.as_str(), e.as_str(), c), ("", "Error: no such é\n", 1));
+        let (_, e, c) = show(r#"{"error":{"code":"x"}}"#, verb);
+        assert_eq!((e.as_str(), c), ("Error: {\"code\": \"x\"}\n", 1));
+        let (_, e, c) = show(r#"{"error":"plain"}"#, verb);
+        assert_eq!((e.as_str(), c), ("Error: plain\n", 1));
+        let (_, e, c) = show(r#"{"error":false}"#, verb);
+        assert_eq!((e.as_str(), c), ("Error: False\n", 1));
+        let (_, e, c) = show(r#"{"error":{"hint":[1,"a"]}}"#, verb);
+        assert_eq!((e.as_str(), c), ("Error: [1, 'a']\n", 1));
     }
 }
 
@@ -220,8 +221,8 @@ fn the_gate() {
         "{e}"
     );
     // An empty text error is not the gate.
-    let (o, _, c) = show(r#"{"error":""}"#, Verb::Add);
-    assert_eq!((o.as_str(), c), ("Error: \n", 1));
+    let (o, e, c) = show(r#"{"error":""}"#, Verb::Add);
+    assert_eq!((o.as_str(), e.as_str(), c), ("", "Error: \n", 1));
     // A code that is the gate's and an empty hint: the teaching alone.
     let (_, e, c) = show(r#"{"error":{"code":"forbidden","hint":""}}"#, Verb::Add);
     assert_eq!(c, 3);
@@ -291,12 +292,13 @@ fn an_answer_that_is_not_json() {
         ),
     ] {
         let s = reader(body.as_bytes(), Verb::Add);
-        assert_eq!((s.stdout.as_str(), s.exit), (want, Exit::Error), "{body:?}");
+        assert_eq!((s.stderr.as_str(), s.exit), (want, Exit::Error), "{body:?}");
+        assert_eq!(s.stdout, "", "{body:?}: stdout carries only results");
     }
     let long = "é".repeat(300);
     let s = reader(long.as_bytes(), Verb::Remove);
     assert_eq!(
-        s.stdout,
+        s.stderr,
         format!(
             "Error: daemon returned an unparseable response: '{}'\n",
             "é".repeat(200)

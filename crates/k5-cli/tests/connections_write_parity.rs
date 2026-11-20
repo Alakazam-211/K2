@@ -44,12 +44,13 @@ fn traceback(c: Case) -> Case {
 }
 
 /// No answer on the left of the pipe: the line, then SIGPIPE (141);
-/// macOS's bash 3.2 runs the reader on an empty input instead.
+/// macOS's bash 3.2 runs the reader on an empty input instead (its line
+/// on stderr since 0.46.17).
 fn in_pipe(c: Case) -> Case {
     Case {
         compare: Compare::Bash32PipeReader {
-            stdout: UNPARSEABLE,
-            stderr: "",
+            stdout: "",
+            stderr: UNPARSEABLE,
         },
         ..c
     }

@@ -1,28 +1,33 @@
 //! `k5 ci`, as the shell CLI's `cmd_ci` answers it (`cli/src/ci.sh`): CI
-//! on K2 Compute, daemon-owned. The binary answers the bare line (`ci`:
-//! the help; `ci --json`: the unknown-verb line) and these verbs, each
-//! with `--json`: `status`, `run [--wait]`, `release [--plan|--wait]`,
-//! `stats`, `monitors`, `monitor add|mute|rm`, `tests`, `setup --plan`,
-//! `watch [on|off]`, `init`, `freeze`, `cache trust`, and `signer`
-//! (`signers`): `list`, `add`, `reveal`, `finish`, `remove`.
-//! `evidence`, `provenance` and `logs` stay the shell's for now (they
-//! write a run's files and call `compute fetch` and `compute logs`).
+//! on K2 Compute, daemon-owned. Every form is the binary's: the help
+//! (`ci` alone, `help`, `-h` or `--help`, or `-h`/`--help` after a verb
+//! before any `--`), and these verbs, each with `--json`: `status`, `run
+//! [--wait]`, `release [--plan|--wait]`, `stats`, `monitors`, `monitor
+//! add|mute|rm`, `tests`, `setup --plan`, `watch [on|off]`, `init`,
+//! `freeze`, `cache trust`, `evidence`, `provenance`, `logs` (`log`), and
+//! `signer` (`signers`): `list`, `add`, `reveal`, `finish`, `remove`
+//! ([`files`] has `evidence`, `provenance` and `logs`).
 //!
-//! What runs, in the shell's order: the settings, the two gates, `ci`'s
-//! tool (`compute`, an `id` tool: a session with no passport is refused,
-//! exit 3), the words ([`parse`]; each problem is one `usage:` line, exit
-//! 2), the verb's requests through `_compute_send` ([`Cp`]) with
-//! `_ci_call`'s refusal line and exit ([`call`]), its reader, then the
-//! EXIT trap's lines.
+//! What runs, in the shell's order: the settings, the virtual desktop's
+//! guard (skipped with `-h` or `--help` anywhere), the connection gate
+//! (skipped for the help forms the shell's prelude names), `ci`'s tool
+//! (`compute`, an `id` tool: a session with no passport is refused, exit
+//! 3), the words ([`parse`]; each problem is one `usage:` line, exit 2),
+//! the verb's requests through `_compute_send` ([`Cp`]) with `_ci_call`'s
+//! refusal line and exit ([`call`]), its reader, then the EXIT trap's
+//! lines.
 //!
-//! The shell answers these itself ([`run`] returns `None`): `-h` or
-//! `--help` anywhere (the help), a word that is not UTF-8, `HOOK_SOCK` set
-//! with a `CODEX_` variable exported, a port curl won't take, a `python3`
-//! the binary can't tell, the shell's own internal settings in the
-//! environment, a `CI_WAIT_SECS` that is not plain seconds, a duration
-//! its arithmetic would read past 64 bits, and a `freeze --until` time
-//! that is not one of the forms read here.
+//! The shell answers these itself ([`run`] returns `None`): a word that
+//! is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a
+//! port curl won't take, a `python3` the binary can't tell, the shell's
+//! own internal settings in the environment, a `CI_WAIT_SECS` that is not
+//! plain seconds, a duration its arithmetic would read past 64 bits, a
+//! `freeze --until` time that is not one of the forms read here, an
+//! `evidence` or `provenance` `--out` folder `mkdir -p` would refuse
+//! (its line is the system's own), `logs` with no `mktemp` (as `compute
+//! logs`), and, off Unix, an `evidence` that fetches files.
 
+pub mod files;
 pub mod py;
 pub mod render;
 pub mod signer;
@@ -44,64 +49,10 @@ use std::ffi::OsString;
 
 /// The router arm's words.
 pub const WORDS: &[&str] = &["ci"];
-/// The shell's but for [`VERBS`].
-pub const OWNER: Owner = Owner::Bash;
-/// The bare line and each native verb.
-pub const VERBS: &[Verb] = &[
-    Verb::bare(Owner::Native),
-    Verb {
-        words: &["status"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["run"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["release"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["stats"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["monitors"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["monitor"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["tests"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["setup"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["watch"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["init"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["freeze"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["cache"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["signer", "signers"],
-        owner: Owner::Native,
-    },
-];
+/// The binary answers every form.
+pub const OWNER: Owner = Owner::Native;
+/// No verb rows: the whole row is the binary's.
+pub const VERBS: &[Verb] = &[];
 
 /// `ci`'s tool in the shell's policy.
 pub const TOOL: &str = "compute";
@@ -441,9 +392,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
-        return None;
-    }
     let parsed = parse(&words)?;
     if let Parsed::Call(a) = &parsed {
         if !shell_free(a) {
@@ -464,16 +412,24 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    // `ci` alone (the help) skips the connection gate, not the guard.
-    let bare_help = words.is_empty();
+    // The guard, unless `-h` or `--help` is anywhere; then the
+    // connection gate, unless the prelude reads the line as the help.
+    let skip_gate = gate_skipped(&words);
+    let offline = words.iter().any(|w| matches!(*w, "-h" | "--help"));
     let gate = prelude::gate(&settings);
-    if gate.is_none() && !bare_help && settings.port_text.as_deref().and_then(curl_port).is_none()
-    {
+    let sends = !matches!(parsed, Parsed::Help | Parsed::Usage(_));
+    // A line that still sends with the gate skipped (`signer remove <fp>
+    // -h`), with no port curl takes or no daemon set up, is the shell's.
+    if sends && settings.port_text.as_deref().and_then(curl_port).is_none() {
+        if gate.is_none() || skip_gate {
+            return None;
+        }
+    } else if sends && skip_gate && gate.is_some() {
         return None;
     }
     match gate {
-        Some(g @ prelude::Gate::VirtualDesktop) => return Some(g.stop()),
-        Some(g) if !bare_help => return Some(g.stop()),
+        Some(g @ prelude::Gate::VirtualDesktop) if !offline => return Some(g.stop()),
+        Some(_) if !skip_gate => return Some(prelude::Gate::CannotConnect.stop()),
         _ => {}
     }
     let would_refuse = passport::current(args).would_refuse();
@@ -519,10 +475,44 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     Some(exit)
 }
 
+/// The prelude's `_skip_conn_gate` for `ci`: the help word right after
+/// it, or `-h`/`--help` before any `--`.
+pub fn gate_skipped(words: &[&str]) -> bool {
+    if matches!(
+        words.first().copied().unwrap_or(""),
+        "" | "help" | "--help" | "-h"
+    ) {
+        return true;
+    }
+    words[1..]
+        .iter()
+        .take_while(|w| **w != "--")
+        .any(|w| matches!(*w, "-h" | "--help"))
+}
+
 /// What the shell must answer before anything is sent.
 fn shell_free(a: &Ask) -> bool {
     if a.wait && matches!(a.sub.as_str(), "run" | "release") && wait_secs().is_none() {
         return false;
+    }
+    let p0 = a.pos.first().map_or("", String::as_str);
+    let sends = !p0.is_empty() && !a.out_dir.is_empty();
+    match a.sub.as_str() {
+        "evidence" | "provenance" if sends => {
+            if !writes::fetch::creatable(&a.out_dir) {
+                return false;
+            }
+            if a.sub == "evidence" && !a.no_files && !cfg!(unix) {
+                return false;
+            }
+        }
+        "logs" | "log" if !p0.is_empty() => {
+            let env = crate::offline::Env::current();
+            if crate::families::update::shell_program(&env, "mktemp").is_none() {
+                return false;
+            }
+        }
+        _ => {}
     }
     true
 }
@@ -782,6 +772,9 @@ fn verb(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
         "init" => init(cp, a, ws),
         "freeze" => freeze(cp, a, ws),
         "cache" => cache(cp, a, ws),
+        "evidence" => files::evidence(cp, a, ws),
+        "provenance" => files::provenance(cp, a, ws),
+        "logs" | "log" => files::logs(cp, a, ws),
         sub => usage(format!(
             "usage: unknown {CLI} ci verb '{sub}' ({CLI} ci --help)"
         )),

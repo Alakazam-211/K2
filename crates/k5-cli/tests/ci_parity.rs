@@ -779,3 +779,588 @@ fn ci_lines_say_the_brand_s_name() {
         format!("usage: {cli} ci signer [list|add|reveal|finish|remove] ({cli} ci --help)\n")
     );
 }
+
+/// Every file under `dir`, by its path there.
+fn tree(dir: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let Ok(list) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in list {
+            let p = e.expect("a folder entry").path();
+            if p.is_dir() {
+                todo.push(p);
+            } else {
+                let rel = p.strip_prefix(dir).expect("under the folder");
+                out.insert(
+                    rel.to_string_lossy().into_owned(),
+                    std::fs::read(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display())),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// The case compared as the rig does, then the files each side wrote
+/// under `dir` (the project's): the same paths and bytes, and `want` among
+/// them.
+fn check_files(rig: &Rig, c: &Case, dir: &str, want: &[&str]) {
+    rig.check(c);
+    let d = rig.proj.join(dir);
+    let mut got = Vec::new();
+    for (side, bash) in [(Side::Bash, true), (Side::Rust, false)] {
+        let _ = std::fs::remove_dir_all(&d);
+        rig.prepare(side, c);
+        rig.run(bash, c);
+        rig.read(side, !bash, c.name);
+        got.push(tree(&d));
+    }
+    let _ = std::fs::remove_dir_all(&d);
+    assert_eq!(got[0], got[1], "{}: the files each side wrote", c.name);
+    for w in want {
+        assert!(got[0].contains_key(*w), "{}: no {w} in {:?}", c.name, got[0].keys());
+    }
+}
+
+const TRUST: &str = r#""trust":{"nodeKeys":{"fp2":{"pem":"-----BEGIN PUBLIC KEY-----\nBBB\n-----END PUBLIC KEY-----\n"},"fp1":{"pem":"-----BEGIN PUBLIC KEY-----\nAAA\n-----END PUBLIC KEY-----\n"}},"statements":[{"body":"{\"node\":\"n1\",\"é\":1}","sig":"s1"}],"owners":[{"rosterKeyFp":"rk1","name":"ann é"},{"rosterKeyFp":"rk2"}],"rosters":[{"nodes":["n1"],"b":2,"a":1}]}"#;
+
+fn provenance_json() -> String {
+    format!(
+        r#"{{"short":"r1234567","statements":{{"mac":{{"short":"j1234567","files":2,"line":"{{\"payloadType\":\"x\",\"é\":1}}\n"}},"lin":{{"short":"j7654321","files":0,"line":"{{}}\n"}}}},"missing":{{"lint":"no artifacts kept","docs":"never ran"}},{TRUST}}}"#
+    )
+}
+
+fn evidence_json() -> String {
+    format!(
+        r#"{{"short":"r9","project":"acme","version":"1.2.3","file":"evidence-r9.json","bundle":{{"z":"é","receipts":{{"mac":{{"job":"j1"}},"lin":{{"job":"j2"}}}},"provenance":{{"mac":{{"payloadType":"application/vnd.in-toto+json","payload":"e30=","signatures":[{{"keyid":"k","sig":"s"}}]}}}}}},"jobs":{{"mac":{{"job":"j1","role":"build","build":"aarch64-apple","short":"j1","node":"n1","artifacts":["a.txt"]}},"lin":{{"job":"j2","role":"test","build":"x86_64-linux","short":"j2","node":"n2","artifacts":[]}}}},"dual":{{"aarch64-apple":{{"build":"mac2","verify":"match","compare":{{"matched":["a.txt"],"differ":["b.txt"],"only_one":[]}}}}}},"notes":["one note é"],{TRUST}}}"#
+    )
+}
+
+const J2_LIST: &str = r#"{"short":"j2"}"#;
+const J1_LIST: &str = r#"{"short":"j1","artifacts":[{"name":"a.txt"}]}"#;
+const J1_A: &str = r#"{"name":"a.txt","offset":0,"eof":true,"data":"aGVsbG8=","sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824","bytes":5}"#;
+
+#[test]
+fn ci_provenance_writes_as_the_shell_does() {
+    let rig = Rig::new(VERB, "prov");
+    check_files(
+        &rig,
+        &case(
+            "provenance",
+            &["provenance", "r1234567", "--out", "prov"],
+            &[],
+            vec![ok(&provenance_json())],
+            owner_and_port,
+            0,
+            1,
+        ),
+        "prov",
+        &[
+            "provenance/mac.intoto.jsonl",
+            "trust/owners.json",
+            "trust/nodes/fp1.pem",
+            "trust/rosters/rk1.json",
+        ],
+    );
+    check_files(
+        &rig,
+        &case(
+            "provenance --json, a workspace",
+            &[
+                "provenance",
+                "r1234567",
+                "--out",
+                "prov/deeper/",
+                "--json",
+                "--workspace",
+                "/w/é",
+            ],
+            &[],
+            vec![ok(&provenance_json())],
+            owner_and_port,
+            0,
+            1,
+        ),
+        "prov",
+        &["deeper/provenance/lin.intoto.jsonl"],
+    );
+    check_files(
+        &rig,
+        &case(
+            "provenance: nothing to write but owners.json",
+            &["provenance", "r1", "--out", "empty"],
+            &[],
+            vec![ok(r#"{"short":"r1"}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        "empty",
+        &["trust/owners.json"],
+    );
+    let v = vec![
+        case(
+            "provenance with no --out",
+            &["provenance", "r1"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "provenance with no run",
+            &["provenance", "--out", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "provenance: no such run",
+            &["provenance", "r1", "--out", "nf"],
+            &[],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"ci_run_not_found","hint":"no run r1"}}"#.into(),
+            )],
+            owner_and_port,
+            4,
+            1,
+        ),
+        traceback(case(
+            "provenance: a statement with no line",
+            &["provenance", "r1", "--out", "odd1"],
+            &[],
+            vec![ok(r#"{"short":"r1","statements":{"mac":{"short":"j"}}}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "provenance: a line that is no string",
+            &["provenance", "r1", "--out", "odd2"],
+            &[],
+            vec![ok(r#"{"short":"r1","statements":{"mac":{"line":5}}}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "provenance: a roster key that is no string",
+            &["provenance", "r1", "--out", "odd3"],
+            &[],
+            vec![ok(
+                r#"{"short":"r1","trust":{"owners":[{"rosterKeyFp":7}],"rosters":[{}]}}"#,
+            )],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "provenance: files that are no number",
+            &["provenance", "r1", "--out", "odd4"],
+            &[],
+            vec![ok(
+                r#"{"short":"r1","statements":{"mac":{"short":"j","files":"two","line":"{}\n"}}}"#,
+            )],
+            owner_and_port,
+            1,
+            1,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn ci_evidence_writes_and_fetches_as_the_shell_does() {
+    let rig = Rig::new(VERB, "evidence");
+    check_files(
+        &rig,
+        &case(
+            "evidence: the bundle, the statements, trust and each job's files",
+            &["evidence", "r9", "--out", "ev"],
+            &[],
+            vec![
+                ok(&evidence_json()),
+                ok(J2_LIST),
+                ok(J1_LIST),
+                ok(J1_A),
+            ],
+            owner_and_port,
+            0,
+            4,
+        ),
+        "ev",
+        &[
+            "evidence-r9.json",
+            "provenance/mac.intoto.jsonl",
+            "trust/owners.json",
+            "mac/a.txt",
+        ],
+    );
+    check_files(
+        &rig,
+        &case(
+            "evidence --reported: the named file in the bundle",
+            &["evidence", "r9", "--out", "evr", "--reported", "a.txt"],
+            &[],
+            vec![
+                ok(&evidence_json()),
+                ok(J2_LIST),
+                ok(J1_LIST),
+                ok(J1_A),
+            ],
+            owner_and_port,
+            0,
+            4,
+        ),
+        "evr",
+        &["evidence-r9.json", "mac/a.txt"],
+    );
+    check_files(
+        &rig,
+        &case(
+            "evidence --json --no-files",
+            &["evidence", "r9", "--out", "evj", "--json", "--no-files"],
+            &[],
+            vec![ok(&evidence_json())],
+            owner_and_port,
+            0,
+            1,
+        ),
+        "evj",
+        &["evidence-r9.json", "trust/owners.json"],
+    );
+    let v = vec![
+        case(
+            "evidence with no --out",
+            &["evidence", "r9"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "evidence --reported with --no-files",
+            &[
+                "evidence",
+                "r9",
+                "--out",
+                "x",
+                "--no-files",
+                "--reported",
+                "a",
+            ],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "evidence --reported: no job wrote it",
+            &["evidence", "r9", "--out", "evn", "--reported", "b.txt"],
+            &[],
+            vec![
+                ok(&evidence_json()),
+                ok(J2_LIST),
+                ok(J1_LIST),
+                ok(J1_A),
+            ],
+            owner_and_port,
+            1,
+            4,
+        ),
+        case(
+            "evidence --reported: a path out of the job's files",
+            &["evidence", "r9", "--out", "evp", "--reported", "../a.txt"],
+            &[],
+            vec![
+                ok(&evidence_json()),
+                ok(J2_LIST),
+                ok(J1_LIST),
+                ok(J1_A),
+            ],
+            owner_and_port,
+            1,
+            4,
+        ),
+        case(
+            "evidence: a job's files can't be fetched",
+            &["evidence", "r9", "--out", "evf"],
+            &[],
+            vec![
+                ok(&evidence_json()),
+                ok(J2_LIST),
+                Reply::Answer(
+                    404,
+                    r#"{"error":{"code":"job_not_found","hint":"no job j1"}}"#.into(),
+                ),
+            ],
+            owner_and_port,
+            1,
+            3,
+        ),
+        case(
+            "evidence: refused",
+            &["evidence", "r9", "--out", "evx"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        traceback(case(
+            "evidence: a file name that is no string",
+            &["evidence", "r9", "--out", "evo1"],
+            &[],
+            vec![ok(r#"{"short":"r9","file":5,"bundle":{}}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "evidence: jobs that are no object",
+            &["evidence", "r9", "--out", "evo2"],
+            &[],
+            vec![ok(
+                r#"{"short":"r9","file":"e.json","bundle":{},"jobs":[]}"#,
+            )],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "evidence: a note that is no string",
+            &["evidence", "r9", "--out", "evo3", "--no-files"],
+            &[],
+            vec![ok(
+                r#"{"short":"r9","file":"e.json","bundle":{},"jobs":{},"notes":[5]}"#,
+            )],
+            owner_and_port,
+            1,
+            1,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+fn log_page(data: &str) -> String {
+    format!(
+        r#"{{"job":{{"short":"abcd1234"}},"cursor":10,"chunks":[{{"seq":0,"stream":"out","data":"{data}"}}],"attempt":1,"generation":1,"attempts":[]}}"#
+    )
+}
+
+const LOG_JOB: &str = r#"{"short":"abcd1234","node":"linux-1","state":"done","argv":["cargo","test"],"exitCode":0,"attempt":1,"generation":1,"result":{"exit":0}}"#;
+const LOG_DONE: &str = r#"{"job":{"short":"abcd1234"},"cursor":10,"chunks":[],"attempt":1,"generation":1,"attempts":[]}"#;
+const LOG_TESTED: &str = r#"{"short":"abcd1234","state":"done","result":{"tests":{"failed":1,"errors":0,"passed":3,"skipped":0,"total":4,"failing":[{"name":"b","classname":"suite","message":"boom"}]}}}"#;
+
+#[test]
+fn ci_logs_answer_as_the_shell_does() {
+    let rig = Rig::new(VERB, "logs");
+    let many: Vec<String> = (0..4000)
+        .map(|i| format!(r#"{{"name":"check-{i:05}-é","state":"queued","description":"waits for a node"}}"#))
+        .collect();
+    let big = format!(r#"{{"run":{{"short":"r1","checks":[{}]}}}}"#, many.join(","));
+    let v = vec![
+        case(
+            "logs: each check's heading and log",
+            &["logs", "r1234567"],
+            &[],
+            vec![
+                ok(&run_json("failure")),
+                ok(LOG_JOB),
+                ok(&log_page("aGVsbG8K")),
+                ok(LOG_DONE),
+                ok(LOG_JOB),
+                ok(&log_page("d29ybGQK")),
+                ok(LOG_DONE),
+            ],
+            owner_and_port,
+            0,
+            7,
+        ),
+        case(
+            "log --check docs: never submitted",
+            &["log", "r1234567", "--check", "docs", "--workspace", "/w"],
+            &[],
+            vec![ok(&run_json("failure"))],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "logs --failures --check lint",
+            &["logs", "main", "--failures", "--check", "lint"],
+            &[],
+            vec![
+                ok(&run_json("failure")),
+                ok(LOG_TESTED),
+                ok(LOG_TESTED),
+                ok(&log_page("aGVsbG8K")),
+                ok(LOG_DONE),
+            ],
+            owner_and_port,
+            0,
+            5,
+        ),
+        case(
+            "logs: a job's log refused, the walk goes on",
+            &["logs", "r1", "--check", "test"],
+            &[],
+            vec![
+                ok(&run_json("failure")),
+                Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no job"}}"#.into()),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "logs: no such check",
+            &["logs", "r1", "--check", "nope"],
+            &[],
+            vec![ok(&run_json("failure"))],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "logs with no run",
+            &["logs"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "logs: 4000 checks never submitted (above 256 KiB)",
+            &["logs", "r1"],
+            &[],
+            vec![ok(&big)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "logs: no answer",
+            &["logs", "r1"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        traceback(case(
+            "logs: a run that is no object",
+            &["logs", "r1"],
+            &[],
+            vec![ok(r#"{"run":[1]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "logs: a job that can't be cut",
+            &["logs", "r1"],
+            &[],
+            vec![ok(r#"{"run":{"checks":[{"name":"a","state":"x","job":7}]}}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// The help is the binary's: every form the shell's prelude reads as
+/// the help, with no daemon set up and behind the guard too.
+#[test]
+fn ci_help_forms() {
+    let rig = Rig::new(VERB, "help");
+    let mut v = Vec::new();
+    for (name, args) in [
+        ("-h", &["-h"][..]),
+        ("--help", &["--help"]),
+        ("help", &["help"]),
+        ("evidence -h", &["evidence", "r9", "--out", "d", "-h"]),
+        ("provenance --help", &["provenance", "--help"]),
+        ("logs -h", &["logs", "r1", "-h"]),
+        ("status --help after a flag", &["status", "--json", "--help"]),
+        ("an unknown verb with -h", &["bogus", "-h"]),
+    ] {
+        v.push(case(name, args, &[], vec![], owner_and_port, 0, 0));
+    }
+    for (name, args) in [
+        ("-h with no daemon set up", &["-h"][..]),
+        ("help with no daemon set up", &["help"]),
+        ("logs -h with no daemon set up", &["logs", "r1", "-h"]),
+    ] {
+        v.push(case(name, args, &[], vec![], nothing, 0, 0));
+    }
+    v.push(case(
+        "-h behind the guard",
+        &["status", "-h"],
+        &[("K2_NO_OWNER_FALLBACK", "1")],
+        vec![],
+        port_only,
+        0,
+        0,
+    ));
+    v.push(case(
+        "help behind the guard: refused",
+        &["help"],
+        &[("K2_NO_OWNER_FALLBACK", "1")],
+        vec![],
+        port_only,
+        3,
+        0,
+    ));
+    v.push(case(
+        "-h after -- is a word of the check: the gate",
+        &["init", "--", "make", "-h"],
+        &[],
+        vec![],
+        nothing,
+        1,
+        0,
+    ));
+    v.push(case(
+        "-h in a session with no passport",
+        &["-h"],
+        &[("K2_HOOK_SOCK", "{sock}")],
+        vec![],
+        owner_and_port,
+        3,
+        0,
+    ));
+    // A bash bug, copied (cli/src/ci.sh, cmd_ci's signer branch reads
+    // only the word after `signer` for the help): `signer remove <fp> -h`
+    // removes the signer. This row flips to "sends nothing" when the
+    // shell is fixed.
+    v.push(case(
+        "signer remove <fp> -h: the shell acts (a bash bug)",
+        &["signer", "remove", "fp1", "-h"],
+        &[],
+        vec![ok(r#"{"ok":true}"#)],
+        owner_and_port,
+        0,
+        1,
+    ));
+    for c in v {
+        rig.check(&c);
+    }
+}

@@ -71,3 +71,42 @@ fn compute_json_puts_secrets_first() {
         r#"{"code": "c", "name": "m", "count": 3}"#
     );
 }
+
+#[test]
+fn the_gate_skips_the_prelude_s_help_forms() {
+    use super::gate_skipped;
+    for words in [
+        &[][..],
+        &["help"],
+        &["-h"],
+        &["--help"],
+        &["status", "--json", "-h"],
+        &["signer", "remove", "x", "--help"],
+    ] {
+        assert!(gate_skipped(words), "{words:?}");
+    }
+    for words in [
+        &["status"][..],
+        &["init", "--", "make", "-h"],
+        &["status", "help"],
+    ] {
+        assert!(!gate_skipped(words), "{words:?}");
+    }
+}
+
+#[test]
+fn the_files_helpers_read_paths_as_python_and_lines_as_read() {
+    use super::files::{join, tab_fields};
+    assert_eq!(join("out", "provenance"), "out/provenance");
+    assert_eq!(join("out/", "x"), "out/x");
+    assert_eq!(join("out", "/abs"), "/abs");
+    assert_eq!(join("", "x"), "x");
+    assert_eq!(
+        tab_fields("a\tb c\t\n\t\tlab\t\tjob\tmore\nlast"),
+        vec![
+            ("a".to_string(), "b c".to_string()),
+            ("lab".to_string(), "job\tmore".to_string()),
+        ]
+    );
+    assert_eq!(tab_fields("-\tdocs\n"), vec![("-".to_string(), "docs".to_string())]);
+}

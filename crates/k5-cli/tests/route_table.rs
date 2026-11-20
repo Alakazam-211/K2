@@ -343,12 +343,6 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
                 "\n    daemon)\n        case \"${2:-status}\" in\n",
                 &[],
             ),
-            ["ci"] => case_verbs_are_its_arms(
-                noun,
-                "ci.sh",
-                "\n    local q=\"\" body=\"\"\n    case \"$sub\" in\n",
-                &["signer", "signers"],
-            ),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -777,7 +771,7 @@ fn every_router_form_is_a_k5_row_or_listed_in_the_native_bar_ceiling() {
 }
 
 /// A family whose verbs are one `case` of the shell's (`daemon` in
-/// `cli/src/router.sh`, `cmd_ci` in `cli/src/ci.sh`): each verb row's
+/// `cli/src/router.sh`): each verb row's
 /// words are words of that case's arms (up to its `esac`), or of `extra`
 /// (verbs the function takes before the case).
 fn case_verbs_are_its_arms(

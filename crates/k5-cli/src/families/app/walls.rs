@@ -380,7 +380,10 @@ fn db_fail_400(body: &[u8]) -> Shown {
         let code = py::dget_or(&e, "code", py::text("usage"), 7)?;
         let hint = py::dget_or(&e, "hint", py::text(""), 7)?;
         let line = json::to_string(
-            &Value::Object(vec![(Text::from("error"), code), (Text::from("hint"), hint)]),
+            &Value::Object(vec![
+                (Text::from("error"), code),
+                (Text::from("hint"), hint),
+            ]),
             &Options::default(),
         )
         .unwrap_or_default();
@@ -543,11 +546,7 @@ pub fn box_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     let v = py::load(body, 3)?;
     let app = py::idx(&v, "app", 4)?;
     let wall = py::idx(&v, "wall", 4)?;
-    o.line(&format!(
-        "{}  box services ({})",
-        py::s(&app),
-        py::s(&wall)
-    ));
+    o.line(&format!("{}  box services ({})", py::s(&app), py::s(&wall)));
     o.line(&indented(&v, "  ", "note", 5)?);
     let svcs = py::or(py::dget(&v, "services", 6)?, py::empty_list());
     if !py::truthy(&svcs) {
@@ -684,7 +683,10 @@ pub fn db_status_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
         let db = py::idx(&c, "db", 13)?;
         let major = py::dget(&c, "major", 13)?;
         let cluster = py::dget(&c, "cluster", 13)?;
-        let roles = py::or(py::dget(&c, "roles", 14)?, Value::Array(vec![py::text("?")]));
+        let roles = py::or(
+            py::dget(&c, "roles", 14)?,
+            Value::Array(vec![py::text("?")]),
+        );
         let login = first(&roles, 14)?;
         let door = if py::truthy(&py::dget(&c, "doorOpen", 14)?) {
             "open"

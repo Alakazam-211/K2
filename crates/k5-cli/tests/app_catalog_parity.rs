@@ -52,7 +52,11 @@ fn list_and_show_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "catalog");
     let v = vec![
         read("catalog", &["catalog"], LIST),
-        read("catalog list, a word after it", &["catalog", "list", "x"], LIST),
+        read(
+            "catalog list, a word after it",
+            &["catalog", "list", "x"],
+            LIST,
+        ),
         read("catalog --json", &["catalog", "--json"], LIST),
         read("catalog list --json", &["catalog", "list", "--json"], LIST),
         read("catalog, empty", &["catalog"], r#"{}"#),
@@ -72,7 +76,11 @@ fn list_and_show_answer_as_the_shell_does() {
         stop("catalog show: no entry", &["catalog", "show"], 2),
         stop("catalog show: two", &["catalog", "show", "a", "b"], 2),
         stop("catalog: an unknown flag", &["catalog", "list", "--x"], 2),
-        stop("catalog: --id given last", &["catalog", "show", "a", "--id"], 1),
+        stop(
+            "catalog: --id given last",
+            &["catalog", "show", "a", "--id"],
+            1,
+        ),
         traceback(ends(
             "catalog: a label that is a number",
             &["catalog"],
@@ -126,11 +134,26 @@ fn jobs_answer_as_the_shell_does() {
     let running = r#"{"job":{"id":"cj-5","state":"running","step":"pull"}}"#;
     let v = vec![
         ends("job: done", &["catalog", "job", "cj-1"], &done, 0),
-        ends("job: failed, a command", &["catalog", "job", "cj-2"], &failed, 1),
-        ends("job: failed, a retry", &["catalog", "jobs", "cj-3"], retry, 1),
+        ends(
+            "job: failed, a command",
+            &["catalog", "job", "cj-2"],
+            &failed,
+            1,
+        ),
+        ends(
+            "job: failed, a retry",
+            &["catalog", "jobs", "cj-3"],
+            retry,
+            1,
+        ),
         ends("job: waiting", &["catalog", "job", "cj-4"], waiting, 2),
         ends("job: running", &["catalog", "job", "cj-5"], running, 2),
-        ends("job --json", &["catalog", "job", "cj-1", "--json"], &done, 0),
+        ends(
+            "job --json",
+            &["catalog", "job", "cj-1", "--json"],
+            &done,
+            0,
+        ),
         read(
             "jobs",
             &["catalog", "jobs"],
@@ -141,7 +164,11 @@ fn jobs_answer_as_the_shell_does() {
             &["catalog", "job", "cj-1", "--app", "git 1", "--id", "z"],
             r#"{"jobs":[]}"#,
         ),
-        read("jobs --json", &["catalog", "jobs", "--json"], r#"{"jobs":[]}"#),
+        read(
+            "jobs --json",
+            &["catalog", "jobs", "--json"],
+            r#"{"jobs":[]}"#,
+        ),
         stop("job: --app given last", &["catalog", "job", "--app"], 1),
         traceback(ends(
             "job: a step that is a list",

@@ -87,11 +87,19 @@ fn egress_answers_as_the_shell_does() {
         ),
         stop("egress: the page", &["egress"], 0),
         stop("egress help: the page", &["egress", "help"], 0),
-        stop("egress: no App, the page on stderr", &["egress", "--json"], 2),
+        stop(
+            "egress: no App, the page on stderr",
+            &["egress", "--json"],
+            2,
+        ),
         stop("egress log: no App", &["egress", "log"], 2),
         stop("egress: a host word", &["egress", "acme", "api.example"], 2),
         stop("egress: an unknown flag", &["egress", "acme", "--zap"], 2),
-        stop("egress: --tail given last", &["egress", "acme", "--tail"], 1),
+        stop(
+            "egress: --tail given last",
+            &["egress", "acme", "--tail"],
+            1,
+        ),
         fail(
             "egress: a host that is a number",
             &["egress", "acme"],
@@ -139,12 +147,28 @@ fn box_service_answers_as_the_shell_does() {
             &["box-services", "acme", "--reason", "r", "--app-port", "1"],
             r#"{"app":"acme","wall":"process"}"#,
         ),
-        read("box-service --json", &["box-service", "acme", "--json"], BOX),
+        read(
+            "box-service --json",
+            &["box-service", "acme", "--json"],
+            BOX,
+        ),
         stop("box-service: the page", &["box-service"], 0),
         stop("box-service: no App", &["box-service", "--json"], 2),
-        stop("box-service: a second word", &["box-service", "acme", "pg"], 2),
-        stop("box-service: an unknown flag", &["box-service", "acme", "--x"], 2),
-        stop("box-service: --reason given last", &["box-service", "acme", "--reason"], 1),
+        stop(
+            "box-service: a second word",
+            &["box-service", "acme", "pg"],
+            2,
+        ),
+        stop(
+            "box-service: an unknown flag",
+            &["box-service", "acme", "--x"],
+            2,
+        ),
+        stop(
+            "box-service: --reason given last",
+            &["box-service", "acme", "--reason"],
+            1,
+        ),
         fail(
             "box-service: a note that is a number",
             &["box-service", "acme"],
@@ -175,7 +199,14 @@ fn db_status_answers_as_the_shell_does() {
         read(
             "database status, no Postgres, none",
             &[
-                "database", "status", "acme", "--timeout", "1h30m", "--major", "17", "--as=X",
+                "database",
+                "status",
+                "acme",
+                "--timeout",
+                "1h30m",
+                "--major",
+                "17",
+                "--as=X",
                 "--wait",
             ],
             r#"{"app":"acme","kind":"process"}"#,
@@ -186,11 +217,31 @@ fn db_status_answers_as_the_shell_does() {
         stop("db: an unknown verb", &["db", "zap"], 1),
         stop("db status: no App", &["db", "status"], 1),
         stop("db status: two Apps", &["db", "status", "a", "b é"], 1),
-        stop("db status: a value missing", &["db", "status", "a", "--db"], 1),
-        stop("db status: an empty value", &["db", "status", "a", "--as", ""], 1),
-        stop("db status: an unknown flag", &["db", "status", "a", "--name=x"], 1),
-        stop("db status: a bad major", &["db", "status", "a", "--major", "7"], 1),
-        stop("db status: a bad duration", &["db", "status", "a", "--timeout", "5x"], 2),
+        stop(
+            "db status: a value missing",
+            &["db", "status", "a", "--db"],
+            1,
+        ),
+        stop(
+            "db status: an empty value",
+            &["db", "status", "a", "--as", ""],
+            1,
+        ),
+        stop(
+            "db status: an unknown flag",
+            &["db", "status", "a", "--name=x"],
+            1,
+        ),
+        stop(
+            "db status: a bad major",
+            &["db", "status", "a", "--major", "7"],
+            1,
+        ),
+        stop(
+            "db status: a bad duration",
+            &["db", "status", "a", "--timeout", "5x"],
+            2,
+        ),
         case(
             "db status: a 400",
             &["db", "status", "acme"],
@@ -277,7 +328,10 @@ fn egress_log_a_large_list() {
         .collect();
     let body = format!(r#"{{"lines":[{}]}}"#, rows.join(","));
     assert!(body.len() > 256 * 1024, "{}", body.len());
-    for args in [&["egress", "log", "acme"][..], &["egress", "log", "acme", "--json"]] {
+    for args in [
+        &["egress", "log", "acme"][..],
+        &["egress", "log", "acme", "--json"],
+    ] {
         rig.check(&case(
             "a large list",
             args,

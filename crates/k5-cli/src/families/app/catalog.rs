@@ -100,7 +100,10 @@ fn loop_words(sub: &str, words: &[&str]) -> Result<Ask, Stop> {
                 continue;
             }
             _ if w.starts_with('-') => {
-                return Err(Stop::usage(format!("Unknown flag: {w}{}", usage::FLAG_TAIL)))
+                return Err(Stop::usage(format!(
+                    "Unknown flag: {w}{}",
+                    usage::FLAG_TAIL
+                )))
             }
             _ => args.push(w),
         }
@@ -489,11 +492,7 @@ fn end_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
         let w = py::or(py::dget(&j, "waiting", 23)?, empty_dict());
         let step = py::dget(&j, "step", 24)?;
         let reason = py::dget(&w, "reason", 24)?;
-        o.line(&format!(
-            "waiting at {}: {}",
-            py::s(&step),
-            py::s(&reason)
-        ));
+        o.line(&format!("waiting at {}: {}", py::s(&step), py::s(&reason)));
         if py::truthy(&py::dget(&w, "requests", 25)?) {
             let requests = py::join(", ", &py::idx(&w, "requests", 26)?, 26)?;
             o.line(&format!("  request(s): {requests}"));
@@ -538,7 +537,10 @@ mod tests {
     fn the_words_read_as_the_shell_reads_them() {
         assert_eq!(p(&[]), Some(Ok(Ask::List { json: false })));
         assert_eq!(p(&["--json"]), Some(Ok(Ask::List { json: true })));
-        assert_eq!(p(&["list", "x", "--json"]), Some(Ok(Ask::List { json: true })));
+        assert_eq!(
+            p(&["list", "x", "--json"]),
+            Some(Ok(Ask::List { json: true }))
+        );
         assert_eq!(p(&["help"]), Some(Ok(Ask::Page)));
         assert_eq!(p(&["check", "a", "b"]), None);
         assert_eq!(p(&["retry", "j"]), None);
@@ -558,12 +560,11 @@ mod tests {
                 json: false
             }))
         );
-        assert_eq!(
-            p(&["job", "--id"]),
-            Some(Err(Stop::silent(Exit::Error)))
-        );
+        assert_eq!(p(&["job", "--id"]), Some(Err(Stop::silent(Exit::Error))));
         assert!(matches!(p(&["zap"]), Some(Err(s)) if s.line.ends_with("app catalog --help)")));
-        assert!(matches!(p(&["list", "--x"]), Some(Err(s)) if s.line.starts_with("Unknown flag: --x")));
+        assert!(
+            matches!(p(&["list", "--x"]), Some(Err(s)) if s.line.starts_with("Unknown flag: --x"))
+        );
     }
 
     #[test]
@@ -581,6 +582,8 @@ mod tests {
         assert_eq!(waiting.exit, Exit::Usage);
         let raised = one_job(br#"[1]"#);
         assert_eq!(raised.exit, Exit::Error);
-        assert!(raised.stderr.ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
+        assert!(raised
+            .stderr
+            .ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
     }
 }

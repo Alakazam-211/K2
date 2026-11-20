@@ -62,8 +62,8 @@ pub mod phone;
 pub mod py;
 pub mod reads;
 pub mod updates;
-pub mod walls;
 pub mod wallet;
+pub mod walls;
 
 use call::Ctx;
 

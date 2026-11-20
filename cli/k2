@@ -17421,7 +17421,9 @@ EOF
         if [ -n "$rooms_csv" ]; then
             rooms_j="$(K2_GR_ROOMS="$rooms_csv" python3 -c 'import json,os; print(json.dumps([r.strip() for r in os.environ["K2_GR_ROOMS"].split(",") if r.strip()]))')"
         fi
-        _app_rt_post /cli/app/test-guest/add "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_role="$role" K2_CJ_expires="$expires" K2_CJ_password="$pw" K2_CJ_rooms_j="$rooms_j")"
+        # The password is a secret key (_s): it reaches python on stdin, never
+        # argv or the environment (ps shows both to every process of this user).
+        _app_rt_post /cli/app/test-guest/add "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_role="$role" K2_CJ_expires="$expires" K2_CJ_password_s="$pw" K2_CJ_rooms_j="$rooms_j")"
         _app_grace_done "$json_out"
     elif [ "$action" = password ]; then
         [ -z "$name" ] && { echo "usage: k2 app user password <name> --test --password-stdin" >&2; exit 2; }
@@ -17429,7 +17431,8 @@ EOF
         local pw=""
         IFS= read -r pw || true
         [ -n "$pw" ] || { echo "--password-stdin: no password on stdin" >&2; exit 2; }
-        _app_rt_post /cli/app/test-guest/password "$(_compute_json K2_CJ_username="$name" K2_CJ_password="$pw")"
+        # The password reaches python on stdin, never argv or the environment.
+        _app_rt_post /cli/app/test-guest/password "$(_compute_json K2_CJ_username="$name" K2_CJ_password_s="$pw")"
         [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
         if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
         printf '%s' "$_CP_BODY" | python3 -c '

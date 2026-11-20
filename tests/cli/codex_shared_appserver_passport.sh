@@ -38,6 +38,10 @@
 #  10. Where ps can't run: the parent walk from python3 decides; every way
 #      refused means the marker alone (one note); garbage or a partial
 #      answer counts as shared.
+#  11. Scoped passports off server-wide (a pane id, no passport, no socket):
+#      today's behaviour, even under a shared server. Windows: counts as
+#      every way refused (the marker alone, one note); another tab's marker
+#      or none is still refused.
 #
 # No daemon build; HTTP is a tiny python stub. HOME is sandboxed.
 # bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
@@ -228,6 +232,7 @@ GONE_SOCK="$WORK/run/cells/dead-session.sock"
 cell() {
     env -u K2SO_HOOK_SOCK -u K2SO_HOOK_TOKEN -u K2SO_PORT -u CODEX_THREAD_ID -u CODEX_HOME -u CODEX_SANDBOX \
         -u CODEX_SESSION_ID -u K2_CODEX_TAB_ISOLATED -u K2_CODEX_PASSPORT_BIND -u K5_HOOK_SOCK -u K5_HOOK_TOKEN \
+        -u K2_PANE_ID -u K5_PANE_ID -u K2SO_PANE_ID \
         K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" K2_HOOK_TOKEN="$SCOPED" \
         K2_PROJECT_PATH="$WORK/proj" "$@"
 }
@@ -397,7 +402,7 @@ run_codex_outside() {
     reset_logs
     set +e
     env -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K5_HOOK_SOCK -u K2_HOOK_TOKEN -u K2SO_HOOK_TOKEN -u K5_HOOK_TOKEN \
-        -u K2SO_PORT -u K2_CODEX_TAB_ISOLATED -u K2_CODEX_PASSPORT_BIND \
+        -u K2SO_PORT -u K2_CODEX_TAB_ISOLATED -u K2_CODEX_PASSPORT_BIND -u K2_PANE_ID -u K5_PANE_ID -u K2SO_PANE_ID \
         K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" K2_PROJECT_PATH="$WORK/proj" "${CODEX_ENV[@]}" \
         "$K2_CLI" "$@" >"$WORK/out" 2>"$WORK/err"
     rc=$?
@@ -684,6 +689,53 @@ printf '%s\n' "    1     0 /sbin/init" "  400     1 /bin/zsh"
 EOF
 run_codex "${CONFIRMED[@]}" PATH="$WORK/psjunk:$WORK/pybin:$WORK/bin:$PATH" K2T_ANCESTRY=denied -- activity
 assert_refused "ps table without this process, walk refused"
+
+# ── 11. Scoped passports off, and Windows ────────────────────────────
+echo "== passports off, Windows =="
+# A K2 terminal on a server with scoped passports off: a pane id, no
+# passport, no cell socket. Today's behaviour, even under a shared server.
+run_passports_off() { # NAME=VALUE... -- ARGS...
+    local -a envs=()
+    while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
+    shift
+    reset_logs
+    set +e
+    env -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K5_HOOK_SOCK -u K2_HOOK_TOKEN -u K2SO_HOOK_TOKEN -u K5_HOOK_TOKEN \
+        -u K2SO_PORT -u K2_CODEX_TAB_ISOLATED -u K2_CODEX_PASSPORT_BIND -u K5_PANE_ID -u K2SO_PANE_ID \
+        K2_HOST=127.0.0.1 K2_PORT="$STUB_PORT" K2_PROJECT_PATH="$WORK/proj" K2_PANE_ID="pane-off-1" \
+        "${CODEX_ENV[@]}" PATH="$WORK/psbin:$WORK/bin:$PATH" ${envs[@]+"${envs[@]}"} \
+        "$K2_CLI" "$@" >"$WORK/out" 2>"$WORK/err"
+    rc=$?
+    set -e
+}
+run_passports_off K2_CODEX_PASSPORT_BIND=0 -- activity
+off_rc="$rc"; off_auth_po="$(auths)"
+run_passports_off -- activity
+assert_absent "passports off, shared server: no refusal" "$(cat "$WORK/err")" "reopen it from K2"
+assert_eq "passports off, shared server: exit as with the switch off" "$rc" "$off_rc"
+assert_eq "passports off, shared server: today's credential" "$(auths)" "$off_auth_po"
+[ -n "$off_auth_po" ] || { echo "  FAIL: passports off: no request was sent" >&2; fail=$((fail + 1)); }
+assert_headers_on "passports off, shared server"
+run_passports_off -- msg cortana hello
+assert_absent "passports off, id verb: no Codex tab refusal" "$(cat "$WORK/err")" "reopen it from K2"
+
+# Windows (a stand-in uname): no walk is handled, which counts as every way
+# refused: the marker alone, one note. The stand-in ps says shared, and is
+# never read.
+mkdir -p "$WORK/winbin"
+cat >"$WORK/winbin/uname" <<'EOF'
+#!/bin/sh
+echo "MINGW64_NT-10.0-19045"
+EOF
+chmod +x "$WORK/winbin/uname"
+run_codex "${CONFIRMED[@]}" PATH="$WORK/winbin:$WORK/psbin:$WORK/bin:$PATH" -- msg cortana hello
+assert_absent "Windows, own marker: no refusal" "$(cat "$WORK/err")" "reopen it from K2"
+assert_eq "Windows, own marker: one marker-only note" "$(note_lines)" "1"
+assert_contains "Windows, own marker: sent with its passport" "$(requests)" "Bearer $SCOPED"
+run_codex K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_TAB_ISOLATED="sess99" PATH="$WORK/winbin:$WORK/psbin:$WORK/bin:$PATH" -- activity
+assert_refused "Windows, marker from another tab"
+run_codex K2_HOOK_SOCK="$LIVE_SOCK" PATH="$WORK/winbin:$WORK/psbin:$WORK/bin:$PATH" -- activity
+assert_refused "Windows, no marker"
 
 echo
 echo "codex_shared_appserver_passport: $pass passed, $fail failed"

@@ -892,7 +892,8 @@ _cli_ps_chain() {
 
 # The walk without ps. argv: k2-codex-ancestry START. Prints the chain as
 # _cli_ps_chain does; exit 2 when the host refuses to show a process
-# (EPERM, EACCES), 3 for anything else that stops a complete walk.
+# (EPERM, EACCES) or the platform has no walk here, 3 for anything else
+# that stops a complete walk.
 _K2_ANCESTRY_PY='
 import ctypes, errno, struct, sys
 DENIED, BROKEN = 2, 3
@@ -944,7 +945,8 @@ elif sys.platform == "darwin":
             raise ValueError("short argv")
         return ppid, " ".join(a.decode("utf-8", "replace") for a in args)
 else:
-    sys.exit(BROKEN)
+    # No walk is handled on this platform: counts as refused.
+    sys.exit(DENIED)
 rows = []
 pid = start
 try:
@@ -965,13 +967,20 @@ for r in rows:
 # _cli_codex_ancestry: set _K2_ANC_STATE for this shell ($$):
 #   shared  a shared Codex app-server is above it;
 #   clear   the chain is complete and has none;
-#   blind   every way to look was refused (permission denied or the
-#           command refused to run): the tab marker alone decides;
+#   blind   every way to look was refused (permission denied, the
+#           command refused to run, or a platform with no walk, such as
+#           Windows): the tab marker alone decides;
 #   broken  an answer was missing, partial or unreadable: counts as shared.
 # Called in this shell, never in $(...), so ps is this shell's child.
 _K2_ANC_STATE=""
 _cli_codex_ancestry() {
     local out low rc=0 r_ps r_py rows=""
+    # Windows (Git Bash, MSYS, Cygwin: the prelude's _K2_WINDOWS): no walk
+    # is handled there, which counts as every way refused.
+    if [ -n "${_K2_WINDOWS:-}" ]; then
+        _K2_ANC_STATE=blind
+        return 0
+    fi
     # exec: ps runs as this shell's own child on every bash (bash 3.2 forks
     # once more for a plain $(ps ...)).
     out="$(exec ps -axo pid=,ppid=,command= 2>&1)" || rc=$?
@@ -1037,10 +1046,27 @@ _cli_codex_tab_refuse() {
     exit 3
 }
 
+# True in a K2 terminal on a server with scoped passports off: K2 named the
+# tab (K2_PANE_ID, set whatever the passport switch says) but gave it no
+# passport and no cell socket, the session marks the rest of this CLI
+# reads (_k2_token_is_session_owner). Every tab there acts as the owner
+# today and has no identity of its own to mix up, so the gate changes
+# nothing. A terminal outside K2 has no pane id and stays refused.
+_cli_codex_passports_off() {
+    local pane
+    [ -z "${SCOPED_TOKEN:-}" ] || return 1
+    [ -z "${K5_HOOK_SOCK:-${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}}" ] || return 1
+    _envn_into pane PANE_ID
+    [ -n "$pane" ]
+}
+
 # Before any command: a Codex call K2 can't confirm runs only the local
 # words, never the owner token from disk.
 _cli_codex_tab_gate() {
     _cli_codex_bind_on || return 0
+    if _cli_codex_passports_off; then
+        return 0
+    fi
     _cli_codex_tab_confirmed && return 0
     DISK_OWNER_TOKEN=""
     TOKEN="${SCOPED_TOKEN:-}"

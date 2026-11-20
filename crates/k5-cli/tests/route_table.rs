@@ -334,6 +334,7 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
             ["workspace"] => workspace_verbs_are_its_arms(noun),
             ["compute"] => compute_verbs_are_its_arms(noun),
             ["app"] => app_verbs_are_its_arms(noun),
+            ["chat"] => chat_verbs_are_its_arms(noun),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -373,6 +374,50 @@ fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
 /// `workspace`'s verb rows: each is one arm of the `workspace)` case in
 /// `cli/src/router.sh`, which hands it to its own function, and one the
 /// binary's family answers.
+/// `chat`'s verb rows: together, exactly the arms of `cmd_chat`'s verb
+/// case in `cli/src/chat.sh` (not `*`), each the family's
+/// ([`k5_cli::families::chat`]).
+fn chat_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "chat.sh")
+        .expect("cli/src/chat.sh")
+        .1;
+    let body = &text[text.find("\ncmd_chat() {\n").expect("cmd_chat")..];
+    let body = &body[body
+        .find("\n    case \"$sub\" in\n        spaces)")
+        .expect("cmd_chat's verb case")..];
+    let body = &body[..body.find("\n    esac\n}\n").expect("its end")];
+    let mut arms = BTreeSet::new();
+    for line in body.lines() {
+        let Some(head) = line.strip_prefix("        ") else {
+            continue;
+        };
+        if head.starts_with(' ') || head.starts_with("*)") {
+            continue;
+        }
+        let Some((words, _)) = head.split_once(')') else {
+            continue;
+        };
+        if words
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c == '-' || c == '|')
+        {
+            arms.extend(words.split('|').map(str::to_string));
+        }
+    }
+    let rows: BTreeSet<String> = noun
+        .verbs
+        .iter()
+        .flat_map(|v| {
+            assert_eq!(v.owner, Owner::Native, "{:?}", v.words);
+            v.words.iter().map(|w| w.to_string())
+        })
+        .collect();
+    assert_eq!(rows, arms, "chat's verb rows are not cmd_chat's arms");
+}
+
 fn workspace_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
     let sources = common::shell_sources();
     let text = &sources

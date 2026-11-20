@@ -1,48 +1,47 @@
-//! `k5 workspace launch [<path>]`, `k5 workspace profile [<path>]` and
-//! `k5 workspace update --field <f> --value <v>`, as
+//! `k5 workspace launch [<path|name>] [--json]`, `k5 workspace profile
+//! [<path>]` and `k5 workspace update --field <f> --value <v>`, as
 //! `cmd_workspace_launch`, `cmd_workspace_profile` and
 //! `cmd_workspace_update` (`cli/src/agent-context.sh`) do them.
 //!
-//! - `launch`: the first word after it (`${1:-$PROJECT}`: the workspace
-//!   when there is none; any other word is skipped) is the target. When it
-//!   is not a folder, `cli_request /cli/workspace/resolve q=<it>` asks the
-//!   daemon for its path ([`look_up`]) and a path in the answer takes its
-//!   place. Then `cli_request_post /cli/workspace/ensure-canonical-session
-//!   project=<target>` ([`direct`]).
-//! - `profile`: `cli_request /cli/workspace/agent-display-name
-//!   project=<target>`, the target as for `launch` ([`direct`]).
-//! - `update`: the words ([`parse_update`]); a projects DB column as the
-//!   field is three lines and exit 2. Then the agent's name from
-//!   `cli_request /cli/workspace/agent-display-name` ([`look_up`]), or the
-//!   workspace folder's name; then `cli_request_post /cli/agent/update
-//!   agent=<name>&field=<f>&value=<v>` ([`direct`]).
+//! - `launch`: the words first ([`parse_launch`]): `--json` is skipped
+//!   (the answer is K2's JSON object either way), `--no-attach` and any
+//!   other flag are refused, a second target too, each exit 2. The target
+//!   is the word, or the workspace when there is none. When it is not a
+//!   folder, `/cli/workspace/resolve q=<it>` asks the daemon for its path
+//!   ([`resolved`]); an answer with no folder is `cli_print_or_fail`'s
+//!   error when it has one, else the no-folder line, exit 1. Then a POST
+//!   of `/cli/workspace/ensure-canonical-session` with the target as the
+//!   one `project=`.
+//! - `profile`: `/cli/workspace/agent-display-name` with the target (the
+//!   first word, or the workspace) as `project=` and `project_path=` (the
+//!   cell socket sends no `project=` of its own).
+//! - `update`: the words ([`parse_update`]); a flag with no value, any
+//!   other word, no field or value, and a projects DB column as the field
+//!   are each lines and exit 2. Then the agent's name from
+//!   `/cli/workspace/agent-display-name` ([`field`]; a refusal there is no
+//!   closing line), or the workspace folder's name; then a POST of
+//!   `/cli/agent/update agent=<name>&field=<f>&value=<v>`.
 //!
-//! Every call goes over TCP (the shell calls them directly). A lookup runs
-//! as `$(cli_request … 2>/dev/null | python3 … 2>/dev/null)`, in a
-//! subshell: its own client (`lookup`), so a passport it heals is not the
-//! one the next call starts with, as in bash. It gives the
-//! answer's `path` or `display_name` as Python prints it, nothing when it
-//! has none (or is not JSON, or not an object); a lookup with no answer
-//! hides its line and ends the command by SIGPIPE
-//! ([`super::super::end_in_pipe`]); any other failure is its code, with
-//! nothing printed (`set -e`). The last call prints the answer's bytes as
-//! they came (NULs dropped), exit 0; no answer is the transport's line,
-//! exit 1; any other failure is its code. A POST is sent once, as for
+//! Each request is `_ws_request` ([`super::ws_request`]), in its own
+//! `$(…)`: a client each, so a passport one heals is not the one the next
+//! starts with, as in bash. Each answer the command reports goes through
+//! `cli_print_or_fail` ([`super::print_or_fail`]): an error on stderr with
+//! its exit (3 with a permission card) and closing line, else the answer
+//! as `$(…)` held it and a newline. A POST is sent once, as for
 //! [`super::register`].
 //!
-//! The shell answers `update` with `--field` or `--value` as its last
-//! word (it stops on `$2: unbound variable`, a line with its script's
-//! path in it), and with a workspace whose path is not absolute or holds
-//! a newline (`basename` there is not sure).
+//! The shell answers `update` with a workspace whose path is not absolute
+//! or holds a newline (`basename` there is not sure).
 
-use super::super::{end_in_pipe, get, piped_body, s, without_nuls};
-use super::Stop;
+use super::super::setup::{cut_200, utf8_locale};
+use super::super::{get, py_space, s};
+use super::{print_or_fail, verdict, ws_request, Stop, Verdict, Ws};
 use crate::exit::Exit;
 use crate::out::json::{self, Value};
-use crate::out::{self, py};
-use crate::prelude::Closing;
+use crate::out::py;
 use crate::transport::encode::quote;
-use crate::transport::{Call, Channel, Client, Error};
+use crate::transport::{Call, Client};
+use k2_client::brand::PRODUCT_NAME;
 
 /// `launch`'s lookup.
 pub const RESOLVE: &str = "/cli/workspace/resolve";
@@ -52,8 +51,16 @@ pub const ENSURE: &str = "/cli/workspace/ensure-canonical-session";
 pub const DISPLAY_NAME: &str = "/cli/workspace/agent-display-name";
 /// `update`'s call.
 pub const AGENT_UPDATE: &str = "/cli/agent/update";
-/// `update` without a field or a value.
+/// `update`'s usage line.
 pub const UPDATE_USAGE: &str = "Usage: k2 workspace update --field <f> --value <v>";
+/// `launch`'s usage line.
+pub const LAUNCH_USAGE: &str = "Usage: k2 workspace launch [<path|name>] [--json]";
+/// `launch --no-attach`: exit 2.
+pub const NO_ATTACH: &str = concat!(
+    "Error: --no-attach: k2 workspace launch never attaches a terminal (it starts or finds the workspace's agent session and prints ",
+    k2_client::product_name!(),
+    "'s answer), so there is nothing to turn off. Run it without --no-attach."
+);
 
 /// The projects DB columns `update` refuses as a field.
 pub const DB_COLUMNS: [&str; 25] = [
@@ -93,6 +100,39 @@ pub fn db_column_lines(field: &str) -> Vec<String> {
     ]
 }
 
+fn usage_stop(lines: Vec<String>) -> Stop {
+    Stop {
+        lines,
+        exit: Exit::Usage,
+    }
+}
+
+/// The words after `launch`, as its loop reads them: the target (empty
+/// for none).
+pub fn parse_launch(words: &[&str]) -> Result<String, Stop> {
+    let mut target = String::new();
+    for w in words {
+        match *w {
+            "--json" => {}
+            "--no-attach" => return Err(usage_stop(vec![NO_ATTACH.to_string()])),
+            w if w.starts_with('-') => {
+                return Err(usage_stop(vec![
+                    format!("Unknown flag: {w}"),
+                    LAUNCH_USAGE.to_string(),
+                ]))
+            }
+            w if !target.is_empty() => {
+                return Err(usage_stop(vec![
+                    format!("Unexpected extra argument: {w}"),
+                    LAUNCH_USAGE.to_string(),
+                ]))
+            }
+            w => target = w.to_string(),
+        }
+    }
+    Ok(target)
+}
+
 /// `update`'s field and value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Update {
@@ -100,15 +140,20 @@ pub struct Update {
     pub value: String,
 }
 
-/// The words after `update`, as its loop reads them. `None`: `--field` or
-/// `--value` as the last word (the shell's).
-pub fn parse_update(words: &[&str]) -> Option<Result<Update, Stop>> {
+/// The words after `update`, as its loop reads them.
+pub fn parse_update(words: &[&str]) -> Result<Update, Stop> {
+    let usage = || UPDATE_USAGE.to_string();
     let (mut field, mut value) = (String::new(), String::new());
     let mut i = 0;
     while let Some(w) = words.get(i) {
         match *w {
             "--field" | "--value" => {
-                let v = words.get(i + 1)?;
+                let Some(v) = words.get(i + 1) else {
+                    return Err(usage_stop(vec![
+                        format!("Error: {w} needs a value"),
+                        usage(),
+                    ]));
+                };
                 if *w == "--field" {
                     field = (*v).to_string();
                 } else {
@@ -116,22 +161,21 @@ pub fn parse_update(words: &[&str]) -> Option<Result<Update, Stop>> {
                 }
                 i += 2;
             }
-            _ => i += 1,
+            w => {
+                return Err(usage_stop(vec![
+                    format!("Error: unknown argument: {w}"),
+                    usage(),
+                ]))
+            }
         }
     }
     if field.is_empty() || value.is_empty() {
-        return Some(Err(Stop {
-            lines: vec![UPDATE_USAGE.to_string()],
-            exit: Exit::Error,
-        }));
+        return Err(usage_stop(vec![usage()]));
     }
     if DB_COLUMNS.contains(&field.as_str()) {
-        return Some(Err(Stop {
-            lines: db_column_lines(&field),
-            exit: Exit::Usage,
-        }));
+        return Err(usage_stop(db_column_lines(&field)));
     }
-    Some(Ok(Update { field, value }))
+    Ok(Update { field, value })
 }
 
 /// `$(basename "$project")` for an absolute path with no newline in it.
@@ -146,9 +190,9 @@ pub fn basename(project: &str) -> Option<String> {
     Some(trimmed.rsplit('/').next().unwrap_or(trimmed).to_string())
 }
 
-/// The lookup's Python on what it read: `print(json.load(sys.stdin).get(key, ""))`
-/// under a bare `except`, as `$(…)` holds it (NULs and trailing newlines
-/// gone).
+/// `update`'s lookup Python on what `$(…)` held:
+/// `print(json.load(sys.stdin).get(key, ""))` under a bare `except`, as
+/// `$(…)` holds it (NULs and trailing newlines gone).
 pub fn field(body: &[u8], key: &str) -> String {
     let text = String::from_utf8_lossy(body);
     let Ok(Value::Object(pairs)) = json::parse(&text) else {
@@ -165,51 +209,25 @@ pub fn field(body: &[u8], key: &str) -> String {
     printed.trim_end_matches('\n').to_string()
 }
 
-/// A lookup (see the module's notes): what it found, or the exit that ends
-/// the command.
-pub fn look_up(
-    client: &mut Client,
-    closing: &mut Closing,
-    endpoint: &str,
-    args: &[&str],
-    key: &str,
-) -> Result<String, Exit> {
-    let passport = client.passport().is_some();
-    match client.call(Channel::Tcp, endpoint, Call::Request(args)) {
-        Ok(r) => {
-            closing.answer(&r, passport);
-            Ok(field(&piped_body(&r), key))
-        }
-        // `_k2_end_command` from inside the pipe; its line went to
-        // /dev/null.
-        Err(Error::NoAnswer(_)) => end_in_pipe(),
-        Err(e) => Err(Exit::from_curl(e.curl_code())),
+/// `launch`'s resolve Python on what `$(…)` held: the answer's `path` when
+/// it is a string with more than spaces in it, as `$(…)` holds what it
+/// prints; else nothing.
+pub fn resolved(body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    let Ok(Value::Object(pairs)) = json::parse(&text) else {
+        return String::new();
+    };
+    let Some(Value::Str(p)) = get(&pairs, "path") else {
+        return String::new();
+    };
+    let Some(p) = p.as_str() else {
+        return String::new();
+    };
+    if p.chars().all(py_space) {
+        return String::new();
     }
-}
-
-/// A call whose answer the shell prints as it came.
-pub fn direct(client: &mut Client, closing: &mut Closing, endpoint: &str, call: Call<'_>) -> Exit {
-    let passport = client.passport().is_some();
-    match client.call(Channel::Tcp, endpoint, call) {
-        Ok(r) => {
-            closing.answer(&r, passport);
-            match out::write_flushed(&mut std::io::stdout().lock(), &without_nuls(&r.body)) {
-                Ok(()) => Exit::Ok,
-                Err(e) => out::after_stdout_error(&e),
-            }
-        }
-        Err(Error::NoAnswer(n)) => {
-            out::stderr_line(&n.to_string());
-            Exit::Error
-        }
-        Err(e) => Exit::from_curl(e.curl_code()),
-    }
-}
-
-/// `${1:-$PROJECT}`.
-fn target(word: Option<String>, project: &str) -> String {
-    word.filter(|w| !w.is_empty())
-        .unwrap_or_else(|| project.to_string())
+    let printed: String = p.chars().filter(|c| *c != '\0').collect();
+    printed.trim_end_matches('\n').to_string()
 }
 
 /// `[[ -d "$target" ]]`.
@@ -217,61 +235,93 @@ fn is_dir(p: &str) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_dir())
 }
 
-/// `launch`, after the checks.
+/// `${1:-$PROJECT}`, or `launch`'s target.
+fn target(word: Option<String>, project: &str) -> String {
+    word.filter(|w| !w.is_empty())
+        .unwrap_or_else(|| project.to_string())
+}
+
+/// The line for a resolve answer with no folder, as bytes:
+/// `${_WS_ANSWER:0:200}` may cut a character.
+pub fn no_folder_line(target: &str, answer: &[u8], utf8: impl FnOnce() -> bool) -> Vec<u8> {
+    let mut line = format!(
+        "Error: {PRODUCT_NAME}'s server gave no folder for workspace '{target}' ({RESOLVE} answered: "
+    )
+    .into_bytes();
+    line.extend_from_slice(cut_200(answer, utf8));
+    line.extend_from_slice(b")\n");
+    line
+}
+
+/// `launch`, after the checks: `lookup` for the resolve, `client` for the
+/// POST.
 pub fn launch(
-    client: &mut Client,
+    ws: &mut Ws,
     lookup: &mut Client,
+    client: &mut Client,
     project: &str,
-    word: Option<String>,
+    word: String,
 ) -> Exit {
-    let mut closing = Closing::default();
-    let mut target = target(word, project);
+    let mut target = target(Some(word), project);
     if !is_dir(&target) {
         let q = format!("q={}", quote(&target));
-        match look_up(lookup, &mut closing, RESOLVE, &[q.as_str()], "path") {
-            Ok(found) if !found.is_empty() => target = found,
-            Ok(_) => {}
-            Err(exit) => {
-                closing.flush(client, exit);
-                return exit;
+        let answer = match ws_request(ws, lookup, RESOLVE, Call::Request(&[q.as_str()]), false) {
+            Ok(a) => a,
+            Err(exit) => return exit,
+        };
+        let found = resolved(&answer);
+        if found.is_empty() {
+            // `cli_print_or_fail … >/dev/null`: an error ends it here.
+            if let Verdict::Error(err) = verdict(&answer, RESOLVE) {
+                crate::out::stderr_line(&format!("Error: {err}"));
+                return super::refused_or(&answer, Exit::Error);
             }
+            let line = no_folder_line(&target, &answer, utf8_locale);
+            let _ = crate::out::write_flushed(&mut std::io::stderr().lock(), &line);
+            return Exit::Error;
         }
+        target = found;
     }
-    let p = format!("project={}", quote(&target));
-    let exit = direct(
-        client,
-        &mut closing,
-        ENSURE,
-        Call::RequestPost(&[p.as_str()]),
-    );
-    closing.flush(client, exit);
-    exit
+    client.project = target;
+    match ws_request(ws, client, ENSURE, Call::RequestPost(&[]), false) {
+        Ok(answer) => print_or_fail(&answer, ENSURE),
+        Err(exit) => exit,
+    }
 }
 
 /// `profile`, after the checks.
-pub fn profile(client: &mut Client, project: &str, word: Option<String>) -> Exit {
-    let mut closing = Closing::default();
-    let p = format!("project={}", quote(&target(word, project)));
-    let exit = direct(
+pub fn profile(ws: &mut Ws, client: &mut Client, project: &str, word: Option<String>) -> Exit {
+    let target = target(word, project);
+    let p = format!("project_path={}", quote(&target));
+    client.project = target;
+    match ws_request(
+        ws,
         client,
-        &mut closing,
         DISPLAY_NAME,
         Call::Request(&[p.as_str()]),
-    );
-    closing.flush(client, exit);
-    exit
+        false,
+    ) {
+        Ok(answer) => print_or_fail(&answer, DISPLAY_NAME),
+        Err(exit) => exit,
+    }
 }
 
-/// `update`, after the checks (`run` made sure `basename` is).
-pub fn update(client: &mut Client, lookup: &mut Client, project: &str, u: &Update) -> Exit {
-    let mut closing = Closing::default();
-    let name = match look_up(lookup, &mut closing, DISPLAY_NAME, &[], "display_name") {
-        Ok(n) if !n.is_empty() => n,
-        Ok(_) => basename(project).unwrap_or_default(),
-        Err(exit) => {
-            closing.flush(client, exit);
-            return exit;
-        }
+/// `update`, after the checks (`run` made sure `basename` is): `lookup`
+/// for the agent's name, `client` for the POST.
+pub fn update(
+    ws: &mut Ws,
+    lookup: &mut Client,
+    client: &mut Client,
+    project: &str,
+    u: &Update,
+) -> Exit {
+    let answer = match ws_request(ws, lookup, DISPLAY_NAME, Call::Request(&[]), true) {
+        Ok(a) => a,
+        Err(exit) => return exit,
+    };
+    let name = match field(&answer, "display_name") {
+        n if n.is_empty() => basename(project).unwrap_or_default(),
+        n => n,
     };
     let pairs = [
         format!("agent={}", quote(&name)),
@@ -279,7 +329,8 @@ pub fn update(client: &mut Client, lookup: &mut Client, project: &str, u: &Updat
         format!("value={}", quote(&u.value)),
     ];
     let refs: Vec<&str> = pairs.iter().map(String::as_str).collect();
-    let exit = direct(client, &mut closing, AGENT_UPDATE, Call::RequestPost(&refs));
-    closing.flush(client, exit);
-    exit
+    match ws_request(ws, client, AGENT_UPDATE, Call::RequestPost(&refs), false) {
+        Ok(answer) => print_or_fail(&answer, AGENT_UPDATE),
+        Err(exit) => exit,
+    }
 }

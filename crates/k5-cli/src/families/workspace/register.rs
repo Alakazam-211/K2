@@ -11,15 +11,17 @@
 //!    the deepest folder that exists as `cd` names it and the rest as
 //!    typed. `open`: a folder that exists as `cd` names it, anything else
 //!    as typed. `cd` is bash's logical one ([`canonpath`]).
-//! 3. One `cli_request_post /cli/workspace/<verb> path=<escaped>` with
-//!    `no_wiki=1`, `no_agents_md=1` and `fanout=1` after it, in that
-//!    order, for the flags given; over TCP, in `$(…)`. A POST is sent
-//!    once: only a connect that was refused or timed out is tried again,
-//!    a 503 `migrating` (no handler ran), an older daemon's 405 (the same
-//!    call as a GET) and a refused passport healed (a 403 ran no handler).
-//!    No answer is the transport's line, exit 1; any other failure is its
-//!    code, with nothing printed (`set -e`).
-//! 4. `cli_print_or_fail` ([`print_or_fail`]) on what `$(…)` held.
+//! 3. One `_ws_request cli_request_post /cli/workspace/<verb>
+//!    path=<escaped>` ([`super::ws_request`]) with `no_wiki=1`,
+//!    `no_agents_md=1` and `fanout=1` after it, in that order, for the
+//!    flags given; the cell socket first, then TCP. A POST is sent once:
+//!    only a connect that was refused or timed out is tried again, a 503
+//!    `migrating` (no handler ran), an older daemon's 405 (the same call
+//!    as a GET) and a refused passport healed (a 403 ran no handler). A
+//!    failed request is its line, exit 1.
+//! 4. `cli_print_or_fail` ([`super::print_or_fail`]) on what `$(…)` held:
+//!    an answer that is no success (empty, not JSON, not an object, an
+//!    error) is one line on stderr and exit 1 (3 with a permission card).
 //! 5. The EXIT trap's lines.
 //!
 //! The shell answers a path the binary can't resolve exactly as bash
@@ -27,14 +29,10 @@
 //! checks would refuse, a folder the binary may not enter, and a relative
 //! path for `open`'s `cd` while `CDPATH` is set.
 
-use super::super::{get, without_nuls};
-use super::Stop;
+use super::{print_or_fail, ws_request, Stop, Ws};
 use crate::exit::Exit;
-use crate::out::json::{self, Value};
-use crate::out::{self, py};
-use crate::prelude::Closing;
 use crate::transport::encode::quote;
-use crate::transport::{permission, Call, Channel, Client, Error};
+use crate::transport::{Call, Client};
 
 /// Which verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,9 +239,7 @@ pub fn path(verb: Verb, target: &str, pwd: &str, cdpath: bool) -> Option<String>
 }
 
 /// The call and `cli_print_or_fail`, after the checks: `path` as resolved.
-pub fn send(client: &mut Client, verb: Verb, ask: &Ask, path: &str) -> Exit {
-    let mut closing = Closing::default();
-    let passport = client.passport().is_some();
+pub fn send(ws: &mut Ws, client: &mut Client, verb: Verb, ask: &Ask, path: &str) -> Exit {
     let mut params = vec![format!("path={}", quote(path))];
     for (on, pair) in [
         (ask.no_wiki, "no_wiki=1"),
@@ -255,102 +251,8 @@ pub fn send(client: &mut Client, verb: Verb, ask: &Ask, path: &str) -> Exit {
         }
     }
     let refs: Vec<&str> = params.iter().map(String::as_str).collect();
-    let exit = match client.call(Channel::Tcp, verb.endpoint(), Call::RequestPost(&refs)) {
-        Ok(r) => {
-            closing.answer(&r, passport);
-            print_or_fail(&held(&r.body))
-        }
-        Err(Error::NoAnswer(n)) => {
-            out::stderr_line(&n.to_string());
-            Exit::Error
-        }
-        Err(e) => Exit::from_curl(e.curl_code()),
-    };
-    closing.flush(client, exit);
-    exit
-}
-
-/// What `cli_print_or_fail "$resp"` makes of `resp`, and its exit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Verdict {
-    /// `printf '%s\n' "$resp"`, exit 0.
-    Print,
-    /// `Error: <it>` on stderr; exit 3 when the body has a permission
-    /// card's closing line, else 1.
-    Error(String),
-    /// The Python raised (its traceback to `/dev/null`): `set -e` ends the
-    /// command with exit 1 and nothing printed.
-    Raised,
-}
-
-/// `cli_print_or_fail`'s Python on `resp` (what `$(…)` held).
-pub fn verdict(resp: &[u8]) -> Verdict {
-    let text = String::from_utf8_lossy(resp);
-    let Ok(d) = json::parse(&text) else {
-        return Verdict::Print;
-    };
-    let Value::Object(pairs) = &d else {
-        return Verdict::Raised;
-    };
-    let Some(e) = get(pairs, "error").filter(|e| py::truthy(e)) else {
-        return Verdict::Print;
-    };
-    let said = match e {
-        Value::Object(ep) => {
-            let first = [get(ep, "hint"), get(ep, "code")]
-                .into_iter()
-                .flatten()
-                .find(|v| py::truthy(v));
-            first.map_or_else(|| "daemon refused".to_string(), py::str_of)
-        }
-        other => {
-            let trust = ["folder_trust_pending", "folder_trust_denied"]
-                .iter()
-                .any(|w| *other == super::super::s(w));
-            match get(pairs, "message").filter(|m| py::truthy(m)) {
-                Some(m) if trust => format!("{}: {}", py::str_of(other), py::str_of(m)),
-                _ => py::str_of(other),
-            }
-        }
-    };
-    // `err=$(…)`: NULs and trailing newlines go.
-    let err: String = said.chars().filter(|c| *c != '\0').collect();
-    let err = err.trim_end_matches('\n');
-    if err.is_empty() {
-        Verdict::Print
-    } else {
-        Verdict::Error(err.to_string())
+    match ws_request(ws, client, verb.endpoint(), Call::RequestPost(&refs), false) {
+        Ok(answer) => print_or_fail(&answer, verb.endpoint()),
+        Err(exit) => exit,
     }
-}
-
-/// `cli_print_or_fail "$resp"`: prints and gives the exit.
-pub fn print_or_fail(resp: &[u8]) -> Exit {
-    match verdict(resp) {
-        Verdict::Print => {
-            let mut bytes = resp.to_vec();
-            bytes.push(b'\n');
-            match out::write_flushed(&mut std::io::stdout().lock(), &bytes) {
-                Ok(()) => Exit::Ok,
-                Err(e) => out::after_stdout_error(&e),
-            }
-        }
-        Verdict::Error(err) => {
-            out::stderr_line(&format!("Error: {err}"));
-            if permission::note(resp).is_some() {
-                Exit::Refused
-            } else {
-                Exit::Error
-            }
-        }
-        Verdict::Raised => Exit::Error,
-    }
-}
-
-/// What `$(…)` holds of a body: NULs and trailing newlines gone.
-pub fn held(body: &[u8]) -> Vec<u8> {
-    let mut b = without_nuls(body);
-    while b.last() == Some(&b'\n') {
-        b.pop();
-    }
-    b
 }

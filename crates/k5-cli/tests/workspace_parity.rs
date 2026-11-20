@@ -4,19 +4,24 @@
 //! exit code.
 //!
 //! - The table: workspaces (spaces, unicode, odd types), `--running`,
-//!   none, words it skips, the daemon's error, an object, not JSON (short,
-//!   empty), a refusal with a permission card, migrating, Python's raise.
+//!   none, words it skips, the daemon's error (its hint or code, on
+//!   stderr), an object, not JSON (short, empty), a refusal with a
+//!   permission card (exit 3), migrating, Python's raise.
 //! - `--json`: the rows, `--running`, an error (text, object), `ok` false,
-//!   not an object, not JSON, the bulletin, Python's raise.
-//! - `profile`: the answer as it came (any status), a target, a refusal.
-//! - The owner from disk, a passport over TCP, a live cell socket (still
-//!   TCP: the shell calls `cli_request` directly), a healed passport, PRD
-//!   13.9 #4's owner token with a passport, the gates.
-//! - No answer: on the left of the pipe the line, then death by SIGPIPE;
-//!   `profile` the line and exit 1. A reset, not HTTP, TMPDIR unusable
-//!   and no daemon: the reader on nothing (`list`), curl's code
-//!   (`profile`).
-//! - What the binary hands to the shell: help, a port that is no port.
+//!   not an object, not JSON, the bulletin, a permission card (exit 3),
+//!   Python's raise.
+//! - `profile`: the answer and a newline, a target (as `project=` and
+//!   `project_path=`), an error on stderr (exit 1), a refusal (exit 3),
+//!   an answer that is no success (empty, not JSON, not an object).
+//! - The owner from disk, a passport over TCP, a live cell socket (tried
+//!   first, its refusal teaching: exit 3), a healed passport, a session's
+//!   passport with the owner on disk, a session with no passport (no
+//!   credential at all), the gates.
+//! - A request with no answer, or none taken: the line, exit 1 (an empty
+//!   reply, a 5xx with no body, none in time, a reset, not HTTP, TMPDIR
+//!   unusable, nothing listening).
+//! - What the binary hands to the shell: help, a port that is no port, a
+//!   session with no passport whose cell socket is live.
 
 #![cfg(unix)]
 
@@ -36,8 +41,6 @@ const ROWS: &str = r#"[
 const AGENTS: &str = r#"{"ok":true,"agents":[
     {"name":"acme","id":"w1","handle":"acme","path":"/srv/acme ws","mode":"agent","enabled":true,"live":false},
     {"name":"Globex é","id":"w2","enabled":false,"n":1.0e16}]}"#;
-const UNPARSEABLE: &str = "Error: daemon returned an unparseable response: ''\n";
-const BAD_JSON: &str = "{\"error\": {\"code\": \"bad_response\", \"hint\": \"daemon returned an unparseable response: ''\"}}\n";
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
@@ -53,25 +56,6 @@ fn traceback(c: Case) -> Case {
 fn waited(c: Case) -> Case {
     Case {
         compare: Compare::Waited,
-        ..c
-    }
-}
-
-/// No answer on the left of the pipe: the line, then SIGPIPE (141);
-/// macOS's bash 3.2 runs the reader on an empty input instead.
-fn in_pipe(c: Case, json: bool) -> Case {
-    Case {
-        compare: if json {
-            Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: BAD_JSON,
-            }
-        } else {
-            Compare::Bash32PipeReader {
-                stdout: UNPARSEABLE,
-                stderr: "",
-            }
-        },
         ..c
     }
 }
@@ -165,10 +149,28 @@ fn workspace_list_answers_as_the_shell_does() {
             1,
         ),
         case(
-            "a refusal with a permission card: the closing line",
+            "a refusal with a permission card: exit 3, the closing line",
             &["list"],
             &[],
             vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "an error's code, a hint that is empty",
+            &["list"],
+            &[],
+            vec![ok(r#"{"error":{"code":"db","hint":""}}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an error object with neither: the answer",
+            &["list"],
+            &[],
+            vec![ok(r#"{"error":{"x":1}}"#)],
             owner_and_port,
             1,
             1,
@@ -325,12 +327,12 @@ fn workspace_list_json_answers_as_the_shell_does() {
             1,
         ),
         case(
-            "a refusal with a permission card: the closing line",
+            "a refusal with a permission card: exit 3, the closing line",
             &["list", "--json"],
             &[],
             vec![Reply::Answer(403, PERMISSION_ASK.into())],
             owner_and_port,
-            1,
+            3,
             1,
         ),
         traceback(case(
@@ -380,7 +382,7 @@ fn workspace_profile_answers_as_the_shell_does() {
             1,
         ),
         case(
-            "an error, printed as it came",
+            "an error: on stderr, exit 1",
             &["profile", "nope"],
             &[],
             vec![Reply::Answer(
@@ -388,16 +390,43 @@ fn workspace_profile_answers_as_the_shell_does() {
                 r#"{"error":"no such workspace"}"#.into(),
             )],
             owner_and_port,
-            0,
+            1,
             1,
         ),
         case(
-            "a refusal with a permission card: no closing line on exit 0",
+            "a refusal with a permission card: exit 3, the closing line",
             &["profile"],
             &[],
             vec![Reply::Answer(403, PERMISSION_ASK.into())],
             owner_and_port,
-            0,
+            3,
+            1,
+        ),
+        case(
+            "an empty answer is no success",
+            &["profile"],
+            &[],
+            vec![ok("\n")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an answer that is not JSON is no success",
+            &["profile"],
+            &[],
+            vec![ok("<html>up é</html>")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "JSON that is not an object is no success",
+            &["profile"],
+            &[],
+            vec![ok("[\"Acme\"]")],
+            owner_and_port,
+            1,
             1,
         ),
         case(
@@ -435,13 +464,49 @@ fn workspace_reads_with_a_passport() {
         with(
             h(&[("K2_HOOK_SOCK", "{sock}")]),
             case(
-                "a live cell socket: still TCP",
+                "a live cell socket: the socket first",
                 &["list", "--json"],
                 &[],
                 vec![ok(AGENTS)],
                 port_only,
                 0,
                 1,
+            ),
+        ),
+        with(
+            h(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(
+                "a live cell socket: its refusal teaches, exit 3",
+                &["list"],
+                &[],
+                vec![Reply::Answer(403, PERMISSION_ASK.into())],
+                port_only,
+                3,
+                1,
+            ),
+        ),
+        with(
+            h(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(
+                "a live cell socket: profile names the target as project_path",
+                &["profile", "/srv/other ws"],
+                &[],
+                vec![ok(r#"{"display_name":"other"}"#)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(
+                "a live cell socket: an empty reply goes on to TCP",
+                &["list"],
+                &[],
+                vec![Reply::Close, ok(ROWS)],
+                port_only,
+                0,
+                2,
             ),
         ),
         with(
@@ -479,25 +544,40 @@ fn workspace_reads_with_a_passport() {
                     Reply::Answer(403, REFUSED.into()),
                 ],
                 port_only,
-                0,
+                1,
                 2,
             ),
         ),
-        Case {
-            compare: Compare::OwnerTokenWithPassport,
-            ..with(
-                h(&[("K2_HOOK_SOCK", "{nosock}")]),
-                case(
-                    "HOOK_SOCK set, the owner on disk (PRD 13.9 #4)",
-                    &["list"],
-                    &[],
-                    vec![ok(ROWS)],
-                    owner_and_port,
-                    0,
-                    1,
-                ),
-            )
-        },
+        with(
+            h(&[("K2_HOOK_SOCK", "{nosock}")]),
+            case(
+                "a session, the owner on disk: the passport",
+                &["list"],
+                &[],
+                vec![ok(ROWS)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
+        case(
+            "a session with no passport, the owner on disk: no credential",
+            &["list", "--json"],
+            &[("K2_HOOK_SOCK", "{nosock}")],
+            vec![ok(AGENTS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a session with no passport: profile sends no credential",
+            &["profile"],
+            &[("K2_HOOK_SOCK", "{nosock}")],
+            vec![ok("{}")],
+            owner_and_port,
+            0,
+            1,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -512,32 +592,26 @@ fn workspace_reads_with_no_answer() {
         ..c
     };
     let v = vec![
-        in_pipe(
-            case(
-                "list: an empty reply, the line, then SIGPIPE",
-                &["list"],
-                &[],
-                vec![Reply::Close],
-                owner_and_port,
-                141,
-                1,
-            ),
-            false,
-        ),
-        in_pipe(
-            case(
-                "list --json: a 5xx with no body, the line, then SIGPIPE",
-                &["list", "--json"],
-                &[],
-                vec![Reply::Answer(502, String::new())],
-                owner_and_port,
-                141,
-                1,
-            ),
-            true,
-        ),
+        waited(case(
+            "list: an empty reply, the line, exit 1",
+            &["list"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        )),
+        waited(case(
+            "list --json: a 5xx with no body, the line, exit 1",
+            &["list", "--json"],
+            &[],
+            vec![Reply::Answer(502, String::new())],
+            owner_and_port,
+            1,
+            1,
+        )),
         case(
-            "list: a reset, the reader on nothing",
+            "list: a reset (56), the line, exit 1",
             &["list"],
             &[],
             vec![Reply::Reset],
@@ -546,7 +620,7 @@ fn workspace_reads_with_no_answer() {
             1,
         ),
         case(
-            "list --json: not HTTP, the reader on nothing",
+            "list --json: not HTTP (1), the line, exit 1",
             &["list", "--json"],
             &[],
             vec![Reply::Raw(GARBAGE.to_vec())],
@@ -555,7 +629,7 @@ fn workspace_reads_with_no_answer() {
             1,
         ),
         no_tmp(case(
-            "list: TMPDIR unusable, a reset",
+            "list: TMPDIR unusable, a reset (76), the line, exit 1",
             &["list"],
             &[],
             vec![Reply::Reset],
@@ -563,6 +637,15 @@ fn workspace_reads_with_no_answer() {
             1,
             1,
         )),
+        case(
+            "list: an empty 200 is the reader's",
+            &["list"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            1,
+            1,
+        ),
         waited(case(
             "profile: an empty reply, the line, exit 1",
             &["profile"],
@@ -582,16 +665,16 @@ fn workspace_reads_with_no_answer() {
             1,
         )),
         case(
-            "profile: a reset (56)",
+            "profile: a reset (56), the line, exit 1",
             &["profile"],
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            56,
+            1,
             1,
         ),
         case(
-            "profile: not HTTP (1)",
+            "profile: not HTTP (1), the line, exit 1",
             &["profile"],
             &[],
             vec![Reply::Raw(GARBAGE.to_vec())],
@@ -600,12 +683,12 @@ fn workspace_reads_with_no_answer() {
             1,
         ),
         no_tmp(case(
-            "profile: TMPDIR unusable, a reset (76)",
+            "profile: TMPDIR unusable, a reset (76), the line, exit 1",
             &["profile"],
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            76,
+            1,
             1,
         )),
     ];
@@ -618,10 +701,10 @@ fn workspace_reads_with_no_answer() {
 fn workspace_reads_with_no_daemon() {
     let rig = Rig::new(VERB, "dead");
     let port = dead_port();
-    for (name, args, code) in [
-        ("list: nothing listens", &["list"][..], 1),
-        ("list --json: nothing listens", &["list", "--json"], 1),
-        ("profile: nothing listens (7)", &["profile"], 7),
+    for (name, args) in [
+        ("list: nothing listens (7), the line, exit 1", &["list"][..]),
+        ("list --json: nothing listens (7)", &["list", "--json"]),
+        ("profile: nothing listens (7)", &["profile"]),
     ] {
         let args: &'static [&'static str] = Box::leak(args.to_vec().into_boxed_slice());
         rig.check(&case(
@@ -630,29 +713,25 @@ fn workspace_reads_with_no_daemon() {
             &[("K2_PORT", port.as_str())],
             vec![],
             owner_only,
-            code,
+            1,
             0,
         ));
     }
 }
 
-/// No answer within 30 s: the line, then SIGPIPE (`list`) or exit 1
-/// (`profile`). Slow.
+/// No answer within 30 s: the line, exit 1. Slow.
 #[test]
 fn workspace_reads_with_a_daemon_that_never_answers() {
     let rig = Rig::new(VERB, "hang");
-    rig.check(&in_pipe(
-        case(
-            "list: no answer in time (28)",
-            &["list"],
-            &[],
-            vec![Reply::Hang(Duration::from_secs(35))],
-            owner_and_port,
-            141,
-            1,
-        ),
-        false,
-    ));
+    rig.check(&waited(case(
+        "list: no answer in time (28)",
+        &["list"],
+        &[],
+        vec![Reply::Hang(Duration::from_secs(35))],
+        owner_and_port,
+        1,
+        1,
+    )));
     rig.check(&waited(case(
         "profile: no answer in time (28)",
         &["profile"],
@@ -718,6 +797,15 @@ fn workspace_reads_hand_these_to_the_shell() {
             owner_only,
             1,
             0,
+        )),
+        shell(case(
+            "a session with no passport whose cell socket is live",
+            &["list"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![ok(ROWS)],
+            owner_and_port,
+            0,
+            1,
         )),
     ];
     for c in v {

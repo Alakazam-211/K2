@@ -3,31 +3,31 @@
 //!
 //! 1. The words ([`parse`]): `--running` and `--json`; any other word is
 //!    skipped (`*) shift`).
-//! 2. One `cli_request` over TCP (the shell calls it directly: never the
-//!    cell socket), on the left of a pipe into the shell's Python
-//!    ([`super::super::request_piped_tcp`]): `/cli/projects/list` for the
-//!    table, `/cli/agent/list` with `--json`.
-//! 3. The Python on what the call printed: the table ([`text`]): an
+//! 2. One `_ws_request cli_request` ([`super::ws_request`]): the cell
+//!    socket first, then TCP. `/cli/projects/list` for the table,
+//!    `/cli/agent/list` with `--json`. A failed request is its line, exit
+//!    1.
+//! 3. The shell's Python on what `$(…)` held: the table ([`text`]): an
 //!    answer that is not JSON, or an object, is one `Error:` line on
-//!    stdout and exit 1; else a line per workspace (`--running`: only the
-//!    agent-enabled ones), or the line for none. With `--json`
-//!    ([`json_form`]): the daemon's error as one line of JSON on stderr,
-//!    exit 1; else `{"ok": true, "workspaces": [...]}`, the agent rows
-//!    (`--running`: only the enabled ones).
-//! 4. The EXIT trap's lines, with the pipeline's code (`set -o pipefail`).
+//!    stderr (an error object's `hint`, else its `code`) and exit 1; else
+//!    a line per workspace (`--running`: only the agent-enabled ones), or
+//!    the line for none. With `--json` ([`json_form`]): the daemon's error
+//!    as one line of JSON on stderr, exit 1; else `{"ok": true,
+//!    "workspaces": [...]}`, the agent rows (`--running`: only the enabled
+//!    ones).
+//! 4. `_ws_list_exit`: a failed reader is exit 3 when the answer carries a
+//!    permission card (its closing line follows), else the reader's code.
+//!    Then the EXIT trap's lines.
 //!
-//! A request with no answer is the transport's line, then death by
-//! SIGPIPE, as for [`super::super::inbox`]; any other failure leaves the
-//! reader nothing to read. Where the shell's Python raises (rows that are
-//! not a list of objects, a name that is a list), this prints a Python
-//! 3.12 traceback.
+//! Where the shell's Python raises (rows that are not a list of objects, a
+//! name that is a list), this prints a Python 3.12 traceback.
 
-use super::super::{get, pipefail, py_get, py_iter, raised, request_piped_tcp, s, Raise, Shown};
+use super::super::{get, py_get, py_iter, raised, s, Raise, Shown};
+use super::{refused_or, ws_request, Ws};
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::py;
-use crate::prelude::Closing;
-use crate::transport::Client;
+use crate::transport::{Call, Client};
 
 /// The table's route.
 pub const PROJECTS: &str = "/cli/projects/list";
@@ -43,10 +43,10 @@ pub const NONE: &str = "No workspaces registered.";
 /// The lines of the shell's Python that raise (`tests` pins them).
 pub mod line {
     /// The table's `--running` filter.
-    pub const RUNNING: u32 = 13;
-    pub const FOR: u32 = 20;
-    pub const NAME: u32 = 21;
-    pub const ROW: u32 = 24;
+    pub const RUNNING: u32 = 16;
+    pub const FOR: u32 = 23;
+    pub const NAME: u32 = 24;
+    pub const ROW: u32 = 27;
     /// `--json`'s `--running` filter.
     pub const J_RUNNING: u32 = 17;
 }
@@ -72,18 +72,21 @@ pub fn parse(words: &[&str]) -> Ask {
 }
 
 /// The call and its reader, after the checks.
-pub fn send(client: &mut Client, ask: Ask) -> Exit {
-    let mut closing = Closing::default();
+pub fn send(ws: &mut Ws, client: &mut Client, ask: Ask) -> Exit {
     let endpoint = if ask.json { AGENTS } else { PROJECTS };
-    let left = request_piped_tcp(client, &mut closing, endpoint, &[]);
-    let shown = if ask.json {
-        json_form(&left.body, ask.running)
-    } else {
-        text(&left.body, ask.running)
+    let answer = match ws_request(ws, client, endpoint, Call::Request(&[]), false) {
+        Ok(a) => a,
+        Err(exit) => return exit,
     };
-    let exit = pipefail(left.exit, shown.print());
-    closing.flush(client, exit);
-    exit
+    let shown = if ask.json {
+        json_form(&answer, ask.running)
+    } else {
+        text(&answer, ask.running)
+    };
+    match shown.print() {
+        Exit::Ok => Exit::Ok,
+        failed => refused_or(&answer, failed),
+    }
 }
 
 /// `raw[:200]`: the first 200 code points of what the Python read.
@@ -116,19 +119,23 @@ fn left(v: &Value, width: usize) -> Result<String, Raise> {
 pub fn text(body: &[u8], running: bool) -> Shown {
     let raw = String::from_utf8_lossy(body);
     let Ok(rows) = json::parse(&raw) else {
-        return Shown {
-            stdout: format!("{UNPARSEABLE}{}\n", py::repr(&head(&raw))),
-            stderr: String::new(),
-            exit: Exit::Error,
-        };
+        return Shown::err(
+            format!("{UNPARSEABLE}{}\n", py::repr(&head(&raw))),
+            Exit::Error,
+        );
     };
     if let Value::Object(pairs) = &rows {
-        let err = get(pairs, "error").cloned().unwrap_or_else(|| head(&raw));
-        return Shown {
-            stdout: format!("Error: {}\n", py::str_of(&err)),
-            stderr: String::new(),
-            exit: Exit::Error,
+        let err = match get(pairs, "error") {
+            Some(Value::Object(ep)) => [get(ep, "hint"), get(ep, "code")]
+                .into_iter()
+                .flatten()
+                .find(|v| py::truthy(v))
+                .cloned()
+                .unwrap_or_else(|| head(&raw)),
+            Some(e) => e.clone(),
+            None => head(&raw),
         };
+        return Shown::err(format!("Error: {}\n", py::str_of(&err)), Exit::Error);
     }
     let mut stdout = String::new();
     match table(rows, running, &mut stdout) {
@@ -137,7 +144,7 @@ pub fn text(body: &[u8], running: bool) -> Shown {
     }
 }
 
-/// Lines 12 on.
+/// Lines 15 on.
 fn table(rows: Value, running: bool, stdout: &mut String) -> Result<(), Raise> {
     let rows = if running {
         let mut kept = Vec::new();

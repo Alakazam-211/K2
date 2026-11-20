@@ -11,13 +11,17 @@
 //! - The answers (`cli_print_or_fail`): printed with a newline, the
 //!   daemon's error (text, `hint`, `code`, neither, folder trust with its
 //!   message), a refusal with a permission card (exit 3 and the closing
-//!   line), not JSON, an answer that is not an object (exit 1, nothing
-//!   printed), an error of only newlines, the bulletin, migrating, an
-//!   older daemon's 405 (the same call as a GET), a healed passport.
-//! - Sent once: an empty 200 is the answer; an empty reply, a 5xx with no
-//!   body and none in time are the line and exit 1; a reset (56), not
-//!   HTTP (1) and TMPDIR unusable (76) are curl's code; only a connect
-//!   nothing accepted (7) is tried again. Each with one request.
+//!   line), an answer that is no success (empty, not JSON, not an object:
+//!   one line on stderr, exit 1), an error of only newlines, the
+//!   bulletin, migrating, an older daemon's 405 (the same call as a GET),
+//!   a healed passport.
+//! - The cell socket first (its card: exit 3), a session's passport, a
+//!   session with no passport (no credential).
+//! - Sent once: an empty reply, a 5xx with no body and none in time are
+//!   the line and exit 1; a reset (56), not HTTP (1) and TMPDIR unusable
+//!   (76) are the line with curl's code, exit 1; only a connect nothing
+//!   accepted (7) is tried again, then its line, exit 1. Each with one
+//!   request.
 //! - What the binary hands to the shell: help, a doubled `/`, a relative
 //!   `open` while `CDPATH` is set, a port that is no port.
 
@@ -180,19 +184,28 @@ fn register_answers(verb: &'static str, tag: &str) {
             1,
         ),
         case(
-            "not JSON is printed as an answer",
+            "not JSON is no success: its line, exit 1",
             a(&["new-ws"]),
             &[],
             vec![ok("<html>it's up</html>\n")],
             folders,
-            0,
+            1,
             1,
         ),
         case(
-            "an answer that is not an object: exit 1, nothing printed",
+            "an answer that is not an object: its line, exit 1",
             a(&["new-ws"]),
             &[],
             vec![ok("[1, 2]")],
+            folders,
+            1,
+            1,
+        ),
+        case(
+            "an answer of only spaces is empty: exit 1",
+            a(&["new-ws"]),
+            &[],
+            vec![ok("  \n")],
             folders,
             1,
             1,
@@ -367,13 +380,40 @@ fn workspace_create_with_a_passport() {
         with(
             h(&[("K2_HOOK_SOCK", "{sock}")]),
             case(
-                "a live cell socket: still TCP",
+                "a live cell socket: the socket first",
                 &["open", "new-ws"],
                 &[],
                 vec![ok(MADE)],
                 port_only,
                 0,
                 1,
+            ),
+        ),
+        with(
+            h(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(
+                "a live cell socket: its card, exit 3",
+                &["create", "new-ws"],
+                &[],
+                vec![Reply::Answer(403, PERMISSION_ASK.into())],
+                port_only,
+                3,
+                1,
+            ),
+        ),
+        with(
+            h(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(
+                "a live cell socket: not served there, then TCP",
+                &["create", "new-ws"],
+                &[],
+                vec![
+                    Reply::Answer(404, "not served on cell socket".into()),
+                    ok(MADE),
+                ],
+                port_only,
+                0,
+                2,
             ),
         ),
         with(
@@ -388,21 +428,27 @@ fn workspace_create_with_a_passport() {
                 2,
             ),
         ),
-        Case {
-            compare: Compare::OwnerTokenWithPassport,
-            ..with(
-                h(&[("K2_HOOK_SOCK", "{nosock}")]),
-                case(
-                    "HOOK_SOCK set, the owner on disk (PRD 13.9 #4)",
-                    &["create", "new-ws"],
-                    &[],
-                    vec![ok(MADE)],
-                    owner_and_port,
-                    0,
-                    1,
-                ),
-            )
-        },
+        with(
+            h(&[("K2_HOOK_SOCK", "{nosock}")]),
+            case(
+                "a session, the owner on disk: the passport",
+                &["create", "new-ws"],
+                &[],
+                vec![ok(MADE)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
+        case(
+            "a session with no passport, the owner on disk: no credential",
+            &["open", "new-ws"],
+            &[("K2_HOOK_SOCK", "{nosock}")],
+            vec![ok(MADE)],
+            owner_and_port,
+            0,
+            1,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -419,12 +465,12 @@ fn sent_once(verb: &'static str, tag: &str) {
     };
     let v = vec![
         case(
-            "an empty 200 is the answer",
+            "an empty 200 is no success",
             args,
             &[],
             vec![ok("")],
             owner_and_port,
-            0,
+            1,
             1,
         ),
         waited(case(
@@ -446,12 +492,12 @@ fn sent_once(verb: &'static str, tag: &str) {
             1,
         )),
         case(
-            "a reset (56)",
+            "a reset (56): the line, exit 1",
             args,
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            56,
+            1,
             1,
         ),
         case(
@@ -464,12 +510,12 @@ fn sent_once(verb: &'static str, tag: &str) {
             1,
         ),
         no_tmp(case(
-            "TMPDIR unusable, a reset (76)",
+            "TMPDIR unusable, a reset (76): the line, exit 1",
             args,
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            76,
+            1,
             1,
         )),
         no_tmp(case(
@@ -487,12 +533,12 @@ fn sent_once(verb: &'static str, tag: &str) {
     }
     let port = dead_port();
     rig.check(&case(
-        "nothing listens (7): tried again, exit 7",
+        "nothing listens (7): tried again, the line, exit 1",
         args,
         &[("K2_PORT", port.as_str())],
         vec![],
         owner_only,
-        7,
+        1,
         0,
     ));
 }
@@ -565,12 +611,12 @@ fn workspace_create_and_open_hand_these_to_the_shell() {
             1,
         )),
         shell(case(
-            "a port that is no port: curl's 3",
+            "a port that is no port: curl's 3, the line, exit 1",
             &["create", "x"],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            3,
+            1,
             0,
         )),
     ];

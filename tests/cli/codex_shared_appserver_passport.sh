@@ -12,10 +12,11 @@
 #   1. Pure ancestry matcher over fake `ps` tables: the 0.161 and 0.160
 #      shared-server shapes match; a --no-daemon TUI and a private stdio
 #      app-server do not.
-#   2. e2e: ID verb under a process named like the shared app-server with
+#   2. e2e: ID verb under a shared app-server (a stand-in ps) with
 #      K2_CODEX_PASSPORT_BIND=0 (today's id-tool gate) → exit 3 + "shared
 #      Codex app-server", nothing sent; with the switch on, the Codex tab
-#      gate refuses first, naming the shared server.
+#      gate refuses first, naming the shared server, from the stand-in and
+#      from the real process tree (`exec -a`).
 #   3. e2e: K2_HOOK_SOCK gone + daemon rejects the scoped token → exit 3 +
 #      "credentials are stale"; only the scoped whoami probe was sent.
 #   4. e2e: K2_HOOK_SOCK gone but the daemon accepts the token (socket bind
@@ -234,15 +235,24 @@ requests() { cat "$WORK/requests.log"; }
 
 # ── 2. Under a shared Codex app-server ───────────────────────────────
 echo "== under a shared Codex app-server =="
+# A stand-in `ps` puts a shared server above the call (some hosts, such as
+# a sandboxed macOS build node, don't let a job run the real one). The k2
+# shell runs ps as its own child, so the stand-in names it by $PPID.
+mkdir -p "$WORK/psbin"
+cat >"$WORK/psbin/ps" <<'EOF'
+#!/bin/sh
+printf '%s\n' "    1     0 /sbin/init" \
+    "  300     1 codex app-server --listen unix://" \
+    "  400   300 /bin/zsh -lc k2" \
+    "$PPID   400 /bin/bash k2"
+EOF
+chmod +x "$WORK/psbin/ps"
+
+# With the switch off (today's behaviour), the id-tool check refuses.
 : >"$WORK/requests.log"
-# With the switch off (today's behaviour), the id-tool gate refuses. This
-# one names the parent with `exec -a` and reads the real `ps`.
-# `exec -a` names the parent bash like the shared server; the second
-# command keeps bash from exec'ing k2 in its place.
 set +e
-cell K2_HOOK_SOCK="$GONE_SOCK" CODEX_THREAD_ID="thread-1" K2_CODEX_PASSPORT_BIND=0 K2="$K2_CLI" \
-    bash -c 'exec -a "codex app-server --listen unix://" bash -c "\"\$K2\" thread k2/cortana hello; exit \$?"' \
-    >"$WORK/out" 2>"$WORK/err"
+cell K2_HOOK_SOCK="$GONE_SOCK" CODEX_THREAD_ID="thread-1" K2_CODEX_PASSPORT_BIND=0 PATH="$WORK/psbin:$PATH" \
+    "$K2_CLI" thread k2/cortana hello >"$WORK/out" 2>"$WORK/err"
 rc=$?
 set -e
 assert_eq "shared server: exit 3" "$rc" "3"
@@ -252,19 +262,7 @@ assert_eq "shared server: nothing reached the daemon" "$(requests)" ""
 assert_absent "shared server: no bare token error" "$(cat "$WORK/err")" "Invalid or missing auth token"
 
 # Switch on (the default): the Codex tab gate refuses first, even with a
-# matching marker, and names the shared server. A stand-in `ps` puts the
-# shared server above the call (some hosts, such as a sandboxed macOS
-# build node, don't let a job run the real one).
-mkdir -p "$WORK/psbin"
-cat >"$WORK/psbin/ps" <<'EOF'
-#!/bin/sh
-# The caller (k2 runs ps from its own shell) under a shared Codex server.
-printf '%s\n' "    1     0 /sbin/init" \
-    "  300     1 codex app-server --listen unix://" \
-    "  400   300 /bin/zsh -lc k2" \
-    "$PPID   400 /bin/bash k2"
-EOF
-chmod +x "$WORK/psbin/ps"
+# matching marker, and names the shared server.
 : >"$WORK/requests.log"
 set +e
 cell K2_HOOK_SOCK="$GONE_SOCK" CODEX_THREAD_ID="thread-1" K2_CODEX_TAB_ISOLATED="sess42" PATH="$WORK/psbin:$PATH" \
@@ -275,6 +273,20 @@ assert_eq "shared server, switch on: exit 3" "$rc" "3"
 assert_contains "shared server, switch on: reopen from K2" "$(cat "$WORK/err")" "reopen it from K2"
 assert_contains "shared server, switch on: names the shared server" "$(cat "$WORK/err")" "It runs under a shared Codex app-server"
 assert_eq "shared server, switch on: nothing reached the daemon" "$(requests)" ""
+
+# The real process tree: `exec -a` names the parent bash like the shared
+# server (the trailing exit keeps bash from exec'ing k2 in its place). Read
+# by the real ps, or by the parent walk where ps can't run.
+: >"$WORK/requests.log"
+set +e
+cell K2_HOOK_SOCK="$GONE_SOCK" CODEX_THREAD_ID="thread-1" K2_CODEX_TAB_ISOLATED="sess42" K2="$K2_CLI" \
+    bash -c 'exec -a "codex app-server --listen unix://" bash -c "\"\$K2\" thread k2/cortana hello; exit \$?"' \
+    >"$WORK/out" 2>"$WORK/err"
+rc=$?
+set -e
+assert_eq "real tree, switch on: exit 3" "$rc" "3"
+assert_contains "real tree, switch on: names the shared server" "$(cat "$WORK/err")" "It runs under a shared Codex app-server"
+assert_eq "real tree, switch on: nothing reached the daemon" "$(requests)" ""
 
 # Same tree without CODEX_* (not a Codex tool) → no ancestry refusal.
 : >"$WORK/requests.log"

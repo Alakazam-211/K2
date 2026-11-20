@@ -216,13 +216,21 @@ fn msg_sends_as_the_shell_does() {
             2,
             5,
         ),
-        plain(
-            "a lookup with no answer",
-            &["ws", "hi", "--idempotency-key", KEY],
-            vec![ok(ON), Reply::Close],
-            141,
-            2,
-        ),
+        // macOS's bash 3.2 runs the handle's reader on an empty input and
+        // ends with exit 1, printing nothing.
+        Case {
+            compare: Compare::Bash32PipeReader {
+                stdout: "",
+                stderr: "",
+            },
+            ..plain(
+                "a lookup with no answer",
+                &["ws", "hi", "--idempotency-key", KEY],
+                vec![ok(ON), Reply::Close],
+                141,
+                2,
+            )
+        },
         plain(
             "a lookup not HTTP",
             &["ws", "hi", "--idempotency-key", KEY],

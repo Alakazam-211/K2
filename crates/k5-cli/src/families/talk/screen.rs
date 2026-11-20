@@ -183,7 +183,7 @@ pub fn tabbar(screen: &str) -> Vec<String> {
         let raw: String = chars[i + 1..j].iter().collect();
         let name = raw
             .trim_matches(py_space)
-            .trim_matches(|c| c == '→' || c == '←')
+            .trim_matches(|c: char| c == '→' || c == '←')
             .trim_matches(py_space)
             .to_string();
         if matches!(marker, '☐' | '☒') && !name.is_empty() && name != "Submit" {

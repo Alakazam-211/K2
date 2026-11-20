@@ -383,7 +383,7 @@ fn tray_compose_answer_as_json_fields() {
         (
             "control and bidi characters, and dashes",
             "T",
-            r#"{"ok":true,"id":"c1","title":" \u001b[31mred\u0003 ‮ x---y  "}"#,
+            r#"{"ok":true,"id":"c1","title":" \u001b[31mred\u0003 \u202e x---y \u2028"}"#,
         ),
         (
             "no title in the answer: the typed one",

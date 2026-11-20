@@ -698,7 +698,10 @@ pub fn one_line(text: &str) -> String {
         let u = u32::from(c);
         u < 0x20
             || (0x7f..=0x9f).contains(&u)
-            || matches!(u, 0x2028 | 0x2029 | 0x061c | 0x200e | 0x200f | 0x2060 | 0xfeff)
+            || matches!(
+                u,
+                0x2028 | 0x2029 | 0x061c | 0x200e | 0x200f | 0x2060 | 0xfeff
+            )
             || (0x202a..=0x202e).contains(&u)
             || (0x2066..=0x2069).contains(&u)
             || (0x200b..=0x200d).contains(&u)
@@ -1396,7 +1399,10 @@ mod tests {
         assert_eq!(mapped(b"nope", "T"), Mapped::ParseFail);
         assert_eq!(mapped(b"[1]", "T"), Mapped::ParseFail);
         assert_eq!(one_line("a----b-c---"), "a--\\u{2d}-b-c--\\u{2d}");
-        assert_eq!(one_line("\u{1c} \u{202e}a\u{e0041}\u{3000}"), "\\u{202e}a\\u{e0041}");
+        assert_eq!(
+            one_line("\u{1c} \u{202e}a\u{e0041}\u{3000}"),
+            "\\u{202e}a\\u{e0041}"
+        );
         let long = "x".repeat(2049);
         assert_eq!(one_line(&long), format!("{}...", "x".repeat(2048)));
         assert_eq!(one_line(&long[..2048]), "x".repeat(2048));

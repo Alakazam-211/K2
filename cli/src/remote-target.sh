@@ -69,10 +69,26 @@ _split_remote_target() {
 # an agent on the Postal network, not a K2 server. `k2 msg <address> "text"`
 # sends Postal mail from this workspace's own address (the daemon takes the
 # sender from the credential), to a friend only.
+# The label follows the Postal plane's rule (k2-core postal::is_label):
+# 1 to 63 of a-z 0-9 -, no hyphen first or last, no two in a row, not all
+# digits, not reserved, not starting with turn-. The reserved names are the
+# plane's list.
+_is_postal_label() {
+    local l="$1"
+    [[ "$l" =~ ^[a-z0-9-]{1,63}$ ]] || return 1
+    [[ "$l" =~ ^[0-9]+$ ]] && return 1
+    case "$l" in
+        -*|*-|*--*|turn-*) return 1 ;;
+        www|api|app|admin|dashboard|account|billing|k2|k2c|connect|mail|smtp|ns1|ns2|status|help|support|blog|docs|k2-relay-probe|cert|relay|edge|frps|db|db-staging|supabase|dl|postal|postalbot|frp|acme|probe) return 1 ;;
+    esac
+    return 0
+}
+
 _is_postal_address() {
     local a
     a="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-    [[ "$a" =~ ^[a-z0-9][a-z0-9_-]*::[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.postal\.bot$ ]]
+    [[ "$a" =~ ^[a-z0-9][a-z0-9_-]*::([a-z0-9-]+)\.postal\.bot$ ]] || return 1
+    _is_postal_label "${BASH_REMATCH[1]}"
 }
 
 # _postal_send_teach <address> [args…]: when the address is a Postal one,

@@ -17,8 +17,10 @@
 # flag before the address is refused with the address-first form's line
 # (--from, --summary, --no-wake then --from, --idempotency-key, --secret),
 # never dropped; route sends its targets; owner-link reads a
-# token from stdin; adopt says "not available yet". Hermetic: HOME is a
-# throwaway dir, every K2_*/K2SO_* var is unset, the daemon is a python stub.
+# token from stdin; adopt says "not available yet"; postal send takes a
+# label by the Postal plane's rule and refuses the rest (exit 2, no
+# request). Hermetic: HOME is a throwaway dir, every K2_*/K2SO_* var is
+# unset, the daemon is a python stub.
 
 set -euo pipefail
 
@@ -284,6 +286,31 @@ assert_contains "msg --idempotency-key <key> <address> hi: unknown for Postal ma
 same_refusal "msg --secret K <address> hi" msg --secret K ops::beta.postal.bot hi VS msg ops::beta.postal.bot hi --secret K
 same_refusal "msg --from me <address> (no text)" msg --from me ops::beta.postal.bot VS msg ops::beta.postal.bot --from me
 assert_contains "msg --from me <address> (no text): --from is refused first" "$out" "--from is for messages"
+
+echo "== the label rule (the Postal plane's) =="
+# A label is 1 to 63 of a-z 0-9 -, no hyphen first or last, no two in a
+# row, not all digits, not reserved and not starting with turn-. z3 is a
+# live label. The reserved names are the plane's list.
+l63="$(printf 'a%.0s' $(seq 1 63))"
+l64="${l63}a"
+# covers: postal send
+for l in z3 a "$l63" k2n-lab acme-box; do
+    run postal send "ops::$l.postal.bot" "hi"
+    assert_eq "label ${l:0:12} (${#l} chars): sent, exit 0" "$rc" "0"
+    assert_eq "label ${l:0:12}: the address the daemon reads" "$(last /cli/postal/send)" "POST {\"text\": \"hi\", \"to\": \"ops::$l.postal.bot\", \"wake\": true}"
+done
+run postal send "ops::Z3.postal.bot" "hi"
+assert_eq "label Z3: letters in any case, exit 0" "$rc" "0"
+before="$(nreq)"
+for l in "$l64" -a a- a.b a--b 123 7 turn-x \
+    www api app admin dashboard account billing k2 k2c connect mail smtp ns1 ns2 status help support blog docs \
+    k2-relay-probe cert relay edge frps db db-staging supabase dl postal postalbot frp acme probe; do
+    # covers: postal send
+    run postal send "ops::$l.postal.bot" "hi"
+    assert_eq "label ${l:0:12} (${#l} chars): refused, exit 2" "$rc" "2"
+    assert_contains "label ${l:0:12}: says why" "$out" "isn't a Postal address"
+done
+assert_eq "a refused label sends nothing" "$(nreq)" "$before"
 
 echo "== routing =="
 run postal route inbox+pointer thread:rosson --no-wake

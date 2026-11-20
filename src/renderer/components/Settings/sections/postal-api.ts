@@ -156,11 +156,35 @@ export function postalRouteText(route: string | null | undefined): string | null
   return `Mail: ${words.join(' and ')}${woken}`
 }
 
+/** Labels no server may hold on the Postal network (the daemon's list,
+ * k2-core `postal::RESERVED_LABELS`, which matches the Postal plane's). */
+export const POSTAL_RESERVED_LABELS: readonly string[] = [
+  'www', 'api', 'app', 'admin', 'dashboard', 'account', 'billing', 'k2', 'k2c', 'connect', 'mail', 'smtp', 'ns1', 'ns2',
+  'status', 'help', 'support', 'blog', 'docs', 'k2-relay-probe', 'cert', 'relay', 'edge', 'frps', 'db', 'db-staging',
+  'supabase', 'dl', 'postal', 'postalbot', 'frp', 'acme', 'probe',
+]
+
+/** A server's label on the Postal network, by the daemon's rule: 1 to 63
+ * of a-z 0-9 -, no hyphen first or last, no two in a row, not all digits,
+ * not reserved, not starting with `turn-`. */
+export function isPostalLabel(label: string): boolean {
+  return (
+    /^[a-z0-9-]{1,63}$/.test(label) &&
+    !label.startsWith('-') &&
+    !label.endsWith('-') &&
+    !label.includes('--') &&
+    !/^[0-9]+$/.test(label) &&
+    !POSTAL_RESERVED_LABELS.includes(label) &&
+    !label.startsWith('turn-')
+  )
+}
+
 /** A full Postal address: `handle::label.postal.bot`. */
 export function isPostalAddress(value: string): boolean {
-  // The daemon's grammar (p5's): handle [a-z0-9][a-z0-9_-]*, a 3–63
-  // character label, one level under postal.bot.
-  return /^[a-z0-9][a-z0-9_-]{0,63}::[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.postal\.bot$/i.test(value.trim())
+  // The daemon's grammar (p5's): handle [a-z0-9][a-z0-9_-]*, then a label
+  // (isPostalLabel), one level under postal.bot.
+  const m = /^[a-z0-9][a-z0-9_-]{0,63}::([a-z0-9-]+)\.postal\.bot$/.exec(value.trim().toLowerCase())
+  return m !== null && isPostalLabel(m[1])
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────

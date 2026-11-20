@@ -189,7 +189,11 @@ fn decimal(text: &str) -> Option<i64> {
 /// `_sources_secs "$v" "$flag"` where its arithmetic runs: the seconds,
 /// as text (`*s` and a bare number are the text as typed).
 pub fn secs(v: &str, flag: &str) -> Result<String, Stop> {
-    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit() || b"smhd".contains(&b)) {
+    if v.is_empty()
+        || !v
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b"smhd".contains(&b))
+    {
         return Err(Stop::Usage(format!(
             "Error: {flag} takes a duration like 30s, 5m, 2h, 1d"
         )));
@@ -230,7 +234,13 @@ pub fn b2_secs(v: &str) -> Result<String, Stop> {
         "h" => 3_600,
         "m" => 60,
         // `echo "${v%s}"`: Python's int() takes digits only.
-        "s" => return if all_digits(num) { Ok(num.to_string()) } else { Err(Stop::Shell) },
+        "s" => {
+            return if all_digits(num) {
+                Ok(num.to_string())
+            } else {
+                Err(Stop::Shell)
+            }
+        }
         _ if all_digits(v) => return Ok(v.to_string()),
         _ => {
             return Err(Stop::Usage(format!(
@@ -248,7 +258,9 @@ pub fn b2_secs(v: &str) -> Result<String, Stop> {
 pub fn history_time(v: &str, flag: &str, now: i64) -> Result<String, Stop> {
     if v.ends_with(['s', 'm', 'h', 'd']) {
         let n = secs(v, flag).map_err(|_| Stop::Shell)?;
-        return decimal(&n).map(|n| (now - n).to_string()).ok_or(Stop::Shell);
+        return decimal(&n)
+            .map(|n| (now - n).to_string())
+            .ok_or(Stop::Shell);
     }
     if !v.bytes().all(|b| b.is_ascii_digit()) {
         return Err(Stop::Usage(format!(
@@ -681,7 +693,8 @@ fn go(c: &mut Client, ask: Ask, json_any: bool) -> Result<Exit, Exit> {
         Ask::Refresh { name, wait } => {
             let q = format!("name={}", quote(&name));
             let checked = |sent: &Sent| -> Result<String, Exit> {
-                let v = load(&sent.resp, 1).map_err(|r| raised(String::new(), String::new(), &r).print())?;
+                let v = load(&sent.resp, 1)
+                    .map_err(|r| raised(String::new(), String::new(), &r).print())?;
                 let at = py_get(&v, "checkedAt", 1)
                     .map_err(|r| raised(String::new(), String::new(), &r).print())?;
                 Ok(ops::s_of(at))
@@ -1151,11 +1164,19 @@ fn view_line(v: &Value) -> Result<String, Raise> {
         bits.push(s(&soft));
     }
     if py_get(v, "muted", line::LINE_MUTED)?.is_some_and(py::truthy) {
-        let by = idx(&idx(v, "muted", line::LINE_MUTED + 1)?, "by", line::LINE_MUTED + 1)?;
+        let by = idx(
+            &idx(v, "muted", line::LINE_MUTED + 1)?,
+            "by",
+            line::LINE_MUTED + 1,
+        )?;
         bits.push(s(&format!("muted by {}", py::str_of(&by))));
     }
     if py_get(v, "simulated", line::LINE_SIM)?.is_some_and(py::truthy) {
-        let state = idx(&idx(v, "simulated", line::LINE_SIM + 1)?, "state", line::LINE_SIM + 1)?;
+        let state = idx(
+            &idx(v, "simulated", line::LINE_SIM + 1)?,
+            "state",
+            line::LINE_SIM + 1,
+        )?;
         bits.push(s(&concat(&s("TEST "), &state, line::LINE_SIM + 1)?));
     }
     if py_get(v, "pinned", line::LINE_SIM + 2)?.is_some_and(py::truthy) {
@@ -1200,7 +1221,11 @@ fn card(v: &Value, o: &mut String) -> Result<(), Raise> {
     if py_get(v, "gap", line::CARD_GAP - 2)?.is_some_and(py::truthy) {
         let g = idx(v, "gap", line::CARD_GAP - 1)?;
         let kind = idx(&g, "kind", line::CARD_GAP)?;
-        let span = sub(&idx(&g, "to", line::CARD_GAP)?, &idx(&g, "from", line::CARD_GAP)?, line::CARD_GAP)?;
+        let span = sub(
+            &idx(&g, "to", line::CARD_GAP)?,
+            &idx(&g, "from", line::CARD_GAP)?,
+            line::CARD_GAP,
+        )?;
         push_line(
             o,
             &format!("  gap: {} ({} s)", py::str_of(&kind), py::str_of(&span)),
@@ -1321,7 +1346,10 @@ fn show_lines(d: &Value, o: &mut String) -> Result<(), Raise> {
         push_line(o, &format!("  fetch: {}", py::str_of(&u)));
     } else if ops::contains(&f, "targets", line::SHOW_TARGETS)? {
         let t = idx(&f, "targets", line::SHOW_TARGETS_P)?;
-        push_line(o, &format!("  fetch: {} targets", py_len(&t, line::SHOW_TARGETS_P)?));
+        push_line(
+            o,
+            &format!("  fetch: {} targets", py_len(&t, line::SHOW_TARGETS_P)?),
+        );
     } else if ops::contains(&f, "urlSecret", line::SHOW_SECRET_IN)? {
         let u = idx(&f, "urlSecret", line::SHOW_SECRET_P)?;
         let name = idx(&u, "name", line::SHOW_SECRET_P)?;

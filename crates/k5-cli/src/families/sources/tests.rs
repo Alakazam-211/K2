@@ -92,7 +92,10 @@ fn the_help_pages() {
     assert_eq!(parse(&["show", "x", "-h"]), Parsed::Help("show".into()));
     assert_eq!(help_page(""), crate::text::help("sources").unwrap());
     assert_eq!(help_page("ls"), crate::text::help("sources").unwrap());
-    assert_eq!(help_page("list"), crate::text::help("sources/read").unwrap());
+    assert_eq!(
+        help_page("list"),
+        crate::text::help("sources/read").unwrap()
+    );
     assert!(help_page("add").starts_with(&format!("{CLI} sources add --from")));
     assert!(help_page("try").ends_with(crate::text::help("sources/_flags").unwrap()));
 }
@@ -109,10 +112,16 @@ fn the_verbs_words() {
     );
     assert_eq!(
         ask("read", &w(&["--json"]), 0),
-        Err(Stop::Usage(format!("Error: usage: {CLI} sources read <name>")))
+        Err(Stop::Usage(format!(
+            "Error: usage: {CLI} sources read <name>"
+        )))
     );
     assert_eq!(
-        ask("history", &w(&["a", "health", "x", "--item", "k é", "--from", "100", "--to", "2m"]), 1000),
+        ask(
+            "history",
+            &w(&["a", "health", "x", "--item", "k é", "--from", "100", "--to", "2m"]),
+            1000
+        ),
         Ok(Ask::Get {
             route: "history",
             query: "name=a&field=health&item=k%20%C3%A9&from=100&to=880".into(),
@@ -122,10 +131,16 @@ fn the_verbs_words() {
     assert_eq!(ask("history", &w(&["a", "--to"]), 0), Err(Stop::Shift));
     assert_eq!(
         ask("history", &w(&["a", "f", "--from", "5x"]), 0),
-        Err(Stop::Usage("Error: --from takes a duration (6h) or epoch seconds".into()))
+        Err(Stop::Usage(
+            "Error: --from takes a duration (6h) or epoch seconds".into()
+        ))
     );
     for odd in ["h", "08h", "1d5h", "5xs", "-5h"] {
-        assert_eq!(ask("history", &w(&["a", "f", "--from", odd]), 0), Err(Stop::Shell), "{odd}");
+        assert_eq!(
+            ask("history", &w(&["a", "f", "--from", odd]), 0),
+            Err(Stop::Shell),
+            "{odd}"
+        );
     }
     assert_eq!(
         ask("mute", &w(&["a", "--for", "2h", "--reason", "r"]), 0),
@@ -144,7 +159,9 @@ fn the_verbs_words() {
     );
     assert_eq!(
         ask("mute", &w(&["a", "--for", "5x"]), 0),
-        Err(Stop::Usage("Error: --for takes a duration like 30s, 5m, 2h, 1d".into()))
+        Err(Stop::Usage(
+            "Error: --for takes a duration like 30s, 5m, 2h, 1d".into()
+        ))
     );
     assert_eq!(ask("mute", &w(&["a", "--for", "s"]), 0), Err(Stop::Shell));
     assert_eq!(
@@ -153,25 +170,42 @@ fn the_verbs_words() {
     );
     assert_eq!(
         ask("access", &w(&["on", "off"]), 0),
-        Err(Stop::Usage(format!("usage: {CLI} sources access on|off [--workspace <ws>]")))
+        Err(Stop::Usage(format!(
+            "usage: {CLI} sources access on|off [--workspace <ws>]"
+        )))
     );
     assert_eq!(
         ask("access", &w(&["on", "--workspace", ""]), 0),
-        Err(Stop::Usage("usage: --workspace <workspace name or path>".into()))
+        Err(Stop::Usage(
+            "usage: --workspace <workspace name or path>".into()
+        ))
     );
     assert_eq!(ask("propose", &w(&[]), 0), Err(Stop::Shell));
 }
 
 #[test]
 fn a_refusal() {
-    let f = fail("403", br#"{"error":{"code":"person_only","hint":"ask"}}"#, false);
+    let f = fail(
+        "403",
+        br#"{"error":{"code":"person_only","hint":"ask"}}"#,
+        false,
+    );
     assert_eq!(f.exit, Exit::Refused);
-    assert!(f.stderr.starts_with("Error: person_only: ask\nThis needs a person"));
-    let f = fail("403", br#"{"error":{"code":"forbidden","hint":"no"}}"#, false);
+    assert!(f
+        .stderr
+        .starts_with("Error: person_only: ask\nThis needs a person"));
+    let f = fail(
+        "403",
+        br#"{"error":{"code":"forbidden","hint":"no"}}"#,
+        false,
+    );
     assert_eq!(f.stderr, "Error: forbidden: no\n");
     let f = fail("404", br#"{"error":{"code":"source_not_found"}}"#, true);
     assert_eq!(f.exit, Exit::NotFound);
-    assert_eq!(f.stdout, "{\n  \"error\": {\n    \"code\": \"source_not_found\"\n  }\n}\n");
+    assert_eq!(
+        f.stdout,
+        "{\n  \"error\": {\n    \"code\": \"source_not_found\"\n  }\n}\n"
+    );
     let f = fail("500", b"oops", false);
     assert_eq!(f.stderr, "Error: daemon returned: oops\n");
     let f = fail("000", b"", false);
@@ -194,11 +228,22 @@ fn the_renderer() {
             "web"
         )
     );
-    let r = render("history", br#"{"field":"count","points":[{"t":1,"v":null},{"t":2.5,"v":3}]}"#);
+    let r = render(
+        "history",
+        br#"{"field":"count","points":[{"t":1,"v":null},{"t":2.5,"v":3}]}"#,
+    );
     assert_eq!(r.stdout, "1\tgap\n2\t3\n");
-    let r = render("read", br#"{"name":"n","label":"L","display":5,"serverNow":1}"#);
+    let r = render(
+        "read",
+        br#"{"name":"n","label":"L","display":5,"serverNow":1}"#,
+    );
     assert_eq!(r.exit, Exit::Error);
-    assert!(r.stderr.ends_with("TypeError: sequence item 0: expected str instance, int found\n"), "{}", r.stderr);
+    assert!(
+        r.stderr
+            .ends_with("TypeError: sequence item 0: expected str instance, int found\n"),
+        "{}",
+        r.stderr
+    );
 }
 
 #[test]
@@ -222,10 +267,15 @@ fn simulate_and_refresh_words() {
     );
     assert_eq!(
         ask("simulate", &w(&["web", "ok", "--for", "5q"]), 0),
-        Err(Stop::Usage("usage: bad duration '5q' (use 30s, 5m, 2h, 1d)".into()))
+        Err(Stop::Usage(
+            "usage: bad duration '5q' (use 30s, 5m, 2h, 1d)".into()
+        ))
     );
-    assert_eq!(ask("simulate", &w(&["web", "ok", "--for", "xs"]), 0), Err(Stop::Shell));
-    assert_eq!(ask("simulate", &w(&["web", "ok", "--for", "5é"]), 0).is_err(), true);
+    assert_eq!(
+        ask("simulate", &w(&["web", "ok", "--for", "xs"]), 0),
+        Err(Stop::Shell)
+    );
+    assert!(ask("simulate", &w(&["web", "ok", "--for", "5é"]), 0).is_err());
     assert_eq!(
         ask("refresh", &w(&["--wait", "web"]), 0),
         Ok(Ask::Refresh {
@@ -233,6 +283,9 @@ fn simulate_and_refresh_words() {
             wait: true
         })
     );
-    assert_eq!(utc_minutes(&Value::Int("3660".into())), Ok("01:01 UTC".into()));
+    assert_eq!(
+        utc_minutes(&Value::Int("3660".into())),
+        Ok("01:01 UTC".into())
+    );
     assert_eq!(utc_minutes(&Value::Float(-0.5)), Ok("23:59 UTC".into()));
 }

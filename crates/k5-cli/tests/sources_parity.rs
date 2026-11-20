@@ -50,9 +50,7 @@ fn shell(c: Case) -> Case {
 }
 
 fn view(display: &str, extra: &str) -> String {
-    format!(
-        r#"{{"display":"{display}","serverNow":1763600000,"updatedAt":1763599000{extra}}}"#
-    )
+    format!(r#"{{"display":"{display}","serverNow":1763600000,"updatedAt":1763599000{extra}}}"#)
 }
 
 fn list() -> String {
@@ -162,17 +160,29 @@ fn sources_help_and_words() {
         ("export with no name", &["export"]),
         ("pause with no name", &["pause"]),
         ("history with no field", &["history", "web"]),
-        ("history, an unknown flag", &["history", "web", "health", "--since", "1"]),
-        ("history, a bad --from", &["history", "web", "health", "--from", "6x"]),
+        (
+            "history, an unknown flag",
+            &["history", "web", "health", "--since", "1"],
+        ),
+        (
+            "history, a bad --from",
+            &["history", "web", "health", "--from", "6x"],
+        ),
         ("mute with no --for", &["mute", "web"]),
         ("mute, a bad duration", &["mute", "web", "--for", "5q"]),
-        ("mute, an unknown flag", &["mute", "web", "--for", "5m", "--x"]),
+        (
+            "mute, an unknown flag",
+            &["mute", "web", "--for", "5m", "--x"],
+        ),
         ("remove with no --yes and no terminal", &["remove", "web"]),
         ("rm with no name", &["rm", "--yes"]),
         ("pending, a word it doesn't take", &["pending", "web"]),
         ("access with nothing", &["access"]),
         ("access on off", &["access", "on", "off"]),
-        ("access, an empty workspace", &["access", "on", "--workspace", ""]),
+        (
+            "access, an empty workspace",
+            &["access", "on", "--workspace", ""],
+        ),
         ("access, a word it doesn't take", &["access", "on", "x"]),
         ("an unknown verb", &["nosuch"]),
     ] {
@@ -181,8 +191,14 @@ fn sources_help_and_words() {
     // bash D6: a value flag as the last word; flips to a usage line,
     // exit 2.
     for (name, args) in [
-        ("bash D6: history --from last", &["history", "web", "health", "--from"][..]),
-        ("bash D6: mute --reason last", &["mute", "web", "--for", "1m", "--reason"]),
+        (
+            "bash D6: history --from last",
+            &["history", "web", "health", "--from"][..],
+        ),
+        (
+            "bash D6: mute --reason last",
+            &["mute", "web", "--for", "1m", "--reason"],
+        ),
         ("bash D6: pending --names last", &["pending", "--names"]),
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 1, 0));
@@ -201,7 +217,15 @@ fn sources_help_and_words() {
     }
     // `source` is the same command.
     let rig = Rig::new("source", "alias");
-    rig.check(&case("source list", &["ls"], &[], vec![ok(&list())], owner_and_port, 0, 1));
+    rig.check(&case(
+        "source list",
+        &["ls"],
+        &[],
+        vec![ok(&list())],
+        owner_and_port,
+        0,
+        1,
+    ));
 }
 
 #[test]
@@ -210,11 +234,43 @@ fn sources_verbs_answer_as_the_shell_does() {
     let done = || ok(r#"{"ok":true}"#);
     let v = vec![
         // covers: sources list
-        case("list", &["list"], &[], vec![ok(&list())], owner_and_port, 0, 1),
-        case("list, none", &["ls"], &[], vec![ok(r#"{"sources":[]}"#)], owner_and_port, 0, 1),
+        case(
+            "list",
+            &["list"],
+            &[],
+            vec![ok(&list())],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list, none",
+            &["ls"],
+            &[],
+            vec![ok(r#"{"sources":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources list --json
-        case("list --json", &["list", "--json"], &[], vec![ok(&list())], owner_and_port, 0, 1),
-        case("list, thousands of rows", &["list"], &[], vec![ok(&many(2500))], owner_and_port, 0, 1),
+        case(
+            "list --json",
+            &["list", "--json"],
+            &[],
+            vec![ok(&list())],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list, thousands of rows",
+            &["list"],
+            &[],
+            vec![ok(&many(2500))],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "list --json, thousands of rows",
             &["list", "--json"],
@@ -224,19 +280,61 @@ fn sources_verbs_answer_as_the_shell_does() {
             0,
             1,
         ),
-        case("list --json, not JSON", &["list", "--json"], &[], vec![ok("<html>")], owner_and_port, 0, 1),
+        case(
+            "list --json, not JSON",
+            &["list", "--json"],
+            &[],
+            vec![ok("<html>")],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources show
-        case("show", &["show", "web é"], &[], vec![ok(&show())], owner_and_port, 0, 1),
+        case(
+            "show",
+            &["show", "web é"],
+            &[],
+            vec![ok(&show())],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources show --json
-        case("show --json", &["show", "--json", "web"], &[], vec![ok(&show())], owner_and_port, 0, 1),
+        case(
+            "show --json",
+            &["show", "--json", "web"],
+            &[],
+            vec![ok(&show())],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources read
-        case("read", &["read", "web"], &[], vec![ok(&read())], owner_and_port, 0, 1),
+        case(
+            "read",
+            &["read", "web"],
+            &[],
+            vec![ok(&read())],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources read --json
-        case("read --json", &["read", "web", "--json"], &[], vec![ok(&read())], owner_and_port, 0, 1),
+        case(
+            "read --json",
+            &["read", "web", "--json"],
+            &[],
+            vec![ok(&read())],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources history
         case(
             "history health, epochs",
-            &["history", "web", "health", "--item", "eu 1", "--from", "100", "--to", "200"],
+            &[
+                "history", "web", "health", "--item", "eu 1", "--from", "100", "--to", "200",
+            ],
             &[],
             vec![ok(
                 r#"{"field":"health","events":[{"t":150,"kind":"state","item":"eu 1","from":"ok","to":"crit","reason":"timeout"},{"t":160.9,"kind":"gap"}]}"#,
@@ -259,7 +357,9 @@ fn sources_verbs_answer_as_the_shell_does() {
             "history trend --json",
             &["history", "web", "ms", "--json"],
             &[],
-            vec![ok(r#"{"field":"ms","points":[{"t":1,"v":null},{"t":2,"v":1.5}]}"#)],
+            vec![ok(
+                r#"{"field":"ms","points":[{"t":1,"v":null},{"t":2,"v":1.5}]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -268,7 +368,9 @@ fn sources_verbs_answer_as_the_shell_does() {
             "history trend",
             &["history", "web", "ms"],
             &[],
-            vec![ok(r#"{"field":"ms","points":[{"t":1,"v":null},{"t":2,"v":1.5}]}"#)],
+            vec![ok(
+                r#"{"field":"ms","points":[{"t":1,"v":null},{"t":2,"v":1.5}]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -290,7 +392,9 @@ fn sources_verbs_answer_as_the_shell_does() {
             "status --json",
             &["status", "--json"],
             &[],
-            vec![ok(r#"{"running":false,"sources":0,"active":0,"targets":0,"inFlight":0}"#)],
+            vec![ok(
+                r#"{"running":false,"sources":0,"active":0,"targets":0,"inFlight":0}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -300,16 +404,42 @@ fn sources_verbs_answer_as_the_shell_does() {
             "export: always JSON",
             &["export", "web"],
             &[],
-            vec![ok(r#"{"name":"web","label":"é","fetch":{"url":"https://example.com"}}"#)],
+            vec![ok(
+                r#"{"name":"web","label":"é","fetch":{"url":"https://example.com"}}"#,
+            )],
             owner_and_port,
             0,
             1,
         ),
         // covers: sources pause
-        case("pause", &["pause", "web"], &[], vec![done()], owner_and_port, 0, 1),
+        case(
+            "pause",
+            &["pause", "web"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources pause --json
-        case("pause --json", &["pause", "web", "--json"], &[], vec![done()], owner_and_port, 0, 1),
-        case("resume", &["resume", "web"], &[], vec![done()], owner_and_port, 0, 1),
+        case(
+            "pause --json",
+            &["pause", "web", "--json"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "resume",
+            &["resume", "web"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources mute
         case(
             "mute",
@@ -331,13 +461,45 @@ fn sources_verbs_answer_as_the_shell_does() {
             1,
         ),
         // covers: sources unmute
-        case("unmute", &["unmute", "web"], &[], vec![done()], owner_and_port, 0, 1),
+        case(
+            "unmute",
+            &["unmute", "web"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources unmute --json
-        case("unmute --json", &["unmute", "--json", "web"], &[], vec![done()], owner_and_port, 0, 1),
+        case(
+            "unmute --json",
+            &["unmute", "--json", "web"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources remove
-        case("remove --yes", &["remove", "web", "--yes"], &[], vec![done()], owner_and_port, 0, 1),
+        case(
+            "remove --yes",
+            &["remove", "web", "--yes"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources remove --json
-        case("rm --yes --json", &["rm", "--yes", "web", "--json"], &[], vec![done()], owner_and_port, 0, 1),
+        case(
+            "rm --yes --json",
+            &["rm", "--yes", "web", "--json"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources pending
         case(
             "pending",
@@ -364,13 +526,23 @@ fn sources_verbs_answer_as_the_shell_does() {
             "pending, own",
             &["pending"],
             &[],
-            vec![ok(r#"{"scope":"own","sources":[{"name":"w","approval":"owner_only","everySecs":5,"targets":1,"madeBy":"me"}]}"#)],
+            vec![ok(
+                r#"{"scope":"own","sources":[{"name":"w","approval":"owner_only","everySecs":5,"targets":1,"madeBy":"me"}]}"#,
+            )],
             owner_and_port,
             0,
             1,
         ),
         // covers: sources pending --json
-        case("pending --json", &["pending", "--json"], &[], vec![ok(r#"{"sources":[]}"#)], owner_and_port, 0, 1),
+        case(
+            "pending --json",
+            &["pending", "--json"],
+            &[],
+            vec![ok(r#"{"sources":[]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "access on",
             &["access", "on", "--workspace", "acme"],
@@ -402,12 +574,23 @@ fn sources_verbs_answer_as_the_shell_does() {
             "access, a 403",
             &["access", "on", "--workspace", "w"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"forbidden","hint":"no"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"forbidden","hint":"no"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
         ),
-        traceback(case("read, not JSON", &["read", "web"], &[], vec![ok("<html>")], owner_and_port, 1, 1)),
+        traceback(case(
+            "read, not JSON",
+            &["read", "web"],
+            &[],
+            vec![ok("<html>")],
+            owner_and_port,
+            1,
+            1,
+        )),
         traceback(case(
             "read, a display that is a number",
             &["read", "web"],
@@ -459,7 +642,10 @@ fn sources_refusals_and_no_answer() {
             "person_only with a hint: the person line too",
             &["pause", "web"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"person_only","hint":"ask a person"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"person_only","hint":"ask a person"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -468,7 +654,10 @@ fn sources_refusals_and_no_answer() {
             "lan_owner_only with a hint: no line of ours",
             &["list"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"lan_owner_only","hint":"from the LAN"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"lan_owner_only","hint":"from the LAN"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -477,7 +666,10 @@ fn sources_refusals_and_no_answer() {
             "forbidden with no hint: the person line",
             &["mute", "web", "--for", "1h"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"forbidden"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"forbidden"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -486,7 +678,10 @@ fn sources_refusals_and_no_answer() {
             "secret_not_usable: the secret line",
             &["resume", "web"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"secret_not_usable","hint":" "}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"secret_not_usable","hint":" "}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -504,7 +699,10 @@ fn sources_refusals_and_no_answer() {
             "source_not_found --json: the body on stdout",
             &["show", "nope", "--json"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"source_not_found","hint":"none"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"source_not_found","hint":"none"}}"#.into(),
+            )],
             owner_and_port,
             4,
             1,
@@ -527,9 +725,33 @@ fn sources_refusals_and_no_answer() {
             1,
             1,
         ),
-        case("500, no body", &["read", "web"], &[], vec![Reply::Answer(500, String::new())], owner_and_port, 1, 1),
-        case("an empty reply", &["list"], &[], vec![Reply::Close], owner_and_port, 1, 1),
-        case("a reset", &["pause", "web"], &[], vec![Reply::Reset], owner_and_port, 1, 1),
+        case(
+            "500, no body",
+            &["read", "web"],
+            &[],
+            vec![Reply::Answer(500, String::new())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an empty reply",
+            &["list"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "a reset",
+            &["pause", "web"],
+            &[],
+            vec![Reply::Reset],
+            owner_and_port,
+            1,
+            1,
+        ),
         case(
             "nothing listens",
             &["status"],
@@ -586,14 +808,20 @@ fn sources_refusals_and_no_answer() {
 #[test]
 fn sources_simulate_refresh_and_the_shell() {
     let rig = Rig::new(VERB, "sim");
-    let read_at = |t: u32| ok(&format!(r#"{{"name":"web","label":"L","display":"ok","serverNow":9,"updatedAt":9,"checkedAt":{t}}}"#));
+    let read_at = |t: u32| {
+        ok(&format!(
+            r#"{{"name":"web","label":"L","display":"ok","serverNow":9,"updatedAt":9,"checkedAt":{t}}}"#
+        ))
+    };
     let v = vec![
         // covers: sources simulate
         case(
             "simulate crit --for",
             &["simulate", "web", "crit", "--for", "1h"],
             &[],
-            vec![ok(r#"{"name":"web","simulated":{"state":"crit","until":1763603600}}"#)],
+            vec![ok(
+                r#"{"name":"web","simulated":{"state":"crit","until":1763603600}}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -617,13 +845,53 @@ fn sources_simulate_refresh_and_the_shell() {
             0,
             1,
         ),
-        case("simulate, a bad state", &["simulate", "web", "red"], &[], vec![], owner_and_port, 2, 0),
-        case("simulate, --for last", &["simulate", "web", "ok", "--for"], &[], vec![], owner_and_port, 2, 0),
-        case("simulate, a bad duration", &["simulate", "web", "ok", "--for", "9q"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "simulate, a bad state",
+            &["simulate", "web", "red"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "simulate, --for last",
+            &["simulate", "web", "ok", "--for"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "simulate, a bad duration",
+            &["simulate", "web", "ok", "--for", "9q"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         // covers: sources refresh
-        case("refresh", &["refresh", "web"], &[], vec![ok(r#"{"ok":true}"#)], owner_and_port, 0, 1),
+        case(
+            "refresh",
+            &["refresh", "web"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: sources refresh --json
-        case("refresh --json", &["refresh", "web", "--json"], &[], vec![ok(r#"{"ok":true}"#)], owner_and_port, 0, 1),
+        case(
+            "refresh --json",
+            &["refresh", "web", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "refresh --wait: a new check",
             &["refresh", "web", "--wait"],
@@ -670,7 +938,15 @@ fn sources_help_never_acts() {
         &["unmute", "web"],
         &["remove", "web", "--yes"],
         &["access", "on", "--workspace", "w"],
-        &["propose", "--name", "n", "--label", "L", "--url", "https://e"],
+        &[
+            "propose",
+            "--name",
+            "n",
+            "--label",
+            "L",
+            "--url",
+            "https://e",
+        ],
         &["approve", "web"],
         &["refresh", "web"],
     ] {

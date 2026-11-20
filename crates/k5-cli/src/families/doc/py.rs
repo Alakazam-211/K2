@@ -2,14 +2,153 @@
 //! gave: the lines they print (stdout as bytes, stderr as text) and, where
 //! Python raises, the traceback with Python's exception. Small wrappers
 //! over [`crate::out::pylib`] and [`crate::families`]'s helpers.
+//!
+//! An answer that is not UTF-8 reaches the shell's readers on stdin, which
+//! Python decodes as its locale says ([`crate::cards::decode`]). In a
+//! UTF-8 locale a bad byte raises `UnicodeDecodeError`. In the C or POSIX
+//! locale (or a name Python coerces to it) each bad byte becomes a lone
+//! surrogate (`surrogateescape`, U+DC80 to U+DCFF), which goes back out on
+//! stdout as the same byte, on stderr as `\udcXX` (`backslashreplace`), and
+//! in `json.dumps` and `repr` as `\udcXX`. A Rust string can't hold a lone
+//! surrogate, so [`stdin_text`] keeps each such byte as a code point of
+//! its own ([`escaped`]: U+10FF00 plus the byte), as long as a surrogate
+//! in every way the readers use (one character), and [`Pr`] writes each
+//! out as Python writes the surrogate. While no answer had a bad byte,
+//! nothing is changed (a legitimate U+10FF80 to U+10FFFF in an answer that
+//! also had a bad byte would be taken for one: none of the daemon's
+//! answers holds such a code point).
 
+use crate::cards::Decode;
 use crate::exit::Exit;
 use crate::families::{py_d, py_get, py_iter, py_left, Raise};
+use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::pylib::{json as pyjson, ops, time as pytime};
 use crate::out::{self, py};
 
 pub type R<T> = Result<T, Raise>;
+
+/// An answer with a byte that is not UTF-8 was read the C locale's way.
+static ESCAPED: AtomicBool = AtomicBool::new(false);
+
+/// The code point that stands for the bad byte `b` (0x80 to 0xFF), as
+/// Python's U+DC00 plus `b` does.
+pub fn escaped(b: u8) -> char {
+    char::from_u32(0x10_FF00 + u32::from(b)).expect("U+10FF80..U+10FFFF are code points")
+}
+
+/// The byte [`escaped`] stands for.
+fn unescaped(c: char) -> Option<u8> {
+    let n = u32::from(c);
+    (0x10_FF80..=0x10_FFFF)
+        .contains(&n)
+        .then(|| (n - 0x10_FF00) as u8)
+}
+
+/// The settings that say how `python3` decodes its stdin: the locale's,
+/// and the three of Python's own that change it.
+const DECODE_VARS: [&str; 6] = [
+    "LC_ALL",
+    "LC_CTYPE",
+    "LANG",
+    "PYTHONIOENCODING",
+    "PYTHONUTF8",
+    "PYTHONCOERCECLOCALE",
+];
+
+/// How the shell's `python3` decodes its stdin here
+/// ([`crate::cards::decode`] of [`DECODE_VARS`]): `None` when the binary
+/// can't tell (one of Python's three set, or a locale that is neither
+/// UTF-8 nor C or POSIX), and the family goes to the shell then.
+pub fn decode_here() -> Option<Decode> {
+    let held: Vec<(&str, String)> = DECODE_VARS
+        .iter()
+        .filter_map(|n| std::env::var_os(n).map(|v| (*n, v.to_string_lossy().into_owned())))
+        .collect();
+    let pairs: Vec<(&str, &str)> = held.iter().map(|(n, v)| (*n, v.as_str())).collect();
+    crate::cards::decode(&crate::offline::Env::of(&pairs))
+}
+
+/// `sys.stdin.read()` of an answer: the text, a bad byte as [`escaped`]
+/// in the C locale, or the `UnicodeDecodeError` Python raises at `line`
+/// in a UTF-8 one.
+pub fn stdin_text(body: &[u8], line: u32) -> R<Cow<'_, str>> {
+    stdin_text_as(body, line, decode_here())
+}
+
+/// [`stdin_text`] for Python's `decode`.
+pub fn stdin_text_as(body: &[u8], line: u32, decode: Option<Decode>) -> R<Cow<'_, str>> {
+    let e = match std::str::from_utf8(body) {
+        Ok(t) => return Ok(Cow::Borrowed(t)),
+        Err(e) => e,
+    };
+    if decode != Some(Decode::Lossy) {
+        return Err(super::utf8_raise(line, body, e));
+    }
+    ESCAPED.store(true, Ordering::Relaxed);
+    let mut t = String::with_capacity(body.len() + 8);
+    for chunk in body.utf8_chunks() {
+        t.push_str(chunk.valid());
+        t.extend(chunk.invalid().iter().map(|b| escaped(*b)));
+    }
+    Ok(Cow::Owned(t))
+}
+
+/// What Python writes for a text holding [`escaped`] code points: on
+/// stdout each as its byte; on stderr each as `\udcXX`; and the
+/// `\udbff\udfXX` of `json.dumps` or the `\U0010ffXX` of `repr` as
+/// `\udcXX` on either.
+fn python_writes(s: &str, stdout: bool) -> Cow<'_, [u8]> {
+    if !ESCAPED.load(Ordering::Relaxed) {
+        return Cow::Borrowed(s.as_bytes());
+    }
+    let s = surrogate_escapes(s);
+    let mut out = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        match unescaped(c) {
+            Some(b) if stdout => out.push(b),
+            Some(b) => out.extend_from_slice(format!("\\udc{b:02x}").as_bytes()),
+            None => {
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            }
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// `\udbff\udfXX` (U+10FFXX in `json.dumps`) and `\U0010ffXX` (in
+/// `repr`) for XX of 80 to ff, as `\udcXX`.
+fn surrogate_escapes(s: &str) -> Cow<'_, str> {
+    const DUMPS: &str = "\\udbff\\udf";
+    const REPR: &str = "\\U0010ff";
+    if !s.contains(DUMPS) && !s.contains(REPR) {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        let lead = [DUMPS, REPR].into_iter().find(|p| rest.starts_with(p));
+        let byte = lead.and_then(|p| {
+            let xx = rest.get(p.len()..p.len() + 2)?;
+            let lower = xx.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+            let v = u8::from_str_radix(xx, 16).ok()?;
+            (lower && v >= 0x80).then_some((p.len() + 2, v))
+        });
+        match byte {
+            Some((n, v)) => {
+                out.push_str(&format!("\\udc{v:02x}"));
+                rest = &rest[n..];
+            }
+            None => {
+                out.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    Cow::Owned(out)
+}
 
 /// What a reader printed so far.
 #[derive(Debug, Default)]
@@ -21,21 +160,26 @@ pub struct Pr {
 impl Pr {
     /// `print(s)`.
     pub fn line(&mut self, s: &str) {
-        self.out.extend_from_slice(s.as_bytes());
+        self.out.extend_from_slice(&python_writes(s, true));
         self.out.push(b'\n');
     }
     /// `sys.stdout.write(s)`.
     pub fn put(&mut self, s: &str) {
-        self.out.extend_from_slice(s.as_bytes());
+        self.out.extend_from_slice(&python_writes(s, true));
     }
     /// `print(s, file=sys.stderr)`.
     pub fn eline(&mut self, s: &str) {
-        self.err.push_str(s);
+        self.eput(s);
         self.err.push('\n');
     }
     /// `sys.stderr.write(s)`.
     pub fn eput(&mut self, s: &str) {
-        self.err.push_str(s);
+        match python_writes(s, false) {
+            Cow::Borrowed(_) => self.err.push_str(s),
+            Cow::Owned(b) => self
+                .err
+                .push_str(&String::from_utf8(b).expect("stderr's text is UTF-8")),
+        }
     }
 
     /// Writes what was printed (and the traceback when the reader
@@ -58,10 +202,10 @@ impl Pr {
     }
 }
 
-/// `json.load(...)` of an answer's bytes (read as UTF-8, a bad byte as
-/// U+FFFD), or the traceback's exception at `line`.
+/// `json.load(sys.stdin)` of an answer's bytes ([`stdin_text`]), or the
+/// traceback's exception at `line`.
 pub fn load(body: &[u8], line: u32) -> R<Value> {
-    let text = String::from_utf8_lossy(body);
+    let text = stdin_text(body, line)?;
     pyjson::loads(&text).map_err(|f| Raise::at(line, f.last_line()))
 }
 

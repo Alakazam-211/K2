@@ -856,3 +856,109 @@ fn xfer_heals_once_on_the_gate_s_refusal() {
         .collect();
     assert_eq!(tools.len(), 2, "one call and one retry, no more:\n{log:#?}");
 }
+
+/// An HTTP answer with a body of any bytes.
+fn raw_answer(status: u16, body: &[u8]) -> Reply {
+    let mut r = format!(
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    r.extend_from_slice(body);
+    Reply::Raw(r)
+}
+
+/// An answer that is not UTF-8 (a file's name in Latin-1): the shell's
+/// readers get it on stdin, which Python in the C locale (the rig's: no
+/// LANG) reads with `surrogateescape`. Each bad byte goes back out on
+/// stdout as itself, on stderr as `\udcXX`, and as `\udcXX` in
+/// `json.dumps` and `repr`; never as U+FFFD. Out reads output as UTF-8
+/// (a bad byte as U+FFFD on both sides alike), so each row also checks
+/// the bytes ([`Rig::raw`]).
+#[test]
+fn answers_that_are_not_utf8_pass_their_bytes() {
+    let rig = Rig::new(VERB, "bytes");
+    let rows: Vec<(Case, &[u8], &[u8])> = vec![
+        // covers: doc view
+        (
+            r(
+                "view: a path that is not UTF-8, on stdout",
+                &["view", "--region", "p1", "a.pdf"],
+                vec![raw_answer(200, b"{\"region\":\"p1\",\"doc\":{\"path\":\"/w/caf\xe9.pdf\"}}")],
+                0,
+            ),
+            b"viewing p1 in /w/caf\xe9.pdf\n",
+            b"",
+        ),
+        // covers: doc restore
+        (
+            r(
+                "restore: a value that is not UTF-8, on stderr",
+                &["restore", "--version", "2", "a.bin"],
+                vec![raw_answer(
+                    200,
+                    b"{\"tier\":0,\"restored\":\"v\xff\",\"result\":{\"changed\":true,\"version\":3,\"size\":5,\"written\":true}}",
+                )],
+                0,
+            ),
+            b"",
+            b"restored version v\\udcff as version 3 (5 bytes)\n",
+        ),
+        // covers: doc status
+        (
+            r(
+                "a refusal that is not UTF-8: the hint and its JSON",
+                &["status", "a.md"],
+                vec![raw_answer(500, b"oops \xff")],
+                1,
+            ),
+            b"",
+            b"Error: oops \\udcff\n{\"error\": {\"code\": \"error\", \"hint\": \"oops \\udcff\", \"status\": 500}}\n",
+        ),
+        // covers: doc append
+        (
+            r(
+                "a conflict that is not UTF-8: repr",
+                &["append", "--text", "x", "a.md"],
+                vec![raw_answer(
+                    409,
+                    b"{\"error\":{\"code\":\"conflict\",\"hint\":\"h\"},\"conflicts\":[{\"lines\":[1,2],\"ours\":\"x\xff\",\"theirs\":\"y\"}]}",
+                )],
+                1,
+            ),
+            b"",
+            b"Error: h\n{\"error\": {\"code\": \"conflict\", \"hint\": \"h\", \"status\": 409}}\nconflict at lines 1-2:\n  yours:  'x\\udcff'\n  theirs: 'y'\n",
+        ),
+        // covers: doc who --json
+        (
+            r(
+                "--json: the answer's bytes as they came",
+                &["who", "--json", "a.md"],
+                vec![raw_answer(200, b"{\"roster\":[{\"name\":\"Jos\xe9\"}]}")],
+                0,
+            ),
+            b"{\"roster\":[{\"name\":\"Jos\xe9\"}]}\n",
+            b"",
+        ),
+    ];
+    for (c, stdout, stderr) in rows {
+        rig.check(&c);
+        let bash = rig.raw(Side::Bash);
+        assert_eq!(
+            (bash.0.as_slice(), bash.1.as_slice()),
+            (stdout, stderr),
+            "{}: the shell's bytes:\n{}\n{}",
+            c.name,
+            String::from_utf8_lossy(&bash.0),
+            String::from_utf8_lossy(&bash.1)
+        );
+        for side in [Side::Rust, Side::NoPython3] {
+            assert_eq!(
+                rig.raw(side),
+                bash,
+                "{}: the binary's bytes ({side:?}) against the shell's",
+                c.name
+            );
+        }
+    }
+}

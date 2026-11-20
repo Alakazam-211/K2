@@ -20,9 +20,14 @@
 //!    any status but 200 the refusal reader ([`fail`]), then the reader's
 //!    lines ([`print`], [`tool`], [`more`]).
 //!
+//! An answer that is not UTF-8 is read as the shell's Python reads its
+//! stdin, by its locale, and its bytes go back out as Python writes them
+//! ([`py::stdin_text`]): never as U+FFFD.
+//!
 //! Handed to the shell before anything is printed or sent: a word that is
 //! not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a port curl won't
-//! take, a `python3` the binary can't tell, `--host`, `--token` or
+//! take, a `python3` the binary can't tell (nor how it decodes its stdin:
+//! [`py::decode_here`]), `--host`, `--token` or
 //! `--token-stdin` anywhere (another server: the remote transport isn't
 //! the binary's yet), and a board verb on a `.k5board` file (the shell
 //! runs `cmd_board` for it, under `docs`'s gate).
@@ -153,7 +158,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if handed_back(&words) || !python::family_native(python::here()) {
+    if handed_back(&words)
+        || !python::family_native(python::here())
+        || py::decode_here().is_none()
+    {
         return None;
     }
     let settings = match daemon::current() {
@@ -758,7 +766,7 @@ pub fn fail(status: &str, body: &[u8], as_json: bool) -> Exit {
 }
 
 fn fail_lines(pr: &mut Pr, status: &str, body: &[u8], as_json: bool) -> R<Exit> {
-    let raw = String::from_utf8_lossy(body).into_owned();
+    let raw = py::stdin_text(body, 4)?.into_owned();
     let mut code = s("");
     let mut hint = s("");
     let v = crate::out::pylib::json::loads(&raw).ok();

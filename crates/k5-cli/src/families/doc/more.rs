@@ -95,7 +95,7 @@ pub fn cores(ctx: &mut Ctx, words: &[String]) -> Step {
 }
 
 fn cores_fail(pr: &mut Pr, status: &str, out: &[u8], json: bool) -> R<Exit> {
-    let raw = String::from_utf8_lossy(out).into_owned();
+    let raw = py::stdin_text(out, 4)?.into_owned();
     let v = crate::out::pylib::json::loads(&raw).ok();
     let mut hint = py::s("");
     if let Some(Value::Object(pairs)) = &v {
@@ -827,6 +827,9 @@ pub fn history_diff(ctx: &mut Ctx, words: &[String]) -> Step {
         &[("fromVersion", &from), ("toVersion", &to), ("context", &cx)],
     );
     let b = ctx.call(false, "/cli/docs/diff", &q)?;
+    // Two commands: the text (`printf` or a Python), then a second Python
+    // whose exit is the command's, whatever the first did (its traceback
+    // included).
     let mut pr = Pr::default();
     if ctx.json {
         pr.out.extend_from_slice(&b);
@@ -838,7 +841,8 @@ pub fn history_diff(ctx: &mut Ctx, words: &[String]) -> Step {
             Ok(Exit::Ok)
         });
         if r.is_err() {
-            return Ok(pr.finish(r));
+            let _ = pr.finish(r);
+            pr = Pr::default();
         }
     }
     let mut text = b.clone();

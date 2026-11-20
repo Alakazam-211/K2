@@ -70,3 +70,38 @@ fn a_refusal_names_its_exit() {
     let r = fail_lines(&mut pr, "422", br#"{"error":{"code":"x","exit":7}}"#, true);
     assert_eq!(r.unwrap(), Exit::DaemonUnreachable);
 }
+
+#[test]
+fn a_byte_that_is_not_utf8_goes_out_as_python_writes_it() {
+    use crate::cards::Decode;
+    use super::py::{escaped, stdin_text_as};
+    let body = b"{\"p\": \"caf\xe9\"}";
+    // A UTF-8 locale: Python's decode raises.
+    let e = stdin_text_as(body, 3, Some(Decode::Strict)).unwrap_err();
+    assert!(
+        e.text().ends_with(
+            "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 10: invalid continuation byte\n"
+        ),
+        "{}",
+        e.text()
+    );
+    // The C locale: the byte stands for itself (surrogateescape).
+    let t = stdin_text_as(body, 3, Some(Decode::Lossy)).unwrap();
+    assert_eq!(t, format!("{{\"p\": \"caf{}\"}}", escaped(0xe9)));
+    let mut pr = py::Pr::default();
+    pr.line(&t);
+    pr.line(&py::dumps(&py::s(&t)));
+    pr.line(&crate::out::py::repr(&py::s(&t)));
+    pr.eline(&t);
+    let mut want: Vec<u8> = b"{\"p\": \"caf\xe9\"}\n".to_vec();
+    want.extend_from_slice(br#""{\"p\": \"caf\udce9\"}""#);
+    want.push(b'\n');
+    want.extend_from_slice(br#"'{"p": "caf\udce9"}'"#);
+    want.push(b'\n');
+    assert_eq!(pr.out, want, "{}", String::from_utf8_lossy(&pr.out));
+    assert_eq!(pr.err, "{\"p\": \"caf\\udce9\"}\n");
+    // Text that is UTF-8 passes as it is.
+    let mut pr = py::Pr::default();
+    pr.line("é \\udbff\\udf41");
+    assert_eq!(pr.out, "é \\udbff\\udf41\n".as_bytes());
+}

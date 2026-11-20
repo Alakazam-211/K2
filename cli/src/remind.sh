@@ -927,13 +927,13 @@ try:
         sys.exit(1)  # the send said why and is ending the command
     d = json.loads(_in)
     if d.get('success'):
-        state = 'enabled' if '$enabled' == 'true' else 'disabled'
-        print(f'Pinned-session delivery {state} for heartbeat: $name')
+        state = 'enabled' if sys.argv[1] == 'true' else 'disabled'
+        print(f'Pinned-session delivery {state} for heartbeat: {sys.argv[2]}')
     else:
         print(f\"Error: {d.get('error', 'unknown')}\", file=sys.stderr); sys.exit(1)
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
-"
+" "$enabled" "$name"
 }
 
 # 0073 — heartbeat DELIVERY-SESSION control: where a fire's wake
@@ -1034,11 +1034,11 @@ try:
     if _in == '\x1ek2:not-answered\x1e':
         sys.exit(1)  # the send said why and is ending the command
     d = json.loads(_in)
-    if d.get('success'): print(f'Renamed heartbeat: $from -> $to')
+    if d.get('success'): print(f'Renamed heartbeat: {sys.argv[1]} -> {sys.argv[2]}')
     else: print(f\"Error: {d.get('error', 'unknown')}\", file=sys.stderr); sys.exit(1)
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
-"
+" "$from" "$to"
 }
 
 # Change an existing heartbeat's schedule and/or wake instructions.
@@ -1325,8 +1325,8 @@ import json, sys
 try:
     rows = json.loads(sys.stdin.read())
     if not rows:
-        print(f'No fire history for heartbeat \"$name\" yet.'); sys.exit(0)
-    print(f'Last {len(rows)} fire(s) for heartbeat \"$name\":')
+        print(f'No fire history for heartbeat \"{sys.argv[1]}\" yet.'); sys.exit(0)
+    print(f'Last {len(rows)} fire(s) for heartbeat \"{sys.argv[1]}\":')
     print(f'{\"Time\":<22} {\"Decision\":<22} {\"By\":<22} Reason')
     print('-' * 110)
     def who(a):
@@ -1341,7 +1341,7 @@ try:
         print(f'{t:<22} {r.get(\"decision\",\"?\"):<22} {who(r.get(\"actor\")):<22} {r.get(\"reason\",\"\") or \"\"}')
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
-"
+" "$name"
 }
 
 # Show the recent heartbeat decision log for this workspace.

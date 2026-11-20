@@ -18,11 +18,10 @@
 #      where it is a quoted literal.
 # Text in comments and in other commands' heredoc bodies is not read.
 #
-# Reviewed exceptions, as "file|variable|why", are below (EXCEPTIONS): a
-# value the caller typed itself (a flag or an argument), never a daemon
-# answer, a message, a file's contents or a name someone else can set. A
-# listed exception that no longer matches fails too, so the list stays
-# exact.
+# Reviewed exceptions, as "file|variable|why", go below (EXCEPTIONS). The
+# list is empty and is meant to stay so: a caller's own flag is often a
+# value it copied from somewhere else, so it goes as data too. A listed
+# exception that no longer matches fails, so the list stays exact.
 #
 # Before the real scan it runs itself on a scratch dir of broken and good
 # parts and fails unless it catches exactly the broken ones.
@@ -35,20 +34,7 @@ export LC_ALL=C
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-EXCEPTIONS=(
-    "heartbeat.sh|frequency|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
-    "heartbeat.sh|time|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
-    "heartbeat.sh|days|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
-    "heartbeat.sh|months|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
-    "heartbeat.sh|every|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
-    "heartbeat.sh|unit|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
-    "heartbeat.sh|start|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
-    "heartbeat.sh|end|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
-    "remind.sh|name|the heartbeat name argument of k2 heartbeat pin and status, typed by the caller"
-    "remind.sh|enabled|true or false, set by k2 heartbeat pin from its own flag"
-    "remind.sh|from|the old name argument of k2 heartbeat rename, typed by the caller"
-    "remind.sh|to|the new name argument of k2 heartbeat rename, typed by the caller"
-)
+EXCEPTIONS=()
 
 lint() { # lint <dir> [file|var|why ...]: one line per problem; exit 1 when any
     python3 - "$@" <<'PYEOF'
@@ -361,7 +347,7 @@ echo "self test: every broken fixture caught, the good one passes"
 
 # ── the real scan ─────────────────────────────────────────────────────
 DIR="${1:-$PROJECT_ROOT/cli/src}"
-if out="$(lint "$DIR" "${EXCEPTIONS[@]}")"; then
+if out="$(lint "$DIR" ${EXCEPTIONS[@]+"${EXCEPTIONS[@]}"})"; then
     echo "python_code_values_lint: no shell value is pasted into a python3 or node program in cli/src (${#EXCEPTIONS[@]} reviewed exceptions)"
 else
     echo "$out" >&2

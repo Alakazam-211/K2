@@ -178,22 +178,24 @@ hb_parse_spec() {
         done
     fi
     # Build JSON spec
-    python3 -c "
-import json
-spec = {'frequency': '$frequency'}
-if '$time': spec['time'] = '$time'
-if '$days':
-    d = '$days'.split(',')
-    if '$frequency' in ('monthly','yearly'):
-        spec['days_of_month'] = [int(x) for x in d if x.strip().isdigit()]
+    # The flags reach Python in argv, as data.
+    python3 -c '
+import json, sys
+frequency, time, days, months, every, unit, start, end = sys.argv[1:9]
+spec = {"frequency": frequency}
+if time: spec["time"] = time
+if days:
+    d = days.split(",")
+    if frequency in ("monthly","yearly"):
+        spec["days_of_month"] = [int(x) for x in d if x.strip().isdigit()]
     else:
-        spec['days'] = [x.strip().lower() for x in d]
-if '$months': spec['months'] = [x.strip().lower() for x in '$months'.split(',')]
-if '$every': spec['every_seconds'] = int('$every') * (60 if '$unit' == 'minutes' else 3600 if '$unit' == 'hours' else 1)
-if '$start': spec['start'] = '$start'
-if '$end': spec['end'] = '$end'
+        spec["days"] = [x.strip().lower() for x in d]
+if months: spec["months"] = [x.strip().lower() for x in months.split(",")]
+if every: spec["every_seconds"] = int(every) * (60 if unit == "minutes" else 3600 if unit == "hours" else 1)
+if start: spec["start"] = start
+if end: spec["end"] = end
 print(json.dumps(spec))
-print('FREQ:' + '$frequency')
-"
+print("FREQ:" + frequency)
+' "$frequency" "$time" "$days" "$months" "$every" "$unit" "$start" "$end"
 }
 

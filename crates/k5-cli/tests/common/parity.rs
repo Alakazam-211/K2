@@ -260,6 +260,8 @@ pub struct Case {
     pub requests: usize,
     pub compare: Compare,
     pub no_python3: NoPython3,
+    /// What each side reads on stdin; `None`: nothing (stdin is closed).
+    pub stdin: Option<&'static [u8]>,
 }
 
 impl Rig {
@@ -467,7 +469,30 @@ impl Rig {
             }
         }
         cmd.args(self.argv(case));
-        let o = cmd.output().unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
+        let o = match case.stdin {
+            None => cmd.output().unwrap_or_else(|e| panic!("run {cmd:?}: {e}")),
+            Some(input) => {
+                use std::io::Write;
+                cmd.stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = cmd.spawn().unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
+                let mut pipe = child.stdin.take().expect("its stdin");
+                // A side that stops reading early closes the pipe; any
+                // other failure to hand it its input is.
+                if let Err(e) = pipe.write_all(input) {
+                    assert_eq!(
+                        e.kind(),
+                        std::io::ErrorKind::BrokenPipe,
+                        "stdin of {cmd:?}: {e}"
+                    );
+                }
+                drop(pipe);
+                child
+                    .wait_with_output()
+                    .unwrap_or_else(|e| panic!("wait {cmd:?}: {e}"))
+            }
+        };
         let signal = o.status.signal();
         Out {
             code: o.status.code().or_else(|| signal.map(|s| 128 + s)),
@@ -1159,6 +1184,7 @@ pub fn case(
         requests,
         compare: Compare::Exact,
         no_python3: NoPython3::AsWith,
+        stdin: None,
     }
 }
 

@@ -273,6 +273,12 @@ enum Kind {
     /// `_setup_send POST`: the same, `-X POST`, the config's `data-raw`
     /// body and `Content-Type: application/json`.
     SetupPost,
+    /// `cli_post` (`cli/src/usage.sh`): `_k2_curl` with a config `url` of
+    /// `<endpoint>?project=<it>&<pairs>` and the token as Bearer, `-s -X
+    /// POST --data-raw ""`, connect 5 s, at most 30 s, over TCP. Only
+    /// `_k2_curl`'s tries (a refused connect, a moved port); no status read,
+    /// no 503 tries, no heal, no line. The answer gets `_permission_note`.
+    QueryPost,
 }
 
 impl Kind {
@@ -311,6 +317,7 @@ impl Kind {
                 | Kind::UpdateVersion
                 | Kind::SetupGet
                 | Kind::SetupPost
+                | Kind::QueryPost
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -332,6 +339,7 @@ impl Kind {
                 | Kind::UpdateVersion
                 | Kind::SetupGet
                 | Kind::SetupPost
+                | Kind::QueryPost
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -928,6 +936,22 @@ impl Client {
         .map_err(|f| f.error)
     }
 
+    /// `cli_post <endpoint> <pairs>` ([`Kind::QueryPost`]): a POST with an
+    /// empty body and the pairs in the query after `project=`, over TCP.
+    /// The body comes back whatever the status; no heal, no no-answer
+    /// line. A refused connect is tried again (nothing went out).
+    pub fn post_query(&mut self, endpoint: &str, args: &[&str]) -> Result<Response, Error> {
+        self.run(
+            Kind::QueryPost,
+            Channel::Tcp,
+            endpoint,
+            args,
+            &[],
+            Instant::now(),
+        )
+        .map_err(|f| f.error)
+    }
+
     /// `k2 respond`'s TCP arm: `args` joined by `&` as a form body, POSTed
     /// to `endpoint` as it is over TCP with the passport as Bearer (a
     /// config line, before the shell's `-H`s), no `project=`. `_k2_curl` with `-s -X POST`, connect 5 s, at most
@@ -1249,7 +1273,8 @@ impl Client {
             | Kind::Public
             | Kind::BearerForm
             | Kind::SetupGet
-            | Kind::SetupPost => MAX_TIME,
+            | Kind::SetupPost
+            | Kind::QueryPost => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
             Kind::SidecarGet => SIDECAR_MAX_TIME,
             Kind::ComputeGet => COMPUTE_GET_MAX_TIME,
@@ -1478,6 +1503,21 @@ impl Client {
                 (
                     Method::Post,
                     path,
+                    Some(Body {
+                        bytes: Vec::new(),
+                        curl_form_type: true,
+                    }),
+                )
+            }
+            Kind::QueryPost => {
+                let mut q = format!("{endpoint}?{}", with_project());
+                for a in args {
+                    q.push('&');
+                    q.push_str(a);
+                }
+                (
+                    Method::Post,
+                    q,
                     Some(Body {
                         bytes: Vec::new(),
                         curl_form_type: true,
@@ -1970,6 +2010,7 @@ mod tests {
             (Kind::UpdateVersion, 4),
             (Kind::SetupGet, 30),
             (Kind::SetupPost, 30),
+            (Kind::QueryPost, 30),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }

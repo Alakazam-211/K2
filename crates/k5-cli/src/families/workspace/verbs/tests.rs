@@ -28,10 +28,17 @@ fn the_shell_keeps_identity_help_and_apps() {
         &["set-agent-identity", "a"][..],
         &["api-guest-policy"],
         &["mobile-tab", "help"],
-        &["trust"],
+        &["trust", "--help"],
         &["remove", "x", "--apps", "park"],
     ] {
         assert_eq!(parse(words, &here()), None, "{words:?}");
+    }
+    // `trust` alone and `trust help` print the trust page here.
+    for words in [&["trust"][..], &["trust", "help"], &["trust", ""]] {
+        assert!(
+            matches!(parse(words, &here()), Some(Ask::Page(p)) if p.contains("workspace trust")),
+            "{words:?}"
+        );
     }
     // --drop-access with another --apps is answered here, after the lookup.
     assert!(matches!(

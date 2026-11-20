@@ -92,6 +92,9 @@ pub enum Ask {
     /// names).
     Shell,
     Stop(Stop),
+    /// A help page the verb prints itself (not the router's `-h`): on
+    /// stdout, exit 0, after the gates.
+    Page(&'static str),
     Switch(switch::Ask),
     Named(named::Ask),
     Trust(trust::Ask),
@@ -189,6 +192,12 @@ fn run_with(args: &[OsString], ask: Ask, mut settings: Settings) -> Exit {
     if let Ask::Stop(stop) = &ask {
         return stop.print();
     }
+    if let Ask::Page(text) = &ask {
+        return match out::stdout(text) {
+            Ok(()) => Exit::Ok,
+            Err(e) => out::after_stdout_error(&e),
+        };
+    }
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let would_refuse = passport::current(args).would_refuse();
@@ -211,7 +220,7 @@ fn run_with(args: &[OsString], ask: Ask, mut settings: Settings) -> Exit {
         Ask::Trust(a) => trust::send(&mut w, &a),
         Ask::Other(a) => other::send(&mut w, &a),
         // Printed above, or the shell's.
-        Ask::Stop(_) | Ask::Shell => Exit::Usage,
+        Ask::Stop(_) | Ask::Shell | Ask::Page(_) => Exit::Usage,
     };
     closing.flush(&mut client, exit);
     exit

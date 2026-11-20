@@ -15,8 +15,11 @@
 //!   a fingerprint there stops with its line (exit 2) unless stdin and
 //!   stdout are terminals; then the decision's POST.
 //!
+//! `trust` alone (or an empty word) and `trust help` print
+//! `cmd_help_workspace_trust`'s page on stdout, exit 0.
+//!
 //! Folders are made absolute as `cli_abs_path` does. Usage lines are
-//! exit 2. The shell answers: the help, a folder the binary can't make
+//! exit 2. The shell answers: `-h` and `--help` (the front's), a folder the binary can't make
 //! absolute as bash would, and a decision with no fingerprint at a
 //! terminal (its `[y/N]` prompt).
 
@@ -87,7 +90,9 @@ pub fn parse(words: &[&str], here: &Here) -> Top {
     let sub = words.first().copied().unwrap_or("");
     let abs = |f: &str| abs_path(f, &here.pwd);
     match sub {
-        "" | "-h" | "--help" | "help" => Top::Shell,
+        // `cmd_help_workspace_trust`; `-h` and `--help` are the front's.
+        "" | "help" => crate::text::help("workspace/trust").map_or(Top::Shell, Top::Page),
+        "-h" | "--help" => Top::Shell,
         "status" => {
             let (mut folder, mut json) = (String::new(), false);
             for w in &words[1..] {

@@ -40,6 +40,7 @@
 //! the test [`tests::rows_agree_with_the_registry`] keeps this map and the
 //! registry in step as they land.
 
+use k2_core::brand::CLI_NAME;
 use k2_core::{cli_name, product_name};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -1213,9 +1214,16 @@ fn shell_word(s: &str) -> String {
     }
 }
 
-/// The exact command an agent runs to ask (PRD §3.1).
+/// The exact command an agent runs to ask (PRD §3.1), with this build's
+/// command name.
 pub(crate) fn ask_command(action: &str, params: &Map<String, Value>) -> String {
-    let mut cmd = format!("k2 permission request {action}");
+    ask_command_named(CLI_NAME, action, params)
+}
+
+/// [`ask_command`] with the command's name as a value: the one place the
+/// Ask line is built.
+fn ask_command_named(cli: &str, action: &str, params: &Map<String, Value>) -> String {
+    let mut cmd = format!("{cli} permission request {action}");
     for (k, v) in params {
         let v = v.as_str().map(shell_word).unwrap_or_else(|| format!("<{k}>"));
         cmd.push_str(&format!(" {k}={v}"));
@@ -2589,5 +2597,26 @@ mod tests {
         // The cell socket, with the gate off for this workspace: today's text.
         let empty = HashMap::new();
         assert!(cell_gated_body("POST", "/cli/settings/update", &empty, br#"{"ciPreview":true}"#, "no-such-workspace").is_none());
+    }
+
+    /// The Ask line with the command's name passed in: another brand's
+    /// name comes out whole, the rest of the line as before. Pinned as
+    /// literals; the tests above pin the default brand's lines.
+    #[test]
+    fn the_ask_line_takes_the_command_name_as_a_value() {
+        let mut params = Map::new();
+        params.insert("to".to_string(), json!("pog-sales"));
+        assert_eq!(
+            ask_command_named("xy", "connections.add", &params),
+            "xy permission request connections.add to=pog-sales --why \"<what you need it for>\""
+        );
+
+        // A value that needs quoting is quoted the same way.
+        let mut params = Map::new();
+        params.insert("to".to_string(), json!("a b'c"));
+        assert_eq!(
+            ask_command_named("xy", "connections.add", &params),
+            "xy permission request connections.add to='a b'\\''c' --why \"<what you need it for>\""
+        );
     }
 }

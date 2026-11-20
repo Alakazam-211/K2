@@ -36,6 +36,7 @@ use serde_json::{json, Value as J};
 use super::egress_routes::codes;
 use crate::cli_response::CliResponse;
 use super::routes::{actor, db_err, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
+use k2_core::brand::CLI_NAME;
 
 pub const ROUTES: &[&str] = &["/cli/app/approvals", "/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
@@ -211,7 +212,7 @@ pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
                 json!({
                     "raised": false,
                     "error": { "code": e.get("code").and_then(J::as_str).unwrap_or(st), "hint": e.get("hint").and_then(J::as_str).unwrap_or("") },
-                    "ask": format!("k2 permission request apps.approve request={} --why \"<what you need it for>\"", r.id),
+                    "ask": format!("{CLI_NAME} permission request apps.approve request={} --why \"<what you need it for>\"", r.id),
                     "where": format!("no permission card went up; the request waits in {approvals}"),
                 })
             }

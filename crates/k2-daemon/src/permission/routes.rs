@@ -25,6 +25,7 @@ use super::answer::{self, err};
 use super::{batch, limits, present, store};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
 
 pub(crate) const REQUEST: &str = "/cli/permission/request";
 pub(crate) const UPDATE: &str = "/cli/permission/update";
@@ -332,7 +333,7 @@ fn asked_for(conversation_id: &str, now: i64) -> Option<String> {
 fn not_cardable(id: &str) -> Option<CliResponse> {
     let n = present::find_not_cardable(id)?;
     let (hint, covered) = match n.why {
-        NotCardable::Covered { by } => (format!("{id} is covered by {by}: Ask with: k2 permission request {by} --why \"<what you need it for>\""), Some(by)),
+        NotCardable::Covered { by } => (format!("{id} is covered by {by}: Ask with: {}", super::walls::ask_command(by, &Map::new())), Some(by)),
         NotCardable::Never { .. } => (format!("{id} is never a card; a person does it in {}. It can't be requested.", n.r#where), None),
         NotCardable::Later | NotCardable::Dropped => (format!("{id} isn't a card yet; a person does it in {}. It can't be requested.", n.r#where), None),
     };
@@ -343,7 +344,7 @@ fn not_cardable(id: &str) -> Option<CliResponse> {
             "ok": false,
             "error": { "code": code::NOT_CARDABLE, "hint": hint },
             "permission": match covered {
-                Some(by) => json!({ "action": by, "params": {}, "command": format!("k2 permission request {by} --why \"<what you need it for>\"") }),
+                Some(by) => json!({ "action": by, "params": {}, "command": super::walls::ask_command(by, &Map::new()) }),
                 None => json!({ "requestable": false, "where": n.r#where }),
             },
         })
@@ -829,7 +830,7 @@ fn list(workspace_id: &str, area: Option<&str>, search: Option<&str>) -> CliResp
             "direction": s.direction,
             "params": s.params.iter().map(|p| json!({ "key": p.key, "kind": p.kind, "required": p.required, "list": p.list, "choices": p.choices })).collect::<Vec<_>>(),
             "now": now_state,
-            "command": format!("k2 permission request {}{} --why \"<what you need it for>\"", s.id, s.params.iter().filter(|p| p.required).map(|p| format!(" {}=…", p.key)).collect::<String>()),
+            "command": format!("{CLI_NAME} permission request {}{} --why \"<what you need it for>\"", s.id, s.params.iter().filter(|p| p.required).map(|p| format!(" {}=…", p.key)).collect::<String>()),
         }));
     }
     let recent: Vec<Value> = store::for_workspace(workspace_id, 20).unwrap_or_default().iter().map(summary).collect();

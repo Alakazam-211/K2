@@ -58,6 +58,7 @@ use serde_json::{json, Map, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::permission::{answer, limits, present, store};
+use k2_core::brand::CLI_NAME;
 
 /// The card's id.
 pub(crate) const ACTION: &str = "vault.incoming.accept";
@@ -110,7 +111,7 @@ pub(crate) static ACCEPT: ActionSpec = ActionSpec {
 
 /// The exact line an agent asks with (Beta on), for its texts.
 pub(crate) fn ask_line(delivery_id: &str) -> String {
-    format!("k2 permission request {ACTION} id={delivery_id} --why \"<what you need it for>\"")
+    format!("{CLI_NAME} permission request {ACTION} id={delivery_id} --why \"<what you need it for>\"")
 }
 
 fn id_of(ctx: &Ctx) -> Result<&str, String> {

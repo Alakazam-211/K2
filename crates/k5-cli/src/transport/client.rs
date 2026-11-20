@@ -30,6 +30,11 @@ pub const SIDECAR_MAX_TIME: Duration = Duration::from_secs(120);
 pub const COMPUTE_GET_MAX_TIME: Duration = Duration::from_secs(60);
 /// `_compute_send POST`'s `--max-time "${K2_CP_MAX_TIME:-120}"`.
 pub const COMPUTE_POST_MAX_TIME: Duration = Duration::from_secs(120);
+/// `_vault_sock_call`'s `--max-time 180` (`cli/src/vault.sh`).
+pub const VAULT_SOCK_MAX_TIME: Duration = Duration::from_secs(180);
+/// The per-verb header `_vault_sock_call` sends: `1` when stdin and
+/// stdout, or stdin and stderr, are terminals, else `0`.
+pub const TTY_HEADER: &str = "X-K2-Tty";
 /// `_cli_use_passport_project`'s `--max-time 15` (`cli/src/cell-socket.sh`).
 pub const PASSPORT_PROJECT_MAX_TIME: Duration = Duration::from_secs(15);
 /// Where `_permission_probe` asks whether permission cards are on
@@ -240,6 +245,20 @@ enum Kind {
     /// `_compute_send POST`: `cli_send_json POST`'s request, at most
     /// `K2_CP_MAX_TIME` or 120 s; likewise nothing else.
     ComputePost,
+    /// `_sidecar_send POST`: `cli_send_json POST`'s request, at most 120 s,
+    /// and likewise nothing else.
+    SidecarPost,
+    /// `_vault_sock_call GET <route>` (`cli/src/vault.sh`): `_k2_curl "" -s
+    /// -G --unix-socket <K2 home>/vault.sock http://localhost/cli/vault/<route>
+    /// -H "X-K2-Tty: <0|1>"`, connect 5 s, at most 180 s. No credential
+    /// (the socket is the person's channel), `_k2_curl`'s tries for a
+    /// refused connect; no heal, no line, no note (`_vault_fail` notes a
+    /// refusal itself).
+    VaultSockGet,
+    /// `_vault_sock_call POST <route> <json>`: the same with `-X POST`, the
+    /// `X-K2-Tty` header, `Content-Type: application/json` and the body
+    /// from stdin (`--data-binary @-`), so never tried twice.
+    VaultSockPost,
     /// `_cli_use_passport_project`'s `/cli/whoami` (`cli/src/cell-socket.sh`):
     /// `cli_send_json GET`'s request with no query of the caller's, at
     /// most 15 s; no heal, no line, no note.
@@ -311,6 +330,9 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::ComputeGet
                 | Kind::ComputePost
+                | Kind::SidecarPost
+                | Kind::VaultSockGet
+                | Kind::VaultSockPost
                 | Kind::PassportProject
                 | Kind::Cards
                 | Kind::FeedbackOptin
@@ -333,6 +355,9 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::ComputeGet
                 | Kind::ComputePost
+                | Kind::SidecarPost
+                | Kind::VaultSockGet
+                | Kind::VaultSockPost
                 | Kind::PassportProject
                 | Kind::Cards
                 | Kind::FeedbackOptin
@@ -354,6 +379,9 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::ComputeGet
                 | Kind::ComputePost
+                | Kind::SidecarPost
+                | Kind::VaultSockGet
+                | Kind::VaultSockPost
                 | Kind::PassportProject
                 | Kind::Cards
                 | Kind::FeedbackOptin
@@ -376,7 +404,10 @@ impl Kind {
     /// shell's `@-` rule is an argument that is exactly `@-`, never one in
     /// a URL), or `_K2_CURL_TRIES=1`.
     fn once(self) -> bool {
-        matches!(self, Kind::PostJsonStdin | Kind::UpdateVersion)
+        matches!(
+            self,
+            Kind::PostJsonStdin | Kind::UpdateVersion | Kind::VaultSockPost
+        )
     }
 }
 
@@ -651,6 +682,9 @@ pub struct Client {
     healed: bool,
     /// Refused connects `_k2_curl` tried again before the last answer.
     refused: std::cell::Cell<u32>,
+    /// The vault socket and the `X-K2-Tty` value of the call under way
+    /// ([`Client::vault_sock`]).
+    vault_sock: Option<(PathBuf, bool)>,
 }
 
 impl Client {
@@ -680,6 +714,7 @@ impl Client {
             healer: None,
             healed: false,
             refused: std::cell::Cell::new(0),
+            vault_sock: None,
         }
     }
 
@@ -995,6 +1030,44 @@ impl Client {
         self.send_json_as(Kind::SidecarGet, path, payload)
     }
 
+    /// `_sidecar_send POST <path> <json>`: as [`Client::sidecar_get`], a
+    /// POST with `payload` as its JSON body. Sent once: it goes on to TCP
+    /// only after a failed connect on the cell socket (curl 7) or "not
+    /// served on cell socket"; any other failure there may have run it
+    /// ([`Error::MaybeApplied`]).
+    pub fn sidecar_post(&mut self, path: &str, payload: &str) -> Result<Response, Error> {
+        self.send_json_as(Kind::SidecarPost, path, payload)
+    }
+
+    /// `_vault_sock_call METHOD <route> [json]`: one request to the vault
+    /// socket at `sock` (`<K2 home>/vault.sock`), for `/cli/vault/<route>`
+    /// (`route` may carry its `?query`), with `X-K2-Tty: 1` when `tty`.
+    /// No credential. A GET is tried again after a refused connect as
+    /// `_k2_curl` does; a POST (its body from stdin) never. The shell holds
+    /// `<body>\n<status>`, and any failure is its `000` with an empty body;
+    /// that is the caller's.
+    pub fn vault_sock(
+        &mut self,
+        sock: &Path,
+        post: bool,
+        route: &str,
+        payload: &[u8],
+        tty: bool,
+    ) -> Result<Response, Error> {
+        let kind = if post {
+            Kind::VaultSockPost
+        } else {
+            Kind::VaultSockGet
+        };
+        self.vault_sock = Some((sock.to_path_buf(), tty));
+        let endpoint = format!("/cli/vault/{route}");
+        let r = self
+            .run(kind, Channel::Uds, &endpoint, &[], payload, Instant::now())
+            .map_err(|f| f.error);
+        self.vault_sock = None;
+        r
+    }
+
     /// `_cli_use_passport_project`'s request: `/cli/whoami` with the
     /// passport, on the cell socket when there is a live one, then over
     /// TCP (the passport as Bearer) when that failed or its answer, as
@@ -1066,7 +1139,10 @@ impl Client {
     }
 
     fn send_json_as(&mut self, kind: Kind, path: &str, payload: &str) -> Result<Response, Error> {
-        let post = matches!(kind, Kind::SendJsonPost | Kind::ComputePost);
+        let post = matches!(
+            kind,
+            Kind::SendJsonPost | Kind::ComputePost | Kind::SidecarPost
+        );
         let t0 = Instant::now();
         self.no_owner_in_session(path)?;
         if self.cell_socket().is_some() {
@@ -1276,9 +1352,10 @@ impl Client {
             | Kind::SetupPost
             | Kind::QueryPost => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
-            Kind::SidecarGet => SIDECAR_MAX_TIME,
+            Kind::SidecarGet | Kind::SidecarPost => SIDECAR_MAX_TIME,
             Kind::ComputeGet => COMPUTE_GET_MAX_TIME,
             Kind::ComputePost => self.compute_post_max_time.unwrap_or(COMPUTE_POST_MAX_TIME),
+            Kind::VaultSockGet | Kind::VaultSockPost => VAULT_SOCK_MAX_TIME,
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
             Kind::Cards => CARDS_TIME,
             Kind::FeedbackOptin => FEEDBACK_MAX_TIME,
@@ -1393,7 +1470,17 @@ impl Client {
         // the `-H`s `_k2_curl` puts first: its Bearer comes after the
         // hand-over headers. Every other call's comes before them.
         let mut late_credential = None;
+        let vault_sock = matches!(kind, Kind::VaultSockGet | Kind::VaultSockPost);
         let (target, host) = match channel {
+            // The person's channel: no credential of ours.
+            _ if vault_sock => {
+                let Some((sock, _)) = &self.vault_sock else {
+                    return Err(Error::NoCellSocket {
+                        endpoint: endpoint.to_string(),
+                    });
+                };
+                (uds_target(sock, endpoint)?, "localhost".to_string())
+            }
             Channel::Tcp => {
                 // The credential is the first header, an `Authorization:
                 // Bearer` line of the shell's curl config (`_k2_cfg_auth`),
@@ -1458,6 +1545,9 @@ impl Client {
             headers.push((OWNER_SOURCE_HEADER.into(), OWNER_SOURCE_DISK.into()));
         }
         headers.extend(late_credential);
+        if let Some((_, tty)) = self.vault_sock.as_ref().filter(|_| vault_sock) {
+            headers.push((TTY_HEADER.into(), if *tty { "1" } else { "0" }.into()));
+        }
 
         let tcp = channel == Channel::Tcp;
         let with_project = || format!("project={}", quote(&self.project));
@@ -1557,9 +1647,10 @@ impl Client {
                 };
                 (Method::Get, path, None)
             }
-            Kind::SendJsonPost | Kind::ComputePost => {
+            Kind::SendJsonPost | Kind::ComputePost | Kind::SidecarPost | Kind::VaultSockPost => {
                 (Method::Post, endpoint.to_string(), json(&mut headers))
             }
+            Kind::VaultSockGet => (Method::Get, endpoint.to_string(), None),
             Kind::Public | Kind::Probe | Kind::UpdateVersion => {
                 (Method::Get, endpoint.to_string(), None)
             }
@@ -1922,6 +2013,27 @@ mod tests {
             (SidecarGet, false, false, false, false, false, false, false),
             (ComputeGet, false, false, false, false, false, false, false),
             (ComputePost, false, false, false, false, false, false, false),
+            (SidecarPost, false, false, false, false, false, false, false),
+            (
+                VaultSockGet,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
+            (
+                VaultSockPost,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+            ),
             (
                 PassportProject,
                 false,
@@ -2004,6 +2116,9 @@ mod tests {
             (Kind::SidecarGet, 120),
             (Kind::ComputeGet, 60),
             (Kind::ComputePost, 120),
+            (Kind::SidecarPost, 120),
+            (Kind::VaultSockGet, 180),
+            (Kind::VaultSockPost, 180),
             (Kind::PassportProject, 15),
             (Kind::Cards, 1),
             (Kind::FeedbackOptin, 2),
@@ -2345,6 +2460,102 @@ mod tests {
     }
 
     /// Over TCP every call but the public GETs carries its credential as
+    /// `_vault_sock_call`: the vault socket, no credential of any kind,
+    /// the hand-over headers then `X-K2-Tty`, and a POST's JSON type
+    /// last; the route under `/cli/vault/` with its query as given.
+    #[cfg(unix)]
+    #[test]
+    fn the_vault_socket_carries_no_credential() {
+        let mut c = Client::new(
+            "127.0.0.1",
+            9,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.t").unwrap(),
+                sock: Some(PathBuf::from("/tmp/cell.sock")),
+            },
+        );
+        c.vault_sock = Some((PathBuf::from("/tmp/vault.sock"), true));
+        let (t, r) = c
+            .build(
+                Kind::VaultSockGet,
+                Channel::Uds,
+                "/cli/vault/show?name=A",
+                &[],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(t, Target::Unix(PathBuf::from("/tmp/vault.sock")));
+        assert_eq!(
+            (r.method, r.target.as_str(), r.host.as_str()),
+            (Method::Get, "/cli/vault/show?name=A", "localhost")
+        );
+        assert!(r.body.is_none());
+        let heads: Vec<(&str, &str)> = r
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            heads,
+            [
+                (VERSION_HEADER, c.version.as_str()),
+                (VIA_HEADER, VIA_NATIVE),
+                (TTY_HEADER, "1")
+            ]
+        );
+        c.vault_sock = Some((PathBuf::from("/tmp/vault.sock"), false));
+        let (_, r) = c
+            .build(
+                Kind::VaultSockPost,
+                Channel::Uds,
+                "/cli/vault/reveal",
+                &[],
+                b"{}",
+            )
+            .unwrap();
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            [VERSION_HEADER, VIA_HEADER, TTY_HEADER, "Content-Type"]
+        );
+        assert_eq!(r.headers[2].1, "0");
+        assert_eq!(r.method, Method::Post);
+        assert_eq!(
+            r.body.as_ref().map(|b| b.bytes.as_slice()),
+            Some(&b"{}"[..])
+        );
+        // The owner from disk: the shell's hand-over header, still no token.
+        let mut o = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
+        o.owner_from_disk = true;
+        o.vault_sock = Some((PathBuf::from("/tmp/vault.sock"), false));
+        let (_, r) = o
+            .build(
+                Kind::VaultSockGet,
+                Channel::Uds,
+                "/cli/vault/status",
+                &[],
+                &[],
+            )
+            .unwrap();
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            [VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER, TTY_HEADER]
+        );
+        // No socket named: nothing to build.
+        o.vault_sock = None;
+        assert!(o
+            .build(
+                Kind::VaultSockGet,
+                Channel::Uds,
+                "/cli/vault/status",
+                &[],
+                &[]
+            )
+            .is_err());
+    }
+
     /// the first header, `Authorization: Bearer <T>` (the shell's
     /// `_k2_cfg_auth`, a curl config line read before the `-H`s), and
     /// never in the query: the owner token, or the passport when there is
@@ -2373,6 +2584,7 @@ mod tests {
                 SidecarGet,
                 ComputeGet,
                 ComputePost,
+                SidecarPost,
                 PassportProject,
                 Cards,
                 FeedbackOptin,

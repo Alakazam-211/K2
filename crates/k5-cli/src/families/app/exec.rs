@@ -20,6 +20,7 @@ use super::{Answer, Stop};
 use crate::exit::Exit;
 use crate::families::Raise;
 use crate::out::json::{Text, Value};
+use crate::out::pylib::base64::b64encode;
 use k2_client::cli_name;
 
 /// The usage lines (exit 2).
@@ -170,25 +171,6 @@ fn stage() -> Result<(), Exit> {
     Err(Exit::Error)
 }
 
-/// Python's `base64.b64encode(data).decode("ascii")`.
-fn b64(data: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for c in data.chunks(3) {
-        let n = (u32::from(c[0]) << 16)
-            | (u32::from(*c.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*c.get(2).unwrap_or(&0));
-        for (k, shift) in [18u32, 12, 6, 0].into_iter().enumerate() {
-            if k <= c.len() {
-                out.push(char::from(A[((n >> shift) & 63) as usize]));
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
 /// Runs it: what it printed, or the exit it ended with.
 pub fn run(ctx: &mut Ctx, a: &Ask) -> Answer {
     let s = |t: &str| Value::Str(Text::from(t));
@@ -219,7 +201,7 @@ pub fn run(ctx: &mut Ctx, a: &Ask) -> Answer {
             crate::out::stderr_line(usage::TOO_BIG);
             return Err(Exit::Usage);
         }
-        pairs.push((Text::from("stdin"), s(&b64(&data))));
+        pairs.push((Text::from("stdin"), s(&b64encode(&data))));
     }
     if !a.timeout.is_empty() {
         pairs.push((Text::from("timeout"), Value::Int(a.timeout.clone())));
@@ -291,14 +273,5 @@ mod tests {
             matches!(parse(&["acme", "--timeout", "x", "ls"]), Some(Err(s)) if s.exit == Exit::Usage)
         );
         assert_eq!(parse(&["-h"]), None);
-    }
-
-    #[test]
-    fn base64_as_python_writes_it() {
-        assert_eq!(b64(b""), "");
-        assert_eq!(b64(b"f"), "Zg==");
-        assert_eq!(b64(b"fo"), "Zm8=");
-        assert_eq!(b64(b"foo"), "Zm9v");
-        assert_eq!(b64(b"foob\xff"), "Zm9vYv8=");
     }
 }

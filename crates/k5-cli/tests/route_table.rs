@@ -694,3 +694,68 @@ fn app_skin_verb_reaches_cmd_skin(body: &str, verb: &k5_cli::route::Verb) {
         }
     }
 }
+
+/// The router's forms (`tests/data/router_forms.tsv`) and the native
+/// bar's ceiling (`tests/data/native_bar_ceiling.tsv`), as sets of words.
+fn router_forms_and_ceiling() -> (BTreeSet<String>, BTreeSet<String>) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let read = |name: &str| {
+        let p = root.join("tests/data").join(name);
+        std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
+    };
+    let column = |text: &str, head: &str, col: usize| -> BTreeSet<String> {
+        let mut lines = text.lines().filter(|l| !l.starts_with('#'));
+        assert_eq!(lines.next(), Some(head));
+        lines
+            .map(|l| l.split('\t').nth(col).expect("the column").to_string())
+            .collect()
+    };
+    (
+        column(
+            &read("router_forms.tsv"),
+            "form\targv\talias_of\tanchor\tentry\tjson\tsource",
+            0,
+        ),
+        column(&read("native_bar_ceiling.tsv"), "class\tfamily\tform", 2),
+    )
+}
+
+/// Both ways between the route table and the router's forms: every verb
+/// row's word is a form of its family's arm, and every two-word form the
+/// front hands straight to the shell (a `Bash` row's verb, or a help line
+/// with no page) is listed in the native bar's ceiling, so no bash arm is
+/// left out of the count.
+#[test]
+fn every_router_form_is_a_k5_row_or_listed_in_the_native_bar_ceiling() {
+    let (forms, ceiling) = router_forms_and_ceiling();
+    let mut problems = Vec::new();
+    for noun in TABLE {
+        for verb in noun.verb_rows() {
+            for word in verb.words {
+                if !noun.words.iter().any(|n| forms.contains(&format!("{n} {word}"))) {
+                    problems.push(format!(
+                        "{:?} has a verb row {word:?} that is no form of its arm in router_forms.tsv",
+                        noun.words
+                    ));
+                }
+            }
+        }
+    }
+    let mut checked = 0;
+    for form in &forms {
+        let words: Vec<std::ffi::OsString> = form.split(' ').map(Into::into).collect();
+        if words.len() != 2 {
+            continue;
+        }
+        checked += 1;
+        let owner = k5_cli::route::find(TABLE, &words).owner;
+        let route = k5_cli::front::route(&words);
+        if route == k5_cli::front::Route::Fallthrough && !ceiling.contains(form) {
+            problems.push(format!(
+                "{form:?} goes to the shell (its row is {owner:?}) and the native bar's ceiling doesn't list it"
+            ));
+        }
+    }
+    assert!(checked > 500, "only {checked} two-word router forms");
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}

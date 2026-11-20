@@ -133,9 +133,10 @@ PY
         bad "$label: the request's headers: $(tr '\n' ' ' <<<"$heads"), wanted fallthrough|1|$noun|disk"
     fi
 }
-# Two verbs the binary still hands to the shell (heartbeat and preset are
-# native now): ci's curl and clone's engine, a python3 urlopen client.
-run "ci status (curl)" /cli/ci/status ci curl ci status --json
+# Two verbs the binary still hands to the shell (heartbeat, preset and ci
+# status are native now): ci provenance's curl and clone's engine, a
+# python3 urlopen client.
+run "ci provenance (curl)" /cli/ci/provenance ci curl ci provenance r1 --out "$WORK/prov" --json
 run "clone preview (python3 urlopen)" /cli/clone/preview clone python3 clone preview w --json
 
 echo

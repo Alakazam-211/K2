@@ -52,14 +52,19 @@ pub mod who;
 #[cfg(test)]
 mod tests;
 
-crate::route::shell_family!(&["msg"]);
+/// The router arm's words: this family's row of [`crate::route::TABLE`].
+pub const WORDS: &[&str] = &["msg"];
+/// The binary, by [`run`] (which may still hand a line to the shell).
+pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[crate::route::Verb] = &[];
 
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "msg";
 
-/// `k5 msg ...`, not routed yet: `args` is the whole command line after
-/// `argv[0]`. `None`: the shell CLI answers it (see the module's notes).
-pub fn native_run(args: &[OsString]) -> Option<Exit> {
+/// `k5 msg ...`: `args` is the whole command line after `argv[0]`.
+/// `None`: the shell CLI answers it (see the module's notes).
+pub fn run(args: &[OsString]) -> Option<Exit> {
     let hook_sock = super::hook_sock();
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
         return None;

@@ -749,6 +749,9 @@ pub struct Client {
     /// The credential and `--max-time` of the [`Kind::Own`] call being
     /// made ([`Client::own_curl`]).
     own: Option<(Option<String>, Duration)>,
+    /// The [`Kind::Own`] call under way is sent once
+    /// ([`Client::own_curl_once`]).
+    own_once: bool,
 }
 
 /// How [`Client::own_curl`] sends: `_k2_curl` with the caller's config
@@ -799,6 +802,7 @@ impl Client {
             refused: std::cell::Cell::new(0),
             vault_sock: None,
             own: None,
+            own_once: false,
         }
     }
 
@@ -1105,6 +1109,20 @@ impl Client {
         let r = self.run(kind, Channel::Tcp, endpoint, &[], body, Instant::now());
         self.own = None;
         r.map_err(|f| f.error)
+    }
+
+    /// [`Client::own_curl`] with `_K2_CURL_TRIES=1`: a refused connect is
+    /// not tried again.
+    pub fn own_curl_once(
+        &mut self,
+        endpoint: &str,
+        how: OwnCurl<'_>,
+        body: &[u8],
+    ) -> Result<Response, Error> {
+        self.own_once = true;
+        let r = self.own_curl(endpoint, how, body);
+        self.own_once = false;
+        r
     }
 
     /// `cli_post <endpoint> <pairs>` ([`Kind::QueryPost`]): a POST with an
@@ -1554,7 +1572,8 @@ impl Client {
                     return r;
                 }
                 Err(Failure::Connect(e)) => {
-                    if kind.once() || tries >= TRIES {
+                    let own_once = self.own_once && matches!(kind, Kind::Own { .. });
+                    if kind.once() || own_once || tries >= TRIES {
                         return Err(Failure::Connect(e));
                     }
                     tries += 1;
@@ -2918,6 +2937,29 @@ mod tests {
             assert!(r.headers.iter().all(|(n, _)| n != "Authorization"));
             assert!(r.body.is_none());
         }
+    }
+
+    /// `_K2_CURL_TRIES=1`: [`Client::own_curl_once`] connects once where
+    /// [`Client::own_curl`] tries a refused connect again.
+    #[test]
+    fn an_own_curl_once_is_not_tried_again() {
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let mut c = Client::new("127.0.0.1", port, "/p", Auth::None);
+        c.pause = Duration::ZERO;
+        let how = OwnCurl {
+            post: true,
+            credential: None,
+            max_time: Duration::from_secs(5),
+            note: false,
+        };
+        assert!(c.own_curl_once("/cli/x", how, b"{}").is_err());
+        assert_eq!(c.refused_before_answer(), 0);
+        assert!(!c.own_once);
+        assert!(c.own_curl("/cli/x", how, b"{}").is_err());
+        assert_eq!(c.refused_before_answer(), TRIES - 1);
     }
 
     /// `X-K5-Owner-Source: disk` after the Via, only on an owner's call

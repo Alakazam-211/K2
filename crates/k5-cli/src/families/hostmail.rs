@@ -5,6 +5,8 @@
 //! - [`forward`]: `forward` (set, add, rm, show, unset, pause, resume,
 //!   list), whose Python branch `mail forward` shares
 //!   ([`super::mail::forward`]).
+//! - [`mailbox`]: `quota`, `catchall` and `alias`.
+//! - [`words`]: how a `cmd_hostmail_*` function's loop reads its words.
 //!
 //! The route table sends a verb here only once it has a row of its own
 //! ([`crate::route`]); [`run`] returns `None` for anything else, and the
@@ -15,6 +17,8 @@ use crate::exit::Exit;
 use std::ffi::OsString;
 
 pub mod forward;
+pub mod mailbox;
+pub mod words;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["hostmail"];
@@ -22,7 +26,12 @@ pub const WORDS: &[&str] = &["hostmail"];
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
 /// The verbs the binary answers; every other verb, and `hostmail` alone,
 /// is the shell's. One verb row each, so each can turn back alone.
-pub const VERBS: &[crate::route::Verb] = &[native(&["forward"])];
+pub const VERBS: &[crate::route::Verb] = &[
+    native(&["forward"]),
+    native(&["quota"]),
+    native(&["catchall"]),
+    native(&["alias"]),
+];
 
 /// A verb row the binary answers.
 const fn native(words: &'static [&'static str]) -> crate::route::Verb {
@@ -48,6 +57,13 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 pub fn parse(verb: &str, words: &[&str]) -> Plan {
     match verb {
         "forward" => forward::parse(words),
+        v if mailbox::VERBS.contains(&v) => mailbox::parse(v, words),
         _ => Plan::Shell,
     }
+}
+
+/// The `_mail_py` branches only `hostmail` runs, for `M_VERB` `verb`.
+/// `None`: not one of them.
+pub fn branch(py_: &mut core::Py, verb: &str) -> Option<core::R<()>> {
+    mailbox::exec(py_, verb)
 }

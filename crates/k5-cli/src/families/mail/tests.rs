@@ -1666,6 +1666,46 @@ fn the_forward_lines_are_the_shell_s() {
     }
 }
 
+/// The lines of `_mail_py` the hostmail verbs raise at.
+#[test]
+fn the_hostmail_lines_are_the_shell_s() {
+    use crate::families::hostmail::mailbox;
+    let s = mail_py_script();
+    let pins: &[(u32, &str)] = &[
+        (mailbox::line::QUOTA_GET_CALL, "d = call(\"GET\", \"/cli/mail/quota\", params={\"addr"),
+        (mailbox::line::QUOTA_GET_Q, "q = d.get(\"quotas\") or {}"),
+        (mailbox::line::QUOTA_GET_ADDR, "d.get(\"address\") or env(\"M_ADDRESS\") or \"?\","),
+        (mailbox::line::QUOTA_GET_DISK, "q.get(\"maxDiskQuota\") if q.get(\"maxDiskQuota\") i"),
+        (mailbox::line::QUOTA_GET_MSGS, "q.get(\"maxEmails\") if q.get(\"maxEmails\") is not "),
+        (mailbox::line::QUOTA_SET_BYTES, "body[\"bytes\"] = int(env(\"M_QUOTA_BYTES\"))"),
+        (mailbox::line::QUOTA_SET_GB, "body[\"gb\"] = int(env(\"M_QUOTA_GB\"))"),
+        (mailbox::line::QUOTA_SET_MSGS_INT, "body[\"messages\"] = int(env(\"M_QUOTA_MESSAGES\"))"),
+        (mailbox::line::QUOTA_SET_CALL, "d = call(\"POST\", \"/cli/mail/quota\", body=body)"),
+        (mailbox::line::QUOTA_SET_Q, "q = d.get(\"quotas\") or {}"),
+        (mailbox::line::QUOTA_SET_ADDR, "d.get(\"address\") or env(\"M_ADDRESS\") or \"?\","),
+        (mailbox::line::QUOTA_SET_DISK, "q.get(\"maxDiskQuota\") if q.get(\"maxDiskQuota\") i"),
+        (mailbox::line::QUOTA_SET_MSGS, "q.get(\"maxEmails\") if q.get(\"maxEmails\") is not "),
+        (mailbox::line::CATCHALL_GET_CALL, "d = call(\"GET\", \"/cli/mail/catchall\", params={\"d"),
+        (mailbox::line::CATCHALL_GET_ADDR, "addr = d.get(\"catchAllAddress\")"),
+        (mailbox::line::CATCHALL_GET_DOMAIN, "print(\"%s  catch-all=%s\" % (d.get(\"domain\") or e"),
+        (mailbox::line::CATCHALL_SET_CALL, "d = call(\"POST\", \"/cli/mail/catchall\", body=body"),
+        (mailbox::line::CATCHALL_SET_ADDR, "addr = d.get(\"catchAllAddress\")"),
+        (mailbox::line::CATCHALL_SET_DOMAIN, "print(\"%s  catch-all=%s\" % (d.get(\"domain\") or e"),
+        (mailbox::line::ALIAS_LIST_CALL, "d = call(\"GET\", \"/cli/mail/alias\", params={\"mail"),
+        (mailbox::line::ALIAS_LIST_ROWS, "rows = d.get(\"aliases\") or []"),
+        (mailbox::line::ALIAS_LIST_NONE, "print(\"%s  aliases=none\" % (d.get(\"mailbox\") or "),
+        (mailbox::line::ALIAS_LIST_PRINT, "print(\"%s  aliases=%s\" % (d.get(\"mailbox\") or \"?"),
+        (mailbox::line::ALIAS_ADD_CALL, "d = call(\"POST\", \"/cli/mail/alias\", body=body)"),
+        (mailbox::line::ALIAS_ADD_PRINT, "print(\"alias %s -> %s\" % (d.get(\"alias\") or env("),
+        (mailbox::line::ALIAS_REMOVE_CALL, "d = call(\"POST\", \"/cli/mail/alias/remove\", body="),
+        (mailbox::line::ALIAS_REMOVE_PRINT, "print(\"removed alias %s from %s\" % (d.get(\"remov"),
+    ];
+    for (n, text) in pins {
+        let got = s[*n as usize - 1].trim();
+        assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
+    }
+}
+
 #[test]
 fn the_boot_script_runs_the_mail_script_at_its_line_13() {
     let path =

@@ -97,6 +97,7 @@ pub fn exec(py_: &mut core::Py) -> core::R<()> {
         .or_else(|| writes::exec(py_, &verb))
         .or_else(|| owner::exec(py_, &verb))
         .or_else(|| forward::exec(py_, &verb))
+        .or_else(|| super::hostmail::branch(py_, &verb))
         .unwrap_or_else(|| unreachable!("no _mail_py branch for {verb}"))
 }
 

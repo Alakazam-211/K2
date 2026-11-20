@@ -31732,7 +31732,8 @@ retry --retries times (default 1) with backoff, on another node when K2
 placed the job (--retries 0 or --no-retry: never). k2 compute get <job>
 says why each attempt ended; logs/fetch --attempt N read an earlier one.
 A job that prints nothing for --stall-timeout (default 30m; 2h for Priority
-and CI) ends as timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
+and CI) ends as timeout/stalled; its end says which rule fired (no output and
+no CPU, or no output where the node can't read its CPU). A non-zero exit, a timeout, a stall or a cancel is a
 result and never retried.
 Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
 3 = infra, with a JSON code on stderr (node_offline, not_granted,
@@ -34075,6 +34076,8 @@ for j in bodies:
         code, what = 3, st + ((" (%s)" % j["reason"]) if j.get("reason") else "")
         errs.append(json.dumps({"error": st, "reason": j.get("reason") or "", "hint": "k2 compute get %s; k2 compute retry %s" % (j.get("short"), j.get("short"))}))
     sys.stderr.write("[k2 compute] job %s on %s: %s%s\n" % (j.get("short"), j.get("node"), what, took))
+    if j.get("hint"):
+        sys.stderr.write("  hint: %s\n" % j["hint"])
     if code != 0:
         failed_ids.append(j.get("id"))
         if rc is None:
@@ -70716,6 +70719,11 @@ NEVER STUCK
                             quiet while it waits on a lock or another service.
                             A stall not shorter than --timeout is none: the
                             wall clock ends the job first.
+                            A stall end says which rule fired (get's hint,
+                            the [compute] message, the job's detail): no
+                            output and no CPU, or no output on a node that
+                            couldn't read the job's CPU (silence alone ends
+                            it there), and how to set the limit.
                             5 minutes before the limit (for a limit under 10
                             minutes: once half of it has passed with no output,
                             4m for an 8m limit) you get one [compute]

@@ -29,6 +29,9 @@ pub struct Extra<'a> {
     pub late_secs: Option<i64>,
     /// CE-4: the Rust version the job ran, when Rust was a need.
     pub rustc: Option<&'a str>,
+    /// A stalled job: which stall rule ended it, in this server's own
+    /// words ([`super::proto::stall::words_for`]), never the node's text.
+    pub stall: Option<&'static str>,
 }
 
 /// Keep only plain characters of a controller- or node-made fact.
@@ -68,6 +71,11 @@ pub fn completion_text(
             _ => format!("finished{after}"),
         },
         "failed" => format!("failed ({}){after}", reason.unwrap_or("infrastructure")),
+        "timeout" if reason == Some("stalled") => format!(
+            "stopped by the stall guard{after}: {}; {}",
+            extra.stall.unwrap_or("no output for its whole --stall-timeout"),
+            super::proto::stall::HOW_TO_SET
+        ),
         "timeout" => format!("timed out{after}"),
         "cancelled" => match reason {
             // A shared node ended it (0.46.3): say why, plainly.
@@ -144,6 +152,26 @@ mod tests {
             completion_text("7f3a0000aaaa", "mini-1", "done", Some(100), None, None, Some(61), Some(&t), &Extra::default()),
             "[compute] job 7f3a0000 on mini-1: exit 100 after 1m01s; tests 410 passed, 3 failed, 2 skipped. k2 compute logs 7f3a0000 --failures · k2 compute get 7f3a0000 --json"
         );
+    }
+
+    /// A stall end says the stall guard ended it, which rule fired (the
+    /// server's words, from the node's detail) and how to set the limit;
+    /// an older node's detail falls back to the plain rule.
+    #[test]
+    fn a_stall_says_which_rule_fired_and_how_to_set_it() {
+        use super::super::proto::stall::{detail, words_for, StallRule, HOW_TO_SET};
+        let d = detail(StallRule::NoOutputNoCpu, 1800, 0);
+        let x = Extra { stall: Some(words_for(Some(&d))), ..Default::default() };
+        assert_eq!(
+            completion_text("ab12cd34ffff", "k2n4", "timeout", None, None, Some("stalled"), Some(1900), None, &x),
+            format!("[compute] job ab12cd34 on k2n4: stopped by the stall guard after 31m40s: no output and no CPU for its whole --stall-timeout; {HOW_TO_SET}. k2 compute logs ab12cd34 --tail 50 · k2 compute get ab12cd34 --json")
+        );
+        let blind = Extra { stall: Some(words_for(Some(&detail(StallRule::CpuUnreadable, 60, 0)))), ..Default::default() };
+        assert!(completion_text("j", "n", "timeout", None, None, Some("stalled"), None, None, &blind).contains("the node couldn't read its CPU"));
+        let old = completion_text("j", "n", "timeout", None, None, Some("stalled"), None, None, &Extra::default());
+        assert!(old.contains("stopped by the stall guard: no output for its whole --stall-timeout; set it with --stall-timeout"), "{old}");
+        // A wall-clock timeout is still a timeout.
+        assert!(completion_text("j", "n", "timeout", None, None, Some("timeout"), Some(60), None, &Extra::default()).contains("timed out after 1m00s"));
     }
 
     #[test]

@@ -1268,6 +1268,14 @@ fn gpu_mem_cap_hint(j: &store::JobRow) -> Option<String> {
     ))
 }
 
+/// A job the stall guard ended (`timeout`/`stalled`): which rule fired, in
+/// this server's words, and how to set the limit.
+pub(crate) fn stall_hint(j: &store::JobRow) -> Option<String> {
+    use k2_core::compute::proto::stall;
+    (j.state == "timeout" && j.reason.as_deref() == Some("stalled"))
+        .then(|| format!("stopped by the stall guard: {}; {}", stall::words_for(j.detail.as_deref()), stall::HOW_TO_SET))
+}
+
 /// CE-10: a running job's stall watch, as `get` shows it: the limit the
 /// node enforces (`stallSecs`, null = off) and when the warning went out.
 fn stall_json(j: &store::JobRow) -> serde_json::Value {
@@ -1364,7 +1372,7 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
     let mut v = job_summary(&j);
     // `commit` is srcCommit; `dirty` says whether --dirty changes rode along.
     v["dirty"] = j.dirty_sha256.is_some().into();
-    if let Some(h) = mem_cap_hint(&j).or_else(|| gpu_mem_cap_hint(&j)) {
+    if let Some(h) = mem_cap_hint(&j).or_else(|| gpu_mem_cap_hint(&j)).or_else(|| stall_hint(&j)) {
         v["hint"] = h.into();
     }
     // The audit line: who asked for the cancel, and when.
@@ -1815,5 +1823,25 @@ mod run_time_tests {
         assert_eq!(run_and_queue_secs(&row("preparing", Some(1010), None, false), 1700), (None, 700));
         // Queued on this server.
         assert_eq!(run_and_queue_secs(&row("queued", None, None, false), 1300), (None, 300));
+    }
+}
+
+#[cfg(test)]
+mod stall_hint_tests {
+    use super::stall_hint;
+    use k2_core::compute::proto::stall::{detail, StallRule, HOW_TO_SET};
+    use k2_core::compute::store::JobRow;
+
+    /// `get`'s hint for a stall end names the rule that fired and how to
+    /// set the limit; any other end has none from here.
+    #[test]
+    fn a_stall_end_hints_its_rule_and_the_flag() {
+        let row = |state: &str, reason: &str, d: Option<String>| JobRow { id: "j".into(), state: state.into(), reason: Some(reason.into()), detail: d, ..Default::default() };
+        let h = stall_hint(&row("timeout", "stalled", Some(detail(StallRule::CpuUnreadable, 1800, 0)))).expect("a hint");
+        assert_eq!(h, format!("stopped by the stall guard: no output for its whole --stall-timeout, and the node couldn't read its CPU (silence alone ends a job there); {HOW_TO_SET}"));
+        let old = stall_hint(&row("timeout", "stalled", Some("no output for 1800s".into()))).expect("a hint");
+        assert!(old.contains("no output for its whole --stall-timeout; set it with --stall-timeout"), "{old}");
+        assert_eq!(stall_hint(&row("timeout", "timeout", None)), None);
+        assert_eq!(stall_hint(&row("failed", "mem_cap", None)), None);
     }
 }

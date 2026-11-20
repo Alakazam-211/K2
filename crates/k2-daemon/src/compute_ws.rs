@@ -1562,6 +1562,8 @@ pub fn finalize(job_id: &str) {
         detail: job.detail.as_deref().filter(|_| job.reason.as_deref() == Some("queue_timeout")),
         late_secs: job.ctl.reported_late_secs,
         rustc: rustc.as_deref(),
+        // A stall: which rule fired, in this server's words.
+        stall: (job.reason.as_deref() == Some("stalled")).then(|| compute::proto::stall::words_for(job.detail.as_deref())),
     };
     let text = if job.ctl.shards.is_empty() {
         compute::message::completion_text(&job.id, &node_name, &job.state, job.exit_code, job.signal, job.reason.as_deref(), secs, tests.as_ref(), &extra)

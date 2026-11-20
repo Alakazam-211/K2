@@ -8,7 +8,9 @@
 # --follow; --max-wait keeps exit 3; a failed job still exits 3; the two
 # limits together are a usage error. `k2 compute list` is `jobs` (the same
 # request, --json printed on stdout); `ls` stays `nodes`. `status` prints
-# a running job's time from its start and the wait before it apart.
+# a running job's time from its start and the wait before it apart. A
+# stalled job's wait end prints the server's hint (which rule fired, how
+# to set --stall-timeout).
 
 set -euo pipefail
 
@@ -46,6 +48,9 @@ def job(which):
     j = {"id": which, "short": short, "node": "linux-1", "argv": ["true"], "createdAt": 1000}
     if which.startswith("queued"):
         j.update({"state": "queued", "queue": {"position": 2, "of": 3, "reason": "parallel_full"}})
+    elif which.startswith("stalled"):
+        j.update({"state": "timeout", "reason": "stalled", "startedAt": 1000, "endedAt": 2900,
+                  "hint": "stopped by the stall guard: no output and no CPU for its whole --stall-timeout; set it with --stall-timeout (e.g. --stall-timeout 2h, or off for a quiet job), or stall_timeout in .k2/compute.toml"})
     elif which.startswith("failed"):
         j.update({"state": "failed", "reason": "spawn_failed", "startedAt": 1000, "endedAt": 1060})
     else:
@@ -159,6 +164,13 @@ set +e
 "$K2" compute wait done0002 --timeout 30s >/dev/null 2>"$SANDBOX/err"; rc=$?
 set -e
 expect_eq "a done job inside --timeout exits 0" "$rc" "0"
+
+set +e
+"$K2" compute wait stalled1 >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "a stalled job exits 3" "$rc" "3"
+expect_has "its end line names the stall" "$(cat "$SANDBOX/err")" "[k2 compute] job stalled1 on linux-1: timeout (stalled)"
+expect_has "and the hint says which rule fired and how to set it" "$(cat "$SANDBOX/err")" "  hint: stopped by the stall guard: no output and no CPU for its whole --stall-timeout; set it with --stall-timeout"
 
 echo "== usage =="
 set +e

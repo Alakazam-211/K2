@@ -89,6 +89,7 @@ pub mod share;
 pub mod signer_policy;
 pub mod statement;
 pub mod sim;
+pub mod stall;
 pub mod ticket;
 pub mod tiers;
 

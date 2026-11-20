@@ -1502,6 +1502,9 @@ impl Node {
         // or half the window when that's shorter), again only after it
         // printed or worked in between.
         let mut stall_warned = false;
+        // Which stall rule ended it (the job's detail names it) and the
+        // job's CPU then.
+        let mut stall_end: Option<(k2_node_proto::stall::StallRule, u64)> = None;
         // An adopted job that ended while no node watched (or whose holder
         // is gone) has nothing to wait for.
         let mut ended_by: Option<StopReason> = preset.clone();
@@ -1532,6 +1535,15 @@ impl Node {
                     let m = stall_ms.unwrap_or(u64::MAX);
                     // An older server's job keeps the output-only rule.
                     if if easy { usage.stalled(quiet, now_ms, m) } else { quiet >= m } {
+                        use k2_node_proto::stall::StallRule;
+                        let rule = if !easy {
+                            StallRule::NoOutput
+                        } else if usage.cpu_known {
+                            StallRule::NoOutputNoCpu
+                        } else {
+                            StallRule::CpuUnreadable
+                        };
+                        stall_end = Some((rule, usage.last_rate_permille));
                         ended_by = Some(StopReason { state: JobState::Timeout, reason: "stalled".into() });
                         break;
                     }
@@ -1871,7 +1883,10 @@ impl Node {
             unknown_detail
         } else {
             match reason.as_deref() {
-            Some("stalled") => Some(format!("no output for {}s", a.plan.stall_secs.unwrap_or(0))),
+            Some("stalled") => Some(match stall_end {
+                Some((rule, cpu)) => k2_node_proto::stall::detail(rule, a.plan.stall_secs.unwrap_or(0), cpu),
+                None => format!("no output for {}s", a.plan.stall_secs.unwrap_or(0)),
+            }),
             Some("mem_cap") => Some(mem_cap_detail_used(mem_limit, peak_shown)),
             Some(k2_node_proto::gpu::codes::GPU_MEM_CAP) => gpu_mem_detail.clone(),
             Some(refusal::DISK_LOW) => {

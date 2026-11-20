@@ -466,6 +466,8 @@ for j in bodies:
         code, what = 3, st + ((" (%s)" % j["reason"]) if j.get("reason") else "")
         errs.append(json.dumps({"error": st, "reason": j.get("reason") or "", "hint": "k2 compute get %s; k2 compute retry %s" % (j.get("short"), j.get("short"))}))
     sys.stderr.write("[k2 compute] job %s on %s: %s%s\n" % (j.get("short"), j.get("node"), what, took))
+    if j.get("hint"):
+        sys.stderr.write("  hint: %s\n" % j["hint"])
     if code != 0:
         failed_ids.append(j.get("id"))
         if rc is None:

@@ -119,7 +119,11 @@ async fn a_silent_job_stalls_out_and_a_chatty_one_does_not() {
     c.send(Frame::Assign(assign(p, 1)));
     let fr = run_to_receipt(&mut c, "s1").await;
     let end = states_of(&fr, "s1").into_iter().last().unwrap();
-    assert_eq!((end.state, end.reason.as_deref(), end.detail.as_deref()), (JobState::Timeout, Some("stalled"), Some("no output for 1s")));
+    assert_eq!((end.state, end.reason.as_deref()), (JobState::Timeout, Some("stalled")));
+    // The detail says which stall rule fired and how to set the limit.
+    let d = end.detail.clone().expect("a stalled job's detail");
+    assert!(d.starts_with("no output for 1s") && d.contains(k2_node_proto::stall::HOW_TO_SET), "{d}");
+    assert!(k2_node_proto::stall::rule_of(&d).is_some(), "it names its rule: {d}");
     assert!(t.elapsed() < std::time::Duration::from_secs(10), "stopped long before the 30 s sleep: {:?}", t.elapsed());
     let sys = text(&logs_of(&fr, "s1"), k2_node_proto::frames::LogStream::Sys);
     assert!(sys.contains("[k2-node] stopping job: stalled"), "{sys}");

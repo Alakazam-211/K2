@@ -700,7 +700,8 @@ retry --retries times (default 1) with backoff, on another node when K2
 placed the job (--retries 0 or --no-retry: never). k2 compute get <job>
 says why each attempt ended; logs/fetch --attempt N read an earlier one.
 A job that prints nothing for --stall-timeout (default 30m; 2h for Priority
-and CI) ends as timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
+and CI) ends as timeout/stalled; its end says which rule fired (no output and
+no CPU, or no output where the node can't read its CPU). A non-zero exit, a timeout, a stall or a cancel is a
 result and never retried.
 Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
 3 = infra, with a JSON code on stderr (node_offline, not_granted,

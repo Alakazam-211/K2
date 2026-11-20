@@ -304,12 +304,29 @@ fn the_words() {
         &["agent::host.example", "t"],
         &["agent@host", "t"],
         &["ws", "t", "--secret", "N"],
-        &["ws", "t", "--from"],
-        &["ws", "t", "--command"],
-        &["ws", "t", "--wake-timeout"],
-        &["ws", "t", "--via"],
     ] {
         assert_eq!(parse(shell), Parsed::Shell, "{shell:?}");
+    }
+    // A value flag as the last word: one line and exit 2 (K2's D6), where
+    // the shell stops on its own `$2: unbound variable`.
+    for flag in ["--from", "--command", "--wake-timeout", "--via"] {
+        assert_eq!(
+            stops(&["ws", "t", flag]),
+            (send::needs_value(flag), Exit::Usage)
+        );
+        assert_eq!(
+            send::needs_value(flag),
+            format!("Error: {flag} needs a value (try '{CLI_NAME} msg --help')\n")
+        );
+    }
+    let staging = source("msg-whoami-done.sh");
+    for line in [
+        r#"--from) explicit_from="$2"; shift 2 ;;"#,
+        r#"--command) explicit_command="$2"; shift 2 ;;"#,
+        r#"wake_timeout="$2"; shift 2 ;;"#,
+        r#"explicit_via="$2"; shift 2 ;;"#,
+    ] {
+        assert!(staging.contains(line), "{line}");
     }
 }
 
@@ -800,6 +817,7 @@ fn the_lines_name_the_brand() {
         verify::parse(&["a", "b"], &mut NoStdin).unwrap_err().0,
         stop(&["ws", "hi", "--agent", "x"]),
         stop(&["ws"]),
+        send::needs_value("--from"),
     ];
     for line in &lines {
         let named = line.contains(&format!("{cli} ")) || line.contains(product);

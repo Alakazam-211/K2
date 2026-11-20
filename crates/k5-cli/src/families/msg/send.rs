@@ -41,9 +41,11 @@
 //! ([`super::postal`]). The shell answers these forms itself ([`parse`]
 //! says [`Parsed::Shell`]): `--signal`,
 //! `--inbox-silent` and `--inbox-wake`, an address on another server
-//! (`agent::host`, `agent@host`), `--secret NAME` (a vault handoff), and a
-//! value flag (`--from`, `--command`, `--wake-timeout`, `--via`) as the
-//! last word, where bash stops with its own `$2: unbound variable`.
+//! (`agent::host`, `agent@host`) and `--secret NAME` (a vault handoff).
+//!
+//! A value flag (`--from`, `--command`, `--wake-timeout`, `--via`) as the
+//! last word is [`needs_value`]'s line and exit 2, where bash stops with
+//! its own `$2: unbound variable` (K2's D6).
 
 use super::super::{end_in_pipe, without_nuls};
 use super::py::s;
@@ -182,6 +184,22 @@ pub fn unknown_flag(word: &str) -> String {
             " msg --help')\n"
         ),
         word
+    )
+}
+
+/// A value flag as the last word. The shell stops there on its own
+/// `$2: unbound variable` line (the script's path and line in it, exit
+/// 1); the binary says what is missing and exits 2, K2's D6 ruling for
+/// the class (`scripts/cli-parity.sh`'s named difference
+/// `edge-usage-exit-2`).
+pub fn needs_value(flag: &str) -> String {
+    format!(
+        concat!(
+            "Error: {} needs a value (try '",
+            cli_name!(),
+            " msg --help')\n"
+        ),
+        flag
     )
 }
 
@@ -370,7 +388,7 @@ pub fn parse(words: &[&str]) -> Parsed {
             },
             flag @ ("--from" | "--command" | "--wake-timeout" | "--via") => {
                 let Some(v) = next else {
-                    return Parsed::Shell;
+                    return Parsed::Stop(needs_value(flag), Exit::Usage);
                 };
                 let slot = match flag {
                     "--from" => &mut m.from,

@@ -169,6 +169,7 @@ EXPECTED_DIFFS=(
     "wiki-status-large-answer|K5 lane r8c, for K2 to rule on|\`wiki status\` hands both of the daemon's answers (the serve status and the index) to its Python in environment variables; an index above what one variable may hold (128 KiB on Linux, about 1 MiB in all on macOS) stops bash there: \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 126 (exit 1 on macOS, with its /bin/bash 3.2). The binary reads the answers itself and prints the status, exit 0. Both send the same two requests"
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
     "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words three of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError; from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
+    "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Neither sends anything"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
 
@@ -193,6 +194,33 @@ check_version_offline() {
         [ "$(cat "$out")" = "k2 $cli_version" ] && [ "$(wc -l <"$out" | tr -d ' ')" = 1 ] \
             || problems+=("the binary as $name printed '$(head -c 200 "$out")', want exactly 'k2 $cli_version'")
         [ ! -s "$err" ] || problems+=("the binary as $name wrote on stderr: $(head -c 200 "$err")")
+    done
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_edge_usage_exit_2: a value flag as the last word, with a port and
+# an owner token on disk but nothing listening (neither side may ask).
+# Bash stops on its own unbound-variable line and exits 1; the binary
+# prints its one line and exits 2.
+check_edge_usage_exit_2() {
+    local d="$WORK/d6" flag rc out err problems=()
+    mkdir -p "$d/home/.k2" "$d/ws"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    printf '1\n' >"$d/home/.k2/heartbeat.port"
+    out="$d/out" err="$d/err"
+    for flag in --from --command --wake-timeout --via; do
+        rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" bash "$ROOT/cli/k2" msg ws hi "$flag") >"$out" 2>"$err" </dev/null || rc=$?
+        [ "$rc" = 1 ] || problems+=("bash msg ws hi $flag exited $rc, want 1")
+        [ ! -s "$out" ] || problems+=("bash msg ws hi $flag printed on stdout: $(head -c 200 "$out")")
+        [ "$(wc -l <"$err" | tr -d ' ')" = 1 ] && grep -q '^.*: line [0-9]*: \$2: unbound variable$' "$err" \
+            || problems+=("bash msg ws hi $flag wrote: $(head -c 300 "$err")")
+        rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" "$WORK/bin/k2" msg ws hi "$flag") >"$out" 2>"$err" </dev/null || rc=$?
+        [ "$rc" = 2 ] || problems+=("the binary's msg ws hi $flag exited $rc, want 2")
+        [ ! -s "$out" ] || problems+=("the binary's msg ws hi $flag printed on stdout: $(head -c 200 "$out")")
+        [ "$(cat "$err")" = "Error: $flag needs a value (try 'k2 msg --help')" ] \
+            || problems+=("the binary's msg ws hi $flag wrote: $(head -c 300 "$err")")
     done
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"

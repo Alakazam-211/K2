@@ -28,8 +28,7 @@
 //!   ([`crate::prelude::codex_env`]);
 //! - a word that is not UTF-8;
 //! - the forms [`send`] names (`--signal`, `--inbox-silent`
-//!   and `--inbox-wake`, `<agent>::<host>`, `--secret`, a value flag as the
-//!   last word).
+//!   and `--inbox-wake`, `<agent>::<host>`, `--secret`).
 
 use super::curl_port;
 use crate::daemon;

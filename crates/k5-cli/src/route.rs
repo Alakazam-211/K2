@@ -806,6 +806,6 @@ mod tests {
             .filter(|n| n.bare_row().is_some())
             .map(|n| n.words[0])
             .collect();
-        assert_eq!(rows, Vec::<&str>::new());
+        assert_eq!(rows, ["compute", "chat"]);
     }
 }

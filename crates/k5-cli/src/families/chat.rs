@@ -917,40 +917,44 @@ pub const WORDS: &[&str] = &["chat"];
 /// help is a page the front puts together ([`crate::pages::Composed`]).
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
 /// Every verb is the binary's ([`run`] hands some lines back to the
-/// shell).
-pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
-    words: &[
-        "spaces",
-        "channels",
-        "messages",
-        "read",
-        "wait",
-        "whoami",
-        "unread",
-        "mark-read",
-        "ack",
-        "follow",
-        "unfollow",
-        "prefs",
-        "deliveries",
-        "send",
-        "post",
-        "reply",
-        "dm",
-        "edit",
-        "delete",
-        "outbox",
-        "access",
-        "channel",
-        "space",
-        "role",
-        "ban",
-        "unban",
-        "timeout",
-        "mute",
-    ],
-    owner: crate::route::Owner::Native,
-}];
+/// shell), and so is `chat --json` (the bare row; `chat` alone stays the
+/// front's composed page).
+pub const VERBS: &[crate::route::Verb] = &[
+    crate::route::Verb::bare(crate::route::Owner::Native),
+    crate::route::Verb {
+        words: &[
+            "spaces",
+            "channels",
+            "messages",
+            "read",
+            "wait",
+            "whoami",
+            "unread",
+            "mark-read",
+            "ack",
+            "follow",
+            "unfollow",
+            "prefs",
+            "deliveries",
+            "send",
+            "post",
+            "reply",
+            "dm",
+            "edit",
+            "delete",
+            "outbox",
+            "access",
+            "channel",
+            "space",
+            "role",
+            "ban",
+            "unban",
+            "timeout",
+            "mute",
+        ],
+        owner: crate::route::Owner::Native,
+    },
+];
 
 /// `k5 chat ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it.

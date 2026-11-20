@@ -42,7 +42,8 @@ pub const WORDS: &[&str] = &["compute"];
 /// The shell's but for [`VERBS`].
 pub const OWNER: Owner = Owner::Bash;
 /// One verb row per arm of `cmd_compute` (`cli/src/compute-command.sh`), so
-/// each can turn back alone.
+/// each can turn back alone, and the bare line's row (`compute` alone or
+/// with `--json`; [`run`] hands `--json` to the shell).
 pub const VERBS: &[Verb] = &[
     Verb {
         words: &["nodes", "ls"],
@@ -184,6 +185,8 @@ pub const VERBS: &[Verb] = &[
         words: &["roster", "seats", "trust", "owners"],
         owner: Owner::Native,
     },
+    // `compute` alone: the help page, after the gates ([`admin::setup`]).
+    Verb::bare(Owner::Native),
 ];
 
 /// Whether this family's code answers `verb` (a second word).

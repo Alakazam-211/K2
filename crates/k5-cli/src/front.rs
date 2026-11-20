@@ -931,6 +931,58 @@ mod tests {
         }
     }
 
+    /// A bare row's line goes to its family's code; its verb rows and its
+    /// help are where they were, and a composed page stays the front's.
+    #[test]
+    fn the_bare_rows() {
+        // compute: the bare row is Native, its verb rows unchanged.
+        assert_eq!(route(&args(&["compute"])), family("compute"));
+        assert_eq!(route(&args(&["compute", "--json"])), family("compute"));
+        assert_eq!(route(&args(&["compute", "nodes"])), family("compute"));
+        for shell in [
+            &["compute", "x"][..],
+            &["compute", ""],
+            &["compute", "help"],
+            &["compute", "--json", "x"],
+        ] {
+            assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
+        }
+        for help in [&["compute", "--help"][..], &["compute", "-h"]] {
+            assert_ne!(route(&args(help)), family("compute"), "{help:?}");
+        }
+        // chat: `chat --json` is the family's; `chat` alone is still the
+        // composed page, and so is its help.
+        assert_eq!(route(&args(&["chat", "--json"])), family("chat"));
+        assert_eq!(route(&args(&["chat"])), Route::Composed(Composed::Chat));
+        assert_eq!(
+            route(&args(&["chat", "--help"])),
+            Route::Composed(Composed::Chat)
+        );
+        assert_eq!(route(&args(&["chat", "spaces"])), family("chat"));
+        assert_eq!(route(&args(&["chat", "nope"])), Route::Fallthrough);
+        // A family with no bare row: its bare line is not the family's.
+        for (line, name) in [
+            (&["app"][..], "app"),
+            (&["connect"], "connect"),
+            (&["hostmail", "--json"], "hostmail"),
+        ] {
+            assert_ne!(route(&args(line)), family(name), "{line:?}");
+        }
+    }
+
+    /// The bare row's guard bites: with the composed page's check gone,
+    /// `chat` alone would reach the family.
+    #[test]
+    fn a_composed_page_is_checked_before_the_bare_row() {
+        let found = route::find(route::TABLE, &args(&["chat"]));
+        assert_eq!(found.owner, Owner::Native);
+        assert!(found.by_bare);
+        assert!(composed_line(&args(&["chat"])));
+        assert!(!composed_line(&args(&["chat", "--json"])));
+        let chat = found.noun.expect("a chat row");
+        assert_eq!(native(chat, &args(&["chat"])), family("chat"));
+    }
+
     /// A first word the router has no arm for is the `*)` arm's; every
     /// word it has an arm for is never (so a typo never reaches a real
     /// verb, and a real verb never gets the unknown command's answer).

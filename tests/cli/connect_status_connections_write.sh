@@ -142,7 +142,7 @@ assert_eq "nothing paired: the token, then the tunnel" "$(requests)" "GET /cli/t
 assert_eq "nothing paired: the lines" "$out" "$(printf '%s\n' \
     "K2 Connect account" \
     "  Account session: no" \
-    "  Paired subdomain: '(none)'" \
+    "  Paired subdomain: (none)" \
     "  Tunnel token:     yes" \
     "  Tunnel running:  yes" \
     "  Public URL:      https://acme.k2.dev")"
@@ -215,7 +215,9 @@ assert_eq "the gate: JSON on stderr" "$err" '{"error": {"code": "agents_create_c
 assert_eq "the gate: nothing on stdout" "$out" ""
 run missing connections remove nope
 assert_eq "remove, not found: exit 1" "$rc" "1"
-assert_eq "remove, not found: the line" "$out" "Error: no workspace named nope"
+# 0.46.17: every error on stderr, stdout only the result lines.
+assert_eq "remove, not found: the line" "$err" "Error: no workspace named nope"
+assert_eq "remove, not found: nothing on stdout" "$out" ""
 run removed connections remove beta
 assert_eq "remove: exit 0" "$rc" "0"
 assert_eq "remove: the line" "$out" "Disconnected."
@@ -233,7 +235,8 @@ echo "== a write is sent once =="
 for verb in add remove; do
     run empty connections "$verb" beta
     assert_eq "$verb, an empty answer: exit 1" "$rc" "1"
-    assert_eq "$verb, an empty answer: the reader's line" "$out" "Error: daemon returned an unparseable response: ''"
+    assert_eq "$verb, an empty answer: the reader's line" "$err" "Error: daemon returned an unparseable response: ''"
+    assert_eq "$verb, an empty answer: nothing on stdout" "$out" ""
     assert_eq "$verb, an empty answer: one request" "$(requests)" "POST /cli/connections;"
     run close connections "$verb" beta
     if [ "$rc" != 0 ]; then ok "$verb, no answer: fails"; else bad "$verb, no answer: exit 0"; fi

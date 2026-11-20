@@ -203,7 +203,8 @@ run ok workspace update --field agent_mode --value off
 assert_eq "update: a DB column, exit 2" "$rc" "2"
 assert_eq "update: a DB column, nothing sent" "$(requests)" ""
 run ok workspace update --field role
-assert_eq "update: no value, the usage" "$rc:$err" "1:Usage: k2 workspace update --field <f> --value <v>"
+# 0.46.17: a usage mistake, exit 2 (it was 1).
+assert_eq "update: no value, the usage" "$rc:$err" "2:Usage: k2 workspace update --field <f> --value <v>"
 
 echo
 echo "workspace_first_run: $pass passed, $fail failed"

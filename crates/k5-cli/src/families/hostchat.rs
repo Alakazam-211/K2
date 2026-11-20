@@ -437,9 +437,22 @@ pub struct Ctx {
 impl Ctx {
     /// `_hostchat_call`: the body of a 200, or the exit after
     /// `_compute_fail`'s line.
-    pub fn call(&mut self, post: bool, path: &str, payload: &str, tcp: bool) -> Result<String, Exit> {
-        sew::call(&mut self.client, &mut self.closing, post, path, payload, tcp)
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
+    pub fn call(
+        &mut self,
+        post: bool,
+        path: &str,
+        payload: &str,
+        tcp: bool,
+    ) -> Result<String, Exit> {
+        sew::call(
+            &mut self.client,
+            &mut self.closing,
+            post,
+            path,
+            payload,
+            tcp,
+        )
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
     }
 }
 

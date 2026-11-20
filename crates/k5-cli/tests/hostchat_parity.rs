@@ -47,6 +47,11 @@ fn one(name: &'static str, args: &'static [&'static str], body: &str) -> Case {
     case(name, args, &[], vec![ok(body)], owner_and_port, 0, 1)
 }
 
+/// The shell's Python raises on the answer: exit 1, the traceback.
+fn tb(name: &'static str, args: &'static [&'static str], body: &str) -> Case {
+    traceback(case(name, args, &[], vec![ok(body)], owner_and_port, 1, 1))
+}
+
 fn many(name: &'static str, args: &'static [&'static str], bodies: &[&str], code: i32) -> Case {
     let replies: Vec<Reply> = bodies.iter().map(|b| ok(b)).collect();
     let n = replies.len();
@@ -65,7 +70,11 @@ fn hostchat_reads_answer_as_the_shell_does() {
         one("status: every line", &["status"], STATUS),
         // covers: hostchat --json
         one("status --json", &["status", "--json"], STATUS),
-        one("status: a pin, a folder, no mirror", &["status", "--health"], STATUS2),
+        one(
+            "status: a pin, a folder, no mirror",
+            &["status", "--health"],
+            STATUS2,
+        ),
         one(
             "status: not in this release",
             &["status"],
@@ -76,7 +85,11 @@ fn hostchat_reads_answer_as_the_shell_does() {
             &["status"],
             r#"{"released":false,"state":"not-installed","notice":"soon"}"#,
         ),
-        one("status: not supported", &["status"], r#"{"supported":false}"#),
+        one(
+            "status: not supported",
+            &["status"],
+            r#"{"supported":false}"#,
+        ),
         one(
             "status: the box backup with no line",
             &["status"],
@@ -93,9 +106,17 @@ fn hostchat_reads_answer_as_the_shell_does() {
             &["backups"],
             r#"{"ok":true,"backups":[{"id":"b1","at":1},{"id":"b2"}],"dir":"/var/b","count":2,"none":null,"empty":"","list":[]}"#,
         ),
-        one("job", &["job", "j 1"], r#"{"id":"j 1","state":"done","n":1.5,"t":true}"#),
+        one(
+            "job",
+            &["job", "j 1"],
+            r#"{"id":"j 1","state":"done","n":1.5,"t":true}"#,
+        ),
         one("doctor", &["doctor"], r#"{"ok":false,"checks":{"a":1}}"#),
-        one("reconfigure", &["reconfigure"], r#"{"ok":true,"state":"running"}"#),
+        one(
+            "reconfigure",
+            &["reconfigure"],
+            r#"{"ok":true,"state":"running"}"#,
+        ),
         one("restart", &["restart"], r#"{"state":"running"}"#),
         one("disable", &["disable"], r#"{"state":"stopped"}"#),
         one(
@@ -149,7 +170,9 @@ fn hostchat_reads_answer_as_the_shell_does() {
             "rollback: ok false exits 3 with its code",
             &["rollback", "--json"],
             &[],
-            vec![ok(r#"{"ok":false,"code":"media_rollback_failed","error":"no","mediaCommand":"sudo y"}"#)],
+            vec![ok(
+                r#"{"ok":false,"code":"media_rollback_failed","error":"no","mediaCommand":"sudo y"}"#,
+            )],
             owner_and_port,
             3,
             1,
@@ -174,28 +197,56 @@ fn hostchat_reads_answer_as_the_shell_does() {
             &["ship", "dir", "off box"],
             r#"{"ship":{"kind":"dir","path":"/x/off box"},"mirror":{"state":"waiting","error":"no disk"}}"#,
         ),
-        one("ship none", &["ship", "none"], r#"{"ship":{"kind":"none"},"mirror":{}}"#),
+        one(
+            "ship none",
+            &["ship", "none"],
+            r#"{"ship":{"kind":"none"},"mirror":{}}"#,
+        ),
         // covers: hostchat mirror
-        one("mirror none", &["mirror", "none"], r#"{"ok":true,"mirror":{"kind":"none"}}"#),
-        one("mirror dir", &["mirror", "dir", "/mnt/m", "--json"], r#"{"ok":true}"#),
+        one(
+            "mirror none",
+            &["mirror", "none"],
+            r#"{"ok":true,"mirror":{"kind":"none"}}"#,
+        ),
+        one(
+            "mirror dir",
+            &["mirror", "dir", "/mnt/m", "--json"],
+            r#"{"ok":true}"#,
+        ),
         // covers: hostchat app-url
         one("app-url", &["app-url"], STATUS),
-        one("app-url show: none", &["app-url", "show"], r#"{"state":"x"}"#),
+        one(
+            "app-url show: none",
+            &["app-url", "show"],
+            r#"{"state":"x"}"#,
+        ),
         one("app-url --json", &["app-url", "--json"], STATUS),
         one(
             "app-url set",
             &["app-url", "set", "https://app.example/x"],
             r#"{"ok":true,"appUrl":"https://app.example/x"}"#,
         ),
-        one("app-url clear", &["app-url", "clear"], r#"{"ok":true,"appUrl":null}"#),
+        one(
+            "app-url clear",
+            &["app-url", "clear"],
+            r#"{"ok":true,"appUrl":null}"#,
+        ),
         // covers: hostchat config
         one(
             "config: the list",
             &["config"],
             r#"{"approvalsBy":"people","allowed":["people","people+agents"],"defaultSpace":null}"#,
         ),
-        one("config: the list, none allowed", &["config"], r#"{"defaultSpace":"ops"}"#),
-        one("config --json", &["config", "--json"], r#"{"approvalsBy":"people"}"#),
+        one(
+            "config: the list, none allowed",
+            &["config"],
+            r#"{"defaultSpace":"ops"}"#,
+        ),
+        one(
+            "config --json",
+            &["config", "--json"],
+            r#"{"approvalsBy":"people"}"#,
+        ),
         one(
             "config set approvals.by",
             &["config", "set", "approvals.by", "people+agents"],
@@ -228,19 +279,15 @@ fn hostchat_reads_answer_as_the_shell_does() {
             &["agents"],
             r#"{"access":[{"workspace":"w","space":"s","level":"read","approval":"required"}]}"#,
         ),
-        traceback(one("status: not JSON", &["status"], "<html>")),
-        traceback(one("status: a list", &["status"], "[1]")),
-        traceback(one(
+        tb("status: not JSON", &["status"], "<html>"),
+        tb("status: a list", &["status"], "[1]"),
+        tb(
             "status: a mirror path that is no string",
             &["status"],
             r#"{"state":"x","mirror":{"kind":"dir","path":3}}"#,
-        )),
-        traceback(one("backups: a list", &["backups"], "[]")),
-        traceback(one(
-            "config: not JSON",
-            &["config"],
-            "nope",
-        )),
+        ),
+        tb("backups: a list", &["backups"], "[]"),
+        tb("config: not JSON", &["config"], "nope"),
     ];
     for c in v {
         rig.check(&c);
@@ -300,8 +347,16 @@ fn hostchat_waits_as_the_shell_does() {
             ],
             3,
         ),
-        one("enable --no-wait", &["enable", "--no-wait"], r#"{"state":"installing","ok":true}"#),
-        one("enable: done at once", &["enable"], r#"{"state":"running"}"#),
+        one(
+            "enable --no-wait",
+            &["enable", "--no-wait"],
+            r#"{"state":"installing","ok":true}"#,
+        ),
+        one(
+            "enable: done at once",
+            &["enable"],
+            r#"{"state":"running"}"#,
+        ),
         many(
             "upgrade: each step once, then done",
             &["upgrade", "--tarball", "s.tgz", "--dry-run"],
@@ -330,8 +385,16 @@ fn hostchat_waits_as_the_shell_does() {
             ],
             3,
         ),
-        one("upgrade --no-wait", &["upgrade", "--no-wait"], r#"{"state":"upgrading"}"#),
-        one("upgrade: refused at once", &["upgrade"], r#"{"state":"running","refused":"x"}"#),
+        one(
+            "upgrade --no-wait",
+            &["upgrade", "--no-wait"],
+            r#"{"state":"upgrading"}"#,
+        ),
+        one(
+            "upgrade: refused at once",
+            &["upgrade"],
+            r#"{"state":"running","refused":"x"}"#,
+        ),
         traceback(many(
             "enable: a status that is no JSON",
             &["enable"],
@@ -352,7 +415,10 @@ fn hostchat_refusals_as_the_shell_says_them() {
             "a 400",
             &["job", "x"],
             &[],
-            vec![Reply::Answer(400, r#"{"error":{"code":"bad_id","hint":"no such job"}}"#.into())],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"bad_id","hint":"no such job"}}"#.into(),
+            )],
             owner_and_port,
             2,
             1,
@@ -388,7 +454,10 @@ fn hostchat_refusals_as_the_shell_says_them() {
             "config: chat's refusal line",
             &["config"],
             &[],
-            vec![Reply::Answer(409, r#"{"error":{"code":"sew_down","hint":"h","details":{"key":"k"}}}"#.into())],
+            vec![Reply::Answer(
+                409,
+                r#"{"error":{"code":"sew_down","hint":"h","details":{"key":"k"}}}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -435,15 +504,32 @@ fn hostchat_words_as_the_shell_reads_them() {
             2,
             0,
         ),
-        case("status with no port: the gate", &["status"], &[], vec![], owner_only, 1, 0),
+        case(
+            "status with no port: the gate",
+            &["status"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
         bad("an unknown verb", &["nope"]),
         bad("an unknown flag, as it is", &["status", "--x\"y"]),
         bad("--setup-url", &["config", "--setup-url", "x", "--bogus"]),
         bad("--identity", &["enable", "--identity", "ldap"]),
         bad("--voice on status", &["status", "--voice"]),
-        bad("--node-ip on upgrade", &["upgrade", "--node-ip", "192.0.2.1"]),
-        bad("--media-tarball on status", &["status", "--media-tarball", "m"]),
-        bad("--accept-data-loss on upgrade", &["upgrade", "--accept-data-loss"]),
+        bad(
+            "--node-ip on upgrade",
+            &["upgrade", "--node-ip", "192.0.2.1"],
+        ),
+        bad(
+            "--media-tarball on status",
+            &["status", "--media-tarball", "m"],
+        ),
+        bad(
+            "--accept-data-loss on upgrade",
+            &["upgrade", "--accept-data-loss"],
+        ),
         bad("act-as", &["act-as", "ann"]),
         bad("job: no id", &["job"]),
         bad("restore: no bundle", &["restore", "--confirm"]),
@@ -454,17 +540,32 @@ fn hostchat_words_as_the_shell_reads_them() {
         bad("mirror box-backup", &["mirror", "box-backup"]),
         bad("mirror: no kind", &["mirror"]),
         bad("config set: a bad key", &["config", "set", "color", "red"]),
-        bad("config set approvals.by: a bad value", &["config", "set", "approvals.by", "all"]),
-        bad("config set default_space: none given", &["config", "set", "default_space"]),
-        bad("config set server.public_url: none given", &["config", "set", "public_url"]),
+        bad(
+            "config set approvals.by: a bad value",
+            &["config", "set", "approvals.by", "all"],
+        ),
+        bad(
+            "config set default_space: none given",
+            &["config", "set", "default_space"],
+        ),
+        bad(
+            "config set server.public_url: none given",
+            &["config", "set", "public_url"],
+        ),
         bad("config: a word", &["config", "x"]),
         bad("purge: no hostname", &["purge"]),
-        bad("upgrade --accept-binary: not hex", &["upgrade", "--accept-binary", "xyz"]),
+        bad(
+            "upgrade --accept-binary: not hex",
+            &["upgrade", "--accept-binary", "xyz"],
+        ),
         bad(
             "upgrade --accept-binary: too short",
             &["upgrade", "--accept-binary", "ABCDEF"],
         ),
-        bad("deliveries set: nothing to set", &["deliveries", "set", "w"]),
+        bad(
+            "deliveries set: nothing to set",
+            &["deliveries", "set", "w"],
+        ),
         case(
             "HOOK_SOCK set and no passport: the require-passport lines",
             &["status"],
@@ -485,7 +586,10 @@ fn hostchat_with_a_passport() {
     let rig = Rig::new(VERB, "pass");
     let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
     let v = vec![
-        with(with_passport(&[]), one("a host session: TCP", &["status"], STATUS2)),
+        with(
+            with_passport(&[]),
+            one("a host session: TCP", &["status"], STATUS2),
+        ),
         with(
             cell(),
             case(
@@ -570,7 +674,13 @@ fn hostchat_with_a_passport() {
 fn hostchat_backups_large() {
     let rig = Rig::new(VERB, "large");
     let rows: Vec<String> = (0..4000)
-        .map(|i| format!(r#"{{"id":"bundle-{i:05}","at":{},"size":{},"kind":"nightly"}}"#, 1_790_000_000 + i, 1000 + i))
+        .map(|i| {
+            format!(
+                r#"{{"id":"bundle-{i:05}","at":{},"size":{},"kind":"nightly"}}"#,
+                1_790_000_000 + i,
+                1000 + i
+            )
+        })
         .collect();
     let body = format!(r#"{{"backups":[{}]}}"#, rows.join(","));
     assert!(body.len() > 256 * 1024, "{}", body.len());
@@ -627,12 +737,37 @@ fn hostchat_help_never_acts() {
     for c in [
         shell("enable -h", &["enable", "--voice", "-h"], vec![], 0),
         shell("disable --help", &["disable", "--help"], vec![], 0),
-        shell("upgrade -h", &["upgrade", "--tarball", "t", "-h"], vec![], 0),
+        shell(
+            "upgrade -h",
+            &["upgrade", "--tarball", "t", "-h"],
+            vec![],
+            0,
+        ),
         shell("rollback --help", &["rollback", "--help"], vec![], 0),
-        shell("restore -h", &["restore", "b1", "--confirm", "-h"], vec![], 0),
-        shell("purge -h", &["purge", "--confirm-hostname", "h", "-h"], vec![], 0),
-        shell("recovery-key --help", &["recovery-key", "--help"], vec![], 0),
-        shell("rotate-master -h", &["rotate-master", "--drop-prev", "-h"], vec![], 0),
+        shell(
+            "restore -h",
+            &["restore", "b1", "--confirm", "-h"],
+            vec![],
+            0,
+        ),
+        shell(
+            "purge -h",
+            &["purge", "--confirm-hostname", "h", "-h"],
+            vec![],
+            0,
+        ),
+        shell(
+            "recovery-key --help",
+            &["recovery-key", "--help"],
+            vec![],
+            0,
+        ),
+        shell(
+            "rotate-master -h",
+            &["rotate-master", "--drop-prev", "-h"],
+            vec![],
+            0,
+        ),
         shell("uninstall -h", &["uninstall", "-h"], vec![], 0),
         shell("ship dir -h", &["ship", "dir", "/x", "-h"], vec![], 0),
         shell("mirror --help", &["mirror", "none", "--help"], vec![], 0),
@@ -696,12 +831,7 @@ fn vcase(name: &'static str, args: &[&'static str]) -> VCase {
 
 /// A person's step: the install id, then the confirm on the vault socket
 /// (the vault password, typed on stdin), then the step with the token.
-fn person(
-    name: &'static str,
-    args: &[&'static str],
-    daemon: Vec<Reply>,
-    code: i32,
-) -> VCase {
+fn person(name: &'static str, args: &[&'static str], daemon: Vec<Reply>, code: i32) -> VCase {
     let mut c = vcase(name, args);
     c.daemon_requests = daemon.len();
     c.daemon = daemon;
@@ -725,7 +855,10 @@ fn hostchat_a_person_s_steps() {
         person(
             "recovery-key",
             &["recovery-key"],
-            vec![ok(INSTALL), ok(r#"{"recoveryKey":"rk-1","warning":"keep it safe"}"#)],
+            vec![
+                ok(INSTALL),
+                ok(r#"{"recoveryKey":"rk-1","warning":"keep it safe"}"#),
+            ],
             0,
         ),
         person(
@@ -736,7 +869,12 @@ fn hostchat_a_person_s_steps() {
         ),
         person(
             "purge",
-            &["purge", "--confirm-hostname", "box.example", "--keep-backups"],
+            &[
+                "purge",
+                "--confirm-hostname",
+                "box.example",
+                "--keep-backups",
+            ],
             vec![ok(INSTALL), ok(r#"{"state":"purged"}"#)],
             0,
         ),
@@ -763,7 +901,9 @@ fn hostchat_a_person_s_steps() {
             vec![
                 ok(r#"{"bundle":"b7","to":"0.5.0","from":"0.6.0","since":"2026-11-01"}"#),
                 ok(INSTALL),
-                ok(r#"{"result":"rolled_back","message":"rolled back","keptBackup":"k1","bundle":"b7","version":"0.5.0","doctorFails":["a","b"]}"#),
+                ok(
+                    r#"{"result":"rolled_back","message":"rolled back","keptBackup":"k1","bundle":"b7","version":"0.5.0","doctorFails":["a","b"]}"#,
+                ),
             ],
             0,
         ),
@@ -790,7 +930,10 @@ fn hostchat_a_person_s_steps() {
         person(
             "open --print: no code",
             &["open", "--print"],
-            vec![ok(r#"{"appUrl":"https://chat.example"}"#), ok(r#"{"code":"x"}"#)],
+            vec![
+                ok(r#"{"appUrl":"https://chat.example"}"#),
+                ok(r#"{"code":"x"}"#),
+            ],
             3,
         ),
     ];
@@ -807,7 +950,10 @@ fn hostchat_a_person_s_steps() {
     no_point.daemon_requests = 1;
     no_point.code = 3;
     v.push(no_point);
-    let mut refused = vcase("purge: the confirm refused", &["purge", "--confirm-hostname", "h"]);
+    let mut refused = vcase(
+        "purge: the confirm refused",
+        &["purge", "--confirm-hostname", "h"],
+    );
     refused.daemon = vec![ok(INSTALL)];
     refused.daemon_requests = 1;
     refused.vault = Some(vec![Reply::Answer(
@@ -817,7 +963,10 @@ fn hostchat_a_person_s_steps() {
     refused.vault_requests = 1;
     refused.code = 3;
     v.push(refused);
-    let mut tb = vcase("recovery-key: an install id that is no JSON", &["recovery-key"]);
+    let mut tb = vcase(
+        "recovery-key: an install id that is no JSON",
+        &["recovery-key"],
+    );
     tb.daemon = vec![ok("nope")];
     tb.daemon_requests = 1;
     tb.code = 1;
@@ -838,7 +987,11 @@ fn hostchat_recording_as_the_shell_does() {
     let v = vec![
         // covers: hostchat recording
         one("recording status", &["recording", "status"], REC),
-        one("recording status --json", &["recording", "status", "--json"], REC),
+        one(
+            "recording status --json",
+            &["recording", "status", "--json"],
+            REC,
+        ),
         one(
             "recording status: not installed",
             &["recording", "status"],
@@ -927,17 +1080,49 @@ fn hostchat_recording_as_the_shell_does() {
                 1,
             ),
         ),
-        case("recording alone: its help", &["recording"], &[], vec![], owner_and_port, 0, 0),
-        case("recording help", &["recording", "help"], &[], vec![], owner_and_port, 0, 0),
-        bad("recording: --yes on status", &["recording", "status", "--yes"]),
-        bad("recording: --model-file on status", &["recording", "status", "--model-file", "m"]),
-        bad("recording: --model-file with no file", &["recording", "install", "--model-file"]),
-        bad("recording: an unknown flag", &["recording", "status", "--x"]),
+        case(
+            "recording alone: its help",
+            &["recording"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "recording help",
+            &["recording", "help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        bad(
+            "recording: --yes on status",
+            &["recording", "status", "--yes"],
+        ),
+        bad(
+            "recording: --model-file on status",
+            &["recording", "status", "--model-file", "m"],
+        ),
+        bad(
+            "recording: --model-file with no file",
+            &["recording", "install", "--model-file"],
+        ),
+        bad(
+            "recording: an unknown flag",
+            &["recording", "status", "--x"],
+        ),
         bad("recording: a word", &["recording", "status", "now"]),
         bad("recording: an unknown verb", &["recording", "start"]),
         // covers: hostchat recording policy
         utc(one("recording policy", &["recording", "policy"], POLICIES)),
-        one("recording policies --json", &["recording", "policies", "--json"], POLICIES),
+        one(
+            "recording policies --json",
+            &["recording", "policies", "--json"],
+            POLICIES,
+        ),
         one(
             "recording policy: no flags, no locks list",
             &["recording", "policy"],
@@ -969,7 +1154,10 @@ fn hostchat_recording_as_the_shell_does() {
             "recording policy set: refused",
             &["recording", "policy", "set", "required", "off"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"owner_only","hint":"the owner"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"owner_only","hint":"the owner"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -980,28 +1168,58 @@ fn hostchat_recording_as_the_shell_does() {
                 "recording policy set in a session: held, no confirm",
                 &["recording", "policy", "set", "enabled", "on"],
                 &[],
-                vec![Reply::Answer(403, r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into())],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into(),
+                )],
                 port_only,
                 3,
                 1,
             ),
         ),
         bad("recording policy: a word", &["recording", "policy", "x"]),
-        bad("recording policy: an unknown flag", &["recording", "policy", "--x"]),
-        bad("recording policy set: nothing", &["recording", "policy", "set"]),
-        bad("recording policy set: odd", &["recording", "policy", "set", "enabled"]),
-        bad("recording policy set: unknown key", &["recording", "policy", "set", "color", "é"]),
-        bad("recording policy set: not on or off", &["recording", "policy", "set", "enabled", "maybe"]),
-        bad("recording policy set: required", &["recording", "policy", "set", "required", "all"]),
-        bad("recording policy set: days 0", &["recording", "policy", "set", "audio_max_days", "0"]),
-        bad("recording policy set: days 3651", &["recording", "policy", "set", "audio_max_days", "3651"]),
-        bad("recording policy set: days x", &["recording", "policy", "set", "audio_max_days", "d"]),
-        traceback(one("recording status: a list", &["recording", "status"], "[]")),
-        traceback(one(
+        bad(
+            "recording policy: an unknown flag",
+            &["recording", "policy", "--x"],
+        ),
+        bad(
+            "recording policy set: nothing",
+            &["recording", "policy", "set"],
+        ),
+        bad(
+            "recording policy set: odd",
+            &["recording", "policy", "set", "enabled"],
+        ),
+        bad(
+            "recording policy set: unknown key",
+            &["recording", "policy", "set", "color", "é"],
+        ),
+        bad(
+            "recording policy set: not on or off",
+            &["recording", "policy", "set", "enabled", "maybe"],
+        ),
+        bad(
+            "recording policy set: required",
+            &["recording", "policy", "set", "required", "all"],
+        ),
+        bad(
+            "recording policy set: days 0",
+            &["recording", "policy", "set", "audio_max_days", "0"],
+        ),
+        bad(
+            "recording policy set: days 3651",
+            &["recording", "policy", "set", "audio_max_days", "3651"],
+        ),
+        bad(
+            "recording policy set: days x",
+            &["recording", "policy", "set", "audio_max_days", "d"],
+        ),
+        tb("recording status: a list", &["recording", "status"], "[]"),
+        tb(
             "recording policy: a lock time that is no number",
             &["recording", "policy"],
             r#"{"locks":[{"lockedAt":"x"}]}"#,
-        )),
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -1026,14 +1244,20 @@ fn hostchat_recording_a_person_s_steps() {
             "recording policy set: held for a confirm",
             &["recording", "policy", "set", "required", "multi_person"],
             vec![
-                Reply::Answer(403, r#"{"error":{"code":"owner_confirm_required","hint":"in person"}}"#.into()),
+                Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"owner_confirm_required","hint":"in person"}}"#.into(),
+                ),
                 ok(INSTALL),
                 ok(r#"{"changed":["recording.required"]}"#),
             ],
             0,
         ),
     ];
-    let mut tty = vcase("recording uninstall: no terminal", &["recording", "uninstall"]);
+    let mut tty = vcase(
+        "recording uninstall: no terminal",
+        &["recording", "uninstall"],
+    );
     tty.code = 2;
     v.push(tty);
     for c in &v {
@@ -1052,8 +1276,16 @@ fn hostchat_media_as_the_shell_does() {
             r#"{"ready":true,"checks":[{"status":"ok","id":"udp","detail":"open"}]}"#,
         ),
         one("media status", &["media", "status"], STATUS),
-        one("media status --json", &["media", "status", "--json"], STATUS),
-        one("media status --json: no voice", &["media", "status", "--json"], r#"{"state":"x"}"#),
+        one(
+            "media status --json",
+            &["media", "status", "--json"],
+            STATUS,
+        ),
+        one(
+            "media status --json: no voice",
+            &["media", "status", "--json"],
+            r#"{"state":"x"}"#,
+        ),
         one(
             "media install",
             &[
@@ -1078,17 +1310,46 @@ fn hostchat_media_as_the_shell_does() {
             ],
             0,
         ),
-        one("media url", &["media", "url", "wss://v.example"], r#"{"ok":true,"publicUrl":"wss://v.example"}"#),
-        one("media url --url", &["media", "url", "--public-url", "wss://w.example"], r#"{"ok":true}"#),
-        one("media renew", &["media", "renew"], r#"{"renewed":true,"daysLeft":89}"#),
+        one(
+            "media url",
+            &["media", "url", "wss://v.example"],
+            r#"{"ok":true,"publicUrl":"wss://v.example"}"#,
+        ),
+        one(
+            "media url --url",
+            &["media", "url", "--public-url", "wss://w.example"],
+            r#"{"ok":true}"#,
+        ),
+        one(
+            "media renew",
+            &["media", "renew"],
+            r#"{"renewed":true,"daysLeft":89}"#,
+        ),
         one("media rebind", &["media", "rebind"], r#"{"rebound":true}"#),
-        one("media tier", &["media", "tier", "tunnel"], r#"{"tier":"tunnel"}"#),
+        one(
+            "media tier",
+            &["media", "tier", "tunnel"],
+            r#"{"tier":"tunnel"}"#,
+        ),
         one(
             "media probe",
-            &["media", "probe", "--udp", "ok", "--tcp", "fail", "--turn-tls", "ok"],
+            &[
+                "media",
+                "probe",
+                "--udp",
+                "ok",
+                "--tcp",
+                "fail",
+                "--turn-tls",
+                "ok",
+            ],
             r#"{"exposure":{"note":"tcp blocked"}}"#,
         ),
-        one("media uninstall --yes", &["media", "uninstall", "--yes"], r#"{"removed":true}"#),
+        one(
+            "media uninstall --yes",
+            &["media", "uninstall", "--yes"],
+            r#"{"removed":true}"#,
+        ),
         case(
             "media uninstall with no terminal",
             &["media", "uninstall"],
@@ -1098,14 +1359,29 @@ fn hostchat_media_as_the_shell_does() {
             2,
             0,
         ),
-        case("media alone: the help", &["media"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "media alone: the help",
+            &["media"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         bad("media url: none", &["media", "url"]),
         bad("media tier: a bad tier", &["media", "tier", "fast"]),
-        bad("media probe: a flag missing", &["media", "probe", "--udp", "ok"]),
+        bad(
+            "media probe: a flag missing",
+            &["media", "probe", "--udp", "ok"],
+        ),
         bad("media: --yes on renew", &["media", "renew", "-y"]),
         bad("media: an unknown flag", &["media", "renew", "--x"]),
         bad("media: an unknown verb", &["media", "start"]),
-        traceback(one("media status --json: a list", &["media", "status", "--json"], "[]")),
+        tb(
+            "media status --json: a list",
+            &["media", "status", "--json"],
+            "[]",
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -1124,29 +1400,68 @@ fn hostchat_users_as_the_shell_does() {
             r#"{"users":[{"username":"ann","installRole":"owner","kind":"person","displayName":"Ann é"},{"externalId":"x1","installRole":"member","kind":"guest","deactivated":true}]}"#,
         ),
         one("users list: none", &["users", "list"], r#"{"users":[]}"#),
-        one("user list --json", &["user", "list", "--json"], r#"{"users":[]}"#),
-        one("users owner", &["users", "owner", "ann", "--display-name", "Ann"], link),
         one(
-            "users invite",
-            &["users", "invite", "bob", "--email", "bob@example.test", "--admin"],
+            "user list --json",
+            &["user", "list", "--json"],
+            r#"{"users":[]}"#,
+        ),
+        one(
+            "users owner",
+            &["users", "owner", "ann", "--display-name", "Ann"],
             link,
         ),
-        one("users invite: a member", &["users", "invite", "cy"], r#"{"username":"cy","installRole":"member"}"#),
+        one(
+            "users invite",
+            &[
+                "users",
+                "invite",
+                "bob",
+                "--email",
+                "bob@example.test",
+                "--admin",
+            ],
+            link,
+        ),
+        one(
+            "users invite: a member",
+            &["users", "invite", "cy"],
+            r#"{"username":"cy","installRole":"member"}"#,
+        ),
         one("users reset", &["users", "reset", "ann"], link),
         one(
             "users revoke",
             &["users", "revoke", "ann"],
             r#"{"username":"ann","sessionsRevoked":0}"#,
         ),
-        one("users reactivate --json", &["users", "reactivate", "ann", "--json"], link),
-        one("users role", &["users", "role", "ann", "member"], r#"{"username":"ann","installRole":"member"}"#),
-        one("users role --role", &["users", "role", "ann", "--role", "admin"], r#"{"username":"ann"}"#),
+        one(
+            "users reactivate --json",
+            &["users", "reactivate", "ann", "--json"],
+            link,
+        ),
+        one(
+            "users role",
+            &["users", "role", "ann", "member"],
+            r#"{"username":"ann","installRole":"member"}"#,
+        ),
+        one(
+            "users role --role",
+            &["users", "role", "ann", "--role", "admin"],
+            r#"{"username":"ann"}"#,
+        ),
         bad("users owner: no name", &["users", "owner"]),
         bad("users role: no role", &["users", "role", "ann"]),
         bad("users: an unknown verb", &["users", "kick", "ann"]),
         bad("users: an unknown flag", &["users", "list", "--x"]),
-        case("users help", &["users", "help"], &[], vec![], owner_and_port, 0, 0),
-        traceback(one("users list: a list", &["users"], "[1]")),
+        case(
+            "users help",
+            &["users", "help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        tb("users list: a list", &["users"], "[1]"),
     ];
     for c in v {
         rig.check(&c);
@@ -1167,11 +1482,27 @@ fn hostchat_chat_administration_as_the_shell_does() {
             r#"{"people":[{"user":"ann","subjectKind":"person","scope":"box"},{"user":"bot","subjectKind":"agent","scope":"ws","enabled":false}]}"#,
         ),
         one("people: none", &["person", "list"], r#"{"people":[]}"#),
-        one("people --json", &["people", "--json"], r#"{"people":[]}"#),
-        one("people add, a guest", &["people", "add", "@ann", "--guest"], r#"{"ok":true,"user":"ann","guest":true}"#),
-        one("people grant --guest off", &["people", "grant", "ann", "--guest", "off"], r#"{"ok":true}"#),
-        one("people set", &["people", "set", "ann", "--guest", "yes"], r#"{"user":"ann"}"#),
-        one("people remove", &["people", "remove", "ann", "--json"], r#"{"ok":true}"#),
+        bad("people --json", &["people", "--json"]),
+        one(
+            "people add, a guest",
+            &["people", "add", "@ann", "--guest"],
+            r#"{"ok":true,"user":"ann","guest":true}"#,
+        ),
+        one(
+            "people grant --guest off",
+            &["people", "grant", "ann", "--guest", "off"],
+            r#"{"ok":true}"#,
+        ),
+        one(
+            "people set",
+            &["people", "set", "ann", "--guest", "yes"],
+            r#"{"user":"ann"}"#,
+        ),
+        one(
+            "people remove",
+            &["people", "remove", "ann", "--json"],
+            r#"{"ok":true}"#,
+        ),
         bad("people add: no user", &["people", "add"]),
         bad("people set: no --guest", &["people", "set", "ann"]),
         bad("people: a bad verb", &["people", "kick"]),
@@ -1182,8 +1513,16 @@ fn hostchat_chat_administration_as_the_shell_does() {
             &["approvals"],
             r#"{"items":[{"id":"out_1","status":"queued","addr":"s/c","body":"hi"}]}"#,
         ),
-        one("approvals: an id first is a list", &["approvals", "out_1", "--workspace", "w b"], r#"{"items":[]}"#),
-        one("approvals approve", &["approvals", "approve", "out_1", "--note", "ok"], r#"{"ok":true,"id":"out_1"}"#),
+        one(
+            "approvals: an id first is a list",
+            &["approvals", "out_1", "--workspace", "w b"],
+            r#"{"items":[]}"#,
+        ),
+        one(
+            "approvals approve",
+            &["approvals", "approve", "out_1", "--note", "ok"],
+            r#"{"ok":true,"id":"out_1"}"#,
+        ),
         one(
             "approvals approve: two",
             &["approval", "approve", "out_1", "out_2"],
@@ -1193,7 +1532,10 @@ fn hostchat_chat_administration_as_the_shell_does() {
             "approvals approve: refused",
             &["approvals", "approve", "out_1"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"not_yours","hint":"h"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"not_yours","hint":"h"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -1202,7 +1544,10 @@ fn hostchat_chat_administration_as_the_shell_does() {
             "approvals approve: held, no action named",
             &["approvals", "approve", "out_1"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"confirm_required","hint":"h"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"confirm_required","hint":"h"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -1219,10 +1564,17 @@ fn hostchat_chat_administration_as_the_shell_does() {
                 1,
             ),
         ),
-        one("approvals deny", &["approvals", "deny", "out_1", "--note", "no \"way\""], r#"{"ok":true}"#),
+        one(
+            "approvals deny",
+            &["approvals", "deny", "out_1", "--note", "no \"way\""],
+            r#"{"ok":true}"#,
+        ),
         bad("approvals deny: no note", &["approvals", "deny", "out_1"]),
         bad("approvals approve: none", &["approvals", "approve"]),
-        bad("approvals --note: empty", &["approvals", "approve", "out_1", "--note", ""]),
+        bad(
+            "approvals --note: empty",
+            &["approvals", "approve", "out_1", "--note", ""],
+        ),
         bad("approvals: a bad verb", &["approvals", "skip"]),
         // covers: hostchat on-behalf
         one(
@@ -1230,9 +1582,21 @@ fn hostchat_chat_administration_as_the_shell_does() {
             &["on-behalf", "--state", "all", "--limit", "5"],
             r#"{"person":"ann","items":[{"write":"post","messageId":"m1","action":"posted","state":"approved","workspace":"w","decidedBy":"ann","decidedKind":"person","note":7},{"write":"edit","state":"pending"}]}"#,
         ),
-        one("on-behalf: none", &["behalf", "list"], r#"{"person":"ann","items":[]}"#),
-        one("on-behalf approve", &["on-behalf", "approve", "act_1", "--note", "fine"], r#"{"ok":true,"state":"approved"}"#),
-        one("on-behalf decline --json", &["on-behalf", "decline", "msg_1", "--json"], r#"{"ok":true}"#),
+        one(
+            "on-behalf: none",
+            &["behalf", "list"],
+            r#"{"person":"ann","items":[]}"#,
+        ),
+        one(
+            "on-behalf approve",
+            &["on-behalf", "approve", "act_1", "--note", "fine"],
+            r#"{"ok":true,"state":"approved"}"#,
+        ),
+        one(
+            "on-behalf decline --json",
+            &["on-behalf", "decline", "msg_1", "--json"],
+            r#"{"ok":true}"#,
+        ),
         with(
             with_passport(&[]),
             case(
@@ -1258,8 +1622,12 @@ fn hostchat_chat_administration_as_the_shell_does() {
         one("log --json", &["log", "--json"], r#"{"entries":[]}"#),
         bad("log: a word", &["log", "x"]),
         bad("log --limit: none", &["log", "--limit"]),
-        traceback(one("log: a reason that is no string", &["log"], r#"{"entries":[{"at":1,"reason":5}]}"#)),
-        traceback(one("people: a list", &["people"], "[]")),
+        tb(
+            "log: a reason that is no string",
+            &["log"],
+            r#"{"entries":[{"at":1,"reason":5}]}"#,
+        ),
+        tb("people: a list", &["people"], "[]"),
     ];
     for c in v {
         rig.check(&c);
@@ -1273,13 +1641,19 @@ fn hostchat_chat_administration_a_person_s_steps() {
         person(
             "approvals approve: held, then confirmed",
             &["approvals", "approve", "out_1", "--note", "ok"],
-            vec![Reply::Answer(403, HELD.into()), ok(r#"{"ok":true,"id":"out_1"}"#)],
+            vec![
+                Reply::Answer(403, HELD.into()),
+                ok(r#"{"ok":true,"id":"out_1"}"#),
+            ],
             0,
         ),
         person(
             "on-behalf approve: held, then confirmed",
             &["on-behalf", "approve", "act_1"],
-            vec![Reply::Answer(403, HELD.into()), ok(r#"{"ok":true,"state":"approved"}"#)],
+            vec![
+                Reply::Answer(403, HELD.into()),
+                ok(r#"{"ok":true,"state":"approved"}"#),
+            ],
             0,
         ),
     ];
@@ -1301,9 +1675,21 @@ fn hostchat_apps_as_the_shell_does() {
             &["app-spaces"],
             r#"{"spaces":[{"appId":"acme","spaceId":"s1","members":{"added":3,"held":1},"governance":"app","governanceConfirmed":"sew"},{"appId":"b","spaceId":"s2","governance":"sew","governanceConfirmed":"sew"}],"unbound":[{"appId":"old","spaceId":"s0","doneAt":1},{"appId":"o2","spaceId":"s9"}],"note":"a note"}"#,
         ),
-        one("app-space list: none", &["app-space", "list"], r#"{"spaces":[]}"#),
-        one("app-space --json", &["app-space", "--json"], r#"{"spaces":[]}"#),
-        one("app-space bind", &["app-space", "bind", "acme", "s1"], r#"{"ok":true,"bound":true}"#),
+        one(
+            "app-space list: none",
+            &["app-space", "list"],
+            r#"{"spaces":[]}"#,
+        ),
+        one(
+            "app-space --json",
+            &["app-space", "--json"],
+            r#"{"spaces":[]}"#,
+        ),
+        one(
+            "app-space bind",
+            &["app-space", "bind", "acme", "s1"],
+            r#"{"ok":true,"bound":true}"#,
+        ),
         one(
             "app-space unbind --remove-app-members",
             &["app-space", "unbind", "acme", "s1", "--remove-app-members"],
@@ -1316,20 +1702,39 @@ fn hostchat_apps_as_the_shell_does() {
                 "app-space governance in a session: no confirm",
                 &["app-space", "governance", "acme", "s1", "app"],
                 &[],
-                vec![ok(r#"{"spaceId":"s1","governance":"app","changed":true,"hint":"h"}"#)],
+                vec![ok(
+                    r#"{"spaceId":"s1","governance":"app","changed":true,"hint":"h"}"#,
+                )],
                 port_only,
                 0,
                 1,
             ),
         ),
         bad("app-space bind: one word", &["app-spaces", "bind", "acme"]),
-        bad("app-space bind --remove-app-members", &["app-space", "bind", "a", "s", "--remove-app-members"]),
-        bad("app-space governance: no value", &["app-space", "governance", "a", "s"]),
-        bad("app-space governance: a bad value", &["app-space", "governance", "a", "s", "both"]),
+        bad(
+            "app-space bind --remove-app-members",
+            &["app-space", "bind", "a", "s", "--remove-app-members"],
+        ),
+        bad(
+            "app-space governance: no value",
+            &["app-space", "governance", "a", "s"],
+        ),
+        bad(
+            "app-space governance: a bad value",
+            &["app-space", "governance", "a", "s", "both"],
+        ),
         bad("app-space: an unknown flag", &["app-space", "bind", "--x"]),
         // covers: hostchat app-space recording
-        one("app-space recording: the rule", &["app-space", "recording", "acme", "5"], APP_REC),
-        one("app-space recording: another Space", &["app-space", "recording", "acme", "s2"], APP_REC),
+        one(
+            "app-space recording: the rule",
+            &["app-space", "recording", "acme", "5"],
+            APP_REC,
+        ),
+        one(
+            "app-space recording: another Space",
+            &["app-space", "recording", "acme", "s2"],
+            APP_REC,
+        ),
         case(
             "app-space recording: not bound",
             &["app-space", "recording", "acme", "s9"],
@@ -1339,15 +1744,35 @@ fn hostchat_apps_as_the_shell_does() {
             3,
             1,
         ),
-        one("app-space recording --json", &["app-space", "recording", "acme", "5", "--json"], APP_REC),
+        one(
+            "app-space recording --json",
+            &["app-space", "recording", "acme", "5", "--json"],
+            APP_REC,
+        ),
         one(
             "app-space recording: a change",
-            &["app-space", "recording", "acme", "s1", "--start-level", "member", "--required=inherit"],
+            &[
+                "app-space",
+                "recording",
+                "acme",
+                "s1",
+                "--start-level",
+                "member",
+                "--required=inherit",
+            ],
             r#"{"spaceId":"s1","app":"acme","changed":true,"startLevel":"member","required":null,"locked":true}"#,
         ),
         one(
             "app-space recording: down, already so",
-            &["app-space", "recording", "acme", "s1", "--start-level=none", "--required", "off"],
+            &[
+                "app-space",
+                "recording",
+                "acme",
+                "s1",
+                "--start-level=none",
+                "--required",
+                "off",
+            ],
             r#"{"spaceId":"s1","app":"acme","required":false}"#,
         ),
         with(
@@ -1356,17 +1781,35 @@ fn hostchat_apps_as_the_shell_does() {
                 "app-space recording in a session: held, refused",
                 &["app-space", "recording", "acme", "s1", "--required", "on"],
                 &[],
-                vec![Reply::Answer(403, r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into())],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into(),
+                )],
                 port_only,
                 3,
                 1,
             ),
         ),
-        bad("app-space recording: one word", &["app-space", "recording", "acme"]),
-        bad("app-space recording: three words", &["app-space", "recording", "a", "s", "x"]),
-        bad("app-space recording: a bad level", &["app-space", "recording", "a", "s", "--start-level", "owner"]),
-        bad("app-space recording: a bad required", &["app-space", "recording", "a", "s", "--required", "maybe"]),
-        bad("app-space recording: --required with nothing", &["app-space", "recording", "a", "s", "--required"]),
+        bad(
+            "app-space recording: one word",
+            &["app-space", "recording", "acme"],
+        ),
+        bad(
+            "app-space recording: three words",
+            &["app-space", "recording", "a", "s", "x"],
+        ),
+        bad(
+            "app-space recording: a bad level",
+            &["app-space", "recording", "a", "s", "--start-level", "owner"],
+        ),
+        bad(
+            "app-space recording: a bad required",
+            &["app-space", "recording", "a", "s", "--required", "maybe"],
+        ),
+        bad(
+            "app-space recording: --required with nothing",
+            &["app-space", "recording", "a", "s", "--required"],
+        ),
         // covers: hostchat app-space recording-lock
         one(
             "app-space recording-lock",
@@ -1378,7 +1821,10 @@ fn hostchat_apps_as_the_shell_does() {
             &["app-space", "recording-lock", "s1", "no"],
             r#"{"spaceId":"s1","locked":false}"#,
         ),
-        bad("app-space recording-lock: maybe", &["app-space", "recording-lock", "s1", "maybe"]),
+        bad(
+            "app-space recording-lock: maybe",
+            &["app-space", "recording-lock", "s1", "maybe"],
+        ),
         one(
             "home",
             &["home"],
@@ -1389,14 +1835,26 @@ fn hostchat_apps_as_the_shell_does() {
             &["home", "--json"],
             r#"{"ok":false,"error":"x"}"#,
         ),
-        one("home: not ok, the lines", &["home"], r#"{"ok":false,"error":"x"}"#),
+        one(
+            "home: not ok, the lines",
+            &["home"],
+            r#"{"ok":false,"error":"x"}"#,
+        ),
         one(
             "home client",
             &["home", "client", "acme"],
             r#"{"sew":{"appScopedSessions":true},"homeClient":"acme","homeClientDelivered":false}"#,
         ),
-        one("home client none", &["home", "client", "none"], r#"{"sew":{},"homeClient":null}"#),
-        one("home app", &["home", "app", "acme", "--hidden", "on"], r#"{"sew":{},"apps":[]}"#),
+        one(
+            "home client none",
+            &["home", "client", "none"],
+            r#"{"sew":{},"homeClient":null}"#,
+        ),
+        one(
+            "home app",
+            &["home", "app", "acme", "--hidden", "on"],
+            r#"{"sew":{},"apps":[]}"#,
+        ),
         bad("home: a bad verb", &["home", "list"]),
         bad("home app: no --hidden", &["home", "app", "acme"]),
         bad("home client: no app", &["home", "client"]),
@@ -1416,18 +1874,42 @@ fn hostchat_apps_as_the_shell_does() {
             r#"{"keys":[{"state":"current","kid":"k2","publishedAt":1790000000,"rotateDueAt":1792000000},{"state":"retiring","kid":"k1","publishedAt":1780000000,"retireAfter":1791000000}]}"#,
         )),
         one("pass-keys: none", &["pass-keys"], r#"{"keys":[]}"#),
-        one("pass-keys rotate", &["pass-keys", "rotate"], r#"{"keys":[]}"#),
-        one("pass-keys drop-previous --json", &["pass-keys", "drop-previous", "--json"], r#"{"ok":true}"#),
+        one(
+            "pass-keys rotate",
+            &["pass-keys", "rotate"],
+            r#"{"keys":[]}"#,
+        ),
+        one(
+            "pass-keys drop-previous --json",
+            &["pass-keys", "drop-previous", "--json"],
+            r#"{"ok":true}"#,
+        ),
         bad("pass-keys: a word", &["pass-keys", "list"]),
         bad("pass-keys: a flag", &["pass-keys", "--x"]),
         // covers: hostchat meet
-        one("meet bind", &["meet", "bind", "acme"], r#"{"ok":true,"app":"acme","url":"https://meet.example"}"#),
+        one(
+            "meet bind",
+            &["meet", "bind", "acme"],
+            r#"{"ok":true,"app":"acme","url":"https://meet.example"}"#,
+        ),
         one("meet unbind", &["meet", "unbind"], r#"{"ok":true}"#),
-        case("meet alone: the help", &["meet"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "meet alone: the help",
+            &["meet"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         bad("meet bind: no app", &["meet", "bind"]),
         bad("meet: a bad verb", &["meet", "start"]),
-        traceback(one("pass-keys: a time that is no number", &["pass-keys"], r#"{"keys":[{"publishedAt":"x"}]}"#)),
-        traceback(one("home: a list", &["home"], "[]")),
+        tb(
+            "pass-keys: a time that is no number",
+            &["pass-keys"],
+            r#"{"keys":[{"publishedAt":"x"}]}"#,
+        ),
+        tb("home: a list", &["home"], "[]"),
     ];
     for c in v {
         rig.check(&c);
@@ -1437,7 +1919,12 @@ fn hostchat_apps_as_the_shell_does() {
 #[test]
 fn hostchat_apps_a_person_s_steps() {
     let rig = VRig::new();
-    let held = || Reply::Answer(403, r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into());
+    let held = || {
+        Reply::Answer(
+            403,
+            r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into(),
+        )
+    };
     let mut gov = person(
         "app-space governance",
         &["app-space", "governance", "acme", "s1", "sew"],
@@ -1449,14 +1936,28 @@ fn hostchat_apps_a_person_s_steps() {
         gov,
         person(
             "app-space recording: up, held for a confirm",
-            &["app-space", "recording", "acme", "s1", "--start-level", "admin"],
-            vec![held(), ok(APP_REC), ok(r#"{"spaceId":"s1","app":"acme","changed":true,"startLevel":"admin"}"#)],
+            &[
+                "app-space",
+                "recording",
+                "acme",
+                "s1",
+                "--start-level",
+                "admin",
+            ],
+            vec![
+                held(),
+                ok(APP_REC),
+                ok(r#"{"spaceId":"s1","app":"acme","changed":true,"startLevel":"admin"}"#),
+            ],
             0,
         ),
         person(
             "app-space recording-lock: held for a confirm",
             &["app-space", "recording-lock", "s1", "on", "--json"],
-            vec![held(), ok(r#"{"spaceId":"s1","locked":true,"changed":true}"#)],
+            vec![
+                held(),
+                ok(r#"{"spaceId":"s1","locked":true,"changed":true}"#),
+            ],
             0,
         ),
     ];

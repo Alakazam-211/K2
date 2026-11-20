@@ -8,8 +8,8 @@ use super::print::{self, g, is, load, or, st, sub, sv, t, Py, R};
 use super::{cj, usage, Ctx, Main};
 use crate::confirm::{self, Confirm};
 use crate::exit::Exit;
-use crate::families::{chat, raised, Raise, Shown};
 use crate::families::voice::sew::{self, Field};
+use crate::families::{chat, raised, Raise, Shown};
 use crate::out::json::Value;
 use crate::out::{self, py};
 use crate::transport::encode::{quote, quote_bytes};
@@ -310,10 +310,7 @@ fn rollback_check(body: &str) -> Exit {
             return Ok(None);
         }
         let mut pairs = vec![
-            (
-                "error",
-                or(g(&v, "code", 5)?, st("rollback_incomplete")),
-            ),
+            ("error", or(g(&v, "code", 5)?, st("rollback_incomplete"))),
             ("hint", or(g(&v, "error", 5)?, st("see the answer above"))),
         ];
         if t(&g(&v, "mediaCommand", 6)?) {
@@ -346,7 +343,13 @@ fn upgrade(ctx: &mut Ctx, m: &Main) -> Result<Exit, Exit> {
         let mut sha: String = m
             .accept_binary
             .chars()
-            .map(|ch| if ch.is_ascii_uppercase() && ch <= 'F' { ch.to_ascii_lowercase() } else { ch })
+            .map(|ch| {
+                if ch.is_ascii_uppercase() && ch <= 'F' {
+                    ch.to_ascii_lowercase()
+                } else {
+                    ch
+                }
+            })
             .collect();
         while sha.ends_with('\n') {
             sha.pop();
@@ -355,7 +358,9 @@ fn upgrade(ctx: &mut Ctx, m: &Main) -> Result<Exit, Exit> {
             return Ok(bad(&format!("--accept-binary is the binary's sha256: 64 hex characters ({c} hostchat upgrade names it when it refuses)")));
         }
         if sha.chars().count() != 64 {
-            return Ok(bad("--accept-binary is the binary's sha256: 64 hex characters"));
+            return Ok(bad(
+                "--accept-binary is the binary's sha256: 64 hex characters",
+            ));
         }
         person(ctx)?;
         let id = install_id(ctx)?;
@@ -514,7 +519,9 @@ fn app_url(ctx: &mut Ctx, m: &Main) -> Result<Exit, Exit> {
         }
         "set" => {
             if pos(1).is_empty() {
-                return Ok(bad(&format!("{c} hostchat app-url set https://HOST[/path]")));
+                return Ok(bad(&format!(
+                    "{c} hostchat app-url set https://HOST[/path]"
+                )));
             }
             let payload = cj(&[("url", s(pos(1)))]);
             let body = ctx.call(true, "/cli/sew/server/app-url", &payload, false)?;
@@ -524,7 +531,9 @@ fn app_url(ctx: &mut Ctx, m: &Main) -> Result<Exit, Exit> {
             let body = ctx.call(true, "/cli/sew/server/app-url", r#"{"url":""}"#, false)?;
             Ok(show(&body, "app-url", json))
         }
-        _ => Ok(bad(&format!("{c} hostchat app-url set <url> | clear | show"))),
+        _ => Ok(bad(&format!(
+            "{c} hostchat app-url set <url> | clear | show"
+        ))),
     }
 }
 
@@ -655,7 +664,10 @@ fn rollback_data_loss(ctx: &mut Ctx, media: &str, json: bool) -> Result<Exit, Ex
         let v = load(&body, 3)?;
         let r = g(&v, "result", 4)?;
         if !json {
-            let head = or(or(g(&v, "message", 6)?, r.clone()), st(&sew::dumps_default(&v)));
+            let head = or(
+                or(g(&v, "message", 6)?, r.clone()),
+                st(&sew::dumps_default(&v)),
+            );
             p.print(&sv(&head));
             for (k, lbl) in [
                 ("keptBackup", "kept backup"),
@@ -671,7 +683,8 @@ fn rollback_data_loss(ctx: &mut Ctx, media: &str, json: bool) -> Result<Exit, Ex
                 }
             }
             if t(&g(&v, "doctorFails", 10)?) {
-                let fails = crate::out::pylib::ops::join(&print::ix(&v, "doctorFails", 11)?, ", ", 11)?;
+                let fails =
+                    crate::out::pylib::ops::join(&print::ix(&v, "doctorFails", 11)?, ", ", 11)?;
                 p.print(&format!("doctor fails:    {fails}"));
             }
         }
@@ -686,7 +699,10 @@ fn rollback_data_loss(ctx: &mut Ctx, media: &str, json: bool) -> Result<Exit, Ex
         }
         let err = confirm::object(vec![
             ("error", or(r, st("rollback_incomplete"))),
-            ("hint", or(g(&v, "message", 14)?, st("see the answer above"))),
+            (
+                "hint",
+                or(g(&v, "message", 14)?, st("see the answer above")),
+            ),
         ]);
         p.eprint(&sew::dumps_default(&err));
         Ok(false)
@@ -892,7 +908,14 @@ fn upgrade_now(body: &str) -> R<(String, Vec<String>)> {
         sv(&or(g(&p, "current", 6)?, st("-")))
     );
     let steps = or(g(&p, "steps", 4)?, print::dict());
-    let order = ["stage", "upgrade", "health", "rollback", "media", "tunnel-bind"];
+    let order = [
+        "stage",
+        "upgrade",
+        "health",
+        "rollback",
+        "media",
+        "tunnel-bind",
+    ];
     let mut keyed: Vec<((Key, Key, usize), String)> = Vec::new();
     let pairs: Vec<(String, Value)> = match &steps {
         Value::Object(pairs) => pairs
@@ -925,7 +948,11 @@ fn upgrade_now(body: &str) -> R<(String, Vec<String>)> {
             "TypeError: '<' not supported between instances of 'str' and 'int'",
         ));
     }
-    let line = keyed.into_iter().map(|(_, k)| k).collect::<Vec<_>>().join(" ");
+    let line = keyed
+        .into_iter()
+        .map(|(_, k)| k)
+        .collect::<Vec<_>>()
+        .join(" ");
     // `for s in $steps`: split on blanks.
     let steps = line
         .split([' ', '\t', '\n'])
@@ -955,7 +982,9 @@ fn upgrade_end(body: &str, json: bool) -> Exit {
             return Ok(true);
         }
         if !t(&why) {
-            why = st(&format!("the daemon recorded no reason (a {PRODUCT_NAME} bug: send the k2-daemon log)"));
+            why = st(&format!(
+                "the daemon recorded no reason (a {PRODUCT_NAME} bug: send the k2-daemon log)"
+            ));
         }
         let o = confirm::object(vec![
             ("error", st(&format!("upgrade_{}", sv(&res)))),

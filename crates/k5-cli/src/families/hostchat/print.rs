@@ -202,8 +202,9 @@ fn print_into(p: &mut Py, raw: &str, verb: &str) -> R<()> {
     match verb {
         "status" => status(p, &v),
         "recording-status" => recording_status(p, &v),
-        "recording-install" | "recording-enable" | "recording-disable"
-        | "recording-uninstall" => recording_change(p, &v, verb),
+        "recording-install" | "recording-enable" | "recording-disable" | "recording-uninstall" => {
+            recording_change(p, &v, verb)
+        }
         "preflight" | "media-preflight" | "recording-preflight" => {
             p.print(if t(&g(&v, "ready", 146)?) {
                 "ready"
@@ -337,10 +338,7 @@ fn print_into(p: &mut Py, raw: &str, verb: &str) -> R<()> {
             Ok(())
         }
         "recovery-key" => {
-            let k = or(
-                or(g(&v, "recoveryKey", 232)?, g(&v, "key", 232)?),
-                st(""),
-            );
+            let k = or(or(g(&v, "recoveryKey", 232)?, g(&v, "key", 232)?), st(""));
             p.print(&sv(&k));
             if t(&g(&v, "warning", 233)?) {
                 p.eprint(&sv(&ix(&v, "warning", 234)?));
@@ -526,11 +524,7 @@ fn status(p: &mut Py, v: &Value) -> R<()> {
         if t(&turn) {
             p.line_s(
                 "TURN",
-                &format!(
-                    "{}:5349 (node {})",
-                    sv(&turn),
-                    sv(&g(&vo, "nodeIp", 98)?)
-                ),
+                &format!("{}:5349 (node {})", sv(&turn), sv(&g(&vo, "nodeIp", 98)?)),
             );
         }
         let c = sub(&vo, "cert", 99)?;
@@ -608,11 +602,7 @@ fn recording_status(p: &mut Py, v: &Value) -> R<()> {
     if matches!(g(&r, "ok", 126)?, Value::Bool(false)) {
         p.line_s(
             "not ready",
-            &format!(
-                "{}: {}",
-                sv(&g(&r, "code", 127)?),
-                sv(&g(&r, "hint", 127)?)
-            ),
+            &format!("{}: {}", sv(&g(&r, "code", 127)?), sv(&g(&r, "hint", 127)?)),
         );
     }
     Ok(())
@@ -624,7 +614,11 @@ fn recording_change(p: &mut Py, v: &Value, verb: &str) -> R<()> {
     match verb {
         "recording-install" => {
             p.line_s("recorder", if installing { &busy } else { "installed" });
-            let on = if t(&g(v, "enabled", 131)?) { "on" } else { "off" };
+            let on = if t(&g(v, "enabled", 131)?) {
+                "on"
+            } else {
+                "off"
+            };
             p.line_s("recording", on);
             p.line("version", &g(v, "version", 132)?);
             p.line("model", &g(v, "model", 133)?);

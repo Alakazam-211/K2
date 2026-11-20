@@ -19,27 +19,49 @@ fn status_lines_as_the_shell_prints_them() {
         "Chat / Voice Hosting: x\nversion:         pin None\n"
     );
     assert_eq!(
-        out("job", r#"{"ok":true,"a":[],"b":"","c":null,"d":{"e":[1,"\u00e9"]},"f":0}"#),
+        out(
+            "job",
+            r#"{"ok":true,"a":[],"b":"","c":null,"d":{"e":[1,"\u00e9"]},"f":0}"#
+        ),
         "a:               []\nd:               {\"e\": [1, \"\\u00e9\"]}\nf:               0\n"
     );
 }
 
 #[test]
 fn a_raise_part_way() {
-    let r = print::print(r#"{"state":"x","mirror":{"kind":"dir","path":3}}"#, "status");
+    let r = print::print(
+        r#"{"state":"x","mirror":{"kind":"dir","path":3}}"#,
+        "status",
+    );
     assert_eq!(r.exit, Exit::Error);
-    assert!(r.stdout.starts_with("Chat / Voice Hosting: x\n"), "{}", r.stdout);
-    assert!(r.stderr.ends_with("TypeError: unsupported operand type(s) for +: 'int' and 'str'\n"), "{}", r.stderr);
+    assert!(
+        r.stdout.starts_with("Chat / Voice Hosting: x\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stderr
+            .ends_with("TypeError: unsupported operand type(s) for +: 'int' and 'str'\n"),
+        "{}",
+        r.stderr
+    );
 }
 
 #[test]
 fn compute_json_puts_a_token_first() {
     assert_eq!(
-        cj(&[("phase", Field::S("drop-prev".into())), ("confirmToken", Field::S("t1".into()))]),
+        cj(&[
+            ("phase", Field::S("drop-prev".into())),
+            ("confirmToken", Field::S("t1".into()))
+        ]),
         r#"{"confirmToken": "t1", "phase": "drop-prev"}"#
     );
     assert_eq!(
-        cj(&[("purge", Field::B("1".into())), ("keep", Field::B("0".into())), ("host", Field::S("aToken=b".into()))]),
+        cj(&[
+            ("purge", Field::B("1".into())),
+            ("keep", Field::B("0".into())),
+            ("host", Field::S("aToken=b".into()))
+        ]),
         r#"{"host": "aToken=b", "purge": true, "keep": false}"#
     );
 }

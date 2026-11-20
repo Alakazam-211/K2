@@ -18,15 +18,54 @@ use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 /// One verb of these, ready to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Apps {
-    SpaceList { json: bool },
-    SpacePost { route: String, payload: String, verb: String, json: bool },
-    Governance { app: String, space: String, gov: String, json: bool },
-    RuleRead { app: String, space: String, json: bool },
-    Rule { app: String, space: String, body: String, json: bool },
-    Lock { space: String, word: String, body: String, json: bool },
-    Home { post: bool, route: &'static str, payload: String, json: bool },
-    PassKeys { sub: &'static str, json: bool },
-    Meet { route: &'static str, payload: String, verb: &'static str, json: bool },
+    SpaceList {
+        json: bool,
+    },
+    SpacePost {
+        route: String,
+        payload: String,
+        verb: String,
+        json: bool,
+    },
+    Governance {
+        app: String,
+        space: String,
+        gov: String,
+        json: bool,
+    },
+    RuleRead {
+        app: String,
+        space: String,
+        json: bool,
+    },
+    Rule {
+        app: String,
+        space: String,
+        body: String,
+        json: bool,
+    },
+    Lock {
+        space: String,
+        word: String,
+        body: String,
+        json: bool,
+    },
+    Home {
+        post: bool,
+        route: &'static str,
+        payload: String,
+        json: bool,
+    },
+    PassKeys {
+        sub: &'static str,
+        json: bool,
+    },
+    Meet {
+        route: &'static str,
+        payload: String,
+        verb: &'static str,
+        json: bool,
+    },
 }
 
 fn s(t: &str) -> Field {
@@ -191,7 +230,9 @@ fn lock(words: &[&str]) -> Plan {
             "--json" => json = true,
             "-h" | "--help" => return Plan::Text(super::recording::HELP),
             w if w.starts_with('-') => {
-                return bad(format!("unknown flag {w} ({c} hostchat app-space recording-lock <space-id> on|off)"))
+                return bad(format!(
+                    "unknown flag {w} ({c} hostchat app-space recording-lock <space-id> on|off)"
+                ))
             }
             w => pos.push(w),
         }
@@ -224,7 +265,9 @@ pub fn home(words: &[&str]) -> Plan {
         None => ("show", &[]),
         Some((w, _)) if w.is_empty() || w.starts_with('-') => ("show", words),
         Some(_) => {
-            return bad(format!("{c} hostchat home [client <app-id>|none] | home app <app-id> --hidden on|off"))
+            return bad(format!(
+                "{c} hostchat home [client <app-id>|none] | home app <app-id> --hidden on|off"
+            ))
         }
     };
     let mut json = false;
@@ -393,11 +436,18 @@ fn held_post(
     confirm_for: impl FnOnce(&mut Ctx) -> Result<(String, String, String), Exit>,
 ) -> Result<String, Exit> {
     let mut sent = sew::send(&mut ctx.client, true, route, body, false)?;
-    sew::note(&mut ctx.closing, &sent.body, ctx.client.passport().is_some());
+    sew::note(
+        &mut ctx.closing,
+        &sent.body,
+        ctx.client.passport().is_some(),
+    );
     let held = sent.status == "403"
-        && [&b"\"vault_confirm_required\""[..], b"\"owner_confirm_required\""]
-            .iter()
-            .any(|w| sent.body.windows(w.len()).any(|x| x == *w))
+        && [
+            &b"\"vault_confirm_required\""[..],
+            b"\"owner_confirm_required\"",
+        ]
+        .iter()
+        .any(|w| sent.body.windows(w.len()).any(|x| x == *w))
         && !ctx.in_session;
     if held {
         let (action, id, label) = confirm_for(ctx)?;
@@ -405,7 +455,11 @@ fn held_post(
         let b = confirm::with_confirm_token(body, &tok, None).unwrap_or_default();
         drop(tok);
         sent = sew::send(&mut ctx.client, true, route, &b, true)?;
-        sew::note(&mut ctx.closing, &sent.body, ctx.client.passport().is_some());
+        sew::note(
+            &mut ctx.closing,
+            &sent.body,
+            ctx.client.passport().is_some(),
+        );
     }
     if sent.status != "200" {
         let (line, exit) = sew::fail_line(&sent.status, &sent.body);
@@ -499,7 +553,10 @@ fn step(ctx: &mut Ctx, a: &Apps) -> Result<Exit, Exit> {
                 }
                 p.print(&format!(
                     "  start level  {}",
-                    sv(&or(g(&sp, "startLevel", 14)?, st("inherit (the App's rule)")))
+                    sv(&or(
+                        g(&sp, "startLevel", 14)?,
+                        st("inherit (the App's rule)")
+                    ))
                 ));
                 let r = match req {
                     Value::Null => "inherit (the App's rule)",
@@ -724,7 +781,8 @@ fn step(ctx: &mut Ctx, a: &Apps) -> Result<Exit, Exit> {
                         extra = format!("  rotates by {}", when(&ix(&k, "rotateDueAt", 16)?, 16)?);
                     }
                     if t(&g(&k, "retireAfter", 17)?) {
-                        extra = format!("  retires after {}", when(&ix(&k, "retireAfter", 18)?, 18)?);
+                        extra =
+                            format!("  retires after {}", when(&ix(&k, "retireAfter", 18)?, 18)?);
                     }
                     p.print(&format!(
                         "{} {}  published {}{extra}",

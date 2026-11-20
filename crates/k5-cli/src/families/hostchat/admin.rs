@@ -12,23 +12,52 @@ use super::{cj, Ctx, Plan};
 use crate::exit::Exit;
 use crate::families::voice::sew::{self, Field};
 use crate::families::{chat, ljust, py_iter, raised, Shown};
-use crate::out::json::Value;
 use crate::out;
+use crate::out::json::Value;
 use crate::transport::encode::quote;
 use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A chat administration verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Admin {
-    PeopleList { json: bool },
-    People { route: &'static str, payload: String, json: bool },
-    Approvals { query: String, json: bool },
-    Approve { route: &'static str, payload: String, label: String, json: bool },
-    Deny { payload: String, json: bool },
-    OnBehalfList { query: String, json: bool },
-    OnBehalfApprove { payload: String, json: bool },
-    OnBehalfDecline { payload: String, json: bool },
-    Log { query: String, json: bool },
+    PeopleList {
+        json: bool,
+    },
+    People {
+        route: &'static str,
+        payload: String,
+        json: bool,
+    },
+    Approvals {
+        query: String,
+        json: bool,
+    },
+    Approve {
+        route: &'static str,
+        payload: String,
+        label: String,
+        json: bool,
+    },
+    Deny {
+        payload: String,
+        json: bool,
+    },
+    OnBehalfList {
+        query: String,
+        json: bool,
+    },
+    OnBehalfApprove {
+        payload: String,
+        json: bool,
+    },
+    OnBehalfDecline {
+        payload: String,
+        json: bool,
+    },
+    Log {
+        query: String,
+        json: bool,
+    },
 }
 
 fn bad(hint: impl AsRef<str>) -> Plan {
@@ -66,7 +95,9 @@ pub fn people(words: &[&str]) -> Plan {
                 _ => guest = "1",
             },
             "-h" | "--help" => return Plan::Help,
-            w if w.starts_with('-') => return bad(format!("unknown flag {w} ({c} hostchat --help)")),
+            w if w.starts_with('-') => {
+                return bad(format!("unknown flag {w} ({c} hostchat --help)"))
+            }
             w => pos.push(w),
         }
         i += 1;
@@ -80,13 +111,19 @@ pub fn people(words: &[&str]) -> Plan {
             if user.is_empty() {
                 return bad(format!("{c} hostchat people add <user> [--guest]"));
             }
-            ("/cli/sew/admin/people/grant", cj(&[("user", s(user)), ("guest", g)]))
+            (
+                "/cli/sew/admin/people/grant",
+                cj(&[("user", s(user)), ("guest", g)]),
+            )
         }
         "set" | "update" => {
             if user.is_empty() || guest.is_empty() {
                 return bad(format!("{c} hostchat people set <user> --guest on|off"));
             }
-            ("/cli/sew/admin/people/update", cj(&[("user", s(user)), ("guest", g)]))
+            (
+                "/cli/sew/admin/people/update",
+                cj(&[("user", s(user)), ("guest", g)]),
+            )
         }
         "remove" | "revoke" => {
             if user.is_empty() {
@@ -135,7 +172,9 @@ pub fn approvals(words: &[&str]) -> Plan {
                 i += 1;
             }
             "-h" | "--help" => return Plan::Help,
-            w if w.starts_with('-') => return bad(format!("unknown flag {w} ({c} hostchat --help)")),
+            w if w.starts_with('-') => {
+                return bad(format!("unknown flag {w} ({c} hostchat --help)"))
+            }
             w => pos.push(w),
         }
         i += 1;
@@ -212,7 +251,9 @@ pub fn on_behalf(words: &[&str]) -> Plan {
             "--limit" => (&mut limit, "--limit N"),
             "--note" => (&mut note, "--note \"\u{2026}\""),
             "-h" | "--help" => return Plan::Help,
-            w if w.starts_with('-') => return bad(format!("unknown flag {w} ({c} hostchat --help)")),
+            w if w.starts_with('-') => {
+                return bad(format!("unknown flag {w} ({c} hostchat --help)"))
+            }
             w => {
                 pos.push(w);
                 i += 1;
@@ -401,7 +442,10 @@ fn step(ctx: &mut Ctx, a: &Admin) -> Result<Exit, Exit> {
                         ));
                     }
                     if t(&g(&r, "note", 12)?) {
-                        line.push_str(&format!("  note: {}", sv(&super::print::ix(&r, "note", 13)?)));
+                        line.push_str(&format!(
+                            "  note: {}",
+                            sv(&super::print::ix(&r, "note", 13)?)
+                        ));
                     }
                     p.print(&line);
                 }
@@ -468,7 +512,11 @@ fn step(ctx: &mut Ctx, a: &Admin) -> Result<Exit, Exit> {
 /// `_hostchat_confirmed_post <path> <payload> <label>`: the answer's body.
 fn confirmed_post(ctx: &mut Ctx, path: &str, payload: &str, label: &str) -> Result<String, Exit> {
     let sent = sew::send(&mut ctx.client, true, path, payload, false)?;
-    sew::note(&mut ctx.closing, &sent.body, ctx.client.passport().is_some());
+    sew::note(
+        &mut ctx.closing,
+        &sent.body,
+        ctx.client.passport().is_some(),
+    );
     if sent.status == "200" {
         return Ok(String::from_utf8_lossy(&sent.body).into_owned());
     }

@@ -150,11 +150,20 @@ fn verb(ctx: &mut Ctx, m: &Media) -> Result<Exit, Exit> {
             Ok(show(&body, "media-install", json))
         }
         "url" => {
-            let u = if pos0.is_empty() { m.url.as_str() } else { pos0 };
+            let u = if pos0.is_empty() {
+                m.url.as_str()
+            } else {
+                pos0
+            };
             if u.is_empty() {
                 return bad(&format!("{c} hostchat media url wss://HOST"));
             }
-            post(ctx, "/cli/sew/media/url", &cj(&[("publicUrl", s(u))]), "media-url")
+            post(
+                ctx,
+                "/cli/sew/media/url",
+                &cj(&[("publicUrl", s(u))]),
+                "media-url",
+            )
         }
         "renew" => post(ctx, "/cli/sew/media/renew", "{}", "media-renew"),
         "rebind" => post(ctx, "/cli/sew/media/rebind", "{}", "media-rebind"),
@@ -162,7 +171,12 @@ fn verb(ctx: &mut Ctx, m: &Media) -> Result<Exit, Exit> {
             if !matches!(pos0, "tunnel" | "direct") {
                 return bad(&format!("{c} hostchat media tier tunnel|direct (tunnel: relay-only TURN through {PRODUCT_NAME} Connect, no public port; direct: public 5349/7882, the box IP in DNS)"));
             }
-            post(ctx, "/cli/sew/media/tier", &cj(&[("tier", s(pos0))]), "media-tier")
+            post(
+                ctx,
+                "/cli/sew/media/tier",
+                &cj(&[("tier", s(pos0))]),
+                "media-tier",
+            )
         }
         "probe" => {
             if m.udp.is_empty() || m.tcp.is_empty() || m.tls.is_empty() {
@@ -170,7 +184,11 @@ fn verb(ctx: &mut Ctx, m: &Media) -> Result<Exit, Exit> {
                     "{c} hostchat media probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail"
                 ));
             }
-            let payload = cj(&[("udp", s(&m.udp)), ("tcp", s(&m.tcp)), ("turnTls", s(&m.tls))]);
+            let payload = cj(&[
+                ("udp", s(&m.udp)),
+                ("tcp", s(&m.tcp)),
+                ("turnTls", s(&m.tls)),
+            ]);
             post(ctx, "/cli/sew/media/probe", &payload, "media-probe")
         }
         _ => {

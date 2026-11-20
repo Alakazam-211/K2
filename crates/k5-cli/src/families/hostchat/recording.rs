@@ -17,8 +17,8 @@ use crate::families::app::py::local_minutes;
 use crate::families::voice::sew::{self, Field};
 use crate::families::voice::SPACE;
 use crate::families::{ljust, py_iter, raised, Shown};
-use crate::out::json::{Text, Value};
 use crate::out;
+use crate::out::json::{Text, Value};
 use crate::prompt::{self, AtEof, Echo};
 use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 use std::time::Duration;
@@ -163,7 +163,7 @@ fn policy(words: &[&str]) -> Plan {
             changes: None,
         });
     }
-    if pos.is_empty() || pos.len() % 2 != 0 {
+    if pos.is_empty() || !pos.len().is_multiple_of(2) {
         return Plan::Bad(usage(&format!("{c} hostchat recording policy set KEY VALUE [KEY VALUE \u{2026}] ({c} hostchat recording --help lists the keys)")));
     }
     let py_bad = |h: String| {
@@ -335,14 +335,21 @@ fn verb(
                     out::stderr_line(&format!("{{\"error\":\"confirm_required\",\"hint\":\"Remove the recorder? Live recordings stop; every recording is kept. There is no terminal to ask on: pass --yes ({c} hostchat recording uninstall --yes)\"}}"));
                     return Err(Exit::Usage);
                 }
-                prompt::prompt("Remove the recorder? Live recordings stop; every recording is kept. [y/N] ");
+                prompt::prompt(
+                    "Remove the recorder? Live recordings stop; every recording is kept. [y/N] ",
+                );
                 let ans = prompt::read_line(Echo::Shown, AtEof::Drop);
                 if !matches!(ans.expose(), b"y" | b"Y" | b"yes" | b"YES" | b"Yes") {
                     out::stderr_line("Recorder not removed.");
                     return Err(Exit::Error);
                 }
             }
-            let body = ctx.call(true, "/cli/sew/recording/uninstall", r#"{"confirm": true}"#, false)?;
+            let body = ctx.call(
+                true,
+                "/cli/sew/recording/uninstall",
+                r#"{"confirm": true}"#,
+                false,
+            )?;
             Ok(show(&body, "recording-uninstall", json))
         }
     }
@@ -382,7 +389,11 @@ fn wait_install(ctx: &mut Ctx, json: bool) -> Result<Exit, Exit> {
     if e != Exit::Ok {
         return Ok(e);
     }
-    Ok(if res == "done" { Exit::Ok } else { Exit::Refused })
+    Ok(if res == "done" {
+        Exit::Ok
+    } else {
+        Exit::Refused
+    })
 }
 
 fn run_policy(ctx: &mut Ctx, json: bool, changes: Option<&str>) -> Result<Exit, Exit> {
@@ -391,11 +402,18 @@ fn run_policy(ctx: &mut Ctx, json: bool, changes: Option<&str>) -> Result<Exit, 
         None => ctx.call(false, "/cli/sew/recording/policies", "", false)?,
         Some(changes) => {
             let mut sent = sew::send(&mut ctx.client, true, route, changes, false)?;
-            sew::note(&mut ctx.closing, &sent.body, ctx.client.passport().is_some());
+            sew::note(
+                &mut ctx.closing,
+                &sent.body,
+                ctx.client.passport().is_some(),
+            );
             let held = sent.status == "403"
-                && [&b"\"vault_confirm_required\""[..], b"\"owner_confirm_required\""]
-                    .iter()
-                    .any(|w| sent.body.windows(w.len()).any(|x| x == *w))
+                && [
+                    &b"\"vault_confirm_required\""[..],
+                    b"\"owner_confirm_required\"",
+                ]
+                .iter()
+                .any(|w| sent.body.windows(w.len()).any(|x| x == *w))
                 && !ctx.in_session;
             if held {
                 let id = install_id(ctx)?;
@@ -408,7 +426,11 @@ fn run_policy(ctx: &mut Ctx, json: bool, changes: Option<&str>) -> Result<Exit, 
                 let b = confirm::with_confirm_token(changes, &tok, None).unwrap_or_default();
                 drop(tok);
                 sent = sew::send(&mut ctx.client, true, route, &b, true)?;
-                sew::note(&mut ctx.closing, &sent.body, ctx.client.passport().is_some());
+                sew::note(
+                    &mut ctx.closing,
+                    &sent.body,
+                    ctx.client.passport().is_some(),
+                );
             }
             if sent.status != "200" {
                 let (line, exit) = sew::fail_line(&sent.status, &sent.body);
@@ -444,9 +466,8 @@ fn run_policy(ctx: &mut Ctx, json: bool, changes: Option<&str>) -> Result<Exit, 
         }
         let f = g(&v, "flags", 8)?;
         if let Value::Object(_) = f {
-            let yn = |k: &str| -> R<&'static str> {
-                Ok(if t(&g(&f, k, 11)?) { "yes" } else { "no" })
-            };
+            let yn =
+                |k: &str| -> R<&'static str> { Ok(if t(&g(&f, k, 11)?) { "yes" } else { "no" }) };
             p.print(&format!(
                 "Sew flags: record in Apps {} \u{b7} voice:record cap {} \u{b7} required {} \u{b7} server reads {}",
                 yn("appRecording")?,
@@ -461,7 +482,12 @@ fn run_policy(ctx: &mut Ctx, json: bool, changes: Option<&str>) -> Result<Exit, 
         let row = |a: &str, b: &str, c: &str, d: &str| {
             format!("{} {} {} {d}", ljust(a, 36), ljust(b, 14), ljust(c, 14))
         };
-        p.print(&row("policy", &format!("{PRODUCT_NAME} asked"), "Sew shows", ""));
+        p.print(&row(
+            "policy",
+            &format!("{PRODUCT_NAME} asked"),
+            "Sew shows",
+            "",
+        ));
         for pol in py_iter(&or(g(&v, "policies", 15)?, Value::Array(Vec::new())), 15)? {
             let want = g(&pol, "want", 17)?;
             let mut note = String::new();

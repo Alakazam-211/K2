@@ -671,7 +671,7 @@ fn desktop_refusals_and_odd_answers() {
             &[],
             vec![Reply::Answer(403, "[1]".into())],
             owner_and_port,
-            3,
+            1,
             1,
         )),
         traceback(case(

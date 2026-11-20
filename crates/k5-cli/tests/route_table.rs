@@ -337,6 +337,18 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
             ["chat"] => chat_verbs_are_its_arms(noun),
             ["mail"] => mail_verbs_are_its_arms(noun),
             ["hostmail"] => hostmail_verbs_are_its_arms(noun),
+            ["daemon"] => case_verbs_are_its_arms(
+                noun,
+                "router.sh",
+                "\n    daemon)\n        case \"${2:-status}\" in\n",
+                &[],
+            ),
+            ["ci"] => case_verbs_are_its_arms(
+                noun,
+                "ci.sh",
+                "\n    local q=\"\" body=\"\"\n    case \"$sub\" in\n",
+                &["signer", "signers"],
+            ),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
     }
@@ -762,4 +774,53 @@ fn every_router_form_is_a_k5_row_or_listed_in_the_native_bar_ceiling() {
     }
     assert!(checked > 500, "only {checked} two-word router forms");
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// A family whose verbs are one `case` of the shell's (`daemon` in
+/// `cli/src/router.sh`, `cmd_ci` in `cli/src/ci.sh`): each verb row's
+/// words are words of that case's arms (up to its `esac`), or of `extra`
+/// (verbs the function takes before the case).
+fn case_verbs_are_its_arms(
+    noun: &k5_cli::route::Noun,
+    file: &str,
+    start: &str,
+    extra: &[&str],
+) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == file)
+        .unwrap_or_else(|| panic!("cli/src/{file}"))
+        .1;
+    let body = &text[text.find(start).unwrap_or_else(|| panic!("{start:?} in {file}"))..];
+    let case_line = start.trim_end_matches('\n');
+    let case_line = &case_line[case_line.rfind('\n').map_or(0, |i| i + 1)..];
+    let indent: String = case_line.chars().take_while(|c| *c == ' ').collect();
+    let end = format!("\n{indent}esac\n");
+    let body = &body[..body.find(&end).expect("its esac")];
+    let arm_indent = format!("{indent}    ");
+    let mut arms = BTreeSet::new();
+    for line in body.lines() {
+        let Some(head) = line.strip_prefix(arm_indent.as_str()) else {
+            continue;
+        };
+        if head.starts_with(' ') {
+            continue;
+        }
+        let Some((words, _)) = head.split_once(')') else {
+            continue;
+        };
+        if words
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c == '-' || c == '|')
+        {
+            arms.extend(words.split('|').map(str::to_string));
+        }
+    }
+    arms.extend(extra.iter().map(|w| w.to_string()));
+    for verb in noun.verb_rows() {
+        for w in verb.words {
+            assert!(arms.contains(*w), "{w} is no arm of {file}'s case: {arms:?}");
+        }
+    }
 }

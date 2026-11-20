@@ -1,6 +1,7 @@
-//! `k5 daemon` and `k5 daemon status [--json]`, as the shell CLI's
-//! `cmd_daemon_status` answers them (`cli/src/daemon.sh`): what this
-//! machine's daemon service is doing. Every other verb (`start`, `stop`,
+//! `k5 daemon status [--json]`, as the shell CLI's `cmd_daemon_status`
+//! answers it (`cli/src/daemon.sh`): what this machine's daemon service
+//! is doing. `k5 daemon` alone ends with 1 and prints nothing, as the
+//! shell's router does (its `shift 2` fails under `set -e`). Every other verb (`start`, `stop`,
 //! `restart`, `survive`, `log`, `install`, `uninstall`, and `daemon
 //! --json`'s usage) stays the shell's: they start, stop or install the
 //! real service.
@@ -89,6 +90,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL) {
         return Some(stop);
     }
+    if words.is_empty() {
+        // The router's `shift 2` with the noun alone fails under `set -e`
+        // (a bash bug, copied): exit 1, nothing printed.
+        return Some(Exit::Error);
+    }
     Some(status(&settings, json).print())
 }
 
@@ -171,8 +177,7 @@ fn linux_unit(home: &Path) -> Option<(String, String)> {
                 .strip_prefix("0::")
                 .unwrap_or(&cg)
                 .split('/')
-                .filter(|c| c.ends_with(".service") && !c.starts_with("user@"))
-                .next_back()
+                .rfind(|c| c.ends_with(".service") && !c.starts_with("user@"))
                 .unwrap_or("")
                 .to_string();
             let scope = if cg.contains("/user@") {

@@ -464,13 +464,17 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if prelude::gate(&settings).is_none()
-        && settings.port_text.as_deref().and_then(curl_port).is_none()
+    // `ci` alone (the help) skips the connection gate, not the guard.
+    let bare_help = words.is_empty();
+    let gate = prelude::gate(&settings);
+    if gate.is_none() && !bare_help && settings.port_text.as_deref().and_then(curl_port).is_none()
     {
         return None;
     }
-    if let Some(gate) = prelude::gate(&settings) {
-        return Some(gate.stop());
+    match gate {
+        Some(g @ prelude::Gate::VirtualDesktop) => return Some(g.stop()),
+        Some(g) if !bare_help => return Some(g.stop()),
+        _ => {}
     }
     let would_refuse = passport::current(args).would_refuse();
     if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL) {

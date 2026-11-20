@@ -110,17 +110,24 @@ fn daemon_status_answers_as_the_shell_does() {
     let ptyd = || ok(r#"{"ptyd":"on\tnow","adopted":3}"#);
     let v = vec![
         // covers: daemon
+        // A bash bug, copied: the router's `shift 2` with the noun alone
+        // fails under `set -e` (cli/src/router.sh, the daemon arm), so
+        // `daemon` alone ends with 1 and prints nothing.
         with(
             env(&rig, "user-unit"),
             case(
-                "daemon alone: a user unit",
+                "daemon alone: the router's shift 2 ends it",
                 &[],
                 &[],
-                vec![ptyd()],
+                vec![],
                 files,
-                0,
                 1,
+                0,
             ),
+        ),
+        with(
+            env(&rig, "user-unit"),
+            case("status: a user unit", &["status"], &[], vec![ptyd()], files, 0, 1),
         ),
         with(
             env(&rig, "user-unit"),
@@ -206,7 +213,7 @@ fn daemon_gates() {
     let v = vec![
         case(
             "no daemon set up: the gate",
-            &[],
+            &["status"],
             &[],
             vec![],
             nothing,

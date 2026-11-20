@@ -461,7 +461,7 @@ fn writes() {
             "switch, the list refused",
             &["tokens", "switch", "claude", "work"],
             vec![Reply::Answer(401, r#"{"error":"Invalid or missing auth token"}"#.into())],
-            3,
+            1,
         ),
         // covers: llm tokens next
         daemon(

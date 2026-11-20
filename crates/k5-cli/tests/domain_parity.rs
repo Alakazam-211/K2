@@ -256,6 +256,16 @@ fn domain_writes_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: domain refresh --json
+        case(
+            "refresh --json",
+            &["refresh", "acme.example", "--json"],
+            &[],
+            vec![ok(r#"{"ok":true,"domains":[{"apex":"acme.example"}],"checked":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "refresh: an apex with spaces",
             &["refresh", " a.example "],
@@ -314,6 +324,7 @@ fn domain_writes_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // covers: domain name remove --json
         case(
             "name del --json",
             &["name", "del", "h", "--json"],

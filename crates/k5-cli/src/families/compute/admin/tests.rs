@@ -2,7 +2,7 @@
 //! `cmd_compute` and its Python do with them.
 
 use super::super::writes::Words;
-use super::{retier, switch};
+use super::{cache, moves, retier, switch};
 use crate::exit::Exit;
 use k2_client::cli_name;
 
@@ -150,4 +150,43 @@ fn readers() {
         s.stdout,
         "job abc: Standard → Priority on mini (asked CI: this server's Priority doesn't count there)\n  moved up.\n"
     );
+}
+
+fn usage<T: std::fmt::Debug>(w: Words<T>) -> String {
+    match w {
+        Words::Usage(line) => line,
+        other => panic!("expected a usage line, got {other:?}"),
+    }
+}
+
+/// Under any brand (a `K2_BRAND_DIR=brand/xy` build too) the lines name
+/// the command by the brand's name, never a typed `k2` or `k5`.
+#[test]
+fn the_lines_say_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let mut lines: Vec<String> = [
+        switch::REVOKE_USAGE,
+        switch::ACCESS_USAGE,
+        switch::OPERATE_USAGE,
+        switch::MANAGE_USAGE,
+        retier::USAGE,
+        moves::USAGE,
+        cache::USAGE,
+        cache::CLEAR_USAGE,
+        cache::LINEAGE_LIST_USAGE,
+    ]
+    .map(String::from)
+    .to_vec();
+    lines.push(usage(retier::parse(&["abc", "--priority"])));
+    let moved = moves::reader(br#"{"warnings":["w"],"matched":0,"moved":[]}"#);
+    lines.push(moved.stderr.clone());
+    let listed = cache::reader(br#"{"nodes":[]}"#, false, 0);
+    lines.push(listed.stderr.clone());
+    for line in &lines {
+        assert!(line.contains(&format!("{cli} compute")), "{line:?}");
+        if cli != "k2" {
+            assert!(!line.contains("k2 ") && !line.contains("k5 "), "{line:?}");
+            assert!(!line.contains("[k2 ") && !line.contains("[k5 "), "{line:?}");
+        }
+    }
 }

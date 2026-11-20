@@ -20,7 +20,8 @@
 #   Ctrl-C stops with 130 and the cancelled line, echo back on; clone-tmp
 #   is a folder of ours at 0700 (a link there is refused); the download's
 #   .part is 0600 and is gone after a refused range, a short download,
-#   Ctrl-C or SIGTERM.
+#   Ctrl-C or SIGTERM; the remote token can come on stdin (--token-stdin),
+#   and --token T still works with a note that every account sees it.
 #
 # Run on compute (it starts stubs and opens ports):
 #   bash tests/cli/clone_security.sh
@@ -495,6 +496,21 @@ for sig in TERM INT; do
     expect_eq "SIG$sig: no .part left" "$(parts)" ""
     expect_has "SIG$sig: the remote pack is cleaned up" "$(paths remote)" "POST /cli/clone/pack-cleanup"
 done
+
+echo "== the remote token on stdin; --token with its note =="
+fresh
+k2 clone preview ws1 --host "$REMOTE" --token "$REMOTE_TOKEN" --json
+expect_eq "--token still works" "$RC" "0"
+expect_has "--token prints its note" "$ERR" "note: --token is visible to every account on this computer while the command runs; use --token-stdin"
+fresh
+IN="$W/token-in" k2 clone preview ws1 --host "$REMOTE" --token-stdin --json
+expect_eq "--token-stdin works" "$RC" "0"
+expect_eq "--token-stdin: the remote got the token" "$(auth remote /cli/clone/preview)" "Bearer $REMOTE_TOKEN"
+expect_not "--token-stdin: no note" "$ERR" "note:"
+fresh
+IN="$W/token-in" k2 clone preview ws1 --host "$REMOTE" --token-stdin --token "$REMOTE_TOKEN" --json
+expect_eq "--token-stdin and --token: usage, exit 2" "$RC" "2"
+expect_eq "--token-stdin and --token: nothing sent" "$(paths remote)" ""
 
 echo
 echo "clone_security: $pass passed, $fail failed"

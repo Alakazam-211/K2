@@ -333,4 +333,19 @@ mod tests {
         assert_eq!(out, "");
         assert!(err.contains("JSONDecodeError"), "{err}");
     }
+
+    /// Every name a line prints is the brand's (a `K2_BRAND_DIR=brand/xy`
+    /// build says `xy`).
+    #[test]
+    fn the_lines_name_the_brand() {
+        let cli = k2_client::brand::CLI_NAME;
+        assert_eq!(USAGE, format!("usage: {cli} capabilities [--json] [--node <name>]"));
+        let (out, _, _) = shown(r#"{"box":[{"missing":{"code":"c"}}],"doctor":{"ready":1}}"#);
+        assert!(out.contains(&format!("({cli} explain c)")), "{out}");
+        assert!(out.contains(&format!("({cli} study compute)")), "{out}");
+        assert!(out.contains(&format!("Box setup ({cli} app doctor): ready")), "{out}");
+        if cli != "k2" {
+            assert!(!out.contains("k2") && !USAGE.contains("k2"), "{out}");
+        }
+    }
 }

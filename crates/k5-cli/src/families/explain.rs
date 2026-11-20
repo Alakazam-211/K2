@@ -612,4 +612,29 @@ mod tests {
         assert_eq!(page.exit, Exit::NotFound);
         assert!(page.text.contains("id 'nope' ("), "{}", page.text);
     }
+
+    /// Every name a line prints is the brand's (a `K2_BRAND_DIR=brand/xy`
+    /// build says `xy`).
+    #[test]
+    fn the_lines_name_the_brand() {
+        let (cli, product) = (k2_client::brand::CLI_NAME, k2_client::brand::PRODUCT_NAME);
+        assert_eq!(USAGE, format!("usage: {cli} explain [<id>] [--json]"));
+        for line in [LIST_HEAD, ASKABLE, UNKNOWN_HINT] {
+            assert!(line.contains(&format!("{cli} ")), "{line}");
+            if cli != "k2" {
+                assert!(!line.contains("k2"), "{line}");
+            }
+        }
+        let reg = json::parse(registry()).expect("the registry is JSON");
+        let list = list(&reg);
+        if cli != "k2" {
+            assert!(!list.contains("k2 explain"), "{list}");
+        }
+        let row = json::parse(r#"{"id":"x","who":"k2"}"#).expect("a row");
+        assert!(
+            row_text(&row).contains(&format!("{product} (wait, retry or update)")),
+            "{}",
+            row_text(&row)
+        );
+    }
 }

@@ -308,4 +308,16 @@ mod tests {
             );
         }
     }
+
+    /// Every name a line prints is the brand's (a `K2_BRAND_DIR=brand/xy`
+    /// build says `xy`).
+    #[test]
+    fn the_lines_name_the_brand() {
+        let (cli, product) = (k2_client::brand::CLI_NAME, k2_client::brand::PRODUCT_NAME);
+        assert_eq!(
+            title(),
+            format!("{product} glossary \u{2014} definitions of {product}-specific terms")
+        );
+        assert_eq!(RUN_LINE, format!("Run `{cli} glossary <term>` for a full definition."));
+    }
 }

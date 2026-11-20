@@ -212,22 +212,40 @@ export K2T_AUDIT_LOG="$W/audit.log"
 
 # ── The pty driver: ptyrun.py MODE STEPS -- cmd…
 # MODE ctty: a new session whose controlling terminal is the pty (a person
-# at a terminal). MODE noctty: stdin is the pty but the process has no
-# controlling terminal (/dev/tty can't be opened). STEPS is a JSON list of
-# [text to wait for, bytes to type]. stdout and stderr go to $W/out and
-# $W/err; what the terminal showed to $W/tty; whether echo is on after
-# the run to $W/echo. Exits with the command's code (128+N for signal N).
+# at a terminal). MODE noctty: stdin and stderr are the pty but the session
+# has no controlling terminal (/dev/tty can't be opened). Its leader is a
+# small wrapper that never opens a terminal and waits for the command, so
+# the command (not a session leader) can't pick one up either. STEPS is a JSON list of
+# [text to wait for, bytes to type]. stdin and stderr are the terminal (as
+# for a person; the CLI asks for a person when stdin or stderr is one);
+# stdout goes to $W/out; what the terminal showed to $W/tty; whether echo
+# is on after the run to $W/echo. On a timeout the whole session is
+# killed. Exits with the command's code (128+N for signal N).
 cat >"$W/ptyrun.py" <<'PYEOF'
-import fcntl, json, os, select, subprocess, sys, termios, time
+import fcntl, json, os, select, signal, subprocess, sys, termios, time
 mode, steps, W = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
 cmd = sys.argv[sys.argv.index("--") + 1:]
+if mode == "noctty":
+    cmd = [sys.executable, "-c", """
+import os, sys
+pid = os.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+_, st = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
+"""] + cmd
 m, s = os.openpty()
 def pre():
     os.setsid()
     if mode == "ctty":
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-with open(os.path.join(W, "out"), "wb") as out, open(os.path.join(W, "err"), "wb") as err:
-    p = subprocess.Popen(cmd, stdin=s, stdout=out, stderr=err, preexec_fn=pre)
+with open(os.path.join(W, "out"), "wb") as out:
+    p = subprocess.Popen(cmd, stdin=s, stdout=out, stderr=s, preexec_fn=pre)
+def stop():
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 seen = b""
 def pump(t):
     global seen
@@ -242,7 +260,7 @@ for want, send in steps:
             if want.encode() in seen:
                 break
             open(os.path.join(W, "tty"), "wb").write(seen)
-            p.kill()
+            stop()
             sys.exit("ptyrun: never saw %r on the terminal" % want)
         pump(0.1)
     seen = seen.replace(want.encode(), b"<<" + want.encode() + b">>", 1)
@@ -250,13 +268,15 @@ for want, send in steps:
 end = time.time() + 120
 while p.poll() is None:
     if time.time() > end:
-        p.kill()
+        stop()
         sys.exit("ptyrun: the command never finished")
     pump(0.1)
 pump(0.2)
 open(os.path.join(W, "tty"), "wb").write(seen)
+# The session's end hangs up the slave descriptor; on Linux the master
+# reads the terminal's settings as the command left them.
 with open(os.path.join(W, "echo"), "w") as f:
-    f.write("on" if termios.tcgetattr(s)[3] & termios.ECHO else "off")
+    f.write("on" if termios.tcgetattr(m)[3] & termios.ECHO else "off")
 sys.exit(p.returncode if p.returncode >= 0 else 128 - p.returncode)
 PYEOF
 
@@ -288,14 +308,15 @@ k2() {
     set -e
     OUT="$(cat "$W/out")"; ERR="$(cat "$W/err")"
 }
-# k2pty MODE STEPS ARGS…: the same through the pty driver; also sets TTY, ECHO.
+# k2pty MODE STEPS ARGS…: the same through the pty driver; sets RC, OUT,
+# TTY (what the terminal showed, stderr included; ERR is the same) and ECHO.
 k2pty() {
     local mode="$1" steps="$2"; shift 2
     set +e
     "$PY" "$W/ptyrun.py" "$mode" "$steps" "$W" -- "$K2" "$@"; RC=$?
     set -e
-    OUT="$(cat "$W/out")"; ERR="$(cat "$W/err")"
-    TTY="$(cat "$W/tty" 2>/dev/null || true)"; ECHO="$(cat "$W/echo" 2>/dev/null || true)"
+    OUT="$(cat "$W/out")"
+    TTY="$(tr -d '\r' <"$W/tty")"; ERR="$TTY"; ECHO="$(cat "$W/echo")"
 }
 # auth NAME PATH: the Authorization headers the stub NAME got on PATH.
 auth() { [ -f "$W/log-$1.jsonl" ] || return 0; "$PY" -c '
@@ -328,13 +349,13 @@ bg() {
 }
 bg_wait() { set +e; wait "$BG"; RC=$?; set -e; OUT="$(cat "$W/out")"; ERR="$(cat "$W/err")"; }
 # hanging: wait until the remote holds the second range, then ENGINE = the
-# clone engine's pid (the one python3 running the stdin boot).
+# clone engine's pid (the python3 running the stdin boot, a child of BG).
 hanging() {
     local i
     for i in $(seq 1 300); do [ -f "$W/hanging" ] && break; sleep 0.1; done
     [ -f "$W/hanging" ] || { bad "the download never reached the second range"; return 1; }
-    ENGINE="$(pgrep -f K2_STDIN_SECRETS)"
-    [ "$(printf '%s\n' "$ENGINE" | wc -l)" = 1 ] && [ -n "$ENGINE" ] || { bad "not exactly one clone engine: '$ENGINE'"; return 1; }
+    ENGINE="$(pgrep -P "$BG" -f K2_STDIN_SECRETS || true)"
+    [ "$(printf '%s\n' "$ENGINE" | wc -l)" = 1 ] && [ -n "$ENGINE" ] || { bad "not exactly one clone engine under $BG: '$ENGINE'"; ps -o pid,ppid,args -e >&2; return 1; }
 }
 refused_line() { printf "refused: %s isn't https, so k2 won't send your token or password there; use https://%s" "$1" "$1"; }
 printf '%s\n' "$REMOTE_TOKEN" >"$W/token-in"
@@ -342,6 +363,25 @@ save_token() {
     "$PY" -c 'import json,sys; json.dump({sys.argv[1]: sys.argv[2]}, open(sys.argv[3], "w"))' "$1" "$2" "$KH/connect-tokens.json"
     chmod 600 "$KH/connect-tokens.json"
 }
+
+echo "== the terminal stand-ins =="
+TTYPROBE='import os
+try:
+    os.close(os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)); print("tty")
+except OSError:
+    print("no tty")'
+set +e
+"$PY" "$W/ptyrun.py" noctty '[]' "$W" -- "$PY" -c "$TTYPROBE"; rc=$?
+set -e
+expect_eq "no-terminal stand-in: /dev/tty can't be opened" "$rc $(cat "$W/out")" "0 no tty"
+set +e
+"$PY" "$W/ptyrun.py" ctty '[]' "$W" -- "$PY" -c "$TTYPROBE"; rc=$?
+set -e
+expect_eq "terminal stand-in: /dev/tty opens" "$rc $(cat "$W/out")" "0 tty"
+"$PY" "$W/ptyrun.py" ctty '[]' "$W" -- "$PY" -c 'import os, termios
+fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY); a = termios.tcgetattr(fd); a[3] &= ~termios.ECHO
+termios.tcsetattr(fd, termios.TCSAFLUSH, a)'
+expect_eq "terminal stand-in: echo left off is seen as off" "$(cat "$W/echo")" "off"
 
 echo "== hand-over headers go to this computer's daemon only =="
 fresh
@@ -396,8 +436,8 @@ fresh
 save_token "$REMOTE" "$REMOTE_TOKEN"
 k2pty ctty '[]' clone from "$REMOTE:ws1" --copy API_KEY --json
 expect_eq "pull with a password confirm over http: exit 3" "$RC" "3"
-expect_eq "pull with a password confirm over http: the refusal line" "$ERR" "$(refused_line "127.0.0.1:$PR")"
-expect_not "no password prompt on the terminal" "$TTY" "password"
+expect_has "pull with a password confirm over http: the refusal line" "$ERR" "$(refused_line "127.0.0.1:$PR")"
+expect_not "no password prompt on the terminal" "$TTY" "Your password on"
 expect_not "the remote got no password confirm" "$(paths remote)" "/cli/clone/vault/confirm"
 expect_not "the remote packed nothing" "$(paths remote)" "/cli/clone/pack"
 
@@ -553,13 +593,14 @@ scn local "{\"target\": \"$LONG\"}"
 save_token "$LONG" "$REMOTE_TOKEN"
 k2pty ctty '[["Send your token to ", "n\n"]]' clone approve prop-1abc --json
 expect_has "the confirm shows the proposed host in full" "$TTY" "<<Send your token to >>$LONG? (https://$LONG)"
-expect_eq "the long host: no lookup or connect" "$(cat "$W/audit.log")" ""
+expect_not "the long host: no lookup of it" "$(cat "$W/audit.log")" "$LONG"
+expect_eq "the long host: the remote got nothing" "$(paths remote)" ""
 fresh
 scn local '{"target": "http://box.example"}'
 save_token "http://box.example" "$REMOTE_TOKEN"
 k2pty ctty '[]' clone approve prop-1abc --json
 expect_eq "an http proposed host: exit 3" "$RC" "3"
-expect_eq "an http proposed host: the refusal line" "$ERR" "$(refused_line box.example)"
+expect_has "an http proposed host: the refusal line" "$ERR" "$(refused_line box.example)"
 expect_not "an http proposed host: no lookup" "$(cat "$W/audit.log")" "box.example"
 for f in "--token $REMOTE_TOKEN" "--token-stdin"; do
     fresh

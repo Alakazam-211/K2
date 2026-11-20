@@ -21,6 +21,7 @@ const PASSED_ON: &[(i32, &str)] = &[
     (7, "cli-tools-policy.sh: curl exit 7, nothing accepted the connection; _k2_curl returns it"),
     (8, "doc.sh and study-docs-live.sh: too old, sent by the daemon (revert_too_old, base_expired)"),
     (26, "cli-tools-policy.sh: curl exit 26, it couldn't read its input (Git for Windows' /dev/fd/3)"),
+    (124, "compute-jobs.sh and compute-lib.sh: wait --timeout passed first, exit \"${_CP_DEADLINE_RC:-3}\" and K2_CP_LIMIT_RC"),
 ];
 
 /// The front's own codes, which the shell script never uses: 69 no

@@ -50,6 +50,12 @@ pub enum Exit {
     /// `cli_post_json_stdin` (`cli-tools-policy.sh`) goes another way
     /// there; a call whose last step is curl ends with it.
     CurlReadError,
+    /// 124: `k2 compute wait --timeout` passed before the jobs ended
+    /// (`still_running`); the jobs are left alone. It is the code
+    /// coreutils' `timeout` uses. The shell passes it on from a variable
+    /// (`compute-jobs.sh`, `_CP_DEADLINE_RC` and `K2_CP_LIMIT_RC`);
+    /// `--max-wait`, the older spelling, stays 3.
+    WaitTimedOut,
     /// 130: stopped with Ctrl-C: `k2 compute` detaches from a job that
     /// keeps running (`compute-lib.sh`, `compute-run.sh`), an LLM login is
     /// cancelled (`llm.sh`). 128 plus SIGINT, as shells report it.
@@ -84,7 +90,7 @@ pub enum Exit {
 
 impl Exit {
     /// Every code, in order.
-    pub const ALL: [Exit; 14] = [
+    pub const ALL: [Exit; 15] = [
         Exit::Ok,
         Exit::Error,
         Exit::Usage,
@@ -96,6 +102,7 @@ impl Exit {
         Exit::TooOld,
         Exit::CurlReadError,
         Exit::NoPython,
+        Exit::WaitTimedOut,
         Exit::K2Retired,
         Exit::Interrupted,
         Exit::NoGitBash,
@@ -115,6 +122,7 @@ impl Exit {
             Exit::TooOld => 8,
             Exit::CurlReadError => 26,
             Exit::NoPython => 69,
+            Exit::WaitTimedOut => 124,
             Exit::K2Retired => 127,
             Exit::Interrupted => 130,
             Exit::NoGitBash => 9009,
@@ -165,6 +173,7 @@ mod tests {
                 (Exit::TooOld, 8),
                 (Exit::CurlReadError, 26),
                 (Exit::NoPython, 69),
+                (Exit::WaitTimedOut, 124),
                 (Exit::K2Retired, 127),
                 (Exit::Interrupted, 130),
                 (Exit::NoGitBash, 9009),

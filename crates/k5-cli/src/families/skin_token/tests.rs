@@ -97,9 +97,18 @@ fn the_python() {
     let create = quoted_python("app-wallet.sh", after, 1);
     for (n, text) in [
         (line::LOAD, "d=json.load(sys.stdin)"),
-        (line::create::ID, r#"print("Skin token created (id: %s) name %s." % (d.get("id",""), d.get("name") or d.get("username","")))"#),
-        (line::create::CAPS, r#"print("Capabilities: %s" % (", ".join(caps) if caps else "(none)"))"#),
-        (line::create::ROOMS, r#"print("Rooms: %s" % (", ".join(handles) if handles else "(none)"))"#),
+        (
+            line::create::ID,
+            r#"print("Skin token created (id: %s) name %s." % (d.get("id",""), d.get("name") or d.get("username","")))"#,
+        ),
+        (
+            line::create::CAPS,
+            r#"print("Capabilities: %s" % (", ".join(caps) if caps else "(none)"))"#,
+        ),
+        (
+            line::create::ROOMS,
+            r#"print("Rooms: %s" % (", ".join(handles) if handles else "(none)"))"#,
+        ),
         (line::create::TOKEN, r#"print("  %s" % d.get("token",""))"#),
     ] {
         assert_eq!(at_line(&create, n), text, "create line {n}");
@@ -109,9 +118,18 @@ fn the_python() {
         (line::LOAD, "d=json.load(sys.stdin)"),
         (line::list::TOKENS, r#"tokens=d.get("tokens",[])"#),
         (line::list::FOR, "for t in tokens:"),
-        (line::list::STATE, r#"state="revoked" if t.get("revokedAt") else "active""#),
-        (line::list::CAPS, r#"caps=",".join(t.get("caps") or []) or "none""#),
-        (line::list::ROOMS, r#"rooms=",".join(handles) if handles else "(none)""#),
+        (
+            line::list::STATE,
+            r#"state="revoked" if t.get("revokedAt") else "active""#,
+        ),
+        (
+            line::list::CAPS,
+            r#"caps=",".join(t.get("caps") or []) or "none""#,
+        ),
+        (
+            line::list::ROOMS,
+            r#"rooms=",".join(handles) if handles else "(none)""#,
+        ),
     ] {
         assert_eq!(at_line(&list, n), text, "list line {n}");
     }
@@ -122,7 +140,8 @@ fn the_python() {
     );
     assert!(at_line(&rooms, line::rooms::PRINT).starts_with(r#"print("Skin token %s rooms: %s""#));
     let revoke = quoted_python("app-wallet.sh", after, 6);
-    assert!(at_line(&revoke, line::revoke::PRINT).starts_with(r#"print("Skin token revoked." if d.get("success")"#));
+    assert!(at_line(&revoke, line::revoke::PRINT)
+        .starts_with(r#"print("Skin token revoked." if d.get("success")"#));
 }
 
 fn words(list: &[&str]) -> Result<Ask, Stop> {
@@ -164,7 +183,10 @@ fn the_words() {
         })
     );
     assert_eq!(words(&["rooms", "--agent"]).unwrap_err(), Stop::shift());
-    assert_eq!(words(&["revoke", ""]).unwrap_err().lines, vec![REVOKE_USAGE]);
+    assert_eq!(
+        words(&["revoke", ""]).unwrap_err().lines,
+        vec![REVOKE_USAGE]
+    );
     assert_eq!(words(&[]).unwrap_err().exit, Exit::Error);
     assert_eq!(words(&["nope"]).unwrap_err().lines, vec![USAGE[0]]);
 }
@@ -173,7 +195,7 @@ fn the_words() {
 fn the_bodies() {
     assert_eq!(
         create_body("n\u{e9}", " a, b ,, ", &["x\ry".into(), " ".into()]),
-        r#"{"name": "né", "caps": ["a", "b"], "rooms": ["x", "y"]}"#
+        "{\"name\": \"n\\u00e9\", \"caps\": [\"a\", \"b\"], \"rooms\": [\"x\", \"y\"]}"
     );
     assert_eq!(create_body("n", "  ", &[]), r#"{"name": "n", "rooms": []}"#);
     assert_eq!(rooms_body("i", &[]), r#"{"id": "i", "rooms": []}"#);
@@ -215,10 +237,7 @@ fn die_if_err_as_the_shell() {
         die(r#"{"error":"Bad Token"}"#),
         Shown::err("Error: Bad Token\n", Exit::Refused)
     );
-    assert_eq!(
-        die(r#"{"error":0}"#),
-        Shown::err("Error: 0\n", Exit::Error)
-    );
+    assert_eq!(die(r#"{"error":0}"#), Shown::err("Error: 0\n", Exit::Error));
     let r = die(r#"{"error":{"code":"x","hint":5}}"#);
     assert_eq!(r.exit, Exit::Error);
     assert!(r.stderr.ends_with(
@@ -238,7 +257,9 @@ fn the_printers() {
     );
     assert_eq!(list_reader(r#"{"tokens":null}"#).stdout, "No App tokens.\n");
     let r = list_reader(r#"{"tokens":"ab"}"#);
-    assert!(r.stderr.ends_with("line 8, in <module>\nAttributeError: 'str' object has no attribute 'get'\n"));
+    assert!(r
+        .stderr
+        .ends_with("line 8, in <module>\nAttributeError: 'str' object has no attribute 'get'\n"));
     assert_eq!(
         rooms_reader(r#"{"id":"t","roomHandles":["a","b"]}"#).stdout,
         "Skin token t rooms: a, b\n"

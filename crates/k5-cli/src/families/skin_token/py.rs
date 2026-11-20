@@ -428,11 +428,17 @@ mod tests {
 
     #[test]
     fn join_raises_as_python() {
-        assert_eq!(join(", ", &json::parse(r#"["a","b"]"#).unwrap(), 1).unwrap(), "a, b");
+        assert_eq!(
+            join(", ", &json::parse(r#"["a","b"]"#).unwrap(), 1).unwrap(),
+            "a, b"
+        );
         assert_eq!(join(",", &s("ab"), 1).unwrap(), "a,b");
         assert_eq!(
             join(",", &json::parse("[1]").unwrap(), 7).unwrap_err(),
-            Raise::at(7, "TypeError: sequence item 0: expected str instance, int found")
+            Raise::at(
+                7,
+                "TypeError: sequence item 0: expected str instance, int found"
+            )
         );
         assert_eq!(
             join(",", &Value::Bool(true), 7).unwrap_err(),
@@ -447,23 +453,48 @@ mod tests {
             ("  \n ", "Expecting value: line 2 column 2 (char 4)"),
             ("<html>", "Expecting value: line 1 column 1 (char 0)"),
             ("{\"a\":1} x", "Extra data: line 1 column 9 (char 8)"),
-            ("{\"a\":1,}", "Expecting property name enclosed in double quotes: line 1 column 8 (char 7)"),
-            ("{\"a\" 1}", "Expecting ':' delimiter: line 1 column 6 (char 5)"),
-            ("{\"a\":1 \"b\"}", "Expecting ',' delimiter: line 1 column 8 (char 7)"),
+            (
+                "{\"a\":1,}",
+                "Expecting property name enclosed in double quotes: line 1 column 8 (char 7)",
+            ),
+            (
+                "{\"a\" 1}",
+                "Expecting ':' delimiter: line 1 column 6 (char 5)",
+            ),
+            (
+                "{\"a\":1 \"b\"}",
+                "Expecting ',' delimiter: line 1 column 8 (char 7)",
+            ),
             ("[1,]", "Expecting value: line 1 column 4 (char 3)"),
             ("[1 2]", "Expecting ',' delimiter: line 1 column 4 (char 3)"),
-            ("\"ab", "Unterminated string starting at: line 1 column 1 (char 0)"),
-            ("\"a\tb\"", "Invalid control character at: line 1 column 3 (char 2)"),
+            (
+                "\"ab",
+                "Unterminated string starting at: line 1 column 1 (char 0)",
+            ),
+            (
+                "\"a\tb\"",
+                "Invalid control character at: line 1 column 3 (char 2)",
+            ),
             ("\"a\\qb\"", "Invalid \\escape: line 1 column 3 (char 2)"),
-            ("\"\\u12\"", "Invalid \\uXXXX escape: line 1 column 3 (char 2)"),
+            (
+                "\"\\u12\"",
+                "Invalid \\uXXXX escape: line 1 column 3 (char 2)",
+            ),
             ("01", "Extra data: line 1 column 2 (char 1)"),
             ("-", "Expecting value: line 1 column 1 (char 0)"),
             ("1.", "Extra data: line 1 column 2 (char 1)"),
-            ("\u{feff}{}", "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)"),
+            (
+                "\u{feff}{}",
+                "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)",
+            ),
         ] {
             assert_eq!(decode_error(raw).as_deref(), Some(want), "{raw:?}");
         }
-        for ok in ["{}", " [1, -2.5e3, NaN, -Infinity, \"\\ud83d\\ude00\"] ", "null"] {
+        for ok in [
+            "{}",
+            " [1, -2.5e3, NaN, -Infinity, \"\\ud83d\\ude00\"] ",
+            "null",
+        ] {
             assert_eq!(decode_error(ok), None, "{ok:?}");
         }
     }

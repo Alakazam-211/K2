@@ -21,10 +21,16 @@ fn the_shell_s_lines() {
         r#"            settings="$(cli_request "/cli/settings/get" || true)""#,
         "            exit 2",
     ] {
-        assert!(f.lines().any(|l| l == shell), "cmd_api no longer has {shell:?}");
+        assert!(
+            f.lines().any(|l| l == shell),
+            "cmd_api no longer has {shell:?}"
+        );
     }
     for l in USAGE {
-        assert!(f.contains(&format!("            echo \"{}\" >&2\n", k2(l))), "{l:?}");
+        assert!(
+            f.contains(&format!("            echo \"{}\" >&2\n", k2(l))),
+            "{l:?}"
+        );
     }
     assert!(f.contains(&format!("    print('{}')\n", k2(NOTE_OFF))));
     assert!(f.contains(&format!("    print('{FORCED}')\n")));
@@ -42,8 +48,14 @@ fn the_python() {
     let switch = super::super::shell_python("talk-and-workspace.sh", "cmd_api() {");
     let at_line = |lines: &[String], n: u32| lines[n as usize - 1].trim().to_string();
     assert_eq!(at_line(&switch, line::switch::IN), "if 'error' in d:");
-    assert_eq!(at_line(&switch, line::switch::INDEX), "print('Error: %s' % d['error'])");
-    assert_eq!(at_line(&switch, line::switch::GET), "on = bool(d.get('apiEnabled'))");
+    assert_eq!(
+        at_line(&switch, line::switch::INDEX),
+        "print('Error: %s' % d['error'])"
+    );
+    assert_eq!(
+        at_line(&switch, line::switch::GET),
+        "on = bool(d.get('apiEnabled'))"
+    );
     let doc = f.split_once("python3 <<'PY'\n").expect("the heredoc").1;
     let doc: Vec<String> = doc.lines().map(str::to_string).collect();
     assert_eq!(
@@ -83,16 +95,23 @@ fn the_switch_reader() {
     let e = switch_reader("");
     assert_eq!(
         (e.stdout.as_str(), e.exit),
-        ("Error: daemon returned an unparseable response: ''\n", Exit::Error)
+        (
+            "Error: daemon returned an unparseable response: ''\n",
+            Exit::Error
+        )
     );
     let e = switch_reader("\"an error\"");
     assert!(e.stderr.ends_with(
         "line 10, in <module>\nTypeError: string indices must be integers, not 'str'\n"
     ));
     let e = switch_reader("5");
-    assert!(e.stderr.ends_with("line 9, in <module>\nTypeError: argument of type 'int' is not iterable\n"));
+    assert!(e
+        .stderr
+        .ends_with("line 9, in <module>\nTypeError: argument of type 'int' is not iterable\n"));
     let e = switch_reader("[]");
-    assert!(e.stderr.ends_with("line 12, in <module>\nAttributeError: 'list' object has no attribute 'get'\n"));
+    assert!(e
+        .stderr
+        .ends_with("line 12, in <module>\nAttributeError: 'list' object has no attribute 'get'\n"));
 }
 
 #[test]

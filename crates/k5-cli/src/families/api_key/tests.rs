@@ -17,7 +17,9 @@ fn echoed(line: &str) -> String {
 #[test]
 fn the_shell_s_lines() {
     let f = cmd_api_key();
-    let usage = &f[f.find("        *)\n            echo \"Usage: k2 api-key <").expect("the usage arm")..];
+    let usage = &f[f
+        .find("        *)\n            echo \"Usage: k2 api-key <")
+        .expect("the usage arm")..];
     let lines: Vec<&str> = usage
         .lines()
         .skip(1)
@@ -25,9 +27,15 @@ fn the_shell_s_lines() {
         .collect();
     assert_eq!(lines.len(), USAGE.len());
     for (shell, ours) in lines.iter().zip(USAGE) {
-        assert_eq!(*shell, format!("            echo \"{}\" >&2", echoed(&k2(ours))));
+        assert_eq!(
+            *shell,
+            format!("            echo \"{}\" >&2", echoed(&k2(ours)))
+        );
     }
-    assert!(usage.contains(&format!("{}\n            exit 1 ;;", lines[lines.len() - 1])));
+    assert!(usage.contains(&format!(
+        "{}\n            exit 1 ;;",
+        lines[lines.len() - 1]
+    )));
     for shell in [
         r#"                    --label)        label="${2:-}"; shift 2 ;;"#,
         r#"                    *)              echo "Unknown flag: $1" >&2; exit 1 ;;"#,
@@ -41,7 +49,10 @@ fn the_shell_s_lines() {
         r#"                hire_confirm="$(_vault_confirm_token hire-key-mint "" "API key that can hire agents")" || exit 3"#,
         r#"        hire-ceiling|app-access)"#,
     ] {
-        assert!(f.lines().any(|l| l == shell), "cmd_api_key no longer has {shell:?}");
+        assert!(
+            f.lines().any(|l| l == shell),
+            "cmd_api_key no longer has {shell:?}"
+        );
     }
     for l in [STATUS_ONLY, BOTH_KEYS, NO_KEY, STORE_NOW] {
         assert!(f.contains(l), "{l:?}");
@@ -80,12 +91,18 @@ fn the_words() {
         parse(&["create", "--x", "--hire"]),
         Some(Ask::Stop(vec!["Unknown flag: --x".into()], Exit::Error))
     );
-    assert_eq!(parse(&["create", "--label"]), Some(Ask::Stop(vec![], Exit::Error)));
+    assert_eq!(
+        parse(&["create", "--label"]),
+        Some(Ask::Stop(vec![], Exit::Error))
+    );
     assert_eq!(
         parse(&["revoke"]),
         Some(Ask::Stop(vec![IdVerb::Revoke.usage().into()], Exit::Error))
     );
-    assert_eq!(parse(&["disable", "k1", "x"]), Some(Ask::Id(IdVerb::Disable, "k1".into())));
+    assert_eq!(
+        parse(&["disable", "k1", "x"]),
+        Some(Ask::Id(IdVerb::Disable, "k1".into()))
+    );
     let Some(Ask::Create(c)) = parse(&["create", "--status", "--label", "m"]) else {
         panic!()
     };
@@ -127,9 +144,14 @@ fn the_readers() {
     let r = list_reader("");
     assert_eq!(
         (r.stderr.as_str(), r.exit),
-        ("Error: Expecting value: line 1 column 1 (char 0)\n", Exit::Error)
+        (
+            "Error: Expecting value: line 1 column 1 (char 0)\n",
+            Exit::Error
+        )
     );
-    let r = list_reader(r#"{"keys":[{"id":"k1","label":"","anthropicKeySet":true,"provider":"openai","scope":"*","baseUrl":"u","capabilities":{"hostSessions":true,"hire":1},"hireLimits":{"apps":[{"app":"a","rooms":["r"],"roles":["x"]}]}}]}"#);
+    let r = list_reader(
+        r#"{"keys":[{"id":"k1","label":"","anthropicKeySet":true,"provider":"openai","scope":"*","baseUrl":"u","capabilities":{"hostSessions":true,"hire":1},"hireLimits":{"apps":[{"app":"a","rooms":["r"],"roles":["x"]}]}}]}"#,
+    );
     assert_eq!(
         r.stdout,
         "k1  [active]  -  openai-key  scope=*  base-url=u  caps=host-sessions,hire\n    App access: a rooms=r up-to-role=x\n"
@@ -144,12 +166,18 @@ fn the_readers() {
     );
     assert_eq!(list_reader(r#"{"error":"no"}"#).stderr, "Error: no\n");
     assert_eq!(list_reader("{}").stdout, "No API keys.\n");
-    assert_eq!(id_reader(r#"{"success":1}"#, IdVerb::Revoke).stdout, "API key revoked.\n");
+    assert_eq!(
+        id_reader(r#"{"success":1}"#, IdVerb::Revoke).stdout,
+        "API key revoked.\n"
+    );
     assert_eq!(
         id_reader("\"error\"", IdVerb::Enable).stderr,
         "Error: string indices must be integers, not 'str'\n"
     );
-    let r = create_reader(r#"{"id":"k","key":"k2sk_x","capabilities":{"db":true}}"#, "");
+    let r = create_reader(
+        r#"{"id":"k","key":"k2sk_x","capabilities":{"db":true}}"#,
+        "",
+    );
     assert_eq!(
         r.stdout,
         format!("API key created (id: k).\nCapabilities: db\n\n  k2sk_x\n\n{STORE_NOW}\n\n")
@@ -157,6 +185,9 @@ fn the_readers() {
     assert_eq!(r.stderr, format!("{}\n", NO_GRANT.join("\n")));
     let r = create_reader(r#"{"error":{"code":"c"}}"#, "*");
     assert_eq!((r.stderr.as_str(), r.exit), ("Error: c: \n", Exit::Error));
-    assert_eq!(status_reader("x").stderr, "Error: no answer from the daemon\n");
+    assert_eq!(
+        status_reader("x").stderr,
+        "Error: no answer from the daemon\n"
+    );
     assert_eq!(status_reader(r#"{"error":"nope"}"#).stderr, "Error: nope\n");
 }

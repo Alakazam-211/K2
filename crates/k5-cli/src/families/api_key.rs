@@ -259,8 +259,7 @@ fn parse_create(rest: &[&str]) -> Option<Ask> {
             }
             "--label" | "--max-per-day" | "--max-live" | "--max-per-team" | "--hire-db"
             | "--link-targets" | "--reach" | "--folder" | "--app-login" | "--anthropic-key"
-            | "--llm-key" | "--provider" | "--base-url" | "--workspaces" | "--allow"
-            | "--deny" => {
+            | "--llm-key" | "--provider" | "--base-url" | "--workspaces" | "--allow" | "--deny" => {
                 // `x="${2:-}"; shift 2`: no value, and `shift 2` fails.
                 let Some(v) = value else {
                     return Some(Ask::Stop(Vec::new(), Exit::Error));
@@ -282,7 +281,10 @@ fn parse_create(rest: &[&str]) -> Option<Ask> {
                 }
             }
             other => {
-                return Some(Ask::Stop(vec![format!("Unknown flag: {other}")], Exit::Error));
+                return Some(Ask::Stop(
+                    vec![format!("Unknown flag: {other}")],
+                    Exit::Error,
+                ));
             }
         }
         i += if takes { 2 } else { 1 };
@@ -793,7 +795,11 @@ pub fn create_reader(raw: &str, workspaces: &str) -> Shown {
             for a in items(&or(at(hl, "apps"), Value::Array(vec![])))? {
                 let a = dict(&a, 0)?;
                 let rooms = join(",", &or(at(a, "rooms"), Value::Array(vec![])), 0)?;
-                let rooms = if rooms.is_empty() { "-".to_string() } else { rooms };
+                let rooms = if rooms.is_empty() {
+                    "-".to_string()
+                } else {
+                    rooms
+                };
                 let roles = match at(a, "roles").filter(|v| pyout::truthy(v)) {
                     Some(r) => format!(", roles {}", join(",", r, 0)?),
                     None => String::new(),

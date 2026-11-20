@@ -963,8 +963,15 @@ impl Client {
     /// this client's credential as Bearer, no query; connect 5 s, at most
     /// 10 s; a refused connect is tried again; no heal, no line, no note.
     pub fn get_boot_status(&mut self, path: &str) -> Result<Response, Error> {
-        self.run(Kind::BootStatus, Channel::Tcp, path, &[], &[], Instant::now())
-            .map_err(|f| f.error)
+        self.run(
+            Kind::BootStatus,
+            Channel::Tcp,
+            path,
+            &[],
+            &[],
+            Instant::now(),
+        )
+        .map_err(|f| f.error)
     }
 
     /// `_setup_send <GET|POST> <ep> <as_json> [<body>]` (`cli/src/setup.sh`):

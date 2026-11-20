@@ -57,14 +57,41 @@ fn in_pipe(c: Case) -> Case {
 fn api_on_and_off_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "switch");
     let v = vec![
-        case("on", &["on"], &[], vec![ok(r#"{"apiEnabled":true}"#)], owner_and_port, 0, 1),
-        case("off", &["off", "x"], &[], vec![ok(r#"{"apiEnabled":false}"#)], owner_and_port, 0, 1),
-        case("on, the answer says off", &["on"], &[], vec![ok("{}")], owner_and_port, 0, 1),
+        case(
+            "on",
+            &["on"],
+            &[],
+            vec![ok(r#"{"apiEnabled":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "off",
+            &["off", "x"],
+            &[],
+            vec![ok(r#"{"apiEnabled":false}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "on, the answer says off",
+            &["on"],
+            &[],
+            vec![ok("{}")],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "the owner-only refusal",
             &["on"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":"owner or admin only"}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":"owner or admin only"}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -78,9 +105,33 @@ fn api_on_and_off_answer_as_the_shell_does() {
             1,
             1,
         ),
-        case("the bulletin", &["on"], &[], vec![ok(BULLETIN)], owner_and_port, 0, 1),
-        case("not JSON", &["on"], &[], vec![ok("<html>\u{e9}</html>")], owner_and_port, 1, 1),
-        case("an empty 200", &["on"], &[], vec![ok("")], owner_and_port, 1, 1),
+        case(
+            "the bulletin",
+            &["on"],
+            &[],
+            vec![ok(BULLETIN)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "not JSON",
+            &["on"],
+            &[],
+            vec![ok("<html>\u{e9}</html>")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an empty 200",
+            &["on"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            1,
+            1,
+        ),
         traceback(case(
             "a list with no error in it",
             &["on"],
@@ -136,8 +187,24 @@ fn api_on_and_off_answer_as_the_shell_does() {
             1,
         )),
         // The words and the gates.
-        case("an unknown verb", &["enable"], &[], vec![], owner_and_port, 2, 0),
-        case("an unknown verb and no port: the gate", &["enable"], &[], vec![], owner_only, 1, 0),
+        case(
+            "an unknown verb",
+            &["enable"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "an unknown verb and no port: the gate",
+            &["enable"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
         case("no token", &["on"], &[], vec![], port_only, 1, 0),
         case(
             "the virtual desktop's guard",
@@ -171,7 +238,10 @@ fn api_status_answers_as_the_shell_does() {
             "no verb is status",
             &[],
             &[],
-            vec![ok(r#"{"api":{"enabled":false}}"#), ok(r#"{"apiEnabled":true}"#)],
+            vec![
+                ok(r#"{"api":{"enabled":false}}"#),
+                ok(r#"{"apiEnabled":true}"#),
+            ],
             owner_and_port,
             0,
             2,
@@ -252,7 +322,15 @@ fn api_with_a_passport() {
     let v = vec![
         with(
             h(&[]),
-            case("no session: the passport", &["status"], &[], vec![ok(BOOT_ON), ok(SET_OFF)], port_only, 0, 2),
+            case(
+                "no session: the passport",
+                &["status"],
+                &[],
+                vec![ok(BOOT_ON), ok(SET_OFF)],
+                port_only,
+                0,
+                2,
+            ),
         ),
         with(
             h(&[]),
@@ -360,7 +438,15 @@ fn api_hands_these_to_the_shell() {
         ..c
     };
     let v = vec![
-        shell(case("--help", &["--help"], &[], vec![], owner_and_port, 2, 0)),
+        shell(case(
+            "--help",
+            &["--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        )),
         // The shell's cmd_api never reads -h: `on -h` turns it on.
         shell(case(
             "on -h",

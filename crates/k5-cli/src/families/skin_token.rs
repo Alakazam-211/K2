@@ -41,8 +41,8 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::{Call, Channel, Client, Error};
-use py::{at, at_or, dict, join, load, obj, or, s};
 use k2_client::cli_name;
+use py::{at, at_or, dict, join, load, obj, or, s};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -94,7 +94,11 @@ pub const ROOMS_USAGE: &str = concat!(
 pub const REVOKE_USAGE: &str = concat!("Usage: ", cli_name!(), " app token revoke <id>");
 /// The family's usage, its first line alone for an unknown verb.
 pub const USAGE: [&str; 6] = [
-    concat!("Usage: ", cli_name!(), " app token <create|list|revoke|rooms>"),
+    concat!(
+        "Usage: ",
+        cli_name!(),
+        " app token <create|list|revoke|rooms>"
+    ),
     "  create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]",
     "  list",
     "  rooms <id> --agent sales",
@@ -199,7 +203,11 @@ pub fn parse(words: &[&str]) -> Result<Ask, Stop> {
         },
         "" | "--help" | "-h" => Err(Stop::new(
             &USAGE,
-            if sub.is_empty() { Exit::Error } else { Exit::Ok },
+            if sub.is_empty() {
+                Exit::Error
+            } else {
+                Exit::Ok
+            },
         )),
         _ => Err(Stop::new(&USAGE[..1], Exit::Error)),
     }
@@ -209,7 +217,11 @@ fn parse_create(rest: &[&str]) -> Result<Ask, Stop> {
     let (mut name, mut caps, mut agents) = (String::new(), String::new(), Vec::new());
     let mut i = 0;
     while i < rest.len() {
-        let value = || rest.get(i + 1).map(|v| v.to_string()).ok_or_else(Stop::shift);
+        let value = || {
+            rest.get(i + 1)
+                .map(|v| v.to_string())
+                .ok_or_else(Stop::shift)
+        };
         match rest[i] {
             "--name" => name = value()?,
             "--caps" | "--cap" => caps = value()?,
@@ -486,7 +498,10 @@ fn die_lines(d: &Value, stderr: &mut String) -> Result<Exit, Raise> {
     stderr.push_str(&format!("Error: {}\n", pyout::str_of(&err)));
     if let Value::Str(_) = err {
         let low = pyout::str_of(&err).to_lowercase();
-        if ["token", "forbidden", "owner"].iter().any(|w| low.contains(w)) {
+        if ["token", "forbidden", "owner"]
+            .iter()
+            .any(|w| low.contains(w))
+        {
             return Ok(Exit::Refused);
         }
     }
@@ -515,7 +530,10 @@ fn joined_or_none(sep: &str, x: &Value, line: u32) -> Result<String, Raise> {
 
 /// `d.get("roomHandles") or d.get("room_handles") or []`.
 fn handles(d: &Value) -> Value {
-    or(at(d, "roomHandles"), or(at(d, "room_handles"), Value::Array(vec![])))
+    or(
+        at(d, "roomHandles"),
+        or(at(d, "room_handles"), Value::Array(vec![])),
+    )
 }
 
 /// `create`'s printer.
@@ -557,7 +575,11 @@ pub fn list_reader(raw: &str) -> Shown {
             } else {
                 "active"
             };
-            let caps = join(",", &or(at(t, "caps"), Value::Array(vec![])), line::list::CAPS)?;
+            let caps = join(
+                ",",
+                &or(at(t, "caps"), Value::Array(vec![])),
+                line::list::CAPS,
+            )?;
             let caps = if caps.is_empty() { "none".into() } else { caps };
             let rooms = joined_or_none(",", &handles(t), line::list::ROOMS)?;
             let name = or(at(t, "name"), at_or(t, "username", s("")));

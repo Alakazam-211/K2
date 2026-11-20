@@ -293,11 +293,11 @@ pub fn status_reader(boot: &str, settings: &str) -> Shown {
         let eff = at(api, "enabled").cloned();
         let settings = dict(&settings, line::status::SETTINGS)?;
         let setting = at(settings, "apiEnabled").cloned();
+        stdout.push_str(&format!("Public /v1 API surface: {}\n", fmt(eff.as_ref())));
         stdout.push_str(&format!(
-            "Public /v1 API surface: {}\n",
-            fmt(eff.as_ref())
+            "  Settings switch:      {}\n",
+            fmt(setting.as_ref())
         ));
-        stdout.push_str(&format!("  Settings switch:      {}\n", fmt(setting.as_ref())));
         if eff.as_ref().is_some_and(pyout::truthy) && setting == Some(Value::Bool(false)) {
             stdout.push_str(FORCED);
             stdout.push('\n');
@@ -309,9 +309,7 @@ pub fn status_reader(boot: &str, settings: &str) -> Shown {
         // A heredoc's frames name `<stdin>`.
         Err(r) => Shown {
             stdout,
-            stderr: r
-                .text()
-                .replace("File \"<string>\"", "File \"<stdin>\""),
+            stderr: r.text().replace("File \"<string>\"", "File \"<stdin>\""),
             exit: Exit::Error,
         },
     }

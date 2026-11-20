@@ -158,6 +158,9 @@ Agents:
                  [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
                                 node at spawn; names only in the plan (k2 study compute)
                  [--timeout D (≤ the grant's max, default 2h; k2 compute nodes shows it)]
+                 [--strict]     run a sh -c / bash -c script as bash -euo pipefail
+                                (a job's exit is its script's last command; sh is
+                                dash on Linux, without pipefail)
                  [--exclusive --why "<one line>"]  the whole node to itself; needs
                                 a reason (else exit 2) and a grant with --ci, or the
                                 owner or an Admin (else exit 3 exclusive_needs_grant)

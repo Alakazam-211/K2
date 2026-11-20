@@ -10,7 +10,8 @@
 # request, --json printed on stdout); `ls` stays `nodes`. `status` prints
 # a running job's time from its start and the wait before it apart. A
 # stalled job's wait end prints the server's hint (which rule fired, how
-# to set --stall-timeout).
+# to set --stall-timeout). run --strict asks the server for strict
+# (and only then).
 
 set -euo pipefail
 
@@ -202,6 +203,15 @@ echo "== status: running time from the start, the wait apart =="
 sout="$("$K2" compute status 2>&1)"
 expect_has "the running job shows its running time and the wait before it" "$sout" "running run00001  2m00s    ws           cargo test  (queued 10m00s first)"
 expect_not "the wait is never shown as running time" "$sout" "running run00001  12m00s"
+
+echo "== run --strict =="
+last_strict() { tail -1 "$LOG" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["path"], json.dumps(v["body"].get("strict")), json.dumps(v["body"].get("argv")))'; }
+"$K2" compute run --no-source --strict --detach -- sh -c 'cargo test | tee log' >/dev/null 2>&1 || true
+expect_eq "--strict reaches the daemon with the script as given" "$(last_strict)" '/cli/compute/run true ["sh", "-c", "cargo test | tee log"]'
+"$K2" compute run --no-source --detach -- sh -c 'x' >/dev/null 2>&1 || true
+expect_eq "no --strict: no key" "$(last_strict)" '/cli/compute/run null ["sh", "-c", "x"]'
+expect_has "the help names --strict" "$("$K2" compute --help 2>&1)" "[--strict]     run a sh -c / bash -c script as bash -euo pipefail"
+expect_has "the study page says a job's exit is its last command" "$("$K2" study compute 2>&1)" "A job's exit is its script's LAST command"
 
 echo
 echo "compute_agent_feedback_cli: $pass passed, $fail failed"

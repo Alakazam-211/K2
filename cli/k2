@@ -31190,6 +31190,9 @@ Agents:
                  [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
                                 node at spawn; names only in the plan (k2 study compute)
                  [--timeout D (≤ the grant's max, default 2h; k2 compute nodes shows it)]
+                 [--strict]     run a sh -c / bash -c script as bash -euo pipefail
+                                (a job's exit is its script's last command; sh is
+                                dash on Linux, without pipefail)
                  [--exclusive --why "<one line>"]  the whole node to itself; needs
                                 a reason (else exit 2) and a grant with --ci, or the
                                 owner or an Admin (else exit 3 exclusive_needs_grant)
@@ -32748,7 +32751,7 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local network=""
+    local network="" strict=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -32794,6 +32797,9 @@ cmd_compute_run() {
             # --cache-required: run only on the node that holds the --cache
             # (it waits there); without it the cache is only a preference.
             --cache-required) cache_required=1; shift ;;
+            # --strict (0.46.17): the server runs a sh -c / bash -c script
+            # under bash -euo pipefail.
+            --strict) strict=1; shift ;;
             # --gate = --tier ci (0.46.5; an older daemon only knows gate,
             # so both go in the body).
             --gate) gate=1; tier="ci"; shift ;;
@@ -33066,7 +33072,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
         K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_cacheRequired_b="${cache_required#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
-        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem" K2_CJ_network="$network" K2_CJ_netnsDummies_j="$netns_json")"
+        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem" K2_CJ_network="$network" K2_CJ_netnsDummies_j="$netns_json" K2_CJ_strict_b="$strict")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -57312,7 +57318,7 @@ cmd_schema() {
     },
     {
       "name": "compute run",
-      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
+      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
       "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem. Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
       "args": [{"name": "node", "required": false, "description": "Pin the job to this node (full name or a start that fits only one). Leave it off unless the job needs that machine."}, {"name": "command", "required": true, "description": "After --: the command to run."}],
       "flags": [
@@ -57339,6 +57345,7 @@ cmd_schema() {
         {"name": "--cpus", "arg": "N|N+M", "description": "Cores; N+M: N guaranteed, up to M on idle cores."},
         {"name": "--secret", "arg": "NAME[=ENVNAME]", "description": "A vault secret as env, sealed to the node at spawn (repeatable); only a person grants it."},
         {"name": "--timeout", "arg": "D", "description": "The job's time limit (at most the grant's max, default 2h)."},
+        {"name": "--strict", "arg": null, "description": "Run a sh -c / bash -c script as bash -euo pipefail -c: any failing command, pipe stage or unset variable fails the job (a job's exit is otherwise its script's last command; sh is dash on Linux). Other commands: bad_request, exit 2."},
         {"name": "--exclusive", "arg": null, "description": "The whole node to itself; needs --why (else exit 2) and a grant with --ci, or the owner or an Admin (else exit 3 exclusive_needs_grant)."},
         {"name": "--why", "arg": "text", "description": "The one-line reason for --priority or --exclusive; it shows in the queue."},
         {"name": "--gpu", "arg": "[any|amd|intel]", "description": "One GPU of the node, to this job alone (bare --gpu = any). Needs a grant with --gpu (else no_gpu_node or gpu_needs_grant, exit 3)."},
@@ -70935,6 +70942,13 @@ IN THE JOB
   '^K2_(COMPUTE_JOB|JOB_|NODE_|GPU_|QUIET_HOST)'
   Chain steps with sh -ec 'a && b' (sh -c 'a; b' exits with b's code,
   so a failing a looks green).
+  A job's exit is its script's LAST command: cargo test | tee log exits
+  with tee's 0 even when the tests fail, and a trailing grep turns green
+  red. sh is dash on Linux nodes, where set -o pipefail fails. Easiest:
+  k2 compute run --strict -- sh -c '<script>' (0.46.17) runs it as
+  bash -euo pipefail -c '<script>': any failing command, pipe stage or
+  unset variable fails the job. get shows the command as it ran. Only a
+  sh -c / bash -c script takes --strict (else bad_request, exit 2).
   --exclusive waits for an idle node and holds other K2 jobs while it
   runs; it doesn't stop non-K2 load (Sew VMs, hand-run builds).
 

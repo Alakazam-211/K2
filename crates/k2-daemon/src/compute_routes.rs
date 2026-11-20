@@ -1805,12 +1805,8 @@ fn submitted_json(who: &Who, sub: &Submitted) -> serde_json::Value {
 
 /// Check, place and store one job, then try to start it.
 fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, request_sha: &str, opts: &SubmitOpts) -> R<Submitted> {
-    // argv / env / cwd.
-    let argv: Vec<String> = v
-        .get("argv")
-        .and_then(|a| a.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
-        .unwrap_or_default();
+    // argv (with `--strict`: under bash -euo pipefail) / env / cwd.
+    let argv = crate::compute_strict::argv_of(v).map_err(|m| no(codes::BAD_REQUEST, 400, m))?;
     if argv.is_empty() || argv.len() > 256 || argv.iter().map(String::len).sum::<usize>() > 128 * 1024 || argv.iter().any(|a| a.contains('\0')) {
         return Err(no(codes::BAD_REQUEST, 400, "pass the command after --: k2 compute run [<node>] -- <command…>"));
     }

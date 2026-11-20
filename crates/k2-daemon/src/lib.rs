@@ -429,6 +429,8 @@ pub mod compute_repo_pick;
 pub mod compute_views;
 /// A pinned job that waited long gets one note (0.46.17).
 pub mod compute_pinned_wait;
+/// `k2 compute run --strict`: bash -euo pipefail (0.46.17).
+pub mod compute_strict;
 /// App runtime stage 1 (prd-k2-app-runtime-v1): `/cli/app/*` routes.
 pub mod apps;
 pub mod compute_shards;

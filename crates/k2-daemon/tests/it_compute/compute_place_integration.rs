@@ -2621,3 +2621,38 @@ async fn a_pinned_job_that_waited_long_gets_one_note() {
         compute_ws::test_detach(n);
     }
 }
+
+/// 0.46.17 (agent feedback): `--strict` stores a sh -c script as
+/// `bash -euo pipefail -c`, so get, the plan and a retry run that; a
+/// command that isn't a shell script is refused (bad_request, nothing
+/// queued); without it the argv is as given.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn strict_runs_a_shell_script_under_bash_euo_pipefail() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "strict");
+    active_node("st-a");
+    grant("st-a", &me, None, 2);
+    let _a = compute_ws::test_attach("st-a", offer(1, 30, 32, 0));
+    let body = |argv: Value, strict: bool| {
+        let mut b = json!({"argv": argv, "noSource": true, "workspace": me.id, "memBytes": 2 * GB, "detach": true,
+            "clientJobId": uuid::Uuid::new_v4().simple().to_string()});
+        if strict {
+            b["strict"] = json!(true);
+        }
+        b
+    };
+    let r = post(d.port, "/cli/compute/run", OWNER, body(json!(["sh", "-c", "cargo test | tee log"]), true)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let want = vec!["bash", "-euo", "pipefail", "-c", "cargo test | tee log"];
+    assert_eq!(row(&job).argv, want, "stored as it runs");
+    assert_eq!(row(&job).plan().expect("a plan").argv, want, "the plan the node gets");
+    let r = post(d.port, "/cli/compute/run", OWNER, body(json!(["sh", "-c", "a | b"]), false)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(row(j(&r)["job"]["id"].as_str().unwrap()).argv, vec!["sh", "-c", "a | b"], "no --strict: as given");
+    let r = post(d.port, "/cli/compute/run", OWNER, body(json!(["make", "check"]), true)).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    assert!(r.body.contains("--strict runs a shell script under bash -euo pipefail"), "{}", r.body);
+    compute_ws::test_detach("st-a");
+}

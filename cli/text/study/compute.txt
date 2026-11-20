@@ -1182,6 +1182,13 @@ IN THE JOB
   '^K2_(COMPUTE_JOB|JOB_|NODE_|GPU_|QUIET_HOST)'
   Chain steps with sh -ec 'a && b' (sh -c 'a; b' exits with b's code,
   so a failing a looks green).
+  A job's exit is its script's LAST command: cargo test | tee log exits
+  with tee's 0 even when the tests fail, and a trailing grep turns green
+  red. sh is dash on Linux nodes, where set -o pipefail fails. Easiest:
+  k2 compute run --strict -- sh -c '<script>' (0.46.17) runs it as
+  bash -euo pipefail -c '<script>': any failing command, pipe stage or
+  unset variable fails the job. get shows the command as it ran. Only a
+  sh -c / bash -c script takes --strict (else bad_request, exit 2).
   --exclusive waits for an idle node and holds other K2 jobs while it
   runs; it doesn't stop non-K2 load (Sew VMs, hand-run builds).
 

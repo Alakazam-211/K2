@@ -73056,9 +73056,8 @@ cmd_inbox_compose() {
 }
 
 cmd_inbox_respond() {
-    # -h/--help before a bare `--` prints the inbox help and sends nothing;
+    # cmd_inbox has printed the help for -h/--help before a bare `--`;
     # after `--` the words are the id and the text, as typed.
-    if _wants_help "$@"; then cmd_help_inbox; return 0; fi
     local words=() a dashes=0
     for a in "$@"; do
         if [ "$dashes" = 0 ] && [ "$a" = "--" ]; then dashes=1; continue; fi
@@ -73141,6 +73140,11 @@ cmd_inbox() {
         cmd_inbox_list
         return
     fi
+    # -h/--help anywhere before a bare -- prints the inbox help and sends
+    # nothing (0.46.17: `k2 inbox delete <id> -h` deleted the item, and
+    # compose, move and archive sent theirs). After -- the words are
+    # respond's id and text, as typed.
+    if _wants_help "$@"; then cmd_help_inbox; return 0; fi
     local sub="$1"
     case "$sub" in
         list)     shift; cmd_inbox_list "$@" ;;

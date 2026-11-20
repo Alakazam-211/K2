@@ -543,6 +543,19 @@ pub fn uds_eligible(endpoint: &str) -> bool {
         "/cli/thread",
         "/cli/browser/notes",
         "/cli/browser/notes/redeliver",
+        // Postal: the agent's own address, friends, cards and mail. Never
+        // code, settings or owner-link (people only: TCP).
+        "/cli/postal/status",
+        "/cli/postal/friends",
+        "/cli/postal/invite",
+        "/cli/postal/remove",
+        "/cli/postal/block",
+        "/cli/postal/link-p5",
+        "/cli/postal/claim",
+        "/cli/postal/decide",
+        "/cli/postal/enable",
+        "/cli/postal/send",
+        "/cli/postal/route",
     ];
     // Owner-only heartbeat routes, before `/cli/heartbeat/*`.
     const NOT: &[&str] = &[

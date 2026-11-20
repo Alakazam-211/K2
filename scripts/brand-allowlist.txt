@@ -951,5 +951,6 @@
 1 K5 crates/k2-daemon/src/voice/bff.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
 1 K5 crates/k2-daemon/src/voice/occupancy.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
 1 K5 crates/kessel-attest/src/verify.rs keeper: the repo's new name, AlakazamLabs/K5, in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)
+1 K5 crates/k5-cli/src/families/voice.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design), as the shell CLI's voice lines do
 2 repo crates/kessel-attest/src/main.rs keeper: kessel-attest does not link k2-client; its help names the format docs in this repo
 1 repo crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)

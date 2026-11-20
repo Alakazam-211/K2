@@ -371,7 +371,7 @@ hanging() {
     for i in $(seq 1 300); do [ -f "$W/hanging" ] && break; sleep 0.1; done
     [ -f "$W/hanging" ] || { bad "the download never reached the second range"; return 1; }
     ENGINE="$(pgrep -P "$BG" -f K2_STDIN_SECRETS || true)"
-    [ "$(printf '%s\n' "$ENGINE" | wc -l)" = 1 ] && [ -n "$ENGINE" ] || { bad "not exactly one clone engine under $BG: '$ENGINE'"; ps -o pid,ppid,args -e >&2; return 1; }
+    [ "$(printf '%s\n' "$ENGINE" | wc -l | tr -d ' ')" = 1 ] && [ -n "$ENGINE" ] || { bad "not exactly one clone engine under $BG: '$ENGINE'"; ps -o pid,ppid,args -e >&2; return 1; }
 }
 refused_line() { printf "refused: %s isn't https, so K2 won't send your token or password there; use https://%s" "$1" "$1"; }
 printf '%s\n' "$REMOTE_TOKEN" >"$W/token-in"

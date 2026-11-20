@@ -40583,7 +40583,10 @@ owner's lane; k2 study ci-release):
 Signer pairing (a person at this server, never an agent; Touch ID / vault
 password each step). On the signing machine first: sudo k2-signer-admin
 pair-begin > pair.json
-  k2 ci signer add <CODE.FP> --hello pair.json [--out offer.json]
+  k2 ci signer add --code-stdin --hello pair.json [--out offer.json] < code
+                                the pairing code on stdin (<CODE.FP> in its
+                                place still works; every user on this
+                                computer can see a code on the command line)
   k2 ci signer reveal <pairing> --reveal reveal.json   prints the 6-digit
                                 SAS here only; type it at the signer
   k2 ci signer finish <pairing> --done done.json
@@ -40815,22 +40818,35 @@ if not v["signers"]:
     }
     case "$sub" in
         add)
-            local code="${1:-}"; [ -n "$code" ] && shift
-            local hello="" out="k2-signer-offer.json"
+            # The code off argv: --code-stdin reads one line from stdin. A
+            # <CODE.FP> word still works for now, with a note: a command line
+            # is visible to every user on this computer while the command runs.
+            local code="" code_stdin=0 hello="" out="k2-signer-offer.json"
+            local usage="usage: k2 ci signer add --code-stdin --hello <pair-begin output file> [--out offer.json] < code-file (or <CODE.FP> instead of --code-stdin, visible to every user on this computer)"
+            if [ -n "${1:-}" ] && [ "${1#-}" = "$1" ]; then code="$1"; shift; fi
             while [ $# -gt 0 ]; do
                 case "$1" in
+                    --code-stdin) code_stdin=1; shift ;;
                     --hello) hello="${2:-}"; shift 2 ;;
                     --out) out="${2:-}"; shift 2 ;;
-                    *) echo "usage: k2 ci signer add <CODE.FP> --hello <pair-begin output file> [--out offer.json]" >&2; exit 2 ;;
+                    *) echo "$usage" >&2; exit 2 ;;
                 esac
             done
-            { [ -n "$code" ] && [ -f "$hello" ]; } || { echo "usage: k2 ci signer add <CODE.FP> --hello <pair-begin output file> [--out offer.json]" >&2; exit 2; }
+            [ "$code_stdin" = 0 ] || [ -z "$code" ] || { echo "k2 ci signer add: --code-stdin or <CODE.FP>, not both" >&2; exit 2; }
+            { { [ -n "$code" ] || [ "$code_stdin" = 1 ]; } && [ -f "$hello" ]; } || { echo "$usage" >&2; exit 2; }
             _ci_signer_person
+            if [ "$code_stdin" = 1 ]; then
+                _cli_read_secret_stdin "Pairing code: "
+                code="${_K2_SECRET%$'\r'}"; _K2_SECRET=""
+                [ -n "$code" ] || { echo "k2 ci signer add: --code-stdin: no code on stdin" >&2; exit 2; }
+            else
+                echo "note: <CODE.FP> is visible to every user on this computer while the command runs; use --code-stdin" >&2
+            fi
             local prefix="${code##*.}" hj tok
             hj="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(json.dumps(v.get("hello", v)))' "$hello")" || { echo "usage: --hello is the JSON pair-begin printed" >&2; exit 2; }
             tok="$(_vault_confirm_token ci-signer "add:$prefix" "Pair a release signer with this server")" || exit 3
-            _compute_call POST /cli/ci/signer/add "$(_compute_json K2_CJ_code="$code" K2_CJ_hello_j="$hj" K2_CJ_confirmToken="$tok")" tcp
-            tok=""
+            _compute_call POST /cli/ci/signer/add "$(_compute_json K2_CJ_code_s="$code" K2_CJ_hello_j="$hj" K2_CJ_confirmToken="$tok")" tcp
+            tok=""; code=""
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); json.dump(v["offer"], open(sys.argv[1], "w")); print("pairing %s: offer written to %s\non the signing machine: sudo k2-signer-admin pair-reveal < %s > reveal.json\nthen here: k2 ci signer reveal %s --reveal reveal.json" % (v["pairing"], sys.argv[1], sys.argv[1], v["pairing"]))' "$out"
             ;;
         reveal)

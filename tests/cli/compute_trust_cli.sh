@@ -49,7 +49,7 @@ has "help: seats offer" "$help" "k2 compute seats offer <request> --nodes a,b,c"
 has "help: a person decides" "$help" "a person (owner or Admin, from a"
 has "help: consent" "$help" "k2 compute owners consent <owner> on|off"
 cihelp="$("$K2" ci --help)"
-has "ci help: signer add" "$cihelp" "k2 ci signer add <CODE.FP> --hello pair.json"
+has "ci help: signer add" "$cihelp" "k2 ci signer add --code-stdin --hello pair.json"
 has "ci help: SAS here only" "$cihelp" "SAS here only"
 
 # ── the stub daemon ──────────────────────────────────────────────────
@@ -162,6 +162,7 @@ rc "roster key in a session" 3 compute roster key
 rc "consent on in a session" 3 compute owners consent owner.k2.dev on
 echo '{"hello":{}}' >"$WORK/pair.json"
 rc "signer add in a session" 3 ci signer add ABCDE-FGHJK.0123456789abcdef --hello "$WORK/pair.json"
+rc "signer add --code-stdin in a session" 3 ci signer add --code-stdin --hello "$WORK/pair.json"
 rc "signer reveal in a session" 3 ci signer reveal csp_1 --reveal "$WORK/pair.json"
 eq "no request for any of them" "$(wc -l <"$REQ_LOG")" "$before"
 

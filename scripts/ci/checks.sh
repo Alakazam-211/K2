@@ -98,6 +98,7 @@ part_web() {
     step "no K2_CJ_ field or password in a child's argv or environment (lint)"; bash tests/cli/secret_argv_env_lint.sh
     step "a test guest's password stays off every child's argv and environment (stub daemon)"; bash tests/cli/app_test_guest_password_off_argv.sh
     step "the typed-back recovery words stay off every child's argv and environment (stub vault)"; bash tests/cli/vault_recovery_words_off_argv.sh
+    step "k2 ci signer add takes the pairing code on stdin (stub daemon and vault)"; bash tests/cli/ci_signer_code_stdin.sh
     step "k2 compute fetch gets every file of a job with many (stub daemon)"; bash tests/cli/compute_fetch_many_artifacts.sh
     step "k2 never sends a daemon request through a proxy (stub daemon)"; bash tests/cli/no_proxy_to_daemon.sh
     step "one proxy rule in Rust, the CLI's curl and its Python (parity table)"; bash tests/cli/proxy_rule_parity.sh

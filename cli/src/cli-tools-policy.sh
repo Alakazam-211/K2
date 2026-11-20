@@ -284,6 +284,14 @@ _cli_apply_auth_for_verb() {
             # In a session these send the session's own passport, or no
             # credential when it has none: never the owner token from disk.
             TOKEN="${SCOPED_TOKEN:-}"
+        elif [ -n "$hook_sock" ] && _cli_tickets_sends_passport "$@"; then
+            # Tickets: K2's server takes the passport as this agent (its own
+            # workspace and tickets). With none, refuse here: never the owner.
+            if [ -z "${SCOPED_TOKEN:-}" ]; then
+                echo "Error: k2 tickets in a K2 session sends this session's passport, and the session has none, so nothing was sent." >&2
+                exit 3
+            fi
+            TOKEN="$SCOPED_TOKEN"
         elif [ -n "$hook_sock" ] && [ -n "${DISK_OWNER_TOKEN:-}" ]; then
             # Open / ungoverned: keep COMPAT-58 inversion for TCP ergonomics.
             TOKEN="$DISK_OWNER_TOKEN"
@@ -302,6 +310,16 @@ _cli_verb_sends_session_passport() {
         "agent profile"|"agent update") return 0 ;;
     esac
     return 1
+}
+
+# `k2 tickets ask|list|show|comment|resolve|assign|settings` (alias
+# `feedback`): in an agent's session they send the session's passport,
+# never the owner token. Help and `template` make no request.
+_cli_tickets_sends_passport() {
+    case "${1:-}" in tickets|feedback) ;; *) return 1 ;; esac
+    case "${2:-}" in ask|list|show|comment|resolve|assign|settings) ;; *) return 1 ;; esac
+    shift 2
+    ! _wants_help "$@"
 }
 
 # The credential project membership changes ride from verbs that are not

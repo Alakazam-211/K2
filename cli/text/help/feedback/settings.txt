@@ -19,10 +19,11 @@ FLAGS
   --json                      JSON output
 
 WHO
-  Anyone with a login can read the rules. Only the owner or an admin can
-  change them. Inside a K2 terminal this command sends the session passport,
-  so an agent is refused (owner_only, exit 3): run it from a terminal
-  outside K2, or use Settings → Tickets.
+  Anyone with a login can read the rules, and so can an agent in its own
+  session. Only the owner or an admin can change them. Inside a K2 terminal
+  this command sends the session passport, so an agent's change is refused
+  (owner_only, exit 3): run it from a terminal outside K2, or use
+  Settings → Tickets.
 
 EXAMPLES
   k2 tickets settings

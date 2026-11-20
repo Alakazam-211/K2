@@ -806,6 +806,14 @@ _cli_apply_auth_for_verb() {
             # In a session these send the session's own passport, or no
             # credential when it has none: never the owner token from disk.
             TOKEN="${SCOPED_TOKEN:-}"
+        elif [ -n "$hook_sock" ] && _cli_tickets_sends_passport "$@"; then
+            # Tickets: K2's server takes the passport as this agent (its own
+            # workspace and tickets). With none, refuse here: never the owner.
+            if [ -z "${SCOPED_TOKEN:-}" ]; then
+                echo "Error: k2 tickets in a K2 session sends this session's passport, and the session has none, so nothing was sent." >&2
+                exit 3
+            fi
+            TOKEN="$SCOPED_TOKEN"
         elif [ -n "$hook_sock" ] && [ -n "${DISK_OWNER_TOKEN:-}" ]; then
             # Open / ungoverned: keep COMPAT-58 inversion for TCP ergonomics.
             TOKEN="$DISK_OWNER_TOKEN"
@@ -824,6 +832,16 @@ _cli_verb_sends_session_passport() {
         "agent profile"|"agent update") return 0 ;;
     esac
     return 1
+}
+
+# `k2 tickets ask|list|show|comment|resolve|assign|settings` (alias
+# `feedback`): in an agent's session they send the session's passport,
+# never the owner token. Help and `template` make no request.
+_cli_tickets_sends_passport() {
+    case "${1:-}" in tickets|feedback) ;; *) return 1 ;; esac
+    case "${2:-}" in ask|list|show|comment|resolve|assign|settings) ;; *) return 1 ;; esac
+    shift 2
+    ! _wants_help "$@"
 }
 
 # The credential project membership changes ride from verbs that are not
@@ -82143,10 +82161,10 @@ PYEOF
 
 # Settings → Tickets (0.45.4): show or change the server's ticket rules
 # (GET/POST /cli/tickets/settings). Changing them is owner/admin only.
-# `tickets` is an Open tool (the owner token in a K2 terminal), so a write
-# from inside a K2 terminal deliberately sends the SESSION PASSPORT instead:
-# the daemon refuses it (owner_only), and an agent can never loosen the
-# rules it is held to.
+# Inside a K2 terminal every tickets verb sends the SESSION PASSPORT
+# (_cli_tickets_sends_passport): a read answers canEdit:false, and a write
+# is refused (owner_only), so an agent can never loosen the rules it is
+# held to.
 cmd_feedback_settings() {
     if _wants_help "$@"; then cmd_help_feedback_settings; exit 0; fi
     local as_json=false brief="" assignee="" default="" set_default=false
@@ -82180,11 +82198,6 @@ if os.environ.get("FB_BRIEF"): b["briefPolicy"]=os.environ["FB_BRIEF"]
 if os.environ.get("FB_ASSIGNEE"): b["assigneePolicy"]=os.environ["FB_ASSIGNEE"]
 if os.environ.get("FB_SET_DEFAULT")=="true": b["defaultAssignee"]=os.environ.get("FB_DEFAULT","")
 print(json.dumps(b))')
-        # In a K2 terminal: the passport, never the owner token (see above).
-        local TOKEN="$TOKEN"
-        if _envn_any HOOK_SOCK && [ -n "$SCOPED_TOKEN" ]; then
-            TOKEN="$SCOPED_TOKEN"
-        fi
         resp=$(cli_post_json "/cli/tickets/settings" "$body") || resp=""
     else
         resp=$(cli_request "/cli/tickets/settings") || resp=""
@@ -82250,10 +82263,11 @@ FLAGS
   --json                      JSON output
 
 WHO
-  Anyone with a login can read the rules. Only the owner or an admin can
-  change them. Inside a K2 terminal this command sends the session passport,
-  so an agent is refused (owner_only, exit 3): run it from a terminal
-  outside K2, or use Settings → Tickets.
+  Anyone with a login can read the rules, and so can an agent in its own
+  session. Only the owner or an admin can change them. Inside a K2 terminal
+  this command sends the session passport, so an agent's change is refused
+  (owner_only, exit 3): run it from a terminal outside K2, or use
+  Settings → Tickets.
 
 EXAMPLES
   k2 tickets settings
@@ -82310,9 +82324,15 @@ OUTPUT CONTRACT
   of --json, so scripts can rely on the shape.
 
 EXIT CODES
-  0 ok · 1 error · 2 bad usage · 4 not found (ambiguous id prefix = 4 too,
-  with the matching candidates listed in the hint) · 5 ask --wait: the person
-  wrote free text instead of picking an option (needs_discussion)
+  0 ok · 1 error · 2 bad usage · 3 refused: a K2 session with no passport
+  (nothing is sent) · 4 not found (ambiguous id prefix = 4 too, with the
+  matching candidates listed in the hint) · 5 ask --wait: the person wrote
+  free text instead of picking an option (needs_discussion)
+
+WHO
+  Inside a K2 terminal these commands send the session passport: an agent
+  asks in its own workspace and works its own workspace's tickets only
+  (another workspace's ticket is not found).
 
 Run 'k2 feedback <command> --help' for details on a command.
 EOF

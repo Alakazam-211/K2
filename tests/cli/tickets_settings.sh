@@ -6,9 +6,9 @@
 #   1. no flags → GET, prints the three rules, exit 0.
 #   2. --brief/--assignee-required/--default-assignee → POST with exactly
 #      those keys, prints "Saved.", exit 0.
-#   3. inside a K2 terminal (K2_HOOK_SOCK set) a read uses the owner token
-#      (tickets is an Open tool) but a WRITE sends the session passport;
-#      the daemon's owner_only refusal exits 3 with its hint on stderr.
+#   3. inside a K2 terminal (K2_HOOK_SOCK set) a read and a WRITE both send
+#      the session passport, never the owner token on disk; the daemon's
+#      owner_only refusal of the write exits 3 with its hint on stderr.
 #   4. a bad rule value exits 2 and sends nothing.
 #   5. --json prints the daemon's object.
 #   6. a bad_value / unknown_user refusal exits 2.
@@ -177,10 +177,11 @@ else
     bad "default assignee: rc=$RC body=$(req_field body) out=$(cat "$WORK/out")"
 fi
 
-# 3. Inside a K2 terminal: read with the owner token, write with the passport.
+# 3. Inside a K2 terminal: read and write with the passport.
 k2_inside tickets settings
-if [ "$RC" -eq 0 ] && [ "$(req_field token)" = "owner-disk-token" ]; then
-    ok "in-cell read: Open tool uses the owner token"
+if [ "$RC" -eq 0 ] && [ "$(req_field token)" = "passport-xyz" ] && [ "$(req_field method)" = "GET" ] \
+    && grep -q "Require an HTML brief:" "$WORK/out"; then
+    ok "in-cell read: sends the passport, never the owner token"
 else
     bad "in-cell read: rc=$RC token=$(req_field token) err=$(cat "$WORK/err")"
 fi

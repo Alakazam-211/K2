@@ -925,10 +925,10 @@ PYEOF
 
 # Settings → Tickets (0.45.4): show or change the server's ticket rules
 # (GET/POST /cli/tickets/settings). Changing them is owner/admin only.
-# `tickets` is an Open tool (the owner token in a K2 terminal), so a write
-# from inside a K2 terminal deliberately sends the SESSION PASSPORT instead:
-# the daemon refuses it (owner_only), and an agent can never loosen the
-# rules it is held to.
+# Inside a K2 terminal every tickets verb sends the SESSION PASSPORT
+# (_cli_tickets_sends_passport): a read answers canEdit:false, and a write
+# is refused (owner_only), so an agent can never loosen the rules it is
+# held to.
 cmd_feedback_settings() {
     if _wants_help "$@"; then cmd_help_feedback_settings; exit 0; fi
     local as_json=false brief="" assignee="" default="" set_default=false
@@ -962,11 +962,6 @@ if os.environ.get("FB_BRIEF"): b["briefPolicy"]=os.environ["FB_BRIEF"]
 if os.environ.get("FB_ASSIGNEE"): b["assigneePolicy"]=os.environ["FB_ASSIGNEE"]
 if os.environ.get("FB_SET_DEFAULT")=="true": b["defaultAssignee"]=os.environ.get("FB_DEFAULT","")
 print(json.dumps(b))')
-        # In a K2 terminal: the passport, never the owner token (see above).
-        local TOKEN="$TOKEN"
-        if _envn_any HOOK_SOCK && [ -n "$SCOPED_TOKEN" ]; then
-            TOKEN="$SCOPED_TOKEN"
-        fi
         resp=$(cli_post_json "/cli/tickets/settings" "$body") || resp=""
     else
         resp=$(cli_request "/cli/tickets/settings") || resp=""

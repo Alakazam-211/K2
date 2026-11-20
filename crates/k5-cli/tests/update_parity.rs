@@ -158,9 +158,12 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
 }
 
+/// No temp folder for mktemp: its error names a random file on macOS, so
+/// the two sides' stderr is compared with that name masked.
 fn no_tmpdir(c: Case) -> Case {
     Case {
         no_tmpdir: true,
+        compare: Compare::MktempName,
         ..c
     }
 }

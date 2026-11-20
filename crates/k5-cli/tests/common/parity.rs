@@ -200,6 +200,32 @@ pub enum Compare {
     /// last line's exception name must match (its frames and wording
     /// depend on the Python version; the binary prints 3.12's).
     Traceback,
+    /// Both sides run the system's `mktemp`, which picks a random name:
+    /// everything as [`Compare::Exact`] but stderr, compared with the six
+    /// random characters after `k2-update.` masked ([`mask_temp_names`]).
+    /// macOS's mktemp names the file in its error; GNU's doesn't.
+    MktempName,
+}
+
+/// Each `k2-update.` followed by six letters or digits (the random part
+/// `mktemp k2-update.XXXXXX` fills in), with those six as `XXXXXX`.
+pub fn mask_temp_names(text: &str) -> String {
+    const STEM: &str = "k2-update.";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(STEM) {
+        let (head, tail) = rest.split_at(at + STEM.len());
+        out.push_str(head);
+        let six: String = tail.chars().take(6).collect();
+        if six.len() == 6 && six.chars().all(|c| c.is_ascii_alphanumeric()) {
+            out.push_str("XXXXXX");
+            rest = &tail[6..];
+        } else {
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// What a case's run with no `python3` on `PATH` must do.
@@ -662,6 +688,12 @@ impl Rig {
                 on.len() == wn.len() && on.iter().zip(&wn).all(|(x, y)| x.abs_diff(*y) <= 1),
                 "{name}: the waited lines with no python3"
             );
+        } else if c.compare == Compare::MktempName {
+            assert_eq!(
+                mask_temp_names(&out.stderr),
+                mask_temp_names(&with.stderr),
+                "{name}: stderr with no python3 (mktemp's name masked)"
+            );
         } else {
             assert_eq!(out.stderr, with.stderr, "{name}: stderr with no python3");
         }
@@ -838,6 +870,12 @@ impl Rig {
                     "{name}: waited {x} s here, {y} s in bash"
                 );
             }
+        } else if c.compare == Compare::MktempName {
+            assert_eq!(
+                mask_temp_names(&r.stderr),
+                mask_temp_names(&b.stderr),
+                "{name}: stderr (mktemp's name masked)"
+            );
         } else {
             assert_eq!(r.stderr, b.stderr, "{name}: stderr");
         }

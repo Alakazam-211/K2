@@ -25,6 +25,9 @@
 //! <body>
 //! ```
 //!
+//! A POST with no data (`data=None`) gets http.client's own
+//! `Content-Length: 0`, right after `Accept-Encoding`.
+//!
 //! A body with no `Content-Type` of the caller's gets urllib's own
 //! `Content-Type: application/x-www-form-urlencoded`, just before
 //! `Content-Length` (`agent`'s `data=b""` POSTs). The hand-over headers
@@ -405,6 +408,11 @@ impl Opener {
             req.method.as_str(),
             req.selector()
         );
+        // http.client's own `Content-Length: 0` for a POST with no data,
+        // before the headers urllib hands it.
+        if req.data.is_none() && req.method == Method::Post {
+            head.push_str("Content-Length: 0\r\n");
+        }
         let has = |name: &str| {
             req.headers
                 .iter()

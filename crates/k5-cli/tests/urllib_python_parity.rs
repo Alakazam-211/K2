@@ -181,6 +181,16 @@ fn rows() -> Vec<Row> {
             reply: Some(Reply::Answer(200, r#"{"ok":true}"#.into())),
         },
         Row {
+            name: "a POST with no data",
+            method: Method::Post,
+            query: &[("get", "1")],
+            data: None,
+            init: &[],
+            add: &[AUTH],
+            timeout_ms: 5000,
+            reply: Some(Reply::Answer(200, r#"{"ok":true}"#.into())),
+        },
+        Row {
             name: "a GET with a type and no credential",
             method: Method::Get,
             query: &[],

@@ -268,6 +268,9 @@ mod apple {
         ) -> *mut c_void;
     }
 
+    /// `QOS_CLASS_UNSPECIFIED` (`<sys/qos.h>`).
+    const QOS_CLASS_UNSPECIFIED: u32 = 0;
+
     /// `OS_CLOCK_MACH_ABSOLUTE_TIME` (`<os/clock.h>`).
     const OS_CLOCK_MACH_ABSOLUTE_TIME: u32 = 32;
 
@@ -329,14 +332,54 @@ mod apple {
     }
 
     #[test]
-    fn promote_sets_user_interactive_qos_and_the_time_constraint_policy() {
+    fn promote_sets_the_time_constraint_policy() {
         on_a_new_thread(|| {
             let s = promote_current();
             assert_eq!(s.mode(), DspScheduling::TimeConstraint);
             // SAFETY: the calling thread.
             let me = unsafe { libc::pthread_self() };
-            assert_eq!(qos_of(me), QOS_CLASS_USER_INTERACTIVE);
             assert_eq!(time_constraint_of(me), Some(expected_policy()));
+            // Darwin reports no QoS class for a thread with a Mach policy of
+            // its own: the time-constraint policy replaces the QoS class set
+            // before it (which is there for when the policy is refused).
+            assert_eq!(qos_of(me), QOS_CLASS_UNSPECIFIED);
+        });
+    }
+
+    /// The real OS, with the time-constraint policy refused.
+    struct RefuseTimeConstraint(AppleOs);
+
+    impl SchedOs for RefuseTimeConstraint {
+        type Workgroup = Workgroup;
+        type Token = ();
+        fn set_qos(&mut self) -> bool {
+            self.0.set_qos()
+        }
+        fn set_time_constraint(&mut self, _: RtParams) -> bool {
+            false
+        }
+        fn join(&mut self, wg: &Workgroup) -> Option<()> {
+            self.0.join(wg)
+        }
+        fn leave(&mut self, wg: &Workgroup, token: ()) {
+            self.0.leave(wg, token)
+        }
+    }
+
+    #[test]
+    fn a_refused_time_constraint_leaves_user_interactive_qos() {
+        on_a_new_thread(|| {
+            let mut s = DspSched::promote(RefuseTimeConstraint(AppleOs::new()), RT_PARAMS);
+            assert_eq!(s.mode(), DspScheduling::Qos);
+            // SAFETY: the calling thread.
+            let me = unsafe { libc::pthread_self() };
+            assert_eq!(qos_of(me), QOS_CLASS_USER_INTERACTIVE);
+            assert_eq!(time_constraint_of(me), None);
+            // And a thread that isn't real-time doesn't join a workgroup.
+            let mut discarded = 0;
+            s.set_workgroup(Some(work_interval()), |_| discarded += 1);
+            assert_eq!(s.mode(), DspScheduling::Qos);
+            assert_eq!(discarded, 1);
         });
     }
 
@@ -347,9 +390,12 @@ mod apple {
             published_stats(&engine).dsp_scheduling,
             DspScheduling::TimeConstraint
         );
+        // Read back from the OS: the real-time policy, on the engine's own
+        // processing thread.
         let dsp = engine.dsp_pthread();
-        assert_eq!(qos_of(dsp), QOS_CLASS_USER_INTERACTIVE);
         assert_eq!(time_constraint_of(dsp), Some(expected_policy()));
+        // The policy replaced the QoS class (see the test above).
+        assert_eq!(qos_of(dsp), QOS_CLASS_UNSPECIFIED);
         engine.shutdown();
     }
 

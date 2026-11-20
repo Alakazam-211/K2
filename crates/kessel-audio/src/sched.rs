@@ -5,8 +5,9 @@
 //!
 //! 1. the QoS class `QOS_CLASS_USER_INTERACTIVE`
 //!    (`pthread_set_qos_class_self_np`), the least it should run at;
-//! 2. on top of that, Mach's time-constraint policy
-//!    (`THREAD_TIME_CONSTRAINT_POLICY`): the real-time band, with
+//! 2. then Mach's time-constraint policy (`THREAD_TIME_CONSTRAINT_POLICY`),
+//!    which replaces the QoS class (Darwin then reports none for the
+//!    thread): the real-time band, with
 //!    [`RT_PARAMS`] (a 10 ms period, the block; 6 ms of computation, the
 //!    stage's percentile budget; a 9 ms constraint, its hard budget);
 //! 3. once the phone backend's audio unit runs (iOS 14 or later), the unit's
@@ -50,9 +51,9 @@ pub enum DspScheduling {
     /// [`DspScheduling::TimeConstraint`] when the unit closes.
     Workgroup,
     /// Mach's real-time time-constraint policy
-    /// (`THREAD_TIME_CONSTRAINT_POLICY`), on top of
-    /// [`DspScheduling::Qos`]: a 10 ms period, 6 ms of computation and a
-    /// 9 ms constraint (the block, and the capture stage's two budgets).
+    /// (`THREAD_TIME_CONSTRAINT_POLICY`), asked for after the QoS class and
+    /// replacing it: a 10 ms period, 6 ms of computation and a 9 ms
+    /// constraint (the block, and the capture stage's two budgets).
     TimeConstraint,
     /// Only the QoS class `QOS_CLASS_USER_INTERACTIVE`: the OS refused the
     /// time-constraint policy.
@@ -140,7 +141,8 @@ pub(crate) struct DspSched<O: SchedOs> {
 impl<O: SchedOs> DspSched<O> {
     /// Ask for the QoS class, then the time-constraint policy, for the
     /// calling thread. The QoS class goes first: Darwin refuses a QoS change
-    /// once a thread has a policy of its own.
+    /// once a thread has a policy of its own, and the policy replaces the
+    /// class; the class is what is left if the policy is refused.
     pub(crate) fn promote(mut os: O, params: RtParams) -> Self {
         let qos = os.set_qos();
         let time_constraint = os.set_time_constraint(params);

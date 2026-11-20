@@ -835,3 +835,138 @@ mod wait_verb {
         );
     }
 }
+
+mod fetch_verb {
+    use super::super::fetch::{self, Ask};
+    use super::super::Words;
+    use super::{at, python_after};
+
+    #[test]
+    fn the_readers_lines() {
+        use fetch::line::{list as l, step as s};
+        let list = python_after("compute-jobs.sh", "list=\"$(printf");
+        assert_eq!(at(&list, l::LOAD), "v = json.load(sys.stdin)");
+        assert!(at(&list, l::HAVE).starts_with("have = {a[\"name\"]: a for a in"));
+        assert!(at(&list, l::MISSING).contains("artifact_not_found"));
+        assert_eq!(at(&list, l::FOR), "for n in (want or sorted(have)):");
+        let step = python_after("compute-jobs.sh", "step=\"$(printf");
+        assert_eq!(at(&step, s::PENDING), r#"if v.get("pending"):"#);
+        assert!(at(&step, s::MB).contains("MB on the server so far"));
+        assert_eq!(at(&step, s::NAME), r#"name = v["name"]"#);
+        assert!(at(&step, s::MAKEDIRS).starts_with("os.makedirs("));
+        assert_eq!(at(&step, s::DATA), r#"data = base64.b64decode(v["data"])"#);
+        assert!(at(&step, s::PRINT).starts_with(r#"print("%d %d %s %s %s""#));
+        if k2_client::brand::CLI_NAME == "k2" {
+            let text = super::source("compute-jobs.sh");
+            let line = format!("    local fusage=\"{}\"", fetch::USAGE);
+            assert!(text.lines().any(|x| x == line), "$fusage moved");
+        }
+    }
+
+    #[test]
+    fn the_words() {
+        let usage = || Words::Usage(fetch::USAGE.to_string());
+        let a = |f: &dyn Fn(&mut Ask)| {
+            let mut a = Ask::default();
+            f(&mut a);
+            Words::Ask(a)
+        };
+        let rows: Vec<(&[&str], Words<Ask>)> = vec![
+            (&["j"], a(&|x| x.job = "j".into())),
+            (
+                &[
+                    "j",
+                    "a",
+                    "b",
+                    "-o",
+                    "d",
+                    "--json",
+                    "--over-relay",
+                    "--attempt",
+                    "02",
+                ],
+                a(&|x| {
+                    x.job = "j".into();
+                    x.names = vec!["a".into(), "b".into()];
+                    x.out = "d".into();
+                    x.json = true;
+                    x.over_relay = true;
+                    x.attempt = "02".into();
+                }),
+            ),
+            (&[], usage()),
+            (&["j", "--out", ""], usage()),
+            (&["j", "--out"], Words::ShiftFailed),
+            (&["j", "--attempt"], Words::ShiftFailed),
+            (
+                &["j", "--attempt", "0"],
+                Words::Usage(format!(
+                    "{}  (--attempt N: an attempt number from 1)",
+                    fetch::USAGE
+                )),
+            ),
+            (&["j", "--bogus"], usage()),
+        ];
+        for (w, want) in rows {
+            assert_eq!(fetch::parse(w), want, "{w:?}");
+        }
+    }
+
+    #[test]
+    fn base64_as_python_decodes_it() {
+        assert_eq!(fetch::b64decode("aGVsbG8="), Ok(b"hello".to_vec()));
+        assert_eq!(fetch::b64decode("aGVs\nbG8="), Ok(b"hello".to_vec()));
+        assert_eq!(fetch::b64decode(""), Ok(Vec::new()));
+        assert_eq!(fetch::b64decode("aGk="), Ok(b"hi".to_vec()));
+        assert_eq!(fetch::b64decode("aA=="), Ok(b"h".to_vec()));
+        assert_eq!(
+            fetch::b64decode("aGVsbG8").unwrap_err(),
+            "binascii.Error: Incorrect padding"
+        );
+        assert!(fetch::b64decode("a")
+            .unwrap_err()
+            .contains("cannot be 1 more than a multiple of 4"));
+    }
+
+    #[test]
+    fn the_list() {
+        let names = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let body =
+            br#"{"short":"j1","artifacts":[{"name":"d/a.txt"},{"name":"b.txt"},{"name":"b.txt"}]}"#;
+        assert_eq!(
+            fetch::list_reader(body, &[]).map_err(|r| r.text()),
+            Ok(Ok("b.txt\nd/a.txt\n".into()))
+        );
+        assert_eq!(
+            fetch::list_reader(body, &names(&["d/a.txt", "d/a.txt"])).map_err(|r| r.text()),
+            Ok(Ok("d/a.txt\nd/a.txt\n".into()))
+        );
+        assert_eq!(
+            fetch::list_reader(body, &names(&["x"])).map_err(|r| r.text()),
+            Ok(Err(
+                r#"{"error": "artifact_not_found", "hint": "job j1 kept: b.txt, d/a.txt"}"#.into()
+            ))
+        );
+        assert_eq!(
+            fetch::list_reader(b"{}", &names(&["x"])).map_err(|r| r.text()),
+            Ok(Err(
+                r#"{"error": "artifact_not_found", "hint": "job None kept: (nothing)"}"#.into()
+            ))
+        );
+        let r = fetch::list_reader(br#"{"artifacts":[{"x":1}]}"#, &[]).unwrap_err();
+        assert_eq!(r.exception, "KeyError: 'name'");
+    }
+
+    #[test]
+    fn a_folder_mkdir_can_make() {
+        let d = std::env::temp_dir().join(format!("k5-fetch-creatable-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let file = d.join("afile");
+        std::fs::write(&file, "x").unwrap();
+        assert!(fetch::creatable(&d.to_string_lossy()));
+        assert!(fetch::creatable(&d.join("new/deeper").to_string_lossy()));
+        assert!(!fetch::creatable(&file.to_string_lossy()));
+        assert!(!fetch::creatable(&file.join("under").to_string_lossy()));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+}

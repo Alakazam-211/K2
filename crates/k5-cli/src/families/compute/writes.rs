@@ -6,6 +6,8 @@
 //!   `k5 compute cancel --all-mine|--workspace-all [...]`.
 //! - [`wait`]: `k5 compute wait <job>... [--any] [--max-wait D] [--quiet]
 //!   [--json]`.
+//! - [`fetch`]: `k5 compute fetch <job> [NAME...] [--out DIR] [--json]
+//!   [--over-relay] [--attempt N]`.
 //!
 //! What runs, in the shell's order:
 //!
@@ -46,6 +48,7 @@ use std::path::Path;
 use std::time::Duration;
 
 pub mod cancel;
+pub mod fetch;
 pub mod wait;
 
 #[cfg(test)]
@@ -61,6 +64,7 @@ pub const NO_STATUS: &str = "000";
 enum Ready {
     Cancel(cancel::Ask),
     Wait(wait::Ask),
+    Fetch(fetch::Ask),
 }
 
 impl<T> Words<T> {
@@ -92,6 +96,7 @@ pub enum Words<T> {
 enum Form {
     Cancel(Words<cancel::Ask>),
     Wait(Words<wait::Ask>),
+    Fetch(Words<fetch::Ask>),
 }
 
 /// `k5 compute <verb> ...`: `args` is the whole command line after
@@ -119,6 +124,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
                 return None;
             }
             Form::Wait(w)
+        }
+        Some(&"fetch") => {
+            let f = fetch::parse(&words[1..]);
+            // A folder `mkdir -p` would refuse: its line is the system's.
+            if matches!(&f, Words::Ask(a) if !fetch::creatable(&a.out)) {
+                return None;
+            }
+            Form::Fetch(f)
         }
         _ => return None,
     };
@@ -170,6 +183,7 @@ fn run_with(
     let verb = match form {
         Form::Cancel(w) => w.ready().map(Ready::Cancel),
         Form::Wait(w) => w.ready().map(Ready::Wait),
+        Form::Fetch(w) => w.ready().map(Ready::Fetch),
     };
     let ask = match verb {
         Ok(a) => a,
@@ -194,6 +208,7 @@ fn run_with(
     let exit = match &ask {
         Ready::Cancel(a) => cancel::send(&mut cp, a),
         Ready::Wait(a) => wait::send(&mut cp, a),
+        Ready::Fetch(a) => fetch::send(&mut cp, a),
     };
     let closing = std::mem::take(&mut cp.closing);
     closing.flush(&mut client, exit);

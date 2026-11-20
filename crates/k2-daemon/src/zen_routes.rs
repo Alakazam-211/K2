@@ -1530,7 +1530,16 @@ pub fn handle(
     // without Garden access; never a sandboxed agent or an API cell.
     let passport_read = !owner && !garden_owner_login && is_live_local_passport(caller) && PASSPORT_READS.contains(&path);
     if passport_read {
-        // A read: no Garden list or lock applies.
+        // A read: no lock applies. With Garden access on, a widget's reads
+        // take the same lists as its writes (the widget list is narrowed
+        // the same way below).
+        if access_on && matches!(path, "/cli/zen/widget/show" | "/cli/zen/widget/errors") {
+            if let Some(w) = param(params, "widget") {
+                if let Some(r) = crate::zen_access_routes::widget_read_gate(&files(), w, caller, path, ingress) {
+                    return r;
+                }
+            }
+        }
     } else if !owner && !garden_owner_login && access_on {
         // G11/G12: the lock, then the Garden's list (zen_access_routes).
         if let Some(r) = crate::zen_access_routes::passport_gate(path, caller, body, ingress) {
@@ -1649,6 +1658,9 @@ pub fn handle(
                         // Garden access (a5-asks #9): signer, change time,
                         // and the signer gate per placement.
                         crate::zen_access_routes::decorate_widgets(&f, &mut v);
+                        if passport_read {
+                            crate::zen_access_routes::narrow_widgets(&f, &mut v, caller);
+                        }
                     }
                     v
                 })

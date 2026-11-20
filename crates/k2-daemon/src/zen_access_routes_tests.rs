@@ -953,3 +953,36 @@ fn a_phone_layout_needs_garden_access() {
     let (s, v) = zen("/cli/zen/garden/put", false, &agent("w-ed"), json!({"garden": e.g1, "text": PAGE}));
     assert_eq!((s.as_str(), v["error"].as_str()), ("423 Locked", Some("garden_locked")), "{v}");
 }
+
+/// D1: with Garden access on, a passport reads a widget (show, errors, the
+/// list) only where it may write it: every Garden placing it lists its
+/// workspace. A listed agent reads it; one that isn't doesn't see it.
+#[test]
+fn a_passport_reads_only_the_widgets_its_lists_let_it_write() {
+    let e = env();
+    let read = |path: &str, who: &Caller, q: &[(&str, &str)]| -> (String, J) {
+        let p: HashMap<String, String> = q.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let r = crate::zen_routes::handle(path, matches!(who, Caller::Owner), who, "test", &p, b"");
+        let v: J = serde_json::from_str(&r.body).unwrap_or_else(|err| panic!("{path}: not JSON ({err}): {}", r.body));
+        (r.status.to_string(), v)
+    };
+    let names = |v: &J| -> Vec<String> { v["widgets"].as_array().expect("widgets").iter().map(|w| w["name"].as_str().expect("name").to_string()).collect() };
+    let other = agent("w-other");
+    for path in ["/cli/zen/widget/show", "/cli/zen/widget/errors"] {
+        let (s, v) = read(path, &other, &[("widget", "board")]);
+        assert_eq!(s, "403 Forbidden", "an agent not on g1's list, {path}: {v}");
+    }
+    let (s, v) = read("/cli/zen/widgets", &other, &[]);
+    assert_eq!(s, "200 OK", "{v}");
+    assert!(!names(&v).contains(&"board".to_string()), "board is not in its list: {v}");
+    list(&e.g1, "w-ed");
+    let ed = agent("w-ed");
+    for path in ["/cli/zen/widget/show", "/cli/zen/widget/errors"] {
+        let (s, v) = read(path, &ed, &[("widget", "board")]);
+        assert_eq!(s, "200 OK", "a listed agent, {path}: {v}");
+    }
+    let (_, v) = read("/cli/zen/widgets", &ed, &[]);
+    assert!(names(&v).contains(&"board".to_string()), "a listed agent sees board: {v}");
+    let (_, v) = read("/cli/zen/widgets", &Caller::Owner, &[]);
+    assert!(names(&v).contains(&"board".to_string()), "the owner's list is whole: {v}");
+}

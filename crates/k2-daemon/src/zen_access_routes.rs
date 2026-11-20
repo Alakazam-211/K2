@@ -646,6 +646,23 @@ fn widget_write(f: &ZenFiles, widget: &str, caller: &Caller, path: &str, ingress
     None
 }
 
+/// D1: a passport's read of widget `widget` (show, errors) takes the same
+/// lists as its writes ([`widget_write`]): every Garden that places it
+/// lists the passport's workspace (a draft placed nowhere is open).
+pub(crate) fn widget_read_gate(f: &ZenFiles, widget: &str, caller: &Caller, path: &str, ingress: &str) -> Option<CliResponse> {
+    widget_write(f, widget, caller, path, ingress)
+}
+
+/// D1: the widget list a passport reads keeps only the widgets it may
+/// read ([`widget_read_gate`]'s rule).
+pub(crate) fn narrow_widgets(f: &ZenFiles, v: &mut J, caller: &Caller) {
+    let Some(rows) = v["widgets"].as_array_mut() else { return };
+    rows.retain(|row| {
+        let name = row["name"].as_str().unwrap_or_default();
+        placing_gardens(f, name).iter().all(|(id, _)| garden_access_may(caller, id) == May::Edit)
+    });
+}
+
 /// The computer-wide look: a passport on at least one Garden's list.
 fn look_write(caller: &Caller, path: &str, ingress: &str) -> Option<CliResponse> {
     let (p, _) = match passport_workspace(caller) {

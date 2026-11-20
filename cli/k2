@@ -13,25 +13,13 @@ K2_CLI_VERSION="0.46.16"
 
 set -euo pipefail
 
-# The name this script was called by: k2, or k5 once a link of that name
-# exists. Anything else (a copy under another name, a test's path) counts
-# as k2. The Rust front (k5-cli) runs this script for the commands it does
-# not handle itself, from a path whose name may be neither, so it passes
-# the name it was called by in K5_CLI_CALLED_AS: that wins over $0 when it
-# says k2 or k5, and any other value is ignored. Nothing reads the name
-# yet; the notice that tells callers of k2 to use k5 will.
-_k2_name="${0##*/}"
-case "${K5_CLI_CALLED_AS:-}" in
-    k2|k5) _k2_name="$K5_CLI_CALLED_AS" ;;
-esac
-case "$_k2_name" in
-    k5) _K2_CALLED_AS="k5" ;;
-    *)  _K2_CALLED_AS="k2" ;;
-esac
-unset _k2_name
+# The name this script was called by changes nothing it prints: every
+# line carries the command's own name. An alias's notice or tombstone is
+# the Rust front's job, from the brand file, so this script does not read
+# $0's name or K5_CLI_CALLED_AS.
 
-# Two more the Rust front sets when it hands a command to this script.
-# Empty counts as unset.
+# What the Rust front sets when it hands a command to this script. Empty
+# counts as unset.
 #   K5_CLI_NOTICE_DONE  it already showed the notice that tells callers of
 #                       k2 to use k5. Nothing here prints that notice yet;
 #                       when something does, it skips it on _K5_NOTICE_DONE.

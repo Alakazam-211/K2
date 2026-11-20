@@ -19,8 +19,10 @@
 //! shot lines [`shot::shells`] names (no runner beside the program, and
 //! the like), and the edge hand-backs every family keeps
 //! (a word that is not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a
-//! port curl won't take, a `python3` the binary can't tell); `validate
-//! --dir` when the temp folder can't be used (`mktemp`'s own line).
+//! port curl won't take, a `python3` the binary can't tell); a line that
+//! would run `mktemp` where the temp folder can't be used, when there is
+//! no `mktemp` on `PATH` the binary can run as the shell does. With one,
+//! the binary runs it there, so its line is the shell's ([`temp_fails`]).
 //!
 //! What runs, in the shell's order: the settings and the two gates (`zen`
 //! alone and `zen help` skip the connection gate, not the virtual
@@ -74,16 +76,14 @@ fn native(words: &[&str]) -> bool {
                 && words
                     .iter()
                     .any(|w| *w == "--dir" || w.starts_with("--dir="))
-                && crate::transport::client::tmpdir_unusable())
+                && temp_shell())
         }
-        "garden" | "gardens" => {
-            !(words.get(1) == Some(&"new") && crate::transport::client::tmpdir_unusable())
-        }
+        "garden" | "gardens" => !(words.get(1) == Some(&"new") && temp_shell()),
         "widget" | "widgets" => {
             let w = &words[1..];
             let dir = w.iter().any(|a| *a == "--dir" || a.starts_with("--dir="))
                 || w.first() == Some(&"apply");
-            !widget::shells(w) && !(dir && crate::transport::client::tmpdir_unusable())
+            !widget::shells(w) && !(dir && temp_shell())
         }
         _ => true,
     }
@@ -183,6 +183,57 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     };
     Some(z.finish(exit))
 }
+
+/// A line that may run `mktemp` where `${TMPDIR:-/tmp}` can't be used,
+/// with no `mktemp` the shell would run as the binary runs it
+/// ([`super::update::shell_program`]): the shell's.
+fn temp_shell() -> bool {
+    crate::transport::client::tmpdir_unusable()
+        && super::update::shell_program(&crate::offline::Env::current(), "mktemp").is_none()
+}
+
+/// `x="$(mktemp [-d] "${TMPDIR:-/tmp}/<name>XXXXXX")" || { echo "<line>"
+/// >&2; exit 1; }` where `${TMPDIR:-/tmp}` can't be used: the system's
+/// `mktemp` (the one on `PATH`, as the shell runs it) says why on stderr
+/// in its own words, then the shell's line, exit 1. `None` when the folder
+/// can be used (the binary needs no file there), or when `mktemp` made one
+/// after all (it goes again).
+pub fn temp_fails(folder: bool, name: &str, line: &str) -> Option<crate::families::Shown> {
+    if !crate::transport::client::tmpdir_unusable() {
+        return None;
+    }
+    let mut template = std::env::var_os("TMPDIR")
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| OsString::from("/tmp"));
+    template.push("/");
+    template.push(name);
+    template.push("XXXXXX");
+    let mut cmd = std::process::Command::new("mktemp");
+    if folder {
+        cmd.arg("-d");
+    }
+    let made = cmd
+        .arg(&template)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .ok()
+        .filter(|o| o.status.success());
+    if let Some(o) = made {
+        let text = String::from_utf8_lossy(&o.stdout);
+        let path = Path::new(text.trim_end_matches('\n'));
+        let _ = if folder {
+            std::fs::remove_dir(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        return None;
+    }
+    Some(crate::families::Shown::err(format!("{line}\n"), Exit::Error))
+}
+
+/// `_zen_dir_call`'s and the shot's line when `mktemp` fails.
+pub const NO_TEMP_FILE: &str = "Error: can't make a temp file";
 
 /// `_ws_dot_dir ROOT`.
 fn dot_dir(root: &str) -> PathBuf {

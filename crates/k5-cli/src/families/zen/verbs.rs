@@ -286,6 +286,9 @@ fn plan_or_stop(sub: &str, words: &[&str]) -> Result<Plan, Shown> {
                 if !a.as_.is_empty() {
                     extra.push((Text::from("widget"), print::jstr(&a.as_)));
                 }
+                if let Some(s) = super::temp_fails(false, "k2-zen-dir.", super::NO_TEMP_FILE) {
+                    return Err(s);
+                }
                 let body = dir_body(&a.dir, extra, NameKey::Fallback)?;
                 return Ok(Plan::Dir { a, body });
             }

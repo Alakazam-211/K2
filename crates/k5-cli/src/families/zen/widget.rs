@@ -282,6 +282,9 @@ fn put(z: &mut Zen, words: &[&str]) -> Step {
         if !note.is_empty() {
             extra.push((Text::from("note"), print::jstr(&note)));
         }
+        if let Some(s) = super::temp_fails(false, "k2-zen-dir.", super::NO_TEMP_FILE) {
+            return stop(s);
+        }
         let body = match dir_body(&dir, extra, NameKey::Widget) {
             Ok(b) => b,
             Err(s) => return stop(s),
@@ -580,6 +583,9 @@ fn preview(z: &mut Zen, words: &[&str]) -> Step {
     let mut extra = vec![(Text::from("config"), Value::Object(config))];
     if let Some(w) = pos.first().filter(|w| !w.is_empty()) {
         extra.push((Text::from("widget"), print::jstr(w)));
+    }
+    if let Some(s) = super::temp_fails(false, "k2-zen-dir.", super::NO_TEMP_FILE) {
+        return stop(s);
     }
     let body = match dir_body(dir, extra, NameKey::Fallback) {
         Ok(b) => b,

@@ -472,7 +472,11 @@ fn export(gd: &mut Gd, words: &[String]) -> R<()> {
         return Err(Exit::Error);
     }
     // `tmp="$(mktemp …)"; _gd_export_jsonl … > "$tmp"; cat "$tmp"`: out
-    // whole, or nothing when the export stopped.
+    // whole, or nothing when the export stopped. Where the temp folder
+    // can't be used, mktemp says why first, as in the shell.
+    if let Some(s) = super::temp_fails(false, "k2-gd-export.", super::NO_TEMP_FILE) {
+        return Err(s.print());
+    }
     let dir = std::env::var_os("TMPDIR")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)

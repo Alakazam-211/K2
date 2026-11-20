@@ -990,6 +990,11 @@ pub fn garden(z: &mut Zen, words: &[&str]) -> Step {
                         " on that server."
                     )));
                 }
+                if let Some(s) =
+                    super::temp_fails(true, "k2-zen-new.", "Error: can't make a temp folder")
+                {
+                    return stop(s);
+                }
                 let body = match new_v2_body(&name, texting, &at, &new_from, &new_widgets) {
                     Ok(b) => b,
                     Err(s) => return stop(s),

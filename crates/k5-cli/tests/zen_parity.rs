@@ -2552,4 +2552,78 @@ fn zen_person_and_session_lines_answer_as_the_shell_does() {
     for c in &cases {
         rig.check(c);
     }
+    // No temp folder: the system's mktemp says why, then the shell's line
+    // (the binary runs that mktemp). GNU mktemp names the template in its
+    // error, not a random name.
+    if cfg!(target_os = "linux") {
+        let proj = rig.proj.to_string_lossy().into_owned();
+        let folder = leak(format!("{proj}/staged-w"));
+        let page = leak(format!("{proj}/page.toml"));
+        let args = |v: Vec<&'static str>| -> &'static [&'static str] {
+            Box::leak(v.into_boxed_slice())
+        };
+        let no_temp = |c: Case| Case {
+            no_tmpdir: true,
+            ..c
+        };
+        let rows = vec![
+            no_temp(case(
+                "no temp folder: validate --dir",
+                args(vec!["validate", "--dir", folder]),
+                &[],
+                vec![],
+                staged,
+                1,
+                0,
+            )),
+            no_temp(case(
+                "no temp folder: widget put --dir",
+                args(vec!["widget", "put", "w2", "--dir", folder]),
+                &[],
+                vec![],
+                staged,
+                1,
+                0,
+            )),
+            no_temp(case(
+                "no temp folder: widget apply",
+                args(vec!["widget", "apply", "--from", folder]),
+                &[],
+                vec![],
+                staged,
+                1,
+                0,
+            )),
+            no_temp(case(
+                "no temp folder: widget preview --dir",
+                args(vec!["widget", "preview", "--dir", folder]),
+                &[],
+                vec![],
+                staged,
+                1,
+                0,
+            )),
+            no_temp(case(
+                "no temp folder: garden new --from (mktemp -d)",
+                args(vec!["garden", "new", "My", "--from", page]),
+                &[],
+                vec![ok(r#"{"ok":true}"#)],
+                staged_marked,
+                1,
+                1,
+            )),
+            no_temp(case(
+                "no temp folder: data export --blobs",
+                &["data", "export", "board", "--blobs", "out-blobs"],
+                &[],
+                vec![],
+                clean_export,
+                1,
+                0,
+            )),
+        ];
+        for c in &rows {
+            rig.check(c);
+        }
+    }
 }

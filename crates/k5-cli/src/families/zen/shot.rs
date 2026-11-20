@@ -222,6 +222,9 @@ pub fn shot(z: &mut Zen, a: &Shot<'_>) -> Step {
         Ok(e) => e,
         Err(s) => return stop(s),
     };
+    if let Some(s) = super::temp_fails(false, "k2-zen-shot-body.", super::NO_TEMP_FILE) {
+        return stop(s);
+    }
     let body = match dir_body(a.dir, extra, NameKey::Fallback) {
         Ok(b) => b,
         Err(s) => return stop(s),

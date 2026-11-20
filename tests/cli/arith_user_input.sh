@@ -217,7 +217,7 @@ expect_eq "wait --max-wait 5m: asks for the job" "$(field "$r" 'v["path"], v["qu
 r="$(sent_first compute run --no-source --mem 2G --wait --max-wait 5m -- true)"
 expect_eq "run --wait --max-wait 5m: submits" "$(field "$r" 'v["path"]')" '"/cli/compute/run"'
 r="$(sent_first compute events --max-wait 5m)"
-expect_eq "events --max-wait 5m: asks for events" "$(field "$r" 'v["path"]')" '"/cli/compute/events"'
+expect_eq "events --max-wait 5m: asks for events" "$(field "$r" 'v["path"], v["query"].get("events")')" '["/cli/compute/jobs", "1"]'
 
 echo "== sources simulate --for, trigger add --cooldown / --on stale_for: =="
 refused "simulate --for <subscript>d" "usage: bad duration" -- sources simulate fleet crit --for "${P}d"

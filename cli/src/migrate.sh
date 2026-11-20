@@ -369,13 +369,27 @@ _vault_run() {
         exit 2
     fi
     _vault_call GET run-helper ''
-    local helper
+    local helper token_fd
     helper="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("helper") or "")')"
+    token_fd="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("tokenFd") is True else "")')"
     if [ -z "$helper" ] || [ ! -x "$helper" ]; then
         echo "run_helper_missing: the K2 daemon named no usable helper; restart the K2 daemon and try again" >&2
         exit 1
     fi
-    K2_HOOK_SOCK="$(_hook_sock)" K2_HOOK_TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}" K5_HOOK_TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}" exec "$helper" --vault-run "${helper_args[@]}" -- "$@"
+    if [ -z "$token_fd" ]; then
+        echo "run_helper_too_old: this K2 daemon's run helper takes the passport in its environment, where the command would see it; update the K2 daemon, then run it again" >&2
+        exit 1
+    fi
+    # The passport reaches the helper on fd 3, through a pipe, never in its
+    # environment. The helper clears every K2 credential variable from the
+    # command's environment and sets K2_NO_OWNER_FALLBACK=1: the command
+    # gets its secrets, not the agent's identity.
+    local _vr_tok="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}"
+    exec 3< <(printf '%s' "$_vr_tok")
+    _vr_tok=""
+    export K2_HOOK_SOCK="$(_hook_sock)"
+    unset K2_HOOK_TOKEN K5_HOOK_TOKEN K2SO_HOOK_TOKEN
+    exec "$helper" --vault-run --token-fd 3 "${helper_args[@]}" -- "$@"
 }
 
 _vault_unknown_verb() {

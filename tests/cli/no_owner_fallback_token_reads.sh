@@ -130,7 +130,7 @@ fn() {
 refused() { # refused <case>: the guard's exit and message, no owner token anywhere
     [ "$RC" = 3 ] || die "$1: exit $RC (want 3): $OUT"
     case "$OUT" in
-        *"Error: k2 won't act as this server's owner here."*"(K2_NO_OWNER_FALLBACK=1) and has no session passport"*) ;;
+        *"Error: k2 won't act as this server's owner here: no session passport (K2_NO_OWNER_FALLBACK=1, a K2 virtual desktop or k2 vault run)."*"not under vault run, or give the command the secret it needs."*) ;;
         *) die "$1: not the guard's message: $OUT" ;;
     esac
     case "$OUT" in *"$OWNER"*) die "$1: the owner token is in the output" ;; esac

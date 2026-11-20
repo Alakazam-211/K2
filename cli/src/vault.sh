@@ -1493,6 +1493,11 @@ through pipes, so it doesn't see a terminal. --no-mask lets the command use
 your terminal (TTY), for interactive tools. Output is then not masked, and
 the run is logged as no-mask.
 
+The command gets its secrets, not your identity: no session passport or
+other K2 token is in its environment, and a k2 it runs refuses (exit 3)
+rather than act as you or as this server's owner. Run such k2 commands
+outside vault run.
+
 Exit code: the command's own (128 + the signal if a signal killed it).
 K2's own refusals come before the command starts, on stderr as "code: hint":
 2 usage, 3 refused (the hint or the last line says what to run), 4 no such

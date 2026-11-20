@@ -5,8 +5,10 @@
 #     daemon; the child's own flags (after `--`) are never read as ours;
 #   * against a stub daemon: the CLI asks GET /cli/vault/run-helper, then
 #     execs that helper with --vault-run and only names on its argv, with the
-#     session's socket and passport in its env, and the helper's exit code
-#     is the command's.
+#     session's socket in its env and the passport on fd 3 (--token-fd 3),
+#     never in its env, and the helper's exit code is the command's;
+#   * a daemon whose helper doesn't take --token-fd (no "tokenFd" in its
+#     answer) is refused before anything runs.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -65,26 +67,34 @@ ok "an unknown flag, and --value, are exit 2; the value is not echoed"
 HELPER="$WORK/fake-helper"
 cat >"$HELPER" <<'EOF'
 #!/usr/bin/env bash
+fd=""
+prev=""
+for a in "$@"; do [ "$prev" = "--token-fd" ] && fd="$a"; prev="$a"; done
 {
     for a in "$@"; do printf 'ARG=%s\n' "$a"; done
     printf 'SOCK=%s\n' "${K2_HOOK_SOCK:-}"
     printf 'TOKEN=%s\n' "${K2_HOOK_TOKEN:-}"
     printf 'TOKEN5=%s\n' "${K5_HOOK_TOKEN:-}"
+    printf 'TOKEN2SO=%s\n' "${K2SO_HOOK_TOKEN:-}"
+    if [ "$fd" = 3 ]; then printf 'FD3=%s\n' "$(cat <&3)"; fi
 } >"$FAKE_HELPER_LOG"
 exit "${FAKE_HELPER_EXIT:-0}"
 EOF
 chmod +x "$HELPER"
 HITS="$WORK/hits.log"
 
-python3 - "$WORK/port" "$HELPER" "$HITS" <<'PY' &
+python3 - "$WORK/port" "$HELPER" "$HITS" "$WORK/old-daemon" <<'PY' &
 import http.server, json, os, socketserver, sys
-port_file, helper, hits = sys.argv[1:4]
+port_file, helper, hits, old_flag = sys.argv[1:5]
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def _go(self):
         with open(hits, "a") as f: f.write("%s %s\n" % (self.command, self.path.split("?")[0]))
         if self.path.split("?")[0] == "/cli/vault/run-helper":
-            data = json.dumps({"helper": helper}).encode()
+            answer = {"helper": helper}
+            if not os.path.exists(old_flag):
+                answer["tokenFd"] = True
+            data = json.dumps(answer).encode()
             self.send_response(200)
         else:
             data = b'{"error":{"code":"not_found","hint":"no route"}}'
@@ -115,18 +125,30 @@ python3 - "$WORK/helper.log" <<'PY' || fail "helper argv: $(cat "$WORK/helper.lo
 import sys
 lines = open(sys.argv[1]).read().splitlines()
 args = [l[4:] for l in lines if l.startswith("ARG=")]
-assert args == ["--vault-run", "--secret", "A", "--secret", "B=OTHER", "--env-file", ".env.k2", "--scope", "server", "--no-mask", "--", "grep", "--help", "--secret", "x"], args
-assert "TOKEN=passport-abc" in lines, lines
-assert "TOKEN5=passport-abc" in lines, lines
+assert args == ["--vault-run", "--token-fd", "3", "--secret", "A", "--secret", "B=OTHER", "--env-file", ".env.k2", "--scope", "server", "--no-mask", "--", "grep", "--help", "--secret", "x"], args
+assert "FD3=passport-abc" in lines, lines
+assert "TOKEN=" in lines and "TOKEN5=" in lines and "TOKEN2SO=" in lines, lines
+assert not any("passport-abc" in l for l in lines if not l.startswith("FD3=")), lines
 PY
-ok "the CLI execs the daemon's helper; flags before -- only, the child's words stay the child's"
+ok "the CLI execs the daemon's helper; the passport on fd 3, never in its env; the child's words stay the child's"
 
-# A session whose passport is under K5_HOOK_TOKEN: the helper gets that one
-# under both names.
-out="$(env HOME="$WORK" K2_PORT="$PORT" K5_HOOK_TOKEN=passport-k5 K2_HOOK_TOKEN=passport-abc FAKE_HELPER_LOG="$WORK/helper.log" "$K2_CLI" vault run --secret A -- true)" || fail "vault run (K5_): $out"
-grep -Fxq "TOKEN=passport-k5" "$WORK/helper.log" && grep -Fxq "TOKEN5=passport-k5" "$WORK/helper.log" \
-    || fail "the helper should get the K5_ passport under K2_ and K5_: $(grep TOKEN "$WORK/helper.log")"
-ok "the helper gets the session's passport under K2_HOOK_TOKEN and K5_HOOK_TOKEN"
+# A session whose passport is under K5_HOOK_TOKEN: the helper gets that one,
+# on fd 3, and no name of it in its env.
+out="$(env HOME="$WORK" K2_PORT="$PORT" K5_HOOK_TOKEN=passport-k5 K2_HOOK_TOKEN=passport-abc K2SO_HOOK_TOKEN=passport-so FAKE_HELPER_LOG="$WORK/helper.log" "$K2_CLI" vault run --secret A -- true)" || fail "vault run (K5_): $out"
+grep -Fxq "FD3=passport-k5" "$WORK/helper.log" && grep -Fxq "TOKEN=" "$WORK/helper.log" && grep -Fxq "TOKEN5=" "$WORK/helper.log" && grep -Fxq "TOKEN2SO=" "$WORK/helper.log" \
+    || fail "the helper should get the K5_ passport on fd 3 and none in env: $(cat "$WORK/helper.log")"
+ok "the helper gets the session's passport on fd 3; K2_, K5_ and K2SO_HOOK_TOKEN are not in its env"
+
+# A daemon whose helper takes the passport only in its env: refused, nothing run.
+touch "$WORK/old-daemon"
+rm -f "$WORK/helper.log"
+set +e
+err="$(k2s vault run --secret A -- true 2>&1)"; rc=$?
+set -e
+rm -f "$WORK/old-daemon"
+[ "$rc" = 1 ] && <<<"$err" grep -Fq "run_helper_too_old" || fail "an old helper: exit $rc ($err)"
+[ ! -e "$WORK/helper.log" ] || fail "an old helper ran: $(cat "$WORK/helper.log")"
+ok "a daemon whose helper wants the passport in its env is refused; nothing runs"
 
 out="$(k2s vault run API_KEY -- ls)" || fail "vault run NAME: $out"
 grep -Fxq "ARG=API_KEY" "$WORK/helper.log" || fail "NAME: $(cat "$WORK/helper.log")"

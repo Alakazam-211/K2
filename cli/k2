@@ -1493,14 +1493,14 @@ case "${1:-}" in
         ;;
 esac
 
-# The virtual-desktop refusal (LD-10): says why and exits 3. The guard below
+# The no-owner refusal (LD-10; also a command under k2 vault run, whose
+# helper sets K2_NO_OWNER_FALLBACK=1): says why and exits 3. The guard below
 # calls it, and so do the commands that read the owner token file
 # themselves (heartbeat wake, the Connect account commands) when
 # K2_NO_OWNER_FALLBACK is set and they have no session passport.
 _k2_refuse_owner_fallback() {
-    echo "Error: k2 won't act as this server's owner here." >&2
-    echo "This program runs on a K2 virtual desktop (K2_NO_OWNER_FALLBACK=1) and has no session passport, so k2 doesn't read the owner token (~/.k2/daemon.token)." >&2
-    echo "Use k2 from a K2 terminal tab, or from your own device signed in to this server." >&2
+    echo "Error: k2 won't act as this server's owner here: no session passport (K2_NO_OWNER_FALLBACK=1, a K2 virtual desktop or k2 vault run)." >&2
+    echo "Run k2 from a K2 terminal tab or your signed-in device, not under vault run, or give the command the secret it needs." >&2
     exit 3
 }
 
@@ -40183,6 +40183,11 @@ through pipes, so it doesn't see a terminal. --no-mask lets the command use
 your terminal (TTY), for interactive tools. Output is then not masked, and
 the run is logged as no-mask.
 
+The command gets its secrets, not your identity: no session passport or
+other K2 token is in its environment, and a k2 it runs refuses (exit 3)
+rather than act as you or as this server's owner. Run such k2 commands
+outside vault run.
+
 Exit code: the command's own (128 + the signal if a signal killed it).
 K2's own refusals come before the command starts, on stderr as "code: hint":
 2 usage, 3 refused (the hint or the last line says what to run), 4 no such
@@ -42385,13 +42390,27 @@ _vault_run() {
         exit 2
     fi
     _vault_call GET run-helper ''
-    local helper
+    local helper token_fd
     helper="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("helper") or "")')"
+    token_fd="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("tokenFd") is True else "")')"
     if [ -z "$helper" ] || [ ! -x "$helper" ]; then
         echo "run_helper_missing: the K2 daemon named no usable helper; restart the K2 daemon and try again" >&2
         exit 1
     fi
-    K2_HOOK_SOCK="$(_hook_sock)" K2_HOOK_TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}" K5_HOOK_TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}" exec "$helper" --vault-run "${helper_args[@]}" -- "$@"
+    if [ -z "$token_fd" ]; then
+        echo "run_helper_too_old: this K2 daemon's run helper takes the passport in its environment, where the command would see it; update the K2 daemon, then run it again" >&2
+        exit 1
+    fi
+    # The passport reaches the helper on fd 3, through a pipe, never in its
+    # environment. The helper clears every K2 credential variable from the
+    # command's environment and sets K2_NO_OWNER_FALLBACK=1: the command
+    # gets its secrets, not the agent's identity.
+    local _vr_tok="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}"
+    exec 3< <(printf '%s' "$_vr_tok")
+    _vr_tok=""
+    export K2_HOOK_SOCK="$(_hook_sock)"
+    unset K2_HOOK_TOKEN K5_HOOK_TOKEN K2SO_HOOK_TOKEN
+    exec "$helper" --vault-run --token-fd 3 "${helper_args[@]}" -- "$@"
 }
 
 _vault_unknown_verb() {

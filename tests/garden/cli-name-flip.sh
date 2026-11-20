@@ -68,9 +68,12 @@ has text 'a.sh:3: [printed text] echo "Usage: k2 msg'
 has text 'a.sh:4:'
 has kept 'a.sh:5: [a [k2 ...] prefix or stamp]'
 has unsure 'a.sh:6: [k2 followed by a word that is not a command]'
-has unsure 'a.sh:7: [a string that is exactly k2 (a value)]'
-has unsure 'a.sh:8: [k2 as a word in shell code]'
-has unsure 'a.sh:9: [k2 as a word in shell code]'
+# A string that is exactly k2, and k2 as a word in shell code, are kept:
+# the brand gate holds each such line to a value row with its class.
+has kept 'a.sh:7: [a string that is exactly k2 (a value)]'
+has kept 'a.sh:8: [k2 as a word in shell code]'
+has kept 'a.sh:9: [k2 as a word in shell code]'
+for n in 7 8 9; do hasnt unsure "a.sh:$n:"; done
 # A string inside $( ) inside a string is still read right, and so is the
 # rest of the line after it.
 has text 'a.sh:10:'
@@ -86,7 +89,7 @@ has kept 'a.sh:18: [a name in interpreter code (k2 = ...)]'
 has text 'a.sh:19: [string in interpreter code]'
 [ "$(show unsure | grep -c '^cli/src/a.sh:19:')" = 1 ] || die "line 19: the identifier k2 should be unsure: $(show unsure)"; ok
 has unsure 'a.sh:19: [interpreter code, not in a string]'
-has unsure 'a.sh:20: [a string that is exactly k2 (a value)]'
+has kept 'a.sh:20: [a string that is exactly k2 (a value)]'
 has kept 'a.sh:22: [a name in interpreter code (k2 = ...)]'
 has text 'a.sh:22: [string in interpreter code]'
 # A shell variable, a flag or an assignment named node is not the Node
@@ -110,7 +113,7 @@ has unsure 'schema/talk.entries:1: [k2 followed by a word that is not a command]
 
 out="$(python3 "$FLIP" --root "$S")"
 case "$out" in *"will change: text 14, comment 4"*) ok ;; *) die "the dry run counts: $out" ;; esac
-case "$out" in *"will not:    kept 4, unsure 9"*) ok ;; *) die "the dry run counts: $out" ;; esac
+case "$out" in *"will not:    kept 8, unsure 5"*) ok ;; *) die "the dry run counts: $out" ;; esac
 
 # The dry run and --show change nothing.
 before="$(cat "$S/cli/src/a.sh" "$S/cli/src/schema/talk.entries" | cksum)"
@@ -144,6 +147,20 @@ line() { sed -n "${1}p" "$S/cli/src/a.sh"; }
 bash -n "$S/cli/src/a.sh" || die "the rewritten part does not parse"; ok
 # A second run finds no text left to change.
 python3 "$FLIP" --root "$S" | grep -q "will change: text 0, comment 0" || die "a second run still finds text: $(python3 "$FLIP" --root "$S")"; ok
+
+# ── cli/text: printed pages, read where the folder exists ───────────────
+mkdir -p "$S/cli/text/help"
+printf 'Send one: k2 msg <addr> "text"\nThe mode is "k2" or off.\nk2.dev and ~/.k2 are not the word.\n' > "$S/cli/text/help/talk.txt"
+has text 'help/talk.txt:1: [printed text]'
+has kept 'help/talk.txt:2: [a string that is exactly k2 (a value)]'
+for c in text comment kept unsure; do hasnt "$c" 'help/talk.txt:3:'; done
+out="$(python3 "$FLIP" --root "$S")"
+# (a.sh is already rewritten above: the page's line is the only text left.)
+case "$out" in *"in 3 files of cli/src and cli/text"*"will change: text 1, comment 0"*) ok ;; *) die "the dry run with cli/text: $out" ;; esac
+python3 "$FLIP" --apply --root "$S" | grep -q "rewrote 1 uses of k2 to k5 in 1 files" || die "--apply on cli/text: $(python3 "$FLIP" --root "$S")"; ok
+[ "$(sed -n 1p "$S/cli/text/help/talk.txt")" = 'Send one: k5 msg <addr> "text"' ] || die "cli/text line 1: $(sed -n 1p "$S/cli/text/help/talk.txt")"; ok
+[ "$(sed -n 2p "$S/cli/text/help/talk.txt")" = 'The mode is "k2" or off.' ] || die "cli/text line 2: $(sed -n 2p "$S/cli/text/help/talk.txt")"; ok
+rm -r "$S/cli/text"
 
 # ── Rust: a made-up crate ───────────────────────────────────────────────
 mkdir -p "$S/crates/a/src"

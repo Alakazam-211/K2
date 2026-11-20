@@ -8,8 +8,10 @@
 #
 # Kinds: cli (the command name typed out: a verb, a flag or a placeholder
 # after it), value (a string that is exactly "k2" or "k5": a Rust literal,
-# or '...', "..." or `...` on a renderer code line), glued (a brand name
-# built into a token: a header, a key, a path, a prefix).
+# or '...', "..." or `...` on a renderer code line; in the bash CLI's parts,
+# cli/src and cli/text, also the name as a word in shell code, as
+# scripts/garden/cli-name-flip.py finds them), glued (a brand name built
+# into a token: a header, a key, a path, a prefix).
 # Reasons: `keeper:` stays on purpose (who reads it); `debt:` should move to
 # the brand module. A glued row is always `keeper:`.
 # A value row says the class of its lines:
@@ -608,11 +610,14 @@
 7 value crates/k2-daemon/src/docs/host.rs keeper: stored; the docs audit's actor
 7 value src-tauri/src/commands/settings.rs debt: command (6 lines); B9; keeps: outside; the package's lib folder
 6 value src/renderer/lib/zen/garden-access-api.ts keeper: wire; the Garden access actor and signer kind from the daemon
+5 value cli/src/agent.sh keeper: stored; the agent mode (--mode, settings.rs:26) and an old pack id in a context stack (context_layers.rs:1780), as the daemon reads them
 5 value crates/k2-core/src/overlay/doc.rs keeper: stored+wire; the Thread sender, login and via; a collected line's origin
 5 value src/renderer/components/Help/HelpExplorer.tsx keeper: stored; the CLI catalog's tool key
 5 value src/renderer/components/Help/cli-explorer.ts debt: command (2 lines); B9; keeps: stored; the CLI catalog's tool key
 5 value src/renderer/components/Thread/systemNotice.fixtures.ts keeper: wire; the Thread system author's login, from and via
 5 value src/renderer/components/Wiki/wiki-api.ts keeper: wire+inert; the wiki index's scope (daemon); the page's own view mode
+4 value cli/src/mail.sh keeper: wire+outside; the mail certificate's owner and ipStrategySetBy in the daemon's JSON (mail/defaults.rs:1665); Stalwart's app password label, the daemon's default_label (mail/app_password.rs:125)
+4 value cli/src/zen-guide-data.sh keeper: wire; madeBy.kind in the widget sign and claim replies (zen_routes.rs:924)
 4 value crates/k2-core/src/cli_folder_trust/scan.rs keeper: wire; a trust finding's tool, in the card's and the CLI's JSON
 4 value crates/k2-core/src/suite/testkit.rs keeper: wire; an App manifest's requires.k2 and the suite variant
 4 value crates/k2-core/src/zen/version_carry.rs keeper: stored; the auth audit's actor and maker
@@ -621,6 +626,8 @@
 4 value crates/k2-signer/src/registry.rs keeper: outside; k2sign's project id for this repo's releases
 4 value crates/k2-signer/src/session.rs keeper: outside; k2sign's project id for this repo's releases
 4 value src/renderer/components/Wiki/wiki-graph-data.ts keeper: inert; the wiki page's own view mode
+3 value cli/src/app-doctor.sh keeper: wire; createdWith.k2 in the App routes' JSON (deploy/build.rs:28), and an App manifest's requires.k2 in the help
+3 value cli/src/prelude.sh debt: command (3 lines); B4
 3 value crates/k2-core/src/jscheck/inventory.rs keeper: wire; the k2 global that App scripts use
 3 value crates/k2-core/src/jscheck/lint.rs keeper: wire; the k2 global that App scripts use
 3 value crates/k2-core/src/sim/manager.rs keeper: stored; sim_audit.actor
@@ -634,6 +641,8 @@
 3 value crates/k2-daemon/src/zen_access_routes.rs keeper: wire; madeBy and the actor kind, in the Garden access JSON
 3 value crates/k2-root-proto/src/k2_db.rs keeper: outside; Postgres, the schema's name in a pg_restore list
 3 value src/renderer/components/Desktop/desktop-keymap.ts keeper: inert; the key router's own route name
+2 value cli/src/browser.sh keeper: wire; the Thread item's sender when no workspace handle is found (OverlayDoc.from)
+2 value cli/src/garden-data.sh keeper: wire; madeBy.kind in the daemon's widget data JSON (garden_data/call.rs:396)
 2 value crates/k2-core/src/firewall.rs keeper: stored; the firewall config's managed_by; the app reads it
 2 value crates/k2-core/src/mail_forward.rs keeper: stored; mail_forward_events.actor
 2 value crates/k2-core/src/runtime_dir.rs keeper: outside; systemd's RuntimeDirectory=k2 (packaging's unit); B9 reads it again
@@ -655,6 +664,18 @@
 2 value src/renderer/components/Settings/sections/ZenWidgetData.tsx keeper: wire; madeBy, from the Garden data JSON
 2 value src/renderer/components/Settings/sections/sew-api.ts keeper: wire; the Sew identity the daemon reads
 2 value src/renderer/lib/zen/zen-rail-views.ts keeper: inert; a built-in view's source label that nothing compares
+1 value cli/src/app-catalog.sh keeper: wire; the suite catalog's variant (--variant, suite/mod.rs:45)
+1 value cli/src/compute-run.sh keeper: outside; cargo-nextest's profile, named by the [profile.k2] config the job writes one line above
+1 value cli/src/doc.sh keeper: wire; notReached[].k2 in the purge reply (docs/annotations.rs)
+1 value cli/src/explain.sh keeper: wire; the refusal row's who (refusals/mod.rs:54)
+1 value cli/src/firewall.sh keeper: wire; the firewall status's upstream.managedBy (firewall/routes.rs:497)
+1 value cli/src/hostchat-voice.sh keeper: wire; the Sew enable request's identity (--identity, sew/routes.rs:463)
+1 value cli/src/schema-head.sh debt: command (1 line); B8
+1 value cli/src/study-app-api.sh keeper: wire; the refusal registry's who, written here by contract-gen from k2-core (refusals/mod.rs:54)
+1 value cli/src/study-db-mail.sh keeper: wire; an App manifest's requires.k2 (suite/testkit.rs:28)
+1 value cli/src/study-tauri.sh keeper: wire; the App auth door's ping reply (apps/auth_door.rs:938)
+1 value cli/src/thread.sh keeper: wire; the Thread item's sender when no workspace handle is found (OverlayDoc.from)
+1 value cli/src/wiki.sh keeper: stored; the agent mode (--mode, settings.rs:26)
 1 value crates/k2-client/src/account_session.rs debt: command (1 line); B9
 1 value crates/k2-client/src/cli_install.rs debt: command (1 line); B3
 1 value crates/k2-core/src/cli_folder_trust.rs keeper: outside; Cursor's marker file holds trustMethod; our revoke matches it

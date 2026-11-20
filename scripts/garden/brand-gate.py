@@ -44,8 +44,13 @@ the word scripts/garden/cli-name-flip.py matches, either digit):
   value  a string that is exactly "k2" or "k5". Rust: a string literal.
          Renderer: '...', "..." or `...` on a code line, not after a `//`
          (a command built from parts, ['k2', 'msg'].join(' '), reads as a
-         command to nobody, so `cli` cannot see it). Each line has one
-         class. Kept in every brand: stored (on this machine's disk or
+         command to nobody, so `cli` cannot see it). Bash, the CLI's
+         parts (cli/src, and cli/text where it exists): a line where the
+         flip finds a string that is exactly the name, or the name as a
+         word in shell code (a mode in a case pattern, the called-as
+         rule), by the flip's own reader; the flip calls both `kept` and
+         never rewrites them, and this row is what holds them. Each line
+         has one class. Kept in every brand: stored (on this machine's disk or
          database, read back by our own code), wire (another program of
          ours reads it: another server, the app, an App, the CLI's JSON),
          outside (a program that is not ours holds it), inert (no reader
@@ -377,10 +382,30 @@ def counted_lines(path, area, known):
     return out
 
 
+# The bash CLI's `value` lines: where the flip finds a string that is
+# exactly the name, or the name as a word in shell code. The flip keeps both
+# and never rewrites them; this gate holds each line to its file's row.
+BASH_VALUE_WHY = (flip.VALUE_WHY, flip.SHELL_WHY)
+
+
+def bash_values(root, known, found):
+    """Add the `value` lines of the CLI's parts (cli/src, and cli/text where
+    it exists) to `found`, by the flip's own reader. A line counts once."""
+    for path in flip.parts(root):
+        hits = sorted({n for n, _, _, _, why in flip.classify_file(path, known, NAME) if why in BASH_VALUE_WHY})
+        if not hits:
+            continue
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().split("\n")
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        found[("value", rel)] = [(n, lines[n - 1].strip()) for n in hits]
+
+
 def scan(root):
     """{(kind, relative path): [(line number, text)]}."""
     known = flip.verbs(root)
     found = {}
+    bash_values(root, known, found)
     for area in AREAS:
         for top in area["dirs"]:
             for dirpath, dirnames, filenames in os.walk(os.path.join(root, top)):

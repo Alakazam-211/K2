@@ -306,26 +306,63 @@ rows "1 glued crates/b/src/lib.rs debt: should move"
 crun 1 "a glued row is always 'keeper: <who reads this name>'"
 rows
 
+# Gate 2, value, in the bash CLI's parts (cli/src, and cli/text where it
+# exists): a line where the flip finds a string that is exactly the name, or
+# the name as a word in shell code. The flip calls both kept; the row holds
+# them. A line with two uses is one line; text, stamps and look-alikes are
+# not counted.
+cat > "$C/cli/src/v.sh" <<'SH'
+cmd_v() {
+    MODE="k2"; OTHER="k5"
+    case "$m" in off|k2|k5) ;; esac
+    echo "run k2 msg <addr>"
+    echo "[k2 sidecar] up, k2.dev, ~/.k2, k2so"
+}
+SH
+crun 1 "cli/src/v.sh:2 spells out value and has no value row: use CLI_NAME, or add a keeper: row"
+crun 1 "cli/src/v.sh:3 spells out value and has no value row"
+clacks "cli/src/v.sh:4"
+clacks "cli/src/v.sh:5"
+rows "2 value cli/src/v.sh keeper: stored; the mode"
+crun 0 "0 cli, 2 value, 0 glued lines in 1 rows"
+crun 0 'value cli/src/v.sh:2: MODE="k2"; OTHER="k5"' --list value
+crun 0 'value cli/src/v.sh:3: case "$m" in off|k2|k5) ;; esac' --list value
+printf 'cmd_w() { M2="k2"; }\n' >> "$C/cli/src/v.sh"
+crun 1 "cli/src/v.sh has 3 value lines, its row allows 2: use CLI_NAME, or add a keeper: row"
+rows "3 value cli/src/v.sh debt: command (1 line); B4; keeps: stored; the mode"
+crun 0 "1 cli/src/v.sh B4" --list value --debt
+crun 0 "0 glued lines in 1 rows type the command name; 1 value lines are the command)."
+# A cli/text page is read where the folder exists.
+mkdir -p "$C/cli/text/help"
+printf 'The mode is "k2" or off; run k2 msg <addr>.\n' > "$C/cli/text/help/page.txt"
+crun 1 "cli/text/help/page.txt:1 spells out value and has no value row"
+rm -r "$C/cli/text" "$C/cli/src/v.sh"
+rows
+
 # Gate 3: the unsure uses of the CLI's parts, one ceiling per reason.
 cat > "$C/cli/src/a.sh" <<'SH'
 cmd_a() {
-    MODE="k2"
-    OTHER="k2"
-    bin="$(command -v k2 || true)"
+    echo "--identity is k2 or standalone"
+    echo "--variant is k2 or standalone"
+    cat <<EOF
+$(k2 msg a)
+EOF
 }
 SH
-crun 1 "2 unsure uses of the command name in the CLI's parts (a string that is exactly k2 (a value)), the ceiling is 0"
-printf '# unsure ceilings\n\n2 a string that is exactly k2 (a value)\n1 k2 as a word in shell code\n' > "$C/u.txt"
-crun 0 "unsure in the CLI's parts: 2 a string that is exactly k2 (a value), 1 k2 as a word in shell code)"
+crun 1 "2 unsure uses of the command name in the CLI's parts (k2 followed by a word that is not a command), the ceiling is 0"
+printf '# unsure ceilings\n\n2 k2 followed by a word that is not a command\n1 $(k2 ...): runs the command\n' > "$C/u.txt"
+crun 0 "unsure in the CLI's parts: 2 k2 followed by a word that is not a command, 1 \$(k2 ...): runs the command)"
 cat > "$C/cli/src/a.sh" <<'SH'
 cmd_a() {
-    MODE="k2"
-    OTHER="k2"
-    bin="$(command -v k2 || true)"
-    THIRD="k2"
+    echo "--identity is k2 or standalone"
+    echo "--variant is k2 or standalone"
+    echo "--mode is k2 or off"
+    cat <<EOF
+$(k2 msg a)
+EOF
 }
 SH
-crun 1 "3 unsure uses of the command name in the CLI's parts (a string that is exactly k2 (a value)), the ceiling is 2"
+crun 1 "3 unsure uses of the command name in the CLI's parts (k2 followed by a word that is not a command), the ceiling is 2"
 # --tighten never raises a ceiling, and leaves the file as it was.
 cp "$C/u.txt" "$C/u.before"
 crun 1 "its ceiling is 2; --tighten never raises one" --tighten
@@ -333,16 +370,18 @@ cmp -s "$C/u.txt" "$C/u.before" || { echo "FAIL: --tighten changed the ceilings 
 pass=$((pass + 1))
 cat > "$C/cli/src/a.sh" <<'SH'
 cmd_a() {
-    MODE="k2"
-    bin="$(command -v k2 || true)"
+    echo "--identity is k2 or standalone"
+    cat <<EOF
+$(k2 msg a)
+EOF
 }
 SH
 crun 0 "brand-gate: 1 unsure ceiling(s) are above today's count"
 crun 0 "brand-gate: u.txt tightened: 2 unsure uses for 2 reasons." --tighten
-want="$(printf '# unsure ceilings\n\n1 a string that is exactly k2 (a value)\n1 k2 as a word in shell code')"
+want="$(printf '# unsure ceilings\n\n1 $(k2 ...): runs the command\n1 k2 followed by a word that is not a command')"
 [ "$(cat "$C/u.txt")" = "$want" ] || { echo "FAIL: tightened ceilings: $(cat "$C/u.txt")" >&2; exit 1; }
 pass=$((pass + 1))
-printf '# unsure ceilings\n\n1 a string that is exactly k2 (a value)\nx k2 as a word in shell code\n' > "$C/u.txt"
+printf '# unsure ceilings\n\n1 $(k2 ...): runs the command\nx k2 followed by a word that is not a command\n' > "$C/u.txt"
 crun 1 "want '<count> <reason>'"
 rm "$C/cli/src/a.sh"
 printf '# unsure ceilings\n' > "$C/u.txt"

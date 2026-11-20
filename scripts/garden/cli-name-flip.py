@@ -12,22 +12,28 @@ rewrite it to `k5`.
                            the default area is cli
 
 The dry run is the normal mode. It changes nothing. It reads the CLI's
-parts (cli/src/*.sh and cli/src/schema/*.entries), or with --area rust
+parts (cli/src/*.sh and cli/src/schema/*.entries, and the printed pages
+cli/text/**/*.txt where that folder exists), or with --area rust
 every .rs file under crates/ and src-tauri/src/, and sorts every use of
 the bare word `k2` into a class:
 
   text      inside words a person or agent reads: a heredoc that is printed,
             or a quoted string (a Usage line, a hint, an error). Will change.
   comment   in a shell comment. Will change.
-  kept      a name that is not the CLI's: `[k2 ...]` log and stamp prefixes.
-            Never changes.
-  unsure    everything else: a string that is exactly "k2" (a value, not a
-            sentence), `k2` as a command word in shell code, `$(k2 ...)` where
-            the shell would run it (not in a quoted heredoc, which prints it), a
-            heredoc that feeds an interpreter (python, node, sql) when the
-            word is not inside a string there. Never changed by this tool:
-            someone reads each one and either rewrites the line so it is
-            plainly text, or leaves it.
+  kept      never changed by this tool: a name that is not the CLI's
+            (`[k2 ...]` log and stamp prefixes, a variable set with `k2 = `
+            in embedded code), and the two forms the brand gate owns line by
+            line, each with its class in scripts/cli-name-allowlist.txt
+            (kind `value`): a string that is exactly "k2" (a value, not a
+            sentence), and `k2` as a word in shell code (a mode in a case
+            pattern, the called-as rule).
+  unsure    everything else: `$(k2 ...)` where the shell would run it (not
+            in a quoted heredoc, which prints it), a use in embedded code
+            (python, node, sql) that is not in a string, a comment or a
+            name set with `=`, and `k2` before a word that is not one of the
+            CLI's commands. Never changed by this tool: someone reads each
+            one and either rewrites the line so it is plainly text, or
+            leaves it.
 
 Names that only contain k2 are not matched at all: k2.dev, k2so, k2skn_,
 K2_PORT, ~/.k2, cli/k2, dev.k2.daemon, k2-daemon, .k2/. Those are other
@@ -57,6 +63,10 @@ HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 INTERPRETER = re.compile(r"(?<![$\w{.-])(\bpython3?\b|\$_k2_py\b|\$\{?PY\b|\bnode\b|\bsqlite3\b|\bpsql\b|\bosascript\b|\bawk\b|\bjq\b|\bsed\b|\bruby\b|\bperl\b|\bssh\b|\bbash\b|\bsh\b|\beval\b)(?![\w=-])")
 CLASSES = ("text", "comment", "kept", "unsure")
 NAME_WHY = "a name in interpreter code (k2 = ...)"
+# The two forms the brand gate counts as `value` lines (brand-gate.py reads
+# these names, so they are the one spelling of each reason).
+VALUE_WHY = "a string that is exactly k2 (a value)"
+SHELL_WHY = "k2 as a word in shell code"
 # After `k2 `, these mark a use as the command even when the word is not a
 # verb: a flag, a placeholder, an ellipsis.
 COMMAND_TAIL = re.compile(r" (--?[a-z]|<|\[|…|\.\.\.)")
@@ -65,13 +75,15 @@ EXTRA_VERBS = {"help", "version", "study", "update", "setup", "explain", "capabi
 
 
 def parts(root):
-    src = os.path.join(root, "cli", "src")
+    """The CLI's parts: cli/src/*.sh and its schema entries, then the
+    printed pages under cli/text (where the folder exists)."""
     out = []
-    for dirpath, dirnames, filenames in os.walk(src):
-        dirnames.sort()
-        for name in sorted(filenames):
-            if name.endswith(".sh") or name.endswith(".entries"):
-                out.append(os.path.join(dirpath, name))
+    for top, ends in (("src", (".sh", ".entries")), ("text", (".txt",))):
+        for dirpath, dirnames, filenames in os.walk(os.path.join(root, "cli", top)):
+            dirnames.sort()
+            for name in sorted(filenames):
+                if name.endswith(ends):
+                    out.append(os.path.join(dirpath, name))
     return out
 
 
@@ -258,11 +270,11 @@ def classify(line, m, where, known):
     if where == "comment":
         return "comment", "comment"
     if where == "bare":
-        return "unsure", "k2 as a word in shell code"
+        return "kept", SHELL_WHY
     if before.rstrip().endswith("$(") and where != "heredoc-quoted":
         return "unsure", "$(k2 ...): runs the command"
     if whole_string_is_name(line, m):
-        return "unsure", "a string that is exactly k2 (a value)"
+        return "kept", VALUE_WHY
     if where.endswith("-code"):
         place = code_place(line, m.start(), outer=None if where == "heredoc-code" else ("'" if where[0] == "s" else '"'))
         if place == "comment":
@@ -276,15 +288,18 @@ def classify(line, m, where, known):
     return "text", "printed text" if not where.endswith("-code") else "string in interpreter code"
 
 
-def classify_file(path, known):
-    """Yield (line number, start, end, class, why) for each bare `k2`."""
+def classify_file(path, known, word=WORD):
+    """Yield (line number, start, end, class, why) for each bare `k2`.
+    `word` is the name to find; the brand gate passes its own, which also
+    finds k5."""
     with open(path, encoding="utf-8") as f:
         lines = f.read().split("\n")
-    if path.endswith(".entries"):
+    if path.endswith((".entries", ".txt")):
         # Schema entries are JSON inside one printed, quoted heredoc (it
-        # opens in schema-head.sh): all text, and nothing in it runs.
+        # opens in schema-head.sh), and a cli/text page is printed as it
+        # is: all text, and nothing in it runs.
         for n, line in enumerate(lines, 1):
-            for m in WORD.finditer(line):
+            for m in word.finditer(line):
                 yield n, m.start(), m.end(), *classify(line, m, "heredoc-quoted", known)
         return
     stack, heredoc = [], None
@@ -295,7 +310,7 @@ def classify_file(path, known):
             if (line.lstrip("\t") if strip else line) == term:
                 heredoc = None
                 continue
-            for m in WORD.finditer(line):
+            for m in word.finditer(line):
                 # A quoted heredoc (<<'EOF') expands nothing, so $(k2 ...)
                 # in it is an example for the reader, not a command run.
                 where = "heredoc-code" if is_code else ("heredoc-quoted" if is_quoted else "heredoc")
@@ -304,7 +319,7 @@ def classify_file(path, known):
                 rows.append((n, m.start(), m.end(), *classify(line, m, where, known)))
             continue
         ctx, stack, heredoc = contexts(line, stack)
-        for m in WORD.finditer(line):
+        for m in word.finditer(line):
             where = ctx[m.start()] if m.start() < len(ctx) else "bare"
             rows.append((n, m.start(), m.end(), *classify(line, m, where, known)))
     # A part must end with every quote closed. If it does not, this reader
@@ -485,7 +500,7 @@ def main(argv):
             sys.exit("cli-name-flip: --apply on this tree itself is refused; set CLI_NAME_FLIP_THIS_TREE=yes for the real flip")
     root = root or here
     rows = collect(root) if area == "cli" else collect_rust(root)
-    place = "cli/src" if area == "cli" else "crates and src-tauri/src"
+    place = ("cli/src and cli/text" if os.path.isdir(os.path.join(root, "cli", "text")) else "cli/src") if area == "cli" else "crates and src-tauri/src"
     if mode == "show":
         for rel, n, s, e, cls, why in rows:
             if cls == show:

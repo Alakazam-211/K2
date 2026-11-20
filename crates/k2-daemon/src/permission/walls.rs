@@ -595,6 +595,16 @@ pub(crate) const ROWS: &[Row] = &[
         params: SIDECAR_RETIRE_PARAMS,
         ..row(ask("sidecar.retire", Floor::Admin), code(403, "retire_needs_person"), "/cli/sidecar/retire", POST)
     },
+    // D1 (0.46.17): an agent's approve of its own review branch, and its
+    // commit --merge, are a person's; the refusal names the branch.
+    Row {
+        params: &[("agent", &[ParamFrom::Response("/error/agent"), ParamFrom::Query("agent")]), ("branch", &[ParamFrom::Response("/error/branch"), ParamFrom::Query("branch")])],
+        ..row(ask("git.review-approve", Floor::Admin), code(403, "merge_needs_person"), "/cli/review/approve", POST)
+    },
+    Row {
+        params: &[("message", &[ParamFrom::Query("message")])],
+        ..row(ask("git.commit-merge", Floor::Admin), code(403, "merge_needs_person"), "/cli/commit-merge", POST)
+    },
     // `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-X4): the same
     // switch as sidecar new. Its main-only refusal (`main_only`) can't be
     // requested.

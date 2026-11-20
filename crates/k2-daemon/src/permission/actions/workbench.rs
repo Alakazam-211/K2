@@ -14,6 +14,9 @@
 //! merge, conflict abort) run again at the click.
 //!
 //! One-time, click proof, no undo.
+//!
+//! D1 (0.46.17): `git.review-approve agent= branch=` and `git.commit-merge
+//! [message=]`, an agent's own merge that a person makes for it.
 
 use k2_core::permission::catalog::{
     ActionSpec, Area, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamFrom, ParamKind, ParamSpec, Proof, SettingsRef,
@@ -27,6 +30,10 @@ use crate::sidecar_worktree::{LAND_NEEDS_PERSON, LAND_ROUTE, RETIRE_NEEDS_PERSON
 use k2_core::cli_name;
 
 pub(crate) const LAND_ACTION: &str = "git.land";
+pub(crate) const REVIEW_APPROVE_ACTION: &str = "git.review-approve";
+pub(crate) const COMMIT_MERGE_ACTION: &str = "git.commit-merge";
+const REVIEW_APPROVE_ROUTE: &str = "/cli/review/approve";
+const COMMIT_MERGE_ROUTE: &str = "/cli/commit-merge";
 pub(crate) const RETIRE_ACTION: &str = "sidecar.retire";
 
 const SETTINGS: SettingsRef = SettingsRef { page: "workspaces/{ws}", path: concat!(cli_name!(), " sidecar review {ws}/{sidecar}") };
@@ -96,6 +103,131 @@ pub(crate) static RETIRE: ActionSpec = ActionSpec {
     form: None,
     machine_hints: &[],
 };
+
+/// D1 (0.46.17): an agent approves and merges its OWN review branch (or
+/// one whose author can't be told) only through a person: the route answers
+/// its passport `403 merge_needs_person` naming the agent and the branch
+/// (`passport_routes::merge_needs_person`), which this card teaches. The
+/// person's click runs the same route as the owner.
+pub(crate) static REVIEW_APPROVE: ActionSpec = ActionSpec {
+    id: REVIEW_APPROVE_ACTION,
+    area: Area::Misc,
+    params: &[
+        ParamSpec { key: "agent", kind: ParamKind::Text, required: true, list: false, choices: &[] },
+        ParamSpec { key: "branch", kind: ParamKind::Branch, required: true, list: false, choices: &[] },
+    ],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Approve {branch} in {ws}",
+        what_changes: "Merge {branch} into {ws}'s current branch and close {agent}'s review",
+        consequences: "The branch is merged (fast-forward when it can be), its worktree and branch are removed and the review's done items are cleared. It stops with nothing merged on a conflict.",
+        scope: "{ws}, {branch}",
+        duration: "once",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "workspaces/{ws}", path: "the review queue of {ws}" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: crate::passport_routes::MERGE_NEEDS_PERSON },
+        route_prefix: REVIEW_APPROVE_ROUTE,
+        method: WallMethod::Post,
+        params: &[("agent", ParamFrom::Response("/error/agent")), ("branch", ParamFrom::Response("/error/branch"))],
+    }],
+    coverage: WallCoverage::Code,
+    form: None,
+    machine_hints: &[],
+};
+
+/// D1 (0.46.17): an agent commits; `k2 commit --merge` from its passport
+/// is a person's step (who wrote what it merges can't be told).
+pub(crate) static COMMIT_MERGE: ActionSpec = ActionSpec {
+    id: COMMIT_MERGE_ACTION,
+    area: Area::Misc,
+    params: &[ParamSpec { key: "message", kind: ParamKind::Text, required: false, list: false, choices: &[] }],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Commit and merge in {ws}",
+        what_changes: "Commit {ws}'s changes and merge them, with the AI commit",
+        consequences: "The desktop app opens the AI commit terminal in {ws}, which commits the changes and merges them.",
+        scope: "{ws}",
+        duration: "once",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "workspaces/{ws}", path: "the Changes tab of {ws}" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: crate::passport_routes::MERGE_NEEDS_PERSON },
+        route_prefix: COMMIT_MERGE_ROUTE,
+        method: WallMethod::Post,
+        params: &[("message", ParamFrom::Query("message"))],
+    }],
+    coverage: WallCoverage::Code,
+    form: None,
+    machine_hints: &[],
+};
+
+/// The asking workspace's folder, by its id.
+fn workspace_path(ctx: &Ctx) -> Result<String, String> {
+    crate::workspace_msg::resolve_workspace(&ctx.workspace_id).ok_or_else(|| "the workspace is gone".to_string())
+}
+
+fn check_review_approve(ctx: &Ctx) -> Check {
+    let (Some(_), Some(branch)) = (text_param(ctx, "agent"), text_param(ctx, "branch")) else {
+        return Check::Moved("name the agent and its branch: agent=<name> branch=<branch>".into());
+    };
+    let path = match workspace_path(ctx) {
+        Ok(p) => p,
+        Err(e) => return Check::Moved(e),
+    };
+    if k2_core::git::list_branches(&path).local.iter().any(|b| b == branch) {
+        Check::Needed
+    } else {
+        Check::Moved(format!("{branch} is not a branch of this workspace (merged or removed already?)"))
+    }
+}
+
+fn check_commit_merge(ctx: &Ctx) -> Check {
+    match workspace_path(ctx) {
+        Ok(_) => Check::Needed,
+        Err(e) => Check::Moved(e),
+    }
+}
+
+/// The route as the person who clicked: the owner's dispatch, no passport.
+fn run_route(route: &str, ctx: &Ctx, who: &Answerer, keys: &[&str]) -> Result<crate::cli_response::CliResponse, Applied> {
+    route_floor(route, who)?;
+    let path = workspace_path(ctx).map_err(|e| Applied::Refused { code: "bad_params".into(), message: e })?;
+    let mut params = std::collections::HashMap::new();
+    params.insert("project".to_string(), path);
+    for k in keys {
+        if let Some(v) = text_param(ctx, k) {
+            params.insert((*k).to_string(), v.to_string());
+        }
+    }
+    Ok(crate::cli::dispatch(route, &params))
+}
+
+fn apply_review_approve(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    match run_route(REVIEW_APPROVE_ROUTE, ctx, who, &["agent", "branch"]) {
+        Ok(r) => applied(&r, |v| v["message"].as_str().unwrap_or("Approved and merged.").to_string()),
+        Err(refused) => refused,
+    }
+}
+
+fn apply_commit_merge(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    match run_route(COMMIT_MERGE_ROUTE, ctx, who, &["message"]) {
+        Ok(r) => applied(&r, |_| "The AI commit terminal opens to commit and merge.".to_string()),
+        Err(refused) => refused,
+    }
+}
 
 /// The asking workspace's worktree sidecar the request names, read through
 /// the route as the owner (a read; the person's floor is applied at apply).
@@ -214,6 +346,8 @@ pub(crate) fn actions() -> Vec<Registered> {
     vec![
         Registered { spec: &LAND, check: check_land, apply: apply_land },
         Registered { spec: &RETIRE, check: check_retire, apply: apply_retire },
+        Registered { spec: &REVIEW_APPROVE, check: check_review_approve, apply: apply_review_approve },
+        Registered { spec: &COMMIT_MERGE, check: check_commit_merge, apply: apply_commit_merge },
     ]
 }
 

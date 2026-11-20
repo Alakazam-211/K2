@@ -382,3 +382,103 @@ async fn a_passport_through_the_tunnel_is_refused() {
         assert!(r.raw.contains(REFUSED), "through the tunnel, {path}: the route's own refusal: {}", r.raw);
     }
 }
+
+/// Cards on for the agent's workspace, off again when the test ends.
+struct CardsOn;
+impl CardsOn {
+    fn for_workspace(ws_id: &str) -> Self {
+        k2_core::permission::gate::set_server_switch(true);
+        k2_core::workspace::settings::set_agents_can_request_permissions(ws_id, true).expect("the agent's switch");
+        CardsOn
+    }
+}
+impl Drop for CardsOn {
+    fn drop(&mut self) {
+        k2_core::permission::gate::set_server_switch(false);
+    }
+}
+
+/// A git repo in `ws` with one commit on its current branch and, for each
+/// name, a branch one commit ahead. Returns (base commit, branch tips).
+fn repo_with_branches(ws: &Path, branches: &[&str]) -> (git2::Oid, Vec<git2::Oid>) {
+    let repo = git2::Repository::init(ws).expect("git init");
+    let sig = git2::Signature::now("Acme Dev", "dev@example.com").expect("signature");
+    let blob = repo.blob(b"base\n").expect("blob");
+    let mut tb = repo.treebuilder(None).expect("tree");
+    tb.insert("base.txt", blob, 0o100644).expect("insert");
+    let tree = repo.find_tree(tb.write().expect("write tree")).expect("tree");
+    let base = repo.commit(Some("HEAD"), &sig, &sig, "base", &tree, &[]).expect("base commit");
+    let parent = repo.find_commit(base).expect("base");
+    let tips = branches
+        .iter()
+        .map(|b| {
+            let blob = repo.blob(b.as_bytes()).expect("blob");
+            let mut tb = repo.treebuilder(Some(&tree)).expect("tree");
+            tb.insert(format!("{}.txt", b.replace('/', "-")), blob, 0o100644).expect("insert");
+            let t = repo.find_tree(tb.write().expect("write tree")).expect("tree");
+            repo.commit(Some(&format!("refs/heads/{b}")), &sig, &sig, b, &t, &[&parent]).expect("branch commit")
+        })
+        .collect();
+    (base, tips)
+}
+
+fn head_of(ws: &Path) -> git2::Oid {
+    git2::Repository::open(ws).expect("open").head().expect("head").target().expect("head target")
+}
+
+fn branch_tip(ws: &Path, b: &str) -> Option<git2::Oid> {
+    let repo = git2::Repository::open(ws).expect("open");
+    let found = repo.find_branch(b, git2::BranchType::Local).ok();
+    found.and_then(|br| br.get().target())
+}
+
+/// A merge of the agent's own work is a person's: approving its own branch,
+/// or one whose author can't be told, and `commit --merge` answer
+/// `merge_needs_person` with the permission card, and nothing is merged.
+/// Another agent's branch in its workspace is admitted and merged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn its_own_merge_is_a_card_for_a_person() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let _cards = CardsOn::for_workspace(&e.own_id);
+    let own = enc(&e.own);
+    let ws = Path::new(&e.own);
+    // `backend` is a skill of its workspace (another agent there).
+    let skill = k2_core::workspace::agent_identity::skills_dir(&e.own).join("backend");
+    std::fs::create_dir_all(&skill).expect("skill dir");
+    std::fs::write(skill.join("SKILL.md"), "---\nname: backend\nrole: dev\n---\nBackend.\n").expect("skill");
+    let (base, tips) = repo_with_branches(ws, &["agent/d1-agent/own-task", "feature/no-author", "agent/backend/task"]);
+
+    for (label, agent, branch) in [
+        ("its own branch", "d1-agent", "agent/d1-agent/own-task"),
+        ("an author that can't be told", "backend", "feature/no-author"),
+        ("agent= and the branch disagree", "d1-agent", "agent/backend/task"),
+    ] {
+        let path = format!("/cli/review/approve?project={own}&agent={}&branch={}", enc(agent), enc(branch));
+        let r = http(e.port, "POST", &path, Some(e.passport.as_str()));
+        assert_eq!(r.status, 403, "{label}: {}", r.raw);
+        let v = r.json(label);
+        assert_eq!(v["error"]["code"], "merge_needs_person", "{label}: {v}");
+        assert_eq!(v["error"]["branch"], branch, "{label}: {v}");
+        assert_eq!(v["permission"]["action"], "git.review-approve", "{label}: the card: {v}");
+        let command = v["permission"]["command"].as_str().unwrap_or_else(|| panic!("{label}: no command: {v}"));
+        assert!(command.starts_with("k2 permission request git.review-approve "), "{label}: {command}");
+        assert!(command.contains(&format!("branch={branch}")), "{label}: {command}");
+        assert_eq!(head_of(ws), base, "{label}: nothing merged");
+    }
+    assert_eq!(branch_tip(ws, "agent/d1-agent/own-task"), Some(tips[0]), "its own branch is still there");
+
+    let r = http(e.port, "POST", &format!("/cli/commit-merge?project={own}&message=wip"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 403, "commit --merge: {}", r.raw);
+    let v = r.json("commit-merge");
+    assert_eq!((v["error"]["code"].as_str(), v["permission"]["action"].as_str()), (Some("merge_needs_person"), Some("git.commit-merge")), "{v}");
+    let r = http(e.port, "POST", &format!("/cli/commit?project={own}&message=wip"), Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "a plain commit stays the agent's: {}", r.raw);
+
+    // Another agent of its workspace: admitted, merged.
+    let path = format!("/cli/review/approve?project={own}&agent=backend&branch={}", enc("agent/backend/task"));
+    let r = http(e.port, "POST", &path, Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "another agent's branch: {}", r.raw);
+    assert_eq!(head_of(ws), tips[2], "merged (fast-forward)");
+    assert_eq!(branch_tip(ws, "agent/backend/task"), None, "the merged branch is removed");
+}

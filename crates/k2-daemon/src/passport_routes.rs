@@ -97,7 +97,8 @@ pub(crate) const ROUTES: &[Route] = &[
     named("/cli/agents/delete", Scope::Own, &["name"]),
     route("/cli/agents/list", Scope::Own),
     named("/cli/agents/profile", Scope::Own, &["agent"]),
-    // `k2 commit [--merge]` (manager skill).
+    // `k2 commit [--merge]` (manager skill); a merge is a person's
+    // ([`merge_needs_person`]).
     route("/cli/commit", Scope::Own),
     route("/cli/commit-merge", Scope::Own),
     // `k2 agent context list|show|catalog`.
@@ -117,7 +118,8 @@ pub(crate) const ROUTES: &[Route] = &[
     route("/cli/glossary/list", Scope::Shared),
     route("/cli/onboarding/scan", Scope::Own),
     route("/cli/presets/list", Scope::Shared),
-    // `k2 review approve|reject|feedback` and `k2 reviews` (manager skill).
+    // `k2 review approve|reject|feedback` and `k2 reviews` (manager skill);
+    // approving its own branch is a person's ([`merge_needs_person`]).
     named("/cli/review/approve", Scope::Own, &["agent"]),
     named("/cli/review/feedback", Scope::Own, &["agent"]),
     named("/cli/review/reject", Scope::Own, &["agent"]),
@@ -208,11 +210,70 @@ pub(crate) async fn serve_tcp(
     crate::caller_workspace::strip_request_stamps(&mut params);
     crate::caller_workspace::keep_client_project(&mut params);
     crate::caller_workspace::stamp_principal(&mut params, &principal);
+    if let Some(r) = merge_needs_person(path, &params, &principal) {
+        http::send_response(stream, r.status, r.content_type, &r.body).await;
+        return;
+    }
     let path = path.to_string();
     let r = crate::rt::blocking(|| {
         crate::caller_workspace::with_request_principal(Some(principal), || crate::cli::dispatch(&path, &params))
     });
     http::send_response(stream, r.status, r.content_type, &r.body).await;
+}
+
+/// The refusal code of a merge a person makes for the agent; the
+/// `git.review-approve` and `git.commit-merge` cards teach it.
+pub(crate) const MERGE_NEEDS_PERSON: &str = "merge_needs_person";
+
+/// A merge of the agent's own work is a person's (K2's ruling on D1):
+/// `k2 commit --merge` always (who wrote what it merges can't be told), and
+/// `k2 review approve` of a branch whose author is the passport itself, or
+/// can't be told ([`own_branch`]). Approving another agent of the same
+/// workspace stays the agent's. `Some(403 merge_needs_person)`, naming the
+/// branch, which the permission card asks a person to approve.
+fn merge_needs_person(path: &str, params: &HashMap<String, String>, principal: &HookPrincipal) -> Option<CliResponse> {
+    let error = match path {
+        "/cli/commit-merge" => serde_json::json!({
+            "code": MERGE_NEEDS_PERSON,
+            "hint": "an agent commits; merging its work is a person's step",
+        }),
+        "/cli/review/approve" if own_branch(params, principal) => serde_json::json!({
+            "code": MERGE_NEEDS_PERSON,
+            "hint": "an agent approves another agent's branch, never its own (or one whose author can't be told); a person approves this one",
+            "agent": params.get("agent").map(|s| s.trim()).unwrap_or(""),
+            "branch": params.get("branch").map(|s| s.trim()).unwrap_or(""),
+        }),
+        _ => return None,
+    };
+    Some(CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({ "error": error }).to_string(),
+    })
+}
+
+/// Whether `branch=` is the passport's own work, or its author can't be
+/// told. An agent's review branch is `agent/<author>/<task>`; it is another
+/// agent's only when that author is a skill of this workspace, isn't one of
+/// the passport's own names (its address, its workspace's handle), and
+/// matches `agent=` when the request names one.
+fn own_branch(params: &HashMap<String, String>, principal: &HookPrincipal) -> bool {
+    let branch = params.get("branch").map(|s| s.trim()).unwrap_or("");
+    let Some(author) = branch.strip_prefix("agent/").and_then(|rest| rest.split_once('/')).map(|(a, _)| a).filter(|a| !a.is_empty()) else {
+        return true;
+    };
+    if params.get("agent").map(|s| s.trim()).is_some_and(|a| !a.is_empty() && a != author) {
+        return true;
+    }
+    let mine = [principal.agent_address.as_str(), params.get("from").map(String::as_str).unwrap_or("")];
+    if mine.iter().any(|n| !n.trim().is_empty() && n.trim().eq_ignore_ascii_case(author)) {
+        return true;
+    }
+    let Some(project) = params.get("project").filter(|p| !p.is_empty()) else {
+        return true;
+    };
+    let skill = k2_core::workspace::agent::list(project.clone()).is_ok_and(|l| l.iter().any(|a| a.name == author));
+    !skill
 }
 
 /// The passport's workspace (`projects.id`) when `params` were stamped from

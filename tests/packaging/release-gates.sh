@@ -29,7 +29,7 @@ trap 'rm -rf "$tmp"' EXIT
 co="$tmp/co"
 mkdir -p "$co/scripts/lib"
 cp "$ROOT/scripts/release.sh" "$co/scripts/"
-for f in release-gates.sh rust-pin.sh compute-tier.sh linux-gate-spec.sh release-timer.sh; do
+for f in release-gates.sh rust-pin.sh compute-tier.sh linux-gate-spec.sh release-timer.sh release-repo.sh; do
     [ -f "$ROOT/scripts/lib/$f" ] && cp "$ROOT/scripts/lib/$f" "$co/scripts/lib/"
 done
 printf '[toolchain]\nchannel = "1.98.7"\n' > "$co/rust-toolchain.toml"

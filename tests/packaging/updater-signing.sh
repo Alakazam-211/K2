@@ -84,12 +84,17 @@ case "$1 $2" in
         fi
         # Passes only for bytes listed in $STUB_ATTESTED (sha256 per line) and
         # only for the exact certificate identity + the tag ref and commit.
-        f="$3"; shift 3; ident="" digest="" ref=""
+        # The identity names the repo as GitHub called it when the workflow
+        # ran: $STUB_ATTEST_REPO (default the repo's old name); -R must be it.
+        f="$3"; shift 3; ident="" digest="" ref="" repo=""
         while [ $# -gt 0 ]; do
-            case "$1" in --cert-identity) ident="$2"; shift 2 ;; --source-digest) digest="$2"; shift 2 ;; --source-ref) ref="$2"; shift 2 ;; *) shift ;; esac
+            case "$1" in --cert-identity) ident="$2"; shift 2 ;; --source-digest) digest="$2"; shift 2 ;; --source-ref) ref="$2"; shift 2 ;; -R) repo="$2"; shift 2 ;; *) shift ;; esac
         done
+        printf 'ATTEST -R %s\n' "$repo" >> "$STUB_GH_LOG"
         sha="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$f")"
-        [ "$ident" = "https://github.com/Alakazam-211/K2/.github/workflows/daemon-binaries.yml@$ref" ] || { echo "wrong certificate identity $ident" >&2; exit 1; }
+        attest_repo="${STUB_ATTEST_REPO:-Alakazam-211/K2}"
+        [ "$repo" = "$attest_repo" ] || { echo "no attestations found for subject in $repo" >&2; exit 1; }
+        [ "$ident" = "https://github.com/$attest_repo/.github/workflows/daemon-binaries.yml@$ref" ] || { echo "wrong certificate identity $ident" >&2; exit 1; }
         [ "$digest" = "${STUB_ATTESTED_COMMIT:-$STUB_TAG_COMMIT}" ] || { echo "no attestation for commit $digest" >&2; exit 1; }
         case "$ref" in refs/tags/v*) ;; *) echo "wrong ref $ref" >&2; exit 1 ;; esac
         grep -qx "$sha" "${STUB_ATTESTED:-/dev/null}" || { echo "Error: no attestations found for subject" >&2; exit 1; }
@@ -633,6 +638,18 @@ gh_refuses "an asset uploaded by a person" "uploaded by 'mallory', not github-ac
 gh_refuses "an asset uploaded before the release existed" "before the release" STUB_ASSET_TIME=2026-10-24T10:00:00Z
 awk '{print $1}' "$good"/k2-daemon-linux-*.sha256 > "$tmp/attested-daemons-only"
 gh_refuses "k5-cli without its own attestation (the daemons have theirs)" "k5-cli-linux-x86_64: no valid build-provenance attestation" STUB_ATTESTED="$tmp/attested-daemons-only"
+gh_refuses "an attestation from a repo with a third name" "no valid build-provenance attestation" STUB_ATTEST_REPO=AlakazamLabs/K2
+gh_refuses "an attestation from another owner's K5" "no valid build-provenance attestation" STUB_ATTEST_REPO=someone/K5
+# The repo's new name (after the move, GitHub attests under it): signs, and
+# the old name was asked first.
+fresh_rel
+if STUB_ATTEST_REPO=AlakazamLabs/K5 K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" >"$tmp/gh.out" 2>&1 \
+    && grep -q "provenance ok (attested by daemon-binaries.yml" "$tmp/gh.out" \
+    && grep -q '^ATTEST -R AlakazamLabs/K5$' "$STUB_GH_LOG" && grep -q '^ATTEST -R Alakazam-211/K2$' "$STUB_GH_LOG"; then
+    pass "an attestation under the repo's new name (AlakazamLabs/K5) signs; the old name is tried first"
+else
+    fail "new repo name" "$(tail -8 "$tmp/gh.out"; grep ATTEST "$STUB_GH_LOG" | sort | uniq -c)"
+fi
 fresh_rel
 if STUB_SWAP_AFTER_MANIFEST=k2-daemon-linux-x86_64 K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" >"$tmp/gh.out" 2>&1; then
     fail "post-publish swap" "not caught"
@@ -708,7 +725,7 @@ if STUB_GH_OLD=1 bash "$ROOT/scripts/sign-daemon.sh" --preflight "$V" >"$tmp/p.o
 else
     grep -qE "has no --source-(ref|digest)" "$tmp/p.out" && pass "preflight refuses a gh whose attestation verify lacks --source-ref/--source-digest" || fail "old gh" "$(cat "$tmp/p.out")"
 fi
-grep -qF -- '--cert-identity "https://github.com/$REPO/.github/workflows/daemon-binaries.yml@refs/tags/$TAG"' "$ROOT/scripts/sign-daemon.sh" \
+grep -qF -- '--cert-identity "https://github.com/$name/.github/workflows/daemon-binaries.yml@refs/tags/$TAG"' "$ROOT/scripts/sign-daemon.sh" \
     && ! grep -q -- '--signer-workflow' "$ROOT/scripts/sign-daemon.sh" \
     && pass "sign-daemon.sh pins the exact certificate identity (no prefix-matching --signer-workflow)" || fail "cert identity" ""
 STUB_SECRETS="K2_GMAIL_CLIENT_ID" bash "$ROOT/scripts/sign-daemon.sh" --preflight "$V" >/dev/null 2>&1 && pass "preflight passes with no TAURI_SIGNING_* secret on GitHub" || fail "preflight clean" ""
@@ -729,7 +746,7 @@ printf '{"version":"%s","platforms":{"darwin-aarch64":{"signature":"x","url":"u"
 export STUB_CURL_FILE="$tmp/latest.json"
 wroot="$tmp/wroot"; mkdir -p "$wroot/scripts/lib"
 cp "$ROOT/scripts/windows-patch-latest-json.sh" "$wroot/scripts/"
-cp "$LIB" "$ROOT/scripts/lib/k2-signer.sh" "$wroot/scripts/lib/"
+cp "$LIB" "$ROOT/scripts/lib/k2-signer.sh" "$ROOT/scripts/lib/release-repo.sh" "$wroot/scripts/lib/"
 if bash "$wroot/scripts/windows-patch-latest-json.sh" "$V" "$tmp/K2_${V}_x64-setup.exe" >"$tmp/w.out" 2>&1; then
     python3 -I - "$STUB_REL/v$V/latest.json" > "$tmp/w.sig" <<'PY'
 import base64, json, sys

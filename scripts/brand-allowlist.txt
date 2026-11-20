@@ -506,6 +506,7 @@
 2 K2 crates/k2-vault/src/vault/agent_store.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-vault/src/vault/oauth_store.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/kessel-attest/src/main.rs keeper: the repo's URL in kessel-attest's help (the repo row says why)
+1 K2 crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (the repo row says why)
 2 K2 src-tauri/src/commands/secrets.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 src-tauri/src/webview_watchdog.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 src/renderer/App.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
@@ -949,4 +950,6 @@
 1 K5 crates/k2-daemon/src/sew/recording.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
 1 K5 crates/k2-daemon/src/voice/bff.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
 1 K5 crates/k2-daemon/src/voice/occupancy.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
+1 K5 crates/kessel-attest/src/verify.rs keeper: the repo's new name, AlakazamLabs/K5, in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)
 2 repo crates/kessel-attest/src/main.rs keeper: kessel-attest does not link k2-client; its help names the format docs in this repo
+1 repo crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)

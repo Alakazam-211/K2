@@ -27,18 +27,20 @@
 #   ARCH_PKG_PENDING   1 (arch-later only) when the Arch package was still
 #                      missing and not waited for
 #
-# Environment: K2_RELEASE_REPO (default Alakazam-211/K2),
+# Environment: K2_RELEASE_REPO (default: lib/release-repo.sh),
 #              K2_SUMS_POLL_SECS (default 30; tests set 0).
 
 _K2_SUMS_STEP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/wait-progress.sh
 source "$_K2_SUMS_STEP_DIR/wait-progress.sh"
+# shellcheck source=scripts/lib/release-repo.sh
+source "$_K2_SUMS_STEP_DIR/release-repo.sh"
 
 # "<status> <conclusion> <run id> <url>" of the tag's arch-package.yml run.
 # Empty when there is no run yet or gh failed: neither means the build failed.
 _k2_arch_run() {
     local tag="$1"
-    gh run list --repo "${K2_RELEASE_REPO:-Alakazam-211/K2}" --workflow arch-package.yml \
+    gh run list --repo "${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}" --workflow arch-package.yml \
         --branch "$tag" --event push --limit 1 \
         --json status,conclusion,databaseId,url \
         --jq '.[0] | select(.) | [.status, (if (.conclusion // "") == "" then "none" else .conclusion end), (.databaseId | tostring), .url] | join(" ")' \
@@ -48,7 +50,7 @@ _k2_arch_run() {
 # Say it once, plainly: what failed, what it means, what to run.
 _k2_arch_failed_report() {
     local version="$1" conclusion="$2" run_id="$3" url="$4" pkg="$5"
-    local repo="${K2_RELEASE_REPO:-Alakazam-211/K2}"
+    local repo="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
     {
         echo ""
         echo "  ✗ The Arch package build for v${version} FAILED (${conclusion}): ${url}"

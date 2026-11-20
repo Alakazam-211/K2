@@ -28,13 +28,15 @@
 #   scripts/windows-sign-after-release.sh <version> [setup.exe]
 #     setup.exe defaults to dist-windows/K2_<version>_x64-setup.exe and must
 #     match dist-windows/SHA256SUMS-windows-x86_64.txt.
-# Env: K2_RELEASE_REPO (default Alakazam-211/K2),
+# Env: K2_RELEASE_REPO (default: scripts/lib/release-repo.sh),
 #      K2_SIGN_APPROVE_TIMEOUT_MIN / K2_SIGN_APPROVE_APP (sign-approve.sh).
 set -euo pipefail
 
 VERSION="${1:-}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-RELEASE_REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
+# shellcheck source=lib/release-repo.sh
+source "$PROJECT_DIR/scripts/lib/release-repo.sh"
+RELEASE_REPO="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
 TAG="v${VERSION}"
 WIN_ASSET="K2_${VERSION}_x64-setup.exe"
 SETUP="${2:-$PROJECT_DIR/dist-windows/$WIN_ASSET}"

@@ -28,7 +28,7 @@
 #   K2_ROOT_HELPER_KEY      secret key path (default ~/.k2-root-helper/k2-root-helper.key)
 #   K2_ROOT_HELPER_PUB      public key path (default ~/.k2-root-helper/k2-root-helper.pub)
 #   K2_ROOT_HELPER_KEYCHAIN keychain service for the password (default k2-root-helper-signing)
-#   K2_RELEASE_REPO         default Alakazam-211/K2
+#   K2_RELEASE_REPO         default: scripts/lib/release-repo.sh
 #   K2_SIGN_WAIT_MIN        minutes to wait for CI assets (default 60)
 #   K2_SIGN_POLL_SECS       seconds between polls for them (default 30)
 #   K2_RELEASE_KEYS_RS      keys.rs to read RELEASE_KEYS from (default the repo's; tests only)
@@ -38,7 +38,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KEY="${K2_ROOT_HELPER_KEY:-$HOME/.k2-root-helper/k2-root-helper.key}"
 PUB="${K2_ROOT_HELPER_PUB:-$HOME/.k2-root-helper/k2-root-helper.pub}"
 SERVICE="${K2_ROOT_HELPER_KEYCHAIN:-k2-root-helper-signing}"
-REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
+# shellcheck source=lib/release-repo.sh
+source "$ROOT/scripts/lib/release-repo.sh"
+REPO="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
 WAIT_MIN="${K2_SIGN_WAIT_MIN:-60}"
 # Seconds between polls for the CI assets (tests set 0).
 POLL_SECS="${K2_SIGN_POLL_SECS:-30}"

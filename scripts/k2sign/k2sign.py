@@ -87,7 +87,7 @@ PINNED_LIBEXEC = ("k2sign", "k2sign-admin", "k2sign.py", "minisign", "gh", "gh-r
 PINNED_ETC = ("policy", "pubkeys")
 POLICY_KEYS = {
     "approval", "session_hours", "challenge_minutes", "max_stdin_mb",
-    "assets.u1", "assets.u2", "windows_assets", "repo",
+    "assets.u1", "assets.u2", "windows_assets", "repo", "repo_names",
     "github_api", "daemon_workflow", "release_commit_files", "apple_team",
     "compute_assets", "compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env",
     "compute_secret_env_optional", "compute_dual_names", "compute_receipt_max_hours",
@@ -126,6 +126,8 @@ SCREEN_FORBIDDEN = (
 APP_TARBALL = "K2.app.tar.gz"
 MARKER_RE = re.compile(rb"K2_DAEMON_BUILD v=([0-9.]+) os=([a-z]+) arch=([a-z0-9_]+);")
 TOKEN_RE = re.compile(r"^(github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255})$")
+# owner/name, as GitHub API paths and attestation identities carry it.
+REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
 
 
 class Refused(Exception):
@@ -542,10 +544,19 @@ def load_policy(ctx):
         pol[k] = v
     for k, v in POLICY_DEFAULTS.items():
         pol.setdefault(k, v)
+    # A policy from before repo_names: the repo's one name (the strictest).
+    if "repo" in pol:
+        pol.setdefault("repo_names", pol["repo"])
     missing = POLICY_KEYS - set(pol)
     if missing:
         raise Refused("policy: missing %s" % ", ".join(sorted(missing)))
     parse_require(pol["require"])
+    names = pol["repo_names"].split()
+    for n in [pol["repo"]] + names:
+        if not REPO_RE.match(n):
+            raise Refused("policy: %r is not a GitHub owner/name" % n)
+    if pol["repo"] not in names or len(set(names)) != len(names):
+        raise Refused("policy: repo_names must list repo once, and no name twice")
     if pol["require_attest"] not in ("none", "development", "production"):
         raise Refused("policy: require_attest must be none, development or production")
     if pol["approval"] not in ("on", "off"):
@@ -821,9 +832,14 @@ def gh_api(ctx, pol, path, missing=None):
             raise Refused(missing)
         raise Refused("GitHub API %s failed: %s" % (path, first_line(err or out)))
     try:
-        return json.loads(out)
+        j = json.loads(out)
     except ValueError:
         raise Refused("GitHub API %s did not return JSON" % path)
+    if isinstance(j, dict) and j.get("message") == "Moved Permanently":
+        raise Refused("GitHub API %s: the repo moved (GitHub says %s): set the policy's repo to the repo's "
+                      "new name (one of repo_names), re-run install.sh, and set-gh-token for the new repo"
+                      % (path, str(j.get("url") or "?")[:200]))
+    return j
 
 
 def gh_version(ctx):
@@ -940,43 +956,61 @@ def verb_gh_selfcheck(ctx, args):
     say("gh-selfcheck ok: the pinned gh, the signer's token and gh's JSON fields all work")
 
 
+def repo_names(pol):
+    """The repo's names, the policy's repo first: GitHub moved it
+    (Alakazam-211/K2 -> AlakazamLabs/K5, a transfer and rename), and a build
+    attestation names it as it was called when the workflow ran. Exactly
+    the policy's repo_names, never any other."""
+    return [pol["repo"]] + [n for n in pol["repo_names"].split() if n != pol["repo"]]
+
+
 def check_attestation(ctx, pol, asset, version, path, sha, t, d):
     """The build attestation for these bytes, from daemon-binaries.yml at the
-    tag, at commit T: fetched and verified by the pinned gh, then its
-    certificate fields and subject checked here as well."""
-    repo, tag = pol["repo"], "v" + version
-    ident = "https://github.com/%s/%s@refs/tags/%s" % (repo, pol["daemon_workflow"], tag)
+    tag, at commit T, under one of the repo's names: fetched and verified by
+    the pinned gh, then its certificate fields and subject checked here as
+    well."""
+    tag = "v" + version
+    names = repo_names(pol)
+    idents = {n: "https://github.com/%s/%s@refs/tags/%s" % (n, pol["daemon_workflow"], tag) for n in names}
     env = gh_env(ctx, d)
     gh = os.path.join(ctx.libexec, "gh")
-    base_argv = [gh, "attestation", "verify", path, "-R", repo, "--format", "json"]
-    rc, out, err = run_env(base_argv, env)
-    if rc != 0:
-        raise Refused("%s: no build attestation for %s (%s)" % (asset, sha, first_line(err or out)))
-    try:
-        results = json.loads(out)
-    except ValueError:
-        raise Refused("%s: gh's attestation output is not JSON" % asset)
-    mine, seen = [], []
-    for r in results if isinstance(results, list) else []:
-        vr = (r or {}).get("verificationResult") or {}
-        subj = ((vr.get("statement") or {}).get("subject")) or []
-        if not any(((s or {}).get("digest") or {}).get("sha256") == sha for s in subj):
+    argv = lambda n: [gh, "attestation", "verify", path, "-R", n, "--format", "json"]
+    mine, seen, errors, name = [], [], [], None
+    for n in names:
+        rc, out, err = run_env(argv(n), env)
+        if rc != 0:
+            errors.append(first_line(err or out))
             continue
-        cert = ((vr.get("signature") or {}).get("certificate")) or {}
-        seen.append(cert.get("subjectAlternativeName") or "?")
-        if cert.get("subjectAlternativeName") == ident:
-            mine.append(cert)
+        try:
+            results = json.loads(out)
+        except ValueError:
+            raise Refused("%s: gh's attestation output is not JSON" % asset)
+        for r in results if isinstance(results, list) else []:
+            vr = (r or {}).get("verificationResult") or {}
+            subj = ((vr.get("statement") or {}).get("subject")) or []
+            if not any(((s or {}).get("digest") or {}).get("sha256") == sha for s in subj):
+                continue
+            cert = ((vr.get("signature") or {}).get("certificate")) or {}
+            seen.append(cert.get("subjectAlternativeName") or "?")
+            if cert.get("subjectAlternativeName") == idents[n]:
+                mine.append(cert)
+        if mine:
+            name = n
+            break
+    if len(errors) == len(names):
+        raise Refused("%s: no build attestation for %s (%s)" % (asset, sha, errors[0]))
     if not seen:
         raise Refused("%s: no build attestation for %s" % (asset, sha))
     if not mine:
-        raise Refused("%s: attestation identity is %s, want %s" % (asset, seen[0], ident))
+        raise Refused("%s: attestation identity is %s, want %s" % (asset, seen[0], " or ".join(idents[n] for n in names)))
+    ident = idents[name]
     if not any(c.get("sourceRepositoryRef") == "refs/tags/" + tag and c.get("sourceRepositoryDigest") == t for c in mine):
         c = mine[0]
         raise Refused("%s: attestation source is %s@%s, want refs/tags/%s@%s"
                       % (asset, c.get("sourceRepositoryRef"), c.get("sourceRepositoryDigest"), tag, t))
     # Belt: gh's own policy check with the exact identity, ref and commit.
-    rc, out, err = run_env(base_argv + ["--cert-identity", ident, "--source-ref", "refs/tags/" + tag,
-                                        "--source-digest", t], env)
+    rc, out, err = run_env(argv(name) + ["--cert-identity", ident, "--source-ref", "refs/tags/" + tag,
+                                         "--source-digest", t], env)
     if rc != 0:
         raise Refused("%s: gh refuses the attestation with the exact identity (%s)" % (asset, first_line(err or out)))
 

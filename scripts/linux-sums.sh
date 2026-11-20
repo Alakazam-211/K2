@@ -32,11 +32,13 @@
 #       GitHub's own asset digest. Waits up to N minutes (default 0) for
 #       the workflows to finish.
 #
-# Environment: K2_RELEASE_REPO (default Alakazam-211/K2),
+# Environment: K2_RELEASE_REPO (default: lib/release-repo.sh),
 #              K2_SUMS_POLL_SECS (default 30; tests set 0).
 set -euo pipefail
 
-REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
+# shellcheck source=lib/release-repo.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/release-repo.sh"
+REPO="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
 SUMS_NAME="SHA256SUMS-linux-x86_64.txt"
 POLL="${K2_SUMS_POLL_SECS:-30}"
 # One "waiting for …" line, then dots, a status line every few minutes.

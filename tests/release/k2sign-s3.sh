@@ -12,6 +12,8 @@ V=0.46.20
 REPOP="/repos/Alakazam-211/K2"
 T="$(printf 'c%.0s' $(seq 40))"
 IDENT="https://github.com/Alakazam-211/K2/.github/workflows/daemon-binaries.yml@refs/tags/v$V"
+# The repo's new name (policy repo_names): GitHub attests under it after the move.
+IDENT_NEW="https://github.com/AlakazamLabs/K5/.github/workflows/daemon-binaries.yml@refs/tags/v$V"
 ASSETS=(K2.app.tar.gz k2-daemon-linux-aarch64 k2-daemon-linux-x86_64 k2-daemon-macos-aarch64 k5-cli-linux-aarch64 k5-cli-linux-x86_64)
 
 open_session() { # <version> <base> [--windows] assets…
@@ -101,14 +103,22 @@ attest "$tmp/lx" "https://github.com/Alakazam-211/K2/.github/workflows/daemon-bi
 refuses "S3-2 an attestation from main, not the tag" "$tmp/lx" u2 k2-daemon-linux-x86_64 "$V" "attestation identity is https://github.com/Alakazam-211/K2/.github/workflows/daemon-binaries.yml@refs/heads/main"
 attest "$tmp/lx" "$IDENT" "refs/tags/v$V" "$B2"
 refuses "an attestation at another commit" "$tmp/lx" u2 k2-daemon-linux-x86_64 "$V" "attestation source is refs/tags/v$V@$B2"
+attest "$tmp/lx" "https://github.com/AlakazamLabs/K2/.github/workflows/daemon-binaries.yml@refs/tags/v$V" "refs/tags/v$V" "$T"
+refuses "an attestation from a repo with a third name (AlakazamLabs/K2)" "$tmp/lx" u2 k2-daemon-linux-x86_64 "$V" \
+    "attestation identity is https://github.com/AlakazamLabs/K2/.github/workflows/daemon-binaries.yml@refs/tags/v$V, want $IDENT or $IDENT_NEW"
+attest "$tmp/lx" "https://github.com/Alakazam-211/K5/.github/workflows/daemon-binaries.yml@refs/tags/v$V" "refs/tags/v$V" "$T"
+refuses "an attestation from a repo with a third name (Alakazam-211/K5)" "$tmp/lx" u2 k2-daemon-linux-x86_64 "$V" "attestation identity is https://github.com/Alakazam-211/K5/"
 attest "$tmp/lx" "$IDENT" "refs/tags/v$V" "$T"
-attest "$tmp/la" "$IDENT" "refs/tags/v$V" "$T"
+attest "$tmp/la" "$IDENT_NEW" "refs/tags/v$V" "$T"
 : > "$FIX/gh.log"
 signs "a Linux daemon with all its evidence signs (u2)" "$tmp/lx" u2 k2-daemon-linux-x86_64 "$V"
 grep -qF -- "--cert-identity $IDENT --source-ref refs/tags/v$V --source-digest $T" "$FIX/gh.log" \
     && pass "gh ran the strict check: exact identity, tag ref and tag commit" || fail "strict gh call" "$(cat "$FIX/gh.log")"
 signs "…and u1 (the bridge)" "$tmp/lx" u1 k2-daemon-linux-x86_64 "$V"
-signs "aarch64 too" "$tmp/la" u2 k2-daemon-linux-aarch64 "$V"
+: > "$FIX/gh.log"
+signs "aarch64 too, attested under the repo's new name (AlakazamLabs/K5)" "$tmp/la" u2 k2-daemon-linux-aarch64 "$V"
+grep -qF -- "-R AlakazamLabs/K5 --format json --cert-identity $IDENT_NEW --source-ref refs/tags/v$V --source-digest $T" "$FIX/gh.log" \
+    && pass "gh's strict check ran under the new name, with the new name's exact identity" || fail "strict gh call, new name" "$(cat "$FIX/gh.log")"
 
 echo "== k5-cli: the daemon's key (U2 only), evidence and attestation, its own byte checks =="
 mkk5 "$tmp/kx" x86_64 "$V" "$V"; mkk5 "$tmp/ka" aarch64 "$V"
@@ -301,6 +311,31 @@ r = json.load(open(p)); del r[0]["verificationResult"]["signature"]["certificate
 json.dump(r, open(p, "w"))
 PY
 check "gh-selfcheck: a JSON shape without the fields the signer reads" 3 "lacks the fields the signer reads" "$K" gh-selfcheck
+
+echo "== the repo moved: GitHub answers the policy's repo with Moved Permanently =="
+route "/repos/Alakazam-211/K2" '{"message": "Moved Permanently", "url": "https://api.github.com/repositories/1", "documentation_url": "https://docs.github.com/"}'
+printf '%s\n' "$GH_TOKEN_VALUE" > "$tmp/tok"
+check_in "a moved repo is refused with what to change, not read as an answer" "$tmp/tok" 3 "the repo moved" "$ADM" set-gh-token --stdin
+route "/repos/Alakazam-211/K2" '{"full_name": "Alakazam-211/K2"}'
+
+echo "== policy: repo_names =="
+POL="$TREE/scripts/k2sign/policy"
+cp "$POL" "$tmp/policy.tree.bak"
+python3 -I - "$POL" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+assert "\nrepo_names = Alakazam-211/K2 AlakazamLabs/K5\n" in s
+open(p, "w").write(s.replace("\nrepo_names = Alakazam-211/K2 AlakazamLabs/K5\n", "\nrepo_names = AlakazamLabs/K5\n"))
+PY
+if install_signer; then
+    check "a policy whose repo_names leave out repo is refused" 3 "repo_names must list repo" "$K" preflight 0.46.6
+else
+    fail "re-install with a broken repo_names" "$(cat "$tmp/install.out")"
+fi
+cp "$tmp/policy.tree.bak" "$POL"
+install_signer || fail "re-install the tree's policy" "$(cat "$tmp/install.out")"
+check "the shipped policy loads again" 0 "preflight ok" "$K" preflight 0.46.6
 
 echo "== policy drift =="
 python3 -I - "$REPO/scripts/release.sh" "$REPO/scripts/k2sign/policy" <<'PY' && pass "policy release_commit_files == release.sh RELEASE_COMMIT_FILES" || fail "release_commit_files drift"

@@ -18,7 +18,7 @@
 # No target_url: logs stay in K2 (k2 compute logs <job>).
 #
 # K2_CI_DRY_RUN=1 prints the status instead of posting (shadow runs,
-# tests). Env: K2_CI_REPO_SLUG (default Alakazam-211/K2),
+# tests). Env: K2_CI_REPO_SLUG (default: scripts/lib/release-repo.sh),
 # K2_CI_API (default https://api.github.com).
 set -euo pipefail
 
@@ -30,7 +30,9 @@ case "$state" in pending|success|failure|error) ;; *) usage ;; esac
 desc="${desc:0:140}"
 
 body="$(python3 -c 'import json,sys; print(json.dumps({"state": sys.argv[1], "context": sys.argv[2], "description": sys.argv[3]}))' "$state" "$context" "$desc")"
-slug="${K2_CI_REPO_SLUG:-Alakazam-211/K2}"
+# shellcheck source=../lib/release-repo.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/release-repo.sh"
+slug="${K2_CI_REPO_SLUG:-$K2_RELEASE_REPO_DEFAULT}"
 
 if [ "${K2_CI_DRY_RUN:-0}" = "1" ]; then
     echo "status (dry run) $slug@${sha:0:12}: $body"

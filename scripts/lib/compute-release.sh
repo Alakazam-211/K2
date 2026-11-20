@@ -136,6 +136,8 @@ K2CR_PY="$K2CR_LIB_DIR/../ci/compute_release.py"
 source "$K2CR_LIB_DIR/rust-pin.sh"
 # shellcheck source=scripts/lib/compute-tier.sh
 source "$K2CR_LIB_DIR/compute-tier.sh"
+# shellcheck source=scripts/lib/release-repo.sh
+source "$K2CR_LIB_DIR/release-repo.sh"
 
 k2cr_k2() { "${K2_BIN:-k2}" "$@"; }
 
@@ -539,7 +541,7 @@ k2cr_stage() {
 # Shadow report: compute-built files vs this tag's GitHub assets.
 k2cr_compare_github() {
     local tag="$1" gh_dir="${K2CR_FILES%/}-github" n
-    local repo="${K2_RELEASE_REPO:-Alakazam-211/K2}"
+    local repo="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
     rm -rf "$gh_dir"
     mkdir -p "$gh_dir"
     # Exactly the names compute built (never a glob that could pick up

@@ -18,9 +18,11 @@ set -euo pipefail
 
 VERSION="${1:-}"
 SETUP="${2:-}"
-RELEASE_REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
 TAG="v${VERSION}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/release-repo.sh
+source "$PROJECT_DIR/scripts/lib/release-repo.sh"
+RELEASE_REPO="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
 
 if [ -z "$VERSION" ]; then
     echo "Usage: $0 <version> [setup.exe path]" >&2

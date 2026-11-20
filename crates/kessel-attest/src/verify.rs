@@ -509,7 +509,7 @@ fn check_statement(label: &str, env: &Envelope, roster: &NodeRoster, input: &Inp
     }
     if let Some(r) = &p.repo {
         let have = st.source_uri().unwrap_or("");
-        if norm_repo(have) != norm_repo(r) {
+        if !same_repo(have, r) {
             return Err(run.fail(label, "repo", format!("built from {}, not {r}", if have.is_empty() { "(no source)" } else { have })));
         }
         run.pass(label, "repo", format!("built from {have}"));
@@ -677,6 +677,21 @@ fn check_self_statement(label: &str, st: &Statement, e: &RosterEntry, key: &Node
     Ok(())
 }
 
+/// One repository under two names, as [`norm_repo`] forms: GitHub moved
+/// it (a transfer and rename, which GitHub redirects). A statement made
+/// before the move names the old name and one made after names the new, so
+/// a policy that names either accepts both. Exactly these pairs, never a
+/// pattern: K2's repo, Alakazam-211/K2, became AlakazamLabs/K5.
+const RENAMED_REPOS: &[[&str; 2]] = &[["github.com/Alakazam-211/K2", "github.com/AlakazamLabs/K5"]];
+
+/// `have` (a statement's source) is the repository `want` names: equal as
+/// [`norm_repo`] forms, or the two names of one repository in
+/// [`RENAMED_REPOS`].
+pub fn same_repo(have: &str, want: &str) -> bool {
+    let (h, w) = (norm_repo(have), norm_repo(want));
+    h == w || RENAMED_REPOS.iter().any(|pair| pair.contains(&h.as_str()) && pair.contains(&w.as_str()))
+}
+
 /// A repository reference reduced to `host/path` for comparison: no
 /// `git+`, scheme, user, trailing `.git` or `/`; the host lowercased.
 pub fn norm_repo(s: &str) -> String {
@@ -712,6 +727,35 @@ mod tests {
         assert_ne!(norm_repo("git.example.test/acme/app2"), want);
         assert_ne!(norm_repo("git.example.test/acme"), want);
         assert_eq!(norm_repo("k2-project:abc"), "k2-project:abc");
+    }
+
+    /// K2's repo under its old name and its new one is one repository,
+    /// either way round and in any form; a third name is not.
+    #[test]
+    fn a_renamed_repo_matches_under_both_names_and_no_other() {
+        let old = ["git+https://github.com/Alakazam-211/K2.git", "https://github.com/Alakazam-211/K2", "github.com/Alakazam-211/K2"];
+        let new = ["git+https://github.com/AlakazamLabs/K5.git", "https://GitHub.com/AlakazamLabs/K5/", "github.com/AlakazamLabs/K5"];
+        for a in old.iter().chain(new.iter()) {
+            for b in old.iter().chain(new.iter()) {
+                assert!(same_repo(a, b), "{a} vs {b}");
+            }
+        }
+        for third in [
+            "github.com/AlakazamLabs/K2",
+            "github.com/Alakazam-211/K5",
+            "github.com/Alakazam-211/K2SO",
+            "github.com/someone/K5",
+            "git.example.test/Alakazam-211/K2",
+            "github.com/alakazamlabs/k5",
+        ] {
+            for a in old.iter().chain(new.iter()) {
+                assert!(!same_repo(third, a), "{third} built, {a} wanted");
+                assert!(!same_repo(a, third), "{a} built, {third} wanted");
+            }
+        }
+        // Other repositories still compare by their one name.
+        assert!(same_repo("git+https://git.example.test/acme/app.git", "git.example.test/acme/app"));
+        assert!(!same_repo("git.example.test/acme/app", "git.example.test/acme/app2"));
     }
 
     #[test]

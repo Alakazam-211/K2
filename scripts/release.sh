@@ -13,8 +13,9 @@
 #     .k2/wiki/Release - Build Sign Notarize.md
 #
 # RELEASE_REPO selects the GitHub repo for `gh release create` + all
-# manifest/download URLs. Defaults to the new K2 home; override with
-# K2_RELEASE_REPO=Alakazam-211/K2SO for an old-repo (bridge) release.
+# manifest/download URLs. Defaults to K2_RELEASE_REPO_DEFAULT in
+# scripts/lib/release-repo.sh (the one line move day changes); override with
+# K2_RELEASE_REPO=<owner/name> for a release to another repo.
 #
 # Prerequisites:
 #   - The update keys U1 (the retired key, bridge signatures for installs
@@ -315,8 +316,10 @@ fi
 TAG="v${VERSION}"
 SIGNING_IDENTITY="Developer ID Application: LZTEK, LLC (36B8R93HXV)"
 KEYCHAIN_PROFILE="K2SO-notarize"   # machine-local notarytool profile name — NOT renamed
-RELEASE_REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/release-repo.sh
+source "$PROJECT_DIR/scripts/lib/release-repo.sh"
+RELEASE_REPO="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
 
 # Notarization auth (0.39.45): prefer DIRECT App Store Connect API-key
 # auth when the env provides it — the keychain profile lives in the

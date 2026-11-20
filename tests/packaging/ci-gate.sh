@@ -97,7 +97,7 @@ echo "post-status.sh:"
 # run-checks.sh needs the sha to be a commit in its own checkout.
 mkdir -p "$tmp/rc/scripts/ci" "$tmp/rc/scripts/lib"
 cp "$ROOT"/scripts/ci/*.sh "$tmp/rc/scripts/ci/"
-cp "$ROOT/scripts/lib/rust-pin.sh" "$ROOT/scripts/lib/compute-tier.sh" "$tmp/rc/scripts/lib/"
+cp "$ROOT/scripts/lib/rust-pin.sh" "$ROOT/scripts/lib/compute-tier.sh" "$ROOT/scripts/lib/release-repo.sh" "$tmp/rc/scripts/lib/"
 git -C "$tmp/rc" init -q
 # An old commit without the pin, then one pinned to a version unlike the
 # repo's own, so the tests see the pin read AT THE SHA, not from the tree.
@@ -139,10 +139,10 @@ srv_pid=$!
 for _ in $(seq 50); do [ -s "$tmp/port" ] && break; sleep 0.1; done
 API="http://127.0.0.1:$(cat "$tmp/port")"
 K2_CI_API="$API" CI_STATUSES_TOKEN="tok-secret" K2_CI_STATUSES_TOKEN="tok-hand" bash "$ROOT/scripts/ci/post-status.sh" "$SHA" failure k2-compute/rust-test "job x: exit 100" >/dev/null
-python3 - "$tmp/reqs" "$SHA" <<'PY' && pass "posts state/context/description with the bearer token" || fail "post" "$(cat "$tmp/reqs")"
+python3 - "$tmp/reqs" "$SHA" "$(. "$ROOT/scripts/lib/release-repo.sh"; echo "$K2_RELEASE_REPO_DEFAULT")" <<'PY' && pass "posts state/context/description with the bearer token" || fail "post" "$(cat "$tmp/reqs")"
 import json, sys
 r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
-assert r["path"] == "/repos/Alakazam-211/K2/statuses/" + sys.argv[2], r
+assert r["path"] == "/repos/%s/statuses/" % sys.argv[3] + sys.argv[2], r
 assert r["auth"] == "Bearer tok-secret", r
 assert r["body"] == {"state": "failure", "context": "k2-compute/rust-test", "description": "job x: exit 100"}, r
 assert "target_url" not in r["body"]
@@ -334,7 +334,7 @@ MAIN="$(git -C "$tmp/ci" rev-parse HEAD~1)"
 INTEG="$(git -C "$tmp/ci" rev-parse HEAD)"
 mkdir -p "$tmp/ci/scripts/ci" "$tmp/ci/scripts/lib"
 cp "$ROOT"/scripts/ci/*.sh "$tmp/ci/scripts/ci/"
-cp "$ROOT/scripts/lib/rust-pin.sh" "$ROOT/scripts/lib/compute-tier.sh" "$tmp/ci/scripts/lib/"
+cp "$ROOT/scripts/lib/rust-pin.sh" "$ROOT/scripts/lib/compute-tier.sh" "$ROOT/scripts/lib/release-repo.sh" "$tmp/ci/scripts/lib/"
 export STUB_DIR="$tmp/s-poll" STUB_CALLS="$tmp/c-poll" K2_CI_STATE="$tmp/state-poll"
 mkdir -p "$STUB_DIR"; : > "$STUB_CALLS"
 K2_CI_MAX_INFLIGHT=1 bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p1" 2>&1

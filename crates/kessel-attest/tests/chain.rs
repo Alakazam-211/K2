@@ -87,6 +87,32 @@ fn policy_mismatches_fail_by_name() {
     assert!(detail.contains("exclusive"), "{detail}");
 }
 
+/// K2's repo moved from Alakazam-211/K2 to AlakazamLabs/K5: a statement
+/// built under either name passes `--repo` with either name, and a third
+/// name fails the repo rule.
+#[test]
+fn a_renamed_repo_passes_under_both_names_and_no_other() {
+    for (built, n) in [("git+https://github.com/Alakazam-211/K2.git", "old"), ("git+https://github.com/AlakazamLabs/K5.git", "new")] {
+        let mut w = World::new(&format!("renamed-{n}"));
+        w.statement["predicate"]["buildDefinition"]["externalParameters"]["source"]["uri"] = json!(built);
+        w.write(t(AFTER_BUILD));
+        for want in ["https://github.com/Alakazam-211/K2", "https://github.com/AlakazamLabs/K5"] {
+            let mut i = input(&w, vec![bin(&w)]);
+            i.policy.repo = Some(want.into());
+            let r = verify(&i);
+            assert_eq!(r.verdict, Verdict::Verified, "built from {built}, --repo {want}: {:#?}", r.checks);
+            assert!(r.checks.iter().any(|c| c.rule == "repo" && c.outcome == Outcome::Pass), "{:#?}", r.checks);
+        }
+        for third in ["https://github.com/AlakazamLabs/K2", "https://github.com/Alakazam-211/K5", "https://github.com/someone/K5"] {
+            let mut i = input(&w, vec![bin(&w)]);
+            i.policy.repo = Some(third.into());
+            let (rule, detail) = failed(&verify(&i));
+            assert_eq!(rule, "repo", "built from {built}, --repo {third}");
+            assert!(detail.contains(built), "{detail}");
+        }
+    }
+}
+
 #[test]
 fn a_file_that_is_not_a_subject_fails() {
     let w = World::new("file");

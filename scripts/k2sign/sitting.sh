@@ -26,6 +26,9 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TREE="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=../lib/release-repo.sh
+source "$TREE/scripts/lib/release-repo.sh"
+REPO="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
 # Every path below is absolute; from / the _k2sign steps can read their cwd.
 cd /
 LIBEXEC=/usr/local/libexec/k2sign
@@ -370,7 +373,7 @@ agents) agents_check ;;
     echo "  # 3. Old stopgap leftovers, if they exist (each may say 'not found': fine):"
     echo "  rm -f ~/.k2-updater/*.key; security delete-generic-password -s k2-updater-signing-u1; security delete-generic-password -s k2-updater-signing-u2"
     echo "  # 4. The old GitHub signing secrets (once, on either Mac; the release preflight refuses while they exist):"
-    echo "  gh secret delete TAURI_SIGNING_PRIVATE_KEY -R Alakazam-211/K2; gh secret delete TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R Alakazam-211/K2"
+    echo "  gh secret delete TAURI_SIGNING_PRIVATE_KEY -R $REPO; gh secret delete TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R $REPO"
     echo "  # 5. App Store Connect key: keep one AuthKey_*.p8 in one folder, chmod 700 the folder and 600 the file,"
     echo "  #    and point ASC_API_KEY_P8= in the K2 checkout's .env at it"
     if [ -n "$ALLOW_PID" ]; then
@@ -399,7 +402,7 @@ agents) agents_check ;;
         'source "$1/scripts/lib/sign-updater.sh"; source "$1/scripts/lib/sign-approve.sh"; k2sa_open_session 0.0.1 "$(git -C "$1" rev-parse HEAD)" K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64' sh "$TREE"
     step "Status shows the session, its 4 files and a 12 h expiry" sudo -n -u _k2sign "$LIBEXEC/k2sign" status 0.0.1
     must_fail "a file with no evidence is refused even inside the session" /bin/sh -c "echo x | sudo -n -u _k2sign $LIBEXEC/k2sign sign u2 K2.app.tar.gz 0.0.1 raw"
-    step "Fetch 0.46.5's real (notarized) app update" /bin/sh -c 'rm -rf "$1" && mkdir -p "$1" && gh release download v0.46.5 -R Alakazam-211/K2 -p K2.app.tar.gz -D "$1"' sh "${TMPDIR:-/tmp}/k2-s3proof"
+    step "Fetch 0.46.5's real (notarized) app update" /bin/sh -c 'rm -rf "$1" && mkdir -p "$1" && gh release download v0.46.5 -R "$2" -p K2.app.tar.gz -D "$1"' sh "${TMPDIR:-/tmp}/k2-s3proof" "$REPO"
     must_say "the signer checks a real app as _k2sign: team, notarization, then refuses only for the version" "K2.app is 0.46.5, session is 0.0.1" \
         /bin/sh -c 'sudo -n -u _k2sign "$1/k2sign" sign u2 K2.app.tar.gz 0.0.1 raw < "$2/K2.app.tar.gz"' sh "$LIBEXEC" "${TMPDIR:-/tmp}/k2-s3proof"
     step "Remove the downloaded app" /bin/rm -rf "${TMPDIR:-/tmp}/k2-s3proof"

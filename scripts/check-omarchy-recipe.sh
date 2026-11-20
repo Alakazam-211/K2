@@ -13,6 +13,8 @@
 #   - nothing is compiled: no build() or prepare(), no OAuth or signing names;
 #   - the source is our GitHub release, with a real sha256 and noextract;
 #   - .omarchy/package.json watches our releases and holds new ones back 24 h,
+#     (our release: the repo under either of its names, Alakazam-211/K2 or,
+#     after the move, AlakazamLabs/K5: scripts/lib/release-repo.sh)
 #     and doesn't ask for the fast ring;
 #   - bash -n on the PKGBUILD and the install file.
 #
@@ -24,6 +26,9 @@ set -euo pipefail
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 ROOT="$(cd "$ROOT" && pwd)"
 RECIPE="$ROOT/packaging/omarchy/k2-bin"
+# shellcheck source=lib/release-repo.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/release-repo.sh"
+export K2_RELEASE_REPO_NAMES
 ARCH_DIR="$ROOT/packaging/arch"
 
 fails=0
@@ -121,8 +126,9 @@ fi
 
 # ── The source: our release, pinned ──
 if python3 -I - "$RECIPE/PKGBUILD" "$RECIPE/k2-bin.install" <<'PY'
-import hashlib, re, subprocess, sys
+import hashlib, os, re, subprocess, sys
 pkgbuild, install = sys.argv[1:3]
+names = os.environ["K2_RELEASE_REPO_NAMES"].split()
 out = subprocess.run(
     ["bash", "-c", 'source "$1" >/dev/null; printf "%s\\n" "$pkgname" "$pkgver" "${#source[@]}" "${source[@]}" "${sha256sums[@]}" "${noextract[@]}"', "_", pkgbuild],
     capture_output=True, text=True, check=True).stdout.splitlines()
@@ -134,9 +140,9 @@ if name != "k2-bin":
 if n != 2 or len(sums) != 2:
     problems.append("expected 2 sources and 2 sums, got %d and %d" % (n, len(sums)))
 else:
-    url = "https://github.com/Alakazam-211/K2/releases/download/v%s/k2-%s-x86_64.pkg.tar.zst" % (ver, ver)
-    if src[0] != url:
-        problems.append("source is %s, expected %s" % (src[0], url))
+    urls = ["https://github.com/%s/releases/download/v%s/k2-%s-x86_64.pkg.tar.zst" % (r, ver, ver) for r in names]
+    if src[0] not in urls:
+        problems.append("source is %s, expected %s" % (src[0], " or ".join(urls)))
     if not re.fullmatch(r"[0-9a-f]{64}", sums[0]):
         problems.append("the release package's sum is %r, not a sha256" % sums[0])
     if src[1] != "k2-bin.install":
@@ -154,16 +160,17 @@ then ok "source is our GitHub release, sha256 pinned, noextract set"; else bad "
 
 # ── Their metadata ──
 if python3 -I - "$RECIPE/.omarchy/package.json" <<'PY'
-import json, re, sys
+import json, os, re, sys
 d = json.load(open(sys.argv[1]))
+names = os.environ["K2_RELEASE_REPO_NAMES"].split()
 w = (d.get("upstream") or {}).get("watch") or {}
 problems = []
 if d.get("source") != "local":
     problems.append("source is %r" % d.get("source"))
 if d.get("min_release_age") != "24h":
     problems.append("min_release_age is %r, must be 24h: the package reaches a release after the release itself" % d.get("min_release_age"))
-if w.get("github") != "Alakazam-211/K2":
-    problems.append("watch.github is %r" % w.get("github"))
+if w.get("github") not in names:
+    problems.append("watch.github is %r, not one of %s" % (w.get("github"), ", ".join(names)))
 p = w.get("pattern") or ""
 try:
     ok = re.fullmatch(p, "v0.46.7") and re.fullmatch(p, "v0.46.7").group("version") == "0.46.7" and not re.fullmatch(p, "v0.40.150a")

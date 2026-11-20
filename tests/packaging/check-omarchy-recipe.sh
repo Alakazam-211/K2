@@ -40,6 +40,25 @@ PY
     pass "$name"
 }
 
+# renamed <name> <owner/name>: the recipe moved to the repo under this name
+# (PKGBUILD source and the watch) still passes.
+renamed() {
+    local name="$1" repo="$2" out
+    fresh
+    python3 -I - "$tmp/t/$R/PKGBUILD" "$tmp/t/$R/.omarchy/package.json" "$repo" <<'PY'
+import sys
+pkgbuild, meta, repo = sys.argv[1:4]
+for p in (pkgbuild, meta):
+    s = open(p).read()
+    assert "Alakazam-211/K2" in s, p
+    open(p, "w").write(s.replace("Alakazam-211/K2", repo))
+PY
+    if out="$(bash "$CHECK" "$tmp/t" 2>&1)"; then pass "$name"; else fail "$name" "$out"; fi
+}
+
+echo "== the repo's new name =="
+renamed "a recipe on the repo's new name (AlakazamLabs/K5) passes" AlakazamLabs/K5
+
 echo "== broken recipes =="
 broken "install hooks drift from packaging/arch" "k2-bin.install differs" 's + "# drift\n"' "$R/k2-bin.install"
 broken "a stale sum for the install hooks" "k2-bin.install's sum is" 's.replace("44073b55", "00000000")' "$R/PKGBUILD"
@@ -57,6 +76,8 @@ broken "SKIP instead of a sum" "not a sha256" 's.replace("d4aa363d4a3f26c4414676
 broken "noextract dropped" "noextract is" 's.replace("noextract=(\"${_pkgname}-${pkgver}-x86_64.pkg.tar.zst\")\n", "")' "$R/PKGBUILD"
 broken "no 24 h hold" "min_release_age is None" 's.replace("  \"min_release_age\": \"24h\",\n", "")' "$R/.omarchy/package.json"
 broken "a watch on someone else's repo" "watch.github is" 's.replace("Alakazam-211/K2", "someone/else")' "$R/.omarchy/package.json"
+broken "a watch on a third name (AlakazamLabs/K2)" "watch.github is 'AlakazamLabs/K2'" 's.replace("Alakazam-211/K2", "AlakazamLabs/K2")' "$R/.omarchy/package.json"
+broken "a source on a third name (Alakazam-211/K5)" "source is https://github.com/Alakazam-211/K5/" 's.replace("Alakazam-211/K2", "Alakazam-211/K5")' "$R/PKGBUILD"
 broken "a pattern that takes our prerelease tags" "watch.pattern" 's.replace("[0-9]+(?:\\\\.[0-9]+)*", "[0-9a-z.]+")' "$R/.omarchy/package.json"
 broken "the fast ring" "release_ring is set" 's.replace("\"source\": \"local\",", "\"source\": \"local\",\n  \"release_ring\": \"fast\",")' "$R/.omarchy/package.json"
 broken "a PKGBUILD that doesn't parse" "bash -n PKGBUILD" 's + "\nif then\n"' "$R/PKGBUILD"

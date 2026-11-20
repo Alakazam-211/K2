@@ -14,12 +14,14 @@
 #   same bytes already up  say so, upload nothing, exit 0 (a re-run)
 #   different bytes up     exit 1, and say what to do; nothing changes
 #
-# Environment: K2_RELEASE_REPO (default Alakazam-211/K2), GH_TOKEN for gh.
+# Environment: K2_RELEASE_REPO (default: lib/release-repo.sh), GH_TOKEN for gh.
 set -euo pipefail
 
 TAG="${1:-}"
 PKG="${2:-}"
-REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
+# shellcheck source=lib/release-repo.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/release-repo.sh"
+REPO="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
 
 [ $# -eq 2 ] && [ -n "$TAG" ] && [ -n "$PKG" ] || {
     echo "Usage: $0 <tag> <k2-<version>-x86_64.pkg.tar.zst>" >&2

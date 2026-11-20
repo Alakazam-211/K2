@@ -34,6 +34,13 @@ windows_assets = setup.exe K2_{version}_x64-setup.exe
 # The repository S3's GitHub checks read (attestations, tags, main), and
 # the API the signer reads it through (its own read-only token).
 repo = Alakazam-211/K2
+# Every name the repository answers to. GitHub is moving it to
+# AlakazamLabs/K5 (a transfer and rename): a build attestation names the repo
+# as it was called when the workflow ran, so one under either name counts,
+# and one under any other name is refused. repo must be one of these. Move
+# day: repo becomes AlakazamLabs/K5 (re-run install.sh, then set-gh-token
+# with a token for the new repo); this line stays.
+repo_names = Alakazam-211/K2 AlakazamLabs/K5
 github_api = https://api.github.com
 # The workflow whose build attestation a Linux daemon must carry, at refs/tags/v<x>.
 daemon_workflow = .github/workflows/daemon-binaries.yml

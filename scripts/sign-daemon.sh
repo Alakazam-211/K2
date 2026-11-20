@@ -87,7 +87,7 @@
 # G12; docs/release/updater-key-ceremony.md "Next: two independent builds").
 #
 # Environment:
-#   K2_RELEASE_REPO           default Alakazam-211/K2
+#   K2_RELEASE_REPO           default: scripts/lib/release-repo.sh
 #   K2_SIGN_WAIT_MIN          minutes to wait for CI assets (default 60)
 #   K2_SIGN_SOURCE_DIR        the checkout whose refs/tags/v<x> is the release
 #                             commit (default: this checkout; tests use a
@@ -103,7 +103,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC_DIR="${K2_SIGN_SOURCE_DIR:-$ROOT}"
-REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
+# shellcheck source=lib/release-repo.sh
+source "$ROOT/scripts/lib/release-repo.sh"
+REPO="${K2_RELEASE_REPO:-$K2_RELEASE_REPO_DEFAULT}"
 WAIT_MIN="${K2_SIGN_WAIT_MIN:-60}"
 ARCHES=(x86_64 aarch64)
 # shellcheck source=lib/sign-updater.sh
@@ -246,10 +248,22 @@ if [ "$DRY" = 0 ]; then
 fi
 
 check_github_provenance() { # <file> <asset>
-    local f="$1" a="$2"
-    if ! gh attestation verify "$f" -R "$REPO" \
-        --cert-identity "https://github.com/$REPO/.github/workflows/daemon-binaries.yml@refs/tags/$TAG" \
-        --source-ref "refs/tags/$TAG" --source-digest "$TAG_COMMIT" >"$WORK/attest-$a.out" 2>&1; then
+    local f="$1" a="$2" name ok="" tried=" "
+    # The attestation names the repo as it was called when the workflow ran:
+    # Alakazam-211/K2 before the move, AlakazamLabs/K5 after. Either of the
+    # repo's names (lib/release-repo.sh), after $REPO (this run's repo).
+    : >"$WORK/attest-$a.out"
+    for name in $REPO $K2_RELEASE_REPO_NAMES; do
+        case "$tried" in *" $name "*) continue ;; esac
+        tried="$tried$name "
+        if gh attestation verify "$f" -R "$name" \
+            --cert-identity "https://github.com/$name/.github/workflows/daemon-binaries.yml@refs/tags/$TAG" \
+            --source-ref "refs/tags/$TAG" --source-digest "$TAG_COMMIT" >>"$WORK/attest-$a.out" 2>&1; then
+            ok="$name"
+            break
+        fi
+    done
+    if [ -z "$ok" ]; then
         sed 's/^/    /' "$WORK/attest-$a.out" >&2
         die "$a: no valid build-provenance attestation from daemon-binaries.yml at $TAG ($TAG_COMMIT) — not signing"
     fi

@@ -205,23 +205,40 @@ pub fn bytes<T>(v: &str) -> Option<Result<String, Words<T>>> {
     Some(Ok(n.to_string()))
 }
 
-/// Whether `v` matches a bash `[[ =~ ]]` pattern made of `[set]{min,max}`
-/// runs: each run a set of ASCII bytes and how many of them. Only for
-/// ASCII text (the caller hands the rest to the shell).
-pub fn runs(v: &str, parts: &[(&dyn Fn(u8) -> bool, usize, usize)]) -> bool {
-    fn go(b: &[u8], parts: &[(&dyn Fn(u8) -> bool, usize, usize)]) -> bool {
+/// Whether `v` matches a bash `[[ =~ ^…$ ]]` pattern made of runs of
+/// `[set]{min,max}`: each run a bracket's set as bash spells it (`a-z0-9._-`)
+/// and how many of them. Only for ASCII text (the caller hands the rest to
+/// the shell).
+pub fn runs(v: &str, parts: &[(&str, usize, usize)]) -> bool {
+    fn go(b: &[u8], parts: &[(&str, usize, usize)]) -> bool {
         let Some(((set, min, max), more)) = parts.split_first() else {
             return b.is_empty();
         };
-        let n = b.iter().take(*max).take_while(|c| set(**c)).count();
+        let n = b.iter().take(*max).take_while(|c| in_set(set, **c)).count();
         (*min..=n).rev().any(|k| go(&b[k..], more))
     }
     go(v.as_bytes(), parts)
 }
 
-/// `a-z 0-9`.
-pub fn lower_digit(c: u8) -> bool {
-    c.is_ascii_lowercase() || c.is_ascii_digit()
+/// Whether `c` is in a bracket's set: ranges (`a-z`) and single bytes, a
+/// `-` last is itself.
+fn in_set(set: &str, c: u8) -> bool {
+    let s = set.as_bytes();
+    let mut i = 0;
+    while i < s.len() {
+        if i + 2 < s.len() && s[i + 1] == b'-' {
+            if (s[i]..=s[i + 2]).contains(&c) {
+                return true;
+            }
+            i += 3;
+        } else {
+            if s[i] == c {
+                return true;
+            }
+            i += 1;
+        }
+    }
+    false
 }
 
 /// `_compute_distro_arg`: the value, or its usage line (exit 2).
@@ -229,19 +246,15 @@ pub fn distro<T>(v: &str) -> Option<Result<String, Words<T>>> {
     if !v.is_ascii() {
         return None;
     }
-    let tail = |c: u8| lower_digit(c) || matches!(c, b'.' | b'_' | b'-');
-    let vhead = |c: u8| c.is_ascii_alphanumeric();
-    let vtail = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-');
-    let at = |c: u8| c == b'@';
-    let ok = runs(v, &[(&lower_digit, 1, 1), (&tail, 0, 39)])
+    let ok = runs(v, &[("a-z0-9", 1, 1), ("a-z0-9._-", 0, 39)])
         || runs(
             v,
             &[
-                (&lower_digit, 1, 1),
-                (&tail, 0, 39),
-                (&at, 1, 1),
-                (&vhead, 1, 1),
-                (&vtail, 0, 19),
+                ("a-z0-9", 1, 1),
+                ("a-z0-9._-", 0, 39),
+                ("@", 1, 1),
+                ("0-9A-Za-z", 1, 1),
+                ("0-9A-Za-z._-", 0, 19),
             ],
         );
     Some(if ok {

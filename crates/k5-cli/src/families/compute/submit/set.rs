@@ -173,8 +173,9 @@ pub fn poll(
         if seen.iter().any(|(k, v)| *k == index && *v == key) {
             continue;
         }
-        match seen.iter_mut().find(|(k, _)| *k == index) {
-            Some(slot) => slot.1 = key,
+        let at = seen.iter().position(|(k, _)| *k == index);
+        match at {
+            Some(i) => seen[i].1 = key,
             None => seen.push((index, key)),
         }
         let l = line!("what = x[\"state\"]");

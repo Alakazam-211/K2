@@ -174,11 +174,8 @@ pub fn parse(words: &[&str]) -> Option<Words<run::Ask>> {
     if node.is_empty() {
         any = true;
     }
-    let script = match script(&runner, &profile, many, &partition, &targs) {
-        Ok(s) => s,
-        // shlex's error: the shell's (its traceback, then exit 2).
-        Err(()) => return None,
-    };
+    // shlex's error is the shell's (its traceback, then exit 2).
+    let script = script(&runner, &profile, many, &partition, &targs)?;
     let mut args: Vec<String> = vec![];
     if any {
         args.push("--any".into());
@@ -202,14 +199,14 @@ pub fn parse(words: &[&str]) -> Option<Words<run::Ask>> {
 }
 
 /// The script `cmd_compute_test`'s Python writes (`$(…)` drops its last
-/// newline). `Err`: `shlex.split` refuses the runner.
+/// newline). `None`: `shlex.split` refuses the runner.
 pub fn script(
     runner: &str,
     profile: &str,
     many: bool,
     partition: &str,
     targs: &[String],
-) -> Result<String, ()> {
+) -> Option<String> {
     let runner = shlex_split(runner)?;
     let fixed = fixed();
     let mut lines: Vec<String> = fixed.head.clone();
@@ -228,7 +225,7 @@ pub fn script(
     }
     cmd.extend(targs.iter().map(|a| shlex_quote(a)));
     lines.push(format!("exec {}", cmd.join(" ")));
-    Ok(lines.join("\n"))
+    Some(lines.join("\n"))
 }
 
 /// The script's fixed text, as the shell's Python spells it.
@@ -325,9 +322,9 @@ pub fn shlex_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
-/// `shlex.split(s)` (POSIX, no comments). `Err`: a quote or escape with
+/// `shlex.split(s)` (POSIX, no comments). `None`: a quote or escape with
 /// no end (Python's `ValueError`).
-pub fn shlex_split(s: &str) -> Result<Vec<String>, ()> {
+pub fn shlex_split(s: &str) -> Option<Vec<String>> {
     let ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
     let mut out = vec![];
     let mut token = String::new();
@@ -348,7 +345,7 @@ pub fn shlex_split(s: &str) -> Result<Vec<String>, ()> {
                     quoted = true;
                     state = c;
                 } else if c == '\\' {
-                    let next = chars.next().ok_or(())?;
+                    let next = chars.next()?;
                     token.push(next);
                     state = 'a';
                 } else {
@@ -360,7 +357,7 @@ pub fn shlex_split(s: &str) -> Result<Vec<String>, ()> {
                 if c == q {
                     state = 'a';
                 } else if q == '"' && c == '\\' {
-                    let next = chars.next().ok_or(())?;
+                    let next = chars.next()?;
                     if next != '"' && next != '\\' {
                         token.push('\\');
                     }
@@ -372,10 +369,10 @@ pub fn shlex_split(s: &str) -> Result<Vec<String>, ()> {
         }
     }
     if state == '\'' || state == '"' {
-        return Err(());
+        return None;
     }
     if !token.is_empty() || quoted {
         out.push(token);
     }
-    Ok(out)
+    Some(out)
 }

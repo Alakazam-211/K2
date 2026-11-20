@@ -113,8 +113,8 @@ fn shlex_as_python() {
         vec!["a", "b c", "d e", "f g", "", "h\"i"]
     );
     assert_eq!(test::shlex_split(r#""a\b""#).unwrap(), vec!["a\\b"]);
-    assert!(test::shlex_split("'open").is_err());
-    assert!(test::shlex_split("end\\").is_err());
+    assert!(test::shlex_split("'open").is_none());
+    assert!(test::shlex_split("end\\").is_none());
     assert_eq!(test::shlex_quote(""), "''");
     assert_eq!(test::shlex_quote("a-b/c.d"), "a-b/c.d");
     assert_eq!(test::shlex_quote("it's"), "'it'\"'\"'s'");

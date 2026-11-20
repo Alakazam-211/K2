@@ -26,7 +26,7 @@ pub const USAGE: &str = concat!(
 );
 
 /// What the words ask for.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Ask {
     pub preset: String,
     pub os: String,

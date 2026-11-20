@@ -24,7 +24,7 @@ use super::super::lines::py_line;
 use super::super::pyrt::{self as p, s};
 use super::super::render::{self, Cx};
 use super::super::writes::{self, dumps, object, str_value, wait, Cp, Words};
-use super::{bytes, distro, gpu_arg, head8, lower_digit, runs, secs, SRC};
+use super::{bytes, distro, gpu_arg, head8, runs, secs, SRC};
 use crate::exit::Exit;
 use crate::families::{py_space, raised, Raise};
 use crate::out;
@@ -55,7 +55,7 @@ pub const UNKNOWN: &str = concat!("usage: unknown flag '%s' (", cli_name!(), " c
 
 /// What the words ask for, as the shell's variables hold it after its
 /// checks.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Ask {
     pub node: String,
     pub any: bool,
@@ -103,8 +103,10 @@ pub struct Ask {
     pub mem_auto_fb: String,
     pub cpus_burst: Num,
     pub network: String,
-    pub labels: Value,
-    pub env: Value,
+    /// `--label` (always an object once read).
+    pub labels: Option<Value>,
+    /// `--env` (always an object once read).
+    pub env: Option<Value>,
     pub needs: Option<Value>,
     pub artifacts: Option<Value>,
     pub secrets: Option<Value>,
@@ -206,8 +208,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 if !a.preset.is_ascii() {
                     return None;
                 }
-                let tail = |c: u8| lower_digit(c) || matches!(c, b'.' | b'_' | b'-');
-                if !runs(&a.preset, &[(&lower_digit, 1, 1), (&tail, 0, 39)]) {
+                if !runs(&a.preset, &[("a-z0-9", 1, 1), ("a-z0-9._-", 0, 39)]) {
                     return usage("usage: --preset NAME (a [presets.NAME] in .k2/compute.toml: 1–40 of a-z 0-9 . _ -)");
                 }
             }
@@ -221,8 +222,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 if !a.tag.is_ascii() {
                     return None;
                 }
-                let set = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b':' | b'/' | b'-');
-                if !runs(&a.tag, &[(&set, 1, 64)]) {
+                if !runs(&a.tag, &[("A-Za-z0-9._:/-", 1, 64)]) {
                     return usage("usage: --tag NAME (1–64 of A-Z a-z 0-9 . _ : / -, e.g. fuzz:p3)");
                 }
             }
@@ -254,8 +254,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 if !a.cache.is_ascii() {
                     return None;
                 }
-                let tail = |c: u8| lower_digit(c) || matches!(c, b'.' | b'_' | b'-');
-                if !runs(&a.cache, &[(&lower_digit, 1, 1), (&tail, 0, 63)]) {
+                if !runs(&a.cache, &[("a-z0-9", 1, 1), ("a-z0-9._-", 0, 63)]) {
                     return usage("usage: --cache NAME (1–64 of a-z 0-9 . _ -, starting with a letter or digit)");
                 }
             }
@@ -307,8 +306,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 if !a.submitter.is_ascii() {
                     return None;
                 }
-                let set = |c: u8| lower_digit(c) || matches!(c, b'.' | b'_' | b'-');
-                if !runs(&a.submitter, &[(&set, 1, 40)]) {
+                if !runs(&a.submitter, &[("a-z0-9._-", 1, 40)]) {
                     return usage("usage: --submitter NAME (1–40 of a-z 0-9 . _ -)");
                 }
             }
@@ -384,7 +382,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 a.cpus_burst = Num(None);
                 shift2!();
                 if cpus.contains('+') {
-                    let (c, b) = cpus.split_once('+').unwrap_or((&cpus, ""));
+                    let (c, b) = cpus.split_once('+').unwrap_or((cpus.as_str(), ""));
                     let num = |d: &str| {
                         let (x, y) = d.split_once('.').unwrap_or((d, "1"));
                         !x.is_empty()
@@ -610,11 +608,11 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
     // The cpus as a number (`int()` or `float()` in `_compute_json`).
     a.cpus = Num::of(&cpus)?;
     a.labels = match pairs(&labels, "usage: --label key=value") {
-        Ok(v) => v,
+        Ok(v) => Some(v),
         Err(line) => return usage(line),
     };
     a.env = match pairs(&envs, "usage: --env NAME=value") {
-        Ok(v) => v,
+        Ok(v) => Some(v),
         Err(line) => return usage(line),
     };
     if !needs.is_empty() {
@@ -629,7 +627,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             if x.is_empty() || x.starts_with('=') {
                 return usage("usage: --secret NAME[=ENVNAME]");
             }
-            let (name, env) = x.split_once('=').unwrap_or((x, ""));
+            let (name, env) = x.split_once('=').unwrap_or((x.as_str(), ""));
             let mut o = vec![("name", str_value(name))];
             if !env.is_empty() {
                 o.push(("env", str_value(env)));
@@ -728,8 +726,9 @@ pub fn pairs(items: &[String], line: &'static str) -> Result<Value, &'static str
             return Err(line);
         };
         let key = Text::from(k);
-        match out.iter_mut().find(|(x, _)| *x == key) {
-            Some(slot) => slot.1 = str_value(v),
+        let at = out.iter().position(|(x, _)| *x == key);
+        match at {
+            Some(i) => out[i].1 = str_value(v),
             None => out.push((key, str_value(v))),
         }
     }
@@ -761,8 +760,11 @@ pub fn body(a: &Ask, cwd: &str, repo_dir: &str, ws: &str, client: &str) -> Strin
         ("arch", st(&a.arch)),
         ("avoid", a.avoids.clone()),
         ("only", a.onlys.clone()),
-        ("labels", Some(a.labels.clone())),
-        ("env", Some(a.env.clone())),
+        (
+            "labels",
+            Some(a.labels.clone().unwrap_or(Value::Object(vec![]))),
+        ),
+        ("env", Some(a.env.clone().unwrap_or(Value::Object(vec![])))),
         ("argv", Some(strs(&a.argv))),
         ("needs", a.needs.clone()),
         ("artifacts", a.artifacts.clone()),
@@ -1133,7 +1135,7 @@ fn info_reader(cx: &Cx, body: &[u8], err: &mut String) -> Result<String, Raise> 
     let l = line!("src = v.get(\"source\")");
     let src = cx.at(l, p::get(&v, "source"))?;
     if p::is_dict(&src) {
-        err.push_str(&source_line(cx, &src, |m| line_of(m))?);
+        err.push_str(&source_line(cx, &src, line_of)?);
     }
     let l = line!("p = v.get(\"placement\") or");
     let pl = cx.at(l, p::get(&v, "placement"))?;
@@ -1206,8 +1208,8 @@ pub fn source_line(cx: &Cx, src: &Value, at: impl Fn(&str) -> u32) -> Result<Str
     let l = at("path");
     if p::truthy(&cx.at(l, p::get(src, "path"))?) {
         let path = cx.at(l, p::idx(src, "path"))?;
-        let with_space = cx.at(l, p::add(&where_, &s(" ")))?;
-        where_ = cx.at(l, p::add(&with_space, &path))?;
+        let rhs = cx.at(l, plus(" ", &path))?;
+        where_ = cx.at(l, p::iadd(&where_, &s(&rhs)))?;
     }
     let l = at("s");
     let commit = p::or(cx.at(l, p::get(src, "commit"))?, s(""));

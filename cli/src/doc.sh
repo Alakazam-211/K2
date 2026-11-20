@@ -94,7 +94,12 @@ sys.exit(rc)
 }
 
 # _doc_call METHOD ROUTE PAYLOAD → _DOC_STATUS/_DOC_BODY; exits on non-200.
+# A POST's PAYLOAD is _doc_body's output, never empty: empty means the body
+# builder refused (it said why on stderr), so nothing is sent.
 _doc_call() {
+    if [ "$1" != "GET" ] && [ -z "${3:-}" ]; then
+        exit 2
+    fi
     local raw
     raw="$(cli_send_json "$1" "$2" "${3:-}")"
     _DOC_STATUS="${raw##*$'\n'}"
@@ -194,13 +199,26 @@ _doc_call_file() {
 }
 
 # _doc_body PATH [key value]... → JSON body with workspace/path/onBehalfOf.
-# A value "@stdin" is replaced by stdin's text, "@text" by --text,
-# "@file" by --file's content (all byte-exact); "@b64" by the same bytes
-# (--text, --file or stdin) as base64, for any file.
+# Every value is sent as the plain text it is: a value the user typed is
+# never read as a marker, so `--name @int:5` names the version "@int:5".
+# A key the CLI writes with a leading "@" carries a marker the CLI built
+# itself, and its value must be one of:
+#   "@text"  --text, --file or stdin as UTF-8 text (byte-exact)
+#   "@b64"   the same bytes as base64, for any file
+#   "@true" / "@false"   a JSON boolean
+#   "@int:N" a JSON number (N is digits)
+# Anything else there is refused with one usage error and exit 2, and the
+# body is empty, so _doc_call sends nothing. The key "argv" is a JSON array
+# the CLI built.
 # The script rides `-c`, not a heredoc: a heredoc would BE python's stdin,
 # and the doc's text comes from stdin.
-_DOC_BODY_PY='import base64, json, sys
-ws, ob, text_set, text, file_, path, rest = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7:]
+_DOC_BODY_PY='import base64, json, re, sys
+as_json, ws, ob, text_set, text, file_, path, rest = sys.argv[1] == "1", sys.argv[2], sys.argv[3], sys.argv[4] == "1", sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8:]
+def refuse(hint):
+    if not as_json:
+        print("Error: " + hint, file=sys.stderr)
+    print(json.dumps({"error": {"code": "usage", "hint": hint}}), file=sys.stderr)
+    sys.exit(2)
 d = {}
 if ws:
     d["workspace"] = ws
@@ -210,29 +228,38 @@ if ob:
     d["onBehalfOf"] = ob
 def body_bytes():
     if text_set:
-        return text.encode("utf-8")
+        return text.encode("utf-8", "surrogateescape")
     if file_:
         with open(file_, "rb") as f:
             return f.read()
     return sys.stdin.buffer.read()
 def body_text():
-    return body_bytes().decode("utf-8")
+    try:
+        return body_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        refuse("the text is not valid UTF-8")
 for i in range(0, len(rest), 2):
     k, v = rest[i], rest[i + 1]
-    if v == "@text":
-        v = body_text()
-    elif v == "@b64":
-        v = base64.b64encode(body_bytes()).decode("ascii")
-    elif k == "argv":
+    if k == "argv":
         v = json.loads(v)
-    elif v in ("@true", "@false"):
-        v = v == "@true"
-    elif v.startswith("@int:"):
-        v = int(v[5:])
+    elif k.startswith("@"):
+        k = k[1:]
+        if v == "@text":
+            v = body_text()
+        elif v == "@b64":
+            v = base64.b64encode(body_bytes()).decode("ascii")
+        elif v in ("@true", "@false"):
+            v = v == "@true"
+        elif re.fullmatch(r"@int:[0-9]+", v):
+            v = int(v[5:])
+        elif v.startswith("@int:"):
+            refuse("%s takes a whole number, not %r" % (k, v[5:]))
+        else:
+            refuse("%s: %r is not a value marker" % (k, v))
     d[k] = v
 print(json.dumps(d))'
 _doc_body() {
-    python3 -c "$_DOC_BODY_PY" "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$_DOC_FILE" "$@"
+    python3 -c "$_DOC_BODY_PY" "${_DOC_JSON:-0}" "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$_DOC_FILE" "$@"
 }
 
 # _doc_query PATH [key value]... → urlencoded query for the GET routes.
@@ -502,7 +529,7 @@ _doc_blob_tool() {
     argv="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$verb" ${toks[@]+"${toks[@]}"})"
     _doc_tmp
     if [ -n "$budget" ]; then
-        _doc_body "$path" argv "$argv" readBudget "@int:$budget" >"$_DOC_TMPD/tool.json" </dev/null
+        _doc_body "$path" argv "$argv" @readBudget "@int:$budget" >"$_DOC_TMPD/tool.json" </dev/null
     else
         _doc_body "$path" argv "$argv" >"$_DOC_TMPD/tool.json" </dev/null
     fi
@@ -700,9 +727,9 @@ _doc_owner_purge() {
     local -a kv=()
     if [ "$verb" = purge-comments ]; then
         [ -n "$thread" ] && kv+=(thread "$thread")
-        [ -n "$n" ] && kv+=(n "@int:$n")
+        [ -n "$n" ] && kv+=(@n "@int:$n")
         [ -n "$text" ] && kv+=(text "$text")
-        [ "$all" = 1 ] && kv+=(all "@true")
+        [ "$all" = 1 ] && kv+=(@all "@true")
         [ ${#kv[@]} -gt 0 ] || _doc_die usage "k2 doc purge-comments --thread ann-N [--n N] | --text \"...\" | --all <file>"
         _doc_call POST /cli/docs/comments/purge "$(_doc_body "$path" ${kv[@]+"${kv[@]}"} </dev/null)"
     else
@@ -989,7 +1016,7 @@ sys.stdout.flush()
             exit $? ;;
         restore)
             [ -n "$ver" ] || _doc_die usage "k2 doc restore --version V <file>"
-            _doc_call POST /cli/docs/restore "$(_doc_body "$path" version "@int:$ver")"
+            _doc_call POST /cli/docs/restore "$(_doc_body "$path" @version "@int:$ver")"
             _doc_print_json_or '
 import json, sys
 v = json.load(sys.stdin)
@@ -1006,13 +1033,13 @@ else:
         version)
             [ -n "$name" ] || _doc_die usage "k2 doc version --name \"<name>\" [--version V] <file.md>"
             if [ -n "$ver" ]; then
-                _doc_call POST /cli/docs/name "$(_doc_body "$path" name "$name" version "@int:$ver")"
+                _doc_call POST /cli/docs/name "$(_doc_body "$path" name "$name" @version "@int:$ver")"
             else
                 _doc_call POST /cli/docs/name "$(_doc_body "$path" name "$name")"
             fi
             _doc_print_json_or 'import json,sys; v=json.load(sys.stdin); print("version %s named \"%s\"" % (v.get("version"), v.get("name")))' ;;
         revert)
-            _doc_call POST /cli/docs/revert "$(_doc_body "$path" change "@int:$change" partial "$partial")"
+            _doc_call POST /cli/docs/revert "$(_doc_body "$path" @change "@int:$change" @partial "$partial")"
             _doc_print_undo revert ;;
     esac
 }
@@ -1508,7 +1535,7 @@ print(int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)])
             _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path "$verb"; local path="$_DOC_PATH"
             if [ -n "$secs" ]; then
-                _doc_call POST /cli/docs/lease "$(_doc_body "$path" action "$action" ttlSecs "@int:$secs")"
+                _doc_call POST /cli/docs/lease "$(_doc_body "$path" action "$action" @ttlSecs "@int:$secs")"
             else
                 _doc_call POST /cli/docs/lease "$(_doc_body "$path" action "$action")"
             fi
@@ -1577,9 +1604,9 @@ print(int(m.group(1)) * {None: 1, "ms": 1, "s": 1000, "m": 60000}[m.group(2)])
             fi
             local -a kv=(action "$action")
             [ -n "$lines" ] && kv+=(lines "$lines")
-            [ -n "$ms" ] && kv+=(ttlMs "@int:$ms")
+            [ -n "$ms" ] && kv+=(@ttlMs "@int:$ms")
             [ -n "$note" ] && kv+=(note "$note")
-            [ -n "$hold" ] && kv+=(hold "$hold")
+            [ -n "$hold" ] && kv+=(@hold "$hold")
             [ -n "$id" ] && kv+=(id "$id")
             _doc_call POST /cli/docs/claim "$(_doc_body "$path" ${kv[@]+"${kv[@]}"})"
             _doc_print_json_or '
@@ -1656,7 +1683,7 @@ sys.stdout.write(v.get("rendered") or "No activity.\n")
             fi
             # The text rides as --text does (never read as a body flag).
             _DOC_TEXT="$msg"; _DOC_TEXT_SET=1
-            _doc_call POST /cli/docs/say "$(_doc_body "$path" text @text to "$to" at "$at" time "$time" reply_to "$reply")"
+            _doc_call POST /cli/docs/say "$(_doc_body "$path" @text @text to "$to" at "$at" time "$time" reply_to "$reply")"
             _doc_print_json_or 'import json,sys; v=json.load(sys.stdin)["say"]; print("said %s%s" % (v["id"], " to " + v["to"] if v.get("to") else " to the room"))' ;;
         follow)
             _doc_parse "$@"
@@ -1704,7 +1731,7 @@ sys.stdout.write(v.get("rendered") or "No activity.\n")
             # The bytes ride as base64 from a temp file (any file, any size
             # up to the cap; a Markdown doc's must be UTF-8).
             _doc_tmp
-            _doc_body "$path" base "$base" bytesB64 @b64 >"$_DOC_TMPD/body.json" \
+            _doc_body "$path" base "$base" @bytesB64 @b64 >"$_DOC_TMPD/body.json" \
                 || _doc_die usage "couldn't read the new content"
             _doc_call_file POST /cli/docs/write "" "$_DOC_TMPD/body.json"
             _DOC_BODY="$(cat "$_DOC_OUT")"
@@ -1744,7 +1771,7 @@ if a:
             case "$steps" in ''|*[!0-9]*) _doc_die usage "--steps needs a number" ;; esac
             _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path "$verb"; local path="$_DOC_PATH"
-            _doc_call POST "/cli/docs/$verb" "$(_doc_body "$path" steps "@int:$steps" mode "$mode" forPerson "$for_p")"
+            _doc_call POST "/cli/docs/$verb" "$(_doc_body "$path" @steps "@int:$steps" mode "$mode" forPerson "$for_p")"
             _doc_print_undo "$verb" ;;
         log)
             local by="" since="" n="" pend=@false for_p=""
@@ -1900,7 +1927,7 @@ for r in rows:
             case "$change" in ''|*[!0-9]*) _doc_die usage "the change is a number (k2 doc approvals)" ;; esac
             local path; path="$(_doc_path "${_DOC_ARGS[1]}")"
             local state="approved"; [ "$verb" = decline ] && state="declined"
-            _doc_call POST /cli/docs/approve "$(_doc_body "$path" change "@int:$change" state "$state")"
+            _doc_call POST /cli/docs/approve "$(_doc_body "$path" @change "@int:$change" state "$state")"
             _doc_print_json_or '
 import json, sys
 v = json.load(sys.stdin)
@@ -1927,7 +1954,7 @@ if v.get("hint"):
             [ ${#_DOC_ARGS[@]} -eq 1 ] || _doc_die usage "k2 doc $verb <file-or-folder> --with <workspace> -w <ws>"
             local rel="${_DOC_ARGS[0]}"
             if [ "$verb" = share ]; then
-                _doc_call POST /cli/docs/share "$(_doc_body "$rel" with "$with" write "$write" history "$history" comment "$comment")"
+                _doc_call POST /cli/docs/share "$(_doc_body "$rel" with "$with" @write "$write" @history "$history" @comment "$comment")"
             else
                 _doc_call POST /cli/docs/unshare "$(_doc_body "$rel" with "$with")"
             fi

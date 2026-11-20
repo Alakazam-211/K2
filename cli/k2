@@ -90388,6 +90388,9 @@ EOF
 # person (a vault confirm bound to this install); in a K2 terminal the
 # daemon answers person_only with the card's Ask-with line.
 _hostchat_recording() {
+    # -h or --help anywhere prints the help and sends nothing, also before
+    # the verb (k2 hostchat recording -h policy set …).
+    if _wants_help "$@"; then _hostchat_recording_usage; return 0; fi
     local sub="${1:-}"; [ $# -gt 0 ] && shift
     case "$sub" in
         policy|policies) _hostchat_recording_policy "$@"; return ;;

@@ -752,10 +752,11 @@ fn help_never_acts_on_a_write() {
     }
     // A value flag takes the next word as it comes, so `-h` there is a
     // value and the write is sent (bash bugs, app-links.sh:21 and
-    // app-auth.sh:811; the rows flip when the fixes land).
+    // app-auth.sh:176; the rows flip when the fixes land). `email` is
+    // safe: the router answers its -h with the family's usage first.
     for args in [
         &["links", "set", "acme", "--ios", "-h"][..],
-        &["email", "on", "acme", "--sender", "-h"],
+        &["pairing", "setup", "acme", "--ios", "T", "--host", "-h"],
     ] {
         rig.check(&shell(case(
             "help as a value acts (bash bug)",

@@ -186,7 +186,13 @@ fn bare_rgb(t: &str) -> Option<[u32; 3]> {
 }
 
 /// `cmd_agent_identity` past its words: the request and its reader.
-pub fn identity(client: &mut Client, closing: &mut Closing, a: &IdentityArgs, project: &str, agent_passport: bool) -> Exit {
+pub fn identity(
+    client: &mut Client,
+    closing: &mut Closing,
+    a: &IdentityArgs,
+    project: &str,
+    agent_passport: bool,
+) -> Exit {
     let mut target = a.target.clone();
     if target.is_empty() && !agent_passport {
         target = project.to_string();
@@ -308,7 +314,10 @@ fn identity_lines(d: &Value, status: &str, as_json: bool, post: bool) -> Result<
                 _ => format!("HTTP {status}"),
             },
         };
-        if err.as_ref().is_some_and(|e| ops::py_eq(e, &s("rate_limited"))) {
+        if err
+            .as_ref()
+            .is_some_and(|e| ops::py_eq(e, &s("rate_limited")))
+        {
             msg = format!(
                 "too many changes; try again in {}s",
                 super::str_or(get("retryAfterSecs")?, "?")
@@ -336,7 +345,10 @@ fn identity_lines(d: &Value, status: &str, as_json: bool, post: bool) -> Result<
     } else {
         out.push_str(&format!("Agent {handle}\n"));
     }
-    out.push_str(&format!("  name:    {}\n", super::str_or(get("displayName")?, "")));
+    out.push_str(&format!(
+        "  name:    {}\n",
+        super::str_or(get("displayName")?, "")
+    ));
     let color = match get("color")? {
         Some(c) if py::truthy(c) => py::str_of(c),
         _ => "-".to_string(),
@@ -540,9 +552,19 @@ mod tests {
 
     #[test]
     fn the_identity_reader() {
-        let r = identity_reader(r##"{"handle":"qa","displayName":"QA","color":"#fff","canEditIdentity":true}"##, "200", false, false);
+        let r = identity_reader(
+            r##"{"handle":"qa","displayName":"QA","color":"#fff","canEditIdentity":true}"##,
+            "200",
+            false,
+            false,
+        );
         assert_eq!(r.stdout, "Agent qa\n  name:    QA\n  color:   #fff\n  picture: none\n  you can change: color, picture\n");
-        let r = identity_reader(r#"{"error":"rate_limited","retryAfterSecs":30}"#, "429", false, true);
+        let r = identity_reader(
+            r#"{"error":"rate_limited","retryAfterSecs":30}"#,
+            "429",
+            false,
+            true,
+        );
         assert_eq!(r.stderr, "Error: too many changes; try again in 30s\n");
         let r = identity_reader("", "000", false, false);
         assert_eq!(r.exit, Exit::Error);

@@ -2,9 +2,7 @@
 //! AGENTS.md layer stack over `/cli/context/*`, each call a urllib request
 //! of `_context_http`'s own (K2's ruling D4).
 
-use super::{
-    abs_user, at, cli, cut, dumps, err_json, obj, product, py_strip, raised, s, str_or,
-};
+use super::{abs_user, at, cli, cut, dumps, err_json, obj, product, py_strip, raised, s, str_or};
 use crate::exit::Exit;
 use crate::families::{ljust, py_get, py_iter, without_nuls, Raise, Shown};
 use crate::out::json::{self, Options, Text, Value};
@@ -109,10 +107,18 @@ fn verb(rest: &[String]) -> Option<Result<(Verb, bool), String>> {
     Some(match sub.as_str() {
         "list" => no_args(&words, &format!("{cli} agent context list [--json]"), false)
             .map(|(json, _)| (Verb::List, json)),
-        "regen" => no_args(&words, &format!("{cli} agent context regen [--json]"), false)
-            .map(|(json, _)| (Verb::Regen, json)),
-        "catalog" => no_args(&words, &format!("{cli} agent context catalog [--json]"), false)
-            .map(|(json, _)| (Verb::Catalog, json)),
+        "regen" => no_args(
+            &words,
+            &format!("{cli} agent context regen [--json]"),
+            false,
+        )
+        .map(|(json, _)| (Verb::Regen, json)),
+        "catalog" => no_args(
+            &words,
+            &format!("{cli} agent context catalog [--json]"),
+            false,
+        )
+        .map(|(json, _)| (Verb::Catalog, json)),
         "show" => no_args(
             &words,
             &format!("{cli} agent context show [--outline] [--json]"),
@@ -120,14 +126,18 @@ fn verb(rest: &[String]) -> Option<Result<(Verb, bool), String>> {
         )
         .map(|(json, outline)| (Verb::Show { outline }, json)),
         "add" => add_words(&words),
-        "remove" | "rm" | "delete" => {
-            one_token(&words, &format!("{cli} agent context remove <id|path> [--json]"))
-                .map(|(token, json)| (Verb::Remove { token }, json))
-        }
+        "remove" | "rm" | "delete" => one_token(
+            &words,
+            &format!("{cli} agent context remove <id|path> [--json]"),
+        )
+        .map(|(token, json)| (Verb::Remove { token }, json)),
         "on" | "off" => {
             let on = sub == "on";
-            one_token(&words, &format!("{cli} agent context {sub} <id|path> [--json]"))
-                .map(|(token, json)| (Verb::Enabled { on, token }, json))
+            one_token(
+                &words,
+                &format!("{cli} agent context {sub} <id|path> [--json]"),
+            )
+            .map(|(token, json)| (Verb::Enabled { on, token }, json))
         }
         "move" => move_words(&words),
         other => Err(format!(
@@ -303,7 +313,11 @@ fn apply_project(client: &mut Client, closing: &mut Closing, sel: &str) {
 /// holds what it prints.
 fn resolved(body: &[u8]) -> String {
     let text = decode(body);
-    let text = if text.is_empty() { "{}".to_string() } else { text };
+    let text = if text.is_empty() {
+        "{}".to_string()
+    } else {
+        text
+    };
     let Ok(d @ Value::Object(_)) = pyjson::loads(&text) else {
         return String::new();
     };
@@ -385,7 +399,9 @@ impl Ctx<'_> {
                 let lid = self.layer_id(token)?;
                 let body = dumps(&obj(vec![("project", s(self.project)), ("id", s(&lid))]));
                 let raw = self.http(Method::Post, REMOVE, &[], &body)?;
-                self.reply(&raw, as_json, true, |_| Ok(format!("removed layer {lid}\n")))
+                self.reply(&raw, as_json, true, |_| {
+                    Ok(format!("removed layer {lid}\n"))
+                })
             }
             Verb::Enabled { on, token } => {
                 let lid = self.layer_id(token)?;
@@ -425,11 +441,7 @@ impl Ctx<'_> {
         warn: bool,
         printer: impl FnOnce(&Value) -> Result<String, (String, Raise)>,
     ) -> R<Shown> {
-        let warnings = if warn {
-            soft_warn(raw)?
-        } else {
-            String::new()
-        };
+        let warnings = if warn { soft_warn(raw)? } else { String::new() };
         if as_json {
             return Ok(Shown {
                 stdout: format!("{raw}\n"),
@@ -467,7 +479,10 @@ impl Ctx<'_> {
                 .header("Content-Type", "application/json");
         }
         let (status, raw) = match self.opener.open(&r) {
-            Outcome::Answer { status, body: Ok(b) } => (status, decode(&b)),
+            Outcome::Answer {
+                status,
+                body: Ok(b),
+            } => (status, decode(&b)),
             Outcome::Answer { body: Err(e), .. } | Outcome::Raised(e) => {
                 return Err(fail(
                     "daemon_unreachable",
@@ -555,9 +570,7 @@ impl Ctx<'_> {
         if status == 404 && !has("ok") && !has("layers") && !has("catalog") {
             return Err(fail(
                 "not_found",
-                &format!(
-                    "route {route} not found (is the context-stack daemon build running?)"
-                ),
+                &format!("route {route} not found (is the context-stack daemon build running?)"),
                 Exit::NotFound,
             ));
         }
@@ -678,16 +691,16 @@ fn first_of<'a>(x: &'a Value, keys: &[&str], line: u32) -> Result<Option<&'a Val
 /// The resolver's `norm(p)`.
 fn norm(p: Option<&Value>, line: u32) -> Result<String, Raise> {
     let p = text_or_empty(p, "replace", line)?.replace('\\', "/");
-    Ok(py_strip(&p)
-        .trim_start_matches(['.', '/'])
-        .to_string())
+    Ok(py_strip(&p).trim_start_matches(['.', '/']).to_string())
 }
 
 /// The resolver's Python: the layer id it prints, or `None` (exit 4).
 fn resolve_layer(d: &Value, token: &str) -> Result<Option<String>, Raise> {
     let l = line::RESOLVE_PINNED;
     let empty = Value::Array(Vec::new());
-    let layers = first_of(d, &["layers", "optional"], l)?.unwrap_or(&empty).clone();
+    let layers = first_of(d, &["layers", "optional"], l)?
+        .unwrap_or(&empty)
+        .clone();
     let pinned = first_of(d, &["pinned"], l)?.unwrap_or(&empty).clone();
     let lower = token.to_lowercase();
     for p in py_iter(&pinned, l)? {
@@ -695,11 +708,19 @@ fn resolve_layer(d: &Value, token: &str) -> Result<Option<String>, Raise> {
             .filter(|v| py::truthy(v))
             .map_or_else(String::new, py::str_of);
         if pid == token || pid.is_empty() {
-            return Ok(Some(if pid.is_empty() { token.to_string() } else { pid }));
+            return Ok(Some(if pid.is_empty() {
+                token.to_string()
+            } else {
+                pid
+            }));
         }
         let lab = py_strip(&text_or_empty(dget(&p, "label", l)?, "strip", l)?).to_lowercase();
         if !lab.is_empty() && lab == lower {
-            return Ok(Some(if pid.is_empty() { token.to_string() } else { pid }));
+            return Ok(Some(if pid.is_empty() {
+                token.to_string()
+            } else {
+                pid
+            }));
         }
     }
     let l = line::RESOLVE_LAYERS;
@@ -708,7 +729,9 @@ fn resolve_layer(d: &Value, token: &str) -> Result<Option<String>, Raise> {
         Ok(at(x, "id").map_or_else(|| "None".to_string(), py::str_of))
     };
     for x in &items {
-        let id = dget(x, "id", l)?.filter(|v| py::truthy(v)).map_or_else(String::new, py::str_of);
+        let id = dget(x, "id", l)?
+            .filter(|v| py::truthy(v))
+            .map_or_else(String::new, py::str_of);
         if id == token {
             return id_of(x).map(Some);
         }
@@ -795,7 +818,9 @@ pub fn list_printer(d: &Value) -> Result<String, (String, Raise)> {
 fn list_lines(d: &Value, out: &mut String) -> Result<(), Raise> {
     let cli = cli();
     let empty = Value::Array(Vec::new());
-    let pinned = first_of(d, &["pinned"], line::LIST_PINNED)?.unwrap_or(&empty).clone();
+    let pinned = first_of(d, &["pinned"], line::LIST_PINNED)?
+        .unwrap_or(&empty)
+        .clone();
     let layers = first_of(d, &["layers", "optional"], line::LIST_PINNED)?
         .unwrap_or(&empty)
         .clone();
@@ -825,8 +850,8 @@ fn list_lines(d: &Value, out: &mut String) -> Result<(), Raise> {
                     .unwrap_or("")
                     .to_string()
             };
-            let mut path = first_of(&p, &["path", "detail"], l)?
-                .map_or_else(String::new, py::str_of);
+            let mut path =
+                first_of(&p, &["path", "detail"], l)?.map_or_else(String::new, py::str_of);
             let blank = !first_of(&p, &["path", "detail"], l)?.is_some();
             if blank {
                 let generated = at(&p, "generated").is_some_and(py::truthy)
@@ -869,9 +894,10 @@ fn list_lines(d: &Value, out: &mut String) -> Result<(), Raise> {
                 label = if path.is_empty() {
                     match at(&x, "id").filter(|v| py::truthy(v)) {
                         None => "?".to_string(),
-                        Some(Value::Str(t)) => {
-                            py::str_of(&Value::Str(t.clone())).chars().take(12).collect()
-                        }
+                        Some(Value::Str(t)) => py::str_of(&Value::Str(t.clone()))
+                            .chars()
+                            .take(12)
+                            .collect(),
                         Some(other) => {
                             return Err(Raise::at(
                                 l,
@@ -926,7 +952,9 @@ pub fn catalog_printer(d: &Value) -> Result<String, (String, Raise)> {
 fn catalog_lines(d: &Value, out: &mut String) -> Result<(), Raise> {
     let l = line::CATALOG;
     let empty = Value::Array(Vec::new());
-    let items = first_of(d, &["catalog", "items"], l)?.unwrap_or(&empty).clone();
+    let items = first_of(d, &["catalog", "items"], l)?
+        .unwrap_or(&empty)
+        .clone();
     if !py::truthy(&items) {
         out.push_str("(no context catalog items registered)\n");
         return Ok(());
@@ -941,7 +969,10 @@ fn catalog_lines(d: &Value, out: &mut String) -> Result<(), Raise> {
             out.push('\n');
             continue;
         }
-        let pid = at(&p, "id").filter(|v| py::truthy(v)).cloned().unwrap_or_else(|| s("?"));
+        let pid = at(&p, "id")
+            .filter(|v| py::truthy(v))
+            .cloned()
+            .unwrap_or_else(|| s("?"));
         let path = first_of(&p, &["path", "defaultPath"], l)?
             .cloned()
             .unwrap_or_else(|| s(""));
@@ -968,7 +999,9 @@ fn catalog_lines(d: &Value, out: &mut String) -> Result<(), Raise> {
                 || path_s.contains("/wiki/")
             {
                 "path"
-            } else if pid_s.contains("hygiene") || pid_s.contains("pack") || path_s.contains("catalog/")
+            } else if pid_s.contains("hygiene")
+                || pid_s.contains("pack")
+                || path_s.contains("catalog/")
             {
                 "static"
             } else {
@@ -1209,8 +1242,14 @@ mod tests {
         assert_eq!(resolve_layer(&d, "L1").unwrap().as_deref(), Some("L1"));
         assert_eq!(resolve_layer(&d, "a.md").unwrap().as_deref(), Some("L1"));
         assert_eq!(resolve_layer(&d, "docs").unwrap().as_deref(), Some("L1"));
-        assert_eq!(resolve_layer(&d, "wiki-index").unwrap().as_deref(), Some("L1"));
-        assert_eq!(resolve_layer(&d, "agent").unwrap().as_deref(), Some("pinned:agent"));
+        assert_eq!(
+            resolve_layer(&d, "wiki-index").unwrap().as_deref(),
+            Some("L1")
+        );
+        assert_eq!(
+            resolve_layer(&d, "agent").unwrap().as_deref(),
+            Some("pinned:agent")
+        );
         assert_eq!(resolve_layer(&d, "nope").unwrap(), None);
     }
 

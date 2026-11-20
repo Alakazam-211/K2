@@ -2,14 +2,12 @@
 //! conf, then one urllib POST of the block's own (K2's ruling D4).
 
 use super::conf::fetch;
-use super::{
-    abs_user, at, cli, dumps, err_json, head, obj, product, py_strip, raised, s, str_or,
-};
-use crate::families::{py_get, py_iter, Raise, Shown};
+use super::{abs_user, at, cli, dumps, err_json, head, obj, product, py_strip, raised, s, str_or};
 use crate::exit::Exit;
+use crate::families::{py_get, py_iter, Raise, Shown};
 use crate::out::json::Value;
-use crate::out::pylib::{json as pyjson, ops};
 use crate::out::py;
+use crate::out::pylib::{json as pyjson, ops};
 use crate::prelude::Closing;
 use crate::transport::urllib::{decode, Method, Opener, Outcome, Request};
 use crate::transport::Client;
@@ -237,10 +235,8 @@ fn retire_block(opener: &Opener, conf: &Value, a: &RetireArgs) -> Shown {
                 Some(d) => d,
                 None => {
                     return Shown::err(
-                        err_json(
-                            "daemon_error",
-                            &format!("HTTP {code} on {}", super::RETIRE),
-                        ) + "\n",
+                        err_json("daemon_error", &format!("HTTP {code} on {}", super::RETIRE))
+                            + "\n",
                         Exit::Error,
                     )
                 }
@@ -263,11 +259,18 @@ fn retire_answer(d: &Value, as_json: bool, label: &str, path: &str) -> Result<Sh
         .cloned()
         .unwrap_or(Value::Null);
     if at(d, "refused").is_some_and(py::truthy) {
-        let e = if py::truthy(&err) { err.clone() } else { obj(vec![]) };
+        let e = if py::truthy(&err) {
+            err.clone()
+        } else {
+            obj(vec![])
+        };
         let hint = py_get(&e, "hint", line::RETIRE_REFUSED)
             .map_err(none)?
             .filter(|h| py::truthy(h))
-            .map_or_else(|| "retire refused by a safety guard".to_string(), py::str_of);
+            .map_or_else(
+                || "retire refused by a safety guard".to_string(),
+                py::str_of,
+            );
         let stderr = if as_json {
             dumps(d) + "\n"
         } else {
@@ -311,7 +314,9 @@ fn retire_answer(d: &Value, as_json: bool, label: &str, path: &str) -> Result<Sh
             "DRY RUN \u{2014} no changes made. Plan for retiring {label} ({path}):\n"
         ));
     }
-    let actions = at(d, "actions").cloned().unwrap_or(Value::Array(Vec::new()));
+    let actions = at(d, "actions")
+        .cloned()
+        .unwrap_or(Value::Array(Vec::new()));
     let items = match py_iter(&actions, line::RETIRE_ACTIONS) {
         Ok(i) => i,
         Err(r) => return Err((out, String::new(), r)),
@@ -343,13 +348,19 @@ fn action_line(a: &Value) -> Result<String, Raise> {
     let some = |k: &str| at(a, k).filter(|v| **v != Value::Null);
     let mut detail = String::new();
     if is(&step, "stop-session") && at(a, "sessionId").is_some_and(py::truthy) {
-        detail = format!(" (session {})", head(&at(a, "sessionId").cloned().unwrap_or(Value::Null), 8));
+        detail = format!(
+            " (session {})",
+            head(&at(a, "sessionId").cloned().unwrap_or(Value::Null), 8)
+        );
     } else if is(&step, "remove-connections") && some("removed").is_some() {
         detail = format!(" ({} edge(s))", str_or(some("removed"), ""));
     } else if is(&step, "remove-connections") && some("edges").is_some() {
         detail = format!(" ({} edge(s))", str_or(some("edges"), ""));
     } else if is(&step, "clean-dependents") && some("chatSessionNames").is_some() {
-        detail = format!(" ({} chat-session row(s))", str_or(some("chatSessionNames"), ""));
+        detail = format!(
+            " ({} chat-session row(s))",
+            str_or(some("chatSessionNames"), "")
+        );
     } else if is(&step, "archive-folder") && at(a, "to").is_some_and(py::truthy) {
         detail = format!(" \u{2192} {}", str_or(at(a, "to"), ""));
     }
@@ -439,7 +450,10 @@ fn restart_block(opener: &Opener, conf: &Value, a: &RestartArgs) -> Shown {
             format!("DRY RUN \u{2014} {label} has no live session; restart would start one.\n")
         });
     }
-    let mut body = vec![("project", path.clone()), ("forceRespawn", Value::Bool(true))];
+    let mut body = vec![
+        ("project", path.clone()),
+        ("forceRespawn", Value::Bool(true)),
+    ];
     if !harness.is_empty() {
         body.push(("harness", s(&harness)));
     }
@@ -568,7 +582,10 @@ fn restart_answer(
             ("sessionId", new_id),
             ("conversationId", conversation),
             ("resumedExisting", Value::Bool(resumed)),
-            ("provider", at(d, "provider").cloned().unwrap_or(Value::Null)),
+            (
+                "provider",
+                at(d, "provider").cloned().unwrap_or(Value::Null),
+            ),
         ]);
         return Ok(Shown::out(dumps(&out) + "\n"));
     }

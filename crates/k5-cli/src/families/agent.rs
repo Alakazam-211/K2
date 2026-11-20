@@ -93,7 +93,9 @@ pub const ENSURE_PINNED_CHAT: &str = "/cli/workspace/ensure-pinned-chat";
 enum Form {
     Conf(conf::ConfArgs),
     Get(conf::GetArgs),
-    List { json: bool },
+    List {
+        json: bool,
+    },
     Retire(retire::RetireArgs),
     Restart(retire::RestartArgs),
     Context(context::ContextArgs),

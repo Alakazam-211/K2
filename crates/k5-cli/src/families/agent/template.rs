@@ -33,8 +33,13 @@ mod line {
 /// One template verb and its words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verb {
-    List { all: bool },
-    Show { id: String, files: bool },
+    List {
+        all: bool,
+    },
+    Show {
+        id: String,
+        files: bool,
+    },
     Save {
         ws: String,
         id: String,
@@ -43,12 +48,26 @@ pub enum Verb {
         wiki: Vec<String>,
         dry: bool,
     },
-    Add { dir: String, dry: bool },
-    Remove { id: String, version: String },
+    Add {
+        dir: String,
+        dry: bool,
+    },
+    Remove {
+        id: String,
+        version: String,
+    },
     /// `upgrade <ws>` or `diff <ws>`.
-    Workspace { diff: bool, ws: String, dry: bool },
+    Workspace {
+        diff: bool,
+        ws: String,
+        dry: bool,
+    },
     /// `diff <id> <vA> <vB>`: the versions with one leading `v` off.
-    Versions { id: String, a: String, b: String },
+    Versions {
+        id: String,
+        a: String,
+        b: String,
+    },
 }
 
 /// The words after `template`: the verb and `--json`, or the usage line
@@ -106,7 +125,11 @@ pub fn parse(words: &[&str]) -> Option<Result<(Verb, bool), String>> {
             let mut i = 0;
             while i < rest.len() {
                 let w = rest[i];
-                let value = |need: &str| rest.get(i + 1).map(|v| v.to_string()).ok_or_else(|| need.to_string());
+                let value = |need: &str| {
+                    rest.get(i + 1)
+                        .map(|v| v.to_string())
+                        .ok_or_else(|| need.to_string())
+                };
                 match w {
                     "--id" => match value("--id needs a template id") {
                         Ok(v) => {
@@ -329,7 +352,13 @@ pub fn run(client: &mut Client, closing: &mut Closing, verb: &Verb, as_json: boo
         Verb::Workspace { diff, ws, dry } => {
             let ws = template_ws(client, ws);
             let body = obj(vec![("workspace", s(&ws)), ("dryRun", Value::Bool(*dry))]);
-            post(client, closing, if *diff { "diff" } else { "upgrade" }, &body, as_json)
+            post(
+                client,
+                closing,
+                if *diff { "diff" } else { "upgrade" },
+                &body,
+                as_json,
+            )
         }
         Verb::Versions { id, a, b } => {
             let (Some(a), Some(b)) = (py_int(a), py_int(b)) else {
@@ -390,7 +419,13 @@ fn template_ws(client: &mut Client, ws: &str) -> String {
 
 /// `_agent_template_post /cli/agent-templates/<mode> <body>`: the POST on
 /// the left of the pipe, the write reader on the right.
-fn post(client: &mut Client, closing: &mut Closing, mode: &str, body: &Value, as_json: bool) -> Exit {
+fn post(
+    client: &mut Client,
+    closing: &mut Closing,
+    mode: &str,
+    body: &Value,
+    as_json: bool,
+) -> Exit {
     let route = format!("/cli/agent-templates/{mode}");
     let body = super::dumps(body);
     let passport = client.passport().is_some();
@@ -567,7 +602,10 @@ fn list_lines(d: &Value, out: &mut String, err: &mut String) -> Result<(), Raise
     let row = |t: &Value| -> Result<String, Raise> {
         let mut extra = Vec::new();
         if truthy(py_get(t, "aliases", l)?) {
-            extra.push(format!("old id: {}", joined(super::at(t, "aliases").unwrap_or(&Value::Null), l)?));
+            extra.push(format!(
+                "old id: {}",
+                joined(super::at(t, "aliases").unwrap_or(&Value::Null), l)?
+            ));
         }
         if eq(super::at(t, "kind"), "system") {
             extra.push("system".to_string());
@@ -638,7 +676,10 @@ fn show_lines(d: &Value, files: bool, out: &mut String) -> Result<(), Raise> {
         g("summary")?.map_or_else(String::new, py::str_of)
     ));
     if truthy(g("aliases")?) {
-        out.push_str(&format!("  Old id: {}\n", joined(g("aliases")?.unwrap_or(&Value::Null), l)?));
+        out.push_str(&format!(
+            "  Old id: {}\n",
+            joined(g("aliases")?.unwrap_or(&Value::Null), l)?
+        ));
     }
     let ag = match g("agent")? {
         Some(v) if py::truthy(v) => v.clone(),
@@ -675,7 +716,11 @@ fn show_lines(d: &Value, files: bool, out: &mut String) -> Result<(), Raise> {
                 py::str_of(&Value::Str(k.clone())),
                 sv(py_get(p, "label", l)?),
                 sv(py_get(p, "max", l)?),
-                if truthy(py_get(p, "required", l)?) { ", required" } else { "" }
+                if truthy(py_get(p, "required", l)?) {
+                    ", required"
+                } else {
+                    ""
+                }
             ));
         }
     }
@@ -743,7 +788,9 @@ fn show_lines(d: &Value, files: bool, out: &mut String) -> Result<(), Raise> {
         joined(&Value::Array(sugg), l)?
     };
     out.push_str(&format!("  Suggests: {sugg}\n"));
-    out.push_str("    (suggestions only: a person turns a switch on, or the agent asks on a card)\n");
+    out.push_str(
+        "    (suggestions only: a person turns a switch on, or the agent asks on a card)\n",
+    );
     if let Some(hello) = g("hello")?.filter(|v| py::truthy(v)) {
         let Value::Str(_) = hello else {
             return Err(Raise::no_attribute(l, hello, "replace"));
@@ -816,7 +863,10 @@ fn write_print(raw: &str, mode: &str, as_json: bool) -> Shown {
         let line = format!("Error: {head}{}\n", py::str_of(&hint));
         let exit = if code_in(&code, &["usage", "bad_id", "bad_template", "no_charter"]) {
             Exit::Usage
-        } else if code_in(&code, &["id_reserved", "id_taken", "secret_found", "too_large"]) {
+        } else if code_in(
+            &code,
+            &["id_reserved", "id_taken", "secret_found", "too_large"],
+        ) {
             Exit::Error
         } else {
             let refused = code_in(
@@ -893,7 +943,10 @@ fn write_lines(d: &Value, mode: &str, out: &mut String) -> Result<(), Raise> {
         } else {
             format!("; still saved: {left}")
         };
-        out.push_str(&format!("Removed {}: {gone}{still}\n", sv(py_get(d, "id", l)?)));
+        out.push_str(&format!(
+            "Removed {}: {gone}{still}\n",
+            sv(py_get(d, "id", l)?)
+        ));
         return Ok(());
     }
     if mode == "save" || mode == "add" {
@@ -933,7 +986,11 @@ fn write_lines(d: &Value, mode: &str, out: &mut String) -> Result<(), Raise> {
             Some(v) if py::truthy(v) => joined(v, l)?,
             _ => String::new(),
         };
-        let sugg = if sugg.is_empty() { "nothing".to_string() } else { sugg };
+        let sugg = if sugg.is_empty() {
+            "nothing".to_string()
+        } else {
+            sugg
+        };
         out.push_str(&format!(
             "  Suggests: {sugg}  (suggestions only: a hire never gets a switch from a template)\n"
         ));
@@ -979,7 +1036,11 @@ fn write_lines(d: &Value, mode: &str, out: &mut String) -> Result<(), Raise> {
                 py::str_of(&a),
                 py::str_of(&b),
                 sv(g("id")?),
-                if truthy(g("dryRun")?) { "  [dry run]" } else { "" }
+                if truthy(g("dryRun")?) {
+                    "  [dry run]"
+                } else {
+                    ""
+                }
             ));
         }
         if let Some(rows) = g("rows")?.filter(|v| py::truthy(v)) {
@@ -1081,7 +1142,10 @@ mod tests {
             parse(&["remove", "x", "--version", "v2"]),
             Some(Ok((Verb::Remove { .. }, false)))
         ));
-        assert!(matches!(parse(&["remove", "x", "--version", "2a"]), Some(Err(_))));
+        assert!(matches!(
+            parse(&["remove", "x", "--version", "2a"]),
+            Some(Err(_))
+        ));
         assert!(matches!(
             parse(&["diff", "id", "v1", "2", "--json"]),
             Some(Ok((Verb::Versions { .. }, true)))
@@ -1110,10 +1174,21 @@ mod tests {
 
     #[test]
     fn the_errors() {
-        let r = read_print(r#"{"error":{"code":"unknown_template","hint":"no such"}}"#, Mode::Show, false, false);
-        assert_eq!((r.stderr.as_str(), r.exit), ("Error: unknown_template: no such\n", Exit::NotFound));
+        let r = read_print(
+            r#"{"error":{"code":"unknown_template","hint":"no such"}}"#,
+            Mode::Show,
+            false,
+            false,
+        );
+        assert_eq!(
+            (r.stderr.as_str(), r.exit),
+            ("Error: unknown_template: no such\n", Exit::NotFound)
+        );
         let r = write_print(r#"{"error":"bad token here"}"#, "save", false);
-        assert_eq!((r.stderr.as_str(), r.exit), ("Error: bad token here\n", Exit::Refused));
+        assert_eq!(
+            (r.stderr.as_str(), r.exit),
+            ("Error: bad token here\n", Exit::Refused)
+        );
         let r = write_print("", "save", false);
         assert_eq!(r.stderr, "Error: daemon answered: \n");
     }

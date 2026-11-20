@@ -81,14 +81,18 @@ pub fn parse(harness_verb: bool, rest: &[&str]) -> Result<Args, Stop> {
             "--recent" if harness_verb => a.full = false,
             "--notes-file" => {
                 if value.is_empty() {
-                    return Err(usage_stop(format!("--notes-file takes a path \u{2014} {usage}")));
+                    return Err(usage_stop(format!(
+                        "--notes-file takes a path \u{2014} {usage}"
+                    )));
                 }
                 a.notes_file = value.to_string();
                 i += 1;
             }
             "--model" if harness_verb => {
                 if value.is_empty() {
-                    return Err(usage_stop(format!("--model takes a model id \u{2014} {usage}")));
+                    return Err(usage_stop(format!(
+                        "--model takes a model id \u{2014} {usage}"
+                    )));
                 }
                 a.model = value.to_string();
                 i += 1;
@@ -141,7 +145,9 @@ pub fn check_refresh_ws(a: &mut Args, passport: bool) -> Result<(), Stop> {
     if a.harness_verb || !a.ws.is_empty() {
         return Ok(());
     }
-    if let Some((_, v)) = k2_client::env_names::first_nonempty_os(k2_client::env_names::PROJECT_PATH) {
+    if let Some((_, v)) =
+        k2_client::env_names::first_nonempty_os(k2_client::env_names::PROJECT_PATH)
+    {
         a.ws = v.to_string_lossy().into_owned();
     }
     if a.ws.is_empty() && !passport {
@@ -217,7 +223,13 @@ pub fn run(client: &mut Client, closing: &mut Closing, a: &Args) -> Exit {
         ));
         return Exit::Error;
     }
-    reader(a.harness_verb, &String::from_utf8_lossy(&body), status, a.json).print()
+    reader(
+        a.harness_verb,
+        &String::from_utf8_lossy(&body),
+        status,
+        a.json,
+    )
+    .print()
 }
 
 fn get<'a>(d: &'a Value, k: &str) -> Option<&'a Value> {
@@ -242,7 +254,10 @@ pub fn reader(harness_verb: bool, raw: &str, status: u16, as_json: bool) -> Show
         return Shown::err(
             err_json(
                 "daemon_error",
-                &format!("unparseable answer (HTTP {status}): {}", super::cut(raw, 300)),
+                &format!(
+                    "unparseable answer (HTTP {status}): {}",
+                    super::cut(raw, 300)
+                ),
             ) + "\n",
             Exit::Error,
         );
@@ -251,7 +266,10 @@ pub fn reader(harness_verb: bool, raw: &str, status: u16, as_json: bool) -> Show
         return Shown::err(
             err_json(
                 "daemon_error",
-                &format!("unexpected answer (HTTP {status}): {}", super::cut(raw, 300)),
+                &format!(
+                    "unexpected answer (HTTP {status}): {}",
+                    super::cut(raw, 300)
+                ),
             ) + "\n",
             Exit::Error,
         );
@@ -458,7 +476,9 @@ fn lines(harness_verb: bool, d: &Value, l: u32) -> Result<String, (String, Raise
             "Heartbeats on the pinned chat, Threads and messages now go to the {h} chat.\n"
         ));
     } else {
-        out.push_str("The Thread, heartbeats on the pinned chat and messages carry on in the new chat.\n");
+        out.push_str(
+            "The Thread, heartbeats on the pinned chat and messages carry on in the new chat.\n",
+        );
     }
     if let Err(r) = own_note(&mut out) {
         return Err(fail(out, r));
@@ -505,10 +525,18 @@ mod tests {
     fn the_words() {
         assert!(parse(true, &["ws"]).is_err());
         let a = parse(true, &["ws", "codex", "--full", "--model", "o3"]).unwrap();
-        assert_eq!((a.harness.as_str(), a.full, a.model.as_str()), ("codex", true, "o3"));
+        assert_eq!(
+            (a.harness.as_str(), a.full, a.model.as_str()),
+            ("codex", true, "o3")
+        );
         assert!(parse(false, &["--note", "x", "--notes-file", "y"]).is_err());
         assert!(parse(false, &["--model", "x"]).is_err());
-        assert_eq!(parse(true, &["a", "b", "--notes-file", "/no/such"]).unwrap_err().1, Exit::Error);
+        assert_eq!(
+            parse(true, &["a", "b", "--notes-file", "/no/such"])
+                .unwrap_err()
+                .1,
+            Exit::Error
+        );
     }
 
     #[test]
@@ -527,7 +555,18 @@ mod tests {
 
     #[test]
     fn a_refusal() {
-        let r = reader(false, r#"{"error":{"code":"needs_person","hint":"ask"},"handoffPath":"/h"}"#, 403, false);
-        assert_eq!((r.stderr.as_str(), r.exit), ("Error (needs_person): ask\nHandoff file: /h\n", Exit::Refused));
+        let r = reader(
+            false,
+            r#"{"error":{"code":"needs_person","hint":"ask"},"handoffPath":"/h"}"#,
+            403,
+            false,
+        );
+        assert_eq!(
+            (r.stderr.as_str(), r.exit),
+            (
+                "Error (needs_person): ask\nHandoff file: /h\n",
+                Exit::Refused
+            )
+        );
     }
 }

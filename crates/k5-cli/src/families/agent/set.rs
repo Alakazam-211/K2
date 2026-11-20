@@ -7,15 +7,16 @@ use super::{at, cli, dumps, obj, s};
 use crate::exit::Exit;
 use crate::families::{ljust, py_get, py_iter, Raise, Shown};
 use crate::out::json::{Text, Value};
-use crate::out::pylib::{json as pyjson, ops};
 use crate::out::py;
+use crate::out::pylib::{json as pyjson, ops};
 use crate::prelude::Closing;
 use crate::transport::urllib::{decode, Method, Opener, Outcome, Request};
 use crate::transport::Client;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
-const VALID: &str = "--mode --enabled --name --persona --add-project --remove-project --dry-run --json";
+const VALID: &str =
+    "--mode --enabled --name --persona --add-project --remove-project --dry-run --json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetArgs {
@@ -50,7 +51,9 @@ pub fn parse(rest: &[&str]) -> Result<SetArgs, String> {
         let value = rest.get(i + 1).map(|v| v.to_string());
         let need = |hint: String| value.clone().ok_or(hint);
         match w {
-            "--mode" => a.mode = need("--mode requires a value (off | custom | manager | k2)".into())?,
+            "--mode" => {
+                a.mode = need("--mode requires a value (off | custom | manager | k2)".into())?
+            }
             "--enabled" => a.enabled = need("--enabled requires a value (true | false)".into())?,
             "--name" => a.new_name = need("--name requires a value".into())?,
             "--persona" => a.persona = need("--persona requires a file path".into())?,
@@ -94,7 +97,10 @@ pub fn parse(rest: &[&str]) -> Result<SetArgs, String> {
     {
         return Err("nothing to set \u{2014} pass at least one of: --mode --enabled --name --persona --add-project --remove-project".into());
     }
-    if !matches!(a.mode.as_str(), "" | "off" | "custom" | "manager" | "k2" | "k2so") {
+    if !matches!(
+        a.mode.as_str(),
+        "" | "off" | "custom" | "manager" | "k2" | "k2so"
+    ) {
         return Err(format!(
             "invalid --mode '{}' \u{2014} valid: off, custom, manager, k2",
             a.mode
@@ -196,7 +202,11 @@ fn act(pairs: Vec<(&str, Value)>) -> Action {
 }
 
 fn to_value(a: &Action) -> Value {
-    Value::Object(a.iter().map(|(k, v)| (Text::from(k.as_str()), v.clone())).collect())
+    Value::Object(
+        a.iter()
+            .map(|(k, v)| (Text::from(k.as_str()), v.clone()))
+            .collect(),
+    )
 }
 
 struct Run<'a> {
@@ -236,7 +246,10 @@ impl Run<'_> {
     }
 
     fn http_get(&self, route: &str, params: Vec<(String, String)>) -> Value {
-        self.call(Request::new(Method::Get, route, TIMEOUT).query(params), route)
+        self.call(
+            Request::new(Method::Get, route, TIMEOUT).query(params),
+            route,
+        )
     }
 
     fn post_query(&self, route: &str, params: Vec<(String, String)>) -> Value {
@@ -278,7 +291,11 @@ impl Run<'_> {
             },
         };
         let a = self.a;
-        let req_mode = if a.mode == "k2so" { "k2" } else { a.mode.as_str() };
+        let req_mode = if a.mode == "k2so" {
+            "k2"
+        } else {
+            a.mode.as_str()
+        };
         if !a.mode.is_empty() {
             let from = at(conf, "mode").cloned().unwrap_or(Value::Null);
             self.actions.push(if ops::py_eq(&s(req_mode), &from) {
@@ -353,20 +370,21 @@ impl Run<'_> {
                     .map(|b| read_text(&b)),
                 _ => None,
             };
-            self.actions.push(if current.as_deref() == Some(content.as_str()) {
-                act(vec![
-                    ("step", s("write-persona")),
-                    ("source", s(&a.persona)),
-                    ("status", s("skipped")),
-                    ("reason", s("identical content")),
-                ])
-            } else {
-                act(vec![
-                    ("step", s("write-persona")),
-                    ("source", s(&a.persona)),
-                    ("status", s("pending")),
-                ])
-            });
+            self.actions
+                .push(if current.as_deref() == Some(content.as_str()) {
+                    act(vec![
+                        ("step", s("write-persona")),
+                        ("source", s(&a.persona)),
+                        ("status", s("skipped")),
+                        ("reason", s("identical content")),
+                    ])
+                } else {
+                    act(vec![
+                        ("step", s("write-persona")),
+                        ("source", s(&a.persona)),
+                        ("status", s("pending")),
+                    ])
+                });
             persona_content = Some(content);
         }
         // Current memberships: {group id: isPoc}.
@@ -420,7 +438,12 @@ impl Run<'_> {
                 ));
             }
         }
-        let member = |id: &Value| member_of.iter().find(|(k, _)| ops::py_eq(k, id)).map(|(_, p)| *p);
+        let member = |id: &Value| {
+            member_of
+                .iter()
+                .find(|(k, _)| ops::py_eq(k, id))
+                .map(|(_, p)| *p)
+        };
         for (id, name, memberless) in &adds {
             let mut x = act(vec![
                 ("step", s("join-project")),
@@ -481,14 +504,21 @@ impl Run<'_> {
                 Value::Str(_) => obj(vec![("code", s("error")), ("hint", err)]),
                 other => other,
             };
-            let mut code = py_get(&err, "code", L)?.cloned().unwrap_or_else(|| s("error"));
+            let mut code = py_get(&err, "code", L)?
+                .cloned()
+                .unwrap_or_else(|| s("error"));
             if ops::py_eq(&code, &s("ambiguous_id")) {
                 code = s("ambiguous");
             }
             let hint = at(&err, "hint").filter(|v| py::truthy(v)).cloned();
             if ops::py_eq(&code, &s("not_found")) || ops::py_eq(&code, &s("ambiguous")) {
                 let hint = hint.map_or_else(
-                    || format!("no project matches '{sel}' \u{2014} see: {} project list", cli()),
+                    || {
+                        format!(
+                            "no project matches '{sel}' \u{2014} see: {} project list",
+                            cli()
+                        )
+                    },
                     |h| py::str_of(&h),
                 );
                 return Err(fail(&code, &hint, Exit::NotFound));
@@ -516,7 +546,10 @@ impl Run<'_> {
             let mut out = vec![
                 ("ok", Value::Bool(ok)),
                 ("changed", Value::Bool(changed)),
-                ("name", at(self.conf, "name").cloned().unwrap_or(Value::Null)),
+                (
+                    "name",
+                    at(self.conf, "name").cloned().unwrap_or(Value::Null),
+                ),
                 ("path", self.path.clone()),
                 (
                     "actions",
@@ -543,12 +576,12 @@ impl Run<'_> {
                 "done" => "done",
                 "skipped" => "skipped",
                 "failed" => "FAILED",
-                _ => return Err(Raise::at(L, format!("KeyError: {}", py::repr(&s(&status)))).into()),
+                _ => {
+                    return Err(Raise::at(L, format!("KeyError: {}", py::repr(&s(&status)))).into())
+                }
             };
-            self.stdout.push_str(&format!(
-                "  {} {line}\n",
-                ljust(&format!("[{marker}]"), 14)
-            ));
+            self.stdout
+                .push_str(&format!("  {} {line}\n", ljust(&format!("[{marker}]"), 14)));
         }
         if !self.a.dry {
             let n = self.actions.iter().filter(|x| status_is(x, "done")).count();
@@ -581,7 +614,10 @@ impl Run<'_> {
             }
             let step = aget(x, "step").map(py::str_of).unwrap_or_default();
             if step == "set-mode" {
-                fields.push(("agent_mode", aget(x, "mode").cloned().unwrap_or(Value::Null)));
+                fields.push((
+                    "agent_mode",
+                    aget(x, "mode").cloned().unwrap_or(Value::Null),
+                ));
             } else if step == "set-enabled" {
                 let on = aget(x, "enabled").is_some_and(py::truthy);
                 fields.push(("agent_enabled", s(if on { "1" } else { "0" })));
@@ -590,7 +626,10 @@ impl Run<'_> {
         if !fields.is_empty() {
             let resp = self.post_json(
                 "/cli/workspace/set",
-                &obj(vec![("project", self.path.clone()), ("fields", obj(fields))]),
+                &obj(vec![
+                    ("project", self.path.clone()),
+                    ("fields", obj(fields)),
+                ]),
             );
             let err = py_get(&resp, "error", L)?.cloned().unwrap_or(Value::Null);
             if py::truthy(&err) || !at(&resp, "ok").is_some_and(py::truthy) {
@@ -599,7 +638,11 @@ impl Run<'_> {
                 let hint = match &err {
                     Value::Str(_) => py::str_of(&err),
                     _ => {
-                        let e = if py::truthy(&err) { err.clone() } else { obj(vec![]) };
+                        let e = if py::truthy(&err) {
+                            err.clone()
+                        } else {
+                            obj(vec![])
+                        };
                         match py_get(&e, "hint", L)?.filter(|v| py::truthy(v)) {
                             Some(h) => py::str_of(h),
                             None => dumps(&resp).chars().take(300).collect(),
@@ -613,7 +656,9 @@ impl Run<'_> {
                 ));
             }
             let mut by_field: Vec<(Value, Value)> = Vec::new();
-            let acts = at(&resp, "actions").cloned().unwrap_or(Value::Array(Vec::new()));
+            let acts = at(&resp, "actions")
+                .cloned()
+                .unwrap_or(Value::Array(Vec::new()));
             for f in py_iter(&acts, L)? {
                 let k = py_get(&f, "field", L)?.cloned().unwrap_or(Value::Null);
                 let v = py_get(&f, "status", L)?.cloned().unwrap_or(Value::Null);
@@ -646,7 +691,9 @@ impl Run<'_> {
         // 2. Rename.
         for i in 0..self.actions.len() {
             let x = &self.actions[i];
-            if !(aget(x, "step").is_some_and(|v| ops::py_eq(v, &s("rename"))) && status_is(x, "pending")) {
+            if !(aget(x, "step").is_some_and(|v| ops::py_eq(v, &s("rename")))
+                && status_is(x, "pending"))
+            {
                 continue;
             }
             let name = py::str_of(aget(x, "name").unwrap_or(&Value::Null));
@@ -665,7 +712,11 @@ impl Run<'_> {
                 };
                 put(&mut self.actions[i], "status", s("failed"));
                 self.emit(false, changed)?;
-                return Err(fail(&s("daemon_error"), &format!("rename failed: {why}"), Exit::Error));
+                return Err(fail(
+                    &s("daemon_error"),
+                    &format!("rename failed: {why}"),
+                    Exit::Error,
+                ));
             }
             put(&mut self.actions[i], "status", s("done"));
             changed = true;
@@ -673,16 +724,28 @@ impl Run<'_> {
         // 3. Persona.
         for i in 0..self.actions.len() {
             let x = &self.actions[i];
-            if !(aget(x, "step").is_some_and(|v| ops::py_eq(v, &s("write-persona"))) && status_is(x, "pending")) {
+            if !(aget(x, "step").is_some_and(|v| ops::py_eq(v, &s("write-persona")))
+                && status_is(x, "pending"))
+            {
                 continue;
             }
             let path = py::str_of(&self.path);
             let base = path.rsplit('/').next().unwrap_or("");
             let agent_name: String = base
                 .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '-' })
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
                 .collect();
-            let agent_name = if agent_name.is_empty() { "agent".to_string() } else { agent_name };
+            let agent_name = if agent_name.is_empty() {
+                "agent".to_string()
+            } else {
+                agent_name
+            };
             if !at(self.conf, "personaPath").is_some_and(py::truthy) {
                 let resp = self.post_query(
                     "/cli/agents/create",
@@ -733,7 +796,9 @@ impl Run<'_> {
         for i in 0..self.actions.len() {
             let x = &self.actions[i];
             let step = aget(x, "step").map(py::str_of).unwrap_or_default();
-            if !matches!(step.as_str(), "join-project" | "leave-project") || !status_is(x, "pending") {
+            if !matches!(step.as_str(), "join-project" | "leave-project")
+                || !status_is(x, "pending")
+            {
                 continue;
             }
             let route = if step == "join-project" {
@@ -754,7 +819,10 @@ impl Run<'_> {
                     e if py::truthy(&e) => e,
                     _ => obj(vec![
                         ("code", s("daemon_error")),
-                        ("hint", s(&dumps(&resp).chars().take(300).collect::<String>())),
+                        (
+                            "hint",
+                            s(&dumps(&resp).chars().take(300).collect::<String>()),
+                        ),
                     ]),
                 };
                 put(&mut self.actions[i], "status", s("failed"));
@@ -825,11 +893,19 @@ fn action_line(x: &Action) -> Result<String, Raise> {
             }
         }
         "set-enabled" => {
-            let want = if g("enabled").is_some_and(py::truthy) { "true" } else { "false" };
+            let want = if g("enabled").is_some_and(py::truthy) {
+                "true"
+            } else {
+                "false"
+            };
             if skipped {
                 format!("enabled: {want}")
             } else {
-                let from = if g("from").is_some_and(py::truthy) { "true" } else { "false" };
+                let from = if g("from").is_some_and(py::truthy) {
+                    "true"
+                } else {
+                    "false"
+                };
                 format!("enabled: {from} \u{2192} {want}")
             }
         }
@@ -861,7 +937,10 @@ fn action_line(x: &Action) -> Result<String, Raise> {
             if skipped {
                 "persona: unchanged (identical content)".to_string()
             } else {
-                format!("persona: replace from {} (previous backed up)", idx("source")?)
+                format!(
+                    "persona: replace from {} (previous backed up)",
+                    idx("source")?
+                )
             }
         }
     })
@@ -874,11 +953,24 @@ mod tests {
     #[test]
     fn the_words() {
         assert!(parse(&["qa"]).unwrap_err().starts_with("nothing to set"));
-        assert!(parse(&["qa", "--mode", "x"]).unwrap_err().starts_with("invalid --mode"));
+        assert!(parse(&["qa", "--mode", "x"])
+            .unwrap_err()
+            .starts_with("invalid --mode"));
         assert!(parse(&["qa", "--enabled"]).is_err());
-        let a = parse(&["qa", "--mode", "k2so", "--add-project", "A", "--add-project", "B"]).unwrap();
+        let a = parse(&[
+            "qa",
+            "--mode",
+            "k2so",
+            "--add-project",
+            "A",
+            "--add-project",
+            "B",
+        ])
+        .unwrap();
         assert_eq!(a.add, vec!["A", "B"]);
-        assert!(parse(&["qa", "--persona", "/no/such/file"]).unwrap_err().starts_with("persona file"));
+        assert!(parse(&["qa", "--persona", "/no/such/file"])
+            .unwrap_err()
+            .starts_with("persona file"));
     }
 
     #[test]
@@ -897,6 +989,9 @@ mod tests {
             ("status", s("skipped")),
             ("reason", s("already a member")),
         ]);
-        assert_eq!(action_line(&x).unwrap(), "join-project: Acme  (already a member)");
+        assert_eq!(
+            action_line(&x).unwrap(),
+            "join-project: Acme  (already a member)"
+        );
     }
 }

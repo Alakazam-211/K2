@@ -2,9 +2,9 @@
 //! `cmd_agent_conf` and `cmd_agent_get` (`cli/src/agent.sh`).
 
 use super::{abs_user, at, cli, cut, dumps, err_json, head, obj, product, raised, s, str_or};
+use crate::exit::Exit;
 use crate::families::connections::held;
 use crate::families::{py_get, py_iter, Raise, Shown};
-use crate::exit::Exit;
 use crate::out::json::Value;
 use crate::out::pylib::{json as pyjson, ops};
 use crate::out::{self, py};
@@ -107,10 +107,7 @@ pub fn parse_get(rest: &[&str]) -> Result<GetArgs, String> {
 pub fn unreachable_line() -> String {
     err_json(
         "daemon_unreachable",
-        &format!(
-            "no response from the {} daemon (is it running?)",
-            product()
-        ),
+        &format!("no response from the {} daemon (is it running?)", product()),
     )
 }
 
@@ -412,7 +409,10 @@ fn conf_lines(d: &Value, now: f64, out: &mut String) -> Result<(), Raise> {
         ("agent    ", str_or(at(d, "name"), "?")),
         ("path     ", str_or(at(d, "path"), "?")),
         ("mode     ", str_or(at(d, "mode"), "?")),
-        ("enabled  ", (if enabled { "true" } else { "false" }).to_string()),
+        (
+            "enabled  ",
+            (if enabled { "true" } else { "false" }).to_string(),
+        ),
         ("persona  ", persona_line),
         ("connects ", connects),
         ("projects ", projects),
@@ -587,7 +587,9 @@ mod tests {
         let r = reader(r#"{"error":"boom"}"#).unwrap_err();
         assert_eq!(r.exit, Exit::Error);
         let r = reader("[1]").unwrap_err();
-        assert!(r.stderr.ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
+        assert!(r
+            .stderr
+            .ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
     }
 
     #[test]
@@ -612,7 +614,10 @@ mod tests {
 
     #[test]
     fn get_prints_python_values() {
-        let d = parse(r#"{"ok":true,"name":"qa","enabled":false,"mode":null,"projects":[{"name":"a"},{}]}"#).unwrap();
+        let d = parse(
+            r#"{"ok":true,"name":"qa","enabled":false,"mode":null,"projects":[{"name":"a"},{}]}"#,
+        )
+        .unwrap();
         assert_eq!(get_printer(&d, "enabled", false).stdout, "false\n");
         assert_eq!(get_printer(&d, "mode", false).stdout, "None\n");
         assert_eq!(get_printer(&d, "projects", false).stdout, "a\n?\n");

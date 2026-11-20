@@ -60,9 +60,15 @@ const CONF_IDLE: &str = r#"{"ok":true,"name":"","path":"/srv/idle-one","mode":"c
 
 const CONF_PERSONA: &str = r#"{"ok":true,"name":"qa","path":"/srv/qa","personaPath":"persona.md","live":{"active":true,"sessionId":"s1","uptimeSec":59.9}}"#;
 
+const CONF_NO_FILE: &str = r#"{"ok":true,"name":"qa","path":"/srv/qa","personaPath":"no-such-persona.md"}"#;
+
 fn persona(r: &Rig) {
     owner_and_port(r);
-    std::fs::write(r.proj.join("persona.md"), "# QA\r\nline two\rline three\n\u{e9}t\u{e9}").unwrap();
+    std::fs::write(
+        r.proj.join("persona.md"),
+        "# QA\r\nline two\rline three\n\u{e9}t\u{e9}",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -148,7 +154,15 @@ fn conf_and_get() {
     let rig = Rig::new(VERB, "conf");
     let mut v = vec![
         // covers: agent conf
-        case("by name", &["conf", "qa"], &[], vec![ok(CONF)], owner_and_port, 0, 1),
+        case(
+            "by name",
+            &["conf", "qa"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: agent conf --json
         case(
             "by name, --json",
@@ -199,7 +213,7 @@ fn conf_and_get() {
             "a persona file that isn't there",
             &["conf", "qa"],
             &[],
-            vec![ok(CONF_PERSONA)],
+            vec![ok(CONF_NO_FILE)],
             owner_and_port,
             0,
             1,
@@ -208,7 +222,9 @@ fn conf_and_get() {
             "not found: exit 4",
             &["conf", "nobody"],
             &[],
-            vec![ok(r#"{"error":{"code":"not_found","hint":"no agent 'nobody' — did you mean 'qa'?"}}"#)],
+            vec![ok(
+                r#"{"error":{"code":"not_found","hint":"no agent 'nobody' — did you mean 'qa'?"}}"#,
+            )],
             owner_and_port,
             4,
             1,
@@ -217,7 +233,9 @@ fn conf_and_get() {
             "ambiguous: exit 4",
             &["conf", "q"],
             &[],
-            vec![ok(r#"{"error":{"code":"ambiguous","hint":"q is qa or qb"}}"#)],
+            vec![ok(
+                r#"{"error":{"code":"ambiguous","hint":"q is qa or qb"}}"#,
+            )],
             owner_and_port,
             4,
             1,
@@ -295,14 +313,78 @@ fn conf_and_get() {
             1,
         )),
         // covers: agent get
-        case("get mode", &["get", "qa", "mode"], &[], vec![ok(CONF)], owner_and_port, 0, 1),
-        case("get enabled", &["get", "qa", "enabled"], &[], vec![ok(CONF_IDLE)], owner_and_port, 0, 1),
-        case("get name", &["get", "qa", "name"], &[], vec![ok(CONF)], owner_and_port, 0, 1),
-        case("get path", &["get", "qa", "path"], &[], vec![ok(CONF)], owner_and_port, 0, 1),
-        case("get projects", &["get", "qa", "projects"], &[], vec![ok(CONF)], owner_and_port, 0, 1),
-        case("get projects, none", &["get", "qa", "projects"], &[], vec![ok(CONF_IDLE)], owner_and_port, 0, 1),
-        case("get a key the conf lacks", &["get", "qa", "mode"], &[], vec![ok(CONF_PERSONA)], owner_and_port, 0, 1),
-        case("get persona", &["get", "qa", "persona"], &[], vec![ok(CONF_PERSONA)], persona, 0, 1),
+        case(
+            "get mode",
+            &["get", "qa", "mode"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "get enabled",
+            &["get", "qa", "enabled"],
+            &[],
+            vec![ok(CONF_IDLE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "get name",
+            &["get", "qa", "name"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "get path",
+            &["get", "qa", "path"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "get projects",
+            &["get", "qa", "projects"],
+            &[],
+            vec![ok(CONF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "get projects, none",
+            &["get", "qa", "projects"],
+            &[],
+            vec![ok(CONF_IDLE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "get a key the conf lacks",
+            &["get", "qa", "mode"],
+            &[],
+            vec![ok(CONF_PERSONA)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "get persona",
+            &["get", "qa", "persona"],
+            &[],
+            vec![ok(CONF_PERSONA)],
+            persona,
+            0,
+            1,
+        ),
         case(
             "get persona, none set",
             &["get", "qa", "persona"],
@@ -316,7 +398,7 @@ fn conf_and_get() {
             "get persona, the file isn't there",
             &["get", "qa", "persona"],
             &[],
-            vec![ok(CONF_PERSONA)],
+            vec![ok(CONF_NO_FILE)],
             owner_and_port,
             1,
             1,
@@ -420,9 +502,25 @@ fn list() {
     let answer: &'static str = leak(&[&format!(r#"{{"ok":true,"agents":[{rows}]}}"#)])[0];
     let mut v = vec![
         // covers: agent list
-        case("the table", &["list"], &[], vec![ok(answer)], owner_and_port, 0, 1),
+        case(
+            "the table",
+            &["list"],
+            &[],
+            vec![ok(answer)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: agent list --json
-        case("--json", &["list", "--json"], &[], vec![ok(answer)], owner_and_port, 0, 1),
+        case(
+            "--json",
+            &["list", "--json"],
+            &[],
+            vec![ok(answer)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "none",
             &["list"],
@@ -445,7 +543,10 @@ fn list() {
             "an error",
             &["list"],
             &[],
-            vec![Reply::Answer(500, r#"{"error":{"code":"db","hint":"locked"}}"#.into())],
+            vec![Reply::Answer(
+                500,
+                r#"{"error":{"code":"db","hint":"locked"}}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -477,8 +578,24 @@ fn list() {
             1,
             1,
         ),
-        case("not JSON", &["list"], &[], vec![ok("nope")], owner_and_port, 1, 1),
-        case("an empty answer", &["list"], &[], vec![ok("")], owner_and_port, 1, 1),
+        case(
+            "not JSON",
+            &["list"],
+            &[],
+            vec![ok("nope")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an empty answer",
+            &["list"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            1,
+            1,
+        ),
         traceback(case(
             "a row that is not a dict",
             &["list"],
@@ -543,8 +660,7 @@ fn a_list_above_the_environment_s_limit() {
             )
         })
         .collect();
-    let big: &'static str =
-        leak(&[&format!(r#"{{"ok":true,"agents":[{}]}}"#, rows.join(","))])[0];
+    let big: &'static str = leak(&[&format!(r#"{{"ok":true,"agents":[{}]}}"#, rows.join(","))])[0];
     assert!(big.len() > 1024 * 1024, "above macOS's whole ARG_MAX too");
     let c = Case {
         no_python3: NoPython3::Own,
@@ -589,8 +705,7 @@ fn a_list_above_the_environment_s_limit() {
     let lines: Vec<&str> = r.stdout.lines().collect();
     assert_eq!(lines.len(), 12_001);
     assert_eq!(
-        lines[0],
-        "NAME         MODE   ENABLED  LIVE  PATH",
+        lines[0], "NAME         MODE   ENABLED  LIVE  PATH",
         "the head"
     );
     assert_eq!(
@@ -690,7 +805,13 @@ fn retire() {
             "the retire not found: exit 4",
             &["retire", "qa"],
             &[],
-            vec![ok(CONF), Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"gone"}}"#.into())],
+            vec![
+                ok(CONF),
+                Reply::Answer(
+                    404,
+                    r#"{"error":{"code":"not_found","hint":"gone"}}"#.into(),
+                ),
+            ],
             owner_and_port,
             4,
             2,
@@ -699,7 +820,10 @@ fn retire() {
             "an error string",
             &["retire", "qa"],
             &[],
-            vec![ok(CONF), Reply::Answer(500, r#"{"error":"disk full"}"#.into())],
+            vec![
+                ok(CONF),
+                Reply::Answer(500, r#"{"error":"disk full"}"#.into()),
+            ],
             owner_and_port,
             1,
             2,
@@ -868,7 +992,10 @@ fn restart() {
             "an HTTP error with a hint",
             &["restart", "qa"],
             &[],
-            vec![ok(CONF), Reply::Answer(500, r#"{"error":{"hint":"spawn failed"}}"#.into())],
+            vec![
+                ok(CONF),
+                Reply::Answer(500, r#"{"error":{"hint":"spawn failed"}}"#.into()),
+            ],
             owner_and_port,
             1,
             2,
@@ -877,7 +1004,10 @@ fn restart() {
             "an HTTP error with a message",
             &["restart", "qa"],
             &[],
-            vec![ok(CONF), Reply::Answer(500, r#"{"error":{"message":"no pty"}}"#.into())],
+            vec![
+                ok(CONF),
+                Reply::Answer(500, r#"{"error":{"message":"no pty"}}"#.into()),
+            ],
             owner_and_port,
             1,
             2,
@@ -1105,7 +1235,15 @@ fn context_reads() {
     let rig = Rig::new(VERB, "ctxread");
     let v = vec![
         // covers: agent context list
-        case("list", &["context", "list"], &[], vec![ok(LAYERS)], owner_and_port, 0, 1),
+        case(
+            "list",
+            &["context", "list"],
+            &[],
+            vec![ok(LAYERS)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: agent context list --json
         case(
             "list --json",
@@ -1129,7 +1267,9 @@ fn context_reads() {
             "list, soft warnings",
             &["context", "list"],
             &[],
-            vec![ok(r#"{"ok":true,"softWarn":["AGENTS.md is 40 KB",{"a":1}],"layers":[]}"#)],
+            vec![ok(
+                r#"{"ok":true,"softWarn":["AGENTS.md is 40 KB",{"a":1}],"layers":[]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1180,7 +1320,15 @@ fn context_reads() {
             1,
         ),
         // covers: agent context catalog
-        case("catalog", &["context", "catalog"], &[], vec![ok(CATALOG)], owner_and_port, 0, 1),
+        case(
+            "catalog",
+            &["context", "catalog"],
+            &[],
+            vec![ok(CATALOG)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: agent context catalog --json
         case(
             "catalog --json",
@@ -1214,7 +1362,9 @@ fn context_reads() {
             "show --outline",
             &["context", "show", "--outline"],
             &[],
-            vec![ok(r#"{"ok":true,"outline":[{"level":1,"title":"AGENTS"},{"depth":"3","heading":"Deep"},{"title":"No level"},"bare"]}"#)],
+            vec![ok(
+                r#"{"ok":true,"outline":[{"level":1,"title":"AGENTS"},{"depth":"3","heading":"Deep"},{"title":"No level"},"bare"]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1251,7 +1401,10 @@ fn context_reads() {
             "not found",
             &["context", "list"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no workspace"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"not_found","hint":"no workspace"}}"#.into(),
+            )],
             owner_and_port,
             4,
             1,
@@ -1260,7 +1413,10 @@ fn context_reads() {
             "refused",
             &["context", "show"],
             &[],
-            vec![Reply::Answer(409, r#"{"error":{"code":"Refused","hint":"no"}}"#.into())],
+            vec![Reply::Answer(
+                409,
+                r#"{"error":{"code":"Refused","hint":"no"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -1310,7 +1466,15 @@ fn context_reads() {
             1,
             1,
         ),
-        case("not JSON", &["context", "list"], &[], vec![ok("<html>")], owner_and_port, 1, 1),
+        case(
+            "not JSON",
+            &["context", "list"],
+            &[],
+            vec![ok("<html>")],
+            owner_and_port,
+            1,
+            1,
+        ),
         case(
             "not ok",
             &["context", "list"],
@@ -1377,7 +1541,9 @@ fn context_writes() {
             "add a path, a label",
             &["context", "add", "docs/runbook.md", "--label", "Runbook"],
             &[],
-            vec![ok(r#"{"ok":true,"layer":{"id":"lay-b","label":"Runbook","path":"docs/runbook.md"},"regenerated":true}"#)],
+            vec![ok(
+                r#"{"ok":true,"layer":{"id":"lay-b","label":"Runbook","path":"docs/runbook.md"},"regenerated":true}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1386,7 +1552,9 @@ fn context_writes() {
             "add a catalog id",
             &["context", "add", "wiki:index"],
             &[],
-            vec![ok(r#"{"ok":true,"added":{"id":"lay-w"},"path":".k2/wiki/_Index.md","regenerated":false}"#)],
+            vec![ok(
+                r#"{"ok":true,"added":{"id":"lay-w"},"path":".k2/wiki/_Index.md","regenerated":false}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1414,7 +1582,10 @@ fn context_writes() {
             "add, a duplicate: exit 3",
             &["context", "add", "./a"],
             &[],
-            vec![Reply::Answer(409, r#"{"error":{"code":"duplicate_layer","hint":"already there"}}"#.into())],
+            vec![Reply::Answer(
+                409,
+                r#"{"error":{"code":"duplicate_layer","hint":"already there"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -1467,7 +1638,15 @@ fn context_writes() {
             1,
         ),
         // covers: agent context on
-        case("on a pinned layer", &["context", "on", "pinned:project"], &[], vec![ok(done)], owner_and_port, 0, 1),
+        case(
+            "on a pinned layer",
+            &["context", "on", "pinned:project"],
+            &[],
+            vec![ok(done)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: agent context on --json
         case(
             "on by id, --json",
@@ -1479,18 +1658,56 @@ fn context_writes() {
             2,
         ),
         // covers: agent context off
-        case("off by source", &["context", "off", "hygiene"], &[], vec![ok(LAYERS), ok(done)], owner_and_port, 0, 2),
+        case(
+            "off by source",
+            &["context", "off", "hygiene"],
+            &[],
+            vec![ok(LAYERS), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
         // covers: agent context off --json
-        case("off --json", &["context", "off", "agent", "--json"], &[], vec![ok(done)], owner_and_port, 0, 1),
+        case(
+            "off --json",
+            &["context", "off", "agent", "--json"],
+            &[],
+            vec![ok(done)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: agent context move
-        case("move up", &["context", "move", "Runbook", "up"], &[], vec![ok(LAYERS), ok(done)], owner_and_port, 0, 2),
-        case("move to a place", &["context", "move", "lay-a", "007"], &[], vec![ok(LAYERS), ok(done)], owner_and_port, 0, 2),
+        case(
+            "move up",
+            &["context", "move", "Runbook", "up"],
+            &[],
+            vec![ok(LAYERS), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "move to a place",
+            &["context", "move", "lay-a", "007"],
+            &[],
+            vec![ok(LAYERS), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
         // covers: agent context move --json
         case(
             "move --json, refused",
             &["context", "move", "lay-a", "top", "--json"],
             &[],
-            vec![ok(LAYERS), Reply::Answer(400, r#"{"error":{"code":"invalid_move","hint":"already top"}}"#.into())],
+            vec![
+                ok(LAYERS),
+                Reply::Answer(
+                    400,
+                    r#"{"error":{"code":"invalid_move","hint":"already top"}}"#.into(),
+                ),
+            ],
             owner_and_port,
             2,
             2,
@@ -1635,8 +1852,24 @@ fn template_reads() {
     let rig = Rig::new(VERB, "tplread");
     let v = vec![
         // covers: agent template list
-        case("list", &["template", "list"], &[], vec![ok(TEMPLATES)], owner_and_port, 0, 1),
-        case("list --all", &["templates", "list", "--all"], &[], vec![ok(TEMPLATES)], owner_and_port, 0, 1),
+        case(
+            "list",
+            &["template", "list"],
+            &[],
+            vec![ok(TEMPLATES)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list --all",
+            &["templates", "list", "--all"],
+            &[],
+            vec![ok(TEMPLATES)],
+            owner_and_port,
+            0,
+            1,
+        ),
         // covers: agent template list --json
         case(
             "list --json",
@@ -1660,7 +1893,10 @@ fn template_reads() {
             "list, refused",
             &["template", "list"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"forbidden","hint":"owner only"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"forbidden","hint":"owner only"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -1683,7 +1919,15 @@ fn template_reads() {
             1,
             1,
         ),
-        case("list, not JSON", &["template", "list"], &[], vec![ok("<html>")], owner_and_port, 1, 1),
+        case(
+            "list, not JSON",
+            &["template", "list"],
+            &[],
+            vec![ok("<html>")],
+            owner_and_port,
+            1,
+            1,
+        ),
         traceback(case(
             "list, a row that is not a dict",
             &["template", "list"],
@@ -1703,7 +1947,15 @@ fn template_reads() {
             1,
         )),
         // covers: agent template show
-        case("show", &["template", "show", "qa-bot"], &[], vec![ok(TEMPLATE)], owner_and_port, 0, 1),
+        case(
+            "show",
+            &["template", "show", "qa-bot"],
+            &[],
+            vec![ok(TEMPLATE)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "show --files",
             &["template", "show", "--files", "qa bot/x"],
@@ -1736,7 +1988,10 @@ fn template_reads() {
             "show, unknown: exit 4",
             &["template", "show", "nope"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"unknown_template","hint":"no template nope"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"unknown_template","hint":"no template nope"}}"#.into(),
+            )],
             owner_and_port,
             4,
             1,
@@ -1745,7 +2000,9 @@ fn template_reads() {
             "show, bad: exit 2",
             &["template", "show", "x"],
             &[],
-            vec![ok(r#"{"error":{"code":"bad_template","hint":"broken toml"}}"#)],
+            vec![ok(
+                r#"{"error":{"code":"bad_template","hint":"broken toml"}}"#,
+            )],
             owner_and_port,
             2,
             1,
@@ -1789,7 +2046,21 @@ fn template_writes() {
         // covers: agent template save
         case(
             "save this workspace",
-            &["template", "save", ".", "--id", "qa-bot", "--name", "QA", "--summary", "", "--wiki", "Work", "--wiki", "Notes"],
+            &[
+                "template",
+                "save",
+                ".",
+                "--id",
+                "qa-bot",
+                "--name",
+                "QA",
+                "--summary",
+                "",
+                "--wiki",
+                "Work",
+                "--wiki",
+                "Notes",
+            ],
             &[],
             vec![ok(SAVED)],
             owner_and_port,
@@ -1800,7 +2071,9 @@ fn template_writes() {
             "save a handle, a dry run",
             &["template", "save", "acme", "--id", "x", "--dry-run"],
             &[],
-            vec![ok(r#"{"ok":true,"dryRun":true,"id":"x","version":1,"author":"ana","path":"/srv/t/x/v1"}"#)],
+            vec![ok(
+                r#"{"ok":true,"dryRun":true,"id":"x","version":1,"author":"ana","path":"/srv/t/x/v1"}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1819,7 +2092,10 @@ fn template_writes() {
             "save, a secret found",
             &["template", "save", ".", "--id", "x"],
             &[],
-            vec![Reply::Answer(400, r#"{"error":{"code":"secret_found","hint":"a GitHub token in ROLE.md"}}"#.into())],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"secret_found","hint":"a GitHub token in ROLE.md"}}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -1828,7 +2104,10 @@ fn template_writes() {
             "save, not the author",
             &["template", "save", ".", "--id", "x"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"not_author","message":"ana saved it"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"not_author","message":"ana saved it"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -1858,7 +2137,9 @@ fn template_writes() {
             "remove one version",
             &["template", "remove", "qa-bot", "--version", "v02"],
             &[],
-            vec![ok(r#"{"ok":true,"id":"qa-bot","removed":[2],"remaining":[1,3]}"#)],
+            vec![ok(
+                r#"{"ok":true,"id":"qa-bot","removed":[2],"remaining":[1,3]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1877,7 +2158,10 @@ fn template_writes() {
             "remove --json, unknown",
             &["template", "remove", "nope", "--json"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"code":"no_template","hint":"none"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"no_template","hint":"none"}}"#.into(),
+            )],
             owner_and_port,
             4,
             1,
@@ -1896,7 +2180,9 @@ fn template_writes() {
             "upgrade, done",
             &["template", "upgrade", "acme"],
             &[],
-            vec![ok(r#"{"ok":true,"name":"QA","id":"qa-bot","from":3,"to":3,"changed":false,"rows":[]}"#)],
+            vec![ok(
+                r#"{"ok":true,"name":"QA","id":"qa-bot","from":3,"to":3,"changed":false,"rows":[]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1905,7 +2191,9 @@ fn template_writes() {
             "upgrade, changed",
             &["template", "upgrade", "/tmp"],
             &[],
-            vec![ok(r#"{"ok":true,"name":"QA","id":"qa-bot","from":2,"to":3,"changed":true,"rows":[{"status":"update","step":"role","target":"ROLE.md"}]}"#)],
+            vec![ok(
+                r#"{"ok":true,"name":"QA","id":"qa-bot","from":2,"to":3,"changed":true,"rows":[{"status":"update","step":"role","target":"ROLE.md"}]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1934,7 +2222,9 @@ fn template_writes() {
             "diff two versions",
             &["template", "diff", "qa-bot", "v1", "3"],
             &[],
-            vec![ok(r#"{"ok":true,"id":"qa-bot","from":1,"to":3,"files":[{"status":"changed","path":"ROLE.md","diff":"-a\r\n+b"},{"status":"added","path":"x.md"}]}"#)],
+            vec![ok(
+                r#"{"ok":true,"id":"qa-bot","from":1,"to":3,"files":[{"status":"changed","path":"ROLE.md","diff":"-a\r\n+b"},{"status":"added","path":"x.md"}]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1944,7 +2234,9 @@ fn template_writes() {
             "diff --json",
             &["template", "diff", "qa-bot", "1", "2", "--json"],
             &[],
-            vec![ok(r#"{"ok":true,"id":"qa-bot","from":1,"to":2,"files":[]}"#)],
+            vec![ok(
+                r#"{"ok":true,"id":"qa-bot","from":1,"to":2,"files":[]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1980,7 +2272,10 @@ fn template_writes() {
     let mut v = v;
     let last = v.pop().unwrap();
     v.push(Case {
-        env: with_passport(&[("K2_HOOK_SOCK", "{nosock}"), ("K2_PROJECT_PATH", "/srv/acme")]),
+        env: with_passport(&[
+            ("K2_HOOK_SOCK", "{nosock}"),
+            ("K2_PROJECT_PATH", "/srv/acme"),
+        ]),
         ..last
     });
     check(&rig, v);
@@ -2002,12 +2297,22 @@ fn identity() {
     let rig = Rig::new(VERB, "identity");
     let mut v = vec![
         // covers: agent identity
-        case("read by name", &["identity", "qa"], &[], vec![ok(IDENTITY)], owner_and_port, 0, 1),
+        case(
+            "read by name",
+            &["identity", "qa"],
+            &[],
+            vec![ok(IDENTITY)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "read this workspace",
             &["identity"],
             &[],
-            vec![ok(r#"{"handle":"me","displayName":"","canEditIdentity":true}"#)],
+            vec![ok(
+                r#"{"handle":"me","displayName":"","canEditIdentity":true}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -2022,12 +2327,29 @@ fn identity() {
             1,
         ),
         // covers: agent identity --json
-        case("read --json", &["identity", "qa", "--json"], &[], vec![ok(IDENTITY)], owner_and_port, 0, 1),
+        case(
+            "read --json",
+            &["identity", "qa", "--json"],
+            &[],
+            vec![ok(IDENTITY)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "change the color and name",
-            &["identity", "qa", "--color", " rgb(51, 170, 119) ", "--name", "QA Bot"],
+            &[
+                "identity",
+                "qa",
+                "--color",
+                " rgb(51, 170, 119) ",
+                "--name",
+                "QA Bot",
+            ],
             &[],
-            vec![ok(r##"{"ok":true,"handle":"qa","changed":["name","color"],"displayName":"QA Bot","color":"#33aa77"}"##)],
+            vec![ok(
+                r##"{"ok":true,"handle":"qa","changed":["name","color"],"displayName":"QA Bot","color":"#33aa77"}"##,
+            )],
             owner_and_port,
             0,
             1,
@@ -2036,7 +2358,10 @@ fn identity() {
             "a color the daemon checks",
             &["identity", "qa", "--color", "1,2,300"],
             &[],
-            vec![Reply::Answer(400, r#"{"error":"bad_color","message":"use #rgb or #rrggbb"}"#.into())],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":"bad_color","message":"use #rgb or #rrggbb"}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -2063,7 +2388,9 @@ fn identity() {
             "a PNG picture",
             &["identity", "qa", "--image", "pic.png"],
             &[],
-            vec![ok(r#"{"ok":true,"handle":"qa","changed":["image"],"image":"x"}"#)],
+            vec![ok(
+                r#"{"ok":true,"handle":"qa","changed":["image"],"image":"x"}"#,
+            )],
             pictures,
             0,
             1,
@@ -2090,7 +2417,10 @@ fn identity() {
             "not found",
             &["identity", "nobody"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":"not_found","message":"no agent nobody"}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":"not_found","message":"no agent nobody"}"#.into(),
+            )],
             owner_and_port,
             4,
             1,
@@ -2099,7 +2429,10 @@ fn identity() {
             "refused",
             &["identity", "qa", "--name", "X"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":"agents can't rename themselves"}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":"agents can't rename themselves"}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -2108,7 +2441,10 @@ fn identity() {
             "rate limited",
             &["identity", "qa", "--color", "#fff"],
             &[],
-            vec![Reply::Answer(429, r#"{"error":"rate_limited","retryAfterSecs":12}"#.into())],
+            vec![Reply::Answer(
+                429,
+                r#"{"error":"rate_limited","retryAfterSecs":12}"#.into(),
+            )],
             owner_and_port,
             1,
             1,
@@ -2122,8 +2458,24 @@ fn identity() {
             1,
             1,
         ),
-        case("an empty answer", &["identity", "qa"], &[], vec![ok("")], owner_and_port, 1, 1),
-        case("no answer", &["identity", "qa"], &[], vec![Reply::Close], owner_and_port, 1, 1),
+        case(
+            "an empty answer",
+            &["identity", "qa"],
+            &[],
+            vec![ok("")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "no answer",
+            &["identity", "qa"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
         case(
             "a session with no passport: refused",
             &["identity", "qa"],
@@ -2139,7 +2491,10 @@ fn identity() {
                 "a session with a passport: its own workspace (the probe first)",
                 &["identity", "--color", "#123456"],
                 &[],
-                vec![ok(r#"{"ok":true}"#), ok(r#"{"ok":true,"handle":"me","changed":["color"]}"#)],
+                vec![
+                    ok(r#"{"ok":true}"#),
+                    ok(r#"{"ok":true,"handle":"me","changed":["color"]}"#),
+                ],
                 owner_and_port,
                 0,
                 2,
@@ -2171,12 +2526,22 @@ fn access() {
     let rig = Rig::new(VERB, "access");
     let mut v = vec![
         // covers: agent access
-        case("alone: the switches, exit 2", &["access"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "alone: the switches, exit 2",
+            &["access"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "chat_manage on",
             &["access", "set", "qa", "chat_manage", "on"],
             &[],
-            vec![ok(r#"{"ok":true,"workspace":"qa","agentsCanManageChat":true}"#)],
+            vec![ok(
+                r#"{"ok":true,"workspace":"qa","agentsCanManageChat":true}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -2185,7 +2550,9 @@ fn access() {
             "chat_refresh off",
             &["access", "set", "qa", "chat_refresh", "off"],
             &[],
-            vec![ok(r#"{"ok":true,"agentsCanRefreshChat":false,"workspace":"qa"}"#)],
+            vec![ok(
+                r#"{"ok":true,"agentsCanRefreshChat":false,"workspace":"qa"}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -2194,7 +2561,9 @@ fn access() {
             "agents_hire on",
             &["access", "set", "/srv/qa", "agents_hire", "on"],
             &[],
-            vec![ok(r#"{"ok":true,"agentsCanHire":true,"workspace":"/srv/qa"}"#)],
+            vec![ok(
+                r#"{"ok":true,"agentsCanHire":true,"workspace":"/srv/qa"}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -2203,7 +2572,9 @@ fn access() {
             "agents_manage on",
             &["access", "set", "qa", "agents_manage", "on"],
             &[],
-            vec![ok(r#"{"ok":true,"toggle":"agents_manage","agentsCanManage":true,"workspace":"qa"}"#)],
+            vec![ok(
+                r#"{"ok":true,"toggle":"agents_manage","agentsCanManage":true,"workspace":"qa"}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -2213,7 +2584,9 @@ fn access() {
             "--json",
             &["access", "set", "--json", "qa", "chat_manage", "off"],
             &[],
-            vec![ok(r#"{"ok":true,"workspace":"qa","agentsCanManageChat":false}"#)],
+            vec![ok(
+                r#"{"ok":true,"workspace":"qa","agentsCanManageChat":false}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -2222,7 +2595,10 @@ fn access() {
             "refused",
             &["access", "set", "qa", "chat_manage", "on"],
             &[],
-            vec![Reply::Answer(403, r#"{"error":"owner or admin only"}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":"owner or admin only"}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
@@ -2231,7 +2607,10 @@ fn access() {
             "a bad request",
             &["access", "set", "qa", "chat_manage", "on"],
             &[],
-            vec![Reply::Answer(400, r#"{"error":"unknown workspace qa"}"#.into())],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":"unknown workspace qa"}"#.into(),
+            )],
             owner_and_port,
             2,
             1,
@@ -2270,7 +2649,11 @@ fn access() {
 
 fn notes(r: &Rig) {
     owner_and_port(r);
-    std::fs::write(r.proj.join("notes.md"), "Carry on with the release.\r\nThen \u{e9}cho.\n").unwrap();
+    std::fs::write(
+        r.proj.join("notes.md"),
+        "Carry on with the release.\r\nThen \u{e9}cho.\n",
+    )
+    .unwrap();
 }
 
 const MOVED: &str = r#"{"ok":true,"workspace":"qa","harness":"codex","fromHarness":"claude","model":"o3","claudeSessionId":"conv-2","sessionId":"term-2","fromSessionId":"term-1","oldChatInHistory":false,"ownSessionHeartbeats":["nightly","weekly"],"messageDelivered":true,"seedError":"too large"}"#;
@@ -2407,7 +2790,15 @@ fn harness() {
         &["harness", "qa", "codex", "--model", ""],
         &["harness", "qa", "codex", "--note", "x"],
     ] {
-        v.push(case("a usage line", leak(args), &[], vec![], owner_and_port, 2, 0));
+        v.push(case(
+            "a usage line",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ));
     }
     check(&rig, v);
 }
@@ -2432,7 +2823,9 @@ fn refresh() {
             "refresh with a notes file, not delivered",
             &["refresh", "/tmp", "--notes-file", "notes.md", "--full"],
             &[],
-            vec![ok(r#"{"ok":true,"workspace":"/tmp","harness":"codex","sessionId":"t9","messageDelivered":false,"handoffPath":"/tmp/h.md"}"#)],
+            vec![ok(
+                r#"{"ok":true,"workspace":"/tmp","harness":"codex","sessionId":"t9","messageDelivered":false,"handoffPath":"/tmp/h.md"}"#,
+            )],
             notes,
             0,
             1,
@@ -2450,13 +2843,23 @@ fn refresh() {
             "the plan, a person must allow it",
             &["refresh", "qa", "--dry-run"],
             &[],
-            vec![ok(r#"{"ok":true,"dryRun":true,"workspace":"qa","harness":"claude","needsPerson":true,"launches":"/usr/bin/claude","noteChars":42}"#)],
+            vec![ok(
+                r#"{"ok":true,"dryRun":true,"workspace":"qa","harness":"claude","needsPerson":true,"launches":"/usr/bin/claude","noteChars":42}"#,
+            )],
             owner_and_port,
             0,
             1,
         ),
         // covers: agent refresh --json
-        case("--json", &["refresh", "qa", "--json"], &[], vec![ok(REFRESHED)], owner_and_port, 0, 1),
+        case(
+            "--json",
+            &["refresh", "qa", "--json"],
+            &[],
+            vec![ok(REFRESHED)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "refused",
             &["refresh", "qa"],
@@ -2470,7 +2873,10 @@ fn refresh() {
             "an older daemon",
             &["refresh", "qa"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":{"hint":"route /cli/agent/refresh not found"}}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"hint":"route /cli/agent/refresh not found"}}"#.into(),
+            )],
             owner_and_port,
             4,
             1,
@@ -2479,12 +2885,23 @@ fn refresh() {
             "a usage error from the daemon",
             &["refresh", "qa"],
             &[],
-            vec![Reply::Answer(400, r#"{"error":{"code":"usage","hint":"bad mode"}}"#.into())],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"usage","hint":"bad mode"}}"#.into(),
+            )],
             owner_and_port,
             2,
             1,
         ),
-        case("no answer", &["refresh", "qa"], &[], vec![Reply::Close], owner_and_port, 1, 1),
+        case(
+            "no answer",
+            &["refresh", "qa"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
         case(
             "no workspace and no passport",
             &["refresh", "--dry-run"],
@@ -2514,7 +2931,15 @@ fn refresh() {
         &["refresh", "--model", "x"],
         &["refresh", "--zz"],
     ] {
-        v.push(case("a usage line", leak(args), &[], vec![], owner_and_port, 2, 0));
+        v.push(case(
+            "a usage line",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ));
     }
     check(&rig, v);
 }
@@ -2741,7 +3166,15 @@ fn set() {
         &["set", "--add-project"],
         &["set", "qa", "--mode", ""],
     ] {
-        v.push(case("a usage line", leak(args), &[], vec![], owner_and_port, 2, 0));
+        v.push(case(
+            "a usage line",
+            leak(args),
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ));
     }
     check(&rig, v);
 }

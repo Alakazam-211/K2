@@ -2,8 +2,8 @@
 
 use super::conf::{request, unreachable_line};
 use super::{at, cli, cut, dumps, err_json, obj, raised, s, str_or};
-use crate::families::{ljust, py_get, py_iter, Raise, Shown};
 use crate::exit::Exit;
+use crate::families::{ljust, py_get, py_iter, Raise, Shown};
 use crate::out::json::Value;
 use crate::out::pylib::json as pyjson;
 use crate::out::{self, py};
@@ -125,11 +125,18 @@ fn rows(d: &Value, home: &str) -> Result<Option<String>, Raise> {
         _ => return Ok(None),
     };
     let home = user_home(home);
-    let mut rows: Vec<[String; 5]> = vec![["NAME", "MODE", "ENABLED", "LIVE", "PATH"].map(String::from)];
+    let mut rows: Vec<[String; 5]> =
+        vec![["NAME", "MODE", "ENABLED", "LIVE", "PATH"].map(String::from)];
     for a in py_iter(&agents, line::ROWS)? {
         let name = str_or(py_get(&a, "name", line::ROWS)?, "?");
         let mode = str_or(py_get(&a, "mode", line::ROWS)?, "?");
-        let yes = |v: Option<&Value>| if v.is_some_and(py::truthy) { "yes" } else { "no" };
+        let yes = |v: Option<&Value>| {
+            if v.is_some_and(py::truthy) {
+                "yes"
+            } else {
+                "no"
+            }
+        };
         let enabled = yes(py_get(&a, "enabled", line::ROWS)?).to_string();
         let live = yes(py_get(&a, "live", line::ROWS)?).to_string();
         let path = tilde(&str_or(py_get(&a, "path", line::ROWS)?, "?"), &home);

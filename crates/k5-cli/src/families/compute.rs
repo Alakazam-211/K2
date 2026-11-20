@@ -3,7 +3,7 @@
 //! the side that answers it:
 //!
 //! - [`reads`]: the verbs that only read (`nodes`, `ls`, `info`, `queue`,
-//!   `jobs`, `get`, `status`, `grants`, `receipt`, `events`, `stats`,
+//!   `jobs` (`list`), `get`, `status`, `grants`, `receipt`, `events`, `stats`,
 //!   `usage`, `logs`, `preview` and `placement` with no change, and
 //!   `rightsize`).
 //! - [`writes`]: the verbs that write, wait or move files (`cancel`,

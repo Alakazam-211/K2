@@ -1,7 +1,7 @@
 //! `k5 compute` and its read verbs, as the shell CLI's `cmd_compute`
 //! (`cli/src/compute-command.sh`) and its helpers answer them:
 //!
-//! - `nodes` (`ls`), `info <node>`, `queue <node>`, `jobs [filters]`,
+//! - `nodes` (`ls`), `info <node>`, `queue <node>`, `jobs [filters]` (`list`),
 //!   `grants [--node N] [--workspace WS]`: one `_compute_call` GET, then the
 //!   answer as it came (`--json`) or `_compute_render <verb>`
 //!   ([`render`]).
@@ -70,6 +70,7 @@ pub const ANSWERS: &[&str] = &[
     "info",
     "queue",
     "jobs",
+    "list",
     "get",
     "status",
     "grants",
@@ -248,7 +249,8 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
                 json,
             }
         }
-        "jobs" => match jobs_query(rest) {
+        // `list` is the same verb; `ls` stays `nodes`.
+        "jobs" | "list" => match jobs_query(rest) {
             Ok(query) => Ask::Jobs { query, json },
             Err(stop) => return Some(Err(stop)),
         },

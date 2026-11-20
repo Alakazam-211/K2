@@ -3,7 +3,8 @@
 //! stdout, stderr and exit code.
 //!
 //! - Each verb's words: its forms, `--json`, its usage lines (exit 2), a
-//!   value flag last (`shift 2` runs out: exit 1, nothing printed).
+//!   value flag last (`shift 2` runs out: exit 1, nothing printed). `list`
+//!   is `jobs` (`ls` stays `nodes`).
 //! - The answers: full ones for each printer (its every branch is checked
 //!   against the shell's Python in compute_render_oracle.rs), none, the
 //!   daemon's errors (400, 403 with a permission card and its "Ask with:"
@@ -106,6 +107,10 @@ fn compute_reads_as_the_shell_does() {
         usage_case("jobs --tier bad", &["jobs", "--tier", "x"]),
         usage_case("jobs, a word it doesn't take", &["jobs", "x"]),
         case("jobs --node last: shift runs out", &["jobs", "--node"], &[], vec![], owner_and_port, 1, 0),
+        ok_case("list is jobs", &["list"], JOBS),
+        ok_case("list --mine --state done --json", &["list", "--mine", "--state", "done", "--json"], JOBS),
+        usage_case("list, a word it doesn't take", &["list", "x"]),
+        case("list --tag last: shift runs out", &["list", "--tag"], &[], vec![], owner_and_port, 1, 0),
         // covers: compute get
         ok_case("get", &["get", "abcd1234"], JOB),
         ok_case("get --full", &["get", "abcd1234", "--full"], JOB),
@@ -230,6 +235,7 @@ fn compute_large_lists() {
     for c in [
         ok_case("jobs, 3000 rows", &["jobs"], &jobs),
         ok_case("jobs --json, 3000 rows", &["jobs", "--json"], &jobs),
+        ok_case("list, 3000 rows", &["list"], &jobs),
         ok_case("events --audit, 3000 rows", &["events", "--audit"], &events),
     ] {
         rig.check(&c);

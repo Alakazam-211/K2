@@ -105,6 +105,14 @@ fn the_words() {
     assert_eq!(usage(&["jobs", "--tier"]), TIER_USAGE);
     assert_eq!(usage(&["jobs", "x"]), JOBS_USAGE);
     assert_eq!(parse(&["jobs", "--node"]), Some(Err(Stop::Shift)));
+    assert_eq!(
+        ok(&["list", "--mine", "--state", "done", "--json"]),
+        Ask::Jobs {
+            query: "mine=1&state=done".into(),
+            json: true
+        }
+    );
+    assert_eq!(usage(&["list", "x"]), JOBS_USAGE);
     assert_eq!(ok(&["status"]), Ask::Status { json: false });
     assert_eq!(ok(&["status", "--json"]), Ask::Status { json: true });
     assert_eq!(usage(&["status", "--json", "x"]), STATUS_USAGE);

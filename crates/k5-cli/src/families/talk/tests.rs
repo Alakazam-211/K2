@@ -122,15 +122,13 @@ fn the_tuning_takes_what_sleep_and_test_take() {
     for bad in ["", ".", "1.2.3", "1s", "-1", "1e2"] {
         assert_eq!(seconds(bad), None, "{bad}");
     }
-    assert_eq!(whole("20"), Some(20));
-    assert_eq!(whole("-3"), Some(-3));
-    assert_eq!(whole("0"), Some(0));
-    for bad in ["", "08", "2+2", "a[$(id)]", "x"] {
-        assert_eq!(whole(bad), None, "{bad}");
+    assert_eq!(scout_cap("2"), Some(2));
+    assert_eq!(scout_cap("0"), Some(0));
+    for not_digits in ["", "-3", "2+2", "a[$(id)]", "x", " 2"] {
+        assert_eq!(scout_cap(not_digits), Some(20), "{not_digits}");
     }
-    assert!(agent_as_written("ada-2"));
-    for bad in ["a\\nb", "a'''b", "ada'"] {
-        assert!(!agent_as_written(bad), "{bad}");
+    for shell in ["08", "010", "99999999999999999999"] {
+        assert_eq!(scout_cap(shell), None, "{shell}");
     }
 }
 

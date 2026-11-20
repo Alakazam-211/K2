@@ -49,13 +49,10 @@
 //! - a workspace that still holds an `@` once the host is split off
 //!   (`k2 read` splits it again and looks up a second host's token);
 //! - a host the binary doesn't send to itself ([`remote::base`]);
-//! - an `--agent` the shell pastes into its Python's source and that
-//!   Python then reads differently (a backslash, `'''`, or a closing `'`):
-//!   a bash bug, reported;
 //! - a `--lines` value curl wouldn't send as it is ([`super::read`]);
 //! - a `*_TALK_NAV_SETTLE` or `*_TALK_ANSWER_SETTLE` that is not plain
-//!   seconds, or a `*_TALK_SCOUT_MAX` that is not a plain number (bash's
-//!   `[[ -ge ]]` evaluates it as arithmetic: a bash bug, reported);
+//!   seconds, or a `*_TALK_SCOUT_MAX` of digits with a leading 0 (octal
+//!   to bash's `[[ -ge ]]`) or past a 64-bit number;
 //! - a `python3` the binary can't tell.
 
 use super::read;
@@ -239,12 +236,6 @@ pub fn parse(words: &[&str]) -> Parsed {
     Parsed::Ask(Box::new(a))
 }
 
-/// An `--agent` the shell's Python reads as written: no backslash, no
-/// `'''`, no `'` at its end.
-pub fn agent_as_written(agent: &str) -> bool {
-    !agent.contains('\\') && !agent.contains("'''") && !agent.ends_with('\'')
-}
-
 /// The timing settings, read once as the shell reads them at load.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tuning {
@@ -263,14 +254,15 @@ pub fn seconds(v: &str) -> Option<Duration> {
     plain.then(|| Duration::from_secs_f64(v.parse().unwrap_or(0.0)))
 }
 
-/// A plain whole number, as `[[ -ge ]]` reads one without arithmetic.
-pub fn whole(v: &str) -> Option<i64> {
-    let digits = v.strip_prefix('-').unwrap_or(v);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
+/// The scout's cap as the shell reads `*_TALK_SCOUT_MAX` at load:
+/// anything but plain digits is the default, 20 (`case … in
+/// ''|*[!0-9]*)`). `None`: digits with a leading 0, which `[[ -ge ]]`
+/// reads as octal, or a number past 64 bits.
+pub fn scout_cap(v: &str) -> Option<i64> {
+    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+        return Some(20);
     }
-    // A leading 0 is octal to `[[ -ge ]]`.
-    if digits.len() > 1 && digits.starts_with('0') {
+    if v.len() > 1 && v.starts_with('0') {
         return None;
     }
     v.parse().ok()
@@ -287,7 +279,7 @@ impl Tuning {
             nav_settle: seconds(&get(env_names::TALK_NAV_SETTLE, "0.35"))?,
             answer_settle: seconds(&get(env_names::TALK_ANSWER_SETTLE, "0.35"))?,
             submit_key: get(env_names::TALK_SUBMIT_KEY, "1"),
-            scout_max: whole(&get(env_names::TALK_SCOUT_MAX, "20"))?,
+            scout_max: scout_cap(&get(env_names::TALK_SCOUT_MAX, "20"))?,
         })
     }
 }
@@ -311,7 +303,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         let (bare, host) = read::split_remote(&a.target);
         if a.text.starts_with('-')
             || bare.contains('@')
-            || !agent_as_written(&a.agent)
             || !read::sendable_lines(&a.lines)
         {
             return None;

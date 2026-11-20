@@ -544,41 +544,59 @@ fn talk_value_flag_last_is_the_d6_line() {
     }
 }
 
-/// Forms the binary hands to the shell because of a bash bug, until the
-/// fix reaches this line. Each row flips to [`Compare::Exact`] (and the
-/// hand-back in `families/talk.rs` goes) when it does:
-/// - an `--agent` the session pick pastes into its Python's source
-///   (fixed in bash on q17, a0afbaea7);
-/// - a `*_TALK_SCOUT_MAX` that `[[ -ge ]]` evaluates as arithmetic (the
-///   fix is asked for).
+/// Two forms the binary handed to the shell until bash's fixes reached
+/// this line, now answered by both alike:
+/// - an `--agent` reaches the session pick's Python as data (argv), so a
+///   backslash or quotes in it pick the session of the agent named
+///   exactly that, past a near miss;
+/// - a `*_TALK_SCOUT_MAX` that is not plain digits is the default cap,
+///   20, never arithmetic: with `1+1` the walk goes past two questions.
 #[test]
-fn talk_bash_bug_forms_go_to_the_shell() {
-    let rig = Rig::new(VERB, "bugs");
-    let empty = || ok(r#"{"lines":[]}"#);
+fn talk_agent_and_scout_cap_as_fixed_in_bash() {
+    let rig = Rig::new(VERB, "fixed");
+    let lines = |l: &str| ok(&format!(r#"{{"lines":["{l}"]}}"#));
     for c in [
-        // FLIP when the agent fix lands.
         plain(
-            "an --agent with a backslash",
+            "an --agent with a backslash and quotes picks its own session",
+            &["ws", "--answer", "1", "--agent", "a\\b'''\""],
+            vec![
+                ok(r#"{"path":"/w/ws"}"#),
+                ok(
+                    r#"[{"sessionId":"s-near","isV2":true,"agentName":"a\\\\b"},{"sessionId":"s-it","isV2":true,"agentName":"a\\b'''\""}]"#,
+                ),
+                ok("{}"),
+                ok(SCREEN),
+            ],
+            0,
+            4,
+        ),
+        plain(
+            "an --agent with a backslash and no live session",
             &["ws", "--answer", "1", "--agent", "a\\b"],
             vec![ok("{}"), ok("[]")],
             1,
             2,
         ),
-        // FLIP when the SCOUT_MAX fix lands.
         env(
             plain(
-                "a scout cap that is arithmetic",
+                "a scout cap that is not digits walks to the default cap",
                 &["ws", "--scout", "--session", SID],
-                vec![empty(), empty(), ok("{}"), empty(), ok("{}")],
+                vec![
+                    ok(r#"{"lines":[]}"#),
+                    lines("one"),
+                    ok("{}"),
+                    lines("two"),
+                    ok("{}"),
+                    lines("two"),
+                    ok("{}"),
+                    ok("{}"),
+                ],
                 0,
-                5,
+                8,
             ),
             &[("K2_TALK_SCOUT_MAX", "1+1")],
         ),
     ] {
-        rig.check(&Case {
-            compare: Compare::Shell,
-            ..c
-        });
+        rig.check(&c);
     }
 }

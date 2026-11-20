@@ -83,6 +83,9 @@ pub struct Ctx {
     pub client: Client,
     pub closing: Closing,
     pub args_json: bool,
+    /// `<K2 home>/vault.sock`, where a confirm is asked
+    /// ([`crate::confirm::confirm_token`]).
+    pub vault_sock: std::path::PathBuf,
 }
 
 impl Ctx {
@@ -91,6 +94,7 @@ impl Ctx {
             client,
             closing: Closing::default(),
             args_json,
+            vault_sock: std::path::PathBuf::new(),
         }
     }
 
@@ -128,6 +132,22 @@ impl Ctx {
         let passport = self.client.passport().is_some();
         self.closing.answer(&noted, passport);
         Ok(split)
+    }
+
+    /// For [`crate::confirm::confirm_token`].
+    pub fn confirm(&mut self) -> crate::confirm::Confirm<'_> {
+        let passport = self.client.passport().is_some();
+        crate::confirm::Confirm {
+            client: &mut self.client,
+            sock: &self.vault_sock,
+            closing: &mut self.closing,
+            passport,
+        }
+    }
+
+    /// `_compute_in_session`: the call carries a session passport.
+    pub fn in_session(&self) -> bool {
+        matches!(self.client.auth, crate::transport::client::Auth::Passport { .. })
     }
 
     /// `_compute_call`: [`Ctx::send`], and any status but 200 is

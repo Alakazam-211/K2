@@ -6,9 +6,7 @@
 //! is the shell's word loop, one `_compute_call`, `--json` as it came,
 //! else the shell's Python line for line.
 //!
-//! The writes stay the shell's: `links set|off|check`, `pairing
-//! setup|off|check`, `push setup|creds|check|on|off|set|send|test|devices
-//! rm`, `email on|off|test|send`.
+//! The writes are [`super::phone_set`]'s.
 
 use super::access::answer;
 use super::call::Ctx;

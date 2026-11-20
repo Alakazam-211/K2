@@ -17,6 +17,8 @@
 //!   `--client` without `--since`).
 //! - [`phone`]: the reads of `app links`, `app pairing`, `app push` and
 //!   `app email`, each family's page and its unknown verb's usage line.
+//! - [`phone_set`]: the writes of `app links`, `app pairing`, `app push`
+//!   and `app email`, with their confirm steps.
 //! - [`catalog`]: `app catalog [list]`, `app catalog show` and `app
 //!   catalog job|jobs`.
 //! - [`walls`]: `app egress [show]|log`, `app box-service <app>` and `app
@@ -59,6 +61,7 @@ pub mod catalog;
 pub mod door;
 pub mod history;
 pub mod phone;
+pub mod phone_set;
 pub mod py;
 pub mod reads;
 pub mod updates;
@@ -82,6 +85,7 @@ pub enum Ask {
     Updates(updates::Ask),
     History(history::Ask),
     Phone(phone::Ask),
+    PhoneSet(phone_set::Ask),
     Catalog(catalog::Ask),
     Walls(walls::Ask),
 }
@@ -280,7 +284,10 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
         v if history::VERBS.contains(&v) => Some(history::parse(v, rest)?.map(Ask::History)),
-        v if phone::VERBS.contains(&v) => Some(phone::parse(v, rest)?.map(Ask::Phone)),
+        v if phone::VERBS.contains(&v) => match phone_set::parse(v, rest) {
+            Some(r) => Some(r.map(Ask::PhoneSet)),
+            None => Some(phone::parse(v, rest)?.map(Ask::Phone)),
+        },
         _ => None,
     }
 }
@@ -342,6 +349,7 @@ fn run_with(
         }
     };
     let mut ctx = Ctx::new(client, call::args_json(words));
+    ctx.vault_sock = crate::confirm::sock_path(&settings.home);
     let shown = match &ask {
         Ask::Wallet(a) => wallet::run(&mut ctx, a),
         Ask::List(l) => reads::list(&mut ctx, l),
@@ -352,6 +360,7 @@ fn run_with(
         Ask::Updates(u) => updates::run(&mut ctx, u),
         Ask::History(h) => history::run(&mut ctx, h),
         Ask::Phone(p) => phone::run(&mut ctx, p),
+        Ask::PhoneSet(p) => phone_set::run(&mut ctx, p),
         Ask::Catalog(c) => catalog::run(&mut ctx, c),
         Ask::Walls(w) => walls::run(&mut ctx, w),
     };

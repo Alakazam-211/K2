@@ -8,7 +8,7 @@
 //!   (`cmd_msg_verify`, `cli/src/msg-verify.sh`).
 //! - [`send`]: everything else, `cmd_msg_v2` (`cli/src/msg-inbox-staging.sh`)
 //!   and its live form `cmd_msg` (`cli/src/msg-whoami-done.sh`), sent once
-//!   by its idempotency key ([`send_once`]).
+//!   by its idempotency key ([`send_once`]), and Postal mail ([`postal`]).
 //!
 //! What runs before any of them, in the shell's order:
 //!
@@ -27,7 +27,7 @@
 //!   looks for a shared Codex server in the process's ancestry first
 //!   ([`crate::prelude::codex_env`]);
 //! - a word that is not UTF-8;
-//! - the forms [`send`] names (Postal mail, `--signal`, `--inbox-silent`
+//! - the forms [`send`] names (`--signal`, `--inbox-silent`
 //!   and `--inbox-wake`, `<agent>::<host>`, `--secret`, a value flag as the
 //!   last word).
 
@@ -42,6 +42,7 @@ use k2_client::env_names;
 use std::ffi::OsString;
 use std::path::Path;
 
+pub mod postal;
 pub mod py;
 pub mod send;
 pub mod send_once;

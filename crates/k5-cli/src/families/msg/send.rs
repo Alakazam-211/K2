@@ -37,8 +37,9 @@
 //!     `gated` or `forbidden`, 0 when `success` is `true`, else 2.
 //! 12. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
-//! The shell answers these forms itself ([`parse`] says [`Parsed::Shell`]):
-//! Postal mail (an address `handle::label.postal.bot`), `--signal`,
+//! An address `handle::label.postal.bot` first is Postal mail
+//! ([`super::postal`]). The shell answers these forms itself ([`parse`]
+//! says [`Parsed::Shell`]): `--signal`,
 //! `--inbox-silent` and `--inbox-wake`, an address on another server
 //! (`agent::host`, `agent@host`), `--secret NAME` (a vault handoff), and a
 //! value flag (`--from`, `--command`, `--wake-timeout`, `--via`) as the
@@ -241,6 +242,8 @@ pub enum Parsed {
     Stop(String, Exit),
     /// The send, after the summary hint (if any).
     Send(Msg),
+    /// Postal mail ([`super::postal`]).
+    Postal(super::postal::Mail),
 }
 
 /// `_is_postal_address`.
@@ -305,12 +308,13 @@ pub fn parse(words: &[&str]) -> Parsed {
     if words.iter().any(|w| matches!(*w, "--help" | "-h")) {
         return Parsed::Shell;
     }
-    if words
-        .iter()
-        .find(|w| !w.starts_with('-'))
-        .is_some_and(|w| is_postal(w))
-    {
-        return Parsed::Shell;
+    if let Some(at) = words.iter().position(|w| !w.starts_with('-')) {
+        if is_postal(words[at]) {
+            return match super::postal::parse(words, at) {
+                Ok(m) => Parsed::Postal(m),
+                Err(line) => Parsed::Stop(format!("{line}\n"), Exit::Usage),
+            };
+        }
     }
     let has = |f: &str| words.contains(&f);
     if has("--signal") {
@@ -442,6 +446,7 @@ pub fn run(args: &[OsString], words: &[&str], hook_sock: Option<&Path>) -> Optio
             exit
         }
         Parsed::Send(m) => send(&mut client, m),
+        Parsed::Postal(m) => super::postal::send(&mut client, &m),
     })
 }
 

@@ -40,9 +40,15 @@ fn the_shell_s_lines() {
         send::SESSION_ONE_WORD,
         send::SESSION_SECRET,
     ] {
-        pinned(staging, &format!("echo \"{}\" >&2", line.replace('"', "\\\"")));
+        pinned(
+            staging,
+            &format!("echo \"{}\" >&2", line.replace('"', "\\\"")),
+        );
     }
-    pinned(staging, r#"echo "Error: unknown flag '$1' (try 'k2 msg --help')" >&2"#);
+    pinned(
+        staging,
+        r#"echo "Error: unknown flag '$1' (try 'k2 msg --help')" >&2"#,
+    );
     assert_eq!(
         as_shell(&send::unknown_flag("-x")),
         "Error: unknown flag '-x' (try 'k2 msg --help')\n"
@@ -52,7 +58,10 @@ fn the_shell_s_lines() {
         staging,
         r#"echo "Usage: k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]" >&2"#,
     );
-    pinned(staging, r#"echo "       Run 'k2 msg --help' for full reference." >&2"#);
+    pinned(
+        staging,
+        r#"echo "       Run 'k2 msg --help' for full reference." >&2"#,
+    );
     pinned(staging, r#"echo "Error: message text required" >&2"#);
     pinned(
         staging,
@@ -70,13 +79,19 @@ fn the_shell_s_lines() {
         staging,
         r#"echo "  Wire form is for:              k2 fed send <fp>::<ws>::<agent> \"text\"" >&2"#,
     );
-    pinned(staging, r#"response=$(_k2_idem_send cli_post_form "/cli/workspace/msg" "$params")"#);
+    pinned(
+        staging,
+        r#"response=$(_k2_idem_send cli_post_form "/cli/workspace/msg" "$params")"#,
+    );
     // The woke and reopened notes and the gate's JSON line go nowhere.
     let msg = source(staging);
     assert!(msg.contains("        sys.stderr.write(\"note: reopened a past conversation as %s; your message is its first turn. Reply arrives as [from %s].\\n\" % (d.get(\"addr\"), d.get(\"addr\")))\nexcept Exception:\n    pass' 2>/dev/null"));
     assert!(msg.contains("except Exception:\n    print(2)\n' 2>/dev/null)"));
     let inbox = source("msg-inbox.sh");
-    assert!(inbox.contains(&format!("cat >&2 <<'EOF'\n{}EOF\n    exit 2", as_shell(send::BARE_INBOX))));
+    assert!(inbox.contains(&format!(
+        "cat >&2 <<'EOF'\n{}EOF\n    exit 2",
+        as_shell(send::BARE_INBOX)
+    )));
     pinned(
         "msg-inbox-staging.sh",
         &format!("echo \"{}\" >&2\n        exit 2", send::BOTH_INBOX),
@@ -109,9 +124,27 @@ fn the_send_once_lines() {
     assert!(cell.contains(r#"echo "Error: K2's server didn't answer ${endpoint} (${n} tries, $((SECONDS - t0)) s); it may have been delivered. It is safe to run the same command again with --idempotency-key ${_K2_IDEM_KEY}: K2 delivers one key once." >&2"#));
     let note = send_once::replay_note(br#"{"replayed":true}"#).unwrap();
     assert!(cell.contains(&format!("echo \"{}\" >&2 ;;", as_shell(&note))));
-    assert!(cell.contains(r#"local endpoint="$2" tries="${_K2_IDEM_TRIES:-3}" n=1 out rc t0="$SECONDS""#));
+    assert!(cell
+        .contains(r#"local endpoint="$2" tries="${_K2_IDEM_TRIES:-3}" n=1 out rc t0="$SECONDS""#));
     assert!(cell.contains(r#"case "$rc" in 28|52|56) return 0 ;; esac"#));
     assert!(cell.contains(r#"[[ "$out" == *'"code":"in_progress"'* ]] && return 0"#));
+}
+
+#[test]
+fn the_post_time_limit() {
+    use std::ffi::OsStr;
+    use std::time::Duration;
+    let t = |v: &str| super::post_max_time(Some(OsStr::new(v)));
+    assert_eq!(super::post_max_time(None), Some(None));
+    assert_eq!(t(""), Some(None));
+    assert_eq!(t("1"), Some(Some(Duration::from_secs(1))));
+    assert_eq!(t("0.5"), Some(Some(Duration::from_millis(500))));
+    assert_eq!(t("0"), Some(Some(Duration::from_secs(u64::from(u32::MAX)))));
+    for odd in ["x", "1e2", "-1", "1.2.3", ".", " 1"] {
+        assert_eq!(t(odd), None, "{odd}");
+    }
+    let policy = source("cli-tools-policy.sh");
+    assert!(policy.contains(r#"--connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \"#));
 }
 
 #[test]
@@ -119,7 +152,14 @@ fn keys_and_tries() {
     for ok in ["abcdefgh", "A-_9a-_9", "x".repeat(64).as_str()] {
         assert!(send_once::valid(ok), "{ok}");
     }
-    for bad in ["", "abcdefg", "abc defgh", "abcdefgh!", "x".repeat(65).as_str(), "ééééé"] {
+    for bad in [
+        "",
+        "abcdefg",
+        "abc defgh",
+        "abcdefgh!",
+        "x".repeat(65).as_str(),
+        "ééééé",
+    ] {
         assert!(!send_once::valid(bad), "{bad}");
     }
     let k = send_once::uuid4();
@@ -172,13 +212,31 @@ fn stops(words: &[&str]) -> (String, Exit) {
 #[test]
 fn the_words() {
     let m = sends(&["ws", "hello"]);
-    assert_eq!((m.target.as_str(), m.text.as_str(), m.wake), ("ws", "hello", true));
-    let m = sends(&["ws", "a", "b", "--no-wake", "--from", "me", "--command", "/x"]);
-    assert_eq!((m.text.as_str(), m.wake, m.from.as_str(), m.command.as_str()), ("b", false, "me", "/x"));
+    assert_eq!(
+        (m.target.as_str(), m.text.as_str(), m.wake),
+        ("ws", "hello", true)
+    );
+    let m = sends(&[
+        "ws",
+        "a",
+        "b",
+        "--no-wake",
+        "--from",
+        "me",
+        "--command",
+        "/x",
+    ]);
+    assert_eq!(
+        (m.text.as_str(), m.wake, m.from.as_str(), m.command.as_str()),
+        ("b", false, "me", "/x")
+    );
     let m = sends(&["", "ws", "t"]);
     assert_eq!((m.target.as_str(), m.text.as_str()), ("ws", "t"));
     let m = sends(&["--session", "s1", "only text"]);
-    assert_eq!((m.target.as_str(), m.text.as_str(), m.session.as_str()), ("", "only text", "s1"));
+    assert_eq!(
+        (m.target.as_str(), m.text.as_str(), m.session.as_str()),
+        ("", "only text", "s1")
+    );
     let m = sends(&["--summary", "", "ws", "t", "--idempotency-key", "abcdefgh"]);
     assert_eq!((m.summary.as_str(), m.idem_key.as_str()), ("", "abcdefgh"));
     // Not hosts: local.
@@ -189,25 +247,49 @@ fn the_words() {
 
     assert_eq!(stops(&["--idempotency-key"]).1, Exit::Usage);
     assert_eq!(stops(&["--idempotency-key", ""]).1, Exit::Usage);
-    assert_eq!(stops(&["--session"]).0, format!("{}\n", send::SESSION_USAGE));
-    assert_eq!(stops(&["ws", "--summary"]).0, format!("{}\n", send::SUMMARY_USAGE));
-    assert_eq!(stops(&["--secret", ""]).0, format!("{}\n", send::SECRET_USAGE));
-    assert_eq!(stops(&["ws", "--bogus", "--from"]), (send::unknown_flag("--bogus"), Exit::Error));
+    assert_eq!(
+        stops(&["--session"]).0,
+        format!("{}\n", send::SESSION_USAGE)
+    );
+    assert_eq!(
+        stops(&["ws", "--summary"]).0,
+        format!("{}\n", send::SUMMARY_USAGE)
+    );
+    assert_eq!(
+        stops(&["--secret", ""]).0,
+        format!("{}\n", send::SECRET_USAGE)
+    );
+    assert_eq!(
+        stops(&["ws", "--bogus", "--from"]),
+        (send::unknown_flag("--bogus"), Exit::Error)
+    );
     assert_eq!(stops(&["ws", "-"]).0, send::unknown_flag("-"));
-    assert_eq!(stops(&["--agent", "x"]), (send::AGENT_RETIRED.to_string(), Exit::Error));
+    assert_eq!(
+        stops(&["--agent", "x"]),
+        (send::AGENT_RETIRED.to_string(), Exit::Error)
+    );
     assert_eq!(stops(&[]), (send::no_target(), Exit::Error));
     assert_eq!(stops(&["--no-wake", ""]), (send::no_target(), Exit::Error));
     assert_eq!(stops(&["ws"]), (send::no_text(), Exit::Error));
     assert_eq!(stops(&["ws", ""]), (send::no_text(), Exit::Error));
-    assert_eq!(stops(&["--session", "s", "a", "b"]).0, format!("{}\n", send::SESSION_ONE_WORD));
+    assert_eq!(
+        stops(&["--session", "s", "a", "b"]).0,
+        format!("{}\n", send::SESSION_ONE_WORD)
+    );
     assert_eq!(stops(&["--session", "s"]), (send::no_text(), Exit::Error));
     let long = "x".repeat(601);
     let words = ["--session", "s", long.as_str(), "--secret", "N"];
     let (text, exit) = stops(&words);
     assert_eq!(exit, Exit::Usage);
-    assert!(text.starts_with("hint: this message is 601 characters"), "{text}");
+    assert!(
+        text.starts_with("hint: this message is 601 characters"),
+        "{text}"
+    );
     assert!(text.ends_with(&format!("\n{}\n", send::SESSION_SECRET)));
-    assert_eq!(stops(&["ws", "--inbox"]), (send::BARE_INBOX.to_string(), Exit::Usage));
+    assert_eq!(
+        stops(&["ws", "--inbox"]),
+        (send::BARE_INBOX.to_string(), Exit::Usage)
+    );
     assert_eq!(
         stops(&["ws", "--inbox", "--inbox-silent", "--inbox-wake"]).0,
         format!("{}\n", send::BOTH_INBOX)
@@ -216,8 +298,6 @@ fn the_words() {
     for shell in [
         &["--help"][..],
         &["ws", "t", "-h"],
-        &["a::label.postal.bot", "t"],
-        &["--no-wake", "A_b::my-label.Postal.Bot", "t"],
         &["ws", "--signal", "x"],
         &["ws", "--inbox-silent", "f"],
         &["ws", "--inbox-wake", "f"],
@@ -231,6 +311,130 @@ fn the_words() {
     ] {
         assert_eq!(parse(shell), Parsed::Shell, "{shell:?}");
     }
+}
+
+#[test]
+fn postal_mail() {
+    use super::postal::{self, Mail};
+    let mail = |to: &str, text: &str, wake: bool, json: bool| {
+        Parsed::Postal(Mail {
+            to: to.into(),
+            text: text.into(),
+            wake,
+            json,
+        })
+    };
+    assert_eq!(
+        parse(&["a::label.postal.bot", "t"]),
+        mail("a::label.postal.bot", "t", true, false)
+    );
+    assert_eq!(
+        parse(&[
+            "--no-wake",
+            "A_b::my-label.Postal.Bot",
+            "one",
+            "",
+            "two",
+            "--json",
+            "--wake"
+        ]),
+        mail("A_b::my-label.Postal.Bot", "one  two", false, true)
+    );
+    assert_eq!(
+        parse(&["a::abc.postal.bot", "", "t"]),
+        mail("a::abc.postal.bot", "t", true, false)
+    );
+    let to = "a::abc.postal.bot";
+    assert_eq!(
+        parse(&[to]),
+        Parsed::Stop(format!("{}\n", postal::usage(to)), Exit::Usage)
+    );
+    assert_eq!(
+        parse(&[to, "t", "--from", "x"]),
+        Parsed::Stop(format!("{}\n", postal::k2_only("--from", to)), Exit::Usage)
+    );
+    assert_eq!(
+        parse(&[to, "t", "-q"]),
+        Parsed::Stop(format!("{}\n", postal::unknown_flag("-q")), Exit::Usage)
+    );
+    // The first word that is no flag decides, even a flag's value.
+    assert_eq!(
+        parse(&["--from", to, "ws", "t"]),
+        Parsed::Stop(format!("{}\n", postal::k2_only("--from", to)), Exit::Usage)
+    );
+    let src = source("remote-target.sh");
+    for line in [
+        r#"echo "k2 msg: $1 is for messages to agents on this server; Postal mail to $to takes only the text, --no-wake and --json." >&2"#,
+        r#"-*) echo "k2 msg: unknown flag '$1' for Postal mail (k2 msg --help)" >&2; exit 2 ;;"#,
+        r#"echo "Usage: k2 msg $to \"text\" [--no-wake] [--json]" >&2"#,
+        "--summary|--wake-timeout|--session|--inbox|--inbox-wake|--inbox-silent|--signal|--command|--from|--via)",
+    ] {
+        assert!(src.contains(line), "{line}");
+    }
+    assert_eq!(
+        as_shell(&postal::usage("A")),
+        "Usage: k2 msg A \"text\" [--no-wake] [--json]"
+    );
+    let m = Mail {
+        to: "a::b.postal.bot".into(),
+        text: "hé".into(),
+        wake: false,
+        json: false,
+    };
+    assert_eq!(
+        postal::body("/w", &m),
+        r#"{"workspace": "/w", "to": "a::b.postal.bot", "text": "h\u00e9", "wake": false}"#
+    );
+
+    let r = postal::reader(
+        br#"{"status":"delivered","to":"a::b.postal.bot","badge":"B","deliveryId":"m_1"}"#,
+        false,
+    );
+    assert_eq!(
+        as_shell(&r.stdout),
+        "Postal mail to a::b.postal.bot: delivered\nBadge:    B\nRecord:   m_1 (k2 msg verify m_1)\nTheir server stored it.\n"
+    );
+    assert_eq!(r.exit, Exit::Ok);
+    let r = postal::reader(br#"{"status":"failed","to":"x","reason":"gone"}"#, false);
+    assert_eq!(
+        (r.stdout.as_str(), r.exit),
+        ("Not sent to x: failed (gone)\n", Exit::Error)
+    );
+    let r = postal::reader(br#"{"status":"queued"}"#, false);
+    assert_eq!(
+        r.stdout,
+        "Postal mail to None: queued\nQueued on this server; it goes out at the next try.\n"
+    );
+    let r = postal::reader(
+        r#"{"asked":true,"card":"c1","waiting":true,"hint":"ßee"}"#.as_bytes(),
+        false,
+    );
+    assert_eq!(
+        (r.stdout.as_str(), r.exit),
+        (
+            "Asked: a card is on your person's Thread (c1), waiting already.\nSSee.\n",
+            Exit::Usage
+        )
+    );
+    let r = postal::reader(
+        br#"{"error":{"code":"postal_not_friends","hint":"ask first"}}"#,
+        false,
+    );
+    assert_eq!(
+        (r.stderr.as_str(), r.exit),
+        ("Error: postal_not_friends: ask first\n", Exit::Refused)
+    );
+    let r = postal::reader(br#"{"error":{"code":"too_large","hint":"h"}}"#, false);
+    assert_eq!(r.exit, Exit::Usage);
+    let r = postal::reader(br#"{"status":"held"}"#, true);
+    assert_eq!(r.stdout, "{\n  \"status\": \"held\"\n}\n");
+    let r = postal::reader(br#"{"workspace":"x"}"#, false);
+    assert!(
+        r.stderr
+            .ends_with("AttributeError: 'str' object has no attribute 'get'\n"),
+        "{}",
+        r.stderr
+    );
 }
 
 #[test]
@@ -330,8 +534,14 @@ fn the_answer() {
         send::moved_note(&parsed(r#"{"movedFrom":"o d","addr":"n"}"#)).as_deref(),
         Some("note: o is now d n")
     );
-    assert_eq!(send::moved_note(&parsed(r#"{"movedFrom":"a","addr":"a"}"#)), None);
-    assert_eq!(send::moved_note(&parsed(r#"{"movedFrom":"a","addr":""}"#)), None);
+    assert_eq!(
+        send::moved_note(&parsed(r#"{"movedFrom":"a","addr":"a"}"#)),
+        None
+    );
+    assert_eq!(
+        send::moved_note(&parsed(r#"{"movedFrom":"a","addr":""}"#)),
+        None
+    );
     assert_eq!(
         send::moved_note(&parsed(r#"{"movedFrom":5,"addr":true}"#)).as_deref(),
         Some("note: 5 is now True")
@@ -357,10 +567,16 @@ fn the_sender_readers() {
 #[test]
 fn who_words_and_reader() {
     assert_eq!(who::parse(&["m_1"]), Some(Ok(("m_1".into(), false))));
-    assert_eq!(who::parse(&["--json", "m_1"]), Some(Ok(("m_1".into(), true))));
+    assert_eq!(
+        who::parse(&["--json", "m_1"]),
+        Some(Ok(("m_1".into(), true)))
+    );
     assert_eq!(who::parse(&["-h"]), None);
     let usage = |tail: &str| format!("Usage: {CLI_NAME} msg who <m_…> [--json]  ({tail})");
-    assert_eq!(who::parse(&["m", "-x"]), Some(Err(usage("unknown flag -x"))));
+    assert_eq!(
+        who::parse(&["m", "-x"]),
+        Some(Err(usage("unknown flag -x")))
+    );
     assert_eq!(who::parse(&["a", "b"]), Some(Err(usage("one id only"))));
     assert_eq!(who::parse(&[]), Some(Err(who::no_id())));
     assert_eq!(who::parse(&["", "b"]), Some(Ok(("b".into(), false))));
@@ -384,26 +600,43 @@ fn who_words_and_reader() {
         "Delivery m_1\n  via:     None\n  sender:  -\n  actor:   None\n  linked:  no\n"
     );
     let r = who::reader(br#"{"error":{"code":"not_found","hint":"no such"}}"#, false);
-    assert_eq!((r.stderr.as_str(), r.exit), ("Error: not_found: no such\n", Exit::NotFound));
+    assert_eq!(
+        (r.stderr.as_str(), r.exit),
+        ("Error: not_found: no such\n", Exit::NotFound)
+    );
     let r = who::reader(br#"{"error":{"hint":"bad token"}}"#, false);
-    assert_eq!((r.stderr.as_str(), r.exit), ("Error: bad token\n", Exit::Refused));
+    assert_eq!(
+        (r.stderr.as_str(), r.exit),
+        ("Error: bad token\n", Exit::Refused)
+    );
     let r = who::reader(br#"{"error":"plain"}"#, false);
     assert_eq!((r.stderr.as_str(), r.exit), ("Error: plain\n", Exit::Error));
     let r = who::reader(b"", false);
-    assert_eq!((r.stderr.as_str(), r.exit), ("Error: daemon answered: \n", Exit::Error));
+    assert_eq!(
+        (r.stderr.as_str(), r.exit),
+        ("Error: daemon answered: \n", Exit::Error)
+    );
     let r = who::reader(b"oops \xff", false);
     assert_eq!(r.stderr, "Error: daemon answered: oops \\udcff\n");
     let r = who::reader(br#"{"a":"\u00e9"}"#, true);
     assert_eq!(r.stdout, "{\n  \"a\": \"\\u00e9\"\n}\n");
     let r = who::reader(br#"[1]"#, false);
     assert_eq!(r.exit, Exit::Error);
-    assert!(r.stderr.ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
+    assert!(r
+        .stderr
+        .ends_with("AttributeError: 'list' object has no attribute 'get'\n"));
     let r = who::reader(br#"{"linked":1,"links":[{"x":1}]}"#, false);
     assert!(r.stderr.ends_with("KeyError: 'id'\n"), "{}", r.stderr);
     let r = who::reader(br#"{"error":{"code":5}}"#, false);
-    assert!(r.stderr.ends_with("TypeError: unsupported operand type(s) for +: 'int' and 'str'\n"));
+    assert!(r
+        .stderr
+        .ends_with("TypeError: unsupported operand type(s) for +: 'int' and 'str'\n"));
     let r = who::reader(br#"{"error":{"code":[],"hint":"h"}}"#, false);
-    assert!(r.stderr.ends_with("TypeError: unhashable type: 'list'\n"), "{}", r.stderr);
+    assert!(
+        r.stderr.ends_with("TypeError: unhashable type: 'list'\n"),
+        "{}",
+        r.stderr
+    );
 }
 
 fn clock(secs: i64) -> Option<String> {
@@ -422,10 +655,19 @@ impl verify::Stdin for NoStdin {
 fn verify_words_hashes_and_reader() {
     let p = |w: &[&str]| verify::parse(w, &mut NoStdin);
     let ask = p(&["m_1", "--text", "hi", "--json"]).unwrap();
-    assert_eq!((ask.code.as_str(), ask.text.as_deref(), ask.json), ("m_1", Some("hi"), true));
-    assert_eq!(p(&["m_1", "--text-file", "-"]).unwrap().text.as_deref(), Some("from stdin"));
+    assert_eq!(
+        (ask.code.as_str(), ask.text.as_deref(), ask.json),
+        ("m_1", Some("hi"), true)
+    );
+    assert_eq!(
+        p(&["m_1", "--text-file", "-"]).unwrap().text.as_deref(),
+        Some("from stdin")
+    );
     let pre = format!("{CLI_NAME} msg verify: ");
-    assert_eq!(p(&["--text"]).unwrap_err(), (format!("{pre}--text needs the text"), Exit::Usage));
+    assert_eq!(
+        p(&["--text"]).unwrap_err(),
+        (format!("{pre}--text needs the text"), Exit::Usage)
+    );
     assert_eq!(
         p(&["--text-file", "/no/such/file"]).unwrap_err(),
         (format!("{pre}no file /no/such/file"), Exit::Usage)
@@ -473,20 +715,43 @@ fn verify_words_hashes_and_reader() {
         "code      m_1 (msg)\nfrom      a@b  via passport  [workspace acme, key ff]\nactor     owner\nfor       v (app-asserted, not verified)\nto        w1\nwhen      T12\ntyped in  yes\nbadge     b2\nlanded    {\"x\": [1]}\ncontent   match: ok\n"
     );
     assert_eq!(r.exit, Exit::Ok);
-    let r = verify::reader(br#"{"content":"mismatch","contentHint":null}"#, false, clock);
+    let r = verify::reader(
+        br#"{"content":"mismatch","contentHint":null}"#,
+        false,
+        clock,
+    );
     assert_eq!(
         r.stdout,
         "code      None (None)\nfrom      ?  via None\nto        ?\nwhen      T0\ntyped in  no (the delivery did not reach the agent)\ncontent   mismatch: None\n"
     );
     assert_eq!(r.exit, Exit::Error);
     let r = verify::reader(br#"{"content":"mismatch"}"#, true, clock);
-    assert_eq!((r.stdout.as_str(), r.exit), ("{\n  \"content\": \"mismatch\"\n}\n", Exit::Error));
-    let r = verify::reader(br#"{"error":{"code":"forbidden","hint":"no"}}"#, false, clock);
-    assert_eq!((r.stderr.as_str(), r.exit), ("Error: forbidden: no\n", Exit::Refused));
+    assert_eq!(
+        (r.stdout.as_str(), r.exit),
+        ("{\n  \"content\": \"mismatch\"\n}\n", Exit::Error)
+    );
+    let r = verify::reader(
+        br#"{"error":{"code":"forbidden","hint":"no"}}"#,
+        false,
+        clock,
+    );
+    assert_eq!(
+        (r.stderr.as_str(), r.exit),
+        ("Error: forbidden: no\n", Exit::Refused)
+    );
     let r = verify::reader(br#"{"at":"x"}"#, false, clock);
-    assert!(r.stderr.ends_with("TypeError: 'str' object cannot be interpreted as an integer\n"));
+    assert!(r
+        .stderr
+        .ends_with("TypeError: 'str' object cannot be interpreted as an integer\n"));
     let r = verify::reader(br#"{"sender":{"handle":5}}"#, false, clock);
-    assert!(r.stderr.ends_with("TypeError: can only concatenate str (not \"int\") to str\n"), "{}", r.stderr);
+    assert_eq!(r.exit, Exit::Ok, "who is the handle: no workspace part");
+    let r = verify::reader(br#"{"sender":{"address":"a","handle":5}}"#, false, clock);
+    assert!(
+        r.stderr
+            .ends_with("TypeError: can only concatenate str (not \"int\") to str\n"),
+        "{}",
+        r.stderr
+    );
 }
 
 #[cfg(unix)]

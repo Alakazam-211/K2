@@ -69,8 +69,8 @@ fn the_verbs_and_their_aliases() {
 
 #[test]
 fn the_shell_s_own_forms() {
-    assert_eq!(form(&["wake"]), None);
-    assert_eq!(form(&["signal", "wake"]), None);
+    assert_eq!(form(&["wake"]), Some(Form::Wake(None)));
+    assert_eq!(form(&["signal", "wake", "x"]), Some(Form::Wake(None)));
     assert_eq!(form(&["session", "a", "--set"]), None);
     assert_eq!(form(&["status", "a", "--limit"]), None);
     assert_eq!(form(&["log", "-n"]), None);

@@ -19,8 +19,7 @@
 //!
 //! The shell answers these forms itself ([`run`] returns `None`): any
 //! `-h` or `--help` (the front sends those to a page or the shell);
-//! `wake` (`signal wake`), a Python block of its own that makes several
-//! requests; a value flag as the last word (the shell stops on
+//! the `wake` cases [`wake`] names; a value flag as the last word (the shell stops on
 //! `$2: unbound variable` or a `shift 2` out of range, K2's D6 class); a
 //! word bash would expand as a file name in `--days` or `--months`; an
 //! `--instructions-file` holding a NUL or bytes that are not UTF-8;
@@ -32,6 +31,7 @@
 pub mod py;
 pub mod read;
 pub mod spec;
+pub mod wake;
 pub mod when;
 
 use self::read::{Edited, Shows};
@@ -85,6 +85,9 @@ pub const SCHEDULER: &str = "/cli/heartbeat/scheduler-status";
 pub enum Form {
     /// `heartbeat help`: the help on stdout.
     Help,
+    /// `wake` and `signal wake`: [`wake`]'s block, with what it read
+    /// before its first request ([`run`] fills it in).
+    Wake(Option<wake::Setup>),
     /// Lines on stderr, and the exit; nothing sent.
     Stop(Vec<String>, Exit),
     List {
@@ -247,7 +250,7 @@ pub fn parse(rest: &[&str], resolve: &dyn Fn(&str) -> Option<String>) -> Option<
             match tail.first().copied().unwrap_or("") {
                 "fire" => fire(more),
                 "wakeup" => wakeup(more),
-                "wake" => None,
+                "wake" => Some(Form::Wake(None)),
                 other => usage2(
                     format!("Unknown 'heartbeat signal' subcommand: {other}"),
                     format!(
@@ -257,7 +260,7 @@ pub fn parse(rest: &[&str], resolve: &dyn Fn(&str) -> Option<String>) -> Option<
                 ),
             }
         }
-        "wake" => None,
+        "wake" => Some(Form::Wake(None)),
         "log" => log(tail),
         "add" => add(tail),
         "list" => list(tail, resolve),
@@ -956,6 +959,13 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     {
         return None;
     }
+    let form = match form {
+        Form::Wake(_) => {
+            let home = crate::home::k2_home().ok()?;
+            Form::Wake(Some(wake::Setup::read(&home, settings.no_owner_fallback)?))
+        }
+        other => other,
+    };
     Some(run_with(args, form, hook.as_deref(), settings, &pwd))
 }
 
@@ -1120,7 +1130,12 @@ impl Hb {
 
     fn answer(&mut self, form: Form, pwd: &str) -> Exit {
         match form {
-            Form::Help | Form::Stop(..) => Exit::Ok,
+            Form::Help | Form::Stop(..) | Form::Wake(None) => Exit::Ok,
+            Form::Wake(Some(setup)) => {
+                let mut w = wake::Wake::new(&mut self.client, &setup);
+                let (stdout, end) = w.run(&setup);
+                wake::show(&stdout, end)
+            }
             Form::List { json, ws } => {
                 let params = ws_param(&ws);
                 if json {

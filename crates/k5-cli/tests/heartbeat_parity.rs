@@ -1695,6 +1695,194 @@ fn heartbeat_help_never_acts() {
     }
 }
 
+const NO_WORK: &str = r#"[{"name":"a","inboxCount":0}]"#;
+const WORK: &str = r#"[{"name":"a","inboxCount":2}]"#;
+const MANAGER_UP: &str = r#"[{"cwd":"/srv/ws/.k2/agents/manager","terminalId":"t-9"}]"#;
+
+/// `heartbeat wake` (and `signal wake`): the noop, the running manager
+/// (by its folder, by its terminal id), the launch and its poll, each
+/// failure the block names (not a list, a type it can't compare or
+/// walk, a refusal with its card, an error status, not JSON, a change
+/// the daemon answered with an error, no answer, not HTTP), and the one
+/// heal of a refused passport.
+#[test]
+fn heartbeat_wake_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "wake");
+    let v = vec![
+        case(
+            "no inbox work: noop",
+            &["wake"],
+            &[],
+            vec![ok(NO_WORK), ok("[]")],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "signal wake, with words after it: noop",
+            &["signal", "wake", "now", "--json"],
+            &[],
+            vec![ok("[]"), ok("[]")],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "an unfiled inbox item, the manager running: notified",
+            &["wake"],
+            &[],
+            vec![ok(NO_WORK), ok(r#"[{"id":"i1"}]"#), ok(MANAGER_UP), ok(r#"{"ok":true}"#)],
+            owner_and_port,
+            0,
+            4,
+        ),
+        case(
+            "the manager by its terminal id",
+            &["wake"],
+            &[],
+            vec![
+                ok(WORK),
+                ok("[]"),
+                ok(r#"[{"cwd":"/x","terminalId":"agent-chat:p1:coordinator"},{"cwd":"/y","terminalId":"agent-chat:p1:manager:hb:d"}]"#),
+                ok("{}"),
+            ],
+            owner_and_port,
+            0,
+            4,
+        ),
+        case(
+            "the manager asleep: launched, then notified",
+            &["wake"],
+            &[],
+            vec![
+                ok(WORK),
+                ok("[]"),
+                ok(r#"[{"cwd":"/x","terminalId":"agent-chat:wt:w1"}]"#),
+                ok(r#"{"launched":true}"#),
+                ok(r#"[{"cwd":"/z","terminalId":"agent-chat-manager-7"}]"#),
+                ok("{}"),
+            ],
+            owner_and_port,
+            0,
+            6,
+        ),
+        case(
+            "the agents are not a list",
+            &["wake"],
+            &[],
+            vec![ok(r#"{"agents":[]}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an inbox count that is a string",
+            &["wake"],
+            &[],
+            vec![ok(r#"[{"inboxCount":"3"}]"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "the inbox items are not dicts",
+            &["wake"],
+            &[],
+            vec![ok(NO_WORK), ok("[1]")],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "a session's cwd that is null",
+            &["wake"],
+            &[],
+            vec![ok(WORK), ok("[]"), ok(r#"[{"cwd":null,"terminalId":"t"}]"#)],
+            owner_and_port,
+            1,
+            3,
+        ),
+        case(
+            "a terminal id that is a number",
+            &["wake"],
+            &[],
+            vec![ok(WORK), ok("[]"), ok(r#"[{"cwd":"/x","terminalId":7}]"#)],
+            owner_and_port,
+            1,
+            3,
+        ),
+        case(
+            "a refusal with a permission card",
+            &["wake"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "a 500 with no body",
+            &["wake"],
+            &[],
+            vec![Reply::Answer(500, String::new())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "not JSON",
+            &["wake"],
+            &[],
+            vec![ok("<html>")],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "the write answered with an error",
+            &["wake"],
+            &[],
+            vec![ok(WORK), ok("[]"), ok(MANAGER_UP), ok(r#"{"error":{"code":"gone","hint":"terminal gone"}}"#)],
+            owner_and_port,
+            1,
+            4,
+        ),
+        case(
+            "an empty reply",
+            &["wake"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "not HTTP",
+            &["wake"],
+            &[],
+            vec![Reply::Raw(GARBAGE.to_vec())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        with(
+            with_passport(&[]),
+            case(
+                "a refused passport heals once",
+                &["wake"],
+                &[],
+                vec![Reply::Answer(403, REFUSED.into()), ok("[]"), ok("[]")],
+                healed_on_disk,
+                0,
+                3,
+            ),
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
 /// The lines name the command by the brand's name (in a build with
 /// `K2_BRAND_DIR=brand/xy` they say `xy`).
 #[test]

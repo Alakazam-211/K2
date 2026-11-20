@@ -27,8 +27,14 @@
 # One that holds only on some hosts proves itself where it holds and,
 # elsewhere, checks what it can and prints "NOT PROVEN on this host" with
 # where it is proven (bash32-pipe-reader: the macOS job, on /bin/bash 3.2).
-# No tests/cli test meets one through the binary today; one that does is
-# mapped to its difference here by name, never skipped broadly. (The
+# Three tests/cli tests meet one through the binary, and check the binary's
+# side of it exactly, by the difference's name, never by a skip:
+# airgap_no_python.sh (native-without-python3: no python3 on PATH, the
+# one line and exit 69) and socket_first_no_owner.sh
+# (owner-token-with-passport: `read` when the socket says "not served"),
+# and socket_first_no_owner_headless.sh (the same difference: `feedback
+# list` over TCP from a real session, refused for the passport).
+# Any other is mapped to its difference the same way. (The
 # binary's own parity tests meet owner-token-with-passport:
 # crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, activity_parity.rs
 # and feedback_parity.rs; since 0.46.17 the shell's read and setup send

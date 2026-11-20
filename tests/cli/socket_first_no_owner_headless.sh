@@ -231,8 +231,21 @@ fi
 
 echo "== 3. a TCP-only Open verb from the session (today's behaviour; a later change to the TCP-only senders ends it) =="
 agent "$SOCK" "$DPORT" feedback list
-if [ "$RC" = 0 ]; then ok "feedback list: answers as before (exit 0)"; else bad "feedback list: exit $RC"; show; fi
-case "$ERR" in "") ok "feedback list: nothing on stderr" ;; *) bad "feedback list: stderr $(printf %q "$ERR")" ;; esac
+if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    # The k5 binary answers feedback list itself and never holds the owner
+    # token beside a passport (scripts/cli-parity.sh's named difference
+    # owner-token-with-passport, PRD 13.9 #4): it sends the session's
+    # passport over TCP, which the daemon refuses there, so the agent gets
+    # the refusal rather than the owner's answer.
+    if [ "$RC" = 1 ]; then ok "feedback list (the k5 binary): exit 1"; else bad "feedback list (the k5 binary): exit $RC"; show; fi
+    case "$ERR" in
+        '{"error": {"code": "error", "hint": "Invalid or missing auth token"}}') ok "feedback list (the k5 binary): the daemon's refusal of the passport" ;;
+        *) bad "feedback list (the k5 binary): stderr $(printf %q "$ERR")" ;;
+    esac
+else
+    if [ "$RC" = 0 ]; then ok "feedback list: answers as before (exit 0)"; else bad "feedback list: exit $RC"; show; fi
+    case "$ERR" in "") ok "feedback list: nothing on stderr" ;; *) bad "feedback list: stderr $(printf %q "$ERR")" ;; esac
+fi
 
 echo
 echo "socket_first_no_owner_headless: $pass passed, $fail failed"

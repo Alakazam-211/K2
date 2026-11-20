@@ -103,6 +103,20 @@ run sources add --name lan --label "LAN boxes" --target "a=$UP/ok" --target "b=$
     --agg 'n=count' --trend n --every 30s --fail-after 1
 expect_eq "add exit 0" "$rc" "0"
 expect_has "add says active" "$out" "lan: active"
+# add runs a first check at once, and checkedAt counts whole seconds:
+# refresh --wait waits for checkedAt to change, so a refresh whose check
+# lands in the same second as the first one is only seen at the next
+# scheduled check (30 s later, at the edge of the wait). Wait for the
+# first check, then one second.
+first=""
+for _ in $(seq 1 50); do
+    run sources read lan --json
+    first="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("checkedAt") or "")' 2>/dev/null || true)"
+    [ -n "$first" ] && break
+    sleep 0.2
+done
+if [ -n "$first" ]; then ok "the first check ran"; else bad "the first check ran (read: $out)"; fi
+sleep 1
 run sources refresh lan --wait
 expect_eq "refresh --wait exit 0" "$rc" "0"
 expect_has "read shows the up box" "$out" "a"

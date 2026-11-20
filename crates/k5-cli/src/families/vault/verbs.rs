@@ -51,7 +51,7 @@ pub const NATIVE: &[&str] = &[
 /// Whether the binary answers `vault <sub> <rest>` (no I/O).
 pub fn native(sub: &str, rest: &[&str]) -> bool {
     match sub {
-        "kek" | "rekey" | "reveal" => true,
+        "kek" | "rekey" | "reveal" | "confirm-password" => true,
         // Not the recovery key's words, typed back here.
         "recovery" => !rest.iter().any(|w| matches!(*w, "show-once" | "rotate")),
         _ => NATIVE.contains(&sub),
@@ -1006,7 +1006,10 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             echo("done")
         }
         "reveal" => {
-            need(!name.is_empty(), format!("usage: {CLI} vault reveal NAME [--scope <s>]"))?;
+            need(
+                !name.is_empty(),
+                format!("usage: {CLI} vault reveal NAME [--scope <s>]"),
+            )?;
             ctx.person_guard()?;
             let base = merge(&[&sj, &nj]);
             let sh = ctx.sock(false, &format!("show?{}", py::urlencode(&base)), b"");
@@ -1020,7 +1023,8 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                     return Err(Exit::Error);
                 }
             };
-            let Some(tok) = confirm::confirm_token(&mut ctx.confirm(), "reveal", &sid, &name) else {
+            let Some(tok) = confirm::confirm_token(&mut ctx.confirm(), "reveal", &sid, &name)
+            else {
                 return Err(Exit::Refused);
             };
             let b = confirm::with_confirm_token(&obj(base), &tok, None).unwrap_or_default();
@@ -1029,6 +1033,56 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                 return Err(ctx.fail(&r));
             }
             value_out(&r.body, true)
+        }
+        "confirm-password" => {
+            need(
+                o.pos.first().map(String::as_str) == Some("set"),
+                format!("usage: {CLI} vault confirm-password set"),
+            )?;
+            ctx.person_guard()?;
+            let st = ctx.sock(false, "status", b"");
+            if !st.ok() {
+                return Err(ctx.fail(&st));
+            }
+            let has = match confirm::load(&st.body).and_then(|v| get(&v, "confirmPassword")) {
+                Ok(x) => t(&x),
+                Err(e) => {
+                    out::stderr_line(e.text().trim_end_matches('\n'));
+                    false
+                }
+            };
+            let action = if has {
+                "confirm-password-change"
+            } else {
+                "vault-password-set"
+            };
+            let Some(tok) =
+                confirm::confirm_token(&mut ctx.confirm(), action, "", "vault password")
+            else {
+                return Err(Exit::Refused);
+            };
+            let tokj = confirm::with_confirm_token("{}", &tok, None).unwrap_or_default();
+            let p1 = prompt::ask_hidden("New vault password (10+ characters): ");
+            let p2 = prompt::ask_hidden("Again: ");
+            if p1.is_empty() || p1 != p2 {
+                return Err(usage("usage: the two entries don't match".into()));
+            }
+            drop(p2);
+            let mut b = match crate::out::json::parse(&tokj) {
+                Ok(Value::Object(b)) => b,
+                _ => Vec::new(),
+            };
+            b.push(kv("password", confirm::text_of_bytes(p1.expose())));
+            drop(p1);
+            let pb = prompt::Secret::new(obj(b).into_bytes());
+            let r = ctx.sock(true, "confirm-password/set", pb.expose());
+            drop(pb);
+            if !r.ok() {
+                return Err(ctx.fail(&r));
+            }
+            echo(&format!(
+                "vault password set. {PRODUCT} only asks for it inside the {PRODUCT} window or your own terminal."
+            ))
         }
         "recovery" => {
             let act = o.pos.first().cloned().unwrap_or_else(|| "status".into());

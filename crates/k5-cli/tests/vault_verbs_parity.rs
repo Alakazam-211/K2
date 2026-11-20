@@ -704,26 +704,93 @@ fn file_env_file_grant_and_service() {
 fn fetch() {
     let rig = VRig::new();
     for c in [
-        daemon("fetch", &["fetch", "--secret", "API", "https://api.example.com/x"], ok(r#"{"status":200,"body":"{\"ok\":true}\n"}"#), 0),
-        daemon("fetch, everything", &["fetch", "-s", "API", "--scope", "ws:proj", "-X", "POST", "-H", "Accept: a/b", "--json", "{\"a\":1}", "--max-bytes", "100", "--timeout", "9", "-i", "--dst", "header:X", "--fmt", "Bearer {}", "https://h/x"], ok(r#"{"status":404,"headers":[["A","b"]],"body":"nope"}"#), 0),
-        daemon("fetch, an error status", &["fetch", "-s", "API", "https://h/x", "-d", "a=1"], ok(r#"{"status":503,"bodyB64":"/wBoaQ==","truncated":true}"#), 0),
-        daemon("fetch -o", &["fetch", "-s", "API", "https://h/x", "-o", "out.bin"], ok(r#"{"status":200,"out":"/x/out.bin","bytes":12}"#), 0),
-        daemon("fetch --json-out", &["fetch", "-s", "API", "https://h/x", "--json-out"], ok(r#"{"status":200}"#), 0),
-        daemon("fetch, refused", &["fetch", "-s", "API", "https://h/x"], Reply::Answer(403, PERMISSION_ASK.into()), 3),
+        daemon(
+            "fetch",
+            &["fetch", "--secret", "API", "https://api.example.com/x"],
+            ok(r#"{"status":200,"body":"{\"ok\":true}\n"}"#),
+            0,
+        ),
+        daemon(
+            "fetch, everything",
+            &[
+                "fetch",
+                "-s",
+                "API",
+                "--scope",
+                "ws:proj",
+                "-X",
+                "POST",
+                "-H",
+                "Accept: a/b",
+                "--json",
+                "{\"a\":1}",
+                "--max-bytes",
+                "100",
+                "--timeout",
+                "9",
+                "-i",
+                "--dst",
+                "header:X",
+                "--fmt",
+                "Bearer {}",
+                "https://h/x",
+            ],
+            ok(r#"{"status":404,"headers":[["A","b"]],"body":"nope"}"#),
+            0,
+        ),
+        daemon(
+            "fetch, an error status",
+            &["fetch", "-s", "API", "https://h/x", "-d", "a=1"],
+            ok(r#"{"status":503,"bodyB64":"/wBoaQ==","truncated":true}"#),
+            0,
+        ),
+        daemon(
+            "fetch -o",
+            &["fetch", "-s", "API", "https://h/x", "-o", "out.bin"],
+            ok(r#"{"status":200,"out":"/x/out.bin","bytes":12}"#),
+            0,
+        ),
+        daemon(
+            "fetch --json-out",
+            &["fetch", "-s", "API", "https://h/x", "--json-out"],
+            ok(r#"{"status":200}"#),
+            0,
+        ),
+        daemon(
+            "fetch, refused",
+            &["fetch", "-s", "API", "https://h/x"],
+            Reply::Answer(403, PERMISSION_ASK.into()),
+            3,
+        ),
         refused("fetch, no URL", &["fetch", "-s", "API"]),
         refused("fetch, no secret", &["fetch", "https://h/x"]),
         refused("fetch, two URLs", &["fetch", "-s", "A", "u1", "u2"]),
-        refused("fetch, a bad header", &["fetch", "-s", "A", "u", "-H", "nocolon"]),
-        refused("fetch, a bad scope", &["fetch", "-s", "A", "u", "--scope", "ws:"]),
+        refused(
+            "fetch, a bad header",
+            &["fetch", "-s", "A", "u", "-H", "nocolon"],
+        ),
+        refused(
+            "fetch, a bad scope",
+            &["fetch", "-s", "A", "u", "--scope", "ws:"],
+        ),
         refused("fetch, an unknown flag", &["fetch", "-s", "A", "u", "-q"]),
-        traceback(refused("fetch, --max-bytes not a number", &["fetch", "-s", "A", "u", "--max-bytes", "lots"])),
+        traceback(refused(
+            "fetch, --max-bytes not a number",
+            &["fetch", "-s", "A", "u", "--max-bytes", "lots"],
+        )),
     ] {
         rig.check(&c);
     }
 }
 
 /// A person's verb: the vault socket answers, the password on stdin.
-fn person(name: &'static str, args: &[&'static str], replies: Vec<Reply>, stdin: &[u8], code: i32) -> VCase {
+fn person(
+    name: &'static str,
+    args: &[&'static str],
+    replies: Vec<Reply>,
+    stdin: &[u8],
+    code: i32,
+) -> VCase {
     let mut c = VCase::new(name, args);
     c.vault_requests = replies.len();
     c.vault = Some(replies);
@@ -735,11 +802,20 @@ fn person(name: &'static str, args: &[&'static str], replies: Vec<Reply>, stdin:
 #[test]
 fn the_person_verbs() {
     let rig = VRig::new();
-    let pw = |m: &str| ok(&format!(r#"{{"methods":["{m}"],"confirmText":"rotate the key"}}"#));
+    let pw = |m: &str| {
+        ok(&format!(
+            r#"{{"methods":["{m}"],"confirmText":"rotate the key"}}"#
+        ))
+    };
     let mut reveal = person(
         "reveal",
         &["reveal", "API", "--scope", "server"],
-        vec![ok(r#"{"secret":{"id":"sec-9"}}"#), pw("vault-password"), ok(r#"{"token":"tk-4242"}"#), ok(r#"{"valueB64":"cmV2ZWFsZWQtdmFsdWU="}"#)],
+        vec![
+            ok(r#"{"secret":{"id":"sec-9"}}"#),
+            pw("vault-password"),
+            ok(r#"{"token":"tk-4242"}"#),
+            ok(r#"{"valueB64":"cmV2ZWFsZWQtdmFsdWU="}"#),
+        ],
         b"pw-reveal-1\n",
         0,
     );
@@ -752,21 +828,161 @@ fn the_person_verbs() {
     no_sock.code = 1;
     for c in [
         reveal,
-        person("reveal: the secret isn't there", &["reveal", "API"], vec![Reply::Answer(404, r#"{"error":{"code":"not_found","hint":"no API"}}"#.into())], b"", 4),
-        person("reveal: a wrong password", &["reveal", "API"], vec![ok(r#"{"secret":{"id":"s"}}"#), pw("vault-password"), Reply::Answer(403, r#"{"error":{"code":"bad_password","hint":"try again"}}"#.into())], b"wrong\n", 3),
-        person("reveal: Touch ID", &["reveal", "API"], vec![ok(r#"{"secret":{"id":"s"}}"#), pw("local-auth"), ok(r#"{"token":"t"}"#), ok(r#"{"valueB64":"eA=="}"#)], b"", 0),
-        person("reveal: an owner login", &["reveal", "API"], vec![ok(r#"{"secret":{"id":"s"}}"#), pw("owner-login-password"), ok(r#"{"token":"t"}"#), ok(r#"{"valueB64":"eA=="}"#)], b"amy\npw-login-77\n", 0),
-        person("kek rotate", &["kek", "rotate"], vec![pw("vault-password"), ok(r#"{"token":"t"}"#), ok("{}")], b"pw\n", 0),
-        person("rekey: this terminal", &["rekey"], vec![pw("terminal"), ok(r#"{"token":"t"}"#), ok("{}")], b"", 0),
-        person("rekey: no method", &["rekey"], vec![ok(r#"{"methods":[]}"#)], b"", 3),
-        person("rekey: confirm/start refused", &["rekey"], vec![Reply::Answer(400, r#"{"error":{"code":"bad","hint":"h"}}"#.into())], b"", 3),
+        person(
+            "reveal: the secret isn't there",
+            &["reveal", "API"],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":{"code":"not_found","hint":"no API"}}"#.into(),
+            )],
+            b"",
+            4,
+        ),
+        person(
+            "reveal: a wrong password",
+            &["reveal", "API"],
+            vec![
+                ok(r#"{"secret":{"id":"s"}}"#),
+                pw("vault-password"),
+                Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"bad_password","hint":"try again"}}"#.into(),
+                ),
+            ],
+            b"wrong\n",
+            3,
+        ),
+        person(
+            "reveal: Touch ID",
+            &["reveal", "API"],
+            vec![
+                ok(r#"{"secret":{"id":"s"}}"#),
+                pw("local-auth"),
+                ok(r#"{"token":"t"}"#),
+                ok(r#"{"valueB64":"eA=="}"#),
+            ],
+            b"",
+            0,
+        ),
+        person(
+            "reveal: an owner login",
+            &["reveal", "API"],
+            vec![
+                ok(r#"{"secret":{"id":"s"}}"#),
+                pw("owner-login-password"),
+                ok(r#"{"token":"t"}"#),
+                ok(r#"{"valueB64":"eA=="}"#),
+            ],
+            b"amy\npw-login-77\n",
+            0,
+        ),
+        person(
+            "kek rotate",
+            &["kek", "rotate"],
+            vec![pw("vault-password"), ok(r#"{"token":"t"}"#), ok("{}")],
+            b"pw\n",
+            0,
+        ),
+        person(
+            "rekey: this terminal",
+            &["rekey"],
+            vec![pw("terminal"), ok(r#"{"token":"t"}"#), ok("{}")],
+            b"",
+            0,
+        ),
+        person(
+            "rekey: no method",
+            &["rekey"],
+            vec![ok(r#"{"methods":[]}"#)],
+            b"",
+            3,
+        ),
+        person(
+            "rekey: confirm/start refused",
+            &["rekey"],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"bad","hint":"h"}}"#.into(),
+            )],
+            b"",
+            3,
+        ),
         refused("kek, no rotate", &["kek"]),
         refused("rekey takes no flags", &["rekey", "--json"]),
         in_k2,
         no_sock,
-        daemon("recovery", &["recovery"], ok(r#"{"recovery":"confirmed","recoveryConfirmedAt":"t","recoveryHint":"h"}"#), 0),
-        daemon("recovery status", &["recovery", "status"], ok(r#"{"recovery":"none"}"#), 0),
+        daemon(
+            "recovery",
+            &["recovery"],
+            ok(r#"{"recovery":"confirmed","recoveryConfirmedAt":"t","recoveryHint":"h"}"#),
+            0,
+        ),
+        daemon(
+            "recovery status",
+            &["recovery", "status"],
+            ok(r#"{"recovery":"none"}"#),
+            0,
+        ),
         refused("recovery, an unknown word", &["recovery", "nope"]),
+    ] {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn confirm_password_set() {
+    let rig = VRig::new();
+    let mut set = person(
+        "confirm-password set, the first",
+        &["confirm-password", "set"],
+        vec![
+            ok(r#"{"confirmPassword":false}"#),
+            ok(r#"{"methods":["local-auth"],"confirmText":"set a vault password"}"#),
+            ok(r#"{"token":"tk-1"}"#),
+            ok("{}"),
+        ],
+        b"new-password-123\nnew-password-123\n",
+        0,
+    );
+    set.secrets = vec!["new-password-123", "tk-1"];
+    for c in [
+        set,
+        person(
+            "confirm-password set, a change",
+            &["confirm-password", "set"],
+            vec![
+                ok(r#"{"confirmPassword":true}"#),
+                ok(r#"{"methods":["vault-password"]}"#),
+                ok(r#"{"token":"t"}"#),
+                ok("{}"),
+            ],
+            b"old-pw\nnew-pw-1234\nnew-pw-1234\n",
+            0,
+        ),
+        person(
+            "confirm-password set, they differ",
+            &["confirm-password", "set"],
+            vec![
+                ok("{}"),
+                ok(r#"{"methods":["terminal"]}"#),
+                ok(r#"{"token":"t"}"#),
+            ],
+            b"aaaaaaaaaa\nbbbbbbbbbb\n",
+            2,
+        ),
+        person(
+            "confirm-password set, refused",
+            &["confirm-password", "set"],
+            vec![
+                ok("{}"),
+                ok(r#"{"methods":["terminal"]}"#),
+                ok(r#"{"token":"t"}"#),
+                Reply::Answer(422, r#"{"error":{"code":"too_short","hint":"10+"}}"#.into()),
+            ],
+            b"short\nshort\n",
+            2,
+        ),
+        refused("confirm-password, no set", &["confirm-password"]),
     ] {
         rig.check(&c);
     }

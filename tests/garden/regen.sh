@@ -12,11 +12,11 @@ pass=0
 # A throwaway tree: stub cargo and node on PATH, a stub goldens test.
 # Each stub logs its call and fails when its name is in $FAIL.
 mkdir -p "$T/bin" "$T/root/tests/cli"
-for tool in cargo node; do
+for tool in cargo node python3; do
     cat > "$T/bin/$tool" <<STUB
 #!/usr/bin/env bash
 echo "$tool \$*" >> "$T/calls"
-key="$tool"; [ "$tool" = node ] && key="\$(basename -- "\$1")"
+key="$tool"; case "$tool" in node|python3) key="\$(basename -- "\$1")" ;; esac
 case " \${FAIL:-} " in *" \$key "*) exit 1 ;; esac
 exit 0
 STUB
@@ -114,4 +114,16 @@ calls ""
 run 2 "unknown argument: --chekc" --chekc
 calls ""
 
+# With the spec census script there, it runs after the explorer catalog.
+mkdir -p "$T/root/scripts"
+: > "$T/root/scripts/spec-census.py"
+run 0 "regen: done; everything generated is current." --check
+calls "cargo run --locked -q -p k2-core --bin contract-gen -- --check
+node scripts/sdk-server-dist.mjs --check
+node scripts/gen-cli-explorer-catalog.mjs --check
+python3 scripts/spec-census.py --check
+node scripts/build-styles.mjs --check
+goldens bless=0"
+FAIL="spec-census.py" run 1 "regen: STALE: spec census." --check
+rm "$T/root/scripts/spec-census.py"
 echo "regen tests: $pass passed"

@@ -607,6 +607,7 @@
 6 value crates/k5-cli/src/called_as.rs debt: command (6 lines); B4
 6 value src/renderer/lib/zen/garden-access-api.ts keeper: wire; the Garden access actor and signer kind from the daemon
 5 value cli/src/agent.sh keeper: stored; the agent mode (--mode, settings.rs:26) and an old pack id in a context stack (context_layers.rs:1780), as the daemon reads them
+2 value crates/k5-cli/src/families/agent/set.rs keeper: stored; the agent mode (--mode, settings.rs:26), as the daemon reads it
 5 value crates/k2-core/src/overlay/doc.rs keeper: stored+wire; the Thread sender, login and via; a collected line's origin
 5 value src/renderer/components/Help/HelpExplorer.tsx keeper: stored; the CLI catalog's tool key
 5 value src/renderer/components/Help/cli-explorer.ts debt: command (2 lines); B9; keeps: stored; the CLI catalog's tool key

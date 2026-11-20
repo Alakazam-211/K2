@@ -256,15 +256,14 @@ pub fn parse_report(
         );
     }
     if !r.preview && blank(&r.text) {
-        return Err(format!(
-            concat!(
-                "usage: ",
-                cli_name!(),
-                " send-feedback \"<text>\" (or - for stdin). ",
-                cli_name!(),
-                " send-feedback --help"
-            )
-        ));
+        return Err(concat!(
+            "usage: ",
+            cli_name!(),
+            " send-feedback \"<text>\" (or - for stdin). ",
+            cli_name!(),
+            " send-feedback --help"
+        )
+        .to_string());
     }
     Ok(r)
 }

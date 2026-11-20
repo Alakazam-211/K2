@@ -60,7 +60,7 @@ fn settings_words() {
 
 #[test]
 fn the_settings_page() {
-    let page = render(br#"{"enabled":true,"agents":true,"agentPlatform":false,"agentsAsked":false,"agentAttach":["logs"],"attachParts":[{"id":"logs","label":"Recent logs"},{"id":"config","label":"Config é"}],"canSend":true,"message":"","service":{"message":"up"},"pending":2,"endpoint":"https://x"}"#);
+    let page = render(br#"{"enabled":true,"agents":true,"agentPlatform":false,"agentsAsked":false,"agentAttach":["logs"],"attachParts":[{"id":"logs","label":"Recent logs"},{"id":"config","label":"Config \u00e9"}],"canSend":true,"message":"","service":{"message":"up"},"pending":2,"endpoint":"https://x"}"#);
     assert_eq!(
         String::from_utf8(page).unwrap(),
         b("Send feedback to K2 on this server\n  enabled:            on\n  agents report:      problems with K2 commands\n  answered:           not asked yet\n  agents may attach:  (the versions always go)\n    on   logs           Recent logs\n    off  config         Config \u{e9}\n  can send now:       yes\n  service:            up\n  waiting to send:    2\n  sends to:           https://x\n")

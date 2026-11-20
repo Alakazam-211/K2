@@ -285,7 +285,7 @@ fn local_run(ask: &Ask) -> Option<Exit> {
 fn local(words: &[String]) -> Option<Exit> {
     let named = ["K5_APPROVE_BIN", "K2_APPROVE_BIN", "K2SO_APPROVE_BIN"]
         .iter()
-        .filter_map(|n| std::env::var_os(n))
+        .filter_map(std::env::var_os)
         .find(|v| !v.is_empty());
     let program = |p: &std::path::Path| p.is_file() && executable(p);
     let bin = match named {

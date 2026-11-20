@@ -28,7 +28,7 @@
 //!   ([`crate::prelude::codex_env`]);
 //! - a word that is not UTF-8;
 //! - the forms [`send`] names (`--signal`, a tray form's `~name` path,
-//!   and `--secret --stdin`).
+//!   and a `--secret` the vault's handoff leaves to the shell).
 
 use super::curl_port;
 use crate::daemon;

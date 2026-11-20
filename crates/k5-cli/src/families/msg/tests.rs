@@ -299,11 +299,15 @@ fn the_words() {
         &["--help"][..],
         &["ws", "t", "-h"],
         &["ws", "--signal", "x"],
-        // The vault's handoff leaves a value typed in to the shell.
-        &["ws", "t", "--secret", "--stdin"],
     ] {
         assert_eq!(parse(shell), Parsed::Shell, "{shell:?}");
     }
+    // `--secret --stdin`: the vault's handoff now reads the value typed
+    // in itself, so it is a handoff too.
+    assert!(
+        matches!(parse(&["ws", "t", "--secret", "--stdin"]), Parsed::Secret(_, ref n) if n == "--stdin"),
+        "--secret --stdin is the handoff"
+    );
     // The tray forms: the module's own words.
     for (words, mode) in [
         (&["ws", "--inbox-silent", "f"][..], "silent"),

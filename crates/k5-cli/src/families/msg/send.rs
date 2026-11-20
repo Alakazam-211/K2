@@ -43,8 +43,8 @@
 //! ([`super::postal`]). The shell answers these forms itself ([`parse`]
 //! says [`Parsed::Shell`]): `--signal`, a tray form's `~name` path
 //! ([`super::tray`]), and a `--secret` the vault's handoff leaves to the
-//! shell (its name `--stdin`: a value a person types in), or with a
-//! `python3` the binary can't tell. An address on another server
+//! shell ([`vault::handoff::native`]), or with a `python3` the binary
+//! can't tell. An address on another server
 //! (`agent::host`, `agent@host`) goes over federation ([`super::remote`]).
 //!
 //! A value flag (`--from`, `--command`, `--wake-timeout`, `--via`) as the

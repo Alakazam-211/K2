@@ -354,7 +354,10 @@ fn tray_help_never_acts() {
 }
 
 /// What an archive holds: each entry's name, type, mode and bytes.
-fn contents(gz: &[u8]) -> Vec<(String, u8, u32, Vec<u8>)> {
+/// One archive entry: its name, type, mode and bytes.
+type Entry = (String, u8, u32, Vec<u8>);
+
+fn contents(gz: &[u8]) -> Vec<Entry> {
     let mut raw = Vec::new();
     flate2::read::GzDecoder::new(gz)
         .read_to_end(&mut raw)
@@ -432,7 +435,7 @@ fn b64decode(s: &str) -> Vec<u8> {
 
 /// A request with the upload's archive (its base64, its random file name
 /// and its length) masked; the archive's contents beside it.
-fn mask_archive(r: &str) -> (String, Option<Vec<(String, u8, u32, Vec<u8>)>>) {
+fn mask_archive(r: &str) -> (String, Option<Vec<Entry>>) {
     // A normalised request starts with its channel's line (`[tcp]`).
     if !r.contains("POST /cli/fs/upload-binary ") {
         return (r.to_string(), None);

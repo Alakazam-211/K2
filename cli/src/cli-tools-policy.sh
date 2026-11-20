@@ -848,6 +848,18 @@ _cli_check_session_passport() {
 }
 # END_CLI_STALE_PASSPORT
 
+# A bare `--` ends k2's own words and starts a command's. `k2 update` runs
+# no command, so a `--` on its line is a usage error: exit 2, nothing sent,
+# before any gate. `k2 update -- -h` can never start an update.
+if [ "${1:-}" = "update" ]; then
+    for _a in "${@:2}"; do
+        if [ "$_a" = "--" ]; then
+            echo "usage: k2 update takes no '--' (k2 update --help)" >&2
+            exit 2
+        fi
+    done
+fi
+
 # BEGIN_CLI_CODEX_TAB_BIND
 # A Codex tool call (Codex sets CODEX_THREAD_ID on every one) keeps this
 # tab's credentials only when K2 can tell it runs in a tab K2 started with

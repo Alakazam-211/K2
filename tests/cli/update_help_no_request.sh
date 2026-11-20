@@ -7,6 +7,10 @@
 # exit 0, nothing on stderr) and sends no request, with or without a
 # daemon connection (no PORT or token needed).
 #
+# A bare `--` anywhere on `k2 update` is a usage error: exit 2, nothing
+# sent. update runs no command, and the words after `--` are never help,
+# so without this `k2 update -- -h` would run the update.
+#
 # How: a curl stub first on PATH logs every call and refuses; the CLI's
 # GitHub and daemon requests both go through curl. Every form must leave
 # the log empty. Then the plain `k2 update` still asks GitHub (the stub
@@ -78,6 +82,28 @@ for how in conn noconn; do
             || { bad "$label: output differs from k2 update --help"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2; }
         [ -z "$ERR" ] && ok "$label: nothing on stderr" \
             || { bad "$label: stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2; }
+        if [ -s "$LOG" ]; then
+            bad "$label: sent a request:"; sed 's/^/      | /' "$LOG" >&2
+        else
+            ok "$label: sent nothing"
+        fi
+    done
+done
+
+echo "== a bare -- is a usage error, nothing sent =="
+for how in conn noconn; do
+    for form in "-- -h" "-- --help" "--" "--app -- -h" "--cli -- --check" "-h --"; do
+        : >"$LOG"
+        # shellcheck disable=SC2086
+        run "$how" $form
+        label="$how: k2 update $form"
+        [ "$RC" -eq 2 ] && ok "$label: exit 2" || bad "$label: exit $RC (want 2)"
+        [ -z "$OUT" ] && ok "$label: nothing on stdout" \
+            || { bad "$label: stdout"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2; }
+        case "$ERR" in
+            *"k2 update takes no '--'"*) ok "$label: says why" ;;
+            *) bad "$label: stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2 ;;
+        esac
         if [ -s "$LOG" ]; then
             bad "$label: sent a request:"; sed 's/^/      | /' "$LOG" >&2
         else

@@ -7,6 +7,13 @@
 //! `k2_client::brand` re-exports them; code uses that module, not this
 //! crate. No dependencies at run time.
 //!
+//! It also writes the tokens an install builds from the command's name:
+//! the PATH block's marker lines, the fish file's name, the system-wide
+//! path, and the same for each name the brand is retiring ([`RETIRED`]).
+//! They are made in the build script and nowhere else. The install code
+//! (`k2_client::cli_install`) and the root helper's paths
+//! (`k2_root_proto::paths`) read them from here.
+//!
 //! The text forms are macros as well as consts, so a `const` sentence can
 //! be built with `concat!` and still be one `&'static str`. Inside this
 //! crate the macros are named by their bare names only, after the
@@ -24,6 +31,22 @@ pub enum AliasMode {
     Notice,
     /// Runs nothing: prints the brand's form of the command and exits 127.
     Tombstone,
+}
+
+/// A name the brand is retiring (an alias in mode `notice` or
+/// `tombstone`), with the PATH block and the fish file its installs left.
+/// A build of this brand takes those over; it never touches a block or a
+/// file of a name that is not its own or in this list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetiredName {
+    /// The old command name.
+    pub name: &'static str,
+    /// The first line of its PATH block.
+    pub block_begin: &'static str,
+    /// The last line of its PATH block.
+    pub block_end: &'static str,
+    /// Its fish startup file, in fish's `conf.d`.
+    pub fish_conf: &'static str,
 }
 
 include!(concat!(env!("OUT_DIR"), "/brand.rs"));
@@ -66,6 +89,41 @@ mod tests {
         assert_eq!(product_name!(), PRODUCT_NAME);
         assert!(!PRODUCT_NAME.is_empty());
         assert!(!BRAND_ID.is_empty());
+    }
+
+    /// The compiled install tokens are the generator's, for this brand's
+    /// name (any brand: these tests also run under `K2_BRAND_DIR`).
+    #[test]
+    fn the_install_tokens_are_built_from_the_name() {
+        let own = brand_file::install_tokens(CLI_NAME);
+        assert_eq!(PATH_BLOCK_BEGIN, own.block_begin);
+        assert_eq!(PATH_BLOCK_END, own.block_end);
+        assert_eq!(FISH_CONF, own.fish_conf);
+        assert_eq!(SYSTEM_CLI_PATH, brand_file::system_cli_path(CLI_NAME));
+        assert!(PATH_BLOCK_BEGIN.starts_with("# >>> ") && PATH_BLOCK_END.starts_with("# <<< "));
+    }
+
+    /// RETIRED is the aliases in mode notice or tombstone, in order, each
+    /// with its own tokens; a silent alias is not there.
+    #[test]
+    fn retired_is_the_retiring_aliases_with_their_tokens() {
+        let want: Vec<&str> = CLI_ALIAS_MODES
+            .iter()
+            .filter(|(_, mode)| matches!(mode, AliasMode::Notice | AliasMode::Tombstone))
+            .map(|(name, _)| *name)
+            .collect();
+        let got: Vec<&str> = RETIRED.iter().map(|r| r.name).collect();
+        assert_eq!(got, want);
+        for r in RETIRED {
+            let t = brand_file::install_tokens(r.name);
+            assert_eq!(
+                (r.block_begin, r.block_end, r.fish_conf),
+                (t.block_begin.as_str(), t.block_end.as_str(), t.fish_conf.as_str()),
+                "{}",
+                r.name
+            );
+            assert_ne!(r.block_begin, PATH_BLOCK_BEGIN, "{} has the command's own marker", r.name);
+        }
     }
 
     /// The macros still work inside `concat!` in a `const`.

@@ -6,6 +6,11 @@
 //!
 //! What it reads today: `id`, `schema`, `[names] product` and the `[cli]`
 //! table. Other tables are left for later steps.
+//!
+//! The tokens an install builds from a command's name (the PATH block's
+//! two marker lines, the fish file's name, the system-wide path) are made
+//! here, by [`install_tokens`] and [`system_cli_path`], and nowhere else:
+//! other crates take them as generated constants.
 
 use std::path::Path;
 
@@ -52,6 +57,14 @@ impl Mode {
         }
     }
 
+    /// The brand is retiring this name: its installs left a PATH block and
+    /// a fish file, which this brand's build takes over. A `silent` alias
+    /// is a second name for the command and never had an install of its
+    /// own.
+    pub fn retires(self) -> bool {
+        matches!(self, Mode::Notice | Mode::Tombstone)
+    }
+
     fn variant(self) -> &'static str {
         match self {
             Mode::Silent => "Silent",
@@ -69,6 +82,35 @@ pub fn is_command_name(s: &str) -> bool {
         && b[1..]
             .iter()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+/// The folder the command is installed in system-wide.
+pub const SYSTEM_BIN: &str = "/usr/local/bin";
+
+/// What an install of one command name writes: its PATH block's first and
+/// last lines, and its fish startup file's name.
+#[derive(Debug, PartialEq, Eq)]
+pub struct InstallTokens {
+    pub block_begin: String,
+    pub block_end: String,
+    pub fish_conf: String,
+}
+
+/// The install tokens of `name`: `# >>> <NAME> CLI >>>`,
+/// `# <<< <NAME> CLI <<<` (the name in upper case) and `<name>-cli.fish`.
+/// A name is ASCII (`is_command_name`), so upper case is one byte each.
+pub fn install_tokens(name: &str) -> InstallTokens {
+    let upper = name.to_ascii_uppercase();
+    InstallTokens {
+        block_begin: format!("# >>> {upper} CLI >>>"),
+        block_end: format!("# <<< {upper} CLI <<<"),
+        fish_conf: format!("{name}-cli.fish"),
+    }
+}
+
+/// `/usr/local/bin/<name>`.
+pub fn system_cli_path(name: &str) -> String {
+    format!("{SYSTEM_BIN}/{name}")
 }
 
 /// Reads and checks the brand file at `path`.
@@ -165,6 +207,19 @@ fn text_field(t: &toml::Table, key: &str, field: &str) -> Result<String, String>
 /// (`{:?}` escapes quotes, backslashes and control characters).
 pub fn render(b: &Brand) -> String {
     let names: Vec<String> = b.aliases.iter().map(|a| format!("{:?}", a.name)).collect();
+    let own = install_tokens(&b.cli_name);
+    let retired: Vec<String> = b
+        .aliases
+        .iter()
+        .filter(|a| a.mode.retires())
+        .map(|a| {
+            let t = install_tokens(&a.name);
+            format!(
+                "RetiredName {{ name: {:?}, block_begin: {:?}, block_end: {:?}, fish_conf: {:?} }}",
+                a.name, t.block_begin, t.block_end, t.fish_conf
+            )
+        })
+        .collect();
     let modes: Vec<String> = b
         .aliases
         .iter()
@@ -203,12 +258,33 @@ pub const CLI_ALIASES: &[&str] = &[{names}];
 
 /// The same names, in the same order, each with what it does.
 pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = &[{modes}];
+
+/// First line of the PATH block an install writes into a shell startup file.
+pub const PATH_BLOCK_BEGIN: &str = {begin:?};
+
+/// Last line of the PATH block.
+pub const PATH_BLOCK_END: &str = {end:?};
+
+/// The fish startup file an install owns (the whole file is its block).
+pub const FISH_CONF: &str = {fish:?};
+
+/// The command's system-wide path: the Linux copy and the root helper's.
+pub const SYSTEM_CLI_PATH: &str = {system:?};
+
+/// The aliases this brand is retiring (mode notice or tombstone), with the
+/// PATH block and fish file their installs left.
+pub const RETIRED: &[RetiredName] = &[{retired}];
 ",
         product = b.product,
         cli = b.cli_name,
         id = b.id,
         names = names.join(", "),
         modes = modes.join(", "),
+        begin = own.block_begin,
+        end = own.block_end,
+        fish = own.fish_conf,
+        system = system_cli_path(&b.cli_name),
+        retired = retired.join(", "),
     )
 }
 
@@ -279,7 +355,7 @@ aliases = [{ name = "abc", mode = "notice" }, { name = "ab1", mode = "silent" },
     fn a_good_file_gives_the_expected_text() {
         let t = TempBrand::new("good", Some(GOOD));
         let text = render(&load(&t.file()).expect("the good file loads"));
-        let want = r#"// Written by k2-brand's build script from the brand file. Do not edit.
+        let want = r##"// Written by k2-brand's build script from the brand file. Do not edit.
 
 /// The product's name as a literal, for `concat!` in a `const`.
 #[macro_export]
@@ -311,7 +387,23 @@ pub const CLI_ALIASES: &[&str] = &["abc", "ab1", "ab2"];
 
 /// The same names, in the same order, each with what it does.
 pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = &[("abc", AliasMode::Notice), ("ab1", AliasMode::Silent), ("ab2", AliasMode::Tombstone)];
-"#;
+
+/// First line of the PATH block an install writes into a shell startup file.
+pub const PATH_BLOCK_BEGIN: &str = "# >>> AB CLI >>>";
+
+/// Last line of the PATH block.
+pub const PATH_BLOCK_END: &str = "# <<< AB CLI <<<";
+
+/// The fish startup file an install owns (the whole file is its block).
+pub const FISH_CONF: &str = "ab-cli.fish";
+
+/// The command's system-wide path: the Linux copy and the root helper's.
+pub const SYSTEM_CLI_PATH: &str = "/usr/local/bin/ab";
+
+/// The aliases this brand is retiring (mode notice or tombstone), with the
+/// PATH block and fish file their installs left.
+pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "# >>> ABC CLI >>>", block_end: "# <<< ABC CLI <<<", fish_conf: "abc-cli.fish" }, RetiredName { name: "ab2", block_begin: "# >>> AB2 CLI >>>", block_end: "# <<< AB2 CLI <<<", fish_conf: "ab2-cli.fish" }];
+"##;
         assert_eq!(text, want);
     }
 
@@ -329,7 +421,68 @@ pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = &[("abc", AliasMode::Notice), 
                 out.contains("pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = &[];\n"),
                 "{tag}: {out}"
             );
+            assert!(
+                out.contains("pub const RETIRED: &[RetiredName] = &[];\n"),
+                "{tag}: {out}"
+            );
         }
+    }
+
+    /// The default brand's install tokens are today's bytes: the lines in
+    /// people's shell startup files, the fish file's name and the system
+    /// path. A change to the generator that moves one fails here.
+    #[test]
+    fn the_default_brand_gives_todays_install_tokens() {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../brand/k2/brand.toml");
+        let out = render(&load(&file).expect("the default brand file loads"));
+        for line in [
+            "pub const PATH_BLOCK_BEGIN: &str = \"# >>> K2 CLI >>>\";\n",
+            "pub const PATH_BLOCK_END: &str = \"# <<< K2 CLI <<<\";\n",
+            "pub const FISH_CONF: &str = \"k2-cli.fish\";\n",
+            "pub const SYSTEM_CLI_PATH: &str = \"/usr/local/bin/k2\";\n",
+            // Its one alias is silent: nothing to take over.
+            "pub const RETIRED: &[RetiredName] = &[];\n",
+        ] {
+            assert!(out.contains(line), "{line:?} in:\n{out}");
+        }
+        assert_eq!(
+            install_tokens("k2"),
+            InstallTokens {
+                block_begin: "# >>> K2 CLI >>>".into(),
+                block_end: "# <<< K2 CLI <<<".into(),
+                fish_conf: "k2-cli.fish".into(),
+            }
+        );
+        assert_eq!(system_cli_path("k2"), "/usr/local/bin/k2");
+    }
+
+    /// A `notice` or `tombstone` alias is listed under RETIRED with its
+    /// own tokens; a `silent` one is not.
+    #[test]
+    fn a_retiring_alias_is_listed_and_a_silent_one_is_not() {
+        let text = "id = \"xy\"\nschema = 1\n[names]\nproduct = \"XY\"\n[cli]\nname = \"xy\"\n\
+            aliases = [{ name = \"xyold\", mode = \"notice\" }, { name = \"xy2\", mode = \"silent\" }]\n";
+        let t = TempBrand::new("retired", Some(text));
+        let out = render(&load(&t.file()).expect("loads"));
+        let want = "pub const RETIRED: &[RetiredName] = &[RetiredName { name: \"xyold\", \
+            block_begin: \"# >>> XYOLD CLI >>>\", block_end: \"# <<< XYOLD CLI <<<\", \
+            fish_conf: \"xyold-cli.fish\" }];\n";
+        assert!(out.contains(want), "{want:?} in:\n{out}");
+        assert!(out.contains("pub const PATH_BLOCK_BEGIN: &str = \"# >>> XY CLI >>>\";\n"), "{out}");
+        assert!(out.contains("pub const FISH_CONF: &str = \"xy-cli.fish\";\n"), "{out}");
+        assert!(out.contains("pub const SYSTEM_CLI_PATH: &str = \"/usr/local/bin/xy\";\n"), "{out}");
+        let retired = out
+            .lines()
+            .find(|l| l.starts_with("pub const RETIRED"))
+            .expect("a RETIRED line");
+        assert!(!retired.contains("xy2"), "a silent alias is not retired: {retired}");
+
+        let tomb = TempBrand::new(
+            "tombstone",
+            Some(&text.replace("\"notice\"", "\"tombstone\"")),
+        );
+        let out = render(&load(&tomb.file()).expect("loads"));
+        assert!(out.contains(want), "a tombstone alias is retired too:\n{out}");
     }
 
     #[test]

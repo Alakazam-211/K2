@@ -36,7 +36,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 EXCEPTIONS=(
-    "daemon-install.sh|agent|the --agent flag of k2 terminal write and k2 talk, typed by the caller"
     "heartbeat.sh|frequency|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
     "heartbeat.sh|time|hb_parse_spec: the heartbeat schedule flags, typed by the caller"
     "heartbeat.sh|days|hb_parse_spec: the heartbeat schedule flags, typed by the caller"

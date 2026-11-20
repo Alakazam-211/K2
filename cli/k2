@@ -6813,7 +6813,7 @@ except Exception:
     sid=$(cli_request "/cli/sessions/list-for-workspace" "path=$(urlencode "$resolved_path")" 2>/dev/null \
         | python3 -c "
 import json, sys
-agent = '''$agent'''
+agent = sys.argv[1]
 try:
     rows = json.loads(sys.stdin.read())
 except Exception:
@@ -6826,7 +6826,7 @@ if agent:
     matched = [r for r in pool if r.get('agentName') == agent]
     pool = matched if matched else pool
 print(pool[0].get('sessionId', '') if pool else '')
-" 2>/dev/null)
+" "$agent" 2>/dev/null)
     if [ -z "$sid" ]; then
         echo "Error: no live session for workspace '$target'${agent:+ agent '$agent'} — it may be asleep (check 'k2 sessions live $target')" >&2
         return 1

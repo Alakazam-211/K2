@@ -582,3 +582,98 @@ fn group_one_printers() {
     let r = super::py::local_minutes(&super::py::text("x"), 8).unwrap_err();
     assert!(r.exception.starts_with("TypeError"), "{r:?}");
 }
+
+/// Each usage line of the history and phone groups is the shell's, with
+/// the shell's own name for the command.
+#[test]
+fn group_two_usage_lines_are_the_shell_s() {
+    use super::{history, phone};
+    let cases: [(&str, &[&str]); 3] = [
+        (
+            "app-doctor.sh",
+            &[
+                history::usage::HISTORY,
+                history::usage::ERRORS,
+                history::usage::ERRORS_KIND,
+                history::usage::ERRORS_FOLLOW,
+                history::usage::LOGS,
+                history::usage::LOGS_CLIENT_ONLY,
+                history::usage::CLIENT,
+                history::usage::CLIENT_KIND,
+                history::usage::CLIENT_LIMIT,
+            ],
+        ),
+        (
+            "app-links.sh",
+            &[
+                phone::usage::LINKS_FLAG_TAIL,
+                phone::usage::LINKS_DASH,
+                phone::usage::LINKS_SET_ONLY,
+            ],
+        ),
+        (
+            "app-auth.sh",
+            &[
+                phone::usage::PAIRING,
+                phone::usage::PAIRING_STATUS,
+                phone::usage::PAIRING_LOG,
+                phone::usage::PUSH,
+                phone::usage::PUSH_STATUS,
+                phone::usage::PUSH_LOG,
+                phone::usage::PUSH_DEVICES,
+                phone::usage::EMAIL,
+                phone::usage::EMAIL_SHOW,
+                phone::usage::EMAIL_LOG,
+                phone::usage::EMAIL_STATUS,
+            ],
+        ),
+    ];
+    for (file, lines) in cases {
+        let src = shell_source(file);
+        for line in lines {
+            let shell = line.replace(k2_client::brand::CLI_NAME, SHELL_NAME);
+            assert!(src.contains(&shell), "{file} no longer has {shell}");
+        }
+    }
+    let links = shell_source("app-links.sh");
+    assert!(links.contains(r#"echo "usage: k2 app links $sub <app> (k2 app links --help)""#));
+    for page in ["app/links", "app/pairing", "app/push", "app/email"] {
+        assert!(crate::text::help(page).is_some(), "{page}");
+    }
+}
+
+#[test]
+fn group_two_helpers() {
+    use super::py;
+    use crate::out::json::Value;
+    let obj = |s: &str| crate::out::json::parse(s).unwrap();
+    assert_eq!(
+        py::sum_values(&obj(r#"{"a":1,"b":true}"#), 9).unwrap(),
+        Value::Int("2".into())
+    );
+    assert_eq!(
+        py::sum_values(&obj(r#"{"a":1,"b":0.5}"#), 9).unwrap(),
+        Value::Float(1.5)
+    );
+    assert!(py::sum_values(&obj(r#"{"a":"x"}"#), 9)
+        .unwrap_err()
+        .exception
+        .starts_with("TypeError"));
+    assert_eq!(
+        py::word_for(&[("a", "A")], &py::text("a"), py::text("d"), 1).unwrap(),
+        py::text("A")
+    );
+    assert!(py::word_for(&[], &obj("[1]"), Value::Null, 1).is_err());
+    use super::history;
+    assert!(history::parse("logs", &["acme", "--client", "--since", "1d"]).is_none());
+    assert!(history::parse("logs", &["acme", "--follow"]).is_none());
+    assert!(history::parse("logs", &["acme", "--client", "--follow"]).is_some());
+    let s = printed(
+        history::errors_lines,
+        r#"{"failures":[],"kind":"crash","framed":"x"}"#,
+    );
+    assert_eq!(
+        s.stdout,
+        "No crashes, failed health gates or failed builds in the window.\n"
+    );
+}

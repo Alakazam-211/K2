@@ -13,6 +13,10 @@
 //!   `app remote-pass` and `app account-deletion` (list, complete, cancel).
 //! - [`updates`]: `app updates ls|list|stats|fleet`, its page and its
 //!   usage line; its other verbs are the shell's.
+//! - [`history`]: `app history`, `app errors`, `app logs` (one read, and
+//!   `--client` without `--since`).
+//! - [`phone`]: the reads of `app links`, `app pairing`, `app push` and
+//!   `app email`, each family's page and its unknown verb's usage line.
 //!
 //! What runs, in the shell's order:
 //!
@@ -48,6 +52,8 @@ use std::path::Path;
 pub mod access;
 pub mod call;
 pub mod door;
+pub mod history;
+pub mod phone;
 pub mod py;
 pub mod reads;
 pub mod updates;
@@ -68,6 +74,8 @@ pub enum Ask {
     Access(access::Ask),
     Door(door::Ask),
     Updates(updates::Ask),
+    History(history::Ask),
+    Phone(phone::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -116,6 +124,13 @@ pub const TAKES: &[&str] = &[
     "account-deletion",
     "account-deletions",
     "updates",
+    "history",
+    "errors",
+    "logs",
+    "links",
+    "pairing",
+    "push",
+    "email",
 ];
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -189,6 +204,34 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["updates"],
         owner: crate::route::Owner::Native,
     },
+    crate::route::Verb {
+        words: &["history"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["errors"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["logs"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["links"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["pairing"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["push"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["email"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// The words after `app`, read by the group the verb names. `None`: the
@@ -204,6 +247,8 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "updates" => Some(updates::parse(rest)?.map(Ask::Updates)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
+        v if history::VERBS.contains(&v) => Some(history::parse(v, rest)?.map(Ask::History)),
+        v if phone::VERBS.contains(&v) => Some(phone::parse(v, rest)?.map(Ask::Phone)),
         _ => None,
     }
 }
@@ -273,6 +318,8 @@ fn run_with(
         Ask::Access(a) => access::run(&mut ctx, a),
         Ask::Door(d) => door::run(&mut ctx, d),
         Ask::Updates(u) => updates::run(&mut ctx, u),
+        Ask::History(h) => history::run(&mut ctx, h),
+        Ask::Phone(p) => phone::run(&mut ctx, p),
     };
     let exit = match shown {
         Ok(s) => s.print(),

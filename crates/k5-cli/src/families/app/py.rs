@@ -354,8 +354,14 @@ pub fn now() -> f64 {
 }
 
 /// `time.strftime("%Y-%m-%d %H:%M", time.localtime(v))`, or the exception
-/// at `line` (`None` is now, as Python takes it).
+/// at `line`.
 pub fn local_minutes(v: &Value, line: u32) -> Result<String, Raise> {
+    local_time(v, "%Y-%m-%d %H:%M", line)
+}
+
+/// `time.strftime(fmt, time.localtime(v))`, or the exception at `line`
+/// (`None` is now, as Python takes it).
+pub fn local_time(v: &Value, fmt: &str, line: u32) -> Result<String, Raise> {
     const RANGE: &str = "OverflowError: timestamp out of range for platform time_t";
     let secs: i64 = match v {
         Value::Null => now().floor() as i64,
@@ -385,7 +391,9 @@ pub fn local_minutes(v: &Value, line: u32) -> Result<String, Raise> {
             ))
         }
     };
-    local_text(secs, b"%Y-%m-%d %H:%M\0").map_err(|e| Raise::at(line, e))
+    let mut fmt = fmt.as_bytes().to_vec();
+    fmt.push(0);
+    local_text(secs, &fmt).map_err(|e| Raise::at(line, e))
 }
 
 /// `secs` as local time in `fmt` (NUL-ended), by `localtime_r` and
@@ -423,4 +431,88 @@ fn local_text(secs: i64, fmt: &[u8]) -> Result<String, String> {
 #[cfg(not(unix))]
 fn local_text(_secs: i64, _fmt: &[u8]) -> Result<String, String> {
     Err("OSError: no local time here".into())
+}
+
+/// `datetime.datetime.fromtimestamp(v).strftime(fmt)`: the time rounded
+/// half to even to the microsecond first, as `fromtimestamp` does; or the
+/// exception at `line`.
+pub fn date_time(v: &Value, fmt: &str, line: u32) -> Result<String, Raise> {
+    match v {
+        Value::Float(x) if x.is_finite() => {
+            let whole = x.trunc();
+            let us = ((x - whole) * 1e6).round_ties_even();
+            let secs = if us >= 1e6 {
+                whole + 1.0
+            } else if us < 0.0 {
+                whole - 1.0
+            } else {
+                whole
+            };
+            local_time(&Value::Float(secs), fmt, line)
+        }
+        other => local_time(other, fmt, line),
+    }
+}
+
+/// `sum(v.values())` for a dict of numbers: an int, or a float once one
+/// is a float; the `TypeError` at `line` for anything else.
+pub fn sum_values(v: &Value, line: u32) -> Result<Value, Raise> {
+    let Value::Object(pairs) = v else {
+        return Err(Raise::no_attribute(line, v, "values"));
+    };
+    let mut int: i128 = 0;
+    let mut float: Option<f64> = None;
+    for (_, x) in pairs {
+        let add = match x {
+            Value::Bool(b) => Some(i128::from(*b)),
+            Value::Int(digits) => digits.parse::<i128>().ok(),
+            _ => None,
+        };
+        let y = match (x, add) {
+            (_, Some(n)) => {
+                if float.is_none() {
+                    int += n;
+                    continue;
+                }
+                n as f64
+            }
+            (Value::Float(y), _) => *y,
+            (other, _) => {
+                let left = if float.is_some() { "float" } else { "int" };
+                return Err(Raise::at(
+                    line,
+                    format!(
+                        "TypeError: unsupported operand type(s) for +: '{left}' and '{}'",
+                        py::type_name(other)
+                    ),
+                ));
+            }
+        };
+        float = Some(float.unwrap_or(int as f64) + y);
+    }
+    Ok(match float {
+        Some(f) => Value::Float(f),
+        None => Value::Int(int.to_string()),
+    })
+}
+
+/// `{…}.get(key, default)` on a dict of words: the word for a string key
+/// in `words`, else `default`; a list or dict key is unhashable.
+pub fn word_for(
+    words: &[(&str, &str)],
+    key: &Value,
+    default: Value,
+    line: u32,
+) -> Result<Value, Raise> {
+    match key {
+        Value::Array(_) | Value::Object(_) => Err(Raise::at(
+            line,
+            format!("TypeError: unhashable type: '{}'", py::type_name(key)),
+        )),
+        Value::Str(_) => Ok(words
+            .iter()
+            .find(|(k, _)| *key == text(k))
+            .map_or(default, |(_, w)| text(w))),
+        _ => Ok(default),
+    }
 }

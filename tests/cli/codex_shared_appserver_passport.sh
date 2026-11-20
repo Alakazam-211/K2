@@ -719,22 +719,27 @@ assert_headers_on "passports off, shared server"
 run_passports_off -- msg cortana hello
 assert_absent "passports off, id verb: no Codex tab refusal" "$(cat "$WORK/err")" "reopen it from K2"
 
-# Windows (a stand-in uname): no walk is handled, which counts as every way
-# refused: the marker alone, one note. The stand-in ps says shared, and is
-# never read.
+# Windows (a stand-in uname, and a ps that rejects -axo as Git Bash's
+# does): no walk is handled, which counts as every way refused: the marker
+# alone, one note. (On a handled platform that ps answer counts as shared.)
 mkdir -p "$WORK/winbin"
 cat >"$WORK/winbin/uname" <<'EOF'
 #!/bin/sh
 echo "MINGW64_NT-10.0-19045"
 EOF
-chmod +x "$WORK/winbin/uname"
-run_codex "${CONFIRMED[@]}" PATH="$WORK/winbin:$WORK/psbin:$WORK/bin:$PATH" -- msg cortana hello
+cat >"$WORK/winbin/ps" <<'EOF'
+#!/bin/sh
+echo "ps: unknown option -- a" >&2
+exit 1
+EOF
+chmod +x "$WORK/winbin/uname" "$WORK/winbin/ps"
+run_codex "${CONFIRMED[@]}" PATH="$WORK/winbin:$WORK/bin:$PATH" -- msg cortana hello
 assert_absent "Windows, own marker: no refusal" "$(cat "$WORK/err")" "reopen it from K2"
 assert_eq "Windows, own marker: one marker-only note" "$(note_lines)" "1"
 assert_contains "Windows, own marker: sent with its passport" "$(requests)" "Bearer $SCOPED"
-run_codex K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_TAB_ISOLATED="sess99" PATH="$WORK/winbin:$WORK/psbin:$WORK/bin:$PATH" -- activity
+run_codex K2_HOOK_SOCK="$LIVE_SOCK" K2_CODEX_TAB_ISOLATED="sess99" PATH="$WORK/winbin:$WORK/bin:$PATH" -- activity
 assert_refused "Windows, marker from another tab"
-run_codex K2_HOOK_SOCK="$LIVE_SOCK" PATH="$WORK/winbin:$WORK/psbin:$WORK/bin:$PATH" -- activity
+run_codex K2_HOOK_SOCK="$LIVE_SOCK" PATH="$WORK/winbin:$WORK/bin:$PATH" -- activity
 assert_refused "Windows, no marker"
 
 echo

@@ -271,8 +271,10 @@ pub struct Case {
 }
 
 /// How long one side of a row may run: a side still running then is
-/// killed (its whole process group) and the row fails, naming it.
-pub const DEADLINE: Duration = Duration::from_secs(60);
+/// killed (its whole process group) and the row fails, naming it. Above
+/// the longest wait a side makes on purpose: a daemon that never answers
+/// is curl's `--max-time` (60 s for a GET, 120 s for a compute POST).
+pub const DEADLINE: Duration = Duration::from_secs(180);
 
 impl Rig {
     pub fn new(verb: &'static str, tag: &str) -> Rig {

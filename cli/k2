@@ -48155,7 +48155,9 @@ def call(side, method, route, body=None, params=None, timeout=120):
         headers["Authorization"] = "Bearer " + tok
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
+        # The hand-over headers (X-K5-*) are for this computer's daemon
+        # only, never a remote server.
+        with urllib.request.urlopen(k5_request(req) if name == "local" else req, timeout=timeout) as r:
             status, raw = r.status, r.read()
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read()

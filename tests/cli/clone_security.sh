@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+# k2 clone: where its tokens, passwords and files may go.
+#
+# The real CLI runs against stubs: this server's daemon (TCP, loopback),
+# a remote server (TCP, loopback) and the vault socket. Every stub logs
+# each request it gets (method, path, headers, body). Every python3 the
+# CLI starts loads an audit hook (sitecustomize on PYTHONPATH) that logs
+# each name lookup and connect, so a refused host can be shown to get no
+# request and no lookup. A small pty driver plays the person at a
+# terminal (or a process with no terminal at all).
+#
+# Rows, by rule:
+#   the X-K5-* hand-over headers go to this computer's daemon only.
+#
+# Run on compute (it starts stubs and opens ports):
+#   bash tests/cli/clone_security.sh
+# No daemon build; a throwaway HOME; never touches the real ~/.k2.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
+
+for v in $(env | grep -E '^(K2|K2SO|K5)_' | cut -d= -f1); do unset "$v"; done
+unset PYTHONPATH
+
+PY="$(command -v python3)" || { echo "FAIL: python3 not found" >&2; exit 1; }
+
+W="$(mktemp -d /tmp/k2cs-XXXXXX)"
+PIDS=()
+cleanup() {
+    for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done
+    rm -rf "$W"
+}
+trap cleanup EXIT
+
+export HOME="$W/home"
+KH="$HOME/.k2"
+mkdir -p "$KH"
+
+pass=0
+fail=0
+ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
+bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
+expect_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got $(printf %q "$2") want $(printf %q "$3"))"; fi; }
+expect_has() { if <<<"$2" grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
+expect_not() { if <<<"$2" grep -Fq -- "$3"; then bad "$1 (found $(printf %q "$3"))"; else ok "$1"; fi; }
+
+# ── The stubs ────────────────────────────────────────────────────────
+# stub.py NAME tcp PORTFILE | NAME unix SOCKPATH. Answers from a table of
+# defaults; $W/scn-NAME.json (read on every request) overrides a route
+# ({"routes": {path: {"status": n, "body": {...}}}}) and sets the knobs:
+#   methods          what confirm/start offers (vault socket and TCP)
+#   confirm_methods  what the clone preview offers for a carry confirm
+#   rows             the preview's secret rows
+#   target           the clone proposal's target
+#   rr               read-range: ok, short, fail2 (the second range is
+#                    refused), hang2 (the second range hangs; $W/hanging
+#                    marks it)
+cat >"$W/stub.py" <<'PYEOF'
+import base64, http.server, json, os, socketserver, sys, threading, time
+name, kind, addr = sys.argv[1], sys.argv[2], sys.argv[3]
+W = os.path.dirname(os.path.abspath(__file__))
+LOG = os.path.join(W, "log-%s.jsonl" % name)
+lock = threading.Lock()
+DATA = b"bundle-bytes-" * 100
+
+def scn():
+    try:
+        with open(os.path.join(W, "scn-%s.json" % name)) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def answer(path, q, body, s):
+    rows = s.get("rows", [{"name": "API_KEY", "kind": "api_key", "copyable": True, "default": "skip"}])
+    preview = {"workspace": {"path": "/w/ws1", "handle": "ws1"}, "history": {"files": 1, "sessions": 1},
+               "threads": {}, "envFiles": [], "callerCanCopySecrets": True,
+               "secrets": {"available": True, "rows": rows,
+                           "confirm": {"methods": s.get("confirm_methods", ["connect-password"])}}}
+    if path in s.get("routes", {}):
+        r = s["routes"][path]
+        return r.get("status", 200), r.get("body", {})
+    if path.endswith("/cli/vault/confirm/start"):
+        return 200, {"methods": s.get("methods", ["vault-password"]), "expiresIn": 60}
+    if path.endswith("/cli/vault/confirm/finish") or path == "/cli/clone/vault/confirm":
+        return 200, {"token": "VT-1", "approveToken": "AT-1", "expiresIn": 60}
+    if path == "/cli/vault/recipient":
+        return 200, {"recipient": "age1stub", "vaultId": "vault-1"}
+    if path == "/cli/clone/preview":
+        return 200, preview
+    if path == "/cli/clone/bundle":
+        return 200, {"bundle_path": os.path.join(W, "bundle.tar")}
+    if path == "/cli/clone/unpack":
+        return 200, {"dest_path": "/dest/ws1", "project": {"id": "p1", "name": "ws1", "path": "/dest/ws1"}}
+    if path == "/cli/fs/info":
+        return 200, {"home": "/rhome", "separator": "/"}
+    if path == "/cli/fs/upload-chunk":
+        return 200, ({"path": "/rhome/.k2/clone-tmp/" + body.get("filename", "")} if body.get("is_last") else {"ok": True})
+    if path == "/cli/clone/pack":
+        return 200, {"job_id": "job-1"}
+    if path == "/cli/clone/pack-status":
+        return 200, {"phase": "done", "bundle_path": "/rb/bundle-job-1.tar", "size_bytes": len(DATA)}
+    if path == "/cli/clone/pack-cleanup":
+        return 200, {"ok": True}
+    if path == "/cli/fs/read-range":
+        off, half, mode = int(q.get("offset", "0")), len(DATA) // 2, s.get("rr", "ok")
+        if mode == "ok":
+            return 200, {"base64": base64.b64encode(DATA[off:]).decode(), "eof": True}
+        if mode == "short":
+            return 200, {"base64": base64.b64encode(DATA[:-10]).decode(), "eof": True}
+        if off == 0:
+            return 200, {"base64": base64.b64encode(DATA[:half]).decode(), "eof": False}
+        if mode == "hang2":
+            open(os.path.join(W, "hanging"), "w").close()
+            time.sleep(60)
+        return 500, {"error": {"code": "read_failed", "hint": "the stub refused the second range"}}
+    if path == "/cli/clone-proposal/list":
+        return 200, {"proposals": [{"id": "prop-1abc", "status": "open", "summary": "clone ws1", "proposedBy": "agent-a",
+                                    "why": "a spare copy", "workspacePath": "/w/ws1", "target": s.get("target", "here"),
+                                    "options": {}}]}
+    return 200, {"ok": True}
+
+class H(http.server.BaseHTTPRequestHandler):
+    def _any(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b""
+        path, _, qs = self.path.partition("?")
+        q = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+        with lock, open(LOG, "a") as f:
+            f.write(json.dumps({"method": self.command, "path": path, "query": q,
+                                "headers": dict(self.headers.items()),
+                                "body": raw.decode("utf-8", "replace")}) + "\n")
+        try:
+            body = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            body = {}
+        status, out = answer(path, q, body, scn())
+        data = json.dumps(out).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(data)
+    do_GET = do_POST = _any
+    def log_message(self, *a):
+        pass
+    def address_string(self):
+        return "stub"
+
+if kind == "tcp":
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    with open(addr + ".tmp", "w") as f:
+        f.write(str(srv.server_address[1]))
+    os.rename(addr + ".tmp", addr)
+else:
+    class U(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+        daemon_threads = True
+    srv = U(addr, H)
+    open(os.path.join(W, "vault-ready"), "w").close()
+srv.serve_forever()
+PYEOF
+
+"$PY" "$W/stub.py" local tcp "$W/port-local" & PIDS+=("$!")
+"$PY" "$W/stub.py" remote tcp "$W/port-remote" & PIDS+=("$!")
+"$PY" "$W/stub.py" vault unix "$KH/vault.sock" & PIDS+=("$!")
+for _ in $(seq 1 100); do
+    [ -s "$W/port-local" ] && [ -s "$W/port-remote" ] && [ -f "$W/vault-ready" ] && break
+    sleep 0.1
+done
+[ -s "$W/port-local" ] && [ -s "$W/port-remote" ] && [ -f "$W/vault-ready" ] || { echo "FAIL: a stub never came up" >&2; exit 1; }
+PL="$(cat "$W/port-local")"; PR="$(cat "$W/port-remote")"
+REMOTE="http://127.0.0.1:$PR"
+
+# The CLI finds this server's daemon through these files.
+printf '%s\n' "$PL" >"$KH/heartbeat.port"
+LOCAL_TOKEN="k2lt_CLONESEC_local_token"
+printf '%s\n' "$LOCAL_TOKEN" >"$KH/heartbeat.token"
+printf '%s\n' "$LOCAL_TOKEN" >"$KH/daemon.token"
+REMOTE_TOKEN="k2rt_CLONESEC_remote_token"
+
+# ── The audit hook: every python3 the CLI starts logs its name lookups
+# and connects (not the stubs: they started before this).
+mkdir -p "$W/audit"
+cat >"$W/audit/sitecustomize.py" <<'PYEOF'
+import os, sys
+_log = os.environ["K2T_AUDIT_LOG"]
+_events = ("socket.getaddrinfo", "socket.gethostbyname", "socket.gethostbyname_ex", "socket.connect")
+def _hook(ev, args):
+    if ev in _events:
+        with open(_log, "a") as f:
+            f.write("%s %r\n" % (ev, args[1:2] if ev == "socket.connect" else args[:1]))
+sys.addaudithook(_hook)
+PYEOF
+export PYTHONPATH="$W/audit"
+export K2T_AUDIT_LOG="$W/audit.log"
+
+# ── The pty driver: ptyrun.py MODE STEPS -- cmd…
+# MODE ctty: a new session whose controlling terminal is the pty (a person
+# at a terminal). MODE noctty: stdin is the pty but the process has no
+# controlling terminal (/dev/tty can't be opened). STEPS is a JSON list of
+# [text to wait for, bytes to type]. stdout and stderr go to $W/out and
+# $W/err; what the terminal showed to $W/tty; whether echo is on after
+# the run to $W/echo. Exits with the command's code (128+N for signal N).
+cat >"$W/ptyrun.py" <<'PYEOF'
+import fcntl, json, os, select, subprocess, sys, termios, time
+mode, steps, W = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
+cmd = sys.argv[sys.argv.index("--") + 1:]
+m, s = os.openpty()
+def pre():
+    os.setsid()
+    if mode == "ctty":
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+with open(os.path.join(W, "out"), "wb") as out, open(os.path.join(W, "err"), "wb") as err:
+    p = subprocess.Popen(cmd, stdin=s, stdout=out, stderr=err, preexec_fn=pre)
+seen = b""
+def pump(t):
+    global seen
+    r, _, _ = select.select([m], [], [], t)
+    if r:
+        seen += os.read(m, 65536)
+for want, send in steps:
+    end = time.time() + 60
+    while want.encode() not in seen:
+        if time.time() > end or p.poll() is not None:
+            pump(0.2)
+            if want.encode() in seen:
+                break
+            open(os.path.join(W, "tty"), "wb").write(seen)
+            p.kill()
+            sys.exit("ptyrun: never saw %r on the terminal" % want)
+        pump(0.1)
+    seen = seen.replace(want.encode(), b"<<" + want.encode() + b">>", 1)
+    os.write(m, send.encode())
+end = time.time() + 120
+while p.poll() is None:
+    if time.time() > end:
+        p.kill()
+        sys.exit("ptyrun: the command never finished")
+    pump(0.1)
+pump(0.2)
+open(os.path.join(W, "tty"), "wb").write(seen)
+with open(os.path.join(W, "echo"), "w") as f:
+    f.write("on" if termios.tcgetattr(s)[3] & termios.ECHO else "off")
+sys.exit(p.returncode if p.returncode >= 0 else 128 - p.returncode)
+PYEOF
+
+# ── Helpers ──────────────────────────────────────────────────────────
+# fresh: empty logs, default scenarios, no clone-tmp, no saved tokens.
+fresh() {
+    rm -f "$W"/log-*.jsonl "$W"/scn-*.json "$W/audit.log" "$W/hanging" "$W/out" "$W/err" "$W/tty" "$W/echo"
+    : >"$W/audit.log"
+    rm -rf "$KH/clone-tmp" "$KH/connect-tokens.json" "$W/elsewhere"
+    printf 'bundle-bytes' >"$W/bundle.tar"
+    [ -S "$KH/vault.sock" ] || mv "$KH/vault.sock.off" "$KH/vault.sock"
+}
+scn() { printf '%s' "$2" >"$W/scn-$1.json"; }
+# paths NAME: "METHOD path" per request the stub NAME got.
+paths() { [ -f "$W/log-$1.jsonl" ] || return 0; "$PY" -c '
+import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l); print(r["method"], r["path"])' "$W/log-$1.jsonl"; }
+# headers NAME: every header name the stub NAME got, one per line.
+headers() { [ -f "$W/log-$1.jsonl" ] || return 0; "$PY" -c '
+import json, sys
+for l in open(sys.argv[1]):
+    for k in json.loads(l)["headers"]: print(k)' "$W/log-$1.jsonl"; }
+# k2 ARGS…: run the CLI, stdin from $IN (default /dev/null); sets RC, OUT, ERR.
+IN=/dev/null
+k2() {
+    set +e
+    "$K2" "$@" <"$IN" >"$W/out" 2>"$W/err"; RC=$?
+    set -e
+    OUT="$(cat "$W/out")"; ERR="$(cat "$W/err")"
+}
+# k2pty MODE STEPS ARGS…: the same through the pty driver; also sets TTY, ECHO.
+k2pty() {
+    local mode="$1" steps="$2"; shift 2
+    set +e
+    "$PY" "$W/ptyrun.py" "$mode" "$steps" "$W" -- "$K2" "$@"; RC=$?
+    set -e
+    OUT="$(cat "$W/out")"; ERR="$(cat "$W/err")"
+    TTY="$(cat "$W/tty" 2>/dev/null || true)"; ECHO="$(cat "$W/echo" 2>/dev/null || true)"
+}
+save_token() {
+    "$PY" -c 'import json,sys; json.dump({sys.argv[1]: sys.argv[2]}, open(sys.argv[3], "w"))' "$1" "$2" "$KH/connect-tokens.json"
+    chmod 600 "$KH/connect-tokens.json"
+}
+
+echo "== hand-over headers go to this computer's daemon only =="
+fresh
+K5_CLI_VIA=rust k2 clone to "$REMOTE" ws1 --token "$REMOTE_TOKEN" --yes --json
+expect_eq "push with the front's headers succeeds" "$RC" "0"
+expect_has "this server's daemon got X-K5-Cli-Via" "$(headers local)" "X-K5-Cli-Via"
+expect_has "the remote got the upload" "$(paths remote)" "POST /cli/fs/upload-chunk"
+if headers remote | grep -iq '^x-k5-'; then bad "the remote got an X-K5-* header: $(headers remote | grep -i '^x-k5-' | sort -u | tr '\n' ' ')"; else ok "the remote got no X-K5-* header"; fi
+fresh
+K5_CLI_VIA=rust k2 clone from "$REMOTE:ws1" --token "$REMOTE_TOKEN" --yes --json
+expect_eq "pull with the front's headers succeeds" "$RC" "0"
+expect_has "the remote got the read-range" "$(paths remote)" "GET /cli/fs/read-range"
+if headers remote | grep -iq '^x-k5-'; then bad "pull: the remote got an X-K5-* header"; else ok "pull: the remote got no X-K5-* header"; fi
+
+echo
+echo "clone_security: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

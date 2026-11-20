@@ -131,3 +131,27 @@ fn help_never_acts() {
         rig.check(&c);
     }
 }
+
+/// The lines name the command by the brand's name (in a build with
+/// `K2_BRAND_DIR=brand/xy` they say `xy`), never a typed `k2` or `k5`.
+#[test]
+fn the_lines_say_the_brand_s_name() {
+    let rig = VRig::new();
+    let cli = k2_client::brand::CLI_NAME;
+    for (args, want) in [
+        (&["nope"][..], format!("usage: unknown vault verb 'nope' ({cli} vault --help)\n")),
+        (&["show"][..], format!("usage: {cli} vault show NAME [--scope <s>]\n")),
+        (&["fetch", "-s", "A"][..], format!("usage: {cli} vault fetch --secret NAME URL\n")),
+        (&["send", "A"][..], format!("usage: {cli} vault send NAME --to <agent>|<agent>::<host> [--note …]\n")),
+        (&["placements", "--scope", "server"][..], format!("usage: --scope picks which secret NAME is: {cli} vault placements NAME --scope <s>\n")),
+    ] {
+        let mut c = VCase::new("brand", args);
+        c.code = 2;
+        let ran = rig.run(false, false, &c);
+        assert_eq!(ran.out.stderr, want, "{args:?}");
+        assert_eq!(ran.out.code, Some(2), "{args:?}");
+        if cli != "k2" {
+            assert!(!ran.out.stderr.contains("k2 ") && !ran.out.stderr.contains("k5 "));
+        }
+    }
+}

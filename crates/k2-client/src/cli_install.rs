@@ -1141,3 +1141,7 @@ mod tests {
         assert!(!path_list_has_dir("", dir));
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "cli_install_names_tests.rs"]
+mod names_tests;

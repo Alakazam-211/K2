@@ -4,7 +4,11 @@ use std::net::TcpListener;
 
 /// The variables set, whether the target is https, and the proxy
 /// setting curl uses.
-type EnvRow = (&'static [(&'static str, &'static str)], bool, Option<&'static str>);
+type EnvRow = (
+    &'static [(&'static str, &'static str)],
+    bool,
+    Option<&'static str>,
+);
 
 /// A proxy URL as read: host, port, and whether it has a user part.
 type Parsed = (String, u16, bool);

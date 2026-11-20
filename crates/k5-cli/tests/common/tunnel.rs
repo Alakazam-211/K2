@@ -37,16 +37,31 @@ pub struct Pki {
 
 impl Pki {
     pub fn new(dir: &Path) -> Pki {
-        use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+        use rcgen::{
+            BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+            KeyUsagePurpose,
+        };
+        // Names of their own: a leaf whose subject is its issuer's reads
+        // as self-signed to OpenSSL (curl's UnknownCA).
         let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "Acme throwaway test CA");
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+            KeyUsagePurpose::DigitalSignature,
+        ];
         let ca_key = KeyPair::generate().unwrap();
         let ca = ca_params.self_signed(&ca_key).unwrap();
         let leaf_key = KeyPair::generate().unwrap();
-        let leaf = CertificateParams::new(vec![HOST.to_string()])
-            .unwrap()
-            .signed_by(&leaf_key, &ca, &ca_key)
-            .unwrap();
+        let mut leaf_params = CertificateParams::new(vec![HOST.to_string()]).unwrap();
+        leaf_params.distinguished_name.push(DnType::CommonName, HOST);
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        leaf_params.use_authority_key_identifier_extension = true;
+        let leaf = leaf_params.signed_by(&leaf_key, &ca, &ca_key).unwrap();
         std::fs::create_dir_all(dir).unwrap();
         let ca_file = dir.join("throwaway-ca.pem");
         std::fs::write(&ca_file, ca.pem()).unwrap();
@@ -332,7 +347,12 @@ pub fn both(
             tls: take(&tls.log).iter().map(|r| masked(r)).collect(),
             tls_errors: take(&tls.errors),
         });
-        println!("-- {} side of {}: {:?}", if bash { "bash" } else { "the binary's" }, c.name, runs.last());
+        println!(
+            "-- {} side of {}: {:?}",
+            if bash { "bash" } else { "the binary's" },
+            c.name,
+            runs.last()
+        );
     }
     let rust = runs.pop().unwrap();
     let bash = runs.pop().unwrap();
@@ -402,7 +422,10 @@ pub fn assert_tunnel_only(
     basic: Option<&str>,
     token: &str,
 ) {
-    assert!(!run.proxy.is_empty(), "{name}: the proxy saw nothing: {run:?}");
+    assert!(
+        !run.proxy.is_empty(),
+        "{name}: the proxy saw nothing: {run:?}"
+    );
     for h in &run.proxy {
         assert!(
             h.starts_with(&format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n")),

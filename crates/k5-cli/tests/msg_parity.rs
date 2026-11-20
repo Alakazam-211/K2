@@ -658,9 +658,9 @@ fn msg_sends_as_the_shell_does() {
     for c in &v {
         rig.check(c);
     }
-    // Help never acts: -h or --help anywhere is the shell's, and sends
-    // nothing. (`--signal … --help` is left out: the shell sends the
-    // signal there, a bash bug reported to K2.)
+    // Help never acts: -h or --help anywhere is the shell's: the msg
+    // help, exit 0, nothing sent, in every form (`cmd_msg_v2` looks first;
+    // `who` and `verify` print their own).
     for (name, args, code) in [
         ("--help", &["--help"][..], 0),
         ("-h after the text", &["ws", "hi", "--no-wake", "-h"], 0),
@@ -678,6 +678,13 @@ fn msg_sends_as_the_shell_does() {
         (
             "Postal mail --help",
             &["a::abc.postal.bot", "hi", "--help"],
+            0,
+        ),
+        ("--signal with -h", &["ws", "--signal", "ping", "-h"], 0),
+        ("--help as the signal", &["ws", "--signal", "--help"], 0),
+        (
+            "--help as the payload",
+            &["ws", "--signal", "ping", "--payload", "--help"],
             0,
         ),
     ] {

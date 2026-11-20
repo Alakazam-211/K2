@@ -331,8 +331,9 @@ fn tray_packages_as_the_shell_sends_them() {
     }
 }
 
-/// The tray forms' loop reads `-h` and `--help` as unknown flags: the
-/// shell's line, exit 2, nothing sent (no help either).
+/// Help never acts: `-h` or `--help` anywhere in a tray form prints the
+/// msg help, exit 0, nothing sent (`cmd_msg_v2` looks before it splits
+/// the forms). The binary hands these to the shell.
 #[test]
 fn tray_help_never_acts() {
     let rig = Rig::new(VERB, "trayhelp");
@@ -345,12 +346,103 @@ fn tray_help_never_acts() {
             "--help with a title",
             &["ws", "--inbox-silent", "--title", "T", "--help"],
         ),
+        (
+            "--help where the title goes",
+            &["ws", "--inbox-wake", "--title", "--help"],
+        ),
+        (
+            "-h with a bare --inbox and a file",
+            &["ws", "--inbox", "note.md", "-h"],
+        ),
+        (
+            "--help with both modes",
+            &["ws", "--inbox-silent", "--inbox-wake", "note.md", "--help"],
+        ),
     ] {
         rig.check(&Case {
             compare: Compare::Shell,
-            ..plain(name, args, vec![], 2, 0)
+            ..plain(name, args, vec![], 0, 0)
         });
     }
+}
+
+/// `--inbox-wake` with a title and no file: the compose answer read as
+/// JSON fields. The pointer gets the answer's id and title (or the typed
+/// title) each made one line as the daemon's `inbox::one_line` makes it;
+/// an error's code is made one line and its hint kept as it came.
+#[test]
+fn tray_compose_answer_as_json_fields() {
+    let rig = Rig::new(VERB, "trayjson");
+    let long = "t".repeat(2100);
+    let landed = [
+        (
+            "a title with line breaks",
+            "T",
+            r#"{"ok":true,"id":"c1\nc2","title":"line one\nline two\r\n"}"#,
+        ),
+        (
+            "control and bidi characters, and dashes",
+            "T",
+            r#"{"ok":true,"id":"c1","title":" \u001b[31mred\u0003 ‮ x---y  "}"#,
+        ),
+        (
+            "no title in the answer: the typed one",
+            "a\tb\u{7}",
+            r#"{"ok":true,"id":7}"#,
+        ),
+        (
+            "an empty title in the answer",
+            "  typed  ",
+            r#"{"ok":true,"id":"c1","title":""}"#,
+        ),
+        (
+            "a title that is not a string",
+            "T",
+            r#"{"ok":true,"id":"c1","title":[1,"x"]}"#,
+        ),
+        ("a long title", long.as_str(), r#"{"ok":true,"id":"c1"}"#),
+    ];
+    for (name, title, answer) in landed {
+        let replies = vec![ok(ON), ok(answer), ok(DELIVERED)];
+        rig.check(&plain(name, compose_wake(title), replies, 0, 3));
+    }
+    let refused = [
+        (
+            "an error with line breaks",
+            r#"{"error":{"code":"x\ny","hint":"two\nlines é"}}"#,
+            1,
+        ),
+        (
+            "an error code that is a number",
+            r#"{"error":{"code":5}}"#,
+            1,
+        ),
+        (
+            "a gate",
+            r#"{"error":{"code":"forbidden","hint":"no\tway"}}"#,
+            3,
+        ),
+        ("an error string", r#"{"error":"boom\nbang"}"#, 1),
+        ("not an object", "[1]", 0),
+        ("not JSON", "plain text", 0),
+    ];
+    for (name, answer, code) in refused {
+        let replies = vec![ok(ON), ok(answer)];
+        rig.check(&plain(name, compose_wake("T"), replies, code, 2));
+    }
+}
+
+const DELIVERED: &str = r#"{"success":true,"target_session_id":"s1","attempts":1}"#;
+
+/// `ws --inbox-wake --title <title>` with the send key.
+fn compose_wake(title: &str) -> &'static [&'static str] {
+    let mut words = vec!["ws", "--inbox-wake", "--title"];
+    words.extend([title, "--idempotency-key", KEY]);
+    let leaked: Vec<&'static str> = words
+        .iter()
+        .map(|w| &*Box::leak(w.to_string().into_boxed_str()))
+        .collect();
+    Box::leak(leaked.into_boxed_slice())
 }
 
 /// What an archive holds: each entry's name, type, mode and bytes.

@@ -28,8 +28,10 @@
 //!      deleted once it landed (`/cli/fs/delete`, best effort).
 //! 5. No files: `--title` is needed (two lines, exit 2). Then
 //!    `/cli/inbox/compose`, sent once; for `--inbox-wake` on this server a
-//!    second send to `/cli/workspace/msg` with the inbox pointer, and the
-//!    two answers merged into one JSON line. To another server
+//!    second send to `/cli/workspace/msg` with the inbox pointer (the
+//!    compose answer's id and title, or the typed title, each made one
+//!    line by [`one_line`]), and the two answers merged into one JSON
+//!    line. To another server
 //!    (`agent::host`) the wake rides the compose.
 //! 6. The answer's reader ([`map_response`]): exit 3 for a gate, 1 for an
 //!    error, 0 when it landed (a wake that failed is a note).
@@ -579,7 +581,7 @@ fn compose(
     if let Some(n) = send_once::replay_note(&response) {
         out::stderr_line(&n);
     }
-    let (id, title) = match mapped(&response) {
+    let (id, title) = match mapped(&response, &f.title) {
         Mapped::Err(code, hint) => {
             let line = dumps_compact_ascii(&obj(vec![(
                 "error",
@@ -594,18 +596,7 @@ fn compose(
                 },
             );
         }
-        Mapped::Ok(id, title) => (
-            id,
-            if title.is_empty() {
-                f.title.clone()
-            } else {
-                title
-            },
-        ),
-        Mapped::Raise(tb) => {
-            let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
-            return echo(&response).map(|()| Exit::Ok);
-        }
+        Mapped::Ok(id, title) => (id, title),
         Mapped::ParseFail => return echo(&response).map(|()| Exit::Ok),
     };
     let from = if f.from.is_empty() {
@@ -679,107 +670,101 @@ fn dumps_compact_ascii(v: &Value) -> String {
     .unwrap_or_default()
 }
 
-/// What the compose's mapping Python prints.
+/// What the compose's mapping Python prints, as the shell reads its
+/// three lines back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mapped {
     ParseFail,
+    /// The code (made one line) and the hint (as it came).
     Err(String, String),
+    /// The id and the title, each made one line.
     Ok(String, String),
-    /// It raised: its traceback (stderr), and the shell then echoes the
-    /// answer.
-    Raise(String),
 }
 
-fn concat_error(v: &Value, line: u32) -> String {
-    traceback(
-        &[(line, "<module>")],
-        &format!(
-            "TypeError: can only concatenate str (not \"{}\") to str",
-            py::type_name(v)
-        ),
-    )
+/// `str(v or "")`.
+fn str_or_empty(v: Option<&Value>) -> String {
+    v.filter(|v| py::truthy(v))
+        .map(py::str_of)
+        .unwrap_or_default()
 }
 
-/// A value Python's `x or ""` leaves, as a string, or the raise when it
-/// is not one.
-fn or_empty(v: Option<&Value>, line: u32) -> Result<String, String> {
-    match v {
-        Some(v) if py::truthy(v) => match v {
-            Value::Str(t) => Ok(py::str_of(&Value::Str(t.clone()))),
-            other => Err(concat_error(other, line)),
-        },
-        _ => Ok(String::new()),
+/// The daemon's `inbox::one_line` as the shell's Python writes it:
+/// trimmed (`str.strip()`), control, line-break, bidi and invisible
+/// characters as `\u{..}`, cut at 2048 characters (then `...`), and a
+/// third dash in a row as `\u{2d}`.
+pub fn one_line(text: &str) -> String {
+    const CAP: usize = 2048;
+    let hidden = |c: char| {
+        let u = u32::from(c);
+        u < 0x20
+            || (0x7f..=0x9f).contains(&u)
+            || matches!(u, 0x2028 | 0x2029 | 0x061c | 0x200e | 0x200f | 0x2060 | 0xfeff)
+            || (0x202a..=0x202e).contains(&u)
+            || (0x2066..=0x2069).contains(&u)
+            || (0x200b..=0x200d).contains(&u)
+            || (0xe0000..=0xe007f).contains(&u)
+    };
+    let text = text.trim_matches(super::super::py_space);
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars().take(CAP) {
+        if hidden(c) {
+            out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
+        } else {
+            out.push(c);
+        }
     }
+    if text.chars().nth(CAP).is_some() {
+        out.push_str("...");
+    }
+    let mut res = String::with_capacity(out.len());
+    let mut dashes = 0;
+    for c in out.chars() {
+        if c != '-' {
+            dashes = 0;
+            res.push(c);
+        } else if dashes == 2 {
+            dashes = 0;
+            res.push_str("\\u{2d}");
+        } else {
+            dashes += 1;
+            res.push(c);
+        }
+    }
+    res
 }
 
-/// The compose answer's mapping Python, then `cut` on its line.
-pub fn mapped(response: &[u8]) -> Mapped {
+/// The compose answer's mapping Python (`typed`: the `--title` given,
+/// its `sys.argv[1]`), one field per line.
+pub fn mapped(response: &[u8], typed: &str) -> Mapped {
     let Ok(d) = json::parse(&String::from_utf8_lossy(response)) else {
         return Mapped::ParseFail;
     };
     let Value::Object(pairs) = &d else {
-        return Mapped::Raise(traceback(
-            &[(7, "<module>")],
-            &format!(
-                "AttributeError: '{}' object has no attribute 'get'",
-                py::type_name(&d)
-            ),
-        ));
+        return Mapped::ParseFail;
     };
-    let field = |line: &str, n: usize| -> String {
-        line.split('\n')
-            .map(|l| {
-                let f: Vec<&str> = l.split('\t').collect();
-                if f.len() == 1 {
-                    l.to_string()
-                } else if n == 2 {
-                    f.get(1).copied().unwrap_or("").to_string()
-                } else {
-                    f.get(2..).map(|r| r.join("\t")).unwrap_or_default()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let line = match get(pairs, "error") {
+    match get(pairs, "error") {
         Some(Value::Object(e)) => {
-            let code = match or_empty(get(e, "code"), 10) {
-                Ok(c) => c,
-                Err(tb) => return Mapped::Raise(tb),
-            };
+            let code = str_or_empty(get(e, "code"));
             let hint = match get(e, "hint").filter(|v| py::truthy(v)) {
-                Some(Value::Str(t)) => py::str_of(&Value::Str(t.clone())),
-                Some(other) => return Mapped::Raise(concat_error(other, 10)),
+                Some(v) => py::str_of(v),
                 None => code.clone(),
             };
-            format!("ERR\t{code}\t{hint}")
+            return Mapped::Err(one_line(&code), hint);
         }
-        Some(Value::Str(t)) if py::truthy(&Value::Str(t.clone())) => {
-            format!("ERR\terror\t{}", py::str_of(&Value::Str(t.clone())))
+        Some(v) if matches!(v, Value::Str(_)) && py::truthy(v) => {
+            return Mapped::Err("error".into(), py::str_of(v));
         }
-        _ => {
-            if matches!(get(pairs, "ok"), Some(Value::Bool(false))) && get(pairs, "id").is_none() {
-                "ERR\terror\tcompose failed".to_string()
-            } else {
-                let id = match or_empty(get(pairs, "id"), 20) {
-                    Ok(v) => v,
-                    Err(tb) => return Mapped::Raise(tb),
-                };
-                let title = match or_empty(get(pairs, "title"), 20) {
-                    Ok(v) => v,
-                    Err(tb) => return Mapped::Raise(tb),
-                };
-                format!("OK\t{id}\t{title}")
-            }
-        }
-    };
-    // `$(…)` drops the trailing newlines of what it held.
-    let line = line.trim_end_matches('\n').to_string();
-    if line.starts_with("ERR\t") {
-        Mapped::Err(field(&line, 2), field(&line, 3))
-    } else {
-        Mapped::Ok(field(&line, 2), field(&line, 3))
+        _ => {}
     }
+    if matches!(get(pairs, "ok"), Some(Value::Bool(false))) && get(pairs, "id").is_none() {
+        return Mapped::Err("error".into(), "compose failed".into());
+    }
+    let title = match get(pairs, "title").filter(|v| py::truthy(v)) {
+        Some(v) => py::str_of(v),
+        None => typed.to_string(),
+    };
+    let id = str_or_empty(get(pairs, "id"));
+    Mapped::Ok(one_line(&id), one_line(&title))
 }
 
 /// The merge Python on the two answers: the JSON line and the note, or
@@ -1389,21 +1374,32 @@ mod tests {
             br#"{"error":{"code":"bad_request","hint":"no"}}"#
         ));
         assert_eq!(
-            mapped(br#"{"ok":true,"id":"c1","title":"a\tb"}"#),
-            Mapped::Ok("c1".into(), "a\tb".into())
+            mapped(br#"{"ok":true,"id":"c1","title":"a\tb\nc"}"#, "T"),
+            Mapped::Ok("c1".into(), "a\\u{9}b\\u{a}c".into())
         );
         assert_eq!(
-            mapped(br#"{"error":{"code":"gated"}}"#),
+            mapped(br#"{"ok":true,"id":5,"title":""}"#, " x\u{1b}y "),
+            Mapped::Ok("5".into(), "x\\u{1b}y".into())
+        );
+        assert_eq!(
+            mapped(br#"{"error":{"code":"gated"}}"#, "T"),
             Mapped::Err("gated".into(), "gated".into())
         );
         assert_eq!(
-            mapped(br#"{"ok":false}"#),
+            mapped(br#"{"error":{"code":"x\ny","hint":"a\nb"}}"#, "T"),
+            Mapped::Err("x\\u{a}y".into(), "a\nb".into())
+        );
+        assert_eq!(
+            mapped(br#"{"ok":false}"#, "T"),
             Mapped::Err("error".into(), "compose failed".into())
         );
-        assert_eq!(mapped(b"nope"), Mapped::ParseFail);
-        assert!(
-            matches!(mapped(br#"{"id":5}"#), Mapped::Raise(t) if t.ends_with("(not \"int\") to str\n"))
-        );
+        assert_eq!(mapped(b"nope", "T"), Mapped::ParseFail);
+        assert_eq!(mapped(b"[1]", "T"), Mapped::ParseFail);
+        assert_eq!(one_line("a----b-c---"), "a--\\u{2d}-b-c--\\u{2d}");
+        assert_eq!(one_line("\u{1c} \u{202e}a\u{e0041}\u{3000}"), "\\u{202e}a\\u{e0041}");
+        let long = "x".repeat(2049);
+        assert_eq!(one_line(&long), format!("{}...", "x".repeat(2048)));
+        assert_eq!(one_line(&long[..2048]), "x".repeat(2048));
         let (line, note) = merge(br#"{"wake":0,"id":"c"}"#, b"oops").unwrap();
         assert_eq!(
             line,

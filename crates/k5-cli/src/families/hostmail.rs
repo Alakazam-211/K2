@@ -6,6 +6,7 @@
 //!   list), whose Python branch `mail forward` shares
 //!   ([`super::mail::forward`]).
 //! - [`mailbox`]: `quota`, `catchall` and `alias`.
+//! - [`notices`]: `ooo` and `footer`.
 //! - [`words`]: how a `cmd_hostmail_*` function's loop reads its words.
 //!
 //! The route table sends a verb here only once it has a row of its own
@@ -18,6 +19,7 @@ use std::ffi::OsString;
 
 pub mod forward;
 pub mod mailbox;
+pub mod notices;
 pub mod words;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -31,6 +33,8 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["quota"]),
     native(&["catchall"]),
     native(&["alias"]),
+    native(&["ooo"]),
+    native(&["footer"]),
 ];
 
 /// A verb row the binary answers.
@@ -58,6 +62,7 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
     match verb {
         "forward" => forward::parse(words),
         v if mailbox::VERBS.contains(&v) => mailbox::parse(v, words),
+        v if notices::VERBS.contains(&v) => notices::parse(v, words),
         _ => Plan::Shell,
     }
 }
@@ -65,5 +70,5 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
 /// The `_mail_py` branches only `hostmail` runs, for `M_VERB` `verb`.
 /// `None`: not one of them.
 pub fn branch(py_: &mut core::Py, verb: &str) -> Option<core::R<()>> {
-    mailbox::exec(py_, verb)
+    mailbox::exec(py_, verb).or_else(|| notices::exec(py_, verb))
 }

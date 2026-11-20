@@ -1669,7 +1669,7 @@ fn the_forward_lines_are_the_shell_s() {
 /// The lines of `_mail_py` the hostmail verbs raise at.
 #[test]
 fn the_hostmail_lines_are_the_shell_s() {
-    use crate::families::hostmail::mailbox;
+    use crate::families::hostmail::{mailbox, notices};
     let s = mail_py_script();
     let pins: &[(u32, &str)] = &[
         (mailbox::line::QUOTA_GET_CALL, "d = call(\"GET\", \"/cli/mail/quota\", params={\"addr"),
@@ -1699,6 +1699,24 @@ fn the_hostmail_lines_are_the_shell_s() {
         (mailbox::line::ALIAS_ADD_PRINT, "print(\"alias %s -> %s\" % (d.get(\"alias\") or env("),
         (mailbox::line::ALIAS_REMOVE_CALL, "d = call(\"POST\", \"/cli/mail/alias/remove\", body="),
         (mailbox::line::ALIAS_REMOVE_PRINT, "print(\"removed alias %s from %s\" % (d.get(\"remov"),
+        (notices::line::OOO_GET_CALL, "d = call(\"GET\", \"/cli/mail/ooo\", params={\"addres"),
+        (notices::line::OOO_GET_ON, "if d.get(\"enabled\"):"),
+        (notices::line::OOO_GET_UNTIL, "until = d.get(\"until\") or \"none\""),
+        (notices::line::OOO_GET_ADDR, "d.get(\"address\") or env(\"M_ADDRESS\") or \"?\","),
+        (notices::line::OOO_GET_DAYS, "d.get(\"days\") if d.get(\"days\") is not None else "),
+        (notices::line::OOO_GET_TEXT, "if d.get(\"text\"):"),
+        (notices::line::OOO_GET_OFF, "print(\"%s  ooo off\" % (d.get(\"address\") or env(\""),
+        (notices::line::OOO_SET_DAYS, "body[\"days\"] = int(env(\"M_DAYS\"))"),
+        (notices::line::OOO_SET_CALL, "d = call(\"POST\", \"/cli/mail/ooo\", body=body)"),
+        (notices::line::OOO_SET_ADDR, "d.get(\"address\") or env(\"M_ADDRESS\") or \"?\","),
+        (notices::line::OOO_SET_DAYS_PRINT, "d.get(\"days\") if d.get(\"days\") is not None else "),
+        (notices::line::OOO_SET_UNTIL, "d.get(\"until\") or \"none\"))"),
+        (notices::line::OOO_UNSET_CALL, "d = call(\"POST\", \"/cli/mail/ooo/unset\", body={\"a"),
+        (notices::line::OOO_UNSET_PRINT, "print(\"ooo unset for %s\" % (d.get(\"address\") or "),
+        (notices::line::FOOTER_GET_CALL, "d = call(\"GET\", \"/cli/mail/footer\")"),
+        (notices::line::FOOTER_GET_ON, "if d.get(\"enabled\") and d.get(\"text\"):"),
+        (notices::line::FOOTER_SET_CALL, "d = call(\"POST\", \"/cli/mail/footer\", body=body)"),
+        (notices::line::FOOTER_UNSET_CALL, "d = call(\"POST\", \"/cli/mail/footer/unset\", body="),
     ];
     for (n, text) in pins {
         let got = s[*n as usize - 1].trim();

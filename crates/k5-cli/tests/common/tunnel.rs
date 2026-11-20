@@ -263,7 +263,10 @@ pub fn masked(request: &str) -> (String, bool) {
     let (head, body) = request.split_once("\r\n\r\n").unwrap_or((request, ""));
     let mut native = false;
     let mut out = Vec::new();
-    for line in head.split("\r\n") {
+    let mut lines = head.split("\r\n");
+    // curl 8.5 and 8.7 write a query's %XX escapes in lower case.
+    out.push(super::parity::fold_query_escapes(lines.next().unwrap_or("")));
+    for line in lines {
         if line.starts_with("User-Agent: k5/") {
             native = true;
             out.push("User-Agent: <ua>".to_string());

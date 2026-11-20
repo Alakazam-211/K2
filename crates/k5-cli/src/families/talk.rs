@@ -19,7 +19,10 @@
 //!    token ([`remote::token_for_host`]; none is two lines, exit 1), and
 //!    every request after that goes to `https://<host>` (or the
 //!    `http://` URL as given) with it ([`remote::apply`], TLS by
-//!    [`crate::transport::tls`]).
+//!    [`crate::transport::tls`], through the person's proxy when one is
+//!    set, [`crate::transport::proxy`]). Plain `http://` to a host that is
+//!    not this computer is refused first: one line, exit 2 (K2's shared
+//!    transport rule).
 //! 5. `--scout`: the form walked arrow by arrow and left on Q1
 //!    ([`scout`]). `--answers a,b,c`: each digit, then the submit key
 //!    ([`answers`]). `--answer N` / `--respond y|n`: one key, then the
@@ -48,7 +51,8 @@
 //! - a text that starts with `-` (`msg`'s loop would read it as a flag);
 //! - a workspace that still holds an `@` once the host is split off
 //!   (`k2 read` splits it again and looks up a second host's token);
-//! - a host the binary doesn't send to itself ([`remote::base`]);
+//! - a host the binary doesn't send to itself ([`remote::base`]), or a
+//!   proxy setting it doesn't read ([`remote::routed`]);
 //! - a `--lines` value curl wouldn't send as it is ([`super::read`]);
 //! - a `*_TALK_NAV_SETTLE` or `*_TALK_ANSWER_SETTLE` that is not plain
 //!   seconds, or a `*_TALK_SCOUT_MAX` of digits with a leading 0 (octal
@@ -305,7 +309,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return None;
         }
         if !host.is_empty() {
-            base = Some((remote::base(&host)?, host));
+            base = Some((remote::routed(&host)?, host));
         }
     }
     if !python::family_native(python::here()) {
@@ -344,6 +348,12 @@ fn talk(
     if a.target.is_empty() {
         let _ = out::write_flushed(&mut std::io::stderr().lock(), usage().as_bytes());
         return Exit::Error;
+    }
+    // K2's shared transport rule, before any request: a token goes to
+    // another machine over https only.
+    if let Some(line) = base.as_ref().and_then(|(b, h)| remote::plain_http_refusal(b, h)) {
+        out::stderr_line(&line);
+        return Exit::Usage;
     }
     if a.token_stdin {
         if !a.token.is_empty() {

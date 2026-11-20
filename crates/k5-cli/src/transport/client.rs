@@ -754,6 +754,10 @@ pub struct Client {
     /// `BASE_URL` is `https://…`: TLS over the TCP connection
     /// ([`super::tls`]).
     pub tls: bool,
+    /// The person's proxy for a remote `https://` base
+    /// ([`super::proxy`]). Only [`super::remote::apply`] sets it; it is
+    /// used only with [`Client::tls`], and a new client has none.
+    pub(in crate::transport) via: Option<super::proxy::Proxy>,
     /// The `Host` header curl writes for the `BASE_URL`, when it is not
     /// `<HOST>:<PORT>` (a remote URL with the scheme's own port leaves the
     /// port out).
@@ -825,6 +829,7 @@ impl Client {
             version: crate::embedded::version().to_string(),
             force_tcp: false,
             tls: false,
+            via: None,
             host_header: None,
             post_max_time: None,
             send_max_time: None,
@@ -1772,7 +1777,16 @@ impl Client {
                     .clone()
                     .unwrap_or_else(|| format!("{host}:{port}"));
                 let target = if self.tls {
-                    Target::Tls { host, port }
+                    // The proxy rides only here: `via` is set by
+                    // `remote::apply` alone, for a host that is not this
+                    // computer.
+                    let via = self.via.clone().map(|proxy| {
+                        Box::new(wire::Tunnel {
+                            proxy,
+                            user_agent: format!("k5/{}", self.version),
+                        })
+                    });
+                    Target::Tls { host, port, via }
                 } else {
                     Target::Tcp { host, port }
                 };
@@ -2030,6 +2044,11 @@ fn failure(kind: Kind, endpoint: &str, f: Failure, t0: Instant) -> Error {
             endpoint,
             why,
             curl,
+        },
+        Failure::Tunnel(why) => Error::Broken {
+            endpoint,
+            why,
+            curl: wire::curl::RECV_ERROR,
         },
     }
 }
@@ -3406,5 +3425,166 @@ mod tests {
             assert_eq!(c.moved_port(host, 4000), want, "{content:?} {host}");
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Every proxy variable curl reads, pointed at a proxy.
+    const PROXY_VARS: [&str; 8] = [
+        "http_proxy",
+        "HTTP_PROXY",
+        "https_proxy",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "no_proxy",
+        "NO_PROXY",
+    ];
+
+    /// The daemon's paths never read a proxy setting (K2's ruling, the
+    /// Steward's proof): with every proxy variable set in this process,
+    /// every kind of daemon call builds a target with no place for a
+    /// proxy (TCP or the cell socket), on loopback and on a LAN host,
+    /// with the owner token and with a passport. Only a client that
+    /// `remote::apply` pointed at a remote `https://` base carries one.
+    #[cfg(unix)]
+    #[test]
+    fn daemon_targets_never_carry_a_proxy() {
+        for n in PROXY_VARS {
+            let v = if n.ends_with("no_proxy") || n.ends_with("NO_PROXY") {
+                "nothing.example"
+            } else {
+                "http://user:pw@proxy.example:3128"
+            };
+            std::env::set_var(n, v);
+        }
+        let kinds = [
+            Kind::Request,
+            Kind::RequestPost,
+            Kind::PostForm,
+            Kind::PostJson,
+            Kind::PostJsonStdin,
+            Kind::SendJsonGet,
+            Kind::SendJsonPost,
+            Kind::Public,
+            Kind::Probe,
+            Kind::BearerForm,
+            Kind::SidecarGet,
+            Kind::ComputeGet,
+            Kind::ComputePost,
+            Kind::SidecarPost,
+            Kind::PassportProject,
+            Kind::Cards,
+            Kind::FeedbackOptin,
+            Kind::UpdateVersion,
+            Kind::SetupGet,
+            Kind::SetupPost,
+            Kind::QueryPost,
+            Kind::Own {
+                post: false,
+                note: false,
+            },
+            Kind::Own {
+                post: true,
+                note: true,
+            },
+            Kind::BootStatus,
+            Kind::SendOnce,
+            Kind::ConnectProxy,
+            Kind::ControlPlane { put: false },
+            Kind::VaultSockGet,
+            Kind::VaultSockPost,
+        ];
+        let passport = || Auth::Passport {
+            passport: Passport::new("s.x").unwrap(),
+            sock: Some(PathBuf::from("/tmp/k5-noproxy.sock")),
+        };
+        for host in ["127.0.0.1", "localhost", "10.0.0.5", "box.example"] {
+            for auth in [Auth::Owner("o".into()), passport()] {
+                let mut c = Client::new(host, 4000, "/p", auth);
+                c.own = Some((Some("o".into()), Duration::from_secs(5)));
+                c.vault_sock = Some((PathBuf::from("/tmp/k5-noproxy-vault.sock"), false));
+                assert!(c.via.is_none(), "a new client has no proxy");
+                for kind in kinds {
+                    for channel in [Channel::Tcp, Channel::Uds] {
+                        let Ok((target, _)) = c.build(kind, channel, "/cli/x", &[], b"{}") else {
+                            continue;
+                        };
+                        assert!(
+                            matches!(target, Target::Tcp { .. } | Target::Unix(_)),
+                            "{host} {kind:?} {channel:?}: {target:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // A remote http:// base (a LAN K2 over plain http) has none either.
+        let mut c = Client::new("127.0.0.1", 4000, "", Auth::None);
+        let b = super::super::remote::routed("http://127.0.0.1:4100").unwrap();
+        super::super::remote::apply(&mut c, &b, "t".into());
+        let (target, _) = c
+            .build(Kind::Request, Channel::Tcp, "/cli/x", &[], &[])
+            .unwrap();
+        assert!(matches!(target, Target::Tcp { .. }), "{target:?}");
+        // A remote https:// base does: the one place it rides.
+        let mut c = Client::new("127.0.0.1", 4000, "", Auth::None);
+        let b = super::super::remote::routed("box.example").unwrap();
+        super::super::remote::apply(&mut c, &b, "t".into());
+        let (target, r) = c
+            .build(Kind::Request, Channel::Tcp, "/cli/x", &[], &[])
+            .unwrap();
+        let Target::Tls { via: Some(t), .. } = target else {
+            panic!("no proxy on a remote https base: {target:?}");
+        };
+        assert_eq!((t.proxy.host.as_str(), t.proxy.port), ("proxy.example", 3128));
+        assert_eq!(t.user_agent, r.user_agent);
+        for n in PROXY_VARS {
+            std::env::remove_var(n);
+        }
+    }
+
+    /// The proxy settings are read from the process environment in ONE
+    /// place, the remote base ([`super::super::remote::routed`]). Every
+    /// other file of the binary is checked for the reader's name and for
+    /// a proxy variable's.
+    #[test]
+    fn only_the_remote_base_reads_proxy_settings() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        let mut dirs = vec![src.clone()];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    files.push(p);
+                }
+            }
+        }
+        assert!(files.len() > 100, "the walk found the sources: {}", files.len());
+        let allowed = [
+            src.join("transport/proxy.rs"),
+            src.join("transport/proxy/tests.rs"),
+            src.join("transport/remote.rs"),
+            src.join("transport/client.rs"),
+        ];
+        let reader = ["from_", "process_env"].concat();
+        let vars = PROXY_VARS.map(|v| format!("\"{v}\""));
+        let mut found = Vec::new();
+        for f in &files {
+            let text = std::fs::read_to_string(f).unwrap();
+            let rel = f.strip_prefix(&src).unwrap().display().to_string();
+            if text.contains(&reader) && !allowed[..3].contains(f) {
+                found.push(format!("{rel}: names the proxy reader"));
+            }
+            for v in &vars {
+                if text.contains(v.as_str()) && !allowed.contains(f) {
+                    found.push(format!("{rel}: names {v}"));
+                }
+            }
+        }
+        assert_eq!(found, Vec::<String>::new());
+        // And in remote.rs the reader is called once, by `routed`.
+        let remote = std::fs::read_to_string(src.join("transport/remote.rs")).unwrap();
+        assert_eq!(remote.matches(&reader).count(), 1, "remote.rs");
     }
 }

@@ -45,9 +45,15 @@
 //! `tunnel.json`'s token as its `Authorization` header (TLS for an
 //! `https://` base, [`crate::transport::tls`]).
 //!
+//! `K2_CONNECT_BASE` with no scheme, or plain `http://` to a host that is
+//! not this computer, is refused as publish starts, before any request:
+//! one line, exit 2 (K2's rulings; the shell does the same). Through the
+//! person's proxy when one is set for an `https://` base
+//! ([`crate::transport::proxy`]).
+//!
 //! Still the shell's ([`run`] returns `None`): `wiki publish` with a token
-//! in `tunnel.json`, air-gap off, and a proxy setting curl would use or a
-//! control-plane base the binary doesn't send to itself, a word that is
+//! in `tunnel.json`, air-gap off, and a proxy setting the binary doesn't
+//! read or a control-plane base it doesn't send to itself, a word that is
 //! not UTF-8, a command line with `-h` or `--help` ([`crate::front`]),
 //! a `--workspace` folder that `cd` reads as an option or that `CDPATH`
 //! would move (bash's own edges, D6), a port that is set but is no port
@@ -366,19 +372,26 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     settings.port_text.as_deref().and_then(curl_port)?;
     let mut connect = Connect::default();
     if matches!(form, Form::Ask(Verb::Publish, _)) {
+        // K2's rulings on the control plane's base, as publish starts and
+        // before any request: no scheme, or plain http to another machine,
+        // is refused.
+        if let Some(line) = base_refusal(&connect_base()) {
+            out::stderr_line(&line);
+            return Some(Exit::Usage);
+        }
         let (state, _) = crate::airgap::state(&crate::offline::Env::current())?;
         connect.airgap_off = state == crate::airgap::State::Off;
         // With no daemon to make the call, the shell calls the control
-        // plane itself with `tunnel.json`'s token. A base the binary
-        // doesn't send to itself, or a proxy curl would use, is the
-        // shell's.
+        // plane itself with `tunnel.json`'s token, through the person's
+        // proxy when one is set for it. A base or a proxy setting the
+        // binary doesn't read is the shell's.
         if connect.airgap_off {
             if let Some(token) = publish::tunnel_token(&settings.home.join("tunnel.json")) {
                 let url = connect_base();
-                if url.ends_with('/') || proxy_set() {
+                if url.ends_with('/') {
                     return None;
                 }
-                connect.control = Some((crate::transport::remote::base(&url)?, token));
+                connect.control = Some((crate::transport::remote::routed(&url)?, token));
             }
         }
     }
@@ -409,17 +422,19 @@ fn connect_base() -> String {
         )
 }
 
-/// A proxy setting curl would use for the control plane's URL.
-fn proxy_set() -> bool {
-    [
-        "http_proxy",
-        "https_proxy",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "all_proxy",
-    ]
-    .iter()
-    .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
+/// K2's rulings on `K2_CONNECT_BASE` (the shell checks the same, first):
+/// a base with no scheme is refused (curl would guess `http://` and send
+/// the token there), and so is plain `http://` to a host that is not
+/// this computer (a token goes to another machine over https only).
+fn base_refusal(url: &str) -> Option<String> {
+    let plain = url.starts_with("http://");
+    if !plain && !url.starts_with("https://") {
+        return Some(format!(
+            "Error: K2_CONNECT_BASE must start with https:// (got: {url})"
+        ));
+    }
+    (plain && !crate::transport::proxy::url_is_loopback(url))
+        .then(|| crate::transport::remote::plain_http_line(url))
 }
 
 /// A `--workspace` folder bash's `cd` reads otherwise: an option (a

@@ -187,13 +187,25 @@ pub enum Target {
         port: u16,
     },
     /// `https://<host>[:<port>]`: TCP, then TLS for `host`
-    /// ([`super::tls`]).
+    /// ([`super::tls`]); through the person's proxy when `via` holds one
+    /// ([`super::proxy`]). Only a host that is not this computer ever has
+    /// one, and only this variant can hold one: the daemon's targets,
+    /// [`Target::Tcp`] and [`Target::Unix`], never go through a proxy.
     Tls {
         host: String,
         port: u16,
+        via: Option<Box<Tunnel>>,
     },
     #[cfg(unix)]
     Unix(PathBuf),
+}
+
+/// The proxy a [`Target::Tls`] goes through, and the `User-Agent` its
+/// CONNECT head names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tunnel {
+    pub proxy: super::proxy::Proxy,
+    pub user_agent: String,
 }
 
 /// An open connection.
@@ -271,6 +283,9 @@ pub enum Failure {
     /// Anything else: a write or read that failed, an answer cut short, a
     /// head that is not HTTP. `curl` is curl's exit code for it.
     Broken { curl: i32, why: String },
+    /// The proxy's CONNECT failed (not a 2xx, closed, not HTTP): curl's
+    /// 56, and nothing of the request went out.
+    Tunnel(String),
 }
 
 /// curl's exit codes for the failures here (`man curl`, EXIT CODES).
@@ -308,7 +323,10 @@ impl Failure {
     /// have been run.
     pub fn sent(&self) -> bool {
         match self {
-            Failure::Connect(_) | Failure::ConnectTimedOut | Failure::NotSent(_) => false,
+            Failure::Connect(_)
+            | Failure::ConnectTimedOut
+            | Failure::NotSent(_)
+            | Failure::Tunnel(_) => false,
             Failure::Broken { curl, .. } => !super::tls::before_request(*curl),
             _ => true,
         }
@@ -320,6 +338,7 @@ impl Failure {
             Failure::Connect(_) => curl::COULDNT_CONNECT,
             Failure::ConnectTimedOut | Failure::TimedOut => curl::OPERATION_TIMEDOUT,
             Failure::NotSent(_) => curl::SEND_ERROR,
+            Failure::Tunnel(_) => curl::RECV_ERROR,
             Failure::Empty => curl::GOT_NOTHING,
             Failure::Broken { curl, .. } => *curl,
         }
@@ -370,8 +389,13 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
     let limit = (start + connect).min(deadline);
     match target {
         Target::Tcp { host, port } => tcp(host, *port, limit).map(Conn::Tcp),
-        Target::Tls { host, port } => {
-            let s = tcp(host, *port, limit)?;
+        Target::Tls { host, port, via } => {
+            let s = match via {
+                None => tcp(host, *port, limit)?,
+                Some(t) => {
+                    super::proxy::tunnel(&t.proxy, host, *port, &t.user_agent, limit, tcp)?
+                }
+            };
             super::tls::connect(s, host, limit).map(|t| Conn::Tls(Box::new(t)))
         }
         #[cfg(unix)]

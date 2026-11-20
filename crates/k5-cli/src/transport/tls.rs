@@ -167,6 +167,7 @@ pub fn before_request(code: i32) -> bool {
         code,
         SSL_CONNECT_ERROR | PEER_FAILED_VERIFICATION | SSL_CACERT_BADFILE
     ) || code == curl::COULDNT_RESOLVE_HOST
+        || code == super::proxy::COULDNT_RESOLVE_PROXY
 }
 
 #[cfg(test)]

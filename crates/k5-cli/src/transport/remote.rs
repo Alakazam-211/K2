@@ -9,8 +9,15 @@
 //! socket after that. [`apply`] does the same to a [`Client`]: the
 //! credential is that token alone, sent as the owner's but never as one
 //! read from this machine's K2 home.
+//!
+//! This module is the one place the person's proxy settings are read
+//! ([`routed`], [`super::proxy`]): only for a base that is `https://` to a
+//! host that is not this computer. The daemon's paths never come here.
+//! It also holds K2's shared transport rule for a token-bearing request
+//! to another machine: https only ([`plain_http_refusal`]).
 
 use super::client::{Auth, Client};
+use super::proxy::{self, Lookup, Proxy, Route};
 use crate::out::json::{self, Value};
 use crate::out::py;
 use k2_client::env_names;
@@ -28,6 +35,8 @@ pub struct Base {
     /// curl's `Host` header for the URL: the host, and `:<port>` when the
     /// URL names a port that is not the scheme's.
     pub host_header: String,
+    /// The person's proxy for it ([`routed`]); none from [`base`].
+    pub via: Option<Proxy>,
 }
 
 /// `BASE_URL` for `host` as `_apply_remote_host` sets it, read as curl
@@ -67,7 +76,40 @@ pub fn base(host: &str) -> Option<Base> {
         host: name.to_string(),
         port: port_n,
         host_header,
+        via: None,
     })
+}
+
+/// [`base`], with the person's proxy for it, read from the process
+/// environment as curl reads it ([`proxy::decide`]). `None`: the shell's
+/// (a URL [`base`] doesn't read, or a proxy setting the binary doesn't).
+pub fn routed(host: &str) -> Option<Base> {
+    routed_with(host, proxy::from_process_env)
+}
+
+/// [`routed`] with the variables from `env` (the tests' tables).
+pub fn routed_with(host: &str, env: impl Fn(&str) -> Lookup) -> Option<Base> {
+    let mut b = base(host)?;
+    match proxy::decide(&b.host, b.tls, env) {
+        Route::Direct => {}
+        Route::Via(p) => b.via = Some(p),
+        Route::Shell => return None,
+    }
+    Some(b)
+}
+
+/// K2's shared transport rule: a request with a token to a host that is
+/// not this computer goes over https only, proxied or not (the rule `k2
+/// remote logout` has). The line, exit 2, for a plain `http://` `url`
+/// whose host is not loopback ([`proxy::loopback`], the shell's
+/// `_k2_direct_url`); checked before any request.
+pub fn plain_http_refusal(b: &Base, url: &str) -> Option<String> {
+    (!b.tls && !proxy::loopback(&b.host)).then(|| plain_http_line(url))
+}
+
+/// The plain-http refusal's line ([`plain_http_refusal`]).
+pub fn plain_http_line(url: &str) -> String {
+    format!("Error: plain http:// only to this computer; use https:// (got: {url})")
 }
 
 /// `_apply_remote_host`'s swap, once the token is known.
@@ -75,6 +117,7 @@ pub fn apply(client: &mut Client, base: &Base, token: String) {
     client.host = base.host.clone();
     client.port = base.port;
     client.tls = base.tls;
+    client.via = base.via.clone();
     client.host_header = Some(base.host_header.clone());
     client.auth = Auth::Owner(token);
     client.owner_from_disk = false;

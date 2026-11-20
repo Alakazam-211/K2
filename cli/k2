@@ -1645,6 +1645,8 @@ if [ "${1:-}" = "publish" ]; then
             esac
             ;;
     esac
+    # -h or --help anywhere only prints help (the router answers it).
+    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
 # Headless Connect account commands: login talks to Supabase first
 # (no daemon needed for the account step); status/logout can run from

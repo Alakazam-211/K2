@@ -18,6 +18,10 @@
 # are a usage error (exit 2, "Error: unknown flag '-x'" on stderr) and
 # send nothing. point and target refuse a dash word in either place.
 #
+# Help needs no daemon connection: with no port, token or socket the
+# help forms still print the usage with exit 0; `claim acme` is still
+# stopped by the connection gate.
+#
 # `--`: the router has no end-of-options rule for publish; -h after `--`
 # is still help, like anywhere else on the line. claim refuses `--` itself
 # as an unknown flag (as before), and create skips it as it skips any
@@ -209,6 +213,43 @@ page publish/subdomain/list.txt publish subdomain list -h
 page publish/status.txt publish status acme -h
 page publish/secret.txt publish secret add svc NAME -h
 page vault/service.txt publish env svc -h
+
+echo "== help needs no daemon connection =="
+# No port, no token, no socket, an empty HOME: the connection gate must
+# let a help form through, and still stop a form that acts.
+NOHOME="$WORK/nohome"; mkdir -p "$NOHOME"
+run_nodaemon() {
+    set +e
+    OUT="$(env -u K2_PORT -u K2_HOOK_TOKEN -u K2SO_PORT -u K2SO_HOOK_TOKEN -u K2_HOOK_SOCK \
+        -u K2SO_HOOK_SOCK -u K2_HOST -u K5_PORT -u K5_HOOK_TOKEN -u K5_HOOK_SOCK -u K5_HOST \
+        HOME="$NOHOME" "$K2" "$@" </dev/null 2>"$WORK/err")"
+    RC=$?
+    set -e
+    ERR="$(cat "$WORK/err")"
+}
+nodaemon() {
+    local label="k2 $* (no daemon)"
+    : >"$REQ_LOG"
+    run_nodaemon "$@"
+    [ "$RC" -eq 0 ] && ok "$label: exit 0" || bad "$label: exit $RC (want 0)"
+    [ "$ERR" = "$REF" ] && ok "$label: prints the publish usage" \
+        || { bad "$label: stderr is not the publish usage"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2; }
+    [ -z "$OUT" ] && ok "$label: nothing on stdout" \
+        || { bad "$label: stdout"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2; }
+    sent_nothing "$label"
+}
+nodaemon publish subdomain claim -h
+nodaemon publish subdomain claim acme --help
+nodaemon publish subdomain create -h --target x
+nodaemon publish subdomain rm acme -h
+nodaemon publish run web --cmd x --port 1 -h
+nodaemon publish stop web --help
+: >"$REQ_LOG"
+run_nodaemon publish subdomain claim acme
+[ "$RC" -eq 1 ] && ok "k2 publish subdomain claim acme (no daemon): exit 1" || bad "claim acme (no daemon): exit $RC (want 1)"
+[ "$(printf '%s\n' "$ERR" | head -n 1)" = "Error: Cannot connect to K2." ] && ok "k2 publish subdomain claim acme (no daemon): the gate stops it" \
+    || { bad "claim acme (no daemon): stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2; }
+sent_nothing "k2 publish subdomain claim acme (no daemon)"
 
 echo "== the plain point and rm still check their label =="
 : >"$REQ_LOG"; run publish subdomain point acme --target localhost:3000

@@ -2312,6 +2312,65 @@ fn the_hostmail_lists_lines_are_the_shell_s() {
 }
 
 
+/// The lines of `_mail_py` admin raises at.
+#[test]
+fn the_hostmail_admin_lines_are_the_shell_s() {
+    use crate::families::hostmail::admin::line;
+    let s = mail_py_script();
+    let pins: &[(u32, &str)] = &[
+        (line::CREATE_CALL, "d = call(\"POST\", \"/cli/mail/address/create\","),
+        (line::CREATE_CAP, "print(\"%s %s   (%s)\" % (word, d.get(\"address"),
+        (line::CREATE_EP_HOST, "host = ep.get(\"host\") or \"?\""),
+        (line::CREATE_EP_IMAP, "_ep(\"imap    \", \"imap\", 443)"),
+        (line::CREATE_EP_SUBMIT, "_ep(\"submit  \", \"submission\", 465)"),
+        (line::CREATE_EP_JMAP, "_ep(\"jmap    \", \"jmap\", 443)"),
+        (line::DELETE_CALL, "d = call(\"POST\", \"/cli/mail/address/delete\","),
+        (line::STATUS_REQUEST, "d = request(\"GET\", \"/cli/mail/status\", param"),
+        (line::STATUS_ERROR, "if d.get(\"error\"):"),
+        (line::STATUS_NAME0, "host = cert.get(\"host\") or (names[0] if name"),
+        (line::STATUS_ORDER_JOIN, "line += \" (orders: %s%s)\" % (\", \".join(order"),
+        (line::STATUS_ORDER_LEN, "\" only\" if len(order) == 1 else \"\")"),
+        (line::STATUS_PORTS, "ports = [p for p in (cert.get(\"ports\") or []"),
+        (line::STATUS_PORT_STATES, "if len({p.get(\"state\") for p in ports}) > 1:"),
+        (line::STATUS_NAMES_LEN, "if len(names) > 1 or (names and host and nam"),
+        (line::STATUS_SERVES, "print(\"           serves: %s\" % \", \".join(na"),
+        (line::STATUS_OWNER, "print(\"owner    : %s — %s\" % (cert[\"owner\"],"),
+        (line::STATUS_PENDING, "% (ob[\"pendingReload\"].get(\"error\") or \"?\"))"),
+        (line::STATUS_HERE, "here = [e for e in extra_names if e.get(\"poi"),
+        (line::STATUS_BAD, "if (e.get(\"cert\") or {}).get(\"state\") != \"is"),
+        (line::STATUS_BAD_JOIN, "(\"; no own cert: \" + \", \".join(bad)) if bad "),
+        (line::DOMAIN_ADD_CALL, "d = call(\"POST\", \"/cli/mail/domain/add\", bod"),
+        (line::DOMAIN_ADD_PRINT, "print_domain(d)"),
+        (line::DOMAIN_CMDS_FOR, "for c in cmds:"),
+        (line::DOMAIN_CMD, "print(\"  \" + c)"),
+        (line::DOMAIN_LIST_CALL, "d = call(\"GET\", \"/cli/mail/domain/list\")"),
+        (line::DOMAIN_LIST_W, "w = max(max(len(r.get(\"domain\", \"\")) for r i"),
+        (line::DOMAIN_LIST_RECS, "recs = r.get(\"records\") or {}"),
+        (line::DOMAIN_LIST_REC, "if recs.get(k):"),
+        (line::DOMAIN_LIST_NAG, "if r.get(\"dmarcNag\"):"),
+        (line::DOMAIN_LIST_ROW, "print((\"%-\" + str(w) + \"s%-11s%-14s%s\") % (r"),
+        (line::DOMAIN_SHOW_CALL, "d = call(\"GET\", \"/cli/mail/domain/show\", par"),
+        (line::DOMAIN_SHOW_PRINT, "print_domain(d)"),
+        (line::DOMAIN_CHECK_CALL, "d = call(\"POST\", \"/cli/mail/domain/check\", b"),
+        (line::DOMAIN_CHECK_PRINT, "print_domain(d)"),
+        (line::DOMAIN_REMOVE_REQUEST, "d = request(\"POST\", \"/cli/mail/domain/remove"),
+        (line::DOMAIN_REMOVE_ERROR, "err = d.get(\"error\")"),
+        (line::DOMAIN_REMOVE_HINT, "err = dict(err, hint=str(err.get(\"hint\", \"\")"),
+        (line::DOCTOR_CALL, "d = call(\"POST\", \"/cli/mail/doctor\", body=bo"),
+        (line::CONFIG_GET_CALL, "d = call(\"GET\", \"/cli/mail/config\")"),
+        (line::FWD_CAP_CALL, "d = call(\"POST\", \"/cli/mail/config/forward-n"),
+        (line::FWD_COPIES_CALL, "d = call(\"POST\", \"/cli/mail/config/forward-c"),
+        (line::CONFIG_SET_INT, "body[key] = int(v) if key in (\"relayPort\", \""),
+        (line::CONFIG_SET_GB, "body[\"quotaBytes\"] = int(env(\"M_QUOTA_GB\")) "),
+        (line::CONFIG_SET_CALL, "d = call(\"POST\", \"/cli/mail/config/set\", bod"),
+    ];
+    for (n, text) in pins {
+        let got = s[*n as usize - 1].trim();
+        assert!(got.starts_with(text), "line {n}: {got:?} is not {text:?}");
+    }
+}
+
+
 #[test]
 fn the_boot_script_runs_the_mail_script_at_its_line_13() {
     let path =
@@ -2604,6 +2663,13 @@ mod hostmail_words {
             ("acl", &["grant"]),
             ("autoconfig", &["show"]),
             ("audit-sieve", &["x"]),
+            ("status", &["x"]),
+            ("domain", &["x"]),
+            ("domain", &["list", "a"]),
+            ("create", &["a", "-x"]),
+            ("delete", &[]),
+            ("doctor", &["-x"]),
+            ("config", &["x"]),
         ] {
             let h = match parse(verb, words) {
                 Plan::Usage(h) => h,
@@ -2628,6 +2694,9 @@ mod hostmail_words {
             Plan::Shell
         );
         assert_eq!(parse("footer", &["set", "--text", "-"]), Plan::Shell);
-        assert_eq!(parse("status", &[]), Plan::Shell);
+        assert_eq!(
+            parse("config", &["--relay-port", "99999999999999999999"]),
+            Plan::Shell
+        );
     }
 }

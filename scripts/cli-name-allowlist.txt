@@ -773,3 +773,5 @@
 1 value src/renderer/lib/agent-type.ts keeper: stored; the stored agent mode (ruling 5)
 1 value src/renderer/lib/garden-data/garden-data-types.ts keeper: wire; madeBy, from the Garden data JSON
 1 value crates/k5-cli/src/families/hostmail/cert.rs keeper: wire; the cert owner and the outbound setBy the daemon's mail routes send (/cli/mail/cert/owner, /cli/mail/outbound)
+1 value crates/k5-cli/src/families/hostmail/admin.rs keeper: wire; the cert owner the daemon's /cli/mail/status answer sends
+1 glued crates/k5-cli/src/families/hostmail/admin.rs keeper: a person reading hostmail status; the shell's own prose (no K2-planted certificate), not a token

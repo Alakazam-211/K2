@@ -222,12 +222,7 @@ fn text(s: &str) -> Value {
 }
 
 fn object(pairs: Vec<(&str, Value)>) -> Value {
-    Value::Object(
-        pairs
-            .into_iter()
-            .map(|(k, v)| (Text::from(k), v))
-            .collect(),
-    )
+    Value::Object(pairs.into_iter().map(|(k, v)| (Text::from(k), v)).collect())
 }
 
 /// `datetime.now(timezone.utc).isoformat(timespec="microseconds")`.
@@ -240,8 +235,8 @@ pub fn now() -> String {
 
 /// Seconds and microseconds since 1970 as Python's UTC `isoformat`.
 pub fn iso_utc(secs: i64, micros: u32) -> String {
-    let civil = super::super::remote_session::civil(secs)
-        .unwrap_or_else(|| "1970-01-01 00:00:00Z".into());
+    let civil =
+        super::super::remote_session::civil(secs).unwrap_or_else(|| "1970-01-01 00:00:00Z".into());
     format!(
         "{}.{micros:06}+00:00",
         civil.trim_end_matches('Z').replacen(' ', "T", 1)
@@ -251,7 +246,10 @@ pub fn iso_utc(secs: i64, micros: u32) -> String {
 /// `_k2_db_uri`: the database as a `file:` URI that never creates it.
 pub fn db_uri(path: &Path) -> String {
     let p = path.to_string_lossy();
-    let p = p.replace('%', "%25").replace('?', "%3f").replace('#', "%23");
+    let p = p
+        .replace('%', "%25")
+        .replace('?', "%3f")
+        .replace('#', "%23");
     format!("file:{p}?mode=rw")
 }
 
@@ -288,9 +286,13 @@ pub fn home_db(home: &Path, sqlite3: Option<&Path>) -> PathBuf {
     let new = home.join("k2.db");
     let old = home.join("k2so.db");
     if real_file(&new) && real_file(&old) {
-        const LIVE: &str = "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast');";
+        const LIVE: &str =
+            "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast');";
         let (cn, co) = match sqlite3 {
-            Some(bin) => (count(&sqlite(bin, &new, LIVE)), count(&sqlite(bin, &old, LIVE))),
+            Some(bin) => (
+                count(&sqlite(bin, &new, LIVE)),
+                count(&sqlite(bin, &old, LIVE)),
+            ),
             None => (0, 0),
         };
         if co > cn {
@@ -364,7 +366,9 @@ pub fn send(client: &mut Client, home: &Path, s: &Signal) -> Exit {
                 Err(e) => out::after_stdout_error(&e),
             }
         }
-        Err(e @ (Error::NoAnswer(_) | Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. })) => {
+        Err(
+            e @ (Error::NoAnswer(_) | Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. }),
+        ) => {
             out::stderr_line(&e.to_string());
             Exit::Error
         }

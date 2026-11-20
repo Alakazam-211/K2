@@ -301,10 +301,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let mut base = None;
     if let Parsed::Ask(a) = &parsed {
         let (bare, host) = read::split_remote(&a.target);
-        if a.text.starts_with('-')
-            || bare.contains('@')
-            || !read::sendable_lines(&a.lines)
-        {
+        if a.text.starts_with('-') || bare.contains('@') || !read::sendable_lines(&a.lines) {
             return None;
         }
         if !host.is_empty() {

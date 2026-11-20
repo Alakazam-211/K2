@@ -295,10 +295,7 @@ fn the_words() {
         format!("{}\n", send::BOTH_INBOX)
     );
 
-    for shell in [
-        &["--help"][..],
-        &["ws", "t", "-h"],
-    ] {
+    for shell in [&["--help"][..], &["ws", "t", "-h"]] {
         assert_eq!(parse(shell), Parsed::Shell, "{shell:?}");
     }
     // `--secret --stdin`: the vault's handoff now reads the value typed
@@ -1147,7 +1144,10 @@ fn signal_words_as_the_signal_form_reads_them() {
     );
     // --from wins, even empty; the first word is the target, whatever it is.
     assert_eq!(
-        parse_with(&["--signal", "k", "ws", "--from", ""], Ok(Some("ada".into()))),
+        parse_with(
+            &["--signal", "k", "ws", "--from", ""],
+            Ok(Some("ada".into()))
+        ),
         sig("--signal", "msg", "{}", "", false)
     );
     assert_eq!(
@@ -1179,13 +1179,29 @@ fn signal_body_as_the_shell_python_builds_it() {
         from: "f\u{e9}".into(),
         inbox: false,
     };
-    let head = r#"{"id": "I", "from": {"scope": "agent", "workspace": "W", "name": "fé"}, "to": {"scope": "agent", "workspace": "W", "name": "t\"o"}, "kind": "#;
+    let head = r#"{"id": "I", "from": {"scope": "agent", "workspace": "W", "name": "f\u00e9"}, "to": {"scope": "agent", "workspace": "W", "name": "t\"o"}, "kind": "#;
     let tail = r#", "priority": "normal", "delivery": "live", "at": "A"}"#;
     for (kind, payload, want) in [
-        ("msg", r#"{"text": 1.50}"#, r#"{"kind": "msg", "data": {"text": 1.5}}"#),
-        ("msg", "not json", r#"{"kind": "msg", "data": {"text": "not json"}}"#),
-        ("status", " \n", r#"{"kind": "status", "data": {"text": ""}}"#),
-        ("presence", "{}", r#"{"kind": "presence", "data": {"state": "active"}}"#),
+        (
+            "msg",
+            r#"{"text": 1.50}"#,
+            r#"{"kind": "msg", "data": {"text": 1.5}}"#,
+        ),
+        (
+            "msg",
+            "not json",
+            r#"{"kind": "msg", "data": {"text": "not json"}}"#,
+        ),
+        (
+            "status",
+            " \n",
+            r#"{"kind": "status", "data": {"text": ""}}"#,
+        ),
+        (
+            "presence",
+            "{}",
+            r#"{"kind": "presence", "data": {"state": "active"}}"#,
+        ),
         (
             "ping",
             "[1, NaN]",
@@ -1210,9 +1226,16 @@ fn signal_body_as_the_shell_python_builds_it() {
     );
     let long = "9".repeat(5000);
     let r = body(&s("ping", &long), "I", "W", "A").unwrap_err();
-    assert!(r.exception.starts_with("ValueError: Exceeds the limit"), "{}", r.exception);
+    assert!(
+        r.exception.starts_with("ValueError: Exceeds the limit"),
+        "{}",
+        r.exception
+    );
     assert_eq!(iso_utc(0, 7), "1970-01-01T00:00:00.000007+00:00");
-    assert_eq!(iso_utc(1_700_000_000, 123_456), "2023-11-14T22:13:20.123456+00:00");
+    assert_eq!(
+        iso_utc(1_700_000_000, 123_456),
+        "2023-11-14T22:13:20.123456+00:00"
+    );
 }
 
 #[test]

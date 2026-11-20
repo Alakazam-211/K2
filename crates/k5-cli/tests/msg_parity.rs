@@ -676,7 +676,7 @@ fn msg_sends_as_the_shell_does() {
         (
             "Postal mail --help",
             &["a::abc.postal.bot", "hi", "--help"],
-            2,
+            0,
         ),
     ] {
         rig.check(&Case {

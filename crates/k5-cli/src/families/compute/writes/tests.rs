@@ -970,3 +970,73 @@ mod fetch_verb {
         std::fs::remove_dir_all(&d).unwrap();
     }
 }
+
+mod grant_verb {
+    use super::super::grant::{self, Ask};
+    use super::super::Words;
+    use crate::out::json::Value;
+
+    #[test]
+    fn the_words_and_the_body() {
+        let w = |words: &[&str], s: bool| grant::parse(words, s);
+        let Words::Ask(a) = w(
+            &[
+                "mini",
+                "--workspace",
+                "acme",
+                "--max-time",
+                "1h30m",
+                "--max-disk",
+                "60G",
+                "--ci",
+                "--no-gpu",
+            ],
+            false,
+        ) else {
+            panic!("an ask")
+        };
+        assert_eq!(
+            grant::body(&a),
+            Ok(r#"{"node": "mini", "workspace": "acme", "maxJobSecs": 5400, "maxDiskGb": 60, "allowCi": true, "allowGpu": false}"#.into())
+        );
+        assert_eq!(w(&["mini"], false), Words::Usage(grant::USAGE.into()));
+        assert!(matches!(w(&["mini"], true), Words::Ask(Ask { .. })));
+        assert_eq!(
+            w(&["mini", "--max-time"], true),
+            Words::Usage("usage: bad duration '' (use 2h, 90m, 1h30m, 300s)".into())
+        );
+        assert_eq!(w(&["mini", "--max-queued"], true), Words::ShiftFailed);
+        assert_eq!(
+            w(&["mini", "--submitter-max-running", "-1"], true),
+            Words::Usage("usage: --submitter-max-running N (0 = off)".into())
+        );
+        assert_eq!(
+            w(&["mini", "-x"], true),
+            Words::Usage("usage: unknown flag '-x'".into())
+        );
+        assert_eq!(grant::number("1.5"), Ok(Value::Float(1.5)));
+        assert_eq!(grant::number("2."), Ok(Value::Float(2.0)));
+        assert_eq!(grant::number(" 7 "), Ok(Value::Int("7".into())));
+        assert_eq!(
+            grant::number("two").unwrap_err(),
+            "ValueError: invalid literal for int() with base 10: 'two'"
+        );
+        assert_eq!(
+            grant::number("1.x").unwrap_err(),
+            "ValueError: could not convert string to float: '1.x'"
+        );
+    }
+
+    #[test]
+    fn the_lines() {
+        let s = grant::reader(br#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"submitterMaxRunning":1,"allowCi":true},"note":"n.","resent":2}"#);
+        assert_eq!(s.stdout, "granted mini to acme (max 7200s/job, 2 parallel, 1 running per submitter, 10 queued, 60 GB disk, CI allowed). n.\nre-sent 2 queued job(s) of acme on mini with the new caps (they keep their order)\n");
+        let s = grant::reader(br#"{"node":"mini"}"#);
+        assert!(
+            s.stderr
+                .ends_with("line 4, in <module>\nKeyError: 'grant'\n"),
+            "{}",
+            s.stderr
+        );
+    }
+}

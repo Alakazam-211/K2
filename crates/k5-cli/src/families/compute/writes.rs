@@ -6,6 +6,7 @@
 //!   `k5 compute cancel --all-mine|--workspace-all [...]`.
 //! - [`wait`]: `k5 compute wait <job>... [--any] [--max-wait D] [--quiet]
 //!   [--json]`.
+//! - [`grant`]: `k5 compute grant <node> --workspace WS [...]`.
 //! - [`fetch`]: `k5 compute fetch <job> [NAME...] [--out DIR] [--json]
 //!   [--over-relay] [--attempt N]`.
 //!
@@ -49,6 +50,7 @@ use std::time::Duration;
 
 pub mod cancel;
 pub mod fetch;
+pub mod grant;
 pub mod wait;
 
 #[cfg(test)]
@@ -65,6 +67,7 @@ enum Ready {
     Cancel(cancel::Ask),
     Wait(wait::Ask),
     Fetch(fetch::Ask),
+    Grant(grant::Ask),
 }
 
 impl<T> Words<T> {
@@ -97,6 +100,8 @@ enum Form {
     Cancel(Words<cancel::Ask>),
     Wait(Words<wait::Ask>),
     Fetch(Words<fetch::Ask>),
+    /// Read once the settings say whether this is a session.
+    Grant(Vec<String>),
 }
 
 /// `k5 compute <verb> ...`: `args` is the whole command line after
@@ -133,6 +138,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             }
             Form::Fetch(f)
         }
+        Some(&"grant") => Form::Grant(words[1..].iter().map(|w| w.to_string()).collect()),
         _ => return None,
     };
     let max_time = post_max_time(std::env::var_os("K2_CP_MAX_TIME"))?;
@@ -184,6 +190,12 @@ fn run_with(
         Form::Cancel(w) => w.ready().map(Ready::Cancel),
         Form::Wait(w) => w.ready().map(Ready::Wait),
         Form::Fetch(w) => w.ready().map(Ready::Fetch),
+        Form::Grant(w) => {
+            let w: Vec<&str> = w.iter().map(String::as_str).collect();
+            grant::parse(&w, in_session(&settings.auth))
+                .ready()
+                .map(Ready::Grant)
+        }
     };
     let ask = match verb {
         Ok(a) => a,
@@ -209,6 +221,7 @@ fn run_with(
         Ready::Cancel(a) => cancel::send(&mut cp, a),
         Ready::Wait(a) => wait::send(&mut cp, a),
         Ready::Fetch(a) => fetch::send(&mut cp, a),
+        Ready::Grant(a) => grant::send(&mut cp, a),
     };
     let closing = std::mem::take(&mut cp.closing);
     closing.flush(&mut client, exit);

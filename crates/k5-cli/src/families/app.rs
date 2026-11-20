@@ -17,6 +17,10 @@
 //!   `--client` without `--since`).
 //! - [`phone`]: the reads of `app links`, `app pairing`, `app push` and
 //!   `app email`, each family's page and its unknown verb's usage line.
+//! - [`catalog`]: `app catalog [list]`, `app catalog show` and `app
+//!   catalog job|jobs`.
+//! - [`walls`]: `app egress [show]|log`, `app box-service <app>` and `app
+//!   db status`.
 //!
 //! What runs, in the shell's order:
 //!
@@ -51,12 +55,14 @@ use std::path::Path;
 
 pub mod access;
 pub mod call;
+pub mod catalog;
 pub mod door;
 pub mod history;
 pub mod phone;
 pub mod py;
 pub mod reads;
 pub mod updates;
+pub mod walls;
 pub mod wallet;
 
 use call::Ctx;
@@ -76,6 +82,8 @@ pub enum Ask {
     Updates(updates::Ask),
     History(history::Ask),
     Phone(phone::Ask),
+    Catalog(catalog::Ask),
+    Walls(walls::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -131,6 +139,12 @@ pub const TAKES: &[&str] = &[
     "pairing",
     "push",
     "email",
+    "catalog",
+    "egress",
+    "box-service",
+    "box-services",
+    "db",
+    "database",
 ];
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -232,6 +246,22 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["email"],
         owner: crate::route::Owner::Native,
     },
+    crate::route::Verb {
+        words: &["catalog"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["egress"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["box-service", "box-services"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["db", "database"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// The words after `app`, read by the group the verb names. `None`: the
@@ -245,6 +275,8 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "deployment" => Some(reads::parse_deployment(rest)?.map(Ask::Deployment)),
         "inspect" => Some(reads::parse_inspect(rest)?.map(Ask::Inspect)),
         "updates" => Some(updates::parse(rest)?.map(Ask::Updates)),
+        "catalog" => Some(catalog::parse(rest)?.map(Ask::Catalog)),
+        v if walls::VERBS.contains(&v) => Some(walls::parse(v, rest)?.map(Ask::Walls)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
         v if history::VERBS.contains(&v) => Some(history::parse(v, rest)?.map(Ask::History)),
@@ -320,6 +352,8 @@ fn run_with(
         Ask::Updates(u) => updates::run(&mut ctx, u),
         Ask::History(h) => history::run(&mut ctx, h),
         Ask::Phone(p) => phone::run(&mut ctx, p),
+        Ask::Catalog(c) => catalog::run(&mut ctx, c),
+        Ask::Walls(w) => walls::run(&mut ctx, w),
     };
     let exit = match shown {
         Ok(s) => s.print(),

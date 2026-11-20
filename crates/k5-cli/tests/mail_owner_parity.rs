@@ -14,9 +14,9 @@
 //! - An agent refused (owner only, exit 3) and the permission card.
 //! - Help never acts: each verb that changes something with `-h` or
 //!   `--help` anywhere prints its help and sends nothing.
-//!
-//! The rig gives the CLI no stdin, so a secret piped on stdin is not
-//! driven here.
+//! - A secret piped on stdin (`link add --pass-stdin`, `oauth-config set
+//!   --secret-stdin`): the same request with the secret in its body, and
+//!   the secret on no child's argv or environment, on either side.
 
 #![cfg(unix)]
 
@@ -24,6 +24,7 @@ mod common;
 
 use common::parity::*;
 use common::stub::Reply;
+use std::os::unix::fs::PermissionsExt;
 
 const VERB: &str = "mail";
 
@@ -699,5 +700,159 @@ fn help_never_acts() {
                 0,
             ),
         ));
+    }
+}
+
+/// The secret the piped cases send: it must reach the daemon in the
+/// request's body, and no child's argv or environment.
+const SECRET: &str = "CHILDTEST_PASSWORD_7Kq";
+
+fn piped(input: &'static [u8], c: Case) -> Case {
+    Case {
+        stdin: Some(input),
+        ..c
+    }
+}
+
+const LINK_ADD: &[&str] = &[
+    "link",
+    "add",
+    "me@globex.example",
+    "--host",
+    "imap.globex.example",
+    "--workspace",
+    "alpha",
+    "--pass-stdin",
+];
+
+const OAUTH_SET: &[&str] = &[
+    "oauth-config",
+    "set",
+    "--provider",
+    "gmail",
+    "--client-id",
+    "g-1",
+    "--secret-stdin",
+];
+
+const LINKED_ONE: &str = r#"{"ok":true,"address":"me@globex.example"}"#;
+
+/// The cases with a secret on stdin: one line, a line with no newline at
+/// its end, two lines (only the first is read), and an empty first line.
+fn piped_cases() -> Vec<Case> {
+    vec![
+        piped(
+            b"CHILDTEST_PASSWORD_7Kq\n",
+            ok_case("link add, the password piped", LINK_ADD, LINKED_ONE),
+        ),
+        piped(
+            b"CHILDTEST_PASSWORD_7Kq",
+            ok_case("link add, no newline at the end", LINK_ADD, LINKED_ONE),
+        ),
+        piped(
+            b"CHILDTEST_PASSWORD_7Kq\nsecond line\n",
+            ok_case("link add, two lines", LINK_ADD, LINKED_ONE),
+        ),
+        piped(
+            b"\nCHILDTEST_PASSWORD_7Kq\n",
+            usage_case("link add, an empty first line", LINK_ADD),
+        ),
+        piped(
+            b"CHILDTEST_PASSWORD_7Kq\n",
+            ok_case("oauth-config set, the secret piped", OAUTH_SET, OAUTH_CONFIG),
+        ),
+        piped(
+            b"CHILDTEST_PASSWORD_7Kq",
+            ok_case(
+                "oauth-config set, no newline at the end",
+                OAUTH_SET,
+                OAUTH_CONFIG,
+            ),
+        ),
+        piped(
+            b"\n",
+            usage_case("oauth-config set, an empty line", OAUTH_SET),
+        ),
+    ]
+}
+
+#[test]
+fn a_piped_secret_is_read_as_the_shell_reads_it() {
+    let rig = Rig::new(VERB, "piped");
+    for c in &piped_cases() {
+        rig.check(c);
+    }
+}
+
+/// A folder of `python3` and `curl` that log their argv and environment
+/// to `log`, then run the real program.
+fn logging_programs(rig: &Rig, log: &std::path::Path) -> std::path::PathBuf {
+    let dir = rig.dir.join("logging-bin");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = std::env::var_os("PATH").expect("a PATH to run the tests with");
+    for prog in ["python3", "curl"] {
+        let real = std::env::split_paths(&path)
+            .map(|d| d.join(prog))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("no {prog} on PATH"));
+        let script = format!(
+            "#!/bin/sh\n{{ printf '== {prog}'; for a in \"$@\"; do printf ' [%s]' \"$a\"; done; printf '\\n'; env; }} >> '{log}'\nexec '{real}' \"$@\"\n",
+            log = log.display(),
+            real = real.display(),
+        );
+        let file = dir.join(prog);
+        std::fs::write(&file, script).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    dir
+}
+
+/// Each side's run of a piped case with `python3` and `curl` logging
+/// what they were started with: the secret reaches the daemon in the
+/// request and no child's argv or environment. The shell starts its
+/// Python (so the logging is seen to work); the binary starts nothing.
+#[test]
+fn a_piped_secret_is_on_no_child_s_argv_or_environment() {
+    let mut rig = Rig::new(VERB, "children");
+    let log = rig.dir.join("children.log");
+    rig.path_first = Some(logging_programs(&rig, &log));
+    rig.tool_log = Some(log);
+    for c in piped_cases().iter().filter(|c| c.code == 0) {
+        rig.prepare(Side::Bash, c);
+        let out = rig.run(true, c);
+        assert_eq!(out.code, Some(0), "{}: the shell: {out:?}", c.name);
+        let sent = rig.read(Side::Bash, false, c.name);
+        let children = rig.take_tool_log();
+        assert!(
+            children.contains("== python3 "),
+            "{}: the shell's Python was not logged:\n{children}",
+            c.name
+        );
+        assert!(
+            !children.contains(SECRET),
+            "{}: the secret is on a child of the shell:\n{children}",
+            c.name
+        );
+        assert_eq!(sent.len(), 1, "{}: the shell's requests", c.name);
+        assert!(
+            String::from_utf8_lossy(&sent[0].bytes).contains(SECRET),
+            "{}: the shell did not send the secret",
+            c.name
+        );
+
+        let (out, sent) = rig.binary(c, false);
+        let children = rig.take_tool_log();
+        assert_eq!(out.code, Some(0), "{}: the binary: {out:?}", c.name);
+        assert_eq!(
+            children, "",
+            "{}: the binary started a program",
+            c.name
+        );
+        assert_eq!(sent.len(), 1, "{}: the binary's requests", c.name);
+        assert!(
+            sent[0].contains(SECRET),
+            "{}: the binary did not send the secret",
+            c.name
+        );
     }
 }

@@ -752,7 +752,6 @@
 1 value crates/k2-root-helper/src/pg_major.rs keeper: wire; the source the daemon reads in the helper's answer
 1 value crates/k2-root-helper/src/sew.rs keeper: wire; Sew's --from flag
 1 value crates/k2-root-helper/src/sew_teardown.rs keeper: wire; the teardown answer the daemon reads
-1 value crates/k2-root-proto/src/paths.rs debt: command (1 line); B3
 1 value crates/k2-root-proto/src/podman.rs keeper: stored; the root helper's /opt/k2 folder for the Podman bundle
 1 value crates/k2-root-proto/src/sew.rs keeper: wire; Sew's identity provider
 1 value crates/k2-signer/src/forge.rs keeper: outside; k2sign's project id for this repo's releases

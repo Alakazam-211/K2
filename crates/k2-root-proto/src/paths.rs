@@ -49,12 +49,15 @@ pub const SUDO_EXES: &[&str] = &[
     "/usr/lib/cargo/bin/sudo",
 ];
 
-/// The `k2` CLI on PATH (`provision-k2-server.sh`'s install). `helper
-/// cli-refresh` replaces it when it is a root-owned K2 CLI older than the
-/// helper's own copy; the daemon refreshes a copy it owns itself.
-pub const CLI_PATH: &str = "/usr/local/bin/k2";
+/// The command on PATH (`provision-k2-server.sh`'s install),
+/// `/usr/local/bin/<name>` with the name from the brand file (`k2-brand`).
+/// `helper cli-refresh` replaces it when it is a root-owned K2 CLI older
+/// than the helper's own copy; the daemon refreshes a copy it owns itself.
+/// Only this one name: the helper never refreshes an alias, or a file of
+/// another brand's name.
+pub const CLI_PATH: &str = k2_brand::SYSTEM_CLI_PATH;
 pub const CLI_DIR: &str = "/usr/local/bin";
-pub const CLI_FILE: &str = "k2";
+pub const CLI_FILE: &str = k2_brand::CLI_NAME;
 
 // ── Programs the helper spawns (absolute, env cleared) ──────────────────
 
@@ -162,3 +165,26 @@ pub const PG_RAM_TEMPLATE_DROPIN_PATH: &str =
 pub const PG_ETC: &str = "/etc/postgresql";
 pub const PG_CONFD_FILE: &str = "99-k2-ram.conf";
 pub const PG_OS_USER: &str = "postgres";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The helper's one CLI path is its folder and its file, the file
+    /// named by the brand file.
+    #[test]
+    fn the_cli_path_is_its_folder_and_its_file() {
+        assert_eq!(CLI_PATH, format!("{CLI_DIR}/{CLI_FILE}"));
+        assert_eq!(CLI_FILE, k2_brand::CLI_NAME);
+    }
+
+    /// With the default brand, today's paths, as literals: the helper
+    /// refreshes exactly this file. (This crate's tests run under the
+    /// default brand only.)
+    #[test]
+    fn the_default_cli_paths_are_todays() {
+        assert_eq!(CLI_PATH, "/usr/local/bin/k2");
+        assert_eq!(CLI_DIR, "/usr/local/bin");
+        assert_eq!(CLI_FILE, "k2");
+    }
+}

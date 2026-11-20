@@ -29,6 +29,9 @@ sew-test-pins-upgrade = ["sew-test-pins"]
 sew-test-pin-next = ["sew-test-pins"]
 
 [dependencies]
+# The command's name and its system path (paths::CLI_PATH, CLI_FILE). A
+# leaf crate: no dependencies at run time.
+k2-brand = { path = "../k2-brand" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Verify-only, pure Rust, no transitive deps beyond its own ed25519/blake2b.

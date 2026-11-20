@@ -31,6 +31,7 @@ fn main() {
     assert!(ok, "k2-daemon version must be plain x.y.z, got {version}");
     println!("cargo:rustc-env=K2_PRODUCT_VERSION={version}");
 
+    // The repo's script file, not the command's name: a brand build of the bash CLI is a later step (C7).
     let cli_path = "../../cli/k2";
     println!("cargo:rerun-if-changed={cli_path}");
     let cli = fs::read(cli_path).expect("read cli/k2");

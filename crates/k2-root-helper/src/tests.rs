@@ -1986,6 +1986,25 @@ fn cli_refresh_never_writes_through_a_hard_link() {
     assert_eq!(std::fs::read_to_string(t.p("/etc/other-k2")).unwrap(), STALE_CLI, "the other link keeps its bytes");
 }
 
+/// The helper refreshes the brand's one name (`CLI_PATH`) and no other
+/// file in `/usr/local/bin`: a stale CLI under an alias's name (`k2so`) or
+/// another brand's (`k5`, `xy`) keeps its bytes.
+#[test]
+fn cli_refresh_writes_only_its_own_name() {
+    let t = stale_box();
+    let others: Vec<PathBuf> = ["k2so", "k5", "xy"].iter().map(|n| t.p(&format!("{CLI_DIR}/{n}"))).collect();
+    for p in &others {
+        std::fs::write(p, STALE_CLI).unwrap();
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let v = cli_json(&t.call(&["helper", "cli-refresh"]));
+    assert_eq!(v["result"], "updated", "{v}");
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::CLI_CONTENT);
+    for p in &others {
+        assert_eq!(std::fs::read_to_string(p).unwrap(), STALE_CLI, "{} is not the helper's", p.display());
+    }
+}
+
 #[test]
 fn cli_refresh_with_a_planted_temp_name() {
     let tmp = format!("/usr/local/bin/.k2.k2tmp.{}", std::process::id());

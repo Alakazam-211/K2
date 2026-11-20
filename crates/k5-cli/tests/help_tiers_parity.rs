@@ -65,12 +65,23 @@ fn rows(f: &Form) -> Vec<Case> {
         row("an owner's terminal: the page", owner_and_port, 0),
         with(
             with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
-            row("an agent on its cell socket: the page, nothing sent", nothing, 0),
+            row(
+                "an agent on its cell socket: the page, nothing sent",
+                nothing,
+                0,
+            ),
         ),
-        with(with_passport(&[]), row("an agent over TCP: the page", nothing, 0)),
+        with(
+            with_passport(&[]),
+            row("an agent over TCP: the page", nothing, 0),
+        ),
         with(
             vec![("K2_HOOK_SOCK", "{nosock}".to_string())],
-            row("HOOK_SOCK set and no passport: an open tool", owner_and_port, 0),
+            row(
+                "HOOK_SOCK set and no passport: an open tool",
+                owner_and_port,
+                0,
+            ),
         ),
         with(
             with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),

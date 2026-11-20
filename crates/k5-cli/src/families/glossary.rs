@@ -318,6 +318,9 @@ mod tests {
             title(),
             format!("{product} glossary \u{2014} definitions of {product}-specific terms")
         );
-        assert_eq!(RUN_LINE, format!("Run `{cli} glossary <term>` for a full definition."));
+        assert_eq!(
+            RUN_LINE,
+            format!("Run `{cli} glossary <term>` for a full definition.")
+        );
     }
 }

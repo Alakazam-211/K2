@@ -53,7 +53,15 @@ fn the_answer() {
         // covers: capabilities
         case("the rows", &[], &[], vec![ok(CAPS)], owner_and_port, 0, 1),
         // covers: capabilities --json
-        case("--json", &["--json"], &[], vec![ok(CAPS)], owner_and_port, 0, 1),
+        case(
+            "--json",
+            &["--json"],
+            &[],
+            vec![ok(CAPS)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "--node, escaped",
             &["--node", "n 1&é", "--json"],
@@ -169,7 +177,15 @@ fn the_words() {
             2,
             0,
         ),
-        case("--help: the page", &["--help"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "--help: the page",
+            &["--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         case("-h: the page", &["-h"], &[], vec![], nothing, 0, 0),
         shell(case(
             "a help flag after a word",
@@ -311,7 +327,15 @@ fn refusals_and_no_answer() {
             3,
             0,
         ),
-        case("a reset", &[], &[], vec![Reply::Reset], owner_and_port, 3, 1),
+        case(
+            "a reset",
+            &[],
+            &[],
+            vec![Reply::Reset],
+            owner_and_port,
+            3,
+            1,
+        ),
         case(
             "a closed connection",
             &[],
@@ -345,15 +369,7 @@ fn the_session_and_the_gates() {
         ),
         with(
             with_passport(&[]),
-            case(
-                "an agent over TCP",
-                &[],
-                &[],
-                vec![ok(CAPS)],
-                nothing,
-                0,
-                1,
-            ),
+            case("an agent over TCP", &[], &[], vec![ok(CAPS)], nothing, 0, 1),
         ),
         with(
             vec![("K2_HOOK_SOCK", "{nosock}".to_string())],

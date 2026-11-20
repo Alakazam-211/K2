@@ -94,7 +94,10 @@ fn the_registry_is_cli_k2_s() {
     let script = std::fs::read_to_string(cli_k2()).expect("read cli/k2");
     let start = script.find(OPEN).expect("cli/k2 defines _k2_refusals_json") + OPEN.len();
     let end = script[start..].find("\nEOF\n").expect("the heredoc's end");
-    assert_eq!(k5_cli::families::explain::registry(), &script[start..start + end]);
+    assert_eq!(
+        k5_cli::families::explain::registry(),
+        &script[start..start + end]
+    );
     assert!(rows().len() > 100);
 }
 

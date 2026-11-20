@@ -72,7 +72,10 @@ const EXPLAIN: &str = concat!(" (", cli_name!(), " explain ");
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
-    Run { json: bool, node: String },
+    Run {
+        json: bool,
+        node: String,
+    },
     /// The usage line, exit 2.
     Usage,
 }
@@ -246,7 +249,11 @@ fn in_row(from: u32, e: Raise) -> Raise {
 
 /// `row(r)`, lines 5 to 10.
 fn row(o: &mut Out, r: &Value) -> Result<(), Raise> {
-    let mark = if truthy(&dget(r, "ok", 5)?) { "ok" } else { "no" };
+    let mark = if truthy(&dget(r, "ok", 5)?) {
+        "ok"
+    } else {
+        "no"
+    };
     let cap = dget_or(r, "cap", text(""), 6)?;
     let detail = or(dget(r, "detail", 6)?, text(""));
     o.line(&format!("  {mark}  {} {}", left(&cap, 22), s(&detail)));
@@ -312,7 +319,10 @@ mod tests {
             format!("{BOX_SETUP}not ready \u{2014} failing: a, b\n"),
         ]
         .concat();
-        assert_eq!((out.as_str(), err.as_str(), exit), (want.as_str(), "", Exit::Ok));
+        assert_eq!(
+            (out.as_str(), err.as_str(), exit),
+            (want.as_str(), "", Exit::Ok)
+        );
     }
 
     #[test]
@@ -339,11 +349,17 @@ mod tests {
     #[test]
     fn the_lines_name_the_brand() {
         let cli = k2_client::brand::CLI_NAME;
-        assert_eq!(USAGE, format!("usage: {cli} capabilities [--json] [--node <name>]"));
+        assert_eq!(
+            USAGE,
+            format!("usage: {cli} capabilities [--json] [--node <name>]")
+        );
         let (out, _, _) = shown(r#"{"box":[{"missing":{"code":"c"}}],"doctor":{"ready":1}}"#);
         assert!(out.contains(&format!("({cli} explain c)")), "{out}");
         assert!(out.contains(&format!("({cli} study compute)")), "{out}");
-        assert!(out.contains(&format!("Box setup ({cli} app doctor): ready")), "{out}");
+        assert!(
+            out.contains(&format!("Box setup ({cli} app doctor): ready")),
+            "{out}"
+        );
         if cli != "k2" {
             assert!(!out.contains("k2") && !USAGE.contains("k2"), "{out}");
         }

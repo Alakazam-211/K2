@@ -28,8 +28,10 @@ fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 
-# The two helpers, as cli/k2 defines them.
+# The two helpers, as cli/k2 defines them (and the literal loopback check
+# _k2_direct_url uses).
 eval "$(sed -n '/^_k2_direct_url() {/,/^}/p' "$CLI_BASH_SOURCE")"
+eval "$(sed -n '/^_k2_url_is_literal_loopback() {/,/^}/p' "$CLI_BASH_SOURCE")"
 eval "$(sed -n '/^_K2_PY_PROXY_RULE=/,/^export _K2_PY_PROXY_RULE/p' "$CLI_BASH_SOURCE")"
 declare -F _k2_direct_url >/dev/null || { echo "FAIL: _k2_direct_url not found in cli/k2" >&2; exit 1; }
 [ -n "${_K2_PY_PROXY_RULE:-}" ] || { echo "FAIL: _K2_PY_PROXY_RULE not found in cli/k2" >&2; exit 1; }

@@ -31,7 +31,8 @@
 # 3. Local traffic never goes through a proxy: a control-plane call the CLI
 #    makes itself (no daemon) to loopback gets --noproxy '*' like a daemon
 #    call, with every proxy variable set. https to a remote control plane
-#    keeps the person's proxy (the stub proxy gets its CONNECT).
+#    keeps the person's proxy (the stub proxy gets its CONNECT), and so
+#    does https to a name that only starts with 127 (127.evil.example).
 #
 # A stub daemon (loopback TCP), a stub control plane and a stub proxy each
 # log what reaches them. A second port is bound and closed: "no daemon"
@@ -300,6 +301,10 @@ reached "control plane on localhost, proxy set: the call went straight there" "^
 no_proxy_hit "control plane on localhost"
 run nodaemon proxy "https://k2-remote.example.test" publish subdomain list --json
 reached "control plane on remote https: the person's proxy got the CONNECT" "^proxy CONNECT k2-remote.example.test:443 "
+# A name that starts with 127 is a name, not loopback: https to it keeps
+# the person's proxy.
+run nodaemon proxy "https://127.evil.example" publish subdomain list --json
+reached "control plane on https://127.evil.example: the person's proxy got the CONNECT" "^proxy CONNECT 127.evil.example:443 "
 
 echo "== 4. K2_HOST on another computer over plain http: one warning per run =="
 mkdir -p "$WORK/bin"

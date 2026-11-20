@@ -1012,7 +1012,9 @@ def k5_request(req):
 #
 # _k2_direct_url URL: true when a request to URL must skip every proxy
 # setting. Only https:// to a host that is not loopback may use one; a
-# call with no URL found skips the proxy too.
+# call with no URL found skips the proxy too. A 127 address counts only
+# as four numbers (_k2_url_is_literal_loopback), so 127.example.com is a
+# name and may use the proxy, as the Python and Rust rules say.
 _k2_direct_url() {
     local h
     case "$1" in
@@ -1026,9 +1028,9 @@ _k2_direct_url() {
     h="${h%%:*}"; h="${h%.}"
     h="$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')"
     case "$h" in
-        localhost|*.localhost|127.*) return 0 ;;
+        localhost|*.localhost) return 0 ;;
     esac
-    return 1
+    _k2_url_is_literal_loopback "https://$h"
 }
 # _k2_url_is_literal_loopback URL: true when URL's host, AS WRITTEN, is
 # this computer: an IPv4 address in 127.0.0.0/8 written as four numbers,

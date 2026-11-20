@@ -1009,6 +1009,14 @@ cmd_msg_signal_form() {
 
 # Wrapper that splits `k2 msg <ws> ...` into live / tray / --signal forms.
 cmd_msg_v2() {
+    # -h/--help anywhere prints the msg help and sends nothing, for every
+    # form (0.46.17: `k2 msg <ws> --signal <kind> --help` sent the signal;
+    # the signal form and cmd_signal skip words they don't know). The live
+    # form already printed this same help.
+    if _wants_help "$@"; then
+        cmd_help_msg
+        return 0
+    fi
     # A Postal address (the first word that isn't a flag): Postal mail.
     local first i=0
     for first in "$@"; do

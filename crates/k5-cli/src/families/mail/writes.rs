@@ -17,7 +17,8 @@
 //! Where this differs from the shell: the body rides `M_BODY` in the
 //! environment of the shell's `python3`, so a body over 128 KiB (Linux's
 //! limit for one string there) stops the shell with `Argument list too
-//! long` (exit 126) before anything is sent. The binary sends it.
+//! long` (exit 126) before anything is sent. The binary sends it: the
+//! named difference `mail-body-large`.
 
 use super::core::{self, run_env, usage, At, Env, Plan, Py, Secs, Within, MODULE, R};
 use super::py::{self as p, attr_get};

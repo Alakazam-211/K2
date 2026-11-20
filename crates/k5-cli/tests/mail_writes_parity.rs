@@ -18,7 +18,8 @@
 //!   help and sends nothing.
 //! - A body above 128 KiB: the shell hands `M_BODY` to its Python in the
 //!   environment, which Linux refuses for one string past 128 KiB (exit
-//!   126, nothing sent); the binary sends it ([`a_large_body`]).
+//!   126, nothing sent); the binary sends it ([`a_large_body`]): the named
+//!   difference `mail-body-large`.
 
 #![cfg(unix)]
 
@@ -492,8 +493,8 @@ fn help_never_acts() {
 /// environment string, which Linux refuses past 128 KiB: `python3` never
 /// starts (exit 126, `Argument list too long`) and nothing is sent. The
 /// binary sends it once and prints the answer. Elsewhere (macOS: one
-/// limit for the whole environment) both send it. A named difference, for
-/// K2's sign-off.
+/// limit for the whole environment) both send it. The named difference
+/// `mail-body-large`, for K2's sign-off.
 #[test]
 fn a_large_body() {
     let rig = Rig::new(VERB, "large");

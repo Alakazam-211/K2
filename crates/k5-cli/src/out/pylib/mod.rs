@@ -9,6 +9,8 @@
 //!   the exception Python raises where the value is not what it expects.
 //!
 //! - [`difflib`]: `difflib.unified_diff` with its `SequenceMatcher`.
+//! - [`mimetypes`]: `mimetypes.guess_type`, the built-in map and the
+//!   system's `mime.types` files.
 //! - [`path`]: `posixpath`'s `normpath`, `realpath`, `relpath` and the
 //!   rest, on text.
 //! - [`time`]: `time.strftime(fmt, time.localtime(secs))`.
@@ -18,6 +20,7 @@
 
 pub mod difflib;
 pub mod json;
+pub mod mimetypes;
 pub mod ops;
 pub mod path;
 pub mod time;

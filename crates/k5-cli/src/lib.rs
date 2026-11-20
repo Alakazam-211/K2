@@ -42,6 +42,8 @@
 //! - [`prelude`]: what the shell CLI does around such a verb: its first
 //!   line, its two gates, an `id` tool's passport checks and its EXIT
 //!   trap's lines.
+//! - [`prompt`]: questions to a person and secrets from stdin, no-echo
+//!   reads included, as the shell's `read -r`, `read -rs` and `$(cat)`.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 //! - [`passport`]: the passport rule the front applies before a verb
@@ -86,6 +88,7 @@ pub mod pages;
 pub mod passport;
 pub mod port;
 pub mod prelude;
+pub mod prompt;
 pub mod python;
 pub mod retired;
 pub mod route;

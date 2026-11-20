@@ -1,10 +1,9 @@
 //! `k5 daemon status [--json]`, as the shell CLI's `cmd_daemon_status`
 //! answers it (`cli/src/daemon.sh`): what this machine's daemon service
 //! is doing. `k5 daemon` alone ends with 1 and prints nothing, as the
-//! shell's router does (its `shift 2` fails under `set -e`). Every other verb (`start`, `stop`,
-//! `restart`, `survive`, `log`, `install`, `uninstall`, and `daemon
-//! --json`'s usage) stays the shell's: they start, stop or install the
-//! real service.
+//! shell's router does (its `shift 2` fails under `set -e`). `start`,
+//! `stop`, `restart`, `survive`, `log`, `uninstall` and the usage for any
+//! other word are [`life`]'s. `install` stays the shell's.
 //!
 //! What runs, in the shell's order: the settings, the two gates, the
 //! `daemon-admin` tool (an `id` tool: a session with no passport is
@@ -19,7 +18,11 @@
 //!
 //! The shell answers these itself ([`run`] returns `None`): `-h` or
 //! `--help` anywhere, a word that is not UTF-8, `HOOK_SOCK` set with a
-//! `CODEX_` variable exported, and a `python3` the binary can't tell.
+//! `CODEX_` variable exported, a `python3` the binary can't tell, what
+//! [`life::parse`] hands on, and, for [`life`]'s verbs, a port that is
+//! set but is no port curl takes.
+
+pub mod life;
 
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
@@ -38,16 +41,20 @@ use std::process::{Command, Stdio};
 
 /// The router arm's words.
 pub const WORDS: &[&str] = &["daemon"];
-/// The shell's but for [`VERBS`].
-pub const OWNER: Owner = Owner::Bash;
-/// The bare line (`daemon`: the status) and `status`.
-pub const VERBS: &[Verb] = &[
-    Verb::bare(Owner::Native),
-    Verb {
-        words: &["status"],
-        owner: Owner::Native,
-    },
-];
+/// Every form comes here; [`run`] hands `install` to the shell.
+pub const OWNER: Owner = Owner::Native;
+/// No verb rows: every form is [`OWNER`]'s.
+pub const VERBS: &[Verb] = &[];
+
+/// What the words ask for.
+enum Ask {
+    /// The noun alone.
+    Bare,
+    /// `status`, and whether `--json` follows it.
+    Status(bool),
+    /// A verb of [`life`]'s.
+    Life(life::Life),
+}
 
 /// `daemon`'s tool in the shell's policy.
 pub const TOOL: &str = "daemon-admin";
@@ -67,11 +74,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
-    // `daemon --json` is the router's usage: the shell's.
-    let json = match words.as_slice() {
-        [] => false,
-        ["status", rest @ ..] => rest.first() == Some(&"--json"),
-        _ => return None,
+    let ask = match words.as_slice() {
+        [] => Ask::Bare,
+        ["status", rest @ ..] => Ask::Status(rest.first() == Some(&"--json")),
+        [verb, rest @ ..] => Ask::Life(life::parse(verb, rest)?),
     };
     if !python::family_native(python::here()) {
         return None;
@@ -83,6 +89,15 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
+    // `$BASE_URL` with a port curl wouldn't take: the shell's.
+    let port = settings
+        .port_text
+        .as_deref()
+        .and_then(crate::families::curl_port);
+    let odd_port = settings.port_text.as_deref().is_some_and(|t| !t.is_empty()) && port.is_none();
+    if matches!(ask, Ask::Life(_)) && odd_port {
+        return None;
+    }
     if let Some(gate) = prelude::gate(&settings) {
         return Some(gate.stop());
     }
@@ -90,12 +105,16 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL) {
         return Some(stop);
     }
-    if words.is_empty() {
+    match ask {
         // The router's `shift 2` with the noun alone fails under `set -e`
         // (a bash bug, copied): exit 1, nothing printed.
-        return Some(Exit::Error);
+        Ask::Bare => Some(Exit::Error),
+        Ask::Status(json) => Some(status(&settings, json, would_refuse).print()),
+        Ask::Life(v) => {
+            let mut client = settings.client_on(port?, would_refuse);
+            Some(life::run(&settings, &mut client, v))
+        }
     }
-    Some(status(&settings, json, would_refuse).print())
 }
 
 /// What a program printed on stdout, its trailing newlines gone, and

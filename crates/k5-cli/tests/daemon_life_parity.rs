@@ -1,0 +1,1318 @@
+//! `k5-cli daemon start|stop|restart|survive|log|uninstall` and the
+//! daemon row's usage against the shell CLI's `cli/k2 daemon …`, on the
+//! parity rig ([`common::parity`]).
+//!
+//! No row can touch a real service. Every side runs with `PATH` set to
+//! exactly two folders: first the stand-ins (`systemctl`, `launchctl`,
+//! `loginctl`, `journalctl`, `sudo`, `curl`, `minisign`, `sc`,
+//! `schtasks`, and `uname`, which says which OS the row is on), then a
+//! folder of links to a short list of ordinary tools (bash, python3,
+//! coreutils), none of them a service manager, `sudo` or a download tool
+//! ([`assert_only_stand_ins`] checks it on every run). The stand-ins log
+//! what they were run with; each row names the service calls it must
+//! make, and the binary must make the same ones (the shell's `curl`
+//! calls to the stub daemon go through the `curl` stand-in to the real
+//! curl; the binary never runs curl). No token is ever in a stand-in's
+//! arguments. A test also proves no absolute path to a service manager,
+//! `sudo` or a download tool is in the shell's daemon verbs or the
+//! binary's.
+//!
+//! Each side starts from the same files (the row's setup) and must print
+//! the same, exit the same, send the same requests, run the same service
+//! calls and leave the same files (the stop and keep intents, the port
+//! and token files, the plist).
+
+#![cfg(unix)]
+
+mod common;
+
+use common::parity::*;
+use common::stub::Reply;
+use std::path::{Path, PathBuf};
+
+const VERB: &str = "daemon";
+/// The owner token in `daemon.token`.
+const DAEMON_TOKEN: &str = "daemon-tok-5151";
+/// A remote server's token, read from stdin.
+const REMOTE_TOKEN: &str = "remote-tok-6161";
+
+/// The stand-ins' names.
+const STAND_INS: &[&str] = &[
+    "systemctl",
+    "launchctl",
+    "loginctl",
+    "journalctl",
+    "sudo",
+    "curl",
+    "minisign",
+    "sc",
+    "schtasks",
+];
+
+/// Programs no folder but the stand-ins' may hold.
+const NEVER_REAL: &[&str] = &[
+    "systemctl",
+    "launchctl",
+    "loginctl",
+    "journalctl",
+    "sudo",
+    "doas",
+    "pkexec",
+    "su",
+    "service",
+    "initctl",
+    "curl",
+    "wget",
+    "minisign",
+    "sc",
+    "schtasks",
+    "uname",
+    "git",
+];
+
+/// The ordinary tools the two CLIs may run, linked from this process's
+/// `PATH` when there.
+const TOOLS: &[&str] = &[
+    "bash", "sh", "env", "python3", "awk", "sed", "grep", "tr", "cat", "head", "tail", "cut",
+    "sort", "uniq", "wc", "date", "mkdir", "chmod", "mv", "rm", "cp", "ln", "id", "ps", "readlink",
+    "realpath", "dirname", "basename", "mktemp", "sleep", "stat", "touch", "od", "base64",
+    "sha256sum", "shasum", "kill", "find", "ls", "tee", "printf", "hostname", "whoami", "expr",
+    "test", "true", "false", "tty", "stty", "getconf", "seq", "cmp", "diff", "timeout",
+];
+
+fn svc(r: &Rig) -> PathBuf {
+    r.dir.join("svc")
+}
+
+fn exe(p: &Path, text: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(p, text).unwrap();
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Where `name` is on this process's `PATH`.
+fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(name))
+        .find(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file()))
+}
+
+/// The stand-ins, and the two tool folders (with and without `python3`).
+fn folders(r: &Rig) {
+    let d = svc(r);
+    std::fs::create_dir_all(&d).unwrap();
+    let log = r.dir.join("tools.log");
+    let logline = |name: &str| {
+        format!(
+            "{{ printf '%s' '{name}'; for a in \"$@\"; do printf ' %s' \"$a\"; done; printf '\\n'; }} >> '{}'\n",
+            log.display()
+        )
+    };
+    let dir = d.display();
+    let systemctl = format!(
+        r#"#!/bin/sh
+{}scope=system
+if [ "$1" = --user ]; then scope=user; shift; fi
+[ -f '{dir}/systemd' ] || exit 1
+read s u st pid slice cg < '{dir}/systemd'
+[ "$s" = "$scope" ] || exit 1
+case "$1" in
+  cat) [ "$2" = "$u" ] || exit 1; echo "ExecStart=/opt/k2/k2-daemon" ;;
+  is-active) echo "$st"; [ "$st" = active ] ;;
+  show)
+    case "$3" in
+      MainPID) echo "$pid" ;;
+      Slice) echo "$slice" ;;
+      ControlGroup) echo "$cg" ;;
+      *) exit 1 ;;
+    esac ;;
+  stop|restart|start)
+    [ "$2" = "$u" ] || exit 1
+    echo "stand-in systemctl: $1 $2"
+    if [ -f '{dir}/systemd-fail' ]; then echo "Failed to $1 $2: Access denied" >&2; exit 1; fi ;;
+  *) exit 1 ;;
+esac
+"#,
+        logline("systemctl")
+    );
+    exe(&d.join("systemctl"), &systemctl);
+    let launchctl = format!(
+        r#"#!/bin/sh
+{}f='{dir}/launchctl-'"$1"
+if [ -f "$f" ]; then cat "$f" >&2; fi
+if [ -f "$f.rc" ]; then read rc < "$f.rc"; exit "$rc"; fi
+exit 0
+"#,
+        logline("launchctl")
+    );
+    exe(&d.join("launchctl"), &launchctl);
+    for name in ["loginctl", "journalctl", "sudo", "minisign", "sc", "schtasks"] {
+        exe(
+            &d.join(name),
+            &format!(
+                "#!/bin/sh\n{}echo \"stand-in {name}: never run\" >&2\nexit 1\n",
+                logline(name)
+            ),
+        );
+    }
+    let curl = which("curl").expect("a curl for the shell's calls to the stub daemon");
+    exe(
+        &d.join("curl"),
+        &format!(
+            "#!/bin/sh\n{}exec '{}' \"$@\"\n",
+            logline("curl"),
+            curl.display()
+        ),
+    );
+    exe(
+        &d.join("uname"),
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n  -m) echo x86_64 ;;\n  *) if [ -f '{dir}/uname-s' ]; then cat '{dir}/uname-s'; else echo Linux; fi ;;\nesac\n"
+        ),
+    );
+    for (sub, python) in [("sys", true), ("sys-nopy", false)] {
+        let t = r.dir.join(sub);
+        std::fs::create_dir_all(&t).unwrap();
+        for name in TOOLS {
+            if *name == "python3" && !python {
+                continue;
+            }
+            if let Some(p) = which(name) {
+                std::os::unix::fs::symlink(&p, t.join(name)).unwrap();
+            }
+        }
+        for must in ["bash", "cat", "tail", "id"] {
+            assert!(t.join(must).exists(), "no {must} for the rows");
+        }
+    }
+}
+
+/// `PATH` for a side: the stand-ins, then the tools.
+fn path_for(r: &Rig, python: bool) -> String {
+    let tools = r.dir.join(if python { "sys" } else { "sys-nopy" });
+    format!("{}:{}", svc(r).display(), tools.display())
+}
+
+/// `path` is the stand-ins and one folder of tools, and only the
+/// stand-ins' folder holds a service manager, `sudo` or a download tool.
+fn assert_only_stand_ins(r: &Rig, path: &str) {
+    let dirs: Vec<PathBuf> = std::env::split_paths(path).collect();
+    assert_eq!(dirs.len(), 2, "PATH is the stand-ins and the tools: {path}");
+    assert_eq!(dirs[0], svc(r), "the stand-ins come first: {path}");
+    for name in STAND_INS {
+        assert!(dirs[0].join(name).is_file(), "no stand-in {name}");
+    }
+    for name in NEVER_REAL {
+        assert!(
+            std::fs::symlink_metadata(dirs[1].join(name)).is_err(),
+            "{name} is reachable outside the stand-ins: {}",
+            dirs[1].display()
+        );
+    }
+}
+
+fn rig(tag: &str) -> Rig {
+    let mut rig = Rig::new(VERB, tag);
+    folders(&rig);
+    rig.tool_log = Some(rig.dir.join("tools.log"));
+    rig
+}
+
+fn plist(r: &Rig) -> PathBuf {
+    r.home.join("Library/LaunchAgents/dev.k2.daemon.plist")
+}
+
+/// Every row's files start here: the owner and port the gate wants, the
+/// daemon's own token, and no unit, plist or OS word from a row before.
+fn base(r: &Rig) {
+    owner_and_port(r);
+    let d = svc(r);
+    for f in [
+        "systemd",
+        "systemd-fail",
+        "uname-s",
+        "launchctl-load",
+        "launchctl-load.rc",
+        "launchctl-unload",
+        "launchctl-kickstart",
+    ] {
+        let _ = std::fs::remove_file(d.join(f));
+    }
+    let _ = std::fs::remove_dir_all(r.home.join("Library"));
+    for f in ["daemon.port", "daemon.stdout.log"] {
+        let _ = std::fs::remove_file(r.k2home.join(f));
+    }
+    std::fs::write(r.k2home.join("daemon.token"), format!("{DAEMON_TOKEN}\n")).unwrap();
+}
+
+fn put(r: &Rig, name: &str, text: &str) {
+    std::fs::write(svc(r).join(name), text).unwrap();
+}
+
+fn user_unit(r: &Rig) {
+    base(r);
+    put(
+        r,
+        "systemd",
+        "user k2-daemon.service active 4242 user.slice /user.slice/k2-daemon.service\n",
+    );
+}
+
+fn system_unit_failing(r: &Rig) {
+    base(r);
+    put(
+        r,
+        "systemd",
+        "system k2-daemon.service active 4242 system.slice /system.slice/k2-daemon.service\n",
+    );
+    put(r, "systemd-fail", "");
+}
+
+fn slice_moved(r: &Rig) {
+    base(r);
+    put(
+        r,
+        "systemd",
+        "system k2-daemon.service active 4242 k2cores.slice /system.slice/k2-daemon.service\n",
+    );
+}
+
+fn no_daemon_token(r: &Rig) {
+    base(r);
+    let _ = std::fs::remove_file(r.k2home.join("daemon.token"));
+}
+
+fn with_log(r: &Rig) {
+    base(r);
+    std::fs::write(r.k2home.join("daemon.stdout.log"), "one\ntwo\nthree\nfour\n").unwrap();
+}
+
+fn mac(r: &Rig) {
+    base(r);
+    put(r, "uname-s", "Darwin\n");
+}
+
+fn mac_plist(r: &Rig) {
+    mac(r);
+    let p = plist(r);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "<plist/>\n").unwrap();
+}
+
+fn mac_loaded(r: &Rig) {
+    mac_plist(r);
+    let menubar = r.home.join("Library/LaunchAgents/dev.k2.menubar.plist");
+    std::fs::write(menubar, "<plist/>\n").unwrap();
+    put(
+        r,
+        "launchctl-load",
+        "/x/dev.k2.daemon.plist: service already loaded\n",
+    );
+}
+
+fn mac_load_fails(r: &Rig) {
+    mac_plist(r);
+    put(r, "launchctl-load", "Load failed: 5: Input/output error\n");
+    put(r, "launchctl-load.rc", "5\n");
+}
+
+fn mac_not_loaded(r: &Rig) {
+    mac_plist(r);
+    put(
+        r,
+        "launchctl-unload",
+        "Could not find specified service\n",
+    );
+    put(
+        r,
+        "launchctl-kickstart",
+        "Could not find service \"dev.k2.daemon\" in domain\n",
+    );
+}
+
+fn mac_old_label(r: &Rig) {
+    mac(r);
+    let old = r.home.join("Library/LaunchAgents/com.k2so.k2so-daemon.plist");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(old, "<plist/>\n").unwrap();
+}
+
+fn other_os(r: &Rig) {
+    base(r);
+    put(r, "uname-s", "FreeBSD\n");
+}
+
+/// The files a verb may leave or take away.
+fn files_after(r: &Rig) -> Vec<(&'static str, bool)> {
+    vec![
+        ("stop-intent", r.k2home.join("run/stop-intent.json").is_file()),
+        ("keep-intent", r.k2home.join("run/keep-intent.json").is_file()),
+        ("daemon.token", r.k2home.join("daemon.token").exists()),
+        ("daemon.port", r.k2home.join("daemon.port").exists()),
+        ("plist", plist(r).exists()),
+    ]
+}
+
+/// The service calls a side made: its stand-ins' log without the shell's
+/// `curl` calls (the binary never runs curl). No token is in it.
+fn service_calls(r: &Rig, name: &str, native: bool) -> Vec<String> {
+    let log = r.take_tool_log();
+    for t in [OWNER, DAEMON_TOKEN, REMOTE_TOKEN] {
+        assert!(!log.contains(t), "{name}: a token in a stand-in's arguments:\n{log}");
+    }
+    let lines: Vec<String> = log.lines().map(str::to_string).collect();
+    if native {
+        assert!(
+            lines.iter().all(|l| !l.starts_with("curl")),
+            "{name}: the binary ran curl:\n{log}"
+        );
+    }
+    lines.into_iter().filter(|l| !l.starts_with("curl")).collect()
+}
+
+fn uid() -> String {
+    let o = std::process::Command::new("id").arg("-u").output().unwrap();
+    String::from_utf8(o.stdout).unwrap().trim().to_string()
+}
+
+/// `want` with `{home}` and `{uid}` filled in.
+fn calls(r: &Rig, want: &[&str]) -> Vec<String> {
+    want.iter()
+        .map(|w| {
+            w.replace("{home}", &r.home.to_string_lossy())
+                .replace("{uid}", &uid())
+        })
+        .collect()
+}
+
+/// A side of `c` with `PATH` set to the stand-ins and the tools.
+fn side_case(r: &Rig, c: &Case, python: bool) -> Case {
+    let path = path_for(r, python);
+    assert_only_stand_ins(r, &path);
+    let mut env = c.env.clone();
+    env.push(("PATH", path));
+    Case {
+        name: c.name,
+        args: c.args,
+        env,
+        replies: c.replies.clone(),
+        setup: c.setup,
+        cwd: c.cwd.clone(),
+        no_tmpdir: c.no_tmpdir,
+        code: c.code,
+        requests: c.requests,
+        compare: c.compare,
+        no_python3: c.no_python3,
+        stdin: c.stdin,
+        deadline: c.deadline,
+        bash32_empty_array: c.bash32_empty_array,
+    }
+}
+
+type Seen = (
+    Option<i32>,
+    String,
+    String,
+    Vec<String>,
+    Vec<String>,
+    Vec<(&'static str, bool)>,
+);
+
+/// Runs `c` on the shell, the binary, and (`native`) the binary with no
+/// `python3`, each on its own stub, and compares them. `want` is the
+/// service calls the row must make. `native`: the binary answers the
+/// line itself (else it hands it to the shell).
+fn check(r: &Rig, c: &Case, want: &[&str], native: bool) {
+    let mask = |side: Side, t: &str| t.replace(&r.stub_of(side).port.to_string(), "{port}");
+    let bash_case = side_case(r, c, true);
+    r.prepare(Side::Bash, &bash_case);
+    let out = r.run(true, &bash_case);
+    let log: Vec<String> = r
+        .read(Side::Bash, false, c.name)
+        .iter()
+        .map(|l| mask(Side::Bash, &normalise(l, false, VERB, c.name)))
+        .collect();
+    let bash: Seen = (
+        out.code,
+        mask(Side::Bash, &out.stdout),
+        mask(Side::Bash, &out.stderr),
+        log,
+        service_calls(r, c.name, false),
+        files_after(r),
+    );
+    println!("-- bash: {bash:?}");
+    assert_eq!(bash.0, Some(c.code), "{}: bash's exit", c.name);
+    assert_eq!(bash.3.len(), c.requests, "{}: bash's requests", c.name);
+    assert_eq!(bash.4, calls(r, want), "{}: bash's service calls", c.name);
+    let sides: &[(Side, bool)] = if native {
+        &[(Side::Rust, true), (Side::NoPython3, false)]
+    } else {
+        &[(Side::Rust, true)]
+    };
+    for (side, python) in sides {
+        let run = side_case(r, c, *python);
+        let (out, log) = r.binary(&run, !*python);
+        let handed = k5_cli::fallthrough::cache_dir(&r.k2home).exists();
+        assert_eq!(handed, !native, "{}: {side:?} handed it to the shell", c.name);
+        let got: Seen = (
+            out.code,
+            mask(*side, &out.stdout),
+            mask(*side, &out.stderr),
+            log.iter().map(|l| mask(*side, l)).collect(),
+            service_calls(r, c.name, native),
+            files_after(r),
+        );
+        assert_eq!(got, bash, "{}: {side:?} against bash", c.name);
+    }
+}
+
+fn with_stdin(c: Case, input: &'static [u8]) -> Case {
+    Case {
+        stdin: Some(input),
+        ..c
+    }
+}
+
+const CAT_USER: &str = "systemctl --user cat k2-daemon.service";
+const CAT_USER_OLD: &str = "systemctl --user cat k2so-daemon.service";
+const CAT_SYSTEM: &str = "systemctl cat k2-daemon.service";
+const CAT_SYSTEM_OLD: &str = "systemctl cat k2so-daemon.service";
+const NO_UNIT: &[&str] = &[CAT_USER, CAT_USER_OLD, CAT_SYSTEM, CAT_SYSTEM_OLD];
+
+#[test]
+fn daemon_stop_on_linux_answers_as_the_shell_does() {
+    let r = rig("stop");
+    let user = |verb: &'static str| -> Vec<&'static str> {
+        vec![
+            CAT_USER,
+            "systemctl --user show -p Slice --value k2-daemon.service",
+            "systemctl --user show -p ControlGroup --value k2-daemon.service",
+            verb,
+        ]
+    };
+    let system = |verb: &'static str| -> Vec<&'static str> {
+        vec![
+            CAT_USER,
+            CAT_USER_OLD,
+            CAT_SYSTEM,
+            "systemctl show -p Slice --value k2-daemon.service",
+            "systemctl show -p ControlGroup --value k2-daemon.service",
+            verb,
+        ]
+    };
+    let rows: Vec<(Case, Vec<&str>)> = vec![
+        (
+            // native: daemon stop
+            case("stop: a user unit", &["stop"], &[], vec![], user_unit, 0, 0),
+            user("systemctl --user stop k2-daemon.service"),
+        ),
+        (
+            case(
+                "stop: a system unit that needs root",
+                &["stop"],
+                &[],
+                vec![],
+                system_unit_failing,
+                1,
+                0,
+            ),
+            system("systemctl stop k2-daemon.service"),
+        ),
+        (
+            case(
+                "stop: the unit's slice moved",
+                &["stop"],
+                &[],
+                vec![],
+                slice_moved,
+                0,
+                0,
+            ),
+            system("systemctl stop k2-daemon.service"),
+        ),
+        (
+            case(
+                "stop: no unit, the daemon stops",
+                &["stop"],
+                &[],
+                vec![ok(r#"{"stopping":true}"#)],
+                base,
+                0,
+                1,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            case(
+                "stop: no unit, the daemon says something else",
+                &["stop"],
+                &[],
+                vec![ok(r#"{"stopping":false}"#)],
+                base,
+                0,
+                1,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            case(
+                "stop: no unit, no answer",
+                &["stop"],
+                &[],
+                vec![Reply::Close],
+                base,
+                0,
+                1,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            case(
+                "stop: no unit, no daemon.token: nothing sent",
+                &["stop"],
+                &[],
+                vec![],
+                no_daemon_token,
+                0,
+                0,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            // native: daemon stop --keep-agents
+            case(
+                "stop --keep-agents: a user unit",
+                &["stop", "--keep-agents"],
+                &[],
+                vec![],
+                user_unit,
+                0,
+                0,
+            ),
+            user("systemctl --user stop k2-daemon.service"),
+        ),
+        (
+            case(
+                "stop --keep-agents: a system unit that needs root",
+                &["stop", "--keep-agents"],
+                &[],
+                vec![],
+                system_unit_failing,
+                1,
+                0,
+            ),
+            system("systemctl stop k2-daemon.service"),
+        ),
+        (
+            case(
+                "stop --keep-agents: the slice moved",
+                &["stop", "--keep-agents"],
+                &[],
+                vec![],
+                slice_moved,
+                2,
+                0,
+            ),
+            vec![
+                CAT_USER,
+                CAT_USER_OLD,
+                CAT_SYSTEM,
+                "systemctl show -p Slice --value k2-daemon.service",
+                "systemctl show -p ControlGroup --value k2-daemon.service",
+            ],
+        ),
+        (
+            case(
+                "stop --keep-agents: no unit",
+                &["stop", "--keep-agents"],
+                &[],
+                vec![],
+                base,
+                2,
+                0,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            case(
+                "stop with a word it doesn't take",
+                &["stop", "--now"],
+                &[],
+                vec![],
+                user_unit,
+                2,
+                0,
+            ),
+            vec![],
+        ),
+    ];
+    for (c, want) in rows {
+        check(&r, &c, &want, true);
+    }
+}
+
+#[test]
+fn daemon_restart_answers_as_the_shell_does() {
+    let r = rig("restart");
+    let user_restart = vec![CAT_USER, "systemctl --user restart k2-daemon.service"];
+    let ready = |v: &str| ok(&format!(r#"{{"phase":"ready","version":"{v}"}}"#));
+    let rows: Vec<(Case, Vec<&str>)> = vec![
+        (
+            // native: daemon restart
+            case("restart: a user unit", &["restart"], &[], vec![], user_unit, 0, 0),
+            user_restart.clone(),
+        ),
+        (
+            // native: daemon restart --wait
+            case(
+                "restart --wait: back up",
+                &["restart", "--wait"],
+                &[],
+                vec![ready("9.9.9")],
+                user_unit,
+                0,
+                1,
+            ),
+            user_restart.clone(),
+        ),
+        (
+            case(
+                "restart: a system unit that needs root",
+                &["restart"],
+                &[],
+                vec![],
+                system_unit_failing,
+                1,
+                0,
+            ),
+            vec![
+                CAT_USER,
+                CAT_USER_OLD,
+                CAT_SYSTEM,
+                "systemctl restart k2-daemon.service",
+            ],
+        ),
+        (
+            case(
+                "restart: no unit, the daemon restarts",
+                &["restart"],
+                &[],
+                vec![ok(r#"{"restarting":true}"#)],
+                base,
+                0,
+                1,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            case(
+                "restart: no unit, no answer",
+                &["restart"],
+                &[],
+                vec![Reply::Close],
+                base,
+                1,
+                1,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            // native: daemon restart --sessions
+            case(
+                "restart --sessions",
+                &["restart", "--sessions"],
+                &[],
+                vec![ok(r#"{"restarting":true,"endAgents":true}"#)],
+                user_unit,
+                0,
+                1,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "restart --sessions --wait: no version",
+                &["restart", "--wait", "--sessions"],
+                &[],
+                vec![ok(r#"{"restarting":true}"#), ok(r#"{"phase": "ready"}"#)],
+                user_unit,
+                0,
+                2,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "restart --sessions: refused",
+                &["restart", "--sessions"],
+                &[],
+                vec![Reply::Answer(403, r#"{"error":"owner_only"}"#.into())],
+                user_unit,
+                1,
+                1,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "restart with a word it doesn't take",
+                &["restart", "--wait", "--bogus"],
+                &[],
+                vec![],
+                user_unit,
+                2,
+                0,
+            ),
+            vec![],
+        ),
+    ];
+    for (c, want) in rows {
+        check(&r, &c, &want, true);
+    }
+}
+
+#[test]
+fn daemon_restart_host_answers_as_the_shell_does() {
+    let r = rig("host");
+    const HOST: &str = "http://127.0.0.1:{port}";
+    let rows: Vec<Case> = vec![
+        // native: daemon restart --host
+        // native: daemon restart --host --token-stdin
+        with_stdin(
+            case(
+                "restart --host --token-stdin",
+                &["restart", "--host", HOST, "--token-stdin"],
+                &[],
+                vec![ok(r#"{"restarting":true}"#)],
+                base,
+                0,
+                1,
+            ),
+            b"remote-tok-6161\n",
+        ),
+        case(
+            "restart --host=…/ --sessions --wait: daemon.token's token",
+            &["restart", "--host=http://127.0.0.1:{port}/", "--sessions", "--wait"],
+            &[],
+            vec![
+                ok(r#"{"restarting":true}"#),
+                ok(r#"{"phase":"ready","version":"0.46.17"}"#),
+            ],
+            base,
+            0,
+            2,
+        ),
+        case(
+            "restart --host: rejected",
+            &["restart", "--host", HOST],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":"forbidden"}"#.into())],
+            base,
+            1,
+            1,
+        ),
+        case(
+            "restart --host: an answer it doesn't know",
+            &["restart", "--host", HOST],
+            &[],
+            vec![ok("fine")],
+            base,
+            1,
+            1,
+        ),
+        case(
+            "restart --host: no answer",
+            &["restart", "--host", HOST],
+            &[],
+            vec![Reply::Close],
+            base,
+            1,
+            1,
+        ),
+        case(
+            "restart --host: no token anywhere",
+            &["restart", "--host", HOST],
+            &[],
+            vec![],
+            no_daemon_token,
+            1,
+            0,
+        ),
+        with_stdin(
+            case(
+                "restart --host --token-stdin --token: both",
+                &["restart", "--host", HOST, "--token-stdin", "--token", "x"],
+                &[],
+                vec![],
+                base,
+                2,
+                0,
+            ),
+            b"remote-tok-6161\n",
+        ),
+        case(
+            "restart --host --token-stdin: nothing on stdin",
+            &["restart", "--host", HOST, "--token-stdin"],
+            &[],
+            vec![],
+            base,
+            2,
+            0,
+        ),
+    ];
+    for c in rows {
+        check(&r, &c, &[], true);
+    }
+}
+
+#[test]
+fn daemon_survive_answers_as_the_shell_does() {
+    let r = rig("survive");
+    let rows: Vec<Case> = vec![
+        // native: daemon survive on
+        case(
+            "survive on",
+            &["survive", "on"],
+            &[],
+            vec![ok(r#"{"terminal":{"ptyd":"on"}}"#)],
+            base,
+            0,
+            1,
+        ),
+        // native: daemon survive off
+        case(
+            "survive off: the daemon kept it on",
+            &["survive", "off", "extra"],
+            &[],
+            vec![ok(r#"{"terminal":{"ptyd":"on"}}"#)],
+            base,
+            1,
+            1,
+        ),
+        case(
+            "survive off: no terminal in the answer",
+            &["survive", "off"],
+            &[],
+            vec![ok(r#"{"ok":true}"#)],
+            base,
+            0,
+            1,
+        ),
+        case(
+            "survive on: an error",
+            &["survive", "on"],
+            &[],
+            vec![Reply::Answer(403, r#"{"error":"owner_only"}"#.into())],
+            base,
+            3,
+            1,
+        ),
+        case(
+            "survive on: a list",
+            &["survive", "on"],
+            &[],
+            vec![ok("[1, 2]")],
+            base,
+            3,
+            1,
+        ),
+        case(
+            "survive on: not JSON",
+            &["survive", "on"],
+            &[],
+            vec![ok("nope")],
+            base,
+            1,
+            1,
+        ),
+        // native: daemon survive status
+        case(
+            "survive: the setting and the backend",
+            &["survive"],
+            &[],
+            vec![
+                ok(r#"{"terminal":{"ptyd":" OFF "}}"#),
+                ok(r#"{"ptyd":"on (k2-ptyd 3)","adopted":2}"#),
+            ],
+            base,
+            0,
+            2,
+        ),
+        case(
+            "survive status: unset, no backend",
+            &["survive", "status"],
+            &[],
+            vec![ok("{}"), Reply::Close],
+            base,
+            0,
+            2,
+        ),
+        case(
+            "survive status: settings not JSON",
+            &["survive", "status"],
+            &[],
+            vec![ok("nope"), ok(r#"{"ptyd":"on"}"#)],
+            base,
+            1,
+            2,
+        ),
+        // native: daemon survive help
+        case("survive help", &["survive", "help"], &[], vec![], base, 0, 0),
+        case(
+            "survive with a word it doesn't take",
+            &["survive", "maybe"],
+            &[],
+            vec![],
+            base,
+            2,
+            0,
+        ),
+    ];
+    for c in rows {
+        check(&r, &c, &[], true);
+    }
+}
+
+#[test]
+fn daemon_log_uninstall_start_and_usage_answer_as_the_shell_does() {
+    let r = rig("misc");
+    let rows: Vec<Case> = vec![
+        // native: daemon log
+        case("log: none yet", &["log"], &[], vec![], base, 0, 0),
+        case("log -n 2", &["log", "-n", "2"], &[], vec![], with_log, 0, 0),
+        // native: daemon logs
+        case(
+            "logs --tail 1 and a word it skips",
+            &["logs", "x", "--tail", "1"],
+            &[],
+            vec![],
+            with_log,
+            0,
+            0,
+        ),
+        case(
+            "log --tail with no number tail takes",
+            &["log", "--tail", "abc"],
+            &[],
+            vec![],
+            with_log,
+            1,
+            0,
+        ),
+        // native: daemon uninstall
+        case(
+            "uninstall --yes on Linux",
+            &["uninstall", "--yes"],
+            &[],
+            vec![],
+            base,
+            0,
+            0,
+        ),
+        with_stdin(
+            case("uninstall: y", &["uninstall"], &[], vec![], base, 0, 0),
+            b"  y \n",
+        ),
+        with_stdin(
+            case("uninstall: no", &["uninstall"], &[], vec![], base, 1, 0),
+            b"n\n",
+        ),
+        case(
+            "uninstall: the input ends",
+            &["uninstall", "x", "--yes"],
+            &[],
+            vec![],
+            base,
+            1,
+            0,
+        ),
+        // native: daemon start
+        case("start on Linux: no plist", &["start"], &[], vec![], base, 1, 0),
+        // native: daemon --json
+        case("the usage", &["--json"], &[], vec![], base, 1, 0),
+        case("the usage for any word", &["nosuch", "x"], &[], vec![], base, 1, 0),
+        case(
+            "other OS: stop with no plist",
+            &["stop"],
+            &[],
+            vec![],
+            other_os,
+            0,
+            0,
+        ),
+    ];
+    for c in rows {
+        check(&r, &c, &[], true);
+    }
+}
+
+#[test]
+fn daemon_verbs_on_macos_answer_as_the_shell_does() {
+    let r = rig("mac");
+    let load = "launchctl load -w {home}/Library/LaunchAgents/dev.k2.daemon.plist";
+    let unload = "launchctl unload -w {home}/Library/LaunchAgents/dev.k2.daemon.plist";
+    let kick = "launchctl kickstart -k gui/{uid}/dev.k2.daemon";
+    let rows: Vec<(Case, Vec<&str>)> = vec![
+        (
+            case("start: loaded", &["start"], &[], vec![], mac_plist, 0, 0),
+            vec![load],
+        ),
+        (
+            case(
+                "start: already loaded, and the menu bar's job",
+                &["start"],
+                &[],
+                vec![],
+                mac_loaded,
+                0,
+                0,
+            ),
+            vec![
+                load,
+                "launchctl load -w {home}/Library/LaunchAgents/dev.k2.menubar.plist",
+            ],
+        ),
+        (
+            case(
+                "start: launchctl fails",
+                &["start"],
+                &[],
+                vec![],
+                mac_load_fails,
+                0,
+                0,
+            ),
+            vec![load],
+        ),
+        (
+            case("start: no plist", &["start"], &[], vec![], mac, 1, 0),
+            vec![],
+        ),
+        (
+            case("stop", &["stop"], &[], vec![], mac_plist, 0, 0),
+            vec![unload],
+        ),
+        (
+            case("stop: not loaded", &["stop"], &[], vec![], mac_not_loaded, 0, 0),
+            vec![unload],
+        ),
+        (
+            case("stop: no plist", &["stop"], &[], vec![], mac, 0, 0),
+            vec![],
+        ),
+        (
+            case(
+                "stop --keep-agents: not Linux",
+                &["stop", "--keep-agents"],
+                &[],
+                vec![],
+                mac_plist,
+                2,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case("restart", &["restart"], &[], vec![], mac_plist, 0, 0),
+            vec![kick],
+        ),
+        (
+            case(
+                "restart: not loaded, so a start",
+                &["restart"],
+                &[],
+                vec![],
+                mac_not_loaded,
+                0,
+                0,
+            ),
+            vec![kick, load],
+        ),
+        (
+            case(
+                "restart: the old label",
+                &["restart"],
+                &[],
+                vec![],
+                mac_old_label,
+                0,
+                0,
+            ),
+            vec!["launchctl kickstart -k gui/{uid}/com.k2so.k2so-daemon"],
+        ),
+        (
+            case(
+                "uninstall --yes with a plist",
+                &["uninstall", "-y"],
+                &[],
+                vec![],
+                mac_plist,
+                0,
+                0,
+            ),
+            vec![unload],
+        ),
+    ];
+    for (c, want) in rows {
+        check(&r, &c, &want, true);
+    }
+}
+
+#[test]
+fn daemon_verbs_keep_the_gates() {
+    let r = rig("gates");
+    let rows: Vec<Case> = vec![
+        case(
+            "no daemon set up: the gate",
+            &["stop"],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
+        case(
+            "the guard",
+            &["restart"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            port_only,
+            3,
+            0,
+        ),
+        case(
+            "a session with no passport",
+            &["survive", "on"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+    ];
+    for c in rows {
+        check(&r, &c, &[], true);
+    }
+}
+
+/// Help never acts: with `-h` or `--help` on the line the front hands it
+/// to the shell, which prints its usage line and touches nothing.
+#[test]
+fn daemon_help_lines_never_act() {
+    let r = rig("help");
+    let rows: Vec<Case> = vec![
+        case("stop -h", &["stop", "-h"], &[], vec![], user_unit, 2, 0),
+        case(
+            "stop --keep-agents --help",
+            &["stop", "--keep-agents", "--help"],
+            &[],
+            vec![],
+            user_unit,
+            2,
+            0,
+        ),
+        case("restart -h", &["restart", "-h"], &[], vec![], user_unit, 2, 0),
+        case(
+            "restart --host … --help",
+            &["restart", "--host", "http://127.0.0.1:1", "--help"],
+            &[],
+            vec![],
+            user_unit,
+            2,
+            0,
+        ),
+    ];
+    for c in rows {
+        check(&r, &c, &[], false);
+    }
+}
+
+/// `install`, and a value flag as the last word, are the shell's.
+#[test]
+fn daemon_install_and_a_last_value_flag_are_the_shell_s() {
+    let r = rig("handback");
+    let rows: Vec<Case> = vec![case(
+        "install --bogus",
+        &["install", "--bogus"],
+        &[],
+        vec![],
+        base,
+        2,
+        0,
+    )];
+    for c in rows {
+        check(&r, &c, &[], false);
+    }
+    for (verb, rest) in [
+        ("install", &[][..]),
+        ("log", &["--tail"][..]),
+        ("logs", &["-n"][..]),
+        ("restart", &["--host"][..]),
+        ("restart", &["--token"][..]),
+        ("restart", &["--host", "k2.example"][..]),
+    ] {
+        assert_eq!(
+            k5_cli::families::daemon::life::parse(verb, rest),
+            None,
+            "{verb} {rest:?}"
+        );
+    }
+}
+
+/// Nothing in the shell's daemon verbs or the binary's names a service
+/// manager, `sudo` or a download tool by an absolute path: every one of
+/// them is found on `PATH`, where the rows put the stand-ins.
+#[test]
+fn no_service_manager_is_named_by_an_absolute_path() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let files = [
+        root.join("../../cli/src/daemon.sh"),
+        root.join("../../cli/src/daemon-install.sh"),
+        root.join("src/families/daemon.rs"),
+        root.join("src/families/daemon/life.rs"),
+    ];
+    for f in files {
+        let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        for name in NEVER_REAL.iter().filter(|n| **n != "git" && **n != "uname") {
+            for dir in ["/bin/", "/sbin/", "/usr/local/bin/", "/opt/homebrew/bin/"] {
+                let abs = format!("{dir}{name}");
+                for (i, line) in text.lines().enumerate() {
+                    if let Some(at) = line.find(&abs) {
+                        let after = line[at + abs.len()..].chars().next();
+                        assert!(
+                            after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                            "{}:{}: {abs}",
+                            f.display(),
+                            i + 1
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The lines name the command by the brand's name.
+#[test]
+fn daemon_life_lines_say_the_brand_s_name() {
+    let r = rig("brand");
+    let cli = k2_client::brand::CLI_NAME;
+    let rows: [(&'static [&'static str], String); 3] = [
+        (&["nosuch"], format!("Usage: {cli} daemon <status|")),
+        (
+            &["stop", "x"],
+            format!("\"hint\":\"{cli} daemon stop [--keep-agents]\""),
+        ),
+        (&["survive", "x"], format!("Usage: {cli} daemon survive")),
+    ];
+    for (args, want) in rows {
+        let c = side_case(&r, &case("brand", args, &[], vec![], base, 0, 0), true);
+        let (out, _) = r.binary(&c, false);
+        let _ = r.take_tool_log();
+        assert!(out.stderr.contains(&want), "{args:?}: {}", out.stderr);
+        if cli != "k2" {
+            assert!(!out.stderr.contains("k2 daemon"), "{args:?}: {}", out.stderr);
+        }
+    }
+}

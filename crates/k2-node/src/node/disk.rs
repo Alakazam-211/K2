@@ -35,7 +35,9 @@
 //!   thread), and sooner when free disk has dropped since by more than
 //!   the slot's room left under the budget. Each slot has a node-only
 //!   `.target-<n>.k2meta` beside it ([`SlotMeta`]): the server's slot,
-//!   the workspace and job that last used it, when, and its size.
+//!   the workspace and job that last used it, when, and its size as
+//!   measured when that job ended (after a restart it stands in for a
+//!   walk of an idle slot).
 //!   Sizes in the node's log are GiB, like the budget.
 //! - **The guard pass** ([`Node::disk_guard_pass`], every `disk_poll`):
 //!   under the floor plus [`RECLAIM_MARGIN`] it reclaims (leftover
@@ -493,17 +495,7 @@ impl Node {
         let Some(n) = l.slot else { return vec![] };
         let Some((project, _)) = slot_of_dir(&l.dir) else { return vec![] };
         let cap = warm_cap(&self.local.lock().unwrap().policy);
-        let known = self.slot_use.lock().unwrap().get(&l.dir).copied();
-        let bytes = match known {
-            Some(u) => u.bytes,
-            None if std::fs::symlink_metadata(&l.dir).is_ok_and(|m| m.is_dir()) => {
-                let d = l.dir.clone();
-                let b = tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0);
-                self.slot_use.lock().unwrap().insert(l.dir.clone(), SlotUse { bytes: b, used_at: mtime_secs(&l.dir) });
-                b
-            }
-            None => 0,
-        };
+        let bytes = self.slot_size(&l.dir).await.bytes;
         let mut lines = Vec::new();
         let mut gone = false;
         if bytes > cap {
@@ -667,13 +659,31 @@ impl Node {
     /// Measure idle slots we have no size for (made before this run).
     async fn measure_idle_slots(&self, idle: &[Idle]) {
         for s in idle {
-            if self.slot_use.lock().unwrap().contains_key(&s.dir) {
-                continue;
-            }
-            let d = s.dir.clone();
-            let bytes = tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0);
-            self.slot_use.lock().unwrap().insert(s.dir.clone(), SlotUse { bytes, used_at: mtime_secs(&s.dir) });
+            self.slot_size(&s.dir).await;
         }
+    }
+
+    /// A slot's size and last use: as this run last measured it; else as
+    /// its meta says (measured when its last job ended: no walk after a
+    /// restart); else walked now. 0 for no slot.
+    async fn slot_size(&self, dir: &Path) -> SlotUse {
+        if let Some(u) = self.slot_use.lock().unwrap().get(dir).copied() {
+            return u;
+        }
+        if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+            return SlotUse::default();
+        }
+        let meta = slot_of_dir(dir).and_then(|(project, n)| read_slot_meta(&project, n)).filter(|m| m.bytes > 0);
+        let u = match meta {
+            Some(m) => SlotUse { bytes: m.bytes, used_at: m.used_at },
+            None => {
+                let d = dir.to_path_buf();
+                let bytes = tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0);
+                SlotUse { bytes, used_at: mtime_secs(dir) }
+            }
+        };
+        self.slot_use.lock().unwrap().insert(dir.to_path_buf(), u);
+        u
     }
 
     /// Every warm slot no job holds right now, in every tenant's cache.
@@ -1826,6 +1836,18 @@ mod tests {
         assert!(!pc2.join("target-1").exists(), "the leased slot went");
         assert!(pc4.join("target-1/x").exists(), "a slot in use is never touched");
         wait_until("the evicted tree is deleted", || no_evicted_left(&pc2)).await;
+        // (d) After a restart (nothing measured yet) the slot's meta gives
+        // its size without a walk: 6 MiB recorded, so it goes.
+        n.slots.lock().unwrap().release(&pc2, &l, None);
+        n.unhold_slot(&l.dir);
+        let pc5 = layout.project_cache("pk5");
+        put(&pc5.join("target-1/x"), 1024);
+        write_slot_meta(&pc5, 1, &SlotMeta { server_slot: 0, workspace: "w0".into(), job: "j0".into(), generation: 1, used_at: 5, bytes: 6 << 20 });
+        let mut l = n.slots.lock().unwrap().lease(&pc5, "pk5", 1, "c", private.clone());
+        let lines = n.fit_leased_slot(&owner, &mut l, "j4", 1, "w1").await;
+        assert!(lines.len() == 1 && lines[0].contains("held 0.0 GiB, over"), "{lines:?}");
+        assert!(!pc5.join("target-1").exists(), "the recorded size counts");
+        assert_eq!(read_slot_meta(&pc5, 1).map(|m| m.job), Some("j4".to_string()), "the meta names the new job");
     }
 
     /// Rule 2 end to end (a job with source, on a real warm slot): past the

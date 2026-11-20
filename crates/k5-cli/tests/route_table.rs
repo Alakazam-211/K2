@@ -405,7 +405,9 @@ fn mail_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
             "the mail case has no {word} arm calling cmd_mail_{func}"
         );
         assert!(
-            word == "watch" || k5_cli::families::mail::reads::VERBS.contains(&word),
+            word == "watch"
+                || k5_cli::families::mail::reads::VERBS.contains(&word)
+                || k5_cli::families::mail::writes::VERBS.contains(&word),
             "{word}: a mail verb row no family module answers"
         );
     }

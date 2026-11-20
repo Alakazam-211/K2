@@ -27,8 +27,8 @@ pub mod writes;
 pub const WORDS: &[&str] = &["mail"];
 /// The shell's but for [`VERBS`].
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
-/// `watch` and the reads; every other verb, and `mail` alone, is the
-/// shell's. One verb row each, so each can turn back alone.
+/// `watch`, the reads and the writes; every other verb, and `mail`
+/// alone, is the shell's. One verb row each, so each can turn back alone.
 pub const VERBS: &[crate::route::Verb] = &[
     native(&["watch"]),
     native(&["inboxes"]),
@@ -43,6 +43,14 @@ pub const VERBS: &[crate::route::Verb] = &[
     native(&["outbox"]),
     native(&["capabilities"]),
     native(&["folder"]),
+    native(&["send"]),
+    native(&["reply"]),
+    native(&["forward-message"]),
+    native(&["draft"]),
+    native(&["move"]),
+    native(&["flag"]),
+    native(&["archive"]),
+    native(&["delete"]),
 ];
 
 /// A verb row the binary answers.

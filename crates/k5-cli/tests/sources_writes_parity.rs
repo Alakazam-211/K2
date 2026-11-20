@@ -61,9 +61,9 @@ fn trigger_row(i: usize) -> String {
     format!(
         r#"{{"id":"{i:08}-aaaa-bbbb-cccc-dddddddddddd","source":"src-{i}","on":{{"kind":"stale_for","secs":{}}},"agent":{{"handle":"bot{i}","missing":{}}},"status":"active","cooldownSecs":300,"dailyCap":5,"firesToday":{},"lastFireAt":{},"note":"{}"}}"#,
         i % 3 * 60,
-        i % 5 == 0,
+        i.is_multiple_of(5),
         i % 4,
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             "1763600000".to_string()
         } else {
             "null".to_string()

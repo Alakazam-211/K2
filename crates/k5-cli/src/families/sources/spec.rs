@@ -639,7 +639,7 @@ mod tests {
                 ])
             )
             .unwrap(),
-            r#"{"name": "w", "label": "L é", "fetch": {"urlSecret": {"name": "U", "origin": "o"}}, "everySecs": 420, "maxBytes": 2048, "extract": {"aggregates": {"c": {"op": "countWhere", "field": "s", "cond": {"in": ["a", 2]}}}}, "rules": [{"field": "a", "warn": {"gt": 1.5}, "crit": {"gte": {"field": "lim"}}, "critAfter": 3}]}"#
+            r#"{"name": "w", "label": "L \u00e9", "fetch": {"urlSecret": {"name": "U", "origin": "o"}}, "everySecs": 420, "maxBytes": 2048, "extract": {"aggregates": {"c": {"op": "countWhere", "field": "s", "cond": {"in": ["a", 2]}}}}, "rules": [{"field": "a", "warn": {"gt": 1.5}, "crit": {"gte": {"field": "lim"}}, "critAfter": 3}]}"#
         );
         assert_eq!(
             spec_json(

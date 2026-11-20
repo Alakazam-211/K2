@@ -42,13 +42,6 @@ fn traceback(c: Case) -> Case {
     }
 }
 
-fn shell(c: Case) -> Case {
-    Case {
-        compare: Compare::Shell,
-        ..c
-    }
-}
-
 fn view(display: &str, extra: &str) -> String {
     format!(r#"{{"display":"{display}","serverNow":1763600000,"updatedAt":1763599000{extra}}}"#)
 }
@@ -803,8 +796,9 @@ fn sources_refusals_and_no_answer() {
     }
 }
 
-/// `simulate` and `refresh`, and a verb the shell CLI still answers
-/// (both sides' requests are the shell's there).
+/// `simulate` and `refresh`. (Every verb is native now; the shell's
+/// own arithmetic errors still go to it, but they name the script's path,
+/// so no row can compare them: D6.)
 #[test]
 fn sources_simulate_refresh_and_the_shell() {
     let rig = Rig::new(VERB, "sim");
@@ -909,15 +903,6 @@ fn sources_simulate_refresh_and_the_shell() {
             owner_and_port,
             1,
             1,
-        )),
-        shell(case(
-            "a duration bash's arithmetic fails on goes to the shell",
-            &["trigger", "list", "--cooldown", "1.5d"],
-            &[],
-            vec![],
-            owner_and_port,
-            2,
-            0,
         )),
     ];
     for c in v {

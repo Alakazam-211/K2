@@ -750,11 +750,7 @@ fn plan(picked: &str, body: &[u8], joined: &str) -> Result<String, Raise> {
         }
     }
     let find = |n: &str| rows.iter().find(|(k, _)| k == n).map(|(_, r)| r.clone());
-    let missing: Vec<&str> = want
-        .iter()
-        .copied()
-        .filter(|n| find(n).is_none())
-        .collect();
+    let missing: Vec<&str> = want.iter().copied().filter(|n| find(n).is_none()).collect();
     if !missing.is_empty() {
         return Ok(format!("missing\t{}", missing.join(",")));
     }

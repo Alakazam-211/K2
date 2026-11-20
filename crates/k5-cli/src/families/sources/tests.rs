@@ -180,7 +180,11 @@ fn the_verbs_words() {
             "usage: --workspace <workspace name or path>".into()
         ))
     );
-    assert_eq!(ask("propose", &w(&[]), 0), Err(Stop::Shell));
+    assert_eq!(
+        ask("propose", &w(&[]), 0),
+        Err(Stop::Usage("Error: --name is required".into()))
+    );
+    assert_eq!(ask("nosuch", &w(&[]), 0), Err(Stop::Shell));
 }
 
 #[test]

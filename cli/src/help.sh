@@ -278,6 +278,9 @@ SKIN (guest list + roles + k2skn_ passes — Thread rooms, never grid)
   skin front-door [connect|direct] [--ui-port N]
                                                 Leftover Caddy path-filter. Not how you host a skin.
 
+REMOTE (this computer's sign-in to another K2 server)
+  remote logout --host H [--token-stdin]        End this computer's session on H; drop its saved token
+
 REMOTE SESSION (owner/admin Layer 0 + grants + shell PTY)
   remote-session status [--json]                Master switch + grants/sessions/denials
   remote-session enable | disable               Turn Remote Sessions ON/OFF (disable kills shells)

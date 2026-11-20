@@ -657,6 +657,16 @@ WHAT THE CLI TOUCHES
              not the device tunnel, not mail MX (hostmail).
   k2 domain  Attach an apex to THIS server (owner). Not hostmail domain.
   k2 cert    Certs for attached hostnames. Not hostmail cert.
+  k2 remote logout --host H [--token-stdin]
+             end this computer's session on another K2 server and
+             drop the saved copies of that token here. Not the
+             Connect account (k2 connect logout).
+
+SIGNING OUT OF ANOTHER SERVER
+  The token goes in an Authorization header, never on a command
+  line. It can't revoke an owner token (no session to end; a
+  restart of that server's daemon does), and success can't prove a
+  session existed: the server answers 200 either way.
 
 WHAT NOT TO CONFUSE
   Connect users (`k2 users`) are humans on this daemon — study people.

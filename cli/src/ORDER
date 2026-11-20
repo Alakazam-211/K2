@@ -8,6 +8,7 @@ respond.sh
 session-complete.sh
 remote-target.sh
 remote-msg.sh
+remote-logout.sh
 commands-core.sh
 heartbeat.sh
 remind.sh
@@ -84,6 +85,7 @@ schema/users.entries
 schema/app.entries
 schema/skin.entries
 schema/remote-session.entries
+schema/remote.entries
 schema/compute.entries
 schema/vault.entries
 schema/wiki-zen.entries

@@ -843,6 +843,15 @@ case "${1:-help}" in
         fi
         shift; cmd_users "$@"
         ;;
+    remote)
+        # This computer's sign-in to another K2 server (k2 remote logout).
+        # The connect-account tool id: a Connect credential the person holds.
+        if _wants_help "${@:2}"; then
+            _remote_usage
+            exit 0
+        fi
+        shift; cmd_remote "$@"
+        ;;
     remote-session)
         # Remote Session Layer 0 + grants + shell PTY (owner/admin CLI).
         # Locked id tool; connection gate required (daemon). Grant-driven

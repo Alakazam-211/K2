@@ -67,6 +67,8 @@ assert_eq "sessions → sessions-spawn" "$(_cli_tool_id_for_verb sessions)" "ses
 assert_eq "daemon → daemon-admin" "$(_cli_tool_id_for_verb daemon)" "daemon-admin"
 assert_eq "api-key → api-key" "$(_cli_tool_id_for_verb api-key)" "api-key"
 assert_eq "remote-session → remote-session" "$(_cli_tool_id_for_verb remote-session)" "remote-session"
+assert_eq "remote → connect-account" "$(_cli_tool_id_for_verb remote)" "connect-account"
+assert_eq "remote mode id" "$(_cli_tool_default_mode "$(_cli_tool_id_for_verb remote)")" "id"
 assert_eq "activity → activity" "$(_cli_tool_id_for_verb activity)" "activity"
 assert_eq "skills → skills" "$(_cli_tool_id_for_verb skills)" "skills"
 assert_eq "unknown → empty" "$(_cli_tool_id_for_verb totally-unknown)" ""

@@ -164,6 +164,9 @@ _cli_tool_id_for_verb() {
         # from publish (nested-subdomain control plane) so login is not
         # always attributed as the publish tool.
         connect) echo "connect-account" ;;
+        # k2 remote logout ends this computer's session on another server
+        # with a Connect token the person holds: the same locked tool.
+        remote) echo "connect-account" ;;
         sessions|terminal) echo "sessions-spawn" ;;
         fs) echo "fs" ;;
         daemon) echo "daemon-admin" ;;
@@ -782,6 +785,9 @@ fi
 # disk alone. Daemon-touching steps (tunnel/config + start) check
 # PORT/TOKEN themselves and fail loud with a start-daemon hint.
 [ "${1:-}" = "connect" ] && _skip_conn_gate=1
+# k2 remote talks only to the other server (k2 remote logout): no local
+# daemon needed.
+[ "${1:-}" = "remote" ] && _skip_conn_gate=1
 # Air-gap: refuse hosted-network verbs before any curl/GitHub, even
 # without a running daemon (fresh image). --help still prints.
 _k2_cli_wants_help=0

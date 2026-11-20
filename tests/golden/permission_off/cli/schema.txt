@@ -4134,6 +4134,23 @@ exit: 0
       ]
     },
     {
+      "name": "remote",
+      "usage": "k2 remote logout --host HOST [--token-stdin]",
+      "description": "This computer's sign-in to another K2 server. Not the Connect account (k2 connect) and not Remote Sessions (k2 remote-session).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "remote logout",
+      "usage": "k2 remote logout --host HOST [--token-stdin]",
+      "description": "End this computer's session on HOST (POST /cli/auth/logout, the token in an Authorization header). The token is the one k2 talk <ws>@HOST sends ($K2_REMOTE_TOKEN, connect-tokens.json, then the keychain) or one read from stdin; never on the command line. After HOST answers, the saved copies of that token for HOST are removed (connect-tokens.json and the keychain); a saved token that differs is kept. It can't revoke an owner token (a restart of that server's daemon does), and success can't prove a session existed: the server answers 200 either way. Exit: 0 signed out, 1 no answer or an unexpected one, 2 usage, 3 HOST refused (nothing removed).",
+      "args": [],
+      "flags": [
+        {"name": "--host", "arg": "HOST", "description": "The server: a name (https) or a URL; plain http:// only to this computer. Required."},
+        {"name": "--token-stdin", "arg": null, "description": "Read the token from stdin instead of the saved one."}
+      ]
+    },
+    {
       "name": "compute",
       "usage": "k2 compute <nodes|status|info|run|test|prewarm|jobs|get|fetch|wait|attach|logs|rightsize|stats|cancel|retry|events|cache|queue|retier|move|allow-nodes|git-access|receipt|provenance|verify|node|grant|revoke|grants|access|operate|manage|usage|preview|placement|roster|lanes|seats|trust|owners|local> [...]",
       "description": "Run commands on your own machines (compute nodes). Exit codes: 0 to 255 the command's own exit (attached runs), 2 bad usage, 3 infra with a JSON code on stderr (node_offline, not_granted, compute_off, queue_full, owner_only, job_started), 130 you detached with Ctrl-C (the job keeps running). Read k2 study compute first.",

@@ -1848,6 +1848,7 @@ cmd_help() {
         publish)                  _publish_usage ;;
         connect)                  _connect_usage ;;
         users)                    _users_usage ;;
+        remote)                   _remote_usage ;;
         remote-session)           cmd_help_remote_session ;;
         study)                    _study_usage ;;
         explain)                  _explain_usage ;;

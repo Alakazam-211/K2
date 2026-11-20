@@ -603,6 +603,8 @@ pub mod daemon_main;
 mod test_support;
 #[cfg(test)]
 mod codex_no_daemon_tests;
+#[cfg(all(test, unix))]
+mod codex_conversation_bind_tests;
 #[cfg(test)]
 mod sessions_main_tests;
 #[cfg(test)]

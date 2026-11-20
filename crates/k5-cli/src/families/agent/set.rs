@@ -3,7 +3,7 @@
 //! the display name, the persona, and project memberships.
 
 use super::conf::fetch;
-use super::{at, cli, dumps, err_json, obj, s};
+use super::{at, cli, dumps, obj, s};
 use crate::exit::Exit;
 use crate::families::{ljust, py_get, py_iter, Raise, Shown};
 use crate::out::json::{Text, Value};

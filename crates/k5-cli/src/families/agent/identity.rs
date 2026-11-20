@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn the_identity_reader() {
-        let r = identity_reader(r#"{"handle":"qa","displayName":"QA","color":"#fff","canEditIdentity":true}"#, "200", false, false);
+        let r = identity_reader(r##"{"handle":"qa","displayName":"QA","color":"#fff","canEditIdentity":true}"##, "200", false, false);
         assert_eq!(r.stdout, "Agent qa\n  name:    QA\n  color:   #fff\n  picture: none\n  you can change: color, picture\n");
         let r = identity_reader(r#"{"error":"rate_limited","retryAfterSecs":30}"#, "429", false, true);
         assert_eq!(r.stderr, "Error: too many changes; try again in 30s\n");

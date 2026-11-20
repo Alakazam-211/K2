@@ -1552,7 +1552,7 @@ fn in_pipe(c: Case) -> Case {
 
 const TEMPLATES: &str = r#"{"ok":true,"templates":[{"id":"chief-of-staff","name":"Chief of staff","summary":"Runs the office","kind":"system","aliases":["cos","chief"]},{"id":"researcher","name":"Researcher","summary":"Reads and reports"},{"id":"qa-bot","name":"QA","summary":"Tests things","origin":"library","author":"ana","version":3}],"problems":[{"dir":"/srv/t/bad","error":"template.toml: missing id"}]}"#;
 
-const TEMPLATE: &str = r#"{"ok":true,"template":{"id":"qa-bot","name":"QA","version":3,"author":"ana","summary":"Tests things","aliases":["qa"],"agent":{"role":"tester","tool":"claude","model":"opus"},"params":{"team":{"label":"Team name","max":40,"required":true},"tone":{"label":"Tone","max":20}},"questions":[{"id":"stack","ask":"What stack?","fills":"role"},{"id":"repo","ask":"Which repo?","fills":"wiki:Work#Repos"},{"id":"x","ask":"Other?"}],"wiki":["Work"],"catalog":["wiki:index"],"skills":["k2-cli"],"heartbeats":[{"name":"nightly","frequency":"daily"}],"permissions":{"cards":true,"expanded":["compute.run"]},"hello":"Hi.\nI test.","versions":[1,2,3],"hash":"abc123","files":{"template.toml":"id = \"qa-bot\"\n\n","ROLE.md":"# QA\n"}}}"#;
+const TEMPLATE: &str = r##"{"ok":true,"template":{"id":"qa-bot","name":"QA","version":3,"author":"ana","summary":"Tests things","aliases":["qa"],"agent":{"role":"tester","tool":"claude","model":"opus"},"params":{"team":{"label":"Team name","max":40,"required":true},"tone":{"label":"Tone","max":20}},"questions":[{"id":"stack","ask":"What stack?","fills":"role"},{"id":"repo","ask":"Which repo?","fills":"wiki:Work#Repos"},{"id":"x","ask":"Other?"}],"wiki":["Work"],"catalog":["wiki:index"],"skills":["k2-cli"],"heartbeats":[{"name":"nightly","frequency":"daily"}],"permissions":{"cards":true,"expanded":["compute.run"]},"hello":"Hi.\nI test.","versions":[1,2,3],"hash":"abc123","files":{"template.toml":"id = \"qa-bot\"\n\n","ROLE.md":"# QA\n"}}}"##;
 
 #[test]
 fn template_words() {
@@ -2027,7 +2027,7 @@ fn identity() {
             "change the color and name",
             &["identity", "qa", "--color", " rgb(51, 170, 119) ", "--name", "QA Bot"],
             &[],
-            vec![ok(r#"{"ok":true,"handle":"qa","changed":["name","color"],"displayName":"QA Bot","color":"#33aa77"}"#)],
+            vec![ok(r##"{"ok":true,"handle":"qa","changed":["name","color"],"displayName":"QA Bot","color":"#33aa77"}"##)],
             owner_and_port,
             0,
             1,

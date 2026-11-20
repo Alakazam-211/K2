@@ -784,3 +784,43 @@ fn no_daemon() {
         0,
     ));
 }
+
+/// Bash bugs the binary copies until K2's fixes land; each row flips then.
+#[test]
+fn bash_bugs_copied() {
+    let rig = Rig::new(VERB, "psbugs");
+    let v = vec![
+        // app-auth.sh:605: `args.index("--")` finds a `--to --` value
+        // first, so the later recipient reads as --data (and fails its
+        // key=value check, exit 2). Flips when the fix lands.
+        stop(
+            "push send: --to -- moves the split (bash bug)",
+            &["push", "send", "acme", "--to", "--", "--to", "b", "--data", "k=v"],
+            2,
+        ),
+        // app-auth.sh:881-885: a list value that names a list (`--to
+        // --cc`) switches which list the Python fills, so the To list is
+        // sent empty and the address goes to Cc. Flips when the fix lands.
+        one(
+            "email send: a list value switches the list (bash bug)",
+            &[
+                "email",
+                "send",
+                "acme",
+                "--to",
+                "--cc",
+                "--cc",
+                "b@acme.example",
+                "--subject",
+                "s",
+                "--text",
+                "t",
+            ],
+            r#"{"id":"em_3","status":"queued","recipients":1}"#,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

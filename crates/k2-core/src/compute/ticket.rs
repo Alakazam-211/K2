@@ -149,27 +149,46 @@ impl UsedNonces {
         let raw = match std::fs::read_to_string(path) {
             Ok(raw) => raw,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-            Err(e) => return Err(format!("can't read {}: {e}", path.display())),
+            Err(e) => return Err(e.to_string()),
         };
-        serde_json::from_str::<UsedFile>(&raw).map(|f| f.used).map_err(|e| format!("{} isn't a used-ticket file: {e}", path.display()))
+        serde_json::from_str::<UsedFile>(&raw).map(|f| f.used).map_err(|e| format!("not a used-ticket file: {e}"))
     }
 
     fn save(path: &Path, used: &HashMap<String, i64>) -> Result<(), String> {
         let body = serde_json::to_vec(&UsedFile { used: used.clone() }).map_err(|e| e.to_string())?;
-        crate::fs_atomic::atomic_write_private(path, &body).map_err(|e| format!("can't write {}: {e}", path.display()))
+        crate::fs_atomic::atomic_write_private(path, &body).map_err(|e| e.to_string())
+    }
+
+    /// The owner's log line for a file that can't be read: where it is and
+    /// how to clear it. Deleting it forgets the uses it holds, so it is
+    /// safe only once every ticket it could name has expired.
+    fn unreadable(path: &Path, e: &str) -> String {
+        format!(
+            "[compute] compute-ticket-used.json at {} can't be read ({e}); one-click tickets are refused until it's fixed or removed: \
+             delete it once no ticket is pending (they expire within {} minutes)",
+            path.display(),
+            MAX_LIFETIME_SECS / 60
+        )
+    }
+
+    fn unwritable(path: &Path, e: &str) -> String {
+        format!(
+            "[compute] compute-ticket-used.json at {} can't be written ({e}); one-click tickets are refused until it can be: \
+             check the folder's free space and permissions",
+            path.display()
+        )
     }
 
     /// Mark `key` used until `exp`. Refuses a key that is already used,
     /// and any use this set can't load or record.
     pub fn consume(&mut self, key: &str, exp: i64, now: i64) -> Result<(), TicketRefusal> {
-        let unavailable = |e: String| {
-            crate::log_debug!("[compute] refusing a ticket: the used-ticket file: {e}");
-            TicketRefusal::StoreUnavailable
-        };
         let used = match self.used.take() {
             Some(u) => u,
             None => match &self.path {
-                Some(p) => Self::load(p).map_err(unavailable)?,
+                Some(p) => Self::load(p).map_err(|e| {
+                    crate::log_debug!("{}", Self::unreadable(p, &e));
+                    TicketRefusal::StoreUnavailable
+                })?,
                 None => HashMap::new(),
             },
         };
@@ -181,10 +200,11 @@ impl UsedNonces {
         next.insert(key.to_string(), exp);
         if let Some(p) = &self.path {
             if let Err(e) = Self::save(p, &next) {
+                crate::log_debug!("{}", Self::unwritable(p, &e));
                 // Memory keeps matching the file: this use never counted.
                 next.remove(key);
                 self.used = Some(next);
-                return Err(unavailable(e));
+                return Err(TicketRefusal::StoreUnavailable);
             }
         }
         self.used = Some(next);
@@ -450,6 +470,16 @@ mod tests {
         // didn't count as uses.
         std::fs::remove_dir(home.used_file()).unwrap();
         assert!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &fp, "mini-1", now).is_ok());
+    }
+
+    #[test]
+    fn the_log_line_names_the_file_and_how_to_clear_it() {
+        let p = crate::paths::k2_home_in("/home/acme").join("compute-ticket-used.json");
+        let line = UsedNonces::unreadable(&p, "expected value at line 1 column 1");
+        assert!(line.contains(&format!("at {} can't be read (expected value", p.display())), "{line}");
+        assert!(line.contains("delete it once no ticket is pending (they expire within 15 minutes)"), "{line}");
+        let line = UsedNonces::unwritable(&p, "No space left on device");
+        assert!(line.contains(&format!("at {} can't be written (No space left on device)", p.display())), "{line}");
     }
 
     #[test]

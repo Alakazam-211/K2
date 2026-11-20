@@ -1188,6 +1188,17 @@ pub(crate) fn is_local_passport(caller: &Caller) -> bool {
     }
 }
 
+/// D1: a passport whose session is live in the session map: an agent that
+/// isn't sandboxed, or a K2 terminal. A passport K2 can't place (no live
+/// session: a `k2 job` run, a session that ended) isn't one.
+fn is_live_local_passport(caller: &Caller) -> bool {
+    match caller {
+        Caller::Agent(a) => !a.sandboxed && a.map_key.is_some(),
+        Caller::Shell { .. } => true,
+        _ => false,
+    }
+}
+
 /// The Garden an agent write names, if any: `garden`, or a `file` that is
 /// `gardens/<id>.toml` (reset).
 fn garden_named(body: &[u8]) -> Option<String> {
@@ -1517,7 +1528,7 @@ pub fn handle(
     // D1 (0.46.17): an agent's reads of the Gardens it is told to build and
     // check (`k2 zen validate`, the lists, a widget's errors), with or
     // without Garden access; never a sandboxed agent or an API cell.
-    let passport_read = !owner && !garden_owner_login && is_local_passport(caller) && PASSPORT_READS.contains(&path);
+    let passport_read = !owner && !garden_owner_login && is_live_local_passport(caller) && PASSPORT_READS.contains(&path);
     if passport_read {
         // A read: no Garden list or lock applies.
     } else if !owner && !garden_owner_login && access_on {

@@ -110,10 +110,60 @@ fn code(r: &Resp, what: &str) -> String {
     v["error"]["code"].as_str().unwrap_or_else(|| panic!("{what}: no error code: {}", r.raw)).to_string()
 }
 
+/// A live session in the session map (a `cat` in a PTY, a K2 terminal),
+/// ended and unregistered on drop.
+struct Live {
+    key: String,
+    session: std::sync::Arc<k2_core::terminal::DaemonPtySession>,
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        k2_daemon::v2_session_map::unregister(&self.key);
+        self.session.kill();
+    }
+}
+
+/// A passport for a live session under map key `key` in workspace `ws_id`,
+/// as a session K2 started carries.
+fn live_passport(cwd: &Path, ws_id: &str, key: &str, address: &str) -> (String, Live) {
+    let sid = SessionId::new();
+    let session = k2_core::terminal::DaemonPtySession::spawn(k2_core::terminal::DaemonPtyConfig {
+        session_id: sid,
+        cols: 80,
+        rows: 24,
+        cwd: Some(cwd.to_path_buf()),
+        program: Some("/bin/cat".to_string()),
+        args: vec![],
+        durable_args: None,
+        env: Default::default(),
+        drain_on_exit: true,
+        label: String::new(),
+        label_source: k2_core::terminal::LabelSource::Pty,
+        sandbox: k2_core::terminal::SandboxSpec::Passthrough,
+        cell_uid: None,
+        overlay: None,
+        survive: false,
+        ptyd_meta: None,
+    })
+    .expect("spawn a live session");
+    k2_daemon::v2_session_map::register(key.to_string(), session.clone());
+    let passport = session_token::mint_session_token(
+        &sid,
+        &sid.to_string(),
+        HookPrincipal { workspace_uuid: ws_id.to_string(), agent_address: address.to_string() },
+        session_token::CredMode::ApiKey,
+        session_token::Provider::Anthropic,
+    );
+    assert!(session_token::validate_hook(&passport).is_some(), "the passport is valid");
+    (passport, Live { key: key.to_string(), session })
+}
+
 struct Env {
     port: u16,
     tunnel_port: u16,
     passport: String,
+    _live: Live,
     own: String,
     other: String,
     peer: String,
@@ -141,19 +191,13 @@ async fn env(t: &k2_core::test_env::TempHome) -> (Env, test_harness::TestDaemon)
         k2_core::db::schema::WorkspaceRelation::create(&conn, &uuid::Uuid::new_v4().to_string(), &ids[0], &ids[2], "collaborator")
             .expect("connect own and peer");
     }
-    let passport = session_token::mint_session_token(
-        &SessionId::new(),
-        "pane-d1-passport",
-        HookPrincipal { workspace_uuid: ids[0].clone(), agent_address: "d1-agent".into() },
-        session_token::CredMode::ApiKey,
-        session_token::Provider::Anthropic,
-    );
-    assert!(session_token::validate_hook(&passport).is_some(), "the passport is live");
+    let (passport, live) = live_passport(&paths[0], &ids[0], "tab-d1-agent", "d1-agent");
     let s = |p: &Path| p.to_string_lossy().to_string();
     let e = Env {
         port,
         tunnel_port: d.tunnel_port,
         passport,
+        _live: live,
         own: s(&paths[0]),
         other: s(&paths[1]),
         peer: s(&paths[2]),
@@ -540,5 +584,40 @@ async fn the_actor_is_the_passport() {
     assert_eq!(r.status, 200, "reject: {}", r.raw);
     for kind in ["review.approved", "review.changes-requested", "review.rejected"] {
         assert_eq!(entries(&e, kind), vec![("d1-agent".to_string(), "backend".to_string())], "{kind}: the passport reviewed backend's work");
+    }
+}
+
+/// Only a passport of a live, local session: an API cell's, a `k2 job`
+/// run's, and one whose session isn't live are refused on the D1 routes
+/// and the Zen reads, where the live one is admitted. (A microVM agent:
+/// `passport_routes::tests::only_a_live_local_session_is_admitted`.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_a_live_local_passport_is_admitted() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let r = http_body(e.port, "POST", "/cli/zen/setup", Some(OWNER), "{}");
+    assert_eq!(r.status, 200, "zen setup: {}", r.raw);
+    let own = Path::new(&e.own);
+    let (api, _api_live) = live_passport(own, &e.own_id, &format!("api-d1key-{}", uuid::Uuid::new_v4()), "d1-api");
+    let mint = |address: &str| {
+        session_token::mint_session_token(
+            &SessionId::new(),
+            "pane-not-live",
+            HookPrincipal { workspace_uuid: e.own_id.clone(), agent_address: address.to_string() },
+            session_token::CredMode::ApiKey,
+            session_token::Provider::Anthropic,
+        )
+    };
+    let job = mint("job:nightly");
+    let gone = mint("d1-agent");
+    let conf = format!("/cli/agent/conf?q={}", enc(&e.own));
+    for route in [conf.as_str(), "/cli/presets/list", "/cli/zen/gardens", "/cli/zen/status"] {
+        let r = http(e.port, "GET", route, Some(e.passport.as_str()));
+        assert_eq!(r.status, 200, "the live passport, {route}: {}", r.raw);
+        for (label, p) in [("an API cell", &api), ("a k2 job run", &job), ("no live session", &gone)] {
+            assert!(session_token::validate_hook(p).is_some(), "{label}: the passport itself is valid");
+            let r = http(e.port, "GET", route, Some(p.as_str()));
+            assert_eq!(r.status, 403, "{label}, {route}: {}", r.raw);
+        }
     }
 }

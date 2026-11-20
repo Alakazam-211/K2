@@ -9,8 +9,8 @@
 //! How a passport is admitted over TCP, as `k2 workspace profile` was
 //! (`workspace_profile_route`) and as the cell socket stamps one:
 //! - the dispatcher's first arm takes a live passport on one of [`ROUTES`]
-//!   ([`tcp_passport`]: `session_token::validate_hook`, a session on this
-//!   computer only), so no route's owner-token arm sees it; every other
+//!   ([`tcp_passport`]: `session_token::validate_hook`, a live session on
+//!   this computer only), so no route's owner-token arm sees it; every other
 //!   credential misses that arm and meets the route's arm as before;
 //! - never through the tunnel: a request that came in through it misses
 //!   the arm whatever it carries (as a chat pass is never minted there), so
@@ -180,11 +180,26 @@ pub(crate) fn tcp_passport(
     crate::session_token::validate_hook(presented).filter(|v| local_session(&v.session_id, &v.principal))
 }
 
-/// A passport of a session on this computer, as Zen admits one
-/// (`zen_routes::is_local_passport`): a harness session that isn't
-/// sandboxed, or a K2 terminal. An API cell and a microVM agent are not.
+/// A passport of a live session on this computer: its session is in the
+/// session map now, isn't sandboxed (microVM), isn't an API cell or a
+/// remote-session grant shell, and the passport isn't a `k2 job` run's. A
+/// passport K2 can't place that way is refused, never assumed local.
 fn local_session(session_id: &str, principal: &HookPrincipal) -> bool {
-    crate::zen_routes::is_local_passport(&crate::sidecar_routes::caller_from_session(session_id, principal))
+    let live = crate::v2_session_map::snapshot().into_iter().find(|(_, s)| s.session_id.to_string() == session_id);
+    live.is_some_and(|(key, s)| {
+        local_entry(&key, matches!(s.sandbox, k2_core::terminal::SandboxSpec::Microvm), &principal.agent_address)
+    })
+}
+
+/// [`local_session`] for a live session's map key, its sandbox and the
+/// passport's address (pure: tests).
+fn local_entry(key: &str, sandboxed: bool, agent_address: &str) -> bool {
+    use k2_core::workspace_session_handles::{is_api_agent_name, is_remote_shell_agent_name};
+    !sandboxed
+        && !is_api_agent_name(key)
+        && !is_remote_shell_agent_name(key)
+        && !agent_address.starts_with("api-")
+        && !agent_address.starts_with("job:")
 }
 
 /// The TCP dispatcher's first arm, for a request [`tcp_passport`] admits
@@ -500,6 +515,18 @@ mod tests {
         for p in ["/cli/tunnel/status", "/cli/workspace/set", "/cli/feedback/create", "/cli/context/add", "/cli/projects/list"] {
             assert!(!is_route(p), "{p} must not be admitted here");
         }
+    }
+
+    #[test]
+    fn only_a_live_local_session_is_admitted() {
+        assert!(local_entry("tab-pane-1", false, "Acme"), "a K2 terminal or harness tab");
+        assert!(local_entry("0f8a2c1e-0000-4000-8000-000000000000", false, "Acme"), "a pinned chat");
+        assert!(!local_entry("tab-pane-1", true, "Acme"), "a microVM agent");
+        assert!(!local_entry("api-key1-abc", false, "Acme"), "an API cell");
+        assert!(!local_entry("remote-shell-g1-abc", false, "Acme"), "a remote-session grant shell");
+        assert!(!local_entry("tab-pane-1", false, "api-key1"), "an API cell's passport");
+        assert!(!local_entry("tab-pane-1", false, "job:nightly"), "a k2 job run's passport");
+        assert!(!local_session("no-such-session", &HookPrincipal { workspace_uuid: "w".into(), agent_address: "Acme".into() }), "no live session");
     }
 
     #[test]

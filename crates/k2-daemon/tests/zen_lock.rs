@@ -590,9 +590,9 @@ fn headless_lock_route_restore_and_audit() {
 
 /// §5.2, §5.3: a session passport (an agent) is refused with 423 on every
 /// Garden write to a locked Garden, still makes them on an unlocked one,
-/// can neither lock nor unlock (403), reads the Garden list (D1), and still
-/// gets 403 zen_local_only on every other Zen route. The owner token still
-/// changes the locked one.
+/// can neither lock nor unlock (403), and still gets 403 zen_local_only
+/// on every other Zen route (its session isn't live, so the D1 reads too).
+/// The owner token still changes the locked one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_passport_is_refused_on_a_locked_garden() {
     use k2_core::session::SessionId;
@@ -680,15 +680,12 @@ async fn agent_passport_is_refused_on_a_locked_garden() {
     let (s, v) = get(&format!("/cli/zen/get?garden={locked}"), &owner);
     assert_eq!((s, v["theme"]["name"].as_str()), (200, Some("midnight")), "the theme reached the locked Garden: {v}");
 
-    // D1 (0.46.17): the Garden list is one of the reads an agent may make
-    // (`zen_routes::PASSPORT_READS`), locked Gardens included.
-    let (s, v) = get("/cli/zen/gardens", &passport);
-    assert_eq!(s, 200, "a passport reads the Garden list: {v}");
-    assert!(v["gardens"].as_array().expect("gardens").iter().any(|g| g["id"] == locked.as_str() && g["locked"] == true), "{v}");
-
-    // Every other Zen route still refuses a passport.
+    // Every other Zen route still refuses a passport. The Garden list is a
+    // D1 read only for a passport whose session is live
+    // (`zen_routes::PASSPORT_READS`); this one's session isn't.
     for (m, p, body) in [
         ("GET", "/cli/zen/sync", None),
+        ("GET", "/cli/zen/gardens", None),
         ("GET", "/cli/zen/get", None),
         ("GET", "/cli/zen/history", None),
         ("GET", "/cli/zen/news", None),

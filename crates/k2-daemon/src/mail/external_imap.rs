@@ -3067,44 +3067,43 @@ mod tests {
             let mut w = stream;
             let mut captured_sasl: Vec<u8> = Vec::new();
             w.write_all(b"* OK mock IMAP4rev1 ready\r\n").unwrap();
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    break;
-                }
-                let trimmed = line.trim_end().to_string();
-                let mut parts = trimmed.split_whitespace();
-                let tag = parts.next().unwrap_or("*").to_string();
-                let verb = parts.next().unwrap_or("").to_ascii_uppercase();
-                match verb.as_str() {
-                    "AUTHENTICATE" => {
-                        assert_eq!(parts.next(), Some("XOAUTH2"), "wrong mechanism: {trimmed}");
-                        // Empty challenge (regex `^\+ (.*)\r\n` → "").
-                        w.write_all(b"+ \r\n").unwrap();
-                        // The base64(SASL) response line.
-                        let mut resp = String::new();
-                        reader.read_line(&mut resp).expect("sasl line");
-                        captured_sasl = B64.decode(resp.trim_end()).expect("base64 sasl");
-                        if reject {
-                            // Google's rejected-token surface: base64-JSON
-                            // on a continuation, then the tagged NO.
-                            let blob = br#"{"status":"400","schemes":"Bearer","scope":"https://mail.google.com/"}"#;
-                            w.write_all(format!("+ {}\r\n", B64.encode(blob)).as_bytes()).unwrap();
-                            // The client answers empty; consume it.
-                            let mut empty = String::new();
-                            reader.read_line(&mut empty).expect("empty response");
-                            w.write_all(
-                                format!("{tag} NO [AUTHENTICATIONFAILED] invalid credentials\r\n")
-                                    .as_bytes(),
-                            )
-                            .unwrap();
-                        } else {
-                            w.write_all(format!("{tag} OK authenticated\r\n").as_bytes()).unwrap();
-                        }
-                        break;
+            // One command per connection: the client's AUTHENTICATE. A
+            // client that hangs up first leaves nothing captured.
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                return captured_sasl;
+            }
+            let trimmed = line.trim_end().to_string();
+            let mut parts = trimmed.split_whitespace();
+            let tag = parts.next().unwrap_or("*").to_string();
+            let verb = parts.next().unwrap_or("").to_ascii_uppercase();
+            match verb.as_str() {
+                "AUTHENTICATE" => {
+                    assert_eq!(parts.next(), Some("XOAUTH2"), "wrong mechanism: {trimmed}");
+                    // Empty challenge (regex `^\+ (.*)\r\n` → "").
+                    w.write_all(b"+ \r\n").unwrap();
+                    // The base64(SASL) response line.
+                    let mut resp = String::new();
+                    reader.read_line(&mut resp).expect("sasl line");
+                    captured_sasl = B64.decode(resp.trim_end()).expect("base64 sasl");
+                    if reject {
+                        // Google's rejected-token surface: base64-JSON
+                        // on a continuation, then the tagged NO.
+                        let blob = br#"{"status":"400","schemes":"Bearer","scope":"https://mail.google.com/"}"#;
+                        w.write_all(format!("+ {}\r\n", B64.encode(blob)).as_bytes()).unwrap();
+                        // The client answers empty; consume it.
+                        let mut empty = String::new();
+                        reader.read_line(&mut empty).expect("empty response");
+                        w.write_all(
+                            format!("{tag} NO [AUTHENTICATIONFAILED] invalid credentials\r\n")
+                                .as_bytes(),
+                        )
+                        .unwrap();
+                    } else {
+                        w.write_all(format!("{tag} OK authenticated\r\n").as_bytes()).unwrap();
                     }
-                    other => panic!("mock got unexpected command '{other}': {trimmed}"),
                 }
+                other => panic!("mock got unexpected command '{other}': {trimmed}"),
             }
             captured_sasl
         });

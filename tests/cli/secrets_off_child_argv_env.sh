@@ -356,16 +356,8 @@ assert_off_children "sources secret" "secret's name" "$SECRET_SENTINEL"
 
 # 3-5b. The four callers of _rec_send_confirmed: the stub asks for the
 #       confirm, the CLI gets it and sends the change again with the token.
-#       rec_case_native: a command the k5 binary answers itself (hostchat),
-#       which starts no python3 or curl child at all.
-rec_case() {
-    local label="$1" path="$2"; shift 2
-    fresh
-    printf '\n' | "$K2_CLI" "$@" >/dev/null 2>&1 || true
-    assert_tcp_got "$label" "$path" "confirm token" "$TOKEN_SENTINEL"
-    assert_children_seen "$label" curl
-    assert_off_children "$label" "confirm token" "$TOKEN_SENTINEL"
-}
+#       rec_case_native: each is a command the k5 binary answers itself
+#       (app recording and hostchat), which starts no python3 or curl child.
 rec_case_native() {
     local label="$1" path="$2"; shift 2
     fresh
@@ -374,7 +366,7 @@ rec_case_native() {
     assert_children_native "$label" curl
     assert_off_children "$label" "confirm token" "$TOKEN_SENTINEL"
 }
-rec_case "app recording set" /cli/app/recording/set app recording acme set --start-level admin
+rec_case_native "app recording set" /cli/app/recording/set app recording acme set --start-level admin
 rec_case_native "app-space recording" /cli/sew/app-spaces/recording hostchat app-space recording acme 5 --start-level admin
 rec_case_native "app-space recording-lock" /cli/sew/app-spaces/recording-lock hostchat app-space recording-lock 5 off
 rec_case_native "recording policy set" /cli/sew/recording/policy hostchat recording policy set audio_max_days 60

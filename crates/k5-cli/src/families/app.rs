@@ -44,6 +44,7 @@
 //! - [`boxes`]: `app doctor` (the box and reach doctors), `app box`
 //!   (every sub-verb), `app engine`, `app rehost` and `app sessions`.
 //! - [`exec`]: `app exec`; [`history`] also answers `app logs --follow`.
+//! - [`shell`]: `app shell`, the interactive terminal over a WebSocket.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
 //! - The verbs `cmd_app` hands to `cmd_skin` (`user`, `role`, `grant`'s
@@ -104,6 +105,7 @@ pub mod reads;
 pub mod recording;
 pub mod resources;
 pub mod runtime;
+pub mod shell;
 pub mod sign_in;
 pub mod traffic;
 pub mod updates;
@@ -147,6 +149,7 @@ pub enum Ask {
     Owner(owner::Ask),
     Boxes(boxes::Ask),
     Exec(exec::Ask),
+    Shell(shell::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -247,6 +250,7 @@ pub const TAKES: &[&str] = &[
     "rehost",
     "sessions",
     "exec",
+    "shell",
 ];
 
 /// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
@@ -545,6 +549,10 @@ pub const VERBS: &[crate::route::Verb] = &[
         owner: crate::route::Owner::Native,
     },
     crate::route::Verb {
+        words: &["shell"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
         words: &["user", "users"],
         owner: crate::route::Owner::Native,
     },
@@ -608,6 +616,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "init" => Some(init::parse_init(rest)?.map(Ask::Folder)),
         "doctor" => doctor(rest),
         "exec" => Some(exec::parse(rest)?.map(Ask::Exec)),
+        "shell" => Some(shell::parse(rest)?.map(Ask::Shell)),
         "box" => {
             if rest.iter().any(|w| matches!(*w, "-h" | "--help")) {
                 return None;
@@ -756,6 +765,7 @@ fn run_with(
         Ask::Owner(o) => owner::run(&mut ctx, o),
         Ask::Boxes(b) => boxes::run(&mut ctx, b),
         Ask::Exec(e) => exec::run(&mut ctx, e),
+        Ask::Shell(sh) => shell::run(&mut ctx, sh),
     };
     let exit = match shown {
         Ok(s) => s.print(),

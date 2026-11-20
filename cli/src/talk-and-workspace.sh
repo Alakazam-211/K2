@@ -1089,7 +1089,7 @@ cmd_sessions_set_label() {
             *) label_parts+=("$1"); shift ;;
         esac
     done
-    local label="${label_parts[*]}"
+    local label="${label_parts[*]:-}"
     [[ -z "$label" ]] && { echo "Usage: k2 sessions set-label <session-id> <label> [--no-lock]" >&2; exit 1; }
     local params="id=$(urlencode "$session_id")&label=$(urlencode "$label")&lock=$lock"
     cli_request_post "/cli/sessions/label" "$params" \

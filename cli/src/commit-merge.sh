@@ -17,7 +17,7 @@ cmd_commit_v2() {
             [[ "$arg" == "--merge" ]] && continue
             rest+=("$arg")
         done
-        cmd_commit_merge "${rest[@]}"
+        cmd_commit_merge ${rest[@]+"${rest[@]}"}
     else
         cmd_commit "$@"
     fi

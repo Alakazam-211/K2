@@ -637,7 +637,7 @@ if e["K2_AP_MODE"] == "send":
             k, v = kv.split("=", 1)
             d[k] = v
         b["data"] = d
-print(json.dumps(b))' "${tos[@]}" -- "${datas[@]}")" || exit 2
+print(json.dumps(b))' ${tos[@]+"${tos[@]}"} -- ${datas[@]+"${datas[@]}"})" || exit 2
     _compute_send_call POST "/cli/app/push/$mode" "$body"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
@@ -905,7 +905,7 @@ if e.get("K2_EM_HTMLF"):
         b["html"] = f.read()
 if e.get("K2_EM_KEY"):
     b["idempotencyKey"] = e["K2_EM_KEY"]
-print(json.dumps(b))' --to "${tos[@]}" --cc "${ccs[@]}" --bcc "${bccs[@]}" --replyTo "${rts[@]}" --headers "${hdrs[@]}" --tags "${tags[@]}")" || exit 2
+print(json.dumps(b))' --to ${tos[@]+"${tos[@]}"} --cc ${ccs[@]+"${ccs[@]}"} --bcc ${bccs[@]+"${bccs[@]}"} --replyTo ${rts[@]+"${rts[@]}"} --headers ${hdrs[@]+"${hdrs[@]}"} --tags ${tags[@]+"${tags[@]}"})" || exit 2
     _email_post /cli/app/email/send "$body"
     body=""
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
@@ -1287,7 +1287,7 @@ if e.get("K2_EM_VIA"):
     b["via"] = e["K2_EM_VIA"]
 if sys.argv[1:]:
     b["replyTo"] = sys.argv[1:]
-print(json.dumps(b))' "${rts[@]}")"
+print(json.dumps(b))' ${rts[@]+"${rts[@]}"})"
             _email_post /cli/notifications/email/sender/add "$body"
             printf '%s' "$_CP_BODY" | _notif_sender_print
             ;;
@@ -1346,7 +1346,7 @@ if e.get("K2_EM_LOCK") in ("0", "1"):
     b["nameLocked"] = e["K2_EM_LOCK"] == "1"
 if sys.argv[1:]:
     b["replyTo"] = sys.argv[1:]
-print(json.dumps(b))' "${rts[@]}")"
+print(json.dumps(b))' ${rts[@]+"${rts[@]}"})"
             _email_post "/cli/notifications/email/sender/$verb" "$body"
             if [ "$verb" = rm ]; then
                 printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("removed %s (%s); its address stays reserved %s days" % (v.get("removed"), v.get("address"), v.get("reservedDays")))'

@@ -386,7 +386,7 @@ cmd_agent_context() {
             *) ctx_args+=("$1"); shift ;;
         esac
     done
-    set -- "${ctx_args[@]}"
+    set -- ${ctx_args[@]+"${ctx_args[@]}"}
     if [ $# -eq 0 ]; then
         cmd_help_agent_context
         exit 0

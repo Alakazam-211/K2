@@ -833,7 +833,7 @@ cmd_feedback_assign() {
             --to|--assign)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--to requires a comma-separated username list"; exit 2; }
                 IFS=',' read -r -a _parts <<< "$2"
-                for u in "${_parts[@]}"; do
+                for u in ${_parts[@]+"${_parts[@]}"}; do
                     u="${u#"${u%%[![:space:]]*}"}"
                     u="${u%"${u##*[![:space:]]}"}"
                     [ -n "$u" ] && users+=("$u")
@@ -860,7 +860,7 @@ cmd_feedback_assign() {
         exit 2
     fi
     local body resp
-    body=$(FB_ID="$id" FB_USERS="$(printf '%s\n' "${users[@]}")" python3 -c 'import json,os
+    body=$(FB_ID="$id" FB_USERS="$(printf '%s\n' ${users[@]+"${users[@]}"})" python3 -c 'import json,os
 users=[u for u in os.environ.get("FB_USERS","").splitlines() if u.strip()]
 print(json.dumps({"id": os.environ["FB_ID"], "usernames": users}))')
     resp=$(cli_post_json "/cli/feedback/assign" "$body") || resp=""

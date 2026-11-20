@@ -8,15 +8,25 @@
 //!   `rename <old> <new>`, `pause|drain|resume <name>`, `pinned-only
 //!   <name> on|off`, `route|routes add|rm|remove <name> <url>` and `alerts
 //!   [<node>] [--after D|off|none] [--to WS|none]`;
+//! - `wall`, `update`, `rollback`, `rollout`, `policy` and `admin`
+//!   ([`more`]), with the held-change and approve flows and `take-owner`
+//!   ([`flows`]);
 //! - a missing or unknown subverb: the usage line, exit 2.
 //!
-//! Every other subverb is the shell's, and so is an `--after` whose
-//! seconds pass the shell's arithmetic (the shell wraps them).
+//! Every other subverb is the shell's, and so are: a duration whose
+//! seconds pass the shell's 64-bit arithmetic (the shell wraps them),
+//! `update --all --batch` with a leading zero (`_compute_json` raises),
+//! a `--plan` or script `--file` Python can't read, and `take-owner` with
+//! no terminal to open (bash prints its own `/dev/tty` error).
+
+pub mod flows;
+pub mod more;
 
 use super::super::lines::{py_line, LIB};
 use super::super::pyrt::{self as p, s};
 use super::super::render::{self, Cx};
-use super::super::writes::{body_of, dumps, object, str_value, Cp, Words};
+use super::super::writes::{body_of, dumps, object, print_body, str_value, Cp, Words};
+use std::path::Path;
 use crate::exit::Exit;
 use crate::families::{raised, Raise, Shown};
 use crate::out::json::Value;
@@ -71,6 +81,11 @@ pub const ROUTE_USAGE: &str = concat!(
     cli_name!(),
     " compute node route add|rm <name> <url>"
 );
+pub const TAKE_OWNER_USAGE: &str = concat!(
+    "usage: ",
+    cli_name!(),
+    " compute node take-owner <node>"
+);
 pub const ALERTS_USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
@@ -93,6 +108,25 @@ pub enum Reader {
     PinnedOnly,
     Routes,
     Alerts,
+    /// `"%s: %s" % (v["node"], v.get("note","ok"))`.
+    NodeNote,
+    Update,
+    /// `_compute_render_rollout 0`.
+    Rollout,
+    PolicyShow,
+    AdminList,
+    Denied,
+    Withdrew,
+}
+
+/// What a held change does after the answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Held {
+    No,
+    /// `grep -q '"held": *true'`, then `_compute_admin_held_or_approve`.
+    IfHeld,
+    /// `_compute_admin_held_or_approve` on every answer (propose).
+    Always,
 }
 
 /// One request and its printer.
@@ -105,6 +139,9 @@ pub struct Call {
     pub body: String,
     /// `_compute_call`'s `tcp`.
     pub tcp: bool,
+    pub held: Held,
+    /// `--json`: the answer as it is.
+    pub json: bool,
     pub reader: Reader,
 }
 
@@ -112,6 +149,10 @@ pub struct Call {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
     Call(Call),
+    /// `admin approve <id>`.
+    Approve(String),
+    /// `take-owner <node>`.
+    TakeOwner(String),
 }
 
 /// A POST over TCP.
@@ -121,6 +162,8 @@ fn tcp_post(path: &str, body: String, reader: Reader) -> Option<Words<Ask>> {
         path: path.to_string(),
         body,
         tcp: true,
+        held: Held::No,
+        json: false,
         reader,
     })))
 }
@@ -204,8 +247,23 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             tcp_post("/cli/compute/nodes/routes", body, Reader::Routes)
         }
         "alerts" => alerts(rest),
-        "admin" | "servers" | "packages" | "pkg" | "take-owner" | "policy" | "health"
-        | "update" | "rollback" | "rollout" | "wall" => None,
+        "wall" => more::wall(rest),
+        "update" | "rollback" => more::update(sub, rest),
+        "rollout" => more::rollout(rest),
+        "policy" => more::policy(rest),
+        "admin" => more::admin(rest),
+        "take-owner" => {
+            if rest.len() != 1 || rest[0].starts_with('-') {
+                return usage(TAKE_OWNER_USAGE);
+            }
+            // `[ -r /dev/tty ]` holds but there is no terminal to read:
+            // bash prints its own redirect error there (the shell's).
+            if flows::dev_tty_r_ok() && !crate::prompt::dev_tty_readable() {
+                return None;
+            }
+            Some(Words::Ask(Ask::TakeOwner(rest[0].to_string())))
+        }
+        "servers" | "packages" | "pkg" | "health" => None,
         _ => usage(USAGE),
     }
 }
@@ -322,17 +380,25 @@ fn alerts(rest: &[&str]) -> Option<Words<Ask>> {
     tcp_post("/cli/compute/nodes/alerts", body, Reader::Alerts)
 }
 
-/// The request and what it prints.
-pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
-    match a {
-        Ask::Call(c) => {
-            let answer = match cp.call(c.post, &c.path, &c.body, c.tcp) {
-                Ok(b) => b,
-                Err(e) => return e,
-            };
-            reader(&c.reader, &answer).print()
-        }
+/// The request and what it prints. `sock`: the vault socket, for the
+/// owner's confirm.
+pub fn send(cp: &mut Cp<'_>, a: &Ask, sock: &Path) -> Exit {
+    let c = match a {
+        Ask::Call(c) => c,
+        Ask::Approve(id) => return flows::approve(cp, sock, id),
+        Ask::TakeOwner(node) => return flows::take_owner(cp, sock, node),
+    };
+    let answer = match cp.call(c.post, &c.path, &c.body, c.tcp) {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    if c.held == Held::Always || (c.held == Held::IfHeld && flows::held(&answer)) {
+        return flows::held_or_approve(cp, sock, &answer);
     }
+    if c.json {
+        return print_body(&answer);
+    }
+    reader(&c.reader, &answer).print()
 }
 
 /// What `reader` prints for `body`.
@@ -351,6 +417,13 @@ pub fn reader(r: &Reader, body: &[u8]) -> Shown {
         Reader::PinnedOnly => pinned_only(&mut cx, body),
         Reader::Routes => routes(&mut cx, body),
         Reader::Alerts => alerts_reader(&mut cx, body),
+        Reader::NodeNote => more::node_note(&mut cx, body),
+        Reader::Update => more::update_reader(&mut cx, body),
+        Reader::Rollout => more::rollout_reader(&mut cx, body),
+        Reader::PolicyShow => more::policy_reader(&mut cx, body),
+        Reader::AdminList => more::admin_list(&mut cx, body),
+        Reader::Denied => more::request_line(&mut cx, body, true),
+        Reader::Withdrew => more::request_line(&mut cx, body, false),
         Reader::Renamed(_) => unreachable!("printed above"),
     };
     match done {

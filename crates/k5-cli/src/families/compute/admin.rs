@@ -159,6 +159,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Ok(a) => a,
         Err(exit) => return Some(exit),
     };
+    let vault_sock = crate::confirm::sock_path(&settings.home);
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let mut client = match settings.client(would_refuse) {
@@ -181,7 +182,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Ask::Retier(a) => retier::send(&mut cp, a),
         Ask::Move(a) => moves::send(&mut cp, a),
         Ask::Cache(a) => cache::send(&mut cp, a),
-        Ask::Node(a) => node::send(&mut cp, a),
+        Ask::Node(a) => node::send(&mut cp, a, &vault_sock),
     };
     let closing = std::mem::take(&mut cp.closing);
     closing.flush(&mut client, exit);

@@ -816,3 +816,13 @@ fn compute_run_failures_is_the_shells() {
         )
     });
 }
+
+/// `compute` alone and `compute help`: the help page.
+#[test]
+fn compute_alone() {
+    let rig = Rig::new(VERB, "alone");
+    // covers: compute
+    rig.check(&case("compute alone", &[], &[], vec![], owner_and_port, 0, 0));
+    rig.check(&case("compute help", &["help"], &[], vec![], owner_and_port, 0, 0));
+    rig.check(&case("compute \"\"", &[""], &[], vec![], owner_and_port, 0, 0));
+}

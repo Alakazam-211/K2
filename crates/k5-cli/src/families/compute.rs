@@ -17,7 +17,7 @@
 //!   `trust` and `owners`.
 //! - [`submit`]: `run`, `test` and `prewarm`.
 //!
-//! Every other verb is the shell's. The modules below
+//! Every other line is the shell's. The modules below
 //! are shared: [`pyrt`] (the Python operations the shell's readers use),
 //! [`render`] (`_compute_render`), [`lines`] (where the shell's Python
 //! lines are) and `reads::call` (`_compute_call`).
@@ -41,167 +41,12 @@ use std::ffi::OsString;
 
 /// The router arm's words.
 pub const WORDS: &[&str] = &["compute"];
-/// The shell's but for [`VERBS`].
-pub const OWNER: Owner = Owner::Bash;
-/// One verb row per arm of `cmd_compute` (`cli/src/compute-command.sh`), so
-/// each can turn back alone, and the bare line's row (`compute` alone or
-/// with `--json`; [`run`] hands `--json` to the shell).
-pub const VERBS: &[Verb] = &[
-    Verb {
-        words: &["nodes", "ls"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["info"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["queue"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["jobs"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["get", "status"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["grants"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["receipt"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["events"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["stats"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["usage"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["logs"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["preview"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["placement"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["rightsize"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["cancel"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["wait"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["fetch"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["grant"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["revoke"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["access"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["operate"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["manage"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["retier"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["tier"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["move"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["cache"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["node"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["allow-nodes"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["git-access"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["lanes"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["local"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["attach"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["retry"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["provenance", "verify"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["roster", "seats", "trust", "owners"],
-        owner: Owner::Native,
-    },
-    // `compute` alone: the help page, after the gates ([`admin::setup`]).
-    Verb::bare(Owner::Native),
-    Verb {
-        words: &["run"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["test"],
-        owner: Owner::Native,
-    },
-    Verb {
-        words: &["prewarm"],
-        owner: Owner::Native,
-    },
-];
+/// The binary's: every arm of `cmd_compute` (`cli/src/compute-command.sh`)
+/// is native, and `compute` alone too. A form [`run`] doesn't take still
+/// goes to the shell CLI.
+pub const OWNER: Owner = Owner::Native;
+/// None: [`OWNER`] answers every verb.
+pub const VERBS: &[Verb] = &[];
 
 /// Whether this family's code answers `verb` (a second word).
 pub fn answers(verb: &str) -> bool {

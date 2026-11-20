@@ -773,6 +773,7 @@
 1 value src/renderer/components/Wiki/WikiGraph3D.tsx keeper: inert; the wiki page's own view mode
 1 value src/renderer/components/Wiki/WikiNoteList.tsx keeper: inert; the wiki page's own view mode
 1 value crates/k5-cli/src/families/app/reads.rs keeper: wire; the createdWith key in the daemon's app inspect answer (cw.get("k2"))
+1 value crates/k5-cli/src/families/zen/sign.rs keeper: wire; madeBy.kind of a built-in widget in the daemon's widget sign answer (zen_routes)
 1 value crates/k5-cli/src/families/explain.rs keeper: wire; the App refusal registry's who (k2-core refusals, through cli/src's _k2_refusals_json)
 1 value src/renderer/lib/agent-type.ts keeper: stored; the stored agent mode (ruling 5)
 1 value src/renderer/lib/garden-data/garden-data-types.ts keeper: wire; madeBy, from the Garden data JSON

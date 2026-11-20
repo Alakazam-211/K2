@@ -14,12 +14,18 @@ then schema-tail.sh's). Columns:
   forms    2 when the entry takes --json (the JSON form and the text form),
            else 1. A verb form is one of these (K2's ruling: the target
            counts forms).
-  where    cli/src/<file>:<line> of the bash code that answers it: the case
-           arm of its last word, found from the router's arm for its first
-           word through each dispatching function (`cmd_*`, or a function
-           called with "$@"). `<file>:<line>~` when no arm names the last
-           word and the line is the function that reads it; `-` when the
-           router has no arm for the first word.
+  where    the bash code that answers it, anchored on the function and the
+           arm word, never a line number (K2's ruling: an edit elsewhere in
+           the file does not move the row): cli/src/<file>:<function>:<words>,
+           the case arm of its last word, found from the router's arm for
+           its first word through each dispatching function (`cmd_*`, or a
+           function called with "$@"). <function> is the function that holds
+           the arm (empty for the router's own case, which is not in a
+           function); <words> are the arm words matched inside that function,
+           outermost first, joined by spaces (one word for a plain arm).
+           A trailing `~` when no arm names the last word: the anchor is
+           then the function or arm that reads it. `-` when the router has
+           no arm for the first word.
   via      the request functions its code calls (that code and the
            functions it calls in the same family, two levels), or `none`
   output   what its code prints with: body (printf of the body), text
@@ -112,6 +118,7 @@ def entries(order):
 
 
 def functions(order):
+    """name -> (file, line of `name() {`, body lines)."""
     funcs = {}
     for name in order:
         if not name.endswith(".sh"):
@@ -206,10 +213,13 @@ def dispatch(code, funcs):
 
 
 def locate(words, arms, funcs):
+    """Where `words` is answered: ((file, line), its code, exact, the
+    words whose arms were matched, each with its (file, line))."""
     arm = arms.get(words[0])
     if arm is None:
-        return None, [], False
+        return None, [], False, []
     file, line, code = arm
+    matched = [(words[0], (file, line))]
     exact = True
     for w in words[1:]:
         hit = arm_in(file, line, code, w)
@@ -224,7 +234,39 @@ def locate(words, arms, funcs):
                 file, line, code, exact = ffile, fline, fbody, False
                 break
         file, line, code = hit
-    return (file, line), code, exact
+        matched.append((w, (file, line)))
+    return (file, line), code, exact, matched
+
+
+def enclosing(funcs):
+    """(file, line) -> the name of the function that holds that line, or
+    "" for code outside every function (the router's case)."""
+    spans = {}
+    for name, (file, start, body) in funcs.items():
+        spans.setdefault(file, []).append((start, start + len(body) + 1, name))
+
+    def find(file, line):
+        for start, end, name in spans.get(file, []):
+            if start <= line <= end:
+                return name
+        return ""
+
+    return find
+
+
+def anchor(where, exact, matched, find):
+    """The `where` column: cli/src/<file>:<function>:<words>[~]. The
+    words are the matched arms that sit in the same function as `where`,
+    outermost first; none when `where` is the function itself."""
+    file, line = where
+    fn = find(file, line)
+    words = []
+    for w, (f, l) in reversed(matched):
+        if f != file or find(f, l) != fn:
+            break
+        if (f, l) == where or words:
+            words.insert(0, w)
+    return "cli/src/%s:%s:%s%s" % (file, fn, " ".join(words), "" if exact else "~")
 
 
 def gather(code, funcs, file):
@@ -244,11 +286,11 @@ def gather(code, funcs, file):
     return out
 
 
-def row(e, arms, funcs, spec_names):
+def row(e, arms, funcs, spec_names, find):
     name = e["name"]
     words = name.split(" ")
     forms = 2 if any(f.get("name") == "--json" for f in e.get("flags", [])) else 1
-    where, code, exact = locate(words, arms, funcs)
+    where, code, exact, matched = locate(words, arms, funcs)
     if where is None:
         return [name, str(forms), "-", "none", "none", "out:no-arm", "-"]
     text = "\n".join(l for l in gather(code, funcs, where[0]) if not l.lstrip().startswith("#"))
@@ -285,7 +327,7 @@ def row(e, arms, funcs, spec_names):
             tier = "2"
         else:
             tier = "1"
-    w = "cli/src/%s:%d%s" % (where[0], where[1], "" if exact else "~")
+    w = anchor(where, exact, matched, find)
     return [name, str(forms), w, ",".join(via) or "none", ",".join(output) or "none", kind, tier]
 
 
@@ -312,7 +354,8 @@ def main():
     spec_names = {e["name"] for e in ents if e.get("impl") == "spec"}
     pairs = sorted({(e["name"].split(" ")[0], (e["name"].split(" ") + [""])[1]) for e in ents})
     _TOOLS.update(shell_tools(pairs))
-    rows = [row(e, arms, funcs, spec_names) for e in ents]
+    find = enclosing(funcs)
+    rows = [row(e, arms, funcs, spec_names, find) for e in ents]
     head = ["entry", "forms", "where", "via", "output", "kind", "tier"]
     lines = ["\t".join(head)] + ["\t".join(r) for r in rows]
     counts = {}

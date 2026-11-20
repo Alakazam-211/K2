@@ -13,870 +13,870 @@
 # out:python-client             140 entries   274 forms
 # out:secret                    148 entries   206 forms
 entry	forms	where	via	output	kind	tier
-thread	2	cli/src/router.sh:598	compute,send,request,post-json,post-form	body,json,python	out:file	-
-browser note	2	cli/src/browser.sh:14	send,post-json	json,python	out:file	-
-ci	2	cli/src/router.sh:738	compute	json,python	out:confirm	-
-msg	1	cli/src/router.sh:583	request,post-json,post-form	json,python	out:file	-
-msg verify	2	cli/src/agent-template.sh:362~	request	json,python	candidate	3
-talk	1	cli/src/router.sh:611	send,request,request-post,post-form	json,python	out:secret	-
-read	1	cli/src/router.sh:604	send,request	json,python	out:open-tool	-
-terminal write	1	cli/src/router.sh:271	request-post	none	candidate	1
-terminal read	1	cli/src/router.sh:272	request	python	out:many-requests	-
-terminal spawn	1	cli/src/router.sh:270	request-post	none	candidate	1
-inbox	1	cli/src/router.sh:632	send,request,post-form	python	out:file	-
-review	1	cli/src/router.sh:288	request-post	none	out:open-tool	-
-sessions	2	cli/src/router.sh:646	sidecar,request,request-post	json,python	out:file	-
-sessions --past	2	cli/src/awareness.sh:391~	sidecar,request,request-post	body,json,python	out:file	-
-sessions show	2	cli/src/awareness.sh:409	sidecar	body,python	candidate	3
-sessions open	2	cli/src/awareness.sh:410	sidecar	body,json,python	out:file	-
-sessions main	2	cli/src/awareness.sh:406	sidecar	body,json,python	out:many-requests	-
-sessions main set	2	cli/src/sessions.sh:225	none	none	out:no-request	-
-sessions new	1	cli/src/awareness.sh:411	sidecar	json,python	out:file	-
-sessions stop	1	cli/src/awareness.sh:412	none	none	out:no-request	-
-sessions live	2	cli/src/awareness.sh:415	request	json,python	out:many-requests	-
-sidecar new	2	cli/src/sidecar.sh:630	none	none	out:no-request	-
-sidecar list	2	cli/src/sidecar.sh:631	none	none	out:no-request	-
-sidecar stop	2	cli/src/sidecar.sh:632	none	none	out:no-request	-
-sidecar archive	2	cli/src/sidecar.sh:633	none	none	out:no-request	-
-sidecar access	1	cli/src/sidecar.sh:634	none	none	out:no-request	-
-sources list	2	cli/src/sources.sh:163	compute	json,python	candidate	3
-sources show	2	cli/src/sources.sh:164	compute	json,python	candidate	3
-sources read	2	cli/src/sources.sh:165	compute	json,python	candidate	3
-sources history	2	cli/src/sources.sh:166	compute	json,python	candidate	3
-sources status	2	cli/src/sources.sh:167	compute	json,python	candidate	3
-sources export	1	cli/src/sources.sh:168	compute	json,python	candidate	3
-sources propose	2	cli/src/sources.sh:169	none	none	out:no-request	-
-sources add	2	cli/src/sources.sh:170	none	none	out:no-request	-
-sources edit	2	cli/src/sources.sh:171	compute	json,python	out:confirm	-
-sources remove	2	cli/src/sources.sh:172	compute	json,python	candidate	3
-sources pause	2	cli/src/sources.sh:173	none	json,python	out:no-request	-
-sources mute	2	cli/src/sources.sh:175	compute	json,python	candidate	3
-sources unmute	2	cli/src/sources.sh:176	none	json,python	out:no-request	-
-sources refresh	2	cli/src/sources.sh:177	compute	json,python	out:poll	-
-sources try	2	cli/src/sources.sh:178	compute	json,python	candidate	3
-sources simulate	2	cli/src/sources.sh:179	compute	json,python	candidate	3
-sources pending	2	cli/src/sources.sh:184	none	json,python	out:no-request	-
-sources approve	2	cli/src/sources.sh:180	compute	json,python	out:confirm	-
-sources secret	2	cli/src/sources.sh:181	compute	json,python	out:confirm	-
-sources pin	2	cli/src/sources.sh:182	none	none	out:no-request	-
-sources trigger	2	cli/src/sources.sh:185	compute	json,python	out:file	-
-changes	2	cli/src/router.sh:690	send-json	json,python	out:confirm	-
-changes diff	2	cli/src/changes-notes.sh:256	send-json,request	json,python	out:many-requests	-
-changes stage	2	cli/src/changes-notes.sh:257	send-json,request	json,python	out:many-requests	-
-changes discard	2	cli/src/changes-notes.sh:259	send-json,request	json,python	out:confirm	-
-changes commit	2	cli/src/changes-notes.sh:260	send-json,request	json,python	out:many-requests	-
-changes notes	2	cli/src/changes-notes.sh:261	none	python	out:no-request	-
-changes notes add	1	cli/src/changes-notes.sh:233	send-json,request	json,python	out:many-requests	-
-changes open	2	cli/src/changes-notes.sh:262	send-json,request	json,python	out:many-requests	-
-changes init	2	cli/src/changes-notes.sh:263	send-json,request	json,python	out:many-requests	-
-sim	2	cli/src/router.sh:694	none	json,python	out:no-request	-
-desktop	2	cli/src/router.sh:666	sidecar	json,python	out:open-tool	-
-sim tree	2	cli/src/sim.sh:587	send-json	json,python	candidate	3
-sim tap	2	cli/src/sim.sh:588	none	json,python	out:no-request	-
-sim install	2	cli/src/sim.sh:584	send-json	json,python	candidate	3
-sim screenshot	2	cli/src/sim.sh:597	send-json	json,python	candidate	3
-board	2	cli/src/router.sh:238	compute	json,python	out:file	-
-store --widget	2	cli/src/board.sh:588~	compute,garden-data,request,python-client	json,table	out:python-client	-
-zen data	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-llm tokens list	2	cli/src/llm.sh:350	sidecar	body,python	candidate	3
-llm tokens status	2	cli/src/llm.sh:357	sidecar	body,json,python	candidate	3
-usage tokens	2	cli/src/usage.sh:87	sidecar	body,python	candidate	3
-usage turns	2	cli/src/usage.sh:140	sidecar	body,python	candidate	3
-usage limits	2	cli/src/usage.sh:167	sidecar	body,json,python	out:many-requests	-
-llm tokens usage	2	cli/src/llm.sh:381	sidecar	body,python	candidate	3
-llm tokens add	1	cli/src/llm.sh:397	sidecar	body,json,python	out:secret	-
-llm tokens switch	1	cli/src/llm.sh:413	sidecar	body,json,python	out:many-requests	-
-llm tokens next	1	cli/src/llm.sh:422	sidecar	body,json,python	candidate	3
-llm tokens auto-next	2	cli/src/llm.sh:523	sidecar	none	candidate	1
-llm tokens add-key	1	cli/src/llm.sh:679	sidecar,curl	body,json,python	out:secret	-
-llm tokens pin	1	cli/src/llm.sh:638	sidecar	body,json,python	out:many-requests	-
-llm tokens unpin	1	cli/src/llm.sh:638	sidecar	body,json,python	out:many-requests	-
-llm tokens pins	2	cli/src/llm.sh:570	sidecar	body,python	candidate	3
-llm tokens for	2	cli/src/llm.sh:591	sidecar	body,json,python	out:many-requests	-
-connections	2	cli/src/router.sh:748	send,request,request-post	json,python	out:file	-
-connections list	2	cli/src/help-helpers.sh:15~	none	none	out:no-request	-
-workspace trust status	2	cli/src/wiki.sh:1162	send,request	python	out:open-tool	-
-workspace trust request	1	cli/src/wiki.sh:1185	send,request-post	python	out:open-tool	-
-agent hire	2	cli/src/router.sh:45	python-client	json,python	out:python-client	-
-agent template list	2	cli/src/agent-template.sh:14	request	json,python	out:open-tool	-
-agent template show	2	cli/src/agent-template.sh:30	request	json,python	out:open-tool	-
-agent template save	2	cli/src/agent-template.sh:49	post-json	json,python	out:open-tool	-
-agent template add	2	cli/src/agent-template.sh:79	post-json	json,python	out:open-tool	-
-agent template remove	2	cli/src/agent-template.sh:98	post-json	json,python	out:open-tool	-
-agent template diff	2	cli/src/agent-template.sh:120	post-json	json,python	out:open-tool	-
-agent template upgrade	2	cli/src/agent-template.sh:120	post-json	json,python	out:open-tool	-
-agent conf	2	cli/src/router.sh:42	request	json,python	out:open-tool	-
-agent get	2	cli/src/router.sh:43	request	json,python	out:open-tool	-
-agent access	2	cli/src/router.sh:50	compute	body,python	out:open-tool	-
-agent set	2	cli/src/router.sh:44	request,python-client	json,python	out:python-client	-
-agent list	2	cli/src/router.sh:59	request	json,python	out:open-tool	-
-agent retire	2	cli/src/router.sh:60	request,python-client	json,python	out:python-client	-
-agent identity	2	cli/src/router.sh:47	send-json	json,python	out:file	-
-agent restart	2	cli/src/router.sh:61	request,python-client	json,python	out:python-client	-
-agent harness	2	cli/src/router.sh:63	send-json	json,python	out:file	-
-agent refresh	2	cli/src/router.sh:64	send-json	json,python	out:file	-
-agent context	2	cli/src/router.sh:67	request	json,python	out:open-tool	-
-agent context list	2	cli/src/agent-context.sh:397	python-client	json,python	out:python-client	-
-agent context add	2	cli/src/agent-context.sh:398	python-client	json,python	out:python-client	-
-agent context remove	2	cli/src/agent-context.sh:399	python-client	json,python	out:python-client	-
-agent context on	2	cli/src/agent-context.sh:401	python-client	json,python	out:python-client	-
-agent context off	2	cli/src/agent-context.sh:402	python-client	json,python	out:python-client	-
-agent context move	2	cli/src/agent-context.sh:403	python-client	json,python	out:python-client	-
-agent context show	2	cli/src/agent-context.sh:404	python-client	json,python	out:python-client	-
-agent context regen	2	cli/src/agent-context.sh:405	python-client	json,python	out:python-client	-
-agent context catalog	2	cli/src/agent-context.sh:406	python-client	json,python	out:python-client	-
-preset list	2	cli/src/router.sh:92	python-client	json,python	out:python-client	-
-preset show	2	cli/src/router.sh:93	python-client	json,python	out:python-client	-
-preset add	2	cli/src/router.sh:94	python-client	json,python	out:python-client	-
-preset set	2	cli/src/router.sh:95	python-client	json,python	out:python-client	-
-preset remove	2	cli/src/router.sh:96	python-client	json,python	out:python-client	-
-feedback ask	2	cli/src/router.sh:107	python-client	json,python	out:python-client	-
-feedback list	2	cli/src/router.sh:108	request	json,python	out:open-tool	-
-feedback show	2	cli/src/router.sh:109	request	json,python	out:open-tool	-
-feedback template	1	cli/src/router.sh:110	none	json,python	out:no-request	-
-feedback comment	2	cli/src/router.sh:111	post-json	json,python	out:open-tool	-
-feedback assign	2	cli/src/router.sh:112	post-json	json,python	out:open-tool	-
-feedback resolve	2	cli/src/router.sh:113	post-json	json,python	out:open-tool	-
-feedback settings	2	cli/src/router.sh:114	request,post-json	json,python	out:open-tool	-
-project create	2	cli/src/router.sh:133	python-client	json,python	out:python-client	-
-project list	2	cli/src/router.sh:138	python-client	json,python	out:python-client	-
-project show	2	cli/src/router.sh:139	python-client	json,python	out:python-client	-
-project add	2	cli/src/router.sh:140	python-client	json,python	out:python-client	-
-project remove	2	cli/src/router.sh:141	python-client	json,python	out:python-client	-
-project poc	2	cli/src/router.sh:142	python-client	json,python	out:python-client	-
-project view	2	cli/src/router.sh:137	python-client	json,python	out:python-client	-
-project msg	2	cli/src/router.sh:143	python-client	json,python	out:python-client	-
-organization bulletin	2	cli/src/permission.sh:843	send-json	json,python	out:file	-
-organization reach	2	cli/src/permission.sh:881	send-json	json,python	candidate	3
-organization list	2	cli/src/permission.sh:873	send-json	python	candidate	3
-organization create	2	cli/src/permission.sh:904	send-json	json,python	candidate	3
-project read	2	cli/src/router.sh:144	python-client	json,python	out:python-client	-
-db create	2	cli/src/db-store.sh:911	compute	body,json,python	out:python-client	-
-db cap	2	cli/src/db-store.sh:1046	request,post-json	json,python	out:python-client	-
-db clusters	2	cli/src/db-store.sh:901	python-client	json,python	out:python-client	-
-db cluster create	2	cli/src/db-store.sh:912	compute	body,json,python	out:python-client	-
-db cluster restart	2	cli/src/db-store.sh:929	compute	body,json,python	out:python-client	-
-db upgrade	2	cli/src/db-store.sh:748	compute	body,json,python	out:python-client	-
-db default-major	2	cli/src/db-store.sh:935	python-client	json,python	out:python-client	-
-db status	2	cli/src/db-store.sh:664	python-client	json,python	out:python-client	-
-db grant	2	cli/src/db-store.sh:1062	python-client	json,python	out:python-client	-
-db revoke	2	cli/src/db-store.sh:1099	python-client	json,python	out:python-client	-
-db bind	2	cli/src/db-store.sh:1114	python-client	json,python	out:python-client	-
-db dsn	2	cli/src/db-store.sh:943	python-client	json,python	out:python-client	-
-db run	1	cli/src/db-store.sh:969	python-client	json,python	out:python-client	-
-db list	2	cli/src/db-store.sh:940	python-client	json,python	out:python-client	-
-db migrate	2	cli/src/db-store.sh:995	python-client	json,python	out:python-client	-
-db dump	2	cli/src/db-store.sh:1007	python-client	json,python	out:python-client	-
-db restore	2	cli/src/db-store.sh:1019	python-client	json,python	out:python-client	-
-db drop	2	cli/src/db-store.sh:1033	python-client	json,python	out:python-client	-
-store put	2	cli/src/board.sh:605	python-client	json,python	out:python-client	-
-store list	2	cli/src/board.sh:602	python-client	json,python	out:python-client	-
-hostmail create	2	cli/src/hostmail-app-cert-backup.sh:212	python-client	json,python	out:python-client	-
-mail inboxes	2	cli/src/router.sh:161	python-client	json,python	out:python-client	-
-mail domains	2	cli/src/router.sh:164	python-client	json,python	out:python-client	-
-mail messages	2	cli/src/router.sh:165	python-client	json,python	out:python-client	-
-mail read	2	cli/src/router.sh:166	python-client	json,python	out:python-client	-
-mail attachments	2	cli/src/router.sh:167	python-client	json,python	out:python-client	-
-mail watch	2	cli/src/router.sh:169	none	json,python	out:no-request	-
-mail wait	2	cli/src/router.sh:168	python-client	json,python	out:python-client	-
-calendar list	2	cli/src/calendar.sh:549	none	none	out:no-request	-
-calendar events	2	cli/src/calendar.sh:550	none	none	out:no-request	-
-calendar show	2	cli/src/calendar.sh:618	none	none	out:no-request	-
-calendar calendars	2	cli/src/calendar.sh:552	none	none	out:no-request	-
-calendar link	2	cli/src/calendar.sh:553	none	none	out:no-request	-
-calendar freebusy	2	cli/src/calendar.sh:554	none	none	out:no-request	-
-calendar wait	2	cli/src/calendar.sh:555	none	none	out:no-request	-
-calendar create	2	cli/src/calendar.sh:556	none	none	out:no-request	-
-calendar update	2	cli/src/calendar.sh:618	none	none	out:no-request	-
-calendar delete	2	cli/src/calendar.sh:618	none	none	out:no-request	-
-mail send	2	cli/src/router.sh:170	python-client	json,python	out:python-client	-
-mail forward-message	2	cli/src/router.sh:172	python-client	json,python	out:python-client	-
-mail reply	2	cli/src/router.sh:171	python-client	json,python	out:python-client	-
-mail draft	2	cli/src/router.sh:183	python-client	json,python	out:python-client	-
-mail outbox	2	cli/src/router.sh:185	python-client	json,python	out:python-client	-
-hostmail delete	2	cli/src/hostmail-app-cert-backup.sh:213	python-client	json,python	out:python-client	-
-mail capabilities	2	cli/src/router.sh:192	python-client	json,python	out:python-client	-
-mail oauth-config	2	cli/src/router.sh:193	python-client	json,python	out:python-client	-
-mail link	2	cli/src/router.sh:188	python-client	none	out:python-client	-
-mail forward	2	cli/src/router.sh:207	python-client	json,python	out:python-client	-
-mail access	2	cli/src/router.sh:189	python-client	json,python	out:python-client	-
-mail move	2	cli/src/router.sh:175	python-client	json,python	out:python-client	-
-mail flag	2	cli/src/router.sh:176	python-client	json,python	out:python-client	-
-mail archive	2	cli/src/router.sh:177	python-client	json,python	out:python-client	-
-mail delete	2	cli/src/router.sh:178	python-client	json,python	out:python-client	-
-mail folder	2	cli/src/router.sh:179	python-client	json,python	out:python-client	-
-hostmail	2	cli/src/router.sh:222	python-client	json,python	out:python-client	-
-hostmail enable	2	cli/src/hostmail-app-cert-backup.sh:202	python-client	json,python	out:python-client	-
-hostmail uninstall	2	cli/src/hostmail-app-cert-backup.sh:204	python-client	json,python	out:python-client	-
-hostmail upgrade	2	cli/src/hostmail-app-cert-backup.sh:205	python-client	json,python	out:python-client	-
-hostmail cert renew	2	cli/src/hostmail-app-cert-backup.sh:590	python-client	json,python	out:python-client	-
-hostmail cert names	2	cli/src/hostmail-app-cert-backup.sh:591	python-client	json,python	out:python-client	-
-hostmail cert names issue	2	cli/src/hostmail-app-cert-backup.sh:646	none	none	out:no-request	-
-hostmail cert names renew	2	cli/src/hostmail-app-cert-backup.sh:646	none	none	out:no-request	-
-hostmail cert owner	2	cli/src/hostmail-app-cert-backup.sh:592	python-client	json,python	out:python-client	-
-hostmail backup status	2	cli/src/hostmail-app-cert-backup.sh:682	python-client	json,python	out:python-client	-
-hostmail backup plan	2	cli/src/hostmail-app-cert-backup.sh:683	python-client	json,python	out:python-client	-
-hostmail backup set	2	cli/src/hostmail-app-cert-backup.sh:684	python-client	json,python	out:python-client	-
-hostmail outbound	2	cli/src/hostmail-app-cert-backup.sh:233	python-client	json,python	out:python-client	-
-hostmail rotate-admin	2	cli/src/hostmail-app-cert-backup.sh:207	python-client	json,python	out:python-client	-
-hostmail password rotate	2	cli/src/hostmail-app-cert-backup.sh:334	python-client	json,python	out:python-client	-
-hostmail password keep	2	cli/src/hostmail-app-cert-backup.sh:335	python-client	json,python	out:python-client	-
-hostmail quota get	2	cli/src/hostmail-app-cert-backup.sh:836	python-client	json,python	out:python-client	-
-hostmail quota set	2	cli/src/hostmail-app-cert-backup.sh:837	python-client	json,python	out:python-client	-
-hostmail catchall	2	cli/src/hostmail-app-cert-backup.sh:219	python-client	json,python	out:python-client	-
-hostmail ooo set	2	cli/src/hostmail-ooo-footer.sh:28	python-client	json,python	out:python-client	-
-hostmail alias	2	cli/src/hostmail-app-cert-backup.sh:220	python-client	json,python	out:python-client	-
-hostmail forward	2	cli/src/hostmail-app-cert-backup.sh:221	python-client	json,python	out:python-client	-
-hostmail ooo unset	2	cli/src/hostmail-ooo-footer.sh:29	python-client	json,python	out:python-client	-
-hostmail ooo show	2	cli/src/hostmail-ooo-footer.sh:30	python-client	json,python	out:python-client	-
-hostmail footer set	2	cli/src/hostmail-ooo-footer.sh:154	python-client	json,python	out:python-client	-
-hostmail footer unset	2	cli/src/hostmail-ooo-footer.sh:155	python-client	json,python	out:python-client	-
-hostmail footer show	2	cli/src/hostmail-ooo-footer.sh:156	python-client	json,python	out:python-client	-
-hostmail app-password add	2	cli/src/hostmail-app-cert-backup.sh:409	python-client	json,python	out:python-client	-
-hostmail app-password list	2	cli/src/hostmail-app-cert-backup.sh:410	python-client	json,python	out:python-client	-
-hostmail app-password revoke	2	cli/src/hostmail-app-cert-backup.sh:411	python-client	json,python	out:python-client	-
-hostmail app-password keep	2	cli/src/hostmail-app-cert-backup.sh:412	python-client	json,python	out:python-client	-
-hostmail person	2	cli/src/hostmail-app-cert-backup.sh:210	python-client	json,python	out:python-client	-
-hostmail dkim show	2	cli/src/hostmail-dkim-dmarc.sh:8	python-client	json,python	out:python-client	-
-hostmail dkim rotate	2	cli/src/hostmail-dkim-dmarc.sh:9	python-client	json,python	out:python-client	-
-hostmail dkim retire	2	cli/src/hostmail-dkim-dmarc.sh:10	python-client	json,python	out:python-client	-
-hostmail dmarc show	2	cli/src/hostmail-dkim-dmarc.sh:106	python-client	json,python	out:python-client	-
-hostmail dmarc report-to	2	cli/src/hostmail-dkim-dmarc.sh:107	python-client	json,python	out:python-client	-
-hostmail ptr show	2	cli/src/hostmail-bans-allowlist.sh:149	python-client	json,python	out:python-client	-
-hostmail ptr set	2	cli/src/hostmail-bans-allowlist.sh:150	python-client	json,python	out:python-client	-
-hostmail bans list	2	cli/src/hostmail-bans-allowlist.sh:208	python-client	json,python	out:python-client	-
-hostmail bans clear	2	cli/src/hostmail-bans-allowlist.sh:209	python-client	json,python	out:python-client	-
-hostmail bans migrate	2	cli/src/hostmail-bans-allowlist.sh:210	python-client	none	out:python-client	-
-hostmail bans migrate restore	2	cli/src/hostmail-bans-allowlist.sh:266	python-client	json,python	out:python-client	-
-hostmail bans migrate status	2	cli/src/hostmail-bans-allowlist.sh:270	python-client	json,python	out:python-client	-
-hostmail allowlist list	2	cli/src/hostmail-bans-allowlist.sh:352	python-client	json,python	out:python-client	-
-hostmail allowlist add	2	cli/src/hostmail-bans-allowlist.sh:353	python-client	json,python	out:python-client	-
-hostmail allowlist remove	2	cli/src/hostmail-bans-allowlist.sh:354	python-client	json,python	out:python-client	-
-hostmail audit-sieve	2	cli/src/hostmail-app-cert-backup.sh:239	python-client	json,python	out:python-client	-
-hostmail calendar status	2	cli/src/hostmail-dkim-dmarc.sh:174	python-client	json,python	out:python-client	-
-hostmail calendar enable	2	cli/src/hostmail-dkim-dmarc.sh:174	python-client	json,python	out:python-client	-
-hostmail calendar disable	2	cli/src/hostmail-dkim-dmarc.sh:174	python-client	json,python	out:python-client	-
-hostmail calendar create	2	cli/src/hostmail-dkim-dmarc.sh:175	python-client	json,python	out:python-client	-
-hostmail calendar rename	2	cli/src/hostmail-dkim-dmarc.sh:175	python-client	json,python	out:python-client	-
-hostmail calendar share	2	cli/src/hostmail-dkim-dmarc.sh:175	python-client	json,python	out:python-client	-
-hostmail calendar unshare	2	cli/src/hostmail-dkim-dmarc.sh:175	python-client	json,python	out:python-client	-
-hostmail calendar shares	2	cli/src/hostmail-dkim-dmarc.sh:175	python-client	json,python	out:python-client	-
-hostmail calendar sharing	2	cli/src/hostmail-dkim-dmarc.sh:175	python-client	json,python	out:python-client	-
-hostmail group create	2	cli/src/hostmail-bans-allowlist.sh:33	python-client	json,python	out:python-client	-
-hostmail group add	2	cli/src/hostmail-bans-allowlist.sh:38	python-client	json,python	out:python-client	-
-hostmail group remove	2	cli/src/hostmail-bans-allowlist.sh:38	python-client	json,python	out:python-client	-
-hostmail group list	2	cli/src/hostmail-bans-allowlist.sh:48	python-client	json,python	out:python-client	-
-hostmail group show	2	cli/src/hostmail-bans-allowlist.sh:52	python-client	json,python	out:python-client	-
-hostmail group delete	2	cli/src/hostmail-bans-allowlist.sh:52	python-client	json,python	out:python-client	-
-hostchat	2	cli/src/router.sh:702	compute	body,json,table	out:secret	-
-hostchat enable	1	cli/src/hostchat-voice.sh:860	compute	body,json,table	out:poll	-
-hostchat recording	1	cli/src/hostchat-voice.sh:788	compute	body,json,table	out:secret	-
-hostchat media	1	cli/src/hostchat-voice.sh:777	compute	body,json,table	out:confirm	-
-hostchat users	1	cli/src/hostchat-voice.sh:779	compute	body,json,table	out:file	-
-hostchat config	1	cli/src/hostchat-voice.sh:950	compute	body,json,table	out:many-requests	-
-hostchat app-url	1	cli/src/hostchat-voice.sh:996	compute	body,json,table	candidate	2
-hostchat ship	1	cli/src/hostchat-voice.sh:1013	compute	body,json,table	candidate	2
-hostchat mirror	1	cli/src/hostchat-voice.sh:1013	compute	body,json,table	candidate	2
-hostchat app-space	1	cli/src/hostchat-voice.sh:787	compute	body,json,table	out:secret	-
-hostchat app-space governance	1	cli/src/hostchat-voice.sh:787~	compute	body,json,table	out:secret	-
-hostchat app-space recording	1	cli/src/hostchat-voice.sh:787~	compute	body,json,table	out:secret	-
-hostchat app-space recording-lock	1	cli/src/hostchat-voice.sh:787~	compute	body,json,table	out:secret	-
-hostchat recording policy	1	cli/src/hostchat-voice.sh:1498	compute	body,json,python	out:confirm	-
-hostchat pass-keys	1	cli/src/hostchat-voice.sh:790	compute	body,python	out:file	-
-hostchat open	1	cli/src/hostchat-voice.sh:1027	compute,curl	json,python	out:secret	-
-hostchat meet	1	cli/src/hostchat-voice.sh:780	compute	body,json,table	out:file	-
-hostchat people	1	cli/src/hostchat-voice.sh:781	compute	body,json,table	out:file	-
-hostchat approvals	1	cli/src/hostchat-voice.sh:782	compute	body,json,table	out:confirm	-
-hostchat agents	1	cli/src/hostchat-voice.sh:791	compute	body,json,table	out:file	-
-hostchat on-behalf	1	cli/src/hostchat-voice.sh:783	compute	body,json,table	out:confirm	-
-hostchat deliveries	1	cli/src/hostchat-voice.sh:786	compute	body,json,table	out:file	-
-hostchat log	1	cli/src/hostchat-voice.sh:785	compute	body,json,python	out:file	-
-voice	2	cli/src/router.sh:706	compute	body,json,table	out:file	-
-voice settings	1	cli/src/hostchat-voice.sh:279	compute	body,json,table	candidate	2
-voice recordings	1	cli/src/hostchat-voice.sh:247	compute	body,table	candidate	2
-voice transcript	1	cli/src/hostchat-voice.sh:252	compute	body,table	candidate	2
-voice transcripts	1	cli/src/hostchat-voice.sh:258	compute	body,table	candidate	2
-chat	2	cli/src/router.sh:710	compute	body,json,table	out:file	-
-chat send	1	cli/src/chat.sh:420	none	json,python	out:no-request	-
-chat reply	1	cli/src/chat.sh:423	none	json,python	out:no-request	-
-chat dm	1	cli/src/chat.sh:424	none	json,python	out:no-request	-
-chat messages	1	cli/src/chat.sh:358	compute	body,json,table	candidate	2
-chat read	1	cli/src/chat.sh:366	compute	body,json,table	candidate	2
-chat wait	1	cli/src/chat.sh:370	compute	body,json,table	candidate	2
-chat unread	1	cli/src/chat.sh:390	compute	body,json,table	candidate	2
-chat follow	1	cli/src/chat.sh:404	compute	body,json,table	candidate	2
-chat prefs	1	cli/src/chat.sh:408	compute	body,json,table	candidate	2
-chat outbox	1	cli/src/chat.sh:443	compute	body,json,table	candidate	2
-chat edit	1	cli/src/chat.sh:434	compute	body,json,table	candidate	2
-chat spaces	1	cli/src/chat.sh:351	compute	body,json,table	candidate	2
-chat access	1	cli/src/chat.sh:455	compute	body,json,table	candidate	2
-chat channel	1	cli/src/chat.sh:456	compute	body,json,table	candidate	2
-chat space	1	cli/src/chat.sh:479	compute	body,json,table	candidate	2
-chat role	1	cli/src/chat.sh:505	compute	body,json,table	candidate	2
-hostmail profile	2	cli/src/hostmail-app-cert-backup.sh:238	python-client	json,python	out:python-client	-
-dns access	2	cli/src/router.sh:247	send,request	json,table	out:file	-
-dns list	2	cli/src/router.sh:248	send,request	json,table	out:file	-
-dns records	2	cli/src/router.sh:249	send,request	json,table	out:file	-
-dns record add	2	cli/src/dns.sh:447	send,post-json	json,table	out:file	-
-dns record remove	2	cli/src/dns.sh:448	send,post-json	json,table	out:file	-
-dns verify	2	cli/src/router.sh:251	send,post-json	json,table	out:file	-
-dns	2	cli/src/router.sh:242	send,request,post-json	json,table	out:file	-
-domain list	2	cli/src/domains-certs.sh:389	send,request	json,table	out:file	-
-domain add	2	cli/src/domains-certs.sh:390	send,post-json	json,table	out:file	-
-domain remove	2	cli/src/domains-certs.sh:391	send,post-json	json,table	out:file	-
-domain refresh	2	cli/src/domains-certs.sh:392	send,post-json	json,table	out:file	-
-domain name add	2	cli/src/domains-certs.sh:378	send,post-json	json,table	out:file	-
-domain name remove	2	cli/src/domains-certs.sh:379	send,post-json	json,table	out:file	-
-domain	2	cli/src/router.sh:257	send,request,post-json	json,table	out:file	-
-cert list	2	cli/src/domains-certs.sh:479	send,request	json,table	out:file	-
-cert	2	cli/src/router.sh:262	send,request,post-json	json,table	out:file	-
-heartbeat	1	cli/src/router.sh:376	send,request,request-post,python-client	json,python	out:python-client	-
-heartbeat remind	2	cli/src/router.sh:393	send,request,request-post	python	out:file	-
-heartbeat schedule	2	cli/src/router.sh:400	send,request,request-post	json,python	out:file	-
-heartbeat signal	1	cli/src/router.sh:437	send,request,request-post,python-client	json,python	out:python-client	-
-heartbeat session	1	cli/src/router.sh:469	send,request,request-post	python	out:many-requests	-
-heartbeat restart	2	cli/src/router.sh:470	send,request-post	json,python	out:many-requests	-
-heartbeat show	2	cli/src/router.sh:473	send,request	json,python	out:many-requests	-
-heartbeat status	1	cli/src/router.sh:475	send,request	python	out:many-requests	-
-heartbeat log	1	cli/src/router.sh:451	send,request	python	out:many-requests	-
-workspace	1	cli/src/router.sh:299	send-json,send,request,request-post,post-json,post-form,curl	json,python	out:open-tool	-
-activity	2	cli/src/router.sh:628	request	json,python	out:open-tool	-
-glossary	1	cli/src/router.sh:636	request	python	out:open-tool	-
-whats-new	1	cli/src/router.sh:625	request,request-post	python	out:open-tool	-
-update	1	cli/src/router.sh:924	none	python	out:no-request	-
-daemon	1	cli/src/router.sh:493	request,post-json,curl	python	out:secret	-
-tunnel	1	cli/src/router.sh:544	request,post-json	json,python	out:open-tool	-
-tunnel disable	1	cli/src/usage.sh:748	none	python	out:no-request	-
-tunnel enable	1	cli/src/usage.sh:767	none	python	out:no-request	-
-tunnel switch	1	cli/src/usage.sh:805	post-json	json,python	out:open-tool	-
-tunnel release	1	cli/src/usage.sh:870	none	python	out:no-request	-
-tunnel forget	1	cli/src/usage.sh:908	none	python	out:no-request	-
-tunnel subdomains	2	cli/src/usage.sh:1068	request	python	out:open-tool	-
-publish	2	cli/src/router.sh:829	sidecar,send,request,post-json	body,json,python	out:secret	-
-publish run	2	cli/src/connect.sh:736	none	json,python	out:no-request	-
-publish visibility	2	cli/src/connect.sh:766	send,request,post-json	json,python	out:secret	-
-publish open	2	cli/src/connect.sh:769	send,post-json	json,python	out:file	-
-publish sessions	2	cli/src/connect.sh:772	send,request,post-json	json,python	out:file	-
-publish frame	2	cli/src/connect.sh:760	send,post-json	json,python	out:file	-
-publish start	2	cli/src/connect.sh:739	none	none	out:no-request	-
-publish stop	2	cli/src/connect.sh:742	none	none	out:no-request	-
-publish rm	1	cli/src/connect.sh:791	sidecar,curl	body,json,python	out:secret	-
-publish ps	2	cli/src/connect.sh:748	send,request	json,python	out:file	-
-publish logs	1	cli/src/connect.sh:751	send,request	json,python	out:file	-
-publish subdomain claim	1	cli/src/connect.sh:2007	send	python	candidate	3
-connect	1	cli/src/router.sh:908	send,request,post-json,python-client	json,python	out:python-client	-
-connect login	1	cli/src/connect-account.sh:720	send,post-json,python-client	json,python	out:python-client	-
-connect status	1	cli/src/connect-account.sh:723	send,request	python	out:file	-
-connect logout	1	cli/src/connect-account.sh:726	python-client	python	out:python-client	-
-users	2	cli/src/router.sh:838	send,request,post-json	json,python	out:secret	-
-users unlock	2	cli/src/clone.sh:1519	send,post-json	json,python	out:file	-
-users add	1	cli/src/clone.sh:1006	send,post-json	json,python	out:secret	-
-users audit	2	cli/src/clone.sh:1415	send,request	python	out:file	-
-users set-role	1	cli/src/clone.sh:1199	send,post-json	json,python	out:secret	-
-users share	2	cli/src/clone.sh:1254	send,request,post-json	json,python	out:file	-
-users set-password	1	cli/src/clone.sh:1340	send,post-json	json,python	out:secret	-
-users pair-phone	2	cli/src/clone.sh:1589	send,post-json	json,python	out:secret	-
-users phones	2	cli/src/clone.sh:1593	send,request	json,python	out:file	-
-users unpair-phone	2	cli/src/clone.sh:1597	send,post-json	json,python	out:file	-
-users set-can-clone	1	cli/src/clone.sh:1489	send,post-json	json,python	out:many-requests	-
-clone	2	cli/src/router.sh:834	compute,python-client	body,json,python	out:python-client	-
-clone propose	1	cli/src/clone.sh:751	compute	body,json,python	out:open-tool	-
-app	1	cli/src/router.sh:766	compute,request,post-json	body,json,python	out:confirm	-
-app validate	2	cli/src/router.sh:775	compute,request,post-json	body,json,python	out:confirm	-
-app db connect	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app db status	2	cli/src/app-wallet.sh:112	compute	body,python	out:file	-
-app db check	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app db disconnect	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app status	2	cli/src/router.sh:775	compute,request,post-json	body,json,python	out:confirm	-
-explain	2	cli/src/router.sh:949	none	json,python	out:no-request	-
-capabilities	2	cli/src/router.sh:954	compute	body,python	out:file	-
-approve	2	cli/src/router.sh:963	compute	body,python	out:open-tool	-
-send-feedback	2	cli/src/router.sh:958	compute	body,json,python	out:open-tool	-
-app sdk add	2	cli/src/app-wallet.sh:175	compute,request,post-json	body,json,python	out:file	-
-app sdk status	2	cli/src/app-wallet.sh:112	compute	body,python	out:file	-
-app sdk kit	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app init	2	cli/src/router.sh:784	compute,request,post-json	body,json,python	out:confirm	-
-app doctor store	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app links	2	cli/src/router.sh:784	compute,request,post-json	body,json,python	out:confirm	-
-app auth	2	cli/src/router.sh:784	compute,request,post-json	body,json,python	out:confirm	-
-app updates push	2	cli/src/app-wallet.sh:155	compute	body,json,python	out:file	-
-app updates ls	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app updates key	2	cli/src/app-wallet.sh:153	compute	body,json,python	out:confirm	-
-app updates token	2	cli/src/app-wallet.sh:219	compute,request,post-json	body,json,python	out:file	-
-app updates promote	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app updates rollback	2	cli/src/app-wallet.sh:117	compute	body,python	out:file	-
-app updates pull	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app updates stats	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app updates fleet	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user add	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user invite	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user reset	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app login settings	2	cli/src/app-wallet.sh:203	compute	body,json,python	out:file	-
-app profile settings	2	cli/src/app-wallet.sh:197	compute	body,python	out:file	-
-app set	2	cli/src/router.sh:784	compute,request,post-json	body,json,python	out:confirm	-
-app account-deletion	2	cli/src/router.sh:784	compute,request,post-json	body,json,python	out:confirm	-
-app user show	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user image	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user sessions	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user email	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user agent	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user full-name	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user password	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user unlock	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user list	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user remove	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user rooms	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user role	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app user unassign	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app role	1	cli/src/app-wallet.sh:175	compute,request,post-json	body,json,python	out:file	-
-app role create	1	cli/src/app-wallet.sh:845	post-json	json,python	candidate	3
-app role list	1	cli/src/app-wallet.sh:1210	request	python	out:many-requests	-
-app role room	1	cli/src/app-wallet.sh:923	post-json	json,python	candidate	3
-app role paths	1	cli/src/app-wallet.sh:981	post-json	json,python	candidate	3
-app role update	1	cli/src/app-wallet.sh:1082	post-json	json,python	candidate	3
-app role remove	1	cli/src/app-wallet.sh:1128	post-json	json,python	candidate	3
-app grant	1	cli/src/router.sh:796	compute,request,post-json	body,json,python	out:confirm	-
-app grant chat-key	1	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app recording	2	cli/src/router.sh:784	compute,request,post-json	body,json,python	out:confirm	-
-app chat	2	cli/src/router.sh:775	compute,request,post-json	body,json,python	out:confirm	-
-app grant list	1	cli/src/router.sh:799	none	none	out:no-request	-
-app grant add	1	cli/src/router.sh:799	none	none	out:no-request	-
-app grant rm	1	cli/src/router.sh:799	none	none	out:no-request	-
-app grant role	1	cli/src/app-wallet.sh:175	compute,request,post-json	body,json,python	out:file	-
-app grant set	1	cli/src/app-wallet.sh:189	compute	body,python	out:file	-
-app grant hooks	2	cli/src/app-wallet.sh:175	compute,request,post-json	body,json,python	out:file	-
-app grant copy-host	2	cli/src/router.sh:799	none	none	out:no-request	-
-app grant guests-rooms	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app guest rooms	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app guest ceiling	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app guest list	2	cli/src/app-wallet.sh:175	compute,request,post-json	body,json,python	out:file	-
-app wallet	2	cli/src/app-wallet.sh:182	compute	body,python	out:file	-
-app hydra	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app front-door	2	cli/src/app-wallet.sh:106~	compute,request,post-json,curl	body,json,python	out:secret	-
-app token	1	cli/src/app-wallet.sh:219	compute,request,post-json	body,json,python	out:file	-
-app token create	1	cli/src/app-recording.sh:380~	compute	body,json,python	out:file	-
-app token list	1	cli/src/app-recording.sh:380~	compute	body,json,python	out:file	-
-app token rooms	1	cli/src/app-recording.sh:380~	compute	body,json,python	out:file	-
-app token revoke	1	cli/src/app-recording.sh:380~	compute	body,json,python	out:file	-
-app members	2	cli/src/app-wallet.sh:183	compute	body,python	out:file	-
-app room-names	1	cli/src/app-wallet.sh:208	compute	body,python	out:file	-
-app self	2	cli/src/app-wallet.sh:209	compute	body,python	out:file	-
-app usage	2	cli/src/app-wallet.sh:211	compute	body,python	out:file	-
-skin	1	cli/src/router.sh:813	compute,request,post-json	body,json,python	out:file	-
-skin user add	1	cli/src/app-wallet.sh:271	post-json	json,python	candidate	3
-skin user email	1	cli/src/app-wallet.sh:615	post-json	json,python	candidate	3
-skin user password	1	cli/src/app-wallet.sh:518	post-json	json,python	candidate	3
-skin user unlock	2	cli/src/app-wallet.sh:587	post-json	json,python	candidate	3
-skin user list	1	cli/src/app-wallet.sh:699	request	python	out:many-requests	-
-skin user remove	1	cli/src/app-wallet.sh:744	post-json	json,python	candidate	3
-skin user rooms	1	cli/src/app-wallet.sh:757	post-json	json,python	candidate	3
-skin user role	1	cli/src/app-wallet.sh:801	post-json	json,python	candidate	3
-skin user unassign	1	cli/src/app-wallet.sh:817	post-json	json,python	candidate	3
-skin role	1	cli/src/app-wallet.sh:834	compute,request,post-json	body,json,python	out:many-requests	-
-skin role create	1	cli/src/app-wallet.sh:846	post-json	json,python	candidate	3
-skin role list	1	cli/src/app-wallet.sh:895	request	python	candidate	3
-skin role update	1	cli/src/app-wallet.sh:1083	post-json	json,python	candidate	3
-skin role remove	1	cli/src/app-wallet.sh:1129	post-json	json,python	candidate	3
-skin front-door	2	cli/src/app-wallet.sh:240~	compute,request,post-json	body,json,python	out:file	-
-skin-token	1	cli/src/router.sh:821	request,post-json	json,python	out:many-requests	-
-skin-token create	1	cli/src/app-wallet.sh:1674	post-json	json,python	candidate	3
-skin-token list	1	cli/src/app-wallet.sh:1723	request	python	candidate	3
-skin-token rooms	1	cli/src/app-wallet.sh:1740	post-json	json,python	candidate	3
-skin-token revoke	1	cli/src/app-wallet.sh:1775	post-json	json,python	candidate	3
-remote-session	2	cli/src/router.sh:847	request,request-post,post-json	json,python	out:secret	-
-remote-session status	2	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-remote-session enable	1	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-remote-session disable	1	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-remote-session grant	1	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-remote-session grants	2	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-remote-session revoke	1	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-remote-session shell	1	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-remote-session write	1	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-remote-session read	1	cli/src/remote-session.sh:113~	none	none	out:no-request	-
-compute	1	cli/src/router.sh:686	compute	body,text,json,table	out:prompt	-
-compute nodes	2	cli/src/compute-command.sh:24	compute	body,table	candidate	2
-compute status	2	cli/src/compute-command.sh:273	compute	none	candidate	1
-compute info	2	cli/src/compute-command.sh:34	compute	body,table	candidate	2
-compute allow-nodes	2	cli/src/compute-command.sh:45	compute	body,python	out:many-requests	-
-compute git-access	2	cli/src/compute-command.sh:46	compute	body,json,python	out:many-requests	-
-compute git-access setup	1	cli/src/compute-access.sh:158	compute	json,python	candidate	3
-compute git-access grant	1	cli/src/compute-access.sh:184	compute	none	candidate	1
-compute git-access revoke	1	cli/src/compute-access.sh:188	compute	none	candidate	1
-compute run	2	cli/src/compute-command.sh:40	compute	json,python	out:poll	-
-compute test	1	cli/src/compute-command.sh:95	compute	json,python	out:poll	-
-compute prewarm	2	cli/src/compute-command.sh:96	compute	body,json,python	out:poll	-
-compute jobs	2	cli/src/compute-command.sh:54	compute	body,table	candidate	2
-compute get	2	cli/src/compute-command.sh:81	compute	body,json,table	out:many-requests	-
-compute fetch	2	cli/src/compute-command.sh:94	compute	json,python	out:many-requests	-
-compute wait	2	cli/src/compute-command.sh:115	compute	json,python	out:poll	-
-compute attach	1	cli/src/compute-command.sh:97	compute	python	candidate	3
-compute logs	2	cli/src/compute-command.sh:111	compute	body,json,python	out:file	-
-compute rightsize	2	cli/src/compute-command.sh:113	compute	text,json,python	candidate	3
-compute stats	2	cli/src/compute-command.sh:114	compute	text	candidate	1
-compute cancel	2	cli/src/compute-command.sh:116	compute	body,json,python	out:many-requests	-
-compute retry	1	cli/src/compute-command.sh:214	compute	python	candidate	3
-compute events	2	cli/src/compute-command.sh:361	compute	body,json,table	out:many-requests	-
-compute cache	2	cli/src/compute-command.sh:47	compute	body,python	out:many-requests	-
-compute cache clear	1	cli/src/compute-run.sh:527	none	none	out:no-request	-
-compute queue	2	cli/src/compute-command.sh:48	compute	body,table	candidate	2
-compute retier	2	cli/src/compute-command.sh:43	compute	body,python	candidate	3
-compute move	2	cli/src/compute-command.sh:44	compute	body,json,python	out:many-requests	-
-compute receipt	2	cli/src/compute-command.sh:223	compute	body,json,table	out:many-requests	-
-compute provenance	2	cli/src/compute-command.sh:223	compute	body,json,table	out:many-requests	-
-compute verify	2	cli/src/compute-command.sh:223	compute	body,json,table	out:many-requests	-
-compute preview	1	cli/src/compute-command.sh:251	compute	python	out:many-requests	-
-compute placement	1	cli/src/compute-command.sh:266	compute	python	out:many-requests	-
-compute node	1	cli/src/compute-command.sh:224	compute	body,json,table	out:secret	-
-compute node add	2	cli/src/compute-node.sh:73	none	none	out:no-request	-
-compute node confirm	1	cli/src/compute-node.sh:28	compute	python	out:confirm	-
-compute node remove	1	cli/src/compute-node.sh:74	none	none	out:no-request	-
-compute node rename	1	cli/src/compute-node.sh:46	compute	none	candidate	1
-compute node retire	1	cli/src/compute-node.sh:40	compute	python	candidate	3
-compute node pause	1	cli/src/compute-node.sh:52	compute	python	candidate	3
-compute node drain	1	cli/src/compute-node.sh:52	compute	python	candidate	3
-compute node resume	1	cli/src/compute-node.sh:52	compute	python	candidate	3
-compute node pinned-only	1	cli/src/compute-node.sh:58	compute	python	candidate	3
-compute node route	1	cli/src/compute-node.sh:69	compute	python	candidate	3
-compute node servers	2	cli/src/compute-node.sh:81	compute	body,json,table	out:secret	-
-compute node servers add	1	cli/src/compute-node.sh:591	compute	json,python	out:secret	-
-compute node servers approve	1	cli/src/compute-node.sh:649	compute	json,python	out:secret	-
-compute node servers deny	1	cli/src/compute-node.sh:650	compute	body,json,python	out:confirm	-
-compute node servers limits	1	cli/src/compute-node.sh:651	compute	body,json,python	out:confirm	-
-compute node servers pause	1	cli/src/compute-node.sh:691	compute	body,python	candidate	3
-compute node servers resume	1	cli/src/compute-node.sh:691	compute	body,python	candidate	3
-compute node servers revoke	1	cli/src/compute-node.sh:697	compute	body,python	candidate	3
-compute node servers owner	1	cli/src/compute-node.sh:713	compute	python	out:confirm	-
-compute node take-owner	1	cli/src/compute-node.sh:83	compute,curl	json,python	out:secret	-
-compute node health	2	cli/src/compute-node.sh:160	compute	body,python	candidate	3
-compute node policy show	1	cli/src/compute-node.sh:129	compute	body,json,python	candidate	3
-compute node policy set	1	cli/src/compute-node.sh:140	compute	json,python	out:confirm	-
-compute node update	1	cli/src/compute-node.sh:166	compute	body,python	out:many-requests	-
-compute node rollout	2	cli/src/compute-node.sh:194	compute	body,python	out:many-requests	-
-compute node rollback	1	cli/src/compute-node.sh:166	compute	body,python	out:many-requests	-
-compute node wall	1	cli/src/compute-node.sh:211	compute	python	out:confirm	-
-compute node admin propose	1	cli/src/compute-node.sh:886	compute	json,python	out:confirm	-
-compute node admin list	2	cli/src/compute-node.sh:932	compute	body,python	candidate	3
-compute node admin withdraw	1	cli/src/compute-node.sh:970	compute	python	candidate	3
-compute node admin approve	1	cli/src/compute-node.sh:954	compute	json,python	out:secret	-
-compute node admin deny	1	cli/src/compute-node.sh:958	compute	python	candidate	3
-compute node packages	2	cli/src/compute-node.sh:82	compute	body,json,python	out:file	-
-compute node packages request	2	cli/src/compute-node.sh:321	compute	body,json,python	candidate	3
-compute node packages requests	2	cli/src/compute-node.sh:367	compute	body,python	out:many-requests	-
-compute node packages approve	1	cli/src/compute-node.sh:411	compute	body,python	out:many-requests	-
-compute node packages deny	1	cli/src/compute-node.sh:411	compute	body,python	out:many-requests	-
-compute node packages policy	2	cli/src/compute-node.sh:464	compute	body,json,python	out:confirm	-
-compute node alerts	1	cli/src/compute-node.sh:231	compute	python	candidate	3
-compute roster	2	cli/src/compute-command.sh:42	compute	json,python	out:secret	-
-compute roster key	1	cli/src/compute-local-trust.sh:247	compute	json,python	candidate	3
-compute roster set	1	cli/src/compute-local-trust.sh:255	compute	json,python	candidate	3
-compute roster retire	1	cli/src/compute-local-trust.sh:274	compute	json,python	candidate	3
-compute roster revoke	1	cli/src/compute-local-trust.sh:274	compute	json,python	candidate	3
-compute roster publish	1	cli/src/compute-local-trust.sh:288	compute	json,python	candidate	3
-compute lanes	2	cli/src/compute-command.sh:42	compute	json,python	out:secret	-
-compute lanes set	1	cli/src/compute-local-trust.sh:255	compute	json,python	candidate	3
-compute seats	2	cli/src/compute-command.sh:42	compute	json,python	out:secret	-
-compute seats request	1	cli/src/compute-local-trust.sh:355	compute	json,python	candidate	3
-compute seats offer	1	cli/src/compute-local-trust.sh:376	compute	json,python	candidate	3
-compute seats suspend	1	cli/src/compute-local-trust.sh:390	compute,curl	json,python	out:secret	-
-compute seats resume	1	cli/src/compute-local-trust.sh:390	compute,curl	json,python	out:secret	-
-compute seats end	1	cli/src/compute-local-trust.sh:390	compute,curl	json,python	out:secret	-
-compute trust	2	cli/src/compute-command.sh:42	compute	json,python	out:secret	-
-compute trust approve	1	cli/src/compute-local-trust.sh:434	compute	json,python	out:secret	-
-compute trust deny	1	cli/src/compute-local-trust.sh:435	compute	json,python	candidate	3
-compute trust withdraw	1	cli/src/compute-local-trust.sh:443	compute	json,python	candidate	3
-compute owners	2	cli/src/compute-command.sh:42	compute	json,python	out:secret	-
-compute owners consent	1	cli/src/compute-local-trust.sh:218~	compute,curl	json,python	out:secret	-
-compute grant	1	cli/src/compute-command.sh:225	compute	json,python	candidate	3
-compute revoke	1	cli/src/compute-command.sh:226	compute	python	candidate	3
-compute grants	2	cli/src/compute-command.sh:238	compute	body,table	candidate	2
-compute access	1	cli/src/compute-command.sh:282	compute	python	candidate	3
-compute operate	1	cli/src/compute-command.sh:312	compute	python	candidate	3
-compute manage	1	cli/src/compute-command.sh:332	compute	python	out:confirm	-
-compute usage	1	cli/src/compute-command.sh:355	compute	table	candidate	2
-compute local	1	cli/src/compute-command.sh:442	compute	body,json,python	out:confirm	-
-compute local status	2	cli/src/compute-local-trust.sh:6	compute	body,python	out:confirm	-
-compute local pause	1	cli/src/compute-local-trust.sh:39	compute	python	candidate	3
-compute local drain	1	cli/src/compute-local-trust.sh:46	compute	python	candidate	3
-compute local resume	1	cli/src/compute-local-trust.sh:46	compute	python	candidate	3
-compute local policy	1	cli/src/compute-local-trust.sh:50	compute	json,python	out:many-requests	-
-compute local enable	1	cli/src/compute-local-trust.sh:67	compute	python	out:confirm	-
-compute local remote-admin	1	cli/src/compute-local-trust.sh:96	compute	python	candidate	3
-compute local disable	1	cli/src/compute-local-trust.sh:110	compute	python	out:many-requests	-
-vault	1	cli/src/router.sh:726	sidecar,curl	body,json,python	out:secret	-
-vault status	2	cli/src/migrate.sh:919	sidecar	python	candidate	3
-vault open	2	cli/src/migrate.sh:720	sidecar	body,python	candidate	3
-vault list	2	cli/src/migrate.sh:458	sidecar	body,python	candidate	3
-vault show	2	cli/src/migrate.sh:470	sidecar	body,python	candidate	3
-vault set	2	cli/src/migrate.sh:519	sidecar	body,json,python	out:secret	-
-vault rotate	2	cli/src/migrate.sh:923	curl	json,python	out:secret	-
-vault hosts	2	cli/src/migrate.sh:580	sidecar	body,json,python	candidate	3
-vault delivery	2	cli/src/migrate.sh:629	sidecar	body,json,python	candidate	3
-vault sign	2	cli/src/migrate.sh:589	sidecar	body,json,python	candidate	3
-vault public-key	2	cli/src/migrate.sh:606	sidecar	body,python	candidate	3
-vault agent-limit	2	cli/src/migrate.sh:614	sidecar	body,json,python	candidate	3
-vault grant	2	cli/src/migrate.sh:648	sidecar,curl	body,json,python	out:secret	-
-vault revoke	2	cli/src/migrate.sh:699	sidecar	body,json,python	candidate	3
-vault disable	2	cli/src/migrate.sh:725	sidecar	body,json,python	candidate	3
-vault enable	2	cli/src/migrate.sh:725	sidecar	body,json,python	candidate	3
-vault destroy	2	cli/src/migrate.sh:732	sidecar	body,json,python	candidate	3
-vault fetch	2	cli/src/migrate.sh:289~	sidecar,curl	body,json,python	out:secret	-
-vault get	2	cli/src/migrate.sh:739	sidecar	body,json,python	candidate	3
-vault audit	2	cli/src/migrate.sh:745	sidecar	body,python	candidate	3
-vault requests	2	cli/src/migrate.sh:760	sidecar	body,python	candidate	3
-vault presets	2	cli/src/migrate.sh:772	sidecar	body,python	candidate	3
-vault env-file	2	cli/src/migrate.sh:799	sidecar	body,json,python	candidate	3
-vault file	2	cli/src/migrate.sh:833	sidecar	body,json,python	candidate	3
-vault proxy-url	2	cli/src/migrate.sh:816	sidecar	body,json,python	candidate	3
-vault run	1	cli/src/migrate.sh:289~	sidecar,curl	body,json,python	out:secret	-
-vault sync	2	cli/src/migrate.sh:318	sidecar	body,python	candidate	3
-vault import	2	cli/src/migrate.sh:1064	sidecar	body,json,python	out:file	-
-vault service	2	cli/src/migrate.sh:871	sidecar	body,json,python	candidate	3
-vault doctor	2	cli/src/migrate.sh:781	sidecar	body,python	candidate	3
-vault send	2	cli/src/migrate.sh:309	sidecar,curl	body,json,python	out:secret	-
-vault incoming	2	cli/src/migrate.sh:309	sidecar,curl	body,json,python	out:secret	-
-vault incoming accept	2	cli/src/migrate.sh:309~	sidecar,curl	body,json,python	out:secret	-
-vault incoming decline	2	cli/src/migrate.sh:309~	sidecar,curl	body,json,python	out:secret	-
-vault sent	2	cli/src/migrate.sh:309	sidecar,curl	body,json,python	out:secret	-
-vault accept-from	2	cli/src/migrate.sh:309	sidecar,curl	body,json,python	out:secret	-
-vault accept-from add	2	cli/src/migrate.sh:309~	sidecar,curl	body,json,python	out:secret	-
-vault accept-from remove	2	cli/src/migrate.sh:309~	sidecar,curl	body,json,python	out:secret	-
-vault send-allow	2	cli/src/migrate.sh:309	sidecar,curl	body,json,python	out:secret	-
-vault send-allow add	2	cli/src/migrate.sh:309~	sidecar,curl	body,json,python	out:secret	-
-vault send-allow remove	2	cli/src/migrate.sh:309~	sidecar,curl	body,json,python	out:secret	-
-vault ask	2	cli/src/migrate.sh:309	sidecar,curl	body,json,python	out:secret	-
-vault asks	2	cli/src/migrate.sh:309	sidecar,curl	body,json,python	out:secret	-
-vault unsend	2	cli/src/migrate.sh:309	sidecar,curl	body,json,python	out:secret	-
-vault placement add	2	cli/src/migrate.sh:317~	sidecar	body,json,python	out:confirm	-
-vault placement done	2	cli/src/migrate.sh:317~	sidecar	body,json,python	out:confirm	-
-vault placement rm	2	cli/src/migrate.sh:317~	sidecar	body,json,python	out:confirm	-
-vault placements	2	cli/src/migrate.sh:317	sidecar	body,json,python	out:confirm	-
-vault reveal	1	cli/src/migrate.sh:901	curl	json,python	out:secret	-
-vault recovery	1	cli/src/migrate.sh:916	sidecar,curl	json,python	out:secret	-
-vault recovery show-once	1	cli/src/migrate.sh:924	curl	json,python	out:secret	-
-vault recovery rotate	1	cli/src/migrate.sh:924	curl	json,python	out:secret	-
-vault confirm-password set	1	cli/src/migrate.sh:965~	curl	json,python	out:secret	-
-vault kek rotate	1	cli/src/migrate.sh:991~	curl	json,python	out:secret	-
-vault rekey	1	cli/src/migrate.sh:991	curl	json,python	out:secret	-
-vault rollback	1	cli/src/migrate.sh:1006	curl	json,python	out:secret	-
-vault systemd-cred	2	cli/src/migrate.sh:316	curl	body,json,python	out:secret	-
-vault backup	1	cli/src/migrate.sh:1103	curl	json,python	out:secret	-
-vault backup key	1	cli/src/migrate.sh:1103~	curl	json,python	out:secret	-
-vault restore	1	cli/src/migrate.sh:1150	curl	json,python	out:secret	-
-vault recipient	2	cli/src/migrate.sh:1026	sidecar	body,python	candidate	3
-vault carry export	1	cli/src/migrate.sh:1039	sidecar	json,python	candidate	3
-vault carry import	2	cli/src/migrate.sh:1065	sidecar	body,json,python	out:file	-
-wiki	2	cli/src/router.sh:898	request,post-form	json,python	out:open-tool	-
-wiki status	2	cli/src/wiki.sh:155~	none	none	out:no-request	-
-wiki index	2	cli/src/wiki.sh:155~	none	none	out:no-request	-
-wiki note	2	cli/src/wiki.sh:155~	none	none	out:no-request	-
-wiki seed	1	cli/src/wiki.sh:155~	none	none	out:no-request	-
-wiki serve	1	cli/src/wiki.sh:155~	none	none	out:no-request	-
-wiki chat	1	cli/src/wiki.sh:155~	none	none	out:no-request	-
-wiki publish	2	cli/src/wiki.sh:155~	none	none	out:no-request	-
-wiki unpublish	2	cli/src/wiki.sh:155~	none	none	out:no-request	-
-zen	2	cli/src/router.sh:857	request,post-json	json,python	out:open-tool	-
-zen garden	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen inspect	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen widget errors	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen validate	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen widget delete	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen widget put	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen widget preview	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen reload	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen reset	1	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen history	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen doctor	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen theme	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen widget	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen path	1	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen sync	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen links	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen news	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen agents-order	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-zen guide	2	cli/src/garden-data.sh:147~	none	none	out:no-request	-
-whoami	2	cli/src/router.sh:572	send,request	python	out:open-tool	-
-done	1	cli/src/router.sh:561	request-post,curl	none	out:open-tool	-
-respond	1	cli/src/router.sh:618	curl	none	candidate	1
-fed	1	cli/src/router.sh:30	send,request,post-json,curl	json,python	out:open-tool	-
-fed enable	1	cli/src/federation.sh:262	post-json	python	out:open-tool	-
-fed disable	1	cli/src/federation.sh:262	post-json	python	out:open-tool	-
-fed status	1	cli/src/federation.sh:277	request	python	out:open-tool	-
-fed peers	1	cli/src/federation.sh:286	send,request	python	out:open-tool	-
-fed pubkey	2	cli/src/federation.sh:230	none	json,python	out:no-request	-
-fed send	1	cli/src/federation.sh:44	curl	json,python	out:open-tool	-
-fed outbox	1	cli/src/federation.sh:352	curl	python	out:open-tool	-
-fed pair-start	1	cli/src/federation.sh:76	curl	json,python	out:open-tool	-
-fed pair-join	1	cli/src/federation.sh:76	curl	json,python	out:open-tool	-
-fed pair-finish	1	cli/src/federation.sh:76	curl	json,python	out:open-tool	-
-fed pair-verify	1	cli/src/federation.sh:76	curl	json,python	out:open-tool	-
-fed pair-request	1	cli/src/federation.sh:180	curl	json,python	out:open-tool	-
-fed confirm	1	cli/src/federation.sh:209	curl	json,python	out:open-tool	-
-setup	2	cli/src/router.sh:579	curl	body	out:open-tool	-
-setup hide	2	cli/src/setup.sh:82	curl	none	out:open-tool	-
-setup show	2	cli/src/setup.sh:82	curl	none	out:open-tool	-
-setup skip	2	cli/src/setup.sh:86	curl	none	out:open-tool	-
-setup kessel	2	cli/src/setup.sh:84	curl	none	out:open-tool	-
-setup chief-of-staff	2	cli/src/setup.sh:85	curl	none	out:poll	-
-setup dismiss-offer	2	cli/src/setup.sh:83	curl	none	out:open-tool	-
-setup agent-reports	2	cli/src/setup.sh:22	compute	body	out:open-tool	-
-remind	2	cli/src/router.sh:368	send,request,request-post	python	out:file	-
-remind list	2	cli/src/remind.sh:51	send,request	python	out:file	-
-remind show	2	cli/src/remind.sh:52	send,request	python	out:file	-
-remind snooze	2	cli/src/remind.sh:35~	send,request,request-post	python	out:file	-
-remind cancel	2	cli/src/remind.sh:53	send,request-post	python	out:file	-
-firewall	2	cli/src/router.sh:662	sidecar	json,python	out:file	-
-firewall ports	2	cli/src/firewall.sh:123	sidecar	python	candidate	3
-firewall rules	1	cli/src/firewall.sh:127	sidecar	python	candidate	3
-firewall ssh any	2	cli/src/firewall.sh:135	none	none	out:no-request	-
-firewall ssh allow	2	cli/src/firewall.sh:136	none	json,python	out:no-request	-
-firewall ssh port	2	cli/src/firewall.sh:139	none	none	out:no-request	-
-firewall open	2	cli/src/firewall.sh:146	sidecar	json,python	candidate	3
-firewall close	2	cli/src/firewall.sh:146	sidecar	json,python	candidate	3
-firewall guard	2	cli/src/firewall.sh:157	sidecar	json,python	candidate	3
-firewall upstream	2	cli/src/firewall.sh:180	sidecar	json,python	candidate	3
-front	1	cli/src/router.sh:658	sidecar	json,python	out:file	-
-front status	2	cli/src/desktop.sh:608	sidecar	python	candidate	3
-front enable	2	cli/src/desktop.sh:612	sidecar	python	candidate	3
-front disable	2	cli/src/desktop.sh:618	sidecar	python	candidate	3
-front http	2	cli/src/desktop.sh:597	sidecar	python	out:file	-
-front passthrough	2	cli/src/desktop.sh:596	sidecar	json,python	out:file	-
-front passthrough add	2	cli/src/desktop.sh:540	sidecar	json,python	candidate	3
-front passthrough rm	2	cli/src/desktop.sh:544	sidecar	json,python	candidate	3
-root-helper	1	cli/src/router.sh:654	sidecar	json,python	out:open-tool	-
-root-helper status	2	cli/src/root-helper.sh:152	sidecar	python	out:open-tool	-
-root-helper update	2	cli/src/root-helper.sh:158	sidecar	json,python	out:open-tool	-
-root-helper rollback	2	cli/src/root-helper.sh:180	sidecar	python	out:open-tool	-
-root-helper install-command	2	cli/src/root-helper.sh:184	sidecar	python	out:open-tool	-
-git-tools	2	cli/src/router.sh:670	curl	none	out:open-tool	-
-git-tools install	2	cli/src/git-tools.sh:97	curl	none	out:open-tool	-
-git-tools recheck	2	cli/src/git-tools.sh:98	curl	none	out:open-tool	-
-push	1	cli/src/router.sh:674	curl	json,python	out:open-tool	-
-push devices	2	cli/src/push.sh:146	curl	python	out:open-tool	-
-push e2e	2	cli/src/push.sh:151	curl	python	out:open-tool	-
-push device e2e	2	cli/src/push.sh:164~	curl	json,python	out:open-tool	-
-push device remove	2	cli/src/push.sh:164~	curl	json,python	out:open-tool	-
-push log	2	cli/src/push.sh:185	curl	python	out:open-tool	-
-notify	1	cli/src/router.sh:682	compute	json,python	out:open-tool	-
-notify email	1	cli/src/app-auth.sh:1045	compute	json,python	out:open-tool	-
-notify email off	1	cli/src/app-auth.sh:1054	compute	none	out:open-tool	-
-notify email mute	1	cli/src/app-auth.sh:1061	compute	json,python	out:open-tool	-
-notify email unmute	1	cli/src/app-auth.sh:1061	compute	json,python	out:open-tool	-
-notifications	1	cli/src/router.sh:678	compute	body,json,python	out:open-tool	-
-notifications email	2	cli/src/app-auth.sh:988	compute	body,json,python	out:open-tool	-
-notifications email sender add	1	cli/src/app-auth.sh:1260	compute	json,python	out:open-tool	-
-notifications email sender list	2	cli/src/app-auth.sh:1294	compute	body,python	out:open-tool	-
-notifications email sender check	1	cli/src/app-auth.sh:1323	compute	json,python	out:open-tool	-
-notifications email sender set	1	cli/src/app-auth.sh:1323	compute	json,python	out:open-tool	-
-notifications email sender rm	1	cli/src/app-auth.sh:1323	compute	json,python	out:open-tool	-
-notifications email sender resume	1	cli/src/app-auth.sh:1315	compute	json,python	out:open-tool	-
-notifications email suppressions	2	cli/src/app-auth.sh:1143	compute	body,json,python	out:open-tool	-
-notifications email suppressions add	2	cli/src/app-auth.sh:1405	compute	body,json,python	out:open-tool	-
-notifications email suppressions rm	2	cli/src/app-auth.sh:1405	compute	body,json,python	out:open-tool	-
-notifications email system-sender	1	cli/src/app-auth.sh:1140	compute	python	out:open-tool	-
-notifications email relay add	1	cli/src/app-auth.sh:1473	compute	json,python	out:open-tool	-
-notifications email relay list	1	cli/src/app-auth.sh:1511	compute	python	out:open-tool	-
-notifications email relay rm	1	cli/src/app-auth.sh:1521	compute	json,python	out:open-tool	-
-notifications email relay test	1	cli/src/app-auth.sh:1526	compute	json,python	out:open-tool	-
-notifications email log	2	cli/src/app-auth.sh:1145	compute	body,python	out:open-tool	-
-notifications email settings	1	cli/src/app-auth.sh:1162	compute	json,python	out:open-tool	-
-notifications email address	2	cli/src/app-auth.sh:1142	compute	body,json,python	out:open-tool	-
-notifications email address set	2	cli/src/app-auth.sh:1225	compute	body,json,python	out:open-tool	-
-notifications email address remove	2	cli/src/app-auth.sh:1237	compute	body,json,python	out:open-tool	-
-notifications email agent	2	cli/src/app-auth.sh:1144	compute	body,json,python	out:open-tool	-
-notifications email agent on	1	cli/src/app-auth.sh:1019	compute	json,python	out:open-tool	-
-notifications email agent off	1	cli/src/app-auth.sh:1026	compute	json,python	out:open-tool	-
-api-key	1	cli/src/router.sh:762	request,post-json	json,python	out:secret	-
-api-key create	1	cli/src/talk-and-workspace.sh:2248	post-json,curl	json,python	out:secret	-
-api-key list	1	cli/src/talk-and-workspace.sh:2508	request	python	candidate	3
-api-key hire-ceiling	1	cli/src/talk-and-workspace.sh:2439	post-json,curl	json,python	out:secret	-
-api-key revoke	1	cli/src/talk-and-workspace.sh:2549	post-json	json,python	candidate	3
-api-key disable	1	cli/src/talk-and-workspace.sh:2564	post-json	json,python	candidate	3
-api-key enable	1	cli/src/talk-and-workspace.sh:2579	post-json	json,python	candidate	3
-migrate	1	cli/src/router.sh:730	sidecar,curl	body,json,python	out:confirm	-
-migrate status	2	cli/src/migrate.sh:146	sidecar,curl	body,json,python	out:many-requests	-
-migrate import-secrets begin	2	cli/src/migrate.sh:191	none	none	out:no-request	-
-migrate export-secrets	2	cli/src/migrate.sh:166	sidecar,curl	body,json,python	out:secret	-
-migrate import-secrets	2	cli/src/migrate.sh:186	sidecar,curl	body,json,python	out:secret	-
-migrate approve	2	cli/src/migrate.sh:152	sidecar,curl	body,json,python	out:secret	-
-doc	2	cli/src/router.sh:698	send-json	json,python	out:secret	-
-doc cores	2	cli/src/doc.sh:1406	send-json	json,python	out:secret	-
-doc cad	2	cli/src/doc.sh:1429	send-json	json,python	out:secret	-
-doc av	2	cli/src/doc.sh:1431	send-json	json,python	out:secret	-
-doc cat	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc head	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc tail	1	cli/src/doc.sh:1594	send-json	json,python	out:secret	-
-doc wc	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc grep	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc sed	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc view	1	cli/src/doc.sh:1435	send-json	json,python	out:secret	-
-doc diff	1	cli/src/doc.sh:1410	send-json	json,python	out:secret	-
-doc patch	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc append	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc insert	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc replace	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc delete	1	cli/src/doc.sh:1420	none	json,python	out:no-request	-
-doc replace-section	1	cli/src/doc.sh:1388~	compute,send-json,curl	json,python	out:secret	-
-doc mv	1	cli/src/doc.sh:1953	send-json	json,python	out:secret	-
-doc write	1	cli/src/doc.sh:1657	curl	json,python	out:secret	-
-doc undo	1	cli/src/doc.sh:1703	send-json	json,python	out:secret	-
-doc redo	1	cli/src/doc.sh:1703	send-json	json,python	out:secret	-
-doc revert	1	cli/src/doc.sh:1592	send-json	json,python	out:secret	-
-doc who	1	cli/src/doc.sh:1606	send-json	json,python	out:secret	-
-doc follow	1	cli/src/doc.sh:1634	send-json	json,python	out:secret	-
-doc cursor	1	cli/src/doc.sh:1638	send-json	json,python	out:secret	-
-doc claim	1	cli/src/doc.sh:1505	send-json	json,python	out:secret	-
-doc activity	1	cli/src/doc.sh:1573	send-json	json,python	out:secret	-
-doc say	1	cli/src/doc.sh:1607	send-json	json,python	out:secret	-
-doc open	1	cli/src/doc.sh:1830	send-json	json,python	out:secret	-
-doc leave	1	cli/src/doc.sh:1830	send-json	json,python	out:secret	-
-doc watch	1	cli/src/doc.sh:1605	send-json	json,python	out:secret	-
-doc status	1	cli/src/doc.sh:1773	send-json	json,python	out:secret	-
-doc flush	1	cli/src/doc.sh:1830	send-json	json,python	out:secret	-
-doc log	1	cli/src/doc.sh:1722	send-json	json,python	out:secret	-
-doc versions	1	cli/src/doc.sh:1592	send-json	json,python	out:secret	-
-doc show	1	cli/src/doc.sh:1592	send-json	json,python	out:secret	-
-doc blame	1	cli/src/doc.sh:1935	send-json	json,python	out:secret	-
-doc restore	1	cli/src/doc.sh:1592	send-json	json,python	out:secret	-
-doc version	1	cli/src/doc.sh:1592	send-json	json,python	out:secret	-
-doc approvals	1	cli/src/doc.sh:1845	send-json	json,python	out:secret	-
-doc approve	1	cli/src/doc.sh:1869	send-json	json,python	out:secret	-
-doc decline	1	cli/src/doc.sh:1869	send-json	json,python	out:secret	-
-doc export	1	cli/src/doc.sh:1966	send-json,curl	json,python	out:secret	-
-doc lease	1	cli/src/doc.sh:1455	send-json	json,python	out:secret	-
-doc lock	1	cli/src/doc.sh:1455	send-json	json,python	out:secret	-
-doc unlock	1	cli/src/doc.sh:1455	send-json	json,python	out:secret	-
-doc outline	1	cli/src/doc.sh:1422	none	json,python	out:no-request	-
-doc node	1	cli/src/doc.sh:1422	none	json,python	out:no-request	-
-doc layer	1	cli/src/doc.sh:1422	none	json,python	out:no-request	-
-doc comment	1	cli/src/doc.sh:1422	none	json,python	out:no-request	-
-doc reply	1	cli/src/doc.sh:1422	none	json,python	out:no-request	-
-doc resolve	1	cli/src/doc.sh:1422	none	json,python	out:no-request	-
-doc comments	1	cli/src/doc.sh:1422	none	json,python	out:no-request	-
-doc reanchor	1	cli/src/doc.sh:1422	none	json,python	out:no-request	-
-doc purge-comments	1	cli/src/doc.sh:1433	send-json	json,python	out:secret	-
-doc erase-participant	1	cli/src/doc.sh:1433	send-json	json,python	out:secret	-
-doc share	1	cli/src/doc.sh:1884	send-json	json,python	out:secret	-
-doc unshare	1	cli/src/doc.sh:1884	send-json	json,python	out:secret	-
-doc shares	1	cli/src/doc.sh:1915	send-json	json,python	out:secret	-
-job	2	cli/src/router.sh:734	sidecar	body,json,python	out:file	-
-job add	2	cli/src/job.sh:162	sidecar	python	candidate	3
-job edit	2	cli/src/job.sh:166	sidecar	python	candidate	3
-job list	2	cli/src/job.sh:168	sidecar	body,python	candidate	3
-job show	2	cli/src/job.sh:172	sidecar	body,python	candidate	3
-job logs	2	cli/src/job.sh:176	sidecar	body,python	candidate	3
-job run	2	cli/src/job.sh:191	sidecar	python	candidate	3
-job enable	2	cli/src/job.sh:193	sidecar	python	candidate	3
-job disable	2	cli/src/job.sh:193	sidecar	python	candidate	3
-job kill	2	cli/src/job.sh:193	sidecar	python	candidate	3
-job rm	2	cli/src/job.sh:195	sidecar	python	candidate	3
-job pause	2	cli/src/job.sh:197	sidecar	python	candidate	3
-job resume	2	cli/src/job.sh:197	sidecar	python	candidate	3
-postal	2	cli/src/router.sh:575	request,post-json	json,python	out:open-tool	-
-skills	1	cli/src/router.sh:917	request,request-post	json,python	out:open-tool	-
-settings	1	cli/src/router.sh:548	send-json,request,request-post	json,python	out:file	-
-settings set	1	cli/src/wiki.sh:1499~	send-json,request,request-post	json,python	out:file	-
-version	1	cli/src/router.sh:928	none	none	out:no-request	-
-cli status	2	cli/src/router.sh:931~	none	none	out:no-request	-
---schema	1	cli/src/router.sh:939	none	none	out:no-request	-
-study	2	cli/src/router.sh:946	none	json,python	out:no-request	-
-help	1	cli/src/router.sh:972	none	none	out:no-request	-
+thread	2	cli/src/router.sh::thread	compute,send,request,post-json,post-form	body,json,python	out:file	-
+browser note	2	cli/src/browser.sh:cmd_browser:note	send,post-json	json,python	out:file	-
+ci	2	cli/src/router.sh::ci	compute	json,python	out:confirm	-
+msg	1	cli/src/router.sh::msg	request,post-json,post-form	json,python	out:file	-
+msg verify	2	cli/src/agent-template.sh:cmd_msg_who:~	request	json,python	candidate	3
+talk	1	cli/src/router.sh::talk	send,request,request-post,post-form	json,python	out:secret	-
+read	1	cli/src/router.sh::read	send,request	json,python	out:open-tool	-
+terminal write	1	cli/src/router.sh::terminal write	request-post	none	candidate	1
+terminal read	1	cli/src/router.sh::terminal read	request	python	out:many-requests	-
+terminal spawn	1	cli/src/router.sh::terminal spawn	request-post	none	candidate	1
+inbox	1	cli/src/router.sh::inbox	send,request,post-form	python	out:file	-
+review	1	cli/src/router.sh::review	request-post	none	out:open-tool	-
+sessions	2	cli/src/router.sh::sessions	sidecar,request,request-post	json,python	out:file	-
+sessions --past	2	cli/src/awareness.sh:cmd_sessions:~	sidecar,request,request-post	body,json,python	out:file	-
+sessions show	2	cli/src/awareness.sh:cmd_sessions:show	sidecar	body,python	candidate	3
+sessions open	2	cli/src/awareness.sh:cmd_sessions:open	sidecar	body,json,python	out:file	-
+sessions main	2	cli/src/awareness.sh:cmd_sessions:main	sidecar	body,json,python	out:many-requests	-
+sessions main set	2	cli/src/sessions.sh:cmd_sessions_main:set	none	none	out:no-request	-
+sessions new	1	cli/src/awareness.sh:cmd_sessions:new	sidecar	json,python	out:file	-
+sessions stop	1	cli/src/awareness.sh:cmd_sessions:stop	none	none	out:no-request	-
+sessions live	2	cli/src/awareness.sh:cmd_sessions:live	request	json,python	out:many-requests	-
+sidecar new	2	cli/src/sidecar.sh:cmd_sidecar:new	none	none	out:no-request	-
+sidecar list	2	cli/src/sidecar.sh:cmd_sidecar:list	none	none	out:no-request	-
+sidecar stop	2	cli/src/sidecar.sh:cmd_sidecar:stop	none	none	out:no-request	-
+sidecar archive	2	cli/src/sidecar.sh:cmd_sidecar:archive	none	none	out:no-request	-
+sidecar access	1	cli/src/sidecar.sh:cmd_sidecar:access	none	none	out:no-request	-
+sources list	2	cli/src/sources.sh:cmd_sources:list	compute	json,python	candidate	3
+sources show	2	cli/src/sources.sh:cmd_sources:show	compute	json,python	candidate	3
+sources read	2	cli/src/sources.sh:cmd_sources:read	compute	json,python	candidate	3
+sources history	2	cli/src/sources.sh:cmd_sources:history	compute	json,python	candidate	3
+sources status	2	cli/src/sources.sh:cmd_sources:status	compute	json,python	candidate	3
+sources export	1	cli/src/sources.sh:cmd_sources:export	compute	json,python	candidate	3
+sources propose	2	cli/src/sources.sh:cmd_sources:propose	none	none	out:no-request	-
+sources add	2	cli/src/sources.sh:cmd_sources:add	none	none	out:no-request	-
+sources edit	2	cli/src/sources.sh:cmd_sources:edit	compute	json,python	out:confirm	-
+sources remove	2	cli/src/sources.sh:cmd_sources:remove	compute	json,python	candidate	3
+sources pause	2	cli/src/sources.sh:cmd_sources:pause	none	json,python	out:no-request	-
+sources mute	2	cli/src/sources.sh:cmd_sources:mute	compute	json,python	candidate	3
+sources unmute	2	cli/src/sources.sh:cmd_sources:unmute	none	json,python	out:no-request	-
+sources refresh	2	cli/src/sources.sh:cmd_sources:refresh	compute	json,python	out:poll	-
+sources try	2	cli/src/sources.sh:cmd_sources:try	compute	json,python	candidate	3
+sources simulate	2	cli/src/sources.sh:cmd_sources:simulate	compute	json,python	candidate	3
+sources pending	2	cli/src/sources.sh:cmd_sources:pending	none	json,python	out:no-request	-
+sources approve	2	cli/src/sources.sh:cmd_sources:approve	compute	json,python	out:confirm	-
+sources secret	2	cli/src/sources.sh:cmd_sources:secret	compute	json,python	out:confirm	-
+sources pin	2	cli/src/sources.sh:cmd_sources:pin	none	none	out:no-request	-
+sources trigger	2	cli/src/sources.sh:cmd_sources:trigger	compute	json,python	out:file	-
+changes	2	cli/src/router.sh::changes	send-json	json,python	out:confirm	-
+changes diff	2	cli/src/changes-notes.sh:cmd_changes:diff	send-json,request	json,python	out:many-requests	-
+changes stage	2	cli/src/changes-notes.sh:cmd_changes:stage	send-json,request	json,python	out:many-requests	-
+changes discard	2	cli/src/changes-notes.sh:cmd_changes:discard	send-json,request	json,python	out:confirm	-
+changes commit	2	cli/src/changes-notes.sh:cmd_changes:commit	send-json,request	json,python	out:many-requests	-
+changes notes	2	cli/src/changes-notes.sh:cmd_changes:notes	none	python	out:no-request	-
+changes notes add	1	cli/src/changes-notes.sh:_changes_notes:add	send-json,request	json,python	out:many-requests	-
+changes open	2	cli/src/changes-notes.sh:cmd_changes:open	send-json,request	json,python	out:many-requests	-
+changes init	2	cli/src/changes-notes.sh:cmd_changes:init	send-json,request	json,python	out:many-requests	-
+sim	2	cli/src/router.sh::sim	none	json,python	out:no-request	-
+desktop	2	cli/src/router.sh::desktop	sidecar	json,python	out:open-tool	-
+sim tree	2	cli/src/sim.sh:cmd_sim:tree	send-json	json,python	candidate	3
+sim tap	2	cli/src/sim.sh:cmd_sim:tap	none	json,python	out:no-request	-
+sim install	2	cli/src/sim.sh:cmd_sim:install	send-json	json,python	candidate	3
+sim screenshot	2	cli/src/sim.sh:cmd_sim:screenshot	send-json	json,python	candidate	3
+board	2	cli/src/router.sh::board	compute	json,python	out:file	-
+store --widget	2	cli/src/board.sh:cmd_store:~	compute,garden-data,request,python-client	json,table	out:python-client	-
+zen data	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+llm tokens list	2	cli/src/llm.sh:cmd_llm_accounts:list	sidecar	body,python	candidate	3
+llm tokens status	2	cli/src/llm.sh:cmd_llm_accounts:status	sidecar	body,json,python	candidate	3
+usage tokens	2	cli/src/usage.sh:cmd_usage:tokens	sidecar	body,python	candidate	3
+usage turns	2	cli/src/usage.sh:cmd_usage:turns	sidecar	body,python	candidate	3
+usage limits	2	cli/src/usage.sh:cmd_usage:limits	sidecar	body,json,python	out:many-requests	-
+llm tokens usage	2	cli/src/llm.sh:cmd_llm_accounts:usage	sidecar	body,python	candidate	3
+llm tokens add	1	cli/src/llm.sh:cmd_llm_accounts:add	sidecar	body,json,python	out:secret	-
+llm tokens switch	1	cli/src/llm.sh:cmd_llm_accounts:switch	sidecar	body,json,python	out:many-requests	-
+llm tokens next	1	cli/src/llm.sh:cmd_llm_accounts:next	sidecar	body,json,python	candidate	3
+llm tokens auto-next	2	cli/src/llm.sh:cmd_llm_accounts:auto-next	sidecar	none	candidate	1
+llm tokens add-key	1	cli/src/llm.sh:cmd_llm_accounts:add-key	sidecar,curl	body,json,python	out:secret	-
+llm tokens pin	1	cli/src/llm.sh:cmd_llm_accounts:pin	sidecar	body,json,python	out:many-requests	-
+llm tokens unpin	1	cli/src/llm.sh:cmd_llm_accounts:unpin	sidecar	body,json,python	out:many-requests	-
+llm tokens pins	2	cli/src/llm.sh:cmd_llm_accounts:pins	sidecar	body,python	candidate	3
+llm tokens for	2	cli/src/llm.sh:cmd_llm_accounts:for	sidecar	body,json,python	out:many-requests	-
+connections	2	cli/src/router.sh::connections	send,request,request-post	json,python	out:file	-
+connections list	2	cli/src/help-helpers.sh:cmd_help_connections:~	none	none	out:no-request	-
+workspace trust status	2	cli/src/wiki.sh:cmd_workspace_trust:status	send,request	python	out:open-tool	-
+workspace trust request	1	cli/src/wiki.sh:cmd_workspace_trust:request	send,request-post	python	out:open-tool	-
+agent hire	2	cli/src/router.sh::agent hire	python-client	json,python	out:python-client	-
+agent template list	2	cli/src/agent-template.sh:cmd_agent_template:list	request	json,python	out:open-tool	-
+agent template show	2	cli/src/agent-template.sh:cmd_agent_template:show	request	json,python	out:open-tool	-
+agent template save	2	cli/src/agent-template.sh:cmd_agent_template:save	post-json	json,python	out:open-tool	-
+agent template add	2	cli/src/agent-template.sh:cmd_agent_template:add	post-json	json,python	out:open-tool	-
+agent template remove	2	cli/src/agent-template.sh:cmd_agent_template:remove	post-json	json,python	out:open-tool	-
+agent template diff	2	cli/src/agent-template.sh:cmd_agent_template:diff	post-json	json,python	out:open-tool	-
+agent template upgrade	2	cli/src/agent-template.sh:cmd_agent_template:upgrade	post-json	json,python	out:open-tool	-
+agent conf	2	cli/src/router.sh::agent conf	request	json,python	out:open-tool	-
+agent get	2	cli/src/router.sh::agent get	request	json,python	out:open-tool	-
+agent access	2	cli/src/router.sh::agent access	compute	body,python	out:open-tool	-
+agent set	2	cli/src/router.sh::agent set	request,python-client	json,python	out:python-client	-
+agent list	2	cli/src/router.sh::agent list	request	json,python	out:open-tool	-
+agent retire	2	cli/src/router.sh::agent retire	request,python-client	json,python	out:python-client	-
+agent identity	2	cli/src/router.sh::agent identity	send-json	json,python	out:file	-
+agent restart	2	cli/src/router.sh::agent restart	request,python-client	json,python	out:python-client	-
+agent harness	2	cli/src/router.sh::agent harness	send-json	json,python	out:file	-
+agent refresh	2	cli/src/router.sh::agent refresh	send-json	json,python	out:file	-
+agent context	2	cli/src/router.sh::agent context	request	json,python	out:open-tool	-
+agent context list	2	cli/src/agent-context.sh:cmd_agent_context:list	python-client	json,python	out:python-client	-
+agent context add	2	cli/src/agent-context.sh:cmd_agent_context:add	python-client	json,python	out:python-client	-
+agent context remove	2	cli/src/agent-context.sh:cmd_agent_context:remove	python-client	json,python	out:python-client	-
+agent context on	2	cli/src/agent-context.sh:cmd_agent_context:on	python-client	json,python	out:python-client	-
+agent context off	2	cli/src/agent-context.sh:cmd_agent_context:off	python-client	json,python	out:python-client	-
+agent context move	2	cli/src/agent-context.sh:cmd_agent_context:move	python-client	json,python	out:python-client	-
+agent context show	2	cli/src/agent-context.sh:cmd_agent_context:show	python-client	json,python	out:python-client	-
+agent context regen	2	cli/src/agent-context.sh:cmd_agent_context:regen	python-client	json,python	out:python-client	-
+agent context catalog	2	cli/src/agent-context.sh:cmd_agent_context:catalog	python-client	json,python	out:python-client	-
+preset list	2	cli/src/router.sh::preset list	python-client	json,python	out:python-client	-
+preset show	2	cli/src/router.sh::preset show	python-client	json,python	out:python-client	-
+preset add	2	cli/src/router.sh::preset add	python-client	json,python	out:python-client	-
+preset set	2	cli/src/router.sh::preset set	python-client	json,python	out:python-client	-
+preset remove	2	cli/src/router.sh::preset remove	python-client	json,python	out:python-client	-
+feedback ask	2	cli/src/router.sh::feedback ask	python-client	json,python	out:python-client	-
+feedback list	2	cli/src/router.sh::feedback list	request	json,python	out:open-tool	-
+feedback show	2	cli/src/router.sh::feedback show	request	json,python	out:open-tool	-
+feedback template	1	cli/src/router.sh::feedback template	none	json,python	out:no-request	-
+feedback comment	2	cli/src/router.sh::feedback comment	post-json	json,python	out:open-tool	-
+feedback assign	2	cli/src/router.sh::feedback assign	post-json	json,python	out:open-tool	-
+feedback resolve	2	cli/src/router.sh::feedback resolve	post-json	json,python	out:open-tool	-
+feedback settings	2	cli/src/router.sh::feedback settings	request,post-json	json,python	out:open-tool	-
+project create	2	cli/src/router.sh::project create	python-client	json,python	out:python-client	-
+project list	2	cli/src/router.sh::project list	python-client	json,python	out:python-client	-
+project show	2	cli/src/router.sh::project show	python-client	json,python	out:python-client	-
+project add	2	cli/src/router.sh::project add	python-client	json,python	out:python-client	-
+project remove	2	cli/src/router.sh::project remove	python-client	json,python	out:python-client	-
+project poc	2	cli/src/router.sh::project poc	python-client	json,python	out:python-client	-
+project view	2	cli/src/router.sh::project view	python-client	json,python	out:python-client	-
+project msg	2	cli/src/router.sh::project msg	python-client	json,python	out:python-client	-
+organization bulletin	2	cli/src/permission.sh:cmd_organization:bulletin	send-json	json,python	out:file	-
+organization reach	2	cli/src/permission.sh:cmd_organization:reach	send-json	json,python	candidate	3
+organization list	2	cli/src/permission.sh:cmd_organization:list	send-json	python	candidate	3
+organization create	2	cli/src/permission.sh:cmd_organization:create	send-json	json,python	candidate	3
+project read	2	cli/src/router.sh::project read	python-client	json,python	out:python-client	-
+db create	2	cli/src/db-store.sh:cmd_db:create	compute	body,json,python	out:python-client	-
+db cap	2	cli/src/db-store.sh:cmd_db:cap	request,post-json	json,python	out:python-client	-
+db clusters	2	cli/src/db-store.sh:cmd_db:clusters	python-client	json,python	out:python-client	-
+db cluster create	2	cli/src/db-store.sh:cmd_db:cluster create	compute	body,json,python	out:python-client	-
+db cluster restart	2	cli/src/db-store.sh:cmd_db:cluster restart	compute	body,json,python	out:python-client	-
+db upgrade	2	cli/src/db-store.sh:cmd_db:upgrade	compute	body,json,python	out:python-client	-
+db default-major	2	cli/src/db-store.sh:cmd_db:default-major	python-client	json,python	out:python-client	-
+db status	2	cli/src/db-store.sh:cmd_db:status	python-client	json,python	out:python-client	-
+db grant	2	cli/src/db-store.sh:cmd_db:grant	python-client	json,python	out:python-client	-
+db revoke	2	cli/src/db-store.sh:cmd_db:revoke	python-client	json,python	out:python-client	-
+db bind	2	cli/src/db-store.sh:cmd_db:bind	python-client	json,python	out:python-client	-
+db dsn	2	cli/src/db-store.sh:cmd_db:dsn	python-client	json,python	out:python-client	-
+db run	1	cli/src/db-store.sh:cmd_db:run	python-client	json,python	out:python-client	-
+db list	2	cli/src/db-store.sh:cmd_db:list	python-client	json,python	out:python-client	-
+db migrate	2	cli/src/db-store.sh:cmd_db:migrate	python-client	json,python	out:python-client	-
+db dump	2	cli/src/db-store.sh:cmd_db:dump	python-client	json,python	out:python-client	-
+db restore	2	cli/src/db-store.sh:cmd_db:restore	python-client	json,python	out:python-client	-
+db drop	2	cli/src/db-store.sh:cmd_db:drop	python-client	json,python	out:python-client	-
+store put	2	cli/src/board.sh:cmd_store:put	python-client	json,python	out:python-client	-
+store list	2	cli/src/board.sh:cmd_store:list	python-client	json,python	out:python-client	-
+hostmail create	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:create	python-client	json,python	out:python-client	-
+mail inboxes	2	cli/src/router.sh::mail inboxes	python-client	json,python	out:python-client	-
+mail domains	2	cli/src/router.sh::mail domains	python-client	json,python	out:python-client	-
+mail messages	2	cli/src/router.sh::mail messages	python-client	json,python	out:python-client	-
+mail read	2	cli/src/router.sh::mail read	python-client	json,python	out:python-client	-
+mail attachments	2	cli/src/router.sh::mail attachments	python-client	json,python	out:python-client	-
+mail watch	2	cli/src/router.sh::mail watch	none	json,python	out:no-request	-
+mail wait	2	cli/src/router.sh::mail wait	python-client	json,python	out:python-client	-
+calendar list	2	cli/src/calendar.sh:cmd_calendar:list	none	none	out:no-request	-
+calendar events	2	cli/src/calendar.sh:cmd_calendar:events	none	none	out:no-request	-
+calendar show	2	cli/src/calendar.sh:cmd_calendar:show	none	none	out:no-request	-
+calendar calendars	2	cli/src/calendar.sh:cmd_calendar:calendars	none	none	out:no-request	-
+calendar link	2	cli/src/calendar.sh:cmd_calendar:link	none	none	out:no-request	-
+calendar freebusy	2	cli/src/calendar.sh:cmd_calendar:freebusy	none	none	out:no-request	-
+calendar wait	2	cli/src/calendar.sh:cmd_calendar:wait	none	none	out:no-request	-
+calendar create	2	cli/src/calendar.sh:cmd_calendar:create	none	none	out:no-request	-
+calendar update	2	cli/src/calendar.sh:cmd_calendar:update	none	none	out:no-request	-
+calendar delete	2	cli/src/calendar.sh:cmd_calendar:delete	none	none	out:no-request	-
+mail send	2	cli/src/router.sh::mail send	python-client	json,python	out:python-client	-
+mail forward-message	2	cli/src/router.sh::mail forward-message	python-client	json,python	out:python-client	-
+mail reply	2	cli/src/router.sh::mail reply	python-client	json,python	out:python-client	-
+mail draft	2	cli/src/router.sh::mail draft	python-client	json,python	out:python-client	-
+mail outbox	2	cli/src/router.sh::mail outbox	python-client	json,python	out:python-client	-
+hostmail delete	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:delete	python-client	json,python	out:python-client	-
+mail capabilities	2	cli/src/router.sh::mail capabilities	python-client	json,python	out:python-client	-
+mail oauth-config	2	cli/src/router.sh::mail oauth-config	python-client	json,python	out:python-client	-
+mail link	2	cli/src/router.sh::mail link	python-client	none	out:python-client	-
+mail forward	2	cli/src/router.sh::mail forward	python-client	json,python	out:python-client	-
+mail access	2	cli/src/router.sh::mail access	python-client	json,python	out:python-client	-
+mail move	2	cli/src/router.sh::mail move	python-client	json,python	out:python-client	-
+mail flag	2	cli/src/router.sh::mail flag	python-client	json,python	out:python-client	-
+mail archive	2	cli/src/router.sh::mail archive	python-client	json,python	out:python-client	-
+mail delete	2	cli/src/router.sh::mail delete	python-client	json,python	out:python-client	-
+mail folder	2	cli/src/router.sh::mail folder	python-client	json,python	out:python-client	-
+hostmail	2	cli/src/router.sh::hostmail	python-client	json,python	out:python-client	-
+hostmail enable	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:enable	python-client	json,python	out:python-client	-
+hostmail uninstall	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:uninstall	python-client	json,python	out:python-client	-
+hostmail upgrade	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:upgrade	python-client	json,python	out:python-client	-
+hostmail cert renew	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_cert:renew	python-client	json,python	out:python-client	-
+hostmail cert names	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_cert:names	python-client	json,python	out:python-client	-
+hostmail cert names issue	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_cert_names:issue	none	none	out:no-request	-
+hostmail cert names renew	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_cert_names:renew	none	none	out:no-request	-
+hostmail cert owner	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_cert:owner	python-client	json,python	out:python-client	-
+hostmail backup status	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_backup:status	python-client	json,python	out:python-client	-
+hostmail backup plan	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_backup:plan	python-client	json,python	out:python-client	-
+hostmail backup set	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_backup:set	python-client	json,python	out:python-client	-
+hostmail outbound	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:outbound	python-client	json,python	out:python-client	-
+hostmail rotate-admin	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:rotate-admin	python-client	json,python	out:python-client	-
+hostmail password rotate	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_password:rotate	python-client	json,python	out:python-client	-
+hostmail password keep	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_password:keep	python-client	json,python	out:python-client	-
+hostmail quota get	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_quota:get	python-client	json,python	out:python-client	-
+hostmail quota set	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_quota:set	python-client	json,python	out:python-client	-
+hostmail catchall	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:catchall	python-client	json,python	out:python-client	-
+hostmail ooo set	2	cli/src/hostmail-ooo-footer.sh:cmd_hostmail_ooo:set	python-client	json,python	out:python-client	-
+hostmail alias	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:alias	python-client	json,python	out:python-client	-
+hostmail forward	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:forward	python-client	json,python	out:python-client	-
+hostmail ooo unset	2	cli/src/hostmail-ooo-footer.sh:cmd_hostmail_ooo:unset	python-client	json,python	out:python-client	-
+hostmail ooo show	2	cli/src/hostmail-ooo-footer.sh:cmd_hostmail_ooo:show	python-client	json,python	out:python-client	-
+hostmail footer set	2	cli/src/hostmail-ooo-footer.sh:cmd_hostmail_footer:set	python-client	json,python	out:python-client	-
+hostmail footer unset	2	cli/src/hostmail-ooo-footer.sh:cmd_hostmail_footer:unset	python-client	json,python	out:python-client	-
+hostmail footer show	2	cli/src/hostmail-ooo-footer.sh:cmd_hostmail_footer:show	python-client	json,python	out:python-client	-
+hostmail app-password add	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_app_password:add	python-client	json,python	out:python-client	-
+hostmail app-password list	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_app_password:list	python-client	json,python	out:python-client	-
+hostmail app-password revoke	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_app_password:revoke	python-client	json,python	out:python-client	-
+hostmail app-password keep	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail_app_password:keep	python-client	json,python	out:python-client	-
+hostmail person	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:person	python-client	json,python	out:python-client	-
+hostmail dkim show	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_dkim:show	python-client	json,python	out:python-client	-
+hostmail dkim rotate	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_dkim:rotate	python-client	json,python	out:python-client	-
+hostmail dkim retire	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_dkim:retire	python-client	json,python	out:python-client	-
+hostmail dmarc show	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_dmarc:show	python-client	json,python	out:python-client	-
+hostmail dmarc report-to	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_dmarc:report-to	python-client	json,python	out:python-client	-
+hostmail ptr show	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_ptr:show	python-client	json,python	out:python-client	-
+hostmail ptr set	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_ptr:set	python-client	json,python	out:python-client	-
+hostmail bans list	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_bans:list	python-client	json,python	out:python-client	-
+hostmail bans clear	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_bans:clear	python-client	json,python	out:python-client	-
+hostmail bans migrate	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_bans:migrate	python-client	none	out:python-client	-
+hostmail bans migrate restore	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_bans_migrate:restore	python-client	json,python	out:python-client	-
+hostmail bans migrate status	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_bans_migrate:status	python-client	json,python	out:python-client	-
+hostmail allowlist list	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_allowlist:list	python-client	json,python	out:python-client	-
+hostmail allowlist add	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_allowlist:add	python-client	json,python	out:python-client	-
+hostmail allowlist remove	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_allowlist:remove	python-client	json,python	out:python-client	-
+hostmail audit-sieve	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:audit-sieve	python-client	json,python	out:python-client	-
+hostmail calendar status	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:status	python-client	json,python	out:python-client	-
+hostmail calendar enable	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:enable	python-client	json,python	out:python-client	-
+hostmail calendar disable	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:disable	python-client	json,python	out:python-client	-
+hostmail calendar create	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:create	python-client	json,python	out:python-client	-
+hostmail calendar rename	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:rename	python-client	json,python	out:python-client	-
+hostmail calendar share	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:share	python-client	json,python	out:python-client	-
+hostmail calendar unshare	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:unshare	python-client	json,python	out:python-client	-
+hostmail calendar shares	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:shares	python-client	json,python	out:python-client	-
+hostmail calendar sharing	2	cli/src/hostmail-dkim-dmarc.sh:cmd_hostmail_calendar:sharing	python-client	json,python	out:python-client	-
+hostmail group create	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_group:create	python-client	json,python	out:python-client	-
+hostmail group add	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_group:add	python-client	json,python	out:python-client	-
+hostmail group remove	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_group:remove	python-client	json,python	out:python-client	-
+hostmail group list	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_group:list	python-client	json,python	out:python-client	-
+hostmail group show	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_group:show	python-client	json,python	out:python-client	-
+hostmail group delete	2	cli/src/hostmail-bans-allowlist.sh:cmd_hostmail_group:delete	python-client	json,python	out:python-client	-
+hostchat	2	cli/src/router.sh::hostchat	compute	body,json,table	out:secret	-
+hostchat enable	1	cli/src/hostchat-voice.sh:cmd_hostchat:enable	compute	body,json,table	out:poll	-
+hostchat recording	1	cli/src/hostchat-voice.sh:cmd_hostchat:recording	compute	body,json,table	out:secret	-
+hostchat media	1	cli/src/hostchat-voice.sh:cmd_hostchat:media	compute	body,json,table	out:confirm	-
+hostchat users	1	cli/src/hostchat-voice.sh:cmd_hostchat:users	compute	body,json,table	out:file	-
+hostchat config	1	cli/src/hostchat-voice.sh:cmd_hostchat:config	compute	body,json,table	out:many-requests	-
+hostchat app-url	1	cli/src/hostchat-voice.sh:cmd_hostchat:app-url	compute	body,json,table	candidate	2
+hostchat ship	1	cli/src/hostchat-voice.sh:cmd_hostchat:ship	compute	body,json,table	candidate	2
+hostchat mirror	1	cli/src/hostchat-voice.sh:cmd_hostchat:mirror	compute	body,json,table	candidate	2
+hostchat app-space	1	cli/src/hostchat-voice.sh:cmd_hostchat:app-space	compute	body,json,table	out:secret	-
+hostchat app-space governance	1	cli/src/hostchat-voice.sh:cmd_hostchat:app-space~	compute	body,json,table	out:secret	-
+hostchat app-space recording	1	cli/src/hostchat-voice.sh:cmd_hostchat:app-space~	compute	body,json,table	out:secret	-
+hostchat app-space recording-lock	1	cli/src/hostchat-voice.sh:cmd_hostchat:app-space~	compute	body,json,table	out:secret	-
+hostchat recording policy	1	cli/src/hostchat-voice.sh:_hostchat_recording:policy	compute	body,json,python	out:confirm	-
+hostchat pass-keys	1	cli/src/hostchat-voice.sh:cmd_hostchat:pass-keys	compute	body,python	out:file	-
+hostchat open	1	cli/src/hostchat-voice.sh:cmd_hostchat:open	compute,curl	json,python	out:secret	-
+hostchat meet	1	cli/src/hostchat-voice.sh:cmd_hostchat:meet	compute	body,json,table	out:file	-
+hostchat people	1	cli/src/hostchat-voice.sh:cmd_hostchat:people	compute	body,json,table	out:file	-
+hostchat approvals	1	cli/src/hostchat-voice.sh:cmd_hostchat:approvals	compute	body,json,table	out:confirm	-
+hostchat agents	1	cli/src/hostchat-voice.sh:cmd_hostchat:agents	compute	body,json,table	out:file	-
+hostchat on-behalf	1	cli/src/hostchat-voice.sh:cmd_hostchat:on-behalf	compute	body,json,table	out:confirm	-
+hostchat deliveries	1	cli/src/hostchat-voice.sh:cmd_hostchat:deliveries	compute	body,json,table	out:file	-
+hostchat log	1	cli/src/hostchat-voice.sh:cmd_hostchat:log	compute	body,json,python	out:file	-
+voice	2	cli/src/router.sh::voice	compute	body,json,table	out:file	-
+voice settings	1	cli/src/hostchat-voice.sh:cmd_voice:settings	compute	body,json,table	candidate	2
+voice recordings	1	cli/src/hostchat-voice.sh:cmd_voice:recordings	compute	body,table	candidate	2
+voice transcript	1	cli/src/hostchat-voice.sh:cmd_voice:transcript	compute	body,table	candidate	2
+voice transcripts	1	cli/src/hostchat-voice.sh:cmd_voice:transcripts	compute	body,table	candidate	2
+chat	2	cli/src/router.sh::chat	compute	body,json,table	out:file	-
+chat send	1	cli/src/chat.sh:cmd_chat:send	none	json,python	out:no-request	-
+chat reply	1	cli/src/chat.sh:cmd_chat:reply	none	json,python	out:no-request	-
+chat dm	1	cli/src/chat.sh:cmd_chat:dm	none	json,python	out:no-request	-
+chat messages	1	cli/src/chat.sh:cmd_chat:messages	compute	body,json,table	candidate	2
+chat read	1	cli/src/chat.sh:cmd_chat:read	compute	body,json,table	candidate	2
+chat wait	1	cli/src/chat.sh:cmd_chat:wait	compute	body,json,table	candidate	2
+chat unread	1	cli/src/chat.sh:cmd_chat:unread	compute	body,json,table	candidate	2
+chat follow	1	cli/src/chat.sh:cmd_chat:follow	compute	body,json,table	candidate	2
+chat prefs	1	cli/src/chat.sh:cmd_chat:prefs	compute	body,json,table	candidate	2
+chat outbox	1	cli/src/chat.sh:cmd_chat:outbox	compute	body,json,table	candidate	2
+chat edit	1	cli/src/chat.sh:cmd_chat:edit	compute	body,json,table	candidate	2
+chat spaces	1	cli/src/chat.sh:cmd_chat:spaces	compute	body,json,table	candidate	2
+chat access	1	cli/src/chat.sh:cmd_chat:access	compute	body,json,table	candidate	2
+chat channel	1	cli/src/chat.sh:cmd_chat:channel	compute	body,json,table	candidate	2
+chat space	1	cli/src/chat.sh:cmd_chat:space	compute	body,json,table	candidate	2
+chat role	1	cli/src/chat.sh:cmd_chat:role	compute	body,json,table	candidate	2
+hostmail profile	2	cli/src/hostmail-app-cert-backup.sh:cmd_hostmail:profile	python-client	json,python	out:python-client	-
+dns access	2	cli/src/router.sh::dns access	send,request	json,table	out:file	-
+dns list	2	cli/src/router.sh::dns list	send,request	json,table	out:file	-
+dns records	2	cli/src/router.sh::dns records	send,request	json,table	out:file	-
+dns record add	2	cli/src/dns.sh:cmd_dns_record:add	send,post-json	json,table	out:file	-
+dns record remove	2	cli/src/dns.sh:cmd_dns_record:remove	send,post-json	json,table	out:file	-
+dns verify	2	cli/src/router.sh::dns verify	send,post-json	json,table	out:file	-
+dns	2	cli/src/router.sh::dns	send,request,post-json	json,table	out:file	-
+domain list	2	cli/src/domains-certs.sh:cmd_domain:list	send,request	json,table	out:file	-
+domain add	2	cli/src/domains-certs.sh:cmd_domain:add	send,post-json	json,table	out:file	-
+domain remove	2	cli/src/domains-certs.sh:cmd_domain:remove	send,post-json	json,table	out:file	-
+domain refresh	2	cli/src/domains-certs.sh:cmd_domain:refresh	send,post-json	json,table	out:file	-
+domain name add	2	cli/src/domains-certs.sh:cmd_domain_name:add	send,post-json	json,table	out:file	-
+domain name remove	2	cli/src/domains-certs.sh:cmd_domain_name:remove	send,post-json	json,table	out:file	-
+domain	2	cli/src/router.sh::domain	send,request,post-json	json,table	out:file	-
+cert list	2	cli/src/domains-certs.sh:cmd_cert:list	send,request	json,table	out:file	-
+cert	2	cli/src/router.sh::cert	send,request,post-json	json,table	out:file	-
+heartbeat	1	cli/src/router.sh::heartbeat	send,request,request-post,python-client	json,python	out:python-client	-
+heartbeat remind	2	cli/src/router.sh::heartbeat remind	send,request,request-post	python	out:file	-
+heartbeat schedule	2	cli/src/router.sh::heartbeat schedule	send,request,request-post	json,python	out:file	-
+heartbeat signal	1	cli/src/router.sh::heartbeat signal	send,request,request-post,python-client	json,python	out:python-client	-
+heartbeat session	1	cli/src/router.sh::heartbeat session	send,request,request-post	python	out:many-requests	-
+heartbeat restart	2	cli/src/router.sh::heartbeat restart	send,request-post	json,python	out:many-requests	-
+heartbeat show	2	cli/src/router.sh::heartbeat show	send,request	json,python	out:many-requests	-
+heartbeat status	1	cli/src/router.sh::heartbeat status	send,request	python	out:many-requests	-
+heartbeat log	1	cli/src/router.sh::heartbeat log	send,request	python	out:many-requests	-
+workspace	1	cli/src/router.sh::workspace	send-json,send,request,request-post,post-json,post-form,curl	json,python	out:open-tool	-
+activity	2	cli/src/router.sh::activity	request	json,python	out:open-tool	-
+glossary	1	cli/src/router.sh::glossary	request	python	out:open-tool	-
+whats-new	1	cli/src/router.sh::whats-new	request,request-post	python	out:open-tool	-
+update	1	cli/src/router.sh::update	none	python	out:no-request	-
+daemon	1	cli/src/router.sh::daemon	request,post-json,curl	python	out:secret	-
+tunnel	1	cli/src/router.sh::tunnel	request,post-json	json,python	out:open-tool	-
+tunnel disable	1	cli/src/usage.sh:cmd_tunnel:disable	none	python	out:no-request	-
+tunnel enable	1	cli/src/usage.sh:cmd_tunnel:enable	none	python	out:no-request	-
+tunnel switch	1	cli/src/usage.sh:cmd_tunnel:switch	post-json	json,python	out:open-tool	-
+tunnel release	1	cli/src/usage.sh:cmd_tunnel:release	none	python	out:no-request	-
+tunnel forget	1	cli/src/usage.sh:cmd_tunnel:forget	none	python	out:no-request	-
+tunnel subdomains	2	cli/src/usage.sh:cmd_tunnel:subdomains	request	python	out:open-tool	-
+publish	2	cli/src/router.sh::publish	sidecar,send,request,post-json	body,json,python	out:secret	-
+publish run	2	cli/src/connect.sh:cmd_publish:run	none	json,python	out:no-request	-
+publish visibility	2	cli/src/connect.sh:cmd_publish:visibility	send,request,post-json	json,python	out:secret	-
+publish open	2	cli/src/connect.sh:cmd_publish:open	send,post-json	json,python	out:file	-
+publish sessions	2	cli/src/connect.sh:cmd_publish:sessions	send,request,post-json	json,python	out:file	-
+publish frame	2	cli/src/connect.sh:cmd_publish:frame	send,post-json	json,python	out:file	-
+publish start	2	cli/src/connect.sh:cmd_publish:start	none	none	out:no-request	-
+publish stop	2	cli/src/connect.sh:cmd_publish:stop	none	none	out:no-request	-
+publish rm	1	cli/src/connect.sh:cmd_publish:rm	sidecar,curl	body,json,python	out:secret	-
+publish ps	2	cli/src/connect.sh:cmd_publish:ps	send,request	json,python	out:file	-
+publish logs	1	cli/src/connect.sh:cmd_publish:logs	send,request	json,python	out:file	-
+publish subdomain claim	1	cli/src/connect.sh:cmd_publish_subdomain:claim	send	python	candidate	3
+connect	1	cli/src/router.sh::connect	send,request,post-json,python-client	json,python	out:python-client	-
+connect login	1	cli/src/connect-account.sh:cmd_connect:login	send,post-json,python-client	json,python	out:python-client	-
+connect status	1	cli/src/connect-account.sh:cmd_connect:status	send,request	python	out:file	-
+connect logout	1	cli/src/connect-account.sh:cmd_connect:logout	python-client	python	out:python-client	-
+users	2	cli/src/router.sh::users	send,request,post-json	json,python	out:secret	-
+users unlock	2	cli/src/clone.sh:cmd_users:unlock	send,post-json	json,python	out:file	-
+users add	1	cli/src/clone.sh:cmd_users:add	send,post-json	json,python	out:secret	-
+users audit	2	cli/src/clone.sh:cmd_users:audit	send,request	python	out:file	-
+users set-role	1	cli/src/clone.sh:cmd_users:set-role	send,post-json	json,python	out:secret	-
+users share	2	cli/src/clone.sh:cmd_users:share	send,request,post-json	json,python	out:file	-
+users set-password	1	cli/src/clone.sh:cmd_users:set-password	send,post-json	json,python	out:secret	-
+users pair-phone	2	cli/src/clone.sh:cmd_users:pair-phone	send,post-json	json,python	out:secret	-
+users phones	2	cli/src/clone.sh:cmd_users:phones	send,request	json,python	out:file	-
+users unpair-phone	2	cli/src/clone.sh:cmd_users:unpair-phone	send,post-json	json,python	out:file	-
+users set-can-clone	1	cli/src/clone.sh:cmd_users:set-can-clone	send,post-json	json,python	out:many-requests	-
+clone	2	cli/src/router.sh::clone	compute,python-client	body,json,python	out:python-client	-
+clone propose	1	cli/src/clone.sh:cmd_clone:propose	compute	body,json,python	out:open-tool	-
+app	1	cli/src/router.sh::app	compute,request,post-json	body,json,python	out:confirm	-
+app validate	2	cli/src/router.sh::app validate	compute,request,post-json	body,json,python	out:confirm	-
+app db connect	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app db status	2	cli/src/app-wallet.sh:cmd_app:status	compute	body,python	out:file	-
+app db check	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app db disconnect	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app status	2	cli/src/router.sh::app status	compute,request,post-json	body,json,python	out:confirm	-
+explain	2	cli/src/router.sh::explain	none	json,python	out:no-request	-
+capabilities	2	cli/src/router.sh::capabilities	compute	body,python	out:file	-
+approve	2	cli/src/router.sh::approve	compute	body,python	out:open-tool	-
+send-feedback	2	cli/src/router.sh::send-feedback	compute	body,json,python	out:open-tool	-
+app sdk add	2	cli/src/app-wallet.sh:cmd_app:add	compute,request,post-json	body,json,python	out:file	-
+app sdk status	2	cli/src/app-wallet.sh:cmd_app:status	compute	body,python	out:file	-
+app sdk kit	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app init	2	cli/src/router.sh::app init	compute,request,post-json	body,json,python	out:confirm	-
+app doctor store	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app links	2	cli/src/router.sh::app links	compute,request,post-json	body,json,python	out:confirm	-
+app auth	2	cli/src/router.sh::app auth	compute,request,post-json	body,json,python	out:confirm	-
+app updates push	2	cli/src/app-wallet.sh:cmd_app:push	compute	body,json,python	out:file	-
+app updates ls	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app updates key	2	cli/src/app-wallet.sh:cmd_app:key	compute	body,json,python	out:confirm	-
+app updates token	2	cli/src/app-wallet.sh:cmd_app:token	compute,request,post-json	body,json,python	out:file	-
+app updates promote	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app updates rollback	2	cli/src/app-wallet.sh:cmd_app:rollback	compute	body,python	out:file	-
+app updates pull	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app updates stats	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app updates fleet	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user add	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user invite	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user reset	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app login settings	2	cli/src/app-wallet.sh:cmd_app:settings	compute	body,json,python	out:file	-
+app profile settings	2	cli/src/app-wallet.sh:cmd_app:profile settings	compute	body,python	out:file	-
+app set	2	cli/src/router.sh::app set	compute,request,post-json	body,json,python	out:confirm	-
+app account-deletion	2	cli/src/router.sh::app account-deletion	compute,request,post-json	body,json,python	out:confirm	-
+app user show	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user image	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user sessions	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user email	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user agent	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user full-name	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user password	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user unlock	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user list	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user remove	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user rooms	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user role	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app user unassign	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app role	1	cli/src/app-wallet.sh:cmd_app:role	compute,request,post-json	body,json,python	out:file	-
+app role create	1	cli/src/app-wallet.sh:cmd_skin:create	post-json	json,python	candidate	3
+app role list	1	cli/src/app-wallet.sh:cmd_skin:list	request	python	out:many-requests	-
+app role room	1	cli/src/app-wallet.sh:cmd_skin:room	post-json	json,python	candidate	3
+app role paths	1	cli/src/app-wallet.sh:cmd_skin:paths	post-json	json,python	candidate	3
+app role update	1	cli/src/app-wallet.sh:cmd_skin:update	post-json	json,python	candidate	3
+app role remove	1	cli/src/app-wallet.sh:cmd_skin:remove	post-json	json,python	candidate	3
+app grant	1	cli/src/router.sh::app grant	compute,request,post-json	body,json,python	out:confirm	-
+app grant chat-key	1	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app recording	2	cli/src/router.sh::app recording	compute,request,post-json	body,json,python	out:confirm	-
+app chat	2	cli/src/router.sh::app chat	compute,request,post-json	body,json,python	out:confirm	-
+app grant list	1	cli/src/router.sh::app grant list	none	none	out:no-request	-
+app grant add	1	cli/src/router.sh::app grant add	none	none	out:no-request	-
+app grant rm	1	cli/src/router.sh::app grant rm	none	none	out:no-request	-
+app grant role	1	cli/src/app-wallet.sh:cmd_app:role	compute,request,post-json	body,json,python	out:file	-
+app grant set	1	cli/src/app-wallet.sh:cmd_app:set	compute	body,python	out:file	-
+app grant hooks	2	cli/src/app-wallet.sh:cmd_app:hooks	compute,request,post-json	body,json,python	out:file	-
+app grant copy-host	2	cli/src/router.sh::app grant copy-host	none	none	out:no-request	-
+app grant guests-rooms	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app guest rooms	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app guest ceiling	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app guest list	2	cli/src/app-wallet.sh:cmd_app:list	compute,request,post-json	body,json,python	out:file	-
+app wallet	2	cli/src/app-wallet.sh:cmd_app:wallet	compute	body,python	out:file	-
+app hydra	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app front-door	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
+app token	1	cli/src/app-wallet.sh:cmd_app:token	compute,request,post-json	body,json,python	out:file	-
+app token create	1	cli/src/app-recording.sh:cmd_app_token_rotate:~	compute	body,json,python	out:file	-
+app token list	1	cli/src/app-recording.sh:cmd_app_token_rotate:~	compute	body,json,python	out:file	-
+app token rooms	1	cli/src/app-recording.sh:cmd_app_token_rotate:~	compute	body,json,python	out:file	-
+app token revoke	1	cli/src/app-recording.sh:cmd_app_token_rotate:~	compute	body,json,python	out:file	-
+app members	2	cli/src/app-wallet.sh:cmd_app:members	compute	body,python	out:file	-
+app room-names	1	cli/src/app-wallet.sh:cmd_app:room-names	compute	body,python	out:file	-
+app self	2	cli/src/app-wallet.sh:cmd_app:self	compute	body,python	out:file	-
+app usage	2	cli/src/app-wallet.sh:cmd_app:usage	compute	body,python	out:file	-
+skin	1	cli/src/router.sh::skin	compute,request,post-json	body,json,python	out:file	-
+skin user add	1	cli/src/app-wallet.sh:cmd_skin:user add	post-json	json,python	candidate	3
+skin user email	1	cli/src/app-wallet.sh:cmd_skin:user email	post-json	json,python	candidate	3
+skin user password	1	cli/src/app-wallet.sh:cmd_skin:user password	post-json	json,python	candidate	3
+skin user unlock	2	cli/src/app-wallet.sh:cmd_skin:user unlock	post-json	json,python	candidate	3
+skin user list	1	cli/src/app-wallet.sh:cmd_skin:user list	request	python	out:many-requests	-
+skin user remove	1	cli/src/app-wallet.sh:cmd_skin:user remove	post-json	json,python	candidate	3
+skin user rooms	1	cli/src/app-wallet.sh:cmd_skin:user rooms	post-json	json,python	candidate	3
+skin user role	1	cli/src/app-wallet.sh:cmd_skin:user role	post-json	json,python	candidate	3
+skin user unassign	1	cli/src/app-wallet.sh:cmd_skin:user unassign	post-json	json,python	candidate	3
+skin role	1	cli/src/app-wallet.sh:cmd_skin:role	compute,request,post-json	body,json,python	out:many-requests	-
+skin role create	1	cli/src/app-wallet.sh:cmd_skin:role create	post-json	json,python	candidate	3
+skin role list	1	cli/src/app-wallet.sh:cmd_skin:role list	request	python	candidate	3
+skin role update	1	cli/src/app-wallet.sh:cmd_skin:role update	post-json	json,python	candidate	3
+skin role remove	1	cli/src/app-wallet.sh:cmd_skin:role remove	post-json	json,python	candidate	3
+skin front-door	2	cli/src/app-wallet.sh:cmd_skin:~	compute,request,post-json	body,json,python	out:file	-
+skin-token	1	cli/src/router.sh::skin-token	request,post-json	json,python	out:many-requests	-
+skin-token create	1	cli/src/app-wallet.sh:cmd_skin_token:create	post-json	json,python	candidate	3
+skin-token list	1	cli/src/app-wallet.sh:cmd_skin_token:list	request	python	candidate	3
+skin-token rooms	1	cli/src/app-wallet.sh:cmd_skin_token:rooms	post-json	json,python	candidate	3
+skin-token revoke	1	cli/src/app-wallet.sh:cmd_skin_token:revoke	post-json	json,python	candidate	3
+remote-session	2	cli/src/router.sh::remote-session	request,request-post,post-json	json,python	out:secret	-
+remote-session status	2	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+remote-session enable	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+remote-session disable	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+remote-session grant	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+remote-session grants	2	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+remote-session revoke	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+remote-session shell	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+remote-session write	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+remote-session read	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
+compute	1	cli/src/router.sh::compute	compute	body,text,json,table	out:prompt	-
+compute nodes	2	cli/src/compute-command.sh:cmd_compute:nodes	compute	body,table	candidate	2
+compute status	2	cli/src/compute-command.sh:cmd_compute:status	compute	none	candidate	1
+compute info	2	cli/src/compute-command.sh:cmd_compute:info	compute	body,table	candidate	2
+compute allow-nodes	2	cli/src/compute-command.sh:cmd_compute:allow-nodes	compute	body,python	out:many-requests	-
+compute git-access	2	cli/src/compute-command.sh:cmd_compute:git-access	compute	body,json,python	out:many-requests	-
+compute git-access setup	1	cli/src/compute-access.sh:cmd_compute_git_access:setup	compute	json,python	candidate	3
+compute git-access grant	1	cli/src/compute-access.sh:cmd_compute_git_access:grant	compute	none	candidate	1
+compute git-access revoke	1	cli/src/compute-access.sh:cmd_compute_git_access:revoke	compute	none	candidate	1
+compute run	2	cli/src/compute-command.sh:cmd_compute:run	compute	json,python	out:poll	-
+compute test	1	cli/src/compute-command.sh:cmd_compute:test	compute	json,python	out:poll	-
+compute prewarm	2	cli/src/compute-command.sh:cmd_compute:prewarm	compute	body,json,python	out:poll	-
+compute jobs	2	cli/src/compute-command.sh:cmd_compute:jobs	compute	body,table	candidate	2
+compute get	2	cli/src/compute-command.sh:cmd_compute:get	compute	body,json,table	out:many-requests	-
+compute fetch	2	cli/src/compute-command.sh:cmd_compute:fetch	compute	json,python	out:many-requests	-
+compute wait	2	cli/src/compute-command.sh:cmd_compute:wait	compute	json,python	out:poll	-
+compute attach	1	cli/src/compute-command.sh:cmd_compute:attach	compute	python	candidate	3
+compute logs	2	cli/src/compute-command.sh:cmd_compute:logs	compute	body,json,python	out:file	-
+compute rightsize	2	cli/src/compute-command.sh:cmd_compute:rightsize	compute	text,json,python	candidate	3
+compute stats	2	cli/src/compute-command.sh:cmd_compute:stats	compute	text	candidate	1
+compute cancel	2	cli/src/compute-command.sh:cmd_compute:cancel	compute	body,json,python	out:many-requests	-
+compute retry	1	cli/src/compute-command.sh:cmd_compute:retry	compute	python	candidate	3
+compute events	2	cli/src/compute-command.sh:cmd_compute:events	compute	body,json,table	out:many-requests	-
+compute cache	2	cli/src/compute-command.sh:cmd_compute:cache	compute	body,python	out:many-requests	-
+compute cache clear	1	cli/src/compute-run.sh:cmd_compute_cache:clear	none	none	out:no-request	-
+compute queue	2	cli/src/compute-command.sh:cmd_compute:queue	compute	body,table	candidate	2
+compute retier	2	cli/src/compute-command.sh:cmd_compute:retier	compute	body,python	candidate	3
+compute move	2	cli/src/compute-command.sh:cmd_compute:move	compute	body,json,python	out:many-requests	-
+compute receipt	2	cli/src/compute-command.sh:cmd_compute:receipt	compute	body,json,table	out:many-requests	-
+compute provenance	2	cli/src/compute-command.sh:cmd_compute:provenance	compute	body,json,table	out:many-requests	-
+compute verify	2	cli/src/compute-command.sh:cmd_compute:verify	compute	body,json,table	out:many-requests	-
+compute preview	1	cli/src/compute-command.sh:cmd_compute:preview	compute	python	out:many-requests	-
+compute placement	1	cli/src/compute-command.sh:cmd_compute:placement	compute	python	out:many-requests	-
+compute node	1	cli/src/compute-command.sh:cmd_compute:node	compute	body,json,table	out:secret	-
+compute node add	2	cli/src/compute-node.sh:cmd_compute_node:add	none	none	out:no-request	-
+compute node confirm	1	cli/src/compute-node.sh:cmd_compute_node:confirm	compute	python	out:confirm	-
+compute node remove	1	cli/src/compute-node.sh:cmd_compute_node:remove	none	none	out:no-request	-
+compute node rename	1	cli/src/compute-node.sh:cmd_compute_node:rename	compute	none	candidate	1
+compute node retire	1	cli/src/compute-node.sh:cmd_compute_node:retire	compute	python	candidate	3
+compute node pause	1	cli/src/compute-node.sh:cmd_compute_node:pause	compute	python	candidate	3
+compute node drain	1	cli/src/compute-node.sh:cmd_compute_node:drain	compute	python	candidate	3
+compute node resume	1	cli/src/compute-node.sh:cmd_compute_node:resume	compute	python	candidate	3
+compute node pinned-only	1	cli/src/compute-node.sh:cmd_compute_node:pinned-only	compute	python	candidate	3
+compute node route	1	cli/src/compute-node.sh:cmd_compute_node:route	compute	python	candidate	3
+compute node servers	2	cli/src/compute-node.sh:cmd_compute_node:servers	compute	body,json,table	out:secret	-
+compute node servers add	1	cli/src/compute-node.sh:cmd_compute_node_servers:add	compute	json,python	out:secret	-
+compute node servers approve	1	cli/src/compute-node.sh:cmd_compute_node_servers:approve	compute	json,python	out:secret	-
+compute node servers deny	1	cli/src/compute-node.sh:cmd_compute_node_servers:deny	compute	body,json,python	out:confirm	-
+compute node servers limits	1	cli/src/compute-node.sh:cmd_compute_node_servers:limits	compute	body,json,python	out:confirm	-
+compute node servers pause	1	cli/src/compute-node.sh:cmd_compute_node_servers:pause	compute	body,python	candidate	3
+compute node servers resume	1	cli/src/compute-node.sh:cmd_compute_node_servers:resume	compute	body,python	candidate	3
+compute node servers revoke	1	cli/src/compute-node.sh:cmd_compute_node_servers:revoke	compute	body,python	candidate	3
+compute node servers owner	1	cli/src/compute-node.sh:cmd_compute_node_servers:owner	compute	python	out:confirm	-
+compute node take-owner	1	cli/src/compute-node.sh:cmd_compute_node:take-owner	compute,curl	json,python	out:secret	-
+compute node health	2	cli/src/compute-node.sh:cmd_compute_node:health	compute	body,python	candidate	3
+compute node policy show	1	cli/src/compute-node.sh:cmd_compute_node:policy show	compute	body,json,python	candidate	3
+compute node policy set	1	cli/src/compute-node.sh:cmd_compute_node:policy set	compute	json,python	out:confirm	-
+compute node update	1	cli/src/compute-node.sh:cmd_compute_node:update	compute	body,python	out:many-requests	-
+compute node rollout	2	cli/src/compute-node.sh:cmd_compute_node:rollout	compute	body,python	out:many-requests	-
+compute node rollback	1	cli/src/compute-node.sh:cmd_compute_node:rollback	compute	body,python	out:many-requests	-
+compute node wall	1	cli/src/compute-node.sh:cmd_compute_node:wall	compute	python	out:confirm	-
+compute node admin propose	1	cli/src/compute-node.sh:cmd_compute_node_admin:propose	compute	json,python	out:confirm	-
+compute node admin list	2	cli/src/compute-node.sh:cmd_compute_node_admin:list	compute	body,python	candidate	3
+compute node admin withdraw	1	cli/src/compute-node.sh:cmd_compute_node_admin:withdraw	compute	python	candidate	3
+compute node admin approve	1	cli/src/compute-node.sh:cmd_compute_node_admin:approve	compute	json,python	out:secret	-
+compute node admin deny	1	cli/src/compute-node.sh:cmd_compute_node_admin:deny	compute	python	candidate	3
+compute node packages	2	cli/src/compute-node.sh:cmd_compute_node:packages	compute	body,json,python	out:file	-
+compute node packages request	2	cli/src/compute-node.sh:cmd_compute_node_packages:request	compute	body,json,python	candidate	3
+compute node packages requests	2	cli/src/compute-node.sh:cmd_compute_node_packages:requests	compute	body,python	out:many-requests	-
+compute node packages approve	1	cli/src/compute-node.sh:cmd_compute_node_packages:approve	compute	body,python	out:many-requests	-
+compute node packages deny	1	cli/src/compute-node.sh:cmd_compute_node_packages:deny	compute	body,python	out:many-requests	-
+compute node packages policy	2	cli/src/compute-node.sh:cmd_compute_node_packages:policy	compute	body,json,python	out:confirm	-
+compute node alerts	1	cli/src/compute-node.sh:cmd_compute_node:alerts	compute	python	candidate	3
+compute roster	2	cli/src/compute-command.sh:cmd_compute:roster	compute	json,python	out:secret	-
+compute roster key	1	cli/src/compute-local-trust.sh:cmd_compute_trust:key	compute	json,python	candidate	3
+compute roster set	1	cli/src/compute-local-trust.sh:cmd_compute_trust:set	compute	json,python	candidate	3
+compute roster retire	1	cli/src/compute-local-trust.sh:cmd_compute_trust:retire	compute	json,python	candidate	3
+compute roster revoke	1	cli/src/compute-local-trust.sh:cmd_compute_trust:revoke	compute	json,python	candidate	3
+compute roster publish	1	cli/src/compute-local-trust.sh:cmd_compute_trust:publish	compute	json,python	candidate	3
+compute lanes	2	cli/src/compute-command.sh:cmd_compute:lanes	compute	json,python	out:secret	-
+compute lanes set	1	cli/src/compute-local-trust.sh:cmd_compute_trust:set	compute	json,python	candidate	3
+compute seats	2	cli/src/compute-command.sh:cmd_compute:seats	compute	json,python	out:secret	-
+compute seats request	1	cli/src/compute-local-trust.sh:cmd_compute_trust:request	compute	json,python	candidate	3
+compute seats offer	1	cli/src/compute-local-trust.sh:cmd_compute_trust:offer	compute	json,python	candidate	3
+compute seats suspend	1	cli/src/compute-local-trust.sh:cmd_compute_trust:suspend	compute,curl	json,python	out:secret	-
+compute seats resume	1	cli/src/compute-local-trust.sh:cmd_compute_trust:resume	compute,curl	json,python	out:secret	-
+compute seats end	1	cli/src/compute-local-trust.sh:cmd_compute_trust:end	compute,curl	json,python	out:secret	-
+compute trust	2	cli/src/compute-command.sh:cmd_compute:trust	compute	json,python	out:secret	-
+compute trust approve	1	cli/src/compute-local-trust.sh:cmd_compute_trust:approve	compute	json,python	out:secret	-
+compute trust deny	1	cli/src/compute-local-trust.sh:cmd_compute_trust:deny	compute	json,python	candidate	3
+compute trust withdraw	1	cli/src/compute-local-trust.sh:cmd_compute_trust:withdraw	compute	json,python	candidate	3
+compute owners	2	cli/src/compute-command.sh:cmd_compute:owners	compute	json,python	out:secret	-
+compute owners consent	1	cli/src/compute-local-trust.sh:cmd_compute_trust:~	compute,curl	json,python	out:secret	-
+compute grant	1	cli/src/compute-command.sh:cmd_compute:grant	compute	json,python	candidate	3
+compute revoke	1	cli/src/compute-command.sh:cmd_compute:revoke	compute	python	candidate	3
+compute grants	2	cli/src/compute-command.sh:cmd_compute:grants	compute	body,table	candidate	2
+compute access	1	cli/src/compute-command.sh:cmd_compute:access	compute	python	candidate	3
+compute operate	1	cli/src/compute-command.sh:cmd_compute:operate	compute	python	candidate	3
+compute manage	1	cli/src/compute-command.sh:cmd_compute:manage	compute	python	out:confirm	-
+compute usage	1	cli/src/compute-command.sh:cmd_compute:usage	compute	table	candidate	2
+compute local	1	cli/src/compute-command.sh:cmd_compute:local	compute	body,json,python	out:confirm	-
+compute local status	2	cli/src/compute-local-trust.sh:cmd_compute_local:status	compute	body,python	out:confirm	-
+compute local pause	1	cli/src/compute-local-trust.sh:cmd_compute_local:pause	compute	python	candidate	3
+compute local drain	1	cli/src/compute-local-trust.sh:cmd_compute_local:drain	compute	python	candidate	3
+compute local resume	1	cli/src/compute-local-trust.sh:cmd_compute_local:resume	compute	python	candidate	3
+compute local policy	1	cli/src/compute-local-trust.sh:cmd_compute_local:policy	compute	json,python	out:many-requests	-
+compute local enable	1	cli/src/compute-local-trust.sh:cmd_compute_local:enable	compute	python	out:confirm	-
+compute local remote-admin	1	cli/src/compute-local-trust.sh:cmd_compute_local:remote-admin	compute	python	candidate	3
+compute local disable	1	cli/src/compute-local-trust.sh:cmd_compute_local:disable	compute	python	out:many-requests	-
+vault	1	cli/src/router.sh::vault	sidecar,curl	body,json,python	out:secret	-
+vault status	2	cli/src/migrate.sh:cmd_vault:status	sidecar	python	candidate	3
+vault open	2	cli/src/migrate.sh:cmd_vault:open	sidecar	body,python	candidate	3
+vault list	2	cli/src/migrate.sh:cmd_vault:list	sidecar	body,python	candidate	3
+vault show	2	cli/src/migrate.sh:cmd_vault:show	sidecar	body,python	candidate	3
+vault set	2	cli/src/migrate.sh:cmd_vault:set	sidecar	body,json,python	out:secret	-
+vault rotate	2	cli/src/migrate.sh:cmd_vault:rotate	curl	json,python	out:secret	-
+vault hosts	2	cli/src/migrate.sh:cmd_vault:hosts	sidecar	body,json,python	candidate	3
+vault delivery	2	cli/src/migrate.sh:cmd_vault:delivery	sidecar	body,json,python	candidate	3
+vault sign	2	cli/src/migrate.sh:cmd_vault:sign	sidecar	body,json,python	candidate	3
+vault public-key	2	cli/src/migrate.sh:cmd_vault:public-key	sidecar	body,python	candidate	3
+vault agent-limit	2	cli/src/migrate.sh:cmd_vault:agent-limit	sidecar	body,json,python	candidate	3
+vault grant	2	cli/src/migrate.sh:cmd_vault:grant	sidecar,curl	body,json,python	out:secret	-
+vault revoke	2	cli/src/migrate.sh:cmd_vault:revoke	sidecar	body,json,python	candidate	3
+vault disable	2	cli/src/migrate.sh:cmd_vault:disable	sidecar	body,json,python	candidate	3
+vault enable	2	cli/src/migrate.sh:cmd_vault:enable	sidecar	body,json,python	candidate	3
+vault destroy	2	cli/src/migrate.sh:cmd_vault:destroy	sidecar	body,json,python	candidate	3
+vault fetch	2	cli/src/migrate.sh:cmd_vault:~	sidecar,curl	body,json,python	out:secret	-
+vault get	2	cli/src/migrate.sh:cmd_vault:get	sidecar	body,json,python	candidate	3
+vault audit	2	cli/src/migrate.sh:cmd_vault:audit	sidecar	body,python	candidate	3
+vault requests	2	cli/src/migrate.sh:cmd_vault:requests	sidecar	body,python	candidate	3
+vault presets	2	cli/src/migrate.sh:cmd_vault:presets	sidecar	body,python	candidate	3
+vault env-file	2	cli/src/migrate.sh:cmd_vault:env-file	sidecar	body,json,python	candidate	3
+vault file	2	cli/src/migrate.sh:cmd_vault:file	sidecar	body,json,python	candidate	3
+vault proxy-url	2	cli/src/migrate.sh:cmd_vault:proxy-url	sidecar	body,json,python	candidate	3
+vault run	1	cli/src/migrate.sh:cmd_vault:~	sidecar,curl	body,json,python	out:secret	-
+vault sync	2	cli/src/migrate.sh:cmd_vault:sync	sidecar	body,python	candidate	3
+vault import	2	cli/src/migrate.sh:cmd_vault:import	sidecar	body,json,python	out:file	-
+vault service	2	cli/src/migrate.sh:cmd_vault:service	sidecar	body,json,python	candidate	3
+vault doctor	2	cli/src/migrate.sh:cmd_vault:doctor	sidecar	body,python	candidate	3
+vault send	2	cli/src/migrate.sh:cmd_vault:send	sidecar,curl	body,json,python	out:secret	-
+vault incoming	2	cli/src/migrate.sh:cmd_vault:incoming	sidecar,curl	body,json,python	out:secret	-
+vault incoming accept	2	cli/src/migrate.sh:cmd_vault:incoming~	sidecar,curl	body,json,python	out:secret	-
+vault incoming decline	2	cli/src/migrate.sh:cmd_vault:incoming~	sidecar,curl	body,json,python	out:secret	-
+vault sent	2	cli/src/migrate.sh:cmd_vault:sent	sidecar,curl	body,json,python	out:secret	-
+vault accept-from	2	cli/src/migrate.sh:cmd_vault:accept-from	sidecar,curl	body,json,python	out:secret	-
+vault accept-from add	2	cli/src/migrate.sh:cmd_vault:accept-from~	sidecar,curl	body,json,python	out:secret	-
+vault accept-from remove	2	cli/src/migrate.sh:cmd_vault:accept-from~	sidecar,curl	body,json,python	out:secret	-
+vault send-allow	2	cli/src/migrate.sh:cmd_vault:send-allow	sidecar,curl	body,json,python	out:secret	-
+vault send-allow add	2	cli/src/migrate.sh:cmd_vault:send-allow~	sidecar,curl	body,json,python	out:secret	-
+vault send-allow remove	2	cli/src/migrate.sh:cmd_vault:send-allow~	sidecar,curl	body,json,python	out:secret	-
+vault ask	2	cli/src/migrate.sh:cmd_vault:ask	sidecar,curl	body,json,python	out:secret	-
+vault asks	2	cli/src/migrate.sh:cmd_vault:asks	sidecar,curl	body,json,python	out:secret	-
+vault unsend	2	cli/src/migrate.sh:cmd_vault:unsend	sidecar,curl	body,json,python	out:secret	-
+vault placement add	2	cli/src/migrate.sh:cmd_vault:placement~	sidecar	body,json,python	out:confirm	-
+vault placement done	2	cli/src/migrate.sh:cmd_vault:placement~	sidecar	body,json,python	out:confirm	-
+vault placement rm	2	cli/src/migrate.sh:cmd_vault:placement~	sidecar	body,json,python	out:confirm	-
+vault placements	2	cli/src/migrate.sh:cmd_vault:placements	sidecar	body,json,python	out:confirm	-
+vault reveal	1	cli/src/migrate.sh:cmd_vault:reveal	curl	json,python	out:secret	-
+vault recovery	1	cli/src/migrate.sh:cmd_vault:recovery	sidecar,curl	json,python	out:secret	-
+vault recovery show-once	1	cli/src/migrate.sh:cmd_vault:recovery show-once	curl	json,python	out:secret	-
+vault recovery rotate	1	cli/src/migrate.sh:cmd_vault:recovery rotate	curl	json,python	out:secret	-
+vault confirm-password set	1	cli/src/migrate.sh:cmd_vault:confirm-password~	curl	json,python	out:secret	-
+vault kek rotate	1	cli/src/migrate.sh:cmd_vault:kek~	curl	json,python	out:secret	-
+vault rekey	1	cli/src/migrate.sh:cmd_vault:rekey	curl	json,python	out:secret	-
+vault rollback	1	cli/src/migrate.sh:cmd_vault:rollback	curl	json,python	out:secret	-
+vault systemd-cred	2	cli/src/migrate.sh:cmd_vault:systemd-cred	curl	body,json,python	out:secret	-
+vault backup	1	cli/src/migrate.sh:cmd_vault:backup	curl	json,python	out:secret	-
+vault backup key	1	cli/src/migrate.sh:cmd_vault:backup~	curl	json,python	out:secret	-
+vault restore	1	cli/src/migrate.sh:cmd_vault:restore	curl	json,python	out:secret	-
+vault recipient	2	cli/src/migrate.sh:cmd_vault:recipient	sidecar	body,python	candidate	3
+vault carry export	1	cli/src/migrate.sh:cmd_vault:carry export	sidecar	json,python	candidate	3
+vault carry import	2	cli/src/migrate.sh:cmd_vault:carry import	sidecar	body,json,python	out:file	-
+wiki	2	cli/src/router.sh::wiki	request,post-form	json,python	out:open-tool	-
+wiki status	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+wiki index	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+wiki note	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+wiki seed	1	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+wiki serve	1	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+wiki chat	1	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+wiki publish	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+wiki unpublish	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+zen	2	cli/src/router.sh::zen	request,post-json	json,python	out:open-tool	-
+zen garden	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen inspect	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen widget errors	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen validate	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen widget delete	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen widget put	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen widget preview	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen reload	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen reset	1	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen history	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen doctor	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen theme	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen widget	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen path	1	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen sync	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen links	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen news	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen agents-order	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+zen guide	2	cli/src/garden-data.sh:cmd_help_zen_data:~	none	none	out:no-request	-
+whoami	2	cli/src/router.sh::whoami	send,request	python	out:open-tool	-
+done	1	cli/src/router.sh::done	request-post,curl	none	out:open-tool	-
+respond	1	cli/src/router.sh::respond	curl	none	candidate	1
+fed	1	cli/src/router.sh::fed	send,request,post-json,curl	json,python	out:open-tool	-
+fed enable	1	cli/src/federation.sh:cmd_fed:enable	post-json	python	out:open-tool	-
+fed disable	1	cli/src/federation.sh:cmd_fed:disable	post-json	python	out:open-tool	-
+fed status	1	cli/src/federation.sh:cmd_fed:status	request	python	out:open-tool	-
+fed peers	1	cli/src/federation.sh:cmd_fed:peers	send,request	python	out:open-tool	-
+fed pubkey	2	cli/src/federation.sh:cmd_fed:pubkey	none	json,python	out:no-request	-
+fed send	1	cli/src/federation.sh:cmd_fed:send	curl	json,python	out:open-tool	-
+fed outbox	1	cli/src/federation.sh:cmd_fed:outbox	curl	python	out:open-tool	-
+fed pair-start	1	cli/src/federation.sh:cmd_fed:pair-start	curl	json,python	out:open-tool	-
+fed pair-join	1	cli/src/federation.sh:cmd_fed:pair-join	curl	json,python	out:open-tool	-
+fed pair-finish	1	cli/src/federation.sh:cmd_fed:pair-finish	curl	json,python	out:open-tool	-
+fed pair-verify	1	cli/src/federation.sh:cmd_fed:pair-verify	curl	json,python	out:open-tool	-
+fed pair-request	1	cli/src/federation.sh:cmd_fed:pair-request	curl	json,python	out:open-tool	-
+fed confirm	1	cli/src/federation.sh:cmd_fed:confirm	curl	json,python	out:open-tool	-
+setup	2	cli/src/router.sh::setup	curl	body	out:open-tool	-
+setup hide	2	cli/src/setup.sh:cmd_setup:hide	curl	none	out:open-tool	-
+setup show	2	cli/src/setup.sh:cmd_setup:show	curl	none	out:open-tool	-
+setup skip	2	cli/src/setup.sh:cmd_setup:skip	curl	none	out:open-tool	-
+setup kessel	2	cli/src/setup.sh:cmd_setup:kessel	curl	none	out:open-tool	-
+setup chief-of-staff	2	cli/src/setup.sh:cmd_setup:chief-of-staff	curl	none	out:poll	-
+setup dismiss-offer	2	cli/src/setup.sh:cmd_setup:dismiss-offer	curl	none	out:open-tool	-
+setup agent-reports	2	cli/src/setup.sh:cmd_setup:agent-reports	compute	body	out:open-tool	-
+remind	2	cli/src/router.sh::remind	send,request,request-post	python	out:file	-
+remind list	2	cli/src/remind.sh:cmd_heartbeat_remind:list	send,request	python	out:file	-
+remind show	2	cli/src/remind.sh:cmd_heartbeat_remind:show	send,request	python	out:file	-
+remind snooze	2	cli/src/remind.sh:cmd_heartbeat_remind:~	send,request,request-post	python	out:file	-
+remind cancel	2	cli/src/remind.sh:cmd_heartbeat_remind:cancel	send,request-post	python	out:file	-
+firewall	2	cli/src/router.sh::firewall	sidecar	json,python	out:file	-
+firewall ports	2	cli/src/firewall.sh:cmd_firewall:ports	sidecar	python	candidate	3
+firewall rules	1	cli/src/firewall.sh:cmd_firewall:rules	sidecar	python	candidate	3
+firewall ssh any	2	cli/src/firewall.sh:cmd_firewall:ssh any	none	none	out:no-request	-
+firewall ssh allow	2	cli/src/firewall.sh:cmd_firewall:ssh allow	none	json,python	out:no-request	-
+firewall ssh port	2	cli/src/firewall.sh:cmd_firewall:ssh port	none	none	out:no-request	-
+firewall open	2	cli/src/firewall.sh:cmd_firewall:open	sidecar	json,python	candidate	3
+firewall close	2	cli/src/firewall.sh:cmd_firewall:close	sidecar	json,python	candidate	3
+firewall guard	2	cli/src/firewall.sh:cmd_firewall:guard	sidecar	json,python	candidate	3
+firewall upstream	2	cli/src/firewall.sh:cmd_firewall:upstream	sidecar	json,python	candidate	3
+front	1	cli/src/router.sh::front	sidecar	json,python	out:file	-
+front status	2	cli/src/desktop.sh:cmd_front:status	sidecar	python	candidate	3
+front enable	2	cli/src/desktop.sh:cmd_front:enable	sidecar	python	candidate	3
+front disable	2	cli/src/desktop.sh:cmd_front:disable	sidecar	python	candidate	3
+front http	2	cli/src/desktop.sh:cmd_front:http	sidecar	python	out:file	-
+front passthrough	2	cli/src/desktop.sh:cmd_front:passthrough	sidecar	json,python	out:file	-
+front passthrough add	2	cli/src/desktop.sh:_front_passthrough:add	sidecar	json,python	candidate	3
+front passthrough rm	2	cli/src/desktop.sh:_front_passthrough:rm	sidecar	json,python	candidate	3
+root-helper	1	cli/src/router.sh::root-helper	sidecar	json,python	out:open-tool	-
+root-helper status	2	cli/src/root-helper.sh:cmd_root_helper:status	sidecar	python	out:open-tool	-
+root-helper update	2	cli/src/root-helper.sh:cmd_root_helper:update	sidecar	json,python	out:open-tool	-
+root-helper rollback	2	cli/src/root-helper.sh:cmd_root_helper:rollback	sidecar	python	out:open-tool	-
+root-helper install-command	2	cli/src/root-helper.sh:cmd_root_helper:install-command	sidecar	python	out:open-tool	-
+git-tools	2	cli/src/router.sh::git-tools	curl	none	out:open-tool	-
+git-tools install	2	cli/src/git-tools.sh:cmd_git_tools:install	curl	none	out:open-tool	-
+git-tools recheck	2	cli/src/git-tools.sh:cmd_git_tools:recheck	curl	none	out:open-tool	-
+push	1	cli/src/router.sh::push	curl	json,python	out:open-tool	-
+push devices	2	cli/src/push.sh:cmd_push:devices	curl	python	out:open-tool	-
+push e2e	2	cli/src/push.sh:cmd_push:e2e	curl	python	out:open-tool	-
+push device e2e	2	cli/src/push.sh:cmd_push:device~	curl	json,python	out:open-tool	-
+push device remove	2	cli/src/push.sh:cmd_push:device~	curl	json,python	out:open-tool	-
+push log	2	cli/src/push.sh:cmd_push:log	curl	python	out:open-tool	-
+notify	1	cli/src/router.sh::notify	compute	json,python	out:open-tool	-
+notify email	1	cli/src/app-auth.sh:cmd_notify:email	compute	json,python	out:open-tool	-
+notify email off	1	cli/src/app-auth.sh:cmd_notify_email:off	compute	none	out:open-tool	-
+notify email mute	1	cli/src/app-auth.sh:cmd_notify_email:mute	compute	json,python	out:open-tool	-
+notify email unmute	1	cli/src/app-auth.sh:cmd_notify_email:unmute	compute	json,python	out:open-tool	-
+notifications	1	cli/src/router.sh::notifications	compute	body,json,python	out:open-tool	-
+notifications email	2	cli/src/app-auth.sh:cmd_notifications:email	compute	body,json,python	out:open-tool	-
+notifications email sender add	1	cli/src/app-auth.sh:cmd_notifications_sender:add	compute	json,python	out:open-tool	-
+notifications email sender list	2	cli/src/app-auth.sh:cmd_notifications_sender:list	compute	body,python	out:open-tool	-
+notifications email sender check	1	cli/src/app-auth.sh:cmd_notifications_sender:check	compute	json,python	out:open-tool	-
+notifications email sender set	1	cli/src/app-auth.sh:cmd_notifications_sender:set	compute	json,python	out:open-tool	-
+notifications email sender rm	1	cli/src/app-auth.sh:cmd_notifications_sender:rm	compute	json,python	out:open-tool	-
+notifications email sender resume	1	cli/src/app-auth.sh:cmd_notifications_sender:resume	compute	json,python	out:open-tool	-
+notifications email suppressions	2	cli/src/app-auth.sh:cmd_notifications_email:suppressions	compute	body,json,python	out:open-tool	-
+notifications email suppressions add	2	cli/src/app-auth.sh:cmd_notifications_suppressions:add	compute	body,json,python	out:open-tool	-
+notifications email suppressions rm	2	cli/src/app-auth.sh:cmd_notifications_suppressions:rm	compute	body,json,python	out:open-tool	-
+notifications email system-sender	1	cli/src/app-auth.sh:cmd_notifications_email:system-sender	compute	python	out:open-tool	-
+notifications email relay add	1	cli/src/app-auth.sh:cmd_notifications_relay:add	compute	json,python	out:open-tool	-
+notifications email relay list	1	cli/src/app-auth.sh:cmd_notifications_relay:list	compute	python	out:open-tool	-
+notifications email relay rm	1	cli/src/app-auth.sh:cmd_notifications_relay:rm	compute	json,python	out:open-tool	-
+notifications email relay test	1	cli/src/app-auth.sh:cmd_notifications_relay:test	compute	json,python	out:open-tool	-
+notifications email log	2	cli/src/app-auth.sh:cmd_notifications_email:log	compute	body,python	out:open-tool	-
+notifications email settings	1	cli/src/app-auth.sh:cmd_notifications_email:settings	compute	json,python	out:open-tool	-
+notifications email address	2	cli/src/app-auth.sh:cmd_notifications_email:address	compute	body,json,python	out:open-tool	-
+notifications email address set	2	cli/src/app-auth.sh:cmd_notifications_address:set	compute	body,json,python	out:open-tool	-
+notifications email address remove	2	cli/src/app-auth.sh:cmd_notifications_address:remove	compute	body,json,python	out:open-tool	-
+notifications email agent	2	cli/src/app-auth.sh:cmd_notifications_email:agent	compute	body,json,python	out:open-tool	-
+notifications email agent on	1	cli/src/app-auth.sh:cmd_notifications_agent:on	compute	json,python	out:open-tool	-
+notifications email agent off	1	cli/src/app-auth.sh:cmd_notifications_agent:off	compute	json,python	out:open-tool	-
+api-key	1	cli/src/router.sh::api-key	request,post-json	json,python	out:secret	-
+api-key create	1	cli/src/talk-and-workspace.sh:cmd_api_key:create	post-json,curl	json,python	out:secret	-
+api-key list	1	cli/src/talk-and-workspace.sh:cmd_api_key:list	request	python	candidate	3
+api-key hire-ceiling	1	cli/src/talk-and-workspace.sh:cmd_api_key:hire-ceiling	post-json,curl	json,python	out:secret	-
+api-key revoke	1	cli/src/talk-and-workspace.sh:cmd_api_key:revoke	post-json	json,python	candidate	3
+api-key disable	1	cli/src/talk-and-workspace.sh:cmd_api_key:disable	post-json	json,python	candidate	3
+api-key enable	1	cli/src/talk-and-workspace.sh:cmd_api_key:enable	post-json	json,python	candidate	3
+migrate	1	cli/src/router.sh::migrate	sidecar,curl	body,json,python	out:confirm	-
+migrate status	2	cli/src/migrate.sh:cmd_migrate:status	sidecar,curl	body,json,python	out:many-requests	-
+migrate import-secrets begin	2	cli/src/migrate.sh:cmd_migrate:import-secrets begin	none	none	out:no-request	-
+migrate export-secrets	2	cli/src/migrate.sh:cmd_migrate:export-secrets	sidecar,curl	body,json,python	out:secret	-
+migrate import-secrets	2	cli/src/migrate.sh:cmd_migrate:import-secrets	sidecar,curl	body,json,python	out:secret	-
+migrate approve	2	cli/src/migrate.sh:cmd_migrate:approve	sidecar,curl	body,json,python	out:secret	-
+doc	2	cli/src/router.sh::doc	send-json	json,python	out:secret	-
+doc cores	2	cli/src/doc.sh:cmd_doc:cores	send-json	json,python	out:secret	-
+doc cad	2	cli/src/doc.sh:cmd_doc:cad	send-json	json,python	out:secret	-
+doc av	2	cli/src/doc.sh:cmd_doc:av	send-json	json,python	out:secret	-
+doc cat	1	cli/src/doc.sh:cmd_doc:cat	none	json,python	out:no-request	-
+doc head	1	cli/src/doc.sh:cmd_doc:head	none	json,python	out:no-request	-
+doc tail	1	cli/src/doc.sh:cmd_doc:tail	send-json	json,python	out:secret	-
+doc wc	1	cli/src/doc.sh:cmd_doc:wc	none	json,python	out:no-request	-
+doc grep	1	cli/src/doc.sh:cmd_doc:grep	none	json,python	out:no-request	-
+doc sed	1	cli/src/doc.sh:cmd_doc:sed	none	json,python	out:no-request	-
+doc view	1	cli/src/doc.sh:cmd_doc:view	send-json	json,python	out:secret	-
+doc diff	1	cli/src/doc.sh:cmd_doc:diff	send-json	json,python	out:secret	-
+doc patch	1	cli/src/doc.sh:cmd_doc:patch	none	json,python	out:no-request	-
+doc append	1	cli/src/doc.sh:cmd_doc:append	none	json,python	out:no-request	-
+doc insert	1	cli/src/doc.sh:cmd_doc:insert	none	json,python	out:no-request	-
+doc replace	1	cli/src/doc.sh:cmd_doc:replace	none	json,python	out:no-request	-
+doc delete	1	cli/src/doc.sh:cmd_doc:delete	none	json,python	out:no-request	-
+doc replace-section	1	cli/src/doc.sh:cmd_doc:~	compute,send-json,curl	json,python	out:secret	-
+doc mv	1	cli/src/doc.sh:cmd_doc:mv	send-json	json,python	out:secret	-
+doc write	1	cli/src/doc.sh:cmd_doc:write	curl	json,python	out:secret	-
+doc undo	1	cli/src/doc.sh:cmd_doc:undo	send-json	json,python	out:secret	-
+doc redo	1	cli/src/doc.sh:cmd_doc:redo	send-json	json,python	out:secret	-
+doc revert	1	cli/src/doc.sh:cmd_doc:revert	send-json	json,python	out:secret	-
+doc who	1	cli/src/doc.sh:cmd_doc:who	send-json	json,python	out:secret	-
+doc follow	1	cli/src/doc.sh:cmd_doc:follow	send-json	json,python	out:secret	-
+doc cursor	1	cli/src/doc.sh:cmd_doc:cursor	send-json	json,python	out:secret	-
+doc claim	1	cli/src/doc.sh:cmd_doc:claim	send-json	json,python	out:secret	-
+doc activity	1	cli/src/doc.sh:cmd_doc:activity	send-json	json,python	out:secret	-
+doc say	1	cli/src/doc.sh:cmd_doc:say	send-json	json,python	out:secret	-
+doc open	1	cli/src/doc.sh:cmd_doc:open	send-json	json,python	out:secret	-
+doc leave	1	cli/src/doc.sh:cmd_doc:leave	send-json	json,python	out:secret	-
+doc watch	1	cli/src/doc.sh:cmd_doc:watch	send-json	json,python	out:secret	-
+doc status	1	cli/src/doc.sh:cmd_doc:status	send-json	json,python	out:secret	-
+doc flush	1	cli/src/doc.sh:cmd_doc:flush	send-json	json,python	out:secret	-
+doc log	1	cli/src/doc.sh:cmd_doc:log	send-json	json,python	out:secret	-
+doc versions	1	cli/src/doc.sh:cmd_doc:versions	send-json	json,python	out:secret	-
+doc show	1	cli/src/doc.sh:cmd_doc:show	send-json	json,python	out:secret	-
+doc blame	1	cli/src/doc.sh:cmd_doc:blame	send-json	json,python	out:secret	-
+doc restore	1	cli/src/doc.sh:cmd_doc:restore	send-json	json,python	out:secret	-
+doc version	1	cli/src/doc.sh:cmd_doc:version	send-json	json,python	out:secret	-
+doc approvals	1	cli/src/doc.sh:cmd_doc:approvals	send-json	json,python	out:secret	-
+doc approve	1	cli/src/doc.sh:cmd_doc:approve	send-json	json,python	out:secret	-
+doc decline	1	cli/src/doc.sh:cmd_doc:decline	send-json	json,python	out:secret	-
+doc export	1	cli/src/doc.sh:cmd_doc:export	send-json,curl	json,python	out:secret	-
+doc lease	1	cli/src/doc.sh:cmd_doc:lease	send-json	json,python	out:secret	-
+doc lock	1	cli/src/doc.sh:cmd_doc:lock	send-json	json,python	out:secret	-
+doc unlock	1	cli/src/doc.sh:cmd_doc:unlock	send-json	json,python	out:secret	-
+doc outline	1	cli/src/doc.sh:cmd_doc:outline	none	json,python	out:no-request	-
+doc node	1	cli/src/doc.sh:cmd_doc:node	none	json,python	out:no-request	-
+doc layer	1	cli/src/doc.sh:cmd_doc:layer	none	json,python	out:no-request	-
+doc comment	1	cli/src/doc.sh:cmd_doc:comment	none	json,python	out:no-request	-
+doc reply	1	cli/src/doc.sh:cmd_doc:reply	none	json,python	out:no-request	-
+doc resolve	1	cli/src/doc.sh:cmd_doc:resolve	none	json,python	out:no-request	-
+doc comments	1	cli/src/doc.sh:cmd_doc:comments	none	json,python	out:no-request	-
+doc reanchor	1	cli/src/doc.sh:cmd_doc:reanchor	none	json,python	out:no-request	-
+doc purge-comments	1	cli/src/doc.sh:cmd_doc:purge-comments	send-json	json,python	out:secret	-
+doc erase-participant	1	cli/src/doc.sh:cmd_doc:erase-participant	send-json	json,python	out:secret	-
+doc share	1	cli/src/doc.sh:cmd_doc:share	send-json	json,python	out:secret	-
+doc unshare	1	cli/src/doc.sh:cmd_doc:unshare	send-json	json,python	out:secret	-
+doc shares	1	cli/src/doc.sh:cmd_doc:shares	send-json	json,python	out:secret	-
+job	2	cli/src/router.sh::job	sidecar	body,json,python	out:file	-
+job add	2	cli/src/job.sh:cmd_job:add	sidecar	python	candidate	3
+job edit	2	cli/src/job.sh:cmd_job:edit	sidecar	python	candidate	3
+job list	2	cli/src/job.sh:cmd_job:list	sidecar	body,python	candidate	3
+job show	2	cli/src/job.sh:cmd_job:show	sidecar	body,python	candidate	3
+job logs	2	cli/src/job.sh:cmd_job:logs	sidecar	body,python	candidate	3
+job run	2	cli/src/job.sh:cmd_job:run	sidecar	python	candidate	3
+job enable	2	cli/src/job.sh:cmd_job:enable	sidecar	python	candidate	3
+job disable	2	cli/src/job.sh:cmd_job:disable	sidecar	python	candidate	3
+job kill	2	cli/src/job.sh:cmd_job:kill	sidecar	python	candidate	3
+job rm	2	cli/src/job.sh:cmd_job:rm	sidecar	python	candidate	3
+job pause	2	cli/src/job.sh:cmd_job:pause	sidecar	python	candidate	3
+job resume	2	cli/src/job.sh:cmd_job:resume	sidecar	python	candidate	3
+postal	2	cli/src/router.sh::postal	request,post-json	json,python	out:open-tool	-
+skills	1	cli/src/router.sh::skills	request,request-post	json,python	out:open-tool	-
+settings	1	cli/src/router.sh::settings	send-json,request,request-post	json,python	out:file	-
+settings set	1	cli/src/wiki.sh:cmd_settings:~	send-json,request,request-post	json,python	out:file	-
+version	1	cli/src/router.sh::version	none	none	out:no-request	-
+cli status	2	cli/src/router.sh::cli~	none	none	out:no-request	-
+--schema	1	cli/src/router.sh::--schema	none	none	out:no-request	-
+study	2	cli/src/router.sh::study	none	json,python	out:no-request	-
+help	1	cli/src/router.sh::help	none	none	out:no-request	-

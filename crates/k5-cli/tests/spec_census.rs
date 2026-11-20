@@ -57,3 +57,48 @@ fn its_spec_rows_are_the_table_s() {
     let head = format!("# {entries} entries, {forms} verb forms");
     assert!(text.lines().nth(1) == Some(head.as_str()), "{head}");
 }
+
+/// K2's ruling: a row is anchored on the function and the arm word, never
+/// a line number, so an edit elsewhere in a file moves no row. `where` is
+/// `-` or `cli/src/<file>:<function>:<words>`, with a `~` when no arm names
+/// the last word.
+#[test]
+fn where_is_a_function_and_its_arm_words() {
+    let text = census();
+    let ident = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let mut anchored = 0;
+    for r in text.lines().filter(|l| !l.starts_with('#')).skip(1) {
+        let cols: Vec<&str> = r.split('\t').collect();
+        let place = cols[2];
+        if place == "-" {
+            continue;
+        }
+        let parts: Vec<&str> = place.split(':').collect();
+        assert_eq!(parts.len(), 3, "{r}");
+        assert!(
+            parts[0].starts_with("cli/src/") && parts[0].ends_with(".sh"),
+            "{r}"
+        );
+        assert!(ident(parts[1]), "{r}: the function");
+        let words = parts[2].strip_suffix('~').unwrap_or(parts[2]);
+        assert!(
+            !words.is_empty() || parts[2].ends_with('~'),
+            "{r}: an exact row names its arm word"
+        );
+        assert!(
+            !words
+                .split(' ')
+                .any(|w| !w.is_empty() && w.bytes().all(|b| b.is_ascii_digit())),
+            "{r}: a line number"
+        );
+        // The words are the entry's own, in its order.
+        if !words.is_empty() {
+            assert!(
+                format!(" {} ", cols[0]).contains(&format!(" {words} ")),
+                "{r}: the arm words are not the entry's"
+            );
+        }
+        anchored += 1;
+    }
+    assert!(anchored > 800, "only {anchored} anchored rows");
+}

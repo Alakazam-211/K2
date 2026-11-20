@@ -50,7 +50,8 @@
 # Compare::NulInAnswer. They meet feedback-optin-without-python3 in
 # help_feedback_optin_parity.rs: every row's run with no python3 prints
 # what the binary prints with one, and its no-python3 test checks the
-# rows that answer otherwise there.)
+# rows that answer otherwise there. They meet wiki-status-large-answer in
+# wiki_parity.rs's wiki_status_with_a_large_answer.)
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -157,6 +158,7 @@ EXPECTED_DIFFS=(
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\` and \`connections remove beta\` (POSTs). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
+    "wiki-status-large-answer|K5 lane r8c, for K2 to rule on|\`wiki status\` hands both of the daemon's answers (the serve status and the index) to its Python in environment variables; an index above what one variable may hold (128 KiB on Linux, about 1 MiB in all on macOS) stops bash there: \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 126. The binary reads the answers itself and prints the status, exit 0. Both send the same two requests"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
 )
 
@@ -326,7 +328,9 @@ s.serve_forever()
 # whose title holds a NUL byte, anything else {"role":"canonical"}. Mode
 # optin: /cli/product-feedback/settings says agents may not report (to an
 # agent), /cli/permission/enabled says cards are off, anything else
-# {"role":"canonical"}. Sets STUB_PID and STUB_PORT; returns 1 when it
+# {"role":"canonical"}. Mode wikibig: /cli/wiki/serve/status answers
+# {"enabled":false} and /cli/wiki/index 60,000 notes (about 1.4 MiB),
+# anything else {"role":"canonical"}. Sets STUB_PID and STUB_PORT; returns 1 when it
 # doesn't start.
 start_stub() {
     local d="$1" mode="$2"
@@ -343,7 +347,11 @@ OPTIN = {
     "/cli/product-feedback/settings": b"{\"enabled\":true,\"agents\":false,\"canSend\":false,\"why\":\"agents_off\",\"senderKind\":\"agent\",\"ok\":true}",
     "/cli/permission/enabled": b"{\"enabled\":false}",
 }
-TABLE = {"nul": NUL, "optin": OPTIN}.get(mode, {})
+WIKIBIG = {
+    "/cli/wiki/serve/status": b"{\"enabled\":false}",
+    "/cli/wiki/index": b"{\"nodes\":[" + b",".join(b"{\"id\":\"note-%05d.md\"}" % i for i in range(60000)) + b"]}",
+}
+TABLE = {"nul": NUL, "optin": OPTIN, "wikibig": WIKIBIG}.get(mode, {})
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         with open(os.path.join(d, "log"), "a") as f:
@@ -519,6 +527,35 @@ check_nul_in_answer() {
     [ "$warns" = 1 ] && return 0
     echo "bash on PATH is $ver, which drops a NUL silently as the binary does (the warning came in bash 4.4): the two are exact here, so the difference itself was not proven on this host"
     return 3
+}
+
+# check_wiki_status_large_answer: the stub answers the wiki index with
+# about 1.4 MiB of notes (mode wikibig), the owner token and port on disk,
+# and both CLIs run `wiki status`. Bash exits 126 with "Argument list too
+# long" on stderr and nothing on stdout; the binary exits 0, prints the
+# status with "  Notes:      60000" and nothing on stderr; both send the
+# same requests, the serve status then the index.
+check_wiki_status_large_answer() {
+    local d="$WORK/wiki-large" rc rr problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    start_stub "$d" wikibig || { echo "the stub daemon didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    rc=0; run_side "$d" bash wiki status || rc=$?
+    cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
+    rr=0; run_side "$d" binary wiki status || rr=$?
+    stop_stub
+    [ "$rc" = 126 ] || problems+=("bash exited $rc, want 126: $(head -c 300 "$d/err.bash")")
+    grep -q 'Argument list too long' "$d/err.bash" || problems+=("bash's stderr has no 'Argument list too long': $(head -c 300 "$d/err.bash")")
+    [ ! -s "$d/out.bash" ] || problems+=("bash printed on stdout: $(head -c 300 "$d/out.bash")")
+    [ "$rr" = 0 ] || problems+=("the binary exited $rr, want 0: $(head -c 300 "$d/err")")
+    grep -qx '  Notes:      60000' "$d/out" || problems+=("the binary printed no note count: $(head -c 300 "$d/out")")
+    [ ! -s "$d/err" ] || problems+=("the binary wrote on stderr: $(head -c 300 "$d/err")")
+    [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 2 ] || problems+=("bash sent, want two requests: $(head -c 300 "$d/log.bash")")
+    cmp -s "$d/log.bash" "$d/log" || problems+=("the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
 }
 
 # check_feedback_optin_without_python3: the stub says agents may not

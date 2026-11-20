@@ -202,13 +202,13 @@ grep -q "deprecated" "$err" && fail "keyless create must not warn: $(cat "$err")
 # 9. The key POSTs (body on stdin) keep the token off curl's argv too.
 #    (The workspace-name resolve GET goes through the shared cli_request
 #    transport, which is covered by its own test.)
-#    The k5 binary sends `workspace api-key`'s three POSTs itself (no
-#    curl, so no argv to read); only `api-key create`'s four go through
-#    the shell's curl there.
+#    The k5 binary sends all seven itself (workspace api-key's three and
+#    api-key create's four), with no curl and so no argv at all: there
+#    none run curl, and the token check below still reads every line.
 posts="$(grep -F -- '--data-binary @-' "$ARGV_LOG" || true)"
-want=7
-[ -z "${K5_CLI_UNDER_TEST:-}" ] || want=4
-[ "$(printf '%s\n' "$posts" | grep -c .)" -ge "$want" ] || fail "expected the key POSTs in the argv log: $(cat "$ARGV_LOG")"
+want_posts=7
+[ -n "${K5_CLI_UNDER_TEST:-}" ] && want_posts=0
+[ "$(printf '%s\n' "$posts" | grep -c .)" -ge "$want_posts" ] || fail "expected the key POSTs in the argv log: $(cat "$ARGV_LOG")"
 if <<<"$posts" grep -qF "owner-token-for-test"; then
     fail "token on curl argv for a key POST: $posts"
 fi

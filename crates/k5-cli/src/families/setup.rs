@@ -5,12 +5,15 @@
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
 //!    and the two gates ([`crate::prelude`]).
-//! 2. `_cli_apply_auth_for_verb setup <first word>`: `setup` is an open
-//!    tool, but with `chief-of-staff` as its first word it is the locked
+//! 2. `_cli_apply_auth_for_verb setup <words>`: `setup` is an open
+//!    tool, but with `chief-of-staff` as its first word, or as the first
+//!    word after leading flags ([`names_locked_tool`]), it is the locked
 //!    `agent-harness` tool, so in a session with `HOOK_SOCK` set and no
 //!    passport it is refused ([`prelude::require_passport_lines`], exit
-//!    3). (`_cli_check_session_passport` reads only `setup`, an open tool,
-//!    so no stale-passport probe runs.)
+//!    3). Since 0.46.17 `_cli_check_session_passport` reads the same tool,
+//!    so a passport whose socket is gone is probed first
+//!    ([`prelude::id_tool`]), and a shared Codex app-server is the
+//!    shell's.
 //! 3. The words, as `cmd_setup`'s loop reads them ([`parse`]): `--json`;
 //!    one verb of `hide`, `show`, `kessel`, `chief-of-staff`,
 //!    `dismiss-offer` and `skip <step>`; `--tool`, `--name`, `--handle`,
@@ -81,7 +84,7 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::text;
-use crate::transport::{permission, Auth, Channel, Error, Response};
+use crate::transport::{permission, Channel, Error, Response};
 use k2_client::product_name;
 use std::ffi::OsString;
 use std::path::Path;
@@ -385,6 +388,13 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return None;
     }
     let hook_sock = super::hook_sock();
+    // The locked tool under a shared Codex app-server: the shell's check.
+    if names_locked_tool(&words)
+        && hook_sock.is_some()
+        && prelude::codex_env(std::env::vars_os().map(|(name, _)| name))
+    {
+        return None;
+    }
     let settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {
@@ -404,6 +414,33 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     ))
 }
 
+/// `_cli_tool_id_for_args setup <words>` names the locked tool (0.46.17):
+/// the first word is `chief-of-staff`, or it is the first word after the
+/// leading flags (each of `--tool`, `--name`, `--handle`, `--about` and
+/// `--focus-group` takes the word after it; `--` ends the flags; `-h` or
+/// `--help` stops the search and names none).
+pub fn names_locked_tool(words: &[&str]) -> bool {
+    if words.first() == Some(&"chief-of-staff") {
+        return true;
+    }
+    let mut i = 0;
+    while let Some(w) = words.get(i) {
+        match *w {
+            "-h" | "--help" => return false,
+            "--" => {
+                i += 1;
+                break;
+            }
+            "--tool" | "--name" | "--handle" | "--about" | "--focus-group" => {
+                i += if i + 1 < words.len() { 2 } else { 1 };
+            }
+            w if w.starts_with('-') => i += 1,
+            _ => break,
+        }
+    }
+    words.get(i) == Some(&"chief-of-staff")
+}
+
 fn run_with(
     args: &[OsString],
     words: &[&str],
@@ -414,15 +451,15 @@ fn run_with(
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }
-    // The locked tool, read from the first word only, as the router does.
-    if words.first() == Some(&"chief-of-staff")
-        && hook_sock.is_some()
-        && !matches!(settings.auth, Auth::Passport { .. })
-    {
-        for l in prelude::require_passport_lines(TOOL) {
-            out::stderr_line(&l);
+    // The locked tool, read as `_cli_tool_id_for_args` reads it: the
+    // stale-passport probe, then the require-passport refusal (0.46.17,
+    // `_cli_check_session_passport` reads the same tool).
+    if names_locked_tool(words) {
+        if let Some(stop) =
+            prelude::id_tool(&settings, hook_sock, passport::current(args).would_refuse(), TOOL)
+        {
+            return stop;
         }
-        return Exit::Refused;
     }
     let line = match read {
         Ok(line) => line,

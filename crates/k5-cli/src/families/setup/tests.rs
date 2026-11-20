@@ -818,3 +818,42 @@ fn the_switches_pick_the_forms() {
     assert_eq!(native(&["--bogus"]), READ_NATIVE);
     assert_eq!(native(&["skip", "x"]), WRITE_NATIVE);
 }
+
+/// `_cli_tool_id_for_args setup <words>`: the locked tool is
+/// `chief-of-staff` first, or first after the leading flags.
+#[test]
+fn the_locked_tool_after_leading_flags() {
+    for words in [
+        &["chief-of-staff"][..],
+        &["--json", "chief-of-staff"],
+        &["--tool", "claude", "chief-of-staff"],
+        &["--name", "x", "--json", "chief-of-staff", "--about", "y"],
+        &["--", "chief-of-staff"],
+        &["chief-of-staff", "--help"],
+    ] {
+        assert!(names_locked_tool(words), "{words:?}");
+    }
+    for words in [
+        &[][..],
+        &["hide"],
+        &["--json"],
+        &["--json", "hide", "chief-of-staff"],
+        &["--help", "chief-of-staff"],
+        &["--tool", "chief-of-staff"],
+        &["--", "--json", "chief-of-staff"],
+    ] {
+        assert!(!names_locked_tool(words), "{words:?}");
+    }
+    let policy = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh"),
+    )
+    .unwrap();
+    for line in [
+        "                -h|--help) break ;;",
+        "                --) shift; break ;;",
+        "                        setup:--tool|setup:--name|setup:--handle|setup:--about|setup:--focus-group)",
+        "                chief-of-staff) echo \"agent-harness\" ;;",
+    ] {
+        assert!(policy.lines().any(|l| l == line), "_cli_tool_id_for_args moved: no line {line:?}");
+    }
+}

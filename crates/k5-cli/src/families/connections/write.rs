@@ -213,7 +213,7 @@ pub fn reader(raw: &[u8], verb: Verb) -> Shown {
 fn lines(d: &Value, verb: Verb, stdout: &mut String, stderr: &mut String) -> Result<Exit, Raise> {
     if let Some(err) = py_get(d, "error", line::ERR)? {
         if *err != Value::Null {
-            return error_lines(err, stdout, stderr);
+            return error_lines(err, stderr);
         }
     }
     if verb == Verb::Remove {
@@ -263,7 +263,7 @@ fn lines(d: &Value, verb: Verb, stdout: &mut String, stderr: &mut String) -> Res
 }
 
 /// `if err is not None:` (both verbs).
-fn error_lines(err: &Value, stdout: &mut String, stderr: &mut String) -> Result<Exit, Raise> {
+fn error_lines(err: &Value, stderr: &mut String) -> Result<Exit, Raise> {
     let (code, hint) = match err {
         Value::Object(_) => {
             let code = or(at(err, "code"), s(""));

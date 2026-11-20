@@ -895,13 +895,23 @@ fn usage_and_the_prelude() {
             3,
             0,
         ),
+        // 0.46.17: the locked tool after leading flags is still locked.
         case(
-            "the locked tool is the first word only",
+            "the locked tool after a leading flag, no passport: refused",
             &["--json", "chief-of-staff"],
             &[("K2_HOOK_SOCK", "{sock}")],
             vec![],
             owner_and_port,
-            2,
+            3,
+            0,
+        ),
+        case(
+            "the locked tool after a value flag, no passport: refused",
+            &["--tool", "claude", "chief-of-staff"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
             0,
         ),
     ]);

@@ -256,6 +256,6 @@ fn the_four_lines() {
     };
     assert_eq!(
         account_lines(&none, "no"),
-        "K2 Connect account\n  Account session: no\n  Paired subdomain: '(none)'\n  Tunnel token:     no\n"
+        "K2 Connect account\n  Account session: no\n  Paired subdomain: (none)\n  Tunnel token:     no\n"
     );
 }

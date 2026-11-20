@@ -251,15 +251,44 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// `_k2_note_dir` (`cli/src/cell-socket.sh`, 0.46.17): the first of
+/// `TMPDIR` (when set and not empty), `/tmp` and `/var/tmp` that is a
+/// folder this user may write in and enter, with one trailing `/` taken
+/// off (`${d%/}`, `/` when that leaves nothing); `/tmp` when none is.
+fn note_dir(tmpdir: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    let usable = |d: &std::path::Path| d.is_dir() && writable_folder(d);
+    let tmpdir = tmpdir.filter(|d| !d.is_empty());
+    for d in tmpdir.iter().map(std::path::PathBuf::from).chain(["/tmp".into(), "/var/tmp".into()]) {
+        if usable(&d) {
+            let text = d.to_string_lossy();
+            let trimmed = text.strip_suffix('/').unwrap_or(&text);
+            return std::path::PathBuf::from(if trimmed.is_empty() { "/" } else { trimmed });
+        }
+    }
+    std::path::PathBuf::from("/tmp")
+}
+
+/// `[ -w "$d" ] && [ -x "$d" ]`.
+#[cfg(unix)]
+fn writable_folder(d: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(d.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: a valid NUL-terminated path and a plain mode.
+    unsafe { libc::access(c.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
+}
+
+#[cfg(not(unix))]
+fn writable_folder(d: &std::path::Path) -> bool {
+    d.is_dir()
+}
+
 /// The bulletin's line for `day`, once per [`BULLETIN_EVERY`] per `key`:
-/// its stamp file is `<TMPDIR or /tmp>/k2-bulletin.<key>`, holding the
-/// time it was last shown.
+/// its stamp file is `<the note folder>/k2-bulletin.<key>` ([`note_dir`]),
+/// holding the time it was last shown.
 fn bulletin_line(day: &str, key: &str, tmpdir: Option<std::ffi::OsString>, now: u64) {
-    let dir = tmpdir.filter(|d| !d.is_empty()).map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let stamp = dir.join(format!("k2-bulletin.{key}"));
+    let stamp = note_dir(tmpdir).join(format!("k2-bulletin.{key}"));
     // `read -r last`: the first line, spaces and tabs trimmed; anything
     // but digits counts as never shown.
     let last = std::fs::read_to_string(&stamp)
@@ -398,7 +427,7 @@ mod tests {
             "the bulletin's half hour moved"
         );
         assert!(
-            cell.contains(r#"stamp="${TMPDIR:-/tmp}/k2-bulletin.${key}""#),
+            cell.contains(r#"stamp="${_K2_NOTE_DIR%/}/k2-bulletin.${key}""#),
             "the bulletin's stamp file moved"
         );
     }
@@ -439,6 +468,34 @@ mod tests {
             Some(("2".into(), "3".into()))
         );
         assert_eq!(at(""), None);
+    }
+
+    /// `_k2_note_dir`'s order and its fallback, and its lines pinned.
+    #[test]
+    fn the_note_folder_is_the_shell_s() {
+        let dir = std::env::temp_dir().join(format!("k5-notedir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(note_dir(Some(dir.clone().into())), dir);
+        let mut slash = dir.clone().into_os_string();
+        slash.push("/");
+        assert_eq!(note_dir(Some(slash)), dir, "one trailing / goes");
+        // A TMPDIR that is missing, empty or unset: the next usable one.
+        let fallback = note_dir(None);
+        assert!(fallback == std::path::Path::new("/tmp") || fallback == std::path::Path::new("/var/tmp"));
+        assert_eq!(note_dir(Some(dir.join("gone").into())), fallback);
+        assert_eq!(note_dir(Some("".into())), fallback);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let cell = source("cell-socket.sh");
+        for line in [
+            r#"    for d in "${TMPDIR:-}" /tmp /var/tmp; do"#,
+            r#"        if [ -n "$d" ] && [ -d "$d" ] && [ -w "$d" ] && [ -x "$d" ]; then"#,
+            r#"            _K2_NOTE_DIR="${d%/}""#,
+            r#"            [ -n "$_K2_NOTE_DIR" ] || _K2_NOTE_DIR="/""#,
+            r#"    _K2_NOTE_DIR="/tmp""#,
+        ] {
+            assert!(cell.lines().any(|l| l == line), "_k2_note_dir moved: no line {line:?}");
+        }
     }
 
     #[test]

@@ -301,10 +301,24 @@ fn the_words() {
         &["ws", "--signal", "x"],
         &["ws", "--inbox-silent", "f"],
         &["ws", "--inbox-wake", "f"],
-        &["ws", "t", "--secret", "N"],
+        // The vault's handoff leaves a value typed in to the shell.
+        &["ws", "t", "--secret", "--stdin"],
     ] {
         assert_eq!(parse(shell), Parsed::Shell, "{shell:?}");
     }
+    // `--secret NAME`: the handoff, with the text as its note.
+    let Parsed::Secret(m, name) = parse(&["ws", "t", "--secret", "N", "--summary", "s"]) else {
+        panic!("--secret is the handoff");
+    };
+    assert_eq!(name, "N");
+    assert_eq!(
+        send::handoff_words(&m, &name),
+        ["N", "--to", "ws", "--note", "t", "--via", "msg"]
+    );
+    assert_eq!(m.summary, "s");
+    // The shell's own call, word for word.
+    let call = r#"_vault_handoff send "$secret_name" --to "$target" --note "$text" --via msg"#;
+    assert!(source("msg-whoami-done.sh").contains(call));
     // A value flag as the last word: one line and exit 2 (K2's D6), where
     // the shell stops on its own `$2: unbound variable`.
     for flag in ["--from", "--command", "--wake-timeout", "--via"] {

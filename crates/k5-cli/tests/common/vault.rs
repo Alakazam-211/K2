@@ -49,7 +49,8 @@ pub enum VCompare {
 pub struct VCase {
     pub name: &'static str,
     /// The command's first word: `vault`, unless a family that asks for
-    /// the owner's confirm (`api-key`) runs on this rig too.
+    /// the owner's confirm (`api-key`) or hands a secret to the vault
+    /// (`msg --secret`) runs on this rig too.
     pub noun: &'static str,
     /// The words after [`VCase::noun`].
     pub args: Vec<&'static str>,

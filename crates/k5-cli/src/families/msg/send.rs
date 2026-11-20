@@ -15,7 +15,9 @@
 //! 4. No address, or no text: two or three lines, exit 1.
 //! 5. A text over 600 characters with no `--summary`: [`summary_hint`] on
 //!    stderr, and on.
-//! 6. `--secret` with `--session`: exit 2.
+//! 6. `--secret` with `--session`: exit 2. `--secret NAME` to an address
+//!    is one vault handoff whose note is the text ([`secret`]); no message
+//!    goes, so the text never arrives without its secret.
 //! 7. The send key ([`super::send_once::init`]): one probe, then the key.
 //! 8. An address in federation's wire form (`fp::ws::agent`): three lines,
 //!    exit 2.
@@ -39,10 +41,11 @@
 //!
 //! An address `handle::label.postal.bot` first is Postal mail
 //! ([`super::postal`]). The shell answers these forms itself ([`parse`]
-//! says [`Parsed::Shell`]): `--signal`,
-//! `--inbox-silent` and `--inbox-wake`, and `--secret NAME` (a vault
-//! handoff). An address on another server (`agent::host`, `agent@host`)
-//! goes over federation ([`super::remote`]).
+//! says [`Parsed::Shell`]): `--signal`, `--inbox-silent` and
+//! `--inbox-wake`, and a `--secret` the vault's handoff leaves to the
+//! shell (its name `--stdin`: a value a person types in), or with a
+//! `python3` the binary can't tell. An address on another server
+//! (`agent::host`, `agent@host`) goes over federation ([`super::remote`]).
 //!
 //! A value flag (`--from`, `--command`, `--wake-timeout`, `--via`) as the
 //! last word is [`needs_value`]'s line and exit 2, where bash stops with
@@ -52,10 +55,12 @@ use super::super::{end_in_pipe, without_nuls};
 use super::py::s;
 use super::send_once::{self, Key};
 use crate::exit::Exit;
+use crate::families::vault;
 use crate::out::json::{self, Value};
 use crate::out::py::{str_of, truthy};
 use crate::out::{self};
 use crate::prelude::Closing;
+use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::{Call, Channel, Client, Error, Response};
 use k2_client::env_names;
@@ -263,6 +268,9 @@ pub enum Parsed {
     Send(Msg),
     /// Postal mail ([`super::postal`]).
     Postal(super::postal::Mail),
+    /// `--secret NAME`: the vault handoff ([`secret`]), after the summary
+    /// hint (if any).
+    Secret(Msg, String),
 }
 
 /// `_is_postal_address`.
@@ -440,9 +448,26 @@ pub fn parse(words: &[&str]) -> Parsed {
             let hint = summary_hint(&m.text, &m.summary).map_or(String::new(), |h| h + "\n");
             return Parsed::Stop(format!("{hint}{SESSION_SECRET}\n"), Exit::Usage);
         }
-        return Parsed::Shell;
+        if !vault::handoff::native("send", &handoff_words(&m, &secret)) {
+            return Parsed::Shell;
+        }
+        return Parsed::Secret(m, secret);
     }
     Parsed::Send(m)
+}
+
+/// `_vault_handoff send "$secret_name" --to "$target" --note "$text" --via
+/// msg`: the words after `send`.
+pub fn handoff_words<'a>(m: &'a Msg, name: &'a str) -> [&'a str; 7] {
+    [
+        name,
+        "--to",
+        m.target.as_str(),
+        "--note",
+        m.text.as_str(),
+        "--via",
+        "msg",
+    ]
 }
 
 /// `k5 msg …` past `who` and `verify`. `None`: the shell's.
@@ -451,7 +476,11 @@ pub fn run(args: &[OsString], words: &[&str], hook_sock: Option<&Path>) -> Optio
     if parsed == Parsed::Shell {
         return None;
     }
-    let mut client = match super::client(args, hook_sock)? {
+    // The handoff prints what the shell's Python prints.
+    if matches!(parsed, Parsed::Secret(..)) && !python::family_native(python::here()) {
+        return None;
+    }
+    let (mut client, home) = match super::client_home(args, hook_sock)? {
         Ok(c) => c,
         Err(exit) => return Some(exit),
     };
@@ -463,7 +492,28 @@ pub fn run(args: &[OsString], words: &[&str], hook_sock: Option<&Path>) -> Optio
         }
         Parsed::Send(m) => send(&mut client, m),
         Parsed::Postal(m) => super::postal::send(&mut client, &m),
+        Parsed::Secret(m, name) => secret(client, &home, args, &m, &name),
     })
+}
+
+/// `--secret NAME`: the summary hint, then `_vault_handoff send` with the
+/// text as its note ([`vault::handoff`]): from a person's terminal on the
+/// vault socket (a confirm asked for there is typed in, never put on argv
+/// or in the environment), in a K2 terminal or with no vault socket
+/// through the daemon. Its exit is the command's; nothing else is sent.
+fn secret(client: Client, home: &Path, args: &[OsString], m: &Msg, name: &str) -> Exit {
+    if let Some(h) = summary_hint(&m.text, &m.summary) {
+        out::stderr_line(&h);
+    }
+    let mut ctx = vault::Ctx {
+        client,
+        closing: Closing::default(),
+        sock: crate::confirm::sock_path(home),
+        args: args.to_vec(),
+    };
+    let exit = vault::handoff::run(&mut ctx, "send", &handoff_words(m, name));
+    ctx.closing.flush(&mut ctx.client, exit);
+    exit
 }
 
 fn send(client: &mut Client, mut m: Msg) -> Exit {

@@ -28,7 +28,7 @@
 //!   ([`crate::prelude::codex_env`]);
 //! - a word that is not UTF-8;
 //! - the forms [`send`] names (`--signal`, `--inbox-silent`
-//!   and `--inbox-wake`, `--secret`).
+//!   and `--inbox-wake`, and `--secret --stdin`).
 
 use super::curl_port;
 use crate::daemon;
@@ -39,7 +39,7 @@ use crate::prelude;
 use crate::transport::Client;
 use k2_client::env_names;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub mod postal;
 pub mod py;
@@ -87,6 +87,15 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// (`_k2_curl`'s 3, or `_cli_curl`'s 76 when `TMPDIR` can't be used), so
 /// the shell answers it.
 pub fn client(args: &[OsString], hook_sock: Option<&Path>) -> Option<Result<Client, Exit>> {
+    client_home(args, hook_sock).map(|r| r.map(|(c, _)| c))
+}
+
+/// [`client`], and the K2 home its files were read from (where the vault
+/// socket is, for `--secret`).
+pub fn client_home(
+    args: &[OsString],
+    hook_sock: Option<&Path>,
+) -> Option<Result<(Client, PathBuf), Exit>> {
     let mut settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {
@@ -109,7 +118,7 @@ pub fn client(args: &[OsString], hook_sock: Option<&Path>) -> Option<Result<Clie
             .client(would_refuse)
             .map(|mut c| {
                 c.post_max_time = post_max_time;
-                c
+                (c, settings.home.clone())
             })
             .map_err(|e| {
                 out::stderr_line(&format!("Error: {e}"));

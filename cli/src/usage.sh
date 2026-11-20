@@ -712,6 +712,10 @@ print("Your account still owns the subdomain; pair it on any device any time.")
 }
 
 cmd_tunnel() {
+    # -h/--help anywhere prints the help and sends nothing (0.46.17: `k2
+    # tunnel stop -h` stopped the tunnel; start and enable skip words they
+    # don't know, and release/forget read only --confirm).
+    if _wants_help "$@"; then set -- --help; fi
     local sub="${1:-status}"
     shift || true
     case "$sub" in

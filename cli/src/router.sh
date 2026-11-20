@@ -743,7 +743,9 @@ case "${1:-help}" in
     connections)
         # 0.40.24 (B4): --help/-h on any connections subcommand prints help
         # and exits 0 instead of being consumed as a workspace name.
-        if _wants_help "${@:2}"; then
+        # 0.46.17: so does `k2 connections help` (it printed the usage and
+        # exited 1).
+        if [ "${2:-}" = help ] || _wants_help "${@:2}"; then
             cmd_help_connections
             exit 0
         fi

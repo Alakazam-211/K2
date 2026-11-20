@@ -862,46 +862,75 @@ _cmd_msg_inbox_form_inner() {
     _k2_idem_replay_note "$response"
 
     # Parse compose result; on error, map and exit. On success, wake.
-    local compose_id="" compose_title="$title"
+    local compose_id="" compose_title=""
     if command -v python3 >/dev/null 2>&1; then
+        # The answer read as JSON, one field per line: kind, then the id
+        # (or error code), then the title (or the error hint as a JSON
+        # string). The id and title are made one line the way the daemon's
+        # inbox::one_line does: trimmed, line breaks and control, bidi and
+        # invisible characters written as \u{..}, capped, a third dash in a
+        # row as \u{2d}. An older daemon can answer a title with line
+        # breaks; the pointer still gets the answer's id and a one-line title.
         local mapped
         mapped=$(echo "$response" | python3 -c '
-import json, sys
+import json, sys, unicodedata
+def one_line(text):
+    def hidden(c):
+        u = ord(c)
+        return (unicodedata.category(c) == "Cc" or u in (0x2028, 0x2029)
+                or u in (0x061c, 0x200e, 0x200f) or 0x202a <= u <= 0x202e or 0x2066 <= u <= 0x2069
+                or 0x200b <= u <= 0x200d or u in (0x2060, 0xfeff) or 0xe0000 <= u <= 0xe007f)
+    text = text.strip()
+    out = "".join("\\u{%x}" % ord(c) if hidden(c) else c for c in text[:2048])
+    if len(text) > 2048:
+        out += "..."
+    res, dashes = [], 0
+    for c in out:
+        if c != "-":
+            dashes = 0
+            res.append(c)
+        elif dashes == 2:
+            dashes = 0
+            res.append("\\u{2d}")
+        else:
+            dashes += 1
+            res.append(c)
+    return "".join(res)
 try:
     d = json.load(sys.stdin)
 except Exception:
     print("PARSE_FAIL"); sys.exit(0)
+if not isinstance(d, dict):
+    print("PARSE_FAIL"); sys.exit(0)
 err = d.get("error")
 if isinstance(err, dict):
-    code = err.get("code") or ""
-    hint = err.get("hint") or code
-    print("ERR\t" + code + "\t" + hint)
+    code = str(err.get("code") or "")
+    print("ERR"); print(one_line(code)); print(json.dumps(str(err.get("hint") or code)))
     sys.exit(0)
 if isinstance(err, str) and err:
-    print("ERR\terror\t" + err)
+    print("ERR"); print("error"); print(json.dumps(err))
     sys.exit(0)
 if d.get("ok") is False and "id" not in d:
-    print("ERR\terror\tcompose failed")
+    print("ERR"); print("error"); print(json.dumps("compose failed"))
     sys.exit(0)
-print("OK\t" + (d.get("id") or "") + "\t" + (d.get("title") or ""))
-') || true
-        case "$mapped" in
-            ERR$'\t'*)
-                local ecode hint
-                ecode=$(printf '%s' "$mapped" | cut -f2)
-                hint=$(printf '%s' "$mapped" | cut -f3-)
+title = d.get("title") or sys.argv[1]
+print("OK"); print(one_line(str(d.get("id") or ""))); print(one_line(str(title)))
+' "$title") || true
+        local kind="" field1="" field2=""
+        { IFS= read -r kind; IFS= read -r field1; IFS= read -r field2; } <<<"$mapped" || true
+        case "$kind" in
+            ERR)
                 # Said once, on stderr (smoke r6: the raw body on stdout
                 # repeated it).
-                printf '%s\n' "$(python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":sys.argv[2]}},separators=(",",":")))' "$ecode" "$hint")" >&2
-                if [[ "$ecode" == "not_connected" || "$ecode" == "gated" || "$ecode" == "forbidden" ]]; then
+                printf '%s\n' "$(python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":json.loads(sys.argv[2])}},separators=(",",":")))' "$field1" "$field2")" >&2
+                if [[ "$field1" == "not_connected" || "$field1" == "gated" || "$field1" == "forbidden" ]]; then
                     return 3
                 fi
                 return 1
                 ;;
-            OK$'\t'*)
-                compose_id=$(printf '%s' "$mapped" | cut -f2)
-                compose_title=$(printf '%s' "$mapped" | cut -f3-)
-                [[ -z "$compose_title" ]] && compose_title="$title"
+            OK)
+                compose_id="$field1"
+                compose_title="$field2"
                 ;;
             *)
                 echo "$response"

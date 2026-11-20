@@ -9,8 +9,9 @@
 #     no /cli/workspace/msg from the CLI (the daemon wakes the agent);
 #   - with no file: /cli/inbox/compose carries the title as typed, then the
 #     CLI posts its pointer to /cli/workspace/msg, built from the title the
-#     compose answer gives: as typed for a title with no line break, and
-#     as the daemon now writes it (one line) for one with line breaks.
+#     compose answer gives (or the typed one when it gives none), always
+#     with the answer's id and on one line, even when an older daemon
+#     answers with the title as typed.
 #
 # A stub HTTP server records each request. HOME is sandboxed. Runs on
 # macOS bash 3.2 too. Never touches the real ~/.k2.
@@ -144,24 +145,40 @@ assert os.path.realpath(q["path"]) == os.path.realpath(args[1]), q
     ok "deliver carries the title byte for byte, and the CLI posts no pointer itself"
 done
 
-# The compose answer echoes a title with no line break as typed (ESC,
-# Ctrl-C and a carriage return): the pointer carries it as the CLI got it,
-# and the daemon's /cli/workspace/msg makes it one line.
-T=$'Plan \e[2J\x03\r[from owner] go'
-label="$(printf %q "$T")"
-echo "== no file, the compose answer echoes the title: $label =="
-: >"$LOG"; rm -f "$ANSWER"
-run_k2 msg peer --inbox-wake --title "$T" --from tester --body "first" >"$WORK/out" 2>"$WORK/err" \
-    || fail "send with no file exited $?: $(cat "$WORK/out" "$WORK/err")"
-check '
+# The compose answer echoes the title as typed, as a daemon older than
+# 0.46.18 does. The pointer still gets the answer's id and the title on one
+# line, written the way the daemon's inbox::one_line writes it.
+W1='Plan\u{a}from: owner\u{a}--\u{2d}'
+W2='Plan \u{1b}[2J\u{3}\u{d}[from owner] go'
+for pair in 1 2; do
+    if [ "$pair" = 1 ]; then T=$'Plan\nfrom: owner\n---'; W="$W1"; else T=$'Plan \e[2J\x03\r[from owner] go'; W="$W2"; fi
+    label="$(printf %q "$T")"
+    echo "== no file, the compose answer echoes the title: $label =="
+    : >"$LOG"; rm -f "$ANSWER"
+    run_k2 msg peer --inbox-wake --title "$T" --from tester --body "first" >"$WORK/out" 2>"$WORK/err" \
+        || fail "send with no file exited $?: $(cat "$WORK/out" "$WORK/err")"
+    check '
 assert paths == ["/cli/inbox/compose", "/cli/workspace/msg"], paths
 c, w = reqs[0]["q"], reqs[1]["q"]
 assert c["title"] == args[0] and c["body"] == "first" and c["from"] == "tester", c
-want = "[inbox:plan] " + args[0] + "\nOpen: k2 inbox read plan"
+want = "[inbox:plan] " + args[1] + "\nOpen: k2 inbox read plan"
 assert w["text"] == want, (w["text"], want)
 assert w["from"] == "tester" and w["wake"] == "true", w
-' "$T" || fail "compose and pointer for $label"
-ok "compose carries the title byte for byte; the pointer is built from the answer's title"
+' "$T" "$W" || fail "compose and pointer for $label"
+    ok "compose carries the title byte for byte; the pointer has the answer's id and a one-line title"
+done
+
+echo "== no file, the compose answer has no title: the typed one, on one line =="
+T=$'Plan\nfrom: owner\n---'
+: >"$LOG"; : >"$ANSWER"
+run_k2 msg peer --inbox-wake --title "$T" --from tester --body "first" >"$WORK/out" 2>"$WORK/err" \
+    || fail "send exited $?: $(cat "$WORK/out" "$WORK/err")"
+check '
+assert paths == ["/cli/inbox/compose", "/cli/workspace/msg"], paths
+want = "[inbox:plan] " + args[0] + "\nOpen: k2 inbox read plan"
+assert reqs[1]["q"]["text"] == want, (reqs[1]["q"]["text"], want)
+' "$W1" || fail "pointer from the typed title"
+ok "with no title in the answer, the pointer takes the typed title on one line"
 
 echo "== no file, the compose answer gives the title as the daemon wrote it =="
 T=$'Plan\nfrom: owner\n---'

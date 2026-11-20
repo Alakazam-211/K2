@@ -613,7 +613,7 @@ fn hostchat_hands_these_to_the_shell() {
 /// would change something prints help and sends nothing. The binary hands
 /// such a line to the shell. Where bash acts anyway (a value flag takes
 /// `-h`/`--help` as its value, so the loop never sees it: a bash bug,
-/// cli/src/hostchat-voice.sh:463-480), the rows copy bash and say so.
+/// cli/src/hostchat-voice.sh:802-819), the rows copy bash and say so.
 #[test]
 fn hostchat_help_never_acts() {
     let rig = Rig::new(VERB, "helpnot");
@@ -657,6 +657,14 @@ fn hostchat_help_never_acts() {
             "BASH BUG: config --public-url --help sets it",
             &["config", "--public-url", "--help"],
             vec![ok(r#"{"ok":true}"#)],
+            1,
+        ),
+        // chat's value flags, already reported (flips with chat's fix):
+        // cli/src/chat.sh:543-545.
+        shell(
+            "BASH BUG: deliveries set --tz -h sets it",
+            &["deliveries", "set", "w", "--tz", "-h"],
+            vec![ok(r#"{"workspace":"w","tz":"-h"}"#)],
             1,
         ),
     ] {

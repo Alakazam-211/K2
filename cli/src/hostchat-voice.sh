@@ -308,10 +308,22 @@ else:
 '
 }
 
+# A usage error as one line of JSON on stderr, exit 2. The words go through
+# json.dumps, so a quote, backslash or odd byte in them (a flag, a room)
+# can't break it.
+_voice_bad() {
+    python3 -c 'import json, sys
+print(json.dumps({"error": "usage", "hint": sys.argv[1] + " (k2 voice --help)"}, separators=(",", ":")))' "$1" >&2
+    exit 2
+}
+
 cmd_voice() {
-    if [ $# -eq 0 ]; then _voice_usage; return 0; fi
+    # -h/--help anywhere prints the usage and sends nothing, even where a
+    # value flag would take it as its value (0.46.17: `k2 voice leave
+    # --call --help` left the call).
+    if [ $# -eq 0 ] || _wants_help "$@"; then _voice_usage; return 0; fi
     local sub="$1"; shift
-    case "$sub" in -h|--help|help) _voice_usage; return 0 ;; esac
+    case "$sub" in help) _voice_usage; return 0 ;; esac
     local as_json=0 now=0 call="" notice="" rec_req="" rec_level="" vt_room="" vt_after="" vt_limit="" vt_rec="" pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -325,13 +337,11 @@ cmd_voice() {
             --notice) notice="${2:?--notice <version>}"; shift 2 ;;
             --require-recording) rec_req="${2:?--require-recording on|off|inherit}"; shift 2 ;;
             --start-level) rec_level="${2:?--start-level none|moderator|member|inherit}"; shift 2 ;;
-            -h|--help) _voice_usage; return 0 ;;
-            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 voice --help)\"}" >&2; exit 2 ;;
+            -*) _voice_bad "unknown flag $1" ;;
             *) pos+=("$1"); shift ;;
         esac
     done
     local n=${#pos[@]}
-    _voice_bad() { echo "{\"error\":\"usage\",\"hint\":\"$1 (k2 voice --help)\"}" >&2; exit 2; }
     if [ "$now" = "1" ]; then
         case "$sub" in set|close) ;; *) _voice_bad "--now only applies to k2 voice set rooms and k2 voice close" ;; esac
     fi

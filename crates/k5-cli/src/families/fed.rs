@@ -32,8 +32,8 @@
 //! 5. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
 //! Still the shell's: a word that is not UTF-8, a command line with `-h`
-//! or `--help` ([`crate::front`]; the shell has no help page for `fed`,
-//! so its usage), a token on stdin from a terminal (the no-echo read is
+//! or `--help` ([`crate::front`]; the shell has no help page for `fed`:
+//! it prints the usage on stdout, exit 0, and sends nothing), a token on stdin from a terminal (the no-echo read is
 //! the vault lane's), `pubkey` where `shasum` or `awk` is missing (the
 //! shell's "command not found" line names its script), a port that is
 //! set but is no port curl takes, and a `python3` the binary can't tell.

@@ -15,10 +15,8 @@
 //! - The owner token from `daemon.token` only; a passport (the owner's
 //!   verbs refused); the gates.
 //! - No answer: an empty reply and nothing listening.
-//! - Help with `-h` on a verb that changes something: the shell answers
-//!   it (the binary hands it over), and the shell's `cmd_fed` has no help
-//!   check, so it acts (a bash bug, reported; these rows flip when the
-//!   fix lands).
+//! - Help with `-h` or `--help` anywhere: the shell answers it (the
+//!   binary hands it over) with the usage, exit 0, and sends nothing.
 
 #![cfg(unix)]
 
@@ -941,48 +939,56 @@ fn fed_with_no_answer() {
     }
 }
 
-/// `-h` on a verb that changes something: the shell's (the binary hands
-/// the line over). The shell's `cmd_fed` has no help check, so `send`
-/// and `enable` act (a bash bug, reported); these rows flip to "no
-/// request" when its fix lands.
+/// Help never acts: `-h` or `--help` anywhere prints the fed usage on
+/// stdout, exit 0, and sends nothing (`cmd_fed`'s `_wants_help`). The
+/// binary hands the line to the shell.
 #[test]
 fn fed_hands_help_to_the_shell() {
     let rig = Rig::new(VERB, "help");
     let v = vec![
         shell(case(
-            "send with -h sends (bash bug)",
+            "send with -h: the usage, nothing sent",
             &["send", "a::b::c", "x", "-h"],
             &[],
-            vec![reply("{}")],
+            vec![],
             fed_owner,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "enable --help turns it on (bash bug)",
+            "enable --help: the usage, nothing sent",
             &["enable", "--help"],
             &[],
-            vec![reply(r#"{"federationEnabled":true}"#)],
+            vec![],
             fed_owner,
             0,
-            1,
+            0,
         )),
         shell(case(
-            "pair-start -h: an unknown arg",
+            "pair-start -h: the usage, nothing sent",
             &["pair-start", "-h"],
             &[],
             vec![],
             fed_owner,
-            2,
+            0,
             0,
         )),
         shell(case(
-            "fed --help: the usage",
+            "fed --help: the usage, nothing sent",
             &["--help"],
             &[],
             vec![],
             fed_owner,
-            2,
+            0,
+            0,
+        )),
+        shell(case(
+            "disable -h: the usage, nothing sent",
+            &["disable", "-h"],
+            &[],
+            vec![],
+            fed_owner,
+            0,
             0,
         )),
     ];

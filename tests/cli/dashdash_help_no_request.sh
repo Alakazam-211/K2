@@ -26,7 +26,10 @@
 #     sends nothing;
 #   * every verb in the allowlist (_k2_takes_dashdash) gets past that
 #     refusal with a `--` on its line (one row each);
-#   * -h/--help before `--` on job and ci is still their help.
+#   * -h/--help before `--` on job and ci is still their help; job add
+#     -- echo --help sends the add;
+#   * with no connection at all, vault run ... -- grep --help still meets
+#     the connection check (the gate's help skip stops at `--`).
 # HOME is a temp dir, no real daemon, no network. Loud: every failure is
 # named and the script exits 1.
 # Run with: bash tests/cli/dashdash_help_no_request.sh
@@ -334,6 +337,43 @@ send-feedback -- -text
 respond -- -text
 done -- x
 ROWS
+
+echo "== job add: -h/--help after -- is the child's =="
+reset
+run job add nightly --every 1h -- echo --help
+if grep -q '^POST /cli/job' "$REQ_LOG"; then
+    ok "k2 job add nightly --every 1h -- echo --help: sends the add"
+else
+    bad "k2 job add ... -- echo --help sent no add (exit $RC)"; printf '%s\n' "$OUT" "$ERR" | sed 's/^/      | /' >&2
+fi
+case "$OUT" in
+    *"k2 job"*"--every"*) bad "k2 job add ... -- echo --help printed the job help" ;;
+    *) ok "k2 job add ... -- echo --help: no help page" ;;
+esac
+
+echo "== no connection: the vault gate skip stops at -- =="
+# No port, no token: a help page needs no daemon, a run does. A --help
+# after `--` must not let the run skip the connection check.
+set +e
+ERR="$(env K2_PROJECT_PATH="$WORK/proj" "$K2" vault run --secret A -- grep --help </dev/null 2>&1 >/dev/null)"; RC=$?
+set -e
+[ "$RC" -eq 1 ] && ok "no connection, k2 vault run --secret A -- grep --help: exit 1" \
+    || bad "no connection, k2 vault run --secret A -- grep --help: exit $RC (want 1)"
+case "$ERR" in
+    *"Cannot connect to K2"*) ok "no connection, vault run ... -- grep --help: the connection check runs" ;;
+    *) bad "no connection, vault run ... -- grep --help: stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2 ;;
+esac
+set +e
+OUT="$(env K2_PROJECT_PATH="$WORK/proj" "$K2" vault run -h --secret A -- grep </dev/null 2>/dev/null)"; RC=$?
+set -e
+[ "$RC" -eq 0 ] && [ "$OUT" = "$VAULT_REF" ] && ok "no connection, k2 vault run -h ...: the help" \
+    || bad "no connection, k2 vault run -h ...: exit $RC"
+
+echo "== terminal write takes no -- =="
+reset
+run terminal write acme -- --help
+[ "$RC" -eq 2 ] && ok "k2 terminal write acme -- --help: exit 2" || bad "k2 terminal write acme -- --help: exit $RC (want 2)"
+sent_nothing "k2 terminal write acme -- --help"
 
 echo "== -h/--help before -- on job and ci is still help =="
 for args in "job add -h -- true" "ci run --help -- true"; do

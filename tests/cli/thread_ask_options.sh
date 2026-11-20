@@ -99,6 +99,9 @@ assert_not_contains() {
 sent() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v=d.get(sys.argv[2]); print(json.dumps(v, ensure_ascii=False))' "$SANDBOX/last.json" "$1"; }
 NOTE="--options splits on ';'; this became one option. Use ';' between options, or repeat --option"
 ask() { # ask <args...>: run thread ask, stdout to $out, stderr to $SANDBOX/err, exit to $rc
+    # The markdown hint prints on a workspace's 1st and every 10th write;
+    # a count of 1 keeps it off this stderr.
+    printf '1\n' > "$SANDBOX/ws/.k2/.thread-md-nudge"
     set +e
     out="$("$K2_CLI" thread ask ledger "Rewrite the history?" "$@" 2>"$SANDBOX/err")"; rc=$?
     set -e

@@ -12,7 +12,8 @@
 //! - [`door`]: `app suspend`, `app self`, `app usage`, `app members`,
 //!   `app remote-pass` and `app account-deletion` (list, complete, cancel).
 //! - [`updates`]: `app updates ls|list|stats|fleet`, its page and its
-//!   usage line; its other verbs are the shell's.
+//!   usage line; [`updates_set`]: `key`, `token`, `promote`, `rollback`,
+//!   `pull` and `push`.
 //! - [`history`]: `app history`, `app errors`, `app logs` (one read, and
 //!   `--client` without `--since`).
 //! - [`phone`]: the reads of `app links`, `app pairing`, `app push` and
@@ -65,6 +66,7 @@ pub mod phone_set;
 pub mod py;
 pub mod reads;
 pub mod updates;
+pub mod updates_set;
 pub mod wallet;
 pub mod walls;
 
@@ -83,6 +85,7 @@ pub enum Ask {
     Access(access::Ask),
     Door(door::Ask),
     Updates(updates::Ask),
+    UpdatesSet(updates_set::Ask),
     History(history::Ask),
     Phone(phone::Ask),
     PhoneSet(phone_set::Ask),
@@ -278,7 +281,10 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "list" => Some(reads::parse_list(rest)?.map(Ask::List)),
         "deployment" => Some(reads::parse_deployment(rest)?.map(Ask::Deployment)),
         "inspect" => Some(reads::parse_inspect(rest)?.map(Ask::Inspect)),
-        "updates" => Some(updates::parse(rest)?.map(Ask::Updates)),
+        "updates" => match updates_set::parse(rest) {
+            Some(r) => Some(r.map(Ask::UpdatesSet)),
+            None => Some(updates::parse(rest)?.map(Ask::Updates)),
+        },
         "catalog" => Some(catalog::parse(rest)?.map(Ask::Catalog)),
         v if walls::VERBS.contains(&v) => Some(walls::parse(v, rest)?.map(Ask::Walls)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
@@ -358,6 +364,7 @@ fn run_with(
         Ask::Access(a) => access::run(&mut ctx, a),
         Ask::Door(d) => door::run(&mut ctx, d),
         Ask::Updates(u) => updates::run(&mut ctx, u),
+        Ask::UpdatesSet(u) => updates_set::run(&mut ctx, u),
         Ask::History(h) => history::run(&mut ctx, h),
         Ask::Phone(p) => phone::run(&mut ctx, p),
         Ask::PhoneSet(p) => phone_set::run(&mut ctx, p),

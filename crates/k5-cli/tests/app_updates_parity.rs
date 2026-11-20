@@ -10,7 +10,8 @@
 //!   downloads, `--days`, `--json`; a second App.
 //! - `fleet`: the Apps, none, `--json`; a word it doesn't take.
 //! - The page (`updates`, `updates help`) and an unknown verb's usage
-//!   line; a verb that is still the shell's (`pull`).
+//!   line; `pull` with no version (the writes' rows are in
+//!   app_updates_set_parity.rs).
 //! - Python's raise part way; a refusal.
 
 #![cfg(unix)]
@@ -290,18 +291,15 @@ fn stats_fleet_and_the_page_answer_as_the_shell_does() {
             2,
             0,
         ),
-        Case {
-            compare: Compare::Shell,
-            ..case(
-                "pull is the shell's",
-                &["updates", "pull", "acme"],
-                &[],
-                vec![],
-                owner_and_port,
-                2,
-                0,
-            )
-        },
+        case(
+            "pull: no version",
+            &["updates", "pull", "acme"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

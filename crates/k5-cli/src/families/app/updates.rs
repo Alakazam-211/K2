@@ -2,7 +2,7 @@
 //! (`cli/src/app-updates.sh`) answers them: `app updates ls|list`,
 //! `stats` and `fleet`, its page (`app updates`, `app updates help`) and
 //! its usage line for a verb it doesn't know. `key`, `token`, `push`,
-//! `promote`, `rollback` and `pull` stay the shell's.
+//! `promote`, `rollback` and `pull` are [`super::updates_set`]'s.
 
 use super::access::answer;
 use super::call::Ctx;

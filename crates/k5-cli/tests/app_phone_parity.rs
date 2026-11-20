@@ -12,7 +12,7 @@
 //!   skips; phones with `--guest`; the page, an unknown verb, usage.
 //! - `email show|log|status`: sender or none, off; the log's recipients;
 //!   one email's status; the page, an unknown verb, usage.
-//! - The writes stay the shell's (`push devices rm`).
+//! - The writes' rows are in app_phone_set_parity.rs.
 //! - Python's raise part way.
 
 #![cfg(unix)]
@@ -152,13 +152,7 @@ fn push_and_email_answer_as_the_shell_does() {
         usage("push: an unknown verb", &["push", "zap"]),
         usage("push devices: no App", &["push", "devices", "--json"]),
         usage("push status: no App", &["push", "status"]),
-        Case {
-            compare: Compare::Shell,
-            ..usage(
-                "push devices rm: the shell's",
-                &["push", "devices", "rm", "acme"],
-            )
-        },
+        usage("push devices rm: no id", &["push", "devices", "rm", "acme"]),
         traceback(fail(
             "push log: a skip that is not a number",
             &["push", "log", "acme"],

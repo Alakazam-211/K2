@@ -152,8 +152,15 @@ pub fn is_route(path: &str) -> bool {
 /// computer ([`local_session`]). `None` for the owner token, a login, an App
 /// pass, an API cell's or a sandboxed agent's passport or anything else:
 /// those keep the route's existing arm, unchanged.
-pub(crate) fn tcp_passport(path: &str, query: &str, bearer: Option<&str>) -> Option<crate::session_token::ValidatedHook> {
-    if !is_route(path) {
+pub(crate) fn tcp_passport(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> Option<crate::session_token::ValidatedHook> {
+    // The owner token and a login keep their arm without a look at the
+    // passport store, as `token_or_scoped_hook_auth` does.
+    if !is_route(path) || http::token_ok(query, owner_token) {
         return None;
     }
     let presented = bearer
@@ -161,7 +168,8 @@ pub(crate) fn tcp_passport(path: &str, query: &str, bearer: Option<&str>) -> Opt
         .filter(|s| !s.is_empty())
         .or_else(|| http::extract_token(query))
         .unwrap_or("");
-    if presented.is_empty() {
+    // A passport is `<sid>.<secret>`; nothing else is looked up.
+    if !presented.split_once('.').is_some_and(|(sid, secret)| !sid.is_empty() && !secret.is_empty()) {
         return None;
     }
     crate::session_token::validate_hook(presented).filter(|v| local_session(&v.session_id, &v.principal))
@@ -185,9 +193,10 @@ pub(crate) async fn serve_tcp(
     path: &str,
     query: &str,
     bearer: Option<&str>,
+    owner_token: &str,
 ) {
     let mut params = http::read_request_params(stream, buf, is_post, path, query).await;
-    let Some(principal) = tcp_passport(path, query, bearer).map(|v| v.principal) else {
+    let Some(principal) = tcp_passport(path, query, bearer, owner_token).map(|v| v.principal) else {
         let r = CliResponse::forbidden();
         http::send_response(stream, r.status, r.content_type, &r.body).await;
         return;

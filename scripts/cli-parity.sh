@@ -197,6 +197,7 @@ EXPECTED_DIFFS=(
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
+    "python-proxy-rule|K2 ruling R4, the clone engine's port|the person's proxy for a clone request to an https server that isn't this computer (the check: \`clone preview ws1 --host https://cp.example.invalid --token-stdin\` with only ALL_PROXY set): the shell's Python urllib reads https_proxy and HTTPS_PROXY only (never ALL_PROXY), its own no_proxy rule, opens a tunnel only on a 200 and writes its own CONNECT head, so it goes straight there; the binary takes the shared CONNECT path with curl's rules (all_proxy and ALL_PROXY too, curl's no_proxy, any 2xx, curl's head) and sends one CONNECT. Either way the token rides inside the tunnel only, never to the proxy"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -1575,6 +1576,71 @@ check_picker_env_size() {
     [ "$(cat "$d/out.binary")" = "✓ live at https://s5999.k2.dev" ] || problems+=("the binary printed: $(head -c 300 "$d/out.binary")")
     ! grep -q 'Argument list' "$d/err.binary" || problems+=("the binary's stderr: $(head -c 300 "$d/err.binary")")
     [ "$(cat "$d/paths.binary")" = "GET /rest/v1/subdomains; POST /rest/v1/rpc/claim_subdomain; POST /cli/tunnel/config; POST /cli/tunnel/start" ] || problems+=("the binary sent, want the list, the claim, the config and the start: $(cat "$d/paths.binary")")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_python_proxy_rule: with only ALL_PROXY set, bash's clone engine
+# (Python urllib) sends no CONNECT and the binary sends one, never with the
+# token in it.
+check_python_proxy_rule() {
+    local d="$WORK/pyproxy" side tmp pid port problems=()
+    mkdir -p "$d/home/.k2" "$d/ws"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    printf '1\n' >"$d/home/.k2/heartbeat.port"
+    : >"$d/heads"
+    python3 -I - "$d" <<'PY' &
+import os, socket, sys
+d = sys.argv[1]
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(8)
+with open(os.path.join(d, "port.tmp"), "w") as f:
+    f.write(str(s.getsockname()[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+while True:
+    c, _ = s.accept()
+    c.settimeout(10)
+    head = b""
+    try:
+        while b"\r\n\r\n" not in head:
+            more = c.recv(4096)
+            if not more:
+                break
+            head += more
+    except OSError:
+        pass
+    with open(os.path.join(d, "heads"), "ab") as f:
+        f.write(head.replace(b"\r\n", b" | ") + b"\n")
+    try:
+        c.sendall(b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    except OSError:
+        pass
+    c.close()
+PY
+    pid=$!
+    for _ in $(seq 1 50); do [ -s "$d/port" ] && break; sleep 0.1; done
+    [ -s "$d/port" ] || { kill "$pid" 2>/dev/null; echo "the recording proxy didn't start"; return 1; }
+    port="$(cat "$d/port")"
+    for side in bash binary; do
+        : >"$d/heads"
+        tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+        if [ "$side" = bash ]; then set -- bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
+        (cd "$d/ws" && printf 'tok-pyproxy-parity\n' | exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" \
+            ALL_PROXY="http://127.0.0.1:$port" "$@" clone preview ws1 --host https://cp.example.invalid --token-stdin --json) \
+            >"$d/out.$side" 2>"$d/err.$side" || true
+        sleep 0.2
+        cp "$d/heads" "$d/heads.$side"
+    done
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    [ ! -s "$d/heads.bash" ] || problems+=("bash's Python used ALL_PROXY: $(head -c 300 "$d/heads.bash")")
+    [ "$(wc -l <"$d/heads.binary" | tr -d ' ')" = 1 ] || problems+=("want one CONNECT from the binary, got: $(head -c 300 "$d/heads.binary")")
+    grep -q '^CONNECT cp.example.invalid:443 HTTP/1.1 ' "$d/heads.binary" || problems+=("the binary's is not a CONNECT for cp.example.invalid:443: $(head -c 300 "$d/heads.binary")")
+    ! grep -q 'tok-pyproxy-parity' "$d/heads.bash" "$d/heads.binary" || problems+=("the token reached the proxy")
+    grep -q '"daemon_unreachable"' "$d/err.bash" || problems+=("bash didn't go straight there: $(head -c 300 "$d/err.bash")")
+    grep -q 'Tunnel connection failed: 407' "$d/err.binary" || problems+=("the binary's refused tunnel isn't its line: $(head -c 300 "$d/err.binary")")
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

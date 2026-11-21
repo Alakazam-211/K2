@@ -261,7 +261,7 @@ impl Drop for ForwardRecord {
 /// `true` when `peer` is one of this daemon's own forwards for `sid`: a
 /// loopback connection from the source port the forwarder recorded.
 pub fn is_forward_from(peer: Option<std::net::SocketAddr>, sid: &str) -> bool {
-    let Some(p) = peer.filter(|p| *p.ip() == std::net::IpAddr::from(FORWARD_FROM)) else { return false };
+    let Some(p) = peer.filter(|p| p.ip() == std::net::IpAddr::from(FORWARD_FROM)) else { return false };
     FORWARDS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&p)).is_some_and(|s| s == sid)
 }
 
@@ -416,7 +416,7 @@ pub async fn forward_to_tcp(stream: &mut tokio::net::UnixStream, head: &str, bod
         .and_then(|_| sock.bind(std::net::SocketAddr::from((FORWARD_FROM, 0))))
         .and_then(|_| sock.local_addr());
     let record = match local {
-        Ok(a) if *a.ip() == std::net::IpAddr::from(FORWARD_FROM) => ForwardRecord::new(a, sid),
+        Ok(a) if a.ip() == std::net::IpAddr::from(FORWARD_FROM) => ForwardRecord::new(a, sid),
         Ok(a) => {
             let _ = stream.write_all(answer("502 Bad Gateway", format!("the session socket bound {a}, not {}", std::net::Ipv4Addr::from(FORWARD_FROM))).as_bytes()).await;
             let _ = stream.shutdown().await;

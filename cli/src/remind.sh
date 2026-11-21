@@ -288,9 +288,9 @@ cmd_heartbeat_add() {
     local spec_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --name) name="$2"; shift 2 ;;
-            --instructions) instructions="$2"; shift 2 ;;
-            --instructions-file) instructions_file="$2"; shift 2 ;;
+            --name) _need_value "$@"; name="$2"; shift 2 ;;
+            --instructions) _need_value "$@"; instructions="$2"; shift 2 ;;
+            --instructions-file) _need_value "$@"; instructions_file="$2"; shift 2 ;;
             # 0.46.15: the IANA zone the times are read in (the daemon
             # validates it); server (or box, local, or '') = the server's clock.
             # Without --tz the daemon uses the owner's timezone when one is
@@ -903,8 +903,8 @@ cmd_heartbeat_session() {
         case "$1" in
             --pinned)   mode="pinned"; shift ;;
             --auto)     mode="auto"; shift ;;
-            --set)      mode="session"; session_id="${2:-}"; shift 2 ;;
-            --provider) provider="${2:-}"; shift 2 ;;
+            --set)      _need_value "$@"; mode="session"; session_id="${2:-}"; shift 2 ;;
+            --provider) _need_value "$@"; provider="${2:-}"; shift 2 ;;
             -*)
                 echo "Unknown flag for 'heartbeat session': $1" >&2
                 echo "Usage: k2 heartbeat session <name> [--pinned | --auto | --set <session-id|workspace/handle> [--provider <p>]]" >&2
@@ -1009,9 +1009,9 @@ cmd_heartbeat_edit() {
     local spec_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --name) name="$2"; shift 2 ;;
-            --instructions) instructions="$2"; have_instructions=1; shift 2 ;;
-            --instructions-file) instructions_file="$2"; have_instructions=1; shift 2 ;;
+            --name) _need_value "$@"; name="$2"; shift 2 ;;
+            --instructions) _need_value "$@"; instructions="$2"; have_instructions=1; shift 2 ;;
+            --instructions-file) _need_value "$@"; instructions_file="$2"; have_instructions=1; shift 2 ;;
             # 0.46.15: alone or with a spec; server (or box, local, or '') clears it.
             --tz)
                 [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or server" >&2; exit 2; }
@@ -1245,7 +1245,7 @@ cmd_heartbeat_status() {
     local limit="10"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --limit|-n) limit="$2"; shift 2 ;;
+            --limit|-n) _need_value "$@"; limit="$2"; shift 2 ;;
             *) if [ -z "$name" ]; then name="$1"; fi; shift ;;
         esac
     done
@@ -1306,8 +1306,8 @@ cmd_heartbeat_log() {
     local limit="50"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --limit) limit="$2"; shift 2 ;;
-            -n) limit="$2"; shift 2 ;;
+            --limit) _need_value "$@"; limit="$2"; shift 2 ;;
+            -n) _need_value "$@"; limit="$2"; shift 2 ;;
             *) shift ;;
         esac
     done

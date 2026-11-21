@@ -106,13 +106,13 @@ hb_parse_spec() {
             --monthly) frequency="monthly"; shift ;;
             --yearly)  frequency="yearly"; shift ;;
             --hourly)  frequency="hourly"; shift ;;
-            --time)    time="$2"; shift 2 ;;
-            --days)    days="$2"; shift 2 ;;
-            --months)  months="$2"; shift 2 ;;
-            --every)   every="$2"; shift 2 ;;
-            --unit)    unit="$2"; shift 2 ;;
-            --start)   start="$2"; shift 2 ;;
-            --end)     end="$2"; shift 2 ;;
+            --time)    _need_value "$@"; time="$2"; shift 2 ;;
+            --days)    _need_value "$@"; days="$2"; shift 2 ;;
+            --months)  _need_value "$@"; months="$2"; shift 2 ;;
+            --every)   _need_value "$@"; every="$2"; shift 2 ;;
+            --unit)    _need_value "$@"; unit="$2"; shift 2 ;;
+            --start)   _need_value "$@"; start="$2"; shift 2 ;;
+            --end)     _need_value "$@"; end="$2"; shift 2 ;;
             --once|--in|--at|--on)
                 echo "Error: $1 is for a one-time wake: k2 heartbeat remind \"<text>\" --in 45m (see k2 heartbeat remind --help). A heartbeat repeats." >&2
                 exit 2 ;;
